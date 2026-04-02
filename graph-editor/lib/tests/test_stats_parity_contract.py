@@ -17,7 +17,9 @@ from runner.lag_distribution_utils import (
 )
 from runner.stats_engine import (
     compute_blended_mean,
+    compute_per_day_blended_mean,
     compute_edge_latency_stats,
+    enhance_graph_latencies,
     fw_compose_pair,
     CohortData,
     LagDistributionFit,
@@ -150,6 +152,57 @@ class TestParityBlendedMean:
         assert result is None
 
 
+# ── Vector 4b: compute_per_day_blended_mean (D2 parity) ─────────────────────
+class TestParityPerDayBlendedMean:
+    """Per-day blending must match between FE and BE.
+    Uses the same cohort vector as Vector 6 plus CDF params from its fit.
+    """
+    COHORTS = [
+        CohortData(date=f"2025-11-{d:02d}", age=float(age), n=n, k=k,
+                   median_lag_days=5.0, mean_lag_days=7.0)
+        for d, age, n, k in [
+            (1, 60, 100, 85),
+            (5, 56, 120, 98),
+            (10, 51, 90, 72),
+            (15, 46, 110, 82),
+            (20, 41, 95, 65),
+            (25, 36, 105, 60),
+            (1, 31, 80, 38),
+            (5, 27, 115, 42),
+            (10, 22, 100, 28),
+            (15, 17, 90, 15),
+        ]
+    ]
+    CDF_MU = 1.0986122886681098
+    CDF_SIGMA = 1.0107676525947897
+
+    def test_mixed_maturity_cohorts(self):
+        """Per-day blend for mixed-maturity sweep must match FE."""
+        result = compute_per_day_blended_mean(
+            cohorts=self.COHORTS,
+            forecast_mean=0.60,
+            n_baseline=500,
+            cdf_mu=self.CDF_MU,
+            cdf_sigma=self.CDF_SIGMA,
+            onset_delta_days=2.0,
+        )
+        assert result is not None
+        blended_mean, completeness_agg = result
+        assert blended_mean == pytest.approx(0.5903048161481801, abs=TOL)
+        assert completeness_agg == pytest.approx(0.9864722632086734, abs=TOL_CDF)
+
+    def test_zero_baseline(self):
+        """n_baseline=0 → None."""
+        result = compute_per_day_blended_mean(
+            cohorts=self.COHORTS,
+            forecast_mean=0.60,
+            n_baseline=0,
+            cdf_mu=self.CDF_MU,
+            cdf_sigma=self.CDF_SIGMA,
+        )
+        assert result is None
+
+
 # ── Vector 5: fw_compose_pair ────────────────────────────────────────────────
 class TestParityFWCompose:
     def test_compose_two_edges(self):
@@ -211,3 +264,110 @@ class TestParityEdgeLatencyStats:
         assert result.p_evidence == pytest.approx(0.582089552238806, abs=TOL)
         assert result.p_infinity == pytest.approx(0.5663243456570916, abs=TOL_PIPELINE)
         assert result.forecast_available is True
+
+
+# ── Vector 7: Graph-level parity — enhance_graph_latencies ──────────────────
+# Same 3-edge linear graph A → B → C → D as FE Vector 7.
+# Pins BE values and documents remaining delta against FE canonical values.
+class TestParityGraphLevel:
+    """Graph-level orchestration parity: 3-edge linear A→B→C→D."""
+
+    @staticmethod
+    def _make_cohorts(median, mean, k_ratio, n_base=100, n_days=10,
+                      anchor_median=None, anchor_mean=None):
+        cohorts = []
+        for i in range(n_days):
+            age = 30 - i * 2
+            n = n_base + i * 5
+            k = int(n * k_ratio)
+            cohorts.append(CohortData(
+                date=f"2026-03-{1+i:02d}", age=float(age), n=n, k=k,
+                median_lag_days=median, mean_lag_days=mean,
+                anchor_median_lag_days=anchor_median,
+                anchor_mean_lag_days=anchor_mean,
+            ))
+        return cohorts
+
+    # NOTE: onset_delta_days set to 0 on all edges to avoid the onset fallback
+    # discrepancy (FE uses 0 when no window slices; BE reads graph value).
+    GRAPH = {
+        "nodes": [
+            {"uuid": "a", "id": "a", "entry": {"is_start": True}, "event_id": "ev-a"},
+            {"uuid": "b", "id": "b", "event_id": "ev-b"},
+            {"uuid": "c", "id": "c", "event_id": "ev-c"},
+            {"uuid": "d", "id": "d", "event_id": "ev-d"},
+        ],
+        "edges": [
+            {"uuid": "e1", "from": "a", "to": "b", "p": {
+                "id": "param-ab", "mean": 0.7,
+                "latency": {"latency_parameter": True, "t95": 15.0, "onset_delta_days": 0.0},
+                "forecast": {"mean": 0.68},
+                "evidence": {"mean": 0.65, "n": 200, "k": 130},
+            }},
+            {"uuid": "e2", "from": "b", "to": "c", "p": {
+                "id": "param-bc", "mean": 0.5,
+                "latency": {"latency_parameter": True, "t95": 20.0, "onset_delta_days": 0.0},
+                "forecast": {"mean": 0.48},
+                "evidence": {"mean": 0.42, "n": 150, "k": 63},
+            }},
+            {"uuid": "e3", "from": "c", "to": "d", "p": {
+                "id": "param-cd", "mean": 0.3,
+                "latency": {"latency_parameter": True, "t95": 25.0, "onset_delta_days": 0.0},
+            }},
+        ],
+    }
+
+    def test_graph_level_parity(self):
+        """BE graph-level values must match FE canonical values.
+
+        FE canonical (from statsParity.contract.test.ts Vector 7):
+          e1: mu=1.9459  sigma=0.7090  t95=22.47  c=0.9088
+          e2: mu=2.3026  path_t95=46.56  path_mu=2.9131
+          e3: mu=2.4849  path_t95=69.30
+
+        KNOWN ONSET FALLBACK DISCREPANCY (flagged for discussion):
+          FE derives edgeOnsetDeltaDays ONLY from window() slices, defaulting
+          to 0 when none exist. BE falls back to graph-stored onset_delta_days.
+          This means cohort-mode-only queries lose onset in FE but keep it in BE.
+          For this test, we set graph onset to 0 so both sides agree.
+        """
+        param_lookup = {
+            "e1": self._make_cohorts(median=7.0, mean=9.0, k_ratio=0.65),
+            "e2": self._make_cohorts(median=10.0, mean=13.0, k_ratio=0.42,
+                                     n_base=80, n_days=8,
+                                     anchor_median=6.5, anchor_mean=8.5),
+            "e3": self._make_cohorts(median=12.0, mean=15.0, k_ratio=0.28,
+                                     n_base=50, n_days=6,
+                                     anchor_median=14.0, anchor_mean=18.0),
+        }
+
+        result = enhance_graph_latencies(
+            self.GRAPH, param_lookup,
+            query_mode='cohort',
+            active_edges={'e1', 'e2', 'e3'},
+        )
+
+        assert result.edges_processed == 3
+        assert result.edges_with_lag == 3
+
+        by_id = {ev.edge_uuid: ev for ev in result.edge_values}
+
+        # BE values must match FE canonical values within rounding tolerance.
+        # BE rounds: mu/sigma 4dp, t95 2dp, completeness 4dp.
+        TOL_GRAPH = 0.01  # accommodates BE 2dp rounding on t95
+
+        # e1: A → B (FE: mu=1.9459, sigma=0.7090, t95=22.47, c=0.9088)
+        assert by_id["e1"].mu == pytest.approx(1.9459, abs=TOL_GRAPH)
+        assert by_id["e1"].sigma == pytest.approx(0.709, abs=TOL_GRAPH)
+        assert by_id["e1"].t95 == pytest.approx(22.47, abs=TOL_GRAPH)
+        assert by_id["e1"].completeness == pytest.approx(0.9088, abs=TOL_GRAPH)
+
+        # e2: B → C (FE: mu=2.3026, path_t95=46.56, path_mu=2.9131)
+        assert by_id["e2"].mu == pytest.approx(2.3026, abs=TOL_GRAPH)
+        assert by_id["e2"].path_t95 == pytest.approx(46.56, abs=TOL_GRAPH)
+        assert by_id["e2"].path_mu == pytest.approx(2.9131, abs=TOL_GRAPH)
+
+        # e3: C → D (FE: mu=2.4849, path_t95=69.30, c=0.3754)
+        assert by_id["e3"].mu == pytest.approx(2.4849, abs=TOL_GRAPH)
+        assert by_id["e3"].path_t95 == pytest.approx(69.30, abs=0.1)
+        assert by_id["e3"].completeness == pytest.approx(0.3754, abs=TOL_GRAPH)

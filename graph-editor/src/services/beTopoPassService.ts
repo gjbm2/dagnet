@@ -9,6 +9,8 @@
 import type { CohortData, ParameterValueForLAG, LAGHelpers } from './statisticalEnhancementService';
 import type { ModelVarsEntry } from '../types';
 import { buildForecastingSettings } from '../constants/latency';
+import { forecastingSettingsService } from './forecastingSettingsService';
+import { parseDate } from './windowAggregationService';
 
 import { PYTHON_API_BASE } from '../lib/pythonApiBase';
 
@@ -46,6 +48,10 @@ export async function runBeTopoPass(
   queryDate: Date,
   lagHelpers: LAGHelpers,
   cohortWindow?: { start: Date; end: Date },
+  /** D1 FIX: query mode so BE can match FE's cohort/window semantics. */
+  lagSliceSource: 'cohort' | 'window' | 'none' = 'cohort',
+  /** D5 FIX: FE-computed active edge set so BE skips the same edges. */
+  activeEdges?: Set<string>,
 ): Promise<Array<{ edgeUuid: string; conditionalIndex?: number; entry: ModelVarsEntry }>> {
   const result: Array<{ edgeUuid: string; conditionalIndex?: number; entry: ModelVarsEntry }> = [];
 
@@ -120,13 +126,15 @@ export async function runBeTopoPass(
           if (Array.isArray(dates) && dates.length > 0) {
             const last = dates[dates.length - 1];
             if (typeof last === 'string') {
-              const d = new Date(last);
+              // D7 FIX: Use project parseDate (UK date aware, UTC midnight) instead of raw new Date()
+              const d = parseDate(last);
               if (!Number.isNaN(d.getTime()) && (!best || d.getTime() > best.getTime())) best = d;
             }
           }
           const windowTo = v?.window_to;
           if (typeof windowTo === 'string' && windowTo.trim()) {
-            const d = new Date(windowTo);
+            // D7 FIX: Use project parseDate (UK date aware, UTC midnight) instead of raw new Date()
+            const d = parseDate(windowTo);
             if (!Number.isNaN(d.getTime()) && (!best || d.getTime() > best.getTime())) best = d;
           }
         }
@@ -164,7 +172,37 @@ export async function runBeTopoPass(
   }
 
   // 2. Call BE
-  const settings = buildForecastingSettings();
+  // D3 FIX: Use runtime settings (with IDB overrides) instead of compiled constants.
+  // Start from the compiled base (which has non-overridable fields like min_fit_converters,
+  // t95_percentile, fit_left_censor_days), then overlay any runtime overrides.
+  const base = buildForecastingSettings();
+  const runtime = await forecastingSettingsService.getForecastingModelSettings();
+  const settings = {
+    ...base,
+    recency_half_life_days: runtime.RECENCY_HALF_LIFE_DAYS,
+    forecast_blend_lambda: runtime.FORECAST_BLEND_LAMBDA,
+    blend_completeness_power: runtime.LATENCY_BLEND_COMPLETENESS_POWER,
+    max_mean_median_ratio: runtime.LATENCY_MAX_MEAN_MEDIAN_RATIO,
+    onset_mass_fraction_alpha: runtime.ONSET_MASS_FRACTION_ALPHA,
+    onset_aggregation_beta: runtime.ONSET_AGGREGATION_BETA,
+    bayes_log_kappa_mu: runtime.BAYES_LOG_KAPPA_MU,
+    bayes_log_kappa_sigma: runtime.BAYES_LOG_KAPPA_SIGMA,
+    bayes_fallback_prior_ess: runtime.BAYES_FALLBACK_PRIOR_ESS,
+    bayes_dirichlet_conc_floor: runtime.BAYES_DIRICHLET_CONC_FLOOR,
+    bayes_sigma_floor: runtime.BAYES_SIGMA_FLOOR,
+    bayes_mu_prior_sigma_floor: runtime.BAYES_MU_PRIOR_SIGMA_FLOOR,
+    bayes_maturity_floor: runtime.BAYES_MATURITY_FLOOR,
+    bayes_softplus_sharpness: runtime.BAYES_SOFTPLUS_SHARPNESS,
+    bayes_rhat_threshold: runtime.BAYES_RHAT_THRESHOLD,
+    bayes_ess_threshold: runtime.BAYES_ESS_THRESHOLD,
+    bayes_warm_start_rhat_max: runtime.BAYES_WARM_START_RHAT_MAX,
+    bayes_warm_start_ess_min: runtime.BAYES_WARM_START_ESS_MIN,
+    bayes_hdi_prob: runtime.BAYES_HDI_PROB,
+    bayes_draws: runtime.BAYES_DRAWS,
+    bayes_tune: runtime.BAYES_TUNE,
+    bayes_chains: runtime.BAYES_CHAINS,
+    bayes_target_accept: runtime.BAYES_TARGET_ACCEPT,
+  };
   const url = `${PYTHON_API_BASE}/api/lag/topo-pass`;
 
   // ── Golden fixture: send FE outputs alongside BE request ──
@@ -187,6 +225,10 @@ export async function runBeTopoPass(
         cohort_data: cohortData,
         edge_contexts: edgeContexts,
         forecasting_settings: settings,
+        // D1 FIX: send query mode so BE can match FE's cohort/window semantics
+        query_mode: lagSliceSource,
+        // D5 FIX: send FE-computed active edge set so BE skips the same edges
+        ...(activeEdges ? { active_edges: [...activeEdges] } : {}),
         ...(feOutputs ? { fe_outputs: feOutputs } : {}),
       }),
     });

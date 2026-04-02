@@ -347,6 +347,86 @@ def compute_blended_mean(
 
 
 # ─────────────────────────────────────────────────────────────
+# D2 FIX: Per-day blended mean (mirrors FE computePerDayBlendedMean)
+# ─────────────────────────────────────────────────────────────
+
+def compute_per_day_blended_mean(
+    cohorts: List[CohortData],
+    forecast_mean: float,
+    n_baseline: int,
+    cdf_mu: float,
+    cdf_sigma: float,
+    onset_delta_days: float = 0.0,
+    cdf_sigma_moments: Optional[float] = None,
+    tail_constraint_applied: bool = False,
+    forecast_blend_lambda: float = 0.15,
+    blend_completeness_power: float = 2.25,
+) -> Optional[Tuple[float, float]]:
+    """Per-day blended p.mean — each date gets its own blend weight from its
+    own completeness, so mature cohorts contribute nearly pure evidence while
+    immature cohorts lean on the forecast.
+
+    Returns (blended_mean, completeness_agg) or None if inputs are insufficient.
+
+    Port of FE computePerDayBlendedMean (statisticalEnhancementService.ts).
+    """
+    if n_baseline <= 0 or not math.isfinite(forecast_mean) or len(cohorts) == 0:
+        return None
+
+    use_tail_constraint = tail_constraint_applied and cdf_sigma_moments is not None
+
+    total_n = 0
+    total_k = 0
+    effective_n = 0.0  # sum(n_i * c_i)
+    weighted_completeness = 0.0
+    weighted_blended_rate = 0.0
+
+    # Pass 1: compute per-day completeness and accumulate totals for pooled rate
+    day_data: List[Tuple[int, int, float, float]] = []  # (n, k, c_i, w_i)
+    for c in cohorts:
+        if c.n <= 0:
+            continue
+
+        age_x = to_model_space_age_days(onset_delta_days, c.age)
+        if use_tail_constraint:
+            f_moments = log_normal_cdf(age_x, cdf_mu, cdf_sigma_moments)
+            f_constrained = log_normal_cdf(age_x, cdf_mu, cdf_sigma)
+            c_i = min(f_moments, f_constrained)
+        else:
+            c_i = log_normal_cdf(age_x, cdf_mu, cdf_sigma)
+        c_i = max(0.0, min(1.0, c_i))
+
+        # Per-day blend weight (same formula as compute_blended_mean)
+        c_eff = min(1.0, max(0.0, c_i ** blend_completeness_power)) if c_i > 0 else 0.0
+        n_eff = c_eff * c.n
+        remaining = max(0.0, 1.0 - c_eff)
+        m0_eff = forecast_blend_lambda * n_baseline * remaining
+        w_i = (n_eff / (m0_eff + n_eff)) if (m0_eff + n_eff) > 0 else 0.0
+
+        total_n += c.n
+        total_k += c.k
+        effective_n += c.n * c_i
+        weighted_completeness += c.n * c_i
+
+        day_data.append((c.n, c.k, c_i, w_i))
+
+    if total_n <= 0:
+        return None
+
+    # Pooled de-biased rate: p̂ = sum(k) / sum(n * c)
+    pooled_rate = min(1.0, total_k / effective_n) if effective_n > 0 else 0.0
+
+    # Pass 2: apply per-day weights to pooled rate
+    for n_i, _k_i, _c_i, w_i in day_data:
+        blended_rate_i = w_i * pooled_rate + (1.0 - w_i) * forecast_mean
+        weighted_blended_rate += n_i * blended_rate_i
+
+    blended_mean = weighted_blended_rate / total_n
+    completeness_agg = weighted_completeness / total_n
+    return (blended_mean, completeness_agg)
+
+
+# ─────────────────────────────────────────────────────────────
 # FW composition (approximateLogNormalSumFit)
 # ─────────────────────────────────────────────────────────────
 
@@ -411,6 +491,12 @@ class EdgeLatencyStats:
     p_evidence: float
     forecast_available: bool
     completeness_cdf: CompletenessCdfParams
+    # Heuristic dispersion (see heuristic-dispersion-design.md §3)
+    p_sd: float = 0.0
+    mu_sd: float = 0.0
+    sigma_sd: float = 0.0
+    onset_sd: float = 0.0
+    onset_mu_corr: float = 0.0
 
 
 def compute_edge_latency_stats(
@@ -519,17 +605,46 @@ def compute_edge_latency_stats(
         onset_delta_days,
     )
 
+    # ── Heuristic dispersion estimates (design doc §3) ────────────────
+    quality_inflation = 1.0 if fit.empirical_quality_ok else 2.0
+    sigma_for_sd = sigma_moments_safe if sigma_moments_safe > 0 else fit.sigma
+
+    # §3.1 Rate uncertainty: Beta-binomial posterior SD
+    p_alpha = total_k + 1
+    p_beta_val = total_n - total_k + 1
+    p_sd_raw = math.sqrt(p_alpha * p_beta_val / ((p_alpha + p_beta_val) ** 2 * (p_alpha + p_beta_val + 1)))
+    p_sd = max(p_sd_raw, 0.10) if total_k < 30 else p_sd_raw
+
+    # §3.2 Latency location uncertainty: ~1.25 × σ / √totalK
+    n_lag = max(total_k, 1)
+    mu_sd = max(1.25 * sigma_for_sd / math.sqrt(n_lag) * quality_inflation, 0.02)
+
+    # §3.3 Latency scale uncertainty: ~0.87 × σ / √totalK
+    sigma_is_default = (not fit.empirical_quality_ok) or abs(sigma_for_sd - LATENCY_DEFAULT_SIGMA) < 1e-9
+    sigma_sd_raw = 0.25 if sigma_is_default else 0.87 * sigma_for_sd / math.sqrt(n_lag)
+    sigma_sd = max(sigma_sd_raw * quality_inflation, 0.02)
+
+    # §3.4 Onset uncertainty: max(1.0, 0.25 × onset)
+    onset_sd = max(1.0, 0.25 * onset_delta_days)
+
+    # §3.5 Onset-mu correlation: structural prior
+    onset_mu_corr = -0.3 if onset_delta_days > 0 else 0.0
+
     if p_inf is None:
         return EdgeLatencyStats(
             fit=fit, t95=t95, p_infinity=p_evidence, completeness=completeness,
             p_evidence=p_evidence, forecast_available=False,
             completeness_cdf=cdf_params,
+            p_sd=p_sd, mu_sd=mu_sd, sigma_sd=sigma_sd,
+            onset_sd=onset_sd, onset_mu_corr=onset_mu_corr,
         )
 
     return EdgeLatencyStats(
         fit=fit, t95=t95, p_infinity=p_inf, completeness=completeness,
         p_evidence=p_evidence, forecast_available=True,
         completeness_cdf=cdf_params,
+        p_sd=p_sd, mu_sd=mu_sd, sigma_sd=sigma_sd,
+        onset_sd=onset_sd, onset_mu_corr=onset_mu_corr,
     )
 
 
@@ -557,6 +672,12 @@ class EdgeLAGValues:
     p_evidence: float = 0.0
     forecast_available: bool = False
     blended_mean: Optional[float] = None
+    # Heuristic dispersion (see heuristic-dispersion-design.md §3)
+    p_sd: float = 0.0
+    mu_sd: float = 0.0
+    sigma_sd: float = 0.0
+    onset_sd: float = 0.0
+    onset_mu_corr: float = 0.0
 
 
 @dataclass
@@ -571,6 +692,8 @@ def enhance_graph_latencies(
     param_lookup: Dict[str, List[CohortData]],
     settings: Optional[ForecastingSettings] = None,
     edge_contexts: Optional[Dict[str, EdgeContext]] = None,
+    query_mode: str = 'cohort',
+    active_edges: Optional[set] = None,
 ) -> TopoPassResult:
     """Full topo pass: walk graph edges in topological order, compute latency stats.
 
@@ -578,12 +701,18 @@ def enhance_graph_latencies(
         graph: Graph dict with 'nodes' and 'edges'.
         param_lookup: edge_id → list of CohortData (pre-aggregated cohort data per edge).
         settings: Forecasting settings (constants).
+        query_mode: 'cohort' | 'window' | 'none' — matches FE lagSliceSource (D1 FIX).
+        active_edges: Optional FE-computed active edge set (D5 FIX). When provided,
+            used instead of the latency_parameter-only check.
 
     Returns:
         TopoPassResult with per-edge EdgeLAGValues.
     """
     s = settings or ForecastingSettings()
     result = TopoPassResult()
+
+    # D1 FIX: window mode flag — mirrors FE's isWindowMode
+    is_window_mode = query_mode == 'window'
 
     nodes = graph.get("nodes", [])
     edges_raw = graph.get("edges", [])
@@ -610,13 +739,17 @@ def enhance_graph_latencies(
     if anchor_id is None and nodes:
         anchor_id = nodes[0].get("uuid") or nodes[0].get("id")
 
-    # Identify active latency edges
-    active_edges: set = set()
-    for e in edges_raw:
-        lat = (e.get("p") or {}).get("latency") or {}
-        if lat.get("latency_parameter"):
-            eid = e.get("uuid") or e.get("id", "")
-            active_edges.add(eid)
+    # D5 FIX: Use FE-provided active edge set when available (probability-gated,
+    # scenario-aware). Fall back to latency_parameter-only check for backward compat.
+    if active_edges is not None:
+        _active_edges = active_edges
+    else:
+        _active_edges = set()
+        for e in edges_raw:
+            lat = (e.get("p") or {}).get("latency") or {}
+            if lat.get("latency_parameter"):
+                eid = e.get("uuid") or e.get("id", "")
+                _active_edges.add(eid)
 
     # DP state
     node_path_t95: Dict[str, float] = {anchor_id: 0.0}
@@ -627,22 +760,27 @@ def enhance_graph_latencies(
     node_path_sigma: Dict[str, Optional[float]] = {anchor_id: None}
     node_path_onset: Dict[str, float] = {anchor_id: 0.0}
     node_median_lag_prior: Dict[str, float] = {anchor_id: 0.0}
+    node_dominant_edge: Dict[str, str] = {}  # D9 FIX: track winning edge for tie-breaking
 
-    # Kahn's topo sort
+    # D9 FIX: Kahn's topo sort — use list (insertion order) instead of set for
+    # deterministic traversal. Sort initial queue by node ID for stable tie-breaking.
     in_degree: Dict[str, int] = {}
-    all_node_ids = set()
+    all_node_ids: List[str] = []
+    _seen_node_ids: set = set()
     for n in nodes:
         nid = n.get("uuid") or n.get("id", "")
-        all_node_ids.add(nid)
+        if nid not in _seen_node_ids:
+            all_node_ids.append(nid)
+            _seen_node_ids.add(nid)
         in_degree[nid] = 0
     for e in edges_raw:
         to_id = e["to"]
         in_degree[to_id] = in_degree.get(to_id, 0) + 1
 
-    queue: List[str] = []
-    for nid in all_node_ids:
-        if in_degree.get(nid, 0) == 0:
-            queue.append(nid)
+    queue: List[str] = sorted(
+        [nid for nid in all_node_ids if in_degree.get(nid, 0) == 0],
+        key=str,
+    )
     if anchor_id and anchor_id not in queue:
         queue.append(anchor_id)
 
@@ -679,7 +817,7 @@ def enhance_graph_latencies(
             to_node = edge["to"]
             p_block = edge.get("p") or {}
             lat_block = p_block.get("latency") or {}
-            has_latency = edge_id in active_edges
+            has_latency = edge_id in _active_edges
 
             # Propagate flow mass
             from_mass = node_arriving_mass.get(node_id, 0.0)
@@ -697,12 +835,14 @@ def enhance_graph_latencies(
                     edge_id, node_id, to_node,
                     node_path_mu, node_path_sigma, node_path_onset,
                     edge_path_t95, node_path_t95, 0.0,
+                    node_dominant_edge,
                 )
                 _decrement_and_enqueue(to_node, in_degree, queue)
                 continue
 
-            # Edge t95 from graph
-            stored_t95 = lat_block.get("t95")
+            # D4 FIX: Edge t95 from graph — prefer promoted_t95 (model output) over
+            # t95 (user-configured input), matching FE's use of promoted horizons.
+            stored_t95 = lat_block.get("promoted_t95") or lat_block.get("t95")
             if not (isinstance(stored_t95, (int, float)) and math.isfinite(stored_t95) and stored_t95 > 0):
                 stored_t95 = None
             effective_horizon = stored_t95 if (has_latency and stored_t95) else (stored_t95 or DEFAULT_T95_DAYS if has_latency else path_t95_to_node)
@@ -714,6 +854,7 @@ def enhance_graph_latencies(
                     edge_id, node_id, to_node,
                     node_path_mu, node_path_sigma, node_path_onset,
                     edge_path_t95, node_path_t95, path_t95_to_node + (stored_t95 or DEFAULT_T95_DAYS if has_latency else 0),
+                    node_dominant_edge,
                 )
                 _decrement_and_enqueue(to_node, in_degree, queue)
                 continue
@@ -749,29 +890,36 @@ def enhance_graph_latencies(
                     onset = 0.0
 
             # D1 FIX: Anchor delay — exponential credibility blend (FE lines 2194-2256)
-            anchor_cohorts = [c for c in cohorts if c.anchor_median_lag_days is not None and c.anchor_median_lag_days > 0 and c.n > 0]
-            if anchor_cohorts:
-                total_n_anchor = sum(c.n for c in anchor_cohorts)
-                observed_anchor = sum(c.n * c.anchor_median_lag_days for c in anchor_cohorts) / (total_n_anchor or 1)
+            # Window mode: FE skips anchor delay blend entirely (window cohorts are not
+            # anchored at the entry node A, so the prior/blend mechanism is meaningless).
+            if is_window_mode:
+                anchor_median_lag = 0.0
             else:
-                observed_anchor = 0.0
+                anchor_cohorts = [c for c in cohorts if c.anchor_median_lag_days is not None and c.anchor_median_lag_days > 0 and c.n > 0]
+                if anchor_cohorts:
+                    total_n_anchor = sum(c.n for c in anchor_cohorts)
+                    observed_anchor = sum(c.n * c.anchor_median_lag_days for c in anchor_cohorts) / (total_n_anchor or 1)
+                else:
+                    observed_anchor = 0.0
 
-            prior_anchor = node_median_lag_prior.get(node_id, 0.0)
+                prior_anchor = node_median_lag_prior.get(node_id, 0.0)
 
-            # Anchor lag coverage: fraction of cohort-days with valid anchor data
-            total_cohorts_in_scope = sum(1 for c in cohorts if c.n > 0)
-            anchor_lag_coverage = len(anchor_cohorts) / total_cohorts_in_scope if total_cohorts_in_scope > 0 else 0.0
+                # Anchor lag coverage: fraction of cohort-days with valid anchor data
+                total_cohorts_in_scope = sum(1 for c in cohorts if c.n > 0)
+                anchor_lag_coverage = len(anchor_cohorts) / total_cohorts_in_scope if total_cohorts_in_scope > 0 else 0.0
 
-            # D7 FIX: Use scoped cohorts for startersAtX (FE uses cohortsScoped)
-            starters_at_x = sum(c.n for c in cohorts_scoped)
-            rate_for_credibility = (p_block.get("forecast") or {}).get("mean") or p_block.get("mean", 0.0) or 0.0
-            forecast_conversions = starters_at_x * rate_for_credibility
-            effective_forecast_conversions = anchor_lag_coverage * forecast_conversions
-            blend_weight = 1.0 - math.exp(-effective_forecast_conversions / ANCHOR_DELAY_BLEND_K_CONVERSIONS) if ANCHOR_DELAY_BLEND_K_CONVERSIONS > 0 else 1.0
+                # D7 FIX: Use scoped cohorts for startersAtX (FE uses cohortsScoped)
+                starters_at_x = sum(c.n for c in cohorts_scoped)
+                rate_for_credibility = (p_block.get("forecast") or {}).get("mean") or p_block.get("mean", 0.0) or 0.0
+                forecast_conversions = starters_at_x * rate_for_credibility
+                effective_forecast_conversions = anchor_lag_coverage * forecast_conversions
+                blend_weight = 1.0 - math.exp(-effective_forecast_conversions / ANCHOR_DELAY_BLEND_K_CONVERSIONS) if ANCHOR_DELAY_BLEND_K_CONVERSIONS > 0 else 1.0
 
-            anchor_median_lag = blend_weight * observed_anchor + (1.0 - blend_weight) * prior_anchor
+                anchor_median_lag = blend_weight * observed_anchor + (1.0 - blend_weight) * prior_anchor
 
             # Compute edge latency stats (cohorts_for_fit for p∞ — FE parity)
+            # D1 FIX: Window mode cohorts are not anchored at A, so do NOT apply
+            # anchor travel-time adjustment (mirrors FE line 2516: !isWindowMode).
             latency_stats = compute_edge_latency_stats(
                 cohorts,
                 agg_median,
@@ -784,7 +932,7 @@ def enhance_graph_latencies(
                 recency_half_life_days=s.recency_half_life_days,
                 onset_delta_days=onset,
                 max_mean_median_ratio=s.max_mean_median_ratio,
-                apply_anchor_age_adjustment=True,
+                apply_anchor_age_adjustment=not is_window_mode,
                 settings=s,
             )
 
@@ -869,9 +1017,10 @@ def enhance_graph_latencies(
             # Cohort-mode completeness: A→Y path-anchored
             completeness_used = latency_stats.completeness
             if path_mu is not None and path_sigma is not None:
+                # D4 FIX: prefer promoted_path_t95 over path_t95
                 auth_path_t95 = max(
                     edge_path_t95_val,
-                    lat_block.get("path_t95", 0) or 0,
+                    lat_block.get("promoted_path_t95", 0) or lat_block.get("path_t95", 0) or 0,
                 )
                 if auth_path_t95 > 0:
                     ay_median = math.exp(path_mu)
@@ -887,6 +1036,42 @@ def enhance_graph_latencies(
                     )
                     if math.isfinite(ay_completeness):
                         completeness_used = ay_completeness
+
+            # D2 FIX: Set up blend inputs (mirrors FE lines 2632-2653)
+            # Default to edge-level CDF params for per-day blend.
+            blend_cdf_mu = latency_stats.completeness_cdf.mu
+            blend_cdf_sigma = latency_stats.completeness_cdf.sigma
+            blend_cdf_sigma_moments = latency_stats.completeness_cdf.sigma_moments
+            blend_tail_applied = latency_stats.completeness_cdf.tail_constraint_applied
+            blend_onset = onset
+
+            # If A→Y path completeness was computed, use path-level CDF params for blend.
+            if completeness_used != latency_stats.completeness:
+                # ay_cdf was set in the A→Y completeness block above
+                try:
+                    blend_cdf_mu = ay_cdf.mu  # type: ignore[possibly-undefined]
+                    blend_cdf_sigma = ay_cdf.sigma
+                    blend_cdf_sigma_moments = ay_cdf.sigma_moments
+                    blend_tail_applied = ay_cdf.tail_constraint_applied
+                except NameError:
+                    pass  # keep edge-level defaults
+
+            # Blend cohorts: anchor-adjusted in cohort mode (mirrors FE line 2640).
+            # Window mode: use raw cohortsScoped (no anchor adjustment).
+            if not is_window_mode and (anchor_median_lag > 0 or any(
+                c.anchor_median_lag_days is not None and c.anchor_median_lag_days > 0
+                for c in cohorts_scoped
+            )):
+                blend_cohorts = [
+                    CohortData(
+                        date=c.date, age=max(0.0, c.age - (c.anchor_median_lag_days if c.anchor_median_lag_days is not None else anchor_median_lag)),
+                        n=c.n, k=c.k, median_lag_days=c.median_lag_days, mean_lag_days=c.mean_lag_days,
+                        anchor_median_lag_days=c.anchor_median_lag_days, anchor_mean_lag_days=c.anchor_mean_lag_days,
+                    )
+                    for c in cohorts_scoped
+                ]
+            else:
+                blend_cohorts = cohorts_scoped
 
             # ── Forecast mean resolution (D4 FIX: window-derived forecast) ──
             base_forecast_mean = (p_block.get("forecast") or {}).get("mean")
@@ -951,23 +1136,49 @@ def enhance_graph_latencies(
             # D7 FIX: nBaseline fallback to nQueryForBlend (FE: nBaseline > 0 ? nBaseline : nQueryForBlend)
             n_baseline_for_blend = n_baseline if n_baseline > 0 else n_query_for_blend
 
-            blended_from_blend = compute_blended_mean(
-                evidence_mean=evidence_mean_for_blend,
-                forecast_mean=forecast_mean_for_blend,
-                completeness=completeness_used,
-                n_query=n_query_for_blend,
-                n_baseline=max(n_baseline_for_blend, 1),
-                forecast_blend_lambda=s.forecast_blend_lambda,
-                blend_completeness_power=s.blend_completeness_power,
+            # D2 FIX: Try per-day blend first (preferred — correct for mixed-maturity sweeps).
+            # Falls back to aggregate blend when cohorts look sampled or are empty.
+            # Mirrors FE lines 3226-3246 in statisticalEnhancementService.ts.
+            per_day_result = None
+            if not cohorts_look_sampled and len(blend_cohorts) > 0:
+                per_day_result = compute_per_day_blended_mean(
+                    cohorts=blend_cohorts,
+                    forecast_mean=forecast_mean_for_blend,
+                    n_baseline=max(n_baseline_for_blend, 1),
+                    cdf_mu=blend_cdf_mu,
+                    cdf_sigma=blend_cdf_sigma,
+                    onset_delta_days=blend_onset,
+                    cdf_sigma_moments=blend_cdf_sigma_moments,
+                    tail_constraint_applied=blend_tail_applied,
+                    forecast_blend_lambda=s.forecast_blend_lambda,
+                    blend_completeness_power=s.blend_completeness_power,
+                )
+
+            blended_from_blend = (
+                per_day_result[0] if per_day_result is not None
+                else compute_blended_mean(
+                    evidence_mean=evidence_mean_for_blend,
+                    forecast_mean=forecast_mean_for_blend,
+                    completeness=completeness_used,
+                    n_query=n_query_for_blend,
+                    n_baseline=max(n_baseline_for_blend, 1),
+                    forecast_blend_lambda=s.forecast_blend_lambda,
+                    blend_completeness_power=s.blend_completeness_power,
+                )
             )
 
             # D11 FIX: FE falls back to raw evidence mean (edge.p.evidence.mean), not computed k/n
             evidence_mean_raw = evidence_block.get("mean")
             blended = blended_from_blend if blended_from_blend is not None else evidence_mean_raw
 
-            # Update DP state for target node
-            if edge_path_t95_val >= node_path_t95.get(to_node, 0.0):
+            # D9 FIX: Update DP state for target node — deterministic tie-breaking.
+            # Use strict > plus secondary sort by edge_id for equal horizons.
+            current_t95 = node_path_t95.get(to_node, 0.0)
+            _dominant_edge = node_dominant_edge.get(to_node)
+            if (edge_path_t95_val > current_t95
+                    or (edge_path_t95_val == current_t95 and (_dominant_edge is None or edge_id < _dominant_edge))):
                 node_path_t95[to_node] = edge_path_t95_val
+                node_dominant_edge[to_node] = edge_id
                 node_path_mu[to_node] = path_mu if has_latency else (path_mu or node_path_mu.get(node_id))
                 node_path_sigma[to_node] = path_sigma if has_latency else (path_sigma or node_path_sigma.get(node_id))
                 node_path_onset[to_node] = max(node_path_onset.get(to_node, 0.0), path_onset)
@@ -1096,11 +1307,17 @@ def _propagate_path_state(
     edge_id: str, from_node: str, to_node: str,
     node_path_mu: Dict, node_path_sigma: Dict, node_path_onset: Dict,
     edge_path_t95: Dict, node_path_t95: Dict, t95_val: float,
+    node_dominant_edge: Optional[Dict[str, str]] = None,
 ) -> None:
     """Propagate path DP state through a skipped/no-data edge."""
     edge_path_t95[edge_id] = t95_val
-    if t95_val >= node_path_t95.get(to_node, 0.0):
+    # D9 FIX: deterministic tie-breaking (same as main DP update)
+    current = node_path_t95.get(to_node, 0.0)
+    _dom = node_dominant_edge.get(to_node) if node_dominant_edge else None
+    if (t95_val > current or (t95_val == current and (_dom is None or edge_id < _dom))):
         node_path_t95[to_node] = t95_val
+        if node_dominant_edge is not None:
+            node_dominant_edge[to_node] = edge_id
         node_path_mu[to_node] = node_path_mu.get(from_node)
         node_path_sigma[to_node] = node_path_sigma.get(from_node)
         node_path_onset[to_node] = max(

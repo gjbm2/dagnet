@@ -162,3 +162,18 @@ The first exception to this pattern will be MCMC inference (see
 `project-bayes/3-compute-and-deployment-architecture.md`), which delegates
 long-running computation to an external compute vendor with results
 returning via webhook → git commit.
+
+## Related Docs
+
+**Domain model** (what DagNet models, not how it's built):
+- `public/docs/user-guide.md` — Product concepts: nodes, edges, parameters,
+  conversion funnels, what-if scenarios
+- `public/docs/glossary.md` — Term definitions (node, edge, case, event, path,
+  scenario, latency)
+- `public/docs/query-expressions.md` — DSL from the user's perspective
+
+**Canonical data schemas** (see `DATA_SOURCES_REFERENCE.md` for full catalogue):
+- `public/schemas/conversion-graph-1.1.0.json` — Graph structure (source of
+  truth for `lib/graph_types.py` Pydantic models)
+- `public/param-schemas/parameter-schema.yaml` — Parameter data model
+- `public/schemas/query-dsl-1.1.0.json` — DSL grammar

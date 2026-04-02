@@ -138,6 +138,16 @@ class RepositoryOperationsService {
       // best-effort only
     }
 
+    // Re-merge default settings keys after pull.
+    // The repo version of settings.yaml may lack newly-added defaults
+    // (e.g. Bayes forecasting settings). This ensures they are always present.
+    try {
+      const { mergeSettingsDefaults } = await import('../init/seedSettings');
+      await mergeSettingsDefaults();
+    } catch {
+      // best-effort — settings merge failure must not block pull
+    }
+
     // Reload Navigator to show updated files
     if (this.navigatorOps) {
       await this.navigatorOps.refreshItems();

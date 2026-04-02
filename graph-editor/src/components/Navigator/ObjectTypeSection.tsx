@@ -343,12 +343,13 @@ function NavigatorItem({ fileId, isActive, tabCount }: NavigatorItemProps) {
             <Share2 size={12} />
           </button>
         )}
-        {isHovering && canShowHistory && (
+        {isHovering && !entry.isLocal && entry.hasFile && (
           <button
             type="button"
             className="navigator-item-history-btn"
             onClick={handleHistoryClick}
             title="Open historical version"
+            style={canShowHistory ? undefined : { visibility: 'hidden' }}
           >
             <AtSign size={13} />
           </button>

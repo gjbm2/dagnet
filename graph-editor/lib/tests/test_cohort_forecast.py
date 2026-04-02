@@ -7,7 +7,6 @@ from runner.cohort_forecast import (
     read_edge_cohort_params,
     get_incoming_edges,
     find_edge_by_id,
-    upstream_arrival_rate,
     compute_cohort_maturity_rows,
 )
 
@@ -181,41 +180,8 @@ class TestFindEdgeById:
         assert find_edge_by_id(SAMPLE_GRAPH, 'nonexistent') is None
 
 
-# ── upstream_arrival_rate ──────────────────────────────────────────────
-
-
-class TestUpstreamArrivalRate:
-    def test_single_incoming_edge(self):
-        # Node B has one incoming edge (e1: A→B, p=0.9, mu=2.0, sigma=0.4, onset=1.0)
-        rate = upstream_arrival_rate(50, SAMPLE_GRAPH, 'B')
-        assert rate is not None
-        # At τ=50, CDF should be near 1.0, so rate ≈ 0.9
-        assert 0.85 < rate < 0.95
-
-    def test_multiple_incoming_edges_sum(self):
-        # Node C has two incoming edges (e2 + e3)
-        rate = upstream_arrival_rate(50, SAMPLE_GRAPH, 'C')
-        assert rate is not None
-        # Sum of e2 rate (~0.8) + e3 rate (~0.3) ≈ 1.1 — but each is independent
-        # arrival, so summing is correct (total arrivals from both paths)
-        assert rate > 0.5
-
-    def test_zero_tau(self):
-        rate = upstream_arrival_rate(0, SAMPLE_GRAPH, 'B')
-        assert rate is not None
-        assert rate == 0.0
-
-    def test_no_incoming_returns_none(self):
-        assert upstream_arrival_rate(50, SAMPLE_GRAPH, 'A') is None
-
-    def test_monotonically_increasing(self):
-        rates = [upstream_arrival_rate(t, SAMPLE_GRAPH, 'B') for t in range(0, 100)]
-        for i in range(1, len(rates)):
-            assert rates[i] >= rates[i - 1]
-
-    def test_returns_none_for_edges_without_params(self):
-        graph = {'edges': [{'uuid': 'e1', 'from': 'A', 'to': 'B', 'p': {}}]}
-        assert upstream_arrival_rate(50, graph, 'B') is None
+# upstream_arrival_rate tests REMOVED — function replaced by
+# calculate_path_probability from path_runner.py (tested there).
 
 
 # ── compute_cohort_maturity_rows ────────────────────────────────────────

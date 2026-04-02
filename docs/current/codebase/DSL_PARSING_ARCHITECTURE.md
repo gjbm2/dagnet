@@ -111,3 +111,13 @@ When adding new constraint types:
 - `dslExplosion.test.ts`: 10 tests for compound explosion
 - Total: All parsing logic is tested
 
+## Related Docs
+
+- **`DSL_SYNTAX_REFERENCE.md`** — Full grammar, all 14 functions, composition
+  rules, and examples (the "what" to this doc's "how")
+- **`DATA_RETRIEVAL_QUERIES.md`** — Three purposes of queries (topology,
+  conditional metadata, data retrieval)
+- **`RESERVED_QUERY_TERMS_GLOSSARY.md`** — Semantic term definitions
+- **Canonical schemas**: `public/schemas/query-dsl-1.1.0.json`
+- **User-facing guide**: `public/docs/query-expressions.md`
+

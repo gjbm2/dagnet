@@ -101,6 +101,24 @@ export function compareModelVarsSources(graph: any): ParityMismatch[] {
   return mismatches;
 }
 
+// ── D8 FIX: BE rounds outputs before returning. Round FE values to the same
+// precision before comparing so trailing-digit differences don't cause false
+// positives. BE rounds: t95/onset 2dp, mu/sigma/median/mean 4dp, p 6dp.
+const BE_PRECISION: Record<string, number> = {
+  'p.mean': 6,
+  mu: 4, sigma: 4,
+  t95: 2,
+  path_mu: 4, path_sigma: 4,
+  path_t95: 2,
+};
+
+function _roundToBePrecision(value: number, field: string): number {
+  const dp = BE_PRECISION[field];
+  if (dp == null) return value; // unknown field — compare at full precision
+  const factor = 10 ** dp;
+  return Math.round(value * factor) / factor;
+}
+
 // ── Internal ────────────────────────────────────────────────────────────────
 
 function _check(
@@ -111,21 +129,23 @@ function _check(
   be: number,
   mode: 'relative' | 'absolute',
 ): void {
-  const absDelta = Math.abs(fe - be);
+  // Round FE to the same precision BE uses before comparing (D8 FIX)
+  const feRounded = _roundToBePrecision(fe, field);
+  const absDelta = Math.abs(feRounded - be);
 
   if (mode === 'relative') {
-    const relDelta = absDelta / Math.max(1e-12, Math.abs(fe));
+    const relDelta = absDelta / Math.max(1e-12, Math.abs(feRounded));
     if (relDelta > MU_SIGMA_ERROR_REL) {
-      out.push({ edgeUuid, field, fe, be, delta: absDelta });
+      out.push({ edgeUuid, field, fe: feRounded, be, delta: absDelta });
     } else if (relDelta > MU_SIGMA_WARN_REL) {
       sessionLogService.warning(
         'graph', 'ANALYTIC_PARITY_DRIFT',
-        `${edgeUuid.substring(0, 8)}:${field} FE=${fe.toFixed(6)} BE=${be.toFixed(6)} rel=${(relDelta * 100).toFixed(3)}%`,
+        `${edgeUuid.substring(0, 8)}:${field} FE=${feRounded.toFixed(6)} BE=${be.toFixed(6)} rel=${(relDelta * 100).toFixed(3)}%`,
       );
     }
   } else {
     if (absDelta > T95_TOLERANCE) {
-      out.push({ edgeUuid, field, fe, be, delta: absDelta });
+      out.push({ edgeUuid, field, fe: feRounded, be, delta: absDelta });
     }
   }
 }

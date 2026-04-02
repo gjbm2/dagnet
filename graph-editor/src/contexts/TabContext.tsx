@@ -1110,16 +1110,19 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
         console.log('[TabContext] retrieveall mode detected - skipping workspace tab restoration');
       }
 
-      // Always initialise credentials + defaults-backed files that affect query
-      // semantics (connections, settings, hash-mappings). Only restore tabs in
-      // normal workspace boot — share mode and retrieveall start with a blank slate.
-      if (!isShareMode() && !isRetrieveAllMode) {
-        await loadTabsFromDB();
-      }
+      // Seed defaults-backed files BEFORE restoring tabs so that any new
+      // default keys (e.g. Bayes forecasting settings) are already in IDB
+      // when loadTabsFromDB loads files into FileRegistry.
       await initializeCredentials();
       await initializeConnections();
       await initializeSettings();
       await initializeHashMappings();
+
+      // Only restore tabs in normal workspace boot — share mode and
+      // retrieveall start with a blank slate.
+      if (!isShareMode() && !isRetrieveAllMode) {
+        await loadTabsFromDB();
+      }
       
       await loadFromURLData();
 
@@ -2146,7 +2149,7 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
             );
           }
         }
-      } else if (item.type === 'credentials' || item.type === 'connections') {
+      } else if (item.type === 'credentials' || item.type === 'connections' || item.type === 'settings') {
         console.log(`TabContext: Loading ${item.type} ${item.name}...`);
         // These files are seeded/initialized separately
         // Must already exist in IndexedDB - if not, initialization hasn't completed
@@ -2155,7 +2158,7 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
           throw new Error(`${item.type} file not found - initialization incomplete. Please refresh the page.`);
         }
         data = existing.data;
-        console.log(`TabContext: Loaded ${item.type} from IndexedDB with`, 
+        console.log(`TabContext: Loaded ${item.type} from IndexedDB with`,
           item.type === 'connections' ? (data?.connections?.length || 0) + ' connections' : 'data');
       } else if (item.type === 'markdown') {
         console.log(`TabContext: Loading markdown ${item.name}...`);

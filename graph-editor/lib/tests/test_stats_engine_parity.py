@@ -408,10 +408,13 @@ def _parse_edge_contexts(raw: Dict[str, Dict]) -> Dict[str, EdgeContext]:
 
 
 class TestTopoPassLiveFixture:
-    """Superseded by test_stats_parity_contract.py which uses deterministic
-    synthetic vectors instead of a stale golden fixture. Kept for reference."""
+    """Live parity test: if a golden fixture exists at debug/tmp.topo-pass-golden.json
+    (written by BE /api/lag/topo-pass when FE sends fe_outputs), run the BE
+    engine on the same inputs and compare against FE outputs.
 
-    @pytest.mark.skip(reason="Replaced by test_stats_parity_contract.py — deterministic contract tests")
+    Requires a FRESH fixture captured after the D1-D9 parity fixes — old fixtures
+    lack query_mode, active_edges, and promoted_t95 in the request payload."""
+
     def test_live_parity(self):
         fixture = _load_live_fixture()
         if fixture is None:

@@ -2,9 +2,9 @@
 
 ## Pre-flight Checks (MANDATORY before every Bash command)
 
-A `PreToolUse` hook fires on every Bash tool call and reminds you to check
-these gates. **Scan all four gates before executing.** If any gate fails,
-STOP and use the listed alternative. Do not rationalise around them.
+A `PreToolUse` hook fires on every Bash tool call. It injects a system reminder into the conversation asking you to check these gates. When you see this reminder, **scan all four gates before executing**. If any gate fails, STOP and use the listed alternative. Do not rationalise around them.
+
+**How it works**: the hook runs automatically — you don't invoke it. If your command matches a gate pattern and you don't have explicit permission, the correct response is to use a non-destructive alternative (Read, Edit, Glob, Grep) or ask the user. The hook cannot block your command, so the discipline is on you.
 
 ### Gate 1: Git writes
 
@@ -120,34 +120,44 @@ These are **non-negotiable reflexes**. When the user's message matches a trigger
   - `cd graph-editor && nvm use "$(cat .nvmrc)"`
   - After this, `node` and `npm` should be available for `npm test`, etc.
 
+## Graph-Ops Playbooks (in dagnet repo)
+
+`graph-ops/` at the dagnet repo root contains playbooks, reference docs, and scripts for creating, editing, and validating conversion graphs. **Read these before doing graph operations work** — they encode tested procedures for graph editing, entity creation, validation, and the git branch workflow.
+
+Key playbooks:
+- `graph-ops/playbooks/branch-workflow.md` — git lifecycle: branch, commit, push, test, merge
+- `graph-ops/playbooks/create-graph.md` — building a new conversion funnel from scratch
+- `graph-ops/playbooks/build-funnel-graph.md` — end-to-end guide: audit, entity creation, wiring, validation
+- `graph-ops/playbooks/create-entities.md` — creating nodes, events, parameters, contexts
+- `graph-ops/playbooks/edit-existing-graph.md` — modifying an existing graph
+- `graph-ops/playbooks/validate-graph.md` — quality checks before committing
+- `graph-ops/playbooks/manage-hash-mappings.md` — hash mapping workflow for event/context renames
+- `graph-ops/reference/data-model.md` — complete data model reference
+- `graph-ops/reference/common-pitfalls.md` — known pitfalls
+
+Scripts: `graph-ops/scripts/` (validate-graph.sh, validate-indexes.sh, validate-hashes.sh, status.sh, etc.) — run from dagnet root.
+
 ## Adjacent Private Repos (read-only context)
 
-Two private repos are cloned into the workspace root for reference. They are git-excluded (via `.git/info/exclude` and `.gitignore`) and protected by a pre-commit hook — they must NEVER be committed to the public dagnet repo.
+Two private repos are cloned into the workspace root for reference. They are git-excluded and protected by a pre-commit hook — they must **NEVER** be committed to the public dagnet repo.
 
-### Discovering the directory names
+### Safety rules
 
-The actual directory names are stored in `.private-repos.conf` at the repo root. **Read this file** to resolve paths before working with either repo — never hardcode or assume the directory names.
+| Rule | Rationale |
+|------|-----------|
+| **Never commit** private repo files to dagnet | Pre-commit hook blocks this, but don’t attempt it |
+| **Never reveal** literal directory names in chat, docs, or code | Names are confidential. Use "the data repo" / "the monorepo" or config vars `DATA_REPO_DIR` / `MONOREPO_DIR` |
+| **Do not modify** monorepo files unless explicitly asked | It’s read-only context for understanding production |
+| **Data repo edits** must follow `graph-ops/playbooks/branch-workflow.md` | Never commit to main; always use feature branches |
 
-### Never reveal the literal directory names
+### Discovering directory names
 
-The private repo directory names are confidential. **Never emit them literally** in:
-- Chat messages or explanations
-- Documentation, commit messages, or code comments
-- Any file that could be committed to dagnet
+Read `.private-repos.conf` at the repo root to resolve paths. Never hardcode or assume the directory names.
 
-Always refer to them as **"the data repo"** or **"the monorepo"**, or by their config variable names (`DATA_REPO_DIR` / `MONOREPO_DIR`).
+### When to consult each repo
 
-### What each repo is for
-
-- **Monorepo** (`MONOREPO_DIR` in `.private-repos.conf`) — The production web application. Inspect for understanding product behaviour, tracing API endpoints, checking how features work in production, and verifying data flows.
-- **Data repo** (`DATA_REPO_DIR` in `.private-repos.conf`) — The analytics/BI workspace. Contains conversion graphs, event definitions, node/parameter YAML files, and `graph-ops/` (playbooks, reference docs, and operational scripts for graph development).
-
-### Rules when working in these repos
-
-These are **not** DagNet core code. They are context repos for inspection and traversal.
-- **Do not modify** files in the monorepo unless explicitly asked.
-- **Do not commit** anything from either directory to the dagnet repo.
-- For data repo edits, always follow the branch workflow in the data repo’s `graph-ops/playbooks/branch-workflow.md`.
+- **Monorepo** (`MONOREPO_DIR`) — when you need to understand production behaviour: tracing API endpoints, checking how features work in production, verifying data flows. Read-only inspection.
+- **Data repo** (`DATA_REPO_DIR`) — when working with real conversion graphs, event definitions, node/parameter YAML files. Contains its own `graph-ops/` (may differ from dagnet’s copy). For data repo edits, always follow the branch workflow.
 
 ## Core Principles
 
@@ -316,6 +326,8 @@ Hard-won understanding of how subsystems actually work. Two rules:
 Identify your task type below, then read the listed docs **before writing any code**. Docs marked **(full)** must be read completely; **(skim)** means read the overview sections and consult detail sections as needed; **(ref)** means look up specific entries only when you hit a relevant term or mechanism.
 
 **Fixing a state/sync/dirty-tracking bug**:
+- DIAGNOSTIC_PLAYBOOKS.md **(full — find matching symptom)** — structured checklists by symptom type
+- KNOWN_ANTI_PATTERNS.md **(skim)** — check if your bug matches a previously-seen pattern
 - SYNC_SYSTEM_OVERVIEW.md **(full)** — the 4-layer propagation model, all sync flows, known races
 - GRAPH_WRITE_SYNC_ARCHITECTURE.md **(full)** — store↔file sync detail, suppression windows
 - INDEXEDDB_PERSISTENCE_LAYER.md **(skim)** — prefix contract, dual-storage invariant
@@ -379,15 +391,44 @@ Identify your task type below, then read the listed docs **before writing any co
 - SHARE_AND_LIVE_SHARE.md **(full)** — static/live shares, boot/hydration/sync
 - URL_PARAMS.md **(ref)** — supported URL parameters
 
+**Modifying UI components, panels, context menus, modals, or display states**:
+- UI_COMPONENT_MAP.md **(full)** — visual hierarchy, all 11 context menus, 21 modals, display state decision tree
+- CANVAS_OBJECT_DISPLAY_STATES.md **(full if touching minimise/collapse)** — canvas analysis/post-it minimise, position offsets, canvas view integration
+- SIDEBAR_AND_PANELS_ARCHITECTURE.md **(full if touching sidebar)** — rc-dock, panel persistence, sidebar state
+
 **Modifying ReactFlow canvas, edge rendering, or layout**:
 - REACTFLOW_CONTROLLED_MODE.md **(full)** — controlled mode pitfalls and reliable patterns
 - CANVAS_RENDERING_ARCHITECTURE.md **(skim)** — z-index model, transform pipeline
+- CANVAS_OBJECT_DISPLAY_STATES.md **(skim)** — minimise/restore mechanics if touching canvas objects
 - EDGE_RENDERING_PERF_ROOT_CAUSE.md **(ref)** — beads/chevrons performance
+
+**Creating, editing, or validating conversion graphs** (in data repo):
+- `graph-ops/playbooks/` **(full — pick the relevant playbook)** — tested procedures for graph work
+- `graph-ops/reference/data-model.md` **(skim)** — complete data model reference
+- `graph-ops/reference/common-pitfalls.md` **(full)** — known pitfalls
+- HASH_SIGNATURE_INFRASTRUCTURE.md **(skim if renaming events/contexts)** — hash mapping workflow
+
+**Modifying FormEditor, Monaco, RJSF widgets, or UI schemas**:
+- FORM_EDITOR_AND_MONACO.md **(full)** — dynamic form system, custom widgets, UI schema patterns, Monaco integration points
+
+**Modifying schemas, types, or adding new fields**:
+- SCHEMA_AND_TYPE_PARITY.md **(full)** — all schema locations, parity pairs, drift tests, new-field checklist
+- FORM_EDITOR_AND_MONACO.md **(skim — UI schema section)** — UI schema must stay in sync with data schema
+- GRAPH_MUTATION_UPDATE_MANAGER.md **(skim)** — override patterns, node reference fields
+- PARAMETER_SYSTEM.md **(skim if touching param schemas)** — param schema role
 
 **Modifying Python backend, MSMDC, or compute server**:
 - PYTHON_BACKEND_ARCHITECTURE.md **(full)** — FastAPI endpoints, MSMDC, Bayes, FE-BE communication
 
 **Other subsystem docs** (consult when relevant):
+- `DIAGNOSTIC_PLAYBOOKS.md` — symptom → checklist for common bugs
+- `KNOWN_ANTI_PATTERNS.md` — failure patterns with known fixes
+- `DSL_SYNTAX_REFERENCE.md` — full DSL grammar, all 14 functions, composition rules, examples
+- `ANALYSIS_TYPES_CATALOGUE.md` — what each analysis type computes, inputs, outputs, chart kinds
+- `DATA_SOURCES_REFERENCE.md` — external data sources, credential types, schema file catalogue
+- `SCHEMA_AND_TYPE_PARITY.md` — schema locations, parity pairs, drift tests
+- `UI_COMPONENT_MAP.md` — visual hierarchy, context menus, modals, display state patterns
+- `CANVAS_OBJECT_DISPLAY_STATES.md` — canvas analysis/post-it minimise, container states
 - `SIDEBAR_AND_PANELS_ARCHITECTURE.md` — nested rc-dock, panel persistence
 - `CREDENTIALS_INIT_FLOW.md` — three-tier credentials, initialisation
 - `IMAGE_HANDLING.md` — upload, compression, blob URL serving
@@ -433,7 +474,41 @@ Services must NOT import UI components or dialogs directly. Accept callbacks ins
 - Index files use workspace-prefixed IDs in IndexedDB: `repo-branch-node-index`
 - Index files must be marked `isDirty: true` when modified
 
-## Debugging Heuristic: Recurring Defect = Multiple Code Paths
+### Service Directory (quick lookup)
+
+| Need to... | Service | Key test file(s) |
+|------------|---------|-------------------|
+| Git pull/push/commit/clone | `repositoryOperationsService.ts` | `gitService.integration.test.ts` |
+| File CRUD (create/open/delete) | `fileOperationsService.ts` | `fileOperations.integration.test.ts` |
+| Graph mutations (edges, nodes, probs) | `UpdateManager.ts` | `UpdateManager.test.ts`, `UpdateManager.graphToGraph.test.ts` |
+| Topology change → query regen | `graphMutationService.ts` | `graphMutationService.*.test.ts` |
+| Fetch data from external sources | `fetchDataService.ts` | `fetchDataService.test.ts` |
+| Retrieve-all slices (batch fetch) | `retrieveAllSlicesService.ts` | `retrieveAllSlicesService.test.ts` |
+| Data sync (file ↔ graph ↔ external) | `dataOperationsService.ts` | `dataOperationsService.*.test.ts` (12 files) |
+| Scenario composition/rendering | `CompositionService.ts`, `ScenarioRenderer.ts` | `CompositionService.test.ts` |
+| Chart compute/refresh/hydrate | `chartRecomputeService.ts`, `chartHydrationService.ts` | `chartDisplayPlanningService.test.ts` |
+| Canvas analysis create/mutate | `canvasAnalysisCreationService.ts`, `canvasAnalysisMutationService.ts` | `canvasAnalysisCrud.integration.test.ts` |
+| Workspace load/clone/restore | `workspaceService.ts` | `workspaceService.integration.test.ts` |
+| IDB direct access | `db/appDatabase.ts` | (used by all integration tests) |
+| Index rebuild | `indexRebuildService.ts` | `indexRebuild.critical.test.ts` |
+| 3-way merge | `mergeService.ts` | `mergeService.test.ts` |
+| Session logging | `sessionLogService.ts` | (integrated across all tests) |
+| Hash/signature computation | `coreHashService.ts`, `signatureMatchingService.ts` | `coreHashService.test.ts`, `signatureMatchingService.test.ts` |
+| Schema validation | `lib/schema.ts` | `schemaParityAutomated.test.ts` |
+| Non-blocking pull | `nonBlockingPullService.ts` | `nonBlockingPullService.test.ts` |
+| Automation runs | `dailyRetrieveAllAutomationService.ts` | `dailyRetrieveAllAutomationService.test.ts` |
+| Integrity checks | `integrityCheckService.ts` | `integrityCheckService.*.test.ts` (7 files) |
+| FE/BE stats parity | `forecastingParityService.ts`, `beTopoPassService.ts` | `forecastingParity.*.test.ts` |
+
+## Debugging Discipline
+
+### Root-Cause Gate (MANDATORY before writing any fix)
+
+**Can you name the root cause in one sentence?** If not, you are not ready to write code. Continue investigating.
+
+A root cause is not "X is wrong" — it's "X is wrong **because** Y writes to Z without updating W". If your explanation doesn't include the **because**, you're describing a symptom and your fix will be a patch. Consult `docs/current/codebase/DIAGNOSTIC_PLAYBOOKS.md` for structured checklists by symptom type. Consult `docs/current/codebase/KNOWN_ANTI_PATTERNS.md` for failure patterns that have happened before.
+
+### Recurring Defect = Multiple Code Paths
 
 When the user reports the same defect a second time after you "fixed" it, the most likely cause is **multiple code paths performing the same operation**. Before debugging further:
 
@@ -445,6 +520,19 @@ When the user reports the same defect a second time after you "fixed" it, the mo
 Example: changing an analysis type was done in 4 places (inline picker, chart toolbar, properties panel, context menu). Fixing one left three broken. The fix was `setContentItemAnalysisType()` — one function, all four call sites use it.
 
 **If the user raises the same defect twice, assume multiple code paths until proven otherwise.**
+
+### Post-Debugging: Update Codebase Docs (MANDATORY after non-trivial fixes)
+
+After completing a fix that required more than one attempt, or that required understanding non-obvious system behaviour, **proactively propose a codebase doc update** before moving on. Do not wait for the user to ask.
+
+**What to capture** (generalisable insights only, not the specific bug):
+- **How the subsystem actually works** — if you discovered a data flow, guard mechanism, or invariant that isn't documented, add it to the relevant codebase doc
+- **Diagnostic procedures** — if you developed a sequence of checks that would help the next agent diagnose similar issues faster, add it as a "Diagnostic checklist" section
+- **Heuristics** — if "always check X before assuming Y" would have saved attempts, write it down
+
+**What NOT to capture**: the specific bug itself (that belongs in the commit message), or anything derivable from reading the current code.
+
+**How to propose**: tell the user *"This fix revealed that [subsystem] works differently than documented — I'd like to update [doc name] with [brief description]. OK?"* Then make the edit if approved. Small, targeted updates to existing docs are preferred over new docs.
 
 ## Testing Standards
 
@@ -620,6 +708,17 @@ Before submitting changes:
 - [ ] Index files at root with plural names (`nodes-index.yaml`, `parameters-index.yaml`)
 - [ ] Tests updated, new tests for bug fixes, relevant tests passing
 - [ ] All UI entry points use the same code path
+
+### Pre-Completion Verification (MANDATORY before saying "done" or "fixed")
+
+Do NOT claim a fix is complete until you have verified it. "I changed the code" is not "it works". The most expensive failure mode is premature "done" — it wastes a full round-trip when the user discovers it's still broken.
+
+**Before reporting completion**:
+1. **Run the relevant test(s)** — not the full suite, but the specific test file(s) covering the changed behaviour. If no test exists, write one first.
+2. **Check all call sites** — grep for the function/field you changed and verify every caller still works with the new behaviour.
+3. **Verify state in all affected layers** — if you changed something that touches persistence, verify in IDB, FileRegistry, AND GraphStore (not just the one you modified). See SYNC_SYSTEM_OVERVIEW.md for the 4-layer model.
+4. **Test the "already clean" case** — if your fix clears/deletes state, verify it also works when the state is already absent. Idempotency failures are the #1 cause of "worked once, fails on second run" bugs.
+5. **State what you verified and how** — tell the user: "Verified by running [test]. Checked [N] call sites. Confirmed state cleared in [layers]." If you can't state what you verified, you didn't verify it.
 
 ### Adding New Fields or Features - FULL IMPACT ASSESSMENT
 

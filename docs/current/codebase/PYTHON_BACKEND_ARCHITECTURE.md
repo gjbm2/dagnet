@@ -164,3 +164,11 @@ SlicePosteriorEntry: alpha, beta_param, p_hdi_lower/upper, mu/sigma mean/sd, ons
 | `src/lib/graphComputeClient.ts` | Frontend client (caching, mock mode) |
 | `src/lib/pythonApiBase.ts` | Base URL resolution |
 | `graph-editor/dev-server.py` | Dev server startup |
+
+## Related Docs
+
+- **`DATA_SOURCES_REFERENCE.md`** — All external data sources (Amplitude,
+  Google Sheets, Statsig, PostgreSQL), credential types, fetch modes, and
+  schema file catalogue
+- **`ANALYSIS_TYPES_CATALOGUE.md`** — What each analysis type computes,
+  including snapshot-based types routed through this backend

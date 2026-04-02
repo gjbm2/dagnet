@@ -13,12 +13,12 @@
     "forecasting": {
       "type": "object",
       "title": "Forecasting Settings",
-      "description": "Knobs controlling DagNet’s forecasting and latency-aware blending.\n\nThese affect all fetches and analyses, so treat changes like code changes: commit them and communicate them.\n\nFor full explanations and worked examples, see Help → Forecasting settings.",
+      "description": "Knobs controlling DagNet's forecasting and latency-aware blending.\n\nThese affect all fetches and analyses, so treat changes like code changes: commit them and communicate them.\n\nFor full explanations and worked examples, see Help → Forecasting settings.",
       "properties": {
         "RECENCY_HALF_LIFE_DAYS": {
           "type": "number",
           "title": "Recency Half-Life (days)",
-          "description": "Controls how strongly *recent* (mature) cohorts are weighted when estimating the baseline forecast probability.\n\nDefinition: a mature cohort that is H days older has half the weight of a brand-new mature cohort (exponential half-life).\n\nEffects:\n- Higher values = more stable / slower-moving baseline (older mature data still matters).\n- Lower values = more responsive baseline (recent mature data dominates).\n\nIndicative values:\n- 7–14: very responsive (use when conversion genuinely shifts week-to-week)\n- 30: balanced (default)\n- 60–90: conservative (use when rates are stable and you want less noise)\n- Very large (e.g. 10^7): effectively ‘no recency’ (mature-day k/n dominates without age weighting).",
+          "description": "Controls how strongly *recent* (mature) cohorts are weighted when estimating the baseline forecast probability.\n\nDefinition: a mature cohort that is H days older has half the weight of a brand-new mature cohort (exponential half-life).\n\nEffects:\n- Higher values = more stable / slower-moving baseline (older mature data still matters).\n- Lower values = more responsive baseline (recent mature data dominates).\n\nIndicative values:\n- 7–14: very responsive (use when conversion genuinely shifts week-to-week)\n- 30: balanced (default)\n- 60–90: conservative (use when rates are stable and you want less noise)\n- Very large (e.g. 10^7): effectively 'no recency' (mature-day k/n dominates without age weighting).",
           "minimum": 1,
           "maximum": 3650,
           "default": 30
@@ -34,7 +34,7 @@
         "DEFAULT_T95_DAYS": {
           "type": "number",
           "title": "Default t95 (days)",
-          "description": "Fallback maturity horizon (in days) when an edge has no reliable latency estimate.\n\nThis determines how much of the most recent data is treated as potentially incomplete (‘immature’) for lagged conversions.\n\nIndicative values:\n- 0–2: only appropriate if latency is genuinely near-instant and you have high confidence\n- 7–21: typical for many behavioural funnels\n- 30: conservative default\n- 60–90: very conservative; reduces risk of counting immature conversions as missing, but increases lag in responsiveness.",
+          "description": "Fallback maturity horizon (in days) when an edge has no reliable latency estimate.\n\nThis determines how much of the most recent data is treated as potentially incomplete ('immature') for lagged conversions.\n\nIndicative values:\n- 0–2: only appropriate if latency is genuinely near-instant and you have high confidence\n- 7–21: typical for many behavioural funnels\n- 30: conservative default\n- 60–90: very conservative; reduces risk of counting immature conversions as missing, but increases lag in responsiveness.",
           "minimum": 0,
           "maximum": 365,
           "default": 30
@@ -42,7 +42,7 @@
         "FORECAST_BLEND_LAMBDA": {
           "type": "number",
           "title": "Forecast Blend λ (lambda)",
-          "description": "Controls how strongly the forecast baseline acts as a prior when blending forecast and evidence in immature data.\n\nHigher values keep p.mean closer to the forecast for longer (more ‘prior strength’). Lower values let evidence dominate sooner.\n\nIndicative values:\n- 0.05–0.20: typical range (default 0.15)\n- 0.20–0.50: more conservative (forecast dominates longer)\n- 0: disables the prior entirely (not recommended unless you really want raw evidence).",
+          "description": "Controls how strongly the forecast baseline acts as a prior when blending forecast and evidence in immature data.\n\nHigher values keep p.mean closer to the forecast for longer (more 'prior strength'). Lower values let evidence dominate sooner.\n\nIndicative values:\n- 0.05–0.20: typical range (default 0.15)\n- 0.20–0.50: more conservative (forecast dominates longer)\n- 0: disables the prior entirely (not recommended unless you really want raw evidence).",
           "minimum": 0,
           "maximum": 10,
           "default": 0.15
@@ -50,7 +50,7 @@
         "LATENCY_BLEND_COMPLETENESS_POWER": {
           "type": "number",
           "title": "Completeness Power η (eta)",
-          "description": "Controls how aggressively completeness is down-weighted when computing the blend weight.\n\nValues > 1 make the system more conservative (less willing to trust evidence when completeness is below 1). Values = 1 preserve the canonical formula.\n\nIndicative values:\n- 1.0: canonical behaviour (no extra conservatism)\n- 1.5–3.0: typical ‘safety’ range (default 2.25)\n- 3.0–5.0: very conservative; expect p.mean to cling to forecast longer for immature cohorts.",
+          "description": "Controls how aggressively completeness is down-weighted when computing the blend weight.\n\nValues > 1 make the system more conservative (less willing to trust evidence when completeness is below 1). Values = 1 preserve the canonical formula.\n\nIndicative values:\n- 1.0: canonical behaviour (no extra conservatism)\n- 1.5–3.0: typical 'safety' range (default 2.25)\n- 3.0–5.0: very conservative; expect p.mean to cling to forecast longer for immature cohorts.",
           "minimum": 1,
           "maximum": 10,
           "default": 2.25
@@ -62,6 +62,164 @@
           "minimum": 1,
           "maximum": 1000000,
           "default": 50
+        },
+        "ONSET_MASS_FRACTION_ALPHA": {
+          "type": "number",
+          "title": "Onset Mass Fraction α",
+          "description": "The cumulative mass fraction used to derive onset from a window() lag histogram.\n\nOnset is defined as the earliest day by which this fraction of total conversion mass has occurred. The result is stored as onset_delta_days (rounded to 1 d.p.) and used to left-shift the lognormal fit so it starts from the onset day rather than day 0.\n\nLower values produce an earlier onset (more aggressive shifting), which can improve fit quality for edges with a genuine minimum delay. Higher values are more conservative.\n\nIndicative values:\n- 0.005: very aggressive (use with caution — sensitive to noise)\n- 0.01: balanced default\n- 0.02–0.05: conservative (onset shifts less).",
+          "minimum": 0.001,
+          "maximum": 0.5,
+          "default": 0.01
+        },
+        "ONSET_AGGREGATION_BETA": {
+          "type": "number",
+          "title": "Onset Aggregation β",
+          "description": "Quantile used when aggregating onset values across multiple window() slice families in the topological LAG pass. Each slice family contributes one onset value, weighted by its series length (dates.length).\n\nβ=0.5 is a weighted median, which provides robust aggregation that isn't distorted by a single outlier slice.\n\nIndicative values:\n- 0.25: biased toward earlier onset (more aggressive shifting)\n- 0.5: robust median (default)\n- 0.75: biased toward later onset (more conservative).",
+          "minimum": 0,
+          "maximum": 1,
+          "default": 0.5
+        },
+        "LATENCY_MAX_MEAN_MEDIAN_RATIO": {
+          "type": "number",
+          "title": "Max Mean/Median Ratio",
+          "description": "Guardrail for lognormal moment-based fitting. When fitting σ from the mean/median ratio, extremely large ratios can produce unrealistically wide distributions.\n\nWith onset shifting enabled, medianX can become very small while the histogram still has a real tail, making the ratio legitimately large. Setting this very large (default 999999) effectively disables the guardrail, letting σ be inferred from moments even for heavy-tailed cases.\n\nLower values (e.g. 3–10) enforce a skew limit, which can suppress genuine tails.\n\nIndicative values:\n- 3–10: moderate skew limit (use if you see pathological σ values)\n- 999999: guardrail disabled (default — recommended with onset shifting).",
+          "minimum": 1,
+          "maximum": 999999,
+          "default": 999999
+        },
+        "BAYES_LOG_KAPPA_MU": {
+          "type": "number",
+          "title": "log(κ) Prior Centre",
+          "description": "Centre of the LogNormal prior on κ (the overdispersion / concentration parameter).\n\nκ controls how much day-to-day conversion rates are allowed to vary around the edge mean. Higher κ = less variation (more concentrated around the mean); lower κ = more variation.\n\nThe prior is placed on log(κ), so this value is in log-space. log(30) ≈ 3.4 means the prior expects κ ≈ 30, which allows moderate day-to-day variation.\n\nIndicative values:\n- 2.3 (κ ≈ 10): expects substantial overdispersion\n- 3.4 (κ ≈ 30): moderate expectation (default)\n- 4.6 (κ ≈ 100): expects low overdispersion.",
+          "default": 3.4012
+        },
+        "BAYES_LOG_KAPPA_SIGMA": {
+          "type": "number",
+          "title": "log(κ) Prior Width",
+          "description": "Width (standard deviation) of the LogNormal prior on κ.\n\nControls how uncertain the model is about the overdispersion level before seeing data. Wider priors allow the data to dominate; narrower priors constrain κ more tightly.\n\nAt 1.5, the 95% credible interval for κ is roughly [2, 500], which is broad enough for most conversion funnels.\n\nIndicative values:\n- 0.5: tight prior (strong belief about κ level)\n- 1.5: broad prior (default — lets data determine κ)\n- 3.0: very broad (essentially non-informative).",
+          "minimum": 0.1,
+          "maximum": 10,
+          "default": 1.5
+        },
+        "BAYES_FALLBACK_PRIOR_ESS": {
+          "type": "number",
+          "title": "Fallback Prior ESS",
+          "description": "Effective sample size for the fallback Beta prior, used when no Phase 1 posterior is available for an edge.\n\nWhen the Bayesian compiler has no warm-start posterior (e.g. first fit, or posterior was reset), it constructs a Beta(α, β) prior from the frequentist p.mean with this ESS. Higher ESS = stronger prior (more data needed to shift it); lower ESS = weaker prior.\n\nIndicative values:\n- 5–10: weak prior (data dominates quickly)\n- 20: moderate (default)\n- 50–100: strong prior (useful for very stable edges).",
+          "minimum": 1,
+          "maximum": 1000,
+          "default": 20
+        },
+        "BAYES_DIRICHLET_CONC_FLOOR": {
+          "type": "number",
+          "title": "Dirichlet Concentration Floor",
+          "description": "Minimum concentration parameter for the Beta/Dirichlet prior.\n\nPrevents degenerate priors where α or β would be less than this floor. The value 0.5 corresponds to the Jeffreys prior (non-informative), which is appropriate when you have no strong prior belief.\n\nValues below 0.5 produce U-shaped priors favouring extreme probabilities; values above 0.5 produce priors favouring moderate probabilities.\n\nIndicative values:\n- 0.5: Jeffreys prior (default)\n- 1.0: uniform prior\n- 2.0: mildly informative toward moderate values.",
+          "minimum": 0.01,
+          "maximum": 10,
+          "default": 0.5
+        },
+        "BAYES_SIGMA_FLOOR": {
+          "type": "number",
+          "title": "Latency σ Floor",
+          "description": "Minimum lognormal σ for latency modelling.\n\nIf the fitted σ falls below this floor, the edge is treated as having effectively instant conversion (no meaningful latency spread). This prevents the model from trying to fit a near-delta-function latency distribution, which can cause numerical instability.\n\nIndicative values:\n- 0.01: tight floor (default — only truly instant edges are floored)\n- 0.1: looser floor (more edges treated as instant)\n- 0.5: very loose (would floor edges with real latency spread).",
+          "minimum": 0.001,
+          "maximum": 1,
+          "default": 0.01
+        },
+        "BAYES_MU_PRIOR_SIGMA_FLOOR": {
+          "type": "number",
+          "title": "μ Prior Sigma Floor",
+          "description": "Minimum uncertainty (standard deviation) on the latency μ prior.\n\nProvides exploration room for the MCMC sampler when the frequentist μ estimate is very precise. Without this floor, the sampler could get stuck near a tight prior and fail to explore the posterior properly.\n\nIndicative values:\n- 0.1: allows very tight priors (use if you trust the frequentist estimate)\n- 0.5: moderate exploration room (default)\n- 1.0: generous exploration (use if fits are not converging).",
+          "minimum": 0.01,
+          "maximum": 5,
+          "default": 0.5
+        },
+        "BAYES_MATURITY_FLOOR": {
+          "type": "number",
+          "title": "Maturity Floor",
+          "description": "Minimum CDF completeness required for an observation to contribute to overdispersion (κ) estimation.\n\nImmature observations (low completeness) have systematically biased conversion rates, which would distort κ estimation if included. This floor excludes observations below the threshold.\n\nIndicative values:\n- 0.8: slightly more inclusive (may add noise from semi-mature data)\n- 0.9: balanced (default)\n- 0.95: strict (only near-fully-mature data contributes).",
+          "minimum": 0.5,
+          "maximum": 1,
+          "default": 0.9
+        },
+        "BAYES_SOFTPLUS_SHARPNESS": {
+          "type": "number",
+          "title": "Softplus Onset Sharpness",
+          "description": "Sharpness of the softplus function used to model the onset boundary in the Bayesian latency likelihood.\n\nHigher values produce a sharper cutoff below the onset day (closer to a step function); lower values produce a smoother transition. The softplus avoids the discontinuity of a hard cutoff, which improves MCMC sampling stability.\n\nIndicative values:\n- 1–2: very smooth transition\n- 5: moderate sharpness (default)\n- 10–20: very sharp (close to a hard cutoff).",
+          "minimum": 0.1,
+          "maximum": 50,
+          "default": 5.0
+        },
+        "BAYES_RHAT_THRESHOLD": {
+          "type": "number",
+          "title": "R-hat Threshold",
+          "description": "Maximum Gelman-Rubin R-hat statistic for declaring MCMC convergence.\n\nR-hat compares between-chain and within-chain variance. Values near 1.0 indicate that all chains have converged to the same distribution. Fits exceeding this threshold are flagged as potentially unreliable.\n\nIndicative values:\n- 1.01: strict (requires very good convergence)\n- 1.05: standard threshold (default)\n- 1.10: lenient (accepts fits with some between-chain disagreement).",
+          "minimum": 1.0,
+          "maximum": 2.0,
+          "default": 1.05
+        },
+        "BAYES_ESS_THRESHOLD": {
+          "type": "number",
+          "title": "Min ESS",
+          "description": "Minimum effective sample size (ESS) for declaring MCMC convergence.\n\nESS measures how many independent samples the chains are equivalent to after accounting for autocorrelation. Higher ESS = more precise posterior estimates.\n\nIndicative values:\n- 100–200: acceptable for quick fits\n- 400: standard (default)\n- 1000+: high precision (slower fitting).",
+          "minimum": 50,
+          "maximum": 10000,
+          "default": 400
+        },
+        "BAYES_WARM_START_RHAT_MAX": {
+          "type": "number",
+          "title": "Warm-Start R-hat Max",
+          "description": "Quality gate for accepting a previous posterior as a warm-start for the next fit.\n\nIf the previous fit's R-hat exceeds this threshold, warm-starting is rejected and the fit starts from the prior instead. This prevents a bad previous fit from contaminating subsequent fits.\n\nTypically set looser than BAYES_RHAT_THRESHOLD since warm-starts are still useful even from slightly imperfect fits.\n\nIndicative values:\n- 1.05: strict (only very well-converged posteriors used as warm-start)\n- 1.10: standard (default)\n- 1.20: lenient (accepts moderately converged posteriors).",
+          "minimum": 1.0,
+          "maximum": 2.0,
+          "default": 1.10
+        },
+        "BAYES_WARM_START_ESS_MIN": {
+          "type": "number",
+          "title": "Warm-Start Min ESS",
+          "description": "ESS quality gate for warm-starting. If the previous fit's ESS is below this, the warm-start is rejected.\n\nIndicative values:\n- 50: lenient (most fits accepted)\n- 100: standard (default)\n- 200: stricter.",
+          "minimum": 10,
+          "maximum": 5000,
+          "default": 100
+        },
+        "BAYES_HDI_PROB": {
+          "type": "number",
+          "title": "HDI Probability",
+          "description": "Probability mass for the Highest Density Interval (HDI) reported in fit results.\n\nThe HDI is the narrowest interval containing this fraction of the posterior probability. It appears in the Bayes fit diagnostics and is used for credible interval display.\n\nIndicative values:\n- 0.80: 80% HDI (narrower, less conservative)\n- 0.90: 90% HDI (default)\n- 0.95: 95% HDI (wider, more conservative).",
+          "minimum": 0.5,
+          "maximum": 0.999,
+          "default": 0.90
+        },
+        "BAYES_DRAWS": {
+          "type": "integer",
+          "title": "Draws per Chain",
+          "description": "Number of MCMC draws retained per chain after warmup.\n\nTotal posterior samples = DRAWS × CHAINS. More draws improve the accuracy of posterior summaries (means, HDIs) but increase compute time linearly.\n\nIndicative values:\n- 500: fast exploratory fits\n- 2000: standard (default)\n- 5000–10000: high-precision fits (e.g. for publication-quality diagnostics).",
+          "minimum": 100,
+          "maximum": 50000,
+          "default": 2000
+        },
+        "BAYES_TUNE": {
+          "type": "integer",
+          "title": "Warmup per Chain",
+          "description": "Number of warmup (tuning) iterations per chain. These samples are discarded — their purpose is to adapt the sampler's step size and mass matrix.\n\nInsufficient warmup can cause poor mixing and low ESS. More warmup rarely hurts but adds compute time.\n\nIndicative values:\n- 500: fast (adequate for simple models)\n- 1000: standard (default)\n- 2000–5000: generous (use if fits show low ESS or high R-hat).",
+          "minimum": 100,
+          "maximum": 50000,
+          "default": 1000
+        },
+        "BAYES_CHAINS": {
+          "type": "integer",
+          "title": "Number of Chains",
+          "description": "Number of independent MCMC chains run in parallel. Multiple chains are essential for R-hat convergence diagnostics — with only 1 chain, R-hat cannot be computed.\n\nMore chains also improve ESS (effective sample size scales with chain count) but multiply compute time.\n\nIndicative values:\n- 2: minimum for R-hat (fast, lower ESS)\n- 4: standard (default — good balance of diagnostics and speed)\n- 8: high reliability (use for critical fits where convergence assurance matters).",
+          "minimum": 1,
+          "maximum": 16,
+          "default": 4
+        },
+        "BAYES_TARGET_ACCEPT": {
+          "type": "number",
+          "title": "NUTS Target Accept",
+          "description": "Target acceptance rate for the NUTS (No-U-Turn Sampler) algorithm.\n\nHigher values make the sampler take smaller, more conservative steps, reducing divergences but slowing exploration. Lower values allow larger steps, which can improve mixing but may cause divergences in complex posteriors.\n\nIndicative values:\n- 0.80: aggressive (faster exploration, more divergence risk)\n- 0.90: standard (default)\n- 0.95–0.99: very conservative (use if seeing many divergences).",
+          "minimum": 0.5,
+          "maximum": 0.999,
+          "default": 0.90
         }
       },
       "required": [

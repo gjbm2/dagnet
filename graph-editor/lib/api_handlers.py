@@ -1658,6 +1658,7 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                                     is_window=_fixture_data.get('is_window', is_window),
                                     axis_tau_max=_fixture_data.get('axis_tau_max'),
                                     band_level=_fan_band_level,
+                                    anchor_node_id=_fixture_data.get('anchor_node_id'),
                                 )
                             else:
                                 maturity_rows = compute_cohort_maturity_rows(
@@ -2814,7 +2815,17 @@ def handle_stats_topo_pass(data: Dict[str, Any]) -> Dict[str, Any]:
             scoped_cohorts=scoped_cohorts,
         )
 
-    result = enhance_graph_latencies(graph, param_lookup, settings, edge_contexts)
+    # D1 FIX: parse query_mode so BE can match FE's cohort/window semantics
+    query_mode = data.get('query_mode', 'cohort')  # default cohort for backward compat
+
+    # D5 FIX: parse FE-computed active edge set
+    raw_active_edges = data.get('active_edges')
+    active_edges_set = set(raw_active_edges) if isinstance(raw_active_edges, list) else None
+
+    result = enhance_graph_latencies(
+        graph, param_lookup, settings, edge_contexts,
+        query_mode=query_mode, active_edges=active_edges_set,
+    )
 
     # If FE outputs were sent alongside, write the golden fixture to debug/
     fe_outputs = data.get('fe_outputs')

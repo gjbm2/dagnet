@@ -1,5 +1,6 @@
 import { db } from '../db/appDatabase';
 import yaml from 'js-yaml';
+import { fileRegistry } from '../contexts/TabContext';
 
 /**
  * Loads default settings.yaml from public/defaults/
@@ -53,6 +54,24 @@ function mergeDefaults(existing: any, defaults: any): boolean {
   return changed;
 }
 
+/**
+ * Push a file state into the in-memory FileRegistry so the UI doesn't
+ * lag behind IDB.  Best-effort: swallows errors to avoid breaking init.
+ */
+function _syncToFileRegistry(fileId: string, fileState: any): void {
+  try {
+    const reg = fileRegistry as any;
+    if (reg?.files?.set) {
+      reg.files.set(fileId, fileState);
+      if (typeof reg.notifyListeners === 'function') {
+        reg.notifyListeners(fileId, fileState);
+      }
+    }
+  } catch {
+    // best-effort — FileRegistry may not be ready during early init
+  }
+}
+
 export async function seedSettingsFile(): Promise<void> {
   try {
     const fileId = 'settings-settings';
@@ -69,16 +88,20 @@ export async function seedSettingsFile(): Promise<void> {
     if (shouldSeedFromDefaults) {
       console.log('[seedSettings] Creating settings.yaml from defaults');
 
-      await db.files.put({
+      const seeded = {
         fileId,
-        type: 'settings',
+        type: 'settings' as const,
         path: 'settings/settings.yaml',
         data: defaultData,
         lastModified: Date.now(),
         viewTabs: existing?.viewTabs || [],
         isDirty: false,
-        originalData: defaultData,
-      });
+        originalData: structuredClone(defaultData),
+      };
+      await db.files.put(seeded);
+
+      // Keep FileRegistry in sync so the UI sees the seeded data immediately
+      _syncToFileRegistry(fileId, seeded);
 
       console.log('[seedSettings] ✅ settings.yaml created from defaults');
     } else if (existing?.data && defaultData) {
@@ -89,11 +112,27 @@ export async function seedSettingsFile(): Promise<void> {
       const added = mergeDefaults(merged, defaultData);
       if (added) {
         console.log('[seedSettings] Merging new default keys into existing settings.yaml');
-        await db.files.put({
+
+        // Also merge into originalData so the added defaults don't look like
+        // local edits to the 3-way merge during the next git pull.
+        const mergedOriginal = existing.originalData
+          ? structuredClone(existing.originalData)
+          : structuredClone(merged);
+        if (existing.originalData) {
+          mergeDefaults(mergedOriginal, defaultData);
+        }
+
+        const updated = {
           ...existing,
           data: merged,
+          originalData: mergedOriginal,
           lastModified: Date.now(),
-        });
+        };
+        await db.files.put(updated);
+
+        // Keep FileRegistry in sync so the UI sees merged keys immediately
+        _syncToFileRegistry(fileId, updated);
+
         console.log('[seedSettings] ✅ settings.yaml updated with new defaults');
       } else {
         console.log('[seedSettings] settings.yaml up to date, no new keys');
@@ -106,4 +145,55 @@ export async function seedSettingsFile(): Promise<void> {
   }
 }
 
+/**
+ * Re-merge default keys into the settings file after a git pull.
+ *
+ * Git pull can overwrite the IDB settings file with the repo version,
+ * which may lack newly-added default keys (e.g. Bayes settings).
+ * Call this after every successful pull to restore any missing defaults.
+ *
+ * Exported separately so repositoryOperationsService can call it without
+ * re-fetching the defaults template (we always re-fetch because the
+ * template may have been updated by HMR).
+ */
+export async function mergeSettingsDefaults(): Promise<void> {
+  try {
+    const fileId = 'settings-settings';
+    const existing = await db.files.get(fileId);
+    if (!existing?.data) return;
 
+    const defaultData = await loadDefaultSettings();
+    if (!defaultData) return;
+
+    const merged = structuredClone(existing.data);
+    const added = mergeDefaults(merged, defaultData);
+    if (!added) return;
+
+    console.log('[seedSettings] Post-pull: re-merging default keys into settings.yaml');
+
+    // Mirror the originalData merge so added defaults don't trigger false
+    // dirty detection on subsequent pulls.
+    const mergedOriginal = existing.originalData
+      ? structuredClone(existing.originalData)
+      : structuredClone(merged);
+    if (existing.originalData) {
+      mergeDefaults(mergedOriginal, defaultData);
+    }
+
+    const updated = {
+      ...existing,
+      data: merged,
+      originalData: mergedOriginal,
+      lastModified: Date.now(),
+    };
+    await db.files.put(updated);
+    _syncToFileRegistry(fileId, updated);
+
+    console.log('[seedSettings] ✅ Post-pull: settings.yaml updated with new defaults');
+  } catch (error) {
+    console.error('[seedSettings] Post-pull merge failed:', error);
+  }
+}
+
+// Export mergeDefaults for testing
+export { mergeDefaults as _mergeDefaults };

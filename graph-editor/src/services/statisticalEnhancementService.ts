@@ -644,6 +644,12 @@ export interface EdgeLatencyStats {
     sigma_min_from_t95?: number;
     tail_constraint_applied: boolean;
   };
+  /** Heuristic dispersion estimates (see heuristic-dispersion-design.md §3) */
+  p_sd: number;
+  mu_sd: number;
+  sigma_sd: number;
+  onset_sd: number;
+  onset_mu_corr: number;
 }
 
 // =============================================================================
@@ -1292,6 +1298,32 @@ export function computeEdgeLatencyStats(
     model.onsetDeltaDays
   );
 
+  // ── Heuristic dispersion estimates (design doc §3) ────────────────
+  const qualityInflation = fit.empirical_quality_ok ? 1.0 : 2.0;
+  const sigmaForSd = completenessCdf.sigma_moments > 0 ? completenessCdf.sigma_moments : fit.sigma;
+
+  // §3.1 Rate uncertainty: Beta-binomial posterior SD
+  const pAlpha = totalK + 1;
+  const pBeta = totalN - totalK + 1;
+  const pSdRaw = Math.sqrt(pAlpha * pBeta / ((pAlpha + pBeta) ** 2 * (pAlpha + pBeta + 1)));
+  const pSd = totalK < 30 ? Math.max(pSdRaw, 0.10) : pSdRaw;
+
+  // §3.2 Latency location uncertainty: ~1.25 × σ / √totalK
+  const nLag = Math.max(totalK, 1);
+  const muSdRaw = 1.25 * sigmaForSd / Math.sqrt(nLag);
+  const muSd = Math.max(muSdRaw * qualityInflation, 0.02);
+
+  // §3.3 Latency scale uncertainty: ~0.87 × σ / √totalK
+  const sigmaIsDefault = !fit.empirical_quality_ok || sigmaForSd === LATENCY_DEFAULT_SIGMA;
+  const sigmaSdRaw = sigmaIsDefault ? 0.25 : 0.87 * sigmaForSd / Math.sqrt(nLag);
+  const sigmaSd = Math.max(sigmaSdRaw * qualityInflation, 0.02);
+
+  // §3.4 Onset uncertainty: max(1.0, 0.25 × onset)
+  const onsetSd = Math.max(1.0, 0.25 * onsetDeltaDays);
+
+  // §3.5 Onset-mu correlation: structural prior
+  const onsetMuCorr = onsetDeltaDays > 0 ? -0.3 : 0.0;
+
   // If no mature cohorts, forecast fallback is not available
   if (pInfinityEstimate === undefined) {
     return {
@@ -1302,6 +1334,11 @@ export function computeEdgeLatencyStats(
       p_evidence: pEvidence,
       forecast_available: false,
       completeness_cdf: completenessCdf,
+      p_sd: pSd,
+      mu_sd: muSd,
+      sigma_sd: sigmaSd,
+      onset_sd: onsetSd,
+      onset_mu_corr: onsetMuCorr,
     };
   }
 
@@ -1313,6 +1350,11 @@ export function computeEdgeLatencyStats(
     p_evidence: pEvidence,
     forecast_available: true,
     completeness_cdf: completenessCdf,
+    p_sd: pSd,
+    mu_sd: muSd,
+    sigma_sd: sigmaSd,
+    onset_sd: onsetSd,
+    onset_mu_corr: onsetMuCorr,
   };
 }
 
@@ -1794,6 +1836,15 @@ export interface EdgeLAGValues {
     path_mu?: number;   // Path-level A→Y mu (Fenton–Wilkinson combined)
     path_sigma?: number; // Path-level A→Y sigma (Fenton–Wilkinson combined)
     path_onset_delta_days?: number; // Path-level Σ onset_delta_days (DP sum along path)
+    // Heuristic dispersion (see heuristic-dispersion-design.md §3)
+    mu_sd?: number;
+    sigma_sd?: number;
+    onset_sd?: number;
+    onset_mu_corr?: number;
+    p_sd?: number;
+    path_mu_sd?: number;
+    path_sigma_sd?: number;
+    path_onset_sd?: number;
   };
   /** Blended p.mean (if computed) */
   blendedMean?: number;

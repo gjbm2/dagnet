@@ -12,31 +12,145 @@
   "forecasting": {
     "ui:title": "📈 Forecasting settings",
     "ui:description": "These knobs affect how DagNet estimates baseline conversion rates and how it blends forecast vs evidence when data is immature.\n\nBecause they change results, they should be committed and pulled like other shared configuration.\n\nSee Help → Forecasting settings for the full explanation and examples.",
-    "ui:order": [
-      "RECENCY_HALF_LIFE_DAYS",
-      "LATENCY_MIN_EFFECTIVE_SAMPLE_SIZE",
-      "DEFAULT_T95_DAYS",
-      "FORECAST_BLEND_LAMBDA",
-      "LATENCY_BLEND_COMPLETENESS_POWER",
-      "ANCHOR_DELAY_BLEND_K_CONVERSIONS"
-    ],
+    "ui:options": {
+      "groups": [
+        {
+          "title": "Baseline & Blending",
+          "description": "Controls how DagNet estimates the baseline conversion rate from mature data and how it blends that forecast with immature evidence.",
+          "fields": [
+            "RECENCY_HALF_LIFE_DAYS",
+            "LATENCY_MIN_EFFECTIVE_SAMPLE_SIZE",
+            "DEFAULT_T95_DAYS",
+            "FORECAST_BLEND_LAMBDA",
+            "LATENCY_BLEND_COMPLETENESS_POWER",
+            "ANCHOR_DELAY_BLEND_K_CONVERSIONS"
+          ],
+          "defaultExpanded": true
+        },
+        {
+          "title": "Onset & Lag Fitting",
+          "description": "Controls how DagNet derives onset (the minimum conversion delay) from lag histograms and guards against pathological lognormal fits.",
+          "fields": [
+            "ONSET_MASS_FRACTION_ALPHA",
+            "ONSET_AGGREGATION_BETA",
+            "LATENCY_MAX_MEAN_MEDIAN_RATIO"
+          ]
+        },
+        {
+          "title": "Bayesian Model Priors",
+          "description": "Prior distributions and floors for the Bayesian compiler (Phase 2 fitting). These control the starting beliefs about conversion rates and latency parameters before data is observed.",
+          "fields": [
+            "BAYES_LOG_KAPPA_MU",
+            "BAYES_LOG_KAPPA_SIGMA",
+            "BAYES_FALLBACK_PRIOR_ESS",
+            "BAYES_DIRICHLET_CONC_FLOOR",
+            "BAYES_SIGMA_FLOOR",
+            "BAYES_MU_PRIOR_SIGMA_FLOOR",
+            "BAYES_MATURITY_FLOOR",
+            "BAYES_SOFTPLUS_SHARPNESS"
+          ]
+        },
+        {
+          "title": "Convergence & Quality Gates",
+          "description": "Thresholds that determine when the MCMC sampler has converged and when a previous posterior is trustworthy enough to use as a warm-start.",
+          "fields": [
+            "BAYES_RHAT_THRESHOLD",
+            "BAYES_ESS_THRESHOLD",
+            "BAYES_WARM_START_RHAT_MAX",
+            "BAYES_WARM_START_ESS_MIN",
+            "BAYES_HDI_PROB"
+          ]
+        },
+        {
+          "title": "MCMC Sampling",
+          "description": "Controls the NUTS sampler configuration. Increasing draws/chains improves posterior precision at the cost of compute time.",
+          "fields": [
+            "BAYES_DRAWS",
+            "BAYES_TUNE",
+            "BAYES_CHAINS",
+            "BAYES_TARGET_ACCEPT"
+          ]
+        }
+      ]
+    },
+
     "RECENCY_HALF_LIFE_DAYS": {
-      "ui:help": "Recency half-life for *mature* data contributing to the baseline forecast.\n\nIndicative values: 7–14 (responsive), 30 (balanced), 60–90 (conservative), very large = effectively no recency weighting.\n\nSee Help → Forecasting settings."
+      "ui:help": "Half-life for mature-data recency weighting.\n\n7–14 (responsive) · 30 (balanced) · 60–90 (conservative) · very large ≈ no recency."
     },
     "LATENCY_MIN_EFFECTIVE_SAMPLE_SIZE": {
-      "ui:help": "Stability guardrail for recency weighting.\n\nIndicative values: 50–150 (responsive but noisier), 150–500 (typical), 500+ (very conservative).\n\nSee Help → Forecasting settings."
+      "ui:help": "Guardrail: if recency-weighted N_eff drops below this, use a more conservative strategy.\n\n50–150 (responsive) · 150–500 (typical) · 500+ (very conservative)."
     },
     "DEFAULT_T95_DAYS": {
-      "ui:help": "Fallback maturity horizon when no edge-specific latency is available.\n\nIndicative values: 7–21 (typical), 30 (conservative default), 60–90 (very conservative).\n\nSee Help → Forecasting settings."
+      "ui:help": "Fallback horizon when no edge-specific t95 is available.\n\n7–21 (typical funnels) · 30 (conservative default) · 60–90 (very conservative)."
     },
     "FORECAST_BLEND_LAMBDA": {
-      "ui:help": "Forecast prior strength used when blending forecast vs evidence for immature data.\n\nIndicative values: 0.05–0.20 (typical; default 0.15), 0.20–0.50 (more conservative), 0 (disables prior).\n\nSee Help → Forecasting settings."
+      "ui:help": "Prior strength for forecast/evidence blending.\n\n0.05–0.20 (typical) · 0.20–0.50 (conservative) · 0 (raw evidence, no prior)."
     },
     "LATENCY_BLEND_COMPLETENESS_POWER": {
-      "ui:help": "Extra conservatism for how completeness influences blend weight.\n\nIndicative values: 1.0 (canonical), 1.5–3.0 (typical; default 2.25), 3.0–5.0 (very conservative).\n\nSee Help → Forecasting settings."
+      "ui:help": "Extra conservatism via completeness down-weighting.\n\n1.0 (canonical) · 1.5–3.0 (typical) · 3.0–5.0 (very conservative)."
     },
     "ANCHOR_DELAY_BLEND_K_CONVERSIONS": {
-      "ui:help": "Credibility threshold for trusting observed anchor-delay evidence (cohort-mode completeness on downstream edges).\n\nIndicative values: 20–50 (responsive), 50–150 (typical; default 50), 150–300 (conservative).\n\nSee Help → Forecasting settings."
+      "ui:help": "Credibility threshold for observed anchor-delay evidence.\n\n20–50 (responsive) · 50–150 (typical) · 150–300 (conservative)."
+    },
+    "ONSET_MASS_FRACTION_ALPHA": {
+      "ui:help": "Cumulative mass fraction defining onset day from lag histograms.\n\n0.005 (aggressive) · 0.01 (balanced) · 0.02–0.05 (conservative)."
+    },
+    "ONSET_AGGREGATION_BETA": {
+      "ui:help": "Weighted quantile for aggregating onset across slice families.\n\n0.25 (earlier onset) · 0.5 (robust median) · 0.75 (later onset)."
+    },
+    "LATENCY_MAX_MEAN_MEDIAN_RATIO": {
+      "ui:help": "Guardrail for moment-based lognormal fitting.\n\n3–10 (enforce skew limit) · 999999 (disabled — recommended with onset shifting)."
+    },
+    "BAYES_LOG_KAPPA_MU": {
+      "ui:help": "LogNormal prior centre for κ (log-space).\n\n2.3 (κ≈10, high overdispersion) · 3.4 (κ≈30, moderate) · 4.6 (κ≈100, low)."
+    },
+    "BAYES_LOG_KAPPA_SIGMA": {
+      "ui:help": "LogNormal prior width for κ.\n\n0.5 (tight) · 1.5 (broad — default) · 3.0 (very broad)."
+    },
+    "BAYES_FALLBACK_PRIOR_ESS": {
+      "ui:help": "ESS for fallback Beta prior when no warm-start posterior exists.\n\n5–10 (weak) · 20 (moderate) · 50–100 (strong)."
+    },
+    "BAYES_DIRICHLET_CONC_FLOOR": {
+      "ui:help": "Minimum concentration. 0.5 = Jeffreys; 1.0 = uniform; >1 = mildly informative."
+    },
+    "BAYES_SIGMA_FLOOR": {
+      "ui:help": "Below this σ, edge is treated as instant (no latency modelling)."
+    },
+    "BAYES_MU_PRIOR_SIGMA_FLOOR": {
+      "ui:help": "Minimum uncertainty on μ prior. Increase if fits are not converging."
+    },
+    "BAYES_MATURITY_FLOOR": {
+      "ui:help": "Observations below this completeness are excluded from κ estimation.\n\n0.8 (inclusive) · 0.9 (balanced) · 0.95 (strict)."
+    },
+    "BAYES_SOFTPLUS_SHARPNESS": {
+      "ui:help": "Onset boundary sharpness in the likelihood.\n\n1–2 (smooth) · 5 (moderate) · 10–20 (sharp)."
+    },
+    "BAYES_RHAT_THRESHOLD": {
+      "ui:help": "Max R-hat for convergence. Near 1.0 = good.\n\n1.01 (strict) · 1.05 (standard) · 1.10 (lenient)."
+    },
+    "BAYES_ESS_THRESHOLD": {
+      "ui:help": "Min ESS for convergence.\n\n100–200 (quick fits) · 400 (standard) · 1000+ (high precision)."
+    },
+    "BAYES_WARM_START_RHAT_MAX": {
+      "ui:help": "R-hat gate for warm-start acceptance. Typically looser than RHAT_THRESHOLD.\n\n1.05 (strict) · 1.10 (standard) · 1.20 (lenient)."
+    },
+    "BAYES_WARM_START_ESS_MIN": {
+      "ui:help": "ESS gate for warm-start acceptance.\n\n50 (lenient) · 100 (standard) · 200 (stricter)."
+    },
+    "BAYES_HDI_PROB": {
+      "ui:help": "Credible interval probability.\n\n0.80 (narrow) · 0.90 (standard) · 0.95 (wide)."
+    },
+    "BAYES_DRAWS": {
+      "ui:help": "Draws retained per chain. Total samples = DRAWS × CHAINS.\n\n500 (fast) · 2000 (standard) · 5000+ (high precision)."
+    },
+    "BAYES_TUNE": {
+      "ui:help": "Warmup iterations (discarded). Increase if seeing low ESS / high R-hat.\n\n500 (fast) · 1000 (standard) · 2000+ (generous)."
+    },
+    "BAYES_CHAINS": {
+      "ui:help": "Independent chains. Need ≥2 for R-hat.\n\n2 (fast) · 4 (standard) · 8 (high reliability)."
+    },
+    "BAYES_TARGET_ACCEPT": {
+      "ui:help": "NUTS acceptance rate. Higher = smaller steps, fewer divergences.\n\n0.80 (aggressive) · 0.90 (standard) · 0.95–0.99 (conservative)."
     }
   },
 
@@ -46,5 +160,3 @@
     "ui:options": { "accordion": true }
   }
 }
-
-

@@ -1583,10 +1583,10 @@ export async function runStage2EnhancementsAndInboundN(
           
           const forecasting = await forecastingSettingsService.getForecastingModelSettings();
 
-          // ── First-fetch horizon bootstrap ──────────────────────────
+          // ── First-fetch horizon bootstrap (FE-only, no BE network call) ──
           // If any latency edge's param file has no mu/sigma, compute
-          // horizons via the BE stats engine and persist before the topo
-          // pass runs. Inline — no second fetch.
+          // horizons using FE's own fitting primitives and persist before
+          // the topo pass runs. Inline — no second fetch, no server needed.
           {
             const edgesMissingHorizons = (finalGraph?.edges ?? []).filter((e: any) => {
               if (!e?.p?.latency?.latency_parameter) return false;
@@ -1602,76 +1602,90 @@ export async function runStage2EnhancementsAndInboundN(
             });
             console.log(`[HORIZON_BOOTSTRAP_CHECK] ${edgesMissingHorizons.length} edges need horizons`);
             if (edgesMissingHorizons.length > 0) {
-              console.log(`[fetchDataService] Horizon bootstrap: ${edgesMissingHorizons.length} edges missing mu/sigma — computing via BE`);
+              console.log(`[fetchDataService] Horizon bootstrap (FE): ${edgesMissingHorizons.length} edges missing mu/sigma`);
               try {
-                const { runBeTopoPass } = await import('./beTopoPassService');
-                // Use ALL cohort data (global, un-windowed) for horizon computation
-                const globalCohorts: Record<string, any[]> = {};
-                for (const [edgeId, pv] of paramLookup) {
-                  const c = lagHelpers.aggregateCohortData(pv, queryDateForLAG, undefined);
-                  if (c.length > 0) globalCohorts[edgeId] = c;
-                }
-                // Only bootstrap if we actually have cohort data
-                if (Object.keys(globalCohorts).length > 0) {
-                  const beEntries = await runBeTopoPass(finalGraph, paramLookup, queryDateForLAG, lagHelpers);
-                  // Write horizons to param files and finalGraph edges
-                  for (const { edgeUuid, entry } of beEntries) {
-                    if (!entry.latency) continue;
-                    const edge = (finalGraph.edges as any[])?.find(
-                      (e: any) => e.uuid === edgeUuid || e.id === edgeUuid
-                    );
-                    if (!edge?.p?.latency) continue;
-                    // Write to graph edge (so topo pass can read them)
-                    edge.p.latency.mu = entry.latency.mu;
-                    edge.p.latency.sigma = entry.latency.sigma;
-                    edge.p.latency.t95 = entry.latency.t95;
-                    if (entry.latency.path_t95 != null) edge.p.latency.path_t95 = entry.latency.path_t95;
-                    if (entry.latency.path_mu != null) edge.p.latency.path_mu = entry.latency.path_mu;
-                    if (entry.latency.path_sigma != null) edge.p.latency.path_sigma = entry.latency.path_sigma;
+                const { computeEdgeLatencyStats } = await import('./statisticalEnhancementService');
+                const { upsertModelVars, ukDateNow } = await import('./modelVarsResolution');
+
+                const MODEL = forecasting;
+                let bootstrapped = 0;
+
+                for (const edge of edgesMissingHorizons) {
+                  const edgeId = edge.uuid || edge.id;
+                  const paramValues = paramLookup.get(edgeId);
+                  if (!paramValues || paramValues.length === 0) continue;
+
+                  // Aggregate cohorts (global, un-windowed — same as old BE bootstrap)
+                  const cohorts = lagHelpers.aggregateCohortData(paramValues, queryDateForLAG, undefined);
+                  if (cohorts.length === 0) continue;
+
+                  // Compute aggregate lag stats
+                  const lagStats = aggregateLatencyStats(cohorts, MODEL.RECENCY_HALF_LIFE_DAYS);
+                  if (!lagStats) continue;
+
+                  // Read onset from graph edge
+                  const onsetDeltaDays = edge.p?.latency?.onset_delta_days ?? 0;
+
+                  // Read authoritative t95 from edge if set
+                  const edgeT95 = edge.p?.latency?.t95;
+                  const validEdgeT95 = typeof edgeT95 === 'number' && Number.isFinite(edgeT95) && edgeT95 > 0
+                    ? edgeT95 : undefined;
+
+                  // Fit edge using the same function the FE topo pass uses
+                  const stats = computeEdgeLatencyStats(
+                    cohorts,
+                    lagStats.median_lag_days,
+                    lagStats.mean_lag_days,
+                    MODEL.DEFAULT_T95_DAYS,
+                    0,  // anchorMedianLag — bootstrap has no upstream context
+                    undefined,  // fitTotalKOverride
+                    undefined,  // pInfinityCohortsOverride
+                    validEdgeT95,
+                    MODEL.RECENCY_HALF_LIFE_DAYS,
+                    onsetDeltaDays,
+                    MODEL.LATENCY_MAX_MEAN_MEDIAN_RATIO,
+                    true,  // applyAnchorAgeAdjustment — cohort mode default
+                  );
+
+                  if (!stats.fit || !Number.isFinite(stats.fit.mu) || !Number.isFinite(stats.fit.sigma)) continue;
+
+                  // Write to graph edge (so topo pass can read them)
+                  edge.p.latency.mu = stats.fit.mu;
+                  edge.p.latency.sigma = stats.fit.sigma;
+                  edge.p.latency.t95 = stats.t95;
+
+                  // Rebuild analytic model_vars entry with latency
+                  const pid = edge.p.id;
+                  const pf = pid ? fileRegistry.getFile(`parameter-${pid}`)?.data : null;
+                  const latestValue = (pf as any)?.values?.[0];
+                  if (latestValue) {
+                    const analyticEntry: any = {
+                      source: 'analytic',
+                      source_at: (latestValue as any).data_source?.retrieved_at || ukDateNow(),
+                      probability: {
+                        mean: latestValue.mean ?? 0,
+                        stdev: latestValue.stdev ?? 0,
+                      },
+                      latency: {
+                        mu: stats.fit.mu,
+                        sigma: stats.fit.sigma,
+                        t95: stats.t95,
+                        onset_delta_days: onsetDeltaDays,
+                      },
+                    };
+                    upsertModelVars(edge.p, analyticEntry);
                   }
+                  bootstrapped++;
+                }
+
+                if (bootstrapped > 0) {
                   // Persist to param files
                   await persistGraphMasteredLatencyToParameterFiles({
                     graph: finalGraph as any,
                     setGraph: setGraph as any,
                     edgeIds: edgesMissingHorizons.map((e: any) => e.uuid || e.id),
                   });
-                  // Rebuild analytic model_vars entries — UpdateManager built
-                  // them before bootstrap ran (no latency). Now param files
-                  // have mu/sigma, so re-read and upsert with latency.
-                  const { upsertModelVars, ukDateNow } = await import('./modelVarsResolution');
-                  for (const { edgeUuid, entry } of beEntries) {
-                    if (!entry.latency) continue;
-                    const edge = (finalGraph.edges as any[])?.find(
-                      (e: any) => e.uuid === edgeUuid || e.id === edgeUuid
-                    );
-                    if (!edge?.p) continue;
-                    // Build a proper analytic entry with latency from BE results
-                    const pid = edge.p.id;
-                    const pf = pid ? fileRegistry.getFile(`parameter-${pid}`)?.data : null;
-                    const latestValue = (pf as any)?.values?.[0];
-                    if (latestValue) {
-                      const analyticEntry: any = {
-                        source: 'analytic',
-                        source_at: (latestValue as any).data_source?.retrieved_at || ukDateNow(),
-                        probability: {
-                          mean: latestValue.mean ?? 0,
-                          stdev: latestValue.stdev ?? 0,
-                        },
-                        latency: {
-                          mu: entry.latency.mu,
-                          sigma: entry.latency.sigma,
-                          t95: entry.latency.t95,
-                          onset_delta_days: entry.latency.onset_delta_days,
-                          ...(entry.latency.path_mu != null ? { path_mu: entry.latency.path_mu } : {}),
-                          ...(entry.latency.path_sigma != null ? { path_sigma: entry.latency.path_sigma } : {}),
-                          ...(entry.latency.path_t95 != null ? { path_t95: entry.latency.path_t95 } : {}),
-                          ...(entry.latency.path_onset_delta_days != null ? { path_onset_delta_days: entry.latency.path_onset_delta_days } : {}),
-                        },
-                      };
-                      upsertModelVars(edge.p, analyticEntry);
-                    }
-                  }
-                  console.log(`[fetchDataService] Horizon bootstrap: persisted horizons + rebuilt analytic entries for ${edgesMissingHorizons.length} edges`);
+                  console.log(`[fetchDataService] Horizon bootstrap (FE): persisted horizons for ${bootstrapped} edges`);
                 }
               } catch (e: any) {
                 console.warn('[fetchDataService] Horizon bootstrap failed (non-fatal):', e?.message || e);
@@ -1861,6 +1875,7 @@ export async function runStage2EnhancementsAndInboundN(
               const { upsertModelVars } = await import('./modelVarsResolution');
               const beEntries = await runBeTopoPass(
                 finalGraph, paramLookup, queryDateForLAG, lagHelpers, lagCohortWindow,
+                lagSliceSource, activeEdgesForLAG,
               );
               if (beEntries.length > 0 && finalGraph?.edges) {
                 const beGraph = structuredClone(finalGraph);

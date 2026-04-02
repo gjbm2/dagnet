@@ -1,0 +1,144 @@
+/* ═══════════════════════════════════════════════════════════════
+ * FormEditor — shared styles for rjsf custom templates & widgets
+ *
+ * Naming convention:  .fe-<element>[-modifier]
+ * All selectors are prefixed with `.fe-` to avoid collisions.
+ * ═══════════════════════════════════════════════════════════════ */
+
+/* ── Design tokens (CSS custom properties) ──────────────────── */
+:root {
+  --fe-grid-columns: 10% 50% 40%;
+  --fe-grid-gap: 16px;
+
+  --fe-label-font-size: 13px;
+  --fe-label-font-weight: 500;
+
+  --fe-description-font-size: 11px;
+  --fe-description-color: var(--text-muted, #6c757d);
+  --fe-description-line-height: 1.4;
+
+  --fe-required-color: #d32f2f;
+
+  --fe-field-margin-bottom: 12px;
+  --fe-container-margin-bottom: 16px;
+  --fe-group-field-margin-bottom: 8px;
+
+  /* Root-level header alignment (aligns with the field column) */
+  --fe-header-margin-left: calc(10% + 16px);
+  --fe-header-width: 50%;
+}
+
+/* ── Three-column field layout ──────────────────────────────── */
+
+.fe-field {
+  margin-bottom: var(--fe-field-margin-bottom);
+}
+
+.fe-field-grid {
+  display: grid;
+  grid-template-columns: var(--fe-grid-columns);
+  column-gap: var(--fe-grid-gap);
+  align-items: flex-start;
+}
+
+/* Column 1: label */
+.fe-field-label {
+  text-align: right;
+  padding-top: 8px;
+  padding-right: 8px;
+  font-weight: var(--fe-label-font-weight);
+  white-space: normal;
+  word-break: break-word;
+}
+
+.fe-field-label label {
+  margin: 0;
+  font-size: var(--fe-label-font-size);
+}
+
+.fe-field-label .fe-required {
+  color: var(--fe-required-color);
+  margin-left: 2px;
+}
+
+/* Column 2: input + errors + help */
+.fe-field-input {
+  width: 100%;
+  min-width: 0;
+}
+
+/* Column 3: description */
+.fe-field-description {
+  font-size: var(--fe-description-font-size);
+  color: var(--fe-description-color);
+  padding-top: 8px;
+  padding-right: 8px;
+  line-height: var(--fe-description-line-height);
+  word-break: break-word;
+}
+
+/* Container (object/array) wrapper — no grid, just spacing */
+.fe-container {
+  margin-bottom: var(--fe-container-margin-bottom);
+}
+
+/* ── Object header (title + description) ────────────────────── */
+
+.fe-object-header {
+  margin-bottom: var(--fe-container-margin-bottom);
+}
+
+.fe-object-title {
+  margin-bottom: 8px;
+  font-size: 1rem;
+  font-weight: 500;
+  text-transform: capitalize;
+}
+
+.fe-object-title--root {
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin-left: var(--fe-header-margin-left);
+  width: var(--fe-header-width);
+  max-width: var(--fe-header-width);
+}
+
+.fe-object-description {
+  margin-bottom: var(--fe-container-margin-bottom);
+}
+
+.fe-object-description--root {
+  margin-bottom: 32px;
+  margin-left: var(--fe-header-margin-left);
+  width: var(--fe-header-width);
+  max-width: var(--fe-header-width);
+}
+
+/* ── Single accordion ───────────────────────────────────────── */
+
+.fe-accordion-description {
+  margin-bottom: var(--fe-container-margin-bottom);
+}
+
+.fe-accordion-field {
+  margin-bottom: var(--fe-container-margin-bottom);
+}
+
+.fe-accordion-required {
+  color: var(--fe-required-color);
+  margin-left: 4px;
+}
+
+/* ── Grouped accordion ──────────────────────────────────────── */
+
+.fe-group-description {
+  margin-bottom: var(--fe-container-margin-bottom);
+}
+
+.fe-group-field {
+  margin-bottom: var(--fe-group-field-margin-bottom);
+}
+
+.fe-group-unclaimed {
+  margin-top: var(--fe-container-margin-bottom);
+}

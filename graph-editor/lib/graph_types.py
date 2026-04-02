@@ -107,6 +107,14 @@ class ModelVarsLatency(BaseModel):
     path_sigma: Optional[float] = Field(None, ge=0)
     path_t95: Optional[float] = Field(None, ge=0)
     path_onset_delta_days: Optional[float] = Field(None, ge=0)
+    # Dispersion fields (heuristic or Bayesian — see heuristic-dispersion-design.md)
+    mu_sd: Optional[float] = Field(None, ge=0)
+    sigma_sd: Optional[float] = Field(None, ge=0)
+    onset_sd: Optional[float] = Field(None, ge=0)
+    onset_mu_corr: Optional[float] = None
+    path_mu_sd: Optional[float] = Field(None, ge=0)
+    path_sigma_sd: Optional[float] = Field(None, ge=0)
+    path_onset_sd: Optional[float] = Field(None, ge=0)
 
 
 class ModelVarsProbability(BaseModel):

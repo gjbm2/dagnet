@@ -635,6 +635,14 @@ export interface ModelVarsEntry {
     path_sigma?: number;
     path_t95?: number;
     path_onset_delta_days?: number;
+    // Dispersion (heuristic or Bayesian — see heuristic-dispersion-design.md)
+    mu_sd?: number;
+    sigma_sd?: number;
+    onset_sd?: number;
+    onset_mu_corr?: number;
+    path_mu_sd?: number;
+    path_sigma_sd?: number;
+    path_onset_sd?: number;
   };
 
   /** Bayesian-specific quality metadata (present only when source === 'bayesian') */

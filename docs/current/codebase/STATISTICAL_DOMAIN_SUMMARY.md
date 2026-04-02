@@ -585,3 +585,24 @@ fitting.
 | **Slice** | Contextual segmentation (e.g. channel:paid, device:mobile) |
 | **t95** | 95th percentile of total lag T; acts as one-way tail constraint |
 | **User space** | Total elapsed time T from event occurrence |
+
+---
+
+## Related Docs
+
+**Bayesian fitting pipeline** (the nightly inference system — distinct from
+the latency/lag domain covered above):
+- `project-bayes/0-high-level-logical-blocks.md` — Logical blocks: orchestration,
+  evidence assembly, graph-to-hierarchy compiler, probabilistic model, posterior
+  summarisation, artefact persistence
+- `project-bayes/6-compiler-and-worker-pipeline.md` — Compiler phases and worker
+  dispatch
+- `project-bayes/21-unified-posterior-schema.md` — Posterior output schema
+- `project-bayes/1-cohort-completeness-model-contract.md` — Cohort maturity model
+  contract
+
+**Cohort maturity forecasting** (the frontier subsystem):
+- `project-bayes/cohort-maturity/cohort-maturity-project-overview.md` — Project
+  overview
+- `project-bayes/cohort-maturity/cohort-maturity-full-bayes-design.md` — Full
+  Bayesian design

@@ -204,34 +204,33 @@ export function TabbedArrayWidget(props: ArrayFieldTemplateProps) {
             No items yet. Click the + button to add one.
           </Box>
         ) : (
-          items.map((item, index) => (
-            <Box 
-              key={item.key}
-              sx={{ 
-                display: index === safeActiveTab ? 'block' : 'none'
-              }}
-            >
-              {/* Item Content */}
-              <Box sx={{ mb: 2 }}>
-                {item.children}
-              </Box>
-              
-              {/* Delete Button */}
-              {item.hasRemove && !disabled && !readonly && (
-                <Box sx={{ display: 'flex', justifyContent: 'flex-end', mt: 2 }}>
-                  <Tooltip title="Delete this item">
-                    <IconButton
-                      onClick={item.onDropIndexClick(item.index)}
-                      color="error"
-                      size="small"
-                    >
-                      <DeleteIcon />
-                    </IconButton>
-                  </Tooltip>
+          (() => {
+            const item = items[safeActiveTab];
+            if (!item) return null;
+            return (
+              <Box key={item.key}>
+                {/* Item Content */}
+                <Box sx={{ mb: 2 }}>
+                  {item.children}
                 </Box>
-              )}
-            </Box>
-          ))
+
+                {/* Delete Button */}
+                {item.hasRemove && !disabled && !readonly && (
+                  <Box sx={{ display: 'flex', justifyContent: 'flex-end', mt: 2 }}>
+                    <Tooltip title="Delete this item">
+                      <IconButton
+                        onClick={item.onDropIndexClick(item.index)}
+                        color="error"
+                        size="small"
+                      >
+                        <DeleteIcon />
+                      </IconButton>
+                    </Tooltip>
+                  </Box>
+                )}
+              </Box>
+            );
+          })()
         )}
       </Box>
       
