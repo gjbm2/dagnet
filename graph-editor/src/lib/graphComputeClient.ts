@@ -422,7 +422,7 @@ export class GraphComputeClient {
       };
 
       // For CSV export / forensics: keep the fully detailed cohort points
-      // (one row per as_at_date × anchor_day).
+      // (one row per snapshot_date × anchor_day).
       const cohortPointsByKey = new Map<string, Record<string, any>>();
 
       for (const b of blocks) {
@@ -440,7 +440,7 @@ export class GraphComputeClient {
           });
         }
         for (const f of frames) {
-          const asAt = f?.as_at_date || f?.retrieved_at_date || f?.date;
+          const asAt = f?.snapshot_date || f?.as_at_date || f?.retrieved_at_date || f?.date;
           if (!asAt) continue;
           const points: any[] = Array.isArray(f?.data_points) ? f.data_points : [];
           for (const p of points) {
@@ -463,7 +463,7 @@ export class GraphComputeClient {
             const exportRow = {
               scenario_id: b.scenario_id,
               subject_id: b.subject_id,
-              as_at_date: String(asAt),
+              snapshot_date: String(asAt),
               anchor_day: anchorDay,
               cohort_age_days: cohortAgeDays,
               cohort_age_at_window_end_days: cohortAgeAtWindowEndDays,
@@ -642,7 +642,7 @@ export class GraphComputeClient {
               if (sa !== 0) return sa;
               const su = String(a.subject_id || '').localeCompare(String(b.subject_id || ''));
               if (su !== 0) return su;
-              const ad = String(a.as_at_date || '').localeCompare(String(b.as_at_date || ''));
+              const ad = String(a.snapshot_date || '').localeCompare(String(b.snapshot_date || ''));
               if (ad !== 0) return ad;
               return String(a.anchor_day || '').localeCompare(String(b.anchor_day || ''));
             }),
@@ -1492,7 +1492,7 @@ export class GraphComputeClient {
         const f0 = frames[0];
         const pts = Array.isArray(f0?.data_points) ? f0.data_points : [];
         console.log('[GraphComputeClient] cohort_maturity frame[0]:', {
-          as_at_date: f0?.as_at_date,
+          snapshot_date: f0?.snapshot_date,
           total_y: f0?.total_y,
           dataPointsCount: pts.length,
           dataPointsKeys: pts[0] ? Object.keys(pts[0]) : [],

@@ -29,7 +29,7 @@ def make_single_cohort_frames(
         tau = (d - anchor).days
         y = y_by_tau.get(tau, y_by_tau.get(max(t for t in y_by_tau if t <= tau), 0))
         frames.append({
-            'as_at_date': d.isoformat(),
+            'snapshot_date': d.isoformat(),
             'data_points': [{
                 'anchor_day': anchor.isoformat(),
                 'x': x,
@@ -251,7 +251,7 @@ class TestMultiCohortEpochB:
                     'a': x,
                 })
             frames.append({
-                'as_at_date': frame_date.isoformat(),
+                'snapshot_date': frame_date.isoformat(),
                 'data_points': dps,
             })
 
@@ -330,7 +330,7 @@ class TestMCBand:
     """Verify the Monte Carlo confidence band."""
 
     def test_band_bounded_01(self):
-        upper, lower = compute_confidence_band(
+        upper, lower, _median = compute_confidence_band(
             ages=range(0, 30),
             p=0.80, mu=2.0, sigma=0.5, onset=2.0,
             p_sd=0.05, mu_sd=0.10, sigma_sd=0.05, onset_sd=0.20,
@@ -340,7 +340,7 @@ class TestMCBand:
             assert 0.0 <= l <= u <= 1.0, f"Band out of [0,1] at tau={i}: [{l:.4f}, {u:.4f}]"
 
     def test_band_opens_after_onset(self):
-        upper, lower = compute_confidence_band(
+        upper, lower, _median = compute_confidence_band(
             ages=range(0, 30),
             p=0.80, mu=2.0, sigma=0.5, onset=2.0,
             p_sd=0.05, mu_sd=0.10, sigma_sd=0.05, onset_sd=0.20,
@@ -351,7 +351,7 @@ class TestMCBand:
         assert width_at_10 > 0.01, f"Band too narrow at tau=10: {width_at_10:.4f}"
 
     def test_band_converges_asymptotically(self):
-        upper, lower = compute_confidence_band(
+        upper, lower, _median = compute_confidence_band(
             ages=range(0, 60),
             p=0.80, mu=2.0, sigma=0.5, onset=2.0,
             p_sd=0.05, mu_sd=0.10, sigma_sd=0.05, onset_sd=0.20,

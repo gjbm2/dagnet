@@ -34,6 +34,19 @@ PROTECTED=(
 
 for pattern in "${PROTECTED[@]}"; do
   if echo "$FILE_PATH" | grep -qF "$pattern"; then
+    # Check for valid consent
+    CONSENT_FILE="/tmp/dagnet-gate-gate-config"
+    if [ -f "$CONSENT_FILE" ]; then
+      TTL=$(head -1 "$CONSENT_FILE" 2>/dev/null || echo "0")
+      CREATED=$(stat -c %Y "$CONSENT_FILE" 2>/dev/null || echo "0")
+      NOW=$(date +%s)
+      AGE=$(( NOW - CREATED ))
+      if [ "$AGE" -le "$TTL" ]; then
+        exit 0
+      else
+        rm -f "$CONSENT_FILE"
+      fi
+    fi
     cat >&2 <<EOF
 
 STOP. This edit is blocked.

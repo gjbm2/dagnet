@@ -23,7 +23,7 @@ function formatDate_d_MMM_yy(dateStr: string): string {
  */
 export function analysisResultToCsv(result: AnalysisResult): { filename: string; csv: string } {
   // Cohort maturity export: prefer the fully-detailed per-cohort table when available.
-  // This is intended for debugging + custom chart design (one row per as_at_date × anchor_day).
+  // This is intended for debugging + custom chart design (one row per snapshot_date × anchor_day).
   const exportTables: any = (result?.metadata as any)?.export_tables;
   const detailedPoints: any[] | undefined = Array.isArray(exportTables?.cohort_maturity_points)
     ? exportTables.cohort_maturity_points
@@ -41,8 +41,8 @@ export function analysisResultToCsv(result: AnalysisResult): { filename: string;
       'window_from_uk',
       'window_to_iso',
       'window_to_uk',
-      'as_at_date_iso',
-      'as_at_date_uk',
+      'snapshot_date_iso',
+      'snapshot_date_uk',
       'anchor_day_iso',
       'anchor_day_uk',
       'cohort_age_days',
@@ -68,7 +68,7 @@ export function analysisResultToCsv(result: AnalysisResult): { filename: string;
     for (const row of detailedPoints) {
       const scenarioId = String((row as any)?.scenario_id ?? '');
       const subjectId = String((row as any)?.subject_id ?? '');
-      const asAtISO = String((row as any)?.as_at_date ?? '');
+      const asAtISO = String((row as any)?.snapshot_date ?? (row as any)?.as_at_date ?? '');
       const anchorISO = String((row as any)?.anchor_day ?? '');
       const windowFromISO = String((row as any)?.window_from ?? '');
       const windowToISO = String((row as any)?.window_to ?? '');
@@ -82,8 +82,8 @@ export function analysisResultToCsv(result: AnalysisResult): { filename: string;
         window_from_uk: windowFromISO ? formatDate_d_MMM_yy(windowFromISO) : '',
         window_to_iso: windowToISO,
         window_to_uk: windowToISO ? formatDate_d_MMM_yy(windowToISO) : '',
-        as_at_date_iso: asAtISO,
-        as_at_date_uk: asAtISO ? formatDate_d_MMM_yy(asAtISO) : '',
+        snapshot_date_iso: asAtISO,
+        snapshot_date_uk: asAtISO ? formatDate_d_MMM_yy(asAtISO) : '',
         anchor_day_iso: anchorISO,
         anchor_day_uk: anchorISO ? formatDate_d_MMM_yy(anchorISO) : '',
         cohort_age_days: (row as any)?.cohort_age_days,

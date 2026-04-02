@@ -256,7 +256,7 @@ describe('GraphComputeClient - Cohort maturity epoch stitching', () => {
           result: {
             analysis_type: 'cohort_maturity',
             frames: [
-              { as_at_date: '2025-10-01', data_points: [{ anchor_day: '2025-10-01', x: 10, y: 1 }] },
+              { snapshot_date: '2025-10-01', data_points: [{ anchor_day: '2025-10-01', x: 10, y: 1 }] },
             ],
             maturity_rows: [
               { tau_days: 0, rate: 0.1, y_base: 1, tau_solid_max: 0, tau_future_max: 1, boundary_date: '2025-10-01' },
@@ -269,7 +269,7 @@ describe('GraphComputeClient - Cohort maturity epoch stitching', () => {
           result: {
             analysis_type: 'cohort_maturity',
             frames: [
-              { as_at_date: '2025-10-02', data_points: [{ anchor_day: '2025-10-01', x: 20, y: 2 }] },
+              { snapshot_date: '2025-10-02', data_points: [{ anchor_day: '2025-10-01', x: 20, y: 2 }] },
             ],
             maturity_rows: [
               { tau_days: 1, rate: 0.1, y_base: 2, tau_solid_max: 1, tau_future_max: 2, boundary_date: '2025-10-02' },
@@ -384,8 +384,8 @@ describe('GraphComputeClient - Cohort Maturity Normalisation', () => {
   it('should produce τ-indexed rows from BE-computed maturity_rows', () => {
     // Single anchor day (2025-10-01). BE computes a single maturity row at τ=3.
     const frames = [
-      { as_at_date: '2025-10-01', data_points: [], total_y: 0 },
-      { as_at_date: '2025-10-04',
+      { snapshot_date: '2025-10-01', data_points: [], total_y: 0 },
+      { snapshot_date: '2025-10-04',
         data_points: [{ anchor_day: '2025-10-01', y: 42, x: 100, a: 1000, rate: 0.42 }],
         total_y: 42,
       },
@@ -416,8 +416,8 @@ describe('GraphComputeClient - Cohort Maturity Normalisation', () => {
 
   it('should produce empty data when all frames are empty', () => {
     const frames = [
-      { as_at_date: '2025-10-01', data_points: [], total_y: 0 },
-      { as_at_date: '2025-10-02', data_points: [], total_y: 0 },
+      { snapshot_date: '2025-10-01', data_points: [], total_y: 0 },
+      { snapshot_date: '2025-10-02', data_points: [], total_y: 0 },
     ];
 
     const raw = buildRawResponse(frames);
@@ -435,17 +435,17 @@ describe('GraphComputeClient - Cohort Maturity Normalisation', () => {
     // BE computes τ-indexed rows with monotonically increasing rates.
     const frames = [
       {
-        as_at_date: '2025-10-10',
+        snapshot_date: '2025-10-10',
         data_points: [{ anchor_day: '2025-10-01', y: 10, x: 100, a: 1000, rate: 0.10 }],
         total_y: 10,
       },
       {
-        as_at_date: '2025-10-20',
+        snapshot_date: '2025-10-20',
         data_points: [{ anchor_day: '2025-10-01', y: 30, x: 100, a: 1000, rate: 0.30 }],
         total_y: 30,
       },
       {
-        as_at_date: '2025-10-21',
+        snapshot_date: '2025-10-21',
         is_synthetic: true,
         data_points: [{ anchor_day: '2025-10-01', y: 31, x: 100, a: 1000, rate: 0.31 }],
         total_y: 31,
@@ -511,7 +511,7 @@ describe('GraphComputeClient - Cohort Maturity Normalisation', () => {
     // BE computes per-τ aggregated rates across anchor days.
     const frames = [
       {
-        as_at_date: '2025-10-03',
+        snapshot_date: '2025-10-03',
         data_points: [
           { anchor_day: '2025-10-01', y: 10, x: 100, a: 100, rate: 0.10 },
           { anchor_day: '2025-10-02', y: 20, x: 100, a: 100, rate: 0.20 },
@@ -520,7 +520,7 @@ describe('GraphComputeClient - Cohort Maturity Normalisation', () => {
         total_y: 60,
       },
       {
-        as_at_date: '2025-10-04',
+        snapshot_date: '2025-10-04',
         data_points: [
           { anchor_day: '2025-10-01', y: 10, x: 100, a: 100, rate: 0.10 },
           { anchor_day: '2025-10-02', y: 20, x: 100, a: 100, rate: 0.20 },
@@ -578,7 +578,7 @@ describe('GraphComputeClient - Cohort Maturity Normalisation', () => {
   it('should attach fully detailed cohort rows for CSV export', () => {
     const frames = [
       {
-        as_at_date: '2025-10-04',
+        snapshot_date: '2025-10-04',
         data_points: [
           { anchor_day: '2025-10-01', y: 42, x: 100, a: 1000, rate: 0.42, median_lag_days: 3.2, mean_lag_days: 4.1, onset_delta_days: 1.0 },
           { anchor_day: '2025-10-02', y: 10, x: 50, a: 500, rate: 0.20 },
@@ -601,7 +601,7 @@ describe('GraphComputeClient - Cohort Maturity Normalisation', () => {
     const points = exportTables.cohort_maturity_points;
     expect(Array.isArray(points)).toBe(true);
     expect(points.length).toBe(2);
-    expect(points[0]).toHaveProperty('as_at_date', '2025-10-04');
+    expect(points[0]).toHaveProperty('snapshot_date', '2025-10-04');
     expect(points[0]).toHaveProperty('anchor_day');
     expect(points[0]).toHaveProperty('cohort_age_days');
     expect(points[0]).toHaveProperty('cohort_age_at_window_end_days');

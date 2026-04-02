@@ -58,16 +58,17 @@ export interface CanvasContextMenusProps {
   ctxDslEditState: { analysisId: string; scenarioId: string } | null;
   setCtxDslEditState: React.Dispatch<React.SetStateAction<{ analysisId: string; scenarioId: string } | null>>;
   analysisCtxAvailableTypes: AvailableAnalysis[];
+  addChartAvailableTypes: AvailableAnalysis[];
 
   // Pane context menu actions
   addNodeAtPosition: (x: number, y: number) => void;
   addPostitAtPosition: (x: number, y: number, w?: number, h?: number) => void;
   addContainerAtPosition: (x: number, y: number, w?: number, h?: number) => void;
-  addChartAtPosition: (x: number, y: number, w?: number, h?: number) => void;
+  addChartAtPosition: (x: number, y: number, w?: number, h?: number, analysisType?: string) => void;
   pasteNodeAtPosition: (x: number, y: number) => void;
   pasteSubgraphAtPosition: (x: number, y: number) => void;
   setActiveElementTool: (tool: any) => void;
-  startAddChart: (detail?: { contextNodeIds?: string[]; contextEdgeIds?: string[] }) => void;
+  startAddChart: (detail?: { contextNodeIds?: string[]; contextEdgeIds?: string[]; analysisType?: string }) => void;
   copiedNode: any;
   copiedSubgraph: any;
   copySubgraph: (...args: any[]) => void;
@@ -146,6 +147,7 @@ export const CanvasContextMenus: React.FC<CanvasContextMenusProps> = React.memo(
   ctxDslEditState,
   setCtxDslEditState,
   analysisCtxAvailableTypes,
+  addChartAvailableTypes,
   addNodeAtPosition,
   addPostitAtPosition,
   addContainerAtPosition,
@@ -189,6 +191,32 @@ export const CanvasContextMenus: React.FC<CanvasContextMenusProps> = React.memo(
   handleVariantSelection,
   dismissVariantModal,
 }) => {
+
+  /**
+   * Build "Add chart" submenu items from available analysis types.
+   * @param onSelect Called with analysisType (or undefined for blank) when user picks.
+   */
+  const buildChartSubmenu = (onSelect: (analysisType?: string) => void): ContextMenuItem[] => {
+    const items: ContextMenuItem[] = addChartAvailableTypes.map(a => {
+      const meta = getAnalysisTypeMeta(a.id);
+      const icon = meta?.icon ? React.createElement(meta.icon, { size: 14 }) : undefined;
+      return {
+        label: meta?.name || a.name || a.id,
+        icon,
+        onClick: () => onSelect(a.id),
+      };
+    });
+    if (items.length > 0) {
+      items.push({ label: '', onClick: () => {}, divider: true });
+    }
+    items.push({
+      label: 'Blank',
+      icon: <BarChart3 size={14} />,
+      onClick: () => onSelect(),
+    });
+    return items;
+  };
+
   return (
     <>
       {/* Pane Context Menu */}
@@ -210,13 +238,24 @@ export const CanvasContextMenus: React.FC<CanvasContextMenusProps> = React.memo(
               setActiveElementTool('new-container');
             }
           }},
-          { label: 'Add chart', icon: <BarChart3 size={14} />, onClick: () => {
-            if (hasDrawnRect) {
-              addChartAtPosition(contextMenu.flowX, contextMenu.flowY, contextMenu.flowW, contextMenu.flowH);
-            } else {
-              startAddChart();
-            }
-          }},
+          {
+            label: 'Add chart',
+            icon: <BarChart3 size={14} />,
+            onClick: () => {
+              if (hasDrawnRect) {
+                addChartAtPosition(contextMenu.flowX, contextMenu.flowY, contextMenu.flowW, contextMenu.flowH);
+              } else {
+                startAddChart();
+              }
+            },
+            submenu: buildChartSubmenu((analysisType) => {
+              if (hasDrawnRect) {
+                addChartAtPosition(contextMenu.flowX, contextMenu.flowY, contextMenu.flowW, contextMenu.flowH, analysisType);
+              } else {
+                startAddChart({ analysisType });
+              }
+            }),
+          },
           { label: '', onClick: () => {}, divider: true },
         ];
         if (copiedNode) {
@@ -575,7 +614,7 @@ export const CanvasContextMenus: React.FC<CanvasContextMenusProps> = React.memo(
               }
               setContainerContextMenu(null);
             }}
-            onAddChart={(id) => {
+            onAddChart={(id, analysisType) => {
               const c = graph.containers?.find((ci: any) => ci.id === id);
               if (c) {
                 const containedIds = getContainedConversionNodeIds(c, nodes);
@@ -583,10 +622,23 @@ export const CanvasContextMenus: React.FC<CanvasContextMenusProps> = React.memo(
                   const n = nodes.find(nd => nd.id === rfId);
                   return n?.data?.id || rfId;
                 });
-                startAddChart({ contextNodeIds: humanIds });
+                startAddChart({ contextNodeIds: humanIds, analysisType });
               }
               setContainerContextMenu(null);
             }}
+            chartSubmenu={buildChartSubmenu((analysisType) => {
+              if (!containerContextMenu) return;
+              const c = graph.containers?.find((ci: any) => ci.id === containerContextMenu.containerId);
+              if (c) {
+                const containedIds = getContainedConversionNodeIds(c, nodes);
+                const humanIds = containedIds.map(rfId => {
+                  const n = nodes.find(nd => nd.id === rfId);
+                  return n?.data?.id || rfId;
+                });
+                startAddChart({ contextNodeIds: humanIds, analysisType });
+              }
+              setContainerContextMenu(null);
+            })}
             onCopy={(id) => {
               const c = graph.containers?.find((ci: any) => ci.id === id);
               if (c && graph) {
@@ -941,6 +993,7 @@ export const CanvasContextMenus: React.FC<CanvasContextMenusProps> = React.memo(
           setGraph={setGraph}
           onClose={() => setNodeContextMenu(null)}
           onAddChart={startAddChart}
+          availableAnalyses={addChartAvailableTypes}
           onAlign={align}
           onDistribute={distribute}
           onEqualSize={equalSize}
@@ -962,6 +1015,7 @@ export const CanvasContextMenus: React.FC<CanvasContextMenusProps> = React.memo(
           graph={graph}
           graphFileId={graphFileId}
           onAddChart={startAddChart}
+          availableAnalyses={addChartAvailableTypes}
               onClose={() => {
                 setEdgeContextMenu(null);
                 setContextMenuLocalData(null);

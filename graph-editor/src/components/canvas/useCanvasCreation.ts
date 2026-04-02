@@ -68,10 +68,10 @@ export interface UseCanvasCreationReturn {
   addNodeAtPosition: (x: number, y: number) => void;
   addPostitAtPosition: (x: number, y: number, w?: number, h?: number) => void;
   addContainerAtPosition: (x: number, y: number, w?: number, h?: number) => void;
-  addChartAtPosition: (x: number, y: number, w?: number, h?: number) => void;
+  addChartAtPosition: (x: number, y: number, w?: number, h?: number, analysisType?: string) => void;
   pasteNodeAtPosition: (x: number, y: number) => Promise<void>;
   pasteSubgraphAtPosition: (x: number, y: number) => Promise<void>;
-  startAddChart: (detail?: { contextNodeIds?: string[]; contextEdgeIds?: string[] }) => void;
+  startAddChart: (detail?: { contextNodeIds?: string[]; contextEdgeIds?: string[]; analysisType?: string }) => void;
   handleDragOver: (e: React.DragEvent) => void;
   handleDrop: (e: React.DragEvent) => void;
   onPaneMouseDown: (event: React.PointerEvent) => void;
@@ -238,20 +238,29 @@ export function useCanvasCreation({
     setActiveElementTool('new-analysis');
   }, [setActiveElementTool]);
 
-  const startAddChart = useCallback((detail?: { contextNodeIds?: string[]; contextEdgeIds?: string[] }) => {
+  const startAddChart = useCallback((detail?: { contextNodeIds?: string[]; contextEdgeIds?: string[]; analysisType?: string }) => {
     const ctxNodeIds: string[] = detail?.contextNodeIds || [];
     const ctxEdgeIds: string[] = detail?.contextEdgeIds || [];
-    pendingAnalysisPayload = buildAddChartPayload(
+    const payload = buildAddChartPayload(
       graph, nodes, edges, ctxNodeIds, ctxEdgeIds, isCanvasObjectNode, getContainedConversionNodeIds,
     );
+    if (detail?.analysisType) {
+      payload.recipe.analysis.analysis_type = detail.analysisType;
+      payload.analysisTypeOverridden = true;
+    }
+    pendingAnalysisPayload = payload;
     setActiveElementTool('new-analysis');
   }, [nodes, edges, isCanvasObjectNode, graph, setActiveElementTool, getContainedConversionNodeIds]);
 
   /** Create a chart immediately at position + optional size (used by right-drag lasso). */
-  const addChartAtPosition = useCallback((x: number, y: number, w?: number, h?: number) => {
+  const addChartAtPosition = useCallback((x: number, y: number, w?: number, h?: number, analysisType?: string) => {
     const payload = buildAddChartPayload(
       graph, nodes, edges, [], [], isCanvasObjectNode, getContainedConversionNodeIds,
     );
+    if (analysisType) {
+      payload.recipe.analysis.analysis_type = analysisType;
+      payload.analysisTypeOverridden = true;
+    }
     addCanvasAnalysisAtPosition(x, y, { ...(payload || {}), drawWidth: w, drawHeight: h });
   }, [graph, nodes, edges, isCanvasObjectNode, getContainedConversionNodeIds, addCanvasAnalysisAtPosition]);
 

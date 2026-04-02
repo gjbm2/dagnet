@@ -46,7 +46,7 @@ class TestSingleCohortSingleRetrieval:
 
         assert len(result["frames"]) == 1
         frame = result["frames"][0]
-        assert frame["as_at_date"] == "2025-10-15"
+        assert frame["snapshot_date"] == "2025-10-15"
         assert len(frame["data_points"]) == 1
 
         dp = frame["data_points"][0]
@@ -80,7 +80,7 @@ class TestSingleCohortMultipleRetrievals:
             _row("2025-10-01", "2025-10-10T12:00:00+00:00", y=10, x=100),
         ]
         result = derive_cohort_maturity(rows)
-        dates = [f["as_at_date"] for f in result["frames"]]
+        dates = [f["snapshot_date"] for f in result["frames"]]
         assert dates == ["2025-10-10", "2025-10-30"]
 
 
@@ -101,13 +101,13 @@ class TestMultipleCohorts:
 
         # First frame (as_at 10-15): both cohorts
         frame1 = result["frames"][0]
-        assert frame1["as_at_date"] == "2025-10-15"
+        assert frame1["snapshot_date"] == "2025-10-15"
         assert len(frame1["data_points"]) == 2
         assert frame1["total_y"] == 35  # 20 + 15
 
         # Second frame (as_at 10-20): both cohorts, higher Y
         frame2 = result["frames"][1]
-        assert frame2["as_at_date"] == "2025-10-20"
+        assert frame2["snapshot_date"] == "2025-10-20"
         assert frame2["total_y"] == 70  # 40 + 30
 
 
@@ -128,12 +128,12 @@ class TestVirtualSnapshotLogic:
 
         # Frame at 10-15: should see latest 10-15 retrieval (y=12)
         frame_15 = result["frames"][0]
-        assert frame_15["as_at_date"] == "2025-10-15"
+        assert frame_15["snapshot_date"] == "2025-10-15"
         assert frame_15["data_points"][0]["y"] == 12
 
         # Frame at 10-20: should see latest overall (y=30)
         frame_20 = result["frames"][1]
-        assert frame_20["as_at_date"] == "2025-10-20"
+        assert frame_20["snapshot_date"] == "2025-10-20"
         assert frame_20["data_points"][0]["y"] == 30
 
 
@@ -169,7 +169,7 @@ class TestSliceAggregation:
         ]
 
         result = derive_cohort_maturity(rows)
-        assert [f["as_at_date"] for f in result["frames"]] == ["2025-10-10", "2025-10-11"]
+        assert [f["snapshot_date"] for f in result["frames"]] == ["2025-10-10", "2025-10-11"]
 
         # Day 1: only the first retrieval exists.
         dp_10 = result["frames"][0]["data_points"][0]
@@ -242,6 +242,6 @@ class TestSweepRange:
         result = derive_cohort_maturity([], sweep_from="2025-10-01", sweep_to="2025-10-05")
         assert len(result["frames"]) == 5
         for f in result["frames"]:
-            assert isinstance(f.get("as_at_date"), str)
+            assert isinstance(f.get("snapshot_date"), str)
             assert f.get("data_points") == []
             assert f.get("total_y") == 0

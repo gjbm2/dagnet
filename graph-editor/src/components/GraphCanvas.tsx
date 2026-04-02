@@ -54,6 +54,7 @@ import VariantWeightInput from './VariantWeightInput';
 import { SelectionConnectors } from './SelectionConnectors';
 import { captureTabScenariosToRecipe } from '../services/captureTabScenariosService';
 import { resolveAnalysisType } from '../services/analysisTypeResolutionService';
+import { buildAddChartPayload } from './canvas/creationTools';
 import { mutateCanvasAnalysisGraph, deleteCanvasAnalysisFromGraph } from '../services/canvasAnalysisMutationService';
 import { getActiveContentTabIndex } from '../services/activeContentTabTracker';
 import { updateViewObjectState, createCanvasView, applyCanvasView, snapshotStates, deleteCanvasView, renameCanvasView, reorderCanvasViews, toggleCanvasViewLocked, toggleCanvasViewScope, snapshotScenarios, scopeEnabled, viewportToBounds, boundsToViewport } from '../services/canvasViewService';
@@ -427,6 +428,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
   const [containerContextMenu, setContainerContextMenu] = useState<{ x: number; y: number; containerId: string } | null>(null);
   const [analysisContextMenu, setAnalysisContextMenu] = useState<{ x: number; y: number; analysisId: string } | null>(null);
   const [analysisCtxAvailableTypes, setAnalysisCtxAvailableTypes] = useState<import('../lib/graphComputeClient').AvailableAnalysis[]>([]);
+  const [addChartAvailableTypes, setAddChartAvailableTypes] = useState<import('../lib/graphComputeClient').AvailableAnalysis[]>([]);
   const [ctxDslEditState, setCtxDslEditState] = useState<{ analysisId: string; scenarioId: string } | null>(null);
   const [multiSelectContextMenu, setMultiSelectContextMenu] = useState<{ x: number; y: number } | null>(null);
   const [edgeContextMenu, setEdgeContextMenu] = useState<{ x: number; y: number; edgeId: string } | null>(null);
@@ -2191,6 +2193,46 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
     return () => { cancelled = true; };
   }, [analysisContextMenu, graph, tabId, tabOperations]);
 
+  // Resolve available analysis types when any context menu with "Add chart" opens
+  useEffect(() => {
+    const anyMenuOpen = contextMenu || nodeContextMenu || edgeContextMenu || containerContextMenu;
+    if (!anyMenuOpen || !graph) {
+      setAddChartAvailableTypes([]);
+      return;
+    }
+    let cancelled = false;
+
+    // Compute context IDs based on which menu is open
+    let ctxNodeIds: string[] = [];
+    let ctxEdgeIds: string[] = [];
+    if (nodeContextMenu) {
+      const nd = nodes.find(n => n.id === nodeContextMenu.nodeId);
+      const humanId = nd?.data?.id || nodeContextMenu.nodeId;
+      ctxNodeIds = [humanId];
+    } else if (edgeContextMenu) {
+      ctxEdgeIds = [edgeContextMenu.edgeId];
+    } else if (containerContextMenu) {
+      const c = graph.containers?.find((ci: any) => ci.id === containerContextMenu.containerId);
+      if (c) {
+        const containedRfIds = getContainedConversionNodeIds(c, nodes);
+        ctxNodeIds = containedRfIds.map(rfId => {
+          const n = nodes.find(nd => nd.id === rfId);
+          return n?.data?.id || rfId;
+        });
+      }
+    }
+
+    const payload = buildAddChartPayload(
+      graph, nodes, edges, ctxNodeIds, ctxEdgeIds, isCanvasObjectNode, getContainedConversionNodeIds,
+    );
+    const dsl = payload.recipe.analysis.analytics_dsl;
+    const scenarioCount = (tabId ? tabOperations.getScenarioState(tabId)?.visibleScenarioIds?.length : null) || 1;
+    resolveAnalysisType(graph, dsl || undefined, scenarioCount).then(({ availableAnalyses }) => {
+      if (!cancelled) setAddChartAvailableTypes(availableAnalyses);
+    });
+    return () => { cancelled = true; };
+  }, [contextMenu, nodeContextMenu, edgeContextMenu, containerContextMenu, graph, nodes, edges, isCanvasObjectNode, getContainedConversionNodeIds, tabId, tabOperations]);
+
   // Clear right-drag lasso visual when pane context menu closes (item clicked or dismissed)
   useEffect(() => {
     if (!contextMenu) clearRightDrag();
@@ -2800,6 +2842,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
         ctxDslEditState={ctxDslEditState}
         setCtxDslEditState={setCtxDslEditState}
         analysisCtxAvailableTypes={analysisCtxAvailableTypes}
+        addChartAvailableTypes={addChartAvailableTypes}
         addNodeAtPosition={addNodeAtPosition}
         addPostitAtPosition={addPostitAtPosition}
         addContainerAtPosition={addContainerAtPosition}

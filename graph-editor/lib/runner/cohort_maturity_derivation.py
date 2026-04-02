@@ -10,7 +10,7 @@ Output shape:
         "analysis_type": "cohort_maturity",
         "frames": [
             {
-                "as_at_date": "2025-11-01",
+                "snapshot_date": "2025-11-01",
                 "data_points": [
                     {"anchor_day": "2025-10-01", "y": 42, ...},
                     ...
@@ -73,7 +73,7 @@ def derive_cohort_maturity(
             st = date.fromisoformat(sweep_to) if isinstance(sweep_to, str) else sweep_to
             d = sf
             while d <= st:
-                frames.append({"as_at_date": d.isoformat(), "data_points": [], "total_y": 0})
+                frames.append({"snapshot_date": d.isoformat(), "data_points": [], "total_y": 0})
                 d += timedelta(days=1)
 
         return {
@@ -196,7 +196,7 @@ def derive_cohort_maturity(
                 total_y += entry["y"]
 
         frames.append({
-            "as_at_date": ret_date.isoformat(),
+            "snapshot_date": ret_date.isoformat(),
             "data_points": data_points,
             "total_y": total_y,
         })

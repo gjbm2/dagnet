@@ -20,6 +20,8 @@ import { getConditionalProbabilityUnbalancedMap } from '../utils/rebalanceUtils'
 import { getAllDataSections, type DataOperationSection } from './DataOperationsSections';
 import { DataSectionSubmenu } from './DataSectionSubmenu';
 import { copyVarsToClipboard } from '../services/copyVarsService';
+import { getAnalysisTypeMeta } from './panels/analysisTypes';
+import type { AvailableAnalysis } from '../lib/graphComputeClient';
 import { useClearDataFile } from '../hooks/useClearDataFile';
 import { useSnapshotsMenu } from '../hooks/useSnapshotsMenu';
 import { useFetchData, createFetchItem } from '../hooks/useFetchData';
@@ -42,7 +44,8 @@ interface EdgeContextMenuProps {
   /** File-level graph ID, e.g. "graph-my-graph" — authoritative, unlike graph.metadata.name */
   graphFileId?: string | null;
   onClose: () => void;
-  onAddChart: (detail?: { contextNodeIds?: string[]; contextEdgeIds?: string[] }) => void;
+  onAddChart: (detail?: { contextNodeIds?: string[]; contextEdgeIds?: string[]; analysisType?: string }) => void;
+  availableAnalyses?: AvailableAnalysis[];
   onUpdateGraph: (graph: any, historyLabel?: string, nodeId?: string) => void;
   onDeleteEdge: (edgeId: string) => void;
 }
@@ -57,6 +60,7 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
   graphFileId,
   onClose,
   onAddChart,
+  availableAnalyses,
   onUpdateGraph,
   onDeleteEdge,
 }) => {
@@ -778,16 +782,70 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
       <div className="dagnet-popup-divider" />
 
       <div
-        className="dagnet-popup-item"
-        onClick={(e) => {
-          e.stopPropagation();
-          onAddChart({ contextEdgeIds: [edgeId] });
-          onClose();
-        }}
-        style={{ display: 'flex', alignItems: 'center', gap: 8 }}
+        style={{ position: 'relative' }}
+        onMouseEnter={() => handleSubmenuEnter('addChart')}
+        onMouseLeave={handleSubmenuLeave}
       >
-        <BarChart3 size={14} />
-        Add chart
+        <div
+          className={`dagnet-popup-item${openSubmenu === 'addChart' ? ' dagnet-popup-item--active' : ''}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            onAddChart({ contextEdgeIds: [edgeId] });
+            onClose();
+          }}
+          style={{ display: 'flex', alignItems: 'center', gap: 8 }}
+        >
+          <BarChart3 size={14} />
+          Add chart
+          <span className="dagnet-popup-arrow">›</span>
+        </div>
+        {openSubmenu === 'addChart' && (
+          <div
+            className="dagnet-popup dagnet-popup--submenu"
+            style={{
+              position: 'absolute',
+              left: '100%', marginLeft: '4px',
+              top: 'auto', marginTop: -30,
+              zIndex: 10001,
+              whiteSpace: 'nowrap',
+            }}
+            onMouseEnter={handleSubmenuContentEnter}
+            onMouseLeave={handleSubmenuContentLeave}
+          >
+            {(availableAnalyses || []).map(a => {
+              const meta = getAnalysisTypeMeta(a.id);
+              const Icon = meta?.icon;
+              return (
+                <div
+                  key={a.id}
+                  className="dagnet-popup-item"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onAddChart({ contextEdgeIds: [edgeId], analysisType: a.id });
+                    onClose();
+                  }}
+                  style={{ display: 'flex', alignItems: 'center', gap: 8 }}
+                >
+                  {Icon && <Icon size={14} />}
+                  {meta?.name || a.name || a.id}
+                </div>
+              );
+            })}
+            {(availableAnalyses || []).length > 0 && <div className="dagnet-popup-divider" />}
+            <div
+              className="dagnet-popup-item"
+              onClick={(e) => {
+                e.stopPropagation();
+                onAddChart({ contextEdgeIds: [edgeId] });
+                onClose();
+              }}
+              style={{ display: 'flex', alignItems: 'center', gap: 8 }}
+            >
+              <BarChart3 size={14} />
+              Blank
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="dagnet-popup-divider" />

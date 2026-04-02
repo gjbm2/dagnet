@@ -949,14 +949,14 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
         Phase 2 (cohort maturity): append synthetic future frames (forecast-only tail).
 
         This does NOT change the meaning of existing (real) frames. It simply extends
-        `result['frames']` with additional frames beyond the latest real as_at_date so
+        `result['frames']` with additional frames beyond the latest real snapshot_date so
         the frontend can plot a forecast-only tail.
 
         Contract:
         - Synthetic frames are tagged with `is_synthetic: true`.
         - Each synthetic frame uses the same `data_points` shape as real frames.
         - Data points are re-annotated using annotate_rows with retrieved_at_override set
-          to the synthetic as_at_date.
+          to the synthetic snapshot_date.
         """
         result = args.get('result') or {}
         frames = result.get('frames') if isinstance(result, dict) else None
@@ -986,7 +986,7 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
         if not last_real:
             return
 
-        last_as_at = str(last_real.get('as_at_date') or '')[:10]
+        last_as_at = str(last_real.get('snapshot_date') or last_real.get('as_at_date') or '')[:10]
         if not last_as_at:
             return
 
@@ -1092,7 +1092,7 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                 })
 
             new_frames.append({
-                "as_at_date": as_at_iso,
+                "snapshot_date": as_at_iso,
                 "is_synthetic": True,
                 "data_points": synth_points,
                 "total_y": total_y,
@@ -1359,12 +1359,12 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
 
                 if analysis_type == 'cohort_maturity' and 'frames' in result:
                     for frame in result['frames']:
-                        as_at_date = frame.get('as_at_date', '')
+                        snapshot_date = frame.get('snapshot_date', '') or frame.get('as_at_date', '')
                         if frame.get('data_points'):
                             frame['data_points'] = annotate_rows(
                                 frame['data_points'], mu, sigma, onset,
                                 forecast_mean=fm,
-                                retrieved_at_override=as_at_date,
+                                retrieved_at_override=snapshot_date,
                             )
                     # Phase 2: append synthetic future frames (forecast-only tail).
                     _append_synthetic_cohort_maturity_frames({
@@ -1604,7 +1604,7 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
 
                                 if band_mu_sd > 0:
                                     ages = list(range(0, axis_tau_max + 1))
-                                    upper_rates, lower_rates = compute_confidence_band(
+                                    upper_rates, lower_rates, _median_rates = compute_confidence_band(
                                         ages=ages,
                                         p=s_fm, mu=s_mu, sigma=s_sigma, onset=s_onset,
                                         p_sd=band_p_sd, mu_sd=band_mu_sd,

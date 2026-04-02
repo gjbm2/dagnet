@@ -343,7 +343,7 @@ def _regenerate_frames(
                 'rate': round(y / x, 6) if x > 0 else 0.0,
             })
         frames.append({
-            'as_at_date': as_at.isoformat(),
+            'snapshot_date': as_at.isoformat(),
             'data_points': data_points,
         })
 
@@ -409,6 +409,14 @@ def compute_cohort_maturity_rows(
     except (ValueError, TypeError):
         return []
 
+    # Chart extent: how far (in tau days) the chart should draw.
+    # This is anchor-derived and used only for max_tau / row emission range.
+    # NOT the rendering zone boundary — that comes from tau_observed later.
+    tau_chart_extent = max(0, (sweep_to_d - anchor_from_d).days)
+
+    # Zone boundaries are deferred until tau_observed is computed per cohort
+    # (see § after bucket aggregation).  Initialise to anchor-derived proxies
+    # so the rest of the code has valid values even if cohort_list is empty.
     tau_solid_max = max(0, (sweep_to_d - anchor_to_d).days)
     tau_future_max = max(0, (sweep_to_d - anchor_from_d).days)
 
@@ -545,14 +553,28 @@ def compute_cohort_maturity_rows(
     cohort_info: Dict[str, Dict[str, Any]] = {}
     last_frame = None
     for f in frames:
-        if f.get('as_at_date') and str(f['as_at_date'])[:10] <= str(sweep_to)[:10]:
+        if f.get('snapshot_date') and str(f['snapshot_date'])[:10] <= str(sweep_to)[:10]:
             last_frame = f
+    # tau_max for each Cohort is based on the last frame's snapshot date
+    # (the actual last observation), NOT sweep_to.  When sweep_to extends
+    # beyond the data, the Cohort should be immature for the gap — not
+    # treated as mature with carry-forward of stale observations.
+    last_frame_date = None
+    if last_frame:
+        try:
+            last_frame_date = _date.fromisoformat(str(last_frame.get('snapshot_date', ''))[:10])
+        except (ValueError, TypeError):
+            pass
+
     if last_frame and last_frame.get('data_points'):
         for dp in last_frame['data_points']:
             ad_str = str(dp.get('anchor_day', ''))[:10]
             try:
                 ad = _date.fromisoformat(ad_str)
             except (ValueError, TypeError):
+                continue
+            # Filter: only include Cohorts within the anchor window.
+            if ad < anchor_from_d or ad > anchor_to_d:
                 continue
             x_val = dp.get('x', 0)
             y_val = dp.get('y', 0)
@@ -566,7 +588,9 @@ def compute_cohort_maturity_rows(
             # In window mode, x must be > 0 (fixed denominator).
             if is_window and x_val <= 0:
                 continue
-            tau_max = (sweep_to_d - ad).days
+            # tau_max = last observed age, not sweep_to - anchor_day
+            obs_date = last_frame_date or sweep_to_d
+            tau_max = (min(obs_date, sweep_to_d) - ad).days
             cohort_info[ad_str] = {
                 'anchor_day': ad,
                 'x_frozen': float(x_val) if x_val > 0 else 0.0,
@@ -595,7 +619,7 @@ def compute_cohort_maturity_rows(
     buckets: Dict[int, _Bucket] = {}
 
     for frame in frames:
-        as_at_str = str(frame.get('as_at_date', ''))[:10]
+        as_at_str = str(frame.get('snapshot_date', ''))[:10]
         if not as_at_str:
             continue
         try:
@@ -661,29 +685,29 @@ def compute_cohort_maturity_rows(
             tau_obs = min((evidence_retrieved_d - ad).days, c['tau_max'])
             tau_obs = max(0, tau_obs)
         else:
-            # Fallback: last τ where y increased
-            ad_str = ad.isoformat()
-            tau_data = cohort_at_tau.get(ad_str, {})
-            tau_obs = 0
-            prev_y = -1.0
-            for tau_i in sorted(tau_data.keys()):
-                _, y_i = tau_data[tau_i]
-                if y_i > prev_y:
-                    tau_obs = tau_i
-                    prev_y = y_i
-            if tau_obs == 0 and tau_data:
-                for tau_i in sorted(tau_data.keys(), reverse=True):
-                    x_i, _ = tau_data[tau_i]
-                    if x_i > 0:
-                        tau_obs = tau_i
-                        break
-            tau_obs = min(tau_obs, c['tau_max'])
+            # Fallback: no evidence_retrieved_at — assume evidence covers
+            # the full sweep range for this cohort (tau_max = sweep_to − anchor).
+            # A Y-increase heuristic was previously used here but it breaks
+            # when Y plateaus (cohort fully converted) — plateau IS evidence.
+            tau_obs = c['tau_max']
         c['tau_observed'] = tau_obs
+
+    # ── Derive rendering zone boundaries from actual evidence ──────────
+    # tau_solid_max (epoch A/B boundary): youngest cohort's observation depth
+    #   → below this tau, ALL cohorts have evidence. Fan collapsed.
+    # tau_future_max (epoch B/C boundary): oldest cohort's observation depth
+    #   → above this tau, NO cohort has evidence. Pure projection.
+    # See docs/current/codebase/DATE_MODEL_COHORT_MATURITY.md §2.2.
+    if cohort_list:
+        tau_solid_max = min(c['tau_observed'] for c in cohort_list)
+        tau_future_max = max(c['tau_observed'] for c in cohort_list)
+    print(f"[zone_boundaries] tau_solid_max={tau_solid_max} tau_future_max={tau_future_max} "
+          f"tau_chart_extent={tau_chart_extent} cohorts={len(cohort_list)}")
 
     # ── Determine max τ for row emission ───────────────────────────────
     # Use the axis extent from the caller (computed from t95/sweep_span
     # in api_handlers), falling back to a local estimate.
-    max_tau = tau_future_max
+    max_tau = tau_chart_extent
     if axis_tau_max is not None and axis_tau_max > max_tau:
         max_tau = axis_tau_max
     elif has_bayes:
@@ -806,9 +830,23 @@ def compute_cohort_maturity_rows(
         # Per-Cohort conditional forecast, aggregated
         # Window mode: rate_agg^(b)(tau) = Σ y_i^(b) / Σ x_i  (x fixed)
         # Cohort mode: rate_agg^(b)(tau) = Σ y_i^(b) / Σ x_i^(b)  (x grows)
+        #
+        # Rate draw: use p_draw from the MVN parameter samples (p_s).
+        # This is the SAME p used by the confidence band, so the fan:
+        #   - degenerates to the confidence band at zero maturity
+        #   - narrows as evidence accumulates (remaining_cdf shrinks)
+        #   - never exceeds the confidence band in width
+        # No separate Beta draw — p uncertainty is already captured by
+        # the MVN posterior, and CDF timing uncertainty by (mu, sigma,
+        # onset) draws.  Evidence enters via k (observed conversions)
+        # and remaining_cdf = CDF(τ) - CDF(τ_max).
         total_N = sum(c['x_frozen'] for c in cohort_list)
         Y_total = np.zeros((S, T))  # numerator
         X_total = np.zeros((S, T))  # denominator (constant in window mode)
+
+        # Shared rate draw: p from the MVN parameter samples.
+        # Shape (S, 1) for broadcast across tau.
+        r_draw = p_s[:, None]  # (S, 1) — same p_draw as confidence band
 
         for c in cohort_list:
             N_i = c['x_frozen']
@@ -820,25 +858,20 @@ def compute_cohort_maturity_rows(
             a_idx = min(a_i, T - 1)
 
             if is_window or upstream_path_cdf is None:
-                # Window mode: pure latency CDF for timing + Beta draw for rate.
-                # remaining_cdf uses cdf_arr (no p) to avoid p² in the rate.
-                # Rate dispersion comes from rng.beta() draw from the
-                # per-Cohort posterior, which varies with (p, mu, sigma, onset)
-                # draws via c_i_b → n_eff_b.
+                # Window mode: remaining CDF × p_draw for MC rate.
+                # remaining_cdf = CDF(τ) - CDF(τ_max) anchors the forecast
+                # to observed evidence, ensuring continuity at the boundary.
+                if N_i <= 0:
+                    continue  # No arrivals in window mode → skip.
                 cdf_at_a = cdf_arr[:, a_idx]      # (S,)
                 c_i_b = cdf_at_a[:, None]          # (S, 1)
                 remaining_cdf = np.maximum(cdf_arr - c_i_b, 0.0)  # (S, T)
-                if N_i <= 0:
-                    continue  # No arrivals in window mode → skip.
-                n_eff_b = N_i * c_i_b  # (S, 1)
-                a_post = alpha_0 + k_i                                    # (scalar)
-                b_post = np.maximum(beta_0 + n_eff_b - k_i, 1e-6)        # (S, 1)
-                r_draw = rng.beta(a_post, b_post)                         # (S, 1)
+                n_eff_b = N_i * c_i_b  # (S, 1) — for diagnostics only
                 y_forecast = k_i + N_i * remaining_cdf * r_draw           # (S, T)
                 x_forecast_arr = np.full((S, T), N_i)
                 y_forecast = np.clip(y_forecast, k_i, N_i)
             else:
-                # Cohort mode: use pure latency CDF (without p) for Bayesian update.
+                # Cohort mode: remaining CDF × p_draw.
                 cdf_at_a = cdf_arr[:, a_idx]      # (S,)
                 c_i_b = cdf_at_a[:, None]          # (S, 1)
                 remaining_cdf = np.maximum(cdf_arr - c_i_b, 0.0)  # (S, T)
@@ -852,13 +885,8 @@ def compute_cohort_maturity_rows(
                     x_model_floored[None, :], (S, T)
                 ).copy()
 
-                # y_forecast: Bayesian posterior predictive.
-                # Draw r from per-Cohort Beta posterior (not posterior mean).
                 x_at_frontier = float(x_model_floored[a_idx])
-                n_eff_b = N_i * c_i_b  # (S, 1) — from OBSERVED arrivals
-                a_post = alpha_0 + k_i                                    # (scalar)
-                b_post = np.maximum(beta_0 + n_eff_b - k_i, 1e-6)        # (S, 1)
-                r_draw = rng.beta(a_post, b_post)                         # (S, 1)
+                n_eff_b = N_i * c_i_b  # (S, 1) — for diagnostics only
                 y_forecast = k_i + x_at_frontier * remaining_cdf * r_draw # (S, T)
                 y_forecast = np.clip(y_forecast, k_i, x_forecast_arr)
 

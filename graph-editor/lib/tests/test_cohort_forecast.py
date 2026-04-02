@@ -243,7 +243,7 @@ FAN_GRAPH = {
 # tau_solid_max = 15 - 5 = 10, tau_future_max = 15 - 1 = 14
 FAN_FRAMES = [
     {
-        'as_at_date': '2026-03-15',
+        'snapshot_date': '2026-03-15',
         'data_points': [
             {'anchor_day': '2026-03-01', 'x': 100, 'y': 10, 'a': 200},
             {'anchor_day': '2026-03-02', 'x': 90, 'y': 8, 'a': 180},
@@ -376,7 +376,7 @@ class TestWindowZeroMaturityDegeneration:
 
         # Zero maturity: sweep_to = anchor_to = anchor_from.
         zero_frames = [{
-            'as_at_date': fix['anchor_from'],
+            'snapshot_date': fix['anchor_from'],
             'data_points': [
                 fix['frames'][0]['data_points'][0],  # first Cohort, day 0
             ],
@@ -396,7 +396,7 @@ class TestWindowZeroMaturityDegeneration:
 
         # Analytic confidence band with same params.
         tau_points = sorted(fan_by_tau.keys())
-        band_upper, band_lower = compute_confidence_band(
+        band_upper, band_lower, band_median = compute_confidence_band(
             ages=[float(t) for t in tau_points],
             p=ep['forecast_mean'],
             mu=ep['mu'],
@@ -409,7 +409,7 @@ class TestWindowZeroMaturityDegeneration:
             onset_mu_corr=ep.get('bayes_onset_mu_corr', 0.0),
             level=0.90,
         )
-        band = {tau_points[i]: (band_upper[i], band_lower[i])
+        band = {tau_points[i]: (band_upper[i], band_lower[i], band_median[i])
                 for i in range(len(tau_points))}
 
         # MC noise tolerance — 2000 draws gives ~0.02 on percentiles.
@@ -423,13 +423,14 @@ class TestWindowZeroMaturityDegeneration:
             row = fan_by_tau[tau]
             if row['fan_upper'] is None or row['fan_lower'] is None:
                 continue
-            cb_upper, cb_lower = band[tau]
+            cb_upper, cb_lower, cb_median = band[tau]
             if cb_upper < 0.01:
                 continue
 
-            # Midpoint must match.
+            # Midpoint must match (both medians — not interval centroid,
+            # which diverges from the median near onset due to skew).
             fan_mid = row['midpoint']
-            cb_mid = (cb_upper + cb_lower) / 2
+            cb_mid = cb_median
             assert fan_mid is not None
             assert abs(fan_mid - cb_mid) < TOL, (
                 f"tau={tau}: fan midpoint={fan_mid:.4f} vs "
@@ -451,6 +452,77 @@ class TestWindowZeroMaturityDegeneration:
                 f"(delta={row['fan_lower'] - cb_lower:.4f})"
             )
 
+            checked += 1
+
+        assert checked >= 5, f"Only checked {checked} tau points — need at least 5"
+
+    def test_fan_narrows_with_evidence(self):
+        """Fan with non-zero maturity must be narrower than (or equal to)
+        the confidence band.  Evidence can only reduce uncertainty.
+
+        Uses the full fixture (7 Cohorts, sweep_to=13-Jan) so all Cohorts
+        have real data.  Compares fan width to confidence band width at
+        each tau beyond onset."""
+        from runner.confidence_bands import compute_confidence_band
+
+        fix = self._load_fixture()
+        ep = fix['edge_params']
+
+        # Full maturity: use all fixture dates as-is.
+        rows = compute_cohort_maturity_rows(
+            frames=fix['frames'],
+            graph=fix['graph'],
+            target_edge_id=fix['target_edge_id'],
+            edge_params=ep,
+            anchor_from=fix['anchor_from'],
+            anchor_to=fix['anchor_to'],
+            sweep_to=fix['sweep_to'],
+            is_window=True,
+        )
+        assert len(rows) > 0, "No rows returned"
+        fan_by_tau = {r['tau_days']: r for r in rows}
+
+        tau_points = sorted(fan_by_tau.keys())
+        band_upper, band_lower, band_median = compute_confidence_band(
+            ages=[float(t) for t in tau_points],
+            p=ep['forecast_mean'],
+            mu=ep['mu'],
+            sigma=ep['sigma'],
+            onset=ep['onset_delta_days'],
+            p_sd=ep.get('p_stdev', 0.0),
+            mu_sd=ep.get('bayes_mu_sd', 0.0),
+            sigma_sd=ep.get('bayes_sigma_sd', 0.0),
+            onset_sd=ep.get('bayes_onset_sd', 0.0),
+            onset_mu_corr=ep.get('bayes_onset_mu_corr', 0.0),
+            level=0.90,
+        )
+        band = {tau_points[i]: (band_upper[i], band_lower[i])
+                for i in range(len(tau_points))}
+
+        onset = ep['onset_delta_days']
+        checked = 0
+        for tau in tau_points:
+            if tau <= onset + 2:
+                continue
+            row = fan_by_tau[tau]
+            if row['fan_upper'] is None or row['fan_lower'] is None:
+                continue
+            cb_upper, cb_lower = band[tau]
+            cb_width = cb_upper - cb_lower
+            if cb_width < 0.01:
+                continue
+
+            fan_width = row['fan_upper'] - row['fan_lower']
+
+            # MC noise tolerance: fan width may slightly exceed band width
+            # due to sampling noise, but not by more than TOL.
+            TOL = 0.02
+            assert fan_width <= cb_width + TOL, (
+                f"tau={tau}: fan width={fan_width:.4f} > "
+                f"band width={cb_width:.4f} + TOL={TOL} "
+                f"(fan=[{row['fan_lower']:.4f},{row['fan_upper']:.4f}] "
+                f"band=[{cb_lower:.4f},{cb_upper:.4f}])"
+            )
             checked += 1
 
         assert checked >= 5, f"Only checked {checked} tau points — need at least 5"

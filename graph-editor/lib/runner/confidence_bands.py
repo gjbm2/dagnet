@@ -69,7 +69,7 @@ def compute_confidence_band(
     onset_sd: float = 0.0,
     onset_mu_corr: float = 0.0,
     level: float = 0.90,
-) -> tuple[list[float], list[float]]:
+) -> tuple[list[float], list[float], list[float]]:
     """Compute upper and lower confidence bands for rate(t) = p × CDF(t).
 
     Uses Monte Carlo: draws θ from the posterior approximation (MVN),
@@ -84,7 +84,7 @@ def compute_confidence_band(
         level: confidence level (0.80, 0.90, 0.95, 0.99).
 
     Returns:
-        (upper, lower): lists of rate values at each age, within [0, 1].
+        (upper, lower, median): lists of rate values at each age, within [0, 1].
     """
     ages_arr = np.asarray(ages, dtype=float)
     T = len(ages_arr)
@@ -95,7 +95,7 @@ def compute_confidence_band(
         for t in ages:
             cdf = _shifted_lognormal_cdf(float(t), onset, mu, sigma)
             rates.append(max(0.0, min(1.0, p * cdf)))
-        return rates[:], rates[:]
+        return rates[:], rates[:], rates[:]
 
     # Build posterior covariance: [p, mu, sigma, onset]
     sds = np.array([p_sd, mu_sd, sigma_sd, onset_sd])
@@ -133,5 +133,6 @@ def compute_confidence_band(
 
     lower = np.percentile(rate_arr, lo_pct, axis=0).tolist()
     upper = np.percentile(rate_arr, hi_pct, axis=0).tolist()
+    median = np.percentile(rate_arr, 50.0, axis=0).tolist()
 
-    return upper, lower
+    return upper, lower, median

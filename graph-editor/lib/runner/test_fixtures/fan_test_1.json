@@ -2,7 +2,7 @@
   "description": "7-Cohort window(1-Jan:7-Jan), sweep to 13-Jan, p=0.83, factor=0.8",
   "frames": [
     {
-      "as_at_date": "2026-01-01",
+      "snapshot_date": "2026-01-01",
       "data_points": [
         {
           "anchor_day": "2026-01-01",
@@ -14,7 +14,7 @@
       ]
     },
     {
-      "as_at_date": "2026-01-02",
+      "snapshot_date": "2026-01-02",
       "data_points": [
         {
           "anchor_day": "2026-01-01",
@@ -33,7 +33,7 @@
       ]
     },
     {
-      "as_at_date": "2026-01-03",
+      "snapshot_date": "2026-01-03",
       "data_points": [
         {
           "anchor_day": "2026-01-01",
@@ -59,7 +59,7 @@
       ]
     },
     {
-      "as_at_date": "2026-01-04",
+      "snapshot_date": "2026-01-04",
       "data_points": [
         {
           "anchor_day": "2026-01-01",
@@ -92,7 +92,7 @@
       ]
     },
     {
-      "as_at_date": "2026-01-05",
+      "snapshot_date": "2026-01-05",
       "data_points": [
         {
           "anchor_day": "2026-01-01",
@@ -132,7 +132,7 @@
       ]
     },
     {
-      "as_at_date": "2026-01-06",
+      "snapshot_date": "2026-01-06",
       "data_points": [
         {
           "anchor_day": "2026-01-01",
@@ -179,7 +179,7 @@
       ]
     },
     {
-      "as_at_date": "2026-01-07",
+      "snapshot_date": "2026-01-07",
       "data_points": [
         {
           "anchor_day": "2026-01-01",
@@ -233,7 +233,7 @@
       ]
     },
     {
-      "as_at_date": "2026-01-08",
+      "snapshot_date": "2026-01-08",
       "data_points": [
         {
           "anchor_day": "2026-01-01",
@@ -287,7 +287,7 @@
       ]
     },
     {
-      "as_at_date": "2026-01-09",
+      "snapshot_date": "2026-01-09",
       "data_points": [
         {
           "anchor_day": "2026-01-01",
@@ -341,7 +341,7 @@
       ]
     },
     {
-      "as_at_date": "2026-01-10",
+      "snapshot_date": "2026-01-10",
       "data_points": [
         {
           "anchor_day": "2026-01-01",
@@ -395,7 +395,7 @@
       ]
     },
     {
-      "as_at_date": "2026-01-11",
+      "snapshot_date": "2026-01-11",
       "data_points": [
         {
           "anchor_day": "2026-01-01",
@@ -449,7 +449,7 @@
       ]
     },
     {
-      "as_at_date": "2026-01-12",
+      "snapshot_date": "2026-01-12",
       "data_points": [
         {
           "anchor_day": "2026-01-01",
@@ -503,7 +503,7 @@
       ]
     },
     {
-      "as_at_date": "2026-01-13",
+      "snapshot_date": "2026-01-13",
       "data_points": [
         {
           "anchor_day": "2026-01-01",

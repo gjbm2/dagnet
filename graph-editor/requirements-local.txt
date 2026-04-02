@@ -18,6 +18,7 @@ python-dotenv>=1.0.0
 pytest>=7.4.0
 pytest-cov>=4.1.0
 pytest-asyncio>=0.21.0
+pytest-watch>=4.2.0
 
 # Modal CLI (Bayes deploys; Modal worker image uses bayes/requirements.txt)
 modal>=1.0.0

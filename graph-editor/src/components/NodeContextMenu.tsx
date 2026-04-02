@@ -19,6 +19,8 @@ import toast from 'react-hot-toast';
 import { getAllDataSections, type DataOperationSection } from './DataOperationsSections';
 import { DataSectionSubmenu } from './DataSectionSubmenu';
 import { copyVarsToClipboard } from '../services/copyVarsService';
+import { getAnalysisTypeMeta } from './panels/analysisTypes';
+import type { AvailableAnalysis } from '../lib/graphComputeClient';
 import { useClearDataFile } from '../hooks/useClearDataFile';
 import { useFetchData, createFetchItem } from '../hooks/useFetchData';
 import { useOpenFile } from '../hooks/useOpenFile';
@@ -38,7 +40,8 @@ interface NodeContextMenuProps {
   graph: any; // Tab-specific graph
   setGraph: (graph: any) => void; // Tab-specific graph setter
   onClose: () => void;
-  onAddChart: (detail?: { contextNodeIds?: string[]; contextEdgeIds?: string[] }) => void;
+  onAddChart: (detail?: { contextNodeIds?: string[]; contextEdgeIds?: string[]; analysisType?: string }) => void;
+  availableAnalyses?: AvailableAnalysis[];
   onSelectNode: (nodeId: string) => void;
   onDeleteNode: (nodeId: string) => void;
   /** Alignment callbacks — provided when useAlignSelection is wired in GraphCanvas */
@@ -61,6 +64,7 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
   setGraph,
   onClose,
   onAddChart,
+  availableAnalyses,
   onSelectNode,
   onDeleteNode,
   onAlign,
@@ -770,17 +774,73 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
 
       {/* Add chart from selection */}
       <div
-        className="dagnet-popup-item"
-        onClick={(e) => {
-          e.stopPropagation();
-          const humanId = nodeData?.id || nodeId;
-          onAddChart({ contextNodeIds: [humanId] });
-          onClose();
-        }}
-        style={{ display: 'flex', alignItems: 'center', gap: 8 }}
+        style={{ position: 'relative' }}
+        onMouseEnter={() => handleSubmenuEnter('addChart')}
+        onMouseLeave={handleSubmenuLeave}
       >
-        <BarChart3 size={14} />
-        Add chart
+        <div
+          className={`dagnet-popup-item${openSubmenu === 'addChart' ? ' dagnet-popup-item--active' : ''}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            const humanId = nodeData?.id || nodeId;
+            onAddChart({ contextNodeIds: [humanId] });
+            onClose();
+          }}
+          style={{ display: 'flex', alignItems: 'center', gap: 8 }}
+        >
+          <BarChart3 size={14} />
+          Add chart
+          <span className="dagnet-popup-arrow">›</span>
+        </div>
+        {openSubmenu === 'addChart' && (
+          <div
+            className="dagnet-popup dagnet-popup--submenu"
+            style={{
+              position: 'absolute',
+              left: '100%', marginLeft: '4px',
+              top: 'auto', marginTop: -30,
+              zIndex: 10001,
+              whiteSpace: 'nowrap',
+            }}
+            onMouseEnter={handleSubmenuContentEnter}
+            onMouseLeave={handleSubmenuContentLeave}
+          >
+            {(availableAnalyses || []).map(a => {
+              const meta = getAnalysisTypeMeta(a.id);
+              const Icon = meta?.icon;
+              return (
+                <div
+                  key={a.id}
+                  className="dagnet-popup-item"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const humanId = nodeData?.id || nodeId;
+                    onAddChart({ contextNodeIds: [humanId], analysisType: a.id });
+                    onClose();
+                  }}
+                  style={{ display: 'flex', alignItems: 'center', gap: 8 }}
+                >
+                  {Icon && <Icon size={14} />}
+                  {meta?.name || a.name || a.id}
+                </div>
+              );
+            })}
+            {(availableAnalyses || []).length > 0 && <div className="dagnet-popup-divider" />}
+            <div
+              className="dagnet-popup-item"
+              onClick={(e) => {
+                e.stopPropagation();
+                const humanId = nodeData?.id || nodeId;
+                onAddChart({ contextNodeIds: [humanId] });
+                onClose();
+              }}
+              style={{ display: 'flex', alignItems: 'center', gap: 8 }}
+            >
+              <BarChart3 size={14} />
+              Blank
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Copy vars */}

@@ -124,12 +124,12 @@ if [ ! -f "$GATES_FILE" ]; then
 fi
 
 # Use python3 to match command against gate patterns and check consent
-RESULT=$(python3 -c "
+RESULT=$(GATE_COMMAND="$COMMAND" GATE_GATES_FILE="$GATES_FILE" GATE_CONSENT_PREFIX="$CONSENT_PREFIX" python3 -c "
 import json, sys, os, time
 
-command = '''$COMMAND'''
-gates_file = '$GATES_FILE'
-consent_prefix = '$CONSENT_PREFIX'
+command = os.environ['GATE_COMMAND']
+gates_file = os.environ['GATE_GATES_FILE']
+consent_prefix = os.environ['GATE_CONSENT_PREFIX']
 
 with open(gates_file) as f:
     gates = json.load(f)['gates']
@@ -215,8 +215,18 @@ EOF
     exit 2
     ;;
   *)
-    # Fallback — allow if classification failed
-    echo "WARNING: gate classification failed, allowing command" >&2
-    exit 0
+    # Fallback — BLOCK if classification failed (fail-closed)
+    cat >&2 <<EOF
+
+STOP. Gate classification failed — command blocked (fail-closed).
+
+Command:  $COMMAND
+
+Gate check could not classify this command. This is a safety
+measure: if the gate system crashes, commands are denied, not allowed.
+
+If this is a legitimate command, report the issue to the user.
+EOF
+    exit 2
     ;;
 esac

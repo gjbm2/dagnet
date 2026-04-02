@@ -13,6 +13,15 @@
       ],
       "claude_md_section": "Gate 1: Git writes"
     },
+    "package-install": {
+      "description": "Commands that add or remove dependencies",
+      "patterns": [
+        "pip install", "pip uninstall",
+        "npm install", "npm uninstall", "npm add", "npm remove",
+        "npx add", "yarn add", "yarn remove", "pnpm add", "pnpm remove"
+      ],
+      "claude_md_section": "Gate 3: Package installs"
+    },
     "destructive": {
       "description": "Commands that delete or overwrite data",
       "patterns": [

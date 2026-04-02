@@ -3,7 +3,7 @@
 ## Pre-flight Checks (MANDATORY before every Bash command)
 
 A `PreToolUse` hook fires on every Bash tool call and reminds you to check
-these gates. **Scan all three gates before executing.** If any gate fails,
+these gates. **Scan all four gates before executing.** If any gate fails,
 STOP and use the listed alternative. Do not rationalise around them.
 
 ### Gate 1: Git writes
@@ -30,7 +30,22 @@ IndexedDB `.clear()` / `.delete()` / `deleteDatabase()`.
 - **If no permission**: **READ first.** Investigate. Ask. Never widen the
   blast radius — if unsure of the precise target, ask, don't escalate.
 
-### Gate 3: Memory system writes
+### Gate 3: Package installs
+
+`pip install`, `npm install`, `npm add`, or any command that adds a dependency.
+
+- **Pass condition**: you have checked which requirements/package file the
+  dependency belongs in **before** running the install.
+- **Rules**:
+  - **Python**: dev-only packages (testing, linting, dev-server, CLI tools) go
+    in `graph-editor/requirements-local.txt`. Only packages imported at runtime
+    by `api/python-api.py` go in `graph-editor/requirements.txt` (Vercel prod).
+  - **Node**: check whether the package is `dependencies` vs `devDependencies`
+    in `graph-editor/package.json`.
+  - After installing, **update the correct requirements/package file** so the
+    dependency is tracked. Do not leave untracked installs.
+
+### Gate 4: Memory system writes
 
 `~/.claude/projects/*/memory/`, `MEMORY.md`, or any memory files.
 
@@ -126,6 +141,7 @@ These are **not** DagNet core code. They are context repos for inspection and tr
 This repo is large and subtle; over-confidence causes regressions. The assistant must default to *cautious, systematic* work.
 
 **Before proposing or implementing a semantic change** (e.g. “X should be part of the cache signature”):
+- **Read the relevant codebase architecture doc(s) first**: see the categorised index in *Architecture Patterns → Codebase architecture docs* below. These docs encode hard-won understanding of how each subsystem works — reading them before touching code prevents re-deriving context and avoids known pitfalls.
 - **TRIPLE-SEARCH** the repo for existing implementations and prior decisions (`grep` + `codebase_search`), including docs in `docs/current/`.
 - **Trace the full path** for the behaviour: UI entry points → hooks → services → storage/adapters → caches → persistence formats.
 - **Identify all call sites** and *all* related “signature/key” mechanisms (often there are multiple caches with different purposes).
@@ -186,37 +202,7 @@ This section is about **behavioural/source-code changes** and other changes with
 - ❌ **DON'T**: Put git operations, file operations, validation, or data transformations in UI files
 - ❌ **DON'T**: Copy/paste handlers between NavigatorItemContextMenu, TabContextMenu, and FileMenu
 
-**Example - WRONG**:
-```typescript
-// FileMenu.tsx - BAD!
-const handleCommit = async () => {
-  const credsResult = await credentialsManager.loadCredentials();
-  const gitCreds = credsResult.credentials.git.find(...);
-  const result = await gitService.commitAndPushFiles(...);
-  // 50 more lines of logic...
-}
-```
-
-**Example - CORRECT**:
-```typescript
-// FileMenu.tsx - GOOD!
-const handleCommit = async () => {
-  await repositoryOperationsService.commitFiles(files, message, branch, repo, showConfirm);
-}
-```
-
-**For operations appearing in multiple menus, create a hook**:
-```typescript
-// hooks/usePullFile.ts - Centralized hook
-export function usePullFile(fileId: string | undefined) {
-  const { canPull, pullFile } = /* ... service calls ... */;
-  return { canPull, pullFile };
-}
-
-// All menus use the same hook:
-// NavigatorItemContextMenu.tsx, TabContextMenu.tsx, FileMenu.tsx
-const { canPull, pullFile } = usePullFile(fileId);
-```
+**Pattern**: menus call a service method directly, or a shared hook that wraps the service call. Example: `usePullFile(fileId)` is used by NavigatorItemContextMenu, TabContextMenu, and FileMenu — one hook, one code path.
 
 ### 2. NEVER CREATE DUPLICATE CODE PATHS
 **CRITICAL**: Multiple code paths to achieve the same thing cause GRAVE HARM.
@@ -297,37 +283,113 @@ Operations requiring session logging:
 - **Workspace operations**: clone, load, rollback, sync
 
 Use `sessionLogService` from `services/sessionLogService.ts`:
-
-```typescript
-import { sessionLogService } from '../services/sessionLogService';
-
-// Info - operation starting
-sessionLogService.info('git', 'GIT_PULL', `Pulling latest from ${repo}/${branch}`, undefined, { repo, branch });
-
-// Success - operation completed
-sessionLogService.success('git', 'GIT_PULL_SUCCESS', `Pulled ${filesChanged} files`, detail, { repo, branch });
-
-// Error - operation failed
-sessionLogService.error('git', 'GIT_PULL_ERROR', `Pull failed: ${message}`, undefined, { repo, branch });
-
-// Warning - operation completed with issues
-sessionLogService.warning('git', 'GIT_PULL_CONFLICTS', `Pull completed with ${count} conflicts`, detail, metadata);
-
-// Hierarchical logging for complex operations
-const logOpId = sessionLogService.startOperation('info', 'git', 'GIT_COMMIT', `Committing to ${repo}`);
-sessionLogService.addChild(logOpId, 'info', 'COMMIT_FILE', `Updated: ${path}`);
-sessionLogService.endOperation(logOpId, 'success', 'Committed N files');
-```
-
-Operation types: `'session' | 'git' | 'file' | 'workspace' | 'msmdc' | 'data-fetch' | 'data-update' | 'graph' | 'index' | 'merge' | 'integrity'`
+- **Simple**: `sessionLogService.info('git', 'GIT_PULL', message, detail?, metadata?)` — also `.success()`, `.error()`, `.warning()`
+- **Hierarchical**: `startOperation()` → `addChild()` → `endOperation()` for multi-step operations
+- **Operation types**: `'session' | 'git' | 'file' | 'workspace' | 'msmdc' | 'data-fetch' | 'data-update' | 'graph' | 'index' | 'merge' | 'integrity'`
 
 ## Architecture Patterns
 
 ### Codebase architecture docs (`docs/current/codebase/`)
-This folder contains hard-won understanding of how our dependencies and subsystems actually work internally. Two rules:
+This folder contains hard-won understanding of how our dependencies and subsystems actually work internally. Three rules:
 
-1. **Before debugging a system-level problem**: check this folder for an existing doc on the subsystem. Reading it first will save hours.
-2. **After resolving a system-level problem that required non-obvious understanding**: add or update a doc in this folder encoding the mental model. If you fought a dependency's internals to understand behaviour that isn't documented anywhere obvious, that understanding belongs here.
+1. **Before touching a subsystem**: find the matching doc(s) in the index below and read them first. This prevents re-deriving expensive context and avoids known pitfalls.
+2. **Before debugging a system-level problem**: check this folder for an existing doc on the subsystem. Reading it first will save hours.
+3. **After resolving a system-level problem that required non-obvious understanding**: add or update a doc in this folder encoding the mental model. If you fought a dependency's internals to understand behaviour that isn't documented anywhere obvious, that understanding belongs here.
+
+#### Doc index by subsystem
+
+**Persistence & sync** (read these before touching IDB, FileRegistry, dirty tracking, or git ops):
+- `INDEXEDDB_PERSISTENCE_LAYER.md` — IDB schema, tables, workspace prefix contract, dual-storage invariant
+- `FILE_REGISTRY_LIFECYCLE.md` — In-memory cache, dirty tracking, registry-to-IDB sync
+- `GIT_OPERATIONS_ARCHITECTURE.md` — Clone/pull/push/commit, atomic Git Data API, non-blocking pull
+- `MERGE_CONFLICT_RESOLUTION.md` — 3-way merge (text + structural JSON), conflict resolution UI
+- `GRAPH_WRITE_SYNC_ARCHITECTURE.md` — Multi-stage sync pipeline, graph write propagation
+- `SYNC_ENGINE_GUARD_STATE_MACHINE.md` — 9-ref guard state machine in GraphCanvas
+- `STATE_MANAGEMENT_REFERENCE.md` — State layers across the graph editor
+
+**Graph mutation & computation** (read these before modifying graph structure, node IDs, queries, or analysis types):
+- `GRAPH_MUTATION_UPDATE_MANAGER.md` — Edit propagation, node ID renaming, 5-direction mapping system
+- `DSL_PARSING_ARCHITECTURE.md` — queryDSL.ts as single source of truth
+- `DATA_RETRIEVAL_QUERIES.md` — Three purposes of query DSL strings
+- `RESERVED_QUERY_TERMS_GLOSSARY.md` — Reserved terms used across FE, BE, tests, docs
+- `FETCH_PLANNING_PRINCIPLES.md` — Fill missing + refresh stale, single-codepath contract
+
+**Analysis & charts** (read these before modifying analysis types, charts, or canvas analyses):
+- `CHART_PIPELINE_ARCHITECTURE.md` — Recipes, hydration, compute, display planning, staleness
+- `CANVAS_ANALYSIS_FEATURE.md` — Container+content model, three-mode scenarios, computation
+- `ANALYSIS_RETURN_SCHEMA.md` — Standard declarative schema for analysis runners
+- `adding-analysis-types.md` — Checklist for new analysis types
+- `surprise-gauge-design.md` — Surprise analysis type design
+
+**Scenarios & what-if** (read these before modifying scenario overlays, composition, or what-if mode):
+- `SCENARIO_SYSTEM_ARCHITECTURE.md` — Overlays, composition, regeneration, rehydration, provenance
+- `WHAT_IF_ANALYSIS.md` — Override types, DSL, effective probability computation
+
+**Parameters & model variables** (read these before modifying parameters, param packs, or model vars):
+- `PARAMETER_SYSTEM.md` — Data model, extraction, param packs, model variable resolution, schemas
+
+**Statistical & Bayesian** (read these before modifying Bayes, forecasting, or probability blending):
+- `STATISTICAL_DOMAIN_SUMMARY.md` — Statistical architecture, data pipeline, Bayesian programme
+- `BAYESIAN_ENGINE_RESEARCH.md` — Bayesian tool research findings
+- `PROBABILITY_BLENDING.md` — Blending cohort-mode latency edge probabilities
+- `cohort-maturity-forecast-design.md` — Cohort maturity forecast chart design
+
+**Snapshot DB** (read these before modifying snapshot storage, retrieval, or signatures):
+- `SNAPSHOT_DB_ARCHITECTURE.md` — Data model and objectives
+- `SNAPSHOT_DB_CONTEXT_EPOCHS.md` — Context epochs for regime safety
+- `SNAPSHOT_DB_SIGNATURES.md` — Flexible signature matching for archival identity
+- `SNAPSHOT_FIELD_SEMANTICS.md` — Field meanings by slice_key type
+- `snapshot-db-data-paths.md` — Data flow from Amplitude through Bayes via snapshots table
+
+**Hash & signature infrastructure** (read these before modifying hashing, signature matching, or rename resilience):
+- `HASH_SIGNATURE_INFRASTRUCTURE.md` — Core hash, structured signatures, mappings, chain tracing, commit guard
+
+**Lag & time-to-conversion** (read these before modifying lag analysis, horizons, or projections):
+- `LAG_ANALYSIS_SUBSYSTEM.md` — Lag fit, horizons, mixture aggregation
+- `PROJECTION_MODE.md` — Future conversion projection via convolution
+- `DATE_MODEL_COHORT_MATURITY.md` — Canonical date concepts (anchor, reference, data dates)
+
+**Data retrieval & slices** (read these before modifying retrieve-all, slice planning, or data depth):
+- `SLICE_PLANNING_RETRIEVAL.md` — Retrieve-all planning and execution
+- `DATA_DEPTH_SCORING.md` — Three-dimension composite coverage scoring
+- `CONTEXT_SYSTEM.md` — Context registration, MECE aggregation, fallback
+
+**Automation & scheduling** (read these before modifying daily fetch, automation runs, or staleness):
+- `AUTOMATION_PIPELINE.md` — Daily fetch, retrieve-all automation, run logging
+- `JOB_SCHEDULER.md` — Unified system for all automated/recurring work
+- `STALENESS_AND_AUTO_UPDATE.md` — Nudges, jobs, auto-update policy
+
+**Share & collaboration** (read these before modifying share links, live share, or bundles):
+- `SHARE_AND_LIVE_SHARE.md` — Static/live shares, boot/hydration/sync lifecycle, bundles
+- `URL_PARAMS.md` — Supported URL parameters
+
+**Python backend** (read these before modifying API handlers, MSMDC, or compute server):
+- `PYTHON_BACKEND_ARCHITECTURE.md` — FastAPI endpoints, MSMDC, Bayes, FE-BE communication
+
+**Canvas & rendering** (read these before modifying ReactFlow, edge rendering, or canvas layout):
+- `CANVAS_RENDERING_ARCHITECTURE.md` — Two-tier z-index model, transform pipeline
+- `REACTFLOW_CONTROLLED_MODE.md` — Controlled mode pitfalls and reliable patterns
+- `EDGE_RENDERING_PERF_ROOT_CAUSE.md` — Beads/chevrons performance root cause
+
+**UI layout** (read these before modifying sidebar, panels, or dock system):
+- `SIDEBAR_AND_PANELS_ARCHITECTURE.md` — Nested rc-dock system, panel state persistence
+
+**Credentials** (read these before modifying auth, OAuth, or credential loading):
+- `CREDENTIALS_INIT_FLOW.md` — Three-tier credentials system, initialisation sequence
+
+**Images** (read these before modifying image upload, compression, or serving):
+- `IMAGE_HANDLING.md` — Upload, compression, blob URL serving
+
+**Dev tooling & diagnostics**:
+- `DEV_LOG_STREAMING.md` — Three JSONL log streams for debugging
+- `GRAPH_OPS_TOOLING.md` — Graph validation and management tools
+- `INTEGRITY_CHECK_ADDITIONS.md` — Structural integrity checks
+- `TEST_COVERAGE_SURVEY.md` — Test coverage analysis
+
+**Product & architecture overview**:
+- `APP_ARCHITECTURE.md` — Browser-based graph editor overview
+- `COMPLEXITY_ANALYSIS.md` — Most complex aspects of DagNet
+- `COMPETITIVE_ANALYSIS.md` — Competitive landscape analysis
 
 ### Service Layer Pattern
 ```typescript
@@ -351,25 +413,7 @@ class SomeService {
 ```
 
 ### Callback Pattern for UI Interactions
-Services should NOT import UI components or dialogs directly.
-Instead, accept callbacks:
-
-```typescript
-// Service
-async commitFiles(
-  files: any[],
-  message: string,
-  branch: string,
-  repository: string,
-  showConfirmDialog: (options: any) => Promise<boolean>  // ← Callback
-): Promise<void>
-
-// UI calls service with its own showConfirm
-await repositoryOperationsService.commitFiles(
-  files, message, branch, repo, 
-  showConfirm  // ← From useDialog() hook
-);
-```
+Services must NOT import UI components or dialogs directly. Accept callbacks instead (e.g. `showConfirmDialog: (options) => Promise<boolean>`). UI callers pass their own dialog function from `useDialog()` hook.
 
 ### Index File Requirements
 - Index files MUST be at root: `nodes-index.yaml`, `parameters-index.yaml` (plural names)
@@ -390,39 +434,6 @@ Example: changing an analysis type was done in 4 places (inline picker, chart to
 
 **If the user raises the same defect twice, assume multiple code paths until proven otherwise.**
 
-## Common Pitfalls to Avoid
-
-1. **Don't put git/file operations in menu files**
-   - Move to `repositoryOperationsService` or `fileOperationsService`
-
-2. **Don't duplicate logic across menus**
-   - If NavigatorItemContextMenu, TabContextMenu, and FileMenu need the same operation:
-     1. Create a service method in `repositoryOperationsService` or `fileOperationsService`
-     2. Create a hook in `hooks/` that wraps the service call with state/error handling
-     3. Use that hook in all three menus
-   - Examples: `usePullFile`, `useCommitHandler`, `useDeleteFile`
-
-3. **Don't duplicate validation logic**
-   - Create a centralized validation function
-
-4. **Don't trust FileRegistry for dirty state in git operations**
-   - Use `db.getDirtyFiles()` which queries IndexedDB
-
-5. **Don't forget workspace prefixes for IndexedDB**
-   - Files in IDB: `repo-branch-fileId`
-   - Files in FileRegistry: `fileId` (unprefixed)
-
-6. **Don't skip updating tests when changing functionality**
-   - Update existing tests
-   - Add new tests for bug fixes
-   - Run relevant tests (not full suite)
-
-7. **Don't create helper scripts for testing**
-   - Use proper Vitest integration tests
-   - Mock **only** external APIs (GitHub, Amplitude)
-   - Prefer **real** internal components (IndexedDB via fake-indexeddb, FileRegistry, GraphStore) whenever behaviour crosses subsystem boundaries
-   - Avoid mocking IDB/FileRegistry/GraphStore for boundary tests — bugs live at their boundaries
-
 ## Testing Standards
 
 **The core problem these standards address**: over-mocking creates tests that pass but prove nothing. A test that mocks IDB, mocks FileRegistry, mocks the service layer, and asserts against the mocks is a closed loop — it provides zero assurance about real system behaviour. This codebase is complex; the bugs live at subsystem boundaries, not inside individual functions.
@@ -442,39 +453,20 @@ This is non-negotiable. Jumping straight to test code without a design step is a
 
 ### Prefer Blind Tests When Practicable
 
-**Default posture**: write tests from the **specification/contract**, not from the implementation. A "blind" test is one written (or designed) without reading the code under test — it asserts what the function/service *should* do based on its contract, not what it *happens* to do based on current implementation details.
+Write tests from the **specification/contract**, not from the implementation. Tests shaped by reading the code mirror its assumptions, including its bugs.
 
-**Why this matters**: tests shaped by reading the implementation tend to mirror its structure and assumptions, including its bugs. A blind test is more likely to catch the cases the implementer didn't think of, because the test author is reasoning from the contract outward rather than the code inward.
-
-**When to apply**:
-- **New functionality**: design and write tests from the spec/plan *before* or *without* reading the implementation. This is the ideal case.
-- **Bug fixes**: write a failing test that reproduces the reported behaviour *before* reading the fix. The test should encode the correct behaviour from the user's perspective.
-- **Existing code with no tests**: read the *contract* (types, docstrings, calling code) rather than the implementation body to derive test cases.
-
-**When blind testing is not practicable**:
-- Complex internal wiring where the contract is implicit and only discoverable by reading the code (e.g. cache invalidation ordering, IDB prefix conventions). In these cases, read the code — but still frame assertions around *observable outcomes*, not implementation steps.
-
-**The key discipline**: even when you have read the implementation, write assertions about **what** the system produces, not **how** it produces it. Assert on outputs, state changes, and side effects — not on internal method call order or intermediate variables.
+- **New functionality**: design tests from the spec/plan *before* reading the implementation.
+- **Bug fixes**: write a failing test reproducing the reported behaviour *before* reading the fix.
+- **Existing code with no tests**: read the *contract* (types, docstrings, calling code) rather than the implementation body.
+- **When blind is impracticable** (e.g. cache invalidation ordering, IDB prefix conventions): read the code, but still assert on **observable outcomes**, not implementation steps.
 
 ### CRUD Smoke Tests Are MANDATORY for New Features
 
-**CRITICAL**: When building a new feature (e.g. canvas analysis, new panel, new creation flow), the agent MUST write CRUD smoke tests that exercise the **actual creation/read/update/delete paths** as they will be used by the user. These are NOT optional. They are the FIRST tests to write, not an afterthought.
+**CRITICAL**: New features MUST have at least one test exercising the **full creation-to-rendering path** with real internal components before claiming done. These are the FIRST tests, not an afterthought.
 
-**What a CRUD smoke test looks like**:
-- Create the object via the same codepath the user would (e.g. element palette click -> event dispatch -> handler -> graph mutation)
-- Verify the created object has the correct initial state (DSL populated, analysis type resolved, scenarios present)
-- Select the object and verify the properties panel renders without crashing
-- Update a field and verify the change persists to the graph
-- Delete the object and verify it's removed
+A CRUD smoke test creates the object via the real user codepath, verifies initial state (DSL, analysis type, scenarios), updates a field and verifies persistence, then deletes and verifies removal. Isolated unit/component tests that mock the wiring are **insufficient** — the pattern of failure this prevents is all mocks passing while the real user flow is broken because wiring between components is wrong.
 
-**What a CRUD smoke test does NOT look like**:
-- Testing `resolveAnalysisType` in isolation with a mock graph (that's a unit test — useful but insufficient)
-- Testing that a shared component renders without crashing with hardcoded props (that's a component test — useful but insufficient)
-- Testing that a service function returns the right shape (that's a contract test — useful but insufficient)
-
-**The pattern of failure to avoid**: writing isolated unit/component tests that all pass while the actual user flow is broken because the wiring between components is wrong (event not dispatched, prop not passed, selection not captured, DSL not populated, etc.). This has happened repeatedly and is unacceptable.
-
-**Rule**: For every new feature, BEFORE claiming it works, there must be at least one test that exercises the full creation-to-rendering path with real internal components. If this requires a Playwright E2E test (because it involves ReactFlow selection, drag-and-drop, or browser DOM interactions), write a Playwright test. Do not substitute mock-heavy vitest tests and claim coverage.
+If the flow requires ReactFlow selection, drag-and-drop, or browser DOM interactions, write a Playwright E2E test. Do not substitute mock-heavy vitest tests.
 
 ### Mock Discipline — every mock is a lie with a cost
 
@@ -544,38 +536,9 @@ A tautological test is worse than no test — it inflates coverage metrics while
 - If the behaviour is **UI flow timing** (e.g. “wait for graphs to load before enumerating dailyFetch”) → write an **E2E** test (Playwright) or a targeted integration test that exercises the real initialisation pipeline.
 - If it’s **pure logic** with no subsystem interaction → unit tests are fine.
 
-### What Integration Tests Catch That Unit Tests Miss
+### Why Integration Tests Over Unit Tests
 
-Example bug pattern: A service updates IDB with prefixed fileIds (`repo-branch-graph-name`) but FileRegistry/GraphStore use unprefixed fileIds (`graph-name`). A unit test with mocked IDB and FileRegistry would pass. An integration test with real components would fail.
-
-### Integration Test Pattern
-```typescript
-describe('Feature Integration Tests', () => {
-  beforeEach(async () => {
-    // Clear REAL IndexedDB (fake-indexeddb)
-    await db.files.clear();
-    await db.workspaces.clear();
-    vi.clearAllMocks(); // Only for external API mocks
-  });
-
-  it('should sync data across IDB → FileRegistry → GraphStore', async () => {
-    // Setup: Add real data to IDB
-    await db.files.add({ fileId: 'graph-test', type: 'graph', data: {...} });
-    
-    // Act: Call the service
-    await myService.doOperation(...);
-    
-    // Assert: Verify REAL state in all systems
-    const idbFile = await db.files.get('graph-test');
-    const registryFile = fileRegistry.getFile('graph-test');
-    const storeState = getGraphStore('graph-test')?.getState();
-    
-    expect(idbFile.data.myField).toBe(expectedValue);
-    expect(registryFile.data.myField).toBe(expectedValue);
-    expect(storeState.graph.myField).toBe(expectedValue);
-  });
-});
-```
+Example bug pattern: a service updates IDB with prefixed fileIds (`repo-branch-graph-name`) but FileRegistry uses unprefixed (`graph-name`). Unit test with mocked IDB passes; integration test with real IDB fails. The pattern: `beforeEach` clears real IDB (`db.files.clear()`), test calls the service, then asserts state in **all three systems** (IDB, FileRegistry, GraphStore).
 
 ### Critical Test Coverage
 - Git operations (clone, pull, push, commit)
@@ -634,40 +597,17 @@ Developer and architecture documentation:
 4. Search `docs/archive/` for historical context on design decisions
 5. Update `graph-editor/public/docs/` if user-facing behavior changes
 
-## Code Quality Checklist
+## Change Checklist
 
 Before submitting changes:
-- [ ] No business logic in UI/menu files
-- [ ] All shared logic centralized in services
-- [ ] Tests updated and passing
-- [ ] No duplicate code paths
-- [ ] IndexedDB is source of truth for git operations
-- [ ] Index files use correct paths (root, plural names)
-- [ ] Workspace prefixes handled correctly
-- [ ] All call sites updated consistently
-
-## When Making Changes
-
-1. **Understand the full context**
-   - Trace the complete code path
-   - Identify all call sites
-   - Check for existing implementations
-
-2. **Centralize first**
-   - Move logic to services
-   - Update all call sites to use the service
-   - Remove duplicate implementations
-
-3. **Test thoroughly**
-   - Update existing tests
-   - Add new tests for changes
-   - Run relevant tests only
-   - Verify no regressions
-
-4. **Verify consistency**
-   - Check all UI entry points use same code path
-   - Ensure dialogs show same information
-   - Verify all file operations update IndexedDB
+- [ ] Traced the full code path and identified all call sites
+- [ ] No business logic in UI/menu files — all in services
+- [ ] No duplicate code paths — centralised in one canonical function
+- [ ] IndexedDB is source of truth for git operations (`db.getDirtyFiles()`)
+- [ ] Workspace prefixes handled correctly (IDB: `repo-branch-fileId`, FileRegistry: `fileId`)
+- [ ] Index files at root with plural names (`nodes-index.yaml`, `parameters-index.yaml`)
+- [ ] Tests updated, new tests for bug fixes, relevant tests passing
+- [ ] All UI entry points use the same code path
 
 ### Adding New Fields or Features - FULL IMPACT ASSESSMENT
 
@@ -683,70 +623,29 @@ Before submitting changes:
 - [ ] **Services** - Storage, retrieval, sync logic (dataOperationsService, etc.)
 - [ ] **Override patterns** - If field has `_overridden` companion, mirror the pattern
 
-**Finding companion fields**: When adding `new_field`, search for similar fields like `query`:
-```bash
-grep -r "query_overridden\|\.query\b" --include="*.ts" --include="*.tsx" --include="*.py" --include="*.yaml"
-```
-Then ensure `new_field` follows the SAME patterns in ALL the same places.
+**Finding companion fields**: grep for a similar field (e.g. `query_overridden`, `.query\b`) across `.ts`, `.tsx`, `.py`, `.yaml` to find all places where the pattern is used, then replicate for the new field.
 
-**Common patterns that must be mirrored:**
-- `field` + `field_overridden` pair (mastered on graph, copied to file)
-- UpdateManager node ID replacement for query strings
-- PropertiesPanel display/edit with blur-to-save pattern
-- Service layer push to file + fallback from file
-
-**Test coverage for new fields:**
-- [ ] Check existing tests in `src/services/__tests__/` that test similar fields
-- [ ] Add tests for storage/retrieval of the new field
-- [ ] Add tests for override behavior if applicable
-- [ ] Add tests for UpdateManager node ID replacement if field contains node references
-- [ ] Run ONLY the relevant tests (not full suite) to verify no regressions
+**Patterns to mirror**: `field` + `field_overridden` pair, UpdateManager node ID replacement, PropertiesPanel blur-to-save, service layer push/fallback. Add tests for storage/retrieval, override behaviour, and UpdateManager replacement if the field contains node references.
 
 ## Key Lessons from Recent Bugs
 
-1. **Index files were being built in wrong locations**
-   - Root cause: Inconsistent path handling across services
-   - Fix: Single source of truth for index file paths
-   - Tests: Added integration tests for index operations
-
-2. **Commit not showing dirty index files**
-   - Root cause: Using FileRegistry instead of IndexedDB
-   - Fix: `db.getDirtyFiles()` everywhere for git operations
-   - Tests: Added critical tests for workspace-prefixed files
-
-3. **Logic duplicated across menu files**
-   - Root cause: Putting business logic in UI files
-   - Fix: Centralized in `repositoryOperationsService`
-   - Tests: Ensured all call sites work consistently
+- **Index files in wrong locations** → single source of truth for index file paths (root, plural names)
+- **Commit not showing dirty index files** → `db.getDirtyFiles()` (IDB), never `fileRegistry.getDirtyFiles()`
+- **Logic duplicated across menus** → centralised in `repositoryOperationsService`, shared hooks for all call sites
 
 ## Testing and Build Guidelines
 
 ### Running Tests
 **CRITICAL: Only run RELEVANT tests, not the full suite.**
 
-**CRITICAL (Cursor sandbox)**: The default Cursor sandbox **hides `node_modules`** (mounts it as empty tmpfs). You **MUST** use `required_permissions: ["all"]` on Shell tool calls that run npm/vitest, otherwise you get "vitest: not found" or similar errors. This applies to ALL npm test commands.
+**Cursor sandbox note**: The default Cursor sandbox hides `node_modules`. Use `required_permissions: ["all"]` on Shell tool calls that run npm/vitest.
 
-**Standard invocation (with correct permissions)**:
-```
-Shell tool call with:
-  command: cd /home/reg/dev/dagnet/graph-editor && npm test -- --run src/services/__tests__/yourFile.test.ts
-  required_permissions: ["all"]
-  block_until_ms: 120000
-```
+**Standard invocation**: `cd graph-editor && npm test -- --run src/services/__tests__/yourFile.test.ts`
 
-- **Default behavior**: Run only tests related to files you changed
-  - **ALWAYS use file paths, NOT patterns** - patterns are extremely slow in Vitest
-  - Use `npm test -- --run path/to/specific.test.ts` for specific file(s)
-  - Multiple files: `npm test -- --run file1.test.ts file2.test.ts`
-  - **NEVER use --testNamePattern** - it scans all files and is prohibitively slow
-- **Full suite**: Only run when:
-  1. User explicitly requests it, OR
-  2. Major new functionality is demonstrably stable and confirmed working
-- **Never run all tests** just to "verify" - it wastes time
-
-When asked to "run tests":
-- **Frontend**: Run `npm test -- --run path/to/file.test.ts` (Vitest with specific files) — **remember `required_permissions: ["all"]`**
-- **Python**: Run `pytest tests/specific_test.py` or `pytest -k "pattern"` (activate venv first)
+- **ALWAYS use file paths, NOT patterns** — patterns are extremely slow in Vitest. Never use `--testNamePattern`.
+- **Default**: run only tests related to files you changed. **Full suite**: only when user explicitly requests it.
+- **Frontend**: `npm test -- --run path/to/file.test.ts`
+- **Python**: `pytest tests/specific_test.py` (activate venv first)
 - Run BOTH only if changes affect both frontend and Python
 
 ### Investigating Test Failures
@@ -844,29 +743,7 @@ scripts/extract-mark-logs.sh --trim 10000    # keep last 10K lines
 
 Trim snaps the cut point to the nearest mark boundary so partial windows aren't left behind.
 
-**Manual fallback** (if the script is unavailable):
-
-```bash
-# Find the latest mark line number in the console stream
-grep -n "\"kind\":\"mark\"" debug/tmp.browser-console.jsonl | tail -n 1
-
-# Print everything from that line onwards (replace N)
-sed -n 'N,$p' debug/tmp.browser-console.jsonl
-
-# Find the latest mark line number in the session stream
-grep -n "\"operation\":\"DEV_MARK\"" debug/tmp.session-log.jsonl | tail -n 1
-
-# Print everything from that line onwards (replace N)
-sed -n 'N,$p' debug/tmp.session-log.jsonl
-
-# Find the latest mark line number in the Python server stream
-grep -n "\"kind\":\"mark\"" debug/tmp.python-server.jsonl | tail -n 1
-
-# Print everything from that line onwards (replace N)
-sed -n 'N,$p' debug/tmp.python-server.jsonl
-```
-
-If you need a narrower slice, find the previous mark too and restrict to `N,M`.
+**Manual fallback**: if the script is unavailable, `grep -n` for mark boundaries (`"kind":"mark"` in console/python streams, `"operation":"DEV_MARK"` in session stream), then `sed -n 'N,$p'` to extract from that line onwards.
 
 Reference: `docs/current/codebase/DEV_LOG_STREAMING.md`
 
@@ -879,54 +756,16 @@ Reference: `docs/current/codebase/DEV_LOG_STREAMING.md`
 - **NO legacy wrappers** - Migrate callers to new APIs directly
 
 ### When Renaming/Refactoring
-1. Make the change cleanly
-2. Find all broken references
-3. Fix them directly
-4. Delete old code entirely
-
-**WRONG:**
-```typescript
-// Legacy alias (deprecated)
-export type OldName = NewName;
-```
-
-**RIGHT:**
-```typescript
-// Just use NewName everywhere, delete OldName entirely
-export interface NewName { ... }
-```
+Make the change cleanly, find all broken references, fix them directly, delete old code entirely. Never leave legacy aliases (`export type OldName = NewName`) — just update all references.
 
 ## Documentation Standards
 
 ### Implementation Plans
-**CRITICAL**: Implementation plans are PROSE ONLY.
+**CRITICAL**: Implementation plans are PROSE ONLY — no code snippets, examples, pseudo-code, test assertions, mock setups, or function signatures whatsoever.
 
-- ❌ **NEVER** include code snippets, code examples, or pseudo-code in implementation plans
-- ❌ **NEVER** include test code, mock setups, or assertions in implementation plans
-- ✅ **DO** describe WHAT to test in plain English
-- ✅ **DO** list test scenarios as bullet points without code
-- ✅ **DO** reference design document sections by name/number
-
-Implementation plans should contain:
-- File paths and what changes are needed (described in words)
-- Test file paths and what scenarios to cover (described in words)
-- Cross-references to design documents
-- Dependencies between implementation phases
-
-Implementation plans should NOT contain:
-- TypeScript/JavaScript code blocks
-- Test assertions or expect() statements
-- Mock setups or fixture definitions
-- Function signatures or interfaces
-- Any code syntax whatsoever
+Plans should contain: file paths and what changes are needed (in words), test file paths and scenarios to cover (in words), cross-references to design docs, and dependencies between phases.
 
 ## Remember
 
 > "Menus are access points. Services are logic. Tests are proof."
-
-If you're writing business logic in a menu file, STOP and move it to a service.
-If you're duplicating code, STOP and centralize it.
-If you're changing functionality, UPDATE THE TESTS.
-Check architectural docs BEFORE making system changes.
-**Reduce code surface area** - delete unused code, don't add compatibility shims.
 

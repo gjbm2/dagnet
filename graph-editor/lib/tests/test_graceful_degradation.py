@@ -123,7 +123,7 @@ class TestGracefulDegradation:
 
         This is a shallow contract test of the snapshot analyze handler:
         - real frames come from sweep grid + virtual snapshots
-        - synthetic frames extend beyond the last real as_at_date and are tagged with is_synthetic
+        - synthetic frames extend beyond the last real snapshot_date and are tagged with is_synthetic
         """
         from api_handlers import handle_runner_analyze
 
@@ -143,7 +143,7 @@ class TestGracefulDegradation:
         }]
 
         # Model chosen so t95 ~ 2 days from anchor_to (exp(0 + 0.1 * Φ⁻¹(0.95)) ≈ 1.18 → ceil=2).
-        # That should produce one synthetic day beyond the last real as_at_date (2-Oct-25 → 3-Oct-25).
+        # That should produce one synthetic day beyond the last real snapshot_date (2-Oct-25 → 3-Oct-25).
         graph = {
             "edges": [{
                 "uuid": "e1",

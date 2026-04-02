@@ -14,14 +14,15 @@ interface ContainerContextMenuProps {
   onBringForward: (id: string) => void;
   onSendBackward: (id: string) => void;
   onSendToBack: (id: string) => void;
-  onAddChart: (id: string) => void;
+  onAddChart: (id: string, analysisType?: string) => void;
+  chartSubmenu?: ContextMenuItem[];
   onCopy: (id: string) => void;
   onCut: (id: string) => void;
   onDelete: (id: string) => void;
   onClose: () => void;
 }
 
-export function ContainerContextMenu({ x, y, containerId, currentColour, containerCount, onUpdateColour, onBringToFront, onBringForward, onSendBackward, onSendToBack, onAddChart, onCopy, onCut, onDelete, onClose }: ContainerContextMenuProps) {
+export function ContainerContextMenu({ x, y, containerId, currentColour, containerCount, onUpdateColour, onBringToFront, onBringForward, onSendBackward, onSendToBack, onAddChart, chartSubmenu, onCopy, onCut, onDelete, onClose }: ContainerContextMenuProps) {
   const items = useMemo((): ContextMenuItem[] => {
     const colourItems: ContextMenuItem[] = CONTAINER_COLOURS.map((colour) => ({
       label: CONTAINER_COLOUR_NAMES[colour] || colour,
@@ -45,7 +46,7 @@ export function ContainerContextMenu({ x, y, containerId, currentColour, contain
 
     result.push(
       { label: '', onClick: () => {}, divider: true },
-      { label: 'Add chart', icon: <BarChart3 size={14} />, onClick: () => onAddChart(containerId) },
+      { label: 'Add chart', icon: <BarChart3 size={14} />, onClick: () => onAddChart(containerId), submenu: chartSubmenu },
       { label: '', onClick: () => {}, divider: true },
       { label: 'Copy', icon: <Copy size={14} />, onClick: () => onCopy(containerId) },
       { label: 'Cut', icon: <Scissors size={14} />, onClick: () => onCut(containerId) },
@@ -53,7 +54,7 @@ export function ContainerContextMenu({ x, y, containerId, currentColour, contain
     );
 
     return result;
-  }, [containerId, currentColour, containerCount, onUpdateColour, onBringToFront, onBringForward, onSendBackward, onSendToBack, onAddChart, onCopy, onCut, onDelete]);
+  }, [containerId, currentColour, containerCount, onUpdateColour, onBringToFront, onBringForward, onSendBackward, onSendToBack, onAddChart, chartSubmenu, onCopy, onCut, onDelete]);
 
   return <ContextMenu x={x} y={y} items={items} onClose={onClose} />;
 }
