@@ -344,3 +344,113 @@ class TestComputeCohortMaturityRows:
         rows = _call_rows()
         taus = [r['tau_days'] for r in rows]
         assert taus == sorted(taus)
+
+
+# ── Zero-maturity degeneration invariant ──────────────────────────────
+
+
+class TestWindowZeroMaturityDegeneration:
+    """When all Cohorts have tau_max=0 (zero maturity), the cohort_maturity
+    fan chart should degenerate to the unconditional confidence band.
+
+    Both outputs come from the same codebase, same fixture, same params.
+    The test loads the JSON fixture, calls both code paths, and compares.
+    """
+
+    @staticmethod
+    def _load_fixture():
+        from runner.cohort_forecast import load_test_fixture
+        return load_test_fixture('fan_test_1')
+
+    def test_fan_equals_confidence_band_at_zero_maturity(self):
+        """With zero maturity (no evidence), the MC fan must be precisely
+        the same as the analytic confidence band — same midpoint, same
+        upper, same lower.  They are computing the same thing: the
+        unconditional model uncertainty envelope.
+
+        Tolerance is MC noise only (~0.02 with 2000 draws)."""
+        from runner.confidence_bands import compute_confidence_band
+
+        fix = self._load_fixture()
+        ep = fix['edge_params']
+
+        # Zero maturity: sweep_to = anchor_to = anchor_from.
+        zero_frames = [{
+            'as_at_date': fix['anchor_from'],
+            'data_points': [
+                fix['frames'][0]['data_points'][0],  # first Cohort, day 0
+            ],
+        }]
+        rows = compute_cohort_maturity_rows(
+            frames=zero_frames,
+            graph=fix['graph'],
+            target_edge_id=fix['target_edge_id'],
+            edge_params=ep,
+            anchor_from=fix['anchor_from'],
+            anchor_to=fix['anchor_from'],
+            sweep_to=fix['anchor_from'],
+            is_window=True,
+        )
+        assert len(rows) > 0, "No rows returned for zero-maturity window"
+        fan_by_tau = {r['tau_days']: r for r in rows}
+
+        # Analytic confidence band with same params.
+        tau_points = sorted(fan_by_tau.keys())
+        band_upper, band_lower = compute_confidence_band(
+            ages=[float(t) for t in tau_points],
+            p=ep['forecast_mean'],
+            mu=ep['mu'],
+            sigma=ep['sigma'],
+            onset=ep['onset_delta_days'],
+            p_sd=ep.get('p_stdev', 0.0),
+            mu_sd=ep.get('bayes_mu_sd', 0.0),
+            sigma_sd=ep.get('bayes_sigma_sd', 0.0),
+            onset_sd=ep.get('bayes_onset_sd', 0.0),
+            onset_mu_corr=ep.get('bayes_onset_mu_corr', 0.0),
+            level=0.90,
+        )
+        band = {tau_points[i]: (band_upper[i], band_lower[i])
+                for i in range(len(tau_points))}
+
+        # MC noise tolerance — 2000 draws gives ~0.02 on percentiles.
+        TOL = 0.03
+
+        onset = ep['onset_delta_days']
+        checked = 0
+        for tau in tau_points:
+            if tau <= onset + 2:
+                continue  # near-onset: both ~0, skip
+            row = fan_by_tau[tau]
+            if row['fan_upper'] is None or row['fan_lower'] is None:
+                continue
+            cb_upper, cb_lower = band[tau]
+            if cb_upper < 0.01:
+                continue
+
+            # Midpoint must match.
+            fan_mid = row['midpoint']
+            cb_mid = (cb_upper + cb_lower) / 2
+            assert fan_mid is not None
+            assert abs(fan_mid - cb_mid) < TOL, (
+                f"tau={tau}: fan midpoint={fan_mid:.4f} vs "
+                f"band midpoint={cb_mid:.4f} "
+                f"(delta={fan_mid - cb_mid:.4f})"
+            )
+
+            # Upper must match.
+            assert abs(row['fan_upper'] - cb_upper) < TOL, (
+                f"tau={tau}: fan upper={row['fan_upper']:.4f} vs "
+                f"band upper={cb_upper:.4f} "
+                f"(delta={row['fan_upper'] - cb_upper:.4f})"
+            )
+
+            # Lower must match.
+            assert abs(row['fan_lower'] - cb_lower) < TOL, (
+                f"tau={tau}: fan lower={row['fan_lower']:.4f} vs "
+                f"band lower={cb_lower:.4f} "
+                f"(delta={row['fan_lower'] - cb_lower:.4f})"
+            )
+
+            checked += 1
+
+        assert checked >= 5, f"Only checked {checked} tau points — need at least 5"

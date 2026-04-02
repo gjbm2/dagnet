@@ -2,7 +2,7 @@
 
 **Status**: Proposal  
 **Date**: 1-Apr-26  
-**Related**: `cohort-maturity-full-bayes-design.md`, `cohort-maturity-fan-chart-spec.md`, `cohort-maturity-project-overview.md`, `11-snapshot-evidence-assembly.md`, `18-compiler-journal.md`, `../codebase/RESERVED_QUERY_TERMS_GLOSSARY.md`
+**Related**: `cohort-maturity-full-bayes-design.md`, `cohort-maturity-fan-chart-spec.md`, `cohort-maturity-project-overview.md`, `../11-snapshot-evidence-assembly.md`, `../18-compiler-journal.md`, `../../codebase/RESERVED_QUERY_TERMS_GLOSSARY.md`
 
 ---
 

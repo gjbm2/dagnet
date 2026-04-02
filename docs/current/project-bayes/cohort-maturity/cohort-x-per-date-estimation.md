@@ -486,3 +486,103 @@ upstream edge per Cohort date).
 Each stage decision should be based on visual inspection of fans
 against real `cohort()` data with known upstream behaviour, not on
 theoretical considerations.
+
+---
+
+## 8. Open calibration issues (post Option 1 implementation)
+
+The following issues were identified during Option 1 implementation
+and require resolution in sequence. They are maths/stats
+calibration problems, not architectural or plumbing issues.
+
+### 8.1 Zero-maturity degeneration invariant
+
+**Invariant**: for both `window()` and `cohort()` modes, as Cohort
+maturity → 0 (e.g. `cohort(-0d:)` or a window containing only
+today's data), the fan chart must degenerate to the unconditional
+Bayes model curve: `rate(τ) = p × CDF_edge(τ)`, with fan bands
+equal to the unconditional confidence band from the edge posterior.
+
+**Current status**: not confirmed. The frontier-conditioned y
+formula `y = k + x_frontier × remaining_cdf × r` produces `y ≈ 0`
+when `x_frontier ≈ 0` (zero-maturity Cohort with few arrivals),
+so the Cohort contributes almost nothing to the aggregate — rather
+than contributing the model curve.
+
+**Investigation procedure**: for a true `cohort(-0d:)` subject,
+dump per-Cohort terms at `τ = 0..5`:
+
+- `N_i, k_i, c_i, n_eff_i, r_draw_i, x_i(τ), y_i(τ), y_i/x_i`
+- Compare against `model_rate(τ) = posterior_p × CDF_edge(τ)`
+
+Then decompose:
+
+- Residual observed term: does `k_i / x_i(τ)` survive?
+- Posterior draw vs model: does `median(r_draw)` match `p_model`?
+- Mixed upstream bases: is the denominator on a different basis
+  from the displayed Bayes model curve?
+
+**Required fix**: likely a properly derived formula that handles
+the convolution of upstream arrivals over time with edge-level
+conversion timing (see `cohort-maturity-full-bayes-design.md`
+§7.5). The per-tau population projection was tested experimentally
+and gave better visual degeneration but on incorrect maths (double
+time-scaling). A correct derivation is needed.
+
+**Test**: write a fixture test with a single zero-maturity Cohort.
+Assert that the MC fan midpoint converges to `p × CDF_edge(τ)` and
+the fan bands match the unconditional confidence band within
+tolerance. This test should pass for both `window()` and `cohort()`
+modes.
+
+### 8.2 Stochastic denominator (upstream x uncertainty in fan)
+
+**Problem**: `x_forecast_arr` is currently deterministic across MC
+draws. The denominator `X_total` is identical for all 2000 draws.
+Fan width comes only from numerator variation (`y` via rate draws
+and CDF draws). Upstream arrival uncertainty is not reflected.
+
+**Proposal 2A** (Option-1-consistent stochastic denominator): sample
+upstream path terms per draw. For each incoming route `u` and draw
+`b`:
+
+- Sample `p_u^(b)` from the upstream edge's probability posterior
+- Sample `(μ_u^(b), σ_u^(b), onset_u^(b))` from the upstream
+  edge's latency posterior
+- Compute `cdf_u^(b)(τ)` from the drawn params
+- Route mass: `m_u^(b)(τ) = p_u^(b) × cdf_u^(b)(τ)`
+
+Then for each Cohort `s`:
+
+```
+R^(b)(τ) = Σ_u m_u^(b)(τ)        (MECE assumption)
+x_model^(b)(s, τ) = a_s × reach × R^(b)(τ)
+x^(b)(s, τ) = max(x_frozen_s, x_model^(b)(s, τ))
+```
+
+Now the denominator varies per draw, and the fan ratio `Y/X`
+reflects both rate and arrival uncertainty.
+
+**Prerequisite**: §8.1 must be resolved first. Stochastic `x` on
+top of a broken degeneration formula will produce worse results,
+not better.
+
+**Proposal 2B** (consistency fix): the current implementation uses
+`edge.p.mean` for `compute_reach_probability` but `_up['p']` from
+`read_edge_cohort_params` (posterior path params) for the CDF
+weights. These may be on different bases. Pick one posterior source
+for both. This is a small fix that should be done regardless of
+whether 2A is implemented.
+
+### 8.3 Sequence
+
+1. **§8.1**: investigate and fix the zero-maturity degeneration.
+   Write the fixture test first. This is the most fundamental
+   invariant — if it doesn't hold, other calibration work is
+   wasted.
+2. **§8.2 Proposal 2B**: consistency fix for reach vs CDF
+   probability bases. Small, low-risk.
+3. **§8.2 Proposal 2A**: stochastic denominator. Only after §8.1
+   is resolved and confirmed by test.
+4. Re-evaluate fan quality on real data after each step. If fans
+   look correct after §8.1 + 2B, defer 2A.

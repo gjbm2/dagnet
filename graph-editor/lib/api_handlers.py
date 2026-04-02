@@ -1184,22 +1184,15 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                 scenario_rows += len(rows)
 
                 if not rows:
-                    # IMPORTANT:
-                    # Cohort maturity sweep may intentionally yield no rows for an epoch
-                    # (e.g. a planned "gap" epoch, or days before the first retrieval).
-                    # This must be treated as a successful empty result, not an error.
+                    # Zero rows is valid (e.g. asat before first retrieval,
+                    # gap epoch).  Derive empty frames but do NOT skip —
+                    # the maturity computation below can still produce a
+                    # model-only chart (epoch C, pure forecast).
                     result = derive_cohort_maturity(
                         [],
                         sweep_from=subj.get('sweep_from'),
                         sweep_to=subj.get('sweep_to'),
                     )
-                    per_subject_results.append({
-                        "subject_id": subj.get('subject_id'),
-                        "success": True,
-                        "result": result,
-                        "rows_analysed": 0,
-                    })
-                    continue
 
                 result = derive_cohort_maturity(
                     rows,
@@ -1291,6 +1284,7 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
             # bands / maturity rows must ALL use the fixture's params, not
             # whatever the real graph edge happens to have.
             _test_fixture = data.get('test_fixture') or data.get('display_settings', {}).get('test_fixture')
+            _ds = data.get('display_settings') or {}
             if _test_fixture and analysis_type == 'cohort_maturity':
                 from runner.cohort_forecast import load_test_fixture as _ltf
                 _fixture_data = _ltf(_test_fixture)  # frames are static, never regenerated
@@ -1337,6 +1331,9 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                     'bayes_onset_sd': _ep.get('bayes_onset_sd', 0.0),
                     'bayes_onset_mu_corr': _ep.get('bayes_onset_mu_corr', 0.0),
                     'promoted_source': 'bayesian',
+                    # Carry axis_tau_max from fixture as t95 so model curve
+                    # is generated even when sweep_span = 0 (zero-maturity query).
+                    't95': _fixture_data.get('axis_tau_max', 60),
                 }
                 print(f"[test_fixture] model_params: mu={_ep['mu']} sigma={_ep['sigma']} "
                       f"onset={_ep['onset_delta_days']} p={_ep['forecast_mean']:.4f} "
@@ -1634,7 +1631,7 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                     # Compute per-τ rows with rate, midpoint, fan bounds.
                     # All computation here — the FE just draws.
                     if (analysis_type == 'cohort_maturity'
-                            and 'frames' in result
+                            and ('frames' in result or _test_fixture)
                             and subj.get('anchor_from') and subj.get('anchor_to')
                             and subj.get('sweep_to')):
                         try:
@@ -1645,10 +1642,23 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                             _bl_map = {'80': 0.80, '90': 0.90, '95': 0.95, '99': 0.99, 'blend': 0.90}
                             _fan_band_level = _bl_map.get(_bl_str, 0.90)
 
-                            # Test fixture fork: reuse _fixture_data loaded above
-                            # (edge_params already have tf_ overrides applied).
+                            # Test fixture fork: use fixture's frames/graph/edge_params
+                            # but the APP's query dates (anchor_from/to, sweep_to)
+                            # so the user can control the date window from the UI.
                             if _test_fixture:
-                                maturity_rows = compute_cohort_maturity_rows(**_fixture_data, band_level=_fan_band_level)
+                                print(f"[test_fixture_dates] anchor_from={subj['anchor_from']} anchor_to={subj['anchor_to']} sweep_to={subj['sweep_to']}")
+                                maturity_rows = compute_cohort_maturity_rows(
+                                    frames=_fixture_data['frames'],
+                                    graph=_fixture_data['graph'],
+                                    target_edge_id=_fixture_data['target_edge_id'],
+                                    edge_params=_fixture_data['edge_params'],
+                                    anchor_from=subj['anchor_from'],
+                                    anchor_to=subj['anchor_to'],
+                                    sweep_to=subj['sweep_to'],
+                                    is_window=_fixture_data.get('is_window', is_window),
+                                    axis_tau_max=_fixture_data.get('axis_tau_max'),
+                                    band_level=_fan_band_level,
+                                )
                             else:
                                 maturity_rows = compute_cohort_maturity_rows(
                                     frames=result['frames'],

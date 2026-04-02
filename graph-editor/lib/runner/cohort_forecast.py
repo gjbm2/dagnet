@@ -818,28 +818,33 @@ def compute_cohort_maturity_rows(
             ad_str = c['anchor_day'].isoformat()
 
             a_idx = min(a_i, T - 1)
-            # Pure latency CDF at observation point (without p) — for Bayesian update.
-            # Design doc §2.3: c_i = CDF(tau_max), n_eff = x × c_i.
-            cdf_at_a = cdf_arr[:, a_idx]  # (S,)
-            c_i_b = cdf_at_a[:, None]     # (S, 1)
-            remaining_cdf = np.maximum(cdf_arr - c_i_b, 0.0)  # (S, T)
 
             if is_window or upstream_path_cdf is None:
-                # Window mode: x fixed, y from edge CDF × posterior rate.
+                # Window mode: pure latency CDF for timing + Beta draw for rate.
+                # remaining_cdf uses cdf_arr (no p) to avoid p² in the rate.
+                # Rate dispersion comes from rng.beta() draw from the
+                # per-Cohort posterior, which varies with (p, mu, sigma, onset)
+                # draws via c_i_b → n_eff_b.
+                cdf_at_a = cdf_arr[:, a_idx]      # (S,)
+                c_i_b = cdf_at_a[:, None]          # (S, 1)
+                remaining_cdf = np.maximum(cdf_arr - c_i_b, 0.0)  # (S, T)
                 if N_i <= 0:
                     continue  # No arrivals in window mode → skip.
                 n_eff_b = N_i * c_i_b  # (S, 1)
-                post_rate_b = (alpha_0 + k_i) / (alpha_0 + beta_0 + n_eff_b)  # (S, 1)
-                y_forecast = k_i + N_i * remaining_cdf * post_rate_b  # (S, T)
+                a_post = alpha_0 + k_i                                    # (scalar)
+                b_post = np.maximum(beta_0 + n_eff_b - k_i, 1e-6)        # (S, 1)
+                r_draw = rng.beta(a_post, b_post)                         # (S, 1)
+                y_forecast = k_i + N_i * remaining_cdf * r_draw           # (S, T)
                 x_forecast_arr = np.full((S, T), N_i)
                 y_forecast = np.clip(y_forecast, k_i, N_i)
             else:
-                # Cohort mode: x grows with τ.
+                # Cohort mode: use pure latency CDF (without p) for Bayesian update.
+                cdf_at_a = cdf_arr[:, a_idx]      # (S,)
+                c_i_b = cdf_at_a[:, None]          # (S, 1)
+                remaining_cdf = np.maximum(cdf_arr - c_i_b, 0.0)  # (S, T)
+
                 # Option 1 (cohort-x-per-date-estimation.md §3):
                 #   x_model(s, τ) = a_s × reach(from_node) × CDF_path(τ)
-                # reach = product of edge rates from anchor to from-node.
-                # CDF_path = weighted-average path latency CDF.
-                # Floored at x_frozen_s.
                 x_model = a_pop * reach_at_from_node * upstream_path_cdf  # (T,)
                 x_model_floored = np.maximum(x_model, N_i)  # floor at x_frozen
 
@@ -848,13 +853,13 @@ def compute_cohort_maturity_rows(
                 ).copy()
 
                 # y_forecast: Bayesian posterior predictive.
-                # n_eff from x_frozen (observed trials — posterior confidence).
-                # Forward projection from x_at_frontier (scalar — the model's
-                # estimate of arrivals at the observation point).
+                # Draw r from per-Cohort Beta posterior (not posterior mean).
                 x_at_frontier = float(x_model_floored[a_idx])
                 n_eff_b = N_i * c_i_b  # (S, 1) — from OBSERVED arrivals
-                post_rate_b = (alpha_0 + k_i) / (alpha_0 + beta_0 + n_eff_b)  # (S, 1)
-                y_forecast = k_i + x_at_frontier * remaining_cdf * post_rate_b  # (S, T)
+                a_post = alpha_0 + k_i                                    # (scalar)
+                b_post = np.maximum(beta_0 + n_eff_b - k_i, 1e-6)        # (S, 1)
+                r_draw = rng.beta(a_post, b_post)                         # (S, 1)
+                y_forecast = k_i + x_at_frontier * remaining_cdf * r_draw # (S, T)
                 y_forecast = np.clip(y_forecast, k_i, x_forecast_arr)
 
             # Mature ages: use observed (x, y) — same across all draws.
@@ -884,6 +889,38 @@ def compute_cohort_maturity_rows(
             mature_mask = tau_grid <= a_i  # (T,) bool
             Y_cohort = np.where(mature_mask[None, :], observed_y[None, :], y_forecast)
             X_cohort = np.where(mature_mask[None, :], observed_x[None, :], x_forecast_arr)
+
+            # ── Zero-maturity diagnostic ──────────────────────────────────
+            # Dump decomposition for low-maturity Cohorts to diagnose
+            # degeneration to model curve.  Only for immature Cohorts
+            # (tau_max <= 5) to keep output manageable.
+            if a_i <= 5:
+                _diag_taus = [t for t in [0, 1, 2, 3, 5, 10, 15, 20, 30] if t < T]
+                _mode_str = 'window' if is_window else 'cohort'
+                _x_front = float(N_i) if is_window else x_at_frontier
+                for _dt in _diag_taus:
+                    if _dt <= a_i:
+                        continue  # mature at this tau, skip
+                    _model_rate = edge_p * _shifted_lognormal_cdf(
+                        float(_dt), edge_onset, edge_mu, edge_sigma)
+                    _x_med = float(np.median(X_cohort[:, _dt]))
+                    _y_med = float(np.median(Y_cohort[:, _dt]))
+                    _rate_med = _y_med / _x_med if _x_med > 0 else 0.0
+                    _r_src = r_draw
+                    _r_draw_med = float(np.median(_r_src))
+                    _r_draw_p10 = float(np.percentile(_r_src, 10))
+                    _r_draw_p90 = float(np.percentile(_r_src, 90))
+                    _n_eff_med = float(np.median(n_eff_b))
+                    print(f"[DIAG_0d] {_mode_str} tau={_dt} ad={ad_str} tau_max={a_i} "
+                          f"N_i={N_i:.0f} k_i={k_i:.0f} a_pop={a_pop:.0f} "
+                          f"c_i_med={float(np.median(c_i_b)):.6f} "
+                          f"n_eff_med={_n_eff_med:.3f} "
+                          f"r_draw=[{_r_draw_p10:.4f} {_r_draw_med:.4f} {_r_draw_p90:.4f}] "
+                          f"x_frontier={_x_front:.1f} "
+                          f"x_med={_x_med:.1f} y_med={_y_med:.2f} "
+                          f"rate_med={_rate_med:.4f} "
+                          f"model_rate={_model_rate:.4f} "
+                          f"delta={_rate_med - _model_rate:.4f}")
 
             Y_total += Y_cohort
             X_total += X_cohort

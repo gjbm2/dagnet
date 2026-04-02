@@ -28,7 +28,12 @@
       "Bash(PYTHONPATH=graph-editor/lib python -c \":*)",
       "Bash(chmod +x /tmp/analyze.sh)",
       "Bash(bash /tmp/analyze.sh)",
-      "Bash(xargs -I {} bash -c 'echo \"=== {} ===\" && head -30 {}')"
+      "Bash(xargs -I {} bash -c 'echo \"=== {} ===\" && head -30 {}')",
+      "Edit(/.claude/skills/handover/**)"
+    ],
+    "additionalDirectories": [
+      "/home/reg/dev/dagnet/.claude",
+      "/home/reg/dev/dagnet/.claude/skills"
     ]
   },
   "hooks": {
