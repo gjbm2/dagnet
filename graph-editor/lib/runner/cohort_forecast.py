@@ -755,6 +755,12 @@ def compute_cohort_maturity_rows(
         import numpy as np
         from .confidence_bands import _ndtr
 
+        def _weighted_pct(values, weights, pct):
+            """Weighted percentile via sorted cumulative weights."""
+            idx = np.argsort(values)
+            cumw = np.cumsum(weights[idx])
+            return float(values[idx][np.searchsorted(cumw, pct / 100.0)])
+
         # Build posterior covariance matrix
         # Order: [p, mu, sigma, onset]
         theta_mean = np.array([edge_p, edge_mu, edge_sigma, edge_onset])
@@ -827,26 +833,60 @@ def compute_cohort_maturity_rows(
                 upstream_path_cdf /= total_weight  # normalise to [0, 1]
             upstream_path_cdf = np.clip(upstream_path_cdf, 0.0, 1.0)
 
-        # Per-Cohort conditional forecast, aggregated
-        # Window mode: rate_agg^(b)(tau) = Σ y_i^(b) / Σ x_i  (x fixed)
-        # Cohort mode: rate_agg^(b)(tau) = Σ y_i^(b) / Σ x_i^(b)  (x grows)
+        # ── Importance weighting: condition MC draws on evidence ─────
+        # The MVN draws represent prior parameter uncertainty.
+        # The Cohort evidence (k_i conversions out of N_i people at
+        # tau_max_i) constrains which draws are plausible.
         #
-        # Rate draw: use p_draw from the MVN parameter samples (p_s).
-        # This is the SAME p used by the confidence band, so the fan:
-        #   - degenerates to the confidence band at zero maturity
-        #   - narrows as evidence accumulates (remaining_cdf shrinks)
-        #   - never exceeds the confidence band in width
-        # No separate Beta draw — p uncertainty is already captured by
-        # the MVN posterior, and CDF timing uncertainty by (mu, sigma,
-        # onset) draws.  Evidence enters via k (observed conversions)
-        # and remaining_cdf = CDF(τ) - CDF(τ_max).
+        # For each draw θ^(b), compute the Binomial likelihood of the
+        # observed data:
+        #   p_window_i^(b) = p^(b) × CDF(tau_max_i; θ^(b))
+        #   log L^(b) = Σ_i [ k_i log(p_w) + (N_i-k_i) log(1-p_w) ]
+        #
+        # Normalise to get importance weights W^(b).  Resample to get
+        # equally-weighted draws from the conditioned posterior.
+        #
+        # This naturally handles everything:
+        #   - Zero maturity → no evidence → uniform weights → confidence band
+        #   - More Cohorts / data → stronger conditioning → narrower fan
+        #   - Conditions (mu, sigma, onset) too — not just p
+        log_weights = np.zeros(S)
+        for c in cohort_list:
+            N_i = c['x_frozen']
+            k_i = c['y_frozen']
+            if N_i <= 0 and (is_window or upstream_path_cdf is None):
+                continue
+            a_idx = min(c['tau_max'], T - 1)
+            # p_window = probability a person converts within tau_max
+            p_window = p_s * cdf_arr[:, a_idx]              # (S,)
+            p_window = np.clip(p_window, 1e-15, 1 - 1e-15)
+            # Binomial log-likelihood (dropping constant C(N,k))
+            log_weights += k_i * np.log(p_window) + (N_i - k_i) * np.log(1 - p_window)
+
+        # Normalise (log-sum-exp for numerical stability)
+        log_weights -= np.max(log_weights)
+        weights = np.exp(log_weights)
+        weights /= weights.sum()
+
+        # Effective sample size diagnostic
+        ess = 1.0 / np.sum(weights ** 2)
+        print(f"[BAYES_IS] ESS={ess:.0f}/{S} "
+              f"max_weight={weights.max():.4f} "
+              f"p_conditioned=[{_weighted_pct(p_s, weights, 10):.4f} "
+              f"{_weighted_pct(p_s, weights, 50):.4f} "
+              f"{_weighted_pct(p_s, weights, 90):.4f}]")
+
+        # Resample to get equally-weighted conditioned draws
+        resample_idx = rng.choice(S, size=S, replace=True, p=weights)
+        cdf_arr = cdf_arr[resample_idx]         # (S, T) — conditioned
+        p_s = p_s[resample_idx]                  # (S,) — conditioned
+        q = q[resample_idx]                      # (S, T) — conditioned
+        samples = samples[resample_idx]          # (S, 4) — conditioned
+
+        # Per-Cohort conditional forecast, aggregated
         total_N = sum(c['x_frozen'] for c in cohort_list)
         Y_total = np.zeros((S, T))  # numerator
         X_total = np.zeros((S, T))  # denominator (constant in window mode)
-
-        # Shared rate draw: p from the MVN parameter samples.
-        # Shape (S, 1) for broadcast across tau.
-        r_draw = p_s[:, None]  # (S, 1) — same p_draw as confidence band
 
         for c in cohort_list:
             N_i = c['x_frozen']
@@ -858,20 +898,19 @@ def compute_cohort_maturity_rows(
             a_idx = min(a_i, T - 1)
 
             if is_window or upstream_path_cdf is None:
-                # Window mode: remaining CDF × p_draw for MC rate.
-                # remaining_cdf = CDF(τ) - CDF(τ_max) anchors the forecast
-                # to observed evidence, ensuring continuity at the boundary.
+                # Window mode: forecast with conditioned draws.
+                # y = k + N × remaining_cdf × p (conditioned p and CDF).
                 if N_i <= 0:
                     continue  # No arrivals in window mode → skip.
                 cdf_at_a = cdf_arr[:, a_idx]      # (S,)
                 c_i_b = cdf_at_a[:, None]          # (S, 1)
                 remaining_cdf = np.maximum(cdf_arr - c_i_b, 0.0)  # (S, T)
-                n_eff_b = N_i * c_i_b  # (S, 1) — for diagnostics only
-                y_forecast = k_i + N_i * remaining_cdf * r_draw           # (S, T)
+                n_eff_b = N_i * c_i_b                              # (S, 1)
+                y_forecast = k_i + N_i * remaining_cdf * p_s[:, None]  # (S, T)
                 x_forecast_arr = np.full((S, T), N_i)
                 y_forecast = np.clip(y_forecast, k_i, N_i)
             else:
-                # Cohort mode: remaining CDF × p_draw.
+                # Cohort mode: same conditioned draws, growing x.
                 cdf_at_a = cdf_arr[:, a_idx]      # (S,)
                 c_i_b = cdf_at_a[:, None]          # (S, 1)
                 remaining_cdf = np.maximum(cdf_arr - c_i_b, 0.0)  # (S, T)
@@ -886,8 +925,8 @@ def compute_cohort_maturity_rows(
                 ).copy()
 
                 x_at_frontier = float(x_model_floored[a_idx])
-                n_eff_b = N_i * c_i_b  # (S, 1) — for diagnostics only
-                y_forecast = k_i + x_at_frontier * remaining_cdf * r_draw # (S, T)
+                n_eff_b = N_i * c_i_b                              # (S, 1)
+                y_forecast = k_i + x_at_frontier * remaining_cdf * p_s[:, None]  # (S, T)
                 y_forecast = np.clip(y_forecast, k_i, x_forecast_arr)
 
             # Mature ages: use observed (x, y) — same across all draws.
@@ -934,7 +973,7 @@ def compute_cohort_maturity_rows(
                     _x_med = float(np.median(X_cohort[:, _dt]))
                     _y_med = float(np.median(Y_cohort[:, _dt]))
                     _rate_med = _y_med / _x_med if _x_med > 0 else 0.0
-                    _r_src = r_draw
+                    _r_src = p_s[:, None]  # conditioned p draws
                     _r_draw_med = float(np.median(_r_src))
                     _r_draw_p10 = float(np.percentile(_r_src, 10))
                     _r_draw_p90 = float(np.percentile(_r_src, 90))
