@@ -1236,10 +1236,21 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                 # frames for the BASE subject only; skip epoch siblings.
                 base_sid = _base_subject_id(subj.get('subject_id', ''))
                 subj_sid = str(subj.get('subject_id', ''))
-                is_epoch_sibling = '::epoch:' in subj_sid and subj_sid != base_sid + '::epoch:0'
                 is_gap = any(str(sk) == '__epoch_gap__' for sk in subj.get('slice_keys', ['']))
 
-                if is_gap or is_epoch_sibling:
+                # The primary epoch is the first non-gap epoch for this
+                # base subject.  All other epochs (gaps + siblings) are
+                # skipped — their frames were already merged in pre-fetch.
+                _sibs = _epoch_subjects.get(base_sid, [])
+                _primary_sid = None
+                for _s in _sibs:
+                    _s_keys = _s.get('slice_keys', [''])
+                    if not any(str(sk) == '__epoch_gap__' for sk in _s_keys):
+                        _primary_sid = str(_s.get('subject_id', ''))
+                        break
+                is_primary = (subj_sid == _primary_sid)
+
+                if not is_primary:
                     # Gap epochs and non-primary epoch siblings are handled
                     # by the unified computation on the primary epoch.
                     # Emit a minimal result so the response shape is correct.
@@ -1512,7 +1523,25 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                     edge_t95_val = model_params.get('t95')
                     path_t95_val = model_params.get('path_t95')
 
-                    candidates = [c for c in [sweep_span, edge_t95_val, path_t95_val] if c and c > 0]
+                    # Include user's tau_extent display setting so the chart can
+                    # extend beyond the as-at date, showing the forecast curve
+                    # continuing to mature.
+                    _ds = data.get('display_settings') or {}
+                    _tau_extent_raw = _ds.get('tau_extent') or _ds.get('x_axis_max')
+                    _tau_extent = None
+                    if _tau_extent_raw and _tau_extent_raw not in ('auto', 'Auto'):
+                        try:
+                            _tau_extent = int(float(_tau_extent_raw))
+                        except (ValueError, TypeError):
+                            pass
+                    # Extend axis to show the full maturity curve (where the CDF
+                    # plateaus), not just to the sweep span or t95.  Use 2× t95
+                    # as a proxy for near-complete maturity.
+                    t95_extended = max(
+                        (edge_t95_val or 0) * 2,
+                        (path_t95_val or 0) * 2,
+                    ) if (edge_t95_val or path_t95_val) else 0
+                    candidates = [c for c in [sweep_span, edge_t95_val, path_t95_val, t95_extended, _tau_extent] if c and c > 0]
                     axis_tau_max = int(math.ceil(max(candidates))) if candidates else None
 
                     if axis_tau_max and axis_tau_max > 0:

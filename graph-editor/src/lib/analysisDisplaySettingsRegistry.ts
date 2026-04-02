@@ -948,6 +948,17 @@ export const CHART_DISPLAY_SETTINGS: Record<string, DisplaySettingDef[]> = {
     ...COMMON_MOVING_AVERAGE_SETTINGS,
     ...COMMON_CONFIDENCE_SETTINGS,
     {
+      key: 'show_forecast_shading',
+      label: 'Forecast shading',
+      shortLabel: 'Shading',
+      type: 'checkbox',
+      defaultValue: true,
+      propsPanel: true,
+      inline: 'brief',
+      contextMenu: false,
+      computeAffecting: false,
+    },
+    {
       key: 'chart_mode',
       label: 'Chart mode',
       shortLabel: 'Mode',

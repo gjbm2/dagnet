@@ -761,6 +761,81 @@ def compute_cohort_maturity_rows(
         import numpy as np
         from .confidence_bands import _ndtr
 
+        def _apportion_rowwise_total(
+            total: int,
+            weights: np.ndarray,
+            capacities: Optional[np.ndarray] = None,
+        ) -> np.ndarray:
+            """Allocate an exact integer total across each row."""
+            weights_arr = np.maximum(np.asarray(weights, dtype=float), 0.0)
+            squeeze = weights_arr.ndim == 1
+            if squeeze:
+                weights_arr = weights_arr[None, :]
+
+            n_rows, n_cols = weights_arr.shape
+            total = int(max(total, 0))
+            out = np.zeros((n_rows, n_cols), dtype=np.int64)
+            if total <= 0 or n_cols == 0:
+                return out[0] if squeeze else out
+
+            if capacities is None:
+                capacities_arr = np.full((n_rows, n_cols), total, dtype=np.int64)
+            else:
+                capacities_arr = np.maximum(np.asarray(capacities, dtype=np.int64), 0)
+                if capacities_arr.ndim == 1:
+                    capacities_arr = np.broadcast_to(capacities_arr[None, :], (n_rows, n_cols)).copy()
+                else:
+                    capacities_arr = capacities_arr.copy()
+
+            remaining = np.minimum(total, capacities_arr.sum(axis=1).astype(np.int64))
+            spare = capacities_arr.copy()
+
+            while np.any(remaining > 0):
+                active_rows = (remaining > 0) & (spare.sum(axis=1) > 0)
+                if not np.any(active_rows):
+                    break
+
+                live_weights = np.where(spare > 0, weights_arr, 0.0)
+                weight_sums = live_weights.sum(axis=1, keepdims=True)
+                fallback = spare.astype(float)
+                fallback_sums = fallback.sum(axis=1, keepdims=True)
+
+                probs = np.divide(
+                    live_weights,
+                    weight_sums,
+                    out=np.zeros_like(live_weights),
+                    where=weight_sums > 0,
+                )
+                fallback_probs = np.divide(
+                    fallback,
+                    fallback_sums,
+                    out=np.zeros_like(fallback),
+                    where=fallback_sums > 0,
+                )
+                probs = np.where(weight_sums > 0, probs, fallback_probs)
+
+                target = remaining[:, None] * probs
+                extra = np.floor(target).astype(np.int64)
+                extra = np.minimum(extra, spare)
+                delta = extra.sum(axis=1)
+
+                out += extra
+                spare -= extra
+                remaining -= delta
+
+                rows = np.flatnonzero((remaining > 0) & (spare.sum(axis=1) > 0))
+                if rows.size == 0:
+                    continue
+
+                frac = target[rows] - np.floor(target[rows])
+                frac = np.where(spare[rows] > 0, frac, -1.0)
+                cols = np.argmax(frac, axis=1)
+                out[rows, cols] += 1
+                spare[rows, cols] -= 1
+                remaining[rows] -= 1
+
+            return out[0] if squeeze else out
+
         # Build posterior covariance matrix from the Bayesian fit.
         # These are POSTERIOR means and SDs — they already incorporate
         # the historical evidence.  No importance sampling needed.
@@ -910,7 +985,11 @@ def compute_cohort_maturity_rows(
         Y_total = np.zeros((S, T))  # numerator
         X_total = np.zeros((S, T))  # denominator
 
-        for c in cohort_list:
+        import time as _time
+        _t_loop_start = _time.monotonic()
+        _timings = {'drift': 0.0, 'cdf': 0.0, 'is': 0.0, 'upstream': 0.0, 'pop_b': 0.0, 'pop_c': 0.0, 'combine': 0.0}
+
+        for _ci, c in enumerate(cohort_list):
             N_i = c['x_frozen']
             k_i = c['y_frozen']
             a_i = c['tau_max']
@@ -921,6 +1000,8 @@ def compute_cohort_maturity_rows(
 
             a_idx = min(a_i, T - 1)
 
+            _t0 = _time.monotonic()
+            print(f"[PERF] cohort {_ci}/{len(cohort_list)} a_i={a_i} N_i={N_i} T={T} S={S}", flush=True)
             # ── Cohort-specific drifted parameters ────────────────
             # Draw per-cohort drift on transformed scales, then
             # transform back.  Each cohort gets its own (p, mu, sigma,
@@ -935,6 +1016,7 @@ def compute_cohort_maturity_rows(
             onset_i = np.expm1(np.clip(theta_i[:, 3], -1, 5))     # (S,)
             onset_i = np.maximum(onset_i, 0.0)
 
+            _timings['drift'] += _time.monotonic() - _t0; _t0 = _time.monotonic()
             # Recompute CDF with cohort-specific latency params
             t_shifted_i = tau_grid[None, :] - onset_i[:, None]    # (S, T)
             t_shifted_i = np.maximum(t_shifted_i, 1e-12)
@@ -943,6 +1025,7 @@ def compute_cohort_maturity_rows(
             cdf_i = np.where(tau_grid[None, :] > onset_i[:, None], cdf_i, 0.0)
             cdf_i = np.clip(cdf_i, 0.0, 1.0)
 
+            _timings['cdf'] += _time.monotonic() - _t0; _t0 = _time.monotonic()
             # ── Phase 3: Per-cohort IS conditioning on frontier ────
             # Condition this cohort's drifted draws on its observed
             # frontier evidence: k_i conversions from N_i people at
@@ -1032,12 +1115,27 @@ def compute_cohort_maturity_rows(
                 remaining_frontier = max(int(N_i - k_i), 0)
                 pop_b = rng.binomial(remaining_frontier, q_late)   # (S, T)
             else:
-                # Cohort mode: convolution over pre-frontier arrivals
+                # Cohort mode: convolution over pre-frontier arrivals.
+                # Allocate both pre-frontier arrivals and k_i exactly across
+                # sub-cohorts without reintroducing a per-draw Python loop.
                 pop_b = np.zeros((S, T), dtype=np.float64)
+                frontier_count = max(int(round(N_i)), 0)
+                converted_count = max(min(int(round(k_i)), frontier_count), 0)
 
                 # Arrival counts per time s for s = 0..a_i
-                # These sum to approximately N_i (the observed frontier)
+                # Re-apportion them so each draw sums exactly to N_i.
                 pre_frontier_inc = _up_increments[:, :a_idx + 1].copy()  # (S, a_i+1)
+                pre_frontier_counts = _apportion_rowwise_total(frontier_count, pre_frontier_inc)
+                early_cdf_mat = cdf_i[:, np.arange(a_idx, -1, -1)]       # (S, a_i+1)
+                early_prob_mat = p_i[:, None] * early_cdf_mat            # (S, a_i+1)
+                early_prob_mat = np.clip(early_prob_mat, 0.0, 1 - 1e-10)
+                alloc_weights = pre_frontier_counts.astype(float) * early_prob_mat
+                k_alloc = _apportion_rowwise_total(
+                    converted_count,
+                    alloc_weights,
+                    capacities=pre_frontier_counts,
+                )
+                survivors = np.maximum(pre_frontier_counts - k_alloc, 0)
 
                 # For each arrival sub-cohort at time s:
                 #   early_prob[s] = p × F_edge(a_i - s)
@@ -1051,35 +1149,13 @@ def compute_cohort_maturity_rows(
                 # Vectorise: loop over arrival time s (0..a_i), which
                 # is at most ~30 iterations.
                 for s in range(a_idx + 1):
-                    n_s_float = pre_frontier_inc[:, s]              # (S,)
-                    n_s = np.floor(n_s_float).astype(np.int64)
-                    n_s = np.maximum(n_s, 0)
-
-                    exposure_at_frontier = a_i - s
-                    if exposure_at_frontier < 0:
+                    survivors_s = survivors[:, s]                   # (S,)
+                    if not np.any(survivors_s > 0):
                         continue
+
                     # Edge CDF at the frontier exposure for this sub-cohort
-                    exp_idx = min(exposure_at_frontier, T - 1)
-                    early_cdf_s = cdf_i[:, exp_idx]                 # (S,)
-                    early_prob_s = p_i * early_cdf_s                # (S,)
-                    early_prob_s = np.clip(early_prob_s, 0.0, 1 - 1e-10)
-
-                    # Distribute k_i: expected early conversions from
-                    # this sub-cohort = n_s × early_prob_s.
-                    # Allocate k_i proportionally (multinomial-like).
-                    # For simplicity: k_s = round(k_i × (n_s × early_prob_s) / total_expected)
-                    # We compute total_expected once per draw and distribute.
-                    # This is approximate but avoids a full multinomial.
-                    if k_i > 0 and N_i > 0:
-                        k_s = np.round(
-                            k_i * (n_s * early_prob_s) /
-                            np.maximum(N_i * p_i * cdf_at_a, 1e-10)
-                        ).astype(np.int64)
-                        k_s = np.clip(k_s, 0, n_s)
-                    else:
-                        k_s = np.zeros(S, dtype=np.int64)
-
-                    survivors_s = np.maximum(n_s - k_s, 0)
+                    early_cdf_s = early_cdf_mat[:, s]               # (S,)
+                    early_prob_s = early_prob_mat[:, s]             # (S,)
 
                     # Late conversions for each tau > a_i
                     # Exposure at tau for person arriving at s: tau - s
@@ -1120,6 +1196,8 @@ def compute_cohort_maturity_rows(
             else:
                 pop_c = np.zeros((S, T), dtype=np.float64)
 
+            _t_cohort_end = _time.monotonic()
+            print(f"[PERF] cohort {_ci} done in {_t_cohort_end - _t0:.3f}s pop_b_shape={pop_b.shape} pop_c_shape={pop_c.shape}", flush=True)
             y_forecast = k_i + pop_b.astype(np.float64) + pop_c
             y_forecast = np.clip(y_forecast, k_i, x_forecast_arr)
 

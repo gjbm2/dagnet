@@ -259,6 +259,9 @@ export function buildCohortMaturityEChartsOption(
     };
   };
 
+  const chartMode = String(settings.chart_mode ?? 'rate');
+  const forecastDecal = { symbol: 'rect', dashArrayX: [1, 0], dashArrayY: [3, 3], rotation: -Math.PI / 4 } as any;
+
   const seriesOut: any[] = [];
   for (const scenarioId of Array.from(byScenario.keys()).sort()) {
     const name = scenarioMeta?.[scenarioId]?.name || scenarioId;
@@ -273,6 +276,59 @@ export function buildCohortMaturityEChartsOption(
       ?? (scenarioMeta?.[scenarioId]?.visibility_mode as any)
       ?? 'f+e';
 
+    // ── Count mode: stacked bar chart of evidence + forecast ──────────
+    if (chartMode === 'count') {
+      // Determine x-axis display limit for count bars
+      const extSetting = settings.tau_extent ?? settings.x_axis_max;
+      const countTauMax = (extSetting && extSetting !== 'auto' && extSetting !== 'Auto' && Number.isFinite(Number(extSetting)))
+        ? Number(extSetting)
+        : (maxTau ?? sFutureMax);
+
+      let lastEvidenceY = 0;
+      const evidenceData: number[][] = [];
+      const forecastData: number[][] = [];
+      for (const p of points) {
+        if (p.tauDays >= countTauMax) continue;
+        const ey = p.evidenceY ?? lastEvidenceY;
+        if (p.evidenceY != null) lastEvidenceY = p.evidenceY;
+        const fy = p.forecastY ?? ey;
+        evidenceData.push([p.tauDays, ey]);
+        forecastData.push([p.tauDays, fy]);
+      }
+      const scenarioLabel = name || scenarioId;
+      const scenarioColour = colour;
+      // Stacked bars per scenario: evidence (solid base) + forecast-only
+      // (striated top).  Different scenarios sit side by side.
+      const forecastOnlyData = evidenceData.map(([tau, ey], i) => {
+        const fy = forecastData[i]?.[1] ?? ey;
+        return [tau, Math.max(0, fy - ey)];
+      });
+      seriesOut.push({
+        id: `${scenarioId}::evidence_count`,
+        name: `${scenarioLabel} evidence`,
+        type: 'bar',
+        stack: scenarioId,
+        itemStyle: { color: scenarioColour },
+        emphasis: { focus: 'series' },
+        data: evidenceData.map(d => d[1]),
+      });
+      seriesOut.push({
+        id: `${scenarioId}::forecast_count`,
+        name: `${scenarioLabel} forecast`,
+        type: 'bar',
+        stack: scenarioId,
+        itemStyle: { color: scenarioColour, opacity: 0.4, decal: forecastDecal },
+        emphasis: { focus: 'series' },
+        data: forecastOnlyData.map(d => d[1]),
+      });
+      // Collect tau categories for count mode x-axis
+      if (!(seriesOut as any).__countCategories) {
+        (seriesOut as any).__countCategories = evidenceData.map(d => d[0]);
+      }
+      // Don't continue yet — fall through to the shading block below.
+    }
+
+    if (chartMode !== 'count') {
     const toMeta = (p: RowPoint) => ({
       tauDays: p.tauDays,
       baseRate: p.baseRate,
@@ -405,6 +461,112 @@ export function buildCohortMaturityEChartsOption(
           silent: true,
         });
       }
+    }
+    } // end if (chartMode !== 'count')
+
+    // ── Forecast shading + data fade (both rate and count modes) ──────
+    if (settings.show_forecast_shading !== false) {
+      // Use the scenario colour, or fall back to ECharts default palette.
+      const echartsDefaultPalette = ['#5470c6','#91cc75','#fac858','#ee6666','#73c0de','#3ba272','#fc8452','#9a60b4','#ea7ccc'];
+      const scenarioIndex = Array.from(byScenario.keys()).sort().indexOf(scenarioId);
+      const shadingColour = colour || echartsDefaultPalette[scenarioIndex % echartsDefaultPalette.length];
+      const fadeOpacity = (tau: number, base: number): number => {
+        if (tau <= sSolidMax) return base;
+        if (tau >= sFutureMax) return base * 0.8;
+        const t = (tau - sSolidMax) / Math.max(1, sFutureMax - sSolidMax);
+        return base * (1 - 0.2 * t);
+      };
+      for (const s of seriesOut) {
+        if (typeof s.id !== 'string' || !s.id.startsWith(`${scenarioId}::`)) continue;
+        if (s.id.includes('shading')) continue;
+        if (!Array.isArray(s.data)) continue;
+        const baseOpacity = s.itemStyle?.opacity ?? 1.0;
+        s.data = s.data.map((d: any) => {
+          const tau = Array.isArray(d) ? d[0] : d?.value?.[0];
+          if (typeof tau !== 'number' || tau <= sSolidMax) return d;
+          const val = Array.isArray(d) ? d : d?.value;
+          return { value: val, itemStyle: { ...d?.itemStyle, opacity: fadeOpacity(tau, baseOpacity) } };
+        });
+      }
+      seriesOut.push({
+        id: `${scenarioId}::forecast_shading`,
+        name: '_shading',
+        type: 'custom' as any,
+        coordinateSystem: 'cartesian2d',
+        z: 0, silent: true,
+        data: [[0]],
+        renderItem: (params: any, api: any) => {
+          if (params.dataIndex !== 0) return;
+          const gridRect = params.coordSys;
+          // On category axis, api.coord takes category index; on value axis, tau value.
+          const cats = (seriesOut as any).__countCategories as number[] | undefined;
+          const solidVal = cats ? cats.findIndex(t => t >= sSolidMax) : sSolidMax;
+          const futureVal = cats ? cats.findIndex(t => t >= sFutureMax) : sFutureMax;
+          const endVal = cats ? cats.length - 1 : 1e6;
+          const xSolid = api.coord([solidVal >= 0 ? solidVal : 0, 0])[0];
+          const xFuture = api.coord([futureVal >= 0 ? futureVal : solidVal, 0])[0];
+          const xAxisEnd = api.coord([endVal, 0])[0];
+          const xEnd = Math.min(xAxisEnd, gridRect.x + gridRect.width);
+          const y = gridRect.y;
+          const h = gridRect.height;
+          const hexToRgba = (hex: string, a: number) => {
+            const r = parseInt(hex.slice(1, 3), 16) || 0;
+            const g = parseInt(hex.slice(3, 5), 16) || 0;
+            const b = parseInt(hex.slice(5, 7), 16) || 0;
+            return `rgba(${r},${g},${b},${a})`;
+          };
+          // Diagonal hatch lines for the forecast region (standard app pattern)
+          const hatchGap = 8;
+          const hatchStroke = hexToRgba(shadingColour, 0.20);
+          const makeHatch = (rx: number, ry: number, rw: number, rh: number) => {
+            const lines: any[] = [];
+            const diag = rw + rh;
+            for (let d = 0; d < diag; d += hatchGap) {
+              lines.push({
+                type: 'line',
+                shape: { x1: rx + d, y1: ry, x2: rx + d - rh, y2: ry + rh },
+                style: { stroke: hatchStroke, lineWidth: 1 },
+                silent: true,
+              });
+            }
+            return {
+              type: 'group', children: lines,
+              clipPath: { type: 'rect', shape: { x: rx, y: ry, width: rw, height: rh } },
+            };
+          };
+          const children: any[] = [];
+          // Epoch B: gradient effect via increasing line density
+          if (xFuture > xSolid) {
+            // Split into slices with increasing opacity
+            const slices = 5;
+            const sliceW = (xFuture - xSolid) / slices;
+            for (let i = 0; i < slices; i++) {
+              const sx = xSolid + i * sliceW;
+              const alpha = 0.20 * ((i + 1) / slices);
+              const sliceLines: any[] = [];
+              const diag = sliceW + h;
+              for (let d = 0; d < diag; d += hatchGap) {
+                sliceLines.push({
+                  type: 'line',
+                  shape: { x1: sx + d, y1: y, x2: sx + d - h, y2: y + h },
+                  style: { stroke: hexToRgba(shadingColour, alpha), lineWidth: 1 },
+                  silent: true,
+                });
+              }
+              children.push({
+                type: 'group', children: sliceLines,
+                clipPath: { type: 'rect', shape: { x: sx, y, width: sliceW, height: h } },
+              });
+            }
+          }
+          // Epoch C: constant hatch
+          if (xEnd > Math.max(xFuture, xSolid)) {
+            const rx = Math.max(xFuture, xSolid);
+            children.push(makeHatch(rx, y, xEnd - rx, h));
+          }
+          return { type: 'group', children };
+        },
+      });
     }
   }
 
@@ -663,6 +825,7 @@ export function buildCohortMaturityEChartsOption(
         }
       }
     }
+
   }
 
   // Y-axis max from data with headroom.
@@ -764,16 +927,17 @@ export function buildCohortMaturityEChartsOption(
     },
     grid: { left: 52, right: 16, bottom: 60, top: seriesOut.length > 2 ? 58 : 42, containLabel: false },
     xAxis: {
-      type: 'value',
+      type: chartMode === 'count' ? 'category' as const : 'value' as const,
+      ...(chartMode === 'count' ? { data: (seriesOut as any).__countCategories || [] } : {}),
       name: settings.x_axis_title ?? 'Age (days since cohort date)',
       nameLocation: 'middle',
       nameGap: 30,
       nameTextStyle: { fontSize: 8, color: c.text },
-      min: settings.x_axis_min ?? 0,
+      ...(chartMode !== 'count' ? { min: settings.x_axis_min ?? 0 } : {}),
       ...(() => {
+        if (chartMode === 'count') return {};
         const ext = settings.tau_extent ?? settings.x_axis_max;
         if (ext && ext !== 'auto' && ext !== 'Auto' && Number.isFinite(Number(ext))) return { max: Number(ext) };
-        // Auto: let ECharts determine from the data (no max constraint)
         return {};
       })(),
       axisLabel: { fontSize: 9, color: c.text, formatter: (v: number) => `${Math.round(v)}` },
@@ -790,17 +954,21 @@ export function buildCohortMaturityEChartsOption(
     yAxis: {
       type: (settings.y_axis_scale === 'log') ? 'log' : 'value',
       min: settings.y_axis_min ?? 0,
-      max: yMax,
-      name: settings.y_axis_title ?? 'Conversion rate',
+      max: chartMode === 'count' ? undefined : yMax,
+      name: settings.y_axis_title ?? (chartMode === 'count' ? 'Conversions (k)' : 'Conversion rate'),
       nameLocation: 'middle',
-      nameGap: 45,
+      nameGap: chartMode === 'count' ? 55 : 45,
       nameTextStyle: { fontSize: 8, color: c.text },
-      axisLabel: { fontSize: 9, color: c.text, formatter: (v: number) => `${(v * 100).toFixed(0)}%` },
+      axisLabel: { fontSize: 9, color: c.text, formatter: chartMode === 'count'
+        ? (v: number) => v >= 1000 ? `${(v / 1000).toFixed(1)}k` : `${Math.round(v)}`
+        : (v: number) => `${(v * 100).toFixed(0)}%` },
       splitLine: { lineStyle: { color: c.gridLine } },
       axisPointer: {
         snap: true,
         label: {
-          formatter: (p: any) => `${(Number(p.value) * 100).toFixed(1)}%`,
+          formatter: chartMode === 'count'
+            ? (p: any) => `${Math.round(Number(p.value))}`
+            : (p: any) => `${(Number(p.value) * 100).toFixed(1)}%`,
           fontSize: 9, color: c.tooltipText,
           backgroundColor: c.tooltipBg, borderColor: c.tooltipBorder, borderWidth: 1,
           padding: [2, 6],
@@ -813,7 +981,7 @@ export function buildCohortMaturityEChartsOption(
         : legendPos === 'right' ? { top: 'middle', right: 4, orient: 'vertical' as const }
         : { top: 14, left: 12 }),
       textStyle: { fontSize: 8, color: c.text }, itemGap: 6, itemWidth: 36, itemHeight: 8,
-      data: seriesOut.filter(s => s.name).map(s => {
+      data: seriesOut.filter(s => s.name && !s.name.startsWith('_')).map(s => {
         const isModel = typeof s.id === 'string' && (s.id.startsWith('model_cdf') || s.id === 'bayes_band' || s.id.startsWith('band_'));
         const isBand = typeof s.id === 'string' && (s.id === 'bayes_band' || s.id.startsWith('band_'));
         if (isBand) {
