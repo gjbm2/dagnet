@@ -986,6 +986,8 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
         }}
         onRowContextMenu={handleContextMenu}
         isSelected={(id) => selectedScenarioId === id}
+        activePalette={(scenariosContext?.graph as any)?.scenario_colour_palette || 'standard'}
+        onRecolourAll={scenariosContext?.recolourAllScenarios}
         currentSlot={whatIfPanelExpanded ? (
           <div
             className="current-whatif-button tab"

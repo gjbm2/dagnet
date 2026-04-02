@@ -1803,6 +1803,7 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                                     _unified_anchor_to = max(s['anchor_to'] for s in _epoch_sibs)
                                 _unified_sweep_to = max(s.get('sweep_to', s['anchor_to']) for s in _epoch_sibs)
 
+                                print(f"[pre_compute] frames={len(result.get('frames',[]))} anchor={_unified_anchor_from}..{_unified_anchor_to} sweep={_unified_sweep_to}", flush=True)
                                 maturity_rows = compute_cohort_maturity_rows(
                                     frames=result['frames'],
                                     graph=graph,

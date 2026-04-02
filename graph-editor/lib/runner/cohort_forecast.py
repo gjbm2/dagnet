@@ -532,9 +532,6 @@ def compute_cohort_maturity_rows(
                 'tau_max': tau_max,
             }
 
-    if not cohort_info:
-        return []
-
     cohort_list = list(cohort_info.values())
 
     # ── Bucket aggregation from all frames ─────────────────────────────
@@ -635,7 +632,9 @@ def compute_cohort_maturity_rows(
         tau_solid_max = min(c['tau_observed'] for c in cohort_list)
         tau_future_max = max(c['tau_observed'] for c in cohort_list)
     print(f"[zone_boundaries] tau_solid_max={tau_solid_max} tau_future_max={tau_future_max} "
-          f"tau_chart_extent={tau_chart_extent} cohorts={len(cohort_list)}")
+          f"tau_chart_extent={tau_chart_extent} cohorts={len(cohort_list)} "
+          f"axis_tau_max={axis_tau_max} max_tau_will_be={max(tau_chart_extent, axis_tau_max or 0)} "
+          f"has_bayes={has_bayes} edge_mu_sd={edge_mu_sd}")
 
     # ── Determine max τ for row emission ───────────────────────────────
     # Use the axis extent from the caller (computed from t95/sweep_span
@@ -995,8 +994,8 @@ def compute_cohort_maturity_rows(
             a_i = c['tau_max']
             x_frontier = c['x_frontier']
 
-            if N_i <= 0 and x_frontier <= 0:
-                continue  # No arrivals and no model arrivals → skip.
+            if N_i <= 0 and x_frontier <= 0 and upstream_cdf_mc is None:
+                continue  # Window mode with no arrivals — genuinely empty
 
             a_idx = min(a_i, T - 1)
 
@@ -1247,8 +1246,18 @@ def compute_cohort_maturity_rows(
             X_total += X_cohort
 
         # Aggregate rate: (S, T)
-        X_total_safe = np.maximum(X_total, 1e-10)
-        rate_agg = Y_total / X_total_safe
+        # The MC always produces a rate from the posterior draws.
+        # With cohorts: rate = Y_total / X_total (evidence-conditioned).
+        # Without cohorts: rate = p × CDF(τ) (unconditioned model).
+        # This is not a special case — it's the natural limit as
+        # evidence → 0.  The per-cohort loop contributes nothing when
+        # cohort_list is empty, so Y_total and X_total are both zero.
+        if np.any(X_total > 0):
+            X_total_safe = np.maximum(X_total, 1e-10)
+            rate_agg = Y_total / X_total_safe
+        else:
+            # No cohort data at all: unconditioned model draws
+            rate_agg = p_s[:, None] * cdf_arr  # (S, T)
 
         # Extract quantiles for all band levels (for Blend mode)
         # plus the user-selected single band level.

@@ -1367,6 +1367,10 @@ export interface ConversionGraph {
    */
   model_source_preference?: GraphModelSourcePreference;
 
+  /** Active scenario colour palette. 'standard' uses discrete colours with
+   *  per-scenario overrides; gradient palettes auto-assign based on order. */
+  scenario_colour_palette?: string;
+
   /** Metadata from the most recent Bayesian fitting run (written by fitting engine) */
   _bayes?: BayesRunMetadata;
 }

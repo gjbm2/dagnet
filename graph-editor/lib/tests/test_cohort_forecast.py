@@ -303,8 +303,15 @@ class TestComputeCohortMaturityRows:
     def test_returns_empty_for_missing_edge(self):
         assert _call_rows(target_edge_id='nonexistent') == []
 
-    def test_returns_empty_for_no_frames(self):
-        assert _call_rows(frames=[]) == []
+    def test_no_frames_produces_model_curve(self):
+        """With no frames, the MC should still produce rows from the
+        model posterior (unconditioned draws).  This is the degeneration
+        limit — no evidence, pure model prediction."""
+        rows = _call_rows(frames=[], axis_tau_max=20)
+        assert len(rows) > 0, "Should produce model-only rows"
+        # Should have midpoint and fan data
+        mid_rows = [r for r in rows if r.get('midpoint') is not None]
+        assert len(mid_rows) > 5, "Should have midpoint for most taus"
 
     def test_rows_sorted_by_tau(self):
         rows = _call_rows()
@@ -502,3 +509,129 @@ class TestWindowZeroMaturityDegeneration:
             checked += 1
 
         assert checked >= 5, f"Only checked {checked} tau points — need at least 5"
+
+    def test_empty_frames_degenerates_to_model_curve(self):
+        """With no data at all (empty frames), the MC should still run
+        and produce rows matching the model confidence band.  This is
+        the true degeneration limit: no evidence whatsoever."""
+        from runner.confidence_bands import compute_confidence_band
+
+        fix = self._load_fixture()
+        ep = fix['edge_params']
+
+        # Empty frames — no snapshot data exists
+        rows = compute_cohort_maturity_rows(
+            frames=[],
+            graph=fix['graph'],
+            target_edge_id=fix['target_edge_id'],
+            edge_params=ep,
+            anchor_from=fix['anchor_from'],
+            anchor_to=fix['anchor_from'],
+            sweep_to=fix['anchor_from'],
+            is_window=True,
+            axis_tau_max=30,
+        )
+        assert len(rows) > 0, "No rows returned for empty-frames case"
+        fan_by_tau = {r['tau_days']: r for r in rows}
+
+        tau_points = sorted(fan_by_tau.keys())
+        band_upper, band_lower, band_median = compute_confidence_band(
+            ages=[float(t) for t in tau_points],
+            p=ep['forecast_mean'],
+            mu=ep['mu'],
+            sigma=ep['sigma'],
+            onset=ep['onset_delta_days'],
+            p_sd=ep.get('p_stdev', 0.0),
+            mu_sd=ep.get('bayes_mu_sd', 0.0),
+            sigma_sd=ep.get('bayes_sigma_sd', 0.0),
+            onset_sd=ep.get('bayes_onset_sd', 0.0),
+            onset_mu_corr=ep.get('bayes_onset_mu_corr', 0.0),
+            level=0.90,
+        )
+        band = {tau_points[i]: (band_upper[i], band_lower[i], band_median[i])
+                for i in range(len(tau_points))}
+
+        onset = ep['onset_delta_days']
+        TOL = 0.05
+        checked = 0
+        for tau in tau_points:
+            if tau <= onset + 2:
+                continue
+            row = fan_by_tau[tau]
+            if row['fan_upper'] is None or row['fan_lower'] is None:
+                continue
+            cb_upper, cb_lower, cb_median = band[tau]
+            if cb_upper < 0.01:
+                continue
+
+            fan_mid = row['midpoint']
+            assert fan_mid is not None, f"tau={tau}: midpoint is None"
+            assert abs(fan_mid - cb_median) < TOL, (
+                f"tau={tau}: fan midpoint={fan_mid:.4f} vs "
+                f"band median={cb_median:.4f}"
+            )
+            assert row['fan_upper'] >= cb_upper - TOL, (
+                f"tau={tau}: fan upper={row['fan_upper']:.4f} should be "
+                f">= band upper={cb_upper:.4f}"
+            )
+            assert row['fan_lower'] <= cb_lower + TOL, (
+                f"tau={tau}: fan lower={row['fan_lower']:.4f} should be "
+                f"<= band lower={cb_lower:.4f}"
+            )
+            checked += 1
+
+        assert checked >= 5, f"Only checked {checked} tau points"
+
+    def test_empty_frames_cohort_mode_degenerates_to_model(self):
+        """Cohort mode with no data should produce a model-only chart.
+        rate = y_model / x_model from the unconditioned posterior.
+        The midpoint should be positive and increasing beyond onset,
+        and the fan should have non-trivial width (parameter uncertainty
+        + upstream CDF uncertainty)."""
+
+        fix = self._load_fixture()
+        ep = fix['edge_params']
+
+        rows = compute_cohort_maturity_rows(
+            frames=[],
+            graph=fix['graph'],
+            target_edge_id=fix['target_edge_id'],
+            edge_params=ep,
+            anchor_from=fix['anchor_from'],
+            anchor_to=fix['anchor_from'],
+            sweep_to=fix['anchor_from'],
+            is_window=False,
+            axis_tau_max=30,
+        )
+        assert len(rows) > 0, "No rows returned for cohort-mode empty-frames"
+        fan_by_tau = {r['tau_days']: r for r in rows}
+
+        onset = ep['onset_delta_days']
+        checked = 0
+        prev_mid = -1.0
+        for tau in sorted(fan_by_tau.keys()):
+            if tau <= onset + 2:
+                continue
+            row = fan_by_tau[tau]
+            if row['midpoint'] is None:
+                continue
+
+            mid = row['midpoint']
+            # Midpoint should be positive beyond onset
+            assert mid > 0, f"tau={tau}: midpoint={mid} should be > 0"
+            # Midpoint should be monotonically increasing
+            assert mid >= prev_mid - 0.01, (
+                f"tau={tau}: midpoint={mid:.4f} decreased from {prev_mid:.4f}"
+            )
+            prev_mid = mid
+
+            # Fan should have non-trivial width
+            if row['fan_upper'] is not None and row['fan_lower'] is not None:
+                width = row['fan_upper'] - row['fan_lower']
+                if tau > onset + 5:
+                    assert width > 0.001, (
+                        f"tau={tau}: fan width={width:.4f} is too narrow"
+                    )
+            checked += 1
+
+        assert checked >= 5, f"Only checked {checked} tau points"

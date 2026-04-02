@@ -12,7 +12,8 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu';
-import { useScenariosContextOptional } from '../contexts/ScenariosContext';
+import { useScenariosContextOptional, SCENARIO_PALETTE_OPTIONS } from '../contexts/ScenariosContext';
+import type { ScenarioColourPalette } from '../contexts/ScenariosContext';
 import { useTabContext } from '../contexts/TabContext';
 import { useScenarioShareLink } from '../hooks/useScenarioShareLink';
 import toast from 'react-hot-toast';
@@ -172,6 +173,17 @@ export function ScenarioContextMenu({ tabId }: ScenarioContextMenuProps) {
         disabled: true,
         onClick: () => {},
       });
+    }
+
+    // Recolour all
+    if (scenariosContext.recolourAllScenarios && scenariosContext.scenarios.length > 0) {
+      items.push({ label: '', onClick: () => {}, divider: true });
+      for (const opt of SCENARIO_PALETTE_OPTIONS) {
+        items.push({
+          label: `Recolour: ${opt.label}`,
+          onClick: () => scenariosContext.recolourAllScenarios(opt.value as ScenarioColourPalette),
+        });
+      }
     }
 
     // Delete

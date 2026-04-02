@@ -24,6 +24,8 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import type { ScenarioLayerItem } from '../../types/scenarioLayerList';
+import type { ScenarioColourPalette } from '../../contexts/ScenariosContext';
+import { SCENARIO_PALETTE_OPTIONS } from '../../contexts/ScenariosContext';
 
 export interface ScenarioLayerListProps {
   items: ScenarioLayerItem[];
@@ -57,6 +59,10 @@ export interface ScenarioLayerListProps {
   getModeIcon?: (id: string, size?: number) => React.ReactNode;
   /** Mode tooltip callback */
   getModeTooltip?: (id: string) => string;
+
+  /** Palette recolouring */
+  activePalette?: ScenarioColourPalette;
+  onRecolourAll?: (palette: ScenarioColourPalette) => void;
 }
 
 export function ScenarioLayerList({
@@ -81,6 +87,8 @@ export function ScenarioLayerList({
   getSwatchOverlayStyle,
   getModeIcon,
   getModeTooltip,
+  activePalette,
+  onRecolourAll,
 }: ScenarioLayerListProps) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState('');
@@ -317,6 +325,30 @@ export function ScenarioLayerList({
 
   return (
     <div className={containerClassName}>
+      {/* Palette selector */}
+      {onRecolourAll && items.length > 1 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 8px', fontSize: 10, color: '#888' }}>
+          <span>Palette:</span>
+          {SCENARIO_PALETTE_OPTIONS.map(opt => (
+            <button
+              key={opt.value}
+              title={opt.label}
+              onClick={() => onRecolourAll(opt.value)}
+              style={{
+                border: activePalette === opt.value ? '1.5px solid #888' : '1px solid #444',
+                borderRadius: 3,
+                padding: 0,
+                cursor: 'pointer',
+                width: 28,
+                height: 12,
+                background: `linear-gradient(90deg, ${opt.stops.join(', ')})`,
+                opacity: activePalette === opt.value ? 1 : 0.6,
+              }}
+            />
+          ))}
+        </div>
+      )}
+
       {/* Current — pinned at top */}
       {currentItem && renderRow(currentItem)}
       {currentItem && afterCurrentSlot}
