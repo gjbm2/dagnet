@@ -90,9 +90,8 @@
 
 .info-card-prop {
   color: var(--text-secondary, #aaa);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: break-word;
+  word-break: break-word;
 }
 
 .info-card-val {

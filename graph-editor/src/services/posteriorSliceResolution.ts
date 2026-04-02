@@ -16,6 +16,31 @@ import { extractSliceDimensions } from './sliceIsolation';
 import { canonicaliseSliceKeyForMatching } from '../lib/sliceKeyNormalisation';
 import { parseUKDate } from '../lib/dateFormat';
 
+/**
+ * Parse a date string that may be UK format (d-MMM-yy) or ISO
+ * (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SSZ). Returns UTC midnight for the
+ * calendar day so that date-only comparisons work correctly (a fit
+ * produced at 18:49 on 31-Mar is still "on" 31-Mar).
+ */
+function parseDateToMidnightMs(dateStr: string): number {
+  // Try UK format first (d-MMM-yy)
+  try {
+    return parseUKDate(dateStr).getTime();
+  } catch { /* not UK format */ }
+
+  // ISO datetime or date: extract YYYY-MM-DD and build UTC midnight
+  const isoMatch = /^(\d{4})-(\d{2})-(\d{2})/.exec(dateStr);
+  if (isoMatch) {
+    return Date.UTC(
+      parseInt(isoMatch[1], 10),
+      parseInt(isoMatch[2], 10) - 1,
+      parseInt(isoMatch[3], 10),
+    );
+  }
+
+  throw new Error(`Unparseable date: ${dateStr}`);
+}
+
 // ── Temporal mode detection ─────────────────────────────────────────────────
 
 /**
@@ -270,14 +295,14 @@ export function resolveAsatPosterior(
 
   let asatMs: number;
   try {
-    asatMs = parseUKDate(asatDate).getTime();
+    asatMs = parseDateToMidnightMs(asatDate);
   } catch {
     return undefined;
   }
 
   // 1. Check current posterior first
   try {
-    const currentMs = parseUKDate(posterior.fitted_at).getTime();
+    const currentMs = parseDateToMidnightMs(posterior.fitted_at);
     if (currentMs <= asatMs) return posterior;
   } catch { /* parse failure on current — fall through to history */ }
 
@@ -290,7 +315,7 @@ export function resolveAsatPosterior(
 
   for (const entry of history) {
     try {
-      const entryMs = parseUKDate(entry.fitted_at).getTime();
+      const entryMs = parseDateToMidnightMs(entry.fitted_at);
       if (entryMs <= asatMs && entryMs > bestMs) {
         best = entry;
         bestMs = entryMs;

@@ -18,6 +18,9 @@ import {
   toggleCanvasViewLocked,
   toggleCanvasViewScope,
   scopeEnabled,
+  viewportToBounds,
+  boundsToViewport,
+  migrateLegacyBounds,
 } from '../canvasViewService';
 import {
   buildRehydrationPlan,
@@ -579,5 +582,155 @@ describe('finalisePlan', () => {
     const result = finalisePlan(plan, new Map());
     expect(result.visibleScenarioIds).toEqual(['current', 'existing-1', 'base']);
     expect(result.scenarioOrder).toEqual(['existing-1', 'current']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Viewport bounds — cross-device invariant
+// ---------------------------------------------------------------------------
+
+describe('viewportToBounds / boundsToViewport — cross-device round-trip', () => {
+  // The invariant: a view saved on one device must show the same node-space
+  // region on any other device. The stored format is two node-space corners
+  // (x1,y1)→(x2,y2). On restore, the max zoom that contains that rectangle
+  // is computed from the current container. The centre of the rectangle must
+  // always land at the centre of the container.
+
+  // Device profiles (container pixel sizes)
+  const devices = {
+    laptop:      { w: 1280, h: 720 },
+    desktop:     { w: 1920, h: 1080 },
+    ultrawide:   { w: 3440, h: 1440 },
+    tablet:      { w: 1024, h: 768 },
+    smallPhone:  { w: 375,  h: 667 },
+    portrait4k:  { w: 2160, h: 3840 },
+  };
+
+  // A reference node-space region (what the view "means")
+  const nodeRegion = { x1: 100, y1: 200, x2: 900, y2: 600 };
+  const regionCentreX = (nodeRegion.x1 + nodeRegion.x2) / 2; // 500
+  const regionCentreY = (nodeRegion.y1 + nodeRegion.y2) / 2; // 400
+  const regionW = nodeRegion.x2 - nodeRegion.x1; // 800
+  const regionH = nodeRegion.y2 - nodeRegion.y1; // 400
+
+  it('should store only node-space corners with no pixel or zoom values', () => {
+    // Capture on a 1920×1080 desktop at zoom 1.5
+    const tx = -150; // x offset in pixels
+    const ty = -300; // y offset in pixels
+    const zoom = 1.5;
+    const bounds = viewportToBounds([tx, ty, zoom], 1920, 1080);
+
+    expect(bounds).toBeDefined();
+    // All four values must be in node-space (divided by zoom)
+    expect(bounds!.x1).toBeCloseTo(-tx / zoom);
+    expect(bounds!.y1).toBeCloseTo(-ty / zoom);
+    expect(bounds!.x2).toBeCloseTo((-tx + 1920) / zoom);
+    expect(bounds!.y2).toBeCloseTo((-ty + 1080) / zoom);
+    // No width, height, or zoom stored
+    expect('width' in bounds!).toBe(false);
+    expect('height' in bounds!).toBe(false);
+    expect('zoom' in bounds!).toBe(false);
+  });
+
+  for (const [savedOn, savedDevice] of Object.entries(devices)) {
+    for (const [restoredOn, restoreDevice] of Object.entries(devices)) {
+      it(`should show the same node region when saved on ${savedOn} (${savedDevice.w}×${savedDevice.h}) and restored on ${restoredOn} (${restoreDevice.w}×${restoreDevice.h})`, () => {
+        // Restore the fixed node region on the target device
+        const vp = boundsToViewport(nodeRegion, restoreDevice.w, restoreDevice.h);
+
+        // The viewport centre must map back to the node region centre
+        const vpCentreInNodeSpace_x = (-vp.x + restoreDevice.w / 2) / vp.zoom;
+        const vpCentreInNodeSpace_y = (-vp.y + restoreDevice.h / 2) / vp.zoom;
+        expect(vpCentreInNodeSpace_x).toBeCloseTo(regionCentreX, 3);
+        expect(vpCentreInNodeSpace_y).toBeCloseTo(regionCentreY, 3);
+
+        // The visible node-space extent must fully contain the saved region
+        const visibleX1 = -vp.x / vp.zoom;
+        const visibleY1 = -vp.y / vp.zoom;
+        const visibleX2 = (-vp.x + restoreDevice.w) / vp.zoom;
+        const visibleY2 = (-vp.y + restoreDevice.h) / vp.zoom;
+
+        expect(visibleX1).toBeLessThanOrEqual(nodeRegion.x1 + 0.001);
+        expect(visibleY1).toBeLessThanOrEqual(nodeRegion.y1 + 0.001);
+        expect(visibleX2).toBeGreaterThanOrEqual(nodeRegion.x2 - 0.001);
+        expect(visibleY2).toBeGreaterThanOrEqual(nodeRegion.y2 - 0.001);
+
+        // Zoom must be the max that still fits, clamped to [0.1, 2]
+        const rawZoom = Math.min(restoreDevice.w / regionW, restoreDevice.h / regionH);
+        const expectedZoom = Math.max(0.1, Math.min(2, rawZoom));
+        expect(vp.zoom).toBeCloseTo(expectedZoom, 5);
+      });
+    }
+  }
+
+  it('should survive a full save→restore round-trip across different devices', () => {
+    // Save on laptop at some arbitrary viewport state
+    const laptopZoom = 0.8;
+    const laptopTx = -80;
+    const laptopTy = -160;
+    const bounds = viewportToBounds([laptopTx, laptopTy, laptopZoom], devices.laptop.w, devices.laptop.h)!;
+    expect(bounds).toBeDefined();
+
+    // Restore on ultrawide — should show the SAME node-space rectangle, centred
+    const vp = boundsToViewport(bounds, devices.ultrawide.w, devices.ultrawide.h);
+
+    // Reverse-engineer what node region the ultrawide viewport shows
+    const uwX1 = -vp.x / vp.zoom;
+    const uwY1 = -vp.y / vp.zoom;
+    const uwX2 = (-vp.x + devices.ultrawide.w) / vp.zoom;
+    const uwY2 = (-vp.y + devices.ultrawide.h) / vp.zoom;
+
+    // The saved region must be fully visible
+    expect(uwX1).toBeLessThanOrEqual(bounds.x1 + 0.001);
+    expect(uwY1).toBeLessThanOrEqual(bounds.y1 + 0.001);
+    expect(uwX2).toBeGreaterThanOrEqual(bounds.x2 - 0.001);
+    expect(uwY2).toBeGreaterThanOrEqual(bounds.y2 - 0.001);
+
+    // Centre must match
+    const savedCX = (bounds.x1 + bounds.x2) / 2;
+    const savedCY = (bounds.y1 + bounds.y2) / 2;
+    const uwCX = (-vp.x + devices.ultrawide.w / 2) / vp.zoom;
+    const uwCY = (-vp.y + devices.ultrawide.h / 2) / vp.zoom;
+    expect(uwCX).toBeCloseTo(savedCX, 3);
+    expect(uwCY).toBeCloseTo(savedCY, 3);
+  });
+
+  it('should migrate legacy { x, y, width, height } format and produce the same result', () => {
+    // Legacy format stored by the old code
+    const legacy = { x: 100, y: 200, width: 800, height: 400 };
+
+    // Migration should produce the two-corner format
+    const migrated = migrateLegacyBounds(legacy);
+    expect(migrated).toEqual({ x1: 100, y1: 200, x2: 900, y2: 600 });
+
+    // boundsToViewport must handle legacy format transparently
+    const fromLegacy = boundsToViewport(legacy, 1920, 1080);
+    const fromNew = boundsToViewport(migrated, 1920, 1080);
+    expect(fromLegacy.x).toBeCloseTo(fromNew.x, 5);
+    expect(fromLegacy.y).toBeCloseTo(fromNew.y, 5);
+    expect(fromLegacy.zoom).toBeCloseTo(fromNew.zoom, 5);
+  });
+
+  it('should clamp zoom to maxZoom when the region is tiny', () => {
+    const tinyRegion = { x1: 500, y1: 500, x2: 501, y2: 501 };
+    const vp = boundsToViewport(tinyRegion, 1920, 1080, 2, 0.1);
+    expect(vp.zoom).toBe(2);
+  });
+
+  it('should clamp zoom to minZoom when the region is enormous', () => {
+    const hugeRegion = { x1: 0, y1: 0, x2: 100000, y2: 100000 };
+    const vp = boundsToViewport(hugeRegion, 375, 667, 2, 0.1);
+    expect(vp.zoom).toBe(0.1);
+  });
+
+  it('should return fallback when bounds have zero area', () => {
+    const degenerate = { x1: 500, y1: 500, x2: 500, y2: 500 };
+    const vp = boundsToViewport(degenerate, 1920, 1080);
+    expect(vp).toEqual({ x: 0, y: 0, zoom: 1 });
+  });
+
+  it('should return undefined from viewportToBounds when container is not yet rendered', () => {
+    expect(viewportToBounds([0, 0, 1], 0, 0)).toBeUndefined();
+    expect(viewportToBounds([0, 0, 0], 1920, 1080)).toBeUndefined();
   });
 });

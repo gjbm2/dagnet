@@ -58,7 +58,7 @@ import { buildAddChartPayload } from './canvas/creationTools';
 import { mutateCanvasAnalysisGraph, deleteCanvasAnalysisFromGraph } from '../services/canvasAnalysisMutationService';
 import { getActiveContentTabIndex } from '../services/activeContentTabTracker';
 import { updateViewObjectState, createCanvasView, applyCanvasView, snapshotStates, deleteCanvasView, renameCanvasView, reorderCanvasViews, toggleCanvasViewLocked, toggleCanvasViewScope, snapshotScenarios, scopeEnabled, viewportToBounds, boundsToViewport } from '../services/canvasViewService';
-import { isViewportBounds } from '../types';
+import { isViewportBounds, type ViewportBounds } from '../types';
 import { parseConstraints } from '../lib/queryDSL';
 import { buildRehydrationPlan, finalisePlan } from '../services/scenarioRehydrationService';
 import { useDashboardMode } from '../hooks/useDashboardMode';
@@ -331,11 +331,11 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
     return !!(graphRef.current?.canvasViews ?? []).find(v => v.id === vid)?.locked;
   };
 
-  /** Capture the current viewport as a resolution-independent node-space bounding box. */
+  /** Capture the current viewport as two resolution-independent node-space corners. */
   const captureViewportBounds = () => {
     const { transform, width, height } = rfStore.getState();
     return viewportToBounds(transform, width, height)
-      ?? { x: transform[0], y: transform[1], zoom: transform[2] };
+      ?? { x1: 0, y1: 0, x2: 1000, y2: 1000 };
   };
   const effectiveWhatIfDSL = tabWhatIfDSL ?? whatIfDSL ?? null;
 
@@ -1642,10 +1642,13 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
         const from = rfStore.getState().transform;
         // Resolve target: bounds-based viewports adapt to current container size;
         // legacy pixel viewports are used as-is (backwards compatibility).
+        // Also handle old { x, y, width, height } format via boundsToViewport migration.
         const vp = targetView.viewport;
         const { width: cwRestore, height: chRestore } = rfStore.getState();
-        const to = isViewportBounds(vp)
-          ? boundsToViewport(vp, cwRestore, chRestore)
+        const isBounds = isViewportBounds(vp);
+        const isLegacyBounds = !isBounds && 'width' in vp && 'height' in vp;
+        const to = (isBounds || isLegacyBounds)
+          ? boundsToViewport(vp as ViewportBounds, cwRestore, chRestore)
           : vp;
         const dur = autoCycle ? 2000 : 400;
         const start = performance.now();

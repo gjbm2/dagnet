@@ -749,94 +749,139 @@ def compute_cohort_maturity_rows(
             cumw = np.cumsum(weights[idx])
             return float(values[idx][np.searchsorted(cumw, pct / 100.0)])
 
-        # Build posterior covariance matrix
+        # Build prior covariance matrix
         # Order: [p, mu, sigma, onset]
         theta_mean = np.array([edge_p, edge_mu, edge_sigma, edge_onset])
         sds = np.array([edge_p_sd, edge_mu_sd, edge_sigma_sd, edge_onset_sd])
-        cov = np.diag(sds ** 2)
+        prior_cov = np.diag(sds ** 2)
         # onset-mu off-diagonal
-        cov[3, 1] = cov[1, 3] = edge_onset_mu_corr * edge_onset_sd * edge_mu_sd
+        prior_cov[3, 1] = prior_cov[1, 3] = edge_onset_mu_corr * edge_onset_sd * edge_mu_sd
 
         rng = np.random.default_rng(42)
-        samples = rng.multivariate_normal(theta_mean, cov, size=MC_SAMPLES)
-
-        # Clip to valid ranges
-        samples[:, 0] = np.clip(samples[:, 0], 1e-6, 1 - 1e-6)  # p
-        samples[:, 2] = np.clip(samples[:, 2], 0.01, 20.0)       # sigma > 0
 
         # tau grid
         tau_grid = np.arange(0, max_tau + 1, dtype=float)  # (T,)
         T = len(tau_grid)
         S = MC_SAMPLES
 
-        # Compute per-draw latency CDF and conversion fraction.
-        # cdf_arr = pure latency CDF (timing only), used for n_eff / posterior update.
-        # q = p × CDF (conversion fraction), used for total converted by τ.
-        # The Bayes design doc (§2.3) defines n_eff = x × CDF(tau_max), NOT x × p × CDF.
-        p_s = samples[:, 0]       # (S,)
-        mu_s = samples[:, 1]      # (S,)
-        sigma_s = samples[:, 2]   # (S,)
-        onset_s = samples[:, 3]   # (S,)
+        def _compute_cdf_and_likelihood(samples_in):
+            """Compute CDF arrays and Binomial log-likelihood for a set of draws."""
+            _p = samples_in[:, 0]
+            _mu = samples_in[:, 1]
+            _sigma = samples_in[:, 2]
+            _onset = samples_in[:, 3]
 
-        t_shifted = tau_grid[None, :] - onset_s[:, None]  # (S, T)
-        t_shifted = np.maximum(t_shifted, 1e-12)
-        z = (np.log(t_shifted) - mu_s[:, None]) / sigma_s[:, None]  # (S, T)
-        cdf_arr = _ndtr(z)  # (S, T) — pure latency CDF
-        # Zero out pre-onset
-        cdf_arr = np.where(tau_grid[None, :] > onset_s[:, None], cdf_arr, 0.0)
-        cdf_arr = np.clip(cdf_arr, 0.0, 1.0)
-        q = p_s[:, None] * cdf_arr  # (S, T) — conversion fraction p × CDF
-        q = np.clip(q, 0.0, 1.0)
+            _t_shifted = tau_grid[None, :] - _onset[:, None]
+            _t_shifted = np.maximum(_t_shifted, 1e-12)
+            _z = (np.log(_t_shifted) - _mu[:, None]) / _sigma[:, None]
+            _cdf = _ndtr(_z)
+            _cdf = np.where(tau_grid[None, :] > _onset[:, None], _cdf, 0.0)
+            _cdf = np.clip(_cdf, 0.0, 1.0)
+            _q = _p[:, None] * _cdf
+            _q = np.clip(_q, 0.0, 1.0)
 
-        # ── Importance weighting: condition MC draws on evidence ─────
-        # The MVN draws represent prior parameter uncertainty.
-        # The Cohort evidence (k_i conversions out of N_i people at
-        # tau_max_i) constrains which draws are plausible.
+            _log_w = np.zeros(len(samples_in))
+            for c in cohort_list:
+                N_i = c['x_frozen']
+                k_i = c['y_frozen']
+                if N_i <= 0 and c['x_frontier'] <= 0:
+                    continue
+                a_idx = min(c['tau_max'], T - 1)
+                p_window = _p * _cdf[:, a_idx]
+                p_window = np.clip(p_window, 1e-15, 1 - 1e-15)
+                _log_w += k_i * np.log(p_window) + (N_i - k_i) * np.log(1 - p_window)
+
+            return _cdf, _q, _log_w
+
+        # ── Two-pass importance sampling ────────────────────────────
+        # Pass 1: draw from prior, compute weights, find posterior
+        # location. Pass 2: draw from a proposal centred on the
+        # posterior, compute corrected weights.
         #
-        # For each draw θ^(b), compute the Binomial likelihood of the
-        # observed data:
-        #   p_window_i^(b) = p^(b) × CDF(tau_max_i; θ^(b))
-        #   log L^(b) = Σ_i [ k_i log(p_w) + (N_i-k_i) log(1-p_w) ]
-        #
-        # Normalise to get importance weights W^(b).  Resample to get
-        # equally-weighted draws from the conditioned posterior.
-        #
-        # This naturally handles everything:
-        #   - Zero maturity → no evidence → uniform weights → confidence band
-        #   - More Cohorts / data → stronger conditioning → narrower fan
-        #   - Conditions (mu, sigma, onset) too — not just p
-        log_weights = np.zeros(S)
-        for c in cohort_list:
-            N_i = c['x_frozen']
-            k_i = c['y_frozen']
-            if N_i <= 0 and c['x_frontier'] <= 0:
-                continue
-            a_idx = min(c['tau_max'], T - 1)
-            # p_window = probability a person converts within tau_max
-            p_window = p_s * cdf_arr[:, a_idx]              # (S,)
-            p_window = np.clip(p_window, 1e-15, 1 - 1e-15)
-            # Binomial log-likelihood (dropping constant C(N,k))
-            log_weights += k_i * np.log(p_window) + (N_i - k_i) * np.log(1 - p_window)
+        # This avoids the ESS collapse that occurs when the prior is
+        # much wider than the likelihood (e.g. N=1609 observations
+        # with prior p_sd=0.10 → ESS=1 from prior draws).
 
-        # Normalise (log-sum-exp for numerical stability)
-        log_weights -= np.max(log_weights)
-        weights = np.exp(log_weights)
-        weights /= weights.sum()
+        # Pass 1: locate the posterior
+        pilot_samples = rng.multivariate_normal(theta_mean, prior_cov, size=S)
+        pilot_samples[:, 0] = np.clip(pilot_samples[:, 0], 1e-6, 1 - 1e-6)
+        pilot_samples[:, 2] = np.clip(pilot_samples[:, 2], 0.01, 20.0)
 
-        # Effective sample size diagnostic
-        ess = 1.0 / np.sum(weights ** 2)
-        print(f"[BAYES_IS] ESS={ess:.0f}/{S} "
-              f"max_weight={weights.max():.4f} "
-              f"p_conditioned=[{_weighted_pct(p_s, weights, 10):.4f} "
-              f"{_weighted_pct(p_s, weights, 50):.4f} "
-              f"{_weighted_pct(p_s, weights, 90):.4f}]")
+        _, _, pilot_log_w = _compute_cdf_and_likelihood(pilot_samples)
+        pilot_log_w -= np.max(pilot_log_w)
+        pilot_w = np.exp(pilot_log_w)
+        pilot_w /= pilot_w.sum()
+        pilot_ess = 1.0 / np.sum(pilot_w ** 2)
+
+        # If pilot ESS is healthy, use the pilot draws directly (no
+        # need for a second pass — saves compute and avoids proposal
+        # mismatch issues).
+        ESS_THRESHOLD = S * 0.05  # 5% of total draws
+
+        if pilot_ess >= ESS_THRESHOLD:
+            # Pilot draws are adequate
+            samples = pilot_samples
+            weights = pilot_w
+            ess = pilot_ess
+            print(f"[BAYES_IS] pass=1(direct) ESS={ess:.0f}/{S} "
+                  f"max_weight={weights.max():.4f} "
+                  f"p_conditioned=[{_weighted_pct(samples[:, 0], weights, 10):.4f} "
+                  f"{_weighted_pct(samples[:, 0], weights, 50):.4f} "
+                  f"{_weighted_pct(samples[:, 0], weights, 90):.4f}]")
+        else:
+            # Pass 2: build proposal from weighted pilot, redraw
+            proposal_mean = np.average(pilot_samples, weights=pilot_w, axis=0)
+            diff = pilot_samples - proposal_mean
+            proposal_cov = np.dot((diff * pilot_w[:, None]).T, diff)
+            # Regularise: blend with prior to avoid singular proposal
+            proposal_cov = 0.9 * proposal_cov + 0.1 * prior_cov
+            # Ensure symmetry
+            proposal_cov = 0.5 * (proposal_cov + proposal_cov.T)
+
+            samples = rng.multivariate_normal(proposal_mean, proposal_cov, size=S)
+            samples[:, 0] = np.clip(samples[:, 0], 1e-6, 1 - 1e-6)
+            samples[:, 2] = np.clip(samples[:, 2], 0.01, 20.0)
+
+            _, _, log_lik = _compute_cdf_and_likelihood(samples)
+
+            # Importance weight correction: w = prior(θ) × L(θ) / proposal(θ)
+            # In log space: log_w = log_prior - log_proposal + log_lik
+            from scipy.stats import multivariate_normal as mvn_dist
+            log_prior = mvn_dist.logpdf(samples, mean=theta_mean, cov=prior_cov)
+            log_proposal = mvn_dist.logpdf(samples, mean=proposal_mean, cov=proposal_cov)
+            log_weights = log_lik + log_prior - log_proposal
+
+            log_weights -= np.max(log_weights)
+            weights = np.exp(log_weights)
+            weights /= weights.sum()
+            ess = 1.0 / np.sum(weights ** 2)
+
+            print(f"[BAYES_IS] pass=2(proposal) pilot_ESS={pilot_ess:.0f} ESS={ess:.0f}/{S} "
+                  f"max_weight={weights.max():.4f} "
+                  f"proposal_mean=[p={proposal_mean[0]:.4f} mu={proposal_mean[1]:.4f} "
+                  f"sigma={proposal_mean[2]:.4f} onset={proposal_mean[3]:.2f}] "
+                  f"p_conditioned=[{_weighted_pct(samples[:, 0], weights, 10):.4f} "
+                  f"{_weighted_pct(samples[:, 0], weights, 50):.4f} "
+                  f"{_weighted_pct(samples[:, 0], weights, 90):.4f}]")
 
         # Resample to get equally-weighted conditioned draws
         resample_idx = rng.choice(S, size=S, replace=True, p=weights)
-        cdf_arr = cdf_arr[resample_idx]         # (S, T) — conditioned
-        p_s = p_s[resample_idx]                  # (S,) — conditioned
-        q = q[resample_idx]                      # (S, T) — conditioned
-        samples = samples[resample_idx]          # (S, 4) — conditioned
+        samples = samples[resample_idx]
+
+        # Recompute CDF/q from the final conditioned samples
+        p_s = samples[:, 0]
+        mu_s = samples[:, 1]
+        sigma_s = samples[:, 2]
+        onset_s = samples[:, 3]
+
+        t_shifted = tau_grid[None, :] - onset_s[:, None]
+        t_shifted = np.maximum(t_shifted, 1e-12)
+        z = (np.log(t_shifted) - mu_s[:, None]) / sigma_s[:, None]
+        cdf_arr = _ndtr(z)
+        cdf_arr = np.where(tau_grid[None, :] > onset_s[:, None], cdf_arr, 0.0)
+        cdf_arr = np.clip(cdf_arr, 0.0, 1.0)
+        q = p_s[:, None] * cdf_arr
+        q = np.clip(q, 0.0, 1.0)
 
         # Per-Cohort conditional forecast, aggregated
         total_N = sum(c['x_frozen'] for c in cohort_list)
@@ -860,12 +905,32 @@ def compute_cohort_maturity_rows(
                 x_tau_arr[None, :], (S, T)
             ).copy()
 
-            # y forecast: k + x_frontier × remaining_cdf × p (conditioned)
+            # y forecast: posterior predictive via Binomial sampling.
+            # For each MC draw, the conversion probability at tau is
+            # remaining_cdf × p.  We draw the actual conversion count
+            # from Binomial(x, remaining_cdf × p) to capture both
+            # parameter uncertainty (from the MC draws) and sampling
+            # noise (from the Binomial realisation).
+            #
+            # Uses x_forecast_arr (same base as denominator) so that
+            # rate = y/x degenerates to p × CDF at zero maturity.
             cdf_at_a = cdf_arr[:, a_idx]                       # (S,)
             c_i_b = cdf_at_a[:, None]                           # (S, 1)
             remaining_cdf = np.maximum(cdf_arr - c_i_b, 0.0)   # (S, T)
             n_eff_b = N_i * c_i_b                               # (S, 1)
-            y_forecast = k_i + x_frontier * remaining_cdf * p_s[:, None]  # (S, T)
+
+            # Conversion probability for the immature portion
+            conv_prob = remaining_cdf * p_s[:, None]             # (S, T)
+            conv_prob = np.clip(conv_prob, 0.0, 1.0)
+
+            # x counts must be integer for Binomial draws.
+            # Use floor to avoid inflating counts.
+            x_int = np.floor(x_forecast_arr).astype(np.int64)   # (S, T)
+            x_int = np.maximum(x_int, 0)
+
+            # Binomial draw: new conversions beyond k_i
+            new_conversions = rng.binomial(x_int, conv_prob)     # (S, T)
+            y_forecast = k_i + new_conversions.astype(np.float64)
             y_forecast = np.clip(y_forecast, k_i, x_forecast_arr)
 
             # Mature ages: use pre-computed observed (x, y) arrays.
@@ -885,7 +950,7 @@ def compute_cohort_maturity_rows(
             if a_i <= 5:
                 _diag_taus = [t for t in [0, 1, 2, 3, 5, 10, 15, 20, 30] if t < T]
                 _mode_str = 'window' if is_window else 'cohort'
-                _x_front = float(N_i) if is_window else x_at_frontier
+                _x_front = float(N_i) if is_window else float(x_frontier)
                 for _dt in _diag_taus:
                     if _dt <= a_i:
                         continue  # mature at this tau, skip
@@ -1008,7 +1073,7 @@ def compute_cohort_maturity_rows(
 
                 n_eff = x_frozen * c_i
                 posterior_rate = (alpha_0 + y_frozen) / (alpha_0 + beta_0 + n_eff)
-                y_forecast = y_frozen + x_frontier * max(0.0, cdf_at_tau - c_i) * posterior_rate
+                y_forecast = y_frozen + x_forecast * max(0.0, cdf_at_tau - c_i) * posterior_rate
                 y_forecast = min(x_forecast, y_forecast)
 
                 if tau == 10 or tau == 20 or tau == 30:

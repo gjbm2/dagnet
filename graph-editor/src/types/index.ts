@@ -1287,12 +1287,12 @@ export interface CanvasViewScenario {
 /** Legacy pixel-space viewport (fragile across resolutions). */
 export interface ViewportPixel { x: number; y: number; zoom: number }
 
-/** Resolution-independent viewport: node-space bounding box of the visible region. */
-export interface ViewportBounds { x: number; y: number; width: number; height: number }
+/** Resolution-independent viewport: two node-space corners defining the visible region. */
+export interface ViewportBounds { x1: number; y1: number; x2: number; y2: number }
 
-/** Type guard: is this a bounds-based viewport (has width/height)? */
+/** Type guard: is this a bounds-based viewport (has x1/y1/x2/y2)? */
 export function isViewportBounds(v: ViewportPixel | ViewportBounds): v is ViewportBounds {
-  return 'width' in v && 'height' in v;
+  return 'x1' in v && 'y1' in v && 'x2' in v && 'y2' in v;
 }
 
 /** A named snapshot of which canvas objects are minimised/maximised. */

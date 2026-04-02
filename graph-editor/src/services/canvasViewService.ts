@@ -25,7 +25,7 @@ export function scopeEnabled(value: boolean | undefined): boolean {
 // ---------------------------------------------------------------------------
 
 /**
- * Convert a ReactFlow transform + container size into a node-space bounding box.
+ * Convert a ReactFlow transform + container size into two node-space corners.
  * Returns undefined if container dimensions are invalid (not yet rendered).
  */
 export function viewportToBounds(
@@ -36,37 +36,55 @@ export function viewportToBounds(
   const [tx, ty, zoom] = transform;
   if (!containerWidth || !containerHeight || !zoom) return undefined;
   return {
-    x: -tx / zoom,
-    y: -ty / zoom,
-    width: containerWidth / zoom,
-    height: containerHeight / zoom,
+    x1: -tx / zoom,
+    y1: -ty / zoom,
+    x2: (-tx + containerWidth) / zoom,
+    y2: (-ty + containerHeight) / zoom,
   };
 }
 
 /**
- * Convert a node-space bounding box into a ReactFlow viewport for the current container.
- * Centres the bounds if aspect ratios differ. Clamps zoom to [minZoom, maxZoom].
+ * Migrate a legacy { x, y, width, height } bounds to the two-corner format.
+ */
+export function migrateLegacyBounds(v: Record<string, number>): ViewportBounds {
+  return { x1: v.x, y1: v.y, x2: v.x + v.width, y2: v.y + v.height };
+}
+
+/** Type guard for legacy { x, y, width, height } bounds format. */
+function isLegacyBounds(v: unknown): v is { x: number; y: number; width: number; height: number } {
+  return typeof v === 'object' && v !== null && 'width' in v && 'height' in v && !('x1' in v);
+}
+
+/**
+ * Convert two node-space corners into a ReactFlow viewport for the current container.
+ * Finds the maximum zoom that contains all points, centred in the container.
+ * Clamps zoom to [minZoom, maxZoom].
  */
 export function boundsToViewport(
-  bounds: ViewportBounds,
+  bounds: ViewportBounds | Record<string, number>,
   containerWidth: number,
   containerHeight: number,
   maxZoom = 2,
   minZoom = 0.1,
 ): ViewportPixel {
-  if (!bounds.width || !bounds.height || !containerWidth || !containerHeight) {
+  // Migrate legacy format if needed
+  const b: ViewportBounds = isLegacyBounds(bounds) ? migrateLegacyBounds(bounds) : bounds as ViewportBounds;
+
+  const bw = Math.abs(b.x2 - b.x1);
+  const bh = Math.abs(b.y2 - b.y1);
+  if (!bw || !bh || !containerWidth || !containerHeight) {
     return { x: 0, y: 0, zoom: 1 };
   }
-  const zoomX = containerWidth / bounds.width;
-  const zoomY = containerHeight / bounds.height;
+  const zoomX = containerWidth / bw;
+  const zoomY = containerHeight / bh;
   let zoom = Math.min(zoomX, zoomY);
   zoom = Math.max(minZoom, Math.min(maxZoom, zoom));
 
   // Centre the bounds in the container
-  const scaledWidth = bounds.width * zoom;
-  const scaledHeight = bounds.height * zoom;
-  const x = -bounds.x * zoom + (containerWidth - scaledWidth) / 2;
-  const y = -bounds.y * zoom + (containerHeight - scaledHeight) / 2;
+  const midX = (b.x1 + b.x2) / 2;
+  const midY = (b.y1 + b.y2) / 2;
+  const x = containerWidth / 2 - midX * zoom;
+  const y = containerHeight / 2 - midY * zoom;
 
   return { x, y, zoom };
 }
