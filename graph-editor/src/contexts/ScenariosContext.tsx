@@ -154,7 +154,7 @@ export interface ScenariosContextValue {
   listScenarios: () => Scenario[];
   renameScenario: (id: string, name: string) => Promise<void>;
   updateScenarioColour: (id: string, colour: string) => Promise<void>;
-  recolourAllScenarios: (palette: ScenarioColourPalette) => void;
+  recolourAllScenarios: (palette: ScenarioColourPalette, visibleIds?: string[]) => void;
   deleteScenario: (id: string) => Promise<void>;
   
   // Live scenario operations
@@ -1568,31 +1568,53 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
    * Permanently reassigns colours based on scenario order.
    * Also persists the palette choice on the graph.
    */
-  const recolourAllScenarios = useCallback((palette: ScenarioColourPalette) => {
+  const recolourAllScenarios = useCallback((palette: ScenarioColourPalette, visibleIds?: string[]) => {
+    // Recolour only visible layers. visibleIds includes 'current', 'base',
+    // and user scenario IDs.  Gradient flows bottom-to-top: Base → scenarios → Current.
+    const visibleSet = visibleIds ? new Set(visibleIds) : null;
+    const includeBase = !visibleSet || visibleSet.has('base');
+    const includeCurrent = !visibleSet || visibleSet.has('current');
+
     setScenarios(prev => {
+      const visibleScenarios = visibleSet
+        ? prev.filter(s => visibleSet.has(s.id))
+        : prev;
+      const visibleCount = visibleScenarios.length
+        + (includeBase ? 1 : 0)
+        + (includeCurrent ? 1 : 0);
+
       if (palette === 'standard') {
-        // Reassign from the standard discrete palette
-        return prev.map((s, i) => ({
+        if (includeCurrent) setCurrentColour('#3B82F6');
+        if (includeBase) setBaseColour('#A3A3A3');
+        let paletteIdx = 0;
+        return prev.map(s => {
+          if (visibleSet && !visibleSet.has(s.id)) return s;
+          return {
+            ...s,
+            colour: SCENARIO_PALETTE[paletteIdx++ % SCENARIO_PALETTE.length],
+            updatedAt: new Date().toISOString(),
+            version: s.version + 1,
+          };
+        });
+      }
+
+      const colours = generatePaletteColours(palette, visibleCount);
+      // Distribute: Base gets first, visible scenarios get middle, Current gets last.
+      let colourIdx = 0;
+      if (includeBase) setBaseColour(colours[colourIdx++] || '#A3A3A3');
+      const updated = prev.map(s => {
+        if (visibleSet && !visibleSet.has(s.id)) return s;
+        return {
           ...s,
-          colour: SCENARIO_PALETTE[i % SCENARIO_PALETTE.length],
+          colour: colours[colourIdx++] || s.colour,
           updatedAt: new Date().toISOString(),
           version: s.version + 1,
-        }));
-      }
-      const colours = generatePaletteColours(palette, prev.length);
-      return prev.map((s, i) => ({
-        ...s,
-        colour: colours[i] || s.colour,
-        updatedAt: new Date().toISOString(),
-        version: s.version + 1,
-      }));
+        };
+      });
+      if (includeCurrent) setCurrentColour(colours[colourIdx] || '#3B82F6');
+      return updated;
     });
-    // Persist palette choice on the graph
-    const gs = graphStore.getState();
-    if (gs.graph) {
-      gs.setGraph({ ...gs.graph, scenario_colour_palette: palette } as any);
-    }
-  }, [graphStore]);
+  }, []);
 
   /**
    * Delete a scenario

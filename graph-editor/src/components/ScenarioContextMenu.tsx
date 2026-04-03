@@ -175,15 +175,23 @@ export function ScenarioContextMenu({ tabId }: ScenarioContextMenuProps) {
       });
     }
 
-    // Recolour all
+    // Recolour all (submenu)
     if (scenariosContext.recolourAllScenarios && scenariosContext.scenarios.length > 0) {
       items.push({ label: '', onClick: () => {}, divider: true });
-      for (const opt of SCENARIO_PALETTE_OPTIONS) {
-        items.push({
-          label: `Recolour: ${opt.label}`,
-          onClick: () => scenariosContext.recolourAllScenarios(opt.value as ScenarioColourPalette),
-        });
-      }
+      items.push({
+        label: 'Recolour all',
+        onClick: () => {},
+        submenu: SCENARIO_PALETTE_OPTIONS.map(opt => ({
+          label: opt.label,
+          icon: (
+            <span style={{
+              display: 'inline-block', width: 40, height: 14, borderRadius: 2,
+              background: `linear-gradient(90deg, ${opt.stops.join(', ')})`,
+            }} />
+          ),
+          onClick: () => scenariosContext.recolourAllScenarios(opt.value as ScenarioColourPalette, visibleScenarioIds),
+        })),
+      });
     }
 
     // Delete

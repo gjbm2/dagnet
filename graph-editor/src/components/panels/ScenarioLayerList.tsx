@@ -8,8 +8,11 @@
  * Affordances are callback-driven: absent callbacks suppress corresponding UI.
  */
 
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { ColourSelector } from '../ColourSelector';
+import { ContextMenu } from '../ContextMenu';
+import type { ContextMenuItem } from '../ContextMenu';
 import {
   Eye,
   EyeOff,
@@ -22,6 +25,7 @@ import {
   Check,
   Zap,
   RefreshCw,
+  ChevronDown,
 } from 'lucide-react';
 import type { ScenarioLayerItem } from '../../types/scenarioLayerList';
 import type { ScenarioColourPalette } from '../../contexts/ScenariosContext';
@@ -60,9 +64,56 @@ export interface ScenarioLayerListProps {
   /** Mode tooltip callback */
   getModeTooltip?: (id: string) => string;
 
-  /** Palette recolouring */
-  activePalette?: ScenarioColourPalette;
+  /** Palette recolouring (one-shot) */
   onRecolourAll?: (palette: ScenarioColourPalette) => void;
+}
+
+
+/** Text + chevron that opens the app's standard ContextMenu with palette options. */
+export function RecolourTrigger({ onRecolourAll }: { onRecolourAll: (p: ScenarioColourPalette) => void }) {
+  const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
+  const triggerRef = useRef<HTMLSpanElement>(null);
+
+  const handleClick = () => {
+    if (menuPos) { setMenuPos(null); return; }
+    const rect = triggerRef.current?.getBoundingClientRect();
+    if (rect) setMenuPos({ x: rect.right - 200, y: rect.bottom + 2 });
+  };
+
+  const menuItems: ContextMenuItem[] = SCENARIO_PALETTE_OPTIONS.map(opt => ({
+    label: opt.label,
+    icon: (
+      <span style={{
+        display: 'inline-block', width: 40, height: 14, borderRadius: 2,
+        background: `linear-gradient(90deg, ${opt.stops.join(', ')})`,
+      }} />
+    ),
+    onClick: () => { onRecolourAll(opt.value); setMenuPos(null); },
+  }));
+
+  return (
+    <>
+      <span
+        ref={triggerRef}
+        onClick={handleClick}
+        style={{
+          display: 'inline-flex', alignItems: 'center', gap: 3,
+          padding: '4px 8px', cursor: 'pointer', fontSize: 12,
+          color: 'var(--text-secondary, #999)', userSelect: 'none',
+        }}
+      >
+        Recolour <ChevronDown size={12} />
+      </span>
+      {menuPos && (
+        <ContextMenu
+          x={menuPos.x}
+          y={menuPos.y}
+          items={menuItems}
+          onClose={() => setMenuPos(null)}
+        />
+      )}
+    </>
+  );
 }
 
 export function ScenarioLayerList({
@@ -87,7 +138,6 @@ export function ScenarioLayerList({
   getSwatchOverlayStyle,
   getModeIcon,
   getModeTooltip,
-  activePalette,
   onRecolourAll,
 }: ScenarioLayerListProps) {
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -257,6 +307,24 @@ export function ScenarioLayerList({
                 compact={true}
                 value={item.colour}
                 onChange={(colour) => onColourChange(item.id, colour)}
+                extraContent={onRecolourAll ? (
+                  <div className="colour-selector-presets" style={{ borderTop: '1px solid var(--border-color, #333)', marginTop: 6, paddingTop: 6 }}>
+                    <div style={{ fontSize: 11, color: 'var(--text-muted, #888)', marginBottom: 4, width: '100%' }}>Recolour all</div>
+                    {SCENARIO_PALETTE_OPTIONS.map(opt => (
+                      <button
+                        key={opt.value}
+                        type="button"
+                        className="colour-selector-preset"
+                        style={{
+                          background: `linear-gradient(90deg, ${opt.stops.join(', ')})`,
+                          width: 40, height: 14, borderRadius: 3,
+                        }}
+                        onClick={() => onRecolourAll(opt.value)}
+                        title={opt.label}
+                      />
+                    ))}
+                  </div>
+                ) : undefined}
               />
             ) : (
               <div className="scenario-colour-swatch" style={{ backgroundColor: item.colour }} />
@@ -325,30 +393,7 @@ export function ScenarioLayerList({
 
   return (
     <div className={containerClassName}>
-      {/* Palette selector */}
-      {onRecolourAll && items.length > 1 && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 8px', fontSize: 10, color: '#888' }}>
-          <span>Palette:</span>
-          {SCENARIO_PALETTE_OPTIONS.map(opt => (
-            <button
-              key={opt.value}
-              title={opt.label}
-              onClick={() => onRecolourAll(opt.value)}
-              style={{
-                border: activePalette === opt.value ? '1.5px solid #888' : '1px solid #444',
-                borderRadius: 3,
-                padding: 0,
-                cursor: 'pointer',
-                width: 28,
-                height: 12,
-                background: `linear-gradient(90deg, ${opt.stops.join(', ')})`,
-                opacity: activePalette === opt.value ? 1 : 0.6,
-              }}
-            />
-          ))}
-        </div>
-      )}
-
+      {/* Recolour dropdown */}
       {/* Current — pinned at top */}
       {currentItem && renderRow(currentItem)}
       {currentItem && afterCurrentSlot}

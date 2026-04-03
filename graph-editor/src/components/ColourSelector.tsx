@@ -19,6 +19,8 @@ interface ColourSelectorProps {
   onClear?: () => void;
   /** Show clear/reset button */
   showClear?: boolean;
+  /** Extra content rendered at the bottom of the compact popup */
+  extraContent?: React.ReactNode;
 }
 
 /** Overlay connector preset colours — shared across toolbar, props panel, and context menu. */
@@ -52,7 +54,8 @@ export function ColourSelector({
   compact = false,
   presetColours = PRESET_COLOURS,
   onClear,
-  showClear = false
+  showClear = false,
+  extraContent,
 }: ColourSelectorProps) {
   const [showCustomPicker, setShowCustomPicker] = useState(false);
   const [customColour, setCustomColour] = useState(value);
@@ -168,6 +171,7 @@ export function ColourSelector({
           {isPreset && <span style={{ fontSize: '16px' }}>+</span>}
         </button>
       </div>
+      {extraContent}
       <input
         ref={colourInputRef}
         type="color"

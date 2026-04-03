@@ -21,7 +21,7 @@ import { Scenario } from '../../types/scenarios';
 import { ScenarioEditorModal } from '../modals/ScenarioEditorModal';
 import { ScenarioQueryEditModal } from '../modals/ScenarioQueryEditModal';
 import { ToBaseConfirmModal } from '../modals/ToBaseConfirmModal';
-import { ScenarioLayerList } from './ScenarioLayerList';
+import { ScenarioLayerList, RecolourTrigger } from './ScenarioLayerList';
 import type { ScenarioLayerItem } from '../../types/scenarioLayerList';
 import WhatIfAnalysisControl from '../WhatIfAnalysisControl';
 import { parseConstraints } from '@/lib/queryDSL';
@@ -926,6 +926,9 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
           <Layers size={14} strokeWidth={2} style={{ flexShrink: 0 }} />
           <h3 className="scenarios-title">Scenarios</h3>
           <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '6px' }}>
+            {scenariosContext?.recolourAllScenarios && scenarios.length > 0 && (
+              <RecolourTrigger onRecolourAll={(p) => scenariosContext.recolourAllScenarios(p, visibleScenarioIds)} />
+            )}
             <button
               className="scenarios-header-btn"
               onClick={handleCopyAllScenarioParamPacks}
@@ -986,7 +989,6 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
         }}
         onRowContextMenu={handleContextMenu}
         isSelected={(id) => selectedScenarioId === id}
-        activePalette={(scenariosContext?.graph as any)?.scenario_colour_palette || 'standard'}
         onRecolourAll={scenariosContext?.recolourAllScenarios}
         currentSlot={whatIfPanelExpanded ? (
           <div

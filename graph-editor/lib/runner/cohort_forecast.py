@@ -1252,11 +1252,17 @@ def compute_cohort_maturity_rows(
         # This is not a special case — it's the natural limit as
         # evidence → 0.  The per-cohort loop contributes nothing when
         # cohort_list is empty, so Y_total and X_total are both zero.
-        if np.any(X_total > 0):
+        # Use cohort-derived rate when there's meaningful population,
+        # otherwise fall back to unconditioned model draws.
+        # Threshold: median X across draws must exceed 1 person at
+        # at least one tau.  Below that, the Y/X ratio is dominated
+        # by integer noise from sub-person Binomial draws.
+        _x_median = np.median(X_total, axis=0)  # (T,)
+        if np.any(_x_median >= 1.0):
             X_total_safe = np.maximum(X_total, 1e-10)
             rate_agg = Y_total / X_total_safe
         else:
-            # No cohort data at all: unconditioned model draws
+            # Insufficient population: unconditioned model draws
             rate_agg = p_s[:, None] * cdf_arr  # (S, T)
 
         # Extract quantiles for all band levels (for Blend mode)
@@ -1390,7 +1396,7 @@ def compute_cohort_maturity_rows(
                     fan_bands = {str(int(bl * 100)): lo_hi for bl, lo_hi in fq['bands'].items()}
 
         # Diagnostic for epoch B debugging
-        if tau in (tau_solid_max, tau_solid_max + 1, tau_solid_max + 2, tau_future_max, tau_future_max + 1):
+        if tau in (tau_solid_max, tau_solid_max + 1, tau_solid_max + 2, tau_future_max, tau_future_max + 1, 15, 30, 50):
             _bsy = b.sum_y if b else 0
             _bsx = b.sum_x if b else 0
             _ev = f"{evidence_rate:.4f}" if evidence_rate is not None else "null"

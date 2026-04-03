@@ -582,18 +582,48 @@ class TestWindowZeroMaturityDegeneration:
 
         assert checked >= 5, f"Only checked {checked} tau points"
 
-    def test_empty_frames_cohort_mode_degenerates_to_model(self):
-        """Cohort mode with no data should produce a model-only chart.
-        rate = y_model / x_model from the unconditioned posterior.
-        The midpoint should be positive and increasing beyond onset,
-        and the fan should have non-trivial width (parameter uncertainty
-        + upstream CDF uncertainty)."""
+    def test_cohort_mode_zero_evidence_degenerates_to_model(self):
+        """Cohort mode zero-evidence degeneration (blind test).
 
-        fix = self._load_fixture()
+        Contract: with scope_from = scope_to = asat and a realistic
+        anchor population but zero observed conversions, the chart
+        must show the unconditioned model prediction.
+
+        The model rate at tau is approximately p × CDF_path(tau).
+        At zero evidence, the fan midpoint must track this closely
+        (within 10% relative error at taus well past onset).
+
+        Setup:
+        - cohort_test_1 fixture: A→B→C graph, target=B→C
+        - One cohort date, a=500 registrations, x=0 arrivals, y=0
+        - scope_from = scope_to = anchor_from (zero maturity)
+        - axis_tau_max=30
+
+        Invariants:
+        1. Rows produced
+        2. Beyond 2×onset: midpoint > 0 and non-decreasing
+        3. Midpoint within 10% of p × CDF_path(tau) for tau > 2×onset
+        4. Fan width > 5% of midpoint (real parameter uncertainty)
+        5. fan_upper > midpoint > fan_lower
+        6. At tau=30: midpoint > 0.5 × p (approaching asymptote)
+        """
+        import json, os, math
+        fixture_path = os.path.join(
+            os.path.dirname(__file__), '..', 'runner', 'test_fixtures', 'cohort_test_1.json')
+        with open(fixture_path) as f:
+            fix = json.load(f)
         ep = fix['edge_params']
 
+        zero_frames = [{
+            'snapshot_date': fix['anchor_from'],
+            'data_points': [{
+                'anchor_day': fix['anchor_from'],
+                'y': 0, 'x': 0, 'a': 500,
+            }],
+        }]
+
         rows = compute_cohort_maturity_rows(
-            frames=[],
+            frames=zero_frames,
             graph=fix['graph'],
             target_edge_id=fix['target_edge_id'],
             edge_params=ep,
@@ -602,36 +632,80 @@ class TestWindowZeroMaturityDegeneration:
             sweep_to=fix['anchor_from'],
             is_window=False,
             axis_tau_max=30,
+            anchor_node_id=fix.get('anchor_node_id'),
         )
-        assert len(rows) > 0, "No rows returned for cohort-mode empty-frames"
+
+        # Invariant 1
+        assert len(rows) > 0, "No rows returned"
         fan_by_tau = {r['tau_days']: r for r in rows}
 
-        onset = ep['onset_delta_days']
+        onset = ep.get('onset_delta_days', 0)
+        p_model = ep.get('forecast_mean', 0)
+        path_mu = ep.get('path_mu', ep['mu'])
+        path_sigma = ep.get('path_sigma', ep['sigma'])
+        path_onset = ep.get('path_onset_delta_days', onset)
+
+        def _model_rate(tau):
+            if tau <= path_onset:
+                return 0.0
+            t = tau - path_onset
+            if t <= 0:
+                return 0.0
+            from math import log, erf, sqrt
+            z = (log(t) - path_mu) / path_sigma
+            cdf = 0.5 * (1 + erf(z / sqrt(2)))
+            return p_model * cdf
+
         checked = 0
         prev_mid = -1.0
         for tau in sorted(fan_by_tau.keys()):
-            if tau <= onset + 2:
+            if tau <= path_onset * 2:
                 continue
             row = fan_by_tau[tau]
-            if row['midpoint'] is None:
+            mid = row.get('midpoint')
+            if mid is None:
+                continue
+            mr = _model_rate(tau)
+            if mr < 0.01:
                 continue
 
-            mid = row['midpoint']
-            # Midpoint should be positive beyond onset
+            # Invariant 2: positive and non-decreasing
             assert mid > 0, f"tau={tau}: midpoint={mid} should be > 0"
-            # Midpoint should be monotonically increasing
             assert mid >= prev_mid - 0.01, (
                 f"tau={tau}: midpoint={mid:.4f} decreased from {prev_mid:.4f}"
             )
             prev_mid = mid
 
-            # Fan should have non-trivial width
-            if row['fan_upper'] is not None and row['fan_lower'] is not None:
-                width = row['fan_upper'] - row['fan_lower']
-                if tau > onset + 5:
-                    assert width > 0.001, (
-                        f"tau={tau}: fan width={width:.4f} is too narrow"
-                    )
+            # Invariant 3: within 10% of model rate
+            rel_err = abs(mid - mr) / mr
+            assert rel_err < 0.10, (
+                f"tau={tau}: midpoint={mid:.4f} vs model={mr:.4f} "
+                f"(relative error {rel_err:.1%} > 10%)"
+            )
+
+            # Invariant 4 & 5: fan width and ordering
+            fu = row.get('fan_upper')
+            fl = row.get('fan_lower')
+            if fu is not None and fl is not None:
+                assert fu >= mid - 0.001, (
+                    f"tau={tau}: fan_upper={fu:.4f} < midpoint={mid:.4f}"
+                )
+                assert fl <= mid + 0.001, (
+                    f"tau={tau}: fan_lower={fl:.4f} > midpoint={mid:.4f}"
+                )
+                width = fu - fl
+                assert width > mid * 0.05, (
+                    f"tau={tau}: fan width={width:.4f} < 5% of "
+                    f"midpoint={mid:.4f}"
+                )
             checked += 1
 
         assert checked >= 5, f"Only checked {checked} tau points"
+
+        # Invariant 6: asymptote
+        last_mid = fan_by_tau[max(fan_by_tau.keys())].get('midpoint')
+        assert last_mid is not None, "Last row has no midpoint"
+        assert last_mid > p_model * 0.5, (
+            f"Last midpoint={last_mid:.4f} should be > "
+            f"0.5 × p={p_model * 0.5:.4f}"
+        )
