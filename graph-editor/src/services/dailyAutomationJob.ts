@@ -361,41 +361,53 @@ async function runDailyAutomation(ctx: JobContext): Promise<void> {
 
       sessionLogService.info('session', 'DAILY_RETRIEVE_ALL_GRAPH_START', `${sequenceInfo} Starting: ${graphName}`);
 
-      const graphFileId = `graph-${graphName}`;
-      const graphItem: RepositoryItem = {
-        id: graphName,
-        name: graphName,
-        type: 'graph',
-        path: `graphs/${graphName}.json`,
-      };
+      try {
+        const graphFileId = `graph-${graphName}`;
+        const graphItem: RepositoryItem = {
+          id: graphName,
+          name: graphName,
+          type: 'graph',
+          path: `graphs/${graphName}.json`,
+        };
 
-      // Open tab (always fresh — boot was blank, nothing to reuse).
-      if (automationCtx.tabOps) {
-        await automationCtx.tabOps.openTab(graphItem, 'interactive', false);
+        // Open tab (always fresh — boot was blank, nothing to reuse).
+        if (automationCtx.tabOps) {
+          await automationCtx.tabOps.openTab(graphItem, 'interactive', false);
+        }
+
+        if (logTabId) reassertTabFocus(logTabId, [0, 50, 200, 750]);
+
+        const loaded = await waitForGraphData(graphFileId, 60_000, 250, () => ctx.shouldAbort());
+        if (!loaded) {
+          sessionLogService.warning('session', 'DAILY_RETRIEVE_ALL_SKIPPED', `${sequenceInfo} Daily automation skipped graph: graph did not load in time`);
+          continue;
+        }
+
+        await dailyRetrieveAllAutomationService.run({
+          repository: repoFinal,
+          branch: branchFinal,
+          graphFileId,
+          getGraph: () => (automationCtx.fileRegistryGetFile(graphFileId) as any)?.data || null,
+          setGraph: (g) => automationCtx.tabOps?.updateTabData(graphFileId, g),
+          shouldAbort: () => ctx.shouldAbort(),
+        });
+        sessionLogService.info('session', 'DAILY_RETRIEVE_ALL_GRAPH_COMPLETE', `${sequenceInfo} Completed: ${graphName}`);
+      } catch (graphErr) {
+        const msg = graphErr instanceof Error ? graphErr.message : String(graphErr);
+        const stack = graphErr instanceof Error ? graphErr.stack : undefined;
+        sessionLogService.error('session', 'DAILY_RETRIEVE_ALL_GRAPH_FAILED',
+          `${sequenceInfo} Failed: ${graphName} — ${msg}`, stack);
+        console.error(`[dailyAutomationJob] Graph ${graphName} failed:`, graphErr);
+        // Continue to next graph — don't abort the entire run for one graph failure.
       }
-
-      if (logTabId) reassertTabFocus(logTabId, [0, 50, 200, 750]);
-
-      const loaded = await waitForGraphData(graphFileId, 60_000, 250, () => ctx.shouldAbort());
-      if (!loaded) {
-        sessionLogService.warning('session', 'DAILY_RETRIEVE_ALL_SKIPPED', `${sequenceInfo} Daily automation skipped graph: graph did not load in time`);
-        continue;
-      }
-
-      await dailyRetrieveAllAutomationService.run({
-        repository: repoFinal,
-        branch: branchFinal,
-        graphFileId,
-        getGraph: () => (automationCtx.fileRegistryGetFile(graphFileId) as any)?.data || null,
-        setGraph: (g) => automationCtx.tabOps?.updateTabData(graphFileId, g),
-        shouldAbort: () => ctx.shouldAbort(),
-      });
-
-      sessionLogService.info('session', 'DAILY_RETRIEVE_ALL_GRAPH_COMPLETE', `${sequenceInfo} Completed: ${graphName}`);
     }
   } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    const stack = e instanceof Error ? e.stack : undefined;
     console.error('[dailyAutomationJob] Automation failed:', e);
-    throw e; // Let the scheduler handle error state.
+    sessionLogService.error('session', 'DAILY_RETRIEVE_ALL_FATAL',
+      `Automation crashed: ${msg}`, stack);
+    // Do NOT re-throw — let the finally block persist the log with the error.
   } finally {
     document.title = originalTitle;
 
