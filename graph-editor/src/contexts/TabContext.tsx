@@ -1123,8 +1123,10 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
       if (!isShareMode() && !isRetrieveAllMode) {
         await loadTabsFromDB();
       }
-      
-      await loadFromURLData();
+
+      // In retrieveall mode, the automation job owns the full lifecycle
+      // (pull → open tabs → retrieve → commit). Do not open any tabs from URL.
+      await loadFromURLData(isRetrieveAllMode);
 
       // Signal that TabContext initialisation (including URL-driven tab opening) is complete.
       // This is used by headless/URL automations so they don't fight the tab focus churn during boot.
@@ -1264,7 +1266,14 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
   /**
    * Load graph data from URL parameters (?data=... or ?graph=...)
    */
-  const loadFromURLData = async () => {
+  const loadFromURLData = async (isRetrieveAllMode: boolean = false) => {
+    // Retrieve-all mode: automation job owns the full lifecycle.
+    // Do not open any tabs from URL params.
+    if (isRetrieveAllMode) {
+      console.log('[TabContext] retrieveall mode — skipping loadFromURLData (automation job owns lifecycle)');
+      return;
+    }
+
     try {
       const urlParams = new URLSearchParams(window.location.search);
       const modeParam = urlParams.get('mode');

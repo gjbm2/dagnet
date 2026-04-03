@@ -2,7 +2,8 @@
  * Daily Automation Job
  *
  * Registers the `daily-automation` reactive job with the scheduler.
- * This is the headless ?retrieveall automation: pull → retrieve → commit per graph.
+ * This is the headless ?retrieveall automation:
+ *   blank boot → pull (once) → enumerate/target → per-graph retrieve+commit
  *
  * The hook (useURLDailyRetrieveAllQueue) parses URL params, updates context,
  * and calls scheduler.run('daily-automation', { graphNames, isEnumerationMode }).
@@ -27,6 +28,7 @@ import type { RepositoryItem, GraphData, ViewMode } from '../types';
 export interface DailyAutomationContext {
   selectedRepo?: string;
   selectedBranch?: string;
+  navigatorReady: boolean;
   tabs: any[];
   tabOps: {
     openTab: (item: RepositoryItem, viewMode?: ViewMode, forceNew?: boolean) => Promise<any>;
@@ -36,6 +38,7 @@ export interface DailyAutomationContext {
 }
 
 const automationCtx: DailyAutomationContext = {
+  navigatorReady: false,
   tabs: [],
   tabOps: null,
   fileRegistryGetFile: () => null,
@@ -46,7 +49,7 @@ export function updateDailyAutomationContext(ctx: Partial<DailyAutomationContext
 }
 
 // ---------------------------------------------------------------------------
-// Helpers (moved from hook)
+// Helpers
 // ---------------------------------------------------------------------------
 
 function sleep(ms: number): Promise<void> {
@@ -158,6 +161,7 @@ function getCloseDelayMs(outcome: string): number {
   if ((import.meta as any).env?.MODE === 'test') return 0;
   if (typeof window !== 'undefined') {
     const params = new URLSearchParams(window.location.search);
+    if (params.has('noclose')) return Infinity; // Check noclose BEFORE e2e
     if (params.get('e2e') === '1') return 500;
   }
   if (outcome === 'success') return 10_000;
@@ -217,7 +221,7 @@ async function runDailyAutomation(ctx: JobContext): Promise<void> {
       onAction: () => jobSchedulerService.cancel('daily-automation'),
     });
 
-    // Wait for React context to provide repo/branch/tabOps.
+    // Wait for React context to provide repo/branch/tabOps AND NavigatorContext to finish init.
     const maxWaitMs = 60_000;
     const pollMs = 250;
     let loggedWaiting = false;
@@ -229,9 +233,10 @@ async function runDailyAutomation(ctx: JobContext): Promise<void> {
       }
 
       const repo = automationCtx.selectedRepo;
+      const navReady = automationCtx.navigatorReady;
       const hasTabOps = !!automationCtx.tabOps?.openTab;
 
-      if (repo && hasTabOps) break;
+      if (repo && navReady && hasTabOps) break;
 
       if (Date.now() - waitStartedAt > maxWaitMs) {
         sessionLogService.warning('session', 'DAILY_RETRIEVE_ALL_SKIPPED', 'Daily automation skipped: app did not become ready in time');
@@ -251,22 +256,34 @@ async function runDailyAutomation(ctx: JobContext): Promise<void> {
     repoForLog = repoFinal;
     branchForLog = branchFinal;
 
-    // Enumeration mode: pull first, then enumerate dailyFetch graphs from IDB.
-    if (isEnumerationMode) {
-      sessionLogService.info('session', 'DAILY_RETRIEVE_ALL_PRE_PULL', 'Pulling latest from Git before enumerating dailyFetch graphs');
+    // -----------------------------------------------------------------------
+    // Upfront pull (remote wins) — ALWAYS, both enumeration and explicit mode.
+    // -----------------------------------------------------------------------
+    sessionLogService.info('session', 'DAILY_RETRIEVE_ALL_PRE_PULL', 'Pulling latest from Git (remote wins)');
 
-      try {
-        const prePullResult = await repositoryOperationsService.pullLatestRemoteWins(repoFinal, branchFinal);
-        if ((prePullResult.conflictsResolved ?? 0) > 0) {
-          sessionLogService.warning('session', 'DAILY_RETRIEVE_ALL_PRE_PULL_CONFLICTS',
-            `Pre-enumeration pull resolved ${prePullResult.conflictsResolved} conflict(s) by accepting remote`);
-        }
-        await workspaceService.loadWorkspaceFromIDB(repoFinal, branchFinal);
-      } catch (pullErr) {
-        sessionLogService.warning('session', 'DAILY_RETRIEVE_ALL_PRE_PULL_FAILED',
-          `Pre-enumeration pull failed (proceeding with cached data): ${pullErr instanceof Error ? pullErr.message : String(pullErr)}`);
+    try {
+      const prePullResult = await repositoryOperationsService.pullLatestRemoteWins(repoFinal, branchFinal);
+      if ((prePullResult.conflictsResolved ?? 0) > 0) {
+        sessionLogService.warning('session', 'DAILY_RETRIEVE_ALL_PRE_PULL_CONFLICTS',
+          `Pre-pull resolved ${prePullResult.conflictsResolved} conflict(s) by accepting remote`);
       }
+    } catch (pullErr) {
+      sessionLogService.warning('session', 'DAILY_RETRIEVE_ALL_PRE_PULL_FAILED',
+        `Pre-pull failed (proceeding with cached data): ${pullErr instanceof Error ? pullErr.message : String(pullErr)}`);
+    }
 
+    // Load workspace from IDB after pull so enumeration/file loading works.
+    await workspaceService.loadWorkspaceFromIDB(repoFinal, branchFinal);
+
+    if (ctx.shouldAbort()) {
+      sessionLogService.warning('session', 'DAILY_RETRIEVE_ALL_ABORTED', 'Daily automation aborted by user (after pull)');
+      return;
+    }
+
+    // -----------------------------------------------------------------------
+    // Determine target graphs.
+    // -----------------------------------------------------------------------
+    if (isEnumerationMode) {
       targetGraphNames = await enumerateDailyFetchGraphsFromIDB({ repository: repoFinal, branch: branchFinal });
 
       if (targetGraphNames.length === 0) {
@@ -297,7 +314,6 @@ async function runDailyAutomation(ctx: JobContext): Promise<void> {
         onAction: () => jobSchedulerService.cancel('daily-automation'),
       });
 
-      // Simple countdown with banner updates.
       const countdownDeadline = Date.now() + startDelayMs;
       while (Date.now() < countdownDeadline) {
         if (ctx.shouldAbort()) {
@@ -354,9 +370,8 @@ async function runDailyAutomation(ctx: JobContext): Promise<void> {
         path: `graphs/${graphName}.json`,
       };
 
-      // Ensure graph tab is open.
-      const existingTab = automationCtx.tabs.find((t: any) => t.fileId === graphFileId);
-      if (!existingTab && automationCtx.tabOps) {
+      // Open tab (always fresh — boot was blank, nothing to reuse).
+      if (automationCtx.tabOps) {
         await automationCtx.tabOps.openTab(graphItem, 'interactive', false);
       }
 
@@ -432,14 +447,21 @@ async function runDailyAutomation(ctx: JobContext): Promise<void> {
       });
 
       const closeDelayMs = getCloseDelayMs(outcome);
-      const closeDelayLabel = outcome === 'success' ? '10 seconds' : `${Math.round(closeDelayMs / 60_000)} minutes`;
 
-      sessionLogService.info('session', 'AUTOMATION_WINDOW_CLOSE',
-        `Automation finished (${outcome}) — closing browser window in ${closeDelayLabel}`,
-        'Logs have been persisted to IndexedDB. Run dagnetAutomationLogs() in the console to review past runs.');
+      if (closeDelayMs === Infinity) {
+        sessionLogService.info('session', 'AUTOMATION_WINDOW_KEPT_OPEN',
+          '?noclose: window will remain open for inspection',
+          'Logs have been persisted to IndexedDB. Run dagnetAutomationLogs() in the console to review past runs.');
+      } else {
+        const closeDelayLabel = outcome === 'success' ? '10 seconds' : `${Math.round(closeDelayMs / 60_000)} minutes`;
 
-      await sleepUntilDeadline(closeDelayMs);
-      try { window.close(); } catch { /* best effort */ }
+        sessionLogService.info('session', 'AUTOMATION_WINDOW_CLOSE',
+          `Automation finished (${outcome}) — closing browser window in ${closeDelayLabel}`,
+          'Logs have been persisted to IndexedDB. Run dagnetAutomationLogs() in the console to review past runs.');
+
+        await sleepUntilDeadline(closeDelayMs);
+        try { window.close(); } catch { /* best effort */ }
+      }
     } catch (persistErr) {
       console.error('[dailyAutomationJob] Failed to persist automation log:', persistErr);
     }
@@ -454,6 +476,7 @@ if (import.meta.env.DEV && typeof window !== 'undefined') {
 /** Reset for tests. */
 export function _resetDailyAutomationJob(): void {
   registered = false;
+  automationCtx.navigatorReady = false;
   automationCtx.tabs = [];
   automationCtx.tabOps = null;
   automationCtx.selectedRepo = undefined;

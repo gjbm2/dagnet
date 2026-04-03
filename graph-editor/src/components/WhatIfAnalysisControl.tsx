@@ -295,6 +295,7 @@ export default function WhatIfAnalysisControl({ tabId }: { tabId?: string }) {
             setWhatIfDSL(newDSL || null);
           }}
           graph={graph}
+          allowedFunctions={['case', 'visited', 'visitedAny', 'exclude', 'context', 'contextAny']}
           placeholder="case(case_id:treatment).visited(nodea)"
           height="80px"
           readonly={false}

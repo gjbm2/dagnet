@@ -1292,12 +1292,10 @@ describe('POLICY: pullLatestRemoteWins usage is restricted to headless contexts'
   const ALLOWED_CALLERS = new Set([
     // The method definition itself
     'repositoryOperationsService.ts',
-    // Headless nightly automation
-    'dailyRetrieveAllAutomationService.ts',
-    // Headless job scheduler automation
+    // Headless automation orchestration (upfront pull)
     'dailyAutomationJob.ts',
-    // Headless URL-triggered automation
-    'useURLDailyRetrieveAllQueue.ts',
+    // Per-graph automation (commit-retry pulls if remote is ahead)
+    'dailyRetrieveAllAutomationService.ts',
     // Staleness nudge service — only calls it behind isDashboardMode guard
     'stalenessNudgeService.ts',
     // useStalenessNudges wires the callback but stalenessNudgeService gates it

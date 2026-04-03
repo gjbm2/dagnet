@@ -125,6 +125,7 @@ export function ScenarioQueryEditModal({
               value={draftDSL}
               onChange={(value) => setDraftDSL(value)}
               graph={null}
+              allowedFunctions={['context', 'contextAny', 'window', 'cohort', 'asat', 'at']}
               height="100px"
               placeholder="e.g., window(-7d:-1d) or context(channel:google)"
               readonly={false}

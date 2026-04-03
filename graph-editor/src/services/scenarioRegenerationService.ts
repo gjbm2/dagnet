@@ -19,7 +19,7 @@ import { ScenarioParams, NodeParamDiff } from '../types/scenarios';
  */
 export interface FetchParts {
   window: { start?: string; end?: string } | null;
-  cohort: { start?: string; end?: string } | null;
+  cohort: { anchor?: string; start?: string; end?: string } | null;
   /**
    * Context axis (MECE).
    * - inherit: no context clause emitted (inherit from below)
@@ -155,11 +155,15 @@ export function buildFetchDSL(parts: FetchParts): string {
     segments.push(`window(${start}:${end})`);
   }
   
-  // Cohort (date-range filter for cohort analysis)
+  // Cohort (date-range filter for cohort analysis) — preserve anchor if present
   if (parts.cohort) {
     const start = parts.cohort.start || '';
     const end = parts.cohort.end || '';
-    segments.push(`cohort(${start}:${end})`);
+    if (parts.cohort.anchor) {
+      segments.push(`cohort(${parts.cohort.anchor},${start}:${end})`);
+    } else {
+      segments.push(`cohort(${start}:${end})`);
+    }
   }
   
   // Context (MECE axis)
@@ -467,7 +471,7 @@ export function diffQueryDSLFromBase(
   const curCohort = cur.fetchParts.cohort;
   if (
     curCohort &&
-    (!baseCohort || baseCohort.start !== curCohort.start || baseCohort.end !== curCohort.end)
+    (!baseCohort || baseCohort.start !== curCohort.start || baseCohort.end !== curCohort.end || baseCohort.anchor !== curCohort.anchor)
   ) {
     deltaFetch.cohort = curCohort;
   }
@@ -582,7 +586,8 @@ export function deriveScenarioCreateDeltaDSL(
       sMode !== 'cohort' ||
       !s.cohort ||
       s.cohort.start !== c.cohort.start ||
-      s.cohort.end !== c.cohort.end;
+      s.cohort.end !== c.cohort.end ||
+      s.cohort.anchor !== c.cohort.anchor;
     if (changed) delta.cohort = c.cohort;
   } else if (cMode === 'window' && c.window) {
     const changed =

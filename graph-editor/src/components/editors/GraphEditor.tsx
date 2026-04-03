@@ -97,13 +97,6 @@ function URLScenariosProcessor({ fileId }: { fileId: string }) {
   return null; // No UI - just processes URL params
 }
 
-// NOTE: Daily automation URL handling (`?retrieveall=...`) is mounted once in `AppShell`
-// via `useURLDailyRetrieveAllQueue()`. Do not add per-tab automation hooks here.
-
-function URLDailyRetrieveAllProcessor(_props: { fileId: string }) {
-  return null;
-}
-
 /**
  * PutToBaseRequestProcessor - handles tab-scoped "Put to Base" requests.
  * Must be inside ScenariosProvider so it can call ScenariosContext.putToBase().
@@ -2162,7 +2155,6 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
         <ScenariosProvider fileId={fileId} tabId={tabId}>
         <ScenarioHighlightProvider>
           <URLScenariosProcessor fileId={fileId} />
-          <URLDailyRetrieveAllProcessor fileId={fileId} />
           <PutToBaseRequestProcessor tabId={tabId} />
           <ViewPreferencesProvider tabId={tabId}>
             <div
@@ -2186,7 +2178,6 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
       <ScenarioHighlightProvider>
       {/* Process URL scenario parameters after graph loads */}
       <URLScenariosProcessor fileId={fileId} />
-      <URLDailyRetrieveAllProcessor fileId={fileId} />
       <PutToBaseRequestProcessor tabId={tabId} />
       <ViewPreferencesProvider tabId={tabId}>
       <DSLReaggregationProvider value={dslReaggregation}>

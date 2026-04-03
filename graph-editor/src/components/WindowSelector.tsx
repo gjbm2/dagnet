@@ -223,7 +223,11 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
     // Build window/cohort from AUTHORITATIVE window state (not from graph.currentQueryDSL)
     // Use provided mode or fall back to current queryMode state
     const effectiveMode = mode ?? queryMode;
-    const dateRangePart = `${effectiveMode}(${formatDateUK(windowState.start)}:${formatDateUK(windowState.end)})`;
+    // Preserve cohort anchor if present in existing DSL (e.g. cohort(li-c-account-created,-30d:))
+    const cohortAnchor = effectiveMode === 'cohort' ? parsed.cohort?.anchor : undefined;
+    const dateRangePart = cohortAnchor
+      ? `cohort(${cohortAnchor},${formatDateUK(windowState.start)}:${formatDateUK(windowState.end)})`
+      : `${effectiveMode}(${formatDateUK(windowState.start)}:${formatDateUK(windowState.end)})`;
 
     // Preserve asat clause if present in current DSL
     const asatPart = parsed.asat ? `asat(${parsed.asat})` : '';
@@ -1155,11 +1159,11 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
                   // Use getLatestGraph() to avoid stale closure
                   const currentGraph = getLatestGraph();
                   if (!setGraph || !currentGraph) return;
-                  
+
                   // Parse to get new contexts
                   const newParsed = parseConstraints(newContextDSL);
                   const oldParsed = parseConstraints(currentGraph.currentQueryDSL || '');
-                  
+
                   // Rebuild DSL with new contexts + old window
                   const newContextParts: string[] = [];
                   for (const ctx of newParsed.context) {
@@ -1169,7 +1173,7 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
                     const pairs = ctxAny.pairs.map(p => `${p.key}:${p.value}`).join(',');
                     newContextParts.push(`contextAny(${pairs})`);
                   }
-                  
+
                   // Preserve window/cohort (using current queryMode)
                   let dateRangePart = '';
                   if (oldParsed.window) {
@@ -1179,18 +1183,19 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
                   } else if (window) {
                     dateRangePart = `${queryMode}(${normalizeToUK(window.start)}:${normalizeToUK(window.end)})`;
                   }
-                  
+
                   // Preserve asat clause if present in old DSL
                   const asatPart = oldParsed.asat ? `asat(${oldParsed.asat})` : '';
-                  
+
                   const fullDSL = [newContextParts.join('.'), dateRangePart, asatPart].filter(p => p).join('.');
-                  
+
                   // CRITICAL: Update AUTHORITATIVE DSL on graphStore
                   setCurrentDSL(fullDSL || '');
-                  
+
                   // Also update historic record (NOT for live queries!)
                   setGraph({ ...currentGraph, currentQueryDSL: fullDSL || undefined });
                 }}
+                allowedFunctions={['context', 'contextAny']}
                 graph={graph}
                 height="32px"
                 placeholder=""
@@ -1347,7 +1352,7 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
               value={(() => {
                 // Parse current DSL to extract contexts (strip any window)
                 const parsed = parseConstraints(graph?.currentQueryDSL || '');
-                
+
                 const contextParts: string[] = [];
                 for (const ctx of parsed.context) {
                   contextParts.push(`context(${ctx.key}:${ctx.value})`);
@@ -1356,19 +1361,20 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
                   const pairs = ctxAny.pairs.map(p => `${p.key}:${p.value}`).join(',');
                   contextParts.push(`contextAny(${pairs})`);
                 }
-                
+
                 // Add current window/cohort (using queryMode)
-                const dateRangePart = window 
-                  ? `${queryMode}(${normalizeToUK(window.start)}:${normalizeToUK(window.end)})` 
+                const dateRangePart = window
+                  ? `${queryMode}(${normalizeToUK(window.start)}:${normalizeToUK(window.end)})`
                   : '';
-                
+
                 // Preserve asat clause if present in the current DSL
                 const asatPart = parsed.asat ? `asat(${parsed.asat})` : '';
-                
+
                 // Combine
                 const parts = [...contextParts, dateRangePart, asatPart].filter(p => p);
                 return parts.join('.');
               })()}
+              allowedFunctions={['context', 'contextAny', 'window', 'cohort', 'asat', 'at']}
               readonly={false}
               onChange={(newDSL) => {
                 // During editing, just let it update (don't persist yet)

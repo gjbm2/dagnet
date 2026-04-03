@@ -502,6 +502,8 @@ export function QueryExpressionEditor({
           endLineNumber: position.lineNumber,
           endColumn: position.column
         });
+
+        const allowed = new Set(allowedFunctionList);
         
         // Check if there's a selection - if so, use that as the range to replace
         const selection = editor.getSelection();
@@ -526,7 +528,7 @@ export function QueryExpressionEditor({
         }
         
         // After from( → suggest node IDs (graph + registry)
-        if (/from\([^)]*$/.test(textUntilPosition)) {
+        if (allowed.has('from') && /from\([^)]*$/.test(textUntilPosition)) {
           return {
             suggestions: allNodes.map((n: any) => ({
               label: n.label,
@@ -540,7 +542,7 @@ export function QueryExpressionEditor({
         }
         
         // After to( → suggest node IDs (graph + registry)
-        if (/to\([^)]*$/.test(textUntilPosition)) {
+        if (allowed.has('to') && /to\([^)]*$/.test(textUntilPosition)) {
           return {
             suggestions: allNodes.map((n: any) => ({
               label: n.label,
@@ -554,7 +556,7 @@ export function QueryExpressionEditor({
         }
         
         // After .exclude( or .visited( or .visitedAny( → suggest node IDs (graph + registry)
-        if (/\.(exclude|visited|visitedAny)\([^)]*$/.test(textUntilPosition)) {
+        if ((allowed.has('exclude') || allowed.has('visited') || allowed.has('visitedAny')) && /\.(exclude|visited|visitedAny)\([^)]*$/.test(textUntilPosition)) {
           return {
             suggestions: allNodes.map((n: any) => ({
               label: n.label,
@@ -569,7 +571,7 @@ export function QueryExpressionEditor({
         
         // After case( or .case( → suggest case IDs (graph + registry)
         // NOTE: conditional probability "condition" strings often use `case(...)` without the leading dot.
-        if (/(^|\.)(case)\([^:)]*$/.test(textUntilPosition)) {
+        if (allowed.has('case') && /(^|\.)(case)\([^:)]*$/.test(textUntilPosition)) {
           return {
             suggestions: allCases.map((c: any) => ({
               label: c.name,
@@ -583,7 +585,7 @@ export function QueryExpressionEditor({
         }
         
         // After case(case-id: or .case(case-id: → suggest variant names
-        if (/(^|\.)(case)\([a-z0-9_-]+:([^)]*)$/.test(textUntilPosition)) {
+        if (allowed.has('case') && /(^|\.)(case)\([a-z0-9_-]+:([^)]*)$/.test(textUntilPosition)) {
           const match = textUntilPosition.match(/(?:^|\.)case\(([a-z0-9_-]+):/);
           if (match) {
             const caseId = match[1];
@@ -603,7 +605,7 @@ export function QueryExpressionEditor({
         }
         
         // After context( or contextAny( → suggest context keys (async)
-        if (/(context|contextAny)\([^:)]*$/.test(textUntilPosition)) {
+        if ((allowed.has('context') || allowed.has('contextAny')) && /(context|contextAny)\([^:)]*$/.test(textUntilPosition)) {
           // Return a Promise - Monaco supports async completion
           return contextRegistry.getAllContextKeys().then(keys => {
             const suggestions = keys.map(key => ({
@@ -623,7 +625,7 @@ export function QueryExpressionEditor({
         
         // After context(key: or contextAny(key: → suggest values for that key (async)
         // Match the LAST context( or contextAny( in the string (not the first)
-        if (/(context|contextAny)\(([^:)]+):([^)]*)$/.test(textUntilPosition)) {
+        if ((allowed.has('context') || allowed.has('contextAny')) && /(context|contextAny)\(([^:)]+):([^)]*)$/.test(textUntilPosition)) {
           // Use a more specific regex that captures the LAST context(key: or contextAny(key:
           const matches = Array.from(textUntilPosition.matchAll(/(context|contextAny)\(([^:)]+):/g));
           const match = matches[matches.length - 1]; // Get last match
@@ -649,7 +651,7 @@ export function QueryExpressionEditor({
         }
         
         // After window( → suggest date formats (async for current window)
-        if (/window\([^)]*$/.test(textUntilPosition)) {
+        if (allowed.has('window') && /window\([^)]*$/.test(textUntilPosition)) {
           return (async () => {
             const suggestions: any[] = [
               {
@@ -725,10 +727,34 @@ export function QueryExpressionEditor({
           })();
         }
         
-        // After cohort( → suggest date formats (similar to window, but for cohort entry)
-        if (/cohort\([^)]*$/.test(textUntilPosition)) {
+        // After cohort( → suggest anchor nodes (before comma) + date formats
+        if (allowed.has('cohort') && /cohort\([^)]*$/.test(textUntilPosition)) {
+          // Extract the text inside cohort( to determine position
+          const cohortInner = textUntilPosition.match(/cohort\(([^)]*)$/);
+          const innerText = cohortInner ? cohortInner[1] : '';
+          const hasComma = innerText.includes(',');
+
           return (async () => {
-            const suggestions: any[] = [
+            const suggestions: any[] = [];
+
+            // Before comma (or no comma yet): suggest anchor node names
+            // Syntax: cohort(anchor-node,start:end)
+            if (!hasComma) {
+              allNodes.forEach((n: any, i: number) => {
+                suggestions.push({
+                  label: `🔗 ${n.label}`,
+                  kind: monaco.languages.CompletionItemKind.Reference,
+                  insertText: `${n.id},`,
+                  documentation: `Anchor cohort at node: ${n.label}\nSyntax: cohort(${n.id},start:end)`,
+                  detail: `${n.id} (${n.source}) — cohort anchor`,
+                  range,
+                  sortText: `0${String(i).padStart(4, '0')}`
+                });
+              });
+            }
+
+            // Date formats: always shown (valid in both positions)
+            suggestions.push(
               {
                 label: '📅 Last 30 days cohort (-30d:)',
                 kind: monaco.languages.CompletionItemKind.Value,
@@ -761,15 +787,15 @@ export function QueryExpressionEditor({
                 range,
                 sortText: '4'
               }
-            ];
-            
+            );
+
             // Add example with absolute dates (shows d-MMM-yy format)
             try {
               const { formatDateUK } = await import('../lib/dateFormat');
               const today = new Date();
               const threeMonthsAgo = new Date(today);
               threeMonthsAgo.setMonth(today.getMonth() - 3);
-              
+
               suggestions.push({
                 label: `📆 Example: ${formatDateUK(threeMonthsAgo)}:${formatDateUK(today)}`,
                 kind: monaco.languages.CompletionItemKind.Value,
@@ -781,13 +807,13 @@ export function QueryExpressionEditor({
             } catch (err) {
               // Ignore if date formatting fails
             }
-            
+
             return { suggestions };
           })();
         }
         
         // After asat( or at( → suggest date formats (historical query date)
-        if (/(asat|at)\([^)]*$/.test(textUntilPosition)) {
+        if ((allowed.has('asat') || allowed.has('at')) && /(asat|at)\([^)]*$/.test(textUntilPosition)) {
           return (async () => {
             const suggestions: any[] = [
               {
@@ -1003,9 +1029,9 @@ export function QueryExpressionEditor({
             }
           );
           
-          return { suggestions: hasSuggestions };
+          return { suggestions: hasSuggestions.filter((s: any) => allowed.has(s.label)) };
         }
-        
+
         // At start of line, after ), or after ; → suggest from/to OR constraints
         if (/^$/.test(textUntilPosition) || /\)$/.test(textUntilPosition) || /;$/.test(textUntilPosition)) {
           const suggestions: any[] = [];
@@ -1091,9 +1117,9 @@ export function QueryExpressionEditor({
             }
           );
           
-          return { suggestions };
+          return { suggestions: suggestions.filter((s: any) => allowed.has(s.label)) };
         }
-        
+
         return { suggestions: [] };
       }
     });

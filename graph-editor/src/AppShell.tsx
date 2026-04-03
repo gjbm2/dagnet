@@ -25,7 +25,6 @@ import { useCommitHandler } from './hooks/useCommitHandler';
 import { CopyPasteProvider } from './hooks/useCopyPaste';
 import { useStalenessNudges } from './hooks/useStalenessNudges';
 import { useURLDailyRetrieveAllQueue } from './hooks/useURLDailyRetrieveAllQueue';
-import { AutomationBanner } from './components/AutomationBanner';
 import { BannerHost } from './components/BannerHost';
 import { OperationsToast } from './components/OperationsToast';
 import { useOpsDemoMode } from './hooks/useOpsDemoMode';
@@ -2155,7 +2154,6 @@ function AppShellContent() {
       <>
         <BannerHost />
         <ShareModeBanner />
-        <AutomationBanner />
         <OperationsToast />
         <ShareChartBootstrapper />
         <ShareBundleBootstrapper />
@@ -2171,7 +2169,6 @@ function AppShellContent() {
     <>
       <BannerHost />
       <ShareModeBanner />
-      <AutomationBanner />
       <OperationsToast />
       <ShareChartBootstrapper />
       <ShareBundleBootstrapper />

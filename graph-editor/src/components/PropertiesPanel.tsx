@@ -2047,6 +2047,7 @@ export default function PropertiesPanel({
                   onChange={(value) => setLocalBaseDSL(value)}
                   onBlur={(value) => updateGraph(['baseDSL'], value.trim() ? value : undefined)}
                   graph={graph}
+                  allowedFunctions={['context', 'contextAny', 'window', 'cohort', 'asat', 'at']}
                   placeholder="e.g. window(-30d:)"
                   height="40px"
                 />
