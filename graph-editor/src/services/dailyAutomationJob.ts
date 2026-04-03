@@ -164,7 +164,6 @@ function getCloseDelayMs(outcome: string): number {
     if (params.has('noclose')) return Infinity; // Check noclose BEFORE e2e
     if (params.get('e2e') === '1') return 500;
   }
-  if (outcome === 'success') return 10_000;
   return 12 * 60 * 60 * 1000;
 }
 

@@ -1211,14 +1211,18 @@ function MainAppShellContent() {
   React.useEffect(() => {
     const loadSavedLayout = async () => {
       try {
-        const savedLayout = await layoutService.loadLayout();
+        // In retrieveall mode, start with a blank layout — the automation job
+        // owns the full tab lifecycle. Loading a saved layout would restore
+        // stale tabs from a previous session.
+        const isRetrieveAllMode = new URLSearchParams(window.location.search).has('retrieveall');
+        const savedLayout = isRetrieveAllMode ? null : await layoutService.loadLayout();
         if (savedLayout && savedLayout.dockbox) {
           console.log('Loaded saved layout from IndexedDB');
           setLayout(savedLayout);
           // Initialize visible tabs from loaded layout
           updateFromLayout(savedLayout);
         } else {
-          console.log('No saved layout, using default');
+          console.log(isRetrieveAllMode ? 'Retrieveall mode: using blank layout' : 'No saved layout, using default');
           setLayout(defaultLayout);
           // Initialize visible tabs from default layout
           updateFromLayout(defaultLayout);
@@ -1232,7 +1236,7 @@ function MainAppShellContent() {
         setLayoutLoaded(true);
       }
     };
-    
+
     loadSavedLayout();
   }, [defaultLayout, updateFromLayout]);
 
