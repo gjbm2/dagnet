@@ -244,6 +244,7 @@ export function ConditionalProbabilityEditor({
                       }}
                       graph={graph}
                       edgeId={edgeId}
+                      allowedFunctions={['visited', 'visitedAny', 'exclude', 'context', 'contextAny', 'case']}
                       placeholder="visited(node) or context(key:value)"
                       height="50px"
                     />

@@ -1,3 +1,13 @@
+/**
+ * Per-Graph Automation Service
+ *
+ * Runs the per-graph workflow: version check → retrieve → horizons → commit.
+ * Called by dailyAutomationJob.ts once per target graph.
+ *
+ * The upfront pull is handled by the job — this service does NOT pull.
+ * Cross-tab locking is handled by the scheduler — this service does NOT lock.
+ */
+
 import type { GraphData } from '../types';
 import { formatDateUK } from '../lib/dateFormat';
 import { sessionLogService } from './sessionLogService';
@@ -31,26 +41,7 @@ class DailyRetrieveAllAutomationService {
     return DailyRetrieveAllAutomationService.instance;
   }
 
-  private async withCrossTabLock<T>(fn: () => Promise<T>): Promise<T> {
-    try {
-      const nav: any = (typeof navigator !== 'undefined') ? (navigator as any) : null;
-      if (nav?.locks?.request) {
-        // Web Locks API serialises across tabs/windows for the same origin.
-        return await nav.locks.request('dagnet:daily-retrieveall', { mode: 'exclusive' }, async () => {
-          return await fn();
-        });
-      }
-    } catch {
-      // Best-effort only; fall back to in-tab execution.
-    }
-    return await fn();
-  }
-
   async run(options: DailyRetrieveAllAutomationOptions): Promise<void> {
-    return this.withCrossTabLock(() => this.runInternal(options));
-  }
-
-  private async runInternal(options: DailyRetrieveAllAutomationOptions): Promise<void> {
     const { repository, branch, graphFileId, getGraph, setGraph, shouldAbort } = options;
 
     const graphName = inferGraphName(graphFileId);
@@ -58,7 +49,7 @@ class DailyRetrieveAllAutomationService {
       'info',
       'session',
       'DAILY_RETRIEVE_ALL',
-      `Daily automation: pull → retrieve all → commit (${repository}/${branch}, graph: ${graphName})`,
+      `Daily automation: retrieve all → commit (${repository}/${branch}, graph: ${graphName})`,
       { repository, branch, fileId: graphFileId }
     );
 
@@ -68,7 +59,7 @@ class DailyRetrieveAllAutomationService {
         return;
       }
 
-      // Automation safety: never run pull/retrieve/commit on an out-of-date client.
+      // Automation safety: never run retrieve/commit on an out-of-date client.
       // If a newer client is deployed, log and abort so the operator can refresh the page.
       try {
         if (typeof window !== 'undefined' && window.localStorage) {
@@ -87,25 +78,15 @@ class DailyRetrieveAllAutomationService {
           }
         }
       } catch {
-        // Best-effort only; if version check fails (offline), proceed as before.
-      }
-
-      sessionLogService.addChild(logOpId, 'info', 'STEP_PULL', 'Pulling latest (remote wins)');
-      const pullResult = await repositoryOperationsService.pullLatestRemoteWins(repository, branch);
-      if ((pullResult.conflictsResolved ?? 0) > 0) {
-        sessionLogService.addChild(
-          logOpId,
-          'warning',
-          'PULL_CONFLICTS_RESOLVED',
-          `Resolved ${pullResult.conflictsResolved} conflict(s) by accepting remote`
-        );
+        // Best-effort only; if version check fails (offline), proceed.
       }
 
       if (shouldAbort?.()) {
-        sessionLogService.endOperation(logOpId, 'warning', 'Daily automation aborted after pull');
+        sessionLogService.endOperation(logOpId, 'warning', 'Daily automation aborted after version check');
         return;
       }
 
+      // Retrieve all slices (headless).
       sessionLogService.addChild(logOpId, 'info', 'STEP_RETRIEVE', 'Running Retrieve All Slices (headless)');
       const retrieveResult = await executeRetrieveAllSlicesWithProgressToast({
         getGraph,
@@ -125,8 +106,7 @@ class DailyRetrieveAllAutomationService {
         retrieveResult as any
       );
 
-      // After Retrieve All, recompute + persist GLOBAL horizons (uncontexted, recency-weighted).
-      // Best-effort: do not fail the automation run if this step fails.
+      // Recompute global horizons (best-effort).
       try {
         await lagHorizonsService.recomputeHorizons({
           mode: 'global',
@@ -143,6 +123,7 @@ class DailyRetrieveAllAutomationService {
         return;
       }
 
+      // Commit all changes.
       sessionLogService.addChild(logOpId, 'info', 'STEP_COMMIT', 'Committing all changes');
 
       const commitMessage = `Daily data refresh (${graphName}) - ${formatDateUK(new Date())}`;
@@ -194,5 +175,3 @@ class DailyRetrieveAllAutomationService {
 }
 
 export const dailyRetrieveAllAutomationService = DailyRetrieveAllAutomationService.getInstance();
-
-

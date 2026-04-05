@@ -980,10 +980,10 @@ export function calculateIncrementalFetch(
     signatureDiagnostics.matchType = 'no_match';
   }
   
-  // Log signature filtering decision (verbose details only when diagnostics enabled)
+  // Log signature filtering decision (diagnostic only — fires per-edge, far too noisy for normal logging)
   if (effectiveQuerySignature) {
     const diagnosticsOn = sessionLogService.getDiagnosticLoggingEnabled();
-    const details = diagnosticsOn 
+    const details = diagnosticsOn
       ? JSON.stringify({
           targetSlice,
           querySignature: effectiveQuerySignature,
@@ -994,9 +994,11 @@ export function calculateIncrementalFetch(
           bustCache,
         }, null, 2)
       : undefined;
-    sessionLogService.info('data-fetch', 'SIGNATURE_FILTER_DECISION', 
+    sessionLogService.info('data-fetch', 'SIGNATURE_FILTER_DECISION',
       `Signature filtering: ${signatureDiagnostics.matchType} (${signatureFilteredValues.length}/${allValues.length} values passed)`,
-      details
+      details,
+      undefined,
+      { diagnostic: true }
     );
   }
 

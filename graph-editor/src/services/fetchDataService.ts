@@ -52,6 +52,8 @@ import { LATENCY_HORIZON_DECIMAL_PLACES } from '../constants/latency';
 import { roundToDecimalPlaces } from '../utils/rounding';
 import { forecastingSettingsService } from './forecastingSettingsService';
 import { enumerateFetchTargets } from './fetchTargetEnumerationService';
+import { rateLimiter, getEffectiveRateLimitCooloffMinutes } from './rateLimiter';
+import { startRateLimitCountdown } from './rateLimitCountdownService';
 
 // ============================================================================
 // Types (re-exported for consumers)
@@ -1134,7 +1136,8 @@ export async function fetchItems(
     : shouldShowBatchProgress
       ? sessionLogService.startOperation('info', 'data-fetch', 'BATCH_FETCH',
           `Batch fetch: ${effectiveItems.length} items`,
-          { dsl: effectiveDSL, itemCount: effectiveItems.length, mode: itemOptions?.mode || 'versioned' })
+          { dsl: effectiveDSL, itemCount: effectiveItems.length, mode: itemOptions?.mode || 'versioned' },
+          { diagnostic: true })
       : undefined;
 
   if (shouldShowBatchProgress) {
@@ -1153,20 +1156,22 @@ export async function fetchItems(
   
   let successCount = 0;
   let errorCount = 0;
-  
+  let rateLimitAborted = false;
+  let rateLimitSkipped = 0;
+
   try {
     for (let i = 0; i < effectiveItems.length; i++) {
       onProgress?.(i + 1, effectiveItems.length, effectiveItems[i]);
-      
+
       if (shouldShowBatchProgress) {
         operationRegistryService.setProgress(progressToastId, { current: i, total: effectiveItems.length });
       }
-      
+
       // CRITICAL: Use getUpdatedGraph() to get fresh graph for each item
       // This ensures rebalancing from previous items is preserved
       // Without this, each item clones the ORIGINAL graph, losing sibling rebalancing
       const currentGraph = getUpdatedGraph?.() ?? latestGraph ?? graph;
-      
+
       const result = await fetchSingleItemInternal(
         effectiveItems[i],
         itemOptions,
@@ -1175,8 +1180,66 @@ export async function fetchItems(
         effectiveDSL,
         getUpdatedGraph
       );
+
+      // --- Rate limit detection + countdown + retry ---
+      if (
+        !result.success &&
+        result.error &&
+        rateLimiter.isRateLimitError(result.error.message)
+      ) {
+        // Don't push the failed result yet — we'll retry after countdown.
+        const cooldownMinutes = getEffectiveRateLimitCooloffMinutes();
+
+        if (batchLogId) {
+          sessionLogService.addChild(
+            batchLogId,
+            'warning',
+            'RATE_LIMIT_HIT',
+            `Item ${effectiveItems[i].name} hit rate limit — starting ${cooldownMinutes}m countdown`,
+            result.error.message,
+            { itemIndex: i, itemName: effectiveItems[i].name, cooldownMinutes },
+          );
+        }
+
+        const countdownResult = await startRateLimitCountdown({
+          cooldownMinutes,
+          logOpId: batchLogId,
+          label: `Amplitude rate limit — retrying in ${cooldownMinutes}m`,
+        });
+
+        if (countdownResult === 'aborted') {
+          // User aborted: record the original failure, skip remaining items.
+          results.push(result);
+          errorCount++;
+          rateLimitAborted = true;
+          rateLimitSkipped = effectiveItems.length - i - 1;
+          break;
+        }
+
+        // Countdown expired — retry the same item.
+        // Use a fresh graph in case the user edited during the wait.
+        const retryGraph = getUpdatedGraph?.() ?? latestGraph ?? graph;
+        const retryResult = await fetchSingleItemInternal(
+          effectiveItems[i],
+          itemOptions,
+          retryGraph,
+          trackingSetGraph,
+          effectiveDSL,
+          getUpdatedGraph,
+        );
+        results.push(retryResult);
+
+        if (retryResult.success) {
+          successCount++;
+        } else {
+          errorCount++;
+        }
+        // Continue to next item (even if retry failed — don't loop forever).
+        continue;
+      }
+
       results.push(result);
-      
+
       if (result.success) {
         successCount++;
       } else {
@@ -1186,7 +1249,10 @@ export async function fetchItems(
     
     if (shouldShowBatchProgress) {
       operationRegistryService.setProgress(progressToastId, { current: effectiveItems.length, total: effectiveItems.length });
-      if (errorCount > 0) {
+      if (rateLimitAborted) {
+        const msg = `Fetched ${successCount}/${effectiveItems.length} (rate limit — ${rateLimitSkipped} skipped)`;
+        operationRegistryService.complete(progressToastId, 'error', msg);
+      } else if (errorCount > 0) {
         operationRegistryService.complete(progressToastId, 'error', `Fetched ${successCount}/${effectiveItems.length} (${errorCount} failed)`);
       } else {
         operationRegistryService.setLabel(progressToastId, `Fetched ${successCount} item${successCount !== 1 ? 's' : ''}`);

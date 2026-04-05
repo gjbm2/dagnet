@@ -1122,9 +1122,20 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
       // retrieveall start with a blank slate.
       if (!isShareMode() && !isRetrieveAllMode) {
         await loadTabsFromDB();
+      } else if (isRetrieveAllMode) {
+        // Clear stale tabs from IDB so openTab (which uses db.tabs.add) doesn't
+        // crash with ConstraintError when the automation job opens fresh tabs.
+        try {
+          await db.tabs.clear();
+          console.log('[TabContext] retrieveall mode — cleared stale tabs from IDB');
+        } catch (e) {
+          console.warn('[TabContext] Failed to clear stale tabs:', e);
+        }
       }
-      
-      await loadFromURLData();
+
+      // In retrieveall mode, the automation job owns the full lifecycle
+      // (pull → open tabs → retrieve → commit). Do not open any tabs from URL.
+      await loadFromURLData(isRetrieveAllMode);
 
       // Signal that TabContext initialisation (including URL-driven tab opening) is complete.
       // This is used by headless/URL automations so they don't fight the tab focus churn during boot.
@@ -1264,7 +1275,14 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
   /**
    * Load graph data from URL parameters (?data=... or ?graph=...)
    */
-  const loadFromURLData = async () => {
+  const loadFromURLData = async (isRetrieveAllMode: boolean = false) => {
+    // Retrieve-all mode: automation job owns the full lifecycle.
+    // Do not open any tabs from URL params.
+    if (isRetrieveAllMode) {
+      console.log('[TabContext] retrieveall mode — skipping loadFromURLData (automation job owns lifecycle)');
+      return;
+    }
+
     try {
       const urlParams = new URLSearchParams(window.location.search);
       const modeParam = urlParams.get('mode');

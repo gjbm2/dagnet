@@ -21,6 +21,8 @@
       "Bash(. .private-repos.conf)",
       "Bash(CI= PLAYWRIGHT_BROWSERS_PATH=*)",
       "Read(**)",
+      "Grep",
+      "Glob",
       "WebFetch(domain:vitest.dev)",
       "WebFetch(domain:deepwiki.com)",
       "WebFetch(domain:bitsquid.blogspot.com)",

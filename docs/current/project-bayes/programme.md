@@ -144,6 +144,25 @@ data-constrained. Single-source validation:
   constants promoted to user-configurable settings (settings.yaml,
   FE forecasting settings, Python dataclass). 17 Bayes settings
   added with defaults, documentation, and tests.
+- **Cohort completeness: model-derived vs observation-derived anchor
+  lag** — DISCUSS. Bayes computes cohort completeness using
+  FW-composed path latency from the graph topology
+  (`topology.py:_compute_paths` → `PathLatency(path_delta, path_mu,
+  path_sigma)` → `_compute_cohort_completeness(age, ...)`). The FE
+  stats engine uses a different approach: it subtracts the *observed*
+  per-cohort `anchor_median_lag_days` from the raw cohort age before
+  evaluating edge-level CDF (`stats_engine.py:527`). These are
+  different estimators — Bayes is model-driven (FW composition of
+  edge priors), FE is data-driven (observed A→X travel time). They
+  will diverge when observed anchor lags differ from model
+  predictions (e.g. non-lognormal or correlated transitions). The
+  snapshot DB already stores `anchor_median_lag_days` per-row and the
+  Bayes snapshot query already fetches it (`snapshot_service.py:566`)
+  — but `evidence.py` never reads it and `CohortDailyTrajectory` has
+  no field for it. Not a bug (Bayes is self-consistent), but a
+  potential parity gap worth discussing: should Bayes incorporate
+  observed anchor lags as an alternative or additional signal?
+  Discovered 3-Apr-26 during exhaustive cohort() code trace.
 
 *Not yet built*:
 - **Topology signatures** (doc 10) — current code computes a single

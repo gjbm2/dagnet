@@ -107,11 +107,41 @@ interface ActiveOperation {
   startTime: number;
 }
 
+/**
+ * Options for log calls that support diagnostic gating.
+ * When diagnostic logging is off:
+ *
+ *  `diagnostic: true` — the entire operation (parent + children) is buffered.
+ *    If any child is a warning/error, the whole tree is promoted to the real log.
+ *    Otherwise it is silently discarded at endOperation.
+ *
+ *  `diagnosticChildren: true` — the parent is logged normally (always visible),
+ *    but its children are buffered. If a warning/error child arrives, all buffered
+ *    siblings are flushed so the user sees full context around the problem.
+ *    Otherwise children are quietly discarded at endOperation.
+ *    Use this for per-item completion records where the parent is meaningful
+ *    but the detail children are noise.
+ *
+ *  Standalone calls (info/success) with `diagnostic: true` are silently dropped.
+ *  Warnings and errors are NEVER suppressed regardless of these flags.
+ */
+export interface DiagnosticOptions {
+  diagnostic?: boolean;
+  diagnosticChildren?: boolean;
+}
+
+interface DiagnosticBuffer {
+  entry: LogEntry;
+  startTime: number;
+  promoted: boolean;
+}
+
 class SessionLogService {
   private static instance: SessionLogService;
   private entries: LogEntry[] = [];
   private entriesById: Map<string, LogEntry> = new Map();
   private activeOperations: Map<string, ActiveOperation> = new Map();
+  private diagnosticBuffers: Map<string, DiagnosticBuffer> = new Map();
   private fileId = 'session-log';
   private listeners: Set<(entries: LogEntry[]) => void> = new Set();
   private settingsListeners: Set<() => void> = new Set();
@@ -196,16 +226,22 @@ class SessionLogService {
   /**
    * Start a composite operation that will have children
    * Returns operation ID to use with addChild() and endOperation()
+   *
+   * When `options.diagnostic` is true and diagnostic logging is off, the operation
+   * is buffered in memory rather than written to the log. If any child warning/error
+   * arrives, the entire operation (with all children) is promoted to the real log.
+   * Otherwise it is silently discarded at endOperation().
    */
   startOperation(
     level: LogLevel,
     category: OperationType,
     operation: string,
     message: string,
-    context?: OperationContext
+    context?: OperationContext,
+    options?: DiagnosticOptions
   ): string {
     const id = this.generateId();
-    
+
     const entry: LogEntry = {
       id,
       timestamp: new Date(),
@@ -217,17 +253,38 @@ class SessionLogService {
       children: [],
       expanded: level === 'warning' || level === 'error' // Auto-expand warnings/errors
     };
-    
+
+    // Buffer diagnostic operations when diagnostic logging is off
+    // (warnings/errors are never buffered)
+    if (!this.diagnosticLoggingEnabled && level !== 'warning' && level !== 'error') {
+      if (options?.diagnostic) {
+        // Fully buffered — parent + children suppressed unless promoted
+        this.diagnosticBuffers.set(id, { entry, startTime: performance.now(), promoted: false });
+        this.activeOperations.set(id, { entry, startTime: performance.now() });
+        return id;
+      }
+      if (options?.diagnosticChildren) {
+        // Parent visible, children buffered — create buffer but also write parent to log
+        this.diagnosticBuffers.set(id, { entry, startTime: performance.now(), promoted: false });
+      }
+    }
+
     this.entries.push(entry);
     this.entriesById.set(id, entry);
     this.activeOperations.set(id, { entry, startTime: performance.now() });
-    
+
     this.notifyListeners();
     return id;
   }
 
   /**
-   * Add a child entry to an active operation
+   * Add a child entry to an active operation.
+   *
+   * If the parent is a buffered diagnostic operation:
+   *  - info/success children are appended to the buffer silently.
+   *  - warning/error children trigger promotion: the entire operation
+   *    (parent + all buffered children) is flushed to the real log,
+   *    and all subsequent children are logged normally.
    */
   addChild(
     parentId: string,
@@ -237,15 +294,42 @@ class SessionLogService {
     details?: string,
     context?: OperationContext
   ): string {
+    // Check if parent is in the diagnostic buffer
+    const buffered = this.diagnosticBuffers.get(parentId);
+    if (buffered && !buffered.promoted) {
+      if (level === 'warning' || level === 'error') {
+        // Promote the entire operation to the real log
+        this.promoteDiagnosticOperation(parentId);
+        // Fall through to normal addChild logic below
+      } else {
+        // Still buffered — accumulate silently
+        const id = this.generateId();
+        const childEntry: LogEntry = {
+          id,
+          timestamp: new Date(),
+          level,
+          category: buffered.entry.category,
+          operation,
+          message,
+          details,
+          context,
+          parentId
+        };
+        buffered.entry.children = buffered.entry.children || [];
+        buffered.entry.children.push(childEntry);
+        return id;
+      }
+    }
+
     const parent = this.entriesById.get(parentId);
     if (!parent) {
       console.warn(`[SessionLogService] Parent operation not found: ${parentId}`);
       // Fall back to top-level log
       return this.log(level, 'data-update', operation, message, details, context);
     }
-    
+
     const id = this.generateId();
-    
+
     const childEntry: LogEntry = {
       id,
       timestamp: new Date(),
@@ -257,11 +341,11 @@ class SessionLogService {
       context,
       parentId
     };
-    
+
     parent.children = parent.children || [];
     parent.children.push(childEntry);
     this.entriesById.set(id, childEntry);
-    
+
     // Auto-expand parent if child has warning/error
     if (level === 'warning' || level === 'error') {
       parent.expanded = true;
@@ -272,39 +356,71 @@ class SessionLogService {
         parent.level = 'warning';
       }
     }
-    
+
     this.notifyListeners();
     return id;
   }
 
   /**
-   * End an active operation with summary
+   * End an active operation with summary.
+   *
+   * If the operation is a buffered diagnostic that was never promoted,
+   * it is silently discarded (nothing interesting happened).
+   * If endOperation itself escalates to warning/error, the operation
+   * is promoted first.
    */
   endOperation(
-    operationId: string, 
-    level?: LogLevel, 
+    operationId: string,
+    level?: LogLevel,
     summaryMessage?: string,
     context?: OperationContext
   ): void {
+    const buffered = this.diagnosticBuffers.get(operationId);
+
+    // If ending with a warning/error, promote a buffered operation first
+    if (buffered && !buffered.promoted && (level === 'warning' || level === 'error')) {
+      this.promoteDiagnosticOperation(operationId);
+    }
+
+    if (buffered && !buffered.promoted) {
+      const parentInLog = this.entriesById.has(operationId);
+      if (parentInLog) {
+        // diagnosticChildren mode: parent is in log, discard buffered children
+        buffered.entry.children = [];
+        this.diagnosticBuffers.delete(operationId);
+        // Fall through to normal endOperation (update duration, summary, etc.)
+      } else {
+        // Fully diagnostic mode: silently discard entire operation
+        this.diagnosticBuffers.delete(operationId);
+        this.activeOperations.delete(operationId);
+        return;
+      }
+    }
+
+    // Clean up buffer tracking for promoted operations
+    if (buffered) {
+      this.diagnosticBuffers.delete(operationId);
+    }
+
     const active = this.activeOperations.get(operationId);
     if (!active) {
       console.warn(`[SessionLogService] Active operation not found: ${operationId}`);
       return;
     }
-    
+
     const { entry, startTime } = active;
     const duration = performance.now() - startTime;
-    
+
     // Update entry
     if (level) entry.level = level;
     if (summaryMessage) entry.message = summaryMessage;
-    
+
     entry.context = {
       ...entry.context,
       ...context,
       duration
     };
-    
+
     // Auto-expand if has errors/warnings or many children
     if (entry.children && entry.children.length > 0) {
       const hasIssues = entry.children.some(c => c.level === 'error' || c.level === 'warning');
@@ -312,8 +428,42 @@ class SessionLogService {
         entry.expanded = true;
       }
     }
-    
+
     this.activeOperations.delete(operationId);
+    this.notifyListeners();
+  }
+
+  /**
+   * Promote a buffered diagnostic operation to the real log.
+   * Called when a warning/error child arrives — flushes the parent
+   * and all previously buffered children so the user sees the full context.
+   */
+  private promoteDiagnosticOperation(opId: string): void {
+    const buffered = this.diagnosticBuffers.get(opId);
+    if (!buffered) return;
+
+    // For fully-diagnostic parents, move entry to real log.
+    // For diagnosticChildren parents, the entry is already in the log —
+    // we just need to register the buffered children.
+    const alreadyInLog = this.entriesById.has(opId);
+    if (!alreadyInLog) {
+      this.entries.push(buffered.entry);
+      this.entriesById.set(opId, buffered.entry);
+    }
+
+    // Register all buffered children in entriesById
+    if (buffered.entry.children) {
+      for (const child of buffered.entry.children) {
+        this.entriesById.set(child.id, child);
+      }
+    }
+
+    // Mark as promoted — future addChild calls go through the normal path
+    buffered.promoted = true;
+
+    // Auto-expand since we're promoting due to a warning/error
+    buffered.entry.expanded = true;
+
     this.notifyListeners();
   }
 
@@ -351,13 +501,18 @@ class SessionLogService {
   }
 
   /**
-   * Convenience methods for different log levels
+   * Convenience methods for different log levels.
+   * info() and success() accept DiagnosticOptions — when diagnostic is true
+   * and diagnostic logging is off, the entry is silently dropped.
+   * warning() and error() never accept DiagnosticOptions and are always logged.
    */
-  info(category: OperationType, operation: string, message: string, details?: string, context?: OperationContext): string {
+  info(category: OperationType, operation: string, message: string, details?: string, context?: OperationContext, options?: DiagnosticOptions): string {
+    if (options?.diagnostic && !this.diagnosticLoggingEnabled) return '';
     return this.log('info', category, operation, message, details, context);
   }
 
-  success(category: OperationType, operation: string, message: string, details?: string, context?: OperationContext): string {
+  success(category: OperationType, operation: string, message: string, details?: string, context?: OperationContext, options?: DiagnosticOptions): string {
+    if (options?.diagnostic && !this.diagnosticLoggingEnabled) return '';
     return this.log('success', category, operation, message, details, context);
   }
 

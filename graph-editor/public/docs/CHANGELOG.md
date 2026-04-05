@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.9.14b
+**Released:** 3-Apr-26
+
+Fix to retrieveall
+
+---
+
 ## Version 1.9.7b
 **Released:** 1-Apr-26
 

@@ -75,7 +75,10 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
       if (isShareMode()) {
         console.log('[NavigatorContext] Share mode detected - skipping workspace initialisation');
         setIsInitialized(true);
-        try { window.dispatchEvent(new CustomEvent('dagnet:navigatorLoadComplete', { detail: {} })); } catch { /* best effort */ }
+        try {
+          (window as any).__dagnetNavigatorLoadComplete = true;
+          window.dispatchEvent(new CustomEvent('dagnet:navigatorLoadComplete', { detail: {} }));
+        } catch { /* best effort */ }
         return;
       }
       const savedState = await loadStateFromDB();
@@ -100,7 +103,10 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
         // No credentials / no repo configured — loadItems (which normally
         // dispatches navigatorLoadComplete) will never run, so fire it here
         // to unblock the boot progress indicator.
-        try { window.dispatchEvent(new CustomEvent('dagnet:navigatorLoadComplete', { detail: {} })); } catch { /* best effort */ }
+        try {
+          (window as any).__dagnetNavigatorLoadComplete = true;
+          window.dispatchEvent(new CustomEvent('dagnet:navigatorLoadComplete', { detail: {} }));
+        } catch { /* best effort */ }
       }
       setIsInitialized(true);
     };
@@ -699,8 +705,12 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
     } finally {
       loadingRef.current = false;
       setIsLoading(false);
-      // Signal that loading is complete (used by AppShell ?branch= URL handling)
-      try { window.dispatchEvent(new CustomEvent('dagnet:navigatorLoadComplete', { detail: { repo, branch } })); } catch { /* best effort */ }
+      // Signal that loading is complete (used by AppShell ?branch= URL handling
+      // and by useURLDailyRetrieveAllQueue to gate the automation job).
+      try {
+        (window as any).__dagnetNavigatorLoadComplete = true;
+        window.dispatchEvent(new CustomEvent('dagnet:navigatorLoadComplete', { detail: { repo, branch } }));
+      } catch { /* best effort */ }
     }
   }, []); // Empty deps - uses params, not external state
 

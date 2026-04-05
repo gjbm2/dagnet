@@ -1,8 +1,8 @@
 /**
  * useURLDailyRetrieveAllQueue Hook
  *
- * Thin wrapper that parses URL params and triggers the daily-automation
- * scheduler job. All orchestration logic lives in dailyAutomationJob.ts.
+ * Thin wrapper that parses URL params, bridges React context to the
+ * daily-automation scheduler job, and triggers it.
  *
  * Supported URLs:
  * - `?retrieveall=<graph-name>` (single)
@@ -12,7 +12,7 @@
  * - `?retrieveall` (no value) — enumeration mode: all graphs with dailyFetch: true
  */
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigatorContext } from '../contexts/NavigatorContext';
 import { useTabContext, fileRegistry } from '../contexts/TabContext';
 import { isShareMode } from '../lib/shareBootResolver';
@@ -58,6 +58,29 @@ export function useURLDailyRetrieveAllQueue(): void {
   const processedRef = useRef(false);
   const paramsRef = useRef<ReturnType<typeof parseURLParams> | null>(null);
 
+  // Track whether NavigatorContext has finished its init.
+  const [navigatorReady, setNavigatorReady] = useState(() => {
+    // Check if the event already fired before this hook mounted.
+    try {
+      return !!(window as any).__dagnetNavigatorLoadComplete;
+    } catch {
+      return false;
+    }
+  });
+
+  // Listen for NavigatorContext init completion.
+  useEffect(() => {
+    if (navigatorReady) return; // Already set.
+
+    const handler = () => setNavigatorReady(true);
+    window.addEventListener('dagnet:navigatorLoadComplete', handler);
+    // Re-check in case it fired between useState init and addEventListener.
+    if ((window as any).__dagnetNavigatorLoadComplete) {
+      setNavigatorReady(true);
+    }
+    return () => window.removeEventListener('dagnet:navigatorLoadComplete', handler);
+  }, [navigatorReady]);
+
   // Parse params on mount (before TabContext cleans them).
   useEffect(() => {
     if (!paramsRef.current) paramsRef.current = parseURLParams();
@@ -67,6 +90,7 @@ export function useURLDailyRetrieveAllQueue(): void {
   updateDailyAutomationContext({
     selectedRepo: navState.selectedRepo,
     selectedBranch: navState.selectedBranch,
+    navigatorReady,
     tabs,
     tabOps: tabOps?.openTab ? {
       openTab: tabOps.openTab,

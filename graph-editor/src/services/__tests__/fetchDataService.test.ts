@@ -74,10 +74,16 @@ vi.mock('../operationRegistryService', () => ({
   },
 }));
 
+vi.mock('../rateLimitCountdownService', () => ({
+  startRateLimitCountdown: vi.fn(async () => 'expired' as const),
+}));
+
 import { fileRegistry } from '../../contexts/TabContext';
 import { calculateIncrementalFetch, parseDate } from '../windowAggregationService';
 import { parseConstraints } from '../../lib/queryDSL';
 import { forecastingSettingsService } from '../forecastingSettingsService';
+import { startRateLimitCountdown } from '../rateLimitCountdownService';
+import { operationRegistryService } from '../operationRegistryService';
 
 vi.mock('../forecastingSettingsService', () => ({
   forecastingSettingsService: {
@@ -1475,6 +1481,282 @@ describe('persistGraphMasteredLatencyToParameterFiles (doc 19)', () => {
     // t95 preserved (locked), path_t95 updated (unlocked)
     expect(graph.edges[0].p.latency.t95).toBe(14);
     expect(graph.edges[0].p.latency.path_t95).toBe(46);
+  });
+});
+
+// ============================================================================
+// fetchItems — Rate Limit Detection + Countdown + Retry
+// ============================================================================
+
+import { fetchItems, type FetchItem as FetchItemType } from '../fetchDataService';
+
+describe('fetchItems — rate limit countdown and retry', () => {
+  let getFromSourceSpy: ReturnType<typeof vi.spyOn>;
+  const mockStartCountdown = vi.mocked(startRateLimitCountdown);
+
+  function makeFetchItems(count: number): FetchItemType[] {
+    return Array.from({ length: count }, (_, i) => ({
+      id: `item-${i}`,
+      type: 'parameter' as const,
+      name: `Param ${i}`,
+      objectId: `param-${i}`,
+      targetId: `edge-${i}`,
+    }));
+  }
+
+  function makeGraph(edgeCount: number): Graph {
+    return {
+      nodes: [],
+      edges: Array.from({ length: edgeCount }, (_, i) => ({
+        uuid: `edge-${i}`,
+        id: `edge-${i}`,
+        from: 'a',
+        to: 'b',
+        p: { id: `param-${i}`, connection: { name: 'test' } },
+      })),
+    } as Graph;
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Default: getFromSource succeeds.
+    getFromSourceSpy = vi.spyOn(dataOperationsService, 'getFromSource').mockResolvedValue(undefined);
+    // Default: countdown resolves immediately as 'expired'.
+    mockStartCountdown.mockResolvedValue('expired');
+  });
+
+  afterEach(() => {
+    getFromSourceSpy.mockRestore();
+  });
+
+  it('should retry the rate-limited item after countdown expires and produce exactly N results', async () => {
+    const items = makeFetchItems(5);
+    const graph = makeGraph(5);
+    const setGraph = vi.fn();
+    let callCount = 0;
+
+    // Item 2 (index 2) fails with rate limit on first call, succeeds on second.
+    getFromSourceSpy.mockImplementation(async (opts: any) => {
+      callCount++;
+      if (opts.objectId === 'param-2' && callCount <= 3) {
+        // First call for item-2 (callCount 3 = items 0, 1, 2) → rate limit.
+        throw new Error('429 Too Many Requests');
+      }
+      return undefined;
+    });
+
+    const results = await fetchItems(
+      items,
+      { mode: 'versioned', skipStage2: true },
+      graph,
+      setGraph,
+      'window(7d)',
+    );
+
+    // Exactly 5 results — no duplicates.
+    expect(results).toHaveLength(5);
+
+    // Items 0 and 1 succeeded on first try.
+    expect(results[0].success).toBe(true);
+    expect(results[1].success).toBe(true);
+
+    // Item 2 was retried after countdown and succeeded.
+    expect(results[2].success).toBe(true);
+    expect(results[2].item.id).toBe('item-2');
+
+    // Items 3 and 4 proceeded after retry.
+    expect(results[3].success).toBe(true);
+    expect(results[4].success).toBe(true);
+
+    // Countdown was started exactly once.
+    expect(mockStartCountdown).toHaveBeenCalledTimes(1);
+    expect(mockStartCountdown).toHaveBeenCalledWith(
+      expect.objectContaining({ cooldownMinutes: expect.any(Number) }),
+    );
+  });
+
+  it('should abort remaining items when countdown is aborted by user', async () => {
+    const items = makeFetchItems(5);
+    const graph = makeGraph(5);
+    const setGraph = vi.fn();
+
+    // Item 1 hits rate limit.
+    getFromSourceSpy.mockImplementation(async (opts: any) => {
+      if (opts.objectId === 'param-1') {
+        throw new Error('Exceeded rate limit');
+      }
+      return undefined;
+    });
+
+    // Countdown aborted by user.
+    mockStartCountdown.mockResolvedValue('aborted');
+
+    const results = await fetchItems(
+      items,
+      { mode: 'versioned', skipStage2: true },
+      graph,
+      setGraph,
+      'window(7d)',
+    );
+
+    // Only 2 results: item 0 (success) + item 1 (error, rate limit).
+    // Items 2-4 were skipped.
+    expect(results).toHaveLength(2);
+    expect(results[0].success).toBe(true);
+    expect(results[1].success).toBe(false);
+    expect(results[1].item.id).toBe('item-1');
+  });
+
+  it('should not trigger countdown for non-rate-limit errors', async () => {
+    const items = makeFetchItems(3);
+    const graph = makeGraph(3);
+    const setGraph = vi.fn();
+
+    // Item 1 fails with a normal error (not rate limit).
+    getFromSourceSpy.mockImplementation(async (opts: any) => {
+      if (opts.objectId === 'param-1') {
+        throw new Error('Network timeout');
+      }
+      return undefined;
+    });
+
+    const results = await fetchItems(
+      items,
+      { mode: 'versioned', skipStage2: true },
+      graph,
+      setGraph,
+      'window(7d)',
+    );
+
+    // All 3 items processed — no countdown, no abort.
+    expect(results).toHaveLength(3);
+    expect(results[0].success).toBe(true);
+    expect(results[1].success).toBe(false);
+    expect(results[2].success).toBe(true);
+
+    // No countdown started.
+    expect(mockStartCountdown).not.toHaveBeenCalled();
+  });
+
+  it('should handle rate limit on the very first item', async () => {
+    const items = makeFetchItems(3);
+    const graph = makeGraph(3);
+    const setGraph = vi.fn();
+    let firstItemCalls = 0;
+
+    getFromSourceSpy.mockImplementation(async (opts: any) => {
+      if (opts.objectId === 'param-0') {
+        firstItemCalls++;
+        if (firstItemCalls === 1) {
+          throw new Error('429 Too Many Requests');
+        }
+      }
+      return undefined;
+    });
+
+    const results = await fetchItems(
+      items,
+      { mode: 'versioned', skipStage2: true },
+      graph,
+      setGraph,
+      'window(7d)',
+    );
+
+    // All 3 items eventually succeeded.
+    expect(results).toHaveLength(3);
+    expect(results[0].success).toBe(true);
+    expect(results[0].item.id).toBe('item-0');
+    expect(mockStartCountdown).toHaveBeenCalledTimes(1);
+  });
+
+  it('should handle rate limit on the last item', async () => {
+    const items = makeFetchItems(3);
+    const graph = makeGraph(3);
+    const setGraph = vi.fn();
+    let lastItemCalls = 0;
+
+    getFromSourceSpy.mockImplementation(async (opts: any) => {
+      if (opts.objectId === 'param-2') {
+        lastItemCalls++;
+        if (lastItemCalls === 1) {
+          throw new Error('Too Many Requests');
+        }
+      }
+      return undefined;
+    });
+
+    const results = await fetchItems(
+      items,
+      { mode: 'versioned', skipStage2: true },
+      graph,
+      setGraph,
+      'window(7d)',
+    );
+
+    expect(results).toHaveLength(3);
+    expect(results[2].success).toBe(true);
+    expect(results[2].item.id).toBe('item-2');
+    expect(mockStartCountdown).toHaveBeenCalledTimes(1);
+  });
+
+  it('should show rate-limit abort info in batch progress completion when aborted', async () => {
+    // Use 3+ items to trigger shouldShowBatchProgress.
+    const items = makeFetchItems(4);
+    const graph = makeGraph(4);
+    const setGraph = vi.fn();
+
+    // Item 1 rate-limited; countdown aborted.
+    getFromSourceSpy.mockImplementation(async (opts: any) => {
+      if (opts.objectId === 'param-1') {
+        throw new Error('429 Too Many Requests');
+      }
+      return undefined;
+    });
+    mockStartCountdown.mockResolvedValue('aborted');
+
+    await fetchItems(
+      items,
+      { mode: 'versioned', skipStage2: true },
+      graph,
+      setGraph,
+      'window(7d)',
+    );
+
+    // The batch progress toast should have been completed with rate-limit info.
+    const completeMock = vi.mocked(operationRegistryService.complete);
+    expect(completeMock).toHaveBeenCalledWith(
+      'batch-fetch-progress',
+      'error',
+      expect.stringContaining('rate limit'),
+    );
+  });
+
+  it('should handle single-item rate limit (no batch progress registered)', async () => {
+    const items = makeFetchItems(1);
+    const graph = makeGraph(1);
+    const setGraph = vi.fn();
+    let calls = 0;
+
+    getFromSourceSpy.mockImplementation(async () => {
+      calls++;
+      if (calls === 1) {
+        throw new Error('429 Too Many Requests');
+      }
+      return undefined;
+    });
+
+    const results = await fetchItems(
+      items,
+      { mode: 'versioned', skipStage2: true },
+      graph,
+      setGraph,
+      'window(7d)',
+    );
+
+    // Single item retried and succeeded.
+    expect(results).toHaveLength(1);
+    expect(results[0].success).toBe(true);
+    expect(mockStartCountdown).toHaveBeenCalledTimes(1);
   });
 });
 

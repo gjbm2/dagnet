@@ -355,6 +355,7 @@ export function ScenarioEditorModal({ isOpen, scenarioId, tabId, onClose, onSave
                       setIsDirty(true);
                     }}
                     graph={graph}
+                    allowedFunctions={['context', 'contextAny', 'window', 'cohort', 'asat', 'at']}
                     height="60px"
                     placeholder="e.g., window(-30d:-1d).context(channel:google)"
                     readonly={false}
