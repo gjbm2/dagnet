@@ -121,7 +121,8 @@ export async function getParameterFromFile(options: {
         'data-fetch',
         'ASAT_FROM_FILE',
         `As-at snapshot query (from-file): ${paramId}`,
-        { paramId, edgeId, fileId: `parameter-${paramId}`, dsl: targetSlice }
+        { paramId, edgeId, fileId: `parameter-${paramId}`, dsl: targetSlice },
+        { diagnostic: true }
       );
       
       // Build workspace-prefixed param_id from parameter file source metadata
@@ -370,7 +371,8 @@ export async function getParameterFromFile(options: {
     'data-fetch',
     'GET_FROM_FILE',
     `Get parameter from file: ${paramId}`,
-    { fileId: `parameter-${paramId}`, fileType: 'parameter', targetId: edgeId }
+    { fileId: `parameter-${paramId}`, fileType: 'parameter', targetId: edgeId },
+    { diagnostic: true }
   );
   
   // Set auto-updating flag to enable animations
@@ -1945,7 +1947,8 @@ export async function getCaseFromFile(options: {
     'data-fetch',
     'GET_FROM_FILE',
     `Get case from file: ${caseId}`,
-    { fileId: `case-${caseId}`, fileType: 'case', targetId: nodeId }
+    { fileId: `case-${caseId}`, fileType: 'case', targetId: nodeId },
+    { diagnostic: true }
   );
   
   // Set auto-updating flag to enable animations
@@ -2176,7 +2179,8 @@ export async function getNodeFromFile(options: {
     'data-fetch',
     'GET_FROM_FILE',
     `Get node from file: ${nodeId}`,
-    { fileId: `node-${nodeId}`, fileType: 'node', targetId: targetNodeUuid || nodeId }
+    { fileId: `node-${nodeId}`, fileType: 'node', targetId: targetNodeUuid || nodeId },
+    { diagnostic: true }
   );
   
   // Set auto-updating flag to enable animations

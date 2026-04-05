@@ -1,10 +1,12 @@
 /**
- * Unit tests for rate limit cooldown machinery in retrieveAllSlicesService.
+ * Tests for rate limit cooldown machinery.
  *
  * Tests that:
  * 1. Rate limit errors are detected correctly
- * 2. The cooldown helper function works
+ * 2. The cooldown helper function works (with registry bridge)
  * 3. The test override for cooldown duration works
+ * 4. formatCountdown displays human-readable times
+ * 5. startRateLimitCountdown bridges countdown → operation registry
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -142,5 +144,206 @@ describe('Rate Limiter Backoff State', () => {
       rateLimiter.reportRateLimitError('amplitude', '429');
     }
     expect(rateLimiter.getStats().amplitude.currentBackoff).toBeLessThanOrEqual(120000);
+  });
+});
+
+// ============================================================================
+// formatCountdown (OperationsToast display helper)
+// ============================================================================
+
+import { formatCountdown } from '../../components/OperationsToast';
+
+describe('formatCountdown', () => {
+  it('should format 61 minutes as "61:00"', () => {
+    expect(formatCountdown(3660)).toBe('61:00');
+  });
+
+  it('should format 2m 5s as "2:05"', () => {
+    expect(formatCountdown(125)).toBe('2:05');
+  });
+
+  it('should format exactly 1 minute as "1:00"', () => {
+    expect(formatCountdown(60)).toBe('1:00');
+  });
+
+  it('should format sub-minute as seconds with "s" suffix', () => {
+    expect(formatCountdown(59)).toBe('59s');
+    expect(formatCountdown(1)).toBe('1s');
+  });
+
+  it('should format zero as "0s"', () => {
+    expect(formatCountdown(0)).toBe('0s');
+  });
+
+  it('should clamp negative values to "0s"', () => {
+    expect(formatCountdown(-5)).toBe('0s');
+  });
+
+  it('should floor fractional seconds', () => {
+    expect(formatCountdown(61.9)).toBe('1:01');
+    expect(formatCountdown(59.9)).toBe('59s');
+  });
+});
+
+// ============================================================================
+// startRateLimitCountdown (non-React bridge)
+// ============================================================================
+
+// Mock sessionLogService before importing the countdown service.
+vi.mock('../sessionLogService', () => ({
+  sessionLogService: {
+    info: vi.fn(),
+    success: vi.fn(),
+    warning: vi.fn(),
+    error: vi.fn(),
+    addChild: vi.fn(),
+    startOperation: vi.fn(() => 'mock-log-id'),
+    endOperation: vi.fn(),
+  },
+}));
+
+import { operationRegistryService } from '../operationRegistryService';
+import { startRateLimitCountdown } from '../rateLimitCountdownService';
+
+describe('startRateLimitCountdown', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    // Clean up any lingering operations from previous tests.
+    const state = operationRegistryService.getState();
+    for (const op of state.active) {
+      operationRegistryService.complete(op.id, 'cancelled');
+    }
+    operationRegistryService.clearRecent();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('should register a countdown operation in the registry', async () => {
+    const promise = startRateLimitCountdown({ cooldownMinutes: 1 });
+
+    const state = operationRegistryService.getState();
+    const countdownOp = state.active.find(op => op.kind === 'rate-limit-cooldown');
+    expect(countdownOp).toBeDefined();
+    expect(countdownOp!.status).toBe('countdown');
+
+    // Let the countdown expire to clean up.
+    vi.advanceTimersByTime(60_000);
+    await vi.runAllTimersAsync();
+    await promise;
+  });
+
+  it('should resolve "expired" when countdown reaches zero', async () => {
+    const promise = startRateLimitCountdown({ cooldownMinutes: 1 });
+
+    // Advance past the 60-second countdown.
+    vi.advanceTimersByTime(61_000);
+    await vi.runAllTimersAsync();
+
+    const result = await promise;
+    expect(result).toBe('expired');
+  });
+
+  it('should resolve "aborted" when shouldStop returns true', async () => {
+    let stop = false;
+    const promise = startRateLimitCountdown({
+      cooldownMinutes: 1,
+      shouldStop: () => stop,
+    });
+
+    // Advance a bit, then signal abort.
+    vi.advanceTimersByTime(5_000);
+    stop = true;
+    vi.advanceTimersByTime(1_000); // Trigger the abort check interval.
+
+    const result = await promise;
+    expect(result).toBe('aborted');
+  });
+
+  it('should sync countdown ticks to the operation registry', async () => {
+    const promise = startRateLimitCountdown({ cooldownMinutes: 1 });
+
+    // After a few ticks, the registry should show decremented seconds.
+    vi.advanceTimersByTime(3_000);
+
+    const state = operationRegistryService.getState();
+    const countdownOp = state.active.find(op => op.kind === 'rate-limit-cooldown');
+    expect(countdownOp).toBeDefined();
+    expect(countdownOp!.countdownSecondsRemaining).toBeLessThan(60);
+    expect(countdownOp!.countdownSecondsRemaining).toBeGreaterThan(50);
+    expect(countdownOp!.countdownTotalSeconds).toBe(60);
+
+    // Clean up.
+    vi.advanceTimersByTime(60_000);
+    await vi.runAllTimersAsync();
+    await promise;
+  });
+
+  it('should complete own operation on expiry when no operationId provided', async () => {
+    const promise = startRateLimitCountdown({ cooldownMinutes: 1 });
+
+    vi.advanceTimersByTime(61_000);
+    await vi.runAllTimersAsync();
+    await promise;
+
+    // The operation should now be in the recent list (terminal), not active.
+    const state = operationRegistryService.getState();
+    const activeCountdown = state.active.find(op => op.kind === 'rate-limit-cooldown');
+    expect(activeCountdown).toBeUndefined();
+
+    const recentCountdown = state.recent.find(op => op.kind === 'rate-limit-cooldown');
+    expect(recentCountdown).toBeDefined();
+    expect(recentCountdown!.status).toBe('complete');
+  });
+
+  it('should NOT complete operation when operationId is provided (caller owns lifecycle)', async () => {
+    // Register an existing operation that the caller owns.
+    const existingOpId = 'test-retrieve-all-op';
+    operationRegistryService.register({
+      id: existingOpId,
+      kind: 'retrieve-all',
+      label: 'Test Retrieve All',
+      status: 'running',
+    });
+
+    const promise = startRateLimitCountdown({
+      cooldownMinutes: 1,
+      operationId: existingOpId,
+    });
+
+    vi.advanceTimersByTime(61_000);
+    await vi.runAllTimersAsync();
+    await promise;
+
+    // The caller's operation should still be active (not moved to recent).
+    const state = operationRegistryService.getState();
+    const op = state.active.find(o => o.id === existingOpId);
+    // setCountdown transitions to 'countdown'; after expiry the caller must transition back.
+    // The helper should NOT have completed it.
+    // It may be in active (if not completed) or recent (if completed by the helper — which it shouldn't).
+    const inRecent = state.recent.find(o => o.id === existingOpId);
+    expect(inRecent).toBeUndefined();
+
+    // Clean up.
+    operationRegistryService.complete(existingOpId, 'complete');
+  });
+
+  it('should handle cancel button click (via setCancellable) for owned operations', async () => {
+    const promise = startRateLimitCountdown({ cooldownMinutes: 1 });
+
+    vi.advanceTimersByTime(2_000);
+
+    // Find the operation and invoke its cancel callback.
+    const state = operationRegistryService.getState();
+    const countdownOp = state.active.find(op => op.kind === 'rate-limit-cooldown');
+    expect(countdownOp).toBeDefined();
+    expect(countdownOp!.cancellable).toBe(true);
+    expect(countdownOp!.onCancel).toBeDefined();
+
+    countdownOp!.onCancel!();
+
+    const result = await promise;
+    expect(result).toBe('aborted');
   });
 });

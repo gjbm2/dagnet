@@ -332,7 +332,7 @@ class DataOperationsService {
   }): Promise<GetFromSourceResult> {
     const { objectType, objectId, targetId, graph, setGraph, paramSlot, conditionalIndex, bustCache, targetSlice = '', currentDSL, boundedCohortWindow, skipCohortBounding, dontExecuteHttp, overrideFetchWindows, onCacheAnalysis, retrievalBatchAt, enforceAtomicityScopeS } = options;
     sessionLogService.info('data-fetch', 'DATA_GET_FROM_SOURCE', `Get from Source (versioned): ${objectType} ${objectId}`,
-      undefined, { fileId: `${objectType}-${objectId}`, fileType: objectType });
+      undefined, { fileId: `${objectType}-${objectId}`, fileType: objectType }, { diagnostic: true });
     
     // CRITICAL: Track current graph state to avoid stale closure across sequential operations
     // Without this, step 2 would use the original graph, not the one updated by step 1

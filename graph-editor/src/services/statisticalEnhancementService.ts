@@ -1041,7 +1041,8 @@ function improveFitWithT95(
           sigma_min_from_t95: sigmaMinFromT95,
           sigma_final: sigmaFinal,
         },
-      }
+      },
+      { diagnostic: true }
     );
   }
 
@@ -1110,7 +1111,8 @@ function getCompletenessCdfParams(
           sigma_min_from_t95: sigmaMinFromT95,
           sigma_final: sigmaFinal,
         },
-      }
+      },
+      { diagnostic: true }
     );
   }
 

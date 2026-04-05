@@ -79,6 +79,21 @@ function formatCount(op: Operation): string | undefined {
   return `${op.progress.current}/${op.progress.total}`;
 }
 
+/**
+ * Format countdown seconds as human-readable time.
+ * >= 60s → "m:ss" (e.g. "61:00", "2:05")
+ * < 60s → "Xs" (e.g. "45s")
+ */
+export function formatCountdown(seconds: number): string {
+  const s = Math.max(0, Math.floor(seconds));
+  if (s >= 60) {
+    const m = Math.floor(s / 60);
+    const rem = s % 60;
+    return `${m}:${String(rem).padStart(2, '0')}`;
+  }
+  return `${s}s`;
+}
+
 /** Pick the "primary" operation to show in the collapsed view. */
 function pickPrimary(active: Operation[]): Operation | undefined {
   return (
@@ -238,7 +253,7 @@ function PrimaryRow({ op }: { op: Operation }) {
         </span>
         <span className="ops-toast-meta">
           {isCountdown && op.countdownSecondsRemaining !== undefined && (
-            <span>{op.countdownSecondsRemaining}s</span>
+            <span>{formatCountdown(op.countdownSecondsRemaining)}</span>
           )}
           {count && <span>{count}</span>}
           {isCountdown && (
@@ -293,7 +308,7 @@ function ListItem({ op, fade }: { op: Operation; fade: string }) {
           {op.label.split('\n')[0]}
           {op.status === 'countdown' && op.countdownSecondsRemaining !== undefined && (
             <span style={{ color: 'var(--text-secondary, #a0a0a0)', marginLeft: 6 }}>
-              {op.countdownSecondsRemaining}s
+              {formatCountdown(op.countdownSecondsRemaining)}
             </span>
           )}
           {op.error && (

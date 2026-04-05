@@ -34,7 +34,13 @@ vi.mock('../operationRegistryService', () => ({
     register: vi.fn(),
     setLabel: vi.fn(),
     setProgress: vi.fn(),
+    setCountdown: vi.fn(),
+    setCancellable: vi.fn(),
     complete: vi.fn(),
+    get: vi.fn(),
+    getState: vi.fn(() => ({ active: [], recent: [] })),
+    clearRecent: vi.fn(),
+    subscribe: vi.fn(() => () => {}),
   },
 }));
 

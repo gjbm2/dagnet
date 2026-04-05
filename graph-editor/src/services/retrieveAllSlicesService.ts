@@ -11,7 +11,7 @@ import { summarisePlan, type FetchPlan, type FetchPlanItem, type FetchWindow } f
 import { fetchDataService, type FetchItem } from './fetchDataService';
 import { lagHorizonsService } from './lagHorizonsService';
 import { rateLimiter, getEffectiveRateLimitCooloffMinutes } from './rateLimiter';
-import { countdownService } from './countdownService';
+import { startRateLimitCountdown, type RateLimitCountdownResult } from './rateLimitCountdownService';
 import { batchAnchorCoverage, type BatchAnchorCoverageSubject } from './snapshotWriteService';
 import { getClosureSet } from './hashMappingsService';
 import { computeShortCoreHash } from './coreHashService';
@@ -160,64 +160,19 @@ export interface RetrieveAllSlicesWithProgressToastOptions extends RetrieveAllSl
 }
 
 /**
- * Run a rate limit cooldown with countdown.
- * Returns 'expired' when the countdown completes, 'aborted' if shouldStop returns true.
+ * Run a rate limit cooldown with countdown, visible in OperationsToast.
+ * Thin wrapper around the shared startRateLimitCountdown helper.
  */
 async function runRateLimitCooldown(opts: {
   cooldownMinutes: number;
   shouldStop: () => boolean;
   logOpId: string;
-}): Promise<'expired' | 'aborted'> {
-  const { cooldownMinutes, shouldStop, logOpId } = opts;
-  const totalSeconds = cooldownMinutes * 60;
-  const key = `automation:ratelimit:cooldown:${Date.now()}`;
-
-  sessionLogService.addChild(
-    logOpId,
-    'warning',
-    'RATE_LIMIT_COOLDOWN_START',
-    `Rate limit hit - waiting ${cooldownMinutes} minutes before resuming`,
-    undefined,
-    { cooldownMinutes, totalSeconds }
-  );
-
-  return new Promise((resolve) => {
-    let resolved = false;
-
-    const checkAbort = setInterval(() => {
-      if (resolved) return;
-      if (shouldStop()) {
-        resolved = true;
-        clearInterval(checkAbort);
-        countdownService.cancelCountdown(key);
-        resolve('aborted');
-      }
-    }, 1000);
-
-    countdownService.startCountdown({
-      key,
-      durationSeconds: totalSeconds,
-      onExpire: () => {
-        if (resolved) return;
-        resolved = true;
-        clearInterval(checkAbort);
-        sessionLogService.addChild(
-          logOpId,
-          'info',
-          'RATE_LIMIT_COOLDOWN_EXPIRED',
-          `Rate limit cooldown complete - resuming retrieval`
-        );
-        resolve('expired');
-      },
-      audit: {
-        operationType: 'data-fetch',
-        startCode: 'RATE_LIMIT_COOLDOWN_START',
-        cancelCode: 'RATE_LIMIT_COOLDOWN_CANCEL',
-        expireCode: 'RATE_LIMIT_COOLDOWN_EXPIRE',
-        message: `Rate limit cooldown (${cooldownMinutes} minutes)`,
-        metadata: { cooldownMinutes },
-      },
-    });
+}): Promise<RateLimitCountdownResult> {
+  return startRateLimitCountdown({
+    cooldownMinutes: opts.cooldownMinutes,
+    shouldStop: opts.shouldStop,
+    logOpId: opts.logOpId,
+    label: `Amplitude rate limit — retrying in ${opts.cooldownMinutes}m`,
   });
 }
 
@@ -335,7 +290,8 @@ class RetrieveAllSlicesService {
       'data-fetch',
       'BATCH_ALL_SLICES',
       `Retrieve All Slices: ${totalSlices} slice(s)`,
-      { filesAffected: effectiveSlices, referenceNow: batchReferenceNow }
+      { filesAffected: effectiveSlices, referenceNow: batchReferenceNow },
+      { diagnostic: true }
     );
 
     let totalSuccess = 0;
@@ -1126,7 +1082,8 @@ class RetrieveAllSlicesService {
           'data-fetch',
           'POST_RETRIEVE_TOPO_PASS',
           'Post-retrieve topo pass (from-file refresh + Stage‑2)',
-          { dsl: postRunRefreshDsl }
+          { dsl: postRunRefreshDsl },
+          { diagnostic: true }
         );
         try {
           const g = getGraph();

@@ -248,14 +248,15 @@ export async function getFromSourceDirect(options: {
     'data-fetch',
     writeToFile ? 'DATA_FETCH_VERSIONED' : 'DATA_FETCH_DIRECT',
     `Fetching ${objectType}: ${entityLabel}`,
-    { 
-      fileId: objectId ? `${objectType}-${objectId}` : undefined, 
+    {
+      fileId: objectId ? `${objectType}-${objectId}` : undefined,
       fileType: objectType,
       targetId,
       slice: sliceDimensionsForLog || undefined,
       sliceDSL: sliceDSLForLog || undefined,
       sliceLabel: sliceLabelForLog,
-    }
+    },
+    { diagnosticChildren: true }
   );
 
   // ============================================================================
@@ -3923,7 +3924,7 @@ export async function getFromSourceDirect(options: {
     ) {
       sessionLogService.addChild(
         logOpId,
-        'warning',
+        'info',
         'FETCH_NO_DATA_RETURNED',
         `No daily datapoints returned for ${objectId} (executed ${actualFetchWindows.length} plan window(s))`,
         `Windows: ${gapsDesc}`,
