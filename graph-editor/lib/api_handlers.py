@@ -1162,6 +1162,7 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
         # Key: base_subject_id → list of (subj, frames) from each epoch.
         _epoch_frames: Dict[str, List[Any]] = {}
         _epoch_subjects: Dict[str, List[Any]] = {}
+        _epoch_row_counts: Dict[str, int] = {}  # base_sid → total pre-fetched rows
         for subj in subjects:
             if subj.get('read_mode') == 'cohort_maturity' and analysis_type == 'cohort_maturity':
                 base_sid = _base_subject_id(subj.get('subject_id', ''))
@@ -1191,6 +1192,7 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                 )
                 print(f"[epoch_unify] base={base_sid[:40]} epoch_anchor={subj['anchor_from']}..{subj['anchor_to']} rows={len(rows)}")
                 scenario_rows += len(rows)
+                _epoch_row_counts[base_sid] = _epoch_row_counts.get(base_sid, 0) + len(rows)
                 if rows:
                     frames = derive_cohort_maturity(
                         rows,
@@ -1277,8 +1279,11 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                         sweep_from=subj.get('sweep_from'),
                         sweep_to=subj.get('sweep_to'),
                     )
-                # rows count already accumulated during pre-fetch
-                rows = []  # avoid double-counting
+                # rows count already accumulated during pre-fetch;
+                # keep the count for per-subject reporting, but clear rows
+                # to avoid double-counting in scenario_rows.
+                _prefetch_row_count = _epoch_row_counts.get(base_sid, 0)
+                rows = []
             elif read_mode == 'sweep_simple':
                 # Simple sweep (no epoch splitting) — used by lag_fit
                 sweep_from = date.fromisoformat(subj['sweep_from']) if subj.get('sweep_from') else None
@@ -1841,7 +1846,7 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                 "subject_id": subj.get('subject_id'),
                 "success": True,
                 "result": result,
-                "rows_analysed": len(rows),
+                "rows_analysed": _prefetch_row_count if read_mode == 'cohort_maturity' else len(rows),
             })
 
         total_rows += scenario_rows

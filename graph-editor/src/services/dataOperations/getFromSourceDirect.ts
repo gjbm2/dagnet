@@ -4174,7 +4174,7 @@ export async function getFromSourceDirect(options: {
               sessionLogService.addChild(logOpId, 'warning', 'SNAPSHOT_WRITE_ERROR',
                 `Snapshot write error: ${error instanceof Error ? error.message : error}`,
                 undefined,
-                { param_id: dbParamId || objectId, rows_count: snapshotRows.length, slice_key: sliceDSL || '' }
+                { param_id: dbParamId || objectId }
               );
             }
           }
@@ -4500,7 +4500,7 @@ export async function getFromSourceDirect(options: {
               sessionLogService.addChild(logOpId, 'warning', 'SNAPSHOT_WRITE_ERROR',
                 `Snapshot write error: ${error instanceof Error ? error.message : error}`,
                 undefined,
-                { param_id: dbParamId || objectId, rows_count: snapshotRows.length, slice_key: sliceDSL || '' }
+                { param_id: dbParamId || objectId }
               );
             }
           }

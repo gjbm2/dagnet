@@ -14,7 +14,7 @@ import {
 } from './snapshotWriteService';
 import { computeShortCoreHash } from './coreHashService';
 import { db } from '../db/appDatabase';
-import { getClosureSet } from './hashMappingsService';
+import { getClosureSet, type ClosureEntry } from './hashMappingsService';
 
 const providerByConnection = new Map<string, string>();
 
@@ -393,7 +393,7 @@ export async function getSnapshotCoverageForEdgesBatched(args: {
     const contextDims = extractSliceDimensions(dslWithoutAsat);
     const wantSliceFilter = !!contextDims && !hasContextAny(dslWithoutAsat);
 
-    const equivalentHashesByParam: Record<string, Array<{ core_hash: string }>> = {};
+    const equivalentHashesByParam: Record<string, ClosureEntry[]> = {};
     for (const edge of validEdges) {
       if (!equivalentHashesByParam[edge.dbParamId]) {
         const closure = getClosureSet(edge.coreHash);

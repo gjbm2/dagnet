@@ -1903,7 +1903,7 @@ export async function runStage2EnhancementsAndInboundN(
           // Preserve existing path params when the current topo pass doesn't produce
           // them (e.g. window mode doesn't compute path_mu/path_sigma).
           if (ev.latency?.mu != null) {
-            const prev = existing.latency || {};
+            const prev: Record<string, any> = existing.latency || {};
             existing.latency = {
               mu: ev.latency.mu!,
               sigma: ev.latency.sigma!,
