@@ -8,7 +8,7 @@ import { installShareLiveStubs, type ShareLiveStubState } from './support/shareL
  * 1. The error is detected as a rate limit
  * 2. In automated mode, a cooldown countdown would be triggered
  *
- * NOTE: We test the detection mechanism here. The full 61-minute wait
+ * NOTE: We test the detection mechanism here. The full 45-minute wait
  * is tested via unit tests (rateLimitCooldown.test.ts).
  */
 
@@ -201,7 +201,7 @@ test('rate limiter correctly identifies Amplitude 429 error patterns', async ({ 
   }
 });
 
-test('AUTOMATION_RATE_LIMIT_COOLOFF_MINUTES constant is 61', async ({ page, baseURL }) => {
+test('AUTOMATION_RATE_LIMIT_COOLOFF_MINUTES constant is 45', async ({ page, baseURL }) => {
   const shareState: ShareLiveStubState = { version: 'v1', counts: {} };
   
   await installShareLiveStubs(page, shareState);
@@ -212,11 +212,11 @@ test('AUTOMATION_RATE_LIMIT_COOLOFF_MINUTES constant is 61', async ({ page, base
   
   await page.waitForFunction(() => (window as any).db !== undefined, { timeout: 15_000 });
   
-  // The constant should be 61 minutes (we can't directly import it, but we test the override mechanism)
+  // The constant should be 45 minutes (we can't directly import it, but we test the override mechanism)
   const result = await page.evaluate(() => {
     const w = window as any;
     
-    // Without override, getEffectiveRateLimitCooloffMinutes should return 61
+    // Without override, getEffectiveRateLimitCooloffMinutes should return 45
     // We can verify this by checking that setting override works
     const beforeOverride = w.__dagnetTestRateLimitCooloffMinutes;
     

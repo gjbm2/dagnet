@@ -98,7 +98,7 @@ export interface RetrieveAllSlicesOptions {
 
   /**
    * If true, this is an automated (cron) run. On rate limit:
-   * - Automated: wait 61 minutes and retry
+   * - Automated: wait 45 minutes and retry
    * - Manual (false/undefined): abort immediately with explanation
    * 
    * Set automatically by executeRetrieveAllSlicesWithProgressToast().
@@ -939,7 +939,7 @@ class RetrieveAllSlicesService {
             // Check if this is a rate limit error
             if (rateLimiter.isRateLimitError(errorMessage)) {
               if (isAutomated) {
-                // Automated (cron) run: wait 61 minutes and retry
+                // Automated (cron) run: wait 45 minutes and retry
                 const cooldownMinutes = getEffectiveRateLimitCooloffMinutes();
                 sessionLogService.addChild(
                   logOpId,

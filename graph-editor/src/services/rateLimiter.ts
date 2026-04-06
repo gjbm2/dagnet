@@ -13,14 +13,15 @@
  * - Global rate limiting across all call sites
  * - Automatic backoff on 429 errors
  * - Per-provider configuration
- * - Automation mode: 61-minute cooloff for serious rate limits
+ * - Automation mode: 45-minute cooloff for serious rate limits
  */
 
 /**
  * Cooloff period (in minutes) for automation mode when a serious rate limit is hit.
- * Amplitude enforces a 1-hour cooloff; we wait 61 minutes to ensure the limit resets.
+ * Amplitude enforces a 1-hour cooloff, but it takes 15-20 minutes to hit the limit
+ * from a cold start, so a 45-minute recovery period is sufficient.
  */
-export const AUTOMATION_RATE_LIMIT_COOLOFF_MINUTES = 61;
+export const AUTOMATION_RATE_LIMIT_COOLOFF_MINUTES = 45;
 
 /**
  * Get the effective cooloff duration in minutes.
