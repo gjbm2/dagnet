@@ -172,7 +172,7 @@ async function runRateLimitCooldown(opts: {
     cooldownMinutes: opts.cooldownMinutes,
     shouldStop: opts.shouldStop,
     logOpId: opts.logOpId,
-    label: `Amplitude rate limit — retrying in ${opts.cooldownMinutes}m`,
+    label: `Amplitude rate limit / timeout — retrying in ${opts.cooldownMinutes}m`,
   });
 }
 
@@ -936,7 +936,9 @@ class RetrieveAllSlicesService {
           } catch (err) {
             const errorMessage = err instanceof Error ? err.message : String(err);
             
-            // Check if this is a rate limit error
+            // Check if this is a rate limit or timeout error.
+            // Amplitude can express throttling as an explicit 429 OR as a hung
+            // request that times out (~30s).  Both trigger cooldown + retry.
             if (rateLimiter.isRateLimitError(errorMessage)) {
               if (isAutomated) {
                 // Automated (cron) run: wait 45 minutes and retry

@@ -226,9 +226,12 @@ export async function runBeTopoPass(
 
   let response: Response;
   try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5_000); // 5s timeout
     response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      signal: controller.signal,
       body: JSON.stringify({
         graph,
         cohort_data: cohortData,
@@ -241,8 +244,9 @@ export async function runBeTopoPass(
         ...(feOutputs ? { fe_outputs: feOutputs } : {}),
       }),
     });
+    clearTimeout(timeout);
   } catch (e) {
-    console.warn('[beTopoPass] Network error:', e);
+    console.warn('[beTopoPass] Network error or timeout:', e);
     return result;
   }
 

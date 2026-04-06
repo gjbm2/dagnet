@@ -127,6 +127,7 @@ def _load_settings_json(path: str) -> dict:
         return json.load(f)
 
 
+
 def _load_truth_file(graph_path: str) -> dict:
     """Load .truth.yaml sidecar if it exists."""
     truth_path = graph_path.replace(".json", ".truth.yaml")
@@ -333,9 +334,14 @@ def main():
                         help="Dump full bound evidence to JSON file after evidence binding, then stop. "
                              "Includes every trajectory (n, ages, cumulative_y), daily obs (n, k, completeness), "
                              "priors, and raw snapshot row counts per edge.")
+    parser.add_argument("--job-label", type=str, default=None, metavar="LABEL",
+                        help="Override the graph name for lock file and log file. "
+                             "Enables parallel runs of the same graph (e.g. convergence matrix). "
+                             "Lock: /tmp/bayes-harness-{LABEL}.lock, Log: /tmp/bayes_harness-{LABEL}.log")
     args = parser.parse_args()
 
     # NOTE: lock acquisition moved after graph name resolution (below)
+    job_label = args.job_label  # If set, overrides graph_name for lock + log file
 
     # Parse --feature flags into a dict
     feature_flags: dict[str, bool] = {}
@@ -391,7 +397,7 @@ def main():
             print(f"ERROR: Graph not found: {graph_path}")
             sys.exit(1)
         graph_name = os.path.basename(graph_path).replace(".json", "")
-        _acquire_lock(graph_name)
+        _acquire_lock(job_label or graph_name)
         with open(graph_path) as f:
             graph = json.load(f)
         graph_file = os.path.basename(graph_path)
@@ -400,7 +406,7 @@ def main():
             asat_date = None
     elif asat_date:
         graph_name = GRAPH_SHORTCUTS.get(args.graph, args.graph)
-        _acquire_lock(graph_name)
+        _acquire_lock(job_label or graph_name)
         graph_file = f"{graph_name}.json"
         # Load graph from git at the asat date
         import subprocess as _sp
@@ -444,7 +450,7 @@ def main():
         graph_path = os.path.join(data_repo_path, "graphs", graph_file)  # still needed for hash computation
     else:
         graph_name = GRAPH_SHORTCUTS.get(args.graph, args.graph)
-        _acquire_lock(graph_name)
+        _acquire_lock(job_label or graph_name)
         graph_file = f"{graph_name}.json"
         graph_path = os.path.join(data_repo_path, "graphs", graph_file)
         if not os.path.isfile(graph_path):
@@ -724,7 +730,7 @@ def main():
     # --- Run MCMC ---
     import threading
 
-    LOG_PATH = f"/tmp/bayes_harness-{graph_name}.log"
+    LOG_PATH = f"/tmp/bayes_harness-{job_label or graph_name}.log"
     log_file = open(LOG_PATH, "w")
 
     def _print(msg="", **kwargs):

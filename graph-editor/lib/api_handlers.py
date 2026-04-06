@@ -1241,8 +1241,10 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                 # The primary epoch is the first non-gap epoch for this
                 # base subject.  All other epochs (gaps + siblings) are
                 # skipped — their frames were already merged in pre-fetch.
+                # Fallback: if no epoch siblings registered (non-epoch
+                # subject), treat the subject itself as primary.
                 _sibs = _epoch_subjects.get(base_sid, [])
-                _primary_sid = None
+                _primary_sid = subj_sid  # default: self is primary
                 for _s in _sibs:
                     _s_keys = _s.get('slice_keys', [''])
                     if not any(str(sk) == '__epoch_gap__' for sk in _s_keys):
@@ -1523,25 +1525,7 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                     edge_t95_val = model_params.get('t95')
                     path_t95_val = model_params.get('path_t95')
 
-                    # Include user's tau_extent display setting so the chart can
-                    # extend beyond the as-at date, showing the forecast curve
-                    # continuing to mature.
-                    _ds = data.get('display_settings') or {}
-                    _tau_extent_raw = _ds.get('tau_extent') or _ds.get('x_axis_max')
-                    _tau_extent = None
-                    if _tau_extent_raw and _tau_extent_raw not in ('auto', 'Auto'):
-                        try:
-                            _tau_extent = int(float(_tau_extent_raw))
-                        except (ValueError, TypeError):
-                            pass
-                    # Extend axis to show the full maturity curve (where the CDF
-                    # plateaus), not just to the sweep span or t95.  Use 2× t95
-                    # as a proxy for near-complete maturity.
-                    t95_extended = max(
-                        (edge_t95_val or 0) * 2,
-                        (path_t95_val or 0) * 2,
-                    ) if (edge_t95_val or path_t95_val) else 0
-                    candidates = [c for c in [sweep_span, edge_t95_val, path_t95_val, t95_extended, _tau_extent] if c and c > 0]
+                    candidates = [c for c in [sweep_span, edge_t95_val, path_t95_val] if c and c > 0]
                     axis_tau_max = int(math.ceil(max(candidates))) if candidates else None
 
                     if axis_tau_max and axis_tau_max > 0:
@@ -2448,6 +2432,36 @@ def handle_snapshots_batch_retrieval_days(data: Dict[str, Any]) -> Dict[str, Any
         limit_per_param=int(data.get("limit_per_param", 200)),
     )
     return {"success": True, "days_by_param": days_by_param}
+
+
+def handle_snapshots_batch_retrievals(data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Handle batch snapshot retrievals endpoint.
+
+    Signature-filtered retrieved_days for N subjects in a single request.
+    Replaces N separate /api/snapshots/retrievals calls with one round-trip,
+    critical for the @ calendar on large graphs (31+ edges).
+
+    Args:
+        data: Request body containing:
+            - subjects: List of { param_id, core_hash, slice_keys?, equivalent_hashes? }
+            - limit_per_subject: Max timestamps per subject (optional, default 200)
+
+    Returns:
+        Response dict with per-subject retrieved_at + retrieved_days.
+    """
+    from snapshot_service import query_batch_retrievals
+
+    subjects = data.get('subjects')
+    if not subjects or not isinstance(subjects, list):
+        raise ValueError("Missing or invalid 'subjects' field (must be a list)")
+
+    limit_per_subject = int(data.get('limit_per_subject', 200))
+    results = query_batch_retrievals(
+        subjects=subjects,
+        limit_per_subject=limit_per_subject,
+    )
+    return {"success": True, "results": results}
 
 
 def handle_snapshots_retrievals(data: Dict[str, Any]) -> Dict[str, Any]:

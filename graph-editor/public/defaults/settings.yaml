@@ -92,5 +92,9 @@ forecasting:
   # NUTS target acceptance rate.
   BAYES_TARGET_ACCEPT: 0.90
 
+  # Per-cohort drift fraction around the global Bayesian posterior (cohort maturity fan chart).
+  # 0 = no drift; 0.1–0.2 = modest (default); 0.5–1.0 = large deviation per cohort.
+  COHORT_DRIFT_FRACTION: 0.20
+
 development:
   debugGitOperations: false

@@ -183,7 +183,7 @@ export function ParameterSection({
     formatOptionalNumber(param?.latency?.path_t95, LATENCY_HORIZON_DECIMAL_PLACES)
   );
   const [localOnsetDeltaDays, setLocalOnsetDeltaDays] = useState<string>(
-    formatOptionalNumber(param?.latency?.onset_delta_days, 0)
+    formatOptionalNumber(param?.latency?.onset_delta_days, LATENCY_HORIZON_DECIMAL_PLACES)
   );
   const onsetEditingRef = React.useRef(false);
   const onsetLatencySnapshotRef = React.useRef<Record<string, any> | null>(null);
@@ -204,7 +204,7 @@ export function ParameterSection({
 
   useEffect(() => {
     if (!onsetEditingRef.current) {
-      setLocalOnsetDeltaDays(formatOptionalNumber(param?.latency?.onset_delta_days, 0));
+      setLocalOnsetDeltaDays(formatOptionalNumber(param?.latency?.onset_delta_days, LATENCY_HORIZON_DECIMAL_PLACES));
     }
   }, [param?.latency?.onset_delta_days]);
 
@@ -522,7 +522,7 @@ export function ParameterSection({
                       const onset_delta_days =
                         onsetRaw === undefined
                           ? undefined
-                          : roundToDecimalPlaces(onsetRaw, 0);
+                          : roundToDecimalPlaces(onsetRaw, LATENCY_HORIZON_DECIMAL_PLACES);
                       setLocalOnsetDeltaDays(onset_delta_days === undefined ? '' : String(onset_delta_days));
                       // Use the latency snapshot from focus time, not the
                       // current prop (which may have been overwritten by a

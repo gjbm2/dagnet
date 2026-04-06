@@ -43,10 +43,21 @@ describe('Rate Limit Detection', () => {
     expect(rateLimiter.isRateLimitError('Exceeded rate limit')).toBe(true);
   });
 
-  it('does not false positive on normal errors', () => {
+  it('detects timeout and network errors as rate-limit-equivalent', () => {
+    // Amplitude can express throttling as hung requests that time out
+    // rather than returning an immediate 429.
+    expect(rateLimiter.isRateLimitError('Timeout')).toBe(true);
+    expect(rateLimiter.isRateLimitError('Failed to fetch')).toBe(true);
+    expect(rateLimiter.isRateLimitError('The operation was aborted')).toBe(true);
+    expect(rateLimiter.isRateLimitError('Execution failed: TypeError: Failed to fetch')).toBe(true);
+    expect(rateLimiter.isRateLimitError('TypeError: NetworkError when attempting to fetch resource')).toBe(true);
+  });
+
+  it('does not false positive on non-network errors', () => {
     expect(rateLimiter.isRateLimitError('Network error')).toBe(false);
-    expect(rateLimiter.isRateLimitError('Timeout')).toBe(false);
     expect(rateLimiter.isRateLimitError('Invalid response')).toBe(false);
+    expect(rateLimiter.isRateLimitError('Parse error')).toBe(false);
+    expect(rateLimiter.isRateLimitError('Template error: missing variable')).toBe(false);
   });
 });
 

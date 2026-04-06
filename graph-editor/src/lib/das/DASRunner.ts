@@ -730,7 +730,11 @@ export class DASRunner {
       return `Execution failed in phase "${error.phase}". Check Session Log for details.`;
     }
 
-    return `Execution failed. Check Session Log for details.`;
+    // Preserve the original error message so downstream code (e.g. rate-limit
+    // detection) can inspect it.  Amplitude often expresses throttling as hung
+    // requests that time out rather than returning an immediate 429 — losing the
+    // original message here prevents the cooldown+retry mechanism from firing.
+    return `Execution failed: ${error.message || 'Unknown error'}`;
   }
 
   /**

@@ -75,6 +75,7 @@ const FULL_DEFAULTS = {
     BAYES_TUNE: 1000,
     BAYES_CHAINS: 4,
     BAYES_TARGET_ACCEPT: 0.90,
+    COHORT_DRIFT_FRACTION: 0.20,
   },
   development: {
     debugGitOperations: false,

@@ -28,7 +28,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(__file__), '../../.env.local'))
 
-from snapshot_service import append_snapshots as append_snapshots_flexi, get_db_connection
+from snapshot_service import append_snapshots as append_snapshots_flexi, get_db_connection, short_core_hash_from_canonical_signature
 
 # Test prefix to identify and clean up test data
 TEST_PREFIX = 'pytest-snapshot-integration'
@@ -989,6 +989,200 @@ class TestAmplitudeFixtures:
         date_range_str = diag['date_range']
         assert expected_start in date_range_str
         assert expected_end in date_range_str
+
+
+# =============================================================================
+# BR-*: Batch Retrievals Tests
+# =============================================================================
+
+class TestBatchRetrievals:
+    """Tests for the batch-retrievals endpoint (query_batch_retrievals).
+
+    Invariants:
+    - Batch results must match individual query_snapshot_retrievals results
+    - Each subject is filtered by its own core_hash (signature isolation)
+    - Subjects with no matching data return empty retrieved_days
+    - Invalid subjects (missing core_hash) return success=False
+    """
+
+    def test_BR_001_batch_matches_individual_retrievals(self):
+        """
+        BR-001: Batch retrievals must produce identical results to N individual calls.
+
+        Write data for 3 params with different core_hashes, then verify that one
+        batch-retrievals call returns the same retrieved_days as 3 individual
+        query_snapshot_retrievals calls.
+        """
+        from snapshot_service import query_batch_retrievals, query_snapshot_retrievals
+
+        params = []
+        for i in range(3):
+            pid = make_test_param_id(f'br001-{i}')
+            canonical_sig = f'br001-sig-{i}'
+            result = append_snapshots(
+                param_id=pid,
+                core_hash=canonical_sig,
+                context_def_hashes=None,
+                slice_key='',
+                retrieved_at=TEST_TIMESTAMP,
+                rows=[
+                    {'anchor_day': f'2026-03-0{i+1}', 'X': 100, 'Y': 10},
+                    {'anchor_day': f'2026-03-0{i+2}', 'X': 200, 'Y': 20},
+                ],
+            )
+            assert result['success'] is True
+            # Use the DB-derived short hash (what the backend actually stores)
+            db_hash = short_core_hash_from_canonical_signature(canonical_sig)
+            params.append({'param_id': pid, 'core_hash': db_hash})
+
+        # Individual calls
+        individual_results = []
+        for p in params:
+            r = query_snapshot_retrievals(
+                param_id=p['param_id'],
+                core_hash=p['core_hash'],
+            )
+            individual_results.append(r)
+
+        # Batch call
+        batch_results = query_batch_retrievals(
+            subjects=[{'param_id': p['param_id'], 'core_hash': p['core_hash']} for p in params],
+        )
+
+        # Verify parity
+        assert len(batch_results) == len(individual_results)
+        for i in range(len(params)):
+            assert batch_results[i]['success'] == individual_results[i]['success']
+            assert batch_results[i]['retrieved_days'] == individual_results[i]['retrieved_days']
+            assert batch_results[i]['count'] == individual_results[i]['count']
+
+    def test_BR_002_signature_isolation_across_subjects(self):
+        """
+        BR-002: Each subject's core_hash must filter independently.
+
+        Write data under sig-A and sig-B for the same param_id.
+        Query with two subjects using the derived short hashes.
+        Each should return only its own retrieved_days.
+        """
+        from snapshot_service import query_batch_retrievals
+        from datetime import timedelta
+
+        pid = make_test_param_id('br002')
+        ts_a = TEST_TIMESTAMP
+        ts_b = TEST_TIMESTAMP + timedelta(hours=1)
+        sig_a = 'br002-sig-A'
+        sig_b = 'br002-sig-B'
+
+        append_snapshots(
+            param_id=pid, core_hash=sig_a, context_def_hashes=None,
+            slice_key='', retrieved_at=ts_a,
+            rows=[{'anchor_day': '2026-03-01', 'X': 10, 'Y': 1}],
+        )
+        append_snapshots(
+            param_id=pid, core_hash=sig_b, context_def_hashes=None,
+            slice_key='', retrieved_at=ts_b,
+            rows=[{'anchor_day': '2026-03-02', 'X': 20, 'Y': 2}],
+        )
+
+        hash_a = short_core_hash_from_canonical_signature(sig_a)
+        hash_b = short_core_hash_from_canonical_signature(sig_b)
+
+        results = query_batch_retrievals(subjects=[
+            {'param_id': pid, 'core_hash': hash_a},
+            {'param_id': pid, 'core_hash': hash_b},
+        ])
+
+        assert len(results) == 2
+        assert results[0]['success'] is True
+        assert len(results[0]['retrieved_days']) == 1
+        assert results[1]['success'] is True
+        assert len(results[1]['retrieved_days']) == 1
+        assert results[0]['retrieved_at'] != results[1]['retrieved_at']
+
+    def test_BR_003_empty_subjects_returns_empty(self):
+        """BR-003: Empty subjects list returns empty results."""
+        from snapshot_service import query_batch_retrievals
+        assert query_batch_retrievals(subjects=[]) == []
+
+    def test_BR_004_invalid_core_hash_returns_failure(self):
+        """BR-004: Subject with missing core_hash returns success=False."""
+        from snapshot_service import query_batch_retrievals
+        results = query_batch_retrievals(subjects=[
+            {'param_id': 'test', 'core_hash': ''},
+            {'param_id': 'test'},  # no core_hash key at all
+        ])
+        assert len(results) == 2
+        assert results[0]['success'] is False
+        assert results[1]['success'] is False
+
+    def test_BR_005_slice_key_filtering(self):
+        """
+        BR-005: slice_keys filter must be applied per-subject.
+
+        Write data for two slices under the same signature. Query with
+        slice_keys filtering to one slice — should only return that slice's data.
+        """
+        from snapshot_service import query_batch_retrievals
+        from datetime import timedelta
+
+        pid = make_test_param_id('br005')
+        canonical_sig = 'br005-sig'
+        db_hash = short_core_hash_from_canonical_signature(canonical_sig)
+        ts1 = TEST_TIMESTAMP
+        ts2 = TEST_TIMESTAMP + timedelta(hours=1)
+
+        append_snapshots(
+            param_id=pid, core_hash=canonical_sig, context_def_hashes=None,
+            slice_key='context(channel:google).window()',
+            retrieved_at=ts1,
+            rows=[{'anchor_day': '2026-03-01', 'X': 10, 'Y': 1}],
+        )
+        append_snapshots(
+            param_id=pid, core_hash=canonical_sig, context_def_hashes=None,
+            slice_key='context(channel:amazon).window()',
+            retrieved_at=ts2,
+            rows=[{'anchor_day': '2026-03-01', 'X': 20, 'Y': 2}],
+        )
+
+        results = query_batch_retrievals(subjects=[
+            {'param_id': pid, 'core_hash': db_hash, 'slice_keys': ['context(channel:google).window()']},
+        ])
+
+        assert len(results) == 1
+        assert results[0]['success'] is True
+        assert len(results[0]['retrieved_at']) == 1
+
+    def test_BR_006_equivalent_hashes_expansion(self):
+        """
+        BR-006: equivalent_hashes must expand the core_hash match.
+
+        Write data under sig-old. Query with hash-new + equivalent_hashes=[hash-old].
+        Should find the data written under sig-old.
+        """
+        from snapshot_service import query_batch_retrievals
+
+        pid = make_test_param_id('br006')
+        sig_old = 'br006-sig-old'
+        hash_old = short_core_hash_from_canonical_signature(sig_old)
+
+        append_snapshots(
+            param_id=pid, core_hash=sig_old, context_def_hashes=None,
+            slice_key='', retrieved_at=TEST_TIMESTAMP,
+            rows=[{'anchor_day': '2026-03-01', 'X': 10, 'Y': 1}],
+        )
+
+        # Query with a new hash + equivalence link to the old hash
+        results = query_batch_retrievals(subjects=[
+            {
+                'param_id': pid,
+                'core_hash': 'br006-hash-new-does-not-exist',
+                'equivalent_hashes': [{'core_hash': hash_old}],
+            },
+        ])
+
+        assert len(results) == 1
+        assert results[0]['success'] is True
+        assert len(results[0]['retrieved_days']) == 1
 
 
 if __name__ == '__main__':

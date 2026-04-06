@@ -8,6 +8,103 @@ Entries are reverse-chronological (newest first).
 
 ---
 
+## 6-Apr-26: Harness/FE snapshot parity gap and hash-mapping closure cross-contamination
+
+### Bug 1: Harness does not use FE hash-mapping closure
+
+The test harness (`test_harness.py`) computes `equivalent_hashes` via
+`compute_snapshot_subjects.mjs` (graph-structure-derived hashes only).
+The FE computes them via `hashMappingsService.getClosureSet()` which
+reads `hash-mappings.json` and performs transitive BFS, pulling in
+historical equivalent hashes from event renames, schema changes, etc.
+
+Result: the harness sends fewer (or different) `equivalent_hashes` per
+snapshot subject than the FE. On the bayes-test-gm-rebuild graph, the
+harness fetches 8,076 rows; the FE fetches 16,152 rows (2x).
+
+In the current state, the evidence binder produces identical final
+evidence counts (trajectories, daily obs) because the extra rows are
+redundant duplicates that get deduplicated by `(anchor_day,
+retrieved_at)`. But this is accidental — if data existed under the
+equivalent hashes (e.g. from a production graph sharing the same
+underlying events), the FE would bind more evidence than the harness,
+and harness runs would not reproduce FE behaviour.
+
+**Fix needed**: the harness should load `hash-mappings.json` from the
+data repo and compute closure sets using the same BFS algorithm as the
+FE's `getClosureSet`, rather than relying solely on the Node.js
+script's structural equivalents.
+
+### Bug 2: Transitive closure crosses window/cohort hash boundary
+
+`getClosureSet` treats the hash-mapping graph as undirected and does
+full transitive BFS. When hash-mappings link a production hash to both
+the window and cohort hashes of the same edge (which is the typical
+pattern — one production event maps to both slice types), the closure
+for a window-hash subject includes the cohort hash and vice versa.
+
+Example for edge `7bb83fbf` (delegated-to-registered):
+- Window hash seed: `ES2r-ClxqBl4VQQqYdfYYg`
+- Closure includes: `8XC4fDRe...` (prod), `jyE0Y3OO...` (prod),
+  **`YSX41CZhnZKsP49i80jjTg`** (the cohort hash for the same edge)
+
+This means the window-hash subject query returns all cohort-slice rows
+too, and vice versa. Each row is fetched twice per edge. The evidence
+binder's aggregation by `(anchor_day, retrieved_at)` in
+`_bind_from_snapshot_rows` prevents double-counting because window and
+cohort slice_keys never overlap. But this is:
+- **Wasteful**: 2x the DB traffic for no additional information
+- **Fragile**: if a future schema change produces rows with matching
+  `(anchor_day, retrieved_at, slice_key)` under both hashes, the
+  aggregation would silently sum them (double-counting)
+
+**Fix options**:
+1. Make `getClosureSet` respect slice-type boundaries (don't traverse
+   window↔cohort links)
+2. Deduplicate subjects by edge_id before querying (each edge queries
+   once with all its hashes, not once per hash)
+3. Accept redundant fetching but add an assertion in the evidence
+   binder that no row appears twice
+
+### Investigation context
+
+This was discovered while investigating intermittent divergences on the
+4-step prod graph. Initial hypothesis was that the harness and FE were
+fitting different models due to the 2x row count difference. Detailed
+comparison of the evidence detail lines showed identical final evidence
+counts — the parity gap is currently latent, not active.
+
+The divergences (12-29 per FE run, 0 per harness run) are seed-dependent,
+not caused by evidence differences. The onset-mu ridge on edge `7bb83fbf`
+at k=8 is traversable but some random chain initialisations hit it.
+
+### Other fixes applied in this session
+
+1. **`compiler/model.py` line 196**: `SOFTPLUS_SHARPNESS` module fallback
+   was 5.0 despite comment saying "raised from 5→8 on 2-Apr-26". Fixed
+   to 8.0. This caused all harness runs without `--settings-json` to use
+   k=5 instead of the intended k=8.
+
+2. **`worker.py` sampling config**: added `BAYES_DRAWS`/`BAYES_TUNE`/
+   `BAYES_CHAINS`/`BAYES_TARGET_ACCEPT` (UPPER_CASE) to the key lookup
+   chain. The FE sends UPPER_CASE keys; the worker only read lowercase.
+   Values happened to match the hardcoded defaults (2000/1000/4/0.9) so
+   this was a latent bug.
+
+3. **`worker.py` settings logging**: added logging of which `BAYES_*`
+   keys are received in the payload settings, so mismatches are visible
+   in the harness log.
+
+4. **`compiler/evidence.py` diagnostic**: changed misleading
+   `0 window obs` message to show actual trajectory and daily obs counts
+   per slice type (window/cohort).
+
+5. **`useBayesTrigger.ts` session logging**: changed `settings_keys`
+   (key names only) to `forecasting_settings` (full key-value pairs) in
+   the `BAYES_PAYLOAD_SUMMARY` log entry.
+
+---
+
 ## 31-Mar-26: Onset obs precision — autocorrelation correction
 
 ### Problem

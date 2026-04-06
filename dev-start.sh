@@ -203,6 +203,8 @@ if ! python3 -c "import venv, ensurepip" &> /dev/null; then
         if ! sudo apt-get install -y python3-venv; then
             sudo apt-get install -y "python3.${py_minor}-venv"
         fi
+        # BLAS for PyTensor (used by PyMC/Bayes) — without this, sampling is ~10× slower.
+        sudo apt-get install -y libopenblas-dev
     elif [[ "$OSTYPE" == "darwin"* ]]; then
         echo "Python ensurepip missing. Install a Python build that includes ensurepip (or install via pyenv) and re-run."
         exit 1

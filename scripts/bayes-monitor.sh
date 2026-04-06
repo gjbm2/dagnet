@@ -10,8 +10,9 @@
 # invocation — manual, param recovery, pytest, etc.
 #
 # Usage:
-#   scripts/bayes-monitor.sh              # auto-discover active runs
-#   scripts/bayes-monitor.sh --all        # show all recent logs (including finished)
+#   scripts/bayes-monitor.sh              # auto-discover active runs (hides finished)
+#   scripts/bayes-monitor.sh --all        # show all logs (including finished)
+#   scripts/bayes-monitor.sh --clear      # delete old finished logs, then monitor
 #   scripts/bayes-monitor.sh synth-simple-abc synth-mirror-4step   # specific graphs
 #
 # In the status pane:
@@ -49,20 +50,26 @@ discover_graphs() {
         return
     fi
     # Fallback: scan log files
+    # Default (no --all): only show runs with an active lock (currently running).
+    # Finished runs from previous sessions are hidden to reduce clutter.
+    # --all: show everything.
     for f in /tmp/bayes_harness-*.log; do
         [[ -f "$f" ]] || continue
         local name
         name=$(basename "$f" .log)
         name="${name#bayes_harness-}"
-        if [[ $SHOW_ALL -eq 0 ]]; then
+        if [[ $SHOW_ALL -eq 1 ]]; then
+            echo "$name"
+        else
             local lock="/tmp/bayes-harness-${name}.lock"
             if [[ -f "$lock" ]]; then
-                echo "$name"
-            elif [[ -s "$f" ]]; then
-                echo "$name"
+                # Has a lock file — check if the process is actually alive
+                local pid
+                pid=$(cat "$lock" 2>/dev/null) || continue
+                if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+                    echo "$name"
+                fi
             fi
-        else
-            echo "$name"
         fi
     done
 }
@@ -215,17 +222,43 @@ kill_all() {
     echo "  Killed ${killed} processes."
 }
 
+# ── Clear handler (^b e sends USR1 to this process) ──
+_do_clear=0
+_handle_clear() { _do_clear=1; }
+trap _handle_clear USR1
+echo $$ > /tmp/_bayes_monitor_status_pid
+
 # ── Main loop ──
 # Strategy: collect ALL data first (CPU poll is the slow part — 1s),
 # then build the full frame into a buffer, then clear+dump in one go.
 # This avoids the visible redraw flicker.
 while true; do
 
+    # ── 0. Handle clear request (^b e) ──
+    if [[ $_do_clear -eq 1 ]]; then
+        _do_clear=0
+        for f in /tmp/bayes_harness-*.log; do
+            [[ -f "$f" ]] || continue
+            _cname=$(basename "$f" .log)
+            _cname="${_cname#bayes_harness-}"
+            _clock="/tmp/bayes-harness-${_cname}.lock"
+            if [[ -f "$_clock" ]]; then
+                _cpid=$(cat "$_clock" 2>/dev/null)
+                [[ -n "$_cpid" ]] && kill -0 "$_cpid" 2>/dev/null && continue
+                rm -f "$_clock" 2>/dev/null
+            fi
+            rm -f "$f" 2>/dev/null
+        done
+        : > /tmp/_bayes_monitor_initial_graphs 2>/dev/null
+    fi
+
     # ── 1. Poll CPU (1s blocking) ──
     cpu_output=$(cpu_bars)
 
     # ── 2. Parse job status from log files (fast) ──
-    job_lines=""
+    # Collect job data into arrays first, then format with dynamic widths
+    declare -a job_names=() job_markers=() job_stages=() job_pcts=()
+    declare -a job_elapsed=() job_details=()
     running_count=0
     for f in /tmp/bayes_harness-*.log; do
         [[ -f "$f" ]] || continue
@@ -238,8 +271,6 @@ while true; do
             running_count=$((running_count + 1))
         else
             marker=" "
-            # Show finished jobs if log is non-empty (they were recent enough
-            # to have log content). Only skip truly stale empty files.
             if [[ ! -s "$f" ]]; then
                 continue
             fi
@@ -261,31 +292,101 @@ while true; do
         if grep -q "^PASS$\|^FAIL$\|=== FINISHED" "$f" 2>/dev/null; then
             result=$(grep -oP '(PASS|FAIL)' "$f" | tail -1)
             stage="done"
+            pct="100"
             detail="$result"
         fi
 
-        job_lines+=$(printf "  %-28s %s%-12s %7s  %s\n" "$name" "$marker" "[${stage} ${pct}%]" "$elapsed" "$detail")
+        job_names+=("$name")
+        job_markers+=("$marker")
+        job_stages+=("$stage")
+        job_pcts+=("$pct")
+        job_elapsed+=("$elapsed")
+        job_details+=("$detail")
+    done
+
+    # ── 3. Compute dynamic column widths ──
+    term_width=$(tput cols 2>/dev/null || echo 120)
+    # Fixed columns: marker(1) + stage_col(16) + elapsed(8) + spacing(8) = ~33
+    fixed=33
+    # Graph name gets remaining width, min 20, leave room for some detail
+    max_name=$(( term_width - fixed - 20 ))  # 20 reserved for detail
+    [[ $max_name -lt 20 ]] && max_name=20
+
+    # Find longest name to see if we need truncation
+    longest_name=0
+    for n in "${job_names[@]}"; do
+        [[ ${#n} -gt $longest_name ]] && longest_name=${#n}
+    done
+    # Use the shorter of longest name or max allowed
+    name_col=$longest_name
+    [[ $name_col -gt $max_name ]] && name_col=$max_name
+    [[ $name_col -lt 5 ]] && name_col=20
+
+    # Helper: truncate name with ellipsis if needed
+    trunc_name() {
+        local n="$1" max="$2"
+        if [[ ${#n} -le $max ]]; then
+            echo "$n"
+        else
+            echo "${n:0:$((max-1))}…"
+        fi
+    }
+
+    # Helper: render a progress bar  ████████░░░░ 72%
+    progress_bar() {
+        local pct="$1" stage="$2" marker="$3"
+        local bar_width=12
+        if [[ "$pct" == "?" ]]; then
+            # Unknown progress — show stage name only
+            printf "%s%-14s" "$marker" "[${stage}]"
+            return
+        fi
+        local filled=$(( pct * bar_width / 100 ))
+        [[ $pct -gt 0 && $filled -eq 0 ]] && filled=1
+        local bar=""
+        local j
+        for ((j=0; j<filled; j++)); do bar+="█"; done
+        for ((j=filled; j<bar_width; j++)); do bar+="░"; done
+        # Colour: green if done, yellow if in progress, red if compiling
+        local colour
+        if [[ "$stage" == "done" ]]; then colour="\033[32m";
+        elif [[ "$stage" == "compiling" ]]; then colour="\033[33m";
+        else colour="\033[36m"; fi
+        printf "%s${colour}%s\033[0m %3d%%" "$marker" "$bar" "$pct"
+    }
+
+    # Build job lines with dynamic widths
+    job_lines=""
+    for ((idx=0; idx<${#job_names[@]}; idx++)); do
+        dn=$(trunc_name "${job_names[$idx]}" "$name_col")
+        bar_str=$(progress_bar "${job_pcts[$idx]}" "${job_stages[$idx]}" "${job_markers[$idx]}")
+        stage_label="${job_stages[$idx]}"
+        # Capitalise first letter of stage
+        stage_label="$(echo "${stage_label:0:1}" | tr '[:lower:]' '[:upper:]')${stage_label:1}"
+        job_lines+=$(printf "  %-${name_col}s %b  %-11s %7s  %s\n" \
+            "$dn" "$bar_str" "$stage_label" "${job_elapsed[$idx]}" "${job_details[$idx]}")
         job_lines+=$'\n'
     done
 
-    # ── 3. Build frame and dump at once ──
+    # ── 4. Build frame and dump at once ──
+    sep=$(printf '═%.0s' $(seq 1 "$term_width"))
     frame=""
-    frame+="═══════════════════════════════════════════════════════════════════"$'\n'
-    frame+="  BAYES MONITOR  $(date '+%H:%M:%S')"$'\n'
-    frame+="═══════════════════════════════════════════════════════════════════"$'\n'
+    frame+="${sep}"$'\n'
+    frame+="  BAYES MONITOR    $(date '+%H:%M:%S')"$'\n'
+    frame+="${sep}"$'\n'
     frame+="${cpu_output}"$'\n'
     frame+=""$'\n'
-    frame+=$(printf "  %-28s %-14s %7s  %s\n" "GRAPH" "STAGE" "ELAPSED" "DETAIL")$'\n'
-    frame+=$(printf "  %-28s %-14s %7s  %s\n" "─────" "─────" "───────" "──────")$'\n'
+    frame+=$(printf "  %-${name_col}s %-18s %-11s %7s  %s\n" "GRAPH" "PROGRESS" "STAGE" "ELAPSED" "DETAIL")$'\n'
+    frame+=$(printf "  %-${name_col}s %-18s %-11s %7s  %s\n" "─────" "────────" "─────" "───────" "──────")$'\n'
     frame+="${job_lines}"
     frame+="  * = running    ${running_count} active"$'\n'
-    frame+="  Ctrl-b K: kill all  Ctrl-b R: reload  Ctrl-b Q: quit"$'\n'
-    frame+="  Ctrl-b [: scroll pane (q to exit)  Ctrl-b n/p: next/prev page"$'\n'
+    frame+="  ^b k: kill all   ^b e: clear finished   ^b j: reload   ^b g: quit"$'\n'
+    frame+="  ^b [: scroll (q to exit)   ^b n/p: next/prev page"$'\n'
 
     clear
     echo -e "$frame"
 
-    # ── 4. Absorb new graphs into the status display ──
+    # ── 5. Absorb new graphs into the status display ──
     # If new harness log files or recovery graph entries appeared since
     # launch, add them to the initial set so they show up in the job
     # table above. We do NOT rebuild/exec — that kills the tmux session.
@@ -315,7 +416,9 @@ while true; do
         echo "  Press Ctrl-b R to rebuild tail panes."
     fi
 
-    sleep 4
+    # Use wait so USR1 signal can interrupt the sleep immediately
+    sleep 4 &
+    wait $! 2>/dev/null || true
 done
 STATUSEOF
 chmod +x "$STATUS_SCRIPT"
@@ -438,13 +541,13 @@ fi
 KILLEOF
 chmod +x "$KILL_SCRIPT"
 
-# Keybindings (Ctrl-b prefix, so they don't conflict with copy-mode)
-# Ctrl-b K = kill all processes
-tmux bind-key -N "Kill all bayes" K run-shell "${KILL_SCRIPT}"
-# Ctrl-b Q = quit monitor  (uppercase to avoid conflict with copy-mode q)
-tmux bind-key -N "Quit monitor" Q kill-session -t "${SESSION}"
-# Ctrl-b R = reload entire monitor (rebuild all panes from current state)
-tmux bind-key -N "Reload monitor" R run-shell "${REPO_ROOT}/scripts/bayes-monitor.sh &"
+
+# Keybindings: Ctrl-b + single lowercase letter (no modifiers)
+# All letters verified free in default tmux bindings.
+tmux bind-key -N "Kill all bayes"   k run-shell "${KILL_SCRIPT}"
+tmux bind-key -N "Clear finished"   e run-shell "kill -USR1 \$(cat /tmp/_bayes_monitor_status_pid 2>/dev/null) 2>/dev/null || true"
+tmux bind-key -N "Quit monitor"     g kill-session -t "${SESSION}"
+tmux bind-key -N "Reload monitor"   j run-shell "${REPO_ROOT}/scripts/bayes-monitor.sh &"
 
 # Also increase scrollback so tail panes are useful
 tmux set-option -t "$SESSION" -g history-limit 10000

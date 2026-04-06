@@ -247,9 +247,25 @@ class FileRegistry {
     // IMPORTANT: Do NOT drop updates (that creates silent data loss and race conditions).
     // Instead, queue the latest pending update and apply it after the current update completes.
     if (this.updatingFiles.has(fileId)) {
+      // Update in-memory IMMEDIATELY so getFile() always returns latest,
+      // even while a previous IDB write is in flight. The IDB write is
+      // deferred to the pending replay.
+      const file = this.files.get(fileId);
+      if (file) {
+        file.data = newData;
+        file.lastModified = Date.now();
+        if (opts?.syncRevision !== undefined) file.syncRevision = opts.syncRevision;
+        if (opts?.syncOrigin !== undefined) file.syncOrigin = opts.syncOrigin;
+        // Compute isDirty immediately (must match normal path logic at lines ~318-326).
+        if (!file.isInitializing) {
+          const newDataStr = JSON.stringify(newData);
+          const originalDataStr = JSON.stringify(file.originalData);
+          file.isDirty = newDataStr !== originalDataStr;
+        }
+      }
       const gen = this.fileGenerations.get(fileId) || 0;
       this.pendingUpdates.set(fileId, { data: newData, opts, generation: gen });
-      console.warn(`FileRegistry: Queued re-entrant update for ${fileId} (gen=${gen})`);
+      console.warn(`FileRegistry: Queued re-entrant update for ${fileId} (gen=${gen}, in-memory updated immediately)`);
       return;
     }
 

@@ -538,117 +538,90 @@ After completing a fix that required more than one attempt, or that required und
 
 ## Testing Standards
 
-**The core problem these standards address**: over-mocking creates tests that pass but prove nothing. A test that mocks IDB, mocks FileRegistry, mocks the service layer, and asserts against the mocks is a closed loop — it provides zero assurance about real system behaviour. This codebase is complex; the bugs live at subsystem boundaries, not inside individual functions.
+### Philosophy: fewer tests, real boundaries, zero tolerance for mock-driven false confidence
 
-**Default posture**: integration-level tests (real internal components, mocked external APIs) are the **default** for this codebase. Moving toward more mocking requires justification. Moving toward less mocking (E2E) requires a UI-timing or visual-correctness reason.
+A test exists to prove **the system works**, not to prove **the code runs**. “The code runs” means a function returns something when called. “The system works” means when a user performs an action, the correct outcome occurs end-to-end. The first can be proven with mocks. The second cannot.
+
+**The strategic default is zero mocks.** Load real files, hit real servers, use real data. A test that requires the Python server running on localhost is not a problem — it is a prerequisite, just like a test that requires `fake-indexeddb`. Mark it and move on.
+
+**Fewer, better tests.** Three integration tests that exercise real code paths across real boundaries are worth more than thirty unit tests with mocked everything. Do not write tests to increase count. Write tests to catch bugs that would otherwise reach the user.
+
+**A mock that hides a bug is worse than no test at all.** It creates false confidence, wastes investigation time when the bug surfaces in production, and teaches the agent that passing tests mean working code. They do not.
+
+### The Mock Budget
+
+Every test gets a **mock budget of zero by default**. Each mock introduced must pass this gate:
+
+1. **Name the assumption**: what behaviour does this mock encode? (e.g. “the inventory endpoint returns a matched family for this core_hash”)
+2. **Name the risk**: what bug could this assumption hide? (e.g. “if the real endpoint doesn’t match because the core_hash format is wrong, the test still passes”)
+3. **Justify why the real thing is impractical**: not “it’s easier to mock” — a concrete reason like “requires Amplitude API credentials and rate-limited external calls”
+
+If you cannot complete all three steps, do not add the mock.
+
+**What to mock** (the only legitimate cases):
+- External third-party APIs (Amplitude, GitHub) where hitting the real service is impractical or rate-limited
+- Browser APIs not available in Node (e.g. `window.location`, `navigator`) — use the narrowest possible shim
+
+**What to NEVER mock**:
+- The Python server on localhost — it’s part of our system, start it as a test prerequisite
+- `computeQuerySignature`, `computeShortCoreHash`, or any hash/signature function — these are where format mismatches hide
+- `getBatchInventoryV2`, `querySnapshotRetrievals`, `getBatchRetrievals` or any snapshot service function — mock the `fetch` boundary if you must, never the service
+- FileRegistry, IDB, GraphStore — `fake-indexeddb` exists, use it
+- Any function in the code path you are testing — that is testing the mock, not the system
+
+### Parity Tests (MANDATORY when replacing a code path)
+
+When a new implementation replaces an existing working one (e.g. batched version of a per-item function), the agent MUST write a **parity test** before claiming done:
+
+1. **Call both paths** with identical inputs
+2. **Assert identical outputs** — field by field, not just `success: true`
+3. **Use real data** — load actual graph/event/parameter files from the data repo
+4. **Hit the real server** — if the code path makes HTTP calls, those calls must reach the real Python server
+5. **Mock nothing** — if the parity test passes with mocks but fails in the real UI, the test is wrong
+
+The parity test is the **only** gate for switching to the new path. If it fails, the new path is not ready. If it passes with mocks, it has not been tested.
 
 ### Test Design Gate (MANDATORY before writing test code)
 
 Before writing any `describe()` or `it()` blocks, the agent must produce a brief **prose test design** covering:
 
-- **Invariants being protected**: what real bug would each test catch?
-- **Scenarios**: happy path, error paths, edge cases, boundary conditions
-- **Mock decisions**: for each dependency, real or mocked — and why (see Mock Discipline below)
-- **What a failing test would prove**: if this test goes red, what broke in the real system?
+- **What real bug would this test catch?** — name a specific failure mode, not “it should work”
+- **What is real vs mocked and why?** — apply the mock budget (above). Default: everything real.
+- **What would a false pass look like?** — describe a scenario where the test passes but the system is broken. If you can describe one, your test design has a gap.
 
-This is non-negotiable. Jumping straight to test code without a design step is a violation, just as coding without an agreed plan violates Section 0.5. The design does not need to be long — a few bullet points suffice — but it must exist and be shown to the user before code is written.
+### Blind Tests
 
-### Prefer Blind Tests When Practicable
-
-Write tests from the **specification/contract**, not from the implementation. Tests shaped by reading the code mirror its assumptions, including its bugs.
+Write tests from the **contract**, not from the implementation. Tests shaped by reading the code mirror its assumptions, including its bugs.
 
 - **New functionality**: design tests from the spec/plan *before* reading the implementation.
 - **Bug fixes**: write a failing test reproducing the reported behaviour *before* reading the fix.
-- **Existing code with no tests**: read the *contract* (types, docstrings, calling code) rather than the implementation body.
-- **When blind is impracticable** (e.g. cache invalidation ordering, IDB prefix conventions): read the code, but still assert on **observable outcomes**, not implementation steps.
+- **Code path replacement**: write the parity test from the *function signature and return type*, not from the implementation body.
 
-### CRUD Smoke Tests Are MANDATORY for New Features
+### Assertion Standards
 
-**CRITICAL**: New features MUST have at least one test exercising the **full creation-to-rendering path** with real internal components before claiming done. These are the FIRST tests, not an afterthought.
+**Assert on observable outcomes at real boundaries**, not on intermediate state or mock return values.
 
-A CRUD smoke test creates the object via the real user codepath, verifies initial state (DSL, analysis type, scenarios), updates a field and verifies persistence, then deletes and verifies removal. Isolated unit/component tests that mock the wiring are **insufficient** — the pattern of failure this prevents is all mocks passing while the real user flow is broken because wiring between components is wrong.
+**Banned**:
+- `expect(result).toBeDefined()`, `expect(result).toBeTruthy()`, `expect(fn).not.toThrow()` as primary assertions
+- Asserting that a mock was called with specific arguments — this tests the mock wiring, not the system
+- Asserting on values that the test itself configured (circular)
 
-If the flow requires ReactFlow selection, drag-and-drop, or browser DOM interactions, write a Playwright E2E test. Do not substitute mock-heavy vitest tests.
-
-### Mock Discipline — every mock is a lie with a cost
-
-A mock replaces a real component with an **assumption** about how it behaves. Every mock is a bet that the assumption is correct. The question is not "should I mock?" but **"what is the cost of this lie?"**
-
-**Internal components** (IDB, FileRegistry, GraphStore, services, stores):
-- **Default: use the real thing.** These are where bugs live — prefix mismatches, sync ordering, dirty-state semantics, cache invalidation.
-- Mocking an internal component is permitted **only** when there is a concrete, articulable reason (e.g. the test is deliberately isolating pure logic that does not cross a subsystem boundary).
-- `fake-indexeddb` is already configured in vitest setup. FileRegistry and GraphStore can be instantiated directly. There is no setup cost that justifies mocking them.
-
-**External APIs** (GitHub, Amplitude, network calls):
-- **Default: mock them.** Stable contracts, controlled inputs, no value in hitting real endpoints.
-- Mock at the **narrowest possible boundary** — mock the HTTP call or API client method, not the entire service that wraps it.
-
-**The mock tax**: for every mock the agent introduces, it must be able to state: *"This mock assumes X, which is validated by Y."* If it cannot articulate what the mock assumes, the mock is hiding complexity, not managing it.
-
-**Tiered model of test reality** (default is Integration):
-
-| Level | What's real | What's mocked | Use for |
-|---|---|---|---|
-| **E2E** (Playwright) | Everything | Nothing | Critical user flows, UI timing, visual correctness |
-| **Integration** ← default | IDB, FileRegistry, GraphStore, services | External APIs | Subsystem boundary behaviour — the workhorse |
-| **Focused integration** | Service + one real dependency | Other internal deps + external APIs | Isolating a specific boundary interaction |
-| **Pure unit** | Just the function | Everything | Parsing, formatting, validation, deterministic helpers |
-
-**Agents must justify moving UP this stack** (toward more mocking), not justify staying at integration level.
-
-### Assertion Quality Standards
-
-**Banned shallow assertions** — these prove almost nothing and must not appear as the primary assertion of a test:
-- `expect(result).toBeDefined()` — proves it returned *something*, not the right thing
-- `expect(fn).not.toThrow()` — only proves it didn't crash, not that it did the right thing
-- `expect(result).toBeTruthy()` — weak and ambiguous
-- `expect(array.length).toBeGreaterThan(0)` — doesn't verify content
-- `expect(result).toEqual(expect.any(Object))` — shape-only, no value check
-
-These are acceptable as **precondition guards** (e.g. confirming a setup step succeeded before the real assertions), but never as the substance of a test.
-
-**Replacement mandate**: assert on **specific values** or **specific structural properties** that would change if the behaviour broke. If you cannot name the expected value, you do not understand the behaviour well enough to test it.
-
-**Assertion density**: a single assertion on a complex, multi-step operation is a red flag. Operations touching multiple subsystems (IDB, FileRegistry, GraphStore) should assert state in **each affected subsystem**, not just the final return value.
+**Required**:
+- Assert on **specific values** that would change if the behaviour broke
+- For multi-subsystem operations, assert state in **each affected subsystem**
+- For parity tests, assert **field-by-field equality** between old and new paths
 
 ### Test Names as Specification
 
-Test descriptions must state the **invariant being protected**, not describe implementation steps.
-- ❌ `it('should work')`, `it('handles the edge case')`, `it('returns correct result')`
-- ❌ `it('calls the service')`, `it('updates state')` — describes mechanism, not invariant
-- ✅ `it('should propagate dirty flag from IDB to FileRegistry when file content changes')`
-- ✅ `it('should reject commit when credentials are missing and surface a user-visible error')`
-- ✅ `it('should preserve node references in query fields after node ID rename')`
+- ❌ `it(‘should work’)`, `it(‘handles the edge case’)`, `it(‘returns correct result’)`
+- ❌ `it(‘calls the service’)`, `it(‘updates state’)`
+- ✅ `it(‘should propagate dirty flag from IDB to FileRegistry when file content changes’)`
+- ✅ `it(‘batched path produces identical coverage to per-edge path on real graph data’)`
+- ✅ `it(‘should use computeShortCoreHash not parseSignature.coreHash for DB lookups’)`
 
-The `describe` block names the subsystem or feature. The `it` block names the specific invariant. Together they read as a specification of the system's guarantees.
+### When to Skip Tests
 
-### Red-Green Validity
-
-Before considering tests complete, the agent must satisfy: **"If I deleted the code under test, would this test fail?"**
-
-If the answer is uncertain, the test is tautological. Common causes:
-- Assertions only check values the mock was configured to return (testing the mock, not the system)
-- Assertions check constants or setup data that exist regardless of the code under test
-- The test exercises a code path but never asserts on its *effects*
-
-A tautological test is worse than no test — it inflates coverage metrics while providing zero assurance.
-
-### Quick decision guide (choose the smallest test that still catches the real bug)
-- If the bug could be caused by **IDB prefixes, dirty state, registry sync, store sync, tab restore, or persistence format** → write an **integration** test (real IDB/registry/store).
-- If the behaviour is **UI flow timing** (e.g. “wait for graphs to load before enumerating dailyFetch”) → write an **E2E** test (Playwright) or a targeted integration test that exercises the real initialisation pipeline.
-- If it’s **pure logic** with no subsystem interaction → unit tests are fine.
-
-### Why Integration Tests Over Unit Tests
-
-Example bug pattern: a service updates IDB with prefixed fileIds (`repo-branch-graph-name`) but FileRegistry uses unprefixed (`graph-name`). Unit test with mocked IDB passes; integration test with real IDB fails. The pattern: `beforeEach` clears real IDB (`db.files.clear()`), test calls the service, then asserts state in **all three systems** (IDB, FileRegistry, GraphStore).
-
-### Critical Test Coverage
-- Git operations (clone, pull, push, commit)
-- File operations (create, open, delete, dirty tracking)
-- Index operations (create, rebuild, add entries)
-- Data sync (file ↔ graph ↔ external sources) — **must test real IDB/Registry/Store sync**
-- Merge conflicts (3-way merge, resolution)
-- **Cross-system state consistency** (IDB ↔ FileRegistry ↔ GraphStore)
+Not every change needs a test. Pure refactors with no behaviour change, documentation edits, and config tweaks do not need tests. But any change that **introduces a new code path, replaces an existing code path, or changes how data flows between subsystems** needs a test — and that test must exercise the real boundary, not a mock of it.
 
 ## File Structure Requirements
 

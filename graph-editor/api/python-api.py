@@ -64,9 +64,24 @@ class handler(BaseHTTPRequestHandler):
         """Route POST requests based on path."""
         try:
             # Read request body
-            content_length = int(self.headers.get('Content-Length', 0))
+            cl_raw = self.headers.get('Content-Length')
+            content_length = int(cl_raw) if cl_raw else 0
             body = self.rfile.read(content_length)
-            data = json.loads(body.decode('utf-8'))
+            try:
+                data = json.loads(body.decode('utf-8'))
+            except (json.JSONDecodeError, UnicodeDecodeError) as parse_err:
+                diag = {
+                    "content_length_header": cl_raw if cl_raw is not None else "[missing]",
+                    "content_length_parsed": content_length,
+                    "actual_body_length": len(body),
+                    "body_preview": body[:200].decode('utf-8', errors='replace') if body else "[empty]",
+                    "path": self.path,
+                }
+                print(f"[BODY_PARSE_ERROR] {self.path}: CL_header={diag['content_length_header']} "
+                      f"CL_parsed={content_length} actual_len={len(body)} "
+                      f"preview={diag['body_preview']!r}")
+                self.send_error_response(400, str(parse_err), diagnostics=diag)
+                return
             
             # Route based on path
             # Vercel rewrites change the destination but we need to detect original path
@@ -107,6 +122,8 @@ class handler(BaseHTTPRequestHandler):
                     path = '/api/snapshots/batch-retrieval-days'
                 elif endpoint == 'snapshots-batch-anchor-coverage':
                     path = '/api/snapshots/batch-anchor-coverage'
+                elif endpoint == 'snapshots-batch-retrievals':
+                    path = '/api/snapshots/batch-retrievals'
                 elif endpoint == 'snapshots-retrievals':
                     path = '/api/snapshots/retrievals'
                 elif endpoint == 'snapshots-delete':
@@ -150,6 +167,8 @@ class handler(BaseHTTPRequestHandler):
                 self.handle_snapshots_batch_retrieval_days(data)
             elif path == '/api/snapshots/batch-anchor-coverage':
                 self.handle_snapshots_batch_anchor_coverage(data)
+            elif path == '/api/snapshots/batch-retrievals':
+                self.handle_snapshots_batch_retrievals(data)
             elif path == '/api/snapshots/retrievals':
                 self.handle_snapshots_retrievals(data)
             elif path == '/api/snapshots/delete':
@@ -296,6 +315,17 @@ class handler(BaseHTTPRequestHandler):
         except Exception as e:
             self.send_error_response(500, str(e))
 
+    def handle_snapshots_batch_retrievals(self, data):
+        """Handle snapshots/batch-retrievals endpoint - batch signature-filtered retrieval days."""
+        try:
+            from api_handlers import handle_snapshots_batch_retrievals as handler_func
+            response = handler_func(data)
+            self.send_success_response(response)
+        except ValueError as e:
+            self.send_error_response(400, str(e))
+        except Exception as e:
+            self.send_error_response(500, str(e))
+
     def handle_snapshots_retrievals(self, data):
         """Handle snapshots/retrievals endpoint - distinct retrieval timestamps."""
         try:
@@ -397,13 +427,15 @@ class handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(response_json.encode('utf-8'))
     
-    def send_error_response(self, status_code, message):
-        """Send error JSON response."""
+    def send_error_response(self, status_code, message, diagnostics=None):
+        """Send error JSON response, optionally with diagnostics for debugging."""
         error_response = {
             "error": message,
             "detail": message,
             "success": False
         }
+        if diagnostics:
+            error_response["diagnostics"] = diagnostics
         response_json = json.dumps(error_response)
         self.send_response(status_code)
         self.send_header('Content-Type', 'application/json')

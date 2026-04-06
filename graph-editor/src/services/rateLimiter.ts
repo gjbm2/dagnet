@@ -195,10 +195,17 @@ class RateLimiter {
   }
   
   /**
-   * Check if an error is a rate limit error
-   * 
+   * Check if an error is a rate limit error (explicit 429 OR timeout).
+   *
+   * Amplitude can express throttling in two ways:
+   *   1. An immediate 429 "Too Many Requests" response
+   *   2. A hung request that times out after ~30 seconds
+   *
+   * Both must trigger the same cooldown+retry path during automated
+   * retrieve-all runs.
+   *
    * @param error - Error object or message
-   * @returns true if this is a 429 / rate limit error
+   * @returns true if this is a 429 / rate limit / timeout error
    */
   isRateLimitError(error: unknown): boolean {
     const message = error instanceof Error ? error.message : String(error);
@@ -207,7 +214,33 @@ class RateLimiter {
       message.includes('Too Many Requests') ||
       message.includes('rate limit') ||
       message.includes('Exceeded concurrent limit') ||
-      message.includes('Exceeded rate limit')
+      message.includes('Exceeded rate limit') ||
+      this.isTimeoutError(message)
+    );
+  }
+
+  /**
+   * Check if an error looks like a network timeout or connection failure.
+   *
+   * During automated runs against Amplitude, these are treated as
+   * rate-limit-equivalent because Amplitude often throttles by slowing
+   * responses until they time out, rather than returning a clean 429.
+   *
+   * @param error - Error object or message string
+   * @returns true if this looks like a timeout / network failure
+   */
+  isTimeoutError(error: unknown): boolean {
+    const message = error instanceof Error ? error.message : String(error);
+    const lower = message.toLowerCase();
+    return (
+      lower.includes('timeout') ||
+      lower.includes('etimedout') ||
+      lower.includes('econnreset') ||
+      lower.includes('econnrefused') ||
+      lower.includes('aborterror') ||
+      lower.includes('the operation was aborted') ||
+      lower.includes('failed to fetch') ||
+      lower.includes('networkerror')
     );
   }
   

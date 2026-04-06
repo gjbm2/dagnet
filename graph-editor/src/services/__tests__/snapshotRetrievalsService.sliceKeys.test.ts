@@ -135,4 +135,3 @@ describe('snapshotRetrievalsService slice_keys (DB-driven)', () => {
     expect(query!.slice_keys).toEqual(['context(channel:influencer).window(-100d:)']);
   });
 });
-

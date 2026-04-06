@@ -330,6 +330,103 @@ export function useBayesTrigger(computeMode: BayesComputeMode = 'local') {
       operationRegistryService.setLabel(opId, `Bayes ${modeLabel}: submitting ${graphLabel}…`);
       operationRegistryService.setCancellable(opId, handleCancel, true);
 
+      // 7b. Log prior inputs per param file — everything the backend reads
+      //     to resolve probability, latency, and warm-start priors.
+      {
+        const priorLogId = sessionLogService.startOperation(
+          'info', 'bayes', 'BAYES_PRIOR_INPUTS',
+          `Prior inputs for ${Object.keys(parameterFiles).length} param files`,
+        );
+        for (const [paramId, pfRaw] of Object.entries(parameterFiles)) {
+          const pf = pfRaw as Record<string, any> | undefined;
+          if (!pf) continue;
+
+          // Probability prior fields
+          const values0 = Array.isArray(pf.values) && pf.values[0] ? pf.values[0] : null;
+          const posterior = typeof pf.posterior === 'object' && pf.posterior ? pf.posterior : null;
+          const windowSlice = posterior?.slices?.['window()'] ?? null;
+          const cohortSlice = posterior?.slices?.['cohort()'] ?? null;
+          const latencyBlock = typeof pf.latency === 'object' && pf.latency ? pf.latency : null;
+          const modelState = posterior?._model_state ?? null;
+
+          // Determine which prior source the backend will use
+          const bayesReset = !!latencyBlock?.bayes_reset;
+          const wsAcceptable = windowSlice
+            ? (windowSlice.rhat == null || windowSlice.rhat <= 1.1)
+              && (windowSlice.ess == null || windowSlice.ess >= 100)
+            : false;
+          let expectedSource = 'uninformative';
+          if (!bayesReset && windowSlice?.alpha && windowSlice?.beta && wsAcceptable) {
+            expectedSource = 'warm_start (window slice)';
+          } else if (!bayesReset && posterior?.alpha && posterior?.beta) {
+            expectedSource = 'warm_start (legacy)';
+          } else if (values0?.mean != null && values0?.stdev != null
+            && values0.mean > 0 && values0.mean < 1 && values0.stdev > 0) {
+            expectedSource = 'moment_matched';
+          } else if (values0?.n != null && values0?.k != null
+            && values0.n > 0 && values0.k >= 0) {
+            expectedSource = 'kn_derived';
+          }
+
+          const parts: string[] = [
+            `expected_source=${expectedSource}`,
+          ];
+
+          // Warm-start: posterior window slice
+          if (windowSlice) {
+            parts.push(
+              `ws_alpha=${windowSlice.alpha ?? '—'}, ws_beta=${windowSlice.beta ?? '—'}, ` +
+              `ws_rhat=${windowSlice.rhat ?? '—'}, ws_ess=${windowSlice.ess ?? '—'}, ` +
+              `ws_mu_mean=${windowSlice.mu_mean ?? '—'}, ws_sigma_mean=${windowSlice.sigma_mean ?? '—'}`,
+            );
+          }
+          // Legacy posterior alpha/beta
+          if (posterior?.alpha || posterior?.beta) {
+            parts.push(`legacy_alpha=${posterior.alpha}, legacy_beta=${posterior.beta}`);
+          }
+          // Point estimates (moment-match / k-n source)
+          if (values0) {
+            parts.push(
+              `mean=${values0.mean ?? '—'}, stdev=${values0.stdev ?? '—'}, ` +
+              `n=${values0.n ?? '—'}, k=${values0.k ?? '—'}`,
+            );
+          }
+          // Latency prior inputs
+          if (latencyBlock) {
+            parts.push(
+              `lat_mu=${latencyBlock.mu ?? '—'}, lat_sigma=${latencyBlock.sigma ?? '—'}, ` +
+              `onset=${latencyBlock.onset_delta_days ?? '—'}, bayes_reset=${bayesReset}`,
+            );
+          }
+          // Warm-start latency from posterior
+          if (windowSlice?.mu_mean != null) {
+            parts.push(
+              `ws_lat_mu=${windowSlice.mu_mean}, ws_lat_sigma=${windowSlice.sigma_mean ?? '—'}`,
+            );
+          }
+          // Cohort slice warm-start
+          if (cohortSlice) {
+            parts.push(
+              `cohort_mu=${cohortSlice.mu_mean ?? '—'}, cohort_sigma=${cohortSlice.sigma_mean ?? '—'}, ` +
+              `cohort_onset=${cohortSlice.onset_mean ?? '—'}, cohort_rhat=${cohortSlice.rhat ?? '—'}, ` +
+              `cohort_ess=${cohortSlice.ess ?? '—'}`,
+            );
+          }
+          // Kappa warm-start from _model_state
+          if (modelState) {
+            const kappaKeys = Object.keys(modelState).filter(k => k.startsWith('kappa_'));
+            if (kappaKeys.length > 0) {
+              parts.push(`kappa_keys=[${kappaKeys.map(k => `${k}=${modelState[k]}`).join(', ')}]`);
+            }
+          }
+
+          sessionLogService.addChild(priorLogId, 'info', 'BAYES_PRIOR_EDGE',
+            `${paramId}: ${parts.join(' | ')}`);
+        }
+        sessionLogService.endOperation(priorLogId, 'success',
+          `${Object.keys(parameterFiles).length} param files inspected`);
+      }
+
       // 8. Log payload summary + submit
       const paramFileIds = Object.keys(parameterFiles);
       sessionLogService.info('bayes', 'BAYES_PAYLOAD_SUMMARY',
@@ -351,7 +448,7 @@ export function useBayesTrigger(computeMode: BayesComputeMode = 'local') {
             sweep: `${s.sweep_from}→${s.sweep_to}`,
             slice_keys: s.slice_keys,
           })),
-          settings_keys: Object.keys(forecastingSettings),
+          forecasting_settings: forecastingSettings,
           webhook_url: webhookUrl,
         }, null, 2));
 

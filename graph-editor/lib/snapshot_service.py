@@ -1736,6 +1736,135 @@ def query_batch_retrieval_days(
 
 
 # =============================================================================
+# Phase 2c: Batch Retrievals — signature-filtered retrieved_days for N subjects
+# =============================================================================
+
+def query_batch_retrievals(
+    subjects: List[Dict[str, Any]],
+    limit_per_subject: int = 200,
+) -> List[Dict[str, Any]]:
+    """
+    Return signature-filtered retrieved_days for multiple subjects in one DB call.
+
+    Each subject specifies { param_id, core_hash, slice_keys?, equivalent_hashes? }.
+    This replaces N separate query_snapshot_retrievals() calls with a single
+    round-trip, critical for the @ calendar on large graphs (31+ edges).
+
+    The SQL uses UNION ALL across subjects so the DB executes one query.
+
+    Args:
+        subjects: List of dicts, each with:
+            - param_id: str (required, for result keying)
+            - core_hash: str (required, for signature filtering)
+            - slice_keys: List[str] | None (optional slice filter)
+            - equivalent_hashes: List[{"core_hash": str}] | None (optional closure)
+        limit_per_subject: Max distinct retrieved_at per subject (default 200)
+
+    Returns:
+        List of dicts (same order as subjects), each with:
+        - subject_index: int
+        - success: bool
+        - retrieved_at: List[str] (distinct ISO datetimes, descending)
+        - retrieved_days: List[str] (distinct ISO dates, descending)
+        - latest_retrieved_at: str | None
+        - count: int
+        - error: str (if success=False)
+    """
+    if not subjects:
+        return []
+
+    limit_per_subject = max(1, min(int(limit_per_subject or 200), 2000))
+
+    # Pre-validate subjects and build per-subject hash lists.
+    subject_hashes: List[List[str]] = []
+    for i, subj in enumerate(subjects):
+        ch = subj.get('core_hash')
+        if not ch or not isinstance(ch, str) or not ch.strip():
+            subject_hashes.append([])
+            continue
+        hashes = [ch.strip()]
+        eq = subj.get('equivalent_hashes')
+        if eq and isinstance(eq, list):
+            for e in eq:
+                ech = e.get('core_hash') if isinstance(e, dict) else None
+                if ech and isinstance(ech, str) and ech.strip():
+                    hashes.append(ech.strip())
+        subject_hashes.append(hashes)
+
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+
+        # Execute per-subject queries within a single DB connection.
+        # The main performance win is ONE Vercel function invocation + ONE DB connection
+        # instead of N separate cold-start-prone serverless calls.
+        results: List[Dict[str, Any]] = []
+        for i, subj in enumerate(subjects):
+            hashes = subject_hashes[i]
+            if not hashes:
+                results.append({
+                    "subject_index": i,
+                    "success": False,
+                    "retrieved_at": [],
+                    "retrieved_days": [],
+                    "latest_retrieved_at": None,
+                    "count": 0,
+                    "error": "missing or invalid core_hash",
+                })
+                continue
+
+            where_clauses = ["core_hash = ANY(%s)"]
+            params = [hashes]
+
+            sk = subj.get('slice_keys')
+            if sk is not None and isinstance(sk, list):
+                _append_slice_filter_sql(sql_parts=where_clauses, params=params, slice_keys=sk)
+
+            where_sql = " AND ".join(where_clauses)
+
+            cur.execute(
+                f"""
+                SELECT DISTINCT retrieved_at
+                FROM snapshots
+                WHERE {where_sql}
+                ORDER BY retrieved_at DESC
+                LIMIT %s
+                """,
+                tuple(params + [limit_per_subject])
+            )
+            rows = cur.fetchall()
+            retrieved_ats = [r[0].isoformat() for r in rows if r and r[0] is not None]
+            retrieved_days = sorted({ts.split('T')[0] for ts in retrieved_ats}, reverse=True)
+
+            results.append({
+                "subject_index": i,
+                "success": True,
+                "retrieved_at": retrieved_ats,
+                "retrieved_days": retrieved_days,
+                "latest_retrieved_at": retrieved_ats[0] if retrieved_ats else None,
+                "count": len(retrieved_ats),
+            })
+
+        return results
+    except Exception as e:
+        print(f"[query_batch_retrievals] Error: {e}")
+        return [
+            {
+                "subject_index": i,
+                "success": False,
+                "retrieved_at": [],
+                "retrieved_days": [],
+                "latest_retrieved_at": None,
+                "count": 0,
+                "error": str(e),
+            }
+            for i in range(len(subjects))
+        ]
+    finally:
+        conn.close()
+
+
+# =============================================================================
 # Phase 3: Virtual Snapshot (asat) — Latest-per-anchor_day as-of
 # =============================================================================
 

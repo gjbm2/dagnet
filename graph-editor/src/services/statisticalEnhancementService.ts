@@ -1898,7 +1898,7 @@ export interface EdgeLAGValues {
       anchorLag?: number;
     }>;
 
-    // === Forecast / blend diagnostics (to explain “forecast too low”) ===
+    // === Forecast / blend diagnostics (to explain "forecast too low") ===
     /** Forecast mean available on edge before blending (typically from window() baseline slice) */
     baseForecastMean?: number;
     /** Forecast mean fallback computed from mature cohorts (p∞), if available */
@@ -2869,8 +2869,8 @@ export function enhanceGraphLatencies(
         pathMu = nodePathMu.get(nodeId);
         pathSigma = nodePathSigma.get(nodeId);
       }
-      // Fallback (d): first edge from anchor — path IS the edge itself.
-      if (pathMu === undefined && latencyStats.fit.mu !== undefined) {
+      // Fallback (d): first edge from anchor — path IS the edge itself (cohort mode only).
+      if (pathMu === undefined && !isWindowMode && latencyStats.fit.mu !== undefined) {
         pathMu = latencyStats.completeness_cdf.mu;
         pathSigma = latencyStats.completeness_cdf.sigma;
       }

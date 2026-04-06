@@ -938,6 +938,8 @@ export function buildCohortMaturityEChartsOption(
         if (chartMode === 'count') return {};
         const ext = settings.tau_extent ?? settings.x_axis_max;
         if (ext && ext !== 'auto' && ext !== 'Auto' && Number.isFinite(Number(ext))) return { max: Number(ext) };
+        // Auto: clamp to data extent so ECharts doesn't round up beyond the curves
+        if (maxTau !== null && Number.isFinite(maxTau)) return { max: maxTau };
         return {};
       })(),
       axisLabel: { fontSize: 9, color: c.text, formatter: (v: number) => `${Math.round(v)}` },

@@ -4158,7 +4158,15 @@ export async function getFromSourceDirect(options: {
                 sessionLogService.addChild(logOpId, 'warning', 'SNAPSHOT_WRITE_FAILED',
                   `Snapshot write failed: ${result.error || 'unknown error'}`,
                   undefined,
-                  { param_id: dbParamId, error: result.error }
+                  {
+                    param_id: dbParamId, error: result.error,
+                    rows_count: snapshotRows.length,
+                    slice_key: sliceDSL || '',
+                    response_status: result.response_status,
+                    body_size_bytes: result.body_size_bytes,
+                    duration_ms: result.duration_ms,
+                    backend_diagnostics: result.backend_diagnostics,
+                  }
                 );
               }
             } catch (error) {
@@ -4166,7 +4174,7 @@ export async function getFromSourceDirect(options: {
               sessionLogService.addChild(logOpId, 'warning', 'SNAPSHOT_WRITE_ERROR',
                 `Snapshot write error: ${error instanceof Error ? error.message : error}`,
                 undefined,
-                { param_id: dbParamId || objectId }
+                { param_id: dbParamId || objectId, rows_count: snapshotRows.length, slice_key: sliceDSL || '' }
               );
             }
           }
@@ -4475,7 +4483,15 @@ export async function getFromSourceDirect(options: {
                 sessionLogService.addChild(logOpId, 'warning', 'SNAPSHOT_WRITE_FAILED',
                   `Snapshot write failed: ${result.error || 'unknown error'}`,
                   undefined,
-                  { param_id: dbParamId, error: result.error }
+                  {
+                    param_id: dbParamId, error: result.error,
+                    rows_count: snapshotRows.length,
+                    slice_key: sliceDSL || '',
+                    response_status: result.response_status,
+                    body_size_bytes: result.body_size_bytes,
+                    duration_ms: result.duration_ms,
+                    backend_diagnostics: result.backend_diagnostics,
+                  }
                 );
               }
             } catch (error) {
@@ -4484,11 +4500,11 @@ export async function getFromSourceDirect(options: {
               sessionLogService.addChild(logOpId, 'warning', 'SNAPSHOT_WRITE_ERROR',
                 `Snapshot write error: ${error instanceof Error ? error.message : error}`,
                 undefined,
-                { param_id: dbParamId || objectId }
+                { param_id: dbParamId || objectId, rows_count: snapshotRows.length, slice_key: sliceDSL || '' }
               );
             }
           }
-          
+
           await fileRegistry.updateFile(`parameter-${objectId}`, updatedFileData);
           
           // Log merged coverage for this slice (distinct from "new days fetched").

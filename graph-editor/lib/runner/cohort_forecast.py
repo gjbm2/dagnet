@@ -532,6 +532,9 @@ def compute_cohort_maturity_rows(
                 'tau_max': tau_max,
             }
 
+    if not cohort_info:
+        return []
+
     cohort_list = list(cohort_info.values())
 
     # ── Bucket aggregation from all frames ─────────────────────────────

@@ -562,6 +562,9 @@ if ! python3 -c "import venv, ensurepip" >/dev/null 2>&1; then
     py_minor="$(python3 -c "import sys; print(sys.version_info.minor)")"
     sudo apt-get update
     sudo apt-get install -y python3-venv || sudo apt-get install -y "python3.${py_minor}-venv"
+    # BLAS for PyTensor (used by PyMC/Bayes) — without this, sampling is ~10× slower.
+    # Mirrors the .apt_install("libopenblas-dev") in bayes/app.py Modal image.
+    sudo apt-get install -y libopenblas-dev
   else
     echo -e "  ${RED}python3 venv/ensurepip not available. Install python3-venv and re-run.${NC}"
     exit 1

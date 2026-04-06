@@ -19,6 +19,7 @@ import { repositoryOperationsService } from './repositoryOperationsService';
 import { workspaceService } from './workspaceService';
 import { APP_VERSION } from '../version';
 import { db } from '../db/appDatabase';
+import { fileRegistry } from '../contexts/TabContext';
 import type { RepositoryItem, GraphData, ViewMode } from '../types';
 
 // ---------------------------------------------------------------------------
@@ -363,23 +364,18 @@ async function runDailyAutomation(ctx: JobContext): Promise<void> {
 
       try {
         const graphFileId = `graph-${graphName}`;
-        const graphItem: RepositoryItem = {
-          id: graphName,
-          name: graphName,
-          type: 'graph',
-          path: `graphs/${graphName}.json`,
-        };
 
-        // Open tab (always fresh — boot was blank, nothing to reuse).
-        if (automationCtx.tabOps) {
-          await automationCtx.tabOps.openTab(graphItem, 'interactive', false);
+        // Headless: load graph from FileRegistry (already populated by loadWorkspaceFromIDB).
+        // No tab opened — avoids mounting GraphEditor and all its expensive
+        // rendering/compute cascades (ReactFlow, scenarios, charts, edge geometry).
+        let graphFile = fileRegistry.getFile(graphFileId);
+        if (!graphFile?.data) {
+          // Fallback: try restoring from IDB directly (with workspace for prefixed key lookup).
+          graphFile = await fileRegistry.restoreFile(graphFileId, { repository: repoFinal, branch: branchFinal }) ?? undefined;
         }
-
-        if (logTabId) reassertTabFocus(logTabId, [0, 50, 200, 750]);
-
-        const loaded = await waitForGraphData(graphFileId, 60_000, 250, () => ctx.shouldAbort());
-        if (!loaded) {
-          sessionLogService.warning('session', 'DAILY_RETRIEVE_ALL_SKIPPED', `${sequenceInfo} Daily automation skipped graph: graph did not load in time`);
+        if (!graphFile?.data || graphFile.type !== 'graph') {
+          sessionLogService.warning('session', 'DAILY_RETRIEVE_ALL_SKIPPED',
+            `${sequenceInfo} Skipped: graph data not found in workspace`);
           continue;
         }
 
@@ -387,8 +383,8 @@ async function runDailyAutomation(ctx: JobContext): Promise<void> {
           repository: repoFinal,
           branch: branchFinal,
           graphFileId,
-          getGraph: () => (automationCtx.fileRegistryGetFile(graphFileId) as any)?.data || null,
-          setGraph: (g) => automationCtx.tabOps?.updateTabData(graphFileId, g),
+          getGraph: () => fileRegistry.getFile(graphFileId)?.data || null,
+          setGraph: (g) => { if (g) void fileRegistry.updateFile(graphFileId, g); },
           shouldAbort: () => ctx.shouldAbort(),
         });
         sessionLogService.info('session', 'DAILY_RETRIEVE_ALL_GRAPH_COMPLETE', `${sequenceInfo} Completed: ${graphName}`);

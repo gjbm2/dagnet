@@ -271,7 +271,7 @@ describe('applyPromotion', () => {
     // Doc 19: t95 and path_t95 write to promoted_* fields to avoid circular dependency.
     expect(p.latency?.t95).toBe(0); // user-configured value unchanged
     expect(p.latency?.promoted_t95).toBe(40); // model output in promoted field
-    expect(p.latency?.onset_delta_days).toBe(0); // user-configured value unchanged
+    expect(p.latency?.onset_delta_days).toBe(2.5); // copied from promoted (no override lock)
     expect(p.latency?.promoted_onset_delta_days).toBe(2.5); // model output in promoted field
     expect(p.latency?.path_mu).toBe(2.9);
     expect(p.latency?.path_sigma).toBe(0.85);
@@ -345,6 +345,26 @@ describe('applyPromotion', () => {
     // Model output in promoted fields
     expect(p.latency?.promoted_t95).toBe(40);
     expect(p.latency?.promoted_path_t95).toBe(55);
+  });
+
+  it('should preserve user-configured onset_delta_days when override lock is set', () => {
+    const p: ProbabilityParam = {
+      mean: 0,
+      stdev: 0,
+      latency: {
+        mu: 0, sigma: 0, t95: 0, onset_delta_days: 10,
+        onset_delta_days_overridden: true,
+      },
+      model_vars: [bayesianGated], // bayesian has onset_delta_days=2.5
+    };
+
+    applyPromotion(p, undefined);
+
+    // User-configured value untouched (lock held)
+    expect(p.latency?.onset_delta_days).toBe(10);
+    expect(p.latency?.onset_delta_days_overridden).toBe(true);
+    // Model output in promoted field
+    expect(p.latency?.promoted_onset_delta_days).toBe(2.5);
   });
 
   it('should not write latency when ProbabilityParam has no latency block', () => {

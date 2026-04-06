@@ -64,6 +64,10 @@
       "destination": "/api/python-api?endpoint=snapshots-query-virtual"
     },
     {
+      "source": "/api/snapshots/batch-retrievals",
+      "destination": "/api/python-api?endpoint=snapshots-batch-retrievals"
+    },
+    {
       "source": "/api/snapshots/retrievals",
       "destination": "/api/python-api?endpoint=snapshots-retrievals"
     },

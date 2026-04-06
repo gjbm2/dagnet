@@ -72,6 +72,13 @@ if ! python3 -c "import venv, ensurepip" >/dev/null 2>&1; then
   exit 1
 fi
 
+# BLAS for PyTensor (used by PyMC/Bayes) — without this, sampling is ~10× slower.
+# Mirrors the .apt_install("libopenblas-dev") in bayes/app.py Modal image.
+if [[ "$OSTYPE" == "linux-gnu"* ]] && ! dpkg -s libopenblas-dev >/dev/null 2>&1; then
+  echo "WARNING: libopenblas-dev not installed — PyTensor BLAS will be degraded."
+  echo "  Fix: sudo apt-get install -y libopenblas-dev"
+fi
+
 if [[ ! -f "${VENV_ACTIVATE}" ]]; then
   rm -rf "${VENV_DIR}"
   (cd "${ROOT_DIR}/graph-editor" && python3 -m venv venv)

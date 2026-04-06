@@ -1251,7 +1251,7 @@ def enhance_graph_latencies(
                 path_mu=round(path_mu, 4) if path_mu is not None else None,
                 path_sigma=round(path_sigma, 4) if path_sigma is not None else None,
                 path_onset_delta_days=round(path_onset, 2),
-                p_infinity=round(latency_stats.p_infinity, 6) if latency_stats.forecast_available else None,
+                p_infinity=round(forecast_mean, 6) if forecast_mean is not None else None,
                 p_evidence=round(latency_stats.p_evidence, 6),
                 forecast_available=latency_stats.forecast_available,
                 blended_mean=round(blended, 6) if blended is not None else None,

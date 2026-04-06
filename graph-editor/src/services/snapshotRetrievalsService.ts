@@ -6,10 +6,13 @@ import { parseSignature } from './signatureMatchingService';
 import { computeQuerySignature } from './dataOperationsService';
 import {
   getBatchInventoryV2,
+  getBatchRetrievals,
   querySnapshotRetrievals,
+  type BatchRetrievalsSubject,
   type QuerySnapshotRetrievalsParams,
   type QuerySnapshotRetrievalsResult
 } from './snapshotWriteService';
+import { computeShortCoreHash } from './coreHashService';
 import { db } from '../db/appDatabase';
 import { getClosureSet } from './hashMappingsService';
 
@@ -276,9 +279,6 @@ export async function getSnapshotCoverageForEdges(args: {
   edgeIds?: string[];
 }): Promise<SnapshotCoverageResult> {
   const { graph, effectiveDSL, workspace, edgeIds } = args;
-  // Only consider edges that actually have a connected parameter (p.id).
-  // Edges without a connection can never have snapshots, so including them
-  // would artificially deflate the coverage fraction.
   const rawIds = edgeIds && edgeIds.length > 0 ? edgeIds : collectConnectedEdgeIds(graph);
   const targetEdgeIds = edgeIds ? rawIds.filter((id) => edgeHasParam(graph, id)) : rawIds;
 
@@ -303,6 +303,151 @@ export async function getSnapshotCoverageForEdges(args: {
     const dayCounts: Record<string, number> = {};
     const allDaysSet = new Set<string>();
     for (const res of results) {
+      if (!res.success) continue;
+      for (const day of res.retrieved_days) {
+        dayCounts[day] = (dayCounts[day] || 0) + 1;
+        allDaysSet.add(day);
+      }
+    }
+
+    const totalParams = targetEdgeIds.length;
+    const coverageByDay: Record<string, number> = {};
+    for (const [day, count] of Object.entries(dayCounts)) {
+      coverageByDay[day] = count / totalParams;
+    }
+
+    const allDays = Array.from(allDaysSet).sort().reverse();
+    return { success: true, coverageByDay, totalParams, allDays };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    return { success: false, coverageByDay: {}, totalParams: targetEdgeIds.length, allDays: [], error: errorMessage };
+  }
+}
+
+/**
+ * Batched version of getSnapshotCoverageForEdges.
+ *
+ * Same contract, same output — but uses 2 API round-trips (one inventory +
+ * one batch-retrievals) instead of 2N individual calls.
+ *
+ * NOT yet wired into the UI. Exported for parity testing against the
+ * original N-parallel implementation.
+ */
+export async function getSnapshotCoverageForEdgesBatched(args: {
+  graph: GraphData;
+  effectiveDSL: string;
+  workspace?: { repository: string; branch: string };
+  edgeIds?: string[];
+}): Promise<SnapshotCoverageResult> {
+  const { graph, effectiveDSL, workspace, edgeIds } = args;
+  const rawIds = edgeIds && edgeIds.length > 0 ? edgeIds : collectConnectedEdgeIds(graph);
+  const targetEdgeIds = edgeIds ? rawIds.filter((id) => edgeHasParam(graph, id)) : rawIds;
+
+  if (targetEdgeIds.length === 0) {
+    return { success: true, coverageByDay: {}, totalParams: 0, allDays: [] };
+  }
+
+  try {
+    // Step 1: Compute all signatures client-side (parallel, no network)
+    const sigResults = await Promise.all(
+      targetEdgeIds.map((edgeId) =>
+        computeCurrentSignatureForEdge({ graph, edgeId, effectiveDSL, workspace })
+          .catch(() => null)
+      )
+    );
+
+    const validEdges: Array<{
+      edgeId: string;
+      dbParamId: string;
+      signature: string;
+      coreHash: string;
+    }> = [];
+    const currentSignatures: Record<string, string> = {};
+    const dbParamIds: string[] = [];
+
+    for (let i = 0; i < targetEdgeIds.length; i++) {
+      const sig = sigResults[i];
+      if (!sig) continue;
+      // CRITICAL: compute the short DB core_hash from the full signature string,
+      // NOT from parseSignature().coreHash (which is the raw 'c' field hex string).
+      // The DB stores SHA256(signature)[0:16] base64url, not the c field.
+      const shortHash = await computeShortCoreHash(sig.signature);
+      validEdges.push({
+        edgeId: targetEdgeIds[i],
+        dbParamId: sig.dbParamId,
+        signature: sig.signature,
+        coreHash: shortHash,
+      });
+      currentSignatures[sig.dbParamId] = sig.signature;
+      if (!dbParamIds.includes(sig.dbParamId)) {
+        dbParamIds.push(sig.dbParamId);
+      }
+    }
+
+    if (validEdges.length === 0) {
+      return { success: true, coverageByDay: {}, totalParams: targetEdgeIds.length, allDays: [] };
+    }
+
+    // Step 2: ONE batched inventory call
+    const dslWithoutAsat = stripAsatClause(effectiveDSL);
+    const contextDims = extractSliceDimensions(dslWithoutAsat);
+    const wantSliceFilter = !!contextDims && !hasContextAny(dslWithoutAsat);
+
+    const equivalentHashesByParam: Record<string, Array<{ core_hash: string }>> = {};
+    for (const edge of validEdges) {
+      if (!equivalentHashesByParam[edge.dbParamId]) {
+        const closure = getClosureSet(edge.coreHash);
+        if (closure.length > 0) {
+          equivalentHashesByParam[edge.dbParamId] = closure;
+        }
+      }
+    }
+
+    const inv = await getBatchInventoryV2(dbParamIds, {
+      current_signatures: currentSignatures,
+      ...(Object.keys(equivalentHashesByParam).length > 0
+        ? { equivalent_hashes_by_param: equivalentHashesByParam }
+        : {}),
+      limit_families_per_param: 50,
+      limit_slices_per_family: 2000,
+    });
+
+    // Step 3: Build batch-retrievals subjects from inventory
+    const subjects: BatchRetrievalsSubject[] = [];
+
+    for (const edge of validEdges) {
+      const pidInv = inv?.[edge.dbParamId];
+      const matchedFamilyId = pidInv?.current?.matched_family_id;
+      const matchedFamily = matchedFamilyId
+        ? pidInv?.families?.find((f: any) => f.family_id === matchedFamilyId)
+        : undefined;
+
+      let slice_keys: string[] | undefined;
+      if (wantSliceFilter && matchedFamily) {
+        const candidates = (matchedFamily.by_slice_key || [])
+          .map((s: any) => s.slice_key)
+          .filter((k: string) => extractSliceDimensions(k) === contextDims);
+        slice_keys = Array.from(new Set(candidates));
+      } else if (wantSliceFilter) {
+        slice_keys = [];
+      }
+
+      const closure = equivalentHashesByParam[edge.dbParamId];
+      subjects.push({
+        param_id: edge.dbParamId,
+        core_hash: edge.coreHash,
+        slice_keys,
+        ...(closure ? { equivalent_hashes: closure } : {}),
+      });
+    }
+
+    // Step 4: ONE batched retrievals call
+    const batchResults = await getBatchRetrievals(subjects, 200);
+
+    // Step 5: Aggregate coverage
+    const dayCounts: Record<string, number> = {};
+    const allDaysSet = new Set<string>();
+    for (const res of batchResults) {
       if (!res.success) continue;
       for (const day of res.retrieved_days) {
         dayCounts[day] = (dayCounts[day] || 0) + 1;

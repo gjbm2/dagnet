@@ -1439,25 +1439,28 @@ export async function getParameterFromFile(options: {
           }
         } catch (error) {
           const errorMsg = error instanceof Error ? error.message : String(error);
-          // If no data available for window, don't fall back - show error and return early
+          // Fall through to regular file-to-graph update for ALL aggregation
+          // errors, including "no data for window". Bailing out entirely
+          // prevents window-independent fields (posteriors, latency,
+          // model_vars) from syncing to the graph edge.
           if (errorMsg.includes('No data available for window')) {
             const filterRange = (isCohortQuery && cohortWindow) ? cohortWindow : window;
             const rangeLabel = `${filterRange?.start} to ${filterRange?.end}`;
             const paramLabel = edgeId ? `${paramId} (edge ${edgeId})` : paramId;
-            batchableToastError(`${paramLabel}: no data for ${isCohortQuery ? 'cohort' : 'window'} ${rangeLabel}`);
-            sessionLogService.endOperation(logOpId, 'error', `${paramLabel}: no data for ${isCohortQuery ? 'cohort' : 'window'} (${rangeLabel})`);
-            return { success: false }; // Don't proceed with file-to-graph update
+            aggregationFallbackError = `no data for ${isCohortQuery ? 'cohort' : 'window'} (${rangeLabel})`;
+            console.warn(`[DataOperationsService] ${paramLabel}: ${aggregationFallbackError} — falling back to raw file values`);
+            sessionLogService.addChild(logOpId, 'warning', 'AGGREGATION_NO_DATA',
+              `${paramLabel}: ${aggregationFallbackError}, using raw file values`);
+          } else {
+            batchableToastError(`${paramId}: window aggregation failed — ${errorMsg}`);
+            aggregationFallbackError = errorMsg;
+            console.warn('[DataOperationsService] Falling back to regular update:', error);
+            sessionLogService.addChild(logOpId, 'warning', 'AGGREGATION_FALLBACK',
+              `Window aggregation failed, using raw file values`,
+              errorMsg,
+              { error: errorMsg }
+            );
           }
-          batchableToastError(`${paramId}: window aggregation failed — ${errorMsg}`);
-          // Fall back to regular file-to-graph update only for other errors
-          // IMPORTANT: Track the error so session log can report 'warning' instead of 'success'
-          aggregationFallbackError = errorMsg;
-          console.warn('[DataOperationsService] Falling back to regular update:', error);
-          sessionLogService.addChild(logOpId, 'warning', 'AGGREGATION_FALLBACK', 
-            `Window aggregation failed, using raw file values`, 
-            errorMsg, 
-            { error: errorMsg }
-          );
         }
         } else {
           // No daily data available, fall back to regular update

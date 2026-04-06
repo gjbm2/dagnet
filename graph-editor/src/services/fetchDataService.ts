@@ -1952,48 +1952,43 @@ export async function runStage2EnhancementsAndInboundN(
           }
 
           // ── BE topo pass (analytic_be model_vars) + parity comparison ──
-          // Fire-and-forget: runs in parallel, upserts analytic_be entries
-          // when results arrive, then compares FE vs BE. Does not block the FE pipeline.
-          (async () => {
-            try {
-              const { runBeTopoPass } = await import('./beTopoPassService');
-              const { upsertModelVars } = await import('./modelVarsResolution');
-              const beEntries = await runBeTopoPass(
-                finalGraph, paramLookup, queryDateForLAG, lagHelpers, lagCohortWindow,
-                lagSliceSource, activeEdgesForLAG,
-              );
-              if (beEntries.length > 0 && finalGraph?.edges) {
-                const beGraph = structuredClone(finalGraph);
-                let applied = 0;
-                for (const { edgeUuid, conditionalIndex, entry } of beEntries) {
-                  const edge = beGraph.edges?.find((e: any) => e.uuid === edgeUuid || e.id === edgeUuid);
-                  if (!edge) continue;
-                  if (conditionalIndex != null) {
-                    // Conditional probability
-                    const cp = edge.conditional_p?.[conditionalIndex];
-                    if (cp?.p) {
-                      upsertModelVars(cp.p, entry);
-                      applied++;
-                    }
-                  } else if (edge.p) {
-                    upsertModelVars(edge.p, entry);
+          // Awaited: applies BE entries to finalGraph directly so inbound-n (below)
+          // sees both FE and BE results. Previously fire-and-forget, which raced with
+          // inbound-n — last writer won, discarding the other's results.
+          try {
+            const { runBeTopoPass } = await import('./beTopoPassService');
+            const { upsertModelVars } = await import('./modelVarsResolution');
+            const beEntries = await runBeTopoPass(
+              finalGraph, paramLookup, queryDateForLAG, lagHelpers, lagCohortWindow,
+              lagSliceSource, activeEdgesForLAG,
+            );
+            if (beEntries.length > 0 && finalGraph?.edges) {
+              let applied = 0;
+              for (const { edgeUuid, conditionalIndex, entry } of beEntries) {
+                const edge = finalGraph.edges?.find((e: any) => e.uuid === edgeUuid || e.id === edgeUuid);
+                if (!edge) continue;
+                if (conditionalIndex != null) {
+                  const cp = edge.conditional_p?.[conditionalIndex];
+                  if (cp?.p) {
+                    upsertModelVars(cp.p, entry);
                     applied++;
                   }
-                }
-                if (applied > 0) {
-                  setGraph(beGraph);
-                  console.log(`[fetchDataService] BE topo pass: upserted ${applied} analytic_be entries`);
-                  // Both sources now on the graph — run parity comparison
-                  if (FORECASTING_PARALLEL_RUN) {
-                    compareModelVarsSources(beGraph);
-                  }
-
+                } else if (edge.p) {
+                  upsertModelVars(edge.p, entry);
+                  applied++;
                 }
               }
-            } catch (e) {
-              console.warn('[fetchDataService] BE topo pass failed (non-blocking):', e);
+              if (applied > 0) {
+                setGraph(finalGraph);
+                console.log(`[fetchDataService] BE topo pass: upserted ${applied} analytic_be entries into finalGraph`);
+                if (FORECASTING_PARALLEL_RUN) {
+                  compareModelVarsSources(finalGraph);
+                }
+              }
             }
-          })();
+          } catch (e) {
+            console.warn('[fetchDataService] BE topo pass failed (non-blocking):', e);
+          }
 
           if (batchLogId) {
             sessionLogService.addChild(batchLogId, 'info', 'LAG_ENHANCED',

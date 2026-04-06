@@ -1612,10 +1612,10 @@ describe('fetchItems — rate limit countdown and retry', () => {
     const graph = makeGraph(3);
     const setGraph = vi.fn();
 
-    // Item 1 fails with a normal error (not rate limit).
+    // Item 1 fails with a normal error (not rate limit or timeout).
     getFromSourceSpy.mockImplementation(async (opts: any) => {
       if (opts.objectId === 'param-1') {
-        throw new Error('Network timeout');
+        throw new Error('Invalid response format');
       }
       return undefined;
     });

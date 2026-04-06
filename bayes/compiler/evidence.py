@@ -283,10 +283,15 @@ def bind_snapshot_evidence(
                 ev, et, rows, today_date, diagnostics,
                 settings=settings,
             )
+            # Count what actually got bound (trajectories + daily obs per slice type)
+            _w_trajs = sum(len(c.trajectories) for c in ev.cohort_obs if "window" in c.slice_dsl)
+            _w_daily = sum(len(c.daily) for c in ev.cohort_obs if "window" in c.slice_dsl)
+            _c_trajs = sum(len(c.trajectories) for c in ev.cohort_obs if "cohort" in c.slice_dsl)
+            _c_daily = sum(len(c.daily) for c in ev.cohort_obs if "cohort" in c.slice_dsl)
             diagnostics.append(
                 f"INFO edge {edge_id[:8]}…: {len(rows)} snapshot rows "
-                f"→ {len(ev.window_obs)} window obs, "
-                f"{sum(len(c.daily) for c in ev.cohort_obs)} cohort daily obs"
+                f"→ window({_w_trajs} trajs, {_w_daily} daily), "
+                f"cohort({_c_trajs} trajs, {_c_daily} daily)"
             )
 
             # Supplement with param-file data for uncovered anchor_days.
@@ -1046,12 +1051,9 @@ def _resolve_latency_prior(et, pf_data: dict | None) -> LatencyPrior:
                     lat_mu = float(prev_mu)
                     lat_sigma = float(prev_sigma)
                     lat_source = "warm_start"
-                    # onset: do NOT override from warm-start. The graph
-                    # edge's onset_delta_days is the current value — either
-                    # promoted from the last model run or user-edited.
-                    # Overriding it here would discard user edits.
-                    # mu/sigma are different: the graph edge carries stats
-                    # pass values which the posterior improves upon.
+                    # onset comes from et.onset_delta_days which already
+                    # contains the promoted value (Bayesian posterior or
+                    # user override) — no separate warm-start needed here.
 
     return LatencyPrior(
         onset_delta_days=onset,

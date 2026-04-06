@@ -177,6 +177,23 @@ async def snapshots_batch_anchor_coverage(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# Batch snapshot retrievals endpoint (signature-filtered, N subjects in one call)
+@app.post("/api/snapshots/batch-retrievals")
+async def snapshots_batch_retrievals(request: Request):
+    """Batch signature-filtered retrieval days for multiple params."""
+    try:
+        data = await request.json()
+        from api_handlers import handle_snapshots_batch_retrievals
+        return handle_snapshots_batch_retrievals(data)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        import traceback
+        print(f"[snapshots/batch-retrievals] Error: {e}")
+        print(f"[snapshots/batch-retrievals] Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # Snapshot retrievals endpoint (Phase 2 @ UI)
 @app.post("/api/snapshots/retrievals")
 async def snapshots_retrievals(request: Request):

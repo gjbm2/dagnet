@@ -549,6 +549,20 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
         progress.set_band(*P1_COMPILE)
         report("compiling", 0, f"{phase1_label}: Building model…")
         features = settings.get("features") or {}
+
+        # Log key settings so we can verify what the model actually used
+        _bayes_keys = [
+            "BAYES_SOFTPLUS_SHARPNESS", "bayes_softplus_sharpness",
+            "BAYES_LOG_KAPPA_MU", "BAYES_LOG_KAPPA_SIGMA",
+            "BAYES_FALLBACK_PRIOR_ESS", "BAYES_MU_PRIOR_SIGMA_FLOOR",
+            "BAYES_DRAWS", "BAYES_TUNE", "BAYES_CHAINS", "BAYES_TARGET_ACCEPT",
+        ]
+        _found = {k: settings[k] for k in _bayes_keys if k in settings}
+        if _found:
+            _log(log, f"settings: {_found}")
+        else:
+            _log(log, "settings: no BAYES_* keys in payload — using module defaults")
+
         model, metadata = build_model(topology, evidence, features=features, settings=settings)
         _log(log,f"model: {len(model.free_RVs)} free vars, {len(model.observed_RVs)} observed")
         for d in metadata.get("diagnostics", []):
@@ -570,12 +584,18 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
             )
 
         # ── 5. Run inference ──
+        def _s_int(key_lower: str, key_camel: str, key_upper: str, default: int) -> int:
+            return int(settings.get(key_lower, settings.get(key_camel, settings.get(key_upper, default))))
+
+        def _s_float(key_lower: str, key_camel: str, key_upper: str, default: float) -> float:
+            return float(settings.get(key_lower, settings.get(key_camel, settings.get(key_upper, default))))
+
         sampling_config = SamplingConfig(
-            draws=int(settings.get("draws", settings.get("bayes_draws", 2000))),
-            tune=int(settings.get("tune", settings.get("bayes_tune", 1000))),
-            chains=int(settings.get("chains", settings.get("bayes_chains", 4))),
+            draws=_s_int("draws", "bayes_draws", "BAYES_DRAWS", 2000),
+            tune=_s_int("tune", "bayes_tune", "BAYES_TUNE", 1000),
+            chains=_s_int("chains", "bayes_chains", "BAYES_CHAINS", 4),
             cores=settings.get("cores"),
-            target_accept=float(settings.get("target_accept", settings.get("bayes_target_accept", 0.90))),
+            target_accept=_s_float("target_accept", "bayes_target_accept", "BAYES_TARGET_ACCEPT", 0.90),
             random_seed=settings.get("random_seed"),
         )
 

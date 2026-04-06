@@ -94,6 +94,14 @@ export interface AppendSnapshotsResult {
   error?: string;
   /** Diagnostic details (only present if diagnostic=true in request) */
   diagnostic?: SnapshotDiagnostic;
+  /** HTTP response status (populated on failure) */
+  response_status?: number;
+  /** Request body size in bytes (populated on failure) */
+  body_size_bytes?: number;
+  /** Round-trip duration in ms (populated on failure) */
+  duration_ms?: number;
+  /** Backend diagnostic info (populated when server returns diagnostics object) */
+  backend_diagnostics?: Record<string, unknown>;
 }
 
 // -----------------------------------------------------------------------------
@@ -156,28 +164,61 @@ export async function appendSnapshots(params: AppendSnapshotsParams): Promise<Ap
     // Frontend computes core_hash — backend uses it as an opaque DB key (hash-fixes.md)
     const core_hash = await computeShortCoreHash(params.canonical_signature);
 
-    const response = await fetch(`${PYTHON_API_BASE}/api/snapshots/append`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        param_id: params.param_id,
-        canonical_signature: params.canonical_signature,
-        core_hash,
-        inputs_json: params.inputs_json,
-        sig_algo: params.sig_algo,
-        slice_key: params.slice_key,
-        retrieved_at: params.retrieved_at.toISOString(),
-        rows: params.rows,
-        diagnostic: params.diagnostic || false,
-      }),
+    const bodyString = JSON.stringify({
+      param_id: params.param_id,
+      canonical_signature: params.canonical_signature,
+      core_hash,
+      inputs_json: params.inputs_json,
+      sig_algo: params.sig_algo,
+      slice_key: params.slice_key,
+      retrieved_at: params.retrieved_at.toISOString(),
+      rows: params.rows,
+      diagnostic: params.diagnostic || false,
     });
-    
+    const bodySizeBytes = new Blob([bodyString]).size;
+
+    const doFetch = async (): Promise<Response> =>
+      fetch(`${PYTHON_API_BASE}/api/snapshots/append`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: bodyString,
+      });
+
+    const t0 = performance.now();
+    let response = await doFetch();
+    let durationMs = Math.round(performance.now() - t0);
+
+    // Retry once on empty-body errors (Vercel intermittently drops request bodies)
     if (!response.ok) {
       const errorText = await response.text();
+      if (errorText.includes('Expecting value')) {
+        console.warn('[SnapshotWrite] Empty-body error, retrying once:', params.param_id);
+        const t1 = performance.now();
+        response = await doFetch();
+        durationMs = Math.round(performance.now() - t1);
+        if (response.ok) {
+          const result = await response.json();
+          return { success: result.success, inserted: result.inserted, core_hash: result.core_hash, diagnostic: result.diagnostic };
+        }
+        const retryErrorText = await response.text();
+        let backendDiagnostics: Record<string, unknown> | undefined;
+        try { const parsed = JSON.parse(retryErrorText); backendDiagnostics = parsed.diagnostics; } catch { /* not JSON */ }
+        console.error('[SnapshotWrite] Retry also failed:', response.status, retryErrorText);
+        return {
+          success: false, inserted: 0, error: `(retry) ${retryErrorText}`,
+          response_status: response.status, body_size_bytes: bodySizeBytes, duration_ms: durationMs, backend_diagnostics: backendDiagnostics,
+        };
+      }
+      // Non-empty-body error — no retry
+      let backendDiagnostics: Record<string, unknown> | undefined;
+      try { const parsed = JSON.parse(errorText); backendDiagnostics = parsed.diagnostics; } catch { /* not JSON */ }
       console.error('[SnapshotWrite] Failed to append snapshots:', response.status, errorText);
-      return { success: false, inserted: 0, error: errorText };
+      return {
+        success: false, inserted: 0, error: errorText,
+        response_status: response.status, body_size_bytes: bodySizeBytes, duration_ms: durationMs, backend_diagnostics: backendDiagnostics,
+      };
     }
-    
+
     const result = await response.json();
     return {
       success: result.success,
@@ -185,9 +226,8 @@ export async function appendSnapshots(params: AppendSnapshotsParams): Promise<Ap
       core_hash: result.core_hash,
       diagnostic: result.diagnostic,
     };
-    
+
   } catch (error) {
-    // Network or parsing error - return failure, don't throw
     const errorMessage = error instanceof Error ? error.message : String(error);
     console.error('[SnapshotWrite] Error appending snapshots:', errorMessage);
     return { success: false, inserted: 0, error: errorMessage };
@@ -697,6 +737,84 @@ export async function getBatchRetrievalDays(
   } catch (error) {
     console.error('[getBatchRetrievalDays] Error:', error);
     return {};
+  }
+}
+
+// =============================================================================
+// Batch Retrievals — signature-filtered retrieved_days for N subjects in one call
+// =============================================================================
+
+export interface BatchRetrievalsSubject {
+  param_id: string;
+  core_hash: string;
+  slice_keys?: string[];
+  equivalent_hashes?: ClosureEntry[];
+}
+
+export interface BatchRetrievalsResult {
+  subject_index: number;
+  success: boolean;
+  retrieved_at: string[];
+  retrieved_days: string[];
+  latest_retrieved_at: string | null;
+  count: number;
+  error?: string;
+}
+
+/**
+ * Batch signature-filtered retrieval days for multiple subjects in one request.
+ *
+ * Replaces N separate querySnapshotRetrievals() calls with a single round-trip.
+ * Critical for the @ calendar on large graphs (31+ edges).
+ *
+ * Each subject specifies { param_id, core_hash, slice_keys?, equivalent_hashes? }.
+ * The backend executes per-subject queries within a single DB connection.
+ */
+export async function getBatchRetrievals(
+  subjects: BatchRetrievalsSubject[],
+  limitPerSubject = 200,
+): Promise<BatchRetrievalsResult[]> {
+  if (!SNAPSHOTS_ENABLED || subjects.length === 0) {
+    return [];
+  }
+
+  try {
+    const response = await fetch(`${PYTHON_API_BASE}/api/snapshots/batch-retrievals`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        subjects,
+        limit_per_subject: limitPerSubject,
+      }),
+    });
+
+    if (!response.ok) {
+      console.error('[getBatchRetrievals] Failed:', response.status);
+      return subjects.map((_, i) => ({
+        subject_index: i,
+        success: false,
+        retrieved_at: [],
+        retrieved_days: [],
+        latest_retrieved_at: null,
+        count: 0,
+        error: `HTTP ${response.status}`,
+      }));
+    }
+
+    const data = await response.json();
+    return Array.isArray(data.results) ? data.results : [];
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.error('[getBatchRetrievals] Error:', errorMessage);
+    return subjects.map((_, i) => ({
+      subject_index: i,
+      success: false,
+      retrieved_at: [],
+      retrieved_days: [],
+      latest_retrieved_at: null,
+      count: 0,
+      error: errorMessage,
+    }));
   }
 }
 

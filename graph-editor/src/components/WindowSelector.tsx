@@ -376,7 +376,8 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
         setAsatCoverageByDay(fullCoverage);
       } else {
         // Multiple or all edges: signature-filtered per-edge, then aggregate.
-        const res = await getSnapshotCoverageForEdges({
+        const { getSnapshotCoverageForEdgesBatched } = await import('../services/snapshotRetrievalsService');
+        const res = await getSnapshotCoverageForEdgesBatched({
           graph,
           effectiveDSL: currentDSL || '',
           workspace: workspaceForContextRegistry,

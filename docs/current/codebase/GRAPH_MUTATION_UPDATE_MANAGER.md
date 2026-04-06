@@ -138,6 +138,8 @@ Edge IDs are updated with substring replacement, guarding against repeated token
 
 ## Override Flags
 
+`_overridden` is a field lock — it prevents UpdateManager from overwriting the field. That is all. Do not wire semantic logic to it; read the field's output value instead.
+
 Many fields have an `_overridden` companion flag (e.g. `query` + `query_overridden`). When a field is overridden:
 
 - **Graph-mastered cascades skip it**: MSMDC query regeneration won't overwrite a manually-set query
