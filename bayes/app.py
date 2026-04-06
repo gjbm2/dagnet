@@ -17,7 +17,7 @@ import os
 import time
 import uuid
 
-APP_VERSION = "1.9.17-beta"
+APP_VERSION = "1.9.18-beta"
 
 app = modal.App("dagnet-bayes")
 

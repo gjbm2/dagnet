@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.9.18b
+**Released:** 6-Apr-26
+
+Improvements to retrieveall logic
+
+---
+
 ## Version 1.9.14b
 **Released:** 3-Apr-26
 
