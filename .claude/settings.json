@@ -32,7 +32,8 @@
       "Bash(bash /tmp/analyze.sh)",
       "Bash(xargs -I {} bash -c 'echo \"=== {} ===\" && head -30 {}')",
       "Edit(/.claude/skills/handover/**)",
-      "Bash(npx esbuild:*)"
+      "Bash(npx esbuild:*)",
+      "Bash(git merge:*)"
     ],
     "additionalDirectories": [
       "/home/reg/dev/dagnet/.claude",
