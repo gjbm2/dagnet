@@ -51,8 +51,8 @@ describe('Rate Limit Detection', () => {
 });
 
 describe('Cooloff Constant', () => {
-  it('has the correct value (61 minutes)', () => {
-    expect(AUTOMATION_RATE_LIMIT_COOLOFF_MINUTES).toBe(61);
+  it('has the correct value (45 minutes)', () => {
+    expect(AUTOMATION_RATE_LIMIT_COOLOFF_MINUTES).toBe(45);
   });
 });
 
@@ -74,7 +74,7 @@ describe('getEffectiveRateLimitCooloffMinutes', () => {
   });
 
   it('returns default value when no override is set', () => {
-    expect(getEffectiveRateLimitCooloffMinutes()).toBe(61);
+    expect(getEffectiveRateLimitCooloffMinutes()).toBe(45);
   });
 
   it('returns override value when window.__dagnetTestRateLimitCooloffMinutes is set', () => {
@@ -91,10 +91,10 @@ describe('getEffectiveRateLimitCooloffMinutes', () => {
       (global as any).window = {};
     }
     (global.window as any).__dagnetTestRateLimitCooloffMinutes = 0;
-    expect(getEffectiveRateLimitCooloffMinutes()).toBe(61);
+    expect(getEffectiveRateLimitCooloffMinutes()).toBe(45);
 
     (global.window as any).__dagnetTestRateLimitCooloffMinutes = -5;
-    expect(getEffectiveRateLimitCooloffMinutes()).toBe(61);
+    expect(getEffectiveRateLimitCooloffMinutes()).toBe(45);
   });
 
   it('ignores non-number override values', () => {
@@ -102,7 +102,7 @@ describe('getEffectiveRateLimitCooloffMinutes', () => {
       (global as any).window = {};
     }
     (global.window as any).__dagnetTestRateLimitCooloffMinutes = 'invalid';
-    expect(getEffectiveRateLimitCooloffMinutes()).toBe(61);
+    expect(getEffectiveRateLimitCooloffMinutes()).toBe(45);
   });
 });
 
@@ -154,8 +154,8 @@ describe('Rate Limiter Backoff State', () => {
 import { formatCountdown } from '../../components/OperationsToast';
 
 describe('formatCountdown', () => {
-  it('should format 61 minutes as "61:00"', () => {
-    expect(formatCountdown(3660)).toBe('61:00');
+  it('should format 45 minutes as "45:00"', () => {
+    expect(formatCountdown(2700)).toBe('45:00');
   });
 
   it('should format 2m 5s as "2:05"', () => {

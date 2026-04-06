@@ -73,7 +73,7 @@ class CountdownService {
    * IMPORTANT:
    * We track the countdown by absolute time, not by "tick count".
    * Browsers aggressively throttle timers in background tabs and during sleep,
-   * which can otherwise make long countdowns (e.g. 61 minutes) take hours.
+   * which can otherwise make long countdowns (e.g. 45 minutes) take hours.
    */
   private endsAtMsByKey = new Map<string, number>();
 
