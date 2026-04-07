@@ -1527,8 +1527,10 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                                 cdf_sigma = model_params.get('bayes_sigma', cdf_sigma)
                                 cdf_onset = model_params.get('bayes_onset', cdf_onset)
 
-                    # Axis extent: max(upper_hdi(t95), upper_hdi(path_t95), sweep_span).
-                    # Uses posterior HDI values directly — no recomputation from params.
+                    # Axis extent: use the resolved global extent so all
+                    # scenarios in this request share the same tau range.
+                    # _max_sweep_span and _tau_extent_resolved are computed
+                    # once before the per-subject loop.
                     anchor_from_str = subj.get('anchor_from', '')
                     sweep_to_str = subj.get('sweep_to', '')
                     sweep_span = None
@@ -1540,11 +1542,12 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                     except (ValueError, TypeError):
                         pass
 
-                    # t95 / path_t95 point estimates from the graph edge — always present
                     edge_t95_val = model_params.get('t95')
                     path_t95_val = model_params.get('path_t95')
 
-                    # Include user-requested tau_extent from display_settings
+                    # Include user-requested tau_extent from display_settings.
+                    # The FE resolves 'auto' to the max sweep span across all
+                    # scenarios before sending, so a concrete number arrives here.
                     _tau_extent_raw = (data.get('display_settings') or {}).get('tau_extent')
                     _tau_extent = None
                     if _tau_extent_raw and str(_tau_extent_raw) not in ('auto', 'Auto'):
@@ -1778,6 +1781,23 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                             _bl_map = {'80': 0.80, '90': 0.90, '95': 0.95, '99': 0.99, 'blend': 0.90}
                             _fan_band_level = _bl_map.get(_bl_str, 0.90)
 
+                            # Sampling mode: 'binomial', 'normal', or 'none'
+                            _sampling_mode = str(_ds.get('continuous_forecast', 'binomial'))
+
+                            # Resolve anchor node for cohort mode
+                            _anchor_node_id = None
+                            if not is_window and target_id:
+                                try:
+                                    from graph_types import Graph as _Graph
+                                    from msmdc import compute_anchor_node_id as _compute_anchor
+                                    _g_model = _Graph.model_validate(graph)
+                                    _target_edge = next(
+                                        (e for e in _g_model.edges if e.uuid == target_id), None)
+                                    if _target_edge:
+                                        _anchor_node_id = _compute_anchor(_g_model, _target_edge)
+                                except Exception as _e:
+                                    print(f"[anchor_resolve] Failed: {_e}")
+
                             # Test fixture fork: use fixture's frames/graph/edge_params
                             # but the APP's query dates (anchor_from/to, sweep_to)
                             # so the user can control the date window from the UI.
@@ -1795,6 +1815,7 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                                     axis_tau_max=_fixture_data.get('axis_tau_max'),
                                     band_level=_fan_band_level,
                                     anchor_node_id=_fixture_data.get('anchor_node_id'),
+                                    sampling_mode=_sampling_mode,
                                 )
                             else:
                                 # For unified epoch subjects, derive the date
@@ -1827,6 +1848,8 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                                     is_window=is_window,
                                     axis_tau_max=axis_tau_max,
                                     band_level=_fan_band_level,
+                                    sampling_mode=_sampling_mode,
+                                    anchor_node_id=_anchor_node_id,
                                 )
                             _sd_keys = {k: v for k, v in model_params.items() if 'sd' in k.lower() or 'stdev' in k.lower() or 'corr' in k.lower()}
                             print(f"[cohort_maturity_rows] Computed {len(maturity_rows)} rows for {subj.get('subject_id', '?')[:40]}  is_window={is_window}  SDs={_sd_keys}")
@@ -1850,6 +1873,21 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                     _graph = graph if graph else (scenario.get('graph') or {})
                     _tid = target_id if target_id else ((subj.get('target') or {}).get('targetId') or '')
                     _is_win = 'window(' in str(data.get('query_dsl', ''))
+
+                    # Resolve anchor node for cohort mode (mirrors primary path)
+                    _fb_anchor_node_id = None
+                    if not _is_win and _tid:
+                        try:
+                            from graph_types import Graph as _Graph
+                            from msmdc import compute_anchor_node_id as _compute_anchor
+                            _g_model = _Graph.model_validate(_graph)
+                            _target_edge = next(
+                                (e for e in _g_model.edges if e.uuid == _tid), None)
+                            if _target_edge:
+                                _fb_anchor_node_id = _compute_anchor(_g_model, _target_edge)
+                        except Exception as _e:
+                            print(f"[anchor_resolve fallback] Failed: {_e}")
+
                     maturity_rows = compute_cohort_maturity_rows(
                         frames=result['frames'],
                         graph=_graph,
@@ -1859,6 +1897,7 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                         anchor_to=subj['anchor_to'],
                         sweep_to=subj['sweep_to'],
                         is_window=_is_win,
+                        anchor_node_id=_fb_anchor_node_id,
                     )
                     if maturity_rows:
                         result['maturity_rows'] = maturity_rows

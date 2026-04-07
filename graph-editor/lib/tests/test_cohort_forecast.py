@@ -303,7 +303,6 @@ class TestComputeCohortMaturityRows:
     def test_returns_empty_for_missing_edge(self):
         assert _call_rows(target_edge_id='nonexistent') == []
 
-    @pytest.mark.skip(reason="Pending D/C state decomposition rewrite — zero-evidence path not yet implemented")
     def test_no_frames_produces_model_curve(self):
         """With no frames, the MC should still produce rows from the
         model posterior (unconditioned draws).  This is the degeneration
@@ -511,7 +510,6 @@ class TestWindowZeroMaturityDegeneration:
 
         assert checked >= 5, f"Only checked {checked} tau points — need at least 5"
 
-    @pytest.mark.skip(reason="Pending D/C state decomposition rewrite — zero-evidence path not yet implemented")
     def test_empty_frames_degenerates_to_model_curve(self):
         """With no data at all (empty frames), the MC should still run
         and produce rows matching the model confidence band.  This is
@@ -584,7 +582,6 @@ class TestWindowZeroMaturityDegeneration:
 
         assert checked >= 5, f"Only checked {checked} tau points"
 
-    @pytest.mark.skip(reason="Pending D/C state decomposition rewrite — zero-evidence path not yet implemented")
     def test_cohort_mode_zero_evidence_degenerates_to_model(self):
         """Cohort mode zero-evidence degeneration (blind test).
 

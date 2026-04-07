@@ -510,6 +510,29 @@ export async function prepareAnalysisComputeInputs(
 
   const displaySettings = resolveComputeAffectingDisplay(analysisType, params.display ?? undefined);
 
+  // Resolve tau_extent='auto' to the max sweep span across all scenarios.
+  // Each scenario is sent as a separate request — the BE can't see other
+  // scenarios' date ranges.  Resolving here ensures every request carries
+  // the same concrete axis extent.
+  if (displaySettings && String(displaySettings.tau_extent ?? '') === 'auto') {
+    let maxSweep = 0;
+    for (const sc of scenarios) {
+      for (const subj of (sc.snapshot_subjects ?? []) as any[]) {
+        const af = subj?.anchor_from;
+        const st = subj?.sweep_to;
+        if (af && st) {
+          try {
+            const days = Math.round((new Date(String(st).slice(0, 10)).getTime() - new Date(String(af).slice(0, 10)).getTime()) / 86400000);
+            if (days > maxSweep) maxSweep = days;
+          } catch { /* ignore parse errors */ }
+        }
+      }
+    }
+    if (maxSweep > 0) {
+      displaySettings.tau_extent = maxSweep;
+    }
+  }
+
   const ready: PreparedAnalysisComputeReady = {
     status: 'ready',
     analysisType,

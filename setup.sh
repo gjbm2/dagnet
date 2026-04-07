@@ -580,7 +580,8 @@ fi
 source "${VENV_ACTIVATE}"
 python -m pip install --upgrade pip --quiet
 (cd "${ROOT_DIR}/graph-editor" && pip install -r requirements-local.txt --quiet)
-echo -e "  ${GREEN}Python venv ready${NC}"
+(cd "${ROOT_DIR}" && pip install -r bayes/requirements.txt --quiet)
+echo -e "  ${GREEN}Python venv ready (graph-editor + bayes)${NC}"
 
 echo "  Playwright: installing browsers"
 (

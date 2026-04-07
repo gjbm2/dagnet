@@ -491,20 +491,20 @@ describe('useStalenessNudges', () => {
     expect(call).toBeTruthy();
   });
 
-  it('should start non-blocking pull in dashboard mode', async () => {
+  it('should use remote-wins pull in dashboard mode (not non-blocking pull)', async () => {
     hoisted.isDashboardMode = true;
     hoisted.shouldCheckRemoteHead.mockReturnValue(true);
     hoisted.getRemoteAheadStatus.mockResolvedValue({ isRemoteAhead: true, localSha: 'a', remoteHeadSha: 'b' });
     hoisted.isRemoteShaDismissed.mockReturnValue(false);
+    hoisted.pullLatestRemoteWins.mockResolvedValue(undefined);
 
     render(<Harness />);
 
     await waitFor(() => {
-      expect(hoisted.startNonBlockingPull).toHaveBeenCalledTimes(1);
+      expect(hoisted.pullLatestRemoteWins).toHaveBeenCalledTimes(1);
     });
-    const opts = hoisted.startNonBlockingPull.mock.calls[0][0];
-    expect(opts.repository).toBe('repo-1');
-    expect(opts.branch).toBe('main');
+    expect(hoisted.pullLatestRemoteWins).toHaveBeenCalledWith('repo-1', 'main');
+    expect(hoisted.startNonBlockingPull).not.toHaveBeenCalled();
   });
 
   it('should not start non-blocking pull when snoozed', async () => {

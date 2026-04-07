@@ -87,7 +87,7 @@ If all five pass, the issue is **logic**, not staleness.
 
 1. Check/install Node (pin to `.nvmrc`, currently 22)
 2. `npm install` (or `npm ci` if `--clean`)
-3. Create Python venv at `graph-editor/venv`, install `requirements-local.txt`
+3. Create Python venv at `graph-editor/venv`, install `requirements-local.txt` + `bayes/requirements.txt`
 4. Extract ports from `.env.local` (VITE_PORT=5173, PYTHON_API_PORT=9000)
 5. Kill existing `dagnet` tmux session
 6. Create new tmux session with two panes:

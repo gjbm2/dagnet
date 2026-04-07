@@ -1041,6 +1041,22 @@ export const CHART_DISPLAY_SETTINGS: Record<string, DisplaySettingDef[]> = {
       computeAffecting: false,
     },
     {
+      key: 'continuous_forecast',
+      label: 'Sampling mode',
+      shortLabel: 'Sampling',
+      type: 'radio',
+      options: [
+        { value: 'binomial', label: 'Binomial' },
+        { value: 'normal', label: 'Normal' },
+        { value: 'none', label: 'None' },
+      ],
+      defaultValue: 'binomial',
+      propsPanel: true,
+      inline: false,
+      contextMenu: false,
+      computeAffecting: true,
+    },
+    {
       key: 'tau_extent',
       label: 'Age axis extent',
       shortLabel: 'x-axis',

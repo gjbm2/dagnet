@@ -155,11 +155,16 @@ export function buildCohortMaturityEChartsOption(
   for (const r of filteredRows) {
     const base = r?.rate;
     const proj = r?.projected_rate;
-    if ((typeof base === 'number' && Number.isFinite(base)) || (typeof proj === 'number' && Number.isFinite(proj))) {
+    const mid = r?.midpoint;
+    if ((typeof base === 'number' && Number.isFinite(base))
+        || (typeof proj === 'number' && Number.isFinite(proj))
+        || (typeof mid === 'number' && Number.isFinite(mid))) {
       hasAnySignal = true;
       break;
     }
   }
+  // Also pass if model curves exist (f mode may have no rows but has curves)
+  if (!hasAnySignal && result?.metadata?.model_curves) hasAnySignal = true;
   if (!hasAnySignal) return null;
 
   // Parse rows into per-scenario point arrays
@@ -182,6 +187,11 @@ export function buildCohortMaturityEChartsOption(
     evidenceX: number | null;
     forecastY: number | null;
     forecastX: number | null;
+    ratePure: number | null;
+    modelMidpoint: number | null;
+    modelFanUpper: number | null;
+    modelFanLower: number | null;
+    modelBands: FanBands | null;
   };
   const byScenario = new Map<string, RowPoint[]>();
   for (const r of filteredRows) {
@@ -222,6 +232,22 @@ export function buildCohortMaturityEChartsOption(
       evidenceX: parse(r?.evidence_x),
       forecastY: parse(r?.forecast_y),
       forecastX: parse(r?.forecast_x),
+      ratePure: parse(r?.rate_pure),
+      modelMidpoint: parse(r?.model_midpoint),
+      modelFanUpper: parse(r?.model_fan_upper),
+      modelFanLower: parse(r?.model_fan_lower),
+      modelBands: (() => {
+        if (r?.model_bands && typeof r.model_bands === 'object') {
+          const mb: FanBands = {};
+          for (const [level, bounds] of Object.entries(r.model_bands)) {
+            if (Array.isArray(bounds) && bounds.length === 2) {
+              mb[level] = [Number(bounds[0]), Number(bounds[1])];
+            }
+          }
+          return mb;
+        }
+        return null;
+      })(),
     });
   }
 
@@ -345,32 +371,52 @@ export function buildCohortMaturityEChartsOption(
     });
 
     if (mode === 'f') {
-      const forecastAll = points.map(p => ({ value: [p.tauDays, p.projectedRate] as [number, number | null], ...toMeta(p) }));
-      const s = mkLine({
-        id: `${scenarioId}::forecast`, name, colour, lineType: 'dashed', opacity: 0.85,
-        data: forecastAll, showSymbol: forecastAll.length <= 12,
-        areaStyle: { color: colour || '#111827', opacity: 0.08 },
+      // Forecast-only mode: unconditional model prediction.
+      // Midpoint = median of p × CDF(tau) across posterior draws.
+      // Fan = quantiles of those draws (parameter uncertainty only).
+      const modelMidPts = points
+        .filter(p => p.modelMidpoint !== null)
+        .map(p => ({ value: [p.tauDays, p.modelMidpoint] as [number, number | null], ...toMeta(p) }));
+      const sModelMid = mkLine({
+        id: `${scenarioId}::modelMidpoint`, name: `${name} (model)`, colour, lineType: 'dashed', opacity: 0.85,
+        data: modelMidPts,
+        smooth: true,
       });
-      if (s) seriesOut.push(s);
-      continue;
+      if (sModelMid) seriesOut.push(sModelMid);
+      // Fan polygons use model_bands — rendered in the fan section below
+      // (mode !== 'e' gate lets it through).
     }
 
-    // Solid line (epoch A): complete evidence — all cohorts present.
-    const solidPts = points.filter(p => p.tauDays <= sSolidMax).map(p => ({ value: [p.tauDays, p.baseRate] as [number, number | null], ...toMeta(p) }));
-    // Dashed line (epoch B): incomplete evidence — some cohorts dropped out.
-    const dashedEvidencePts = points.filter(p => p.tauDays >= sSolidMax && p.tauDays <= sFutureMax).map(p => ({ value: [p.tauDays, p.baseRate] as [number, number | null], ...toMeta(p) }));
-    // Dotted line (epochs B+C): best estimate midpoint — evidence + model for missing cohorts.
-    // Continuous from B through C; in epoch A midpoint ≈ evidence (no value in showing it).
-    const midpointPts = points.filter(p => p.tauDays >= sSolidMax && p.midpoint !== null).map(p => ({ value: [p.tauDays, p.midpoint] as [number, number | null], ...toMeta(p) }));
+    if (mode !== 'f') {
+      // Solid line (epoch A): complete evidence — all cohorts present.
+      const solidPts = points.filter(p => p.tauDays <= sSolidMax).map(p => ({ value: [p.tauDays, p.baseRate] as [number, number | null], ...toMeta(p) }));
+      const sSolid = mkLine({
+        id: `${scenarioId}::solid`, name, colour, lineType: 'solid',
+        data: solidPts, showSymbol: solidPts.length <= 12,
+        smooth: true,
+      });
+      if (sSolid) seriesOut.push(sSolid);
+    }
 
-    const sSolid = mkLine({
-      id: `${scenarioId}::solid`, name, colour, lineType: 'solid',
-      data: solidPts, showSymbol: solidPts.length <= 12,
-      smooth: true,
-    });
-    if (sSolid) seriesOut.push(sSolid);
+    if (mode === 'e') {
+      // Evidence only: dashed line in epoch B using pure evidence rate
+      // (only cohorts with real observations at this tau contribute).
+      // No projected x, no midpoint, no fan.
+      const dashedPurePts = points
+        .filter(p => p.tauDays >= sSolidMax && p.tauDays <= sFutureMax && p.ratePure !== null)
+        .map(p => ({ value: [p.tauDays, p.ratePure] as [number, number | null], ...toMeta(p) }));
+      const sDashedPure = mkLine({
+        id: `${scenarioId}::dashedEvidence`, colour, lineType: 'dashed', opacity: 0.75,
+        data: dashedPurePts,
+        smooth: true,
+      });
+      if (sDashedPure) seriesOut.push(sDashedPure);
+    }
 
-    if (mode === 'f+e' || mode === 'f') {
+    if (mode === 'f+e') {
+      // Dashed line (epoch B): incomplete evidence — some cohorts dropped out.
+      // Uses blended rate (observed x for mature, projected x for immature).
+      const dashedEvidencePts = points.filter(p => p.tauDays >= sSolidMax && p.tauDays <= sFutureMax).map(p => ({ value: [p.tauDays, p.baseRate] as [number, number | null], ...toMeta(p) }));
       const sDashedEv = mkLine({
         id: `${scenarioId}::dashedEvidence`, colour, lineType: 'dashed', opacity: 0.75,
         data: dashedEvidencePts,
@@ -378,10 +424,13 @@ export function buildCohortMaturityEChartsOption(
       });
       if (sDashedEv) seriesOut.push(sDashedEv);
 
+      // Dotted line (epochs B+C): best estimate midpoint — evidence + model.
+      const midpointPts = points.filter(p => p.tauDays >= sSolidMax && p.midpoint !== null).map(p => ({ value: [p.tauDays, p.midpoint] as [number, number | null], ...toMeta(p) }));
       const sMidpoint = mkLine({
-        id: `${scenarioId}::midpoint`, colour, lineType: 'dotted', opacity: 0.6,
+        id: `${scenarioId}::midpoint`, name: 'Total Forecast (e+f)', colour, lineType: 'dotted', opacity: 0.6,
         data: midpointPts,
         smooth: true,
+        showInLegend: false,
       });
       if (sMidpoint) seriesOut.push(sMidpoint);
     }
@@ -415,11 +464,12 @@ export function buildCohortMaturityEChartsOption(
       }
 
       for (const level of bandLevels) {
-        // Build polygon data from fan_bands or fallback to fan_upper/fan_lower
+        // Build polygon data from fan_bands (f+e) or model_bands (f)
         const poly: Array<[number, number, number]> = [];
         for (const p of points) {
-          if (p.fanBands && p.fanBands[level]) {
-            const [lo, hi] = p.fanBands[level];
+          const bands = mode === 'f' ? p.modelBands : p.fanBands;
+          if (bands && bands[level]) {
+            const [lo, hi] = bands[level];
             if (Number.isFinite(lo) && Number.isFinite(hi)) {
               poly.push([p.tauDays, hi, lo]);
             }
@@ -600,7 +650,16 @@ export function buildCohortMaturityEChartsOption(
       bayesian: 'Bayesian', analytic: 'Analytic (FE)', analytic_be: 'Analytic (BE)',
     };
 
-    const showPromoted = settings.show_model_promoted !== false;
+    // In 'f' mode, always show the model curve — it IS the chart content.
+    // The model curve is per-subject (shared across scenarios), so check
+    // if any scenario is in 'f' mode to force it visible.
+    const hasForecastOnlyScenario = Array.from(byScenario.keys()).some(sid => {
+      const m = extra?.scenarioVisibilityModes?.[sid]
+        ?? (scenarioMeta?.[sid]?.visibility_mode as any)
+        ?? 'f+e';
+      return m === 'f';
+    });
+    const showPromoted = hasForecastOnlyScenario || settings.show_model_promoted !== false;
     const promotedSource: string = entry?.params?.promoted_source || entry?.promotedSource || 'analytic';
     const isBayesianPromoted = promotedSource === 'bayesian';
 
@@ -660,7 +719,9 @@ export function buildCohortMaturityEChartsOption(
     }
     // Confidence band — rendered when promoted source has band data (Bayesian or heuristic dispersion).
     // Rendered as a hatched polygon (diagonal lines) to stay neutral on colour.
-    const hasDispersion = showPromoted && (entry?.bayesBandUpper || entry?.params?.bayes_mu_sd > 0);
+    const _srcPromotedBand = entry?.sourceModelCurves?.[promotedSource]?.band_upper;
+    const _srcBayesBand = entry?.sourceModelCurves?.bayesian?.band_upper;
+    const hasDispersion = showPromoted && (entry?.bayesBandUpper || entry?.params?.bayes_mu_sd > 0 || _srcPromotedBand || _srcBayesBand);
     let bandUpper = hasDispersion ? entry?.bayesBandUpper : undefined;
     let bandLower = hasDispersion ? entry?.bayesBandLower : undefined;
     if (hasDispersion && !bandUpper) {
@@ -884,6 +945,32 @@ export function buildCohortMaturityEChartsOption(
   const fmtPercent = (v: number | null | undefined): string =>
     (v === null || v === undefined || !Number.isFinite(v)) ? '—' : `${(v * 100).toFixed(1)}%`;
 
+  // Build tooltip metadata lookup by tau — ECharts strips custom keys
+  // from data items, so we side-load the metadata for the formatter.
+  // Use the first scenario's points (tooltip shows one scenario at a time).
+  const tooltipMeta: Record<number, any> = {};
+  for (const pts of byScenario.values()) {
+    for (const p of pts) {
+      if (tooltipMeta[p.tauDays] === undefined) {
+        tooltipMeta[p.tauDays] = {
+          baseRate: p.baseRate,
+          ratePure: p.ratePure,
+          projectedRate: p.projectedRate,
+          midpoint: p.midpoint,
+          boundaryDate,
+          evidenceY: p.evidenceY,
+          evidenceX: p.evidenceX,
+          forecastY: p.forecastY,
+          forecastX: p.forecastX,
+          cohortsExpected: p.cohortsExpected,
+          cohortsInDenom: p.cohortsInDenom,
+          cohortsCoveredBase: p.cohortsCoveredBase,
+          cohortsCoveredProjected: p.cohortsCoveredProjected,
+        };
+      }
+    }
+  }
+
   return {
     tooltip: {
       trigger: 'axis',
@@ -898,6 +985,10 @@ export function buildCohortMaturityEChartsOption(
         const tauDays = typeof first?.value?.[0] === 'number' ? first.value[0] : Number(first?.value?.[0]);
 
         const best = items.find((it: any) => it?.data?.baseRate !== undefined || it?.data?.projectedRate !== undefined)?.data ?? first?.data ?? {};
+        // ECharts strips custom keys from data items — look up metadata
+        // from the side map built during series construction.
+        const metaKey = Number.isFinite(tauDays) ? tauDays : -1;
+        const meta = (tooltipMeta as any)?.[metaKey] ?? {};
         const bd = typeof best?.boundaryDate === 'string' ? best.boundaryDate : (boundaryDate || '');
         const title = Number.isFinite(tauDays)
           ? `Age: ${tauDays} day(s) · As at ${bd}`
@@ -910,23 +1001,23 @@ export function buildCohortMaturityEChartsOption(
           .map((it: any) => `${it?.seriesName || 'Scenario'}: <strong>${fmtPercent(it?.value?.[1])}</strong>`);
 
         const extra_: string[] = [];
-        // Components for epoch B debugging
-        if (best?.evidenceY != null) extra_.push(`evidence y: <strong>${best.evidenceY.toFixed(0)}</strong>`);
-        if (best?.evidenceX != null) extra_.push(`evidence x: <strong>${best.evidenceX.toFixed(0)}</strong>`);
-        if (best?.forecastX != null) extra_.push(`forecast x: <strong>${best.forecastX.toFixed(0)}</strong>`);
-        if (best?.forecastY != null) extra_.push(`forecast y: <strong>${best.forecastY.toFixed(0)}</strong>`);
-        if (best?.baseRate !== null && best?.baseRate !== undefined) extra_.push(`evidence rate: <strong>${fmtPercent(best.baseRate)}</strong>`);
-        if (best?.projectedRate !== null && best?.projectedRate !== undefined) extra_.push(`projected: <strong>${fmtPercent(best.projectedRate)}</strong>`);
+        if (meta?.evidenceX != null && meta?.evidenceY != null) {
+          extra_.push(`evidence n=${meta.evidenceX.toFixed(0)}, k=${meta.evidenceY.toFixed(0)} (${fmtPercent(meta.baseRate)})`);
+        }
+        if (meta?.forecastX != null && meta?.forecastY != null) {
+          const fRate = meta.forecastX > 0 ? meta.forecastY / meta.forecastX : null;
+          extra_.push(`forecast n=${meta.forecastX.toFixed(1)}, k=${meta.forecastY.toFixed(1)} (${fmtPercent(fRate)})`);
+        }
         const modelItem = items.find((it: any) => it?.seriesId === 'model_cdf');
         if (modelItem) {
           const mv = modelItem?.value?.[1];
           if (typeof mv === 'number' && Number.isFinite(mv)) extra_.push(`Model CDF: <strong>${fmtPercent(mv)}</strong>`);
         }
-        const ce = best?.cohortsExpected;
-        const cd = best?.cohortsInDenom;
+        const ce = meta?.cohortsExpected;
+        const cd = meta?.cohortsInDenom;
         if (typeof ce === 'number' && typeof cd === 'number') extra_.push(`Cohorts: <strong>${cd}/${ce}</strong> in denominator`);
-        const cb = best?.cohortsCoveredBase;
-        const cp = best?.cohortsCoveredProjected;
+        const cb = meta?.cohortsCoveredBase;
+        const cp = meta?.cohortsCoveredProjected;
         if (typeof cb === 'number' && typeof cp === 'number') extra_.push(`Coverage: base <strong>${cb}</strong> · proj <strong>${cp}</strong> (at this τ)`);
 
         return `<strong>${title}</strong><br/>${[...lines, ...extra_].join('<br/>')}`;

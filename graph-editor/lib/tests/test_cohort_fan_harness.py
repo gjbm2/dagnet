@@ -91,15 +91,19 @@ class TestMidpointInvariants:
                     f"at tau={r['tau_days']} — violates window-mode invariant"
                 )
 
-    @pytest.mark.skip(reason="Pending D/C state decomposition rewrite — Pop B integer floor causes non-monotonic rates at high tau")
     def test_midpoint_monotonically_increasing(self, rows):
-        """Midpoint should not decrease as tau increases."""
+        """Midpoint should not decrease as tau increases.
+
+        Tolerance: 0.005 accommodates Binomial quantisation noise.
+        Pop D uses integer Binomial draws, so the MC median can
+        decrease by up to 1/total_population (~0.0024) at integer
+        boundaries."""
         midpoints = [(r['tau_days'], r['midpoint'])
                      for r in rows if r['midpoint'] is not None]
         for i in range(1, len(midpoints)):
             tau_prev, mp_prev = midpoints[i - 1]
             tau_curr, mp_curr = midpoints[i]
-            assert mp_curr >= mp_prev - 1e-9, (
+            assert mp_curr >= mp_prev - 0.005, (
                 f"midpoint decreased from {mp_prev:.6f} (tau={tau_prev}) "
                 f"to {mp_curr:.6f} (tau={tau_curr})"
             )
@@ -216,14 +220,13 @@ class TestFlexedDistribution:
         rows = _make_flexed_rows(overrides)
         assert len(rows) > 0, f'{label}: should produce rows'
 
-    @pytest.mark.skip(reason="Pending D/C state decomposition rewrite — Pop B integer floor causes non-monotonic rates at high tau")
     @pytest.mark.parametrize('label,overrides', COMBOS, ids=[c[0] for c in COMBOS])
     def test_midpoint_monotonically_increasing(self, label, overrides):
         rows = _make_flexed_rows(overrides)
         midpoints = [(r['tau_days'], r['midpoint'])
                      for r in rows if r['midpoint'] is not None]
         for i in range(1, len(midpoints)):
-            assert midpoints[i][1] >= midpoints[i - 1][1] - 1e-9, (
+            assert midpoints[i][1] >= midpoints[i - 1][1] - 0.005, (
                 f"{label}: midpoint decreased from {midpoints[i-1][1]:.6f} "
                 f"(tau={midpoints[i-1][0]}) to {midpoints[i][1]:.6f} "
                 f"(tau={midpoints[i][0]})"

@@ -461,14 +461,16 @@ describe('buildCohortMaturityEChartsOption', () => {
     // midpoint series only present when model curve data provides it
   });
 
-  it('should render forecast-only in f mode', () => {
+  it('should render forecast-only in f mode (shading only when no model data)', () => {
     const option = buildCohortMaturityEChartsOption(COHORT_MATURITY_RESULT, {}, {
       visibleScenarioIds: ['current'],
       scenarioVisibilityModes: { current: 'f' },
     });
-    expect(option.series).toHaveLength(1);
-    expect(option.series[0].id).toBe('current::forecast');
-    expect(option.series[0].lineStyle.type).toBe('dashed');
+    // Test data has no model_midpoint/model_bands, so only forecast_shading is produced
+    const ids = option.series.map((s: any) => s.id);
+    expect(ids).toContain('current::forecast_shading');
+    expect(ids).not.toContain('current::solid');
+    expect(ids).not.toContain('current::dashedEvidence');
   });
 
   it('should render evidence-only in e mode (no forecast series)', () => {

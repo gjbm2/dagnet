@@ -1,9 +1,40 @@
 # Cohort Maturity Curves — Full Bayes Design
 
-**Status**: Draft — for review before implementation
+**Status**: Draft design with partial implementation; some sections below
+describe target state rather than the exact current code
 **Date**: 1-Apr-26
+**Updated**: 7-Apr-26
 **Supersedes**: The CDF-ratio midpoint formula in cohort-maturity-fan-chart-spec.md §5.2.1
 **Related**: cohort-maturity-fan-chart-spec.md, fan-chart-mc-bug.md, cohort-forecast-conditioning-attempts-1-Apr-26.md
+
+---
+
+## 0. Current implementation delta (7-Apr-26)
+
+This note still captures the intended algebra, but the implementation has
+already moved beyond several assumptions in the original draft.
+
+**Already in code**:
+
+- `cohort_forecast.py` now uses direct posterior draws, not the older global
+  importance-sampling approach.
+- The fan uses a posterior-predictive simulator with per-Cohort drift and
+  local frontier conditioning, not the earlier conditional-band-only path.
+- `tau_observed` is derived from real evidence depth, preferring
+  `evidence_retrieved_at` over sweep-derived age.
+- Epoch B carry-forward is implemented via dense `obs_x` and `obs_y` arrays.
+- The main Bayes path now uses `calculate_path_probability()` and threads
+  `anchor_node_id` into cohort-mode reach computation.
+
+**Still not implemented from this design**:
+
+- The subject-conditioned upstream forecast proposed in §7.4.
+- A graph-wide propagation engine for `x(s,τ)` state.
+- A principled convolution replacing the current `Y_C` shortcut discussed in
+  §7.5.
+
+Read this document as: "target algebra plus live implementation gaps", not as
+"a verbatim description of the current code path".
 
 ---
 
@@ -394,9 +425,20 @@ use them.
 
 ### 7.4 Upstream x-forecast (cohort mode)
 
-Apply the same Bayesian treatment to the upstream CDF ratio at line 679.
-Instead of `x_forecast = N_i × upstream_CDF(τ) / upstream_CDF(tau_max)`,
-use the upstream posterior to condition on the observed x_frozen:
+This section is now a **next-step design**, not a description of the current
+implementation.
+
+The current code no longer uses the old CDF-ratio form. It now computes
+observed `x` where the Cohort is still within its frontier and uses a
+model-derived `x_at_tau = max(a_pop × reach × weighted_upstream_cdf(τ), x_frozen)`
+beyond the frontier, with a per-draw upstream CDF mixture in the MC fan.
+
+What is still **not** implemented is the subject-conditioned upstream update
+proposed below. That remains the design candidate if the local shortcut needs
+to be replaced before a full graph-wide propagation engine exists.
+
+Instead of the older ratio shortcut, one possible Bayesian treatment is to use
+the upstream posterior to condition on the observed `x_frozen`:
 
 ```
 n_eff_up_i = a_i × upstream_CDF(tau_max_i)
@@ -693,131 +735,75 @@ contract from the existing CDF-ratio tests.
 
 ---
 
-## 11. Known Implementation Defects (Current `cohort_forecast.py`)
+## 11. Residual implementation blockers (current `cohort_forecast.py`)
 
-Forensic review of the current implementation (2-Apr-26) identified the
-following defects in the reach/denominator propagation logic.  These are
-the bugs that the full Bayes redesign (§§2–7 above) and the backend
-propagation engine (`cohort-backend-propagation-engine-design.md`) are
-intended to eliminate.
+The original 2-Apr-26 forensic review identified five defects. Some of those
+are now resolved on the primary Bayes path; the remaining blockers are more
+specific than the older section suggested.
 
-### 11.1 CRITICAL — Shared-ancestor bug in DAG reach traversal
+### 11.1 RESOLVED ON PRIMARY PATH — Shared-ancestor reach traversal bug
 
-`compute_reach_probability()` (lines 183–205) mutates a single `_visited`
-set across sibling branches.  When a join node has two incoming paths
-that share an ancestor, the second branch's traversal finds the ancestor
-already in `_visited` and returns 0.0 — zeroing a valid path.
+The main cohort-mode path no longer uses the deleted recursive
+`compute_reach_probability()` helper. It now calls
+`calculate_path_probability()` from `path_runner.py`, which removes the old
+shared-ancestor `_visited` bug from the primary Bayes path.
 
-**Effect**: reach is systematically undercounted in any graph with join
-nodes (shared ancestors), which is the common case for `cohort()` queries
-over multi-step funnels.
+### 11.2 RESOLVED — Anchor threading
 
-**Root cause** (lines 183–188):
+The main Bayes path now passes `anchor_node_id` into
+`compute_cohort_maturity_rows()`, so reach is anchored correctly when that path
+is used.
 
-```python
-if _visited is None:
-    _visited = set()
-if node_id in _visited:
-    return 0.0       # cycle guard — but fires on valid DAG revisits
-_visited.add(node_id)
-```
+The no-Bayes fallback in `api_handlers.py` now also resolves and passes
+`anchor_node_id` (fixed 7-Apr-26), so anchoring is consistent across both
+paths.
 
-The cycle guard conflates DAG revisit (valid) with cycle detection.  A
-correct implementation must either:
-- enumerate all simple paths and sum per-path probabilities, or
-- use a topological-order forward pass (as proposed in the propagation
-  engine design).
+### 11.3 LIVE — Inconsistent probability sources in denominator model
 
-### 11.2 HIGH — Reach is not anchored to the query anchor node
+This is still a real blocker. `reach` and the upstream latency mixture are not
+yet guaranteed to use one common posterior basis end-to-end. The denominator
+path therefore remains only approximately coherent.
 
-Any node with no incoming edges is treated as reach 1.0 (lines 189–193).
-In a multi-root graph this pulls unrelated root nodes into the
-probability model, inflating the denominator for edges that are
-structurally unreachable from the query's actual anchor.
+### 11.4 LIVE — Silent fallback from path-level to edge-level latency
 
-```python
-incoming = get_incoming_edges(graph, node_id)
-if not incoming:
-    return 1.0       # assumes this is THE anchor — wrong for multi-root graphs
-```
+`read_edge_cohort_params()` now correctly preserves zero-valued latency fields,
+but it still falls back from path-level latency to edge-level latency when
+path-level fields are absent. That keeps a semantic downgrade path alive in
+cohort mode.
 
-**Fix**: the anchor node for reach computation must be passed explicitly
-(the query's from-node or the `a` node), and only that node should
-return 1.0.  All other root nodes should return 0.0.
+### 11.5 RESOLVED ON PRIMARY PATH — Per-node capping distortion
 
-### 11.3 HIGH — Inconsistent probability sources in denominator model
+The old recursive `min(total, 1.0)` distortion no longer applies to the main
+Bayes path because that path no longer uses the old recursive reach helper.
 
-Reach is computed from `edge.p.mean` (the promoted scalar on the edge
-object, lines 196–199):
+### 11.6 LIVE — `Y_C` remains a cumulative-arrivals shortcut
 
-```python
-p_obj = edge.get('p') or {}
-edge_p = p_obj.get('mean', 0.0)
-```
+The current code no longer applies a flat ultimate rate to `X_C`; it uses the
+tau-dependent model rate `p × CDF(τ)`. But this is still a shortcut: it
+applies a cumulative conversion rate directly to cumulative post-frontier
+arrivals rather than deriving the proper convolution of arrival timing and
+edge-level conversion timing.
 
-But the latency-mixture weights in the upstream CDF computation use
-`_up['p']` from `read_edge_cohort_params()` (lines 95–109, 789–803),
-which prefers `path_alpha / (path_alpha + path_beta)` — a different
-quantity.
+### 11.7 LIVE — No graph-wide propagation engine yet
 
-This means the denominator formula `x_model = a × reach × CDF_mix` is
-not guaranteed to equal the intended `a × Σ(p_path_i × CDF_i)` because
-`reach` and the mixture weights draw from different probability sources.
+The current `cohort()` denominator path is still local to the subject edge:
+`a_pop × reach × weighted_upstream_cdf(τ)`, with observed `x` used where
+available and a floor at observed `x_frozen`. That is not yet the graph-wide
+per-node, per-Cohort propagation model proposed in
+`cohort-backend-propagation-engine-design.md`.
 
-**Fix**: a single-basis propagation must use one consistent probability
-source throughout.  The full Bayes approach (§2) and the propagation
-engine design both address this by working from posterior parameters
-end-to-end.
+### 11.8 Summary
 
-### 11.4 MEDIUM — Silent fallback from path-level to edge-level latency
+The main Bayes path is materially better than the 2-Apr-26 implementation:
+carry-forward is in place, real evidence depth is respected, anchor threading
+exists on the primary path, and the deleted recursive reach helper no longer
+defines the result.
 
-`read_edge_cohort_params()` (lines 73–81) chains `or` fallbacks:
+The remaining items are narrower and are better characterised as known
+approximations rather than blockers — each produces reasonable results for
+current use cases but could be improved:
 
-```python
-mu = (lat_post.get('path_mu_mean')
-      or lat_post.get('mu_mean')
-      or latency.get('path_mu')
-      or latency.get('mu'))
-```
-
-When path-level latency is absent, the code silently uses edge-level
-latency.  For reach-back denominators in `cohort()` mode, this means
-the CDF shape may be wrong — edge-level latency describes one hop, not
-the full path from anchor to the from-node.
-
-**Effect**: denominator growth curve shape is incorrect whenever
-path-level latency parameters are missing, which is common for edges
-early in the pipeline before full inference has run.
-
-### 11.5 MEDIUM — Per-node `min(total, 1.0)` cap distorts propagation
-
-Line 207 caps reach at each recursion node:
-
-```python
-return min(total, 1.0)
-```
-
-This is a nonlinear operation applied at every level of the recursion.
-Downstream nodes consume already-truncated reach values, which means:
-- Over-sum problems are hidden rather than surfaced.
-- The final reach value depends on traversal order (which branch hits
-  the cap first), not just graph topology.
-- The algebra `reach(A→C) = reach(A→B) × p(B→C)` no longer holds when
-  `reach(A→B)` has been capped.
-
-**Fix**: propagate uncapped values and apply any necessary capping only
-at the final consumer (the denominator formula), or better, ensure the
-graph's probability assignments are self-consistent so capping is
-unnecessary.
-
-### 11.6 Summary
-
-The current implementation does not perform coherent single-basis
-propagation for the denominator `x`.  It mixes probability sources
-(edge-level vs path-level), has a traversal bug that undercounts reach
-in join graphs, treats all root nodes as anchors, silently degrades
-latency parameters, and applies nonlinear capping mid-propagation.
-
-The full Bayes design (§§2–7) addresses the forecasting algebra.  The
-backend propagation engine design addresses the graph-walk mechanics.
-Together they should eliminate all five defects.
+- denominator basis consistency
+- silent path→edge latency downgrade
+- heuristic `Y_C`
+- lack of graph-wide propagation for `x(s,τ)`

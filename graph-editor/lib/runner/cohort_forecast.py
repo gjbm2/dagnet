@@ -71,20 +71,31 @@ def read_edge_cohort_params(
     prob_post = p_obj.get('posterior') or {}
 
     # Latency: prefer cohort path-level posterior, then edge posterior, then flat.
-    mu = (lat_post.get('path_mu_mean')
-          or lat_post.get('mu_mean')
-          or latency.get('path_mu')
-          or latency.get('mu'))
-    sigma = (lat_post.get('path_sigma_mean')
-             or lat_post.get('sigma_mean')
-             or latency.get('path_sigma')
-             or latency.get('sigma'))
-    onset = (lat_post.get('path_onset_delta_days')
-             or lat_post.get('onset_delta_days')
-             or latency.get('path_onset_delta_days')
-             or latency.get('promoted_onset_delta_days')
-             or latency.get('onset_delta_days')
-             or 0.0)
+    # Use _first_num to avoid Python `or` discarding valid 0.0 values.
+    def _first_num(*vals):
+        for v in vals:
+            if isinstance(v, (int, float)) and math.isfinite(v):
+                return v
+        return None
+
+    mu = _first_num(
+        lat_post.get('path_mu_mean'),
+        lat_post.get('mu_mean'),
+        latency.get('path_mu'),
+        latency.get('mu'))
+    sigma = _first_num(
+        lat_post.get('path_sigma_mean'),
+        lat_post.get('sigma_mean'),
+        latency.get('path_sigma'),
+        latency.get('sigma'))
+    onset = _first_num(
+        lat_post.get('path_onset_delta_days'),
+        lat_post.get('onset_delta_days'),
+        latency.get('path_onset_delta_days'),
+        latency.get('promoted_onset_delta_days'),
+        latency.get('onset_delta_days'))
+    if onset is None:
+        onset = 0.0
 
     if not isinstance(mu, (int, float)) or not math.isfinite(mu):
         return None
@@ -319,6 +330,7 @@ def compute_cohort_maturity_rows(
     axis_tau_max: Optional[int] = None,
     band_level: float = 0.90,
     anchor_node_id: Optional[str] = None,
+    sampling_mode: str = 'binomial',
 ) -> List[Dict[str, Any]]:
     """Compute complete per-τ rows for the cohort maturity chart.
 
@@ -533,6 +545,81 @@ def compute_cohort_maturity_rows(
             }
 
     if not cohort_info:
+        # No cohorts but we have Bayes params — produce model-only rows.
+        # This is the true zero-evidence degeneration: unconditioned
+        # posterior draws produce the model curve with uncertainty.
+        if has_bayes and edge_mu_sd > 0 and axis_tau_max is not None and axis_tau_max > 0:
+            import numpy as np
+            from .confidence_bands import _ndtr
+
+            _max_tau = axis_tau_max
+            _tau_grid = np.arange(0, _max_tau + 1, dtype=float)
+            _T = len(_tau_grid)
+            _S = 2000
+            _sds = np.array([edge_p_sd, edge_mu_sd, edge_sigma_sd, edge_onset_sd])
+            _cov = np.diag(_sds ** 2)
+            _cov[3, 1] = _cov[1, 3] = edge_onset_mu_corr * edge_onset_sd * edge_mu_sd
+            _rng = np.random.default_rng(42)
+            _samples = _rng.multivariate_normal(
+                np.array([edge_p, edge_mu, edge_sigma, edge_onset]), _cov, size=_S)
+            _samples[:, 0] = np.clip(_samples[:, 0], 1e-6, 1 - 1e-6)
+            _samples[:, 2] = np.clip(_samples[:, 2], 0.01, 20.0)
+            _p_s = _samples[:, 0]
+            _mu_s = _samples[:, 1]
+            _sigma_s = _samples[:, 2]
+            _onset_s = _samples[:, 3]
+            _t_sh = _tau_grid[None, :] - _onset_s[:, None]
+            _t_sh = np.maximum(_t_sh, 1e-12)
+            _z = (np.log(_t_sh) - _mu_s[:, None]) / _sigma_s[:, None]
+            _cdf_arr = _ndtr(_z)
+            _cdf_arr = np.where(_tau_grid[None, :] > _onset_s[:, None], _cdf_arr, 0.0)
+            _cdf_arr = np.clip(_cdf_arr, 0.0, 1.0)
+            _rate = _p_s[:, None] * _cdf_arr
+
+            _band_levels = [0.80, 0.90, 0.95, 0.99]
+            _pcts = [50.0]
+            for _bl in _band_levels:
+                _a = (1.0 - _bl) / 2.0
+                _pcts.extend([_a * 100, (1.0 - _a) * 100])
+            _all_q = np.percentile(_rate, sorted(set(_pcts)), axis=0)
+            _pct_sorted = sorted(set(_pcts))
+            _q_map = {p: _all_q[i] for i, p in enumerate(_pct_sorted)}
+            _q50 = _q_map[50.0]
+            _a_sel = (1.0 - band_level) / 2.0
+            _q_lo = _q_map.get(_a_sel * 100, _q_map.get(5.0))
+            _q_hi = _q_map.get((1.0 - _a_sel) * 100, _q_map.get(95.0))
+
+            rows: List[Dict[str, Any]] = []
+            for t_idx in range(_T):
+                tau = int(_tau_grid[t_idx])
+                mid = float(_q50[t_idx])
+                lo = float(_q_lo[t_idx])
+                hi = float(_q_hi[t_idx])
+                if mid < 1e-8 and hi < 1e-8:
+                    continue
+                fb = {str(int(_bl * 100)): (
+                    float(_q_map[(1.0 - _bl) / 2.0 * 100][t_idx]),
+                    float(_q_map[(1.0 + _bl) / 2.0 * 100][t_idx]))
+                    for _bl in _band_levels}
+                rows.append({
+                    'tau_days': tau,
+                    'rate': None,
+                    'projected_rate': mid,
+                    'midpoint': mid,
+                    'fan_upper': hi,
+                    'fan_lower': lo,
+                    'tau_solid_max': 0,
+                    'tau_future_max': 0,
+                    'boundary_date': str(sweep_to)[:10],
+                    'cohorts_covered_base': 0,
+                    'cohorts_covered_projected': 0,
+                    'evidence_y': None,
+                    'evidence_x': None,
+                    'forecast_y': None,
+                    'forecast_x': None,
+                    'fan_bands': fb,
+                })
+            return rows
         return []
 
     cohort_list = list(cohort_info.values())
@@ -758,85 +845,11 @@ def compute_cohort_maturity_rows(
     # which breaks down near the onset due to nonlinearity.
     MC_SAMPLES = 2000
     fan_quantiles: Optional[Dict[int, Tuple[float, float]]] = None  # tau → (lo, hi)
+    model_fan_quantiles: Optional[Dict[int, Any]] = None  # tau → unconditioned model quantiles
 
     if has_bayes and edge_mu_sd > 0:
         import numpy as np
         from .confidence_bands import _ndtr
-
-        def _apportion_rowwise_total(
-            total: int,
-            weights: np.ndarray,
-            capacities: Optional[np.ndarray] = None,
-        ) -> np.ndarray:
-            """Allocate an exact integer total across each row."""
-            weights_arr = np.maximum(np.asarray(weights, dtype=float), 0.0)
-            squeeze = weights_arr.ndim == 1
-            if squeeze:
-                weights_arr = weights_arr[None, :]
-
-            n_rows, n_cols = weights_arr.shape
-            total = int(max(total, 0))
-            out = np.zeros((n_rows, n_cols), dtype=np.int64)
-            if total <= 0 or n_cols == 0:
-                return out[0] if squeeze else out
-
-            if capacities is None:
-                capacities_arr = np.full((n_rows, n_cols), total, dtype=np.int64)
-            else:
-                capacities_arr = np.maximum(np.asarray(capacities, dtype=np.int64), 0)
-                if capacities_arr.ndim == 1:
-                    capacities_arr = np.broadcast_to(capacities_arr[None, :], (n_rows, n_cols)).copy()
-                else:
-                    capacities_arr = capacities_arr.copy()
-
-            remaining = np.minimum(total, capacities_arr.sum(axis=1).astype(np.int64))
-            spare = capacities_arr.copy()
-
-            while np.any(remaining > 0):
-                active_rows = (remaining > 0) & (spare.sum(axis=1) > 0)
-                if not np.any(active_rows):
-                    break
-
-                live_weights = np.where(spare > 0, weights_arr, 0.0)
-                weight_sums = live_weights.sum(axis=1, keepdims=True)
-                fallback = spare.astype(float)
-                fallback_sums = fallback.sum(axis=1, keepdims=True)
-
-                probs = np.divide(
-                    live_weights,
-                    weight_sums,
-                    out=np.zeros_like(live_weights),
-                    where=weight_sums > 0,
-                )
-                fallback_probs = np.divide(
-                    fallback,
-                    fallback_sums,
-                    out=np.zeros_like(fallback),
-                    where=fallback_sums > 0,
-                )
-                probs = np.where(weight_sums > 0, probs, fallback_probs)
-
-                target = remaining[:, None] * probs
-                extra = np.floor(target).astype(np.int64)
-                extra = np.minimum(extra, spare)
-                delta = extra.sum(axis=1)
-
-                out += extra
-                spare -= extra
-                remaining -= delta
-
-                rows = np.flatnonzero((remaining > 0) & (spare.sum(axis=1) > 0))
-                if rows.size == 0:
-                    continue
-
-                frac = target[rows] - np.floor(target[rows])
-                frac = np.where(spare[rows] > 0, frac, -1.0)
-                cols = np.argmax(frac, axis=1)
-                out[rows, cols] += 1
-                spare[rows, cols] -= 1
-                remaining[rows] -= 1
-
-            return out[0] if squeeze else out
 
         # Build posterior covariance matrix from the Bayesian fit.
         # These are POSTERIOR means and SDs — they already incorporate
@@ -989,12 +1002,14 @@ def compute_cohort_maturity_rows(
 
         import time as _time
         _t_loop_start = _time.monotonic()
-        _timings = {'drift': 0.0, 'cdf': 0.0, 'is': 0.0, 'upstream': 0.0, 'pop_b': 0.0, 'pop_c': 0.0, 'combine': 0.0}
+        _timings = {'drift': 0.0, 'cdf': 0.0, 'is': 0.0, 'pop_d': 0.0, 'pop_c': 0.0, 'combine': 0.0}
 
         for _ci, c in enumerate(cohort_list):
             N_i = c['x_frozen']
             k_i = c['y_frozen']
-            a_i = c['tau_max']
+            # Use tau_observed (real evidence depth) for the mature/forecast
+            # boundary, not tau_max (which includes carry-forward).
+            a_i = c.get('tau_observed', c['tau_max'])
             x_frontier = c['x_frontier']
 
             if N_i <= 0 and x_frontier <= 0 and upstream_cdf_mc is None:
@@ -1055,153 +1070,82 @@ def compute_cohort_maturity_rows(
                 onset_i = onset_i[resample_idx]
                 cdf_i = cdf_i[resample_idx]
 
-            # x forecast: stochastic in cohort mode, flat in window mode
-            if upstream_cdf_mc is not None:
-                # Cohort mode: x = a_pop × reach × CDF_upstream(τ), per draw
-                # Floored at N_i (can't have fewer arrivals than observed)
-                x_forecast_arr = np.maximum(
-                    a_pop * reach_at_from_node * upstream_cdf_mc,  # (S, T)
-                    float(N_i),
-                )
-            else:
-                # Window mode: x = N_i (observed, deterministic)
-                x_tau_arr = np.array(c['x_at_tau'][:T])           # (T,)
-                x_forecast_arr = np.broadcast_to(
-                    x_tau_arr[None, :], (S, T)
-                ).copy()
-
-            # y forecast: posterior predictive with three populations.
+            # ── D/C state decomposition ─────────────────────────────
+            # Factorised forecast: upstream A→X and local X→Y are
+            # independent.  Two populations beyond the frontier:
             #
-            # Pop A: k_i already converted — done, no draw.
-            # Pop B: N_i - k_i frontier people who haven't converted.
-            #        Conditional law: Binomial(N_i - k_i, q_late)
-            #        where q_late = p(CDF(τ)-CDF(a_i)) / (1-p·CDF(a_i))
-            # Pop C: x_at_tau - N_i future arrivals (cohort mode only).
-            #        Each person arriving at time s converts by τ with
-            #        prob p × CDF_edge(τ-s).  Discrete convolution over
-            #        arrival times from the upstream CDF increments.
-            #        In window mode, Pop C is empty (x = N_i).
+            # Pop D (frontier survivors): N_i - k_i people already at X
+            #   who haven't converted.  Purely local conditional Binomial.
+            #   How they arrived is irrelevant — same formula for window
+            #   and cohort mode.
+            #
+            # Pop C (future arrivals): people arriving at X after the
+            #   frontier.  Continuous expectations (model-predicted
+            #   populations, not observed — Binomial noise inappropriate).
+            #   Only exists in cohort mode (upstream_cdf_mc is not None).
+            #
+            # X_cohort = N_i + X_C  (not upstream-scaled x_forecast_arr)
+            # Y_cohort = k_i + Y_D + Y_C
 
             cdf_at_a = cdf_i[:, a_idx]                             # (S,)
             c_i_b = cdf_at_a[:, None]                              # (S, 1)
             n_eff_b = N_i * c_i_b                                  # (S, 1) — diagnostic
 
-            # ── Compute upstream arrival increments (used by both B and C)
             _has_upstream = upstream_cdf_mc is not None
+
+            # ── Pop D: frontier survivors (window + cohort) ───────
+            # Conditional Binomial: given N_i - k_i people survived to
+            # a_i without converting, what is the probability they
+            # convert between a_i and tau?
+            # q_late = p(CDF(τ) - CDF(a_i)) / (1 - p·CDF(a_i))
+            remaining_frontier = max(N_i - k_i, 0.0)
+            q_early = p_i[:, None] * c_i_b                        # (S, 1)
+            q_early = np.clip(q_early, 0.0, 1 - 1e-10)
+            remaining_cdf = np.maximum(cdf_i - c_i_b, 0.0)        # (S, T)
+            q_late = (p_i[:, None] * remaining_cdf) / (1 - q_early)
+            q_late = np.clip(q_late, 0.0, 1.0)
+            if sampling_mode == 'none':
+                Y_D = remaining_frontier * q_late                  # (S, T)
+            elif sampling_mode == 'normal':
+                _mu_d = remaining_frontier * q_late                # (S, T)
+                _var_d = remaining_frontier * q_late * (1 - q_late)
+                Y_D = np.clip(
+                    _mu_d + rng.normal(0.0, np.sqrt(np.maximum(_var_d, 1e-12))),
+                    0.0, remaining_frontier)                       # (S, T)
+            else:
+                Y_D = rng.binomial(int(remaining_frontier), q_late)  # (S, T)
+
+            # ── Pop C: post-frontier arrivals (cohort mode only) ──
+            # These are model-predicted populations, not observed people.
+            # The model rate at tau is p × CDF_path(tau) — the predicted
+            # y/x ratio.  For model-predicted populations, applying the
+            # model rate directly gives the correct aggregate and
+            # degenerates to the model curve at zero evidence.
+            #
+            # X_C(tau) = cumulative upstream arrivals beyond the frontier.
+            # Y_C(tau) = X_C(tau) × p × CDF_path(tau) per draw.
+            # Rate = Y_C / X_C = p × CDF_path(tau) = model rate.
+            X_C = np.zeros((S, T), dtype=np.float64)
+            Y_C = np.zeros((S, T), dtype=np.float64)
+
             if _has_upstream:
                 _up_scaled = a_pop * reach_at_from_node * upstream_cdf_mc  # (S, T)
-                _up_increments = np.diff(_up_scaled, axis=1, prepend=0.0)  # (S, T)
-                _up_increments = np.maximum(_up_increments, 0.0)
+                # X_C at tau = cumulative upstream arrivals from a_i+1 to tau
+                # = total arrivals at tau minus arrivals at a_i
+                _up_at_frontier = _up_scaled[:, a_idx:a_idx+1]     # (S, 1)
+                X_C = np.maximum(_up_scaled - _up_at_frontier, 0.0)  # (S, T)
+                # Y_C = X_C × model rate per draw
+                model_rate_per_draw = p_i[:, None] * cdf_i         # (S, T)
+                model_rate_per_draw = np.clip(model_rate_per_draw, 0.0, 1.0)
+                Y_C = X_C * model_rate_per_draw
 
-            # ── Pop B: pre-frontier survivors ──────────────────────
-            # People who arrived at s ≤ a_i and haven't converted.
-            #
-            # Window mode: all N_i arrived at s=0, simple conditional
-            #   Binomial(N_i - k_i, q_late) where q_late accounts for
-            #   surviving the early window.
-            #
-            # Cohort mode: N_i people arrived at different times s.
-            #   Each sub-cohort at time s had early exposure F(a_i-s)
-            #   and remaining exposure F(τ-s) - F(a_i-s).
-            #   Distribute k_i across sub-cohorts proportionally to
-            #   their early conversion probability, then draw conditional
-            #   Binomial per sub-cohort.
-
-            if not _has_upstream:
-                # Window mode: simple conditional Binomial
-                q_early = p_i[:, None] * c_i_b                    # (S, 1)
-                q_early = np.clip(q_early, 0.0, 1 - 1e-10)
-                remaining_cdf = np.maximum(cdf_i - c_i_b, 0.0)    # (S, T)
-                q_late = (p_i[:, None] * remaining_cdf) / (1 - q_early)
-                q_late = np.clip(q_late, 0.0, 1.0)
-                remaining_frontier = max(int(N_i - k_i), 0)
-                pop_b = rng.binomial(remaining_frontier, q_late)   # (S, T)
-            else:
-                # Cohort mode: convolution over pre-frontier arrivals.
-                # Allocate both pre-frontier arrivals and k_i exactly across
-                # sub-cohorts without reintroducing a per-draw Python loop.
-                pop_b = np.zeros((S, T), dtype=np.float64)
-                frontier_count = max(int(round(N_i)), 0)
-                converted_count = max(min(int(round(k_i)), frontier_count), 0)
-
-                # Arrival counts per time s for s = 0..a_i
-                # Re-apportion them so each draw sums exactly to N_i.
-                pre_frontier_inc = _up_increments[:, :a_idx + 1].copy()  # (S, a_i+1)
-                pre_frontier_counts = _apportion_rowwise_total(frontier_count, pre_frontier_inc)
-                early_cdf_mat = cdf_i[:, np.arange(a_idx, -1, -1)]       # (S, a_i+1)
-                early_prob_mat = p_i[:, None] * early_cdf_mat            # (S, a_i+1)
-                early_prob_mat = np.clip(early_prob_mat, 0.0, 1 - 1e-10)
-                alloc_weights = pre_frontier_counts.astype(float) * early_prob_mat
-                k_alloc = _apportion_rowwise_total(
-                    converted_count,
-                    alloc_weights,
-                    capacities=pre_frontier_counts,
-                )
-                survivors = np.maximum(pre_frontier_counts - k_alloc, 0)
-
-                # For each arrival sub-cohort at time s:
-                #   early_prob[s] = p × F_edge(a_i - s)
-                #   late_prob[s, τ] = p × (F_edge(τ - s) - F_edge(a_i - s))
-                #   conditional: q_late[s, τ] = late_prob / (1 - early_prob)
-                #
-                # Distribute k_i across sub-cohorts proportionally to
-                # n_s × early_prob[s], then each sub-cohort's survivors
-                # are n_s - k_s.
-                #
-                # Vectorise: loop over arrival time s (0..a_i), which
-                # is at most ~30 iterations.
-                for s in range(a_idx + 1):
-                    survivors_s = survivors[:, s]                   # (S,)
-                    if not np.any(survivors_s > 0):
-                        continue
-
-                    # Edge CDF at the frontier exposure for this sub-cohort
-                    early_cdf_s = early_cdf_mat[:, s]               # (S,)
-                    early_prob_s = early_prob_mat[:, s]             # (S,)
-
-                    # Late conversions for each tau > a_i
-                    # Exposure at tau for person arriving at s: tau - s
-                    # Remaining CDF: F_edge(tau - s) - F_edge(a_i - s)
-                    # Conditional prob: p × remaining / (1 - p × F_edge(a_i - s))
-                    for tau_idx in range(a_idx + 1, T):
-                        exposure_at_tau = tau_idx - s
-                        if exposure_at_tau <= 0 or exposure_at_tau >= T:
-                            continue
-                        cdf_at_tau_s = cdf_i[:, min(exposure_at_tau, T - 1)]
-                        late_cdf_s = np.maximum(cdf_at_tau_s - early_cdf_s, 0.0)
-                        q_late_s = (p_i * late_cdf_s) / (1 - early_prob_s)
-                        q_late_s = np.clip(q_late_s, 0.0, 1.0)
-                        pop_b[:, tau_idx] += rng.binomial(survivors_s, q_late_s).astype(np.float64)
-
-            # ── Pop C: post-frontier arrivals via convolution ──────
-            if _has_upstream:
-                # Zero out pre-frontier increments (handled by Pop B)
-                _post_increments = _up_increments.copy()
-                _post_increments[:, :a_idx + 1] = 0.0
-
-                pop_c = np.zeros((S, T), dtype=np.float64)
-                for d in range(1, T):
-                    if a_idx + 1 + d >= T:
-                        break
-                    tau_start = a_idx + 1 + d
-                    n_taus = T - tau_start
-                    s_start = tau_start - d
-                    arrivals_slice = _post_increments[:, s_start:s_start + n_taus]
-                    arrivals_int = np.floor(arrivals_slice).astype(np.int64)
-                    arrivals_int = np.maximum(arrivals_int, 0)
-                    edge_cdf_d = cdf_i[:, d:d+1]
-                    conv_prob_d = p_i[:, None] * edge_cdf_d
-                    conv_prob_d = np.clip(conv_prob_d, 0.0, 1.0)
-                    pop_c[:, tau_start:tau_start + n_taus] += rng.binomial(
-                        arrivals_int, np.broadcast_to(conv_prob_d, arrivals_int.shape)
-                    ).astype(np.float64)
-            else:
-                pop_c = np.zeros((S, T), dtype=np.float64)
+            # ── Combine: X_cohort, Y_cohort ───────────────────────
+            X_forecast = float(N_i) + X_C                          # (S, T)
+            Y_forecast = float(k_i) + Y_D.astype(np.float64) + Y_C
+            Y_forecast = np.clip(Y_forecast, float(k_i), X_forecast)
 
             _t_cohort_end = _time.monotonic()
-            print(f"[PERF] cohort {_ci} done in {_t_cohort_end - _t0:.3f}s pop_b_shape={pop_b.shape} pop_c_shape={pop_c.shape}", flush=True)
-            y_forecast = k_i + pop_b.astype(np.float64) + pop_c
-            y_forecast = np.clip(y_forecast, k_i, x_forecast_arr)
+            print(f"[PERF] cohort {_ci} done in {_t_cohort_end - _t0:.3f}s Y_D_max={float(Y_D.max()):.1f} Y_C_max={float(Y_C.max()):.1f}", flush=True)
 
             # Mature ages: use pre-computed observed (x, y) arrays.
             # Carry-forward already baked in during pre-computation.
@@ -1210,8 +1154,8 @@ def compute_cohort_maturity_rows(
 
             # Combine: observed where mature, forecast where immature
             mature_mask = tau_grid <= a_i  # (T,) bool
-            Y_cohort = np.where(mature_mask[None, :], observed_y[None, :], y_forecast)
-            X_cohort = np.where(mature_mask[None, :], observed_x[None, :], x_forecast_arr)
+            Y_cohort = np.where(mature_mask[None, :], observed_y[None, :], Y_forecast)
+            X_cohort = np.where(mature_mask[None, :], observed_x[None, :], X_forecast)
 
             # ── Zero-maturity diagnostic ──────────────────────────────────
             # Dump decomposition for low-maturity Cohorts to diagnose
@@ -1301,6 +1245,30 @@ def compute_cohort_maturity_rows(
                 },
             }
 
+        # ── Unconditioned model fan (for f mode) ──────────────────────
+        # Pure parameter uncertainty: rate = p × CDF(tau) per draw.
+        # No IS conditioning, no Pop D, no evidence contribution.
+        rate_model = p_s[:, None] * cdf_arr  # (S, T)
+        _model_q = np.percentile(rate_model, _pct_sorted, axis=0)
+        _mq_by_pct = {p: _model_q[i] for i, p in enumerate(_pct_sorted)}
+        _mq50 = _mq_by_pct[50.0]
+        _mq_lo = _mq_by_pct.get(a_sel * 100, _mq_by_pct.get(5.0))
+        _mq_hi = _mq_by_pct.get((1.0 - a_sel) * 100, _mq_by_pct.get(95.0))
+
+        model_fan_quantiles: Dict[int, Any] = {}
+        for t_idx in range(T):
+            tau_val = int(tau_grid[t_idx])
+            model_fan_quantiles[tau_val] = {
+                'lo': float(_mq_lo[t_idx]),
+                'mid': float(_mq50[t_idx]),
+                'hi': float(_mq_hi[t_idx]),
+                'bands': {
+                    bl: (float(_mq_by_pct[(1.0 - bl) / 2.0 * 100][t_idx]),
+                         float(_mq_by_pct[(1.0 + bl) / 2.0 * 100][t_idx]))
+                    for bl in _band_levels
+                },
+            }
+
     # ── Emit rows ──────────────────────────────────────────────────────
     rows: List[Dict[str, Any]] = []
 
@@ -1314,24 +1282,32 @@ def compute_cohort_maturity_rows(
         # Cohorts move from observed to forecast denominators.
         # Only show circle at taus with real observation data.
         evidence_rate: Optional[float] = None
+        evidence_rate_pure: Optional[float] = None
         ev_y_total: Optional[float] = None
         ev_x_total: Optional[float] = None
         if tau <= tau_future_max:
             has_real_obs = any(
                 tau in cohort_at_tau.get(c['anchor_day'].isoformat(), {})
-                for c in cohort_list if tau <= c['tau_max']
+                for c in cohort_list if tau <= c.get('tau_observed', c['tau_max'])
             )
             if has_real_obs:
                 ev_y_total = 0.0
                 ev_x_total = 0.0
+                ev_y_pure = 0.0
+                ev_x_pure = 0.0
                 for c in cohort_list:
-                    if tau <= c['tau_max']:
+                    _c_obs = c.get('tau_observed', c['tau_max'])
+                    if tau <= _c_obs:
                         ev_x_total += c['obs_x'][tau]
+                        ev_x_pure += c['obs_x'][tau]
+                        ev_y_pure += c['obs_y'][tau]
                     else:
                         ev_x_total += c['x_at_tau'][tau] if tau < len(c['x_at_tau']) else c['x_frontier']
                     ev_y_total += c['obs_y'][tau]
                 if ev_x_total > 0:
                     evidence_rate = max(0.0, min(1.0, ev_y_total / ev_x_total))
+                if ev_x_pure > 0:
+                    evidence_rate_pure = max(0.0, min(1.0, ev_y_pure / ev_x_pure))
 
         # Projected rate from backend annotation
         projected_rate: Optional[float] = None
@@ -1345,19 +1321,44 @@ def compute_cohort_maturity_rows(
         total_x_aug = 0.0
         total_y_aug = 0.0
         for c in cohort_list:
-            if tau <= c['tau_max']:
+            _c_obs = c.get('tau_observed', c['tau_max'])
+            if tau <= _c_obs:
                 total_x_aug += c['obs_x'][tau]
                 total_y_aug += c['obs_y'][tau]
             else:
-                x_forecast = c['x_at_tau'][tau] if tau < len(c['x_at_tau']) else c['x_frontier']
-                c_i = _cdf(c['tau_max'])
-                cdf_at_tau = _cdf(tau)
-                n_eff = c['x_frozen'] * c_i
-                posterior_rate = (alpha_0 + c['y_frozen']) / (alpha_0 + beta_0 + n_eff)
-                y_forecast = c['y_frozen'] + x_forecast * max(0.0, cdf_at_tau - c_i) * posterior_rate
-                y_forecast = min(x_forecast, y_forecast)
-                total_x_aug += x_forecast
-                total_y_aug += y_forecast
+                N_i_det = c['x_frozen']
+                k_i_det = c['y_frozen']
+                a_i_det = _c_obs
+
+                # Pop D deterministic: frontier survivors
+                cdf_a_det = _cdf(a_i_det)
+                cdf_tau_det = _cdf(tau)
+                q_early_det = edge_p * cdf_a_det
+                q_early_det = min(q_early_det, 1 - 1e-10)
+                remaining_det = max(0.0, cdf_tau_det - cdf_a_det)
+                q_late_det = (edge_p * remaining_det) / (1 - q_early_det)
+                q_late_det = min(max(q_late_det, 0.0), 1.0)
+                Y_D_det = max(N_i_det - k_i_det, 0.0) * q_late_det
+
+                # Pop C deterministic: post-frontier upstream arrivals
+                # X_C = cumulative arrivals beyond frontier
+                # Y_C = X_C × model rate (p × CDF_path(tau))
+                X_C_det = 0.0
+                Y_C_det = 0.0
+                if upstream_path_cdf_arr is not None and reach_at_from_node > 0:
+                    _a_pop_det = c.get('a_frozen', N_i_det) or N_i_det or 1.0
+                    tau_clamped = min(tau, len(upstream_path_cdf_arr) - 1)
+                    a_clamped = min(a_i_det, len(upstream_path_cdf_arr) - 1)
+                    X_C_det = max(0.0, _a_pop_det * reach_at_from_node * (
+                        upstream_path_cdf_arr[tau_clamped] - upstream_path_cdf_arr[a_clamped]))
+                    model_rate_det = edge_p * cdf_tau_det
+                    Y_C_det = X_C_det * min(model_rate_det, 1.0)
+
+                x_total_det = N_i_det + X_C_det
+                y_total_det = k_i_det + Y_D_det + Y_C_det
+                y_total_det = min(y_total_det, x_total_det)
+                total_x_aug += x_total_det
+                total_y_aug += y_total_det
 
         # Midpoint: prefer MC median (consistent with fan), fall back
         # to deterministic estimate for taus without fan quantiles.
@@ -1415,6 +1416,7 @@ def compute_cohort_maturity_rows(
         row: Dict[str, Any] = {
             'tau_days': tau,
             'rate': evidence_rate,
+            'rate_pure': evidence_rate_pure,
             'projected_rate': projected_rate,
             'midpoint': midpoint,
             'fan_upper': fan_upper,
@@ -1432,6 +1434,14 @@ def compute_cohort_maturity_rows(
         }
         if fan_bands:
             row['fan_bands'] = fan_bands
+        # Unconditioned model fan (for f mode)
+        if model_fan_quantiles is not None:
+            mfq = model_fan_quantiles.get(tau)
+            if mfq is not None:
+                row['model_midpoint'] = mfq['mid']
+                row['model_fan_upper'] = mfq['hi']
+                row['model_fan_lower'] = mfq['lo']
+                row['model_bands'] = {str(int(bl * 100)): lo_hi for bl, lo_hi in mfq['bands'].items()}
         rows.append(row)
 
     return rows

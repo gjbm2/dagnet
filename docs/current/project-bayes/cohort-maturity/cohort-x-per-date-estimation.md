@@ -1,7 +1,8 @@
 # Per-Cohort-Date `x` Estimation for `cohort()` Mode Fans
 
-**Status**: Proposal
+**Status**: Proposal with Option-1-style local shortcut partially implemented
 **Date**: 1-Apr-26
+**Updated**: 7-Apr-26
 **Related**: `cohort-maturity-full-bayes-design.md` (§3, §6, §7.4),
 `cohort-backend-propagation-engine-design.md`,
 `fan-chart-mc-bug.md`,
@@ -30,30 +31,38 @@ identifies the data requirements for each.
 
 ### 2.1 What the current code does
 
-For each Cohort `i` with frozen observation at `tau_max_i`, the MC
-fan computes:
+The current code no longer uses the old CDF-ratio denominator shortcut.
+
+For each Cohort `i`, it now builds:
+
+- observed `x` and `y` arrays with carry-forward up to the Cohort's observed
+  frontier
+- a model-derived `x_at_tau` beyond the frontier:
 
 ```
-x_forecast_i(τ) = x_frozen_i × upstream_CDF(τ) / upstream_CDF(tau_max_i)
+x_model_i(τ) = max(a_pop_i × reach_at_from_node × weighted_upstream_cdf(τ), x_frozen_i)
 ```
 
-using a single point-estimate upstream CDF from one upstream edge's
-model vars (`cohort_forecast.py`, lines 781–792). The CDF ratio
-scales `x_frozen_i` forward in time.
+where `weighted_upstream_cdf(τ)` is a weighted mixture across immediate
+incoming edges to the subject edge's `from_node`.
 
-Problems:
-- The CDF ratio explodes when `upstream_CDF(tau_max_i)` is small
-  (immature Cohorts near the start of the latency curve). A hard
-  guard at 0.01 creates a cliff.
-- The same `x_frozen_i` is used as the anchor for every Cohort,
-  regardless of its scope date. But different Cohorts in the group
-  have different scope dates `s`, and the distribution of `x` at
-  each `s` depends on when that Cohort started relative to the
-  upstream latency. A Cohort that started 5 days ago has a very
-  different `x` profile from one that started 90 days ago.
-- The formula does not distinguish between Cohort dates at all — it
-  treats the ratio `CDF(τ) / CDF(tau_max)` as uniform across the
-  group.
+In the deterministic path this mixture is point-estimate. In the MC fan, the
+upstream CDF mixture varies per draw using upstream posterior uncertainty, but
+`reach_at_from_node` remains a deterministic scalar.
+
+Problems that still remain:
+
+- The computation is still **local to the subject edge**. It does not build a
+  graph-wide propagated node state for `x(s,τ)`.
+- The model forecast is still anchored by one node-level `reach` scalar and one
+  weighted upstream CDF mixture, rather than by explicit upstream edge forecast
+  states.
+- The current path is still only partially conditioned on data. The observed
+  `x_frozen_i` acts as a floor, but the model forecast above the frontier is
+  not fully conditioned on upstream observations.
+- The denominator path still has a **probability-basis consistency problem**:
+  `reach` and the upstream mixture are not yet guaranteed to use one common
+  posterior basis end-to-end.
 
 ### 2.2 What the Bayes design doc proposes (§7.4)
 
@@ -211,18 +220,17 @@ posterior means rather than per-draw values.
 
 ### 3.5 MC draws for upstream uncertainty
 
-In Option 1, `x_model(s, τ)` is deterministic (uses point-estimate
-path params). This means the fan bands reflect only target-edge
-parameter uncertainty, not upstream uncertainty. This is the same
-limitation as the current code.
+This is no longer just a proposal. The current code now partially implements
+this idea:
 
-To include upstream uncertainty in the fan, the MC draws could
-sample `p_path_i` and `CDF_path_i` from their own posteriors per
-draw. The path params derive from edge posteriors already available
-on the graph. Each draw `b` would produce `x_model^(b)(s, τ)` from
-drawn path params, and the fan would widen to reflect upstream model
-uncertainty. This is an incremental enhancement within Option 1,
-not a separate option.
+- the upstream CDF mixture varies per draw in the MC fan
+- upstream route weights vary per draw from upstream probability posteriors
+
+What is **not** yet implemented is a full stochastic denominator solve. The
+draw-varying CDF mixture is still multiplied by one deterministic
+`reach_at_from_node` scalar and used only inside the local subject-edge
+shortcut. So upstream uncertainty is present, but graph-wide propagation is
+not.
 
 ---
 
@@ -503,11 +511,14 @@ today's data), the fan chart must degenerate to the unconditional
 Bayes model curve: `rate(τ) = p × CDF_edge(τ)`, with fan bands
 equal to the unconditional confidence band from the edge posterior.
 
-**Current status**: not confirmed. The frontier-conditioned y
-formula `y = k + x_frontier × remaining_cdf × r` produces `y ≈ 0`
-when `x_frontier ≈ 0` (zero-maturity Cohort with few arrivals),
-so the Cohort contributes almost nothing to the aggregate — rather
-than contributing the model curve.
+**Current status**: the strict zero-evidence limit is now covered by tests for
+both window mode and cohort mode. The current implementation produces the model
+curve in those true zero-evidence cases.
+
+That does **not** close the broader maths question. The residual problem is the
+partially mature `cohort()` case: once there are some post-frontier arrivals,
+the `Y_C` shortcut is still not a proper convolution of arrival timing and
+edge-level conversion timing.
 
 **Investigation procedure**: for a true `cohort(-0d:)` subject,
 dump per-Cohort terms at `τ = 0..5`:
@@ -537,10 +548,11 @@ modes.
 
 ### 8.2 Stochastic denominator (upstream x uncertainty in fan)
 
-**Problem**: `x_forecast_arr` is currently deterministic across MC
-draws. The denominator `X_total` is identical for all 2000 draws.
-Fan width comes only from numerator variation (`y` via rate draws
-and CDF draws). Upstream arrival uncertainty is not reflected.
+**Current status**: partially implemented. The denominator is no longer fully
+deterministic across draws because the upstream CDF mixture and upstream route
+weights vary per draw. The remaining issue is that the solve is still local:
+one deterministic `reach` scalar feeds the whole denominator path, and there is
+still no graph-wide node-state propagation.
 
 **Proposal 2A** (Option-1-consistent stochastic denominator): sample
 upstream path terms per draw. For each incoming route `u` and draw
@@ -576,13 +588,13 @@ whether 2A is implemented.
 
 ### 8.3 Sequence
 
-1. **§8.1**: investigate and fix the zero-maturity degeneration.
-   Write the fixture test first. This is the most fundamental
-   invariant — if it doesn't hold, other calibration work is
-   wasted.
-2. **§8.2 Proposal 2B**: consistency fix for reach vs CDF
-   probability bases. Small, low-risk.
-3. **§8.2 Proposal 2A**: stochastic denominator. Only after §8.1
-   is resolved and confirmed by test.
-4. Re-evaluate fan quality on real data after each step. If fans
-   look correct after §8.1 + 2B, defer 2A.
+1. **Fix probability-basis consistency** between `reach` and the upstream CDF
+   mixture.
+2. **Replace the local denominator shortcut with graph-wide propagation** if
+   the shared forecast engine work proceeds.
+3. **Replace the `Y_C` shortcut with a proper convolution** of arrival timing
+   and edge-level conversion timing.
+4. Re-evaluate real-data fan quality after each step. The main remaining
+   question is no longer "does zero maturity collapse?" but "does partially
+   mature `cohort()` behave honestly once arrivals and conversions are both
+   moving?"

@@ -112,6 +112,16 @@ Clearing layer 1 is useless unless you also handle layers 2-4. UpdateManager map
 
 **Example**: `loadEventDefinition` in `snapshotRetrievalsService.ts` had `db.files.get(fileId)` as its IDB fallback — this always failed silently, causing event definitions to be missing from signature computation.
 
+## Anti-pattern 13: Setup scripts that don't install all dependency sets
+
+**Signature**: tests pass locally for weeks, then fail after `./dev-start.sh --clean` or a fresh `./setup.sh` run. The error is a missing module (`ModuleNotFoundError: No module named 'pymc'`) in a subsystem that was previously working.
+
+**Root cause**: the repo has multiple `requirements*.txt` files for different subsystems (e.g., `graph-editor/requirements-local.txt` for the frontend Python backend, `bayes/requirements.txt` for the Bayesian compiler). Setup and dev-start scripts only installed the primary requirements file, not all of them. The missing deps only existed because someone had manually installed them in a previous venv session — a `--clean` rebuild wiped that implicit state.
+
+**Fix**: ensure `setup.sh` and `dev-start.sh` install ALL requirement files into the shared venv. Both scripts must produce an identical, complete environment. Grep for all `requirements*.txt` files in the repo and verify each is referenced in both setup paths. When adding a new requirements file to the repo, add the install line to both scripts immediately.
+
+**Broader principle**: any state that exists only because of manual one-off commands will eventually be lost. If the release script gates on it (e.g., bayes compiler tests), the setup script must produce it.
+
 ## When to add to this document
 
 After completing a multi-attempt fix, check: does my bug match a generalisable pattern? If so, add it here following the format: Signature (how to recognise it), Root cause (why it happens), Fix (what to do), Example (optional, specific instance).

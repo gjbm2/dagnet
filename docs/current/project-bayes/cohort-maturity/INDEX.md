@@ -1,6 +1,6 @@
 # Cohort Maturity Documentation Index
 
-**Last updated**: 2-Apr-26
+**Last updated**: 7-Apr-26
 
 This directory contains all design docs, specs, and investigation notes
 for the cohort maturity fan chart and related forecasting work.
@@ -11,8 +11,8 @@ for the cohort maturity fan chart and related forecasting work.
 
 | Doc | Status | Scope |
 |-----|--------|-------|
-| [cohort-maturity-project-overview.md](cohort-maturity-project-overview.md) | Active | Project map: phases, epochs, data pipeline, terminology |
-| [cohort-maturity-full-bayes-design.md](cohort-maturity-full-bayes-design.md) | Draft | Bayesian update formulas, denominator policy, f/e paths, implementation plan. **Contains open issues §7.5 and §11** |
+| [cohort-maturity-project-overview.md](cohort-maturity-project-overview.md) | Historical overview + current-state note | Project map, pipeline context, terminology |
+| [cohort-maturity-full-bayes-design.md](cohort-maturity-full-bayes-design.md) | Draft with implementation delta | Bayesian update formulas, denominator policy, f/e paths, implementation plan. **Contains open issues §7.5 and §11** |
 | [cohort-maturity-fan-chart-spec.md](cohort-maturity-fan-chart-spec.md) | Draft | Chart spec: user-facing behaviour, phasing, window mode computation, fan bounds |
 | [cohort-x-per-date-estimation.md](cohort-x-per-date-estimation.md) | Proposal — Option 1 partially implemented | Per-Cohort-date `x` estimation: Options 1/1b/2, comparison, delivery. **Contains open calibration issues §8** |
 | [cohort-backend-propagation-engine-design.md](cohort-backend-propagation-engine-design.md) | Proposal | BE propagation engine: shared libraries, state model, join semantics, MC independence |
@@ -28,118 +28,283 @@ for the cohort maturity fan chart and related forecasting work.
 
 ---
 
-## Current implementation state (2-Apr-26)
+## Current implementation state (7-Apr-26)
 
-### Major changes this session (2-Apr-26)
+### What the code now does
 
-**Importance-weighted MC fan chart** — complete rewrite of the MC
-dispersion mechanism in `cohort_forecast.py`:
+`graph-editor/lib/runner/cohort_forecast.py` is now a posterior-predictive
+simulator, not the earlier CDF-ratio fan prototype.
 
-- **Importance sampling** replaces all previous rate-draw approaches
-  (per-Cohort Beta draw, pooled Beta, raw MVN p, posterior mean).
-  For each MC draw θ^(b) from the MVN posterior, computes the
-  Binomial likelihood of the observed Cohort data, normalises to
-  importance weights, and resamples.  This conditions ALL parameters
-  (p, mu, sigma, onset) on the window evidence — not just p.
-- **Zero-maturity degeneration** verified: at zero maturity, no
-  evidence → uniform weights → fan = confidence band.  Tested in
-  `TestWindowZeroMaturityDegeneration::test_fan_equals_confidence_band_at_zero_maturity`.
-- **Fan narrows with evidence**: more Cohorts / more data → stronger
-  conditioning → narrower fan.  Tested in
-  `TestWindowZeroMaturityDegeneration::test_fan_narrows_with_evidence`.
-- **Unified window/cohort codepath**: the MC forecast loop is now
-  a single path.  The only branch is how x is computed: flat N_i
-  (window) vs a_pop × reach × CDF_path(τ) (cohort).
-- **`compute_confidence_band`** now returns (upper, lower, median)
-  — third element added for like-for-like comparison with fan median.
-- **Anchor window filter** added: Cohorts outside [anchor_from,
-  anchor_to] are now excluded from the forecast.
-- **tau_max fix**: uses last frame's snapshot date, not sweep_to,
-  so Cohorts aren't treated as "mature" for days beyond the data.
+- **Direct posterior MVN draws** drive the fan. The old global
+  importance-sampling approach is gone.
+- **Per-Cohort drift** is applied on transformed parameter scales
+  (`p`, `mu`, `sigma`, `onset`) so immature Cohorts can vary around the
+  shared posterior rather than reusing one global draw unchanged.
+- **Per-Cohort frontier conditioning** is now local to each Cohort. The
+  simulator reweights/resamples that Cohort's drifted draws against its
+  frontier evidence rather than performing one global evidence
+  conditioning step.
+- **Dense carry-forward arrays** (`obs_x`, `obs_y`) are precomputed and
+  reused by the evidence line, midpoint, and fan. Epoch B carry-forward
+  is therefore implemented in current code.
+- **`tau_observed` is derived from real evidence depth**, preferring
+  `evidence_retrieved_at` over the sweep end so stale carry-forward does
+  not overstate maturity.
+- **Primary cohort-mode anchoring** now uses `calculate_path_probability()`
+  plus an explicit `anchor_node_id` on the main Bayes path.
 
-### Cohort-mode `x` estimation (from prior session)
+### Current cohort-mode denominator path
 
-- `compute_reach_probability()`: walks the DAG backward from the
-  subject edge's from-node, multiplying edge rates (`p.mean`) to
-  get the fraction of anchor population arriving at the node.
-- `x_model(s, τ) = a_s × reach × CDF_path(τ)`: model-derived
-  arrivals per Cohort date, using weighted-average path CDF across
-  incoming edges. Floored at `x_frozen`.
-- Per-Cohort rule: observed `x` where `τ ≤ tau_max`, model forecast
-  (floored) where `τ > tau_max`.
+The present `cohort()` path is better than the earlier ratio shortcut but
+is still not the final architecture:
 
-### What was NOT changed
+- Observed `x` is used where the Cohort is still within its observed
+  frontier.
+- Beyond the frontier, `x_at_tau` is model-derived as
+  `a_pop × reach × weighted_upstream_cdf(τ)`, floored at observed
+  `x_frozen`.
+- In the MC fan, the upstream CDF mixture now varies per draw using
+  upstream posterior uncertainty, but `reach` remains a deterministic
+  scalar and the overall solve is still local to the subject edge.
 
-- Deterministic midpoint: still uses per-Cohort posterior mean with
-  `alpha_0/beta_0`.  Not yet updated to use importance-weighted
-  draws (the midpoint is deterministic, not stochastic, so
-  importance weighting doesn't directly apply — it would need a
-  different approach).
-- FE: no changes. No new data plumbing.
+### Tests that now cover the live implementation
+
+- Window zero-maturity degeneration is covered in
+  `test_cohort_forecast.py`.
+- Cohort-mode zero-evidence degeneration is also covered in
+  `test_cohort_forecast.py`.
+- Window-mode midpoint and fan invariants remain covered by
+  `test_cohort_fan_harness.py` and `test_cohort_fan_controlled.py`.
 
 ---
 
 ## Open issues (consolidated)
 
-All open calibration and implementation issues are tracked in two
-locations. This section indexes them to avoid confusion.
+### Known approximations and potential enhancements
 
-### From this session
+The items below are known approximations in the current cohort-mode
+implementation. None of them block shipping the current single-edge cohort
+maturity or the planned A→Z multi-hop maturity (Phase A in
+`29-generalised-forecast-engine-design.md`). Each produces reasonable results
+for current use cases. They are listed here so we can reason carefully about
+whether and when to invest in each.
 
-- **`path_alpha/path_beta` dead code**: deleted. The `path_` prefix
-  in this app refers to the cohort-level posterior on the same edge
-  (not upstream DAG path). Already handled correctly by the
-  `posterior_path_alpha/beta` source selection at lines 461-466.
+---
 
-- **Production data testing blocked**: Bayes fit requires
-  `BAYES_WEBHOOK_SECRET` in `.env.local` (now added) but the local
-  Bayes roundtrip has a model fit issue. Test fixture works correctly.
+#### 1. No graph-wide propagation engine for x(s,τ)
 
-### From `cohort-maturity-full-bayes-design.md`
+**Current approach**: The denominator beyond the evidence frontier uses a
+subject-edge local shortcut: `x_model(s,τ) = a_pop × reach × weighted_upstream_cdf(τ)`,
+floored at observed `x_frozen`.
 
-- **§7.5 — y projection base**: the frontier-conditioned formula
-  gives depressed rates for low-maturity Cohorts because `y` is
-  anchored at `x_at_frontier` while `x` grows to full model
-  population. Correct convolution formula needed.
+**What the enhancement would do**: Replace the local shortcut with a full
+topological propagation — walk the DAG from anchor to sinks, accumulating
+per-node, per-Cohort arrival state at each step. Each downstream edge's `x`
+would depend on forecast `y` from all incident upstream edges.
 
-- **§11 — Known implementation defects**: shared-ancestor bug in
-  DAG reach traversal, reach not anchored to query anchor node,
-  inconsistent probability sources, silent latency fallback,
-  per-node cap distortion.
+**Pros of attempting**:
+- Correctly models upstream immaturity: if an upstream edge is itself immature,
+  its forecast `y` (and therefore the downstream `x`) should carry that
+  uncertainty. The current shortcut assumes upstream edges are at steady state.
+- Required for accurate multi-hop maturity when intermediate edges have
+  materially different maturity levels.
+- Eliminates the `reach × CDF_path` composition which mixes probability
+  sources (see item 2).
 
-### From `cohort-x-per-date-estimation.md`
+**Cons / reasons to defer**:
+- The current shortcut works well for the common case: linear funnels where
+  upstream edges are more mature than downstream ones (the typical shape).
+- The propagation engine is a substantial piece of work — see
+  `cohort-backend-propagation-engine-design.md` (32KB design doc, join
+  semantics under incomplete inputs, MC independence across nodes).
+- For A→Z multi-hop maturity, Phase A sidesteps this entirely by using
+  first-edge `x` directly from frames as the denominator. The propagation
+  engine would improve accuracy but is not needed for correctness.
+- No user has reported a visible artefact from the current shortcut.
 
-- **§8.1 — Zero-maturity degeneration invariant**: RESOLVED for
-  window mode.  Both tests pass.  Cohort mode not yet verified.
+**Verdict**: Desired enhancement. Worth doing eventually for funnels with
+materially immature upstream edges, but not blocking any current deliverable.
 
-- **§8.2 — Stochastic denominator**: cohort-mode `x` is still
-  deterministic across MC draws (uses point-estimate upstream CDF).
-  The importance weighting conditions (mu, sigma, onset) on evidence
-  which partially addresses this, but upstream CDF is not yet
-  per-draw.
+**Detailed design**: `cohort-backend-propagation-engine-design.md`,
+`cohort-x-per-date-estimation.md` (Options 1/1b/2 with trade-offs).
 
-### Key design decision: window vs cohort CDF basis
+---
 
-Window mode uses `q = p × CDF` for `c_i` and `remaining_cdf`.
-This is how `p^(b)` draw variation enters the fan — through the
-CDF terms, not through the posterior rate formula.
+#### 2. Probability-basis mismatch in denominator
 
-Cohort mode uses pure `cdf_arr` (no `p`). This was an intentional
-split: the cohort-mode rate dispersion comes from the Beta posterior
-draw (`rng.beta`), not from `q`. The two modes have different
-dispersion mechanisms.
+**Current approach**: `reach` is computed from graph path probability
+(`calculate_path_probability()`), while the upstream CDF mixture is weighted
+using posterior parameters from `read_edge_cohort_params()` which may prefer a
+different posterior basis (path-level vs edge-level).
 
-This split is a pragmatic choice, not a principled one. It should
-be revisited once §8.1 is resolved.
+**What the enhancement would do**: Ensure both `reach` and the upstream CDF
+mixture draw from a single consistent posterior basis end-to-end.
 
-### Recommended sequence
+**Pros of attempting**:
+- Eliminates a theoretical inconsistency: one denominator path, two probability
+  sources. The effect is on the forecast band shape rather than the midpoint.
+- Straightforward to implement if done alongside the unified basis resolver
+  proposed in `29-generalised-forecast-engine-design.md` Step 2.
 
-1. **§8.1**: investigate zero-maturity degeneration using
-   diagnostic output. Start with `window()` (simpler case).
-   Write fixture test once the invariant is understood.
-2. Fix §11 implementation defects (shared-ancestor bug etc.)
-3. Fix §8.2 Proposal 2B (probability basis consistency)
-4. Evaluate fan quality on real data
-5. Implement §8.2 Proposal 2A (stochastic denominator) if needed
-6. Address §7.5 (y projection base convolution) if fans still
-   show incorrect limiting behaviour
+**Cons / reasons to defer**:
+- In practice, the divergence is small unless the posterior has moved
+  dramatically from the prior. For most edges, posterior p is close to graph p.
+- The effect is on the *forecast beyond the frontier*, which is inherently
+  uncertain — the basis mismatch is small relative to the overall forecast
+  uncertainty.
+- Fixing this in isolation (without the graph-wide propagation engine) may
+  create a false sense of precision in the denominator that the rest of the
+  model doesn't support.
+- No user has reported a visible artefact.
+
+**Verdict**: Desired enhancement. Best addressed as part of the unified basis
+resolver (Phase 3 of the generalised forecast engine) rather than as an
+isolated fix.
+
+**Current documentation**: Identified in `cohort-maturity-full-bayes-design.md`
+§11.3 and `cohort-x-per-date-estimation.md` §2.1/2.3, but no detailed
+alternative approaches or resolution strategies are documented yet. **Needs a
+short design note with options before implementation.**
+
+---
+
+#### 3. Y_C heuristic (missing arrival-time convolution)
+
+**Current approach**: Post-frontier arrivals `X_C` are multiplied by the
+tau-dependent model rate `p × CDF(τ)` to produce `Y_C`. This treats all
+post-frontier arrivals as if they arrived at the frontier time, when in reality
+each arrival at time `t'` has a different remaining conversion window
+`(τ - t')`.
+
+**What the enhancement would do**: Replace the direct multiplication with the
+proper convolution: `Y_C(τ) = ∫ dX_C(t') × p × CDF(τ - t')`, where `dX_C(t')`
+is the marginal arrival rate at time `t'`.
+
+**Pros of attempting**:
+- Mathematically correct: each post-frontier arrival's conversion probability
+  depends on *when* it arrived, not when the frontier closed.
+- Matters most for long conversion windows (large `mu`) combined with rapid
+  post-frontier arrivals — e.g. a fast-growing funnel with a slow conversion
+  step.
+- Would improve fan band accuracy for immature Cohorts where the post-frontier
+  contribution is a large fraction of the total.
+
+**Cons / reasons to defer**:
+- Second-order effect for most real funnels: when the frontier is reasonably
+  recent, most of `X_C` arrived near the frontier and the difference between
+  `CDF(τ)` and `CDF(τ - t')` is small.
+- Implementing the convolution requires either discretising the arrival-time
+  distribution (tractable but adds complexity) or an analytical solution (which
+  may not exist in closed form for the shifted-lognormal).
+- The current heuristic already uses the tau-dependent rate (not a flat
+  ultimate rate), which was the largest correction. The remaining error from
+  the missing convolution is smaller.
+- Empirical testing (`cohort-maturity-full-bayes-design.md` §7.5) showed that
+  the per-tau formula gave empirically better results even though the maths is
+  approximate — suggesting the approximation error is small in practice.
+
+**Verdict**: Desired enhancement. The correct formulation should be worked out
+on paper before implementing — the integral needs to be discretised into
+something implementable. **Needs a mathematical design note before
+implementation.**
+
+**Current documentation**: `cohort-maturity-full-bayes-design.md` §7.5, §8,
+§11.6. The problem is well-described but the solution is not yet specified.
+
+---
+
+#### 4. Frontier semantics are consumer-specific
+
+**Current approach**: Cohort maturity defines `tau_observed` per Cohort
+(derived from `evidence_retrieved_at` or max sweep age). Surprise gauge uses
+aggregate completeness — a scalar `c(τ)` across all query contexts. These are
+different questions: "how old is *this Cohort's* evidence?" vs "what fraction
+of the final conversion has been observed *in aggregate*?"
+
+**What the enhancement would do**: Define a shared frontier contract in the
+forecast-state model that both consumers use, making explicit what "frontier"
+means and exposing both per-Cohort and aggregate views.
+
+**Pros of attempting**:
+- Required for the generalised forecast engine (Phase 0 contract): if both
+  consumers draw from a shared state model, the frontier definition must be
+  explicit.
+- Would enable new consumers (e.g. edge card overlays showing "maturity %" )
+  without each one reinventing frontier semantics.
+- Per-Cohort `tau_observed` is arguably the more fundamental concept; aggregate
+  completeness can be derived from it but not vice versa.
+
+**Cons / reasons to defer**:
+- Only matters when you're actually building the shared forecast engine. If
+  cohort maturity and surprise gauge remain separate consumers (which they will
+  for a while), each can define its own frontier without conflict.
+- The two definitions answer genuinely different questions. Unifying them risks
+  forcing one semantic where two are appropriate. The contract may need to
+  expose *both* rather than pick one.
+- Low user impact: no user sees both frontiers simultaneously or is confused by
+  their differences.
+
+**Verdict**: Desired enhancement, but only becomes relevant when the
+generalised forecast engine (Phases 0–3) is actively being built. Not worth
+addressing in isolation.
+
+**Current documentation**: `DATE_MODEL_COHORT_MATURITY.md` §2.2–2.3
+(canonical reference), `29-generalised-forecast-engine-design.md` Step 4.4.
+Well-documented; no additional design work needed before implementation.
+
+---
+
+#### 5. Epoch orchestration is multi-subject stitching
+
+**Current approach**: The FE plans snapshot subjects per epoch, commissions
+separate analysis requests for each epoch block, and stitches the results
+together into one continuous chart.
+
+**What the enhancement would do**: The backend would receive one request for
+the full cohort set across all epochs and perform a single authoritative solve,
+returning unified forecast state. The FE would become rendering-only.
+
+**Pros of attempting**:
+- Fewer round-trips (one request instead of N per epoch).
+- Eliminates potential stitching artefacts at epoch boundaries.
+- Cleaner architecture: the backend owns the full computation, the FE draws.
+- Required foundation for the graph-wide propagation engine (item 1), which
+  needs to see all Cohorts at once.
+
+**Cons / reasons to defer**:
+- The current multi-subject stitching works correctly — no user-visible bugs
+  from it.
+- The epoch-splitting logic on the FE is already built and tested. Migrating it
+  to the backend is re-work with no immediate user-facing benefit.
+- Depends on the propagation engine (item 1) for full value — without it, a
+  unified backend solve is just moving the same computation to a different
+  location.
+
+**Verdict**: Desired architectural improvement. Natural companion to the
+propagation engine (item 1) — do them together when the time comes.
+
+**Current documentation**: `cohort-backend-propagation-engine-design.md` §1,
+`DATE_MODEL_COHORT_MATURITY.md` §3.
+
+---
+
+### Issues now resolved
+
+- Epoch B carry-forward is implemented.
+- Window zero-maturity degeneration is verified by test.
+- Cohort zero-evidence degeneration is verified by test.
+- The old recursive shared-ancestor reach bug is resolved on the primary Bayes
+  path.
+- The old global importance-sampling fan path is gone.
+- **Fallback-path anchoring fixed (7-Apr-26)**: The no-Bayes fallback in
+  `api_handlers.py` now resolves and passes `anchor_node_id`, matching the
+  primary Bayes path.
+
+### Recommended reading order
+
+1. Read `cohort-maturity-full-bayes-design.md` for the intended algebra and the
+   still-live `Y_C` and denominator questions.
+2. Read `cohort-x-per-date-estimation.md` for the current `x(s,τ)` gap between
+   the local shortcut and a proper graph-wide solve.
+3. Read `cohort-backend-propagation-engine-design.md` for the target
+   architecture that would eliminate the remaining local shortcuts.

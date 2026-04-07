@@ -1,9 +1,23 @@
 # Cohort Maturity Chart — Complete Project Overview
 
 **Date**: 31-Mar-26
+**Updated**: 7-Apr-26
 **Branch**: `feature/snapshot-db-phase0`
-**Status**: Phase 1a (single Cohort, window mode) working. Phase 1b (multi-Cohort)
-has two open bugs. Phase 2 (cohort mode) not started. Test harness not yet built.
+**Status**: Historical overview plus current-state note. The pipeline outline
+below is still useful, but the later maths sections describe the earlier
+CDF-ratio / conditional-band design rather than the exact current simulator in
+`cohort_forecast.py`.
+
+**Current-state note**:
+
+- `cohort_forecast.py` now runs a posterior-predictive simulator with direct
+  posterior draws, per-Cohort drift, and local frontier conditioning.
+- Epoch B carry-forward is implemented via dense observed arrays.
+- `cohort()` mode is partially implemented, but still relies on a local
+  denominator shortcut rather than a graph-wide propagation engine.
+- The authoritative current blockers are maintained in
+  `INDEX.md`, `cohort-maturity-full-bayes-design.md`, and
+  `cohort-x-per-date-estimation.md`.
 
 ---
 
@@ -51,13 +65,15 @@ Each scenario gets its own fan in its own colour. Model overlay curves
 
 ### 1.3 window() vs cohort() mode
 
-- **window() mode** (Phase 1): `x` is fixed per Cohort — it's the count of
-  people who converted at the from-node within the window. Simpler maths.
-  `midpoint ≥ evidence` is guaranteed.
+- **window() mode**: `x` is fixed per Cohort. This is the most reliable and
+  best-tested path in the current implementation. `midpoint ≥ evidence` is
+  guaranteed because the denominator is shared.
 
-- **cohort() mode** (Phase 2, not yet implemented): `x` grows with τ — more
-  members of the Cohort are still arriving upstream. Requires upstream x
-  forecasting. The `midpoint ≥ evidence` guarantee breaks (see spec §10.5).
+- **cohort() mode**: `x` grows with `τ` because upstream arrivals are still
+  maturing. This path is now implemented in current code, but only via a local
+  subject-edge shortcut (`reach × weighted upstream CDF`) rather than a
+  graph-wide propagation engine. The `midpoint ≥ evidence` guarantee does not
+  hold here because the denominator itself is moving.
 
 ---
 
