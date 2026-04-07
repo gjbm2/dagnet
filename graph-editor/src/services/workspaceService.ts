@@ -606,7 +606,7 @@ class WorkspaceService {
         const filesOfType = fileIds.filter(id => id.startsWith(`${type}-`));
         sessionLogService.addChild(
           logOpId,
-          'success',
+          'debug',
           `CLONE_${type.toUpperCase()}`,
           `Cloned ${count} ${type} file(s)`,
           filesOfType.join(', '),
@@ -662,7 +662,7 @@ class WorkspaceService {
       if (images.length > 0) {
         sessionLogService.addChild(
           logOpId,
-          'success',
+          'debug',
           'CLONE_IMAGES',
           `Cloned ${images.length} image(s)`,
           images.map(img => `${img.sourcePath}/${img.name}`).join(', '),
@@ -686,6 +686,14 @@ class WorkspaceService {
         `Clone complete: ${fileIds.length} files + ${images.length} images in ${elapsed}ms`,
         { repository, branch, filesAffected: fileIds, duration: elapsed }
       );
+
+      // Prune orphaned index entries now that we have the full repo state
+      try {
+        const { IndexRebuildService } = await import('./indexRebuildService');
+        await IndexRebuildService.pruneOrphanedIndexEntries();
+      } catch (e) {
+        console.warn('⚠️ WorkspaceService: Index prune after clone failed (non-fatal):', e);
+      }
 
       // Mark operation complete in registry
       operationRegistryService.complete(opId, 'complete');
@@ -880,7 +888,7 @@ class WorkspaceService {
     for (const [type, paths] of Object.entries(filesByType)) {
       sessionLogService.addChild(
         logOpId,
-        'info',
+        'debug',
         `LOAD_${type.toUpperCase()}`,
         `Loaded ${paths.length} ${type} file(s)`,
         paths.join(', '),
@@ -966,8 +974,7 @@ class WorkspaceService {
       logOpId,
       'success',
       `Loaded ${fileMap.size} files from cache into FileRegistry`,
-      { 
-        filesAffected: Array.from(fileMap.keys()),
+      {
         repository,
         branch
       }
@@ -1352,7 +1359,7 @@ class WorkspaceService {
             // Diagnostic: log merge-path decision for graph files.
             if (isGraphFile && localFileState) {
               console.log(`🔍 WorkspaceService MERGE DECISION for ${treeItem.path}: isDirty=${localFileState.isDirty}, hasActualChanges=${!!hasActualChanges}, localDiffersFromRemote=${localDiffersFromRemote}, localMatchesOriginal=${!!localMatchesOriginal}, dirtyDetected=${!!dirtyDetected}, graphGateTriggered=${graphGateTriggered}, isInitializing=${(localFileState as any).isInitializing}`);
-              sessionLogService.info('git', 'MERGE_DECISION', `${treeItem.path}: isDirty=${localFileState.isDirty}, hasActualChanges=${!!hasActualChanges}, localDiffersFromRemote=${localDiffersFromRemote}, localMatchesOriginal=${!!localMatchesOriginal}, dirtyDetected=${!!dirtyDetected}, graphGateTriggered=${graphGateTriggered}, isInitializing=${(localFileState as any).isInitializing}`);
+              sessionLogService.debug('git', 'MERGE_DECISION', `${treeItem.path}: isDirty=${localFileState.isDirty}, hasActualChanges=${!!hasActualChanges}, localDiffersFromRemote=${localDiffersFromRemote}, localMatchesOriginal=${!!localMatchesOriginal}, dirtyDetected=${!!dirtyDetected}, graphGateTriggered=${graphGateTriggered}, isInitializing=${(localFileState as any).isInitializing}`);
             }
 
             if (graphGateTriggered) {

@@ -9,6 +9,7 @@
 import { useEffect, useRef } from 'react';
 import { operationRegistryService } from '../services/operationRegistryService';
 import { jobSchedulerService } from '../services/jobSchedulerService';
+import { registerBayesFitJob } from '../services/bayesReconnectService';
 
 const BOOT_OP_ID = 'app:boot';
 
@@ -44,6 +45,9 @@ export function useBootProgress(): void {
       if (tabContextDone && navigatorDone) {
         operationRegistryService.setLabel(BOOT_OP_ID, 'Workspace ready');
         operationRegistryService.complete(BOOT_OP_ID, 'complete');
+        // Register persistent jobs before signalling boot complete,
+        // so reconciliation can find their reconcileFn.
+        registerBayesFitJob();
         // Signal the unified job scheduler that app boot is complete.
         // This drains all boot-gated jobs (version-check, git-remote-check,
         // graph-integrity, etc.) and runs IDB reconciliation for persisted jobs.

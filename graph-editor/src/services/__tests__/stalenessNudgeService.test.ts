@@ -8,6 +8,7 @@ const hoisted = vi.hoisted(() => ({
   mockStartOperation: vi.fn(),
   mockEndOperation: vi.fn(),
   mockInfo: vi.fn(),
+  mockDebug: vi.fn(),
   mockWarning: vi.fn(),
 }));
 
@@ -42,7 +43,10 @@ vi.mock('../sessionLogService', () => ({
     startOperation: hoisted.mockStartOperation,
     endOperation: hoisted.mockEndOperation,
     info: hoisted.mockInfo,
+    debug: hoisted.mockDebug,
     warning: hoisted.mockWarning,
+    trace: vi.fn(),
+    isLevelEnabled: vi.fn(() => false),
   },
 }));
 
@@ -73,6 +77,7 @@ describe('stalenessNudgeService', () => {
     hoisted.mockStartOperation.mockReset();
     hoisted.mockEndOperation.mockReset();
     hoisted.mockInfo.mockReset();
+    hoisted.mockDebug.mockReset();
 
     hoisted.mockStartOperation.mockReturnValue('mock-op-id');
   });
@@ -96,15 +101,15 @@ describe('stalenessNudgeService', () => {
     // Rate-limit stamp written
     expect(storage.getItem('dagnet:staleness:lastAppVersionCheckAtMs')).toBe(String(now));
 
-    // Session log audit entries emitted (prod-visible)
-    expect(hoisted.mockInfo).toHaveBeenCalledWith(
+    // Session log audit entries emitted (debug level after info→debug migration)
+    expect(hoisted.mockDebug).toHaveBeenCalledWith(
       'session',
       'STALENESS_APP_VERSION_CHECK_STAMP',
       expect.any(String),
       undefined,
       expect.objectContaining({ key: 'dagnet:staleness:lastAppVersionCheckAtMs', nowMs: now })
     );
-    expect(hoisted.mockInfo).toHaveBeenCalledWith(
+    expect(hoisted.mockDebug).toHaveBeenCalledWith(
       'session',
       'STALENESS_APP_VERSION_CACHE_SET',
       expect.any(String),
@@ -124,7 +129,7 @@ describe('stalenessNudgeService', () => {
     const untilRaw = storage.getItem(key);
     expect(untilRaw).toBeTruthy();
 
-    expect(hoisted.mockInfo).toHaveBeenCalledWith(
+    expect(hoisted.mockDebug).toHaveBeenCalledWith(
       'session',
       'STALENESS_SNOOZE_SET',
       expect.any(String),
@@ -578,7 +583,7 @@ describe('stalenessNudgeService', () => {
 
       expect(pullAll).toHaveBeenCalledTimes(1);
       expect(reloadPage).toHaveBeenCalledTimes(1);
-      expect(hoisted.mockInfo).toHaveBeenCalledWith(
+      expect(hoisted.mockDebug).toHaveBeenCalledWith(
         'session',
         'STALENESS_RUN_THEN_RELOAD',
         expect.any(String),

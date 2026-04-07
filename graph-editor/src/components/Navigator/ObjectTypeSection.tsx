@@ -7,6 +7,7 @@ import { AtSign, ChevronRight, TrendingUp, Coins, Clock, Package, Star, Share2, 
 import { WhereUsedService } from '../../services/whereUsedService';
 import { historicalFileService } from '../../services/historicalFileService';
 import { toggleFavourite, isFavourite, filterSystemTags } from '../../utils/favourites';
+import { formatRelativeTimeCompact } from '../../utils/freshnessDisplay';
 import '../../styles/file-state-indicators.css';
 
 /**
@@ -333,25 +334,49 @@ function NavigatorItem({ fileId, isActive, tabCount }: NavigatorItemProps) {
         })()}
       </span>
       <span className="navigator-item-actions">
-        {isGraphEntry && (isHovering || isDepsFilterActive) && (
+        {isHovering ? (
+          <>
+            {isGraphEntry && (isHovering || isDepsFilterActive) && (
+              <button
+                type="button"
+                className={`navigator-item-history-btn${isDepsFilterActive ? ' deps-active' : ''}`}
+                onClick={handleDepsClick}
+                title={isDepsFilterActive ? 'Clear dependency filter' : 'Show dependencies'}
+              >
+                <Share2 size={12} />
+              </button>
+            )}
+            {!entry.isLocal && entry.hasFile && (
+              <button
+                type="button"
+                className="navigator-item-history-btn"
+                onClick={handleHistoryClick}
+                title="Open historical version"
+                style={canShowHistory ? undefined : { visibility: 'hidden' }}
+              >
+                <AtSign size={13} />
+              </button>
+            )}
+          </>
+        ) : (
+          (() => {
+            const compactTime = formatRelativeTimeCompact(entry.lastModified);
+            if (!compactTime) return null;
+            return (
+              <span className="navigator-item-age">
+                {compactTime}
+              </span>
+            );
+          })()
+        )}
+        {isDepsFilterActive && !isHovering && (
           <button
             type="button"
-            className={`navigator-item-history-btn${isDepsFilterActive ? ' deps-active' : ''}`}
+            className="navigator-item-history-btn deps-active"
             onClick={handleDepsClick}
-            title={isDepsFilterActive ? 'Clear dependency filter' : 'Show dependencies'}
+            title="Clear dependency filter"
           >
             <Share2 size={12} />
-          </button>
-        )}
-        {isHovering && !entry.isLocal && entry.hasFile && (
-          <button
-            type="button"
-            className="navigator-item-history-btn"
-            onClick={handleHistoryClick}
-            title="Open historical version"
-            style={canShowHistory ? undefined : { visibility: 'hidden' }}
-          >
-            <AtSign size={13} />
           </button>
         )}
         {tabCount > 1 && (

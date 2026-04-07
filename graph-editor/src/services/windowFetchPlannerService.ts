@@ -206,7 +206,7 @@ class WindowFetchPlannerService {
     
     // Start session log operation
     const logOpId = sessionLogService.startOperation(
-      'info',
+      'debug',
       'data-fetch',
       'PLANNER_ANALYSIS',
       `Analysing fetch requirements for query`,
@@ -257,7 +257,7 @@ class WindowFetchPlannerService {
       const items = this.convertFetchPlanToPlannerItems(fetchPlan, graph);
       
       // Log plan diagnostics
-      sessionLogService.addChild(logOpId, 'info', 'FETCH_PLAN_BUILT',
+      sessionLogService.addChild(logOpId, 'debug', 'FETCH_PLAN_BUILT',
         `Plan built: ${planDiagnostics.itemsNeedingFetch} need fetch, ${planDiagnostics.itemsCovered} covered, ${planDiagnostics.itemsUnfetchable} unfetchable`,
         undefined,
         {
@@ -332,7 +332,7 @@ class WindowFetchPlannerService {
       }
 
       // Log summary
-      sessionLogService.addChild(logOpId, 'info', 'PLANNER_ITEMS',
+      sessionLogService.addChild(logOpId, 'debug', 'PLANNER_ITEMS',
         `Inspected ${items.length} items: ${autoAggregationItems.length - staleCandidates.length} covered, ${fetchPlanItems.length} need fetch, ${staleCandidates.length} stale, ${unfetchableGaps.length} file-only`,
         undefined,
         { itemCount: items.length, covered: autoAggregationItems.length - staleCandidates.length, needsFetch: fetchPlanItems.length, stale: staleCandidates.length, unfetchable: unfetchableGaps.length }
@@ -377,7 +377,7 @@ class WindowFetchPlannerService {
       }
       
       // DIAGNOSTIC: Detailed per-item coverage analysis
-      if (sessionLogService.getDiagnosticLoggingEnabled() && items.length > 0) {
+      if (sessionLogService.isLevelEnabled('debug') && items.length > 0) {
         try {
           this.logDetailedCoverageAnalysis(logOpId, items, window, dsl, graph);
         } catch (e) {

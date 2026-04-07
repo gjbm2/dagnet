@@ -44,9 +44,11 @@ type IssueCategory =
   | 'naming'           // Naming inconsistencies
   | 'metadata'         // Metadata issues
   | 'sync'             // Registry vs file content mismatch
+  | 'operational'      // Operational health (retrieval staleness, Bayes quality)
   | 'image'            // Image file issues (missing, orphaned)
   | 'face-alignment'   // Handle/face validity, direction consistency, geometric plausibility
-  | 'hash-continuity'; // Snapshot hash mapping issues (stale signatures, missing mappings)
+  | 'hash-continuity'  // Snapshot hash mapping issues (stale signatures, missing mappings)
+  | 'snapshot-coverage'; // Snapshot DB coverage gaps (deep check — requires server)
 
 interface IntegrityIssue {
   fileId: string;
@@ -155,11 +157,13 @@ export class IntegrityCheckService {
    * @param tabOperations Tab operations for file access
    * @param createLog Whether to create a log entry
    * @param workspace Optional workspace filter (repository/branch) - if provided, only checks files from that workspace
+   * @param deep When true, runs snapshot DB checks (requires Python server). False for auto-debounced checks.
    */
   static async checkIntegrity(
     tabOperations: TabOperations,
     createLog: boolean = true,
-    workspace?: { repository: string; branch: string }
+    workspace?: { repository: string; branch: string },
+    deep: boolean = false,
   ): Promise<IntegrityResult> {
     const issues: IntegrityIssue[] = [];
     const startTime = new Date();
@@ -479,6 +483,14 @@ export class IntegrityCheckService {
       await this.validateHashContinuity(graphFiles, allFiles, issues);
 
       // ═══════════════════════════════════════════════════════════════════════
+      // PHASE 10: Snapshot DB Coverage (deep only — requires Python server)
+      // ═══════════════════════════════════════════════════════════════════════
+
+      if (deep) {
+        await this.validateSnapshotCoverage(graphFiles, allFiles, issues, workspace);
+      }
+
+      // ═══════════════════════════════════════════════════════════════════════
       // Generate Results
       // ═══════════════════════════════════════════════════════════════════════
       
@@ -500,7 +512,9 @@ export class IntegrityCheckService {
         'sync': 0,
         'image': 0,
         'face-alignment': 0,
-        'hash-continuity': 0
+        'hash-continuity': 0,
+        'snapshot-coverage': 0,
+        'operational': 0
       };
       
       for (const issue of issues) {
@@ -1108,7 +1122,202 @@ export class IntegrityCheckService {
         suggestion: 'Add a dataInterestsDSL (pinned query) so the runner knows which slices to fetch'
       });
     }
-    
+
+    if (data.runBayes && !data.dailyFetch) {
+      issues.push({
+        fileId: graphFileId,
+        type: 'graph',
+        severity: 'warning',
+        category: 'semantic',
+        field: 'runBayes',
+        message: 'Bayes is enabled but daily fetch is not — Bayes fits require daily fetch to be active',
+        suggestion: 'Enable dailyFetch or disable runBayes'
+      });
+    }
+
+    if (data.runBayes && !data.dataInterestsDSL?.trim()) {
+      issues.push({
+        fileId: graphFileId,
+        type: 'graph',
+        severity: 'warning',
+        category: 'semantic',
+        field: 'runBayes',
+        message: 'Bayes is enabled but no pinned data-interests DSL is set — the compiler needs snapshot subjects derived from the DSL',
+        suggestion: 'Add a dataInterestsDSL (pinned query) so the Bayes compiler can derive snapshot subjects'
+      });
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Operational Health: Retrieval Staleness (doc 28 §10.5)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    if (data.dailyFetch) {
+      const retrievedAtMs = (data as any).metadata?.last_retrieve_all_slices_success_at_ms as number | undefined;
+      if (!retrievedAtMs) {
+        issues.push({
+          fileId: graphFileId,
+          type: 'graph',
+          severity: 'info',
+          category: 'operational',
+          field: 'metadata.last_retrieve_all_slices_success_at_ms',
+          message: 'Daily fetch enabled but no successful retrieval recorded',
+        });
+      } else {
+        const ageMs = Date.now() - retrievedAtMs;
+        const ageDays = ageMs / (1000 * 60 * 60 * 24);
+        if (ageDays > 7) {
+          issues.push({
+            fileId: graphFileId,
+            type: 'graph',
+            severity: 'error',
+            category: 'operational',
+            field: 'metadata.last_retrieve_all_slices_success_at_ms',
+            message: `Last successful retrieval was ${Math.round(ageDays)} days ago — data is likely stale`,
+          });
+        } else if (ageDays > 2) {
+          issues.push({
+            fileId: graphFileId,
+            type: 'graph',
+            severity: 'warning',
+            category: 'operational',
+            field: 'metadata.last_retrieve_all_slices_success_at_ms',
+            message: `Last successful retrieval was ${Math.round(ageDays)} days ago`,
+          });
+        }
+      }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Operational Health: Bayes Quality (doc 28 §10.5)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    if (data.runBayes) {
+      const bayes = (data as any)._bayes as { fitted_at?: string; quality?: { max_rhat?: number | null; min_ess?: number | null; converged_pct?: number } } | undefined;
+
+      if (!bayes) {
+        issues.push({
+          fileId: graphFileId,
+          type: 'graph',
+          severity: 'info',
+          category: 'operational',
+          field: '_bayes',
+          message: 'Bayes enabled but no fit has been run',
+        });
+      } else {
+        // Fitted_at age check
+        if (bayes.fitted_at) {
+          try {
+            const fittedDate = new Date(bayes.fitted_at);
+            const ageDays = (Date.now() - fittedDate.getTime()) / (1000 * 60 * 60 * 24);
+            if (ageDays > 7) {
+              issues.push({
+                fileId: graphFileId,
+                type: 'graph',
+                severity: 'warning',
+                category: 'operational',
+                field: '_bayes.fitted_at',
+                message: `Last Bayes fit was ${Math.round(ageDays)} days ago`,
+              });
+            }
+          } catch { /* parse failure — skip */ }
+        }
+
+        // Graph-level quality checks
+        if (bayes.quality) {
+          if (bayes.quality.max_rhat != null && bayes.quality.max_rhat > 1.1) {
+            issues.push({
+              fileId: graphFileId,
+              type: 'graph',
+              severity: 'warning',
+              category: 'operational',
+              field: '_bayes.quality.max_rhat',
+              message: `Last fit has convergence issues (max rhat ${bayes.quality.max_rhat.toFixed(3)})`,
+            });
+          }
+          if (bayes.quality.min_ess != null && bayes.quality.min_ess < 100) {
+            issues.push({
+              fileId: graphFileId,
+              type: 'graph',
+              severity: 'warning',
+              category: 'operational',
+              field: '_bayes.quality.min_ess',
+              message: `Last fit has low effective sample size (min ESS ${Math.round(bayes.quality.min_ess)})`,
+            });
+          }
+          if (bayes.quality.converged_pct != null && bayes.quality.converged_pct < 100) {
+            issues.push({
+              fileId: graphFileId,
+              type: 'graph',
+              severity: 'warning',
+              category: 'operational',
+              field: '_bayes.quality.converged_pct',
+              message: `Only ${bayes.quality.converged_pct.toFixed(0)}% of edges converged`,
+            });
+          }
+        }
+      }
+
+      // Cross-signal: stale retrieval + fresh posteriors (doc 28 §10.5)
+      const retrievedAtMs = (data as any).metadata?.last_retrieve_all_slices_success_at_ms as number | undefined;
+      const bayes2 = (data as any)._bayes as { fitted_at?: string } | undefined;
+      if (retrievedAtMs && bayes2?.fitted_at) {
+        try {
+          const retrievalAgeDays = (Date.now() - retrievedAtMs) / (1000 * 60 * 60 * 24);
+          const fittedDate = new Date(bayes2.fitted_at);
+          const bayesAgeDays = (Date.now() - fittedDate.getTime()) / (1000 * 60 * 60 * 24);
+          if (retrievalAgeDays > 2 && bayesAgeDays < 2) {
+            issues.push({
+              fileId: graphFileId,
+              type: 'graph',
+              severity: 'warning',
+              category: 'operational',
+              field: '_bayes.fitted_at',
+              message: 'Bayes posteriors are recent but fitted on stale data — retrieval may have failed',
+            });
+          }
+        } catch { /* parse failure — skip */ }
+      }
+
+      // Per-edge quality checks
+      for (const edge of edges) {
+        const posterior = (edge as any).p?.posterior;
+        if (!posterior) continue;
+
+        const edgeLabel = (edge as any).p?.id || edge.id || 'unknown';
+
+        if (posterior.rhat != null && posterior.rhat > 1.1) {
+          issues.push({
+            fileId: graphFileId,
+            type: 'graph',
+            severity: 'warning',
+            category: 'operational',
+            field: `edge.${edgeLabel}.posterior.rhat`,
+            message: `Edge ${edgeLabel}: convergence issue (rhat ${posterior.rhat.toFixed(3)})`,
+          });
+        }
+        if (posterior.ess != null && posterior.ess < 100) {
+          issues.push({
+            fileId: graphFileId,
+            type: 'graph',
+            severity: 'warning',
+            category: 'operational',
+            field: `edge.${edgeLabel}.posterior.ess`,
+            message: `Edge ${edgeLabel}: low ESS (${Math.round(posterior.ess)})`,
+          });
+        }
+        if (posterior.divergences != null && posterior.divergences > 0) {
+          issues.push({
+            fileId: graphFileId,
+            type: 'graph',
+            severity: 'warning',
+            category: 'operational',
+            field: `edge.${edgeLabel}.posterior.divergences`,
+            message: `Edge ${edgeLabel}: ${posterior.divergences} divergent transitions`,
+          });
+        }
+      }
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
     // Node Validation
     // ─────────────────────────────────────────────────────────────────────────
@@ -3429,6 +3638,138 @@ export class IntegrityCheckService {
   }
 
   /**
+   * PHASE 10: Validate snapshot DB coverage for each fetchable edge.
+   *
+   * For each edge, computes all plausible hashes (current + epoch variants +
+   * equivalence closures) and queries the snapshot DB in one batched call.
+   * Reports edges with zero coverage as warnings.
+   *
+   * Only runs when deep=true (manual "Check Integrity" or explicit request).
+   * Requires the Python server to be running.
+   */
+  private static async validateSnapshotCoverage(
+    graphFiles: any[],
+    allFiles: any[],
+    issues: IntegrityIssue[],
+    workspace?: { repository: string; branch: string },
+  ): Promise<void> {
+    try {
+      const { computePlausibleSignaturesForEdge } = await import('./snapshotRetrievalsService');
+      const { getBatchRetrievals } = await import('./snapshotWriteService');
+      const { getClosureSet, getMappings } = await import('./hashMappingsService');
+
+      const mappings = getMappings();
+
+      // Build batch subjects: one per fetchable edge across all graphs
+      const subjects: Array<{
+        param_id: string;
+        hash_groups: Array<{ core_hash: string; equivalent_hashes?: Array<{ core_hash: string; operation: string; weight: number }> }>;
+      }> = [];
+      const subjectMeta: Array<{ graphName: string; graphFileId: string; edgeQuery: string; paramId: string }> = [];
+
+      for (const graphFile of graphFiles) {
+        const graph = graphFile.data;
+        if (!graph?.edges) continue;
+
+        const graphName = graph.metadata?.name || graphFile.fileId;
+        const effectiveDSL = graph.dataInterestsDSL || '';
+
+        for (const edge of graph.edges) {
+          if (!edge.query || !edge.p?.id) continue;
+
+          // Check both nodes have events (fetchable edge)
+          const fromNode = graph.nodes?.find((n: any) => n.uuid === edge.from);
+          const toNode = graph.nodes?.find((n: any) => n.uuid === edge.to);
+          if (!fromNode?.event_id || !toNode?.event_id) continue;
+
+          try {
+            const sigs = await computePlausibleSignaturesForEdge({
+              graph,
+              edgeId: edge.uuid || edge.id,
+              effectiveDSL,
+              workspace,
+            });
+
+            if (sigs.length === 0) continue;
+
+            // Build hash_groups from plausible signatures + equivalence closures
+            const hashGroups = sigs.map(sig => {
+              const closure = getClosureSet(sig.coreHash, mappings);
+              return {
+                core_hash: sig.coreHash,
+                ...(closure.length > 0 ? { equivalent_hashes: closure } : {}),
+              };
+            });
+
+            subjects.push({
+              param_id: sigs[0].dbParamId || sigs[0].paramId,
+              hash_groups: hashGroups,
+            });
+            subjectMeta.push({
+              graphName,
+              graphFileId: graphFile.fileId,
+              edgeQuery: edge.query,
+              paramId: edge.p.id,
+            });
+          } catch {
+            // Skip edges where signature computation fails
+          }
+        }
+      }
+
+      if (subjects.length === 0) return;
+
+      // Single batched DB call for all edges
+      const results = await getBatchRetrievals(subjects as any, 1);
+
+      for (let i = 0; i < results.length; i++) {
+        const result = results[i];
+        const meta = subjectMeta[i];
+        if (!meta) continue;
+
+        if (!result.success) {
+          issues.push({
+            fileId: `parameter-${meta.paramId}`,
+            type: 'parameter' as ObjectType,
+            severity: 'warning',
+            category: 'snapshot-coverage',
+            message: `Snapshot DB query failed: ${result.error || 'unknown'}`,
+            details: `Graph: ${meta.graphName}, edge: ${meta.edgeQuery}`,
+            suggestion: 'Check Python server connectivity',
+          });
+          continue;
+        }
+
+        if (result.count === 0) {
+          issues.push({
+            fileId: `parameter-${meta.paramId}`,
+            type: 'parameter' as ObjectType,
+            severity: 'warning',
+            category: 'snapshot-coverage',
+            message: `No snapshots found in DB under any plausible hash`,
+            field: 'query_signature',
+            details: `Graph: ${meta.graphName}, edge: ${meta.edgeQuery}. Checked ${subjects[i].hash_groups.length} hash group(s) including equivalence closures.`,
+            suggestion: 'Run a data fetch (Retrieve All or @ menu) to populate snapshot data, or check that hash mappings bridge any definition changes',
+          });
+        }
+      }
+    } catch (err: any) {
+      // Non-fatal — snapshot coverage is advisory and requires server
+      if (err?.message?.includes('fetch') || err?.message?.includes('ECONNREFUSED')) {
+        issues.push({
+          fileId: 'system',
+          type: 'system',
+          severity: 'info',
+          category: 'snapshot-coverage',
+          message: 'Snapshot DB coverage check skipped — Python server not available',
+        });
+      } else {
+        console.warn('[IntegrityCheck] Snapshot coverage check failed:', err);
+      }
+    }
+  }
+
+  /**
    * Validate images referenced by nodes and detect orphan images
    */
   private static async validateImages(
@@ -3827,7 +4168,9 @@ export class IntegrityCheckService {
       'sync': '🔄',
       'image': '🖼️',
       'face-alignment': '🧭',
-      'hash-continuity': '🔑'
+      'hash-continuity': '🔑',
+      'snapshot-coverage': '📡',
+      'operational': '⏱️'
     };
     return icons[category] || '•';
   }

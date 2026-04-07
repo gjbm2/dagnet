@@ -136,6 +136,10 @@ class handler(BaseHTTPRequestHandler):
                     path = '/api/sigs/list'
                 elif endpoint == 'sigs-get':
                     path = '/api/sigs/get'
+                elif endpoint == 'cache-clear':
+                    path = '/api/cache/clear'
+                elif endpoint == 'cache-stats':
+                    path = '/api/cache/stats'
                 elif endpoint == 'lag-recompute-models':
                     path = '/api/lag/recompute-models'
                 elif endpoint == 'lag-topo-pass':
@@ -181,6 +185,10 @@ class handler(BaseHTTPRequestHandler):
                 self.handle_sigs_list(data)
             elif path == '/api/sigs/get':
                 self.handle_sigs_get(data)
+            elif path == '/api/cache/clear':
+                self.handle_cache_clear(data)
+            elif path == '/api/cache/stats':
+                self.handle_cache_stats(data)
             elif path == '/api/lag/recompute-models':
                 self.handle_lag_recompute_models(data)
             elif path == '/api/lag-recompute-models':
@@ -389,6 +397,24 @@ class handler(BaseHTTPRequestHandler):
             self.send_success_response(response)
         except ValueError as e:
             self.send_error_response(400, str(e))
+        except Exception as e:
+            self.send_error_response(500, str(e))
+
+    def handle_cache_clear(self, data):
+        """Handle cache/clear endpoint - clear snapshot result cache."""
+        try:
+            from api_handlers import handle_cache_clear as handler_func
+            response = handler_func(data)
+            self.send_success_response(response)
+        except Exception as e:
+            self.send_error_response(500, str(e))
+
+    def handle_cache_stats(self, data):
+        """Handle cache/stats endpoint - return cache statistics."""
+        try:
+            from api_handlers import handle_cache_stats as handler_func
+            response = handler_func(data)
+            self.send_success_response(response)
         except Exception as e:
             self.send_error_response(500, str(e))
 

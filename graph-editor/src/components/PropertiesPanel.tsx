@@ -2078,7 +2078,13 @@ export default function PropertiesPanel({
                 <input
                   type="checkbox"
                   checked={graph?.dailyFetch === true}
-                  onChange={(e) => updateGraph(['dailyFetch'], e.target.checked || undefined)}
+                  onChange={(e) => {
+                    const checked = e.target.checked;
+                    updateGraph(['dailyFetch'], checked || undefined);
+                    if (!checked && graph?.runBayes) {
+                      updateGraph(['runBayes'], undefined);
+                    }
+                  }}
                   id="dailyFetch"
                   style={{ margin: 0 }}
                 />
@@ -2089,6 +2095,32 @@ export default function PropertiesPanel({
               <div style={{ fontSize: '11px', color: '#6B7280', marginTop: '4px', paddingLeft: '4px' }}>
                 When enabled, this graph is included in unattended daily runs via <code>?retrieveall</code>.
               </div>
+              <div className="property-section" style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '8px', paddingLeft: '20px' }}>
+                <input
+                  type="checkbox"
+                  checked={graph?.runBayes === true}
+                  onChange={(e) => {
+                    const checked = e.target.checked;
+                    updateGraph(['runBayes'], checked || undefined);
+                  }}
+                  id="runBayes"
+                  disabled={!graph?.dailyFetch}
+                  style={{ margin: 0 }}
+                />
+                <label
+                  htmlFor="runBayes"
+                  className="property-label"
+                  style={{ marginBottom: 0, cursor: graph?.dailyFetch ? 'pointer' : 'default', opacity: graph?.dailyFetch ? 1 : 0.5 }}
+                  title={!graph?.dailyFetch ? 'Enable daily fetch first' : undefined}
+                >
+                  Run Bayes fit
+                </label>
+              </div>
+              {!graph?.dailyFetch && (
+                <div style={{ fontSize: '11px', color: '#9CA3AF', marginTop: '2px', paddingLeft: '24px' }}>
+                  Enable daily fetch first
+                </div>
+              )}
               {graph?.dailyFetch && !graph?.dataInterestsDSL?.trim() && (
                 <div style={{
                   marginTop: '8px',
@@ -2101,6 +2133,20 @@ export default function PropertiesPanel({
                   lineHeight: '1.4',
                 }}>
                   ⚠️ No pinned data-interests DSL is set. The nightly runner will include this graph but <strong>skip the retrieve step</strong>. Set a DSL above or via the Pinned Query modal.
+                </div>
+              )}
+              {graph?.runBayes && !graph?.dataInterestsDSL?.trim() && (
+                <div style={{
+                  marginTop: '8px',
+                  padding: '8px 10px',
+                  background: '#FEF3C7',
+                  border: '1px solid #FDE047',
+                  borderRadius: '4px',
+                  fontSize: '11px',
+                  color: '#854D0E',
+                  lineHeight: '1.4',
+                }}>
+                  ⚠️ Bayes is enabled but no pinned query is set — the compiler needs snapshot subjects derived from the DSL.
                 </div>
               )}
             </CollapsibleSection>

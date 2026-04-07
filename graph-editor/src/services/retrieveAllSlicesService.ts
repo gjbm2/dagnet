@@ -382,7 +382,7 @@ class RetrieveAllSlicesService {
           const summary = summarisePlan(fetchPlan);
           sessionLogService.addChild(
             logOpId,
-            'info',
+            'debug',
             'FETCH_PLAN_BUILT',
             `Plan built for slice: ${summary.fetchItems} fetch, ${summary.coveredItems} covered, ${summary.unfetchableItems} unfetchable`,
             this.formatFetchPlanTable(fetchPlan),
@@ -403,7 +403,7 @@ class RetrieveAllSlicesService {
         if (checkDbCoverageFirst && workspace) {
           try {
             sessionLogService.addChild(
-              logOpId, 'info', 'DB_COVERAGE_PREFLIGHT_START',
+              logOpId, 'debug', 'DB_COVERAGE_PREFLIGHT_START',
               `DB coverage preflight: ${fetchPlan.items.filter(i => i.type === 'parameter').length} subjects`,
               undefined,
               { sliceDSL, anchor_from: window.start, anchor_to: window.end }
@@ -458,20 +458,13 @@ class RetrieveAllSlicesService {
 
             if (coverageSubjects.length > 0) {
               const coverageResults = await batchAnchorCoverage(coverageSubjects, {
-                diagnostic: sessionLogService.getDiagnosticLoggingEnabled() === true,
+                diagnostic: sessionLogService.isLevelEnabled('trace'),
               });
-              const diagnosticOn = sessionLogService.getDiagnosticLoggingEnabled() === true;
-
-              if (diagnosticOn) {
-                // Mirror the Amplitude/DAS diagnostic approach: record full request/response shape.
-                const maxSubjectsToDump = 200;
-                const requestDump = coverageSubjects.length <= maxSubjectsToDump
-                  ? coverageSubjects
-                  : coverageSubjects.slice(0, maxSubjectsToDump);
-
+              // Debug-level: preflight shape and detail summary
+              if (sessionLogService.isLevelEnabled('debug')) {
                 sessionLogService.addChild(
                   logOpId,
-                  'info',
+                  'debug',
                   'DB_COVERAGE_PREFLIGHT_SHAPE',
                   'DB preflight shape (how subjects were built)',
                   [
@@ -498,53 +491,6 @@ class RetrieveAllSlicesService {
                     skippedNonParameter,
                     skippedNoSignature,
                     skippedHashFail,
-                  } as any
-                );
-
-                sessionLogService.addChild(
-                  logOpId,
-                  'info',
-                  'DB_COVERAGE_PREFLIGHT_REQUEST',
-                  `DB preflight request payload (${Math.min(coverageSubjects.length, maxSubjectsToDump)}/${coverageSubjects.length})`,
-                  JSON.stringify(
-                    {
-                      diagnostic: true,
-                      subjects: requestDump,
-                      truncated: coverageSubjects.length > maxSubjectsToDump,
-                      maxSubjectsToDump,
-                    },
-                    null,
-                    2
-                  ),
-                  {
-                    sliceDSL,
-                    subjects: coverageSubjects.length,
-                    truncated: coverageSubjects.length > maxSubjectsToDump,
-                    maxSubjectsToDump,
-                  } as any
-                );
-
-                sessionLogService.addChild(
-                  logOpId,
-                  'info',
-                  'DB_COVERAGE_PREFLIGHT_RESPONSE',
-                  `DB preflight response payload (${Math.min(coverageResults.length, maxSubjectsToDump)}/${coverageResults.length})`,
-                  JSON.stringify(
-                    {
-                      results: coverageResults.length <= maxSubjectsToDump
-                        ? coverageResults
-                        : coverageResults.slice(0, maxSubjectsToDump),
-                      truncated: coverageResults.length > maxSubjectsToDump,
-                      maxSubjectsToDump,
-                    },
-                    null,
-                    2
-                  ),
-                  {
-                    sliceDSL,
-                    results: coverageResults.length,
-                    truncated: coverageResults.length > maxSubjectsToDump,
-                    maxSubjectsToDump,
                   } as any
                 );
 
@@ -585,7 +531,7 @@ class RetrieveAllSlicesService {
 
                 sessionLogService.addChild(
                   logOpId,
-                  'info',
+                  'debug',
                   'DB_COVERAGE_PREFLIGHT_DETAIL',
                   `DB preflight detail (${Math.min(coverageResults.length, maxRows)}/${coverageResults.length})`,
                   [
@@ -606,6 +552,61 @@ class RetrieveAllSlicesService {
                 );
               }
 
+              // Trace-level: full request/response payloads (gated to avoid allocation cost)
+              if (sessionLogService.isLevelEnabled('trace')) {
+                const maxSubjectsToDump = 200;
+                const requestDump = coverageSubjects.length <= maxSubjectsToDump
+                  ? coverageSubjects
+                  : coverageSubjects.slice(0, maxSubjectsToDump);
+
+                sessionLogService.addChild(
+                  logOpId,
+                  'trace',
+                  'DB_COVERAGE_PREFLIGHT_REQUEST',
+                  `DB preflight request payload (${Math.min(coverageSubjects.length, maxSubjectsToDump)}/${coverageSubjects.length})`,
+                  JSON.stringify(
+                    {
+                      diagnostic: true,
+                      subjects: requestDump,
+                      truncated: coverageSubjects.length > maxSubjectsToDump,
+                      maxSubjectsToDump,
+                    },
+                    null,
+                    2
+                  ),
+                  {
+                    sliceDSL,
+                    subjects: coverageSubjects.length,
+                    truncated: coverageSubjects.length > maxSubjectsToDump,
+                    maxSubjectsToDump,
+                  } as any
+                );
+
+                sessionLogService.addChild(
+                  logOpId,
+                  'trace',
+                  'DB_COVERAGE_PREFLIGHT_RESPONSE',
+                  `DB preflight response payload (${Math.min(coverageResults.length, maxSubjectsToDump)}/${coverageResults.length})`,
+                  JSON.stringify(
+                    {
+                      results: coverageResults.length <= maxSubjectsToDump
+                        ? coverageResults
+                        : coverageResults.slice(0, maxSubjectsToDump),
+                      truncated: coverageResults.length > maxSubjectsToDump,
+                      maxSubjectsToDump,
+                    },
+                    null,
+                    2
+                  ),
+                  {
+                    sliceDSL,
+                    results: coverageResults.length,
+                    truncated: coverageResults.length > maxSubjectsToDump,
+                    maxSubjectsToDump,
+                  } as any
+                );
+              }
+
               let widenedCount = 0;
               let totalDbMissingDays = 0;
 
@@ -615,10 +616,10 @@ class RetrieveAllSlicesService {
                 const planItem = fetchPlan.items[itemIdx];
                 const noop = cr.coverage_ok || !cr.missing_anchor_ranges || cr.missing_anchor_ranges.length === 0;
 
-                if (diagnosticOn) {
+                if (sessionLogService.isLevelEnabled('trace')) {
                   sessionLogService.addChild(
                     logOpId,
-                    noop ? 'success' : 'info',
+                    'trace',
                     noop ? 'DB_COVERAGE_ITEM_NOOP' : 'DB_COVERAGE_ITEM_MISSING',
                     `${planItem.itemKey}: ${noop ? 'coverage ok (no plan change)' : 'missing ranges (will widen plan)'}`,
                     JSON.stringify(
@@ -663,7 +664,7 @@ class RetrieveAllSlicesService {
                 totalDbMissingDays += dbWindows.reduce((sum, w) => sum + w.dayCount, 0);
 
                 sessionLogService.addChild(
-                  logOpId, 'info', 'DB_COVERAGE_ITEM_WIDENED',
+                  logOpId, 'debug', 'DB_COVERAGE_ITEM_WIDENED',
                   `${planItem.itemKey}: +${dbWindows.length} DB-missing window(s), ${dbWindows.reduce((s, w) => s + w.dayCount, 0)} days`,
                   undefined,
                   {
@@ -678,10 +679,10 @@ class RetrieveAllSlicesService {
                   } as any
                 );
 
-                if (diagnosticOn) {
+                if (sessionLogService.isLevelEnabled('trace')) {
                   sessionLogService.addChild(
                     logOpId,
-                    'info',
+                    'trace',
                     'DB_COVERAGE_ITEM_AFTER',
                     `${planItem.itemKey}: plan updated from DB coverage`,
                     JSON.stringify(
@@ -701,7 +702,7 @@ class RetrieveAllSlicesService {
 
               sessionLogService.addChild(
                 logOpId,
-                widenedCount > 0 ? 'info' : 'success',
+                widenedCount > 0 ? 'debug' : 'debug',
                 'DB_COVERAGE_PREFLIGHT_RESULT',
                 widenedCount > 0
                   ? `DB preflight: ${widenedCount} item(s) widened, ${totalDbMissingDays} DB-missing days added`
@@ -817,11 +818,11 @@ class RetrieveAllSlicesService {
                 classificationExecuted: 'unfetchable',
                 plannedWindows: planItem.windows.map(w => ({ ...w })),
               });
-              // Diagnostic-only info logging for event_id skip reasons
-              if (sessionLogService.getDiagnosticLoggingEnabled() && planItem.unfetchableReason) {
+              // Per-item skip reason logging (debug level)
+              if (sessionLogService.isLevelEnabled('debug') && planItem.unfetchableReason) {
                 const reason = planItem.unfetchableReason;
                 if (reason === 'no_event_ids' || reason === 'partial_event_ids') {
-                  sessionLogService.addChild(logOpId, 'info', 'SKIP_NO_EVENT_ID',
+                  sessionLogService.addChild(logOpId, 'debug', 'SKIP_NO_EVENT_ID',
                     `Skipped ${planItem.itemKey}: ${reason}`,
                     undefined,
                     { itemKey: planItem.itemKey, reason } as any
@@ -1043,7 +1044,7 @@ class RetrieveAllSlicesService {
         try {
           sessionLogService.addChild(
             logOpId,
-            sliceErrors > 0 ? 'warning' : 'success',
+            sliceErrors > 0 ? 'warning' : 'debug',
             'WHAT_WE_DID',
             `Slice "${sliceDSL}": processed=${fetchPlan.items.length}, cached=${sliceCached}, fetched=${sliceFetched}, unfetchable=${sliceUnfetchable}, daysFetched=${sliceDaysFetched}, errors=${sliceErrors}`,
             this.formatExecutionTable({ sliceDSL, plan: fetchPlan, rows: executionRows }),
@@ -1056,7 +1057,6 @@ class RetrieveAllSlicesService {
               daysFetched: sliceDaysFetched,
               errors: sliceErrors,
               planSummary: summarisePlan(fetchPlan),
-              rows: executionRows,
             } as any
           );
         } catch {
@@ -1065,7 +1065,7 @@ class RetrieveAllSlicesService {
 
         sessionLogService.addChild(
           logOpId,
-          sliceErrors > 0 ? 'warning' : 'success',
+          sliceErrors > 0 ? 'warning' : 'info',
           'SLICE_COMPLETE',
           `Slice "${sliceDSL}": ${sliceCached} cached, ${sliceFetched} fetched (${sliceDaysFetched}d), ${sliceErrors} errors`,
           undefined,

@@ -744,11 +744,19 @@ export async function getBatchRetrievalDays(
 // Batch Retrievals — signature-filtered retrieved_days for N subjects in one call
 // =============================================================================
 
+export interface HashGroup {
+  core_hash: string;
+  equivalent_hashes?: ClosureEntry[];
+}
+
 export interface BatchRetrievalsSubject {
   param_id: string;
-  core_hash: string;
+  /** Single hash (backward-compatible). Ignored if hash_groups is provided. */
+  core_hash?: string;
   slice_keys?: string[];
   equivalent_hashes?: ClosureEntry[];
+  /** Multiple plausible hashes collapsed into one subject (epoch-spanning queries). */
+  hash_groups?: HashGroup[];
 }
 
 export interface BatchRetrievalsResult {

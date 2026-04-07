@@ -58,6 +58,17 @@ export function formatRelativeTime(timestamp: string | number | Date | null | un
 }
 
 /**
+ * Compact relative time — no "ago" suffix.
+ * Returns e.g. "3h", "4d", "2mo", or null if unparseable.
+ */
+export function formatRelativeTimeCompact(timestamp: string | number | Date | null | undefined): string | null {
+  const full = formatRelativeTime(timestamp);
+  if (!full) return null;
+  if (full === 'just now') return 'now';
+  return full.replace(' ago', '');
+}
+
+/**
  * Parse UK date format "d-MMM-yy" (e.g. "18-Mar-26") to epoch ms.
  * Returns NaN on failure.
  */

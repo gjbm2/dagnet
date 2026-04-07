@@ -92,6 +92,26 @@ Clearing layer 1 is useless unless you also handle layers 2-4. UpdateManager map
 
 **Fix**: check `file.isInitializing` in the debugger. Verify `completeInitialization(fileId)` is scheduled and fires. See FILE_REGISTRY_LIFECYCLE.md.
 
+## Anti-pattern 11: Computing signatures from graph config instead of stored state
+
+**Signature**: a read-path surface (@ menu, planner, coverage UI) computes a signature independently and gets a different hash from what the write path (data fetch) stored. The surface shows "no data" despite data existing in the DB.
+
+**Root cause**: the read path derives context keys from graph-level config (e.g., `dataInterestsDSL`) rather than examining what slices were actually stored in parameter files. The graph config may include ALL context dimensions (e.g., 3 MECE keys), while each individual fetch used just ONE context key per slice. Different context keys → different context definition hashes → different signature → different `core_hash` → no match in DB.
+
+**Fix**: read paths must derive context keys from the **stored slice topology** (`parameterFile.data.values[].sliceDSL`), not from `dataInterestsDSL` or any other graph-level config. Enumerate all plausible context key-sets from stored slices, compute a signature for each, and query the DB with all of them. See `enumeratePlausibleContextKeySets` in `snapshotRetrievalsService.ts`.
+
+**Example**: the @ menu showed no snapshots for `li-cohort-segmentation-v2` because `resolveContextKeys` fell back to `dataInterestsDSL` (3 context keys) while fetches stored snapshots under single-key signatures. Fixed by replacing the fallback with slice-topology-based enumeration.
+
+## Anti-pattern 12: Unprefixed IDB key in file lookups
+
+**Signature**: a function loads a file from `db.files.get(fileId)` using the FileRegistry-style unprefixed key (e.g., `event-myEvent`), but IDB stores files under workspace-prefixed keys (e.g., `nous-conversion-main-event-myEvent`). The lookup silently returns nothing.
+
+**Root cause**: the FileRegistry uses unprefixed file IDs, but IDB uses `${repository}-${branch}-${fileId}` as the primary key. A direct `db.files.get(unprefixedId)` will never find a workspace-loaded file.
+
+**Fix**: use `fileRegistry.restoreFile(fileId, workspaceScope)` which handles both unprefixed and prefixed key lookups. See `plannerQuerySignatureService.ts:152-168` for the correct pattern.
+
+**Example**: `loadEventDefinition` in `snapshotRetrievalsService.ts` had `db.files.get(fileId)` as its IDB fallback — this always failed silently, causing event definitions to be missing from signature computation.
+
 ## When to add to this document
 
 After completing a multi-attempt fix, check: does my bug match a generalisable pattern? If so, add it here following the format: Signature (how to recognise it), Root cause (why it happens), Fix (what to do), Example (optional, specific instance).

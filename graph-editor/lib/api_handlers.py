@@ -1030,6 +1030,11 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
             return
 
         tail_days = int(math.ceil(float(t95_model) + onset))
+        # Honour user-requested tau_extent: extend tail if the user asked
+        # for more days than the model's t95 would naturally produce.
+        tau_extent = args.get('tau_extent')
+        if isinstance(tau_extent, (int, float)) and tau_extent > 0 and tau_extent > tail_days:
+            tail_days = int(math.ceil(tau_extent))
         if tail_days <= 0:
             return
 
@@ -1452,6 +1457,14 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                                 retrieved_at_override=snapshot_date,
                             )
                     # Phase 2: append synthetic future frames (forecast-only tail).
+                    # Parse tau_extent from display_settings (user-requested axis extent).
+                    _te_raw = (data.get('display_settings') or {}).get('tau_extent')
+                    _te_val = None
+                    if _te_raw and str(_te_raw) not in ('auto', 'Auto'):
+                        try:
+                            _te_val = float(_te_raw)
+                        except (ValueError, TypeError):
+                            pass
                     _append_synthetic_cohort_maturity_frames({
                         'result': result,
                         'mu': mu,
@@ -1459,6 +1472,7 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                         'onset_delta_days': onset,
                         'forecast_mean': fm,
                         'anchor_to': subj.get('anchor_to'),
+                        'tau_extent': _te_val,
                     })
                 elif analysis_type == 'daily_conversions' and 'rate_by_cohort' in result:
                     result['rate_by_cohort'] = annotate_rows(
@@ -1530,7 +1544,16 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                     edge_t95_val = model_params.get('t95')
                     path_t95_val = model_params.get('path_t95')
 
-                    candidates = [c for c in [sweep_span, edge_t95_val, path_t95_val] if c and c > 0]
+                    # Include user-requested tau_extent from display_settings
+                    _tau_extent_raw = (data.get('display_settings') or {}).get('tau_extent')
+                    _tau_extent = None
+                    if _tau_extent_raw and str(_tau_extent_raw) not in ('auto', 'Auto'):
+                        try:
+                            _tau_extent = float(_tau_extent_raw)
+                        except (ValueError, TypeError):
+                            pass
+
+                    candidates = [c for c in [sweep_span, edge_t95_val, path_t95_val, _tau_extent] if c and c > 0]
                     axis_tau_max = int(math.ceil(max(candidates))) if candidates else None
 
                     if axis_tau_max and axis_tau_max > 0:
@@ -2740,6 +2763,19 @@ def handle_sigs_get(data: Dict[str, Any]) -> Dict[str, Any]:
     if not core_hash:
         raise ValueError("Missing 'core_hash' field")
     return get_signature(param_id=param_id, core_hash=core_hash)
+
+
+def handle_cache_clear(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Clear the snapshot service result cache.  Returns pre-clear stats."""
+    from snapshot_service import cache_clear
+    stats = cache_clear()
+    return {"success": True, **stats}
+
+
+def handle_cache_stats(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Return current cache statistics (non-destructive)."""
+    from snapshot_service import cache_stats
+    return {"success": True, **cache_stats()}
 
 
 # REMOVED: handle_sigs_links_list, handle_sigs_links_create,

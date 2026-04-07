@@ -315,7 +315,7 @@ export async function getFromSourceDirect(options: {
     const parsedDSLForAsat = parseConstraints(effectiveDSL);
     
     if (parsedDSLForAsat.asat && objectType === 'parameter' && objectId) {
-      sessionLogService.addChild(logOpId, 'info', 'ASAT_FORK', 
+      sessionLogService.addChild(logOpId, 'debug', 'ASAT_FORK',
         `Detected asat(${parsedDSLForAsat.asat}) - routing to snapshot DB`,
         effectiveDSL,
         { asat: parsedDSLForAsat.asat });
@@ -404,7 +404,7 @@ export async function getFromSourceDirect(options: {
       const sliceKeys = extractSliceDimensions(effectiveDSL);
       const sliceKeyArray = sliceKeys ? [sliceKeys] : undefined; // Empty string = uncontexted
       
-      sessionLogService.addChild(logOpId, 'info', 'ASAT_QUERY', 
+      sessionLogService.addChild(logOpId, 'debug', 'ASAT_QUERY',
         `Querying virtual snapshot: ${anchorFromISO} to ${anchorToISO} as-at ${asatDateUK}`,
         undefined,
         { paramId, anchorFrom: anchorFromISO, anchorTo: anchorToISO, asAt: asAtISO, sliceKeys: sliceKeyArray });
@@ -425,7 +425,7 @@ export async function getFromSourceDirect(options: {
         return errorResult;
       }
       
-      sessionLogService.addChild(logOpId, 'info', 'ASAT_RESULT', 
+      sessionLogService.addChild(logOpId, 'debug', 'ASAT_RESULT',
         `Virtual snapshot returned ${virtualResult.count} rows`,
         undefined,
         { 
@@ -681,7 +681,7 @@ export async function getFromSourceDirect(options: {
     }
     
     // Log connection info
-    sessionLogService.addChild(logOpId, 'info', 'CONNECTION', 
+    sessionLogService.addChild(logOpId, 'debug', 'CONNECTION',
       `Using connection: ${connectionName}`,
       connectionString ? `Config: ${JSON.stringify(connectionString).substring(0, 100)}...` : undefined,
       { sourceType: connectionName });
@@ -814,11 +814,11 @@ export async function getFromSourceDirect(options: {
             const eventLoader = async (eventId: string) => {
               const fileId = `event-${eventId}`;
               const file = fileRegistry.getFile(fileId);
-              const diagnosticOn = sessionLogService.getDiagnosticLoggingEnabled();
-              
+              const diagnosticOn = sessionLogService.isLevelEnabled('debug');
+
               if (file && file.data) {
                 if (diagnosticOn) {
-                  sessionLogService.info('data-fetch', 'EVENT_LOADED', 
+                  sessionLogService.debug('data-fetch', 'EVENT_LOADED',
                     `Loaded event "${eventId}" for fetch`,
                     undefined,
                     {
@@ -998,7 +998,7 @@ export async function getFromSourceDirect(options: {
               : (queryPayload.start && queryPayload.end) 
                 ? `Window: ${normalizeDate(queryPayload.start)} to ${normalizeDate(queryPayload.end)}`
                 : 'default window';
-            sessionLogService.addChild(logOpId, 'info', 'QUERY_BUILT',
+            sessionLogService.addChild(logOpId, 'debug', 'QUERY_BUILT',
               `Query: ${queryDesc}`,
               `Window: ${windowDesc}${queryPayload.context_filters?.length ? `, Filters: ${queryPayload.context_filters.length}` : ''}`,
               { 
@@ -1019,10 +1019,10 @@ export async function getFromSourceDirect(options: {
             const eventLoader = async (eventId: string) => {
               const fileId = `event-${eventId}`;
               const file = fileRegistry.getFile(fileId);
-              const diagnosticOn = sessionLogService.getDiagnosticLoggingEnabled();
+              const diagnosticOn = sessionLogService.isLevelEnabled('debug');
               if (file && file.data) {
                 if (diagnosticOn) {
-                  sessionLogService.info('data-fetch', 'EVENT_LOADED', 
+                  sessionLogService.debug('data-fetch', 'EVENT_LOADED',
                     `Loaded event "${eventId}" for fetch (fallback path)`,
                     undefined,
                     {
@@ -1181,7 +1181,7 @@ export async function getFromSourceDirect(options: {
       
       if (fileQuery && typeof fileQuery === 'string' && fileQuery.trim()) {
         console.log('[DataOps] No graph available, using query from parameter file:', fileQuery);
-        sessionLogService.addChild(logOpId, 'info', 'QUERY_FROM_FILE',
+        sessionLogService.addChild(logOpId, 'debug', 'QUERY_FROM_FILE',
           'Using query from parameter file (no graph available)',
           `Query: ${fileQuery}`,
           { fileId: `parameter-${objectId}`, query: fileQuery });
@@ -1196,10 +1196,10 @@ export async function getFromSourceDirect(options: {
             const eventLoader = async (eventId: string) => {
               const fileId = `event-${eventId}`;
               const file = fileRegistry.getFile(fileId);
-              const diagnosticOn = sessionLogService.getDiagnosticLoggingEnabled();
+              const diagnosticOn = sessionLogService.isLevelEnabled('debug');
               if (file?.data) {
                 if (diagnosticOn) {
-                  sessionLogService.info('data-fetch', 'EVENT_LOADED', 
+                  sessionLogService.debug('data-fetch', 'EVENT_LOADED',
                     `Loaded event "${eventId}" for direct query`,
                     undefined,
                     {
@@ -1217,7 +1217,7 @@ export async function getFromSourceDirect(options: {
                 const dbFile: any = await db.files.get(fileId);
                 if (dbFile?.data) {
                   if (diagnosticOn) {
-                    sessionLogService.info('data-fetch', 'EVENT_LOADED',
+                    sessionLogService.debug('data-fetch', 'EVENT_LOADED',
                       `Loaded event "${eventId}" for direct query (IndexedDB fallback)`,
                       undefined,
                       {
@@ -1340,7 +1340,7 @@ export async function getFromSourceDirect(options: {
       
       if (nQueryHasExcludes && !nQueryIsAlreadyComposite && connectionName?.includes('amplitude')) {
         console.log('[DataOps:DUAL_QUERY:EXCLUDE] n_query has excludes, compiling to minus/plus for Amplitude');
-        sessionLogService.addChild(logOpId, 'info', 'N_QUERY_EXCLUDE_COMPILE_START',
+        sessionLogService.addChild(logOpId, 'debug', 'N_QUERY_EXCLUDE_COMPILE_START',
           'Compiling n_query exclude() to minus/plus for Amplitude',
           `Original n_query: ${nQueryString}`
         );
@@ -1348,7 +1348,7 @@ export async function getFromSourceDirect(options: {
           const nQueryCompileResult = await compileExcludeQuery(nQueryString, graph);
           if (nQueryCompileResult.wasCompiled && nQueryCompileResult.compiled !== nQueryString) {
             console.log('[DataOps:DUAL_QUERY:EXCLUDE] Compiled n_query:', nQueryCompileResult.compiled);
-            sessionLogService.addChild(logOpId, 'success', 'N_QUERY_EXCLUDE_COMPILE_SUCCESS',
+            sessionLogService.addChild(logOpId, 'debug', 'N_QUERY_EXCLUDE_COMPILE_SUCCESS',
               'n_query exclude compiled to minus/plus form',
               `Compiled: ${nQueryCompileResult.compiled}`
             );
@@ -1480,7 +1480,7 @@ export async function getFromSourceDirect(options: {
                 if (xId) {
                   nQueryEdgeData.query = `from(${xId}).to(${xId})`;
                   explicitNQueryWindowDenomUsesFromCount = true;
-                  sessionLogService.addChild(logOpId, 'info', 'N_QUERY_COHORT_SEGMENTATION',
+                  sessionLogService.addChild(logOpId, 'debug', 'N_QUERY_COHORT_SEGMENTATION',
                     `Cohort denominator: using segmentation endpoint for to(${xId})`,
                     `Rewrote n_query to from(${xId}).to(${xId}) to avoid anchor===X funnel bug`
                   );
@@ -1501,7 +1501,7 @@ export async function getFromSourceDirect(options: {
                   // switches endpoint/response parsing.
                   nQueryEdgeData.query = `from(${xId}).to(${xId})`;
                   explicitNQueryWindowDenomUsesFromCount = true;
-                  sessionLogService.addChild(logOpId, 'info', 'N_QUERY_WINDOW_SEGMENTATION',
+                  sessionLogService.addChild(logOpId, 'debug', 'N_QUERY_WINDOW_SEGMENTATION',
                     `Window denominator: using segmentation endpoint for to(${xId})`,
                     `Rewrote n_query to from(${xId}).to(${xId})`
                   );
@@ -1718,7 +1718,7 @@ export async function getFromSourceDirect(options: {
       }));
       sessionLogService.addChild(
         logOpId,
-        'info',
+        'debug',
         'FETCH_WINDOWS_OVERRIDDEN',
         `Executing ${actualFetchWindows.length} plan window(s) exactly (overrideFetchWindows)`,
         undefined,
@@ -1734,7 +1734,7 @@ export async function getFromSourceDirect(options: {
       if (actualFetchWindows.length !== beforeCount) {
         sessionLogService.addChild(
           logOpId,
-          'info',
+          'debug',
           'FETCH_WINDOWS_COALESCED',
           `Coalesced plan windows for execution: ${beforeCount} → ${actualFetchWindows.length}`,
           undefined,
@@ -1887,7 +1887,7 @@ export async function getFromSourceDirect(options: {
         });
         
         const effectiveHorizon = latencyConfig?.t95 ?? 30;
-        sessionLogService.addChild(logOpId, 'info', 'REFETCH_POLICY',
+        sessionLogService.addChild(logOpId, 'debug', 'REFETCH_POLICY',
           `Latency-aware policy: ${refetchPolicy.type}`,
           `Horizon: ${effectiveHorizon.toFixed(1)}d | Mode: ${isCohortQuery ? 'cohort' : 'window'}${refetchPolicy.matureCutoff ? ` | Cutoff: ${refetchPolicy.matureCutoff}` : ''}`,
           {
@@ -1919,7 +1919,7 @@ export async function getFromSourceDirect(options: {
           if (boundedCohortWindow) {
             fetchWindow = boundedCohortWindow;
             console.log('[DataOps:COHORT_HORIZON] Using pre-calculated bounded window from planner:', fetchWindow);
-            sessionLogService.addChild(logOpId, 'info', 'COHORT_HORIZON_PLANNER',
+            sessionLogService.addChild(logOpId, 'debug', 'COHORT_HORIZON_PLANNER',
               `Using planner-provided bounded window`,
               undefined,
               { boundedWindow: fetchWindow }
@@ -1928,7 +1928,7 @@ export async function getFromSourceDirect(options: {
           // 2. Skip bounding if explicitly requested (first-principles plan already computed correct windows)
           else if (skipCohortBounding) {
             console.log('[DataOps:COHORT_HORIZON] Skipping bounding: skipCohortBounding=true, using full window:', fetchWindow);
-            sessionLogService.addChild(logOpId, 'info', 'COHORT_HORIZON_SKIPPED',
+            sessionLogService.addChild(logOpId, 'debug', 'COHORT_HORIZON_SKIPPED',
               `Bounding skipped: using full requested window`,
               undefined,
               { window: fetchWindow, reason: 'skipCohortBounding flag set' }
@@ -2051,7 +2051,7 @@ export async function getFromSourceDirect(options: {
             if (momentMatchDebug) {
               sessionLogService.addChild(
                 logOpId,
-                'info',
+                'debug',
                 'COHORT_HORIZON_PATH_T95_ESTIMATE',
                 `path_t95 estimate (moment-matched, p=${(momentMatchDebug.percentile * 100).toFixed(1)}%) = ${momentMatchDebug.estimate.toFixed(2)}d`,
                 `A→X: median=${momentMatchDebug.anchorMedian.toFixed(2)}d mean=${momentMatchDebug.anchorMean.toFixed(2)}d (n=${momentMatchDebug.totalNForAnchor})\nX→Y: median=${momentMatchDebug.edgeMedian.toFixed(2)}d mean=${momentMatchDebug.edgeMean.toFixed(2)}d (k=${momentMatchDebug.totalKForEdge})\nfitOk: anchor=${momentMatchDebug.anchorFitOk ? 'yes' : 'no'} edge=${momentMatchDebug.edgeFitOk ? 'yes' : 'no'}`,
@@ -2086,7 +2086,7 @@ export async function getFromSourceDirect(options: {
                 source: horizonResult.t95Source,
               });
               
-              sessionLogService.addChild(logOpId, 'info', 'COHORT_HORIZON_BOUNDED',
+              sessionLogService.addChild(logOpId, 'debug', 'COHORT_HORIZON_BOUNDED',
                 `Cohort window bounded: ${horizonResult.daysTrimmed}d trimmed`,
                 horizonResult.summary,
                 {
@@ -2158,7 +2158,7 @@ export async function getFromSourceDirect(options: {
               valuesWithDaily = [];
               sessionLogService.addChild(
                 logOpId,
-                'info',
+                'debug',
                 'CACHE_SLICE_ISOLATION_MISS',
                 'Cache slice isolation refused implicit cross-slice use; treating as cache miss',
                 msg,
@@ -2302,8 +2302,8 @@ export async function getFromSourceDirect(options: {
                 : '')
           : '';
         
-        sessionLogService.addChild(logOpId, 
-          cacheStatus === 'CACHE_HIT' ? 'success' : 'info',
+        sessionLogService.addChild(logOpId,
+          'debug',
           cacheStatus,
           `Cache check for window ${windowDesc}`,
           `${cacheDetail}${sigInfo}${incrementalResult.fetchWindows.length > 0 ? `\n${gapDetails}` : ''}`,
@@ -2434,7 +2434,7 @@ export async function getFromSourceDirect(options: {
       // NOTE: Suppress signature warnings here too - user is explicitly fetching this edge
       
       // SESSION LOG: Using cached data, no API fetch
-      sessionLogService.addChild(logOpId, 'success', 'USING_CACHE',
+      sessionLogService.addChild(logOpId, 'debug', 'USING_CACHE',
         `Using cached data for ${entityLabel}`,
         `All ${requestedWindow ? Math.round((new Date(requestedWindow.end).getTime() - new Date(requestedWindow.start).getTime()) / (1000 * 60 * 60 * 24)) + 1 : '?'} days available from cache`,
         { source: 'cache', parameterId: objectId, targetId }
@@ -2525,7 +2525,7 @@ export async function getFromSourceDirect(options: {
     
     if (hasExcludes && !isAlreadyComposite && !supportsNativeExclude) {
       console.log('[DataOps:EXCLUDE] Query has excludes, provider does not support native exclude, compiling to minus/plus');
-      sessionLogService.addChild(logOpId, 'info', 'EXCLUDE_COMPILE_START',
+      sessionLogService.addChild(logOpId, 'debug', 'EXCLUDE_COMPILE_START',
         `Compiling exclude() to minus/plus for ${connectionName} (no native exclude support)`,
         `Original query: ${queryString}`
       );
@@ -2534,7 +2534,7 @@ export async function getFromSourceDirect(options: {
         const compileResult = await compileExcludeQuery(queryString, graph);
         if (compileResult.wasCompiled && compileResult.compiled !== queryString) {
           console.log('[DataOps:EXCLUDE] Compiled query:', compileResult.compiled);
-          sessionLogService.addChild(logOpId, 'success', 'EXCLUDE_COMPILE_SUCCESS',
+          sessionLogService.addChild(logOpId, 'debug', 'EXCLUDE_COMPILE_SUCCESS',
             'Exclude compiled to minus/plus form',
             `Compiled: ${compileResult.compiled}`
           );
@@ -2748,7 +2748,7 @@ export async function getFromSourceDirect(options: {
         updatedFileData.values = existingValuesForGapWrites;
 
         // Diagnostic: confirm onset made it into values[].latency for this slice family.
-        if (sessionLogService.getDiagnosticLoggingEnabled() && !isCohortQuery) {
+        if (sessionLogService.isLevelEnabled('debug') && !isCohortQuery) {
           try {
             // We only ever write onset to window-mode values via mergeOptions.latencySummary.
             // Find any window value for this slice family that carries onset.
@@ -2764,7 +2764,7 @@ export async function getFromSourceDirect(options: {
               .filter((v: any) => typeof v === 'number' && Number.isFinite(v));
             sessionLogService.addChild(
               logOpId,
-              'info',
+              'debug',
               'ONSET_FILE_PERSIST',
               onsets.length > 0
                 ? `Onset written to file (slice family): ${[...new Set(onsets)].sort((a: number, b: number) => a - b).join(', ')}`
@@ -3208,7 +3208,7 @@ export async function getFromSourceDirect(options: {
           timeSeriesLength: baseTimeSeries?.length ?? 0,
         });
         
-        sessionLogService.addChild(logOpId, 'info', 'DUAL_QUERY_BASE',
+        sessionLogService.addChild(logOpId, 'debug', 'DUAL_QUERY_BASE',
           `Base query for n: n=${baseN} (${explicitNQuery ? 'completion count of n_query' : 'all users at from'}${nQueryIsComposite ? ', composite' : ''})`,
           `This is the denominator for upstream-conditioned queries`
         );
@@ -3446,7 +3446,7 @@ export async function getFromSourceDirect(options: {
             : `n=${combinedN} (at 'from' via upstream), k=${combinedK} (converted), p=${(combinedP * 100).toFixed(2)}%`
         });
         
-        sessionLogService.addChild(logOpId, 'info', 'DUAL_QUERY_COMBINED',
+        sessionLogService.addChild(logOpId, 'debug', 'DUAL_QUERY_COMBINED',
           `Dual query: n=${combinedN}${explicitNQuery ? ' (n_query)' : ' (conditioned)'}, k=${combinedK}, p=${(combinedP * 100).toFixed(2)}%`,
           explicitNQuery 
             ? `n from explicit n_query, k from conditioned query`
@@ -3556,11 +3556,11 @@ export async function getFromSourceDirect(options: {
         
         // Capture DAS execution history for session logs (request/response details)
         // Only include verbose data when diagnostic logging is enabled to avoid bloating logs.
-        if (sessionLogService.getDiagnosticLoggingEnabled()) {
+        if (sessionLogService.isLevelEnabled('trace')) {
           const dasHistory = runner.getExecutionHistory();
           for (const entry of dasHistory) {
             // Add each DAS execution step as a child log entry
-            const level = entry.phase === 'error' ? 'error' : 'info';
+            const level = entry.phase === 'error' ? 'error' : 'trace';
             sessionLogService.addChild(logOpId, level, `DAS_${entry.phase.toUpperCase()}`,
               entry.message,
               undefined,
@@ -3742,10 +3742,10 @@ export async function getFromSourceDirect(options: {
             // Persist onset for this gap (used by per-gap file persistence).
             lastOnsetDeltaDays = onset;
             if (typeof onset === 'number' && Number.isFinite(onset)) {
-              if (sessionLogService.getDiagnosticLoggingEnabled()) {
+              if (sessionLogService.isLevelEnabled('debug')) {
                 sessionLogService.addChild(
                   logOpId,
-                  'info',
+                  'debug',
                   'ONSET_CAPTURED',
                   `Onset derived: ${onset} day${onset === 1 ? '' : 's'}`,
                   undefined,
@@ -3759,12 +3759,12 @@ export async function getFromSourceDirect(options: {
                   }
                 );
               }
-            } else if (sessionLogService.getDiagnosticLoggingEnabled()) {
+            } else if (sessionLogService.isLevelEnabled('debug')) {
               // Important for debugging: distinguish "not present" vs "present but null".
               const hasKey = rawAny && Object.prototype.hasOwnProperty.call(rawAny, 'onset_delta_days');
               sessionLogService.addChild(
                 logOpId,
-                'info',
+                'debug',
                 'ONSET_NOT_DERIVED',
                 `Onset not derived (${hasKey ? 'present-but-null' : 'missing'})`,
                 undefined,
@@ -4071,9 +4071,9 @@ export async function getFromSourceDirect(options: {
           // Dense snapshot DB writes: write explicit 0 rows for missing days too.
           // This keeps DB coverage aligned with file-side "no data" markers.
           if (querySignature && actualFetchWindows.length > 0 && !dontExecuteHttp) {
-            const diagnosticOn = sessionLogService.getDiagnosticLoggingEnabled();
+            const diagnosticOn = sessionLogService.isLevelEnabled('trace');
             let dbParamId = '';
-            
+
             try {
               const workspace = (() => {
                 const pf = fileRegistry.getFile(`parameter-${objectId}`);
@@ -4082,10 +4082,10 @@ export async function getFromSourceDirect(options: {
                   branch: pf?.source?.branch || 'unknown',
                 };
               })();
-              
+
               dbParamId = `${workspace.repository}-${workspace.branch}-${objectId}`;
               const sliceDSL = targetSlice || extractSliceDimensions(currentDSL || '');
-              
+
               const snapshotRows = buildDenseSnapshotRowsForDbWrite({
                 allTimeSeriesData,
                 actualFetchWindows,
@@ -4139,7 +4139,7 @@ export async function getFromSourceDirect(options: {
               if (result.success) {
                 if (result.inserted > 0) {
                   const diag = result.diagnostic;
-                  sessionLogService.addChild(logOpId, 'info', 'SNAPSHOT_WRITE',
+                  sessionLogService.addChild(logOpId, 'debug', 'SNAPSHOT_WRITE',
                     `Wrote ${result.inserted} snapshot rows to DB`,
                     diag ? `${diag.sql_time_ms}ms` : undefined,
                     diag ? {
@@ -4381,9 +4381,9 @@ export async function getFromSourceDirect(options: {
           //   explicit zeros in the DB so coverage checks don't interpret "no rows" as "never fetched".
           // =========================================================================
           if (querySignature && actualFetchWindows.length > 0 && !dontExecuteHttp) {
-            const diagnosticOn = sessionLogService.getDiagnosticLoggingEnabled();
+            const diagnosticOn = sessionLogService.isLevelEnabled('trace');
             let dbParamId = '';
-            
+
             try {
               const workspace = (() => {
                 const pf = fileRegistry.getFile(`parameter-${objectId}`);
@@ -4392,9 +4392,9 @@ export async function getFromSourceDirect(options: {
                   branch: pf?.source?.branch || 'unknown',
                 };
               })();
-              
+
               dbParamId = `${workspace.repository}-${workspace.branch}-${objectId}`;
-              
+
               const snapshotRows = buildDenseSnapshotRowsForDbWrite({
                 allTimeSeriesData,
                 actualFetchWindows,
@@ -4451,7 +4451,7 @@ export async function getFromSourceDirect(options: {
                 if (result.inserted > 0) {
                   // Log success with backend diagnostic info if available
                   const diag = result.diagnostic;
-                  sessionLogService.addChild(logOpId, 'info', 'SNAPSHOT_WRITE',
+                  sessionLogService.addChild(logOpId, 'debug', 'SNAPSHOT_WRITE',
                     `Wrote ${result.inserted} snapshot rows to DB`,
                     diag ? `${diag.sql_time_ms}ms` : undefined,
                     diag ? {
@@ -4468,7 +4468,7 @@ export async function getFromSourceDirect(options: {
                 } else if (diagnosticOn) {
                   // Log duplicates only in diagnostic mode (all rows already existed)
                   const diag = result.diagnostic;
-                  sessionLogService.addChild(logOpId, 'info', 'SNAPSHOT_WRITE_SKIPPED',
+                  sessionLogService.addChild(logOpId, 'debug', 'SNAPSHOT_WRITE_SKIPPED',
                     `All ${diag?.rows_attempted || snapshotRows.length} rows already in DB`,
                     diag ? `${diag.sql_time_ms}ms` : undefined,
                     diag ? {

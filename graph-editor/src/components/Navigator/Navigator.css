@@ -706,6 +706,16 @@
   color: #1976d2;
 }
 
+/* Compact relative-time label — visible when not hovering, replaced by action buttons on hover */
+.navigator-item-age {
+  font-size: 10px;
+  font-weight: 500;
+  white-space: nowrap;
+  flex-shrink: 0;
+  line-height: 16px;
+  color: #6b728080;
+}
+
 .navigator-item-status {
   display: flex;
   align-items: center;

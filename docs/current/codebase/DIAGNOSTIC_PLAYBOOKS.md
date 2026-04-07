@@ -83,6 +83,16 @@ This is the **4-layer propagation problem** (see SYNC_SYSTEM_OVERVIEW.md and KNO
 4. **Layer 4 (React render)**: did you call `setGraph()` with a new reference? In-place mutation doesn't trigger re-render.
 5. **Idempotency**: does your cleanup run even when the source data is already absent? If gated behind `if (count > 0)` where count tracks source deletions, the edge-clearing may be skipped on second run.
 
+## Symptom: @ menu shows no snapshot days for a contexted graph
+
+**Check in order**:
+1. **Does the DB actually have snapshots?** Query `SELECT DISTINCT param_id, core_hash, COUNT(*) FROM snapshots WHERE param_id LIKE '%your-param%' GROUP BY param_id, core_hash`. If no rows, the issue is in the fetch/write path, not the @ menu.
+2. **What context key-sets are stored in the parameter file?** Check `paramFile.data.values[].sliceDSL` — are they uncontexted (`''`), single-key (`context(channel:google)`), or multi-key (`context(channel:google).context(geo:UK)`)? The @ menu enumerates plausible hashes from these slices.
+3. **Does `computePlausibleSignaturesForEdge` return multiple signatures?** For a contexted graph with stored context slices, it should return at least 2 results: one uncontexted hash and one per context key-set. If it returns only 1 (uncontexted), the parameter file values are not being loaded — check the `restoreFile` fallback.
+4. **Is the parameter file loaded in FileRegistry?** Check `fileRegistry.getFile('parameter-<paramId>')`. If null, the workspace may not be loaded. The function falls back to `restoreFile` with workspace scope, but this requires the workspace prefix to be derivable.
+5. **Are hash_groups being sent to the backend?** Check the network request to `/api/snapshots/batch-retrievals` — each subject should have a `hash_groups` array containing all plausible hashes. If only `core_hash` is present (no `hash_groups`), the multi-hash logic is not being reached.
+6. **Check KNOWN_ANTI_PATTERNS.md #11** — is the signature being computed from `dataInterestsDSL` rather than stored slice topology? This was the root cause of the 7-Apr-26 `li-cohort-segmentation-v2` bug.
+
 ## Meta-diagnostic: when you're stuck
 
 If you've been debugging for more than 2 attempts without finding the root cause:

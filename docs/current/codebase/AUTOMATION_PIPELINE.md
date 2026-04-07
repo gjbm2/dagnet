@@ -4,7 +4,7 @@ How DagNet runs headless pull-retrieve-commit automation for scheduled data refr
 
 ## Overview
 
-An automation run executes `pull --> retrieve all --> commit` for one or more graphs. It tracks state through phases, supports cross-tab locking, and persists full diagnostics to IndexedDB.
+An automation run executes `pull → apply pending Bayes patches → per-graph (retrieve + commission Bayes) → drain Bayes fits` for one or more graphs. It tracks state through phases, supports cross-tab locking, and persists full diagnostics to IndexedDB.
 
 ## Automation Run State
 
@@ -41,12 +41,25 @@ Registered as a reactive singleton with cross-tab locking. Two modes:
 
 Uses provided graph names directly, skips enumeration.
 
-### Per-graph execution
+### Three-phase execution (doc 28 §11.2.1)
 
-- Opens a tab for each graph (reuses if already open)
-- Waits up to 60s for graph data to load from FileRegistry
-- Calls `dailyRetrieveAllAutomationService.run()` per graph
-- 30s start delay before first graph (0s in tests/e2e)
+**Phase 0 — Apply pending Bayes patches.** After the upfront pull,
+scans fileRegistry for `_bayes/patch-*.json` files (from previous
+cycle's Bayes fits). Applies the newest per graph via
+`scanForPendingPatches`, commits. Ensures yesterday's posteriors are
+in place before today's retrieval.
+
+**Phase 1 — Serial fetch + commission.** Per-graph loop: loads graph
+headlessly from fileRegistry, calls
+`dailyRetrieveAllAutomationService.run()`, then (if `runBayes` is
+true on the graph) submits a Bayes fit via
+`submitBayesFitForAutomation`. Collects pending fits. 30s start
+delay before first graph (0s in tests/e2e).
+
+**Phase 2 — Drain Bayes fits.** `Promise.race` on a shrinking pool
+of polling promises. Each completed fit triggers a pull + commit.
+30-minute timeout per fit. Failed fits are logged and skipped.
+Abort-aware.
 
 ### Window management
 
@@ -95,7 +108,7 @@ Used to invalidate queries on day boundaries without explicit timestamp tracking
 
 **Location**: `automationLogService.ts`
 
-Persists complete run logs to IndexedDB (survives browser restart):
+Persists run logs to IndexedDB (survives browser restart):
 
 - `persistRunLog(log)`: serialise and store; prunes old runs (keeps max 30)
 - `getRunLogs(limit?)`: retrieve recent runs, newest first
@@ -105,7 +118,7 @@ Persists complete run logs to IndexedDB (survives browser restart):
 
 - `runId`: `retrieveall:${timestampMs}`
 - `outcome`: `'success' | 'warning' | 'error' | 'aborted'`
-- `entries`: full session log entries (hierarchical with children)
+- `entries`: session log entries (debug/trace children stripped by `endOperation` — only info+ survive)
 - `appVersion`, `repository`, `branch`, `durationMs`
 
 ### Console helpers (always available)
@@ -113,13 +126,20 @@ Persists complete run logs to IndexedDB (survives browser restart):
 - `dagnetAutomationLogs(n?)`: summary table of last N runs
 - `dagnetAutomationLogEntries(runId)`: full entries for one run
 
+### Git-committed automation logs (planned)
+
+Automation logs will be committed to `.dagnet/automation-logs/` in the repo. These files exist in git for diagnostics but are outside the whitelist that clone/pull uses, so they never enter IDB. With debug/trace entries stripped by `endOperation`, committed files are lean (~10-100 KB).
+
 ## Session Logging Integration
 
-All steps log hierarchically via `sessionLogService`:
+All steps log hierarchically via `sessionLogService`. Per-item detail (cache analysis, signature filtering, DB coverage) is at debug/trace level and stripped at `endOperation`. Only info+ entries survive in the automation log.
+
 - Root: `DAILY_RETRIEVE_ALL`
-- Children: `STEP_PULL`, `STEP_RETRIEVE`, `STEP_COMMIT`
-- Warnings: conflicts, version mismatch, failed horizons
+- Children: `STEP_RETRIEVE`, `STEP_COMMIT`
+- Warnings: conflicts, version mismatch, failed horizons, rate limits
 - Errors propagate, ending with `'error'` level
+
+See `SESSION_LOG_ARCHITECTURE.md` for full details on levels, thresholds, and the viewer.
 
 ## Key Files
 
@@ -127,7 +147,9 @@ All steps log hierarchically via `sessionLogService`:
 |------|------|
 | `src/services/automationRunService.ts` | Run state machine |
 | `src/services/automationLogService.ts` | Persistent run logging |
-| `src/services/dailyFetchService.ts` | Per-graph dailyFetch flag management |
-| `src/services/dailyAutomationJob.ts` | Job orchestration (enumeration, per-graph execution) |
+| `src/services/dailyFetchService.ts` | Per-graph dailyFetch + runBayes flag management |
+| `src/services/dailyAutomationJob.ts` | Job orchestration (enumeration, 3-phase execution) |
 | `src/services/dailyRetrieveAllAutomationService.ts` | Per-graph pull-retrieve-commit workflow |
+| `src/services/bayesPatchService.ts` | Patch apply, cascade, pending-patch scanner |
+| `src/services/bayesReconnectService.ts` | Reconnect, resume polling, automation Bayes submission |
 | `src/services/ukReferenceDayService.ts` | Canonical UK reference day |

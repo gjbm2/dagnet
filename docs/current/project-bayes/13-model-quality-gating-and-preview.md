@@ -1,6 +1,6 @@
 # Doc 13 — Model Quality Gating and Preview
 
-**Status**: Draft
+**Status**: §1.1–1.3 implemented (7-Apr-26), §2–3 pending
 **Date**: 19-Mar-26
 
 ---
@@ -46,11 +46,20 @@ For good quality:
 
 > "Bayes complete — 100% converged (**good**)"
 
-Implementation: in `useBayesTrigger.ts`, after patch apply, read
-`_bayes.quality` from the updated graph and format the completion
-message with the tier word.
+**Implemented 7-Apr-26.** `useBayesTrigger.ts` reads `_bayes.quality`
+after patch apply, derives composite tier via `computeGraphQualityTier()`
+in `bayesQualityTier.ts`, and sets the operation label. For poor/very
+poor, completes with `'warning'` status (amber, no auto-fade). For
+good/fair, completes with `'complete'` (green, normal fade). The
+`'warning'` OperationStatus was added to `operationRegistryService.ts`
+and `OperationsToast.tsx` for this purpose.
 
 ### 1.3 Session log
+
+**Partially implemented 7-Apr-26.** Per-edge quality breakdown logged
+via `BAYES_QUALITY_GATES` warning entry with failed/warning edge counts
+and per-edge reasons. Provenance breakdown and total divergences not yet
+included.
 
 On Bayes completion, log a structured entry via `sessionLogService`:
 

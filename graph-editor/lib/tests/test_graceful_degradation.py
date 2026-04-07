@@ -204,18 +204,32 @@ class TestGracefulDegradation:
         """
         Health check returns clear error when DB unavailable.
         """
+        import snapshot_service
         from snapshot_service import health_check
-        
-        # Temporarily unset DB_CONNECTION
+
+        # Temporarily unset DB_CONNECTION AND close the module-level pool
+        # (the pool caches the connection, so just removing the env var is
+        # insufficient — the existing pool would still serve connections).
         original = os.environ.get('DB_CONNECTION')
+        saved_pool = snapshot_service._pool
         try:
             if 'DB_CONNECTION' in os.environ:
                 del os.environ['DB_CONNECTION']
-            
+            # Close and discard the cached pool so health_check must
+            # re-read DB_CONNECTION (which is now absent).
+            if snapshot_service._pool is not None:
+                try:
+                    snapshot_service._pool.closeall()
+                except Exception:
+                    pass
+                snapshot_service._pool = None
+
             result = health_check()
-            
+
             assert result['status'] == 'error'
             assert result['db'] == 'not_configured'
         finally:
             if original:
                 os.environ['DB_CONNECTION'] = original
+            # Restore the original pool (or let it be lazily recreated)
+            snapshot_service._pool = saved_pool

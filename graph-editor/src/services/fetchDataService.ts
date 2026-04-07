@@ -855,7 +855,7 @@ export function computeAndApplyPathT95(
     Object.fromEntries(edgesWithPathT95.slice(0, 5)));
   
   if (logOpId) {
-    sessionLogService.addChild(logOpId, 'info', 'PATH_T95_COMPUTED',
+    sessionLogService.addChild(logOpId, 'debug', 'PATH_T95_COMPUTED',
       `Computed path_t95 for ${edgesWithPathT95.length} edges`,
       undefined,
       { edgeCount: edgesWithPathT95.length, sample: Object.fromEntries(edgesWithPathT95.slice(0, 3)) }
@@ -1045,7 +1045,7 @@ export function computeAndApplyInboundN(
     Object.fromEntries(edgesWithN.slice(0, 5).map(([id, r]) => [id, { n: r.n, forecast_k: r.forecast_k }])));
   
   if (logOpId) {
-    sessionLogService.addChild(logOpId, 'info', 'INBOUND_N_COMPUTED',
+    sessionLogService.addChild(logOpId, 'debug', 'INBOUND_N_COMPUTED',
       `Computed inbound-n for ${edgesWithN.length} edges`,
       undefined,
       { edgeCount: edgesWithN.length, sample: Object.fromEntries(edgesWithN.slice(0, 3).map(([id, r]) => [id, r.n])) }
@@ -1991,7 +1991,7 @@ export async function runStage2EnhancementsAndInboundN(
           }
 
           if (batchLogId) {
-            sessionLogService.addChild(batchLogId, 'info', 'LAG_ENHANCED',
+            sessionLogService.addChild(batchLogId, 'debug', 'LAG_ENHANCED',
               `Enhanced ${lagResult.edgesWithLAG} edges with LAG stats (topo pass)`,
               undefined,
               { 
@@ -2023,7 +2023,7 @@ export async function runStage2EnhancementsAndInboundN(
                   ? ` anchorLag=${v.debug.anchorMedianLag.toFixed(1)}d`
                   : v.debug.cohortsWithAnchorLag === 0 ? ' (no anchor data)' : '';
                 
-                sessionLogService.addChild(batchLogId, 'info', 'LAG_CALC_DETAIL',
+                sessionLogService.addChild(batchLogId, 'debug', 'LAG_CALC_DETAIL',
                   `${v.edgeUuid.substring(0, 8)}...: completeness=${(v.latency.completeness * 100).toFixed(1)}%${anchorLagInfo} ${dataQuality}`,
                   `Window: ${windowInfo} → ${v.debug.cohortCount} cohorts, n=${v.debug.totalN}, k=${v.debug.totalK}`,
                   {

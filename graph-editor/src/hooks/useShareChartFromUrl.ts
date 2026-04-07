@@ -204,7 +204,7 @@ export function useShareChartFromUrl(args: { fileId: string; tabId?: string }) {
         }
 
         if (parentLogId) {
-          sessionLogService.addChild(parentLogId, 'info', 'LIVE_SHARE_CURRENT_HYDRATE', `Hydrating Current from files for ${currentDsl}…`);
+          sessionLogService.addChild(parentLogId, 'debug', 'LIVE_SHARE_CURRENT_HYDRATE', `Hydrating Current from files for ${currentDsl}…`);
         }
 
         const itemsForCurrent = fetchDataService.getItemsForFromFileLoad(g0 as any);
@@ -233,7 +233,7 @@ export function useShareChartFromUrl(args: { fileId: string; tabId?: string }) {
         });
 
         if (parentLogId) {
-          sessionLogService.addChild(parentLogId, 'success', 'LIVE_SHARE_CURRENT_HYDRATE_OK', 'Hydrated Current from files');
+          sessionLogService.addChild(parentLogId, 'debug', 'LIVE_SHARE_CURRENT_HYDRATE_OK', 'Hydrated Current from files');
         }
       } catch (e: any) {
         if (parentLogId) {
@@ -537,7 +537,7 @@ export function useShareChartFromUrl(args: { fileId: string; tabId?: string }) {
     // Fast path: show cached chart immediately if present.
     const openedCached = await openCachedChartIfPresent();
     if (openedCached) {
-      sessionLogService.addChild(opId, 'info', 'LIVE_SHARE_BOOT_CACHE_OPENED', 'Opened cached chart artefact');
+      sessionLogService.addChild(opId, 'debug', 'LIVE_SHARE_BOOT_CACHE_OPENED', 'Opened cached chart artefact');
     }
 
     // If we already have a cached chart artefact, we may show it immediately as a placeholder,
@@ -549,7 +549,7 @@ export function useShareChartFromUrl(args: { fileId: string; tabId?: string }) {
     const cachedChart = chartFileId ? await fileRegistry.restoreFile(chartFileId) : null;
     const hasCachedResult = Boolean((cachedChart as any)?.data?.payload?.analysis_result);
     if (hasCachedResult && !forceRefetchFromFiles) {
-      sessionLogService.addChild(opId, 'info', 'LIVE_SHARE_BOOT_CACHE_HIT', 'Cached chart artefact present (will recompute)');
+      sessionLogService.addChild(opId, 'debug', 'LIVE_SHARE_BOOT_CACHE_HIT', 'Cached chart artefact present (will recompute)');
     }
 
     // Wait until the graph is actually available in ScenariosContext.
@@ -566,7 +566,7 @@ export function useShareChartFromUrl(args: { fileId: string; tabId?: string }) {
     try {
       const identity = shareMode?.identity;
       if (identity?.repo && identity?.branch) {
-        sessionLogService.addChild(opId, 'info', 'LIVE_SHARE_BOOT_HYDRATE', 'Waiting for live share graph dependencies…');
+        sessionLogService.addChild(opId, 'debug', 'LIVE_SHARE_BOOT_HYDRATE', 'Waiting for live share graph dependencies…');
         const depRes = await waitForLiveShareGraphDeps({
           graph: scenariosContext.graph as any,
           identity: { repo: identity.repo, branch: identity.branch },
@@ -574,7 +574,7 @@ export function useShareChartFromUrl(args: { fileId: string; tabId?: string }) {
         if (!depRes.success) {
           throw new Error(`Live share cache not ready (missing ${depRes.missing.length} file(s))`);
         }
-        sessionLogService.addChild(opId, 'success', 'LIVE_SHARE_BOOT_HYDRATE_OK', 'Live share graph dependencies ready');
+        sessionLogService.addChild(opId, 'debug', 'LIVE_SHARE_BOOT_HYDRATE_OK', 'Live share graph dependencies ready');
       }
     } catch (e) {
       // Surface as in-tab error (handled by the catch block below).
@@ -609,9 +609,9 @@ export function useShareChartFromUrl(args: { fileId: string; tabId?: string }) {
     }
 
     try {
-      sessionLogService.addChild(opId, 'info', 'LIVE_SHARE_BOOT_ENSURE_SCENARIOS', 'Ensuring scenarios…');
+      sessionLogService.addChild(opId, 'debug', 'LIVE_SHARE_BOOT_ENSURE_SCENARIOS', 'Ensuring scenarios…');
       const created = await ensureScenarios();
-      sessionLogService.addChild(opId, 'success', 'LIVE_SHARE_BOOT_ENSURE_SCENARIOS_OK', `Ensured ${created.length} scenario(s)`);
+      sessionLogService.addChild(opId, 'debug', 'LIVE_SHARE_BOOT_ENSURE_SCENARIOS_OK', `Ensured ${created.length} scenario(s)`);
       await applyScenarioViewState(created);
 
       // Deterministic ordering: hydrate Current first (for the chart's Current DSL), then regenerate live scenarios,
@@ -629,7 +629,7 @@ export function useShareChartFromUrl(args: { fileId: string; tabId?: string }) {
         // React state having already incorporated newly-created scenarios.
         const allScenariosOverride = created.map(c => c.scenario).filter(Boolean);
         for (const c of created) {
-          sessionLogService.addChild(opId, 'info', 'LIVE_SHARE_BOOT_REGEN_SCENARIO', `Regenerating scenario ${c.id}…`, undefined, { scenarioId: c.id } as any);
+          sessionLogService.addChild(opId, 'debug', 'LIVE_SHARE_BOOT_REGEN_SCENARIO', `Regenerating scenario ${c.id}…`, undefined, { scenarioId: c.id } as any);
           await scenariosContext.regenerateScenario(c.id, c.scenario, undefined, allScenariosOverride, liveIds, {
             skipStage2: false,
             allowFetchFromSource: false,
@@ -646,7 +646,7 @@ export function useShareChartFromUrl(args: { fileId: string; tabId?: string }) {
         }
       }
 
-      sessionLogService.addChild(opId, 'info', 'LIVE_SHARE_BOOT_RECOMPUTE', 'Recomputing chart…');
+      sessionLogService.addChild(opId, 'debug', 'LIVE_SHARE_BOOT_RECOMPUTE', 'Recomputing chart…');
       await recomputeChart(created);
       sessionLogService.endOperation(opId, 'success', 'Live share boot complete');
 
@@ -754,9 +754,9 @@ export function useShareChartFromUrl(args: { fileId: string; tabId?: string }) {
       );
 
       try {
-        sessionLogService.addChild(opId, 'info', 'ENSURE_SCENARIOS', 'Ensuring scenarios…');
+        sessionLogService.addChild(opId, 'debug', 'ENSURE_SCENARIOS', 'Ensuring scenarios…');
         const created = await ensureScenarios();
-        sessionLogService.addChild(opId, 'success', 'ENSURE_SCENARIOS_OK', `Ensured ${created.length} scenario(s)`);
+        sessionLogService.addChild(opId, 'debug', 'ENSURE_SCENARIOS_OK', `Ensured ${created.length} scenario(s)`);
         await applyScenarioViewState(created);
 
         // Match boot ordering: hydrate Current first, then regenerate scenarios, then analyse.
@@ -769,13 +769,13 @@ export function useShareChartFromUrl(args: { fileId: string; tabId?: string }) {
         const liveIds = created.map(c => c.id);
         const allScenariosOverride = created.map(c => c.scenario).filter(Boolean);
         for (const c of created) {
-          sessionLogService.addChild(opId, 'info', 'REGEN_SCENARIO', `Regenerating scenario ${c.id}…`, undefined, { scenarioId: c.id } as any);
+          sessionLogService.addChild(opId, 'debug', 'REGEN_SCENARIO', `Regenerating scenario ${c.id}…`, undefined, { scenarioId: c.id } as any);
           await scenariosContext.regenerateScenario(c.id, c.scenario, undefined, allScenariosOverride, liveIds, {
             skipStage2: false,
             allowFetchFromSource: false,
           });
         }
-        sessionLogService.addChild(opId, 'info', 'RECOMPUTE_CHART', 'Recomputing chart…');
+        sessionLogService.addChild(opId, 'debug', 'RECOMPUTE_CHART', 'Recomputing chart…');
         await recomputeChart(created);
 
         try {

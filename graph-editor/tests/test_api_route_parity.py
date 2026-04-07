@@ -92,6 +92,10 @@ def extract_python_api_routes(content: str) -> set:
             routes.add('/api/sigs/links/deactivate')
         elif endpoint == 'sigs-resolve':
             routes.add('/api/sigs/resolve')
+        elif endpoint == 'cache-clear':
+            routes.add('/api/cache/clear')
+        elif endpoint == 'cache-stats':
+            routes.add('/api/cache/stats')
         else:
             routes.add(f'/api/{endpoint}')
     return routes

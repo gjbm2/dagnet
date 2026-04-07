@@ -19,6 +19,8 @@ import {
   cancelBayesJob,
 } from '../services/bayesService';
 import type { BayesJobRecord } from '../services/bayesService';
+import { db } from '../db/appDatabase';
+import type { BayesFitJobParams } from '../services/bayesReconnectService';
 
 export type BayesTriggerStatus = 'idle' | 'submitting' | 'running' | 'complete' | 'failed';
 export type BayesComputeMode = 'local' | 'modal';
@@ -227,11 +229,11 @@ export function useBayesTrigger(computeMode: BayesComputeMode = 'local') {
             `Bayes commission: DSL="${pinnedDsl}", ${explodedSlices.length} slices, ${snapshotSubjects.length} subjects`,
           );
           for (let i = 0; i < explodedSlices.length; i++) {
-            sessionLogService.addChild(commissionLogId, 'info', 'BAYES_SLICE',
+            sessionLogService.addChild(commissionLogId, 'debug', 'BAYES_SLICE',
               `Slice ${i + 1}/${explodedSlices.length}: "${explodedSlices[i]}"`);
           }
           for (const subj of snapshotSubjects) {
-            sessionLogService.addChild(commissionLogId, 'info', 'BAYES_SUBJECT',
+            sessionLogService.addChild(commissionLogId, 'debug', 'BAYES_SUBJECT',
               `Subject: param_id=${subj.param_id || '?'}, edge_id=${subj.edge_id || '?'}, core_hash=${subj.core_hash || '?'}, ` +
               `anchor=${subj.anchor_from || '?'}→${subj.anchor_to || '?'}, sweep=${subj.sweep_from || '?'}→${subj.sweep_to || '?'}, ` +
               `slices=[${(subj.slice_keys || []).join(',')}], read_mode=${subj.read_mode || '?'}, ` +
@@ -292,18 +294,18 @@ export function useBayesTrigger(computeMode: BayesComputeMode = 'local') {
         webhookUrl = LOCAL_WEBHOOK_URL;
       } else {
         // Dev modal mode: start cloudflared tunnel so Modal can reach our local webhook
-        sessionLogService.info('bayes', 'BAYES_TUNNEL_START', 'Starting cloudflared tunnel for Modal callback…');
+        sessionLogService.debug('bayes', 'BAYES_TUNNEL_START', 'Starting cloudflared tunnel for Modal callback…');
         const tunnelResp = await fetch(TUNNEL_START_URL, { method: 'POST' });
         const tunnelData = await tunnelResp.json();
         if (tunnelData.tunnel_url) {
           webhookUrl = `${tunnelData.tunnel_url}/api/bayes-webhook`;
-          sessionLogService.info('bayes', 'BAYES_TUNNEL_READY', `Tunnel ready: ${webhookUrl}`);
+          sessionLogService.debug('bayes', 'BAYES_TUNNEL_READY', `Tunnel ready: ${webhookUrl}`);
         } else {
           throw new Error(`Failed to start cloudflared tunnel: ${tunnelData.error || 'no URL returned'}`);
         }
       }
 
-      sessionLogService.info('bayes', 'BAYES_DEV_TRIGGER', `Mode: ${computeMode}, webhook: ${webhookUrl}`);
+      sessionLogService.debug('bayes', 'BAYES_DEV_TRIGGER', `Mode: ${computeMode}, webhook: ${webhookUrl}`);
 
       // 7. Wire up cancel handler now that we have URLs
       const handleCancel = () => {
@@ -420,7 +422,7 @@ export function useBayesTrigger(computeMode: BayesComputeMode = 'local') {
             }
           }
 
-          sessionLogService.addChild(priorLogId, 'info', 'BAYES_PRIOR_EDGE',
+          sessionLogService.addChild(priorLogId, 'debug', 'BAYES_PRIOR_EDGE',
             `${paramId}: ${parts.join(' | ')}`);
         }
         sessionLogService.endOperation(priorLogId, 'success',
@@ -477,6 +479,33 @@ export function useBayesTrigger(computeMode: BayesComputeMode = 'local') {
       setState(s => ({ ...s, status: 'running', jobId }));
       operationRegistryService.setLabel(opId, `Bayes ${modeLabel}: fitting ${graphLabel}…`);
       sessionLogService.info('bayes', 'BAYES_DEV_SUBMITTED', `Job submitted: ${jobId}`, undefined, { jobId });
+
+      // Two-phase IDB persist (doc 28 §8.1): now that we have the jobId,
+      // persist with modalCallId so reconcileFn can probe status on reconnect.
+      const jobInstanceId = `bayes-fit:${activeTab.fileId}:${fitStartedAt}`;
+      const patchPath = `_bayes/patch-${jobId}.json`;
+      const persistParams: BayesFitJobParams = {
+        modalCallId: jobId,
+        computeMode,
+        graphId: activeTab.fileId,
+        graphFilePath: `${activeTab.fileId}.yaml`,
+        repo: `${gitCred.owner}/${gitCred.name}`,
+        branch: navState.selectedBranch || 'main',
+        patchPath,
+        statusUrl: submitUrl ? submitUrl.replace('/submit', '/status') : undefined,
+        webhookUrl,
+        submittedAtIso: new Date().toISOString(),
+      };
+      void db.schedulerJobs.put({
+        jobId: jobInstanceId,
+        jobDefId: 'bayes-fit',
+        status: 'running',
+        params: persistParams as any,
+        submittedAtMs: fitStartedAt,
+        lastUpdatedAtMs: fitStartedAt,
+      }).catch(err => {
+        console.warn('[useBayesTrigger] Failed to persist job to IDB:', err);
+      });
 
       // 9. Poll until done (signal allows cancel to break out of the loop)
       const finalStatus = await pollUntilDone(jobId, (pollStatus) => {
@@ -537,6 +566,9 @@ export function useBayesTrigger(computeMode: BayesComputeMode = 'local') {
             const webhookResp = (r as any)?.webhook_response?.body;
             const patchPath = webhookResp?.patch_path || `_bayes/patch-${jobId}.json`;
             console.log(`[useBayesTrigger] Fetching patch: ${patchPath} (from webhookResp: ${!!webhookResp?.patch_path})`);
+            // fetchAndApplyPatch now uses applyPatchAndCascade internally
+            // (doc 28 §8.2) — tier 1 writes to param files + graph, tier 2
+            // cascades to GraphStore if the graph is open.
             const edgesUpdated = await fetchAndApplyPatch({
               owner: gitCred.owner,
               repo: gitCred.name,
@@ -550,62 +582,6 @@ export function useBayesTrigger(computeMode: BayesComputeMode = 'local') {
             if (edgesUpdated > 0) {
               sessionLogService.success('bayes', 'BAYES_PATCH_APPLIED',
                 `Applied Bayes posteriors to ${edgesUpdated} edges`);
-
-              // Cascade from param files to graph edges
-              const { getParameterFromFile } = await import('../services/dataOperations/fileToGraphSync');
-              const { getGraphStore } = await import('../contexts/GraphStoreContext');
-              const store = getGraphStore(activeTab.fileId);
-              if (store) {
-                // Sync FileRegistry → GraphStore BEFORE cascading.
-                // applyPatch wrote _bayes, posteriors, and model_vars to
-                // FileRegistry but not GraphStore. Without this sync the
-                // cascade starts from stale GraphStore data and the final
-                // writeBack at the end overwrites applyPatch's work.
-                const freshGraph = fileRegistry.getFile(activeTab.fileId)?.data;
-                if (freshGraph) store.getState().setGraph(freshGraph as any);
-
-                const currentDSL = store.getState().currentDSL || '';
-                const setGraph = (g: any) => { if (g) store.getState().setGraph(g); };
-                const graph = store.getState().graph;
-                let cascaded = 0;
-                for (const edge of (graph?.edges || [])) {
-                  const paramId = edge.p?.id;
-                  if (!paramId) continue;
-                  await getParameterFromFile({
-                    paramId,
-                    edgeId: edge.uuid || edge.id,
-                    graph: store.getState().graph,
-                    setGraph,
-                    targetSlice: currentDSL,
-                  });
-                  cascaded++;
-                }
-                // Copy promoted latency outputs → input fields (onset, t95, path_t95)
-                // so the next model run reads the latest output as its input.
-                // Respects override locks: if overridden=true, the input stays
-                // at the user's value and the promoted output is not copied.
-                // This closes the input→model→output→input cycle within a session.
-                const { persistGraphMasteredLatencyToParameterFiles } = await import('../services/fetchDataService');
-                const graphForPersist = store.getState().graph;
-                if (graphForPersist) {
-                  await persistGraphMasteredLatencyToParameterFiles({
-                    graph: graphForPersist as any,
-                    setGraph,
-                    edgeIds: (graphForPersist as any).edges?.map((e: any) => e.uuid || e.id).filter(Boolean) || [],
-                  });
-                }
-
-                // Sync the cascaded graph back to FileRegistry/IDB.
-                // setGraph updates GraphStore in-memory but doesn't
-                // immediately persist to IDB. Explicit updateFile ensures
-                // posteriors are visible to all consumers.
-                const updatedGraph = store.getState().graph;
-                if (updatedGraph) {
-                  await fileRegistry.updateFile(activeTab.fileId, updatedGraph);
-                }
-                sessionLogService.success('bayes', 'BAYES_CASCADE_COMPLETE',
-                  `Cascaded ${cascaded} params from files to graph`);
-              }
             } else {
               sessionLogService.warning('bayes', 'BAYES_PATCH_EMPTY',
                 'Patch file found but no edges updated');
@@ -670,10 +646,18 @@ export function useBayesTrigger(computeMode: BayesComputeMode = 'local') {
             operationRegistryService.complete(opId, 'complete', undefined);
           }
         }
+        // Update persisted job: complete
+        void db.schedulerJobs.update(jobInstanceId, {
+          status: 'complete', lastUpdatedAtMs: Date.now(), result: finalStatus.result,
+        }).catch(() => {});
       } else {
         setState({ status: 'failed', jobId, error: finalStatus.error ?? null, lastResult: record });
         operationRegistryService.complete(opId, 'error', finalStatus.error);
         sessionLogService.error('bayes', 'BAYES_DEV_FAILED', `Job ${jobId} failed: ${finalStatus.error}`, undefined, { jobId });
+        // Update persisted job: error
+        void db.schedulerJobs.update(jobInstanceId, {
+          status: 'error', lastUpdatedAtMs: Date.now(), error: finalStatus.error ?? 'unknown',
+        }).catch(() => {});
       }
 
     } catch (err: any) {

@@ -406,6 +406,80 @@ export class IndexRebuildService {
   }
   
   /**
+   * Prune orphaned index entries — remove entries whose files don't exist in FileRegistry.
+   *
+   * ONLY call this when we are confident we have the full repo state:
+   * - Post-clone (all files just fetched)
+   * - Post-pull (full incremental sync complete)
+   *
+   * NOT safe during IDB-only loads or partial syncs.
+   */
+  static async pruneOrphanedIndexEntries(): Promise<{
+    prunedCount: number;
+    details: Array<{ type: string; id: string }>;
+  }> {
+    const indexedTypes: Array<'parameter' | 'context' | 'case' | 'node' | 'event'> = [
+      'parameter', 'context', 'case', 'node', 'event'
+    ];
+    const pruned: Array<{ type: string; id: string }> = [];
+
+    for (const type of indexedTypes) {
+      const indexFileId = `${type}-index`;
+      const arrayKey = `${type}s` as 'parameters' | 'contexts' | 'cases' | 'nodes' | 'events';
+      const indexFile = fileRegistry.getFile(indexFileId);
+      if (!indexFile?.data?.[arrayKey]) continue;
+
+      const entries: any[] = indexFile.data[arrayKey];
+      const kept: any[] = [];
+
+      for (const entry of entries) {
+        const fileId = `${type}-${entry.id}`;
+        const file = fileRegistry.getFile(fileId);
+        if (file) {
+          kept.push(entry);
+        } else {
+          pruned.push({ type, id: entry.id });
+        }
+      }
+
+      if (kept.length < entries.length) {
+        const removedCount = entries.length - kept.length;
+        console.log(`🧹 IndexRebuildService: Pruning ${removedCount} orphaned ${type} index entries`);
+
+        indexFile.data[arrayKey] = kept;
+        indexFile.data.updated_at = new Date().toISOString();
+        indexFile.isDirty = true;
+        indexFile.lastModified = Date.now();
+
+        // Update FileRegistry
+        (fileRegistry as any).files.set(indexFileId, indexFile);
+
+        // Persist to IDB (both prefixed and unprefixed)
+        const source = indexFile.source;
+        if (source?.repository && source?.branch) {
+          const idbId = `${source.repository}-${source.branch}-${indexFileId}`;
+          await db.files.put({ ...indexFile, fileId: idbId });
+        }
+        await db.files.put({ ...indexFile, fileId: indexFileId });
+
+        // Notify listeners
+        (fileRegistry as any).notifyListeners(indexFileId, indexFile);
+      }
+    }
+
+    if (pruned.length > 0) {
+      sessionLogService.warning('index', 'INDEX_PRUNE',
+        `Pruned ${pruned.length} orphaned index entries`,
+        pruned.map(p => `${p.type}/${p.id}`).join(', '),
+        { pruned });
+    } else {
+      sessionLogService.debug('index', 'INDEX_PRUNE_CLEAN', 'All index entries have corresponding files');
+    }
+
+    return { prunedCount: pruned.length, details: pruned };
+  }
+
+  /**
    * Generate a formatted log report
    */
   private static generateLogReport(

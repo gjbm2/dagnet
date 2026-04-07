@@ -1356,6 +1356,12 @@ export interface ConversionGraph {
   dailyFetch?: boolean;
 
   /**
+   * If true, a Bayesian fit is commissioned after each daily retrieval.
+   * Only meaningful when dailyFetch is also true — the UI enforces this dependency.
+   */
+  runBayes?: boolean;
+
+  /**
    * Default connection for all edges in this graph.
    * Used as fallback when edge.p.connection (or slot-level connection) is not set.
    * e.g. "amplitude-prod", "amplitude-staging"

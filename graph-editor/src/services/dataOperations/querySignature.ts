@@ -299,8 +299,8 @@ export async function computeQuerySignature(
     const structuredSig = serialiseSignature({ coreHash, contextDefHashes });
 
     // ===== DIAGNOSTIC: Show what went into the signature =====
-    if (sessionLogService.getDiagnosticLoggingEnabled()) {
-      sessionLogService.info('data-fetch', 'SIGNATURE_COMPUTED',
+    if (sessionLogService.isLevelEnabled('debug')) {
+      sessionLogService.debug('data-fetch', 'SIGNATURE_COMPUTED',
         `Computed signature: ${coreHash.substring(0, 12)}... (${Object.keys(eventDefHashes).length} events)`,
         undefined,
         {

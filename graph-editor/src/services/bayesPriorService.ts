@@ -211,7 +211,7 @@ export async function resetPriorsForAllParams(
     const ok = await resetPriorsForParam(paramId);
     if (ok) {
       count++;
-      sessionLogService.addChild(logOpId, 'info', 'BAYES_RESET_EDGE',
+      sessionLogService.addChild(logOpId, 'debug', 'BAYES_RESET_EDGE',
         `Reset priors: ${paramId}`);
     }
   }
@@ -287,7 +287,7 @@ export async function deleteHistoryForAllParams(
     const ok = await deleteHistoryForParam(paramId);
     if (ok) {
       count++;
-      sessionLogService.addChild(logOpId, 'info', 'BAYES_HISTORY_DELETE_EDGE',
+      sessionLogService.addChild(logOpId, 'debug', 'BAYES_HISTORY_DELETE_EDGE',
         `Deleted posterior: ${paramId}`);
     }
   }

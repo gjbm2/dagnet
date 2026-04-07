@@ -709,7 +709,7 @@ export function addEvidenceAndForecastScalars(
         };
 
         if (options?.logOpId) {
-          const diagnosticsOn = sessionLogService.getDiagnosticLoggingEnabled();
+          const diagnosticsOn = sessionLogService.isLevelEnabled('debug');
           const basisLabel =
             (!isUncontextedTarget)
               ? 'context-matching'
@@ -831,7 +831,7 @@ export function addEvidenceAndForecastScalars(
         };
 
         if (options?.logOpId) {
-          const diagnosticsOn = sessionLogService.getDiagnosticLoggingEnabled();
+          const diagnosticsOn = sessionLogService.isLevelEnabled('debug');
           const msg = `Forecast attached from stored scalar (${basisLabel})`;
           const details = diagnosticsOn ? `slices:\n${basisSlices.join('\n')}` : undefined;
           sessionLogService.addChild(

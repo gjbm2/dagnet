@@ -110,7 +110,7 @@ function auditOperationEvent(
 ): void {
   void import('./sessionLogService')
     .then(({ sessionLogService }) => {
-      sessionLogService.info('session', code, message, undefined, metadata);
+      sessionLogService.debug('session', code, message, undefined, metadata);
     })
     .catch(() => {
       // ignore — logging must never crash the app

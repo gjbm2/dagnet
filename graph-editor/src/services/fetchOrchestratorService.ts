@@ -81,7 +81,7 @@ class FetchOrchestratorService {
       const s = summarisePlan(plan);
       sessionLogService.addChild(
         parentLogId,
-        'info',
+        'debug',
         'FETCH_PLAN_BUILT',
         `Plan built: ${s.fetchItems} fetch, ${s.coveredItems} covered, ${s.unfetchableItems} unfetchable`,
         undefined,
@@ -183,7 +183,7 @@ class FetchOrchestratorService {
     if (parentLogId) {
       sessionLogService.addChild(
         parentLogId,
-        errors.length > 0 ? 'warning' : 'success',
+        errors.length > 0 ? 'warning' : 'debug',
         'PLAN_EXECUTION_COMPLETE',
         `Plan execution complete (executed=${executedItemKeys.length}, covered=${skippedCoveredItemKeys.length}, unfetchable=${skippedUnfetchableItemKeys.length}, errors=${errors.length})`,
         undefined,

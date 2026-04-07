@@ -325,7 +325,7 @@ class StalenessNudgeService {
     message: string,
     metadata?: Record<string, unknown>
   ): void {
-    sessionLogService.info(operationType, code, message, undefined, {
+    sessionLogService.debug(operationType, code, message, undefined, {
       planEngineVersion: NUDGING_PLAN_ENGINE_VERSION,
       ...metadata,
     });
@@ -1372,7 +1372,7 @@ class StalenessNudgeService {
     // - If reload is selected alongside other actions, run those actions NOW (explicit user intent),
     //   then reload at the end. Nothing is carried across refresh.
     if (wantsReload && (wantsPull || wantsRetrieve)) {
-      sessionLogService.info(
+      sessionLogService.debug(
         'session',
         'STALENESS_RUN_THEN_RELOAD',
         'Reload selected alongside other actions; running selected actions now, then reloading (nothing will run automatically after refresh)',
@@ -1421,7 +1421,7 @@ class StalenessNudgeService {
         );
 
         if (!status.isStale) {
-          sessionLogService.info(
+          sessionLogService.debug(
             'data-fetch',
             'RETRIEVE_ALL_SKIPPED_AFTER_PULL',
             'Retrieve All skipped: pull brought fresh retrieval state (within cooloff window)',
@@ -1481,7 +1481,7 @@ class StalenessNudgeService {
       notify,
     } = opts;
 
-    sessionLogService.info(
+    sessionLogService.debug(
       'session',
       'STALENESS_AUTO_PULL',
       isShareLive ? 'Auto-refreshing live share (countdown expired)' : 'Auto-pulling from repository (countdown expired)',

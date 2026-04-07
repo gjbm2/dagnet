@@ -33,7 +33,9 @@
       "Bash(xargs -I {} bash -c 'echo \"=== {} ===\" && head -30 {}')",
       "Edit(/.claude/skills/handover/**)",
       "Bash(npx esbuild:*)",
-      "Bash(git merge:*)"
+      "Bash(git merge:*)",
+      "Bash(.claude/hooks/confirm-gate.sh gate-config:*)",
+      "Read(//home/reg/dev/dagnet/**)"
     ],
     "additionalDirectories": [
       "/home/reg/dev/dagnet/.claude",
@@ -48,7 +50,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash .claude/hooks/gate-check.sh"
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/gate-check.sh"
           }
         ]
       },
@@ -57,7 +59,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash .claude/hooks/guard-gate-files.sh"
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/guard-gate-files.sh"
           }
         ]
       }

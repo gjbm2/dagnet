@@ -168,7 +168,11 @@ data-constrained. Single-source validation:
 - **Topology signatures** (doc 10) — current code computes a single
   global hash (stub). Needs: per-fit-unit fingerprints, staleness
   detection on FE pull, UI surfacing of stale posteriors, warm-start
-  invalidation when topology changes. Blocks nightly scheduling.
+  invalidation when topology changes. This is a distinct, complex
+  piece of work covering data integrity (stale-posterior detection,
+  param_id reassignment guards) — not strictly blocking nightly
+  scheduling, which is gated on the reconnect mechanism (doc 28)
+  instead.
 - ~~**Model quality gating** (doc 13)~~ — **DONE**. Quality tiers
   (failed/warning/good-0..3), graph-level composite, colour mapping,
   PosteriorIndicator component, edge beads. Wired into UI.
@@ -181,7 +185,11 @@ data-constrained. Single-source validation:
   (`compute_snapshot_subjects.mjs` sets context def hashes to `{}`
   while FE populates them).
 - **Nightly Bayes fit** — automatic posterior updates after daily
-  fetch. Needs: production confidence + topo sigs.
+  fetch. Reconnect mechanism (doc 28) **implemented 7-Apr-26** —
+  all 5 phases complete (`runBayes` flag, `applyPatchAndCascade`,
+  scheduler persistence, 3-phase automation pipeline, operational
+  integrity checks). Needs production testing. Topology signatures
+  (doc 10) add data integrity guards but are not strictly blocking.
 - **FE stats deletion** — ~4000 lines. Parity consolidation
   (2-Apr-26) resolved 10 orchestration deltas (D1–D10); graph-level
   parity now proven via synthetic 3-edge graph (Vector 7). Live
@@ -223,10 +231,18 @@ data-constrained. Single-source validation:
    (cohort). Surprise gauge and confidence bands now use MCMC κ
    posteriors directly.
 3. Commit and stabilise all current code changes.
-4. **Topology signatures** (doc 10) — blocks nightly scheduling.
-5. **Nightly Bayes fit** — trigger as part of nightly fetch. Needs #4.
-6. **Phase C** (context slices) — prerequisites done.
-7. **FE stats deletion** — ~4000 lines. Graph-level parity proven
+4. ~~**Reconnect mechanism** (doc 28)~~ — **IMPLEMENTED 7-Apr-26**.
+   `runBayes` schema + UI, `applyPatchAndCascade` extraction,
+   `scanForPendingPatches`, scheduler persistence + `reconcileFn`,
+   3-phase automation pipeline (Phase 0/1/2), operational integrity
+   checks. All 5 design phases complete. Not yet tested in production.
+5. **Nightly Bayes fit** — trigger as part of nightly fetch. Unblocked
+   by #4. Needs production testing + `runBayes` enabled on graphs.
+6. **Topology signatures** (doc 10) — data integrity: stale-posterior
+   detection, param_id reassignment guards. Complex and intricate
+   but not strictly blocking nightly scheduling.
+7. **Phase C** (context slices) — prerequisites done.
+8. **FE stats deletion** — ~4000 lines. Graph-level parity proven
    (2-Apr-26). Remaining: D11 onset discrepancy design decision,
    Pattern A fragility review, heuristic dispersion FE parity.
 

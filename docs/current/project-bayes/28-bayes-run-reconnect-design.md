@@ -1,10 +1,21 @@
 # 28. Bayes Run Reconnect Design
 
-**Status**: Draft
+**Status**: Implemented (7-Apr-26)
 **Date**: 6-Apr-26
 **Purpose**: Design for resuming in-flight Bayes runs after browser
 close/reopen. Gates integration of Bayes into the retrieve-all automation
 pipeline.
+
+**Amendments (7-Apr-26)**:
+- **`fitted_at_epoch` dropped.** The existing `fitted_at` field uses
+  ISO 8601 format (`YYYY-MM-DDTHH:MM:SSZ`) with second precision —
+  sufficient for staleness comparison (two fits within the same second
+  is impossible). All references to `fitted_at_epoch` below should be
+  read as `fitted_at` (ISO string, lexicographic comparison). No new
+  field is needed; adding one would create a competing source of truth.
+- **§8.5 fingerprint dedup deferred** to topology signatures work
+  (doc 10). The per-graph mutex + `fitted_at` staleness check are
+  sufficient. See §8.5 for detail.
 
 ## 1. Problem Statement
 
@@ -292,13 +303,16 @@ security anti-pattern.
 patch per graph and discards the rest (§4.4). No ordering problem
 arises because intermediate patches are never applied.
 
-**Duplicate application.** Prevented by the staleness check: after a
-patch is applied, `_bayes.fitted_at_epoch` is updated on the graph.
-If the same patch is seen again (e.g. delete failed, patch reappears
-on next pull), `patch.fitted_at_epoch <= graph.fitted_at_epoch` →
-discarded. The `mergePosteriorsIntoParam` function must also
-deduplicate `fit_history` by fingerprint (§8.5) as a defence-in-depth
-against races where `fitted_at_epoch` hasn't been written yet.
+**Duplicate application.** Prevented by two mechanisms working
+together: (1) the per-graph mutex in `applyPatchAndCascade` (§8.16
+point 5) prevents concurrent application to the same graph, and
+(2) the staleness check: after a patch is applied,
+`_bayes.fitted_at_epoch` is updated on the graph. If the same patch
+is seen again (e.g. delete failed, patch reappears on next pull),
+`patch.fitted_at_epoch <= graph.fitted_at_epoch` → discarded. These
+two mechanisms are sufficient — no additional `fit_history`
+deduplication is needed at this stage. (Fingerprint-based dedup is
+deferred to the topology signatures work, doc 10.)
 
 **Happy-path vs scanner race.** The apply mutex must live inside
 `applyPatchAndCascade` itself (§8.16), not in the scanner wrapper.
@@ -584,15 +598,24 @@ patch files. `applyPatch` mutates graph/param documents via
 awaits the first. The pull lock in the scheduler helps but doesn't
 cover the scanner's apply phase.
 
-### 8.5 HIGH: fit_history idempotency gap
+### 8.5 ~~HIGH~~ DEFERRED: fit_history idempotency gap
 
 **Problem**: `mergePosteriorsIntoParam` appends to `fit_history` before
 overwriting posteriors. If a patch is applied twice (scanner + reconcile
 both trigger), the second application creates a duplicate history entry.
 
-**Resolution**: Deduplicate `fit_history` by `fingerprint` before
-appending. If an entry with the same fingerprint already exists, skip
-the append.
+**Original resolution**: Deduplicate `fit_history` by `fingerprint`
+before appending.
+
+**Status**: **Deferred to topology signatures work (doc 10).** The
+`fingerprint` field on `BayesPatchFile` is currently a placeholder
+(empty string) — deduplicating on it would be meaningless. The
+duplicate-application scenario is already prevented by the per-graph
+mutex (§8.16 point 5) and the `fitted_at_epoch` staleness check
+(§4.7). Fingerprint-based dedup becomes meaningful only when topology
+signatures provide real per-fit-unit structural fingerprints. This
+is a data integrity enhancement, not a correctness blocker for the
+reconnect mechanism.
 
 ### 8.6 HIGH: Resume polling must be service-level, not React
 

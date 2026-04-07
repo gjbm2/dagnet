@@ -30,11 +30,11 @@ export function useConsoleMirrorControls(): ConsoleMirrorControls {
       sessionLogMirrorService.enable();
       // Mark start in BOTH streams
       void consoleMirrorService.markNow('log sync start');
-      sessionLogService.info('session', 'DEV_LOG_SYNC_START', 'log sync start');
+      sessionLogService.debug('session', 'DEV_LOG_SYNC_START', 'log sync start');
     } else {
       // Mark stop in BOTH streams while mirroring is still enabled
       void consoleMirrorService.markNow('log sync stop');
-      sessionLogService.info('session', 'DEV_LOG_SYNC_STOP', 'log sync stop');
+      sessionLogService.debug('session', 'DEV_LOG_SYNC_STOP', 'log sync stop');
       consoleMirrorService.disable();
       sessionLogMirrorService.disable();
     }

@@ -5,8 +5,11 @@
  *
  * Principles:
  * - MECE status is user-declared via context definitions (otherPolicy); we do not attempt to certify overlap.
- * - We only support implicit-uncontexted aggregation when slices vary by exactly ONE context key.
- * - If multiple context keys appear (or case dims are present), we refuse to synthesise an uncontexted total.
+ * - Single-key context slices (from semicolon DSL patterns) and multi-key cross-product slices
+ *   (from dot-product DSL patterns) are both supported as MECE partition candidates.
+ * - For multi-key slices, ALL keys in the cross-product must be individually MECE AND the
+ *   cross-product must be fully populated (no missing cells) for aggregation to be safe.
+ * - If case dims are present, we refuse to synthesise an uncontexted total.
  */
 import type { ParameterValue } from '../types/parameterData';
 import { contextRegistry } from './contextRegistry';
@@ -87,13 +90,57 @@ function isEligibleContextOnlySlice(value: ParameterValue): { key: string; value
   const dsl = value.sliceDSL ?? '';
   const dims = extractSliceDimensions(dsl);
   if (!dims) return null;
-  // Reject if case dims are present (implicit uncontexted is only for uncontexted queries).
-  // Case dims appear in slice dimensions via sliceIsolation; be conservative and refuse.
   if (dims.includes('case(')) return null;
   const parsed = parseConstraints(dims);
   if (parsed.contextAny.length > 0) return null;
   if (parsed.context.length !== 1) return null;
   return { key: parsed.context[0].key, value: parsed.context[0].value ?? '' };
+}
+
+/**
+ * Parse a slice's context key-value pairs for multi-key cross-product support.
+ * Returns null if the slice has case dims, contextAny, or zero context keys.
+ * Returns the sorted key-set identifier and per-key values for slices with 2+ keys.
+ */
+function parseMultiKeyContextSlice(value: ParameterValue): {
+  /** Sorted, joined key names — e.g. 'channel||geo' */
+  keySetId: string;
+  /** Per-key value — e.g. { channel: 'google', geo: 'UK' } */
+  keyValues: Record<string, string>;
+  /** Number of context keys */
+  keyCount: number;
+} | null {
+  const dsl = value.sliceDSL ?? '';
+  const dims = extractSliceDimensions(dsl);
+  if (!dims) return null;
+  if (dims.includes('case(')) return null;
+  const parsed = parseConstraints(dims);
+  if (parsed.contextAny.length > 0) return null;
+  if (parsed.context.length < 2) return null;  // single-key handled by isEligibleContextOnlySlice
+
+  // Deduplicate keys (context(a).context(a) → treat as single key)
+  const keyValues: Record<string, string> = {};
+  for (const c of parsed.context) {
+    const k = c.key;
+    const v = c.value ?? '';
+    if (keyValues[k] !== undefined && keyValues[k] !== v) {
+      // Same key with conflicting values — degenerate, reject
+      return null;
+    }
+    keyValues[k] = v;
+  }
+
+  const keys = Object.keys(keyValues).sort();
+  if (keys.length < 2) {
+    // After dedup, collapsed to single key — let isEligibleContextOnlySlice handle it
+    return null;
+  }
+
+  return {
+    keySetId: keys.join('||'),
+    keyValues,
+    keyCount: keys.length,
+  };
 }
 
 export type MECEPartitionCandidate = {
@@ -209,7 +256,7 @@ function computeMECEGenerationCandidates(
     eligible.push({ pv, key: ctx.key, value: ctx.value, sig: normaliseQuerySignature((pv as any).query_signature) });
   }
 
-  const meceEligibleCandidates = eligible.length;
+  let meceEligibleTotal = eligible.length;
 
   // Group into generations. Within each generation, dedupe per context value to the most recent entry.
   const byGeneration = new Map<string, { key: string; sig: string | null; byValue: Map<string, ParameterValue> }>();
@@ -266,7 +313,125 @@ function computeMECEGenerationCandidates(
     });
   }
 
-  return { candidates: out, warnings, meceEligibleCandidates, meceGenerationsConsidered };
+  // ── Multi-key cross-product candidates ──
+  // Group multi-key slices by (keySetId, query_signature). For each group,
+  // verify ALL keys are individually MECE and the cross-product is complete.
+  const multiKeyEligible: Array<{
+    pv: ParameterValue;
+    keySetId: string;
+    keyValues: Record<string, string>;
+    keys: string[];
+    sig: string | null;
+  }> = [];
+
+  for (const pv of candidateValues) {
+    const mk = parseMultiKeyContextSlice(pv);
+    if (!mk) continue;
+    multiKeyEligible.push({
+      pv,
+      keySetId: mk.keySetId,
+      keyValues: mk.keyValues,
+      keys: mk.keySetId.split('||'),
+      sig: normaliseQuerySignature((pv as any).query_signature),
+    });
+  }
+
+  meceEligibleTotal += multiKeyEligible.length;
+
+  // Group by (keySetId, signature)
+  const multiKeyByGen = new Map<string, {
+    keySetId: string;
+    keys: string[];
+    sig: string | null;
+    slices: ParameterValue[];
+    /** Per-key → set of values present */
+    valuesByKey: Map<string, Set<string>>;
+  }>();
+
+  for (const e of multiKeyEligible) {
+    const genKey = `${e.keySetId}||${e.sig ?? '__legacy__'}`;
+    let entry = multiKeyByGen.get(genKey);
+    if (!entry) {
+      entry = {
+        keySetId: e.keySetId,
+        keys: e.keys,
+        sig: e.sig,
+        slices: [],
+        valuesByKey: new Map(e.keys.map(k => [k, new Set<string>()])),
+      };
+      multiKeyByGen.set(genKey, entry);
+    }
+    entry.slices.push(e.pv);
+    for (const [k, v] of Object.entries(e.keyValues)) {
+      entry.valuesByKey.get(k)?.add(v);
+    }
+  }
+
+  for (const gen of multiKeyByGen.values()) {
+    // Check each key is individually MECE
+    let allKeysMECE = true;
+    let allKeysComplete = true;
+    const genWarnings: string[] = [];
+    const allMissingValues: string[] = [];
+
+    for (const key of gen.keys) {
+      const valuesForKey = gen.valuesByKey.get(key);
+      if (!valuesForKey || valuesForKey.size === 0) { allKeysMECE = false; break; }
+
+      const mockWindows = Array.from(valuesForKey).map(v => ({ sliceDSL: `context(${key}:${v})` }));
+      const meceCheck = contextRegistry.detectMECEPartitionSync(mockWindows, key);
+
+      if (meceCheck.policy === 'unknown') { allKeysMECE = false; break; }
+      if (!meceCheck.isMECE || !meceCheck.canAggregate) { allKeysMECE = false; break; }
+      if (!meceCheck.isComplete) {
+        allKeysComplete = false;
+        allMissingValues.push(...meceCheck.missingValues.map(v => `${key}:${v}`));
+      }
+    }
+
+    if (!allKeysMECE) continue;
+    if (requireComplete && !allKeysComplete) continue;
+
+    // Verify cross-product completeness: expected slice count = product of per-key value counts
+    const expectedSliceCount = Array.from(gen.valuesByKey.values())
+      .reduce((prod, vals) => prod * vals.size, 1);
+    const actualSliceCount = dedupeBySliceDimsMostRecent(gen.slices).length;
+
+    if (actualSliceCount < expectedSliceCount) {
+      // Incomplete cross-product — missing cells
+      if (requireComplete) continue;
+      genWarnings.push(
+        `Incomplete cross-product for [${gen.keys.join(', ')}]: ` +
+        `${actualSliceCount}/${expectedSliceCount} cells present`
+      );
+    }
+
+    const pvs = dedupeBySliceDimsMostRecent(gen.slices);
+    const recencyMs = pvs.length > 0
+      ? pvs.reduce((min, cur) => Math.min(min, parameterValueRecencyMs(cur)), Number.POSITIVE_INFINITY)
+      : Number.NEGATIVE_INFINITY;
+
+    if (allMissingValues.length > 0) {
+      genWarnings.push(`Incomplete MECE for [${gen.keys.join(', ')}]: missing ${allMissingValues.join(', ')}`);
+    }
+
+    // Use the keySetId as the 'key' field — distinguishes multi-key from single-key candidates
+    out.push({
+      key: gen.keySetId,
+      querySignature: gen.sig,
+      values: pvs,
+      mece: {
+        isComplete: allKeysComplete && actualSliceCount >= expectedSliceCount,
+        canAggregate: allKeysMECE,
+        missingValues: allMissingValues,
+        policy: 'multi-key',
+      },
+      warnings: genWarnings,
+      recencyMs: Number.isFinite(recencyMs) ? recencyMs : 0,
+    });
+  }
+
+  return { candidates: out, warnings, meceEligibleCandidates: meceEligibleTotal, meceGenerationsConsidered: meceGenerationsConsidered + multiKeyByGen.size };
 }
 
 /**

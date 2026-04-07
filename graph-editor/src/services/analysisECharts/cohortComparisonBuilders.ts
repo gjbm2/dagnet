@@ -535,34 +535,41 @@ export function buildCohortMaturityEChartsOption(
             };
           };
           const children: any[] = [];
-          // Epoch B: gradient effect via increasing line density
-          if (xFuture > xSolid) {
-            // Split into slices with increasing opacity
-            const slices = 5;
-            const sliceW = (xFuture - xSolid) / slices;
-            for (let i = 0; i < slices; i++) {
-              const sx = xSolid + i * sliceW;
-              const alpha = 0.20 * ((i + 1) / slices);
-              const sliceLines: any[] = [];
-              const diag = sliceW + h;
-              for (let d = 0; d < diag; d += hatchGap) {
-                sliceLines.push({
-                  type: 'line',
-                  shape: { x1: sx + d, y1: y, x2: sx + d - h, y2: y + h },
-                  style: { stroke: hexToRgba(shadingColour, alpha), lineWidth: 1 },
-                  silent: true,
-                });
-              }
-              children.push({
-                type: 'group', children: sliceLines,
-                clipPath: { type: 'rect', shape: { x: sx, y, width: sliceW, height: h } },
+          // Unified forecast hatch: one continuous set of lines from
+          // xSolid → xEnd.  A gradient stroke fades 0 → 0.20 alpha
+          // across epoch B (xSolid → xFuture), then holds constant
+          // 0.20 through epoch C (xFuture → xEnd).
+          const hatchStart = Math.min(xSolid, xFuture); // handle edge case where solid==future
+          if (xEnd > hatchStart) {
+            const totalW = xEnd - hatchStart;
+            // Gradient stop: where epoch B ends as a fraction of the total span.
+            const bFrac = totalW > 0 ? Math.min(1, (xFuture - hatchStart) / totalW) : 0;
+            const allLines: any[] = [];
+            const diag = totalW + h;
+            for (let d = 0; d < diag; d += hatchGap) {
+              allLines.push({
+                type: 'line',
+                shape: { x1: hatchStart + d, y1: y, x2: hatchStart + d - h, y2: y + h },
+                style: {
+                  stroke: {
+                    type: 'linear',
+                    x: hatchStart, y: 0, x2: xEnd, y2: 0,
+                    global: true,
+                    colorStops: [
+                      { offset: 0, color: hexToRgba(shadingColour, 0) },
+                      { offset: bFrac, color: hexToRgba(shadingColour, 0.20) },
+                      { offset: 1, color: hexToRgba(shadingColour, 0.20) },
+                    ],
+                  },
+                  lineWidth: 1,
+                },
+                silent: true,
               });
             }
-          }
-          // Epoch C: constant hatch
-          if (xEnd > Math.max(xFuture, xSolid)) {
-            const rx = Math.max(xFuture, xSolid);
-            children.push(makeHatch(rx, y, xEnd - rx, h));
+            children.push({
+              type: 'group', children: allLines,
+              clipPath: { type: 'rect', shape: { x: hatchStart, y, width: totalW, height: h } },
+            });
           }
           return { type: 'group', children };
         },

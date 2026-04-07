@@ -1057,7 +1057,7 @@ export const CHART_DISPLAY_SETTINGS: Record<string, DisplaySettingDef[]> = {
       propsPanel: true,
       inline: 'brief',
       contextMenu: false,
-      computeAffecting: false,
+      computeAffecting: true,
       group: 'x-axis',
     },
     {

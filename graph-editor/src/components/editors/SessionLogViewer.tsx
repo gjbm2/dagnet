@@ -11,6 +11,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { sessionLogService, LogEntry, LogLevel, OperationContext } from '../../services/sessionLogService';
 import { copyToClipboard } from '../../utils/copyToClipboard';
+import { AlertCircle, AlertTriangle, CheckCircle2, Info, Code, Terminal } from 'lucide-react';
 import './SessionLogViewer.css';
 
 interface SessionLogViewerProps {
@@ -23,7 +24,7 @@ export function SessionLogViewer({ fileId }: SessionLogViewerProps) {
   // Preference: whether we auto-tail when already at the bottom. This should NOT flip off just because the user scrolls.
   const [tailMode, setTailMode] = useState(true);
   const [showContext, setShowContext] = useState(true);
-  const [diagnosticEnabled, setDiagnosticEnabled] = useState(sessionLogService.getDiagnosticLoggingEnabled());
+  const [displayThreshold, setDisplayThreshold] = useState<LogLevel>(sessionLogService.getDisplayThreshold());
   const [isAtBottom, setIsAtBottom] = useState(true);
   const containerRef = useRef<HTMLDivElement>(null);
   const wasAtBottomRef = useRef(true);
@@ -41,7 +42,7 @@ export function SessionLogViewer({ fileId }: SessionLogViewerProps) {
     });
 
     const unsubscribeSettings = sessionLogService.subscribeSettings(() => {
-      setDiagnosticEnabled(sessionLogService.getDiagnosticLoggingEnabled());
+      setDisplayThreshold(sessionLogService.getDisplayThreshold());
     });
     
     // Initialize with current entries
@@ -113,9 +114,16 @@ export function SessionLogViewer({ fileId }: SessionLogViewerProps) {
     setIsAtBottom(atBottom);
   }, []);
 
-  const filteredEntries = searchTerm 
-    ? sessionLogService.getFilteredEntries(searchTerm)
-    : entries;
+  // Filter top-level entries by display threshold (debug/trace entries are hidden at info threshold)
+  const thresholdFilteredEntries = entries.filter(
+    e => LEVEL_SEVERITY[e.level] >= LEVEL_SEVERITY[displayThreshold]
+  );
+
+  const filteredEntries = searchTerm
+    ? sessionLogService.getFilteredEntries(searchTerm).filter(
+        e => LEVEL_SEVERITY[e.level] >= LEVEL_SEVERITY[displayThreshold]
+      )
+    : thresholdFilteredEntries;
 
   const handleToggleExpand = (id: string) => {
     sessionLogService.toggleExpanded(id);
@@ -173,14 +181,22 @@ export function SessionLogViewer({ fileId }: SessionLogViewerProps) {
   const handleCopyAll = useCallback(async () => {
     try {
       const allEntries = sessionLogService.getEntries();
-      // Create a clean copy without circular references
-      const cleanEntries = JSON.parse(JSON.stringify(allEntries, (key, value) => {
+      const threshold = sessionLogService.getDisplayThreshold();
+      const thresholdSev = LEVEL_SEVERITY[threshold];
+      // Filter to only entries at or above the display threshold (copy what the user sees)
+      const visibleEntries = allEntries
+        .filter(e => LEVEL_SEVERITY[e.level] >= thresholdSev)
+        .map(e => {
+          if (!e.children?.length) return e;
+          return { ...e, children: e.children.filter(c => LEVEL_SEVERITY[c.level] >= thresholdSev) };
+        });
+      const cleanEntries = JSON.parse(JSON.stringify(visibleEntries, (key, value) => {
         if (value instanceof Date) {
           return value.toISOString();
         }
         return value;
       }));
-      
+
       await copyToClipboard(JSON.stringify(cleanEntries, null, 2));
       // Brief visual feedback - the button text could flash or we could use a toast
       // Keeping it simple without toast dependency
@@ -232,14 +248,22 @@ export function SessionLogViewer({ fileId }: SessionLogViewerProps) {
             Context
           </label>
 
-          <label className="log-checkbox" title="Include verbose diagnostic details in session logs (may increase log size)">
-            <input
-              type="checkbox"
-              checked={diagnosticEnabled}
-              onChange={(e) => sessionLogService.setDiagnosticLoggingEnabled(e.target.checked)}
-            />
-            Diagnostic
-          </label>
+          <select
+            className="log-level-select"
+            value={displayThreshold}
+            onChange={(e) => sessionLogService.setDisplayThreshold(e.target.value as LogLevel)}
+            title="Minimum log level to display"
+          >
+            <option value="info">Info</option>
+            <option value="debug">Debug</option>
+            <option value="trace">Trace</option>
+          </select>
+          {displayThreshold === 'trace' && (
+            <span className="log-trace-note" title="Trace entries are only captured while this threshold is active">
+              ⚠ trace capture active
+            </span>
+          )}
+
           
           <label className="log-checkbox" title="Auto-scroll to latest entries">
             <input
@@ -273,11 +297,12 @@ export function SessionLogViewer({ fileId }: SessionLogViewerProps) {
           </div>
         ) : (
           filteredEntries.map((entry) => (
-            <LogEntryRow 
-              key={entry.id} 
-              entry={entry} 
+            <LogEntryRow
+              key={entry.id}
+              entry={entry}
               depth={0}
               showContext={showContext}
+              displayThreshold={displayThreshold}
               onToggleExpand={handleToggleExpand}
               onContextMenu={handleContextMenu}
             />
@@ -309,16 +334,26 @@ export function SessionLogViewer({ fileId }: SessionLogViewerProps) {
   );
 }
 
+/** Numeric severity for threshold comparisons (mirrors sessionLogService). */
+const LEVEL_SEVERITY: Record<LogLevel, number> = {
+  trace: 0, debug: 1, info: 2, success: 2, warning: 3, error: 4,
+};
+
 interface LogEntryRowProps {
   entry: LogEntry;
   depth: number;
   showContext: boolean;
+  displayThreshold: LogLevel;
   onToggleExpand: (id: string) => void;
   onContextMenu: (e: React.MouseEvent, entry: LogEntry) => void;
 }
 
-function LogEntryRow({ entry, depth, showContext, onToggleExpand, onContextMenu }: LogEntryRowProps) {
-  const hasChildren = entry.children && entry.children.length > 0;
+function LogEntryRow({ entry, depth, showContext, displayThreshold, onToggleExpand, onContextMenu }: LogEntryRowProps) {
+  // Filter children by display threshold to prevent rendering debug/trace entries
+  const visibleChildren = entry.children?.filter(
+    c => LEVEL_SEVERITY[c.level] >= LEVEL_SEVERITY[displayThreshold]
+  );
+  const hasChildren = visibleChildren && visibleChildren.length > 0;
   const isExpanded = entry.expanded;
   
   const levelIcon = getLevelIcon(entry.level);
@@ -352,7 +387,7 @@ function LogEntryRow({ entry, depth, showContext, onToggleExpand, onContextMenu 
         
         {hasChildren && (
           <span className="log-child-count">
-            ({entry.children!.length})
+            ({visibleChildren!.length})
           </span>
         )}
         
@@ -378,12 +413,13 @@ function LogEntryRow({ entry, depth, showContext, onToggleExpand, onContextMenu 
       
       {hasChildren && isExpanded && (
         <div className="log-children">
-          {entry.children!.map((child) => (
+          {visibleChildren!.map((child) => (
             <LogEntryRow
               key={child.id}
               entry={child}
               depth={depth + 1}
               showContext={showContext}
+              displayThreshold={displayThreshold}
               onToggleExpand={onToggleExpand}
               onContextMenu={onContextMenu}
             />
@@ -498,12 +534,15 @@ function ContextField({ fieldKey, value }: ContextFieldProps) {
   );
 }
 
-function getLevelIcon(level: LogLevel): string {
+function getLevelIcon(level: LogLevel): React.ReactNode {
+  const size = 14;
   switch (level) {
-    case 'success': return '✅';
-    case 'warning': return '⚠️';
-    case 'error': return '❌';
-    default: return '📝';
+    case 'trace': return <Terminal size={size} />;
+    case 'debug': return <Code size={size} />;
+    case 'success': return <CheckCircle2 size={size} />;
+    case 'warning': return <AlertTriangle size={size} />;
+    case 'error': return <AlertCircle size={size} />;
+    default: return <Info size={size} />;  // info
   }
 }
 

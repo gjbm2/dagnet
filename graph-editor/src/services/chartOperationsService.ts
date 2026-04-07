@@ -429,7 +429,7 @@ class ChartOperationsService {
         const existingTab = await db.tabs.where('fileId').equals(fileId).first();
         const existingTabId = existingTab?.id || null;
         if (existingTabId) {
-          sessionLogService.info(
+          sessionLogService.debug(
             'session',
             'CHART_OPEN',
             `Updating chart tab in place: ${title}`,

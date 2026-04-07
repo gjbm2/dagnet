@@ -132,6 +132,8 @@ Look for `hash-continuity` issues in the output:
 
 The check traces every `query_signature` stored on every parameter value, computes whether it's reachable from the current hash via the mapping closure, and reports the earliest date where the chain breaks. A fully intact chain means all historical snapshot data is accessible.
 
+The deep check (File Menu → "Check Integrity" or Refresh button in Graph Issues panel) also queries the snapshot DB to verify that snapshots actually exist under plausible hashes. This covers both Class 1 (epoch changes from `dataInterestsDSL` edits) and Class 2 (definition changes bridged by mappings). Issues appear under the 📡 `snapshot-coverage` category.
+
 ### What NOT to do
 
 - Never edit `hash-mappings.json` by hand — use `add-mapping` to ensure format correctness

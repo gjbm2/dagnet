@@ -235,6 +235,7 @@ def generate_graph_artefacts(
         "defaultConnection": "amplitude",
         "simulation": True,
         "dailyFetch": False,
+        "runBayes": False,
         "metadata": {
             "name": name,
             "description": description,

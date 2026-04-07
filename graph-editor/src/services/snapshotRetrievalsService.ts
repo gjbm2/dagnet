@@ -1,4 +1,28 @@
+/**
+ * Snapshot Retrievals Service
+ *
+ * Provides the @ menu (asat calendar) and snapshot coverage APIs.
+ *
+ * Design (7-Apr-26):
+ *   The @ menu needs to find ALL snapshots that could fulfil the current queryDSL,
+ *   spanning multiple dataInterestsDSL epochs and hash mapping changes.
+ *
+ *   It does NOT reference dataInterestsDSL directly. Instead it:
+ *   1. Enumerates plausible context key-sets from stored parameter file slices
+ *   2. Computes a signature for each key-set (same computeQuerySignature as fetch)
+ *   3. Queries the snapshot DB with ALL hashes via hash_groups (one SQL per edge)
+ *   4. Unions retrieved days per edge (boolean — no double-counting)
+ *
+ *   Three inputs determine plausible hashes:
+ *     (a) stored parameter values (slice topology in files)
+ *     (b) context definitions (MECE status from contextRegistry)
+ *     (c) the queryDSL (narrows to explicit context keys if present)
+ *
+ * @see docs/current/project-contexts/snapshot-epoch-resolution-design.md
+ * @see docs/current/project-contexts/mece-context-aggregation-design.md
+ */
 import type { GraphData } from '../types';
+import type { ParameterValue } from '../types/parameterData';
 import { fileRegistry } from '../contexts/TabContext';
 import { parseConstraints } from '../lib/queryDSL';
 import { extractSliceDimensions, hasContextAny } from './sliceIsolation';
@@ -15,6 +39,7 @@ import {
 import { computeShortCoreHash } from './coreHashService';
 import { db } from '../db/appDatabase';
 import { getClosureSet, type ClosureEntry } from './hashMappingsService';
+import { selectImplicitUncontextedSliceSetSync } from './meceSliceService';
 
 const providerByConnection = new Map<string, string>();
 
@@ -64,28 +89,107 @@ function stripAsatClause(dsl: string): string {
   return (dsl || '').replace(/\.?(?:asat|at)\([^)]+\)/g, '').replace(/^\./, '');
 }
 
+// ---------------------------------------------------------------------------
+// Workspace scope — derived once lazily, reused for all restoreFile calls.
+// ---------------------------------------------------------------------------
+
+let cachedWorkspaceScope: { repository: string; branch: string } | undefined;
+
+function getWorkspaceScope(): { repository: string; branch: string } | undefined {
+  if (cachedWorkspaceScope) return cachedWorkspaceScope;
+  const filesMap = (fileRegistry as any)?.files;
+  if (filesMap && typeof filesMap.values === 'function') {
+    try {
+      for (const f of filesMap.values()) {
+        const src = (f as any)?.source;
+        if (src?.repository && src?.branch) {
+          cachedWorkspaceScope = { repository: src.repository, branch: src.branch };
+          return cachedWorkspaceScope;
+        }
+      }
+    } catch { /* ignore */ }
+  }
+  return undefined;
+}
+
 // Event loader shared by all signature-computing paths in this module.
+// Uses restoreFile with workspace-prefixed IDB fallback (same pattern as plannerQuerySignatureService).
 async function loadEventDefinition(eventId: string): Promise<any> {
   const fileId = `event-${eventId}`;
-  const frFile: any = fileRegistry.getFile(fileId);
-  if (frFile?.data) return frFile.data;
+  let file = fileRegistry.getFile(fileId);
+  if (file?.data) return (file as any).data;
+
+  // Restore from IDB with workspace-prefixed key fallback
   try {
-    const dbFile: any = await db.files.get(fileId);
-    if (dbFile?.data) return dbFile.data;
+    await fileRegistry.restoreFile(fileId, getWorkspaceScope());
+    file = fileRegistry.getFile(fileId);
+    if (file?.data) return (file as any).data;
   } catch { /* ignore */ }
+
   throw new Error(`[snapshotRetrievalsService] Event file "${eventId}" not found in fileRegistry or IndexedDB.`);
 }
 
-function resolveContextKeys(constraintsWithoutAsat: any, graph: GraphData): string[] {
+// ---------------------------------------------------------------------------
+// Context key resolution — from stored slice topology, NOT from dataInterestsDSL
+// ---------------------------------------------------------------------------
+
+/**
+ * Enumerate ALL plausible context key-sets that could fulfil the queryDSL,
+ * based on what slices actually exist in the parameter file.
+ *
+ * Three inputs only:
+ *   (a) stored parameter values (slice topology)
+ *   (b) context definitions (MECE status via contextRegistry)
+ *   (c) the queryDSL constraints
+ *
+ * Returns an array of key-sets. Each key-set, when passed to computeQuerySignature,
+ * produces a different hash. The @ menu should query the snapshot DB with ALL of them
+ * and union the results (per-day boolean, no double-counting).
+ *
+ * When the queryDSL has explicit context keys, only that key-set is returned.
+ * When the queryDSL is uncontexted, we return:
+ *   - [] (uncontexted signature) — in case explicit uncontexted snapshots exist
+ *   - Each single MECE context key found in stored slices
+ *   - Each multi-key MECE cross-product key-set found in stored slices
+ */
+function enumeratePlausibleContextKeySets(
+  constraintsWithoutAsat: any,
+  paramValues: ParameterValue[],
+): string[][] {
+  // If the DSL has explicit context keys, only that key-set is plausible
   const explicit = extractContextKeysFromConstraints(constraintsWithoutAsat);
-  if (explicit.length > 0) return explicit;
-  try {
-    const pinnedDsl = (graph as any)?.dataInterestsDSL || '';
-    if (!pinnedDsl) return [];
-    return extractContextKeysFromConstraints(parseConstraints(pinnedDsl));
-  } catch {
-    return [];
+  if (explicit.length > 0) return [explicit.sort()];
+
+  // No explicit context — enumerate all plausible key-sets from stored slices
+  const keySets = new Set<string>();  // serialised key-sets for dedup
+  const result: string[][] = [];
+
+  // Always include uncontexted (empty key-set) — covers epoch A-style data
+  keySets.add('');
+  result.push([]);
+
+  if (!paramValues || paramValues.length === 0) return result;
+
+  // Extract all distinct single-key and multi-key context key-sets from stored slices
+  for (const pv of paramValues) {
+    const dims = extractSliceDimensions(pv.sliceDSL ?? '');
+    if (!dims) continue;
+    try {
+      const parsed = parseConstraints(dims);
+      if (parsed.contextAny.length > 0) continue;  // contextAny not usable for MECE
+      if (parsed.context.length === 0) continue;
+      if (dims.includes('case(')) continue;  // case dims excluded
+
+      const keys = [...new Set(parsed.context.map(c => c.key))].sort();
+      const keySetId = keys.join('||');
+      if (!keySets.has(keySetId)) {
+        keySets.add(keySetId);
+        result.push(keys);
+      }
+    } catch { /* ignore unparseable slices */ }
   }
+
+  return result;
 }
 
 export interface EdgeSignatureResult {
@@ -97,28 +201,41 @@ export interface EdgeSignatureResult {
 }
 
 /**
- * Compute the current canonical signature for an edge based on live graph state.
+ * Compute ALL plausible signatures for an edge that could match stored snapshots.
  *
- * Shared by the @-calendar (retrievals), snapshot menu counts, and Snapshot Manager
- * so all surfaces use the same code path and the same connection/event inputs.
+ * Returns one signature per plausible context key-set. For an uncontexted queryDSL
+ * on a graph that has been through multiple dataInterestsDSL epochs, this may return
+ * several signatures (uncontexted + one per MECE context dim observed in stored slices).
+ *
+ * The @ menu should query the snapshot DB with ALL returned hashes and union the
+ * retrieved days (per-day boolean, no double-counting).
  */
-export async function computeCurrentSignatureForEdge(args: {
+export async function computePlausibleSignaturesForEdge(args: {
   graph: GraphData;
   edgeId: string;
   effectiveDSL: string;
   workspace?: { repository: string; branch: string };
-}): Promise<EdgeSignatureResult | null> {
+}): Promise<EdgeSignatureResult[]> {
   const { graph, edgeId, effectiveDSL, workspace } = args;
   const edge: any = graph?.edges?.find((e: any) => e?.uuid === edgeId || e?.id === edgeId);
-  if (!edge) return null;
+  if (!edge) return [];
 
   const paramId: string | undefined = edge?.p?.id || edge?.p?.parameter_id;
-  if (!paramId) return null;
+  if (!paramId) return [];
 
-  const paramFile = fileRegistry.getFile(`parameter-${paramId}`);
+  // Load parameter file — try FileRegistry first, then restore from IDB with workspace prefix
+  let paramFile = fileRegistry.getFile(`parameter-${paramId}`);
+  if (!paramFile) {
+    try {
+      const ws = workspace ?? getWorkspaceScope();
+      await fileRegistry.restoreFile(`parameter-${paramId}`, ws);
+      paramFile = fileRegistry.getFile(`parameter-${paramId}`);
+    } catch { /* ignore */ }
+  }
+
   const workspaceRepo = paramFile?.source?.repository ?? workspace?.repository;
   const workspaceBranch = paramFile?.source?.branch ?? workspace?.branch;
-  if (!workspaceRepo || !workspaceBranch) return null;
+  if (!workspaceRepo || !workspaceBranch) return [];
 
   const dbParamId = `${workspaceRepo}-${workspaceBranch}-${paramId}`;
   const dslWithoutAsat = stripAsatClause(effectiveDSL);
@@ -137,18 +254,45 @@ export async function computeCurrentSignatureForEdge(args: {
     edge, graph, connectionProvider, loadEventDefinition, constraintsWithoutAsat
   );
 
-  const contextKeys = resolveContextKeys(constraintsWithoutAsat, graph);
+  // Enumerate all plausible context key-sets from stored slice topology
+  const paramValues: ParameterValue[] = Array.isArray((paramFile as any)?.data?.values)
+    ? (paramFile as any).data.values
+    : [];
+  const keySets = enumeratePlausibleContextKeySets(constraintsWithoutAsat, paramValues);
 
-  const signature = await computeQuerySignature(
-    queryPayload, connectionName, graph, edge, contextKeys,
-    { repository: workspaceRepo, branch: workspaceBranch },
-    eventDefinitions
-  );
+  // Compute a signature for each key-set
+  const results: EdgeSignatureResult[] = [];
+  for (const contextKeys of keySets) {
+    try {
+      const signature = await computeQuerySignature(
+        queryPayload, connectionName, graph, edge, contextKeys,
+        { repository: workspaceRepo, branch: workspaceBranch },
+        eventDefinitions
+      );
+      const sigParsed = parseSignature(signature);
+      if (sigParsed.coreHash) {
+        results.push({ signature, coreHash: sigParsed.coreHash, paramId, dbParamId, contextKeys });
+      }
+    } catch {
+      // Skip key-sets that fail signature computation (e.g., context def not loaded)
+    }
+  }
 
-  const sigParsed = parseSignature(signature);
-  if (!sigParsed.coreHash) return null;
+  return results;
+}
 
-  return { signature, coreHash: sigParsed.coreHash, paramId, dbParamId, contextKeys };
+/**
+ * Backward-compatible wrapper: returns the first plausible signature.
+ * Used by callers that only need a single signature (e.g., snapshot write path).
+ */
+export async function computeCurrentSignatureForEdge(args: {
+  graph: GraphData;
+  edgeId: string;
+  effectiveDSL: string;
+  workspace?: { repository: string; branch: string };
+}): Promise<EdgeSignatureResult | null> {
+  const results = await computePlausibleSignaturesForEdge(args);
+  return results.length > 0 ? results[0] : null;
 }
 
 export async function buildSnapshotRetrievalsQueryForEdge(args: {
@@ -218,8 +362,9 @@ export async function getSnapshotRetrievalsForEdge(args: {
   workspace?: { repository: string; branch: string };
   limit?: number;
 }): Promise<QuerySnapshotRetrievalsResult> {
-  const query = await buildSnapshotRetrievalsQueryForEdge(args);
-  if (!query) {
+  // Compute ALL plausible signatures for this edge
+  const sigs = await computePlausibleSignaturesForEdge(args);
+  if (sigs.length === 0) {
     return {
       success: false,
       retrieved_at: [],
@@ -229,7 +374,41 @@ export async function getSnapshotRetrievalsForEdge(args: {
       error: 'Could not determine snapshot subject (missing edge/parameter/workspace metadata or signature)',
     };
   }
-  return await querySnapshotRetrievals(query);
+
+  // Build hash_groups — all plausible hashes in one subject, one SQL query
+  const hashGroups: Array<{ core_hash: string; equivalent_hashes?: ClosureEntry[] }> = [];
+  for (const sig of sigs) {
+    const shortHash = await computeShortCoreHash(sig.signature);
+    const closure = getClosureSet(shortHash);
+    hashGroups.push({
+      core_hash: shortHash,
+      ...(closure.length > 0 ? { equivalent_hashes: closure } : {}),
+    });
+  }
+
+  const batchResults = await getBatchRetrievals([{
+    param_id: sigs[0].dbParamId,
+    hash_groups: hashGroups,
+  }], args.limit ?? 200);
+
+  const allDaysSet = new Set<string>();
+  const allRetrievedAt = new Set<string>();
+  for (const res of batchResults) {
+    if (!res?.success) continue;
+    for (const day of res.retrieved_days) allDaysSet.add(day);
+    for (const rat of res.retrieved_at) allRetrievedAt.add(rat);
+  }
+
+  const retrieved_days = Array.from(allDaysSet).sort().reverse();
+  const retrieved_at = Array.from(allRetrievedAt).sort().reverse();
+
+  return {
+    success: true,
+    retrieved_at,
+    retrieved_days,
+    latest_retrieved_at: retrieved_at[0] ?? null,
+    count: retrieved_at.length,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -348,107 +527,54 @@ export async function getSnapshotCoverageForEdgesBatched(args: {
   }
 
   try {
-    // Step 1: Compute all signatures client-side (parallel, no network)
-    const sigResults = await Promise.all(
+    // Step 1: Compute ALL plausible signatures per edge (parallel, no network)
+    const allSigResults = await Promise.all(
       targetEdgeIds.map((edgeId) =>
-        computeCurrentSignatureForEdge({ graph, edgeId, effectiveDSL, workspace })
-          .catch(() => null)
+        computePlausibleSignaturesForEdge({ graph, edgeId, effectiveDSL, workspace })
+          .catch((): EdgeSignatureResult[] => [])
       )
     );
 
-    const validEdges: Array<{
-      edgeId: string;
-      dbParamId: string;
-      signature: string;
-      coreHash: string;
-    }> = [];
-    const currentSignatures: Record<string, string> = {};
-    const dbParamIds: string[] = [];
+    // Build one subject per edge with hash_groups — all plausible hashes collapsed
+    const subjects: BatchRetrievalsSubject[] = [];
+    const subjectToEdgeIndex: number[] = [];  // maps subject index → edge index
 
-    for (let i = 0; i < targetEdgeIds.length; i++) {
-      const sig = sigResults[i];
-      if (!sig) continue;
-      // CRITICAL: compute the short DB core_hash from the full signature string,
-      // NOT from parseSignature().coreHash (which is the raw 'c' field hex string).
-      // The DB stores SHA256(signature)[0:16] base64url, not the c field.
-      const shortHash = await computeShortCoreHash(sig.signature);
-      validEdges.push({
-        edgeId: targetEdgeIds[i],
-        dbParamId: sig.dbParamId,
-        signature: sig.signature,
-        coreHash: shortHash,
-      });
-      currentSignatures[sig.dbParamId] = sig.signature;
-      if (!dbParamIds.includes(sig.dbParamId)) {
-        dbParamIds.push(sig.dbParamId);
+    for (let edgeIdx = 0; edgeIdx < targetEdgeIds.length; edgeIdx++) {
+      const sigs = allSigResults[edgeIdx];
+      if (!sigs || sigs.length === 0) continue;
+
+      const hashGroups: Array<{ core_hash: string; equivalent_hashes?: ClosureEntry[] }> = [];
+      for (const sig of sigs) {
+        const shortHash = await computeShortCoreHash(sig.signature);
+        const closure = getClosureSet(shortHash);
+        hashGroups.push({
+          core_hash: shortHash,
+          ...(closure.length > 0 ? { equivalent_hashes: closure } : {}),
+        });
       }
+
+      subjects.push({
+        param_id: sigs[0].dbParamId,
+        hash_groups: hashGroups,
+      });
+      subjectToEdgeIndex.push(edgeIdx);
     }
 
-    if (validEdges.length === 0) {
+    if (subjects.length === 0) {
       return { success: true, coverageByDay: {}, totalParams: targetEdgeIds.length, allDays: [] };
     }
 
-    // Step 2: ONE batched inventory call
-    const dslWithoutAsat = stripAsatClause(effectiveDSL);
-    const contextDims = extractSliceDimensions(dslWithoutAsat);
-    const wantSliceFilter = !!contextDims && !hasContextAny(dslWithoutAsat);
-
-    const equivalentHashesByParam: Record<string, ClosureEntry[]> = {};
-    for (const edge of validEdges) {
-      if (!equivalentHashesByParam[edge.dbParamId]) {
-        const closure = getClosureSet(edge.coreHash);
-        if (closure.length > 0) {
-          equivalentHashesByParam[edge.dbParamId] = closure;
-        }
-      }
-    }
-
-    const inv = await getBatchInventoryV2(dbParamIds, {
-      current_signatures: currentSignatures,
-      ...(Object.keys(equivalentHashesByParam).length > 0
-        ? { equivalent_hashes_by_param: equivalentHashesByParam }
-        : {}),
-      limit_families_per_param: 50,
-      limit_slices_per_family: 2000,
-    });
-
-    // Step 3: Build batch-retrievals subjects from inventory
-    const subjects: BatchRetrievalsSubject[] = [];
-
-    for (const edge of validEdges) {
-      const pidInv = inv?.[edge.dbParamId];
-      const matchedFamilyId = pidInv?.current?.matched_family_id;
-      const matchedFamily = matchedFamilyId
-        ? pidInv?.families?.find((f: any) => f.family_id === matchedFamilyId)
-        : undefined;
-
-      let slice_keys: string[] | undefined;
-      if (wantSliceFilter && matchedFamily) {
-        const candidates = (matchedFamily.by_slice_key || [])
-          .map((s: any) => s.slice_key)
-          .filter((k: string) => extractSliceDimensions(k) === contextDims);
-        slice_keys = Array.from(new Set(candidates));
-      } else if (wantSliceFilter) {
-        slice_keys = [];
-      }
-
-      const closure = equivalentHashesByParam[edge.dbParamId];
-      subjects.push({
-        param_id: edge.dbParamId,
-        core_hash: edge.coreHash,
-        slice_keys,
-        ...(closure ? { equivalent_hashes: closure } : {}),
-      });
-    }
-
-    // Step 4: ONE batched retrievals call
+    // Step 2: ONE batched retrievals call — one subject per edge
     const batchResults = await getBatchRetrievals(subjects, 200);
 
-    // Step 5: Aggregate coverage
+    // Step 3: Aggregate coverage — per edge, per day, boolean
     const dayCounts: Record<string, number> = {};
     const allDaysSet = new Set<string>();
-    for (const res of batchResults) {
-      if (!res.success) continue;
+
+    for (let subIdx = 0; subIdx < batchResults.length; subIdx++) {
+      const res = batchResults[subIdx];
+      if (!res?.success) continue;
+      // Each subject = one edge. Days are already unioned by the backend (single SQL ANY query).
       for (const day of res.retrieved_days) {
         dayCounts[day] = (dayCounts[day] || 0) + 1;
         allDaysSet.add(day);

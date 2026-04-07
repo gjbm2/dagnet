@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.9.19b
+**Released:** 7-Apr-26
+
+Bayes completion now reports quality gate results (good/fair/poor/very poor) in the operations toast and session log. Poor/very poor results show amber warning that persists until dismissed. Deep integrity check now queries snapshot DB for coverage gaps across all plausible hashes (epoch variants + equivalence closures).
+
+---
+
 ## Version 1.9.18b
 **Released:** 6-Apr-26
 

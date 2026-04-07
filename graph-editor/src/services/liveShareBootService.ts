@@ -143,7 +143,7 @@ export async function fetchLiveShareBundle(
 
   try {
     // Step 1: Unlock credentials
-    sessionLogService.addChild(logOpId, 'info', 'CREDENTIAL_UNLOCK', 'Unlocking credentials...');
+    sessionLogService.addChild(logOpId, 'debug', 'CREDENTIAL_UNLOCK', 'Unlocking credentials...');
     
     const credResult = await credentialsManager.loadCredentials();
     if (!credResult.success || !credResult.credentials) {
@@ -158,7 +158,7 @@ export async function fetchLiveShareBundle(
       return { success: false, error: `No credentials found for repository: ${repo}` };
     }
     
-    sessionLogService.addChild(logOpId, 'success', 'CREDENTIAL_UNLOCK_SUCCESS', `Credentials unlocked for ${repo}`);
+    sessionLogService.addChild(logOpId, 'debug', 'CREDENTIAL_UNLOCK_SUCCESS', `Credentials unlocked for ${repo}`);
     
     // Step 2: Configure gitService
     gitService.setCredentials({
@@ -178,7 +178,7 @@ export async function fetchLiveShareBundle(
 
     // Step 2.8: Fetch repo tree once (Git Data API) so we can fetch required files by blob SHA.
     // Rationale: GitHub Contents API (`/contents/*`) has become flaky for authenticated CORS preflights.
-    sessionLogService.addChild(logOpId, 'info', 'TREE_FETCH', 'Fetching repo tree (recursive)…');
+    sessionLogService.addChild(logOpId, 'debug', 'TREE_FETCH', 'Fetching repo tree (recursive)…');
     const treeResult = await gitService.getRepositoryTree(branch, true);
     if (!treeResult.success || !treeResult.data?.tree) {
       sessionLogService.endOperation(logOpId, 'error', `Tree fetch failed: ${treeResult.error || 'unknown error'}`);
@@ -194,7 +194,7 @@ export async function fetchLiveShareBundle(
       const size = typeof item?.size === 'number' ? item.size : undefined;
       pathToBlob.set(p, { sha, size });
     }
-    sessionLogService.addChild(logOpId, 'success', 'TREE_FETCH_SUCCESS', `Fetched repo tree (${pathToBlob.size} blobs)`);
+    sessionLogService.addChild(logOpId, 'debug', 'TREE_FETCH_SUCCESS', `Fetched repo tree (${pathToBlob.size} blobs)`);
 
     // In-call memoisation by blob SHA to avoid duplicate network fetches/decodes
     // if the same blob is referenced via multiple paths (rare but cheap to handle).
@@ -230,7 +230,7 @@ export async function fetchLiveShareBundle(
     })();
     
     // Step 3: Fetch graph (via Git Data API: tree+blob, not Contents API)
-    sessionLogService.addChild(logOpId, 'info', 'GRAPH_FETCH', `Fetching graph: ${graph}`);
+    sessionLogService.addChild(logOpId, 'debug', 'GRAPH_FETCH', `Fetching graph: ${graph}`);
 
     const graphsDir = (gitCreds as any)?.graphsPath ? String((gitCreds as any).graphsPath) : 'graphs';
     const graphFileName = graph.endsWith('.json') ? graph : `${graph}.json`;
@@ -255,7 +255,7 @@ export async function fetchLiveShareBundle(
     const graphSha = graphText.sha;
     const graphPath = graphText.path;
     
-    sessionLogService.addChild(logOpId, 'success', 'GRAPH_FETCH_SUCCESS', 
+    sessionLogService.addChild(logOpId, 'debug', 'GRAPH_FETCH_SUCCESS',
       `Fetched graph: ${graphData?.nodes?.length || 0} nodes, SHA: ${graphSha?.substring(0, 8)}`);
     
     // Step 4: Compute dependency closure
@@ -289,7 +289,7 @@ export async function fetchLiveShareBundle(
     })();
 
     const contextKeys = Array.from(new Set([...contextKeysFromGraph, ...contextKeysFromShare]));
-    sessionLogService.addChild(logOpId, 'info', 'DEPENDENCY_CLOSURE', 
+    sessionLogService.addChild(logOpId, 'debug', 'DEPENDENCY_CLOSURE',
       `Dependency closure: ${parameterIds.length} parameters, ${eventIds.length} events, ${contextKeys.length} contexts`);
 
     // Step 4.5+: Fetch supporting files. These are independent and safe to parallelise.
@@ -303,10 +303,10 @@ export async function fetchLiveShareBundle(
       try {
         const indexPath = toRepoPath('parameters-index.yaml');
         if (pathToBlob.has(indexPath)) {
-          sessionLogService.addChild(logOpId, 'info', 'INDEX_FETCH', 'Fetching parameters-index.yaml...');
+          sessionLogService.addChild(logOpId, 'debug', 'INDEX_FETCH', 'Fetching parameters-index.yaml...');
           const indexRes = await readTextFileFromTree('parameters-index.yaml');
           parametersIndex = YAML.parse(indexRes.content);
-          sessionLogService.addChild(logOpId, 'success', 'INDEX_FETCH_SUCCESS', 'Fetched parameters-index.yaml');
+          sessionLogService.addChild(logOpId, 'debug', 'INDEX_FETCH_SUCCESS', 'Fetched parameters-index.yaml');
         } else {
           sessionLogService.addChild(logOpId, 'warning', 'INDEX_FETCH_MISSING', 'No parameters-index.yaml (falling back to conventional paths)');
         }
@@ -317,7 +317,7 @@ export async function fetchLiveShareBundle(
       const parameters = new Map<string, { data: any; sha?: string; path: string }>();
       if (parameterIds.length === 0) return parameters;
 
-      sessionLogService.addChild(logOpId, 'info', 'PARAMETER_FETCH', `Fetching ${parameterIds.length} parameters...`);
+      sessionLogService.addChild(logOpId, 'debug', 'PARAMETER_FETCH', `Fetching ${parameterIds.length} parameters...`);
       await mapWithConcurrency(parameterIds, CONCURRENCY_FILES, async (paramId) => {
         const paramsDir = (gitCreds as any)?.paramsPath ? String((gitCreds as any).paramsPath) : 'parameters';
         const fallbackPath = `${paramsDir}/${paramId}.yaml`;
@@ -332,7 +332,7 @@ export async function fetchLiveShareBundle(
         }
       });
 
-      sessionLogService.addChild(logOpId, 'success', 'PARAMETER_FETCH_SUCCESS', `Fetched ${parameters.size}/${parameterIds.length} parameters`);
+      sessionLogService.addChild(logOpId, 'debug', 'PARAMETER_FETCH_SUCCESS', `Fetched ${parameters.size}/${parameterIds.length} parameters`);
       return parameters;
     };
 
@@ -345,10 +345,10 @@ export async function fetchLiveShareBundle(
       try {
         const indexPath = toRepoPath('events-index.yaml');
         if (pathToBlob.has(indexPath)) {
-          sessionLogService.addChild(logOpId, 'info', 'EVENT_INDEX_FETCH', 'Fetching events-index.yaml...');
+          sessionLogService.addChild(logOpId, 'debug', 'EVENT_INDEX_FETCH', 'Fetching events-index.yaml...');
           const indexRes = await readTextFileFromTree('events-index.yaml');
           eventsIndex = YAML.parse(indexRes.content);
-          sessionLogService.addChild(logOpId, 'success', 'EVENT_INDEX_FETCH_SUCCESS', 'Fetched events-index.yaml');
+          sessionLogService.addChild(logOpId, 'debug', 'EVENT_INDEX_FETCH_SUCCESS', 'Fetched events-index.yaml');
         } else {
           sessionLogService.addChild(logOpId, 'warning', 'EVENT_INDEX_FETCH_MISSING', 'No events-index.yaml (falling back to conventional paths)');
         }
@@ -364,7 +364,7 @@ export async function fetchLiveShareBundle(
         return fallback;
       };
 
-      sessionLogService.addChild(logOpId, 'info', 'EVENT_FETCH', `Fetching ${eventIds.length} event definitions...`);
+      sessionLogService.addChild(logOpId, 'debug', 'EVENT_FETCH', `Fetching ${eventIds.length} event definitions...`);
       await mapWithConcurrency(eventIds, CONCURRENCY_FILES, async (eventId) => {
         const eventsDir = (gitCreds as any)?.eventsPath ? String((gitCreds as any).eventsPath) : 'events';
         const fallbackPath = `${eventsDir}/${eventId}.yaml`;
@@ -379,7 +379,7 @@ export async function fetchLiveShareBundle(
         }
       });
 
-      sessionLogService.addChild(logOpId, 'success', 'EVENT_FETCH_SUCCESS', `Fetched ${events.size}/${eventIds.length} events`);
+      sessionLogService.addChild(logOpId, 'debug', 'EVENT_FETCH_SUCCESS', `Fetched ${events.size}/${eventIds.length} events`);
       return events;
     };
 
@@ -391,10 +391,10 @@ export async function fetchLiveShareBundle(
       try {
         const indexPath = toRepoPath('contexts-index.yaml');
         if (pathToBlob.has(indexPath)) {
-          sessionLogService.addChild(logOpId, 'info', 'CONTEXT_INDEX_FETCH', 'Fetching contexts-index.yaml...');
+          sessionLogService.addChild(logOpId, 'debug', 'CONTEXT_INDEX_FETCH', 'Fetching contexts-index.yaml...');
           const indexRes = await readTextFileFromTree('contexts-index.yaml');
           contextsIndex = YAML.parse(indexRes.content);
-          sessionLogService.addChild(logOpId, 'success', 'CONTEXT_INDEX_FETCH_SUCCESS', 'Fetched contexts-index.yaml');
+          sessionLogService.addChild(logOpId, 'debug', 'CONTEXT_INDEX_FETCH_SUCCESS', 'Fetched contexts-index.yaml');
         } else {
           sessionLogService.addChild(logOpId, 'warning', 'CONTEXT_INDEX_FETCH_MISSING', 'No contexts-index.yaml (falling back to conventional paths)');
         }
@@ -410,7 +410,7 @@ export async function fetchLiveShareBundle(
         return fallback;
       };
 
-      sessionLogService.addChild(logOpId, 'info', 'CONTEXT_FETCH', `Fetching ${contextKeys.length} contexts...`);
+      sessionLogService.addChild(logOpId, 'debug', 'CONTEXT_FETCH', `Fetching ${contextKeys.length} contexts...`);
       await mapWithConcurrency(contextKeys, CONCURRENCY_FILES, async (contextId) => {
         const contextsDir = (gitCreds as any)?.contextsPath ? String((gitCreds as any).contextsPath) : 'contexts';
         const fallbackPath = `${contextsDir}/${contextId}.yaml`;
@@ -425,7 +425,7 @@ export async function fetchLiveShareBundle(
         }
       });
 
-      sessionLogService.addChild(logOpId, 'success', 'CONTEXT_FETCH_SUCCESS', `Fetched ${contexts.size}/${contextKeys.length} contexts`);
+      sessionLogService.addChild(logOpId, 'debug', 'CONTEXT_FETCH_SUCCESS', `Fetched ${contexts.size}/${contextKeys.length} contexts`);
       return contexts;
     };
 
@@ -435,10 +435,10 @@ export async function fetchLiveShareBundle(
       try {
         const repoPath = toRepoPath('connections.yaml');
         if (!pathToBlob.has(repoPath)) return undefined;
-        sessionLogService.addChild(logOpId, 'info', 'CONNECTIONS_FETCH', 'Fetching connections.yaml...');
+        sessionLogService.addChild(logOpId, 'debug', 'CONNECTIONS_FETCH', 'Fetching connections.yaml...');
         const res = await readTextFileFromTree('connections.yaml');
         const data = YAML.parse(res.content);
-        sessionLogService.addChild(logOpId, 'success', 'CONNECTIONS_FETCH_SUCCESS', 'Fetched connections.yaml');
+        sessionLogService.addChild(logOpId, 'debug', 'CONNECTIONS_FETCH_SUCCESS', 'Fetched connections.yaml');
         return { data, sha: res.sha, path: res.path };
       } catch {
         sessionLogService.addChild(logOpId, 'warning', 'CONNECTIONS_FETCH_ERROR', 'Failed to fetch connections.yaml (falling back to defaults)');
@@ -453,11 +453,11 @@ export async function fetchLiveShareBundle(
       try {
         const settingsRepoPath = toRepoPath('settings/settings.yaml');
         if (pathToBlob.has(settingsRepoPath)) {
-          sessionLogService.addChild(logOpId, 'info', 'SETTINGS_FETCH', 'Fetching settings/settings.yaml...');
+          sessionLogService.addChild(logOpId, 'debug', 'SETTINGS_FETCH', 'Fetching settings/settings.yaml...');
           const res = await readTextFileFromTree('settings/settings.yaml');
           const data = YAML.parse(res.content);
           settings = { data, sha: res.sha, path: res.path };
-          sessionLogService.addChild(logOpId, 'success', 'SETTINGS_FETCH_SUCCESS', 'Fetched settings/settings.yaml');
+          sessionLogService.addChild(logOpId, 'debug', 'SETTINGS_FETCH_SUCCESS', 'Fetched settings/settings.yaml');
         } else {
           sessionLogService.addChild(logOpId, 'warning', 'SETTINGS_FETCH_MISSING', 'No settings/settings.yaml found (falling back to defaults)');
         }
@@ -497,7 +497,7 @@ export async function fetchLiveShareBundle(
     // Merge all context keys and fetch contexts
     const allContextKeys = Array.from(new Set([...contextKeys, ...contextKeysFromParams]));
     if (contextKeysFromParams.size > 0) {
-      sessionLogService.addChild(logOpId, 'info', 'CONTEXT_KEYS_FROM_PARAMS', 
+      sessionLogService.addChild(logOpId, 'debug', 'CONTEXT_KEYS_FROM_PARAMS',
         `Found ${contextKeysFromParams.size} additional context keys from parameter sliceDSLs: ${[...contextKeysFromParams].join(', ')}`);
     }
 
@@ -510,10 +510,10 @@ export async function fetchLiveShareBundle(
       try {
         const indexPath = toRepoPath('contexts-index.yaml');
         if (pathToBlob.has(indexPath)) {
-          sessionLogService.addChild(logOpId, 'info', 'CONTEXT_INDEX_FETCH', 'Fetching contexts-index.yaml...');
+          sessionLogService.addChild(logOpId, 'debug', 'CONTEXT_INDEX_FETCH', 'Fetching contexts-index.yaml...');
           const indexRes = await readTextFileFromTree('contexts-index.yaml');
           contextsIndex = YAML.parse(indexRes.content);
-          sessionLogService.addChild(logOpId, 'success', 'CONTEXT_INDEX_FETCH_SUCCESS', 'Fetched contexts-index.yaml');
+          sessionLogService.addChild(logOpId, 'debug', 'CONTEXT_INDEX_FETCH_SUCCESS', 'Fetched contexts-index.yaml');
         } else {
           sessionLogService.addChild(logOpId, 'warning', 'CONTEXT_INDEX_FETCH_MISSING', 'No contexts-index.yaml (falling back to conventional paths)');
         }
@@ -529,7 +529,7 @@ export async function fetchLiveShareBundle(
         return fallback;
       };
 
-      sessionLogService.addChild(logOpId, 'info', 'CONTEXT_FETCH', `Fetching ${keys.length} contexts...`);
+      sessionLogService.addChild(logOpId, 'debug', 'CONTEXT_FETCH', `Fetching ${keys.length} contexts...`);
       await mapWithConcurrency(keys, CONCURRENCY_FILES, async (contextId) => {
         const contextsDir = (gitCreds as any)?.contextsPath ? String((gitCreds as any).contextsPath) : 'contexts';
         const fallbackPath = `${contextsDir}/${contextId}.yaml`;
@@ -544,7 +544,7 @@ export async function fetchLiveShareBundle(
         }
       });
 
-      sessionLogService.addChild(logOpId, 'success', 'CONTEXT_FETCH_SUCCESS', `Fetched ${contexts.size}/${keys.length} contexts`);
+      sessionLogService.addChild(logOpId, 'debug', 'CONTEXT_FETCH_SUCCESS', `Fetched ${contexts.size}/${keys.length} contexts`);
       return contexts;
     };
 

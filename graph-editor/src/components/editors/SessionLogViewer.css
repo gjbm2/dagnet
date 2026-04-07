@@ -84,6 +84,21 @@
   background: #0052a3;
 }
 
+.log-level-select {
+  padding: 3px 6px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  font-size: 12px;
+  background: #ffffff;
+  color: #333;
+  cursor: pointer;
+}
+
+.log-trace-note {
+  font-size: 11px;
+  color: #856404;
+}
+
 .log-checkbox {
   display: flex;
   align-items: center;
@@ -115,6 +130,15 @@
 /* Entry container (includes children) */
 .log-entry-container {
   border-left: 3px solid transparent;
+}
+
+.log-entry-container.log-level-trace {
+  border-left-color: #9ca3af;
+  opacity: 0.75;
+}
+
+.log-entry-container.log-level-debug {
+  border-left-color: #6b7280;
 }
 
 .log-entry-container.log-level-success {
@@ -305,6 +329,15 @@
 }
 
 /* Level-specific colors for messages */
+.log-level-trace .log-message {
+  color: #6b7280;
+  font-size: 0.9em;
+}
+
+.log-level-debug .log-message {
+  color: #6b7280;
+}
+
 .log-level-success .log-message {
   color: #155724;
 }

@@ -33,7 +33,9 @@ type IssueCategory =
   | 'sync'
   | 'image'
   | 'face-alignment'
-  | 'hash-continuity';
+  | 'hash-continuity'
+  | 'snapshot-coverage'
+  | 'operational';
 
 export interface GraphIssue {
   id: string;
@@ -156,18 +158,26 @@ class GraphIssuesService {
     // Note: run() is fire-and-forget; callers that need to await should
     // subscribe to state changes instead. Kept async for API compatibility.
   }
-  
+
+  /**
+   * Run a deep integrity check (includes snapshot DB coverage).
+   * Requires the Python server to be running. Results replace current issues.
+   */
+  async deepCheck(): Promise<void> {
+    await this.runCheck(true);
+  }
+
   /**
    * Run the integrity check
    */
-  private async runCheck(): Promise<void> {
+  private async runCheck(deep: boolean = false): Promise<void> {
     // Update loading state
     this.state = { ...this.state, isLoading: true, error: null };
     this.notifySubscribers();
 
     let opId: string | null = null;
     try {
-      opId = sessionLogService.startOperation('info', 'integrity', 'GRAPH_ISSUES_CHECK', 'Running graph integrity check');
+      opId = sessionLogService.startOperation('debug', 'integrity', 'GRAPH_ISSUES_CHECK', 'Running graph integrity check');
       const startTime = performance.now();
       
       // Run integrity check with a mock tabOperations (we don't need tab opening here)
@@ -178,7 +188,7 @@ class GraphIssuesService {
         closeTab: () => {}
       };
       
-      const result = await IntegrityCheckService.checkIntegrity(mockTabOps as any, false);
+      const result = await IntegrityCheckService.checkIntegrity(mockTabOps as any, false, undefined, deep);
       
       const elapsed = performance.now() - startTime;
       console.log(`[GraphIssuesService] Check completed in ${elapsed.toFixed(0)}ms: ${result.issues.length} issues`);

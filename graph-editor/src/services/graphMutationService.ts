@@ -311,7 +311,7 @@ class GraphMutationService {
       return node?.id || uuidOrId;
     };
 
-    const diag = sessionLogService.getDiagnosticLoggingEnabled();
+    const diag = sessionLogService.isLevelEnabled('debug');
     const fingerprintBefore = computeGraphMasteredFingerprint(graph);
     const graphAnchoredEdges = graph.edges.filter(e => typeof e.p?.latency?.anchor_node_id === 'string' && e.p.latency.anchor_node_id.trim().length > 0);
     const latencyEdges = graph.edges.filter(e => !!e.p?.latency?.latency_parameter);
@@ -333,7 +333,7 @@ class GraphMutationService {
     if (diag) {
       sessionLogService.addChild(
         logOpId,
-        'info',
+        'debug',
         'MSMDC_INPUT_GRAPH_MASTERED_STATE',
         'Input graph-mastered state fingerprint',
         `fingerprint=${fingerprintBefore.fingerprint} (edges=${fingerprintBefore.itemCount})`,
@@ -444,7 +444,7 @@ class GraphMutationService {
 
         sessionLogService.addChild(
           logOpId,
-          'info',
+          'debug',
           'MSMDC_ANCHOR_COMPARISON_SUMMARY',
           'Anchor comparison (graph vs MSMDC output)',
           `willApply=${willApplyCount}, noChange=${noChangeCount}, overridden=${overriddenCount}, missingFromMSMDC=${missingFromMsmdcCount}`,
@@ -463,7 +463,7 @@ class GraphMutationService {
         for (const c of shown) {
           sessionLogService.addChild(
             logOpId,
-            'info',
+            'debug',
             'MSMDC_ANCHOR_COMPARISON',
             `${c.edgeLocation}: ${c.reason}`,
             `graph=${c.graphAnchor ?? '(unset)'}; msmdc=${c.msmdcAnchor ?? (c.msmdcAnchor === null ? '(null)' : '(unset)')}`,
@@ -481,7 +481,7 @@ class GraphMutationService {
         if (comparisons.length > maxPerEdge) {
           sessionLogService.addChild(
             logOpId,
-            'info',
+            'debug',
             'MSMDC_ANCHOR_COMPARISON_TRUNCATED',
             'Anchor comparison truncated',
             `Showing ${maxPerEdge}/${comparisons.length} edges`,
@@ -508,7 +508,7 @@ class GraphMutationService {
         for (const param of applyResult.changedParameters || []) {
           sessionLogService.addChild(
             logOpId,
-            'info',
+            'debug',
             'PARAM_UPDATED',
             `Query updated: ${param.paramId}`,
             `Location: ${param.location}`,
@@ -523,7 +523,7 @@ class GraphMutationService {
         for (const a of applyResult.changedAnchors || []) {
           sessionLogService.addChild(
             logOpId,
-            'info',
+            'debug',
             'ANCHOR_UPDATED',
             `Anchor updated: ${a.edgeLocation}`,
             `anchor_node_id: ${a.oldAnchor ?? '(unset)'} → ${a.newAnchor ?? '(unset)'}`,
@@ -539,7 +539,7 @@ class GraphMutationService {
         for (const nq of applyResult.changedNQueries || []) {
           sessionLogService.addChild(
             logOpId,
-            'info',
+            'debug',
             'N_QUERY_UPDATED',
             `n_query updated: ${nq.paramId}`,
             `Location: ${nq.location}`,
@@ -564,7 +564,7 @@ class GraphMutationService {
           );
           sessionLogService.addChild(
             logOpId,
-            'info',
+            'debug',
             'FILE_CASCADE_SUMMARY',
             'Graph→file cascade decisions (diagnostic)',
             undefined,
@@ -575,7 +575,7 @@ class GraphMutationService {
           for (const d of decisions.slice(0, max)) {
             sessionLogService.addChild(
               logOpId,
-              d.decision === 'error' ? 'error' : 'info',
+              d.decision === 'error' ? 'error' : 'debug',
               'FILE_CASCADE_DECISION',
               `${d.fileId}: ${d.field} → ${d.decision}`,
               d.reason,
@@ -594,7 +594,7 @@ class GraphMutationService {
           if (decisions.length > max) {
             sessionLogService.addChild(
               logOpId,
-              'info',
+              'debug',
               'FILE_CASCADE_TRUNCATED',
               'File cascade decision list truncated',
               `Showing ${max}/${decisions.length}`
@@ -603,7 +603,7 @@ class GraphMutationService {
         } else {
           sessionLogService.addChild(
             logOpId,
-            'info',
+            'debug',
             'FILE_CASCADE_SUMMARY',
             'Graph→file cascade decisions (diagnostic)',
             'No cascaded file updates were attempted'

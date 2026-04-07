@@ -35,6 +35,8 @@ const ISSUE_CATEGORY_ORDER: IssueCategory[] = [
   'naming',
   'metadata',
   'image',
+  'hash-continuity',
+  'snapshot-coverage',
 ];
 
 /**
@@ -281,9 +283,9 @@ export function GraphIssuesViewer({ fileId, tabId }: GraphIssuesViewerProps) {
     }
   }, [operations]);
   
-  // Force refresh
+  // Force refresh (deep — includes snapshot DB coverage)
   const handleRefresh = useCallback(() => {
-    graphIssuesService.forceCheck();
+    graphIssuesService.deepCheck();
   }, []);
 
   const handleCopyAll = useCallback(async () => {
@@ -468,10 +470,10 @@ export function GraphIssuesViewer({ fileId, tabId }: GraphIssuesViewerProps) {
           <button onClick={collapseAll} className="issues-btn" title="Collapse all">
             ⊖
           </button>
-          <button 
-            onClick={handleRefresh} 
+          <button
+            onClick={handleRefresh}
             className={`issues-btn ${state.isLoading ? 'loading' : ''}`}
-            title="Refresh"
+            title="Refresh (includes snapshot DB coverage)"
             disabled={state.isLoading}
           >
             {state.isLoading ? '⟳' : '↻'}

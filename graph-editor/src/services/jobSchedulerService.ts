@@ -263,7 +263,7 @@ class JobSchedulerService {
     if (this._bootComplete) return;
     this._bootComplete = true;
 
-    sessionLogService.info('session', 'SCHEDULER_BOOT_COMPLETE', 'Job scheduler: boot complete, reconciling persisted jobs then draining boot-waiting jobs');
+    sessionLogService.debug('session', 'SCHEDULER_BOOT_COMPLETE', 'Job scheduler: boot complete, reconciling persisted jobs then draining boot-waiting jobs');
 
     // Reconcile persisted IDB jobs BEFORE draining boot-waiting jobs.
     // This ensures completed remote jobs (e.g. Bayes) are surfaced and their
@@ -364,7 +364,7 @@ class JobSchedulerService {
 
       if (staleJobs.length === 0) return;
 
-      sessionLogService.info('session', 'SCHEDULER_RECONCILE_START',
+      sessionLogService.debug('session', 'SCHEDULER_RECONCILE_START',
         `Reconciling ${staleJobs.length} persisted job(s)`, undefined,
         { jobIds: staleJobs.map(j => j.jobId) });
 
@@ -420,7 +420,7 @@ class JobSchedulerService {
 
           // If still running, resume polling as a sub-task (job-specific logic).
           if (result.status === 'running') {
-            sessionLogService.info('session', 'SCHEDULER_RECONCILE_RESUME',
+            sessionLogService.debug('session', 'SCHEDULER_RECONCILE_RESUME',
               `Job ${record.jobId} still running remotely — will resume polling when job is triggered`);
           }
         } catch (err) {
@@ -445,7 +445,7 @@ class JobSchedulerService {
         await db.schedulerJobs.bulkDelete(old.map(j => j.jobId));
       }
 
-      sessionLogService.info('session', 'SCHEDULER_RECONCILE_DONE',
+      sessionLogService.debug('session', 'SCHEDULER_RECONCILE_DONE',
         `Reconciliation complete (${staleJobs.length} job(s) processed, ${old.length} pruned)`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -478,7 +478,7 @@ class JobSchedulerService {
 
     // Suppression check.
     if (this.isJobSuppressed(jobId)) {
-      sessionLogService.info('session', 'SCHEDULER_JOB_SUPPRESSED', `Job ${jobId} suppressed by running job`, undefined, { jobId });
+      sessionLogService.debug('session', 'SCHEDULER_JOB_SUPPRESSED', `Job ${jobId} suppressed by running job`, undefined, { jobId });
       return;
     }
 

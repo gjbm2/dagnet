@@ -43,7 +43,7 @@ export function useIntegrityCheck(): UseIntegrityCheckResult {
       const workspace = state.selectedRepo && state.selectedBranch 
         ? { repository: state.selectedRepo, branch: state.selectedBranch }
         : undefined;
-      const result = await IntegrityCheckService.checkIntegrity(operations, true, workspace);
+      const result = await IntegrityCheckService.checkIntegrity(operations, true, workspace, true);
       
       if (result.success) {
         toast.success(

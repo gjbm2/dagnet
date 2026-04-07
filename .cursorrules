@@ -90,6 +90,7 @@ These are **non-negotiable reflexes**. When the user's message matches a trigger
 | **"RTFM"**, "rtfm", or any derivation (e.g. "read the manual", "check the docs", "did you even read the rules") | The user is telling you that your recent response missed context that is already documented. **Three mandatory steps**: **(1)** Re-read this entire CLAUDE.md file systematically — do not skim. **(2)** Review relevant codebase docs (`docs/current/`, `docs/current/project-contexts/`, `graph-editor/docs/`, and any files referenced in the current discussion) to rebuild working knowledge. **(3)** Revise your most recent response/analysis in light of what you missed, and respond with corrected, properly contextualised guidance. **Do NOT defend the original response.** The user is not asking for justification — they are telling you that you were wrong. |
 | **"pick up handover"**, "pick up latest handover", "continue from handover", "read the handover" | **(1)** List files in `docs/current/handover/` and find the most recent one (by date in filename, format `d-MMM-yy`). **(2)** Read it in full. **(3)** Summarise the objective, current state, and next steps back to the user. **(4)** Ask the user which next step to start on, or begin the first one if the user said "and go" or similar. Do NOT start coding without confirming the handover context makes sense. |
 | **"write handover"**, "do a handover", "handover note" | Write a detailed handover note following the template in `.claude/skills/handover/SKILL.md`. Write to `docs/current/handover/` with a `d-MMM-yy` dated filename. Review the **full conversation** — capture objective, current state, all key decisions and rationale, discoveries, gotchas, relevant files, next steps, and open questions. No code snippets — prose only. Tell the user the file path when done. |
+| **"document"**, "/document", "document this", "ensure this is documented" | Invoke the `/document` skill. Reviews the full conversation and ensures all decisions, designs, architectural insights, and user-facing changes are properly documented in the appropriate locations (`docs/current/codebase/`, `docs/current/project-contexts/`, `graph-editor/public/docs/`, etc.). Reports what was created/updated and flags anything deliberately omitted. |
 
 **Handover guard**: NEVER initiate a handover (reading or writing) unless the user explicitly requests it in their message. The warm-start step to *list* the handover directory is permitted, but do not read or write handover notes based on that listing alone. The word "handover" appearing in file paths, directory listings, or prior context does NOT constitute a user request.
 
@@ -311,9 +312,11 @@ Operations requiring session logging:
 - **Workspace operations**: clone, load, rollback, sync
 
 Use `sessionLogService` from `services/sessionLogService.ts`:
-- **Simple**: `sessionLogService.info('git', 'GIT_PULL', message, detail?, metadata?)` — also `.success()`, `.error()`, `.warning()`
+- **Simple**: `sessionLogService.info('git', 'GIT_PULL', message, detail?, metadata?)` — also `.success()`, `.error()`, `.warning()`, `.debug()`, `.trace()`
 - **Hierarchical**: `startOperation()` → `addChild()` → `endOperation()` for multi-step operations
 - **Operation types**: `'session' | 'git' | 'file' | 'workspace' | 'msmdc' | 'data-fetch' | 'data-update' | 'graph' | 'index' | 'merge' | 'integrity'`
+- **Levels**: `trace < debug < info = success < warning < error`. Session logs are for **Business Analysts** — use info for business events, debug for developer diagnostics, trace for raw payloads. See `SESSION_LOG_ARCHITECTURE.md` for full details.
+- **Allocation gates**: Gate expensive trace-level entries with `if (sessionLogService.isLevelEnabled('trace'))` to avoid unconditional `JSON.stringify` costs.
 
 ## Architecture Patterns
 
@@ -388,6 +391,7 @@ Identify your task type below, then read the listed docs **before writing any co
 - AUTOMATION_PIPELINE.md **(full)** — daily fetch, retrieve-all automation, run logging
 - JOB_SCHEDULER.md **(skim)** — unified system for recurring work
 - STALENESS_AND_AUTO_UPDATE.md **(skim)** — nudges, auto-update policy
+- `docs/current/project-bayes/28-bayes-run-reconnect-design.md` **(skim if touching Bayes automation)** — 3-phase pipeline (Phase 0 patch apply, Phase 1 fetch+commission, Phase 2 drain), `runBayes` flag, reconnect mechanism
 
 **Modifying share links, live share, or bundles**:
 - SHARE_AND_LIVE_SHARE.md **(full)** — static/live shares, boot/hydration/sync
@@ -440,6 +444,7 @@ Identify your task type below, then read the listed docs **before writing any co
 - `cohort-maturity-forecast-design.md` — cohort maturity forecast chart
 - `surprise-gauge-design.md` — surprise analysis type
 - `BAYESIAN_ENGINE_RESEARCH.md` — Bayesian tool research
+- `SESSION_LOG_ARCHITECTURE.md` — session log levels, thresholds, viewer, endOperation cleanup
 - `DEV_LOG_STREAMING.md` — three JSONL log streams
 - `GRAPH_OPS_TOOLING.md` — graph validation tools
 - `INTEGRITY_CHECK_ADDITIONS.md` — structural integrity checks
@@ -494,15 +499,31 @@ Services must NOT import UI components or dialogs directly. Accept callbacks ins
 | IDB direct access | `db/appDatabase.ts` | (used by all integration tests) |
 | Index rebuild | `indexRebuildService.ts` | `indexRebuild.critical.test.ts` |
 | 3-way merge | `mergeService.ts` | `mergeService.test.ts` |
-| Session logging | `sessionLogService.ts` | (integrated across all tests) |
+| Session logging | `sessionLogService.ts` | `sessionLogService.test.ts` |
 | Hash/signature computation | `coreHashService.ts`, `signatureMatchingService.ts` | `coreHashService.test.ts`, `signatureMatchingService.test.ts` |
 | Schema validation | `lib/schema.ts` | `schemaParityAutomated.test.ts` |
 | Non-blocking pull | `nonBlockingPullService.ts` | `nonBlockingPullService.test.ts` |
 | Automation runs | `dailyRetrieveAllAutomationService.ts` | `dailyRetrieveAllAutomationService.test.ts` |
 | Integrity checks | `integrityCheckService.ts` | `integrityCheckService.*.test.ts` (7 files) |
 | FE/BE stats parity | `forecastingParityService.ts`, `beTopoPassService.ts` | `forecastingParity.*.test.ts` |
+| Bayes patch apply + cascade | `bayesPatchService.ts` | `bayesPatchServiceMerge.integration.test.ts` |
+| Bayes reconnect + automation submit | `bayesReconnectService.ts` | (no dedicated test yet) |
+| Daily fetch / runBayes flags | `dailyFetchService.ts` | `dailyFetchService.test.ts` |
 
 ## Debugging Discipline
+
+### No "Not My Problem" Dismissals (APPLIES TO EVERYTHING)
+
+**CRITICAL**: "This isn't caused by my changes" is **never** an acceptable reason to stop investigating. It applies to test failures, unexpected behaviour, broken UI, stale state, console errors — anything you encounter while working.
+
+You may (and should) note provenance: *"This doesn't appear related to edits made in this thread."* But that observation is the **start** of the investigation, not the end. The user hired you to solve problems, not to assign blame.
+
+**Required response to any issue you encounter:**
+1. **Investigate** — trace the cause with the same rigour you'd apply to your own bugs.
+2. **Report** — explain what's wrong and why, with file paths and line numbers.
+3. **Propose action** — fix it (if in scope and low risk), or flag it with enough context for the user to act.
+
+"Not invented here" is never an acceptable pattern. The user sees a broken system, not a clean division of responsibility between you and prior commits. If you found it, you own the investigation.
 
 ### Root-Cause Gate (MANDATORY before writing any fix)
 
@@ -735,7 +756,7 @@ Do NOT claim a fix is complete until you have verified it. "I changed the code" 
 - Run BOTH only if changes affect both frontend and Python
 
 ### Investigating Test Failures
-**CRITICAL**: Every test failure is your responsibility to investigate, regardless of whether your changes caused it. When tests fail — whether from a targeted run or a full suite — you **own** the investigation. Do not label failures as "pre-existing" or "unrelated" and move on. That is not acceptable.
+This is a specific application of the **"No 'Not My Problem' Dismissals"** rule above. Every test failure is your responsibility to investigate, regardless of whether your changes caused it. You **own** the investigation.
 
 Your job for **every** failure:
 

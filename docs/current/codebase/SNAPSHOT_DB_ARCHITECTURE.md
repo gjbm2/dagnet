@@ -139,5 +139,14 @@ For context-epoch handling (regime-safe cohort maturity), see `SNAPSHOT_DB_CONTE
 - `src/lib/graphComputeClient.ts` — analysis request/response handling
 
 **Backend:**
-- `lib/snapshot_service.py` — all DB operations (append, query-virtual, query-full, retrievals, inventory, equivalence)
+- `lib/snapshot_service.py` — all DB operations (append, query-virtual, query-full, retrievals, inventory, equivalence) plus module-level connection pool and TTL result cache
 - `lib/api_handlers.py` — API route handlers
+
+## 8. Connection Pooling and Result Cache
+
+Added 7-Apr-26. All DB operations go through a module-level `psycopg2` connection pool and a 15-minute TTL result cache, both scoped to a single Vercel function instance. See `PYTHON_BACKEND_ARCHITECTURE.md` § "Connection Pooling and Result Cache" for full details.
+
+Key points:
+- All read functions are cached; write functions (`append_snapshots`, `delete_snapshots`) clear the entire cache after successful commit.
+- Vercel has no sticky routing — each instance has its own isolated cache. Fluid Compute (enabled by default) maximises reuse of a single instance for concurrent requests.
+- Explicit cache bust via `/api/cache/clear` for dev/testing. FE does not need to trigger cache busting in normal workflows.

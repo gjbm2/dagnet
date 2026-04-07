@@ -11,6 +11,7 @@ import { historicalFileService, type CommitDateMap, type HistoricalCommit } from
 import toast from 'react-hot-toast';
 import { RepositoryItem, ObjectType } from '../../types';
 import { registryService, RegistryItem } from '../../services/registryService';
+import { db } from '../../db/appDatabase';
 import { getObjectTypeTheme } from '../../theme/objectTypeTheme';
 import { Tag, GitBranch, X } from 'lucide-react';
 import { collectGraphDependencies } from '../../lib/dependencyClosure';
@@ -211,6 +212,24 @@ export function NavigatorContent() {
     };
   }, [tabs]);
 
+  // Async: fetch content-level updated_at timestamps from IDB (non-blocking)
+  const [idbTimestamps, setIdbTimestamps] = useState<Map<string, number>>(new Map());
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const map = new Map<string, number>();
+      await db.files.each(file => {
+        const raw = file.data?.metadata?.updated_at ?? file.data?.updated_at;
+        if (raw) {
+          const ms = typeof raw === 'number' ? raw : Date.parse(raw);
+          if (!isNaN(ms) && ms > 0) map.set(file.fileId, ms);
+        }
+      });
+      if (!cancelled) setIdbTimestamps(map);
+    })();
+    return () => { cancelled = true; };
+  }, [registryItems, dirtyStateVersion]);
+
   // Build NavigatorEntry objects from registry service + graph files
   const navigatorEntries = useMemo(() => {
     const entriesMap = new Map<string, NavigatorEntry>();
@@ -232,7 +251,7 @@ export function NavigatorContent() {
           isOrphan: item.isOrphan,
           tags: item.tags,
           path: item.file_path,
-          lastModified: item.lastModified,
+          lastModified: item.lastModified || idbTimestamps.get(fileId),
           lastOpened: item.lastOpened,
           // Type-specific metadata for sub-categorization
           parameter_type: item.parameter_type,
@@ -270,7 +289,7 @@ export function NavigatorContent() {
           isOrphan: false,
           tags: file?.data?.metadata?.tags || file?.data?.tags,
           path: item.path,
-          lastModified: file?.lastModified,
+          lastModified: file?.lastModified || idbTimestamps.get(fileId),
           lastOpened: file?.lastOpened
         });
       } else if (item.type === 'node') {
@@ -295,15 +314,15 @@ export function NavigatorContent() {
             isOpen: itemTabs.length > 0,
             isOrphan: true,
             path: item.path,
-            lastModified: file?.lastModified,
+            lastModified: file?.lastModified || idbTimestamps.get(fileId),
             lastOpened: file?.lastOpened
           });
         }
       }
     }
-    
+
     return Array.from(entriesMap.values());
-  }, [items, tabs, registryItems, dirtyStateVersion]);
+  }, [items, tabs, registryItems, dirtyStateVersion, idbTimestamps]);
 
   // Build dependency filter set when a graph is selected for dependency filtering
   const dependencyFileIds = useMemo(() => {

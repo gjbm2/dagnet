@@ -14,12 +14,14 @@ import toast from 'react-hot-toast';
 export interface DailyFetchChange {
   graphFileId: string;
   dailyFetch: boolean;
+  runBayes?: boolean;
 }
 
 export interface GraphListItem {
   fileId: string;
   name: string;
   dailyFetch: boolean;
+  runBayes: boolean;
   hasPinnedQuery: boolean;
 }
 
@@ -82,6 +84,7 @@ class DailyFetchService {
         fileId,
         name,
         dailyFetch: data?.dailyFetch ?? false,
+        runBayes: data?.runBayes ?? false,
         hasPinnedQuery: !!(data?.dataInterestsDSL),
       });
     }
@@ -97,7 +100,7 @@ class DailyFetchService {
   async applyChanges(changes: DailyFetchChange[]): Promise<void> {
     if (changes.length === 0) return;
 
-    for (const { graphFileId, dailyFetch } of changes) {
+    for (const { graphFileId, dailyFetch, runBayes } of changes) {
       const file = await db.files.get(graphFileId);
       if (!file || file.type !== 'graph') {
         console.warn(`[dailyFetchService] File not found or not a graph: ${graphFileId}`);
@@ -105,7 +108,9 @@ class DailyFetchService {
       }
 
       const data = file.data as GraphData;
-      const updatedData = { ...data, dailyFetch };
+      // When dailyFetch is disabled, runBayes must also be cleared
+      const effectiveRunBayes = dailyFetch ? (runBayes ?? data.runBayes) : undefined;
+      const updatedData = { ...data, dailyFetch, runBayes: effectiveRunBayes };
 
       // Update IDB (the prefixed or unprefixed variant we found)
       await db.files.update(graphFileId, {
@@ -131,7 +136,7 @@ class DailyFetchService {
         if (unprefixedFile && unprefixedFile.type === 'graph') {
           const unprefixedData = unprefixedFile.data as GraphData;
           await db.files.update(canonicalFileId, {
-            data: { ...unprefixedData, dailyFetch },
+            data: { ...unprefixedData, dailyFetch, runBayes: effectiveRunBayes },
             isDirty: true,
             lastModified: Date.now(),
           });
@@ -144,7 +149,7 @@ class DailyFetchService {
       const registryFile = fileRegistry.getFile(canonicalFileId);
       if (registryFile) {
         const liveData = registryFile.data as GraphData;
-        fileRegistry.updateFile(canonicalFileId, { ...liveData, dailyFetch });
+        fileRegistry.updateFile(canonicalFileId, { ...liveData, dailyFetch, runBayes: effectiveRunBayes });
       }
 
       // Sync to GraphStore using canonical (unprefixed) fileId.
@@ -153,7 +158,7 @@ class DailyFetchService {
       if (store) {
         const liveGraph = store.getState().graph;
         if (liveGraph) {
-          store.getState().setGraph({ ...liveGraph, dailyFetch });
+          store.getState().setGraph({ ...liveGraph, dailyFetch, runBayes: effectiveRunBayes });
         }
       }
     }

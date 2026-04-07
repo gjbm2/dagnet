@@ -749,11 +749,11 @@ export async function getParameterFromFile(options: {
               const eventLoader = async (eventId: string) => {
                 const fileId = `event-${eventId}`;
                 const file = fileRegistry.getFile(fileId);
-                const diagnosticOn = sessionLogService.getDiagnosticLoggingEnabled();
-                
+                const diagnosticOn = sessionLogService.isLevelEnabled('debug');
+
                 if (file && file.data) {
                   if (diagnosticOn) {
-                    sessionLogService.info('data-fetch', 'EVENT_LOADED', 
+                    sessionLogService.debug('data-fetch', 'EVENT_LOADED',
                       `Loaded event "${eventId}" for signature`,
                       undefined,
                       {
@@ -772,7 +772,7 @@ export async function getParameterFromFile(options: {
                   const dbFile: any = await db.files.get(fileId);
                   if (dbFile?.data) {
                     if (diagnosticOn) {
-                      sessionLogService.info('data-fetch', 'EVENT_LOADED',
+                      sessionLogService.debug('data-fetch', 'EVENT_LOADED',
                         `Loaded event "${eventId}" for signature (IndexedDB fallback)`,
                         undefined,
                         {
@@ -905,9 +905,9 @@ export async function getParameterFromFile(options: {
               const signatureToUse = latestQuerySignature || expectedQuerySignature;
               
               // DIAGNOSTIC: Log signature comparison result
-              const diagnosticOn = sessionLogService.getDiagnosticLoggingEnabled();
+              const diagnosticOn = sessionLogService.isLevelEnabled('debug');
               if (diagnosticOn) {
-                sessionLogService.info('data-fetch', 'SIGNATURE_COMPARISON', 
+                sessionLogService.debug('data-fetch', 'SIGNATURE_COMPARISON',
                   `Comparing signatures for ${paramId}`,
                   undefined,
                   {
@@ -930,7 +930,7 @@ export async function getParameterFromFile(options: {
                 // Log for debugging, but don't toast - file having old signatures is normal
                 // and the system handles it correctly by using latest signature data
                 if (diagnosticOn) {
-                  sessionLogService.warning('data-fetch', 'SIGNATURE_MISMATCH', 
+                  sessionLogService.debug('data-fetch', 'SIGNATURE_MISMATCH',
                     `Signature mismatch for ${paramId}: expected differs from cached`,
                     undefined,
                     {

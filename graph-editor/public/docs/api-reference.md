@@ -584,6 +584,18 @@ interface HealthResponse {
 }
 ```
 
+### Cache Management
+
+Clear the in-memory result cache on the Python backend. Useful for dev/testing after manual DB edits.
+
+**Endpoint:** `POST /api/cache/clear`
+
+Returns pre-clear statistics including `hits`, `misses`, `evictions`, and `entries_cleared`.
+
+**Endpoint:** `GET /api/cache/stats`
+
+Returns current cache statistics (non-destructive): `hits`, `misses`, `evictions`, `entries`.
+
 ## Credentials Management API
 
 ### Loading Credentials

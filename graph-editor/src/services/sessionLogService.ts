@@ -21,7 +21,34 @@ import type { TabState } from '../types';
 import { DIAGNOSTIC_LOG as DIAGNOSTIC_LOG_DEFAULT } from '../constants/latency';
 import { db } from '../db/appDatabase';
 
-export type LogLevel = 'info' | 'success' | 'warning' | 'error';
+/**
+ * Log levels, ordered by severity.
+ * Threshold ordering: trace < debug < info = success < warning < error
+ *
+ * - trace: extremely verbose, per-call granularity (API request/response bodies).
+ *          Gated by isLevelEnabled('trace') at call sites to avoid allocation cost.
+ * - debug: diagnostic detail for developers (per-item processing, fetch plans).
+ * - info:  significant business events, operation boundaries.
+ * - success: positive outcome markers (equivalent to info for threshold purposes).
+ * - warning: degraded but recoverable.
+ * - error: operation failed, requires attention.
+ */
+export type LogLevel = 'trace' | 'debug' | 'info' | 'success' | 'warning' | 'error';
+
+/** Numeric severity for threshold comparisons. */
+const LEVEL_SEVERITY: Record<LogLevel, number> = {
+  trace: 0,
+  debug: 1,
+  info: 2,
+  success: 2,  // equivalent to info for threshold purposes
+  warning: 3,
+  error: 4,
+};
+
+/** Returns true if `level` is at or above `threshold`. */
+function meetsThreshold(level: LogLevel, threshold: LogLevel): boolean {
+  return LEVEL_SEVERITY[level] >= LEVEL_SEVERITY[threshold];
+}
 
 export type OperationType = 
   | 'session'
@@ -108,32 +135,13 @@ interface ActiveOperation {
 }
 
 /**
- * Options for log calls that support diagnostic gating.
- * When diagnostic logging is off:
- *
- *  `diagnostic: true` — the entire operation (parent + children) is buffered.
- *    If any child is a warning/error, the whole tree is promoted to the real log.
- *    Otherwise it is silently discarded at endOperation.
- *
- *  `diagnosticChildren: true` — the parent is logged normally (always visible),
- *    but its children are buffered. If a warning/error child arrives, all buffered
- *    siblings are flushed so the user sees full context around the problem.
- *    Otherwise children are quietly discarded at endOperation.
- *    Use this for per-item completion records where the parent is meaningful
- *    but the detail children are noise.
- *
- *  Standalone calls (info/success) with `diagnostic: true` are silently dropped.
- *  Warnings and errors are NEVER suppressed regardless of these flags.
+ * @deprecated DiagnosticOptions is retained for API compatibility during transition.
+ * Callers should use debug/trace log levels instead of diagnostic flags.
+ * This interface and all references will be removed in a future cleanup.
  */
 export interface DiagnosticOptions {
   diagnostic?: boolean;
   diagnosticChildren?: boolean;
-}
-
-interface DiagnosticBuffer {
-  entry: LogEntry;
-  startTime: number;
-  promoted: boolean;
 }
 
 class SessionLogService {
@@ -141,13 +149,12 @@ class SessionLogService {
   private entries: LogEntry[] = [];
   private entriesById: Map<string, LogEntry> = new Map();
   private activeOperations: Map<string, ActiveOperation> = new Map();
-  private diagnosticBuffers: Map<string, DiagnosticBuffer> = new Map();
   private fileId = 'session-log';
   private listeners: Set<(entries: LogEntry[]) => void> = new Set();
   private settingsListeners: Set<() => void> = new Set();
   private isInitialized = false;
   private operationCounter = 0;
-  private diagnosticLoggingEnabled = DIAGNOSTIC_LOG_DEFAULT;
+  private displayThreshold: LogLevel = DIAGNOSTIC_LOG_DEFAULT ? 'trace' : 'info';
 
   private constructor() {}
 
@@ -188,18 +195,22 @@ class SessionLogService {
   }
 
   /**
-   * Runtime control: whether verbose diagnostic data should be included in session logs.
-   * Defaults from constants/latency.ts but can be toggled via UI.
+   * Whether verbose diagnostic data should be included.
+   * Now derived from the display threshold: trace = diagnostics on, anything else = off.
+   * Callers (e.g. batchAnchorCoverage) use this to decide whether to request
+   * extra diagnostic fields from the server.
    */
   getDiagnosticLoggingEnabled(): boolean {
-    return this.diagnosticLoggingEnabled;
+    return this.displayThreshold === 'trace';
   }
 
+  /**
+   * @deprecated Use setDisplayThreshold('trace') instead.
+   * Retained for API compatibility — sets threshold to trace (if enabling)
+   * or info (if disabling).
+   */
   setDiagnosticLoggingEnabled(enabled: boolean): void {
-    const next = !!enabled;
-    if (this.diagnosticLoggingEnabled === next) return;
-    this.diagnosticLoggingEnabled = next;
-    this.notifySettingsListeners();
+    this.setDisplayThreshold(enabled ? 'trace' : 'info');
   }
 
   subscribeSettings(listener: () => void): () => void {
@@ -207,6 +218,26 @@ class SessionLogService {
     return () => {
       this.settingsListeners.delete(listener);
     };
+  }
+
+  /**
+   * Check whether a given level would pass the current display threshold.
+   * Use at call sites to gate expensive object allocation for trace-level entries:
+   *   if (sessionLogService.isLevelEnabled('trace')) { sessionLogService.addChild(...) }
+   */
+  isLevelEnabled(level: LogLevel): boolean {
+    return meetsThreshold(level, this.displayThreshold);
+  }
+
+  getDisplayThreshold(): LogLevel {
+    return this.displayThreshold;
+  }
+
+  setDisplayThreshold(threshold: LogLevel): void {
+    if (this.displayThreshold === threshold) return;
+    this.displayThreshold = threshold;
+    this.notifySettingsListeners();
+    this.notifyListeners();
   }
 
   private notifySettingsListeners(): void {
@@ -224,13 +255,12 @@ class SessionLogService {
   }
 
   /**
-   * Start a composite operation that will have children
-   * Returns operation ID to use with addChild() and endOperation()
+   * Start a composite operation that will have children.
+   * Returns operation ID to use with addChild() and endOperation().
    *
-   * When `options.diagnostic` is true and diagnostic logging is off, the operation
-   * is buffered in memory rather than written to the log. If any child warning/error
-   * arrives, the entire operation (with all children) is promoted to the real log.
-   * Otherwise it is silently discarded at endOperation().
+   * The `options` parameter is accepted for API compatibility but diagnostic
+   * buffering has been replaced by level-based filtering. Use debug/trace
+   * levels on children instead of diagnostic flags.
    */
   startOperation(
     level: LogLevel,
@@ -254,26 +284,13 @@ class SessionLogService {
       expanded: level === 'warning' || level === 'error' // Auto-expand warnings/errors
     };
 
-    // Buffer diagnostic operations when diagnostic logging is off
-    // (warnings/errors are never buffered)
-    if (!this.diagnosticLoggingEnabled && level !== 'warning' && level !== 'error') {
-      if (options?.diagnostic) {
-        // Fully buffered — parent + children suppressed unless promoted
-        this.diagnosticBuffers.set(id, { entry, startTime: performance.now(), promoted: false });
-        this.activeOperations.set(id, { entry, startTime: performance.now() });
-        return id;
-      }
-      if (options?.diagnosticChildren) {
-        // Parent visible, children buffered — create buffer but also write parent to log
-        this.diagnosticBuffers.set(id, { entry, startTime: performance.now(), promoted: false });
-      }
-    }
-
     this.entries.push(entry);
     this.entriesById.set(id, entry);
     this.activeOperations.set(id, { entry, startTime: performance.now() });
 
-    this.notifyListeners();
+    if (meetsThreshold(level, this.displayThreshold)) {
+      this.notifyListeners();
+    }
     return id;
   }
 
@@ -294,33 +311,6 @@ class SessionLogService {
     details?: string,
     context?: OperationContext
   ): string {
-    // Check if parent is in the diagnostic buffer
-    const buffered = this.diagnosticBuffers.get(parentId);
-    if (buffered && !buffered.promoted) {
-      if (level === 'warning' || level === 'error') {
-        // Promote the entire operation to the real log
-        this.promoteDiagnosticOperation(parentId);
-        // Fall through to normal addChild logic below
-      } else {
-        // Still buffered — accumulate silently
-        const id = this.generateId();
-        const childEntry: LogEntry = {
-          id,
-          timestamp: new Date(),
-          level,
-          category: buffered.entry.category,
-          operation,
-          message,
-          details,
-          context,
-          parentId
-        };
-        buffered.entry.children = buffered.entry.children || [];
-        buffered.entry.children.push(childEntry);
-        return id;
-      }
-    }
-
     const parent = this.entriesById.get(parentId);
     if (!parent) {
       console.warn(`[SessionLogService] Parent operation not found: ${parentId}`);
@@ -344,7 +334,14 @@ class SessionLogService {
 
     parent.children = parent.children || [];
     parent.children.push(childEntry);
-    this.entriesById.set(id, childEntry);
+
+    const aboveThreshold = meetsThreshold(level, this.displayThreshold);
+
+    // Only register in entriesById if above threshold (sub-threshold children
+    // are stripped at endOperation and should not be discoverable by ID).
+    if (aboveThreshold) {
+      this.entriesById.set(id, childEntry);
+    }
 
     // Auto-expand parent if child has warning/error
     if (level === 'warning' || level === 'error') {
@@ -357,17 +354,17 @@ class SessionLogService {
       }
     }
 
-    this.notifyListeners();
+    // Only notify listeners (trigger viewer re-render) for children at or above
+    // the display threshold. Debug/trace children accumulate silently.
+    if (aboveThreshold) {
+      this.notifyListeners();
+    }
     return id;
   }
 
   /**
    * End an active operation with summary.
-   *
-   * If the operation is a buffered diagnostic that was never promoted,
-   * it is silently discarded (nothing interesting happened).
-   * If endOperation itself escalates to warning/error, the operation
-   * is promoted first.
+   * Strips sub-threshold children to free memory and keep getEntries() lean.
    */
   endOperation(
     operationId: string,
@@ -375,33 +372,6 @@ class SessionLogService {
     summaryMessage?: string,
     context?: OperationContext
   ): void {
-    const buffered = this.diagnosticBuffers.get(operationId);
-
-    // If ending with a warning/error, promote a buffered operation first
-    if (buffered && !buffered.promoted && (level === 'warning' || level === 'error')) {
-      this.promoteDiagnosticOperation(operationId);
-    }
-
-    if (buffered && !buffered.promoted) {
-      const parentInLog = this.entriesById.has(operationId);
-      if (parentInLog) {
-        // diagnosticChildren mode: parent is in log, discard buffered children
-        buffered.entry.children = [];
-        this.diagnosticBuffers.delete(operationId);
-        // Fall through to normal endOperation (update duration, summary, etc.)
-      } else {
-        // Fully diagnostic mode: silently discard entire operation
-        this.diagnosticBuffers.delete(operationId);
-        this.activeOperations.delete(operationId);
-        return;
-      }
-    }
-
-    // Clean up buffer tracking for promoted operations
-    if (buffered) {
-      this.diagnosticBuffers.delete(operationId);
-    }
-
     const active = this.activeOperations.get(operationId);
     if (!active) {
       console.warn(`[SessionLogService] Active operation not found: ${operationId}`);
@@ -421,7 +391,15 @@ class SessionLogService {
       duration
     };
 
-    // Auto-expand if has errors/warnings or many children
+    // Strip sub-threshold children. During the operation, debug/trace children
+    // accumulate in parent.children (in case the user lowers the threshold).
+    // Now that the operation is done, discard them to free memory and keep
+    // getEntries() / persistRunLog() lean.
+    if (entry.children && entry.children.length > 0) {
+      entry.children = entry.children.filter(c => meetsThreshold(c.level, this.displayThreshold));
+    }
+
+    // Auto-expand if has errors/warnings
     if (entry.children && entry.children.length > 0) {
       const hasIssues = entry.children.some(c => c.level === 'error' || c.level === 'warning');
       if (hasIssues) {
@@ -430,40 +408,6 @@ class SessionLogService {
     }
 
     this.activeOperations.delete(operationId);
-    this.notifyListeners();
-  }
-
-  /**
-   * Promote a buffered diagnostic operation to the real log.
-   * Called when a warning/error child arrives — flushes the parent
-   * and all previously buffered children so the user sees the full context.
-   */
-  private promoteDiagnosticOperation(opId: string): void {
-    const buffered = this.diagnosticBuffers.get(opId);
-    if (!buffered) return;
-
-    // For fully-diagnostic parents, move entry to real log.
-    // For diagnosticChildren parents, the entry is already in the log —
-    // we just need to register the buffered children.
-    const alreadyInLog = this.entriesById.has(opId);
-    if (!alreadyInLog) {
-      this.entries.push(buffered.entry);
-      this.entriesById.set(opId, buffered.entry);
-    }
-
-    // Register all buffered children in entriesById
-    if (buffered.entry.children) {
-      for (const child of buffered.entry.children) {
-        this.entriesById.set(child.id, child);
-      }
-    }
-
-    // Mark as promoted — future addChild calls go through the normal path
-    buffered.promoted = true;
-
-    // Auto-expand since we're promoting due to a warning/error
-    buffered.entry.expanded = true;
-
     this.notifyListeners();
   }
 
@@ -493,10 +437,12 @@ class SessionLogService {
     
     this.entries.push(entry);
     this.entriesById.set(id, entry);
-    
+
     this.updateLogFile();
-    this.notifyListeners();
-    
+    if (meetsThreshold(level, this.displayThreshold)) {
+      this.notifyListeners();
+    }
+
     return id;
   }
 
@@ -506,13 +452,21 @@ class SessionLogService {
    * and diagnostic logging is off, the entry is silently dropped.
    * warning() and error() never accept DiagnosticOptions and are always logged.
    */
+  debug(category: OperationType, operation: string, message: string, details?: string, context?: OperationContext): string {
+    return this.log('debug', category, operation, message, details, context);
+  }
+
+  trace(category: OperationType, operation: string, message: string, details?: string, context?: OperationContext): string {
+    return this.log('trace', category, operation, message, details, context);
+  }
+
   info(category: OperationType, operation: string, message: string, details?: string, context?: OperationContext, options?: DiagnosticOptions): string {
-    if (options?.diagnostic && !this.diagnosticLoggingEnabled) return '';
+    if (options?.diagnostic && !this.getDiagnosticLoggingEnabled()) return '';
     return this.log('info', category, operation, message, details, context);
   }
 
   success(category: OperationType, operation: string, message: string, details?: string, context?: OperationContext, options?: DiagnosticOptions): string {
-    if (options?.diagnostic && !this.diagnosticLoggingEnabled) return '';
+    if (options?.diagnostic && !this.getDiagnosticLoggingEnabled()) return '';
     return this.log('success', category, operation, message, details, context);
   }
 
@@ -747,10 +701,12 @@ class SessionLogService {
 
   private getLevelIcon(level: LogLevel): string {
     switch (level) {
-      case 'success': return '✅';
-      case 'warning': return '⚠️';
-      case 'error': return '❌';
-      default: return '📝';
+      case 'trace': return '[TRACE]';
+      case 'debug': return '[DEBUG]';
+      case 'success': return '[OK]';
+      case 'warning': return '[WARN]';
+      case 'error': return '[ERROR]';
+      default: return '[INFO]';
     }
   }
 

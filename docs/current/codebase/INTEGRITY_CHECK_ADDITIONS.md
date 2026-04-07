@@ -1,6 +1,6 @@
-# Integrity Check Additions (Mar-26)
+# Integrity Check Additions
 
-**Created**: 22-Mar-26
+**Created**: 22-Mar-26, **Updated**: 7-Apr-26
 **Context**: Checks added during synthetic data generator development to
 catch structural issues that prevented FE rendering.
 
@@ -73,3 +73,19 @@ the canvas.
 | 6 | Invalid UUID format on edge | Warning | id-format |
 | 7 | **Source handle missing "-out" suffix** | Warning | id-format |
 | 8 | Outgoing probabilities sum > 1.0 | Warning/Info | value |
+
+---
+
+## Phase 10: Snapshot DB Coverage (added 7-Apr-26)
+
+**Severity**: Warning
+**Category**: snapshot-coverage (📡)
+**Deep only**: Yes — runs on manual "Check Integrity" (File Menu) or Refresh in Graph Issues panel, not on auto-debounced background checks.
+
+**What it checks**: For each fetchable edge across all graphs, computes all plausible hashes via `computePlausibleSignaturesForEdge` (handles epoch variants from different `dataInterestsDSL` regimes), builds equivalence closures via `getClosureSet`, and queries the snapshot DB with a single batched `getBatchRetrievals` call. Reports edges with zero snapshots under any plausible hash.
+
+**Why deep-only**: Hitting the snapshot DB on every file save (the auto-debounced path) would be excessive. The deep flag gates this behind an explicit user action.
+
+**Requires**: Python server running (gracefully skips with info-level note if unavailable).
+
+**Suggestion on failure**: "Run a data fetch (Retrieve All or @ menu) to populate snapshot data, or check that hash mappings bridge any definition changes."

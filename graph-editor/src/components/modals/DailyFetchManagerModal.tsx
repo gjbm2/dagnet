@@ -40,6 +40,7 @@ export function DailyFetchManagerModal({ isOpen, onClose, workspace, onSaved }: 
   const [selectedLeft, setSelectedLeft] = useState<Set<string>>(new Set());
   const [selectedRight, setSelectedRight] = useState<Set<string>>(new Set());
   const [pendingChanges, setPendingChanges] = useState<Map<string, boolean>>(new Map());
+  const [pendingBayesChanges, setPendingBayesChanges] = useState<Map<string, boolean>>(new Map());
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(false);
 
@@ -54,6 +55,7 @@ export function DailyFetchManagerModal({ isOpen, onClose, workspace, onSaved }: 
     if (!isOpen || !repo || !branch) {
       setAllGraphs([]);
       setPendingChanges(new Map());
+      setPendingBayesChanges(new Map());
       setSelectedLeft(new Set());
       setSelectedRight(new Set());
       return;
@@ -66,6 +68,7 @@ export function DailyFetchManagerModal({ isOpen, onClose, workspace, onSaved }: 
         if (cancelled) return;
         setAllGraphs(items);
         setPendingChanges(new Map());
+        setPendingBayesChanges(new Map());
         setSelectedLeft(new Set());
         setSelectedRight(new Set());
       })
@@ -91,6 +94,13 @@ export function DailyFetchManagerModal({ isOpen, onClose, workspace, onSaved }: 
       : item.dailyFetch;
   };
 
+  const getEffectiveRunBayes = (item: GraphListItem): boolean => {
+    if (!getEffectiveDailyFetch(item)) return false;
+    return pendingBayesChanges.has(item.fileId)
+      ? pendingBayesChanges.get(item.fileId)!
+      : item.runBayes;
+  };
+
   const availableGraphs = allGraphs.filter(g => !getEffectiveDailyFetch(g));
   const enabledGraphs = allGraphs.filter(g => getEffectiveDailyFetch(g));
 
@@ -103,23 +113,43 @@ export function DailyFetchManagerModal({ isOpen, onClose, workspace, onSaved }: 
 
   const moveToAvailable = () => {
     const newChanges = new Map(pendingChanges);
-    selectedRight.forEach(fileId => newChanges.set(fileId, false));
+    const newBayesChanges = new Map(pendingBayesChanges);
+    selectedRight.forEach(fileId => {
+      newChanges.set(fileId, false);
+      newBayesChanges.set(fileId, false);
+    });
     setPendingChanges(newChanges);
+    setPendingBayesChanges(newBayesChanges);
     setSelectedRight(new Set());
   };
 
+  const toggleBayes = (fileId: string) => {
+    const item = allGraphs.find(g => g.fileId === fileId);
+    if (!item) return;
+    const current = getEffectiveRunBayes(item);
+    const newBayesChanges = new Map(pendingBayesChanges);
+    newBayesChanges.set(fileId, !current);
+    setPendingBayesChanges(newBayesChanges);
+  };
+
+  const hasAnyChanges = pendingChanges.size > 0 || pendingBayesChanges.size > 0;
+
   const handleSave = async () => {
-    if (pendingChanges.size === 0) {
+    if (!hasAnyChanges) {
       onClose();
       return;
     }
 
     setSaving(true);
     try {
-      const changes: DailyFetchChange[] = Array.from(pendingChanges.entries()).map(([fileId, dailyFetch]) => ({
-        graphFileId: fileId,
-        dailyFetch,
-      }));
+      // Merge dailyFetch and runBayes changes — collect all affected fileIds
+      const allFileIds = new Set([...pendingChanges.keys(), ...pendingBayesChanges.keys()]);
+      const changes: DailyFetchChange[] = Array.from(allFileIds).map(fileId => {
+        const item = allGraphs.find(g => g.fileId === fileId);
+        const dailyFetch = pendingChanges.has(fileId) ? pendingChanges.get(fileId)! : (item?.dailyFetch ?? false);
+        const runBayes = pendingBayesChanges.has(fileId) ? pendingBayesChanges.get(fileId)! : undefined;
+        return { graphFileId: fileId, dailyFetch, runBayes };
+      });
       await dailyFetchService.applyChanges(changes);
 
       const enabled = changes.filter(c => c.dailyFetch).length;
@@ -159,7 +189,7 @@ export function DailyFetchManagerModal({ isOpen, onClose, workspace, onSaved }: 
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-container" onClick={e => e.stopPropagation()} style={{ maxWidth: '750px' }}>
         <div className="modal-header">
-          <h2 className="modal-title">Automated Daily Fetches</h2>
+          <h2 className="modal-title">Automation Manager</h2>
           <button onClick={onClose} className="modal-close-btn"><X size={20} /></button>
         </div>
 
@@ -283,14 +313,13 @@ export function DailyFetchManagerModal({ isOpen, onClose, workspace, onSaved }: 
                       </div>
                     ) : (
                       enabledGraphs.map(g => (
-                        <label
+                        <div
                           key={g.fileId}
                           style={{
                             display: 'flex',
                             alignItems: 'center',
                             gap: '8px',
                             padding: '8px 12px',
-                            cursor: 'pointer',
                             borderBottom: `1px solid ${dark ? '#1a3a2a' : '#D1FAE5'}`,
                             background: selectedRight.has(g.fileId) ? (dark ? '#1a2a40' : '#DBEAFE') : 'transparent'
                           }}
@@ -299,13 +328,26 @@ export function DailyFetchManagerModal({ isOpen, onClose, workspace, onSaved }: 
                             type="checkbox"
                             checked={selectedRight.has(g.fileId)}
                             onChange={() => toggleRightSelection(g.fileId)}
-                            style={{ width: '14px', height: '14px' }}
+                            style={{ width: '14px', height: '14px', cursor: 'pointer' }}
                           />
-                          <span style={{ fontSize: '13px', flex: 1 }}>{g.name}</span>
+                          <span style={{ fontSize: '13px', flex: 1, cursor: 'pointer' }} onClick={() => toggleRightSelection(g.fileId)}>{g.name}</span>
                           {!g.hasPinnedQuery && (
                             <span title="No pinned query set" style={{ color: '#F59E0B', fontSize: '12px' }}>⚠️</span>
                           )}
-                        </label>
+                          <label
+                            style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: dark ? '#9CA3AF' : '#6B7280', cursor: 'pointer' }}
+                            title="Commission a Bayes fit after each daily retrieval"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={getEffectiveRunBayes(g)}
+                              onChange={() => toggleBayes(g.fileId)}
+                              style={{ width: '12px', height: '12px' }}
+                            />
+                            Bayes
+                          </label>
+                        </div>
                       ))
                     )}
                   </div>
@@ -328,9 +370,9 @@ export function DailyFetchManagerModal({ isOpen, onClose, workspace, onSaved }: 
           <button
             onClick={handleSave}
             className="modal-btn modal-btn-primary"
-            disabled={saving || pendingChanges.size === 0}
+            disabled={saving || !hasAnyChanges}
           >
-            {saving ? 'Saving...' : `Save Changes${pendingChanges.size > 0 ? ` (${pendingChanges.size})` : ''}`}
+            {saving ? 'Saving...' : `Save Changes${hasAnyChanges ? ` (${new Set([...pendingChanges.keys(), ...pendingBayesChanges.keys()]).size})` : ''}`}
           </button>
         </div>
       </div>

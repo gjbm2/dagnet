@@ -766,7 +766,7 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
         setShowBridgeInstall(true);
         return;
       }
-      sessionLogService.addChild(logOpId, 'info', 'AMP_BRIDGE_OK', `Bridge v${status.version || '?'} detected`);
+      sessionLogService.addChild(logOpId, 'debug', 'AMP_BRIDGE_OK', `Bridge v${status.version || '?'} detected`);
 
       if (!graph) {
         sessionLogService.endOperation(logOpId, 'warning', 'No graph');
@@ -881,7 +881,7 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
         return;
       }
 
-      sessionLogService.addChild(logOpId, 'info', 'AMP_CONN_RESOLVED',
+      sessionLogService.addChild(logOpId, 'debug', 'AMP_CONN_RESOLVED',
         `Connection: ${connectionName} (from ${uniqueConns.length > 1 ? 'first of ' + uniqueConns.length + ' mixed' : 'edges'}) → app=${appId}, org=${orgId}`,
       );
 
@@ -892,7 +892,7 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
       const dslParts = [queryDSL, currentDSL].filter(d => d && d.trim()).join('.');
       const effectiveDsl = dslParts || null;
 
-      sessionLogService.addChild(logOpId, 'info', 'AMP_DSL_COMPOSED',
+      sessionLogService.addChild(logOpId, 'debug', 'AMP_DSL_COMPOSED',
         `Effective DSL: ${effectiveDsl || '(none)'}`,
         `queryDSL: ${queryDSL || '(empty)'}\ncurrentDSL: ${currentDSL || '(empty)'}\ncomposed: ${effectiveDsl || '(none)'}`,
       );

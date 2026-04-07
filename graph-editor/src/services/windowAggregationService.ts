@@ -982,7 +982,7 @@ export function calculateIncrementalFetch(
   
   // Log signature filtering decision (diagnostic only — fires per-edge, far too noisy for normal logging)
   if (effectiveQuerySignature) {
-    const diagnosticsOn = sessionLogService.getDiagnosticLoggingEnabled();
+    const diagnosticsOn = sessionLogService.isLevelEnabled('debug');
     const details = diagnosticsOn
       ? JSON.stringify({
           targetSlice,
@@ -994,11 +994,9 @@ export function calculateIncrementalFetch(
           bustCache,
         }, null, 2)
       : undefined;
-    sessionLogService.info('data-fetch', 'SIGNATURE_FILTER_DECISION',
+    sessionLogService.debug('data-fetch', 'SIGNATURE_FILTER_DECISION',
       `Signature filtering: ${signatureDiagnostics.matchType} (${signatureFilteredValues.length}/${allValues.length} values passed)`,
-      details,
-      undefined,
-      { diagnostic: true }
+      details
     );
   }
 

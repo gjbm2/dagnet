@@ -281,6 +281,49 @@ async function runDailyAutomation(ctx: JobContext): Promise<void> {
     }
 
     // -----------------------------------------------------------------------
+    // Phase 0: Apply pending Bayes patches from previous cycle (doc 28 §11.2.1)
+    // -----------------------------------------------------------------------
+    try {
+      const { scanForPendingPatches } = await import('./bayesPatchService');
+      const scanResult = await scanForPendingPatches(branchFinal);
+
+      if (scanResult.applied.length > 0 || scanResult.skipped.length > 0) {
+        sessionLogService.info('session', 'DAILY_AUTOMATION_BAYES_PHASE0',
+          `Phase 0: ${scanResult.applied.length} patch(es) applied, ${scanResult.skipped.length} skipped, ${scanResult.errors.length} errors`);
+
+        // Commit applied patches so posteriors are in git before Phase 1 retrieval
+        if (scanResult.applied.length > 0) {
+          try {
+            const committable = await repositoryOperationsService.getCommittableFiles(repoFinal, branchFinal);
+            if (committable.length > 0) {
+              await repositoryOperationsService.commitFiles(
+                committable,
+                `Bayes posteriors (Phase 0) — ${new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: '2-digit' })}`,
+                branchFinal,
+                repoFinal,
+                async () => 'primary',
+                async () => {
+                  await repositoryOperationsService.pullLatestRemoteWins(repoFinal, branchFinal);
+                },
+              );
+            }
+          } catch (commitErr) {
+            sessionLogService.warning('session', 'DAILY_AUTOMATION_BAYES_PHASE0_COMMIT_FAILED',
+              `Phase 0 commit failed: ${commitErr instanceof Error ? commitErr.message : String(commitErr)}`);
+          }
+        }
+      }
+    } catch (phase0Err) {
+      sessionLogService.warning('session', 'DAILY_AUTOMATION_BAYES_PHASE0_FAILED',
+        `Phase 0 failed (non-fatal): ${phase0Err instanceof Error ? phase0Err.message : String(phase0Err)}`);
+    }
+
+    if (ctx.shouldAbort()) {
+      sessionLogService.warning('session', 'DAILY_RETRIEVE_ALL_ABORTED', 'Daily automation aborted by user (after Phase 0)');
+      return;
+    }
+
+    // -----------------------------------------------------------------------
     // Determine target graphs.
     // -----------------------------------------------------------------------
     if (isEnumerationMode) {
@@ -342,7 +385,18 @@ async function runDailyAutomation(ctx: JobContext): Promise<void> {
       onAction: () => jobSchedulerService.cancel('daily-automation'),
     });
 
-    // Per-graph loop.
+    // -----------------------------------------------------------------------
+    // Phase 1: Serial fetch + commission Bayes (doc 28 §11.2.1)
+    // -----------------------------------------------------------------------
+    interface PendingBayesFit {
+      graphId: string;
+      graphName: string;
+      jobId: string;
+      statusUrl?: string;
+      patchPath: string;
+    }
+    const pendingBayesFits: PendingBayesFit[] = [];
+
     const totalGraphs = targetGraphNames.length;
     for (let idx = 0; idx < totalGraphs; idx++) {
       const graphName = targetGraphNames[idx];
@@ -388,6 +442,32 @@ async function runDailyAutomation(ctx: JobContext): Promise<void> {
           shouldAbort: () => ctx.shouldAbort(),
         });
         sessionLogService.info('session', 'DAILY_RETRIEVE_ALL_GRAPH_COMPLETE', `${sequenceInfo} Completed: ${graphName}`);
+
+        // Commission Bayes fit if graph has opted in (doc 28 §10.4)
+        const graphData = fileRegistry.getFile(graphFileId)?.data as GraphData | null;
+        if (graphData?.runBayes) {
+          try {
+            const { submitBayesFitForAutomation } = await import('./bayesReconnectService');
+            const result = await submitBayesFitForAutomation({
+              graphFileId,
+              repo: repoFinal,
+              branch: branchFinal,
+            });
+            pendingBayesFits.push({
+              graphId: graphFileId,
+              graphName,
+              jobId: result.jobId,
+              patchPath: result.patchPath,
+            });
+            sessionLogService.info('session', 'DAILY_AUTOMATION_BAYES_SUBMITTED',
+              `${sequenceInfo} Bayes fit submitted for ${graphName}: ${result.jobId}`);
+          } catch (bayesErr) {
+            // Submit failed — log, skip Bayes for this graph, continue (doc 28 F3)
+            const msg = bayesErr instanceof Error ? bayesErr.message : String(bayesErr);
+            sessionLogService.warning('session', 'DAILY_AUTOMATION_BAYES_SUBMIT_FAILED',
+              `${sequenceInfo} Bayes submit failed for ${graphName}: ${msg}`);
+          }
+        }
       } catch (graphErr) {
         const msg = graphErr instanceof Error ? graphErr.message : String(graphErr);
         const stack = graphErr instanceof Error ? graphErr.stack : undefined;
@@ -396,6 +476,95 @@ async function runDailyAutomation(ctx: JobContext): Promise<void> {
         console.error(`[dailyAutomationJob] Graph ${graphName} failed:`, graphErr);
         // Continue to next graph — don't abort the entire run for one graph failure.
       }
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 2: Drain pending Bayes fits (doc 28 §11.2.1)
+    // -----------------------------------------------------------------------
+    if (pendingBayesFits.length > 0 && !ctx.shouldAbort()) {
+      sessionLogService.info('session', 'DAILY_AUTOMATION_BAYES_DRAIN_START',
+        `Phase 2: draining ${pendingBayesFits.length} pending Bayes fit(s)`);
+
+      ctx.showBanner({
+        label: `Automation: waiting for ${pendingBayesFits.length} Bayes fit(s)…`,
+        detail: pendingBayesFits.map(f => f.graphName).join(', '),
+        actionLabel: 'Stop',
+        onAction: () => jobSchedulerService.cancel('daily-automation'),
+      });
+
+      // Create all polling promises once — race on a shrinking pool (doc 28 F6).
+      // Each promise resolves to { fit, result, idx } — idx is used to find
+      // and remove the resolved entry from the remaining array.
+      const { pollUntilDone: poll } = await import('./bayesService');
+
+      type DrainEntry = { promise: Promise<DrainResult>; fit: PendingBayesFit };
+      type DrainResult = { fit: PendingBayesFit; result: { status: string; error?: string }; idx: number };
+
+      const drainEntries: DrainEntry[] = pendingBayesFits.map((fit, idx) => {
+        const promise = poll(fit.jobId, undefined, 5_000, 30 * 60 * 1000)
+          .then(result => ({ fit, result, idx }))
+          .catch(err => ({ fit, result: { status: 'failed' as const, error: err.message }, idx }));
+        return { promise, fit };
+      });
+
+      let remaining = [...drainEntries];
+
+      while (remaining.length > 0) {
+        if (ctx.shouldAbort()) {
+          sessionLogService.warning('session', 'DAILY_AUTOMATION_BAYES_DRAIN_ABORTED',
+            `Phase 2 aborted — ${remaining.length} fit(s) still pending`);
+          break;
+        }
+
+        const settled = await Promise.race(remaining.map(e => e.promise));
+        remaining = remaining.filter(e => e.fit.jobId !== settled.fit.jobId);
+
+        ctx.showBanner({
+          label: `Automation: ${remaining.length} Bayes fit(s) remaining…`,
+          detail: pendingBayesFits.map(f => f.graphName).join(', '),
+          actionLabel: 'Stop',
+          onAction: () => jobSchedulerService.cancel('daily-automation'),
+        });
+
+        if (settled.result.status === 'failed') {
+          // Log and continue — don't block other fits (doc 28 F1)
+          sessionLogService.warning('session', 'DAILY_AUTOMATION_BAYES_FIT_FAILED',
+            `Bayes fit failed for ${settled.fit.graphName}: ${settled.result.error ?? 'unknown'}`);
+          continue;
+        }
+
+        // Pull to get the patch file, then apply via on-pull scanner
+        try {
+          await repositoryOperationsService.pullLatestRemoteWins(repoFinal, branchFinal);
+          await workspaceService.loadWorkspaceFromIDB(repoFinal, branchFinal);
+
+          // The on-pull scanner (scanForPendingPatches, hooked into pullLatest)
+          // applies the patch automatically. Commit the resulting dirty files.
+          const committable = await repositoryOperationsService.getCommittableFiles(repoFinal, branchFinal);
+          if (committable.length > 0) {
+            await repositoryOperationsService.commitFiles(
+              committable,
+              `Bayes posteriors (${settled.fit.graphName}) — ${new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: '2-digit' })}`,
+              branchFinal,
+              repoFinal,
+              async () => 'primary',
+              async () => {
+                await repositoryOperationsService.pullLatestRemoteWins(repoFinal, branchFinal);
+              },
+            );
+          }
+
+          sessionLogService.success('session', 'DAILY_AUTOMATION_BAYES_FIT_APPLIED',
+            `Bayes posteriors applied and committed for ${settled.fit.graphName}`);
+        } catch (applyErr) {
+          const msg = applyErr instanceof Error ? applyErr.message : String(applyErr);
+          sessionLogService.warning('session', 'DAILY_AUTOMATION_BAYES_APPLY_FAILED',
+            `Bayes apply/commit failed for ${settled.fit.graphName}: ${msg}`);
+        }
+      }
+
+      sessionLogService.info('session', 'DAILY_AUTOMATION_BAYES_DRAIN_COMPLETE',
+        `Phase 2 complete: ${pendingBayesFits.length - remaining.length} fit(s) processed`);
     }
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);

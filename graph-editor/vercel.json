@@ -110,6 +110,14 @@
     {
       "source": "/api/lag-topo-pass",
       "destination": "/api/python-api?endpoint=lag-topo-pass"
+    },
+    {
+      "source": "/api/cache/clear",
+      "destination": "/api/python-api?endpoint=cache-clear"
+    },
+    {
+      "source": "/api/cache/stats",
+      "destination": "/api/python-api?endpoint=cache-stats"
     }
   ]
 }

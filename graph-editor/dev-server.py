@@ -337,6 +337,24 @@ async def sigs_get(request: Request):
 # /api/sigs/links/deactivate, /api/sigs/resolve
 # Equivalence is now FE-owned via hash-mappings.json.
 
+@app.post("/api/cache/clear")
+async def cache_clear_endpoint(request: Request):
+    """Clear the snapshot service result cache."""
+    try:
+        from api_handlers import handle_cache_clear
+        return handle_cache_clear({})
+    except Exception as e:
+        print(f"[cache/clear] Error: {e}")
+        import traceback
+        print(f"[cache/clear] Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/cache/stats")
+def cache_stats_endpoint():
+    """Return current cache statistics."""
+    from api_handlers import handle_cache_stats
+    return handle_cache_stats({})
+
 @app.post("/api/lag/recompute-models")
 async def lag_recompute_models(request: Request):
     try:

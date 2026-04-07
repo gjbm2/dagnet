@@ -120,7 +120,7 @@ class HistoricalFileService {
     const credsOk = await this.setupCredentials(selectedRepo);
     if (!credsOk) return new Map();
 
-    sessionLogService.info(
+    sessionLogService.debug(
       'git',
       'HISTORICAL_LOAD_DATES',
       `Loading commit dates for ${fileId}`,
@@ -258,7 +258,7 @@ class HistoricalFileService {
       return null;
     }
 
-    sessionLogService.info(
+    sessionLogService.debug(
       'git',
       'HISTORICAL_OPEN',
       `Opening historical version of ${fileId} at ${commit.shortSha} (${commit.dateUK})`,

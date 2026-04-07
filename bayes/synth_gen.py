@@ -2210,6 +2210,7 @@ def set_simulation_guard(
     if enable:
         graph["simulation"] = True
         graph["dailyFetch"] = False
+        graph["runBayes"] = False
 
         if sim_stats:
             base_date = datetime.strptime(sim_stats["base_date"], "%Y-%m-%d")

@@ -5,33 +5,185 @@ Handles all database operations for the snapshot feature.
 Provides shadow-write capability to persist time-series data to Neon PostgreSQL.
 
 Design reference: docs/current/project-db/snapshot-db-design.md
+
+Connection pooling & result caching
+------------------------------------
+Module-level connection pool and TTL result cache survive across warm Vercel
+invocations (~5-15 min).  Cold start = fresh pool + empty cache.
+
+Cache is invalidated on writes (append_snapshots, delete_snapshots) and can be
+busted explicitly via ``cache_clear()`` or the ``/api/snapshots/cache-clear``
+endpoint.
 """
 
 import os
 import json
 import hashlib
 import base64
+import time as _time
+import threading
 import psycopg2
+import psycopg2.pool
 from psycopg2.extras import execute_values
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from datetime import date, datetime, timedelta
 import re
 
 from slice_key_normalisation import normalise_slice_key_for_matching
 
 
+# =============================================================================
+# Connection Pool (module-level, survives warm starts)
+# =============================================================================
+
+_pool: Optional[psycopg2.pool.SimpleConnectionPool] = None
+_pool_lock = threading.Lock()
+
+_POOL_MIN_CONN = 1
+_POOL_MAX_CONN = 2
+
+
+def _get_pool() -> psycopg2.pool.SimpleConnectionPool:
+    """Lazily create (or recreate) the module-level connection pool."""
+    global _pool
+    if _pool is not None and not _pool.closed:
+        return _pool
+    with _pool_lock:
+        # Double-check under lock.
+        if _pool is not None and not _pool.closed:
+            return _pool
+        conn_string = os.environ.get('DB_CONNECTION')
+        if not conn_string:
+            raise ValueError("DB_CONNECTION environment variable not set")
+        _pool = psycopg2.pool.SimpleConnectionPool(
+            _POOL_MIN_CONN, _POOL_MAX_CONN, conn_string
+        )
+        return _pool
+
+
+class _PooledConnection:
+    """Context manager that borrows from the pool and returns on exit.
+
+    If the connection is broken (e.g. Neon killed it after idle timeout),
+    we discard it and create a fresh one on the next ``_pooled_conn()`` call.
+    """
+
+    def __init__(self):
+        self._conn = None
+
+    def __enter__(self):
+        pool = _get_pool()
+        self._conn = pool.getconn()
+        # Quick liveness check — Neon can silently close idle connections.
+        try:
+            self._conn.cursor().execute("SELECT 1")
+        except Exception:
+            # Connection is stale; discard and get a fresh one.
+            try:
+                pool.putconn(self._conn, close=True)
+            except Exception:
+                pass
+            self._conn = pool.getconn()
+        return self._conn
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self._conn is not None:
+            try:
+                if exc_type is not None:
+                    self._conn.rollback()
+                pool = _get_pool()
+                pool.putconn(self._conn)
+            except Exception:
+                # If putconn fails, just close and let pool create a fresh one.
+                try:
+                    self._conn.close()
+                except Exception:
+                    pass
+            self._conn = None
+        return False  # Don't suppress exceptions.
+
+
+def _pooled_conn() -> _PooledConnection:
+    """Return a context manager for a pooled DB connection."""
+    return _PooledConnection()
+
+
 def get_db_connection():
     """
-    Get database connection from environment.
-    
-    Uses DB_CONNECTION env var which should contain a full PostgreSQL connection string.
-    For Neon, this typically looks like:
-    postgresql://user:password@host/database?sslmode=require
+    Legacy entry point — returns a raw connection (caller must close).
+
+    Prefer ``_pooled_conn()`` context manager for new code.  This function
+    is kept for backward compatibility with code that has not been migrated.
     """
     conn_string = os.environ.get('DB_CONNECTION')
     if not conn_string:
         raise ValueError("DB_CONNECTION environment variable not set")
     return psycopg2.connect(conn_string)
+
+
+# =============================================================================
+# TTL Result Cache (module-level, survives warm starts)
+# =============================================================================
+
+_CACHE_DEFAULT_TTL_S = 15 * 60   # 15 minutes
+_CACHE_MAX_ENTRIES = 256
+
+_cache: Dict[str, Tuple[float, Any]] = {}   # key -> (expiry_timestamp, result)
+_cache_lock = threading.Lock()
+_cache_stats = {"hits": 0, "misses": 0, "evictions": 0, "invalidations": 0}
+
+
+def _cache_key(fn_name: str, *args, **kwargs) -> str:
+    """Deterministic cache key from function name + arguments."""
+    raw = json.dumps(
+        {"fn": fn_name, "a": args, "kw": kwargs},
+        sort_keys=True, default=str
+    )
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
+
+
+def _cache_get(key: str) -> Tuple[bool, Any]:
+    """Return (hit, value).  Expired entries are treated as misses."""
+    with _cache_lock:
+        entry = _cache.get(key)
+        if entry is not None:
+            expiry, value = entry
+            if _time.time() < expiry:
+                _cache_stats["hits"] += 1
+                return True, value
+            # Expired — remove.
+            del _cache[key]
+        _cache_stats["misses"] += 1
+        return False, None
+
+
+def _cache_put(key: str, value: Any, ttl_s: int = _CACHE_DEFAULT_TTL_S) -> None:
+    """Store a value with TTL.  Evicts oldest entries if over capacity."""
+    with _cache_lock:
+        _cache[key] = (_time.time() + ttl_s, value)
+        # Simple eviction: if over capacity, drop oldest (earliest expiry).
+        if len(_cache) > _CACHE_MAX_ENTRIES:
+            oldest_key = min(_cache, key=lambda k: _cache[k][0])
+            del _cache[oldest_key]
+            _cache_stats["evictions"] += 1
+
+
+def cache_clear() -> Dict[str, Any]:
+    """Clear the entire result cache.  Returns stats before clearing."""
+    with _cache_lock:
+        stats = dict(_cache_stats)
+        stats["entries_cleared"] = len(_cache)
+        _cache.clear()
+        _cache_stats["invalidations"] += 1
+        return stats
+
+
+def cache_stats() -> Dict[str, Any]:
+    """Return current cache statistics (read-only snapshot)."""
+    with _cache_lock:
+        stats = dict(_cache_stats)
+        stats["entries"] = len(_cache)
+        return stats
 
 
 def short_core_hash_from_canonical_signature(canonical_signature: str) -> str:
@@ -170,10 +322,9 @@ def append_snapshots(
             }
         return result
     
-    conn = get_db_connection()
-    start_time = time.time()
-    
-    try:
+    with _pooled_conn() as conn:
+        start_time = time.time()
+
         cur = conn.cursor()
 
         if not param_id:
@@ -278,10 +429,8 @@ def append_snapshots(
                 "slice_key": slice_key or "(uncontexted)",
             }
         
+        cache_clear()
         return result
-        
-    finally:
-        conn.close()
 
 
 def health_check() -> Dict[str, Any]:
@@ -294,12 +443,12 @@ def health_check() -> Dict[str, Any]:
         Dict with status ('ok' or 'error') and additional info
     """
     try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute("SELECT 1")
-        cur.fetchone()
-        conn.close()
-        return {"status": "ok", "db": "connected"}
+        with _pooled_conn() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT 1")
+            cur.fetchone()
+            stats = cache_stats()
+            return {"status": "ok", "db": "connected", "cache": stats}
     except ValueError as e:
         # DB_CONNECTION not set
         return {"status": "error", "db": "not_configured", "error": str(e)}
@@ -443,12 +592,18 @@ def query_snapshots(
         - anchor_median_lag_days, anchor_mean_lag_days
         - onset_delta_days
     """
-    conn = get_db_connection()
-    try:
+    ck = _cache_key("query_snapshots", param_id, core_hash, slice_keys,
+                     anchor_from, anchor_to, as_at, retrieved_ats,
+                     equivalent_hashes, limit)
+    hit, cached = _cache_get(ck)
+    if hit:
+        return cached
+
+    with _pooled_conn() as conn:
         cur = conn.cursor()
-        
+
         query = """
-            SELECT 
+            SELECT
                 param_id, core_hash, slice_key, anchor_day, retrieved_at,
                 A as a, X as x, Y as y,
                 median_lag_days, mean_lag_days,
@@ -457,7 +612,7 @@ def query_snapshots(
             FROM snapshots
         """
         params: List[Any] = []
-        
+
         if core_hash is not None:
             if equivalent_hashes is not None and len(equivalent_hashes) > 0:
                 # FE-supplied closure set — expand core_hash to include equivalents.
@@ -472,21 +627,21 @@ def query_snapshots(
             # No core_hash filter → strict param_id scoping (historical behaviour)
             query += " WHERE param_id = %s"
             params.append(param_id)
-        
+
         if slice_keys is not None:
             parts: List[str] = []
             _append_slice_filter_sql(sql_parts=parts, params=params, slice_keys=slice_keys)
             if parts:
                 query += " AND " + " AND ".join(parts)
-        
+
         if anchor_from is not None:
             query += " AND anchor_day >= %s"
             params.append(anchor_from)
-        
+
         if anchor_to is not None:
             query += " AND anchor_day <= %s"
             params.append(anchor_to)
-        
+
         if as_at is not None:
             query += " AND retrieved_at <= %s"
             params.append(as_at)
@@ -494,25 +649,23 @@ def query_snapshots(
         if retrieved_ats is not None and len(retrieved_ats) > 0:
             query += " AND retrieved_at = ANY(%s)"
             params.append(retrieved_ats)
-        
+
         query += " ORDER BY anchor_day, slice_key, retrieved_at"
         query += f" LIMIT {int(limit)}"
-        
+
         cur.execute(query, params)
         columns = [desc[0] for desc in cur.description]
         rows = [dict(zip(columns, row)) for row in cur.fetchall()]
-        
+
         # Convert date/datetime to ISO strings for JSON serialization
         for row in rows:
             if row.get('anchor_day') and hasattr(row['anchor_day'], 'isoformat'):
                 row['anchor_day'] = row['anchor_day'].isoformat()
             if row.get('retrieved_at') and hasattr(row['retrieved_at'], 'isoformat'):
                 row['retrieved_at'] = row['retrieved_at'].isoformat()
-        
+
+        _cache_put(ck, rows)
         return rows
-        
-    finally:
-        conn.close()
 
 
 def query_snapshots_for_sweep(
@@ -542,8 +695,14 @@ def query_snapshots_for_sweep(
 
     See: docs/current/project-db/1-reads.md §5.1
     """
-    conn = get_db_connection()
-    try:
+    ck = _cache_key("query_snapshots_for_sweep", param_id, core_hash,
+                     slice_keys, anchor_from, anchor_to, sweep_from,
+                     sweep_to, equivalent_hashes, limit)
+    hit, cached = _cache_get(ck)
+    if hit:
+        return cached
+
+    with _pooled_conn() as conn:
         cur = conn.cursor()
 
         # core_hash is mandatory for sweep.
@@ -559,7 +718,7 @@ def query_snapshots_for_sweep(
             hashes = [core_hash]
 
         query = """
-            SELECT 
+            SELECT
                 param_id, core_hash, slice_key, anchor_day, retrieved_at,
                 A as a, X as x, Y as y,
                 median_lag_days, mean_lag_days,
@@ -607,31 +766,34 @@ def query_snapshots_for_sweep(
             if row.get('retrieved_at') and hasattr(row['retrieved_at'], 'isoformat'):
                 row['retrieved_at'] = row['retrieved_at'].isoformat()
 
+        _cache_put(ck, rows)
         return rows
-    finally:
-        conn.close()
 
 
 
 def get_batch_inventory(param_ids: List[str]) -> Dict[str, Dict[str, Any]]:
     """
     Get inventory summary for multiple parameters in a single query.
-    
+
     More efficient than calling get_snapshot_inventory() multiple times.
-    
+
     Args:
         param_ids: List of workspace-prefixed parameter IDs
-    
+
     Returns:
         Dict mapping param_id -> inventory dict (same format as get_snapshot_inventory)
     """
     if not param_ids:
         return {}
-    
-    conn = get_db_connection()
-    try:
+
+    ck = _cache_key("get_batch_inventory", sorted(param_ids))
+    hit, cached = _cache_get(ck)
+    if hit:
+        return cached
+
+    with _pooled_conn() as conn:
         cur = conn.cursor()
-        
+
         # Get basic stats
         cur.execute("""
             SELECT 
@@ -704,10 +866,8 @@ def get_batch_inventory(param_ids: List[str]) -> Dict[str, Dict[str, Any]]:
                 'unique_retrievals': retrieval_counts.get(pid, 0),
             }
         
+        _cache_put(ck, results)
         return results
-        
-    finally:
-        conn.close()
 
 
 def get_batch_inventory_rich(param_ids: List[str]) -> Dict[str, Dict[str, Any]]:
@@ -726,10 +886,14 @@ def get_batch_inventory_rich(param_ids: List[str]) -> Dict[str, Dict[str, Any]]:
     if not param_ids:
         return {}
 
+    ck = _cache_key("get_batch_inventory_rich", sorted(param_ids))
+    hit, cached = _cache_get(ck)
+    if hit:
+        return cached
+
     overall = get_batch_inventory(param_ids)
 
-    conn = get_db_connection()
-    try:
+    with _pooled_conn() as conn:
         cur = conn.cursor()
 
         # Distinct retrieval days (UTC) per param_id, and per (param_id, core_hash).
@@ -866,10 +1030,8 @@ def get_batch_inventory_rich(param_ids: List[str]) -> Dict[str, Dict[str, Any]]:
         for pid in by_param.keys():
             by_param[pid]["by_core_hash"].sort(key=lambda x: int(x.get("row_count") or 0), reverse=True)
 
+        _cache_put(ck, by_param)
         return by_param
-
-    finally:
-        conn.close()
 
 
 # =============================================================================
@@ -942,8 +1104,15 @@ def get_batch_inventory_v2(
     current_signatures = current_signatures or {}
     slice_keys_by_param = slice_keys_by_param or {}
 
-    conn = get_db_connection()
-    try:
+    ck = _cache_key("get_batch_inventory_v2", sorted(param_ids),
+                     current_signatures, current_core_hashes,
+                     slice_keys_by_param, equivalent_hashes_by_param,
+                     limit_families_per_param, limit_slices_per_family)
+    hit, cached = _cache_get(ck)
+    if hit:
+        return cached
+
+    with _pooled_conn() as conn:
         cur = conn.cursor()
 
         # 1) Load snapshot aggregates by (param_id, core_hash, slice_key).
@@ -1262,9 +1431,8 @@ def get_batch_inventory_v2(
                 "warnings": [],
             }
 
+        _cache_put(ck, inventory)
         return inventory
-    finally:
-        conn.close()
 
 
 # =============================================================================
@@ -1306,131 +1474,137 @@ def batch_anchor_coverage(
     if not subjects:
         return []
 
-    conn = get_db_connection()
+    ck = _cache_key("batch_anchor_coverage", subjects, diagnostic)
+    hit, cached = _cache_get(ck)
+    if hit:
+        return cached
+
     try:
-        cur = conn.cursor()
-        results: List[Dict[str, Any]] = []
+        with _pooled_conn() as conn:
+            cur = conn.cursor()
+            results: List[Dict[str, Any]] = []
 
-        for idx, subj in enumerate(subjects):
-            param_id = subj["param_id"]
-            core_hash = subj["core_hash"]
-            slice_keys = subj.get("slice_keys") or []
-            anchor_from = subj["anchor_from"]
-            anchor_to = subj["anchor_to"]
-            subj_equivalent_hashes = subj.get("equivalent_hashes")
+            for idx, subj in enumerate(subjects):
+                param_id = subj["param_id"]
+                core_hash = subj["core_hash"]
+                slice_keys = subj.get("slice_keys") or []
+                anchor_from = subj["anchor_from"]
+                anchor_to = subj["anchor_to"]
+                subj_equivalent_hashes = subj.get("equivalent_hashes")
 
-            # --- Resolve equivalence closure ---
-            if subj_equivalent_hashes is not None and len(subj_equivalent_hashes) > 0:
-                # FE-supplied closure set — use directly.
-                resolved_hashes = [core_hash] + [e['core_hash'] for e in subj_equivalent_hashes if e.get('core_hash')]
-            else:
-                resolved_hashes = [core_hash]
-
-            # --- Query distinct anchor_day present in DB ---
-            # core_hash-only scoping (no param_id filter), consistent with
-            # the snapshot read contract (key-fixes.md §2.2).
-            where_clauses: List[str] = [
-                "core_hash = ANY(%s)",
-                "anchor_day >= %s",
-                "anchor_day <= %s",
-            ]
-            params: List[Any] = [resolved_hashes, anchor_from, anchor_to]
-
-            # Diagnostic evidence for slice-key normalisation + filter semantics
-            slice_keys_normalised: List[str] = [normalise_slice_key_for_matching(sk) for sk in slice_keys] if slice_keys else []
-            if not slice_keys:
-                slice_filter_kind = "empty"
-            elif "" in slice_keys_normalised:
-                slice_filter_kind = "none"
-            else:
-                slice_filter_kind = "families"
-
-            if slice_keys:
-                slice_parts: List[str] = []
-                _append_slice_filter_sql(sql_parts=slice_parts, params=params, slice_keys=slice_keys)
-                if slice_parts:
-                    where_clauses.extend(slice_parts)
-
-            where_sql = " AND ".join(where_clauses)
-            cur.execute(
-                f"SELECT DISTINCT anchor_day FROM snapshots WHERE {where_sql} ORDER BY anchor_day",
-                tuple(params),
-            )
-            present_days = {r[0] for r in cur.fetchall() if r and r[0]}
-
-            # --- Compute expected day set and missing ranges ---
-            expected_days: List[date] = []
-            d = anchor_from
-            one_day = timedelta(days=1)
-            while d <= anchor_to:
-                expected_days.append(d)
-                d += one_day
-
-            missing_ranges: List[Dict[str, str]] = []
-            range_start: Optional[date] = None
-            range_end: Optional[date] = None
-
-            for day in expected_days:
-                if day not in present_days:
-                    if range_start is None:
-                        range_start = day
-                    range_end = day
+                # --- Resolve equivalence closure ---
+                if subj_equivalent_hashes is not None and len(subj_equivalent_hashes) > 0:
+                    # FE-supplied closure set — use directly.
+                    resolved_hashes = [core_hash] + [e['core_hash'] for e in subj_equivalent_hashes if e.get('core_hash')]
                 else:
-                    if range_start is not None and range_end is not None:
-                        missing_ranges.append({
-                            "start": range_start.isoformat(),
-                            "end": range_end.isoformat(),
-                        })
-                        range_start = None
-                        range_end = None
+                    resolved_hashes = [core_hash]
 
-            # Flush final open range
-            if range_start is not None and range_end is not None:
-                missing_ranges.append({
-                    "start": range_start.isoformat(),
-                    "end": range_end.isoformat(),
-                })
+                # --- Query distinct anchor_day present in DB ---
+                # core_hash-only scoping (no param_id filter), consistent with
+                # the snapshot read contract (key-fixes.md §2.2).
+                where_clauses: List[str] = [
+                    "core_hash = ANY(%s)",
+                    "anchor_day >= %s",
+                    "anchor_day <= %s",
+                ]
+                params: List[Any] = [resolved_hashes, anchor_from, anchor_to]
 
-            out = {
-                "subject_index": idx,
-                "coverage_ok": len(missing_ranges) == 0,
-                "missing_anchor_ranges": missing_ranges,
-                "present_anchor_day_count": len(present_days),
-                "expected_anchor_day_count": len(expected_days),
-                "equivalence_resolution": {
-                    "core_hashes": resolved_hashes,
-                    # Diagnostic only: historically returned param_ids from DB closure.
-                    # Under the core_hash-only read contract, we keep the field stable
-                    # and report the subject param_id as the sole entry.
-                    "param_ids": [param_id],
-                },
-            }
+                # Diagnostic evidence for slice-key normalisation + filter semantics
+                slice_keys_normalised: List[str] = [normalise_slice_key_for_matching(sk) for sk in slice_keys] if slice_keys else []
+                if not slice_keys:
+                    slice_filter_kind = "empty"
+                elif "" in slice_keys_normalised:
+                    slice_filter_kind = "none"
+                else:
+                    slice_filter_kind = "families"
 
-            if diagnostic:
-                # Present anchor evidence as a normalised union of ranges (bounded by gaps).
-                present_ranges: List[Dict[str, str]] = []
-                pr_start: Optional[date] = None
-                pr_end: Optional[date] = None
+                if slice_keys:
+                    slice_parts: List[str] = []
+                    _append_slice_filter_sql(sql_parts=slice_parts, params=params, slice_keys=slice_keys)
+                    if slice_parts:
+                        where_clauses.extend(slice_parts)
+
+                where_sql = " AND ".join(where_clauses)
+                cur.execute(
+                    f"SELECT DISTINCT anchor_day FROM snapshots WHERE {where_sql} ORDER BY anchor_day",
+                    tuple(params),
+                )
+                present_days = {r[0] for r in cur.fetchall() if r and r[0]}
+
+                # --- Compute expected day set and missing ranges ---
+                expected_days: List[date] = []
+                d = anchor_from
+                one_day = timedelta(days=1)
+                while d <= anchor_to:
+                    expected_days.append(d)
+                    d += one_day
+
+                missing_ranges: List[Dict[str, str]] = []
+                range_start: Optional[date] = None
+                range_end: Optional[date] = None
+
                 for day in expected_days:
-                    if day in present_days:
-                        if pr_start is None:
-                            pr_start = day
-                        pr_end = day
+                    if day not in present_days:
+                        if range_start is None:
+                            range_start = day
+                        range_end = day
                     else:
-                        if pr_start is not None and pr_end is not None:
-                            present_ranges.append({"start": pr_start.isoformat(), "end": pr_end.isoformat()})
-                            pr_start = None
-                            pr_end = None
-                if pr_start is not None and pr_end is not None:
-                    present_ranges.append({"start": pr_start.isoformat(), "end": pr_end.isoformat()})
+                        if range_start is not None and range_end is not None:
+                            missing_ranges.append({
+                                "start": range_start.isoformat(),
+                                "end": range_end.isoformat(),
+                            })
+                            range_start = None
+                            range_end = None
 
-                out["present_anchor_ranges"] = present_ranges
-                out["slice_keys_normalised"] = slice_keys_normalised
-                out["slice_filter_kind"] = slice_filter_kind
+                # Flush final open range
+                if range_start is not None and range_end is not None:
+                    missing_ranges.append({
+                        "start": range_start.isoformat(),
+                        "end": range_end.isoformat(),
+                    })
 
-            results.append(out)
+                out = {
+                    "subject_index": idx,
+                    "coverage_ok": len(missing_ranges) == 0,
+                    "missing_anchor_ranges": missing_ranges,
+                    "present_anchor_day_count": len(present_days),
+                    "expected_anchor_day_count": len(expected_days),
+                    "equivalence_resolution": {
+                        "core_hashes": resolved_hashes,
+                        # Diagnostic only: historically returned param_ids from DB closure.
+                        # Under the core_hash-only read contract, we keep the field stable
+                        # and report the subject param_id as the sole entry.
+                        "param_ids": [param_id],
+                    },
+                }
 
-        return results
+                if diagnostic:
+                    # Present anchor evidence as a normalised union of ranges (bounded by gaps).
+                    present_ranges: List[Dict[str, str]] = []
+                    pr_start: Optional[date] = None
+                    pr_end: Optional[date] = None
+                    for day in expected_days:
+                        if day in present_days:
+                            if pr_start is None:
+                                pr_start = day
+                            pr_end = day
+                        else:
+                            if pr_start is not None and pr_end is not None:
+                                present_ranges.append({"start": pr_start.isoformat(), "end": pr_end.isoformat()})
+                                pr_start = None
+                                pr_end = None
+                    if pr_start is not None and pr_end is not None:
+                        present_ranges.append({"start": pr_start.isoformat(), "end": pr_end.isoformat()})
+
+                    out["present_anchor_ranges"] = present_ranges
+                    out["slice_keys_normalised"] = slice_keys_normalised
+                    out["slice_filter_kind"] = slice_filter_kind
+
+                results.append(out)
+
+            _cache_put(ck, results)
+            return results
     except Exception as e:
         # Return per-subject error for all subjects
         return [
@@ -1448,8 +1622,6 @@ def batch_anchor_coverage(
             }
             for i in range(len(subjects))
         ]
-    finally:
-        conn.close()
 
 
 # =============================================================================
@@ -1482,29 +1654,28 @@ def delete_snapshots(
         - deleted: int (rows deleted)
         - error: str (if success=False)
     """
-    conn = get_db_connection()
     try:
-        cur = conn.cursor()
-        where = ["param_id = %s"]
-        params: List[Any] = [param_id]
+        with _pooled_conn() as conn:
+            cur = conn.cursor()
+            where = ["param_id = %s"]
+            params: List[Any] = [param_id]
 
-        if core_hashes is not None and len(core_hashes) > 0:
-            where.append("core_hash = ANY(%s)")
-            params.append(core_hashes)
+            if core_hashes is not None and len(core_hashes) > 0:
+                where.append("core_hash = ANY(%s)")
+                params.append(core_hashes)
 
-        if retrieved_ats is not None and len(retrieved_ats) > 0:
-            where.append("retrieved_at = ANY(%s)")
-            params.append(retrieved_ats)
+            if retrieved_ats is not None and len(retrieved_ats) > 0:
+                where.append("retrieved_at = ANY(%s)")
+                params.append(retrieved_ats)
 
-        sql = "DELETE FROM snapshots WHERE " + " AND ".join(where)
-        cur.execute(sql, tuple(params))
-        deleted = cur.rowcount
-        conn.commit()
-        return {'success': True, 'deleted': deleted}
+            sql = "DELETE FROM snapshots WHERE " + " AND ".join(where)
+            cur.execute(sql, tuple(params))
+            deleted = cur.rowcount
+            conn.commit()
+            cache_clear()
+            return {'success': True, 'deleted': deleted}
     except Exception as e:
         return {'success': False, 'deleted': 0, 'error': str(e)}
-    finally:
-        conn.close()
 
 
 # =============================================================================
@@ -1554,118 +1725,126 @@ def query_snapshot_retrievals(
         limit_i = 200
     limit_i = max(1, min(limit_i, 2000))
 
-    conn = get_db_connection()
+    ck = _cache_key("query_snapshot_retrievals", param_id, core_hash,
+                     slice_keys, anchor_from, anchor_to, equivalent_hashes,
+                     include_summary, limit_i)
+    hit, cached = _cache_get(ck)
+    if hit:
+        return cached
+
     try:
-        cur = conn.cursor()
+        with _pooled_conn() as conn:
+            cur = conn.cursor()
 
-        # Defensive: treat inverted anchor bounds as unordered.
-        if anchor_from is not None and anchor_to is not None and anchor_from > anchor_to:
-            anchor_from, anchor_to = anchor_to, anchor_from
+            # Defensive: treat inverted anchor bounds as unordered.
+            if anchor_from is not None and anchor_to is not None and anchor_from > anchor_to:
+                anchor_from, anchor_to = anchor_to, anchor_from
 
-        # READ CONTRACT (key-fixes.md §2.2):
-        # - When core_hash is provided, snapshot read identity must NOT depend on param_id
-        #   bucketing (repo/branch). The logical key is:
-        #     normalised slice family × core_hash (optionally expanded by equivalence) × retrieved_at.
-        # - param_id remains meaningful for:
-        #   - write identity / audit
-        #   - scoping WHICH equivalence links apply (the link graph is per param_id)
-        #
-        # Therefore:
-        # - If core_hash is provided: we NEVER filter snapshots by param_id.
-        # - If core_hash is omitted: we fall back to strict param_id scoping (inventory-by-param).
-        where_clauses: List[str] = []
-        params: List[Any] = []
+            # READ CONTRACT (key-fixes.md §2.2):
+            # - When core_hash is provided, snapshot read identity must NOT depend on param_id
+            #   bucketing (repo/branch). The logical key is:
+            #     normalised slice family × core_hash (optionally expanded by equivalence) × retrieved_at.
+            # - param_id remains meaningful for:
+            #   - write identity / audit
+            #   - scoping WHICH equivalence links apply (the link graph is per param_id)
+            #
+            # Therefore:
+            # - If core_hash is provided: we NEVER filter snapshots by param_id.
+            # - If core_hash is omitted: we fall back to strict param_id scoping (inventory-by-param).
+            where_clauses: List[str] = []
+            params: List[Any] = []
 
-        if core_hash:
-            if equivalent_hashes is not None and len(equivalent_hashes) > 0:
-                # FE-supplied closure — use ANY(%s) directly.
-                all_hashes = [core_hash] + [e['core_hash'] for e in equivalent_hashes if e.get('core_hash')]
-                where_clauses.append("core_hash = ANY(%s)")
-                params.append(all_hashes)
+            if core_hash:
+                if equivalent_hashes is not None and len(equivalent_hashes) > 0:
+                    # FE-supplied closure — use ANY(%s) directly.
+                    all_hashes = [core_hash] + [e['core_hash'] for e in equivalent_hashes if e.get('core_hash')]
+                    where_clauses.append("core_hash = ANY(%s)")
+                    params.append(all_hashes)
+                else:
+                    where_clauses.append("core_hash = %s")
+                    params.append(core_hash)
             else:
-                where_clauses.append("core_hash = %s")
-                params.append(core_hash)
-        else:
-            where_clauses.append("param_id = %s")
-            params.append(param_id)
+                where_clauses.append("param_id = %s")
+                params.append(param_id)
 
-        if slice_keys is not None:
-            _append_slice_filter_sql(sql_parts=where_clauses, params=params, slice_keys=slice_keys)
+            if slice_keys is not None:
+                _append_slice_filter_sql(sql_parts=where_clauses, params=params, slice_keys=slice_keys)
 
-        if anchor_from is not None:
-            where_clauses.append("anchor_day >= %s")
-            params.append(anchor_from)
+            if anchor_from is not None:
+                where_clauses.append("anchor_day >= %s")
+                params.append(anchor_from)
 
-        if anchor_to is not None:
-            where_clauses.append("anchor_day <= %s")
-            params.append(anchor_to)
+            if anchor_to is not None:
+                where_clauses.append("anchor_day <= %s")
+                params.append(anchor_to)
 
-        where_sql = " AND ".join(where_clauses)
+            where_sql = " AND ".join(where_clauses)
 
-        if include_summary:
-            cur.execute(
-                f"""
-                SELECT
-                  retrieved_at,
-                  slice_key,
-                  MIN(anchor_day) AS anchor_from,
-                  MAX(anchor_day) AS anchor_to,
-                  COUNT(*) AS row_count,
-                  COALESCE(SUM(X), 0) AS sum_x,
-                  COALESCE(SUM(Y), 0) AS sum_y
-                FROM snapshots
-                WHERE {where_sql}
-                GROUP BY retrieved_at, slice_key
-                ORDER BY retrieved_at DESC, slice_key
-                LIMIT %s
-                """,
-                tuple(params + [limit_i])
-            )
-        else:
-            # Distinct retrievals bounded by limit, most recent first.
-            cur.execute(
-                f"""
-                SELECT DISTINCT retrieved_at
-                FROM snapshots
-                WHERE {where_sql}
-                ORDER BY retrieved_at DESC
-                LIMIT %s
-                """,
-                tuple(params + [limit_i])
-            )
+            if include_summary:
+                cur.execute(
+                    f"""
+                    SELECT
+                      retrieved_at,
+                      slice_key,
+                      MIN(anchor_day) AS anchor_from,
+                      MAX(anchor_day) AS anchor_to,
+                      COUNT(*) AS row_count,
+                      COALESCE(SUM(X), 0) AS sum_x,
+                      COALESCE(SUM(Y), 0) AS sum_y
+                    FROM snapshots
+                    WHERE {where_sql}
+                    GROUP BY retrieved_at, slice_key
+                    ORDER BY retrieved_at DESC, slice_key
+                    LIMIT %s
+                    """,
+                    tuple(params + [limit_i])
+                )
+            else:
+                # Distinct retrievals bounded by limit, most recent first.
+                cur.execute(
+                    f"""
+                    SELECT DISTINCT retrieved_at
+                    FROM snapshots
+                    WHERE {where_sql}
+                    ORDER BY retrieved_at DESC
+                    LIMIT %s
+                    """,
+                    tuple(params + [limit_i])
+                )
 
-        rows = cur.fetchall()
-        if include_summary:
-            summary = []
-            for r in rows:
-                if not r or r[0] is None:
-                    continue
-                summary.append({
-                    "retrieved_at": r[0].isoformat(),
-                    "slice_key": r[1] or '',
-                    "anchor_from": r[2].isoformat() if r[2] else None,
-                    "anchor_to": r[3].isoformat() if r[3] else None,
-                    "row_count": int(r[4] or 0),
-                    "sum_x": int(r[5] or 0),
-                    "sum_y": int(r[6] or 0),
-                })
-            retrieved_ats = [s["retrieved_at"] for s in summary]
-        else:
-            retrieved_ats = [r[0].isoformat() for r in rows if r and r[0] is not None]
-            summary = None
+            rows = cur.fetchall()
+            if include_summary:
+                summary = []
+                for r in rows:
+                    if not r or r[0] is None:
+                        continue
+                    summary.append({
+                        "retrieved_at": r[0].isoformat(),
+                        "slice_key": r[1] or '',
+                        "anchor_from": r[2].isoformat() if r[2] else None,
+                        "anchor_to": r[3].isoformat() if r[3] else None,
+                        "row_count": int(r[4] or 0),
+                        "sum_x": int(r[5] or 0),
+                        "sum_y": int(r[6] or 0),
+                    })
+                retrieved_ats = [s["retrieved_at"] for s in summary]
+            else:
+                retrieved_ats = [r[0].isoformat() for r in rows if r and r[0] is not None]
+                summary = None
 
-        retrieved_days = sorted({ts.split('T')[0] for ts in retrieved_ats}, reverse=True)
+            retrieved_days = sorted({ts.split('T')[0] for ts in retrieved_ats}, reverse=True)
 
-        out = {
-            'success': True,
-            'retrieved_at': retrieved_ats,
-            'retrieved_days': retrieved_days,
-            'latest_retrieved_at': retrieved_ats[0] if retrieved_ats else None,
-            'count': len(retrieved_ats),
-        }
-        if summary is not None:
-            out["summary"] = summary
-        return out
+            out = {
+                'success': True,
+                'retrieved_at': retrieved_ats,
+                'retrieved_days': retrieved_days,
+                'latest_retrieved_at': retrieved_ats[0] if retrieved_ats else None,
+                'count': len(retrieved_ats),
+            }
+            if summary is not None:
+                out["summary"] = summary
+            _cache_put(ck, out)
+            return out
     except Exception as e:
         return {
             'success': False,
@@ -1675,8 +1854,6 @@ def query_snapshot_retrievals(
             'count': 0,
             'error': str(e),
         }
-    finally:
-        conn.close()
 
 
 # =============================================================================
@@ -1707,32 +1884,36 @@ def query_batch_retrieval_days(
 
     limit_per_param = max(1, min(int(limit_per_param or 200), 2000))
 
-    conn = get_db_connection()
+    ck = _cache_key("query_batch_retrieval_days", sorted(param_ids), limit_per_param)
+    hit, cached = _cache_get(ck)
+    if hit:
+        return cached
+
     try:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            SELECT param_id,
-                   (retrieved_at AT TIME ZONE 'UTC')::date AS retrieved_day
-            FROM snapshots
-            WHERE param_id = ANY(%s)
-            GROUP BY param_id, (retrieved_at AT TIME ZONE 'UTC')::date
-            ORDER BY param_id, retrieved_day DESC
-            """,
-            (param_ids,),
-        )
-        result: Dict[str, List[str]] = {pid: [] for pid in param_ids}
-        for row in cur.fetchall():
-            pid = str(row[0])
-            day_iso = row[1].isoformat() if row[1] else None
-            if pid in result and day_iso and len(result[pid]) < limit_per_param:
-                result[pid].append(day_iso)
-        return result
+        with _pooled_conn() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT param_id,
+                       (retrieved_at AT TIME ZONE 'UTC')::date AS retrieved_day
+                FROM snapshots
+                WHERE param_id = ANY(%s)
+                GROUP BY param_id, (retrieved_at AT TIME ZONE 'UTC')::date
+                ORDER BY param_id, retrieved_day DESC
+                """,
+                (param_ids,),
+            )
+            result: Dict[str, List[str]] = {pid: [] for pid in param_ids}
+            for row in cur.fetchall():
+                pid = str(row[0])
+                day_iso = row[1].isoformat() if row[1] else None
+                if pid in result and day_iso and len(result[pid]) < limit_per_param:
+                    result[pid].append(day_iso)
+            _cache_put(ck, result)
+            return result
     except Exception as e:
         print(f"[query_batch_retrieval_days] Error: {e}")
         return {pid: [] for pid in param_ids}
-    finally:
-        conn.close()
 
 
 # =============================================================================
@@ -1776,76 +1957,100 @@ def query_batch_retrievals(
     limit_per_subject = max(1, min(int(limit_per_subject or 200), 2000))
 
     # Pre-validate subjects and build per-subject hash lists.
+    # Supports two formats:
+    #   (a) Single hash: { core_hash, equivalent_hashes? }
+    #   (b) Hash groups: { hash_groups: [{ core_hash, equivalent_hashes? }, ...] }
+    # Format (b) collapses multiple plausible hashes (e.g., from different
+    # dataInterestsDSL epochs) into a single SQL query per subject.
     subject_hashes: List[List[str]] = []
     for i, subj in enumerate(subjects):
-        ch = subj.get('core_hash')
-        if not ch or not isinstance(ch, str) or not ch.strip():
-            subject_hashes.append([])
-            continue
-        hashes = [ch.strip()]
-        eq = subj.get('equivalent_hashes')
-        if eq and isinstance(eq, list):
-            for e in eq:
-                ech = e.get('core_hash') if isinstance(e, dict) else None
-                if ech and isinstance(ech, str) and ech.strip():
-                    hashes.append(ech.strip())
-        subject_hashes.append(hashes)
+        hashes: List[str] = []
 
-    conn = get_db_connection()
+        def _collect_hash_group(group: Dict[str, Any]) -> None:
+            ch = group.get('core_hash')
+            if ch and isinstance(ch, str) and ch.strip():
+                hashes.append(ch.strip())
+            eq = group.get('equivalent_hashes')
+            if eq and isinstance(eq, list):
+                for e in eq:
+                    ech = e.get('core_hash') if isinstance(e, dict) else None
+                    if ech and isinstance(ech, str) and ech.strip():
+                        hashes.append(ech.strip())
+
+        # Format (b): hash_groups array
+        groups = subj.get('hash_groups')
+        if groups and isinstance(groups, list):
+            for g in groups:
+                if isinstance(g, dict):
+                    _collect_hash_group(g)
+        else:
+            # Format (a): single core_hash + equivalent_hashes
+            _collect_hash_group(subj)
+
+        # Deduplicate
+        subject_hashes.append(list(dict.fromkeys(hashes)))
+
+    ck = _cache_key("query_batch_retrievals", subjects, limit_per_subject)
+    hit, cached = _cache_get(ck)
+    if hit:
+        return cached
+
     try:
-        cur = conn.cursor()
+        with _pooled_conn() as conn:
+            cur = conn.cursor()
 
-        # Execute per-subject queries within a single DB connection.
-        # The main performance win is ONE Vercel function invocation + ONE DB connection
-        # instead of N separate cold-start-prone serverless calls.
-        results: List[Dict[str, Any]] = []
-        for i, subj in enumerate(subjects):
-            hashes = subject_hashes[i]
-            if not hashes:
+            # Execute per-subject queries within a single DB connection.
+            # The main performance win is ONE Vercel function invocation + ONE DB connection
+            # instead of N separate cold-start-prone serverless calls.
+            results: List[Dict[str, Any]] = []
+            for i, subj in enumerate(subjects):
+                hashes = subject_hashes[i]
+                if not hashes:
+                    results.append({
+                        "subject_index": i,
+                        "success": False,
+                        "retrieved_at": [],
+                        "retrieved_days": [],
+                        "latest_retrieved_at": None,
+                        "count": 0,
+                        "error": "missing or invalid core_hash",
+                    })
+                    continue
+
+                where_clauses = ["core_hash = ANY(%s)"]
+                params = [hashes]
+
+                sk = subj.get('slice_keys')
+                if sk is not None and isinstance(sk, list):
+                    _append_slice_filter_sql(sql_parts=where_clauses, params=params, slice_keys=sk)
+
+                where_sql = " AND ".join(where_clauses)
+
+                cur.execute(
+                    f"""
+                    SELECT DISTINCT retrieved_at
+                    FROM snapshots
+                    WHERE {where_sql}
+                    ORDER BY retrieved_at DESC
+                    LIMIT %s
+                    """,
+                    tuple(params + [limit_per_subject])
+                )
+                rows = cur.fetchall()
+                retrieved_ats = [r[0].isoformat() for r in rows if r and r[0] is not None]
+                retrieved_days = sorted({ts.split('T')[0] for ts in retrieved_ats}, reverse=True)
+
                 results.append({
                     "subject_index": i,
-                    "success": False,
-                    "retrieved_at": [],
-                    "retrieved_days": [],
-                    "latest_retrieved_at": None,
-                    "count": 0,
-                    "error": "missing or invalid core_hash",
+                    "success": True,
+                    "retrieved_at": retrieved_ats,
+                    "retrieved_days": retrieved_days,
+                    "latest_retrieved_at": retrieved_ats[0] if retrieved_ats else None,
+                    "count": len(retrieved_ats),
                 })
-                continue
 
-            where_clauses = ["core_hash = ANY(%s)"]
-            params = [hashes]
-
-            sk = subj.get('slice_keys')
-            if sk is not None and isinstance(sk, list):
-                _append_slice_filter_sql(sql_parts=where_clauses, params=params, slice_keys=sk)
-
-            where_sql = " AND ".join(where_clauses)
-
-            cur.execute(
-                f"""
-                SELECT DISTINCT retrieved_at
-                FROM snapshots
-                WHERE {where_sql}
-                ORDER BY retrieved_at DESC
-                LIMIT %s
-                """,
-                tuple(params + [limit_per_subject])
-            )
-            rows = cur.fetchall()
-            retrieved_ats = [r[0].isoformat() for r in rows if r and r[0] is not None]
-            retrieved_days = sorted({ts.split('T')[0] for ts in retrieved_ats}, reverse=True)
-
-            results.append({
-                "subject_index": i,
-                "success": True,
-                "retrieved_at": retrieved_ats,
-                "retrieved_days": retrieved_days,
-                "latest_retrieved_at": retrieved_ats[0] if retrieved_ats else None,
-                "count": len(retrieved_ats),
-            })
-
-        return results
+            _cache_put(ck, results)
+            return results
     except Exception as e:
         print(f"[query_batch_retrievals] Error: {e}")
         return [
@@ -1860,8 +2065,6 @@ def query_batch_retrievals(
             }
             for i in range(len(subjects))
         ]
-    finally:
-        conn.close()
 
 
 # =============================================================================
@@ -1909,148 +2112,135 @@ def query_virtual_snapshot(
     if anchor_from > anchor_to:
         anchor_from, anchor_to = anchor_to, anchor_from
 
-    conn = get_db_connection()
+    ck = _cache_key("query_virtual_snapshot", param_id, as_at, anchor_from,
+                     anchor_to, core_hash, slice_keys, equivalent_hashes, limit)
+    hit, cached = _cache_get(ck)
+    if hit:
+        return cached
+
     try:
-        cur = conn.cursor()
-        
-        # Build WHERE clause for base filter.
-        #
-        # DESIGN (docs/current/project-db/completed/key-fixes.md §2.2):
-        # Read identity must not depend on param_id (repo/branch). When core_hash is
-        # provided, we match by hash family (optionally with equivalence) + slice family
-        # + retrieved_at discriminator.
-        where_clauses = [
-            "retrieved_at <= %s",
-            "anchor_day >= %s",
-            "anchor_day <= %s"
-        ]
-        params: List[Any] = [as_at, anchor_from, anchor_to]
+        with _pooled_conn() as conn:
+            cur = conn.cursor()
 
-        if slice_keys is not None:
-            _append_slice_filter_sql(sql_parts=where_clauses, params=params, slice_keys=slice_keys)
+            # Build WHERE clause for base filter.
+            #
+            # DESIGN (docs/current/project-db/completed/key-fixes.md §2.2):
+            # Read identity must not depend on param_id (repo/branch). When core_hash is
+            # provided, we match by hash family (optionally with equivalence) + slice family
+            # + retrieved_at discriminator.
+            where_clauses = [
+                "retrieved_at <= %s",
+                "anchor_day >= %s",
+                "anchor_day <= %s"
+            ]
+            params: List[Any] = [as_at, anchor_from, anchor_to]
 
-        where_sql = " AND ".join(where_clauses)
+            if slice_keys is not None:
+                _append_slice_filter_sql(sql_parts=where_clauses, params=params, slice_keys=slice_keys)
 
-        # Determine hash expansion mode.
-        use_fe_closure = equivalent_hashes is not None and len(equivalent_hashes) > 0
+            where_sql = " AND ".join(where_clauses)
 
-        if use_fe_closure:
-            # FE-supplied closure — use ANY(%s) directly.
-            all_hashes = [core_hash] + [e['core_hash'] for e in equivalent_hashes if e.get('core_hash')]
-            where_match_sql = where_sql + " AND core_hash = ANY(%s)"
-        else:
-            where_match_sql = where_sql + " AND core_hash = %s"
+            # Determine hash expansion mode.
+            use_fe_closure = equivalent_hashes is not None and len(equivalent_hashes) > 0
 
-        # Single-query virtual snapshot + mismatch detection.
-        # ranked: latest row per (anchor_day, LOGICAL slice family) as-of as_at.
-        #
-        # IMPORTANT:
-        # We match slice_keys by normalising window/cohort args, so the "latest wins" ranking
-        # must also be applied across that same logical slice key; otherwise multiple historic
-        # window/cohort argument variants can yield multiple rows for the same slice family.
-        # We then select only rows matching the requested core_hash, but we also compute:
-        # - has_any_rows: whether ANY virtual rows exist for this param/window (any core_hash)
-        # - has_matching_core_hash: whether ANY virtual rows exist for the requested core_hash
-        # This allows the caller to treat signature mismatch as a hard failure.
-        # The ranked_match query shape is the same for all paths — only the CTE prefix
-        # and parameter binding differ.
-        ranked_match_body = f"""
-            ranked_match AS (
+            if use_fe_closure:
+                all_hashes = [core_hash] + [e['core_hash'] for e in equivalent_hashes if e.get('core_hash')]
+                where_match_sql = where_sql + " AND core_hash = ANY(%s)"
+            else:
+                where_match_sql = where_sql + " AND core_hash = %s"
+
+            ranked_match_body = f"""
+                ranked_match AS (
+                    SELECT
+                        anchor_day,
+                        slice_key,
+                        core_hash,
+                        retrieved_at,
+                        A as a, X as x, Y as y,
+                        median_lag_days,
+                        mean_lag_days,
+                        anchor_median_lag_days,
+                        anchor_mean_lag_days,
+                        onset_delta_days,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY anchor_day, {_partition_key_match_sql_expr()}
+                            ORDER BY retrieved_at DESC, param_id DESC
+                        ) AS rn
+                    FROM snapshots
+                    WHERE {where_match_sql}
+                )
                 SELECT
-                    anchor_day,
-                    slice_key,
-                    core_hash,
-                    retrieved_at,
-                    A as a, X as x, Y as y,
-                    median_lag_days,
-                    mean_lag_days,
-                    anchor_median_lag_days,
-                    anchor_mean_lag_days,
-                    onset_delta_days,
-                    ROW_NUMBER() OVER (
-                        PARTITION BY anchor_day, {_partition_key_match_sql_expr()}
-                        ORDER BY retrieved_at DESC, param_id DESC
-                    ) AS rn
-                FROM snapshots
-                WHERE {where_match_sql}
-            )
-            SELECT
-                COALESCE(
-                    jsonb_agg((to_jsonb(rm) - 'rn') ORDER BY rm.anchor_day, rm.slice_key)
-                        FILTER (WHERE rm.rn = 1),
-                    '[]'::jsonb
-                ) AS rows,
-                (SELECT COUNT(*) > 0 FROM snapshots WHERE {where_sql}) AS has_any_rows,
-                (SELECT COUNT(*) > 0 FROM snapshots WHERE {where_match_sql}) AS has_matching_core_hash,
-                MAX(rm.retrieved_at) FILTER (WHERE rm.rn = 1) AS latest_retrieved_at_used,
-                COALESCE(BOOL_OR(rm.rn = 1 AND rm.anchor_day = %s), false) AS has_anchor_to
-            FROM ranked_match rm
-        """
-
-        if use_fe_closure:
-            # FE closure path — core_hash = ANY(%s).
-            query = f"""
-            WITH {ranked_match_body}
+                    COALESCE(
+                        jsonb_agg((to_jsonb(rm) - 'rn') ORDER BY rm.anchor_day, rm.slice_key)
+                            FILTER (WHERE rm.rn = 1),
+                        '[]'::jsonb
+                    ) AS rows,
+                    (SELECT COUNT(*) > 0 FROM snapshots WHERE {where_sql}) AS has_any_rows,
+                    (SELECT COUNT(*) > 0 FROM snapshots WHERE {where_match_sql}) AS has_matching_core_hash,
+                    MAX(rm.retrieved_at) FILTER (WHERE rm.rn = 1) AS latest_retrieved_at_used,
+                    COALESCE(BOOL_OR(rm.rn = 1 AND rm.anchor_day = %s), false) AS has_anchor_to
+                FROM ranked_match rm
             """
-            # ranked_match WHERE: base params + all_hashes
-            # has_any_rows: base params
-            # has_matching_core_hash: base params + all_hashes
-            # has_anchor_to: anchor_to
-            params2 = (
-                params + [all_hashes] +
-                params +
-                params + [all_hashes] +
-                [anchor_to]
-            )
-        else:
-            # No expansion — core_hash = %s.
-            query = f"""
-            WITH {ranked_match_body}
-            """
-            params2 = (
-                params + [core_hash] +
-                params +
-                params + [core_hash] +
-                [anchor_to]
-            )
 
-        cur.execute(query, params2)
-        row = cur.fetchone()
-        if not row:
-            return {
+            if use_fe_closure:
+                query = f"""
+                WITH {ranked_match_body}
+                """
+                params2 = (
+                    params + [all_hashes] +
+                    params +
+                    params + [all_hashes] +
+                    [anchor_to]
+                )
+            else:
+                query = f"""
+                WITH {ranked_match_body}
+                """
+                params2 = (
+                    params + [core_hash] +
+                    params +
+                    params + [core_hash] +
+                    [anchor_to]
+                )
+
+            cur.execute(query, params2)
+            row = cur.fetchone()
+            if not row:
+                return {
+                    'success': True,
+                    'rows': [],
+                    'count': 0,
+                    'latest_retrieved_at_used': None,
+                    'has_anchor_to': False,
+                    'has_any_rows': False,
+                    'has_matching_core_hash': False,
+                }
+
+            rows_json, has_any_rows, has_matching_core_hash, latest_retrieved_at_used, has_anchor_to = row
+            if isinstance(rows_json, (bytes, bytearray)):
+                rows_json = rows_json.decode('utf-8')
+            if isinstance(rows_json, str):
+                try:
+                    rows_out = json.loads(rows_json)
+                except Exception:
+                    rows_out = []
+            elif isinstance(rows_json, list):
+                rows_out = rows_json
+            else:
+                rows_out = rows_json or []
+
+            out = {
                 'success': True,
-                'rows': [],
-                'count': 0,
-                'latest_retrieved_at_used': None,
-                'has_anchor_to': False,
-                'has_any_rows': False,
-                'has_matching_core_hash': False,
+                'rows': rows_out,
+                'count': len(rows_out),
+                'latest_retrieved_at_used': latest_retrieved_at_used.isoformat() if hasattr(latest_retrieved_at_used, 'isoformat') else latest_retrieved_at_used,
+                'has_anchor_to': bool(has_anchor_to),
+                'has_any_rows': bool(has_any_rows),
+                'has_matching_core_hash': bool(has_matching_core_hash),
             }
+            _cache_put(ck, out)
+            return out
 
-        rows_json, has_any_rows, has_matching_core_hash, latest_retrieved_at_used, has_anchor_to = row
-        # psycopg2 may return jsonb as str unless JSON adapters are registered.
-        if isinstance(rows_json, (bytes, bytearray)):
-            rows_json = rows_json.decode('utf-8')
-        if isinstance(rows_json, str):
-            try:
-                rows_out = json.loads(rows_json)
-            except Exception:
-                rows_out = []
-        elif isinstance(rows_json, list):
-            rows_out = rows_json
-        else:
-            rows_out = rows_json or []
-
-        return {
-            'success': True,
-            'rows': rows_out,
-            'count': len(rows_out),
-            'latest_retrieved_at_used': latest_retrieved_at_used.isoformat() if hasattr(latest_retrieved_at_used, 'isoformat') else latest_retrieved_at_used,
-            'has_anchor_to': bool(has_anchor_to),
-            'has_any_rows': bool(has_any_rows),
-            'has_matching_core_hash': bool(has_matching_core_hash),
-        }
-        
     except Exception as e:
         return {
             'success': False,
@@ -2060,8 +2250,6 @@ def query_virtual_snapshot(
             'has_anchor_to': False,
             'error': str(e)
         }
-    finally:
-        conn.close()
 
 
 # =============================================================================
@@ -2086,107 +2274,116 @@ def list_signatures(
     - graph_name: filter by inputs_json->'provenance'->>'graph_name' (JSONB).
     """
     limit_i = max(1, min(int(limit or 200), 2000))
-    conn = get_db_connection()
+
+    ck = _cache_key("list_signatures", param_id, param_id_prefix, graph_name,
+                     list_params, limit_i, include_inputs)
+    hit, cached = _cache_get(ck)
+    if hit:
+        return cached
+
     try:
-        cur = conn.cursor()
+        with _pooled_conn() as conn:
+            cur = conn.cursor()
 
-        # ── Mode: list distinct param_ids ────────────────────────────────────
-        if list_params:
-            where_clauses: List[str] = []
-            params_list: List[Any] = []
+            # ── Mode: list distinct param_ids ────────────────────────────────
+            if list_params:
+                where_clauses: List[str] = []
+                params_list: List[Any] = []
 
-            if param_id_prefix:
-                where_clauses.append("param_id LIKE %s")
-                params_list.append(param_id_prefix + "%")
+                if param_id_prefix:
+                    where_clauses.append("param_id LIKE %s")
+                    params_list.append(param_id_prefix + "%")
+                if graph_name:
+                    where_clauses.append("inputs_json->'provenance'->>'graph_name' = %s")
+                    params_list.append(graph_name)
+
+                where_sql = (" WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+                cur.execute(
+                    f"""
+                    SELECT param_id,
+                           COUNT(*) AS signature_count,
+                           MAX(created_at) AS latest_created_at,
+                           MIN(created_at) AS earliest_created_at
+                    FROM signature_registry
+                    {where_sql}
+                    GROUP BY param_id
+                    ORDER BY MAX(created_at) DESC
+                    LIMIT %s
+                    """,
+                    tuple(params_list + [limit_i]),
+                )
+                rows = cur.fetchall()
+                out = []
+                for (pid, sig_count, latest, earliest) in rows:
+                    out.append({
+                        "param_id": str(pid),
+                        "signature_count": int(sig_count),
+                        "latest_created_at": latest.isoformat().replace("+00:00", "Z") if hasattr(latest, "isoformat") else str(latest),
+                        "earliest_created_at": earliest.isoformat().replace("+00:00", "Z") if hasattr(earliest, "isoformat") else str(earliest),
+                    })
+                result = {"success": True, "params": out, "count": len(out)}
+                _cache_put(ck, result)
+                return result
+
+            # ── Mode: list signatures for a specific param_id ────────────────
+            if not param_id:
+                raise ValueError("Either param_id or list_params=True is required")
+
+            where_clauses = ["param_id = %s"]
+            params_list = [param_id]
+
             if graph_name:
                 where_clauses.append("inputs_json->'provenance'->>'graph_name' = %s")
                 params_list.append(graph_name)
 
-            where_sql = (" WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
-            cur.execute(
-                f"""
-                SELECT param_id,
-                       COUNT(*) AS signature_count,
-                       MAX(created_at) AS latest_created_at,
-                       MIN(created_at) AS earliest_created_at
-                FROM signature_registry
-                {where_sql}
-                GROUP BY param_id
-                ORDER BY MAX(created_at) DESC
-                LIMIT %s
-                """,
-                tuple(params_list + [limit_i]),
-            )
+            where_sql = " AND ".join(where_clauses)
+
+            if include_inputs:
+                cur.execute(
+                    f"""
+                    SELECT param_id, core_hash, created_at, canonical_signature, canonical_sig_hash_full, sig_algo, inputs_json
+                    FROM signature_registry
+                    WHERE {where_sql}
+                    ORDER BY created_at DESC
+                    LIMIT %s
+                    """,
+                    tuple(params_list + [limit_i]),
+                )
+            else:
+                cur.execute(
+                    f"""
+                    SELECT param_id, core_hash, created_at, canonical_signature, canonical_sig_hash_full, sig_algo
+                    FROM signature_registry
+                    WHERE {where_sql}
+                    ORDER BY created_at DESC
+                    LIMIT %s
+                    """,
+                    tuple(params_list + [limit_i]),
+                )
             rows = cur.fetchall()
             out = []
-            for (pid, sig_count, latest, earliest) in rows:
-                out.append({
-                    "param_id": str(pid),
-                    "signature_count": int(sig_count),
-                    "latest_created_at": latest.isoformat().replace("+00:00", "Z") if hasattr(latest, "isoformat") else str(latest),
-                    "earliest_created_at": earliest.isoformat().replace("+00:00", "Z") if hasattr(earliest, "isoformat") else str(earliest),
-                })
-            return {"success": True, "params": out, "count": len(out)}
-
-        # ── Mode: list signatures for a specific param_id ────────────────────
-        if not param_id:
-            raise ValueError("Either param_id or list_params=True is required")
-
-        where_clauses = ["param_id = %s"]
-        params_list = [param_id]
-
-        if graph_name:
-            where_clauses.append("inputs_json->'provenance'->>'graph_name' = %s")
-            params_list.append(graph_name)
-
-        where_sql = " AND ".join(where_clauses)
-
-        if include_inputs:
-            cur.execute(
-                f"""
-                SELECT param_id, core_hash, created_at, canonical_signature, canonical_sig_hash_full, sig_algo, inputs_json
-                FROM signature_registry
-                WHERE {where_sql}
-                ORDER BY created_at DESC
-                LIMIT %s
-                """,
-                tuple(params_list + [limit_i]),
-            )
-        else:
-            cur.execute(
-                f"""
-                SELECT param_id, core_hash, created_at, canonical_signature, canonical_sig_hash_full, sig_algo
-                FROM signature_registry
-                WHERE {where_sql}
-                ORDER BY created_at DESC
-                LIMIT %s
-                """,
-                tuple(params_list + [limit_i]),
-            )
-        rows = cur.fetchall()
-        out = []
-        for row in rows:
-            if include_inputs:
-                pid, ch, created_at, canonical_signature, full_hash, sig_algo, inputs_json = row
-            else:
-                pid, ch, created_at, canonical_signature, full_hash, sig_algo = row
-                inputs_json = None
-            out.append(
-                {
-                    "param_id": str(pid),
-                    "core_hash": str(ch),
-                    "created_at": created_at.isoformat().replace("+00:00", "Z") if hasattr(created_at, "isoformat") else str(created_at),
-                    "canonical_signature": canonical_signature,
-                    "canonical_sig_hash_full": full_hash,
-                    "sig_algo": sig_algo,
-                    "inputs_json": inputs_json,
-                }
-            )
-        return {"success": True, "rows": out, "count": len(out)}
+            for row in rows:
+                if include_inputs:
+                    pid, ch, created_at, canonical_signature, full_hash, sig_algo, inputs_json = row
+                else:
+                    pid, ch, created_at, canonical_signature, full_hash, sig_algo = row
+                    inputs_json = None
+                out.append(
+                    {
+                        "param_id": str(pid),
+                        "core_hash": str(ch),
+                        "created_at": created_at.isoformat().replace("+00:00", "Z") if hasattr(created_at, "isoformat") else str(created_at),
+                        "canonical_signature": canonical_signature,
+                        "canonical_sig_hash_full": full_hash,
+                        "sig_algo": sig_algo,
+                        "inputs_json": inputs_json,
+                    }
+                )
+            result = {"success": True, "rows": out, "count": len(out)}
+            _cache_put(ck, result)
+            return result
     except Exception as e:
         return {"success": False, "rows": [], "count": 0, "error": str(e)}
-    finally:
-        conn.close()
 
 
 def get_signature(
@@ -2195,37 +2392,42 @@ def get_signature(
     core_hash: str
 ) -> Dict[str, Any]:
     """Get a single signature_registry row."""
-    conn = get_db_connection()
+    ck = _cache_key("get_signature", param_id, core_hash)
+    hit, cached = _cache_get(ck)
+    if hit:
+        return cached
+
     try:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            SELECT param_id, core_hash, created_at, canonical_signature, canonical_sig_hash_full, sig_algo, inputs_json
-            FROM signature_registry
-            WHERE param_id = %s AND core_hash = %s
-            """,
-            (param_id, core_hash),
-        )
-        row = cur.fetchone()
-        if not row:
-            return {"success": False, "error": "not_found"}
-        pid, ch, created_at, canonical_signature, full_hash, sig_algo, inputs_json = row
-        return {
-            "success": True,
-            "row": {
-                "param_id": str(pid),
-                "core_hash": str(ch),
-                "created_at": created_at.isoformat().replace("+00:00", "Z") if hasattr(created_at, "isoformat") else str(created_at),
-                "canonical_signature": canonical_signature,
-                "canonical_sig_hash_full": full_hash,
-                "sig_algo": sig_algo,
-                "inputs_json": inputs_json,
-            },
-        }
+        with _pooled_conn() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT param_id, core_hash, created_at, canonical_signature, canonical_sig_hash_full, sig_algo, inputs_json
+                FROM signature_registry
+                WHERE param_id = %s AND core_hash = %s
+                """,
+                (param_id, core_hash),
+            )
+            row = cur.fetchone()
+            if not row:
+                return {"success": False, "error": "not_found"}
+            pid, ch, created_at, canonical_signature, full_hash, sig_algo, inputs_json = row
+            result = {
+                "success": True,
+                "row": {
+                    "param_id": str(pid),
+                    "core_hash": str(ch),
+                    "created_at": created_at.isoformat().replace("+00:00", "Z") if hasattr(created_at, "isoformat") else str(created_at),
+                    "canonical_signature": canonical_signature,
+                    "canonical_sig_hash_full": full_hash,
+                    "sig_algo": sig_algo,
+                    "inputs_json": inputs_json,
+                },
+            }
+            _cache_put(ck, result)
+            return result
     except Exception as e:
         return {"success": False, "error": str(e)}
-    finally:
-        conn.close()
 
 
 

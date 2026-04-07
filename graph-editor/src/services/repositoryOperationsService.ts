@@ -148,6 +148,14 @@ class RepositoryOperationsService {
       // best-effort — settings merge failure must not block pull
     }
 
+    // Prune orphaned index entries now that we have the full repo state
+    try {
+      const { IndexRebuildService } = await import('./indexRebuildService');
+      await IndexRebuildService.pruneOrphanedIndexEntries();
+    } catch (e) {
+      console.warn('⚠️ RepositoryOperationsService: Index prune after pull failed (non-fatal):', e);
+    }
+
     // Reload Navigator to show updated files
     if (this.navigatorOps) {
       await this.navigatorOps.refreshItems();
@@ -202,6 +210,15 @@ class RepositoryOperationsService {
     sessionLogService.success('git', 'GIT_PULL_SUCCESS', `Pulled latest from ${repository}/${branch}`,
       fileDetails,
       { repository, branch, newFiles: result.newFiles, changedFiles: result.changedFiles, deletedFiles: result.deletedFiles });
+
+    // Scan for Bayes patch files that may have arrived in the pull (doc 28 §4.4).
+    // Fire-and-forget — scan errors are logged but must not break the pull flow.
+    void import('./bayesPatchService').then(({ scanForPendingPatches }) => {
+      scanForPendingPatches(branch).catch(err => {
+        console.warn('[repositoryOperationsService] Bayes patch scan failed (non-fatal):', err);
+      });
+    });
+
     return {
       success: true,
       forceReplaceRequests: (result as any).forceReplaceRequests || [],
@@ -369,7 +386,7 @@ class RepositoryOperationsService {
           const remoteKeys = Object.keys(remoteData || {}).sort();
           const localOnly = localKeys.filter(k => !baseKeys.includes(k));
           const remoteOnly = remoteKeys.filter(k => !baseKeys.includes(k));
-          sessionLogService.info('git', 'JSON_MERGE_INPUTS',
+          sessionLogService.debug('git', 'JSON_MERGE_INPUTS',
             `Structural merge inputs for ${fileId}`,
             `base keys: ${baseKeys.join(', ')}\nlocal keys: ${localKeys.join(', ')}\nremote keys: ${remoteKeys.join(', ')}\nlocal-only: ${localOnly.join(', ') || '(none)'}\nremote-only: ${remoteOnly.join(', ') || '(none)'}`,
             { fileId, baseKeyCount: baseKeys.length, localKeyCount: localKeys.length, remoteKeyCount: remoteKeys.length, localOnlyKeys: localOnly, remoteOnlyKeys: remoteOnly });
@@ -412,7 +429,7 @@ class RepositoryOperationsService {
           }
 
           finalData = jsonMerge.merged;
-          sessionLogService.info('git', 'GIT_PULL_FILE_MERGED',
+          sessionLogService.debug('git', 'GIT_PULL_FILE_MERGED',
             `Structural auto-merge for ${fileId} (JSON)`, undefined, { fileId });
         } else {
           const baseContent = serialise(file.originalData);
@@ -445,7 +462,7 @@ class RepositoryOperationsService {
           finalData = parseContent(mergeResult.merged || remoteContent);
         }
 
-        sessionLogService.info('git', 'GIT_PULL_FILE_MERGED',
+        sessionLogService.debug('git', 'GIT_PULL_FILE_MERGED',
           `Auto-merged local changes with remote for ${fileId}`, undefined, { fileId });
       } else {
         finalData = remoteData;
@@ -650,7 +667,7 @@ class RepositoryOperationsService {
         }
       }
 
-      sessionLogService.addChild(logOpId, 'info', 'DISCARD_FILE', `Discarded: ${unprefixedId}`);
+      sessionLogService.addChild(logOpId, 'debug', 'DISCARD_FILE', `Discarded: ${unprefixedId}`);
       discardedCount++;
     }
 
@@ -1065,7 +1082,7 @@ class RepositoryOperationsService {
       }
     );
     
-    sessionLogService.addChild(logOpId, 'info', 'COMMIT_MESSAGE', `Message: "${message}"`);
+    sessionLogService.addChild(logOpId, 'debug', 'COMMIT_MESSAGE', `Message: "${message}"`);
 
     // Get git credentials
     const credsResult = await credentialsManager.loadCredentials();
@@ -1223,7 +1240,7 @@ class RepositoryOperationsService {
       // Log files being committed
       for (const file of filesToCommit) {
         const action = file.delete ? 'DELETE' : (file.binaryContent ? 'IMAGE' : 'UPDATE');
-        sessionLogService.addChild(logOpId, 'info', `COMMIT_${action}`, 
+        sessionLogService.addChild(logOpId, 'debug', `COMMIT_${action}`,
           `${action}: ${file.path}`,
           undefined,
           { filePath: file.path });
@@ -1271,7 +1288,7 @@ class RepositoryOperationsService {
                 path: 'hash-mappings.json',
                 content: JSON.stringify(mappingsFile, null, 2),
               });
-              sessionLogService.addChild(logOpId, 'info', 'HASH_GUARD_MAPPINGS',
+              sessionLogService.addChild(logOpId, 'debug', 'HASH_GUARD_MAPPINGS',
                 `Added ${selectedItems.length} hash mapping(s) to commit`);
             }
           }

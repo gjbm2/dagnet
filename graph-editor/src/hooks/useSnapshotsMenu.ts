@@ -325,10 +325,7 @@ export function useSnapshotsMenu(objectIds: string[], options: UseSnapshotsMenuO
             ? matchedFamilyWithData.overall
             : (hasCallerSignatures ? null : overallAll);
 
-          const diag =
-            typeof (sessionLogService as any).getDiagnosticLoggingEnabled === 'function'
-              ? sessionLogService.getDiagnosticLoggingEnabled()
-              : false;
+          const diag = sessionLogService.isLevelEnabled('debug');
           const fetchedThisRefresh = backendFetchedDbParamIds.has(dbParamId);
           if (diag || fetchedThisRefresh) {
             try {
@@ -350,7 +347,7 @@ export function useSnapshotsMenu(objectIds: string[], options: UseSnapshotsMenuO
                   chosen_unique_retrieved_days: days,
                 };
                 console.log('[SnapshotsMenu] inventory', debugPayload);
-                sessionLogService.info(
+                sessionLogService.debug(
                   'data-fetch', 'SNAPSHOT_INVENTORY_MENU',
                   `Snapshot inventory: ${objectId} → ${days} day(s)`,
                   undefined, debugPayload as any
@@ -478,7 +475,7 @@ export function useSnapshotsMenu(objectIds: string[], options: UseSnapshotsMenuO
 
           const ws = resolveWorkspaceForParam(objectId, repo, branch);
           const dbParamId = buildDbParamId(objectId, ws.repo, ws.branch);
-          sessionLogService.addChild(opId, 'info', 'SNAPSHOT_DELETE_PARAM', `Deleting snapshots for ${objectId}`, undefined, {
+          sessionLogService.addChild(opId, 'debug', 'SNAPSHOT_DELETE_PARAM', `Deleting snapshots for ${objectId}`, undefined, {
             dbParamId,
             expectedCount: expected,
           });
@@ -548,7 +545,7 @@ export function useSnapshotsMenu(objectIds: string[], options: UseSnapshotsMenuO
       try {
         const ws = resolveWorkspaceForParam(objectId, repo, branch);
         const dbParamId = buildDbParamId(objectId, ws.repo, ws.branch);
-        sessionLogService.addChild(opId, 'info', 'SNAPSHOT_DELETE_PARAM', `Deleting snapshots for ${objectId}`, undefined, {
+        sessionLogService.addChild(opId, 'debug', 'SNAPSHOT_DELETE_PARAM', `Deleting snapshots for ${objectId}`, undefined, {
           dbParamId,
           scoped,
           core_hashes: core_hashes ?? null,
@@ -611,7 +608,7 @@ export function useSnapshotsMenu(objectIds: string[], options: UseSnapshotsMenuO
           const ws = resolveWorkspaceForParam(objectId, repo, branch);
           const dbParamId = buildDbParamId(objectId, ws.repo, ws.branch);
 
-          sessionLogService.addChild(opId, 'info', 'SNAPSHOT_QUERY_FULL', `Querying snapshot rows for ${objectId}`, undefined, {
+          sessionLogService.addChild(opId, 'debug', 'SNAPSHOT_QUERY_FULL', `Querying snapshot rows for ${objectId}`, undefined, {
             dbParamId,
             expectedRows,
           });
@@ -698,7 +695,7 @@ export function useSnapshotsMenu(objectIds: string[], options: UseSnapshotsMenuO
         if (scoped) {
           // Download rows for each core_hash in the family separately (query-full takes single core_hash).
           for (const ch of core_hashes!) {
-            sessionLogService.addChild(opId, 'info', 'SNAPSHOT_QUERY_FULL', `Querying snapshot rows for ${objectId} (core_hash=${ch.substring(0, 8)}…)`, undefined, {
+            sessionLogService.addChild(opId, 'debug', 'SNAPSHOT_QUERY_FULL', `Querying snapshot rows for ${objectId} (core_hash=${ch.substring(0, 8)}…)`, undefined, {
               dbParamId,
               core_hash: ch,
             });
@@ -713,7 +710,7 @@ export function useSnapshotsMenu(objectIds: string[], options: UseSnapshotsMenuO
           }
         } else {
           // Param-wide download: no core_hash filter.
-          sessionLogService.addChild(opId, 'info', 'SNAPSHOT_QUERY_FULL', `Querying all snapshot rows for ${objectId}`, undefined, {
+          sessionLogService.addChild(opId, 'debug', 'SNAPSHOT_QUERY_FULL', `Querying all snapshot rows for ${objectId}`, undefined, {
             dbParamId,
             expectedRows,
           });

@@ -391,3 +391,121 @@ describe('real-world patterns', () => {
     expect(result).toHaveLength(10);
   });
 });
+
+// ===========================================================================
+// 7. Reordering, commutativity, and mixed nesting
+// ===========================================================================
+
+describe('reordering and mixed nesting', () => {
+  it('context;window;context — interleaved semicolons at top level → 3 additive branches', async () => {
+    // Three top-level semicolon branches: two contexts and one window
+    const result = await explodeDSL(
+      'context(channel:ch-1);window(-30d:);context(geo:geo-1)',
+    );
+    expect(result).toHaveLength(3);
+    expect(result.some(s => s.includes('context(channel:ch-1)'))).toBe(true);
+    expect(result.some(s => s.includes('window(-30d:)'))).toBe(true);
+    expect(result.some(s => s.includes('context(geo:geo-1)'))).toBe(true);
+  });
+
+  it('context(a).(window;context(b)) — dot-product with mixed group → 2 branches each with context(a)', async () => {
+    // context(channel:ch-1) composed with (window(-30d:) OR context(geo:geo-1))
+    // = context(channel:ch-1).window(-30d:) ; context(channel:ch-1).context(geo:geo-1)
+    const result = await explodeDSL(
+      'context(channel:ch-1).(window(-30d:);context(geo:geo-1))',
+    );
+    expect(result).toHaveLength(2);
+    expect(result.every(s => s.includes('context(channel:ch-1)'))).toBe(true);
+    expect(result.some(s => s.includes('window(-30d:)'))).toBe(true);
+    expect(result.some(s => s.includes('context(geo:geo-1)'))).toBe(true);
+  });
+
+  it('(context(a);window).(context(b);cohort) — mixed types on both sides → 4 branches', async () => {
+    // (context(channel:ch-1) OR window(-30d:)) × (context(geo:geo-1) OR cohort(-30d:))
+    // = context(channel:ch-1).context(geo:geo-1)
+    //   context(channel:ch-1).cohort(-30d:)
+    //   window(-30d:).context(geo:geo-1)
+    //   window(-30d:).cohort(-30d:)
+    const result = await explodeDSL(
+      '(context(channel:ch-1);window(-30d:)).(context(geo:geo-1);cohort(-30d:))',
+    );
+    expect(result).toHaveLength(4);
+    // Check each expected combination exists
+    expect(result.some(s => s.includes('channel:ch-1') && s.includes('geo:geo-1'))).toBe(true);
+    expect(result.some(s => s.includes('channel:ch-1') && s.includes('cohort(-30d:)'))).toBe(true);
+    expect(result.some(s => s.includes('window(-30d:)') && s.includes('geo:geo-1'))).toBe(true);
+    expect(result.some(s => s.includes('window(-30d:)') && s.includes('cohort(-30d:)'))).toBe(true);
+  });
+
+  it('commutativity: A.B ≡ B.A for pinned terms', async () => {
+    const ab = await explodeDSL('context(channel:ch-1).window(-30d:)');
+    const ba = await explodeDSL('window(-30d:).context(channel:ch-1)');
+    expect(ab).toHaveLength(1);
+    expect(ba).toHaveLength(1);
+    // Both should produce the same normalised slice (order may differ but both constraints present)
+    expect(ab[0].includes('channel:ch-1') && ab[0].includes('window(-30d:)')).toBe(true);
+    expect(ba[0].includes('channel:ch-1') && ba[0].includes('window(-30d:)')).toBe(true);
+  });
+
+  it('commutativity: (A;B).C ≡ C.(A;B) for mixed groups', async () => {
+    const prefixed = await explodeDSL(
+      '(context(channel:ch-1);context(geo:geo-1)).window(-30d:)',
+    );
+    const suffixed = await explodeDSL(
+      'window(-30d:).(context(channel:ch-1);context(geo:geo-1))',
+    );
+    expect(sorted(prefixed)).toEqual(sorted(suffixed));
+    expect(prefixed).toHaveLength(2);
+  });
+
+  it('bare key context(a).(window;context(b)) — bare a expands, b stays pinned', async () => {
+    // context(channel) bare × (window OR context(geo:geo-1) pinned)
+    // = 3 × 2 = 6 (each channel value paired with window, then with geo:geo-1)
+    const result = await explodeDSL(
+      'context(channel).(window(-30d:);context(geo:geo-1))',
+    );
+    expect(result).toHaveLength(3 * 2); // 6
+    // Each channel value appears with window and with geo:geo-1
+    for (const ch of ['ch-1', 'ch-2', 'ch-3']) {
+      expect(result.some(s => s.includes(`channel:${ch}`) && s.includes('window(-30d:)'))).toBe(true);
+      expect(result.some(s => s.includes(`channel:${ch}`) && s.includes('geo:geo-1'))).toBe(true);
+    }
+  });
+
+  it('bare key in mixed position: (window;cohort).context(a).(context(b);context(c))', async () => {
+    // 2 time modes × 3 channel values × (2 geo + 4 device) = 2 × 3 × 6 = 36?
+    // NO — context(a) is bare (Cartesian with everything on its clause),
+    // but (context(b);context(c)) is semicolon (additive in suffix group).
+    // Parse: (window;cohort).context(channel).(context(geo);context(device))
+    // Step 1: distribute (window;cohort) → 2 branches
+    // Step 2: each branch gets .context(channel).(context(geo);context(device))
+    // Step 3: (context(geo);context(device)) is additive → 2 + 4 = 6 branches
+    // Step 4: .context(channel) is dot-product with each → 3 × 6 = 18 per time branch?
+    // Actually: context(channel) is bare key on the SAME clause as context(geo:X) or context(device:X)
+    //   so it's Cartesian: channel × geo = 3×2 = 6, channel × device = 3×4 = 12
+    //   total per time branch: 6 + 12 = 18, times 2 = 36
+    const result = await explodeDSL(
+      '(window(-30d:);cohort(-30d:)).context(channel).(context(geo);context(device))',
+    );
+    // 2 × (3×2 + 3×4) = 2 × (6 + 12) = 36
+    expect(result).toHaveLength(36);
+    // Spot check: window + channel:ch-1 + geo:geo-1 should exist
+    expect(result.some(s =>
+      s.includes('window(-30d:)') && s.includes('channel:ch-1') && s.includes('geo:geo-1')
+    )).toBe(true);
+    // And window + channel:ch-2 + device:dev-3 should exist
+    expect(result.some(s =>
+      s.includes('window(-30d:)') && s.includes('channel:ch-2') && s.includes('device:dev-3')
+    )).toBe(true);
+  });
+
+  it('triple dot-product with reordering: context(b).context(a).window ≡ window.context(a).context(b)', async () => {
+    const order1 = await explodeDSL('context(geo).context(channel).window(-30d:)');
+    const order2 = await explodeDSL('window(-30d:).context(channel).context(geo)');
+    // Both should produce 3×2 = 6 slices (Cartesian of channel × geo, each with window)
+    expect(order1).toHaveLength(6);
+    expect(order2).toHaveLength(6);
+    // Same set of slices regardless of term order
+    expect(sorted(order1)).toEqual(sorted(order2));
+  });
+});

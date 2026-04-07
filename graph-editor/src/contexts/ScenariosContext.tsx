@@ -324,7 +324,7 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
           for (const d of res.updatedDetails || []) {
             const prev = (d.prevDepsSignature || '').slice(0, 12);
             const next = (d.nextDepsSignature || '').slice(0, 12);
-            sessionLogService.addChild(logOpId, 'info', 'CHART_STALE', `Chart ${d.chartFileId} stale (${prev}→${next})`, undefined, { chartFileId: d.chartFileId });
+            sessionLogService.addChild(logOpId, 'debug', 'CHART_STALE', `Chart ${d.chartFileId} stale (${prev}→${next})`, undefined, { chartFileId: d.chartFileId });
           }
           sessionLogService.endOperation(logOpId, 'success', `Reconciled charts (updated=${res.updatedChartFileIds.length}, skipped=${res.skippedChartFileIds.length})`);
         } catch (e: any) {
@@ -981,7 +981,7 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
         } else {
           sessionLogService.addChild(
             regenLogId,
-            'info',
+            'debug',
             'SCENARIO_REGEN_SOURCE_FETCH_DISABLED',
             'Source fetch disabled; running from-file refresh only',
             undefined,
@@ -1163,7 +1163,7 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
           const currentDsl = graphStore?.getState().currentDSL || '';
           const g = graphStore?.getState().graph as any;
           if (currentDsl && g) {
-            sessionLogService.addChild(opId, 'info', 'DEV_REFETCH_CURRENT', 'Refreshing Current from file cache…', undefined, {
+            sessionLogService.addChild(opId, 'debug', 'DEV_REFETCH_CURRENT', 'Refreshing Current from file cache…', undefined, {
               currentDsl,
             } as any);
             const itemsForCurrent = fetchDataService.getItemsForFromFileLoad(g as any);
@@ -1201,7 +1201,7 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
 
         sessionLogService.addChild(
           opId,
-          'info',
+          'debug',
           'DEV_REFETCH_PLAN',
           `Regenerating ${idsToRegen.length} visible live scenario(s) from file cache…`,
           undefined,
@@ -1211,7 +1211,7 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
         for (const id of idsToRegen) {
           const s = scenarios.find((x) => x.id === id);
           if (!s || s.meta?.isLive !== true) continue;
-          sessionLogService.addChild(opId, 'info', 'DEV_REFETCH_SCENARIO', `Regenerating ${id}…`, undefined, {
+          sessionLogService.addChild(opId, 'debug', 'DEV_REFETCH_SCENARIO', `Regenerating ${id}…`, undefined, {
             scenarioId: id,
             queryDSL: s.meta?.queryDSL,
             lastEffectiveDSL: s.meta?.lastEffectiveDSL,
@@ -1226,7 +1226,7 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
         // 2) Recompute any open chart artefacts that depend on this graph (mirror live share).
         // We keep this best-effort: scenario regeneration is the primary debugging intent.
         try {
-          sessionLogService.addChild(opId, 'info', 'DEV_RECOMPUTE_CHARTS', 'Recomputing open chart(s)…');
+          sessionLogService.addChild(opId, 'debug', 'DEV_RECOMPUTE_CHARTS', 'Recomputing open chart(s)…');
           const effectiveGraph = (graphStore?.getState().graph as any) || (graph as any);
           if (effectiveGraph) {
             const res = await recomputeOpenChartsForGraph({
@@ -1239,7 +1239,7 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
               baseColour,
               authoritativeCurrentDsl: graphStore?.getState().currentDSL || undefined,
             });
-            sessionLogService.addChild(opId, 'success', 'DEV_RECOMPUTE_CHARTS_OK', `Recomputed ${res.updatedChartFileIds.length} chart(s)`);
+            sessionLogService.addChild(opId, 'debug', 'DEV_RECOMPUTE_CHARTS_OK', `Recomputed ${res.updatedChartFileIds.length} chart(s)`);
           } else {
             sessionLogService.addChild(opId, 'warning', 'DEV_RECOMPUTE_CHARTS_SKIP', 'No graph available to recompute charts');
           }

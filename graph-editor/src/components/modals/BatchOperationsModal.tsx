@@ -653,7 +653,7 @@ export function BatchOperationsModal({
         // Add child to hierarchical session log
         sessionLogService.addChild(
           logOpId,
-          success ? 'success' : 'error',
+          success ? 'debug' : 'error',
           success ? 'ITEM_SUCCESS' : 'ITEM_ERROR',
           `${item.name}${detailText}`,
           contextText ? contextText.slice(2, -1) : undefined, // Remove leading " (" and trailing ")"

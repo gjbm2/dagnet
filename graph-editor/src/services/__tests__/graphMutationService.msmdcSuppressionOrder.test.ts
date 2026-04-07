@@ -23,6 +23,9 @@ vi.mock('../sessionLogService', () => ({
     addChild: vi.fn(),
     endOperation: vi.fn(),
     info: vi.fn(),
+    debug: vi.fn(),
+    trace: vi.fn(),
+    isLevelEnabled: vi.fn(() => false),
   },
 }));
 

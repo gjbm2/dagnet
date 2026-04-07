@@ -82,6 +82,61 @@ Key client methods: `health()`, `parseQuery()`, `generateAllParameters()`, `enha
 | `/api/sigs/list` | POST | List all signatures for a parameter |
 | `/api/sigs/get` | POST | Retrieve signature entry by param_id + core_hash |
 
+### Cache management
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/api/cache/clear` | POST | Clear the snapshot service result cache; returns pre-clear stats |
+| `/api/cache/stats` | GET | Return current cache statistics (non-destructive) |
+
+## Connection Pooling and Result Cache
+
+Added 7-Apr-26. Module-level infrastructure in `lib/snapshot_service.py` that survives across warm Vercel invocations.
+
+### Vercel function lifecycle (context for design)
+
+- Warm instances persist ~5–15 min of inactivity; module-level globals survive across requests within the same instance.
+- **No sticky routing**: sequential requests from the same browser can hit any available warm instance. Each instance has its own isolated pool and cache.
+- **Fluid Compute** (enabled by default on Pro): a single instance handles multiple concurrent requests, which maximises cache hit rate and connection reuse.
+- Cold start = fresh pool + empty cache. Instance death = everything gone.
+
+### Connection pool
+
+`psycopg2.pool.SimpleConnectionPool(minconn=1, maxconn=2)` at module level. Avoids TCP+TLS handshake to Neon on every request.
+
+- `_PooledConnection` context manager borrows from pool, returns on exit.
+- Stale connection detection: executes `SELECT 1` on borrow; if it fails, discards and gets a fresh connection.
+- Thread-safe via `_pool_lock`.
+- Legacy `get_db_connection()` kept for backward compatibility but all production paths now use `_pooled_conn()`.
+
+### TTL result cache
+
+Module-level dict: `_cache[key] → (expiry_timestamp, result)`.
+
+- **Default TTL**: 15 minutes (matches Vercel warm lifetime).
+- **Max entries**: 256, with LRU eviction (oldest expiry dropped).
+- **Cache key**: SHA256 prefix of `json.dumps({fn_name, args, kwargs}, sort_keys=True, default=str)`.
+- **Thread-safe** via `_cache_lock`.
+
+**Cached functions** (all read paths): `query_snapshots`, `query_snapshots_for_sweep`, `query_virtual_snapshot`, `get_batch_inventory`, `get_batch_inventory_rich`, `get_batch_inventory_v2`, `batch_anchor_coverage`, `query_snapshot_retrievals`, `query_batch_retrieval_days`, `query_batch_retrievals`, `list_signatures`, `get_signature`.
+
+**Not cached**: `health_check` (must test real connection), `append_snapshots` and `delete_snapshots` (write paths).
+
+### Cache invalidation
+
+- **Write-path**: `append_snapshots` and `delete_snapshots` call `cache_clear()` after successful commit. This is a full cache nuke — simple and correct, since any write can change what any read returns.
+- **Explicit**: `cache_clear()` function exposed via `/api/cache/clear` endpoint. Useful for dev/testing after manual DB edits.
+- **TTL expiry**: entries older than 15 min are treated as misses.
+- **Cold start**: empty cache on new instance.
+
+**FE does not need to trigger cache busting in normal workflows.** Write-path invalidation covers all standard flows (fetch-and-store, delete). The explicit endpoint is for dev/ops only.
+
+### Observability
+
+- `health_check()` includes cache stats in its response (`hits`, `misses`, `evictions`, `entries`).
+- `/api/cache/stats` returns the same stats non-destructively.
+- `/api/cache/clear` returns stats before clearing, plus `entries_cleared` count.
+
 ## MSMDC Computation (lib/msmdc.py)
 
 **Minimal Set of Maximally Discriminating Constraints** -- auto-generates optimal query strings for data retrieval by finding the minimal constraint set that uniquely identifies a target path.

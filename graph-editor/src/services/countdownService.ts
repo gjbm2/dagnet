@@ -32,7 +32,7 @@ function auditCountdownEvent(
   // Use dynamic import so this module does not rely on `require()` in the browser.
   void import('./sessionLogService')
     .then(({ sessionLogService }) => {
-      sessionLogService.info(audit.operationType, code, audit.message, undefined, payload);
+      sessionLogService.debug(audit.operationType, code, audit.message, undefined, payload);
     })
     .catch(() => {
       // ignore

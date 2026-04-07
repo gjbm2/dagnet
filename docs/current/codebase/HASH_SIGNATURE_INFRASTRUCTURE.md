@@ -152,3 +152,19 @@ Detects hash-breaking changes at commit time:
 | `src/services/commitHashGuardService.ts` | Commit-time detection |
 | `src/services/signaturePolicyService.ts` | Feature flags |
 | `src/lib/stableSignature.ts` | Canonical signature construction |
+| `src/services/integrityCheckService.ts` | Phase 9 (hash continuity) + Phase 10 (snapshot DB coverage) |
+| `src/services/snapshotRetrievalsService.ts` | `computePlausibleSignaturesForEdge` — epoch-aware hash enumeration |
+
+## Integrity Checks
+
+Two integrity service phases validate hash infrastructure health:
+
+### Phase 9: Hash Continuity (local, runs on every check)
+
+Validates that hash-mappings.json is structurally correct and that the full hash chain is intact for every parameter. For each fetchable edge: computes the current core_hash from live event/context definitions, traces through equivalence closures via `hashChainService`, and reports breaks with severity based on age. Issues appear under the `hash-continuity` category (🔑).
+
+### Phase 10: Snapshot DB Coverage (deep only, requires Python server)
+
+Validates that snapshots actually exist in the DB for each fetchable edge. For each edge: computes all plausible hashes via `computePlausibleSignaturesForEdge` (handles epoch variants from different `dataInterestsDSL` regimes), builds equivalence closures for each, and issues a single batched `getBatchRetrievals` call. Edges with zero snapshots under any plausible hash are reported under `snapshot-coverage` (📡).
+
+This phase only runs on manual "Check Integrity" (File Menu) or the Refresh button in the Graph Issues panel — not on the auto-debounced background checks triggered by file changes.

@@ -737,6 +737,7 @@ class Graph(BaseModel):
     dataInterestsDSL: Optional[str] = Field(None, description="Pinned DSL for batch/overnight fetches")
     debugging: Optional[bool] = Field(None, description="If true, run Graph Issues checks while this graph is open and show an Issues indicator overlay.")
     dailyFetch: Optional[bool] = Field(None, description="If true, this graph is included in unattended daily automation runs when ?retrieveall is used without an explicit graph list.")
+    runBayes: Optional[bool] = Field(None, description="If true, a Bayesian fit is commissioned after each daily retrieval. Only meaningful when dailyFetch is also true.")
     defaultConnection: Optional[str] = Field(None, description="Default connection for all edges. Fallback when edge-level connection is not set (e.g. 'amplitude-prod').")
     model_source_preference: Optional[Literal['best_available', 'bayesian', 'analytic_be', 'analytic']] = Field(None, description="Graph-level default for which model var source to promote to scalars (doc 15 §2.3)")
     bayes: Optional[BayesRunMetadata] = Field(None, alias='_bayes', description="Metadata from the most recent Bayesian fitting run")

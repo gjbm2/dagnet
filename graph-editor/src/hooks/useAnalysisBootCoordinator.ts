@@ -156,7 +156,7 @@ export function useAnalysisBootCoordinator(
         error: null,
       });
 
-      sessionLogService.info(
+      sessionLogService.debug(
         'graph',
         'BOOT_COORDINATOR_COLLECT',
         `Collecting boot requirements for ${hostType}:${hostId}`,
@@ -187,7 +187,7 @@ export function useAnalysisBootCoordinator(
               unavailableFileIds: [],
             },
           });
-          sessionLogService.success(
+          sessionLogService.debug(
             'graph',
             'BOOT_COORDINATOR_READY',
             `Boot ready for ${hostType}:${hostId}, epoch ${newEpoch}`,
@@ -234,7 +234,7 @@ export function useAnalysisBootCoordinator(
           },
         }));
 
-        sessionLogService.info(
+        sessionLogService.debug(
           'graph',
           'BOOT_COORDINATOR_HYDRATE',
           `Hydrating ${result.hydratableFileIds.length} files for ${hostType}:${hostId}`,
@@ -272,7 +272,7 @@ export function useAnalysisBootCoordinator(
               unavailableFileIds: [],
             },
           });
-          sessionLogService.success(
+          sessionLogService.debug(
             'graph',
             'BOOT_COORDINATOR_READY',
             `Boot ready (post-hydration) for ${hostType}:${hostId}, epoch ${newEpoch}`,

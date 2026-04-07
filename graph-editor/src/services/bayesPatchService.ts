@@ -10,8 +10,9 @@
  *      § "Return path re-architecture: patch file model"
  */
 
-import type { ModelVarsEntry, ModelVarsQuality } from '../types';
+import type { ModelVarsEntry, ModelVarsQuality, Graph } from '../types';
 import { fileRegistry } from '../contexts/TabContext';
+import { getGraphStore } from '../contexts/GraphStoreContext';
 import { sessionLogService } from './sessionLogService';
 import { upsertModelVars, ukDateNow, applyPromotion } from './modelVarsResolution';
 import { parseUKDate } from '../lib/dateFormat';
@@ -41,10 +42,12 @@ function meetsQualityGate(
   return true;
 }
 
-// --- Direct fetch + apply (happy path: browser is open) ---
+// --- Direct fetch + apply + cascade (happy path: browser is open) ---
 
 /**
- * Fetch a single patch file from git by path and apply it locally.
+ * Fetch a single patch file from git by path, apply it locally, and
+ * cascade posteriors through the graph (if open in a tab).
+ *
  * Used by useBayesTrigger when the job completes while the browser is open.
  * No full pull needed — just reads one file via GitHub Contents API.
  *
@@ -93,8 +96,8 @@ export async function fetchAndApplyPatch(args: {
   const patch: BayesPatchFile = JSON.parse(content);
   console.log(`[bayesPatchService] Parsed patch: ${patch.edges.length} edges, job_id: ${patch.job_id}`);
 
-  // Apply the patch
-  const edgesUpdated = await applyPatch(patch);
+  // Apply the patch + cascade (shared two-tier function, doc 28 §8.2)
+  const { edgesUpdated } = await applyPatchAndCascade(patch, graphId);
 
   // Delete the patch file from git (cleanup)
   try {
@@ -211,7 +214,7 @@ export async function applyPatch(patch: BayesPatchFile): Promise<number> {
     await fileRegistry.updateFile(paramFileId, paramDoc);
     edgesUpdated++;
 
-    sessionLogService.addChild(logOpId, 'info', 'PATCH_EDGE_APPLIED',
+    sessionLogService.addChild(logOpId, 'debug', 'PATCH_EDGE_APPLIED',
       `Updated ${edge.param_id}: slices=${Object.keys(edge.slices || {}).join(',')}`);
   }
 
@@ -359,7 +362,7 @@ export async function applyPatch(patch: BayesPatchFile): Promise<number> {
     }
 
     await fileRegistry.updateFile(patch.graph_id, graphDoc);
-    sessionLogService.addChild(logOpId, 'info', 'PATCH_GRAPH_UPDATED',
+    sessionLogService.addChild(logOpId, 'debug', 'PATCH_GRAPH_UPDATED',
       `Updated _bayes + edge posteriors + model_vars on ${patch.graph_id}`);
   }
 
@@ -447,4 +450,272 @@ function mergePosteriorsIntoParam(
   if (paramDoc.latency?.bayes_reset) {
     delete paramDoc.latency.bayes_reset;
   }
+}
+
+// ── Per-graph mutex for applyPatchAndCascade (doc 28 §8.16 point 5) ──────
+// Prevents concurrent application to the same graph (scanner + happy path race).
+const _applyMutexes = new Map<string, Promise<void>>();
+
+function withGraphMutex<T>(graphId: string, fn: () => Promise<T>): Promise<T> {
+  const prev = _applyMutexes.get(graphId) ?? Promise.resolve();
+  const next = prev.then(fn, fn); // run fn after previous completes (even if previous errored)
+  _applyMutexes.set(graphId, next.then(() => {}, () => {})); // swallow result, keep chain
+  return next;
+}
+
+// ── applyPatchAndCascade (doc 28 §8.2) ───────────────────────────────────
+//
+// Shared function used by both the happy path (useBayesTrigger, browser open)
+// and the on-pull scanner (Phase 3). Two-tier cascade:
+//
+// Tier 1 (always): apply patch to param files + graph _bayes block via
+//   applyPatch(). No React dependency.
+// Tier 2 (only if GraphStore is mounted): sync FileRegistry → GraphStore,
+//   run per-edge getParameterFromFile, run latency promotion, write back.
+//   When the graph is not open in a tab, tier 2 is skipped — the cascade
+//   happens naturally when the user opens the graph.
+
+export interface ApplyPatchAndCascadeResult {
+  edgesUpdated: number;
+}
+
+/**
+ * Apply a Bayes patch and cascade posteriors through the graph.
+ *
+ * Tier 1 writes posteriors to param files + _bayes block (always runs).
+ * Tier 2 cascades to GraphStore (only if the graph is open in a tab).
+ *
+ * Per-graph mutex prevents concurrent application.
+ */
+export function applyPatchAndCascade(
+  patch: BayesPatchFile,
+  graphId: string,
+): Promise<ApplyPatchAndCascadeResult> {
+  return withGraphMutex(graphId, () => _applyPatchAndCascadeInner(patch, graphId));
+}
+
+async function _applyPatchAndCascadeInner(
+  patch: BayesPatchFile,
+  graphId: string,
+): Promise<ApplyPatchAndCascadeResult> {
+  // ── Tier 1: apply to param files + graph (no React dependency) ──────
+  const edgesUpdated = await applyPatch(patch);
+
+  if (edgesUpdated === 0) {
+    return { edgesUpdated };
+  }
+
+  // ── Tier 2: cascade to GraphStore (only if mounted) ─────────────────
+  const store = getGraphStore(graphId);
+  if (!store) {
+    // Graph not open in a tab — tier 1 is sufficient. Posteriors are in
+    // IDB via fileRegistry. When the user opens the graph, GraphStore
+    // mounts and reads from fileRegistry — posteriors are already there.
+    sessionLogService.info('bayes', 'BAYES_CASCADE_DEFERRED',
+      `Graph ${graphId} not open — tier 2 cascade deferred to graph open`);
+    return { edgesUpdated };
+  }
+
+  // Sync FileRegistry → GraphStore BEFORE cascading.
+  // applyPatch wrote _bayes, posteriors, and model_vars to FileRegistry
+  // but not GraphStore. Without this sync the cascade starts from stale
+  // GraphStore data and the final writeBack overwrites applyPatch's work.
+  const freshGraph = fileRegistry.getFile(graphId)?.data;
+  if (freshGraph) store.getState().setGraph(freshGraph as Graph);
+
+  const { getParameterFromFile } = await import('./dataOperations/fileToGraphSync');
+  const currentDSL = store.getState().currentDSL || '';
+  const setGraph = (g: Graph | null) => { if (g) store.getState().setGraph(g); };
+  const graph = store.getState().graph;
+
+  let cascaded = 0;
+  for (const edge of (graph?.edges || [])) {
+    const paramId = (edge as any).p?.id;
+    if (!paramId) continue;
+    await getParameterFromFile({
+      paramId,
+      edgeId: (edge as any).uuid || edge.id,
+      graph: store.getState().graph,
+      setGraph,
+      targetSlice: currentDSL,
+    });
+    cascaded++;
+  }
+
+  // Copy promoted latency outputs → input fields (onset, t95, path_t95)
+  // so the next model run reads the latest output as its input.
+  const { persistGraphMasteredLatencyToParameterFiles } = await import('./fetchDataService');
+  const graphForPersist = store.getState().graph;
+  if (graphForPersist) {
+    await persistGraphMasteredLatencyToParameterFiles({
+      graph: graphForPersist,
+      setGraph,
+      edgeIds: graphForPersist.edges?.map((e: any) => e.uuid || e.id).filter(Boolean) || [],
+    });
+  }
+
+  // Sync the cascaded graph back to FileRegistry/IDB.
+  const updatedGraph = store.getState().graph;
+  if (updatedGraph) {
+    await fileRegistry.updateFile(graphId, updatedGraph);
+  }
+
+  sessionLogService.success('bayes', 'BAYES_CASCADE_COMPLETE',
+    `Cascaded ${cascaded} params from files to graph`);
+
+  return { edgesUpdated };
+}
+
+// ── scanForPendingPatches (doc 28 §4.4) ──────────────────────────────────
+//
+// Scans fileRegistry for _bayes/patch-*.json files. Groups by graph_id,
+// applies staleness-discard (newest-only per graph), and calls
+// applyPatchAndCascade for each surviving patch.
+//
+// Not wired to any caller yet — Phase 3 hooks this into
+// repositoryOperationsService.pullLatest and the scheduler reconcile path.
+
+/** Module-level mutex — prevents concurrent scanner invocations (doc 28 §8.4). */
+let _scannerPromise: Promise<ScanResult> | null = null;
+
+/** Poisoned patches that failed to parse — skip on subsequent scans (doc 28 §8.9). */
+const _poisonedPatches = new Set<string>();
+
+export interface PatchScanEntry {
+  patch: BayesPatchFile;
+  fileId: string;
+  graphId: string;
+}
+
+export interface ScanResult {
+  applied: Array<{ graphId: string; fileId: string; edgesUpdated: number }>;
+  skipped: Array<{ fileId: string; reason: string }>;
+  errors: Array<{ fileId: string; error: string }>;
+}
+
+/**
+ * Scan fileRegistry for pending Bayes patch files and apply them.
+ *
+ * Applies staleness-discard: only the newest patch per graph is applied.
+ * Stale patches are returned in `skipped` for the caller to delete.
+ *
+ * The caller is responsible for:
+ * - Showing countdown banners (§4.8)
+ * - Deleting applied/skipped patches from git
+ * - Committing dirty files after apply
+ */
+export function scanForPendingPatches(currentBranch: string): Promise<ScanResult> {
+  if (_scannerPromise) return _scannerPromise;
+  _scannerPromise = _scanForPendingPatchesInner(currentBranch).finally(() => {
+    _scannerPromise = null;
+  });
+  return _scannerPromise;
+}
+
+async function _scanForPendingPatchesInner(currentBranch: string): Promise<ScanResult> {
+  const result: ScanResult = { applied: [], skipped: [], errors: [] };
+
+  // Find all patch files in fileRegistry
+  const allFiles = fileRegistry.getAllFiles();
+  const patchFiles = allFiles.filter((f: any) =>
+    f.fileId.startsWith('_bayes/patch-') ||
+    f.fileId.includes('-_bayes/patch-') || // workspace-prefixed variant
+    f.fileId.match(/patch-.*\.json$/)
+  ).filter((f: any) => {
+    // Extract a canonical patch identifier for poisoned-patch check
+    const match = f.fileId.match(/patch-([^.]+)\.json/);
+    const jobId = match?.[1];
+    if (jobId && _poisonedPatches.has(jobId)) {
+      result.skipped.push({ fileId: f.fileId, reason: 'poisoned (previous parse failure)' });
+      return false;
+    }
+    return true;
+  });
+
+  if (patchFiles.length === 0) return result;
+
+  sessionLogService.info('bayes', 'BAYES_SCAN_START',
+    `Found ${patchFiles.length} pending patch file(s)`);
+
+  // Parse and group by graph_id
+  const byGraph = new Map<string, PatchScanEntry[]>();
+
+  for (const file of patchFiles) {
+    try {
+      const patch = file.data as BayesPatchFile;
+      if (!patch?.job_id || !patch?.graph_id || !patch?.edges) {
+        throw new Error('Missing required fields (job_id, graph_id, edges)');
+      }
+
+      // Branch check (doc 28 §8.10): skip if patch was created for a different branch
+      // The patch file doesn't carry an explicit branch field, but we can infer from
+      // the workspace prefix or check the graph_file_path. For now, we log a note
+      // and proceed — the caller can refine this check with additional context.
+
+      const entries = byGraph.get(patch.graph_id) ?? [];
+      entries.push({ patch, fileId: file.fileId, graphId: patch.graph_id });
+      byGraph.set(patch.graph_id, entries);
+    } catch (err: any) {
+      const match = file.fileId.match(/patch-([^.]+)\.json/);
+      const jobId = match?.[1];
+      if (jobId) _poisonedPatches.add(jobId);
+      result.errors.push({ fileId: file.fileId, error: `Parse failed: ${err.message}` });
+      sessionLogService.warning('bayes', 'BAYES_SCAN_PARSE_FAIL',
+        `Failed to parse patch file ${file.fileId}: ${err.message}`);
+    }
+  }
+
+  // Per-graph: staleness-discard, apply newest only
+  for (const [graphId, entries] of byGraph) {
+    // Read current graph's fitted_at for staleness comparison
+    const graphFile = fileRegistry.getFile(graphId);
+    const currentFittedAt: string | undefined = (graphFile?.data as any)?._bayes?.fitted_at;
+
+    // Sort by fitted_at descending (ISO strings sort lexicographically)
+    entries.sort((a, b) => (b.patch.fitted_at ?? '').localeCompare(a.patch.fitted_at ?? ''));
+
+    const newest = entries[0];
+    const stale = entries.slice(1);
+
+    // Discard patches older than or equal to current graph state
+    if (currentFittedAt && newest.patch.fitted_at <= currentFittedAt) {
+      // All patches are stale — the graph already has newer posteriors
+      for (const entry of entries) {
+        result.skipped.push({ fileId: entry.fileId, reason: `superseded by current posteriors (graph fitted_at: ${currentFittedAt})` });
+      }
+      sessionLogService.info('bayes', 'BAYES_SCAN_ALL_STALE',
+        `All ${entries.length} patch(es) for ${graphId} are stale (graph fitted_at: ${currentFittedAt})`);
+      continue;
+    }
+
+    // Mark stale intermediate patches for deletion
+    for (const entry of stale) {
+      result.skipped.push({ fileId: entry.fileId, reason: `superseded by newer patch (${newest.patch.fitted_at})` });
+    }
+
+    // Apply the newest patch
+    try {
+      const { edgesUpdated } = await applyPatchAndCascade(newest.patch, graphId);
+      result.applied.push({ graphId, fileId: newest.fileId, edgesUpdated });
+    } catch (err: any) {
+      result.errors.push({ fileId: newest.fileId, error: `Apply failed: ${err.message}` });
+      sessionLogService.error('bayes', 'BAYES_SCAN_APPLY_FAIL',
+        `Failed to apply patch for ${graphId}: ${err.message}`);
+      // On apply failure, do NOT mark stale patches for deletion (doc 28 §8.16 point 4)
+      // Remove them from skipped so the caller doesn't delete them
+      result.skipped = result.skipped.filter(s =>
+        !entries.some(e => e.fileId === s.fileId)
+      );
+    }
+  }
+
+  sessionLogService.info('bayes', 'BAYES_SCAN_COMPLETE',
+    `Scan complete: ${result.applied.length} applied, ${result.skipped.length} skipped, ${result.errors.length} errors`);
+
+  return result;
+}
+
+/** Clear the poisoned-patch skip-set (e.g. when user re-triggers a fit). */
+export function clearPoisonedPatches(): void {
+  _poisonedPatches.clear();
 }
