@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.9.20b
+**Released:** 7-Apr-26
+
+CohortMaturity fixes
+
+---
+
 ## Version 1.9.19b
 **Released:** 7-Apr-26
 
