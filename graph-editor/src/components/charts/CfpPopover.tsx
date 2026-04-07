@@ -76,15 +76,51 @@ export function CfpPopover({ icon, title, label, children, active, activeColour,
   useLayoutEffect(() => {
     if (!open || !wrapRef.current) return;
     const anchor = wrapRef.current.getBoundingClientRect();
+
+    // Compute the effective visual scale of the anchor element.
+    // The toolbar lives inside the ReactFlow canvas (transform: scale)
+    // plus a CSS zoom on the floating palette (invScale from
+    // ChartInlineSettingsFloating). The portal at document.body has
+    // neither, so we apply both to match pill sizes.
+    let cssZoom = 1;
+    let canvasScale = 1;
+    let el: HTMLElement | null = wrapRef.current;
+    while (el && el !== document.body) {
+      const inlineZ = el.style.zoom;
+      if (inlineZ && inlineZ !== '' && inlineZ !== '1' && inlineZ !== 'normal') {
+        cssZoom *= parseFloat(inlineZ);
+      }
+      if (el.classList?.contains('react-flow__viewport')) {
+        const m = new DOMMatrix(getComputedStyle(el).transform);
+        if (m.a !== 1) canvasScale = m.a;
+      }
+      el = el.parentElement;
+    }
+    const z = canvasScale * cssZoom;
+    const applyZoom = z !== 1 && Number.isFinite(z) && z > 0.1;
+
+    // Position in screen coordinates first, then convert to zoomed space.
     const GAP = 4;
-    const popH = popRef.current?.offsetHeight ?? 180;
-    const popW = popRef.current?.offsetWidth ?? 180;
-    const flipY = anchor.bottom + GAP + popH > window.innerHeight && anchor.top - GAP - popH > 0;
-    const top = flipY ? anchor.top - GAP - popH : anchor.bottom + GAP;
-    let left = anchor.right - popW;
-    if (left < 4) left = 4;
-    if (left + popW > window.innerWidth - 4) left = window.innerWidth - 4 - popW;
-    setPos({ position: 'fixed', top, left, right: undefined, bottom: undefined });
+    // Estimate visual popover size (layout size × zoom)
+    const rawPopH = popRef.current?.offsetHeight ?? 180;
+    const rawPopW = popRef.current?.offsetWidth ?? 180;
+    const visPopH = applyZoom ? rawPopH * z : rawPopH;
+    const visPopW = applyZoom ? rawPopW * z : rawPopW;
+
+    const flipY = anchor.bottom + GAP + visPopH > window.innerHeight && anchor.top - GAP - visPopH > 0;
+    const screenTop = flipY ? anchor.top - GAP - visPopH : anchor.bottom + GAP;
+    let screenLeft = anchor.right - visPopW;
+    if (screenLeft < 4) screenLeft = 4;
+    if (screenLeft + visPopW > window.innerWidth - 4) screenLeft = window.innerWidth - 4 - visPopW;
+
+    setPos({
+      position: 'fixed',
+      top: applyZoom ? screenTop / z : screenTop,
+      left: applyZoom ? screenLeft / z : screenLeft,
+      right: undefined,
+      bottom: undefined,
+      ...(applyZoom ? { zoom: z } as any : {}),
+    });
   }, [open]);
 
   const isActive = active || open;

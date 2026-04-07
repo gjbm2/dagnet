@@ -1510,6 +1510,7 @@
 .cfp-pill-group {
   display: inline-flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: calc(2px * var(--cfp-scale, 1));
   padding: 1px;
   border-radius: 6px;
@@ -1621,7 +1622,7 @@
 .cfp-popover {
   position: fixed;
   min-width: 160px;
-  max-width: 280px;
+  max-width: 380px;
   background: rgba(255, 255, 255, 0.97);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
