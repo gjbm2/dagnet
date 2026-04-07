@@ -43,25 +43,52 @@ if (!pinnedDsl) {
   process.exit(1);
 }
 
-// Load event definitions from the data repo (sibling of graph file)
+// Load event and context definitions from the data repo (sibling of graph file)
 const graphDir = dirname(graphPath);
 const dataRepoDir = dirname(graphDir); // graphs/ -> repo root
+
+// Resolve js-yaml once (shared by event + context loaders)
+let yaml;
+try {
+  const require = createRequire(join(graphEditorDir, 'package.json'));
+  yaml = require('js-yaml');
+} catch (e) {
+  console.error(`Warning: Could not resolve js-yaml: ${e.message}`);
+}
+
 const eventsDir = join(dataRepoDir, 'events');
 const eventDefinitions = {};
-try {
-  // Resolve js-yaml from graph-editor/node_modules
-  const require = createRequire(join(graphEditorDir, 'package.json'));
-  const yaml = require('js-yaml');
-  for (const f of readdirSync(eventsDir)) {
-    if (f.endsWith('.yaml')) {
-      const content = yaml.load(readFileSync(join(eventsDir, f), 'utf8'));
-      if (content?.id) {
-        eventDefinitions[content.id] = content;
+if (yaml) {
+  try {
+    for (const f of readdirSync(eventsDir)) {
+      if (f.endsWith('.yaml')) {
+        const content = yaml.load(readFileSync(join(eventsDir, f), 'utf8'));
+        if (content?.id) {
+          eventDefinitions[content.id] = content;
+        }
       }
     }
+  } catch (e) {
+    console.error(`Warning: Could not load events from ${eventsDir}: ${e.message}`);
   }
-} catch (e) {
-  console.error(`Warning: Could not load events from ${eventsDir}: ${e.message}`);
+}
+
+// Load context definitions (contexts/*.yaml) keyed by id
+const contextsDir = join(dataRepoDir, 'contexts');
+const contextDefinitions = {};
+if (yaml) {
+  try {
+    for (const f of readdirSync(contextsDir)) {
+      if (f.endsWith('.yaml')) {
+        const content = yaml.load(readFileSync(join(contextsDir, f), 'utf8'));
+        if (content?.id) {
+          contextDefinitions[content.id] = content;
+        }
+      }
+    }
+  } catch (e) {
+    console.error(`Warning: Could not load contexts from ${contextsDir}: ${e.message}`);
+  }
 }
 
 // Load hash mappings
@@ -108,6 +135,95 @@ function shortHash(canonical) {
   const digest = createHash('sha256').update(canonical.trim(), 'utf8').digest();
   const first16 = digest.subarray(0, 16);
   return first16.toString('base64url'); // base64url, no padding
+}
+
+// ---------------------------------------------------------------------------
+// Context key extraction from DSL (mirrors extractContextKeysFromDSL in
+// graph-editor/src/lib/dependencyClosure.ts)
+// ---------------------------------------------------------------------------
+function extractContextKeysFromDSL(dsl) {
+  if (!dsl || typeof dsl !== 'string') return new Set();
+  const keys = new Set();
+  for (const m of dsl.matchAll(/context\(\s*([^:)]+)\s*(?::[^)]*)?\)/g)) {
+    if (m[1]) keys.add(m[1].trim());
+  }
+  for (const m of dsl.matchAll(/contextAny\(\s*([^)]+)\)/g)) {
+    const inner = m[1] ?? '';
+    for (const p of inner.split(',').map(s => s.trim()).filter(Boolean)) {
+      const colon = p.indexOf(':');
+      if (colon > 0) keys.add(p.slice(0, colon).trim());
+    }
+  }
+  return keys;
+}
+
+// ---------------------------------------------------------------------------
+// Context definition normalisation (mirrors normalizeContextDefinition in
+// graph-editor/src/services/dataOperations/querySignature.ts)
+// ---------------------------------------------------------------------------
+function sortPrimitiveArray(items) {
+  if (!Array.isArray(items)) return items;
+  if (items.every(v => typeof v === 'string')) return [...items].sort();
+  if (items.every(v => typeof v === 'number')) return [...items].sort((a, b) => a - b);
+  return items;
+}
+
+function normalizeObjectKeys(obj) {
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return obj;
+  const out = {};
+  for (const k of Object.keys(obj).sort()) {
+    const v = obj[k];
+    if (Array.isArray(v)) {
+      out[k] = v.map(item => (item && typeof item === 'object' ? normalizeObjectKeys(item) : item));
+    } else if (v && typeof v === 'object') {
+      out[k] = normalizeObjectKeys(v);
+    } else {
+      out[k] = v;
+    }
+  }
+  return out;
+}
+
+function normalizeContextDefinition(ctx) {
+  const values = Array.isArray(ctx?.values) ? [...ctx.values] : [];
+  const normalizedValues = values
+    .map(v => ({
+      id: v.id,
+      label: v.label,
+      description: v.description,
+      order: v.order,
+      aliases: Array.isArray(v.aliases) ? sortPrimitiveArray(v.aliases) : v.aliases,
+      sources: v.sources ? normalizeObjectKeys(v.sources) : v.sources,
+    }))
+    .sort((a, b) => String(a.id ?? '').localeCompare(String(b.id ?? '')));
+
+  const metadata = ctx?.metadata ? normalizeObjectKeys(ctx.metadata) : ctx?.metadata;
+
+  return normalizeObjectKeys({
+    id: ctx?.id,
+    name: ctx?.name,
+    description: ctx?.description,
+    type: ctx?.type,
+    otherPolicy: ctx?.otherPolicy ?? 'undefined',
+    values: normalizedValues,
+    metadata,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Build contextDefHashes for the graph's pinned DSL.
+// Computed once (same context keys for every edge — context is graph-level).
+// ---------------------------------------------------------------------------
+const dslContextKeys = Array.from(extractContextKeysFromDSL(pinnedDsl)).sort();
+const contextDefHashes = {};
+for (const key of dslContextKeys) {
+  const ctx = contextDefinitions[key];
+  if (!ctx) {
+    contextDefHashes[key] = 'missing';
+  } else {
+    const normalized = normalizeContextDefinition(ctx);
+    contextDefHashes[key] = await hashText(JSON.stringify(normalized));
+  }
 }
 
 // Parse a simple query string: from(A).to(B).visited(C).exclude(D)
@@ -239,8 +355,8 @@ async function computeEdgeHashes(edge) {
     });
 
     const coreHash = await hashText(coreCanonical);
-    // Structured signature (no context keys for now)
-    const structuredSig = JSON.stringify({ c: coreHash, x: {} });
+    // Structured signature with real context definition hashes
+    const structuredSig = JSON.stringify({ c: coreHash, x: contextDefHashes });
     const shortCoreHash = shortHash(structuredSig);
 
     results[modeName] = shortCoreHash;
@@ -291,6 +407,8 @@ for (const er of edgeResults) {
 const output = {
   graph_file: graphPath,
   pinned_dsl: pinnedDsl,
+  context_keys: dslContextKeys,
+  context_def_hashes: contextDefHashes,
   edges: edgeResults.map(e => ({
     param_id: e.param_id,
     edge_uuid: e.edge_uuid,

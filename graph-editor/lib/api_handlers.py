@@ -660,6 +660,7 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
     """
     from datetime import date, datetime, timedelta
     from snapshot_service import query_snapshots, query_snapshots_for_sweep
+    from snapshot_regime_selection import CandidateRegime, select_regime_rows
     from runner.histogram_derivation import derive_lag_histogram
     from runner.daily_conversions_derivation import derive_daily_conversions
     from runner.cohort_maturity_derivation import derive_cohort_maturity
@@ -669,6 +670,31 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
 
     analysis_type = data.get('analysis_type', 'lag_histogram')
     scenarios = data.get('scenarios', [])
+
+    def _apply_regime_selection(rows: List[Dict], subj: Dict) -> List[Dict]:
+        """Apply regime selection if candidate_regimes is present on the subject.
+
+        Doc 30 §4.2: when candidate_regimes is provided, filter rows to
+        one regime per retrieved_at date. When absent, return rows unchanged
+        (backward compatible).
+        """
+        cr_raw = subj.get('candidate_regimes')
+        if not cr_raw or not isinstance(cr_raw, list):
+            return rows
+        regimes = [
+            CandidateRegime(
+                core_hash=r.get('core_hash', ''),
+                equivalent_hashes=[
+                    e.get('core_hash', '') if isinstance(e, dict) else str(e)
+                    for e in (r.get('equivalent_hashes') or [])
+                ],
+            )
+            for r in cr_raw if isinstance(r, dict) and r.get('core_hash')
+        ]
+        if not regimes:
+            return rows
+        selection = select_regime_rows(rows, regimes)
+        return selection.rows
 
     def _resolve_promoted_source(model_params: Dict[str, Any], source_curves: Dict[str, Any]) -> Optional[str]:
         """Determine the actual promoted model source.
@@ -1195,6 +1221,8 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                     sweep_to=sweep_to,
                     equivalent_hashes=subj.get('equivalent_hashes'),
                 )
+                # Doc 30: apply regime selection before derivation
+                rows = _apply_regime_selection(rows, subj)
                 print(f"[epoch_unify] base={base_sid[:40]} epoch_anchor={subj['anchor_from']}..{subj['anchor_to']} rows={len(rows)}")
                 scenario_rows += len(rows)
                 _epoch_row_counts[base_sid] = _epoch_row_counts.get(base_sid, 0) + len(rows)
@@ -1305,6 +1333,8 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                     equivalent_hashes=subj.get('equivalent_hashes'),
                 )
 
+                # Doc 30: apply regime selection before derivation
+                rows = _apply_regime_selection(rows, subj)
                 scenario_rows += len(rows)
 
                 if analysis_type == 'lag_fit':
@@ -1338,6 +1368,8 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                     equivalent_hashes=subj.get('equivalent_hashes'),
                 )
 
+                # Doc 30: apply regime selection before derivation
+                rows = _apply_regime_selection(rows, subj)
                 scenario_rows += len(rows)
 
                 if not rows:

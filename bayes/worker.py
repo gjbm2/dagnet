@@ -455,6 +455,37 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
         elif snapshot_subjects and not db_url:
             _log(log,"snapshot_subjects provided but no db_connection — falling back to param files")
 
+        # Doc 30: apply regime selection per edge if candidate_regimes_by_edge provided.
+        candidate_regimes_by_edge = payload.get("candidate_regimes_by_edge")
+        if snapshot_rows and candidate_regimes_by_edge and isinstance(candidate_regimes_by_edge, dict):
+            try:
+                import sys as _sys
+                _sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'graph-editor', 'lib'))
+                from snapshot_regime_selection import CandidateRegime, select_regime_rows
+                for edge_id, edge_rows in list(snapshot_rows.items()):
+                    cr_raw = candidate_regimes_by_edge.get(edge_id, [])
+                    if not cr_raw:
+                        continue
+                    regimes = [
+                        CandidateRegime(
+                            core_hash=r.get('core_hash', ''),
+                            equivalent_hashes=[
+                                e.get('core_hash', '') if isinstance(e, dict) else str(e)
+                                for e in (r.get('equivalent_hashes') or [])
+                            ],
+                        )
+                        for r in cr_raw if isinstance(r, dict) and r.get('core_hash')
+                    ]
+                    if regimes:
+                        selection = select_regime_rows(edge_rows, regimes)
+                        snapshot_rows[edge_id] = selection.rows
+                        n_before = len(edge_rows)
+                        n_after = len(selection.rows)
+                        if n_before != n_after:
+                            _log(log, f"  regime selection {edge_id[:8]}…: {n_before} → {n_after} rows")
+            except Exception as e:
+                _log(log, f"  regime selection failed (non-blocking): {e}")
+
         if snapshot_rows:
             from compiler import bind_snapshot_evidence
             evidence = bind_snapshot_evidence(

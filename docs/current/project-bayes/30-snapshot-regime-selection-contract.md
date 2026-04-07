@@ -1,6 +1,8 @@
 # Doc 30 — Snapshot Regime Selection Contract
 
-**Status**: Design — not yet implemented
+**Status**: Design — partially implemented (utility + wiring done,
+FE candidate construction not started).
+See `30b-regime-selection-worked-examples.md` for worked examples.
 **Date**: 7-Apr-26
 **Purpose**: Define the FE/BE contract for selecting one coherent set
 of snapshot rows per retrieval date when multiple candidate hash
@@ -86,141 +88,170 @@ the aggregate. But slices from different dimensions are NOT additive:
 
 ---
 
-## 3. What is a "regime"?
+## 3. How hashing works (essential context)
 
-A regime is a set of slice keys produced by a single query signature
-(a single `core_hash`, possibly with equivalents via hash mappings).
-Each regime represents one way the data was fetched — one context
-dimension, or uncontexted.
+The `core_hash` used as the DB lookup key is derived from a
+**structured signature** containing two parts:
 
-Examples of distinct regimes for the same edge:
-- `window()` (uncontexted) — hash H0
-- `context(channel:google).window()` + `context(channel:meta).window()`
-  — hash H1
-- `context(device:mobile).window()` + `context(device:desktop).window()`
-  — hash H2
-- `context(channel:google).context(device:mobile).window()` + ... (cross-product)
-  — hash H3
+- **`c` (core)**: hash of the edge's query identity — connection,
+  event IDs, event definition hashes, latency config, normalised
+  query string. **Context values are stripped.** This is the same
+  for all values within a MECE dimension.
+- **`x` (context definitions)**: hash of each context **definition**
+  (the MECE value list), keyed by context key name. Not the specific
+  value — the definition.
 
-Each regime, if complete, recovers the same aggregate total. They are
-interchangeable but not combinable.
+`core_hash = shortHash(JSON.stringify({c, x}))`.
+
+Consequences:
+
+- `context(channel:google).window()` and `context(channel:meta).window()`
+  produce the **same** core_hash. All values within one MECE dimension
+  share one hash.
+- `context(channel).window()` and `context(device).window()` produce
+  **different** core_hashes — different `x` fields.
+- `context(channel).window()` and `window()` produce **different**
+  core_hashes — `x: {channel: "abc"}` vs `x: {}`.
+- A cross-product `context(channel).context(device).window()` produces
+  yet another core_hash — `x: {channel: "abc", device: "def"}`.
+
+A **regime** is therefore one core_hash — which corresponds to one
+set of context dimensions (or none). All rows under that hash are
+part of the same MECE partition. Rows from different hashes are
+alternative representations of the same aggregate and must NOT be
+summed.
+
+Summing rows within one hash to recover the aggregate is safe only
+if all dimensions in those rows are MECE. The BE checks this via
+`mece_dimensions` (§4.1) — a flat list of MECE dimension names
+sent by the FE.
 
 ---
 
-## 4. Revised contract
+## 4. Contract
 
-### 4.1 FE responsibility: describe what would satisfy the request
+### 4.1 What the FE sends
 
-The FE computes, from graph topology + DSL + hash mappings, an
-**ordered list of candidate regimes** per edge. The FE does NOT need
-to know what is available in the DB. It describes what WOULD satisfy
-the request.
+The FE sends two things:
+
+**Per query (FE analysis) or per edge (Bayes aggregate)**:
+an ordered list of candidate hashes. Each entry is a core_hash
+plus its equivalents via hash mappings. The ordering encodes
+preference (more granular first, uncontexted last).
 
 ```
 CandidateRegime {
-  core_hash: string               // FE-computed
-  equivalent_hashes: ClosureEntry[]  // from hash mappings
-  slice_keys: string[]            // the slice families this regime produces
-  regime_kind: 'uncontexted' | 'mece_partition'
+  core_hash: string           // FE-computed from pinned DSL explosion
+  equivalent_hashes: string[] // from hash mappings
 }
 ```
 
-The ordering encodes preference: **closest match first** (least
-aggregation needed to satisfy the query).
+**Per graph**: a flat list of which context dimensions are MECE.
 
-Ordering rule:
-1. **Exact dimensional match** — same context keys and values as the
-   query. Zero aggregation needed. Always preferred.
-2. **Superset dimensional match** — has additional context keys
-   beyond what the query specifies. Aggregation over the extra
-   dimensions recovers the requested slice. Prefer fewer extra
-   dimensions.
-3. **Never a subset** — a regime with fewer context dimensions than
-   the query cannot fulfil it. An uncontexted hash cannot satisfy
-   `context(channel:google).window()` because you cannot extract a
-   specific context value from an aggregate observation. A
-   `context(channel)` hash cannot satisfy
-   `context(channel).context(browser_type)` because it lacks the
-   browser_type dimension. Subset regimes are excluded from the
-   candidate list entirely.
+```
+mece_dimensions: string[]     // e.g. ["channel", "onboarding_variant"]
+```
 
-For a pinned DSL `context(channel);context(device).window(-90d:)`:
+#### Candidate construction
+
+The FE explodes the current pinned DSL into atomic slices, extracts
+the distinct context key-sets that the explosion produces (each
+key-set maps to one core_hash), computes the hash for each, and
+adds hash-mapping closures. This mirrors what the daily fetch
+pipeline does when writing data.
+
+For a pinned DSL `(context(channel);context(device)).window(-90d:)`,
+the explosion produces key-sets `{channel}` and `{device}`. The
+candidates per edge (for an aggregate query) are:
 
 ```
 candidate_regimes: [
-  { hash: H_channel, slice_keys: ['context(channel:*).window()'], kind: 'mece_partition' },
-  { hash: H_device,  slice_keys: ['context(device:*).window()'],  kind: 'mece_partition' },
-  { hash: H_bare,    slice_keys: ['window()'],                    kind: 'uncontexted' },
+  { core_hash: H_channel, equivalent_hashes: [...] },
+  { core_hash: H_device,  equivalent_hashes: [...] },
 ]
 ```
 
-The FE can compute this from:
-- The current pinned DSL → explode → query signatures → core hashes
-- Hash mappings → equivalence closures
-- Context registry → MECE status per dimension
+For a query targeting a specific dimension
+(`context(product_variant:basic).window()`), the FE filters the
+candidate list to only hashes whose key-set includes the queried
+dimension. If no candidate qualifies, the query cannot be satisfied
+(the data was never fetched at that granularity).
 
-No DB round-trip required.
+No DB round-trip required. The FE describes what COULD have data;
+the BE determines what DOES.
 
-### 4.2 BE responsibility: select and serve
+#### MECE dimensions
 
-The BE receives the ordered candidate regimes and, for each distinct
-`retrieved_at` date in the sweep:
+`mece_dimensions` is a property of the graph's context registry —
+not per-hash, not per-query. It tells the BE which dimensions are
+safe to sum over when aggregating rows under a hash.
 
-1. Try regime 0: does `core_hash = ANY(H0 + equivalents)` have rows
-   for this `retrieved_at`? If yes → use those rows, stop.
-2. Try regime 1: same check. If yes → use, stop.
-3. ...continue through the list.
-4. No regime has data → this `retrieved_at` contributes nothing.
+The BE uses it as follows: after regime selection returns rows from
+one hash, the BE inspects the `slice_key` strings on those rows to
+extract dimension names. If it needs to aggregate (e.g. sum over
+channel values to get the aggregate), it checks that the dimension
+being summed over is in `mece_dimensions`. If yes, the sum is safe.
 
-**The BE does NOT verify MECE completeness.** It cannot — it does not
-have context definitions. It trusts that if a hash has data for a
-date, the fetch that produced it was valid. The FE validated MECE
-completeness at fetch time; the data in the DB under that hash is
-the result of that validation.
+The BE derives everything else from the query DSL and the slice_key
+strings: which dimensions to group by (from the query), which to
+sum over (the remainder), and which specific values to filter to
+(from the query's context clause).
 
-**Selection granularity is per `retrieved_at`, not per `anchor_day`.**
-A single retrieval event produces rows for many anchor days under one
-regime. The regime is consistent within a retrieval — you never get
-channel slices for some anchor days and device slices for others from
-the same fetch.
+### 4.2 What the BE does
 
-### 4.3 What "has data" means
+1. Query: `WHERE core_hash = ANY(all hashes from all candidates)`.
+   Single broad query, full sweep range.
+2. Call `select_regime_rows(rows, candidates)`: for each distinct
+   `retrieved_at` date, try candidates in order, keep only rows
+   from the first hash that has data. Returns filtered rows.
+3. Pass filtered rows to the consumer (derivation function or
+   evidence binder).
 
-A regime "has data" for a `retrieved_at` if at least one row exists
-in the DB matching `core_hash = ANY(regime hashes)` AND
-`retrieved_at` falls on that date. The BE does not need to check
-whether all MECE values are present — partial data from a regime is
-still preferable to mixing regimes.
+The consumer then:
+- For aggregate queries: sums all rows per anchor_day (safe because
+  all dimensions in the rows are checked against `mece_dimensions`)
+- For specific-value queries: filters by slice_key (from query DSL),
+  then sums over remaining MECE dimensions
+- For per-dimension breakdowns: groups by the queried dimension,
+  sums over the others
 
-### 4.4 Epoch segmentation moves to the BE (or becomes unnecessary)
+**Selection granularity is per `retrieved_at`, not per
+`anchor_day`.** A single fetch writes all anchor_days under one
+hash. The regime is consistent within a retrieval.
 
-Under the current design, the FE segments the sweep into epochs with
-different `slice_keys`. Under the revised contract, the BE does
-per-`retrieved_at` selection internally. The FE sends a single
-request per edge covering the full sweep range. The BE returns rows
-tagged with which regime was selected per `retrieved_at`.
+**The BE does NOT verify MECE completeness.** It trusts that data
+under a given hash was complete at fetch time.
 
-Epoch segmentation as an FE concept may still be useful for UI
-purposes (showing regime transitions in the calendar view), but it
-is no longer required for constructing the read request.
+### 4.3 Epoch segmentation becomes unnecessary
+
+The FE no longer segments the sweep into epochs. It sends one
+request per edge with the full sweep range and the candidate list.
+Different `retrieved_at` dates naturally resolve to different
+candidates — epoch boundaries emerge from the data.
 
 ---
 
 ## 5. Bayes evidence assembly
 
-### 5.1 Same problem, same solution
+### 5.1 Three read patterns
 
-The Bayes compiler needs evidence for each edge. For a given edge,
-the pinned DSL may produce multiple exploded slices, each with its
-own query signature and `core_hash`. The compiler (pre-Phase C) wants
-aggregate observations — one set of `(anchor_day, retrieved_at, x,
-y, a)` tuples per edge, not per-slice.
+The Bayes compiler has three distinct read patterns:
 
-This is the same regime selection problem as the analysis path. For
-each exploded DSL instance, the compiler needs to pick one hash
-family that has data, per retrieval date. The Bayes case is a **loop
-over the analysis case**: for each exploded DSL instance, apply
-regime selection (§4), collect the rows.
+- **Per-slice reads**: each exploded DSL slice has a known hash
+  (from the pinned DSL explosion). The worker queries by that hash
+  + slice_key filter. No regime selection needed — no ambiguity.
+
+- **Aggregate evidence** (pre-Phase C): the compiler wants
+  aggregate `(x, y)` per edge. The worker applies
+  `select_regime_rows()` over the collected per-slice rows to pick
+  one hash per date and sums to aggregate. Same logic as FE
+  uncontexted analysis. Uses `mece_dimensions` to confirm the sum
+  is safe.
+
+- **Phase C children**: each dimension's children are read from the
+  specific hash that contains that dimension. Per-slice reads, no
+  regime selection. Different dimensions use different hashes —
+  no conflict with the aggregate's regime selection.
 
 ### 5.2 The uncontexted aggregate problem
 
@@ -290,34 +321,16 @@ separator position — trailing (`context(channel);`), leading
 leading comma (`or(,context(channel))`), or explicit `context()` —
 all mean "include the uncontexted slice". No new keyword.
 
-### 5.4 Per-instance regime selection
+### 5.4 Regime selection in the Bayes path
 
-For each exploded DSL instance (including the uncontexted one), the
-Bayes worker applies the same regime selection as the analysis path:
+Per-slice reads (§5.1) don't need regime selection — each has a
+known hash.
 
-1. The FE sends `candidate_regimes` per edge (§4.1)
-2. The worker queries the DB with all candidate hashes
-3. `select_regime_rows()` picks one regime per `retrieved_at`
-4. The evidence binder receives a clean bag per instance
-
-For the uncontexted instance, the candidates are ordered by closest
-match (least aggregation):
-- H_bare (uncontexted hash — exact match, zero aggregation)
-- H_channel (2-value MECE partition — sum 2 slices)
-- H_device (3-value MECE partition — sum 3 slices)
-- H_channel_x_device (cross-product — sum 6 slices)
-
-For a contexted instance like `context(channel:google).window()`,
-there is still regime ambiguity. The data could exist under:
-- The **direct** single-dimension hash for
-  `context(channel:google).window()`
-- A **cross-product** hash for
-  `context(channel).context(browser_type).window()`, where summing
-  over browser_type recovers the channel:google aggregate
-- **Hash mapping equivalents** of either, from different DSL eras
-
-Same selection logic applies — ordered candidates, first match wins
-per `retrieved_at`.
+For aggregate evidence, the worker applies `select_regime_rows()`
+over the collected per-slice rows. All values within one dimension
+share one core_hash (§3), so the candidates are dimension-level
+hashes. The worker picks one per date, sums the winning hash's
+rows, checks `mece_dimensions` to confirm the sum is safe.
 
 ### 5.5 Mixed epochs are handled implicitly
 
@@ -391,14 +404,15 @@ terms with shrinkage toward the aggregate.
 
 ```python
 @dataclass
+class CandidateRegime:
+    core_hash: str
+    equivalent_hashes: list[str] = []
+
+@dataclass
 class RegimeSelection:
-    """Result of per-date regime selection."""
     rows: list[dict]
     regime_per_date: dict[str, CandidateRegime]
     # retrieved_at (date-level ISO string) → winning regime.
-    # Consumers use this to determine likelihood structure:
-    #   mece_partition → child likelihood, no parent term
-    #   uncontexted    → parent likelihood, no child terms
 
 def select_regime_rows(
     rows: list[dict],
@@ -407,17 +421,19 @@ def select_regime_rows(
     """Filter rows to one regime per retrieved_at date.
 
     For each distinct retrieved_at in the input rows:
-    1. Try each candidate regime in order (closest match first).
-    2. A regime "matches" if any row exists with
-       core_hash in (regime.core_hash + regime.equivalent_hashes).
+    1. Try each candidate regime in order.
+    2. A regime "matches" if any row has core_hash in
+       {regime.core_hash} ∪ {regime.equivalent_hashes}.
     3. Keep only rows from the first matching regime.
-    4. Discard rows from all other regimes for that retrieved_at.
-
-    Returns filtered rows AND the regime decision per date, so
-    the evidence binder can route observations to the correct
-    likelihood terms (parent vs child).
+    4. Discard rows from all other regimes for that date.
     """
 ```
+
+The `regime_per_date` output is informational — the utility doesn't
+use it for selection. Phase C consumers can inspect the winning
+regime's rows' `slice_key` strings to determine whether the data is
+contexted (contains `context(...)`) or uncontexted, and route
+likelihood terms accordingly.
 
 ### 6.2 Consumers
 
@@ -486,6 +502,15 @@ aggregates snapshot rows. Tests must cover the utility itself AND
 verify that each consumer produces correct results when regimes are
 mixed. All tests are red-first: write the test, verify it fails
 against the current code, then implement the fix.
+
+**Implementation note**: `CandidateRegime` has been simplified to
+`{core_hash, equivalent_hashes}` only. The test implementation
+(RS-001 to RS-012, RC-001 to RC-006) uses this simplified type
+and all 20 tests pass. `mece_dimensions` is part of the contract
+(§4.1) but not yet tested — the consumer tests verify regime
+selection prevents double-counting, but do not yet verify that
+the BE checks `mece_dimensions` before aggregating. This is
+Phase 3 work (FE sends `mece_dimensions` alongside candidates).
 
 #### 7.3.1 Scope of the double-counting bug
 
@@ -1079,80 +1104,69 @@ engineering around. No test needed.
 
 ## 8. Migration path
 
-### 8.1 Phase 1: BE selection utility + red tests
+### 8.1 Phase 1: BE selection utility + red tests — DONE
 
-Build `select_regime_rows()` with red tests. Do not yet change any
-callers. The utility is pure (rows in → rows out) and has no
-dependencies on the request format.
+`select_regime_rows()` implemented with 15 unit tests and 5
+consumer integration tests. Pure function, no dependencies on
+request format. All 20 tests passing.
 
-### 8.2 Phase 2: Wire into existing BE paths
+### 8.2 Phase 2: Wire into existing BE paths — DONE
 
-Add `candidate_regimes` as an optional field on snapshot subject
-requests. When present, the BE handler calls `select_regime_rows`
-before passing rows to derivation functions. When absent, existing
-behaviour is preserved (all rows pass through — backward compatible).
+`_apply_regime_selection()` added to `api_handlers.py` at all 3
+query sites (cohort_maturity epoch path, sweep_simple path,
+raw_snapshots path). Per-edge regime selection added to Bayes
+worker. Both opt-in: activate when `candidate_regimes` is present
+on the request. Backward compatible when absent.
 
-### 8.3 Phase 3: FE sends candidate regimes
+### 8.3 Phase 3: FE candidate construction + mece_dimensions
 
-Update `snapshotDependencyPlanService` to build and send
-`candidate_regimes`. Remove the preflight round-trip. This is the
-breaking change — the FE stops pre-deciding and the BE starts
-selecting.
+Two pieces:
+
+**a) Candidate regime construction per edge**: explode the current
+pinned DSL, extract distinct context key-sets, compute core_hash
+for each, add hash-mapping closures. For FE analysis queries,
+filter candidates to those whose dimensions include the query's
+context dimensions. For Bayes aggregate, send all candidates.
+
+**b) `mece_dimensions` computation**: read the graph's context
+registry, collect dimension names where the context definition has
+MECE status (`otherPolicy: null` or `otherPolicy: computed`).
+Send as a flat list alongside candidates.
+
+Both are FE-side. Neither requires DB access. This phase activates
+the BE regime selection in production.
 
 ### 8.4 Phase 4: Bayes worker integration
 
-Update the Bayes worker to accept candidate regimes in the submission
-payload and use `select_regime_rows` before evidence binding.
+Update the Bayes submission payload to include
+`candidate_regimes_by_edge` (per-edge candidate lists for aggregate
+evidence) and `mece_dimensions`. The worker uses these with
+`select_regime_rows()` before evidence binding.
 
 ### 8.5 Phase 5: Remove legacy epoch machinery
 
-Once the BE does selection, the FE's epoch segmentation for
-`cohort_maturity` can be simplified or removed. The
-`selectLeastAggregationSliceKeysForDay` function and the preflight
-path become dead code.
+Once Phase 3 is deployed, the FE's `querySnapshotRetrievals`
+preflight, `selectLeastAggregationSliceKeysForDay`,
+`segmentSweepIntoEpochs`, and related epoch code become dead.
+Remove.
 
 ---
 
 ## 9. Open questions
 
-1. **Should the BE return regime metadata?** If the response includes
-   which regime was selected per `retrieved_at`, the FE can show
-   regime transitions in the UI (calendar view, epoch indicators)
-   without needing to pre-compute them. This replaces the FE's epoch
-   segmentation for display purposes.
+1. **Regime preference order**: "first in candidate list wins" is
+   the selection rule. The FE controls the ordering. For aggregate
+   queries, any MECE hash gives the same total so ordering doesn't
+   matter for correctness. For consistency across dates (avoid
+   floating-point artefacts from switching regimes), prefer a stable
+   ordering. Policy TBD.
 
-2. **Cross-product regimes**: a pinned DSL with dot-product
-   `context(channel).context(device).window(-90d:)` produces
-   cross-product slices. These are a single regime (one hash) with
-   many slice keys. The selection utility handles this naturally (one
-   hash = one regime). But the aggregation must sum across the full
-   cross-product, not just one dimension.
-
-3. **Regime preference order**: "least aggregation first" is the
-   current FE heuristic. Is this always correct? A cross-product
-   regime (channel × device) is less aggregated than either single
-   dimension, but has more slices and may have sparser data. Should
-   the preference order be configurable per graph or per edge?
-
-4. ~~**Partial regime data**~~ — **RESOLVED**. Selection is per
-   `retrieved_at`, not per `(anchor_day, retrieved_at)`. A single
-   fetch event writes all anchor_days under one hash — you never get
-   mixed regimes within a single retrieval. Per-`retrieved_at` is
-   the correct and only sensible granularity.
-
-5. ~~**`context()` syntax for uncontexted**~~ — **RESOLVED**. See
-   §10. `context()` plus empty elements in any separator position
-   (leading, trailing, in `or()`). No new keyword.
-
-6. **Single pinned DSL vs separate model DSL**: the cleanest approach
-   is a single pinned DSL like
-   `(window(-90d:);cohort(-90d:)).(context(channel);context())`
-   that drives both fetching and modelling. The alternative — a
-   separate "model DSL" that adds uncontexted on top of the fetch
-   DSL — adds complexity (two DSLs to maintain, potential drift).
-   The cost of the single-DSL approach is one additional fetch per
-   edge (uncontexted alongside the MECE partition), which is a
-   price worth paying for simplicity.
+2. **Phase C overconstrained parent**: when the pinned DSL has
+   `context(a);context(b)`, both dimensions independently constrain
+   the parent via Dirichlet. Since A and B are orthogonal slicings
+   of the same conversions, this overcounts evidence at the parent
+   level. See doc 30b §15 for discussion. This is a Phase C model
+   design concern, not a regime selection concern.
 
 ---
 
@@ -1281,31 +1295,13 @@ consistent with.
 
 For each `(anchor_day, retrieved_at)`, the compiler needs:
 
-- **Parent evidence**: aggregate `(x, y)`. Comes from either:
-  (a) direct uncontexted fetch (if available), or
-  (b) summing one MECE partition via regime selection.
-
-- **Channel children evidence**: per-channel `(x, y)`. Comes from
-  the channel hash's rows.
-
-- **Browser children evidence**: per-browser `(x, y)`. Comes from
-  the browser_type hash's rows.
-
-Regime selection (§4) applies at **every level**, not just the
-parent. Even a specific contexted slice like
-`context(channel:google).window()` may have regime ambiguity:
-
-- A **direct** single-dimension fetch under one hash
-- A **cross-product** fetch under a different hash
-  (`context(channel:google).context(browser_type:*).window()`),
-  where summing over browser_type recovers the channel:google
-  aggregate
-- **Hash mapping equivalents** of either, from event/context renames,
-  each with data for different date ranges
-
-The same "ordered candidates, first match wins per `retrieved_at`"
-logic applies uniformly — for the parent, for each child dimension,
-and for each specific context value within a dimension.
+- **Parent evidence**: aggregate `(x, y)`. Regime selection picks
+  one hash per date, sums to aggregate. Checks `mece_dimensions`
+  to confirm the sum is safe.
+- **Per-dimension children evidence**: per-value `(x, y)` from the
+  specific hash that contains that dimension. Per-slice reads —
+  each dimension uses its own hash. No regime selection needed for
+  children.
 
 ### 11.4 Does the parent need direct observations?
 

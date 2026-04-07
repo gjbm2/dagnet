@@ -1,7 +1,7 @@
 # Project Bayes: Programme
 
 **Status**: Active
-**Updated**: 31-Mar-26
+**Updated**: 7-Apr-26
 **Purpose**: Phased delivery plan for Project Bayes. This doc owns sequencing;
 design docs contain the detail.
 
@@ -181,9 +181,33 @@ data-constrained. Single-source validation:
   Designed, not built.
 - **Phase C posteriors** — context slice pooling, hierarchical
   shrinkage, per-slice visualisation. Prerequisites done
-  (doc 21 ✓, doc 25 ✓). Includes fixing harness hash mismatch
-  (`compute_snapshot_subjects.mjs` sets context def hashes to `{}`
-  while FE populates them).
+  (doc 21 ✓, doc 25 ✓). ~~Harness hash mismatch~~ — **FIXED
+  7-Apr-26**. `compute_snapshot_subjects.mjs` now loads context
+  definitions from `contexts/*.yaml`, normalises them identically
+  to the FE (`normalizeContextDefinition`), and populates the `x`
+  field with real per-key hashes.
+- **A→Z multi-hop cohort maturity** (doc 29 §Phase A) — generalise
+  cohort maturity from single-edge `from(A).to(B)` to multi-hop
+  `from(A).to(Z)`. Core work: two pure composition functions
+  (`compose_path_maturity_frames`, `compose_path_forecast_params`)
+  plus handler integration. Evidence composition is exact; forecast
+  uses documented approximations (per-edge p independence, last-edge
+  path CDF, last-edge uncertainty SDs) replaced later by Phases 2–4.
+  **If implemented after docs 30+31**: path resolution done natively
+  by BE from DSL (no FE `from_node_uuid`/`to_node_uuid` patch needed),
+  but requires cross-edge regime coherence check (all path edges must
+  use same regime family per date — see doc 29 §"Post-doc-31 variant").
+  Design complete in doc 29. Not yet implemented.
+- **Snapshot regime selection** (doc 30) — move regime selection from
+  FE preflight to authoritative BE selection per (edge, anchor_day,
+  retrieved_at) triple. Eliminates FE preflight round-trip; prevents
+  double-counting across context dimensions. Design complete, not
+  implemented.
+- **BE analysis subject resolution** (doc 31) — move DSL resolution
+  from FE to BE. FE sends DSL string + candidate regimes for all
+  edges; BE resolves path structure natively. Enables multi-hop
+  maturity without FE patch fields. Depends on doc 30. Design
+  complete, not implemented.
 - **Nightly Bayes fit** — automatic posterior updates after daily
   fetch. Reconnect mechanism (doc 28) **implemented 7-Apr-26** —
   all 5 phases complete (`runBayes` flag, `applyPatchAndCascade`,
@@ -245,6 +269,14 @@ data-constrained. Single-source validation:
 8. **FE stats deletion** — ~4000 lines. Graph-level parity proven
    (2-Apr-26). Remaining: D11 onset discrepancy design decision,
    Pattern A fragility review, heuristic dispersion FE parity.
+9. **A→Z multi-hop cohort maturity** (doc 29 §Phase A) — design
+   complete. Sequencing depends on whether docs 30+31 land first
+   (cleaner, no FE patch, but adds regime coherence concern) or
+   Phase A goes first (faster, uses `from_node_uuid`/`to_node_uuid`
+   patch, replaced later). See doc 29 for both variants.
+10. **Regime selection + BE subject resolution** (docs 30+31) —
+    architectural cleanup enabling cleaner multi-hop and eliminating
+    FE preflight round-trip. Designed, not implemented.
 
 ---
 
@@ -280,6 +312,10 @@ data-constrained. Single-source validation:
 | **Statistical domain summary** | `statistical-domain-summary.md` | Reference: statistical foundations and domain concepts. |
 | **Sampling performance** | `22-sampling-performance.md` | MCMC performance bottleneck analysis: compilation time, GPU vs CPU research, optimisation paths (compilation fix, dev-mode draws, more chains, NumPyro vectorised, faster cloud CPUs). Experiment protocol. |
 | **Posterior slice resolution** | `25-posterior-slice-resolution-and-analysis-type-review.md` | Query-driven posterior slice projection in cascade + analysis graph composition. Systematic review of all analysis types for correct promoted scalars, window/cohort/context sensitivity, and chart visualisation. |
+| **Bayes run reconnect** | `28-bayes-run-reconnect-design.md` | 3-phase automation pipeline (Phase 0 patch apply, Phase 1 fetch+commission, Phase 2 drain), `runBayes` flag, reconnect mechanism. Implemented 7-Apr-26. |
+| **Generalised forecast engine** | `29-generalised-forecast-engine-design.md` | Forecast-state contract, basis unification, reusable layers, A→Z multi-hop maturity (Phase A), known approximations. Includes post-doc-31 variant for regime coherence. |
+| **Regime selection** | `30-snapshot-regime-selection-contract.md` | FE/BE regime selection contract: one regime per (edge, anchor_day, retrieved_at). Eliminates FE preflight, prevents double-counting. |
+| **BE subject resolution** | `31-be-analysis-subject-resolution.md` | Move DSL resolution from FE to BE. FE sends DSL string; BE resolves path structure natively. Enables clean multi-hop. Depends on doc 30. |
 
 **Context**: `../codebase/APP_ARCHITECTURE.md` (app architecture),
 `../project-db/` (snapshot DB)

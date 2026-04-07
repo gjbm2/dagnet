@@ -313,6 +313,64 @@ After A→Z maturity is working:
 
 In other words: Steps A.1–A.2 are **deliberate scaffolding** that will be replaced by the correct implementations in Phases 2–4. They exist to deliver user value now while the harder maths is being developed. The scaffolding functions are clearly named, documented as approximate, and have parity tests that will validate their replacements.
 
+### Post-doc-31 variant: what changes when BE owns subject resolution
+
+**Added**: 7-Apr-26
+
+Docs 30 (regime selection) and 31 (BE subject resolution) redesign how
+analysis requests reach the backend. If Phase A is implemented *after*
+docs 30+31, several steps simplify and one new concern emerges.
+
+#### What simplifies
+
+| Phase A step | Pre-doc-31 | Post-doc-31 |
+|---|---|---|
+| **A.0** `from_node_uuid` / `to_node_uuid` on `SnapshotSubjectRequest` | New patch fields required | **Unnecessary** — BE resolves path from DSL natively, knows first/last edges |
+| **A.6** FE passes from/to UUIDs | FE change required | **Unnecessary** — FE sends DSL string; BE resolves |
+| **A.3** Handler detects multi-hop | Counts subjects > 1 | Inspects resolved path structure directly — more robust |
+| Scope resolution | FE BFS via `resolveFunnelPathEdges`, sends flat subject list | BE BFS from DSL string via `graph_select.py` — path ordering preserved |
+
+Steps A.1 (`compose_path_maturity_frames`) and A.2
+(`compose_path_forecast_params`) are **unchanged** — they are pure
+functions operating on frames and params, independent of how the path
+was resolved.
+
+#### New concern: cross-edge regime coherence
+
+Doc 30 introduces per-edge regime selection: for each
+`(edge, anchor_day, retrieved_at)` triple, the BE picks one observation
+regime (one hash family) and discards alternatives. For single-edge
+maturity this is sufficient.
+
+For multi-hop maturity the regimes selected for the **first edge** and
+**last edge** must be **compatible** — both must represent the same
+underlying cohort population. If different regimes are selected (e.g.
+first edge uses `context(channel)` regime, last edge uses
+`context(device)` regime), the composed rate `y_Z / x_A` is meaningless
+because numerator and denominator count different populations.
+
+**Proposed rule**: when composing path maturity, enforce that all path
+edges use the **same regime family** for a given `(anchor_day,
+retrieved_at)`. If no single regime covers all edges for that date, the
+date is excluded from evidence (no composition). This is conservative
+but correct — better to have a gap than a wrong number.
+
+**Implementation**: `compose_path_maturity_frames()` receives regime
+metadata per frame and filters to dates where the regime family is
+consistent across all contributing edges.
+
+#### Revised Phase A steps (post-doc-31)
+
+| Step | What | Notes |
+|------|------|-------|
+| **A.1** | `compose_path_maturity_frames()` — pure function, no DB | Unchanged; add regime coherence filter |
+| **A.2** | `compose_path_forecast_params()` — reads per-edge params from graph | Unchanged |
+| **A.3** | Handler integration — BE resolves path from DSL, composes frames+params | Simpler: path structure available natively |
+| **A.4** | Tests: evidence parity + regime coherence | Extended: verify correct exclusion of incoherent-regime dates |
+| **A.5** | Tests: forecast convergence (τ→∞, rate→path_p) | Unchanged |
+
+Steps A.0 and A.6 are eliminated entirely.
+
 ---
 
 ## Revised Recommended Sequencing
