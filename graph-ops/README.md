@@ -11,6 +11,19 @@ Playbooks, reference docs, and scripts for creating, editing, and maintaining co
 - **[Edit Existing Graph](playbooks/edit-existing-graph.md)** — modifying an existing graph (add/remove nodes, rename, re-wire)
 - **[Iterate on a Graph](playbooks/iterate-on-graph.md)** — fetch data, validate, fix in a tight loop
 - **[Validate a Graph](playbooks/validate-graph.md)** — how to run quality checks before committing (structural + deep integrity)
+- **[Manage Hash Mappings](playbooks/manage-hash-mappings.md)** — hash mapping workflow for event/context renames
+- **[Common Pitfalls](reference/common-pitfalls.md)** — known pitfalls and how to avoid them
+
+## CLI Tools
+
+DagNet ships command-line tools that produce the same outputs as the browser UI — useful for automation, scripting, and validating graphs without opening the app.
+
+| Tool | What it does | Playbook |
+|---|---|---|
+| `scripts/param-pack.sh` | Compute edge probabilities, evidence, forecast, and latency for a graph+window/cohort — identical to the browser's WindowSelector output | [CLI: Param Pack](playbooks/cli-param-pack.md) |
+| `scripts/analyse.sh` | Run any analysis type (graph overview, cohort maturity, etc.) and get the JSON payload that feeds ECharts | [CLI: Analyse](playbooks/cli-analyse.md) |
+| `scripts/parity-test.sh` | Regression test: old path vs new path, single + multi-scenario, all snapshot types | — |
+| `scripts/golden-regression.sh` | Compare current analyse output against golden baselines | — |
 
 ## Reference
 
