@@ -108,16 +108,28 @@ Used to invalidate queries on day boundaries without explicit timestamp tracking
 
 **Location**: `automationLogService.ts`
 
-Persists run logs to IndexedDB (survives browser restart):
+Automation run logs are persisted in two places:
+
+### 1. IndexedDB (primary safety net)
 
 - `persistRunLog(log)`: serialise and store; prunes old runs (keeps max 30)
 - `getRunLogs(limit?)`: retrieve recent runs, newest first
 - `getRunLog(runId)`: single run by ID
 
+### 2. Git-committed logs (crash-resilient, shared visibility)
+
+During a run, the job commits a log snapshot to `.dagnet/automation-logs/{date}.json` in the data repo every 10 minutes (wall-clock based via `sleepUntilDeadline`, resilient to browser tab throttling). A final commit with the definitive outcome runs in the finally block. The same file is overwritten each time — git tracks history.
+
+The periodic commit uses `automationLogService.commitLogToRepo()`, which loads credentials, serialises the current `getEntries()` output, and calls `gitService.commitAndPushFiles()` directly (the log file is not tracked in IDB or FileRegistry).
+
+Periodic snapshots use outcome `'in-progress'`; the final commit uses the computed outcome (`success`/`warning`/`error`/`aborted`).
+
+These files exist in git for diagnostics but are outside the whitelist that clone/pull uses, so they never enter IDB. With debug/trace children stripped by `endOperation`, committed files are lean (~10-100 KB).
+
 ### Log structure
 
 - `runId`: `retrieveall:${timestampMs}`
-- `outcome`: `'success' | 'warning' | 'error' | 'aborted'`
+- `outcome`: `'success' | 'warning' | 'error' | 'aborted' | 'in-progress'`
 - `entries`: session log entries (debug/trace children stripped by `endOperation` — only info+ survive)
 - `appVersion`, `repository`, `branch`, `durationMs`
 
@@ -125,10 +137,42 @@ Persists run logs to IndexedDB (survives browser restart):
 
 - `dagnetAutomationLogs(n?)`: summary table of last N runs
 - `dagnetAutomationLogEntries(runId)`: full entries for one run
+- `dagnetExportLog(runId?)`: download a run as JSON file (most recent if no runId)
 
-### Git-committed automation logs (planned)
+## Rate Limit and Timeout Handling
 
-Automation logs will be committed to `.dagnet/automation-logs/` in the repo. These files exist in git for diagnostics but are outside the whitelist that clone/pull uses, so they never enter IDB. With debug/trace entries stripped by `endOperation`, committed files are lean (~10-100 KB).
+**Location**: `rateLimiter.ts`, `retrieveAllSlicesService.ts`, `fetchDataService.ts`
+
+The system distinguishes between explicit API rate limits (429 responses) and transient timeouts. These are handled differently:
+
+### Error classification (`rateLimiter.ts`)
+
+Three methods, from narrow to broad:
+
+- `isExplicitRateLimitError(error)` — matches only server-side 429 responses: "429", "Too Many Requests", "Exceeded rate limit", "Exceeded concurrent limit"
+- `isTimeoutError(error)` — matches network timeouts and connection failures: timeout, ETIMEDOUT, ECONNRESET, failed to fetch, AbortError, etc.
+- `isRateLimitError(error)` — union of both. Used by `getFromSourceDirect.ts` atomicity guard where both cases should throw up to the orchestrator.
+
+### Timeout handling (automated runs)
+
+When a fetch times out during a retrieve-all, the system retries indefinitely with exponential backoff: 30s → 60s → 120s → 240s → cap at 5 minutes. The retry loop only exits on:
+- **Success** — item fetched, continue to next
+- **User abort** — stop the run
+- **Explicit 429 during retry** — break out of timeout retries, enter cooldown path
+
+Timeouts never trigger the 45-minute cooldown directly.
+
+### Timeout handling (manual runs)
+
+Shorter patience for interactive use: 2 retries with 15s → 30s backoff. If still failing, records the error and moves to the next item. No cooldown for pure timeouts.
+
+### Explicit 429 handling
+
+Only actual 429 responses trigger the 45-minute cooldown. After cooldown expires: mint a new `retrieved_at` batch timestamp for the scope, bust cache for the scope, retry the item.
+
+### Why timeouts are not rate limits
+
+Amplitude can return a 429 immediately ("Exceeded rate limit with query of cost 360") or hang the connection until it times out (~30s). Previously both were treated identically — a single timeout triggered a 45-minute cooldown. In a real incident (8-Apr-26), this caused 5 consecutive cooldowns (3h 45m wasted) from transient timeouts that would have resolved with a simple 30-60s retry.
 
 ## Session Logging Integration
 
@@ -146,7 +190,8 @@ See `SESSION_LOG_ARCHITECTURE.md` for full details on levels, thresholds, and th
 | File | Role |
 |------|------|
 | `src/services/automationRunService.ts` | Run state machine |
-| `src/services/automationLogService.ts` | Persistent run logging |
+| `src/services/automationLogService.ts` | IDB persistence + git-committed run logs |
+| `src/services/rateLimiter.ts` | Error classification (429 vs timeout), backoff state |
 | `src/services/dailyFetchService.ts` | Per-graph dailyFetch + runBayes flag management |
 | `src/services/dailyAutomationJob.ts` | Job orchestration (enumeration, 3-phase execution) |
 | `src/services/dailyRetrieveAllAutomationService.ts` | Per-graph pull-retrieve-commit workflow |

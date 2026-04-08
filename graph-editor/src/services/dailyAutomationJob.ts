@@ -20,7 +20,11 @@ import { workspaceService } from './workspaceService';
 import { APP_VERSION } from '../version';
 import { db } from '../db/appDatabase';
 import { fileRegistry } from '../contexts/TabContext';
+import { formatDateUK } from '../lib/dateFormat';
 import type { RepositoryItem, GraphData, ViewMode } from '../types';
+
+/** Interval (ms) between periodic log commits to the data repo. */
+const LOG_COMMIT_INTERVAL_MS = 10 * 60_000; // 10 minutes
 
 // ---------------------------------------------------------------------------
 // Context store — written by the hook, read by the job runFn
@@ -211,6 +215,35 @@ async function runDailyAutomation(ctx: JobContext): Promise<void> {
   const logStartIndex = sessionLogService.getEntries().length;
   let repoForLog = 'unknown';
   let branchForLog = 'unknown';
+  let logCommitAborted = false;
+  const logFilename = `retrieve-all-${formatDateUK(new Date())}.json`;
+
+  /** Snapshot current run entries and commit to repo. Best-effort. */
+  const commitLogSnapshot = async () => {
+    if (repoForLog === 'unknown') return;
+    try {
+      const allEntries = sessionLogService.getEntries();
+      const runEntries = allEntries.slice(logStartIndex);
+      await automationLogService.commitLogToRepo({
+        repository: repoForLog,
+        branch: branchForLog,
+        filename: logFilename,
+        log: {
+          runId: `retrieveall:${waitStartedAt}`,
+          timestamp: waitStartedAt,
+          graphs: targetGraphNames,
+          outcome: 'in-progress',
+          appVersion: APP_VERSION,
+          repository: repoForLog,
+          branch: branchForLog,
+          durationMs: Date.now() - waitStartedAt,
+          entries: runEntries,
+        },
+      });
+    } catch (e) {
+      console.warn('[dailyAutomationJob] Periodic log commit failed:', e);
+    }
+  };
 
   // ---------------------------------------------------------------------------
   // Progressive flush — write log state to IDB every 60s so a crash/kill
@@ -304,6 +337,17 @@ async function runDailyAutomation(ctx: JobContext): Promise<void> {
     const branchFinal = automationCtx.selectedBranch || 'main';
     repoForLog = repoFinal;
     branchForLog = branchFinal;
+
+    // Start periodic log commit loop (wall-clock based, not setInterval).
+    // Uses absolute deadlines so browser throttling of background tabs can't
+    // cause drift or missed commits.
+    void (async () => {
+      while (!logCommitAborted) {
+        await sleepUntilDeadline(LOG_COMMIT_INTERVAL_MS);
+        if (logCommitAborted) break;
+        await commitLogSnapshot();
+      }
+    })();
 
     // -----------------------------------------------------------------------
     // Upfront pull (remote wins) — ALWAYS, both enumeration and explicit mode.
@@ -627,6 +671,7 @@ async function runDailyAutomation(ctx: JobContext): Promise<void> {
     // Do NOT re-throw — let the finally block persist the log with the error.
   } finally {
     stopProgressiveFlush();
+    logCommitAborted = true;
     document.title = originalTitle;
 
     // Clean URL params.
@@ -665,7 +710,7 @@ async function runDailyAutomation(ctx: JobContext): Promise<void> {
         outcome = 'success';
       }
 
-      await automationLogService.persistRunLog({
+      const runLog = {
         runId,
         timestamp: waitStartedAt,
         graphs: targetGraphNames,
@@ -675,20 +720,33 @@ async function runDailyAutomation(ctx: JobContext): Promise<void> {
         branch: branchForLog,
         durationMs: Date.now() - waitStartedAt,
         entries: runEntries,
-      });
+      };
+
+      // Persist to IDB (primary safety net).
+      await automationLogService.persistRunLog(runLog);
+
+      // Final commit to git repo (best-effort).
+      if (repoForLog !== 'unknown') {
+        await automationLogService.commitLogToRepo({
+          repository: repoForLog,
+          branch: branchForLog,
+          filename: logFilename,
+          log: runLog,
+        });
+      }
 
       const closeDelayMs = getCloseDelayMs(outcome);
 
       if (closeDelayMs === Infinity) {
         sessionLogService.info('session', 'AUTOMATION_WINDOW_KEPT_OPEN',
           '?noclose: window will remain open for inspection',
-          'Logs have been persisted to IndexedDB. Run dagnetAutomationLogs() in the console to review past runs.');
+          'Logs persisted to IndexedDB and git repo.');
       } else {
         const closeDelayLabel = outcome === 'success' ? '10 seconds' : `${Math.round(closeDelayMs / 60_000)} minutes`;
 
         sessionLogService.info('session', 'AUTOMATION_WINDOW_CLOSE',
           `Automation finished (${outcome}) — closing browser window in ${closeDelayLabel}`,
-          'Logs have been persisted to IndexedDB. Run dagnetAutomationLogs() in the console to review past runs.');
+          'Logs persisted to IndexedDB and git repo.');
 
         await sleepUntilDeadline(closeDelayMs);
         try { window.close(); } catch { /* best effort */ }

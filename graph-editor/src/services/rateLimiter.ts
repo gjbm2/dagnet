@@ -195,36 +195,47 @@ class RateLimiter {
   }
   
   /**
-   * Check if an error is a rate limit error (explicit 429 OR timeout).
+   * Check if an error is an explicit rate limit response (429 / "Too Many Requests").
    *
-   * Amplitude can express throttling in two ways:
-   *   1. An immediate 429 "Too Many Requests" response
-   *   2. A hung request that times out after ~30 seconds
-   *
-   * Both must trigger the same cooldown+retry path during automated
-   * retrieve-all runs.
+   * This matches ONLY server-side rate limit responses — NOT timeouts or
+   * network failures. Use this when the distinction matters (e.g. deciding
+   * whether to retry with backoff vs enter a long cooldown).
    *
    * @param error - Error object or message
-   * @returns true if this is a 429 / rate limit / timeout error
+   * @returns true if this is an explicit 429 / rate limit error
    */
-  isRateLimitError(error: unknown): boolean {
+  isExplicitRateLimitError(error: unknown): boolean {
     const message = error instanceof Error ? error.message : String(error);
     return (
       message.includes('429') ||
       message.includes('Too Many Requests') ||
       message.includes('rate limit') ||
       message.includes('Exceeded concurrent limit') ||
-      message.includes('Exceeded rate limit') ||
-      this.isTimeoutError(message)
+      message.includes('Exceeded rate limit')
     );
+  }
+
+  /**
+   * Check if an error is a rate limit error (explicit 429 OR timeout).
+   *
+   * This is the broad check: it matches both server-side 429s AND timeouts/
+   * network failures. Used by getFromSourceDirect's atomicity guard where
+   * both cases should throw up to the orchestrator. The orchestrator then
+   * decides whether to retry with backoff (timeout) or cooldown (429).
+   *
+   * @param error - Error object or message
+   * @returns true if this is a 429 / rate limit / timeout error
+   */
+  isRateLimitError(error: unknown): boolean {
+    return this.isExplicitRateLimitError(error) || this.isTimeoutError(error);
   }
 
   /**
    * Check if an error looks like a network timeout or connection failure.
    *
-   * During automated runs against Amplitude, these are treated as
-   * rate-limit-equivalent because Amplitude often throttles by slowing
-   * responses until they time out, rather than returning a clean 429.
+   * Timeouts are NOT the same as rate limits. A timeout may be a transient
+   * network issue or a slow query — it should be retried with exponential
+   * backoff, not punished with a 45-minute cooldown.
    *
    * @param error - Error object or message string
    * @returns true if this looks like a timeout / network failure

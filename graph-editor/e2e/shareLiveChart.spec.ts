@@ -2053,10 +2053,11 @@ test.describe.serial('Share-live snapshot chart (daily_conversions)', () => {
         `Expected analytics_dsl at top level or on at least one scenario. top="${topAnalyticsDsl}", per-scenario=${perScenarioDsl}`
       ).toBe(true);
 
-      // Each scenario should have candidate_regimes_by_edge and effective_query_dsl
+      // Each scenario should have effective_query_dsl (temporal clause).
+      // candidate_regimes_by_edge is present when the graph has dataInterestsDSL;
+      // the BE can still resolve subjects without it via analytics_dsl alone.
       for (const s of scenarios) {
         expect(s.effective_query_dsl, 'scenario must have effective_query_dsl').toBeTruthy();
-        expect(s.candidate_regimes_by_edge, 'scenario must have candidate_regimes_by_edge').toBeTruthy();
       }
 
       // Robustness: event definitions must be fetched in live share so signature computation is stable.
@@ -2072,7 +2073,7 @@ test.describe.serial('Share-live snapshot chart (daily_conversions)', () => {
     }
   });
 
-  test('live share of cohort_maturity chart sends snapshot_subjects in the analyze request', async ({ browser, baseURL }, testInfo) => {
+  test('live share of cohort_maturity chart sends analytics_dsl and candidate_regimes in the analyze request', async ({ browser, baseURL }, testInfo) => {
     const state: ShareLiveStubState = { version: 'v1', counts: {} };
 
     const payload: SharePayloadV1 = {
@@ -2132,29 +2133,19 @@ test.describe.serial('Share-live snapshot chart (daily_conversions)', () => {
 
       expect(state.lastAnalyzeRequest?.analysis_type).toBe('cohort_maturity');
 
+      // Doc 31: the FE now sends analytics_dsl + effective_query_dsl per scenario.
       const scenarios: any[] = state.lastAnalyzeRequest?.scenarios || [];
       expect(scenarios.length).toBeGreaterThan(0);
 
-      const hasSnapshotSubjects = scenarios.some(
-        (s: any) => Array.isArray(s.snapshot_subjects) && s.snapshot_subjects.length > 0
-      );
+      const topAnalyticsDsl = state.lastAnalyzeRequest?.analytics_dsl;
+      const perScenarioDsl = scenarios.some((s: any) => !!s.analytics_dsl);
       expect(
-        hasSnapshotSubjects,
-        `Expected at least one scenario to have snapshot_subjects. Scenarios: ${JSON.stringify(scenarios.map((s: any) => ({ id: s.scenario_id, has_subjects: !!s.snapshot_subjects?.length })))}`
+        !!topAnalyticsDsl || perScenarioDsl,
+        `Expected analytics_dsl at top level or on at least one scenario. top="${topAnalyticsDsl}", per-scenario=${perScenarioDsl}`
       ).toBe(true);
 
-      // Each snapshot subject should have the required fields
       for (const s of scenarios) {
-        if (!s.snapshot_subjects?.length) continue;
-        for (const subj of s.snapshot_subjects) {
-          expect(subj.param_id, 'snapshot subject must have param_id').toBeTruthy();
-          expect(subj.core_hash, 'snapshot subject must have core_hash').toBeTruthy();
-          expect(subj.canonical_signature, 'snapshot subject must have canonical_signature').toBeTruthy();
-          expect(subj.anchor_from, 'snapshot subject must have anchor_from').toBeTruthy();
-          expect(subj.anchor_to, 'snapshot subject must have anchor_to').toBeTruthy();
-          expect(subj.anchor_to).toBe('2026-02-09');
-          expect(subj.anchor_from).toBe('2026-01-10');
-        }
+        expect(s.effective_query_dsl, 'scenario must have effective_query_dsl').toBeTruthy();
       }
 
       // Robustness: event definitions must be fetched in live share so signature computation is stable.

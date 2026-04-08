@@ -378,8 +378,6 @@ There are **no existing tests** for `sessionLogService` — no tests for `startO
 
 ## 10. Relationship to the Git Commit Feature
 
-The git commit feature (committing automation logs to `.dagnet/automation-logs/`) is unblocked by this work. With debug/trace entries stripped at `endOperation`, the committed log is naturally lean. Implementation of the git commit is a separate, small piece of work that follows this.
+The git commit feature (committing automation logs to `.dagnet/automation-logs/`) was unblocked by this work and is now implemented. With debug/trace entries stripped at `endOperation`, committed logs are naturally lean. See AUTOMATION_PIPELINE.md § "Automation Logging" for details.
 
-Implementation order:
-1. Session log overhaul (this proposal)
-2. Git commit of automation logs
+`automationLogService.commitLogToRepo()` commits periodic snapshots (every 10 min) and a final log at run completion. The periodic timer uses wall-clock deadlines (`sleepUntilDeadline`) to resist browser tab throttling.
