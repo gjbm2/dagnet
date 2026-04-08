@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.10.0b
+**Released:** 9-Apr-26
+
+Along with many contract fixes, added cli support for analysis and param extraction
+
+---
+
 ## Version 1.9.20b
 **Released:** 7-Apr-26
 
