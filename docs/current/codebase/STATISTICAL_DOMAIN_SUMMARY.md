@@ -452,7 +452,32 @@ hyperprior (hierarchical Dirichlet pattern).
 
 Maps to provenance flags: `bayesian / pooled-fallback / point-estimate / skipped`.
 
-### 9.5 Model materialisation (PyMC)
+### 9.5 Unified posterior schema
+
+Posteriors are stored per parameter file in a `posterior` block. The
+key structure is `posterior.slices` — a map keyed by DSL string (e.g.
+`"window()"`, `"cohort()"`, `"context(channel:paid)"`). Each entry is
+a `SlicePosteriorEntry` carrying both probability (alpha, beta, HDI,
+p_mean, p_stdev) and latency (mu/sigma/onset with mean/SD, hdi_t95)
+posteriors for that slice.
+
+`posterior._model_state` stores model-internal parameters (warm-start
+state, hyperparameters) — no consumption semantics, only used by the
+compiler on subsequent runs.
+
+**Slice resolution** (`posteriorSliceResolution.ts`):
+`resolvePosteriorSlice(slices, effectiveDSL)` builds the ideal key
+from the current query DSL, matches against available slices, and
+falls back to the aggregate entry if no exact match.
+`projectProbabilityPosterior()` and `projectLatencyPosterior()` use
+this to promote the correct slice's values to flat edge scalars during
+cascade (via `mappingConfigurations.ts`).
+
+Defined in `graph_types.py:SlicePosteriorEntry`, `Posterior`.
+TS types: `index.ts:742-806`. YAML schema:
+`parameter-schema.yaml:209-309`.
+
+### 9.5b Model materialisation (PyMC)
 
 The compiler emits runtime-agnostic IR; a separate model builder translates to
 PyMC. Key patterns from reference implementation review:
@@ -592,17 +617,29 @@ fitting.
 
 **Bayesian fitting pipeline** (the nightly inference system — distinct from
 the latency/lag domain covered above):
-- `project-bayes/0-high-level-logical-blocks.md` — Logical blocks: orchestration,
-  evidence assembly, graph-to-hierarchy compiler, probabilistic model, posterior
-  summarisation, artefact persistence
-- `project-bayes/6-compiler-and-worker-pipeline.md` — Compiler phases and worker
-  dispatch
-- `project-bayes/21-unified-posterior-schema.md` — Posterior output schema
-- `project-bayes/1-cohort-completeness-model-contract.md` — Cohort maturity model
-  contract
+- `PYTHON_BACKEND_ARCHITECTURE.md` §Bayesian Computation — compiler
+  pipeline, async roundtrip, two-phase model, FE overlay components,
+  automation
+- `project-bayes/1-cohort-completeness-model-contract.md` — Cohort
+  maturity model contract (partial — foundational, not yet archived)
+
+**Implemented design docs** (archived — essential knowledge captured
+above and in `PYTHON_BACKEND_ARCHITECTURE.md`):
+- `project-bayes/archive/` — compiler pipeline (docs 0, 6), async
+  roundtrip (doc 4), Modal deployment (doc 3), two-phase model
+  (doc 23), ESS decay (doc 24), unified posterior schema (doc 21),
+  latent onset (doc 18L), evidence assembly (doc 11), recency
+  weighting (doc 12), trajectory compression (doc 20), posterior
+  slice resolution (doc 25P), Phase 2 onset drift fix (doc 26),
+  reconnect automation (doc 28), model vars provenance (doc 15),
+  promoted fields (doc 19M), heuristic dispersion, join-node
+  convergence, FE overlay (doc 9)
+
+**Active design docs** (not yet implemented — see
+`project-bayes/INDEX.md` for full catalogue):
+- `project-bayes/14-phase-c-slice-pooling-design.md` — Phase C
+- `project-bayes/29-generalised-forecast-engine-design.md` — multi-hop
+- `project-bayes/32-posterior-predictive-scoring-design.md` — LOO-ELPD
 
 **Cohort maturity forecasting** (the frontier subsystem):
-- `project-bayes/cohort-maturity/cohort-maturity-project-overview.md` — Project
-  overview
-- `project-bayes/cohort-maturity/cohort-maturity-full-bayes-design.md` — Full
-  Bayesian design
+- `project-bayes/cohort-maturity/INDEX.md` — 9 docs, own index

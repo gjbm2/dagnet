@@ -193,10 +193,10 @@ This means the app has no server-side state management, no job queues, and
 no long-lived server processes. Every server-side call is a stateless
 request/response within Vercel's execution limits.
 
-The first exception to this pattern will be MCMC inference (see
-`project-bayes/3-compute-and-deployment-architecture.md`), which delegates
-long-running computation to an external compute vendor with results
-returning via webhook → git commit.
+The first exception to this pattern is MCMC inference (see
+`PYTHON_BACKEND_ARCHITECTURE.md` §Bayesian Computation), which delegates
+long-running computation to Modal with results returning via webhook →
+atomic git commit.
 
 ## Related Docs
 

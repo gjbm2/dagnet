@@ -368,28 +368,30 @@ grade. ΔELPD could refine this — an edge with strong evidence but
 poor predictive fit should not be good-3 — but this is a design choice
 to be resolved during implementation.
 
-Bead text: append ΔELPD to the existing reason string, e.g.
-"Strong evidence, ΔELPD +3.2" or "Warning: worse than analytic
-(ΔELPD −1.4)".
+Bead text: the existing tier label, e.g. "Strong evidence" or
+"Warning: worse than analytic". No raw ΔELPD numbers — business
+users cannot interpret log-probability units.
 
 ### 7.2 Edge Info → Model tab (BayesPosteriorCard)
 
 **Current**: shows p ± stdev, HDI, α/β, latency params, rhat, ESS,
-evidence grade, fitted timestamp.
+evidence grade, fitted timestamp, and quality tier label.
 
-**Add a "Predictive fit" section** to the convergence footer:
+**No raw LOO numbers in the headline footer.** The quality tier
+label already absorbs LOO signals — "Warning: worse than analytic"
+or "Warning: influential observations" appear when ΔELPD < 0 or
+Pareto k > 0.7. The user sees a clear good/bad signal without
+needing to interpret ELPD values.
 
-| Display label | Value | Note |
-|---|---|---|
-| ΔELPD | +3.2 | Positive = better than analytic. Colour: green if > 0, red if < 0. |
-| ELPD / obs | −2.1 | Normalised by n_loo_obs — comparable across edges with different amounts of data |
-| Pareto k | 0.43 | Flag amber if > 0.5, red if > 0.7 |
+Raw ΔELPD and Pareto k numbers are available in the diagnostic
+popover (§7.3) for technical inspection.
 
-### 7.3 PosteriorIndicator popover
+### 7.3 PosteriorIndicator popover (diagnostic detail)
 
 Add ΔELPD and Pareto k rows to the "Convergence" section of the
-diagnostic table, alongside rhat and ESS. Same values as the Model
-tab, compact format.
+diagnostic table, alongside rhat and ESS. These are the raw values
+for technical users — colour-coded amber/red at the same thresholds
+as the quality tier warnings.
 
 ### 7.4 Graph-level summary
 

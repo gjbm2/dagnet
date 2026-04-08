@@ -171,6 +171,8 @@ the common case.
 **MECE dimension with partial slices** (`Σ n_slice < n_aggregate`):
 - Compute residual: `(n_agg - Σ n_slice, k_agg - Σ k_slice)`
 - Bind residual as a separate likelihood term for the base-rate variable
+  (but see §14.5 for interaction with per-date routing — residual
+  feeding `p_base` on a mece-regime date conflicts with §5.7)
 - Bind per-slice terms to per-slice variables
 
 **Non-MECE dimension** (`visited()`):
@@ -228,6 +230,8 @@ EdgeEvidence (existing fields preserved)
     + has_slices: bool                       # True if any slice_groups non-empty
     + regime_per_date: dict[str, str]        # retrieved_at → regime_kind
                                              # ('mece_partition' | 'uncontexted')
+                                             # Per-date suppression (§5A.3 Rule 2)
+                                             # keeps only most granular data
 ```
 
 The existing `window_obs` and `cohort_obs` lists on `EdgeEvidence`
@@ -248,12 +252,13 @@ posteriors from per-slice evidence.
 
 The `bind_evidence()` function (and `bind_snapshot_evidence()`) must:
 
-1. **Call `select_regime_rows()`** (doc 30 §6) before any observation
-   routing. This filters the input rows to one regime per
-   `retrieved_at` date and returns `regime_per_date` mapping each
-   date to its winning regime kind (`mece_partition` or `uncontexted`).
-   This is a hard prerequisite — without it, multi-regime rows
-   double-count (doc 30 §1.1).
+1. **Snapshot DB path only**: call `select_regime_rows()` (doc 30 §6)
+   before any observation routing. This filters the input rows to one
+   regime per `retrieved_at` date and returns `regime_per_date` mapping
+   each date to its winning regime kind (`mece_partition` or
+   `uncontexted`). Hard prerequisite for snapshot evidence — without
+   it, multi-regime rows double-count (doc 30 §1.1). Param-file
+   evidence skips this step (single DSL era, no hash ambiguity).
 2. Parse `context_key()` from each row's `slice_key` / `sliceDSL`
 3. Group entries by context dimension
 4. Classify each dimension as MECE or non-MECE
@@ -308,6 +313,10 @@ p_slice_window_i = logistic(logit(p_slice_base_i) + ε_window_i * τ_window)
 p_slice_cohort_i = logistic(logit(p_slice_base_i) + ε_cohort_i * τ_cohort)
 
 # Likelihoods per slice per observation type
+# NB: emitted only for mece-regime dates (§5.7). Aggregate
+# observations on uncontexted-regime dates feed p_base directly
+# via existing window/cohort likelihood. Per-date suppression
+# (§5A.3 Rule 2) ensures no double-counting across granularities.
 obs_window_slice_i ~ Binomial(n_window_i, p_slice_window_i * completeness)
 obs_cohort_slice_i ~ per-day Potential (existing pattern)
 ```
@@ -336,6 +345,7 @@ base_weights ~ Dirichlet(α_hyper)           # K+1 components (incl. dropout)
 weights_slice_i ~ Dirichlet(κ * base_weights)    # one per slice
 
 # Multinomial likelihood per slice
+# NB: emitted only for mece-regime dates (§5.7). See §5.2 note.
 obs_slice_i ~ Multinomial(n_slice_i, weights_slice_i * completeness_vec)
 ```
 
@@ -471,6 +481,13 @@ children have evidence. This is expected and well-behaved — the
 hierarchy naturally produces aggregate posteriors from per-slice
 evidence (doc 30 §11.4).
 
+**Subsumption scenarios**: when the pinned DSL has overlapping
+context specifications (§5A.3 Rule 2), multiple granularities may
+have data for the same date. The per-date suppression rule applies:
+most granular wins, coarser data is discarded. The two-case table
+above covers the result — after suppression, each date has either
+children data (mece) or aggregate data (uncontexted), never both.
+
 ---
 
 ## 5A. DSL shape taxonomy and hierarchy construction
@@ -564,82 +581,55 @@ is acceptable — the hierarchical shrinkage absorbs moderate
 correlation, and the alternative (modelling the full joint
 distribution) requires cross-product data.
 
-**Rule 2 — Subsumption: use the most granular, route coarser to
-parent via regime selection.**
+**Rule 2 — Subsumption: multi-level hierarchy, most granular wins
+per date.**
 
 `context(a).context(b);context(a);context(b);` →
 
 The cross-product `context(a).context(b)` subsumes both marginals.
 These are NOT independent — using more than one for the same date
-double-counts. The model hierarchy uses only one decomposition at a
-time per date.
+double-counts. The model hierarchy has a natural multi-level
+structure with each granularity at its own level:
 
 ```
 Parent (p_base)
-  └── a×b compound Dirichlet (one SliceGroup)
-        ├── (a:n, b:p)
-        ├── (a:n, b:q)
-        ├── (a:m, b:p)
-        └── (a:m, b:q)
-```
-
-Regime selection (per exploded instance, per `retrieved_at`)
-determines which data feeds the model:
-
-- Dates with cross-product data → compound children get per-cell
-  likelihood terms. Parent informed through Dirichlet only.
-- Dates with only a-marginal data → regime falls back to H_a. But
-  the model has a×b children, not a-children. The a-marginal
-  observations must be routed to the PARENT as aggregate evidence
-  (since they cannot be decomposed into the a×b cells without the
-  b dimension). Same rule as §5.7: coarser-than-model data feeds
-  the parent directly.
-- Dates with only uncontexted data → parent gets direct aggregate
-  term. Same as §5.7.
-
-The a-marginal and b-marginal semicoloned parts serve as **fallback
-fetch specifications** — they provide data for dates before the
-cross-product DSL was adopted. They do NOT create additional model
-hierarchies.
-
-**Question: should the model have intermediate a-marginal nodes?**
-
-An alternative is a multi-level hierarchy:
-
-```
-Parent (p_base)
-  ├── a:n (intermediate)     ← a-marginal observations on dates
-  │     │                      where only H_a has data
-  │     ├── (a:n, b:p) (leaf) ← cross-product observations on
-  │     └── (a:n, b:q)          dates where H_axb has data
+  ├── a:n (intermediate)     ← Dirichlet group 1 (a-dimension)
+  │     ├── (a:n, b:p) (leaf) ← Dirichlet group 2 (a×b compound)
+  │     └── (a:n, b:q)
   ├── a:m (intermediate)
   │     ├── (a:m, b:p)
   │     └── (a:m, b:q)
 ```
 
-This places a-marginal data at the correct structural level: `obs(a:n)`
-constrains the sum `p(a:n,b:p) + p(a:n,b:q)` rather than `p_base`.
-More informative than routing a-marginal data to the parent.
+The intermediates (`a:n`, `a:m`) form one Dirichlet group. The
+leaves (`(a:n,b:p)`, ...) form another, with the structural
+constraint that each intermediate equals the sum of its leaves.
+Each granularity has a natural home for its data.
 
-However, this creates a double-counting risk: on a date where the
-cross-product regime wins, the leaf children `(a:n,b:*)` get direct
-likelihood terms AND their parent intermediate `a:n` would also get
-a likelihood term if regime selection for the a-marginal instance
-picks H_axb as a superset match (summing over b). The same data feeds
-both levels.
+**Per-date suppression rule**: on any given `retrieved_at` date,
+only the **most granular** data available is used. Coarser data for
+that date is discarded. This is the same principle as doc 30's
+regime selection, applied across hierarchy levels:
 
-**Guard**: for dates where the cross-product regime wins at the leaf
-level, the intermediate level must have NO likelihood term. This
-requires the evidence binder to coordinate regime selection across
-hierarchy levels — the most granular level that has data for a date
-claims it exclusively. Higher levels are informed only through the
-Dirichlet link.
+- Date has cross-product data (H_axb) → leaves get likelihood
+  terms. Intermediates and parent informed through Dirichlet only.
+  Any H_a or H_bare data for this date is discarded.
+- Date has only a-marginal data (H_a, no H_axb) → intermediates
+  get likelihood terms. Leaves are silent. Parent informed through
+  Dirichlet only.
+- Date has only uncontexted data (H_bare) → parent gets direct
+  aggregate term. Intermediates and leaves are silent.
 
-This coordination is more complex than the flat model and may not be
-worth the benefit for v1. **Recommended for v1**: flat compound
-Dirichlet (no intermediate nodes). Coarser-than-model data routes to
-parent. Revisit multi-level hierarchy if parameter recovery tests show
-the parent is poorly constrained by the flat approach.
+The a-marginal and b-marginal semicoloned parts serve as **fallback
+fetch specifications** — they provide data for dates before the
+cross-product DSL was adopted, routed to the correct intermediate
+level.
+
+**Validation**: after evidence binding, if `p_base` has zero
+likelihood terms on any level (no aggregate obs, no intermediates
+with obs, no leaves with obs on any date), this is a pinned DSL
+misconfiguration. The compiler should reject the edge with a
+diagnostic naming the missing data (see §14.7).
 
 **Rule 3 — Subset values are absorbed by the dimension expansion.**
 
@@ -678,30 +668,30 @@ marginals of part 1.
 
 **Step 3 — Choose model hierarchy (Rule 2).**
 
-One compound a×b Dirichlet (the most granular decomposition):
+Multi-level: a-intermediates + a×b leaves.
 
 ```
 Parent (p_base)
-  └── a×b Dirichlet
-        ├── (a:n, b:p)
-        ├── (a:n, b:q)
-        ├── (a:m, b:p)
-        └── (a:m, b:q)
+  ├── a:n (intermediate)     ← Dirichlet group 1
+  │     ├── (a:n, b:p) (leaf) ← Dirichlet group 2
+  │     └── (a:n, b:q)
+  ├── a:m (intermediate)
+  │     ├── (a:m, b:p)
+  │     └── (a:m, b:q)
 ```
 
-**Step 4 — Evidence routing by date.**
+**Step 4 — Evidence routing by date (most granular wins).**
 
-| Data available for this `retrieved_at` | Regime selected | Feeds |
-|---|---|---|
-| H_axb (cross-product) rows | H_axb | Per-cell children |
-| H_a (a-marginal) rows only | H_a | Parent (coarser than model) |
-| H_b (b-marginal) rows only | H_b | Parent (coarser than model) |
-| H_bare (uncontexted) rows only | H_bare | Parent |
-| H_a:p (specific value) rows only | Same family as H_a | Parent |
+| Data available for this `retrieved_at` | Most granular | Feeds | Suppressed |
+|---|---|---|---|
+| H_axb + H_a + H_bare | H_axb | Leaves | H_a, H_bare |
+| H_a + H_bare (no H_axb) | H_a | Intermediates | H_bare |
+| H_bare only | H_bare | Parent | — |
+| H_axb + H_b (no H_a) | H_axb | Leaves | H_b |
+| Nothing | — | No data | — |
 
-Per-cell children get likelihood terms ONLY on dates where the
-cross-product regime wins. Parent gets direct likelihood terms ONLY
-on dates where a coarser regime wins. Never both on the same date.
+Each date uses exactly one granularity. Coarser data is discarded.
+Higher levels are informed only through the Dirichlet link.
 
 **Step 5 — Hash families and regime preference.**
 
@@ -806,10 +796,9 @@ and channel Dirichlet (Group 2).
 
 | Risk | Cause | Guard |
 |---|---|---|
-| Two subsumption-related parts both feed children | Marginal and cross-product data used for same date | Regime selection per date. Coarser-than-model data routes to parent, not children. |
-| Independent dimensions double-count at parent level | Both decompositions observe the same n underlying conversions | Accepted — structurally independent constraints. Modest parent overconfidence under dimension correlation. See §5A.3 Rule 1 note. |
-| Cross-product + marginal both have data for same date | H_axb and H_a both present for a `retrieved_at` | Regime selection picks one per date per instance. Cross-product preferred (closer match). Marginal instance gets H_a directly, not H_axb superset — but model only emits children for the compound level, so marginal data routes to parent. |
-| Multi-level hierarchy: leaf and intermediate both get terms for same date | Evidence binder runs regime selection per instance independently | v1: flat hierarchy only (no intermediate nodes). Coarser data → parent. Eliminates the multi-level coordination problem. |
+| Two granularities feed the same hierarchy level on the same date | Marginal and cross-product data both present for same `retrieved_at` | Per-date suppression: most granular wins, coarser discarded (§5A.3 Rule 2) |
+| Independent dimensions double-count at parent level | Both decompositions observe the same n underlying conversions | Accepted — structurally independent constraints. Modest parent overconfidence under dimension correlation. See §5A.3 Rule 1 note. 1/N κ correction (§14.6d). |
+| No MECE partition or aggregate exists for any date | DSL misconfiguration — context slices specified but no values registered, or all below `min_n_slice` | Compiler validation: reject edge if `p_base` has zero likelihood terms at any level after evidence binding (§14.7) |
 | Partial overlap (`context(a).context(b);context(b).context(c)`) | Shared dimension b, but neither subsumes the other | DSL validation should reject. No sensible hierarchy. |
 
 ---
@@ -1111,6 +1100,13 @@ names by design).
 - `exclude()` and `minus()` query modifiers on edges
 - `n_query` overrides for denominator computation
 
+**Test data gaps for §5A scenarios**: this graph has a single context
+dimension. §5A's multi-dimension scenarios (independent dimensions,
+subsumption/marginals, cross-product + marginals, mixed-epoch regime
+transitions) require synthetic multi-dimension data for parameter
+recovery tests (step 8). The real test graph covers the common
+single-dimension case only.
+
 ---
 
 ## 13. Risks and mitigations
@@ -1156,21 +1152,14 @@ groups them into `SliceGroup`s by `dimension_key()`. Each dimension's
 `regime_per_date` is derived from its instances' regime selections.
 No special multi-dimension wiring needed.
 
-### 14.3 Param-file evidence path and regime selection
+### ~~14.3 Param-file evidence path and regime selection~~ — RESOLVED
 
-§4.3 says regime selection applies to "both param file and snapshot
-DB paths", but `select_regime_rows()` operates on snapshot DB rows
-(keyed by `core_hash` and `retrieved_at`). Param file `values[]`
-entries have neither field — they are curated snapshots from one DSL
-era with no temporal overlap or hash ambiguity.
-
-**Likely resolution**: param-file evidence does not need regime
-selection. The param file contains one coherent set of observations
-per edge. Regime ambiguity arises only in the snapshot DB where
-multiple fetch eras coexist. §4.3 step 1 should be conditional:
-call `select_regime_rows()` only when binding from snapshot rows.
-
-Needs confirmation before step 3 implementation.
+Param files don't need regime selection. The FE fetches over the
+current query DSL before triggering a Bayes run — one coherent set
+of observations per edge, no hash ambiguity, no overlapping eras.
+Regime selection is a snapshot DB concern only (multiple fetch eras
+coexisting under different `core_hash` values). §4.3 step 1 applies
+only when binding from snapshot rows.
 
 ### 14.4 Non-MECE dimensions and regime kind
 
@@ -1251,11 +1240,23 @@ Dirichlet groups each constrain the parent with the same underlying
 evidence. This overcounts the parent's effective sample size by a
 factor of N.
 
-**Resolution**: downweight each group's Dirichlet concentration
-parameter by 1/N. If 2 independent groups each see 100 conversions,
-each contributes concentration × 0.5, giving the parent ESS=100
-(not 200). In PyMC: multiply the concentration prior by `1/N` per
-group.
+**Proposed approach**: downweight each group's Dirichlet
+concentration parameter by 1/N. If 2 independent groups each see
+100 conversions, each contributes concentration × 0.5, giving the
+parent ESS ≈ 100 (not 200). In PyMC: multiply the concentration
+prior by `1/N` per group.
+
+**This is approximate.** κ controls how tightly children cluster
+around the parent (Dirichlet concentration), not the likelihood
+contribution directly. Loosening κ reduces the parent's effective
+sample size indirectly — children can deviate more, so the parent
+is less constrained. But the relationship between κ and parent ESS
+is not linear, and the correction is exact only when dimensions
+have equal sample sizes and zero correlation. **Verify via parameter
+recovery test** (step 8): generate synthetic data with known parent
+rate and two independent MECE decompositions, compare parent
+posterior width with vs without the 1/N correction, confirm it
+matches the single-dimension case.
 
 This assumes independence between dimensions — which is forced
 when using semicolons (no cross-product data to estimate
@@ -1264,7 +1265,48 @@ the full cross-product is available and a single joint hierarchy
 could model the correlation, but 1/N is a valid conservative
 default.
 
-### 14.7 Doc 30 RB-003 as Phase C contract test
+### ~~14.7 Cross-instance coordination and `regime_per_date` type~~ — RESOLVED
+
+When multiple granularities have data for the same date, **most
+granular wins, coarser data is discarded for that date.** This is
+the same principle as doc 30's regime selection applied one level up.
+Not an architectural problem — a straightforward per-date
+suppression rule folded into §5A.3 Rule 2.
+
+The multi-level hierarchy (§5A.3 Rule 2) gives each granularity a
+natural home. The evidence binder collects per-instance results,
+then for each date keeps only the most granular set.
+
+**One real validation corner case**: if no complete MECE partition
+exists over `window()` or `cohort()` for any date in the training
+window, the parent `p_base` has no anchor — no direct observations
+and no children to inform it through the Dirichlet. This is almost
+certainly a pinned DSL misconfiguration (e.g., context slices
+specified but no values registered, or all slices below
+`min_n_slice`). The compiler should **fail with a diagnostic** rather
+than emit an unconstrained parent. Check: after evidence binding, if
+`p_base` has zero likelihood terms (no aggregate obs, no children
+with obs on any date), reject the edge with a clear error naming the
+missing data.
+
+### 14.8 `doc 30b` references in §14.12
+
+§14.12 references "Use Case B in doc 30b §6" and "Use Case C/D in
+doc 30b §7–8". If doc 30b exists, it should be added to the Related
+header. If it is a draft or does not yet exist, the references
+should be marked as forward-looking. Verify before implementation.
+
+### 14.9 §14.12 (FE commissioning) is a design spec, not an open issue
+
+§14.12 is ~100 lines of implementation-ready design: the two data
+classes, the 4-step commissioning flow, the schema implication. It
+reads as a settled design, not an open question. Consider promoting
+to a main-body section (e.g. §5B or §9A) since steps 3–4 of Phase C
+implementation depend on it. The one genuinely open part — the
+`model_vars` schema change (two options at the end) — could remain
+as an open issue.
+
+### 14.10 Doc 30 RB-003 as Phase C contract test
 
 Doc 30 §7.3.11 Gap 5 explicitly flags RB-003 (regime tag drives
 likelihood structure) as a Phase C test prerequisite. When Phase C
@@ -1272,7 +1314,7 @@ is built, a corresponding test must verify the evidence binder
 consumes `regime_per_date` and emits the correct likelihood
 structure. §11 step 8 should cross-reference RB-003.
 
-### 14.8 `context()` DSL fix and the absent-aggregate path
+### 14.11 `context()` DSL fix and the absent-aggregate path
 
 Doc 30 §10 resolves the `context()` syntax for "also fetch
 uncontexted aggregate". If this ships before Phase C, the common
@@ -1289,13 +1331,29 @@ either way, but especially if it is the default.
 Not blocking — either path works architecturally. But affects
 testing emphasis in step 8.
 
-### 14.9 FE per-slice commissioning contract
+### 14.12 FE per-slice commissioning contract
 
-Phase C requires the FE to produce per-slice analytic model_vars
-**before** triggering Bayes. This is not new work — the FE already
-explodes the pinned DSL for fetch planning and runs the topo pass on
-DSL-filtered data. The change is running it per exploded slice rather
-than once on the aggregate.
+Phase C requires the FE to produce a complete, per-slice "one-time
+picture" for the Bayes worker. This section specifies what that
+picture contains, why, and how the FE produces it.
+
+**Two classes of data the Bayes worker consumes:**
+
+1. **Snapshot DB rows** — the worker queries these itself via
+   `snapshot_subjects` and the DB connection. The snapshot DB is
+   context-aware natively: rows carry `slice_key` and the worker
+   filters by it. **No FE per-slice prep needed for this source.**
+
+2. **The "one-time picture"** — the graph snapshot and parameter
+   files as they exist at trigger time. This picture is
+   DSL-dependent because the FE topo pass (analytics) runs on
+   data filtered by the active query DSL. **This source must be
+   prepared per slice by the FE.**
+
+The graph topology (nodes, edges, connections) is invariant across
+slices — one graph is sent. What varies per slice is the analytic
+model_vars on the edges and the posterior/prior entries on the
+param files.
 
 **Why per-slice analytics are required:**
 
@@ -1303,72 +1361,90 @@ than once on the aggregate.
    Bayesian posterior against the analytic baseline. Each context
    slice gets its own Bayesian posterior (§5.2–5.3). The denominator
    must be the analytic model_vars for **that slice** — not the
-   aggregate. Using the aggregate analytic baseline for per-slice
-   ΔELPD would be a category error (comparing a context-specific
-   model against an aggregate baseline that includes all contexts).
+   aggregate. The analytic model_vars are DSL-dependent (the topo
+   pass runs on DSL-filtered data), so using the aggregate baseline
+   for a context-specific ΔELPD is a category error.
 
 2. **Prior resolution**: when no previous Bayesian posterior exists
    for a slice (cold start), the Bayes compiler falls back to
    analytic priors. These must be slice-specific — the p for
-   `context(channel:google)` differs from the aggregate p.
+   `context(channel:google)` differs from the aggregate p. The
+   param files already support per-slice posterior storage (doc 21
+   `posterior.slices`), but the analytic fallback values come from
+   the graph's model_vars.
 
 3. **Warm-start quality gating**: the quality gate for warm-start
    uses the previous posterior's rhat/ESS. For Phase C, this is
-   per-slice. The analytic fallback when the gate fails must also be
-   per-slice.
+   per-slice. The analytic fallback when the gate fails must also
+   be per-slice.
+
+**Why the worker cannot produce analytics itself:**
+
+The BE topo pass (`enhance_graph_latencies` in `stats_engine.py`)
+requires pre-filtered inputs: `param_lookup` (cohort data filtered
+by DSL dimensions), `edge_contexts` (onset from window slices,
+forecast cohorts), and `query_mode`. These are constructed in
+`fetchDataService.ts` and `beTopoPassService.ts` from the active
+DSL and param file values. The worker has no DSL context and no
+param file filtering logic — it receives the finished picture.
+There is one code path for analytics (the topo pass), and the FE
+drives it.
 
 **FE commissioning flow:**
 
-1. FE explodes the pinned DSL into per-slice DSLs. This already
+1. **Explode the pinned DSL** into per-slice DSLs. This already
    happens during fetch planning. The explosion produces:
    - The bare (uncontexted) parent: `window()` or `cohort()` —
      **always produced**, regardless of whether the pinned DSL
-     includes context clauses. Required for the Dirichlet hierarchy
-     anchor.
+     includes context clauses. This is mandatory: the Dirichlet
+     hierarchy (§5.2–5.3) needs the parent as its anchor. Without
+     a parent analytic baseline, LOO scoring has no denominator
+     for the aggregate model, and cold-start prior fallback has
+     no aggregate p to fall back to.
    - Each context slice: `window().context(channel:google)`,
      `window().context(channel:organic)`, etc.
 
-2. For each exploded slice DSL, FE filters param file values by that
-   slice's dimensions (same filtering `fetchDataService.ts` already
-   does during Stage 2) and runs the topo pass
-   (`enhance_graph_latencies`) on the filtered data. This produces
-   per-slice `analytic` model_vars: p, p_sd, onset, mu, sigma, t95,
-   completeness, blended_mean.
+2. **Run the topo pass per slice.** For each exploded slice DSL,
+   FE filters param file values by that slice's dimensions (same
+   filtering `fetchDataService.ts` already does during Stage 2)
+   and calls `enhance_graph_latencies` on the filtered data. This
+   produces per-slice analytic model_vars: p, p_sd, onset, mu,
+   sigma, t95, completeness, blended_mean. The FE already does
+   this once on the aggregate as part of every fetch cycle — the
+   change is doing it N+1 times (parent + N children).
 
-3. FE puts per-slice analytic model_vars on the graph edges. The
-   model_vars array on each edge grows from one `analytic` entry per
-   edge to one per (edge, context_key). The `analytic` entry could
-   carry a `slice_dsl` or `context_key` field to distinguish them,
-   or they could be stored in a separate per-slice structure.
+3. **Put per-slice analytic model_vars on the graph edges.** The
+   model_vars array on each edge grows from one `analytic` entry
+   per edge to one per (edge, context_key). See schema
+   implications below.
 
-4. FE builds the Bayes trigger payload as today: graph_snapshot
-   (now with per-slice model_vars), parameter_files, snapshot_subjects.
-   The Bayes worker reads the per-slice baselines from the graph
-   snapshot via `extract_analytic_baselines()` in `loo.py`.
+4. **Build the Bayes trigger payload** as today: graph_snapshot
+   (now with per-slice model_vars), parameter_files (with per-slice
+   `posterior.slices` for warm-start — doc 21), snapshot_subjects
+   (with per-slice hashes — doc 30). All three are slice-coherent
+   because the FE produced them from the same exploded DSL.
 
-**What this means for the Bayes worker:**
+**What the Bayes worker does with this:**
 
-The worker does not run the topo pass itself. It receives per-slice
-analytic baselines on the graph snapshot, alongside per-slice snapshot
-subjects and per-slice posterior priors on the param files. All three
-are slice-coherent because the FE produced them from the same
-exploded DSL.
+The worker receives one graph with per-slice analytic model_vars,
+param files with per-slice posteriors, and per-slice snapshot
+subjects. It queries the DB per slice hash (Use Case B in doc 30b
+§6 — no regime selection needed for per-slice reads). The
+aggregate/parent uses regime selection (Use Case C/D in doc 30b
+§7–8) across candidate hashes. The evidence binder builds per-slice
+observations (§4.3). The LOO scorer (`loo.py`) reads per-slice
+analytic baselines from the graph and computes per-slice ΔELPD.
 
-**Interaction with regime selection (doc 30):**
-
-Each exploded slice DSL maps to a known `core_hash`. The FE already
-computes these hashes during fetch planning. The snapshot_subjects
-sent to Bayes include these per-slice hashes. The worker queries the
-DB per hash (Use Case B in doc 30b §6 — no regime selection needed
-for per-slice reads). The aggregate/parent uses regime selection
-(Use Case C/D in doc 30b §7–8) across the candidate hashes.
+The worker does not run the topo pass. It does not filter param
+data. It does not know the DSL. It consumes the finished per-slice
+picture the FE prepared.
 
 **Cost:**
 
-Running the topo pass N+1 times (parent + N context slices) instead
-of once. `enhance_graph_latencies` is fast (< 1s per call), so even
-with 10 context slices the overhead is under 10s — negligible
-compared to MCMC time.
+Running the topo pass N+1 times instead of once.
+`enhance_graph_latencies` is fast (< 1s per call), so even with
+10 context slices the overhead is under 10s — negligible compared
+to MCMC time (30–120s).
 
 **Schema implication:**
 

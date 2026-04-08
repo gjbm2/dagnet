@@ -396,12 +396,48 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
     return `${a}\n${b}`;
   };
 
+  // Detect grouped stages (visitedAny) in dimension_values
+  const stageDimValues = result.dimension_values?.stage || {};
+  const groupedStageIds = new Set<string>();
+  const allGroupMembers: string[] = [];  // ordered, unique across all groups
+  for (const [stageId, meta] of Object.entries(stageDimValues)) {
+    if ((meta as any)?.is_group && (meta as any)?.members) {
+      groupedStageIds.add(stageId);
+      for (const m of (meta as any).members as string[]) {
+        if (!allGroupMembers.includes(m)) allGroupMembers.push(m);
+      }
+    }
+  }
+  const hasGroupedStages = groupedStageIds.size > 0;
+
+  // Helper: compute alpha for member sub-bar within a group
+  const memberAlpha = (memberIdx: number, memberCount: number): number => {
+    if (memberCount <= 1) return 0.85;
+    return 0.9 - (memberIdx * 0.5 / Math.max(1, memberCount - 1));
+  };
+
+  // Helper: get member label from dimension_values
+  const getMemberLabel = (stageId: string, memberId: string): string => {
+    const meta = stageDimValues[stageId] as any;
+    return meta?.member_labels?.[memberId] ?? memberId;
+  };
+
+  // Helper: extract member data for a grouped stage from result.data
+  const getMemberDataForStage = (scenarioId: string, stageId: string, memberId: string): any => {
+    return result.data.find(r =>
+      String(r.stage) === stageId &&
+      String(r.scenario_id) === scenarioId &&
+      String(r.stage_member) === memberId
+    ) || null;
+  };
+
   const series: any[] = [];
   for (const scenarioId of scenarioIds) {
     const baseSeriesName = getScenarioTitleWithBasis(result, scenarioId);
     const colour = result.dimension_values?.scenario_id?.[scenarioId]?.colour;
     const visibilityMode = result.dimension_values?.scenario_id?.[scenarioId]?.visibility_mode ?? 'f+e';
-    const shouldShowFEStack = !useStepChange && args.metric === 'cumulative_probability' && visibilityMode === 'f+e';
+    // Disable F+E stacking when grouped stages exist (member stacking takes precedence)
+    const shouldShowFEStack = !hasGroupedStages && !useStepChange && args.metric === 'cumulative_probability' && visibilityMode === 'f+e';
 
     const baseSeriesConfig = {
       type: 'bar',
@@ -453,7 +489,111 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
       continue;
     }
 
-    // Default: a single bar series per scenario.
+    // ── Grouped-stage path: base series + member series, all stacked ──
+    if (hasGroupedStages && !useStepChange) {
+      const points = extractFunnelSeriesPoints(result, { scenarioId }) || [];
+      const byStage = new Map(points.map(p => [p.stageId, p]));
+
+      // Base series: carries non-grouped stage values (grouped stages = 0)
+      series.push({
+        name: baseSeriesName,
+        ...baseSeriesConfig,
+        stack: scenarioId,
+        itemStyle: colour ? { color: colour } : undefined,
+        label: {
+          show: showValueLabels,
+          position: 'top',
+          formatter: (p: any) => {
+            const v = typeof p?.value === 'number' ? p.value : null;
+            // Only show label for non-grouped stages (grouped stages show label on top member)
+            if (p?.data?.__isGroupPlaceholder) return '';
+            return typeof v === 'number' && Number.isFinite(v) ? fmtPct(v) : '';
+          },
+          fontSize: 7,
+          color: echartsThemeColours().text,
+        },
+        data: stageIds.map(stageId => {
+          if (groupedStageIds.has(stageId)) {
+            // Placeholder: 0 value at grouped stages (member series carry the values)
+            return { value: 0, __isGroupPlaceholder: true, __raw: byStage.get(stageId) || null };
+          }
+          const pt = byStage.get(stageId);
+          const metricValue = args.metric === 'step_probability'
+            ? (pt?.stepProbability ?? null)
+            : (pt?.probability ?? null);
+          return { value: metricValue ?? 0, __raw: pt || null };
+        }),
+      });
+
+      // Member series: one per unique group member across all groups
+      for (let mIdx = 0; mIdx < allGroupMembers.length; mIdx++) {
+        const memberId = allGroupMembers[mIdx];
+        const alpha = memberAlpha(mIdx, allGroupMembers.length);
+        const isLastMember = mIdx === allGroupMembers.length - 1;
+
+        // Find which grouped stage(s) this member belongs to
+        const memberStageIds = new Set<string>();
+        for (const gStageId of groupedStageIds) {
+          const meta = stageDimValues[gStageId] as any;
+          if (meta?.members?.includes(memberId)) memberStageIds.add(gStageId);
+        }
+
+        // Resolve a display label for this member (from any group it belongs to)
+        let memberLabel = memberId;
+        for (const gStageId of memberStageIds) {
+          memberLabel = getMemberLabel(gStageId, memberId);
+          break;
+        }
+
+        series.push({
+          name: `${baseSeriesName} — ${memberLabel}`,
+          ...baseSeriesConfig,
+          stack: scenarioId,
+          itemStyle: colour ? { color: hexToRgba(colour, alpha) } : undefined,
+          label: {
+            show: isLastMember && showValueLabels,
+            position: 'top',
+            formatter: (p: any) => {
+              // Show total group probability on the topmost member
+              const groupTotal = p?.data?.__groupTotal;
+              return typeof groupTotal === 'number' && Number.isFinite(groupTotal) ? fmtPct(groupTotal) : '';
+            },
+            fontSize: 7,
+            color: echartsThemeColours().text,
+          },
+          data: stageIds.map(stageId => {
+            if (!memberStageIds.has(stageId)) {
+              // Not a grouped stage for this member: contribute 0
+              return { value: 0, __memberPlaceholder: true };
+            }
+            const memberRow = getMemberDataForStage(scenarioId, stageId, memberId);
+            const memberProb = typeof memberRow?.probability === 'number' ? memberRow.probability : 0;
+
+            // Compute group total for label (sum of all members for this stage+scenario)
+            const meta = stageDimValues[stageId] as any;
+            let groupTotal = 0;
+            if (meta?.members) {
+              for (const m of meta.members) {
+                const row = getMemberDataForStage(scenarioId, stageId, m);
+                groupTotal += typeof row?.probability === 'number' ? row.probability : 0;
+              }
+            }
+
+            return {
+              value: memberProb,
+              __raw: memberRow,
+              __memberLabel: memberLabel,
+              __memberId: memberId,
+              __groupTotal: groupTotal,
+              __component: 'member',
+            };
+          }),
+        });
+      }
+      continue;
+    }
+
+    // Default: a single bar series per scenario (no groups, no F+E stacking).
     series.push({
       name: baseSeriesName,
       ...baseSeriesConfig,
@@ -494,6 +634,14 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
       // If we render FE stacked sub-series, also attach the same DSL to those legend entries.
       dslByLegendName.set(`${ln} — e`, dsl);
       dslByLegendName.set(`${ln} — f−e`, dsl);
+      // If we render member sub-series, also attach the same DSL.
+      for (const memberId of allGroupMembers) {
+        for (const gStageId of groupedStageIds) {
+          const meta = stageDimValues[gStageId] as any;
+          const memberLabel = meta?.member_labels?.[memberId] ?? memberId;
+          dslByLegendName.set(`${ln} — ${memberLabel}`, dsl);
+        }
+      }
     }
   }
 
@@ -588,6 +736,27 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
           // In F+E stacked mode we get two series per scenario; only render the summary once
           // (on the upper segment) so the tooltip stays readable.
           if (fe && component === 'e') continue;
+
+          // Skip zero-value placeholder entries from grouped-stage member series
+          if (p?.data?.__memberPlaceholder || p?.data?.__isGroupPlaceholder) continue;
+
+          // Member component from grouped stage: show member-level detail
+          if (component === 'member') {
+            const memberLabel = p?.data?.__memberLabel ?? '';
+            const memberProb = typeof p?.value === 'number' ? p.value : null;
+            const groupTotal = typeof p?.data?.__groupTotal === 'number' ? p.data.__groupTotal : null;
+            lines.push(`<div style="margin-top:2px; padding-left:8px;">`);
+            lines.push(`<span style="opacity:0.75">${memberLabel}:</span> ${fmtPct(memberProb)}`);
+            if (raw?.n !== null && raw?.n !== undefined) lines.push(` <span style="opacity:0.6">(n=${fmtNum(raw.n)})</span>`);
+            lines.push(`</div>`);
+            // Show group total on last member
+            if (groupTotal !== null && p?.data?.__memberId === allGroupMembers[allGroupMembers.length - 1]) {
+              lines.push(`<div style="margin-top:2px; padding-left:8px; font-weight:600;">`);
+              lines.push(`<span style="opacity:0.75">Total:</span> ${fmtPct(groupTotal)}`);
+              lines.push(`</div>`);
+            }
+            continue;
+          }
 
           const metricVal =
             useStepChange && metricInfo?.kind === 'step_change'

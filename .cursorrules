@@ -393,7 +393,7 @@ Identify your task type below, then read the listed docs **before writing any co
 - AUTOMATION_PIPELINE.md **(full)** — daily fetch, retrieve-all automation, run logging
 - JOB_SCHEDULER.md **(skim)** — unified system for recurring work
 - STALENESS_AND_AUTO_UPDATE.md **(skim)** — nudges, auto-update policy
-- `docs/current/project-bayes/28-bayes-run-reconnect-design.md` **(skim if touching Bayes automation)** — 3-phase pipeline (Phase 0 patch apply, Phase 1 fetch+commission, Phase 2 drain), `runBayes` flag, reconnect mechanism
+- `docs/current/project-bayes/archive/28-bayes-run-reconnect-design.md` **(skim if touching Bayes automation)** — 3-phase pipeline (Phase 0 patch apply, Phase 1 fetch+commission, Phase 2 drain), `runBayes` flag, reconnect mechanism. Essential knowledge also in `PYTHON_BACKEND_ARCHITECTURE.md` §Automation.
 
 **Modifying share links, live share, or bundles**:
 - SHARE_AND_LIVE_SHARE.md **(full)** — static/live shares, boot/hydration/sync

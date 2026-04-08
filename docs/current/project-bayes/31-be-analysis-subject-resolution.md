@@ -113,18 +113,18 @@ FE sends per scenario:
   ]
 ```
 
-**After**:
+**After** (corrected 8-Apr-26):
 
 ```
 FE sends:
   analysis_type: 'cohort_maturity'
-  query_dsl: 'from(registration).to(purchase).window(-90d:)'
-  mece_dimensions: ['channel', ...]   // doc 30 — for aggregation safety
+  analytics_dsl: 'from(registration).to(purchase)'  // TOP LEVEL — subject, constant
+  mece_dimensions: ['channel', ...]                   // doc 30 — for aggregation safety
   scenarios: [
     {
       graph: { ... }
-      analytics_dsl: 'from(registration).to(purchase)'
-      candidate_regimes_by_edge: {    // doc 30 — for ALL edges in graph
+      effective_query_dsl: 'window(-90d:)'            // PER SCENARIO — temporal, varies
+      candidate_regimes_by_edge: {                    // PER SCENARIO — filtered to context
         'edge-uuid-1': [CandidateRegime, ...],
         'edge-uuid-2': [CandidateRegime, ...],
         ...
@@ -132,6 +132,17 @@ FE sends:
     }
   ]
 ```
+
+Key corrections from initial design:
+- `analytics_dsl` is top-level (constant across scenarios), not per-scenario.
+- `effective_query_dsl` (temporal) is per-scenario and mandatory.
+- `candidate_regimes_by_edge` is per-scenario because different contexts
+  produce different hash key-sets (doc 30 §4.1). The FE filters the full
+  inventory per scenario based on its `effective_query_dsl` context dimensions.
+- No top-level `query_dsl` — it was meaningless when scenarios have different
+  temporals. Deprecated, accepted for backward compat only.
+- See `docs/current/project-y/8-Apr-26-analysis-contract-fix.md` for the
+  full implementation plan and adversarial review.
 
 No `snapshot_subjects`. The BE resolves the DSL against each
 scenario's graph, identifies in-scope edges, looks up their

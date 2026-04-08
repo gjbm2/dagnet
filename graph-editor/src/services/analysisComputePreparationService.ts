@@ -122,11 +122,14 @@ export interface PreparedAnalysisScenario {
 export interface PreparedAnalysisComputeReady {
   status: 'ready';
   analysisType: string;
-  queryDsl: string;
+  /** Analysis subject DSL (from/to/visited). Constant across scenarios. */
+  analyticsDsl: string;
   scenarios: PreparedAnalysisScenario[];
   signature: string;
   /** Compute-affecting display settings forwarded to the backend. */
   displaySettings?: Record<string, unknown>;
+  /** MECE dimension names for regime selection aggregation safety (doc 30). */
+  meceDimensions?: string[];
 }
 
 export interface PreparedAnalysisComputeBlocked {
@@ -260,13 +263,13 @@ function snapshotSubjectsSignature(subjects?: SnapshotSubjectPayload[]): string 
 
 export function createPreparedSignature(
   analysisType: string,
-  queryDsl: string,
+  analyticsDsl: string,
   scenarios: PreparedAnalysisScenario[],
   displaySettings?: Record<string, unknown>,
 ): string {
   const parts = [
     analysisType,
-    queryDsl,
+    analyticsDsl,
     ...scenarios.map((scenario) => [
       scenario.scenario_id,
       scenario.visibility_mode,
@@ -356,17 +359,11 @@ export async function prepareAnalysisComputeInputs(
     return logBlockedResult(params, { status: 'blocked', reason: 'analysis_type_missing' });
   }
 
+  // analytics_dsl = the subject (from/to/visited). Constant across scenarios.
+  // currentDSL = the graph's temporal clause. Used as base for scenario DSL composition.
+  // These are SEPARATE concerns — never concatenated.
   const analyticsDsl = params.analyticsDsl || '';
-  // queryDsl is the temporal/context clause (window, cohort, context, asat).
-  // analytics_dsl (from/to) is a separate concept — see DSL_SYNTAX_REFERENCE.md.
-  // The BE receives analytics_dsl per-scenario and query_dsl as top-level temporal.
-  // Non-snapshot analysis types (bridge_view, etc.) receive query_dsl via the
-  // standard runner which parses it for from/to/window — so we compose both parts
-  // for the top-level queryDsl to ensure the standard runner has the full DSL.
   const currentDSL = params.currentDSL || '';
-  const queryDsl = analyticsDsl && currentDSL && !analyticsDsl.includes(currentDSL)
-    ? `${analyticsDsl}.${currentDSL}`
-    : analyticsDsl || currentDSL;
 
   let scenarios: PreparedAnalysisScenario[] = [];
 
@@ -482,6 +479,18 @@ export async function prepareAnalysisComputeInputs(
       return logBlockedResult(params, { status: 'blocked', reason: 'workspace_missing' });
     }
 
+    // Build full candidate regime inventory once (graph-level, not per-scenario).
+    let fullRegimeInventory: Record<string, Array<{ core_hash: string; equivalent_hashes: string[]; context_keys?: string[] }>> = {};
+    try {
+      const { buildCandidateRegimesByEdge } = await import('./candidateRegimeService');
+      fullRegimeInventory = await buildCandidateRegimesByEdge(
+        scenarios[0]?.graph as any,
+        params.workspace!,
+      );
+    } catch {
+      // Non-blocking: regime selection degrades to pass-through on the BE
+    }
+
     for (let index = 0; index < scenarios.length; index += 1) {
       const scenario = scenarios[index];
       const plannerStatus = await getSnapshotPlannerInputsStatus({
@@ -493,25 +502,27 @@ export async function prepareAnalysisComputeInputs(
         return logBlockedResult(params, createBlockedPlannerState(plannerStatus));
       }
 
-      // Doc 31: BE resolves subjects from analytics_dsl + candidate_regimes.
-      // No snapshot_subjects sent — the BE owns subject resolution.
+      // Filter the full inventory to this scenario's context dimensions (doc 30 §4.1).
+      // If filtering produces empty results for all edges, fall back to the full
+      // inventory — the BE's regime selection will pick the best available match.
       let candidateRegimesByEdge: Record<string, Array<{ core_hash: string; equivalent_hashes: string[] }>> | undefined;
-      try {
-        const { buildCandidateRegimesByEdge } = await import('./candidateRegimeService');
-        const regimesByEdge = await buildCandidateRegimesByEdge(
-          scenario.graph as any,
-          params.workspace!,
-        );
-        if (Object.keys(regimesByEdge).length > 0) {
-          candidateRegimesByEdge = regimesByEdge;
+      if (Object.keys(fullRegimeInventory).length > 0) {
+        try {
+          const { filterCandidatesByContext } = await import('./candidateRegimeService');
+          const filtered = await filterCandidatesByContext(
+            fullRegimeInventory,
+            scenario.effective_query_dsl,
+          );
+          candidateRegimesByEdge = Object.keys(filtered).length > 0
+            ? filtered
+            : fullRegimeInventory;
+        } catch {
+          candidateRegimesByEdge = fullRegimeInventory;
         }
-      } catch {
-        // Non-blocking: regime selection degrades to pass-through on the BE
       }
 
       scenarios[index] = {
         ...scenario,
-        analytics_dsl: analyticsDsl || undefined,
         ...(candidateRegimesByEdge ? { candidate_regimes_by_edge: candidateRegimesByEdge } : {}),
       };
 
@@ -522,6 +533,20 @@ export async function prepareAnalysisComputeInputs(
         analyticsDsl,
         candidateRegimeEdgeCount: candidateRegimesByEdge ? Object.keys(candidateRegimesByEdge).length : 0,
       });
+    }
+  }
+
+  // Doc 30: compute MECE dimensions from the base graph's context registry.
+  let meceDimensions: string[] | undefined;
+  if (params.needsSnapshots && params.workspace) {
+    try {
+      const { computeMeceDimensions } = await import('./candidateRegimeService');
+      const baseGraph = scenarios[0]?.graph;
+      if (baseGraph) {
+        meceDimensions = await computeMeceDimensions(baseGraph as any, params.workspace);
+      }
+    } catch {
+      // Non-blocking
     }
   }
 
@@ -542,7 +567,7 @@ export async function prepareAnalysisComputeInputs(
 
       let maxSweep = 0;
       // Collect all DSL strings: base + each scenario's effective override
-      const dslCandidates = [queryDsl, ...scenarios.map(sc => sc.effective_query_dsl)].filter(Boolean);
+      const dslCandidates = [currentDSL, ...scenarios.map(sc => sc.effective_query_dsl)].filter(Boolean);
       for (const dsl of dslCandidates) {
         const parsed = parseConstraints(dsl);
         const startStr = parsed?.window?.start || parsed?.cohort?.start;
@@ -563,10 +588,11 @@ export async function prepareAnalysisComputeInputs(
   const ready: PreparedAnalysisComputeReady = {
     status: 'ready',
     analysisType,
-    queryDsl,
+    analyticsDsl,
     scenarios,
-    signature: createPreparedSignature(analysisType, queryDsl, scenarios, displaySettings),
+    signature: createPreparedSignature(analysisType, analyticsDsl, scenarios, displaySettings),
     displaySettings,
+    meceDimensions,
   };
 
   logChartReadinessTrace('AnalysisPrepare:ready', {
@@ -601,7 +627,7 @@ export async function runPreparedAnalysis(
     analysisType: prepared.analysisType,
     signature: prepared.signature,
     scenarioCount: prepared.scenarios.length,
-    queryDsl: prepared.queryDsl,
+    analyticsDsl: prepared.analyticsDsl,
     scenarios: prepared.scenarios.map((scenario) => ({
       scenarioId: scenario.scenario_id,
       visibilityMode: scenario.visibility_mode,
@@ -617,7 +643,7 @@ export async function runPreparedAnalysis(
       colour: s.colour,
       graph: s.graph as any,
     }));
-    const localResponse = computeLocalResultMultiScenario(localScenarios, prepared.analysisType, prepared.queryDsl);
+    const localResponse = computeLocalResultMultiScenario(localScenarios, prepared.analysisType, prepared.analyticsDsl);
 
     // For info-type analyses (node_info, edge_info), the FE result is authoritative
     // and complete. The backend computes a different analysis shape (funnel data)
@@ -653,12 +679,10 @@ async function runBackendAnalysis(
         graph: scenario.graph,
         colour: scenario.colour,
         visibility_mode: scenario.visibility_mode,
-        snapshot_subjects: scenario.snapshot_subjects,
-        analytics_dsl: scenario.analytics_dsl,
         candidate_regimes_by_edge: scenario.candidate_regimes_by_edge,
         effective_query_dsl: scenario.effective_query_dsl,
       })),
-      prepared.queryDsl || undefined,
+      prepared.analyticsDsl,
       prepared.analysisType,
       prepared.displaySettings,
       prepared.meceDimensions,
@@ -668,16 +692,15 @@ async function runBackendAnalysis(
   const scenario = prepared.scenarios[0];
   return graphComputeClient.analyzeSelection(
     scenario.graph,
-    prepared.queryDsl || undefined,
+    prepared.analyticsDsl,
+    scenario.effective_query_dsl,
     scenario.scenario_id,
     scenario.name,
     scenario.colour,
     prepared.analysisType,
     scenario.visibility_mode,
-    scenario.snapshot_subjects,
+    scenario.candidate_regimes_by_edge,
     prepared.displaySettings,
     prepared.meceDimensions,
-    scenario.analytics_dsl,
-    scenario.candidate_regimes_by_edge,
   );
 }

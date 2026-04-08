@@ -1083,7 +1083,7 @@ export class GraphComputeClient {
       // immediate children, derive the missing branch as the complement so split-by-child remains
       // intelligible in time-series mode.
       try {
-        const query = request.query_dsl || '';
+        const query = request.analytics_dsl || request.query_dsl || '';
         const match = /visited\(([^)]+)\)/.exec(query);
         const selectedParentId = match?.[1] ? String(match[1]).trim() : '';
         const firstGraph: any = request.scenarios?.[0]?.graph || {};
@@ -1402,27 +1402,25 @@ export class GraphComputeClient {
    */
   async analyzeSelection(
     graph: any,
-    queryDsl?: string,
+    analyticsDsl?: string,
+    effectiveQueryDsl?: string,
     scenarioId: string = 'base',
     scenarioName: string = 'Current',
     scenarioColour: string = '#3b82f6',
     analysisType?: string,
     visibilityMode: 'f+e' | 'f' | 'e' = 'f+e',
-    snapshotSubjects?: SnapshotSubjectPayload[],
+    candidateRegimesByEdge?: Record<string, Array<{ core_hash: string; equivalent_hashes: string[] }>>,
     displaySettings?: Record<string, unknown>,
     meceDimensions?: string[],
-    analyticsDsl?: string,
-    candidateRegimesByEdge?: Record<string, Array<{ core_hash: string; equivalent_hashes: string[] }>>,
   ): Promise<AnalysisResponse> {
     const bypassCache = this.shouldBypassCache();
-    const snapshotSig = snapshotSubjectsSignature(snapshotSubjects);
     const testFixture = this.getUrlSearchParams().get('test_fixture');
 
     const displaySig = displaySettings ? JSON.stringify(displaySettings) : '';
     const cacheKey =
-      this.generateCacheKey(graph, queryDsl, analysisType, [scenarioId])
+      this.generateCacheKey(graph, analyticsDsl, analysisType, [scenarioId])
+      + `|eqdsl:${this.hashString(effectiveQueryDsl || '')}`
       + `|vis:${visibilityMode}`
-      + (snapshotSig ? `|snap:${this.hashString(snapshotSig)}` : '')
       + (analysisType === 'cohort_maturity' ? `|cmv:${this.COHORT_MATURITY_CACHE_VERSION}` : '')
       + (displaySig ? `|ds:${this.hashString(displaySig)}` : '')
       + (testFixture ? `|tf:${testFixture}:${this.getUrlSearchParams().toString()}` : '');
@@ -1461,8 +1459,7 @@ export class GraphComputeClient {
       colour: scenarioColour,
       visibility_mode: visibilityMode,
       graph,
-      ...(snapshotSubjects?.length ? { snapshot_subjects: snapshotSubjects } : {}),
-      ...(analyticsDsl ? { analytics_dsl: analyticsDsl } : {}),
+      ...(effectiveQueryDsl ? { effective_query_dsl: effectiveQueryDsl } : {}),
       ...(candidateRegimesByEdge ? { candidate_regimes_by_edge: candidateRegimesByEdge } : {}),
     };
 
@@ -1478,8 +1475,9 @@ export class GraphComputeClient {
 
     const request: AnalysisRequest = {
       scenarios: [scenarioEntry],
-      query_dsl: queryDsl,
+      analytics_dsl: analyticsDsl,
       analysis_type: analysisType,
+      ...(meceDimensions?.length ? { mece_dimensions: meceDimensions } : {}),
       ...(displaySettings ? { display_settings: displaySettings } : {}),
       ...(testFixture ? { test_fixture: testFixture, ...tfOverrides } : {}),
     };
@@ -1592,12 +1590,11 @@ export class GraphComputeClient {
   async analyzeMultipleScenarios(
     scenarios: Array<{
       scenario_id: string; name: string; graph: any; colour?: string;
-      visibility_mode?: 'f+e' | 'f' | 'e'; snapshot_subjects?: SnapshotSubjectPayload[];
-      analytics_dsl?: string;
+      visibility_mode?: 'f+e' | 'f' | 'e';
       candidate_regimes_by_edge?: Record<string, Array<{ core_hash: string; equivalent_hashes: string[] }>>;
       effective_query_dsl?: string;
     }>,
-    queryDsl?: string,
+    analyticsDsl?: string,
     analysisType?: string,
     displaySettings?: Record<string, unknown>,
     meceDimensions?: string[],
@@ -1608,25 +1605,17 @@ export class GraphComputeClient {
     // This ensures cache invalidates when any scenario's data changes
     const scenarioIds = scenarios.map(s => s.scenario_id);
     const visibilityModes = scenarios.map(s => `${s.scenario_id}:${s.visibility_mode || 'f+e'}`).join(',');
-    const snapshotSig = scenarios
-      .map(s => `${s.scenario_id}:${snapshotSubjectsSignature(s.snapshot_subjects)}`)
-      .filter(Boolean)
-      .join('||');
-    
-    // CRITICAL:
-    // Cache key must incorporate ALL scenario graphs (not just scenarios[0]),
-    // otherwise DSL/window changes that only affect non-first scenarios can
-    // incorrectly produce cache hits and prevent chart recomputation.
+
+    // Cache key incorporates ALL scenario graphs + per-scenario effective DSL
     const scenarioGraphKey = scenarios
-      .map(s => `${s.scenario_id}:${this.hashString(this.graphSignature(s.graph))}`)
+      .map(s => `${s.scenario_id}:${this.hashString(this.graphSignature(s.graph))}:${this.hashString(s.effective_query_dsl || '')}`)
       .join(',');
 
     const multiTestFixture = this.getUrlSearchParams().get('test_fixture');
     const multiDisplaySig = displaySettings ? JSON.stringify(displaySettings) : '';
     const cacheKey =
-      `multi|graphs:${scenarioGraphKey}|dsl:${queryDsl || ''}|type:${analysisType || ''}|scenarios:${scenarioIds.join(',')}`
+      `multi|graphs:${scenarioGraphKey}|adsl:${analyticsDsl || ''}|type:${analysisType || ''}|scenarios:${scenarioIds.join(',')}`
       + `|vis:${visibilityModes}`
-      + (snapshotSig ? `|snap:${this.hashString(snapshotSig)}` : '')
       + (analysisType === 'cohort_maturity' ? `|cmv:${this.COHORT_MATURITY_CACHE_VERSION}` : '')
       + (multiDisplaySig ? `|ds:${this.hashString(multiDisplaySig)}` : '')
       + (multiTestFixture ? `|tf:${multiTestFixture}:${this.getUrlSearchParams().toString()}` : '');
@@ -1680,13 +1669,12 @@ export class GraphComputeClient {
         colour: s.colour,
         visibility_mode: s.visibility_mode || 'f+e',
         graph: s.graph,
-        ...(s.snapshot_subjects?.length ? { snapshot_subjects: s.snapshot_subjects } : {}),
-        ...(s.analytics_dsl ? { analytics_dsl: s.analytics_dsl } : {}),
         ...(s.candidate_regimes_by_edge ? { candidate_regimes_by_edge: s.candidate_regimes_by_edge } : {}),
         ...(s.effective_query_dsl ? { effective_query_dsl: s.effective_query_dsl } : {}),
       })),
-      query_dsl: queryDsl,
+      analytics_dsl: analyticsDsl,
       analysis_type: analysisType,
+      ...(meceDimensions?.length ? { mece_dimensions: meceDimensions } : {}),
       ...(displaySettings ? { display_settings: displaySettings } : {}),
       ...(multiTestFixture ? { test_fixture: multiTestFixture, ...multiTfOverrides } : {}),
     };
@@ -1928,8 +1916,13 @@ export interface ScenarioData {
 
 export interface AnalysisRequest {
   scenarios: ScenarioData[];
+  /** Analysis subject DSL (from/to/visited). Constant across scenarios. */
+  analytics_dsl?: string;
+  /** DEPRECATED — use analytics_dsl. Kept for backward compat. */
   query_dsl?: string;
   analysis_type?: string;
+  /** MECE dimension names for regime selection aggregation safety (doc 30). */
+  mece_dimensions?: string[];
   /** Forecasting settings from buildForecastingSettings(). Sent for snapshot analyses. */
   forecasting_settings?: import('../constants/latency').ForecastingSettings;
   /** Compute-affecting display settings (e.g. bayes_band_level). */
@@ -1998,6 +1991,12 @@ export interface DimensionValueMeta {
   order?: number;
   visibility_mode?: 'f+e' | 'f' | 'e';
   probability_label?: string;
+  /** True when this stage represents a visitedAny group (disjoint branch alternatives). */
+  is_group?: boolean;
+  /** Member node IDs for grouped stages. */
+  members?: string[];
+  /** Map of member ID → human-readable label for grouped stages. */
+  member_labels?: Record<string, string>;
 }
 
 export interface AnalysisResult {
@@ -2013,6 +2012,8 @@ export interface AnalysisResult {
 export interface AnalysisResponse {
   success: boolean;
   result?: AnalysisResult;
+  analytics_dsl?: string;
+  /** DEPRECATED — use analytics_dsl. Kept for backward compat. */
   query_dsl?: string;
   error?: {
     error_type: string;

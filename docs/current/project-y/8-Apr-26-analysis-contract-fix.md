@@ -1,9 +1,8 @@
 # Analysis Request Contract Fix
 
-**Status**: Plan — not yet implemented
+**Status**: Implemented — Phases 0-6 complete, all gates green
 **Date**: 8-Apr-26
 **Depends on**: Doc 30 (regime selection), Doc 31 (BE subject resolution)
-**Blocks**: All analysis types — bridge_view currently returns zeros, surprise_gauge unreachable
 
 ---
 
@@ -383,7 +382,15 @@ These files read/write `analytics_dsl` or `query_dsl` but only on content items,
 
 ---
 
-## 7. Documentation updates
+## 7. Known issues (out of scope — separate fixes)
+
+- **Time-series x-axis extent across scenarios**: daily_conversions (and other time-series chart types) should compute x-axis min/max as the union of ALL scenarios' date ranges, not per-scenario. Currently if scenario A has March data and scenario B has April data, the x-axis may only show one range, making the other scenario invisible. Fix is in the ECharts builder, not the request contract.
+
+- **CohortMaturity x-axis overextension**: fan bands and model curves rendering beyond chart extent. Partially addressed earlier in this session (clipPath additions to `cohortComparisonBuilders.ts` and `tau_extent` resolution fix in `analysisComputePreparationService.ts`).
+
+---
+
+## 8. Documentation updates
 
 - `docs/current/codebase/DSL_SYNTAX_REFERENCE.md` §"DSL Roles": update lines 257-260 to reflect new wire format (no top-level `query_dsl`, `analytics_dsl` at top level, `effective_query_dsl` per scenario)
 - `docs/current/project-bayes/31-be-analysis-subject-resolution.md` §2.1: update "After" contract

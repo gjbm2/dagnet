@@ -252,74 +252,270 @@ This is the core new logic. Given frames from the first edge and frames from the
 
 **Edge case — shared `a` field**: In many data sources, `a` (anchor population) is the same across all edges for a given cohort, and equals `x` on the entry edge. If `from_node = anchor_node` (common case), we can use `a` from any edge as the denominator, which is simpler than extracting `x` from the first edge specifically. The implementation should prefer `a` when from-node is the anchor, falling back to first-edge `x` otherwise.
 
-#### Layer 4: Backend — path-level forecast params
+#### Architectural decomposition: span kernel vs upstream denominator
 
-`compute_cohort_maturity_rows` needs Bayes params for the path-level forecast. Currently it takes `edge_params` for a single edge.
+**REFRAMED (8-Apr-26)**: The multi-hop problem contains two
+mathematically distinct sub-problems. The original design treated them
+as one coupled rewrite. They are not and must be separated.
 
-For multi-hop, compose path-level params:
+**Problem 1 — the x→y span kernel** (Phase A): Given arrivals at x,
+what is the probability of reaching y by age τ? This is the conditional
+progression from x to y, hop by hop, using per-edge posteriors for each
+hop in the queried span. This is a numerator problem.
 
-- **path_p**: Product of per-edge p values along the path: `p_path = Π pᵢ`. This is exact under conditional independence (each edge's conversion is independent given arrival at its from-node).
-- **path CDF**: The path-level latency CDF is the convolution of per-edge shifted-lognormal CDFs. **Approximation for this phase**: use the `path_mu` / `path_sigma` / `path_onset_delta_days` already stored on the last edge's posterior (these are computed by the Bayes engine for the anchor→target path). When from-node = anchor, these are directly usable. When from-node ≠ anchor, they need adjustment (deconvolution of the prefix path) — defer this to the full DAG propagation phase.
-- **Uncertainty**: Use the last edge's path-level posterior SDs (`bayes_path_mu_sd`, `bayes_path_sigma_sd`, etc.) as the path uncertainty estimate. This underestimates true path uncertainty (ignores upstream edge uncertainty) but is the best available without the full covariance structure.
+**Problem 2 — the upstream denominator** (Phase B): How does
+anchor-cohort mass reach x? This is the `reach(x)` ×
+`CDF_upstream(τ)` computation currently in `compute_cohort_maturity_rows`
+(lines 818–823 of `cohort_forecast.py`). This is a denominator problem.
 
-**New function**: `compose_path_forecast_params(graph, path_edge_ids, is_window) → Dict[str, float]`. Returns the same key structure as `read_edge_cohort_params` but with path-level values.
+**One-sentence summary**: Phase A fixes the multi-hop x→y numerator by
+doing the hop-by-hop convolution correctly while keeping the existing
+upstream x estimate unchanged; Phase B, if needed, replaces that
+upstream x estimate with a proper anchor-to-x propagation solve.
+
+**Why this split is correct**:
+- It isolates the real numerator problem — the x→y span logic is what
+  doesn't exist today.
+- It avoids turning one fix into a full graph-propagation rewrite.
+- It works cleanly in window() mode (x is flat) and improves cohort()
+  mode immediately (better y forecast, same x forecast).
+- It gives a stable seam: later work can swap in a better x provider
+  without rewriting the x→y logic again.
+
+**Architectural contract**: The row builder should be restructured to
+consume x as an **input** and apply the span kernel to resolve y:
+
+```
+Input A:  current estimate of arrivals into x  (unchanged in Phase A)
+Input B:  conditional x→…→y multi-hop kernel   (new in Phase A)
+Output:   forecast y
+
+Y_y(s,τ) = convolution of arrivals into x with the x→…→y progression kernel
+```
+
+The row builder must stop inventing or re-deriving x internally for
+the multi-hop case. It should receive x and apply the kernel.
+
+#### Layer 4: Backend — x→y span kernel (Phase A)
+
+This is the core new logic. For each hop in the queried span x→…→y,
+compose the per-edge conditional progression into a single span-level
+kernel: "given arrival at x at time t, what is the probability of
+being at y by age τ?"
+
+**For a single hop** (x→y is one edge): The kernel is the existing
+edge-level `p × CDF(τ)` — no change from current `cohort_maturity`.
+
+**For multiple hops** (x→B→…→y): The kernel is the hop-by-hop
+convolution of per-edge `pᵢ × CDFᵢ(τ)` kernels along the chain.
+
+**Scope restriction — Phase A supports linear chains only; branching
+deferred to Phase B**: For x→B→D plus x→C→D, `graph_select.py` returns
+the union of edges across all valid paths (lines 297–309). Multiplying
+p across the union is not a path probability. If `from(x).to(y)`
+resolves to multiple routes, Phase A should either (a) refuse, or
+(b) pick the single dominant route by highest cumulative p.
+
+**Branching is a hard requirement** — it must be supported eventually.
+The correct `p_path` for branching topologies is already available from
+`calculate_path_probability(x, y)` (DFS with memoisation in
+`path_runner.py`). The path CDF for branching is a weighted mixture of
+per-route CDFs. Phase B addresses this along with the upstream
+denominator work.
+
+The evidence side (Layer 3) is **already correct for branching** —
+fan-in numerator summation works for all topologies.
+
+**New function**: `compose_span_kernel(graph, span_edge_ids,
+is_window) → SpanKernel`. The `SpanKernel` encapsulates the x→y
+conditional progression and provides:
+
+- `span_p`: conditional probability of reaching y given arrival at x.
+  For a linear chain: `Π pᵢ`. Uses per-edge posteriors.
+- `span_cdf(τ)`: conditional CDF — probability of reaching y by age τ
+  given arrival at x. For Phase A (linear chain): use the last edge's
+  `path_mu`/`path_sigma`/`path_onset` when from-node = anchor (these
+  are already composed by the Bayes engine). When from-node ≠ anchor,
+  this needs adjustment (deconvolution of the prefix) — flag as a
+  known approximation.
+- `span_uncertainty`: posterior SDs for MC fan sampling. Use last
+  edge's path-level SDs (`bayes_path_mu_sd`, `bayes_path_sigma_sd`,
+  etc.). Underestimates true span uncertainty.
+- `alpha_0`, `beta_0`: Bayesian prior for per-Cohort rate updating
+  in the posterior predictive. From last edge's
+  `posterior_path_alpha`/`posterior_path_beta`.
+
+The kernel must provide all the fields that `compute_cohort_maturity_rows`
+currently reads from `edge_params` (lines 390–418 of `cohort_forecast.py`),
+matching the full `_read_edge_model_params` shape from `api_handlers.py`
+(lines 760–880). See appendix for the full key set.
 
 **Known approximations** (documented, not hidden):
-1. Per-edge p values are assumed independent (reasonable for most funnels)
-2. Path CDF ≈ last edge's `path_mu`/`path_sigma` (correct only when from-node = anchor)
-3. Path uncertainty ≈ last edge's path posterior SDs (underestimates)
+1. Linear chains only — branching not supported in Phase A
+2. Span CDF ≈ last edge's path params (correct only when from-node = anchor)
+3. Span uncertainty ≈ last edge's SDs (underestimate)
 
-The full DAG propagation (Phase 2 below) replaces these with correct values.
+#### Layer 5: Backend — row builder restructuring
 
-#### Layer 5: Backend — compute_cohort_maturity_rows adaptation
+The row builder (`compute_cohort_maturity_rows`) currently does three
+things internally:
 
-If `compose_path_maturity_frames` produces frames in the same schema as `derive_cohort_maturity` (with `x` = path denominator and `y` = path numerator), then `compute_cohort_maturity_rows` may need **no changes at all** — it already reads `x` and `y` from frames. The `x` in composed frames represents arrivals at A rather than arrivals at the last edge's from-node, but the function doesn't care — it sums and divides.
+1. Resolves `edge_params` → edge-level or path-level mu/sigma/p/SDs
+2. Computes upstream x forecast: `reach(from_node) × CDF_upstream(τ)`
+3. Projects y from x using the edge kernel
 
-The only necessary change: pass the composed `path_params` instead of single-edge `edge_params` for the forecast/fan computation.
+For multi-hop, the row builder must be restructured to separate these
+concerns:
+
+**Phase A change**: accept the span kernel (Layer 4) as an input and
+use it for the y projection (item 3). The upstream x forecast (item 2)
+**stays unchanged** — it continues to use the existing
+`reach_at_from_node × upstream_path_cdf_arr` logic from the target
+edge's perspective.
+
+In concrete terms:
+- **Window mode**: x is flat (fixed denominator). The span kernel's
+  `span_p` and `span_cdf(τ)` replace the single-edge `edge_p` and
+  `_cdf(τ)` used for the y forecast. No x changes needed.
+- **Cohort mode**: The existing x forecast (`a_pop × reach × CDF_path`)
+  stays. The y forecast uses the span kernel instead of the single-edge
+  kernel. The rate `y/x` is now span-level in the numerator, edge-level
+  in the denominator. This is an improvement — the numerator correctly
+  accounts for multi-hop progression — even though the denominator
+  model is not yet span-aware.
+
+**What this means for the frontier discontinuity**: In the observed
+region, composed frames use `x_A` (actual arrivals at x from
+snapshots). In the forecast region, the row builder's existing x model
+produces its own estimate of arrivals at the target edge's from-node.
+For the common case where from-node = anchor, `reach(anchor) = 1.0`
+and the x forecast is simply `a_pop × CDF_upstream(τ)` which closely
+matches the observed `x_A`. Any residual discontinuity at the frontier
+is a known limitation to be resolved in Phase B.
+
+**Phase B change** (later): replace the internal x forecast with an
+explicit `x_provider` input — a function that returns `x(s, τ)` for
+any cohort s and age τ. This enables:
+- Proper anchor-to-x propagation for non-trivial upstream paths
+- Upstream traversal with correct join handling
+- Graph-wide x(s,τ) solve replacing the local shortcut
+- Guaranteed frontier continuity (x provider matches observed x)
+
+This is explicitly described as a **denominator-improvement phase**,
+not mixed into the multi-hop span fix.
 
 #### Layer 6: Frontend — chart rendering
 
-No changes needed. The row schema is the same. The chart builder sums and divides — it does not know or care whether the underlying rate is edge-level or path-level.
+No changes needed. The row schema is the same. The chart builder sums
+and divides — it does not know or care whether the underlying rate is
+edge-level or path-level.
 
-The only cosmetic change: the chart title/subtitle should indicate it shows path rate (A→Z) rather than edge rate (Y→Z). This is a label change driven by the `subjectLabel` field already present in the subject metadata.
+The only cosmetic change: the chart title/subtitle should indicate it
+shows path rate (x→y) rather than edge rate. This is a label change
+driven by the `subjectLabel` field already present in the subject
+metadata.
+
+### Implementation strategy: new analysis type with single-hop parity gate
+
+**Updated 8-Apr-26**: Phase A is implemented as a **new analysis type**
+(`cohort_maturity_v2` or similar) rather than modifying the existing
+`cohort_maturity`. This provides:
+
+1. **Zero regression risk** — existing `cohort_maturity` is untouched
+   during development.
+2. **Built-in parity test** — run both analysis types on the same
+   adjacent `from(A).to(B)` subject via CLI; assert identical output.
+   Multi-hop must degenerate to single-hop, so parity on adjacent
+   pairs is the acceptance gate.
+3. **Visible from day one** — full FE+BE registration per the
+   adding-analysis-types checklist. Can be tested in browser and via
+   `graph-ops/scripts/analyse.sh --type cohort_maturity_v2`.
+4. **CLI parity tooling** — extend `graph-ops/scripts/parity-test.sh`
+   or write a dedicated script that runs both types and diffs output.
+
+Once parity is proven and multi-hop is working, either:
+- Retire the old type and rename v2 → `cohort_maturity`, or
+- Keep both if there's value in having the simpler single-edge path
+  as a distinct analysis.
 
 ### Implementation sequence for A→Z maturity
 
 | Step | What | Depends on | Risk |
 |------|------|-----------|------|
-| **A.0** | Add `from_node_uuid` and `to_node_uuid` as first-class fields on `SnapshotSubjectRequest` | — | Low: additive field |
-| **A.1** | Implement `compose_path_maturity_frames()` in Python — pure function, no DB | — | Medium: join alignment |
-| **A.2** | Implement `compose_path_forecast_params()` in Python — reads per-edge params from graph | — | Low: straightforward composition |
-| **A.3** | Modify `_handle_snapshot_analyze_subjects` to detect multi-hop (`funnel_path` with >1 subject), compose frames and params, then call existing `compute_cohort_maturity_rows` | A.0, A.1, A.2 | Medium: handler plumbing |
-| **A.4** | Tests: path-level evidence parity (compose y_Z/x_A from frames, compare against known rates from data repo) | A.1 | Required gate |
-| **A.5** | Tests: path-level forecast convergence (as τ→∞, rate→path_p) | A.2 | Required gate |
-| **A.6** | FE: pass from/to node UUIDs in subject requests | A.0 | Low |
+| **A.0** | Register `cohort_maturity_v2` as a new analysis type — full FE+BE registration per adding-analysis-types checklist. Reuse `cohort_maturity` ECharts builder (same chart shape). BE handler delegates to the same `derive_cohort_maturity` + `compute_cohort_maturity_rows` pipeline initially (clone of existing path). | — | Low: mechanical checklist |
+| **A.1** | Implement `compose_path_maturity_frames()` in Python — pure function, no DB. Joins first-edge x with last-edge y. | — | Medium: join alignment |
+| **A.2** | Implement `compose_span_kernel()` in Python — builds the x→y conditional progression from per-edge posteriors along the span. Must provide the full key set that `compute_cohort_maturity_rows` reads (matching `_read_edge_model_params` shape). | — | Low: composition logic |
+| **A.3** | Restructure `compute_cohort_maturity_rows` to accept span kernel as input for y projection while keeping existing x forecast unchanged. Wire into v2 handler. | A.0, A.2 | Medium: row builder refactor |
+| **A.4** | **Single-hop parity gate**: CLI test running both `cohort_maturity` and `cohort_maturity_v2` on identical adjacent subjects, asserting identical output field-by-field. Uses real graph data from data repo. | A.0 | Required gate — v2 must degenerate to v1 |
+| **A.5** | **Multi-hop tests**: evidence parity (`y_Z / x_A` from composed frames vs manual computation) + forecast convergence (τ→∞, rate→span_p) + verify cohort-mode frontier behaviour is reasonable | A.1, A.2, A.3 | Required gate |
 
 ### How this feeds into the broader forecast generalisation
 
-After A→Z maturity is working:
+After Phase A (span kernel) is working:
 
-1. **The forecast-state contract (Phase 0 above)** can be designed with multi-hop as a first-class concern — the composed frames and params from Steps A.1–A.2 become the reference implementation for "what path-level forecast state looks like".
+1. **Phase B — upstream denominator improvement**: Replace the row
+   builder's internal x forecast with an explicit `x_provider` input.
+   This is the denominator-improvement phase:
+   - Proper anchor-to-x propagation for non-trivial upstream paths
+   - Branching graph support (fan-out/fan-in via
+     `calculate_path_probability` and weighted mixture CDFs)
+   - Graph-wide x(s,τ) solve replacing the local shortcut
+   - Guaranteed frontier continuity
+   - The span kernel (Phase A) is untouched — it consumes whatever
+     x the provider delivers.
 
-2. **The four maths fixes (Phase 2 above)** replace the approximations:
-   - Graph-wide x(s,τ) propagation replaces the `a × reach × CDF_path` shortcut and the first-edge-x-as-denominator join
-   - τ-dependent Y_C replaces the composed-p × CDF approximation
-   - Consistent probability bases replace the mixed window/cohort p values in composition
-   - Unified tau_observed replaces the per-edge tau_max
+2. **The forecast-state contract (Phase 0 above)** can be designed with
+   the span kernel as a first-class building block — the kernel from
+   A.2 becomes the reference implementation for "conditional progression
+   across a queried span".
 
-3. **The unified resolver (Phase 3 above)** replaces `compose_path_forecast_params` with a proper resolution that accounts for sub-path semantics.
+3. **The remaining maths fixes (Phase 2 above)** improve the kernel:
+   - τ-dependent Y_C convolution (currently heuristic)
+   - Consistent probability bases
+   - Unified tau_observed
 
-4. **The trajectory layer (Phase 4 above)** replaces `compose_path_maturity_frames` with DAG-propagated trajectories.
+4. **The unified resolver (Phase 3 above)** provides the `x_provider`
+   with proper sub-path semantics.
 
-In other words: Steps A.1–A.2 are **deliberate scaffolding** that will be replaced by the correct implementations in Phases 2–4. They exist to deliver user value now while the harder maths is being developed. The scaffolding functions are clearly named, documented as approximate, and have parity tests that will validate their replacements.
+In other words: Phase A delivers the span kernel (a new capability).
+Phase B delivers the x provider (an improvement to an existing
+estimate). These are cleanly separable — the span kernel consumes x
+without caring how it was derived.
 
-### Post-doc-31 variant: what changes when BE owns subject resolution
+### Appendix: full key set for span kernel output
 
-**Added**: 7-Apr-26
+The span kernel must provide all keys that `compute_cohort_maturity_rows`
+reads from `edge_params`. These are sourced from `_read_edge_model_params`
+(`api_handlers.py` lines 760–880) and consumed at lines 390–418 of
+`cohort_forecast.py`:
 
-Docs 30 (regime selection) and 31 (BE subject resolution) redesign how
-analysis requests reach the backend. If Phase A is implemented *after*
-docs 30+31, several steps simplify and one new concern emerges.
+Edge-level: `mu`, `sigma`, `onset_delta_days`, `forecast_mean`,
+`posterior_p`, `posterior_alpha`, `posterior_beta`, `p_stdev`,
+`bayes_mu_sd`, `bayes_sigma_sd`, `bayes_onset_sd`,
+`bayes_onset_mu_corr`, `t95`, `evidence_retrieved_at`.
+
+Path-level: `path_mu`, `path_sigma`, `path_onset_delta_days`,
+`posterior_p_cohort`, `posterior_path_alpha`, `posterior_path_beta`,
+`p_stdev_cohort`, `bayes_path_mu_sd`, `bayes_path_sigma_sd`,
+`bayes_path_onset_sd`, `bayes_path_onset_mu_corr`, `path_t95`.
+
+The row builder selects edge-level or path-level based on `is_window`
+(lines 393–418). For span kernels, the "path-level" values represent
+the x→y span, and the "edge-level" values represent the last edge
+(used as fallback).
+
+### Post-doc-31 variant: active implementation path
+
+**Added**: 7-Apr-26 | **Updated**: 8-Apr-26 — docs 30+31 now
+implemented; this is the active path, not a hypothetical variant.
+
+Docs 30 (regime selection) and 31 (BE subject resolution) are
+implemented. The BE resolves path structure natively from the DSL
+string. Several Phase A steps simplify and one new concern emerges.
+
+**CLI testing**: `graph-ops/scripts/analyse.sh --type cohort_maturity`
+with a non-adjacent `from(A).to(Z)` subject provides end-to-end
+development testing of the charting pipeline.
 
 #### What simplifies
 
@@ -342,56 +538,72 @@ Doc 30 introduces per-edge regime selection: for each
 regime (one hash family) and discards alternatives. For single-edge
 maturity this is sufficient.
 
-For multi-hop maturity the regimes selected for the **first edge** and
-**last edge** must be **compatible** — both must represent the same
-underlying cohort population. If different regimes are selected (e.g.
-first edge uses `context(channel)` regime, last edge uses
-`context(device)` regime), the composed rate `y_Z / x_A` is meaningless
-because numerator and denominator count different populations.
+For multi-hop maturity, the regimes selected for different edges need
+**not** be identical. Doc 30 only requires one coherent regime per edge
+per date — it then lets the consumer aggregate/filter within that
+regime. Two edges can legitimately use different winning hashes and
+still represent the same requested population (e.g. first edge resolved
+via `context(channel)` hash, last edge via `context(device)` hash —
+both are valid MECE representations of the same aggregate).
 
-**Proposed rule**: when composing path maturity, enforce that all path
-edges use the **same regime family** for a given `(anchor_day,
-retrieved_at)`. If no single regime covers all edges for that date, the
-date is excluded from evidence (no composition). This is conservative
-but correct — better to have a gap than a wrong number.
-
-**Implementation**: `compose_path_maturity_frames()` receives regime
-metadata per frame and filters to dates where the regime family is
-consistent across all contributing edges.
+**No cross-edge regime enforcement needed**: the composition takes `x`
+from the first edge and `y` from the last edge. As long as each edge's
+own regime selection is coherent (guaranteed by doc 30), the composed
+`y_Z / x_A` is correct. Enforcing identical regime families across
+path edges would create avoidable evidence gaps on dates where edges
+happen to have different winning hashes.
 
 #### Revised Phase A steps (post-doc-31)
 
 | Step | What | Notes |
 |------|------|-------|
-| **A.1** | `compose_path_maturity_frames()` — pure function, no DB | Unchanged; add regime coherence filter |
-| **A.2** | `compose_path_forecast_params()` — reads per-edge params from graph | Unchanged |
-| **A.3** | Handler integration — BE resolves path from DSL, composes frames+params | Simpler: path structure available natively |
-| **A.4** | Tests: evidence parity + regime coherence | Extended: verify correct exclusion of incoherent-regime dates |
-| **A.5** | Tests: forecast convergence (τ→∞, rate→path_p) | Unchanged |
-
-Steps A.0 and A.6 are eliminated entirely.
+| **A.0** | Register `cohort_maturity_v2` — full FE+BE, reuse existing ECharts builder | Regression-safe development vehicle |
+| **A.1** | `compose_path_maturity_frames()` — pure function, no DB | Evidence composition (exact for all topologies) |
+| **A.2** | `compose_span_kernel()` — x→y conditional progression from per-edge posteriors | Must match full `_read_edge_model_params` key set (see appendix) |
+| **A.3** | Restructure row builder: accept span kernel for y projection, keep existing x forecast | Span kernel in, existing denominator unchanged |
+| **A.4** | **Single-hop parity gate**: v1 vs v2 on adjacent subjects, field-by-field | Required gate |
+| **A.5** | **Multi-hop tests**: evidence parity + forecast convergence + frontier behaviour | Required gate |
 
 ---
 
 ## Revised Recommended Sequencing
 
-The original sequencing above assumed the forecast engine generalisation happens first. With A→Z maturity as a precursor, the revised sequencing is:
+**Updated 8-Apr-26**: The original "Phase A" has been decomposed into
+two cleanly separable phases: **Phase A** (x→y span kernel — numerator
+fix) and **Phase B** (upstream x provider — denominator improvement).
+The broader forecast engine phases are renumbered accordingly.
 
 | Phase | What | Why this order |
 |-------|------|----------------|
-| **A** | Generalise cohort maturity to A→Z spans (Steps A.0–A.6 above) | Immediate user value; creates multi-hop consumer; uses documented approximations for forecast |
-| **0** | Design the forecast-state contract as a document, informed by Phase A's multi-hop needs | Forces precision; Phase A reveals what "path-level" means concretely |
+| **A** | **x→y span kernel**: register `cohort_maturity_v2`, implement `compose_path_maturity_frames` + `compose_span_kernel`, restructure row builder to accept span kernel for y projection while keeping existing x forecast unchanged. Linear chains only. | Isolates the real numerator problem. Works in window() immediately, improves cohort() immediately. Existing x estimate is good enough for the common case (from-node = anchor). |
+| **B** | **Upstream x provider**: replace the row builder's internal x forecast with an explicit `x_provider(s, τ)` input. Proper anchor-to-x propagation, branching graph support, frontier continuity guarantee. | Denominator-improvement phase. Only needed after span kernel is proven. Clean seam: span kernel consumes whatever x the provider delivers. |
+| **0** | Design the forecast-state contract as a document, informed by Phases A+B | Forces precision; span kernel + x provider define the building blocks |
 | **1** | Record the live cohort() blockers precisely (Step 4 above) | Prevents the contract from freezing stale assumptions |
-| **2** | Fix the remaining cohort() maths blockers in Python — replaces Phase A's approximations | Hard prerequisite for a reusable shipping engine |
-| **3** | Implement the contract in Python + unify basis resolution (Steps 1+2 above) | Backend-first, informed by corrected maths |
-| **4** | Split layers and wire `cohort_maturity` to the new contract — replaces Phase A scaffolding | First consumer validates the contract |
-| **5** | Wire `surprise_gauge` to the same contract and retire semantic duplication in the FE | Second consumer proves reusability |
-| **6** | Parity and contract tests throughout, but especially before switching consumers | Gate for promoting the shared engine |
+| **2** | Fix the remaining cohort() maths in Python | Hard prerequisite for a reusable shipping engine |
+| **3** | Implement the contract in Python + unify basis resolution | Backend-first, informed by corrected maths |
+| **4** | Split layers and wire `cohort_maturity` to the new contract | First consumer validates the contract |
+| **5** | Wire `surprise_gauge` to the same contract, retire FE duplication | Second consumer proves reusability |
+| **6** | Parity and contract tests throughout | Gate for promoting the shared engine |
 
 ---
 
 ## Bottom Line
 
-The reusable core is the **state model and propagation architecture**, not the current chart-specific formulas. The forecast-state contract (Phase 0) is the highest-leverage activity because it forces agreement on semantics before code proliferates. The cohort() maths fixes (Phase 2) are the hard gate — without them, generalisation means generalising bugs.
+The multi-hop problem decomposes into two independent concerns:
 
-**However**, multi-hop cohort maturity (Phase A) can and should be delivered before the full generalisation. The evidence composition is exact (no approximation needed). The forecast composition uses documented approximations that work for the common case and are replaced by correct implementations in subsequent phases. This sequence delivers user value immediately, creates the first multi-hop consumer that validates the forecast-state contract, and makes the approximation/correctness boundary explicit rather than hidden.
+1. **The x→y span kernel** (Phase A): "given arrival at x, what is the
+   probability of reaching y by age τ?" — a conditional progression
+   computed hop-by-hop from per-edge posteriors. This is the new
+   capability that doesn't exist today.
+
+2. **The upstream x estimate** (Phase B): "how does anchor-cohort mass
+   reach x?" — an improvement to the existing denominator model. The
+   current model (`reach × CDF_upstream`) is adequate for the common
+   case (from-node = anchor, so reach = 1.0) and can be replaced later
+   without touching the span kernel.
+
+Phase A delivers user value immediately. Phase B improves accuracy for
+edge cases. The broader forecast engine (Phases 0–6) generalises both
+for all consumers. The span kernel is the stable seam between the two:
+it consumes x as input and produces y as output, regardless of how x
+is derived.

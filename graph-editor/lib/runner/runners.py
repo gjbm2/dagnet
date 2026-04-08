@@ -397,15 +397,6 @@ def run_bridge_view(
     GA: nx.DiGraph = sA['scenario_G']
     GB: nx.DiGraph = sB['scenario_G']
 
-    # ── Bridge diagnostic ──
-    print(f"[bridge_diag] node_id={node_id} GA_nodes={GA.number_of_nodes()} "
-          f"GA_edges={GA.number_of_edges()} GB_nodes={GB.number_of_nodes()} GB_edges={GB.number_of_edges()}")
-    # Sample edge probabilities
-    for _u, _v, _d in list(GA.edges(data=True))[:3]:
-        print(f"[bridge_diag] GA edge {_u[:12]}→{_v[:12]} p={_d.get('p')}")
-    for _u, _v, _d in list(GB.edges(data=True))[:3]:
-        print(f"[bridge_diag] GB edge {_u[:12]}→{_v[:12]} p={_d.get('p')}")
-
     # Induced subgraph: nodes that are both
     # - descendants of (any) entry nodes
     # - ancestors of the target node (including the target)
@@ -413,8 +404,6 @@ def run_bridge_view(
         entry_nodes = find_entry_nodes(GA)
     except Exception:
         entry_nodes = []
-
-    print(f"[bridge_diag] entry_nodes={entry_nodes[:3]} node_in_GA={node_id in GA}")
 
     if not entry_nodes:
         return {'error': 'No entry nodes found for Bridge View'}
@@ -433,15 +422,9 @@ def run_bridge_view(
     inducedA = GA.subgraph(induced_nodes).copy()
     inducedB = GB.subgraph(induced_nodes).copy()
 
-    print(f"[bridge_diag] induced_nodes={len(induced_nodes)} "
-          f"inducedA_edges={inducedA.number_of_edges()} inducedB_edges={inducedB.number_of_edges()}")
-    for _u, _v, _d in list(inducedA.edges(data=True))[:3]:
-        print(f"[bridge_diag] induced edge {GA.nodes[_u].get('id','?')[:20]}→{GA.nodes[_v].get('id','?')[:20]} p={_d.get('p')}")
-
     # Totals
     reachA = calculate_path_to_absorbing(inducedA, node_id, pruning).probability
     reachB = calculate_path_to_absorbing(inducedB, node_id, pruning).probability
-    print(f"[bridge_diag] reachA={reachA} reachB={reachB}")
     total_delta = reachB - reachA
 
     # Sequential replacement attribution over nodes in induced topo order.
@@ -1042,6 +1025,100 @@ def _expected_additive_latency_between_nodes(
     return (median_lag, mean_lag)
 
 
+def _make_group_stage_id(member_ids: list[str]) -> str:
+    """Build a deterministic composite stage ID for a visitedAny group."""
+    return 'visitedAny:' + ','.join(sorted(member_ids))
+
+
+def _build_stage_slots(
+    G: nx.DiGraph,
+    start_id: str,
+    end_id: str,
+    intermediate_nodes: list[str],
+    visited_any_groups: Optional[list[list[str]]],
+) -> list:
+    """
+    Build an ordered list of stage slots from intermediates and visitedAny groups.
+
+    Each slot is either:
+      - a str (single node ID) for a plain intermediate
+      - a list[str] (member node IDs) for a visitedAny group
+
+    Returns [start_id, ...slots..., end_id].
+    """
+    groups = visited_any_groups or []
+
+    # Identify which intermediates belong to a group
+    grouped_node_ids: set[str] = set()
+    for group in groups:
+        grouped_node_ids.update(group)
+
+    # Solo intermediates (not part of any group)
+    solo = [n for n in intermediate_nodes if n not in grouped_node_ids]
+
+    # Build mixed slot list: solo nodes + groups
+    slots: list = list(solo)
+    for group in groups:
+        # Only include group members that are actually in the intermediates list
+        intermediates_set = set(intermediate_nodes)
+        members_in_intermediates = [m for m in group if m in intermediates_set]
+        if len(members_in_intermediates) <= 1:
+            # Degenerate single-member group: treat as plain stage
+            slots.extend(members_in_intermediates)
+        else:
+            slots.append(members_in_intermediates)
+
+    # Sort slots topologically by distance from start
+    try:
+        distances = nx.single_source_shortest_path_length(G, start_id)
+    except nx.NetworkXError:
+        distances = {}
+
+    def slot_distance(slot):
+        if isinstance(slot, list):
+            # Group: use min distance across members
+            return min((distances.get(m, float('inf')) for m in slot), default=float('inf'))
+        return distances.get(slot, float('inf'))
+
+    slots.sort(key=slot_distance)
+
+    return [start_id] + slots + [end_id]
+
+
+def _detect_branch_specific_intermediates(
+    G: nx.DiGraph,
+    stage_slots: list,
+) -> list[dict]:
+    """
+    Detect non-group intermediates that are only reachable from a subset of
+    a preceding visitedAny group's members. Returns a list of warning dicts.
+    """
+    warnings = []
+    seen_groups = []
+
+    for slot in stage_slots:
+        if isinstance(slot, list):
+            seen_groups.append(slot)
+        elif isinstance(slot, str) and seen_groups:
+            # Check reachability from all preceding groups
+            for group in seen_groups:
+                reachable_from = [m for m in group if nx.has_path(G, m, slot)]
+                if 0 < len(reachable_from) < len(group):
+                    node_label = G.nodes[slot].get('label') or slot if slot in G else slot
+                    reachable_labels = [
+                        (G.nodes[m].get('label') or m) if m in G else m
+                        for m in reachable_from
+                    ]
+                    warnings.append({
+                        'type': 'branch_specific_intermediate',
+                        'node': slot,
+                        'reachable_from': reachable_from,
+                        'group': list(group),
+                        'message': f'Stage "{node_label}" is only reachable via {", ".join(reachable_labels)}, not all branches',
+                    })
+    return warnings
+
+
 def run_path(
     G: nx.DiGraph,
     start_id: str,
@@ -1049,6 +1126,7 @@ def run_path(
     intermediate_nodes: list[str] = None,
     pruning: Optional[PruningResult] = None,
     all_scenarios: Optional[list] = None,
+    visited_any_groups: Optional[list[list[str]]] = None,
 ) -> dict[str, Any]:
     """
     Calculate path between two nodes with optional intermediate constraints.
@@ -1060,30 +1138,68 @@ def run_path(
     when available on edges, conditional upon scenario visibility_mode.
     """
     intermediate_nodes = intermediate_nodes or []
-    
+
     # Get labels from primary graph
     from_label = G.nodes[start_id].get('label') or start_id if start_id in G else start_id
     to_label = G.nodes[end_id].get('label') or end_id if end_id in G else end_id
-    
-    # Sort intermediate nodes topologically by distance from start
-    sorted_intermediates = _sort_nodes_topologically(G, start_id, intermediate_nodes)
-    
-    # Build stages: start -> sorted intermediates -> end
-    stage_ids = [start_id] + sorted_intermediates + [end_id]
-    
+
+    # Build stage slots (supports grouped stages from visitedAny)
+    has_groups = visited_any_groups and any(len(g) > 1 for g in visited_any_groups)
+    if has_groups:
+        stage_slots = _build_stage_slots(G, start_id, end_id, intermediate_nodes, visited_any_groups)
+        branch_warnings = _detect_branch_specific_intermediates(G, stage_slots)
+    else:
+        # Legacy path: flat stage_ids
+        sorted_intermediates = _sort_nodes_topologically(G, start_id, intermediate_nodes)
+        stage_slots = [start_id] + sorted_intermediates + [end_id]
+        branch_warnings = []
+
+    # Build stage entries: (stage_key, member_node_ids, is_group) tuples
+    stage_entries: list[tuple[str, list[str], bool]] = []
+    for slot in stage_slots:
+        if isinstance(slot, list):
+            stage_key = _make_group_stage_id(slot)
+            stage_entries.append((stage_key, slot, True))
+        else:
+            stage_entries.append((slot, [slot], False))
+
+    # Flat stage_ids for iteration (one key per logical stage)
+    stage_ids = [key for key, _, _ in stage_entries]
+
+    # Flat list of intermediate node IDs for metadata
+    sorted_intermediates_meta = []
+    for key, members, is_group in stage_entries:
+        if key != start_id and key != end_id:
+            sorted_intermediates_meta.extend(members)
+
     prepared_scenarios = _prepare_scenarios(G, all_scenarios)
     scenario_count = len(prepared_scenarios)
-    
+
     # Build dimension_values for stages and scenarios
     stage_dimension_values = {}
     scenario_dimension_values = {}
-    
-    for i, stage_id in enumerate(stage_ids):
-        stage_label = G.nodes[stage_id].get('label') if stage_id in G else None
-        stage_dimension_values[stage_id] = {
-            'name': stage_label or stage_id,  # Fallback to stage_id if label is None
-            'order': i
-        }
+
+    for i, (stage_key, members, is_group) in enumerate(stage_entries):
+        if is_group:
+            member_labels = {}
+            label_parts = []
+            for m in members:
+                lbl = G.nodes[m].get('label') or m if m in G else m
+                member_labels[m] = lbl
+                label_parts.append(lbl)
+            stage_dimension_values[stage_key] = {
+                'name': ' / '.join(label_parts),
+                'order': i,
+                'is_group': True,
+                'members': list(members),
+                'member_labels': member_labels,
+            }
+        else:
+            stage_label = G.nodes[stage_key].get('label') if stage_key in G else None
+            stage_dimension_values[stage_key] = {
+                'name': stage_label or stage_key,
+                'order': i,
+            }
     
     for s in prepared_scenarios:
         scenario_dimension_values[s['scenario_id']] = {
@@ -1109,212 +1225,219 @@ def run_path(
         if max_n_for_start is not None:
             start_n_by_scenario_id[scenario_id] = max_n_for_start
     
-    # Build flat data rows (stage × scenario)
+    # Build flat data rows (stage × scenario), supporting grouped stages.
+    # Track previous stage total probability per scenario for dropoff/step_probability.
+    prev_stage_total_prob: dict[str, float] = {}  # scenario_id -> probability
     data_rows = []
-    for i, stage_id in enumerate(stage_ids):
-        for s in prepared_scenarios:
-            scenario_G = s['scenario_G']
-            scenario_id = s['scenario_id']
-            scenario_name = s['scenario_name']
-            visibility_mode = s['visibility_mode']
-            p_label = s['probability_label']
-            
-            # Calculate probability to reach this stage from start
-            if i == 0:
-                prob = 1.0
-                cost_gbp = 0.0
-                labour_cost = 0.0
-                median_lag_days = 0.0
-                mean_lag_days = 0.0
+
+    for i, (stage_key, member_nodes, is_group) in enumerate(stage_entries):
+        # For each member node in this stage (1 for solo, N for groups)
+        for member_idx, node_id in enumerate(member_nodes):
+            for s in prepared_scenarios:
+                scenario_G = s['scenario_G']
+                scenario_id = s['scenario_id']
+                scenario_name = s['scenario_name']
+                visibility_mode = s['visibility_mode']
+                p_label = s['probability_label']
+
+                # Calculate probability to reach this node from start
+                if i == 0:
+                    prob = 1.0
+                    cost_gbp = 0.0
+                    labour_cost = 0.0
+                    median_lag_days = 0.0
+                    mean_lag_days = 0.0
+                    step_probability = None
+                else:
+                    result = calculate_path_probability(scenario_G, start_id, node_id, pruning)
+                    prob = result.probability
+                    cost_gbp = result.expected_cost_gbp
+                    labour_cost = result.expected_labour_cost
+
+                    median_lag_days = None
+                    mean_lag_days = None
+
+                    # Stage-level evidence and latency summary
+                    inbound_edges = []
+                    if node_id in scenario_G:
+                        inbound_edges = [(pred, node_id) for pred in scenario_G.predecessors(node_id)]
+
+                    total_inbound_k = 0
+                    has_any_inbound_k = False
+                    completeness_weighted_sum = 0.0
+                    completeness_weight_total = 0.0
+                    completeness_min = None
+                    median_lag_weighted_sum = 0.0
+                    median_lag_weight_total = 0.0
+                    mean_lag_weighted_sum = 0.0
+                    mean_lag_weight_total = 0.0
+
+                    for (pred, node) in inbound_edges:
+                        edge_data = scenario_G.edges.get((pred, node), {}) or {}
+                        evidence = edge_data.get('evidence') or {}
+                        latency = edge_data.get('latency') or {}
+
+                        k = evidence.get('k')
+                        if k is not None:
+                            has_any_inbound_k = True
+                            total_inbound_k += k
+
+                        comp = latency.get('completeness')
+                        if comp is not None:
+                            completeness_min = comp if completeness_min is None else min(completeness_min, comp)
+                            if k is not None and k > 0:
+                                completeness_weighted_sum += comp * k
+                                completeness_weight_total += k
+
+                        med = latency.get('median_lag_days')
+                        if med is not None and k is not None and k > 0:
+                            median_lag_weighted_sum += med * k
+                            median_lag_weight_total += k
+
+                        mean = latency.get('mean_lag_days')
+                        if mean is not None and k is not None and k > 0:
+                            mean_lag_weighted_sum += mean * k
+                            mean_lag_weight_total += k
+
+                    arrivals_n = total_inbound_k if has_any_inbound_k else None
+
+                    if median_lag_weight_total > 0:
+                        median_lag_days = median_lag_weighted_sum / median_lag_weight_total
+                    if mean_lag_weight_total > 0:
+                        mean_lag_days = mean_lag_weighted_sum / mean_lag_weight_total
+
+                    completeness = None
+                    if visibility_mode in ('e', 'f+e'):
+                        if completeness_weight_total > 0:
+                            completeness = completeness_weighted_sum / completeness_weight_total
+                        else:
+                            completeness = completeness_min
+
+                    evidence_mean = None
+                    forecast_mean = None
+                    p_mean = None
+
+                    # Gap metrics: for groups, use start→member; for solo, use prev_stage→stage
+                    if not is_group and i > 0:
+                        prev_stage_key = stage_ids[i - 1]
+                        # For prev stage that was a group, use first member for lag estimate
+                        prev_entry = stage_entries[i - 1]
+                        prev_node = prev_entry[1][0] if prev_entry[2] else prev_stage_key
+                        seg_median, seg_mean = _expected_additive_latency_between_nodes(scenario_G, prev_node, node_id, pruning)
+                        if seg_median is not None:
+                            median_lag_days = seg_median
+                        if seg_mean is not None:
+                            mean_lag_days = seg_mean
+
+                # Calculate dropoff/step_probability from previous stage total
+                dropoff = None
                 step_probability = None
-            else:
-                result = calculate_path_probability(scenario_G, start_id, stage_id, pruning)
-                prob = result.probability
-                cost_gbp = result.expected_cost_gbp
-                labour_cost = result.expected_labour_cost
-            
-                median_lag_days = None
-                mean_lag_days = None
+                prev_total = prev_stage_total_prob.get(scenario_id)
+                if i > 0 and prev_total is not None and prev_total > 0:
+                    dropoff = prev_total - prob
+                    step_probability = prob / prev_total
 
-                # Stage-level evidence and latency summary:
-                # Funnel stages are NOT necessarily connected by a direct edge (e.g. A -> B may be a multi-step journey),
-                # so we must not assume `prev_stage -> stage` exists. Instead, show "arrivals at stage" as total inbound k.
-                inbound_edges = []
-                if stage_id in scenario_G:
-                    inbound_edges = [(pred, stage_id) for pred in scenario_G.predecessors(stage_id)]
+                row = {
+                    'stage': stage_key,
+                    'scenario_id': scenario_id,
+                    'scenario_name': scenario_name,
+                    'visibility_mode': visibility_mode,
+                    'probability_label': p_label,
+                    'probability': prob,
+                    'expected_cost_gbp': cost_gbp,
+                    'expected_labour_cost': labour_cost,
+                }
 
-                total_inbound_k = 0
-                has_any_inbound_k = False
+                # Add stage_member field for grouped stages
+                if is_group:
+                    row['stage_member'] = node_id
 
-                completeness_weighted_sum = 0.0
-                completeness_weight_total = 0.0
-                completeness_min = None
-
-                median_lag_weighted_sum = 0.0
-                median_lag_weight_total = 0.0
-
-                mean_lag_weighted_sum = 0.0
-                mean_lag_weight_total = 0.0
-
-                for (pred, node) in inbound_edges:
-                    edge_data = scenario_G.edges.get((pred, node), {}) or {}
-                    evidence = edge_data.get('evidence') or {}
-                    latency = edge_data.get('latency') or {}
-
-                    k = evidence.get('k')
-                    if k is not None:
-                        has_any_inbound_k = True
-                        total_inbound_k += k
-
-                    comp = latency.get('completeness')
-                    if comp is not None:
-                        completeness_min = comp if completeness_min is None else min(completeness_min, comp)
-                        if k is not None and k > 0:
-                            completeness_weighted_sum += comp * k
-                            completeness_weight_total += k
-
-                    med = latency.get('median_lag_days')
-                    if med is not None and k is not None and k > 0:
-                        median_lag_weighted_sum += med * k
-                        median_lag_weight_total += k
-
-                    mean = latency.get('mean_lag_days')
-                    if mean is not None and k is not None and k > 0:
-                        mean_lag_weighted_sum += mean * k
-                        mean_lag_weight_total += k
-
-                arrivals_n = total_inbound_k if has_any_inbound_k else None
-
-                # Prefer weighted lag averages by realised arrivals (k). If no arrivals, leave blank.
-                if median_lag_weight_total > 0:
-                    median_lag_days = median_lag_weighted_sum / median_lag_weight_total
-                if mean_lag_weight_total > 0:
-                    mean_lag_days = mean_lag_weighted_sum / mean_lag_weight_total
-
-                # Completeness is only shown when we show evidence (E or F+E).
-                # Use weighted-by-k when possible; otherwise fall back to min across inbound edges.
-                completeness = None
-                if visibility_mode in ('e', 'f+e'):
-                    if completeness_weight_total > 0:
-                        completeness = completeness_weighted_sum / completeness_weight_total
-                    else:
-                        completeness = completeness_min
-
-                # Cumulative evidence probability is derived from arrivals / start-N (see below),
-                # not from any single inbound edge's evidence.mean.
-                evidence_mean = None
-                forecast_mean = None
-                p_mean = None
-
-                # Gap metrics between the selected stages (prev_stage -> stage_id), not just the last inbound edge.
-                prev_stage = stage_ids[i - 1]
-                seg_median, seg_mean = _expected_additive_latency_between_nodes(scenario_G, prev_stage, stage_id, pruning)
-                if seg_median is not None:
-                    median_lag_days = seg_median
-                if seg_mean is not None:
-                    mean_lag_days = seg_mean
-            
-            # Calculate dropoff from previous stage
-            dropoff = None
-            if i > 0 and scenario_count > 0 and len(data_rows) >= scenario_count:
-                # Find the previous stage row for this scenario
-                prev_idx = len(data_rows) - scenario_count
-                prev_row = data_rows[prev_idx]
-                if prev_row['scenario_id'] == scenario_id and prev_row['probability'] > 0:
-                    dropoff = prev_row['probability'] - prob
-                    step_probability = prob / prev_row['probability']
-            
-            row = {
-                'stage': stage_id,
-                'scenario_id': scenario_id,
-                'scenario_name': scenario_name,
-                'visibility_mode': visibility_mode,
-                'probability_label': p_label,
-                'probability': prob,
-                'expected_cost_gbp': cost_gbp,
-                'expected_labour_cost': labour_cost,
-            }
-
-            # First stage conventions: 100% and show start population N as "n".
-            if i == 0:
-                start_n = start_n_by_scenario_id.get(scenario_id)
-                if start_n is not None:
-                    row['n'] = start_n
-
-                if visibility_mode in ('e', 'f+e'):
-                    row['evidence_mean'] = 1.0
-                    row['completeness'] = 1.0
-                if visibility_mode == 'f':
-                    row['forecast_mean'] = 1.0
-                if visibility_mode == 'f+e':
-                    row['p_mean'] = 1.0
-
-                row['median_lag_days'] = 0.0
-                row['mean_lag_days'] = 0.0
-            else:
-                # Subsequent stages: include arrivals n and evidence-only context where applicable.
-                if visibility_mode in ('e', 'f+e') and arrivals_n is not None:
-                    row['n'] = arrivals_n
-
-                # Evidence probability is cumulative: arrivals / start-N.
-                if visibility_mode in ('e', 'f+e'):
+                # First stage conventions: 100% and show start population N as "n".
+                if i == 0:
                     start_n = start_n_by_scenario_id.get(scenario_id)
-                    if isinstance(start_n, (int, float)) and start_n and arrivals_n is not None:
-                        row['evidence_mean'] = arrivals_n / float(start_n)
+                    if start_n is not None:
+                        row['n'] = start_n
 
-                # LAG field invariants:
-                # - forecast_mean must always mean the EDGE forecast baseline (p.forecast.mean) when available
-                #   and must NOT change meaning based on visibility_mode.
-                # - evidence_mean (for stage rows) is the cumulative arrival probability (arrivals/start-N),
-                #   which for single-path funnels matches the edge evidence mean and is the quantity the UI
-                #   wants for a funnel stage.
-                #
-                # If the selected stages are directly connected (prev_stage → stage_id), surface the
-                # edge-local forecast.mean regardless of visibility_mode so semantics remain invariant.
-                prev_stage = stage_ids[i - 1]
-                if prev_stage in scenario_G and stage_id in scenario_G and scenario_G.has_edge(prev_stage, stage_id):
-                    edge_data_direct = scenario_G.edges.get((prev_stage, stage_id), {}) or {}
-                    direct_forecast = edge_data_direct.get('forecast') or {}
-                    direct_forecast_mean = direct_forecast.get('mean')
-                    if direct_forecast_mean is not None:
-                        row['forecast_mean'] = direct_forecast_mean
-                    # Surface edge evidence.mean as evidence_mean fallback when we cannot derive
-                    # cumulative arrivals/start-N (e.g. when only evidence.mean is present).
-                    # This keeps evidence_mean semantics stable across visibility modes for
-                    # directly-connected stages.
-                    if 'evidence_mean' not in row:
-                        direct_evidence = edge_data_direct.get('evidence') or {}
-                        direct_evidence_mean = direct_evidence.get('mean')
-                        if direct_evidence_mean is not None:
-                            row['evidence_mean'] = direct_evidence_mean
+                    if visibility_mode in ('e', 'f+e'):
+                        row['evidence_mean'] = 1.0
+                        row['completeness'] = 1.0
+                    if visibility_mode == 'f':
+                        row['forecast_mean'] = 1.0
+                    if visibility_mode == 'f+e':
+                        row['p_mean'] = 1.0
 
-                # Blended probability is the scenario's cumulative probability when in blended mode.
-                if visibility_mode == 'f+e':
-                    row['p_mean'] = prob
+                    row['median_lag_days'] = 0.0
+                    row['mean_lag_days'] = 0.0
+                else:
+                    if visibility_mode in ('e', 'f+e') and arrivals_n is not None:
+                        row['n'] = arrivals_n
 
-                if completeness is not None:
-                    row['completeness'] = completeness
+                    if visibility_mode in ('e', 'f+e'):
+                        start_n = start_n_by_scenario_id.get(scenario_id)
+                        if isinstance(start_n, (int, float)) and start_n and arrivals_n is not None:
+                            row['evidence_mean'] = arrivals_n / float(start_n)
 
-                if median_lag_days is not None:
-                    row['median_lag_days'] = median_lag_days
-                if mean_lag_days is not None:
-                    row['mean_lag_days'] = mean_lag_days
+                    # Edge-direct forecast/evidence for non-group stages
+                    if not is_group and i > 0:
+                        prev_entry = stage_entries[i - 1]
+                        prev_node = prev_entry[1][0] if prev_entry[2] else stage_ids[i - 1]
+                        if prev_node in scenario_G and node_id in scenario_G and scenario_G.has_edge(prev_node, node_id):
+                            edge_data_direct = scenario_G.edges.get((prev_node, node_id), {}) or {}
+                            direct_forecast = edge_data_direct.get('forecast') or {}
+                            direct_forecast_mean = direct_forecast.get('mean')
+                            if direct_forecast_mean is not None:
+                                row['forecast_mean'] = direct_forecast_mean
+                            if 'evidence_mean' not in row:
+                                direct_evidence = edge_data_direct.get('evidence') or {}
+                                direct_evidence_mean = direct_evidence.get('mean')
+                                if direct_evidence_mean is not None:
+                                    row['evidence_mean'] = direct_evidence_mean
 
-            if dropoff is not None:
-                row['dropoff'] = dropoff
-            if step_probability is not None:
-                row['step_probability'] = step_probability
-            
-            data_rows.append(row)
-    
+                    if visibility_mode == 'f+e':
+                        row['p_mean'] = prob
+
+                    if completeness is not None:
+                        row['completeness'] = completeness
+
+                    if median_lag_days is not None:
+                        row['median_lag_days'] = median_lag_days
+                    if mean_lag_days is not None:
+                        row['mean_lag_days'] = mean_lag_days
+
+                if dropoff is not None:
+                    row['dropoff'] = dropoff
+                if step_probability is not None:
+                    row['step_probability'] = step_probability
+
+                data_rows.append(row)
+
+        # After processing all members of this stage, update prev_stage_total_prob.
+        # For groups: sum of member probabilities. For solo: the single probability.
+        for s in prepared_scenarios:
+            scenario_id = s['scenario_id']
+            scenario_G = s['scenario_G']
+            if i == 0:
+                prev_stage_total_prob[scenario_id] = 1.0
+            else:
+                total = 0.0
+                for node_id in member_nodes:
+                    result = calculate_path_probability(scenario_G, start_id, node_id, pruning)
+                    total += result.probability
+                prev_stage_total_prob[scenario_id] = total
+
+    # Build metadata
+    metadata: dict[str, Any] = {
+        'from_node': start_id,
+        'from_label': from_label,
+        'to_node': end_id,
+        'to_label': to_label,
+        'intermediate_nodes': sorted_intermediates_meta,
+    }
+    if branch_warnings:
+        metadata['warnings'] = branch_warnings
+
     return {
-        'metadata': {
-            'from_node': start_id,
-            'from_label': from_label,
-            'to_node': end_id,
-            'to_label': to_label,
-            'intermediate_nodes': sorted_intermediates,  # Topologically sorted
-        },
+        'metadata': metadata,
         'semantics': {
             'dimensions': [
                 {'id': 'stage', 'name': 'Stage', 'type': 'stage', 'role': 'primary'},
@@ -1355,6 +1478,7 @@ def run_conversion_funnel(
     end_id: str,
     intermediate_nodes: list[str] = None,
     all_scenarios: Optional[list] = None,
+    visited_any_groups: Optional[list[list[str]]] = None,
 ) -> dict[str, Any]:
     """
     Conversion funnel analysis - shows probability at each stage WITHOUT pruning.
@@ -1365,7 +1489,8 @@ def run_conversion_funnel(
     This is the natural "funnel" view: what % of traffic reaches each stage?
     """
     # Just call run_path with pruning=None
-    result = run_path(G, start_id, end_id, intermediate_nodes, pruning=None, all_scenarios=all_scenarios)
+    result = run_path(G, start_id, end_id, intermediate_nodes, pruning=None,
+                      all_scenarios=all_scenarios, visited_any_groups=visited_any_groups)
     
     # Update metadata to clarify this is a funnel (not constrained)
     result['metadata']['is_conversion_funnel'] = True

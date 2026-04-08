@@ -17,6 +17,8 @@ import type { Graph } from '../types';
 export interface CandidateRegime {
   core_hash: string;
   equivalent_hashes: string[];
+  /** Context dimension keys that produced this hash (e.g. ['channel']). Empty = bare/uncontexted. */
+  context_keys?: string[];
 }
 
 /**
@@ -109,6 +111,7 @@ export async function buildCandidateRegimesByEdge(
           result[edgeId].push({
             core_hash: coreHash,
             equivalent_hashes: equivalentHashes,
+            context_keys: keys,
           });
         }
       }
@@ -182,4 +185,43 @@ export async function computeMeceDimensions(
   }
 
   return meceDims;
+}
+
+/**
+ * Filter candidate regimes per edge to match a scenario's context dimensions.
+ *
+ * Per doc 30 §4.1: "For a query targeting a specific dimension, the FE
+ * filters the candidate list to only hashes whose key-set includes the
+ * queried dimension."
+ *
+ * - Scenario with `context(channel:google)` → keep only regimes with `channel` in key-set
+ * - Scenario with no context → keep only bare (uncontexted) regimes (`context_keys = []`)
+ * - Scenario with `context(channel:google).context(device:mobile)` → keep only
+ *   regimes whose key-set is exactly `['channel', 'device']`
+ *
+ * If filtering produces an empty list for an edge, there's no data for that
+ * scenario's context — the analysis degrades gracefully.
+ */
+export async function filterCandidatesByContext(
+  allRegimes: Record<string, CandidateRegime[]>,
+  effectiveQueryDsl: string,
+): Promise<Record<string, CandidateRegime[]>> {
+  const { parseConstraints } = await import('../lib/queryDSL');
+  const { extractContextKeysFromConstraints } = await import('./dataOperations/querySignature');
+
+  const parsed = parseConstraints(effectiveQueryDsl);
+  const queryKeys = extractContextKeysFromConstraints(parsed).sort();
+  const queryKeySet = queryKeys.join('||');
+
+  const filtered: Record<string, CandidateRegime[]> = {};
+  for (const [edgeId, regimes] of Object.entries(allRegimes)) {
+    const matching = regimes.filter((r) => {
+      const regimeKeys = (r.context_keys || []).sort();
+      return regimeKeys.join('||') === queryKeySet;
+    });
+    if (matching.length > 0) {
+      filtered[edgeId] = matching;
+    }
+  }
+  return filtered;
 }

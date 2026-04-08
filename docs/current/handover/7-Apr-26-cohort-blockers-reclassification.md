@@ -103,7 +103,7 @@ The underlying constraint: **do not let "the maths could be better" paralyse shi
 
 4. **Complexity assessment for Phase A is available** in this conversation: roughly 1 week of implementation total, with the main risk being frame join alignment on `(anchor_day, snapshot_date)` between first-edge and last-edge frames.
 
-5. **Docs 30+31 (regime selection + BE subject resolution)** — designs complete (7-Apr-26). Doc 30 prevents double-counting across context dimensions. Doc 31 moves DSL resolution to BE, enabling cleaner multi-hop. Together they are the architectural prerequisite for the cleanest A→Z implementation. Programme doc updated with both.
+5. **Docs 30+31 (regime selection + BE subject resolution)** — **IMPLEMENTED 8-Apr-26**. Doc 30 prevents double-counting across context dimensions. Doc 31 moves DSL resolution to BE. Post-doc-31 variant is now the active Phase A path: Steps A.0/A.6 eliminated, BE resolves path natively. CLI analyse tooling available for cohort maturity testing during development (`graph-ops/scripts/analyse.sh --type cohort_maturity`). Programme doc updated with both.
 
 ---
 
@@ -113,4 +113,4 @@ The underlying constraint: **do not let "the maths could be better" paralyse shi
 
 - **Is the Y_C convolution (item 3) worth the complexity?** The empirical evidence (§7.5 of the full-bayes design doc) suggests the current approximation works well in practice. The correct formulation may add meaningful complexity for marginal accuracy gain. **Non-blocking** — needs the mathematical design note (next step 2) before this can be properly evaluated.
 
-- **Phase A before or after docs 30+31?** Two viable orderings: (a) Phase A first — faster to ship, uses FE patch fields, replaced later by doc 31's native path resolution; (b) docs 30+31 first — cleaner architecture, no throwaway patch fields, but larger prerequisite scope. The core composition functions (A.1, A.2) are identical either way. Decision depends on whether regime selection / BE subject resolution are on the near-term roadmap independently.
+- ~~**Phase A before or after docs 30+31?**~~ **RESOLVED 8-Apr-26** — docs 30+31 implemented. Post-doc-31 variant is the active path. No throwaway patch fields needed.

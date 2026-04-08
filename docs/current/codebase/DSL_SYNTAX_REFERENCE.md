@@ -254,10 +254,13 @@ per scenario — each live scenario can have a different window or context.
   for `resolve_analysis_subjects()`.
 - **Contains**: `window()`, `cohort()`, `context()`, `asat()` — never `from()`/`to()`
 
-The top-level `request.query_dsl` is a composed string (`analyticsDsl.currentDSL`)
-used by non-snapshot analysis types (e.g. `bridge_view`) that go through the
-standard runner. Snapshot types use the per-scenario `effective_query_dsl`
-instead (doc 31, 8-Apr-26).
+There is no top-level `query_dsl` on the request. The subject
+(`analytics_dsl`) is top-level; the temporal (`effective_query_dsl`) is
+per-scenario. Both snapshot and non-snapshot analysis types use the same
+shape. The BE reads `analytics_dsl` for subject resolution (standard
+runner) and composes it with each scenario's `effective_query_dsl` for
+snapshot subject resolution (doc 31). The `query_dsl` field is deprecated
+and accepted only for backward compatibility with old clients (8-Apr-26).
 
 ### 3. `dataInterestsDSL` (pinned query — graph-level)
 

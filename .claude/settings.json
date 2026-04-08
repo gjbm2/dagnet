@@ -50,7 +50,10 @@
       "Bash(bash graph-ops/scripts/parity-test.sh gm-rebuild-jan-26 \"cohort\\(-90d:\\)\" --subject \"from\\(household-delegated\\).to\\(switch-registered\\)\" --type cohort_maturity)",
       "Bash(bash graph-ops/scripts/parity-test.sh gm-rebuild-jan-26 \"cohort\\(-90d:\\)\" --subject \"from\\(household-delegated\\).to\\(switch-registered\\)\")",
       "Bash(bash graph-ops/scripts/parity-test.sh gm-rebuild-jan-26 \"window\\(-90d:\\)\" --subject \"from\\(household-delegated\\).to\\(switch-registered\\)\" --query2 \"window\\(-30d:\\)\")",
-      "Bash(bash graph-ops/scripts/parity-test.sh gm-rebuild-jan-26 \"window\\(-90d:\\)\" --subject \"from\\(household-delegated\\).to\\(switch-registered\\)\" --type daily_conversions)"
+      "Bash(bash graph-ops/scripts/parity-test.sh gm-rebuild-jan-26 \"window\\(-90d:\\)\" --subject \"from\\(household-delegated\\).to\\(switch-registered\\)\" --type daily_conversions)",
+      "Bash(bash graph-ops/scripts/golden-regression.sh)",
+      "Bash(bash graph-ops/scripts/golden-regression.sh --update)",
+      "Bash(bash /home/reg/dev/dagnet/graph-ops/scripts/golden-regression.sh)"
     ],
     "additionalDirectories": [
       "/home/reg/dev/dagnet/.claude",

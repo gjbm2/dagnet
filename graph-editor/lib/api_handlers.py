@@ -605,32 +605,35 @@ def handle_runner_analyze(data: Dict[str, Any]) -> Dict[str, Any]:
     Returns:
         Analysis results
     """
-    # Route to snapshot handler only when the analysis type actually needs
-    # snapshot data. analytics_dsl may be present on non-snapshot types
-    # (e.g. bridge_view) — those must go through the standard runner.
-    from analysis_subject_resolution import ANALYSIS_TYPE_SCOPE_RULES
+    # ── Read top-level fields ────────────────────────────────────────
+    # analytics_dsl (new): the subject — from(x).to(y), constant across scenarios.
+    # query_dsl (deprecated): falls back for old clients that haven't migrated.
+    analytics_dsl = data.get('analytics_dsl') or data.get('query_dsl') or ''
     analysis_type = data.get('analysis_type', '')
+
+    # ── Route to snapshot handler when analysis type needs snapshot DB ──
+    from analysis_subject_resolution import ANALYSIS_TYPE_SCOPE_RULES
     is_snapshot_type = analysis_type in ANALYSIS_TYPE_SCOPE_RULES
-    scenarios_with_snapshots = [
-        s for s in data.get('scenarios', [])
-        if s.get('snapshot_subjects') or s.get('analytics_dsl')
-    ]
-    if is_snapshot_type and scenarios_with_snapshots:
+    # Snapshot path requires: (a) a snapshot-aware type AND (b) either
+    # top-level analytics_dsl or per-scenario snapshot_subjects (legacy).
+    has_snapshot_data = bool(analytics_dsl) or any(
+        s.get('snapshot_subjects') for s in data.get('scenarios', [])
+    )
+    if is_snapshot_type and has_snapshot_data:
         return _handle_snapshot_analyze_subjects(data)
 
     # Legacy path: snapshot_query (single subject)
     snapshot_query = data.get('snapshot_query')
     if snapshot_query:
         return _handle_snapshot_analyze_legacy(data)
-    
-    # Standard scenario-based analysis (no snapshot data needed)
+
+    # ── Standard runner path (graph-only analysis types) ───────────
     from runner import analyze
     from runner.types import AnalysisRequest, ScenarioData
-    
+
     if 'scenarios' not in data or not data['scenarios']:
         raise ValueError("Missing 'scenarios' field")
-    
-    # Build request
+
     scenarios = [
         ScenarioData(
             scenario_id=s.get('scenario_id', f'scenario_{i}'),
@@ -638,20 +641,24 @@ def handle_runner_analyze(data: Dict[str, Any]) -> Dict[str, Any]:
             colour=s.get('colour'),
             visibility_mode=s.get('visibility_mode', 'f+e'),
             graph=s.get('graph', {}),
+            effective_query_dsl=s.get('effective_query_dsl'),
+            candidate_regimes_by_edge=s.get('candidate_regimes_by_edge'),
         )
         for i, s in enumerate(data['scenarios'])
     ]
-    
+
     request_obj = AnalysisRequest(
         scenarios=scenarios,
-        query_dsl=data.get('query_dsl'),
-        analysis_type=data.get('analysis_type'),
+        analytics_dsl=analytics_dsl,
+        # Backward compat shim: standard runner reads query_dsl for
+        # subject parsing. Set it to analytics_dsl until Phase 3
+        # updates analyzer.py to read analytics_dsl directly.
+        query_dsl=analytics_dsl,
+        analysis_type=analysis_type,
+        mece_dimensions=data.get('mece_dimensions'),
     )
-    
-    # Run analysis
+
     response = analyze(request_obj)
-    
-    # Return JSON-serializable response
     return response.model_dump()
 
 
@@ -1183,29 +1190,25 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
     per_scenario_results: List[Dict[str, Any]] = []
     total_rows = 0
 
+    # Top-level analytics_dsl (subject) — constant across scenarios.
+    # Fall back to per-scenario analytics_dsl for backward compat.
+    top_analytics_dsl = data.get('analytics_dsl', '')
+
     for scenario in scenarios:
         scenario_id = scenario.get('scenario_id', 'unknown')
-        # Doc 31: prefer analytics_dsl (new path). Falls back to
-        # snapshot_subjects when analytics_dsl absent or resolution fails.
+        # Doc 31: resolve subjects from analytics_dsl (subject) +
+        # effective_query_dsl (temporal). Falls back to snapshot_subjects
+        # when resolution fails or analytics_dsl absent.
         subjects = None
-        if not subjects and scenario.get('analytics_dsl'):
+        subject_dsl = top_analytics_dsl or scenario.get('analytics_dsl', '')
+        if subject_dsl:
             try:
                 from analysis_subject_resolution import resolve_analysis_subjects, synthesise_snapshot_subjects
-                # Compose full DSL: analytics_dsl has the subject (from(x).to(y)),
-                # temporal DSL has the window/cohort/context clause.
-                # Per-scenario effective_query_dsl takes precedence over
-                # top-level query_dsl (which is shared across scenarios).
-                subject_dsl = scenario.get('analytics_dsl', '')
-                temporal_dsl = (scenario.get('effective_query_dsl')
-                                or data.get('query_dsl', ''))
-                if temporal_dsl and subject_dsl:
-                    # Avoid duplication: if one already contains the other, use the longer one.
-                    if subject_dsl in temporal_dsl:
-                        full_dsl = temporal_dsl
-                    elif temporal_dsl in subject_dsl:
-                        full_dsl = subject_dsl
-                    else:
-                        full_dsl = f"{subject_dsl}.{temporal_dsl}"
+                temporal_dsl = scenario.get('effective_query_dsl', '')
+                # Compose: subject + temporal. They are separate concerns
+                # and should never overlap.
+                if subject_dsl and temporal_dsl:
+                    full_dsl = f"{subject_dsl}.{temporal_dsl}"
                 else:
                     full_dsl = subject_dsl or temporal_dsl
                 resolved = resolve_analysis_subjects(
@@ -2049,6 +2052,8 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
     any_success = any(s.get("success") for s in per_scenario_results)
     return {
         "success": any_success,
+        "analytics_dsl": top_analytics_dsl,
+        "query_dsl": top_analytics_dsl,  # backward compat
         "scenarios": per_scenario_results,
         "rows_analysed": total_rows,
     }

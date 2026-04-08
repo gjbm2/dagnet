@@ -174,7 +174,7 @@ Clearing layer 1 is useless unless you also handle layers 2-4. UpdateManager map
 
 **Root cause**: `analytics_dsl` (data subject, constant across scenarios) and `query_dsl` (temporal/context, varies per scenario) are fundamentally different concepts that happen to use the same DSL syntax. Combining them with `analyticsDsl || currentDSL` loses the distinction — downstream code that needs the temporal DSL gets the path DSL instead, and vice versa.
 
-**Fix**: keep them separate throughout the pipeline. The FE sends `analytics_dsl` per scenario and `effective_query_dsl` per scenario. The BE composes them when needed for resolution (`f"{subject_dsl}.{temporal_dsl}"`). See `DSL_SYNTAX_REFERENCE.md` § "DSL Roles in the Analysis Request Flow".
+**Fix**: keep them separate throughout the pipeline. The FE sends `analytics_dsl` at top level (constant — the subject) and `effective_query_dsl` per scenario (varies — the temporal). They are never concatenated on the FE. The BE composes them when needed for snapshot subject resolution. See `DSL_SYNTAX_REFERENCE.md` § "DSL Roles in the Analysis Request Flow" and `docs/current/project-y/8-Apr-26-analysis-contract-fix.md`.
 
 ## Anti-pattern 20: Single-scenario parity test missing multi-scenario defects
 
@@ -183,6 +183,14 @@ Clearing layer 1 is useless unless you also handle layers 2-4. UpdateManager map
 **Root cause**: single-scenario tests use one top-level `query_dsl` which happens to be correct for the only scenario. Multi-scenario requires per-scenario temporal DSLs. The top-level `query_dsl` is the current scenario's DSL — other scenarios get the wrong time bounds.
 
 **Fix**: parity tests must include multi-scenario cases with different temporal DSLs (e.g. `--query "window(-90d:)" --query2 "window(-30d:)"`). The test must verify each scenario's data reflects its own time bounds, not the shared top-level DSL.
+
+## Anti-pattern 21: Display planner forcing single-scenario on multi-scenario-capable charts
+
+**Signature**: a time-series chart type (e.g. `daily_conversions`) has data for multiple scenarios in the result, but only one scenario renders. The legend shows "N" / "Conversion %" instead of per-scenario labels.
+
+**Root cause**: `chartDisplayPlanningService.ts` has a `multiScenarioTimeSeriesKinds` set that controls which time-series chart kinds are allowed to render multiple scenarios. Chart kinds not in this set are forced to `current_only` mode (only the last scenario renders). The `daily_conversions` builder already handles multi-scenario correctly (separate series per scenario, unioned date axis), but the planner blocks it.
+
+**Fix**: add the chart kind to `multiScenarioTimeSeriesKinds` in `chartDisplayPlanningService.ts`. Verify the ECharts builder handles multi-scenario grouping before adding — check that it groups by `scenario_id`, creates separate series per scenario, and aligns to a common date set.
 
 ## When to add to this document
 

@@ -167,14 +167,68 @@ Module-level dict: `_cache[key] → (expiry_timestamp, result)`.
 
 Mirrors Modal API with threading-based job spawning. Same `submit/status/cancel` interface.
 
-### Worker pipeline
+### Async roundtrip (FE → Modal → webhook → git)
 
-1. Topology analysis: extract path from graph, compute reachability
-2. Evidence binding: aggregate k/n from parameter files by slice
-3. PyMC model construction: Bayesian probabilistic model
-4. MCMC inference: sample posterior distribution
-5. Quality check: Rhat, ESS, divergence metrics; assign evidence grade
-6. Webhook report: POST posteriors and quality metrics
+The full cycle from user trigger to persisted posteriors:
+
+1. **FE trigger**: `useBayesTrigger.ts` calls `/api/bayes/submit` with
+   graph topology, parameter files, and an encrypted callback token
+2. **Modal dispatch**: `bayes/app.py` `/submit` endpoint spawns a
+   worker via `modal.Function.spawn()`, returns `job_id`
+3. **FE polling**: `useBayesTrigger.ts` polls `/api/bayes/status`
+   every 5s until completion
+4. **Worker execution**: `bayes/worker.py:fit_graph()` runs the
+   compiler pipeline (see below), fires webhook on completion
+5. **Webhook → atomic git commit**: `api/bayes-webhook.ts` receives
+   posteriors, writes a patch file (`_bayes/patch-{job_id}.json`),
+   commits atomically via GitHub Git Data API (`atomicCommitFiles`).
+   Retry-with-rebase on 422 conflict.
+6. **FE pull + patch apply**: `useBayesTrigger.ts` detects completion,
+   pulls the commit, applies the patch locally via
+   `bayesPatchService.ts:applyPatchAndCascade()`
+
+If the browser closes mid-run, the webhook still commits. On next
+boot, `bayesPatchService.ts:scanForPendingPatches()` detects
+unapplied patches in `_bayes/` and applies them.
+
+### Compiler pipeline (`bayes/compiler/`)
+
+The compiler translates graph topology into a Bayesian model and runs
+MCMC inference. Five modules form a strict pipeline:
+
+| Stage | Module | Input | Output |
+|-------|--------|-------|--------|
+| 1. Topology | `topology.py` | Graph JSON | `TopologyAnalysis` — edges, branch groups, paths, reachability |
+| 2. Evidence | `evidence.py` | TopologyAnalysis + param files + snapshot DB | `BoundEvidence` — per-edge observations with recency weights |
+| 3. Model | `model.py` | BoundEvidence + settings | PyMC model (Beta/Binomial, Dirichlet, latent onset, latency CDF) |
+| 4. Inference | `inference.py` | PyMC model | MCMC samples via nutpie (4 chains, 1000 draws) |
+| 5. Summary | `inference.py` | Samples | `PosteriorSummary` per edge — HDI, ESS, rhat, evidence grade |
+
+The pipeline runs twice per fit (**two-phase model**):
+- **Phase 1 (window)**: fits window() observations only. Extracts
+  posterior point estimates (p_alpha/beta, mu/sigma/onset with SDs).
+- **Phase 2 (cohort)**: uses Phase 1 posteriors as priors (ESS-decayed
+  Beta/Dirichlet via `_ess_decay_scale()`), fits cohort() observations
+  with frozen Phase 1 latency. `worker.py:557-877` orchestrates.
+
+Key implemented features:
+- **Latent onset**: per-edge learned onset (feature flag
+  `latent_onset=True`, default on). Onset estimated via MCMC, not
+  fixed from histogram.
+- **Recency weighting**: `_apply_recency_weights()` in evidence.py
+  applies `exp(-ln2 * age / half_life_days)` to each trajectory.
+- **Zero-count filter**: likelihood-lossless removal of bins where
+  neither y nor x changed (`zero_count_filter` flag, default True).
+- **Snapshot evidence**: `bind_snapshot_evidence()` queries snapshot DB
+  directly, falls back to param files per edge. Merges trajectories
+  with supplemental daily observations.
+- **Join-node mixture CDF**: `completeness.py:moment_matched_collapse()`
+  builds mixture CDF at join nodes with moment matching. Differentiable
+  PyTensor variant (`pt_moment_matched_collapse`) for MCMC gradients.
+- **Unified MCMC kappa**: single dispersion parameter per edge with
+  LogNormal prior, replacing external Williams MLE.
+- **Quality-gated warm-start**: previous posteriors used as priors only
+  if rhat < 1.10 and ESS >= 100.
 
 ### Quality gates
 
@@ -182,6 +236,32 @@ Mirrors Modal API with threading-based job spawning. Same `submit/status/cancel`
 - ESS > min_ess (effective sample size)
 - Divergences < threshold
 - Evidence grade >= 1
+
+### FE posterior overlay components
+
+| Component | File | Role |
+|-----------|------|------|
+| `BayesPosteriorCard` | `src/components/analytics/BayesPosteriorCard.tsx` | Renders probability + latency posteriors with quality tier, HDI, ESS, freshness |
+| `PosteriorIndicator` | `src/components/shared/PosteriorIndicator.tsx` | Reusable badge + hover popover with convergence warnings |
+| `bayesQualityTier` | `src/utils/bayesQualityTier.ts` | Computes quality tier: failed/warning/good-0..3/no-data with colour palette |
+| `useBayesTrigger` | `src/hooks/useBayesTrigger.ts` | Full roundtrip orchestration: submit, poll, webhook, patch apply |
+
+Quality tier overlay mode colour-codes edges in `ConversionEdge.tsx`
+and `EdgeBeads.tsx`. `AnalysisInfoCard` Forecast tab shows full
+posterior diagnostics per edge.
+
+### Automation (nightly Bayes fit)
+
+`bayesReconnectService.ts` (426 lines) and `bayesPatchService.ts`
+(721 lines) implement the 3-phase automation pipeline:
+
+- **Phase 0**: apply any pending patches from previous runs
+- **Phase 1**: fetch new data + commission Bayes fit
+- **Phase 2**: drain — poll until completion, apply results
+
+Integrated into `dailyAutomationJob.ts`. `runBayes` graph-level flag
+controls opt-in. Scheduler persistence via `reconcileBayesFitJob`
+with probe grace periods and stale cutoff thresholds.
 
 ## Shared Data Types
 

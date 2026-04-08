@@ -142,9 +142,22 @@ async function runAnalyse() {
 
   log.info(`${scenarioEntries.length} scenario(s) prepared`);
 
-  // Build the effective analytics DSL (subject + first scenario's window)
-  const baseDsl = scenarios[0]?.queryDsl || queryDsl;
-  const analyticsDsl = subject ? `${subject}.${baseDsl}` : baseDsl;
+  // analytics_dsl = subject only (from/to/visited). Never temporal.
+  // When --subject is explicit, use it. Otherwise extract from the query
+  // DSL (shorthand: "from(x).to(y).window(-30d:)" has subject embedded).
+  let analyticsDsl = subject || '';
+  if (!analyticsDsl && queryDsl) {
+    // Extract subject clauses from the query DSL shorthand
+    const subjectParts: string[] = [];
+    const subjectRe = /\b(from|to|visited|visitedAny|exclude)\([^)]*\)/g;
+    let match: RegExpExecArray | null;
+    while ((match = subjectRe.exec(queryDsl)) !== null) {
+      subjectParts.push(match[0]);
+    }
+    if (subjectParts.length > 0) {
+      analyticsDsl = subjectParts.join('.');
+    }
+  }
 
   // Build scenariosContext to inject CLI scenarios into live mode.
   // The last scenario is always 'current'. Earlier ones are live scenarios.
