@@ -127,6 +127,25 @@
   color: #999;
 }
 
+/* Windowed rendering indicator */
+.log-window-indicator {
+  padding: 4px 12px;
+  background: #f0f0f0;
+  color: #888;
+  font-size: 11px;
+  text-align: center;
+  border-bottom: 1px solid #e0e0e0;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+[data-theme="dark"] .log-window-indicator {
+  background: #2a2a2a;
+  color: #888;
+  border-bottom-color: #444;
+}
+
 /* Entry container (includes children) */
 .log-entry-container {
   border-left: 3px solid transparent;

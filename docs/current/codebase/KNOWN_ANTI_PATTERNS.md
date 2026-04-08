@@ -122,6 +122,16 @@ Clearing layer 1 is useless unless you also handle layers 2-4. UpdateManager map
 
 **Broader principle**: any state that exists only because of manual one-off commands will eventually be lost. If the release script gates on it (e.g., bayes compiler tests), the setup script must produce it.
 
+## Anti-pattern 14: Treating transient errors as permanent rate limits
+
+**Signature**: automated retrieve-all run takes hours longer than expected. Logs show repeated 45-minute cooldowns triggered by 30-second timeouts rather than actual 429 responses.
+
+**Root cause**: the error classifier (`rateLimiter.isRateLimitError`) treated both explicit 429s and network timeouts as the same category, triggering a 45-minute cooldown for any transient timeout. In a real incident, 5 consecutive timeouts caused 3h 45m of wasted cooldowns, while a simple 30s retry would have succeeded.
+
+**Fix**: classify errors into two tiers. Use `isExplicitRateLimitError()` for 429s only (triggers long cooldown) and `isTimeoutError()` for transient failures (retry with exponential backoff: 30s → 60s → 120s → cap at 5 min). Only escalate from timeout to cooldown if a retry receives an actual 429. See `rateLimiter.ts`, `retrieveAllSlicesService.ts`.
+
+**Broader principle**: not all errors in the same code path deserve the same recovery strategy. Classify by cause, not by location.
+
 ## When to add to this document
 
 After completing a multi-attempt fix, check: does my bug match a generalisable pattern? If so, add it here following the format: Signature (how to recognise it), Root cause (why it happens), Fix (what to do), Example (optional, specific instance).

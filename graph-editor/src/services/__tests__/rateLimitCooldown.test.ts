@@ -43,9 +43,8 @@ describe('Rate Limit Detection', () => {
     expect(rateLimiter.isRateLimitError('Exceeded rate limit')).toBe(true);
   });
 
-  it('detects timeout and network errors as rate-limit-equivalent', () => {
-    // Amplitude can express throttling as hung requests that time out
-    // rather than returning an immediate 429.
+  it('detects timeout and network errors via isRateLimitError (broad check)', () => {
+    // isRateLimitError is the union: 429 OR timeout. Used by atomicity guard.
     expect(rateLimiter.isRateLimitError('Timeout')).toBe(true);
     expect(rateLimiter.isRateLimitError('Failed to fetch')).toBe(true);
     expect(rateLimiter.isRateLimitError('The operation was aborted')).toBe(true);
@@ -58,6 +57,43 @@ describe('Rate Limit Detection', () => {
     expect(rateLimiter.isRateLimitError('Invalid response')).toBe(false);
     expect(rateLimiter.isRateLimitError('Parse error')).toBe(false);
     expect(rateLimiter.isRateLimitError('Template error: missing variable')).toBe(false);
+  });
+});
+
+describe('Explicit vs Timeout Error Classification', () => {
+  it('isExplicitRateLimitError matches only 429 / rate limit responses', () => {
+    expect(rateLimiter.isExplicitRateLimitError('Error: 429')).toBe(true);
+    expect(rateLimiter.isExplicitRateLimitError('Too Many Requests')).toBe(true);
+    expect(rateLimiter.isExplicitRateLimitError('Exceeded rate limit')).toBe(true);
+    expect(rateLimiter.isExplicitRateLimitError('Exceeded concurrent limit')).toBe(true);
+  });
+
+  it('isExplicitRateLimitError does NOT match timeouts', () => {
+    expect(rateLimiter.isExplicitRateLimitError('Timeout')).toBe(false);
+    expect(rateLimiter.isExplicitRateLimitError('Request timeout after 30000ms')).toBe(false);
+    expect(rateLimiter.isExplicitRateLimitError('Failed to fetch')).toBe(false);
+    expect(rateLimiter.isExplicitRateLimitError('The operation was aborted')).toBe(false);
+    expect(rateLimiter.isExplicitRateLimitError('ETIMEDOUT')).toBe(false);
+  });
+
+  it('isTimeoutError matches timeouts but NOT 429s', () => {
+    expect(rateLimiter.isTimeoutError('Timeout')).toBe(true);
+    expect(rateLimiter.isTimeoutError('Request timeout after 30000ms')).toBe(true);
+    expect(rateLimiter.isTimeoutError('ETIMEDOUT')).toBe(true);
+    expect(rateLimiter.isTimeoutError('Failed to fetch')).toBe(true);
+
+    expect(rateLimiter.isTimeoutError('Error: 429')).toBe(false);
+    expect(rateLimiter.isTimeoutError('Too Many Requests')).toBe(false);
+    expect(rateLimiter.isTimeoutError('Exceeded rate limit')).toBe(false);
+  });
+
+  it('timeout-only errors are NOT classified as explicit rate limits', () => {
+    // This is the exact scenario from the morning run: 30s timeout should NOT
+    // trigger a 45-minute cooldown.
+    const timeoutMsg = 'Execution failed: Request timeout after 30000ms';
+    expect(rateLimiter.isTimeoutError(timeoutMsg)).toBe(true);
+    expect(rateLimiter.isExplicitRateLimitError(timeoutMsg)).toBe(false);
+    expect(rateLimiter.isRateLimitError(timeoutMsg)).toBe(true); // broad check still matches
   });
 });
 

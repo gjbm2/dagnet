@@ -1,11 +1,13 @@
 /**
  * Session Log Viewer
- * 
+ *
  * Displays hierarchical session logs with:
  * - Expand/collapse for composite operations
  * - Search filtering
  * - Tail mode (auto-scroll to latest)
  * - Context details for data operations
+ * - Throttled updates (200ms debounce) to survive high-frequency logging
+ * - Windowed rendering (last 500 entries) to keep DOM size bounded
  */
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
@@ -13,6 +15,12 @@ import { sessionLogService, LogEntry, LogLevel, OperationContext } from '../../s
 import { copyToClipboard } from '../../utils/copyToClipboard';
 import { AlertCircle, AlertTriangle, CheckCircle2, Info, Code, Terminal } from 'lucide-react';
 import './SessionLogViewer.css';
+
+/** Maximum number of top-level entries to render as DOM nodes. */
+const RENDER_WINDOW_SIZE = 500;
+
+/** Minimum interval (ms) between React state updates from log notifications. */
+const THROTTLE_MS = 200;
 
 interface SessionLogViewerProps {
   fileId?: string;
@@ -30,46 +38,54 @@ export function SessionLogViewer({ fileId }: SessionLogViewerProps) {
   const wasAtBottomRef = useRef(true);
   const tailModeRef = useRef(true);
   const suppressScrollHandlingRef = useRef(false);
-  const prevDeepCountRef = useRef(0);
-  
+  const prevEntryCountRef = useRef(0);
+
+  // Throttle refs — latest entries are stashed in a ref; a trailing timer
+  // coalesces rapid-fire notifications into a single React setState.
+  const throttleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingEntriesRef = useRef<LogEntry[] | null>(null);
+
   // Context menu state
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; entry: LogEntry } | null>(null);
 
-  // Subscribe to log updates
+  // Subscribe to log updates (throttled)
   useEffect(() => {
+    const flushPending = () => {
+      throttleTimerRef.current = null;
+      if (pendingEntriesRef.current) {
+        setEntries(pendingEntriesRef.current);
+        pendingEntriesRef.current = null;
+      }
+    };
+
     const unsubscribe = sessionLogService.subscribe((newEntries) => {
-      setEntries([...newEntries]);
+      // Stash latest entries — don't copy again, getEntries() already returned a copy.
+      pendingEntriesRef.current = newEntries;
+      if (!throttleTimerRef.current) {
+        throttleTimerRef.current = setTimeout(flushPending, THROTTLE_MS);
+      }
     });
 
     const unsubscribeSettings = sessionLogService.subscribeSettings(() => {
       setDisplayThreshold(sessionLogService.getDisplayThreshold());
     });
-    
+
     // Initialize with current entries
     setEntries(sessionLogService.getEntries());
-    
+
     return () => {
       unsubscribe();
       unsubscribeSettings();
+      if (throttleTimerRef.current) {
+        clearTimeout(throttleTimerRef.current);
+        throttleTimerRef.current = null;
+      }
     };
   }, []);
 
   useEffect(() => {
     tailModeRef.current = tailMode;
   }, [tailMode]);
-
-  function countEntriesDeep(list: LogEntry[]): number {
-    let count = 0;
-    const stack: LogEntry[] = [...list];
-    while (stack.length) {
-      const e = stack.pop()!;
-      count++;
-      if (e.children?.length) {
-        for (const c of e.children) stack.push(c);
-      }
-    }
-    return count;
-  }
 
   const scrollToBottom = useCallback(() => {
     const el = containerRef.current;
@@ -89,14 +105,13 @@ export function SessionLogViewer({ fileId }: SessionLogViewerProps) {
   }, []);
 
   // Auto-scroll when in tail mode, but ONLY when new entries are added.
+  // Uses top-level entry count (O(1)) instead of deep tree walk.
   useEffect(() => {
-    const nextCount = countEntriesDeep(entries);
-    const prevCount = prevDeepCountRef.current;
-    prevDeepCountRef.current = nextCount;
+    const nextCount = entries.length;
+    const prevCount = prevEntryCountRef.current;
+    prevEntryCountRef.current = nextCount;
 
     if (!tailModeRef.current) return;
-    // Preference semantics: only auto-scroll if the user is currently at bottom.
-    // If they've scrolled up, keep position and let them use "Jump to Latest".
     if (!wasAtBottomRef.current) return;
     if (nextCount <= prevCount) return;
     scrollToBottom();
@@ -106,10 +121,10 @@ export function SessionLogViewer({ fileId }: SessionLogViewerProps) {
   const handleScroll = useCallback(() => {
     if (suppressScrollHandlingRef.current) return;
     if (!containerRef.current) return;
-    
+
     const { scrollTop, scrollHeight, clientHeight } = containerRef.current;
     const atBottom = scrollHeight - scrollTop - clientHeight < 50;
-    
+
     wasAtBottomRef.current = atBottom;
     setIsAtBottom(atBottom);
   }, []);
@@ -124,6 +139,14 @@ export function SessionLogViewer({ fileId }: SessionLogViewerProps) {
         e => LEVEL_SEVERITY[e.level] >= LEVEL_SEVERITY[displayThreshold]
       )
     : thresholdFilteredEntries;
+
+  // Windowed rendering: only mount DOM for the last RENDER_WINDOW_SIZE entries.
+  // All entries remain in memory (service + state) — search, copy-all, and export
+  // still see everything. Only the DOM is bounded.
+  const hiddenCount = Math.max(0, filteredEntries.length - RENDER_WINDOW_SIZE);
+  const windowedEntries = hiddenCount > 0
+    ? filteredEntries.slice(-RENDER_WINDOW_SIZE)
+    : filteredEntries;
 
   const handleToggleExpand = (id: string) => {
     sessionLogService.toggleExpanded(id);
@@ -152,7 +175,7 @@ export function SessionLogViewer({ fileId }: SessionLogViewerProps) {
 
   const handleCopyEntry = useCallback(async () => {
     if (!contextMenu?.entry) return;
-    
+
     try {
       // Create a clean copy without circular references and with serialized dates
       const cleanEntry = JSON.parse(JSON.stringify(contextMenu.entry, (key, value) => {
@@ -161,9 +184,8 @@ export function SessionLogViewer({ fileId }: SessionLogViewerProps) {
         }
         return value;
       }));
-      
+
       await copyToClipboard(JSON.stringify(cleanEntry, null, 2));
-      // Could show a toast here, but keeping it simple
     } catch (err) {
       console.error('Failed to copy log entry:', err);
     }
@@ -180,10 +202,10 @@ export function SessionLogViewer({ fileId }: SessionLogViewerProps) {
 
   const handleCopyAll = useCallback(async () => {
     try {
+      // Copy ALL entries (not just windowed) — no data loss
       const allEntries = sessionLogService.getEntries();
       const threshold = sessionLogService.getDisplayThreshold();
       const thresholdSev = LEVEL_SEVERITY[threshold];
-      // Filter to only entries at or above the display threshold (copy what the user sees)
       const visibleEntries = allEntries
         .filter(e => LEVEL_SEVERITY[e.level] >= thresholdSev)
         .map(e => {
@@ -198,8 +220,6 @@ export function SessionLogViewer({ fileId }: SessionLogViewerProps) {
       }));
 
       await copyToClipboard(JSON.stringify(cleanEntries, null, 2));
-      // Brief visual feedback - the button text could flash or we could use a toast
-      // Keeping it simple without toast dependency
     } catch (err) {
       console.error('Failed to copy all logs:', err);
     }
@@ -224,7 +244,7 @@ export function SessionLogViewer({ fileId }: SessionLogViewerProps) {
           onChange={(e) => setSearchTerm(e.target.value)}
           className="log-search"
         />
-        
+
         <div className="log-toolbar-actions">
           <button onClick={handleCopyAll} className="log-btn" title="Copy all logs to clipboard">
             📋
@@ -238,7 +258,7 @@ export function SessionLogViewer({ fileId }: SessionLogViewerProps) {
           <button onClick={handleCollapseAll} className="log-btn" title="Collapse all">
             ⊖
           </button>
-          
+
           <label className="log-checkbox" title="Show operation context details">
             <input
               type="checkbox"
@@ -264,7 +284,7 @@ export function SessionLogViewer({ fileId }: SessionLogViewerProps) {
             </span>
           )}
 
-          
+
           <label className="log-checkbox" title="Auto-scroll to latest entries">
             <input
               type="checkbox"
@@ -277,7 +297,7 @@ export function SessionLogViewer({ fileId }: SessionLogViewerProps) {
             />
             Tail
           </label>
-          
+
           {tailMode && !isAtBottom && (
             <button onClick={jumpToBottom} className="log-btn log-btn-primary">
               ↓{'\u00A0'}Latest
@@ -285,18 +305,23 @@ export function SessionLogViewer({ fileId }: SessionLogViewerProps) {
           )}
         </div>
       </div>
-      
-      <div 
-        className="log-entries" 
+
+      <div
+        className="log-entries"
         ref={containerRef}
         onScroll={handleScroll}
       >
-        {filteredEntries.length === 0 ? (
+        {hiddenCount > 0 && (
+          <div className="log-window-indicator">
+            {hiddenCount} older {hiddenCount === 1 ? 'entry' : 'entries'} not shown (use Copy All for full log)
+          </div>
+        )}
+        {windowedEntries.length === 0 ? (
           <div className="log-empty">
             {searchTerm ? 'No matching log entries' : 'No log entries yet'}
           </div>
         ) : (
-          filteredEntries.map((entry) => (
+          windowedEntries.map((entry) => (
             <LogEntryRow
               key={entry.id}
               entry={entry}
@@ -309,20 +334,20 @@ export function SessionLogViewer({ fileId }: SessionLogViewerProps) {
           ))
         )}
       </div>
-      
+
       {/* Context Menu */}
       {contextMenu && (
-        <div 
+        <div
           className="log-context-menu"
-          style={{ 
-            position: 'fixed', 
-            left: contextMenu.x, 
+          style={{
+            position: 'fixed',
+            left: contextMenu.x,
             top: contextMenu.y,
             zIndex: 10000
           }}
           onClick={(e) => e.stopPropagation()}
         >
-          <button 
+          <button
             className="log-context-menu-item"
             onClick={handleCopyEntry}
           >
@@ -355,16 +380,16 @@ function LogEntryRow({ entry, depth, showContext, displayThreshold, onToggleExpa
   );
   const hasChildren = visibleChildren && visibleChildren.length > 0;
   const isExpanded = entry.expanded;
-  
+
   const levelIcon = getLevelIcon(entry.level);
   const levelClass = `log-level-${entry.level}`;
-  
+
   return (
-    <div 
+    <div
       className={`log-entry-container ${levelClass}`}
       onContextMenu={(e) => onContextMenu(e, entry)}
     >
-      <div 
+      <div
         className={`log-entry ${hasChildren ? 'log-entry-expandable' : ''}`}
         style={{ paddingLeft: `${depth * 20 + 8}px` }}
         onClick={() => hasChildren && onToggleExpand(entry.id)}
@@ -374,43 +399,43 @@ function LogEntryRow({ entry, depth, showContext, displayThreshold, onToggleExpa
             {isExpanded ? '▼' : '▶'}
           </span>
         )}
-        
+
         <span className="log-time">
           {entry.timestamp.toLocaleTimeString()}
         </span>
-        
+
         <span className="log-icon">{levelIcon}</span>
-        
+
         <span className="log-operation">[{entry.operation}]</span>
-        
+
         <span className="log-message">{entry.message}</span>
-        
+
         {hasChildren && (
           <span className="log-child-count">
             ({visibleChildren!.length})
           </span>
         )}
-        
+
         {entry.context?.duration && (
           <span className="log-duration">
             {entry.context.duration.toFixed(0)}ms
           </span>
         )}
       </div>
-      
+
       {entry.details && (
-        <div 
+        <div
           className="log-details"
           style={{ paddingLeft: `${depth * 20 + 32}px` }}
         >
           <pre className="log-details-pre">{entry.details}</pre>
         </div>
       )}
-      
+
       {showContext && entry.context && (
         <ContextDetails context={entry.context} depth={depth} />
       )}
-      
+
       {hasChildren && isExpanded && (
         <div className="log-children">
           {visibleChildren!.map((child) => (
@@ -444,11 +469,11 @@ function ContextDetails({ context, depth }: ContextDetailsProps) {
     if (typeof value === 'object' && Object.keys(value).length === 0) return false;
     return true;
   });
-  
+
   if (relevantFields.length === 0) return null;
-  
+
   return (
-    <div 
+    <div
       className="log-context"
       style={{ paddingLeft: `${depth * 20 + 32}px` }}
     >
@@ -466,11 +491,11 @@ interface ContextFieldProps {
 
 function ContextField({ fieldKey, value }: ContextFieldProps) {
   const label = formatFieldLabel(fieldKey);
-  
+
   // Handle arrays
   if (Array.isArray(value)) {
     if (value.length === 0) return null;
-    
+
     // Special handling for parametersGenerated
     if (fieldKey === 'parametersGenerated') {
       return (
@@ -490,7 +515,7 @@ function ContextField({ fieldKey, value }: ContextFieldProps) {
         </div>
       );
     }
-    
+
     // Generic array:
     // - Arrays of primitives: inline join
     // - Arrays of objects: pretty JSON (otherwise we get "[object Object]" which is useless)
@@ -512,7 +537,7 @@ function ContextField({ fieldKey, value }: ContextFieldProps) {
       </div>
     );
   }
-  
+
   // Handle objects (valuesBefore, valuesAfter)
   if (typeof value === 'object') {
     return (
@@ -524,7 +549,7 @@ function ContextField({ fieldKey, value }: ContextFieldProps) {
       </div>
     );
   }
-  
+
   // Simple values
   return (
     <div className="context-field">
