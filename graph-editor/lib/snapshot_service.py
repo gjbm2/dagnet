@@ -130,35 +130,73 @@ _CACHE_MAX_ENTRIES = 256
 
 _cache: Dict[str, Tuple[float, Any]] = {}   # key -> (expiry_timestamp, result)
 _cache_lock = threading.Lock()
-_cache_stats = {"hits": 0, "misses": 0, "evictions": 0, "invalidations": 0}
+_cache_stats = {"hits": 0, "misses": 0, "evictions": 0, "invalidations": 0, "bypasses": 0}
+
+# Thread-local bypass flag — set via set_cache_bypass() or cache_bypass_ctx().
+_tls = threading.local()
+
+_CACHE_LOG = bool(os.environ.get('DAGNET_CACHE_LOG'))
+
+
+def set_cache_bypass(bypass: bool = True) -> None:
+    """Set the per-thread cache bypass flag (for no-cache requests)."""
+    _tls.bypass = bypass
+
+
+def _is_cache_bypassed() -> bool:
+    return getattr(_tls, 'bypass', False)
+
+
+class cache_bypass_ctx:
+    """Context manager that sets cache bypass for the current thread."""
+    def __enter__(self):
+        self._prev = getattr(_tls, 'bypass', False)
+        _tls.bypass = True
+        return self
+    def __exit__(self, *exc):
+        _tls.bypass = self._prev
 
 
 def _cache_key(fn_name: str, *args, **kwargs) -> str:
-    """Deterministic cache key from function name + arguments."""
+    """Deterministic cache key from function name + arguments.
+    Key is prefixed with fn_name for log readability."""
     raw = json.dumps(
         {"fn": fn_name, "a": args, "kw": kwargs},
         sort_keys=True, default=str
     )
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
+    return f"{fn_name}:{digest}"
 
 
 def _cache_get(key: str) -> Tuple[bool, Any]:
-    """Return (hit, value).  Expired entries are treated as misses."""
+    """Return (hit, value).  Expired entries are treated as misses.
+    Respects per-thread bypass flag."""
+    fn = key.split(':')[0] if ':' in key else key[:24]
+    if _is_cache_bypassed():
+        with _cache_lock:
+            _cache_stats["bypasses"] += 1
+        print(f"[snapshot_cache] BYPASS {fn}")
+        return False, None
     with _cache_lock:
         entry = _cache.get(key)
         if entry is not None:
             expiry, value = entry
             if _time.time() < expiry:
                 _cache_stats["hits"] += 1
+                print(f"[snapshot_cache] HIT {fn} ({len(_cache)} entries)")
                 return True, value
             # Expired — remove.
             del _cache[key]
         _cache_stats["misses"] += 1
+        print(f"[snapshot_cache] MISS {fn} ({len(_cache)} entries)")
         return False, None
 
 
 def _cache_put(key: str, value: Any, ttl_s: int = _CACHE_DEFAULT_TTL_S) -> None:
-    """Store a value with TTL.  Evicts oldest entries if over capacity."""
+    """Store a value with TTL.  Evicts oldest entries if over capacity.
+    Skips storage when bypass is active."""
+    if _is_cache_bypassed():
+        return
     with _cache_lock:
         _cache[key] = (_time.time() + ttl_s, value)
         # Simple eviction: if over capacity, drop oldest (earliest expiry).

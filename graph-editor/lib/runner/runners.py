@@ -397,6 +397,15 @@ def run_bridge_view(
     GA: nx.DiGraph = sA['scenario_G']
     GB: nx.DiGraph = sB['scenario_G']
 
+    # ── Bridge diagnostic ──
+    print(f"[bridge_diag] node_id={node_id} GA_nodes={GA.number_of_nodes()} "
+          f"GA_edges={GA.number_of_edges()} GB_nodes={GB.number_of_nodes()} GB_edges={GB.number_of_edges()}")
+    # Sample edge probabilities
+    for _u, _v, _d in list(GA.edges(data=True))[:3]:
+        print(f"[bridge_diag] GA edge {_u[:12]}→{_v[:12]} p={_d.get('p')}")
+    for _u, _v, _d in list(GB.edges(data=True))[:3]:
+        print(f"[bridge_diag] GB edge {_u[:12]}→{_v[:12]} p={_d.get('p')}")
+
     # Induced subgraph: nodes that are both
     # - descendants of (any) entry nodes
     # - ancestors of the target node (including the target)
@@ -404,6 +413,8 @@ def run_bridge_view(
         entry_nodes = find_entry_nodes(GA)
     except Exception:
         entry_nodes = []
+
+    print(f"[bridge_diag] entry_nodes={entry_nodes[:3]} node_in_GA={node_id in GA}")
 
     if not entry_nodes:
         return {'error': 'No entry nodes found for Bridge View'}
@@ -422,9 +433,15 @@ def run_bridge_view(
     inducedA = GA.subgraph(induced_nodes).copy()
     inducedB = GB.subgraph(induced_nodes).copy()
 
+    print(f"[bridge_diag] induced_nodes={len(induced_nodes)} "
+          f"inducedA_edges={inducedA.number_of_edges()} inducedB_edges={inducedB.number_of_edges()}")
+    for _u, _v, _d in list(inducedA.edges(data=True))[:3]:
+        print(f"[bridge_diag] induced edge {GA.nodes[_u].get('id','?')[:20]}→{GA.nodes[_v].get('id','?')[:20]} p={_d.get('p')}")
+
     # Totals
     reachA = calculate_path_to_absorbing(inducedA, node_id, pruning).probability
     reachB = calculate_path_to_absorbing(inducedB, node_id, pruning).probability
+    print(f"[bridge_diag] reachA={reachA} reachB={reachB}")
     total_delta = reachB - reachA
 
     # Sequential replacement attribution over nodes in induced topo order.

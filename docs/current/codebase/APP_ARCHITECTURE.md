@@ -153,28 +153,31 @@ A second entry point into the same orchestration modules — runs in
 Node via `tsx`, no browser required. Lives in `graph-editor/src/cli/`
 with wrapper scripts in `graph-ops/scripts/`.
 
-The CLI imports the same TS modules the browser uses (DSL parsing,
-hash/signature computation, window aggregation, LAG topological pass,
-param extraction, serialisation). The only new code is I/O adapters:
+The CLI calls the **same functions** the browser calls — no parallel
+reimplementations. `react-hot-toast` imports work in Node (no-op
+without DOM). `fake-indexeddb/auto` provides the Dexie shim.
+`import.meta.env?.` optional chaining guards the Vite-specific
+environment variables.
 
 - **`diskLoader.ts`** — reads graph JSON + YAML files from the data
   repo on disk, seeds `fileRegistry` and `contextRegistry` in memory
   (replacing the IDB/git loading path)
-- **`aggregate.ts`** — calls `aggregateWindowData`,
-  `enhanceGraphLatencies`, and other pure functions from
-  `windowAggregationService` / `statisticalEnhancementService`
-  directly, avoiding browser-only dependencies (`react-hot-toast`,
-  `window` events) in `fetchDataService` / `fileToGraphSync`
+- **`aggregate.ts`** — thin wrapper that calls
+  `fetchDataService.fetchItems({ mode: 'from-file' })` — the same
+  function the browser's `useDSLReaggregation` hook calls
+- **`commands/analyse.ts`** — calls `prepareAnalysisComputeInputs` →
+  `runPreparedAnalysis` — the same functions the browser's
+  `useCanvasAnalysisCompute` hook calls
 - **`bootstrap.ts`** — shared arg parsing, graph loading, registry
   seeding; new commands extend this rather than duplicating setup
 
-Browser-specific modules are guarded with `typeof window ===
-'undefined'` checks and `import.meta.env?.` optional chaining so they
-work in both environments. `fake-indexeddb/auto` provides the Dexie
-shim in Node.
+E2E parity is verified by a Playwright test
+(`e2e/cliParityGraphOverview.spec.ts`) that loads the same graph in
+the browser, runs the from-file pipeline, and compares the BE result
+field-by-field against the CLI's output.
 
 See `docs/current/project-cli/programme.md` for the full design and
-feasibility assessment.
+`docs/current/codebase/GRAPH_OPS_TOOLING.md` for the CLI reference.
 
 ---
 

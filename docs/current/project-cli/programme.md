@@ -640,13 +640,47 @@ fresh live scenario in the FE with its own query DSL and no what-if
 overlays. No composition or stacking — each aggregates independently
 from the clean graph. Fully reproducible in the FE.
 
+### 8-Apr-26: One-codepath refactor + E2E parity test
+
+**Critical refactor**: `aggregate.ts` was rewritten from a 280-line
+parallel reimplementation to a thin wrapper calling
+`fetchDataService.fetchItems({ mode: 'from-file' })` — the same
+function the browser uses. The old version missed fields like
+`scope_from/to` and computed evidence differently from the FE.
+
+**`analyse` command** now calls `prepareAnalysisComputeInputs` →
+`runPreparedAnalysis` — the real FE preparation + dispatch path
+including snapshot subject resolution, display settings, and
+posterior re-projection. CLI scenarios are injected into live mode
+by building a `scenariosContext` with extracted params.
+
+**`import.meta.env` guards**: `?.` optional chaining added to
+`graphComputeClient.ts` (5 occurrences), `snapshotBootTrace.ts`
+(4 occurrences), `fetchDataService.ts` (2 occurrences), plus
+`getUrlSearchParams()` helper replacing bare `window.location.search`.
+Entry points polyfill `import.meta.env = { DEV: false }` via
+`cliEntry.ts`.
+
+**E2E parity test** (`e2e/cliParityGraphOverview.spec.ts`):
+Playwright loads real graph + 455 parameter files from data repo
+into IDB, boots the app, sets target DSL via graphStore, triggers
+`dagnetDebug.refetchFromFiles()` to run the from-file pipeline,
+then calls the BE directly with the FE's graph state. CLI runs
+separately against the same data repo + DSL. Field-by-field
+comparison of all probability values — all must match within 1e-6.
+
+**Discovery**: `db.files.put()` in e2e seeds does not populate
+FileRegistry — only IDB. The from-file pipeline needs FileRegistry
+populated, which happens lazily via `restoreFile()`. Using
+`dagnetDebug.refetchFromFiles()` triggers the full from-file pipeline
+correctly.
+
 **Remaining for full parity with browser**:
 - Context-based slice filtering (`context(channel:google)` in DSL —
   currently uses all values in the correct mode, not filtered by
   context).
 - Snapshot DB retrieval path (for when param files on disk are stale
   and fresh data is needed from the PostgreSQL cache).
-- `--allow-external-fetch` mode (calling Amplitude etc.).
 
 ## Dependencies
 

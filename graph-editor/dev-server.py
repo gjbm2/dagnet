@@ -73,6 +73,25 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Snapshot cache bypass middleware — respects ?no-cache=1, ?nocache=1, or
+# {"no_cache": true} in request body.  Sets per-thread bypass flag so all
+# snapshot_service cache lookups in the request are skipped.
+from starlette.middleware.base import BaseHTTPMiddleware
+
+class _SnapshotCacheBypassMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        from snapshot_service import set_cache_bypass
+        bypass = request.query_params.get('no-cache') == '1' or \
+                 request.query_params.get('nocache') == '1'
+        set_cache_bypass(bypass)
+        try:
+            return await call_next(request)
+        finally:
+            set_cache_bypass(False)
+
+app.add_middleware(_SnapshotCacheBypassMiddleware)
+
+
 # Health check
 @app.get("/")
 @app.get("/api")

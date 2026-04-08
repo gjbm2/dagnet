@@ -123,12 +123,12 @@ export function summariseSnapshotCharts(graph: any): SnapshotChartSummary[] {
 }
 
 export function logSnapshotBoot(stage: string, payload: Record<string, unknown>): void {
-  if (!import.meta.env.DEV) return;
+  if (!import.meta.env?.DEV) return;
   console.log(`[SnapshotBootTrace] ${stage}`, payload);
 }
 
 export function logChartReadinessTrace(stage: string, payload: Record<string, unknown>): void {
-  if (!import.meta.env.DEV) return;
+  if (!import.meta.env?.DEV) return;
   console.log(`[ChartReadinessTrace] ${stage}`, payload);
 }
 
@@ -136,7 +136,7 @@ export function recordSnapshotBootLedgerStage(
   stage: SnapshotBootLedgerStage,
   payload: Record<string, unknown> & { analysisId: string },
 ): void {
-  if (!import.meta.env.DEV) return;
+  if (!import.meta.env?.DEV) return;
   const cycleId = resolveCycleId(payload.analysisId, payload);
   const enrichedPayload = {
     ...payload,
@@ -153,7 +153,7 @@ export function registerSnapshotBootExpectations(
   context: Record<string, unknown> = {},
   timeoutMs = 4000,
 ): void {
-  if (!import.meta.env.DEV || charts.length === 0) return;
+  if (!import.meta.env?.DEV || charts.length === 0) return;
   const state = getBootLedgerState();
   charts.forEach((chart) => {
     const cycleId = safeString(context.cycleId) || `cycle-${Date.now()}`;

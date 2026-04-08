@@ -1798,7 +1798,7 @@ export async function runStage2EnhancementsAndInboundN(
 
           // Stash FE topo pass outputs so the BE topo pass can log a complete
           // parity fixture (BE inputs + FE outputs) via console mirroring.
-          if (import.meta.env.DEV && typeof window !== 'undefined') {
+          if (import.meta.env?.DEV && typeof window !== 'undefined') {
             (window as any).__feTopoFixtureOutputs = {
               edges_processed: lagResult.edgesProcessed,
               edges_with_lag: lagResult.edgesWithLAG,
@@ -2323,7 +2323,7 @@ export function checkDSLNeedsFetch(dsl: string, graph: Graph): CacheCheckResult 
   // - DEV build
   // - URL contains ?e2e=1
   try {
-    if (import.meta.env.DEV && typeof window !== 'undefined') {
+    if (import.meta.env?.DEV && typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
       if (params.has('e2e')) {
         return { needsFetch: false, items: [] };

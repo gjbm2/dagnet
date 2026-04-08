@@ -4661,7 +4661,7 @@ export async function getFromSourceDirect(options: {
           mean,
           stdev: (mean === 0 || mean === 1 || n === 0) ? 0 : Math.sqrt((mean * (1 - mean)) / n),
           raw_data: [], // No daily data for direct pulls
-          window: window || {
+          window: requestedWindow || {
             start: new Date().toISOString().split('T')[0],
             end: new Date().toISOString().split('T')[0]
           },

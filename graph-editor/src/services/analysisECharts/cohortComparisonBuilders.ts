@@ -499,10 +499,12 @@ export function buildCohortMaturityEChartsOption(
             for (let i = poly.length - 1; i >= 0; i--) {
               pts.push(api.coord([poly[i][0], poly[i][2]]));
             }
+            const gr = params.coordSys;
             return {
               type: 'polygon',
               shape: { points: pts, smooth: 0.3 },
               style: { fill: fillColour, stroke: 'none' },
+              clipPath: { type: 'rect', shape: { x: gr.x, y: gr.y, width: gr.width, height: gr.height } },
               silent: true,
             };
           },
@@ -757,6 +759,7 @@ export function buildCohortMaturityEChartsOption(
             const pts: number[][] = [];
             for (let i = 0; i < polyData.length; i++) pts.push(api.coord([polyData[i][0], polyData[i][1]]));
             for (let i = polyData.length - 1; i >= 0; i--) pts.push(api.coord([polyData[i][0], polyData[i][2]]));
+            const gr = params.coordSys;
             return {
               type: 'group',
               children: [{
@@ -764,6 +767,7 @@ export function buildCohortMaturityEChartsOption(
                 children: generatePatternChildren(pts, promotedPattern, bandStroke),
                 clipPath: { type: 'polygon', shape: { points: pts, smooth: false } },
               }],
+              clipPath: { type: 'rect', shape: { x: gr.x, y: gr.y, width: gr.width, height: gr.height } },
               silent: true,
             };
           },
@@ -846,6 +850,7 @@ export function buildCohortMaturityEChartsOption(
                   const pts: number[][] = [];
                   for (let i = 0; i < polyDataSrc.length; i++) pts.push(api.coord([polyDataSrc[i][0], polyDataSrc[i][1]]));
                   for (let i = polyDataSrc.length - 1; i >= 0; i--) pts.push(api.coord([polyDataSrc[i][0], polyDataSrc[i][2]]));
+                  const gr = params.coordSys;
                   return {
                     type: 'group',
                     children: [{
@@ -853,6 +858,7 @@ export function buildCohortMaturityEChartsOption(
                       children: generatePatternChildren(pts, srcPattern, bandStroke),
                       clipPath: { type: 'polygon', shape: { points: pts, smooth: false } },
                     }],
+                    clipPath: { type: 'rect', shape: { x: gr.x, y: gr.y, width: gr.width, height: gr.height } },
                     silent: true,
                   };
                 },

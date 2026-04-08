@@ -1289,6 +1289,100 @@ either way, but especially if it is the default.
 Not blocking — either path works architecturally. But affects
 testing emphasis in step 8.
 
+### 14.9 FE per-slice commissioning contract
+
+Phase C requires the FE to produce per-slice analytic model_vars
+**before** triggering Bayes. This is not new work — the FE already
+explodes the pinned DSL for fetch planning and runs the topo pass on
+DSL-filtered data. The change is running it per exploded slice rather
+than once on the aggregate.
+
+**Why per-slice analytics are required:**
+
+1. **LOO-ELPD denominator** (doc 32 §3.3): ΔELPD compares the
+   Bayesian posterior against the analytic baseline. Each context
+   slice gets its own Bayesian posterior (§5.2–5.3). The denominator
+   must be the analytic model_vars for **that slice** — not the
+   aggregate. Using the aggregate analytic baseline for per-slice
+   ΔELPD would be a category error (comparing a context-specific
+   model against an aggregate baseline that includes all contexts).
+
+2. **Prior resolution**: when no previous Bayesian posterior exists
+   for a slice (cold start), the Bayes compiler falls back to
+   analytic priors. These must be slice-specific — the p for
+   `context(channel:google)` differs from the aggregate p.
+
+3. **Warm-start quality gating**: the quality gate for warm-start
+   uses the previous posterior's rhat/ESS. For Phase C, this is
+   per-slice. The analytic fallback when the gate fails must also be
+   per-slice.
+
+**FE commissioning flow:**
+
+1. FE explodes the pinned DSL into per-slice DSLs. This already
+   happens during fetch planning. The explosion produces:
+   - The bare (uncontexted) parent: `window()` or `cohort()` —
+     **always produced**, regardless of whether the pinned DSL
+     includes context clauses. Required for the Dirichlet hierarchy
+     anchor.
+   - Each context slice: `window().context(channel:google)`,
+     `window().context(channel:organic)`, etc.
+
+2. For each exploded slice DSL, FE filters param file values by that
+   slice's dimensions (same filtering `fetchDataService.ts` already
+   does during Stage 2) and runs the topo pass
+   (`enhance_graph_latencies`) on the filtered data. This produces
+   per-slice `analytic` model_vars: p, p_sd, onset, mu, sigma, t95,
+   completeness, blended_mean.
+
+3. FE puts per-slice analytic model_vars on the graph edges. The
+   model_vars array on each edge grows from one `analytic` entry per
+   edge to one per (edge, context_key). The `analytic` entry could
+   carry a `slice_dsl` or `context_key` field to distinguish them,
+   or they could be stored in a separate per-slice structure.
+
+4. FE builds the Bayes trigger payload as today: graph_snapshot
+   (now with per-slice model_vars), parameter_files, snapshot_subjects.
+   The Bayes worker reads the per-slice baselines from the graph
+   snapshot via `extract_analytic_baselines()` in `loo.py`.
+
+**What this means for the Bayes worker:**
+
+The worker does not run the topo pass itself. It receives per-slice
+analytic baselines on the graph snapshot, alongside per-slice snapshot
+subjects and per-slice posterior priors on the param files. All three
+are slice-coherent because the FE produced them from the same
+exploded DSL.
+
+**Interaction with regime selection (doc 30):**
+
+Each exploded slice DSL maps to a known `core_hash`. The FE already
+computes these hashes during fetch planning. The snapshot_subjects
+sent to Bayes include these per-slice hashes. The worker queries the
+DB per hash (Use Case B in doc 30b §6 — no regime selection needed
+for per-slice reads). The aggregate/parent uses regime selection
+(Use Case C/D in doc 30b §7–8) across the candidate hashes.
+
+**Cost:**
+
+Running the topo pass N+1 times (parent + N context slices) instead
+of once. `enhance_graph_latencies` is fast (< 1s per call), so even
+with 10 context slices the overhead is under 10s — negligible
+compared to MCMC time.
+
+**Schema implication:**
+
+The `model_vars` array on graph edges currently holds entries keyed
+only by `source` (`analytic`, `analytic_be`, `bayesian`, `manual`).
+For Phase C, `analytic` entries must also be keyed by context_key
+(or slice DSL). Design options:
+- Add a `context_key` field to `ModelVarsEntry` (empty string for
+  aggregate) — minimal schema change, backward compatible.
+- Nest per-slice entries under a `slices` map within the `analytic`
+  entry — mirrors the `posterior.slices` pattern from doc 21.
+
+To be resolved during Phase C implementation.
+
 ---
 
 ## 15. What this document does NOT cover

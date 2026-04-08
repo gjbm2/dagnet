@@ -1,7 +1,7 @@
 # Doc 31 — BE Analysis Subject Resolution
 
-**Status**: Design — not yet implemented
-**Date**: 7-Apr-26
+**Status**: Implemented 8-Apr-26
+**Date**: 7-Apr-26 (design), 8-Apr-26 (implemented)
 **Depends on**: Doc 30 (Snapshot Regime Selection Contract) — assumed
 implemented immediately prior. All references to "candidate regimes",
 "regime selection", and `select_regime_rows()` refer to doc 30's

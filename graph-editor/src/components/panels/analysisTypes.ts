@@ -350,6 +350,13 @@ export const ANALYSIS_TYPES: AnalysisTypeMeta[] = [
     shortDescription: 'How surprising is current evidence given the Bayesian posterior',
     selectionHint: 'Use from(a).to(b) to select an edge',
     icon: Gauge,
+    snapshotContract: {
+      scopeRule: 'funnel_path',
+      readMode: 'sweep_simple',
+      slicePolicy: 'mece_fulfilment_allowed',
+      timeBoundsSource: 'query_dsl_window',
+      perScenario: false,
+    },
     renderMinimised: (props) => React.createElement(MinimisedSurpriseGauge, props),
     minimisedLabel: ({ result, settings, label }) => {
       const selectedVar = settings?.surprise_var || 'p';

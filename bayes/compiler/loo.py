@@ -2,8 +2,8 @@
 LOO-ELPD posterior predictive scoring (doc 32).
 
 Computes per-edge model adequacy scores via PSIS-LOO-CV, benchmarked
-against the analytic stats pass as null model.  ΔELPD per edge answers:
-"does the Bayesian model improve on the analytic point estimates?"
+against the BE analytic stats pass as null model.  ΔELPD per edge
+answers: "does the Bayesian model improve on the analytic stats pass?"
 
 Called from worker.py between run_inference() and summarise_posteriors().
 """
@@ -28,7 +28,7 @@ log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Output type
+# Types
 # ---------------------------------------------------------------------------
 
 @dataclass
@@ -39,6 +39,88 @@ class EdgeLooMetrics:
     delta_elpd: float = 0.0   # elpd - elpd_null (positive = Bayesian better)
     pareto_k_max: float = 0.0 # worst Pareto k across this edge's data points
     n_loo_obs: int = 0        # number of data points contributing
+
+
+@dataclass
+class AnalyticBaseline:
+    """Analytic stats pass values for one edge — the LOO null model.
+
+    Extracted from the graph snapshot's analytic_be (or analytic)
+    model_vars entry. These are the BE topo pass point estimates that
+    the user already sees before a Bayes fit.
+    """
+    p: float                   # p_evidence (maturity-corrected rate)
+    p_sd: float                # heuristic dispersion SD
+    onset: float = 0.0        # onset_delta_days
+    mu: float = 0.0           # log-latency location
+    sigma: float = 0.5        # log-latency scale
+    has_latency: bool = False
+
+    @property
+    def kappa(self) -> float | None:
+        """Beta concentration implied by p and p_sd."""
+        if self.p_sd <= 0 or self.p <= 0 or self.p >= 1:
+            return None
+        v = self.p_sd ** 2
+        common = self.p * (1 - self.p) / v - 1
+        return (self.p + (1 - self.p)) * common if common > 0 else None
+
+
+def extract_analytic_baselines(
+    graph_snapshot: dict,
+    topology: TopologyAnalysis,
+) -> dict[str, AnalyticBaseline]:
+    """Extract analytic_be (or analytic) model_vars from graph edges.
+
+    Returns {edge_id: AnalyticBaseline} for edges that have analytic
+    model_vars. Prefers analytic_be; falls back to analytic.
+    """
+    edge_lookup: dict[str, dict] = {}
+    for edge in graph_snapshot.get("edges", []):
+        eid = edge.get("uuid") or edge.get("id")
+        if eid:
+            edge_lookup[eid] = edge
+
+    result: dict[str, AnalyticBaseline] = {}
+    for edge_id, et in topology.edges.items():
+        ge = edge_lookup.get(edge_id)
+        if not ge:
+            continue
+        p_block = ge.get("p", {})
+        mvs = p_block.get("model_vars", [])
+
+        # Prefer analytic (FE, currently authoritative) then analytic_be.
+        # Phase C: this becomes per-slice, keyed by context_key.
+        mv = None
+        for entry in mvs:
+            if entry.get("source") == "analytic":
+                mv = entry
+                break
+        if mv is None:
+            for entry in mvs:
+                if entry.get("source") == "analytic_be":
+                    mv = entry
+                    break
+        if mv is None:
+            continue
+
+        prob = mv.get("probability", {})
+        lat = mv.get("latency", {})
+        p_mean = prob.get("mean")
+        p_sd = prob.get("stdev") or prob.get("p_stdev") or 0.0
+        if p_mean is None:
+            continue
+
+        result[edge_id] = AnalyticBaseline(
+            p=float(p_mean),
+            p_sd=float(p_sd),
+            onset=float(lat.get("onset_delta_days", 0) or 0),
+            mu=float(lat.get("mu", 0) or 0),
+            sigma=float(lat.get("sigma", 0.5) or 0.5),
+            has_latency=et.has_latency,
+        )
+
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -97,20 +179,12 @@ def _var_to_edge_ids(var_name: str, safe_to_edge, bg_to_siblings) -> list[str]:
 # Null log-likelihood
 # ---------------------------------------------------------------------------
 
-def _analytic_p_and_kappa(ev) -> tuple[float, float | None]:
-    """Derive analytic p and κ from the evidence's probability prior."""
-    alpha = ev.prob_prior.alpha
-    beta = ev.prob_prior.beta
-    p = alpha / (alpha + beta) if (alpha + beta) > 0 else 0.5
-    kappa = alpha + beta if (alpha + beta) > 2.0 else None
-    return p, kappa
-
-
 def _null_ll_edge_var(
-    var_name: str, ev, et,
+    var_name: str, ev, baseline: AnalyticBaseline,
 ) -> float:
     """Null log-likelihood for one edge-level observation variable."""
-    p, kappa = _analytic_p_and_kappa(ev)
+    p = baseline.p
+    kappa = baseline.kappa
 
     if var_name.startswith("obs_w_"):
         total = 0.0
@@ -146,15 +220,13 @@ def _null_ll_edge_var(
                     continue
                 age = traj.max_retrieval_age or traj.retrieval_ages[-1]
                 k = min(traj.cumulative_y[-1], traj.n)
-                if is_cohort:
+                # Analytic completeness from the stats pass latency
+                if baseline.has_latency:
                     f = shifted_lognormal_cdf(
-                        age, et.path_latency.path_delta,
-                        et.path_latency.path_mu, et.path_latency.path_sigma,
-                    ) if et.has_latency else 1.0
+                        age, baseline.onset, baseline.mu, baseline.sigma,
+                    )
                 else:
-                    f = shifted_lognormal_cdf(
-                        age, et.onset_delta_days, et.mu_prior, et.sigma_prior,
-                    ) if et.has_latency else 1.0
+                    f = 1.0
                 p_eff = min(max(p * f, 1e-6), 1 - 1e-6)
                 if kappa is not None:
                     total += sp_betabinom.logpmf(k, traj.n, p_eff * kappa, (1 - p_eff) * kappa)
@@ -166,15 +238,15 @@ def _null_ll_edge_var(
 
 
 def _null_ll_bg_var(
-    var_name: str, sibling_ids: list[str], evidence: BoundEvidence, trace,
+    var_name: str, sibling_ids: list[str],
+    baselines: dict[str, AnalyticBaseline], trace,
 ) -> float:
     """Null log-likelihood for one branch-group observation variable."""
     alpha_vec = []
     for eid in sibling_ids:
-        ev = evidence.edges.get(eid)
-        if ev:
-            p_sib, _ = _analytic_p_and_kappa(ev)
-            alpha_vec.append(max(p_sib, 0.01))
+        bl = baselines.get(eid)
+        if bl:
+            alpha_vec.append(max(bl.p, 0.01))
         else:
             alpha_vec.append(0.01)
     alpha_arr = np.array(alpha_vec)
@@ -196,9 +268,14 @@ def compute_loo_scores(
     trace,
     evidence: BoundEvidence,
     topology: TopologyAnalysis,
+    analytic_baselines: dict[str, AnalyticBaseline] | None = None,
     diagnostics: list[str] | None = None,
 ) -> dict[str, EdgeLooMetrics]:
     """Compute per-edge LOO-ELPD scores with analytic null comparison.
+
+    analytic_baselines: {edge_id: AnalyticBaseline} from
+        extract_analytic_baselines(). If None, null log-likelihoods
+        are not computed (ΔELPD will be 0).
 
     Returns {edge_id: EdgeLooMetrics}.
     """
@@ -206,49 +283,61 @@ def compute_loo_scores(
 
     if diagnostics is None:
         diagnostics = []
+    if analytic_baselines is None:
+        analytic_baselines = {}
 
     if not hasattr(trace, "log_likelihood") or len(trace.log_likelihood.data_vars) == 0:
         diagnostics.append("LOO: no log_likelihood group in trace, skipping")
         return {}
 
-    # Run PSIS-LOO — gives pointwise ELPD and Pareto k as flat arrays
-    try:
-        loo_result = az.loo(trace, pointwise=True)
-    except Exception as e:
-        diagnostics.append(f"LOO: az.loo() failed: {e}")
-        return {}
-
-    loo_i = np.asarray(loo_result.loo_i)     # flat per-observation ELPD
-    pk = np.asarray(loo_result.pareto_k)      # flat per-observation Pareto k
-
     safe_to_edge, bg_to_siblings = _build_lookups(topology)
     var_names = list(trace.log_likelihood.data_vars)
     edge_metrics: dict[str, EdgeLooMetrics] = {}
 
-    # Walk variables in order, slicing the flat loo_i/pk arrays
-    offset = 0
-    for var_name in var_names:
-        ll_shape = trace.log_likelihood[var_name].values.shape  # (chains, draws, *obs)
-        n_obs = int(np.prod(ll_shape[2:])) if len(ll_shape) > 2 else 1
+    # Filter to scoreable variables (our observation nodes only, not
+    # soft-constraint nodes like t95_obs_, onset_obs_, path_t95_obs_)
+    scoreable = [v for v in var_names if _var_to_edge_ids(v, safe_to_edge, bg_to_siblings)]
 
-        if offset + n_obs > len(loo_i):
-            diagnostics.append(f"LOO: offset mismatch at {var_name}, stopping")
-            break
+    # Run PSIS-LOO per variable — az.loo requires var_name when
+    # multiple log-likelihood arrays exist in the trace.
+    for var_name in scoreable:
+        try:
+            loo_result = az.loo(trace, var_name=var_name, pointwise=True)
+        except Exception as e:
+            diagnostics.append(f"LOO: az.loo({var_name}) failed: {e}")
+            continue
 
-        var_elpd = float(loo_i[offset:offset + n_obs].sum())
-        var_pk_max = float(pk[offset:offset + n_obs].max())
+        loo_i = np.asarray(loo_result.loo_i)
+        pk = np.asarray(loo_result.pareto_k)
+        n_obs = len(loo_i)
+
+        var_elpd = float(loo_i.sum())
+        var_pk_max = float(pk.max()) if len(pk) > 0 else 0.0
 
         # Null log-likelihood for this variable
         edge_ids = _var_to_edge_ids(var_name, safe_to_edge, bg_to_siblings)
         is_bg = _BG_RE.match(var_name) is not None
 
         if is_bg:
-            var_null = _null_ll_bg_var(var_name, edge_ids, evidence, trace)
+            var_null = _null_ll_bg_var(var_name, edge_ids, analytic_baselines, trace)
         elif edge_ids:
-            ev = evidence.edges.get(edge_ids[0])
-            et = topology.edges.get(edge_ids[0])
-            var_null = _null_ll_edge_var(var_name, ev, et) if ev and et else 0.0
+            eid = edge_ids[0]
+            ev = evidence.edges.get(eid)
+            bl = analytic_baselines.get(eid)
+            if ev and bl:
+                var_null = _null_ll_edge_var(var_name, ev, bl)
+            else:
+                var_null = 0.0
         else:
+            var_null = 0.0
+
+        # Guard: if null ll is non-finite (numerical overflow with
+        # extreme kappa or degenerate data), skip this variable's
+        # null contribution so it doesn't poison ΔELPD.
+        if not np.isfinite(var_null):
+            diagnostics.append(
+                f"LOO: null ll for {var_name} is {var_null}, skipping null for this variable"
+            )
             var_null = 0.0
 
         # Attribute to edge(s)
@@ -259,8 +348,6 @@ def compute_loo_scores(
             m.elpd_null += var_null / n_recipients
             m.n_loo_obs += max(n_obs // n_recipients, 1)
             m.pareto_k_max = max(m.pareto_k_max, var_pk_max)
-
-        offset += n_obs
 
     # Compute ΔELPD
     for m in edge_metrics.values():

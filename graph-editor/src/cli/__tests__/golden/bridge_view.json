@@ -1,0 +1,218 @@
+{
+  "success": true,
+  "result": {
+    "analysis_type": "bridge_view",
+    "analysis_name": "Bridge View",
+    "analysis_description": "Decompose the Reach Probability difference between two scenarios",
+    "metadata": {
+      "to_node": "switch-success",
+      "to_label": "Switch success",
+      "scenario_a": {
+        "scenario_id": "scenario-1",
+        "name": "Scenario 1",
+        "colour": "#3b82f6",
+        "visibility_mode": "f+e",
+        "probability_label": "Probability"
+      },
+      "scenario_b": {
+        "scenario_id": "current",
+        "name": "Scenario 2",
+        "colour": "#ef4444",
+        "visibility_mode": "f+e",
+        "probability_label": "Probability"
+      },
+      "reach_a": 0.062063177379747286,
+      "reach_b": 0.045243884304051296,
+      "delta": -0.01681929307569599,
+      "other_threshold_pct": 0.025
+    },
+    "semantics": {
+      "dimensions": [
+        {
+          "id": "bridge_step",
+          "name": "Step",
+          "type": "stage",
+          "role": "primary"
+        }
+      ],
+      "metrics": [
+        {
+          "id": "total",
+          "name": "Reach",
+          "type": "probability",
+          "format": "percent",
+          "role": "secondary"
+        },
+        {
+          "id": "delta",
+          "name": "Change",
+          "type": "delta",
+          "format": "percent",
+          "role": "primary"
+        },
+        {
+          "id": "reach_before",
+          "name": "Reach before (Scenario 1→Scenario 2)",
+          "type": "probability",
+          "format": "percent",
+          "role": "secondary"
+        },
+        {
+          "id": "reach_after",
+          "name": "Reach after (Scenario 1→Scenario 2)",
+          "type": "probability",
+          "format": "percent",
+          "role": "secondary"
+        }
+      ],
+      "chart": {
+        "recommended": "bridge",
+        "alternatives": [
+          "bridge_horizontal",
+          "table"
+        ],
+        "hints": {
+          "other_threshold_pct": 0.025
+        }
+      }
+    },
+    "dimension_values": {
+      "bridge_step": {
+        "start": {
+          "name": "Start (Scenario 1)",
+          "colour": "#3b82f6",
+          "order": 0,
+          "visibility_mode": null,
+          "probability_label": null
+        },
+        "household-created": {
+          "name": "Household created",
+          "colour": null,
+          "order": 1,
+          "visibility_mode": null,
+          "probability_label": null
+        },
+        "household-delegated": {
+          "name": "household-delegated",
+          "colour": null,
+          "order": 2,
+          "visibility_mode": null,
+          "probability_label": null
+        },
+        "mobile-or-broadband-first-rec": {
+          "name": "Mobile or broadband first rec",
+          "colour": null,
+          "order": 3,
+          "visibility_mode": null,
+          "probability_label": null
+        },
+        "energy-rec": {
+          "name": "Energy rec",
+          "colour": null,
+          "order": 4,
+          "visibility_mode": null,
+          "probability_label": null
+        },
+        "switch-registered": {
+          "name": "Switch registered",
+          "colour": null,
+          "order": 5,
+          "visibility_mode": null,
+          "probability_label": null
+        },
+        "other": {
+          "name": "Other",
+          "colour": null,
+          "order": 6,
+          "visibility_mode": null,
+          "probability_label": null
+        },
+        "end": {
+          "name": "End (Scenario 2)",
+          "colour": "#ef4444",
+          "order": 7,
+          "visibility_mode": null,
+          "probability_label": null
+        }
+      },
+      "scenario_id": {
+        "scenario-1": {
+          "name": "Scenario 1",
+          "colour": "#3b82f6",
+          "visibility_mode": "f+e"
+        },
+        "current": {
+          "name": "Scenario 2",
+          "colour": "#ef4444",
+          "visibility_mode": "f+e"
+        }
+      }
+    },
+    "data": [
+      {
+        "bridge_step": "start",
+        "kind": "start",
+        "total": 0.062063177379747286,
+        "delta": null
+      },
+      {
+        "bridge_step": "household-created",
+        "kind": "step",
+        "total": null,
+        "delta": -0.0032125954352588484,
+        "reach_before": 0.062063177379747286,
+        "reach_after": 0.05885058194448844
+      },
+      {
+        "bridge_step": "household-delegated",
+        "kind": "step",
+        "total": null,
+        "delta": -0.001249158733910169,
+        "reach_before": 0.05885058194448844,
+        "reach_after": 0.05760142321057827
+      },
+      {
+        "bridge_step": "mobile-or-broadband-first-rec",
+        "kind": "step",
+        "total": null,
+        "delta": -0.0010803792658870062,
+        "reach_before": 0.05760142321057827,
+        "reach_after": 0.05652104394469126
+      },
+      {
+        "bridge_step": "energy-rec",
+        "kind": "step",
+        "total": null,
+        "delta": -0.006310655577473304,
+        "reach_before": 0.05652104394469126,
+        "reach_after": 0.05021038836721796
+      },
+      {
+        "bridge_step": "switch-registered",
+        "kind": "step",
+        "total": null,
+        "delta": -0.004959475583414898,
+        "reach_before": 0.05021038836721796,
+        "reach_after": 0.04525091278380306
+      },
+      {
+        "bridge_step": "other",
+        "kind": "other",
+        "total": null,
+        "delta": -0.000007028479751765293,
+        "reach_before": 0.04525091278380306,
+        "reach_after": 0.045243884304051296
+      },
+      {
+        "bridge_step": "end",
+        "kind": "end",
+        "total": 0.045243884304051296,
+        "delta": null,
+        "reach_before": null,
+        "reach_after": 0.045243884304051296
+      }
+    ]
+  },
+  "query_dsl": "to(switch-success).window(-90d:-30d).window(-30d:)",
+  "error": null
+}

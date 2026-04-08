@@ -80,64 +80,69 @@ contributions from both.
 
 ---
 
-## 3. The null model: analytic stats pass
+## 3. The null model: analytic model_vars
 
-The analytic topo pass (`stats_engine.py`, see FE_BE_STATS_PARALLELISM
-doc) produces per-edge point estimates with heuristic dispersion
-(heuristic-dispersion-design.md §3):
+The LOO null is the FE analytic topo pass — the `analytic` model_vars
+entry on each graph edge. This is the point-estimate model the user
+already sees before a Bayes fit runs. ΔELPD answers: "does the
+Bayesian model improve on what the user already had?"
 
-| Variable | Analytic source |
-|---|---|
-| p | `p_evidence` (maturity-corrected observed rate) |
-| onset, μ, σ | Fitted from summary statistics (median/mean lag) |
-| p_sd | Beta-binomial posterior SD (§3.1) |
-| μ_sd, σ_sd | Heuristic from σ/√n (§3.2–3.3) |
-| onset_sd | Heuristic max(0.2, 0.1×onset) (§3.4) |
-| onset↔μ corr | Structural prior −0.3 (§3.5) |
+The analytic model_vars provide per-edge: `probability.mean` (p),
+`probability.stdev` (p_sd), and `latency.mu`, `latency.sigma`,
+`latency.onset_delta_days`. The implementation reads these from the
+graph snapshot via `extract_analytic_baselines()` in `loo.py`,
+preferring `analytic` (FE, currently authoritative) and falling back
+to `analytic_be`.
 
-**Which p**: use the evidence binder's probability prior
-(`ev.prob_prior.alpha`, `ev.prob_prior.beta`). This is the Beta
-distribution the Bayesian model received as its prior — derived from
-the analytic stats pass via moment-matching. Using the same prior
-values makes the comparison fair: the null model uses the analytic
-estimate of p and κ, and the Bayesian model's LOO score measures how
-much the MCMC posterior improved on that starting point.
-
-The prior's α and β directly give p = α/(α+β) and κ = α+β. For
-BetaBinomial observation nodes, the null uses α_null = p×κ×F and
-β_null = (1−p×F)×κ. For Binomial nodes, the null uses p×F directly.
-
-When κ is not meaningful (α+β ≤ 2, i.e. a near-uninformative prior),
-use Binomial rather than BetaBinomial for the null.
+From p and p_sd, the null's Beta concentration κ is moment-matched:
+`v = p_sd², common = p(1−p)/v − 1, κ = common` (when common > 0).
+For BetaBinomial nodes, the null uses `α = p×F×κ, β = (1−p×F)×κ`.
+For Binomial nodes, `p×F` directly. When κ is not derivable (p_sd
+too large or p at boundary), Binomial is used.
 
 ### 3.1 Completeness in the null model
 
-The Bayesian model computes completeness F from its own latent
-onset/μ/σ (gradients flow through the CDF). The analytic pass computes
-F from its own fitted onset/μ/σ. These differ.
+For endpoint observation nodes (where completeness depends on latency),
+the null uses the analytic latency parameters (onset, μ, σ from the
+`analytic` model_vars) to compute F via `shifted_lognormal_cdf`.
+This gives each model credit for its own latency estimates.
 
-For the null log-likelihood, **use the analytic completeness** — i.e.
-the F derived from the analytic onset/μ/σ. This gives each model
-credit for its own latency estimates. If the Bayesian model has better
-latency, its F will produce better-calibrated p×F products, and ΔELPD
-will reflect that advantage. Using the Bayesian F for the null would
-give the analytic model a free ride on the Bayesian latency.
-
-The analytic completeness per anchor day is available from the evidence
-binder — it is pre-computed during evidence assembly from the topology
-priors, which are the analytic values.
+For `obs_daily_` and `obs_w_` nodes, the completeness is pre-baked on
+the evidence observations (computed during evidence binding from
+topology priors). These topology priors are the analytic values, so
+the completeness is already the analytic completeness.
 
 ### 3.2 Fairness of plug-in vs LOO for the null
 
-The analytic stats pass **is** fitted to the same snapshot data
-(p_evidence uses total_k/total_n; p_sd uses total_k+1, total_n−total_k+1).
-Strictly, its plug-in log-likelihood is slightly optimistic vs what LOO
-would give. However, the analytic model has very few effective
-parameters (essentially p and κ from moment-matching), so the
-LOO correction would be negligible. We use plug-in log-likelihood as a
-practical approximation. If this proves problematic (analytic ELPD
-suspiciously close to Bayesian on edges where the Bayesian model
-clearly fits better), revisit.
+The analytic model is fitted to the same snapshot data. Strictly, its
+plug-in log-likelihood is slightly optimistic vs what LOO would give.
+However, the analytic model has very few effective parameters
+(essentially p and κ from moment-matching), so the LOO correction
+is negligible. We use plug-in log-likelihood as a practical
+approximation.
+
+### 3.3 Phase C: per-slice analytic baselines
+
+The analytic model_vars are DSL-dependent — the FE topo pass runs on
+data filtered by the active query DSL, including context dimensions.
+For Phase C (context-slice pooling, doc 14), each context slice gets
+its own Bayesian posterior. The ΔELPD for each slice must compare
+against the analytic baseline for **that slice**.
+
+This requires the FE to:
+1. Explode the pinned DSL into per-slice DSLs (parent + children)
+2. Run the topo pass per slice (same `enhance_graph_latencies`, called
+   once per exploded slice)
+3. Put per-slice analytic model_vars on the graph, keyed by context_key
+
+The Bayes worker then reads the correct per-slice baseline from the
+graph snapshot when computing ΔELPD.
+
+For Phase A/B (no context), only one slice exists per edge (the
+aggregate). The current implementation handles this correctly — one
+`analytic` model_vars entry per edge, one baseline per edge.
+
+See doc 14 §14.8 for the full FE commissioning contract.
 
 ---
 

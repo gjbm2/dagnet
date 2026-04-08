@@ -11,6 +11,8 @@ analysis with any analysis type the Python BE supports.
 - **Python BE running** (`python dev-server.py` on localhost:9000, or
   set `PYTHON_API_URL` for a remote instance)
 - Parameter files populated by prior browser fetches or retrieveAll
+  (or use `--allow-external-fetch` to fetch from Amplitude on the fly;
+  credentials auto-loaded from `.env.amplitude.local`)
 
 ## Quick start
 

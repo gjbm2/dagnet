@@ -12,6 +12,8 @@ import { readFile, readdir, writeFile, stat, mkdir } from 'fs/promises';
 import { join, basename, extname } from 'path';
 import { createHash } from 'crypto';
 import YAML from 'js-yaml';
+import { log } from './logger';
+import { CACHE_HASH_LENGTH, FINGERPRINT_HASH_LENGTH } from './constants';
 import { fileRegistry } from '../contexts/TabContext';
 import { contextRegistry } from '../services/contextRegistry';
 import type { ContextDefinition } from '../services/contextRegistry';
@@ -111,7 +113,7 @@ export async function loadGraphFromDiskCached(
   if (opts?.noCache) return loadGraphFromDisk(dir, graphName);
 
   // Use a hash of the dir path to namespace cache files per data repo
-  const dirHash = createHash('sha256').update(dir).digest('hex').slice(0, 12);
+  const dirHash = createHash('sha256').update(dir).digest('hex').slice(0, CACHE_HASH_LENGTH);
   const cachePath = join(CACHE_DIR, `${dirHash}-${graphName}.bundle.json`);
   const fingerprintPath = join(CACHE_DIR, `${dirHash}-${graphName}.fingerprint`);
 
@@ -125,7 +127,7 @@ export async function loadGraphFromDiskCached(
       const cached = await readFile(cachePath, 'utf-8');
       const raw = JSON.parse(cached);
       const bundle = deserialiseBundle(raw);
-      console.error(`[cli] Loaded from cache (${cachePath})`);
+      log.info(`Loaded from cache (${cachePath})`);
       return bundle;
     }
   } catch {
@@ -140,9 +142,9 @@ export async function loadGraphFromDiskCached(
     await mkdir(CACHE_DIR, { recursive: true });
     await writeFile(cachePath, serialiseBundle(bundle), 'utf-8');
     await writeFile(fingerprintPath, currentFingerprint, 'utf-8');
-    console.error(`[cli] Wrote cache (${cachePath})`);
+    log.info(`Wrote cache (${cachePath})`);
   } catch (err: any) {
-    console.error(`[cli] WARNING: Could not write cache: ${err.message}`);
+    log.warn(`Could not write cache: ${err.message}`);
   }
 
   return bundle;
@@ -186,7 +188,7 @@ async function computeFingerprint(dir: string, graphName: string): Promise<strin
     mtimes.push(`hash-mappings:${s.mtimeMs}`);
   } catch { /* missing */ }
 
-  return createHash('sha256').update(mtimes.join('\n')).digest('hex').slice(0, 32);
+  return createHash('sha256').update(mtimes.join('\n')).digest('hex').slice(0, FINGERPRINT_HASH_LENGTH);
 }
 
 /** Serialise a GraphBundle to JSON (Maps → plain objects). */

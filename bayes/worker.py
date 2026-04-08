@@ -643,10 +643,15 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
         # ── 6. LOO-ELPD scoring + Summarise Phase 1 posteriors ──
         progress.set_band(*P1_SUMMARISE)
         report("summarising", 100, f"{phase1_label}: Computing diagnostics…")
-        from compiler.loo import compute_loo_scores
+        from compiler.loo import compute_loo_scores, extract_analytic_baselines
+        analytic_baselines = extract_analytic_baselines(graph_snapshot, topology)
         loo_diag = []
         try:
-            loo_scores = compute_loo_scores(trace, evidence, topology, diagnostics=loo_diag)
+            loo_scores = compute_loo_scores(
+                trace, evidence, topology,
+                analytic_baselines=analytic_baselines,
+                diagnostics=loo_diag,
+            )
         except Exception as e:
             loo_scores = None
             loo_diag.append(f"LOO: failed: {e}")
@@ -888,7 +893,11 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
             report("summarising", 100, f"{phase2_label}: Computing diagnostics…")
             loo_diag2 = []
             try:
-                loo_scores2 = compute_loo_scores(trace2, evidence, topology, diagnostics=loo_diag2)
+                loo_scores2 = compute_loo_scores(
+                    trace2, evidence, topology,
+                    analytic_baselines=analytic_baselines,
+                    diagnostics=loo_diag2,
+                )
             except Exception as e:
                 loo_scores2 = None
                 loo_diag2.append(f"LOO Phase 2: failed: {e}")
@@ -1179,6 +1188,12 @@ def _build_unified_slices(
         window["ess"] = round(min(prob.ess, lat.ess), 1)
         window["rhat"] = round(max(prob.rhat or 0, lat.rhat or 0), 4) or None
 
+    # LOO-ELPD model adequacy (doc 32)
+    if prob.delta_elpd is not None:
+        window["delta_elpd"] = round(prob.delta_elpd, 3)
+        window["pareto_k_max"] = round(prob.pareto_k_max, 3) if prob.pareto_k_max is not None else None
+        window["n_loo_obs"] = prob.n_loo_obs
+
     slices = {"window()": window}
 
     # Cohort slice: probability (from p_cohort if available, else p_base) + path-level latency
@@ -1209,6 +1224,11 @@ def _build_unified_slices(
             cohort["onset_mean"] = round(lat.path_onset_delta_days, 2)
         if lat.path_onset_sd is not None:
             cohort["onset_sd"] = round(lat.path_onset_sd, 2)
+        # LOO-ELPD (doc 32) — cohort slice gets same edge-level scores
+        if prob.delta_elpd is not None:
+            cohort["delta_elpd"] = round(prob.delta_elpd, 3)
+            cohort["pareto_k_max"] = round(prob.pareto_k_max, 3) if prob.pareto_k_max is not None else None
+            cohort["n_loo_obs"] = prob.n_loo_obs
         slices["cohort()"] = cohort
 
     return slices

@@ -1,0 +1,193 @@
+{
+  "success": true,
+  "result": {
+    "analysis_type": "path_between",
+    "analysis_name": "Path Between Nodes",
+    "analysis_description": "Probability and cost of path from start to end",
+    "metadata": {
+      "from_node": "household-delegated",
+      "from_label": "household-delegated",
+      "to_node": "switch-success",
+      "to_label": "Switch success",
+      "intermediate_nodes": []
+    },
+    "semantics": {
+      "dimensions": [
+        {
+          "id": "stage",
+          "name": "Stage",
+          "type": "stage",
+          "role": "primary"
+        },
+        {
+          "id": "scenario_id",
+          "name": "Scenario",
+          "type": "scenario",
+          "role": "secondary"
+        }
+      ],
+      "metrics": [
+        {
+          "id": "probability",
+          "name": "Cum. probability",
+          "type": "probability",
+          "format": "percent",
+          "role": "primary"
+        },
+        {
+          "id": "n",
+          "name": "n",
+          "type": "count",
+          "format": "number",
+          "role": null
+        },
+        {
+          "id": "evidence_mean",
+          "name": "Evidence probability",
+          "type": "probability",
+          "format": "percent",
+          "role": null
+        },
+        {
+          "id": "forecast_mean",
+          "name": "Forecast probability",
+          "type": "probability",
+          "format": "percent",
+          "role": null
+        },
+        {
+          "id": "p_mean",
+          "name": "Blended probability",
+          "type": "probability",
+          "format": "percent",
+          "role": null
+        },
+        {
+          "id": "completeness",
+          "name": "Completeness",
+          "type": "ratio",
+          "format": "percent",
+          "role": null
+        },
+        {
+          "id": "median_lag_days",
+          "name": "Median lag (days)",
+          "type": "number",
+          "format": "number",
+          "role": null
+        },
+        {
+          "id": "mean_lag_days",
+          "name": "Mean lag (days)",
+          "type": "number",
+          "format": "number",
+          "role": null
+        },
+        {
+          "id": "step_probability",
+          "name": "Step probability",
+          "type": "probability",
+          "format": "percent",
+          "role": null
+        },
+        {
+          "id": "dropoff",
+          "name": "Dropoff",
+          "type": "probability",
+          "format": "percent",
+          "role": null
+        },
+        {
+          "id": "expected_cost_gbp",
+          "name": "Expected Cost (£)",
+          "type": "currency",
+          "format": "currency_gbp",
+          "role": null
+        },
+        {
+          "id": "expected_labour_cost",
+          "name": "Expected Cost (Labour)",
+          "type": "duration",
+          "format": "number",
+          "role": null
+        }
+      ],
+      "chart": {
+        "recommended": "funnel",
+        "alternatives": [
+          "bridge",
+          "bar_grouped",
+          "table"
+        ],
+        "hints": {
+          "show_dropoff": true
+        }
+      }
+    },
+    "dimension_values": {
+      "stage": {
+        "16974652-b532-41ee-b4d5-a3ef5381591d": {
+          "name": "household-delegated",
+          "colour": null,
+          "order": 0,
+          "visibility_mode": null,
+          "probability_label": null
+        },
+        "30aabc44-e448-4359-b0d0-338a231edb92": {
+          "name": "Switch success",
+          "colour": null,
+          "order": 1,
+          "visibility_mode": null,
+          "probability_label": null
+        }
+      },
+      "scenario_id": {
+        "current": {
+          "name": "Scenario 1",
+          "colour": "#3b82f6",
+          "order": null,
+          "visibility_mode": "f+e",
+          "probability_label": "Probability"
+        }
+      }
+    },
+    "data": [
+      {
+        "stage": "16974652-b532-41ee-b4d5-a3ef5381591d",
+        "scenario_id": "current",
+        "scenario_name": "Scenario 1",
+        "visibility_mode": "f+e",
+        "probability_label": "Probability",
+        "probability": 1,
+        "expected_cost_gbp": 0,
+        "expected_labour_cost": 0,
+        "n": 9322,
+        "evidence_mean": 1,
+        "completeness": 1,
+        "p_mean": 1,
+        "median_lag_days": 0,
+        "mean_lag_days": 0
+      },
+      {
+        "stage": "30aabc44-e448-4359-b0d0-338a231edb92",
+        "scenario_id": "current",
+        "scenario_name": "Scenario 1",
+        "visibility_mode": "f+e",
+        "probability_label": "Probability",
+        "probability": 0.0845311883902231,
+        "expected_cost_gbp": 0.0113035,
+        "expected_labour_cost": 0,
+        "n": 826,
+        "evidence_mean": 0.08860759493670886,
+        "p_mean": 0.0845311883902231,
+        "completeness": 0.9066682249329128,
+        "median_lag_days": 24.143307761219315,
+        "mean_lag_days": 15.415245982270706,
+        "dropoff": 0.9154688116097769,
+        "step_probability": 0.0845311883902231
+      }
+    ]
+  },
+  "query_dsl": "from(household-delegated).to(switch-success).window(-30d:)",
+  "error": null
+}

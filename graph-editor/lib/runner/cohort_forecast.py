@@ -17,7 +17,11 @@ Key concepts:
 from __future__ import annotations
 
 import math
+import os
 from typing import Any, Dict, List, Optional, Tuple
+
+# Gate per-cohort diagnostic prints behind env var (set DAGNET_COHORT_DEBUG=1 to enable)
+_COHORT_DEBUG = bool(os.environ.get('DAGNET_COHORT_DEBUG'))
 
 
 from .forecast_application import compute_completeness
@@ -482,8 +486,9 @@ def compute_cohort_maturity_rows(
                         pr = calculate_path_probability(G, entry, from_node_id)
                         if pr.probability > reach_at_from_node:
                             reach_at_from_node = pr.probability
-                print(f"[REACH] from_node={from_node_id} anchor={anchor_node_id} "
-                      f"reach={reach_at_from_node:.6f}")
+                if _COHORT_DEBUG:
+                    print(f"[REACH] from_node={from_node_id} anchor={anchor_node_id} "
+                          f"reach={reach_at_from_node:.6f}")
             except Exception as e:
                 print(f"[REACH] Error computing reach: {e}")
                 import traceback; traceback.print_exc()
@@ -721,10 +726,11 @@ def compute_cohort_maturity_rows(
     if cohort_list:
         tau_solid_max = min(c['tau_observed'] for c in cohort_list)
         tau_future_max = max(c['tau_observed'] for c in cohort_list)
-    print(f"[zone_boundaries] tau_solid_max={tau_solid_max} tau_future_max={tau_future_max} "
-          f"tau_chart_extent={tau_chart_extent} cohorts={len(cohort_list)} "
-          f"axis_tau_max={axis_tau_max} max_tau_will_be={max(tau_chart_extent, axis_tau_max or 0)} "
-          f"has_bayes={has_bayes} edge_mu_sd={edge_mu_sd}")
+    if _COHORT_DEBUG:
+        print(f"[zone_boundaries] tau_solid_max={tau_solid_max} tau_future_max={tau_future_max} "
+              f"tau_chart_extent={tau_chart_extent} cohorts={len(cohort_list)} "
+              f"axis_tau_max={axis_tau_max} max_tau_will_be={max(tau_chart_extent, axis_tau_max or 0)} "
+              f"has_bayes={has_bayes} edge_mu_sd={edge_mu_sd}")
 
     # ── Determine max τ for row emission ───────────────────────────────
     # Use the axis extent from the caller (computed from t95/sweep_span
@@ -817,26 +823,25 @@ def compute_cohort_maturity_rows(
             c['x_frontier'] = x_arr[a_idx]
 
     # ── Monte Carlo fan bands ────────────────────────────────────────
-    _mc_msg = (f"[MC_diag] has_bayes={has_bayes} edge_mu_sd={edge_mu_sd} edge_sigma_sd={edge_sigma_sd} "
-               f"edge_onset_sd={edge_onset_sd} edge_p_sd={edge_p_sd} edge_p={edge_p} "
-               f"edge_mu={edge_mu} edge_sigma={edge_sigma} edge_onset={edge_onset} "
-               f"cohorts={len(cohort_list)} is_window={is_window}")
-    print(_mc_msg)
-    # Bayesian prior diagnostic
-    print(f"[BAYES_prior] alpha_0={alpha_0:.4f} beta_0={beta_0:.4f} "
-          f"prior_rate={alpha_0/(alpha_0+beta_0):.6f}")
-    if upstream_params_list:
-        _up0 = upstream_params_list[0]
-        print(f"[BAYES_upstream] p={_up0.get('p', 0):.6f} "
-              f"mu={_up0.get('mu', 0):.4f} sigma={_up0.get('sigma', 0):.4f} "
-              f"onset={_up0.get('onset', 0):.4f} "
-              f"reach={reach_at_from_node:.6f}")
-    # Also write to file for debugging
-    try:
-        with open('/tmp/mc_diag.log', 'a') as _f:
-            _f.write(_mc_msg + '\n')
-    except Exception:
-        pass
+    if _COHORT_DEBUG:
+        _mc_msg = (f"[MC_diag] has_bayes={has_bayes} edge_mu_sd={edge_mu_sd} edge_sigma_sd={edge_sigma_sd} "
+                   f"edge_onset_sd={edge_onset_sd} edge_p_sd={edge_p_sd} edge_p={edge_p} "
+                   f"edge_mu={edge_mu} edge_sigma={edge_sigma} edge_onset={edge_onset} "
+                   f"cohorts={len(cohort_list)} is_window={is_window}")
+        print(_mc_msg)
+        print(f"[BAYES_prior] alpha_0={alpha_0:.4f} beta_0={beta_0:.4f} "
+              f"prior_rate={alpha_0/(alpha_0+beta_0):.6f}")
+        if upstream_params_list:
+            _up0 = upstream_params_list[0]
+            print(f"[BAYES_upstream] p={_up0.get('p', 0):.6f} "
+                  f"mu={_up0.get('mu', 0):.4f} sigma={_up0.get('sigma', 0):.4f} "
+                  f"onset={_up0.get('onset', 0):.4f} "
+                  f"reach={reach_at_from_node:.6f}")
+        try:
+            with open('/tmp/mc_diag.log', 'a') as _f:
+                _f.write(_mc_msg + '\n')
+        except Exception:
+            pass
     # Draw S parameter samples from MVN(posterior_mean, Σ).
     # For each draw, forecast each immature Cohort forward using the
     # conditional mean, aggregate, and collect quantiles.
@@ -888,9 +893,10 @@ def compute_cohort_maturity_rows(
         sigma_s = samples[:, 2]   # (S,)
         onset_s = samples[:, 3]   # (S,)
 
-        print(f"[BAYES_PP] direct posterior draw S={S} "
-              f"p=[{np.percentile(p_s, 10):.4f} {np.median(p_s):.4f} {np.percentile(p_s, 90):.4f}] "
-              f"mu=[{np.percentile(mu_s, 10):.4f} {np.median(mu_s):.4f} {np.percentile(mu_s, 90):.4f}]")
+        if _COHORT_DEBUG:
+            print(f"[BAYES_PP] direct posterior draw S={S} "
+                  f"p=[{np.percentile(p_s, 10):.4f} {np.median(p_s):.4f} {np.percentile(p_s, 90):.4f}] "
+                  f"mu=[{np.percentile(mu_s, 10):.4f} {np.median(mu_s):.4f} {np.percentile(mu_s, 90):.4f}]")
 
         # Compute per-draw latency CDF
         t_shifted = tau_grid[None, :] - onset_s[:, None]  # (S, T)
@@ -1018,7 +1024,8 @@ def compute_cohort_maturity_rows(
             a_idx = min(a_i, T - 1)
 
             _t0 = _time.monotonic()
-            print(f"[PERF] cohort {_ci}/{len(cohort_list)} a_i={a_i} N_i={N_i} T={T} S={S}", flush=True)
+            if _COHORT_DEBUG:
+                print(f"[PERF] cohort {_ci}/{len(cohort_list)} a_i={a_i} N_i={N_i} T={T} S={S}", flush=True)
             # ── Cohort-specific drifted parameters ────────────────
             # Draw per-cohort drift on transformed scales, then
             # transform back.  Each cohort gets its own (p, mu, sigma,
@@ -1145,7 +1152,8 @@ def compute_cohort_maturity_rows(
             Y_forecast = np.clip(Y_forecast, float(k_i), X_forecast)
 
             _t_cohort_end = _time.monotonic()
-            print(f"[PERF] cohort {_ci} done in {_t_cohort_end - _t0:.3f}s Y_D_max={float(Y_D.max()):.1f} Y_C_max={float(Y_C.max()):.1f}", flush=True)
+            if _COHORT_DEBUG:
+                print(f"[PERF] cohort {_ci} done in {_t_cohort_end - _t0:.3f}s Y_D_max={float(Y_D.max()):.1f} Y_C_max={float(Y_C.max()):.1f}", flush=True)
 
             # Mature ages: use pre-computed observed (x, y) arrays.
             # Carry-forward already baked in during pre-computation.
@@ -1161,7 +1169,7 @@ def compute_cohort_maturity_rows(
             # Dump decomposition for low-maturity Cohorts to diagnose
             # degeneration to model curve.  Only for immature Cohorts
             # (tau_max <= 5) to keep output manageable.
-            if a_i <= 5:
+            if _COHORT_DEBUG and a_i <= 5:
                 _diag_taus = [t for t in [0, 1, 2, 3, 5, 10, 15, 20, 30] if t < T]
                 _mode_str = 'window' if is_window else 'cohort'
                 _x_front = float(N_i) if is_window else float(x_frontier)
@@ -1400,7 +1408,7 @@ def compute_cohort_maturity_rows(
                     fan_bands = {str(int(bl * 100)): lo_hi for bl, lo_hi in fq['bands'].items()}
 
         # Diagnostic for epoch B debugging
-        if tau in (tau_solid_max, tau_solid_max + 1, tau_solid_max + 2, tau_future_max, tau_future_max + 1, 15, 30, 50):
+        if _COHORT_DEBUG and tau in (tau_solid_max, tau_solid_max + 1, tau_solid_max + 2, tau_future_max, tau_future_max + 1, 15, 30, 50):
             _bsy = b.sum_y if b else 0
             _bsx = b.sum_x if b else 0
             _ev = f"{evidence_rate:.4f}" if evidence_rate is not None else "null"

@@ -5,6 +5,7 @@
  * then runs aggregation + LAG pass + param extraction + serialisation.
  */
 
+import { log } from '../logger';
 import { bootstrap } from '../bootstrap';
 import { extractParamsFromGraph } from '../../services/GraphParamExtractor';
 import { flattenParams, toYAML, toJSON, toCSV } from '../../services/ParamPackDSLService';
@@ -26,11 +27,14 @@ dagnet-cli param-pack
     --show-signatures        Show computed signatures per edge (diagnostic)
     --verbose, -v            Show all console.log/warn output (LAG debug, etc.)
     --session-log            Show session log output
-    --allow-external-fetch   Enable external source fetching (not yet implemented)
+    --allow-external-fetch   Allow fetching from external sources if cache is stale/missing
     --help, -h               Show this help
 
   Environment:
     PYTHON_API_URL   Python BE URL (default: http://localhost:9000)
+
+  Amplitude credentials are auto-loaded from .env.amplitude.local
+  at the repo root. No manual env setup needed.
 
   Examples:
     bash graph-ops/scripts/param-pack.sh my-graph "window(1-Dec-25:20-Dec-25)"
@@ -38,6 +42,14 @@ dagnet-cli param-pack
 `;
 
 export async function run() {
+  try {
+    await runParamPack();
+  } catch (err: any) {
+    log.fatal(err.message || String(err));
+  }
+}
+
+async function runParamPack() {
   const ctx = await bootstrap();
   if (!ctx) {
     console.error(USAGE);
@@ -48,7 +60,7 @@ export async function run() {
 
   // Signatures diagnostic
   if (flags.showSignatures) {
-    console.error(`\n[cli] Computing signatures per edge...`);
+    log.info('Computing signatures per edge...');
     for (const edge of bundle.graph.edges || []) {
       const edgeId = edge.id || edge.uuid;
       try {
@@ -57,42 +69,44 @@ export async function run() {
           edgeId: edge.uuid || edge.id,
           effectiveDSL: queryDsl,
         });
-        console.error(`  ${edgeId}: ${sigs.length} signature(s)`);
+        log.info(`  ${edgeId}: ${sigs.length} signature(s)`);
         for (const sig of sigs) {
-          console.error(`    hash=${sig.coreHash}  keys=[${sig.contextKeys.join(',')}]  dbParam=${sig.dbParamId}`);
+          log.info(`    hash=${sig.coreHash}  keys=[${sig.contextKeys.join(',')}]  dbParam=${sig.dbParamId}`);
         }
       } catch (err: any) {
-        console.error(`  ${edgeId}: ERROR — ${err.message}`);
+        log.error(`  ${edgeId}: ${err.message}`);
       }
     }
   }
 
   // Aggregate + LAG pass
-  console.error(`[cli] Aggregating parameter data for requested window...`);
-  const { graph: populatedGraph, warnings } = aggregateAndPopulateGraph(bundle, queryDsl);
+  // 'from-file' = cache only; 'versioned' = cache first, API if stale/missing
+  const fetchMode = flags.allowExternalFetch ? 'versioned' as const : 'from-file' as const;
+  log.info(`Aggregating parameter data for requested window (mode: ${fetchMode})...`);
+  const { graph: populatedGraph, warnings } = await aggregateAndPopulateGraph(bundle, queryDsl, { mode: fetchMode });
   for (const w of warnings) {
-    console.error(`[cli] WARNING: ${w}`);
+    log.warn(w);
   }
 
   // Extract + serialise
   const params = extractParamsFromGraph(populatedGraph);
   const edgeCount = Object.keys(params.edges ?? {}).length;
   const nodeCount = Object.keys(params.nodes ?? {}).length;
-  console.error(`[cli] Extracted params: ${edgeCount} edges, ${nodeCount} nodes`);
+  log.info(`Extracted params: ${edgeCount} edges, ${nodeCount} nodes`);
 
   // --get: extract a single scalar value
   if (getKey) {
     const flat = flattenParams(params);
     const value = flat[getKey];
     if (value === undefined) {
-      console.error(`[cli] ERROR: key '${getKey}' not found in param pack`);
+      log.error(`key '${getKey}' not found in param pack`);
       // Try to suggest: match on edge/node ID (second segment) if present
       const segments = getKey.split('.');
       const edgeOrNodeId = segments.length >= 2 ? segments[1] : getKey;
       const suggestions = Object.keys(flat).filter(k => k.includes(edgeOrNodeId));
       if (suggestions.length > 0) {
-        console.error(`[cli] Available keys for '${edgeOrNodeId}':`);
-        for (const k of suggestions) console.error(`  ${k}`);
+        log.info(`Available keys for '${edgeOrNodeId}':`);
+        for (const k of suggestions) log.info(`  ${k}`);
       }
       process.exit(1);
     }

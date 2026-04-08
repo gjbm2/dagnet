@@ -5,7 +5,7 @@
  * No grid lines — uses spacing and muted headers like the rest of the app.
  */
 
-import React, { useMemo } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ReactECharts from 'echarts-for-react';
 import type { ProbabilityPosterior, LatencyPosterior } from '../../types';
 import { computeQualityTier, qualityTierToColour, qualityTierLabel } from '../../utils/bayesQualityTier';
@@ -67,15 +67,10 @@ export function BayesPosteriorCard({ probability, latency, t95, pathT95, theme =
     const rel = formatRelativeTime(post.fitted_at);
     footerParts.push({ text: rel ?? post.fitted_at, colour: freshnessColour(getFreshnessLevel(post.fitted_at), theme) });
   }
-  // LOO-ELPD model adequacy (doc 32)
-  if (post?.delta_elpd != null) {
-    const elpdColour = post.delta_elpd < 0 ? qualityTierToColour('warning', theme) : undefined;
-    footerParts.push({ text: `ΔELPD ${post.delta_elpd > 0 ? '+' : ''}${post.delta_elpd.toFixed(1)}`, colour: elpdColour });
-  }
-  if (post?.pareto_k_max != null && post.pareto_k_max > 0.5) {
-    const kColour = post.pareto_k_max > 0.7 ? qualityTierToColour('warning', theme) : undefined;
-    footerParts.push({ text: `k=${post.pareto_k_max.toFixed(2)}`, colour: kColour });
-  }
+  // LOO-ELPD model adequacy (doc 32): raw numbers suppressed from
+  // headline footer — they're uninterpretable to business users.
+  // Quality tier absorbs LOO signals (warning on ΔELPD<0 or k>0.7).
+  // Raw values remain in PosteriorIndicator diagnostic popover.
 
   // ── Shared components ──
   const Label = ({ children }: { children: string }) => (
@@ -502,6 +497,38 @@ export const ModelRateChart = React.memo(function ModelRateChart(props: ModelRat
     hasEdge, hasEdgeLat, hasPath, hasPathLat,
   ]);
 
+  // Measure container with ResizeObserver and feed explicit pixel dimensions to ECharts.
+  // echarts-for-react skips its first resize callback (isInitialResize guard), so on F5
+  // the sidebar may not be at final width when ECharts inits → chart renders tiny.
+  // Driving dimensions from observed container size avoids the race entirely.
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [dims, setDims] = useState<{ w: number; h: number } | null>(null);
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const measure = () => {
+      const w = el.clientWidth;
+      if (w > 0) {
+        const h = Math.min(Math.round(w / 1.6), 320);
+        setDims(prev => (prev && prev.w === w && prev.h === h) ? prev : { w, h });
+      }
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const echartsRef = useRef<any>(null);
+  // When dims change, tell the existing ECharts instance to resize
+  useEffect(() => {
+    if (!dims) return;
+    const inst = echartsRef.current?.getEchartsInstance?.();
+    if (inst) {
+      try { inst.resize({ width: dims.w, height: dims.h }); } catch { /* noop */ }
+    }
+  }, [dims]);
+
   const hasBands = (hasEdge && (props.edgePSd ?? 0) > 0) || (hasPath && (props.pathPSd ?? 0) > 0);
   return (
     <div style={{ width: '100%', marginTop: 6 }}>
@@ -518,8 +545,8 @@ export const ModelRateChart = React.memo(function ModelRateChart(props: ModelRat
         )}
         {hasBands && <span style={{ marginLeft: 'auto', color: '#666', fontSize: 7 }}>shading: 90% / 99% HDI</span>}
       </div>
-      <div style={{ width: '100%', aspectRatio: '1.6 / 1', maxHeight: 320 }}>
-      <ReactECharts option={option} style={{ width: '100%', height: '100%' }} notMerge lazyUpdate />
+      <div ref={containerRef} style={{ width: '100%' }}>
+      {dims && <ReactECharts ref={echartsRef} option={option} style={{ width: dims.w, height: dims.h }} notMerge lazyUpdate />}
       </div>
     </div>
   );

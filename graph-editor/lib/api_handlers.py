@@ -8,7 +8,10 @@ Used by both:
 This ensures dev and prod use identical handler logic.
 """
 import math
+import os
 from typing import Dict, Any, Optional, List
+
+_COHORT_DEBUG = bool(os.environ.get('DAGNET_COHORT_DEBUG'))
 
 
 def handle_generate_all_parameters(data: Dict[str, Any]) -> Dict[str, Any]:
@@ -602,13 +605,17 @@ def handle_runner_analyze(data: Dict[str, Any]) -> Dict[str, Any]:
     Returns:
         Analysis results
     """
-    # New path: per-scenario snapshot_subjects or DSL-resolved subjects (doc 31)
-    # Check if any scenario carries snapshot_subjects or analytics_dsl
+    # Route to snapshot handler only when the analysis type actually needs
+    # snapshot data. analytics_dsl may be present on non-snapshot types
+    # (e.g. bridge_view) — those must go through the standard runner.
+    from analysis_subject_resolution import ANALYSIS_TYPE_SCOPE_RULES
+    analysis_type = data.get('analysis_type', '')
+    is_snapshot_type = analysis_type in ANALYSIS_TYPE_SCOPE_RULES
     scenarios_with_snapshots = [
         s for s in data.get('scenarios', [])
         if s.get('snapshot_subjects') or s.get('analytics_dsl')
     ]
-    if scenarios_with_snapshots:
+    if is_snapshot_type and scenarios_with_snapshots:
         return _handle_snapshot_analyze_subjects(data)
 
     # Legacy path: snapshot_query (single subject)
@@ -1178,26 +1185,46 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
 
     for scenario in scenarios:
         scenario_id = scenario.get('scenario_id', 'unknown')
-        subjects = scenario.get('snapshot_subjects')
-
-        # Doc 31: if no pre-resolved snapshot_subjects but analytics_dsl is
-        # present, resolve subjects from DSL + graph + candidate_regimes_by_edge.
+        # Doc 31: prefer analytics_dsl (new path). Falls back to
+        # snapshot_subjects when analytics_dsl absent or resolution fails.
+        subjects = None
         if not subjects and scenario.get('analytics_dsl'):
             try:
                 from analysis_subject_resolution import resolve_analysis_subjects, synthesise_snapshot_subjects
+                # Compose full DSL: analytics_dsl has the subject (from(x).to(y)),
+                # temporal DSL has the window/cohort/context clause.
+                # Per-scenario effective_query_dsl takes precedence over
+                # top-level query_dsl (which is shared across scenarios).
+                subject_dsl = scenario.get('analytics_dsl', '')
+                temporal_dsl = (scenario.get('effective_query_dsl')
+                                or data.get('query_dsl', ''))
+                if temporal_dsl and subject_dsl:
+                    # Avoid duplication: if one already contains the other, use the longer one.
+                    if subject_dsl in temporal_dsl:
+                        full_dsl = temporal_dsl
+                    elif temporal_dsl in subject_dsl:
+                        full_dsl = subject_dsl
+                    else:
+                        full_dsl = f"{subject_dsl}.{temporal_dsl}"
+                else:
+                    full_dsl = subject_dsl or temporal_dsl
                 resolved = resolve_analysis_subjects(
                     graph=scenario.get('graph', {}),
-                    query_dsl=data.get('query_dsl', scenario.get('analytics_dsl', '')),
+                    query_dsl=full_dsl,
                     analysis_type=analysis_type,
                     candidate_regimes_by_edge=scenario.get('candidate_regimes_by_edge', {}),
                 )
                 subjects = synthesise_snapshot_subjects(resolved, analysis_type)
                 print(f"[doc31] Resolved {len(subjects)} subjects from DSL "
-                      f"'{scenario.get('analytics_dsl')}' for {analysis_type} "
+                      f"'{full_dsl}' for {analysis_type} "
                       f"(scenario={scenario_id})")
             except Exception as e:
                 print(f"[doc31] WARNING: DSL resolution failed for scenario={scenario_id}: {e}")
                 subjects = None
+
+        # Fallback: use FE-resolved snapshot_subjects if analytics_dsl absent or failed
+        if not subjects:
+            subjects = scenario.get('snapshot_subjects')
 
         if not subjects:
             # No snapshot subjects for this scenario — skip snapshot analysis
@@ -1255,7 +1282,8 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                 )
                 # Doc 30: apply regime selection before derivation
                 rows = _apply_regime_selection(rows, subj)
-                print(f"[epoch_unify] base={base_sid[:40]} epoch_anchor={subj['anchor_from']}..{subj['anchor_to']} rows={len(rows)}")
+                if _COHORT_DEBUG:
+                    print(f"[epoch_unify] base={base_sid[:40]} epoch_anchor={subj['anchor_from']}..{subj['anchor_to']} rows={len(rows)}")
                 scenario_rows += len(rows)
                 _epoch_row_counts[base_sid] = _epoch_row_counts.get(base_sid, 0) + len(rows)
                 if rows:
@@ -1333,8 +1361,9 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
 
                 # Use merged frames from all epochs for this base subject
                 merged = _epoch_frames.get(base_sid, [])
-                print(f"[epoch_unify] computing unified maturity for {base_sid[:40]} "
-                      f"merged_frames={len(merged)} epochs={len(_epoch_subjects.get(base_sid, []))}")
+                if _COHORT_DEBUG:
+                    print(f"[epoch_unify] computing unified maturity for {base_sid[:40]} "
+                          f"merged_frames={len(merged)} epochs={len(_epoch_subjects.get(base_sid, []))}")
 
                 if merged:
                     result = {'frames': merged, 'analysis_type': analysis_type}
@@ -1860,7 +1889,12 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                                     if _target_edge:
                                         _anchor_node_id = _compute_anchor(_g_model, _target_edge)
                                 except Exception as _e:
-                                    print(f"[anchor_resolve] Failed: {_e}")
+                                    # Truncate to first line — full Pydantic dumps are extremely verbose
+                                    _e_first = str(_e).split('\n')[0][:120]
+                                    if _COHORT_DEBUG:
+                                        print(f"[anchor_resolve] Failed: {_e}")
+                                    else:
+                                        print(f"[anchor_resolve] Failed (set DAGNET_COHORT_DEBUG=1 for detail): {_e_first}")
 
                             # Test fixture fork: use fixture's frames/graph/edge_params
                             # but the APP's query dates (anchor_from/to, sweep_to)
@@ -1900,7 +1934,8 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                                     _unified_anchor_to = max(s['anchor_to'] for s in _epoch_sibs)
                                 _unified_sweep_to = max(s.get('sweep_to', s['anchor_to']) for s in _epoch_sibs)
 
-                                print(f"[pre_compute] frames={len(result.get('frames',[]))} anchor={_unified_anchor_from}..{_unified_anchor_to} sweep={_unified_sweep_to}", flush=True)
+                                if _COHORT_DEBUG:
+                                    print(f"[pre_compute] frames={len(result.get('frames',[]))} anchor={_unified_anchor_from}..{_unified_anchor_to} sweep={_unified_sweep_to}", flush=True)
                                 maturity_rows = compute_cohort_maturity_rows(
                                     frames=result['frames'],
                                     graph=graph,
@@ -1950,7 +1985,11 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                             if _target_edge:
                                 _fb_anchor_node_id = _compute_anchor(_g_model, _target_edge)
                         except Exception as _e:
-                            print(f"[anchor_resolve fallback] Failed: {_e}")
+                            _e_first = str(_e).split('\n')[0][:120]
+                            if _COHORT_DEBUG:
+                                print(f"[anchor_resolve fallback] Failed: {_e}")
+                            else:
+                                print(f"[anchor_resolve fallback] Failed: {_e_first}")
 
                     maturity_rows = compute_cohort_maturity_rows(
                         frames=result['frames'],

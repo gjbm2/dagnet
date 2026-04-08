@@ -71,9 +71,6 @@ the file first — never modify, truncate, or delete.**
 2. `docs/current/codebase/RESERVED_QUERY_TERMS_GLOSSARY.md` — term definitions (Cohort vs cohort(), window mode vs cohort mode, edge-level vs path-level latency, anchor_median_lag_days) that affect every subsystem
 3. `docs/current/codebase/DEV_ENVIRONMENT_AND_HMR.md` — staleness diagnostic section only (5-step checklist). Do NOT blame HMR for bugs unless this checklist confirms code staleness.
 
-**Then check for handover notes**:
-4. List `docs/current/handover/` — if a recent handover exists for your work area, read it in full before starting
-
 **Why this exists**: agents repeatedly spend 3-6 attempts on fixes that would have been one-shot with this context. The sync overview alone would have prevented the 6-attempt posterior deletion failure (each attempt missed a different layer). The glossary prevents misusing cohort/window semantics. The HMR doc prevents false staleness diagnoses.
 
 ---
@@ -88,11 +85,10 @@ These are **non-negotiable reflexes**. When the user's message matches a trigger
 | "run tests" (without specific files) | Run only tests related to files you changed — use file paths, not patterns |
 | "dry run" / "run the script" | Requires `required_permissions: ["all"]` — the sandbox hides `node_modules` and env files |
 | **"RTFM"**, "rtfm", or any derivation (e.g. "read the manual", "check the docs", "did you even read the rules") | The user is telling you that your recent response missed context that is already documented. **Three mandatory steps**: **(1)** Re-read this entire CLAUDE.md file systematically — do not skim. **(2)** Review relevant codebase docs (`docs/current/`, `docs/current/project-contexts/`, `graph-editor/docs/`, and any files referenced in the current discussion) to rebuild working knowledge. **(3)** Revise your most recent response/analysis in light of what you missed, and respond with corrected, properly contextualised guidance. **Do NOT defend the original response.** The user is not asking for justification — they are telling you that you were wrong. |
-| **"pick up handover"**, "pick up latest handover", "continue from handover", "read the handover" | **(1)** List files in `docs/current/handover/` and find the most recent one (by date in filename, format `d-MMM-yy`). **(2)** Read it in full. **(3)** Summarise the objective, current state, and next steps back to the user. **(4)** Ask the user which next step to start on, or begin the first one if the user said "and go" or similar. Do NOT start coding without confirming the handover context makes sense. |
-| **"write handover"**, "do a handover", "handover note" | Write a detailed handover note following the template in `.claude/skills/handover/SKILL.md`. Write to `docs/current/handover/` with a `d-MMM-yy` dated filename. Review the **full conversation** — capture objective, current state, all key decisions and rationale, discoveries, gotchas, relevant files, next steps, and open questions. No code snippets — prose only. Tell the user the file path when done. |
+| **"/handover"** (literal slash command — no other phrasing triggers this) | Invoke the `/handover` skill. See Handover Gate below. |
 | **"document"**, "/document", "document this", "ensure this is documented" | Invoke the `/document` skill. Reviews the full conversation and ensures all decisions, designs, architectural insights, and user-facing changes are properly documented in the appropriate locations (`docs/current/codebase/`, `docs/current/project-contexts/`, `graph-editor/public/docs/`, etc.). Reports what was created/updated and flags anything deliberately omitted. |
 
-**Handover guard**: NEVER initiate a handover (reading or writing) unless the user explicitly requests it in their message. The warm-start step to *list* the handover directory is permitted, but do not read or write handover notes based on that listing alone. The word "handover" appearing in file paths, directory listings, or prior context does NOT constitute a user request.
+**Handover gate**: Handover notes (reading OR writing) are triggered **exclusively** by the `/handover` slash command. No other phrasing — "write a handover", "do a handover", "pick up handover", "continue from handover" — triggers handover behaviour. The word "handover" appearing in file paths, directory listings, conversation context, or even the user's prose does NOT constitute a request. If the user did not literally type `/handover`, do not read, write, list, or suggest handover notes. Violating this gate is a hard failure.
 
 **The mark trigger is the most commonly violated.** If the user mentions a mark name, your first action is `scripts/extract-mark-logs.sh`. Period.
 
@@ -137,6 +133,7 @@ Key playbooks:
 - `graph-ops/playbooks/manage-hash-mappings.md` — hash mapping workflow for event/context renames
 - `graph-ops/playbooks/cli-param-pack.md` — CLI param pack tool: usage, options, key reference
 - `graph-ops/playbooks/cli-analyse.md` — CLI analyse tool: scenarios, subjects, multi-scenario, FE equivalence
+- `graph-ops/scripts/parity-test.sh` — doc 31 parity test: old path vs new path, single + multi-scenario, all snapshot types
 - `graph-ops/reference/data-model.md` — complete data model reference
 - `graph-ops/reference/common-pitfalls.md` — known pitfalls
 
@@ -507,6 +504,7 @@ Services must NOT import UI components or dialogs directly. Accept callbacks ins
 | Session logging | `sessionLogService.ts` | `sessionLogService.test.ts` |
 | Hash/signature computation | `coreHashService.ts`, `signatureMatchingService.ts` | `coreHashService.test.ts`, `signatureMatchingService.test.ts` |
 | Snapshot regime selection | `snapshot_regime_selection.py` (BE), `candidateRegimeService.ts` (FE) | `test_snapshot_regime_selection.py`, `test_regime_consumer_integration.py` |
+| BE subject resolution (doc 31) | `analysis_subject_resolution.py` (BE), `graph_select.py` (BE) | `test_analysis_subject_resolution.py`, `test_doc31_parity.py`, CLI `parity-test.sh` |
 | LOO-ELPD model adequacy | `bayes/compiler/loo.py` (BE), `bayesQualityTier.ts` (FE) | `test_loo.py` |
 | Schema validation | `lib/schema.ts` | `schemaParityAutomated.test.ts` |
 | Non-blocking pull | `nonBlockingPullService.ts` | `nonBlockingPullService.test.ts` |
@@ -739,6 +737,7 @@ Do NOT claim a fix is complete until you have verified it. "I changed the code" 
 - [ ] **UpdateManager** - If field contains node references, update on node ID rename
 - [ ] **Services** - Storage, retrieval, sync logic (dataOperationsService, etc.)
 - [ ] **Override patterns** - If field has `_overridden` companion, mirror the pattern
+- [ ] **Bayes posterior fields** - If adding to `PosteriorSummary` or `LatencyPosteriorSummary`, also add to `_build_unified_slices()` in `worker.py` (both window and cohort dicts) AND to `bayesPatchService.ts` projection. See anti-pattern 14.
 
 **Finding companion fields**: grep for a similar field (e.g. `query_overridden`, `.query\b`) across `.ts`, `.tsx`, `.py`, `.yaml` to find all places where the pattern is used, then replicate for the new field.
 

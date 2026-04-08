@@ -223,6 +223,66 @@ detail):
 
 ---
 
+## DSL Roles in the Analysis Request Flow
+
+When the FE commissions a snapshot analysis, DSL strings appear in **three
+distinct roles** on the request. Confusing them is a common source of bugs.
+
+### 1. `analytics_dsl` (data subject — per scenario)
+
+The path being analysed: `from(x).to(y)`. Identifies *which edge(s)* to query
+in the snapshot DB. Constant across scenarios for a given chart — it describes
+the data subject, not the temporal window.
+
+- **Set by**: `contentItem.analytics_dsl` (canvas analysis content item)
+- **Sent as**: `scenario.analytics_dsl` in the request
+- **Used by BE**: path resolution in `resolve_analysis_subjects()` (doc 31)
+- **Contains**: `from()`, `to()`, path constraints — never temporal clauses
+
+### 2. `effective_query_dsl` (temporal/context clause — per scenario)
+
+The temporal window, context segmentation, and asat clause: e.g.
+`window(-90d:)`, `cohort(1-Jan-26:1-Apr-26).context(channel:google)`. Varies
+per scenario — each live scenario can have a different window or context.
+
+- **Set by**: scenario's `effective_query_dsl`, derived from `currentDSL` +
+  scenario inheritance + `chartCurrentLayerDsl`
+  (see `scenarioRegenerationService.ts`)
+- **Sent as**: `scenario.effective_query_dsl` per scenario in the request
+- **Used by BE**: time bounds extraction, snapshot DB date filtering.
+  The BE composes `analytics_dsl` + `effective_query_dsl` into a full DSL
+  for `resolve_analysis_subjects()`.
+- **Contains**: `window()`, `cohort()`, `context()`, `asat()` — never `from()`/`to()`
+
+The top-level `request.query_dsl` is a composed string (`analyticsDsl.currentDSL`)
+used by non-snapshot analysis types (e.g. `bridge_view`) that go through the
+standard runner. Snapshot types use the per-scenario `effective_query_dsl`
+instead (doc 31, 8-Apr-26).
+
+### 3. `dataInterestsDSL` (pinned query — graph-level)
+
+The nightly retrieval template stored on the graph itself. Controls which
+slices the daily batch runner fetches and caches. Uses enumeration syntax
+(`context(channel)` without a value) to generate Cartesian products of slices.
+
+- **Set by**: Pinned Query Modal (`PinnedQueryModal.tsx`)
+- **Stored on**: `graph.dataInterestsDSL`
+- **Used by**: `candidateRegimeService.ts`, `useBayesTrigger.ts`,
+  nightly automation
+- **Contains**: `window()`, `context()` with enumeration, `or()` — typically
+  no `from()`/`to()`
+
+### Shorthand composition
+
+In the CLI or single-scenario cases, `analytics_dsl` and `query_dsl` are
+sometimes concatenated for convenience: `from(x).to(y).window(-90d:)`. This is
+a valid DSL string but masks the fact that the subject and temporal parts serve
+different purposes and vary independently. The BE must be able to handle them
+arriving separately (per-scenario `analytics_dsl` + top-level `query_dsl`) as
+the canonical form.
+
+---
+
 ## Examples
 
 ```

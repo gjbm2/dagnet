@@ -14,6 +14,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { join } from 'path';
 import { loadGraphFromDisk, seedFileRegistry, type GraphBundle } from '../diskLoader';
 import { aggregateAndPopulateGraph } from '../aggregate';
+import { parseScenarioSpec } from '../scenarioParser';
 import { PYTHON_API_BASE } from '../../lib/pythonApiBase';
 
 const FIXTURES_DIR = join(__dirname, 'fixtures');
@@ -35,62 +36,6 @@ beforeAll(async () => {
     console.warn('[cliAnalyse] Python BE not running — skipping BE integration tests');
   }
 });
-
-// ---------------------------------------------------------------------------
-// Scenario spec parsing (pure — no BE needed)
-// ---------------------------------------------------------------------------
-
-// Import the parsing functions by re-implementing the parse logic here
-// (they're not exported from the command module). This tests the contract,
-// not the implementation.
-function splitOutsideParens(s: string): string[] {
-  const parts: string[] = [];
-  let depth = 0;
-  let start = 0;
-  for (let i = 0; i < s.length; i++) {
-    if (s[i] === '(') depth++;
-    else if (s[i] === ')') depth--;
-    else if (s[i] === ',' && depth === 0) {
-      parts.push(s.slice(start, i));
-      start = i + 1;
-    }
-  }
-  parts.push(s.slice(start));
-  return parts.filter(p => p.length > 0);
-}
-
-function parseScenarioSpec(raw: string, index: number) {
-  const parts = splitOutsideParens(raw);
-  let name: string | undefined;
-  let colour: string | undefined;
-  let visibilityMode: 'f+e' | 'f' | 'e' = 'f+e';
-  const dslParts: string[] = [];
-
-  for (const part of parts) {
-    const eqIdx = part.indexOf('=');
-    if (eqIdx > 0) {
-      const key = part.slice(0, eqIdx).trim().toLowerCase();
-      const value = part.slice(eqIdx + 1).trim();
-      switch (key) {
-        case 'name': name = value; break;
-        case 'colour':
-        case 'color': colour = value; break;
-        case 'visibility':
-        case 'visibility_mode': visibilityMode = value as any; break;
-        default: dslParts.push(part);
-      }
-    } else {
-      dslParts.push(part);
-    }
-  }
-
-  return {
-    name: name || `Scenario ${index + 1}`,
-    queryDsl: dslParts.join(','),
-    colour: colour || '#3b82f6',
-    visibilityMode,
-  };
-}
 
 describe('Scenario spec parsing', () => {
   it('should parse bare DSL with default name', () => {
@@ -146,13 +91,13 @@ describe('Multi-scenario aggregation', () => {
     seedFileRegistry(bundle);
   });
 
-  it('should produce different evidence for different windows from the same graph', () => {
+  it('should produce different evidence for different windows from the same graph', async () => {
     // First 5 days: n=500 for start-to-middle
-    const { graph: g1 } = aggregateAndPopulateGraph(bundle, 'window(1-Jan-26:5-Jan-26)');
+    const { graph: g1 } = await aggregateAndPopulateGraph(bundle, 'window(1-Jan-26:5-Jan-26)');
     const edge1 = g1.edges.find((e: any) => e.id === 'start-to-middle');
 
     // Full 10 days: n=1000 for start-to-middle
-    const { graph: g2 } = aggregateAndPopulateGraph(bundle, 'window(1-Jan-26:10-Jan-26)');
+    const { graph: g2 } = await aggregateAndPopulateGraph(bundle, 'window(1-Jan-26:10-Jan-26)');
     const edge2 = g2.edges.find((e: any) => e.id === 'start-to-middle');
 
     expect(edge1.p.evidence.n).toBe(500);
@@ -160,9 +105,9 @@ describe('Multi-scenario aggregation', () => {
     expect(edge1.p.evidence.n).not.toBe(edge2.p.evidence.n);
   });
 
-  it('should produce independent graphs (mutating one does not affect the other)', () => {
-    const { graph: g1 } = aggregateAndPopulateGraph(bundle, 'window(1-Jan-26:5-Jan-26)');
-    const { graph: g2 } = aggregateAndPopulateGraph(bundle, 'window(1-Jan-26:10-Jan-26)');
+  it('should produce independent graphs (mutating one does not affect the other)', async () => {
+    const { graph: g1 } = await aggregateAndPopulateGraph(bundle, 'window(1-Jan-26:5-Jan-26)');
+    const { graph: g2 } = await aggregateAndPopulateGraph(bundle, 'window(1-Jan-26:10-Jan-26)');
 
     // Mutate g1
     g1.edges[0].p.mean = 999;
@@ -199,7 +144,7 @@ describe('Analyse end-to-end (requires Python BE)', () => {
   it('should return a successful graph_overview analysis for a single scenario', async () => {
     if (!beAvailable) return;
 
-    const { graph } = aggregateAndPopulateGraph(bundle, 'window(1-Jan-26:10-Jan-26)');
+    const { graph } = await aggregateAndPopulateGraph(bundle, 'window(1-Jan-26:10-Jan-26)');
 
     const request = {
       scenarios: [{
@@ -233,8 +178,8 @@ describe('Analyse end-to-end (requires Python BE)', () => {
   it('should return results for two scenarios with different scenario_ids', async () => {
     if (!beAvailable) return;
 
-    const { graph: g1 } = aggregateAndPopulateGraph(bundle, 'window(1-Jan-26:5-Jan-26)');
-    const { graph: g2 } = aggregateAndPopulateGraph(bundle, 'window(1-Jan-26:10-Jan-26)');
+    const { graph: g1 } = await aggregateAndPopulateGraph(bundle, 'window(1-Jan-26:5-Jan-26)');
+    const { graph: g2 } = await aggregateAndPopulateGraph(bundle, 'window(1-Jan-26:10-Jan-26)');
 
     const request = {
       scenarios: [
@@ -269,7 +214,7 @@ describe('Analyse end-to-end (requires Python BE)', () => {
   it('should include subject DSL in query_dsl when provided', async () => {
     if (!beAvailable) return;
 
-    const { graph } = aggregateAndPopulateGraph(bundle, 'window(1-Jan-26:10-Jan-26)');
+    const { graph } = await aggregateAndPopulateGraph(bundle, 'window(1-Jan-26:10-Jan-26)');
 
     // Use from().to() subject — the BE should parse this
     const request = {
@@ -369,7 +314,7 @@ describe('Snapshot-backed analysis (requires Python BE)', () => {
   it('should return cohort_maturity analysis using seeded snapshot data', async () => {
     if (!beAvailable) return;
 
-    const { graph } = aggregateAndPopulateGraph(bundle, 'window(1-Jan-26:10-Jan-26)');
+    const { graph } = await aggregateAndPopulateGraph(bundle, 'window(1-Jan-26:10-Jan-26)');
 
     const request = {
       scenarios: [{
@@ -423,7 +368,7 @@ describe('Snapshot-backed analysis (requires Python BE)', () => {
   it('should return daily_conversions analysis using seeded snapshot data', async () => {
     if (!beAvailable) return;
 
-    const { graph } = aggregateAndPopulateGraph(bundle, 'window(1-Jan-26:10-Jan-26)');
+    const { graph } = await aggregateAndPopulateGraph(bundle, 'window(1-Jan-26:10-Jan-26)');
 
     const request = {
       scenarios: [{

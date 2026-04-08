@@ -10,8 +10,10 @@ WindowSelector.
 - Node 22+ (via nvm, resolved from `graph-editor/.nvmrc`)
 - Data repo cloned (path in `.private-repos.conf`)
 - Parameter files populated by prior browser fetches or retrieveAll
-  (the CLI reads cached data from disk, it does not fetch from
-  Amplitude)
+  (the CLI reads cached data from disk by default)
+- For live Amplitude fetching: `.env.amplitude.local` at the repo
+  root with `AMPLITUDE_API_KEY` and `AMPLITUDE_SECRET_KEY` (credentials
+  are auto-loaded by the CLI — no manual env setup needed)
 
 ## Quick start
 
@@ -64,6 +66,7 @@ echo "Completeness: $val"
 | `--show-signatures` | Diagnostic: show computed hash signatures per edge |
 | `--verbose` / `-v` | Show all internal debug logging (LAG pass, aggregation, etc.) |
 | `--session-log` | Show session log output |
+| `--allow-external-fetch` | Allow fetching from Amplitude if cached data is stale or missing. Without this flag, the CLI uses cached parameter files only. Credentials are auto-loaded from `.env.amplitude.local`. |
 
 ## Query DSL
 

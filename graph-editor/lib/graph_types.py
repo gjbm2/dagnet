@@ -127,7 +127,7 @@ class ModelVarsLatency(BaseModel):
 class ModelVarsProbability(BaseModel):
     """Probability sub-block within a ModelVarsEntry."""
     mean: float = Field(..., ge=0, le=1)
-    stdev: float = Field(..., ge=0)
+    stdev: float = Field(0.0, ge=0)
 
 
 class ModelVarsEntry(BaseModel):
@@ -217,7 +217,7 @@ class FitHistoryEntry(BaseModel):
     fingerprint: str
     slices: Dict[str, FitHistorySlice]
     hdi_level: Optional[float] = None
-    prior_tier: Optional[Literal['direct_history', 'trajectory_calibrated', 'inherited', 'sibling_pooled', 'uninformative']] = None
+    prior_tier: Optional[str] = None
 
 
 class Posterior(BaseModel):
@@ -228,9 +228,9 @@ class Posterior(BaseModel):
     fitted_at: str = Field(..., description="UK date (d-MMM-yy) of most recent fit")
     fingerprint: str = Field(..., description="Deterministic model hash")
     hdi_level: float = Field(..., description="HDI level used (e.g. 0.9)")
-    prior_tier: Literal['direct_history', 'trajectory_calibrated', 'inherited', 'sibling_pooled', 'uninformative']
+    prior_tier: str = Field('uninformative', description="Prior cascade tier (e.g. direct_history, warm_start, moment_matched, uninformative)")
     surprise_z: Optional[float] = Field(None, description="Trajectory surprise z-score")
-    slices: Dict[str, SlicePosteriorEntry] = Field(..., description="Per-slice posteriors keyed by DSL")
+    slices: Dict[str, SlicePosteriorEntry] = Field(default_factory=dict, description="Per-slice posteriors keyed by DSL")
     model_state: Optional[Dict[str, float]] = Field(None, alias='_model_state', description="Model internals for warm-start")
     fit_history: Optional[List[FitHistoryEntry]] = None
 
@@ -241,18 +241,26 @@ class BayesQuality(BaseModel):
     """Quality metrics from a Bayesian fitting run."""
     max_rhat: float
     min_ess: float
-    converged_pct: float = Field(..., ge=0, le=1, description="Fraction of params meeting convergence criteria")
-    edges_fitted: int = Field(..., ge=0)
-    edges_skipped: int = Field(..., ge=0)
+    converged_pct: float = Field(0.0, ge=0, description="Fraction of params meeting convergence criteria (0-1)")
+    edges_fitted: int = Field(0, ge=0)
+    edges_skipped: int = Field(0, ge=0)
     total_divergences: int = Field(0, ge=0, description="Sum of divergences across all fitted edges")
     edges_with_surprise: int = Field(0, ge=0, description="Count of edges with trajectory surprise |z| > 2")
     edges_by_tier: Dict[str, int] = Field(default_factory=dict, description="Prior cascade tier distribution")
+
+    @field_validator('converged_pct', mode='before')
+    @classmethod
+    def _normalise_converged_pct(cls, v: Any) -> float:
+        """Accept both 0-1 fraction and 0-100 percentage."""
+        if isinstance(v, (int, float)) and v > 1:
+            return float(v) / 100.0
+        return float(v) if v is not None else 0.0
 
 
 class BayesRunMetadata(BaseModel):
     """Graph-level metadata from the most recent Bayesian fitting run."""
     fitted_at: str = Field(..., description="UK date (d-MMM-yy)")
-    duration_ms: float = Field(..., ge=0, description="Wall-clock elapsed time")
+    duration_ms: float = Field(0.0, ge=0, description="Wall-clock elapsed time")
     fingerprint: str = Field(..., description="Deterministic hash of (graph + policy + evidence)")
     model_version: int = Field(..., ge=1, description="Schema version (starts at 1)")
     settings_signature: str = Field(..., description="Hash of ForecastingSettings used")

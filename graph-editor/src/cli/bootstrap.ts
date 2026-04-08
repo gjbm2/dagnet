@@ -11,6 +11,8 @@
  * receives the loaded graph bundle and parsed args.
  */
 
+import { execSync } from 'node:child_process';
+import { log } from './logger';
 import type { GraphBundle } from './diskLoader';
 
 // ------------------------------------------------------------------
@@ -22,6 +24,9 @@ export interface CLIContext {
   graphDir: string;
   graphName: string;
   queryDsl: string;
+  /** Workspace identity derived from data repo git state.
+   *  Used for workspace-prefixed param_ids in snapshot DB lookups. */
+  workspace: { repository: string; branch: string };
   /** Single key to extract (bare scalar output). Overrides format. */
   getKey: string | undefined;
   format: 'yaml' | 'json' | 'csv';
@@ -91,15 +96,29 @@ export async function bootstrap(
   const noCache = !!args['no-cache'];
   const format = ((args.format as string) || 'yaml') as 'yaml' | 'json' | 'csv';
 
-  console.error(`[cli] Loading graph '${graphName}' from ${graphDir}...`);
+  log.info(`Loading graph '${graphName}' from ${graphDir}...`);
   const bundle = noCache
     ? await loadGraphFromDisk(graphDir, graphName)
     : await loadGraphFromDiskCached(graphDir, graphName);
-  seedFileRegistry(bundle);
 
-  console.error(`[cli] Loaded: ${bundle.events.size} events, ${bundle.contexts.size} contexts, ${bundle.parameters.size} parameters`);
-  console.error(`[cli] Graph has ${bundle.graph.nodes?.length ?? 0} nodes, ${bundle.graph.edges?.length ?? 0} edges`);
-  if (queryDsl) console.error(`[cli] Query DSL: ${queryDsl}`);
+  // Detect workspace from data repo git state for correct param_id prefixing
+  let workspace = { repository: 'cli', branch: 'local' };
+  try {
+    const repoName = execSync('basename $(git remote get-url origin) .git', { cwd: graphDir, encoding: 'utf-8' }).trim();
+    const branch = execSync('git rev-parse --abbrev-ref HEAD', { cwd: graphDir, encoding: 'utf-8' }).trim();
+    if (repoName && branch) {
+      workspace = { repository: repoName, branch };
+    }
+  } catch {
+    log.info('Could not detect workspace from git — using cli/local');
+  }
+
+  seedFileRegistry(bundle, workspace);
+
+  log.info(`Loaded: ${bundle.events.size} events, ${bundle.contexts.size} contexts, ${bundle.parameters.size} parameters`);
+  log.info(`Graph has ${bundle.graph.nodes?.length ?? 0} nodes, ${bundle.graph.edges?.length ?? 0} edges`);
+  log.info(`Workspace: ${workspace.repository}/${workspace.branch}`);
+  if (queryDsl) log.info(`Query DSL: ${queryDsl}`);
 
   // Extract extra args (command-specific options)
   const extraArgs: Record<string, any> = {};
@@ -114,6 +133,7 @@ export async function bootstrap(
     graphDir,
     graphName,
     queryDsl,
+    workspace,
     getKey,
     format,
     flags: {

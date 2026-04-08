@@ -10,7 +10,7 @@
  * controls which tab is visible initially.
  */
 
-import React, { useMemo, useCallback } from 'react';
+import React, { useMemo, useCallback, useEffect, useRef, useState } from 'react';
 import ReactECharts from 'echarts-for-react';
 import type { AnalysisResult } from '../../lib/graphComputeClient';
 import { fontSizeZoom } from '../../lib/analysisDisplaySettingsRegistry';
@@ -512,9 +512,37 @@ function buildCombinedCdfOption(edge?: CdfParams, path?: CdfParams) {
 const LatencyCdfTab = React.memo(function LatencyCdfTab({ edge, path }: { edge?: CdfParams; path?: CdfParams }) {
   if (!edge && !path) return null;
   const option = useMemo(() => buildCombinedCdfOption(edge, path), [edge, path]);
+
+  // ResizeObserver-driven sizing — same pattern as ModelRateChart.
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [dims, setDims] = useState<{ w: number; h: number } | null>(null);
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const measure = () => {
+      const w = el.clientWidth;
+      if (w > 0) {
+        const h = Math.min(Math.round(w / 2.5), 320);
+        setDims(prev => (prev && prev.w === w && prev.h === h) ? prev : { w, h });
+      }
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const echartsRef = useRef<any>(null);
+  useEffect(() => {
+    if (!dims) return;
+    const inst = echartsRef.current?.getEchartsInstance?.();
+    if (inst) {
+      try { inst.resize({ width: dims.w, height: dims.h }); } catch { /* noop */ }
+    }
+  }, [dims]);
+
   return (
-    <div style={{ width: '100%', aspectRatio: '2.5 / 1', maxHeight: 320 }}>
-      <ReactECharts option={option} style={{ width: '100%', height: '100%' }} notMerge lazyUpdate />
+    <div ref={containerRef} style={{ width: '100%' }}>
+      {dims && <ReactECharts ref={echartsRef} option={option} style={{ width: dims.w, height: dims.h }} notMerge lazyUpdate />}
     </div>
   );
 });

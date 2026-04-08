@@ -100,15 +100,14 @@ bash graph-ops/scripts/param-pack.sh <graph-name> "<query-dsl>" \
 
 1. Loads graph JSON + events/contexts/parameters/cases/connections YAML
    from the data repo (path resolved from `.private-repos.conf`)
-2. Seeds `fileRegistry` and `contextRegistry` in memory (no IDB needed)
-3. Parses the query DSL, resolves relative dates
-4. Filters parameter file daily arrays (`n_daily`, `k_daily`, `dates`)
-   to the requested window/cohort range
-5. Computes evidence scalars (n, k, mean, stdev)
-6. Runs the full LAG topological pass (`enhanceGraphLatencies`) for
-   latency, completeness, blended p.mean, t95, path_t95
-7. Extracts params via `GraphParamExtractor`
-8. Serialises via `ParamPackDSLService` (YAML/JSON/CSV)
+2. Seeds `fileRegistry` and `contextRegistry` in memory
+   (`fake-indexeddb` provides the Dexie shim)
+3. Runs the SAME `fetchDataService.fetchItems({ mode: 'from-file' })`
+   pipeline the browser uses — one codepath, not a reimplementation
+4. This populates graph edges with evidence, forecast, latency,
+   `scope_from/to`, and runs the Stage 2 LAG topological pass
+5. Extracts params via `GraphParamExtractor`
+6. Serialises via `ParamPackDSLService` (YAML/JSON/CSV)
 
 **Options**:
 
@@ -132,8 +131,10 @@ the full design, feasibility assessment, and phase plan.
 **Script**: `graph-ops/scripts/analyse.sh`
 
 Runs a graph analysis via the Python BE and returns the result JSON —
-the same payload that feeds ECharts in the browser. Requires the
-Python BE running.
+the same payload that feeds ECharts in the browser. Uses the same
+preparation path as the FE: `prepareAnalysisComputeInputs` →
+`runPreparedAnalysis`, including snapshot subject resolution, display
+settings, and posterior re-projection. Requires the Python BE running.
 
 ```bash
 # Single scenario — subject in the DSL
@@ -214,19 +215,58 @@ bypass.
 
 ```
 graph-editor/src/cli/
+├── cliEntry.ts           # Shared: console suppression + import.meta.env polyfill
 ├── bootstrap.ts          # Shared: arg parsing, graph loading, registry seeding
 ├── diskLoader.ts         # Shared: reads YAML/JSON from data repo on disk
-├── aggregate.ts          # Shared: window/cohort aggregation + LAG pass
-├── param-pack.ts         # Entry: console suppression + dynamic import
-├── analyse.ts            # Entry: console suppression + dynamic import
+├── aggregate.ts          # Shared: calls fetchDataService.fetchItems (same as FE)
+├── logger.ts             # Shared: CLI logger (stderr diagnostics)
+├── constants.ts          # Shared: colour palette, cache config
+├── scenarioParser.ts     # Shared: --scenario flag parsing
+├── analysisTypeRegistry.ts # Shared: analysis type → snapshotContract lookup
+├── param-pack.ts         # Entry point: param-pack command
+├── analyse.ts            # Entry point: analyse command
+├── parity-test.ts        # Entry point: parity test command
 └── commands/
     ├── paramPack.ts      # Command: param-pack specific logic
-    └── analyse.ts        # Command: analyse with multi-scenario support
+    ├── analyse.ts        # Command: analyse with multi-scenario support
+    └── parity-test.ts    # Command: parity test runner
 ```
 
 Adding a new command requires: a `commands/<name>.ts` with
-`export async function run()`, a 3-line entry point in `cli/<name>.ts`
-(suppress, fake-idb, import), and a wrapper in `graph-ops/scripts/`.
+`export async function run()`, an entry point in `cli/<name>.ts`
+that calls `initCLI()` then dynamically imports the command, and
+a wrapper in `graph-ops/scripts/`.
+
+### One-codepath principle
+
+The CLI calls the **same functions** the browser calls. There are no
+parallel reimplementations:
+
+- **Aggregation**: `aggregate.ts` calls `fetchDataService.fetchItems`
+  with `mode: 'from-file'` — the same function the browser's
+  `useDSLReaggregation` hook calls.
+- **Analysis**: `commands/analyse.ts` calls
+  `prepareAnalysisComputeInputs` → `runPreparedAnalysis` — the same
+  functions the browser's `useCanvasAnalysisCompute` hook calls.
+- **Parity verified**: an E2E Playwright test
+  (`e2e/cliParityGraphOverview.spec.ts`) loads a real graph in the
+  browser, triggers from-file reaggregation, calls the BE with the
+  FE's graph state, then runs the CLI separately and compares
+  field-by-field. All probability values must match within 1e-6.
+
+### Node compatibility guards
+
+Several modules have `import.meta.env.DEV` or `import.meta.env.VITE_*`
+at module scope or in function bodies. These throw in Node because
+`import.meta.env` is `undefined` outside Vite. The pattern:
+
+- Module-scope constants: use `import.meta.env?.VITE_X` (optional
+  chaining)
+- Function-body guards: use `import.meta.env?.DEV`
+- `window.location.search`: use `getUrlSearchParams()` helper in
+  `graphComputeClient.ts`
+- Entry points: `cliEntry.ts` polyfills `import.meta.env = { DEV: false }`
+  before any imports
 
 ## Key Invariants
 
