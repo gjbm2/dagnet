@@ -47,6 +47,49 @@ Splits query identity into two independent components:
 
 This solved the bug where uncontexted queries rejected contexted MECE cache slices.
 
+### What is and is not in the hash
+
+The `core_hash` stored in the snapshots table is
+`computeShortCoreHash(serialiseSignature({coreHash, contextDefHashes}))` —
+a hash of the full structured signature including both `c` and `x`.
+
+**Included in `c` (core)**: connection name, from/to event IDs, event
+definition hashes, event filters, case constraints, `cohort_mode`
+flag, cohort anchor event ID, latency config, normalised query
+string (with context and date clauses stripped).
+
+**Included in `x` (context definitions)**: a hash of each context
+**definition** YAML file, keyed by context key name. This is the
+hash of the MECE value list, not the specific value.
+
+**NOT included**: context values (`channel:google` vs
+`channel:meta` produce the same hash), date bounds (`window(-90d:)`
+vs `window(-30d:)` produce the same hash). These are carried in
+the `slice_key` column, not in `core_hash`.
+
+Consequences for snapshot reads:
+- All values within one MECE dimension share one `core_hash`.
+  Querying by `core_hash` returns rows for ALL values.
+- Different context dimensions produce different `core_hash` values.
+- Window and cohort mode produce different `core_hash` values.
+- Uncontexted (`x: {}`) is a different hash from any contexted
+  variant.
+
+### Regime selection
+
+When a graph's pinned DSL has multiple independent MECE context
+dimensions (e.g. `context(channel);context(device)`), each
+dimension produces a different `core_hash`. Both dimensions' rows
+represent the same underlying conversions sliced differently.
+Summing across dimensions double-counts.
+
+`snapshot_regime_selection.py` provides `select_regime_rows()` which
+picks one hash per `retrieved_at` date from an ordered candidate
+list. The BE applies this after querying the snapshot DB and before
+passing rows to derivation functions. See
+`docs/current/project-bayes/30-snapshot-regime-selection-contract.md`
+for the full design.
+
 ## Hash Mappings
 
 **Location**: `hashMappingsService.ts`
@@ -154,6 +197,8 @@ Detects hash-breaking changes at commit time:
 | `src/lib/stableSignature.ts` | Canonical signature construction |
 | `src/services/integrityCheckService.ts` | Phase 9 (hash continuity) + Phase 10 (snapshot DB coverage) |
 | `src/services/snapshotRetrievalsService.ts` | `computePlausibleSignaturesForEdge` — epoch-aware hash enumeration |
+| `src/services/candidateRegimeService.ts` | `buildCandidateRegimesByEdge`, `computeMeceDimensions` — FE candidate construction for regime selection |
+| `lib/snapshot_regime_selection.py` | `select_regime_rows`, `validate_mece_for_aggregation` — BE regime selection utility |
 
 ## Integrity Checks
 

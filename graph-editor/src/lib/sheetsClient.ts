@@ -1,4 +1,4 @@
-const APPS_SCRIPT = import.meta.env.VITE_APPS_SCRIPT_URL as string | undefined;
+const APPS_SCRIPT = import.meta.env?.VITE_APPS_SCRIPT_URL as string | undefined;
 
 export async function loadFromSheet(): Promise<any | null> {
   const p = new URLSearchParams(window.location.search);

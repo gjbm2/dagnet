@@ -64,20 +64,23 @@ pretending to be per-analysis-type configuration.
 
 ### 1.4 Post-doc-30 the FE still does too much
 
-After doc 30, the FE no longer does the preflight round-trip or epoch
-segmentation. But it still:
+After doc 30, the FE still:
 
 - Resolves DSL → in-scope edges via graph traversal
-- Builds `candidate_regimes` per in-scope edge (doc 30 §4.1)
+- Builds `candidate_regimes` per edge (doc 30 §4.1 — now for all
+  edges via `buildCandidateRegimesByEdge`)
 - Assembles `SnapshotSubjectRequest` objects with read modes, time
   bounds, and slice keys
+- Performs preflight + epoch segmentation for `cohort_maturity`
+  (retained in doc 30 implementation; removed by this doc)
 
-The scope rule application and subject assembly are pure functions of
-the graph + DSL, both of which the BE already has. The candidate
-regime construction requires FE-side state (context registry, hash
-mappings) and stays on the FE — but the FE can compute it for all
-edges cheaply, removing the need for the FE to know which edges are
-in scope.
+The scope rule application, subject assembly, and epoch planning are
+pure functions of the graph + DSL + DB state. The graph and DSL are
+already sent to the BE; the DB is on the BE. The candidate regime
+construction requires FE-side state (context registry, hash
+mappings) and stays on the FE — but the FE already computes it for
+all edges, removing the need to know which edges the BE will
+select.
 
 ---
 
@@ -113,22 +116,36 @@ FE sends per scenario:
 **After**:
 
 ```
-FE sends per scenario:
-  graph: { ... }
-  analytics_dsl: 'from(registration).to(purchase)'
-  query_dsl: 'from(registration).to(purchase).window(-90d:)'
+FE sends:
   analysis_type: 'cohort_maturity'
-  candidate_regimes_by_edge: {      // doc 30 — for ALL edges in graph
-    'edge-uuid-1': [CandidateRegime, ...],
-    'edge-uuid-2': [CandidateRegime, ...],
-    ...
-  }
+  query_dsl: 'from(registration).to(purchase).window(-90d:)'
+  mece_dimensions: ['channel', ...]   // doc 30 — for aggregation safety
+  scenarios: [
+    {
+      graph: { ... }
+      analytics_dsl: 'from(registration).to(purchase)'
+      candidate_regimes_by_edge: {    // doc 30 — for ALL edges in graph
+        'edge-uuid-1': [CandidateRegime, ...],
+        'edge-uuid-2': [CandidateRegime, ...],
+        ...
+      }
+    }
+  ]
 ```
 
-No `snapshot_subjects`. The BE resolves the DSL against the graph,
-identifies in-scope edges, looks up their candidate regimes from the
-map, and uses doc 30's `select_regime_rows()` to serve the right
-data.
+No `snapshot_subjects`. The BE resolves the DSL against each
+scenario's graph, identifies in-scope edges, looks up their
+candidate regimes from the per-scenario map, and uses doc 30's
+`select_regime_rows()` to serve the right data.
+
+**Note on doc 30 implementation**: the current doc 30 code attaches
+regimes **per-subject** (`subject.candidate_regimes`) on the
+analysis path, and as a **top-level `candidate_regimes_by_edge`
+map** on the Bayes path. Doc 31 adopts the Bayes-path pattern
+(top-level map per scenario) since there are no pre-resolved
+subjects. The BE handler's `_apply_regime_selection()` will shift
+from reading `subj.get('candidate_regimes')` to looking up by
+edge UUID from the scenario-level map.
 
 ### 2.2 What the FE still owns
 
@@ -143,6 +160,10 @@ The FE remains responsible for:
   (MECE status per dimension) which is FE-side state. Computing for
   all edges (not just in-scope ones) is trivially cheap and avoids
   the FE needing to know which edges the BE will select.
+- **MECE dimensions** (doc 30 implementation): `computeMeceDimensions`
+  returns the list of context dimensions that are safe to aggregate
+  over. Sent as a top-level `mece_dimensions` field for the BE's
+  `validate_mece_for_aggregation()` check after regime selection.
 - **Signature + hash computation**: still needed per edge for
   candidate regime construction. The FE retains `coreHashService`
   and `plannerQuerySignatureService` for this purpose.
@@ -448,7 +469,12 @@ Once the BE handles all analysis subject resolution:
 - `SnapshotSubjectRequest` interface — dead (replaced by the simpler
   request shape)
 - `snapshotSubjectResolutionService.ts` — dead
-- Epoch-related functions (already dead after doc 30)
+- Epoch-related functions (`selectLeastAggregationSliceKeysForDay`,
+  `segmentSweepIntoEpochs`, `chooseLatestRetrievalGroupPerDay`,
+  preflight `querySnapshotRetrievals` call) — dead. These were
+  retained in the doc 30 implementation for backward compatibility
+  with the per-subject architecture; they become dead once subjects
+  are no longer assembled on the FE.
 
 These are removed in a final cleanup phase, not during the migration.
 
@@ -888,17 +914,16 @@ in the new format).
 `branch_comparison` have `perScenario: true` in their snapshot
 contract, meaning each scenario can have different snapshot subjects
 (because each scenario's graph may have different edges/topology
-after what-if overlays). The current doc describes resolution as
-happening once per request, but for perScenario types it must happen
-once per scenario.
+after what-if overlays).
 
-**Impact**: If the BE resolves subjects once against the base graph,
-what-if scenarios with different topologies get wrong subjects.
-
-**Mitigation**: The BE already receives a per-scenario graph. Subject
-resolution must run per-scenario for perScenario types. The doc's
-`ResolvedAnalysisPath` should be per-scenario, not per-request, for
-these types.
+**Status**: Partially resolved by doc 30 implementation. The FE's
+`analysisComputePreparationService` already calls
+`buildCandidateRegimesByEdge` per scenario's graph, so
+`candidate_regimes_by_edge` is correct per-scenario. For doc 31,
+the BE must also resolve subjects per-scenario (using each
+scenario's graph). The request shape (§2.1) places
+`candidate_regimes_by_edge` and `analytics_dsl` per-scenario, which
+is correct.
 
 **G5: The `surprise_gauge` special path.** In the current BE handler
 (line 1223), `surprise_gauge` skips the normal snapshot query path

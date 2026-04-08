@@ -65,7 +65,7 @@ Examples:
 | `context(key:value)` | Colon-separated key:value | Segment filter (e.g. `context(channel:google)`). |
 | `context(key)` | Key only (no value) | **Enumerate** all values — triggers Cartesian expansion in `explodeDSL`. |
 | `context(key:)` | Key with empty value | **Per-key clear** — removes inherited context for this key in scenario layering. |
-| `context()` | Empty | **Whole clear** — removes all inherited context. |
+| `context()` | Empty | **Whole clear** in scenario layering. **Uncontexted slice** in pinned DSL — see below. |
 | `contextAny(k1:v1, k2:v2, ...)` | Comma-separated key:value pairs | OR over context segments. |
 
 ### Time Windows
@@ -142,6 +142,30 @@ context(channel).context(browser) →
   context(channel:bing).context(browser:chrome);
   context(channel:bing).context(browser:safari)
 ```
+
+### Uncontexted Slice in Pinned DSL
+
+In a pinned DSL (graph `dataInterestsDSL`), an empty element in a
+semicolon or `or()` list means "also fetch the uncontexted
+aggregate". All of the following forms are equivalent:
+
+```
+(window(-90d:)).(context(channel);context())    → 3 channel + 1 bare
+(window(-90d:)).(context(channel);)             → same (trailing ;)
+(window(-90d:)).(;context(channel))             → same (leading ;)
+(window(-90d:)).or(context(channel),)            → same (trailing ,)
+(window(-90d:)).or(,context(channel))            → same (leading ,)
+```
+
+`context()` in a semicolon/or position is treated as "include the
+uncontexted slice" — the temporal clause is emitted without any
+context qualifier. This is handled by `explodeDSL` in
+`dslExplosion.ts`.
+
+Note: `context()` retains its "whole clear" meaning in scenario
+delta layering (`composeConstraints`). The disambiguation is by
+context — pinned DSL explosion vs scenario composition use
+different code paths.
 
 ### Context Merging in Scenario Layers
 

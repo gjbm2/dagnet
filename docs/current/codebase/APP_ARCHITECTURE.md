@@ -147,10 +147,42 @@ workers. The FE is the orchestrator for all operations.
 
 ---
 
+## CLI layer (headless Node.js)
+
+A second entry point into the same orchestration modules — runs in
+Node via `tsx`, no browser required. Lives in `graph-editor/src/cli/`
+with wrapper scripts in `graph-ops/scripts/`.
+
+The CLI imports the same TS modules the browser uses (DSL parsing,
+hash/signature computation, window aggregation, LAG topological pass,
+param extraction, serialisation). The only new code is I/O adapters:
+
+- **`diskLoader.ts`** — reads graph JSON + YAML files from the data
+  repo on disk, seeds `fileRegistry` and `contextRegistry` in memory
+  (replacing the IDB/git loading path)
+- **`aggregate.ts`** — calls `aggregateWindowData`,
+  `enhanceGraphLatencies`, and other pure functions from
+  `windowAggregationService` / `statisticalEnhancementService`
+  directly, avoiding browser-only dependencies (`react-hot-toast`,
+  `window` events) in `fetchDataService` / `fileToGraphSync`
+- **`bootstrap.ts`** — shared arg parsing, graph loading, registry
+  seeding; new commands extend this rather than duplicating setup
+
+Browser-specific modules are guarded with `typeof window ===
+'undefined'` checks and `import.meta.env?.` optional chaining so they
+work in both environments. `fake-indexeddb/auto` provides the Dexie
+shim in Node.
+
+See `docs/current/project-cli/programme.md` for the full design and
+feasibility assessment.
+
+---
+
 ## Orchestration model
 
-All orchestration is **browser-side and Promise-driven**. The FE triggers
-operations, awaits results, and writes them into the persistence layers.
+All orchestration is **browser-side and Promise-driven** (or
+**Node-side** in the CLI). The FE/CLI triggers operations, awaits
+results, and writes them into the persistence layers.
 Progress is reported via callbacks (`onProgress?: (p) => void`), not
 polling.
 

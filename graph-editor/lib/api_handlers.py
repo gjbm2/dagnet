@@ -602,11 +602,11 @@ def handle_runner_analyze(data: Dict[str, Any]) -> Dict[str, Any]:
     Returns:
         Analysis results
     """
-    # New path: per-scenario snapshot_subjects
-    # Check if any scenario carries snapshot_subjects (per-scenario architecture)
+    # New path: per-scenario snapshot_subjects or DSL-resolved subjects (doc 31)
+    # Check if any scenario carries snapshot_subjects or analytics_dsl
     scenarios_with_snapshots = [
         s for s in data.get('scenarios', [])
-        if s.get('snapshot_subjects')
+        if s.get('snapshot_subjects') or s.get('analytics_dsl')
     ]
     if scenarios_with_snapshots:
         return _handle_snapshot_analyze_subjects(data)
@@ -660,7 +660,7 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
     """
     from datetime import date, datetime, timedelta
     from snapshot_service import query_snapshots, query_snapshots_for_sweep
-    from snapshot_regime_selection import CandidateRegime, select_regime_rows
+    from snapshot_regime_selection import CandidateRegime, select_regime_rows, validate_mece_for_aggregation
     from runner.histogram_derivation import derive_lag_histogram
     from runner.daily_conversions_derivation import derive_daily_conversions
     from runner.cohort_maturity_derivation import derive_cohort_maturity
@@ -670,6 +670,12 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
 
     analysis_type = data.get('analysis_type', 'lag_histogram')
     scenarios = data.get('scenarios', [])
+    # Doc 30 §4.1: MECE dimension names for aggregation safety.
+    # Currently logged for diagnostics; enforcement in derivation
+    # functions is a future hardening step.
+    mece_dimensions = data.get('mece_dimensions', [])
+    if mece_dimensions:
+        print(f"[analyze] mece_dimensions: {mece_dimensions}")
 
     def _apply_regime_selection(rows: List[Dict], subj: Dict) -> List[Dict]:
         """Apply regime selection if candidate_regimes is present on the subject.
@@ -694,6 +700,12 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
         if not regimes:
             return rows
         selection = select_regime_rows(rows, regimes)
+        # Validate MECE safety if mece_dimensions provided
+        if mece_dimensions and selection.rows:
+            non_mece = validate_mece_for_aggregation(selection.rows, mece_dimensions)
+            if non_mece:
+                print(f"[regime_selection] WARNING: non-MECE dimensions in rows: {non_mece} "
+                      f"(subject={subj.get('subject_id', '?')}). Aggregation over these dimensions may be unsafe.")
         return selection.rows
 
     def _resolve_promoted_source(model_params: Dict[str, Any], source_curves: Dict[str, Any]) -> Optional[str]:
@@ -1167,6 +1179,26 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
     for scenario in scenarios:
         scenario_id = scenario.get('scenario_id', 'unknown')
         subjects = scenario.get('snapshot_subjects')
+
+        # Doc 31: if no pre-resolved snapshot_subjects but analytics_dsl is
+        # present, resolve subjects from DSL + graph + candidate_regimes_by_edge.
+        if not subjects and scenario.get('analytics_dsl'):
+            try:
+                from analysis_subject_resolution import resolve_analysis_subjects, synthesise_snapshot_subjects
+                resolved = resolve_analysis_subjects(
+                    graph=scenario.get('graph', {}),
+                    query_dsl=data.get('query_dsl', scenario.get('analytics_dsl', '')),
+                    analysis_type=analysis_type,
+                    candidate_regimes_by_edge=scenario.get('candidate_regimes_by_edge', {}),
+                )
+                subjects = synthesise_snapshot_subjects(resolved, analysis_type)
+                print(f"[doc31] Resolved {len(subjects)} subjects from DSL "
+                      f"'{scenario.get('analytics_dsl')}' for {analysis_type} "
+                      f"(scenario={scenario_id})")
+            except Exception as e:
+                print(f"[doc31] WARNING: DSL resolution failed for scenario={scenario_id}: {e}")
+                subjects = None
+
         if not subjects:
             # No snapshot subjects for this scenario — skip snapshot analysis
             per_scenario_results.append({

@@ -1102,6 +1102,58 @@ engineering around. No test needed.
 
 ---
 
+## 7.4 Known code issues (post-implementation)
+
+Logged 8-Apr-26. These should be addressed before production use.
+
+**Missing tests:**
+
+1. ~~**Consumer integration**~~: RC-004 and RC-005 now implemented
+   (8-Apr-26). RC-002 removed (tested a scenario that doesn't arise
+   in real code paths — see session notes).
+
+2. **Bayes evidence binder**: RB-001 through RB-005 (§7.3.5) do
+   not exist. `test_regime_bayes_evidence.py` is specified but not
+   created.
+
+3. ~~**Handler-level integration**~~: RC-H-001 and RC-H-002
+   implemented 8-Apr-26 in `test_regime_handler_integration.py`.
+   Uses real snapshot DB data. Proves regime selection reduces
+   multi-hash rows to one hash, and opt-in guard works.
+
+4. ~~**FE candidate construction**~~: `candidateRegimeService.test.ts`
+   implemented 8-Apr-26 — 5 tests for `computeMeceDimensions`
+   (MECE vs non-MECE identification, empty DSL cases) and
+   `buildCandidateRegimesByEdge` (empty/blank DSL guards). Full
+   EP-001/003/004 integration tests (multi-dimension DSL → per-edge
+   hash computation) require production connection providers and
+   remain as documented integration test targets.
+
+**Code quality:**
+
+5. ~~`from collections import defaultdict` inside function body~~.
+   Fixed 8-Apr-26 — moved to module-level imports.
+
+6. ~~`import re` inside function body~~. Fixed 8-Apr-26 — moved
+   to module-level imports.
+
+7. ~~Duplicate step numbering in `useBayesTrigger.ts`~~. Fixed
+   8-Apr-26.
+
+8. ~~`(graph as any).dataInterestsDSL` in
+   `candidateRegimeService.ts`~~. Fixed 8-Apr-26 — `Graph` type
+   includes `dataInterestsDSL`, cast removed.
+
+**Reviewed and not a bug:**
+
+9. ~~`createPreparedSignature()` cache key staleness~~. Reviewed:
+   `candidate_regimes` changes only when hash mappings change
+   (which also changes `equivalent_hashes`, already in the
+   signature) or when the pinned DSL changes (which changes
+   subjects themselves). No action needed.
+
+---
+
 ## 8. Migration path
 
 ### 8.1 Phase 1: BE selection utility + red tests — DONE

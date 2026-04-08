@@ -15,6 +15,8 @@ See: docs/current/project-bayes/30-snapshot-regime-selection-contract.md
 
 from __future__ import annotations
 
+import re
+from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -77,7 +79,6 @@ def select_regime_rows(
     regime_hash_sets: list[set[str]] = [r.all_hashes() for r in candidate_regimes]
 
     # Group rows by retrieved_at date (truncate datetime to date).
-    from collections import defaultdict
     by_date: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for r in rows:
         ret = str(r.get('retrieved_at', ''))
@@ -113,3 +114,32 @@ def select_regime_rows(
         regime_per_date[date_key] = winner
 
     return RegimeSelection(rows=out_rows, regime_per_date=regime_per_date)
+
+
+def validate_mece_for_aggregation(
+    rows: list[dict[str, Any]],
+    mece_dimensions: list[str],
+) -> list[str]:
+    """Check that all context dimensions in the rows are MECE-safe.
+
+    Extracts dimension names from slice_key strings on the rows
+    (e.g. 'context(channel:google).window()' → 'channel') and checks
+    each against the mece_dimensions list.
+
+    Returns a list of dimension names that are NOT MECE — i.e. not
+    safe to sum over. Empty list means all dimensions are safe.
+
+    This is a validation check, not a filter. Callers decide what to
+    do with non-MECE dimensions (log warning, skip aggregation, etc.).
+    """
+    mece_set = set(mece_dimensions)
+    dims_found: set[str] = set()
+
+    for r in rows:
+        sk = str(r.get('slice_key', ''))
+        # Extract dimension keys from context(...) clauses
+        for m in re.finditer(r'context\(([^:)]+)', sk):
+            dims_found.add(m.group(1))
+
+    non_mece = sorted(dims_found - mece_set)
+    return non_mece

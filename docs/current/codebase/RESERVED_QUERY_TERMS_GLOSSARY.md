@@ -138,3 +138,40 @@ The FE-computed closure set of hashes linked through `hash-mappings`.
 These are part of the snapshot family for reads. If the FE provides
 them, the BE must use them for evidence binding rather than reading only
 the seed `core_hash`.
+
+## Model quality and diagnostic terms
+
+**LOO-ELPD**
+
+Leave-one-out expected log pointwise predictive density. A proper
+scoring rule measuring how well the Bayesian model predicts each
+observation when that observation is held out. Computed via PSIS-LOO
+(Pareto-smoothed importance sampling). More negative = worse fit.
+See doc 32.
+
+**ΔELPD** / **`delta_elpd`**
+
+The difference between the Bayesian model's LOO-ELPD and the analytic
+stats pass's plug-in log-likelihood, for the same set of observations.
+Positive means the Bayesian model predicts better than the analytic
+point estimates; negative means worse. The primary per-edge model
+adequacy metric. Stored on `PosteriorSummary` (Python) and
+`ProbabilityPosterior` / `LatencyPosterior` (TypeScript).
+
+**Pareto k** / **`pareto_k_max`**
+
+The shape parameter from the generalised Pareto distribution fitted to
+the importance-sampling weights during PSIS-LOO. Indicates reliability
+of the LOO estimate for a given observation. k < 0.5 is reliable;
+0.5–0.7 acceptable; > 0.7 unreliable (the observation is highly
+influential — the posterior changes substantially when it is removed).
+`pareto_k_max` on a posterior is the worst k across all observations
+contributing to that edge.
+
+**`n_loo_obs`**
+
+The number of data points (observation-level, not node-level) that
+contributed to the LOO score for an edge. Observation nodes like
+`obs_daily_{edge}` are vectorised — one data point per anchor day in
+the array — so `n_loo_obs` can be much larger than the number of
+named PyMC distribution nodes.

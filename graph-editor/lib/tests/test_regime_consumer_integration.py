@@ -23,6 +23,8 @@ from snapshot_regime_selection import (
 )
 from runner.cohort_maturity_derivation import derive_cohort_maturity
 from runner.lag_model_fitter import select_latest_evidence
+from runner.daily_conversions_derivation import derive_daily_conversions
+from runner.histogram_derivation import derive_lag_histogram
 
 
 # ---------------------------------------------------------------------------
@@ -200,3 +202,97 @@ class TestRC006_LatestEvidenceWeightedAverages:
         e = evidence[0]
         # Only channel regime — median_lag should be 5.0
         assert e.median_lag_days == pytest.approx(5.0, abs=0.1)
+
+
+# ===================================================================
+# RC-004: derive_daily_conversions with mixed regimes (Pattern B)
+# ===================================================================
+
+class TestRC004_DailyConversionsMixedRegimes:
+    """Two regimes have rows for the same anchor_day on the same
+    retrieved_at. Daily conversions computes ΔY between consecutive
+    retrieval dates per (anchor_day, slice_key). With mixed regimes,
+    all slice_keys are treated as independent series and their
+    latest Y values are summed — doubling the rate."""
+
+    ROWS = [
+        # Channel regime: latest y per anchor_day = 12+8 = 20
+        row('2025-12-01', '2026-01-10T06:00:00Z', H_CHANNEL,
+            'context(channel:google).window(2025-12-01:2026-01-10)', x=60, y=12),
+        row('2025-12-01', '2026-01-10T06:00:00Z', H_CHANNEL,
+            'context(channel:meta).window(2025-12-01:2026-01-10)', x=40, y=8),
+        # Device regime, SAME retrieved_at: latest y = 11+9 = 20
+        row('2025-12-01', '2026-01-10T06:00:00Z', H_DEVICE,
+            'context(device:mobile).window(2025-12-01:2026-01-10)', x=55, y=11),
+        row('2025-12-01', '2026-01-10T06:00:00Z', H_DEVICE,
+            'context(device:desktop).window(2025-12-01:2026-01-10)', x=45, y=9),
+    ]
+
+    def test_without_regime_selection_rate_is_doubled(self):
+        """RED TEST: rate_by_cohort sums Y across all 4 slice_keys."""
+        result = derive_daily_conversions(self.ROWS)
+        cohorts = result.get('rate_by_cohort', [])
+        assert len(cohorts) == 1
+        c = cohorts[0]
+        # BUG: y=40 (12+8+11+9), x=200 (60+40+55+45)
+        assert c['y'] == 40
+        assert c['x'] == 200
+
+    def test_with_regime_selection_rate_is_correct(self):
+        """GREEN TEST: only channel regime rows present."""
+        selected = select_regime_rows(self.ROWS, CANDIDATES)
+        result = derive_daily_conversions(selected.rows)
+        cohorts = result.get('rate_by_cohort', [])
+        assert len(cohorts) == 1
+        c = cohorts[0]
+        assert c['y'] == 20
+        assert c['x'] == 100
+
+
+# ===================================================================
+# RC-005: derive_lag_histogram with mixed regimes (Pattern B)
+# ===================================================================
+
+class TestRC005_LagHistogramMixedRegimes:
+    """Two regimes have rows for the same anchor_day across two
+    retrieval dates. The histogram computes ΔY per lag bin. With
+    mixed regimes, the histogram double-counts."""
+
+    # Use consistent slice_keys (no date args) so the histogram
+    # groups by (anchor_day, slice_key) correctly across retrievals.
+    ROWS = [
+        # Retrieval 1: channel y=10, device y=10
+        row('2025-12-01', '2026-01-06T06:00:00Z', H_CHANNEL,
+            'context(channel:google).window()', x=60, y=6),
+        row('2025-12-01', '2026-01-06T06:00:00Z', H_CHANNEL,
+            'context(channel:meta).window()', x=40, y=4),
+        row('2025-12-01', '2026-01-06T06:00:00Z', H_DEVICE,
+            'context(device:mobile).window()', x=55, y=6),
+        row('2025-12-01', '2026-01-06T06:00:00Z', H_DEVICE,
+            'context(device:desktop).window()', x=45, y=4),
+        # Retrieval 2: channel y=20, device y=20
+        row('2025-12-01', '2026-01-11T06:00:00Z', H_CHANNEL,
+            'context(channel:google).window()', x=60, y=12),
+        row('2025-12-01', '2026-01-11T06:00:00Z', H_CHANNEL,
+            'context(channel:meta).window()', x=40, y=8),
+        row('2025-12-01', '2026-01-11T06:00:00Z', H_DEVICE,
+            'context(device:mobile).window()', x=55, y=11),
+        row('2025-12-01', '2026-01-11T06:00:00Z', H_DEVICE,
+            'context(device:desktop).window()', x=45, y=9),
+    ]
+
+    def test_without_regime_selection_histogram_is_doubled(self):
+        """RED TEST: total_conversions should be doubled with mixed regimes."""
+        result = derive_lag_histogram(self.ROWS)
+        total = result.get('total_conversions', 0)
+        # With both regimes: 4 series each accumulating to their final Y.
+        # google=12, meta=8, mobile=11, desktop=9 → total=40
+        # Correct (single regime) would be 20
+        assert total == 40, f"Expected doubled total=40, got {total}"
+
+    def test_with_regime_selection_histogram_is_correct(self):
+        """GREEN TEST: only channel regime — total = 20."""
+        selected = select_regime_rows(self.ROWS, CANDIDATES)
+        result = derive_lag_histogram(selected.rows)
+        total = result.get('total_conversions', 0)
+        assert total == 20

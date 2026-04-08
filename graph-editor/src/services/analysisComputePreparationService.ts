@@ -113,6 +113,11 @@ export interface PreparedAnalysisScenario {
   effective_query_dsl: string;
   snapshot_subjects?: SnapshotSubjectPayload[];
   snapshot_query_dsl?: string;
+  /** Doc 31: analytics DSL for BE-side subject resolution. When present,
+   *  the BE resolves subjects from DSL + graph instead of using snapshot_subjects. */
+  analytics_dsl?: string;
+  /** Doc 31: FE-computed candidate regimes for all edges in this scenario's graph. */
+  candidate_regimes_by_edge?: Record<string, Array<{ core_hash: string; equivalent_hashes: string[] }>>;
 }
 
 export interface PreparedAnalysisComputeReady {
@@ -123,6 +128,8 @@ export interface PreparedAnalysisComputeReady {
   signature: string;
   /** Compute-affecting display settings forwarded to the backend. */
   displaySettings?: Record<string, unknown>;
+  /** Doc 30: MECE dimension names for regime selection aggregation safety. */
+  meceDimensions?: string[];
 }
 
 export interface PreparedAnalysisComputeBlocked {
@@ -469,6 +476,9 @@ export async function prepareAnalysisComputeInputs(
       return logBlockedResult(params, { status: 'blocked', reason: 'workspace_missing' });
     }
 
+    // Doc 31: the BE resolves subjects from the DSL + graph. The FE's job
+    // is to validate planner readiness, build candidate regimes for all
+    // edges, and attach analytics_dsl. No snapshot_subjects needed.
     for (let index = 0; index < scenarios.length; index += 1) {
       const scenario = scenarios[index];
       const plannerStatus = await getSnapshotPlannerInputsStatus({
@@ -480,56 +490,73 @@ export async function prepareAnalysisComputeInputs(
         return logBlockedResult(params, createBlockedPlannerState(plannerStatus));
       }
 
-      const resolved = await resolveSnapshotSubjectsForScenario({
-        scenarioGraph: scenario.graph,
-        analyticsDsl,
-        scenarioId: scenario.scenario_id,
-        analysisType,
-        workspace: params.workspace,
-        getQueryDslForScenario: (scenarioId: string) => {
-          const match = scenarios.find((item) => item.scenario_id === scenarioId);
-          return match?.effective_query_dsl || '';
-        },
-      });
+      // Build candidate regimes for all edges in this scenario's graph.
+      let candidateRegimesByEdge: Record<string, Array<{ core_hash: string; equivalent_hashes: string[] }>> | undefined;
+      try {
+        const { buildCandidateRegimesByEdge } = await import('./candidateRegimeService');
+        const regimes = await buildCandidateRegimesByEdge(
+          scenario.graph as any,
+          params.workspace!,
+        );
+        if (Object.keys(regimes).length > 0) {
+          candidateRegimesByEdge = regimes;
+        }
+      } catch {
+        // Non-blocking: BE falls back if no regimes provided
+      }
 
       scenarios[index] = {
         ...scenario,
-        snapshot_subjects: resolved.subjects as SnapshotSubjectPayload[],
-        snapshot_query_dsl: resolved.snapshotDsl,
+        analytics_dsl: analyticsDsl || undefined,
+        candidate_regimes_by_edge: candidateRegimesByEdge,
       };
 
-      logChartReadinessTrace('AnalysisPrepare:snapshot-subjects-ready', {
+      logChartReadinessTrace('AnalysisPrepare:doc31-dsl-ready', {
         mode: params.mode,
         analysisType,
         scenarioId: scenario.scenario_id,
-        subjectCount: resolved.subjects.length,
-        snapshotQueryDsl: resolved.snapshotDsl,
+        analyticsDsl,
+        regimeEdgeCount: candidateRegimesByEdge ? Object.keys(candidateRegimesByEdge).length : 0,
       });
     }
   }
 
   const displaySettings = resolveComputeAffectingDisplay(analysisType, params.display ?? undefined);
 
-  // Resolve tau_extent='auto' to the max sweep span across all scenarios.
-  // Each scenario is sent as a separate request — the BE can't see other
-  // scenarios' date ranges.  Resolving here ensures every request carries
-  // the same concrete axis extent.
+  // Resolve tau_extent='auto' to the sweep span derived from the query DSL.
+  // The window/cohort clause in the DSL defines the anchor range; sweep_to
+  // defaults to today for cohort_maturity.
   if (displaySettings && String(displaySettings.tau_extent ?? '') === 'auto') {
-    let maxSweep = 0;
-    for (const sc of scenarios) {
-      for (const subj of (sc.snapshot_subjects ?? []) as any[]) {
-        const af = subj?.anchor_from;
-        const st = subj?.sweep_to;
-        if (af && st) {
-          try {
-            const days = Math.round((new Date(String(st).slice(0, 10)).getTime() - new Date(String(af).slice(0, 10)).getTime()) / 86400000);
-            if (days > maxSweep) maxSweep = days;
-          } catch { /* ignore parse errors */ }
+    try {
+      const { parseConstraints } = await import('../lib/queryDSL');
+      const parsed = parseConstraints(queryDsl);
+      const windowStart = parsed?.window?.start || parsed?.cohort?.start;
+      if (windowStart) {
+        const { resolveRelativeDate } = await import('../lib/dateFormat');
+        const startDate = resolveRelativeDate(windowStart);
+        const endDate = new Date(); // sweep_to defaults to today
+        if (startDate && !isNaN(startDate.getTime())) {
+          const days = Math.round((endDate.getTime() - startDate.getTime()) / 86400000);
+          if (days > 0) {
+            displaySettings.tau_extent = days;
+          }
         }
       }
-    }
-    if (maxSweep > 0) {
-      displaySettings.tau_extent = maxSweep;
+    } catch { /* ignore parse errors — tau_extent stays 'auto' */ }
+  }
+
+  // Doc 30: compute MECE dimensions from the base graph's context registry.
+  let meceDimensions: string[] | undefined;
+  if (params.needsSnapshots && params.workspace) {
+    try {
+      const { computeMeceDimensions } = await import('./candidateRegimeService');
+      // Use the base graph (first scenario) for MECE dimension detection
+      const baseGraph = scenarios[0]?.graph;
+      if (baseGraph) {
+        meceDimensions = await computeMeceDimensions(baseGraph as any, params.workspace);
+      }
+    } catch {
+      // Non-blocking
     }
   }
 
@@ -540,6 +567,7 @@ export async function prepareAnalysisComputeInputs(
     scenarios,
     signature: createPreparedSignature(analysisType, queryDsl, scenarios, displaySettings),
     displaySettings,
+    meceDimensions,
   };
 
   logChartReadinessTrace('AnalysisPrepare:ready', {
@@ -626,11 +654,13 @@ async function runBackendAnalysis(
         graph: scenario.graph,
         colour: scenario.colour,
         visibility_mode: scenario.visibility_mode,
-        snapshot_subjects: scenario.snapshot_subjects,
+        analytics_dsl: scenario.analytics_dsl,
+        candidate_regimes_by_edge: scenario.candidate_regimes_by_edge,
       })),
       prepared.queryDsl || undefined,
       prepared.analysisType,
       prepared.displaySettings,
+      prepared.meceDimensions,
     );
   }
 
@@ -643,7 +673,10 @@ async function runBackendAnalysis(
     scenario.colour,
     prepared.analysisType,
     scenario.visibility_mode,
-    scenario.snapshot_subjects,
+    undefined, // snapshot_subjects no longer sent (doc 31)
     prepared.displaySettings,
+    prepared.meceDimensions,
+    scenario.analytics_dsl,
+    scenario.candidate_regimes_by_edge,
   );
 }

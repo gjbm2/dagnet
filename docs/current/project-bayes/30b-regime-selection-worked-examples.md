@@ -986,23 +986,10 @@ likelihood.
 
 ### 15.3 Possible resolutions (deferred to Phase C design)
 
-1. **Only one Dirichlet per date**: for each date, only the
-   regime-selected dimension contributes child likelihood terms.
-   The other dimension's children have no evidence for that date
-   (informed only through the hierarchy). This avoids double-
-   counting but wastes evidence from the non-selected dimension.
-
-2. **Shared parent via mixture**: model the parent as informed by
-   a mixture of both decompositions, with explicit modelling of
-   the shared-evidence correlation. More complex but statistically
-   correct.
-
-3. **One Dirichlet at a time**: fit dimension A's Dirichlet first,
-   then dimension B's, each with the parent fixed from the
-   previous step. Sequential, not joint.
-
-This is a Phase C model design decision, not a Phase 1–3 concern.
-Noted here for programme.md tracking.
+**Resolution**: downweight each group's Dirichlet concentration by
+1/N (N = number of independent dimension groups). See doc 14
+§14.6(d) for full design. This is a Phase C model design decision,
+not a Phase 1–3 concern.
 
 ---
 

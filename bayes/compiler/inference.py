@@ -77,6 +77,7 @@ def run_inference(
                 random_seed=config.random_seed,
                 progressbar=not use_callback,
                 callback=_sampling_callback if use_callback else None,
+                idata_kwargs={"log_likelihood": True},
             )
 
     if report_progress:
@@ -477,11 +478,14 @@ def summarise_posteriors(
     quality: QualityMetrics,
     phase1_kappa: dict[str, "np.ndarray"] | None = None,
     settings: dict | None = None,
+    loo_scores: dict | None = None,
 ) -> InferenceResult:
     """Extract posterior summaries from the MCMC trace.
 
     Produces PosteriorSummary per edge and LatencyPosteriorSummary
     for edges with latency (Phase A: echoes the fixed point estimate).
+
+    loo_scores: optional {edge_id: EdgeLooMetrics} from compute_loo_scores().
     """
     import arviz as az
     import numpy as np
@@ -991,6 +995,31 @@ def summarise_posteriors(
         if vname in trace.posterior:
             model_state[vname] = round(float(np.mean(trace.posterior[vname].values.flatten())), 4)
 
+    # Attach LOO-ELPD scores (doc 32) if available
+    if loo_scores:
+        for ps in posteriors:
+            loo = loo_scores.get(ps.edge_id)
+            if loo:
+                ps.elpd = loo.elpd
+                ps.elpd_null = loo.elpd_null
+                ps.delta_elpd = loo.delta_elpd
+                ps.pareto_k_max = loo.pareto_k_max
+                ps.n_loo_obs = loo.n_loo_obs
+        for edge_id, lps in latency_posteriors.items():
+            loo = loo_scores.get(edge_id)
+            if loo:
+                lps.elpd = loo.elpd
+                lps.elpd_null = loo.elpd_null
+                lps.delta_elpd = loo.delta_elpd
+                lps.pareto_k_max = loo.pareto_k_max
+                lps.n_loo_obs = loo.n_loo_obs
+        # Graph-level LOO summary
+        all_loo = list(loo_scores.values())
+        if all_loo:
+            quality.total_delta_elpd = sum(m.delta_elpd for m in all_loo)
+            quality.worst_pareto_k = max(m.pareto_k_max for m in all_loo)
+            quality.n_high_k = sum(1 for m in all_loo if m.pareto_k_max > 0.7)
+
     return InferenceResult(
         posteriors=posteriors,
         latency_posteriors=latency_posteriors,
@@ -1247,6 +1276,12 @@ def _sample_nutpie(model, config: SamplingConfig, report_progress=None,
         coords=coords,
         dims=dims,
     )
+
+    # Compute per-observation log-likelihoods for LOO-ELPD scoring.
+    # nutpie does not populate log_likelihood during sampling (nutpie#150);
+    # pm.compute_log_likelihood evaluates log p(y_i|θ) for each posterior
+    # draw and each named observation node, populating trace.log_likelihood.
+    pm.compute_log_likelihood(trace, model=model, progressbar=False)
 
     return trace
 

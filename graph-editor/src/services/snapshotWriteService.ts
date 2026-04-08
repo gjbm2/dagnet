@@ -114,7 +114,7 @@ import { PYTHON_API_BASE } from '../lib/pythonApiBase';
  * Feature flag for snapshot writes.
  * Can be disabled via environment variable if needed.
  */
-const SNAPSHOTS_ENABLED = import.meta.env.VITE_SNAPSHOTS_ENABLED !== 'false';
+const SNAPSHOTS_ENABLED = import.meta.env?.VITE_SNAPSHOTS_ENABLED !== 'false';
 
 // -----------------------------------------------------------------------------
 // Service Implementation

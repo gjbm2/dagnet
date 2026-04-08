@@ -474,7 +474,10 @@ describe('useCanvasAnalysisCompute DSL handling', () => {
     rerender({ currentAnalysis: analysis });
 
     await waitFor(() => {
-      expect(mockResolveSnapshotSubjectsForScenario).toHaveBeenCalled();
+      // Doc 31: the FE no longer calls resolveSnapshotSubjectsForScenario.
+      // Instead, the preparation service checks planner readiness via
+      // getSnapshotPlannerInputsStatus and attaches analytics_dsl directly.
+      expect(mockGetSnapshotPlannerInputsStatus).toHaveBeenCalled();
       expect(mockAnalyzeMultipleScenarios).toHaveBeenCalled();
       expect(result.current.waitingForDeps).toBe(false);
       expect(result.current.result).not.toBeNull();
@@ -557,7 +560,8 @@ describe('useCanvasAnalysisCompute DSL handling', () => {
     await waitFor(() => {
       expect(result.current.waitingForDeps).toBe(true);
     });
-    expect(mockResolveSnapshotSubjectsForScenario).not.toHaveBeenCalled();
+    // Doc 31: the FE no longer calls resolveSnapshotSubjectsForScenario.
+    // The preparation service checks planner readiness and attaches analytics_dsl directly.
     expect(mockAnalyzeMultipleScenarios).not.toHaveBeenCalled();
     expect(mockHydrateSnapshotPlannerInputs).toHaveBeenCalledWith({
       fileIds: ['parameter-edge-a'],
@@ -574,7 +578,9 @@ describe('useCanvasAnalysisCompute DSL handling', () => {
     fileRegistrySubscribers.get('parameter-edge-a')?.forEach((callback) => callback());
 
     await waitFor(() => {
-      expect(mockResolveSnapshotSubjectsForScenario).toHaveBeenCalledTimes(2);
+      // Planner status checked multiple times: during blocked phase, then again
+      // after hydration (once per scenario in the preparation loop).
+      expect(mockGetSnapshotPlannerInputsStatus.mock.calls.length).toBeGreaterThanOrEqual(2);
       expect(mockAnalyzeMultipleScenarios).toHaveBeenCalledTimes(1);
       expect(result.current.waitingForDeps).toBe(false);
     });

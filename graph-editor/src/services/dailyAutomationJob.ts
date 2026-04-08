@@ -212,6 +212,55 @@ async function runDailyAutomation(ctx: JobContext): Promise<void> {
   let repoForLog = 'unknown';
   let branchForLog = 'unknown';
 
+  // ---------------------------------------------------------------------------
+  // Progressive flush — write log state to IDB every 60s so a crash/kill
+  // doesn't lose hours of diagnostic context.  The timer is silent: no session
+  // log entries on each tick.  Only writes when new entries have appeared.
+  // ---------------------------------------------------------------------------
+  const FLUSH_INTERVAL_MS = 60_000;
+  const runId = `retrieveall:${waitStartedAt}`;
+  let lastFlushedEntryCount = 0;
+  let progressiveFlushTimer: ReturnType<typeof setInterval> | null = null;
+
+  const countEntriesDeep = (entries: any[]): number =>
+    entries.reduce((n, e) => n + 1 + (e.children?.length ?? 0), 0);
+
+  const doProgressiveFlush = async () => {
+    try {
+      const allEntries = sessionLogService.getEntries();
+      const runEntries = allEntries.slice(logStartIndex);
+      const totalCount = countEntriesDeep(runEntries);
+      if (totalCount === lastFlushedEntryCount) return; // no change
+      lastFlushedEntryCount = totalCount;
+      await automationLogService.progressiveFlush({
+        runId,
+        timestamp: waitStartedAt,
+        graphs: targetGraphNames,
+        outcome: 'running',
+        appVersion: APP_VERSION,
+        repository: repoForLog,
+        branch: branchForLog,
+        durationMs: Date.now() - waitStartedAt,
+        entries: runEntries,
+      });
+    } catch { /* best effort — never let flush errors interrupt the run */ }
+  };
+
+  const startProgressiveFlush = () => {
+    sessionLogService.info('session', 'PROGRESSIVE_LOG_FLUSH_ENABLED',
+      `Progressive log writes enabled (every ${FLUSH_INTERVAL_MS / 1000}s) — runId: ${runId}`);
+    // Initial flush: create the 'running' record in IDB immediately.
+    void doProgressiveFlush();
+    progressiveFlushTimer = setInterval(doProgressiveFlush, FLUSH_INTERVAL_MS);
+  };
+
+  const stopProgressiveFlush = () => {
+    if (progressiveFlushTimer != null) {
+      clearInterval(progressiveFlushTimer);
+      progressiveFlushTimer = null;
+    }
+  };
+
   try {
     setAutomationTitle('starting');
     ctx.showBanner({
@@ -344,6 +393,9 @@ async function runDailyAutomation(ctx: JobContext): Promise<void> {
       logTabId = (await sessionLogService.openLogTab()) ?? undefined;
       if (logTabId) reassertTabFocus(logTabId, [0, 50, 200, 750]);
     } catch { /* best effort */ }
+
+    // Begin progressive log flushing now that we know the target graphs.
+    startProgressiveFlush();
 
     // Start delay (countdown).
     const startDelayMs = getStartDelayMs();
@@ -574,6 +626,7 @@ async function runDailyAutomation(ctx: JobContext): Promise<void> {
       `Automation crashed: ${msg}`, stack);
     // Do NOT re-throw — let the finally block persist the log with the error.
   } finally {
+    stopProgressiveFlush();
     document.title = originalTitle;
 
     // Clean URL params.
@@ -584,7 +637,9 @@ async function runDailyAutomation(ctx: JobContext): Promise<void> {
       window.history.replaceState({}, document.title, url.toString());
     } catch { /* best effort */ }
 
-    // Persist automation run log and auto-close window.
+    // Final persist — overwrites the progressive 'running' record with the
+    // definitive outcome. This is the same record (same runId) so there is
+    // no duplication.
     try {
       const allEntries = sessionLogService.getEntries();
       const runEntries = allEntries.slice(logStartIndex);
@@ -611,7 +666,7 @@ async function runDailyAutomation(ctx: JobContext): Promise<void> {
       }
 
       await automationLogService.persistRunLog({
-        runId: `retrieveall:${waitStartedAt}`,
+        runId,
         timestamp: waitStartedAt,
         graphs: targetGraphNames,
         outcome,

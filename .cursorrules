@@ -135,10 +135,12 @@ Key playbooks:
 - `graph-ops/playbooks/edit-existing-graph.md` — modifying an existing graph
 - `graph-ops/playbooks/validate-graph.md` — quality checks before committing
 - `graph-ops/playbooks/manage-hash-mappings.md` — hash mapping workflow for event/context renames
+- `graph-ops/playbooks/cli-param-pack.md` — CLI param pack tool: usage, options, key reference
+- `graph-ops/playbooks/cli-analyse.md` — CLI analyse tool: scenarios, subjects, multi-scenario, FE equivalence
 - `graph-ops/reference/data-model.md` — complete data model reference
 - `graph-ops/reference/common-pitfalls.md` — known pitfalls
 
-Scripts: `graph-ops/scripts/` (validate-graph.sh, validate-indexes.sh, validate-hashes.sh, status.sh, etc.) — run from dagnet root.
+Scripts: `graph-ops/scripts/` (validate-graph.sh, validate-indexes.sh, validate-hashes.sh, param-pack.sh, analyse.sh, status.sh, etc.) — run from dagnet root.
 
 ## Adjacent Private Repos (read-only context)
 
@@ -368,6 +370,7 @@ Identify your task type below, then read the listed docs **before writing any co
 - FE_BE_STATS_PARALLELISM.md **(full)** — why both FE and BE run the topo pass, parity comparison
 - STATISTICAL_DOMAIN_SUMMARY.md **(full)** — statistical architecture, data pipeline
 - PROBABILITY_BLENDING.md **(skim)** — blending cohort-mode latency edge probabilities
+- `docs/current/project-bayes/32-posterior-predictive-scoring-design.md` **(ref if touching LOO/ELPD)** — per-edge model adequacy scoring, analytic null comparison
 
 **Modifying snapshot DB, signatures, or hash infrastructure**:
 - SNAPSHOT_DB_ARCHITECTURE.md **(full)** — data model and objectives
@@ -386,6 +389,8 @@ Identify your task type below, then read the listed docs **before writing any co
 - SLICE_PLANNING_RETRIEVAL.md **(full)** — retrieve-all planning and execution
 - CONTEXT_SYSTEM.md **(skim)** — context registration, MECE aggregation
 - DATA_DEPTH_SCORING.md **(ref)** — coverage scoring
+- HASH_SIGNATURE_INFRASTRUCTURE.md **(skim — regime selection section)** — when multiple context dimensions produce multiple hashes, the BE must select one per date
+- `docs/current/project-bayes/30-snapshot-regime-selection-contract.md` **(ref if touching snapshot aggregation)** — regime selection contract and `mece_dimensions`
 
 **Modifying automation, scheduling, or staleness**:
 - AUTOMATION_PIPELINE.md **(full)** — daily fetch, retrieve-all automation, run logging
@@ -501,6 +506,8 @@ Services must NOT import UI components or dialogs directly. Accept callbacks ins
 | 3-way merge | `mergeService.ts` | `mergeService.test.ts` |
 | Session logging | `sessionLogService.ts` | `sessionLogService.test.ts` |
 | Hash/signature computation | `coreHashService.ts`, `signatureMatchingService.ts` | `coreHashService.test.ts`, `signatureMatchingService.test.ts` |
+| Snapshot regime selection | `snapshot_regime_selection.py` (BE), `candidateRegimeService.ts` (FE) | `test_snapshot_regime_selection.py`, `test_regime_consumer_integration.py` |
+| LOO-ELPD model adequacy | `bayes/compiler/loo.py` (BE), `bayesQualityTier.ts` (FE) | `test_loo.py` |
 | Schema validation | `lib/schema.ts` | `schemaParityAutomated.test.ts` |
 | Non-blocking pull | `nonBlockingPullService.ts` | `nonBlockingPullService.test.ts` |
 | Automation runs | `dailyRetrieveAllAutomationService.ts` | `dailyRetrieveAllAutomationService.test.ts` |
@@ -509,6 +516,9 @@ Services must NOT import UI components or dialogs directly. Accept callbacks ins
 | Bayes patch apply + cascade | `bayesPatchService.ts` | `bayesPatchServiceMerge.integration.test.ts` |
 | Bayes reconnect + automation submit | `bayesReconnectService.ts` | (no dedicated test yet) |
 | Daily fetch / runBayes flags | `dailyFetchService.ts` | `dailyFetchService.test.ts` |
+| CLI disk loader | `src/cli/diskLoader.ts` | (smoke-tested manually) |
+| CLI aggregation + LAG | `src/cli/aggregate.ts` | (smoke-tested manually) |
+| CLI bootstrap (shared) | `src/cli/bootstrap.ts` | (smoke-tested manually) |
 
 ## Debugging Discipline
 

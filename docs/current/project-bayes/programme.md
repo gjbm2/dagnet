@@ -186,6 +186,14 @@ data-constrained. Single-source validation:
   definitions from `contexts/*.yaml`, normalises them identically
   to the FE (`normalizeContextDefinition`), and populates the `x`
   field with real per-key hashes.
+  **Design prerequisite** (identified 8-Apr-26): when a pinned DSL
+  has `context(a);context(b)`, both dimensions are independent MECE
+  partitions of the same conversions. Representing them as
+  independent Dirichlets each constraining the parent overcounts
+  evidence at the parent level. See doc 30b §15 for analysis and
+  three possible resolutions. Also: RB-003 (regime tag drives
+  likelihood structure) is a Phase C test prerequisite — see doc 14
+  §14.7.
 - **A→Z multi-hop cohort maturity** (doc 29 §Phase A) — generalise
   cohort maturity from single-edge `from(A).to(B)` to multi-hop
   `from(A).to(Z)`. Core work: two pure composition functions
@@ -201,8 +209,18 @@ data-constrained. Single-source validation:
 - **Snapshot regime selection** (doc 30) — move regime selection from
   FE preflight to authoritative BE selection per (edge, anchor_day,
   retrieved_at) triple. Eliminates FE preflight round-trip; prevents
-  double-counting across context dimensions. Design complete, not
-  implemented.
+  double-counting across context dimensions. **Implemented 8-Apr-26**
+  — BE utility (`select_regime_rows`, `validate_mece_for_aggregation`)
+  with 24 tests; wired into API handler (3 query sites) and Bayes
+  worker; FE candidate construction (`candidateRegimeService.ts`)
+  and `mece_dimensions` computation; wired into analysis preparation
+  and Bayes trigger. DSL `context()` / trailing separator syntax for
+  uncontexted slices also implemented (8 tests). Worked examples in
+  doc 30b. FE preflight removal (Phase 5) not yet done.
+  **Outstanding**: Bayes evidence binder regime tests (RB-001–005
+  in doc 30 §7.3.5) — verifying `_bind_from_snapshot_rows` handles
+  multi-regime rows correctly. Requires compiler type setup. RB-003
+  is a Phase C prerequisite (doc 14 §14.7).
 - **BE analysis subject resolution** (doc 31) — move DSL resolution
   from FE to BE. FE sends DSL string + candidate regimes for all
   edges; BE resolves path structure natively. Enables multi-hop
@@ -228,6 +246,19 @@ data-constrained. Single-source validation:
   May be partially fixed. Low priority — warm-start bypasses
   first-run prior issue, and onset histogram observations provide
   direct data-driven onset priors.
+- **Posterior predictive scoring** (doc 32) — per-edge LOO-ELPD
+  model adequacy scoring, benchmarked against the analytic stats pass
+  as null model. Assesses p and κ via the five named distribution
+  likelihood types (aggregate window, per-anchor-day, window endpoints,
+  cohort endpoints, branch groups). ΔELPD per edge answers "does the
+  Bayesian model improve on the analytic point estimates?" Surfaces in
+  Forecast Quality overlay (warning tier on ΔELPD < 0 or pareto_k > 0.7),
+  Edge Info Model tab, and PosteriorIndicator popover.
+  **Phase 1 implemented 8-Apr-26** — `bayes/compiler/loo.py` with
+  `compute_loo_scores()`, wired into both Phase 1 and Phase 2 in
+  `worker.py`. FE types, patch service, quality tier, and display
+  updated. 8 unit tests passing. Latency shape assessment (trajectory
+  Potential) deferred to Phase 2.
 - **Sampling performance** (doc 22) — compilation time (155s on
   branch graph), GPU experiment, dev-mode draws. Quality-of-life,
   not blocking.
@@ -281,6 +312,10 @@ data-constrained. Single-source validation:
 ---
 
 ## Design docs
+
+**Full index**: [INDEX.md](INDEX.md) — complete catalogue of all 44
+docs (grouped by theme, with reconciled status). The table below is a
+quick-reference subset; the index is authoritative.
 
 | Short name | File | Scope |
 |---|---|---|

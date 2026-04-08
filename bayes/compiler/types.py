@@ -345,9 +345,17 @@ class PosteriorSummary:
     cohort_hdi_lower: float | None = None
     cohort_hdi_upper: float | None = None
 
+    # LOO-ELPD model adequacy scoring (doc 32)
+    elpd: float | None = None
+    elpd_se: float | None = None
+    elpd_null: float | None = None
+    delta_elpd: float | None = None
+    pareto_k_max: float | None = None
+    n_loo_obs: int | None = None
+
     def to_webhook_dict(self) -> dict[str, Any]:
         """Format for the webhook payload's edge.probability block."""
-        return {
+        result = {
             "alpha": round(self.alpha, 4),
             "beta": round(self.beta, 4),
             "mean": round(self.mean, 6),
@@ -359,6 +367,11 @@ class PosteriorSummary:
             "rhat": round(self.rhat, 4) if self.rhat else None,
             "provenance": self.provenance,
         }
+        if self.delta_elpd is not None:
+            result["delta_elpd"] = round(self.delta_elpd, 3)
+            result["pareto_k_max"] = round(self.pareto_k_max, 3) if self.pareto_k_max is not None else None
+            result["n_loo_obs"] = self.n_loo_obs
+        return result
 
 
 @dataclass
@@ -409,6 +422,14 @@ class LatencyPosteriorSummary:
     path_hdi_t95_upper: float | None = None
     path_provenance: str | None = None
 
+    # LOO-ELPD model adequacy scoring (doc 32)
+    elpd: float | None = None
+    elpd_se: float | None = None
+    elpd_null: float | None = None
+    delta_elpd: float | None = None
+    pareto_k_max: float | None = None
+    n_loo_obs: int | None = None
+
     def to_webhook_dict(self) -> dict[str, Any]:
         """Format for the webhook payload's edge.latency block.
 
@@ -449,6 +470,11 @@ class LatencyPosteriorSummary:
             result["path_hdi_t95_lower"] = round(self.path_hdi_t95_lower, 1) if self.path_hdi_t95_lower is not None else None
             result["path_hdi_t95_upper"] = round(self.path_hdi_t95_upper, 1) if self.path_hdi_t95_upper is not None else None
             result["path_provenance"] = self.path_provenance or self.provenance
+        # LOO-ELPD (doc 32)
+        if self.delta_elpd is not None:
+            result["delta_elpd"] = round(self.delta_elpd, 3)
+            result["pareto_k_max"] = round(self.pareto_k_max, 3) if self.pareto_k_max is not None else None
+            result["n_loo_obs"] = self.n_loo_obs
         return result
 
 
@@ -459,6 +485,10 @@ class QualityMetrics:
     converged: bool = False
     total_divergences: int = 0
     converged_pct: float = 0.0
+    # LOO-ELPD graph-level summary (doc 32)
+    total_delta_elpd: float = 0.0
+    worst_pareto_k: float = 0.0
+    n_high_k: int = 0
 
 
 @dataclass

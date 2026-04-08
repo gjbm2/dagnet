@@ -102,6 +102,8 @@ Clearing layer 1 is useless unless you also handle layers 2-4. UpdateManager map
 
 **Example**: the @ menu showed no snapshots for `li-cohort-segmentation-v2` because `resolveContextKeys` fell back to `dataInterestsDSL` (3 context keys) while fetches stored snapshots under single-key signatures. Fixed by replacing the fallback with slice-topology-based enumeration.
 
+**Related**: when multiple context dimensions produce multiple hashes for the same edge, the BE must select one hash per `retrieved_at` date to avoid double-counting. See `snapshot_regime_selection.py` and doc 30 (`30-snapshot-regime-selection-contract.md`). The candidate hashes for regime selection are derived from the current pinned DSL's explosion (which produces specific per-cross-product key-sets), not from a flat union of all dimensions.
+
 ## Anti-pattern 12: Unprefixed IDB key in file lookups
 
 **Signature**: a function loads a file from `db.files.get(fileId)` using the FileRegistry-style unprefixed key (e.g., `event-myEvent`), but IDB stores files under workspace-prefixed keys (e.g., `nous-conversion-main-event-myEvent`). The lookup silently returns nothing.

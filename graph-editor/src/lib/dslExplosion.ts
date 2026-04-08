@@ -37,8 +37,33 @@ export async function explodeDSL(dsl: string): Promise<string[]> {
     expanded.push(...slices);
   }
   
+  // Step 2b: Handle "context()" as "uncontexted slice" in pinned DSL.
+  // context() in a semicolon position means "also include the bare
+  // temporal clause without any context". Strip context() and emit
+  // the temporal parts only. See doc 30 §10.
+  const resolved: string[] = [];
+  for (const slice of expanded) {
+    const trimmed = slice.trim();
+    if (!trimmed) {
+      // Empty branch from trailing/leading separator — uncontexted.
+      // We'll collect temporal clauses from sibling branches below.
+      continue;
+    }
+    const parsed = parseConstraints(trimmed);
+    if (parsed.contextClausePresent && parsed.context.length === 0) {
+      // context() with no key — strip it, emit temporal clause only
+      const stripped = trimmed
+        .replace(/\.?context\(\)/g, '')
+        .replace(/^\./,  '')
+        .trim();
+      if (stripped) resolved.push(stripped);
+    } else {
+      resolved.push(trimmed);
+    }
+  }
+
   // Step 3: Normalize all slices (uses queryDSL.normalizeConstraintString)
-  return expanded.map(s => normalizeConstraintString(s));
+  return resolved.map(s => normalizeConstraintString(s));
 }
 
 /**
@@ -65,14 +90,19 @@ function parseExpression(dsl: string): string[] {
     const suffix = trimmed.substring(parenEnd + 1);
     
     const contents = extractFunctionContents(orPart, 'or');
-    const parts = smartSplit(contents, ',');
+    const parts = smartSplit(contents, ',', true);
     const branches: string[] = [];
     for (const part of parts) {
-      const partBranches = parseExpression(part);
-      // Apply suffix to each branch
-      for (const branch of partBranches) {
-        // Re-parse after suffix application so suffix expressions like `.or(...)` are handled.
-        branches.push(...parseExpression(branch + suffix));
+      if (part === '') {
+        // Empty part in or() — means "include uncontexted"
+        branches.push(suffix.startsWith('.') ? suffix.slice(1) : suffix || '');
+      } else {
+        const partBranches = parseExpression(part);
+        // Apply suffix to each branch
+        for (const branch of partBranches) {
+          // Re-parse after suffix application so suffix expressions like `.or(...)` are handled.
+          branches.push(...parseExpression(branch + suffix));
+        }
       }
     }
     return branches;
@@ -121,7 +151,7 @@ function parseExpression(dsl: string): string[] {
     const rest = trimmed.substring(dotParenIndex + 1);
     
     const restBranches = parseExpression(rest);
-    return restBranches.map(b => prefix + '.' + b);
+    return restBranches.map(b => b === '' ? prefix : prefix + '.' + b);
   }
 
   // Handle prefix.or(...)
@@ -172,10 +202,17 @@ function parseExpression(dsl: string): string[] {
   
   // Handle semicolons at top level
   if (trimmed.includes(';')) {
-    const parts = smartSplit(trimmed, ';');
+    const parts = smartSplit(trimmed, ';', true);
     const branches: string[] = [];
     for (const part of parts) {
-      branches.push(...parseExpression(part));
+      if (part === '') {
+        // Empty part from trailing/leading/double semicolon.
+        // In pinned DSL context, this means "include uncontexted".
+        // Emit empty string — Step 2b in explodeDSL handles it.
+        branches.push('');
+      } else {
+        branches.push(...parseExpression(part));
+      }
     }
     return branches;
   }
@@ -215,24 +252,27 @@ function findMatchingParen(str: string, openIndex: number): number {
 
 /**
  * Split respecting parentheses.
+ * @param keepEmpty - if true, preserve empty parts (e.g. from trailing
+ *   separators). Used for semicolons in pinned DSL where an empty
+ *   element means "include uncontexted". See doc 30 §10.
  */
-function smartSplit(str: string, sep: string): string[] {
+function smartSplit(str: string, sep: string, keepEmpty = false): string[] {
   const parts: string[] = [];
   let current = '';
   let depth = 0;
-  
+
   for (const char of str) {
     if (char === '(') depth++;
     else if (char === ')') depth--;
     else if (char === sep && depth === 0) {
-      if (current.trim()) parts.push(current.trim());
+      if (keepEmpty || current.trim()) parts.push(current.trim());
       current = '';
       continue;
     }
     current += char;
   }
-  
-  if (current.trim()) parts.push(current.trim());
+
+  if (keepEmpty || current.trim()) parts.push(current.trim());
   return parts;
 }
 

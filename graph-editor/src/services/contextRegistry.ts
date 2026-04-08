@@ -78,6 +78,25 @@ export class ContextRegistry {
     console.log('[ContextRegistry] Clearing cache');
     this.cache.clear();
   }
+
+  /**
+   * Pre-load context definitions into the in-memory cache.
+   *
+   * Intended for headless / CLI environments where contexts are loaded from
+   * disk rather than FileRegistry or IndexedDB. When all required contexts
+   * are pre-loaded, the IDB fallback in getContext() is never reached.
+   */
+  preloadContexts(
+    contexts: Map<string, ContextDefinition> | Record<string, ContextDefinition>,
+    options?: { workspace?: { repository: string; branch: string } }
+  ): void {
+    const entries = contexts instanceof Map ? contexts.entries() : Object.entries(contexts);
+    for (const [id, def] of entries) {
+      const key = this.cacheKey(id, options?.workspace);
+      this.cache.set(key, def);
+    }
+    console.log(`[ContextRegistry] Pre-loaded ${contexts instanceof Map ? contexts.size : Object.keys(contexts).length} context definitions`);
+  }
   
   /**
    * Get context definition (loads and caches).

@@ -274,6 +274,12 @@ export async function applyPatch(patch: BayesPatchFile): Promise<number> {
             path_hdi_upper: cohortSlice.p_hdi_upper,
             path_provenance: cohortSlice.provenance,
           } : {}),
+          // LOO-ELPD model adequacy (doc 32)
+          ...(windowSlice.delta_elpd != null ? {
+            delta_elpd: windowSlice.delta_elpd,
+            pareto_k_max: windowSlice.pareto_k_max,
+            n_loo_obs: windowSlice.n_loo_obs,
+          } : {}),
         };
       }
 
@@ -310,6 +316,12 @@ export async function applyPatch(patch: BayesPatchFile): Promise<number> {
             ...(cohortSlice.hdi_t95_lower != null ? { path_hdi_t95_lower: cohortSlice.hdi_t95_lower, path_hdi_t95_upper: cohortSlice.hdi_t95_upper } : {}),
             ...(cohortSlice.onset_mu_corr != null ? { path_onset_mu_corr: cohortSlice.onset_mu_corr } : {}),
             path_provenance: cohortSlice.provenance,
+          } : {}),
+          // LOO-ELPD model adequacy (doc 32)
+          ...(windowSlice.delta_elpd != null ? {
+            delta_elpd: windowSlice.delta_elpd,
+            pareto_k_max: windowSlice.pareto_k_max,
+            n_loo_obs: windowSlice.n_loo_obs,
           } : {}),
         };
       }

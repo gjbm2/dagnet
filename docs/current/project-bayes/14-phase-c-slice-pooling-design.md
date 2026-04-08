@@ -1245,11 +1245,24 @@ be rejected by DSL validation. Need to confirm this is enforced in
 `explodeDSL` or at graph validation time, and decide the error
 handling (hard error vs warning + fallback).
 
-**d) Independent dimension correlation**: §5A.3 Rule 1 notes that
-independent dimensions may overconfident the parent if dimensions are
-correlated. No mitigation planned for v1 — this is an accepted
-limitation. If it proves problematic, a correlation adjustment term
-or a single cross-product hierarchy would address it.
+**d) Independent dimension overcounting**: when a pinned DSL has
+`context(a);context(b)` (semicolon = independent dimensions), N
+Dirichlet groups each constrain the parent with the same underlying
+evidence. This overcounts the parent's effective sample size by a
+factor of N.
+
+**Resolution**: downweight each group's Dirichlet concentration
+parameter by 1/N. If 2 independent groups each see 100 conversions,
+each contributes concentration × 0.5, giving the parent ESS=100
+(not 200). In PyMC: multiply the concentration prior by `1/N` per
+group.
+
+This assumes independence between dimensions — which is forced
+when using semicolons (no cross-product data to estimate
+correlation). If the DSL uses dot-product (`context(a).context(b)`),
+the full cross-product is available and a single joint hierarchy
+could model the correlation, but 1/N is a valid conservative
+default.
 
 ### 14.7 Doc 30 RB-003 as Phase C contract test
 

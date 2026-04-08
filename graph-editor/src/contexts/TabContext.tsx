@@ -162,6 +162,26 @@ class FileRegistry {
   }
 
   /**
+   * Seed a file into the in-memory map only — no IDB, no listeners, no dirty tracking.
+   *
+   * Intended for headless / CLI environments where files are loaded from disk
+   * and need to be queryable via getFile() without a full browser environment.
+   */
+  seedFileInMemory(fileId: string, type: string, data: any, source?: { repository: string; branch: string; path: string }): void {
+    this.files.set(fileId, {
+      fileId,
+      type: type as any,
+      data,
+      originalData: data,
+      isDirty: false,
+      isInitializing: false,
+      source,
+      viewTabs: [],
+      lastModified: Date.now(),
+    });
+  }
+
+  /**
    * Upsert a file with "clean" semantics (overwrite seed).
    *
    * This is critical for share/live refresh flows:

@@ -21,7 +21,7 @@ export interface AutomationRunLog {
   runId: string;
   timestamp: number;           // ms since epoch (run start)
   graphs: string[];
-  outcome: 'success' | 'warning' | 'error' | 'aborted';
+  outcome: 'running' | 'success' | 'warning' | 'error' | 'aborted';
   appVersion: string;
   repository: string;
   branch: string;

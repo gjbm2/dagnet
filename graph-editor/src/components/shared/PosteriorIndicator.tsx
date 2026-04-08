@@ -188,6 +188,22 @@ function ProbabilityPosteriorDetails({ posterior, tier, colour, retrievedAt, the
             {qualityTierLabel(tier.tier)}
           </td>
         </tr>
+        {posterior.delta_elpd != null && (
+          <tr>
+            <td className="posterior-details-label">ΔELPD</td>
+            <td className="posterior-details-value" style={posterior.delta_elpd < 0 ? { color: qualityTierToColour('warning', theme) } : undefined}>
+              {posterior.delta_elpd > 0 ? '+' : ''}{posterior.delta_elpd.toFixed(2)}
+            </td>
+          </tr>
+        )}
+        {posterior.pareto_k_max != null && (
+          <tr>
+            <td className="posterior-details-label">Pareto k</td>
+            <td className="posterior-details-value" style={posterior.pareto_k_max > 0.7 ? { color: qualityTierToColour('warning', theme) } : undefined}>
+              {posterior.pareto_k_max.toFixed(3)}
+            </td>
+          </tr>
+        )}
 
         {/* ── Metadata ── */}
         <SectionHeader label="Metadata" theme={theme} />
@@ -386,6 +402,22 @@ function LatencyPosteriorDetails({ posterior, tier, colour, retrievedAt, theme, 
             {qualityTierLabel(tier.tier)}
           </td>
         </tr>
+        {posterior.delta_elpd != null && (
+          <tr>
+            <td className="posterior-details-label">ΔELPD</td>
+            <td className="posterior-details-value" style={posterior.delta_elpd < 0 ? { color: qualityTierToColour('warning', theme) } : undefined}>
+              {posterior.delta_elpd > 0 ? '+' : ''}{posterior.delta_elpd.toFixed(2)}
+            </td>
+          </tr>
+        )}
+        {posterior.pareto_k_max != null && (
+          <tr>
+            <td className="posterior-details-label">Pareto k</td>
+            <td className="posterior-details-value" style={posterior.pareto_k_max > 0.7 ? { color: qualityTierToColour('warning', theme) } : undefined}>
+              {posterior.pareto_k_max.toFixed(3)}
+            </td>
+          </tr>
+        )}
 
         {/* ── Metadata ── */}
         <SectionHeader label="Metadata" theme={theme} />

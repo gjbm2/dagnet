@@ -15,7 +15,7 @@
 
 import { PYTHON_API_BASE as API_BASE_URL } from './pythonApiBase';
 
-const USE_MOCK = import.meta.env.VITE_USE_MOCK_COMPUTE === 'true';
+const USE_MOCK = import.meta.env?.VITE_USE_MOCK_COMPUTE === 'true';
 
 // ============================================================
 // Request/Response Types
@@ -113,6 +113,58 @@ function humaniseSubjectId(rawId: string): string {
   return rawId;
 }
 
+/**
+ * Extract edge UUID from a BE-resolved subject_id.
+ * Format: "resolved:{edge_uuid}:{index}"
+ */
+function extractEdgeUuidFromSubjectId(subjectId: string): string | null {
+  const s = String(subjectId || '');
+  if (!s.startsWith('resolved:')) return null;
+  const parts = s.split(':');
+  return parts.length >= 2 ? parts[1] : null;
+}
+
+/**
+ * Build a subject label lookup from the graph.
+ * Maps subject_id → "fromNode → toNode" using the edge UUID embedded
+ * in BE-resolved subject_ids.
+ */
+function buildSubjectLabelLookupFromGraph(
+  scenarios: Array<{ scenario_id?: string; graph?: any }>,
+  subjectIds: string[],
+): Map<string, string> {
+  const lookup = new Map<string, string>();
+
+  // Build edge UUID → label from all scenario graphs.
+  const edgeLabelByUuid = new Map<string, string>();
+  for (const sc of scenarios) {
+    const graph = sc?.graph;
+    if (!graph) continue;
+    const nodes: any[] = Array.isArray(graph?.nodes) ? graph.nodes : [];
+    const edges: any[] = Array.isArray(graph?.edges) ? graph.edges : [];
+    const nodeById = new Map(nodes.map((n: any) => [String(n.uuid || n.id || ''), n]));
+    for (const edge of edges) {
+      const uuid = String(edge.uuid || edge.id || '');
+      if (!uuid) continue;
+      const fromNode = nodeById.get(String(edge.from || ''));
+      const toNode = nodeById.get(String(edge.to || ''));
+      const fromLabel = fromNode?.id || fromNode?.label || String(edge.from || '');
+      const toLabel = toNode?.id || toNode?.label || String(edge.to || '');
+      edgeLabelByUuid.set(uuid, `${fromLabel} → ${toLabel}`);
+    }
+  }
+
+  // Map each subject_id to a label.
+  for (const sid of subjectIds) {
+    const edgeUuid = extractEdgeUuidFromSubjectId(sid);
+    if (edgeUuid && edgeLabelByUuid.has(edgeUuid)) {
+      lookup.set(sid, edgeLabelByUuid.get(edgeUuid)!);
+    }
+  }
+
+  return lookup;
+}
+
 function snapshotSubjectsSignature(subjects?: SnapshotSubjectPayload[]): string {
   const arr = Array.isArray(subjects) ? subjects : [];
   if (arr.length === 0) return '';
@@ -150,7 +202,13 @@ export class GraphComputeClient {
     this.baseUrl = baseUrl;
     this.useMock = useMock;
   }
-  
+
+  /** Safe URL search params — returns empty params in Node / CLI. */
+  private getUrlSearchParams(): URLSearchParams {
+    if (typeof window === 'undefined') return new URLSearchParams();
+    try { return new URLSearchParams(window.location.search); } catch { return new URLSearchParams(); }
+  }
+
   /**
    * Fast, stable hash to keep cache keys short (FNV-1a 32-bit).
    */
@@ -378,20 +436,12 @@ export class GraphComputeClient {
         return b?.result || null;
       })();
 
-      // Map (scenario_id, collapsed subject_id) → request subject payload metadata.
+      // Doc 31: epoch maps are no longer populated from snapshot_subjects.
+      // The BE handles the full sweep as one subject — no epoch segmentation.
+      // The maps remain for backward compatibility with pickEpochPayloadForAsAt
+      // which falls through to firstMeta when empty.
       const subjectPayloadByScenarioSubject = new Map<string, SnapshotSubjectPayload>();
       const subjectPayloadsByScenarioSubject = new Map<string, SnapshotSubjectPayload[]>();
-      for (const sc of request.scenarios || []) {
-        const scenarioId = String(sc?.scenario_id || '');
-        for (const subj of sc.snapshot_subjects || []) {
-          if (!subj?.subject_id) continue;
-          const collapsed = collapseEpochSubjectId(subj.subject_id);
-          const key = `${scenarioId}||${collapsed}`;
-          subjectPayloadByScenarioSubject.set(key, subj);
-          if (!subjectPayloadsByScenarioSubject.has(key)) subjectPayloadsByScenarioSubject.set(key, []);
-          subjectPayloadsByScenarioSubject.get(key)!.push(subj);
-        }
-      }
 
       const pickEpochPayloadForAsAt = (key: string, asAt: string): SnapshotSubjectPayload | null => {
         const payloads = subjectPayloadsByScenarioSubject.get(key) || [];
@@ -540,7 +590,13 @@ export class GraphComputeClient {
       // Scenario and subject IDs are added here from the request context.
       const data: Array<Record<string, any>> = [];
 
-      const scenarioSubjectKeys = Array.from(new Set(Array.from(subjectPayloadsByScenarioSubject.keys())));
+      // Doc 31: iterate from response blocks, not from the (now-empty) epoch payload map.
+      // Build unique (scenario_id, subject_id) keys from the blocks themselves.
+      const scenarioSubjectKeys = Array.from(new Set(
+        blocks
+          .filter(b => isCohortMaturityResult(b.result))
+          .map(b => `${b.scenario_id}||${b.subject_id}`)
+      ));
       for (const ssKey of scenarioSubjectKeys) {
         const [scenarioId, subjectId] = ssKey.split('||');
 
@@ -616,18 +672,12 @@ export class GraphComputeClient {
         scenario_id: scenarioDimensionValues,
       };
 
-      // Add subject dimension values using human-readable labels from the request.
-      // Build a lookup from subject_id → subject_label provided by the frontend.
-      const subjectLabelLookup = new Map<string, string>();
-      for (const sc of request.scenarios || []) {
-        for (const subj of sc.snapshot_subjects || []) {
-          if (subj.subject_label) {
-            subjectLabelLookup.set(collapseEpochSubjectId(subj.subject_id), subj.subject_label);
-          }
-        }
-      }
+      // Doc 31: derive subject labels from graph edge topology rather than
+      // snapshot_subjects sidecar. BE subject_ids embed the edge UUID.
+      const allSubjectIds = Array.from(new Set(data.map(d => String(d.subject_id))));
+      const subjectLabelLookup = buildSubjectLabelLookupFromGraph(request.scenarios || [], allSubjectIds);
       dimensionValues.subject_id = Object.fromEntries(
-        Array.from(new Set(data.map(d => String(d.subject_id)))).map((id, i) => [
+        allSubjectIds.map((id, i) => [
           id,
           { name: subjectLabelLookup.get(id) || humaniseSubjectId(id), order: i },
         ])
@@ -848,16 +898,11 @@ export class GraphComputeClient {
       }
 
       // Subject dimension values.
-      const subjectLabelLookup = new Map<string, string>();
-      for (const sc of request.scenarios || []) {
-        for (const subj of sc.snapshot_subjects || []) {
-          if (subj.subject_label) {
-            subjectLabelLookup.set(subj.subject_id, subj.subject_label);
-          }
-        }
-      }
+      // Doc 31: derive subject labels from graph edge topology.
+      const dcSubjectIds = Array.from(new Set(data.map(d => String(d.subject_id))));
+      const subjectLabelLookup = buildSubjectLabelLookupFromGraph(request.scenarios || [], dcSubjectIds);
       const subjectDimValues = Object.fromEntries(
-        Array.from(new Set(data.map(d => String(d.subject_id)))).map((id, i) => [
+        dcSubjectIds.map((id, i) => [
           id,
           { name: subjectLabelLookup.get(id) || humaniseSubjectId(id), order: i },
         ])
@@ -985,6 +1030,8 @@ export class GraphComputeClient {
 
       if (blocks.length === 0) return null;
 
+      // Doc 31: derive branch keys from BE response subject_ids + graph edges.
+      // Extract edge UUID from subject_id, look up edge → child node in graph.
       const branchLabelLookup = new Map<string, string>();
       const branchKeyByScenarioAndSubject = new Map<string, string>();
       for (const sc of request.scenarios || []) {
@@ -993,25 +1040,30 @@ export class GraphComputeClient {
         const edges: any[] = Array.isArray(graph?.edges) ? graph.edges : [];
         const nodeByUuid = new Map(nodes.map((n: any) => [String(n.uuid || n.id || ''), n]));
         const edgeByUuid = new Map(edges.map((e: any) => [String(e.uuid || e.id || ''), e]));
-        for (const subj of sc.snapshot_subjects || []) {
-          const subjectId = String(subj.subject_id || '');
+        const scenarioId = String(sc?.scenario_id || '');
+        // Build branch keys from BE response blocks for this scenario.
+        for (const b of blocks) {
+          if (b.scenario_id !== scenarioId) continue;
+          const subjectId = String(b.subject_id || '');
           if (!subjectId) continue;
-          let branchKey = '';
-          let branchName = '';
-          const targetEdge = edgeByUuid.get(String(subj?.target?.targetId || ''));
+          const edgeUuid = extractEdgeUuidFromSubjectId(subjectId);
+          const targetEdge = edgeUuid ? edgeByUuid.get(edgeUuid) : null;
           const childNode = targetEdge ? nodeByUuid.get(String(targetEdge.to || '')) : null;
+          let branchKey = subjectId;
+          let branchName = humaniseSubjectId(subjectId);
           if (childNode) {
             branchKey = String(childNode.id || childNode.uuid || subjectId);
             branchName = String(childNode.label || childNode.id || branchKey);
-          } else if (subj.subject_label) {
-            branchKey = subjectId;
-            branchName = subj.subject_label;
-          } else {
-            branchKey = subjectId;
-            branchName = humaniseSubjectId(subjectId);
+          } else if (edgeUuid && edgeByUuid.has(edgeUuid)) {
+            const e = edgeByUuid.get(edgeUuid);
+            const toNode = nodeByUuid.get(String(e.to || ''));
+            if (toNode) {
+              branchKey = String(toNode.id || toNode.uuid || subjectId);
+              branchName = String(toNode.label || toNode.id || branchKey);
+            }
           }
           branchLabelLookup.set(branchKey, branchName);
-          branchKeyByScenarioAndSubject.set(`${sc.scenario_id}||${subjectId}`, branchKey);
+          branchKeyByScenarioAndSubject.set(`${scenarioId}||${subjectId}`, branchKey);
         }
       }
 
@@ -1396,19 +1448,23 @@ export class GraphComputeClient {
     visibilityMode: 'f+e' | 'f' | 'e' = 'f+e',
     snapshotSubjects?: SnapshotSubjectPayload[],
     displaySettings?: Record<string, unknown>,
+    meceDimensions?: string[],
+    analyticsDsl?: string,
+    candidateRegimesByEdge?: Record<string, Array<{ core_hash: string; equivalent_hashes: string[] }>>,
   ): Promise<AnalysisResponse> {
     const bypassCache = this.shouldBypassCache();
-    const snapshotSig = snapshotSubjectsSignature(snapshotSubjects);
-    const testFixture = new URLSearchParams(window.location.search).get('test_fixture');
+    const urlParams = this.getUrlSearchParams();
+    const testFixture = urlParams.get('test_fixture');
 
     const displaySig = displaySettings ? JSON.stringify(displaySettings) : '';
+    const dslSig = analyticsDsl || '';
     const cacheKey =
       this.generateCacheKey(graph, queryDsl, analysisType, [scenarioId])
       + `|vis:${visibilityMode}`
-      + (snapshotSig ? `|snap:${this.hashString(snapshotSig)}` : '')
+      + (dslSig ? `|adsl:${this.hashString(dslSig)}` : '')
       + (analysisType === 'cohort_maturity' ? `|cmv:${this.COHORT_MATURITY_CACHE_VERSION}` : '')
       + (displaySig ? `|ds:${this.hashString(displaySig)}` : '')
-      + (testFixture ? `|tf:${testFixture}:${new URLSearchParams(window.location.search).toString()}` : '');
+      + (testFixture ? `|tf:${testFixture}:${urlParams.toString()}` : '');
     if (!bypassCache) {
       const cached = this.analysisCache.get(cacheKey);
       if (cached && Date.now() - cached.timestamp < this.CACHE_TTL_MS) {
@@ -1444,15 +1500,16 @@ export class GraphComputeClient {
       colour: scenarioColour,
       visibility_mode: visibilityMode,
       graph,
-      ...(snapshotSubjects?.length ? { snapshot_subjects: snapshotSubjects } : {}),
+      ...(analyticsDsl ? { analytics_dsl: analyticsDsl } : {}),
+      ...(candidateRegimesByEdge && Object.keys(candidateRegimesByEdge).length > 0
+        ? { candidate_regimes_by_edge: candidateRegimesByEdge } : {}),
     };
 
     // Collect test fixture override params from URL (?tf_onset=2&tf_mu=1.2 etc.)
     const tfOverrides: Record<string, string> = {};
     if (testFixture) {
-      const sp = new URLSearchParams(window.location.search);
       for (const k of ['tf_onset', 'tf_mu', 'tf_sigma', 'tf_factor']) {
-        const v = sp.get(k);
+        const v = urlParams.get(k);
         if (v) tfOverrides[k] = v;
       }
     }
@@ -1462,6 +1519,7 @@ export class GraphComputeClient {
       query_dsl: queryDsl,
       analysis_type: analysisType,
       ...(displaySettings ? { display_settings: displaySettings } : {}),
+      ...(meceDimensions?.length ? { mece_dimensions: meceDimensions } : {}),
       ...(testFixture ? { test_fixture: testFixture, ...tfOverrides } : {}),
     };
 
@@ -1568,10 +1626,11 @@ export class GraphComputeClient {
    * @param analysisType - Optional analysis type override
    */
   async analyzeMultipleScenarios(
-    scenarios: Array<{ scenario_id: string; name: string; graph: any; colour?: string; visibility_mode?: 'f+e' | 'f' | 'e'; snapshot_subjects?: SnapshotSubjectPayload[] }>,
+    scenarios: Array<{ scenario_id: string; name: string; graph: any; colour?: string; visibility_mode?: 'f+e' | 'f' | 'e'; analytics_dsl?: string; candidate_regimes_by_edge?: Record<string, Array<{ core_hash: string; equivalent_hashes: string[] }>> }>,
     queryDsl?: string,
     analysisType?: string,
     displaySettings?: Record<string, unknown>,
+    meceDimensions?: string[],
   ): Promise<AnalysisResponse> {
     const bypassCache = this.shouldBypassCache();
 
@@ -1579,8 +1638,8 @@ export class GraphComputeClient {
     // This ensures cache invalidates when any scenario's data changes
     const scenarioIds = scenarios.map(s => s.scenario_id);
     const visibilityModes = scenarios.map(s => `${s.scenario_id}:${s.visibility_mode || 'f+e'}`).join(',');
-    const snapshotSig = scenarios
-      .map(s => `${s.scenario_id}:${snapshotSubjectsSignature(s.snapshot_subjects)}`)
+    const dslSig = scenarios
+      .map(s => `${s.scenario_id}:${s.analytics_dsl || ''}`)
       .filter(Boolean)
       .join('||');
     
@@ -1592,15 +1651,16 @@ export class GraphComputeClient {
       .map(s => `${s.scenario_id}:${this.hashString(this.graphSignature(s.graph))}`)
       .join(',');
 
-    const multiTestFixture = new URLSearchParams(window.location.search).get('test_fixture');
+    const multiUrlParams = this.getUrlSearchParams();
+    const multiTestFixture = multiUrlParams.get('test_fixture');
     const multiDisplaySig = displaySettings ? JSON.stringify(displaySettings) : '';
     const cacheKey =
       `multi|graphs:${scenarioGraphKey}|dsl:${queryDsl || ''}|type:${analysisType || ''}|scenarios:${scenarioIds.join(',')}`
       + `|vis:${visibilityModes}`
-      + (snapshotSig ? `|snap:${this.hashString(snapshotSig)}` : '')
+      + (dslSig ? `|adsl:${this.hashString(dslSig)}` : '')
       + (analysisType === 'cohort_maturity' ? `|cmv:${this.COHORT_MATURITY_CACHE_VERSION}` : '')
       + (multiDisplaySig ? `|ds:${this.hashString(multiDisplaySig)}` : '')
-      + (multiTestFixture ? `|tf:${multiTestFixture}:${new URLSearchParams(window.location.search).toString()}` : '');
+      + (multiTestFixture ? `|tf:${multiTestFixture}:${multiUrlParams.toString()}` : '');
     
     // Check cache first (unless explicitly bypassed via URL params for debugging).
     if (!bypassCache) {
@@ -1637,9 +1697,8 @@ export class GraphComputeClient {
 
     const multiTfOverrides: Record<string, string> = {};
     if (multiTestFixture) {
-      const sp = new URLSearchParams(window.location.search);
       for (const k of ['tf_onset', 'tf_mu', 'tf_sigma', 'tf_factor']) {
-        const v = sp.get(k);
+        const v = multiUrlParams.get(k);
         if (v) multiTfOverrides[k] = v;
       }
     }
@@ -1651,11 +1710,14 @@ export class GraphComputeClient {
         colour: s.colour,
         visibility_mode: s.visibility_mode || 'f+e',
         graph: s.graph,
-        ...(s.snapshot_subjects?.length ? { snapshot_subjects: s.snapshot_subjects } : {}),
+        ...(s.analytics_dsl ? { analytics_dsl: s.analytics_dsl } : {}),
+        ...(s.candidate_regimes_by_edge && Object.keys(s.candidate_regimes_by_edge).length > 0
+          ? { candidate_regimes_by_edge: s.candidate_regimes_by_edge } : {}),
       })),
       query_dsl: queryDsl,
       analysis_type: analysisType,
       ...(displaySettings ? { display_settings: displaySettings } : {}),
+      ...(meceDimensions?.length ? { mece_dimensions: meceDimensions } : {}),
       ...(multiTestFixture ? { test_fixture: multiTestFixture, ...multiTfOverrides } : {}),
     };
 
@@ -1885,6 +1947,10 @@ export interface ScenarioData {
   param_overrides?: Record<string, any>;
   /** Per-scenario snapshot DB coordinates (only for analysis types with snapshotContract) */
   snapshot_subjects?: SnapshotSubjectPayload[];
+  /** Doc 31: analytics DSL for BE-side subject resolution */
+  analytics_dsl?: string;
+  /** Doc 31: FE-computed candidate regimes for all edges in this scenario's graph */
+  candidate_regimes_by_edge?: Record<string, Array<{ core_hash: string; equivalent_hashes: string[] }>>;
 }
 
 export interface AnalysisRequest {
@@ -1895,6 +1961,8 @@ export interface AnalysisRequest {
   forecasting_settings?: import('../constants/latency').ForecastingSettings;
   /** Compute-affecting display settings (e.g. bayes_band_level). */
   display_settings?: Record<string, unknown>;
+  /** Doc 30: MECE dimension names for regime selection aggregation safety. */
+  mece_dimensions?: string[];
   /** Test fixture name — when set, BE loads synthetic data instead of snapshot DB. */
   test_fixture?: string;
 }

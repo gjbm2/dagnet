@@ -43,6 +43,24 @@ class AutomationLogService {
     }
   }
 
+  /**
+   * Progressive flush: upsert a running automation's log to IDB.
+   * Silent — no session log entries, no pruning (the run already exists or is
+   * being created for the first time). Caller is responsible for dirty-checking
+   * before calling to avoid unnecessary writes.
+   */
+  async progressiveFlush(log: AutomationRunLog): Promise<void> {
+    try {
+      const serialised: AutomationRunLog = {
+        ...log,
+        entries: JSON.parse(JSON.stringify(log.entries)),
+      };
+      await db.automationRunLogs.put(serialised);
+    } catch (e) {
+      console.error('[AutomationLogService] Progressive flush failed:', e);
+    }
+  }
+
   /** Retrieve recent run logs, newest first. */
   async getRunLogs(limit: number = MAX_STORED_RUNS): Promise<AutomationRunLog[]> {
     try {
@@ -109,6 +127,7 @@ if (typeof window !== 'undefined') {
     for (const log of logs) {
       const date = new Date(log.timestamp);
       const outcomeIcon =
+        log.outcome === 'running'  ? '🔄' :
         log.outcome === 'success'  ? '✅' :
         log.outcome === 'warning'  ? '⚠️' :
         log.outcome === 'error'    ? '❌' : '⏹️';

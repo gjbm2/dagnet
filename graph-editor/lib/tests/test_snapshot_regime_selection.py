@@ -20,6 +20,7 @@ from snapshot_regime_selection import (
     CandidateRegime,
     RegimeSelection,
     select_regime_rows,
+    validate_mece_for_aggregation,
 )
 
 
@@ -349,6 +350,65 @@ class TestRS007_SingleRegime:
 
         assert len(result.rows) == 4
         assert len(result.regime_per_date) == 2
+
+
+# ===================================================================
+# VM-001 to VM-004: validate_mece_for_aggregation
+# ===================================================================
+
+class TestVM001_AllDimensionsMECE:
+    """All context dimensions in the rows are in mece_dimensions."""
+
+    def test_returns_empty(self):
+        rows = [
+            row('2025-12-01', '2026-01-10T06:00:00Z', H_CHANNEL,
+                'context(channel:google).window()', x=60, y=12),
+            row('2025-12-01', '2026-01-10T06:00:00Z', H_CHANNEL,
+                'context(channel:meta).window()', x=40, y=8),
+        ]
+        non_mece = validate_mece_for_aggregation(rows, ['channel'])
+        assert non_mece == []
+
+
+class TestVM002_NonMECEDimension:
+    """A dimension in the rows is NOT in mece_dimensions."""
+
+    def test_returns_non_mece_dimension(self):
+        rows = [
+            row('2025-12-01', '2026-01-10T06:00:00Z', H_CHANNEL,
+                'context(channel:google).context(experiment:v1).window()', x=30, y=6),
+            row('2025-12-01', '2026-01-10T06:00:00Z', H_CHANNEL,
+                'context(channel:meta).context(experiment:v1).window()', x=20, y=4),
+        ]
+        non_mece = validate_mece_for_aggregation(rows, ['channel'])
+        assert non_mece == ['experiment']
+
+
+class TestVM003_NoDimensions:
+    """Uncontexted rows have no dimensions — always safe."""
+
+    def test_returns_empty(self):
+        rows = [
+            row('2025-12-01', '2026-01-10T06:00:00Z', H_BARE,
+                'window()', x=100, y=20),
+        ]
+        non_mece = validate_mece_for_aggregation(rows, ['channel'])
+        assert non_mece == []
+
+
+class TestVM004_CrossProductMixed:
+    """Cross-product with one MECE and one non-MECE dimension."""
+
+    def test_returns_only_non_mece(self):
+        rows = [
+            row('2025-12-01', '2026-01-10T06:00:00Z', H_CROSS,
+                'context(channel:google).context(experiment:v1).window()', x=30, y=6),
+            row('2025-12-01', '2026-01-10T06:00:00Z', H_CROSS,
+                'context(channel:meta).context(experiment:v2).window()', x=20, y=4),
+        ]
+        non_mece = validate_mece_for_aggregation(
+            rows, ['channel', 'onboarding_variant'])
+        assert non_mece == ['experiment']
 
 
 # ===================================================================

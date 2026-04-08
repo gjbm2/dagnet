@@ -67,6 +67,15 @@ export function BayesPosteriorCard({ probability, latency, t95, pathT95, theme =
     const rel = formatRelativeTime(post.fitted_at);
     footerParts.push({ text: rel ?? post.fitted_at, colour: freshnessColour(getFreshnessLevel(post.fitted_at), theme) });
   }
+  // LOO-ELPD model adequacy (doc 32)
+  if (post?.delta_elpd != null) {
+    const elpdColour = post.delta_elpd < 0 ? qualityTierToColour('warning', theme) : undefined;
+    footerParts.push({ text: `ΔELPD ${post.delta_elpd > 0 ? '+' : ''}${post.delta_elpd.toFixed(1)}`, colour: elpdColour });
+  }
+  if (post?.pareto_k_max != null && post.pareto_k_max > 0.5) {
+    const kColour = post.pareto_k_max > 0.7 ? qualityTierToColour('warning', theme) : undefined;
+    footerParts.push({ text: `k=${post.pareto_k_max.toFixed(2)}`, colour: kColour });
+  }
 
   // ── Shared components ──
   const Label = ({ children }: { children: string }) => (
@@ -355,7 +364,7 @@ export interface ModelRateChartProps {
 }
 
 /** Build a polygon band series (custom renderer) for ECharts. */
-function bandPolygon(name: string, ages: number[], upper: number[], lower: number[], fill: string, z: number) {
+function bandPolygon(name: string, ages: number[], upper: number[], lower: number[], fill: string, z: number, smooth = 0.3) {
   const data = ages.map((t, i) => [t, upper[i], lower[i]]);
   return {
     name, type: 'custom' as any, z, silent: true,
@@ -365,7 +374,7 @@ function bandPolygon(name: string, ages: number[], upper: number[], lower: numbe
       const pts: number[][] = [];
       for (let i = 0; i < data.length; i++) pts.push(api.coord([data[i][0], data[i][1]]));
       for (let i = data.length - 1; i >= 0; i--) pts.push(api.coord([data[i][0], data[i][2]]));
-      return { type: 'polygon', shape: { points: pts, smooth: 0.3 }, style: { fill, stroke: 'none' }, silent: true };
+      return { type: 'polygon', shape: { points: pts, smooth }, style: { fill, stroke: 'none' }, silent: true };
     },
     data,
   };
@@ -376,8 +385,10 @@ function bandPolygon(name: string, ages: number[], upper: number[], lower: numbe
  *  Renders edge (solid) and path (dashed) CDF curves with 90%/99% bands when SDs are provided.
  */
 export const ModelRateChart = React.memo(function ModelRateChart(props: ModelRateChartProps) {
-  const hasEdge = props.edgeP != null && props.edgeMu != null && props.edgeSigma != null;
-  const hasPath = props.pathP != null && props.pathMu != null && props.pathSigma != null;
+  const hasEdge = props.edgeP != null;
+  const hasEdgeLat = hasEdge && props.edgeMu != null && props.edgeSigma != null;
+  const hasPath = props.pathP != null;
+  const hasPathLat = hasPath && props.pathMu != null && props.pathSigma != null;
   if (!hasEdge && !hasPath) return null;
 
   const option = useMemo(() => {
@@ -389,42 +400,68 @@ export const ModelRateChart = React.memo(function ModelRateChart(props: ModelRat
 
     // Edge (window)
     if (hasEdge) {
-      const ep = props.edgeP!; const emu = props.edgeMu!; const esig = props.edgeSigma!; const eon = props.edgeOnset ?? 0;
-      const bands = computeBands(ages, ep, emu, esig, eon,
-        props.edgePSd ?? 0, props.edgeMuSd ?? 0, props.edgeSigmaSd ?? 0, props.edgeOnsetSd ?? 0,
-        props.edgeOnsetMuCorr ?? 0);
-      series.push(bandPolygon('_e99', ages, bands.u99, bands.l99, 'rgba(96,165,250,0.08)', 0));
-      series.push(bandPolygon('_e90', ages, bands.u90, bands.l90, 'rgba(96,165,250,0.15)', 1));
-      series.push({
-        name: 'Edge (window)', type: 'line', showSymbol: false, smooth: true, z: 3,
-        lineStyle: { width: 1.5, color: '#60a5fa' },
-        data: ages.map(t => [t, ep * shiftedLognormalCdf(t, eon, emu, esig)]),
-      });
+      const ep = props.edgeP!;
+      if (hasEdgeLat) {
+        const emu = props.edgeMu!; const esig = props.edgeSigma!; const eon = props.edgeOnset ?? 0;
+        const bands = computeBands(ages, ep, emu, esig, eon,
+          props.edgePSd ?? 0, props.edgeMuSd ?? 0, props.edgeSigmaSd ?? 0, props.edgeOnsetSd ?? 0,
+          props.edgeOnsetMuCorr ?? 0);
+        series.push(bandPolygon('_e99', ages, bands.u99, bands.l99, 'rgba(96,165,250,0.08)', 0));
+        series.push(bandPolygon('_e90', ages, bands.u90, bands.l90, 'rgba(96,165,250,0.15)', 1));
+        series.push({
+          name: 'Edge (window)', type: 'line', showSymbol: false, smooth: true, z: 3,
+          lineStyle: { width: 1.5, color: '#60a5fa' },
+          data: ages.map(t => [t, ep * shiftedLognormalCdf(t, eon, emu, esig)]),
+        });
+      } else {
+        // Prob-only: flat line at p with bands from pSd
+        const pSd = props.edgePSd ?? 0;
+        if (pSd > 0) {
+          series.push(bandPolygon('_e99', ages, ages.map(() => Math.min(1, ep + 2.576 * pSd)), ages.map(() => Math.max(0, ep - 2.576 * pSd)), 'rgba(96,165,250,0.08)', 0, 0));
+          series.push(bandPolygon('_e90', ages, ages.map(() => Math.min(1, ep + 1.645 * pSd)), ages.map(() => Math.max(0, ep - 1.645 * pSd)), 'rgba(96,165,250,0.15)', 1, 0));
+        }
+        series.push({
+          name: 'Edge (window)', type: 'line', showSymbol: false, smooth: false, z: 3,
+          lineStyle: { width: 1.5, color: '#60a5fa' },
+          data: ages.map(t => [t, ep]),
+        });
+      }
     }
 
     // Path (cohort)
     if (hasPath) {
-      const pp = props.pathP!; const pmu = props.pathMu!; const psig = props.pathSigma!; const pon = props.pathOnset ?? 0;
-      const bands = computeBands(ages, pp, pmu, psig, pon,
-        props.pathPSd ?? 0, props.pathMuSd ?? 0, props.pathSigmaSd ?? 0, props.pathOnsetSd ?? 0,
-        props.pathOnsetMuCorr ?? 0);
-      series.push(bandPolygon('_p99', ages, bands.u99, bands.l99, 'rgba(245,158,11,0.08)', 0));
-      series.push(bandPolygon('_p90', ages, bands.u90, bands.l90, 'rgba(245,158,11,0.15)', 1));
-      series.push({
-        name: 'Path (cohort)', type: 'line', showSymbol: false, smooth: true, z: 3,
-        lineStyle: { width: 1.5, color: '#f59e0b', type: 'dashed' },
-        data: ages.map(t => [t, pp * shiftedLognormalCdf(t, pon, pmu, psig)]),
-      });
+      const pp = props.pathP!;
+      if (hasPathLat) {
+        const pmu = props.pathMu!; const psig = props.pathSigma!; const pon = props.pathOnset ?? 0;
+        const bands = computeBands(ages, pp, pmu, psig, pon,
+          props.pathPSd ?? 0, props.pathMuSd ?? 0, props.pathSigmaSd ?? 0, props.pathOnsetSd ?? 0,
+          props.pathOnsetMuCorr ?? 0);
+        series.push(bandPolygon('_p99', ages, bands.u99, bands.l99, 'rgba(245,158,11,0.08)', 0));
+        series.push(bandPolygon('_p90', ages, bands.u90, bands.l90, 'rgba(245,158,11,0.15)', 1));
+        series.push({
+          name: 'Path (cohort)', type: 'line', showSymbol: false, smooth: true, z: 3,
+          lineStyle: { width: 1.5, color: '#f59e0b', type: 'dashed' },
+          data: ages.map(t => [t, pp * shiftedLognormalCdf(t, pon, pmu, psig)]),
+        });
+      } else {
+        // Prob-only: flat line at p with bands from pSd
+        const pSd = props.pathPSd ?? 0;
+        if (pSd > 0) {
+          series.push(bandPolygon('_p99', ages, ages.map(() => Math.min(1, pp + 2.576 * pSd)), ages.map(() => Math.max(0, pp - 2.576 * pSd)), 'rgba(245,158,11,0.08)', 0, 0));
+          series.push(bandPolygon('_p90', ages, ages.map(() => Math.min(1, pp + 1.645 * pSd)), ages.map(() => Math.max(0, pp - 1.645 * pSd)), 'rgba(245,158,11,0.15)', 1, 0));
+        }
+        series.push({
+          name: 'Path (cohort)', type: 'line', showSymbol: false, smooth: false, z: 3,
+          lineStyle: { width: 1.5, color: '#f59e0b', type: 'dashed' },
+          data: ages.map(t => [t, pp]),
+        });
+      }
     }
 
     return {
       animation: false,
-      grid: { left: 30, right: 8, top: 28, bottom: 20 },
-      legend: {
-        show: true, top: 0, left: 0, itemWidth: 14, itemHeight: 8, itemGap: 8,
-        textStyle: { fontSize: 7, color: '#aaa' },
-        data: series.filter(s => !s.name.startsWith('_')).map(s => s.name),
-      },
+      grid: { left: 30, right: 8, top: 6, bottom: 20 },
+      legend: { show: false },
       xAxis: {
         type: 'value' as const, min: 0, max: maxDays,
         name: 'days', nameLocation: 'end' as const,
@@ -462,12 +499,28 @@ export const ModelRateChart = React.memo(function ModelRateChart(props: ModelRat
     props.edgePSd, props.edgeMuSd, props.edgeSigmaSd, props.edgeOnsetSd, props.edgeOnsetMuCorr, props.edgeT95,
     props.pathP, props.pathMu, props.pathSigma, props.pathOnset,
     props.pathPSd, props.pathMuSd, props.pathSigmaSd, props.pathOnsetSd, props.pathOnsetMuCorr, props.pathT95,
-    hasEdge, hasPath,
+    hasEdge, hasEdgeLat, hasPath, hasPathLat,
   ]);
 
+  const hasBands = (hasEdge && (props.edgePSd ?? 0) > 0) || (hasPath && (props.pathPSd ?? 0) > 0);
   return (
-    <div style={{ width: '100%', aspectRatio: '1.6 / 1', maxHeight: 320, marginTop: 6 }}>
+    <div style={{ width: '100%', marginTop: 6 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, fontSize: 8, color: '#aaa', padding: '0 2px 2px', flexWrap: 'wrap' }}>
+        {hasEdge && (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+            <span style={{ display: 'inline-block', width: 14, height: 0, borderTop: '1.5px solid #60a5fa' }} />Edge (window)
+          </span>
+        )}
+        {hasPath && (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+            <span style={{ display: 'inline-block', width: 14, height: 0, borderTop: '1.5px dashed #f59e0b' }} />Path (cohort)
+          </span>
+        )}
+        {hasBands && <span style={{ marginLeft: 'auto', color: '#666', fontSize: 7 }}>shading: 90% / 99% HDI</span>}
+      </div>
+      <div style={{ width: '100%', aspectRatio: '1.6 / 1', maxHeight: 320 }}>
       <ReactECharts option={option} style={{ width: '100%', height: '100%' }} notMerge lazyUpdate />
+      </div>
     </div>
   );
 });

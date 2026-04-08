@@ -95,8 +95,6 @@ export function useBayesTrigger(computeMode: BayesComputeMode = 'local') {
 
       // 2. Load credentials
       console.log('[useBayesTrigger] loading credentials, selectedRepo:', navState.selectedRepo);
-
-      // 2. Load credentials
       const credsResult = await credentialsManager.loadCredentials();
       if (!credsResult.success || !credsResult.credentials) {
         throw new Error('Failed to load credentials');
@@ -429,6 +427,27 @@ export function useBayesTrigger(computeMode: BayesComputeMode = 'local') {
           `${Object.keys(parameterFiles).length} param files inspected`);
       }
 
+      // 7b. Build candidate regimes + MECE dimensions (doc 30 §4.1)
+      let candidateRegimesByEdge: Record<string, Array<{ core_hash: string; equivalent_hashes: string[] }>> = {};
+      let meceDimensions: string[] = [];
+      try {
+        const { buildCandidateRegimesByEdge, computeMeceDimensions } = await import('../services/candidateRegimeService');
+        const workspace = {
+          repository: `${gitCred.owner}/${gitCred.name}`,
+          branch: navState.selectedBranch || 'main',
+        };
+        [candidateRegimesByEdge, meceDimensions] = await Promise.all([
+          buildCandidateRegimesByEdge(graphFile.data as any, workspace),
+          computeMeceDimensions(graphFile.data as any, workspace),
+        ]);
+        sessionLogService.info('bayes', 'BAYES_REGIME_CANDIDATES',
+          `Built candidate regimes: ${Object.keys(candidateRegimesByEdge).length} edges, ` +
+          `${meceDimensions.length} MECE dims: [${meceDimensions.join(', ')}]`);
+      } catch (err: any) {
+        sessionLogService.warning('bayes', 'BAYES_REGIME_CANDIDATES_FAILED',
+          `Failed to build candidate regimes (non-blocking): ${err.message}`);
+      }
+
       // 8. Log payload summary + submit
       const paramFileIds = Object.keys(parameterFiles);
       sessionLogService.info('bayes', 'BAYES_PAYLOAD_SUMMARY',
@@ -467,6 +486,8 @@ export function useBayesTrigger(computeMode: BayesComputeMode = 'local') {
           ...(new URLSearchParams(window.location.search).has('placeholder') ? { placeholder: true } : {}),
         },
         ...(snapshotSubjects.length > 0 ? { snapshot_subjects: snapshotSubjects } : {}),
+        ...(Object.keys(candidateRegimesByEdge).length > 0 ? { candidate_regimes_by_edge: candidateRegimesByEdge } : {}),
+        ...(meceDimensions.length > 0 ? { mece_dimensions: meceDimensions } : {}),
         callback_token: callbackToken,
         db_connection: config.db_connection,
         webhook_url: webhookUrl,

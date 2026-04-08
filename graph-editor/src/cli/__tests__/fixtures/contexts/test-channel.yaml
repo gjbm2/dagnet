@@ -1,0 +1,15 @@
+id: test-channel
+name: Test Channel
+type: categorical
+otherPolicy: "null"
+values:
+  - id: organic
+    label: Organic
+  - id: paid
+    label: Paid
+metadata:
+  category: test
+  data_source: manual
+  created_at: "2026-01-01T00:00:00Z"
+  version: "1.0.0"
+  status: active

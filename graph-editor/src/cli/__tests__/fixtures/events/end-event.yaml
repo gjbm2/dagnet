@@ -1,0 +1,4 @@
+id: end-event
+name: End Event
+provider_event_names:
+  amplitude: "test_end_event"

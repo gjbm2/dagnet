@@ -35,7 +35,8 @@
       "Bash(npx esbuild:*)",
       "Bash(git merge:*)",
       "Bash(.claude/hooks/confirm-gate.sh gate-config:*)",
-      "Read(//home/reg/dev/dagnet/**)"
+      "Read(//home/reg/dev/dagnet/**)",
+      "WebFetch(domain:python.arviz.org)"
     ],
     "additionalDirectories": [
       "/home/reg/dev/dagnet/.claude",

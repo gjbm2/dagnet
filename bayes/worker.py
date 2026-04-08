@@ -640,11 +640,20 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
             f"divergences={quality.total_divergences}"
         )
 
-        # ── 6. Summarise Phase 1 posteriors ──
+        # ── 6. LOO-ELPD scoring + Summarise Phase 1 posteriors ──
         progress.set_band(*P1_SUMMARISE)
         report("summarising", 100, f"{phase1_label}: Computing diagnostics…")
+        from compiler.loo import compute_loo_scores
+        loo_diag = []
+        try:
+            loo_scores = compute_loo_scores(trace, evidence, topology, diagnostics=loo_diag)
+        except Exception as e:
+            loo_scores = None
+            loo_diag.append(f"LOO: failed: {e}")
+        for d in loo_diag:
+            _log(log, f"  {d}")
         inference_result = summarise_posteriors(trace, topology, evidence, metadata, quality,
-                                                settings=settings)
+                                                settings=settings, loo_scores=loo_scores)
 
         # ── 6b. Phase 2: cohort pass with frozen Phase 1 results ──
         # Extract Phase 1 posterior means and build Phase 2 model.
@@ -874,12 +883,20 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
                               f"mean={eps.mean():.3f} std={eps.std():.3f} "
                               f"range=[{eps.min():.3f}, {eps.max():.3f}]")
 
-            # Summarise Phase 2 — cohort posteriors
+            # LOO-ELPD scoring + Summarise Phase 2 — cohort posteriors
             progress.set_band(*P2_SUMMARISE)
             report("summarising", 100, f"{phase2_label}: Computing diagnostics…")
+            loo_diag2 = []
+            try:
+                loo_scores2 = compute_loo_scores(trace2, evidence, topology, diagnostics=loo_diag2)
+            except Exception as e:
+                loo_scores2 = None
+                loo_diag2.append(f"LOO Phase 2: failed: {e}")
+            for d in loo_diag2:
+                _log(log, f"  {d}")
             inference_result2 = summarise_posteriors(
                 trace2, topology, evidence, metadata2, quality2,
-                settings=settings,
+                settings=settings, loo_scores=loo_scores2,
             )
 
             # Merge Phase 2 cohort results into Phase 1 results.

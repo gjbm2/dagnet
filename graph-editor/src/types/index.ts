@@ -761,6 +761,10 @@ export interface ProbabilityPosterior {
   path_hdi_lower?: number;
   path_hdi_upper?: number;
   path_provenance?: 'bayesian' | 'pooled-fallback' | 'point-estimate';
+  // LOO-ELPD model adequacy scoring (doc 32)
+  delta_elpd?: number | null;
+  pareto_k_max?: number | null;
+  n_loo_obs?: number | null;
 }
 
 /** Latency posterior summary on graph edge.
@@ -804,6 +808,10 @@ export interface LatencyPosterior {
   path_hdi_t95_upper?: number;
   path_onset_mu_corr?: number;
   path_provenance?: 'bayesian' | 'pooled-fallback' | 'point-estimate';
+  // LOO-ELPD model adequacy scoring (doc 32)
+  delta_elpd?: number | null;
+  pareto_k_max?: number | null;
+  n_loo_obs?: number | null;
 }
 
 /** Quality metrics from a Bayesian fitting run */

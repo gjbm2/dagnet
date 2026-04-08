@@ -1,0 +1,4 @@
+id: middle-event
+name: Middle Event
+provider_event_names:
+  amplitude: "test_middle_event"
