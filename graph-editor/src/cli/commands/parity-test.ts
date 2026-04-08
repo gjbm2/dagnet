@@ -238,7 +238,7 @@ async function testParity(args: TestParityArgs): Promise<ComparisonResult> {
     }
   }
 
-  console.error(`[parity] Prepared: ${readyPrepared.scenarios.length} scenarios, queryDsl="${readyPrepared.queryDsl}"`);
+  console.error(`[parity] Prepared: ${readyPrepared.scenarios.length} scenarios, analyticsDsl="${readyPrepared.analyticsDsl}"`);
 
   // Run the prepared analysis through the full FE normalisation path
   let response: AnalysisResponse;
@@ -272,7 +272,7 @@ function validateResponse(
   const frames = Array.isArray(r.frames) ? r.frames : [];
   const maturityRows = Array.isArray(r.maturity_rows) ? r.maturity_rows : [];
 
-  const parts = [];
+  const parts: string[] = [];
   if (data.length > 0) parts.push(`${data.length} data rows`);
   if (frames.length > 0) parts.push(`${frames.length} frames`);
   if (maturityRows.length > 0) parts.push(`${maturityRows.length} maturity_rows`);
@@ -387,7 +387,7 @@ function compareNormalisedResponses(
   }
 
   // Build summary
-  const parts = [];
+  const parts: string[] = [];
   if (oldData.length > 0) parts.push(`${oldData.length} data rows`);
   if (oldFrames.length > 0) parts.push(`${oldFrames.length} frames`);
   if (oldMR.length > 0) parts.push(`${oldMR.length} maturity_rows`);

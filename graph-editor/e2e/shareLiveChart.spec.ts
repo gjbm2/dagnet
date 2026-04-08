@@ -1975,7 +1975,7 @@ test.describe.serial('Share-live chart (persistence-first)', () => {
 
 
 test.describe.serial('Share-live snapshot chart (daily_conversions)', () => {
-  test('live share of daily_conversions chart sends snapshot_subjects in the analyze request', async ({ browser, baseURL }, testInfo) => {
+  test('live share of daily_conversions chart sends analytics_dsl and candidate_regimes in the analyze request', async ({ browser, baseURL }, testInfo) => {
     const state: ShareLiveStubState = { version: 'v1', counts: {} };
 
     // Build a share URL for a daily_conversions chart
@@ -2040,31 +2040,23 @@ test.describe.serial('Share-live snapshot chart (daily_conversions)', () => {
       // The analyze request should include analysis_type = daily_conversions
       expect(state.lastAnalyzeRequest?.analysis_type).toBe('daily_conversions');
 
-      // At least one scenario should have snapshot_subjects
+      // Doc 31: the FE now sends analytics_dsl + candidate_regimes_by_edge
+      // instead of pre-resolved snapshot_subjects.
       const scenarios: any[] = state.lastAnalyzeRequest?.scenarios || [];
       expect(scenarios.length).toBeGreaterThan(0);
 
-      const hasSnapshotSubjects = scenarios.some(
-        (s: any) => Array.isArray(s.snapshot_subjects) && s.snapshot_subjects.length > 0
-      );
+      // analytics_dsl should be present (top-level or per-scenario)
+      const topAnalyticsDsl = state.lastAnalyzeRequest?.analytics_dsl;
+      const perScenarioDsl = scenarios.some((s: any) => !!s.analytics_dsl);
       expect(
-        hasSnapshotSubjects,
-        `Expected at least one scenario to have snapshot_subjects. Scenarios: ${JSON.stringify(scenarios.map((s: any) => ({ id: s.scenario_id, has_subjects: !!s.snapshot_subjects?.length })))}`
+        !!topAnalyticsDsl || perScenarioDsl,
+        `Expected analytics_dsl at top level or on at least one scenario. top="${topAnalyticsDsl}", per-scenario=${perScenarioDsl}`
       ).toBe(true);
 
-      // Each snapshot subject should have the required fields
+      // Each scenario should have candidate_regimes_by_edge and effective_query_dsl
       for (const s of scenarios) {
-        if (!s.snapshot_subjects?.length) continue;
-        for (const subj of s.snapshot_subjects) {
-          expect(subj.param_id, 'snapshot subject must have param_id').toBeTruthy();
-          expect(subj.core_hash, 'snapshot subject must have core_hash').toBeTruthy();
-          expect(subj.canonical_signature, 'snapshot subject must have canonical_signature').toBeTruthy();
-          expect(subj.anchor_from, 'snapshot subject must have anchor_from').toBeTruthy();
-          expect(subj.anchor_to, 'snapshot subject must have anchor_to').toBeTruthy();
-          // Viewer-now semantics for relative cohort(-30d:) (frozen via addInitScript above).
-          expect(subj.anchor_to).toBe('2026-02-09');
-          expect(subj.anchor_from).toBe('2026-01-10');
-        }
+        expect(s.effective_query_dsl, 'scenario must have effective_query_dsl').toBeTruthy();
+        expect(s.candidate_regimes_by_edge, 'scenario must have candidate_regimes_by_edge').toBeTruthy();
       }
 
       // Robustness: event definitions must be fetched in live share so signature computation is stable.

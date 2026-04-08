@@ -164,6 +164,13 @@ def _build_new_path_request(graph: dict, from_id: str, to_id: str, edge: dict,
 
     analytics_dsl = f'from({from_id}).to({to_id})'
 
+    # Extract temporal clause (window(...) or cohort(...)) from the full
+    # query_dsl so the handler receives it as effective_query_dsl — this
+    # mirrors what the FE sends on the new path.
+    import re
+    temporal_match = re.search(r'((?:window|cohort)\([^)]*\))', query_dsl)
+    effective_query_dsl = temporal_match.group(1) if temporal_match else ''
+
     return {
         'scenarios': [{
             'scenario_id': 'parity-test',
@@ -172,6 +179,7 @@ def _build_new_path_request(graph: dict, from_id: str, to_id: str, edge: dict,
             'visibility_mode': 'f+e',
             'graph': graph,
             'analytics_dsl': analytics_dsl,
+            'effective_query_dsl': effective_query_dsl,
             'candidate_regimes_by_edge': candidate_regimes_by_edge,
         }],
         'query_dsl': query_dsl,

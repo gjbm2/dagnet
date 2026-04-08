@@ -151,6 +151,10 @@ export interface BayesPatchEdge {
     divergences: number;
     evidence_grade: number;
     provenance: string;
+    // LOO-ELPD model adequacy scoring (doc 32)
+    delta_elpd?: number | null;
+    pareto_k_max?: number | null;
+    n_loo_obs?: number | null;
   }>;
   _model_state?: Record<string, number>;
   prior_tier?: string;

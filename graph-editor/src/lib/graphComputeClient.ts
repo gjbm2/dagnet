@@ -1445,7 +1445,7 @@ export class GraphComputeClient {
           metadata: {},
           data: [{ mock: true }],
         },
-        query_dsl: queryDsl,
+        query_dsl: analyticsDsl,
       };
       if (!bypassCache) {
         this.analysisCache.set(cacheKey, { data: result, timestamp: Date.now() });
@@ -1647,7 +1647,7 @@ export class GraphComputeClient {
           },
           data: scenarios.map(s => ({ scenario_id: s.scenario_id, mock: true })),
         },
-        query_dsl: queryDsl,
+        query_dsl: analyticsDsl,
       };
       this.analysisCache.set(cacheKey, { data: result, timestamp: Date.now() });
       return result;

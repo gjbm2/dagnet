@@ -824,10 +824,10 @@ describe('activeContentIndex: compute must use the selected tab properties', () 
 
     // Assert the backend received the tab 1 DSL, not tab 0's
     const call = mockAnalyzeSelection.mock.calls[0];
-    // analyzeSelection(graph, queryDsl, scenarioId, scenarioName, scenarioColour, analysisType, ...)
-    const [, queryDsl, , , , analysisType] = call;
+    // analyzeSelection(graph, analyticsDsl, effectiveQueryDsl, scenarioId, scenarioName, scenarioColour, analysisType, ...)
+    const [, analyticsDsl, , , , , analysisType] = call;
     expect(analysisType).toBe('graph_overview');
-    expect(queryDsl).toContain('from(delegated).to(registered)');
+    expect(analyticsDsl).toContain('from(delegated).to(registered)');
   });
 });
 

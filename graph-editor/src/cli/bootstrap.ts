@@ -40,7 +40,7 @@ export interface CLIContext {
 
 export interface CLICommandOptions {
   /** Additional parseArgs options beyond the shared ones */
-  extraOptions?: Record<string, { type: 'string' | 'boolean'; short?: string; default?: any }>;
+  extraOptions?: Record<string, { type: 'string' | 'boolean'; short?: string; default?: any; multiple?: boolean }>;
   /** If true, --query is not required */
   queryOptional?: boolean;
 }

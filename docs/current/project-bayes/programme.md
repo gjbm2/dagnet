@@ -196,19 +196,20 @@ data-constrained. Single-source validation:
   §14.7.
 - **A→Z multi-hop cohort maturity** (doc 29) — two-phase
   decomposition:
-  - **Phase A — x→y span kernel** (numerator): new analysis type
+  - **Phase A — x→y span kernel** (numerator only): new analysis type
     `cohort_maturity_v2` with full FE+BE registration. Implements
-    `compose_path_maturity_frames` (evidence, exact for all
-    topologies) + `compose_span_kernel` (x→y conditional progression
-    from per-edge posteriors). Row builder restructured to accept span
-    kernel for y projection; existing x forecast unchanged. Linear
-    chains only. Single-hop parity gate against existing
-    `cohort_maturity`. Not yet implemented.
-  - **Phase B — upstream x provider** (denominator): replace row
-    builder's internal x forecast with explicit `x_provider(s, τ)`.
-    Proper anchor-to-x propagation, branching graph support, frontier
-    continuity. Cleanly separable — span kernel consumes whatever x
-    the provider delivers. Not yet designed in detail.
+    `compose_path_maturity_frames` (evidence, all topologies) +
+    `compose_span_kernel` (node-level DP convolution through DAG, all
+    topologies incl. branching). `x_provider(s, τ)`: a_pop when x = a
+    (trivially correct), observed + carry-forward when x ≠ a. Row
+    builder becomes composition layer with frontier conditioning and
+    MC fan. All statistical decisions resolved (last edge's path
+    alpha/beta for prior, last edge's path SDs for MC uncertainty —
+    matches v1 for adjacent-pair parity). Single-hop parity gate.
+    Not yet implemented.
+  - **Phase B — x provider** (denominator only): swap `x_provider`
+    for x ≠ a with proper a→x propagation. Completeness-adjusted
+    frontier conditioning. Span kernel untouched. Not yet designed.
   Docs 30+31 now implemented: BE resolves path from DSL natively.
 - **Snapshot regime selection** (doc 30) — move regime selection from
   FE preflight to authoritative BE selection per (edge, anchor_day,
@@ -303,18 +304,15 @@ data-constrained. Single-source validation:
 8. **FE stats deletion** — ~4000 lines. Graph-level parity proven
    (2-Apr-26). Remaining: D11 onset discrepancy design decision,
    Pattern A fragility review, heuristic dispersion FE parity.
-9. **A→Z multi-hop: Phase A — x→y span kernel** (doc 29) — design
-   complete, unblocked by docs 30+31 (now implemented). New analysis
-   type `cohort_maturity_v2` with full FE+BE registration. Steps:
-   A.0 (register type), A.1 (evidence frame composition), A.2 (span
-   kernel — must match `_read_edge_model_params` key set), A.3
-   (row builder accepts span kernel, existing x forecast unchanged),
-   A.4 (single-hop parity gate), A.5 (multi-hop tests). Linear
-   chains only; branching in Phase B. CLI tooling available.
-10. **A→Z multi-hop: Phase B — upstream x provider** — replace row
-   builder's internal x forecast with `x_provider(s, τ)`. Enables
-   branching, proper anchor-to-x propagation, frontier continuity.
-   Not yet designed in detail. Depends on Phase A being proven.
+9. **x→y multi-hop: Phase A — span kernel** (doc 29) — design
+   complete. New analysis type `cohort_maturity_v2`. `x_provider`:
+   a_pop when x = a (trivially correct), carry-forward when x ≠ a.
+   `span_kernel`: node-level DP through DAG, all topologies.
+   Full fix in window() and cohort() when x = a. Carry-forward
+   approximation for x ≠ a resolved in Phase B.
+10. **x→y multi-hop: Phase B — x provider** — proper a→x propagation
+    for x ≠ a. Completeness-adjusted frontier conditioning. Span
+    kernel untouched. Not yet designed.
 
 ---
 

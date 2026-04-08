@@ -12,6 +12,7 @@ Contexts), `8-compiler-implementation-phases.md` (phase sequencing),
 `11-snapshot-evidence-assembly.md` (Phase S data that Phase C consumes),
 `30-snapshot-regime-selection-contract.md` (regime selection — hard
 prerequisite for Phase C evidence binding),
+`30b-regime-selection-worked-examples.md` (regime selection use cases),
 `programme.md` (programme-level sequencing)
 
 ---
@@ -169,11 +170,14 @@ the common case.
   model (double-counting)
 
 **MECE dimension with partial slices** (`Σ n_slice < n_aggregate`):
-- Compute residual: `(n_agg - Σ n_slice, k_agg - Σ k_slice)`
-- Bind residual as a separate likelihood term for the base-rate variable
-  (but see §14.5 for interaction with per-date routing — residual
-  feeding `p_base` on a mece-regime date conflicts with §5.7)
-- Bind per-slice terms to per-slice variables
+- All slices participate regardless of n — the hierarchical
+  shrinkage handles low-data slices naturally (see §10.2)
+- No residual computation needed — there is no `min_n_slice` gate
+  to create excluded slices
+- If a MECE partition genuinely doesn't sum to the aggregate (e.g.,
+  some context values were not fetched), the difference is
+  unobserved — the model handles this through the parent's prior,
+  not through a residual term
 
 **Non-MECE dimension** (`visited()`):
 - Independent per-slice likelihoods without partition constraint
@@ -182,21 +186,13 @@ the common case.
 - Each slice is a separate observation of `p_slice` with pooling toward
   `p_base`
 
-### 3.4 Residual computation is intra-regime only
+### 3.4 No residual computation
 
-Residual `(n_agg - Σ n_slice, k_agg - Σ k_slice)` is meaningful only
-when aggregate and per-slice observations come from the **same regime**
-(same `core_hash` family, same `retrieved_at`). Doc 30 §11.5
-establishes that regime selection picks one regime per `retrieved_at`
-date: either MECE-partition rows (per-slice) or uncontexted rows
-(aggregate), never both. The aggregate and per-slice observations
-therefore never coexist for the same date.
-
-Residual arises only within a MECE-partition regime when some context
-values are below `min_n_slice` and are excluded from per-slice
-modelling. Their observations fold into the residual term, which
-enters the likelihood under `p_base`. This is an intra-regime
-computation — no cross-regime subtraction.
+With no `min_n_slice` gate (§10.2), all slices participate in the
+model. There are no excluded slices to produce a residual. The
+aggregate and per-slice observations never coexist for the same date
+(doc 30 §11.5 — regime selection picks one per `retrieved_at`). No
+cross-regime subtraction, no intra-regime residual.
 
 ---
 
@@ -219,7 +215,6 @@ SliceGroup
     is_mece: bool
     is_exhaustive: bool         # True if Σ n_slice ≈ n_aggregate
     slices: dict[str, SliceObservations]   # context_key → observations
-    residual: SliceObservations | None     # non-None for partial MECE
 ```
 
 ### 4.2 Extension to EdgeEvidence
@@ -261,14 +256,12 @@ The `bind_evidence()` function (and `bind_snapshot_evidence()`) must:
    evidence skips this step (single DSL era, no hash ambiguity).
 2. Parse `context_key()` from each row's `slice_key` / `sliceDSL`
 3. Group entries by context dimension
-4. Classify each dimension as MECE or non-MECE
-5. Detect exhaustiveness per MECE dimension (intra-regime only, §3.4)
-6. Compute residuals for partial MECE dimensions (intra-regime only)
-7. Route aggregate entries to existing `window_obs`/`cohort_obs` —
+4. Classify each dimension as MECE
+5. Route aggregate entries to existing `window_obs`/`cohort_obs` —
    only for dates where `regime_per_date[date] == 'uncontexted'`
-8. Route sliced entries to `slice_groups` — only for dates where
+6. Route sliced entries to `slice_groups` — only for dates where
    `regime_per_date[date] == 'mece_partition'`
-9. Store `regime_per_date` on `EdgeEvidence` for model emission (§5.7)
+7. Store `regime_per_date` on `EdgeEvidence` for model emission (§5.7)
 
 ---
 
@@ -362,17 +355,16 @@ probability drawn from `weights_slice_i[j]` for sibling j in slice i.
 **Exhaustive groups**: omit the dropout component (as in Phase B).
 Per-slice `weights_slice_i` has K components summing to 1.
 
-### 5.4 Aggregate likelihood for partial MECE dimensions
+### 5.4 ~~Aggregate likelihood for partial MECE dimensions~~ — removed
 
-When MECE slices within a single regime partially cover the aggregate
-(some context values below `min_n_slice`), the residual
-`(n_residual, k_residual)` enters the likelihood under `p_base` (not a
-slice variable). This residual represents un-sliced observations that
-don't belong to any named slice. See §3.4 — residual is always
-intra-regime.
+~~Residual from below-threshold slices was to enter the likelihood
+under `p_base`.~~
 
-For branch groups, the residual enters as a Multinomial under
-`base_weights` (not a per-slice simplex).
+With no `min_n_slice` gate (§10.2), all slices participate. No
+residual term exists. If a MECE partition doesn't sum to the
+aggregate (some context values not fetched), the unobserved portion
+is handled by the parent's prior — not by a residual likelihood
+term.
 
 ### 5.5 Non-MECE dimensions
 
@@ -982,6 +974,168 @@ identified in doc 30 §7.3.1.
 
 ---
 
+## 9A. FE per-slice commissioning: engorged graphs
+
+Phase C requires the FE to produce a complete, per-slice picture for
+the Bayes worker. The design principle: **all file-based data goes
+onto the graph edges. The BE reads structured data off edges. No
+param files in the Bayes payload.**
+
+### 9A.1 Two evidence sources, different handling
+
+1. **Snapshot DB rows** — the BE queries the DB directly via
+   `snapshot_subjects` + regime selection (doc 30). No change from
+   current design. The FE sends hashes and candidate regimes; the
+   BE does the querying.
+
+2. **File-based data** (observations, priors, warm-start) — currently
+   sent as separate param files, parsed by the BE evidence binder
+   (`evidence.py` lines 99-166 for observations, lines 1021-1216
+   for priors). **Replaced by engorged graph edges.** The FE injects
+   everything the BE needs directly onto each per-slice graph's
+   edges. Param files drop out of the Bayes payload entirely.
+
+### 9A.2 What goes onto each engorged graph edge
+
+The FE puts all file-based evidence onto each edge at trigger time.
+The BE reads it directly — no param file lookup, no sliceDSL
+parsing, no file filtering.
+
+**Observations** (currently from param file `values[]`):
+```
+edge._bayes_evidence = {
+    window: [{ n, k, window_from, window_to }],
+    cohort: [{ anchor_day, n_daily, k_daily, dates }]
+}
+```
+
+**Priors and warm-start** (currently from param file posteriors +
+`_model_state`):
+```
+edge._bayes_priors = {
+    prob: { alpha, beta, source, rhat, ess },
+    latency: { onset, mu, sigma, source },
+    kappa: float | null,
+    cohort_latency: { mu, sigma, onset } | null
+}
+```
+
+**Analytics** (from per-slice topo pass — already on model_vars):
+- p, p_sd, onset, mu, sigma, t95, completeness, blended_mean
+
+Each per-slice graph is fully self-contained. The BE evidence binder
+reads `_bayes_evidence` and `_bayes_priors` off each edge. No param
+files needed.
+
+### 9A.3 Why this is simpler
+
+**All fetch planning, slice filtering, and DSL-aware logic stays in
+the FE.** The BE never needs to:
+
+- Parse `sliceDSL` strings or classify observation types from DSL
+- Group observations by context dimension
+- Look up param files by param_id via params_index
+- Filter `values[]` entries per slice
+- Resolve priors from param file posteriors (FE pre-resolves and
+  injects the result)
+- Understand the warm-start quality gates (FE applies them and
+  sends the winning prior)
+
+The BE evidence binder for file-based data becomes: for each edge,
+read `_bayes_evidence` and `_bayes_priors`. Compute completeness
+(using edge topology latency — already on the graph). Done.
+
+### 9A.4 FE commissioning flow
+
+1. **Explode the pinned DSL** into per-slice DSLs (existing fetch
+   planning). Produces the bare parent (`window()` / `cohort()` —
+   always produced) + each context slice.
+
+2. **Ensure data is fetched** for all slices. The fetch planner
+   already handles this.
+
+3. **Run the topo pass per slice.** Filter param file values by
+   slice dimensions (same filtering `fetchDataService.ts` already
+   does), call `enhance_graph_latencies`. N+1 topo passes. Overhead:
+   < 1s per call, negligible vs MCMC time.
+
+4. **Engorge each graph.** For each per-slice graph, for each edge:
+   - Inject filtered observations from param file `values[]`
+     → `_bayes_evidence`
+   - Resolve warm-start priors (apply quality gates: rhat ≤ 1.10,
+     ess ≥ 100) and inject the winning prior → `_bayes_priors`
+   - Analytics already on model_vars from step 3
+
+5. **Build the Bayes trigger payload:**
+   - N+1 engorged graph snapshots
+   - Snapshot subjects + candidate regimes + mece_dimensions
+   - Settings
+   - **No `parameter_files`. No `parameters_index`.**
+
+### 9A.5 What the Bayes worker does
+
+For each edge on each graph:
+- Read `_bayes_evidence` → build `WindowObservation` /
+  `CohortObservation` (direct field mapping, no parsing)
+- Read `_bayes_priors` → populate `ProbabilityPrior`,
+  `LatencyPrior`, κ warm-start (direct field mapping)
+- Compute completeness from edge topology latency (unchanged)
+- If snapshot subjects provided: query DB, apply regime selection,
+  merge snapshot observations with graph-based observations
+  (supplementation reads graph for uncovered dates)
+
+The worker does not parse sliceDSL. Does not look up param files.
+Does not know the DSL. Does not apply quality gates. It reads
+structured data off graph edges and builds the model.
+
+### 9A.6 Refactoring in `evidence.py`
+
+**Replace** (`bind_evidence()` lines 99-166): param file `values[]`
+parsing loop → read `_bayes_evidence` off graph edge.
+
+**Replace** (lines 86-97, 1021-1216): prior resolution from param
+files (`_resolve_prior()`, `_resolve_latency_prior()`,
+`_resolve_warm_start_extras()`) → read `_bayes_priors` off graph
+edge. The FE already applied quality gates.
+
+**Keep**: completeness computation (same CDF logic, edge topology
+source). Keep model emission, inference. Keep snapshot evidence
+binding (unchanged — BE still queries DB directly).
+
+**Snapshot supplementation** (lines 297-307): for anchor_days not
+covered by snapshot rows, falls back to graph edge observations
+instead of param file values[].
+
+### 9A.7 Phase C slice routing simplification
+
+With engorged per-slice graphs, the file-based evidence path needs
+no slice routing. Each graph IS one slice. The `_route_slices()`
+function (lines 1239-1368) is only relevant for the snapshot path
+where the BE receives multi-slice rows from the DB.
+
+### 9A.8 Why per-slice analytics are required
+
+1. **LOO-ELPD denominator** (doc 32 §3.3): per-slice ΔELPD needs
+   per-slice analytic baseline, not the aggregate.
+
+2. **Prior resolution**: cold-start falls back to analytic priors.
+   Must be slice-specific.
+
+3. **Warm-start quality gating**: per-slice rhat/ESS gates.
+
+### 9A.9 Cost
+
+- FE: N+1 topo passes (< 1s each) + engorging step (copy filtered
+  values + resolved priors onto edges)
+- Payload: N+1 graphs sharing identical topology. Observation data
+  moves from param files to graph edges — roughly neutral payload
+  size, minus the params_index overhead.
+- BE: simpler evidence binder, fewer dependencies, easier to test.
+  No param file parsing code. No sliceDSL parsing code. No prior
+  resolution code (moved to FE engorging step).
+
+---
+
 ## 10. Variable count scaling and performance
 
 ### 10.1 Variable count estimates
@@ -1003,17 +1157,20 @@ NUTS scales roughly linearly with variable count for moderate-dimension
 models (< 500 variables). The `target_accept=0.95` from Phase A may
 need relaxing if step-size adaptation struggles with the larger model.
 
-### 10.2 Minimum-n gate per slice
+### 10.2 ~~Minimum-n gate per slice~~ — removed
 
-The existing `min_n_threshold` (default 10) applies per edge. Phase C
-needs a per-slice minimum-n gate: slices with fewer than `min_n_slice`
-observations (default 10) should be excluded from the likelihood and
-not given their own latent variable. Their observations fold into the
-aggregate/residual.
+~~Phase C was to have a per-slice `min_n_slice` gate excluding
+low-data slices from the model.~~
 
-This prevents the model from wasting variables on slices with
-insufficient data to inform a deviation, and avoids numerical issues
-in the Multinomial likelihood with very small counts.
+This is unnecessary. The hierarchical shrinkage naturally handles
+low-data slices: with few observations, the posterior sits close to
+`p_base` with wide uncertainty. No numerical issues arise from small
+counts in Binomial or Multinomial likelihoods. The shrinkage prior
+IS the minimum-n gate — it makes low-data slices uninformative
+rather than excluding them. All slices participate regardless of n.
+
+The existing per-edge `min_n_threshold` remains (an edge with zero
+or near-zero total observations should not enter the model at all).
 
 ---
 
@@ -1059,9 +1216,11 @@ implemented now — Phase C step 3 depends on it.
 
 8. **Parameter recovery tests**: synthetic slice data per doc 8 §Phase
    C test scenarios (high-data slice, low-data slice, different true p,
-   MECE partition, non-MECE dimension). Must include mixed-epoch
-   scenarios (some dates uncontexted, some mece-partition) to verify
-   per-date likelihood routing.
+   MECE partition). Must include mixed-epoch scenarios (some dates
+   uncontexted, some mece-partition) to verify per-date likelihood
+   routing. Must satisfy doc 30 RB-003 contract (regime tag drives
+   likelihood structure). Must include 1/N κ correction validation
+   for independent dimensions (§14.6d).
 
 Steps 1–2 are independent of Phase D and doc 30. Step 3 requires doc
 30 regime selection. Steps 4–7 require Phase D latent latency —
@@ -1161,109 +1320,50 @@ Regime selection is a snapshot DB concern only (multiple fetch eras
 coexisting under different `core_hash` values). §4.3 step 1 applies
 only when binding from snapshot rows.
 
-### 14.4 Non-MECE dimensions and regime kind
+### ~~14.4 Non-MECE dimensions and regime kind~~ — RESOLVED (non-issue)
 
-§5.5 defines `visited()` as non-MECE: independent per-slice
-likelihoods, no partition constraint, aggregate excluded. But doc
-30's `CandidateRegime.regime_kind` is `'mece_partition'` or
-`'uncontexted'`. A `visited()` hash is neither — it is a non-MECE
-partition.
+`visited()` is not a context partitioning dimension — it is a query
+filter used in analytics query DSLs and `conditional_p` definitions.
+It does not appear in pinned DSL context positions and does not
+produce sliced observations for the Bayes model. There are no
+non-MECE slice dimensions in practice. §3.1's non-MECE row and §5.5
+describe a theoretical case that does not arise in Phase C. The
+`regime_kind` enum (`'mece_partition' | 'uncontexted'`) is
+sufficient.
 
-The §5.7 per-date routing rule ("mece → child terms, uncontexted →
-parent terms") does not cover this case. For `visited()` slices:
-- The aggregate is always excluded (§5.5) regardless of regime
-- Per-slice terms are emitted for dates where the visited hash has
-  data
-- No parent term on any date (not because of Dirichlet upward
-  flow as in the MECE case, but because the aggregate double-counts
-  overlapping visits)
+### ~~14.5 `min_n_slice` residual on mece-regime dates~~ — RESOLVED (non-issue)
 
-**Likely resolution**: add `'non_mece_partition'` as a third
-`regime_kind`. Routing rule: emit per-slice terms, never emit parent
-term, no residual. Or: treat `visited()` as a special case in the
-evidence binder that bypasses the regime routing entirely (since
-there is no parent/child ambiguity — the aggregate is always
-excluded).
+The `min_n_slice` gate (§10.2) is unnecessary. The hierarchical
+shrinkage handles low-data slices naturally — a slice with n=8 has
+little data to deviate from `p_base`, so its posterior sits close to
+the base rate with wide uncertainty. Binomial(8, p) is well-defined.
+No numerical issues. The shrinkage IS the minimum-n gate.
 
-Needs decision before step 3.
+No residual computation, no threshold, no special routing. All
+slices participate in the model regardless of n. §10.2 should be
+revised to remove the `min_n_slice` gate.
 
-### 14.5 `min_n_slice` residual on mece-regime dates
+### ~~14.6 DSL shape detection and hierarchy construction (§5A)~~ — mostly RESOLVED
 
-§10.2 says slices below `min_n_slice` fold into the residual, which
-enters the likelihood under `p_base`. §5.7 says mece-regime dates
-have no parent likelihood term. These conflict: below-threshold
-residual on a mece-regime date IS a parent term.
+**a) Detection implementation**: §5A.6 specifies the algorithm
+(dimension-key intersection test). Implementation detail, not a
+design decision.
 
-Options:
-- **Allow the exception**: residual from below-threshold slices feeds
-  `p_base` directly even on mece-regime dates. This is a small,
-  controlled amount of data (by definition, the excluded slices have
-  few observations) and does not cause meaningful double-counting
-  because the excluded slices' data is NOT also feeding children.
-- **Discard below-threshold observations**: no residual on mece
-  dates. Data loss, but keeps the routing rule clean.
-- **Pool below-threshold slices into a synthetic "other" child**:
-  a catch-all slice child in the Dirichlet that receives the
-  residual. No parent term needed — the residual flows through the
-  hierarchy like any other child. Avoids both double-counting and
-  data loss.
+**b) Flat vs multi-level**: resolved — multi-level hierarchy is the
+default (§5A.3 Rule 2).
 
-The "other child" option is likely cleanest. Needs decision before
-step 4.
+**c) Partial overlap rejection**: `context(a).context(b);context(b).context(c)`
+is pathological — add validation check to reject at DSL/graph
+validation time. Implementation detail.
 
-### 14.6 DSL shape detection and hierarchy construction (§5A)
-
-§5A defines the taxonomy and rules but several implementation
-decisions remain:
-
-**a) Detection implementation**: §5A.6 defines the dimension-key
-intersection test for classifying semicoloned parts as independent vs
-subsumption vs partial overlap. This must be implemented in the
-evidence binder (or a pre-processing step) to determine which
-Dirichlet hierarchies to construct. Needs to happen in step 3.
-
-**b) Flat vs multi-level for subsumption (§5A.3 Rule 2)**: the v1
-recommendation is flat compound Dirichlet with coarser-than-model
-data routing to parent. The multi-level alternative (intermediate
-a-marginal nodes) is deferred. If parameter recovery tests (step 8)
-show the parent is poorly constrained when most training dates have
-only marginal data and few dates have cross-product data, revisit.
-
-**c) Partial overlap rejection**: §5A.6 says partial overlap should
-be rejected by DSL validation. Need to confirm this is enforced in
-`explodeDSL` or at graph validation time, and decide the error
-handling (hard error vs warning + fallback).
-
-**d) Independent dimension overcounting**: when a pinned DSL has
-`context(a);context(b)` (semicolon = independent dimensions), N
-Dirichlet groups each constrain the parent with the same underlying
-evidence. This overcounts the parent's effective sample size by a
-factor of N.
-
-**Proposed approach**: downweight each group's Dirichlet
-concentration parameter by 1/N. If 2 independent groups each see
-100 conversions, each contributes concentration × 0.5, giving the
-parent ESS ≈ 100 (not 200). In PyMC: multiply the concentration
-prior by `1/N` per group.
-
-**This is approximate.** κ controls how tightly children cluster
-around the parent (Dirichlet concentration), not the likelihood
-contribution directly. Loosening κ reduces the parent's effective
-sample size indirectly — children can deviate more, so the parent
-is less constrained. But the relationship between κ and parent ESS
-is not linear, and the correction is exact only when dimensions
-have equal sample sizes and zero correlation. **Verify via parameter
-recovery test** (step 8): generate synthetic data with known parent
-rate and two independent MECE decompositions, compare parent
-posterior width with vs without the 1/N correction, confirm it
-matches the single-dimension case.
-
-This assumes independence between dimensions — which is forced
-when using semicolons (no cross-product data to estimate
-correlation). If the DSL uses dot-product (`context(a).context(b)`),
-the full cross-product is available and a single joint hierarchy
-could model the correlation, but 1/N is a valid conservative
-default.
+**d) Independent dimension overcounting**: start with 1/N κ
+correction — each of N independent Dirichlet groups gets its
+concentration prior multiplied by `1/N`. This is approximate (κ
+controls clustering tightness, not likelihood contribution
+directly), but a reasonable starting point. Validate in parameter
+recovery tests (step 8): synthetic data with known parent rate and
+two independent MECE decompositions, compare parent posterior width
+with vs without correction. Adjust if needed.
 
 ### ~~14.7 Cross-instance coordination and `regime_per_date` type~~ — RESOLVED
 
@@ -1289,175 +1389,30 @@ than emit an unconstrained parent. Check: after evidence binding, if
 with obs on any date), reject the edge with a clear error naming the
 missing data.
 
-### 14.8 `doc 30b` references in §14.12
+### ~~14.8 `doc 30b` references in §14.12~~ — RESOLVED
 
-§14.12 references "Use Case B in doc 30b §6" and "Use Case C/D in
-doc 30b §7–8". If doc 30b exists, it should be added to the Related
-header. If it is a draft or does not yet exist, the references
-should be marked as forward-looking. Verify before implementation.
+Doc 30b exists: `30b-regime-selection-worked-examples.md`. References
+in §14.12 are valid.
 
-### 14.9 §14.12 (FE commissioning) is a design spec, not an open issue
+### ~~14.9 §14.12 (FE commissioning) is a design spec, not an open issue~~ — RESOLVED
 
-§14.12 is ~100 lines of implementation-ready design: the two data
-classes, the 4-step commissioning flow, the schema implication. It
-reads as a settled design, not an open question. Consider promoting
-to a main-body section (e.g. §5B or §9A) since steps 3–4 of Phase C
-implementation depend on it. The one genuinely open part — the
-`model_vars` schema change (two options at the end) — could remain
-as an open issue.
+Promoted to main body as §9A. The `model_vars` schema choice (two
+options at end of §9A) remains open — to be resolved during
+implementation.
 
-### 14.10 Doc 30 RB-003 as Phase C contract test
+### ~~14.10 Doc 30 RB-003 as Phase C contract test~~ — RESOLVED
 
-Doc 30 §7.3.11 Gap 5 explicitly flags RB-003 (regime tag drives
-likelihood structure) as a Phase C test prerequisite. When Phase C
-is built, a corresponding test must verify the evidence binder
-consumes `regime_per_date` and emits the correct likelihood
-structure. §11 step 8 should cross-reference RB-003.
+Cross-referenced in §11 step 8.
 
-### 14.11 `context()` DSL fix and the absent-aggregate path
+### ~~14.11 `context()` DSL fix and the absent-aggregate path~~ — RESOLVED (accepted)
 
-Doc 30 §10 resolves the `context()` syntax for "also fetch
-uncontexted aggregate". If this ships before Phase C, the common
-case becomes "aggregate observations usually present" (both
-uncontexted and contexted data fetched). §5.7's absent-aggregate
-path ("parent informed solely through hierarchy") becomes a fallback
-for legacy data, not the primary path.
+Not blocking. Either path works architecturally — with the DSL fix,
+aggregate observations are usually present; without it, the parent
+is informed solely through the hierarchy. Step 8 parameter recovery
+tests must cover both scenarios regardless. The DSL fix (doc 30 §10)
+is independent work that benefits Phase C but is not a prerequisite.
 
-If it does NOT ship before Phase C, the absent-aggregate path is
-the primary path for all contexted edges. This affects testing
-priority — the absent-aggregate scenario needs thorough coverage
-either way, but especially if it is the default.
-
-Not blocking — either path works architecturally. But affects
-testing emphasis in step 8.
-
-### 14.12 FE per-slice commissioning contract
-
-Phase C requires the FE to produce a complete, per-slice "one-time
-picture" for the Bayes worker. This section specifies what that
-picture contains, why, and how the FE produces it.
-
-**Two classes of data the Bayes worker consumes:**
-
-1. **Snapshot DB rows** — the worker queries these itself via
-   `snapshot_subjects` and the DB connection. The snapshot DB is
-   context-aware natively: rows carry `slice_key` and the worker
-   filters by it. **No FE per-slice prep needed for this source.**
-
-2. **The "one-time picture"** — the graph snapshot and parameter
-   files as they exist at trigger time. This picture is
-   DSL-dependent because the FE topo pass (analytics) runs on
-   data filtered by the active query DSL. **This source must be
-   prepared per slice by the FE.**
-
-The graph topology (nodes, edges, connections) is invariant across
-slices — one graph is sent. What varies per slice is the analytic
-model_vars on the edges and the posterior/prior entries on the
-param files.
-
-**Why per-slice analytics are required:**
-
-1. **LOO-ELPD denominator** (doc 32 §3.3): ΔELPD compares the
-   Bayesian posterior against the analytic baseline. Each context
-   slice gets its own Bayesian posterior (§5.2–5.3). The denominator
-   must be the analytic model_vars for **that slice** — not the
-   aggregate. The analytic model_vars are DSL-dependent (the topo
-   pass runs on DSL-filtered data), so using the aggregate baseline
-   for a context-specific ΔELPD is a category error.
-
-2. **Prior resolution**: when no previous Bayesian posterior exists
-   for a slice (cold start), the Bayes compiler falls back to
-   analytic priors. These must be slice-specific — the p for
-   `context(channel:google)` differs from the aggregate p. The
-   param files already support per-slice posterior storage (doc 21
-   `posterior.slices`), but the analytic fallback values come from
-   the graph's model_vars.
-
-3. **Warm-start quality gating**: the quality gate for warm-start
-   uses the previous posterior's rhat/ESS. For Phase C, this is
-   per-slice. The analytic fallback when the gate fails must also
-   be per-slice.
-
-**Why the worker cannot produce analytics itself:**
-
-The BE topo pass (`enhance_graph_latencies` in `stats_engine.py`)
-requires pre-filtered inputs: `param_lookup` (cohort data filtered
-by DSL dimensions), `edge_contexts` (onset from window slices,
-forecast cohorts), and `query_mode`. These are constructed in
-`fetchDataService.ts` and `beTopoPassService.ts` from the active
-DSL and param file values. The worker has no DSL context and no
-param file filtering logic — it receives the finished picture.
-There is one code path for analytics (the topo pass), and the FE
-drives it.
-
-**FE commissioning flow:**
-
-1. **Explode the pinned DSL** into per-slice DSLs. This already
-   happens during fetch planning. The explosion produces:
-   - The bare (uncontexted) parent: `window()` or `cohort()` —
-     **always produced**, regardless of whether the pinned DSL
-     includes context clauses. This is mandatory: the Dirichlet
-     hierarchy (§5.2–5.3) needs the parent as its anchor. Without
-     a parent analytic baseline, LOO scoring has no denominator
-     for the aggregate model, and cold-start prior fallback has
-     no aggregate p to fall back to.
-   - Each context slice: `window().context(channel:google)`,
-     `window().context(channel:organic)`, etc.
-
-2. **Run the topo pass per slice.** For each exploded slice DSL,
-   FE filters param file values by that slice's dimensions (same
-   filtering `fetchDataService.ts` already does during Stage 2)
-   and calls `enhance_graph_latencies` on the filtered data. This
-   produces per-slice analytic model_vars: p, p_sd, onset, mu,
-   sigma, t95, completeness, blended_mean. The FE already does
-   this once on the aggregate as part of every fetch cycle — the
-   change is doing it N+1 times (parent + N children).
-
-3. **Put per-slice analytic model_vars on the graph edges.** The
-   model_vars array on each edge grows from one `analytic` entry
-   per edge to one per (edge, context_key). See schema
-   implications below.
-
-4. **Build the Bayes trigger payload** as today: graph_snapshot
-   (now with per-slice model_vars), parameter_files (with per-slice
-   `posterior.slices` for warm-start — doc 21), snapshot_subjects
-   (with per-slice hashes — doc 30). All three are slice-coherent
-   because the FE produced them from the same exploded DSL.
-
-**What the Bayes worker does with this:**
-
-The worker receives one graph with per-slice analytic model_vars,
-param files with per-slice posteriors, and per-slice snapshot
-subjects. It queries the DB per slice hash (Use Case B in doc 30b
-§6 — no regime selection needed for per-slice reads). The
-aggregate/parent uses regime selection (Use Case C/D in doc 30b
-§7–8) across candidate hashes. The evidence binder builds per-slice
-observations (§4.3). The LOO scorer (`loo.py`) reads per-slice
-analytic baselines from the graph and computes per-slice ΔELPD.
-
-The worker does not run the topo pass. It does not filter param
-data. It does not know the DSL. It consumes the finished per-slice
-picture the FE prepared.
-
-**Cost:**
-
-Running the topo pass N+1 times instead of once.
-`enhance_graph_latencies` is fast (< 1s per call), so even with
-10 context slices the overhead is under 10s — negligible compared
-to MCMC time (30–120s).
-
-**Schema implication:**
-
-The `model_vars` array on graph edges currently holds entries keyed
-only by `source` (`analytic`, `analytic_be`, `bayesian`, `manual`).
-For Phase C, `analytic` entries must also be keyed by context_key
-(or slice DSL). Design options:
-- Add a `context_key` field to `ModelVarsEntry` (empty string for
-  aggregate) — minimal schema change, backward compatible.
-- Nest per-slice entries under a `slices` map within the `analytic`
-  entry — mirrors the `posterior.slices` pattern from doc 21.
-
-To be resolved during Phase C implementation.
+### ~~14.12 FE per-slice commissioning contract~~ — promoted to §9A
 
 ---
 
