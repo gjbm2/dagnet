@@ -285,9 +285,74 @@ class EdgeEvidence:
     slice_groups: dict[str, SliceGroup] = field(default_factory=dict)
     has_slices: bool = False
 
+    # Suppression counts (populated by _bind_from_snapshot_rows)
+    rows_received: int = 0           # rows entering _bind_from_snapshot_rows
+    rows_post_aggregation: int = 0   # rows after context aggregation
+    rows_aggregated: int = 0         # rows removed by context aggregation
+
     # Skip state
     skipped: bool = False
     skip_reason: str = ""
+
+    def content_hash(self) -> str:
+        """SHA-256 of model-input fields for parity comparison.
+
+        Covers everything that affects the model: priors, observations,
+        warm-start hints, skip state. Excludes diagnostic metadata
+        (rows_received, rows_aggregated, file_path) that doesn't enter
+        the likelihood.
+        """
+        import hashlib, json
+
+        def _prior_dict(p: 'ProbabilityPrior') -> dict:
+            return {"alpha": p.alpha, "beta": p.beta, "source": p.source}
+
+        def _lat_dict(lp: 'LatencyPrior | None') -> dict | None:
+            if lp is None:
+                return None
+            return {
+                "onset": lp.onset_delta_days, "mu": lp.mu, "sigma": lp.sigma,
+                "onset_uncertainty": lp.onset_uncertainty, "source": lp.source,
+                "onset_obs": lp.onset_observations,
+            }
+
+        def _traj_dict(t: 'CohortDailyTrajectory') -> dict:
+            return {
+                "date": t.date, "n": t.n, "obs_type": t.obs_type,
+                "ages": t.retrieval_ages, "cum_y": t.cumulative_y,
+                "cum_x": t.cumulative_x, "path": t.path_edge_ids,
+                "recency": round(t.recency_weight, 6),
+            }
+
+        def _daily_dict(d: 'CohortDailyObs') -> dict:
+            return {"date": d.date, "n": d.n, "k": d.k, "age": d.age_days,
+                    "compl": round(d.completeness, 6)}
+
+        def _co_dict(co: 'CohortObservation') -> dict:
+            return {
+                "dsl": co.slice_dsl,
+                "trajs": [_traj_dict(t) for t in co.trajectories],
+                "daily": [_daily_dict(d) for d in co.daily],
+            }
+
+        def _wo_dict(wo: 'WindowObservation') -> dict:
+            return {"n": wo.n, "k": wo.k, "dsl": wo.slice_dsl,
+                    "compl": round(wo.completeness, 6)}
+
+        canonical = {
+            "edge_id": self.edge_id,
+            "param_id": self.param_id,
+            "prior": _prior_dict(self.prob_prior),
+            "latency_prior": _lat_dict(self.latency_prior),
+            "window_obs": [_wo_dict(wo) for wo in self.window_obs],
+            "cohort_obs": [_co_dict(co) for co in self.cohort_obs],
+            "total_n": self.total_n,
+            "kappa_warm": self.kappa_warm,
+            "cohort_latency_warm": self.cohort_latency_warm,
+            "skipped": self.skipped,
+        }
+        blob = json.dumps(canonical, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(blob.encode()).hexdigest()[:16]
 
 
 @dataclass
@@ -298,6 +363,155 @@ class BoundEvidence:
     today: str = ""
     diagnostics: list[str] = field(default_factory=list)
     n_drift_bins: int = 1           # Phase D drift: number of time bins (future)
+
+
+# ---------------------------------------------------------------------------
+# Binding receipt — diagnostic audit trail for evidence binding
+# ---------------------------------------------------------------------------
+
+@dataclass
+class EdgeBindingReceipt:
+    """Per-edge audit receipt produced after evidence binding.
+
+    Captures what data was expected, what arrived, what was filtered,
+    and whether the binding is healthy enough for inference.
+    """
+    edge_id: str = ""
+    param_id: str = ""
+
+    # Verdict: pass / warn / fail
+    verdict: str = "pass"
+
+    # Hash coverage
+    expected_hashes: list[str] = field(default_factory=list)
+    hashes_with_data: list[str] = field(default_factory=list)
+    hashes_empty: list[str] = field(default_factory=list)
+
+    # Row counts through the pipeline
+    rows_raw: int = 0
+    rows_post_regime: int = 0
+    regimes_seen: int = 0
+    regime_selected: str = ""
+
+    # Suppression
+    rows_post_suppression: int = 0
+    rows_suppressed: int = 0
+
+    # Slice coverage
+    expected_slices: list[str] = field(default_factory=list)
+    observed_slices: list[str] = field(default_factory=list)
+    missing_slices: list[str] = field(default_factory=list)
+    unexpected_slices: list[str] = field(default_factory=list)
+    orphan_rows: int = 0
+
+    # Evidence source classification
+    evidence_source: str = "none"   # snapshot / param_file / mixed / none
+
+    # Observation counts
+    window_trajectories: int = 0
+    window_daily: int = 0
+    cohort_trajectories: int = 0
+    cohort_daily: int = 0
+    total_n: int = 0
+
+    # Anchor range
+    expected_anchor_from: str = ""
+    expected_anchor_to: str = ""
+    actual_anchor_from: str = ""
+    actual_anchor_to: str = ""
+    anchor_days_covered: int = 0
+
+    # Skip state
+    skipped: bool = False
+    skip_reason: str = ""
+
+    # Content hash of the assembled EdgeEvidence (model inputs).
+    # Used for parity comparison between different payload contracts
+    # (e.g. param-file path vs engorged-graph path). If two paths
+    # produce the same evidence_hash for the same edge, the model
+    # inputs are identical.
+    evidence_hash: str = ""
+
+    # Human-readable divergence notes
+    divergences: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialise to a plain dict for JSON output."""
+        return {
+            "edge_id": self.edge_id,
+            "param_id": self.param_id,
+            "verdict": self.verdict,
+            "expected_hashes": self.expected_hashes,
+            "hashes_with_data": list(self.hashes_with_data),
+            "hashes_empty": list(self.hashes_empty),
+            "rows_raw": self.rows_raw,
+            "rows_post_regime": self.rows_post_regime,
+            "regimes_seen": self.regimes_seen,
+            "regime_selected": self.regime_selected,
+            "rows_post_suppression": self.rows_post_suppression,
+            "rows_suppressed": self.rows_suppressed,
+            "expected_slices": self.expected_slices,
+            "observed_slices": self.observed_slices,
+            "missing_slices": self.missing_slices,
+            "unexpected_slices": self.unexpected_slices,
+            "orphan_rows": self.orphan_rows,
+            "evidence_source": self.evidence_source,
+            "window_trajectories": self.window_trajectories,
+            "window_daily": self.window_daily,
+            "cohort_trajectories": self.cohort_trajectories,
+            "cohort_daily": self.cohort_daily,
+            "total_n": self.total_n,
+            "expected_anchor_from": self.expected_anchor_from,
+            "expected_anchor_to": self.expected_anchor_to,
+            "actual_anchor_from": self.actual_anchor_from,
+            "actual_anchor_to": self.actual_anchor_to,
+            "anchor_days_covered": self.anchor_days_covered,
+            "skipped": self.skipped,
+            "skip_reason": self.skip_reason,
+            "evidence_hash": self.evidence_hash,
+            "divergences": self.divergences,
+        }
+
+
+@dataclass
+class BindingReceipt:
+    """Graph-level summary of evidence binding outcomes.
+
+    Aggregates per-edge receipts into a single diagnostic object
+    that can be logged, returned in the result payload, or used
+    to gate inference (mode='gate').
+    """
+    edge_receipts: dict[str, EdgeBindingReceipt] = field(default_factory=dict)
+
+    # Graph-level summary counts
+    edges_expected: int = 0
+    edges_bound: int = 0
+    edges_fallback: int = 0
+    edges_skipped: int = 0
+    edges_no_subjects: int = 0
+    edges_warned: int = 0
+    edges_failed: int = 0
+
+    # Mode and halt state
+    mode: str = "log"           # log / gate
+    halted: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialise to a plain dict for JSON output."""
+        return {
+            "edge_receipts": {
+                eid: r.to_dict() for eid, r in self.edge_receipts.items()
+            },
+            "edges_expected": self.edges_expected,
+            "edges_bound": self.edges_bound,
+            "edges_fallback": self.edges_fallback,
+            "edges_skipped": self.edges_skipped,
+            "edges_no_subjects": self.edges_no_subjects,
+            "edges_warned": self.edges_warned,
+            "edges_failed": self.edges_failed,
+            "mode": self.mode,
+            "halted": self.halted,
+        }
 
 
 # ---------------------------------------------------------------------------

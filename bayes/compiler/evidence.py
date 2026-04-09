@@ -398,6 +398,9 @@ def _bind_from_snapshot_rows(
     """
     from collections import defaultdict
 
+    # Record incoming row count for binding receipt
+    ev.rows_received = len(rows)
+
     # Step 1: Classify each row and group by (obs_type, anchor_day).
     # Rows from different slice_keys for the same anchor_day are the
     # same Cohort observed via different queries — merge them.
@@ -458,6 +461,11 @@ def _bind_from_snapshot_rows(
         window_by_day[anchor_day].extend(ret_map.values())
     for anchor_day, ret_map in agg_cohort.items():
         cohort_by_day[anchor_day].extend(ret_map.values())
+
+    # Record post-aggregation row counts for binding receipt
+    _n_post_agg = sum(len(v) for v in window_by_day.values()) + sum(len(v) for v in cohort_by_day.values())
+    ev.rows_post_aggregation = _n_post_agg
+    ev.rows_aggregated = n_ctx_aggregated
 
     if n_ctx_aggregated > 0:
         diagnostics.append(

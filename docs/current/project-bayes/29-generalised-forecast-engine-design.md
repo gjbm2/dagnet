@@ -458,7 +458,20 @@ updating, then uses the posterior predictive for the forecast beyond
 tau_observed. This is what makes the fan narrow around observed data
 and widen into the future.
 
-Phase A must preserve this. The approach:
+**Preservation rule: new operators, same sampler.** Phase A must keep
+the current cohort-maturity forecasting discipline and only swap the
+inner single-edge ingredients for richer span-level ones. In
+particular, it must preserve:
+
+- the observed/forecast splice at `tau_observed`
+- the D/C decomposition (frontier survivors vs future arrivals)
+- conditional late-conversion sampling for the D population only
+- continuous expected-mass treatment of the C population (no Binomial
+  noise on model-predicted future arrivals)
+- posterior-draw fan generation and the current clipping/boundedness
+  discipline
+
+The approach:
 
 1. **Per-cohort frontier conditioning**: At tau_observed, the composed
    evidence frames provide actual (y_at_y, x_at_x). Update the prior
@@ -530,7 +543,9 @@ Phase A introduces two explicit inputs:
 
 The row builder becomes a **composition layer** that applies the
 numerator formula from Layer 3 and the frontier conditioning from
-Layer 3's MC fan section.
+Layer 3's MC fan section. It stops hard-coding the single-edge
+`p × CDF` ingredients; it does **not** replace the outer
+cohort-maturity sampler.
 
 **Why introduce x_provider in Phase A** (not Phase B): If Phase A
 leaves x hidden inside the row builder, Phase B must refactor the row
@@ -577,14 +592,24 @@ For each cohort s:
 1. Call `x_provider(s, τ)` to get X_x(s, τ) for all τ — this is
    arrivals at x (when x = a: simply a_pop; when x ≠ a: observed
    then carry-forward)
-2. Compute ΔX_x(s, τ) = X_x(s, τ) − X_x(s, τ−1) — in window mode
-   and cohort mode with x = a, this is a delta at τ=0
-3. Convolve with K to get unconditional forecast of y
-4. At tau_observed, read actual (y_obs, x_obs) from evidence
-5. Update prior → posterior (frontier conditioning, Layer 3)
-6. Forecast beyond tau_observed using posterior predictive + kernel
-   shape
-7. MC fan: draw rate samples, forecast per draw, take quantiles
+2. Use the observed prefix exactly as today: actual `(x_obs, y_obs)` up
+   to `tau_observed`, forecast only beyond the frontier
+3. Split the immature region exactly as today into:
+   - **D**: frontier survivors already at x by `tau_observed`
+   - **C**: future arrivals to x after `tau_observed`
+4. For **D**, use the span kernel in the same conditional style as the
+   current code:
+   `q_late(τ) = (K(τ) - K(tau_observed)) / (1 - K(tau_observed))`
+   and preserve the existing sampling discipline (`none` / `normal` /
+   `binomial`)
+5. For **C**, treat future arrivals as model-predicted mass, not as
+   observed Binomial trials. Combine arrival increments `ΔX_x` with the
+   span kernel to get expected future `y`; do not introduce Binomial
+   noise for this term
+6. Combine observed prefix + forecast suffix, clip `y` into `[0, x]`,
+   and preserve cumulative monotonicity / boundedness as in v1
+7. MC fan: draw posterior rate samples (and latency-shape uncertainty
+   where enabled), forecast per draw, aggregate quantiles
 
 #### Layer 5: Frontend — chart rendering
 
@@ -619,7 +644,7 @@ type (rename v2 → `cohort_maturity`) or keep both.
 | **A.0** | Register `cohort_maturity_v2` — full FE+BE per adding-analysis-types checklist. Reuse `cohort_maturity` ECharts builder. BE handler initially clones existing pipeline. | — | Low |
 | **A.1** | `compose_path_maturity_frames()` — evidence frame composition. Handles all topologies (branching at x, fan-in at y). Uses canonical denominator carrier rule. | — | Medium: join alignment |
 | **A.2** | `compose_span_kernel()` — conditional x→y kernel via numerical convolution of per-edge sub-probability densities on tau grid. Route enumeration + summation for branching. | — | Medium: DAG traversal + convolution |
-| **A.3** | Extract `x_provider(s, τ)` — a_pop when x = a, observed + carry-forward when x ≠ a. Extract row builder as composition layer: convolution + frontier conditioning + MC fan. Uses last edge's path alpha/beta for prior, last edge's path SDs for MC uncertainty. | A.0, A.1, A.2 | High: row builder refactor + frontier conditioning |
+| **A.3** | Extract `x_provider(s, τ)` — a_pop when x = a, observed + carry-forward when x ≠ a. Extract row builder as composition layer **while preserving the current D/C decomposition, frontier conditioning, sampling modes, clipping discipline, and MC fan behaviour**. Uses last edge's path alpha/beta for prior, last edge's path SDs for MC uncertainty. | A.0, A.1, A.2 | High: row builder refactor + frontier conditioning |
 | **A.4** | **Single-hop parity gate**: v1 vs v2 on adjacent subjects, field-by-field. Real graph data. | A.3 | Required gate |
 | **A.5** | **Multi-hop tests**: evidence parity (all topologies) + forecast convergence (τ→∞, rate→span_p) + frontier conditioning (fan narrows at observed data, widens into future) | A.1, A.2, A.3 | Required gate |
 
@@ -714,6 +739,11 @@ cohort_maturity_v2` provides end-to-end development testing.
    carry-forward beyond, (c) the convolution Y_y = ΔX_x * K produces
    the correct unconditional forecast.
 
+5. **Sampling-discipline parity**: For adjacent pairs, v2 preserves the
+   existing cohort-maturity sampler: observed/forecast splice at the
+   frontier, D/C decomposition, no Binomial noise on model-predicted
+   future-arrival mass, and fan-band behaviour consistent with v1.
+
 ---
 
 ## Bottom Line
@@ -731,10 +761,13 @@ Phase A introduces two explicit inputs to the row builder:
   computed via node-level DP (forward convolution of per-edge
   sub-probability densities through the DAG in topological order)
 
-The row builder applies the convolution, frontier-conditions on
-observed evidence, and produces MC fan bands via posterior predictive
-sampling. It no longer computes x internally or knows about single
-edges.
+**New operators, same sampler**: the row builder keeps the current
+cohort-maturity forecasting discipline — observed/forecast splice,
+D/C decomposition, conditional sampling for frontier survivors only,
+continuous treatment of future-arrival mass, posterior-draw fan bands,
+and clipping/boundedness. What changes is only the inner input pair:
+`x_provider(s, τ)` for arrivals at x and `span_kernel K_{x→y}(τ)` for
+conditional progression from x to y.
 
 Phase B swaps the x_provider's implementation for x ≠ a with a proper
 a→x propagation solve, and introduces completeness-adjusted frontier

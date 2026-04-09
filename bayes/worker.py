@@ -387,6 +387,7 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
     result_edges: list[dict] = []
     result_skipped: list[dict] = []
     quality_dict = {"max_rhat": 0.0, "min_ess": 0, "converged_pct": 0.0}
+    binding_receipt = None
 
     try:
         # ── 0. Environment diagnostic ──
@@ -457,6 +458,13 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
 
         # Doc 30: apply regime selection per edge if candidate_regimes_by_edge provided.
         candidate_regimes_by_edge = payload.get("candidate_regimes_by_edge")
+        # Capture pre-regime row counts and hashes for binding receipt
+        rows_raw_per_edge: dict[str, int] = {eid: len(rows) for eid, rows in snapshot_rows.items()}
+        hashes_seen_per_edge: dict[str, set] = {
+            eid: {r.get('core_hash', '') for r in rows}
+            for eid, rows in snapshot_rows.items()
+        }
+        regime_selections: dict = {}
         if snapshot_rows and candidate_regimes_by_edge and isinstance(candidate_regimes_by_edge, dict):
             try:
                 import sys as _sys
@@ -478,6 +486,7 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
                     ]
                     if regimes:
                         selection = select_regime_rows(edge_rows, regimes)
+                        regime_selections[edge_id] = selection
                         snapshot_rows[edge_id] = selection.rows
                         n_before = len(edge_rows)
                         n_after = len(selection.rows)
@@ -502,33 +511,68 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
         for d in evidence.diagnostics:
             _log(log,f"  evidence: {d}")
 
-        # Intermediate evidence summary — what data is the model actually getting?
-        for edge_id, edge_ev in evidence.edges.items():
-            if edge_ev.skipped:
-                continue
-            n_cohort_obs = len(edge_ev.cohort_obs)
-            n_window_traj = 0
-            n_cohort_traj = 0
-            n_window_daily = 0
-            n_cohort_daily = 0
-            for co in edge_ev.cohort_obs:
-                for t in co.trajectories:
-                    if t.obs_type == "window":
-                        n_window_traj += 1
-                    else:
-                        n_cohort_traj += 1
-                for d in co.daily:
-                    # daily obs don't have obs_type yet; infer from slice_dsl
-                    if "window" in co.slice_dsl:
-                        n_window_daily += 1
-                    else:
-                        n_cohort_daily += 1
-            has_snapshot = n_window_traj + n_cohort_traj + n_window_daily + n_cohort_daily > 0
+        # Build binding receipt — structured audit of what evidence was bound
+        receipt_mode = settings.get("binding_receipt", "log")
+        binding_receipt = _build_binding_receipt(
+            topology=topology,
+            evidence=evidence,
+            snapshot_subjects=snapshot_subjects,
+            candidate_regimes_by_edge=candidate_regimes_by_edge or {},
+            rows_raw_per_edge=rows_raw_per_edge,
+            hashes_seen_per_edge=hashes_seen_per_edge,
+            regime_selections=regime_selections,
+            mode=receipt_mode,
+        )
+
+        # Log receipt summary (replaces ad-hoc evidence detail block)
+        _log(log,
+            f"binding receipt: {binding_receipt.edges_bound} bound, "
+            f"{binding_receipt.edges_fallback} fallback, "
+            f"{binding_receipt.edges_skipped} skipped, "
+            f"{binding_receipt.edges_no_subjects} no-subjects, "
+            f"{binding_receipt.edges_warned} warned, "
+            f"{binding_receipt.edges_failed} failed "
+            f"(mode={binding_receipt.mode})"
+        )
+        # Log per-edge receipt summaries. Only log divergences for
+        # warn/fail edges to avoid flooding the log on large graphs.
+        for eid, er in binding_receipt.edge_receipts.items():
+            if er.verdict == "pass" and not er.divergences:
+                continue  # skip clean edges in log
             _log(log,
-                f"  evidence detail {edge_id[:8]}…: "
-                f"source={'snapshot' if has_snapshot else 'param_file'}, "
-                f"window_traj={n_window_traj}, cohort_traj={n_cohort_traj}, "
-                f"window_daily={n_window_daily}, cohort_daily={n_cohort_daily}"
+                f"  binding {eid[:8]}…: "
+                f"verdict={er.verdict}, "
+                f"source={er.evidence_source}, "
+                f"rows={er.rows_raw}→{er.rows_post_regime}→{er.total_n}"
+            )
+            for div in er.divergences:
+                # Truncate long divergence messages (e.g. 32-slice lists)
+                _log(log, f"    {div[:120]}{'…' if len(div) > 120 else ''}")
+
+        if binding_receipt.mode == "preflight":
+            # Preflight mode: always return after receipt, never run MCMC.
+            # Used by CLI --preflight for data binding assurance.
+            _log(log, f"binding receipt preflight: {binding_receipt.edges_failed} failed, "
+                 f"{binding_receipt.edges_warned} warned, {binding_receipt.edges_bound} bound")
+            binding_receipt.halted = True
+            report("complete", 100)
+            return _build_result(
+                None if binding_receipt.edges_failed == 0 else
+                    f"binding receipt preflight: {binding_receipt.edges_failed} edges failed",
+                log, timings, t0, result_edges, result_skipped,
+                quality_dict, webhook_response,
+                binding_receipt=binding_receipt,
+            )
+
+        if binding_receipt.mode == "gate" and binding_receipt.edges_failed > 0:
+            error = f"binding receipt gate: {binding_receipt.edges_failed} edges failed"
+            _log(log, error)
+            binding_receipt.halted = True
+            report("complete", 100)
+            return _build_result(
+                error, log, timings, t0, result_edges, result_skipped,
+                quality_dict, webhook_response,
+                binding_receipt=binding_receipt,
             )
 
         timings["evidence_ms"] = int((time.time() - t0) * 1000) - timings.get("neon_ms", 0) - timings.get("topology_ms", 0)
@@ -542,6 +586,7 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
             return _build_result(
                 None, log, timings, t0, result_edges, result_skipped,
                 quality_dict, webhook_response,
+                binding_receipt=binding_receipt,
             )
 
         if n_with_data == 0:
@@ -551,6 +596,7 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
             return _build_result(
                 error, log, timings, t0, result_edges, result_skipped,
                 quality_dict, webhook_response,
+                binding_receipt=binding_receipt,
             )
 
         # ── 4. Build model ──
@@ -612,6 +658,7 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
             return _build_result(
                 None, log, timings, t0, result_edges, result_skipped,
                 quality_dict, webhook_response,
+                binding_receipt=binding_receipt,
             )
 
         # ── 5. Run inference ──
@@ -1050,7 +1097,355 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
     return _build_result(
         error, log, timings, t0, result_edges, result_skipped,
         quality_dict, webhook_response,
+        binding_receipt=binding_receipt,
     )
+
+
+# ---------------------------------------------------------------------------
+# Binding receipt construction
+# ---------------------------------------------------------------------------
+
+def _build_binding_receipt(
+    topology,
+    evidence,
+    snapshot_subjects: list,
+    candidate_regimes_by_edge: dict,
+    rows_raw_per_edge: dict,
+    hashes_seen_per_edge: dict,
+    regime_selections: dict,
+    mode: str = "log",
+):
+    """Build a structured binding receipt from evidence binding outcomes.
+
+    Inspects the bound evidence alongside the raw inputs (snapshot subjects,
+    regime selections, row counts) to produce a per-edge audit trail with
+    verdicts and graph-level summary counts.
+    """
+    from compiler.types import EdgeBindingReceipt, BindingReceipt
+
+    # Group snapshot subjects by edge_id
+    subjects_by_edge: dict[str, list[dict]] = {}
+    for subj in (snapshot_subjects or []):
+        eid = subj.get("edge_id") or subj.get("target", {}).get("targetId", "")
+        if eid:
+            subjects_by_edge.setdefault(eid, []).append(subj)
+
+    edge_receipts: dict[str, EdgeBindingReceipt] = {}
+    n_bound = 0
+    n_fallback = 0
+    n_skipped = 0
+    n_no_subjects = 0
+    n_warned = 0
+    n_failed = 0
+
+    for edge_id, et in topology.edges.items():
+        edge_ev = evidence.edges.get(edge_id)
+
+        er = EdgeBindingReceipt(edge_id=edge_id, param_id=et.param_id or "")
+
+        # Edge not processed by evidence binder at all (e.g. no param_id)
+        if not edge_ev:
+            edge_subjects = subjects_by_edge.get(edge_id, [])
+            if not edge_subjects:
+                n_no_subjects += 1
+            else:
+                n_skipped += 1
+            er.evidence_source = "none"
+            er.skipped = True
+            er.skip_reason = "no evidence (edge not processed by binder)"
+            er.verdict = "pass"
+            edge_receipts[edge_id] = er
+            continue
+
+        # --- Subjects and hash coverage ---
+        edge_subjects = subjects_by_edge.get(edge_id, [])
+        if not edge_subjects:
+            n_no_subjects += 1
+            er.evidence_source = "param_file" if not edge_ev.skipped else "none"
+            er.skipped = edge_ev.skipped
+            er.skip_reason = edge_ev.skip_reason or ""
+            if not edge_ev.skipped:
+                n_fallback += 1
+            else:
+                n_skipped += 1
+            er.verdict = "pass"
+            edge_receipts[edge_id] = er
+            continue
+
+        # Collect expected hashes from candidate regimes
+        cr_raw = candidate_regimes_by_edge.get(edge_id, [])
+        expected_hashes = []
+        for cr in cr_raw:
+            if isinstance(cr, dict) and cr.get("core_hash"):
+                expected_hashes.append(cr["core_hash"])
+        er.expected_hashes = expected_hashes
+
+        # Hashes actually seen in raw rows
+        seen = hashes_seen_per_edge.get(edge_id, set())
+        er.hashes_with_data = sorted(h for h in expected_hashes if h in seen)
+        er.hashes_empty = sorted(h for h in expected_hashes if h not in seen)
+
+        # Collect expected slices from subjects
+        expected_slices = []
+        for subj in edge_subjects:
+            for sk in (subj.get("slice_keys") or []):
+                if sk not in expected_slices:
+                    expected_slices.append(sk)
+        er.expected_slices = expected_slices
+
+        # Anchor range from subjects
+        anchor_froms = [s.get("anchor_from", "") for s in edge_subjects if s.get("anchor_from")]
+        anchor_tos = [s.get("anchor_to", "") for s in edge_subjects if s.get("anchor_to")]
+        if anchor_froms:
+            er.expected_anchor_from = min(anchor_froms)
+        if anchor_tos:
+            er.expected_anchor_to = max(anchor_tos)
+
+        # --- Row counts ---
+        er.rows_raw = rows_raw_per_edge.get(edge_id, 0)
+
+        # Regime selection details
+        sel = regime_selections.get(edge_id)
+        if sel:
+            er.rows_post_regime = len(sel.rows)
+            er.regimes_seen = len(sel.regime_per_date) if hasattr(sel, 'regime_per_date') else 0
+            # Pick the most common regime as regime_selected
+            if hasattr(sel, 'regime_per_date') and sel.regime_per_date:
+                from collections import Counter
+                hash_counts = Counter(
+                    r.core_hash for r in sel.regime_per_date.values()
+                )
+                er.regime_selected = hash_counts.most_common(1)[0][0] if hash_counts else ""
+        else:
+            er.rows_post_regime = er.rows_raw
+
+        # Suppression counts from EdgeEvidence
+        er.rows_post_suppression = edge_ev.rows_post_aggregation
+        er.rows_suppressed = edge_ev.rows_aggregated
+
+        # --- Observation counts ---
+        w_traj = 0
+        w_daily = 0
+        c_traj = 0
+        c_daily = 0
+        observed_slices_raw = set()  # full slice_dsl strings
+        actual_anchors = set()
+
+        for co in edge_ev.cohort_obs:
+            observed_slices_raw.add(co.slice_dsl)
+            for t in co.trajectories:
+                if t.obs_type == "window":
+                    w_traj += 1
+                else:
+                    c_traj += 1
+                if t.date:
+                    actual_anchors.add(t.date)
+            for d in co.daily:
+                if "window" in co.slice_dsl:
+                    w_daily += 1
+                else:
+                    c_daily += 1
+                if d.date:
+                    actual_anchors.add(d.date)
+
+        for wo in edge_ev.window_obs:
+            observed_slices_raw.add(wo.slice_dsl)
+
+        er.window_trajectories = w_traj
+        er.window_daily = w_daily
+        er.cohort_trajectories = c_traj
+        er.cohort_daily = c_daily
+        er.total_n = edge_ev.total_n
+
+        # --- Slice comparison ---
+        # The FE sends slice_keys like "" (uncontexted) or
+        # "context(channel:google)" (Phase C). The evidence binder labels
+        # observations with full slice_dsl strings like "window(snapshot)"
+        # or "cohort(Landing-page,6-Sep-25:9-Apr-26)". These are different
+        # representations. We extract the context component from observed
+        # slice_dsl strings to compare against the FE's slice_keys.
+        #
+        # Context extraction: strip temporal qualifiers (window(...),
+        # cohort(...), asat(...)) to get the context-only part. For
+        # uncontexted data this yields "" matching the FE's "".
+
+        def _extract_context_key(slice_dsl: str) -> str:
+            """Extract context identity from a full slice_dsl string.
+
+            Strips temporal qualifiers: window(...), cohort(...), asat(...).
+            Leaves context(...), visited(...), case(...) etc.
+            For uncontexted data, returns "" (matching FE convention).
+            """
+            import re
+            # Remove temporal parts: window(...), cohort(...), asat(...)
+            stripped = re.sub(r'(window|cohort|asat)\([^)]*\)', '', slice_dsl)
+            # Clean up separators: leading/trailing dots, double dots
+            stripped = stripped.strip('.')
+            stripped = re.sub(r'\.{2,}', '.', stripped)
+            # Binder labels like "window(snapshot)" or "cohort(snapshot)"
+            # reduce to "" after stripping — correct for uncontexted
+            return stripped
+
+        observed_context_keys = set()
+        for raw_dsl in observed_slices_raw:
+            observed_context_keys.add(_extract_context_key(raw_dsl))
+
+        er.observed_slices = sorted(observed_context_keys)
+        er.missing_slices = sorted(s for s in expected_slices if s not in observed_context_keys)
+        er.unexpected_slices = sorted(s for s in observed_context_keys if s not in expected_slices)
+
+        # --- Anchor coverage ---
+        # Dates on trajectories/daily obs may be in ISO format ("2025-08-19")
+        # from snapshot DB rows, or UK format ("1-Dec-25") from param file
+        # supplementation. Normalise to date objects for correct sorting.
+        if actual_anchors:
+            from datetime import date as _date
+            parsed_anchors = set()
+            for d in actual_anchors:
+                try:
+                    parsed_anchors.add(_date.fromisoformat(d))
+                except (ValueError, TypeError):
+                    # Try UK format: d-MMM-yy
+                    try:
+                        from datetime import datetime as _dt
+                        parsed_anchors.add(_dt.strptime(d, "%d-%b-%y").date())
+                    except (ValueError, TypeError):
+                        pass  # unparseable — skip
+            if parsed_anchors:
+                sorted_anchors = sorted(parsed_anchors)
+                er.actual_anchor_from = sorted_anchors[0].isoformat()
+                er.actual_anchor_to = sorted_anchors[-1].isoformat()
+                er.anchor_days_covered = len(parsed_anchors)
+
+        # Evidence source classification
+        has_snapshot = (w_traj + c_traj + w_daily + c_daily) > 0
+        has_param = any(
+            "param" in co.slice_dsl or "file" in co.slice_dsl
+            for co in edge_ev.cohort_obs
+        ) or len(edge_ev.window_obs) > 0
+        if has_snapshot and has_param:
+            er.evidence_source = "mixed"
+        elif has_snapshot:
+            er.evidence_source = "snapshot"
+        elif not edge_ev.skipped:
+            er.evidence_source = "param_file"
+        else:
+            er.evidence_source = "none"
+
+        # Skip state
+        er.skipped = edge_ev.skipped
+        er.skip_reason = edge_ev.skip_reason
+
+        # Content hash — checksums the assembled model inputs for
+        # parity comparison between payload contracts.
+        er.evidence_hash = edge_ev.content_hash()
+
+        # --- Verdict ---
+        divergences = []
+
+        if er.expected_hashes and all(h in er.hashes_empty for h in er.expected_hashes):
+            divergences.append("all expected hashes returned no data")
+
+        if er.rows_raw > 0 and er.total_n == 0:
+            divergences.append(
+                f"rows_raw={er.rows_raw} but total_n=0 — all data lost in pipeline"
+            )
+
+        if er.expected_hashes and er.hashes_empty and not all(h in er.hashes_empty for h in er.expected_hashes):
+            divergences.append(
+                f"{len(er.hashes_empty)} of {len(er.expected_hashes)} expected hashes empty"
+            )
+
+        if er.rows_raw > 0 and er.rows_raw > er.rows_post_regime:
+            regime_pct = 1.0 - (er.rows_post_regime / er.rows_raw)
+            if regime_pct > 0.5:
+                divergences.append(
+                    f"regime dedup removed {regime_pct:.0%} of rows "
+                    f"({er.rows_raw} → {er.rows_post_regime})"
+                )
+
+        if er.evidence_source == "param_file" and er.expected_hashes:
+            divergences.append("snapshot expected but fell back to param_file")
+
+        if (er.expected_anchor_from and er.actual_anchor_from and
+                er.expected_anchor_to and er.actual_anchor_to):
+            try:
+                from datetime import date as _date
+                exp_days = (_date.fromisoformat(er.expected_anchor_to) -
+                            _date.fromisoformat(er.expected_anchor_from)).days
+                act_days = (_date.fromisoformat(er.actual_anchor_to) -
+                            _date.fromisoformat(er.actual_anchor_from)).days
+                if exp_days > 0 and act_days < (exp_days * 0.5):
+                    divergences.append(
+                        f"anchor range covers {act_days}d of {exp_days}d expected (<50%)"
+                    )
+            except (ValueError, TypeError):
+                pass  # date parsing failed — skip this check
+
+        # Slice coverage divergences (Phase C — populated when context routing active)
+        if er.missing_slices:
+            divergences.append(
+                f"{len(er.missing_slices)} expected slices missing: "
+                f"{', '.join(er.missing_slices)}"
+            )
+
+        if er.unexpected_slices:
+            divergences.append(
+                f"{len(er.unexpected_slices)} unexpected slices found: "
+                f"{', '.join(er.unexpected_slices)}"
+            )
+
+        if er.orphan_rows > 0:
+            divergences.append(f"{er.orphan_rows} rows could not be routed to any slice")
+
+        er.divergences = divergences
+
+        # Assign verdict
+        # All expected hashes empty is only a fail if data didn't arrive
+        # via equivalence (rows_raw == 0 or total_n == 0). If data was
+        # found via equivalent hashes, the primary hash being absent is
+        # a warn, not a fail.
+        all_hashes_empty = er.expected_hashes and all(h in er.hashes_empty for h in er.expected_hashes)
+        all_hashes_empty_and_no_data = all_hashes_empty and (er.rows_raw == 0 or er.total_n == 0)
+        all_slices_missing = (er.expected_slices and er.missing_slices
+                              and set(er.missing_slices) == set(er.expected_slices))
+        has_fail = (
+            all_hashes_empty_and_no_data or
+            (er.rows_raw > 0 and er.total_n == 0) or
+            all_slices_missing
+        )
+        has_warn = len(divergences) > 0 and not has_fail
+
+        if edge_ev.skipped and not edge_subjects:
+            # Skipped with no subjects = expected, not a problem
+            er.verdict = "pass"
+            n_skipped += 1
+        elif has_fail:
+            er.verdict = "fail"
+            n_failed += 1
+        elif has_warn:
+            er.verdict = "warn"
+            n_warned += 1
+            n_bound += 1
+        else:
+            er.verdict = "pass"
+            n_bound += 1
+
+        edge_receipts[edge_id] = er
+
+    receipt = BindingReceipt(
+        edge_receipts=edge_receipts,
+        edges_expected=len(topology.edges),
+        edges_bound=n_bound,
+        edges_fallback=n_fallback,
+        edges_skipped=n_skipped,
+        edges_no_subjects=n_no_subjects,
+        edges_warned=n_warned,
+        edges_failed=n_failed,
+        mode=mode,
+        halted=False,
+    )
+    return receipt
 
 
 # ---------------------------------------------------------------------------
@@ -1240,10 +1635,11 @@ def _build_unified_slices(
 
 def _build_result(
     error, log, timings, t0, edges, skipped, quality, webhook_response,
+    binding_receipt=None,
 ) -> dict:
     duration_ms = int((time.time() - t0) * 1000)
     timings["total_ms"] = duration_ms
-    return {
+    result = {
         "status": "failed" if error else "complete",
         "duration_ms": duration_ms,
         "timings": timings,
@@ -1256,6 +1652,9 @@ def _build_result(
         "webhook_response": webhook_response,
         "error": error,
     }
+    if binding_receipt is not None:
+        result["binding_receipt"] = binding_receipt.to_dict()
+    return result
 
 
 def _build_path_lookup(params_index: dict | None) -> dict[str, str]:
