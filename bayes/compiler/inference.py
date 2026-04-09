@@ -812,16 +812,35 @@ def summarise_posteriors(
                         _slice_entry["kappa_mean"] = float(np.mean(_ks_samples))
                         _slice_entry["kappa_sd"] = float(np.std(_ks_samples))
 
+                    # Per-slice latency (§R2b2)
+                    _mu_s_name = f"mu_slice_{safe_eid}_{_ctx_safe}"
+                    _sigma_s_name = f"sigma_slice_{safe_eid}_{_ctx_safe}"
+                    _onset_s_name = f"onset_slice_{safe_eid}_{_ctx_safe}"
+                    if _mu_s_name in trace.posterior:
+                        _slice_entry["mu_mean"] = float(trace.posterior[_mu_s_name].values.mean())
+                        _slice_entry["mu_sd"] = float(trace.posterior[_mu_s_name].values.std())
+                    if _sigma_s_name in trace.posterior:
+                        _slice_entry["sigma_mean"] = float(trace.posterior[_sigma_s_name].values.mean())
+                        _slice_entry["sigma_sd"] = float(trace.posterior[_sigma_s_name].values.std())
+                    if _onset_s_name in trace.posterior:
+                        _slice_entry["onset_mean"] = float(trace.posterior[_onset_s_name].values.mean())
+                        _slice_entry["onset_sd"] = float(trace.posterior[_onset_s_name].values.std())
+
                     post.slice_posteriors[_ctx_key] = _slice_entry
 
                     _kappa_str = ""
                     if "kappa_mean" in _slice_entry:
                         _kappa_str = f" kappa={_slice_entry['kappa_mean']:.1f}±{_slice_entry['kappa_sd']:.1f}"
+                    _lat_str = ""
+                    if "mu_mean" in _slice_entry:
+                        _lat_str = (f" mu={_slice_entry['mu_mean']:.3f}±{_slice_entry['mu_sd']:.3f}"
+                                    f" sigma={_slice_entry['sigma_mean']:.3f}±{_slice_entry['sigma_sd']:.3f}"
+                                    f" onset={_slice_entry['onset_mean']:.2f}±{_slice_entry['onset_sd']:.2f}")
                     diagnostics.append(
                         f"  p_slice {edge_id[:8]}… {_ctx_key}: "
                         f"{_pred_mean:.4f}±{_pred_std:.4f} "
                         f"HDI=[{_pred_hdi_lo:.4f}, {_pred_hdi_hi:.4f}]"
-                        f"{_kappa_str}"
+                        f"{_kappa_str}{_lat_str}"
                     )
 
             if post.tau_slice_mean is not None:

@@ -1330,6 +1330,13 @@ trusted.
 **R2e — Posterior summarisation** (`compiler/inference.py`):
 - Per-slice α/β/HDI/ESS/rhat in `posterior.slices` output
 - Webhook payload extension
+- **Predictive latency uncertainty**: current mu_sd/sigma_sd/onset_sd
+  are raw MCMC posterior SDs (parameter estimation precision). These
+  overstate predictive certainty — with many trajectories they shrink
+  to ±0.005, implying sub-day prediction precision. Predictive spread
+  should incorporate sigma (the LogNormal scale), analogous to how
+  predictive p incorporates kappa. Pre-existing issue affecting both
+  uncontexted and per-slice posteriors. Fix here.
 
 **R2f — Real data validation**:
 - Run on `conversion-flow-v2-recs-collapsed` test graph (channel

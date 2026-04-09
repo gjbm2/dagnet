@@ -1537,3 +1537,18 @@ current constants were guessed, producing confidence bands that span
 Bands will be either too wide (noise covering the chart — current state)
 or too narrow (hiding real uncertainty). Either undermines user trust.
 **This feature must not ship until calibrated.**
+
+### Upstream blocker: Bayesian latency SDs overstate predictive certainty (9-Apr-26)
+
+The Bayesian compiler's latency posterior SDs (`mu_sd`, `sigma_sd`,
+`onset_sd`) are raw MCMC posterior SDs — they measure parameter
+estimation precision, not predictive spread. With many trajectories
+they shrink to ±0.005 (mu) or ±0.010 (onset), implying sub-day
+prediction precision. In reality, individual conversion times vary
+with spread `sigma` (the LogNormal scale parameter). The predictive
+spread should incorporate sigma, analogous to how predictive p
+incorporates kappa via `Beta(p*κ, (1-p)*κ)`. This affects both
+uncontexted and per-slice posteriors. Until fixed, the Bayesian
+"ground truth" SDs used to calibrate heuristic dispersions (§ above)
+are themselves wrong — any heuristic calibrated against them will
+inherit the same overstatement of certainty.

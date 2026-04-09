@@ -406,6 +406,17 @@ to hand-craft graph JSON or entity files.
 - **Slow-latency trajectory density**: truth mu > 2.0 produces 50-80
   ages per trajectory after dedup, causing long compilation and slow
   sampling. Truth files use mu ≤ 1.5 where possible.
+- **Latency posterior SDs overstate predictive certainty** (9-Apr-26):
+  `mu_sd`, `sigma_sd`, `onset_sd` are raw MCMC posterior SDs — they
+  measure parameter estimation precision, not predictive spread.
+  With many trajectories, these shrink to ±0.005 (mu) or ±0.010
+  (onset), implying we can predict conversion timing to sub-day
+  precision. In reality, individual conversion times vary with
+  spread `sigma` (the LogNormal scale parameter). The fix: derive
+  predictive latency uncertainty that incorporates sigma, analogous
+  to how predictive p incorporates kappa via `Beta(p*κ, (1-p)*κ)`.
+  Applies to both uncontexted and per-slice latency posteriors.
+  Pre-existing issue — not specific to Phase C.
 
 ---
 

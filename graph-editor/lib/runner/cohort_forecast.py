@@ -58,10 +58,23 @@ class XProvider:
             mu_sd, sigma_sd, onset_sd, alpha, beta, p_sd.
         enabled: if False, the row builder treats this as "no upstream"
             (equivalent to window mode for the denominator).
+        ingress_carrier: path-level latency params from edges entering x.
+            Each dict has: p, mu, sigma, onset, and optionally SDs and
+            alpha/beta.  The mixture of these carriers gives the
+            parametric CDF for arrivals at x.
+            None when x = a or window mode.
+        upstream_obs: observed arrivals at x from upstream evidence.
+            Dict mapping anchor_day (str) to a list of (tau, x_obs)
+            tuples, where x_obs is the total observed arrivals at x
+            at that tau (summed across incident edges, mass-weighted).
+            Used to IS-condition the ingress carrier draws.
+            None when no upstream evidence is available.
     """
     reach: float = 0.0
     upstream_params_list: List[Dict[str, float]] = field(default_factory=list)
     enabled: bool = False
+    ingress_carrier: Optional[List[Dict[str, float]]] = None
+    upstream_obs: Optional[Dict[str, List[Tuple[int, float]]]] = None
 
 
 def build_x_provider_from_graph(
@@ -570,7 +583,14 @@ def compute_cohort_maturity_rows(
         x_provider = build_x_provider_from_graph(
             graph, target_edge, anchor_node_id, is_window,
         )
-    upstream_params_list = x_provider.upstream_params_list
+    # Use ingress carrier when available (Phase B: params from edges
+    # entering x, not from edges entering u).  Fall back to legacy
+    # upstream_params_list (edges entering u = from_node of target edge).
+    upstream_params_list = (
+        x_provider.ingress_carrier
+        if x_provider.ingress_carrier
+        else x_provider.upstream_params_list
+    )
     reach_at_from_node = x_provider.reach
 
     # ── Per-Cohort info from last frame ────────────────────────────────
@@ -884,7 +904,11 @@ def compute_cohort_maturity_rows(
         c['obs_x'] = obs_x
         c['obs_y'] = obs_y
 
-        # ── x at each tau (flat or model-derived) ─────────────────
+        # ── x at each tau (model-derived or flat) ──────────────────
+        # Phase B: upstream_path_cdf_arr is evidence-conditioned when
+        # upstream_obs is available (IS step above recomputes the
+        # point-estimate from conditioned draws).  The model produces
+        # a smooth curve; no raw evidence substitution.
         if upstream_path_cdf_arr is None:
             c['x_at_tau'] = [float(N_i)] * (max_tau + 1)
             c['x_frontier'] = float(N_i)
@@ -1089,6 +1113,59 @@ def compute_cohort_maturity_rows(
                 # Normalise per draw so mixture weights sum to 1
                 _weight_sum = np.maximum(_weight_sum, 1e-10)
                 upstream_cdf_mc = _unnorm_cdf / _weight_sum[:, None]
+
+        # ── IS-condition upstream draws on observed arrivals (Phase B) ──
+        # When upstream_obs is available, weight each draw by how well
+        # its CDF predicts the observed arrivals at x.  This tightens
+        # the ingress carrier posterior without replacing the model.
+        # Same discipline as subject-side IS conditioning.
+        if (upstream_cdf_mc is not None
+                and x_provider is not None
+                and x_provider.upstream_obs is not None
+                and reach_at_from_node > 0):
+            # Pool observations across cohorts for global conditioning
+            _all_obs: List[Tuple[int, float, float]] = []  # (tau, x_obs, a_pop)
+            for c in cohort_list:
+                _ad_key = c['anchor_day'].isoformat() if hasattr(c['anchor_day'], 'isoformat') else str(c['anchor_day'])[:10]
+                _cohort_obs = x_provider.upstream_obs.get(_ad_key, [])
+                _a_pop_c = c.get('a_frozen', c['x_frozen']) or c['x_frozen'] or 1.0
+                for (_tau_obs, _x_obs) in _cohort_obs:
+                    if 0 <= _tau_obs < T:
+                        _all_obs.append((_tau_obs, _x_obs, _a_pop_c))
+
+            if _all_obs and len(_all_obs) >= 1:
+                # Gaussian IS: log_w[s] += -0.5 × ((x_obs - x_model) / σ)²
+                # x_model(s, τ) = a_pop × reach × upstream_cdf_mc[s, τ]
+                # σ = max(sqrt(x_obs), 1) — Poisson-like noise floor
+                _log_w_up = np.zeros(S)
+                for (_tau_obs, _x_obs, _a_pop_c) in _all_obs:
+                    _x_model = _a_pop_c * reach_at_from_node * upstream_cdf_mc[:, _tau_obs]
+                    _sigma = max(math.sqrt(max(_x_obs, 1.0)), 1.0)
+                    _log_w_up += -0.5 * ((_x_obs - _x_model) / _sigma) ** 2
+
+                # Normalise and resample
+                _log_w_up -= np.max(_log_w_up)
+                _w_up = np.exp(_log_w_up)
+                _w_up /= _w_up.sum()
+                _ess_up = 1.0 / np.sum(_w_up ** 2)
+
+                if _ess_up > 5:  # only resample if IS is informative
+                    _resample_idx = rng.choice(S, size=S, replace=True, p=_w_up)
+                    upstream_cdf_mc = upstream_cdf_mc[_resample_idx]
+                    if _COHORT_DEBUG:
+                        print(f"[UPSTREAM_IS] conditioned on {len(_all_obs)} obs, "
+                              f"ESS={_ess_up:.1f}")
+                elif _COHORT_DEBUG:
+                    print(f"[UPSTREAM_IS] skipped (ESS={_ess_up:.1f} < 5, "
+                          f"{len(_all_obs)} obs)")
+
+        # ── Recompute point-estimate upstream CDF from conditioned draws ─
+        # When IS conditioning was applied, the point estimate should
+        # reflect the conditioned posterior, not the prior.
+        if upstream_cdf_mc is not None and upstream_path_cdf_arr is not None:
+            # Use median of conditioned draws as point estimate
+            _median_cdf = np.median(upstream_cdf_mc, axis=0)
+            upstream_path_cdf_arr = [float(_median_cdf[t]) for t in range(len(upstream_path_cdf_arr))]
 
         # ── Precompute point-estimate normalised span CDF (for exposure) ─
         # Used by the completeness-adjusted frontier exposure (Phase B,

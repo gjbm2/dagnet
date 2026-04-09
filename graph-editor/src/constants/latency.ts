@@ -542,6 +542,11 @@ export const BAYES_TUNE = 1000;                     // MCMC warmup per chain
 export const BAYES_CHAINS = 4;                      // number of MCMC chains
 export const BAYES_TARGET_ACCEPT = 0.90;            // NUTS target acceptance
 
+// ── Multi-hop upstream (Phase B, doc 29d) ──
+// Coverage threshold removed: any upstream evidence conditions the
+// ingress carrier model (IS weighting).  Sparse evidence conditions
+// less tightly; dense evidence conditions more tightly.  No cutover.
+
 export function buildForecastingSettings(): ForecastingSettings {
   return {
     min_fit_converters: LATENCY_MIN_FIT_CONVERTERS,

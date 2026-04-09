@@ -857,14 +857,19 @@ def simulate_graph(
         base_p: float,
         base_mu: float,
         drift_offset: float,
-    ) -> tuple[float, float]:
-        """Compute per-user effective p and mu from context assignments.
+        base_sigma: float = 0.0,
+        base_onset: float = 0.0,
+    ) -> tuple[float, float, float, float]:
+        """Compute per-user effective p, mu, sigma, onset from context assignments.
 
-        Composes context effects then draws per-user p from Beta.
-        Returns (p_user, mu_user).
+        Composes context effects: p multiplicative, mu additive,
+        sigma multiplicative, onset additive.
+        Returns (p_user, mu_user, sigma_user, onset_user).
         """
         p_mult = 1.0
         mu_offset = 0.0
+        sigma_mult = 1.0
+        onset_offset = 0.0
 
         # Compose effects from all context dimensions
         for dim in context_dims:
@@ -890,6 +895,8 @@ def simulate_graph(
                     overrides = overrides or {}
                     p_mult *= overrides.get("p_mult", 1.0)
                     mu_offset += overrides.get("mu_offset", 0.0)
+                    sigma_mult *= overrides.get("sigma_mult", 1.0)
+                    onset_offset += overrides.get("onset_offset", 0.0)
                     break
 
         # Apply drift
@@ -899,11 +906,12 @@ def simulate_graph(
         else:
             p_drifted = base_p
 
-        # Apply context p multiplier, clamp to (0, 1)
+        # Apply context effects, clamp to valid ranges
         p_ctx = min(max(p_drifted * p_mult, 1e-6), 1.0 - 1e-6)
-
         mu_user = base_mu + mu_offset
-        return p_ctx, mu_user
+        sigma_user = max(base_sigma * sigma_mult, 0.01)
+        onset_user = max(base_onset + onset_offset, 0.0)
+        return p_ctx, mu_user, sigma_user, onset_user
 
     # Two independent sources of between-day overdispersion:
     #
@@ -987,7 +995,7 @@ def simulate_graph(
             ctx_key = tuple(sorted(user_contexts.items()))
             cache_key = (edge_id, ctx_key)
             if cache_key not in _day_p_cache:
-                p_expected, _ = _compute_user_params(
+                p_expected, _, _, _ = _compute_user_params(
                     user_contexts, edge_id, base_p, 0.0, drift_offset,
                 )
                 _day_p_cache[cache_key] = _draw_day_p(p_expected, day_kappa)
@@ -1007,17 +1015,23 @@ def simulate_graph(
             # Use day-level p (shared by all users in this context on this day)
             user_probs: dict[str, float] = {}
             user_mus: dict[str, float] = {}
+            user_sigmas: dict[str, float] = {}
+            user_onsets: dict[str, float] = {}
             for eid, ep in edge_params.items():
                 user_probs[eid] = _get_day_p(
                     eid, user_contexts,
                     ep["p"], day_drift[eid],
                 )
-                _, mu_user = _compute_user_params(
+                _, mu_user, sigma_user, onset_user = _compute_user_params(
                     user_contexts, eid,
                     ep["p"], ep.get("mu", 0.0),
                     day_drift[eid],
+                    base_sigma=ep.get("sigma", 0.0),
+                    base_onset=ep.get("onset", 0.0),
                 )
                 user_mus[eid] = mu_user
+                user_sigmas[eid] = sigma_user
+                user_onsets[eid] = onset_user
 
             person: dict[str, Any] = {"_contexts": user_contexts}
             _traverse(
@@ -1025,6 +1039,8 @@ def simulate_graph(
                 topology, adj_out, edge_params, user_probs,
                 edge_to_bg, rng,
                 user_mus=user_mus,
+                user_sigmas=user_sigmas,
+                user_onsets=user_onsets,
                 day_idx=day_idx,
                 step_day_fn=_get_step_day_p,
             )
@@ -1191,6 +1207,8 @@ def _traverse(
     edge_to_bg: dict[str, str],
     rng: np.random.Generator,
     user_mus: dict[str, float] | None = None,
+    user_sigmas: dict[str, float] | None = None,
+    user_onsets: dict[str, float] | None = None,
     day_idx: int = 0,
     step_day_fn=None,
 ) -> None:
@@ -1250,7 +1268,8 @@ def _traverse(
             chosen_eid = evented[choice]
             _take_edge(chosen_eid, t_current, person, topology,
                        adj_out, edge_params, day_probs, edge_to_bg, rng,
-                       user_mus=user_mus, day_idx=day_idx,
+                       user_mus=user_mus, user_sigmas=user_sigmas,
+                       user_onsets=user_onsets, day_idx=day_idx,
                        step_day_fn=step_day_fn)
         elif unevented:
             chosen_eid = rng.choice(unevented)
@@ -1269,7 +1288,8 @@ def _traverse(
         if rng.random() < p_eff:
             _take_edge(eid, t_current, person, topology,
                        adj_out, edge_params, day_probs, edge_to_bg, rng,
-                       user_mus=user_mus, day_idx=day_idx,
+                       user_mus=user_mus, user_sigmas=user_sigmas,
+                       user_onsets=user_onsets, day_idx=day_idx,
                        step_day_fn=step_day_fn)
 
 
@@ -1280,6 +1300,8 @@ def _take_edge(
     topology,
     adj_out, edge_params, day_probs, edge_to_bg, rng,
     user_mus: dict[str, float] | None = None,
+    user_sigmas: dict[str, float] | None = None,
+    user_onsets: dict[str, float] | None = None,
     day_idx: int = 0,
     step_day_fn=None,
 ) -> None:
@@ -1287,13 +1309,14 @@ def _take_edge(
 
     Records both node arrival (node_id → t) and edge traversal
     (edge:<edge_id> → t_arrival) so per-edge counts work at joins.
+    Per-user mu/sigma/onset come from context overrides when available.
     """
     et = topology.edges[edge_id]
     params = edge_params[edge_id]
 
     mu = user_mus.get(edge_id, params.get("mu", 0.0)) if user_mus else params.get("mu", 0.0)
-    sigma = params.get("sigma", 0.0)
-    onset = params.get("onset", 0.0)
+    sigma = user_sigmas.get(edge_id, params.get("sigma", 0.0)) if user_sigmas else params.get("sigma", 0.0)
+    onset = user_onsets.get(edge_id, params.get("onset", 0.0)) if user_onsets else params.get("onset", 0.0)
     if sigma > 0.001:
         latency = onset + rng.lognormal(mu, sigma)
     else:
@@ -1303,7 +1326,8 @@ def _take_edge(
     person[f"edge:{edge_id}"] = t_arrival
     _traverse(et.to_node, t_arrival, person, topology,
               adj_out, edge_params, day_probs, edge_to_bg, rng,
-              user_mus=user_mus, day_idx=day_idx,
+              user_mus=user_mus, user_sigmas=user_sigmas,
+              user_onsets=user_onsets, day_idx=day_idx,
               step_day_fn=step_day_fn)
 
 

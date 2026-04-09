@@ -624,6 +624,94 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                 )
 
         # =============================================================
+        # SECTION 2b: PER-SLICE BRANCH GROUP DIRICHLETS (Phase C, R2c)
+        # =============================================================
+        # For branch groups with context slices, each slice gets its own
+        # Dirichlet-distributed weight vector drawn from the base weights
+        # (Section 2) via a learned concentration parameter κ_slice.
+        #
+        # base_weights come from Section 2's Dirichlet (bg_p_vars).
+        # κ_slice_bg ~ Gamma controls how tightly per-slice weights
+        # cluster around the base. High κ = slices similar to base.
+        #
+        # bg_slice_p_vars[edge_id][ctx_key] = per-slice p variable
+        bg_slice_p_vars: dict[str, dict[str, object]] = {}
+
+        if not is_phase2:
+            for group_id, bg in topology.branch_groups.items():
+                # Check if any sibling in this group has slices
+                any_slices = False
+                group_slice_keys: set[str] = set()
+                for sib_id in bg.sibling_edge_ids:
+                    ev_sib = evidence.edges.get(sib_id)
+                    if ev_sib and ev_sib.has_slices:
+                        any_slices = True
+                        for sg in ev_sib.slice_groups.values():
+                            group_slice_keys.update(sg.slices.keys())
+
+                if not any_slices:
+                    continue
+
+                safe_group = _safe_var_name(bg.group_id)
+
+                # Collect base weights from Section 2's Dirichlet
+                sibling_edges = []
+                base_p_vars = []
+                for sib_id in bg.sibling_edge_ids:
+                    if sib_id in bg_p_vars:
+                        sibling_edges.append(sib_id)
+                        base_p_vars.append(bg_p_vars[sib_id])
+
+                if len(sibling_edges) < 2:
+                    continue
+
+                # Stack base weights into a vector for Dirichlet parameterisation
+                base_weight_vec = pt.stack(base_p_vars)
+                if not bg.is_exhaustive:
+                    # Add dropout: 1 - sum(siblings)
+                    dropout = pt.maximum(1.0 - pt.sum(base_weight_vec), 0.01)
+                    base_weight_vec = pt.concatenate([base_weight_vec, dropout.reshape((1,))])
+
+                n_components = len(sibling_edges) + (0 if bg.is_exhaustive else 1)
+
+                # Per-group concentration for slice Dirichlets
+                # LogNormal prior: moderate concentration, learned from data
+                _log_kappa_bg = pm.Normal(
+                    f"log_kappa_slice_bg_{safe_group}",
+                    mu=np.log(float(n_components) * 5.0),
+                    sigma=1.0,
+                )
+                kappa_bg = pm.Deterministic(
+                    f"kappa_slice_bg_{safe_group}",
+                    pt.exp(_log_kappa_bg),
+                )
+
+                # Per-slice Dirichlet for each context key
+                for ctx_key in sorted(group_slice_keys):
+                    ctx_safe = _safe_var_name(ctx_key)
+                    conc_vec = kappa_bg * base_weight_vec
+                    # Floor concentrations to avoid degenerate Dirichlet
+                    conc_vec = pt.maximum(conc_vec, _s_dirichlet_conc_floor)
+
+                    slice_weights = pm.Dirichlet(
+                        f"weights_slice_{safe_group}_{ctx_safe}",
+                        a=conc_vec,
+                    )
+
+                    for i, sib_id in enumerate(sibling_edges):
+                        sib_safe = _safe_var_name(sib_id)
+                        p_slice_var = pm.Deterministic(
+                            f"p_slice_{sib_safe}_{ctx_safe}",
+                            slice_weights[i],
+                        )
+                        bg_slice_p_vars.setdefault(sib_id, {})[ctx_key] = p_slice_var
+
+                    diagnostics.append(
+                        f"  branch_group_slice: {safe_group} {ctx_key} → "
+                        f"Dir({n_components}, κ_bg)"
+                    )
+
+        # =============================================================
         # SECTION 3: PER-EDGE LATENCY VARIABLES
         # =============================================================
         # Latency describes *when* conversions happen after onset.
@@ -1042,6 +1130,7 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                     model=model,
                     cohort_latency_vars=cohort_latency_vars,
                     settings=_s,
+                    bg_slice_p_vars=bg_slice_p_vars.get(edge_id),
                 )
                 if suppress_agg:
                     # All slice groups exhaustive — p_base informed
@@ -1650,14 +1739,20 @@ def _emit_slice_model(
     model=None,
     cohort_latency_vars=None,
     settings=None,
+    bg_slice_p_vars: dict[str, object] | None = None,
 ) -> bool:
     """Emit Phase C hierarchical slice model for one edge (doc 14 §5.2).
 
-    Creates per-edge shrinkage τ_slice, per-slice logit-offset deviations,
-    per-slice kappa (overdispersion), and per-slice endpoint BetaBinomials.
-    Delegates trajectory likelihoods to the existing emission functions
-    (_emit_window_likelihoods, _emit_cohort_likelihoods) via a temporary
-    EdgeEvidence populated from each SliceObservations.
+    For solo edges: creates per-edge shrinkage τ_slice and per-slice
+    logit-offset deviations from p_base.
+
+    For branch group edges: uses pre-computed per-slice p from Dirichlet
+    (bg_slice_p_vars, created in Section 2b). The logit-offset path is
+    NOT used — the Dirichlet maintains the simplex constraint.
+
+    Both paths create per-slice kappa, per-slice latency deviations,
+    and per-slice endpoint BetaBinomials. Delegates trajectory likelihoods
+    to the existing emission functions via a temporary EdgeEvidence.
 
     Returns True if ALL slice groups are exhaustive (caller should
     suppress aggregate likelihoods for this edge).
@@ -1671,14 +1766,14 @@ def _emit_slice_model(
     _softplus_k = float(_s.get("BAYES_SOFTPLUS_SHARPNESS",
                                 _s.get("bayes_softplus_sharpness", SOFTPLUS_SHARPNESS)))
 
-    # Per-edge shrinkage (§5.2: σ_τ = 0.5 default)
-    tau_slice = pm.HalfNormal(f"tau_slice_{safe_id}", sigma=0.5)
+    # Per-edge shrinkage for p (doc 14 §5.2, §R2b2)
+    # Only needed for solo edges — branch group edges get p from Dirichlet
+    is_branch_group = bg_slice_p_vars is not None
+    if not is_branch_group:
+        tau_slice = pm.HalfNormal(f"tau_slice_{safe_id}", sigma=0.5)
+        logit_p_base = pt.log(p_base / (1.0 - p_base))
 
-    # Logit of p_base (shared across slices)
-    logit_p_base = pt.log(p_base / (1.0 - p_base))
-
-    # Resolve latency for endpoint BB (shared across slices — latency
-    # doesn't vary by context).
+    # Resolve edge-level latency (parent for per-slice hierarchy)
     ep_onset = et.onset_delta_days if et.has_latency else 0.0
     ep_mu = et.mu_prior if et.has_latency else 0.0
     ep_sigma = max(et.sigma_prior, 0.01) if et.has_latency else 0.01
@@ -1692,6 +1787,15 @@ def _emit_slice_model(
     else:
         ep_onset_var = pt.as_tensor_variable(np.float64(ep_onset))
 
+    # Per-slice latency shrinkage (§R2b2): how much mu/sigma/onset
+    # can vary across slices. Moderate defaults — user segments
+    # can genuinely convert on different timescales.
+    has_slice_latency = et.has_latency
+    if has_slice_latency:
+        tau_mu_slice = pm.HalfNormal(f"tau_mu_slice_{safe_id}", sigma=0.3)
+        tau_sigma_slice = pm.HalfNormal(f"tau_sigma_slice_{safe_id}", sigma=0.2)
+        tau_onset_slice = pm.HalfNormal(f"tau_onset_slice_{safe_id}", sigma=0.5)
+
     all_exhaustive = True
 
     for dim_key, group in ev.slice_groups.items():
@@ -1702,12 +1806,18 @@ def _emit_slice_model(
             ctx_safe = _safe_var_name(ctx_key)
             slice_safe_id = f"{safe_id}__{ctx_safe}"
 
-            # Non-centred parameterisation (§5.2)
-            eps = pm.Normal(f"eps_slice_{safe_id}_{ctx_safe}", mu=0, sigma=1)
-            p_slice = pm.Deterministic(
-                f"p_slice_{safe_id}_{ctx_safe}",
-                pm.math.invlogit(logit_p_base + eps * tau_slice),
-            )
+            # Per-slice p: Dirichlet (branch group) or logit-offset (solo)
+            if is_branch_group and ctx_key in bg_slice_p_vars:
+                # Branch group: p comes from per-slice Dirichlet (Section 2b)
+                # Already created as a Deterministic — just reference it
+                p_slice = bg_slice_p_vars[ctx_key]
+            else:
+                # Solo edge: non-centred logit-offset from p_base (§5.2)
+                eps = pm.Normal(f"eps_slice_{safe_id}_{ctx_safe}", mu=0, sigma=1)
+                p_slice = pm.Deterministic(
+                    f"p_slice_{safe_id}_{ctx_safe}",
+                    pm.math.invlogit(logit_p_base + eps * tau_slice),
+                )
 
             # Per-slice kappa (overdispersion)
             _log_kappa_slice = pm.Normal(
@@ -1718,6 +1828,30 @@ def _emit_slice_model(
                 f"kappa_slice_{safe_id}_{ctx_safe}",
                 pt.exp(_log_kappa_slice),
             )
+
+            # Per-slice latency deviations (§R2b2, non-centred)
+            if has_slice_latency:
+                _eps_mu = pm.Normal(f"eps_mu_slice_{safe_id}_{ctx_safe}", mu=0, sigma=1)
+                _eps_sigma = pm.Normal(f"eps_sigma_slice_{safe_id}_{ctx_safe}", mu=0, sigma=1)
+                _eps_onset = pm.Normal(f"eps_onset_slice_{safe_id}_{ctx_safe}", mu=0, sigma=1)
+
+                mu_slice = pm.Deterministic(
+                    f"mu_slice_{safe_id}_{ctx_safe}",
+                    ep_mu_var + _eps_mu * tau_mu_slice,
+                )
+                sigma_slice = pm.Deterministic(
+                    f"sigma_slice_{safe_id}_{ctx_safe}",
+                    pt.maximum(ep_sigma_var + _eps_sigma * tau_sigma_slice, 0.01),
+                )
+                onset_slice = pm.Deterministic(
+                    f"onset_slice_{safe_id}_{ctx_safe}",
+                    pt.maximum(ep_onset_var + _eps_onset * tau_onset_slice, 0.0),
+                )
+                _slice_lv = (mu_slice, sigma_slice)
+                _slice_ov = onset_slice
+            else:
+                _slice_lv = latency_vars
+                _slice_ov = onset_vars
 
             # Build a temporary EdgeEvidence with this slice's observations
             # so existing emission functions work unchanged.
@@ -1743,9 +1877,9 @@ def _emit_slice_model(
 
             # Delegate trajectory likelihoods to existing emission functions.
             # _emit_cohort_likelihoods expects latency_vars/onset_vars as
-            # dicts keyed by edge_id, so wrap the resolved values.
-            _lv_dict = {ev.edge_id: latency_vars} if latency_vars is not None else {}
-            _ov_dict = {ev.edge_id: onset_vars} if onset_vars is not None else {}
+            # dicts keyed by edge_id, so wrap the per-slice values.
+            _lv_dict = {ev.edge_id: _slice_lv} if _slice_lv is not None else {}
+            _ov_dict = {ev.edge_id: _slice_ov} if _slice_ov is not None else {}
             _clv_dict = (
                 {ev.edge_id: cohort_latency_vars[ev.edge_id]}
                 if cohort_latency_vars and ev.edge_id in cohort_latency_vars
@@ -1802,13 +1936,18 @@ def _emit_slice_model(
                     _ep_y = np.array(ep_y_list, dtype=np.int64)
                     _ep_ages = np.array(ep_ages_list, dtype=np.float64)
 
+                    # Use per-slice latency vars for CDF (gradients flow)
+                    _bb_mu = mu_slice if has_slice_latency else ep_mu_var
+                    _bb_sigma = sigma_slice if has_slice_latency else ep_sigma_var
+                    _bb_onset = onset_slice if has_slice_latency else ep_onset_var
+
                     _ages_t = pt.as_tensor_variable(_ep_ages)
-                    _age_minus_onset = _ages_t - ep_onset_var
+                    _age_minus_onset = _ages_t - _bb_onset
                     _eff_ages = pt.softplus(
                         _softplus_k * _age_minus_onset
                     ) / _softplus_k
                     _log_ages = pt.log(pt.maximum(_eff_ages, LOG_ARG_FLOOR))
-                    _z = (_log_ages - ep_mu_var) / (ep_sigma_var * pt.sqrt(2.0))
+                    _z = (_log_ages - _bb_mu) / (_bb_sigma * pt.sqrt(2.0))
                     _f_ep = 0.5 * pt.erfc(-_z)
 
                     _p_eff = pm.math.clip(
@@ -1828,7 +1967,7 @@ def _emit_slice_model(
 
             diagnostics.append(
                 f"  slice: {safe_id[:8]}… {ctx_key} → "
-                f"w={n_w} c={n_c}, p_slice+kappa_slice via τ_slice"
+                f"w={n_w} c={n_c}, p_slice+kappa_slice via {'Dirichlet' if is_branch_group else 'τ_slice'}"
             )
 
     return all_exhaustive

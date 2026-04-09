@@ -193,6 +193,30 @@ def main():
                 "kappa_sd": float(kappa_match.group(3)),
             })
 
+        # Extract parent p from posterior summary:
+        #   synth-context-solo-synth-ctx1-anchor-to-target
+        #     window(): p=0.3033 (α=3.9, β=9.0)  ess=602 rhat=1.007 [bayesian]
+        p_match = re.search(
+            r"window\(\):\s+p=([\d.]+)\s+\(α=([\d.]+),\s*β=([\d.]+)\)\s+ess=([\d.]+)\s+rhat=([\d.]+)",
+            line
+        )
+        if p_match:
+            # Associate with the most recently seen edge prefix
+            # (the edge name line precedes the window() line)
+            p_val = float(p_match.group(1))
+            p_alpha = float(p_match.group(2))
+            p_beta = float(p_match.group(3))
+            # Derive SD from alpha/beta: sd = sqrt(ab / ((a+b)^2 * (a+b+1)))
+            _ab = p_alpha + p_beta
+            p_sd = float((p_alpha * p_beta / (_ab ** 2 * (_ab + 1))) ** 0.5) if _ab > 0 else 0.0
+            _last_p_entry = {"p_mean": p_val, "p_sd": p_sd, "p_alpha": p_alpha, "p_beta": p_beta}
+
+        # Match edge name lines to associate p with the right edge
+        #   synth-context-solo-synth-ctx1-anchor-to-target
+        eid_line_match = re.search(r"^\s{2}(\S+)$", line)
+        if eid_line_match:
+            _last_edge_name = eid_line_match.group(1)
+
     # --- Map edge UUIDs to param_ids ---
     with open(graph_path) as f:
         graph = json.load(f)
@@ -202,6 +226,31 @@ def main():
         uuid = e.get("uuid", "")
         if pid and uuid:
             uuid_to_pid[uuid[:8]] = pid
+
+    # Extract parent p from posterior summary block:
+    #   synth-context-solo-synth-ctx1-anchor-to-target
+    #     window(): p=0.3033 (α=3.9, β=9.0)  ess=602 rhat=1.007 [bayesian]
+    _last_edge_name = None
+    for line in output.split("\n"):
+        eid_line_match = re.search(r"^\s{2}([\w-]+)$", line.rstrip())
+        if eid_line_match:
+            _last_edge_name = eid_line_match.group(1)
+        p_match = re.search(
+            r"window\(\):\s+p=([\d.]+)\s+\(α=([\d.]+),\s*β=([\d.]+)\)",
+            line
+        )
+        if p_match and _last_edge_name:
+            p_val = float(p_match.group(1))
+            p_alpha = float(p_match.group(2))
+            p_beta = float(p_match.group(3))
+            _ab = p_alpha + p_beta
+            p_sd = float((p_alpha * p_beta / (_ab ** 2 * (_ab + 1))) ** 0.5) if _ab > 0 else 0.0
+            for _upfx, _upid in uuid_to_pid.items():
+                if _upid == _last_edge_name or _last_edge_name.endswith(_upid):
+                    posteriors.setdefault(_upfx, {}).update({
+                        "p_mean": p_val, "p_sd": p_sd,
+                    })
+                    break
 
     # --- Print comparison ---
     print()
@@ -240,14 +289,8 @@ def main():
                 post = p
                 break
 
-        print(f"  {pid}")
+        print(f"  {pid} (uncontexted parent)")
         print(f"  {'─' * 65}")
-
-        if not has_latency:
-            print(f"    (no latency — p-only edge)")
-            # TODO: extract p posteriors from harness output
-            print()
-            continue
 
         if post is None:
             print(f"    NO POSTERIOR FOUND")
@@ -255,8 +298,9 @@ def main():
             print()
             continue
 
-        # Compare each parameter
+        # Compare all parent parameters (p + latency + kappa)
         for param, truth_key, post_key, sd_key in [
+            ("p",     "p",     "p_mean",     "p_sd"),
             ("mu",    "mu",    "mu_mean",    "mu_sd"),
             ("sigma", "sigma", "sigma_mean", "sigma_sd"),
             ("onset", "onset", "onset_mean", "onset_sd"),
@@ -309,9 +353,9 @@ def main():
         print()
 
     # --- Phase C: per-slice posterior comparison ---
-    # Parse p_slice lines from inference diagnostics:
-    #   p_slice 1d62f264… context(synth-channel:google): 0.3996±0.0051 HDI=[0.3900, 0.4094]
-    slice_posteriors: dict[str, dict[str, dict]] = {}  # uuid_prefix → ctx_key → {mean, sd}
+    # Parse p_slice lines from inference diagnostics. Full format:
+    #   p_slice 1d62f264… context(synth-channel:google): 0.4013±0.1175 HDI=[...] kappa=17.2±2.8 mu=1.100±0.005 sigma=0.574±0.004 onset=1.00±0.01
+    slice_posteriors: dict[str, dict[str, dict]] = {}  # uuid_prefix → ctx_key → {vars}
     for line in output.split("\n"):
         sp_match = re.search(
             r"p_slice (\w{8})… (context\([^)]+\)):\s+([\d.]+)±([\d.]+)\s+HDI=\[([\d.]+),\s*([\d.]+)\]",
@@ -320,14 +364,21 @@ def main():
         if sp_match:
             eid_prefix = sp_match.group(1)
             ctx_key = sp_match.group(2)
-            slice_posteriors.setdefault(eid_prefix, {})[ctx_key] = {
-                "mean": float(sp_match.group(3)),
-                "sd": float(sp_match.group(4)),
-                "hdi_lower": float(sp_match.group(5)),
-                "hdi_upper": float(sp_match.group(6)),
+            entry = {
+                "p_mean": float(sp_match.group(3)),
+                "p_sd": float(sp_match.group(4)),
+                "p_hdi_lower": float(sp_match.group(5)),
+                "p_hdi_upper": float(sp_match.group(6)),
             }
+            # Extract kappa, mu, sigma, onset from the same line
+            for var in ["kappa", "mu", "sigma", "onset"]:
+                vm = re.search(rf"{var}=([\d.]+)±([\d.]+)", line)
+                if vm:
+                    entry[f"{var}_mean"] = float(vm.group(1))
+                    entry[f"{var}_sd"] = float(vm.group(2))
+            slice_posteriors.setdefault(eid_prefix, {})[ctx_key] = entry
 
-    # Build ground truth per-slice p values from context_dimensions
+    # Build ground truth per-slice values from context_dimensions
     context_dims = truth.get("context_dimensions", [])
     if context_dims and slice_posteriors:
         print(f"  {'─' * 65}")
@@ -348,18 +399,21 @@ def main():
                 edges_overrides = val.get("edges", {})
 
                 for edge_key, overrides in edges_overrides.items():
-                    p_mult = overrides.get("p_mult")
-                    if p_mult is None:
-                        continue
-
-                    # Find base p from truth edges
-                    base_p = truth_edges.get(edge_key, {}).get("p")
+                    # Find base edge params from truth
+                    base_edge = truth_edges.get(edge_key, {})
+                    base_p = base_edge.get("p")
                     if base_p is None:
                         continue
-                    true_p = base_p * p_mult
+
+                    # Compute per-slice ground truth for all vars
+                    slice_truth = {
+                        "p": base_p * overrides.get("p_mult", 1.0),
+                        "mu": base_edge.get("mu", 0.0) + overrides.get("mu_offset", 0.0),
+                        "sigma": base_edge.get("sigma", 0.0) * overrides.get("sigma_mult", 1.0),
+                        "onset": base_edge.get("onset", 0.0) + overrides.get("onset_offset", 0.0),
+                    }
 
                     # Find the posterior for this slice
-                    # Match via uuid_prefix → graph_pid → truth edge key
                     sp = None
                     for prefix, slices in slice_posteriors.items():
                         mapped_pid = uuid_to_pid.get(prefix, "")
@@ -370,28 +424,51 @@ def main():
 
                     label = f"{val_id} ({edge_key})"
                     if sp is None:
-                        print(f"    {label:<35s}  truth={true_p:.4f}  posterior=???")
+                        print(f"    {label:<35s}  posterior=???")
                         continue
 
-                    abs_err = abs(sp["mean"] - true_p)
-                    abs_tol = max(0.02, abs(true_p) * 0.15)
-                    if sp["sd"] > 0:
-                        z_score = abs_err / sp["sd"]
-                        recovered = z_score < p_slice_z_threshold or abs_err < abs_tol
-                        status = "OK" if recovered else "MISS"
-                    else:
-                        z_score = float("inf")
-                        recovered = abs_err < abs_tol
-                        status = "OK" if recovered else "???"
+                    print(f"    {label}")
 
-                    if not recovered:
-                        any_fail = True
+                    # Compare each per-slice variable
+                    for var, truth_val, post_key, sd_key, z_thresh in [
+                        ("p",     slice_truth["p"],     "p_mean",     "p_sd",     p_slice_z_threshold),
+                        ("mu",    slice_truth["mu"],    "mu_mean",    "mu_sd",    3.0),
+                        ("sigma", slice_truth["sigma"], "sigma_mean", "sigma_sd", 3.0),
+                        ("onset", slice_truth["onset"], "onset_mean", "onset_sd", 3.0),
+                        ("kappa", None,                 "kappa_mean", "kappa_sd", None),
+                    ]:
+                        post_val = sp.get(post_key)
+                        post_sd = sp.get(sd_key)
+                        if post_val is None:
+                            continue
 
-                    err_str = f"Δ={abs_err:.4f}" if abs_err < abs_tol and z_score >= p_slice_z_threshold else f"z={z_score:5.2f}"
-                    print(f"    {label:<35s}  truth={true_p:.4f}  post={sp['mean']:.4f}±{sp['sd']:.4f}  "
-                          f"{err_str:>10s}  [{status}]")
+                        if var == "kappa":
+                            # Kappa: informational only (no ground truth per-slice)
+                            print(f"      {var:<8s}  post={post_val:7.1f}±{post_sd:.1f}")
+                            continue
 
-                print()
+                        if truth_val is None or truth_val == 0:
+                            continue
+
+                        abs_err = abs(post_val - truth_val)
+                        abs_tol = max(0.15, abs(truth_val) * 0.15)
+                        if post_sd and post_sd > 0:
+                            z_score = abs_err / post_sd
+                            recovered = z_score < z_thresh or abs_err < abs_tol
+                            status = "OK" if recovered else "MISS"
+                        else:
+                            z_score = float("inf")
+                            recovered = abs_err < abs_tol
+                            status = "OK" if recovered else "???"
+
+                        if not recovered:
+                            any_fail = True
+
+                        err_str = f"Δ={abs_err:.3f}" if abs_err < abs_tol and z_score >= z_thresh else f"z={z_score:5.2f}"
+                        print(f"      {var:<8s}  truth={truth_val:7.3f}  post={post_val:7.3f}±{post_sd:.3f}  "
+                              f"{err_str:>10s}  [{status}]")
+
+                    print()
 
     print(f"{'=' * 70}")
     if any_fail:

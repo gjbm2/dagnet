@@ -14,6 +14,7 @@
  */
 
 import { PYTHON_API_BASE as API_BASE_URL } from './pythonApiBase';
+import { buildForecastingSettings } from '../constants/latency';
 
 const USE_MOCK = (typeof import.meta.env !== 'undefined' && import.meta.env.VITE_USE_MOCK_COMPUTE === 'true');
 
@@ -1480,6 +1481,7 @@ export class GraphComputeClient {
       ...(meceDimensions?.length ? { mece_dimensions: meceDimensions } : {}),
       ...(displaySettings ? { display_settings: displaySettings } : {}),
       ...(testFixture ? { test_fixture: testFixture, ...tfOverrides } : {}),
+      forecasting_settings: buildForecastingSettings(),
     };
 
     const analyzeUrl = bypassCache
@@ -1677,6 +1679,7 @@ export class GraphComputeClient {
       ...(meceDimensions?.length ? { mece_dimensions: meceDimensions } : {}),
       ...(displaySettings ? { display_settings: displaySettings } : {}),
       ...(multiTestFixture ? { test_fixture: multiTestFixture, ...multiTfOverrides } : {}),
+      forecasting_settings: buildForecastingSettings(),
     };
 
     // DEV/forensics: make the exact compute boundary payload easy to copy without

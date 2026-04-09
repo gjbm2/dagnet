@@ -872,15 +872,130 @@ def _handle_cohort_maturity_v2(data: Dict[str, Any]) -> Dict[str, Any]:
             except (ValueError, TypeError):
                 band_level = 0.90
 
-            # ── x_provider (doc 29c §Phase A x_provider) ─────────────
-            # For single-edge: use the legacy provider (from_node = x,
-            # so the existing upstream logic is correct).
-            # For multi-hop: disabled provider — legacy logic computes
-            # at u (last edge's source), not x (query start).  Phase B
-            # will implement a proper x-coordinate provider.
+            # ── x_provider (doc 29c/29d) ─────────────────────────────
             is_multi_hop = len(per_edge_results) > 1
             if is_multi_hop:
-                _x_provider = XProvider(reach=0.0, upstream_params_list=[], enabled=False)
+                from runner.cohort_forecast import get_incoming_edges, read_edge_cohort_params
+                from runner.span_upstream import extract_upstream_observations
+                from runner.span_kernel import _build_span_topology
+
+                # Read ingress carrier: path latency params from edges
+                # entering x (query_from_node).
+                _ingress = []
+                if query_from_node:
+                    for inc_edge in get_incoming_edges(graph_data, query_from_node):
+                        _params = read_edge_cohort_params(inc_edge)
+                        if _params:
+                            _ingress.append(_params)
+
+                # ── Compute reach from anchor to x ────────────────────
+                _reach_to_x = 0.0
+                if query_from_node and anchor_node and not is_window:
+                    try:
+                        from runner.graph_builder import build_networkx_graph
+                        from runner.path_runner import calculate_path_probability
+                        G = build_networkx_graph(graph_data)
+                        path_result = calculate_path_probability(G, anchor_node, query_from_node)
+                        _reach_to_x = path_result.probability
+                        print(f"[v2] reach(a→x): {_reach_to_x:.6f}")
+                    except Exception as _e:
+                        print(f"[v2] reach computation failed: {_e}")
+
+                # ── Policy B: extract upstream observations ───────────
+                # Evidence conditions the ingress carrier model — it
+                # does not replace it.  Any evidence is useful.
+                _upstream_obs = None
+                _upstream_enabled = False
+                if (query_from_node and anchor_node
+                        and query_from_node != anchor_node
+                        and not is_window
+                        and _ingress  # need a carrier to condition
+                        and _reach_to_x > 0):
+                    # Collect evidence frames for edges entering x
+                    _up_edge_frames: Dict[str, List[Dict[str, Any]]] = {}
+
+                    # Index subject edges we already have
+                    for entry in per_edge_results:
+                        _target_id = (entry.get('subject') or {}).get('target', {}).get('targetId', '')
+                        if _target_id:
+                            _up_edge_frames[_target_id] = (
+                                entry.get('derivation_result', {}).get('frames', [])
+                            )
+
+                    # Find upstream edges not already in subject set
+                    _up_topo = _build_span_topology(graph_data, anchor_node, query_from_node)
+                    if _up_topo is not None:
+                        def _edge_uuid(e_dict):
+                            return str(e_dict.get('uuid', e_dict.get('id', '')))
+                        _missing_eids = [
+                            _edge_uuid(e_data) for _, _, e_data in _up_topo.edge_list
+                            if _edge_uuid(e_data) not in _up_edge_frames
+                        ]
+                        if _missing_eids:
+                            print(f"[v2] Policy B: fetching {len(_missing_eids)} upstream edges")
+                            candidate_regimes = scenario.get('candidate_regimes_by_edge', {})
+                            for _eid in _missing_eids:
+                                _regimes = candidate_regimes.get(_eid, [])
+                                if not _regimes:
+                                    print(f"[v2] Policy B: no regime for {_eid[:20]}")
+                                    break
+                                _regime = _regimes[0]
+                                _core_hash = _regime.get('core_hash', '')
+                                if not _core_hash:
+                                    break
+                                _up_edge = None
+                                for e in graph_data.get('edges', []):
+                                    if str(e.get('uuid', e.get('id', ''))) == str(_eid):
+                                        _up_edge = e
+                                        break
+                                if not _up_edge:
+                                    break
+                                _p_id = _up_edge.get('p', {}).get('id', '') or _eid
+                                _af = subjects[0].get('anchor_from', '')
+                                _at = subjects[0].get('anchor_to', '')
+                                _sf = subjects[0].get('sweep_from', _af)
+                                _st = subjects[0].get('sweep_to', _at)
+                                try:
+                                    _up_rows = query_snapshots_for_sweep(
+                                        param_id=_p_id,
+                                        core_hash=_core_hash,
+                                        slice_keys=[''],
+                                        anchor_from=date.fromisoformat(_af),
+                                        anchor_to=date.fromisoformat(_at),
+                                        sweep_from=date.fromisoformat(_sf) if _sf else None,
+                                        sweep_to=date.fromisoformat(_st) if _st else None,
+                                        equivalent_hashes=_regime.get('equivalent_hashes'),
+                                    )
+                                    print(f"[v2] Policy B: edge {_eid[:20]} → {len(_up_rows)} rows")
+                                    _up_derivation = derive_cohort_maturity(
+                                        _up_rows, sweep_from=_sf, sweep_to=_st,
+                                    )
+                                    _up_edge_frames[_eid] = _up_derivation.get('frames', [])
+                                except Exception as _e:
+                                    print(f"[v2] Policy B: query failed for {_eid[:20]}: {_e}")
+                                    break
+
+                    # Extract observations (sum y across edges entering x)
+                    if _up_edge_frames:
+                        _upstream_obs = extract_upstream_observations(
+                            graph=graph_data,
+                            anchor_node_id=anchor_node,
+                            x_node_id=query_from_node,
+                            per_edge_frames=_up_edge_frames,
+                        )
+                        if _upstream_obs:
+                            _upstream_enabled = True
+                            _total_obs = sum(len(v) for v in _upstream_obs.values())
+                            print(f"[v2] Policy B: {_total_obs} observations "
+                                  f"across {len(_upstream_obs)} cohorts")
+
+                _x_provider = XProvider(
+                    reach=_reach_to_x,
+                    upstream_params_list=_ingress,
+                    enabled=_upstream_enabled,
+                    ingress_carrier=_ingress if _ingress else None,
+                    upstream_obs=_upstream_obs,
+                )
             else:
                 # Single-edge: delegate to legacy provider (x = u = from_node)
                 target_edge_obj = None
