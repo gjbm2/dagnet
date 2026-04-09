@@ -858,20 +858,21 @@ expressions of latent `(mu, sigma)`. Each slice's Potential/BetaBinomial
 term naturally inherits the latent coupling — no special per-slice
 completeness wiring needed beyond using the same CDF expression.
 
-Per-slice likelihoods use the edge's κ (Beta-Binomial/DM overdispersion,
-also Phase D). No per-slice overdispersion variable is needed.
+Per-slice likelihoods use per-slice κ (Beta-Binomial/DM overdispersion).
+Each context slice has its own `kappa_slice_i` — between-day variation
+differs by user segment (e.g. paid traffic may be noisier than organic).
 
 ### 7.3 Temporal drift × slices
 
 Phase D's time-binned latency drift (`mu_t` random walk per edge)
-applies uniformly across slices — different channels don't have
-different latency models (there is no per-slice latency). The latency
-model describes the conversion process's timing, which is a property
-of the product pipeline, not the user segment.
+applies at the edge level. Per-slice latency deviations (§5.2b) are
+layered on top: each slice has its own `mu_slice_i`, `sigma_slice_i`,
+`onset_slice_i` drawn from a hierarchy around the edge-level values.
+Different user segments genuinely convert on different timescales —
+e.g. paid-search users may convert faster than organic visitors.
 
-Each slice's cohort observations use the same per-edge latent
-`(mu_t, sigma)` for completeness. The slice deviation affects only
-the probability, not the latency.
+Each slice's cohort observations use that slice's latent latency
+for completeness computation, not the edge-level values.
 
 ---
 
@@ -1295,12 +1296,24 @@ trusted.
   value; parent HDI must contain the true aggregate
 - Generator is the test harness for all subsequent steps
 
-**R2b — Solo-edge slice pooling** (`compiler/model.py`):
+**R2b — Solo-edge slice pooling: p + kappa** (`compiler/model.py`):
 - `τ_slice` (HalfNormal), per-slice logit-offset deviations (§5.2)
-- Per-slice window/cohort likelihoods
+- Per-slice `kappa_slice_i` (overdispersion) + endpoint BetaBinomial
+- Per-slice window/cohort likelihoods via existing emission functions
 - Per-date routing: parent terms for uncontexted-regime dates,
   child terms for mece-regime dates (§5.7)
-- Parameter recovery test: recover known slice deviations
+- Parameter recovery test: recover known slice p deviations
+- Parent (uncontexted) variable set always emitted alongside slices
+
+**R2b2 — Per-slice latency** (`compiler/model.py`):
+- Per-slice `mu_slice_i`, `sigma_slice_i`, `onset_slice_i` via
+  non-centred hierarchy from edge-level values (same pattern as p):
+  `mu_slice_i = mu_base + eps_mu_i * τ_mu_slice`
+- Different user segments convert on different timescales — this is
+  highly material for some context vectors (e.g. paid vs organic)
+- Extend truth file with `mu_offset`, `sigma_mult` per context value
+- New synth graph (S1b) with varied latency across contexts
+- Parameter recovery test: recover known per-slice latency deviations
 
 **R2c — Branch-group hierarchical Dirichlet** (`compiler/model.py`):
 - `κ`, `base_weights`, per-slice `Dirichlet(κ * base_weights)` (§5.3)
@@ -1361,7 +1374,7 @@ verified.
 - R2a (synth generator) can start immediately after R1 gate
 - R2b-R2e depend on R1c but NOT on R1d (hand-crafted test graphs)
 - R2g substeps are independent of each other
-- Critical path: R1a → R1c → R1e → R2a → R2b → R2c → R2d → R2e → R2f
+- Critical path: R1a → R1c → R1e → R2a → R2b → R2b2 → R2c → R2d → R2e → R2f
 
 ---
 

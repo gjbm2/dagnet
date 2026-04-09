@@ -118,20 +118,27 @@ function parseExpression(dsl: string): string[] {
     }
   }
   
-  // Handle (...).suffix
+  // Handle (...).suffix or (...)(suffix) — cartesian product
+  // Both forms distribute: (a;b).c = a.c;b.c and (a;b)(c) = a.c;b.c
   if (trimmed.startsWith('(') || trimmed.startsWith('or(')) {
     const parenEnd = findMatchingParen(trimmed, trimmed.indexOf('('));
-    if (parenEnd < trimmed.length - 1 && trimmed[parenEnd + 1] === '.') {
-      const prefix = trimmed.substring(0, parenEnd + 1);
-      const suffix = trimmed.substring(parenEnd + 1);
-      
-      // Parse prefix, distribute suffix (re-parse so semicolons in suffix are expanded)
-      const prefixBranches = parseExpression(prefix);
-      const branches: string[] = [];
-      for (const b of prefixBranches) {
-        branches.push(...parseExpression(b + suffix));
+    if (parenEnd < trimmed.length - 1) {
+      const nextChar = trimmed[parenEnd + 1];
+      if (nextChar === '.' || nextChar === '(') {
+        const prefix = trimmed.substring(0, parenEnd + 1);
+        // For (...)(suffix), insert a dot so distribution works uniformly
+        const suffix = nextChar === '('
+          ? '.' + trimmed.substring(parenEnd + 1)
+          : trimmed.substring(parenEnd + 1);
+
+        // Parse prefix, distribute suffix (re-parse so semicolons in suffix are expanded)
+        const prefixBranches = parseExpression(prefix);
+        const branches: string[] = [];
+        for (const b of prefixBranches) {
+          branches.push(...parseExpression(b + suffix));
+        }
+        return branches;
       }
-      return branches;
     }
   }
   

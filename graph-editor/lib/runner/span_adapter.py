@@ -91,28 +91,39 @@ def span_kernel_to_edge_params(
         params['posterior_p'] = span_p
         params['posterior_p_cohort'] = span_p
 
-        # Alpha/beta from last edge (for frontier conditioning prior)
+        # Alpha/beta for frontier conditioning prior.
+        # Use span_p as the prior mean, with concentration (kappa)
+        # from the last edge's posterior.  This ensures the prior is
+        # centred on the span rate, not the last edge's rate.
         post_alpha = prob_posterior.get('alpha')
         post_beta = prob_posterior.get('beta')
-        if (isinstance(post_alpha, (int, float)) and isinstance(post_beta, (int, float))
-                and post_alpha > 0 and post_beta > 0):
-            params['posterior_alpha'] = float(post_alpha)
-            params['posterior_beta'] = float(post_beta)
-
         path_alpha = prob_posterior.get('path_alpha')
         path_beta = prob_posterior.get('path_beta')
+
+        # Derive kappa from last edge's posterior (how much data it saw)
         if (isinstance(path_alpha, (int, float)) and isinstance(path_beta, (int, float))
                 and path_alpha > 0 and path_beta > 0):
-            params['posterior_path_alpha'] = float(path_alpha)
-            params['posterior_path_beta'] = float(path_beta)
+            kappa = float(path_alpha) + float(path_beta)
+        elif (isinstance(post_alpha, (int, float)) and isinstance(post_beta, (int, float))
+                and post_alpha > 0 and post_beta > 0):
+            kappa = float(post_alpha) + float(post_beta)
+        else:
+            kappa = 20.0  # weak default
 
-        # p_stdev
-        if post_alpha and post_beta and post_alpha > 0 and post_beta > 0:
-            s = float(post_alpha) + float(post_beta)
-            params['p_stdev'] = math.sqrt(float(post_alpha) * float(post_beta) / (s * s * (s + 1)))
-        if path_alpha and path_beta and path_alpha > 0 and path_beta > 0:
-            s = float(path_alpha) + float(path_beta)
-            params['p_stdev_cohort'] = math.sqrt(float(path_alpha) * float(path_beta) / (s * s * (s + 1)))
+        # Re-derive alpha/beta from span_p + kappa
+        params['posterior_alpha'] = span_p * kappa
+        params['posterior_beta'] = (1.0 - span_p) * kappa
+        params['posterior_path_alpha'] = span_p * kappa
+        params['posterior_path_beta'] = (1.0 - span_p) * kappa
+
+        # p_stdev — derived from span_p + kappa
+        span_alpha = span_p * kappa
+        span_beta = (1.0 - span_p) * kappa
+        if span_alpha > 0 and span_beta > 0:
+            s = span_alpha + span_beta
+            p_sd = math.sqrt(span_alpha * span_beta / (s * s * (s + 1)))
+            params['p_stdev'] = p_sd
+            params['p_stdev_cohort'] = p_sd
 
         # Posterior SDs for MC fan (from last edge's path-level)
         for key in ('bayes_mu_sd', 'bayes_sigma_sd', 'bayes_onset_sd',

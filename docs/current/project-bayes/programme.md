@@ -1,7 +1,7 @@
 # Project Bayes: Programme
 
 **Status**: Active
-**Updated**: 7-Apr-26
+**Updated**: 9-Apr-26
 **Purpose**: Phased delivery plan for Project Bayes. This doc owns sequencing;
 design docs contain the detail.
 
@@ -51,8 +51,11 @@ data-constrained. Single-source validation:
    kappa/kappa_p variables and external Williams MLE (which is
    retained for diagnostic comparison only).
 6. Quality-gated warm-start (rhat < 1.10, ESS ≥ 100)
-7. Full kappa→alpha/beta→p_stdev→confidence bands pipeline verified
-   for both window and cohort modes
+7. Window kappa→alpha/beta→p_stdev→confidence bands pipeline verified
+   end-to-end. The cohort export path is under renewed review after the
+   9-Apr-26 forensic review found that current code still routes
+   `cohort()` alpha/beta through `_estimate_cohort_kappa()` rather
+   than a clearly model-based Phase 2 dispersion export. See doc 33.
 
 **Resolved bugs** (29-Mar-26 sweep):
 - ~~Posterior upsert on subsequent runs~~ — **FIXED 29-Mar-26**.
@@ -99,6 +102,15 @@ data-constrained. Single-source validation:
 **Open issues**:
 
 *Model quality — WATCH LIST (no blockers)*:
+- **Compiler dispersion forensic review** — **OPEN 9-Apr-26**. See
+  `docs/current/project-bayes/33-bayes-compiler-dispersion-forensic-review.md`.
+  Current code inspection identifies two likely likelihood-changing
+  defects (trajectory endpoint double-counting and the order-dependent
+  Phase 2 non-exhaustive branch-group prior) plus four export or
+  diagnostic defects (cohort uncertainty export drift, LOO null
+  mismatch, non-deterministic predictive summarisation, and
+  unconditional path provenance). These findings are from forensic code
+  review and targeted evidence, not yet from dedicated synth reruns.
 - ~~**Dispersion estimation: dual-kappa model**~~ — **RESOLVED
   31-Mar-26**. Abandoned external MLE approach. Unified MCMC κ per
   edge (LogNormal prior, daily BB + endpoint BB). Phase 1 κ measures

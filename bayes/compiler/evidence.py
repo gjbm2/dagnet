@@ -371,6 +371,9 @@ def bind_snapshot_evidence(
         else:
             diagnostics.append(f"SKIP edge {edge_id[:8]}…: no snapshot data and no param file")
 
+        # --- Phase C: route sliced observations to SliceGroups ---
+        _route_slices(ev, settings, diagnostics)
+
         # --- Minimum-n gate ---
         min_n = settings.get("min_n_threshold", MIN_N_THRESHOLD)
         if ev.total_n < min_n and ev.total_n > 0:
@@ -466,13 +469,19 @@ def _bind_from_snapshot_rows(
     # Aggregate context-prefixed rows into bare window()/cohort().
     # Context slices are MECE — summing their x and y values for the
     # same (anchor_day, retrieved_at) recovers the aggregate row.
-    # Until Phase C per-context modelling is built, the compiler
-    # operates on aggregate data only. If a bare aggregate row already
-    # exists, it takes precedence (context rows for that retrieval are
-    # dropped). See doc 25.
+    # If a bare aggregate row already exists, it takes precedence
+    # (context rows for that retrieval are dropped). See doc 25.
+    #
+    # Phase C addition: also collect per-context rows separately for
+    # slice routing. The aggregate feeds p_base; per-context feeds
+    # per-slice likelihoods via _route_slices → SliceGroups.
     agg_window: dict[str, dict[str, dict]] = defaultdict(dict)  # anchor → ret → row
     agg_cohort: dict[str, dict[str, dict]] = defaultdict(dict)
     n_ctx_aggregated = 0
+
+    # Phase C: per-context rows for slice routing (context_key → anchor → [rows])
+    ctx_window_rows: dict[str, dict[str, list[dict]]] = defaultdict(lambda: defaultdict(list))
+    ctx_cohort_rows: dict[str, dict[str, list[dict]]] = defaultdict(lambda: defaultdict(list))
 
     for row in rows:
         anchor_day = str(row.get("anchor_day", ""))
@@ -486,6 +495,15 @@ def _bind_from_snapshot_rows(
             bucket = agg_window
         else:
             continue
+
+        # Phase C: collect per-context rows before aggregation
+        if is_ctx:
+            ctx_part = context_key(slice_key)
+            if ctx_part:
+                if _is_cohort(slice_key):
+                    ctx_cohort_rows[ctx_part][anchor_day].append(dict(row))
+                else:
+                    ctx_window_rows[ctx_part][anchor_day].append(dict(row))
 
         day_bucket = bucket[anchor_day]
         if ret_key in day_bucket:
@@ -566,6 +584,37 @@ def _bind_from_snapshot_rows(
             ev.total_n += t.n
         for d in cohort_daily:
             ev.total_n += d.n
+
+    # Step 3b: Phase C — per-context observations for slice routing.
+    # These decompose the same data that the aggregate observations
+    # cover. _route_slices (called downstream) will move them into
+    # SliceGroups. We do NOT add to total_n — the aggregate already
+    # accounts for the full data volume.
+    for ctx_part in sorted(ctx_window_rows.keys()):
+        ctx_by_day = ctx_window_rows[ctx_part]
+        ctx_trajs, ctx_daily = _build_trajectories_for_obs_type(
+            ctx_by_day, "window", et, today, diagnostics,
+            zero_count_filter=zcf,
+        )
+        if ctx_trajs or ctx_daily:
+            ev.cohort_obs.append(CohortObservation(
+                slice_dsl=f"window(snapshot).{ctx_part}",
+                daily=ctx_daily,
+                trajectories=ctx_trajs,
+            ))
+
+    for ctx_part in sorted(ctx_cohort_rows.keys()):
+        ctx_by_day = ctx_cohort_rows[ctx_part]
+        ctx_trajs, ctx_daily = _build_trajectories_for_obs_type(
+            ctx_by_day, "cohort", et, today, diagnostics,
+            zero_count_filter=zcf,
+        )
+        if ctx_trajs or ctx_daily:
+            ev.cohort_obs.append(CohortObservation(
+                slice_dsl=f"cohort(snapshot).{ctx_part}",
+                daily=ctx_daily,
+                trajectories=ctx_trajs,
+            ))
 
     # Step 4: Collect per-retrieval-date onset observations.
     # onset_delta_days is derived once per retrieval date per edge from

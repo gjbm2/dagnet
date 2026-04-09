@@ -559,6 +559,12 @@ class PosteriorSummary:
     cohort_hdi_lower: float | None = None
     cohort_hdi_upper: float | None = None
 
+    # Phase C: per-context-slice posteriors (doc 14 §5.2)
+    # context_key → {mean, stdev, alpha, beta, hdi_lower, hdi_upper}
+    slice_posteriors: dict[str, dict[str, float]] = field(default_factory=dict)
+    tau_slice_mean: float | None = None
+    tau_slice_sd: float | None = None
+
     # LOO-ELPD model adequacy scoring (doc 32)
     elpd: float | None = None
     elpd_se: float | None = None

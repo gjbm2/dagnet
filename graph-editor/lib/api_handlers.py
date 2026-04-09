@@ -678,7 +678,7 @@ def _handle_cohort_maturity_v2(data: Dict[str, Any]) -> Dict[str, Any]:
     import math
     from datetime import date, datetime, timedelta
     from runner.cohort_maturity_derivation import derive_cohort_maturity
-    from runner.cohort_forecast import compute_cohort_maturity_rows
+    from runner.cohort_forecast import compute_cohort_maturity_rows, XProvider, build_x_provider_from_graph
     from runner.span_evidence import compose_path_maturity_frames
     from runner.span_kernel import compose_span_kernel
     from runner.span_adapter import span_kernel_to_edge_params
@@ -749,8 +749,13 @@ def _handle_cohort_maturity_v2(data: Dict[str, Any]) -> Dict[str, Any]:
         except Exception:
             pass
 
+        # Detect window vs cohort mode from the temporal DSL.
+        # The FE sends analytics_dsl (subject: from(x).to(y)) separately
+        # from effective_query_dsl (temporal: window(-90d:) or cohort(...)).
+        # Check the temporal DSL first, then the full composed DSL.
+        temporal_dsl = scenario.get('effective_query_dsl', '')
         query_dsl = data.get('query_dsl') or top_analytics_dsl or ''
-        is_window = 'window(' in query_dsl
+        is_window = 'window(' in temporal_dsl or 'window(' in query_dsl
 
         # ── Derive frames per edge ────────────────────────────────────
         per_edge_results: List[Dict[str, Any]] = []
@@ -849,13 +854,8 @@ def _handle_cohort_maturity_v2(data: Dict[str, Any]) -> Dict[str, Any]:
             edge_params = _read_edge_model_params(graph_data, last_edge_id) or {}
 
         # ── Call compute_cohort_maturity_rows ──────────────────────────
-        print(f"[v2] Kernel: span_p={kernel.span_p:.4f} max_tau={kernel.max_tau}" if kernel else "[v2] Kernel: None")
-        print(f"[v2] last_edge_id={last_edge_id}")
-        print(f"[v2] edge_params keys: {sorted(edge_params.keys()) if edge_params else 'None'}")
-        ep_p = edge_params.get('forecast_mean') or edge_params.get('posterior_p') or 0
-        ep_mu = edge_params.get('mu') or edge_params.get('path_mu') or 0
-        ep_sigma = edge_params.get('sigma') or edge_params.get('path_sigma') or 0
-        print(f"[v2] edge_params: p={ep_p} mu={ep_mu} sigma={ep_sigma}")
+        if kernel:
+            print(f"[v2] Kernel: span_p={kernel.span_p:.4f} max_tau={kernel.max_tau}")
         maturity_rows = []
         if composed_frames and last_edge_id and edge_params:
             anchor_from_str = subjects[0].get('anchor_from', '')
@@ -872,6 +872,44 @@ def _handle_cohort_maturity_v2(data: Dict[str, Any]) -> Dict[str, Any]:
             except (ValueError, TypeError):
                 band_level = 0.90
 
+            # ── x_provider (doc 29c §Phase A x_provider) ─────────────
+            # For single-edge: use the legacy provider (from_node = x,
+            # so the existing upstream logic is correct).
+            # For multi-hop: disabled provider — legacy logic computes
+            # at u (last edge's source), not x (query start).  Phase B
+            # will implement a proper x-coordinate provider.
+            is_multi_hop = len(per_edge_results) > 1
+            if is_multi_hop:
+                _x_provider = XProvider(reach=0.0, upstream_params_list=[], enabled=False)
+            else:
+                # Single-edge: delegate to legacy provider (x = u = from_node)
+                target_edge_obj = None
+                for e in graph_data.get('edges', []):
+                    if str(e.get('uuid', e.get('id', ''))) == str(last_edge_id):
+                        target_edge_obj = e
+                        break
+                _x_provider = build_x_provider_from_graph(
+                    graph_data, target_edge_obj, anchor_node, is_window,
+                )
+
+            # Build a CDF callable from the span kernel for multi-hop.
+            # For single-edge spans, let the row builder use its own
+            # analytic CDF (exact parity with v1).
+            _span_cdf_fn = None
+            if is_multi_hop and kernel is not None and kernel.span_p > 0:
+                # Build topology for MC reconvolution
+                from runner.span_kernel import _build_span_topology
+                _span_topo = _build_span_topology(graph_data, query_from_node, query_to_node)
+
+                def _span_cdf_fn_impl(tau: float) -> float:
+                    raw = kernel.cdf_at(int(round(tau)))
+                    return raw / kernel.span_p
+
+                # Attach topology and graph so the MC loop can reconvolve
+                _span_cdf_fn_impl._span_topo = _span_topo
+                _span_cdf_fn_impl._span_graph = graph_data
+                _span_cdf_fn = _span_cdf_fn_impl
+
             try:
                 maturity_rows = compute_cohort_maturity_rows(
                     frames=composed_frames,
@@ -886,6 +924,8 @@ def _handle_cohort_maturity_v2(data: Dict[str, Any]) -> Dict[str, Any]:
                     band_level=band_level,
                     anchor_node_id=anchor_node,
                     sampling_mode=sampling_mode,
+                    span_cdf_override=_span_cdf_fn,
+                    x_provider=_x_provider,
                 )
                 print(f"[v2] compute_cohort_maturity_rows returned {len(maturity_rows)} rows")
             except Exception as e:

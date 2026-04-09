@@ -18,13 +18,115 @@ from __future__ import annotations
 
 import math
 import os
-from typing import Any, Dict, List, Optional, Tuple
+from dataclasses import dataclass, field
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 # Gate per-cohort diagnostic prints behind env var (set DAGNET_COHORT_DEBUG=1 to enable)
 _COHORT_DEBUG = bool(os.environ.get('DAGNET_COHORT_DEBUG'))
 
 
 from .forecast_application import compute_completeness
+
+
+# ── x_provider: upstream arrival provider ─────────────────────────────
+#
+# Phase A seam (doc 29c §"Phase A x_provider").
+#
+# The x_provider encapsulates all upstream state needed by the row
+# builder to compute the denominator (cumulative arrivals at x).
+# In Phase A, the provider wraps the existing legacy upstream logic.
+# In Phase B, it will be upgraded with evidence-driven policies.
+#
+# Contract:
+#   - Returns arrivals at x (the query start node), never at u
+#   - For single-edge spans, x = u = from_node, so the distinction
+#     is invisible
+#   - For multi-hop spans, the Phase A provider returns None
+#     (Pop C disabled), because the legacy logic computes arrivals
+#     at u, not x.  Phase B will implement a proper x-coordinate
+#     provider.
+
+
+@dataclass
+class XProvider:
+    """Upstream arrival state for the cohort maturity row builder.
+
+    Attributes:
+        reach: scalar reach probability from anchor to x.
+        upstream_params_list: per-edge upstream params for MC draws.
+            Each dict has: p, mu, sigma, onset, and optionally
+            mu_sd, sigma_sd, onset_sd, alpha, beta, p_sd.
+        enabled: if False, the row builder treats this as "no upstream"
+            (equivalent to window mode for the denominator).
+    """
+    reach: float = 0.0
+    upstream_params_list: List[Dict[str, float]] = field(default_factory=list)
+    enabled: bool = False
+
+
+def build_x_provider_from_graph(
+    graph: Dict[str, Any],
+    target_edge: Optional[Dict[str, Any]],
+    anchor_node_id: Optional[str],
+    is_window: bool,
+) -> XProvider:
+    """Build the legacy x_provider from graph data.
+
+    This is the Phase A provider: it wraps the existing upstream logic
+    that reads from the target edge's from-node.  For single-edge spans,
+    from_node = x, so this is correct.
+
+    Args:
+        graph: scenario graph dict.
+        target_edge: the target edge (last in the span).
+        anchor_node_id: anchor node for reach computation.
+        is_window: True for window mode (x is flat, no upstream needed).
+
+    Returns:
+        XProvider with reach and upstream params populated.
+    """
+    if is_window or target_edge is None:
+        return XProvider(reach=0.0, upstream_params_list=[], enabled=False)
+
+    from_node_id = get_edge_from_node(target_edge)
+    if not from_node_id:
+        return XProvider(reach=0.0, upstream_params_list=[], enabled=False)
+
+    reach = 0.0
+    try:
+        from .graph_builder import build_networkx_graph
+        from .path_runner import calculate_path_probability
+        from .graph_builder import find_entry_nodes
+        G = build_networkx_graph(graph)
+        if anchor_node_id:
+            path_result = calculate_path_probability(G, anchor_node_id, from_node_id)
+            reach = path_result.probability
+        else:
+            entry_nodes = find_entry_nodes(G)
+            for entry in entry_nodes:
+                pr = calculate_path_probability(G, entry, from_node_id)
+                if pr.probability > reach:
+                    reach = pr.probability
+        if _COHORT_DEBUG:
+            print(f"[REACH] from_node={from_node_id} anchor={anchor_node_id} "
+                  f"reach={reach:.6f}")
+    except Exception as e:
+        print(f"[REACH] Error computing reach: {e}")
+        import traceback; traceback.print_exc()
+
+    upstream_params_list: List[Dict[str, float]] = []
+    incoming = get_incoming_edges(graph, from_node_id)
+    for inc_edge in incoming:
+        params = read_edge_cohort_params(inc_edge)
+        if params:
+            upstream_params_list.append(params)
+
+    enabled = reach > 0 and len(upstream_params_list) > 0
+    return XProvider(
+        reach=reach,
+        upstream_params_list=upstream_params_list,
+        enabled=enabled,
+    )
 
 
 # ── Core forecast function ─────────────────────────────────────────────
@@ -335,6 +437,8 @@ def compute_cohort_maturity_rows(
     band_level: float = 0.90,
     anchor_node_id: Optional[str] = None,
     sampling_mode: str = 'binomial',
+    span_cdf_override: Optional[Callable[[float], float]] = None,
+    x_provider: Optional[XProvider] = None,
 ) -> List[Dict[str, Any]]:
     """Compute complete per-τ rows for the cohort maturity chart.
 
@@ -449,55 +553,25 @@ def compute_cohort_maturity_rows(
         alpha_0 = _p_prior * _KAPPA_DEFAULT
         beta_0 = (1.0 - _p_prior) * _KAPPA_DEFAULT
 
-    def _cdf(tau: float) -> float:
-        if edge_sigma <= 0:
-            return 0.0
-        return _shifted_lognormal_cdf(tau, edge_onset, edge_mu, edge_sigma)
+    if span_cdf_override is not None:
+        def _cdf(tau: float) -> float:
+            return span_cdf_override(tau)
+    else:
+        def _cdf(tau: float) -> float:
+            if edge_sigma <= 0:
+                return 0.0
+            return _shifted_lognormal_cdf(tau, edge_onset, edge_mu, edge_sigma)
 
-    # ── Upstream params (cohort mode only) ─────────────────────────────
-    # In cohort() mode, x grows with τ.  To forecast x beyond tau_max,
-    # we need the reach probability to the subject's from-node and the
-    # path-level latency CDF.
-    #
-    # x_model(s, τ) = a_s × reach(from_node) × CDF_path(τ)
-    #
-    # Reach uses calculate_path_probability from path_runner (proper
-    # DFS with memoisation), fixing:
-    #   §11.1 — shared-ancestor bug (visited set no longer shared)
-    #   §11.2 — anchor not specified (uses explicit anchor_node_id)
-    #   §11.5 — per-node cap (path_runner doesn't cap at 1.0)
-    upstream_params_list: List[Dict[str, float]] = []
-    reach_at_from_node: float = 0.0
-    if not is_window and target_edge is not None:
-        from_node_id = get_edge_from_node(target_edge)
-        if from_node_id:
-            try:
-                from .graph_builder import build_networkx_graph
-                from .path_runner import calculate_path_probability
-                from .graph_builder import find_entry_nodes
-                G = build_networkx_graph(graph)
-                if anchor_node_id:
-                    path_result = calculate_path_probability(G, anchor_node_id, from_node_id)
-                    reach_at_from_node = path_result.probability
-                else:
-                    # No anchor specified — use entry node with highest reach.
-                    entry_nodes = find_entry_nodes(G)
-                    for entry in entry_nodes:
-                        pr = calculate_path_probability(G, entry, from_node_id)
-                        if pr.probability > reach_at_from_node:
-                            reach_at_from_node = pr.probability
-                if _COHORT_DEBUG:
-                    print(f"[REACH] from_node={from_node_id} anchor={anchor_node_id} "
-                          f"reach={reach_at_from_node:.6f}")
-            except Exception as e:
-                print(f"[REACH] Error computing reach: {e}")
-                import traceback; traceback.print_exc()
-
-            incoming = get_incoming_edges(graph, from_node_id)
-            for inc_edge in incoming:
-                params = read_edge_cohort_params(inc_edge)
-                if params:
-                    upstream_params_list.append(params)
+    # ── Upstream params via x_provider (doc 29c §Phase A x_provider) ────
+    # The x_provider encapsulates all upstream state.  If not supplied,
+    # build one from the graph (legacy v1 path).  The v2 handler passes
+    # an explicit provider (disabled for multi-hop until Phase B).
+    if x_provider is None:
+        x_provider = build_x_provider_from_graph(
+            graph, target_edge, anchor_node_id, is_window,
+        )
+    upstream_params_list = x_provider.upstream_params_list
+    reach_at_from_node = x_provider.reach
 
     # ── Per-Cohort info from last frame ────────────────────────────────
     cohort_info: Dict[str, Dict[str, Any]] = {}
@@ -852,19 +926,11 @@ def compute_cohort_maturity_rows(
     fan_quantiles: Optional[Dict[int, Tuple[float, float]]] = None  # tau → (lo, hi)
     model_fan_quantiles: Optional[Dict[int, Any]] = None  # tau → unconditioned model quantiles
 
+    _is_span = span_cdf_override is not None
+
     if has_bayes and edge_mu_sd > 0:
         import numpy as np
         from .confidence_bands import _ndtr
-
-        # Build posterior covariance matrix from the Bayesian fit.
-        # These are POSTERIOR means and SDs — they already incorporate
-        # the historical evidence.  No importance sampling needed.
-        # Order: [p, mu, sigma, onset]
-        theta_mean = np.array([edge_p, edge_mu, edge_sigma, edge_onset])
-        sds = np.array([edge_p_sd, edge_mu_sd, edge_sigma_sd, edge_onset_sd])
-        posterior_cov = np.diag(sds ** 2)
-        # onset-mu off-diagonal
-        posterior_cov[3, 1] = posterior_cov[1, 3] = edge_onset_mu_corr * edge_onset_sd * edge_mu_sd
 
         rng = np.random.default_rng(42)
 
@@ -873,38 +939,61 @@ def compute_cohort_maturity_rows(
         T = len(tau_grid)
         S = MC_SAMPLES
 
-        # ── Phase 1: Draw directly from posterior MVN ───────────────
-        # The edge vars (posterior means + SDs from the NUTS fit)
-        # already encode the evidence-conditioned parameter uncertainty.
-        # No importance sampling — that was double-counting by
-        # conditioning on the same evidence the fit already used.
-        #
-        # Posterior predictive = parameter draws + Binomial noise.
-        # The Binomial draws (added per-cohort below) capture the
-        # sampling uncertainty for "where will this cohort land?"
-        samples = rng.multivariate_normal(theta_mean, posterior_cov, size=S)
+        if _is_span and hasattr(span_cdf_override, '_span_topo') and hasattr(span_cdf_override, '_span_graph'):
+            # ── Multi-hop: per-draw reconvolution ──────────────────
+            # Draw per-edge (p, mu, sigma, onset) independently, then
+            # reconvolve the span kernel for each draw.  ~76ms for
+            # 2000 draws × 3 edges × 400 tau.
+            from .span_kernel import mc_span_cdfs
+            cdf_arr, p_s = mc_span_cdfs(
+                topo=span_cdf_override._span_topo,
+                graph=span_cdf_override._span_graph,
+                is_window=is_window,
+                max_tau=max_tau,
+                num_draws=S,
+                rng=rng,
+            )
+            # mu/sigma/onset draws unused for CDF but needed downstream
+            mu_s = np.full(S, edge_mu)
+            sigma_s = np.full(S, max(edge_sigma, 0.01))
+            onset_s = np.full(S, edge_onset)
+        elif _is_span:
+            # Fallback: span CDF override without topology (shouldn't
+            # happen, but safe). Use rate-only draws with fixed CDF.
+            p_s = rng.beta(max(alpha_0, 0.01), max(beta_0, 0.01), size=S)
+            p_s = np.clip(p_s, 1e-6, 1 - 1e-6)
+            span_cdf_1d = np.array([span_cdf_override(float(t)) for t in range(T)])
+            cdf_arr = np.broadcast_to(span_cdf_1d[None, :], (S, T)).copy()
+            mu_s = np.full(S, edge_mu)
+            sigma_s = np.full(S, max(edge_sigma, 0.01))
+            onset_s = np.full(S, edge_onset)
+        else:
+            # ── Single-edge: full parametric draws ─────────────────
+            theta_mean = np.array([edge_p, edge_mu, edge_sigma, edge_onset])
+            sds = np.array([edge_p_sd, edge_mu_sd, edge_sigma_sd, edge_onset_sd])
+            posterior_cov = np.diag(sds ** 2)
+            posterior_cov[3, 1] = posterior_cov[1, 3] = edge_onset_mu_corr * edge_onset_sd * edge_mu_sd
 
-        # Clip to valid ranges
-        samples[:, 0] = np.clip(samples[:, 0], 1e-6, 1 - 1e-6)  # p
-        samples[:, 2] = np.clip(samples[:, 2], 0.01, 20.0)       # sigma > 0
+            samples = rng.multivariate_normal(theta_mean, posterior_cov, size=S)
+            samples[:, 0] = np.clip(samples[:, 0], 1e-6, 1 - 1e-6)
+            samples[:, 2] = np.clip(samples[:, 2], 0.01, 20.0)
 
-        p_s = samples[:, 0]       # (S,)
-        mu_s = samples[:, 1]      # (S,)
-        sigma_s = samples[:, 2]   # (S,)
-        onset_s = samples[:, 3]   # (S,)
+            p_s = samples[:, 0]
+            mu_s = samples[:, 1]
+            sigma_s = samples[:, 2]
+            onset_s = samples[:, 3]
+
+            # Compute per-draw latency CDF
+            t_shifted = tau_grid[None, :] - onset_s[:, None]
+            t_shifted = np.maximum(t_shifted, 1e-12)
+            z = (np.log(t_shifted) - mu_s[:, None]) / sigma_s[:, None]
+            cdf_arr = _ndtr(z)
+            cdf_arr = np.where(tau_grid[None, :] > onset_s[:, None], cdf_arr, 0.0)
+            cdf_arr = np.clip(cdf_arr, 0.0, 1.0)
 
         if _COHORT_DEBUG:
-            print(f"[BAYES_PP] direct posterior draw S={S} "
-                  f"p=[{np.percentile(p_s, 10):.4f} {np.median(p_s):.4f} {np.percentile(p_s, 90):.4f}] "
-                  f"mu=[{np.percentile(mu_s, 10):.4f} {np.median(mu_s):.4f} {np.percentile(mu_s, 90):.4f}]")
-
-        # Compute per-draw latency CDF
-        t_shifted = tau_grid[None, :] - onset_s[:, None]  # (S, T)
-        t_shifted = np.maximum(t_shifted, 1e-12)
-        z = (np.log(t_shifted) - mu_s[:, None]) / sigma_s[:, None]  # (S, T)
-        cdf_arr = _ndtr(z)  # (S, T)
-        cdf_arr = np.where(tau_grid[None, :] > onset_s[:, None], cdf_arr, 0.0)
-        cdf_arr = np.clip(cdf_arr, 0.0, 1.0)
+            print(f"[BAYES_PP] {'span-reconvolve' if _is_span else 'edge'} S={S} "
+                  f"p=[{np.percentile(p_s, 10):.4f} {np.median(p_s):.4f} {np.percentile(p_s, 90):.4f}]")
         cdf_arr = np.clip(cdf_arr, 0.0, 1.0)
 
         # ── Per-cohort drift layer (Phase 2) ───────────────────────
@@ -1001,6 +1090,17 @@ def compute_cohort_maturity_rows(
                 _weight_sum = np.maximum(_weight_sum, 1e-10)
                 upstream_cdf_mc = _unnorm_cdf / _weight_sum[:, None]
 
+        # ── Precompute point-estimate normalised span CDF (for exposure) ─
+        # Used by the completeness-adjusted frontier exposure (Phase B,
+        # doc 29d §Concrete Formula).  For single-edge, C(τ) = analytic
+        # CDF (equivalent to full exposure at τ=0 arrivals).
+        _span_C_point: Optional[np.ndarray] = None  # (T,) normalised [0,1]
+        if _is_span and span_cdf_override is not None:
+            _span_C_point = np.array([
+                span_cdf_override(float(t)) for t in range(T)
+            ], dtype=np.float64)
+            _span_C_point = np.clip(_span_C_point, 0.0, 1.0)
+
         # Per-Cohort conditional forecast, aggregated
         total_N = sum(c['x_frozen'] for c in cohort_list)
         Y_total = np.zeros((S, T))  # numerator
@@ -1023,9 +1123,39 @@ def compute_cohort_maturity_rows(
 
             a_idx = min(a_i, T - 1)
 
+            # ── Completeness-adjusted effective exposure (Phase B) ────
+            # For multi-hop spans WITH real arrival timing, weight each
+            # arrival increment at x by how much of the span kernel has
+            # had time to mature.  E_i = Σ_u ΔX(u) · C(a_i - u)
+            #
+            # Requires x_provider.enabled — i.e., we have upstream
+            # arrival timing (x_at_tau is not flat).  Without real
+            # arrival data (Phase A multi-hop), x_at_tau is flat at N_i
+            # which would incorrectly reduce E_i via the span kernel.
+            # Phase A keeps E_i = N_i (conservative).  Phase B enables
+            # the adjustment when Policy B provides evidence-driven
+            # upstream histories.  See doc 29d §Concrete Formula.
+            E_i = float(N_i)  # default: full exposure (Phase A)
+            if _is_span and _span_C_point is not None and x_provider.enabled and a_i > 0:
+                x_at_tau = c.get('x_at_tau')
+                if x_at_tau is not None and len(x_at_tau) > a_idx:
+                    _E = 0.0
+                    prev_x = 0.0
+                    for u in range(a_idx + 1):
+                        dx = max(x_at_tau[u] - prev_x, 0.0)
+                        lag = a_idx - u
+                        if dx > 0 and lag >= 0:
+                            _E += dx * float(_span_C_point[lag])
+                        prev_x = x_at_tau[u]
+                    # Floor at k_i: can't have fewer exposed than observed
+                    E_i = max(_E, float(k_i))
+                    if _COHORT_DEBUG:
+                        print(f"[EXPOSURE] cohort {_ci}: N_i={N_i} E_i={E_i:.2f} "
+                              f"ratio={E_i/N_i:.3f}" if N_i > 0 else f"[EXPOSURE] cohort {_ci}: N_i=0 E_i=0")
+
             _t0 = _time.monotonic()
             if _COHORT_DEBUG:
-                print(f"[PERF] cohort {_ci}/{len(cohort_list)} a_i={a_i} N_i={N_i} T={T} S={S}", flush=True)
+                print(f"[PERF] cohort {_ci}/{len(cohort_list)} a_i={a_i} N_i={N_i} E_i={E_i:.2f} T={T} S={S}", flush=True)
             # ── Cohort-specific drifted parameters ────────────────
             # Draw per-cohort drift on transformed scales, then
             # transform back.  Each cohort gets its own (p, mu, sigma,
@@ -1041,29 +1171,39 @@ def compute_cohort_maturity_rows(
             onset_i = np.maximum(onset_i, 0.0)
 
             _timings['drift'] += _time.monotonic() - _t0; _t0 = _time.monotonic()
-            # Recompute CDF with cohort-specific latency params
-            t_shifted_i = tau_grid[None, :] - onset_i[:, None]    # (S, T)
-            t_shifted_i = np.maximum(t_shifted_i, 1e-12)
-            z_i = (np.log(t_shifted_i) - mu_i[:, None]) / sigma_i[:, None]
-            cdf_i = _ndtr(z_i)                                    # (S, T)
-            cdf_i = np.where(tau_grid[None, :] > onset_i[:, None], cdf_i, 0.0)
+            if _is_span:
+                # Multi-hop: use the reconvolved span CDF (from mc_span_cdfs).
+                # The CDF shape is fixed per-draw; per-cohort drift only
+                # affects p (rate), not latency shape.
+                cdf_i = cdf_arr  # (S, T) — already normalised to [0, 1]
+            else:
+                # Single-edge: recompute CDF with cohort-specific latency params
+                t_shifted_i = tau_grid[None, :] - onset_i[:, None]    # (S, T)
+                t_shifted_i = np.maximum(t_shifted_i, 1e-12)
+                z_i = (np.log(t_shifted_i) - mu_i[:, None]) / sigma_i[:, None]
+                cdf_i = _ndtr(z_i)                                    # (S, T)
+                cdf_i = np.where(tau_grid[None, :] > onset_i[:, None], cdf_i, 0.0)
             cdf_i = np.clip(cdf_i, 0.0, 1.0)
 
             _timings['cdf'] += _time.monotonic() - _t0; _t0 = _time.monotonic()
             # ── Phase 3: Per-cohort IS conditioning on frontier ────
             # Condition this cohort's drifted draws on its observed
-            # frontier evidence: k_i conversions from N_i people at
-            # tau_max_i.  This is tractable because per-cohort N is
-            # small (10-50), unlike the global IS that collapsed at
-            # N=1566.  Mature cohorts with lots of evidence narrow
-            # their draws; immature ones with little evidence stay wide.
-            if N_i > 0 and a_i > 0:
+            # frontier evidence: k_i conversions from E_i effectively
+            # exposed people at tau_max_i.  For single-edge, E_i = N_i.
+            # For multi-hop, E_i < N_i because recent arrivals at x
+            # haven't had time to traverse the full span (doc 29d).
+            _N_eff = E_i if (_is_span and x_provider.enabled) else float(N_i)
+            if _N_eff > 0 and a_i > 0:
                 # p_window = probability of converting within tau_max
                 p_window_i = p_i * cdf_i[:, a_idx]                # (S,)
                 p_window_i = np.clip(p_window_i, 1e-15, 1 - 1e-15)
                 # Binomial log-likelihood of frontier observation
-                log_w_i = (k_i * np.log(p_window_i)
-                           + (N_i - k_i) * np.log(1 - p_window_i))
+                # Uses effective exposure _N_eff so that in-transit
+                # mass at x doesn't inflate the failure count.
+                _k_eff = min(k_i, _N_eff)  # can't have more successes than exposed
+                _fail_eff = max(_N_eff - _k_eff, 0.0)
+                log_w_i = (_k_eff * np.log(p_window_i)
+                           + _fail_eff * np.log(1 - p_window_i))
                 log_w_i -= np.max(log_w_i)
                 w_i = np.exp(log_w_i)
                 w_i /= w_i.sum()
@@ -1098,14 +1238,21 @@ def compute_cohort_maturity_rows(
             c_i_b = cdf_at_a[:, None]                              # (S, 1)
             n_eff_b = N_i * c_i_b                                  # (S, 1) — diagnostic
 
-            _has_upstream = upstream_cdf_mc is not None
+            # Pop C gated by x_provider.enabled — the provider knows
+            # whether its upstream state is in x coordinates.
+            # Phase A: disabled for multi-hop (provider returns
+            # enabled=False because legacy logic computes at u, not x).
+            _has_upstream = upstream_cdf_mc is not None and x_provider.enabled
 
             # ── Pop D: frontier survivors (window + cohort) ───────
-            # Conditional Binomial: given N_i - k_i people survived to
-            # a_i without converting, what is the probability they
-            # convert between a_i and tau?
+            # Conditional Binomial: given the effectively exposed
+            # population minus observed conversions, what is the
+            # probability they convert between a_i and tau?
+            # For multi-hop: E_i < N_i because recent arrivals haven't
+            # had full span exposure (doc 29d §Concrete Formula).
+            # For single-edge: E_i = N_i (no adjustment).
             # q_late = p(CDF(τ) - CDF(a_i)) / (1 - p·CDF(a_i))
-            remaining_frontier = max(N_i - k_i, 0.0)
+            remaining_frontier = max(E_i - k_i, 0.0) if (_is_span and x_provider.enabled) else max(N_i - k_i, 0.0)
             q_early = p_i[:, None] * c_i_b                        # (S, 1)
             q_early = np.clip(q_early, 0.0, 1 - 1e-10)
             remaining_cdf = np.maximum(cdf_i - c_i_b, 0.0)        # (S, T)
@@ -1339,6 +1486,7 @@ def compute_cohort_maturity_rows(
                 a_i_det = _c_obs
 
                 # Pop D deterministic: frontier survivors
+                # For multi-hop, use completeness-adjusted exposure.
                 cdf_a_det = _cdf(a_i_det)
                 cdf_tau_det = _cdf(tau)
                 q_early_det = edge_p * cdf_a_det
@@ -1346,14 +1494,31 @@ def compute_cohort_maturity_rows(
                 remaining_det = max(0.0, cdf_tau_det - cdf_a_det)
                 q_late_det = (edge_p * remaining_det) / (1 - q_early_det)
                 q_late_det = min(max(q_late_det, 0.0), 1.0)
-                Y_D_det = max(N_i_det - k_i_det, 0.0) * q_late_det
+                if _is_span and _span_C_point is not None and x_provider.enabled:
+                    # Compute E_i for this cohort (deterministic path)
+                    # Only when x_provider gives real arrival timing.
+                    _x_at_tau_det = c.get('x_at_tau')
+                    if _x_at_tau_det and len(_x_at_tau_det) > a_i_det:
+                        _E_det = 0.0
+                        _prev = 0.0
+                        for _u in range(min(a_i_det + 1, len(_x_at_tau_det))):
+                            _dx = max(_x_at_tau_det[_u] - _prev, 0.0)
+                            _lag = a_i_det - _u
+                            if _dx > 0 and _lag >= 0 and _lag < len(_span_C_point):
+                                _E_det += _dx * float(_span_C_point[_lag])
+                            _prev = _x_at_tau_det[_u]
+                        _remaining_det = max(_E_det - k_i_det, 0.0)
+                    else:
+                        _remaining_det = max(N_i_det - k_i_det, 0.0)
+                else:
+                    _remaining_det = max(N_i_det - k_i_det, 0.0)
+                Y_D_det = _remaining_det * q_late_det
 
-                # Pop C deterministic: post-frontier upstream arrivals
-                # X_C = cumulative arrivals beyond frontier
-                # Y_C = X_C × model rate (p × CDF_path(tau))
+                # Pop C deterministic: post-frontier upstream arrivals.
+                # Gated by x_provider.enabled (see MC Pop C comment).
                 X_C_det = 0.0
                 Y_C_det = 0.0
-                if upstream_path_cdf_arr is not None and reach_at_from_node > 0:
+                if upstream_path_cdf_arr is not None and reach_at_from_node > 0 and x_provider.enabled:
                     _a_pop_det = c.get('a_frozen', N_i_det) or N_i_det or 1.0
                     tau_clamped = min(tau, len(upstream_path_cdf_arr) - 1)
                     a_clamped = min(a_i_det, len(upstream_path_cdf_arr) - 1)

@@ -147,6 +147,13 @@ describe('Analysis Request Contract', () => {
       expect(meta?.snapshotContract?.readMode).toBe('cohort_maturity');
     });
 
+    it('should recognise snapshotContract for cohort_maturity_v2', () => {
+      const meta = ANALYSIS_TYPES.find(t => t.id === 'cohort_maturity_v2');
+      expect(meta?.snapshotContract).toBeDefined();
+      expect(meta?.snapshotContract?.scopeRule).toBe('funnel_path');
+      expect(meta?.snapshotContract?.readMode).toBe('cohort_maturity');
+    });
+
     it('should recognise snapshotContract for surprise_gauge', () => {
       const meta = ANALYSIS_TYPES.find(t => t.id === 'surprise_gauge');
       expect(meta?.snapshotContract).toBeDefined();
@@ -159,6 +166,7 @@ describe('Analysis Request Contract', () => {
     // BE scope rules from analysis_subject_resolution.py
     const BE_SCOPE_RULES: Record<string, string> = {
       cohort_maturity: 'funnel_path',
+      cohort_maturity_v2: 'funnel_path',
       daily_conversions: 'funnel_path',
       lag_histogram: 'funnel_path',
       lag_fit: 'funnel_path',

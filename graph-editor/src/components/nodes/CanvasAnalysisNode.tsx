@@ -153,12 +153,9 @@ function CanvasAnalysisNodeInner({ data, selected, dragging }: NodeProps<CanvasA
     return edge ? (edge.uuid || edge.id || null) : null;
   }, [analyticsDslForSubject, graphEdgeCount, storeHandle]);
   const evidenceTabExtra = useMemo(() => {
-    if (!resolvedEdgeId) {
-      console.log('[CanvasAnalysisNode] evidenceTabExtra: no resolvedEdgeId', { analyticsDslForSubject, graphEdgeCount });
-      return undefined;
-    }
+    if (!resolvedEdgeId) return undefined;
+    if (!navState.selectedRepo || !navState.selectedBranch) return undefined;
     const graph = storeHandle.getState().graph;
-    console.log('[CanvasAnalysisNode] evidenceTabExtra: building', { resolvedEdgeId, currentDSL, repo: navState.selectedRepo, branch: navState.selectedBranch });
     return {
       evidence: (
         <SnapshotCalendarSection

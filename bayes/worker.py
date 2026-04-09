@@ -1670,6 +1670,24 @@ def _build_unified_slices(
             cohort["n_loo_obs"] = prob.n_loo_obs
         slices["cohort()"] = cohort
 
+    # Phase C: per-context-slice entries (doc 14 §5.2)
+    for ctx_key, sp in prob.slice_posteriors.items():
+        slice_key = f"context({ctx_key})" if not ctx_key.startswith("context(") else ctx_key
+        slices[slice_key] = {
+            "alpha": round(sp["alpha"], 4),
+            "beta": round(sp["beta"], 4),
+            "p_hdi_lower": round(sp["hdi_lower"], 6),
+            "p_hdi_upper": round(sp["hdi_upper"], 6),
+            "ess": round(prob.ess, 1),
+            "rhat": round(prob.rhat, 4) if prob.rhat else None,
+            "provenance": "bayesian",
+        }
+    if prob.tau_slice_mean is not None:
+        slices["_tau_slice"] = {
+            "mean": round(prob.tau_slice_mean, 4),
+            "sd": round(prob.tau_slice_sd, 4) if prob.tau_slice_sd else None,
+        }
+
     return slices
 
 

@@ -308,12 +308,97 @@ def main():
             print(f"    {'rhat':<8s}  {post['rhat']:.4f}  ess={post.get('ess', '?')}")
         print()
 
+    # --- Phase C: per-slice posterior comparison ---
+    # Parse p_slice lines from inference diagnostics:
+    #   p_slice 1d62f264… context(synth-channel:google): 0.3996±0.0051 HDI=[0.3900, 0.4094]
+    slice_posteriors: dict[str, dict[str, dict]] = {}  # uuid_prefix → ctx_key → {mean, sd}
+    for line in output.split("\n"):
+        sp_match = re.search(
+            r"p_slice (\w{8})… (context\([^)]+\)):\s+([\d.]+)±([\d.]+)\s+HDI=\[([\d.]+),\s*([\d.]+)\]",
+            line
+        )
+        if sp_match:
+            eid_prefix = sp_match.group(1)
+            ctx_key = sp_match.group(2)
+            slice_posteriors.setdefault(eid_prefix, {})[ctx_key] = {
+                "mean": float(sp_match.group(3)),
+                "sd": float(sp_match.group(4)),
+                "hdi_lower": float(sp_match.group(5)),
+                "hdi_upper": float(sp_match.group(6)),
+            }
+
+    # Build ground truth per-slice p values from context_dimensions
+    context_dims = truth.get("context_dimensions", [])
+    if context_dims and slice_posteriors:
+        print(f"  {'─' * 65}")
+        print(f"  Per-slice recovery (Phase C)")
+        print(f"  {'─' * 65}")
+        print()
+
+        # Get per-slice thresholds from truth file
+        testing = truth.get("testing", {})
+        per_slice_thresholds = testing.get("per_slice_thresholds", {})
+        p_slice_z_threshold = per_slice_thresholds.get("p_slice_z", 3.0)
+
+        for dim in context_dims:
+            dim_id = dim["id"]
+            for val in dim.get("values", []):
+                val_id = val["id"]
+                ctx_key = f"context({dim_id}:{val_id})"
+                edges_overrides = val.get("edges", {})
+
+                for edge_key, overrides in edges_overrides.items():
+                    p_mult = overrides.get("p_mult")
+                    if p_mult is None:
+                        continue
+
+                    # Find base p from truth edges
+                    base_p = truth_edges.get(edge_key, {}).get("p")
+                    if base_p is None:
+                        continue
+                    true_p = base_p * p_mult
+
+                    # Find the posterior for this slice
+                    # Match via uuid_prefix → graph_pid → truth edge key
+                    sp = None
+                    for prefix, slices in slice_posteriors.items():
+                        mapped_pid = uuid_to_pid.get(prefix, "")
+                        graph_pid = _truth_key_to_graph_pid.get(edge_key, edge_key)
+                        if mapped_pid == graph_pid or mapped_pid == edge_key:
+                            sp = slices.get(ctx_key)
+                            break
+
+                    label = f"{val_id} ({edge_key})"
+                    if sp is None:
+                        print(f"    {label:<35s}  truth={true_p:.4f}  posterior=???")
+                        continue
+
+                    abs_err = abs(sp["mean"] - true_p)
+                    abs_tol = max(0.02, abs(true_p) * 0.15)
+                    if sp["sd"] > 0:
+                        z_score = abs_err / sp["sd"]
+                        recovered = z_score < p_slice_z_threshold or abs_err < abs_tol
+                        status = "OK" if recovered else "MISS"
+                    else:
+                        z_score = float("inf")
+                        recovered = abs_err < abs_tol
+                        status = "OK" if recovered else "???"
+
+                    if not recovered:
+                        any_fail = True
+
+                    err_str = f"Δ={abs_err:.4f}" if abs_err < abs_tol and z_score >= p_slice_z_threshold else f"z={z_score:5.2f}"
+                    print(f"    {label:<35s}  truth={true_p:.4f}  post={sp['mean']:.4f}±{sp['sd']:.4f}  "
+                          f"{err_str:>10s}  [{status}]")
+
+                print()
+
     print(f"{'=' * 70}")
     if any_fail:
-        print("  RECOVERY: PARTIAL — some parameters not recovered within 2 SD")
+        print("  RECOVERY: PARTIAL — some parameters not recovered")
         sys.exit(1)
     else:
-        print("  RECOVERY: PASS — all latency parameters within 2 SD of truth")
+        print("  RECOVERY: PASS — all parameters within threshold of truth")
     print(f"{'=' * 70}")
 
 

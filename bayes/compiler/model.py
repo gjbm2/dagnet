@@ -1018,6 +1018,42 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
             else:
                 edge_kappa = None
 
+            # --- Phase C: per-slice hierarchical model (doc 14 §5.2) ---
+            # When an edge has context slices from _route_slices, emit
+            # τ_slice, per-slice deviations, and per-slice likelihoods.
+            # If ALL slice groups are exhaustive, aggregate likelihoods are
+            # suppressed — p_base is informed only through the hierarchy.
+            # Phase 2 does not use slices (existing posterior suffices).
+            if ev.has_slices and not is_phase2:
+                # Create p_base first (needed by the hierarchy)
+                if p_base_var is not None:
+                    p = p_base_var
+                else:
+                    p = pm.Beta(f"p_{safe_id}", alpha=alpha, beta=beta_param)
+                edge_var_names[edge_id] = f"p_{safe_id}"
+
+                suppress_agg = _emit_slice_model(
+                    safe_id, p, ev, et, diagnostics,
+                    kappa=edge_kappa,
+                    latency_vars=latency_vars.get(edge_id),
+                    onset_vars=onset_vars.get(edge_id),
+                    topology=topology,
+                    edge_var_names=edge_var_names,
+                    model=model,
+                    cohort_latency_vars=cohort_latency_vars,
+                    settings=_s,
+                )
+                if suppress_agg:
+                    # All slice groups exhaustive — p_base informed
+                    # through hierarchy only. Skip aggregate Cases A-D.
+                    diagnostics.append(
+                        f"  slice_model: {edge_id[:8]}… exhaustive slices, "
+                        f"aggregate likelihoods suppressed"
+                    )
+                    continue
+                # Non-exhaustive slices — also emit aggregate likelihoods
+                # below (mixed-epoch: some dates aggregate, some per-slice).
+
             # --- Case A: edge has BOTH window and cohort data ---
             if ev.has_window and ev.has_cohort:
                 if is_phase2:
@@ -1597,6 +1633,205 @@ def _emit_window_likelihoods(
             p=p_effective,
             observed=min(w_obs.k, w_obs.n),
         )
+
+
+def _emit_slice_model(
+    safe_id: str,
+    p_base,
+    ev: EdgeEvidence,
+    et,
+    diagnostics: list[str],
+    *,
+    kappa=None,
+    latency_vars=None,
+    onset_vars=None,
+    topology=None,
+    edge_var_names=None,
+    model=None,
+    cohort_latency_vars=None,
+    settings=None,
+) -> bool:
+    """Emit Phase C hierarchical slice model for one edge (doc 14 §5.2).
+
+    Creates per-edge shrinkage τ_slice, per-slice logit-offset deviations,
+    per-slice kappa (overdispersion), and per-slice endpoint BetaBinomials.
+    Delegates trajectory likelihoods to the existing emission functions
+    (_emit_window_likelihoods, _emit_cohort_likelihoods) via a temporary
+    EdgeEvidence populated from each SliceObservations.
+
+    Returns True if ALL slice groups are exhaustive (caller should
+    suppress aggregate likelihoods for this edge).
+    """
+    import pymc as pm
+    import pytensor.tensor as pt
+    import numpy as np
+    from .completeness import shifted_lognormal_cdf
+
+    _s = settings or {}
+    _softplus_k = float(_s.get("BAYES_SOFTPLUS_SHARPNESS",
+                                _s.get("bayes_softplus_sharpness", SOFTPLUS_SHARPNESS)))
+
+    # Per-edge shrinkage (§5.2: σ_τ = 0.5 default)
+    tau_slice = pm.HalfNormal(f"tau_slice_{safe_id}", sigma=0.5)
+
+    # Logit of p_base (shared across slices)
+    logit_p_base = pt.log(p_base / (1.0 - p_base))
+
+    # Resolve latency for endpoint BB (shared across slices — latency
+    # doesn't vary by context).
+    ep_onset = et.onset_delta_days if et.has_latency else 0.0
+    ep_mu = et.mu_prior if et.has_latency else 0.0
+    ep_sigma = max(et.sigma_prior, 0.01) if et.has_latency else 0.01
+    if latency_vars is not None:
+        ep_mu_var, ep_sigma_var = latency_vars
+    else:
+        ep_mu_var = pt.as_tensor_variable(np.float64(ep_mu))
+        ep_sigma_var = pt.as_tensor_variable(np.float64(ep_sigma))
+    if onset_vars is not None:
+        ep_onset_var = onset_vars
+    else:
+        ep_onset_var = pt.as_tensor_variable(np.float64(ep_onset))
+
+    all_exhaustive = True
+
+    for dim_key, group in ev.slice_groups.items():
+        if not group.is_exhaustive:
+            all_exhaustive = False
+
+        for ctx_key, s_obs in group.slices.items():
+            ctx_safe = _safe_var_name(ctx_key)
+            slice_safe_id = f"{safe_id}__{ctx_safe}"
+
+            # Non-centred parameterisation (§5.2)
+            eps = pm.Normal(f"eps_slice_{safe_id}_{ctx_safe}", mu=0, sigma=1)
+            p_slice = pm.Deterministic(
+                f"p_slice_{safe_id}_{ctx_safe}",
+                pm.math.invlogit(logit_p_base + eps * tau_slice),
+            )
+
+            # Per-slice kappa (overdispersion)
+            _log_kappa_slice = pm.Normal(
+                f"log_kappa_slice_{safe_id}_{ctx_safe}",
+                mu=LOG_KAPPA_MU, sigma=LOG_KAPPA_SIGMA,
+            )
+            kappa_slice = pm.Deterministic(
+                f"kappa_slice_{safe_id}_{ctx_safe}",
+                pt.exp(_log_kappa_slice),
+            )
+
+            # Build a temporary EdgeEvidence with this slice's observations
+            # so existing emission functions work unchanged.
+            slice_ev = EdgeEvidence(
+                edge_id=ev.edge_id,
+                param_id=ev.param_id,
+                file_path=ev.file_path,
+                window_obs=list(s_obs.window_obs),
+                cohort_obs=list(s_obs.cohort_obs),
+                has_window=s_obs.has_window,
+                has_cohort=s_obs.has_cohort,
+                total_n=s_obs.total_n,
+                latency_prior=ev.latency_prior,
+                kappa_warm=ev.kappa_warm,
+                cohort_latency_warm=ev.cohort_latency_warm,
+            )
+
+            n_w = len(s_obs.window_obs)
+            n_c = sum(
+                len(c.trajectories) + len(c.daily)
+                for c in s_obs.cohort_obs
+            )
+
+            # Delegate trajectory likelihoods to existing emission functions.
+            # _emit_cohort_likelihoods expects latency_vars/onset_vars as
+            # dicts keyed by edge_id, so wrap the resolved values.
+            _lv_dict = {ev.edge_id: latency_vars} if latency_vars is not None else {}
+            _ov_dict = {ev.edge_id: onset_vars} if onset_vars is not None else {}
+            _clv_dict = (
+                {ev.edge_id: cohort_latency_vars[ev.edge_id]}
+                if cohort_latency_vars and ev.edge_id in cohort_latency_vars
+                else {}
+            )
+
+            if s_obs.has_window:
+                _emit_window_likelihoods(
+                    slice_safe_id, p_slice, slice_ev, diagnostics,
+                    kappa=kappa_slice,
+                )
+            if s_obs.has_cohort:
+                _emit_cohort_likelihoods(
+                    slice_safe_id, p_slice, slice_ev, diagnostics,
+                    topology=topology,
+                    edge_var_names=edge_var_names,
+                    model=model,
+                    latency_vars=_lv_dict,
+                    p_window_var=p_slice,
+                    cohort_latency_vars=_clv_dict,
+                    kappa=kappa_slice,
+                    onset_vars=_ov_dict,
+                    settings=settings,
+                )
+
+            # Per-slice endpoint BetaBinomial: captures between-day
+            # overdispersion within each context slice. Same pattern
+            # as edge-level endpoint_bb in Cases A-D.
+            if s_obs.has_cohort and et.has_latency:
+                ep_n_list = []
+                ep_y_list = []
+                ep_ages_list = []
+                ep_skipped = 0
+                for c_obs in s_obs.cohort_obs:
+                    for traj in c_obs.trajectories:
+                        if traj.obs_type != "window":
+                            continue
+                        if len(traj.retrieval_ages) < 2 or traj.n <= 0:
+                            continue
+                        ep_f = shifted_lognormal_cdf(
+                            traj.retrieval_ages[-1], ep_onset, ep_mu, ep_sigma)
+                        if ep_f < 0.9:
+                            ep_skipped += 1
+                            continue
+                        ep_n_list.append(traj.n)
+                        ep_y_list.append(
+                            min(traj.cumulative_y[-1], traj.n)
+                            if traj.cumulative_y else 0
+                        )
+                        ep_ages_list.append(traj.retrieval_ages[-1])
+
+                if len(ep_n_list) >= 3:
+                    _ep_n = np.array(ep_n_list, dtype=np.int64)
+                    _ep_y = np.array(ep_y_list, dtype=np.int64)
+                    _ep_ages = np.array(ep_ages_list, dtype=np.float64)
+
+                    _ages_t = pt.as_tensor_variable(_ep_ages)
+                    _age_minus_onset = _ages_t - ep_onset_var
+                    _eff_ages = pt.softplus(
+                        _softplus_k * _age_minus_onset
+                    ) / _softplus_k
+                    _log_ages = pt.log(pt.maximum(_eff_ages, LOG_ARG_FLOOR))
+                    _z = (_log_ages - ep_mu_var) / (ep_sigma_var * pt.sqrt(2.0))
+                    _f_ep = 0.5 * pt.erfc(-_z)
+
+                    _p_eff = pm.math.clip(
+                        p_slice * _f_ep, P_CLIP_LO, P_CLIP_HI,
+                    )
+                    pm.BetaBinomial(
+                        f"endpoint_bb_{slice_safe_id}",
+                        n=_ep_n,
+                        alpha=_p_eff * kappa_slice,
+                        beta=(1.0 - _p_eff) * kappa_slice,
+                        observed=_ep_y,
+                    )
+                    diagnostics.append(
+                        f"  endpoint_bb_slice: {safe_id[:8]}… {ctx_key} "
+                        f"{len(ep_n_list)} mature ({ep_skipped} immature excluded)"
+                    )
+
+            diagnostics.append(
+                f"  slice: {safe_id[:8]}… {ctx_key} → "
+                f"w={n_w} c={n_c}, p_slice+kappa_slice via τ_slice"
+            )
+
+    return all_exhaustive
 
 
 def _emit_cohort_likelihoods(

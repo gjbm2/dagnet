@@ -212,6 +212,42 @@ Clearing layer 1 is useless unless you also handle layers 2-4. UpdateManager map
 
 **Broader principle**: YAML loaders that auto-convert types (dates, booleans, octals) are a hash stability hazard. Any data that enters a hashing pipeline must be loaded with type coercion disabled, or coerced back to strings before hashing.
 
+## Anti-pattern 24: Live scenarios not regenerated on boot (F5)
+
+**Signature**: after page refresh, analyses that depend on per-scenario edge probabilities (e.g. bridge chart) show identical values for all scenarios (delta=0), even though scenarios have different DSLs.
+
+**Root cause**: `ScenariosContext` loads scenario objects from IDB on boot but never calls `regenerateAllLive`. The scenario overlays are stale (or empty if the scenario was created before the current DSL diverged). `useDSLReaggregation` skips auto-aggregation on `initial_load` trigger. Both paths assume "trust persisted graph state", but the persisted state only has one set of edge values for `currentQueryDSL`, not per-scenario values.
+
+**Fix**: added a one-shot post-boot effect in `ScenariosContext.tsx` that calls `regenerateAllLive` once `scenariosLoaded`, `graph`, and `tabContextInitDone` are all true and at least one live scenario exists. Mirrors the existing workspace-change and topology-change handlers. Share links are unaffected — they have their own regeneration path via `useShareBundleFromUrl`.
+
+## Anti-pattern 25: FE-only analysis types blocked by scenariosReady gate
+
+**Signature**: pinned canvas `edge_info` or `node_info` analyses show blank content after F5, with console log `[Compute] BLOCKED ... live_scenarios_context_missing`.
+
+**Root cause**: `prepareAnalysisComputeInputs` gates ALL live-mode analyses on `scenariosContext.scenariosReady`. FE-computed types (`edge_info`, `node_info`) are computed entirely from in-memory graph data and don't use scenarios at all, but they're still blocked until the asynchronous IDB scenario load completes.
+
+**Fix**: skip the `scenariosReady` gate for `edge_info` and `node_info` in `analysisComputePreparationService.ts`. These types bypass the scenario composition path entirely.
+
+## Anti-pattern 26: Snapshot fetch fires before navigator workspace is ready
+
+**Signature**: pinned evidence tab on canvas shows no snapshots after F5, but works after interacting with the graph (which triggers a re-render after navigator context loads).
+
+**Root cause**: `NavigatorContext` loads asynchronously and can take several seconds to populate `selectedRepo`/`selectedBranch`. Components that fetch snapshot data using workspace from `useNavigatorContext` fire their fetch immediately on mount — with `workspace: undefined`. `getSnapshotRetrievalsForEdge` can't compute `dbParamId` without workspace, returns `success: false`. The version-counter or dedup-key guards prevent retry even when workspace later becomes available.
+
+**Fix**: guard snapshot fetch effects on `sourceRepo && sourceBranch` being non-empty. The effect re-fires when these deps transition from empty to populated. Same guard needed in the `evidenceTabExtra` memo in `CanvasAnalysisNode`.
+
+**Broader principle**: any effect that depends on async context (navigator, credentials, workspace) must guard on the context being populated, not just the primary data being present. Version-counter dedup patterns are especially vulnerable because a failed initial attempt locks out retries.
+
+## Anti-pattern 27: Confusing context hash filtering with context value filtering
+
+**Signature**: selecting a context value (e.g. `context(channel:paid-search)`) in a snapshot filter returns the same snapshot count as no filter.
+
+**Root cause**: context values within one MECE dimension share the same `core_hash` (the hash encodes the context **definition**, not the specific value). Querying `getSnapshotRetrievalsForEdge` with `context(channel:paid-search)` vs `context(channel:influencer)` returns identical results because both resolve to the same hash family. To filter by value, you need `slice_key` filtering — either via the `slice_keys` parameter on `querySnapshotRetrievals`, or client-side by matching `slice_key` strings in summary rows.
+
+**Two-level model**: (1) context *dimension* changes the hash (channel-contexted ≠ device-contexted ≠ uncontexted); (2) context *value* is carried in `slice_key` within a hash family. Both levels must be filtered for context-specific snapshot views.
+
+**Reference**: `HASH_SIGNATURE_INFRASTRUCTURE.md` §"What is and is not in the hash" — especially lines 63-76.
+
 ## When to add to this document
 
 After completing a multi-attempt fix, check: does my bug match a generalisable pattern? If so, add it here following the format: Signature (how to recognise it), Root cause (why it happens), Fix (what to do), Example (optional, specific instance).

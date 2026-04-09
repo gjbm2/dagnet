@@ -287,6 +287,43 @@ def generate_graph_artefacts(
             with open(event_path, "w") as f:
                 yaml.dump(event_data, f, default_flow_style=False, sort_keys=False)
 
+    # Generate context YAML files (doc 14 §12.5b)
+    context_dims = truth.get("context_dimensions", [])
+    contexts_dir = os.path.join(data_repo, "contexts")
+    if context_dims:
+        os.makedirs(contexts_dir, exist_ok=True)
+    for dim in context_dims:
+        ctx_id = dim["id"]
+        ctx_path = os.path.join(contexts_dir, f"{ctx_id}.yaml")
+        ctx_values = []
+        for v in dim.get("values", []):
+            ctx_val: dict[str, Any] = {
+                "id": v["id"],
+                "label": v.get("label", v["id"].replace("-", " ").title()),
+            }
+            if v.get("description"):
+                ctx_val["description"] = v["description"]
+            if v.get("aliases") is not None:
+                ctx_val["aliases"] = v["aliases"]
+            if v.get("sources"):
+                ctx_val["sources"] = v["sources"]
+            ctx_values.append(ctx_val)
+        ctx_data = {
+            "id": ctx_id,
+            "name": dim.get("name", ctx_id.replace("-", " ").title()),
+            "type": "categorical",
+            "otherPolicy": dim.get("otherPolicy", "none"),
+            "values": ctx_values,
+            "metadata": {
+                "status": "active",
+                "author": "synth_gen",
+                "version": "1.0.0",
+            },
+        }
+        with open(ctx_path, "w") as f:
+            yaml.dump(ctx_data, f, default_flow_style=False, sort_keys=False)
+        print(f"  Context: {ctx_path}")
+
     print(f"  Generated: {graph_path}")
     print(f"    {len(graph_nodes)} nodes, {len(graph_edges)} edges "
           f"({len(edges_cfg)} data + {len(graph_edges) - len(edges_cfg)} complement)")

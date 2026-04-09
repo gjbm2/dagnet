@@ -331,6 +331,110 @@ class TestCohortMaturityParity:
 
 @requires_db
 @requires_data_repo
+class TestCohortMaturityV1V2Parity:
+    """v1 (cohort_maturity) and v2 (cohort_maturity_v2) produce identical
+    single-edge output — the Phase A acceptance gate.
+
+    Sends the same single-edge from(x).to(y) query to both analysis types
+    via handle_runner_analyze and compares maturity_rows field-by-field.
+    For single-edge spans, v2's span kernel degenerates to the single-edge
+    parametric case, so output must be identical within float tolerance.
+    """
+
+    def _run_analysis(self, graph, from_id, to_id, edge, analysis_type, query_dsl):
+        """Build a new-path request and run it through the top-level dispatcher."""
+        from api_handlers import handle_runner_analyze
+
+        # Build the new-path request (analytics_dsl + candidate_regimes_by_edge)
+        # so both v1 and v2 take the same code path for subject resolution.
+        old_req = _build_old_path_request(graph, from_id, to_id, edge, analysis_type, query_dsl)
+        req = _build_new_path_request(graph, from_id, to_id, edge, analysis_type, query_dsl, old_req)
+        return handle_runner_analyze(req)
+
+    def _extract_maturity_rows(self, result, label):
+        """Extract maturity_rows from a handler result, asserting non-empty."""
+        # Result may be wrapped in scenarios or flat (single-scenario unwrap)
+        scenarios = result.get('scenarios', [result] if 'subjects' in result else [])
+        assert len(scenarios) > 0, f"[{label}] no scenarios in result"
+        for sc in scenarios:
+            for subj in sc.get('subjects', []):
+                if subj.get('success'):
+                    r = subj.get('result', {})
+                    rows = r.get('maturity_rows', [])
+                    assert len(rows) > 0, \
+                        f"[{label}] maturity_rows empty. keys={sorted(r.keys())}"
+                    return rows
+        pytest.fail(f"[{label}] no successful subject with maturity_rows")
+
+    def test_single_edge_cohort_mode_parity(self):
+        """Cohort mode: v1 and v2 produce identical maturity_rows."""
+        graph = _load_graph(GRAPH_NAME)
+        from_id, to_id, edge = _find_adjacent_edge(graph)
+        query_dsl = f'from({from_id}).to({to_id}).cohort(-90d:)'
+
+        v1_result = self._run_analysis(graph, from_id, to_id, edge, 'cohort_maturity', query_dsl)
+        v2_result = self._run_analysis(graph, from_id, to_id, edge, 'cohort_maturity_v2', query_dsl)
+
+        v1_rows = self._extract_maturity_rows(v1_result, 'v1')
+        v2_rows = self._extract_maturity_rows(v2_result, 'v2')
+
+        assert len(v1_rows) == len(v2_rows), \
+            f"maturity_rows count: v1={len(v1_rows)} v2={len(v2_rows)}"
+
+        for i, (r1, r2) in enumerate(zip(v1_rows, v2_rows)):
+            assert r1.get('tau_days') == r2.get('tau_days'), \
+                f"row {i}: tau_days v1={r1.get('tau_days')} v2={r2.get('tau_days')}"
+            for field in ('rate', 'midpoint', 'fan_upper', 'fan_lower',
+                          'projected_rate', 'projected_fan_upper', 'projected_fan_lower'):
+                ov = r1.get(field)
+                nv = r2.get(field)
+                if ov is None and nv is None:
+                    continue
+                if ov is None or nv is None:
+                    # Allow v2 to have projected_rate when v1 doesn't
+                    # (v2 reads stats-pass model vars even without posteriors)
+                    if field.startswith('projected_') and ov is None:
+                        continue
+                    assert False, \
+                        f"row {i}: {field} presence mismatch v1={ov} v2={nv}"
+                assert abs(float(ov) - float(nv)) < 1e-6, \
+                    f"row {i}: {field} v1={ov} v2={nv} diff={abs(float(ov)-float(nv))}"
+
+    def test_single_edge_window_mode_parity(self):
+        """Window mode: v1 and v2 produce identical maturity_rows."""
+        graph = _load_graph(GRAPH_NAME)
+        from_id, to_id, edge = _find_adjacent_edge(graph)
+        query_dsl = f'from({from_id}).to({to_id}).window(-90d:)'
+
+        v1_result = self._run_analysis(graph, from_id, to_id, edge, 'cohort_maturity', query_dsl)
+        v2_result = self._run_analysis(graph, from_id, to_id, edge, 'cohort_maturity_v2', query_dsl)
+
+        v1_rows = self._extract_maturity_rows(v1_result, 'v1')
+        v2_rows = self._extract_maturity_rows(v2_result, 'v2')
+
+        assert len(v1_rows) == len(v2_rows), \
+            f"maturity_rows count: v1={len(v1_rows)} v2={len(v2_rows)}"
+
+        for i, (r1, r2) in enumerate(zip(v1_rows, v2_rows)):
+            assert r1.get('tau_days') == r2.get('tau_days'), \
+                f"row {i}: tau_days v1={r1.get('tau_days')} v2={r2.get('tau_days')}"
+            for field in ('rate', 'midpoint', 'fan_upper', 'fan_lower',
+                          'projected_rate', 'projected_fan_upper', 'projected_fan_lower'):
+                ov = r1.get(field)
+                nv = r2.get(field)
+                if ov is None and nv is None:
+                    continue
+                if ov is None or nv is None:
+                    if field.startswith('projected_') and ov is None:
+                        continue
+                    assert False, \
+                        f"row {i}: {field} presence mismatch v1={ov} v2={nv}"
+                assert abs(float(ov) - float(nv)) < 1e-6, \
+                    f"row {i}: {field} v1={ov} v2={nv} diff={abs(float(ov)-float(nv))}"
+
+
+@requires_db
+@requires_data_repo
 class TestDailyConversionsParity:
     """Old path and new path produce identical daily conversions output."""
 

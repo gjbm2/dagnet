@@ -876,7 +876,18 @@ def simulate_graph(
                 if v["id"] == user_val:
                     pid = topology.edges[edge_id].param_id if edge_id in topology.edges else ""
                     bare = pid.replace("parameter-", "") if pid.startswith("parameter-") else pid
-                    overrides = v.get("edges", {}).get(pid) or v.get("edges", {}).get(bare) or {}
+                    # Truth files use short edge keys (e.g. "synth-ctx1-anchor-to-target")
+                    # but param_ids use the full prefixed name (e.g. "synth-context-solo-synth-ctx1-anchor-to-target").
+                    # Try multiple lookup forms.
+                    edges_map = v.get("edges", {})
+                    overrides = edges_map.get(pid) or edges_map.get(bare)
+                    if overrides is None:
+                        # Try matching truth edge keys by suffix
+                        for ekey in edges_map:
+                            if bare.endswith(ekey) or bare.endswith(f"-{ekey}"):
+                                overrides = edges_map[ekey]
+                                break
+                    overrides = overrides or {}
                     p_mult *= overrides.get("p_mult", 1.0)
                     mu_offset += overrides.get("mu_offset", 0.0)
                     break

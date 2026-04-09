@@ -1,7 +1,7 @@
 # Project Bayes — Document Index
 
-**Last updated**: 8-Apr-26
-**Verified against codebase**: 8-Apr-26
+**Last updated**: 9-Apr-26
+**Verified against codebase**: 9-Apr-26
 
 For sequencing, priorities, and current status snapshot, see
 [programme.md](programme.md).
@@ -31,6 +31,7 @@ For sequencing, priorities, and current status snapshot, see
 |---|------|--------|-------|
 | 16 | [16-lag-array-population-defect.md](16-lag-array-population-defect.md) | **Open** | Window values[] lag arrays mostly zero (71/207 nonzero). Low priority — warm-start bypasses |
 | 19B | [19-be-stats-engine-bugs.md](19-be-stats-engine-bugs.md) | **Open** | Three-way prior discrepancy (FE/BE/topology). Low priority — warm-start bypasses |
+| 33 | [33-bayes-compiler-dispersion-forensic-review.md](33-bayes-compiler-dispersion-forensic-review.md) | **Open** | Engineering-facing forensic review of six compiler dispersion defects. Highest-risk items are endpoint double-counting and the order-dependent Phase 2 non-exhaustive branch-group prior |
 
 ## Reference and operational docs
 

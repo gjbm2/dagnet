@@ -118,10 +118,23 @@ common case.
 
 ### Practical Interpretation
 
-Today the most natural ingress carrier is the cohort-mode path
-information attached to edges entering `x`. When it exists and is
-compatible with the query's slice, context, and as-at constraints, it is
-the preferred Phase B latency carrier.
+The ingress carrier is the **cohort-mode path latency parameters**
+attached to edges entering `x`:
+
+- `path_mu`, `path_sigma`, `path_onset_delta_days`
+- their posterior equivalents where available (`posterior.path_mu_mean`,
+  `posterior.path_sigma_mean`, `posterior.path_onset_delta_days`)
+
+These parameters already encode `a→x` timing in a single parametric
+form. When they exist and are compatible with the query's slice,
+context, and as-at constraints, they are the preferred Phase B latency
+carrier.
+
+Evidence frames are the **mass input** for Policy B (the arrival
+history at `x`). They are not the latency carrier. The latency carrier
+shapes the model continuation beyond the observed upstream frontier;
+the evidence frames provide the observed upstream history within the
+frontier.
 
 Recursive upstream composition is the fallback, not the default. If it
 is used, it must obey the same regime-boundary, metadata-compatibility,
@@ -200,18 +213,66 @@ terms:
 This keeps the upstream provider in node-arrival coordinates rather than
 in edge-local proxy coordinates.
 
+### Reconstruction Mechanics
+
+Policy B is **frame-level evidence propagation in node-arrival space**,
+not model-parameter reconstruction. Concretely:
+
+1. Regime-select compatible cohort evidence per upstream edge (see
+   §Evidence Compatibility below).
+2. Align frames across edges by `(anchor_day, snapshot_date)`.
+3. For each incoming edge `u→v`, treat the `y` field on that edge's
+   evidence as **observed arrivals at node `v`**.
+4. At joins (multiple edges into the same node), sum the compatible
+   contributions.
+5. Walk the upstream subgraph `G_up = closure(a→x)` in topological
+   order, propagating node-arrival histories forward.
+6. Beyond the observed upstream frontier, switch to model continuation
+   (Policy A semantics seeded from the reconstructed frontier state,
+   not from a blank initial condition).
+
+The output is a per-cohort arrival history at `x`: `X_x(anchor_day, τ)`
+for each `τ` in the observation grid, which feeds directly into the
+`x_provider` interface from Phase A.
+
+### Evidence Compatibility
+
+Upstream evidence on an edge is **compatible** with the subject analysis
+when it satisfies all of:
+
+- **same cohort slice type** — the edge's evidence uses cohort-mode
+  slicing, not window-mode
+- **same anchor** — the evidence is anchored on the same node as the
+  subject analysis
+- **same context predicate/family** — the context dimensions and values
+  match (not necessarily byte-equal `slice_key`, but the same logical
+  partition)
+- **asat-admissible retrieval window** — the evidence was retrieved
+  within an acceptable staleness window for the subject's as-at
+  constraints (not necessarily identical `retrieved_at` across edges)
+- **regime coherence per retrieved date** — the regime-selection
+  contract from doc `30` is satisfied for each observation date
+- **complete coverage on the aligned observation grid** — evidence
+  exists for all `(anchor_day, snapshot_date)` pairs up to the subject
+  frontier, with no gaps that would require interpolation
+
+These criteria are derived from docs `29b` and
+`30-snapshot-regime-selection-contract.md`.
+
 ### Evidence Completeness Gate
 
-Policy B may only run when the upstream evidence coverage is genuinely
+Policy B may only run when upstream evidence compatibility is genuinely
 complete for the requested regime:
 
 - every edge needed to carry arrivals through `G_up` has compatible
-  cohort evidence
+  cohort evidence (per the compatibility predicate above)
 - the evidence covers the relevant tau window for the subject analysis
 - the metadata across the chosen upstream plan is compatible
 
-If any of those checks fail, Phase B must fall back to Policy A rather
-than attempting a partial reconstruction.
+If any of those checks fail, Phase B must fall back to Policy A for the
+**entire** upstream regime rather than attempting a partial
+reconstruction. No mixing of evidence-driven and model-driven upstream
+within one regime.
 
 ### Forecast Beyond the Observed Upstream Frontier
 
@@ -258,6 +319,36 @@ In words:
 
 This is the substantive row-builder change in Phase B. It does not
 change the row-builder structure, but it does change the frontier maths.
+
+### Concrete Formula
+
+The subject span kernel `K_{x→y}` from Phase A is a sub-probability CDF
+(`K(∞) = span_p`).  The exposure weight must use the **normalised
+completeness kernel**, not raw `K`, because raw `K` folds `p` into
+exposure — the wrong quantity.
+
+```
+C_{x→y}(t) = K_{x→y}(t) / span_p    (or 0 if span_p = 0)
+```
+
+Per-cohort effective exposure at frontier age `a_i`:
+
+```
+E_i(a_i) = Σ_u  ΔX_x(u) · C_{x→y}(a_i − u)
+```
+
+where `ΔX_x(u)` is the incremental arrival mass at `x` on day `u`.
+
+Posterior update using effective exposure:
+
+```
+α_post = α₀ + y_obs(a_i)
+β_post = β₀ + max(E_i(a_i) − y_obs(a_i), 0)
+```
+
+This replaces the Phase A conservative update where `β_post` used raw
+`x_obs − y_obs`.  When in-transit mass is negligible (`C ≈ 1` over the
+relevant window), `E_i ≈ X_x` and the formula collapses to Phase A.
 
 ### Behavioural Expectations
 

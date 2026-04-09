@@ -29,6 +29,7 @@ const SNAPSHOT_ANALYSIS_TYPES = [
   'daily_conversions',
   'lag_histogram',
   'cohort_maturity',
+  'cohort_maturity_v2',
 ];
 
 const USAGE = `
@@ -65,6 +66,7 @@ interface ComparisonResult {
   scenarioMode: 'single' | 'multi';
   passed: boolean;
   details: string;
+  response?: AnalysisResponse;  // retained for v1-vs-v2 comparison
 }
 
 export async function run() {
@@ -112,6 +114,9 @@ export async function run() {
 
   const results: ComparisonResult[] = [];
 
+  // Collect v2 responses for v1-vs-v2 parity comparison
+  const v2Responses: Map<string, AnalysisResponse> = new Map();
+
   // Test each analysis type in both single-scenario and multi-scenario modes
   for (const analysisType of typesToTest) {
     // ── Single scenario ──
@@ -123,6 +128,11 @@ export async function run() {
     results.push(singleResult);
     logResult(singleResult);
 
+    // Stash v2 response for later v1-vs-v2 comparison
+    if (analysisType === 'cohort_maturity_v2' && singleResult.passed && singleResult.response) {
+      v2Responses.set('single', singleResult.response);
+    }
+
     // ── Multi-scenario (if query2 provided) ──
     if (query2 && params2) {
       console.error(`\n[parity] ── ${analysisType} (multi-scenario) ──`);
@@ -132,7 +142,31 @@ export async function run() {
       });
       results.push(multiResult);
       logResult(multiResult);
+
+      if (analysisType === 'cohort_maturity_v2' && multiResult.passed && multiResult.response) {
+        v2Responses.set('multi', multiResult.response);
+      }
     }
+  }
+
+  // ── v1-vs-v2 parity: compare cohort_maturity vs cohort_maturity_v2 ──
+  // Only runs when both types are in the test set and v2 succeeded.
+  if (typesToTest.includes('cohort_maturity') && typesToTest.includes('cohort_maturity_v2')) {
+    v2Responses.forEach((v2Resp, mode) => {
+      const scenarioMode = mode as 'single' | 'multi';
+      // Find the v1 result we already ran
+      const v1Result = results.find(
+        r => r.analysisType === 'cohort_maturity' && r.scenarioMode === scenarioMode,
+      );
+      if (v1Result?.passed && v1Result.response) {
+        console.error(`\n[parity] ── v1-vs-v2 parity (${mode} scenario) ──`);
+        const parityResult = compareNormalisedResponses(
+          v1Result.response, v2Resp, 'v1_vs_v2_parity', scenarioMode, verbose,
+        );
+        results.push(parityResult);
+        logResult(parityResult);
+      }
+    });
   }
 
   // Summary
@@ -147,7 +181,9 @@ export async function run() {
   }
   console.error('[parity] ══════════════════════════════════');
 
-  process.stdout.write(JSON.stringify({ results, passed, failed, total: results.length }, null, 2) + '\n');
+  // Strip response payloads before JSON output (they're large and only used for comparison)
+  const cleanResults = results.map(({ response, ...rest }) => rest);
+  process.stdout.write(JSON.stringify({ results: cleanResults, passed, failed, total: results.length }, null, 2) + '\n');
   process.exit(failed > 0 ? 1 : 0);
 }
 
@@ -250,7 +286,9 @@ async function testParity(args: TestParityArgs): Promise<ComparisonResult> {
   }
 
   // Validate the response has real data
-  return validateResponse(response, analysisType, scenarioMode);
+  const result = validateResponse(response, analysisType, scenarioMode);
+  result.response = response;
+  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -293,7 +331,7 @@ function validateResponse(
     details: parts.join(', ') };
 }
 
-// Keep for future parity comparison if needed
+// v1-vs-v2 parity: field-by-field comparison of normalised responses
 function compareNormalisedResponses(
   oldResp: AnalysisResponse,
   newResp: AnalysisResponse,

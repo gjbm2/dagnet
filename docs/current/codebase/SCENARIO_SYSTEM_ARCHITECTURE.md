@@ -85,6 +85,35 @@ Live scenarios inherit DSL from base and lower layers:
 
 `computeEffectiveParams()` applies what-if logic (case overrides, visited conditionals) and bakes in results. Used to generate parameters for live scenario overlays.
 
+### Boot-time regeneration
+
+**Location**: `ScenariosContext.tsx` (post-boot effect, after topology-change handler)
+
+On page refresh (F5), scenarios are loaded from IDB with their persisted parameter overlays, but these overlays may be stale — particularly when the graph's `currentQueryDSL` has changed since the overlay was computed. Without regeneration, live scenarios with different DSLs produce identical edge probabilities in analyses like bridge charts.
+
+A one-shot post-boot effect fires once all prerequisites are met:
+- `scenariosLoaded` (IDB load complete)
+- `graph` available (hydrated in store)
+- `tabContextInitDone` (boot coordinator + FileRegistry hydration complete)
+- At least one live scenario with `meta.isLive === true`
+
+The effect calls `regenerateAllLive(undefined, visibleOrder)` followed by `scheduleChartReconcile('boot-scenario-hydration')`. This mirrors the existing workspace-change and topology-change handlers. A ref guard (`bootRegenDoneForFileRef`) prevents re-firing when the graph updates from the regeneration itself.
+
+**Share links are unaffected** — they have their own regeneration path via `useShareBundleFromUrl` / `useShareChartFromUrl` with `allowFetchFromSource: false`.
+
+### Auto-regeneration triggers (complete list)
+
+| Trigger | Location | Mechanism |
+|---------|----------|-----------|
+| Boot (F5) | `ScenariosContext.tsx` post-boot effect | One-shot, fires after graph + scenarios + tabContextInit all ready |
+| Workspace file change (git pull) | `ScenariosContext.tsx` `dagnet:workspaceFilesChanged` handler | Re-generates visible live scenarios, reconciles charts |
+| Graph topology change | `ScenariosContext.tsx` topology signature watcher | Debounced 300ms, re-generates visible live scenarios |
+| Scenario DSL edited | `updateScenarioQueryDSL` | Single-scenario regeneration |
+| Manual "Refresh all" button | `ScenariosPanel.tsx` | Calls `regenerateAllLive` with visible order |
+| Share link boot | `useShareBundleFromUrl` / `useShareChartFromUrl` | Per-scenario with `allowFetchFromSource: false` |
+
+All paths use `regenerateAllLive` (which internally calls `regenerateScenario` per scenario with `allowFetchFromSource: false`) except share links (which call `regenerateScenario` directly).
+
 ## Rehydration Service
 
 **Location**: `scenarioRehydrationService.ts`

@@ -757,6 +757,78 @@ def summarise_posteriors(
             cohort_hdi_upper=cohort_hdi_hi,
         ))
 
+        # Phase C: extract per-slice posteriors from trace (doc 14 §5.2)
+        if ev.has_slices:
+            post = posteriors[-1]  # the PosteriorSummary we just appended
+            tau_name = f"tau_slice_{safe_eid}"
+            if tau_name in trace.posterior:
+                tau_samples = trace.posterior[tau_name].values.flatten()
+                post.tau_slice_mean = float(np.mean(tau_samples))
+                post.tau_slice_sd = float(np.std(tau_samples))
+
+            for _dim_key, _group in ev.slice_groups.items():
+                for _ctx_key, _s_obs in _group.slices.items():
+                    _ctx_safe = _safe_var_name(_ctx_key)
+                    _ps_name = f"p_slice_{safe_eid}_{_ctx_safe}"
+                    if _ps_name not in trace.posterior:
+                        continue
+                    _ps_samples = trace.posterior[_ps_name].values.flatten()
+                    _ps_mean = float(np.mean(_ps_samples))
+                    _ps_std = float(np.std(_ps_samples))
+                    _ps_hdi = az.hdi(_ps_samples, hdi_prob=HDI_PROB)
+                    _ps_ab = _fit_beta_to_samples(_ps_samples)
+                    # Per-slice kappa — use predictive alpha/beta if available
+                    _ks_name = f"kappa_slice_{safe_eid}_{_ctx_safe}"
+                    _ks_samples = (
+                        trace.posterior[_ks_name].values.flatten()
+                        if _ks_name in trace.posterior else None
+                    )
+
+                    if _ks_samples is not None:
+                        # Predictive distribution: Beta(p*kappa, (1-p)*kappa)
+                        # Same pattern as edge-level _predictive_alpha_beta
+                        _n_use = min(len(_ps_samples), len(_ks_samples))
+                        _pred_alpha, _pred_beta, _pred_hdi_lo, _pred_hdi_hi = _predictive_alpha_beta(
+                            _ps_samples[:_n_use], kappa_samples=_ks_samples[:_n_use])
+                        _pred_mean = float(_pred_alpha / (_pred_alpha + _pred_beta))
+                        _pred_std = float(np.sqrt(
+                            _pred_alpha * _pred_beta /
+                            ((_pred_alpha + _pred_beta) ** 2 * (_pred_alpha + _pred_beta + 1))
+                        ))
+                    else:
+                        _pred_alpha, _pred_beta = _ps_ab
+                        _pred_hdi_lo, _pred_hdi_hi = float(_ps_hdi[0]), float(_ps_hdi[1])
+                        _pred_mean, _pred_std = _ps_mean, _ps_std
+
+                    _slice_entry = {
+                        "mean": _pred_mean,
+                        "stdev": _pred_std,
+                        "alpha": _pred_alpha,
+                        "beta": _pred_beta,
+                        "hdi_lower": _pred_hdi_lo,
+                        "hdi_upper": _pred_hdi_hi,
+                    }
+                    if _ks_samples is not None:
+                        _slice_entry["kappa_mean"] = float(np.mean(_ks_samples))
+                        _slice_entry["kappa_sd"] = float(np.std(_ks_samples))
+
+                    post.slice_posteriors[_ctx_key] = _slice_entry
+
+                    _kappa_str = ""
+                    if "kappa_mean" in _slice_entry:
+                        _kappa_str = f" kappa={_slice_entry['kappa_mean']:.1f}±{_slice_entry['kappa_sd']:.1f}"
+                    diagnostics.append(
+                        f"  p_slice {edge_id[:8]}… {_ctx_key}: "
+                        f"{_pred_mean:.4f}±{_pred_std:.4f} "
+                        f"HDI=[{_pred_hdi_lo:.4f}, {_pred_hdi_hi:.4f}]"
+                        f"{_kappa_str}"
+                    )
+
+            if post.tau_slice_mean is not None:
+                diagnostics.append(
+                    f"  tau_slice {edge_id[:8]}…: {post.tau_slice_mean:.3f}±{post.tau_slice_sd:.3f}"
+                )
+
         # Latency posterior: extract from MCMC trace if latent, else echo prior
         if et.has_latency and ev.latency_prior:
             lp = ev.latency_prior

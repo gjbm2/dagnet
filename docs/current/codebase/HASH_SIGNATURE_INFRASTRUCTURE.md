@@ -75,6 +75,28 @@ Consequences for snapshot reads:
 - Uncontexted (`x: {}`) is a different hash from any contexted
   variant.
 
+### Two-level filtering for context-specific views
+
+Any UI that needs to show snapshots for a specific context value
+(e.g. the evidence tab's context dropdown) must filter at **both**
+levels:
+
+1. **Hash level** (dimension): select the correct `core_hash` family.
+   `computePlausibleSignaturesForEdge` enumerates key-sets from the
+   DSL's context clauses — passing `context(channel:paid-search)`
+   produces only the channel-contexted hash.
+
+2. **Slice level** (value): filter within the hash family by
+   `slice_key`. `buildSnapshotRetrievalsQueryForEdge` constructs a
+   `slice_keys` array by matching stored slices whose
+   `extractSliceDimensions` equals the DSL's context dimensions.
+   `querySnapshotRetrievals` passes this to the backend.
+
+Hash-only filtering returns all values within the dimension.
+Slice-only filtering without the correct hash might match rows
+from the wrong family. Both are needed. See anti-pattern 27 in
+`KNOWN_ANTI_PATTERNS.md`.
+
 ### Regime selection
 
 When a graph's pinned DSL has multiple independent MECE context

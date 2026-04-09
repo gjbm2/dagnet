@@ -683,7 +683,7 @@ export function SnapshotCalendarSection({ source }: {
   const sourceBranch = source.workspace?.branch;
   const hasContextFilter = ctx.contextDSL.trim().length > 0;
   useEffect(() => {
-    if (!sourceEdgeId) return;
+    if (!sourceEdgeId || !sourceRepo || !sourceBranch) return;
     const version = ++fetchVersionRef.current;
     setIsLoading(true);
 

@@ -356,6 +356,14 @@ Row-builder refactor:
 - preserve the current D/C, frontier, fan, and clipping behaviour
   during the refactor
 
+**Implementation status (9-Apr-26):** the `XProvider` dataclass and
+`build_x_provider_from_graph()` factory live in `cohort_forecast.py`.
+`compute_cohort_maturity_rows` accepts an optional `x_provider`
+parameter; when `None`, it builds the legacy provider internally
+(v1 backward-compat).  The v2 handler passes an explicit provider:
+legacy (enabled) for single-edge, disabled for multi-hop.  Pop C
+guards check `x_provider.enabled` instead of `_is_span`.
+
 Frontend and request plumbing:
 
 - wire the new analysis type through
