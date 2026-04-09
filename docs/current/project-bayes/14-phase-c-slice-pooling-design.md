@@ -1407,3 +1407,392 @@ context. All resolved — no open issues remain.
   `useBayesTrigger.ts` integration is FE work)
 - Temporal drift interaction details (see doc 11 §10)
 - Full downstream `conditional_p` propagation (future, data-dependent)
+
+---
+
+## 16. Binding receipt: FE expectation vs BE reality (9-Apr-26)
+
+### 16.1 Problem
+
+The Bayes pipeline has a systematic debugging gap at the evidence
+binding step. The FE computes what data *should* exist (candidate
+hashes, expected slices, anchor date ranges) and sends these
+expectations in the payload. The BE queries the DB, runs regime
+selection, and binds evidence. But the two views are never compared.
+
+When a posterior looks wrong, there is no way to determine whether the
+problem is in the data (wrong rows bound), the model (correct rows,
+wrong inference), or the binding (rows exist but were misrouted,
+deduplicated incorrectly, or silently dropped). The only diagnostic
+is free-text log lines that require manual interpretation.
+
+This is already a problem for uncontexted data. Phase C makes it
+worse: context slice routing adds another stage where rows can be
+misassigned, and the deduplication logic (regime selection + Rule 2
+suppression + MECE aggregation) becomes multi-layered.
+
+The cost of a bad binding is high: the model runs (minutes of compute
+on Modal), produces plausible-looking posteriors, and the problem only
+surfaces when someone notices the numbers are wrong — potentially much
+later.
+
+### 16.2 Design: compare at the BE, fail fast before fitting
+
+The FE already sends per-edge expectations in the payload:
+
+- `snapshot_subjects`: param_id, edge_id, core_hash, slice_keys,
+  anchor_from/to, sweep_from/to, equivalent_hashes
+- `candidate_regimes_by_edge`: core_hash + equivalent_hashes per edge
+- `mece_dimensions`: which dimensions are safe to sum across
+
+The BE has the reality after DB query + regime selection + evidence
+binding. The comparison happens at the BE — not round-tripped to the
+FE — so that mismatches halt the pipeline *before* the model runs.
+
+### 16.3 The binding pipeline and where counts are captured
+
+The evidence pipeline has five stages. The receipt captures row counts
+at each stage boundary, because a problem at each stage has a
+different diagnostic meaning.
+
+```
+Stage 1: DB query
+  snapshot_subjects → raw rows per edge
+  (failure here = hash mismatch, DB empty, query error)
+
+Stage 2: Regime selection (dedup across hash families)
+  raw rows → select_regime_rows() → filtered rows
+  (rows discarded here = duplicate regimes for same conversions)
+  RegimeSelection.regime_per_date tells you WHICH regime won per date
+
+Stage 3: Rule 2 suppression (dedup across granularity)
+  filtered rows → most-granular-wins per (anchor_day, retrieved_at)
+  (rows discarded here = coarser data superseded by finer)
+
+Stage 4: Slice routing (Phase C only — which context slice?)
+  surviving rows → assigned to expected slices by context_key()
+  (orphan rows here = context_key doesn't match any expected slice)
+
+Stage 5: Trajectory building
+  routed rows → CohortObservation trajectories + daily obs
+  (rows lost here = zero-count filter, parse failures, dedup by
+   retrieved_at within an anchor_day)
+```
+
+### 16.4 Receipt structure
+
+The receipt is a structured dict returned alongside `BoundEvidence`,
+built by comparing the FE's `snapshot_subjects` (grouped by edge_id)
+against what each pipeline stage actually produced.
+
+**Per-edge receipt fields:**
+
+```
+edge_id              — edge identifier
+param_id             — which param file
+verdict              — pass | warn | fail (derived mechanically, see §16.5)
+
+# Stage 1: hash resolution
+expected_hashes      — core_hash + equivalents from FE candidate regimes
+hashes_with_data     — which of those actually had rows in the DB
+hashes_empty         — expected but no rows found
+
+# Stage 2: regime selection
+rows_raw             — total rows from DB for this edge
+rows_post_regime     — rows surviving regime selection
+regimes_seen         — how many distinct regimes appeared in raw data
+regime_selected      — which regime's core_hash won (per-date detail
+                       available in regime_per_date but not in receipt
+                       summary — too verbose)
+
+# Stage 3: Rule 2 suppression
+rows_post_suppression — rows surviving granularity dedup
+rows_suppressed       — count removed by Rule 2
+
+# Stage 4: slice routing (Phase C; omitted for uncontexted)
+expected_slices      — slice_keys from FE snapshot_subjects
+observed_slices      — context_key values parsed from surviving rows
+missing_slices       — expected but not observed
+unexpected_slices    — observed but not expected
+orphan_rows          — rows that couldn't be assigned to any slice
+
+# Stage 5: what entered the model
+evidence_source      — snapshot | param_file | mixed | none
+window_trajectories  — count
+window_daily         — count
+cohort_trajectories  — count
+cohort_daily         — count
+total_n              — total observations bound
+
+# Date coverage
+expected_anchor_from — from FE subject
+expected_anchor_to   — from FE subject
+actual_anchor_from   — earliest anchor_day in bound evidence
+actual_anchor_to     — latest anchor_day in bound evidence
+anchor_days_covered  — distinct anchor_days with ≥1 observation
+
+# Gate outcomes
+skipped              — bool: edge excluded from fitting
+skip_reason          — why (min_n, no data, etc.)
+
+# Divergences (the useful part)
+divergences          — list of human-readable mismatch descriptions
+                       (empty = everything matched)
+```
+
+**Graph-level summary:**
+
+```
+edges_expected       — edges the FE sent subjects for
+edges_bound          — edges with evidence successfully bound
+edges_fallback       — edges that fell back to param_file evidence
+edges_skipped        — edges excluded (min_n, no data, etc.)
+edges_no_subjects    — edges in topology but not in FE subjects
+edges_warned         — edges with non-empty divergences
+edges_failed         — edges where verdict = fail
+```
+
+### 16.5 Verdict derivation
+
+Per-edge verdict is mechanical, not heuristic:
+
+**fail** — the binding is broken, model output for this edge would be
+unreliable:
+- All expected hashes empty (hash mismatch — FE thinks data exists,
+  DB disagrees)
+- rows_raw > 0 but total_n = 0 (data exists but entire pipeline
+  discarded it)
+- All expected slices missing (Phase C: context topology completely
+  divergent)
+
+**warn** — the binding produced evidence but something is off:
+- Some expected hashes empty (partial hash coverage)
+- regime selection discarded >50% of rows (high dedup ratio —
+  indicates complex multi-regime topology, worth inspecting)
+- missing_slices non-empty (some context slices have no data)
+- unexpected_slices non-empty (DB has slices the FE didn't expect)
+- orphan_rows > 0 (rows survived dedup but couldn't be routed)
+- evidence_source = param_file when FE sent snapshot_subjects
+  (silent fallback)
+- coverage_gap: actual anchor range covers <50% of expected range
+
+**pass** — everything matched within tolerance.
+
+### 16.6 Where it lives in the code
+
+**Worker (`worker.py`):**
+
+Currently (lines 458-487) the worker runs regime selection per edge
+but discards `RegimeSelection.regime_per_date` — it keeps only
+`.rows`. The receipt requires preserving the full `RegimeSelection`
+object per edge so that regime_selected and regimes_seen can be
+populated.
+
+The receipt is built after `bind_snapshot_evidence()` returns, in the
+existing "intermediate evidence summary" block (lines 505-532). This
+block already iterates per edge and logs counts — the receipt
+replaces those ad-hoc log lines with structured data.
+
+The `snapshot_subjects` from the payload (line 436) must be grouped
+by edge_id at receipt-build time to provide the FE expectation side
+of the comparison.
+
+**Evidence binder (`compiler/evidence.py`):**
+
+The binder itself does not need to change for the receipt. It already
+returns `BoundEvidence` with per-edge `EdgeEvidence` containing all
+the Stage 5 counts. The receipt is built *outside* the binder by
+comparing binder output against FE expectations.
+
+However, Stage 3 (Rule 2 suppression) and Stage 4 (slice routing)
+happen *inside* `_bind_from_snapshot_rows()`, which currently does not
+report how many rows were suppressed or orphaned. Two options:
+
+1. Add suppression/routing counts to `EdgeEvidence` (new fields)
+2. Return them as a separate side-channel from
+   `_bind_from_snapshot_rows()`
+
+Option 1 is simpler and keeps everything on the existing dataclass.
+
+**Types (`compiler/types.py`):**
+
+New `BindingReceipt` and `EdgeBindingReceipt` dataclasses. Kept
+separate from `BoundEvidence` — the receipt is a diagnostic artefact,
+not model input.
+
+### 16.7 Behaviour: gate vs log
+
+The receipt supports two modes, controlled by a setting:
+
+- **`binding_receipt: "log"`** (default) — build the receipt, log
+  divergences at warning level, proceed with fitting. This is the
+  dev/test diagnostic mode.
+
+- **`binding_receipt: "gate"`** — build the receipt, and if any edge
+  has verdict = fail, halt the pipeline before fitting and return the
+  receipt as the job result. No compute wasted on bad data.
+
+Both modes always build the receipt. The difference is whether a
+`fail` verdict stops the pipeline.
+
+A third option for the future: **`binding_receipt: "gate_and_refit"`**
+— exclude failed edges and fit the rest. Not needed now.
+
+### 16.8 Interaction with existing diagnostics
+
+The receipt does not replace `BoundEvidence.diagnostics` (the
+free-text log lines). Those remain for detailed per-row tracing. The
+receipt is a structured summary for programmatic comparison and
+go/no-go decisions.
+
+The receipt does replace the ad-hoc evidence summary logging in
+`worker.py` lines 505-532. That block currently duplicates
+information that the receipt captures more completely.
+
+### 16.9 Interaction with Phase C
+
+For uncontexted data (current state), Stage 4 (slice routing) is
+trivially empty — all rows are aggregate, no routing needed. The
+receipt still captures Stages 1-3 and 5, which is where the known
+failure modes live (anti-pattern 11, double-counting).
+
+Phase C adds Stage 4. The receipt fields `expected_slices`,
+`observed_slices`, `missing_slices`, `unexpected_slices`, and
+`orphan_rows` become populated. The verdict rules for slice
+mismatches (§16.5) activate.
+
+This means the receipt can be implemented and validated *now* on
+uncontexted data, before Phase C adds the slice routing complexity.
+When Phase C lands, the receipt automatically picks up the new stage
+without structural changes — only the Stage 4 fields get populated.
+
+### 16.10 Implementation staging
+
+**Phase 0** (pre-Phase C, current work):
+- Add suppression counts to `EdgeEvidence` (or
+  `_bind_from_snapshot_rows` return)
+- Preserve `RegimeSelection` per edge in the worker (don't discard
+  `regime_per_date`)
+- Build `BindingReceipt` from FE subjects + regime selection +
+  `BoundEvidence`
+- Log receipt at info level; log divergences at warning level
+- Gate mode available via `binding_receipt: "gate"` setting
+
+**Phase 1** (with Phase C):
+- Populate Stage 4 fields (slice routing counts, orphan rows)
+- Activate slice mismatch verdict rules
+- Validate receipt against real contexted data from data repo
+
+### 16.11 Test fixtures: synthetic graphs for receipt validation
+
+The existing test data (§12, real graph `conversion-flow-v2-recs-
+collapsed`) and synthetic data generator (doc 17) are necessary but
+not sufficient. The real graph exercises "does binding work on correct
+data" — it cannot exercise "does the receipt correctly detect binding
+failures" because the real data is (presumably) correctly bound. The
+synthetic generator (doc 17) produces snapshot rows but not the FE
+side: graph definitions, context YAMLs, pinnedDSLs, candidate
+regimes, and snapshot subjects.
+
+The receipt needs test fixtures where **both sides are hand-crafted**
+— FE expectations and BE rows — with deliberate mismatches in known
+locations so that verdicts can be asserted.
+
+**What each fixture contains:**
+
+Each fixture is a self-contained test case:
+- A small graph definition (2-4 edges) with explicit `pinnedDSL`
+- Context definitions (YAML) where applicable
+- `snapshot_subjects` array (the FE expectation)
+- `candidate_regimes_by_edge` dict (the FE expectation)
+- `mece_dimensions` list
+- Synthetic snapshot DB rows (the BE reality)
+- Expected receipt per edge: verdict, divergence list, key counts
+
+The graph definitions don't need to be valid for model fitting. They
+need valid topology (node IDs, edge IDs, param IDs) and realistic
+DSL structure so the evidence binder's classification logic runs.
+The snapshot rows need valid `core_hash`, `slice_key`, `anchor_day`,
+`retrieved_at`, `x`, `y` fields — the actual counts don't matter
+for receipt testing (they matter for model testing, which is doc 17's
+job).
+
+**Required fixture set (Phase 0 — uncontexted):**
+
+1. **Happy path**: FE expects 1 hash, DB has rows under that hash.
+   Receipt: pass, zero divergences. Baseline sanity check.
+
+2. **Hash mismatch**: FE expects hash `abc123`, DB has rows only
+   under `def456` (no equivalence mapping). Receipt: fail,
+   divergence = "all expected hashes empty."
+
+3. **Hash equivalence**: FE expects hash `abc123` with equivalent
+   `def456`. DB has rows under `def456` only. Receipt: pass (the
+   equivalence mapping bridges it). Verifies regime selection
+   handles equivalent hashes.
+
+4. **Multi-regime dedup**: DB has rows under 2 different hashes for
+   the same edge (e.g. DSL era transition). FE sends both as
+   candidate regimes. Receipt: pass, but `regimes_seen = 2`,
+   `rows_post_regime < rows_raw`. Verifies dedup happened and
+   receipt reports the ratio.
+
+5. **Partial date coverage**: FE expects anchors 1-Jan-25 to
+   1-Apr-26. DB has rows only from 1-Jun-25 to 1-Feb-26. Receipt:
+   warn, divergence = coverage gap.
+
+6. **Silent fallback**: FE sends snapshot_subjects for an edge, but
+   DB returns zero rows. Evidence binder falls back to param file.
+   Receipt: warn, `evidence_source = param_file` when snapshot was
+   expected.
+
+7. **Total pipeline discard**: DB has rows, regime selection keeps
+   some, but all surviving rows have zero counts and get filtered.
+   Receipt: fail, `rows_raw > 0` but `total_n = 0`.
+
+8. **No FE subjects for edge**: Edge exists in topology but FE
+   didn't send snapshot_subjects (e.g. no pinnedDSL). Receipt:
+   edge appears in `edges_no_subjects`, no divergence (this is
+   expected behaviour).
+
+**Required fixture set (Phase 1 — contexted, with Phase C):**
+
+9. **Single MECE dimension — happy path**: FE expects slices
+   `[context(channel:google), context(channel:meta)]`. DB has rows
+   with matching `slice_key` values. Receipt: pass, both slices
+   observed.
+
+10. **Missing slice**: FE expects 3 slices, DB has rows for only 2.
+    Receipt: warn, `missing_slices = ["context(channel:other)"]`.
+
+11. **Unexpected slice**: DB has rows with a `slice_key` the FE
+    didn't expect (e.g. a context value added after the last fetch
+    plan). Receipt: warn, `unexpected_slices` non-empty.
+
+12. **Orphan rows**: After regime selection, some rows have a
+    `context_key()` that doesn't match any expected slice (e.g.
+    normalisation mismatch between FE DSL explosion and DB
+    slice_key format). Receipt: warn, `orphan_rows > 0`.
+
+13. **Multi-dimension independent**: FE sends 2 MECE dimensions
+    as candidate regimes. DB has rows under both. Regime selection
+    picks one per date. Receipt: pass, `regimes_seen = 2`,
+    regime_selected shows which won.
+
+14. **Cross-product with marginals**: DB has rows at cross-product
+    granularity and marginal granularity. Rule 2 suppression
+    removes marginals. Receipt: pass, `rows_suppressed > 0`
+    with correct count.
+
+**Fixture format:**
+
+Fixtures live in `bayes/tests/fixtures/binding_receipt/` as Python
+dicts (or JSON files loaded by the test). Each fixture is a function
+returning `(payload_fragment, snapshot_rows, expected_receipt)`.
+The test calls the receipt builder with the fixture data and asserts
+the receipt matches expectations field by field.
+
+This is distinct from doc 17's synthetic data generator, which
+produces statistically valid data for parameter recovery. The receipt
+fixtures produce structurally valid but statistically meaningless
+data — the counts are arbitrary because the model never runs.
