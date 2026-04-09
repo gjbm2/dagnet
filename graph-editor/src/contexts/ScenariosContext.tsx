@@ -263,6 +263,21 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
   const reconcileInFlightRef = useRef<Promise<any> | null>(null);
   const topologySigRef = useRef<string | null>(null);
   const topologyRegenTimerRef = useRef<number | null>(null);
+  const bootRegenDoneForFileRef = useRef<string | null>(null);
+
+  // Track TabContext init completion (boot coordinator hydration) for post-boot scenario regen.
+  const [tabContextInitDone, setTabContextInitDone] = useState(() => {
+    try { return !!(window as any).__dagnetTabContextInitDone; } catch { return false; }
+  });
+  useEffect(() => {
+    if (tabContextInitDone) return;
+    const handler = () => setTabContextInitDone(true);
+    window.addEventListener('dagnet:tabContextInitDone', handler as any);
+    try {
+      if ((window as any).__dagnetTabContextInitDone) setTabContextInitDone(true);
+    } catch { /* ignore */ }
+    return () => window.removeEventListener('dagnet:tabContextInitDone', handler as any);
+  }, [tabContextInitDone]);
 
   // Ensure we don't leak timers across unmounts (important for tests and share embeds).
   useEffect(() => {
@@ -1451,6 +1466,36 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
       })();
     }, 300);
   }, [fileId, tabId, graph, regenerateAllLive, scheduleChartReconcile]);
+
+  // Boot-time regeneration: when scenarios finish loading from IDB and the graph is
+  // hydrated, regenerate visible live scenarios so that per-scenario DSL-specific
+  // edge values are computed from parameter files.  Without this, scenarios created
+  // with a different DSL from currentQueryDSL would show identical edge probabilities
+  // after F5 (the scenario overlay is empty until regenerated).
+  // Mirrors the workspace-change and topology-change handlers above.
+  useEffect(() => {
+    if (!fileId || !graph || !scenariosLoaded || !tabContextInitDone) return;
+    if (!scenarios.some(s => s.meta?.isLive)) return;
+    // One-shot per file — don't re-fire when graph updates from the regeneration itself.
+    if (bootRegenDoneForFileRef.current === fileId) return;
+    bootRegenDoneForFileRef.current = fileId;
+
+    void (async () => {
+      try {
+        let visibleOrder: string[] | undefined = undefined;
+        try {
+          const t = tabId ? await db.tabs.get(tabId) : null;
+          const vs = (t as any)?.editorState?.scenarioState?.visibleScenarioIds;
+          if (Array.isArray(vs) && vs.length > 0) visibleOrder = vs;
+        } catch { /* best-effort */ }
+
+        await regenerateAllLive(undefined, visibleOrder);
+        scheduleChartReconcile('boot-scenario-hydration');
+      } catch {
+        // best-effort only; failures should not break boot
+      }
+    })();
+  }, [fileId, tabId, graph, scenarios, scenariosLoaded, tabContextInitDone, regenerateAllLive, scheduleChartReconcile]);
 
   /**
    * Update a scenario's queryDSL and trigger regeneration.

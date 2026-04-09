@@ -1138,7 +1138,20 @@ def _build_binding_receipt(
     regime selections, row counts) to produce a per-edge audit trail with
     verdicts and graph-level summary counts.
     """
+    import re as _re
     from compiler.types import EdgeBindingReceipt, BindingReceipt
+
+    def _extract_context_key(slice_dsl: str) -> str:
+        """Extract context identity from a full slice_dsl string.
+
+        Strips temporal qualifiers: window(...), cohort(...), asat(...).
+        Leaves context(...), visited(...), case(...) etc.
+        For uncontexted data, returns "" (matching FE convention).
+        """
+        stripped = _re.sub(r'(window|cohort|asat)\([^)]*\)', '', slice_dsl)
+        stripped = stripped.strip('.')
+        stripped = _re.sub(r'\.{2,}', '.', stripped)
+        return stripped
 
     # Group snapshot subjects by edge_id
     subjects_by_edge: dict[str, list[dict]] = {}
@@ -1202,12 +1215,14 @@ def _build_binding_receipt(
         er.hashes_with_data = sorted(h for h in expected_hashes if h in seen)
         er.hashes_empty = sorted(h for h in expected_hashes if h not in seen)
 
-        # Collect expected slices from subjects
-        expected_slices = []
+        # Collect expected slices from subjects, normalised to context-only
+        # keys (same treatment as observed slices — strip temporal qualifiers)
+        expected_slices_raw = []
         for subj in edge_subjects:
             for sk in (subj.get("slice_keys") or []):
-                if sk not in expected_slices:
-                    expected_slices.append(sk)
+                if sk not in expected_slices_raw:
+                    expected_slices_raw.append(sk)
+        expected_slices = sorted(set(_extract_context_key(sk) for sk in expected_slices_raw))
         er.expected_slices = expected_slices
 
         # Anchor range from subjects
@@ -1275,33 +1290,8 @@ def _build_binding_receipt(
         er.total_n = edge_ev.total_n
 
         # --- Slice comparison ---
-        # The FE sends slice_keys like "" (uncontexted) or
-        # "context(channel:google)" (Phase C). The evidence binder labels
-        # observations with full slice_dsl strings like "window(snapshot)"
-        # or "cohort(Landing-page,6-Sep-25:9-Apr-26)". These are different
-        # representations. We extract the context component from observed
-        # slice_dsl strings to compare against the FE's slice_keys.
-        #
-        # Context extraction: strip temporal qualifiers (window(...),
-        # cohort(...), asat(...)) to get the context-only part. For
-        # uncontexted data this yields "" matching the FE's "".
-
-        def _extract_context_key(slice_dsl: str) -> str:
-            """Extract context identity from a full slice_dsl string.
-
-            Strips temporal qualifiers: window(...), cohort(...), asat(...).
-            Leaves context(...), visited(...), case(...) etc.
-            For uncontexted data, returns "" (matching FE convention).
-            """
-            import re
-            # Remove temporal parts: window(...), cohort(...), asat(...)
-            stripped = re.sub(r'(window|cohort|asat)\([^)]*\)', '', slice_dsl)
-            # Clean up separators: leading/trailing dots, double dots
-            stripped = stripped.strip('.')
-            stripped = re.sub(r'\.{2,}', '.', stripped)
-            # Binder labels like "window(snapshot)" or "cohort(snapshot)"
-            # reduce to "" after stripping — correct for uncontexted
-            return stripped
+        # Both expected and observed slices are normalised to context-only
+        # keys via _extract_context_key (strips window/cohort/asat).
 
         observed_context_keys = set()
         for raw_dsl in observed_slices_raw:
@@ -1309,7 +1299,13 @@ def _build_binding_receipt(
 
         er.observed_slices = sorted(observed_context_keys)
         er.missing_slices = sorted(s for s in expected_slices if s not in observed_context_keys)
-        er.unexpected_slices = sorted(s for s in observed_context_keys if s not in expected_slices)
+        # The aggregate slice ("") is always present alongside contexted
+        # slices — the evidence binder produces both aggregate and
+        # per-context observations. Don't flag it as unexpected.
+        er.unexpected_slices = sorted(
+            s for s in observed_context_keys
+            if s not in expected_slices and s != ""
+        )
 
         # --- Anchor coverage ---
         # Dates on trajectories/daily obs may be in ISO format ("2025-08-19")

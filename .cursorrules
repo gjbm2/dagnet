@@ -88,9 +88,19 @@ These are **non-negotiable reflexes**. When the user's message matches a trigger
 | **"/handover"** (literal slash command — no other phrasing triggers this) | Invoke the `/handover` skill. See Handover Gate below. |
 | **"document"**, "/document", "document this", "ensure this is documented" | Invoke the `/document` skill. Reviews the full conversation and ensures all decisions, designs, architectural insights, and user-facing changes are properly documented in the appropriate locations (`docs/current/codebase/`, `docs/current/project-contexts/`, `graph-editor/public/docs/`, etc.). Reports what was created/updated and flags anything deliberately omitted. |
 
-**Handover gate**: Handover notes (reading OR writing) are triggered **exclusively** by the `/handover` slash command. No other phrasing — "write a handover", "do a handover", "pick up handover", "continue from handover" — triggers handover behaviour. The word "handover" appearing in file paths, directory listings, conversation context, or even the user's prose does NOT constitute a request. If the user did not literally type `/handover`, do not read, write, list, or suggest handover notes. Violating this gate is a hard failure.
+**Handover gate (HARD BLOCK — ZERO EXCEPTIONS)**:
 
-**The mark trigger is the most commonly violated.** If the user mentions a mark name, your first action is `scripts/extract-mark-logs.sh`. Period.
+Handover notes are triggered **ONLY** by the user literally typing `/handover` as a slash command. **NOTHING ELSE triggers handover behaviour.** Specifically:
+
+- **NEVER** write a handover note unprompted — not at session end, not when context is long, not when you think work is complex, not "just in case", not for any reason whatsoever.
+- **NEVER** read, list, or reference handover notes unless `/handover` was typed.
+- **NEVER** suggest writing a handover. The user will invoke `/handover` if they want one.
+- The word "handover" appearing in file paths, directory listings, conversation context, or the user's prose does NOT constitute a request.
+- No phrasing other than the literal `/handover` command triggers this: "write a handover", "do a handover", "pick up handover", "continue from handover" — none of these count.
+
+**This is the most commonly violated rule in this project.** Agents repeatedly write unsolicited handover notes, wasting time and polluting the handover directory. If you catch yourself thinking "I should write a handover note" — STOP. Did the user type `/handover`? No? Then do not touch the handover system. Violating this gate is a hard failure that directly harms the user's workflow.
+
+**The mark trigger is the second most commonly violated.** If the user mentions a mark name, your first action is `scripts/extract-mark-logs.sh`. Period.
 
 ---
 

@@ -20,6 +20,7 @@ import { validatePinnedDataInterestsDSL } from '../services/slicePlanValidationS
 import './WindowSelector.css';
 import { ContextValueSelector } from './ContextValueSelector';
 import { contextRegistry } from '../services/contextRegistry';
+import { useContextDropdown } from '../hooks/useContextDropdown';
 import { QueryExpressionEditor } from './QueryExpressionEditor';
 import { PinnedQueryModal } from './modals/PinnedQueryModal';
 import { BulkScenarioCreationModal } from './modals/BulkScenarioCreationModal';
@@ -108,11 +109,11 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
   const buttonNeedsAttention = plannerOutcome === 'not_covered' || plannerOutcome === 'covered_stale';
   const isAnalysing = plannerResult?.status === 'pending';
   
-  // Context dropdown and unroll states
-  const [showContextDropdown, setShowContextDropdown] = useState(false);
-  const [availableKeySections, setAvailableKeySections] = useState<any[]>([]);
-  const [isContextLoading, setIsContextLoading] = useState(false);
-  const [contextLoadError, setContextLoadError] = useState<string | null>(null);
+  // Context dropdown — shared hook (same logic as evidence tab)
+  const ctxDropdown = useContextDropdown({
+    workspace: workspaceForContextRegistry,
+    pinnedDSL: graph?.dataInterestsDSL,
+  });
   
   // Cohort/Window mode toggle - determines DSL function: cohort() vs window()
   // Default to cohort mode as per design (§7.5)
@@ -155,10 +156,6 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
     closeBulkCreateModal,
     createScenariosForContext
   } = useBulkScenarioCreation(tabId);
-  const [showingAllContexts, setShowingAllContexts] = useState(false);
-  
-  const contextButtonRef = useRef<HTMLButtonElement>(null);
-  const contextDropdownRef = useRef<HTMLDivElement>(null);
   const windowSelectorRef = useRef<HTMLDivElement>(null);
 
   // NOTE: editorState.selectedEdgeId is a stale "last clicked" value that
@@ -525,31 +522,22 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
     return () => globalThis.window.removeEventListener('dagnet:reinitDSL', handler);
   }, [getLatestGraph, setCurrentDSL]);
 
-  // Parse current context values and key from currentQueryDSL
+  // Context values/key derived from graph DSL (for ContextValueSelector currentValues).
+  // The hook derives these from its internal contextDSL, but WindowSelector reads from graph DSL.
   const currentContextValues = useMemo(() => {
     if (!graph?.currentQueryDSL) return [];
     const parsed = parseConstraints(graph.currentQueryDSL);
-    
-    const valueIds: string[] = [];
-    for (const ctx of parsed.context) {
-      if (ctx.value !== undefined) valueIds.push(ctx.value);
-    }
-    for (const ctxAny of parsed.contextAny) {
-      for (const pair of ctxAny.pairs) {
-        if (pair.value !== undefined) valueIds.push(pair.value);
-      }
-    }
-    return valueIds;
+    const vals: string[] = [];
+    for (const ctx of parsed.context) { if (ctx.value !== undefined) vals.push(ctx.value); }
+    for (const ctxAny of parsed.contextAny) { for (const pair of ctxAny.pairs) { if (pair.value !== undefined) vals.push(pair.value); } }
+    return vals;
   }, [graph?.currentQueryDSL]);
-  
+
   const currentContextKey = useMemo(() => {
     if (!graph?.currentQueryDSL) return undefined;
     const parsed = parseConstraints(graph.currentQueryDSL);
-    
     if (parsed.context.length > 0) return parsed.context[0].key;
-    if (parsed.contextAny.length > 0 && parsed.contextAny[0].pairs.length > 0) {
-      return parsed.contextAny[0].pairs[0].key;
-    }
+    if (parsed.contextAny.length > 0 && parsed.contextAny[0].pairs.length > 0) return parsed.contextAny[0].pairs[0].key;
     return undefined;
   }, [graph?.currentQueryDSL]);
   
@@ -584,105 +572,9 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
     }
     
     return () => observer.disconnect();
-  }, [isUnrolled, graph?.currentQueryDSL, showContextDropdown, buttonNeedsAttention]);
+  }, [isUnrolled, graph?.currentQueryDSL, ctxDropdown.showDropdown, buttonNeedsAttention]);
   
-  // Load context keys from graph.dataInterestsDSL when dropdown opens
-  // Also reload when graph changes (e.g., after F5)
-  useEffect(() => {
-    // Skip if in "show all" mode - don't overwrite the full list with pinned DSL
-    if (showingAllContexts) {
-      console.log('[WindowSelector] Skipping context load - in "show all" mode');
-      return;
-    }
-    
-    // Always reload contexts when dropdown opens (don't cache stale data)
-    if (showContextDropdown) {
-      const loadContextsFromPinnedQuery = async () => {
-        setIsContextLoading(true);
-        setContextLoadError(null);
-        // Clear cache to get fresh data
-        contextRegistry.clearCache();
-        // Parse dataInterestsDSL to get pinned context keys
-        const pinnedDSL = graph?.dataInterestsDSL || '';
-        console.log('[WindowSelector] Pinned DSL:', pinnedDSL);
-        
-        if (!pinnedDSL) {
-          console.warn('[WindowSelector] No dataInterestsDSL set on graph - showing all available contexts');
-          // Fall back to showing all available contexts
-          const keys = await contextRegistry.getAllContextKeys({ workspace: workspaceForContextRegistry });
-          console.log('[WindowSelector] All available context keys:', keys);
-          const sections = await contextRegistry.getContextSections(keys, { workspace: workspaceForContextRegistry });
-          setAvailableKeySections(sections);
-          return;
-        }
-        
-        // Parse pinned DSL to extract context keys
-        const { parseConstraints } = await import('../lib/queryDSL');
-        const clauses = pinnedDSL.split(';').map(c => c.trim()).filter(c => c);
-        const contextKeySet = new Set<string>();
-        
-        for (const clause of clauses) {
-          const parsed = parseConstraints(clause);
-          for (const ctx of parsed.context) {
-            contextKeySet.add(ctx.key);
-          }
-          for (const ctxAny of parsed.contextAny) {
-            for (const pair of ctxAny.pairs) {
-              contextKeySet.add(pair.key);
-            }
-          }
-        }
-        
-        console.log('[WindowSelector] Context keys from pinned DSL:', Array.from(contextKeySet));
-        
-        // If no context keys in pinned DSL, fall back to showing all available
-        if (contextKeySet.size === 0) {
-          console.log('[WindowSelector] No context keys in pinned DSL - showing all available contexts');
-          const keys = await contextRegistry.getAllContextKeys({ workspace: workspaceForContextRegistry });
-          console.log('[WindowSelector] All available context keys:', keys);
-          const allSections = await contextRegistry.getContextSections(keys, { workspace: workspaceForContextRegistry });
-          setAvailableKeySections(allSections);
-          return;
-        }
-        
-        // Load values for each pinned key (resilient to malformed contexts)
-        const sections = await contextRegistry.getContextSections(
-          Array.from(contextKeySet).map(id => ({ id })),
-          { workspace: workspaceForContextRegistry }
-        );
-        
-        console.log('[WindowSelector] Sections from pinned query:', sections);
-        setAvailableKeySections(sections);
-      };
-      
-      loadContextsFromPinnedQuery().catch(err => {
-        console.error('Failed to load contexts from pinned query:', err);
-        setAvailableKeySections([]);
-        setContextLoadError(err instanceof Error ? err.message : 'Failed to load contexts');
-      }).finally(() => {
-        setIsContextLoading(false);
-      });
-    }
-  }, [showContextDropdown, showingAllContexts, graph?.dataInterestsDSL, workspaceForContextRegistry]);
-  
-  // Close context dropdown when clicking outside
-  useEffect(() => {
-    function handleClickOutside(event: MouseEvent) {
-      if (
-        showContextDropdown &&
-        contextButtonRef.current &&
-        contextDropdownRef.current &&
-        !contextButtonRef.current.contains(event.target as Node) &&
-        !contextDropdownRef.current.contains(event.target as Node)
-      ) {
-        setShowContextDropdown(false);
-        setShowingAllContexts(false); // Reset for next open
-      }
-    }
-    
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [showContextDropdown]);
+  // Context loading + outside-click: handled by useContextDropdown hook (ctxDropdown)
   
   // Close preset context menu when clicking outside
   useEffect(() => {
@@ -1205,135 +1097,92 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
           );
         })()}
         
-        {/* Add Context button */}
+        {/* Add Context button + dropdown — driven by useContextDropdown hook */}
         <div className="window-selector-toolbar-button" style={{ position: 'relative', marginLeft: '8px' }}>
           <button
-            ref={contextButtonRef}
+            ref={ctxDropdown.buttonRef}
             className="window-selector-preset"
-            onClick={() => setShowContextDropdown(!showContextDropdown)}
+            onClick={ctxDropdown.toggleDropdown}
             title="Add context filter"
             style={{ display: 'flex', alignItems: 'center', gap: '4px' }}
           >
             <span>+</span>
             <FileText size={14} />
             {(() => {
-              // Show "Context" label when no contexts are selected
               const parsed = parseConstraints(graph?.currentQueryDSL || '');
-              const hasContexts = parsed.context.length > 0 || parsed.contextAny.length > 0;
-              return !hasContexts ? <span>Context</span> : null;
+              const hasCtx = parsed.context.length > 0 || parsed.contextAny.length > 0;
+              return !hasCtx ? <span>Context</span> : null;
             })()}
           </button>
-          
-          {showContextDropdown && availableKeySections.length > 0 && (
-            <div ref={contextDropdownRef} className="window-selector-dropdown context-dropdown">
+
+          {ctxDropdown.showDropdown && ctxDropdown.contextSections.length > 0 && (
+            <div ref={ctxDropdown.dropdownRef} className="window-selector-dropdown context-dropdown">
               <ContextValueSelector
                 mode="multi-key"
-                availableKeys={availableKeySections}
+                availableKeys={ctxDropdown.contextSections}
                 currentValues={currentContextValues}
                 currentContextKey={currentContextKey}
-                showingAll={showingAllContexts}
+                showingAll={ctxDropdown.showingAll}
                 onCreateScenarios={(contextKey, values) => {
                   if (values) {
-                    // Create scenarios for specific values immediately
                     createScenariosForContext(contextKey, values);
-                    // Keep dropdown open to allow creating more? Or close?
-                    // If user clicked "+", they probably want to see the scenario created.
-                    // Let's keep it open for multi-creation workflow.
                   } else {
-                    // Open bulk creation modal
-                    setShowContextDropdown(false);
+                    ctxDropdown.closeDropdown();
                     openBulkCreateForContext(contextKey);
                   }
                 }}
-                onShowAll={async () => {
-                  // Load ALL contexts from registry (not just pinned)
-                  contextRegistry.clearCache();
-                  const keys = await contextRegistry.getAllContextKeys({ workspace: workspaceForContextRegistry });
-                  console.log('[WindowSelector] Loading ALL context keys:', keys);
-                  const sections = await Promise.all(
-                    keys.map(async key => {
-                      const context = await contextRegistry.getContext(key.id, { workspace: workspaceForContextRegistry });
-                      const values = await contextRegistry.getValuesForContext(key.id);
-                      return {
-                        id: key.id,
-                        name: key.id.replace(/_/g, ' ').replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
-                        values,
-                        otherPolicy: context?.otherPolicy
-                      };
-                    })
-                  );
-                  setAvailableKeySections(sections);
-                  setShowingAllContexts(true);
-                  return sections;
-                }}
+                onShowAll={ctxDropdown.handleShowAll}
                 onApply={async (key, values) => {
-                  setShowContextDropdown(false);
-                  setShowingAllContexts(false); // Reset for next open
-                  
-                  // Use getLatestGraph() to avoid stale closure
+                  // Use the hook to build context DSL, then merge with window/asat
+                  ctxDropdown.handleApply(key, values);
+
                   const currentGraph = getLatestGraph();
                   if (!setGraph || !currentGraph) return;
-                  
-                  // Parse existing DSL to preserve window
+
                   const parsed = parseConstraints(currentGraph.currentQueryDSL || '');
                   const existingWindow = parsed.window;
-                  
-                  // Check if all values selected AND key is MECE (should remove context)
-                  const keySection = availableKeySections.find(s => s.id === key);
+
+                  const keySection = ctxDropdown.contextSections.find(s => s.id === key);
                   const allValues = keySection?.values || [];
                   const allSelected = allValues.length > 0 && values.length === allValues.length;
                   const isMECE = keySection?.otherPolicy !== 'undefined';
-                  
-                  // Build new context part
+
                   let contextPart = '';
                   if (values.length > 0 && !(allSelected && isMECE)) {
                     if (values.length === 1) {
                       contextPart = `context(${key}:${values[0]})`;
                     } else {
-                      const valuePairs = values.map(v => `${key}:${v}`).join(',');
-                      contextPart = `contextAny(${valuePairs})`;
+                      contextPart = `contextAny(${values.map(v => `${key}:${v}`).join(',')})`;
                     }
                   }
-                  
-                  // Build window/cohort part (preserve existing or use current window state)
+
                   let dateRangePart = '';
                   if (existingWindow) {
                     dateRangePart = `${queryMode}(${existingWindow.start || ''}:${existingWindow.end || ''})`;
                   } else if (window) {
                     dateRangePart = `${queryMode}(${normalizeToUK(window.start)}:${normalizeToUK(window.end)})`;
                   }
-                  
-                  // Preserve asat clause if present in existing DSL
+
                   const existingParsed = parseConstraints(currentGraph.currentQueryDSL || '');
                   const asatPart = existingParsed.asat ? `asat(${existingParsed.asat})` : '';
-                  
-                  // Combine
+
                   const newDSL = [contextPart, dateRangePart, asatPart].filter(p => p).join('.');
-                  
-                  // CRITICAL: Update AUTHORITATIVE DSL on graphStore
                   setCurrentDSL(newDSL || '');
-                  
-                  // Also update historic record (NOT for live queries!)
                   setGraph({ ...currentGraph, currentQueryDSL: newDSL || undefined });
-                  
+
                   if (allSelected && isMECE) {
                     toast.success('All values selected = no filter', { duration: 2000 });
                   }
                 }}
-                onCancel={() => {
-                  setShowContextDropdown(false);
-                  setShowingAllContexts(false); // Reset for next open
-                }}
-                anchorEl={contextButtonRef.current}
+                onCancel={ctxDropdown.handleCancel}
+                anchorEl={ctxDropdown.buttonRef.current}
               />
             </div>
           )}
-          
-          {showContextDropdown && availableKeySections.length === 0 && (
-            <div ref={contextDropdownRef} className="window-selector-dropdown context-dropdown">
-              <div className="dropdown-message">
-                {isContextLoading ? 'Loading contexts...' : (contextLoadError ? `Failed to load contexts: ${contextLoadError}` : 'No contexts found')}
-              </div>
+
+          {ctxDropdown.showDropdown && ctxDropdown.contextSections.length === 0 && (
+            <div ref={ctxDropdown.dropdownRef} className="window-selector-dropdown context-dropdown">
+              <div className="dropdown-message">No contexts found</div>
             </div>
           )}
         </div>
@@ -1485,7 +1334,7 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
                 console.warn('[WindowSelector] Failed to validate pinned DSL:', e);
               });
             // Reload context sections if dropdown is open
-            setAvailableKeySections([]);
+            // Context sections will reload on next dropdown open via the hook
           }
         }}
         onClose={() => setShowPinnedQueryModal(false)}

@@ -40,6 +40,9 @@ import { MinimiseChevron } from '../canvas/MinimiseChevron';
 import { MinimiseCornerArrows, CORNER_ORIGINS } from '../canvas/MinimiseCornerArrows';
 import type { AnchorCorner } from '../canvas/MinimiseCornerArrows';
 import { filterResultForScenarios } from '@/lib/analysisResultUtils';
+import { SnapshotCalendarSection } from '../HoverAnalysisPreview';
+import { useNavigatorContext } from '@/contexts/NavigatorContext';
+import { resolveEdgeFromDsl } from '@/services/localAnalysisComputeService';
 
 interface CanvasAnalysisNodeData {
   analysis: CanvasAnalysis;
@@ -136,6 +139,41 @@ function CanvasAnalysisNodeInner({ data, selected, dragging }: NodeProps<CanvasA
     const graphNodes = storeHandle.getState().graph?.nodes || [];
     return deriveDslSubjectLabel(analyticsDslForSubject, graphNodes);
   }, [analyticsDslForSubject, storeHandle]);
+
+  // Evidence tab: SnapshotCalendarSection in self-fetching mode.
+  // Resolve edge UUID from analytics DSL, then pass source props —
+  // the component handles its own fetch + context filtering via QueryExpressionEditor.
+  const { state: navState } = useNavigatorContext();
+  const graphEdgeCount = useGraphStore(s => (s.graph as any)?.edges?.length ?? 0);
+  const resolvedEdgeId = useMemo(() => {
+    if (!analyticsDslForSubject || graphEdgeCount === 0) return null;
+    const graph = storeHandle.getState().graph;
+    if (!graph) return null;
+    const edge = resolveEdgeFromDsl(graph as any, analyticsDslForSubject);
+    return edge ? (edge.uuid || edge.id || null) : null;
+  }, [analyticsDslForSubject, graphEdgeCount, storeHandle]);
+  const evidenceTabExtra = useMemo(() => {
+    if (!resolvedEdgeId) {
+      console.log('[CanvasAnalysisNode] evidenceTabExtra: no resolvedEdgeId', { analyticsDslForSubject, graphEdgeCount });
+      return undefined;
+    }
+    const graph = storeHandle.getState().graph;
+    console.log('[CanvasAnalysisNode] evidenceTabExtra: building', { resolvedEdgeId, currentDSL, repo: navState.selectedRepo, branch: navState.selectedBranch });
+    return {
+      evidence: (
+        <SnapshotCalendarSection
+          source={{
+            graph,
+            edgeId: resolvedEdgeId,
+            effectiveDSL: currentDSL || '',
+            workspace: navState.selectedRepo && navState.selectedBranch
+              ? { repository: navState.selectedRepo, branch: navState.selectedBranch }
+              : undefined,
+          }}
+        />
+      ),
+    };
+  }, [resolvedEdgeId, currentDSL, storeHandle, navState.selectedRepo, navState.selectedBranch]);
 
   const propContentItem = getContentItems(analysisProp)[0];
   const propAnalysisType = propContentItem?.analysis_type;
@@ -1514,6 +1552,7 @@ function CanvasAnalysisNodeInner({ data, selected, dragging }: NodeProps<CanvasA
                     result={ciResult}
                     kind={ci.kind}
                     fontSize={ci.display?.font_size as number | undefined}
+                    tabExtra={evidenceTabExtra}
                   />
                 </div>
               );
@@ -1558,6 +1597,7 @@ function CanvasAnalysisNodeInner({ data, selected, dragging }: NodeProps<CanvasA
                 viewMode={ci.view_type as ViewMode | undefined}
                 onViewModeChange={handleViewModeChange}
                 infoCardKind={ci.kind}
+                infoTabExtra={evidenceTabExtra}
               />
             )}
             {previewOverlay}

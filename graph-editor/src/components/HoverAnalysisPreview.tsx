@@ -17,7 +17,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ReactDOM from 'react-dom';
-import { GripVertical } from 'lucide-react';
+import { GripVertical, FileText } from 'lucide-react';
 import { AnalysisChartContainer } from './charts/AnalysisChartContainer';
 import { AnalysisInfoCard } from './analytics/AnalysisInfoCard';
 import { ANALYSIS_TYPES, getAnalysisTypeMeta } from './panels/analysisTypes';
@@ -34,6 +34,11 @@ import type { TabDragOutcome } from './CanvasAnalysisCard';
 import type { LocalScenario } from '../services/localAnalysisComputeService';
 import type { EdgeSnapshotRetrievalsData } from '../hooks/useEdgeSnapshotRetrievals';
 import { CalendarGrid } from './CalendarGrid';
+import { getSnapshotRetrievalsForEdge, buildSnapshotRetrievalsQueryForEdge } from '../services/snapshotRetrievalsService';
+import { querySnapshotRetrievals } from '../services/snapshotWriteService';
+import { ContextValueSelector } from './ContextValueSelector';
+import { QueryExpressionEditor } from './QueryExpressionEditor';
+import { useContextDropdown } from '../hooks/useContextDropdown';
 import { TAB_LABELS, extractTabIds, buildPinDragData } from '../utils/canvasAnalysisAccessors';
 
 // -------------------------------------------------------------------
@@ -108,7 +113,7 @@ function DraggableAnalysisCard({
   onSettled,
   deferred,
   infoDefaultTab,
-  snapshotRetrievals,
+  snapshotSource,
   onFileLink,
   onClickPin,
 }: {
@@ -136,8 +141,8 @@ function DraggableAnalysisCard({
   deferred?: boolean;
   /** Default tab for info cards (driven by view overlay mode) */
   infoDefaultTab?: string;
-  /** Snapshot retrieval data for edge_info Evidence tab (async — arrives when ready) */
-  snapshotRetrievals?: EdgeSnapshotRetrievalsData;
+  /** Source for edge_info Evidence tab — SnapshotCalendarSection self-fetches from this. */
+  snapshotSource?: { graph: any; edgeId: string; effectiveDSL: string; workspace?: { repository: string; branch: string } };
   /** Callback when a file link is clicked */
   onFileLink?: (fileId: string, type: string) => void;
   /** Called on click (no drag) — satellites use this to pin at main card position */
@@ -596,7 +601,7 @@ function DraggableAnalysisCard({
                 kind={ci.kind}
                 fontSize={ci.display?.font_size as number | undefined}
                 onFileLink={onFileLink}
-                tabExtra={snapshotRetrievals ? { evidence: <SnapshotCalendarSection data={snapshotRetrievals} /> } : undefined}
+                tabExtra={snapshotSource ? { evidence: <SnapshotCalendarSection source={snapshotSource} /> } : undefined}
               />
             ) : result ? (
               <AnalysisChartContainer
@@ -613,8 +618,8 @@ function DraggableAnalysisCard({
                 source={{ query_dsl: dsl }}
                 infoCardKind={ci.kind}
                 infoDefaultTab={hasMultipleTabs ? undefined : infoDefaultTab}
-                infoTabExtra={snapshotRetrievals ? {
-                  evidence: <SnapshotCalendarSection data={snapshotRetrievals} />,
+                infoTabExtra={snapshotSource ? {
+                  evidence: <SnapshotCalendarSection source={snapshotSource} />,
                 } : undefined}
               />
             ) : null}
@@ -636,18 +641,107 @@ function DraggableAnalysisCard({
 // SnapshotCalendarSection — compact calendar for Evidence tab
 // -------------------------------------------------------------------
 
-function SnapshotCalendarSection({ data }: { data: EdgeSnapshotRetrievalsData }) {
-  // Right month = the latest retrieval month (or current month)
+/**
+ * SnapshotCalendarSection — dual-month calendar showing snapshot availability.
+ *
+ * Two modes:
+ * - **data-only** (hover preview): caller passes pre-fetched `data`, no context filter.
+ * - **self-fetching** (both hover and canvas): caller passes `source`, component fetches via
+ *   buildSnapshotRetrievalsQueryForEdge + querySnapshotRetrievals with include_summary.
+ *   All snapshots are fetched once; a slice_key dropdown filters client-side.
+ */
+export function SnapshotCalendarSection({ source }: {
+  source: {
+    graph: any;
+    edgeId: string;
+    effectiveDSL: string;
+    workspace?: { repository: string; branch: string };
+  };
+}) {
+  // ── Self-fetch + context filter state ──
+  const [fetchedData, setFetchedData] = useState<EdgeSnapshotRetrievalsData | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const fetchVersionRef = useRef(0);
+
+  // Context dropdown (shared hook — same as WindowSelector)
+  const ctx = useContextDropdown({ workspace: source.workspace });
+
+  // Compose the effective DSL from base + context filter
+  const composedDSL = useMemo(() => {
+    const base = source.effectiveDSL || '';
+    const c = ctx.contextDSL.trim();
+    if (!c) return base;
+    return base ? `${c}.${base}` : c;
+  }, [source.effectiveDSL, ctx.contextDSL]);
+
+  // Two-path fetch:
+  // - No context filter: getSnapshotRetrievalsForEdge (all plausible hashes + hash mappings, all slices)
+  // - With context filter: buildSnapshotRetrievalsQueryForEdge + querySnapshotRetrievals
+  //   (specific hash for the context dimension + slice_keys filter for the context value)
+  const sourceEdgeId = source.edgeId;
+  const sourceRepo = source.workspace?.repository;
+  const sourceBranch = source.workspace?.branch;
+  const hasContextFilter = ctx.contextDSL.trim().length > 0;
+  useEffect(() => {
+    if (!sourceEdgeId) return;
+    const version = ++fetchVersionRef.current;
+    setIsLoading(true);
+
+    const buildResult = (res: { success: boolean; retrieved_at?: string[]; retrieved_days?: string[]; latest_retrieved_at?: string | null; count?: number }) => {
+      if (!res.success) return { retrievedDays: [] as string[], countsByDay: {} as Record<string, number>, count: 0, latestRetrievedAt: null };
+      const countsByDay: Record<string, number> = {};
+      for (const ts of (res.retrieved_at || [])) {
+        countsByDay[ts.slice(0, 10)] = (countsByDay[ts.slice(0, 10)] || 0) + 1;
+      }
+      return {
+        retrievedDays: res.retrieved_days || [],
+        countsByDay,
+        count: res.count ?? 0,
+        latestRetrievedAt: res.latest_retrieved_at ?? null,
+      };
+    };
+
+    const doFetch = hasContextFilter
+      // Context active: use single-signature path with slice_keys filter (hash + value filtering)
+      ? buildSnapshotRetrievalsQueryForEdge({
+          graph: source.graph, edgeId: sourceEdgeId,
+          effectiveDSL: composedDSL, workspace: source.workspace, limit: 500,
+        }).then(params => {
+          console.log('[SnapshotCalendarSection] context-filtered query params:', params);
+          if (!params) return { success: false, retrieved_at: [] as string[], retrieved_days: [] as string[], latest_retrieved_at: null, count: 0 };
+          return querySnapshotRetrievals({ ...params, limit: 500 });
+        })
+      // No context: use all-signatures path (all hashes via hash_groups + hash mappings)
+      : getSnapshotRetrievalsForEdge({
+          graph: source.graph, edgeId: sourceEdgeId,
+          effectiveDSL: composedDSL, workspace: source.workspace,
+        });
+
+    void doFetch.then(res => {
+      if (version !== fetchVersionRef.current) return;
+      setFetchedData(buildResult(res));
+    }).catch(() => {
+      if (version === fetchVersionRef.current) {
+        setFetchedData({ retrievedDays: [], countsByDay: {}, count: 0, latestRetrievedAt: null });
+      }
+    }).finally(() => {
+      if (version === fetchVersionRef.current) setIsLoading(false);
+    });
+  }, [source, sourceEdgeId, composedDSL, sourceRepo, sourceBranch, hasContextFilter]);
+
+  const displayData = fetchedData;
+
+  // ── Calendar state ──
   const [rightMonth, setRightMonth] = useState(() => {
-    if (data.latestRetrievedAt) {
-      const d = new Date(data.latestRetrievedAt);
+    const latest = displayData?.latestRetrievedAt;
+    if (latest) {
+      const d = new Date(latest);
       return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1));
     }
     const now = new Date();
     return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
   });
 
-  // Left month = one month before right
   const leftMonth = useMemo(() => {
     const d = new Date(rightMonth.getTime());
     d.setUTCMonth(d.getUTCMonth() - 1);
@@ -655,11 +749,10 @@ function SnapshotCalendarSection({ data }: { data: EdgeSnapshotRetrievalsData })
   }, [rightMonth]);
 
   const highlightedDates = useMemo(
-    () => new Set(data.retrievedDays),
-    [data.retrievedDays],
+    () => new Set(displayData?.retrievedDays || []),
+    [displayData?.retrievedDays],
   );
 
-  // Shared nav moves the pair
   const setLeftMonth = useCallback((d: Date) => {
     const next = new Date(d.getTime());
     next.setUTCMonth(next.getUTCMonth() + 1);
@@ -669,40 +762,105 @@ function SnapshotCalendarSection({ data }: { data: EdgeSnapshotRetrievalsData })
 
   const noop = useCallback(() => {}, []);
 
+  if (!displayData && !isLoading) return null;
+
   return (
     <div className="info-card-snapshot-calendar info-card-snapshot-calendar--dual">
       <div className="info-card-section-title" style={{ padding: '3px 4px 1px' }}>
         Snapshots
       </div>
-      <div className="info-card-snapshot-calendar-pair">
-        <div className="info-card-snapshot-calendar-month">
-          <CalendarGrid
-            monthCursor={leftMonth}
-            setMonthCursor={setLeftMonth}
-            highlightedDates={highlightedDates}
-            selectedDate={null}
-            onDateClick={noop}
-            getDayTitle={(iso, highlighted) =>
-              highlighted ? 'Snapshot available' : ''
-            }
-          />
-        </div>
-        <div className="info-card-snapshot-calendar-month">
-          <CalendarGrid
-            monthCursor={rightMonth}
-            setMonthCursor={setRightMonth}
-            highlightedDates={highlightedDates}
-            selectedDate={null}
-            onDateClick={noop}
-            getDayTitle={(iso, highlighted) =>
-              highlighted ? 'Snapshot available' : ''
-            }
-          />
+      {/* Context filter — same three-state UI as WindowSelector, driven by useContextDropdown.
+          Fetch is one-shot; filtering is client-side by slice_key. */}
+      <div className="window-selector-context-group" style={{ margin: '2px 4px 4px' }}>
+        {ctx.hasContexts && (
+          <div className="window-selector-context-chips" style={{ minWidth: '80px', width: 'auto', maxWidth: '100%' }}>
+            <QueryExpressionEditor
+              value={ctx.contextDSL}
+              onChange={ctx.setContextDSL}
+              allowedFunctions={['context', 'contextAny']}
+              graph={source.graph}
+              height="32px"
+              placeholder=""
+            />
+          </div>
+        )}
+        <div className="window-selector-toolbar-button" style={{ position: 'relative' }}>
+          <button
+            ref={ctx.buttonRef}
+            className="window-selector-preset"
+            onClick={ctx.toggleDropdown}
+            title="Filter snapshots by context"
+            style={{ display: 'flex', alignItems: 'center', gap: '4px' }}
+          >
+            <span>+</span>
+            <FileText size={14} />
+            {!ctx.hasContexts && <span>Context</span>}
+          </button>
+          {ctx.showDropdown && ctx.contextSections.length > 0 && ReactDOM.createPortal(
+            <div
+              ref={ctx.dropdownRef}
+              className="window-selector-dropdown context-dropdown"
+              style={{
+                position: 'fixed',
+                zIndex: 10002,
+                top: ctx.buttonRef.current ? ctx.buttonRef.current.getBoundingClientRect().bottom + 4 : 0,
+                left: ctx.buttonRef.current ? ctx.buttonRef.current.getBoundingClientRect().left : 0,
+              }}
+            >
+              <ContextValueSelector
+                mode="multi-key"
+                availableKeys={ctx.contextSections}
+                currentValues={ctx.currentContextValues}
+                currentContextKey={ctx.currentContextKey}
+                showingAll={ctx.showingAll}
+                onShowAll={ctx.handleShowAll}
+                onApply={ctx.handleApply}
+                onCancel={ctx.handleCancel}
+              />
+            </div>,
+            document.body,
+          )}
         </div>
       </div>
-      <div className="calendar-grid-footer">
-        {data.count} row{data.count !== 1 ? 's' : ''} across {data.retrievedDays.length} day{data.retrievedDays.length !== 1 ? 's' : ''}
-      </div>
+      {isLoading ? (
+        <div style={{ padding: '12px', textAlign: 'center', fontSize: '0.85em', opacity: 0.6 }}>Loading…</div>
+      ) : displayData ? (
+        <>
+          <div className="info-card-snapshot-calendar-pair">
+            <div className="info-card-snapshot-calendar-month">
+              <CalendarGrid
+                monthCursor={leftMonth}
+                setMonthCursor={setLeftMonth}
+                highlightedDates={highlightedDates}
+                selectedDate={null}
+                onDateClick={noop}
+                getDayTitle={(iso, highlighted) => {
+                  if (!highlighted) return '';
+                  const n = displayData?.countsByDay?.[iso] || 0;
+                  return n > 0 ? `${n} snapshot${n !== 1 ? 's' : ''}` : '1 snapshot';
+                }}
+              />
+            </div>
+            <div className="info-card-snapshot-calendar-month">
+              <CalendarGrid
+                monthCursor={rightMonth}
+                setMonthCursor={setRightMonth}
+                highlightedDates={highlightedDates}
+                selectedDate={null}
+                onDateClick={noop}
+                getDayTitle={(iso, highlighted) => {
+                  if (!highlighted) return '';
+                  const n = displayData?.countsByDay?.[iso] || 0;
+                  return n > 0 ? `${n} snapshot${n !== 1 ? 's' : ''}` : '1 snapshot';
+                }}
+              />
+            </div>
+          </div>
+          <div className="calendar-grid-footer">
+            {displayData.count} row{displayData.count !== 1 ? 's' : ''} across {displayData.retrievedDays.length} day{displayData.retrievedDays.length !== 1 ? 's' : ''}
+          </div>
+        </>
+      ) : null}
     </div>
   );
 }
@@ -723,8 +881,8 @@ interface HoverAnalysisPreviewProps {
   onCardEnter: () => void;
   onCardLeave: () => void;
   onDismiss: () => void;
-  /** Snapshot retrieval data for edge_info Evidence tab (async — arrives when ready) */
-  snapshotRetrievals?: EdgeSnapshotRetrievalsData;
+  /** Source for edge_info Evidence tab — SnapshotCalendarSection self-fetches from this. */
+  snapshotSource?: { graph: any; edgeId: string; effectiveDSL: string; workspace?: { repository: string; branch: string } };
   /** Callback when a file link is clicked in an info card */
   onFileLink?: (fileId: string, type: string) => void;
 }
@@ -741,7 +899,7 @@ export function HoverAnalysisPreview({
   onCardEnter,
   onCardLeave,
   onDismiss,
-  snapshotRetrievals,
+  snapshotSource,
   onFileLink,
 }: HoverAnalysisPreviewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -1065,7 +1223,7 @@ export function HoverAnalysisPreview({
           onCardEnter={handleCardEnterWithSatellites}
           onCardLeave={handleCardLeaveWithSatellites}
           infoDefaultTab={infoDefaultTab}
-          snapshotRetrievals={snapshotRetrievals}
+          snapshotSource={snapshotSource}
           onFileLink={onFileLink}
         />
       </div>

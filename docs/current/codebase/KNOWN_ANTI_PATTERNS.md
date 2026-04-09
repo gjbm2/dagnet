@@ -202,6 +202,16 @@ Clearing layer 1 is useless unless you also handle layers 2-4. UpdateManager map
 
 **Broader principle**: not all errors in the same code path deserve the same recovery strategy. Classify by cause, not by location.
 
+## Anti-pattern 23: js-yaml Date conversion corrupts context definition hashes
+
+**Signature**: CLI tool computes a different `core_hash` from the FE browser for the same graph on the same branch. The `x` (context definition) component of the structured signature differs. Receipt shows "all expected hashes returned no data" despite data existing in the DB.
+
+**Root cause**: `js-yaml`'s default schema converts ISO date strings in YAML (e.g. `created_at: '2025-11-24T00:00:00Z'`) to native JavaScript `Date` objects. The `normalizeObjectKeys` function in `querySignature.ts` checks `typeof v === 'object'` — a `Date` passes this check, but `Object.keys(new Date())` returns `[]`, so the normalised output is `{}` instead of the original date string. The canonical JSON changes, producing a different SHA-256 hash. The FE browser doesn't hit this because IDB stores context definitions as serialised JSON where dates are already strings.
+
+**Fix**: use `YAML.load(raw, { schema: YAML.JSON_SCHEMA })` when loading YAML files in the CLI disk loader (`graph-editor/src/cli/diskLoader.ts`). This prevents js-yaml from converting any scalars to non-string types. Do not change `normalizeObjectKeys` in production — the browser path is correct.
+
+**Broader principle**: YAML loaders that auto-convert types (dates, booleans, octals) are a hash stability hazard. Any data that enters a hashing pipeline must be loaded with type coercion disabled, or coerced back to strings before hashing.
+
 ## When to add to this document
 
 After completing a multi-attempt fix, check: does my bug match a generalisable pattern? If so, add it here following the format: Signature (how to recognise it), Root cause (why it happens), Fix (what to do), Example (optional, specific instance).

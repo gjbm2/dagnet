@@ -371,7 +371,10 @@ export async function prepareAnalysisComputeInputs(
     if (!params.rawScenarioStateLoaded) {
       return logBlockedResult(params, { status: 'blocked', reason: 'live_scenario_state_missing' });
     }
-    if (!params.scenariosContext?.scenariosReady) {
+    // FE-computed types (edge_info, node_info) don't need scenarios — skip the ready gate
+    // to avoid blocking them during boot while ScenariosContext loads from IDB.
+    const FE_ONLY_TYPES = new Set(['edge_info', 'node_info']);
+    if (!FE_ONLY_TYPES.has(analysisType) && !params.scenariosContext?.scenariosReady) {
       return logBlockedResult(params, { status: 'blocked', reason: 'live_scenarios_context_missing' });
     }
 

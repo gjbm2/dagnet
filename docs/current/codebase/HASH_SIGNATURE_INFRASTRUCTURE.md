@@ -213,3 +213,28 @@ Validates that hash-mappings.json is structurally correct and that the full hash
 Validates that snapshots actually exist in the DB for each fetchable edge. For each edge: computes all plausible hashes via `computePlausibleSignaturesForEdge` (handles epoch variants from different `dataInterestsDSL` regimes), builds equivalence closures for each, and issues a single batched `getBatchRetrievals` call. Edges with zero snapshots under any plausible hash are reported under `snapshot-coverage` (📡).
 
 This phase only runs on manual "Check Integrity" (File Menu) or the Refresh button in the Graph Issues panel — not on the auto-debounced background checks triggered by file changes.
+
+## CLI / Node.js context
+
+The CLI tools (`dagnet-cli bayes`, `dagnet-cli analyse`, `test_harness.py`
+via `compute_snapshot_subjects.mjs`) compute hashes in a Node.js process
+rather than the browser. The hash computation code is shared — the same
+`computeQuerySignature` and `computeShortCoreHash` functions run in both
+contexts. However, the **data loading path** differs:
+
+- **Browser**: YAML-sourced data enters via IDB, where values are stored
+  as serialised JSON. Date strings remain strings. Objects pass through
+  `structuredClone` on IDB write/read, which strips prototype chains.
+
+- **CLI**: YAML files are loaded from disk by `js-yaml`. By default,
+  js-yaml's `DEFAULT_SCHEMA` converts ISO date strings to native `Date`
+  objects. This breaks `normalizeObjectKeys` in `querySignature.ts`,
+  which treats `Date` as a plain object (empty keys), producing a
+  different canonical JSON and therefore a different hash.
+
+**Fix**: the CLI disk loader (`src/cli/diskLoader.ts`) uses
+`YAML.load(raw, { schema: YAML.JSON_SCHEMA })` to prevent type
+coercion. This keeps all scalars as strings, matching the browser's
+IDB-serialised representation.
+
+**See also**: anti-pattern 23 in `KNOWN_ANTI_PATTERNS.md`.

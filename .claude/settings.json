@@ -58,7 +58,17 @@
       "Bash(bash graph-ops/scripts/analyse.sh config-flow-gm-rebuild-jan-26 \"from\\(landing-page\\).to\\(household-created\\).window\\(-90d:\\)\" --type cohort_maturity --format json)",
       "Bash(bash graph-ops/scripts/analyse.sh config-flow-gm-rebuild-jan-26 \"from\\(landing-page\\).to\\(household-created\\).window\\(-90d:\\)\" --type cohort_maturity_v2 --format json)",
       "Bash(bash graph-ops/scripts/analyse.sh config-flow-gm-rebuild-jan-26 \"from\\(landing-page\\).to\\(household-created\\).window\\(-90d:\\)\" --type cohort_maturity_v2 -v)",
-      "Bash(bash graph-ops/scripts/analyse.sh config-flow-gm-rebuild-jan-26 \"from\\(landing-page\\).to\\(household-created\\).window\\(-90d:\\)\" --type cohort_maturity_v2)"
+      "Bash(bash graph-ops/scripts/analyse.sh config-flow-gm-rebuild-jan-26 \"from\\(landing-page\\).to\\(household-created\\).window\\(-90d:\\)\" --type cohort_maturity_v2)",
+      "Bash(bash graph-ops/scripts/analyse.sh bayes-test-gm-rebuild \"from\\(household-delegated\\).to\\(switch-registered\\).cohort\\(10-Mar-26:8-Apr-26\\)\" --type cohort_maturity --format json)",
+      "Bash(bash graph-ops/scripts/analyse.sh bayes-test-gm-rebuild \"from\\(household-delegated\\).to\\(switch-registered\\).cohort\\(10-Mar-26:8-Apr-26\\)\" --type cohort_maturity)",
+      "Bash(bash graph-ops/scripts/analyse.sh bayes-test-gm-rebuild \"from\\(household-delegated\\).to\\(switch-registered\\).cohort\\(10-Mar-26:8-Apr-26\\)\" --type cohort_maturity --format json --no-cache)",
+      "Bash(bash graph-ops/scripts/analyse.sh bayes-test-gm-rebuild \"from\\(household-delegated\\).to\\(switch-registered\\).cohort\\(10-Mar-26:8-Apr-26\\)\" --type cohort_maturity --no-cache)",
+      "Bash(bash graph-ops/scripts/analyse.sh bayes-test-gm-rebuild \"from\\(household-delegated\\).to\\(switch-registered\\).cohort\\(10-Mar-26:8-Apr-26\\)\" --type cohort_maturity_v2 --no-cache)",
+      "Bash(bash graph-ops/scripts/analyse.sh bayes-test-gm-rebuild \"from\\(switch-registered\\).to\\(switch-success\\).cohort\\(10-Mar-26:8-Apr-26\\)\" --type cohort_maturity --no-cache)",
+      "Bash(bash graph-ops/scripts/analyse.sh bayes-test-gm-rebuild \"from\\(switch-registered\\).to\\(switch-success\\).cohort\\(10-Mar-26:8-Apr-26\\)\" --type cohort_maturity_v2 --no-cache)",
+      "Bash(bash graph-ops/scripts/analyse.sh bayes-test-gm-rebuild \"from\\(switch-registered\\).to\\(switch-success\\).cohort\\(10-Mar-26:8-Apr-26\\)\" --type cohort_maturity_v2 --no-cache -v)",
+      "Bash(bash graph-ops/scripts/analyse.sh bayes-test-gm-rebuild \"from\\(household-delegated\\).to\\(switch-success\\).cohort\\(10-Mar-26:8-Apr-26\\)\" --type cohort_maturity_v2 --no-cache)",
+      "Bash(bash graph-ops/scripts/analyse.sh bayes-test-gm-rebuild \"from\\(household-created\\).to\\(switch-success\\).cohort\\(10-Mar-26:8-Apr-26\\)\" --type cohort_maturity_v2 --no-cache)"
     ],
     "additionalDirectories": [
       "/home/reg/dev/dagnet/.claude",

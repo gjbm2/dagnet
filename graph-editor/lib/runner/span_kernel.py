@@ -281,6 +281,8 @@ def compose_span_kernel(
 
             edge_p = float(min(edge_p, 1.0))
 
+            print(f"[span_kernel] Edge {from_id}→{node}: p={edge_p:.4f} mu={mu:.4f} sigma={sigma:.4f} onset={onset:.2f}")
+
             # Build per-edge sub-probability density
             f_edge = _edge_sub_probability_density(tau_grid, edge_p, onset, mu, sigma)
 

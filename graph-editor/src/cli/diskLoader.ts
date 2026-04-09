@@ -325,7 +325,12 @@ async function loadYamlDirectory(dirPath: string): Promise<Map<string, any>> {
 
     const filePath = join(dirPath, entry);
     const raw = await readFile(filePath, 'utf-8');
-    const data = YAML.load(raw) as any;
+    // Use JSON_SCHEMA to prevent js-yaml from converting ISO date
+    // strings to native Date objects. The FE browser stores these as
+    // strings in IDB; if they become Dates here, normalisation and
+    // hashing produce different results (e.g. Date.toISOString adds
+    // .000Z milliseconds that weren't in the original YAML string).
+    const data = YAML.load(raw, { schema: YAML.JSON_SCHEMA }) as any;
     if (!data) continue;
 
     // Key by the id field if present, otherwise by filename stem
@@ -334,4 +339,36 @@ async function loadYamlDirectory(dirPath: string): Promise<Map<string, any>> {
   }
 
   return result;
+}
+
+
+/**
+ * Recursively convert Date objects to ISO strings in place.
+ *
+ * js-yaml's default schema converts ISO date strings to native Date
+ * objects. When these are later JSON-serialised and hashed, the result
+ * differs from the original string (e.g. Date.toISOString adds .000Z
+ * milliseconds). The FE browser stores YAML-sourced data in IDB as
+ * strings, so hashes computed there match the original YAML. This
+ * function restores that equivalence for CLI-loaded data.
+ */
+function _coerceDatesToStrings(obj: any): void {
+  if (!obj || typeof obj !== 'object') return;
+  if (Array.isArray(obj)) {
+    for (let i = 0; i < obj.length; i++) {
+      if (obj[i] instanceof Date) {
+        obj[i] = (obj[i] as Date).toISOString();
+      } else if (obj[i] && typeof obj[i] === 'object') {
+        _coerceDatesToStrings(obj[i]);
+      }
+    }
+    return;
+  }
+  for (const k of Object.keys(obj)) {
+    if (obj[k] instanceof Date) {
+      obj[k] = (obj[k] as Date).toISOString();
+    } else if (obj[k] && typeof obj[k] === 'object') {
+      _coerceDatesToStrings(obj[k]);
+    }
+  }
 }

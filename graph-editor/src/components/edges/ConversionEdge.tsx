@@ -8,7 +8,6 @@ import { dataOperationsService } from '../../services/dataOperationsService';
 import { useSnapshotsMenu } from '../../hooks/useSnapshotsMenu';
 import toast from 'react-hot-toast';
 import { HoverAnalysisPreview, useHoverPreview, useHoverScenarios } from '@/components/HoverAnalysisPreview';
-import { useEdgeSnapshotRetrievals } from '@/hooks/useEdgeSnapshotRetrievals';
 import { getConditionalColour, getConditionalProbabilityColour, isConditionalEdge } from '@/lib/conditionalColours';
 import { computeEffectiveEdgeProbability, getEdgeWhatIfDisplay } from '@/lib/whatIf';
 import { getVisitedNodeIds } from '@/lib/queryDSL';
@@ -289,8 +288,21 @@ export default function ConversionEdge({
   const hoverPreview = useHoverPreview(500);
   const hoverScenarios = useHoverScenarios(graph);
 
-  // Snapshot retrievals for hover Evidence tab (same code path as @ asat picker)
-  const snapshotRetrievals = useEdgeSnapshotRetrievals(graph as any);
+  // Snapshot source for hover Evidence tab — SnapshotCalendarSection self-fetches from this
+  const snapshotSource = useMemo(() => {
+    if (!graph || !lookupId) return undefined;
+    const activeTab = tabs.find(t => t.id === activeTabId);
+    const effectiveDSL = (activeTab?.editorState as any)?.currentDSL || '';
+    const file = fileRegistry.getFile(currentTab?.fileId || '');
+    const repo = file?.source?.repository;
+    const branch = file?.source?.branch;
+    return {
+      graph,
+      edgeId: lookupId,
+      effectiveDSL,
+      workspace: repo && branch ? { repository: repo, branch } : undefined,
+    };
+  }, [graph, lookupId, tabs, activeTabId, currentTab?.fileId]);
 
   // File link handler for info card
   const handleFileLink = useCallback((fileId: string, type: string) => {
@@ -316,14 +328,12 @@ export default function ConversionEdge({
 
     // Trigger snapshot inventory fetch (hook handles caching)
     void snapshots.refresh();
-    // Commission snapshot retrievals (same code path as @ menu)
-    snapshotRetrievals.commission(lookupId);
 
     // Trigger hover preview — pass mouse coordinates only.
     // Edge bead <g> elements span the entire edge path, so
     // getBoundingClientRect() returns the full path extent (too high).
     hoverPreview.handleTriggerEnter({ clientX: e.clientX, clientY: e.clientY, buttons: e.buttons });
-  }, [data?.scenarioOverlay, isDraggingNode, snapshots.refresh, snapshotRetrievals.commission, lookupId, hoverPreview.handleTriggerEnter]);
+  }, [data?.scenarioOverlay, isDraggingNode, snapshots.refresh, lookupId, hoverPreview.handleTriggerEnter]);
 
   // Handle mouse move (no-op now, preview position is set on enter)
   const handleTooltipMouseMove = useCallback((_e: React.MouseEvent<Element>) => {
@@ -2925,7 +2935,7 @@ export default function ConversionEdge({
           onCardEnter={hoverPreview.handleCardEnter}
           onCardLeave={hoverPreview.handleCardLeave}
           onDismiss={hoverPreview.handleDismiss}
-          snapshotRetrievals={snapshotRetrievals.data ?? undefined}
+          snapshotSource={snapshotSource}
           onFileLink={handleFileLink}
         />
       )}

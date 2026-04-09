@@ -775,6 +775,11 @@ def _handle_cohort_maturity_v2(data: Dict[str, Any]) -> Dict[str, Any]:
                 rows = []
 
             total_rows += len(rows)
+            print(f"[v2] Subject {subj.get('subject_id','?')}: "
+                  f"role={subj.get('path_role')} from={subj.get('from_node')} "
+                  f"to={subj.get('to_node')} rows={len(rows)} "
+                  f"param_id={subj.get('param_id','?')[:40]} "
+                  f"core_hash={subj.get('core_hash','?')[:20]}")
 
             derivation = derive_cohort_maturity(
                 rows,
@@ -797,6 +802,10 @@ def _handle_cohort_maturity_v2(data: Dict[str, Any]) -> Dict[str, Any]:
             query_to_node=query_to_node or '',
             anchor_node=anchor_node,
         )
+        composed_frames = composed.get('frames', [])
+        print(f"[v2] Composed: from={query_from_node} to={query_to_node} "
+              f"anchor={anchor_node} frames={len(composed_frames)} "
+              f"cohorts={composed.get('cohorts_analysed', 0)}")
 
         composed_frames = composed.get('frames', [])
 
@@ -840,6 +849,13 @@ def _handle_cohort_maturity_v2(data: Dict[str, Any]) -> Dict[str, Any]:
             edge_params = _read_edge_model_params(graph_data, last_edge_id) or {}
 
         # ── Call compute_cohort_maturity_rows ──────────────────────────
+        print(f"[v2] Kernel: span_p={kernel.span_p:.4f} max_tau={kernel.max_tau}" if kernel else "[v2] Kernel: None")
+        print(f"[v2] last_edge_id={last_edge_id}")
+        print(f"[v2] edge_params keys: {sorted(edge_params.keys()) if edge_params else 'None'}")
+        ep_p = edge_params.get('forecast_mean') or edge_params.get('posterior_p') or 0
+        ep_mu = edge_params.get('mu') or edge_params.get('path_mu') or 0
+        ep_sigma = edge_params.get('sigma') or edge_params.get('path_sigma') or 0
+        print(f"[v2] edge_params: p={ep_p} mu={ep_mu} sigma={ep_sigma}")
         maturity_rows = []
         if composed_frames and last_edge_id and edge_params:
             anchor_from_str = subjects[0].get('anchor_from', '')
@@ -856,30 +872,32 @@ def _handle_cohort_maturity_v2(data: Dict[str, Any]) -> Dict[str, Any]:
             except (ValueError, TypeError):
                 band_level = 0.90
 
-            maturity_rows = compute_cohort_maturity_rows(
-                frames=composed_frames,
-                graph=graph_data,
-                target_edge_id=last_edge_id,
-                edge_params=edge_params,
-                anchor_from=anchor_from_str,
-                anchor_to=anchor_to_str,
-                sweep_to=sweep_to_final,
-                is_window=is_window,
-                axis_tau_max=max_tau if max_tau != 400 else None,
-                band_level=band_level,
-                anchor_node_id=anchor_node,
-                sampling_mode=sampling_mode,
-            )
+            try:
+                maturity_rows = compute_cohort_maturity_rows(
+                    frames=composed_frames,
+                    graph=graph_data,
+                    target_edge_id=last_edge_id,
+                    edge_params=edge_params,
+                    anchor_from=anchor_from_str,
+                    anchor_to=anchor_to_str,
+                    sweep_to=sweep_to_final,
+                    is_window=is_window,
+                    axis_tau_max=max_tau if max_tau != 400 else None,
+                    band_level=band_level,
+                    anchor_node_id=anchor_node,
+                    sampling_mode=sampling_mode,
+                )
+                print(f"[v2] compute_cohort_maturity_rows returned {len(maturity_rows)} rows")
+            except Exception as e:
+                print(f"[v2] ERROR in compute_cohort_maturity_rows: {e}")
+                import traceback; traceback.print_exc()
 
         # ── Build response ────────────────────────────────────────────
-        result: Dict[str, Any] = {
+        # Must match v1 shape: { success, scenario_id, subjects: [{subject_id, success, result}] }
+        # The FE expects per-subject results even for composed spans.
+        subject_result: Dict[str, Any] = {
             'analysis_type': analysis_type,
-            'semantics': {
-                'chart': {'recommended': 'cohort_maturity'},
-                'dimensions': [],
-                'metrics': [],
-            },
-            'data': maturity_rows,
+            'maturity_rows': maturity_rows,
             'frames': composed_frames,
             'span_kernel': {
                 'span_p': kernel.span_p if kernel else None,
@@ -890,7 +908,12 @@ def _handle_cohort_maturity_v2(data: Dict[str, Any]) -> Dict[str, Any]:
         per_scenario_results.append({
             "scenario_id": scenario_id,
             "success": True,
-            "result": result,
+            "subjects": [{
+                "subject_id": f"v2:{query_from_node}:{query_to_node}",
+                "success": True,
+                "result": subject_result,
+                "rows_analysed": total_rows,
+            }],
             "rows_analysed": total_rows,
         })
 
