@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.10.2b
+**Released:** 9-Apr-26
+
+Further retrieveall performance diagnostics
+
+---
+
 ## Version 1.10.0b
 **Released:** 9-Apr-26
 
