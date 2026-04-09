@@ -53,7 +53,12 @@
       "Bash(bash graph-ops/scripts/parity-test.sh gm-rebuild-jan-26 \"window\\(-90d:\\)\" --subject \"from\\(household-delegated\\).to\\(switch-registered\\)\" --type daily_conversions)",
       "Bash(bash graph-ops/scripts/golden-regression.sh)",
       "Bash(bash graph-ops/scripts/golden-regression.sh --update)",
-      "Bash(bash /home/reg/dev/dagnet/graph-ops/scripts/golden-regression.sh)"
+      "Bash(bash /home/reg/dev/dagnet/graph-ops/scripts/golden-regression.sh)",
+      "Bash(git status:*)",
+      "Bash(bash graph-ops/scripts/analyse.sh config-flow-gm-rebuild-jan-26 \"from\\(landing-page\\).to\\(household-created\\).window\\(-90d:\\)\" --type cohort_maturity --format json)",
+      "Bash(bash graph-ops/scripts/analyse.sh config-flow-gm-rebuild-jan-26 \"from\\(landing-page\\).to\\(household-created\\).window\\(-90d:\\)\" --type cohort_maturity_v2 --format json)",
+      "Bash(bash graph-ops/scripts/analyse.sh config-flow-gm-rebuild-jan-26 \"from\\(landing-page\\).to\\(household-created\\).window\\(-90d:\\)\" --type cohort_maturity_v2 -v)",
+      "Bash(bash graph-ops/scripts/analyse.sh config-flow-gm-rebuild-jan-26 \"from\\(landing-page\\).to\\(household-created\\).window\\(-90d:\\)\" --type cohort_maturity_v2)"
     ],
     "additionalDirectories": [
       "/home/reg/dev/dagnet/.claude",

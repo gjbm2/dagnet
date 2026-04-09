@@ -620,6 +620,8 @@ def handle_runner_analyze(data: Dict[str, Any]) -> Dict[str, Any]:
         s.get('snapshot_subjects') for s in data.get('scenarios', [])
     )
     if is_snapshot_type and has_snapshot_data:
+        if analysis_type == 'cohort_maturity_v2':
+            return _handle_cohort_maturity_v2(data)
         return _handle_snapshot_analyze_subjects(data)
 
     # Legacy path: snapshot_query (single subject)
@@ -662,6 +664,245 @@ def handle_runner_analyze(data: Dict[str, Any]) -> Dict[str, Any]:
     return response.model_dump()
 
 
+def _handle_cohort_maturity_v2(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Phase A: completely parallel cohort_maturity_v2 handler.
+
+    This function is independent of _handle_snapshot_analyze_subjects.
+    It resolves subjects, derives per-edge frames, composes span-level
+    evidence, builds the span kernel, and calls compute_cohort_maturity_rows
+    with composed inputs.
+
+    For single-edge spans, the composed evidence and kernel degenerate to
+    the single-edge case, producing identical output to v1 (parity gate).
+    """
+    import math
+    from datetime import date, datetime, timedelta
+    from runner.cohort_maturity_derivation import derive_cohort_maturity
+    from runner.cohort_forecast import compute_cohort_maturity_rows
+    from runner.span_evidence import compose_path_maturity_frames
+    from runner.span_kernel import compose_span_kernel
+    from runner.span_adapter import span_kernel_to_edge_params
+    from snapshot_service import query_snapshots_for_sweep
+
+    analysis_type = 'cohort_maturity_v2'
+    scenarios = data.get('scenarios', [])
+    top_analytics_dsl = data.get('analytics_dsl', '')
+    display_settings = data.get('display_settings') or {}
+
+    per_scenario_results: List[Dict[str, Any]] = []
+
+    for scenario in scenarios:
+        scenario_id = scenario.get('scenario_id', 'unknown')
+        graph_data = scenario.get('graph') or {}
+
+        # ── Resolve subjects from DSL ─────────────────────────────────
+        subjects = None
+        subject_dsl = top_analytics_dsl or scenario.get('analytics_dsl', '')
+        if subject_dsl:
+            try:
+                from analysis_subject_resolution import resolve_analysis_subjects, synthesise_snapshot_subjects
+                temporal_dsl = scenario.get('effective_query_dsl', '')
+                full_dsl = f"{subject_dsl}.{temporal_dsl}" if subject_dsl and temporal_dsl else (subject_dsl or temporal_dsl)
+                resolved = resolve_analysis_subjects(
+                    graph=graph_data,
+                    query_dsl=full_dsl,
+                    analysis_type=analysis_type,
+                    candidate_regimes_by_edge=scenario.get('candidate_regimes_by_edge', {}),
+                )
+                subjects = synthesise_snapshot_subjects(resolved, analysis_type)
+                print(f"[v2] Resolved {len(subjects)} subjects from DSL "
+                      f"'{full_dsl}' (scenario={scenario_id})")
+            except Exception as e:
+                print(f"[v2] WARNING: DSL resolution failed: {e}")
+                subjects = None
+
+        if not subjects:
+            subjects = scenario.get('snapshot_subjects', [])
+
+        if not subjects:
+            per_scenario_results.append({
+                "scenario_id": scenario_id,
+                "success": True,
+                "subjects": [],
+                "rows_analysed": 0,
+            })
+            continue
+
+        # ── Determine query start/end nodes and anchor ────────────────
+        query_from_node = None
+        query_to_node = None
+        anchor_node = None
+        for subj in subjects:
+            role = subj.get('path_role', '')
+            if role in ('first', 'only'):
+                query_from_node = subj.get('from_node')
+            if role in ('last', 'only'):
+                query_to_node = subj.get('to_node')
+
+        # Resolve anchor node from graph
+        try:
+            from msmdc import compute_anchor_node_id
+            from graph_types import Graph
+            g_obj = Graph(**graph_data) if graph_data else None
+            if g_obj and g_obj.edges:
+                anchor_node = compute_anchor_node_id(g_obj, g_obj.edges[0])
+        except Exception:
+            pass
+
+        query_dsl = data.get('query_dsl') or top_analytics_dsl or ''
+        is_window = 'window(' in query_dsl
+
+        # ── Derive frames per edge ────────────────────────────────────
+        per_edge_results: List[Dict[str, Any]] = []
+        total_rows = 0
+
+        for subj in subjects:
+            sweep_from = subj.get('sweep_from')
+            sweep_to_str = subj.get('sweep_to')
+            try:
+                rows = query_snapshots_for_sweep(
+                    param_id=subj['param_id'],
+                    core_hash=subj['core_hash'],
+                    slice_keys=subj.get('slice_keys', ['']),
+                    anchor_from=date.fromisoformat(subj['anchor_from']),
+                    anchor_to=date.fromisoformat(subj['anchor_to']),
+                    sweep_from=date.fromisoformat(sweep_from) if sweep_from else None,
+                    sweep_to=date.fromisoformat(sweep_to_str) if sweep_to_str else None,
+                    equivalent_hashes=subj.get('equivalent_hashes'),
+                )
+            except Exception as e:
+                print(f"[v2] WARNING: snapshot query failed for {subj.get('subject_id')}: {e}")
+                rows = []
+
+            total_rows += len(rows)
+
+            derivation = derive_cohort_maturity(
+                rows,
+                sweep_from=sweep_from,
+                sweep_to=sweep_to_str,
+            )
+
+            per_edge_results.append({
+                'path_role': subj.get('path_role', 'only'),
+                'from_node': subj.get('from_node', ''),
+                'to_node': subj.get('to_node', ''),
+                'subject': subj,
+                'derivation_result': derivation,
+            })
+
+        # ── Compose span-level evidence ───────────────────────────────
+        composed = compose_path_maturity_frames(
+            per_edge_results=per_edge_results,
+            query_from_node=query_from_node or '',
+            query_to_node=query_to_node or '',
+            anchor_node=anchor_node,
+        )
+
+        composed_frames = composed.get('frames', [])
+
+        # ── Build span kernel ─────────────────────────────────────────
+        # Resolve max_tau from display settings or sweep range
+        tau_extent_raw = display_settings.get('tau_extent')
+        max_tau = 400  # default
+        if tau_extent_raw and str(tau_extent_raw) not in ('auto', 'Auto'):
+            try:
+                max_tau = int(float(tau_extent_raw))
+            except (ValueError, TypeError):
+                pass
+
+        kernel = None
+        if query_from_node and query_to_node:
+            kernel = compose_span_kernel(
+                graph=graph_data,
+                x_node_id=query_from_node,
+                y_node_id=query_to_node,
+                is_window=is_window,
+                max_tau=max_tau,
+            )
+
+        # ── Find last edge for adapter (SDs, alpha/beta) ─────────────
+        last_edge_id = None
+        for entry in per_edge_results:
+            if entry['path_role'] in ('last', 'only'):
+                last_edge_id = (entry['subject'].get('target') or {}).get('targetId')
+                break
+
+        # ── Build edge_params from span kernel or last edge ───────────
+        if kernel and last_edge_id:
+            edge_params = span_kernel_to_edge_params(
+                kernel=kernel,
+                graph=graph_data,
+                target_edge_id=last_edge_id,
+                is_window=is_window,
+            )
+        else:
+            # Fallback: read from last edge directly
+            edge_params = _read_edge_model_params(graph_data, last_edge_id) or {}
+
+        # ── Call compute_cohort_maturity_rows ──────────────────────────
+        maturity_rows = []
+        if composed_frames and last_edge_id and edge_params:
+            anchor_from_str = subjects[0].get('anchor_from', '')
+            anchor_to_str = subjects[0].get('anchor_to', '')
+            sweep_to_final = subjects[0].get('sweep_to', '')
+
+            # Sampling mode from display settings
+            sampling_mode = display_settings.get('continuous_forecast', 'binomial')
+
+            # Band level
+            band_raw = display_settings.get('bayes_band_level', '90')
+            try:
+                band_level = float(band_raw) / 100.0 if band_raw not in ('off', 'blend') else 0.90
+            except (ValueError, TypeError):
+                band_level = 0.90
+
+            maturity_rows = compute_cohort_maturity_rows(
+                frames=composed_frames,
+                graph=graph_data,
+                target_edge_id=last_edge_id,
+                edge_params=edge_params,
+                anchor_from=anchor_from_str,
+                anchor_to=anchor_to_str,
+                sweep_to=sweep_to_final,
+                is_window=is_window,
+                axis_tau_max=max_tau if max_tau != 400 else None,
+                band_level=band_level,
+                anchor_node_id=anchor_node,
+                sampling_mode=sampling_mode,
+            )
+
+        # ── Build response ────────────────────────────────────────────
+        result: Dict[str, Any] = {
+            'analysis_type': analysis_type,
+            'semantics': {
+                'chart': {'recommended': 'cohort_maturity'},
+                'dimensions': [],
+                'metrics': [],
+            },
+            'data': maturity_rows,
+            'frames': composed_frames,
+            'span_kernel': {
+                'span_p': kernel.span_p if kernel else None,
+                'max_tau': kernel.max_tau if kernel else None,
+            } if kernel else None,
+        }
+
+        per_scenario_results.append({
+            "scenario_id": scenario_id,
+            "success": True,
+            "result": result,
+            "rows_analysed": total_rows,
+        })
+
+    # ── Final response ────────────────────────────────────────────────
+    if len(per_scenario_results) == 1:
+        return per_scenario_results[0]
+    return {
+        "success": True,
+        "scenarios": per_scenario_results,
+    }
+
+
 def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
     """
     Handle snapshot-based analysis using per-scenario snapshot_subjects.
@@ -683,6 +924,7 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
     from runner.lag_distribution_utils import log_normal_cdf, log_normal_inverse_cdf, standard_normal_inverse_cdf
 
     analysis_type = data.get('analysis_type', 'lag_histogram')
+    _is_cohort_maturity = analysis_type == 'cohort_maturity'  # v2 never reaches here
     scenarios = data.get('scenarios', [])
     # Doc 30 §4.1: MECE dimension names for aggregation safety.
     # Currently logged for diagnostics; enforcement in derivation
@@ -1257,7 +1499,7 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
         _epoch_subjects: Dict[str, List[Any]] = {}
         _epoch_row_counts: Dict[str, int] = {}  # base_sid → total pre-fetched rows
         for subj in subjects:
-            if subj.get('read_mode') == 'cohort_maturity' and analysis_type == 'cohort_maturity':
+            if subj.get('read_mode') == 'cohort_maturity' and _is_cohort_maturity:
                 base_sid = _base_subject_id(subj.get('subject_id', ''))
                 if base_sid not in _epoch_subjects:
                     _epoch_subjects[base_sid] = []
@@ -1451,7 +1693,7 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                     result = derive_daily_conversions(rows)
                 elif analysis_type == 'branch_comparison':
                     result = derive_daily_conversions(rows)
-                elif analysis_type == 'cohort_maturity':
+                elif _is_cohort_maturity:
                     # Fallback: cohort_maturity without cohort_maturity read_mode
                     result = derive_cohort_maturity(rows)
                 else:
@@ -1471,7 +1713,7 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
             # whatever the real graph edge happens to have.
             _test_fixture = data.get('test_fixture') or data.get('display_settings', {}).get('test_fixture')
             _ds = data.get('display_settings') or {}
-            if _test_fixture and analysis_type == 'cohort_maturity':
+            if _test_fixture and _is_cohort_maturity:
                 from runner.cohort_forecast import load_test_fixture as _ltf
                 _fixture_data = _ltf(_test_fixture)  # frames are static, never regenerated
                 _ep = dict(_fixture_data['edge_params'])  # copy — we'll apply URL overrides
@@ -1543,7 +1785,7 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                 # Extract forecast_mean for annotation (model-based projection)
                 fm = model_params.get('forecast_mean', 0.0) or 0.0
 
-                if analysis_type == 'cohort_maturity' and 'frames' in result:
+                if _is_cohort_maturity and 'frames' in result:
                     for frame in result['frames']:
                         snapshot_date = frame.get('snapshot_date', '') or frame.get('as_at_date', '')
                         if frame.get('data_points'):
@@ -1582,7 +1824,7 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                 # Uses the same resolved params as annotation (doc 1 §17.1).
                 is_gap_epoch = any(str(sk) == '__epoch_gap__' for sk in subj_slice_keys)
 
-                if analysis_type == 'cohort_maturity' and ('forecast_mean' in model_params or 'posterior_p' in model_params) and not is_gap_epoch:
+                if _is_cohort_maturity and ('forecast_mean' in model_params or 'posterior_p' in model_params) and not is_gap_epoch:
                     # Doc 25 §3.3: prefer posterior p over forecast_mean.
                     # In cohort mode, use cohort p (path-level); in window mode, use window p (edge-level).
                     if not is_window and 'posterior_p_cohort' in model_params:
@@ -1859,7 +2101,7 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                     # ── Cohort maturity complete rows ──────────────────
                     # Compute per-τ rows with rate, midpoint, fan bounds.
                     # All computation here — the FE just draws.
-                    if (analysis_type == 'cohort_maturity'
+                    if (_is_cohort_maturity
                             and ('frames' in result or _test_fixture)
                             and subj.get('anchor_from') and subj.get('anchor_to')
                             and subj.get('sweep_to')):
@@ -1965,7 +2207,7 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
             # If the model_params guard above didn't fire, still produce
             # basic maturity_rows (rate/projected_rate, no fan/midpoint)
             # so the FE has data to draw.
-            if (analysis_type == 'cohort_maturity'
+            if (_is_cohort_maturity
                     and result and 'frames' in result
                     and 'maturity_rows' not in result
                     and subj.get('anchor_from') and subj.get('anchor_to')

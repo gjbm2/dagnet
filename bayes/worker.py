@@ -495,10 +495,27 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
             except Exception as e:
                 _log(log, f"  regime selection failed (non-blocking): {e}")
 
+        # Detect engorged graph (doc 14 §9A): edges carry _bayes_evidence dicts.
+        # When engorged, pass graph_snapshot to bind_snapshot_evidence so it
+        # reads priors and file-based evidence from graph edges instead of
+        # param files. Snapshot row handling is unchanged.
+        is_engorged = any(
+            isinstance(e.get("_bayes_evidence"), dict)
+            for e in graph_snapshot.get("edges", [])
+        )
+        if is_engorged:
+            _log(log, "evidence: engorged graph detected (doc 14 §9A)")
+
         if snapshot_rows:
             from compiler import bind_snapshot_evidence
             evidence = bind_snapshot_evidence(
                 topology, snapshot_rows, param_files, params_index, settings,
+                graph_snapshot=graph_snapshot if is_engorged else None,
+            )
+        elif is_engorged:
+            from compiler import bind_evidence_from_graph
+            evidence = bind_evidence_from_graph(
+                topology, graph_snapshot, settings,
             )
         else:
             evidence = bind_evidence(
@@ -1457,32 +1474,35 @@ def _query_snapshot_subjects(
     topology,
     log: list[str],
 ) -> dict[str, list[dict]]:
-    """Query snapshot DB for each subject, return rows grouped by edge_id.
+    """Query snapshot DB for all subjects in one batch, return rows grouped by edge_id.
 
-    Uses the same snapshot_service.query_snapshots_for_sweep() that the
-    BE analysis path uses. The FE sends identical SnapshotSubjectPayload
-    shapes for both Bayes and analysis — same fields, same hash-mapping
-    ClosureEntry objects.
+    All subjects in a Bayes fit share the same pinnedDSL (same date ranges,
+    same slice_keys). Only core_hash varies per subject. We collect the union
+    of all core_hashes (primary + equivalents), issue one DB query, and
+    distribute results back to edge_ids by core_hash lookup.
 
-    Subjects have: param_id, core_hash, slice_keys, anchor_from/to,
-    sweep_from/to, equivalent_hashes (ClosureEntry[]), edge_id (or
-    target.targetId).
+    See: docs/current/project-bayes/33-snapshot-query-batching.md
     """
     from datetime import date
     try:
-        # Modal: graph-editor/lib is on PYTHONPATH as /root/lib
-        from snapshot_service import query_snapshots_for_sweep
+        from snapshot_service import query_snapshots_for_sweep_batch
     except ImportError:
-        # Local dev: add graph-editor/lib to path
         import sys
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'graph-editor', 'lib'))
-        from snapshot_service import query_snapshots_for_sweep
+        from snapshot_service import query_snapshots_for_sweep_batch
 
-    result: dict[str, list[dict]] = {}
+    # ── 1. Parse subjects: resolve edge_id, collect hashes, extract shared dates ──
+    # Map core_hash → list of edge_ids (a hash can appear in multiple subjects)
+    hash_to_edges: dict[str, list[str]] = {}
+    all_hashes: set[str] = set()
+    shared_slice_keys: list[str] = [""]
+    shared_anchor_from: date | None = None
+    shared_anchor_to: date | None = None
+    shared_sweep_from: date | None = None
+    shared_sweep_to: date | None = None
+    dates_parsed = False
 
     for subj in snapshot_subjects:
-        # edge_id: flat field or nested target.targetId (FE flattens it,
-        # but handle both for robustness)
         edge_id = subj.get("edge_id", "")
         if not edge_id:
             target = subj.get("target")
@@ -1491,46 +1511,74 @@ def _query_snapshot_subjects(
 
         core_hash = subj.get("core_hash", "")
         if not core_hash or not edge_id:
-            _log(log,f"  snapshot: skipping subject (no core_hash or edge_id)")
+            _log(log, f"  snapshot: skipping subject (no core_hash or edge_id)")
             continue
 
-        param_id = subj.get("param_id", "")
-        slice_keys = subj.get("slice_keys", [""])
-        anchor_from_str = subj.get("anchor_from", "")
-        anchor_to_str = subj.get("anchor_to", "")
-        sweep_from_str = subj.get("sweep_from", "")
-        sweep_to_str = subj.get("sweep_to", "")
-        equivalent_hashes = subj.get("equivalent_hashes") or None
+        # Collect primary hash
+        all_hashes.add(core_hash)
+        hash_to_edges.setdefault(core_hash, []).append(edge_id)
 
-        try:
-            anchor_from = date.fromisoformat(anchor_from_str) if anchor_from_str else None
-            anchor_to = date.fromisoformat(anchor_to_str) if anchor_to_str else None
-            sweep_from = date.fromisoformat(sweep_from_str) if sweep_from_str else None
-            sweep_to = date.fromisoformat(sweep_to_str) if sweep_to_str else None
+        # Collect equivalent hashes — map them to the same edge_id
+        equivalent_hashes = subj.get("equivalent_hashes") or []
+        for eh in equivalent_hashes:
+            eh_hash = eh.get("core_hash", "") if isinstance(eh, dict) else ""
+            if eh_hash:
+                all_hashes.add(eh_hash)
+                hash_to_edges.setdefault(eh_hash, []).append(edge_id)
 
-            rows = query_snapshots_for_sweep(
-                param_id=param_id,
-                core_hash=core_hash,
-                slice_keys=slice_keys,
-                anchor_from=anchor_from,
-                anchor_to=anchor_to,
-                sweep_from=sweep_from,
-                sweep_to=sweep_to,
-                equivalent_hashes=equivalent_hashes,
-            )
+        # Extract shared dates/slice_keys from first valid subject
+        if not dates_parsed:
+            shared_slice_keys = subj.get("slice_keys", [""])
+            a_from = subj.get("anchor_from", "")
+            a_to = subj.get("anchor_to", "")
+            s_from = subj.get("sweep_from", "")
+            s_to = subj.get("sweep_to", "")
+            try:
+                shared_anchor_from = date.fromisoformat(a_from) if a_from else None
+                shared_anchor_to = date.fromisoformat(a_to) if a_to else None
+                shared_sweep_from = date.fromisoformat(s_from) if s_from else None
+                shared_sweep_to = date.fromisoformat(s_to) if s_to else None
+                dates_parsed = True
+            except (ValueError, TypeError) as e:
+                _log(log, f"  snapshot: date parse failed: {e}")
 
-            if rows:
-                if edge_id not in result:
-                    result[edge_id] = []
-                result[edge_id].extend(rows)
-                _log(log,f"  snapshot: {edge_id[:8]}… → {len(rows)} rows")
-            else:
-                _log(log,f"  snapshot: {edge_id[:8]}… → 0 rows (will fall back to param file)")
+    if not all_hashes:
+        _log(log, "  snapshot: no valid hashes to query")
+        return {}
 
-        except Exception as e:
-            # Debug: log the types of each param to trace 'can't adapt type' errors
-            eh_types = f", equiv_hashes types={[type(h).__name__ for h in (equivalent_hashes or [])]}" if equivalent_hashes else ""
-            _log(log,f"  snapshot: {edge_id[:8]}… query failed: {e} [slice_keys={slice_keys}{eh_types}]")
+    # ── 2. One batch query ──
+    _log(log, f"  snapshot: batch query for {len(all_hashes)} unique hashes")
+    try:
+        rows_by_hash = query_snapshots_for_sweep_batch(
+            core_hashes=list(all_hashes),
+            slice_keys=shared_slice_keys,
+            anchor_from=shared_anchor_from,
+            anchor_to=shared_anchor_to,
+            sweep_from=shared_sweep_from,
+            sweep_to=shared_sweep_to,
+        )
+    except Exception as e:
+        _log(log, f"  snapshot: batch query failed: {e}")
+        return {}
+
+    # ── 3. Distribute rows to edge_ids ──
+    result: dict[str, list[dict]] = {}
+    for core_hash, rows in rows_by_hash.items():
+        edge_ids = hash_to_edges.get(core_hash, [])
+        for edge_id in edge_ids:
+            if edge_id not in result:
+                result[edge_id] = []
+            result[edge_id].extend(rows)
+
+    for edge_id, rows in result.items():
+        _log(log, f"  snapshot: {edge_id[:8]}… → {len(rows)} rows")
+
+    # Log edges with no data
+    all_edge_ids = set()
+    for edges in hash_to_edges.values():
+        all_edge_ids.update(edges)
+    for edge_id in all_edge_ids - set(result.keys()):
+        _log(log, f"  snapshot: {edge_id[:8]}… → 0 rows (will fall back to param file)")
 
     return result
 

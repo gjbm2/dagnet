@@ -44,6 +44,7 @@ const CHART_KINDS_BY_ANALYSIS_TYPE: Record<string, string[]> = {
   // The standard pipeline (useCanvasAnalysisCompute) resolves snapshot data
   // when needsSnapshots=true — no special-casing needed at the satellite level.
   cohort_maturity:          ['cohort_maturity', 'table'],
+  cohort_maturity_v2:       ['cohort_maturity', 'table'],
   daily_conversions:        ['daily_conversions', 'table'],
   lag_histogram:            ['histogram', 'table'],
   lag_fit:                  ['lag_fit', 'table'],

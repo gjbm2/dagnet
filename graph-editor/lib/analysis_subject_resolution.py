@@ -69,6 +69,7 @@ class ResolvedAnalysisResult:
 # Mirrors the FE's snapshotContract.scopeRule per analysis type.
 ANALYSIS_TYPE_SCOPE_RULES: Dict[str, str] = {
     'cohort_maturity': 'funnel_path',
+    'cohort_maturity_v2': 'funnel_path',
     'daily_conversions': 'funnel_path',
     'lag_histogram': 'funnel_path',
     'lag_fit': 'funnel_path',
@@ -80,6 +81,7 @@ ANALYSIS_TYPE_SCOPE_RULES: Dict[str, str] = {
 
 ANALYSIS_TYPE_READ_MODES: Dict[str, str] = {
     'cohort_maturity': 'cohort_maturity',
+    'cohort_maturity_v2': 'cohort_maturity',
     'daily_conversions': 'raw_snapshots',
     'lag_histogram': 'raw_snapshots',
     'lag_fit': 'sweep_simple',
@@ -182,7 +184,7 @@ def _resolve_funnel_path(
     # sweep_to defaults to today.
     sweep_from = None
     sweep_to = None
-    if analysis_type == 'cohort_maturity':
+    if analysis_type in ('cohort_maturity', 'cohort_maturity_v2'):
         sweep_from = anchor_from
         # sweep_to: use asat if present, else today
         import datetime

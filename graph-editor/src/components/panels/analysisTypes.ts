@@ -331,6 +331,20 @@ export const ANALYSIS_TYPES: AnalysisTypeMeta[] = [
     },
   },
   {
+    id: 'cohort_maturity_v2',
+    name: 'Cohort Maturity v2',
+    shortDescription: 'Multi-hop cohort maturity with span kernel (Phase A)',
+    selectionHint: 'Use from(a).to(b) with a window() or cohort() range',
+    icon: TrendingUp,
+    snapshotContract: {
+      scopeRule: 'funnel_path',
+      readMode: 'cohort_maturity',
+      slicePolicy: 'mece_fulfilment_allowed',
+      timeBoundsSource: 'query_dsl_window',
+      perScenario: false,
+    },
+  },
+  {
     id: 'lag_fit',
     name: 'Lag Fit',
     shortDescription: 'Fitted log-normal lag distribution vs. observed cohort completeness',

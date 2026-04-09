@@ -103,6 +103,16 @@ analyses:
       has_to: true
     runner: path_runner
 
+  # from(A).to(B) - cohort maturity v2 (Phase A multi-hop span kernel)
+  - id: cohort_maturity_v2
+    name: "Cohort Maturity v2"
+    description: "Multi-hop cohort maturity with span kernel (Phase A)"
+    when:
+      node_count: 2
+      has_from: true
+      has_to: true
+    runner: path_runner
+
   # from(A).to(B) - lag histogram (snapshot DB analysis)
   - id: lag_histogram
     name: "Lag Histogram"

@@ -1,268 +1,385 @@
-# Phase B — Multi-Hop Cohort Maturity: Upstream x Provider
+# Phase B — Multi-Hop Cohort Maturity: Upstream Provider and Frontier Exposure
 
-**Date**: 9-Apr-26
-**Status**: Design outline (pre-implementation)
-**Depends on**: Phase A (doc 29c) — span kernel and x_provider
-interface must be implemented first
+**Date**: 9-Apr-26  
+**Status**: Design + implementation plan  
+**Depends on**: Phase A in `29c-phase-a-design.md` must exist and be
+parity-proven first  
 **Companion docs**:
-- Phase A design: `29c-phase-a-design.md`
-- Operator algebra + stress tests: `29b-span-kernel-operator-algebra.md`
-  (live companion — 16 stress cases, plus the DAG-cover planner design
-  in §3 which is the reference for Policy B's upstream cover problem)
+- `29-generalised-forecast-engine-design.md`
+- `29b-span-kernel-operator-algebra.md`
+- `29c-phase-a-design.md`
 
 ---
 
-## 1. What Phase B Does
+## Purpose
 
-Phase B replaces the denominator model. It swaps the Phase A
-x_provider implementation for a proper anchor-to-x propagation solve,
-and introduces completeness-adjusted frontier conditioning.
+Phase B upgrades the upstream denominator path behind `x_provider`.
 
-**One sentence**: given anchor population a_pop, compute how cohort
-mass arrives at x over time by recursively propagating through the
-upstream DAG using available evidence and model operators.
+It does two things:
 
-### What Phase B does NOT do
+- replaces the preserved Phase A denominator behaviour with an explicit
+  upstream-provider policy
+- replaces the conservative frontier update with completeness-adjusted
+  exposure
 
-- Does not change the span kernel (K_{x→y} from Phase A)
-- Does not change the row builder structure (composition layer from
-  Phase A)
-- Does not change evidence frame composition (Phase A)
+It does **not** reopen the subject kernel. Phase A's `x→y` solve remains
+the numerator engine.
 
-The interface is clean: Phase B only swaps the x_provider
-implementation. Everything downstream of x_provider is untouched.
+This doc is authoritative for Phase B scope, implementation sequencing,
+and acceptance gates.
 
 ---
 
-## 2. Notation
+## What Phase B Changes
 
-Same as Phase A (doc 29c §2): a = anchor, x = query start, y = query
-end, u = last edge's source (legacy only).
+- Introduces an explicit upstream-provider resolution order
+- Adds evidence-driven upstream propagation when the required evidence
+  exists
+- Retains a model-based fallback when that evidence does not exist
+- Replaces the frontier's raw `x_obs - y_obs` exposure with a
+  completeness-adjusted exposure term
 
----
+## What Phase B Does Not Change
 
-## 3. The Upstream Problem
+- No redesign of the subject-side span kernel from Phase A
+- No redesign of composed span evidence for the `x→y` subject
+- No change to the row-builder architecture established in Phase A
+- No change to the broader forecast-engine contract work from doc 29
 
-### 3.1 What Phase A leaves approximate
-
-When x ≠ a in cohort() mode, Phase A's x_provider uses:
-- Observed x from evidence frames up to tau_observed
-- Carry-forward beyond tau_observed
-
-This is adequate when x is mostly mature by tau_observed (well
-upstream of y). It breaks down when:
-- x is deep in the funnel (long a→x path, significant latency)
-- The frontier is young (tau_observed is small relative to a→x
-  latency)
-- The upstream DAG has branching with different latency profiles
-
-### 3.2 Asymmetry with subject
-
-The upstream side and subject side are **not the same problem** (see
-doc 29b §9):
-
-- **Subject** (x→y): true operator-cover problem. Must tile the full
-  DAG with operators and compose them. Always required for multi-hop.
-
-- **Upstream** (a→x): much thinner problem. Decomposes into:
-  1. Latency carrier — temporal shape of arrivals at x
-  2. Mass policy — scale of arrivals at x
-
-The latency carrier is usually available from ingress blocks at x
-(Phase A already uses this). The mass policy is where Phase B adds
-value.
+Phase B changes the upstream provider and the frontier update, not the
+overall shape of the Phase A pipeline.
 
 ---
 
-## 4. Evidence-Driven Upstream Propagation (Policy B)
+## The Upstream Problem Is Asymmetric
 
-### 4.1 Core idea
+Doc `29b` makes the key asymmetry explicit:
 
-Use snapshot evidence at each edge in the upstream sub-graph to
-reconstruct observed arrivals at x over tau. Walk upstream recursively,
-sum at joins, propagate forward.
+- the subject side is a true operator-cover problem
+- the upstream side is thinner and decomposes into two sub-problems:
+  latency carrier and mass policy
 
-### 4.2 Resolution order
+That asymmetry must survive into implementation.
 
-**Policy B is preferable where k(τ) evidence exists across the fully
-recursed upstream sub-graph. Where it does not, fall back to Policy A.**
+Phase B must therefore avoid turning upstream into a second copy of the
+subject planner by default. The right structure is:
 
-1. **x = a**: no upstream problem. X_x = a_pop(s). Done. (Same as
-   Phase A — this case never reaches Phase B.)
-
-2. **x ≠ a, full upstream evidence available**: k(τ) observed at every
-   edge in G_up for the relevant cohort window. Use Policy B:
-   reconstruct X_x(τ) from upstream snapshot evidence recursively.
-
-3. **x ≠ a, partial or missing upstream evidence**: fall back to
-   Policy A (reach × F_{a→x}(τ) from Phase A §6.4).
-
-### 4.3 Algorithm
-
-Build G_up = closure(a→x). This is the same DAG-cover problem
-described in doc 29b §3 (two-pass planner), applied to the upstream
-regime. The planner's admissibility rules, block preference ordering,
-and cover solving apply here.
-
-For each edge in G_up, retrieve the cohort() snapshot X field (a-cohort
-arrivals at the edge's from-node by retrieved_at). These are observed
-values, not model outputs.
-
-Propagate through the DAG:
-1. Start at a: X_a(s, τ) = a_pop(s) for all τ
-2. For each node v in topological order after a:
-   X_v(s, τ) = Σ_{edges u→v} observed_Y_{u→v}(s, τ)
-   where observed_Y is the y field from the cohort() snapshot for
-   edge u→v
-3. At fan-in nodes: sum contributions from all incoming edges
-4. Result: X_x(s, τ) from observed evidence
-
-Beyond the evidence frontier (τ > tau_observed for the upstream
-edges): use the operator model. Apply the same DP as Phase A's span
-kernel (§5.3), but over G_up instead of G_sub, starting from the
-frontier state rather than a unit impulse.
-
-### 4.4 Evidence completeness check
-
-Before choosing Policy B, verify that evidence covers G_up:
-- Every edge in G_up has cohort() snapshot rows for the query's anchor
-  and cohort window
-- Coverage spans the relevant tau range (at least to tau_observed of
-  the subject analysis)
-
-If any edge lacks evidence, the recursive propagation has a gap. Fall
-back to Policy A for the entire upstream regime (do not mix policies
-within a single regime — partial evidence + partial model creates
-accounting ambiguity at the seams).
+1. choose an upstream latency carrier
+2. choose an upstream mass policy
+3. feed the resulting `x_provider` into the Phase A row builder
 
 ---
 
-## 5. Completeness-Adjusted Frontier Conditioning
+## Phase A Baseline That Phase B Replaces
 
-### 5.1 The Phase A approximation
+Phase A extracted the denominator behind `x_provider` but intentionally
+preserved the current code's upstream behaviour.
 
-Phase A's frontier update:
-`β_post = β₀ + (x_obs − y_obs)`
+That baseline is already good enough in three cases:
 
-This treats all x-arrivals not yet at y as failures. For multi-hop,
-many are in transit. The bias is conservative (underestimates rate).
+- `x = a`
+- all `window()` subjects
+- `cohort()` subjects where `x` is already mostly mature by the frontier
 
-### 5.2 Phase B fix
+It becomes inadequate when:
 
-Use completeness-adjusted exposure:
+- `x` is deep in the funnel
+- the upstream latency is large relative to the frontier age
+- the upstream DAG contains materially different arrival routes
+- the subject frontier is young enough that much of the upstream mass is
+  still in transit
 
-```
-x_effective(s) = Σ_u ΔX_x(s, u) · K_{x→y}(tau_obs − u) / span_p
-```
-
-This is the expected number of x-arrivals that have had enough time
-to reach y by tau_observed, adjusted for the kernel's temporal shape.
-Arrivals that entered x recently (large u, small tau_obs − u) haven't
-had time to traverse x→y and shouldn't count as full trials.
-
-Update:
-```
-α_post = α₀ + y_obs
-β_post = β₀ + (x_effective − y_obs)
-```
-
-This removes the in-transit bias. The posterior rate is higher (more
-accurate) because x_effective < x_obs when the kernel has significant
-latency.
-
-### 5.3 Requirement
-
-Completeness-adjusted conditioning requires the span kernel K_{x→y}
-from Phase A and the ΔX_x arrival profile from the x_provider. Both
-are already available — Phase B only uses them in the frontier update,
-not in new computation.
+Phase B only exists for those harder `cohort(), x != a` cases.
 
 ---
 
-## 6. Improved MC Uncertainty (Phase B+)
+## Upstream Latency Carrier
 
-Two potential enhancements beyond the core Phase B work:
+The upstream latency carrier answers one question:
 
-### 6.1 Prior composition via method-of-moments
+- what is the temporal shape of arrivals at `x` from the anchor cohort
 
-Instead of using last edge's posterior_path_alpha/beta:
-- Compute span_p from the kernel
-- Estimate span-level rate uncertainty from per-edge posterior SDs
-  (propagated through the convolution)
-- Derive α₀, β₀ via method of moments: κ = span_p(1−span_p)/σ² − 1
+Phase B keeps the resolution order from doc `29b`.
 
-More principled. Only matters when the span has significantly
-different rate uncertainty than the last edge alone.
+### Resolution Order
 
-### 6.2 Per-draw kernel reconvolution
+1. If `x = a`, there is no upstream latency problem. `X_x` is just
+   `a_pop`.
+2. If `x != a` and aligned ingress information into `x` is available,
+   use that first. Those ingress objects already carry `a→x` timing.
+3. If `x` has fan-in, combine compatible ingress carriers coherently.
+   The current-code reference shape is a probability-weighted mixture of
+   ingress timing carriers.
+4. Only if the ingress carrier is missing or incompatible should Phase B
+   recurse further upstream and compose edge by edge.
 
-Instead of using last edge's path SDs for latency-shape draws:
-- For each MC draw, independently perturb each edge's (mu, sigma,
-  onset) from their posterior distributions
-- Reconvolve the kernel per draw
-- Cost: O(num_draws × |E| × max_tau²)
+This keeps upstream latency thinner than the subject-side planner in the
+common case.
 
-Correct treatment of span uncertainty. Expensive but parallelisable.
-Only matters for wide spans with many edges where cross-edge
-uncertainty compounds.
+### Practical Interpretation
 
----
+Today the most natural ingress carrier is the cohort-mode path
+information attached to edges entering `x`. When it exists and is
+compatible with the query's slice, context, and as-at constraints, it is
+the preferred Phase B latency carrier.
 
-## 7. Implementation Outline
-
-Phase B is not yet scheduled. This section captures the known scope.
-
-### 7.1 Prerequisites
-
-- Phase A complete and parity-proven
-- x_provider interface established (Phase A §6)
-
-### 7.2 Scope
-
-| Component | Work |
-|-----------|------|
-| Evidence completeness checker | New: verify G_up coverage |
-| Recursive upstream propagator | New: walk G_up, use snapshot X/Y fields |
-| x_provider Policy B implementation | New: swap in recursive propagator |
-| Completeness-adjusted frontier update | Modify: change β_post formula |
-| Policy A fallback | Existing: retain for incomplete evidence |
-
-### 7.3 Acceptance criteria
-
-1. **Policy B parity with Policy A**: When upstream evidence is
-   complete and the graph is a single edge (x adjacent to a), Policy B
-   produces identical X_x to Policy A.
-
-2. **Multi-hop upstream correctness**: For a multi-hop a→x path with
-   full evidence, X_x(τ) from Policy B matches the observed x values
-   from snapshot data.
-
-3. **Frontier conditioning improvement**: For multi-hop spans, the
-   completeness-adjusted posterior rate is higher than the Phase A
-   rate (less conservative bias from in-transit arrivals).
-
-4. **Graceful fallback**: When evidence is incomplete, x_provider
-   falls back to Policy A without error. The chart is produced with
-   the approximation documented.
+Recursive upstream composition is the fallback, not the default. If it
+is used, it must obey the same regime-boundary, metadata-compatibility,
+and leakage rules described in doc `29b`.
 
 ---
 
-## 8. Relationship to Broader Forecast Engine
+## Upstream Mass Policy
 
-Phase B completes the multi-hop story for cohort maturity. After
-Phase B:
+The upstream mass policy answers a different question:
 
-- Subject regime: fully solved (Phase A span kernel)
-- Upstream regime: evidence-driven where possible, model-based
-  fallback (Phase B x_provider)
+- how much mass has arrived at `x` by age `τ`
 
-The broader forecast engine (Phases 0–6 in doc 29) generalises both
-for all consumers. Phase B's x_provider becomes the denominator
-component of the forecast-state contract. Phase A's span kernel
-becomes the numerator component.
+Phase B retains the two-policy framing from doc `29b`.
 
-| Phase | Delivers | Interface |
-|-------|----------|-----------|
-| **A** | Span kernel + x_provider interface | K_{x→y}(τ), x_provider(s, τ) |
-| **B** | Evidence-driven x_provider | Swaps x_provider implementation |
-| **0–6** | Generalised forecast engine | Consumes both via forecast-state contract |
+### Policy A: Model-Based Continuation
+
+Policy A is the current model-based upstream continuation preserved by
+Phase A. Conceptually it combines:
+
+- a scalar reach term
+- an upstream latency carrier
+- post-frontier incremental arrivals
+
+It is cheap, always available, and already compatible with the current
+row builder. It must remain as the permanent fallback path, and the
+fallback implementation must be the exact Phase A provider semantics
+rather than a newly invented approximation.
+
+### Policy B: Evidence-Driven Upstream Propagation
+
+Policy B reconstructs arrivals at `x` from upstream evidence where the
+required evidence actually exists.
+
+This is the real Phase B upgrade:
+
+- observed upstream history becomes data-driven rather than compressed
+  into one reach term
+- joins are handled by summing compatible upstream contributions
+- leakage is learned from the evidence already attached to the upstream
+  edges rather than only from modelled asymptotic probabilities
+
+### Resolution Order
+
+Phase B chooses between the two policies as follows:
+
+1. `x = a`: no upstream problem; return `a_pop`
+2. `x != a` with full upstream evidence coverage: use Policy B
+3. `x != a` with partial or missing upstream evidence: use Policy A for
+   the entire upstream regime
+
+The important rule is all-or-nothing per regime. Phase B must not mix a
+partly evidence-driven upstream solve with a partly model-driven solve
+inside one unresolved seam, because that creates accounting ambiguity at
+joins and frontier boundaries.
+
+---
+
+## Policy B: Observed Upstream Reconstruction
+
+Policy B reconstructs upstream arrivals over the actual upstream subgraph
+`G_up = closure(a→x)`.
+
+### Authoritative Observed State
+
+The authoritative node-arrival quantity at a non-anchor node is the mass
+that reaches that node through incoming upstream edges. In practical
+terms:
+
+- at the anchor node, arrivals are the anchor population
+- at downstream upstream nodes, arrivals are reconstructed from
+  compatible incoming-edge evidence
+- at joins, contributions from all compatible upstream branches are
+  summed
+
+This keeps the upstream provider in node-arrival coordinates rather than
+in edge-local proxy coordinates.
+
+### Evidence Completeness Gate
+
+Policy B may only run when the upstream evidence coverage is genuinely
+complete for the requested regime:
+
+- every edge needed to carry arrivals through `G_up` has compatible
+  cohort evidence
+- the evidence covers the relevant tau window for the subject analysis
+- the metadata across the chosen upstream plan is compatible
+
+If any of those checks fail, Phase B must fall back to Policy A rather
+than attempting a partial reconstruction.
+
+### Forecast Beyond the Observed Upstream Frontier
+
+Policy B improves the observed upstream reconstruction first. Beyond the
+observed upstream frontier it should continue with the model, but now
+from a better frontier state.
+
+That continuation should be framed as:
+
+- observed upstream history comes from recursive evidence propagation
+- post-frontier continuation uses the upstream latency carrier and model
+  continuation, seeded from the reconstructed frontier state rather than
+  from a blank initial condition
+
+This keeps Phase B incremental. It improves the provider without turning
+upstream into a second independent forecasting subsystem with different
+rules.
+
+---
+
+## Completeness-Adjusted Frontier Exposure
+
+Phase A keeps the current conservative frontier update, which treats all
+mass that has reached `x` but not yet `y` as if it were already fully
+exposed to the subject conversion opportunity.
+
+That is acceptable for parity, but it is biased for genuine multi-hop
+subjects because some of that mass is still in transit through the
+subject span.
+
+Phase B fixes this by replacing raw frontier exposure with effective
+exposure:
+
+- start from arrival increments at `x`
+- weight those increments by how much of the subject kernel had time to
+  mature by the frontier
+- update the posterior using exposed mass rather than raw mass at `x`
+
+In words:
+
+- `α_post` still adds observed successes at `y`
+- `β_post` adds only the portion of `x` arrivals that had time to reach
+  `y`, minus the observed successes
+
+This is the substantive row-builder change in Phase B. It does not
+change the row-builder structure, but it does change the frontier maths.
+
+### Behavioural Expectations
+
+- when there is no meaningful in-transit subject mass, Phase B should
+  collapse back toward the Phase A result
+- when there is substantial in-transit subject mass, Phase B should be
+  less conservative than Phase A
+- the change should be largest on wide or slow multi-hop subjects, not
+  on adjacent pairs
+
+---
+
+## Implementation Plan
+
+Provider policy resolution:
+
+- implement the upstream policy selector in
+  `graph-editor/lib/runner/cohort_forecast.py` or a dedicated upstream
+  provider helper under `graph-editor/lib/runner/`
+- keep Policy A available as the baseline fallback path
+
+Evidence completeness:
+
+- add an upstream evidence-completeness checker that evaluates whether
+  the chosen upstream regime has compatible evidence across the required
+  tau window
+- place the checker close to the provider selection logic so policy
+  choice and evidence validation stay coupled
+
+Observed upstream reconstruction:
+
+- add a reusable upstream reconstruction helper under
+  `graph-editor/lib/runner/` that walks the upstream regime in
+  topological order and produces node-arrival histories
+- keep the reconstruction in node-arrival terms so it can feed
+  `x_provider` directly
+
+Latency carrier resolution:
+
+- implement the ingress-first carrier selection rule inside the upstream
+  provider path
+- only invoke recursive upstream composition when the ingress carrier is
+  unavailable or incompatible
+
+Frontier update:
+
+- modify `graph-editor/lib/runner/cohort_forecast.py` so the frontier
+  update consumes effective exposure instead of raw `x_obs`
+- keep the surrounding D/C split, fan generation, and clipping logic
+  unchanged
+
+Request and analysis plumbing:
+
+- Phase B should land inside the Phase A `cohort_maturity_v2` path
+  rather than introducing a third analysis type
+- `graph-editor/lib/api_handlers.py` and the existing request plumbing
+  should therefore change only to pass the improved provider outputs, not
+  to change the public analysis contract
+
+---
+
+## Tests and Gates
+
+Primary Python test homes:
+
+- `graph-editor/lib/tests/test_cohort_forecast.py`
+- `graph-editor/lib/tests/test_cohort_maturity_derivation.py`
+- `graph-editor/lib/tests/test_cohort_fan_controlled.py`
+- `graph-editor/lib/tests/test_cohort_fan_harness.py`
+- `graph-editor/lib/tests/test_bayes_cohort_maturity_wiring.py`
+
+Primary TypeScript and CLI touchpoints:
+
+- `graph-editor/src/cli/__tests__/cliAnalyse.test.ts`
+- `graph-editor/src/lib/__tests__/graphComputeClient.test.ts`
+- `graph-editor/src/services/__tests__/analysisRequestContract.test.ts`
+
+Required Phase B gates:
+
+- `x = a` remains unchanged relative to Phase A
+- complete-evidence upstream cases reconstruct arrivals at `x`
+  correctly from upstream evidence
+- incomplete-evidence cases fall back cleanly to Policy A without
+  partial-regime mixing
+- completeness-adjusted frontier exposure is equal to Phase A when no
+  in-transit subject mass exists and less conservative when it does
+- subject-kernel outputs remain unchanged for the same subject inputs;
+  Phase B improves the provider and frontier update, not the subject
+  planner
+- end-to-end charts remain stable on adjacent pairs and improve only on
+  the intended multi-hop cohort cases
+
+---
+
+## Deferred Work Beyond Core Phase B
+
+The following ideas remain explicitly out of scope for the core Phase B
+implementation:
+
+- method-of-moments prior composition for span-level rate uncertainty
+- per-draw reconvolution of the subject kernel for fuller span
+  uncertainty
+- commissioning a richer library of subject-side cohort macro-blocks
+- broader forecast-engine contract work from doc `29`
+
+These are valid future improvements, but they are not required to make
+the Phase B denominator story coherent.
+
+---
+
+## Relationship to the Broader Forecast Engine
+
+After Phase B, multi-hop cohort maturity has:
+
+- a reusable subject kernel from Phase A
+- an explicit upstream provider with evidence-driven improvement and
+  model-based fallback
+- a frontier update that better respects in-transit subject mass
+
+That is enough to make cohort maturity a credible first consumer of the
+broader forecast-engine architecture from doc `29`.
+
+The later engine work still needs to generalise these building blocks
+for other consumers, but Phase B completes the cohort-maturity-specific
+story first.

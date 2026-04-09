@@ -26,6 +26,7 @@ export type BayesTriggerStatus = 'idle' | 'submitting' | 'running' | 'complete' 
 export type BayesComputeMode = 'local' | 'modal';
 
 import { PYTHON_API_BASE } from '../lib/pythonApiBase';
+import { engorgeGraphEdges } from '../lib/bayesEngorge';
 import { useViewOverlayMode } from './useViewOverlayMode';
 
 /** URLs for local dev mode (Python server, webhook on Vite dev server). */
@@ -427,7 +428,13 @@ export function useBayesTrigger(computeMode: BayesComputeMode = 'local') {
           `${Object.keys(parameterFiles).length} param files inspected`);
       }
 
-      // 7b. Build candidate regimes + MECE dimensions (doc 30 §4.1)
+      // 7c. Engorge graph edges — inject observations and priors from
+      //     param files onto graph edges (doc 14 §9A). During the parity
+      //     phase we still send param files alongside the engorged graph
+      //     so the BE can compare both paths.
+      engorgeGraphEdges(graphData, parameterFiles);
+
+      // 7d. Build candidate regimes + MECE dimensions (doc 30 §4.1)
       let candidateRegimesByEdge: Record<string, Array<{ core_hash: string; equivalent_hashes: string[] }>> = {};
       let meceDimensions: string[] = [];
       try {

@@ -284,3 +284,149 @@ class TestSnapshotE2ERealDB:
         # Posterior means should be in [0, 1] (basic sanity)
         for p in result.posteriors:
             assert 0 < p.mean < 1, f"Edge {p.param_id}: mean={p.mean} outside (0,1)"
+
+    def test_query_snapshot_subjects_real_db(self):
+        """Baseline: _query_snapshot_subjects with real DB and real subjects.
+
+        Builds snapshot_subjects from the graph by discovering core_hashes
+        from the DB for each edge's param_id. This closes the test gap where
+        _query_snapshot_subjects was never tested directly.
+
+        When query_snapshots_batch is implemented, this test becomes the
+        parity baseline: call both paths, assert identical results.
+        """
+        import psycopg2
+        from bayes.compiler import analyse_topology
+
+        graph = _load_graph_snapshot()
+        topology = analyse_topology(graph)
+
+        # Discover core_hashes from DB for each parameterised edge
+        conn = psycopg2.connect(DB_URL)
+        cur = conn.cursor()
+
+        snapshot_subjects = []
+        for edge in graph.get("edges", []):
+            param_id = edge.get("p", {}).get("id", "")
+            edge_id = edge.get("uuid", "")
+            if not param_id or not edge_id:
+                continue
+
+            db_param_id = f"{WORKSPACE_PREFIX}-{param_id}"
+
+            # Find distinct core_hashes for this param_id
+            cur.execute("""
+                SELECT DISTINCT core_hash
+                FROM snapshots
+                WHERE param_id = %s
+            """, (db_param_id,))
+
+            for (core_hash,) in cur.fetchall():
+                snapshot_subjects.append({
+                    "param_id": db_param_id,
+                    "core_hash": core_hash,
+                    "edge_id": edge_id,
+                    "slice_keys": [""],
+                    "equivalent_hashes": None,
+                })
+
+        # Use a single shared date range across all subjects (mirrors FE
+        # pinnedDSL behaviour — all subjects share the same dates).
+        cur.execute("""
+            SELECT MIN(anchor_day), MAX(anchor_day),
+                   MIN(retrieved_at::date), MAX(retrieved_at::date)
+            FROM snapshots
+            WHERE param_id = ANY(%s)
+        """, ([s["param_id"] for s in snapshot_subjects],))
+        anchor_from, anchor_to, sweep_from, sweep_to = cur.fetchone()
+        for subj in snapshot_subjects:
+            subj["anchor_from"] = anchor_from.isoformat() if anchor_from else ""
+            subj["anchor_to"] = anchor_to.isoformat() if anchor_to else ""
+            subj["sweep_from"] = sweep_from.isoformat() if sweep_from else ""
+            subj["sweep_to"] = sweep_to.isoformat() if sweep_to else ""
+
+        cur.close()
+        conn.close()
+
+        assert len(snapshot_subjects) > 0, (
+            "No snapshot subjects built — DB has no rows for this graph's param_ids"
+        )
+
+        # Call the actual worker function
+        import sys, os
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'graph-editor', 'lib'))
+        os.environ["DB_CONNECTION"] = DB_URL
+
+        from bayes.worker import _query_snapshot_subjects
+
+        log: list[str] = []
+        result = _query_snapshot_subjects(snapshot_subjects, topology, log)
+
+        # Verify we got rows back
+        edges_with_rows = {eid for eid, rows in result.items() if rows}
+        total_rows = sum(len(rows) for rows in result.values())
+
+        print(f"\n_query_snapshot_subjects: {len(snapshot_subjects)} subjects → "
+              f"{len(edges_with_rows)} edges with data, {total_rows} total rows")
+        for eid, rows in sorted(result.items(), key=lambda x: -len(x[1])):
+            print(f"  {eid[:12]}… → {len(rows)} rows")
+
+        assert len(edges_with_rows) > 0, "No edges returned rows from _query_snapshot_subjects"
+        assert total_rows > 0, "Zero total rows from _query_snapshot_subjects"
+
+        # Verify row shape — each row should have the expected columns
+        sample_row = next(iter(result.values()))[0]
+        expected_keys = {"param_id", "core_hash", "slice_key", "anchor_day", "retrieved_at", "a", "x", "y"}
+        assert expected_keys.issubset(sample_row.keys()), (
+            f"Row missing expected keys. Got: {set(sample_row.keys())}"
+        )
+
+        # ── Parity: compare per-subject path vs batch path ──
+        # The batch path is now the default in _query_snapshot_subjects.
+        # Compare against individual query_snapshots_for_sweep calls to
+        # verify the batch produces identical results.
+        from datetime import date
+        from snapshot_service import query_snapshots_for_sweep
+
+        per_subject_result: dict[str, list[dict]] = {}
+        for subj in snapshot_subjects:
+            edge_id = subj["edge_id"]
+            rows = query_snapshots_for_sweep(
+                param_id=subj["param_id"],
+                core_hash=subj["core_hash"],
+                slice_keys=subj.get("slice_keys", [""]),
+                anchor_from=date.fromisoformat(subj["anchor_from"]) if subj.get("anchor_from") else None,
+                anchor_to=date.fromisoformat(subj["anchor_to"]) if subj.get("anchor_to") else None,
+                sweep_from=date.fromisoformat(subj["sweep_from"]) if subj.get("sweep_from") else None,
+                sweep_to=date.fromisoformat(subj["sweep_to"]) if subj.get("sweep_to") else None,
+                equivalent_hashes=subj.get("equivalent_hashes"),
+            )
+            if rows:
+                per_subject_result.setdefault(edge_id, []).extend(rows)
+
+        def _row_sort_key(r):
+            return (r.get("core_hash", ""), r.get("anchor_day", ""),
+                    r.get("slice_key", ""), r.get("retrieved_at", ""))
+
+        # Same edge_ids
+        assert set(result.keys()) == set(per_subject_result.keys()), (
+            f"Edge ID mismatch: batch={set(result.keys())}, "
+            f"per-subject={set(per_subject_result.keys())}"
+        )
+
+        # Same rows per edge
+        for edge_id in result:
+            batch_rows = sorted(result[edge_id], key=_row_sort_key)
+            indiv_rows = sorted(per_subject_result[edge_id], key=_row_sort_key)
+            assert len(batch_rows) == len(indiv_rows), (
+                f"Row count mismatch for {edge_id}: "
+                f"batch={len(batch_rows)}, per-subject={len(indiv_rows)}"
+            )
+            for i, (b, p) in enumerate(zip(batch_rows, indiv_rows)):
+                assert b == p, (
+                    f"Row {i} mismatch for {edge_id}:\n"
+                    f"  batch:      {b}\n"
+                    f"  per-subject: {p}"
+                )
+
+        print(f"\nParity check passed: {len(result)} edges, all rows identical")

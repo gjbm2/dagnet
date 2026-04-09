@@ -808,6 +808,84 @@ def query_snapshots_for_sweep(
         return rows
 
 
+def query_snapshots_for_sweep_batch(
+    core_hashes: List[str],
+    slice_keys: Optional[List[str]] = None,
+    anchor_from: Optional[date] = None,
+    anchor_to: Optional[date] = None,
+    sweep_from: Optional[date] = None,
+    sweep_to: Optional[date] = None,
+    limit: int = 500000,
+) -> Dict[str, List[Dict[str, Any]]]:
+    """
+    Batch variant of query_snapshots_for_sweep: one DB round-trip for all
+    core_hashes, results grouped by core_hash.
+
+    All subjects in a Bayes fit share the same pinnedDSL (same date ranges,
+    same slice_keys). Only core_hash varies. This collapses N per-subject
+    queries into one.
+
+    See: docs/current/project-bayes/33-snapshot-query-batching.md
+    """
+    if not core_hashes:
+        return {}
+
+    unique_hashes = list(set(core_hashes))
+
+    with _pooled_conn() as conn:
+        cur = conn.cursor()
+
+        query = """
+            SELECT
+                param_id, core_hash, slice_key, anchor_day, retrieved_at,
+                A as a, X as x, Y as y,
+                median_lag_days, mean_lag_days,
+                anchor_median_lag_days, anchor_mean_lag_days,
+                onset_delta_days
+            FROM snapshots
+            WHERE core_hash = ANY(%s)
+        """
+        params: List[Any] = [unique_hashes]
+
+        if slice_keys is not None:
+            parts: List[str] = []
+            _append_slice_filter_sql(sql_parts=parts, params=params, slice_keys=slice_keys)
+            if parts:
+                query += " AND " + " AND ".join(parts)
+
+        if anchor_from is not None:
+            query += " AND anchor_day >= %s"
+            params.append(anchor_from)
+        if anchor_to is not None:
+            query += " AND anchor_day <= %s"
+            params.append(anchor_to)
+
+        if sweep_from is not None:
+            query += " AND retrieved_at >= %s"
+            params.append(datetime.combine(sweep_from, datetime.min.time()))
+        if sweep_to is not None:
+            query += " AND retrieved_at < %s"
+            from datetime import timedelta
+            params.append(datetime.combine(sweep_to + timedelta(days=1), datetime.min.time()))
+
+        query += " ORDER BY core_hash, anchor_day, slice_key, retrieved_at"
+        query += f" LIMIT {int(limit)}"
+
+        cur.execute(query, params)
+        columns = [desc[0] for desc in cur.description]
+
+        grouped: Dict[str, List[Dict[str, Any]]] = {}
+        for row_tuple in cur.fetchall():
+            row = dict(zip(columns, row_tuple))
+            if row.get('anchor_day') and hasattr(row['anchor_day'], 'isoformat'):
+                row['anchor_day'] = row['anchor_day'].isoformat()
+            if row.get('retrieved_at') and hasattr(row['retrieved_at'], 'isoformat'):
+                row['retrieved_at'] = row['retrieved_at'].isoformat()
+            ch = row.get('core_hash', '')
+            grouped.setdefault(ch, []).append(row)
+
+        return grouped
+
 
 def get_batch_inventory(param_ids: List[str]) -> Dict[str, Dict[str, Any]]:
     """

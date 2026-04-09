@@ -1,0 +1,148 @@
+"""
+Transitional adapter: converts SpanKernel into an edge_params-compatible
+dict that compute_cohort_maturity_rows can consume without refactoring.
+
+This is the bridge between the new span kernel (Phase A) and the
+existing row builder.  Once the row builder is fully refactored to
+consume SpanKernel directly, this adapter is retired.
+
+See doc 29c §11 (Appendix: Legacy Key Set) for the full key set.
+"""
+
+from typing import Dict, Any, Optional
+from .span_kernel import SpanKernel
+
+
+def span_kernel_to_edge_params(
+    kernel: SpanKernel,
+    graph: Dict[str, Any],
+    target_edge_id: str,
+    is_window: bool,
+) -> Dict[str, float]:
+    """Build an edge_params dict from a SpanKernel.
+
+    For the single-edge case, this is equivalent to _read_edge_model_params.
+    For multi-hop, it uses the kernel's span_p as the forecast rate and
+    the last edge's posterior SDs for MC uncertainty.
+
+    Args:
+        kernel: The composed span kernel.
+        graph: Graph dict with edges.
+        target_edge_id: UUID of the last edge in the span (for
+            extracting posterior SDs and alpha/beta).
+        is_window: True for window mode.
+
+    Returns:
+        Dict compatible with compute_cohort_maturity_rows' edge_params.
+    """
+    import math
+
+    # Find the target (last) edge to extract SDs and alpha/beta
+    edges = graph.get('edges', [])
+    target_edge = None
+    for e in edges:
+        if str(e.get('uuid', e.get('id', ''))) == str(target_edge_id):
+            target_edge = e
+            break
+
+    params: Dict[str, Any] = {}
+
+    # The span kernel provides span_p as the conditional probability
+    span_p = kernel.span_p
+
+    # For the CDF shape, we need mu/sigma/onset.  The kernel is built
+    # from numerical convolution so there's no single parametric form.
+    # For the row builder's _cdf() function, we still need scalar params.
+    # Use the last edge's values as the best available proxy.
+    if target_edge:
+        p_data = target_edge.get('p', {})
+        latency = p_data.get('latency', {})
+        posterior = latency.get('posterior', {})
+        prob_posterior = p_data.get('posterior', {})
+
+        # Edge-level latency
+        mu = posterior.get('mu_mean') or latency.get('mu') or 0.0
+        sigma = posterior.get('sigma_mean') or latency.get('sigma') or 0.0
+        onset = (posterior.get('onset_delta_days')
+                 or latency.get('promoted_onset_delta_days')
+                 or latency.get('onset_delta_days') or 0.0)
+
+        # Path-level latency
+        path_mu = posterior.get('path_mu_mean') or latency.get('path_mu')
+        path_sigma = posterior.get('path_sigma_mean') or latency.get('path_sigma')
+        path_onset = (posterior.get('path_onset_delta_days')
+                      or latency.get('path_onset_delta_days'))
+
+        if isinstance(mu, (int, float)):
+            params['mu'] = float(mu)
+        if isinstance(sigma, (int, float)):
+            params['sigma'] = float(sigma)
+        if isinstance(onset, (int, float)):
+            params['onset_delta_days'] = float(onset)
+        if isinstance(path_mu, (int, float)):
+            params['path_mu'] = float(path_mu)
+        if isinstance(path_sigma, (int, float)) and path_sigma > 0:
+            params['path_sigma'] = float(path_sigma)
+        if isinstance(path_onset, (int, float)):
+            params['path_onset_delta_days'] = float(path_onset)
+
+        # Forecast mean / posterior p — use span_p
+        params['forecast_mean'] = span_p
+        params['posterior_p'] = span_p
+        params['posterior_p_cohort'] = span_p
+
+        # Alpha/beta from last edge (for frontier conditioning prior)
+        post_alpha = prob_posterior.get('alpha')
+        post_beta = prob_posterior.get('beta')
+        if (isinstance(post_alpha, (int, float)) and isinstance(post_beta, (int, float))
+                and post_alpha > 0 and post_beta > 0):
+            params['posterior_alpha'] = float(post_alpha)
+            params['posterior_beta'] = float(post_beta)
+
+        path_alpha = prob_posterior.get('path_alpha')
+        path_beta = prob_posterior.get('path_beta')
+        if (isinstance(path_alpha, (int, float)) and isinstance(path_beta, (int, float))
+                and path_alpha > 0 and path_beta > 0):
+            params['posterior_path_alpha'] = float(path_alpha)
+            params['posterior_path_beta'] = float(path_beta)
+
+        # p_stdev
+        if post_alpha and post_beta and post_alpha > 0 and post_beta > 0:
+            s = float(post_alpha) + float(post_beta)
+            params['p_stdev'] = math.sqrt(float(post_alpha) * float(post_beta) / (s * s * (s + 1)))
+        if path_alpha and path_beta and path_alpha > 0 and path_beta > 0:
+            s = float(path_alpha) + float(path_beta)
+            params['p_stdev_cohort'] = math.sqrt(float(path_alpha) * float(path_beta) / (s * s * (s + 1)))
+
+        # Posterior SDs for MC fan (from last edge's path-level)
+        for key in ('bayes_mu_sd', 'bayes_sigma_sd', 'bayes_onset_sd',
+                     'bayes_onset_mu_corr', 'bayes_path_mu_sd',
+                     'bayes_path_sigma_sd', 'bayes_path_onset_sd',
+                     'bayes_path_onset_mu_corr'):
+            val = posterior.get(key.replace('bayes_', '').replace('path_', 'path_'))
+            if val is None:
+                # Try alternate locations
+                if 'path' in key:
+                    alt_key = key.replace('bayes_path_', '')
+                    val = posterior.get(f'path_{alt_key}') or latency.get(f'path_{alt_key}')
+                else:
+                    alt_key = key.replace('bayes_', '')
+                    val = posterior.get(alt_key) or latency.get(alt_key)
+            if isinstance(val, (int, float)):
+                params[key] = float(val)
+
+        # t95
+        t95 = latency.get('promoted_t95') or latency.get('t95')
+        path_t95 = latency.get('promoted_path_t95') or latency.get('path_t95')
+        if isinstance(t95, (int, float)) and t95 > 0:
+            params['t95'] = float(t95)
+        if isinstance(path_t95, (int, float)) and path_t95 > 0:
+            params['path_t95'] = float(path_t95)
+
+        # evidence_retrieved_at
+        evidence = p_data.get('evidence', {})
+        ev_retrieved = evidence.get('retrieved_at')
+        if isinstance(ev_retrieved, str) and ev_retrieved:
+            params['evidence_retrieved_at'] = ev_retrieved
+
+    return params
