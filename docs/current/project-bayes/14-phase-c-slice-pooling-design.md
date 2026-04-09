@@ -1288,6 +1288,63 @@ can begin.
 Uses the harness for intensive parallel compute. Data binding is
 trusted.
 
+**R2-prereq-i — Slice commissioning contract** (evidence binder):
+- The pinnedDSL determines which slices to model. The FE explodes
+  it into atomic slice DSLs (e.g. `window().context(channel:google)`)
+  and sends them as `slice_keys` on snapshot subjects in the payload.
+- The evidence binder must iterate over the **actual commissioned
+  slice DSLs** to determine what observations to create — not
+  reverse-engineer dimensions by scanning DB rows for context
+  qualifiers. Each commissioned DSL pairs with a core_hash; the
+  binder groups rows by `(edge_id, slice_dsl)` and creates one
+  observation set per commissioned DSL. Uncommissioned context rows
+  (from broad fetches) are aggregated into the parent, not modelled
+  as separate slices.
+- This replaces the current `_route_slices` + Step 3b approach
+  (which creates per-context observations from whatever the DB
+  returns regardless of what was requested) with direct iteration
+  over the contract.
+- **Parent always produced**: the pinnedDSL
+  `(window();cohort()).context(channel)` explodes to only
+  context-qualified DSLs — no bare `window()` or `cohort()`. The
+  binder must still synthesise aggregate observations for the parent
+  variable set from per-context rows even when no bare DSL was
+  commissioned. The parent is always emitted.
+- **Normalisation risk**: the commissioned DSLs (normalised by FE
+  via `normalizeConstraintString`) must match DB row `slice_key`
+  values (normalised at write time by the ingestion pipeline).
+  These are two independent codepaths — if they diverge, matching
+  fails silently. Mitigations: (a) match via `context_key()` from
+  `compiler/slices.py` which strips temporal qualifiers before
+  comparison, reducing format sensitivity; (b) the binding receipt
+  already detects "expected slices not found" — extend it to flag
+  commissioned DSLs with zero matching rows; (c) add a parity
+  assertion in the regression suite comparing FE-normalised DSLs
+  against DB slice_key format. This is the same class of
+  normalisation risk that already exists at the DB query filter
+  boundary — not a new risk category.
+- Follows the established FE/BE analysis contract pattern: the
+  request specifies exactly what to compute, the BE computes
+  exactly that.
+
+**R2-prereq-ii — Harness payload via CLI** (test infrastructure):
+- The test harness (`test_harness.py`) currently constructs snapshot
+  subjects manually with `slice_keys: [""]` (broad fetch), bypassing
+  the FE's pinnedDSL → explodeDSL → fetchPlan → subjects pipeline.
+  This means the harness doesn't honour the commissioning contract.
+- Fix: harness calls the CLI (`dagnet-cli bayes --output`) to
+  construct the payload using the real FE service layer. The harness
+  then reads the CLI-generated payload and runs MCMC in-process.
+  One codepath for payload construction (the FE), all harness
+  conveniences preserved (parallel execution, lock files, monitoring,
+  param recovery).
+- The CLI `--output` mode already works. The harness needs a
+  `--payload /path/to/file.json` flag to accept a pre-built payload
+  instead of constructing subjects internally.
+- `run_regression.py` calls CLI first (~5-10s Node startup per
+  graph), then harness with the payload. Core-aware parallel
+  scheduling unchanged.
+
 **R2a — Synthetic data generator** (`compiler/tests/`):
 - Generate known-parameter synthetic engorged graphs: parent
   `p_base`, per-slice deviations from known `τ_slice`, window +
@@ -1381,7 +1438,10 @@ verified.
 - R2a (synth generator) can start immediately after R1 gate
 - R2b-R2e depend on R1c but NOT on R1d (hand-crafted test graphs)
 - R2g substeps are independent of each other
-- Critical path: R1a → R1c → R1e → R2a → R2b → R2b2 → R2c → R2d → R2e → R2f
+- R2-prereq-i and R2-prereq-ii can be done in parallel
+- R2-prereq-i blocks R2b (binder must honour the contract before slice modelling is correct)
+- R2-prereq-ii blocks regression testing (harness must use CLI payload for accurate slice commissioning)
+- Critical path: R1a → R1c → R1e → R2-prereqs → R2a → R2b → R2b2 → R2c → R2d → R2e → R2f
 
 ---
 

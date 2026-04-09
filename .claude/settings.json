@@ -73,7 +73,14 @@
       "Bash(bash graph-ops/scripts/analyse.sh bayes-test-gm-rebuild \"from\\(household-created\\).to\\(switch-success\\).cohort\\(12-Mar-26:8-Apr-26\\)\" --type cohort_maturity_v2 --no-cache)",
       "Bash(bash graph-ops/scripts/analyse.sh bayes-test-gm-rebuild \"from\\(switch-registered\\).to\\(switch-success\\).window\\(-30d:\\)\" --type cohort_maturity --no-cache)",
       "Bash(bash graph-ops/scripts/analyse.sh bayes-test-gm-rebuild \"from\\(switch-registered\\).to\\(switch-success\\).window\\(-30d:\\)\" --type cohort_maturity_v2 --no-cache)",
-      "Bash(head -30 /home/reg/dev/dagnet/bayes/tests/test_*.py)"
+      "Bash(head -30 /home/reg/dev/dagnet/bayes/tests/test_*.py)",
+      "Bash(bash graph-ops/scripts/analyse.sh bayes-test-gm-rebuild \"cohort\\(-90d:\\)\" --type cohort_maturity --subject \"from\\(switch-registered\\).to\\(switch-success\\)\" --get \"result.maturity_rows[0:3]\")",
+      "Bash(bash graph-ops/scripts/analyse.sh bayes-test-gm-rebuild \"cohort\\(-90d:\\)\" --type cohort_maturity --subject \"from\\(switch-registered\\).to\\(switch-success\\)\" -v)",
+      "Bash(bash graph-ops/scripts/analyse.sh bayes-test-gm-rebuild \"cohort\\(-90d:\\)\" --type cohort_maturity_v2 --subject \"from\\(switch-registered\\).to\\(switch-success\\)\" -v)",
+      "Bash(bash graph-ops/scripts/analyse.sh bayes-test-gm-rebuild \"cohort\\(-90d:\\)\" --type cohort_maturity --subject \"from\\(switch-registered\\).to\\(switch-success\\)\")",
+      "Bash(bash graph-ops/scripts/analyse.sh bayes-test-gm-rebuild \"cohort\\(-90d:\\)\" --type cohort_maturity_v2 --subject \"from\\(switch-registered\\).to\\(switch-success\\)\")",
+      "Bash(bash graph-ops/scripts/analyse.sh bayes-test-gm-rebuild \"cohort\\(-90d:\\)\" --type cohort_maturity --subject \"from\\(switch-registered\\).to\\(switch-success\\)\" --format json)",
+      "Bash(bash graph-ops/scripts/analyse.sh bayes-test-gm-rebuild \"cohort\\(-90d:\\)\" --type cohort_maturity_v2 --subject \"from\\(switch-registered\\).to\\(switch-success\\)\" --format json)"
     ],
     "additionalDirectories": [
       "/home/reg/dev/dagnet/.claude",

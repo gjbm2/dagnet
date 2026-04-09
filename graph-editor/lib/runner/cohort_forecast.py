@@ -291,9 +291,33 @@ def get_incoming_edges(
     graph: Dict[str, Any],
     node_id: str,
 ) -> List[Dict[str, Any]]:
-    """Return all edges whose 'to' field matches node_id."""
+    """Return all edges whose 'to' field matches node_id.
+
+    Handles UUID-vs-id mismatch: edge['to'] may store a node UUID
+    while node_id may be the human-readable id.  Builds a resolution
+    map from the graph's nodes array.
+    """
+    nodes = graph.get('nodes', []) if isinstance(graph, dict) else []
     edges = graph.get('edges', []) if isinstance(graph, dict) else []
-    return [e for e in edges if str(e.get('to', '')) == str(node_id)]
+
+    # Build id↔uuid resolution map
+    id_to_uuid: Dict[str, str] = {}
+    uuid_to_id: Dict[str, str] = {}
+    for n in nodes:
+        nid = n.get('id', '')
+        nuuid = n.get('uuid', nid)
+        id_to_uuid[nid] = nuuid
+        uuid_to_id[nuuid] = nid
+        uuid_to_id[nid] = nid  # identity mapping
+
+    # Resolve the target: could be an id or a uuid
+    target_ids = {node_id}
+    if node_id in id_to_uuid:
+        target_ids.add(id_to_uuid[node_id])
+    if node_id in uuid_to_id:
+        target_ids.add(uuid_to_id[node_id])
+
+    return [e for e in edges if str(e.get('to', '')) in target_ids]
 
 
 def get_edge_from_node(edge: Dict[str, Any]) -> str:
@@ -1213,7 +1237,14 @@ def compute_cohort_maturity_rows(
             # the adjustment when Policy B provides evidence-driven
             # upstream histories.  See doc 29d §Concrete Formula.
             E_i = float(N_i)  # default: full exposure (Phase A)
-            if _is_span and _span_C_point is not None and x_provider.enabled and a_i > 0:
+            # Exposure adjustment requires upstream observations that
+            # actually conditioned the model (non-flat x_at_tau).
+            # Without observations, x_at_tau is flat at N_i and the
+            # convolution would incorrectly reduce E_i.
+            _has_upstream_obs = (x_provider is not None
+                                and x_provider.upstream_obs is not None
+                                and len(x_provider.upstream_obs) > 0)
+            if _is_span and _span_C_point is not None and _has_upstream_obs and a_i > 0:
                 x_at_tau = c.get('x_at_tau')
                 if x_at_tau is not None and len(x_at_tau) > a_idx:
                     _E = 0.0
@@ -1269,7 +1300,7 @@ def compute_cohort_maturity_rows(
             # exposed people at tau_max_i.  For single-edge, E_i = N_i.
             # For multi-hop, E_i < N_i because recent arrivals at x
             # haven't had time to traverse the full span (doc 29d).
-            _N_eff = E_i if (_is_span and x_provider.enabled) else float(N_i)
+            _N_eff = E_i if (_is_span and _has_upstream_obs) else float(N_i)
             if _N_eff > 0 and a_i > 0:
                 # p_window = probability of converting within tau_max
                 p_window_i = p_i * cdf_i[:, a_idx]                # (S,)
@@ -1329,7 +1360,7 @@ def compute_cohort_maturity_rows(
             # had full span exposure (doc 29d §Concrete Formula).
             # For single-edge: E_i = N_i (no adjustment).
             # q_late = p(CDF(τ) - CDF(a_i)) / (1 - p·CDF(a_i))
-            remaining_frontier = max(E_i - k_i, 0.0) if (_is_span and x_provider.enabled) else max(N_i - k_i, 0.0)
+            remaining_frontier = max(E_i - k_i, 0.0) if (_is_span and _has_upstream_obs) else max(N_i - k_i, 0.0)
             q_early = p_i[:, None] * c_i_b                        # (S, 1)
             q_early = np.clip(q_early, 0.0, 1 - 1e-10)
             remaining_cdf = np.maximum(cdf_i - c_i_b, 0.0)        # (S, T)
@@ -1571,9 +1602,12 @@ def compute_cohort_maturity_rows(
                 remaining_det = max(0.0, cdf_tau_det - cdf_a_det)
                 q_late_det = (edge_p * remaining_det) / (1 - q_early_det)
                 q_late_det = min(max(q_late_det, 0.0), 1.0)
-                if _is_span and _span_C_point is not None and x_provider.enabled:
+                _has_up_obs_det = (x_provider is not None
+                                   and x_provider.upstream_obs is not None
+                                   and len(x_provider.upstream_obs) > 0)
+                if _is_span and _span_C_point is not None and _has_up_obs_det:
                     # Compute E_i for this cohort (deterministic path)
-                    # Only when x_provider gives real arrival timing.
+                    # Only when upstream observations conditioned the model.
                     _x_at_tau_det = c.get('x_at_tau')
                     if _x_at_tau_det and len(_x_at_tau_det) > a_i_det:
                         _E_det = 0.0

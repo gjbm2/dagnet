@@ -304,16 +304,29 @@ Phase A row-building logic therefore becomes:
 - preserve the existing observed/forecast splice
 - preserve the existing D/C split
 - replace the single-edge conditional progression with span-kernel
-  progression
+  progression throughout: IS conditioning, Pop D, deterministic
+  forecast, and fan generation must all use `K_{x→y}` consistently
 - keep the same fan-generation and clipping posture
+
+The row builder must reason in `X_x + K_{x→y}` coordinates.  In this
+model:
+
+- `p_window(a_i) = span_p × K_{x→y}(a_i)` — fraction of x arrivals
+  that have converted at y by frontier age
+- IS conditioning weights draws by likelihood of observing `k_i`
+  conversions from `N_i` exposed at `p_window`
+- Pop D uses conditional `q_late` derived from `K_{x→y}(τ) - K_{x→y}(a_i)`
+- the prior centres on `span_p`, not path-level forecast mean
+- 1-hop degenerates naturally: `K_{x→y}` is just the single edge's
+  operator
 
 The Phase A frontier update remains conservative:
 
-- the prior still comes from the last edge's path-level cohort posterior
 - the frontier still treats in-transit mass as if it were already fully
   exposed
 - empty-evidence behaviour still falls back to unconditional forecast
 - latency-shape uncertainty still reuses the last edge's path-level SDs
+  for the MC drift layer
 
 These are known approximations, not accidental drift. Phase B addresses
 the frontier exposure issue. Wider span-level uncertainty propagation is
@@ -356,13 +369,109 @@ Row-builder refactor:
 - preserve the current D/C, frontier, fan, and clipping behaviour
   during the refactor
 
+### Row-builder representation consistency (9-Apr-26)
+
+The row builder must reason in one consistent representation per
+forecast call.  The two valid representations are:
+
+1. **Explicit factorisation**: `X_x` (upstream provider) plus
+   `K_{x→y}` (span kernel).  The canonical form.
+2. **Collapsed shortcut**: `cohort(a, x→y)` — the legacy path-level
+   representation that encodes the full anchor-to-y timing in a single
+   parametric CDF with path-level `(path_mu, path_sigma, path_onset)`.
+
+**No mixing**: never use collapsed path semantics for one stage (e.g.
+IS conditioning) and local x→y semantics for another stage (e.g.
+forecast CDF) in the same forecast call.  This was the defect found on
+9-Apr-26: the span kernel provided a local x→y CDF while the IS
+conditioning, Pop D, and prior derivation still used collapsed
+anchor-to-y assumptions from the path-level params.
+
+**Design constraints:**
+
+1. *One-edge degeneration*: one-edge `K_{x→y}` must equal the legacy
+   one-edge operator.  Hop count only changes how `K` is built.
+2. *Factorised canonical form*: the row builder should reason in
+   `X_x + K_{x→y}` coordinates.  IS conditioning uses
+   `p_window = span_p × K_{x→y}(a_i)`, not collapsed path CDF.
+   Pop D uses the same kernel.  The prior centres on `span_p`.
+3. *Shortcut admissibility*: use `cohort(a, x→y)` only when it is a
+   compatible collapsed representation of the same subject under the
+   same anchor/context/regime assumptions.
+4. *Shortcut equivalence*: when both representations are available,
+   the collapsed shortcut and explicit factorisation must agree as a
+   limit condition.
+5. *No representation mixing*: the planner chooses one representation
+   per forecast call.  All stages — IS conditioning, Pop D,
+   deterministic forecast, fan generation — use that representation
+   consistently.
+
+**Practical implications for the row builder:**
+
+When the planner chooses explicit factorisation:
+
+- `_cdf(τ)` = `K_{x→y}(τ)` (span kernel, normalised)
+- `edge_p` = `span_p` (the x→y conversion probability)
+- `alpha_0, beta_0` derived from `span_p` and the last edge's
+  posterior concentration
+- IS conditioning: `p_window = p_i × K_{x→y}(a_i)` per draw
+- Pop D: conditional on `K_{x→y}(a_i)` to `K_{x→y}(τ)`
+- `X_x` from the upstream provider (independent)
+
+When the planner chooses the collapsed shortcut:
+
+- `_cdf(τ)` = path-level parametric CDF
+- `edge_p` = `forecast_mean` from edge params
+- `alpha_0, beta_0` from path-level posterior
+- IS, Pop D, forecast all use path-level CDF consistently
+- This is the v1 code path, preserved unchanged
+
 **Implementation status (9-Apr-26):** the `XProvider` dataclass and
 `build_x_provider_from_graph()` factory live in `cohort_forecast.py`.
-`compute_cohort_maturity_rows` accepts an optional `x_provider`
-parameter; when `None`, it builds the legacy provider internally
-(v1 backward-compat).  The v2 handler passes an explicit provider:
-legacy (enabled) for single-edge, disabled for multi-hop.  Pop C
-guards check `x_provider.enabled` instead of `_is_span`.
+
+The v2 row builder must be a **separate function** from the v1 row
+builder — not `_is_span` branches inside the shared
+`compute_cohort_maturity_rows`.  The whole point of `cohort_maturity_v2`
+as a parallel analysis type is that v1 stays pristine as the parity
+reference while v2 can be refactored freely.
+
+### Parallel implementation strategy
+
+- `compute_cohort_maturity_rows` in `cohort_forecast.py` — **v1 only**.
+  No `_is_span` branches, no `span_cdf_override` parameter.  This
+  function is frozen as the parity reference.  It will be retired
+  wholesale once v2 is proven to be a complete generalisation.
+
+- `compute_cohort_maturity_rows_v2` in a new module
+  `graph-editor/lib/runner/cohort_forecast_v2.py` — **v2 only**.
+  Reasons in `X_x + K_{x→y}` coordinates from the start, with no
+  legacy path-level assumptions.  Consumes: composed evidence frames,
+  `x_provider`, `K_{x→y}` (span kernel).  All stages — IS
+  conditioning, Pop D, deterministic forecast, fan generation — use
+  the span kernel consistently.
+
+- `_handle_cohort_maturity_v2` in `api_handlers.py` calls
+  `compute_cohort_maturity_rows_v2`, never the v1 function.
+
+- `_handle_snapshot_analyze_subjects` continues to call
+  `compute_cohort_maturity_rows` (v1) for `cohort_maturity`.
+
+This separation means:
+
+- v1 is never modified during the v2 generalisation work
+- v2 can be refactored without risk to the parity reference
+- once v2 passes all parity gates on adjacent pairs AND produces
+  correct multi-hop results, `cohort_maturity` is retired and
+  `cohort_maturity_v2` becomes the sole implementation
+- at retirement, `compute_cohort_maturity_rows` and its `_is_span`
+  branches are deleted, not migrated
+
+**Current state (9-Apr-26):** the `_is_span` branches inside
+`compute_cohort_maturity_rows` are the defective mixed-representation
+path.  The next step is to extract them into
+`compute_cohort_maturity_rows_v2`, rewrite them in factorised
+`X_x + K_{x→y}` coordinates, and remove all `_is_span` /
+`span_cdf_override` code from the v1 function.
 
 Frontend and request plumbing:
 
