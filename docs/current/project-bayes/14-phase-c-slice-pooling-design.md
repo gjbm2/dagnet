@@ -1197,11 +1197,19 @@ observations.
 
 ## 11. Implementation staging
 
-Three stages addressing three distinct challenges: data binding
-contract, hierarchical model, and multi-dimension extensions.
+Two macro-phases addressing two distinct risks. Risk 1 must be
+fully retired before Risk 2 work begins.
+
+**Risk 1 — right data gets into the model.** Hash computation,
+DB query, regime selection, dedup, slice routing, observation
+assembly. Covered by R1 steps below and §16.
+
+**Risk 2 — we do the right things with the data.** Hierarchical
+shrinkage, Dirichlet, per-date routing, posterior summarisation.
+Covered by R2 steps below.
 
 **Hard prerequisite**: `select_regime_rows()` (doc 30 §6) must be
-implemented before Stage 1a's snapshot supplementation path. Doc 30
+implemented before R1c's snapshot supplementation path. Doc 30
 is being implemented now.
 
 **Prior work completed**: slice DSL parser (`compiler/slices.py`) ✅,
@@ -1209,111 +1217,143 @@ IR types (`SliceKey`, `SliceObservations`, `SliceGroup` in
 `compiler/types.py`) ✅, evidence binding scaffolding
 (`_populate_slices()` in `compiler/evidence.py`) ✅.
 
-### Stage 1 — Engorged graph contract (data binding)
+### R1 — Data binding assurance (Risk 1)
 
-No model changes. Proves the new data contract works with the
-existing aggregate model.
+No model changes. Goal: certify that the right data enters the
+model, with zero defects, before any model work begins. See §16
+for the binding receipt design and §16.10 for the authoritative
+step-by-step sequencing.
 
-**1a — BE refactoring** (`compiler/evidence.py`):
-- Replace param file `values[]` parsing (current lines 99-166) with
-  graph-edge reader: read `_bayes_evidence`, `_bayes_priors`
-- Replace prior resolution from param files (current lines 86-97,
-  1021-1216) with graph-edge reader
+**R1a — Receipt infrastructure** (§16.3-16.9):
+- Binding receipt built at the BE from FE expectations vs BE
+  reality
+- Pipeline stage counts, verdict derivation, gate vs log mode
+- Receipt contract tests (§16.11 uncontexted fixtures 1-8)
+
+**R1b — CLI tool** (§16.12):
+- `dagnet-cli bayes` command using FE service layer
+- Commissions runs via the real production codepath
+- Displays binding receipt
+
+**R1c — Engorged graph contract** (`compiler/evidence.py`):
+- BE refactoring: replace param file `values[]` parsing with
+  graph-edge reader (`_bayes_evidence`, `_bayes_priors`)
+- Replace prior resolution from param files with graph-edge reader
 - Keep completeness computation (same CDF logic)
 - Keep snapshot evidence binding (unchanged)
 - Update snapshot supplementation to read graph-edge observations
   for uncovered anchor_days (replacing param file fallback)
 
-**1b — FE engorging step** (`useBayesTrigger.ts` or new service):
+**R1d — FE engorging step** (`useBayesTrigger.ts` or new service):
 - For each per-slice graph, for each edge: filter param file
   `values[]` by slice, resolve priors (apply quality gates),
   inject onto edge as `_bayes_evidence` and `_bayes_priors`
 - Run topo pass per slice → per-slice model_vars on edges
 - Remove `parameter_files` and `parameters_index` from payload
-- Can develop in parallel with 1a
+- Can develop in parallel with R1c
 
-**Gate**: run existing aggregate model via engorged graph, verify
-identical posteriors to current param-file path. Parity test.
+**R1e — Certification:**
+- Use CLI tool to commission runs against all test graphs
+- Binding receipt shows zero divergences on every graph
+- Parity gate: engorged path produces identical posteriors to
+  current param-file path
+- LOO/ELPD assertions on synth data (§12.5c): ΔELPD ≥ 0,
+  Pareto k < 0.7
 
-### Stage 2 — Single-dimension hierarchical model
+**R1f — Harness bridge** (§16.12c):
+- One-time confirmation that harness produces the same binding
+  receipt as the CLI for each test graph
+- Once confirmed, harness is cleared for R2 work
 
-Core statistical work. Single MECE dimension (e.g.
-`context(channel)` with 3-4 values).
+**Gate: Risk 1 is retired.** Data binding is certified as rock
+solid. No R2 work begins until this gate passes.
 
-**2a — Synthetic data generator** (`compiler/tests/`):
+### R2 — Model work (Risk 2)
+
+Uses the harness for intensive parallel compute. Data binding is
+trusted.
+
+**R2a — Synthetic data generator** (`compiler/tests/`):
 - Generate known-parameter synthetic engorged graphs: parent
   `p_base`, per-slice deviations from known `τ_slice`, window +
   cohort observations per slice
 - Recovery tolerance: per-slice posterior HDI must contain the true
   value; parent HDI must contain the true aggregate
-- Generator is the test harness for all subsequent stages
+- Generator is the test harness for all subsequent steps
 
-**2b — Solo-edge slice pooling** (`compiler/model.py`):
+**R2b — Solo-edge slice pooling** (`compiler/model.py`):
 - `τ_slice` (HalfNormal), per-slice logit-offset deviations (§5.2)
 - Per-slice window/cohort likelihoods
 - Per-date routing: parent terms for uncontexted-regime dates,
   child terms for mece-regime dates (§5.7)
 - Parameter recovery test: recover known slice deviations
 
-**2c — Branch-group hierarchical Dirichlet** (`compiler/model.py`):
+**R2c — Branch-group hierarchical Dirichlet** (`compiler/model.py`):
 - `κ`, `base_weights`, per-slice `Dirichlet(κ * base_weights)` (§5.3)
 - Per-slice Multinomials and Potentials
 - Parameter recovery test: recover known per-slice weights
 
-**2d — Per-date routing validation**:
+**R2d — Per-date routing validation**:
 - Mixed-epoch synthetic data: some dates aggregate-only, some
   per-slice
 - Verify no double-counting: parent posterior width matches
   single-source expectations
 - Satisfies doc 30 RB-003 contract (regime tag drives likelihood)
 
-**2e — Posterior summarisation** (`compiler/inference.py`):
+**R2e — Posterior summarisation** (`compiler/inference.py`):
 - Per-slice α/β/HDI/ESS/rhat in `posterior.slices` output
 - Webhook payload extension
 
-**2f — Real data validation**:
+**R2f — Real data validation**:
 - Run on `conversion-flow-v2-recs-collapsed` test graph (channel
   dimension, 4 values, 10 edges, branch groups)
 - Per-slice posteriors should be consistent with aggregate
 - Compare against analytic baselines
+- Receipt: populate pipeline Stage 4 fields (slice routing),
+  activate slice mismatch verdicts (§16.11 contexted fixtures 9-14)
+- Per-slice recovery assertions (§12.5e)
 
 **Gate**: parameter recovery passes for solo edges and branch groups.
 Real test graph produces sensible per-slice posteriors.
 
-### Stage 3 — Multi-dimension and advanced cases
+### R2g — Multi-dimension and advanced cases
 
-Builds on Stage 2. Only needed when real graphs have multiple
+Builds on R2a-R2f. Only needed when real graphs have multiple
 context dimensions.
 
-**3a — Independent dimensions** (`compiler/model.py`):
+**R2g-i — Independent dimensions** (`compiler/model.py`):
 - Two separate Dirichlets sharing a parent (§5.6)
 - 1/N κ correction (§14.6d) — start with it, validate in recovery
 - Parameter recovery: parent posterior width with two dimensions
   matches single-dimension case
 
-**3b — Multi-level hierarchy for subsumption** (`compiler/model.py`):
+**R2g-ii — Multi-level hierarchy for subsumption** (`compiler/model.py`):
 - Cross-product + marginals (§5A.3 Rule 2)
 - Per-date suppression: most granular wins
 - Synthetic data with mixed epochs across granularities
 
-**3c — `conditional_p` support** (`compiler/model.py`):
+**R2g-iii — `conditional_p` support** (`compiler/model.py`):
 - Separate simplexes per condition (§6)
-- Independent of 3a/3b
+- Independent of R2g-i/R2g-ii
 
 **Gate**: multi-dimension parameter recovery. Mixed-epoch suppression
 verified.
 
 ### Parallelism
 
-- 1a (BE refactoring) and 1b (FE engorging) are independent
-- 2a (synth generator) can start immediately
-- 2b-2e depend on 1a but NOT on 1b (hand-crafted test graphs)
-- 3a-3c depend on 2 but are independent of each other
-- Critical path: 1a → 2a → 2b → 2c → 2d → 2e → 2f
+- R1a (receipt) and R1b (CLI) are independent
+- R1c (BE refactoring) and R1d (FE engorging) are independent
+- R1a-R1d can overlap; R1e (certification) requires all four
+- R2a (synth generator) can start immediately after R1 gate
+- R2b-R2e depend on R1c but NOT on R1d (hand-crafted test graphs)
+- R2g substeps are independent of each other
+- Critical path: R1a → R1c → R1e → R2a → R2b → R2c → R2d → R2e → R2f
 
 ---
 
 ## 12. Test data for Phase C
+
+### 12.1 Real test graph
 
 **Graph**: `conversion-flow-v2-recs-collapsed` — added to data repo
 `feature/bayes-test-graph` branch (20-Mar-26).
@@ -1351,9 +1391,354 @@ transitions) require synthetic multi-dimension data for parameter
 recovery tests (step 8). The real test graph covers the common
 single-dimension case only.
 
----
+### 12.2 Synthetic graph requirements for model testing
 
-## 13. Risks and mitigations
+Doc 17 (synthetic data generator) covers generation of snapshot DB
+rows and Phase 2 extends it to context slices. But snapshot rows are
+only the BE side. Model testing requires complete graph definitions
+with context definitions, pinnedDSLs, and the full FE artefact set
+so that:
+- The FE trigger path can compute candidate regimes and snapshot
+  subjects from the graph (testing the FE expectation computation)
+- The binding receipt (§16) can compare FE expectations against
+  BE reality on synthetic data with known-correct answers
+- Parameter recovery tests exercise the full pipeline, not just
+  the evidence binder in isolation
+
+Doc 17 §11 specifies the artefact set (graph JSON, node/event/param/
+context YAMLs, index files) and §11.2 covers core hash computation.
+But it does not specify **which graph topologies** are needed for
+contexted model testing or **what pinnedDSL shapes** each graph
+should have.
+
+**Required synthetic graphs:**
+
+Each graph below needs the full artefact set (doc 17 §11.1), a
+truth config (doc 17 §10.6), and generated snapshot rows. The graphs
+are small (2-5 edges) — just enough topology to exercise the
+specific scenario. They are not production-realistic; they isolate
+one concern each.
+
+**Graph S1 — Single MECE dimension, solo edge:**
+
+Simplest possible contexted graph. One edge, one context dimension
+with 3 values. Exercises basic slice pooling without branch group
+or join complexity.
+
+- Topology: 2 nodes, 1 edge
+- Context: `channel` with values `[google, direct, email]`
+- pinnedDSL: `(window(-90d:);cohort(-90d:)).context(channel)`
+- Truth config: different `p` per channel (e.g. 0.4, 0.25, 0.15),
+  same latency parameters
+- Recovery target: per-slice posterior HDI contains true `p`;
+  parent `p_base` HDI contains weighted aggregate
+- What it validates: §5.2 logit-offset deviations, §5.4
+  hierarchical shrinkage (email with low traffic should shrink
+  toward base rate)
+
+**Graph S2 — Single MECE dimension, branch group:**
+
+Adds the Dirichlet constraint (§5.3). Three sibling edges sharing
+a branch node, one context dimension.
+
+- Topology: 4 nodes, 3 edges from one branch node
+- Context: `channel` with values `[google, direct, email]`
+- pinnedDSL: `(window(-90d:);cohort(-90d:)).context(channel)`
+- Truth config: per-channel simplex weights differ from aggregate
+  (e.g. google traffic favours edge 1, email favours edge 3)
+- Recovery target: per-slice simplex weights + per-slice `p`
+- What it validates: §5.3 hierarchical Dirichlet, per-slice
+  simplex constraint, κ concentration parameter
+
+**Graph S3 — Two independent MECE dimensions:**
+
+The multi-dimension case. Two context dimensions that independently
+partition the same conversions.
+
+- Topology: 2 nodes, 1 edge
+- Contexts: `channel` [google, direct], `device` [mobile, desktop]
+- pinnedDSL: `(window(-90d:);cohort(-90d:)).context(channel);context(device)`
+- Truth config: `p` varies by channel AND by device, but the two
+  dimensions are independent (no interaction term)
+- Snapshot rows: stored under two different core_hashes (one per
+  MECE dimension — the signature includes context definition
+  hashes). Also include aggregate (uncontexted) rows under a third
+  hash
+- Recovery target: per-dimension slice posteriors; parent `p_base`
+  not double-counted (the 1/N κ correction from §14.6d)
+- What it validates: §5.6 independent dimensions, §5A.3
+  multi-regime handling, doc 30 regime selection across dimensions,
+  1/N κ correction, binding receipt §16 regimes_seen > 1
+
+**Graph S4 — Mixed-epoch regime transition:**
+
+The DSL changed at some point in the past: originally uncontexted,
+then context was added. Snapshot DB has rows under the old hash
+(uncontexted) for early dates and under the new hash (contexted)
+for later dates.
+
+- Topology: 2 nodes, 1 edge
+- Context: `channel` [google, direct] (added after 6 months of
+  uncontexted fetching)
+- pinnedDSL (current): `(window(-180d:);cohort(-180d:)).context(channel)`
+- Snapshot rows: first 90 days under old core_hash with
+  `slice_key = "window()"`, last 90 days under new core_hash with
+  `slice_key = "context(channel:google).window()"` etc.
+- FE candidate regimes include both hashes (epoch-aware enumeration
+  via `computePlausibleSignaturesForEdge`)
+- Truth config: same underlying `p` throughout, but observation
+  format changes at the epoch boundary
+- Recovery target: posterior uses all data correctly; no
+  double-counting at the boundary
+- What it validates: §5A.3 per-date routing (early dates →
+  parent-only likelihood, late dates → per-slice likelihood),
+  regime selection across epoch boundary, binding receipt §16
+  shows mixed regimes
+
+**Graph S5 — Cross-product with marginals:**
+
+The subsumption case from §5A.3 Rule 2. Cross-product context
+`context(channel).context(device)` produces fine-grained rows.
+Marginal rows (`context(channel)` only) also exist for some dates.
+
+- Topology: 2 nodes, 1 edge
+- Contexts: `channel` [google, direct], `device` [mobile, desktop]
+- pinnedDSL: `(window(-90d:);cohort(-90d:)).context(channel).context(device)`
+- Snapshot rows: cross-product rows for all dates, plus marginal
+  `context(channel)` rows for some dates (simulating a period
+  where the DSL was less specific)
+- Truth config: `p` varies by channel×device combination
+- Recovery target: marginal rows suppressed by Rule 2; model fits
+  on cross-product only; posteriors match truth
+- What it validates: Rule 2 suppression, binding receipt §16
+  rows_suppressed count, no double-counting from marginals
+
+**Graph S6 — Engorged graph parity (R1e gate):**
+
+Not a new topology — this is the existing `bayes-test-gm-rebuild`
+graph with its data, but fed through the engorged graph pathway
+(§9A) instead of the param file pathway. The parity gate for
+R1c/R1d.
+
+- Uses existing graph + existing snapshot rows
+- FE engorges the graph edges with observations and priors from
+  param files
+- BE reads from engorged edges instead of param files
+- Recovery target: posteriors identical to current param-file path
+  (field-by-field parity, not just "both converge")
+- What it validates: the engorged graph contract (§9A) produces
+  identical model inputs to the param file contract
+
+### 12.3 Relationship to doc 17 Phase 2
+
+Doc 17 §10 specifies the context-aware row generation algorithm.
+Doc 17 §12 Phase 2 specifies its delivery scope. The graphs above
+(S1-S5) are the **consumers** of doc 17 Phase 2's generator — they
+define the truth configs and graph topologies that the generator
+must support.
+
+The implementation order is:
+1. Build graph definitions (artefacts) for S1-S5 in the data repo
+   — these are just YAML/JSON files, no code
+2. Extend doc 17 generator to support context slices (doc 17 §10,
+   Phase 2)
+3. Generate snapshot rows for each graph using the extended
+   generator
+4. Run parameter recovery tests against each graph
+
+S6 (engorged parity) doesn't need the context generator — it uses
+existing uncontexted data.
+
+### 12.4 Relationship to §16.11 binding receipt fixtures
+
+The synthetic graphs in §12.2 are for **model testing** — the model
+runs, posteriors are checked against ground truth. The fixtures in
+§16.11 are for **receipt contract testing** — the model never runs,
+only the binding and receipt logic are exercised.
+
+They serve different purposes and have different data requirements:
+- §12.2 graphs need statistically valid data (counts that reflect
+  known conversion rates and latency parameters)
+- §16.11 fixtures need structurally valid data (correct field names
+  and formats) but statistically arbitrary counts
+
+Some §16.11 fixtures deliberately introduce mismatches (wrong hashes,
+missing slices) that would never appear in §12.2's correctly
+generated data. Conversely, §12.2's graphs exercise model behaviour
+(shrinkage, convergence, Dirichlet concentration) that §16.11 cannot
+test because the model never runs.
+
+Both are needed. Neither substitutes for the other.
+
+### 12.5 Regression pipeline changes for Phase C
+
+The current regression pipeline (`run_regression.py` → `param_recovery.py`
+→ `test_harness.py`) discovers synth graphs from truth files,
+bootstraps snapshot data, runs MCMC, and asserts parameter recovery
+via z-scores, rhat, and ESS. It needs to evolve in three ways for
+Phase C.
+
+#### 12.5a Current state and gaps
+
+**What exists:**
+- `synth_gen.py` has `context_dimensions` support in the row
+  generator (person-level context assignment, per-slice snapshot
+  rows with correct `slice_key` values, `dataInterestsDSL`/
+  `pinnedDSL` generation). Coded, tested, never exercised — **no
+  truth file uses `context_dimensions` yet**.
+- `graph_from_truth.py` generates graph JSON and param/event/node
+  YAMLs from truth files. **Does not generate `contexts/*.yaml`
+  artefacts** — context dimensions are in the truth config but
+  the data repo artefact (needed for FE `explodeDSL` and hash
+  computation) is not produced.
+- `run_regression.py` asserts z-scores, rhat, ESS, convergence
+  percentage. **Does not assert LOO/ELPD** — the worker computes
+  LOO scores and emits `delta_elpd` and `pareto_k_max` per edge
+  to posteriors (doc 32, implemented 8-Apr-26), but
+  `param_recovery.py` and `run_regression.py` do not read or
+  check these fields.
+- **No binding receipt assertions** — the receipt (§16) does not
+  exist yet, and the regression pipeline has no hook for checking
+  it.
+
+#### 12.5b Context artefact generation
+
+`graph_from_truth.py` must be extended to produce `contexts/*.yaml`
+for each `context_dimensions` entry in the truth file. The YAML
+format follows doc 17 §10.5:
+
+```yaml
+id: channel
+name: Channel
+type: categorical
+values:
+  - id: google
+    label: Google
+  - id: direct
+    label: Direct
+metadata:
+  status: active
+```
+
+The values list comes directly from the truth config's
+`context_dimensions[].values[]`. The context file must exist in
+the data repo for the FE's `explodeDSL()` to expand bare
+`context(channel)` into per-value slices, and for
+`normalizeContextDefinition()` to compute the context definition
+hash that enters the signature.
+
+Without this artefact, FE-side hash computation cannot work, which
+means `candidateRegimesByEdge` and `snapshotSubjects` cannot be
+built, which means the binding receipt (§16) has nothing to compare
+against.
+
+#### 12.5c LOO/ELPD as a regression assertion
+
+On synthetic data with known ground-truth parameters, the model
+should fit well — LOO/ELPD should reflect this. Specifically:
+
+**ΔELPD ≥ 0 per edge**: on synthetic data generated from the
+model's own generative process, the Bayesian model should not be
+worse than the analytic null. A negative ΔELPD on synthetic data
+means either: (a) evidence binding is wrong (wrong data entered
+the model), (b) the model is misspecified relative to its own
+generative process (a code bug), or (c) LOO computation is broken.
+All three are worth catching.
+
+**Pareto k < 0.7 per edge**: high Pareto k on synthetic data means
+an observation has outsized influence, which shouldn't happen when
+the data matches the model. Values above 0.7 on synth data indicate
+a binding or model geometry problem.
+
+**What to add to `run_regression.py`:**
+
+New assertion tier (alongside existing z-score/rhat/ESS checks):
+
+```
+# LOO assertions (synth-data-specific)
+delta_elpd_min: 0.0        # per-edge ΔELPD must be ≥ 0
+pareto_k_max: 0.7          # per-edge max Pareto k must be < 0.7
+```
+
+These are soft assertions initially (warn, not fail) because LOO
+is new and thresholds need calibration against the existing synth
+graphs before being promoted to hard gates.
+
+**Implementation**: `param_recovery.py` already parses the harness
+log output. The worker emits `delta_elpd` and `pareto_k_max` to
+the posterior summary. The test harness log needs to include these
+in its structured output (currently it doesn't — add a LOO summary
+line per edge alongside the existing z-score/Δ lines).
+
+#### 12.5d Binding receipt as a regression assertion
+
+When the binding receipt (§16) is implemented, the regression
+pipeline should check it as a pre-fit gate:
+
+- **All edges pass**: no verdict = fail in the receipt
+- **Receipt logged**: the receipt appears in the harness log for
+  post-hoc inspection
+- **Known divergences flagged**: on synthetic data, the receipt
+  should show zero divergences (the truth file generated the data,
+  so expectations and reality should match perfectly). Any
+  divergence on synth data is a generator or binding bug.
+
+This is a stronger assertion than on real data, where partial
+coverage and hash transitions are expected. On synth data, the
+generator controls both sides — any mismatch is a bug.
+
+#### 12.5e Per-slice recovery assertions (Phase C specific)
+
+The existing z-score assertions are per-edge (one `p` per edge).
+Phase C adds per-slice posteriors. The regression pipeline needs:
+
+- **Per-slice z-scores**: for each `(edge, context_value)` pair,
+  the posterior slice's HDI must contain the true per-slice `p`
+  from the truth config's `edge_overrides`
+- **Parent recovery**: `p_base` posterior HDI must contain the
+  true aggregate `p` (weighted by context traffic shares from
+  truth config)
+- **Shrinkage validation**: low-traffic slices should shrink toward
+  the base rate. Not a hard assertion — visual inspection via a
+  shrinkage diagnostic plot (truth vs posterior mean vs base rate,
+  with traffic volume on x-axis)
+- **Simplex recovery** (branch groups): per-slice simplex weights
+  HDI must contain truth; `κ` concentration parameter should be
+  in a sensible range
+
+`param_recovery.py` currently parses per-edge results. It needs
+to parse per-slice results from the harness log. The harness log
+format needs to extend: currently emits one line per edge per
+parameter (`mu`, `sigma`, `onset`, `p`); needs to emit one line
+per slice per edge for `p_slice` and `weight_slice`.
+
+Truth file format needs a new `testing.per_slice_thresholds`
+section:
+
+```yaml
+testing:
+  thresholds:
+    p_z: 2.5
+    mu_z: 2.5
+  per_slice_thresholds:
+    p_slice_z: 3.0       # looser — smaller n per slice
+    weight_z: 3.0         # simplex weight recovery
+```
+
+#### 12.5f Implementation order
+
+1. **R1 (data binding assurance)**: write first contexted truth
+   file for graph S1 (§12.2). Extend `graph_from_truth.py` for
+   context YAML generation. Verify `synth_gen.py` context support
+   works end-to-end with real artefacts. Add receipt assertions
+   to regression pipeline (zero divergences on synth data). Add
+   ΔELPD and Pareto k assertions as soft gates, calibrate
+   thresholds, then promote to hard gates. All of this works with
+   the existing aggregate model — no Phase C model changes needed.
+
+2. **R2 (model work)**: add per-slice recovery assertions. Write
+   truth files for S2-S5 (§12.2). Run full regression with
+   per-slice z-scores.
 
 | Risk | Impact | Mitigation |
 |---|---|---|
@@ -1361,10 +1746,10 @@ single-dimension case only.
 | MECE misclassification | Double-counting | All `context()` dimensions are MECE by construction; `case()` is MECE by definition |
 | DSL canonicalisation mismatch (Python vs TS) | `posterior.slices` keys don't match FE lookup | Python port of `normalizeConstraintString()` ordering; integration test with round-trip |
 | Multi-regime double-counting | Evidence inflated by rows from multiple hash families | `select_regime_rows()` (doc 30) + per-date suppression (§5A.3 Rule 2) |
-| Per-date likelihood routing error | Same observations feed both parent and child terms | Per-date routing (§5.7). Mixed-epoch parameter recovery test (§11 Stage 2d) |
+| Per-date likelihood routing error | Same observations feed both parent and child terms | Per-date routing (§5.7). Mixed-epoch parameter recovery test (§11 R2d) |
 | No MECE partition exists for any date | Parent `p_base` unconstrained | Compiler validation: reject edge with diagnostic (§5A.3 Rule 2) |
 | FE sends wrong candidate regime order | Wrong data selected | Inherent contract risk (doc 30 §7.3.11). FE tests + end-to-end tests |
-| 1/N κ correction approximate | Parent overconfident with multiple independent dimensions | Start with 1/N, validate in parameter recovery (§11 Stage 3a) |
+| 1/N κ correction approximate | Parent overconfident with multiple independent dimensions | Start with 1/N, validate in parameter recovery (§11 R2g-i) |
 
 ---
 
@@ -1668,20 +2053,75 @@ without structural changes — only the Stage 4 fields get populated.
 
 ### 16.10 Implementation staging
 
-**Phase 0** (pre-Phase C, current work):
-- Add suppression counts to `EdgeEvidence` (or
-  `_bind_from_snapshot_rows` return)
-- Preserve `RegimeSelection` per edge in the worker (don't discard
-  `regime_per_date`)
-- Build `BindingReceipt` from FE subjects + regime selection +
-  `BoundEvidence`
-- Log receipt at info level; log divergences at warning level
-- Gate mode available via `binding_receipt: "gate"` setting
+The binding receipt is part of the R1 (data binding assurance)
+phase defined in §11. See §11 for the authoritative programme.
 
-**Phase 1** (with Phase C):
-- Populate Stage 4 fields (slice routing counts, orphan rows)
-- Activate slice mismatch verdict rules
-- Validate receipt against real contexted data from data repo
+The receipt-specific work maps to R1 steps as follows:
+
+- **R1a** — receipt infrastructure (this section: §16.3-16.9)
+- **R1b** — CLI tool to commission runs via FE codepath (§16.12)
+- **R1e** — certification using receipt + CLI against all test
+  graphs; receipt must show zero divergences
+- **R1f** — harness bridge: one-time receipt parity check
+
+During R2 (model work), the receipt picks up contexted data:
+
+- **R2f** — populate pipeline Stage 4 fields (slice routing),
+  activate slice mismatch verdicts (§16.11 contexted fixtures 9-14)
+
+### 16.12 CLI tool for Bayes commissioning
+
+#### 16.12a Purpose and phasing
+
+A new `dagnet-cli bayes` command, following the existing `analyse`
+command pattern: Node process, FE service layer, same codepath the
+browser uses.
+
+This tool is used during the **data binding assurance phase** to
+achieve zero defects in evidence binding before any model work
+begins. It commissions Bayes runs via the real FE pipeline so that
+the binding receipt (§16.3-16.5) reflects the actual production
+data pathway.
+
+Once data binding is certified (R1 gate passes), R2 model work
+begins. Model work requires intensive parallel compute iterations
+— that's what the existing harness (`test_harness.py` +
+`run_regression.py`) is good at. The harness is retained unchanged
+for that purpose.
+
+#### 16.12b Implementation
+
+Follows the `cli/commands/analyse.ts` pattern exactly:
+
+1. `cli/bootstrap.ts` loads graph from disk, seeds fileRegistry
+   with events, contexts, parameters, workspace
+2. Command calls the same service functions as
+   `useBayesTrigger.ts`: `explodeDSL`, `buildFetchPlanProduction`,
+   `mapFetchPlanToSnapshotSubjects`, `buildCandidateRegimesByEdge`,
+   `computeMeceDimensions`
+3. Assembles the payload and POSTs to the local Python server
+4. Displays the binding receipt and fit result
+
+Low complexity — the services are pure functions, the CLI
+infrastructure already exists, and the `analyse` command proves
+the pattern works.
+
+#### 16.12c Harness contract verification
+
+The existing harness has its own payload construction path
+(`compute_snapshot_subjects.mjs`). This is fine for model work —
+it's optimised for parallel execution. But before using the harness
+for R2 model work, a one-time dev step confirms it honours the same
+data binding contract:
+
+1. Run CLI tool against a graph → get binding receipt A
+2. Run harness against the same graph → get binding receipt B
+3. Confirm receipts match (same hashes, same rows bound, same
+   regime selection, same observation counts)
+
+This is a do-it-once step per graph, not an ongoing gate. Once
+confirmed, the harness is cleared for intensive model iteration on
+that graph.
 
 ### 16.11 Test fixtures: synthetic graphs for receipt validation
 
@@ -1717,7 +2157,7 @@ The snapshot rows need valid `core_hash`, `slice_key`, `anchor_day`,
 for receipt testing (they matter for model testing, which is doc 17's
 job).
 
-**Required fixture set (Phase 0 — uncontexted):**
+**Required fixture set (R1 — uncontexted):**
 
 1. **Happy path**: FE expects 1 hash, DB has rows under that hash.
    Receipt: pass, zero divergences. Baseline sanity check.
@@ -1755,7 +2195,7 @@ job).
    edge appears in `edges_no_subjects`, no divergence (this is
    expected behaviour).
 
-**Required fixture set (Phase 1 — contexted, with Phase C):**
+**Required fixture set (R2 — contexted, with Phase C model):**
 
 9. **Single MECE dimension — happy path**: FE expects slices
    `[context(channel:google), context(channel:meta)]`. DB has rows
