@@ -202,6 +202,8 @@ def bind_snapshot_evidence(
     settings: dict | None = None,
     today: str | None = None,
     graph_snapshot: dict | None = None,
+    commissioned_slices: dict[str, set[str]] | None = None,
+    mece_dimensions: list[str] | None = None,
 ) -> BoundEvidence:
     """Bind evidence from snapshot DB rows, falling back to parameter files.
 
@@ -220,6 +222,12 @@ def bind_snapshot_evidence(
     priors and file-based evidence are read from ``_bayes_priors`` and
     ``_bayes_evidence`` on graph edges instead of from param_files.
     Snapshot row handling is completely unchanged.
+
+    commissioned_slices: optional dict of edge_id → set of normalised
+    context keys (e.g. {"context(channel:google)", ...}). When provided,
+    _route_slices only creates SliceGroups for these commissioned keys,
+    ignoring any other context data in the DB rows. This is the FE
+    commissioning contract (R2-prereq-i, doc 14 §R2-prereq-i).
     """
     diagnostics: list[str] = []
     settings = settings or {}
@@ -247,6 +255,7 @@ def bind_snapshot_evidence(
 
         pf_data = _resolve_param_file(param_id, param_files)
         ge = engorged_edges.get(edge_id)
+        edge_commissioned = commissioned_slices.get(edge_id) if commissioned_slices else None
 
         file_path = param_id_to_path.get(param_id, "")
         if not file_path:
@@ -331,6 +340,8 @@ def bind_snapshot_evidence(
             snapshot_covered_days = _bind_from_snapshot_rows(
                 ev, et, rows, today_date, diagnostics,
                 settings=settings,
+                commissioned=edge_commissioned,
+                mece_dimensions=mece_dimensions,
             )
             _w_trajs = sum(len(c.trajectories) for c in ev.cohort_obs if "window" in c.slice_dsl)
             _w_daily = sum(len(c.daily) for c in ev.cohort_obs if "window" in c.slice_dsl)
@@ -372,7 +383,7 @@ def bind_snapshot_evidence(
             diagnostics.append(f"SKIP edge {edge_id[:8]}…: no snapshot data and no param file")
 
         # --- Phase C: route sliced observations to SliceGroups ---
-        _route_slices(ev, settings, diagnostics)
+        _route_slices(ev, settings, diagnostics, commissioned=edge_commissioned)
 
         # --- Minimum-n gate ---
         min_n = settings.get("min_n_threshold", MIN_N_THRESHOLD)
@@ -438,6 +449,8 @@ def _bind_from_snapshot_rows(
     today: datetime,
     diagnostics: list[str],
     settings: dict | None = None,
+    commissioned: set[str] | None = None,
+    mece_dimensions: list[str] | None = None,
 ) -> set[str]:
     """Convert snapshot DB rows to Cohort-first trajectory objects.
 
@@ -466,18 +479,20 @@ def _bind_from_snapshot_rows(
     window_by_day: dict[str, list[dict]] = defaultdict(list)
     cohort_by_day: dict[str, list[dict]] = defaultdict(list)
 
-    # Aggregate context-prefixed rows into bare window()/cohort().
-    # Context slices are MECE — summing their x and y values for the
-    # same (anchor_day, retrieved_at) recovers the aggregate row.
+    # Aggregate MECE context-prefixed rows into bare window()/cohort().
+    # Only dimensions declared MECE by the FE (via mece_dimensions) may
+    # be summed — summing non-MECE (overlapping) slices would double-count.
     # If a bare aggregate row already exists, it takes precedence
     # (context rows for that retrieval are dropped). See doc 25.
     #
     # Phase C addition: also collect per-context rows separately for
     # slice routing. The aggregate feeds p_base; per-context feeds
     # per-slice likelihoods via _route_slices → SliceGroups.
+    mece_set = set(mece_dimensions) if mece_dimensions else set()
     agg_window: dict[str, dict[str, dict]] = defaultdict(dict)  # anchor → ret → row
     agg_cohort: dict[str, dict[str, dict]] = defaultdict(dict)
     n_ctx_aggregated = 0
+    n_ctx_non_mece_skipped = 0
 
     # Phase C: per-context rows for slice routing (context_key → anchor → [rows])
     ctx_window_rows: dict[str, dict[str, list[dict]]] = defaultdict(lambda: defaultdict(list))
@@ -496,14 +511,27 @@ def _bind_from_snapshot_rows(
         else:
             continue
 
-        # Phase C: collect per-context rows before aggregation
-        if is_ctx:
+        # Check if this context row's dimension is declared MECE
+        is_mece_ctx = False
+        if is_ctx and mece_set:
             ctx_part = context_key(slice_key)
             if ctx_part:
+                dim = dimension_key(ctx_part)
+                is_mece_ctx = dim in mece_set
+
+        # Phase C: collect per-context rows for commissioned slices
+        if is_ctx:
+            ctx_part = context_key(slice_key)
+            if ctx_part and (commissioned is None or ctx_part in commissioned):
                 if _is_cohort(slice_key):
                     ctx_cohort_rows[ctx_part][anchor_day].append(dict(row))
                 else:
                     ctx_window_rows[ctx_part][anchor_day].append(dict(row))
+
+        # Non-MECE context rows cannot be aggregated — skip them
+        if is_ctx and not is_mece_ctx:
+            n_ctx_non_mece_skipped += 1
+            continue
 
         day_bucket = bucket[anchor_day]
         if ret_key in day_bucket:
@@ -513,7 +541,7 @@ def _bind_from_snapshot_rows(
                 n_ctx_aggregated += 1
                 continue
             if is_ctx:
-                # Sum into existing context-aggregated row
+                # MECE: sum into existing context-aggregated row
                 existing["x"] = (existing.get("x") or 0) + (row.get("x") or 0)
                 existing["y"] = (existing.get("y") or 0) + (row.get("y") or 0)
                 if row.get("a") is not None and existing.get("a") is not None:
@@ -545,6 +573,11 @@ def _bind_from_snapshot_rows(
         diagnostics.append(
             f"INFO edge {ev.edge_id[:8]}…: aggregated {n_ctx_aggregated} "
             f"context-prefixed rows into bare window()/cohort()"
+        )
+    if n_ctx_non_mece_skipped > 0:
+        diagnostics.append(
+            f"WARN edge {ev.edge_id[:8]}…: skipped {n_ctx_non_mece_skipped} "
+            f"context rows from non-MECE dimensions (cannot aggregate)"
         )
 
     # Step 2: Build trajectories for each obs_type.
@@ -1433,6 +1466,7 @@ def _route_slices(
     ev: EdgeEvidence,
     settings: dict,
     diagnostics: list[str],
+    commissioned: set[str] | None = None,
 ) -> None:
     """Route sliced observations from aggregate lists into SliceGroups.
 
@@ -1445,44 +1479,58 @@ def _route_slices(
     5. Detects exhaustiveness for MECE dimensions
     6. Computes residuals for partial MECE dimensions
 
-    Modifies ev in place. No-op if no sliced observations exist.
+    commissioned: the set of context keys the FE commissioned via
+    pinnedDSL. Only these are modelled as slices. If None (no FE
+    subjects), no slices are created — context modelling requires
+    explicit commission.
+
+    Modifies ev in place. No-op if no commissioned slices.
     """
+    if not commissioned:
+        return  # no slices commissioned — context modelling requires explicit FE commission
+
     min_n_slice = settings.get("min_n_slice", MIN_N_THRESHOLD)
 
-    # Collect all sliceDSL strings to discover dimensions
-    all_dsls: list[str] = []
-    for w in ev.window_obs:
-        all_dsls.append(w.slice_dsl)
-    for c in ev.cohort_obs:
-        all_dsls.append(c.slice_dsl)
-
-    # Build dimension → [context_key, ...] mapping
-    from .slices import extract_dimensions
-    dim_map = extract_dimensions(all_dsls)
-    if not dim_map:
-        return  # no sliced observations
-
-    # Partition window_obs and cohort_obs into aggregate vs sliced
+    # Partition window_obs and cohort_obs into aggregate vs sliced.
+    # Only commissioned context keys become slices.
     agg_window: list[WindowObservation] = []
-    sliced_window: dict[str, list[WindowObservation]] = {}  # context_key → [obs]
+    sliced_window: dict[str, list[WindowObservation]] = {}
+    n_uncommissioned = 0
     for w in ev.window_obs:
         ctx = context_key(w.slice_dsl)
-        if ctx:
+        if ctx and ctx in commissioned:
             sliced_window.setdefault(ctx, []).append(w)
         else:
+            if ctx:
+                n_uncommissioned += 1
             agg_window.append(w)
 
     agg_cohort: list[CohortObservation] = []
     sliced_cohort: dict[str, list[CohortObservation]] = {}
     for c in ev.cohort_obs:
         ctx = context_key(c.slice_dsl)
-        if ctx:
+        if ctx and ctx in commissioned:
             sliced_cohort.setdefault(ctx, []).append(c)
         else:
+            if ctx:
+                n_uncommissioned += 1
             agg_cohort.append(c)
 
+    if n_uncommissioned > 0:
+        diagnostics.append(
+            f"  slices: {ev.edge_id[:8]}… {n_uncommissioned} uncommissioned "
+            f"context observations folded into aggregate"
+        )
+
     if not sliced_window and not sliced_cohort:
-        return  # all observations are aggregate
+        return  # commissioned slices had no matching data
+
+    # Build dimension → [context_key, ...] mapping from commissioned keys
+    from .slices import extract_dimensions
+    all_dsls: list[str] = list(sliced_window.keys()) + list(sliced_cohort.keys())
+    dim_map = extract_dimensions(all_dsls)
+    if not dim_map:
+        return
 
     # Replace aggregate lists with only the true aggregates
     ev.window_obs = agg_window
@@ -1514,7 +1562,18 @@ def _route_slices(
                     t.n for t in c.trajectories
                 )
                 s_obs.total_n += n_from_cohort
-                s_obs.has_cohort = True
+                # CohortObservation may contain window-type trajectories
+                # (from Step 3b: per-context rows stored as CohortObservation
+                # with slice_dsl=window(snapshot).context(...))
+                if any(t.obs_type == "window" for t in c.trajectories):
+                    s_obs.has_window = True
+                if any(t.obs_type == "cohort" for t in c.trajectories):
+                    s_obs.has_cohort = True
+                if c.daily:
+                    if "window" in c.slice_dsl:
+                        s_obs.has_window = True
+                    else:
+                        s_obs.has_cohort = True
 
             # Per-slice min-n gate
             if s_obs.total_n < min_n_slice:

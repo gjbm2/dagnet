@@ -137,28 +137,40 @@ export async function computeMeceDimensions(
   graph: Graph,
   workspace?: { repository: string; branch: string },
 ): Promise<string[]> {
-  const pinnedDsl = graph.dataInterestsDSL;
-  if (!pinnedDsl || typeof pinnedDsl !== 'string' || !pinnedDsl.trim()) {
-    return [];
-  }
-
-  const { parseConstraints } = await import('../lib/queryDSL');
-  const { extractContextKeysFromConstraints } = await import('./dataOperations/querySignature');
-  const { explodeDSL } = await import('../lib/dslExplosion');
   const { contextRegistry } = await import('./contextRegistry');
 
-  // Collect all context keys mentioned in the pinned DSL
-  const slices = await explodeDSL(pinnedDsl);
+  // Collect context keys from two sources:
+  // 1. The pinned DSL (if it mentions contexts)
+  // 2. All known context definitions in the registry
+  // MECE is a property of the data, not the query — a dimension is MECE
+  // regardless of whether the current DSL commissions context slices.
   const allKeys = new Set<string>();
-  for (const slice of slices) {
+
+  // Source 1: DSL-mentioned contexts
+  const pinnedDsl = graph.dataInterestsDSL;
+  if (pinnedDsl && typeof pinnedDsl === 'string' && pinnedDsl.trim()) {
     try {
-      const parsed = parseConstraints(slice);
-      for (const key of extractContextKeysFromConstraints(parsed)) {
-        allKeys.add(key);
+      const { parseConstraints } = await import('../lib/queryDSL');
+      const { extractContextKeysFromConstraints } = await import('./dataOperations/querySignature');
+      const { explodeDSL } = await import('../lib/dslExplosion');
+      const slices = await explodeDSL(pinnedDsl);
+      for (const slice of slices) {
+        try {
+          const parsed = parseConstraints(slice);
+          for (const key of extractContextKeysFromConstraints(parsed)) {
+            allKeys.add(key);
+          }
+        } catch { /* ignore */ }
       }
-    } catch {
-      // ignore
-    }
+    } catch { /* ignore */ }
+  }
+
+  // Source 2: All context definitions in the registry cache.
+  // In CLI mode these are pre-loaded from disk; in browser mode they
+  // accumulate as contexts are fetched. This ensures MECE dimensions
+  // are reported even when the DSL doesn't mention contexts.
+  for (const key of contextRegistry.getCachedIds(workspace ? { workspace } : undefined)) {
+    allKeys.add(key);
   }
 
   if (allKeys.size === 0) return [];

@@ -678,9 +678,10 @@ def _handle_cohort_maturity_v2(data: Dict[str, Any]) -> Dict[str, Any]:
     import math
     from datetime import date, datetime, timedelta
     from runner.cohort_maturity_derivation import derive_cohort_maturity
-    from runner.cohort_forecast import compute_cohort_maturity_rows, XProvider, build_x_provider_from_graph
+    from runner.cohort_forecast import XProvider, build_x_provider_from_graph
+    from runner.cohort_forecast_v2 import compute_cohort_maturity_rows_v2, build_span_params
     from runner.span_evidence import compose_path_maturity_frames
-    from runner.span_kernel import compose_span_kernel
+    from runner.span_kernel import compose_span_kernel, _build_span_topology, mc_span_cdfs
     from runner.span_adapter import span_kernel_to_edge_params
     from snapshot_service import query_snapshots_for_sweep
 
@@ -854,15 +855,32 @@ def _handle_cohort_maturity_v2(data: Dict[str, Any]) -> Dict[str, Any]:
             edge_params = _read_edge_model_params(graph_data, last_edge_id) or {}
 
         # ── Annotate composed frames (projected_y, completeness) ────
-        # Same annotation as v1: blends model prediction with evidence
-        # to produce projected_y on each data point.  Without this,
-        # the row builder can't distinguish projected vs observed.
-        if composed_frames and edge_params:
+        # Same mu/sigma/onset resolution as v1's _resolve_completeness_params:
+        # cohort mode prefers path-level params; window mode uses edge-level.
+        _can_annotate = (
+            composed_frames and edge_params
+            and 'mu' in edge_params and 'sigma' in edge_params
+            and 'onset_delta_days' in edge_params
+        )
+        if _can_annotate:
             from runner.forecast_application import annotate_rows
-            _ann_mu = edge_params.get('path_mu', edge_params.get('mu', 0))
-            _ann_sigma = edge_params.get('path_sigma', edge_params.get('sigma', 0))
-            _ann_onset = edge_params.get('path_onset_delta_days', edge_params.get('onset_delta_days', 0))
-            _ann_fm = edge_params.get('forecast_mean', edge_params.get('posterior_p', 0))
+            if is_window:
+                _ann_mu = edge_params['mu']
+                _ann_sigma = edge_params['sigma']
+                _ann_onset = edge_params['onset_delta_days']
+            else:
+                _p_mu = edge_params.get('path_mu')
+                _p_sigma = edge_params.get('path_sigma')
+                if _p_mu is not None and _p_sigma is not None:
+                    _ann_mu = _p_mu
+                    _ann_sigma = _p_sigma
+                    _ann_onset = edge_params.get('path_onset_delta_days',
+                                                  edge_params['onset_delta_days'])
+                else:
+                    _ann_mu = edge_params['mu']
+                    _ann_sigma = edge_params['sigma']
+                    _ann_onset = edge_params['onset_delta_days']
+            _ann_fm = edge_params.get('forecast_mean', 0) or 0
             for frame in composed_frames:
                 sd = frame.get('snapshot_date', '') or frame.get('as_at_date', '')
                 if frame.get('data_points'):
@@ -879,7 +897,30 @@ def _handle_cohort_maturity_v2(data: Dict[str, Any]) -> Dict[str, Any]:
         if composed_frames and last_edge_id and edge_params:
             anchor_from_str = subjects[0].get('anchor_from', '')
             anchor_to_str = subjects[0].get('anchor_to', '')
-            sweep_to_final = subjects[0].get('sweep_to', '')
+            sweep_to_final = subjects[0].get('sweep_to') or subjects[0].get('anchor_to', '')
+
+            # ── Compute axis_tau_max (same logic as v1 handler) ──────
+            # Candidates: sweep_span, edge-level t95, path-level t95,
+            # user tau_extent display setting.
+            _sweep_span = None
+            try:
+                if anchor_from_str and sweep_to_final:
+                    _af_d = date.fromisoformat(str(anchor_from_str)[:10])
+                    _st_d = date.fromisoformat(str(sweep_to_final)[:10])
+                    _sweep_span = (_st_d - _af_d).days
+            except (ValueError, TypeError):
+                pass
+            _edge_t95 = edge_params.get('t95')
+            _path_t95 = edge_params.get('path_t95')
+            _tau_extent_setting = None
+            if tau_extent_raw and str(tau_extent_raw) not in ('auto', 'Auto'):
+                try:
+                    _tau_extent_setting = float(tau_extent_raw)
+                except (ValueError, TypeError):
+                    pass
+            _axis_candidates = [c for c in [_sweep_span, _edge_t95, _path_t95, _tau_extent_setting] if c and c > 0]
+            axis_tau_max = int(math.ceil(max(_axis_candidates))) if _axis_candidates else None
+            print(f"[v2] axis_tau_max={axis_tau_max} candidates={_axis_candidates}")
 
             # Sampling mode from display settings
             sampling_mode = display_settings.get('continuous_forecast', 'binomial')
@@ -956,10 +997,12 @@ def _handle_cohort_maturity_v2(data: Dict[str, Any]) -> Dict[str, Any]:
                     if _missing_eids:
                         print(f"[v2] upstream: fetching {len(_missing_eids)} upstream edges")
                         candidate_regimes = scenario.get('candidate_regimes_by_edge', {})
+                        _fetch_ok = True
                         for _eid in _missing_eids:
                             _regimes = candidate_regimes.get(_eid, [])
                             if not _regimes:
                                 print(f"[v2] upstream: no regime for {_eid[:20]}")
+                                _fetch_ok = False
                                 break
                             _regime = _regimes[0]
                             if isinstance(_regime, str):
@@ -968,6 +1011,7 @@ def _handle_cohort_maturity_v2(data: Dict[str, Any]) -> Dict[str, Any]:
                             else:
                                 _core_hash = _regime.get('core_hash', '')
                             if not _core_hash:
+                                _fetch_ok = False
                                 break
                             _up_edge = None
                             for e in graph_data.get('edges', []):
@@ -975,20 +1019,37 @@ def _handle_cohort_maturity_v2(data: Dict[str, Any]) -> Dict[str, Any]:
                                     _up_edge = e
                                     break
                             if not _up_edge:
+                                _fetch_ok = False
                                 break
                             _p_id = _up_edge.get('p', {}).get('id', '') or _eid
                             _af = subjects[0].get('anchor_from', '')
                             _at = subjects[0].get('anchor_to', '')
                             _sf = subjects[0].get('sweep_from', _af)
                             _st = subjects[0].get('sweep_to', _at)
+                            # Widen anchor_from for upstream fetch so
+                            # Tier 2 can discover older donor cohorts
+                            # outside the plotted window (doc 29d
+                            # §donor-fetch contract).  Lookback is
+                            # data-driven: 2× axis_tau_max (reflects
+                            # t95 / sweep extent), floored at 60 days.
+                            try:
+                                _af_d = date.fromisoformat(_af)
+                                from datetime import timedelta
+                                _lookback_days = max(
+                                    (axis_tau_max or 0) * 2,
+                                    60,
+                                )
+                                _af_widened = (_af_d - timedelta(days=_lookback_days)).isoformat()
+                            except (ValueError, TypeError):
+                                _af_widened = _af
                             try:
                                 _up_rows = query_snapshots_for_sweep(
                                     param_id=_p_id,
                                     core_hash=_core_hash,
                                     slice_keys=[''],
-                                    anchor_from=date.fromisoformat(_af),
+                                    anchor_from=date.fromisoformat(_af_widened),
                                     anchor_to=date.fromisoformat(_at),
-                                    sweep_from=date.fromisoformat(_sf) if _sf else None,
+                                    sweep_from=date.fromisoformat(_af_widened) if _af_widened else None,
                                     sweep_to=date.fromisoformat(_st) if _st else None,
                                     equivalent_hashes=[
                                         h if isinstance(h, dict) else {'core_hash': h}
@@ -1004,7 +1065,12 @@ def _handle_cohort_maturity_v2(data: Dict[str, Any]) -> Dict[str, Any]:
                                 import traceback as _tb
                                 print(f"[v2] upstream: query failed for {_eid[:20]}: {_e}")
                                 _tb.print_exc()
+                                _fetch_ok = False
                                 break
+                        # Discard partial results on incomplete fetch
+                        if not _fetch_ok:
+                            print(f"[v2] upstream: incomplete fetch, discarding partial evidence")
+                            _up_edge_frames = {}
 
                 # Extract observations (sum y across edges entering x)
                 if _up_edge_frames:
@@ -1027,40 +1093,97 @@ def _handle_cohort_maturity_v2(data: Dict[str, Any]) -> Dict[str, Any]:
                 upstream_obs=_upstream_obs,
             )
 
-            # Build a CDF callable from the span kernel.
-            # Single-hop is just a degenerate multi-hop — same machinery.
-            _span_cdf_fn = None
-            if kernel is not None and kernel.span_p > 0:
-                # Build topology for MC reconvolution
-                from runner.span_kernel import _build_span_topology
-                _span_topo = _build_span_topology(graph_data, query_from_node, query_to_node)
-
-                def _span_cdf_fn_impl(tau: float) -> float:
-                    raw = kernel.cdf_at(int(round(tau)))
-                    return raw / kernel.span_p
-
-                # Attach topology and graph so the MC loop can reconvolve
-                _span_cdf_fn_impl._span_topo = _span_topo
-                _span_cdf_fn_impl._span_graph = graph_data
-                _span_cdf_fn = _span_cdf_fn_impl
+            # ── Planner: choose factorised vs collapsed shortcut ─────
+            # Doc 29c §Row-builder representation consistency:
+            # - Collapsed shortcut: when a compatible cohort(a, x-y)
+            #   exists (edge has path-level params), use v1 row builder
+            #   with collapsed representation — exact single-edge parity.
+            # - Factorised: multi-hop, or single-edge without path-level
+            #   params.  Uses v2 row builder with X_x + C_{x→y}.
+            #
+            # Shortcut admissibility: single-edge, not window mode, and
+            # the edge has path-level latency params.
+            _has_path_params = (
+                edge_params.get('path_mu') is not None
+                and edge_params.get('path_sigma') is not None
+                and edge_params.get('path_sigma', 0) > 0
+            )
+            _use_collapsed = not is_multi_hop and _has_path_params and not is_window
+            if _use_collapsed:
+                print(f"[v2] planner: collapsed shortcut (single-edge, path params available)")
+            else:
+                print(f"[v2] planner: factorised (multi_hop={is_multi_hop} "
+                      f"path_params={_has_path_params} window={is_window})")
 
             try:
-                maturity_rows = compute_cohort_maturity_rows(
-                    frames=composed_frames,
-                    graph=graph_data,
-                    target_edge_id=last_edge_id,
-                    edge_params=edge_params,
-                    anchor_from=anchor_from_str,
-                    anchor_to=anchor_to_str,
-                    sweep_to=sweep_to_final,
-                    is_window=is_window,
-                    axis_tau_max=max_tau if max_tau != 400 else None,
-                    band_level=band_level,
-                    anchor_node_id=anchor_node,
-                    sampling_mode=sampling_mode,
-                    span_cdf_override=_span_cdf_fn,
-                    x_provider=_x_provider,
-                )
+                if _use_collapsed:
+                    # Collapsed shortcut: use v1 row builder with the
+                    # edge_params as-is (path-level CDF, path alpha/beta).
+                    # This is the v1 code path — exact single-edge parity.
+                    from runner.cohort_forecast import compute_cohort_maturity_rows
+                    maturity_rows = compute_cohort_maturity_rows(
+                        frames=composed_frames,
+                        graph=graph_data,
+                        target_edge_id=last_edge_id,
+                        edge_params=edge_params,
+                        anchor_from=anchor_from_str,
+                        anchor_to=anchor_to_str,
+                        sweep_to=sweep_to_final,
+                        is_window=is_window,
+                        axis_tau_max=axis_tau_max,
+                        band_level=band_level,
+                        anchor_node_id=anchor_node,
+                        sampling_mode=sampling_mode,
+                    )
+                elif kernel is not None and kernel.span_p > 0:
+                    # Factorised: v2 row builder with X_x + C_{x→y}
+                    def _norm_cdf(tau: float) -> float:
+                        raw = kernel.cdf_at(int(round(tau)))
+                        return raw / kernel.span_p
+
+                    _span_params = build_span_params(
+                        kernel_cdf=_norm_cdf,
+                        span_p=kernel.span_p,
+                        max_tau=max_tau,
+                        edge_params=edge_params,
+                        is_window=is_window,
+                    )
+
+                    _span_topo = _build_span_topology(graph_data, query_from_node, query_to_node)
+                    _mc_cdf_arr = None
+                    _mc_p_s = None
+                    if _span_topo is not None:
+                        import numpy as _np
+                        _rng = _np.random.default_rng(42)
+                        _mc_cdf_arr, _mc_p_s = mc_span_cdfs(
+                            topo=_span_topo,
+                            graph=graph_data,
+                            is_window=is_window,
+                            max_tau=max_tau,
+                            num_draws=2000,
+                            rng=_rng,
+                        )
+
+                    maturity_rows = compute_cohort_maturity_rows_v2(
+                        frames=composed_frames,
+                        graph=graph_data,
+                        target_edge_id=last_edge_id,
+                        span_params=_span_params,
+                        anchor_from=anchor_from_str,
+                        anchor_to=anchor_to_str,
+                        sweep_to=sweep_to_final,
+                        is_window=is_window,
+                        axis_tau_max=axis_tau_max,
+                        band_level=band_level,
+                        anchor_node_id=anchor_node,
+                        sampling_mode=sampling_mode,
+                        mc_cdf_arr=_mc_cdf_arr,
+                        mc_p_s=_mc_p_s,
+                        x_provider=_x_provider,
+                        upstream_obs=_upstream_obs,
+                    )
+                else:
+                    maturity_rows = []
                 print(f"[v2] compute_cohort_maturity_rows returned {len(maturity_rows)} rows")
             except Exception as e:
                 print(f"[v2] ERROR in compute_cohort_maturity_rows: {e}")

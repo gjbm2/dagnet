@@ -80,6 +80,26 @@ export class ContextRegistry {
   }
 
   /**
+   * Return context IDs currently in the in-memory cache.
+   * Optionally scoped to a workspace prefix.
+   */
+  getCachedIds(options?: { workspace?: { repository: string; branch: string } }): string[] {
+    const prefix = options?.workspace
+      ? `${options.workspace.repository}/${options.workspace.branch}:`
+      : '';
+    const ids: string[] = [];
+    for (const key of this.cache.keys()) {
+      if (prefix && key.startsWith(prefix)) {
+        ids.push(key.slice(prefix.length));
+      } else if (!prefix && !key.includes(':')) {
+        // No workspace scope — return un-prefixed keys only
+        ids.push(key);
+      }
+    }
+    return ids;
+  }
+
+  /**
    * Pre-load context definitions into the in-memory cache.
    *
    * Intended for headless / CLI environments where contexts are loaded from

@@ -311,11 +311,21 @@ Phase A row-building logic therefore becomes:
 The row builder must reason in `X_x + K_{x→y}` coordinates.  In this
 model:
 
-- `p_window(a_i) = span_p × K_{x→y}(a_i)` — fraction of x arrivals
+Define the normalised completeness kernel:
+
+    C_{x→y}(τ) = K_{x→y}(τ) / span_p    (or 0 if span_p = 0)
+
+`C` is the pure timing curve in [0, 1]; `K` is the sub-probability
+CDF with asymptote `span_p`.  The row builder uses `C` wherever it
+needs the fraction-of-opportunity-elapsed, and `span_p` separately
+wherever it needs the rate.
+
+- `p_window(a_i) = span_p × C_{x→y}(a_i)` — fraction of x arrivals
   that have converted at y by frontier age
 - IS conditioning weights draws by likelihood of observing `k_i`
   conversions from `N_i` exposed at `p_window`
-- Pop D uses conditional `q_late` derived from `K_{x→y}(τ) - K_{x→y}(a_i)`
+- Pop D uses conditional `q_late` derived from
+  `C_{x→y}(τ) - C_{x→y}(a_i)`
 - the prior centres on `span_p`, not path-level forecast mean
 - 1-hop degenerates naturally: `K_{x→y}` is just the single edge's
   operator
@@ -467,11 +477,19 @@ This separation means:
   branches are deleted, not migrated
 
 **Current state (9-Apr-26):** the `_is_span` branches inside
-`compute_cohort_maturity_rows` are the defective mixed-representation
-path.  The next step is to extract them into
-`compute_cohort_maturity_rows_v2`, rewrite them in factorised
-`X_x + K_{x→y}` coordinates, and remove all `_is_span` /
-`span_cdf_override` code from the v1 function.
+`compute_cohort_maturity_rows` inject a local x→y span kernel into a
+row builder that is not yet fully refactored around one coherent
+factorised representation.  The current code uses the span CDF in
+some stages and span_p as the prior centre, but the surrounding
+row-builder structure — drift layer, parameter extraction, upstream
+CDF computation — still carries assumptions from the collapsed
+anchor-to-y model.  The representation inconsistency is broad, not
+confined to specific stages.
+
+The next step is to extract the v2 path into
+`compute_cohort_maturity_rows_v2` in a new module, rewrite it in
+factorised `X_x + C_{x→y}` coordinates from scratch, and remove all
+`_is_span` / `span_cdf_override` code from the v1 function.
 
 Frontend and request plumbing:
 

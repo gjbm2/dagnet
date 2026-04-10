@@ -36,6 +36,7 @@ import base64
 import bisect
 import hashlib
 import os
+import re
 import sys
 import json
 import math
@@ -2002,6 +2003,47 @@ def _format_date_dmy(dt: datetime) -> str:
     return dt.strftime("%-d-%b-%y")
 
 
+def write_context_files(truth: dict, data_repo: str) -> list[str]:
+    """Write context definition YAML files from truth file context_dimensions.
+
+    Returns list of written context IDs.
+    """
+    context_dims = truth.get("context_dimensions", [])
+    if not context_dims:
+        return []
+
+    contexts_dir = os.path.join(data_repo, "contexts")
+    os.makedirs(contexts_dir, exist_ok=True)
+    written = []
+
+    for dim in context_dims:
+        dim_id = dim["id"]
+        is_mece = dim.get("mece", False)
+        values = []
+        for v in dim.get("values", []):
+            entry: dict = {"id": v["id"], "label": v.get("label", v["id"])}
+            if v.get("sources"):
+                entry["sources"] = v["sources"]
+            values.append(entry)
+
+        ctx_def: dict = {
+            "id": dim_id,
+            "name": dim.get("label", dim_id),
+            "type": "categorical",
+            "otherPolicy": "null" if is_mece else "undefined",
+            "values": values,
+            "metadata": {"status": "active", "author": "synth_gen", "version": "1.0.0"},
+        }
+
+        ctx_path = os.path.join(contexts_dir, f"{dim_id}.yaml")
+        with open(ctx_path, "w") as f:
+            yaml.dump(ctx_def, f, default_flow_style=False, sort_keys=False)
+        written.append(dim_id)
+        print(f"  {dim_id}: {len(values)} values, mece={is_mece} → {ctx_path}")
+
+    return written
+
+
 def write_parameter_files(
     topology,
     truth: dict,
@@ -2641,42 +2683,113 @@ Examples:
         set_simulation_guard(graph_path, enable=True, sim_stats=sim_stats, truth=truth)
         print("  Set simulation guard")
 
-    # 2. Compute authoritative hashes via Node.js (from the graph on disk).
+    # 1b. Write context definition files from truth file.
+    #     Context definitions affect hash computation (context_def_hashes
+    #     is part of the canonical signature), so they must be on disk
+    #     BEFORE Step 2.
+    ctx_dims = truth.get("context_dimensions", [])
+    if ctx_dims:
+        print(f"\n── Step 1b: Write context definitions ──")
+        write_context_files(truth, data_repo)
+
+    # 2. Compute authoritative hashes via CLI (from the graph on disk).
+    #    Uses the real FE pipeline (bayes.ts → buildFetchPlanProduction →
+    #    mapFetchPlanToSnapshotSubjects → computeQuerySignature) so hashes
+    #    are guaranteed to match what the FE would send to the Bayes worker.
     #    This MUST happen AFTER structural metadata update (latency_parameter
     #    affects the hash) but the graph must be on disk for Node to read it.
     print(f"\n── Step 2: Compute FE-authoritative hashes ──")
-    node_script = os.path.join(REPO_ROOT, "bayes", "compute_snapshot_subjects.mjs")
+    graph_dir = os.path.dirname(os.path.dirname(graph_path))  # .../graphs/X.json → .../
+    graph_name_for_cli = os.path.basename(graph_path).replace(".json", "")
     nvm_prefix = (
         f'export NVM_DIR="$HOME/.nvm" && '
         f'. "$NVM_DIR/nvm.sh" 2>/dev/null && '
         f'cd {os.path.join(REPO_ROOT, "graph-editor")} && '
         f'nvm use "$(cat .nvmrc)" 2>/dev/null && '
     )
-    node_cmd = f'{nvm_prefix}node {node_script} {graph_path}'
-    node_result = _sp.run(node_cmd, shell=True, capture_output=True, text=True, timeout=30)
-    if node_result.returncode != 0:
-        print(f"  ERROR: compute_snapshot_subjects.mjs failed:")
-        print(f"  {node_result.stderr[:300]}")
-        print(f"  Cannot proceed without authoritative hashes.")
-        sys.exit(1)
-    node_stdout = node_result.stdout
-    json_start = node_stdout.index("{")
-    fe_data = json.loads(node_stdout[json_start:])
+
+    def _cli_hashes_for_dsl(dsl: str) -> dict[str, str]:
+        """Call CLI with a specific DSL, return edge_uuid → core_hash mapping."""
+        # Write a temp copy of the graph with the given DSL
+        import tempfile, shutil
+        with tempfile.TemporaryDirectory() as tmp:
+            # Mirror the data repo structure for the CLI loader
+            tmp_graphs = os.path.join(tmp, "graphs")
+            os.makedirs(tmp_graphs)
+            with open(graph_path) as f:
+                g = json.load(f)
+            g["dataInterestsDSL"] = dsl
+            tmp_graph = os.path.join(tmp_graphs, f"{graph_name_for_cli}.json")
+            with open(tmp_graph, "w") as f:
+                json.dump(g, f)
+            # Symlink supporting dirs
+            for d in ("events", "contexts", "parameters", "nodes", "cases", "connections"):
+                src = os.path.join(graph_dir, d)
+                if os.path.isdir(src):
+                    os.symlink(src, os.path.join(tmp, d))
+
+            cmd = (
+                f'{nvm_prefix}'
+                f'npx tsx src/cli/bayes.ts '
+                f'--graph {tmp} --name {graph_name_for_cli} --format json --no-cache'
+            )
+            r = _sp.run(cmd, shell=True, capture_output=True, text=True, timeout=60,
+                        cwd=REPO_ROOT)
+            if r.returncode != 0:
+                print(f"  ERROR: CLI hash computation failed for DSL '{dsl[:60]}':")
+                print(f"  {r.stderr[:500]}")
+                sys.exit(1)
+            stdout = r.stdout
+            payload = json.loads(stdout[stdout.index("{"):])
+            result: dict[str, str] = {}
+            for subj in payload.get("snapshot_subjects", []):
+                eid = subj.get("edge_id", "")
+                ch = subj.get("core_hash", "")
+                if eid and ch:
+                    result[eid] = ch
+            return result
+
+    # Extract date range from truth file or graph DSL
+    _dsl = truth.get("simulation", {}).get("dsl", "")
+    if not _dsl:
+        _existing_dsl = ""
+        with open(graph_path) as f:
+            _existing_dsl = json.load(f).get("dataInterestsDSL", "")
+        _date_match = re.search(r"(\d{1,2}-\w{3}-\d{2}:\d{1,2}-\w{3}-\d{2})", _existing_dsl)
+        if _date_match:
+            date_range = _date_match.group(1)
+        else:
+            # Derive from simulation dates
+            from datetime import timedelta
+            base = datetime.strptime("12-Dec-25", "%d-%b-%y")
+            n_days = truth.get("simulation", {}).get("n_days", 90)
+            end = base + timedelta(days=n_days)
+            date_range = f"{base.strftime('%-d-%b-%y')}:{end.strftime('%-d-%b-%y')}"
+
+    window_hashes = _cli_hashes_for_dsl(f"window({date_range})")
+    cohort_hashes = _cli_hashes_for_dsl(f"cohort({date_range})")
+
+    # Build uuid → param_id mapping from graph
+    with open(graph_path) as f:
+        _g = json.load(f)
+    uuid_to_pid: dict[str, str] = {}
+    for e in _g.get("edges", []):
+        pid = e.get("p", {}).get("id", "") if isinstance(e.get("p"), dict) else ""
+        if pid and e.get("uuid"):
+            uuid_to_pid[e["uuid"]] = pid
 
     hash_lookup: dict[str, dict[str, str]] = {}
-    for e in fe_data["edges"]:
-        pid = e["param_id"]
-        hash_lookup[pid] = {
-            "window_hash": e["window_hash"],
-            "cohort_hash": e["cohort_hash"],
-            "window_sig": e.get("window_sig", ""),
-            "cohort_sig": e.get("cohort_sig", ""),
-        }
+    for uuid, pid in uuid_to_pid.items():
+        wh = window_hashes.get(uuid, "")
+        ch = cohort_hashes.get(uuid, "")
+        if wh or ch:
+            hash_lookup[pid] = {"window_hash": wh, "cohort_hash": ch}
+            if not pid.startswith("parameter-"):
+                hash_lookup[f"parameter-{pid}"] = hash_lookup[pid]
+    print(f"  {len(hash_lookup) // 2} edges resolved (via CLI)")
+    for pid, h in hash_lookup.items():
         if not pid.startswith("parameter-"):
-            hash_lookup[f"parameter-{pid}"] = hash_lookup[pid]
-    print(f"  {len(fe_data['edges'])} edges resolved")
-    for e in fe_data["edges"]:
-        print(f"    {e['param_id']}: w={e['window_hash'][:16]}… c={e['cohort_hash'][:16]}…")
+            print(f"    {pid}: w={h['window_hash'][:16]}… c={h['cohort_hash'][:16]}…")
 
     # 3. Write to snapshot DB using FE hashes.
     workspace_prefix = ""

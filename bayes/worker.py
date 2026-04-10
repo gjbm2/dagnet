@@ -506,11 +506,36 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
         if is_engorged:
             _log(log, "evidence: engorged graph detected (doc 14 §9A)")
 
+        # R2-prereq-i: extract commissioned context slices from FE subjects.
+        # The binder must only create SliceGroups for slices the FE explicitly
+        # commissioned via pinnedDSL, not whatever happens to be in the DB rows.
+        commissioned_slices: dict[str, set[str]] = {}
+        if snapshot_subjects:
+            import re as _re_cs
+            for subj in snapshot_subjects:
+                eid = subj.get("edge_id") or (subj.get("target", {}) or {}).get("targetId", "")
+                if not eid:
+                    continue
+                for sk in (subj.get("slice_keys") or []):
+                    ctx = _re_cs.sub(r'(window|cohort|asat)\([^)]*\)', '', sk).strip('.')
+                    ctx = _re_cs.sub(r'\.{2,}', '.', ctx)
+                    if ctx:  # non-empty = has context qualifier
+                        commissioned_slices.setdefault(eid, set()).add(ctx)
+            if commissioned_slices:
+                _log(log, f"  commissioned slices: {sum(len(v) for v in commissioned_slices.values())} "
+                     f"across {len(commissioned_slices)} edges")
+
+        mece_dimensions: list[str] = payload.get("mece_dimensions") or []
+        if mece_dimensions:
+            _log(log, f"  MECE dimensions: {mece_dimensions}")
+
         if snapshot_rows:
             from compiler import bind_snapshot_evidence
             evidence = bind_snapshot_evidence(
                 topology, snapshot_rows, param_files, params_index, settings,
                 graph_snapshot=graph_snapshot if is_engorged else None,
+                commissioned_slices=commissioned_slices or None,
+                mece_dimensions=mece_dimensions or None,
             )
         elif is_engorged:
             from compiler import bind_evidence_from_graph
@@ -1283,6 +1308,14 @@ def _build_binding_receipt(
         for wo in edge_ev.window_obs:
             observed_slices_raw.add(wo.slice_dsl)
 
+        # Also scan slice_groups — after _route_slices, per-context
+        # observations are moved from cohort_obs/window_obs into
+        # SliceGroups. The context_key on each SliceObservations is
+        # already normalised (no temporal qualifier).
+        for dim_key, sg in edge_ev.slice_groups.items():
+            for ctx_key in sg.slices:
+                observed_slices_raw.add(ctx_key)
+
         er.window_trajectories = w_traj
         er.window_daily = w_daily
         er.cohort_trajectories = c_traj
@@ -1491,7 +1524,7 @@ def _query_snapshot_subjects(
     # Map core_hash → list of edge_ids (a hash can appear in multiple subjects)
     hash_to_edges: dict[str, list[str]] = {}
     all_hashes: set[str] = set()
-    shared_slice_keys: list[str] = [""]
+    all_slice_keys: set[str] = set()
     shared_anchor_from: date | None = None
     shared_anchor_to: date | None = None
     shared_sweep_from: date | None = None
@@ -1522,9 +1555,12 @@ def _query_snapshot_subjects(
                 all_hashes.add(eh_hash)
                 hash_to_edges.setdefault(eh_hash, []).append(edge_id)
 
-        # Extract shared dates/slice_keys from first valid subject
+        # Collect all slice_keys across subjects (union)
+        for sk in (subj.get("slice_keys") or [""]):
+            all_slice_keys.add(sk)
+
+        # Extract shared dates from first valid subject
         if not dates_parsed:
-            shared_slice_keys = subj.get("slice_keys", [""])
             a_from = subj.get("anchor_from", "")
             a_to = subj.get("anchor_to", "")
             s_from = subj.get("sweep_from", "")
@@ -1547,7 +1583,7 @@ def _query_snapshot_subjects(
     try:
         rows_by_hash = query_snapshots_for_sweep_batch(
             core_hashes=list(all_hashes),
-            slice_keys=shared_slice_keys,
+            slice_keys=list(all_slice_keys),
             anchor_from=shared_anchor_from,
             anchor_to=shared_anchor_to,
             sweep_from=shared_sweep_from,
@@ -1558,9 +1594,11 @@ def _query_snapshot_subjects(
         return {}
 
     # ── 3. Distribute rows to edge_ids ──
+    # Deduplicate edge_ids per hash: multiple subjects may share the same
+    # (core_hash, edge_id) pair when they differ only in slice_keys.
     result: dict[str, list[dict]] = {}
     for core_hash, rows in rows_by_hash.items():
-        edge_ids = hash_to_edges.get(core_hash, [])
+        edge_ids = set(hash_to_edges.get(core_hash, []))
         for edge_id in edge_ids:
             if edge_id not in result:
                 result[edge_id] = []
@@ -1671,9 +1709,13 @@ def _build_unified_slices(
         slices["cohort()"] = cohort
 
     # Phase C: per-context-slice entries (doc 14 §5.2)
+    # Each slice is denominated with temporal qualifier: context(...).window()
+    # and optionally context(...).cohort() — mirroring the parent window()/cohort() pair.
     for ctx_key, sp in prob.slice_posteriors.items():
-        slice_key = f"context({ctx_key})" if not ctx_key.startswith("context(") else ctx_key
-        slices[slice_key] = {
+        ctx_part = f"context({ctx_key})" if not ctx_key.startswith("context(") else ctx_key
+
+        # Build the per-slice entry with full vars
+        entry: dict = {
             "alpha": round(sp["alpha"], 4),
             "beta": round(sp["beta"], 4),
             "p_hdi_lower": round(sp["hdi_lower"], 6),
@@ -1682,6 +1724,39 @@ def _build_unified_slices(
             "rhat": round(prob.rhat, 4) if prob.rhat else None,
             "provenance": "bayesian",
         }
+        if "kappa_mean" in sp:
+            entry["kappa_mean"] = round(sp["kappa_mean"], 2)
+            entry["kappa_sd"] = round(sp["kappa_sd"], 2)
+        if "mu_mean" in sp:
+            entry["mu_mean"] = round(sp["mu_mean"], 4)
+            entry["mu_sd"] = round(sp["mu_sd"], 4)
+        if "sigma_mean" in sp:
+            entry["sigma_mean"] = round(sp["sigma_mean"], 4)
+            entry["sigma_sd"] = round(sp["sigma_sd"], 4)
+        if "onset_mean" in sp:
+            entry["onset_mean"] = round(sp["onset_mean"], 2)
+            entry["onset_sd"] = round(sp.get("onset_sd", 0), 2)
+
+        # window-denominated entry (always)
+        slices[f"{ctx_part}.window()"] = entry
+
+        # cohort-denominated entry (when parent has cohort)
+        # Uses same p/kappa; path-level latency not yet per-slice,
+        # so omit latency fields from cohort entry for now.
+        if "cohort()" in slices:
+            cohort_entry: dict = {
+                "alpha": entry["alpha"],
+                "beta": entry["beta"],
+                "p_hdi_lower": entry["p_hdi_lower"],
+                "p_hdi_upper": entry["p_hdi_upper"],
+                "ess": entry["ess"],
+                "rhat": entry["rhat"],
+                "provenance": "bayesian",
+            }
+            if "kappa_mean" in entry:
+                cohort_entry["kappa_mean"] = entry["kappa_mean"]
+                cohort_entry["kappa_sd"] = entry["kappa_sd"]
+            slices[f"{ctx_part}.cohort()"] = cohort_entry
     if prob.tau_slice_mean is not None:
         slices["_tau_slice"] = {
             "mean": round(prob.tau_slice_mean, 4),

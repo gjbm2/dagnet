@@ -89,15 +89,25 @@ def _edge_sub_probability_density(
 ) -> np.ndarray:
     """Sub-probability density for one edge: f(τ) = p · pdf(τ).
 
-    When sigma < 0.1, treats as delta at onset + exp(mu).
+    sigma == 0: pure probability gate, delta at tau=0 (no timing delay).
+    0 < sigma < 0.1: near-degenerate, delta at onset + exp(mu).
+    sigma >= 0.1: full lognormal PDF.
     Normalises discrete PDF to sum to 1 before scaling by p.
     """
     if p <= 0:
         return np.zeros_like(tau_grid, dtype=float)
 
-    if sigma <= 0 or sigma < 0.1:
+    if sigma <= 0:
+        # Pure probability gate: delta at tau=0
         result = np.zeros_like(tau_grid, dtype=float)
-        delta_tau = onset + math.exp(mu) if sigma > 0 else onset
+        if len(result) > 0:
+            result[0] = p
+        return result
+
+    if sigma < 0.1:
+        # Near-degenerate lognormal: delta at onset + exp(mu)
+        result = np.zeros_like(tau_grid, dtype=float)
+        delta_tau = onset + math.exp(mu)
         idx = int(round(max(0, delta_tau)))
         if idx < len(result):
             result[idx] = p
@@ -111,7 +121,11 @@ def _edge_sub_probability_density(
 
 
 def _extract_edge_params(edge_data: Dict, is_window: bool) -> Tuple[float, float, float, float]:
-    """Extract (p, mu, sigma, onset) from an edge dict."""
+    """Extract (p, mu, sigma, onset) from an edge dict.
+
+    Returns (p, mu, sigma, onset).  When the edge has no latency model,
+    returns sigma=0 to signal a pure probability gate (delta at tau=0).
+    """
     p_data = edge_data.get('p', {})
     latency = p_data.get('latency', {})
     posterior = latency.get('posterior', {})
@@ -126,23 +140,33 @@ def _extract_edge_params(edge_data: Dict, is_window: bool) -> Tuple[float, float
         or 0.0
     )
 
-    mu = posterior.get('mu_mean') or latency.get('mu') or 0.0
-    sigma = posterior.get('sigma_mean') or latency.get('sigma') or 0.0
-    onset = (posterior.get('onset_delta_days')
-             or latency.get('promoted_onset_delta_days')
-             or latency.get('onset_delta_days')
-             or 0.0)
+    # Check whether the edge actually has a latency model
+    _raw_mu = posterior.get('mu_mean') or latency.get('mu')
+    _raw_sigma = posterior.get('sigma_mean') or latency.get('sigma')
+    _has_latency = (
+        isinstance(_raw_mu, (int, float)) and _raw_mu != 0
+        and isinstance(_raw_sigma, (int, float)) and _raw_sigma > 0
+    )
 
-    if not isinstance(mu, (int, float)):
+    if _has_latency:
+        mu = float(_raw_mu)
+        sigma = float(_raw_sigma)
+        onset = (posterior.get('onset_delta_days')
+                 or latency.get('promoted_onset_delta_days')
+                 or latency.get('onset_delta_days')
+                 or 0.0)
+        if not isinstance(onset, (int, float)):
+            onset = 0.0
+    else:
+        # No latency model: pure probability gate, delta at tau=0
         mu = 0.0
-    if not isinstance(sigma, (int, float)) or sigma <= 0:
-        sigma = 0.01
-    if not isinstance(onset, (int, float)):
+        sigma = 0.0
         onset = 0.0
+
     if not isinstance(edge_p, (int, float)) or edge_p <= 0:
         edge_p = 0.0
 
-    return (float(min(edge_p, 1.0)), float(mu), float(max(sigma, 0.01)), float(onset))
+    return (float(min(edge_p, 1.0)), float(mu), float(sigma), float(onset))
 
 
 def _build_span_topology(
@@ -389,18 +413,21 @@ def mc_span_cdfs(
         else:
             p_sd = 0.05  # weak default
 
-        mu_sd = posterior.get('mu_sd') or 0.1
-        sigma_sd = posterior.get('sigma_sd') or 0.05
-        onset_sd = posterior.get('onset_sd') or 0.5
-
-        if not isinstance(mu_sd, (int, float)):
-            mu_sd = 0.1
-        if not isinstance(sigma_sd, (int, float)):
-            sigma_sd = 0.05
-        if not isinstance(onset_sd, (int, float)):
-            onset_sd = 0.5
-
-        edge_sds.append((float(p_sd), float(mu_sd), float(sigma_sd), float(onset_sd)))
+        # Non-latency edge (sigma=0): zero latency SDs, no fake
+        # timing uncertainty.  Only p varies across draws.
+        if sigma <= 0:
+            edge_sds.append((float(p_sd), 0.0, 0.0, 0.0))
+        else:
+            mu_sd = posterior.get('mu_sd') or 0.1
+            sigma_sd = posterior.get('sigma_sd') or 0.05
+            onset_sd = posterior.get('onset_sd') or 0.5
+            if not isinstance(mu_sd, (int, float)):
+                mu_sd = 0.1
+            if not isinstance(sigma_sd, (int, float)):
+                sigma_sd = 0.05
+            if not isinstance(onset_sd, (int, float)):
+                onset_sd = 0.5
+            edge_sds.append((float(p_sd), float(mu_sd), float(sigma_sd), float(onset_sd)))
 
     n_edges = len(edge_keys)
 
@@ -418,7 +445,14 @@ def mc_span_cdfs(
 
     # Clip to valid ranges
     draws[:, :, 0] = np.clip(draws[:, :, 0], 1e-6, 1 - 1e-6)  # p ∈ (0, 1)
-    draws[:, :, 2] = np.clip(draws[:, :, 2], 0.01, 20.0)       # sigma > 0
+    # Clip sigma: non-latency edges (mean sigma=0) stay at 0;
+    # latency edges get sigma ≥ 0.01
+    _latency_mask = means_arr[None, :, 2] > 0  # (1, n_edges)
+    draws[:, :, 2] = np.where(
+        _latency_mask,
+        np.clip(draws[:, :, 2], 0.01, 20.0),
+        0.0,
+    )
 
     # ── Run DP per draw ───────────────────────────────────────────────
     cdf_arr = np.zeros((num_draws, T), dtype=np.float64)

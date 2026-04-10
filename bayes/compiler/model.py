@@ -1185,7 +1185,7 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                 # If not all exhaustive, also emit aggregate
                 _all_exhaustive = all(sg.is_exhaustive for sg in ev.slice_groups.values())
                 if not _all_exhaustive:
-                    _emissions.append((safe_id, None, edge_kappa, ev, latency_vars, onset_vars))
+                    _emissions.append((safe_id, p, edge_kappa, ev, latency_vars, onset_vars))
                 else:
                     diagnostics.append(f"  slices: {edge_id[:8]}… exhaustive, aggregate suppressed")
             else:
@@ -1224,9 +1224,40 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
         # Phase 2 skips this — window data was already used in Phase 1.
         if not is_phase2:
             for group_id, bg in topology.branch_groups.items():
-                _emit_branch_group_multinomial(
-                    bg, topology, evidence, edge_var_names, model, diagnostics,
+                # Check if any sibling has slices
+                _any_slices = any(
+                    evidence.edges.get(sid) and evidence.edges[sid].slice_groups
+                    for sid in bg.sibling_edge_ids
                 )
+                _all_exhaustive_bg = _any_slices and all(
+                    all(sg.is_exhaustive for sg in evidence.edges[sid].slice_groups.values())
+                    for sid in bg.sibling_edge_ids
+                    if evidence.edges.get(sid) and evidence.edges[sid].slice_groups
+                )
+
+                if _any_slices and _all_exhaustive_bg:
+                    # Per-slice Multinomials replace the aggregate
+                    # Collect context keys from first edge that has slices
+                    _ref_ev = next(
+                        evidence.edges[sid] for sid in bg.sibling_edge_ids
+                        if evidence.edges.get(sid) and evidence.edges[sid].slice_groups
+                    )
+                    for _dim_key, _sg in _ref_ev.slice_groups.items():
+                        for _ctx_key in _sg.slices:
+                            _emit_branch_group_multinomial(
+                                bg, topology, evidence, edge_var_names, model,
+                                diagnostics, slice_ctx_key=_ctx_key,
+                                bg_slice_p_vars=bg_slice_p_vars,
+                            )
+                    diagnostics.append(
+                        f"  bg {group_id[:8]}…: {len(_ref_ev.slice_groups)} dims, "
+                        f"per-slice Multinomials emitted"
+                    )
+                else:
+                    # Aggregate Multinomial (uncontexted or non-exhaustive)
+                    _emit_branch_group_multinomial(
+                        bg, topology, evidence, edge_var_names, model, diagnostics,
+                    )
 
     metadata = {
         "edge_var_names": edge_var_names,
@@ -2598,6 +2629,8 @@ def _emit_branch_group_multinomial(
     edge_var_names: dict[str, str],
     model,
     diagnostics: list[str],
+    slice_ctx_key: str | None = None,
+    bg_slice_p_vars: dict | None = None,
 ) -> None:
     """Emit a shared Multinomial (or DirichletMultinomial) likelihood for
     a branch group's window observations.
@@ -2620,6 +2653,10 @@ def _emit_branch_group_multinomial(
     instead of plain Multinomial — this allows the observed proportions
     to vary more than a simple coin-flip model would predict.
 
+    slice_ctx_key: when set, emit a per-slice Multinomial using
+    observations from that slice's SliceObservations and p vars from
+    bg_slice_p_vars. When None, emit the aggregate Multinomial.
+
     Note: cohort daily observations are NOT handled here — each sibling
     may have different completeness on different days, making a shared
     Multinomial impractical. They are handled per-edge in
@@ -2630,28 +2667,47 @@ def _emit_branch_group_multinomial(
     import numpy as np
 
     # Collect siblings that have window data and a model variable.
-    # Check both old path (window_obs) and trajectory path.
+    # When slice_ctx_key is set, use per-slice observations instead
+    # of the aggregate.
     sibling_info = []
     for sib_id in bg.sibling_edge_ids:
         ev = evidence.edges.get(sib_id)
-        if ev is None or ev.skipped or not ev.has_window:
+        if ev is None or ev.skipped:
             continue
         var_name = edge_var_names.get(sib_id)
         if var_name is None:
             continue
 
+        # Select observation source: per-slice or aggregate
+        if slice_ctx_key is not None:
+            # Per-slice: find SliceObservations for this context key
+            s_obs = None
+            for _sg in ev.slice_groups.values():
+                if slice_ctx_key in _sg.slices:
+                    s_obs = _sg.slices[slice_ctx_key]
+                    break
+            if s_obs is None or not s_obs.has_window:
+                continue
+            _win_obs = s_obs.window_obs
+            _coh_obs = s_obs.cohort_obs
+        else:
+            if not ev.has_window:
+                continue
+            _win_obs = ev.window_obs
+            _coh_obs = ev.cohort_obs
+
         # Old path: window_obs
-        total_k = sum(w.k for w in ev.window_obs)
-        total_n = sum(w.n for w in ev.window_obs)
+        total_k = sum(w.k for w in _win_obs)
+        total_n = sum(w.n for w in _win_obs)
         avg_completeness = (
-            sum(w.n * w.completeness for w in ev.window_obs) / total_n
+            sum(w.n * w.completeness for w in _win_obs) / total_n
             if total_n > 0 else 1.0
         )
 
         # Trajectory path: aggregate window trajectories
         if total_n == 0:
             window_trajs = [
-                t for c in ev.cohort_obs for t in c.trajectories
+                t for c in _coh_obs for t in c.trajectories
                 if t.obs_type == "window"
             ]
             if window_trajs:
@@ -2685,9 +2741,18 @@ def _emit_branch_group_multinomial(
         )
         return
 
-    # Resolve the p variable for each sibling from the model
+    # Resolve the p variable for each sibling from the model.
+    # For per-slice emissions, use bg_slice_p_vars directly.
     sibling_p_vars = []
     for s in sibling_info:
+        if slice_ctx_key is not None and bg_slice_p_vars:
+            # Per-slice: use the Dirichlet-derived per-slice p
+            p_var = (bg_slice_p_vars.get(s["edge_id"]) or {}).get(slice_ctx_key)
+            if p_var is not None:
+                sibling_p_vars.append((s, p_var))
+                continue
+            # Fall through to model search if not in bg_slice_p_vars
+
         safe_id = _safe_var_name(s["edge_id"])
         # Try p_window first (hierarchical case), then p (Dirichlet/Beta case)
         p_window_name = f"p_window_{safe_id}"
@@ -2735,30 +2800,34 @@ def _emit_branch_group_multinomial(
         effective_n = shared_n
 
     safe_group = _safe_var_name(bg.group_id)
+    # Suffix for per-slice emissions (unique RV name)
+    ctx_suffix = f"__{_safe_var_name(slice_ctx_key)}" if slice_ctx_key else ""
 
     # Use the first sibling's κ for the entire branch group.
-    # Siblings share a source node, so they share the same level of
-    # day-to-day noise (overdispersion). If κ exists, use
-    # DirichletMultinomial (overdispersed); otherwise plain Multinomial.
+    # For per-slice: use per-slice κ if available.
     first_sib_id = sibling_info[0]["edge_id"]
     first_safe = _safe_var_name(first_sib_id)
     kappa_var = None
-    kappa_name = f"kappa_{first_safe}"
-    for rv in model.free_RVs:
+    if slice_ctx_key:
+        ctx_safe = _safe_var_name(slice_ctx_key)
+        kappa_name = f"kappa_slice_{first_safe}_{ctx_safe}"
+    else:
+        kappa_name = f"kappa_{first_safe}"
+    for rv in model.deterministics + model.free_RVs:
         if rv.name == kappa_name:
             kappa_var = rv
             break
 
     if kappa_var is not None:
         pm.DirichletMultinomial(
-            f"obs_bg_{safe_group}",
+            f"obs_bg_{safe_group}{ctx_suffix}",
             n=effective_n,
             a=kappa_var * p_full,
             observed=k_full,
         )
     else:
         pm.Multinomial(
-            f"obs_bg_{safe_group}",
+            f"obs_bg_{safe_group}{ctx_suffix}",
             n=effective_n,
             p=p_full,
             observed=k_full,

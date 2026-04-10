@@ -269,8 +269,9 @@ export function seedFileRegistry(
   // Hash mappings
   fileRegistry.seedFileInMemory('hash-mappings', 'hash-mappings', bundle.hashMappings, source);
 
-  // Pre-load context registry (avoids IDB fallback)
-  contextRegistry.preloadContexts(bundle.contexts);
+  // Pre-load context registry (avoids IDB fallback).
+  // Must pass workspace so cache keys match later lookups.
+  contextRegistry.preloadContexts(bundle.contexts, workspace ? { workspace: ws } : undefined);
 }
 
 /**

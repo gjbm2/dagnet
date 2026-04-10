@@ -80,7 +80,13 @@
       "Bash(bash graph-ops/scripts/analyse.sh bayes-test-gm-rebuild \"cohort\\(-90d:\\)\" --type cohort_maturity --subject \"from\\(switch-registered\\).to\\(switch-success\\)\")",
       "Bash(bash graph-ops/scripts/analyse.sh bayes-test-gm-rebuild \"cohort\\(-90d:\\)\" --type cohort_maturity_v2 --subject \"from\\(switch-registered\\).to\\(switch-success\\)\")",
       "Bash(bash graph-ops/scripts/analyse.sh bayes-test-gm-rebuild \"cohort\\(-90d:\\)\" --type cohort_maturity --subject \"from\\(switch-registered\\).to\\(switch-success\\)\" --format json)",
-      "Bash(bash graph-ops/scripts/analyse.sh bayes-test-gm-rebuild \"cohort\\(-90d:\\)\" --type cohort_maturity_v2 --subject \"from\\(switch-registered\\).to\\(switch-success\\)\" --format json)"
+      "Bash(bash graph-ops/scripts/analyse.sh bayes-test-gm-rebuild \"cohort\\(-90d:\\)\" --type cohort_maturity_v2 --subject \"from\\(switch-registered\\).to\\(switch-success\\)\" --format json)",
+      "Read(//home/reg/dev/dagnet/graph-editor/lib/**)",
+      "Bash(bash graph-ops/scripts/analyse.sh conversion-flow-v2-recs-collapsed \"from\\(switch-registered\\).to\\(switch-success\\).cohort\\(1-Apr-26:8-Apr-26\\)\" --type cohort_maturity_v2 --no-cache)",
+      "Bash(bash graph-ops/scripts/analyse.sh conversion-flow-v2-recs-collapsed \"from\\(household-delegated\\).to\\(switch-success\\).cohort\\(1-Apr-26:8-Apr-26\\)\" --type cohort_maturity_v2 --no-cache)",
+      "Bash(bash graph-ops/scripts/analyse.sh conversion-flow-v2-recs-collapsed \"from\\(household-delegated\\).to\\(switch-success\\).cohort\\(1-Apr-26:8-Apr-26\\)\" --type cohort_maturity_v2 --no-cache --format json)",
+      "Bash(bash graph-ops/scripts/analyse.sh bayes-test-gm-rebuild \"from\\(household-delegated\\).to\\(switch-success\\).cohort\\(1-Apr-26:8-Apr-26\\)\" --type cohort_maturity_v2 --no-cache --format json)",
+      "Bash(bash graph-ops/scripts/analyse.sh bayes-test-gm-rebuild \"from\\(switch-registered\\).to\\(switch-success\\).cohort\\(1-Apr-26:8-Apr-26\\)\" --type cohort_maturity_v2 --no-cache --format json)"
     ],
     "additionalDirectories": [
       "/home/reg/dev/dagnet/.claude",
