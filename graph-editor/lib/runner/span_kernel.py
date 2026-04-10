@@ -418,15 +418,17 @@ def mc_span_cdfs(
         if sigma <= 0:
             edge_sds.append((float(p_sd), 0.0, 0.0, 0.0))
         else:
-            mu_sd = posterior.get('mu_sd') or 0.1
-            sigma_sd = posterior.get('sigma_sd') or 0.05
-            onset_sd = posterior.get('onset_sd') or 0.5
+            # Use promoted model SDs (written by FE applyPromotion),
+            # falling back to posterior (Bayes).
+            mu_sd = latency.get('promoted_mu_sd') or posterior.get('mu_sd') or 0.0
+            sigma_sd = latency.get('promoted_sigma_sd') or posterior.get('sigma_sd') or 0.0
+            onset_sd = latency.get('promoted_onset_sd') or posterior.get('onset_sd') or 0.0
             if not isinstance(mu_sd, (int, float)):
-                mu_sd = 0.1
+                mu_sd = 0.0
             if not isinstance(sigma_sd, (int, float)):
-                sigma_sd = 0.05
+                sigma_sd = 0.0
             if not isinstance(onset_sd, (int, float)):
-                onset_sd = 0.5
+                onset_sd = 0.0
             edge_sds.append((float(p_sd), float(mu_sd), float(sigma_sd), float(onset_sd)))
 
     n_edges = len(edge_keys)

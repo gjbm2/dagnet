@@ -144,7 +144,7 @@ describe('Synth Diamond Hash Parity — Full Runtime Chain', () => {
       expect(result).not.toBeNull();
       if (!result) return;
 
-      const { signature, coreHash, dbParamId } = result;
+      const { signature, identityHash, dbParamId } = result;
 
       // The signature should be a valid structured sig
       expect(signature).toMatch(/^\{"c":"/);

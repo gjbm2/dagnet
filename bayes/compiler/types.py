@@ -285,6 +285,13 @@ class EdgeEvidence:
     slice_groups: dict[str, SliceGroup] = field(default_factory=dict)
     has_slices: bool = False
 
+    # Phase C §5.7: per-date regime classification.
+    # Maps retrieved_at date (ISO prefix, e.g. "2026-01-15") to regime
+    # kind: "mece_partition" or "uncontexted". Populated by evidence
+    # binder from RegimeSelection. Used to partition rows so aggregate
+    # and per-slice likelihoods cover disjoint date sets.
+    regime_per_date: dict[str, str] = field(default_factory=dict)
+
     # Suppression counts (populated by _bind_from_snapshot_rows)
     rows_received: int = 0           # rows entering _bind_from_snapshot_rows
     rows_post_aggregation: int = 0   # rows after context aggregation

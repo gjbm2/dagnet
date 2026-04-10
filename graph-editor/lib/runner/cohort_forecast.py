@@ -556,7 +556,7 @@ def compute_cohort_maturity_rows(
         edge_onset_sd = edge_params.get('bayes_onset_sd', edge_params.get('bayes_path_onset_sd', 0.0)) or 0.0
         edge_onset_mu_corr = edge_params.get('bayes_onset_mu_corr', edge_params.get('bayes_path_onset_mu_corr', 0.0)) or 0.0
 
-    has_bayes = edge_sigma > 0 and edge_p > 0
+    has_uncertainty = edge_sigma > 0 and edge_p > 0
 
     # ── Bayesian prior (α₀, β₀) for per-Cohort rate updating ─────────
     # Used by the Bayesian posterior predictive (midpoint + MC fan).
@@ -680,7 +680,7 @@ def compute_cohort_maturity_rows(
         # No cohorts but we have Bayes params — produce model-only rows.
         # This is the true zero-evidence degeneration: unconditioned
         # posterior draws produce the model curve with uncertainty.
-        if has_bayes and edge_mu_sd > 0 and axis_tau_max is not None and axis_tau_max > 0:
+        if has_uncertainty and edge_mu_sd > 0 and axis_tau_max is not None and axis_tau_max > 0:
             import numpy as np
             from .confidence_bands import _ndtr
 
@@ -857,7 +857,7 @@ def compute_cohort_maturity_rows(
         print(f"[zone_boundaries] tau_solid_max={tau_solid_max} tau_future_max={tau_future_max} "
               f"tau_chart_extent={tau_chart_extent} cohorts={len(cohort_list)} "
               f"axis_tau_max={axis_tau_max} max_tau_will_be={max(tau_chart_extent, axis_tau_max or 0)} "
-              f"has_bayes={has_bayes} edge_mu_sd={edge_mu_sd}")
+              f"has_uncertainty={has_uncertainty} edge_mu_sd={edge_mu_sd}")
 
     # ── Determine max τ for row emission ───────────────────────────────
     # Use the axis extent from the caller (computed from t95/sweep_span
@@ -865,7 +865,7 @@ def compute_cohort_maturity_rows(
     max_tau = tau_chart_extent
     if axis_tau_max is not None and axis_tau_max > max_tau:
         max_tau = axis_tau_max
-    elif has_bayes:
+    elif has_uncertainty:
         try:
             from .lag_distribution_utils import log_normal_inverse_cdf
             t95 = log_normal_inverse_cdf(0.95, edge_mu, edge_sigma) + edge_onset
@@ -955,7 +955,7 @@ def compute_cohort_maturity_rows(
 
     # ── Monte Carlo fan bands ────────────────────────────────────────
     if _COHORT_DEBUG:
-        _mc_msg = (f"[MC_diag] has_bayes={has_bayes} edge_mu_sd={edge_mu_sd} edge_sigma_sd={edge_sigma_sd} "
+        _mc_msg = (f"[MC_diag] has_uncertainty={has_uncertainty} edge_mu_sd={edge_mu_sd} edge_sigma_sd={edge_sigma_sd} "
                    f"edge_onset_sd={edge_onset_sd} edge_p_sd={edge_p_sd} edge_p={edge_p} "
                    f"edge_mu={edge_mu} edge_sigma={edge_sigma} edge_onset={edge_onset} "
                    f"cohorts={len(cohort_list)} is_window={is_window}")
@@ -986,7 +986,7 @@ def compute_cohort_maturity_rows(
     # v1 only — no span CDF override, no _is_span branches.
     # The v2 row builder lives in cohort_forecast_v2.py.
 
-    if has_bayes and edge_mu_sd > 0:
+    if has_uncertainty and edge_mu_sd > 0:
         import numpy as np
         from .confidence_bands import _ndtr
 

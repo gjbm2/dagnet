@@ -120,6 +120,47 @@ export async function buildCandidateRegimesByEdge(
     }
   }
 
+  // Step 4: Add bare (uncontexted) regime as fallback for each edge.
+  // In mixed-epoch scenarios, early dates may have only uncontexted data
+  // under a different core_hash. The bare hash is computed from the same
+  // edge structure but without context_def_hashes in the signature.
+  if (Object.keys(result).length > 0) {
+    try {
+      // Strip context from a representative slice to get the bare temporal clause
+      const firstSlice = explodedSlices[0] || '';
+      const bareSlice = firstSlice
+        .replace(/\.?context\([^)]*\)/g, '')
+        .replace(/^\./,  '')
+        .trim();
+      if (bareSlice) {
+        const { plan: barePlan } = await buildFetchPlanProduction(
+          graph as any,
+          bareSlice,
+          dummyWindow,
+        );
+        if (barePlan?.items) {
+          for (const item of barePlan.items) {
+            if (!item.querySignature || !item.targetId) continue;
+            const edgeId = item.targetId;
+            const coreHash = await computeShortCoreHash(item.querySignature);
+            const closureEntries = getClosureSet(coreHash);
+            const equivalentHashes = closureEntries.map(e => e.core_hash);
+            if (!result[edgeId]) result[edgeId] = [];
+            if (!result[edgeId].find(r => r.core_hash === coreHash)) {
+              result[edgeId].push({
+                core_hash: coreHash,
+                equivalent_hashes: equivalentHashes,
+                context_keys: [],
+              });
+            }
+          }
+        }
+      }
+    } catch {
+      // Non-fatal: bare regime is a best-effort fallback
+    }
+  }
+
   return result;
 }
 

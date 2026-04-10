@@ -204,6 +204,7 @@ def bind_snapshot_evidence(
     graph_snapshot: dict | None = None,
     commissioned_slices: dict[str, set[str]] | None = None,
     mece_dimensions: list[str] | None = None,
+    regime_selections: dict | None = None,
 ) -> BoundEvidence:
     """Bind evidence from snapshot DB rows, falling back to parameter files.
 
@@ -256,6 +257,25 @@ def bind_snapshot_evidence(
         pf_data = _resolve_param_file(param_id, param_files)
         ge = engorged_edges.get(edge_id)
         edge_commissioned = commissioned_slices.get(edge_id) if commissioned_slices else None
+
+        # Derive per-date regime classification from RegimeSelection.
+        # Classify each retrieved_at date as "mece_partition" or "uncontexted"
+        # by checking if the winning regime's rows have context slice_keys.
+        edge_regime_per_date: dict[str, str] | None = None
+        if regime_selections and edge_id in regime_selections:
+            rs = regime_selections[edge_id]
+            edge_regime_per_date = {}
+            # Build a quick lookup: for each date, check if any row has context
+            rows_for_edge = snapshot_rows.get(edge_id, [])
+            ctx_dates: set[str] = set()
+            for row in rows_for_edge:
+                ret_date = str(row.get("retrieved_at", ""))[:10]
+                if "context(" in str(row.get("slice_key", "")):
+                    ctx_dates.add(ret_date)
+            for date_str in rs.regime_per_date:
+                edge_regime_per_date[date_str] = (
+                    "mece_partition" if date_str in ctx_dates else "uncontexted"
+                )
 
         file_path = param_id_to_path.get(param_id, "")
         if not file_path:
@@ -342,7 +362,10 @@ def bind_snapshot_evidence(
                 settings=settings,
                 commissioned=edge_commissioned,
                 mece_dimensions=mece_dimensions,
+                regime_per_date=edge_regime_per_date,
             )
+            if edge_regime_per_date:
+                ev.regime_per_date = edge_regime_per_date
             _w_trajs = sum(len(c.trajectories) for c in ev.cohort_obs if "window" in c.slice_dsl)
             _w_daily = sum(len(c.daily) for c in ev.cohort_obs if "window" in c.slice_dsl)
             _c_trajs = sum(len(c.trajectories) for c in ev.cohort_obs if "cohort" in c.slice_dsl)
@@ -451,6 +474,7 @@ def _bind_from_snapshot_rows(
     settings: dict | None = None,
     commissioned: set[str] | None = None,
     mece_dimensions: list[str] | None = None,
+    regime_per_date: dict[str, str] | None = None,
 ) -> set[str]:
     """Convert snapshot DB rows to Cohort-first trajectory objects.
 
@@ -557,6 +581,39 @@ def _bind_from_snapshot_rows(
             day_bucket[ret_key] = dict(row)
             if is_ctx:
                 n_ctx_aggregated += 1
+
+    # §5.7 Per-date regime partitioning: remove MECE-regime rows from
+    # aggregate buckets. On dates where the regime is mece_partition,
+    # per-context rows (in ctx_window_rows/ctx_cohort_rows) provide the
+    # data — the aggregate must not also include them (double-counting).
+    # Only apply when slices are commissioned — if no slices, all data
+    # stays in the aggregate (the per-context rows have nowhere to go).
+    n_regime_filtered = 0
+    _has_ctx_data = bool(ctx_window_rows or ctx_cohort_rows)
+    if regime_per_date and commissioned and _has_ctx_data:
+        for anchor_day in list(agg_window.keys()):
+            ret_map = agg_window[anchor_day]
+            for ret_key in list(ret_map.keys()):
+                ret_date = ret_key[:10]
+                if regime_per_date.get(ret_date) == "mece_partition":
+                    del ret_map[ret_key]
+                    n_regime_filtered += 1
+            if not ret_map:
+                del agg_window[anchor_day]
+        for anchor_day in list(agg_cohort.keys()):
+            ret_map = agg_cohort[anchor_day]
+            for ret_key in list(ret_map.keys()):
+                ret_date = ret_key[:10]
+                if regime_per_date.get(ret_date) == "mece_partition":
+                    del ret_map[ret_key]
+                    n_regime_filtered += 1
+            if not ret_map:
+                del agg_cohort[anchor_day]
+        if n_regime_filtered > 0:
+            diagnostics.append(
+                f"INFO edge {ev.edge_id[:8]}…: regime routing removed {n_regime_filtered} "
+                f"MECE-regime rows from aggregate (§5.7 — per-slice likelihoods only)"
+            )
 
     # Flatten aggregated rows back into per-day lists
     for anchor_day, ret_map in agg_window.items():

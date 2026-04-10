@@ -642,6 +642,18 @@ Carrier-specific gates:
   MC fan), C (forecast, projected_rate = midpoint)
 - **axis_tau_max**: computed from sweep_span, edge_t95, path_t95,
   tau_extent — same candidates as v1
+- **Non-latency edges as δ₀**: `span_kernel.py` returns sigma=0 for
+  edges without a latency model; `_edge_sub_probability_density`
+  places all mass at tau=0; `mc_span_cdfs` gives zero SDs so no fake
+  timing uncertainty is injected
+- **FE SD promotion fix**: `promoteModelVars` in
+  `modelVarsResolution.ts` now includes mu_sd, sigma_sd, onset_sd
+  (and path equivalents) in the promotion result — previously omitted,
+  causing `promoted_mu_sd` to never be written
+- **Synth test graph**: `synth-forecast-test` created with 6 edges
+  (including non-latency gate, fan-in at hub, slow/fast upstream
+  paths). 85,944 snapshot rows generated and verified.  Blocked on
+  CLI issues (see `33-cli-analyse-blockers.md`)
 
 ### Known defects / incomplete items
 
@@ -669,6 +681,11 @@ Carrier-specific gates:
   so draws with better-fitting CDF shapes survive indirectly, but
   CDF shape is not directly weighted by observed frontier data.
   Per-draw CDF conditioning is deferred to §Deferred Work.
+
+- **CLI blockers** (doc `33-cli-analyse-blockers.md`): DSL subject
+  doubling and missing topo pass prevent CLI-based testing on synth
+  graphs.  All acceptance gates that require CLI verification are
+  blocked until these are resolved.
 
 ---
 

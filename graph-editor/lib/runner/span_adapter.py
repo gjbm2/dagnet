@@ -125,22 +125,23 @@ def span_kernel_to_edge_params(
             params['p_stdev'] = p_sd
             params['p_stdev_cohort'] = p_sd
 
-        # Posterior SDs for MC fan (from last edge's path-level)
-        for key in ('bayes_mu_sd', 'bayes_sigma_sd', 'bayes_onset_sd',
-                     'bayes_onset_mu_corr', 'bayes_path_mu_sd',
-                     'bayes_path_sigma_sd', 'bayes_path_onset_sd',
-                     'bayes_path_onset_mu_corr'):
-            val = posterior.get(key.replace('bayes_', '').replace('path_', 'path_'))
-            if val is None:
-                # Try alternate locations
-                if 'path' in key:
-                    alt_key = key.replace('bayes_path_', '')
-                    val = posterior.get(f'path_{alt_key}') or latency.get(f'path_{alt_key}')
-                else:
-                    alt_key = key.replace('bayes_', '')
-                    val = posterior.get(alt_key) or latency.get(alt_key)
+        # Posterior SDs for MC fan — read from promoted model fields.
+        # The FE's applyPromotion writes promoted_mu_sd etc. from
+        # whichever model_var won.  Fall back to posterior (Bayes).
+        _sd_map = {
+            'bayes_mu_sd':              ('promoted_mu_sd',              'mu_sd'),
+            'bayes_sigma_sd':           ('promoted_sigma_sd',           'sigma_sd'),
+            'bayes_onset_sd':           ('promoted_onset_sd',           'onset_sd'),
+            'bayes_onset_mu_corr':      ('promoted_onset_mu_corr',      'onset_mu_corr'),
+            'bayes_path_mu_sd':         ('promoted_path_mu_sd',         'path_mu_sd'),
+            'bayes_path_sigma_sd':      ('promoted_path_sigma_sd',      'path_sigma_sd'),
+            'bayes_path_onset_sd':      ('promoted_path_onset_sd',      'path_onset_sd'),
+            'bayes_path_onset_mu_corr': ('promoted_path_onset_mu_corr', 'path_onset_mu_corr'),
+        }
+        for param_key, (promoted_key, posterior_key) in _sd_map.items():
+            val = latency.get(promoted_key) or posterior.get(posterior_key)
             if isinstance(val, (int, float)):
-                params[key] = float(val)
+                params[param_key] = float(val)
 
         # t95
         t95 = latency.get('promoted_t95') or latency.get('t95')

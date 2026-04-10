@@ -1,9 +1,12 @@
 # Phase A — Multi-Hop Cohort Maturity: Subject Kernel and Sampler-Preserving Integration
 
 **Date**: 9-Apr-26  
-**Status**: Design + implementation plan  
-**Depends on**: Docs 30 and 31 are implemented and are treated as
-available infrastructure  
+**Status**: Substantially implemented (10-Apr-26).
+`cohort_forecast_v2.py` (1000+ lines), `span_kernel.py`,
+`span_evidence.py`, `span_adapter.py`, `cohort_maturity_v2` registered
+FE+BE. Remaining: formal parity gate (A.4), multi-hop acceptance
+tests (A.5)  
+**Depends on**: Docs 30 and 31 — implemented and available  
 **Companion docs**:
 - `29-generalised-forecast-engine-design.md`
 - `29b-span-kernel-operator-algebra.md`

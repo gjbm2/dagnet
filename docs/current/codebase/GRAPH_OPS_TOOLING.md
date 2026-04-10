@@ -180,9 +180,11 @@ the first scenario's DSL for the BE `query_dsl`.
 
 | Flag | Purpose |
 |------|---------|
-| `--type <type>` | Analysis type (graph_overview, cohort_maturity, daily_conversions, lag_histogram, surprise, bridge) |
+| `--type <type>` | Analysis type (graph_overview, cohort_maturity, cohort_maturity_v2, daily_conversions, lag_histogram, surprise, bridge) |
 | `--scenario <spec>` | Scenario specification (repeatable) |
 | `--subject <dsl>` | Analysis subject DSL (e.g. `from(x).to(y)`) — shared across scenarios |
+| `--topo-pass` | Run BE topo pass before analysis — populates promoted latency stats from parameter file evidence |
+| `--no-snapshot-cache` | Bypass BE snapshot service cache (essential after `synth_gen.py` or DB repopulation) |
 | `--get <key>` | Extract a value via dot-path (e.g. `result.data.0.probability`) |
 | `--format json\|yaml` | Output format (default: json) |
 | `--no-cache` | Bypass disk bundle cache |

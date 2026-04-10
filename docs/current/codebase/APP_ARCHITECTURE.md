@@ -171,6 +171,17 @@ environment variables.
 - **`bootstrap.ts`** — shared arg parsing, graph loading, registry
   seeding; new commands extend this rather than duplicating setup
 
+**Known limitation**: the `from-file` fetch path calls
+`getParameterFromFile` → `fileRegistry.restoreFile()` which hits IDB.
+In Node, IDB operations fail silently — parameter values are never
+written onto graph edges, and Stage 2 (FE topo pass) produces nothing.
+Parameter file data IS loaded into `bundle.parameters` by diskLoader,
+but it doesn't reach the graph edges via the normal fetch pipeline.
+The `--topo-pass` flag on `analyse.ts` works around this by reading
+cohort evidence directly from `bundle.parameters` and calling the BE
+`/api/lag/topo-pass` endpoint. See `FE_BE_STATS_PARALLELISM.md` §CLI
+topo pass.
+
 E2E parity is verified by a Playwright test
 (`e2e/cliParityGraphOverview.spec.ts`) that loads the same graph in
 the browser, runs the from-file pipeline, and compares the BE result

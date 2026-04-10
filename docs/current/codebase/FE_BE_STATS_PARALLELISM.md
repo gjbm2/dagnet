@@ -155,6 +155,28 @@ user-configured values:
 Defined in `graph_types.py:72-74`. FE consumers use fallback chains
 (e.g. `localAnalysisComputeService.ts:417,576,623`).
 
+## CLI topo pass
+
+The CLI (`src/cli/commands/analyse.ts`) has a `--topo-pass` flag that
+calls the same BE `/api/lag/topo-pass` endpoint. This is necessary
+because the FE topo pass (Stage 2 of the fetch pipeline) does not run
+in Node — `getParameterFromFile` calls `fileRegistry.restoreFile()`
+which hits IDB, and IDB is unavailable in the CLI's Node environment.
+The fetch pipeline fails silently, leaving `model_vars` and
+`promoted_*` fields unpopulated.
+
+The CLI workaround builds `cohort_data` directly from
+`bundle.parameters` (parameter YAML files loaded from disk by
+`diskLoader.ts`), converts per-day parallel arrays into per-date
+`CohortData` records, and sends them alongside the graph to the BE
+topo pass endpoint. The returned per-edge stats are written as
+`promoted_*` fields onto the base graph before analysis dispatch.
+
+This is functionally equivalent to the browser path (FE topo pass →
+`applyPromotion`) but bypasses IDB entirely. The stats engine
+receives the same inputs and produces the same outputs — only the
+transport layer differs.
+
 ## Key files
 
 | File | Role |
@@ -166,3 +188,4 @@ Defined in `graph_types.py:72-74`. FE consumers use fallback chains
 | `src/services/modelVarsResolution.ts` | Preference hierarchy for model_vars |
 | `lib/runner/stats_engine.py` | BE topo pass implementation (Python port of FE) |
 | `lib/api_handlers.py` | `/api/lag/topo-pass` endpoint handler |
+| `src/cli/commands/analyse.ts` | CLI `--topo-pass` flag (builds cohort_data from disk, calls BE) |

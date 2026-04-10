@@ -352,7 +352,7 @@ export async function getFromSourceDirect(options: {
         return errorResult;
       }
       const parsedSig = parseSignature(signatureStr);
-      if (!parsedSig.coreHash) {
+      if (!parsedSig.identityHash) {
         sessionLogService.endOperation(logOpId, 'warning', 'asat: invalid query_signature (snapshot lookup skipped)');
         return errorResult;
       }

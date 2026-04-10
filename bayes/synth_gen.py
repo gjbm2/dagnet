@@ -1160,10 +1160,11 @@ def simulate_graph(
     # by from-node arrival day across simulation days).
     snapshot_start_offset = sim_config.get("snapshot_start_offset", 0)
     # emit_context_slices: when True, emit per-context rows instead of
-    # bare aggregate rows.  Defaults to False — the compiler doesn't yet
-    # support per-context modelling (Phase C).  Set to True in the truth
+    # bare aggregate rows.  Defaults to False.  Set to True in the truth
     # file to test context-aware pipelines.
+    # When 'epochs' is defined, context emission varies by day.
     emit_context_slices = truth.get("emit_context_slices", False)
+    epochs = truth.get("epochs")
 
     snapshot_rows = _generate_observations_nightly(
         topology, sorted_times, sorted_edge_times, actual_traffic,
@@ -1172,6 +1173,7 @@ def simulate_graph(
         context_dims=context_dims,
         snapshot_start_offset=snapshot_start_offset,
         emit_context_slices=emit_context_slices,
+        epochs=epochs,
     )
 
     # Free the raw person data now
@@ -1358,6 +1360,7 @@ def _generate_observations_nightly(
     context_dims: list[dict] | None = None,
     snapshot_start_offset: int = 0,
     emit_context_slices: bool = False,
+    epochs: list[dict] | None = None,
 ) -> dict[str, list[dict]]:
     """Generate snapshot rows using nightly fetch simulation.
 
@@ -1391,6 +1394,18 @@ def _generate_observations_nightly(
     window groups by from-node arrival day, cohort groups by anchor entry day.
     """
     result: dict[str, list[dict]] = defaultdict(list)
+
+    # Epoch-aware context emission: resolve per anchor_day whether to
+    # emit context-qualified or bare aggregate rows. When epochs is
+    # defined, each epoch specifies a day range and whether context
+    # slices are emitted. When epochs is None, use the global flag.
+    def _emit_ctx_for_day(day_offset: int) -> bool:
+        if not epochs:
+            return emit_context_slices
+        for ep in epochs:
+            if ep.get("from_day", 0) <= day_offset <= ep.get("to_day", 999999):
+                return ep.get("emit_context_slices", False)
+        return False  # no epoch covers this day
 
     # Pre-compute latency stats per edge for DB rows
     edge_latency_stats: dict[str, dict] = {}
@@ -1427,7 +1442,9 @@ def _generate_observations_nightly(
             }
 
     # Pre-resolve hashes per edge
-    edge_hashes: dict[str, tuple[str, str]] = {}
+    # edge_hashes: (bare_window, bare_cohort, ctx_window, ctx_cohort)
+    # ctx hashes may be empty strings when no context dimensions exist.
+    edge_hashes: dict[str, tuple[str, str, str, str]] = {}
     for edge_id, et in topology.edges.items():
         pid = et.param_id
         hashes = hash_lookup.get(pid)
@@ -1435,9 +1452,12 @@ def _generate_observations_nightly(
             bare = pid.replace("parameter-", "") if pid.startswith("parameter-") else pid
             hashes = hash_lookup.get(bare)
         if hashes:
-            edge_hashes[edge_id] = (hashes["window_hash"], hashes["cohort_hash"])
+            edge_hashes[edge_id] = (
+                hashes["window_hash"], hashes["cohort_hash"],
+                hashes.get("ctx_window_hash", ""), hashes.get("ctx_cohort_hash", ""),
+            )
         else:
-            edge_hashes[edge_id] = (f"SYNTH-{pid}-w", f"SYNTH-{pid}-c")
+            edge_hashes[edge_id] = (f"SYNTH-{pid}-w", f"SYNTH-{pid}-c", "", "")
 
     _tsd = total_sim_days or n_days
 
@@ -1624,14 +1644,15 @@ def _generate_observations_nightly(
                     continue
 
                 pid = et.param_id
-                w_hash, c_hash = edge_hashes[edge_id]
+                w_hash, c_hash, ctx_w_hash, ctx_c_hash = edge_hashes[edge_id]
                 from_times = sorted_times[sim_day].get(et.from_node, [])
                 edge_times = day_edge_sorted.get(edge_id, [])
                 x_cohort = _count_by_age(from_times, age)
                 y_cohort = _count_by_age(edge_times, age)
 
                 lstats = edge_latency_stats.get(edge_id, {})
-                if not ctx_keys or not emit_context_slices:
+                _emit_ctx_this_day = _emit_ctx_for_day(obs_day_offset)
+                if not ctx_keys or not _emit_ctx_this_day:
                     # Bare aggregate cohort row
                     result[edge_id].append({
                         "param_id": pid,
@@ -1651,8 +1672,8 @@ def _generate_observations_nightly(
                     n_cohort_rows += 1
 
                 # Per-context cohort rows (emitted instead of aggregate
-                # when emit_context_slices is True — matches prod behaviour)
-                if emit_context_slices:
+                # when context emission is active for this day)
+                if _emit_ctx_this_day:
                     for ck in ctx_keys:
                         ctx_from = ctx_sorted_times[ck][sim_day].get(et.from_node, [])
                         ctx_edge = ctx_sorted_edge_times[ck][sim_day].get(edge_id, [])
@@ -1662,7 +1683,7 @@ def _generate_observations_nightly(
                         if ctx_a > 0:
                             result[edge_id].append({
                                 "param_id": pid,
-                                "core_hash": c_hash,
+                                "core_hash": ctx_c_hash or c_hash,
                                 "slice_key": f"{ck}.cohort()",
                                 "anchor_day": anchor_day_str,
                                 "retrieved_at": retrieved_at,
@@ -1677,8 +1698,7 @@ def _generate_observations_nightly(
                             })
                             n_cohort_rows += 1
 
-        if (fi + 1) % 10 == 0:
-            print(f"  Cohort observations: {fi + 1}/{len(fetch_nights)} nights, {n_cohort_rows} rows", flush=True)
+    print(f"  Cohort: {len(fetch_nights)} nights, {n_cohort_rows} rows", flush=True)
 
     # ── Generate window rows ────────────────────────────────────────────
     # Window: anchor_day = absolute calendar day person reached from_node,
@@ -1696,7 +1716,7 @@ def _generate_observations_nightly(
                 continue
 
             pid = et.param_id
-            w_hash, _c_hash = edge_hashes[edge_id]
+            w_hash, _c_hash, ctx_w_hash_e, _ctx_c_hash_e = edge_hashes[edge_id]
             edge_window = window_sorted.get(edge_id, {})
 
             for abs_from_day, (total_x, conv_offsets) in edge_window.items():
@@ -1722,7 +1742,8 @@ def _generate_observations_nightly(
 
                 if total_x > 0:
                     lstats = edge_latency_stats.get(edge_id, {})
-                    if not ctx_keys or not emit_context_slices:
+                    _emit_ctx_this_day_w = _emit_ctx_for_day(abs_from_day)
+                    if not ctx_keys or not _emit_ctx_this_day_w:
                         # Bare aggregate window row
                         result[edge_id].append({
                             "param_id": pid,
@@ -1740,8 +1761,8 @@ def _generate_observations_nightly(
                         n_window_rows += 1
 
                     # Per-context window rows (emitted instead of aggregate
-                    # when emit_context_slices is True)
-                    if emit_context_slices:
+                    # when context emission is active for this day)
+                    if _emit_ctx_this_day_w:
                         for ck in ctx_keys:
                             ctx_edge_window = ctx_window_sorted.get(ck, {}).get(edge_id, {})
                             ctx_entry = ctx_edge_window.get(abs_from_day)
@@ -1753,7 +1774,7 @@ def _generate_observations_nightly(
                             ctx_y_w = bisect.bisect_right(ctx_conv, float(w_age))
                             result[edge_id].append({
                                 "param_id": pid,
-                                "core_hash": w_hash,
+                                "core_hash": ctx_w_hash_e or w_hash,
                                 "slice_key": f"{ck}.window()",
                                 "anchor_day": anchor_day_str,
                                 "retrieved_at": retrieved_at,
@@ -1766,9 +1787,7 @@ def _generate_observations_nightly(
                             })
                             n_window_rows += 1
 
-        if (fi + 1) % 10 == 0:
-            print(f"  Window observations: {fi + 1}/{len(fetch_nights)} nights, {n_window_rows} rows", flush=True)
-
+    print(f"  Window: {len(fetch_nights)} nights, {n_window_rows} rows", flush=True)
     print(f"  Total: {sum(len(v) for v in result.values())} rows ({n_cohort_rows} cohort + {n_window_rows} window)", flush=True)
     return dict(result)
 
@@ -1802,13 +1821,45 @@ def _rehash_snapshot_rows(
 
         w_hash = hashes["window_hash"]
         c_hash = hashes["cohort_hash"]
+        ctx_w_hash = hashes.get("ctx_window_hash", "")
+        ctx_c_hash = hashes.get("ctx_cohort_hash", "")
 
         for r in rows:
             sk = r.get("slice_key", "")
+            is_ctx = "context(" in sk
             if "cohort" in sk:
-                r["core_hash"] = c_hash
+                r["core_hash"] = (ctx_c_hash or c_hash) if is_ctx else c_hash
             else:
-                r["core_hash"] = w_hash
+                r["core_hash"] = (ctx_w_hash or w_hash) if is_ctx else w_hash
+
+
+def _build_verify_checks(hashes: dict[str, str]) -> list[tuple[str, str, bool]]:
+    """Build the list of (mode, hash, expect_rows) for verification.
+
+    For each hash family (bare window/cohort, context window/cohort),
+    determine whether 0 DB rows constitutes a failure.
+
+    Rules:
+    - Context hashes with 0 rows → always FAIL (if they exist, data should be there)
+    - Bare hashes with 0 rows → FAIL only if no context hashes exist
+      (uniform-epoch context graphs have all rows under context hashes)
+    """
+    has_ctx = bool(hashes.get("ctx_window_hash") or hashes.get("ctx_cohort_hash"))
+
+    checks: list[tuple[str, str, bool]] = []
+    for mode, key, is_bare in [
+        ("window", "window_hash", True),
+        ("cohort", "cohort_hash", True),
+        ("ctx_window", "ctx_window_hash", False),
+        ("ctx_cohort", "ctx_cohort_hash", False),
+    ]:
+        h = hashes.get(key, "")
+        if not h:
+            continue
+        expect_rows = (not is_bare) or (is_bare and not has_ctx)
+        checks.append((mode, h, expect_rows))
+
+    return checks
 
 
 def _verify_db_data(
@@ -1839,14 +1890,14 @@ def _verify_db_data(
 
         db_pid = f"{workspace_prefix}-{pid}" if workspace_prefix else pid
 
-        for mode, h in [("window", hashes["window_hash"]), ("cohort", hashes["cohort_hash"])]:
+        for mode, h, expect_rows in _build_verify_checks(hashes):
             cur.execute(
                 "SELECT COUNT(*) FROM snapshots WHERE core_hash = %s AND param_id = %s",
                 (h, db_pid),
             )
             count = cur.fetchone()[0]
-            status = "PASS" if count > 0 else "FAIL"
-            if count == 0:
+            status = "PASS" if count > 0 else ("ok" if not expect_rows else "FAIL")
+            if count == 0 and expect_rows:
                 all_ok = False
             print(f"  {status} {pid} {mode}: {count} rows (hash={h[:16]}…, db_pid={db_pid[:40]})")
 
@@ -2265,6 +2316,34 @@ def write_parameter_files(
     return written
 
 
+def _build_synth_dsl(sim_stats: dict, truth: dict) -> tuple[str, str]:
+    """Build the full DSL and bare (temporal-only) DSL from sim_stats + truth.
+
+    Returns (full_dsl, bare_dsl).  full_dsl includes context qualifiers when
+    any epoch emits context slices; bare_dsl is always window();cohort() only.
+    """
+    base_date = datetime.strptime(sim_stats["base_date"], "%Y-%m-%d")
+    n_days = sim_stats["n_days"]
+    end_date = base_date + timedelta(days=n_days - 1)
+    window_from = _format_date_dmy(base_date)
+    window_to = _format_date_dmy(end_date)
+
+    bare_dsl = f"window({window_from}:{window_to});cohort({window_from}:{window_to})"
+
+    emit_ctx = truth.get("emit_context_slices", False)
+    epochs = truth.get("epochs")
+    if epochs and any(e.get("emit_context_slices") for e in epochs):
+        emit_ctx = True
+    context_dims = truth.get("context_dimensions", [])
+    if emit_ctx and context_dims:
+        ctx_parts = ";".join(f"context({d['id']})" for d in context_dims)
+        full_dsl = f"({bare_dsl})({ctx_parts})"
+    else:
+        full_dsl = bare_dsl
+
+    return full_dsl, bare_dsl
+
+
 def set_simulation_guard(
     graph_path: str,
     enable: bool = True,
@@ -2277,9 +2356,7 @@ def set_simulation_guard(
     preventing real Amplitude fetches from overwriting synthetic data.
 
     Also sets dataInterestsDSL and currentQueryDSL so the FE knows
-    what date range the synthetic data covers. If truth has context
-    dimensions, the DSL includes context qualifiers so the FE expands
-    the cartesian product (obs_type × context_value).
+    what date range the synthetic data covers.
     """
     with open(graph_path) as f:
         graph = json.load(f)
@@ -2290,27 +2367,14 @@ def set_simulation_guard(
         graph["runBayes"] = False
 
         if sim_stats:
+            full_dsl, bare_dsl = _build_synth_dsl(sim_stats, truth or {})
             base_date = datetime.strptime(sim_stats["base_date"], "%Y-%m-%d")
-            n_days = sim_stats["n_days"]
-            end_date = base_date + timedelta(days=n_days - 1)
+            end_date = base_date + timedelta(days=sim_stats["n_days"] - 1)
             window_from = _format_date_dmy(base_date)
             window_to = _format_date_dmy(end_date)
 
-            temporal = f"window({window_from}:{window_to});cohort({window_from}:{window_to})"
-
-            # Add context dimensions to DSL only when emit_context_slices
-            # is True.  Format: (window;cohort)(context(dim1);context(dim2))
-            # The FE expands this as a cartesian product.
-            emit_ctx = (truth or {}).get("emit_context_slices", False)
-            context_dims = (truth or {}).get("context_dimensions", [])
-            if emit_ctx and context_dims:
-                ctx_parts = ";".join(f"context({d['id']})" for d in context_dims)
-                dsl = f"({temporal})({ctx_parts})"
-            else:
-                dsl = temporal
-
-            graph["dataInterestsDSL"] = dsl
-            graph["pinnedDSL"] = dsl
+            graph["dataInterestsDSL"] = full_dsl
+            graph["pinnedDSL"] = full_dsl
             graph["currentQueryDSL"] = f"window({window_from}:{window_to})"
     else:
         graph.pop("simulation", None)
@@ -2620,7 +2684,7 @@ Examples:
             }
             if not pid.startswith("parameter-"):
                 hash_lookup[f"parameter-{pid}"] = hash_lookup[pid]
-    print(f"Hashes: {len(hash_lookup)} edges resolved via FE (Node.js)")
+    print(f"Hashes: {len(hash_lookup)} edges (placeholders — real hashes in Step 2)")
     # Also merge any hashes from truth config edges
     for pid, edata in truth.get("edges", {}).items():
         if "window_hash" in edata and "cohort_hash" in edata:
@@ -2668,20 +2732,29 @@ Examples:
     # Single-pass: structural metadata → FE hashes → DB → param files → verify.
     # ALL hash computation goes through compute_snapshot_subjects.mjs (Node.js).
     # No Python hash computation. One source of truth.
+    #
+    # The DSL is computed ONCE here from sim_stats + truth, then passed
+    # explicitly to both the CLI calls and set_simulation_guard.  This
+    # eliminates the ordering dependency where Step 1 had to write the
+    # DSL to disk before Step 2 could read it.
 
     import subprocess as _sp
+
+    full_dsl, bare_dsl = _build_synth_dsl(sim_stats, truth)
+    print(f"\nDSL: {full_dsl}")
 
     # 1. Update graph edge structural metadata on disk.
     #    (query, latency_parameter, anchor_node_id, cohort_anchor_event_id)
     #    Does NOT touch analytical params (mu/sigma/t95) — stats pass does that.
     if args.write_files:
+        _t1 = _time.time()
         print(f"\n── Step 1: Update graph structural metadata ──")
         update_graph_edge_metadata(graph_path, topology, truth, sim_stats)
         print("  Updated: query, latency_parameter, cohort_anchor_event_id")
 
         # Set simulation guard (simulation=true, dailyFetch=false, DSL)
         set_simulation_guard(graph_path, enable=True, sim_stats=sim_stats, truth=truth)
-        print("  Set simulation guard")
+        print(f"  Set simulation guard ({_time.time() - _t1:.1f}s)")
 
     # 1b. Write context definition files from truth file.
     #     Context definitions affect hash computation (context_def_hashes
@@ -2692,12 +2765,10 @@ Examples:
         print(f"\n── Step 1b: Write context definitions ──")
         write_context_files(truth, data_repo)
 
-    # 2. Compute authoritative hashes via CLI (from the graph on disk).
-    #    Uses the real FE pipeline (bayes.ts → buildFetchPlanProduction →
-    #    mapFetchPlanToSnapshotSubjects → computeQuerySignature) so hashes
-    #    are guaranteed to match what the FE would send to the Bayes worker.
-    #    This MUST happen AFTER structural metadata update (latency_parameter
-    #    affects the hash) but the graph must be on disk for Node to read it.
+    # 2. Compute authoritative hashes via CLI.
+    #    DSL is passed explicitly (computed from sim_stats above) so this
+    #    works regardless of whether --write-files wrote it to disk.
+    _t2 = _time.time()
     print(f"\n── Step 2: Compute FE-authoritative hashes ──")
     graph_dir = os.path.dirname(os.path.dirname(graph_path))  # .../graphs/X.json → .../
     graph_name_for_cli = os.path.basename(graph_path).replace(".json", "")
@@ -2708,66 +2779,90 @@ Examples:
         f'nvm use "$(cat .nvmrc)" 2>/dev/null && '
     )
 
-    def _cli_hashes_for_dsl(dsl: str) -> dict[str, str]:
-        """Call CLI with a specific DSL, return edge_uuid → core_hash mapping."""
-        # Write a temp copy of the graph with the given DSL
-        import tempfile, shutil
+    def _cli_call(dsl: str) -> dict:
+        """Call CLI with explicit DSL override, return full payload."""
+        import tempfile
+        _t0 = _time.time()
         with tempfile.TemporaryDirectory() as tmp:
-            # Mirror the data repo structure for the CLI loader
             tmp_graphs = os.path.join(tmp, "graphs")
             os.makedirs(tmp_graphs)
             with open(graph_path) as f:
                 g = json.load(f)
             g["dataInterestsDSL"] = dsl
-            tmp_graph = os.path.join(tmp_graphs, f"{graph_name_for_cli}.json")
-            with open(tmp_graph, "w") as f:
+            with open(os.path.join(tmp_graphs, f"{graph_name_for_cli}.json"), "w") as f:
                 json.dump(g, f)
-            # Symlink supporting dirs
             for d in ("events", "contexts", "parameters", "nodes", "cases", "connections"):
                 src = os.path.join(graph_dir, d)
                 if os.path.isdir(src):
                     os.symlink(src, os.path.join(tmp, d))
-
             cmd = (
                 f'{nvm_prefix}'
                 f'npx tsx src/cli/bayes.ts '
                 f'--graph {tmp} --name {graph_name_for_cli} --format json --no-cache'
             )
-            r = _sp.run(cmd, shell=True, capture_output=True, text=True, timeout=60,
-                        cwd=REPO_ROOT)
-            if r.returncode != 0:
-                print(f"  ERROR: CLI hash computation failed for DSL '{dsl[:60]}':")
-                print(f"  {r.stderr[:500]}")
-                sys.exit(1)
-            stdout = r.stdout
-            payload = json.loads(stdout[stdout.index("{"):])
-            result: dict[str, str] = {}
-            for subj in payload.get("snapshot_subjects", []):
-                eid = subj.get("edge_id", "")
-                ch = subj.get("core_hash", "")
-                if eid and ch:
-                    result[eid] = ch
-            return result
+            r = _sp.run(cmd, shell=True, capture_output=True, text=True, timeout=30, cwd=REPO_ROOT)
+        _elapsed = _time.time() - _t0
+        if r.returncode != 0:
+            print(f"  CLI FAILED ({_elapsed:.1f}s): {r.stderr[:300]}")
+            sys.exit(1)
+        return json.loads(r.stdout[r.stdout.index("{"):])
 
-    # Extract date range from truth file or graph DSL
-    _dsl = truth.get("simulation", {}).get("dsl", "")
-    if not _dsl:
-        _existing_dsl = ""
-        with open(graph_path) as f:
-            _existing_dsl = json.load(f).get("dataInterestsDSL", "")
-        _date_match = re.search(r"(\d{1,2}-\w{3}-\d{2}:\d{1,2}-\w{3}-\d{2})", _existing_dsl)
-        if _date_match:
-            date_range = _date_match.group(1)
+    # --- Call 1: full DSL (context-qualified subjects + candidate regimes) ---
+    print(f"  CLI call 1 (full DSL)…", end="", flush=True)
+    _t0 = _time.time()
+    _payload = _cli_call(full_dsl)
+    _all_subj = _payload.get("snapshot_subjects", [])
+    _cr = _payload.get("candidate_regimes_by_edge", {})
+    print(f" {len(_all_subj)} subjects, {sum(len(v) for v in _cr.values())} regimes ({_time.time() - _t0:.1f}s)", flush=True)
+
+    # Classify subjects into hash families by slice_key content
+    window_hashes: dict[str, str] = {}   # edge_uuid → bare window hash
+    cohort_hashes: dict[str, str] = {}
+    ctx_window_hashes: dict[str, str] = {}
+    ctx_cohort_hashes: dict[str, str] = {}
+    for subj in _all_subj:
+        eid = subj.get("edge_id", "")
+        ch = subj.get("core_hash", "")
+        sks = subj.get("slice_keys", [])
+        if not eid or not ch:
+            continue
+        sk = sks[0] if sks else ""
+        is_ctx = "context(" in sk
+        is_cohort = "cohort" in sk
+        if is_ctx:
+            if is_cohort:
+                ctx_cohort_hashes[eid] = ch
+            else:
+                ctx_window_hashes[eid] = ch
         else:
-            # Derive from simulation dates
-            from datetime import timedelta
-            base = datetime.strptime("12-Dec-25", "%d-%b-%y")
-            n_days = truth.get("simulation", {}).get("n_days", 90)
-            end = base + timedelta(days=n_days)
-            date_range = f"{base.strftime('%-d-%b-%y')}:{end.strftime('%-d-%b-%y')}"
+            if is_cohort:
+                cohort_hashes[eid] = ch
+            else:
+                window_hashes[eid] = ch
 
-    window_hashes = _cli_hashes_for_dsl(f"window({date_range})")
-    cohort_hashes = _cli_hashes_for_dsl(f"cohort({date_range})")
+    # --- Call 2 (conditional): bare DSL for mixed-epoch data ---
+    # Context-only DSL produces context-qualified hashes only.  Bare
+    # (uncontexted) hashes are different core_hashes.  For mixed-epoch
+    # data we need both families → exactly 1 extra CLI call.
+    _epochs = truth.get("epochs")
+    _has_ctx_epochs = _epochs and any(ep.get("emit_context_slices") for ep in _epochs)
+    _need_bare = ((ctx_window_hashes or ctx_cohort_hashes) and not window_hashes) or _has_ctx_epochs
+    if _need_bare:
+        print(f"  CLI call 2 (bare DSL)…", end="", flush=True)
+        _t0b = _time.time()
+        _bare_payload = _cli_call(bare_dsl)
+        for subj in _bare_payload.get("snapshot_subjects", []):
+            eid = subj.get("edge_id", "")
+            ch = subj.get("core_hash", "")
+            sig = subj.get("canonical_signature", "")
+            if not eid or not ch:
+                continue
+            is_cohort = "cohort" in sig or ('"q"' in sig and '"cohort"' in sig)
+            if is_cohort:
+                cohort_hashes.setdefault(eid, ch)
+            else:
+                window_hashes.setdefault(eid, ch)
+        print(f" done ({_time.time() - _t0b:.1f}s)", flush=True)
 
     # Build uuid → param_id mapping from graph
     with open(graph_path) as f:
@@ -2782,18 +2877,28 @@ Examples:
     for uuid, pid in uuid_to_pid.items():
         wh = window_hashes.get(uuid, "")
         ch = cohort_hashes.get(uuid, "")
-        if wh or ch:
-            hash_lookup[pid] = {"window_hash": wh, "cohort_hash": ch}
+        ctx_wh = ctx_window_hashes.get(uuid, "")
+        ctx_ch = ctx_cohort_hashes.get(uuid, "")
+        if wh or ch or ctx_wh or ctx_ch:
+            hash_lookup[pid] = {
+                "window_hash": wh, "cohort_hash": ch,
+                "ctx_window_hash": ctx_wh, "ctx_cohort_hash": ctx_ch,
+            }
             if not pid.startswith("parameter-"):
                 hash_lookup[f"parameter-{pid}"] = hash_lookup[pid]
-    print(f"  {len(hash_lookup) // 2} edges resolved (via CLI)")
+    n_edges = len(hash_lookup) // 2
+    print(f"  {n_edges} edges resolved ({_time.time() - _t2:.1f}s total)")
     for pid, h in hash_lookup.items():
         if not pid.startswith("parameter-"):
-            print(f"    {pid}: w={h['window_hash'][:16]}… c={h['cohort_hash'][:16]}…")
+            ctx_info = ""
+            if h.get("ctx_window_hash"):
+                ctx_info = f" ctx_w={h['ctx_window_hash'][:16]}…"
+            print(f"    {pid}: w={h['window_hash'][:16]}… c={h['cohort_hash'][:16]}…{ctx_info}")
 
     # 3. Write to snapshot DB using FE hashes.
     workspace_prefix = ""
     if db_conn:
+        _t3 = _time.time()
         print(f"\n── Step 3: Write to snapshot DB ──")
         repo_name = os.path.basename(data_repo)
         try:
@@ -2814,11 +2919,13 @@ Examples:
         except Exception as e:
             print(f"  WARNING: DB write failed: {e}")
             print(f"  (Continuing with file generation if --write-files is set)")
+        print(f"  Step 3 done ({_time.time() - _t3:.1f}s)")
     else:
         print(f"\n── Step 3: SKIPPED (no DB_CONNECTION) ──")
 
     # 4. Write parameter files using FE hashes.
     if args.write_files:
+        _t4 = _time.time()
         print(f"\n── Step 4: Write parameter files ──")
         with open(graph_path) as f:
             updated_graph = json.load(f)
@@ -2827,6 +2934,7 @@ Examples:
         )
         print(f"  Wrote {len(written_params)} parameter files")
         update_parameter_index(data_repo, written_params)
+        print(f"  Step 4 done ({_time.time() - _t4:.1f}s)")
 
     # 5. Verify: query DB with the SAME hashes and confirm data exists.
     if db_conn:

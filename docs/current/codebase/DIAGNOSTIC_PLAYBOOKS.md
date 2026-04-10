@@ -48,11 +48,35 @@ Structured checklists for common symptoms. When something's broken, find the mat
 ## Symptom: Data fetch returned stale/wrong results
 
 **Check in order**:
-1. Is the **core_hash** correct? Check `coreHashService.computeHash()` with the current query signature. If an event or context was renamed, the hash may have changed without a hash-mapping entry.
+1. Is the **core_hash** correct? Check `coreHashService.computeShortCoreHash()` with the current query signature. If an event or context was renamed, the hash may have changed without a hash-mapping entry.
 2. Are **equivalent_hashes** being sent? If hash-mappings.json has entries linking old→new hashes, the FE should send the closure set. Check `hashMappingsService.getEquivalentHashes()`.
 3. Is the **slice_key** correct? Contexted queries must use the right slice. Check `fetchPlanBuilderService` output.
 4. Is the snapshot DB returning the right rows? Check `/api/snapshots/query` response directly.
 5. Is the FE **caching** a previous result? `graphComputeClient` has a 5-minute TTL cache. Check if the cache key matches.
+
+## Symptom: Hash mismatch — "no data" despite data existing in DB
+
+This is the most common hash-related failure. The write path stored data under one `core_hash`, but the read path computes a different one.
+
+**Step-by-step diagnosis**:
+
+1. **Get the stored hash.** Query the DB: `SELECT DISTINCT core_hash FROM snapshots WHERE param_id LIKE '%your-param%'`. Note the ~22-char base64url values.
+
+2. **Get the computed hash.** Check session logs for `SIGNATURE_COMPUTED` entries (logged at debug level by `computeQuerySignature`). The `coreHash` field in metadata shows the first 16 chars. Alternatively, set a breakpoint or `console.log` in `computeQuerySignature()` to capture the full `coreCanonical` JSON object.
+
+3. **If the DB hash ≠ computed hash, compare inputs.** The hash changed because an input to `computeQuerySignature()` differs between write time and read time. Common causes:
+   - **Event definition changed** (AP 28): an event's `provider_event_names` or `amplitude_filters` were modified → `event_def_hashes` changed → different `coreHash` → different `core_hash`. Fix: create a hash mapping.
+   - **Context definition changed**: a context YAML was edited → `contextDefHashes` changed → different `core_hash` (even though `coreHash` is the same). Fix: create a hash mapping.
+   - **Wrong context keys used on read** (AP 11): read path derived keys from `dataInterestsDSL` instead of stored slice topology. Fix: use `computePlausibleSignaturesForEdge()`.
+   - **YAML date coercion** (AP 23): CLI loaded YAML with default schema, converting date strings to `Date` objects → different canonical JSON. Fix: use `YAML.JSON_SCHEMA`.
+   - **Node ID vs event ID**: query normalisation used node IDs (which change across graphs) instead of event IDs (which are stable). Check `normalizeQueryToEventIds`.
+
+4. **If the DB hash = computed hash but still no data**, the problem is in slice filtering, not hashing:
+   - Check `slice_key` filtering — is the query asking for the right context value?
+   - Check equivalence expansion — is `include_equivalents` set to `true`?
+   - Check `hash_groups` in the API request — are all plausible hashes included?
+
+5. **Cross-reference** `HASH_SIGNATURE_INFRASTRUCTURE.md` § "Common Hash Failures" for the full anti-pattern table.
 
 ## Symptom: Canvas analysis not computing / stuck loading
 

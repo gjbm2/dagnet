@@ -23,6 +23,10 @@ from bayes.compiler.types import CohortDailyTrajectory
 from bayes.synth_gen import (
     simulate_graph,
     _build_hash_lookup,
+    _build_synth_dsl,
+    _build_verify_checks,
+    _rehash_snapshot_rows,
+    set_simulation_guard,
     GRAPH_CONFIGS,
     DEFAULT_SIM_CONFIG,
     derive_truth_from_graph,
@@ -709,3 +713,122 @@ class TestWindowVsCohortSemantics:
                 f"Cohort a={r['a']} != actual_traffic[{sim_day}]={expected_a} "
                 f"on {r['anchor_day']}"
             )
+
+
+# ---------------------------------------------------------------------------
+# Tests: _build_synth_dsl
+# ---------------------------------------------------------------------------
+
+class TestBuildSynthDsl:
+    """_build_synth_dsl produces correct DSL strings from sim_stats + truth."""
+
+    def test_bare_dsl_date_format(self):
+        """bare_dsl uses d-MMM-yy date format matching FE expectations."""
+        sim_stats = {"base_date": "2025-12-12", "n_days": 90}
+        _, bare = _build_synth_dsl(sim_stats, {})
+        assert bare == "window(12-Dec-25:11-Mar-26);cohort(12-Dec-25:11-Mar-26)"
+
+    def test_no_context_full_equals_bare(self):
+        """Without context dimensions, full_dsl == bare_dsl."""
+        sim_stats = {"base_date": "2025-12-12", "n_days": 90}
+        full, bare = _build_synth_dsl(sim_stats, {})
+        assert full == bare
+
+    def test_context_from_epochs(self):
+        """When epochs emit context slices, full_dsl wraps with context()."""
+        sim_stats = {"base_date": "2025-12-12", "n_days": 90}
+        truth = {
+            "epochs": [{"emit_context_slices": True}],
+            "context_dimensions": [{"id": "channel"}],
+        }
+        full, bare = _build_synth_dsl(sim_stats, truth)
+        assert bare in full
+        assert "context(channel)" in full
+        assert full.startswith("(") and ")" in full
+
+    def test_multiple_context_dims(self):
+        """Multiple context dimensions produce semicolon-separated context()."""
+        sim_stats = {"base_date": "2025-12-12", "n_days": 30}
+        truth = {
+            "emit_context_slices": True,
+            "context_dimensions": [{"id": "channel"}, {"id": "platform"}],
+        }
+        full, bare = _build_synth_dsl(sim_stats, truth)
+        assert "context(channel);context(platform)" in full
+
+    def test_context_dims_without_emit_flag_stays_bare(self):
+        """context_dimensions alone without emit flag → full == bare."""
+        sim_stats = {"base_date": "2025-12-12", "n_days": 30}
+        truth = {"context_dimensions": [{"id": "channel"}]}
+        full, bare = _build_synth_dsl(sim_stats, truth)
+        assert full == bare
+
+    def test_end_date_is_n_days_minus_one(self):
+        """End date = base + n_days - 1 (inclusive range)."""
+        sim_stats = {"base_date": "2025-01-01", "n_days": 1}
+        _, bare = _build_synth_dsl(sim_stats, {})
+        # 1 day → start == end
+        assert bare == "window(1-Jan-25:1-Jan-25);cohort(1-Jan-25:1-Jan-25)"
+
+
+# ---------------------------------------------------------------------------
+# Tests: set_simulation_guard round-trip
+# ---------------------------------------------------------------------------
+
+class TestSetSimulationGuard:
+    """set_simulation_guard writes correct fields to the graph JSON."""
+
+    def test_enable_writes_dsl_from_build_synth_dsl(self, tmp_path):
+        """The DSL written to disk matches _build_synth_dsl output."""
+        import json as _json
+        graph_file = tmp_path / "test.json"
+        graph_file.write_text(_json.dumps({"edges": [], "nodes": []}))
+
+        sim_stats = {"base_date": "2025-12-12", "n_days": 90}
+        truth = {
+            "epochs": [{"emit_context_slices": True}],
+            "context_dimensions": [{"id": "channel"}],
+        }
+        set_simulation_guard(str(graph_file), enable=True,
+                             sim_stats=sim_stats, truth=truth)
+
+        result = _json.loads(graph_file.read_text())
+        expected_full, _ = _build_synth_dsl(sim_stats, truth)
+        assert result["dataInterestsDSL"] == expected_full
+        assert result["pinnedDSL"] == expected_full
+        assert result["simulation"] is True
+        assert result["dailyFetch"] is False
+
+    def test_disable_clears_fields(self, tmp_path):
+        """enable=False removes simulation fields."""
+        import json as _json
+        graph_file = tmp_path / "test.json"
+        graph_file.write_text(_json.dumps({
+            "edges": [], "simulation": True,
+            "dataInterestsDSL": "old", "currentQueryDSL": "old",
+        }))
+
+        set_simulation_guard(str(graph_file), enable=False)
+        result = _json.loads(graph_file.read_text())
+        assert "simulation" not in result
+        assert "dataInterestsDSL" not in result
+
+    def test_currentQueryDSL_is_window_only(self, tmp_path):
+        """currentQueryDSL should be window-only (no cohort, no context)."""
+        import json as _json
+        graph_file = tmp_path / "test.json"
+        graph_file.write_text(_json.dumps({"edges": []}))
+
+        sim_stats = {"base_date": "2025-12-12", "n_days": 90}
+        truth = {
+            "epochs": [{"emit_context_slices": True}],
+            "context_dimensions": [{"id": "channel"}],
+        }
+        set_simulation_guard(str(graph_file), enable=True,
+                             sim_stats=sim_stats, truth=truth)
+
+        result = _json.loads(graph_file.read_text())
+        cq = result["currentQueryDSL"]
+        assert cq.startswith("window(")
+        assert "cohort" not in cq
+        assert "context" not in cq

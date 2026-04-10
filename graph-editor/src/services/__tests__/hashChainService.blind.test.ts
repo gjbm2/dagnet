@@ -17,7 +17,7 @@ import type { HashMapping } from '../hashMappingsService';
 
 /** Create a deterministic canonical signature string from a seed. */
 async function makeSig(seed: string): Promise<string> {
-  return serialiseSignature({ coreHash: seed.padEnd(64, '0'), contextDefHashes: {} });
+  return serialiseSignature({ identityHash: seed.padEnd(64, '0'), contextDefHashes: {} });
 }
 
 /** Get the short core_hash for a given seed. */

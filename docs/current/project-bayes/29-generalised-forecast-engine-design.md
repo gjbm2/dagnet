@@ -1,7 +1,13 @@
 # 29 — Generalised Forecast Engine Design
 
 **Date**: 7-Apr-26  
-**Status**: Design reasoning (pre-implementation)
+**Status**: Partially realised (10-Apr-26). Phase A infrastructure
+(span kernel, x_provider, evidence composition, `cohort_maturity_v2`)
+is substantially implemented — see doc 29c. Steps 1–3 building blocks
+exist as Phase A code but are not yet extracted into a standalone
+forecast engine. `ForecastState` contract and `evaluate_forecast_at_tau`
+scalar helper not yet created. Unified basis resolver (Step 2) and
+generalisation to non-cohort-maturity consumers (Steps 4–6) not started
 
 ## Motivation
 

@@ -707,9 +707,9 @@ def compute_cohort_maturity_rows_v2(
     MC_SAMPLES = 2000
     fan_quantiles: Optional[Dict[int, Any]] = None
 
-    has_bayes = sp.span_p > 0 and sp.mu_sd > 0
+    has_uncertainty = sp.span_p > 0 and sp.mu_sd > 0
 
-    if has_bayes and mc_cdf_arr is not None and mc_p_s is not None:
+    if has_uncertainty and mc_cdf_arr is not None and mc_p_s is not None:
         import numpy as np
         from scipy.special import ndtr as _ndtr, logit as _logit, expit as _expit
 

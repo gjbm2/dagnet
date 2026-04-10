@@ -1,7 +1,7 @@
 # Project Bayes — Document Index
 
-**Last updated**: 9-Apr-26
-**Verified against codebase**: 9-Apr-26
+**Last updated**: 10-Apr-26
+**Verified against codebase**: 10-Apr-26
 
 For sequencing, priorities, and current status snapshot, see
 [programme.md](programme.md).
@@ -14,16 +14,20 @@ For sequencing, priorities, and current status snapshot, see
 |---|------|--------|-------------|------------|
 | 1 | [1-cohort-completeness-model-contract.md](1-cohort-completeness-model-contract.md) | **Partial** | `query_mode` threading, completeness via `bind_evidence` | Named `_resolve_completeness_params()`, `completeness_model` per-subject object |
 | 7 | [7-asat-analysis-completion.md](7-asat-analysis-completion.md) | **Partial** | Snapshot routing, `_asat_retrieved_at` annotation, integration test | Typed `asat_date` on AnalysisResult, chart subtitle/badge |
-| 8 | [8-compiler-implementation-phases.md](8-compiler-implementation-phases.md) | **Partial** | Phase A (Beta+Binomial), B (Dirichlet), S (snapshot evidence), D (latent latency+onset) | Phase C model emission (DSL parsing done, hierarchical Dirichlet not emitted). Phase E not started |
+| 8 | [8-compiler-implementation-phases.md](8-compiler-implementation-phases.md) | **Partial** | Phase A (Beta+Binomial), B (Dirichlet), S (snapshot evidence), D (latent latency+onset), C (slice routing + per-slice Dirichlet emission + per-slice posterior extraction) | Phase E not started |
 | 10 | [10-topology-signatures.md](10-topology-signatures.md) | **Design only** | Fingerprint field on `TopologyAnalysis` for cache identity | Per-fit-unit staleness detection, UI surfacing, warm-start invalidation |
 | 13 | [13-model-quality-gating-and-preview.md](13-model-quality-gating-and-preview.md) | **Partial** | Quality tiers (failed/warning/good-0..3), `computeGraphQualityTier()`, progress indicator | Accept/reject preview workflow (sections 2-3) |
-| 14 | [14-phase-c-slice-pooling-design.md](14-phase-c-slice-pooling-design.md) | **Design only** | DSL parsing in `slices.py`, `SliceGroup` routing in `evidence.py` | Hierarchical Dirichlet model emission, `conditional_p`, per-slice posteriors |
+| 14 | [14-phase-c-slice-pooling-design.md](14-phase-c-slice-pooling-design.md) | **Partial** (10-Apr-26) | DSL parsing (`slices.py`), `SliceGroup` routing (`evidence.py`), per-slice hierarchical Dirichlet emission (`model.py` §2b), per-slice posterior extraction (`inference.py`), `bayesEngorge.ts` wired. Tested via `test_model_wiring.py`, `test_snapshot_e2e.py`, `test_param_recovery.py` | `conditional_p` not yet emitted. No dedicated Phase C test suite. Per-slice visualisation in FE not started |
 | 27 | [27-fit-history-fidelity-and-asat-posterior.md](27-fit-history-fidelity-and-asat-posterior.md) | **Design only** | Types (`FitHistoryEntry`), settings (`max_days=100`) | `worker.py` does not write to `fit_history`. No archival, no asat() reconstruction |
-| 29 | [29-generalised-forecast-engine-design.md](29-generalised-forecast-engine-design.md) | **Design only** | — | No `ForecastState`, `compose_path_maturity`, or unified contract anywhere |
-| 30 | [30-snapshot-regime-selection-contract.md](30-snapshot-regime-selection-contract.md) | **Partial** | BE `select_regime_rows()` + `CandidateRegime`, FE `buildCandidateRegimesByEdge()` + `mece_dimensions`, 24+ tests, wired into analysis prep + Bayes trigger | FE preflight removal (Phase 5), Bayes evidence binder regime tests (RB-001-005). Doc header stale ("FE not started") — FE candidate construction is done. |
+| 29 | [29-generalised-forecast-engine-design.md](29-generalised-forecast-engine-design.md) | **Partial** (10-Apr-26) | Phase A infrastructure landed: `compose_path_maturity_frames` (`span_evidence.py`), `compose_span_kernel` (`span_kernel.py`), `XProvider` (`cohort_forecast.py`), `cohort_maturity_v2` registered FE+BE, `cohort_forecast_v2.py` (1000+ lines). Steps 1–3 building blocks exist as Phase A code | `ForecastState` contract (Step 1) not yet a standalone type. `evaluate_forecast_at_tau` scalar helper (Step 3) not extracted. Unified basis resolver (Step 2) not started. Generalisation to non-cohort-maturity consumers (Steps 4–6) not started |
+| 29b | [29b-span-kernel-operator-algebra.md](29b-span-kernel-operator-algebra.md) | **Reference** | Companion design stress-test for doc 29. Operator algebra implemented in `span_kernel.py` | n/a |
+| 29c | [29c-phase-a-design.md](29c-phase-a-design.md) | **Substantially implemented** (10-Apr-26) | `cohort_forecast_v2.py` (1000+ lines): span kernel integration, x_provider, fan computation. `span_evidence.py`: evidence frame composition. `span_kernel.py`: conditional kernel. `span_adapter.py`: adapter layer. `cohort_maturity_v2` registered as analysis type FE+BE. Parity tests in `test_doc31_parity.py` | Single-hop parity gate (A.4) and multi-hop acceptance tests (A.5) need formal pass confirmation |
+| 29d | [29d-phase-b-design.md](29d-phase-b-design.md) | **Design only** | — | Depends on Phase A parity gate. Not yet implemented |
+| 30 | [30-snapshot-regime-selection-contract.md](30-snapshot-regime-selection-contract.md) | **Substantially implemented** (10-Apr-26) | BE `select_regime_rows()` + `CandidateRegime` + `mece_dimensions`, FE `candidateRegimeService.ts` (`buildCandidateRegimes`), 24+ tests (12 unit + 6 integration + DB integration), wired into analysis prep + Bayes trigger | FE preflight removal (Phase 5), Bayes evidence binder regime tests (RB-001-005) |
 | 30b | [30b-regime-selection-worked-examples.md](30b-regime-selection-worked-examples.md) | **Reference** | Companion to doc 30 | n/a |
 | 31 | [31-be-analysis-subject-resolution.md](31-be-analysis-subject-resolution.md) | **Implemented** (8-Apr-26) | `analysis_subject_resolution.py` (462 lines): `resolve_analysis_subjects()`, per-scope resolvers, `synthesise_snapshot_subjects()`. Wired into `api_handlers.py`. 36 unit tests + 3 parity tests (`test_doc31_parity.py`) | — |
 | 32 | [32-posterior-predictive-scoring-design.md](32-posterior-predictive-scoring-design.md) | **Partial** (Phase 1 implemented 8-Apr-26) | `bayes/compiler/loo.py` (362 lines): PSIS-LOO via arviz, analytic null baseline, per-edge attribution. Wired into `worker.py` for both Phase 1+2 passes. 21 tests. | Phase 2 (trajectory/Potential scoring) pending |
+| 34 | [34-latency-dispersion-background.md](34-latency-dispersion-background.md) | **Design ready** (10-Apr-26) | Per-cohort mu random effect (`tau_mu` as learned timing dispersion, analogous to kappa for p). Feature-flagged `latency_dispersion`. Background, problem statement, implementation plan | Implementation, regression validation |
 
 ## Open defects
 
@@ -32,6 +36,7 @@ For sequencing, priorities, and current status snapshot, see
 | 16 | [16-lag-array-population-defect.md](16-lag-array-population-defect.md) | **Open** | Window values[] lag arrays mostly zero (71/207 nonzero). Low priority — warm-start bypasses |
 | 19B | [19-be-stats-engine-bugs.md](19-be-stats-engine-bugs.md) | **Open** | Three-way prior discrepancy (FE/BE/topology). Low priority — warm-start bypasses |
 | 33 | [33-bayes-compiler-dispersion-forensic-review.md](33-bayes-compiler-dispersion-forensic-review.md) | **Open** | Engineering-facing forensic review of six compiler dispersion defects. Highest-risk items are endpoint double-counting and the order-dependent Phase 2 non-exhaustive branch-group prior |
+| 33B | [33-snapshot-query-batching.md](33-snapshot-query-batching.md) | **Open** | Sequential per-subject DB queries in `worker.py` — 2N round-trips for N edges. Affects Bayes worker, analysis prep, retrieve-all |
 
 ## Reference and operational docs
 
@@ -49,7 +54,7 @@ For sequencing, priorities, and current status snapshot, see
 
 | File | Status | Notes |
 |------|--------|-------|
-| [cohort-maturity/INDEX.md](cohort-maturity/INDEX.md) | **Active** (7-Apr-26) | 9 docs. Posterior-predictive simulator live. **Open bug**: sparse `cohort_at_tau` → zero-width bands |
+| [cohort-maturity/INDEX.md](cohort-maturity/INDEX.md) | **Active** (10-Apr-26) | 9 docs. Posterior-predictive simulator live. Phase A (multi-hop) substantially implemented — `cohort_forecast_v2.py`, span kernel, x_provider. **Open bug**: sparse `cohort_at_tau` → zero-width bands |
 
 ---
 

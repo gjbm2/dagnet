@@ -446,6 +446,7 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
             t_snap = time.time()
             snapshot_rows = _query_snapshot_subjects(
                 snapshot_subjects, topology, log,
+                candidate_regimes_by_edge=payload.get("candidate_regimes_by_edge"),
             )
             snap_ms = int((time.time() - t_snap) * 1000)
             _log(log,
@@ -536,6 +537,7 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
                 graph_snapshot=graph_snapshot if is_engorged else None,
                 commissioned_slices=commissioned_slices or None,
                 mece_dimensions=mece_dimensions or None,
+                regime_selections=regime_selections or None,
             )
         elif is_engorged:
             from compiler import bind_evidence_from_graph
@@ -1502,6 +1504,7 @@ def _query_snapshot_subjects(
     snapshot_subjects: list[dict],
     topology,
     log: list[str],
+    candidate_regimes_by_edge: dict | None = None,
 ) -> dict[str, list[dict]]:
     """Query snapshot DB for all subjects in one batch, return rows grouped by edge_id.
 
@@ -1574,9 +1577,34 @@ def _query_snapshot_subjects(
             except (ValueError, TypeError) as e:
                 _log(log, f"  snapshot: date parse failed: {e}")
 
+    # Include ALL candidate regime hashes (not just subject hashes).
+    # In mixed-epoch scenarios, subjects carry context hashes but the
+    # DB also has bare (uncontexted) rows under different hashes from
+    # earlier epochs. candidate_regimes_by_edge lists all hash families
+    # per edge — include them all so the batch query fetches everything.
+    if candidate_regimes_by_edge:
+        for edge_id, regimes in candidate_regimes_by_edge.items():
+            for cr in regimes:
+                if not isinstance(cr, dict):
+                    continue
+                ch = cr.get("core_hash", "")
+                if ch:
+                    all_hashes.add(ch)
+                    hash_to_edges.setdefault(ch, []).append(edge_id)
+                for eh in (cr.get("equivalent_hashes") or []):
+                    eh_hash = eh.get("core_hash", "") if isinstance(eh, dict) else ""
+                    if eh_hash:
+                        all_hashes.add(eh_hash)
+                        hash_to_edges.setdefault(eh_hash, []).append(edge_id)
+
     if not all_hashes:
         _log(log, "  snapshot: no valid hashes to query")
         return {}
+
+    # Always include "" (broad fetch) so bare aggregate rows from
+    # uncontexted epochs are fetched alongside context-qualified rows.
+    # Regime selection handles the per-date filtering downstream.
+    all_slice_keys.add("")
 
     # ── 2. One batch query ──
     _log(log, f"  snapshot: batch query for {len(all_hashes)} unique hashes")

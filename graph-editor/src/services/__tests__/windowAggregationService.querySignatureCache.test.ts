@@ -6,13 +6,13 @@ import { serialiseSignature } from '../signatureMatchingService';
 
 describe('calculateIncrementalFetch - query_signature gating', () => {
   // Use structured signatures for tests (the new format)
-  const sigOld = serialiseSignature({ coreHash: 'old-core-hash', contextDefHashes: { channel: 'ch1' } });
-  const sigNew = serialiseSignature({ coreHash: 'new-core-hash', contextDefHashes: { channel: 'ch1' } });  // Different core
+  const sigOld = serialiseSignature({ identityHash: 'old-core-hash', contextDefHashes: { channel: 'ch1' } });
+  const sigNew = serialiseSignature({ identityHash: 'new-core-hash', contextDefHashes: { channel: 'ch1' } });  // Different core
 
   // Test for subset-aware matching with SAME sliceDSL
   // (uncontexted-query-over-contexted-cache is handled by meceSliceService, not here)
-  const sigWithChannel = serialiseSignature({ coreHash: 'core-hash', contextDefHashes: { channel: 'ch-def-hash' } });
-  const sigWithChannelAndDevice = serialiseSignature({ coreHash: 'core-hash', contextDefHashes: { channel: 'ch-def-hash', device: 'dv-def-hash' } });
+  const sigWithChannel = serialiseSignature({ identityHash: 'core-hash', contextDefHashes: { channel: 'ch-def-hash' } });
+  const sigWithChannelAndDevice = serialiseSignature({ identityHash: 'core-hash', contextDefHashes: { channel: 'ch-def-hash', device: 'dv-def-hash' } });
 
   (isSignatureCheckingEnabled() ? it : it.skip)(
     'CRITICAL: single-dimension query matches multi-dimensional cache (subset-aware matching)',

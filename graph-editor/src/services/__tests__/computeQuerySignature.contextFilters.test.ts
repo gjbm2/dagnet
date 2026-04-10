@@ -536,14 +536,14 @@ describe('computeQuerySignature — hash generation robustness', () => {
   // 4. PIPELINE INTEGRITY — full chain produces valid, stable output
   // ─────────────────────────────────────────────────────────────────────────
 
-  it('should produce a valid structured signature (parseable with coreHash and contextDefHashes)', async () => {
+  it('should produce a valid structured signature (parseable with identityHash and contextDefHashes)', async () => {
     vi.spyOn(contextRegistry, 'getContext').mockResolvedValue(channelContext as any);
     const sig = await computeSig({ contextKeys: ['channel'] });
 
     const parsed = parseSignature(sig);
-    expect(parsed.coreHash).toBeTruthy();
-    expect(typeof parsed.coreHash).toBe('string');
-    expect(parsed.coreHash.length).toBe(64); // SHA-256 hex
+    expect(parsed.identityHash).toBeTruthy();
+    expect(typeof parsed.identityHash).toBe('string');
+    expect(parsed.identityHash.length).toBe(64); // SHA-256 hex
     expect(parsed.contextDefHashes).toHaveProperty('channel');
     expect(typeof parsed.contextDefHashes.channel).toBe('string');
     expect(parsed.contextDefHashes.channel.length).toBe(64);
@@ -602,7 +602,7 @@ describe('computeQuerySignature — hash generation robustness', () => {
     // No event definitions provided → should still produce a valid signature
     const sig = await computeSig({ eventDefsOverride: {} });
     const parsed = parseSignature(sig);
-    expect(parsed.coreHash).toBeTruthy();
+    expect(parsed.identityHash).toBeTruthy();
 
     // And it should differ from a signature with loaded definitions
     const sigWithDefs = await computeSig();
@@ -621,11 +621,11 @@ describe('computeQuerySignature — hash generation robustness', () => {
     const frozenHash = await computeShortCoreHash(frozenSig);
 
     // Record the expected values on first run, then hard-code them.
-    // The structured signature should have a stable coreHash.
+    // The structured signature should have a stable identityHash.
     const parsed = parseSignature(frozenSig);
 
     // Verify structural properties that must hold forever
-    expect(parsed.coreHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(parsed.identityHash).toMatch(/^[0-9a-f]{64}$/);
     expect(frozenHash).toMatch(/^[A-Za-z0-9_-]{20,24}$/);
 
     // Pin the actual value — update ONLY if you intentionally changed the hash algorithm

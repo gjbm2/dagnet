@@ -222,7 +222,7 @@ describe('Signature Matching E2E (Real Production Code)', () => {
   // ─────────────────────────────────────────────────────────────────────────────
 
   describe('computeQuerySignature (REAL function)', () => {
-    it('produces structured signature with coreHash and contextDefHashes', async () => {
+    it('produces structured signature with identityHash and contextDefHashes', async () => {
       const graph = createTestGraph();
       const payload = createQueryPayload(['channel']);
       
@@ -240,9 +240,9 @@ describe('Signature Matching E2E (Real Production Code)', () => {
       // Parse it back
       const sig = parseSignature(sigStr);
       
-      // Should have a coreHash
-      expect(sig.coreHash).toBeTruthy();
-      expect(sig.coreHash.length).toBeGreaterThan(0);
+      // Should have an identityHash
+      expect(sig.identityHash).toBeTruthy();
+      expect(sig.identityHash.length).toBeGreaterThan(0);
       
       // Should have contextDefHashes for channel
       expect(sig.contextDefHashes).toBeDefined();
@@ -251,7 +251,7 @@ describe('Signature Matching E2E (Real Production Code)', () => {
       expect(sig.contextDefHashes.channel.length).toBeGreaterThan(10);
     });
 
-    it('generates different coreHash for different connections', async () => {
+    it('generates different identityHash for different connections', async () => {
       const graph = createTestGraph();
       const payload = createQueryPayload();
       
@@ -261,7 +261,7 @@ describe('Signature Matching E2E (Real Production Code)', () => {
       const sig1 = parseSignature(sig1Str);
       const sig2 = parseSignature(sig2Str);
       
-      expect(sig1.coreHash).not.toBe(sig2.coreHash);
+      expect(sig1.identityHash).not.toBe(sig2.identityHash);
     });
 
     it('generates empty contextDefHashes for uncontexted query', async () => {
@@ -274,7 +274,7 @@ describe('Signature Matching E2E (Real Production Code)', () => {
       expect(sig.contextDefHashes).toEqual({});
     });
 
-    it('generates same coreHash for same semantics with different context keys', async () => {
+    it('generates same identityHash for same semantics with different context keys', async () => {
       const graph = createTestGraph();
       const payload1 = createQueryPayload(['channel']);
       const payload2 = createQueryPayload([]);
@@ -286,7 +286,7 @@ describe('Signature Matching E2E (Real Production Code)', () => {
       const sig2 = parseSignature(sig2Str);
       
       // Core semantics are the same (connection, events, window)
-      expect(sig1.coreHash).toBe(sig2.coreHash);
+      expect(sig1.identityHash).toBe(sig2.identityHash);
       // But contextDefHashes differ
       expect(sig1.contextDefHashes.channel).toBeDefined();
       expect(sig2.contextDefHashes.channel).toBeUndefined();
@@ -405,7 +405,7 @@ describe('Signature Matching E2E (Real Production Code)', () => {
         expect(result.daysToFetch).toBe(0);
       });
 
-      it('CRITICAL: needsFetch=true when coreHash differs', async () => {
+      it('CRITICAL: needsFetch=true when identityHash differs', async () => {
         const graph = createTestGraph();
         
         // Cache with one connection
@@ -578,7 +578,7 @@ describe('Signature Matching E2E (Real Production Code)', () => {
       const legacyHex = 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2';
       const parsed = parseSignature(legacyHex);
       
-      expect(parsed.coreHash).toBe('');
+      expect(parsed.identityHash).toBe('');
       expect(parsed.contextDefHashes).toEqual({});
     });
 
@@ -615,7 +615,7 @@ describe('Signature Matching E2E (Real Production Code)', () => {
       const result = calculateIncrementalFetch(
         { values },
         { start: '1-Oct-25', end: '3-Oct-25' },
-        { coreHash: 'new-hash', contextDefHashes: {} },
+        { identityHash: 'new-hash', contextDefHashes: {} },
         false,
         'window(1-Oct-25:3-Oct-25)'
       );

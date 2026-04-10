@@ -453,8 +453,9 @@ def _extract_time_bounds(query_dsl: str) -> tuple:
     if m:
         return (_resolve_date(m.group(1)), _resolve_date(m.group(2)))
 
-    # Try cohort(start:end)
-    m = re.search(r'cohort\(([^:]*):([^)]*)\)', query_dsl)
+    # Try cohort(start:end) or cohort(anchor,start:end)
+    # The anchor prefix (if present) is before the last comma before the colon.
+    m = re.search(r'cohort\((?:[^,)]*,)?([^:,]*):([^)]*)\)', query_dsl)
     if m:
         return (_resolve_date(m.group(1)), _resolve_date(m.group(2)))
 

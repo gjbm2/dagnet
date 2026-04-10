@@ -1,7 +1,11 @@
 # Doc 30 — Snapshot Regime Selection Contract
 
-**Status**: Design — partially implemented (utility + wiring done,
-FE candidate construction not started).
+**Status**: Substantially implemented (10-Apr-26). BE utility
+(`select_regime_rows`, `validate_mece_for_aggregation`, `CandidateRegime`)
++ FE candidate construction (`candidateRegimeService.ts`,
+`buildCandidateRegimes`) + `mece_dimensions` wired across stack. 24+ tests.
+Remaining: FE preflight removal (Phase 5), Bayes evidence binder regime
+tests (RB-001–005).
 See `30b-regime-selection-worked-examples.md` for worked examples.
 **Date**: 7-Apr-26
 **Purpose**: Define the FE/BE contract for selecting one coherent set

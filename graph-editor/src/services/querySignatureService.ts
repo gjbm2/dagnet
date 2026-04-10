@@ -1,10 +1,18 @@
 /**
- * Query Signature Service
- * 
- * Centralizes data query signature generation and validation.
- * Ensures consistency across adapters and incremental fetch logic.
- * 
- * Signatures are for DATA QUERY SPECS, not user DSL queries or slice keys.
+ * Query Signature Service — ADAPTER-LEVEL signatures for incremental fetch.
+ *
+ * ⚠ NOT the same system as snapshot DB hashing (computeQuerySignature / core_hash).
+ *
+ * This service hashes DataQuerySpec objects (connection + topology + context filters
+ * + adapter options) to detect when a data source query has changed, so incremental
+ * fetch can invalidate stale cached responses.
+ *
+ * The snapshot DB hashing system lives in:
+ *   - dataOperations/querySignature.ts  (computeQuerySignature — builds structured {c,x} signatures)
+ *   - coreHashService.ts               (computeShortCoreHash — truncated SHA-256 for DB key)
+ *   - signatureMatchingService.ts       (parseSignature, signatureCanSatisfy — cache matching)
+ *
+ * See HASH_SIGNATURE_INFRASTRUCTURE.md for the full snapshot hashing architecture.
  */
 
 import type { ParsedConstraints } from '../lib/queryDSL';

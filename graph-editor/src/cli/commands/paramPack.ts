@@ -71,7 +71,7 @@ async function runParamPack() {
         });
         log.info(`  ${edgeId}: ${sigs.length} signature(s)`);
         for (const sig of sigs) {
-          log.info(`    hash=${sig.coreHash}  keys=[${sig.contextKeys.join(',')}]  dbParam=${sig.dbParamId}`);
+          log.info(`    hash=${sig.identityHash}  keys=[${sig.contextKeys.join(',')}]  dbParam=${sig.dbParamId}`);
         }
       } catch (err: any) {
         log.error(`  ${edgeId}: ${err.message}`);

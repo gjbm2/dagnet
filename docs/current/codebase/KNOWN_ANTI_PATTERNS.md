@@ -248,6 +248,42 @@ Clearing layer 1 is useless unless you also handle layers 2-4. UpdateManager map
 
 **Reference**: `HASH_SIGNATURE_INFRASTRUCTURE.md` §"What is and is not in the hash" — especially lines 63-76.
 
+## Anti-pattern 28: Duplicate hash computation codepaths
+
+**Signature**: hashes computed by path A don't match hashes computed by path B for the same graph. Snapshot DB queries return 0 rows even though data was just written.
+
+**Root cause**: multiple independent implementations of hash/signature computation that diverge over time. Each path makes slightly different choices about what inputs to hash: which event definitions are "loaded", how YAML dates are parsed (`js-yaml` default converts dates to Date objects vs `JSON_SCHEMA` preserves strings), which edge fields are included, how queries are normalised.
+
+**Fix**: ONE codepath for hash computation. The FE service layer (`computeQuerySignature` via `buildFetchPlanProduction` → `mapFetchPlanToSnapshotSubjects`) is the single source of truth. All other hash computations (synth_gen, test harness, scripts) must call the CLI (`bayes.ts`) which uses this real FE code, not hand-rolled Node.js scripts or Python reimplementations.
+
+**Example**: `compute_snapshot_subjects.mjs` diverged from the CLI's hash computation in event definition loading rules, YAML date handling, and visited/exclude event IDs. Produced different hashes for the same graph. Replaced by CLI calls in `synth_gen.py` Step 2.
+
+## Anti-pattern 29: Branch group likelihood not emitted per-slice
+
+**Signature**: per-slice p variables exist in the model (visible as `p_slice_*` deterministics) but all slices have identical posterior values equal to the parent. Per-slice data is present in `SliceObservations` but no per-slice `obs_bg_*` observed variables appear in the model summary.
+
+**Root cause**: `_emit_branch_group_multinomial` reads from `evidence.edges[sib_id]` (the global aggregate `EdgeEvidence`), not from per-slice `SliceObservations`. When slices are exhaustive and the aggregate emission is suppressed, the per-slice p vars have no likelihood driving them — they're only informed by the hierarchical prior, collapsing to the parent mean.
+
+**Fix**: call `_emit_branch_group_multinomial` once per context key (not once per branch group), passing `slice_ctx_key` and `bg_slice_p_vars`. The function uses per-slice observations, per-slice kappa, and per-slice p vars from the Dirichlet. Fixed in `model.py` Section 6 (10-Apr-26).
+
+## Anti-pattern 30: `has_window` not set on SliceObservations from CohortObservation
+
+**Signature**: `SliceObservations.has_window` is False even though the slice has window-type trajectory data. Functions that check `has_window` (like `_emit_branch_group_multinomial`) skip the slice.
+
+**Root cause**: per-context window data created in Step 3b of `_bind_from_snapshot_rows` is stored as `CohortObservation` objects with `slice_dsl=window(snapshot).context(...)`. During `_route_slices`, these go into `sliced_cohort` (because they come from `ev.cohort_obs`). When moved to `SliceObservations`, only `has_cohort` is set — `has_window` remains False because the code only sets it from `sliced_window`, not from `CohortObservation`s containing window-type trajectories.
+
+**Fix**: in `_route_slices`, after adding cohort observations to a `SliceObservations`, check trajectory `obs_type` and `slice_dsl` to set `has_window` correctly. Fixed in `evidence.py` (10-Apr-26).
+
+## Anti-pattern 31: Regex not handling optional prefixes in DSL clauses
+
+**Signature**: `_extract_time_bounds` (or similar DSL parsers) returns today's date instead of the dates in the DSL. Downstream anchor/sweep filters silently exclude all historical data — queries return 0 rows despite data existing in the DB.
+
+**Root cause**: `cohort(anchor,start:end)` has an optional anchor node prefix before the date range. A regex like `cohort\(([^:]*):([^)]*)\)` captures `anchor,start-date` as group 1. `_resolve_date('anchor,12-Dec-25')` fails all date format checks and falls through to the default `today.isoformat()`. The anchor filter becomes `anchor_day >= today` which excludes all historical data.
+
+**Fix**: make the anchor prefix optional in the regex: `cohort\((?:[^,)]*,)?([^:,]*):([^)]*)\)`. The `(?:[^,)]*,)?` non-capturing group matches the anchor prefix and comma if present. Test with both `cohort(start:end)` and `cohort(anchor,start:end)` forms.
+
+**Broader principle**: any DSL clause parser must handle all valid clause forms. Check the grammar in `DSL_SYNTAX_REFERENCE.md` before writing a regex — `cohort()` has both `cohort(start:end)` and `cohort(anchor,start:end)` forms.
+
 ## When to add to this document
 
 After completing a multi-attempt fix, check: does my bug match a generalisable pattern? If so, add it here following the format: Signature (how to recognise it), Root cause (why it happens), Fix (what to do), Example (optional, specific instance).

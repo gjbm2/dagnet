@@ -1486,82 +1486,12 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
         msp = p.get('model_source_preference') or 'best_available'
         result['promoted_source'] = msp
 
-        # Bayesian latency posterior — edge-level (window)
-        lat_posterior = latency.get('posterior') or {}
-        bayes_mu = lat_posterior.get('mu_mean')
-        bayes_sigma = lat_posterior.get('sigma_mean')
-        if (isinstance(bayes_mu, (int, float)) and math.isfinite(bayes_mu)
-                and isinstance(bayes_sigma, (int, float)) and math.isfinite(bayes_sigma) and bayes_sigma > 0):
-            result['bayes_mu'] = float(bayes_mu)
-            result['bayes_sigma'] = float(bayes_sigma)
-            # Phase D.O: prefer posterior onset_mean (latent onset) over prior onset_delta_days
-            bayes_onset = lat_posterior.get('onset_mean') or lat_posterior.get('onset_delta_days')
-            result['bayes_onset'] = float(bayes_onset) if isinstance(bayes_onset, (int, float)) and math.isfinite(bayes_onset) else 0.0
-            bayes_onset_sd = lat_posterior.get('onset_sd')
-            if isinstance(bayes_onset_sd, (int, float)) and math.isfinite(bayes_onset_sd) and bayes_onset_sd > 0:
-                result['bayes_onset_sd'] = float(bayes_onset_sd)
-        # t95 HDI (for axis extents and display)
-        for _prefix, _src_prefix in [('bayes_', ''), ('bayes_path_', 'path_')]:
-            for _bound in ('lower', 'upper'):
-                _key = f'{_src_prefix}hdi_t95_{_bound}'
-                _val = lat_posterior.get(_key)
-                if isinstance(_val, (int, float)) and math.isfinite(_val) and _val > 0:
-                    result[f'{_prefix}hdi_t95_{_bound}'] = float(_val)
-        # Bayesian latency posterior — uncertainty (for confidence bands)
-        bayes_mu_sd = lat_posterior.get('mu_sd')
-        bayes_sigma_sd = lat_posterior.get('sigma_sd')
-        if (isinstance(bayes_mu_sd, (int, float)) and math.isfinite(bayes_mu_sd) and bayes_mu_sd > 0):
-            result['bayes_mu_sd'] = float(bayes_mu_sd)
-        if (isinstance(bayes_sigma_sd, (int, float)) and math.isfinite(bayes_sigma_sd) and bayes_sigma_sd > 0):
-            result['bayes_sigma_sd'] = float(bayes_sigma_sd)
-        # Onset-mu correlation (for covariance-aware confidence bands)
-        bayes_onset_mu_corr = lat_posterior.get('onset_mu_corr')
-        if isinstance(bayes_onset_mu_corr, (int, float)) and math.isfinite(bayes_onset_mu_corr):
-            result['bayes_onset_mu_corr'] = float(bayes_onset_mu_corr)
-        bayes_path_onset_mu_corr = lat_posterior.get('path_onset_mu_corr')
-        if isinstance(bayes_path_onset_mu_corr, (int, float)) and math.isfinite(bayes_path_onset_mu_corr):
-            result['bayes_path_onset_mu_corr'] = float(bayes_path_onset_mu_corr)
-        # Bayesian latency posterior — path-level (cohort)
-        bayes_path_mu = lat_posterior.get('path_mu_mean')
-        bayes_path_sigma = lat_posterior.get('path_sigma_mean')
-        if (isinstance(bayes_path_mu, (int, float)) and math.isfinite(bayes_path_mu)
-                and isinstance(bayes_path_sigma, (int, float)) and math.isfinite(bayes_path_sigma) and bayes_path_sigma > 0):
-            result['bayes_path_mu'] = float(bayes_path_mu)
-            result['bayes_path_sigma'] = float(bayes_path_sigma)
-            bayes_path_onset = lat_posterior.get('path_onset_delta_days')
-            result['bayes_path_onset'] = float(bayes_path_onset) if isinstance(bayes_path_onset, (int, float)) and math.isfinite(bayes_path_onset) else 0.0
-            # Path-level uncertainty
-            bayes_path_mu_sd = lat_posterior.get('path_mu_sd')
-            bayes_path_sigma_sd = lat_posterior.get('path_sigma_sd')
-            if (isinstance(bayes_path_mu_sd, (int, float)) and math.isfinite(bayes_path_mu_sd) and bayes_path_mu_sd > 0):
-                result['bayes_path_mu_sd'] = float(bayes_path_mu_sd)
-            if (isinstance(bayes_path_sigma_sd, (int, float)) and math.isfinite(bayes_path_sigma_sd) and bayes_path_sigma_sd > 0):
-                result['bayes_path_sigma_sd'] = float(bayes_path_sigma_sd)
-            bayes_path_onset_sd = lat_posterior.get('path_onset_sd')
-            if isinstance(bayes_path_onset_sd, (int, float)) and math.isfinite(bayes_path_onset_sd) and bayes_path_onset_sd > 0:
-                result['bayes_path_onset_sd'] = float(bayes_path_onset_sd)
-
-        # ── Fallback SDs from model_vars (source_curves) ──────────────
-        # The SDs may live in model_vars[bayesian].latency rather than
-        # in lat_posterior directly.  Promote them to top-level if not
-        # already set from the posterior.
-        bayes_sc = source_curves.get('bayesian') if source_curves else None
-        if bayes_sc:
-            for _src_key, _dst_key in [
-                ('mu_sd', 'bayes_mu_sd'), ('sigma_sd', 'bayes_sigma_sd'),
-                ('onset_sd', 'bayes_onset_sd'), ('p_stdev', 'p_stdev'),
-                ('path_mu_sd', 'bayes_path_mu_sd'), ('path_sigma_sd', 'bayes_path_sigma_sd'),
-                ('path_onset_sd', 'bayes_path_onset_sd'),
-            ]:
-                if _dst_key not in result:
-                    _v = bayes_sc.get(_src_key)
-                    if isinstance(_v, (int, float)) and math.isfinite(_v) and _v > 0:
-                        result[_dst_key] = float(_v)
-
-        # ── Fallback SDs from promoted latency (heuristic dispersion) ──
-        # When no Bayesian posterior or source_curves SDs are available,
-        # read from promoted_*_sd fields on the edge latency block.
-        # These are written by applyPromotion from the winning model_vars entry.
+        # ── SDs from promoted fields (source-agnostic) ──────────────
+        # The FE's model source resolution (modelVarsResolution.ts)
+        # selects the winning model_vars entry and writes its values to
+        # promoted_* fields via applyPromotion.  The BE reads these
+        # unconditionally — it does not second-guess the source selection
+        # by preferring Bayes-specific locations.
         if latency:
             for _src_key, _dst_key in [
                 ('promoted_mu_sd', 'bayes_mu_sd'),
@@ -1572,10 +1502,9 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                 ('promoted_path_sigma_sd', 'bayes_path_sigma_sd'),
                 ('promoted_path_onset_sd', 'bayes_path_onset_sd'),
             ]:
-                if _dst_key not in result:
-                    _v = latency.get(_src_key)
-                    if isinstance(_v, (int, float)) and math.isfinite(_v) and (_v > 0 or 'corr' in _src_key):
-                        result[_dst_key] = float(_v)
+                _v = latency.get(_src_key)
+                if isinstance(_v, (int, float)) and math.isfinite(_v) and (_v > 0 or 'corr' in _src_key):
+                    result[_dst_key] = float(_v)
 
         return result
 

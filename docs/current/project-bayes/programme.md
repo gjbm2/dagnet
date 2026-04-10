@@ -1,11 +1,11 @@
 # Project Bayes: Programme
 
 **Status**: Active
-**Updated**: 9-Apr-26
+**Updated**: 10-Apr-26
 **Purpose**: Phased delivery plan for Project Bayes. This doc owns sequencing;
 design docs contain the detail.
 
-### Current status snapshot (31-Mar-26)
+### Current status snapshot (10-Apr-26)
 
 **Done**: Async infrastructure, Phase A–D compiler, FE overlay (basic
 + quality + model CDF + confidence bands), unified posterior schema,
@@ -15,7 +15,14 @@ model architecture (posterior-as-prior), likelihood rewrite
 observations, t95 soft constraint, posterior slice resolution (doc 25),
 Phase 2 join-node CDF fix, full warm-start wiring with quality guard,
 synth context data fix (`emit_context_slices` truth flag), unified
-MCMC κ estimation (journal 30-31-Mar-26).
+MCMC κ estimation (journal 30-31-Mar-26), snapshot regime selection
+(doc 30 — BE+FE, 24+ tests), BE analysis subject resolution (doc 31),
+LOO-ELPD model adequacy scoring Phase 1 (doc 32), Bayes reconnect
+mechanism (doc 28 — 3-phase automation pipeline), Phase C slice
+pooling partial (slice routing, per-slice Dirichlet emission,
+per-slice posterior extraction), multi-hop cohort maturity Phase A
+substantially implemented (`cohort_forecast_v2.py`, span kernel,
+x_provider, `cohort_maturity_v2` analysis type registered FE+BE).
 
 **Synth regression**: 5/10 pass, 5/10 fail. Failures are onset
 convergence issues (pre-existing "Initial evaluation failed"), not
@@ -151,6 +158,12 @@ data-constrained. Single-source validation:
   obs contributing -inf at starting point on 3way-join, fanout,
   join-branch, lattice, skip. Independently resolved.
 
+- **Snapshot query batching** — **OPEN 9-Apr-26**. See
+  `33-snapshot-query-batching.md`. `_query_snapshot_subjects()` in
+  `worker.py` makes one DB round-trip per snapshot subject (2N queries
+  for N parameterised edges with 2 slices). Affects Bayes worker,
+  analysis preparation, retrieve-all.
+
 *Other open*:
 - ~~**Ad hoc hyperparameters**~~ — **RESOLVED 31-Mar-26**. All model
   constants promoted to user-configurable settings (settings.yaml,
@@ -192,12 +205,16 @@ data-constrained. Single-source validation:
   (e.g. registered-to-success) need mixture of two log-normals.
   Designed, not built.
 - **Phase C posteriors** — context slice pooling, hierarchical
-  shrinkage, per-slice visualisation. Prerequisites done
-  (doc 21 ✓, doc 25 ✓). ~~Harness hash mismatch~~ — **FIXED
-  7-Apr-26**. `compute_snapshot_subjects.mjs` now loads context
-  definitions from `contexts/*.yaml`, normalises them identically
-  to the FE (`normalizeContextDefinition`), and populates the `x`
-  field with real per-key hashes.
+  shrinkage, per-slice visualisation. **Partially implemented
+  (10-Apr-26)**: DSL parsing (`slices.py`), `SliceGroup` routing
+  (`evidence.py`), per-slice hierarchical Dirichlet emission
+  (`model.py` §2b — κ_slice learned concentration), per-slice
+  posterior extraction (`inference.py`), `bayesEngorge.ts` wired.
+  Tested indirectly via `test_model_wiring.py`,
+  `test_snapshot_e2e.py`, `test_param_recovery.py`.
+  **Remaining**: `conditional_p` not yet emitted. No dedicated
+  Phase C test suite. Per-slice visualisation in FE not started.
+  ~~Harness hash mismatch~~ — **FIXED 7-Apr-26**.
   **Design prerequisite** (identified 8-Apr-26): when a pinned DSL
   has `context(a);context(b)`, both dimensions are independent MECE
   partitions of the same conversions. Representing them as
@@ -208,21 +225,27 @@ data-constrained. Single-source validation:
   §14.7.
 - **A→Z multi-hop cohort maturity** (doc 29) — two-phase
   decomposition:
-  - **Phase A — x→y span kernel** (numerator only): new analysis type
-    `cohort_maturity_v2` with full FE+BE registration. Implements
-    `compose_path_maturity_frames` (evidence, all topologies) +
-    `compose_span_kernel` (node-level DP convolution through DAG, all
-    topologies incl. branching). `x_provider(s, τ)`: a_pop when x = a
-    (trivially correct), observed + carry-forward when x ≠ a. Row
-    builder becomes composition layer with frontier conditioning and
-    MC fan. All statistical decisions resolved (last edge's path
-    alpha/beta for prior, last edge's path SDs for MC uncertainty —
-    matches v1 for adjacent-pair parity). Single-hop parity gate.
-    Not yet implemented.
+  - **Phase A — x→y span kernel** (numerator only): **substantially
+    implemented (10-Apr-26)**. `cohort_maturity_v2` registered as
+    analysis type FE+BE. `cohort_forecast_v2.py` (1000+ lines):
+    span kernel integration, x_provider, fan computation.
+    `span_evidence.py`: evidence frame composition.
+    `span_kernel.py`: conditional kernel via DP convolution.
+    `span_adapter.py`: adapter layer. Parity tests in
+    `test_doc31_parity.py`. **Remaining**: single-hop parity gate
+    (A.4) and multi-hop acceptance tests (A.5) need formal pass
+    confirmation.
   - **Phase B — x provider** (denominator only): swap `x_provider`
     for x ≠ a with proper a→x propagation. Completeness-adjusted
-    frontier conditioning. Span kernel untouched. Not yet designed.
-  Docs 30+31 now implemented: BE resolves path from DSL natively.
+    frontier conditioning. Span kernel untouched. Design in
+    `29d-phase-b-design.md`. Not yet implemented.
+  Docs 30+31 implemented: BE resolves path from DSL natively.
+  **Next step after Phase A parity**: extract reusable forecast
+  helpers from cohort maturity into a general BE library (see doc 29
+  Steps 1–3 — `ForecastState` contract, `evaluate_forecast_at_tau`
+  scalar helper, unified basis resolver). Prerequisite: best-available
+  promoted model resolution, not only Bayes vars (see
+  cohort-maturity/INDEX.md §6).
 - **Snapshot regime selection** (doc 30) — move regime selection from
   FE preflight to authoritative BE selection per (edge, anchor_day,
   retrieved_at) triple. Eliminates FE preflight round-trip; prevents
@@ -312,19 +335,25 @@ data-constrained. Single-source validation:
 6. **Topology signatures** (doc 10) — data integrity: stale-posterior
    detection, param_id reassignment guards. Complex and intricate
    but not strictly blocking nightly scheduling.
-7. **Phase C** (context slices) — prerequisites done.
+7. **Phase C** (context slices) — partially implemented (slice
+   routing, Dirichlet emission, posterior extraction). Remaining:
+   `conditional_p`, dedicated test suite, FE per-slice visualisation.
 8. **FE stats deletion** — ~4000 lines. Graph-level parity proven
    (2-Apr-26). Remaining: D11 onset discrepancy design decision,
    Pattern A fragility review, heuristic dispersion FE parity.
-9. **x→y multi-hop: Phase A — span kernel** (doc 29) — design
-   complete. New analysis type `cohort_maturity_v2`. `x_provider`:
-   a_pop when x = a (trivially correct), carry-forward when x ≠ a.
-   `span_kernel`: node-level DP through DAG, all topologies.
-   Full fix in window() and cohort() when x = a. Carry-forward
-   approximation for x ≠ a resolved in Phase B.
+9. ~~**x→y multi-hop: Phase A — span kernel** (doc 29)~~ —
+   **SUBSTANTIALLY IMPLEMENTED 10-Apr-26**. `cohort_forecast_v2.py`,
+   `span_kernel.py`, `span_evidence.py`, `span_adapter.py`.
+   `cohort_maturity_v2` registered FE+BE. Remaining: formal parity
+   gate (A.4) and multi-hop acceptance tests (A.5).
 10. **x→y multi-hop: Phase B — x provider** — proper a→x propagation
     for x ≠ a. Completeness-adjusted frontier conditioning. Span
-    kernel untouched. Not yet designed.
+    kernel untouched. Design in `29d-phase-b-design.md`.
+11. **Generalised forecast helpers** — extract reusable forecast
+    library from cohort maturity (doc 29 Steps 1–3): `ForecastState`
+    contract, `evaluate_forecast_at_tau` scalar helper, unified basis
+    resolver. Prerequisite: best-available promoted model resolution
+    (cohort-maturity/INDEX.md §6).
 
 ---
 

@@ -1,7 +1,10 @@
 # Phase C: Slice pooling and hierarchical Dirichlet — detailed design
 
-**Status**: Ready for implementation — Phase D prerequisites met,
-doc 30 regime selection in progress (hard prerequisite for step 3+)
+**Status**: Partially implemented (10-Apr-26). Slice routing
+(`evidence.py`), per-slice hierarchical Dirichlet emission (`model.py`
+§2b), per-slice posterior extraction (`inference.py`), `bayesEngorge.ts`
+wired. Doc 30 regime selection substantially implemented. Remaining:
+`conditional_p`, dedicated Phase C test suite, FE per-slice visualisation
 **Date**: 20-Mar-26 (revised 7-Apr-26 for doc 30 alignment)
 **Purpose**: Technical design for Phase C compiler implementation. Covers
 slice parsing, IR extension, model emission, posterior output, and
@@ -1288,94 +1291,90 @@ can begin.
 Uses the harness for intensive parallel compute. Data binding is
 trusted.
 
-**R2-prereq-i — Slice commissioning contract** (evidence binder):
-- The pinnedDSL determines which slices to model. The FE explodes
-  it into atomic slice DSLs (e.g. `window().context(channel:google)`)
-  and sends them as `slice_keys` on snapshot subjects in the payload.
-- The evidence binder must iterate over the **actual commissioned
-  slice DSLs** to determine what observations to create — not
-  reverse-engineer dimensions by scanning DB rows for context
-  qualifiers. Each commissioned DSL pairs with a core_hash; the
-  binder groups rows by `(edge_id, slice_dsl)` and creates one
-  observation set per commissioned DSL. Uncommissioned context rows
-  (from broad fetches) are aggregated into the parent, not modelled
-  as separate slices.
-- This replaces the current `_route_slices` + Step 3b approach
-  (which creates per-context observations from whatever the DB
-  returns regardless of what was requested) with direct iteration
-  over the contract.
-- **Parent always produced**: the pinnedDSL
-  `(window();cohort()).context(channel)` explodes to only
-  context-qualified DSLs — no bare `window()` or `cohort()`. The
-  binder must still synthesise aggregate observations for the parent
-  variable set from per-context rows even when no bare DSL was
-  commissioned. The parent is always emitted.
-- **Normalisation risk**: the commissioned DSLs (normalised by FE
-  via `normalizeConstraintString`) must match DB row `slice_key`
-  values (normalised at write time by the ingestion pipeline).
-  These are two independent codepaths — if they diverge, matching
-  fails silently. Mitigations: (a) match via `context_key()` from
-  `compiler/slices.py` which strips temporal qualifiers before
-  comparison, reducing format sensitivity; (b) the binding receipt
-  already detects "expected slices not found" — extend it to flag
-  commissioned DSLs with zero matching rows; (c) add a parity
-  assertion in the regression suite comparing FE-normalised DSLs
-  against DB slice_key format. This is the same class of
-  normalisation risk that already exists at the DB query filter
-  boundary — not a new risk category.
-- Follows the established FE/BE analysis contract pattern: the
-  request specifies exactly what to compute, the BE computes
-  exactly that.
+**R2-prereq-i — Slice commissioning contract** ✅ (10-Apr-26):
+- Worker extracts `commissioned_slices: dict[str, set[str]]` from
+  subject `slice_keys` (edge_id → set of normalised context keys).
+  Passed to `bind_snapshot_evidence` and through to `_route_slices`
+  and `_bind_from_snapshot_rows`.
+- `_route_slices` only creates `SliceGroups` for commissioned context
+  keys. When `commissioned` is None (no FE subjects), no slices are
+  created — context modelling requires explicit commission.
+- `_bind_from_snapshot_rows` only collects per-context rows into
+  `ctx_window_rows`/`ctx_cohort_rows` for commissioned keys.
+  Uncommissioned context rows contribute only to the aggregate.
+- **MECE aggregation gating**: `mece_dimensions` (list of dimension
+  IDs declared MECE by the FE) flows from payload → worker → binder.
+  Only context rows whose dimension is in `mece_dimensions` may be
+  summed into the aggregate. Non-MECE context rows are skipped with
+  a diagnostic warning. This prevents double-counting when contexts
+  overlap.
+- **`computeMeceDimensions` fix**: the FE function now scans ALL
+  context definitions in the registry (via `getCachedIds`), not just
+  those mentioned in the DSL. MECE is a property of the data, not
+  the query. In CLI mode, `diskLoader.ts` preloads contexts with
+  the correct workspace key (cache key mismatch fix).
+- **Parent always produced**: aggregate observations for the parent
+  are synthesised from MECE context rows even when no bare `window()`
+  or `cohort()` DSL was commissioned.
+- **Binding receipt**: scans `edge_ev.slice_groups` for observed
+  slices (not just `cohort_obs`/`window_obs` which only contain
+  aggregate observations after `_route_slices`).
 
-**R2-prereq-ii — Harness payload via CLI** (test infrastructure):
-- The test harness (`test_harness.py`) currently constructs snapshot
-  subjects manually with `slice_keys: [""]` (broad fetch), bypassing
-  the FE's pinnedDSL → explodeDSL → fetchPlan → subjects pipeline.
-  This means the harness doesn't honour the commissioning contract.
-- Fix: harness calls the CLI (`dagnet-cli bayes --output`) to
-  construct the payload using the real FE service layer. The harness
-  then reads the CLI-generated payload and runs MCMC in-process.
-  One codepath for payload construction (the FE), all harness
-  conveniences preserved (parallel execution, lock files, monitoring,
-  param recovery).
-- The CLI `--output` mode already works. The harness needs a
-  `--payload /path/to/file.json` flag to accept a pre-built payload
-  instead of constructing subjects internally.
-- `run_regression.py` calls CLI first (~5-10s Node startup per
-  graph), then harness with the payload. Core-aware parallel
-  scheduling unchanged.
+**R2-prereq-ii — Harness payload via CLI** ✅ (10-Apr-26):
+- `--fe-payload` flag on `test_harness.py`: calls `_build_payload_via_cli`
+  which invokes the CLI (`bayes.ts`) to construct the payload using
+  the real FE service layer. Supports both data-repo graphs (via
+  `bayes.sh`) and non-data-repo graphs (direct tsx invocation with
+  `--graph <dir>`).
+- `--payload PATH` flag: accept a pre-built payload JSON file.
+- When `--graph-path` is given with `--fe-payload`, derives graph
+  name and directory from the path for the CLI call.
+- `param_files`, `graph_path`, and `truth` variables correctly
+  resolved in the payload code path (previously unbound).
+- **synth_gen uses CLI for hashes**: `compute_snapshot_subjects.mjs`
+  replaced with CLI calls in `synth_gen.py` Step 2. The generator
+  calls the CLI twice (window DSL, cohort DSL) to get per-obs-type
+  hashes. Creates a temp directory with DSL-overridden graph JSON
+  and symlinked supporting dirs.
 
-**R2a — Synthetic data generator** (`compiler/tests/`):
-- Generate known-parameter synthetic engorged graphs: parent
-  `p_base`, per-slice deviations from known `τ_slice`, window +
-  cohort observations per slice
-- Recovery tolerance: per-slice posterior HDI must contain the true
-  value; parent HDI must contain the true aggregate
-- Generator is the test harness for all subsequent steps
+**R2a — Synthetic data generator** ✅ (9-Apr-26):
+- `synth_gen.py` generates contexted data from truth files with
+  `context_dimensions` (per-slice `p_mult`, `mu_offset`,
+  `onset_offset`)
+- Two contexted synth graphs: S1 (`synth-context-solo`, solo edge)
+  and S2 (`synth-fanout-context`, branch group Dirichlet)
+- Generator pipeline: Step 0 (simulation) → Step 1 (metadata) →
+  Step 1b (context files) → Step 2 (CLI hashes) → Step 3 (DB) →
+  Step 4 (param files) → Step 5 (verify). See doc 19 §3.1.
 
-**R2b — Solo-edge slice pooling: p + kappa** (`compiler/model.py`):
-- `τ_slice` (HalfNormal), per-slice logit-offset deviations (§5.2)
-- Per-slice `kappa_slice_i` (overdispersion) + endpoint BetaBinomial
-- Per-slice window/cohort likelihoods via existing emission functions
-- Per-date routing: parent terms for uncontexted-regime dates,
-  child terms for mece-regime dates (§5.7)
-- Parameter recovery test: recover known slice p deviations
-- Parent (uncontexted) variable set always emitted alongside slices
+**R2b — Solo-edge slice pooling: p + kappa** ✅ (9-Apr-26):
+- `τ_slice` (HalfNormal), per-slice logit-offset deviations
+- Per-slice `kappa_slice_i` (independent LogNormal prior)
+- Per-slice endpoint BetaBinomial via `_emit_edge_likelihoods`
+  (single code path for aggregate and per-slice emissions)
+- Parent always emitted unless all slices exhaustive
+- Param recovery: all per-slice p, kappa recovered within threshold
 
-**R2b2 — Per-slice latency** (`compiler/model.py`):
-- Per-slice `mu_slice_i`, `sigma_slice_i`, `onset_slice_i` via
-  non-centred hierarchy from edge-level values (same pattern as p):
-  `mu_slice_i = mu_base + eps_mu_i * τ_mu_slice`
-- Different user segments convert on different timescales — this is
-  highly material for some context vectors (e.g. paid vs organic)
-- Extend truth file with `mu_offset`, `sigma_mult` per context value
-- New synth graph (S1b) with varied latency across contexts
-- Parameter recovery test: recover known per-slice latency deviations
+**R2b2 — Per-slice latency** ✅ (9-Apr-26):
+- `mu_slice_i = mu_base + eps_mu_i * τ_mu_slice` (non-centred)
+- Same pattern for `sigma_slice_i` and `onset_slice_i`
+- Truth file extended with `mu_offset`, `onset_offset` per context
+- Param recovery: per-slice mu, sigma, onset recovered
 
-**R2c — Branch-group hierarchical Dirichlet** (`compiler/model.py`):
-- `κ`, `base_weights`, per-slice `Dirichlet(κ * base_weights)` (§5.3)
-- Per-slice Multinomials and Potentials
-- Parameter recovery test: recover known per-slice weights
+**R2c — Branch-group hierarchical Dirichlet** ✅ (10-Apr-26):
+- Per-slice `Dirichlet(κ_bg * base_weights)` from Section 2b
+  in `model.py` (lines 689-707)
+- **Per-slice Multinomial likelihoods**: `_emit_branch_group_multinomial`
+  called per context key with per-slice observations and per-slice
+  p vars from `bg_slice_p_vars`. Uses per-slice kappa. Fixed
+  10-Apr-26: originally only aggregate Multinomial was emitted,
+  per-slice p vars had no data driving them.
+- `has_window` detection fix: `SliceObservations` from
+  `CohortObservation` with window-type trajectories now correctly
+  sets `has_window=True` (trajectories checked by `obs_type`).
+- Param recovery: per-slice branch weights recovered, correct
+  ordering (google favours fast, email favours slow), all z-scores
+  under 2.5.
 
 **R2d — Per-date routing validation**:
 - Mixed-epoch synthetic data: some dates aggregate-only, some
@@ -1384,16 +1383,21 @@ trusted.
   single-source expectations
 - Satisfies doc 30 RB-003 contract (regime tag drives likelihood)
 
-**R2e — Posterior summarisation** (`compiler/inference.py`):
-- Per-slice α/β/HDI/ESS/rhat in `posterior.slices` output
-- Webhook payload extension
-- **Predictive latency uncertainty**: current mu_sd/sigma_sd/onset_sd
-  are raw MCMC posterior SDs (parameter estimation precision). These
-  overstate predictive certainty — with many trajectories they shrink
-  to ±0.005, implying sub-day prediction precision. Predictive spread
-  should incorporate sigma (the LogNormal scale), analogous to how
-  predictive p incorporates kappa. Pre-existing issue affecting both
-  uncontexted and per-slice posteriors. Fix here.
+**R2e — Posterior summarisation** ✅ (10-Apr-26):
+- Per-slice α/β/HDI/kappa/mu/sigma/onset in `posterior.slices` output
+- Slice keys denominated with temporal qualifier:
+  `context(channel:google).window()` (not bare `context(…)`)
+- Cohort-denominated entries emitted when parent has cohort slice
+- `_build_unified_slices` in `worker.py` copies all per-slice vars
+  from `slice_posteriors` into the webhook payload
+- `bayesPatchService.ts` writes full `slices` dict to
+  `paramDoc.posterior.slices` — per-context entries persisted
+- `posteriorSliceResolution.ts` `_findSliceByMode` already handles
+  context-qualified keys (tries `context(…).window()` first, falls
+  back to bare `window()`)
+- **Predictive latency uncertainty**: NOT YET FIXED. Current
+  mu_sd/sigma_sd/onset_sd are raw MCMC posterior SDs. Pre-existing
+  issue — documented in `programme.md` as upstream blocker.
 
 **R2f — Real data validation**:
 - Run on `conversion-flow-v2-recs-collapsed` test graph (channel
@@ -1441,7 +1445,8 @@ verified.
 - R2-prereq-i and R2-prereq-ii can be done in parallel
 - R2-prereq-i blocks R2b (binder must honour the contract before slice modelling is correct)
 - R2-prereq-ii blocks regression testing (harness must use CLI payload for accurate slice commissioning)
-- Critical path: R1a → R1c → R1e → R2-prereqs → R2a → R2b → R2b2 → R2c → R2d → R2e → R2f
+- Critical path: ~~R1a → R1c → R1e → R2-prereqs → R2a → R2b → R2b2 → R2c~~ → **R2d** → ~~R2e~~ → **R2f**
+- Current position (10-Apr-26): R2c complete. Next: R2d (per-date routing) then R2f (real data validation).
 
 ---
 

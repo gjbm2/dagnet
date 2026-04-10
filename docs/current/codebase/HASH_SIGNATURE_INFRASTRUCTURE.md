@@ -12,6 +12,105 @@ The hash/signature system ensures that snapshot data keyed by query semantics re
 4. **Hash chain tracing**: reachability validation for historical data
 5. **Commit hash guard**: detection of hash-breaking changes at commit time
 
+---
+
+## ⚠ Naming Disambiguation: Two Different "Core Hashes"
+
+The codebase previously used `coreHash` / `core_hash` for two **different values**. To disambiguate, the inner hash is now called `identityHash`.
+
+| Name in code | What it is | Length | Computed from | Where it lives |
+|---|---|---|---|---|
+| `identityHash` (TS field) / `c` (JSON key) | SHA-256 hex of **non-context** semantic inputs only | ~64 chars hex | connection + event IDs + event def hashes + filters + cases + cohort_mode + latency config + normalised query | Inside the structured signature JSON `{"c":"...","x":{...}}` |
+| `core_hash` (DB column) / `coreHash` (DB-level local vars) | Truncated SHA-256 of the **full structured signature** (both `c` and `x`) | ~22 chars base64url | `computeShortCoreHash(serialiseSignature({identityHash, contextDefHashes}))` | `snapshots` table PK, `signature_registry` PK, API requests/responses |
+
+**Key consequence**: changing a context definition changes `core_hash` (DB) but NOT `identityHash` (inner). Changing an event definition changes both.
+
+---
+
+## Hash Lifecycle Walkthrough
+
+End-to-end trace of how a hash is born, stored, and matched. Read this first if you're new to the system.
+
+### 1. Signature computation (write path)
+
+```
+Edge query string ("from(A).to(B).context(channel:paid-search).cohort(-100d:)")
+    │
+    ▼
+computeQuerySignature()  [querySignature.ts]
+    │
+    ├─► Parses DSL, resolves node IDs → event IDs
+    ├─► Strips context(...) and window/cohort bounds from query string
+    ├─► Hashes event definitions (provider_event_names, amplitude_filters)
+    ├─► Builds coreCanonical JSON object (all non-context inputs)
+    ├─► SHA-256 hex of coreCanonical → identityHash  (~64 chars)
+    ├─► Loads context definitions from contextRegistry
+    ├─► Normalises + SHA-256 hex each definition → contextDefHashes
+    │
+    ▼
+serialiseSignature({identityHash, contextDefHashes})  [signatureMatchingService.ts]
+    │
+    ▼
+Canonical JSON string: '{"c":"<64-char-hex>","x":{"channel":"<64-char-hex>"}}'
+    │
+    ▼
+computeShortCoreHash(canonicalJSON)  [coreHashService.ts]
+    │
+    ├─► SHA-256 of UTF-8 bytes
+    ├─► Truncate to first 16 bytes (128 bits)
+    ├─► base64url encode, no padding
+    │
+    ▼
+core_hash  (~22 chars, e.g. "aBcDeFgHiJkLmNoPqRsT-_")
+    │
+    ▼
+Sent to Python backend in append_snapshots() request
+    │
+    ▼
+Stored in snapshots table PK: (param_id, core_hash, slice_key, anchor_day, retrieved_at)
+```
+
+### 2. Signature lookup (read path)
+
+```
+UI requests snapshot data for an edge
+    │
+    ▼
+computePlausibleSignaturesForEdge()  [snapshotRetrievalsService.ts]
+    │
+    ├─► Enumerates context key-sets from STORED slice topology (not graph config!)
+    ├─► Computes a signature for each plausible key-set
+    ├─► computeShortCoreHash() on each → set of plausible core_hashes
+    │
+    ▼
+hashMappingsService.getClosureSet()  [hashMappingsService.ts]
+    │
+    ├─► Expands each core_hash via equivalence links (BFS, transitive closure)
+    │
+    ▼
+Backend query with WHERE core_hash = ANY(%s)
+    │
+    ├─► Also expands via signature_equivalence recursive CTE (DB-side)
+    │
+    ▼
+Rows returned, filtered by slice_key for context-value-specific views
+```
+
+### 3. Cache matching (in-memory)
+
+```
+signatureCanSatisfy(cacheSig, querySig)  [signatureMatchingService.ts]
+    │
+    ├─► identityHash must match exactly
+    ├─► Every context key in query must exist in cache with matching def hash
+    ├─► Cache may have EXTRA context keys (superset OK)
+    │
+    ▼
+Compatible: true/false (+ reason if false)
+```
+
+---
+
 ## Core Hash
 
 **Location**: `coreHashService.ts`
@@ -30,7 +129,7 @@ Splits query identity into two independent components:
 
 ```
 {
-  coreHash: "...",              // Hash of non-context semantics
+  identityHash: "...",           // Hash of non-context semantics
   contextDefHashes: {           // Per-context-key definition hash
     "dimension_key": "hash1",
     "segmentation_key": "hash2"
@@ -50,7 +149,7 @@ This solved the bug where uncontexted queries rejected contexted MECE cache slic
 ### What is and is not in the hash
 
 The `core_hash` stored in the snapshots table is
-`computeShortCoreHash(serialiseSignature({coreHash, contextDefHashes}))` —
+`computeShortCoreHash(serialiseSignature({identityHash, contextDefHashes}))` —
 a hash of the full structured signature including both `c` and `x`.
 
 **Included in `c` (core)**: connection name, from/to event IDs, event
@@ -260,3 +359,54 @@ coercion. This keeps all scalars as strings, matching the browser's
 IDB-serialised representation.
 
 **See also**: anti-pattern 23 in `KNOWN_ANTI_PATTERNS.md`.
+
+---
+
+## Hash Inputs Reference
+
+Exact fields that enter `coreCanonical` in `computeQuerySignature()` ([querySignature.ts](graph-editor/src/services/dataOperations/querySignature.ts)). If a field is missing or wrong, the hash changes and snapshot lookups fail silently.
+
+| `coreCanonical` field | Source | Varies by context? | Varies by date? |
+|---|---|---|---|
+| `connection` | `connectionName` arg | No | No |
+| `from_event_id` | Graph node lookup via parsed DSL `.from` | No | No |
+| `to_event_id` | Graph node lookup via parsed DSL `.to` | No | No |
+| `visited_event_ids` | Graph node lookup via parsed DSL `.visited` (sorted) | No | No |
+| `exclude_event_ids` | Graph node lookup via parsed DSL `.exclude` (sorted) | No | No |
+| `event_def_hashes` | SHA-256 of `{id, provider_event_names, amplitude_filters}` per event | No | No |
+| `event_filters` | `queryPayload.event_filters` | No | No |
+| `case` | `queryPayload.case` (sorted) | No | No |
+| `cohort_mode` | `!!queryPayload.cohort` | No | No |
+| `cohort_anchor_event_id` | `queryPayload.cohort.anchor_event_id` | No | No |
+| `latency_parameter` | `edge.p.latency.latency_parameter === true` | No | No |
+| `latency_anchor_event_id` | Resolved from `edge.p.latency.anchor_node_id` → event_id | No | No |
+| `original_query` | Edge query with context/window/cohort clauses stripped, node IDs → event IDs | No | No |
+
+**NOT in coreCanonical** (these vary per slice, carried in `slice_key` or `anchor_day`):
+- Context values (`channel:paid-search`)
+- Date bounds (`window(-90d:)`)
+- `retrieved_at` timestamp
+
+**In `x` (contextDefHashes), NOT in `c`**:
+- Per-context-key SHA-256 of the full normalised context definition YAML (values list, metadata, otherPolicy)
+
+---
+
+## Common Hash Failures (Anti-Pattern Cross-Reference)
+
+When debugging hash mismatches, check these known failure patterns first:
+
+| Anti-pattern | One-line summary | Key symptom |
+|---|---|---|
+| **AP 11** — Signatures from graph config | Read path uses `dataInterestsDSL` instead of stored slice topology → wrong context keys → wrong hash | "No data" despite data existing in DB |
+| **AP 23** — js-yaml Date conversion | `js-yaml` default schema converts ISO dates to `Date` objects → different canonical JSON → different hash | CLI computes different `core_hash` from browser for same graph |
+| **AP 27** — Confusing hash vs value filtering | Context *dimension* changes the hash; context *value* is in `slice_key`. Both levels must be filtered. | Wrong context slices returned, or all values mixed together |
+| **AP 28** — Duplicate hash computation codepaths | Multiple independent hash implementations diverge over time → different hashes for same input | Freshly written snapshots not found on read |
+
+**The canonical hash computation path is**: `computeQuerySignature()` in `querySignature.ts` → `serialiseSignature()` → `computeShortCoreHash()`. All other paths (CLI, synth_gen, test harness) must call the CLI which uses this real FE code. Never hand-roll a parallel implementation.
+
+---
+
+## `stableSignature.ts` — NOT Part of This System
+
+[stableSignature.ts](graph-editor/src/lib/stableSignature.ts) provides `stableStringify()` and `fnv1a32()` — a non-cryptographic FNV-1a hash used for **staleness signatures** (chart dependency stamps). It has nothing to do with snapshot DB hashing, query signatures, or `core_hash`. Do not confuse the two systems.
