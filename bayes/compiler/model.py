@@ -356,6 +356,7 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
     feat_latent_onset = features.get("latent_onset", True)
     feat_window_only = features.get("window_only", False)
     feat_neutral_prior = features.get("neutral_prior", False)
+    feat_latency_dispersion = features.get("latency_dispersion", False)
     is_phase2 = phase2_frozen is not None
 
     # Settings-driven model constants (fall back to module-level defaults).
@@ -376,7 +377,8 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                        f"cohort_latency={feat_cohort_latency}, "
                        f"overdispersion={feat_overdispersion}, "
                        f"latent_onset={feat_latent_onset}, "
-                       f"window_only={feat_window_only}")
+                       f"window_only={feat_window_only}, "
+                       f"latency_dispersion={feat_latency_dispersion}")
     edge_var_names: dict[str, str] = {}  # edge_id → primary p variable name
 
     # Identify which edges will have their window obs handled by a branch
@@ -1542,6 +1544,7 @@ def _emit_cohort_likelihoods(
     skip_cohort_trajectories: bool = False,
     p_cohort_vec=None,
     settings: dict | None = None,
+    features: dict | None = None,
 ) -> None:
     """Emit cohort likelihoods — the most complex likelihood in the model.
 
@@ -2049,8 +2052,34 @@ def _emit_cohort_likelihoods(
                 # Same mathematics as the mixture case above, but with a
                 # single (onset, μ, σ) and a single p (or per-cohort p_i).
 
+                # ---- Per-cohort mu random effect (doc 34) ----
+                # When latency_dispersion is enabled, each trajectory gets
+                # its own mu_c = mu + tau_mu * u_c (non-centred). tau_mu is
+                # the learned timing dispersion — the latency analogue of
+                # kappa for p.
+                _feat_ld = (features or {}).get("latency_dispersion", False)
+                _use_per_cohort_mu = _feat_ld and has_latent_latency and not is_mixture
+                if _use_per_cohort_mu:
+                    _tau_mu_sigma = float((settings or {}).get(
+                        "BAYES_TAU_MU_SIGMA", (settings or {}).get("bayes_tau_mu_sigma", 0.2)))
+                    _n_trajs = len(trajs)
+                    # Include obs_type in name to avoid collision when both
+                    # window and cohort trajectories exist for the same edge.
+                    _ld_suffix = f"{safe_id}_{obs_type}"
+                    tau_mu_var = pm.HalfNormal(f"tau_mu_{_ld_suffix}", sigma=_tau_mu_sigma)
+                    eps_mu_cohort = pm.Normal(
+                        f"eps_mu_cohort_{_ld_suffix}", mu=0, sigma=1, shape=_n_trajs)
+                    mu_per_cohort = mu_var + tau_mu_var * eps_mu_cohort
+                    diagnostics.append(
+                        f"  latency_dispersion {safe_id} ({obs_type}): "
+                        f"tau_mu ~ HalfNormal({_tau_mu_sigma}), "
+                        f"{_n_trajs} cohort mu offsets")
+
                 # Compute the CDF at every retrieval age (vectorised).
-                cdf_all = _compute_cdf_at_ages(onset, mu_var, sigma_var)
+                # When per-cohort mu is active, we defer CDF computation
+                # until after the interval decomposition (need traj indices).
+                if not _use_per_cohort_mu:
+                    cdf_all = _compute_cdf_at_ages(onset, mu_var, sigma_var)
 
                 # Decompose trajectories into intervals (same as mixture).
                 # traj_idx_per_interval tracks which trajectory each interval
@@ -2092,8 +2121,33 @@ def _emit_cohort_likelihoods(
                     p_per_interval = p_expr
 
                 # Look up CDF values at interval boundaries.
-                cdf_curr = cdf_all[curr_idx_np]
-                cdf_prev = cdf_all[prev_safe]
+                if _use_per_cohort_mu:
+                    # Per-cohort mu: evaluate CDF at each interval's age
+                    # using that interval's cohort's mu. Onset and sigma
+                    # remain shared.
+                    mu_per_interval = mu_per_cohort[traj_idx_np]
+                    # Reuse the onset→log_ages computation from
+                    # _compute_cdf_at_ages but with per-interval mu.
+                    onset_is_latent = hasattr(onset, 'name')
+                    if onset_is_latent:
+                        _age_minus_onset = ages_tensor - onset
+                        _eff_ages = pt.softplus(_softplus_k * _age_minus_onset) / _softplus_k
+                        _log_ages_all = pt.log(pt.maximum(_eff_ages, LOG_ARG_FLOOR))
+                    else:
+                        _eff_ages_np = np.maximum(ages_raw_np - float(onset), EFFECTIVE_AGE_FLOOR)
+                        _log_ages_all = pt.log(pt.as_tensor_variable(_eff_ages_np))
+                    # Gather log_ages at interval boundaries, then compute
+                    # CDF with per-interval mu.
+                    _log_curr = _log_ages_all[curr_idx_np]
+                    _log_prev = _log_ages_all[prev_safe]
+                    _sqrt2 = pt.sqrt(2.0)
+                    _z_curr = (_log_curr - mu_per_interval) / (sigma_var * _sqrt2)
+                    _z_prev = (_log_prev - mu_per_interval) / (sigma_var * _sqrt2)
+                    cdf_curr = 0.5 * pt.erfc(-_z_curr)
+                    cdf_prev = 0.5 * pt.erfc(-_z_prev)
+                else:
+                    cdf_curr = cdf_all[curr_idx_np]
+                    cdf_prev = cdf_all[prev_safe]
 
                 # ΔF = CDF increment over this interval (how much of the
                 # maturation curve was "used up" in this time window).
@@ -2454,7 +2508,7 @@ def _emit_edge_likelihoods(
                                     kappa=edge_kappa,
                                     onset_vars=onset_vars,
                                     skip_cohort_trajectories=False,
-                                    settings=_s)
+                                    settings=_s, features=features)
 
             # Phase 2 cohort endpoint BB
             if edge_kappa is not None and ev.cohort_obs:
@@ -2537,7 +2591,7 @@ def _emit_edge_likelihoods(
                                         kappa=edge_kappa,
                                         onset_vars=onset_vars,
                                         skip_cohort_trajectories=True,
-                                        settings=_s)
+                                        settings=_s, features=features)
 
             # Endpoint BetaBinomial
             if edge_kappa is not None and ev.cohort_obs:
@@ -2613,7 +2667,7 @@ def _emit_edge_likelihoods(
                                     cohort_latency_vars=cohort_latency_vars,
                                     kappa=edge_kappa,
                                     onset_vars=onset_vars,
-                                    settings=_s)
+                                    settings=_s, features=features)
 
     # --- Case D: no data — prior-only edge ---
     else:

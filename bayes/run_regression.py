@@ -150,6 +150,7 @@ def _run_one_graph(
     draws: int,
     tune: int,
     timeout: int,
+    feature_flags: list[str] | None = None,
 ) -> dict:
     """Run param_recovery.py for one graph. Returns parsed result dict.
 
@@ -167,6 +168,8 @@ def _run_one_graph(
         "--tune", str(tune),
         "--timeout", str(timeout),
     ]
+    for ff in (feature_flags or []):
+        cmd.extend(["--feature", ff])
     env = {**os.environ, **_THREAD_PIN_ENV}
 
     t0 = time.time()
@@ -436,6 +439,7 @@ def run_regression(args) -> list[dict]:
                 draws=args.draws,
                 tune=args.tune,
                 timeout=timeout,
+                feature_flags=getattr(args, 'feature', None) or None,
             )
             futures[future] = g
 
@@ -568,6 +572,9 @@ Examples:
                         help="MCMC warmup per chain (default: 500)")
     parser.add_argument("--max-parallel", type=int, default=None,
                         help="Max parallel runs (default: auto from core count)")
+    parser.add_argument("--feature", action="append", default=[],
+                        help="Model feature flag KEY=VALUE, forwarded to param_recovery.py "
+                             "(e.g. --feature latency_dispersion=true)")
     args = parser.parse_args()
 
     results = run_regression(args)

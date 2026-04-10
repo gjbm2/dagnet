@@ -649,6 +649,10 @@ class LatencyPosteriorSummary:
     path_hdi_t95_upper: float | None = None
     path_provenance: str | None = None
 
+    # Latency dispersion (doc 34) — learned cohort-to-cohort timing variation
+    tau_mu_mean: float | None = None     # posterior mean of tau_mu
+    tau_mu_sd: float | None = None       # posterior SD of tau_mu
+
     # LOO-ELPD model adequacy scoring (doc 32)
     elpd: float | None = None
     elpd_se: float | None = None
@@ -697,6 +701,10 @@ class LatencyPosteriorSummary:
             result["path_hdi_t95_lower"] = round(self.path_hdi_t95_lower, 1) if self.path_hdi_t95_lower is not None else None
             result["path_hdi_t95_upper"] = round(self.path_hdi_t95_upper, 1) if self.path_hdi_t95_upper is not None else None
             result["path_provenance"] = self.path_provenance or self.provenance
+        # Latency dispersion (doc 34)
+        if self.tau_mu_mean is not None:
+            result["tau_mu_mean"] = round(self.tau_mu_mean, 4)
+            result["tau_mu_sd"] = round(self.tau_mu_sd, 4) if self.tau_mu_sd is not None else None
         # LOO-ELPD (doc 32)
         if self.delta_elpd is not None:
             result["delta_elpd"] = round(self.delta_elpd, 3)

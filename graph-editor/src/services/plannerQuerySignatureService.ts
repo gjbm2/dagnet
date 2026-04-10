@@ -23,10 +23,12 @@ import { computeQuerySignature } from './dataOperationsService';
 import { formatDateUK } from '../lib/dateFormat';
 import { parseUKDate } from '../lib/dateFormat';
 import { selectPersistedProbabilityConfig } from './persistedParameterConfigService';
-import { resolveMECEPartitionForImplicitUncontextedSync } from './meceSliceService';
-import { isCohortModeValue } from './windowAggregationService';
-import { extractSliceDimensions } from './sliceIsolation';
-import type { ParameterValue } from '../types/parameterData';
+// DISABLED 10-Apr-26: imports for implicit-uncontexted MECE fulfilment (see ~line 258).
+// Uncomment if re-enabling that block.
+// import { resolveMECEPartitionForImplicitUncontextedSync } from './meceSliceService';
+// import { isCohortModeValue } from './windowAggregationService';
+// import { extractSliceDimensions } from './sliceIsolation';
+// import type { ParameterValue } from '../types/parameterData';
 import { isSignatureCheckingEnabled } from './signaturePolicyService';
 import { sessionLogService } from './sessionLogService';
 
@@ -176,11 +178,13 @@ export async function computePlannerQuerySignaturesForGraph(input: {
     graphConstraints = null;
   }
 
-  const dslTargetDims = extractSliceDimensions(dsl);
-  const dslHasAnyContext =
-    (graphConstraints?.context && graphConstraints.context.length > 0) ||
-    (graphConstraints?.contextAny && graphConstraints.contextAny.length > 0);
-  const dslIsCohort = typeof dsl === 'string' && dsl.includes('cohort(');
+  // DISABLED 10-Apr-26: these variables were only used by the implicit-uncontexted
+  // MECE fulfilment block below. Uncomment if re-enabling.
+  // const dslTargetDims = extractSliceDimensions(dsl);
+  // const dslHasAnyContext =
+  //   (graphConstraints?.context && graphConstraints.context.length > 0) ||
+  //   (graphConstraints?.contextAny && graphConstraints.contextAny.length > 0);
+  // const dslIsCohort = typeof dsl === 'string' && dsl.includes('cohort(');
 
   const out: Record<string, string> = {};
   const targets = enumerateFetchTargets(graph as any);
@@ -243,77 +247,83 @@ export async function computePlannerQuerySignaturesForGraph(input: {
       visitedAny: edgeConstraints?.visitedAny || [],
     });
 
-    // Signature context keys:
-    // - Always include explicit context keys present in the DSL/query (as the executor does).
-    //
-    // For implicit-uncontexted fulfilment over contexted MECE cache:
-    // - The planner must consider **multiple** possible signatures, one per candidate context key,
-    //   because the cached slices are signed with the context *definition* hash of the MECE key,
-    //   while the uncontexted DSL itself contains no context clause.
-    //
-    // This is the production failure mode: cache is "COVERED (FULL headers)" but signature isolation
-    // rejects it because planner only checked the uncontexted signature.
+    // Signature context keys: only include explicit context keys from the DSL/query.
     const baseSignatureContextKeys = extractContextKeysFromConstraints(merged);
-    const candidateContextKeys: string[] = [];
-    try {
-      if (!dslHasAnyContext && dslTargetDims === '' && paramFile?.data?.values) {
-        const allValues = paramFile.data.values as ParameterValue[];
-        const modeFilteredValues = allValues.filter((v) => {
-          if (dslIsCohort) return isCohortModeValue(v);
-          return !isCohortModeValue(v);
-        });
-        const hasAnyContexted = modeFilteredValues.some(v => extractSliceDimensions(v.sliceDSL ?? '') !== '');
-        if (hasAnyContexted) {
-          // Best-effort: ensure contexts are cached so MECE detection is not "unknown".
-          // We only need keys that are present in the file values.
-          const keysInFile = new Set<string>();
-          for (const v of modeFilteredValues) {
-            const dims = extractSliceDimensions(v.sliceDSL ?? '');
-            if (!dims) continue;
-            try {
-              const parsedDims = parseConstraints(dims);
-              for (const c of parsedDims.context) keysInFile.add(c.key);
-              for (const group of parsedDims.contextAny) {
-                for (const pair of group.pairs) keysInFile.add(pair.key);
-              }
-            } catch {
-              // ignore
-            }
-          }
-          if (keysInFile.size > 0) {
-            try {
-              // Workspace scope: pull from the parameter file source if present.
-              const repo = (paramFile as any)?.source?.repository;
-              const branch = (paramFile as any)?.source?.branch;
-              const workspace = repo && branch ? { repository: repo, branch } : undefined;
-              const { contextRegistry } = await import('./contextRegistry');
-              await contextRegistry.ensureContextsCached(
-                Array.from(keysInFile),
-                workspace ? { workspace } : undefined
-              );
-            } catch {
-              // ignore
-            }
-          }
 
-          // Candidate set: any context keys that appear in the cached file values are plausible
-          // MECE fulfilment keys (and are also drawn from the same workspace context universe
-          // that backs the "+ Context" dropdown).
-          for (const k of Array.from(keysInFile.values()).sort()) {
-            candidateContextKeys.push(k);
-          }
-        }
-      }
-    } catch (err) {
-      // Warn but continue: context caching is best-effort enhancement
-      sessionLogService.warning(
-        'data-fetch',
-        'PLANNER_SIG_CONTEXT_CACHE_FAILED',
-        `Failed to cache contexts for signature computation: ${t.objectId}`,
-        undefined,
-        { objectId: t.objectId, targetId: t.targetId, error: String(err) }
-      );
-    }
+    // DISABLED 10-Apr-26: "implicit-uncontexted MECE fulfilment" feature.
+    //
+    // Previously, when the DSL had no context clause but the parameter file on
+    // disk contained contexted values, this block extracted context keys from
+    // those file values and injected them into the signature computation. The
+    // intent was to make a bare query's signature match the contexted cache so
+    // the planner would recognise it as covered.
+    //
+    // Why removed:
+    // 1. It makes bare and context queries produce IDENTICAL core_hashes,
+    //    which breaks regime selection (doc 30). Mixed-epoch data needs
+    //    distinct hash families for uncontexted vs contexted rows.
+    // 2. The signature matching system (canCacheSatisfyQuery in
+    //    signatureMatchingService.ts) already handles superset matching —
+    //    a contexted cache signature is recognised as valid for a bare query.
+    // 3. For snapshot DB lookups, equivalent_hashes / closure sets handle
+    //    cross-hash resolution.
+    //
+    // If something breaks downstream (e.g. planner reports "no cache" for
+    // bare queries when contexted data exists), the fix should be in the
+    // matching/closure layer, not by contaminating signatures.
+    //
+    // See: docs/current/project-bayes/14-phase-c-slice-pooling-design.md
+    // See: docs/current/codebase/KNOWN_ANTI_PATTERNS.md #32
+    //
+    // Original code (commented out — restore if needed for diagnosis):
+    //
+    // const candidateContextKeys: string[] = [];
+    // try {
+    //   if (!dslHasAnyContext && dslTargetDims === '' && paramFile?.data?.values) {
+    //     const allValues = paramFile.data.values as ParameterValue[];
+    //     const modeFilteredValues = allValues.filter((v) => {
+    //       if (dslIsCohort) return isCohortModeValue(v);
+    //       return !isCohortModeValue(v);
+    //     });
+    //     const hasAnyContexted = modeFilteredValues.some(v => extractSliceDimensions(v.sliceDSL ?? '') !== '');
+    //     if (hasAnyContexted) {
+    //       const keysInFile = new Set<string>();
+    //       for (const v of modeFilteredValues) {
+    //         const dims = extractSliceDimensions(v.sliceDSL ?? '');
+    //         if (!dims) continue;
+    //         try {
+    //           const parsedDims = parseConstraints(dims);
+    //           for (const c of parsedDims.context) keysInFile.add(c.key);
+    //           for (const group of parsedDims.contextAny) {
+    //             for (const pair of group.pairs) keysInFile.add(pair.key);
+    //           }
+    //         } catch { /* ignore */ }
+    //       }
+    //       if (keysInFile.size > 0) {
+    //         try {
+    //           const repo = (paramFile as any)?.source?.repository;
+    //           const branch = (paramFile as any)?.source?.branch;
+    //           const workspace = repo && branch ? { repository: repo, branch } : undefined;
+    //           const { contextRegistry } = await import('./contextRegistry');
+    //           await contextRegistry.ensureContextsCached(
+    //             Array.from(keysInFile),
+    //             workspace ? { workspace } : undefined
+    //           );
+    //         } catch { /* ignore */ }
+    //       }
+    //       for (const k of Array.from(keysInFile.values()).sort()) {
+    //         candidateContextKeys.push(k);
+    //       }
+    //     }
+    //   }
+    // } catch (err) {
+    //   sessionLogService.warning(
+    //     'data-fetch', 'PLANNER_SIG_CONTEXT_CACHE_FAILED',
+    //     `Failed to cache contexts for signature computation: ${t.objectId}`,
+    //     undefined, { objectId: t.objectId, targetId: t.targetId, error: String(err) }
+    //   );
+    // }
+    const candidateContextKeys: string[] = [];
 
     const provider = await getProvider(connectionName);
     if (!provider) {
@@ -381,11 +391,8 @@ export async function computePlannerQuerySignaturesForGraph(input: {
         return repo && branch ? { repository: repo, branch } : undefined;
       })();
 
-      // Merge DSL-explicit context keys with candidate keys discovered from cached
-      // parameter file values.  The executor (dataOperationsService) always includes
-      // context keys via the per-slice targetSlice DSL, so the planner must do the
-      // same — otherwise the signature (and therefore core_hash) will diverge from
-      // what was written to the snapshot DB, causing lookup failures.
+      // Context keys for signature: only DSL-explicit keys (candidateContextKeys
+      // is always empty after the implicit-MECE-fulfilment block was disabled).
       const effectiveContextKeys = [
         ...new Set([...baseSignatureContextKeys, ...candidateContextKeys]),
       ].sort();

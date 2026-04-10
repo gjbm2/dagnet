@@ -1689,6 +1689,10 @@ def _build_unified_slices(
         window["hdi_t95_upper"] = round(lat.hdi_t95_upper, 1)
         if lat.onset_mu_corr is not None:
             window["onset_mu_corr"] = round(lat.onset_mu_corr, 3)
+        # Latency dispersion (doc 34)
+        if lat.tau_mu_mean is not None:
+            window["tau_mu_mean"] = round(lat.tau_mu_mean, 4)
+            window["tau_mu_sd"] = round(lat.tau_mu_sd, 4) if lat.tau_mu_sd is not None else None
         # Use worst-of for combined quality
         window["ess"] = round(min(prob.ess, lat.ess), 1)
         window["rhat"] = round(max(prob.rhat or 0, lat.rhat or 0), 4) or None

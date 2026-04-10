@@ -23,9 +23,12 @@ from bayes.compiler.types import CohortDailyTrajectory
 from bayes.synth_gen import (
     simulate_graph,
     _build_hash_lookup,
+    _build_meta_hashes,
     _build_synth_dsl,
     _build_verify_checks,
     _rehash_snapshot_rows,
+    save_synth_meta,
+    verify_synth_data,
     set_simulation_guard,
     GRAPH_CONFIGS,
     DEFAULT_SIM_CONFIG,
@@ -832,3 +835,552 @@ class TestSetSimulationGuard:
         assert cq.startswith("window(")
         assert "cohort" not in cq
         assert "context" not in cq
+
+
+# ---------------------------------------------------------------------------
+# Tests: _build_verify_checks — verification verdict logic
+# ---------------------------------------------------------------------------
+
+class TestBuildVerifyChecks:
+    """Spec: verification must not false-alarm on uniform-epoch context graphs.
+
+    When all rows are under context hashes (because emit_context_slices was
+    True for the entire simulation), bare hashes returning 0 rows from DB
+    is expected — not a failure.
+    """
+
+    def test_bare_only_graph_expects_rows_for_both(self):
+        """Bare-only graph (no context hashes): both window and cohort
+        must have rows — 0 rows is a real failure."""
+        hashes = {
+            "window_hash": "W123", "cohort_hash": "C456",
+            "ctx_window_hash": "", "ctx_cohort_hash": "",
+        }
+        checks = _build_verify_checks(hashes)
+        modes = {c[0]: c[2] for c in checks}  # mode → expect_rows
+        assert modes["window"] is True
+        assert modes["cohort"] is True
+        assert "ctx_window" not in modes
+        assert "ctx_cohort" not in modes
+
+    def test_uniform_context_graph_bare_zero_is_ok(self):
+        """Uniform-epoch context graph: bare hashes should NOT expect rows
+        (all data is under context hashes)."""
+        hashes = {
+            "window_hash": "W123", "cohort_hash": "C456",
+            "ctx_window_hash": "CW789", "ctx_cohort_hash": "CC012",
+        }
+        checks = _build_verify_checks(hashes)
+        modes = {c[0]: c[2] for c in checks}
+        assert modes["window"] is False, "bare window should not expect rows when ctx exists"
+        assert modes["cohort"] is False, "bare cohort should not expect rows when ctx exists"
+        assert modes["ctx_window"] is True
+        assert modes["ctx_cohort"] is True
+
+    def test_mixed_epoch_graph_all_hashes_expect_rows(self):
+        """Mixed-epoch graph: has BOTH bare and context rows in DB.
+        But bare hashes returning 0 is still 'ok' because we can't
+        distinguish mixed-epoch from uniform-context at this level.
+        Context hashes MUST have rows."""
+        hashes = {
+            "window_hash": "W123", "cohort_hash": "C456",
+            "ctx_window_hash": "CW789", "ctx_cohort_hash": "CC012",
+        }
+        checks = _build_verify_checks(hashes)
+        modes = {c[0]: c[2] for c in checks}
+        # Context must have rows
+        assert modes["ctx_window"] is True
+        assert modes["ctx_cohort"] is True
+
+    def test_empty_ctx_hashes_not_included(self):
+        """Empty string context hashes should not produce check entries."""
+        hashes = {
+            "window_hash": "W123", "cohort_hash": "C456",
+            "ctx_window_hash": "", "ctx_cohort_hash": "",
+        }
+        checks = _build_verify_checks(hashes)
+        assert len(checks) == 2
+        assert all(c[0] in ("window", "cohort") for c in checks)
+
+    def test_partial_context_only_window_ctx(self):
+        """Only ctx_window exists (no ctx_cohort): bare window is ok,
+        bare cohort still expects rows (no context cohort to replace it)."""
+        hashes = {
+            "window_hash": "W123", "cohort_hash": "C456",
+            "ctx_window_hash": "CW789", "ctx_cohort_hash": "",
+        }
+        checks = _build_verify_checks(hashes)
+        modes = {c[0]: c[2] for c in checks}
+        # has_ctx is True (ctx_window exists), so bare window AND cohort
+        # are both marked as not-expected
+        assert modes["window"] is False
+        assert modes["cohort"] is False
+        assert modes["ctx_window"] is True
+
+
+# ---------------------------------------------------------------------------
+# Tests: _rehash_snapshot_rows — hash assignment by slice_key
+# ---------------------------------------------------------------------------
+
+class TestRehashSnapshotRows:
+    """Spec: _rehash_snapshot_rows must assign the correct authoritative
+    hash to each row based on its slice_key.
+
+    - Bare window rows → window_hash
+    - Bare cohort rows → cohort_hash
+    - Context window rows → ctx_window_hash (fallback to window_hash)
+    - Context cohort rows → ctx_cohort_hash (fallback to cohort_hash)
+    """
+
+    def _make_rows_and_lookup(self):
+        """Build synthetic rows and topology for rehash testing."""
+        graph = _make_simple_graph()
+        topology = analyse_topology(graph)
+        eid = "edge-anchor-a"
+        pid = topology.edges[eid].param_id
+
+        rows = {eid: [
+            {"param_id": pid, "core_hash": "PLACEHOLDER", "slice_key": "window()"},
+            {"param_id": pid, "core_hash": "PLACEHOLDER", "slice_key": "cohort()"},
+            {"param_id": pid, "core_hash": "PLACEHOLDER",
+             "slice_key": "context(channel:google).window()"},
+            {"param_id": pid, "core_hash": "PLACEHOLDER",
+             "slice_key": "context(channel:google).cohort()"},
+        ]}
+
+        hash_lookup = {
+            pid: {
+                "window_hash": "AUTH-W",
+                "cohort_hash": "AUTH-C",
+                "ctx_window_hash": "AUTH-CW",
+                "ctx_cohort_hash": "AUTH-CC",
+            }
+        }
+        return rows, topology, hash_lookup, eid
+
+    def test_bare_window_gets_window_hash(self):
+        rows, topo, lookup, eid = self._make_rows_and_lookup()
+        _rehash_snapshot_rows(rows, topo, lookup)
+        r = [r for r in rows[eid] if r["slice_key"] == "window()"][0]
+        assert r["core_hash"] == "AUTH-W"
+
+    def test_bare_cohort_gets_cohort_hash(self):
+        rows, topo, lookup, eid = self._make_rows_and_lookup()
+        _rehash_snapshot_rows(rows, topo, lookup)
+        r = [r for r in rows[eid] if r["slice_key"] == "cohort()"][0]
+        assert r["core_hash"] == "AUTH-C"
+
+    def test_context_window_gets_ctx_window_hash(self):
+        rows, topo, lookup, eid = self._make_rows_and_lookup()
+        _rehash_snapshot_rows(rows, topo, lookup)
+        r = [r for r in rows[eid]
+             if "context(" in r["slice_key"] and "window" in r["slice_key"]][0]
+        assert r["core_hash"] == "AUTH-CW"
+
+    def test_context_cohort_gets_ctx_cohort_hash(self):
+        rows, topo, lookup, eid = self._make_rows_and_lookup()
+        _rehash_snapshot_rows(rows, topo, lookup)
+        r = [r for r in rows[eid]
+             if "context(" in r["slice_key"] and "cohort" in r["slice_key"]][0]
+        assert r["core_hash"] == "AUTH-CC"
+
+    def test_context_window_falls_back_to_bare_when_ctx_empty(self):
+        """When ctx_window_hash is empty, context window rows should
+        fall back to bare window_hash."""
+        rows, topo, lookup, eid = self._make_rows_and_lookup()
+        pid = list(lookup.keys())[0]
+        lookup[pid]["ctx_window_hash"] = ""
+        _rehash_snapshot_rows(rows, topo, lookup)
+        r = [r for r in rows[eid]
+             if "context(" in r["slice_key"] and "window" in r["slice_key"]][0]
+        assert r["core_hash"] == "AUTH-W"
+
+    def test_context_cohort_falls_back_to_bare_when_ctx_empty(self):
+        """When ctx_cohort_hash is empty, context cohort rows should
+        fall back to bare cohort_hash."""
+        rows, topo, lookup, eid = self._make_rows_and_lookup()
+        pid = list(lookup.keys())[0]
+        lookup[pid]["ctx_cohort_hash"] = ""
+        _rehash_snapshot_rows(rows, topo, lookup)
+        r = [r for r in rows[eid]
+             if "context(" in r["slice_key"] and "cohort" in r["slice_key"]][0]
+        assert r["core_hash"] == "AUTH-C"
+
+    def test_all_rows_rehashed_no_placeholders_remain(self):
+        """After rehash, no row should still have the placeholder hash."""
+        rows, topo, lookup, eid = self._make_rows_and_lookup()
+        _rehash_snapshot_rows(rows, topo, lookup)
+        for r in rows[eid]:
+            assert r["core_hash"] != "PLACEHOLDER", (
+                f"Row {r['slice_key']} still has placeholder hash"
+            )
+
+
+# ---------------------------------------------------------------------------
+# Tests: mixed-epoch observation generation
+# ---------------------------------------------------------------------------
+
+class TestMixedEpochObservations:
+    """Spec: when epochs define a context emission boundary (e.g. days 0-44
+    bare, days 45-89 context), simulate_graph must produce:
+    - Bare rows (no context prefix) for the bare epoch
+    - Context-qualified rows for the context epoch
+    - Both window and cohort in each epoch
+    - No bare rows in the context epoch, no context rows in the bare epoch
+    """
+
+    def _run_mixed_epoch(self, *, n_days=90, boundary=44):
+        """Run simulation with a mixed epoch truth config."""
+        graph = _make_simple_graph()
+        topology = analyse_topology(graph)
+        truth = _make_truth(topology, graph)
+        truth["context_dimensions"] = [
+            {"id": "channel", "values": [
+                {"id": "google", "weight": 0.6},
+                {"id": "direct", "weight": 0.4},
+            ]}
+        ]
+        truth["epochs"] = [
+            {"from_day": 0, "to_day": boundary,
+             "emit_context_slices": False},
+            {"from_day": boundary + 1, "to_day": n_days - 1,
+             "emit_context_slices": True},
+        ]
+
+        hash_lookup = _make_hash_lookup(topology)
+        # Add context hashes
+        for pid in hash_lookup:
+            hash_lookup[pid]["ctx_window_hash"] = f"CTX-W-{pid}"
+            hash_lookup[pid]["ctx_cohort_hash"] = f"CTX-C-{pid}"
+
+        sim_config = {
+            "n_days": n_days,
+            "mean_daily_traffic": 200,
+            "kappa_sim_default": 50.0,
+            "drift_sigma": 0.0,
+            "failure_rate": 0.0,
+            "seed": 42,
+            "base_date": "2025-11-01",
+        }
+        rows, stats = simulate_graph(graph, topology, truth, sim_config, hash_lookup)
+        return topology, rows, stats
+
+    def test_bare_epoch_produces_bare_rows(self):
+        """Days 0-44: rows should have bare slice_keys (no context prefix)."""
+        from datetime import datetime, timedelta
+        topo, rows, stats = self._run_mixed_epoch()
+        base = datetime.strptime(stats["base_date"], "%Y-%m-%d")
+
+        for eid, edge_rows in rows.items():
+            bare_rows = [r for r in edge_rows if "context(" not in r["slice_key"]]
+            assert len(bare_rows) > 0, f"Edge {eid} has no bare rows"
+
+    def test_context_epoch_produces_context_rows(self):
+        """Days 45-89: rows should have context-qualified slice_keys."""
+        topo, rows, stats = self._run_mixed_epoch()
+
+        for eid, edge_rows in rows.items():
+            ctx_rows = [r for r in edge_rows if "context(" in r["slice_key"]]
+            assert len(ctx_rows) > 0, f"Edge {eid} has no context rows"
+
+    def test_both_window_and_cohort_in_each_epoch(self):
+        """Each epoch should produce both window() and cohort() rows."""
+        topo, rows, stats = self._run_mixed_epoch()
+
+        for eid, edge_rows in rows.items():
+            bare_window = [r for r in edge_rows
+                           if "context(" not in r["slice_key"] and "window" in r["slice_key"]]
+            bare_cohort = [r for r in edge_rows
+                           if "context(" not in r["slice_key"] and "cohort" in r["slice_key"]]
+            ctx_window = [r for r in edge_rows
+                          if "context(" in r["slice_key"] and "window" in r["slice_key"]]
+            ctx_cohort = [r for r in edge_rows
+                          if "context(" in r["slice_key"] and "cohort" in r["slice_key"]]
+            assert len(bare_window) > 0, f"{eid}: missing bare window rows"
+            assert len(bare_cohort) > 0, f"{eid}: missing bare cohort rows"
+            assert len(ctx_window) > 0, f"{eid}: missing context window rows"
+            assert len(ctx_cohort) > 0, f"{eid}: missing context cohort rows"
+
+    def test_context_rows_have_context_prefix_in_slice_key(self):
+        """Context rows must have context(dim:value) prefix."""
+        topo, rows, stats = self._run_mixed_epoch()
+
+        for eid, edge_rows in rows.items():
+            ctx_rows = [r for r in edge_rows if "context(" in r["slice_key"]]
+            for r in ctx_rows:
+                assert r["slice_key"].startswith("context("), (
+                    f"Context row slice_key should start with context(: {r['slice_key']}"
+                )
+
+    def test_context_rows_use_context_hashes(self):
+        """Context rows should use ctx_*_hash, not bare hashes."""
+        topo, rows, stats = self._run_mixed_epoch()
+
+        for eid, edge_rows in rows.items():
+            et = topo.edges[eid]
+            pid = et.param_id
+            ctx_rows = [r for r in edge_rows if "context(" in r["slice_key"]]
+            for r in ctx_rows:
+                assert r["core_hash"].startswith("CTX-"), (
+                    f"Context row should use ctx hash, got {r['core_hash']}"
+                )
+
+    def test_bare_rows_use_bare_hashes(self):
+        """Bare rows should use bare hashes, not context hashes."""
+        topo, rows, stats = self._run_mixed_epoch()
+
+        for eid, edge_rows in rows.items():
+            et = topo.edges[eid]
+            pid = et.param_id
+            bare_rows = [r for r in edge_rows if "context(" not in r["slice_key"]]
+            for r in bare_rows:
+                assert r["core_hash"].startswith("TEST-"), (
+                    f"Bare row should use bare hash, got {r['core_hash']}"
+                )
+
+    def test_uniform_context_graph_produces_no_bare_rows(self):
+        """When emit_context_slices is True for all days (no epochs),
+        there should be zero bare rows — all rows are context-qualified."""
+        graph = _make_simple_graph()
+        topology = analyse_topology(graph)
+        truth = _make_truth(topology, graph)
+        truth["emit_context_slices"] = True
+        truth["context_dimensions"] = [
+            {"id": "channel", "values": [
+                {"id": "google", "weight": 0.6},
+                {"id": "direct", "weight": 0.4},
+            ]}
+        ]
+
+        hash_lookup = _make_hash_lookup(topology)
+        for pid in hash_lookup:
+            hash_lookup[pid]["ctx_window_hash"] = f"CTX-W-{pid}"
+            hash_lookup[pid]["ctx_cohort_hash"] = f"CTX-C-{pid}"
+
+        sim_config = {
+            "n_days": 30, "mean_daily_traffic": 200,
+            "kappa_sim_default": 50.0, "drift_sigma": 0.0,
+            "failure_rate": 0.0, "seed": 42, "base_date": "2025-11-01",
+        }
+        rows, _ = simulate_graph(graph, topology, truth, sim_config, hash_lookup)
+
+        for eid, edge_rows in rows.items():
+            bare_rows = [r for r in edge_rows if "context(" not in r["slice_key"]]
+            assert len(bare_rows) == 0, (
+                f"Edge {eid} has {len(bare_rows)} bare rows in uniform-context graph"
+            )
+
+    def test_rehash_then_verify_checks_pass_for_uniform_context(self):
+        """End-to-end: simulate uniform-context → rehash → verify checks.
+        Bare hashes should have expect_rows=False, context hashes True."""
+        graph = _make_simple_graph()
+        topology = analyse_topology(graph)
+        truth = _make_truth(topology, graph)
+        truth["emit_context_slices"] = True
+        truth["context_dimensions"] = [
+            {"id": "channel", "values": [
+                {"id": "google", "weight": 0.6},
+                {"id": "direct", "weight": 0.4},
+            ]}
+        ]
+
+        hash_lookup = {}
+        for eid, et in topology.edges.items():
+            pid = et.param_id
+            hash_lookup[pid] = {
+                "window_hash": f"W-{pid}",
+                "cohort_hash": f"C-{pid}",
+                "ctx_window_hash": f"CW-{pid}",
+                "ctx_cohort_hash": f"CC-{pid}",
+            }
+
+        sim_config = {
+            "n_days": 30, "mean_daily_traffic": 200,
+            "kappa_sim_default": 50.0, "drift_sigma": 0.0,
+            "failure_rate": 0.0, "seed": 42, "base_date": "2025-11-01",
+        }
+        rows, _ = simulate_graph(graph, topology, truth, sim_config, hash_lookup)
+        _rehash_snapshot_rows(rows, topology, hash_lookup)
+
+        # After rehash: all rows should have context hashes
+        for eid, edge_rows in rows.items():
+            for r in edge_rows:
+                pid = r["param_id"]
+                assert r["core_hash"].startswith("CW-") or r["core_hash"].startswith("CC-"), (
+                    f"Uniform-context row should have ctx hash, got {r['core_hash']}"
+                )
+
+        # Verify checks should NOT expect bare rows
+        for pid, hashes in hash_lookup.items():
+            checks = _build_verify_checks(hashes)
+            for mode, h, expect_rows in checks:
+                if mode in ("window", "cohort"):
+                    assert expect_rows is False, (
+                        f"Bare {mode} should not expect rows in uniform-context graph"
+                    )
+
+
+# ---------------------------------------------------------------------------
+# Tests: synth-meta signing — save and verify round-trip
+# ---------------------------------------------------------------------------
+
+class TestBuildMetaHashes:
+    """Spec: _build_meta_hashes must include context hashes so that
+    verify_synth_data can find rows under context hashes in the DB.
+    """
+
+    def test_includes_context_hashes(self):
+        """Context hashes from hash_lookup must appear in meta output."""
+        hash_lookup = {
+            "my-edge": {
+                "window_hash": "W123", "cohort_hash": "C456",
+                "ctx_window_hash": "CW789", "ctx_cohort_hash": "CC012",
+            },
+            "parameter-my-edge": {
+                "window_hash": "W123", "cohort_hash": "C456",
+                "ctx_window_hash": "CW789", "ctx_cohort_hash": "CC012",
+            },
+        }
+        meta = _build_meta_hashes(hash_lookup)
+        assert "my-edge" in meta
+        assert "parameter-my-edge" not in meta  # deduped
+        assert meta["my-edge"]["ctx_window_hash"] == "CW789"
+        assert meta["my-edge"]["ctx_cohort_hash"] == "CC012"
+
+    def test_bare_only_lookup_has_no_ctx_keys(self):
+        """Bare-only hash_lookup should produce meta with empty ctx hashes."""
+        hash_lookup = {
+            "my-edge": {"window_hash": "W123", "cohort_hash": "C456"},
+        }
+        meta = _build_meta_hashes(hash_lookup)
+        assert meta["my-edge"]["window_hash"] == "W123"
+        assert meta["my-edge"]["cohort_hash"] == "C456"
+        # ctx keys should be empty string, not missing
+        assert meta["my-edge"].get("ctx_window_hash", "") == ""
+
+
+class TestSaveSynthMeta:
+    """Spec: save_synth_meta must persist ALL hash families so that
+    verify_synth_data can find data under context hashes.
+    """
+
+    def test_meta_includes_context_hashes(self, tmp_path):
+        """Context hashes must be persisted in .synth-meta.json."""
+        import json as _json
+
+        # Create minimal truth file
+        truth_file = tmp_path / "graphs" / "test.truth.yaml"
+        truth_file.parent.mkdir(parents=True)
+        truth_file.write_text("graph:\n  name: test\n")
+
+        edge_hashes = {
+            "my-edge": {
+                "window_hash": "W123",
+                "cohort_hash": "C456",
+                "ctx_window_hash": "CW789",
+                "ctx_cohort_hash": "CC012",
+            }
+        }
+
+        save_synth_meta("test", str(truth_file), edge_hashes, 100, str(tmp_path))
+
+        meta_path = tmp_path / "graphs" / "test.synth-meta.json"
+        assert meta_path.exists()
+        meta = _json.loads(meta_path.read_text())
+
+        stored = meta["edge_hashes"]["my-edge"]
+        assert stored.get("ctx_window_hash") == "CW789", (
+            f"ctx_window_hash not persisted: {stored}"
+        )
+        assert stored.get("ctx_cohort_hash") == "CC012", (
+            f"ctx_cohort_hash not persisted: {stored}"
+        )
+
+    def test_meta_includes_bare_hashes(self, tmp_path):
+        """Bare hashes must still be persisted (regression guard)."""
+        import json as _json
+
+        truth_file = tmp_path / "graphs" / "test.truth.yaml"
+        truth_file.parent.mkdir(parents=True)
+        truth_file.write_text("graph:\n  name: test\n")
+
+        edge_hashes = {
+            "my-edge": {
+                "window_hash": "W123",
+                "cohort_hash": "C456",
+            }
+        }
+
+        save_synth_meta("test", str(truth_file), edge_hashes, 50, str(tmp_path))
+
+        meta = _json.loads((tmp_path / "graphs" / "test.synth-meta.json").read_text())
+        stored = meta["edge_hashes"]["my-edge"]
+        assert stored["window_hash"] == "W123"
+        assert stored["cohort_hash"] == "C456"
+
+
+class TestVerifySynthDataContextHashes:
+    """Spec: verify_synth_data must check context hashes when they exist
+    in the meta sidecar. For a uniform-context graph where only context
+    hashes have DB rows, status must be 'fresh' not 'missing'.
+
+    These tests use the no-DB path (meta-only) to test the freshness
+    logic without requiring Postgres.
+    """
+
+    def test_fresh_when_meta_has_rows_and_truth_unchanged(self, tmp_path, monkeypatch):
+        """Meta says rows > 0 and truth unchanged → 'fresh'."""
+        import json as _json
+
+        graphs_dir = tmp_path / "graphs"
+        graphs_dir.mkdir()
+
+        truth_file = graphs_dir / "test.truth.yaml"
+        truth_file.write_text("graph:\n  name: test\n")
+
+        import hashlib
+        truth_sha = hashlib.sha256(truth_file.read_bytes()).hexdigest()
+
+        meta = {
+            "truth_sha256": truth_sha,
+            "row_count": 500,
+            "edge_hashes": {
+                "my-edge": {
+                    "window_hash": "W123",
+                    "cohort_hash": "C456",
+                    "ctx_window_hash": "CW789",
+                    "ctx_cohort_hash": "CC012",
+                }
+            }
+        }
+        (graphs_dir / "test.synth-meta.json").write_text(_json.dumps(meta))
+
+        # Patch to avoid real DB and data repo resolution
+        monkeypatch.setattr("bayes.synth_gen._resolve_data_repo", lambda: str(tmp_path))
+        monkeypatch.setattr("bayes.synth_gen._load_db_connection", lambda: None)
+
+        result = verify_synth_data("test", str(tmp_path))
+        assert result["status"] == "fresh", f"Expected 'fresh', got {result}"
+
+    def test_stale_when_truth_changed(self, tmp_path, monkeypatch):
+        """Meta truth_sha256 doesn't match current truth → 'stale'."""
+        import json as _json
+
+        graphs_dir = tmp_path / "graphs"
+        graphs_dir.mkdir()
+
+        truth_file = graphs_dir / "test.truth.yaml"
+        truth_file.write_text("graph:\n  name: test\n")
+
+        meta = {
+            "truth_sha256": "old-hash-doesnt-match",
+            "row_count": 500,
+            "edge_hashes": {"my-edge": {"window_hash": "W123", "cohort_hash": "C456"}}
+        }
+        (graphs_dir / "test.synth-meta.json").write_text(_json.dumps(meta))
+
+        monkeypatch.setattr("bayes.synth_gen._resolve_data_repo", lambda: str(tmp_path))
+        monkeypatch.setattr("bayes.synth_gen._load_db_connection", lambda: None)
+
+        result = verify_synth_data("test", str(tmp_path))
+        assert result["status"] == "stale", f"Expected 'stale', got {result}"

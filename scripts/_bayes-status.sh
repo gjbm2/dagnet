@@ -181,7 +181,7 @@ while true; do
         if [[ -n "$last_line" ]]; then
             pct=$(echo "$last_line" | grep -oP '\[\s*\K\d+(?=%)' || echo "?")
             elapsed=$(echo "$last_line" | grep -oP '\d+\.\ds' || echo "?")
-            stage=$(echo "$last_line" | grep -oP '(compiling|sampling|summarising|startup)' || echo "?")
+            stage=$(echo "$last_line" | grep -oP '(compiling|sampling|summarising|startup|simulating|hashing|db_write|writing|verifying|done)' || echo "?")
             detail=$(echo "$last_line" | sed 's/[^:]*: //')
         else
             pct="?"
@@ -251,7 +251,7 @@ while true; do
         # Colour: green if done, yellow if in progress, red if compiling
         local colour
         if [[ "$stage" == "done" ]]; then colour="\033[32m";
-        elif [[ "$stage" == "compiling" ]]; then colour="\033[33m";
+        elif [[ "$stage" == "compiling" || "$stage" == "simulating" || "$stage" == "hashing" ]]; then colour="\033[33m";
         else colour="\033[36m"; fi
         printf "%s${colour}%s\033[0m %3d%%" "$marker" "$bar" "$pct"
     }

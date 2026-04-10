@@ -302,9 +302,11 @@ def verify_synth_data(graph_name: str, data_repo: str | None = None) -> dict:
         total = 0
 
         # Try meta hashes first (fast path)
+        _hash_keys = ["window_hash", "cohort_hash", "ctx_window_hash", "ctx_cohort_hash"]
         if meta and meta.get("edge_hashes"):
             for edge_hashes in meta["edge_hashes"].values():
-                for h in [edge_hashes.get("window_hash", ""), edge_hashes.get("cohort_hash", "")]:
+                for hk in _hash_keys:
+                    h = edge_hashes.get(hk, "")
                     if h and not h.startswith("PLACEHOLDER") and not h.startswith("SIM-"):
                         cur.execute("SELECT COUNT(*) FROM snapshots WHERE core_hash = %s", (h,))
                         total += cur.fetchone()[0]
@@ -320,7 +322,8 @@ def verify_synth_data(graph_name: str, data_repo: str | None = None) -> dict:
                 for pid, hashes in fe_hashes.items():
                     if pid.startswith("parameter-"):
                         continue
-                    for h in [hashes.get("window_hash", ""), hashes.get("cohort_hash", "")]:
+                    for hk in _hash_keys:
+                        h = hashes.get(hk, "")
                         if h and not h.startswith("PLACEHOLDER") and not h.startswith("SIM-"):
                             cur.execute("SELECT COUNT(*) FROM snapshots WHERE core_hash = %s", (h,))
                             total += cur.fetchone()[0]
@@ -339,6 +342,24 @@ def verify_synth_data(graph_name: str, data_repo: str | None = None) -> dict:
     except Exception as e:
         return {"status": "missing", "reason": f"DB check failed: {e}",
                 "row_count": 0, "truth_sha256": truth_sha, "meta": meta}
+
+
+def _build_meta_hashes(hash_lookup: dict[str, dict[str, str]]) -> dict[str, dict[str, str]]:
+    """Build the edge_hashes dict for .synth-meta.json from hash_lookup.
+
+    Deduplicates (skips parameter- prefixed keys) and includes all hash
+    families: bare window/cohort AND context window/cohort.
+    """
+    meta: dict[str, dict[str, str]] = {}
+    for pid, h in hash_lookup.items():
+        if not pid.startswith("parameter-"):
+            meta[pid] = {
+                "window_hash": h.get("window_hash", ""),
+                "cohort_hash": h.get("cohort_hash", ""),
+                "ctx_window_hash": h.get("ctx_window_hash", ""),
+                "ctx_cohort_hash": h.get("ctx_cohort_hash", ""),
+            }
+    return meta
 
 
 def save_synth_meta(
@@ -790,6 +811,7 @@ def simulate_graph(
         else:
             ep = {"p": 0.5, "onset": 0.0, "mu": 1.0, "sigma": 0.5}
         ep.setdefault("kappa_sim", kappa_default)
+        ep.setdefault("tau_mu", 0.0)  # doc 34: cohort-to-cohort timing dispersion
         edge_params[edge_id] = ep
 
     # --- Build adjacency ---
@@ -984,6 +1006,13 @@ def simulate_graph(
         for eid in edge_params:
             day_drift[eid] = float(drift_paths[eid][day_idx])
 
+        # Per-cohort (per-day) mu offsets for latency dispersion (doc 34).
+        # All users on the same day share the same mu offset per edge.
+        day_mu_offsets: dict[str, float] = {}
+        for eid, ep in edge_params.items():
+            _tau = ep.get("tau_mu", 0.0)
+            day_mu_offsets[eid] = float(rng.normal(0, _tau)) if _tau > 0 else 0.0
+
         # Pre-draw day-level p for each (edge, context-combo).
         # All users sharing the same day+edge+context get the same p.
         # This creates between-day overdispersion (controlled by kappa_sim).
@@ -1030,7 +1059,7 @@ def simulate_graph(
                     base_sigma=ep.get("sigma", 0.0),
                     base_onset=ep.get("onset", 0.0),
                 )
-                user_mus[eid] = mu_user
+                user_mus[eid] = mu_user + day_mu_offsets.get(eid, 0.0)
                 user_sigmas[eid] = sigma_user
                 user_onsets[eid] = onset_user
 
@@ -1917,102 +1946,142 @@ def write_to_snapshot_db(
     db_connection: str,
     workspace_prefix: str = "",
     hash_lookup: dict[str, dict[str, str]] | None = None,
+    progress_fn=None,
 ) -> dict[str, dict[str, str]]:
-    """Write synthetic rows to snapshot DB using the existing snapshot_service.
+    """Write synthetic rows to snapshot DB via bulk INSERT.
 
-    Cleans existing rows for the same core hashes first (idempotent).
-    workspace_prefix: e.g. "nous-conversion-feature/bayes-test-graph" —
-        prepended to param_ids as "${prefix}-${param_id}" to match the FE's
-        buildDbParamId format.
+    Single connection, three phases:
+      1. DELETE existing rows per (param_id, core_hash) — idempotent
+      2. Upsert signature_registry entries
+      3. Bulk INSERT all rows in one execute_values call
+
+    workspace_prefix: e.g. "nous-conversion-feature/bayes-test-graph"
     Returns dict[param_id → {window_hash, cohort_hash}] for test harness.
     """
-    # Use the existing snapshot_service (same as FE fetch pipeline)
-    lib_dir = os.path.join(REPO_ROOT, "graph-editor", "lib")
-    ge_dir = os.path.join(REPO_ROOT, "graph-editor")
-    if lib_dir not in sys.path:
-        sys.path.insert(0, lib_dir)
-    if ge_dir not in sys.path:
-        sys.path.insert(0, ge_dir)
-    os.environ["DB_CONNECTION"] = db_connection
-    from lib.snapshot_service import append_snapshots, delete_snapshots
+    import psycopg2
+    from psycopg2.extras import execute_values
+    import hashlib as _hashlib
 
-    # Group rows by (param_id, core_hash, slice_key, retrieved_at)
-    # — each group becomes one append_snapshots call
-    # Apply workspace prefix to param_ids (FE queries with prefixed IDs)
-    from collections import defaultdict
-    groups: dict[tuple, list[dict]] = defaultdict(list)
+    conn = psycopg2.connect(db_connection)
+    cur = conn.cursor()
+
+    inputs_json = json.dumps({"synthetic": True, "generator": "synth_gen"})
+    sig_algo = "sig_v1_sha256_trunc128_b64url"
+
+    # Collect all rows with workspace-prefixed param_ids
+    all_values = []
+    registry_entries: dict[tuple[str, str], str] = {}  # (db_pid, core_hash) → canonical_sig
+    hash_map: dict[str, dict[str, str]] = {}
+
     for edge_rows in snapshot_rows.values():
         for r in edge_rows:
             db_pid = f"{workspace_prefix}-{r['param_id']}" if workspace_prefix else r["param_id"]
-            key = (db_pid, r["core_hash"], r["slice_key"], r["retrieved_at"])
-            groups[key].append(r)
+            core_hash = r["core_hash"]
+            slice_key = r["slice_key"]
+            retrieved_at = r["retrieved_at"].replace("T", " ")
 
-    # Clean existing data for all param_id + core_hash combos
-    cleaned_combos: set[tuple[str, str]] = set()
-    for (pid, ch, _sk, _ra) in groups:
-        if (pid, ch) not in cleaned_combos:
-            result = delete_snapshots(pid, core_hashes=[ch])
-            if result["success"] and result["deleted"] > 0:
-                print(f"  Cleaned {result['deleted']} existing rows for {pid}/{ch[:12]}…")
-            cleaned_combos.add((pid, ch))
+            # Registry entry (one per param_id + core_hash)
+            if (db_pid, core_hash) not in registry_entries:
+                bare_pid = r["param_id"]
+                sig_key = "window_sig" if "window" in slice_key else "cohort_sig"
+                real_sig = (hash_lookup or {}).get(bare_pid, {}).get(sig_key)
+                canonical = real_sig if real_sig else f"synthetic:{db_pid}:{slice_key}"
+                registry_entries[(db_pid, core_hash)] = canonical
 
-    # Insert via append_snapshots
-    total_inserted = 0
-    hash_map: dict[str, dict[str, str]] = {}
+            all_values.append((
+                db_pid,
+                core_hash,
+                None,  # context_def_hashes (deprecated)
+                slice_key,
+                r["anchor_day"],
+                retrieved_at,
+                r.get("a"),
+                r.get("x"),
+                r["y"],
+                r.get("median_lag_days"),
+                r.get("mean_lag_days"),
+                r.get("anchor_median_lag_days"),
+                r.get("anchor_mean_lag_days"),
+                r.get("onset_delta_days"),
+                inputs_json,
+            ))
 
-    for (pid, core_hash, slice_key, retrieved_at_str), rows in groups.items():
-        # Parse retrieved_at regardless of separator (T or space)
-        clean_ra = retrieved_at_str.replace("T", " ")
-        retrieved_at = datetime.strptime(clean_ra, "%Y-%m-%d %H:%M:%S")
+            # Hash map for caller
+            if db_pid not in hash_map:
+                hash_map[db_pid] = {}
+            if "window" in slice_key:
+                hash_map[db_pid]["window_hash"] = core_hash
+            else:
+                hash_map[db_pid]["cohort_hash"] = core_hash
 
-        # Build rows in append_snapshots format
-        append_rows = []
-        for r in rows:
-            append_rows.append({
-                "anchor_day": r["anchor_day"],
-                "A": r.get("a"),
-                "X": r.get("x"),
-                "Y": r["y"],
-                "median_lag_days": r.get("median_lag_days"),
-                "mean_lag_days": r.get("mean_lag_days"),
-                "anchor_median_lag_days": r.get("anchor_median_lag_days"),
-                "anchor_mean_lag_days": r.get("anchor_mean_lag_days"),
-                "onset_delta_days": r.get("onset_delta_days"),
-            })
+    import time as _t
 
-        # Resolve the real structured sig for registry parity.
-        # The FE sends current_signatures from param file query_signature;
-        # the registry canonical_signature must match for family grouping.
-        bare_pid = pid.replace(f"{workspace_prefix}-", "") if workspace_prefix else pid
-        sig_key = "window_sig" if "window" in slice_key else "cohort_sig"
-        real_sig = (hash_lookup or {}).get(bare_pid, {}).get(sig_key)
-        canonical = real_sig if real_sig else f"synthetic:{pid}:{slice_key}"
-
-        result = append_snapshots(
-            param_id=pid,
-            canonical_signature=canonical,
-            inputs_json={"synthetic": True, "generator": "synth_gen"},
-            sig_algo="sig_v1_sha256_trunc128_b64url",
-            slice_key=slice_key,
-            retrieved_at=retrieved_at,
-            rows=append_rows,
-            core_hash=core_hash,
+    # Phase 1: DELETE existing rows per (param_id, core_hash)
+    _t1 = _t.time()
+    total_deleted = 0
+    for (db_pid, core_hash) in registry_entries:
+        cur.execute(
+            "DELETE FROM snapshots WHERE param_id = %s AND core_hash = %s",
+            (db_pid, core_hash),
         )
+        total_deleted += cur.rowcount
+    print(f"  Phase 1 DELETE: {total_deleted} rows in {_t.time() - _t1:.1f}s ({len(registry_entries)} combos)", flush=True)
+    if progress_fn: progress_fn(70, "db_write", f"delete done ({total_deleted} rows, {_t.time() - _t1:.1f}s)")
 
-        if result.get("success"):
-            total_inserted += result.get("inserted", 0)
-        else:
-            print(f"  WARNING: append failed for {pid}/{slice_key}: {result}")
+    # Phase 2: Upsert signature_registry
+    _t2 = _t.time()
+    for (db_pid, core_hash), canonical in registry_entries.items():
+        sig_hash = _hashlib.sha256(canonical.strip().encode("utf-8")).hexdigest()
+        cur.execute(
+            """
+            INSERT INTO signature_registry
+              (param_id, core_hash, canonical_signature, inputs_json, canonical_sig_hash_full, sig_algo)
+            VALUES (%s, %s, %s, %s::jsonb, %s, %s)
+            ON CONFLICT (param_id, core_hash) DO NOTHING
+            """,
+            (db_pid, core_hash, canonical, inputs_json, sig_hash, sig_algo),
+        )
+    print(f"  Phase 2 REGISTRY: {len(registry_entries)} entries in {_t.time() - _t2:.1f}s", flush=True)
+    if progress_fn: progress_fn(72, "db_write", f"registry done ({_t.time() - _t2:.1f}s)")
 
-        # Build hash map
-        if pid not in hash_map:
-            hash_map[pid] = {}
-        if "window" in slice_key:
-            hash_map[pid]["window_hash"] = core_hash
-        else:
-            hash_map[pid]["cohort_hash"] = core_hash
+    # Phase 3: Bulk INSERT all rows (chunked)
+    _t3 = _t.time()
+    CHUNK = 25000
+    total_inserted = 0
+    n_chunks = (len(all_values) + CHUNK - 1) // CHUNK
+    for ci, i in enumerate(range(0, len(all_values), CHUNK)):
+        chunk = all_values[i:i + CHUNK]
+        _tc = _t.time()
+        execute_values(
+            cur,
+            """
+            INSERT INTO snapshots (
+                param_id, core_hash, context_def_hashes, slice_key, anchor_day, retrieved_at,
+                A, X, Y,
+                median_lag_days, mean_lag_days,
+                anchor_median_lag_days, anchor_mean_lag_days,
+                onset_delta_days,
+                write_inputs_json
+            ) VALUES %s
+            ON CONFLICT (param_id, core_hash, slice_key, anchor_day, retrieved_at)
+            DO NOTHING
+            """,
+            chunk,
+            template="(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb)",
+        )
+        total_inserted += len(chunk)
+        print(f"  Phase 3 INSERT chunk {ci+1}/{n_chunks}: {len(chunk)} rows in {_t.time() - _tc:.1f}s", flush=True)
+        if progress_fn:
+            insert_pct = 72 + int(16 * (ci + 1) / n_chunks)
+            progress_fn(insert_pct, "db_write", f"insert chunk {ci+1}/{n_chunks} ({_t.time() - _tc:.1f}s)")
 
-    print(f"  Inserted {total_inserted} rows")
+    _t4 = _t.time()
+    conn.commit()
+    print(f"  COMMIT in {_t.time() - _t4:.1f}s", flush=True)
+    if progress_fn: progress_fn(90, "db_write", f"committed ({_t.time() - _t1:.1f}s total)")
+    conn.close()
+
+    print(f"  Total: {total_inserted} rows in {_t.time() - _t1:.1f}s")
     return hash_map
 
 
@@ -2600,6 +2669,8 @@ Examples:
                         help="Also update data repo: param YAMLs, graph JSON, indexes")
     parser.add_argument("--clean", action="store_true",
                         help="Remove synthetic data from DB and exit")
+    parser.add_argument("--force", action="store_true",
+                        help="Regenerate even if existing data is fresh")
     args = parser.parse_args()
 
     data_repo = _resolve_data_repo()
@@ -2632,6 +2703,47 @@ Examples:
     truth = load_truth_config(truth_path)
     print(f"Truth: {truth_path}")
 
+    # --- Harness log integration (bayes-monitor visibility) ---
+    import time as _time
+    _harness_log_path = f"/tmp/bayes_harness-{args.graph}.log"
+    _harness_lock_path = f"/tmp/bayes-harness-{args.graph}.lock"
+    _harness_log = open(_harness_log_path, "w")
+    _harness_t0 = _time.time()
+    # Write lock file so bayes-monitor shows this as active
+    with open(_harness_lock_path, "w") as _lf:
+        _lf.write(str(os.getpid()))
+
+    def _progress(pct: int, stage: str, detail: str = "") -> None:
+        elapsed = _time.time() - _harness_t0
+        line = f"  [{pct:3d}%] {elapsed:6.1f}s  {stage}: {detail}"
+        print(line, flush=True)
+        _harness_log.write(line + "\n")
+        _harness_log.flush()
+
+    import atexit
+    def _cleanup_harness_lock():
+        try:
+            os.remove(_harness_lock_path)
+        except FileNotFoundError:
+            pass
+        try:
+            _harness_log.close()
+        except Exception:
+            pass
+    atexit.register(_cleanup_harness_lock)
+
+    _progress(0, "startup", f"graph={args.graph}")
+
+    # --- Freshness check: skip if data is already fresh ---
+    if not args.force and not args.clean and not args.dry_run:
+        graph_name_for_verify = os.path.basename(truth_path).replace(".truth.yaml", "")
+        freshness = verify_synth_data(graph_name_for_verify, data_repo)
+        if freshness["status"] == "fresh":
+            _progress(100, "done", f"data fresh — skipped")
+            print(f"\nData is fresh — skipping rebuild ({freshness['reason']})")
+            print(f"  Use --force to regenerate anyway.")
+            return
+
     # --- Generate or load graph ---
     if truth_has_graph_structure(truth):
         # New format: generate graph + entity files from truth
@@ -2639,6 +2751,7 @@ Examples:
         graph_path = os.path.join(data_repo, "graphs", f"{graph_name_resolved}.json")
 
         # Always regenerate — truth file is authoritative
+        _progress(2, "startup", "generating graph from truth")
         print(f"\n── Generate graph from truth ──")
         graph_path = generate_graph_artefacts(truth, data_repo, graph_name_resolved)
     else:
@@ -2707,13 +2820,13 @@ Examples:
     sim_config = _get_sim_config(truth, cli_overrides)
     sim_config["base_date"] = truth.get("simulation", {}).get("base_date", "2025-12-12")
 
+    _progress(5, "simulating", f"{sim_config['n_days']} days, {sim_config['mean_daily_traffic']}/day")
     print(f"\nSimulating ~{sim_config['mean_daily_traffic']} people/day "
           f"× {sim_config['n_days']} days "
           f"(seed={sim_config['seed']}, "
           f"κ={sim_config['kappa_sim_default']}, "
           f"drift={sim_config['drift_sigma']})...")
 
-    import time as _time
     t0 = _time.time()
 
     snapshot_rows, sim_stats = simulate_graph(
@@ -2721,10 +2834,12 @@ Examples:
     )
     elapsed = _time.time() - t0
     print(f"Simulation complete in {elapsed:.1f}s")
+    _progress(40, "simulating", f"done ({elapsed:.1f}s, {sum(len(v) for v in snapshot_rows.values())} rows)")
 
     print_summary(topology, truth, snapshot_rows, sim_stats)
 
     if args.dry_run:
+        _progress(100, "done", f"dry run completed in {_time.time() - _harness_t0:.1f}s")
         print("\n(Dry run — not writing to DB or files)")
         return
 
@@ -2748,6 +2863,7 @@ Examples:
     #    Does NOT touch analytical params (mu/sigma/t95) — stats pass does that.
     if args.write_files:
         _t1 = _time.time()
+        _progress(42, "writing", "step 1 — graph metadata")
         print(f"\n── Step 1: Update graph structural metadata ──")
         update_graph_edge_metadata(graph_path, topology, truth, sim_stats)
         print("  Updated: query, latency_parameter, cohort_anchor_event_id")
@@ -2762,6 +2878,7 @@ Examples:
     #     BEFORE Step 2.
     ctx_dims = truth.get("context_dimensions", [])
     if ctx_dims:
+        _progress(45, "writing", "step 1b — context definitions")
         print(f"\n── Step 1b: Write context definitions ──")
         write_context_files(truth, data_repo)
 
@@ -2769,6 +2886,7 @@ Examples:
     #    DSL is passed explicitly (computed from sim_stats above) so this
     #    works regardless of whether --write-files wrote it to disk.
     _t2 = _time.time()
+    _progress(50, "hashing", "step 2 — CLI hash computation")
     print(f"\n── Step 2: Compute FE-authoritative hashes ──")
     graph_dir = os.path.dirname(os.path.dirname(graph_path))  # .../graphs/X.json → .../
     graph_name_for_cli = os.path.basename(graph_path).replace(".json", "")
@@ -2899,6 +3017,7 @@ Examples:
     workspace_prefix = ""
     if db_conn:
         _t3 = _time.time()
+        _progress(65, "db_write", "step 3 — inserting rows")
         print(f"\n── Step 3: Write to snapshot DB ──")
         repo_name = os.path.basename(data_repo)
         try:
@@ -2915,7 +3034,7 @@ Examples:
         _rehash_snapshot_rows(snapshot_rows, topology, hash_lookup)
 
         try:
-            write_to_snapshot_db(snapshot_rows, db_conn, workspace_prefix, hash_lookup)
+            write_to_snapshot_db(snapshot_rows, db_conn, workspace_prefix, hash_lookup, progress_fn=_progress)
         except Exception as e:
             print(f"  WARNING: DB write failed: {e}")
             print(f"  (Continuing with file generation if --write-files is set)")
@@ -2926,6 +3045,7 @@ Examples:
     # 4. Write parameter files using FE hashes.
     if args.write_files:
         _t4 = _time.time()
+        _progress(90, "writing", "step 4 — parameter files")
         print(f"\n── Step 4: Write parameter files ──")
         with open(graph_path) as f:
             updated_graph = json.load(f)
@@ -2938,6 +3058,7 @@ Examples:
 
     # 5. Verify: query DB with the SAME hashes and confirm data exists.
     if db_conn:
+        _progress(95, "verifying", "step 5 — DB verification")
         print(f"\n── Step 5: Verify DB data ──")
         _verify_db_data(hash_lookup, topology, workspace_prefix, db_conn)
 
@@ -2947,18 +3068,12 @@ Examples:
     # Write .synth-meta.json sidecar for integrity checking
     if db_conn or args.write_files:
         total_rows = sum(len(v) for v in snapshot_rows.values())
-        # Serialise edge hashes for the meta sidecar
-        meta_hashes = {}
-        for pid, h in hash_lookup.items():
-            if not pid.startswith("parameter-"):
-                meta_hashes[pid] = {
-                    "window_hash": h.get("window_hash", ""),
-                    "cohort_hash": h.get("cohort_hash", ""),
-                }
+        meta_hashes = _build_meta_hashes(hash_lookup)
         graph_name_for_meta = os.path.basename(truth_path).replace(".truth.yaml", "")
         save_synth_meta(graph_name_for_meta, truth_path, meta_hashes, total_rows, data_repo)
         print(f"Wrote .synth-meta.json (truth_sha256, {total_rows} rows, {len(meta_hashes)} edges)")
 
+    _progress(100, "done", f"completed in {_time.time() - _harness_t0:.1f}s")
     print("\nDone.")
 
 

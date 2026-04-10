@@ -114,7 +114,16 @@
       "Bash(bash graph-ops/scripts/analyse.sh synth-forecast-test \"from\\(synth-forecast-ft-gate\\).to\\(synth-forecast-ft-target\\).cohort\\(1-Mar-26:20-Mar-26\\)\" --type cohort_maturity_v2 --no-cache --format json)",
       "Bash(bash graph-ops/scripts/analyse.sh synth-forecast-test \"from\\(synth-forecast-ft-hub\\).to\\(synth-forecast-ft-target\\).cohort\\(1-Mar-26:20-Mar-26\\)\" --type cohort_maturity_v2 --no-cache --verbose)",
       "Bash(timeout 10 bash graph-ops/scripts/analyse.sh synth-forecast-test \"from\\(synth-forecast-ft-hub\\).to\\(synth-forecast-ft-target\\).cohort\\(1-Mar-26:20-Mar-26\\)\" --type cohort_maturity_v2 --no-cache --format json)",
-      "Bash(kill 694163)"
+      "Bash(kill 694163)",
+      "Bash(pkill -f \"run_regression.py\")",
+      "Bash(pkill -f \"synth_gen.py --graph\")",
+      "Bash(pkill -f \"param_recovery.py\")",
+      "Bash(kill -9 908172 910781)",
+      "Bash(kill -9 924765)",
+      "Bash(pkill -9 -f \"run_regression\")",
+      "Bash(pkill -9 -f \"synth_gen\")",
+      "Bash(pkill -9 -f \"param_recovery\")",
+      "Bash(pkill -9 -f \"test_harness\")"
     ],
     "additionalDirectories": [
       "/home/reg/dev/dagnet/.claude",

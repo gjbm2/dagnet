@@ -94,6 +94,7 @@ def main():
     cmd = [
         sys.executable, os.path.join(REPO_ROOT, "bayes", "test_harness.py"),
         "--graph", args.graph,
+        "--fe-payload",
         "--no-webhook",
         "--timeout", str(args.timeout),
     ]

@@ -629,6 +629,34 @@ def main():
             timeout_s = max(expected_sample_s * 3, 120)  # 3x expected or at least 2 min
         print(f"  Timeout: {timeout_s}s (expected sampling: {expected_sample_s}s)")
 
+        # --- Synth data gate: verify DB has rows, bootstrap if needed ---
+        if graph_name.startswith("synth-"):
+            from synth_gen import verify_synth_data
+            _vsd = verify_synth_data(graph_name, data_repo_path)
+            if _vsd["status"] in ("missing", "stale"):
+                print(f"\n── Synth data gate: {_vsd['status']} ({_vsd['reason']}) ──")
+                print(f"  Bootstrapping {graph_name} via synth_gen.py --write-files...")
+                import subprocess as _sp
+                _boot = _sp.run(
+                    [sys.executable, os.path.join(REPO_ROOT, "bayes", "synth_gen.py"),
+                     "--graph", graph_name, "--write-files"],
+                    capture_output=False, text=True, timeout=600, cwd=REPO_ROOT,
+                )
+                if _boot.returncode != 0:
+                    print(f"  ABORT: Bootstrap failed (exit {_boot.returncode})")
+                    sys.exit(1)
+                # Re-verify after bootstrap
+                _vsd2 = verify_synth_data(graph_name, data_repo_path)
+                if _vsd2["status"] != "fresh":
+                    print(f"  ABORT: Still {_vsd2['status']} after bootstrap ({_vsd2['reason']})")
+                    sys.exit(1)
+                print(f"  Bootstrap OK: {_vsd2['row_count']} rows verified")
+                # Reload graph JSON — bootstrap may have regenerated it
+                with open(graph_path) as f:
+                    graph = json.load(f)
+            else:
+                print(f"\n── Synth data gate: {_vsd['status']} ({_vsd['reason']}) ──")
+
         # --- Compute FE-authoritative hashes via Node.js ---
         print("\n── Compute hashes (Node.js) ──")
         hash_source_path = args.hash_source or graph_path

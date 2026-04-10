@@ -284,6 +284,18 @@ Clearing layer 1 is useless unless you also handle layers 2-4. UpdateManager map
 
 **Broader principle**: any DSL clause parser must handle all valid clause forms. Check the grammar in `DSL_SYNTAX_REFERENCE.md` before writing a regex — `cohort()` has both `cohort(start:end)` and `cohort(anchor,start:end)` forms.
 
+## Anti-pattern 32: Signature contamination from param file values
+
+**Signature**: bare and context DSL queries produce identical `core_hash` values. `candidateRegimeService.buildCandidateRegimesByEdge` returns the same hash for both regime families. Regime selection cannot distinguish uncontexted from contexted dates.
+
+**Root cause**: `plannerQuerySignatureService.ts` had an "implicit-uncontexted MECE fulfilment" feature. When computing a signature for a bare query (no `context()` clause), it inspected the parameter file on disk. If the file contained contexted values (from a previous fetch), it extracted those context keys and injected them into `effectiveContextKeys`. This made the bare signature include `contextDefHashes` for keys not in the query — producing an identical hash to the context query.
+
+**Why it existed**: the intent was to help the planner recognise contexted cache as valid for bare queries. But this is already handled by `canCacheSatisfyQuery` (superset matching in `signatureMatchingService.ts`) and by `equivalent_hashes` / closure sets for snapshot DB lookups.
+
+**Fix**: disabled the `candidateContextKeys` block in `plannerQuerySignatureService.ts` (10-Apr-26). The block is commented out with rationale. If bare-query cache recognition regresses, the fix belongs in the matching/closure layer, not in signature contamination.
+
+**Broader principle**: signatures must reflect what the query asks for, not what data happens to exist on disk. Signature identity = hash identity. If two queries need different hashes, they must have different signatures.
+
 ## When to add to this document
 
 After completing a multi-attempt fix, check: does my bug match a generalisable pattern? If so, add it here following the format: Signature (how to recognise it), Root cause (why it happens), Fix (what to do), Example (optional, specific instance).
