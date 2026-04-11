@@ -444,11 +444,17 @@ def fw_compose_pair(
         return None
 
     def mean_of(mu: float, sigma: float) -> float:
-        return math.exp(mu + sigma * sigma / 2)
+        try:
+            return math.exp(mu + sigma * sigma / 2)
+        except OverflowError:
+            return float('inf')
 
     def var_of(mu: float, sigma: float) -> float:
         s2 = sigma * sigma
-        return (math.exp(s2) - 1) * math.exp(2 * mu + s2)
+        try:
+            return (math.exp(s2) - 1) * math.exp(2 * mu + s2)
+        except OverflowError:
+            return float('inf')
 
     m = mean_of(a.mu, a.sigma) + mean_of(b.mu, b.sigma)
     v = var_of(a.mu, a.sigma) + var_of(b.mu, b.sigma)
@@ -611,7 +617,7 @@ def compute_edge_latency_stats(
 
     # §3.1 Rate uncertainty: Beta-binomial posterior SD
     p_alpha = total_k + 1
-    p_beta_val = total_n - total_k + 1
+    p_beta_val = max(1, total_n - total_k + 1)  # guard against k > n (data corruption)
     p_sd_raw = math.sqrt(p_alpha * p_beta_val / ((p_alpha + p_beta_val) ** 2 * (p_alpha + p_beta_val + 1)))
     p_sd = max(p_sd_raw, 0.10) if total_k < 30 else p_sd_raw
 

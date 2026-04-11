@@ -2052,34 +2052,8 @@ def _emit_cohort_likelihoods(
                 # Same mathematics as the mixture case above, but with a
                 # single (onset, μ, σ) and a single p (or per-cohort p_i).
 
-                # ---- Per-cohort mu random effect (doc 34) ----
-                # When latency_dispersion is enabled, each trajectory gets
-                # its own mu_c = mu + tau_mu * u_c (non-centred). tau_mu is
-                # the learned timing dispersion — the latency analogue of
-                # kappa for p.
-                _feat_ld = (features or {}).get("latency_dispersion", False)
-                _use_per_cohort_mu = _feat_ld and has_latent_latency and not is_mixture
-                if _use_per_cohort_mu:
-                    _tau_mu_sigma = float((settings or {}).get(
-                        "BAYES_TAU_MU_SIGMA", (settings or {}).get("bayes_tau_mu_sigma", 0.2)))
-                    _n_trajs = len(trajs)
-                    # Include obs_type in name to avoid collision when both
-                    # window and cohort trajectories exist for the same edge.
-                    _ld_suffix = f"{safe_id}_{obs_type}"
-                    tau_mu_var = pm.HalfNormal(f"tau_mu_{_ld_suffix}", sigma=_tau_mu_sigma)
-                    eps_mu_cohort = pm.Normal(
-                        f"eps_mu_cohort_{_ld_suffix}", mu=0, sigma=1, shape=_n_trajs)
-                    mu_per_cohort = mu_var + tau_mu_var * eps_mu_cohort
-                    diagnostics.append(
-                        f"  latency_dispersion {safe_id} ({obs_type}): "
-                        f"tau_mu ~ HalfNormal({_tau_mu_sigma}), "
-                        f"{_n_trajs} cohort mu offsets")
-
                 # Compute the CDF at every retrieval age (vectorised).
-                # When per-cohort mu is active, we defer CDF computation
-                # until after the interval decomposition (need traj indices).
-                if not _use_per_cohort_mu:
-                    cdf_all = _compute_cdf_at_ages(onset, mu_var, sigma_var)
+                cdf_all = _compute_cdf_at_ages(onset, mu_var, sigma_var)
 
                 # Decompose trajectories into intervals (same as mixture).
                 # traj_idx_per_interval tracks which trajectory each interval
@@ -2121,33 +2095,8 @@ def _emit_cohort_likelihoods(
                     p_per_interval = p_expr
 
                 # Look up CDF values at interval boundaries.
-                if _use_per_cohort_mu:
-                    # Per-cohort mu: evaluate CDF at each interval's age
-                    # using that interval's cohort's mu. Onset and sigma
-                    # remain shared.
-                    mu_per_interval = mu_per_cohort[traj_idx_np]
-                    # Reuse the onset→log_ages computation from
-                    # _compute_cdf_at_ages but with per-interval mu.
-                    onset_is_latent = hasattr(onset, 'name')
-                    if onset_is_latent:
-                        _age_minus_onset = ages_tensor - onset
-                        _eff_ages = pt.softplus(_softplus_k * _age_minus_onset) / _softplus_k
-                        _log_ages_all = pt.log(pt.maximum(_eff_ages, LOG_ARG_FLOOR))
-                    else:
-                        _eff_ages_np = np.maximum(ages_raw_np - float(onset), EFFECTIVE_AGE_FLOOR)
-                        _log_ages_all = pt.log(pt.as_tensor_variable(_eff_ages_np))
-                    # Gather log_ages at interval boundaries, then compute
-                    # CDF with per-interval mu.
-                    _log_curr = _log_ages_all[curr_idx_np]
-                    _log_prev = _log_ages_all[prev_safe]
-                    _sqrt2 = pt.sqrt(2.0)
-                    _z_curr = (_log_curr - mu_per_interval) / (sigma_var * _sqrt2)
-                    _z_prev = (_log_prev - mu_per_interval) / (sigma_var * _sqrt2)
-                    cdf_curr = 0.5 * pt.erfc(-_z_curr)
-                    cdf_prev = 0.5 * pt.erfc(-_z_prev)
-                else:
-                    cdf_curr = cdf_all[curr_idx_np]
-                    cdf_prev = cdf_all[prev_safe]
+                cdf_curr = cdf_all[curr_idx_np]
+                cdf_prev = cdf_all[prev_safe]
 
                 # ΔF = CDF increment over this interval (how much of the
                 # maturation curve was "used up" in this time window).
@@ -2165,10 +2114,40 @@ def _emit_cohort_likelihoods(
                 #   q_j = p × ΔF / (1 − p × F_{j−1})
                 q_j = pt.clip(p_per_interval * delta_F / surv_prev, SURVIVAL_FLOOR, 1.0 - SURVIVAL_FLOOR)
 
-                # Binomial log-likelihood, weighted and summed.
-                logp = pt.sum(weights_np * (
-                    d_np * pt.log(q_j) + (n_at_risk_np - d_np) * pt.log(1.0 - q_j)
-                ))
+                # ---- Latency dispersion (doc 34) ----
+                # When enabled, replace per-interval Binomial with
+                # BetaBinomial. kappa_lat is a single scalar that captures
+                # timing overdispersion — the latency analogue of kappa
+                # for p. Same mean, inflated variance. One parameter per
+                # edge, no per-cohort latents.
+                _feat_ld = (features or {}).get("latency_dispersion", False)
+                _use_kappa_lat = _feat_ld and has_latent_latency
+                if _use_kappa_lat:
+                    _ld_suffix = f"{safe_id}_{obs_type}"
+                    _log_kl = pm.Normal(f"log_kappa_lat_{_ld_suffix}",
+                                        mu=LOG_KAPPA_MU, sigma=LOG_KAPPA_SIGMA)
+                    kappa_lat = pm.Deterministic(f"kappa_lat_{_ld_suffix}",
+                                                  pt.exp(_log_kl))
+                    # BetaBinomial log-likelihood: same mean as Binomial,
+                    # variance inflated by (n + kappa_lat) / (1 + kappa_lat).
+                    # Use PyMC's native BetaBinomial.dist() + pm.logp() for
+                    # optimised PyTensor compilation (avoids manual gammaln
+                    # graph that causes compilation timeout on large models).
+                    _alpha = q_j * kappa_lat
+                    _beta = (1.0 - q_j) * kappa_lat
+                    _bb_dist = pm.BetaBinomial.dist(
+                        alpha=_alpha, beta=_beta,
+                        n=pt.as_tensor_variable(n_at_risk_np))
+                    _lp = pm.logp(_bb_dist, pt.as_tensor_variable(d_np))
+                    logp = pt.sum(weights_np * _lp)
+                    diagnostics.append(
+                        f"  latency_dispersion {safe_id} ({obs_type}): "
+                        f"kappa_lat ~ LogNormal, BetaBinomial intervals")
+                else:
+                    # Standard Binomial log-likelihood, weighted and summed.
+                    logp = pt.sum(weights_np * (
+                        d_np * pt.log(q_j) + (n_at_risk_np - d_np) * pt.log(1.0 - q_j)
+                    ))
 
             n_terms = len(trajs)
 
@@ -2651,6 +2630,20 @@ def _emit_edge_likelihoods(
                 edge_var_names[edge_id] = f"p_{safe_id}"
         if emit_window_binomial:
             _emit_window_likelihoods(safe_id, p, ev, diagnostics, kappa=edge_kappa)
+        # Snapshot evidence stores window trajectories in cohort_obs
+        # (as CohortObservation with obs_type="window"). When cohort_obs
+        # has content, emit cohort likelihoods to consume those trajectories.
+        # Mirrors Case A Phase 1 pattern: p_window_var=p, skip_cohort=True.
+        if not feat_window_only and ev.cohort_obs:
+            _emit_cohort_likelihoods(safe_id, p, ev, diagnostics,
+                                    topology, edge_var_names, model,
+                                    latency_vars=latency_vars,
+                                    p_window_var=p,
+                                    cohort_latency_vars=cohort_latency_vars,
+                                    kappa=edge_kappa,
+                                    onset_vars=onset_vars,
+                                    skip_cohort_trajectories=True,
+                                    settings=_s, features=features)
 
     # --- Case C: edge has ONLY cohort data ---
     elif ev.has_cohort:

@@ -409,13 +409,23 @@ def bind_snapshot_evidence(
         _route_slices(ev, settings, diagnostics, commissioned=edge_commissioned)
 
         # --- Minimum-n gate ---
+        # Include SliceGroup observations: when regime partitioning removes
+        # aggregate rows, per-context data in SliceGroups may be the only
+        # evidence. Without this, pure-context-only edges are incorrectly
+        # skipped despite having substantial per-slice data.
+        slice_n = sum(
+            s_obs.total_n
+            for sg in ev.slice_groups.values()
+            for s_obs in sg.slices.values()
+        )
+        effective_n = ev.total_n + slice_n
         min_n = settings.get("min_n_threshold", MIN_N_THRESHOLD)
-        if ev.total_n < min_n and ev.total_n > 0:
+        if effective_n < min_n and effective_n > 0:
             ev.skipped = True
-            ev.skip_reason = f"total_n={ev.total_n} < min_n={min_n}"
+            ev.skip_reason = f"effective_n={effective_n} < min_n={min_n}"
             ev.prob_prior = ProbabilityPrior(source="prior-only")
             diagnostics.append(f"PRIOR-ONLY edge {edge_id[:8]}…: {ev.skip_reason}")
-        elif ev.total_n == 0:
+        elif effective_n == 0:
             ev.skipped = True
             ev.skip_reason = "no observations"
             diagnostics.append(f"SKIP edge {edge_id[:8]}…: no observations")

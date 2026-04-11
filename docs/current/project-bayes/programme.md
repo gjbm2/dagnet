@@ -1307,6 +1307,28 @@ design; implementation is post-Phase A.
   logging by default, with verbose output only in a diagnostic mode
   (e.g. `?bayes_debug=1` or a dev-tools toggle).
 
+- **Historical DSL epoch hash discovery for Bayes**: when a graph's
+  `dataInterestsDSL` changes over time (e.g. Jan: `context(channel)`,
+  Feb: `context(browser_type)`, Mar: uncontexted), snapshot data from
+  earlier epochs lives under different `core_hash` families.
+  `enumeratePlausibleContextKeySets` in `snapshotRetrievalsService.ts`
+  correctly discovers these historical families by inspecting stored
+  param file `values[]` entries — but this is only used on the read
+  path (evidence tooltips, coverage checks). The Bayes commissioning
+  path (`buildCandidateRegimesByEdge` in `candidateRegimeService.ts`)
+  only enumerates hash families from the **current** DSL. For a
+  31-Mar query spanning Jan–Mar, the Bayes pipeline would only query
+  the Mar (uncontexted) hash, missing Jan and Feb data entirely.
+  Fix: `buildCandidateRegimesByEdge` should also inspect stored param
+  file slice topology (same as `enumeratePlausibleContextKeySets`)
+  to discover historical hash families. `select_regime_rows` on the
+  BE side already handles per-date regime selection correctly — it
+  just needs the full candidate set from the FE. Test coverage exists
+  for the read path (15+ tests in `snapshotQueryNarrowing.test.ts`)
+  but not for the Bayes commissioning path. Priority: medium — only
+  affects graphs whose `dataInterestsDSL` has changed context
+  dimensions over time.
+
 - **Bayes test hardening — immature cohort recovery**: the Phase A
   `test_completeness_prevents_p_underestimate` test (A4 scenario) is
   `xfail` — the fixed-latency model cannot recover true p from

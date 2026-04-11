@@ -818,21 +818,15 @@ def summarise_posteriors(
                     _onset_s_name = f"onset_slice_{safe_eid}_{_ctx_safe}"
                     if _mu_s_name in trace.posterior:
                         _slice_entry["mu_mean"] = float(trace.posterior[_mu_s_name].values.mean())
-                        _slice_mu_sd = float(trace.posterior[_mu_s_name].values.std())
-                        # Latency dispersion (doc 34): per-slice predictive mu_sd
-                        _slice_tau_mu_name = None
+                        _slice_entry["mu_sd"] = float(trace.posterior[_mu_s_name].values.std())
+                        # Latency dispersion (doc 34): per-slice kappa_lat
                         for _sot in ("cohort", "window"):
-                            _sc = f"tau_mu_{safe_eid}__{_ctx_safe}_{_sot}"
+                            _sc = f"kappa_lat_{safe_eid}__{_ctx_safe}_{_sot}"
                             if _sc in trace.posterior:
-                                _slice_tau_mu_name = _sc
+                                _skl = trace.posterior[_sc].values.flatten()
+                                _slice_entry["kappa_lat_mean"] = float(np.mean(_skl))
+                                _slice_entry["kappa_lat_sd"] = float(np.std(_skl))
                                 break
-                        if _slice_tau_mu_name is not None:
-                            _stm = trace.posterior[_slice_tau_mu_name].values.flatten()
-                            _slice_entry["tau_mu_mean"] = float(np.mean(_stm))
-                            _slice_entry["tau_mu_sd"] = float(np.std(_stm))
-                            _slice_mu_sd = float(np.sqrt(
-                                _slice_mu_sd**2 + float(np.mean(_stm**2))))
-                        _slice_entry["mu_sd"] = _slice_mu_sd
                     if _sigma_s_name in trace.posterior:
                         _slice_entry["sigma_mean"] = float(trace.posterior[_sigma_s_name].values.mean())
                         _slice_entry["sigma_sd"] = float(trace.posterior[_sigma_s_name].values.std())
@@ -949,30 +943,26 @@ def summarise_posteriors(
                 # Use posterior onset mean as canonical onset_delta_days when latent
                 canonical_onset = onset_post_mean if has_latent_onset else onset
 
-                # Latency dispersion (doc 34): extract tau_mu if present.
-                # Variable name includes obs_type suffix; prefer cohort, fall back to window.
-                tau_mu_name = None
+                # Latency dispersion (doc 34): extract kappa_lat if present.
+                # kappa_lat is the timing analogue of kappa for p — it
+                # captures per-interval overdispersion in the discrete-time
+                # hazard via BetaBinomial. Variable name includes obs_type.
+                kappa_lat_name = None
                 for _ot in ("cohort", "window"):
-                    _candidate = f"tau_mu_{safe_eid}_{_ot}"
+                    _candidate = f"kappa_lat_{safe_eid}_{_ot}"
                     if _candidate in trace.posterior:
-                        tau_mu_name = _candidate
+                        kappa_lat_name = _candidate
                         break
-                tau_mu_mean_val = None
-                tau_mu_sd_val = None
-                predictive_mu_sd = mu_sd  # default: pure posterior SD
-                if tau_mu_name is not None:
-                    _tau_mu_samples = trace.posterior[tau_mu_name].values.flatten()
-                    tau_mu_mean_val = float(np.mean(_tau_mu_samples))
-                    tau_mu_sd_val = float(np.std(_tau_mu_samples))
-                    # Predictive mu_sd: combines epistemic (posterior SD on mu)
-                    # with aleatoric (tau_mu — cohort-to-cohort timing variation).
-                    # Var(mu_pred) = Var(mu_posterior) + E[tau_mu^2]
-                    predictive_mu_sd = float(np.sqrt(
-                        mu_sd**2 + float(np.mean(_tau_mu_samples**2))))
+                kappa_lat_mean_val = None
+                kappa_lat_sd_val = None
+                if kappa_lat_name is not None:
+                    _kl_samples = trace.posterior[kappa_lat_name].values.flatten()
+                    kappa_lat_mean_val = float(np.mean(_kl_samples))
+                    kappa_lat_sd_val = float(np.std(_kl_samples))
 
                 latency_posteriors[edge_id] = LatencyPosteriorSummary(
                     mu_mean=mu_mean,
-                    mu_sd=predictive_mu_sd,
+                    mu_sd=mu_sd,
                     sigma_mean=sigma_mean,
                     sigma_sd=sigma_sd,
                     onset_delta_days=canonical_onset,
@@ -986,21 +976,16 @@ def summarise_posteriors(
                     onset_hdi_lower=onset_hdi_lower,
                     onset_hdi_upper=onset_hdi_upper,
                     onset_mu_corr=onset_mu_corr,
-                    tau_mu_mean=tau_mu_mean_val,
-                    tau_mu_sd=tau_mu_sd_val,
+                    kappa_lat_mean=kappa_lat_mean_val,
+                    kappa_lat_sd=kappa_lat_sd_val,
                 )
                 diagnostics.append(
                     f"  latency {edge_id[:8]}…: mu={mu_mean:.3f}±{mu_sd:.3f} "
                     f"(prior={lp.mu:.3f}), sigma={sigma_mean:.3f}±{sigma_sd:.3f} "
                     f"(prior={lp.sigma:.3f}), rhat={lat_rhat:.3f}, ess={lat_ess:.0f}"
-                    + (f", tau_mu={tau_mu_mean_val:.3f}±{tau_mu_sd_val:.3f}"
-                       if tau_mu_mean_val is not None else "")
+                    + (f", kappa_lat={kappa_lat_mean_val:.1f}±{kappa_lat_sd_val:.1f}"
+                       if kappa_lat_mean_val is not None else "")
                 )
-                if tau_mu_mean_val is not None:
-                    diagnostics.append(
-                        f"  latency_dispersion {edge_id[:8]}…: "
-                        f"predictive_mu_sd={predictive_mu_sd:.4f} "
-                        f"(posterior={mu_sd:.4f} + tau_mu={tau_mu_mean_val:.4f})")
                 if has_latent_onset:
                     diagnostics.append(
                         f"  onset {edge_id[:8]}…: {onset_post_mean:.2f}±{onset_post_sd:.2f} "

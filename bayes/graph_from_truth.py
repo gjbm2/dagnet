@@ -200,6 +200,10 @@ def generate_graph_artefacts(
                 "latency": {
                     "latency_parameter": has_latency,
                     "anchor_node_id": anchor_node_id,
+                    **({"onset_delta_days": float(ecfg.get("onset", 0)),
+                        "mu": float(ecfg.get("mu", 0)),
+                        "sigma": float(ecfg.get("sigma", 0.5))}
+                       if has_latency else {}),
                 },
                 "cohort_anchor_event_id": anchor_event_id,
             },

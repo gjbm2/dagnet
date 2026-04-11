@@ -2349,7 +2349,7 @@ def write_parameter_files(
             "id": file_id,
             "name": file_id,
             "type": "probability",
-            "connection": "synthetic",
+            "connection": graph_snapshot.get("defaultConnection", "amplitude"),
             "query": query,
             "query_overridden": False,
             "n_query_overridden": False,
@@ -2549,6 +2549,10 @@ def update_graph_edge_metadata(
         p["latency"] = {
             "latency_parameter": has_latency,
         }
+        if has_latency and edge_truth:
+            p["latency"]["onset_delta_days"] = float(edge_truth.get("onset", 0))
+            p["latency"]["mu"] = float(edge_truth.get("mu", 0))
+            p["latency"]["sigma"] = float(edge_truth.get("sigma", 0.5))
         anchor_id = uuid_to_id.get(
             topology.anchor_node_id, topology.anchor_node_id
         )
@@ -2669,7 +2673,7 @@ Examples:
                         help="Also update data repo: param YAMLs, graph JSON, indexes")
     parser.add_argument("--clean", action="store_true",
                         help="Remove synthetic data from DB and exit")
-    parser.add_argument("--force", action="store_true",
+    parser.add_argument("--bust-cache", action="store_true",
                         help="Regenerate even if existing data is fresh")
     args = parser.parse_args()
 
@@ -2735,13 +2739,13 @@ Examples:
     _progress(0, "startup", f"graph={args.graph}")
 
     # --- Freshness check: skip if data is already fresh ---
-    if not args.force and not args.clean and not args.dry_run:
+    if not args.bust_cache and not args.clean and not args.dry_run:
         graph_name_for_verify = os.path.basename(truth_path).replace(".truth.yaml", "")
         freshness = verify_synth_data(graph_name_for_verify, data_repo)
         if freshness["status"] == "fresh":
             _progress(100, "done", f"data fresh — skipped")
             print(f"\nData is fresh — skipping rebuild ({freshness['reason']})")
-            print(f"  Use --force to regenerate anyway.")
+            print(f"  Use --bust-cache to regenerate anyway.")
             return
 
     # --- Generate or load graph ---
@@ -2910,7 +2914,7 @@ Examples:
             with open(os.path.join(tmp_graphs, f"{graph_name_for_cli}.json"), "w") as f:
                 json.dump(g, f)
             for d in ("events", "contexts", "parameters", "nodes", "cases", "connections"):
-                src = os.path.join(graph_dir, d)
+                src = os.path.abspath(os.path.join(graph_dir, d))
                 if os.path.isdir(src):
                     os.symlink(src, os.path.join(tmp, d))
             cmd = (

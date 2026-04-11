@@ -49,6 +49,11 @@ def main():
     parser.add_argument("--cores", type=int, default=None, help="Number of cores for sampling")
     parser.add_argument("--no-mcmc", action="store_true",
                         help="Stop after model build, skip MCMC (still shows truth)")
+    parser.add_argument("--clean", action="store_true",
+                        help="Pass --clean to harness (clears bytecode + synth meta caches)")
+    parser.add_argument("--job-label", type=str, default=None,
+                        help="Unique label for log files (forwarded to harness --job-label). "
+                             "Prevents parallel runs from cross-contaminating logs.")
     args = parser.parse_args()
 
     # --- Resolve graph and truth file ---
@@ -110,13 +115,19 @@ def main():
         cmd.extend(["--cores", str(args.cores)])
     for f in args.feature:
         cmd.extend(["--feature", f])
+    if args.clean:
+        cmd.append("--clean")
+    if args.job_label:
+        cmd.extend(["--job-label", args.job_label])
 
     print(f"Running: {' '.join(cmd[-6:])}")
     print()
 
-    # Pin thread counts to prevent BLAS/OpenMP oversubscription during parallel runs
+    # Pin thread counts to prevent BLAS/OpenMP oversubscription during parallel runs.
+    # PYTHONDONTWRITEBYTECODE: prevent stale .pyc from masking source edits.
     env = {**os.environ, "OMP_NUM_THREADS": "1", "MKL_NUM_THREADS": "1",
-           "OPENBLAS_NUM_THREADS": "1", "NUMBA_NUM_THREADS": "1"}
+           "OPENBLAS_NUM_THREADS": "1", "NUMBA_NUM_THREADS": "1",
+           "PYTHONDONTWRITEBYTECODE": "1"}
 
     t0 = time.time()
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=args.timeout + 60, env=env)
@@ -127,6 +138,20 @@ def main():
         print(f"HARNESS FAILED (exit {result.returncode}, {elapsed:.0f}s)")
         print(output)
         sys.exit(1)
+
+    # Supplement with harness log — inference diagnostics (mu/sigma
+    # posteriors, kappa_lat) are written to the log file only, not stdout.
+    # The --fe-payload path uses graph_id = "graph-{name}" as log name.
+    # When --job-label is set, the harness uses that as the log file name.
+    _log_label = args.job_label or args.graph
+    for _log_path in [f"/tmp/bayes_harness-{_log_label}.log",
+                      f"/tmp/bayes_harness-graph-{_log_label}.log",
+                      f"/tmp/bayes_harness-graph-{args.graph}.log",
+                      f"/tmp/bayes_harness-{args.graph}.log"]:
+        if os.path.isfile(_log_path) and os.path.getsize(_log_path) > 0:
+            with open(_log_path) as _lf:
+                output += "\n" + _lf.read()
+            break
 
     # --- Parse results from harness output ---
     # Extract quality line
@@ -152,12 +177,12 @@ def main():
     for line in output.split("\n"):
         # inference:   latency 7a26c540…: mu=1.476±0.032 (prior=1.531), sigma=0.599±0.021 (prior=0.467), rhat=1.001, ess=7647
         lat_match = re.search(
-            r"inference:\s+latency (\w{8})…:\s+mu=([\d.]+)±([\d.]+)\s+\(prior=([\d.]+)\),\s+sigma=([\d.]+)±([\d.]+)\s+\(prior=([\d.]+)\),\s+rhat=([\d.]+),\s+ess=(\d+)",
+            r"inference:\s+latency (\w{8})…:\s+mu=([\d.]+)±([\d.]+)\s+\(prior=([\d.]+)\),\s+sigma=([\d.]+)±([\d.]+)\s+\(prior=([\d.]+)\),\s+rhat=([\d.]+),\s+ess=(\d+)(?:,\s+kappa_lat=([\d.]+)±([\d.]+))?",
             line
         )
         if lat_match:
             eid_prefix = lat_match.group(1)
-            posteriors.setdefault(eid_prefix, {}).update({
+            entry = {
                 "mu_mean": float(lat_match.group(2)),
                 "mu_sd": float(lat_match.group(3)),
                 "mu_prior": float(lat_match.group(4)),
@@ -166,7 +191,11 @@ def main():
                 "sigma_prior": float(lat_match.group(7)),
                 "rhat": float(lat_match.group(8)),
                 "ess": int(lat_match.group(9)),
-            })
+            }
+            if lat_match.group(10) is not None:
+                entry["kappa_lat_mean"] = float(lat_match.group(10))
+                entry["kappa_lat_sd"] = float(lat_match.group(11))
+            posteriors.setdefault(eid_prefix, {}).update(entry)
 
         # inference:   onset 7a26c540…: 5.68±0.15 (prior=5.50), corr(onset,mu)=-0.691
         onset_match = re.search(

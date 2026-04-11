@@ -21,6 +21,10 @@ Only one instance at a time — the harness enforces this via a lock file.
 
 import sys
 import os
+
+# Prevent stale .pyc from masking source edits during development.
+sys.dont_write_bytecode = True
+
 import json
 import time
 import argparse
@@ -412,7 +416,42 @@ def main():
                         help="Build payload via CLI on demand (calls dagnet-cli bayes --output). "
                              "Same as --payload but constructs it automatically for --graph. "
                              "Ensures slice commissioning follows the FE codepath.")
+    parser.add_argument("--clean", action="store_true",
+                        help="Clear stale caches before running: (1) delete __pycache__ "
+                             "dirs under bayes/ and graph-editor/lib/ so no stale bytecode "
+                             "masks source edits, (2) delete .synth-meta.json for the target "
+                             "graph so verify_synth_data re-checks DB with fresh hashes.")
+    # Keep --clean-pyc as hidden alias for backwards compat
+    parser.add_argument("--clean-pyc", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
+    if args.clean_pyc:
+        args.clean = True
+
+    # Clean caches if requested
+    if args.clean:
+        import shutil
+        # 1. Python bytecode
+        _pyc_cleaned = 0
+        for _root in [os.path.join(REPO_ROOT, "bayes"),
+                      os.path.join(REPO_ROOT, "graph-editor", "lib")]:
+            for _dp, _dn, _ in os.walk(_root):
+                if "__pycache__" in _dn:
+                    try:
+                        shutil.rmtree(os.path.join(_dp, "__pycache__"))
+                        _pyc_cleaned += 1
+                    except OSError:
+                        pass  # parallel run already deleted it
+        # 2. Synth meta sidecar (forces re-check against DB with fresh hashes)
+        _meta_cleaned = 0
+        if args.graph and args.graph.startswith("synth-"):
+            _conf = _read_private_repos_conf()
+            _dr = _conf.get("DATA_REPO_DIR", "")
+            if _dr:
+                _meta = os.path.join(REPO_ROOT, _dr, "graphs", f"{args.graph}.synth-meta.json")
+                if os.path.isfile(_meta):
+                    os.remove(_meta)
+                    _meta_cleaned = 1
+        print(f"Cleaned {_pyc_cleaned} __pycache__ dirs, {_meta_cleaned} synth-meta files")
 
     # NOTE: lock acquisition moved after graph name resolution (below)
     job_label = args.job_label  # If set, overrides graph_name for lock + log file
@@ -476,6 +515,8 @@ def main():
             settings.setdefault("features", {}).update(feature_flags)
         if args.no_mcmc:
             settings["model_inspect_only"] = True
+        if args.dump_evidence:
+            settings["dump_evidence_path"] = args.dump_evidence
         if args.no_webhook:
             payload["webhook_url"] = ""
         if args.draws:

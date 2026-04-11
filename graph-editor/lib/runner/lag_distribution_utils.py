@@ -151,8 +151,8 @@ def standard_normal_inverse_cdf(p: float) -> float:
 # ─────────────────────────────────────────────────────────────
 
 def log_normal_cdf(t: float, mu: float, sigma: float) -> float:
-    """Log-normal CDF: F(t) = Φ((ln(t) - μ) / σ)."""
-    if t <= 0:
+    """Log-normal CDF: F(t) = ��((ln(t) - μ) / σ)."""
+    if not math.isfinite(t) or t <= 0:
         return 0.0
     if sigma <= 0:
         return 1.0 if t >= math.exp(mu) else 0.0
@@ -259,6 +259,17 @@ def fit_lag_distribution(
         )
 
     sigma = math.sqrt(2.0 * math.log(ratio))
+    if sigma < 1e-12:
+        # ratio ≈ 1.0 (mean ≈ median): degenerate — sigma=0 would produce a
+        # step-function CDF with no smooth completeness transition.  Use the
+        # default σ instead; quality is still OK (the mu from median is valid).
+        return LagDistributionFit(
+            mu=mu,
+            sigma=default_sigma,
+            empirical_quality_ok=True,
+            total_k=total_k,
+            quality_failure_reason="Mean/median ratio ≈ 1.0 (σ degenerate), using default σ",
+        )
     if not math.isfinite(sigma) or sigma < 0:
         return LagDistributionFit(
             mu=mu,

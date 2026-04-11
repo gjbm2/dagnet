@@ -123,7 +123,14 @@
       "Bash(pkill -9 -f \"run_regression\")",
       "Bash(pkill -9 -f \"synth_gen\")",
       "Bash(pkill -9 -f \"param_recovery\")",
-      "Bash(pkill -9 -f \"test_harness\")"
+      "Bash(pkill -9 -f \"test_harness\")",
+      "Bash(pkill -f \"run_regression\")",
+      "Bash(pkill -f \"synth_gen\")",
+      "Bash(pkill -f \"param_recovery\")",
+      "Bash(pkill -f \"test_harness\")",
+      "Bash(bash graph-ops/scripts/bayes.sh synth-diamond-test --format json --verbose)",
+      "Bash(bash graph-ops/scripts/bayes.sh synth-diamond-test --format json --no-cache --verbose)",
+      "Bash(xargs kill:*)"
     ],
     "additionalDirectories": [
       "/home/reg/dev/dagnet/.claude",

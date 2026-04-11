@@ -127,6 +127,37 @@ def _dump_evidence(evidence, topology, path: str, log: list[str]) -> None:
                     "completeness": d.completeness,
                 })
             edge_dump["cohort_obs"].append(co_dump)
+
+        # Regime per date (R2d)
+        edge_dump["regime_per_date"] = ev.regime_per_date or {}
+
+        # Slice groups (Phase C)
+        edge_dump["slice_groups"] = {}
+        for dim, sg in (ev.slice_groups or {}).items():
+            sg_dump = {
+                "is_exhaustive": sg.is_exhaustive,
+                "slices": {},
+            }
+            for sk, so in sg.slices.items():
+                so_dump = {
+                    "has_window": so.has_window,
+                    "total_n": so.total_n,
+                    "window_obs": [
+                        {"n": w.n, "k": w.k, "completeness": w.completeness}
+                        for w in (so.window_obs or [])
+                    ],
+                    "cohort_obs": [],
+                }
+                for c_obs in (so.cohort_obs or []):
+                    so_dump["cohort_obs"].append({
+                        "slice_dsl": c_obs.slice_dsl,
+                        "n_trajectories": len(c_obs.trajectories),
+                        "n_daily": len(c_obs.daily),
+                        "total_n": sum(t.n for t in c_obs.trajectories),
+                    })
+                sg_dump["slices"][sk] = so_dump
+            edge_dump["slice_groups"][dim] = sg_dump
+
         dump[edge_id] = edge_dump
 
     with open(path, "w") as f:
@@ -1690,9 +1721,9 @@ def _build_unified_slices(
         if lat.onset_mu_corr is not None:
             window["onset_mu_corr"] = round(lat.onset_mu_corr, 3)
         # Latency dispersion (doc 34)
-        if lat.tau_mu_mean is not None:
-            window["tau_mu_mean"] = round(lat.tau_mu_mean, 4)
-            window["tau_mu_sd"] = round(lat.tau_mu_sd, 4) if lat.tau_mu_sd is not None else None
+        if lat.kappa_lat_mean is not None:
+            window["kappa_lat_mean"] = round(lat.kappa_lat_mean, 1)
+            window["kappa_lat_sd"] = round(lat.kappa_lat_sd, 1) if lat.kappa_lat_sd is not None else None
         # Use worst-of for combined quality
         window["ess"] = round(min(prob.ess, lat.ess), 1)
         window["rhat"] = round(max(prob.rhat or 0, lat.rhat or 0), 4) or None

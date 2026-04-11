@@ -46,12 +46,14 @@ from datetime import datetime
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPO_ROOT, "bayes"))
 
-# Thread-pinning for BLAS/OpenMP (prevents oversubscription in parallel runs)
+# Thread-pinning for BLAS/OpenMP (prevents oversubscription in parallel runs).
+# PYTHONDONTWRITEBYTECODE: prevent stale .pyc from masking source edits.
 _THREAD_PIN_ENV = {
     "OMP_NUM_THREADS": "1",
     "MKL_NUM_THREADS": "1",
     "OPENBLAS_NUM_THREADS": "1",
     "NUMBA_NUM_THREADS": "1",
+    "PYTHONDONTWRITEBYTECODE": "1",
 }
 
 
@@ -151,17 +153,27 @@ def _run_one_graph(
     tune: int,
     timeout: int,
     feature_flags: list[str] | None = None,
+    clean: bool = False,
+    run_id: str = "",
 ) -> dict:
     """Run param_recovery.py for one graph. Returns parsed result dict.
 
     This is the function submitted to the process pool. It runs as a
     subprocess so that harness logs are written to /tmp/bayes_harness-{graph}.log
     (visible to bayes-monitor.sh).
+
+    run_id binds this execution to a unique log file so parallel
+    regression runs on the same machine don't cross-contaminate.
     """
+    # Job label ties log file → audit. Without run_id, parallel
+    # regressions overwrite each other's logs.
+    job_label = f"{graph_name}-{run_id}" if run_id else graph_name
+
     cmd = [
         sys.executable,
         os.path.join(REPO_ROOT, "bayes", "param_recovery.py"),
         "--graph", graph_name,
+        "--job-label", job_label,
         "--chains", str(chains),
         "--cores", str(cores),
         "--draws", str(draws),
@@ -170,6 +182,8 @@ def _run_one_graph(
     ]
     for ff in (feature_flags or []):
         cmd.extend(["--feature", ff])
+    if clean:
+        cmd.append("--clean")
     env = {**os.environ, **_THREAD_PIN_ENV}
 
     t0 = time.time()
@@ -270,6 +284,129 @@ def _parse_recovery_output(output: str) -> dict:
     return result
 
 
+def _audit_harness_log(graph_name: str, job_label: str | None = None) -> dict:
+    """Extract multi-layered audit from the harness log.
+
+    Returns dict with per-layer status:
+        log_found: bool — harness log exists and has content
+        completed: bool — run reached completion (Status: complete)
+        features: dict — feature flags as seen by the model
+        data_binding:
+            snapshot_edges: int — edges with snapshot DB data
+            fallback_edges: int — edges using param file fallback
+            total_bound: int — edges in binding receipt
+            total_failed: int — edges that failed binding
+        priors:
+            edges_with_latency_prior: int — edges with mu_prior > 0
+            prior_details: list[str] — per-edge prior info
+        model:
+            kappa_lat_edges: int — edges with kappa_lat BetaBinomial
+            latency_dispersion_flag: bool
+            phase1_sampled: bool
+            phase2_sampled: bool
+        inference:
+            edges_with_mu: int — edges with mu posterior
+            mu_details: list[dict] — per-edge {uuid, mu, prior, ess, kappa_lat}
+        convergence:
+            rhat: float
+            ess: int
+            converged_pct: float
+    """
+    audit: dict = {
+        "log_found": False,
+        "completed": False,
+        "features": {},
+        "data_binding": {"snapshot_edges": 0, "fallback_edges": 0,
+                         "total_bound": 0, "total_failed": 0},
+        "priors": {"edges_with_latency_prior": 0, "prior_details": []},
+        "model": {"kappa_lat_edges": 0, "latency_dispersion_flag": False,
+                  "phase1_sampled": False, "phase2_sampled": False},
+        "inference": {"edges_with_mu": 0, "mu_details": []},
+        "convergence": {"rhat": 0.0, "ess": 0, "converged_pct": 0.0},
+    }
+
+    # Find log file — try job_label first (run-id-bound), then graph_name
+    log_content = ""
+    _labels = [job_label, graph_name] if job_label else [graph_name]
+    _candidates = []
+    for _lbl in _labels:
+        _candidates.append(f"/tmp/bayes_harness-{_lbl}.log")
+        _candidates.append(f"/tmp/bayes_harness-graph-{_lbl}.log")
+    for log_path in _candidates:
+        if os.path.isfile(log_path) and os.path.getsize(log_path) > 0:
+            with open(log_path) as f:
+                log_content = f.read()
+            audit["log_found"] = True
+            break
+
+    if not log_content:
+        return audit
+
+    for line in log_content.split("\n"):
+        # Completion
+        if "Status:      complete" in line:
+            audit["completed"] = True
+
+        # Features
+        if "latency_dispersion=True" in line:
+            audit["model"]["latency_dispersion_flag"] = True
+        if "latency_dispersion=False" in line and not audit["model"]["latency_dispersion_flag"]:
+            audit["model"]["latency_dispersion_flag"] = False
+
+        # Data binding
+        if "snapshot rows →" in line:
+            audit["data_binding"]["snapshot_edges"] += 1
+        elif "no snapshot data, using engorged" in line:
+            audit["data_binding"]["fallback_edges"] += 1
+        if "binding receipt:" in line:
+            m = re.search(r"(\d+) bound.*?(\d+) failed", line)
+            if m:
+                audit["data_binding"]["total_bound"] = int(m.group(1))
+                audit["data_binding"]["total_failed"] = int(m.group(2))
+
+        # Priors
+        if "mu_prior=" in line and "latency" in line:
+            audit["priors"]["edges_with_latency_prior"] += 1
+            audit["priors"]["prior_details"].append(line.strip())
+
+        # Model structure
+        if "kappa_lat ~ LogNormal, BetaBinomial" in line:
+            audit["model"]["kappa_lat_edges"] += 1
+        if "sampling_ms:" in line:
+            audit["model"]["phase1_sampled"] = True
+        if "sampling_phase2_ms:" in line:
+            audit["model"]["phase2_sampled"] = True
+
+        # Inference posteriors
+        m = re.search(
+            r"inference:\s+latency (\w{8})…:\s+mu=([\d.]+)±([\d.]+)\s+"
+            r"\(prior=([\d.]+)\).*?ess=(\d+)"
+            r"(?:.*?kappa_lat=([\d.]+))?",
+            line,
+        )
+        if m:
+            audit["inference"]["edges_with_mu"] += 1
+            entry = {
+                "uuid": m.group(1),
+                "mu": float(m.group(2)),
+                "mu_sd": float(m.group(3)),
+                "prior": float(m.group(4)),
+                "ess": int(m.group(5)),
+            }
+            if m.group(6):
+                entry["kappa_lat"] = float(m.group(6))
+            audit["inference"]["mu_details"].append(entry)
+
+        # Convergence
+        m = re.search(r"Quality:.*rhat=([\d.]+).*ess=([\d.]+).*converged=([\d.]+)%", line)
+        if m:
+            audit["convergence"]["rhat"] = float(m.group(1))
+            audit["convergence"]["ess"] = float(m.group(2))
+            audit["convergence"]["converged_pct"] = float(m.group(3))
+
+    return audit
+
+
 def assert_recovery(graph_name: str, parsed: dict, truth: dict) -> dict:
     """Apply tiered assertions. Returns dict with pass/fail and details."""
     testing = truth.get("testing", {})
@@ -354,6 +491,10 @@ def run_regression(args) -> list[dict]:
     from synth_gen import _resolve_data_repo
     data_repo = _resolve_data_repo()
 
+    # Unique run ID — binds log files to this regression instance
+    # so parallel runs don't cross-contaminate.
+    run_id = f"r{int(time.time())}"
+
     # 1. Discover + preflight
     print("=" * 60)
     print("  PARAM RECOVERY REGRESSION")
@@ -361,6 +502,10 @@ def run_regression(args) -> list[dict]:
     print()
 
     graphs = discover_and_preflight(data_repo, args.graph)
+    if args.exclude:
+        before = len(graphs)
+        graphs = [g for g in graphs if args.exclude not in g["graph_name"]]
+        print(f"Excluded {before - len(graphs)} graphs matching '{args.exclude}'")
     if not graphs:
         print("No synth graphs found.")
         return []
@@ -408,12 +553,15 @@ def run_regression(args) -> list[dict]:
     print(f"Running {len(runnable)} graphs...")
     print()
 
-    # Pre-create harness log files so bayes-monitor finds them immediately
+    # Pre-create harness log files so bayes-monitor finds them immediately.
+    # Use run_id-labelled paths to prevent cross-contamination.
     for g in runnable:
-        log_path = f"/tmp/bayes_harness-{g['graph_name']}.log"
-        with open(log_path, "w") as f:
-            f.write("")
-        recovery_log = f"/tmp/bayes_recovery-{g['graph_name']}.log"
+        job_label = f"{g['graph_name']}-{run_id}"
+        for _prefix in [job_label, f"graph-{job_label}"]:
+            log_path = f"/tmp/bayes_harness-{_prefix}.log"
+            with open(log_path, "w") as f:
+                f.write("")
+        recovery_log = f"/tmp/bayes_recovery-{g['graph_name']}-{run_id}.log"
         with open(recovery_log, "w") as f:
             f.write("")
 
@@ -440,6 +588,8 @@ def run_regression(args) -> list[dict]:
                 tune=args.tune,
                 timeout=timeout,
                 feature_flags=getattr(args, 'feature', None) or None,
+                clean=getattr(args, 'clean', False),
+                run_id=run_id,
             )
             futures[future] = g
 
@@ -475,7 +625,7 @@ def run_regression(args) -> list[dict]:
                     for line in out.split("\n")[-20:]:
                         print(f"    | {line}")
                 # Also write to recovery log
-                recovery_log = f"/tmp/bayes_recovery-{name}.log"
+                recovery_log = f"/tmp/bayes_recovery-{name}-{run_id}.log"
                 with open(recovery_log, "w") as f:
                     f.write(run_result.get("output", ""))
                 results.append({
@@ -489,7 +639,46 @@ def run_regression(args) -> list[dict]:
                 })
                 continue
 
+            # Multi-layered audit from harness log (doc 34 §9.6)
+            _job_label = f"{name}-{run_id}"
+            audit = _audit_harness_log(name, job_label=_job_label)
             assertion = assert_recovery(name, parsed, g["truth"])
+            assertion["audit"] = audit
+
+            # Layer: log found
+            if not audit["log_found"]:
+                assertion["passed"] = False
+                assertion["failures"].append("AUDIT: harness log not found or empty")
+
+            # Layer: completion
+            if audit["log_found"] and not audit["completed"]:
+                assertion["warnings"].append("AUDIT: run did not reach completion status")
+
+            # Layer: data binding
+            db = audit["data_binding"]
+            if db["fallback_edges"] > 0:
+                assertion["passed"] = False
+                assertion["failures"].append(
+                    f"DATA BINDING: {db['fallback_edges']} edges used param file "
+                    f"fallback (no snapshot data). Hash alignment broken.")
+            if db["total_failed"] > 0:
+                assertion["passed"] = False
+                assertion["failures"].append(
+                    f"DATA BINDING: {db['total_failed']} edges failed binding")
+
+            # Layer: feature flags
+            md = audit["model"]
+            if md["latency_dispersion_flag"] and md["kappa_lat_edges"] == 0:
+                assertion["passed"] = False
+                assertion["failures"].append(
+                    f"KAPPA_LAT: latency_dispersion=True but 0 kappa_lat variables. "
+                    f"Check mixture path / stale cache.")
+
+            # Layer: priors
+            if audit["priors"]["edges_with_latency_prior"] == 0 and \
+               audit["inference"]["edges_with_mu"] > 0:
+                assertion["warnings"].append(
+                    "PRIORS: no mu_prior lines found — priors may be uninformative")
             results.append(assertion)
 
             status = "PASS" if assertion["passed"] else "FAIL"
@@ -528,7 +717,17 @@ def run_regression(args) -> list[dict]:
         if q:
             quality_str = f" rhat={q.get('rhat', 0):.4f} ess={q.get('ess', 0)} converged={q.get('converged_pct', 0)}%"
 
-        print(f"  {status:6s} {r['graph_name']:35s}{quality_str}")
+        audit = r.get("audit", {})
+        db = audit.get("data_binding", {})
+        md = audit.get("model", {})
+        inf = audit.get("inference", {})
+        snap = db.get("snapshot_edges", "?")
+        fb = db.get("fallback_edges", "?")
+        kl = md.get("kappa_lat_edges", "?")
+        mu_n = inf.get("edges_with_mu", "?")
+        audit_str = f" data={snap}snap/{fb}fb kl={kl} mu={mu_n}" if audit else ""
+
+        print(f"  {status:6s} {r['graph_name']:35s}{quality_str}{audit_str}")
         for f in r.get("failures", []):
             print(f"         {f}")
         for w in r.get("warnings", []):
@@ -562,6 +761,8 @@ Examples:
     )
     parser.add_argument("--graph", default=None,
                         help="Run single graph (default: all discovered)")
+    parser.add_argument("--exclude", default=None,
+                        help="Exclude graphs matching this substring (e.g. --exclude context)")
     parser.add_argument("--preflight-only", action="store_true",
                         help="Discover + check data integrity only, no MCMC")
     parser.add_argument("--chains", type=int, default=3,
@@ -575,6 +776,8 @@ Examples:
     parser.add_argument("--feature", action="append", default=[],
                         help="Model feature flag KEY=VALUE, forwarded to param_recovery.py "
                              "(e.g. --feature latency_dispersion=true)")
+    parser.add_argument("--clean", action="store_true",
+                        help="Clear bytecode + synth meta caches before each graph run")
     args = parser.parse_args()
 
     results = run_regression(args)
