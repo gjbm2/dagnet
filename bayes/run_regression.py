@@ -514,6 +514,10 @@ def run_regression(args) -> list[dict]:
     print()
 
     graphs = discover_and_preflight(data_repo, args.graph)
+    if args.include:
+        before = len(graphs)
+        graphs = [g for g in graphs if args.include in g["graph_name"]]
+        print(f"Included {len(graphs)} of {before} graphs matching '{args.include}'")
     if args.exclude:
         before = len(graphs)
         graphs = [g for g in graphs if args.exclude not in g["graph_name"]]
@@ -1039,6 +1043,8 @@ Examples:
     )
     parser.add_argument("--graph", default=None,
                         help="Run single graph (default: all discovered)")
+    parser.add_argument("--include", default=None,
+                        help="Include only graphs matching this substring (e.g. --include context)")
     parser.add_argument("--exclude", default=None,
                         help="Exclude graphs matching this substring (e.g. --exclude context)")
     parser.add_argument("--preflight-only", action="store_true",
