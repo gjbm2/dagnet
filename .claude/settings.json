@@ -130,7 +130,9 @@
       "Bash(pkill -f \"test_harness\")",
       "Bash(bash graph-ops/scripts/bayes.sh synth-diamond-test --format json --verbose)",
       "Bash(bash graph-ops/scripts/bayes.sh synth-diamond-test --format json --no-cache --verbose)",
-      "Bash(xargs kill:*)"
+      "Bash(xargs kill:*)",
+      "Bash(awk '{print $2}')",
+      "Bash(xargs -r kill)"
     ],
     "additionalDirectories": [
       "/home/reg/dev/dagnet/.claude",

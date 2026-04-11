@@ -1139,6 +1139,8 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                     tau_sigma_slice = pm.HalfNormal(f"tau_sigma_slice_{safe_id}", sigma=0.2)
                     tau_onset_slice = pm.HalfNormal(f"tau_onset_slice_{safe_id}", sigma=0.5)
 
+                _slice_emissions = []  # per-slice only
+
                 for dim_key, group in ev.slice_groups.items():
                     for ctx_key, s_obs in group.slices.items():
                         ctx_safe = _safe_var_name(ctx_key)
@@ -1182,36 +1184,81 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                             has_window=s_obs.has_window, has_cohort=s_obs.has_cohort,
                             total_n=s_obs.total_n, latency_prior=ev.latency_prior,
                             kappa_warm=ev.kappa_warm, cohort_latency_warm=ev.cohort_latency_warm)
-                        _emissions.append((_sfx, p_s, ks, s_ev, _lv, _ov))
+                        _slice_emissions.append((_sfx, p_s, ks, s_ev, _lv, _ov))
 
-                # If not all exhaustive, also emit aggregate
+                # Emit per-slice: skip trajectory Potentials (batched below)
+                for _sfx, _p_ov, _kp, _ev, _lv, _ov in _slice_emissions:
+                    _emit_edge_likelihoods(
+                        _sfx, _p_ov, _kp, _ev, et, edge_id,
+                        p_base_var=_p_ov,
+                        alpha=alpha, beta_param=beta_param,
+                        edge_var_names=edge_var_names,
+                        emit_window_binomial=emit_window_binomial,
+                        is_phase2=is_phase2, phase2_frozen=phase2_frozen,
+                        bg_p_vars=bg_p_vars,
+                        topology=topology, model=model,
+                        latency_vars=_lv, onset_vars=_ov,
+                        cohort_latency_vars=cohort_latency_vars,
+                        diagnostics=diagnostics, features=features, settings=_s,
+                        _softplus_k=_softplus_k,
+                        _s_dirichlet_conc_floor=_s_dirichlet_conc_floor,
+                        _fallback_prior_ess=_fallback_prior_ess,
+                        feat_window_only=feat_window_only,
+                        skip_trajectory_potentials=True,
+                    )
+
+                # Batch trajectory Potentials across all slices (1 Potential
+                # per obs_type instead of S, same posterior).
+                _emit_batched_slice_trajectories(
+                    edge_id, safe_id, _slice_emissions, et, topology,
+                    diagnostics, features=features, settings=_s,
+                    _softplus_k=_softplus_k,
+                )
+
+                # If not all exhaustive, also emit aggregate (full, no skip)
                 _all_exhaustive = all(sg.is_exhaustive for sg in ev.slice_groups.values())
                 if not _all_exhaustive:
-                    _emissions.append((safe_id, p, edge_kappa, ev, latency_vars, onset_vars))
+                    _emit_edge_likelihoods(
+                        safe_id, None, edge_kappa, ev, et, edge_id,
+                        p_base_var=p_base_var if p_base_var is not None else p,
+                        alpha=alpha, beta_param=beta_param,
+                        edge_var_names=edge_var_names,
+                        emit_window_binomial=emit_window_binomial,
+                        is_phase2=is_phase2, phase2_frozen=phase2_frozen,
+                        bg_p_vars=bg_p_vars,
+                        topology=topology, model=model,
+                        latency_vars=latency_vars, onset_vars=onset_vars,
+                        cohort_latency_vars=cohort_latency_vars,
+                        diagnostics=diagnostics, features=features, settings=_s,
+                        _softplus_k=_softplus_k,
+                        _s_dirichlet_conc_floor=_s_dirichlet_conc_floor,
+                        _fallback_prior_ess=_fallback_prior_ess,
+                        feat_window_only=feat_window_only,
+                    )
                 else:
                     diagnostics.append(f"  slices: {edge_id[:8]}… exhaustive, aggregate suppressed")
             else:
                 # No slices or Phase 2: single aggregate emission
                 _emissions.append((safe_id, None, edge_kappa, ev, latency_vars, onset_vars))
 
-            for _sfx, _p_ov, _kp, _ev, _lv, _ov in _emissions:
-                _emit_edge_likelihoods(
-                    _sfx, _p_ov, _kp, _ev, et, edge_id,
-                    p_base_var=p_base_var if _p_ov is None else _p_ov,
-                    alpha=alpha, beta_param=beta_param,
-                    edge_var_names=edge_var_names,
-                    emit_window_binomial=emit_window_binomial,
-                    is_phase2=is_phase2, phase2_frozen=phase2_frozen,
-                    bg_p_vars=bg_p_vars,
-                    topology=topology, model=model,
-                    latency_vars=_lv, onset_vars=_ov,
-                    cohort_latency_vars=cohort_latency_vars,
-                    diagnostics=diagnostics, features=features, settings=_s,
-                    _softplus_k=_softplus_k,
-                    _s_dirichlet_conc_floor=_s_dirichlet_conc_floor,
-                    _fallback_prior_ess=_fallback_prior_ess,
-                    feat_window_only=feat_window_only,
-                )
+                for _sfx, _p_ov, _kp, _ev, _lv, _ov in _emissions:
+                    _emit_edge_likelihoods(
+                        _sfx, _p_ov, _kp, _ev, et, edge_id,
+                        p_base_var=p_base_var if _p_ov is None else _p_ov,
+                        alpha=alpha, beta_param=beta_param,
+                        edge_var_names=edge_var_names,
+                        emit_window_binomial=emit_window_binomial,
+                        is_phase2=is_phase2, phase2_frozen=phase2_frozen,
+                        bg_p_vars=bg_p_vars,
+                        topology=topology, model=model,
+                        latency_vars=_lv, onset_vars=_ov,
+                        cohort_latency_vars=cohort_latency_vars,
+                        diagnostics=diagnostics, features=features, settings=_s,
+                        _softplus_k=_softplus_k,
+                        _s_dirichlet_conc_floor=_s_dirichlet_conc_floor,
+                        _fallback_prior_ess=_fallback_prior_ess,
+                        feat_window_only=feat_window_only,
+                    )
 
         # =============================================================
         # SECTION 6: BRANCH GROUP MULTINOMIAL LIKELIHOODS
@@ -1542,6 +1589,7 @@ def _emit_cohort_likelihoods(
     kappa=None,
     onset_vars: dict[str, object] | None = None,
     skip_cohort_trajectories: bool = False,
+    skip_trajectory_potentials: bool = False,
     p_cohort_vec=None,
     settings: dict | None = None,
     features: dict | None = None,
@@ -1677,10 +1725,19 @@ def _emit_cohort_likelihoods(
     # See doc 6 § "pm.Potential vectorisation" and § "Phase D: latent latency".
     latency_vars = latency_vars or {}
 
+    # When skip_trajectory_potentials is set, the caller will batch
+    # trajectory Potentials across all slices of this edge in one
+    # vectorised Potential — see _emit_batched_slice_trajectories.
+    # We still emit daily obs (Step 3 below) per slice since those
+    # are cheap native PyMC distributions.
+    _do_trajectory_potentials = not skip_trajectory_potentials
+
     for obs_type, trajs in [("window", window_trajs), ("cohort", cohort_trajs)]:
         if not trajs:
             continue
         if skip_cohort_trajectories and obs_type == "cohort":
+            continue
+        if not _do_trajectory_potentials:
             continue
 
         # ---- STEP 2a: Resolve the p expression for this obs_type ----
@@ -2426,6 +2483,245 @@ def _resolve_path_probability(
         return current_p
 
 
+def _emit_batched_slice_trajectories(
+    edge_id: str,
+    base_safe_id: str,
+    slice_emissions: list,
+    et,
+    topology,
+    diagnostics: list[str],
+    features: dict | None = None,
+    settings: dict | None = None,
+    _softplus_k: float = SOFTPLUS_SHARPNESS,
+) -> None:
+    """Emit trajectory Potentials batched across all slices of one edge.
+
+    Instead of creating S separate Potential terms (one per slice), this
+    creates at most 2 (one for window, one for cohort obs_type).  Per-
+    slice latency and p variables are stacked into vectors, and the CDF
+    computation is vectorised across all slices' intervals in a single
+    PyTensor subgraph.
+
+    Mathematically identical to per-slice emission but produces a much
+    smaller PyTensor compilation graph: O(1) CDF subgraphs instead of
+    O(S).  This prevents the super-linear compilation memory growth that
+    was crashing WSL on contexted graphs with >= ~30 Potentials.
+
+    Each entry in *slice_emissions* is a tuple:
+        (suffix, p_var, kappa_var, slice_ev, latency_vars_dict, onset_vars_dict)
+    matching the shape produced by the per-slice emission loop in
+    build_model Section 5.
+    """
+    import pymc as pm
+    import numpy as np
+    import pytensor.tensor as pt
+
+    _s = settings or {}
+    _sigma_floor = float(_s.get("BAYES_SIGMA_FLOOR",
+                                _s.get("bayes_sigma_floor", SIGMA_FLOOR)))
+    _feat_ld = (features or {}).get("latency_dispersion", False)
+
+    for obs_type in ["window", "cohort"]:
+        # Phase 1 per-slice: only window trajectories are emitted
+        # (cohort trajectories use skip_cohort_trajectories=True).
+        # We batch whichever obs_type has data.
+
+        # ---- Collect per-slice trajectories and latency vars ----
+        slice_p_list = []
+        slice_onset_list = []
+        slice_mu_list = []
+        slice_sigma_list = []
+        slice_suffix_list = []
+
+        all_ages_raw = []
+        all_d = []
+        all_n_at_risk = []
+        all_weights = []
+        all_curr_idx = []
+        all_prev_idx = []
+        age_to_slice = []       # maps each age to its slice index
+        interval_to_slice = []  # maps each interval to its slice index
+        n_slices_with_data = 0
+        has_latent_latency = False
+        global_age_offset = 0
+
+        for _sfx, p_var, kappa_var, s_ev, lv, ov in slice_emissions:
+            # Collect trajectories for this obs_type (mirrors Step 1 routing)
+            trajs = []
+            edge_has_latency = (
+                edge_id in (lv or {})
+                or (s_ev.latency_prior is not None
+                    and ((s_ev.latency_prior.sigma or 0) > _sigma_floor
+                         or (s_ev.latency_prior.onset_delta_days or 0) > 0))
+            )
+            for c_obs in s_ev.cohort_obs:
+                for traj in c_obs.trajectories:
+                    if len(traj.retrieval_ages) < 2 or traj.n <= 0:
+                        continue
+                    # No-latency window trajs are converted to daily in
+                    # _emit_cohort_likelihoods Step 1 — skip here.
+                    if not edge_has_latency and traj.obs_type == "window":
+                        continue
+                    if traj.obs_type == obs_type:
+                        trajs.append(traj)
+
+            if not trajs:
+                continue
+
+            # Resolve latency for this slice
+            if edge_id in (lv or {}):
+                has_latent_latency = True
+                mu_s, sigma_s = lv[edge_id]
+                onset_s = (ov or {}).get(edge_id, 0.0)
+            elif s_ev.latency_prior:
+                onset_s = s_ev.latency_prior.onset_delta_days or 0.0
+                mu_s = s_ev.latency_prior.mu
+                sigma_s = s_ev.latency_prior.sigma
+            else:
+                onset_s = 0.0
+                mu_s = 0.0
+                sigma_s = _sigma_floor
+
+            s_idx = n_slices_with_data
+            slice_p_list.append(p_var)
+            slice_onset_list.append(onset_s)
+            slice_mu_list.append(mu_s)
+            slice_sigma_list.append(sigma_s)
+            slice_suffix_list.append(_sfx)
+
+            # Collect ages and decompose into intervals
+            for traj in trajs:
+                n_ages = len(traj.retrieval_ages)
+                for age in traj.retrieval_ages:
+                    all_ages_raw.append(age)
+                    age_to_slice.append(s_idx)
+
+                cum_y = traj.cumulative_y
+                w = getattr(traj, 'recency_weight', 1.0)
+                for j in range(n_ages):
+                    d_j = (float(cum_y[0]) if j == 0
+                           else float(max(0, cum_y[j] - cum_y[j - 1])))
+                    n_j = (float(traj.n) if j == 0
+                           else float(max(0, traj.n - cum_y[j - 1])))
+                    all_d.append(d_j)
+                    all_n_at_risk.append(n_j)
+                    all_weights.append(w)
+                    all_curr_idx.append(global_age_offset + j)
+                    all_prev_idx.append(
+                        global_age_offset + j - 1 if j > 0 else -1)
+                    interval_to_slice.append(s_idx)
+                global_age_offset += n_ages
+
+            n_slices_with_data += 1
+
+        if n_slices_with_data == 0 or not all_ages_raw:
+            continue
+
+        # ---- Build numpy arrays ----
+        d_np = np.array(all_d, dtype=np.float64)
+        n_at_risk_np = np.array(all_n_at_risk, dtype=np.float64)
+        weights_np = np.array(all_weights, dtype=np.float64)
+        curr_idx_np = np.array(all_curr_idx, dtype=np.int64)
+        prev_idx_np = np.array(all_prev_idx, dtype=np.int64)
+        prev_safe = np.where(prev_idx_np >= 0, prev_idx_np, 0)
+        is_first = (prev_idx_np < 0).astype(np.float64)
+        interval_slice_np = np.array(interval_to_slice, dtype=np.int64)
+        age_slice_np = np.array(age_to_slice, dtype=np.int64)
+        ages_raw_np = np.array(all_ages_raw, dtype=np.float64)
+
+        # ---- Stack per-slice PyTensor variables ----
+        p_stack = pt.stack(slice_p_list)             # (S,)
+        if has_latent_latency:
+            onset_stack = pt.stack(slice_onset_list)  # (S,)
+            mu_stack = pt.stack(slice_mu_list)        # (S,)
+            sigma_stack = pt.stack(slice_sigma_list)  # (S,)
+        else:
+            onset_stack = pt.as_tensor_variable(
+                np.array([float(o) for o in slice_onset_list]))
+            mu_stack = pt.as_tensor_variable(
+                np.array([float(m) for m in slice_mu_list]))
+            sigma_stack = pt.as_tensor_variable(
+                np.array([float(s) for s in slice_sigma_list]))
+
+        # ---- Vectorised CDF computation ----
+        # Expand per-slice latency to per-age via index lookup.
+        ages_tensor = pt.as_tensor_variable(ages_raw_np)
+        onset_per_age = onset_stack[age_slice_np]
+        mu_per_age = mu_stack[age_slice_np]
+        sigma_per_age = sigma_stack[age_slice_np]
+
+        if has_latent_latency:
+            age_minus_onset = ages_tensor - onset_per_age
+            effective_ages = (pt.softplus(_softplus_k * age_minus_onset)
+                              / _softplus_k)
+            log_ages = pt.log(pt.maximum(effective_ages, LOG_ARG_FLOOR))
+        else:
+            effective_ages_np = np.maximum(
+                ages_raw_np - np.array(
+                    [float(slice_onset_list[s]) for s in age_to_slice]),
+                EFFECTIVE_AGE_FLOOR)
+            log_ages = pt.log(pt.as_tensor_variable(effective_ages_np))
+
+        z = (log_ages - mu_per_age) / (sigma_per_age * pt.sqrt(2.0))
+        cdf_all = 0.5 * pt.erfc(-z)
+
+        # ---- Interval decomposition (same math as per-slice path) ----
+        cdf_curr = cdf_all[curr_idx_np]
+        cdf_prev = cdf_all[prev_safe]
+        delta_F = cdf_curr - cdf_prev * (1.0 - is_first)
+        delta_F = pt.maximum(delta_F, CDF_INCREMENT_FLOOR)
+
+        p_per_interval = p_stack[interval_slice_np]
+        F_prev = cdf_prev * (1.0 - is_first)
+        surv_prev = 1.0 - p_per_interval * F_prev
+        surv_prev = pt.maximum(surv_prev, SURVIVAL_FLOOR)
+        q_j = pt.clip(p_per_interval * delta_F / surv_prev,
+                       SURVIVAL_FLOOR, 1.0 - SURVIVAL_FLOOR)
+
+        # ---- Log-likelihood ----
+        _use_kappa_lat = _feat_ld and has_latent_latency
+        if _use_kappa_lat:
+            # Per-slice kappa_lat (same semantics as unbatched path).
+            kl_vars = []
+            for s_i in range(n_slices_with_data):
+                _sfx_s = slice_suffix_list[s_i]
+                _log_kl = pm.Normal(
+                    f"log_kappa_lat_{_sfx_s}_{obs_type}",
+                    mu=LOG_KAPPA_MU, sigma=LOG_KAPPA_SIGMA)
+                kl = pm.Deterministic(
+                    f"kappa_lat_{_sfx_s}_{obs_type}", pt.exp(_log_kl))
+                kl_vars.append(kl)
+            kl_stack = pt.stack(kl_vars)
+            kl_per_interval = kl_stack[interval_slice_np]
+
+            _alpha = q_j * kl_per_interval
+            _beta = (1.0 - q_j) * kl_per_interval
+            _bb_dist = pm.BetaBinomial.dist(
+                alpha=_alpha, beta=_beta,
+                n=pt.as_tensor_variable(n_at_risk_np))
+            _lp = pm.logp(_bb_dist, pt.as_tensor_variable(d_np))
+            _ll_pointwise = weights_np * _lp
+            logp = pt.sum(_ll_pointwise)
+            diagnostics.append(
+                f"  batched_traj {obs_type} {base_safe_id}: "
+                f"{n_slices_with_data} slices, latency_dispersion, "
+                f"BetaBinomial intervals")
+        else:
+            _ll_pointwise = weights_np * (
+                d_np * pt.log(q_j)
+                + (n_at_risk_np - d_np) * pt.log(1.0 - q_j))
+            logp = pt.sum(_ll_pointwise)
+
+        pm.Deterministic(
+            f"ll_traj_{obs_type}_{base_safe_id}_batched", _ll_pointwise)
+        pm.Potential(
+            f"traj_{obs_type}_{base_safe_id}_batched", logp)
+        diagnostics.append(
+            f"  Potential traj_{obs_type}_{base_safe_id}_batched: "
+            f"{n_slices_with_data} slices, {len(all_d)} intervals, "
+            f"latent_latency={has_latent_latency}")
+
+
 def _emit_edge_likelihoods(
     safe_id, p_override, edge_kappa, ev, et, edge_id, *,
     p_base_var, alpha, beta_param,
@@ -2435,6 +2731,7 @@ def _emit_edge_likelihoods(
     diagnostics, features, settings,
     _softplus_k, _s_dirichlet_conc_floor, _fallback_prior_ess,
     feat_window_only,
+    skip_trajectory_potentials=False,
 ):
     """Emit likelihood terms for one edge emission (aggregate or per-slice).
 
@@ -2494,6 +2791,7 @@ def _emit_edge_likelihoods(
                                     kappa=edge_kappa,
                                     onset_vars=onset_vars,
                                     skip_cohort_trajectories=False,
+                                    skip_trajectory_potentials=skip_trajectory_potentials,
                                     settings=_s, features=features)
 
             # Phase 2 cohort endpoint BB
@@ -2577,6 +2875,7 @@ def _emit_edge_likelihoods(
                                         kappa=edge_kappa,
                                         onset_vars=onset_vars,
                                         skip_cohort_trajectories=True,
+                                        skip_trajectory_potentials=skip_trajectory_potentials,
                                         settings=_s, features=features)
 
             # Endpoint BetaBinomial
@@ -2650,6 +2949,7 @@ def _emit_edge_likelihoods(
                                     kappa=edge_kappa,
                                     onset_vars=onset_vars,
                                     skip_cohort_trajectories=True,
+                                    skip_trajectory_potentials=skip_trajectory_potentials,
                                     settings=_s, features=features)
 
     # --- Case C: edge has ONLY cohort data ---
@@ -2667,6 +2967,7 @@ def _emit_edge_likelihoods(
                                     cohort_latency_vars=cohort_latency_vars,
                                     kappa=edge_kappa,
                                     onset_vars=onset_vars,
+                                    skip_trajectory_potentials=skip_trajectory_potentials,
                                     settings=_s, features=features)
 
     # --- Case D: no data — prior-only edge ---
