@@ -230,10 +230,43 @@ async function runBayes() {
   try {
     const { buildCandidateRegimesByEdge, computeMeceDimensions } = await import('../../services/candidateRegimeService');
     [candidateRegimesByEdge, meceDimensions] = await Promise.all([
-      buildCandidateRegimesByEdge(graphData, workspace),
+      buildCandidateRegimesByEdge(graphData, workspace, parameterFiles),
       computeMeceDimensions(graphData, workspace),
     ]);
     log.info(`Candidate regimes: ${Object.keys(candidateRegimesByEdge).length} edges, ${meceDimensions.length} MECE dims`);
+
+    // 6b. Add supplementary snapshot subjects for hash families discovered
+    // from stored param file slices (Step 5 of buildCandidateRegimesByEdge).
+    // The DSL-based subjects (Step 4) only cover hashes from the current
+    // pinned DSL. Supplementary regimes from historical/alternative context
+    // configurations need corresponding subjects so the DB query returns
+    // their rows.
+    const existingHashes = new Set(snapshotSubjects.map((s: any) => s.core_hash));
+    let nSupplementary = 0;
+    for (const [edgeId, regimes] of Object.entries(candidateRegimesByEdge)) {
+      for (const regime of regimes) {
+        if (existingHashes.has(regime.core_hash)) continue;
+        // This regime was discovered from param file slices — no subject exists.
+        // Add a minimal subject so the worker queries the DB for this hash.
+        snapshotSubjects.push({
+          subject_id: `supp_${edgeId}_${regime.core_hash}`,
+          param_id: '',  // resolved by worker from edge → param mapping
+          core_hash: regime.core_hash,
+          equivalent_hashes: (regime.equivalent_hashes ?? []).map(
+            (h: string) => ({ core_hash: h })
+          ),
+          edge_id: edgeId,
+          target: { targetId: edgeId },
+          read_mode: 'raw_snapshots',
+          slice_keys: [],
+        });
+        existingHashes.add(regime.core_hash);
+        nSupplementary++;
+      }
+    }
+    if (nSupplementary > 0) {
+      log.info(`Added ${nSupplementary} supplementary snapshot subjects from stored param file slices`);
+    }
   } catch (err: any) {
     log.warn(`Failed to build candidate regimes (non-blocking): ${err.message}`);
   }

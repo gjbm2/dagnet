@@ -152,7 +152,7 @@ async function loadEventDefinition(eventId: string): Promise<any> {
  *   - Each single MECE context key found in stored slices
  *   - Each multi-key MECE cross-product key-set found in stored slices
  */
-function enumeratePlausibleContextKeySets(
+export function enumeratePlausibleContextKeySets(
   constraintsWithoutAsat: any,
   paramValues: ParameterValue[],
 ): string[][] {

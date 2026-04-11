@@ -416,6 +416,10 @@ def main():
                         help="Build payload via CLI on demand (calls dagnet-cli bayes --output). "
                              "Same as --payload but constructs it automatically for --graph. "
                              "Ensures slice commissioning follows the FE codepath.")
+    parser.add_argument("--dsl-override", type=str, default=None, metavar="DSL",
+                        help="Override the graph's pinnedDSL before payload construction. "
+                             "Use to force uncontexted runs on contexted graphs, e.g. "
+                             "'window(12-Dec-25:21-Mar-26);cohort(12-Dec-25:21-Mar-26)'")
     parser.add_argument("--clean", action="store_true",
                         help="Clear stale caches before running: (1) delete __pycache__ "
                              "dirs under bayes/ and graph-editor/lib/ so no stale bytecode "
@@ -494,15 +498,54 @@ def main():
             # If --graph-path was given, derive graph name and directory
             # from the path (e.g. nous-conversion/graphs/synth-foo.json
             # → name="synth-foo", dir="nous-conversion").
-            if args.graph_path:
-                gp = os.path.abspath(args.graph_path)
-                cli_graph_name = os.path.basename(gp).replace(".json", "")
-                # graph_dir is the parent of "graphs/" — e.g. nous-conversion/
-                graphs_parent = os.path.dirname(gp)  # .../graphs
-                cli_graph_dir = os.path.dirname(graphs_parent)  # .../nous-conversion
-                payload = _build_payload_via_cli(cli_graph_name, cli_graph_dir)
-            else:
-                payload = _build_payload_via_cli(args.graph)
+
+            # --dsl-override: temporarily patch the graph JSON's pinnedDSL
+            # before CLI construction so subjects are computed from the
+            # overridden DSL. Restored after the CLI call.
+            _dsl_backup = None
+            _graph_json_path = None
+            if getattr(args, 'dsl_override', None):
+                # Find graph JSON: check nous-conversion/graphs/ first,
+                # then fall back to --graph-path.
+                _candidates = [
+                    os.path.join(REPO_ROOT, "nous-conversion", "graphs", f"{args.graph}.json"),
+                ]
+                if args.graph_path:
+                    _candidates.append(os.path.abspath(args.graph_path))
+                for _cp in _candidates:
+                    if os.path.isfile(_cp):
+                        _graph_json_path = _cp
+                        break
+                if _graph_json_path and os.path.isfile(_graph_json_path):
+                    with open(_graph_json_path) as _gf:
+                        _gj = json.load(_gf)
+                    _dsl_backup = (_gj.get('pinnedDSL'), _gj.get('dataInterestsDSL'))
+                    _gj['pinnedDSL'] = args.dsl_override
+                    _gj['dataInterestsDSL'] = args.dsl_override
+                    with open(_graph_json_path, 'w') as _gf:
+                        json.dump(_gj, _gf, indent=2)
+                    print(f"DSL override applied: {args.dsl_override}")
+
+            try:
+                if args.graph_path:
+                    gp = os.path.abspath(args.graph_path)
+                    cli_graph_name = os.path.basename(gp).replace(".json", "")
+                    # graph_dir is the parent of "graphs/" — e.g. nous-conversion/
+                    graphs_parent = os.path.dirname(gp)  # .../graphs
+                    cli_graph_dir = os.path.dirname(graphs_parent)  # .../nous-conversion
+                    payload = _build_payload_via_cli(cli_graph_name, cli_graph_dir)
+                else:
+                    payload = _build_payload_via_cli(args.graph)
+            finally:
+                # Restore original DSL
+                if _dsl_backup is not None and _graph_json_path:
+                    with open(_graph_json_path) as _gf:
+                        _gj = json.load(_gf)
+                    _gj['pinnedDSL'] = _dsl_backup[0]
+                    _gj['dataInterestsDSL'] = _dsl_backup[1]
+                    with open(_graph_json_path, 'w') as _gf:
+                        json.dump(_gj, _gf, indent=2)
+                    print("DSL override restored")
 
         graph_name = payload.get("graph_id", "unknown")
         graph = payload.get("graph_snapshot", {})

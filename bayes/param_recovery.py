@@ -54,6 +54,8 @@ def main():
     parser.add_argument("--job-label", type=str, default=None,
                         help="Unique label for log files (forwarded to harness --job-label). "
                              "Prevents parallel runs from cross-contaminating logs.")
+    parser.add_argument("--dsl-override", type=str, default=None,
+                        help="Override pinnedDSL (forwarded to harness --dsl-override)")
     args = parser.parse_args()
 
     # --- Resolve graph and truth file ---
@@ -150,6 +152,8 @@ def main():
         cmd.append("--clean")
     if args.job_label:
         cmd.extend(["--job-label", args.job_label])
+    if args.dsl_override:
+        cmd.extend(["--dsl-override", args.dsl_override])
 
     print(f"Running: {' '.join(cmd[-6:])}")
     print()

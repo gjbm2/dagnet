@@ -34,6 +34,7 @@ export interface CandidateRegime {
 export async function buildCandidateRegimesByEdge(
   graph: Graph,
   workspace: { repository: string; branch: string },
+  parameterFiles?: Record<string, unknown>,
 ): Promise<Record<string, CandidateRegime[]>> {
   const pinnedDsl = graph.dataInterestsDSL;
   if (!pinnedDsl || typeof pinnedDsl !== 'string' || !pinnedDsl.trim()) {
@@ -162,6 +163,91 @@ export async function buildCandidateRegimesByEdge(
       }
     } catch {
       // Non-fatal: bare regime is a best-effort fallback
+    }
+  }
+
+  // Step 5: Discover supplementary hash families from stored param file slices.
+  // When the current DSL is bare but param files contain context-qualified
+  // values[] entries (from previous contexted runs), the DB has data under
+  // contexted hashes that Step 3 won't find. Conversely, when the DSL is
+  // contexted, historical uncontexted data may exist (covered by Step 4).
+  // This step generalises: scan stored slices for ALL key-sets not already
+  // covered, compute their hashes, and add as candidate regimes.
+  // See programme.md §"Historical DSL epoch hash discovery for Bayes".
+  if (parameterFiles && Object.keys(result).length > 0) {
+    try {
+      const { enumeratePlausibleContextKeySets } = await import('./snapshotRetrievalsService');
+      const { extractSliceDimensions } = await import('./sliceIsolation');
+      const edges = (graph as any).edges ?? [];
+
+      // Get the bare temporal clause for synthesising contexted DSL slices.
+      const firstSlice = explodedSlices[0] || '';
+      const bareTemporal = firstSlice
+        .replace(/\.?context\([^)]*\)/g, '')
+        .replace(/^\./,  '')
+        .trim();
+
+      for (const edge of edges) {
+        const edgeId = edge.uuid;
+        if (!edgeId || !result[edgeId]) continue;
+
+        // Find param file for this edge
+        const paramId = edge.p?.id;
+        if (!paramId) continue;
+        const pf = (parameterFiles[`parameter-${paramId}`] ?? parameterFiles[paramId]) as any;
+        if (!pf?.values || !Array.isArray(pf.values)) continue;
+
+        // Discover key-sets from stored slices
+        const keySets = enumeratePlausibleContextKeySets({}, pf.values);
+        const existingKeySetIds = new Set(
+          result[edgeId].map(r => (r.context_keys ?? []).sort().join('||'))
+        );
+
+        for (const keys of keySets) {
+          const keySetId = keys.sort().join('||');
+          if (existingKeySetIds.has(keySetId)) continue;  // already covered
+
+          // Synthesise a DSL slice with these context keys
+          let synthSlice = bareTemporal;
+          if (keys.length > 0 && synthSlice) {
+            const ctxSuffix = keys.map(k => `context(${k})`).join('.');
+            // Wrap: (window(...);cohort(...)).context(dim)
+            synthSlice = `(${synthSlice}).${ctxSuffix}`;
+          }
+          if (!synthSlice) continue;
+
+          try {
+            const { plan: suppPlan } = await buildFetchPlanProduction(
+              graph as any,
+              synthSlice,
+              dummyWindow,
+            );
+            if (!suppPlan?.items) continue;
+
+            for (const item of suppPlan.items) {
+              if (!item.querySignature || !item.targetId) continue;
+              if (item.targetId !== edgeId) continue;
+
+              const coreHash = await computeShortCoreHash(item.querySignature);
+              if (result[edgeId].find(r => r.core_hash === coreHash)) continue;
+
+              const closureEntries = getClosureSet(coreHash);
+              const equivalentHashes = closureEntries.map(e => e.core_hash);
+
+              result[edgeId].push({
+                core_hash: coreHash,
+                equivalent_hashes: equivalentHashes,
+                context_keys: keys,
+              });
+              existingKeySetIds.add(keySetId);
+            }
+          } catch {
+            // Non-fatal: skip key-sets that fail to compute
+          }
+        }
+      }
+    } catch {
+      // Non-fatal: supplementary discovery is best-effort
     }
   }
 

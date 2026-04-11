@@ -155,6 +155,7 @@ def _run_one_graph(
     feature_flags: list[str] | None = None,
     clean: bool = False,
     run_id: str = "",
+    dsl_override: str | None = None,
 ) -> dict:
     """Run param_recovery.py for one graph. Returns parsed result dict.
 
@@ -184,6 +185,8 @@ def _run_one_graph(
         cmd.extend(["--feature", ff])
     if clean:
         cmd.append("--clean")
+    if dsl_override:
+        cmd.extend(["--dsl-override", dsl_override])
     env = {**os.environ, **_THREAD_PIN_ENV}
 
     t0 = time.time()
@@ -606,6 +609,7 @@ def run_regression(args) -> list[dict]:
                 feature_flags=getattr(args, 'feature', None) or None,
                 clean=getattr(args, 'clean', False),
                 run_id=run_id,
+                dsl_override=getattr(args, 'dsl_override', None),
             )
             futures[future] = g
 
@@ -1062,6 +1066,8 @@ Examples:
                              "(e.g. --feature latency_dispersion=true)")
     parser.add_argument("--clean", action="store_true",
                         help="Clear bytecode + synth meta caches before each graph run")
+    parser.add_argument("--dsl-override", type=str, default=None,
+                        help="Override pinnedDSL for all graphs (forwarded to param_recovery.py)")
     args = parser.parse_args()
 
     results = run_regression(args)
