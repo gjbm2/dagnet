@@ -31,6 +31,12 @@ For sequencing, priorities, and current status snapshot, see
 | 35 | [35-per-slice-regression-reporting.md](35-per-slice-regression-reporting.md) | **Implemented** (11-Apr-26) | Per-slice verbose regression reporting. Layers 3-8 iterated per context slice. Binding receipts, audit parsing, recovery parsing, LOO scoring (per-slice truth null), report renderer, pass/fail gates — all per-slice. | Production graphs fall back to edge-level AnalyticBaseline for per-slice LOO null (no per-slice model_vars) |
 | 36 | [36-posterior-predictive-calibration.md](36-posterior-predictive-calibration.md) | **Proposal** (11-Apr-26) | Posterior predictive calibration: do stated X% intervals contain ~X% of data? PIT uniformity, coverage curves, per-edge KS test. New audit layer 9. | Not yet implemented |
 
+## Open investigations
+
+| # | File | Status | Notes |
+|---|------|--------|-------|
+| 37 | [37-contexted-compilation-investigation.md](37-contexted-compilation-investigation.md) | **Open** (12-Apr-26) | Contexted model never compiles — PyTensor C compilation of `dlogp` OOMs WSL. Uncontexted works. 5 hypotheses to test. Blocking contexted regression |
+
 ## Open defects
 
 | # | File | Status | Notes |

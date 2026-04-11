@@ -8,6 +8,55 @@ Entries are reverse-chronological (newest first).
 
 ---
 
+## 12-Apr-26: Contexted model compilation — total failure, investigation opened
+
+### The problem
+
+The contexted Bayes model never compiles. Every attempt to run a contexted synth graph (`synth-simple-abc-context` and larger) causes PyTensor C compilation of the `dlogp` function to exhaust memory, crashing the WSL2 VM. Three separate attempts across two sessions ended with `E_UNEXPECTED / Catastrophic failure`. The model never reaches MCMC sampling — it hangs at the "compiling" stage.
+
+The uncontexted model for the same graph structure compiles and samples in seconds. This is a contexted-specific failure.
+
+### Isolation test
+
+Built a `--dsl-override` flag to run a contexted graph (same DB data, same evidence pipeline) but with a bare DSL, suppressing per-slice emission. Required closing a design gap first: the Bayes commissioning path only enumerated hash families from the current pinned DSL. Added supplementary hash family discovery (`candidateRegimeService.ts` Step 5) so bare DSL subjects can find contexted DB data.
+
+Result: bare-DSL-on-contexted-data compiles in 37s, recovers all parameters. Contexted DSL on the same data never compiles.
+
+| | Bare DSL (works) | Contexted DSL (crashes) |
+|---|---|---|
+| Data | Same 29,250 rows | Same 29,250 rows |
+| `has_slices` | False | True |
+| Free RVs | ~13 | ~46 |
+| Trajectory Potentials | 2 | 2 (batched — same structure) |
+| Per-slice likelihoods | None | 6 daily BBs + window Binomials |
+| Compilation | 37s | Never completes |
+
+### What we built (not yet verified on contexted)
+
+1. **Batched trajectory Potentials** (`model.py` `_emit_batched_slice_trajectories`): Vectorises CDF computation across all slices of one edge. Reduces O(E×S) Potentials to O(E). Mathematically identical posterior. Confirmed via synthetic test (1 batched Potential vs 3 unbatched). Not yet tested against real PyTensor C compilation for a contexted model.
+
+2. **Supplementary hash discovery** (`candidateRegimeService.ts` Step 5): Scans stored param file `values[]` to discover hash families not in the current DSL. Closes programme.md gap (lines 1310-1330). Verified working.
+
+3. **`--dsl-override` flag** (threaded through `run_regression.py` → `param_recovery.py` → `test_harness.py`): Enables the isolation test. Verified working.
+
+### Root cause hypothesis
+
+The per-slice code path creates ~33 additional free RVs (per-slice eps, kappa, latency offsets, kappa_lat). PyTensor must compile a single C function computing the gradient of the full log-posterior w.r.t. all ~46 free variables. Each gradient path passes through complex symbolic subgraphs (BetaBinomial gammaln, CDF erfc/softplus). The generated C source is too large for the C compiler to handle in WSL's memory budget.
+
+Five hypotheses documented in `docs/current/project-bayes/37-contexted-compilation-investigation.md`:
+
+1. **H1**: BetaBinomial gammaln gradient is the primary cost driver. Test: `latency_dispersion=false`.
+2. **H3**: PyTensor graph optimisation (rewrite rules) causes exponential blowup. Test: `pytensor.config.optimizer='fast_compile'`.
+3. **H2**: Per-slice variable count exceeds compilation budget regardless of likelihood type. Test: share latency across slices.
+4. **H4**: Batched Potential worse than unbatched for compilation (index ops prevent gradient factorisation).
+5. **H5**: nutpie compilation path differs from default PyMC.
+
+### Next step
+
+Test H1 first: run `synth-simple-abc-context` with `--feature latency_dispersion=false` (contexted DSL, no BetaBinomial). If it compiles, the bottleneck is BetaBinomial gammaln in per-slice Potentials.
+
+---
+
 ## 11-Apr-26: kappa_lat does not deliver predictive mu_sd — design review
 
 ### The problem

@@ -2521,10 +2521,14 @@ def _emit_batched_slice_trajectories(
                                 _s.get("bayes_sigma_floor", SIGMA_FLOOR)))
     _feat_ld = (features or {}).get("latency_dispersion", False)
 
-    for obs_type in ["window", "cohort"]:
-        # Phase 1 per-slice: only window trajectories are emitted
-        # (cohort trajectories use skip_cohort_trajectories=True).
-        # We batch whichever obs_type has data.
+    for obs_type in ["window"]:
+        # Phase 1 per-slice: only window trajectories are emitted.
+        # Cohort trajectories are skipped in Phase 1 (the per-slice
+        # _emit_edge_likelihoods call passes skip_cohort_trajectories=True).
+        # This helper is only called from the Phase 1 slice path, so we
+        # must NOT batch cohort — it would require path probability
+        # resolution, join mixtures, and x-denominator rewriting that
+        # only _emit_cohort_likelihoods handles correctly.
 
         # ---- Collect per-slice trajectories and latency vars ----
         slice_p_list = []
