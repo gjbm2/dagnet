@@ -296,6 +296,16 @@ Clearing layer 1 is useless unless you also handle layers 2-4. UpdateManager map
 
 **Broader principle**: signatures must reflect what the query asks for, not what data happens to exist on disk. Signature identity = hash identity. If two queries need different hashes, they must have different signatures.
 
+## Anti-pattern 33: Per-subject random effects on hazard parameters
+
+**Signature**: adding per-cohort (or per-trajectory) latent offsets to a shared parameter (mu, sigma, onset) in the product-of-conditional-Binomials likelihood. ESS collapses to single digits, shared parameter drifts to its prior, onset-mu correlation approaches ±1.0.
+
+**Root cause**: with N trajectories and N per-cohort offsets, the model has as many parameters as data points. Each cohort's offset absorbs its own trajectory's signal, leaving the shared parameter unconstrained. There is no pooling pressure — unlike kappa (one scalar constrained by many daily observations), per-cohort offsets have a one-to-one parameter-to-data ratio.
+
+**Fix**: use per-interval observation-level overdispersion instead. Replace `Binomial(n_j, q_j)` with `BetaBinomial(n_j, q_j * kappa_lat, (1 - q_j) * kappa_lat)`. This adds ONE scalar parameter per edge, not N. Same pattern as kappa for rate overdispersion. See doc 34 for the full design.
+
+**Broader principle**: the analogue of kappa for any distribution is a scalar that inflates variance at the observation level, not per-subject latent variables. This is the frailty model insight from survival analysis: Gamma frailty marginalises out per-subject effects analytically, leaving a single dispersion parameter.
+
 ## When to add to this document
 
 After completing a multi-attempt fix, check: does my bug match a generalisable pattern? If so, add it here following the format: Signature (how to recognise it), Root cause (why it happens), Fix (what to do), Example (optional, specific instance).

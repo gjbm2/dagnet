@@ -80,6 +80,26 @@ def run_inference(
                 idata_kwargs={"log_likelihood": True},
             )
 
+    # Move pointwise trajectory log-likelihood Deterministics from
+    # posterior to log_likelihood so LOO-ELPD can score them.
+    # pm.Potential doesn't produce log_likelihood entries; the model
+    # stores them as ll_traj_* Deterministics instead (see model.py).
+    _ll_vars = [v for v in trace.posterior.data_vars if v.startswith("ll_traj_")]
+    if _ll_vars:
+        _ll_dict = {}
+        for v in _ll_vars:
+            var_name = v[3:]  # strip "ll_" prefix → "traj_window_..." or "traj_cohort_..."
+            _ll_dict[var_name] = trace.posterior[v]
+        if hasattr(trace, "log_likelihood") and trace.log_likelihood is not None:
+            import xarray as xr
+            existing = {k: trace.log_likelihood[k] for k in trace.log_likelihood.data_vars}
+            existing.update(_ll_dict)
+            trace.log_likelihood = xr.Dataset(existing)
+        else:
+            trace.add_groups({"log_likelihood": _ll_dict})
+        # Remove from posterior to avoid inflating rhat/ess computation
+        trace.posterior = trace.posterior.drop_vars(_ll_vars)
+
     if report_progress:
         report_progress("summarising", 100, f"{prefix}Computing diagnostics…")
 
@@ -468,6 +488,186 @@ def _estimate_cohort_kappa(
             f"n_cohorts={len(k_arr)}"
         )
         return None
+
+
+def _predictive_mu_sd(
+    mu_samples: "np.ndarray",
+    sigma_samples: "np.ndarray",
+    onset_samples: "np.ndarray | None",
+    p_samples: "np.ndarray",
+    kl_samples: "np.ndarray",
+    trajectories: list,
+    diagnostics: list[str],
+    edge_id: str,
+) -> float | None:
+    """Compute predictive mu_sd from kappa_lat via MC simulation.
+
+    For each MCMC draw × each valid trajectory, simulate a BetaBinomial
+    maturation curve and fit mu* via weighted least-squares across all
+    intervals. The SD of mu* across (draw, trajectory) pairs is the
+    predictive mu_sd.
+
+    Fixes over the original implementation:
+      #1 Uses ALL valid trajectories, not one representative
+      #2 Sequential n_at_risk from realised BetaBinomial draws
+      #3 Multi-point WLS fit across all intervals, not single-point inversion
+      #5 Floor derived from quadrature: sqrt(posterior² + aleatoric²)
+
+    Returns None if insufficient trajectory data or if the MC fails.
+    """
+    import numpy as np
+    from scipy.special import ndtr, ndtri
+
+    valid_trajs = [t for t in trajectories
+                   if len(t.retrieval_ages) >= 3 and t.n >= 10]
+    if not valid_trajs:
+        return None
+
+    # Cap trajectories to avoid excessive computation
+    max_trajs = 20
+    if len(valid_trajs) > max_trajs:
+        # Prefer trajectories with more intervals (richer signal)
+        valid_trajs = sorted(valid_trajs, key=lambda t: len(t.retrieval_ages),
+                             reverse=True)[:max_trajs]
+
+    # Subsample MCMC draws for speed.
+    N = len(mu_samples)
+    max_draws = 1000
+    rng = np.random.default_rng(42)
+    if N > max_draws:
+        idx = rng.choice(N, max_draws, replace=False)
+        mu_s = mu_samples[idx]
+        sigma_s = sigma_samples[idx]
+        onset_s = onset_samples[idx] if onset_samples is not None else np.zeros(max_draws)
+        p_s = p_samples[idx]
+        kl_s = kl_samples[idx]
+    else:
+        mu_s = mu_samples
+        sigma_s = sigma_samples
+        onset_s = onset_samples if onset_samples is not None else np.zeros(N)
+        p_s = p_samples
+        kl_s = kl_samples
+
+    S = len(mu_s)
+    all_mu_star = []
+
+    for traj in valid_trajs:
+        ages = np.array(traj.retrieval_ages, dtype=np.float64)
+        n_pop = float(traj.n)
+        J = len(ages)
+        if J < 3 or n_pop < 10:
+            continue
+
+        # Vectorised CDF: shape (S, J)
+        ages_2d = ages[np.newaxis, :]
+        onset_2d = onset_s[:, np.newaxis]
+        mu_2d = mu_s[:, np.newaxis]
+        sigma_2d = np.maximum(sigma_s[:, np.newaxis], 0.01)
+
+        effective_age = np.maximum(ages_2d - onset_2d, 1e-12)
+        z = (np.log(effective_age) - mu_2d) / sigma_2d
+        cdf_all = np.where(ages_2d > onset_2d, ndtr(z), 0.0)
+        cdf_all = np.clip(cdf_all, 0.0, 1.0)
+
+        # Conditional hazards q_j
+        p_2d = p_s[:, np.newaxis]
+        cdf_prev = np.zeros_like(cdf_all)
+        cdf_prev[:, 1:] = cdf_all[:, :-1]
+        delta_F = np.maximum(cdf_all - cdf_prev, 1e-12)
+        surv = np.maximum(1.0 - p_2d * cdf_prev, 1e-12)
+        q_j = np.clip(p_2d * delta_F / surv, 1e-12, 1.0 - 1e-12)
+
+        # Fix #2: sequential n_at_risk from realised BetaBinomial draws.
+        # Draw d_j, update n_at_risk for the next interval.
+        kl_2d = kl_s[:, np.newaxis]
+        alpha_bb = np.maximum(q_j * kl_2d, 0.01)
+        beta_bb = np.maximum((1.0 - q_j) * kl_2d, 0.01)
+
+        n_at_risk = np.full((S, J), n_pop)
+        d_sim = np.zeros((S, J), dtype=int)
+        for j in range(J):
+            p_j = rng.beta(alpha_bb[:, j], beta_bb[:, j])
+            p_j = np.clip(p_j, 1e-12, 1.0 - 1e-12)
+            n_j = np.maximum(n_at_risk[:, j].astype(int), 0)
+            d_sim[:, j] = rng.binomial(n_j, p_j)
+            if j < J - 1:
+                n_at_risk[:, j + 1] = np.maximum(n_at_risk[:, j] - d_sim[:, j], 0)
+
+        # Realised cumulative fraction
+        cum_d = np.cumsum(d_sim, axis=1)
+        realised_frac = cum_d / n_pop  # (S, J)
+
+        # Fix #3: multi-point WLS fit for mu* per draw.
+        # For each draw, fit mu* to the simulated curve using
+        # weighted least-squares on the inverse-CDF transform:
+        #   Φ⁻¹(realised_frac / p) ≈ (log(t - onset) - mu*) / sigma
+        # Rearranging: mu* = log(t - onset) - sigma × Φ⁻¹(realised_frac / p)
+        # Use all intervals where 0.01 < realised_frac/p < 0.99.
+        # Weight by CDF gradient (most informative near CDF = 0.5).
+        eff_age_2d = np.maximum(ages_2d - onset_2d, 1e-12)
+        log_eff_age = np.log(eff_age_2d)  # (S, J)
+
+        # target CDF per interval: realised_frac / p
+        target = realised_frac / np.maximum(p_2d, 1e-6)
+        target = np.clip(target, 0.001, 0.999)
+
+        # Inverse normal of target: Φ⁻¹(target)
+        phi_inv = ndtri(target)  # (S, J)
+
+        # mu* per interval: log(t-onset) - sigma × Φ⁻¹(target)
+        mu_star_all = log_eff_age - sigma_2d * phi_inv  # (S, J)
+
+        # Weight: CDF gradient φ(z) — intervals near CDF=0.5 are most informative
+        from scipy.stats import norm as _norm
+        weight = _norm.pdf(phi_inv)  # (S, J)
+
+        # Mask degenerate intervals
+        usable = (target > 0.01) & (target < 0.99) & np.isfinite(mu_star_all) & (weight > 1e-6)
+        n_usable = usable.sum(axis=1)  # (S,)
+
+        # Weighted mean mu* per draw
+        weight_masked = np.where(usable, weight, 0.0)
+        w_sum = weight_masked.sum(axis=1)
+        mu_star_draw = np.where(
+            w_sum > 0,
+            (weight_masked * mu_star_all).sum(axis=1) / w_sum,
+            np.nan,
+        )
+
+        # Keep draws with at least 2 usable intervals
+        good = (n_usable >= 2) & np.isfinite(mu_star_draw) & (np.abs(mu_star_draw - mu_s) < 5.0)
+        all_mu_star.append(mu_star_draw[good])
+
+    if not all_mu_star:
+        diagnostics.append(
+            f"  predictive_mu {edge_id[:8]}…: no valid trajectories for MC"
+        )
+        return None
+
+    mu_star_pooled = np.concatenate(all_mu_star)
+    if len(mu_star_pooled) < 50:
+        diagnostics.append(
+            f"  predictive_mu {edge_id[:8]}…: too few valid MC fits "
+            f"({len(mu_star_pooled)}), falling back to posterior SD"
+        )
+        return None
+
+    aleatoric_sd = float(np.std(mu_star_pooled))
+    posterior_sd = float(np.std(mu_s))
+
+    # Fix #5: principled floor via quadrature.
+    # predictive_sd² = posterior_sd² + aleatoric_sd²
+    # The posterior SD is irreducible epistemic uncertainty; aleatoric_sd
+    # is the timing noise from kappa_lat. The predictive SD combines both.
+    predictive_sd = float(np.sqrt(posterior_sd ** 2 + aleatoric_sd ** 2))
+
+    diagnostics.append(
+        f"  predictive_mu {edge_id[:8]}…: sd={predictive_sd:.4f} "
+        f"(posterior={posterior_sd:.4f}, aleatoric={aleatoric_sd:.4f}, "
+        f"n_trajs={len(valid_trajs)}, n_fits={len(mu_star_pooled)}/{S * len(valid_trajs)})"
+    )
+
+    return predictive_sd
 
 
 def summarise_posteriors(
@@ -959,6 +1159,34 @@ def summarise_posteriors(
                     _kl_samples = trace.posterior[kappa_lat_name].values.flatten()
                     kappa_lat_mean_val = float(np.mean(_kl_samples))
                     kappa_lat_sd_val = float(np.std(_kl_samples))
+
+                # Predictive mu_sd from kappa_lat MC (doc 34).
+                # When kappa_lat is available, simulate BetaBinomial
+                # maturation curves and measure how much mu varies across
+                # realisations. This replaces the epistemic posterior SD
+                # with a proper predictive SD.
+                if kappa_lat_name is not None:
+                    _all_trajs = []
+                    for _co in ev.cohort_obs:
+                        _all_trajs.extend(_co.trajectories)
+                    _onset_s_arr = (onset_samples if has_latent_onset
+                                    else np.full_like(mu_samples, onset))
+                    # Fix #6: match p_samples to kappa_lat obs_type.
+                    # kappa_lat_name is e.g. "kappa_lat_{edge}_window" — the
+                    # obs_type suffix tells us which p to use.
+                    _kl_obs_type = kappa_lat_name.rsplit("_", 1)[-1]  # "window" or "cohort"
+                    _p_for_kl_name = f"p_{_kl_obs_type}_{safe_eid}"
+                    if _p_for_kl_name in trace.posterior:
+                        _p_for_kl = trace.posterior[_p_for_kl_name].values.flatten()
+                    else:
+                        _p_for_kl = samples  # fallback to the main p samples
+                    _pred_mu_sd = _predictive_mu_sd(
+                        mu_samples, sigma_samples, _onset_s_arr,
+                        _p_for_kl, _kl_samples, _all_trajs,
+                        diagnostics, edge_id,
+                    )
+                    if _pred_mu_sd is not None:
+                        mu_sd = _pred_mu_sd
 
                 latency_posteriors[edge_id] = LatencyPosteriorSummary(
                     mu_mean=mu_mean,

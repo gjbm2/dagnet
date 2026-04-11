@@ -48,15 +48,19 @@ export async function buildCandidateRegimesByEdge(
   const explodedSlices = await explodeDSL(pinnedDsl);
   if (explodedSlices.length === 0) return {};
 
-  // Step 2: Extract distinct context key-sets from the explosion.
+  // Step 2: Extract distinct (context key-set × temporal mode) groups.
   // All values within one MECE dimension share one hash, so we only
-  // need one representative slice per key-set.
+  // need one representative slice per group. Temporal mode (window vs
+  // cohort) is included because cohort_mode is part of the core hash
+  // signature — different modes produce different hashes and must each
+  // appear as a candidate regime so regime selection can match DB rows.
   const keySetMap = new Map<string, { keys: string[]; representativeSlice: string }>();
   for (const slice of explodedSlices) {
     try {
       const parsed = parseConstraints(slice);
       const keys = extractContextKeysFromConstraints(parsed).sort();
-      const keySetId = keys.join('||');
+      const temporalMode = parsed.cohort ? 'cohort' : 'window';
+      const keySetId = `${temporalMode}::${keys.join('||')}`;
       if (!keySetMap.has(keySetId)) {
         keySetMap.set(keySetId, { keys, representativeSlice: slice });
       }

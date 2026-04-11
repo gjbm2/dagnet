@@ -310,7 +310,7 @@ class TestComputeLooScoresIntegration:
         # This is the call that previously failed with
         # "Found several log likelihood arrays ... var_name cannot be None"
         diagnostics = []
-        scores = compute_loo_scores(trace, evidence, topology,
+        scores, slice_scores = compute_loo_scores(trace, evidence, topology,
                                     analytic_baselines=baselines, diagnostics=diagnostics)
 
         # Should NOT have failed
@@ -361,7 +361,7 @@ class TestComputeLooScoresIntegration:
             )
 
         diagnostics = []
-        scores = compute_loo_scores(trace, evidence, topology,
+        scores, _ = compute_loo_scores(trace, evidence, topology,
                                     analytic_baselines=baselines, diagnostics=diagnostics)
 
         # The t95_obs_ node should not contribute to any edge's n_loo_obs.
@@ -382,7 +382,7 @@ class TestComputeLooScoresIntegration:
             )
 
         diagnostics = []
-        compute_loo_scores(trace, evidence, topology,
+        _, _ = compute_loo_scores(trace, evidence, topology,
                           analytic_baselines=baselines, diagnostics=diagnostics)
 
         assert any("edges scored" in d for d in diagnostics), (
@@ -408,9 +408,10 @@ class TestComputeLooScoresIntegration:
         evidence = BoundEvidence(edges={})
 
         diagnostics = []
-        scores = compute_loo_scores(trace, evidence, topology, diagnostics=diagnostics)
+        scores, slice_scores = compute_loo_scores(trace, evidence, topology, diagnostics=diagnostics)
 
         assert scores == {}
+        assert slice_scores == {}
         assert any("no log_likelihood" in d or "skipping" in d for d in diagnostics)
 
 

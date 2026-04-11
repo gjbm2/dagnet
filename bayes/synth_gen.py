@@ -32,7 +32,6 @@ See doc 17 for design rationale.
 """
 from __future__ import annotations
 
-import base64
 import bisect
 import hashlib
 import os
@@ -311,22 +310,12 @@ def verify_synth_data(graph_name: str, data_repo: str | None = None) -> dict:
                         cur.execute("SELECT COUNT(*) FROM snapshots WHERE core_hash = %s", (h,))
                         total += cur.fetchone()[0]
         else:
-            # No meta — compute hashes via FE and check DB directly
-            graph_path = os.path.join(graphs_dir, f"{graph_name}.json")
-            if os.path.isfile(graph_path):
-                from compiler.topology import analyse_topology
-                with open(graph_path) as f:
-                    graph = json.load(f)
-                topo = analyse_topology(graph)
-                fe_hashes = compute_core_hashes(graph, topo, data_repo)
-                for pid, hashes in fe_hashes.items():
-                    if pid.startswith("parameter-"):
-                        continue
-                    for hk in _hash_keys:
-                        h = hashes.get(hk, "")
-                        if h and not h.startswith("PLACEHOLDER") and not h.startswith("SIM-"):
-                            cur.execute("SELECT COUNT(*) FROM snapshots WHERE core_hash = %s", (h,))
-                            total += cur.fetchone()[0]
+            # No meta sidecar — cannot verify without authoritative hashes.
+            # The meta sidecar is always written by the generation pipeline;
+            # its absence means generation hasn't run or was interrupted.
+            conn.close()
+            return {"status": "missing", "reason": "No .synth-meta.json — run synth_gen to generate",
+                    "row_count": 0, "truth_sha256": truth_sha, "meta": meta}
         conn.close()
 
         if truth_stale:
@@ -412,184 +401,6 @@ def _load_db_connection() -> str:
     return ""
 
 
-def _sha256_hex(text: str) -> str:
-    """SHA-256 of UTF-8 bytes, full hex digest. Matches FE hashText()."""
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
-
-def _short_hash(canonical: str) -> str:
-    """SHA-256 → first 16 bytes → base64url (no padding).
-
-    Matches coreHashService.ts computeShortCoreHash() and
-    snapshot_service.py short_core_hash_from_canonical_signature().
-    """
-    digest = hashlib.sha256(canonical.strip().encode("utf-8")).digest()[:16]
-    return base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
-
-
-def compute_core_hashes(
-    graph_snapshot: dict,
-    topology,
-    data_repo: str,
-) -> dict[str, dict[str, str]]:
-    """Compute real FE-compatible core hashes for each edge.
-
-    Replicates the FE's querySignature.ts → coreHashService.ts pipeline:
-    1. Build coreCanonical JSON (connection, event_ids, event_def_hashes,
-       query, latency_parameter, etc.)
-    2. coreHash = sha256(coreCanonical).hex()
-    3. structuredSig = JSON.stringify({c: coreHash, x: {}})
-    4. core_hash = sha256(structuredSig)[:16] → base64url
-
-    Two hashes per edge: window (cohort_mode=false) and cohort (cohort_mode=true).
-
-    Returns dict[param_id → {window_hash, cohort_hash}].
-    """
-    # Build node lookups
-    nodes_by_id = {n["id"]: n for n in graph_snapshot.get("nodes", [])}
-    nodes_by_uuid = {n["uuid"]: n for n in graph_snapshot.get("nodes", [])}
-
-    def find_node(ref: str) -> dict | None:
-        return nodes_by_id.get(ref) or nodes_by_uuid.get(ref)
-
-    # Load event definitions from data repo
-    event_defs: dict[str, dict] = {}
-    events_dir = os.path.join(data_repo, "events")
-    if os.path.isdir(events_dir):
-        for fname in os.listdir(events_dir):
-            if fname.endswith(".yaml"):
-                with open(os.path.join(events_dir, fname)) as f:
-                    edef = yaml.safe_load(f) or {}
-                    if edef.get("id"):
-                        event_defs[edef["id"]] = edef
-
-    result: dict[str, dict[str, str]] = {}
-
-    for edge_id, et in topology.edges.items():
-        pid = et.param_id
-        if not pid:
-            continue
-
-        # Find the graph edge object
-        edge = None
-        for e in graph_snapshot.get("edges", []):
-            if e["uuid"] == edge_id:
-                edge = e
-                break
-        if not edge:
-            continue
-
-        query = edge.get("query", "")
-        lat = edge.get("p", {}).get("latency", {})
-        has_latency = lat.get("latency_parameter", False)
-
-        # Resolve event_ids from from/to nodes via query
-        from_node = find_node(et.from_node)
-        to_node = find_node(et.to_node)
-        from_event_id = from_node.get("event_id", "") if from_node else ""
-        to_event_id = to_node.get("event_id", "") if to_node else ""
-
-        # Latency anchor event_id
-        anchor_node_id = lat.get("anchor_node_id", "")
-        anchor_node = find_node(anchor_node_id) if anchor_node_id else None
-        latency_anchor_event_id = anchor_node.get("event_id", "") if anchor_node else ""
-
-        # Normalise query: replace node IDs with event IDs
-        normalized_query = query
-        for node in graph_snapshot.get("nodes", []):
-            nid = node.get("id", "")
-            eid = node.get("event_id", "")
-            if nid and eid:
-                normalized_query = normalized_query.replace(nid, eid)
-
-        # Find anchor node for cohort mode
-        anchor_start_node = None
-        for n in graph_snapshot.get("nodes", []):
-            if n.get("entry", {}).get("is_start"):
-                anchor_start_node = n
-                break
-        anchor_start_eid = anchor_start_node.get("event_id", "") if anchor_start_node else ""
-
-        # Compute window hash (cohort_mode=false) and cohort hash (cohort_mode=true)
-        hashes: dict[str, str] = {}
-        for mode_name, cohort_mode in [("window_hash", False), ("cohort_hash", True)]:
-            # In cohort mode, buildDslFromEdge resolves the anchor node,
-            # sets cohort_anchor_event_id, and loads the anchor event def.
-            # In window mode, cohort_anchor is empty and the anchor event
-            # is only loaded if it's also a from/to node.
-            # When from_node IS the anchor, buildDslFromEdge uses a 2-step
-            # funnel and does NOT set cohort_anchor_event_id.
-            if cohort_mode and from_event_id != anchor_start_eid:
-                cohort_anchor = anchor_start_eid
-            else:
-                cohort_anchor = ""
-
-            # Event definition hashes — per-edge, only events relevant to
-            # this edge. buildDslFromEdge loads from/to events always.
-            # In cohort mode it also loads the cohort anchor event.
-            # The latency anchor event is loaded only if it coincides
-            # with from/to/cohort-anchor.
-            loaded_event_ids = {from_event_id, to_event_id}
-            if cohort_mode and cohort_anchor:
-                loaded_event_ids.add(cohort_anchor)
-
-            all_event_ids = [eid for eid in [from_event_id, to_event_id, latency_anchor_event_id] if eid]
-            event_def_hashes: dict[str, str] = {}
-            for eid in all_event_ids:
-                if eid not in loaded_event_ids:
-                    event_def_hashes[eid] = "not_loaded"
-                    continue
-                edef = event_defs.get(eid)
-                if edef:
-                    normalized = {
-                        "id": edef.get("id"),
-                        "provider_event_names": edef.get("provider_event_names", {}),
-                        "amplitude_filters": edef.get("amplitude_filters", []),
-                    }
-                    event_def_hashes[eid] = _sha256_hex(json.dumps(normalized, separators=(",", ":")))
-                else:
-                    event_def_hashes[eid] = "not_loaded"
-
-            # Connection: read from edge p.connection or graph defaultConnection
-            edge_connection = edge.get("p", {}).get("connection")
-            if not edge_connection:
-                edge_connection = graph_snapshot.get("defaultConnection", "amplitude")
-
-            core_canonical = json.dumps({
-                "connection": edge_connection,
-                "from_event_id": from_event_id,
-                "to_event_id": to_event_id,
-                "visited_event_ids": [],
-                "exclude_event_ids": [],
-                "event_def_hashes": event_def_hashes,
-                "event_filters": {},
-                "case": [],
-                "cohort_mode": cohort_mode,
-                "cohort_anchor_event_id": cohort_anchor,
-                "latency_parameter": has_latency,
-                "latency_anchor_event_id": latency_anchor_event_id,
-                "original_query": normalized_query,
-            }, separators=(",", ":"))
-
-            core_hash_hex = _sha256_hex(core_canonical)
-
-            # Structured signature (no context keys for synthetic data)
-            structured_sig = json.dumps({
-                "c": core_hash_hex,
-                "x": {},
-            }, separators=(",", ":"))
-
-            hashes[mode_name] = _short_hash(structured_sig)
-            # Also store the structured sig for parameter file query_signature
-            sig_key = mode_name.replace("_hash", "_sig")
-            hashes[sig_key] = structured_sig
-
-        result[pid] = hashes
-        # Also store with parameter- prefix
-        if not pid.startswith("parameter-"):
-            result[f"parameter-{pid}"] = hashes
-
-    return result
 
 
 def _build_hash_lookup(gcfg: dict) -> dict[str, dict[str, str]]:

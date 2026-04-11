@@ -795,3 +795,23 @@ to current single-edge code; none block adjacent-pair parity):
    (underestimates span uncertainty; per-draw reconvolution is a
    Phase A+ improvement)
 4. x carry-forward when x ≠ a (only affects the uncommon x ≠ a case)
+
+---
+
+## Cross-cutting: shared forward-model primitive (doc 36)
+
+The forecast engine's core computation — evaluating `ShiftedLogNormal`
+CDF at retrieval ages and deriving conditional hazard
+`q_j = p × ΔF / (1 - p × F_prev)` to produce predictive counts — is
+also needed by the posterior predictive calibration checker (doc 36).
+PPC evaluates the same forward model pointwise against observed data
+to check whether the model's stated uncertainty intervals have honest
+coverage.
+
+As the engine generalises (Steps 4-6), extracting a pure-Python
+`evaluate_edge_predictive(age, p, mu, sigma, onset, kappa, kappa_lat, n)`
+function into a shared `compiler/predictive.py` module would serve
+both consumers: the forecast engine calls it to project forward, the
+calibration checker calls it to assess backward. This is the
+numpy-level forward model, distinct from the PyTensor computation
+graph in `model.py`.

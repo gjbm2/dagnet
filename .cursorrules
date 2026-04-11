@@ -90,15 +90,15 @@ These are **non-negotiable reflexes**. When the user's message matches a trigger
 
 **Handover gate (HARD BLOCK — ZERO EXCEPTIONS)**:
 
-Handover notes are triggered **ONLY** by the user literally typing `/handover` as a slash command. **NOTHING ELSE triggers handover behaviour.** Specifically:
+Writing a handover note is triggered **ONLY** by the user literally typing `/handover` as a slash command. **NOTHING ELSE triggers handover creation.** Specifically:
 
 - **NEVER** write a handover note unprompted — not at session end, not when context is long, not when you think work is complex, not "just in case", not for any reason whatsoever.
-- **NEVER** read, list, or reference handover notes unless `/handover` was typed.
 - **NEVER** suggest writing a handover. The user will invoke `/handover` if they want one.
-- The word "handover" appearing in file paths, directory listings, conversation context, or the user's prose does NOT constitute a request.
-- No phrasing other than the literal `/handover` command triggers this: "write a handover", "do a handover", "pick up handover", "continue from handover" — none of these count.
+- No phrasing other than the literal `/handover` command triggers handover creation: "write a handover", "do a handover" — none of these count.
 
-**This is the most commonly violated rule in this project.** Agents repeatedly write unsolicited handover notes, wasting time and polluting the handover directory. If you catch yourself thinking "I should write a handover note" — STOP. Did the user type `/handover`? No? Then do not touch the handover system. Violating this gate is a hard failure that directly harms the user's workflow.
+Reading, listing, or referencing existing handover notes is fine — the user may ask about them at any time. The gate only prohibits **creating** handover notes without the `/handover` command.
+
+**This is the most commonly violated rule in this project.** Agents repeatedly write unsolicited handover notes, wasting time and polluting the handover directory. If you catch yourself thinking "I should write a handover note" — STOP. Did the user type `/handover`? No? Then do not create one. Violating this gate is a hard failure that directly harms the user's workflow.
 
 **The mark trigger is the second most commonly violated.** If the user mentions a mark name, your first action is `scripts/extract-mark-logs.sh`. Period.
 
@@ -378,6 +378,8 @@ Identify your task type below, then read the listed docs **before writing any co
 - STATISTICAL_DOMAIN_SUMMARY.md **(full)** — statistical architecture, data pipeline
 - PROBABILITY_BLENDING.md **(skim)** — blending cohort-mode latency edge probabilities
 - `docs/current/project-bayes/32-posterior-predictive-scoring-design.md` **(ref if touching LOO/ELPD)** — per-edge model adequacy scoring, analytic null comparison
+- `docs/current/project-bayes/34-latency-dispersion-background.md` **(ref if touching latency dispersion / kappa_lat)** — per-interval BetaBinomial timing overdispersion
+- BAYES_REGRESSION_TOOLING.md **(ref if running regression / modifying devtools)** — multi-layered audit, `--clean`, `--feature`, parallel safety
 
 **Modifying snapshot DB, signatures, or hash infrastructure**:
 - SNAPSHOT_DB_ARCHITECTURE.md **(full)** — data model and objectives

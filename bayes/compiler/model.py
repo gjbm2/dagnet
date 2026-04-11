@@ -2139,15 +2139,17 @@ def _emit_cohort_likelihoods(
                         alpha=_alpha, beta=_beta,
                         n=pt.as_tensor_variable(n_at_risk_np))
                     _lp = pm.logp(_bb_dist, pt.as_tensor_variable(d_np))
-                    logp = pt.sum(weights_np * _lp)
+                    _ll_pointwise = weights_np * _lp
+                    logp = pt.sum(_ll_pointwise)
                     diagnostics.append(
                         f"  latency_dispersion {safe_id} ({obs_type}): "
                         f"kappa_lat ~ LogNormal, BetaBinomial intervals")
                 else:
                     # Standard Binomial log-likelihood, weighted and summed.
-                    logp = pt.sum(weights_np * (
+                    _ll_pointwise = weights_np * (
                         d_np * pt.log(q_j) + (n_at_risk_np - d_np) * pt.log(1.0 - q_j)
-                    ))
+                    )
+                    logp = pt.sum(_ll_pointwise)
 
             n_terms = len(trajs)
 
@@ -2193,11 +2195,16 @@ def _emit_cohort_likelihoods(
             surv_prev = pt.maximum(1.0 - p_expr * F_prev, SURVIVAL_FLOOR)
             q_j = pt.clip(p_expr * delta_F / surv_prev, SURVIVAL_FLOOR, 1.0 - SURVIVAL_FLOOR)
 
-            logp = pt.sum(weights_np * (
+            _ll_pointwise = weights_np * (
                 d_np * pt.log(q_j) + (n_at_risk_np - d_np) * pt.log(1.0 - q_j)
-            ))
+            )
+            logp = pt.sum(_ll_pointwise)
             n_terms = len(trajs)
 
+        # Store per-interval pointwise log-likelihood for LOO-ELPD.
+        # pm.Potential doesn't produce log_likelihood entries, so we
+        # store via Deterministic and move to log_likelihood post-hoc.
+        pm.Deterministic(f"ll_traj_{obs_type}_{safe_id}", _ll_pointwise)
         pm.Potential(f"traj_{obs_type}_{safe_id}", logp)
         mixture_str = f", mixture={len(mixture_components)} paths" if is_mixture else ""
         diagnostics.append(
@@ -2777,8 +2784,26 @@ def _emit_branch_group_multinomial(
     if len(sibling_info) < 2:
         return
 
-    # Shared denominator
-    shared_n = max(s["n"] for s in sibling_info)
+    # Shared denominator.
+    # Defect 3 fix: when sibling denominators disagree significantly
+    # (max/min > 1.5), the Multinomial's shared-experiment assumption
+    # is violated. The shortfall between max_n and min_n is not real
+    # dropout — it's a data completeness gap. Using max(n_i) inflates
+    # the dropout and biases p downward for smaller-n siblings.
+    # In this case, skip the Multinomial. The Dirichlet prior (Section 2)
+    # still constrains p to the simplex.
+    max_n = max(s["n"] for s in sibling_info)
+    min_n = min(s["n"] for s in sibling_info)
+    if min_n > 0 and max_n / min_n > 1.5:
+        diagnostics.append(
+            f"WARN: branch group {bg.group_id}: skipping Multinomial — "
+            f"sibling denominators disagree (max/min={max_n / min_n:.1f}, "
+            f"max_n={max_n}, min_n={min_n}). "
+            f"Dirichlet prior still constrains p."
+        )
+        return
+
+    shared_n = max_n
     total_k = sum(s["k"] for s in sibling_info)
 
     if total_k > shared_n:

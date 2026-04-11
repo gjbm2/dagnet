@@ -411,6 +411,9 @@ class EdgeBindingReceipt:
     unexpected_slices: list[str] = field(default_factory=list)
     orphan_rows: int = 0
 
+    # Per-slice row counts: ctx_key → {total_n, window_n, cohort_n}
+    slice_row_counts: dict[str, dict[str, int]] = field(default_factory=dict)
+
     # Evidence source classification
     evidence_source: str = "none"   # snapshot / param_file / mixed / none
 
@@ -462,6 +465,7 @@ class EdgeBindingReceipt:
             "missing_slices": self.missing_slices,
             "unexpected_slices": self.unexpected_slices,
             "orphan_rows": self.orphan_rows,
+            "slice_row_counts": self.slice_row_counts,
             "evidence_source": self.evidence_source,
             "window_trajectories": self.window_trajectories,
             "window_daily": self.window_daily,

@@ -8,6 +8,259 @@ Entries are reverse-chronological (newest first).
 
 ---
 
+## 11-Apr-26: kappa_lat does not deliver predictive mu_sd — design review
+
+### The problem
+
+kappa_lat (per-interval BetaBinomial overdispersion on the discrete-time
+hazard q_j) was built to produce a predictive mu_sd analogous to how
+kappa produces predictive p_sd. It doesn't. The mechanism is
+fundamentally wrong for this goal.
+
+### Why kappa works for p (and kappa_lat doesn't work for mu)
+
+For p, the generative model is:
+
+```
+p_cohort ~ Beta(p × kappa, (1 - p) × kappa)
+d ~ Binomial(n, p_cohort)
+```
+
+BetaBinomial(n, p×kappa, (1-p)×kappa) is the **marginalised** form —
+integrates out p_cohort analytically. One scalar kappa, no per-cohort
+latents. At export time, drawing `p_new ~ Beta(p_i × kappa_i,
+(1-p_i) × kappa_i)` gives the predictive directly: "what p will the
+next cohort have?" The spread of those draws = predictive p_sd. Cheap,
+correct, closed-form.
+
+For mu, the analogous generative model would be:
+
+```
+mu_cohort ~ Normal(mu, tau_mu)
+q_j = p × ΔF(mu_cohort) / (1 - p × F_{j-1}(mu_cohort))
+d_j ~ Binomial(n_j, q_j)
+```
+
+The marginalised form = `∫ ∏_j Binomial(d_j | n_j, q_j(mu')) ×
+Normal(mu' | mu, tau_mu) dmu'`. This integral has **no closed form**
+because q_j depends on mu through the shifted lognormal CDF
+nonlinearly. There is no "BetaBinomial for mu" — no distribution
+family where the marginal is tractable.
+
+kappa_lat replaces `Binomial(n_j, q_j)` with `BetaBinomial(n_j,
+q_j × kappa_lat, (1 - q_j) × kappa_lat)`. This inflates variance on
+q_j per-interval, but q_j is a derived quantity — a function of p,
+mu, sigma, onset, and the CDF. kappa_lat does not parameterise
+variation in mu. There is no `mu_new ~ f(mu, kappa_lat)` because
+kappa_lat acts on q_j, not on mu.
+
+The posterior `np.std(mu_samples)` is epistemic (shrinks with data).
+kappa_lat does not meaningfully widen it. Adding kappa_lat to the
+model and then still exporting `np.std(mu_samples)` as mu_sd gives
+essentially the same useless epistemic SD as before.
+
+### What was tried and failed (for the record)
+
+1. **Per-cohort mu random effects** (10-Apr-26): `mu_c = mu +
+   tau_mu × u_c` with N per-cohort offsets. ESS collapsed to 3.
+   One-to-one parameter-to-data ratio. Anti-pattern #33.
+
+2. **Per-interval BetaBinomial** (kappa_lat, 10-11-Apr-26): well-
+   identified scalar, but models interval-level noise, not
+   trajectory-level timing variation. Cannot produce predictive
+   mu_sd without an expensive simulation step, defeating the purpose.
+
+### Approaches not yet tried
+
+#### A. Empirical tau_mu from trajectory residuals (post-hoc estimator)
+
+Analogous to `_estimate_cohort_kappa` for p. No model changes.
+
+After fitting, for each trajectory t:
+- Compute the maturation curve from posterior means (p, mu, sigma,
+  onset) → expected cumulative at each retrieval age
+- Find mu_t* = the mu that minimises the trajectory residual
+  (one-parameter fit, cheap: bisection on CDF(mu) vs observed
+  cumulative fraction)
+- tau_mu_empirical = std(mu_t* across trajectories)
+
+At export: `mu_sd_predictive = sqrt(mu_sd_posterior² + tau_mu²)`.
+
+At fan-chart draw time: `mu_new = mu_i + Normal(0, tau_mu)` per MCMC
+draw, same pattern as `p_new ~ Beta(p_i × kappa_i, ...)`.
+
+**Pros:**
+- Zero model changes. Zero MCMC cost. Computed in inference.py.
+- Same pattern as empirical cohort kappa (proven to work for p).
+- Directly gives the quantity we need.
+- Cheap: one bisection per trajectory (50-100 trajectories).
+
+**Cons:**
+- Post-hoc estimator, not sampled — no posterior uncertainty on
+  tau_mu itself.
+- Assumes the trajectories are a representative sample of timing
+  variation (they are — they're cohorts).
+- Doesn't account for sigma/onset variation (only mu). But mu is the
+  dominant timing parameter; sigma and onset dispersion can be added
+  later with the same approach.
+
+#### B. Marginalised trajectory likelihood via Laplace approximation
+
+Add tau_mu as a latent scalar in the model. For each cohort, instead
+of evaluating L(data | mu, sigma, onset, p), evaluate the marginalised
+likelihood ∫ L(data | mu', ...) N(mu' | mu, tau_mu) dmu' using a
+Laplace approximation around mu. This requires the Hessian of log L
+w.r.t. mu, which is computable from the CDF derivatives.
+
+**Pros:**
+- tau_mu is a proper latent variable with posterior uncertainty.
+- No per-cohort parameters.
+- One scalar per edge, like kappa.
+
+**Cons:**
+- Requires implementing the Hessian of the trajectory log-likelihood
+  w.r.t. mu inside PyTensor (for gradient-based sampling).
+- The Laplace approximation may be poor if the per-trajectory
+  likelihood is non-Gaussian in mu (unlikely for well-observed
+  trajectories, possible for short ones).
+- Significantly more complex than approach A.
+
+#### C. Observation-level LogNormal random effect (OLRE analogue)
+
+The OLRE trick for overdispersed counts adds a Normal(0, sigma_obs)
+to the linear predictor of each observation. The analogue here: add
+Normal(0, tau_mu) to mu for each trajectory (not each interval).
+
+This IS per-cohort random effects, but with a trick: treat each
+trajectory as a single observation with a compound likelihood, and
+use the non-centred parameterisation with a shared tau_mu. The
+difference from the failed attempt: instead of N uncorrelated
+offsets, the offsets are drawn from a single shared distribution
+with one scale parameter.
+
+Wait — this IS the same as the failed attempt. The problem was not
+the parameterisation, it was the N-to-N ratio. Skip.
+
+### Approach D: sufficient-statistics meta-analysis (inside model)
+
+Pre-compute per-trajectory mu estimates before building the PyMC
+model:
+1. For each trajectory, fit mu_hat_c by minimising the trajectory
+   residual against the observed maturation curve (holding
+   sigma/onset at their analytic priors). One-parameter MLE per
+   trajectory — cheap. Also compute se_c (standard error of the
+   per-trajectory fit).
+2. In the PyMC model, add:
+   ```
+   tau_mu ~ HalfNormal(prior)
+   hat_mu_c ~ Normal(mu, sqrt(tau_mu² + se_c²))   [observed]
+   ```
+   hat_mu_c are data, not latent variables. tau_mu is the only new
+   latent — one scalar per edge.
+
+This is a textbook random-effects meta-analysis model. PyMC handles
+it natively. No custom Ops. No per-group latents. NUTS samples
+(mu, tau_mu, ...) in the same low-dimensional space as today.
+
+At export: `mu_sd_predictive = sqrt(posterior_mu_sd² + tau_mu²)`.
+Or: for each MCMC draw, `mu_new ~ Normal(mu_i, tau_mu_i)` — the
+predictive draw, exactly analogous to `p_new ~ Beta(p_i × kappa_i,
+...)`.
+
+**Pros:**
+- tau_mu is a proper posterior variable with uncertainty.
+- One scalar per edge, like kappa.
+- No custom PyTensor Ops. Standard PyMC.
+- The approximation (per-trajectory MLE is approx normal) is very
+  reasonable for trajectories with 10+ intervals.
+- Pre-computation of hat_mu_c is fast (one bisection per trajectory)
+  and happens once before MCMC.
+
+**Cons:**
+- Requires the per-trajectory MLE step before model building. This
+  is straightforward but adds a pre-processing step.
+- The per-trajectory standard error se_c is itself an approximation
+  (Fisher information at the MLE). For very short trajectories
+  (2-3 intervals) this may be inaccurate, but such trajectories are
+  already low-weight.
+
+### The fundamental constraint
+
+**Individual trajectories do not strongly constrain mu independently.**
+Each trajectory is one cohort's maturation curve observed at 10-30
+retrieval ages. The CDF shape depends on (mu, sigma, onset) jointly,
+with onset-mu correlation often >0.9. A single trajectory cannot
+reliably decompose "how fast did this cohort mature?" into a mu
+estimate with meaningful precision.
+
+This is why:
+- Per-cohort random effects failed (anti-pattern 33): N weakly-
+  identified offsets for N trajectories → ESS collapse.
+- Per-interval BetaBinomial (kappa_lat) was appealing: it avoids
+  per-cohort latents. But it operates on q_j, not mu, so it
+  doesn't deliver predictive mu_sd.
+- Sufficient-statistics meta-analysis (approach D) would pre-compute
+  per-trajectory mu estimates. But those estimates inherit the same
+  weak-identification problem: if se_c is large relative to the
+  signal, tau_mu is dominated by noise.
+- Post-hoc empirical tau_mu (approach A) has the same issue.
+- Laplace marginalisation (approach B) is more principled but still
+  requires the per-trajectory integral to be well-behaved, which it
+  won't be when individual trajectories weakly identify mu.
+
+All approaches that estimate per-trajectory mu variation founder on
+the same rock: trajectories don't constrain mu independently.
+
+### Where this leaves us
+
+The anti-pattern 33 "broader principle" — observation-level
+overdispersion as the analogue of kappa — was the best idea from
+the survival analysis literature. We implemented it (kappa_lat).
+It is well-identified and samples fine. But it models interval-level
+noise, not trajectory-level timing variation, and cannot produce
+predictive mu_sd.
+
+### Resolution: post-MCMC simulation translates kappa_lat → predictive mu_sd
+
+The missing insight was about what question we're answering.
+
+Wrong question: "how much does mu vary across cohorts?" — this
+requires per-trajectory mu identification, which is weak.
+
+Right question: "given known (p, mu, sigma, onset, kappa_lat), what
+is the range of maturation curves a new cohort will actually
+exhibit?" — this is a forward simulation from the fitted model.
+
+kappa_lat IS the right model parameter for this. It captures per-
+interval overdispersion on the hazard. The problem was that inference
+extracted it and exported it as telemetry without using it to compute
+anything.
+
+The fix: a post-MCMC numpy step in `inference.py` (`_predictive_mu_sd`).
+For each MCMC draw (p_i, mu_i, sigma_i, onset_i, kappa_lat_i):
+
+1. Compute CDF at a reference age grid → derive conditional hazards q_j
+2. Draw d_j ~ BetaBinomial(n_ref, q_j × kappa_lat_i, (1−q_j) × kappa_lat_i)
+   — one synthetic cohort's realised conversions
+3. Fit mu* by closed-form CDF inversion at the inflection point:
+   mu* = log(t − onset) − sigma × Φ⁻¹(realised_fraction / p)
+
+SD of mu* across draws = predictive mu_sd. This replaces the
+epistemic `np.std(mu_samples)` in the export.
+
+No model changes. No additional MCMC. Pure numpy, seconds not minutes.
+Uses a representative trajectory from the edge's evidence as the
+reference age grid and n.
+
+kappa_lat stays in the model — it is the input to this computation.
+The export path now consumes it properly.
+
+**Implemented in**: `bayes/compiler/inference.py` — `_predictive_mu_sd()`
+helper function, called from the latency extraction block when
+kappa_lat samples are available.
+
+---
+
 ## 6-Apr-26: Harness/FE snapshot parity gap and hash-mapping closure cross-contamination
 
 ### Bug 1: Harness does not use FE hash-mapping closure

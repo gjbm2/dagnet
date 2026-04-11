@@ -720,3 +720,22 @@ broader forecast-engine architecture from doc `29`.
 The later engine work still needs to generalise these building blocks
 for other consumers, but Phase B completes the cohort-maturity-specific
 story first.
+
+---
+
+## Note: shared primitive with posterior predictive calibration (doc 36)
+
+The CDF/hazard evaluation that the forecast engine performs — computing
+`ShiftedLogNormal` CDF at retrieval ages and deriving conditional
+hazard `q_j = p × ΔF / (1 - p × F_prev)` — is also needed by the
+posterior predictive calibration checker (doc 36). PPC evaluates the
+same forward model pointwise against observed data to check whether
+the model's stated uncertainty intervals have honest coverage.
+
+When Phase B (or the broader generalisation) extracts a pure-Python
+`evaluate_edge_predictive_cdf(age, p, mu, sigma, onset, kappa,
+kappa_lat, n)` function, this should be designed as a **shared
+primitive** that both the forecast engine and the calibration checker
+consume. A natural home is a `compiler/predictive.py` module that
+owns the numpy-level forward model evaluation, distinct from the
+PyTensor computation graph in `model.py`.

@@ -532,6 +532,10 @@ def _bind_from_snapshot_rows(
     ctx_window_rows: dict[str, dict[str, list[dict]]] = defaultdict(lambda: defaultdict(list))
     ctx_cohort_rows: dict[str, dict[str, list[dict]]] = defaultdict(lambda: defaultdict(list))
 
+    # Non-MECE fallback: collect skipped non-MECE context rows by context_key.
+    # Used only if no bare/MECE rows produce an aggregate (Defect 4 fix).
+    _non_mece_by_ctx: dict[str, list[dict]] = {}
+
     for row in rows:
         anchor_day = str(row.get("anchor_day", ""))
         slice_key = str(row.get("slice_key", ""))
@@ -562,9 +566,16 @@ def _bind_from_snapshot_rows(
                 else:
                     ctx_window_rows[ctx_part][anchor_day].append(dict(row))
 
-        # Non-MECE context rows cannot be aggregated — skip them
+        # Non-MECE context rows cannot be aggregated — skip them.
+        # Collect them in case we need a fallback (no bare rows at all).
         if is_ctx and not is_mece_ctx:
             n_ctx_non_mece_skipped += 1
+            _ctx_part = context_key(slice_key)
+            if _ctx_part:
+                if _is_cohort(slice_key):
+                    _non_mece_by_ctx.setdefault(_ctx_part, []).append(dict(row))
+                else:
+                    _non_mece_by_ctx.setdefault(_ctx_part, []).append(dict(row))
             continue
 
         day_bucket = bucket[anchor_day]
@@ -591,6 +602,34 @@ def _bind_from_snapshot_rows(
             day_bucket[ret_key] = dict(row)
             if is_ctx:
                 n_ctx_aggregated += 1
+
+    # Defect 4 fix: when ALL rows were non-MECE context-qualified and no
+    # bare/MECE rows produced an aggregate, fall back to the single largest-n
+    # context key's rows. This is a conservative lower bound — no double-
+    # counting because we use only one context's data. The x values
+    # underestimate the true population, giving wider posterior uncertainty,
+    # which is appropriate when the full population is unobserved.
+    _agg_empty = not agg_window and not agg_cohort
+    if _agg_empty and _non_mece_by_ctx and n_ctx_non_mece_skipped > 0:
+        # Pick the context key with the most total x (largest population slice)
+        _best_ctx = max(
+            _non_mece_by_ctx.keys(),
+            key=lambda c: sum(r.get("x", 0) for r in _non_mece_by_ctx[c])
+        )
+        _fallback_rows = _non_mece_by_ctx[_best_ctx]
+        for _fb_row in _fallback_rows:
+            _fb_anchor = str(_fb_row.get("anchor_day", ""))
+            _fb_ret = str(_fb_row.get("retrieved_at", ""))
+            _fb_sk = str(_fb_row.get("slice_key", ""))
+            if _is_cohort(_fb_sk):
+                agg_cohort[_fb_anchor][_fb_ret] = dict(_fb_row)
+            elif _is_window(_fb_sk):
+                agg_window[_fb_anchor][_fb_ret] = dict(_fb_row)
+        diagnostics.append(
+            f"WARN edge {ev.edge_id[:8]}…: no bare or MECE aggregate — "
+            f"using largest non-MECE context '{_best_ctx}' as aggregate proxy "
+            f"({len(_fallback_rows)} rows, conservative lower bound on population)"
+        )
 
     # §5.7 Per-date regime partitioning: remove MECE-regime rows from
     # aggregate buckets. On dates where the regime is mece_partition,

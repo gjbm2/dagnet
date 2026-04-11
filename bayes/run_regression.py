@@ -225,8 +225,14 @@ def _run_one_graph(
 # ---------------------------------------------------------------------------
 
 def _parse_recovery_output(output: str) -> dict:
-    """Parse param_recovery.py output into structured results."""
-    result: dict = {"quality": {}, "edges": {}}
+    """Parse param_recovery.py output into structured results.
+
+    Returns dict with:
+        quality: {elapsed_s, rhat, ess, converged_pct}
+        edges: {edge_name: {param: {truth, posterior_mean, posterior_sd, z_score, abs_error, status}}}
+        slices: {ctx_label: {param: {truth, posterior_mean, posterior_sd, z_score, abs_error, status}}}
+    """
+    result: dict = {"quality": {}, "edges": {}, "slices": {}}
 
     # Quality line
     m = re.search(
@@ -244,24 +250,85 @@ def _parse_recovery_output(output: str) -> dict:
     # Per-edge results: parse the structured output from param_recovery.py
     # Pattern: "  mu    truth=  2.300  post=  2.114±0.004     Δ=0.186  [OK]  prior=2.300"
     current_edge = None
+    in_slice_section = False
+    current_slice_label = None
     for line in output.split("\n"):
-        line = line.strip()
+        stripped = line.strip()
 
-        # Edge header: "  simple-a-to-b"
-        if line and not line.startswith(("mu", "sigma", "onset", "kappa", "rhat", "─", "NO", "RECOVERY")):
-            # Could be an edge name
-            candidate = line.strip()
-            if candidate and not candidate.startswith(("[", "Running", "GROUND", "Edge", "=", "HARNESS")):
-                # Heuristic: edge names contain hyphens and no spaces
-                if "-" in candidate and " " not in candidate:
-                    current_edge = candidate
+        # Detect entry into per-slice recovery section
+        if "Per-slice recovery" in stripped:
+            in_slice_section = True
+            current_edge = None
+            current_slice_label = None
+            continue
 
-        if current_edge and ("truth=" in line and "post=" in line):
+        # Detect exit from per-slice section (the closing "===…" line)
+        if in_slice_section and stripped.startswith("==="):
+            in_slice_section = False
+            continue
+
+        if in_slice_section:
+            # Per-slice section: headers are like "google (simple-a-to-b)"
+            # i.e. "{val_id} ({edge_key})"
+            slice_header = re.match(r"^(\S+)\s+\(([^)]+)\)\s*$", stripped)
+            if slice_header:
+                val_id = slice_header.group(1)
+                edge_key = slice_header.group(2)
+                current_slice_label = f"{val_id} ({edge_key})"
+                continue
+
+            if current_slice_label and "truth=" in stripped and "post=" in stripped:
+                param_match = re.match(
+                    r"(mu|sigma|onset|p)\s+truth=\s*([\d.]+)\s+post=\s*([\d.]+)±([\d.]+)\s+"
+                    r"(?:Δ|z)=\s*([\d.]+)\s+\[(OK|MISS)\]",
+                    stripped,
+                )
+                if param_match:
+                    param = param_match.group(1)
+                    truth_val = float(param_match.group(2))
+                    post_mean = float(param_match.group(3))
+                    post_sd = float(param_match.group(4))
+                    delta_or_z = float(param_match.group(5))
+                    status = param_match.group(6)
+
+                    slice_data = result["slices"].setdefault(current_slice_label, {})
+                    slice_data[param] = {
+                        "truth": truth_val,
+                        "posterior_mean": post_mean,
+                        "posterior_sd": post_sd,
+                        "z_score": abs(post_mean - truth_val) / post_sd if post_sd > 0 else 0,
+                        "abs_error": abs(post_mean - truth_val),
+                        "status": status,
+                    }
+                # Kappa line (informational, no truth)
+                kappa_match = re.match(
+                    r"kappa\s+post=\s*([\d.]+)±([\d.]+)", stripped,
+                )
+                if kappa_match:
+                    slice_data = result["slices"].setdefault(current_slice_label, {})
+                    slice_data["kappa"] = {
+                        "posterior_mean": float(kappa_match.group(1)),
+                        "posterior_sd": float(kappa_match.group(2)),
+                    }
+            continue
+
+        # --- Edge-level recovery (original logic) ---
+        # Edge header: "  simple-a-to-b" or "  simple-a-to-b (uncontexted parent)"
+        if stripped and not stripped.startswith(("mu", "sigma", "onset", "kappa", "rhat", "─", "NO", "RECOVERY", "p ")):
+            # Could be an edge name — possibly with suffix like "(uncontexted parent)"
+            candidate = stripped
+            if candidate and not candidate.startswith(("[", "Running", "GROUND", "Edge", "=", "HARNESS", "Per-slice")):
+                # Extract the first token (edge name) — may have parenthetical suffix
+                first_token = candidate.split()[0] if candidate.split() else ""
+                if "-" in first_token and first_token[0].isalpha():
+                    current_edge = first_token
+
+        if current_edge and ("truth=" in stripped and "post=" in stripped):
             # Parse: "mu    truth=  2.300  post=  2.114±0.004     Δ=0.186  [OK]"
             param_match = re.match(
                 r"(mu|sigma|onset|p)\s+truth=\s*([\d.]+)\s+post=\s*([\d.]+)±([\d.]+)\s+"
                 r"(?:Δ|z)=\s*([\d.]+)\s+\[(OK|MISS)\]",
-                line,
+                stripped,
             )
             if param_match:
                 param = param_match.group(1)
@@ -285,45 +352,13 @@ def _parse_recovery_output(output: str) -> dict:
 
 
 def _audit_harness_log(graph_name: str, job_label: str | None = None) -> dict:
-    """Extract multi-layered audit from the harness log.
+    """Extract multi-layered audit from the harness log file.
 
-    Returns dict with per-layer status:
-        log_found: bool — harness log exists and has content
-        completed: bool — run reached completion (Status: complete)
-        features: dict — feature flags as seen by the model
-        data_binding:
-            snapshot_edges: int — edges with snapshot DB data
-            fallback_edges: int — edges using param file fallback
-            total_bound: int — edges in binding receipt
-            total_failed: int — edges that failed binding
-        priors:
-            edges_with_latency_prior: int — edges with mu_prior > 0
-            prior_details: list[str] — per-edge prior info
-        model:
-            kappa_lat_edges: int — edges with kappa_lat BetaBinomial
-            latency_dispersion_flag: bool
-            phase1_sampled: bool
-            phase2_sampled: bool
-        inference:
-            edges_with_mu: int — edges with mu posterior
-            mu_details: list[dict] — per-edge {uuid, mu, prior, ess, kappa_lat}
-        convergence:
-            rhat: float
-            ess: int
-            converged_pct: float
+    Locates the harness log file by job_label/graph_name, then delegates
+    to audit.audit_log() for the actual parsing. See bayes/audit.py for
+    the structured dict schema.
     """
-    audit: dict = {
-        "log_found": False,
-        "completed": False,
-        "features": {},
-        "data_binding": {"snapshot_edges": 0, "fallback_edges": 0,
-                         "total_bound": 0, "total_failed": 0},
-        "priors": {"edges_with_latency_prior": 0, "prior_details": []},
-        "model": {"kappa_lat_edges": 0, "latency_dispersion_flag": False,
-                  "phase1_sampled": False, "phase2_sampled": False},
-        "inference": {"edges_with_mu": 0, "mu_details": []},
-        "convergence": {"rhat": 0.0, "ess": 0, "converged_pct": 0.0},
-    }
+    from audit import audit_log
 
     # Find log file — try job_label first (run-id-bound), then graph_name
     log_content = ""
@@ -336,75 +371,9 @@ def _audit_harness_log(graph_name: str, job_label: str | None = None) -> dict:
         if os.path.isfile(log_path) and os.path.getsize(log_path) > 0:
             with open(log_path) as f:
                 log_content = f.read()
-            audit["log_found"] = True
             break
 
-    if not log_content:
-        return audit
-
-    for line in log_content.split("\n"):
-        # Completion
-        if "Status:      complete" in line:
-            audit["completed"] = True
-
-        # Features
-        if "latency_dispersion=True" in line:
-            audit["model"]["latency_dispersion_flag"] = True
-        if "latency_dispersion=False" in line and not audit["model"]["latency_dispersion_flag"]:
-            audit["model"]["latency_dispersion_flag"] = False
-
-        # Data binding
-        if "snapshot rows →" in line:
-            audit["data_binding"]["snapshot_edges"] += 1
-        elif "no snapshot data, using engorged" in line:
-            audit["data_binding"]["fallback_edges"] += 1
-        if "binding receipt:" in line:
-            m = re.search(r"(\d+) bound.*?(\d+) failed", line)
-            if m:
-                audit["data_binding"]["total_bound"] = int(m.group(1))
-                audit["data_binding"]["total_failed"] = int(m.group(2))
-
-        # Priors
-        if "mu_prior=" in line and "latency" in line:
-            audit["priors"]["edges_with_latency_prior"] += 1
-            audit["priors"]["prior_details"].append(line.strip())
-
-        # Model structure
-        if "kappa_lat ~ LogNormal, BetaBinomial" in line:
-            audit["model"]["kappa_lat_edges"] += 1
-        if "sampling_ms:" in line:
-            audit["model"]["phase1_sampled"] = True
-        if "sampling_phase2_ms:" in line:
-            audit["model"]["phase2_sampled"] = True
-
-        # Inference posteriors
-        m = re.search(
-            r"inference:\s+latency (\w{8})…:\s+mu=([\d.]+)±([\d.]+)\s+"
-            r"\(prior=([\d.]+)\).*?ess=(\d+)"
-            r"(?:.*?kappa_lat=([\d.]+))?",
-            line,
-        )
-        if m:
-            audit["inference"]["edges_with_mu"] += 1
-            entry = {
-                "uuid": m.group(1),
-                "mu": float(m.group(2)),
-                "mu_sd": float(m.group(3)),
-                "prior": float(m.group(4)),
-                "ess": int(m.group(5)),
-            }
-            if m.group(6):
-                entry["kappa_lat"] = float(m.group(6))
-            audit["inference"]["mu_details"].append(entry)
-
-        # Convergence
-        m = re.search(r"Quality:.*rhat=([\d.]+).*ess=([\d.]+).*converged=([\d.]+)%", line)
-        if m:
-            audit["convergence"]["rhat"] = float(m.group(1))
-            audit["convergence"]["ess"] = float(m.group(2))
-            audit["convergence"]["converged_pct"] = float(m.group(3))
-
-    return audit
+    return audit_log(log_content)
 
 
 def assert_recovery(graph_name: str, parsed: dict, truth: dict) -> dict:
@@ -465,6 +434,49 @@ def assert_recovery(graph_name: str, parsed: dict, truth: dict) -> dict:
             elif z > z_threshold * 0.8:
                 warnings.append(
                     f"{edge_name} {param}: |z|={z:.2f} approaching threshold {z_threshold}"
+                )
+
+    # Per-slice z-score checks (doc 35 Phase 5)
+    per_slice_thresholds = testing.get("per_slice_thresholds", {})
+    p_slice_z = per_slice_thresholds.get("p_slice_z", 3.0)
+    p_slice_abs_floor = per_slice_thresholds.get("p_slice_abs_floor", 0.10)
+    slice_z_defaults = {
+        "p": (p_slice_z, p_slice_abs_floor),
+        "mu": (per_slice_thresholds.get("mu_slice_z", 3.0),
+               per_slice_thresholds.get("mu_slice_abs_floor", 0.3)),
+        "sigma": (per_slice_thresholds.get("sigma_slice_z", 3.5),
+                  per_slice_thresholds.get("sigma_slice_abs_floor", 0.25)),
+        "onset": (per_slice_thresholds.get("onset_slice_z", 3.5),
+                  per_slice_thresholds.get("onset_slice_abs_floor", 0.3)),
+    }
+
+    for slice_label, slice_data in parsed.get("slices", {}).items():
+        for param, pdata in slice_data.items():
+            if param == "kappa":
+                continue  # informational only
+
+            z = pdata.get("z_score", 0)
+            abs_err = pdata.get("abs_error", 0)
+            z_threshold, abs_floor = slice_z_defaults.get(param, (3.0, 0.3))
+
+            z_pass = z <= z_threshold
+            abs_pass = abs_err <= abs_floor
+
+            if not z_pass and not abs_pass:
+                failures.append(
+                    f"SLICE {slice_label} {param}: |z|={z:.2f} > {z_threshold} "
+                    f"Δ={abs_err:.3f} > {abs_floor} "
+                    f"(truth={pdata['truth']:.3f} post={pdata['posterior_mean']:.3f}"
+                    f"±{pdata['posterior_sd']:.3f})"
+                )
+            elif not z_pass and abs_pass:
+                warnings.append(
+                    f"SLICE {slice_label} {param}: |z|={z:.2f} > {z_threshold} "
+                    f"but Δ={abs_err:.3f} < {abs_floor} (abs floor pass)"
+                )
+            elif z > z_threshold * 0.8:
+                warnings.append(
+                    f"SLICE {slice_label} {param}: |z|={z:.2f} approaching threshold {z_threshold}"
                 )
 
     is_xfail = bool(testing.get("xfail_reason"))
@@ -644,6 +656,8 @@ def run_regression(args) -> list[dict]:
             audit = _audit_harness_log(name, job_label=_job_label)
             assertion = assert_recovery(name, parsed, g["truth"])
             assertion["audit"] = audit
+            assertion["edges"] = parsed.get("edges", {})
+            assertion["slices"] = parsed.get("slices", {})
 
             # Layer: log found
             if not audit["log_found"]:
@@ -679,6 +693,20 @@ def run_regression(args) -> list[dict]:
                audit["inference"]["edges_with_mu"] > 0:
                 assertion["warnings"].append(
                     "PRIORS: no mu_prior lines found — priors may be uninformative")
+
+            # Layer: LOO-ELPD
+            loo = audit.get("loo", {})
+            if loo.get("status") == "failed":
+                assertion["warnings"].append(
+                    f"LOO-ELPD: computation failed — "
+                    f"{'; '.join(loo.get('diagnostics', []))}")
+            elif loo.get("status") == "scored":
+                pk = loo.get("worst_pareto_k", 0)
+                if pk > 0.7:
+                    assertion["warnings"].append(
+                        f"LOO-ELPD: worst pareto_k={pk:.2f} > 0.7 — "
+                        f"estimates unreliable for some data points")
+
             results.append(assertion)
 
             status = "PASS" if assertion["passed"] else "FAIL"
@@ -694,10 +722,10 @@ def run_regression(args) -> list[dict]:
     except FileNotFoundError:
         pass
 
-    # 5. Summary
+    # 5. Verbose per-graph audit report
     print()
     print("=" * 60)
-    print("  SUMMARY")
+    print("  REGRESSION REPORT")
     print("=" * 60)
 
     passed = [r for r in results if r["passed"] and not r["xfail"]]
@@ -712,28 +740,278 @@ def run_regression(args) -> list[dict]:
         elif r["xfail"] and r["passed"]:
             status = "XPASS"
 
-        q = r.get("quality", {})
-        quality_str = ""
-        if q:
-            quality_str = f" rhat={q.get('rhat', 0):.4f} ess={q.get('ess', 0)} converged={q.get('converged_pct', 0)}%"
-
         audit = r.get("audit", {})
-        db = audit.get("data_binding", {})
+        q = r.get("quality", {})
+
+        print()
+        print(f"  ── {r['graph_name']} ── {status} ──")
+
+        # Layer 0: DSL and subjects
+        dsl = audit.get("dsl", "")
+        if dsl:
+            print(f"    0. DSL:            {dsl}")
+            print(f"       Subjects:       {audit.get('subjects', '?')} snapshot, "
+                  f"{audit.get('regimes', '?')} candidate regimes")
+
+        # Layer 1: Completion
+        if audit.get("log_found"):
+            comp = "complete" if audit.get("completed") else "INCOMPLETE"
+            print(f"    1. Completion:     {comp}")
+        else:
+            print(f"    1. Completion:     NO LOG FOUND")
+
+        # Layer 2: Feature flags
         md = audit.get("model", {})
+        flags = []
+        if md.get("latency_dispersion_flag"):
+            flags.append("latency_dispersion=True")
+        if md.get("phase1_sampled"):
+            flags.append("phase1_sampled")
+        if md.get("phase2_sampled"):
+            flags.append("phase2_sampled")
+        print(f"    2. Feature flags:  {', '.join(flags) if flags else 'none detected'}")
+
+        # --- Build reporting units: aggregate + per-slice ---
+        # Discover context slices from audit data (binding + inference)
+        db = audit.get("data_binding", {})
         inf = audit.get("inference", {})
-        snap = db.get("snapshot_edges", "?")
-        fb = db.get("fallback_edges", "?")
-        kl = md.get("kappa_lat_edges", "?")
-        mu_n = inf.get("edges_with_mu", "?")
-        audit_str = f" data={snap}snap/{fb}fb kl={kl} mu={mu_n}" if audit else ""
+        slice_ctx_keys: list[str] = []
+        _seen_ctx = set()
+        for sd in db.get("slice_details", []):
+            ck = sd["ctx_key"]
+            if ck not in _seen_ctx:
+                _seen_ctx.add(ck)
+                slice_ctx_keys.append(ck)
+        for sp in inf.get("slice_details", []):
+            ck = sp["ctx_key"]
+            if ck not in _seen_ctx:
+                _seen_ctx.add(ck)
+                slice_ctx_keys.append(ck)
 
-        print(f"  {status:6s} {r['graph_name']:35s}{quality_str}{audit_str}")
+        reporting_units = ["__aggregate__"] + slice_ctx_keys
+
+        for unit in reporting_units:
+            is_aggregate = unit == "__aggregate__"
+            indent = "    "
+
+            if is_aggregate:
+                if slice_ctx_keys:
+                    print(f"\n    ── aggregate (edge-level) ──")
+                # else: no slices, don't print a sub-header
+            else:
+                print(f"\n    ── {unit} ──")
+
+            # Layer 3: Data binding
+            if is_aggregate:
+                snap = db.get("snapshot_edges", 0)
+                fb = db.get("fallback_edges", 0)
+                bound = db.get("total_bound", 0)
+                bind_status = "OK" if fb == 0 and db.get("total_failed", 0) == 0 else "FAIL"
+                print(f"{indent}3. Data binding:   {bind_status} — "
+                      f"{snap} snapshot, {fb} fallback, {bound} bound, "
+                      f"{db.get('total_failed', 0)} failed")
+                for bd in db.get("binding_details", []):
+                    v = bd["verdict"].upper()
+                    tag = "ok" if v == "PASS" else ("!!" if v == "FAIL" else "~~")
+                    print(f"{indent}   {tag} {bd['uuid']}… {v:4s} "
+                          f"source={bd['source']:8s} "
+                          f"rows: raw={bd['rows_raw']} regime={bd['rows_post_regime']} "
+                          f"final={bd['rows_final']}")
+            else:
+                # Per-slice binding: filter slice_details to this ctx_key
+                unit_slices = [sd for sd in db.get("slice_details", [])
+                               if sd["ctx_key"] == unit]
+                if unit_slices:
+                    n_edges = len(unit_slices)
+                    total_n = sum(sd["total_n"] for sd in unit_slices)
+                    status_tag = "OK" if total_n > 0 else "WARN (no data)"
+                    print(f"{indent}3. Data binding:   {status_tag} — {n_edges} edges with slice data")
+                    for sd in unit_slices:
+                        print(f"{indent}     {sd['uuid']}…: "
+                              f"total_n={sd['total_n']} "
+                              f"window={sd['window_n']} cohort={sd['cohort_n']}")
+                else:
+                    print(f"{indent}3. Data binding:   no slice binding data")
+
+            # Layer 4: Priors
+            if is_aggregate:
+                priors = audit.get("priors", {})
+                prior_details = priors.get("prior_details", [])
+                seen_uuids: set = set()
+                unique_priors = []
+                for pd in prior_details:
+                    if isinstance(pd, dict):
+                        if pd["uuid"] not in seen_uuids:
+                            seen_uuids.add(pd["uuid"])
+                            unique_priors.append(pd)
+                n_unique = len(unique_priors)
+                prior_status = "OK" if n_unique > 0 else "WARN (none found)"
+                print(f"{indent}4. Priors:         {prior_status} — {n_unique} edges with mu_prior")
+                for pd in unique_priors:
+                    print(f"{indent}     {pd['uuid']}… mu_prior={pd['mu_prior']:.3f}")
+            else:
+                # Per-slice: show hierarchical prior info from inference slice_details
+                unit_sp = [sp for sp in inf.get("slice_details", [])
+                           if sp["ctx_key"] == unit]
+                if unit_sp:
+                    print(f"{indent}4. Priors:         hierarchical — {len(unit_sp)} edges (per-slice)")
+                else:
+                    print(f"{indent}4. Priors:         (shared with aggregate)")
+
+            # Layer 5: kappa_lat
+            if is_aggregate:
+                kl = md.get("kappa_lat_edges", 0)
+                if md.get("latency_dispersion_flag"):
+                    kl_status = "OK" if kl > 0 else "FAIL (flag on, 0 variables)"
+                else:
+                    kl_status = f"N/A (flag off)" if kl == 0 else f"OK ({kl} edges)"
+                print(f"{indent}5. kappa_lat:      {kl_status} — {kl} edges")
+            else:
+                # Per-slice kappa_lat from inference slice_details
+                unit_sp = [sp for sp in inf.get("slice_details", [])
+                           if sp["ctx_key"] == unit]
+                kl_count = sum(1 for sp in unit_sp if "kappa_lat_mean" in sp)
+                if kl_count > 0:
+                    print(f"{indent}5. kappa_lat:      {kl_count} edges (per-slice)")
+                else:
+                    print(f"{indent}5. kappa_lat:      (shared with aggregate)")
+
+            # Layer 6: Convergence (always shared — single MCMC run)
+            rhat = q.get("rhat", 0)
+            ess = q.get("ess", 0)
+            conv = q.get("converged_pct", 0)
+            if is_aggregate:
+                print(f"{indent}6. Convergence:    rhat={rhat:.4f} ess={ess} converged={conv}%")
+            else:
+                print(f"{indent}6. Convergence:    (shared) rhat={rhat:.4f} ess={ess} converged={conv}%")
+
+            # Layer 7: Parameter recovery
+            if is_aggregate:
+                recovery_edges = r.get("edges", {})
+                if recovery_edges:
+                    print(f"{indent}7. Recovery:       {len(recovery_edges)} edges")
+                    kl_by_uuid = {}
+                    for md_entry in inf.get("mu_details", []):
+                        if "kappa_lat" in md_entry:
+                            kl_by_uuid[md_entry["uuid"]] = md_entry
+                    for edge_name, params in recovery_edges.items():
+                        print(f"{indent}     {edge_name}:")
+                        for param, pdata in params.items():
+                            truth_val = pdata.get("truth", 0)
+                            post_mean = pdata.get("posterior_mean", 0)
+                            post_sd = pdata.get("posterior_sd", 0)
+                            abs_err = pdata.get("abs_error", 0)
+                            z = pdata.get("z_score", 0)
+                            tag = "ok" if pdata.get("status") == "OK" else "!!"
+                            print(f"{indent}       {tag} {param:6s} "
+                                  f"truth={truth_val:7.3f}  "
+                                  f"post={post_mean:7.3f}±{post_sd:.3f}  "
+                                  f"Δ={abs_err:.3f}  z={z:.1f}")
+                        for uuid_prefix, kl_data in kl_by_uuid.items():
+                            if uuid_prefix in edge_name or edge_name in str(kl_data):
+                                kl_sd = f"±{kl_data['kappa_lat_sd']:.0f}" if "kappa_lat_sd" in kl_data else ""
+                                print(f"{indent}          kappa_lat={kl_data['kappa_lat']:.0f}{kl_sd}  "
+                                      f"ess={kl_data['ess']}")
+                                break
+                else:
+                    print(f"{indent}7. Recovery:       no parsed results")
+            else:
+                # Per-slice recovery from parsed slices
+                recovery_slices = r.get("slices", {})
+                # Match slice labels: format is "val_id (edge_key)" — filter by ctx_key
+                # The ctx_key is like "context(dim:val)" — extract val_id from it
+                # e.g. "context(synth-channel:google)" → "google"
+                import re as _re
+                ctx_val_match = _re.search(r":([^)]+)\)$", unit)
+                ctx_val = ctx_val_match.group(1) if ctx_val_match else ""
+                unit_recovery = {k: v for k, v in recovery_slices.items()
+                                 if k.startswith(f"{ctx_val} (")}
+                if unit_recovery:
+                    print(f"{indent}7. Recovery:       {len(unit_recovery)} slice entries")
+                    for label, params in unit_recovery.items():
+                        print(f"{indent}     {label}:")
+                        for param, pdata in params.items():
+                            if param == "kappa":
+                                print(f"{indent}       .. kappa   "
+                                      f"post={pdata.get('posterior_mean', 0):7.1f}"
+                                      f"±{pdata.get('posterior_sd', 0):.1f}")
+                                continue
+                            truth_val = pdata.get("truth", 0)
+                            post_mean = pdata.get("posterior_mean", 0)
+                            post_sd = pdata.get("posterior_sd", 0)
+                            abs_err = pdata.get("abs_error", 0)
+                            z = pdata.get("z_score", 0)
+                            tag = "ok" if pdata.get("status") == "OK" else "!!"
+                            print(f"{indent}       {tag} {param:6s} "
+                                  f"truth={truth_val:7.3f}  "
+                                  f"post={post_mean:7.3f}±{post_sd:.3f}  "
+                                  f"Δ={abs_err:.3f}  z={z:.1f}")
+                else:
+                    # Show inference posteriors if recovery isn't available
+                    unit_sp = [sp for sp in inf.get("slice_details", [])
+                               if sp["ctx_key"] == unit]
+                    if unit_sp:
+                        print(f"{indent}7. Recovery:       {len(unit_sp)} edges (inference only)")
+                        for sp in unit_sp:
+                            lat_str = ""
+                            if "mu_mean" in sp:
+                                lat_str = (f" mu={sp['mu_mean']:.3f}±{sp['mu_sd']:.3f}"
+                                           f" sigma={sp.get('sigma_mean', 0):.3f}")
+                            kl_str = ""
+                            if "kappa_lat_mean" in sp:
+                                kl_str = f" kappa_lat={sp['kappa_lat_mean']:.0f}±{sp['kappa_lat_sd']:.0f}"
+                            print(f"{indent}     {sp['uuid']}…: "
+                                  f"p={sp['p_mean']:.3f}±{sp['p_sd']:.3f} "
+                                  f"HDI=[{sp['p_hdi_lower']:.3f}, {sp['p_hdi_upper']:.3f}]"
+                                  f"{lat_str}{kl_str}")
+                    else:
+                        print(f"{indent}7. Recovery:       no per-slice data")
+
+            # Layer 8: LOO-ELPD
+            if is_aggregate:
+                loo = audit.get("loo", {})
+                loo_status = loo.get("status", "not_run")
+                if loo_status == "scored":
+                    pk = loo["worst_pareto_k"]
+                    pk_warn = " UNRELIABLE" if pk > 0.7 else ""
+                    print(f"{indent}8. LOO-ELPD:       {loo['edges_scored']} edges scored, "
+                          f"ΔELPD={loo['total_delta_elpd']:.1f}, "
+                          f"worst_pareto_k={pk:.2f}{pk_warn}")
+                elif loo_status == "failed":
+                    print(f"{indent}8. LOO-ELPD:       FAILED")
+                    for d in loo.get("diagnostics", []):
+                        print(f"{indent}     {d}")
+                else:
+                    print(f"{indent}8. LOO-ELPD:       not run")
+            else:
+                # Per-slice LOO (doc 35 Phase 3)
+                loo = audit.get("loo", {})
+                slice_loo_details = loo.get("slice_details", [])
+                # Match: unit="context(dim:val)" → ctx_safe contains the safe version
+                # The ctx_safe in LOO uses _safe_var_name which replaces non-alphanum with _
+                unit_safe = re.sub(r'[^a-zA-Z0-9]', '_', unit).strip('_')
+                matched_loo = [sd for sd in slice_loo_details
+                               if sd["ctx_safe"] == unit_safe
+                               or unit_safe.startswith(sd["ctx_safe"].rstrip('_'))]
+                if matched_loo:
+                    sd = matched_loo[0]
+                    pk = sd["worst_pareto_k"]
+                    pk_warn = " UNRELIABLE" if pk > 0.7 else ""
+                    print(f"{indent}8. LOO-ELPD:       {sd['edges']} edges (per-slice), "
+                          f"ΔELPD={sd['delta_elpd']:.1f}, "
+                          f"worst_pareto_k={pk:.2f}{pk_warn}")
+                else:
+                    print(f"{indent}8. LOO-ELPD:       (no per-slice LOO data)")
+
+        # Parameter recovery failures/warnings
         for f in r.get("failures", []):
-            print(f"         {f}")
+            print(f"    ** FAIL: {f}")
         for w in r.get("warnings", []):
-            print(f"         [warn] {w}")
+            print(f"    ** WARN: {w}")
 
+    # Totals
     print()
+    print("-" * 60)
     total = len(results)
     print(f"  {len(passed)} passed, {len(failed)} failed, "
           f"{len(xfailed)} expected failures, {len(xpassed)} unexpected passes "

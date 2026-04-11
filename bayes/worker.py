@@ -454,6 +454,12 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
         settings = payload.get("settings", {})
 
         topology = analyse_topology(graph_snapshot)
+        _dsl = graph_snapshot.get("dataInterestsDSL", "")
+        if _dsl:
+            _log(log, f"DSL: {_dsl}")
+        _n_subjects = len(payload.get("snapshot_subjects", []))
+        _n_regimes = sum(len(v) for v in (payload.get("candidate_regimes_by_edge") or {}).values())
+        _log(log, f"subjects: {_n_subjects} snapshot subjects, {_n_regimes} candidate regimes")
         _log(log,
             f"topology: {len(topology.edges)} edges, "
             f"{len(topology.branch_groups)} branch groups, "
@@ -624,6 +630,15 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
                 # Truncate long divergence messages (e.g. 32-slice lists)
                 _log(log, f"    {div[:120]}{'…' if len(div) > 120 else ''}")
 
+        # Per-slice row counts — logged for ALL edges with slices (doc 35)
+        for eid, er in binding_receipt.edge_receipts.items():
+            for ctx_key, counts in er.slice_row_counts.items():
+                _log(log,
+                    f"  slice {eid[:8]}… {ctx_key}: "
+                    f"total_n={counts['total_n']} "
+                    f"window={counts['window_n']} cohort={counts['cohort_n']}"
+                )
+
         if binding_receipt.mode == "preflight":
             # Preflight mode: always return after receipt, never run MCMC.
             # Used by CLI --preflight for data binding assurance.
@@ -765,17 +780,44 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
         # ── 6. LOO-ELPD scoring + Summarise Phase 1 posteriors ──
         progress.set_band(*P1_SUMMARISE)
         report("summarising", 100, f"{phase1_label}: Computing diagnostics…")
-        from compiler.loo import compute_loo_scores, extract_analytic_baselines
-        analytic_baselines = extract_analytic_baselines(graph_snapshot, topology)
+        from compiler.loo import compute_loo_scores, extract_analytic_baselines, AnalyticBaseline
+        analytic_baselines = extract_analytic_baselines(graph_snapshot, topology, evidence=evidence)
+
+        # Build per-slice truth baselines from settings (doc 35).
+        # Written by param_recovery.py from the truth file's context_dimensions.
+        _slice_baselines = None
+        _stb_raw = settings.get("slice_truth_baselines")
+        if _stb_raw and isinstance(_stb_raw, dict):
+            _slice_baselines = {}
+            # Map truth edge_key → actual edge_id via param_id matching
+            _pid_to_eid = {}
+            for eid, et in topology.edges.items():
+                if et.param_id:
+                    _pid_to_eid[et.param_id] = eid
+            for edge_key, ctx_map in _stb_raw.items():
+                eid = _pid_to_eid.get(edge_key, edge_key)
+                _slice_baselines[eid] = {}
+                for ctx_key, vals in ctx_map.items():
+                    _slice_baselines[eid][ctx_key] = AnalyticBaseline(
+                        p=vals["p"],
+                        p_sd=0.01,  # tight — truth is exact
+                        onset=vals.get("onset", 0.0),
+                        mu=vals.get("mu", 0.0),
+                        sigma=vals.get("sigma", 0.5),
+                        has_latency=vals.get("mu", 0.0) > 0,
+                    )
+
         loo_diag = []
         try:
-            loo_scores = compute_loo_scores(
+            loo_scores, _slice_loo = compute_loo_scores(
                 trace, evidence, topology,
                 analytic_baselines=analytic_baselines,
+                slice_baselines=_slice_baselines,
                 diagnostics=loo_diag,
             )
         except Exception as e:
             loo_scores = None
+            _slice_loo = {}
             loo_diag.append(f"LOO: failed: {e}")
         for d in loo_diag:
             _log(log, f"  {d}")
@@ -1015,9 +1057,10 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
             report("summarising", 100, f"{phase2_label}: Computing diagnostics…")
             loo_diag2 = []
             try:
-                loo_scores2 = compute_loo_scores(
+                loo_scores2, _slice_loo2 = compute_loo_scores(
                     trace2, evidence, topology,
                     analytic_baselines=analytic_baselines,
+                    slice_baselines=_slice_baselines,
                     diagnostics=loo_diag2,
                 )
             except Exception as e:
@@ -1345,9 +1388,23 @@ def _build_binding_receipt(
         # observations are moved from cohort_obs/window_obs into
         # SliceGroups. The context_key on each SliceObservations is
         # already normalised (no temporal qualifier).
+        slice_row_counts: dict[str, dict[str, int]] = {}
         for dim_key, sg in edge_ev.slice_groups.items():
-            for ctx_key in sg.slices:
+            for ctx_key, sobs in sg.slices.items():
                 observed_slices_raw.add(ctx_key)
+                # Tally per-slice row counts from SliceObservations
+                s_window_n = sum(w.n for w in sobs.window_obs) if sobs.window_obs else 0
+                s_cohort_n = 0
+                if sobs.cohort_obs:
+                    for co in sobs.cohort_obs:
+                        s_cohort_n += sum(d.n for d in co.daily) if co.daily else 0
+                        s_cohort_n += sum(t.n for t in co.trajectories) if co.trajectories else 0
+                slice_row_counts[ctx_key] = {
+                    "total_n": sobs.total_n,
+                    "window_n": s_window_n,
+                    "cohort_n": s_cohort_n,
+                }
+        er.slice_row_counts = slice_row_counts
 
         er.window_trajectories = w_traj
         er.window_daily = w_daily
@@ -1764,6 +1821,10 @@ def _build_unified_slices(
             cohort["onset_mean"] = round(lat.path_onset_delta_days, 2)
         if lat.path_onset_sd is not None:
             cohort["onset_sd"] = round(lat.path_onset_sd, 2)
+        # Latency dispersion (doc 34) — cohort slice gets kappa_lat too
+        if lat.kappa_lat_mean is not None:
+            cohort["kappa_lat_mean"] = round(lat.kappa_lat_mean, 1)
+            cohort["kappa_lat_sd"] = round(lat.kappa_lat_sd, 1) if lat.kappa_lat_sd is not None else None
         # LOO-ELPD (doc 32) — cohort slice gets same edge-level scores
         if prob.delta_elpd is not None:
             cohort["delta_elpd"] = round(prob.delta_elpd, 3)
@@ -1854,6 +1915,15 @@ def _build_result(
     }
     if binding_receipt is not None:
         result["binding_receipt"] = binding_receipt.to_dict()
+
+    # Structured audit — always computed from the log list.
+    # Available to the FE via the result payload for trace-level diagnostics.
+    try:
+        from audit import audit_log
+        result["audit"] = audit_log("\n".join(log))
+    except Exception:
+        pass  # non-fatal — audit is diagnostic, not load-bearing
+
     return result
 
 

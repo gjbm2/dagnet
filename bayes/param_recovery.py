@@ -95,6 +95,35 @@ def main():
         print(f"  {pid:<35s} {t['p']:6.3f} {t['onset']:6.1f} {t['mu']:7.3f} {t['sigma']:7.3f}")
     print()
 
+    # --- Build per-slice truth baselines for LOO null model (doc 35) ---
+    # When context_dimensions exist, compute per-slice truth values
+    # and pass them to the worker via --settings-json so LOO uses the
+    # correct per-slice null (p × p_mult, mu + mu_offset, etc.).
+    settings_json_path = None
+    context_dims = truth.get("context_dimensions", [])
+    if context_dims:
+        slice_truth_baselines: dict[str, dict[str, dict]] = {}  # edge_key → ctx_key → {p, mu, sigma, onset}
+        for dim in context_dims:
+            dim_id = dim["id"]
+            for val in dim.get("values", []):
+                val_id = val["id"]
+                ctx_key = f"context({dim_id}:{val_id})"
+                for edge_key, overrides in val.get("edges", {}).items():
+                    base = truth_edges.get(edge_key, {})
+                    if "p" not in base:
+                        continue
+                    slice_truth_baselines.setdefault(edge_key, {})[ctx_key] = {
+                        "p": base["p"] * overrides.get("p_mult", 1.0),
+                        "mu": base.get("mu", 0.0) + overrides.get("mu_offset", 0.0),
+                        "sigma": base.get("sigma", 0.5) * overrides.get("sigma_mult", 1.0),
+                        "onset": base.get("onset", 0.0) + overrides.get("onset_offset", 0.0),
+                    }
+        if slice_truth_baselines:
+            import tempfile
+            settings_json_path = tempfile.mktemp(suffix=".json", prefix="bayes_settings_")
+            with open(settings_json_path, "w") as sf:
+                json.dump({"slice_truth_baselines": slice_truth_baselines}, sf)
+
     # --- Run harness ---
     cmd = [
         sys.executable, os.path.join(REPO_ROOT, "bayes", "test_harness.py"),
@@ -103,6 +132,8 @@ def main():
         "--no-webhook",
         "--timeout", str(args.timeout),
     ]
+    if settings_json_path:
+        cmd.extend(["--settings-json", settings_json_path])
     if args.no_mcmc:
         cmd.append("--no-mcmc")
     if args.draws:
@@ -130,7 +161,12 @@ def main():
            "PYTHONDONTWRITEBYTECODE": "1"}
 
     t0 = time.time()
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=args.timeout + 60, env=env)
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=args.timeout + 60, env=env)
+    finally:
+        # Clean up temp settings file
+        if settings_json_path and os.path.isfile(settings_json_path):
+            os.remove(settings_json_path)
     elapsed = time.time() - t0
 
     output = result.stdout + result.stderr

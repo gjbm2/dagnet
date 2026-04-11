@@ -1,0 +1,248 @@
+# Bayes Regression Tooling
+
+**Last updated**: 11-Apr-26
+
+How the parameter recovery regression pipeline works: discovery,
+bootstrap, parallel execution, multi-layered audit, and known
+pitfalls.
+
+---
+
+## Tool chain
+
+```
+run_regression.py
+  → discover_and_preflight()     # find synth graphs, check DB rows
+  → bootstrap_graph()            # synth_gen.py --write-files (if needed)
+  → _run_one_graph()             # parallel pool, one per graph
+    → param_recovery.py --graph X --job-label X-{run_id}
+      → test_harness.py --graph X --fe-payload --job-label X-{run_id}
+        → fit_graph()            # in-process MCMC
+        → writes /tmp/bayes_harness-{job_label}.log
+      → reads harness log for inference diagnostics
+      → prints recovery comparison to stdout
+    → captured by run_regression.py
+  → _audit_harness_log()         # multi-layered audit from log
+  → assert_recovery()            # z-score + threshold checks
+  → verbose report (layers 0-8 per graph)
+```
+
+---
+
+## Multi-layered audit
+
+The regression report checks **nine layers** per graph in verbose mode.
+Every layer is printed for every graph — pass or fail. This prevents
+the false-pass problem where a terse summary hides a broken layer.
+
+### Verbose report format
+
+```
+── synth-simple-abc ── PASS ──
+  0. DSL:            window(12-Dec-25:21-Mar-26);cohort(12-Dec-25:21-Mar-26)
+     Subjects:       4 snapshot, 4 candidate regimes
+  1. Completion:     complete
+  2. Feature flags:  latency_dispersion=True, phase1_sampled
+  3. Data binding:   OK — 2 snapshot, 0 fallback, 2 bound, 0 failed
+  4. Priors:         OK — 2 edges with mu_prior
+       80844ce8… mu_prior=2.300
+       69320810… mu_prior=2.500
+  5. kappa_lat:      OK — 2 edges
+  6. Convergence:    rhat=1.003 ess=4800 converged=100%
+  7. Recovery:       2 edges
+       simple-a-to-b:
+         ok p      truth=0.700  post=0.703±0.126  Δ=0.003  z=0.0
+         ok mu     truth=2.300  post=2.304±0.045  Δ=0.004  z=0.1
+         ok sigma  truth=0.500  post=0.517±0.004  Δ=0.017  z=4.3
+         ok onset  truth=1.000  post=1.000±0.010  Δ=0.000  z=0.0
+       simple-b-to-c:
+         ok p      truth=0.600  post=0.600±0.132  Δ=0.000  z=0.0
+         ...
+  8. LOO-ELPD:       2 edges scored, ΔELPD=1106.5, worst_pareto_k=0.23
+  ** WARN: simple-a-to-b sigma: |z|=4.25 > 3.0 but Δ=0.017 < 0.2 (abs floor pass)
+```
+
+### Layer reference
+
+| # | Layer | What it checks | Pass/fail effect |
+|---|-------|---------------|------------------|
+| 0 | **DSL** | Pinned DSL, subject count, candidate regime count | Informational |
+| 1 | **Completion** | `Status: complete` in harness log | Warning if incomplete |
+| 2 | **Feature flags** | `latency_dispersion`, `phase1_sampled`, `phase2_sampled` | Informational |
+| 3 | **Data binding** | `fallback_edges > 0` or `total_failed > 0` | **FAIL** |
+| 4 | **Priors** | mu_prior per edge (deduplicated across phases) | Warning if zero |
+| 5 | **kappa_lat** | `latency_dispersion=True` but 0 kappa_lat variables | **FAIL** |
+| 6 | **Convergence** | rhat, ESS, converged % | **FAIL** (via assert_recovery thresholds) |
+| 7 | **Recovery** | Full truth-vs-posterior table per edge: p, mu, sigma, onset with z-scores and absolute errors | **FAIL** if z > threshold AND Δ > abs_floor |
+| 8 | **LOO-ELPD** | Edges scored, ΔELPD (Bayesian vs null), worst Pareto k | Warning if failed or Pareto k > 0.7 |
+
+### Per-edge binding detail
+
+Layer 3 includes per-edge binding rows showing the data pipeline:
+
+```
+ok a2bdb15c… PASS  source=snapshot  rows: raw=4752 regime=4752 final=4872
+~~ 273f7315… WARN  source=snapshot  rows: raw=4752 regime=4752 final=4200
+!! c41a7e20… FAIL  source=mixed     rows: raw=4752 regime=0    final=9998
+```
+
+- `ok` = pass, `~~` = warning, `!!` = failure
+- `raw` = rows from snapshot DB query
+- `regime` = rows after regime selection (doc 30)
+- `final` = rows after evidence binding (may include engorged fallback)
+
+### LOO-ELPD null model
+
+The LOO null model comes from:
+1. **Production graphs**: `analytic` or `analytic_be` model_vars on graph edges
+2. **Synth graphs (fallback)**: evidence priors from param files (Beta prior mean for p, topology mu/sigma/onset)
+
+When no baseline is available for an edge, ΔELPD is set to 0 (no
+comparison) and a diagnostic is logged. This prevents the spurious
+large-negative ΔELPD that occurs when comparing against a null of 0.
+
+**Known gap**: synth graphs don't go through the FE analytic stats pass,
+so their null model uses param file priors rather than analytic
+point estimates. The evidence-prior fallback is reasonable but not
+identical to the production LOO comparison. See doc 35 for the
+per-slice reporting plan that addresses this for contexted graphs.
+
+### Trajectory pointwise log-likelihood
+
+`pm.Potential` (used for trajectory likelihoods) doesn't produce
+`log_likelihood` entries in the ArviZ trace. To enable LOO scoring:
+
+1. `model.py` stores per-interval logp terms as `pm.Deterministic(f"ll_traj_{obs_type}_{safe_id}", ...)`
+2. `inference.py` moves these from `trace.posterior` to `trace.log_likelihood` post-sampling
+3. `loo.py` matches `traj_window_` and `traj_cohort_` prefixes in `_EDGE_RE`
+
+### Audit implementation
+
+`_audit_harness_log()` in `run_regression.py` parses the harness log
+file and extracts structured data for each layer. Tested by
+`bayes/tests/test_regression_audit.py` (20 blind tests against
+synthetic harness logs).
+
+---
+
+## Key flags
+
+| Flag | Tool | Purpose |
+|------|------|---------|
+| `--feature KEY=VALUE` | All three | Model feature flag (e.g. `latency_dispersion=true`). Forwarded through the full chain. |
+| `--clean` | All three | Clear stale caches: `__pycache__` dirs + `.synth-meta.json`. Prevents stale bytecode from masking source edits and stale meta from skipping re-bootstrap after hash computation changes. |
+| `--exclude SUBSTR` | `run_regression.py` | Skip graphs whose name contains the substring. |
+| `--job-label LABEL` | `param_recovery.py`, `test_harness.py` | Unique label for log + lock files. `run_regression.py` auto-generates `{graph}-r{timestamp}` to prevent parallel runs from colliding. |
+
+---
+
+## Candidate regime fix (11-Apr-26)
+
+`candidateRegimeService.ts` grouped exploded DSL slices by context
+key-set only. When both `window(...)` and `cohort(...)` appear in the
+DSL, they share the same (empty) context keys but produce different
+`core_hash` values (because `cohort_mode` is part of the signature).
+Only the first temporal mode's hash was emitted as a candidate regime.
+
+Regime selection then dropped all DB rows that had the other mode's
+hash, causing 100% fallback to param files. **All synth graphs** were
+affected (all have dual-mode DSLs).
+
+Fix: included temporal mode in the grouping key so both modes generate
+separate candidate regimes.
+
+---
+
+## Per-slice reporting gap (doc 35)
+
+The current report iterates layers 3-8 once per graph. For contexted
+graphs with per-slice model variables, this hides per-slice binding
+failures, recovery misses, and LOO gaps. Doc 35 specifies the
+per-slice verbose reporting plan.
+
+---
+
+## Synth data gate
+
+`test_harness.py` checks whether snapshot data exists in the DB
+before running MCMC on synth graphs. If data is missing or stale,
+it automatically bootstraps via `synth_gen.py --write-files`.
+
+The gate runs after graph loading and before hash computation. It
+uses `verify_synth_data()` from `synth_gen.py`, which checks both
+the `.synth-meta.json` sidecar and actual DB row counts.
+
+---
+
+## Parallel safety
+
+`run_regression.py` runs graphs in parallel via `ProcessPoolExecutor`.
+Each graph gets a unique `job_label = {name}-r{timestamp}` to
+prevent cross-contamination between:
+
+- **Harness log files**: `/tmp/bayes_harness-{job_label}.log`
+- **Lock files**: `/tmp/bayes-harness-{job_label}.lock`
+- **Recovery logs**: `/tmp/bayes_recovery-{name}-{run_id}.log`
+
+**Known remaining risk**: if two regression runs bootstrap the same
+graph simultaneously, the DB writes (DELETE + INSERT) could
+interleave. This is rare (bootstrap only runs when data is missing)
+and would require a per-graph bootstrap lock to fix fully.
+
+---
+
+## Known pitfalls
+
+### Stale Python bytecode
+
+Python caches compiled `.pyc` files in `__pycache__/` dirs. When
+source files change (e.g. `model.py`, `inference.py`), subprocesses
+may load stale bytecode. Symptoms: feature flags appear in the model
+diagnostics but the model behaviour doesn't match the source code.
+
+Fix: `--clean` flag, or `sys.dont_write_bytecode = True` (set in
+`test_harness.py`), or `PYTHONDONTWRITEBYTECODE=1` in env (set by
+`param_recovery.py` and `run_regression.py`).
+
+### Harness log name mismatch
+
+The `--fe-payload` path in `test_harness.py` derives `graph_name`
+from `payload.get("graph_id")`, which has a `graph-` prefix (e.g.
+`graph-synth-simple-abc`). The harness log is written to
+`/tmp/bayes_harness-graph-synth-simple-abc.log`. But
+`param_recovery.py` originally looked for
+`/tmp/bayes_harness-synth-simple-abc.log` (without prefix).
+
+Fix: `param_recovery.py` now checks both `{job_label}`,
+`graph-{job_label}`, `graph-{graph_name}`, and `{graph_name}`
+variants.
+
+### Inference diagnostics not in stdout
+
+The harness `_print()` writes to both stdout and the log file. But
+`param_recovery.py` captures stdout via `capture_output=True`. The
+inference diagnostic lines (mu posteriors, kappa_lat) are in the
+harness log file but may not appear in stdout if they're printed
+during the worker thread's execution.
+
+Fix: `param_recovery.py` supplements its captured stdout with the
+harness log file content before parsing.
+
+### `--clean` race in parallel
+
+Multiple parallel `--clean` runs try to delete the same `__pycache__`
+dirs simultaneously. `shutil.rmtree` can fail if another process
+already deleted a file.
+
+Fix: `try/except OSError: pass` around the rmtree call.
+
+### `.synth-meta.json` staleness
+
+After a hash computation code change, the `.synth-meta.json` may
+claim data is fresh (truth SHA matches, row count > 0) but the DB
+rows have wrong hashes. `verify_synth_data()` queries the DB with
+the hashes from the meta, which are now wrong.
+
+Fix: `--clean` deletes the `.synth-meta.json`, forcing
+`verify_synth_data()` to recompute hashes from the graph JSON and
+query the DB with the new (correct) hashes.
