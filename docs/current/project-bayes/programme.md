@@ -742,7 +742,15 @@ cross-phase feature activation. Summary:
   queries DB for maturation trajectories, replaces inline param-file
   evidence (doc 11). Must precede Phase C because slice pooling needs
   rich per-slice evidence.
-- Phase C: slice pooling + hierarchical Dirichlet
+- Phase C: slice pooling + hierarchical Dirichlet.
+  Phase 1 per-slice: DONE (12-Apr-26). Phase 2 per-slice: DONE (12-Apr-26) —
+  frozen Phase 1 per-slice posteriors as Beta priors, per-slice cohort
+  trajectory Potentials, per-slice cohort p extraction to summary.
+  Remaining: Phase 1 convergence gate before Phase 2 — if Phase 1
+  ESS < threshold or rhat > threshold, skip Phase 2 per-slice and fall
+  back to aggregate-only (prevents bad Phase 1 posteriors poisoning
+  Phase 2 priors). Observed: Phase 1 ESS=48 with 500 draws / 2 chains
+  caused Phase 2 to stall; Phase 1 ESS=1425 with 1000 tune worked.
 - Phase D: probability–latency coupling through completeness
 - Phase E (optional): per-chain fan-out across workers
 

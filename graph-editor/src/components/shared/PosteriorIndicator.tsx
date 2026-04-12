@@ -204,15 +204,15 @@ function ProbabilityPosteriorDetails({ posterior, tier, colour, retrievedAt, the
             </td>
           </tr>
         )}
-        {posterior.ppc_coverage_90 != null && (
+        {'ppc_coverage_90' in posterior && (posterior as any).ppc_coverage_90 != null && (
           <tr>
             <td className="posterior-details-label">PPC cov@90%</td>
-            <td className="posterior-details-value" style={posterior.ppc_coverage_90 < 0.82 || posterior.ppc_coverage_90 > 0.97 ? { color: qualityTierToColour('warning', theme) } : undefined}>
-              {(posterior.ppc_coverage_90 * 100).toFixed(0)}% <span style={{ opacity: 0.5 }}>({posterior.ppc_n_obs} obs)</span>
+            <td className="posterior-details-value" style={(posterior as any).ppc_coverage_90 < 0.82 || (posterior as any).ppc_coverage_90 > 0.97 ? { color: qualityTierToColour('warning', theme) } : undefined}>
+              {((posterior as any).ppc_coverage_90 * 100).toFixed(0)}% <span style={{ opacity: 0.5 }}>({(posterior as any).ppc_n_obs} obs)</span>
             </td>
           </tr>
         )}
-        {'ppc_traj_coverage_90' in posterior && posterior.ppc_traj_coverage_90 != null && (
+        {posterior.ppc_traj_coverage_90 != null && (
           <tr>
             <td className="posterior-details-label">PPC traj@90%</td>
             <td className="posterior-details-value" style={posterior.ppc_traj_coverage_90 < 0.82 || posterior.ppc_traj_coverage_90 > 0.97 ? { color: qualityTierToColour('warning', theme) } : undefined}>
@@ -434,15 +434,15 @@ function LatencyPosteriorDetails({ posterior, tier, colour, retrievedAt, theme, 
             </td>
           </tr>
         )}
-        {posterior.ppc_coverage_90 != null && (
+        {'ppc_coverage_90' in posterior && (posterior as any).ppc_coverage_90 != null && (
           <tr>
             <td className="posterior-details-label">PPC cov@90%</td>
-            <td className="posterior-details-value" style={posterior.ppc_coverage_90 < 0.82 || posterior.ppc_coverage_90 > 0.97 ? { color: qualityTierToColour('warning', theme) } : undefined}>
-              {(posterior.ppc_coverage_90 * 100).toFixed(0)}% <span style={{ opacity: 0.5 }}>({posterior.ppc_n_obs} obs)</span>
+            <td className="posterior-details-value" style={(posterior as any).ppc_coverage_90 < 0.82 || (posterior as any).ppc_coverage_90 > 0.97 ? { color: qualityTierToColour('warning', theme) } : undefined}>
+              {((posterior as any).ppc_coverage_90 * 100).toFixed(0)}% <span style={{ opacity: 0.5 }}>({(posterior as any).ppc_n_obs} obs)</span>
             </td>
           </tr>
         )}
-        {'ppc_traj_coverage_90' in posterior && posterior.ppc_traj_coverage_90 != null && (
+        {posterior.ppc_traj_coverage_90 != null && (
           <tr>
             <td className="posterior-details-label">PPC traj@90%</td>
             <td className="posterior-details-value" style={posterior.ppc_traj_coverage_90 < 0.82 || posterior.ppc_traj_coverage_90 > 0.97 ? { color: qualityTierToColour('warning', theme) } : undefined}>

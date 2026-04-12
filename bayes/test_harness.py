@@ -1131,6 +1131,97 @@ def main():
             else:
                 _print(f"  {pid}: no analytic values")
 
+    # --- Ground truth recovery comparison (synth graphs only) ---
+    if truth and truth.get("edges"):
+        _print(f"\n{'─' * 60}")
+        _print("  GROUND TRUTH RECOVERY")
+        _print(f"{'─' * 60}")
+        truth_edges = truth["edges"]
+        ctx_dims = truth.get("context_dimensions", [])
+
+        def _z(truth_val, post_mean, post_sd):
+            if post_sd and post_sd > 1e-6:
+                return abs(truth_val - post_mean) / post_sd
+            return float("inf") if abs(truth_val - post_mean) > 0.01 else 0.0
+
+        def _fmt(name, truth_val, post_mean, post_sd=None):
+            z = _z(truth_val, post_mean, post_sd) if post_sd else None
+            z_str = f" z={z:.1f}" if z is not None else ""
+            err = post_mean - truth_val
+            flag = " MISS" if z is not None and z > 3.0 else ""
+            return f"    {name:>12}: truth={truth_val:.4f} post={post_mean:.4f} Δ={err:+.4f}{z_str}{flag}"
+
+        for edge in webhook_edges:
+            pid = edge.get("param_id", "?")
+            # Match truth edge by param_id suffix (e.g. "synth-simple-abc-context-simple-a-to-b" → "simple-a-to-b")
+            truth_edge = None
+            truth_edge_key = ""
+            for tk, tv in truth_edges.items():
+                if pid.endswith(tk):
+                    truth_edge = tv
+                    truth_edge_key = tk
+                    break
+            if not truth_edge:
+                continue
+
+            truth_p = truth_edge.get("p", 0)
+            truth_mu = truth_edge.get("mu", 0)
+            truth_sigma = truth_edge.get("sigma", 0)
+            truth_onset = truth_edge.get("onset", 0)
+            truth_kappa = truth.get("simulation", {}).get("user_kappa", 50)
+
+            slices = edge.get("slices", {})
+            ws = slices.get("window()", {})
+
+            _print(f"\n  {pid} (truth: p={truth_p}, mu={truth_mu}, σ={truth_sigma}, onset={truth_onset})")
+
+            # Aggregate
+            if ws:
+                _wa, _wb = ws.get("alpha", 0), ws.get("beta", 0)
+                bayes_p = _wa / (_wa + _wb) if (_wa + _wb) > 0 else 0
+                _print(_fmt("p", truth_p, bayes_p))
+                if "mu_mean" in ws:
+                    _print(_fmt("mu", truth_mu, ws["mu_mean"], ws.get("mu_sd")))
+                if "sigma_mean" in ws:
+                    _print(_fmt("sigma", truth_sigma, ws["sigma_mean"], ws.get("sigma_sd")))
+                if "onset_mean" in ws:
+                    _print(_fmt("onset", truth_onset, ws["onset_mean"], ws.get("onset_sd")))
+                if "kappa_mean" in ws:
+                    _print(_fmt("kappa", truth_kappa, ws["kappa_mean"], ws.get("kappa_sd")))
+
+            # Per-slice
+            for dim in ctx_dims:
+                dim_id = dim["id"]
+                for cv in dim.get("values", []):
+                    cv_id = cv["id"]
+                    ctx_key_w = f"context({dim_id}:{cv_id}).window()"
+                    ctx_key_c = f"context({dim_id}:{cv_id}).cohort()"
+                    edge_overrides = cv.get("edges", {}).get(truth_edge_key, {})
+                    slice_truth_p = truth_p * edge_overrides.get("p_mult", 1.0)
+                    slice_truth_mu = truth_mu + edge_overrides.get("mu_offset", 0.0)
+                    slice_truth_onset = truth_onset + edge_overrides.get("onset_offset", 0.0)
+
+                    sw = slices.get(ctx_key_w, {})
+                    if sw:
+                        _sa, _sb = sw.get("alpha", 0), sw.get("beta", 0)
+                        sp = _sa / (_sa + _sb) if (_sa + _sb) > 0 else 0
+                        _print(f"    {ctx_key_w}:")
+                        _print(_fmt("p", slice_truth_p, sp))
+                        if "mu_mean" in sw:
+                            _print(_fmt("mu", slice_truth_mu, sw["mu_mean"], sw.get("mu_sd")))
+                        if "sigma_mean" in sw and sw["sigma_mean"] > 0:
+                            _print(_fmt("sigma", truth_sigma, sw["sigma_mean"], sw.get("sigma_sd")))
+                        if "onset_mean" in sw and sw["onset_mean"] > 0:
+                            _print(_fmt("onset", slice_truth_onset, sw["onset_mean"], sw.get("onset_sd")))
+
+                    sc = slices.get(ctx_key_c, {})
+                    if sc:
+                        _ca, _cb = sc.get("alpha", 0), sc.get("beta", 0)
+                        scp = _ca / (_ca + _cb) if (_ca + _cb) > 0 else 0
+                        prov = sc.get("provenance", "?")
+                        _print(f"    {ctx_key_c} [{prov}]:")
+                        _print(_fmt("p", slice_truth_p, scp))
+
     _print(f"\n{'=' * 60}")
     if result.get("status") == "complete" or result.get("edges_fitted", 0) > 0:
         _print("PASS")

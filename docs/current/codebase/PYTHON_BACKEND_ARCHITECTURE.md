@@ -229,6 +229,19 @@ Key implemented features:
   LogNormal prior, replacing external Williams MLE.
 - **Quality-gated warm-start**: previous posteriors used as priors only
   if rhat < 1.10 and ESS >= 100.
+- **Phase C contexted models**: per-slice hierarchy with native vector
+  RVs (`eps_slice_vec`, `log_kappa_slice_vec`, `eps_mu_slice_vec` —
+  shape `[n_slices]`) replacing per-slice scalar nodes. sigma and onset
+  are edge-level (shared across slices). Phase 1 window trajectories
+  batched into one `pm.Potential` per edge via
+  `_emit_batched_window_trajectories()`. Slice-axis metadata in
+  `build_model` return dict maps `ctx_key → slice_idx` for posterior
+  extraction. See doc 38c.
+- **Auto low-rank mass matrix**: `inference.py` auto-selects
+  `PyNutsSettings.LowRank` when `n_dim > 20` (contexted models with
+  hierarchical funnels). Captures tau-eps correlations that diagonal
+  mass matrices cannot, yielding ~50% larger step sizes and ~70% fewer
+  leapfrog steps per draw. Overridable via `SamplingConfig.lowrank_mass_matrix`.
 
 ### Quality gates
 

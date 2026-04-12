@@ -136,7 +136,13 @@
       "Bash(awk '/def test_bare_overrides_context/,/def test_/' /home/reg/dev/dagnet/bayes/tests/test_data_binding_adversarial.py)",
       "Bash(scripts/bayes-monitor.sh)",
       "WebFetch(domain:docs.pymc.io)",
-      "Bash(ps aux:*)"
+      "Bash(ps aux:*)",
+      "Bash(git -C /home/reg/dev/dagnet log --oneline --since=\"2026-04-06\" --no-merges -- bayes/ graph-editor/src/services/candidateRegimeService.ts scripts/ docs/current/project-bayes/)",
+      "Bash(git -C /home/reg/dev/dagnet log --oneline --since=\"2026-04-06\" --no-merges -- bayes/ graph-editor/src/services/candidateRegimeService.ts scripts/)",
+      "Bash(git -C /home/reg/dev/dagnet log --oneline --format=\"%h %ai %s\" --since=\"2026-04-06\" --no-merges -- bayes/ graph-editor/src/services/candidateRegimeService.ts)",
+      "Bash(git -C /home/reg/dev/dagnet log --format=\"%h %ai %s\" --since=\"2026-04-06\" --until=\"2026-04-11\" --no-merges -- bayes/ graph-editor/src/services/candidateRegimeService.ts)",
+      "Bash(git -C /home/reg/dev/dagnet log --stat --format=\"%h %ai %s%n\" 8d5ae3eb..384f1af4 --no-merges -- bayes/ graph-editor/src/services/candidateRegimeService.ts graph-editor/lib/)",
+      "Bash(pkill -f \"test_harness.*synth-simple-abc-context\")"
     ],
     "additionalDirectories": [
       "/home/reg/dev/dagnet/.claude",

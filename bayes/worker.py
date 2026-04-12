@@ -1173,6 +1173,41 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
                             post1.cohort_hdi_upper = post2.cohort_hdi_upper
                         break
 
+            # Extract Phase 2 per-slice cohort posteriors from trace2.
+            # These replace the window-copy fallback in _build_unified_slices.
+            import numpy as _np2
+            for post1 in inference_result.posteriors:
+                edge_id = post1.edge_id
+                safe_eid = edge_id.replace("-", "_")
+                ev = evidence.edges.get(edge_id)
+                if not ev or not ev.slice_groups:
+                    continue
+                cohort_slice_posts = {}
+                for _dk, _sg in ev.slice_groups.items():
+                    for ctx_key in _sg.slices:
+                        # Must match model.py _safe_var_name: replace hyphens with underscores
+                        ctx_safe = ctx_key.replace("-", "_")
+                        p_name = f"p_cohort_slice_{safe_eid}_{ctx_safe}"
+                        if p_name in trace2.posterior:
+                            _ps = trace2.posterior[p_name].values.flatten()
+                            _p_mean = float(_ps.mean())
+                            _p_std = float(_ps.std())
+                            _alpha, _beta = _p_mean, 1.0 - _p_mean  # fallback
+                            if _p_std > 1e-6 and 0 < _p_mean < 1:
+                                _v = _p_std ** 2
+                                _c = _p_mean * (1 - _p_mean) / _v - 1
+                                if _c > 0:
+                                    _alpha = max(_p_mean * _c, 0.5)
+                                    _beta = max((1 - _p_mean) * _c, 0.5)
+                            cohort_slice_posts[ctx_key] = {
+                                "alpha": _alpha,
+                                "beta": _beta,
+                                "p_mean": _p_mean,
+                                "p_sd": _p_std,
+                            }
+                if cohort_slice_posts:
+                    post1.cohort_slice_posteriors = cohort_slice_posts
+
             # Merge cohort latency posteriors from Phase 2.
             # Phase 2's path-level latency (onset, mu, sigma) overrides
             # Phase 1's cruder FW-composed values on the same attributes.
@@ -1977,18 +2012,29 @@ def _build_unified_slices(
         slices[f"{ctx_part}.window()"] = entry
 
         # cohort-denominated entry (when parent has cohort)
-        # Uses same p/kappa from window; Phase 2 is aggregate-only and
-        # does not produce per-slice cohort posteriors yet.
         if "cohort()" in slices:
-            cohort_entry: dict = {
-                "alpha": entry["alpha"],
-                "beta": entry["beta"],
-                "p_hdi_lower": entry["p_hdi_lower"],
-                "p_hdi_upper": entry["p_hdi_upper"],
-                "ess": entry["ess"],
-                "rhat": entry["rhat"],
-                "provenance": "window-copy",
-            }
+            # Use Phase 2 per-slice cohort posteriors if available
+            _csp = prob.cohort_slice_posteriors.get(ctx_key) if prob.cohort_slice_posteriors else None
+            if _csp:
+                cohort_entry: dict = {
+                    "alpha": round(_csp["alpha"], 4),
+                    "beta": round(_csp["beta"], 4),
+                    "p_hdi_lower": entry["p_hdi_lower"],  # TODO: compute from cohort posterior
+                    "p_hdi_upper": entry["p_hdi_upper"],
+                    "ess": entry["ess"],
+                    "rhat": entry["rhat"],
+                    "provenance": "bayesian",
+                }
+            else:
+                cohort_entry = {
+                    "alpha": entry["alpha"],
+                    "beta": entry["beta"],
+                    "p_hdi_lower": entry["p_hdi_lower"],
+                    "p_hdi_upper": entry["p_hdi_upper"],
+                    "ess": entry["ess"],
+                    "rhat": entry["rhat"],
+                    "provenance": "window-copy",
+                }
             if "kappa_mean" in entry:
                 cohort_entry["kappa_mean"] = entry["kappa_mean"]
                 cohort_entry["kappa_sd"] = entry["kappa_sd"]

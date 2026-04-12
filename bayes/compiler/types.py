@@ -574,6 +574,8 @@ class PosteriorSummary:
     # Phase C: per-context-slice posteriors (doc 14 §5.2)
     # context_key → {mean, stdev, alpha, beta, hdi_lower, hdi_upper}
     slice_posteriors: dict[str, dict[str, float]] = field(default_factory=dict)
+    # Phase 2 per-slice cohort posteriors (context_key → {alpha, beta, p_mean, p_sd})
+    cohort_slice_posteriors: dict[str, dict[str, float]] = field(default_factory=dict)
     tau_slice_mean: float | None = None
     tau_slice_sd: float | None = None
 

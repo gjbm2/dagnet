@@ -483,6 +483,156 @@ kappa_lat samples are available.
 
 ---
 
+## 11-Apr-26: Regression infrastructure and per-slice reporting (doc 35)
+
+### Regression runner per-slice reporting
+
+`run_regression.py` extended to iterate Layers 3-8 per context slice
+(not just per edge). Binding receipts, audit parsing, recovery parsing,
+LOO scoring, report renderer, pass/fail gates — all per-slice. Per-slice
+LOO null falls back to edge-level AnalyticBaseline (no per-slice
+model_vars in production yet).
+
+### Context data binding bugs (10-11-Apr)
+
+Two rounds of fixes to the evidence binder for contexted graphs:
+
+1. **Regime-per-date classification** — `evidence.py` now tags each
+   retrieved_at date as `mece_partition` or `uncontexted` via the
+   RegimeSelection result. Rows are partitioned so aggregate and
+   per-slice likelihoods cover disjoint date sets.
+
+2. **Synth generator context slice fidelity** — `synth_gen.py`
+   rewired to emit per-context trajectories with correct channel
+   proportions, per-channel p/mu/sigma truth values, and proper
+   CohortObservation routing. 307→552-line rewrite with test suite
+   (`test_synth_gen.py`).
+
+3. **Per-slice posterior extraction** — `inference.py` updated to
+   extract per-slice p, kappa, mu, sigma, onset from the MCMC trace.
+   Slice posteriors keyed by context string in `PosteriorSummary.slice_posteriors`.
+
+4. **Worker per-slice diagnostics** — `worker.py` now logs per-slice
+   row counts, trajectory counts, and evidence binding receipts.
+
+### Adversarial test suites (11-Apr)
+
+Three new adversarial test files covering edge cases in evidence
+binding, regime selection, and stats engine interaction with
+contexted data:
+- `test_data_binding_adversarial.py` (773 lines)
+- `test_evidence_binding_adversarial.py` (690 lines)
+- `test_regime_selection_adversarial.py` (431 lines)
+- `test_stats_engine_adversarial.py` (666 lines)
+- `test_regression_audit.py` (243 lines)
+
+---
+
+## 10-Apr-26: Latency dispersion (doc 34) and Phase C dirichlets running
+
+### Latency dispersion (kappa_lat)
+
+Per-interval BetaBinomial overdispersion for trajectory likelihoods.
+One `kappa_lat` scalar per edge (or per slice), captures timing noise
+analogous to how kappa captures rate noise. Feature-flagged
+`latency_dispersion`. Uses `pm.BetaBinomial.dist()` + `pm.logp()` for
+optimised PyTensor compilation (avoids manual gammaln graph). 10/11
+uncontexted graphs pass regression.
+
+### Phase C dirichlets running end-to-end
+
+First successful contexted model MCMC run. Per-slice hierarchical
+emission with non-centred parameterisation for p offsets
+(`logit(p_base) + eps * tau_slice`), per-slice kappa, per-slice
+latency hierarchy (mu, sigma, onset offsets from edge-level base).
+`synth-simple-abc-context` (2 edges × 3 slices): 51 free RVs, 6
+trajectory Potentials, compiled and sampled (slowly — 400s+).
+
+### candidateRegimeService.ts — supplementary hash discovery
+
+Step 5 added: scans stored param file `values[]` to discover hash
+families not in the current DSL. Required for `--dsl-override` to
+find contexted DB data when running bare DSL. Fixed two bugs:
+single temporal mode only (missed cohort hash), and window/cohort
+treated as competing regimes (regime selection dropped cohort).
+
+---
+
+## 9-Apr-26: Phase C data contract (doc 14) and compiler phase C implementation
+
+### Evidence binder Phase C (evidence.py)
+
+Major extension (523+ lines) to `bind_snapshot_evidence()`:
+- Context-qualified rows routed to `SliceGroup` / `SliceObservations`
+- MECE dimension handling — exhaustive slices suppress aggregate emission
+- Per-slice trajectory and daily observation construction
+- Binding receipts (`EdgeBindingReceipt`) for audit trail
+
+### Worker Phase C orchestration (worker.py)
+
+152-line rewrite of the evidence-to-model threading:
+- Per-slice subject commissioning via FE CLI
+- MECE dimensions threaded through payload
+- Per-slice evidence summary logging
+- Phase 2 aggregate-only (known limitation, not per-slice yet)
+
+### Model Phase C emission (model.py)
+
+Per-slice hierarchical emission:
+- Branch group: per-slice Dirichlet priors via `bg_slice_p_vars`
+- Solo edges: non-centred p hierarchy (logit_p_base + eps × tau_slice)
+- Per-slice kappa (log_kappa_slice → kappa_slice)
+- Per-slice latency (eps_mu, eps_sigma, eps_onset with per-edge taus)
+- Exhaustive slices suppress aggregate emission
+
+### Types (types.py)
+
+New types: `SliceObservations`, `SliceGroup`, `EdgeBindingReceipt`.
+Extended `EdgeEvidence` with `slice_groups`, `has_slices`,
+`regime_per_date`, binding receipt fields.
+
+### Test infrastructure
+
+- `test_engorged_parity.py` (386 lines): verifies FE CLI payload
+  matches harness-built payload
+- `test_snapshot_e2e.py` (146 lines): end-to-end snapshot binding
+- `test_binding_receipt.py` (642 lines): binding receipt generation
+
+---
+
+## 8-Apr-26: LOO-ELPD scoring (doc 32), BE analysis subject resolution (doc 31)
+
+### LOO-ELPD model adequacy scoring
+
+`bayes/compiler/loo.py` (275+ lines): PSIS-LOO via arviz, analytic null
+baseline (per-edge Beta(alpha, beta) → Binomial logp), per-edge
+delta_elpd attribution. Wired into `worker.py` for both Phase 1 and
+Phase 2 passes. 117+ tests. Per-slice LOO scoring with per-slice
+null model.
+
+### BE analysis subject resolution (doc 31)
+
+`analysis_subject_resolution.py` (461 lines): `resolve_analysis_subjects()`
+with per-scope resolvers, `synthesise_snapshot_subjects()`. Wired into
+`api_handlers.py`. 781 unit tests + parity tests (`test_doc31_parity.py`).
+
+### candidateRegimeService.ts
+
+185-line extension: `buildCandidateRegimesByEdge()` for Step 2-3 of
+the regime selection pipeline (context key-set grouping, hash family
+computation, candidate emission).
+
+---
+
+## 7-Apr-26: Hash contract revisions
+
+Version bumps (1.9.19 → 1.9.21). Revised BE/FE hash contracts —
+ensuring `core_hash` computation is consistent between FE
+(`candidateRegimeService.ts`) and BE (`snapshot_regime_selection.py`).
+Supplementary hash family discovery started (completed 10-Apr).
+
+---
+
 ## 6-Apr-26: Harness/FE snapshot parity gap and hash-mapping closure cross-contamination
 
 ### Bug 1: Harness does not use FE hash-mapping closure
@@ -4826,3 +4976,84 @@ does not eliminate the stochastic warmup failure.
   a JSON file into the harness payload.
 - `test_harness.py --graph-path` / `--hash-source` / `--params-dir`
   — run harness against graphs/params outside the data repo.
+
+---
+
+## 12-Apr-26: Contexted compilation performance (doc 38c)
+
+### Problem
+
+synth-simple-abc-context (2 edges, 3 context slices each) took 394s
+end-to-end: 29s compile + 335s sampling. 57 free RVs, 6 trajectory
+Potentials. The per-slice scalar RV approach created near-identical
+CDF/hazard subgraphs for each slice, bloating the PyTensor graph.
+NUTS geometry was severely degraded by hierarchical tau-eps funnels.
+
+### NUTS diagnostics (new instrumentation)
+
+Added `sample_stats` logging to `inference.py`: tree_depth, step_size,
+n_steps (leapfrog evaluations), energy, plus `n_dim` on the compile
+line. This immediately revealed the geometry problem:
+
+Phase 1 baseline (51 RVs, 6 Potentials, diagonal mass matrix):
+- step_size=0.070, n_steps=339/draw, tree_depth=8.0, 3 divergences
+- Phase 2 healthy reference: step_size=0.70, n_steps=6/draw
+
+The 10x step size gap confirmed hierarchical funnels (tau→0 in
+non-centred parameterisation forces tiny steps).
+
+### Changes (cumulative, each verified by parity run)
+
+1. **Edge-level sigma and onset** — sigma and onset are structural
+   properties of the measurement lag, not context-specific. Removed
+   `tau_sigma_slice`, `tau_onset_slice`, `eps_sigma_slice_*`,
+   `eps_onset_slice_*`. Only mu varies by slice. 51→35 RVs, 4 fewer
+   funnels. Sampling −25%.
+
+2. **Native vector RVs** — replaced per-slice scalar `eps_slice_*`,
+   `log_kappa_slice_*`, `eps_mu_slice_*` (18 nodes) with 3 vector RVs
+   of shape `[n_slices]` per edge. Same n_dim (35), fewer PyMC nodes
+   (35→23). Sampling −7% (graph smaller but Potentials unchanged).
+
+3. **Batched Phase 1 window trajectory** — new
+   `_emit_batched_window_trajectories()` concatenates all slices'
+   intervals with `slice_idx` arrays, computes CDF once using
+   `mu_slice_vec[age_slice_idx]` (advanced indexing into the native
+   vector RV), `sigma_base`/`onset_base` broadcast (edge-level).
+   One `pm.Potential` per edge instead of per slice: 6→2. Compile
+   −29%. The old dead `_emit_batched_slice_trajectories` (which used
+   `pt.stack` of scalars and never compiled) was replaced.
+
+4. **Auto low-rank mass matrix** — `inference.py` auto-selects
+   `PyNutsSettings.LowRank` when `compiled_model.n_dim > 20`.
+   Captures tau-eps funnel correlations that diagonal cannot.
+   step_size +52% (0.08→0.12), n_steps −70% (263→78). Needs more
+   warmup (tune=1000 vs 500) for adequate mass matrix adaptation.
+   Per-draw cost ~4x better.
+
+### Posterior extraction
+
+`summarise_posteriors()` updated to read vector traces via
+`slice_axes` metadata (`ctx_key → slice_idx`). Indexes into
+`trace.posterior["p_slice_vec_{edge}"][:, :, idx]` etc. Scalar
+name fallback retained for backward compatibility.
+
+### Combined results (synth-simple-abc-context, 2 chains, tune=1000, draws=500)
+
+| Metric | Original | Final |
+|--------|----------|-------|
+| n_dim | 51 | 35 |
+| Potentials | 6 | 2 |
+| compile_ms | 26,410 | 15,699 (−41%) |
+| sampling_ms | 199,486 | 116,095 (−42%) |
+| step_size | 0.070 | 0.122 (+74%) |
+| n_steps/draw | 339 | 82 (−76%) |
+
+Posteriors consistent across all runs (within MCMC noise).
+
+### Remaining geometry work
+
+The tau_slice and tau_mu_slice funnels still exist — lowrank
+mitigates but doesn't eliminate. Further options not yet tried:
+centred parameterisation for the p hierarchy, fixed tau (empirical
+Bayes), or reparameterisation of the latency CDF coupling.

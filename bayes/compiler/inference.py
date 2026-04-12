@@ -1048,7 +1048,17 @@ def summarise_posteriors(
                         if _mu_s_name in trace.posterior:
                             _slice_entry["mu_mean"] = float(trace.posterior[_mu_s_name].values.mean())
                             _slice_entry["mu_sd"] = float(trace.posterior[_mu_s_name].values.std())
-                    # sigma and onset are edge-level (doc 38), no per-slice extraction
+                    # sigma and onset are edge-level (doc 38) — inherit from
+                    # edge-level latency so per-slice summary isn't blank.
+                    if sigma_var_name in trace.posterior:
+                        _slice_entry["sigma_mean"] = float(np.mean(trace.posterior[sigma_var_name].values.flatten()))
+                        _slice_entry["sigma_sd"] = float(np.std(trace.posterior[sigma_var_name].values.flatten()))
+                    _onset_var = f"onset_{safe_eid}"
+                    if _onset_var in trace.posterior:
+                        _slice_entry["onset_mean"] = float(np.mean(trace.posterior[_onset_var].values.flatten()))
+                        _slice_entry["onset_sd"] = float(np.std(trace.posterior[_onset_var].values.flatten()))
+                    elif et and hasattr(et, 'onset_delta_days'):
+                        _slice_entry["onset_mean"] = float(et.onset_delta_days)
 
                     post.slice_posteriors[_ctx_key] = _slice_entry
 
@@ -1567,16 +1577,12 @@ def _sample_nutpie(model, config: SamplingConfig, report_progress=None,
 
         # Build the sampler manually so we can inject our ProgressType.
         # This mirrors what nutpie.sample() does internally.
-        # Auto-enable low-rank mass matrix for models with n_dim > 20
-        # (contexted models with hierarchical funnels benefit significantly).
+        # Low-rank mass matrix captures parameter correlations (e.g.
+        # tau-eps funnels, onset-mu ridges) that diagonal cannot.
+        # Always on — the warmup overhead is negligible for small models
+        # and the geometry benefit is significant for all but trivial ones.
         # See doc 38 §Low-rank mass matrix experiment.
-        _lowrank_explicit = getattr(config, 'lowrank_mass_matrix', False)
-        _lowrank_auto = compiled_model.n_dim > 20
-        _use_lowrank = _lowrank_explicit or _lowrank_auto
-        if _use_lowrank:
-            settings = nutpie_lib.PyNutsSettings.LowRank(config.random_seed)
-        else:
-            settings = nutpie_lib.PyNutsSettings.Diag(config.random_seed)
+        settings = nutpie_lib.PyNutsSettings.LowRank(config.random_seed)
         settings.num_tune = config.tune
         settings.num_draws = config.draws
         settings.num_chains = config.chains
@@ -1598,9 +1604,8 @@ def _sample_nutpie(model, config: SamplingConfig, report_progress=None,
 
         compile_ms = int((time.time() - t_phase_start) * 1000)
         phase_tag = f" {phase_label}" if phase_label else ""
-        _mass_str = "lowrank" if _use_lowrank else "diag"
         print(f"[nutpie{phase_tag}] cores={cores}, os.cpu_count={os.cpu_count()}, "
-              f"chains={config.chains}, draws={config.draws}, tune={config.tune}, mass={_mass_str}, "
+              f"chains={config.chains}, draws={config.draws}, tune={config.tune}, mass=lowrank, "
               f"compile={compile_ms}ms, n_dim={compiled_model.n_dim}", flush=True)
 
         sampler = compiled_model._make_sampler(
