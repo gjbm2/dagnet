@@ -1137,7 +1137,14 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
             # the aggregate. _emit_edge_likelihoods handles Cases A-D.
             _emissions = []  # [(safe_suffix, p_var, kappa_var, ev, lv, ov)]
 
-            if ev.has_slices and not is_phase2:
+            # Phase 2 per-slice: use frozen Phase 1 per-slice posteriors as priors.
+            # No hierarchy (no tau/eps) — each slice gets its own p from frozen prior.
+            _phase2_has_slices = (
+                is_phase2 and ev.has_slices and ev.slice_groups
+                and phase2_frozen.get(edge_id, {}).get("slices")
+            )
+
+            if ev.has_slices and (not is_phase2 or _phase2_has_slices):
                 # Build stable ordered slice axis for this edge.
                 # ctx_keys_ordered is the canonical ordering; every
                 # downstream vector RV and batched likelihood indexes
@@ -1162,99 +1169,138 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                     f"[{', '.join(ck for ck in _slice_ctx_keys)}]"
                 )
 
-                # Create p_base (hierarchy anchor)
-                if p_base_var is not None:
-                    p = p_base_var
-                else:
-                    p = pm.Beta(f"p_{safe_id}", alpha=alpha, beta=beta_param)
-                edge_var_names[edge_id] = f"p_{safe_id}"
+                if _phase2_has_slices:
+                    # ── Phase 2 per-slice: frozen Phase 1 priors, no hierarchy ──
+                    _frozen_slices = phase2_frozen[edge_id]["slices"]
+                    diagnostics.append(
+                        f"  phase2_slices: {edge_id[:8]}… {len(_frozen_slices)} frozen priors")
 
-                # Per-edge p shrinkage (solo edges; branch groups use Dirichlet)
-                _is_bg = edge_id in bg_slice_p_vars
-                if not _is_bg:
-                    tau_slice = pm.HalfNormal(f"tau_slice_{safe_id}", sigma=0.5)
-                    logit_p_base = pt.log(p / (1.0 - p))
+                    for _si, (_ck, _so) in enumerate(
+                            zip(_slice_ctx_keys, _slice_obs_ordered)):
+                        ctx_safe = _safe_var_name(_ck)
+                        _sfx = f"{safe_id}__{ctx_safe}"
+                        _fs = _frozen_slices.get(_ck, {})
+                        _fs_alpha = _fs.get("p_alpha", alpha)
+                        _fs_beta = _fs.get("p_beta", beta_param)
 
-                # Per-slice latency hierarchy: only mu varies by slice.
-                # sigma and onset are edge-level (shared across slices) to
-                # reduce funnel geometry — see doc 38 §NUTS diagnostics.
-                if et.has_latency:
-                    _lv_base = latency_vars.get(edge_id)
-                    _ov_base = onset_vars.get(edge_id)
-                    _mu_base = _lv_base[0] if _lv_base else pt.as_tensor_variable(np.float64(et.mu_prior))
-                    _sigma_base = _lv_base[1] if _lv_base else pt.as_tensor_variable(np.float64(max(et.sigma_prior, 0.01)))
-                    _onset_base = _ov_base if _ov_base is not None else pt.as_tensor_variable(np.float64(et.onset_delta_days))
-                    tau_mu_slice = pm.HalfNormal(f"tau_mu_slice_{safe_id}", sigma=0.3)
+                        p_s = pm.Beta(f"p_cohort_slice_{safe_id}_{ctx_safe}",
+                                      alpha=_fs_alpha, beta=_fs_beta)
 
-                # ── Vector RVs for per-slice families (doc 38 §Native
-                # Vector Batching).  One vector per family, shape [n_slices].
-                # Non-BG p offsets:
-                if not _is_bg:
-                    _eps_slice_vec = pm.Normal(
-                        f"eps_slice_vec_{safe_id}",
-                        mu=0, sigma=1, shape=(_n_slices,))
-                    _p_slice_vec = pm.Deterministic(
-                        f"p_slice_vec_{safe_id}",
-                        pm.math.invlogit(logit_p_base + _eps_slice_vec * tau_slice))
+                        _lks = pm.Normal(f"log_kappa_cohort_slice_{safe_id}_{ctx_safe}",
+                                         mu=LOG_KAPPA_MU, sigma=LOG_KAPPA_SIGMA)
+                        ks = pm.Deterministic(f"kappa_cohort_slice_{safe_id}_{ctx_safe}",
+                                              pt.exp(_lks))
 
-                # Kappa (all edges, including BG):
-                _log_kappa_slice_vec = pm.Normal(
-                    f"log_kappa_slice_vec_{safe_id}",
-                    mu=LOG_KAPPA_MU, sigma=LOG_KAPPA_SIGMA,
-                    shape=(_n_slices,))
-                _kappa_slice_vec = pm.Deterministic(
-                    f"kappa_slice_vec_{safe_id}",
-                    pt.exp(_log_kappa_slice_vec))
+                        s_ev = EdgeEvidence(
+                            edge_id=ev.edge_id, param_id=ev.param_id, file_path=ev.file_path,
+                            window_obs=list(_so.window_obs), cohort_obs=list(_so.cohort_obs),
+                            has_window=_so.has_window, has_cohort=_so.has_cohort,
+                            total_n=_so.total_n, latency_prior=ev.latency_prior,
+                            kappa_warm=ev.kappa_warm, cohort_latency_warm=ev.cohort_latency_warm)
+                        _emissions.append((_sfx, p_s, ks, s_ev,
+                                           cohort_latency_vars or latency_vars, onset_vars))
 
-                # Mu offsets (latency edges only):
-                if et.has_latency:
-                    _eps_mu_slice_vec = pm.Normal(
-                        f"eps_mu_slice_vec_{safe_id}",
-                        mu=0, sigma=1, shape=(_n_slices,))
-                    _mu_slice_vec = pm.Deterministic(
-                        f"mu_slice_vec_{safe_id}",
-                        _mu_base + _eps_mu_slice_vec * tau_mu_slice)
-
-                # ─�� Build per-slice emissions by indexing into vectors.
-                # Phase 3 will replace this loop with a batched Potential;
-                # for now, extract scalars to keep emission logic unchanged.
-                for _si, (_ck, _so) in enumerate(
-                        zip(_slice_ctx_keys, _slice_obs_ordered)):
-                    ctx_safe = _safe_var_name(_ck)
-                    _sfx = f"{safe_id}__{ctx_safe}"
-
-                    # Per-slice p (scalar view into vector)
-                    if _is_bg and _ck in bg_slice_p_vars.get(edge_id, {}):
-                        p_s = bg_slice_p_vars[edge_id][_ck]
+                    _all_exhaustive = all(sg.is_exhaustive for sg in ev.slice_groups.values())
+                    if not _all_exhaustive:
+                        _emissions.append((safe_id, None, edge_kappa, ev, latency_vars, onset_vars))
                     else:
-                        p_s = _p_slice_vec[_si]
+                        diagnostics.append(f"  slices: {edge_id[:8]}… exhaustive, aggregate suppressed")
 
-                    # Per-slice kappa (scalar view)
-                    ks = _kappa_slice_vec[_si]
+                # ── Phase 1 per-slice: hierarchical parameterisation ──
+                elif not is_phase2:
+                    # Create p_base (hierarchy anchor)
+                    if p_base_var is not None:
+                        p = p_base_var
+                    else:
+                        p = pm.Beta(f"p_{safe_id}", alpha=alpha, beta=beta_param)
+                    edge_var_names[edge_id] = f"p_{safe_id}"
 
-                    # Per-slice latency
+                    # Per-edge p shrinkage (solo edges; branch groups use Dirichlet)
+                    _is_bg = edge_id in bg_slice_p_vars
+                    if not _is_bg:
+                        tau_slice = pm.HalfNormal(f"tau_slice_{safe_id}", sigma=0.5)
+                        logit_p_base = pt.log(p / (1.0 - p))
+
+                    # Per-slice latency hierarchy: only mu varies by slice.
+                    # sigma and onset are edge-level (shared across slices) to
+                    # reduce funnel geometry — see doc 38 §NUTS diagnostics.
                     if et.has_latency:
-                        _lv = {edge_id: (_mu_slice_vec[_si], _sigma_base)}
-                        _ov = {edge_id: _onset_base}
+                        _lv_base = latency_vars.get(edge_id)
+                        _ov_base = onset_vars.get(edge_id)
+                        _mu_base = _lv_base[0] if _lv_base else pt.as_tensor_variable(np.float64(et.mu_prior))
+                        _sigma_base = _lv_base[1] if _lv_base else pt.as_tensor_variable(np.float64(max(et.sigma_prior, 0.01)))
+                        _onset_base = _ov_base if _ov_base is not None else pt.as_tensor_variable(np.float64(et.onset_delta_days))
+                        tau_mu_slice = pm.HalfNormal(f"tau_mu_slice_{safe_id}", sigma=0.3)
+
+                    # ── Vector RVs for per-slice families (doc 38 §Native
+                    # Vector Batching).  One vector per family, shape [n_slices].
+                    # Non-BG p offsets:
+                    if not _is_bg:
+                        _eps_slice_vec = pm.Normal(
+                            f"eps_slice_vec_{safe_id}",
+                            mu=0, sigma=1, shape=(_n_slices,))
+                        _p_slice_vec = pm.Deterministic(
+                            f"p_slice_vec_{safe_id}",
+                            pm.math.invlogit(logit_p_base + _eps_slice_vec * tau_slice))
+
+                    # Kappa (all edges, including BG):
+                    _log_kappa_slice_vec = pm.Normal(
+                        f"log_kappa_slice_vec_{safe_id}",
+                        mu=LOG_KAPPA_MU, sigma=LOG_KAPPA_SIGMA,
+                        shape=(_n_slices,))
+                    _kappa_slice_vec = pm.Deterministic(
+                        f"kappa_slice_vec_{safe_id}",
+                        pt.exp(_log_kappa_slice_vec))
+
+                    # Mu offsets (latency edges only):
+                    if et.has_latency:
+                        _eps_mu_slice_vec = pm.Normal(
+                            f"eps_mu_slice_vec_{safe_id}",
+                            mu=0, sigma=1, shape=(_n_slices,))
+                        _mu_slice_vec = pm.Deterministic(
+                            f"mu_slice_vec_{safe_id}",
+                            _mu_base + _eps_mu_slice_vec * tau_mu_slice)
+
+                    # ─�� Build per-slice emissions by indexing into vectors.
+                    # Phase 3 will replace this loop with a batched Potential;
+                    # for now, extract scalars to keep emission logic unchanged.
+                    for _si, (_ck, _so) in enumerate(
+                            zip(_slice_ctx_keys, _slice_obs_ordered)):
+                        ctx_safe = _safe_var_name(_ck)
+                        _sfx = f"{safe_id}__{ctx_safe}"
+
+                        # Per-slice p (scalar view into vector)
+                        if _is_bg and _ck in bg_slice_p_vars.get(edge_id, {}):
+                            p_s = bg_slice_p_vars[edge_id][_ck]
+                        else:
+                            p_s = _p_slice_vec[_si]
+
+                        # Per-slice kappa (scalar view)
+                        ks = _kappa_slice_vec[_si]
+
+                        # Per-slice latency
+                        if et.has_latency:
+                            _lv = {edge_id: (_mu_slice_vec[_si], _sigma_base)}
+                            _ov = {edge_id: _onset_base}
+                        else:
+                            _lv = latency_vars
+                            _ov = onset_vars
+
+                        # Slice ev
+                        s_ev = EdgeEvidence(
+                            edge_id=ev.edge_id, param_id=ev.param_id, file_path=ev.file_path,
+                            window_obs=list(_so.window_obs), cohort_obs=list(_so.cohort_obs),
+                            has_window=_so.has_window, has_cohort=_so.has_cohort,
+                            total_n=_so.total_n, latency_prior=ev.latency_prior,
+                            kappa_warm=ev.kappa_warm, cohort_latency_warm=ev.cohort_latency_warm)
+                        _emissions.append((_sfx, p_s, ks, s_ev, _lv, _ov))
+
+                    # If not all exhaustive, also emit aggregate
+                    _all_exhaustive = all(sg.is_exhaustive for sg in ev.slice_groups.values())
+                    if not _all_exhaustive:
+                        _emissions.append((safe_id, p, edge_kappa, ev, latency_vars, onset_vars))
                     else:
-                        _lv = latency_vars
-                        _ov = onset_vars
-
-                    # Slice ev
-                    s_ev = EdgeEvidence(
-                        edge_id=ev.edge_id, param_id=ev.param_id, file_path=ev.file_path,
-                        window_obs=list(_so.window_obs), cohort_obs=list(_so.cohort_obs),
-                        has_window=_so.has_window, has_cohort=_so.has_cohort,
-                        total_n=_so.total_n, latency_prior=ev.latency_prior,
-                        kappa_warm=ev.kappa_warm, cohort_latency_warm=ev.cohort_latency_warm)
-                    _emissions.append((_sfx, p_s, ks, s_ev, _lv, _ov))
-
-                # If not all exhaustive, also emit aggregate
-                _all_exhaustive = all(sg.is_exhaustive for sg in ev.slice_groups.values())
-                if not _all_exhaustive:
-                    _emissions.append((safe_id, p, edge_kappa, ev, latency_vars, onset_vars))
-                else:
-                    diagnostics.append(f"  slices: {edge_id[:8]}… exhaustive, aggregate suppressed")
+                        diagnostics.append(f"  slices: {edge_id[:8]}… exhaustive, aggregate suppressed")
             else:
                 # No slices or Phase 2: single aggregate emission
                 _emissions.append((safe_id, None, edge_kappa, ev, latency_vars, onset_vars))

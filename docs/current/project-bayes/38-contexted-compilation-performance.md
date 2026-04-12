@@ -553,3 +553,38 @@ The **geometry problem** (step_size ≈ 0.08, tree_depth ≈ 7.4) is still the d
 3. Fixed tau (empirical Bayes)
 
 These are independent of the batching work and can be tried separately.
+
+### Low-rank mass matrix experiment (12-Apr-26)
+
+nutpie supports `PyNutsSettings.LowRank` — a low-rank modified mass matrix that can capture correlations between parameters (e.g. tau-eps funnel structure) that a diagonal mass matrix cannot. Added as `--feature lowrank_mass_matrix=true`, gated behind `SamplingConfig.lowrank_mass_matrix`.
+
+**Results** (synth-simple-abc-context, all batched + edge-level sigma/onset):
+
+| Metric | Diag (tune=500) | LowRank (tune=500) | LowRank (tune=1000) |
+|--------|-----------------|---------------------|----------------------|
+| compile_ms | 18,639 | 15,572 | 15,699 |
+| sampling_ms (Phase 1) | 158,793 | **70,311** | **116,095** |
+| step_size | 0.0786 | **0.1195** | **0.1217** |
+| n_steps mean | 263 | **78** | **82** |
+| tree_depth mean | 7.4 | **5.6** | **5.7** |
+| rhat | 1.019 | 1.054 (poor) | **1.022** |
+| ESS | 191 | 66 (poor) | **117** |
+| divergences | 0 | 0 | 0 |
+
+**Key finding**: the low-rank mass matrix is highly effective. Step size increased 52% (0.08 → 0.12) and leapfrog steps dropped 70% (263 → 78). This confirms the geometry hypothesis: the diagonal mass matrix could not capture the tau-eps correlations, forcing small steps.
+
+**Trade-off**: low-rank adaptation needs more warmup. With tune=500, convergence was poor (rhat=1.054, ESS=66). With tune=1000, convergence improved to acceptable levels (rhat=1.022, ESS=117). The extra warmup cost is more than paid for by the per-draw efficiency gain.
+
+**Per-draw efficiency comparison**:
+- Diag: ~159ms per draw (including warmup)
+- LowRank (tune=1000): ~39ms per draw (including warmup) — **4× improvement**
+
+**Posteriors** remain consistent with all previous runs (within MCMC noise):
+
+| Slice | Diag p | LowRank p |
+|-------|--------|-----------|
+| direct (edge 1) | 0.7088 | 0.7058 |
+| email (edge 1) | 0.5422 | 0.5410 |
+| google (edge 1) | 0.8516 | 0.8460 |
+
+**Recommendation**: enable low-rank by default for contexted models with n_dim > ~20. Increase default tune to 1000 (from current 1000 — already correct). For small uncontexted models (n_dim < 15), diagonal is sufficient and avoids the low-rank warmup overhead.

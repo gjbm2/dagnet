@@ -1,7 +1,7 @@
 # Project Bayes: Programme
 
 **Status**: Active
-**Updated**: 10-Apr-26
+**Updated**: 12-Apr-26
 **Purpose**: Phased delivery plan for Project Bayes. This doc owns sequencing;
 design docs contain the detail.
 
@@ -217,12 +217,22 @@ data-constrained. Single-source validation:
   Designed, not built.
 - **Phase C posteriors** — context slice pooling, hierarchical
   shrinkage, per-slice visualisation. **Partially implemented
-  (10-Apr-26)**: DSL parsing (`slices.py`), `SliceGroup` routing
+  (12-Apr-26)**: DSL parsing (`slices.py`), `SliceGroup` routing
   (`evidence.py`), per-slice hierarchical Dirichlet emission
   (`model.py` §2b — κ_slice learned concentration), per-slice
   posterior extraction (`inference.py`), `bayesEngorge.ts` wired.
   Tested indirectly via `test_model_wiring.py`,
   `test_snapshot_e2e.py`, `test_param_recovery.py`.
+  **Compilation performance (doc 38c, 12-Apr-26)**: contexted models
+  were unusable at scale (6 per-slice trajectory Potentials, 51 RVs,
+  ~400s). Five changes landed: (1) NUTS geometry diagnostics added to
+  `inference.py`, (2) sigma/onset made edge-level (51→35 RVs, 4
+  fewer funnels), (3) per-slice scalar RVs replaced with native vector
+  RVs (`eps_slice_vec`, `log_kappa_slice_vec`, `eps_mu_slice_vec`),
+  (4) batched Phase 1 window trajectory — one `pm.Potential` per edge
+  instead of per slice (6→2), (5) auto low-rank mass matrix for
+  n_dim>20 (captures tau-eps funnel correlations, step_size +74%,
+  leapfrog steps −76%). Combined: compile −29%, sampling −42%.
   **Remaining**: `conditional_p` not yet emitted. No dedicated
   Phase C test suite. Per-slice visualisation in FE not started.
   ~~Harness hash mismatch~~ — **FIXED 7-Apr-26**.

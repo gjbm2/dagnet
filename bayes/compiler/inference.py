@@ -1567,7 +1567,12 @@ def _sample_nutpie(model, config: SamplingConfig, report_progress=None,
 
         # Build the sampler manually so we can inject our ProgressType.
         # This mirrors what nutpie.sample() does internally.
-        _use_lowrank = getattr(config, 'lowrank_mass_matrix', False)
+        # Auto-enable low-rank mass matrix for models with n_dim > 20
+        # (contexted models with hierarchical funnels benefit significantly).
+        # See doc 38 §Low-rank mass matrix experiment.
+        _lowrank_explicit = getattr(config, 'lowrank_mass_matrix', False)
+        _lowrank_auto = compiled_model.n_dim > 20
+        _use_lowrank = _lowrank_explicit or _lowrank_auto
         if _use_lowrank:
             settings = nutpie_lib.PyNutsSettings.LowRank(config.random_seed)
         else:

@@ -1,7 +1,7 @@
 # Project Bayes — Document Index
 
-**Last updated**: 10-Apr-26
-**Verified against codebase**: 10-Apr-26
+**Last updated**: 12-Apr-26
+**Verified against codebase**: 12-Apr-26
 
 For sequencing, priorities, and current status snapshot, see
 [programme.md](programme.md).
@@ -31,12 +31,13 @@ For sequencing, priorities, and current status snapshot, see
 | 35 | [35-per-slice-regression-reporting.md](35-per-slice-regression-reporting.md) | **Implemented** (11-Apr-26) | Per-slice verbose regression reporting. Layers 3-8 iterated per context slice. Binding receipts, audit parsing, recovery parsing, LOO scoring (per-slice truth null), report renderer, pass/fail gates — all per-slice. | Production graphs fall back to edge-level AnalyticBaseline for per-slice LOO null (no per-slice model_vars) |
 | 36 | [36-posterior-predictive-calibration.md](36-posterior-predictive-calibration.md) | **Partial** (12-Apr-26) | Posterior predictive calibration: PIT uniformity, coverage curves, per-edge KS test. `calibration.py` implemented. Endpoint validated; trajectory blocked on synth DGP. | LOO-PIT for production graphs not yet wired |
 | 38 | [38-ppc-calibration-findings.md](38-ppc-calibration-findings.md) | **Partial** (12-Apr-26) | PPC implementation, three-layer validation (true PIT baseline), synth two-kappa DGP mismatch discovery, MLE empirical Bayes prior for kappa. | Single-source synth flag needed for trajectory validation |
+| 38c | [38-contexted-compilation-performance.md](38-contexted-compilation-performance.md) | **Implemented** (12-Apr-26) | NUTS geometry diagnostics, edge-level sigma/onset, native vector RVs, batched Phase 1 window trajectory (6→2 Potentials), auto low-rank mass matrix (n_dim>20). compile −29%, sampling −42%, step_size +74%. | Sampler geometry (tau funnels) partially addressed by lowrank; centred parameterisation not yet tried |
 
 ## Open investigations
 
 | # | File | Status | Notes |
 |---|------|--------|-------|
-| 37 | [37-contexted-compilation-investigation.md](37-contexted-compilation-investigation.md) | **Open** (12-Apr-26) | Contexted model never compiles — PyTensor C compilation of `dlogp` OOMs WSL. Uncontexted works. 5 hypotheses to test. Blocking contexted regression |
+| 37 | [37-contexted-compilation-investigation.md](37-contexted-compilation-investigation.md) | **Resolved** (12-Apr-26) | Contexted model compilation + sampling performance. Original OOM resolved by vector RV batching (doc 38c). Remaining: sampler geometry (tau funnels) partially mitigated by lowrank mass matrix |
 
 ## Open defects
 

@@ -906,6 +906,49 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
                     frozen_edge["onset"] = float(on_s.mean())
                     frozen_edge["onset_sd"] = float(on_s.std())
 
+                # Per-slice posteriors for Phase 2 contexted modelling.
+                # Extract from Phase 1 trace vectors (p_slice_vec, mu_slice_vec, etc.)
+                # keyed by context key in the same order as slice_axes.
+                if ev.has_slices and ev.slice_groups:
+                    slice_frozen = {}
+                    # Reconstruct slice axis ordering (must match model.py's ordering)
+                    _slice_ctx_keys = []
+                    for _dk, _sg in ev.slice_groups.items():
+                        for _ck in _sg.slices:
+                            _slice_ctx_keys.append(_ck)
+
+                    p_vec_name = f"p_slice_vec_{safe_eid}"
+                    mu_vec_name = f"mu_slice_vec_{safe_eid}"
+                    kappa_vec_name = f"kappa_slice_vec_{safe_eid}"
+
+                    p_vec_samples = trace.posterior.get(p_vec_name)
+                    mu_vec_samples = trace.posterior.get(mu_vec_name)
+                    kappa_vec_samples = trace.posterior.get(kappa_vec_name)
+
+                    for si, ctx_key in enumerate(_slice_ctx_keys):
+                        sf = {}
+                        if p_vec_samples is not None:
+                            _ps = p_vec_samples.values[:, :, si].flatten()
+                            sf["p"] = float(_ps.mean())
+                            sf["p_sd"] = float(_ps.std())
+                            if sf["p_sd"] > 1e-6 and 0 < sf["p"] < 1:
+                                _v = sf["p_sd"] ** 2
+                                _c = sf["p"] * (1 - sf["p"]) / _v - 1
+                                if _c > 0:
+                                    sf["p_alpha"] = max(sf["p"] * _c, 0.5)
+                                    sf["p_beta"] = max((1 - sf["p"]) * _c, 0.5)
+                        if mu_vec_samples is not None:
+                            _ms = mu_vec_samples.values[:, :, si].flatten()
+                            sf["mu"] = float(_ms.mean())
+                            sf["mu_sd"] = float(_ms.std())
+                        if kappa_vec_samples is not None:
+                            _ks = kappa_vec_samples.values[:, :, si].flatten()
+                            sf["kappa"] = float(_ks.mean())
+                        if sf:
+                            slice_frozen[ctx_key] = sf
+                    if slice_frozen:
+                        frozen_edge["slices"] = slice_frozen
+
                 if frozen_edge:
                     phase2_frozen[edge_id] = frozen_edge
                     parts = [f"p={frozen_edge.get('p', 0):.4f}±{frozen_edge.get('p_sd', 0):.4f}"]
@@ -916,6 +959,12 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
                     if 'onset' in frozen_edge:
                         parts.append(f"onset={frozen_edge['onset']:.2f}±{frozen_edge['onset_sd']:.2f}")
                     _log(log, f"  phase1_posterior {edge_id[:8]}…: {', '.join(parts)}")
+                    if "slices" in frozen_edge:
+                        for _sk, _sf in frozen_edge["slices"].items():
+                            _sp = [f"p={_sf.get('p', 0):.4f}"]
+                            if "mu" in _sf:
+                                _sp.append(f"mu={_sf['mu']:.3f}")
+                            _log(log, f"    slice {_sk}: {', '.join(_sp)}")
 
             # Estimate per-edge drift rate via variogram on mature daily obs.
             #
