@@ -537,6 +537,7 @@ class SamplingConfig:
     cores: int | None = None
     target_accept: float = DEFAULT_TARGET_ACCEPT
     random_seed: int | None = None
+    lowrank_mass_matrix: bool = False
 
 
 @dataclass
@@ -584,6 +585,12 @@ class PosteriorSummary:
     pareto_k_max: float | None = None
     n_loo_obs: int | None = None
 
+    # PPC calibration (doc 38) — are predictive intervals honest?
+    ppc_coverage_90: float | None = None      # endpoint/daily: empirical coverage at 90% nominal
+    ppc_n_obs: int | None = None              # endpoint/daily: observation count
+    ppc_traj_coverage_90: float | None = None  # trajectory: empirical coverage at 90% nominal
+    ppc_traj_n_obs: int | None = None          # trajectory: observation count
+
     def to_webhook_dict(self) -> dict[str, Any]:
         """Format for the webhook payload's edge.probability block."""
         result = {
@@ -602,6 +609,12 @@ class PosteriorSummary:
             result["delta_elpd"] = round(self.delta_elpd, 3)
             result["pareto_k_max"] = round(self.pareto_k_max, 3) if self.pareto_k_max is not None else None
             result["n_loo_obs"] = self.n_loo_obs
+        if self.ppc_coverage_90 is not None:
+            result["ppc_coverage_90"] = round(self.ppc_coverage_90, 3)
+            result["ppc_n_obs"] = self.ppc_n_obs
+        if self.ppc_traj_coverage_90 is not None:
+            result["ppc_traj_coverage_90"] = round(self.ppc_traj_coverage_90, 3)
+            result["ppc_traj_n_obs"] = self.ppc_traj_n_obs
         return result
 
 
@@ -665,6 +678,10 @@ class LatencyPosteriorSummary:
     pareto_k_max: float | None = None
     n_loo_obs: int | None = None
 
+    # PPC calibration (doc 38)
+    ppc_traj_coverage_90: float | None = None
+    ppc_traj_n_obs: int | None = None
+
     def to_webhook_dict(self) -> dict[str, Any]:
         """Format for the webhook payload's edge.latency block.
 
@@ -714,6 +731,10 @@ class LatencyPosteriorSummary:
             result["delta_elpd"] = round(self.delta_elpd, 3)
             result["pareto_k_max"] = round(self.pareto_k_max, 3) if self.pareto_k_max is not None else None
             result["n_loo_obs"] = self.n_loo_obs
+        # PPC calibration (doc 38)
+        if self.ppc_traj_coverage_90 is not None:
+            result["ppc_traj_coverage_90"] = round(self.ppc_traj_coverage_90, 3)
+            result["ppc_traj_n_obs"] = self.ppc_traj_n_obs
         return result
 
 

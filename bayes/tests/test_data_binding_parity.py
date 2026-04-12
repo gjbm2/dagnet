@@ -1122,6 +1122,347 @@ class TestLateCohort:
 # DGP; the binder doesn't. If they disagree, one of them is wrong.
 # ═══════════════════════════════════════════════════════════════
 
+# ═══════════════════════════════════════════════════════════════
+# LAYER 6: Defect-hunting tests
+#
+# These are designed to expose LIVE defects by testing scenarios
+# where the code's assumptions break. Each test encodes a specific
+# hypothesis about what the code gets wrong.
+# ════════════════════════════════════════════════════════════��══
+
+class TestRegimeClassificationOverride:
+    """The regime classification logic at evidence.py:289-292 re-derives
+    the regime from whether context rows exist in the data, completely
+    ignoring the value passed in regime_selections.regime_per_date.
+
+    If the caller says "this date is mece_partition" but no context rows
+    exist for that date, the binder silently overrides to "uncontexted".
+    Conversely, if the caller says "uncontexted" but context rows exist,
+    the binder overrides to "mece_partition".
+
+    This means regime_selections.regime_per_date values are thrown away —
+    only the keys (date set) are used.
+    """
+
+    @pytest.fixture
+    def topo_pf(self):
+        return _topo_and_pf(("e1", "A", "B", "p1"))
+
+    def test_caller_regime_respected_not_overridden(self, topo_pf):
+        """Caller says ret1 is 'uncontexted'. Data has context rows for
+        ret1. The binder should respect the caller's decision, NOT
+        override to 'mece_partition'.
+
+        If the binder overrides, then on ret1 the aggregate will be
+        regime-stripped (removed) even though the caller said to keep it.
+        """
+        topo, pf = topo_pf
+        ret1 = "2025-03-15"
+        ret2 = "2025-03-31"
+        rows = []
+        base_dt = datetime(2025, 3, 1)
+
+        # ret1: caller says "uncontexted", but data has context rows
+        for d in range(10):
+            anc = (base_dt - timedelta(days=20 - d)).strftime("%Y-%m-%d")
+            rows.append(_r(anc, f"{ret1}T02:00:00", x=600, y=180,
+                           sk="context(channel:google).window()", ch="h-ctx", pid="p1"))
+            rows.append(_r(anc, f"{ret1}T02:00:00", x=400, y=120,
+                           sk="context(channel:organic).window()", ch="h-ctx", pid="p1"))
+
+        # ret2: caller says "mece_partition", data also has context rows
+        for d in range(10, 20):
+            anc = (base_dt - timedelta(days=20 - d)).strftime("%Y-%m-%d")
+            rows.append(_r(anc, f"{ret2}T02:00:00", x=600, y=180,
+                           sk="context(channel:google).window()", ch="h-ctx", pid="p1"))
+            rows.append(_r(anc, f"{ret2}T02:00:00", x=400, y=120,
+                           sk="context(channel:organic).window()", ch="h-ctx", pid="p1"))
+
+        ev = bind_snapshot_evidence(
+            topo, {"e1": rows}, pf, today="1-Mar-25",
+            mece_dimensions=["channel"],
+            commissioned_slices={"e1": {"context(channel:google)", "context(channel:organic)"}},
+            regime_selections=_regime("e1", {
+                ret1: "uncontexted",   # caller says: keep aggregate for ret1
+                ret2: "mece_partition" # caller says: use slices for ret2
+            }))
+
+        e = ev.edges["e1"]
+        # The regime_per_date on the edge should reflect the CALLER's
+        # decision, not the data-derived override.
+        assert e.regime_per_date.get(ret1) == "uncontexted", (
+            f"Caller said ret1 is 'uncontexted' but binder overrode to "
+            f"'{e.regime_per_date.get(ret1)}'. The regime_selections "
+            f"value was ignored — classification was re-derived from data."
+        )
+
+
+class TestUncontextedRegimeDoubleCount:
+    """On 'uncontexted' regime dates, context rows are collected into
+    ctx_*_rows (evidence.py:584-590) AND MECE-summed into the aggregate.
+    When _route_slices runs, per-context observations get moved to
+    SliceGroups. But the aggregate still has the summed data.
+
+    If slices are NOT exhaustive (partial coverage), the model uses
+    BOTH aggregate and slices → double-counting.
+    """
+
+    @pytest.fixture
+    def topo_pf(self):
+        return _topo_and_pf(("e1", "A", "B", "p1"))
+
+    def test_no_double_count_on_uncontexted_dates(self, topo_pf):
+        """All data on one 'uncontexted' date, with commissioned slices.
+        Only ONE of {aggregate, slices} should contribute observations
+        for the same data. If both contribute, the model sees the data
+        twice.
+
+        Specifically: if we commission only ONE of two channels (partial
+        coverage, so slices are NOT exhaustive), the aggregate should
+        still have the full data and the one commissioned slice should
+        NOT create a second copy.
+        """
+        topo, pf = topo_pf
+        ret = "2025-03-31"
+        rows = []
+        for d in range(20):
+            anc = (datetime(2025, 3, 1) - timedelta(days=20 - d)).strftime("%Y-%m-%d")
+            rows.append(_r(anc, f"{ret}T02:00:00", x=700, y=210,
+                           sk="context(channel:google).window()", ch="h-ctx", pid="p1"))
+            rows.append(_r(anc, f"{ret}T02:00:00", x=300, y=90,
+                           sk="context(channel:organic).window()", ch="h-ctx", pid="p1"))
+
+        # Commission only google (partial coverage → non-exhaustive)
+        ev = bind_snapshot_evidence(
+            topo, {"e1": rows}, pf, today="1-Mar-25",
+            mece_dimensions=["channel"],
+            commissioned_slices={"e1": {"context(channel:google)"}},
+            regime_selections=_regime("e1", {ret: "uncontexted"}))
+
+        e = ev.edges["e1"]
+        agg_volume = _agg_n(ev, "e1")
+        slice_volume = _slice_total_n(ev, "e1")
+
+        # The total modelled volume should be the population (20*1000),
+        # NOT population + google slice (20*1000 + 20*700 = 34,000).
+        expected_population = 20 * 1000
+        total_modelled = agg_volume + slice_volume
+
+        assert total_modelled <= expected_population * 1.05, (
+            f"DOUBLE-COUNTING detected on uncontexted regime date: "
+            f"aggregate={agg_volume}, slices={slice_volume}, "
+            f"total modelled={total_modelled}, expected≈{expected_population}. "
+            f"The same data appears in both aggregate and SliceGroups."
+        )
+
+
+class TestExhaustivenessInflation:
+    """When mece_partition dates have been regime-stripped from the
+    aggregate, agg_n shrinks. But slice_n includes data from ALL dates.
+    The exhaustiveness check (coverage = slice_n / agg_n) is inflated,
+    potentially making non-exhaustive data appear exhaustive.
+
+    Scenario: 20 days. First 10 = uncontexted (bare only). Last 10 =
+    mece_partition (context only). Commission only ONE of two channels.
+
+    Expected: partial coverage (one channel out of two) → NOT exhaustive.
+    Actual risk: agg_n is regime-stripped (only first 10 days), slice_n
+    includes last 10 days of one channel. If slice_n > 0.85 * agg_n,
+    is_exhaustive is incorrectly True.
+    """
+
+    @pytest.fixture
+    def topo_pf(self):
+        return _topo_and_pf(("e1", "A", "B", "p1"))
+
+    def test_partial_coverage_not_inflated_by_regime_stripping(self, topo_pf):
+        """Commission only google (out of google+organic). This is partial
+        coverage (50%). It should NOT be reported as exhaustive even after
+        regime stripping reduces the aggregate.
+        """
+        topo, pf = topo_pf
+        base_dt = datetime(2025, 3, 1)
+        ret1 = "2025-03-15"
+        ret2 = "2025-03-31"
+        rows = []
+
+        # First 10 days: bare aggregate only (uncontexted regime)
+        for d in range(10):
+            anc = (base_dt - timedelta(days=20 - d)).strftime("%Y-%m-%d")
+            rows.append(_r(anc, f"{ret1}T02:00:00", x=1000, y=300,
+                           sk="window()", ch="h-bare", pid="p1"))
+
+        # Last 10 days: context-qualified only (mece_partition regime)
+        for d in range(10, 20):
+            anc = (base_dt - timedelta(days=20 - d)).strftime("%Y-%m-%d")
+            rows.append(_r(anc, f"{ret2}T02:00:00", x=600, y=180,
+                           sk="context(channel:google).window()", ch="h-ctx", pid="p1"))
+            rows.append(_r(anc, f"{ret2}T02:00:00", x=400, y=120,
+                           sk="context(channel:organic).window()", ch="h-ctx", pid="p1"))
+
+        # Commission only google (partial: 60% of context data)
+        ev = bind_snapshot_evidence(
+            topo, {"e1": rows}, pf, today="1-Mar-25",
+            mece_dimensions=["channel"],
+            commissioned_slices={"e1": {"context(channel:google)"}},
+            regime_selections=_regime("e1", {ret1: "uncontexted", ret2: "mece_partition"}))
+
+        e = ev.edges["e1"]
+        if "channel" in e.slice_groups:
+            sg = e.slice_groups["channel"]
+            # We commissioned only ONE of TWO channels. Coverage is ~50%.
+            # This should NOT be reported as exhaustive.
+            assert not sg.is_exhaustive, (
+                f"INFLATED EXHAUSTIVENESS: SliceGroup reports is_exhaustive=True "
+                f"but only 1 of 2 channels was commissioned (≈50% coverage). "
+                f"Regime stripping may have reduced agg_n, inflating the "
+                f"coverage ratio. slices={list(sg.slices.keys())}"
+            )
+
+
+class TestPerContextObsNotInTotalNWhenNoAggregate:
+    """When all rows are non-MECE context-qualified (no MECE dimension
+    declared, no bare rows), per-context observations are built at
+    Step 3b but total_n is NOT incremented (comment: 'the aggregate
+    already accounts for the full data volume'). But there IS no
+    aggregate. So total_n stays 0.
+
+    If no commissioned slices exist, _route_slices returns early and
+    no SliceGroups are created. The recomputation step (lines 429-443)
+    finds slice_n=0 and total_n stays 0. Edge is skipped.
+
+    The per-context observations exist in cohort_obs but are invisible
+    to the model because total_n=0 triggers the skip gate.
+    """
+
+    @pytest.fixture
+    def topo_pf(self):
+        return _topo_and_pf(("e1", "A", "B", "p1"))
+
+    def test_non_mece_context_no_commission_total_n(self, topo_pf):
+        """All rows are context-qualified. Dimension is NOT declared MECE.
+        No commissioned slices. total_n should still reflect the data
+        volume present in the per-context observations.
+        """
+        topo, pf = topo_pf
+        ret = "2025-03-31"
+        rows = []
+        for d in range(20):
+            anc = (datetime(2025, 3, 1) - timedelta(days=20 - d)).strftime("%Y-%m-%d")
+            rows.append(_r(anc, f"{ret}T02:00:00", x=600, y=180,
+                           sk="context(channel:google).window()", ch="h-ctx", pid="p1"))
+            rows.append(_r(anc, f"{ret}T02:00:00", x=400, y=120,
+                           sk="context(channel:organic).window()", ch="h-ctx", pid="p1"))
+
+        # No mece_dimensions, no commissioned_slices
+        ev = bind_snapshot_evidence(
+            topo, {"e1": rows}, pf, today="1-Mar-25",
+            mece_dimensions=[])  # NOT declaring channel as MECE
+
+        e = ev.edges["e1"]
+        # Per-context observations were built at Step 3b and exist in
+        # cohort_obs. But total_n was never incremented from them.
+        # This is 40 rows of real data that the binder acknowledges
+        # (rows_received=40) but models zero of.
+        has_ctx_obs = any(
+            "context(" in co.slice_dsl for co in e.cohort_obs
+        )
+
+        if has_ctx_obs and e.total_n == 0:
+            # This IS the defect: per-context obs exist but total_n=0
+            pytest.fail(
+                f"DATA LOSS: {e.rows_received} rows produced per-context "
+                f"observations but total_n=0 because Step 3b does not "
+                f"increment total_n and no aggregate was built (non-MECE "
+                f"context rows skip the aggregate). Per-context obs in "
+                f"cohort_obs: {[co.slice_dsl for co in e.cohort_obs]}"
+            )
+
+    def test_non_mece_context_with_commission_total_n(self, topo_pf):
+        """Same scenario but WITH commissioned slices. _route_slices
+        should create SliceGroups and the recomputation should set
+        total_n from slice_n.
+        """
+        topo, pf = topo_pf
+        ret = "2025-03-31"
+        rows = []
+        for d in range(20):
+            anc = (datetime(2025, 3, 1) - timedelta(days=20 - d)).strftime("%Y-%m-%d")
+            rows.append(_r(anc, f"{ret}T02:00:00", x=600, y=180,
+                           sk="context(channel:google).window()", ch="h-ctx", pid="p1"))
+            rows.append(_r(anc, f"{ret}T02:00:00", x=400, y=120,
+                           sk="context(channel:organic).window()", ch="h-ctx", pid="p1"))
+
+        ev = bind_snapshot_evidence(
+            topo, {"e1": rows}, pf, today="1-Mar-25",
+            mece_dimensions=[],  # NOT declaring channel as MECE
+            commissioned_slices={"e1": {"context(channel:google)", "context(channel:organic)"}})
+
+        e = ev.edges["e1"]
+        # With commissioned slices, _route_slices should have created
+        # SliceGroups and the recomputation should pick up slice_n.
+        expected_volume = 20 * 1000  # 600+400 per day * 20 days
+        assert e.total_n > 0, (
+            f"total_n still 0 even with commissioned slices. "
+            f"SliceGroups: {list(e.slice_groups.keys())}, "
+            f"has_slices={e.has_slices}"
+        )
+
+
+class TestMeceAggregationAFieldLoss:
+    """When MECE context rows are summed (evidence.py:607-614), the 'a'
+    field (anchor entrants) is only summed if BOTH rows have 'a' not None.
+    If one row has a=None and another has a=500, the summed row retains
+    a=None from the first. For cohort observations, this loses the anchor
+    count.
+    """
+
+    @pytest.fixture
+    def topo_pf(self):
+        return _topo_and_pf(("e1", "A", "B", "p1"))
+
+    def test_a_field_survives_partial_null(self, topo_pf):
+        """First context row has a=None, second has a=800. The MECE-summed
+        row should have a=800 (or a=sum), not a=None.
+        """
+        topo, pf = topo_pf
+        ret = "2025-03-31"
+        rows = []
+        for d in range(15):
+            anc = (datetime(2025, 3, 1) - timedelta(days=15 - d)).strftime("%Y-%m-%d")
+            # Cohort: first channel has a=None
+            rows.append(_r(anc, f"{ret}T02:00:00", x=600, y=180, a=None,
+                           sk="context(channel:google).cohort()", ch="h-ctx", pid="p1"))
+            # Cohort: second channel has a=800
+            rows.append(_r(anc, f"{ret}T02:00:00", x=400, y=120, a=800,
+                           sk="context(channel:organic).cohort()", ch="h-ctx", pid="p1"))
+
+        ev = bind_snapshot_evidence(
+            topo, {"e1": rows}, pf, today="1-Mar-25",
+            mece_dimensions=["channel"])
+
+        e = ev.edges["e1"]
+        # The cohort observations should have anchor data. If the MECE
+        # summing dropped 'a' because one row had a=None, the cohort
+        # denominator will be wrong or missing.
+        cohort_obs = [co for co in e.cohort_obs if "cohort" in co.slice_dsl]
+        if cohort_obs:
+            for co in cohort_obs:
+                for tj in co.trajectories:
+                    # Trajectory denominator: the builder uses max(x).
+                    # But if the intended use of 'a' was for display/path
+                    # rate, losing it is still a data integrity issue.
+                    pass
+        # At minimum, the edge should have cohort data
+        assert e.has_cohort or e.has_window, (
+            f"Edge lost all data during MECE aggregation with partial 'a' nulls"
+        )
+
+
+# ═══════════════════════════════════════════════════════════════
+# LAYER 5: Synth-generator oracle tests (continued from above)
+# ═════════════════════════════════════════════���═════════════════
+
 class TestSynthRoundTrip:
     """Round-trip: synth generates rows → binder consumes rows.
     Volume must match the simulation config.

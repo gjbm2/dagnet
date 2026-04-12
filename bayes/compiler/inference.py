@@ -679,6 +679,7 @@ def summarise_posteriors(
     phase1_kappa: dict[str, "np.ndarray"] | None = None,
     settings: dict | None = None,
     loo_scores: dict | None = None,
+    calibration_scores: dict | None = None,
 ) -> InferenceResult:
     """Extract posterior summaries from the MCMC trace.
 
@@ -966,27 +967,44 @@ def summarise_posteriors(
                 post.tau_slice_mean = float(np.mean(tau_samples))
                 post.tau_slice_sd = float(np.std(tau_samples))
 
+            # Unpack per-slice posteriors from vector RVs using
+            # slice_axes metadata (doc 38 §Native Vector Batching).
+            _sa = metadata.get("slice_axes", {}).get(edge_id)
+            _p_vec_name = f"p_slice_vec_{safe_eid}"
+            _k_vec_name = f"kappa_slice_vec_{safe_eid}"
+            _mu_vec_name = f"mu_slice_vec_{safe_eid}"
+
             for _dim_key, _group in ev.slice_groups.items():
                 for _ctx_key, _s_obs in _group.slices.items():
                     _ctx_safe = _safe_var_name(_ctx_key)
-                    _ps_name = f"p_slice_{safe_eid}_{_ctx_safe}"
-                    if _ps_name not in trace.posterior:
-                        continue
-                    _ps_samples = trace.posterior[_ps_name].values.flatten()
+                    # Look up slice index from metadata
+                    _si = _sa["ctx_to_idx"][_ctx_key] if _sa else None
+
+                    # --- p samples: vector path (preferred) or scalar fallback ---
+                    if _si is not None and _p_vec_name in trace.posterior:
+                        _ps_samples = trace.posterior[_p_vec_name].values[:, :, _si].flatten()
+                    else:
+                        _ps_scalar = f"p_slice_{safe_eid}_{_ctx_safe}"
+                        if _ps_scalar not in trace.posterior:
+                            continue
+                        _ps_samples = trace.posterior[_ps_scalar].values.flatten()
+
                     _ps_mean = float(np.mean(_ps_samples))
                     _ps_std = float(np.std(_ps_samples))
                     _ps_hdi = az.hdi(_ps_samples, hdi_prob=HDI_PROB)
                     _ps_ab = _fit_beta_to_samples(_ps_samples)
-                    # Per-slice kappa — use predictive alpha/beta if available
-                    _ks_name = f"kappa_slice_{safe_eid}_{_ctx_safe}"
-                    _ks_samples = (
-                        trace.posterior[_ks_name].values.flatten()
-                        if _ks_name in trace.posterior else None
-                    )
+
+                    # --- kappa samples: vector path or scalar fallback ---
+                    _ks_samples = None
+                    if _si is not None and _k_vec_name in trace.posterior:
+                        _ks_samples = trace.posterior[_k_vec_name].values[:, :, _si].flatten()
+                    else:
+                        _ks_scalar = f"kappa_slice_{safe_eid}_{_ctx_safe}"
+                        if _ks_scalar in trace.posterior:
+                            _ks_samples = trace.posterior[_ks_scalar].values.flatten()
 
                     if _ks_samples is not None:
                         # Predictive distribution: Beta(p*kappa, (1-p)*kappa)
-                        # Same pattern as edge-level _predictive_alpha_beta
                         _n_use = min(len(_ps_samples), len(_ks_samples))
                         _pred_alpha, _pred_beta, _pred_hdi_lo, _pred_hdi_hi = _predictive_alpha_beta(
                             _ps_samples[:_n_use], kappa_samples=_ks_samples[:_n_use])
@@ -1012,13 +1030,11 @@ def summarise_posteriors(
                         _slice_entry["kappa_mean"] = float(np.mean(_ks_samples))
                         _slice_entry["kappa_sd"] = float(np.std(_ks_samples))
 
-                    # Per-slice latency (§R2b2)
-                    _mu_s_name = f"mu_slice_{safe_eid}_{_ctx_safe}"
-                    _sigma_s_name = f"sigma_slice_{safe_eid}_{_ctx_safe}"
-                    _onset_s_name = f"onset_slice_{safe_eid}_{_ctx_safe}"
-                    if _mu_s_name in trace.posterior:
-                        _slice_entry["mu_mean"] = float(trace.posterior[_mu_s_name].values.mean())
-                        _slice_entry["mu_sd"] = float(trace.posterior[_mu_s_name].values.std())
+                    # --- Per-slice latency: vector path or scalar fallback ---
+                    if _si is not None and _mu_vec_name in trace.posterior:
+                        _mu_s = trace.posterior[_mu_vec_name].values[:, :, _si].flatten()
+                        _slice_entry["mu_mean"] = float(np.mean(_mu_s))
+                        _slice_entry["mu_sd"] = float(np.std(_mu_s))
                         # Latency dispersion (doc 34): per-slice kappa_lat
                         for _sot in ("cohort", "window"):
                             _sc = f"kappa_lat_{safe_eid}__{_ctx_safe}_{_sot}"
@@ -1027,12 +1043,12 @@ def summarise_posteriors(
                                 _slice_entry["kappa_lat_mean"] = float(np.mean(_skl))
                                 _slice_entry["kappa_lat_sd"] = float(np.std(_skl))
                                 break
-                    if _sigma_s_name in trace.posterior:
-                        _slice_entry["sigma_mean"] = float(trace.posterior[_sigma_s_name].values.mean())
-                        _slice_entry["sigma_sd"] = float(trace.posterior[_sigma_s_name].values.std())
-                    if _onset_s_name in trace.posterior:
-                        _slice_entry["onset_mean"] = float(trace.posterior[_onset_s_name].values.mean())
-                        _slice_entry["onset_sd"] = float(trace.posterior[_onset_s_name].values.std())
+                    else:
+                        _mu_s_name = f"mu_slice_{safe_eid}_{_ctx_safe}"
+                        if _mu_s_name in trace.posterior:
+                            _slice_entry["mu_mean"] = float(trace.posterior[_mu_s_name].values.mean())
+                            _slice_entry["mu_sd"] = float(trace.posterior[_mu_s_name].values.std())
+                    # sigma and onset are edge-level (doc 38), no per-slice extraction
 
                     post.slice_posteriors[_ctx_key] = _slice_entry
 
@@ -1370,6 +1386,23 @@ def summarise_posteriors(
             quality.worst_pareto_k = max(m.pareto_k_max for m in all_loo)
             quality.n_high_k = sum(1 for m in all_loo if m.pareto_k_max > 0.7)
 
+    # Attach PPC calibration scores (doc 38) if available
+    if calibration_scores:
+        for ps in posteriors:
+            cal = calibration_scores.get(ps.edge_id)
+            if cal:
+                if cal.endpoint_daily:
+                    ps.ppc_coverage_90 = cal.endpoint_daily.coverage_90
+                    ps.ppc_n_obs = cal.endpoint_daily.n_obs
+                if cal.trajectory:
+                    ps.ppc_traj_coverage_90 = cal.trajectory.coverage_90
+                    ps.ppc_traj_n_obs = cal.trajectory.n_obs
+        for edge_id, lps in latency_posteriors.items():
+            cal = calibration_scores.get(edge_id)
+            if cal and cal.trajectory:
+                lps.ppc_traj_coverage_90 = cal.trajectory.coverage_90
+                lps.ppc_traj_n_obs = cal.trajectory.n_obs
+
     return InferenceResult(
         posteriors=posteriors,
         latency_posteriors=latency_posteriors,
@@ -1534,7 +1567,11 @@ def _sample_nutpie(model, config: SamplingConfig, report_progress=None,
 
         # Build the sampler manually so we can inject our ProgressType.
         # This mirrors what nutpie.sample() does internally.
-        settings = nutpie_lib.PyNutsSettings.LowRank(config.random_seed)
+        _use_lowrank = getattr(config, 'lowrank_mass_matrix', False)
+        if _use_lowrank:
+            settings = nutpie_lib.PyNutsSettings.LowRank(config.random_seed)
+        else:
+            settings = nutpie_lib.PyNutsSettings.Diag(config.random_seed)
         settings.num_tune = config.tune
         settings.num_draws = config.draws
         settings.num_chains = config.chains
@@ -1556,8 +1593,9 @@ def _sample_nutpie(model, config: SamplingConfig, report_progress=None,
 
         compile_ms = int((time.time() - t_phase_start) * 1000)
         phase_tag = f" {phase_label}" if phase_label else ""
+        _mass_str = "lowrank" if _use_lowrank else "diag"
         print(f"[nutpie{phase_tag}] cores={cores}, os.cpu_count={os.cpu_count()}, "
-              f"chains={config.chains}, draws={config.draws}, tune={config.tune}, "
+              f"chains={config.chains}, draws={config.draws}, tune={config.tune}, mass={_mass_str}, "
               f"compile={compile_ms}ms, n_dim={compiled_model.n_dim}", flush=True)
 
         sampler = compiled_model._make_sampler(

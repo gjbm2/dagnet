@@ -765,6 +765,11 @@ export interface ProbabilityPosterior {
   delta_elpd?: number | null;
   pareto_k_max?: number | null;
   n_loo_obs?: number | null;
+  // PPC calibration (doc 38)
+  ppc_coverage_90?: number | null;
+  ppc_n_obs?: number | null;
+  ppc_traj_coverage_90?: number | null;
+  ppc_traj_n_obs?: number | null;
 }
 
 /** Latency posterior summary on graph edge.
@@ -812,6 +817,9 @@ export interface LatencyPosterior {
   delta_elpd?: number | null;
   pareto_k_max?: number | null;
   n_loo_obs?: number | null;
+  // PPC calibration (doc 38)
+  ppc_traj_coverage_90?: number | null;
+  ppc_traj_n_obs?: number | null;
 }
 
 /** Quality metrics from a Bayesian fitting run */

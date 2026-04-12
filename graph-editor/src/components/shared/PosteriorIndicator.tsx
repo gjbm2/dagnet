@@ -204,6 +204,22 @@ function ProbabilityPosteriorDetails({ posterior, tier, colour, retrievedAt, the
             </td>
           </tr>
         )}
+        {posterior.ppc_coverage_90 != null && (
+          <tr>
+            <td className="posterior-details-label">PPC cov@90%</td>
+            <td className="posterior-details-value" style={posterior.ppc_coverage_90 < 0.82 || posterior.ppc_coverage_90 > 0.97 ? { color: qualityTierToColour('warning', theme) } : undefined}>
+              {(posterior.ppc_coverage_90 * 100).toFixed(0)}% <span style={{ opacity: 0.5 }}>({posterior.ppc_n_obs} obs)</span>
+            </td>
+          </tr>
+        )}
+        {'ppc_traj_coverage_90' in posterior && posterior.ppc_traj_coverage_90 != null && (
+          <tr>
+            <td className="posterior-details-label">PPC traj@90%</td>
+            <td className="posterior-details-value" style={posterior.ppc_traj_coverage_90 < 0.82 || posterior.ppc_traj_coverage_90 > 0.97 ? { color: qualityTierToColour('warning', theme) } : undefined}>
+              {(posterior.ppc_traj_coverage_90 * 100).toFixed(0)}% <span style={{ opacity: 0.5 }}>({posterior.ppc_traj_n_obs} obs)</span>
+            </td>
+          </tr>
+        )}
 
         {/* ── Metadata ── */}
         <SectionHeader label="Metadata" theme={theme} />
@@ -415,6 +431,22 @@ function LatencyPosteriorDetails({ posterior, tier, colour, retrievedAt, theme, 
             <td className="posterior-details-label">Pareto k</td>
             <td className="posterior-details-value" style={posterior.pareto_k_max > 0.7 ? { color: qualityTierToColour('warning', theme) } : undefined}>
               {posterior.pareto_k_max.toFixed(3)}
+            </td>
+          </tr>
+        )}
+        {posterior.ppc_coverage_90 != null && (
+          <tr>
+            <td className="posterior-details-label">PPC cov@90%</td>
+            <td className="posterior-details-value" style={posterior.ppc_coverage_90 < 0.82 || posterior.ppc_coverage_90 > 0.97 ? { color: qualityTierToColour('warning', theme) } : undefined}>
+              {(posterior.ppc_coverage_90 * 100).toFixed(0)}% <span style={{ opacity: 0.5 }}>({posterior.ppc_n_obs} obs)</span>
+            </td>
+          </tr>
+        )}
+        {'ppc_traj_coverage_90' in posterior && posterior.ppc_traj_coverage_90 != null && (
+          <tr>
+            <td className="posterior-details-label">PPC traj@90%</td>
+            <td className="posterior-details-value" style={posterior.ppc_traj_coverage_90 < 0.82 || posterior.ppc_traj_coverage_90 > 0.97 ? { color: qualityTierToColour('warning', theme) } : undefined}>
+              {(posterior.ppc_traj_coverage_90 * 100).toFixed(0)}% <span style={{ opacity: 0.5 }}>({posterior.ppc_traj_n_obs} obs)</span>
             </td>
           </tr>
         )}

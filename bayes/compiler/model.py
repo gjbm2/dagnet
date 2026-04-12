@@ -380,6 +380,7 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                        f"window_only={feat_window_only}, "
                        f"latency_dispersion={feat_latency_dispersion}")
     edge_var_names: dict[str, str] = {}  # edge_id → primary p variable name
+    slice_axes: dict[str, dict] = {}     # edge_id → {ctx_keys, ctx_to_idx, n_slices, safe_id}
 
     # Identify which edges will have their window obs handled by a branch
     # group Multinomial instead of per-edge Binomials.
@@ -1137,6 +1138,30 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
             _emissions = []  # [(safe_suffix, p_var, kappa_var, ev, lv, ov)]
 
             if ev.has_slices and not is_phase2:
+                # Build stable ordered slice axis for this edge.
+                # ctx_keys_ordered is the canonical ordering; every
+                # downstream vector RV and batched likelihood indexes
+                # by position in this list.  See doc 38 §Native Vector
+                # Batching for design rationale.
+                _slice_ctx_keys = []
+                _slice_obs_ordered = []
+                for _dk, _sg in ev.slice_groups.items():
+                    for _ck, _so in _sg.slices.items():
+                        _slice_ctx_keys.append(_ck)
+                        _slice_obs_ordered.append(_so)
+                _n_slices = len(_slice_ctx_keys)
+                _ctx_to_idx = {ck: i for i, ck in enumerate(_slice_ctx_keys)}
+                slice_axes[edge_id] = {
+                    "ctx_keys": _slice_ctx_keys,
+                    "ctx_to_idx": _ctx_to_idx,
+                    "n_slices": _n_slices,
+                    "safe_id": safe_id,
+                }
+                diagnostics.append(
+                    f"  slice_axis {edge_id[:8]}…: {_n_slices} slices "
+                    f"[{', '.join(ck for ck in _slice_ctx_keys)}]"
+                )
+
                 # Create p_base (hierarchy anchor)
                 if p_base_var is not None:
                     p = p_base_var
@@ -1161,46 +1186,68 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                     _onset_base = _ov_base if _ov_base is not None else pt.as_tensor_variable(np.float64(et.onset_delta_days))
                     tau_mu_slice = pm.HalfNormal(f"tau_mu_slice_{safe_id}", sigma=0.3)
 
-                for dim_key, group in ev.slice_groups.items():
-                    for ctx_key, s_obs in group.slices.items():
-                        ctx_safe = _safe_var_name(ctx_key)
-                        _sfx = f"{safe_id}__{ctx_safe}"
+                # ── Vector RVs for per-slice families (doc 38 §Native
+                # Vector Batching).  One vector per family, shape [n_slices].
+                # Non-BG p offsets:
+                if not _is_bg:
+                    _eps_slice_vec = pm.Normal(
+                        f"eps_slice_vec_{safe_id}",
+                        mu=0, sigma=1, shape=(_n_slices,))
+                    _p_slice_vec = pm.Deterministic(
+                        f"p_slice_vec_{safe_id}",
+                        pm.math.invlogit(logit_p_base + _eps_slice_vec * tau_slice))
 
-                        # Per-slice p
-                        if _is_bg and ctx_key in bg_slice_p_vars.get(edge_id, {}):
-                            p_s = bg_slice_p_vars[edge_id][ctx_key]
-                        else:
-                            _eps = pm.Normal(f"eps_slice_{safe_id}_{ctx_safe}", mu=0, sigma=1)
-                            p_s = pm.Deterministic(
-                                f"p_slice_{safe_id}_{ctx_safe}",
-                                pm.math.invlogit(logit_p_base + _eps * tau_slice))
+                # Kappa (all edges, including BG):
+                _log_kappa_slice_vec = pm.Normal(
+                    f"log_kappa_slice_vec_{safe_id}",
+                    mu=LOG_KAPPA_MU, sigma=LOG_KAPPA_SIGMA,
+                    shape=(_n_slices,))
+                _kappa_slice_vec = pm.Deterministic(
+                    f"kappa_slice_vec_{safe_id}",
+                    pt.exp(_log_kappa_slice_vec))
 
-                        # Per-slice kappa
-                        _lks = pm.Normal(f"log_kappa_slice_{safe_id}_{ctx_safe}",
-                                         mu=LOG_KAPPA_MU, sigma=LOG_KAPPA_SIGMA)
-                        ks = pm.Deterministic(f"kappa_slice_{safe_id}_{ctx_safe}", pt.exp(_lks))
+                # Mu offsets (latency edges only):
+                if et.has_latency:
+                    _eps_mu_slice_vec = pm.Normal(
+                        f"eps_mu_slice_vec_{safe_id}",
+                        mu=0, sigma=1, shape=(_n_slices,))
+                    _mu_slice_vec = pm.Deterministic(
+                        f"mu_slice_vec_{safe_id}",
+                        _mu_base + _eps_mu_slice_vec * tau_mu_slice)
 
-                        # Per-slice latency: only mu varies by slice.
-                        # sigma and onset stay at edge level (shared) — see
-                        # doc 38 §NUTS diagnostics for rationale.
-                        if et.has_latency:
-                            _em = pm.Normal(f"eps_mu_slice_{safe_id}_{ctx_safe}", mu=0, sigma=1)
-                            pm.Deterministic(f"mu_slice_{safe_id}_{ctx_safe}", _mu_base + _em * tau_mu_slice)
-                            _lv = {edge_id: (model[f"mu_slice_{safe_id}_{ctx_safe}"],
-                                             _sigma_base)}
-                            _ov = {edge_id: _onset_base}
-                        else:
-                            _lv = latency_vars
-                            _ov = onset_vars
+                # ─�� Build per-slice emissions by indexing into vectors.
+                # Phase 3 will replace this loop with a batched Potential;
+                # for now, extract scalars to keep emission logic unchanged.
+                for _si, (_ck, _so) in enumerate(
+                        zip(_slice_ctx_keys, _slice_obs_ordered)):
+                    ctx_safe = _safe_var_name(_ck)
+                    _sfx = f"{safe_id}__{ctx_safe}"
 
-                        # Slice ev
-                        s_ev = EdgeEvidence(
-                            edge_id=ev.edge_id, param_id=ev.param_id, file_path=ev.file_path,
-                            window_obs=list(s_obs.window_obs), cohort_obs=list(s_obs.cohort_obs),
-                            has_window=s_obs.has_window, has_cohort=s_obs.has_cohort,
-                            total_n=s_obs.total_n, latency_prior=ev.latency_prior,
-                            kappa_warm=ev.kappa_warm, cohort_latency_warm=ev.cohort_latency_warm)
-                        _emissions.append((_sfx, p_s, ks, s_ev, _lv, _ov))
+                    # Per-slice p (scalar view into vector)
+                    if _is_bg and _ck in bg_slice_p_vars.get(edge_id, {}):
+                        p_s = bg_slice_p_vars[edge_id][_ck]
+                    else:
+                        p_s = _p_slice_vec[_si]
+
+                    # Per-slice kappa (scalar view)
+                    ks = _kappa_slice_vec[_si]
+
+                    # Per-slice latency
+                    if et.has_latency:
+                        _lv = {edge_id: (_mu_slice_vec[_si], _sigma_base)}
+                        _ov = {edge_id: _onset_base}
+                    else:
+                        _lv = latency_vars
+                        _ov = onset_vars
+
+                    # Slice ev
+                    s_ev = EdgeEvidence(
+                        edge_id=ev.edge_id, param_id=ev.param_id, file_path=ev.file_path,
+                        window_obs=list(_so.window_obs), cohort_obs=list(_so.cohort_obs),
+                        has_window=_so.has_window, has_cohort=_so.has_cohort,
+                        total_n=_so.total_n, latency_prior=ev.latency_prior,
+                        kappa_warm=ev.kappa_warm, cohort_latency_warm=ev.cohort_latency_warm)
+                    _emissions.append((_sfx, p_s, ks, s_ev, _lv, _ov))
 
                 # If not all exhaustive, also emit aggregate
                 _all_exhaustive = all(sg.is_exhaustive for sg in ev.slice_groups.values())
@@ -1211,6 +1258,15 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
             else:
                 # No slices or Phase 2: single aggregate emission
                 _emissions.append((safe_id, None, edge_kappa, ev, latency_vars, onset_vars))
+
+            # Determine whether to batch window trajectory Potentials.
+            # Phase 1 contexted edges with slice data use the batched
+            # path (one Potential per edge instead of one per slice).
+            _use_batched_traj = (
+                ev.has_slices and not is_phase2
+                and edge_id in slice_axes
+                and et.has_latency
+            )
 
             for _sfx, _p_ov, _kp, _ev, _lv, _ov in _emissions:
                 _emit_edge_likelihoods(
@@ -1229,6 +1285,27 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                     _s_dirichlet_conc_floor=_s_dirichlet_conc_floor,
                     _fallback_prior_ess=_fallback_prior_ess,
                     feat_window_only=feat_window_only,
+                    skip_trajectory_potentials=_use_batched_traj,
+                )
+
+            # Emit one batched window trajectory Potential per edge
+            # (replaces S per-slice Potentials — doc 38 §Native Vector).
+            if _use_batched_traj:
+                _emit_batched_window_trajectories(
+                    edge_id=edge_id,
+                    safe_id=safe_id,
+                    p_slice_vec=_p_slice_vec if not _is_bg else pt.stack(
+                        [bg_slice_p_vars[edge_id].get(ck, _p_slice_vec[i])
+                         for i, ck in enumerate(_slice_ctx_keys)]),
+                    mu_slice_vec=_mu_slice_vec if et.has_latency else None,
+                    sigma_base=_sigma_base,
+                    onset_base=_onset_base,
+                    slice_obs_list=_slice_obs_ordered,
+                    slice_ctx_keys=_slice_ctx_keys,
+                    diagnostics=diagnostics,
+                    features=features,
+                    settings=_s,
+                    _softplus_k=_softplus_k,
                 )
 
         # =============================================================
@@ -1284,6 +1361,7 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
         "latent_latency_edges": set(latency_vars.keys()),
         "latent_onset_edges": set(onset_vars.keys()),
         "cohort_latency_edges": set(cohort_latency_vars.keys()),
+        "slice_axes": slice_axes,
         "diagnostics": diagnostics,
         "features": features or {},
     }
@@ -2455,34 +2533,30 @@ def _resolve_path_probability(
         return current_p
 
 
-def _emit_batched_slice_trajectories(
+def _emit_batched_window_trajectories(
     edge_id: str,
-    base_safe_id: str,
-    slice_emissions: list,
-    et,
-    topology,
+    safe_id: str,
+    p_slice_vec,
+    mu_slice_vec,
+    sigma_base,
+    onset_base,
+    slice_obs_list: list,
+    slice_ctx_keys: list[str],
     diagnostics: list[str],
     features: dict | None = None,
     settings: dict | None = None,
     _softplus_k: float = SOFTPLUS_SHARPNESS,
 ) -> None:
-    """Emit trajectory Potentials batched across all slices of one edge.
+    """Emit ONE Phase 1 window trajectory Potential for all slices of one edge.
 
-    Instead of creating S separate Potential terms (one per slice), this
-    creates at most 2 (one for window, one for cohort obs_type).  Per-
-    slice latency and p variables are stacked into vectors, and the CDF
-    computation is vectorised across all slices' intervals in a single
-    PyTensor subgraph.
+    Uses native vector RVs (p_slice_vec, mu_slice_vec) directly — no
+    pt.stack of scalars.  sigma and onset are edge-level (shared across
+    slices, doc 38).
 
-    Mathematically identical to per-slice emission but produces a much
-    smaller PyTensor compilation graph: O(1) CDF subgraphs instead of
-    O(S).  This prevents the super-linear compilation memory growth that
-    was crashing WSL on contexted graphs with >= ~30 Potentials.
-
-    Each entry in *slice_emissions* is a tuple:
-        (suffix, p_var, kappa_var, slice_ev, latency_vars_dict, onset_vars_dict)
-    matching the shape produced by the per-slice emission loop in
-    build_model Section 5.
+    The CDF is computed once across all slices' ages using advanced
+    indexing into mu_slice_vec.  The per-interval hazard uses advanced
+    indexing into p_slice_vec.  The result is one pm.Potential instead
+    of S separate Potentials, reducing the PyTensor graph by O(S).
     """
     import pymc as pm
     import numpy as np
@@ -2491,211 +2565,136 @@ def _emit_batched_slice_trajectories(
     _s = settings or {}
     _sigma_floor = float(_s.get("BAYES_SIGMA_FLOOR",
                                 _s.get("bayes_sigma_floor", SIGMA_FLOOR)))
-    _feat_ld = (features or {}).get("latency_dispersion", True)
 
-    for obs_type in ["window"]:
-        # Phase 1 per-slice: only window trajectories are emitted.
-        # Cohort trajectories are skipped in Phase 1 (the per-slice
-        # _emit_edge_likelihoods call passes skip_cohort_trajectories=True).
-        # This helper is only called from the Phase 1 slice path, so we
-        # must NOT batch cohort — it would require path probability
-        # resolution, join mixtures, and x-denominator rewriting that
-        # only _emit_cohort_likelihoods handles correctly.
+    # ---- Collect window trajectories per slice ----
+    all_ages_raw = []
+    all_d = []
+    all_n_at_risk = []
+    all_weights = []
+    all_curr_idx = []
+    all_prev_idx = []
+    age_to_slice = []           # maps each age position to slice index
+    interval_to_slice = []      # maps each interval to slice index
+    n_intervals_per_slice = []  # for diagnostics
+    global_age_offset = 0
 
-        # ---- Collect per-slice trajectories and latency vars ----
-        slice_p_list = []
-        slice_onset_list = []
-        slice_mu_list = []
-        slice_sigma_list = []
-        slice_suffix_list = []
+    has_latent_latency = mu_slice_vec is not None
 
-        all_ages_raw = []
-        all_d = []
-        all_n_at_risk = []
-        all_weights = []
-        all_curr_idx = []
-        all_prev_idx = []
-        age_to_slice = []       # maps each age to its slice index
-        interval_to_slice = []  # maps each interval to its slice index
-        n_slices_with_data = 0
-        has_latent_latency = False
-        global_age_offset = 0
+    for s_idx, s_obs in enumerate(slice_obs_list):
+        trajs = []
+        for c_obs in s_obs.cohort_obs:
+            for traj in c_obs.trajectories:
+                if len(traj.retrieval_ages) < 2 or traj.n <= 0:
+                    continue
+                if traj.obs_type == "window":
+                    trajs.append(traj)
 
-        for _sfx, p_var, kappa_var, s_ev, lv, ov in slice_emissions:
-            # Collect trajectories for this obs_type (mirrors Step 1 routing)
-            trajs = []
-            edge_has_latency = (
-                edge_id in (lv or {})
-                or (s_ev.latency_prior is not None
-                    and ((s_ev.latency_prior.sigma or 0) > _sigma_floor
-                         or (s_ev.latency_prior.onset_delta_days or 0) > 0))
-            )
-            for c_obs in s_ev.cohort_obs:
-                for traj in c_obs.trajectories:
-                    if len(traj.retrieval_ages) < 2 or traj.n <= 0:
-                        continue
-                    # No-latency window trajs are converted to daily in
-                    # _emit_cohort_likelihoods Step 1 — skip here.
-                    if not edge_has_latency and traj.obs_type == "window":
-                        continue
-                    if traj.obs_type == obs_type:
-                        trajs.append(traj)
-
-            if not trajs:
-                continue
-
-            # Resolve latency for this slice
-            if edge_id in (lv or {}):
-                has_latent_latency = True
-                mu_s, sigma_s = lv[edge_id]
-                onset_s = (ov or {}).get(edge_id, 0.0)
-            elif s_ev.latency_prior:
-                onset_s = s_ev.latency_prior.onset_delta_days or 0.0
-                mu_s = s_ev.latency_prior.mu
-                sigma_s = s_ev.latency_prior.sigma
-            else:
-                onset_s = 0.0
-                mu_s = 0.0
-                sigma_s = _sigma_floor
-
-            s_idx = n_slices_with_data
-            slice_p_list.append(p_var)
-            slice_onset_list.append(onset_s)
-            slice_mu_list.append(mu_s)
-            slice_sigma_list.append(sigma_s)
-            slice_suffix_list.append(_sfx)
-
-            # Collect ages and decompose into intervals
-            for traj in trajs:
-                n_ages = len(traj.retrieval_ages)
-                for age in traj.retrieval_ages:
-                    all_ages_raw.append(age)
-                    age_to_slice.append(s_idx)
-
-                cum_y = traj.cumulative_y
-                w = getattr(traj, 'recency_weight', 1.0)
-                for j in range(n_ages):
-                    d_j = (float(cum_y[0]) if j == 0
-                           else float(max(0, cum_y[j] - cum_y[j - 1])))
-                    n_j = (float(traj.n) if j == 0
-                           else float(max(0, traj.n - cum_y[j - 1])))
-                    all_d.append(d_j)
-                    all_n_at_risk.append(n_j)
-                    all_weights.append(w)
-                    all_curr_idx.append(global_age_offset + j)
-                    all_prev_idx.append(
-                        global_age_offset + j - 1 if j > 0 else -1)
-                    interval_to_slice.append(s_idx)
-                global_age_offset += n_ages
-
-            n_slices_with_data += 1
-
-        if n_slices_with_data == 0 or not all_ages_raw:
+        if not trajs:
+            n_intervals_per_slice.append(0)
             continue
 
-        # ---- Build numpy arrays ----
-        d_np = np.array(all_d, dtype=np.float64)
-        n_at_risk_np = np.array(all_n_at_risk, dtype=np.float64)
-        weights_np = np.array(all_weights, dtype=np.float64)
-        curr_idx_np = np.array(all_curr_idx, dtype=np.int64)
-        prev_idx_np = np.array(all_prev_idx, dtype=np.int64)
-        prev_safe = np.where(prev_idx_np >= 0, prev_idx_np, 0)
-        is_first = (prev_idx_np < 0).astype(np.float64)
-        interval_slice_np = np.array(interval_to_slice, dtype=np.int64)
-        age_slice_np = np.array(age_to_slice, dtype=np.int64)
-        ages_raw_np = np.array(all_ages_raw, dtype=np.float64)
+        n_intervals_this = 0
+        for traj in trajs:
+            n_ages = len(traj.retrieval_ages)
+            for age in traj.retrieval_ages:
+                all_ages_raw.append(age)
+                age_to_slice.append(s_idx)
 
-        # ---- Stack per-slice PyTensor variables ----
-        p_stack = pt.stack(slice_p_list)             # (S,)
-        if has_latent_latency:
-            onset_stack = pt.stack(slice_onset_list)  # (S,)
-            mu_stack = pt.stack(slice_mu_list)        # (S,)
-            sigma_stack = pt.stack(slice_sigma_list)  # (S,)
-        else:
-            onset_stack = pt.as_tensor_variable(
-                np.array([float(o) for o in slice_onset_list]))
-            mu_stack = pt.as_tensor_variable(
-                np.array([float(m) for m in slice_mu_list]))
-            sigma_stack = pt.as_tensor_variable(
-                np.array([float(s) for s in slice_sigma_list]))
+            cum_y = traj.cumulative_y
+            w = getattr(traj, 'recency_weight', 1.0)
+            for j in range(n_ages):
+                d_j = (float(cum_y[0]) if j == 0
+                       else float(max(0, cum_y[j] - cum_y[j - 1])))
+                n_j = (float(traj.n) if j == 0
+                       else float(max(0, traj.n - cum_y[j - 1])))
+                all_d.append(d_j)
+                all_n_at_risk.append(n_j)
+                all_weights.append(w)
+                all_curr_idx.append(global_age_offset + j)
+                all_prev_idx.append(
+                    global_age_offset + j - 1 if j > 0 else -1)
+                interval_to_slice.append(s_idx)
+                n_intervals_this += 1
+            global_age_offset += n_ages
+        n_intervals_per_slice.append(n_intervals_this)
 
-        # ---- Vectorised CDF computation ----
-        # Expand per-slice latency to per-age via index lookup.
-        ages_tensor = pt.as_tensor_variable(ages_raw_np)
-        onset_per_age = onset_stack[age_slice_np]
-        mu_per_age = mu_stack[age_slice_np]
-        sigma_per_age = sigma_stack[age_slice_np]
+    if not all_ages_raw:
+        return
 
-        if has_latent_latency:
-            age_minus_onset = ages_tensor - onset_per_age
+    # ---- Build numpy arrays ----
+    d_np = np.array(all_d, dtype=np.float64)
+    n_at_risk_np = np.array(all_n_at_risk, dtype=np.float64)
+    weights_np = np.array(all_weights, dtype=np.float64)
+    curr_idx_np = np.array(all_curr_idx, dtype=np.int64)
+    prev_idx_np = np.array(all_prev_idx, dtype=np.int64)
+    prev_safe = np.where(prev_idx_np >= 0, prev_idx_np, 0)
+    is_first = (prev_idx_np < 0).astype(np.float64)
+    interval_slice_np = np.array(interval_to_slice, dtype=np.int64)
+    age_slice_np = np.array(age_to_slice, dtype=np.int64)
+
+    # ---- Vectorised CDF computation ----
+    # mu varies per-slice (vector RV); sigma and onset are edge-level.
+    ages_tensor = pt.as_tensor_variable(
+        np.array(all_ages_raw, dtype=np.float64))
+
+    if has_latent_latency:
+        # onset is edge-level (shared) — broadcast, no indexing
+        onset_is_latent = hasattr(onset_base, 'name')
+        if onset_is_latent:
+            age_minus_onset = ages_tensor - onset_base
             effective_ages = (pt.softplus(_softplus_k * age_minus_onset)
                               / _softplus_k)
-            log_ages = pt.log(pt.maximum(effective_ages, LOG_ARG_FLOOR))
         else:
-            effective_ages_np = np.maximum(
-                ages_raw_np - np.array(
-                    [float(slice_onset_list[s]) for s in age_to_slice]),
-                EFFECTIVE_AGE_FLOOR)
-            log_ages = pt.log(pt.as_tensor_variable(effective_ages_np))
+            age_minus_onset = ages_tensor - float(onset_base)
+            effective_ages = (pt.softplus(_softplus_k * age_minus_onset)
+                              / _softplus_k)
+        log_ages = pt.log(pt.maximum(effective_ages, LOG_ARG_FLOOR))
 
-        z = (log_ages - mu_per_age) / (sigma_per_age * pt.sqrt(2.0))
-        cdf_all = 0.5 * pt.erfc(-z)
+        # mu varies per slice — index into vector RV
+        mu_per_age = mu_slice_vec[age_slice_np]
+        # sigma is edge-level — broadcast
+        z = (log_ages - mu_per_age) / (sigma_base * pt.sqrt(2.0))
+    else:
+        # Fixed latency — precompute
+        ages_raw_np = np.array(all_ages_raw, dtype=np.float64)
+        effective_ages_np = np.maximum(
+            ages_raw_np - float(onset_base), EFFECTIVE_AGE_FLOOR)
+        log_ages = pt.log(pt.as_tensor_variable(effective_ages_np))
+        mu_per_age = mu_slice_vec[age_slice_np] if mu_slice_vec is not None else 0.0
+        z = (log_ages - mu_per_age) / (sigma_base * pt.sqrt(2.0))
 
-        # ---- Interval decomposition (same math as per-slice path) ----
-        cdf_curr = cdf_all[curr_idx_np]
-        cdf_prev = cdf_all[prev_safe]
-        delta_F = cdf_curr - cdf_prev * (1.0 - is_first)
-        delta_F = pt.maximum(delta_F, CDF_INCREMENT_FLOOR)
+    cdf_all = 0.5 * pt.erfc(-z)
 
-        p_per_interval = p_stack[interval_slice_np]
-        F_prev = cdf_prev * (1.0 - is_first)
-        surv_prev = 1.0 - p_per_interval * F_prev
-        surv_prev = pt.maximum(surv_prev, SURVIVAL_FLOOR)
-        q_j = pt.clip(p_per_interval * delta_F / surv_prev,
-                       SURVIVAL_FLOOR, 1.0 - SURVIVAL_FLOOR)
+    # ---- Interval decomposition (same math as per-slice path) ----
+    cdf_curr = cdf_all[curr_idx_np]
+    cdf_prev = cdf_all[prev_safe]
+    delta_F = cdf_curr - cdf_prev * (1.0 - is_first)
+    delta_F = pt.maximum(delta_F, CDF_INCREMENT_FLOOR)
 
-        # ---- Log-likelihood ----
-        _use_kappa_lat = _feat_ld and has_latent_latency
-        if _use_kappa_lat:
-            # Per-slice kappa_lat (same semantics as unbatched path).
-            kl_vars = []
-            for s_i in range(n_slices_with_data):
-                _sfx_s = slice_suffix_list[s_i]
-                _log_kl = pm.Normal(
-                    f"log_kappa_lat_{_sfx_s}_{obs_type}",
-                    mu=LOG_KAPPA_MU, sigma=LOG_KAPPA_SIGMA)
-                kl = pm.Deterministic(
-                    f"kappa_lat_{_sfx_s}_{obs_type}", pt.exp(_log_kl))
-                kl_vars.append(kl)
-            kl_stack = pt.stack(kl_vars)
-            kl_per_interval = kl_stack[interval_slice_np]
+    # p varies per slice — index into vector RV
+    p_per_interval = p_slice_vec[interval_slice_np]
+    F_prev = cdf_prev * (1.0 - is_first)
+    surv_prev = 1.0 - p_per_interval * F_prev
+    surv_prev = pt.maximum(surv_prev, SURVIVAL_FLOOR)
+    q_j = pt.clip(p_per_interval * delta_F / surv_prev,
+                   SURVIVAL_FLOOR, 1.0 - SURVIVAL_FLOOR)
 
-            _alpha = q_j * kl_per_interval
-            _beta = (1.0 - q_j) * kl_per_interval
-            _bb_dist = pm.BetaBinomial.dist(
-                alpha=_alpha, beta=_beta,
-                n=pt.as_tensor_variable(n_at_risk_np))
-            _lp = pm.logp(_bb_dist, pt.as_tensor_variable(d_np))
-            _ll_pointwise = weights_np * _lp
-            logp = pt.sum(_ll_pointwise)
-            diagnostics.append(
-                f"  batched_traj {obs_type} {base_safe_id}: "
-                f"{n_slices_with_data} slices, latency_dispersion, "
-                f"BetaBinomial intervals")
-        else:
-            _ll_pointwise = weights_np * (
-                d_np * pt.log(q_j)
-                + (n_at_risk_np - d_np) * pt.log(1.0 - q_j))
-            logp = pt.sum(_ll_pointwise)
+    # ---- Log-likelihood (Binomial, no latency dispersion in v1) ----
+    _ll_pointwise = weights_np * (
+        d_np * pt.log(q_j)
+        + (n_at_risk_np - d_np) * pt.log(1.0 - q_j))
+    logp = pt.sum(_ll_pointwise)
 
-        pm.Deterministic(
-            f"ll_traj_{obs_type}_{base_safe_id}_batched", _ll_pointwise)
-        pm.Potential(
-            f"traj_{obs_type}_{base_safe_id}_batched", logp)
-        diagnostics.append(
-            f"  Potential traj_{obs_type}_{base_safe_id}_batched: "
-            f"{n_slices_with_data} slices, {len(all_d)} intervals, "
-            f"latent_latency={has_latent_latency}")
+    pm.Deterministic(
+        f"ll_traj_window_{safe_id}_batched", _ll_pointwise)
+    pm.Potential(
+        f"traj_window_{safe_id}_batched", logp)
+
+    n_slices_with_data = sum(1 for n in n_intervals_per_slice if n > 0)
+    diagnostics.append(
+        f"  Potential traj_window_{safe_id}_batched: "
+        f"{n_slices_with_data} slices, {len(all_d)} intervals, "
+        f"latent_latency={has_latent_latency}")
 
 
 def _emit_edge_likelihoods(

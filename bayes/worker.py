@@ -767,6 +767,7 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
             cores=settings.get("cores"),
             target_accept=_s_float("target_accept", "bayes_target_accept", "BAYES_TARGET_ACCEPT", 0.90),
             random_seed=settings.get("random_seed"),
+            lowrank_mass_matrix=features.get("lowrank_mass_matrix", False),
         )
 
         progress.set_band(*P1_SAMPLE)
@@ -843,7 +844,8 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
                 _log(log, f"  {d}")
 
         inference_result = summarise_posteriors(trace, topology, evidence, metadata, quality,
-                                                settings=settings, loo_scores=loo_scores)
+                                                settings=settings, loo_scores=loo_scores,
+                                                calibration_scores=calibration_results)
 
         # ── 6b. Phase 2: cohort pass with frozen Phase 1 results ──
         # Extract Phase 1 posterior means and build Phase 2 model.
@@ -1837,6 +1839,14 @@ def _build_unified_slices(
         window["pareto_k_max"] = round(prob.pareto_k_max, 3) if prob.pareto_k_max is not None else None
         window["n_loo_obs"] = prob.n_loo_obs
 
+    # PPC calibration (doc 38)
+    if prob.ppc_coverage_90 is not None:
+        window["ppc_coverage_90"] = round(prob.ppc_coverage_90, 3)
+        window["ppc_n_obs"] = prob.ppc_n_obs
+    if prob.ppc_traj_coverage_90 is not None:
+        window["ppc_traj_coverage_90"] = round(prob.ppc_traj_coverage_90, 3)
+        window["ppc_traj_n_obs"] = prob.ppc_traj_n_obs
+
     slices = {"window()": window}
 
     # Cohort slice: probability (from p_cohort if available, else p_base) + path-level latency
@@ -1876,6 +1886,13 @@ def _build_unified_slices(
             cohort["delta_elpd"] = round(prob.delta_elpd, 3)
             cohort["pareto_k_max"] = round(prob.pareto_k_max, 3) if prob.pareto_k_max is not None else None
             cohort["n_loo_obs"] = prob.n_loo_obs
+        # PPC calibration (doc 38)
+        if prob.ppc_coverage_90 is not None:
+            cohort["ppc_coverage_90"] = round(prob.ppc_coverage_90, 3)
+            cohort["ppc_n_obs"] = prob.ppc_n_obs
+        if prob.ppc_traj_coverage_90 is not None:
+            cohort["ppc_traj_coverage_90"] = round(prob.ppc_traj_coverage_90, 3)
+            cohort["ppc_traj_n_obs"] = prob.ppc_traj_n_obs
         slices["cohort()"] = cohort
 
     # Phase C: per-context-slice entries (doc 14 §5.2)

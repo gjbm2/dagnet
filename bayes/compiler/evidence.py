@@ -272,24 +272,17 @@ def bind_snapshot_evidence(
         ge = engorged_edges.get(edge_id)
         edge_commissioned = commissioned_slices.get(edge_id) if commissioned_slices else None
 
-        # Derive per-date regime classification from RegimeSelection.
-        # Classify each retrieved_at date as "mece_partition" or "uncontexted"
-        # by checking if the winning regime's rows have context slice_keys.
+        # Per-date regime classification from RegimeSelection.
+        # Trust the caller's regime decisions — they were computed by
+        # snapshot_regime_selection.py using candidate regime hashes and
+        # per-date row coverage. Re-deriving from data here would ignore
+        # the upstream selection logic and silently override the caller's
+        # intent (e.g. overriding "uncontexted" to "mece_partition" when
+        # context rows happen to exist for that date).
         edge_regime_per_date: dict[str, str] | None = None
         if regime_selections and edge_id in regime_selections:
             rs = regime_selections[edge_id]
-            edge_regime_per_date = {}
-            # Build a quick lookup: for each date, check if any row has context
-            rows_for_edge = snapshot_rows.get(edge_id, [])
-            ctx_dates: set[str] = set()
-            for row in rows_for_edge:
-                ret_date = str(row.get("retrieved_at", ""))[:10]
-                if "context(" in str(row.get("slice_key", "")):
-                    ctx_dates.add(ret_date)
-            for date_str in rs.regime_per_date:
-                edge_regime_per_date[date_str] = (
-                    "mece_partition" if date_str in ctx_dates else "uncontexted"
-                )
+            edge_regime_per_date = dict(rs.regime_per_date)
 
         file_path = param_id_to_path.get(param_id, "")
         if not file_path:
@@ -580,14 +573,43 @@ def _bind_from_snapshot_rows(
                 dim = dimension_key(ctx_part)
                 is_mece_ctx = dim in mece_set
 
-        # Phase C: collect per-context rows for commissioned slices
-        if is_ctx:
+        # Phase C: collect per-context rows for commissioned slices.
+        #
+        # Two gates control collection:
+        #
+        # (a) MECE or commissioned: non-MECE context rows skip the
+        #     aggregate (below), so per-context obs from them have no
+        #     aggregate counterpart. Step 3b doesn't increment total_n
+        #     (it assumes the aggregate accounts for the full volume).
+        #     When all rows are non-MECE and no aggregate exists, that
+        #     assumption is false → total_n=0, silent data loss. Only
+        #     collect non-MECE rows when they are explicitly commissioned
+        #     (the FE intends to model them as slices).
+        #
+        # (b) Regime per date: on "uncontexted" dates the aggregate
+        #     handles the full data volume. Collecting per-context rows
+        #     for those dates would produce SliceGroup observations that
+        #     overlap the aggregate → double-counting in the model.
+        #     Only collect rows from dates with "mece_partition" regime
+        #     (where the aggregate is stripped and slices take over).
+        #     When no regime info exists, collect unconditionally
+        #     (backward compat: all dates are implicitly mece_partition).
+        if is_ctx and (is_mece_ctx or commissioned):
             ctx_part = context_key(slice_key)
             if ctx_part and (commissioned is None or ctx_part in commissioned):
-                if _is_cohort(slice_key):
-                    ctx_cohort_rows[ctx_part][anchor_day].append(dict(row))
-                else:
-                    ctx_window_rows[ctx_part][anchor_day].append(dict(row))
+                # Gate (b): skip rows from "uncontexted" regime dates
+                ret_date = ret_key[:10]
+                _regime_for_date = (
+                    regime_per_date.get(ret_date) if regime_per_date else None
+                )
+                _collect = (
+                    _regime_for_date != "uncontexted"  # mece_partition or no regime info
+                )
+                if _collect:
+                    if _is_cohort(slice_key):
+                        ctx_cohort_rows[ctx_part][anchor_day].append(dict(row))
+                    else:
+                        ctx_window_rows[ctx_part][anchor_day].append(dict(row))
 
         # Non-MECE context rows cannot be aggregated — skip them.
         if is_ctx and not is_mece_ctx:

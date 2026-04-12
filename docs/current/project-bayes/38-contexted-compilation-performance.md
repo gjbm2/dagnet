@@ -488,3 +488,68 @@ Per-edge is the sweet spot:
 2. **Advanced indexing pessimisation** — if batching still relies on heavy `pt.advanced_indexing`, PyTensor may still optimise poorly. The native-vector approach (no stack/index) should avoid this, but needs empirical confirmation.
 3. **Summariser breakage** — `summarise_posteriors()` assumes scalar variable names; will break until updated. Addressed in phase 4.
 4. **Branch-group context paths** — may need separate treatment later, excluded from v1 scope.
+
+---
+
+## Implementation Results (12-Apr-26)
+
+### What was implemented
+
+All 5 phases completed in one session:
+
+1. **Slice-axis metadata**: each contexted edge gets a stable ordered `ctx_keys` list with `ctx_to_idx` mapping, returned in `build_model` metadata.
+2. **Native vector RVs**: `eps_slice_vec`, `log_kappa_slice_vec`, `eps_mu_slice_vec` (shape `[n_slices]`) replace per-slice scalar RVs. Per-slice emission loop indexes into vectors.
+3. **Batched window trajectory**: `_emit_batched_window_trajectories()` replaces per-slice `_emit_cohort_likelihoods` for Phase 1 window trajectories. One `pm.Potential` per edge instead of one per slice.
+4. **Posterior extraction**: `summarise_posteriors()` reads vector traces via `slice_axes` metadata (with scalar fallback for backward compatibility).
+5. **Edge-level sigma/onset**: `sigma` and `onset` latency parameters are edge-level only (not per-slice). Eliminates 4 tau funnels and 12 eps RVs.
+
+### Combined results: synth-simple-abc-context
+
+Settings: `--draws 500 --tune 500 --chains 2 --feature latency_dispersion=false`
+
+| Metric | Original (scalar) | **Final (batched)** | Change |
+|--------|-------------------|---------------------|--------|
+| Free RVs (PyMC count) | 51 | 23 | -55% |
+| n_dim (unconstrained) | 51 | 35 | -31% |
+| Potentials | 6 | 2 | -67% |
+| compile_ms | 26,410 | **18,639** | **-29%** |
+| sampling_ms | 199,486 | 158,793 | -20% |
+| step_size | 0.0695 | 0.0786 | +13% |
+| n_steps mean | 339 | 263 | -22% |
+| tree_depth mean | 8.0 | 7.4 | -8% |
+| divergences (in 1000 draws) | 3 | 0* | improved |
+
+*Divergence count varies between runs due to MCMC stochasticity.
+
+**Posterior parity** (all values within MCMC noise):
+
+| Slice | Original p | Final p |
+|-------|-----------|---------|
+| direct (edge 1) | 0.7063 | 0.7088 |
+| email (edge 1) | 0.5405 | 0.5422 |
+| google (edge 1) | 0.8486 | 0.8516 |
+| direct (edge 2) | 0.6134 | 0.6114 |
+| email (edge 2) | 0.4632 | 0.4621 |
+| google (edge 2) | 0.6983 | 0.6990 |
+
+### Scaling projection
+
+For production graphs with E edges and S slices/edge:
+
+| Component | Before | After | Scaling |
+|-----------|--------|-------|---------|
+| Free RVs | 9E + 6ES + 3 | 9E + 3ES + 3 | ~halved per-slice cost |
+| Potentials | ES | E | O(S) → O(1) per edge |
+| Compile time | O(ES) in graph nodes | O(E) + smaller const | Sub-linear in S |
+
+For a 4-edge, 10-slice production graph: Potentials drop from 40 to 4. The compile improvement should scale roughly proportionally.
+
+### What remains
+
+The **geometry problem** (step_size ≈ 0.08, tree_depth ≈ 7.4) is still the dominant sampling cost and was not addressed by this work. The tau_slice and tau_mu_slice funnels require sampler-side changes:
+
+1. Centred parameterisation for the p hierarchy
+2. nutpie `low_rank_modified_mass_matrix=True`
+3. Fixed tau (empirical Bayes)
+
+These are independent of the batching work and can be tried separately.

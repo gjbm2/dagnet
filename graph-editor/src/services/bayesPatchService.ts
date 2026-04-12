@@ -284,6 +284,15 @@ export async function applyPatch(patch: BayesPatchFile): Promise<number> {
             pareto_k_max: windowSlice.pareto_k_max,
             n_loo_obs: windowSlice.n_loo_obs,
           } : {}),
+          // PPC calibration (doc 38)
+          ...(windowSlice.ppc_coverage_90 != null ? {
+            ppc_coverage_90: windowSlice.ppc_coverage_90,
+            ppc_n_obs: windowSlice.ppc_n_obs,
+          } : {}),
+          ...(windowSlice.ppc_traj_coverage_90 != null ? {
+            ppc_traj_coverage_90: windowSlice.ppc_traj_coverage_90,
+            ppc_traj_n_obs: windowSlice.ppc_traj_n_obs,
+          } : {}),
         };
       }
 
@@ -326,6 +335,11 @@ export async function applyPatch(patch: BayesPatchFile): Promise<number> {
             delta_elpd: windowSlice.delta_elpd,
             pareto_k_max: windowSlice.pareto_k_max,
             n_loo_obs: windowSlice.n_loo_obs,
+          } : {}),
+          // PPC calibration (doc 38)
+          ...(windowSlice.ppc_traj_coverage_90 != null ? {
+            ppc_traj_coverage_90: windowSlice.ppc_traj_coverage_90,
+            ppc_traj_n_obs: windowSlice.ppc_traj_n_obs,
           } : {}),
         };
       }
