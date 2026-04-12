@@ -460,8 +460,9 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
         _n_subjects = len(payload.get("snapshot_subjects", []))
         _n_regimes = sum(len(v) for v in (payload.get("candidate_regimes_by_edge") or {}).values())
         _log(log, f"subjects: {_n_subjects} snapshot subjects, {_n_regimes} candidate regimes")
+        _n_data_edges = sum(1 for et in topology.edges.values() if et.param_id)
         _log(log,
-            f"topology: {len(topology.edges)} edges, "
+            f"topology: {len(topology.edges)} edges ({_n_data_edges} with data), "
             f"{len(topology.branch_groups)} branch groups, "
             f"anchor={topology.anchor_node_id[:8]}…"
         )
@@ -624,7 +625,8 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
                 f"  binding {eid[:8]}…: "
                 f"verdict={er.verdict}, "
                 f"source={er.evidence_source}, "
-                f"rows={er.rows_raw}→{er.rows_post_regime}→{er.total_n}"
+                f"db_rows={er.rows_raw}→{er.rows_post_regime} (post-regime), "
+                f"total_n={er.total_n} (observations)"
             )
             for div in er.divergences:
                 # Truncate long divergence messages (e.g. 32-slice lists)
@@ -1392,13 +1394,24 @@ def _build_binding_receipt(
         for dim_key, sg in edge_ev.slice_groups.items():
             for ctx_key, sobs in sg.slices.items():
                 observed_slices_raw.add(ctx_key)
-                # Tally per-slice row counts from SliceObservations
+                # Tally per-slice row counts from SliceObservations.
+                # Window data may live in WindowObservation objects (from
+                # param file values[]) OR in CohortObservation trajectories
+                # with obs_type="window" (from snapshot rows).  Count both.
                 s_window_n = sum(w.n for w in sobs.window_obs) if sobs.window_obs else 0
                 s_cohort_n = 0
                 if sobs.cohort_obs:
                     for co in sobs.cohort_obs:
-                        s_cohort_n += sum(d.n for d in co.daily) if co.daily else 0
-                        s_cohort_n += sum(t.n for t in co.trajectories) if co.trajectories else 0
+                        for t in (co.trajectories or []):
+                            if t.obs_type == "window":
+                                s_window_n += t.n
+                            else:
+                                s_cohort_n += t.n
+                        for d in (co.daily or []):
+                            if "window" in co.slice_dsl:
+                                s_window_n += d.n
+                            else:
+                                s_cohort_n += d.n
                 slice_row_counts[ctx_key] = {
                     "total_n": sobs.total_n,
                     "window_n": s_window_n,
@@ -1865,8 +1878,8 @@ def _build_unified_slices(
         slices[f"{ctx_part}.window()"] = entry
 
         # cohort-denominated entry (when parent has cohort)
-        # Uses same p/kappa; path-level latency not yet per-slice,
-        # so omit latency fields from cohort entry for now.
+        # Uses same p/kappa from window; Phase 2 is aggregate-only and
+        # does not produce per-slice cohort posteriors yet.
         if "cohort()" in slices:
             cohort_entry: dict = {
                 "alpha": entry["alpha"],
@@ -1875,7 +1888,7 @@ def _build_unified_slices(
                 "p_hdi_upper": entry["p_hdi_upper"],
                 "ess": entry["ess"],
                 "rhat": entry["rhat"],
-                "provenance": "bayesian",
+                "provenance": "window-copy",
             }
             if "kappa_mean" in entry:
                 cohort_entry["kappa_mean"] = entry["kappa_mean"]

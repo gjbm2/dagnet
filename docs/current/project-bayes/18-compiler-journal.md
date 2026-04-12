@@ -8,6 +8,122 @@ Entries are reverse-chronological (newest first).
 
 ---
 
+## 12-Apr-26 (update 6): Full MCMC recovery with all data fixes
+
+### Results
+
+`synth-simple-abc-context`, 2 chains × 500 draws, `latency_dispersion=true`, all data binding fixes applied:
+
+- **405s total** (70s nutpie compilation + ~300s sampling + 5s Phase 2)
+- **rhat=1.02, ESS=217, 85% converged, 11 divergences**
+- **Per-slice p recovery**: all within threshold except direct a→b onset (MISS, z=4.07)
+- **Binding verified**: `window=15050 cohort=15050` for direct (equal, correct)
+- **29250 → 29250 rows** post-regime (no cohort data lost)
+- **Phase 2**: aggregate-only (known deficiency, journalled in update 4)
+
+The onset MISS on direct a→b (truth=1.0, posterior=1.57) is a model sensitivity issue, not a data binding problem — it persists across runs with different data fixes. The direct slice has moderate data volume (15050 observations) but the onset-mu ridge may be poorly constrained for this context weight.
+
+### Known deficiencies programmed
+
+Three items added to `programme.md` § Future work:
+1. Phase 2 per-slice modelling (high priority)
+2. Topo pass per-slice priors (medium priority)
+3. Phase 1 contexted compilation performance — 70s for 2 edges × 3 slices (high priority, blocks full regression suite)
+
+---
+
+## 12-Apr-26 (update 5): Regime selection kills ALL cohort data for contexted graphs
+
+### Finding
+
+`buildCandidateRegimesByEdge` created separate candidate regimes for window-contexted and cohort-contexted hashes (because `cohort_mode` is part of the core_hash signature). Regime selection then picked ONE candidate per date — always window — discarding all cohort rows. For `synth-simple-abc-context`: `29250 → 14625 rows` = exactly half removed = all cohort rows gone. Per-slice evidence had `cohort(0 trajs, 0 daily)`.
+
+This affected every contexted graph since regime selection was implemented. The 1047s successful run on 11-Apr had this bug too — Phase 1 window recovery worked but Phase 2 had no cohort data.
+
+### Root cause
+
+`candidateRegimeService.ts` Step 2 used `temporalMode::contextKeys` as the key-set ID, creating separate candidates for `window::synth-channel` and `cohort::synth-channel`. Regime selection's "pick one hash per date" model treated them as competing regimes for the same epoch.
+
+### Fix
+
+Step 2 now groups by context key-set only (no temporal mode in key-set ID). Each key-set collects representative slices for ALL temporal modes. Step 3 computes hashes for all modes and emits ONE candidate per edge per key-set with the first hash as primary and additional temporal-mode hashes as equivalents. Regime selection sees one candidate, keeps all hashes.
+
+### Also fixed
+
+`_supplement_from_param_file` in `evidence.py` now skips context-qualified param file entries. These were injected by `bayesEngorge.ts` with aggregate n/k values (not per-context), inflating per-slice cohort counts with aggregate denominators.
+
+### Also fixed
+
+Slice row count diagnostic (`worker.py` line 1396) now correctly counts window trajectories from CohortObservation objects by checking `obs_type`, instead of only counting `WindowObservation` objects.
+
+---
+
+## 12-Apr-26 (update 4): Phase 2 per-slice collapse — pre-existing model bug (NOT current blocker)
+
+### Finding
+
+Phase 2 (cohort pass with frozen Phase 1 posteriors) silently collapses back to aggregate-per-edge modelling for contexted graphs. All per-slice logic is gated behind `not is_phase2`:
+
+- **Section 2b** (`model.py` ~line 642): `bg_slice_p_vars` (per-slice branch group Dirichlets) only populated when `not is_phase2`. Phase 2 gets no per-slice p hierarchy.
+- **Section 5** (`model.py` ~line 1117): `if ev.has_slices and not is_phase2` gates the entire per-slice emission loop. Phase 2 falls through to the `else` branch: single aggregate emission per edge.
+- **Section 4** (`model.py` ~line 900): `cohort_latency_vars` creates one `(onset_cohort, mu_cohort, sigma_cohort)` triple per edge, not per slice.
+
+Result: Phase 2 fits contexted cohort evidence against one aggregate cohort model per edge. Per-slice p, per-slice Dirichlets, per-slice cohort latency — all absent.
+
+### Status
+
+**Not the current blocker.** Phase 2 only starts after Phase 1 has built and sampled successfully (`worker.py` ~line 827: `if has_cohort_data and not settings.get("model_inspect_only")`). The current failure is Phase 1 compilation. This defect is deferred until Phase 1 contexted compilation works.
+
+### Scope of fix (when addressed)
+
+1. Per-slice p hierarchy in Phase 2 (Section 2b needs `is_phase2` path)
+2. Per-slice branch group Dirichlets in Phase 2
+3. Per-slice cohort latency in Phase 2 (Section 4 needs per-slice triples)
+4. Per-slice emission in Phase 2 (Section 5 needs slice loop for `is_phase2`)
+
+---
+
+## 12-Apr-26 (update 3): Batched refactor identified as the regression
+
+### Finding
+
+The "lossless" batched trajectory refactor introduced in this session changed the PyTensor graph structure in a way that prevents compilation:
+
+- **Before (working, 1047s on 11-Apr)**: S separate trajectory Potentials, each depending on ~5 of its own per-slice variables (onset_s, mu_s, sigma_s, p_s, kappa_s). PyTensor can factorise the `dlogp` gradient into S independent blocks.
+- **After (broken)**: 1 stacked trajectory Potential using `pt.stack(slice_onset_list)[age_slice_np]` to index into all per-slice variables. The single Potential depends on ALL ~30 per-slice variables simultaneously. PyTensor cannot factorise the gradient — it must compile one monolithic function.
+
+The stacking + indexing (`pt.stack` → `Subtensor` → gradient produces `IncSubtensor` scatter ops) creates a compilation target that is structurally worse than S independent Potentials, even though the total number of Potentials is smaller.
+
+### Action
+
+Revert the emission loop to its pre-refactor state (S independent Potentials per slice, no batching, no `skip_trajectory_potentials` flag). Keep the other session work intact (supplementary hash discovery, `--dsl-override`, cohort bug fix). Then confirm `synth-simple-abc-context` compiles with its original contexted DSL.
+
+### Lesson
+
+"Fewer Potentials" is not the same as "smaller compilation target". PyTensor compiles better when gradient computation can be factorised into independent blocks. Stacking variables to reduce Potential count defeats this factorisation. The optimisation (if still needed) should preserve per-slice Potential independence.
+
+---
+
+## 12-Apr-26 (update 2): Bogus cohort Potentials removed — still fails
+
+### Finding
+
+The batched trajectory helper (`_emit_batched_slice_trajectories`) was iterating both `"window"` and `"cohort"` obs_types, but it's only called from the Phase 1 slice path where cohort trajectories must be skipped (`skip_cohort_trajectories=True`). The helper was emitting malformed cohort Potentials that lacked path probability resolution, join mixture handling, and x-denominator rewriting — features only `_emit_cohort_likelihoods` handles correctly.
+
+### Fix applied
+
+Changed the loop from `for obs_type in ["window", "cohort"]` to `for obs_type in ["window"]` in `_emit_batched_slice_trajectories` (`model.py` ~line 2524). All 79 existing tests pass.
+
+### Result
+
+Still fails. The contexted model still never leaves the "compiling" stage. The bogus cohort Potentials were a genuine bug (wrong model, not just expensive), but removing them did not resolve the compilation hang. The root cause is elsewhere.
+
+### Implication
+
+The problem is not a single broken Potential — it's the per-slice model complexity in aggregate. Continue with the hypothesis testing from doc 37: H1 (disable BetaBinomial) is next.
+
+---
+
 ## 12-Apr-26: Contexted model compilation — total failure, investigation opened
 
 ### The problem

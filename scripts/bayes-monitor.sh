@@ -44,11 +44,6 @@ done
 # Discover graphs — first from runner's graph list, then from log files
 # ---------------------------------------------------------------------------
 discover_graphs() {
-    # Prefer the runner's graph list (written before harness logs exist)
-    if [[ -f /tmp/bayes_recovery_graphs ]]; then
-        cat /tmp/bayes_recovery_graphs
-        return
-    fi
     # Fallback: scan log files
     # Default (no --all): only show runs with an active lock (currently running).
     # Finished runs from previous sessions are hidden to reduce clutter.
@@ -454,8 +449,21 @@ n_pages=$(( (n_graphs + PANES_PER_PAGE - 1) / PANES_PER_PAGE ))
 tail_cmd() {
     local graph="$1"
     local short="${graph#synth-}"
-    local log="/tmp/bayes_harness-${graph}.log"
-    echo "echo '─── ${short} ───'; tail -f '${log}'"
+    short="${short#graph-}"
+    # The harness may write the log under several name variants:
+    #   bayes_harness-{graph}.log          (direct invocation)
+    #   bayes_harness-graph-{graph}.log    (--fe-payload adds graph- prefix)
+    # And SELECTED may contain a bare name while the log has graph- or
+    # synth- prefixes.  Poll for whichever file gets content first.
+    cat <<TAIL_SCRIPT
+echo '─── ${short} ───'
+while true; do
+  for f in /tmp/bayes_harness-*${graph}*.log /tmp/bayes_harness-*${short}*.log; do
+    if [[ -s "\$f" ]]; then exec tail -f "\$f"; fi
+  done
+  sleep 0.5
+done
+TAIL_SCRIPT
 }
 
 if [[ $n_graphs -eq 0 ]]; then

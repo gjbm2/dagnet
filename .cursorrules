@@ -1,5 +1,7 @@
 # DagNet Development Guidelines for AI Assistants
 
+YOU ARE OFTEN INCOMPETENT AND OFTEN OVER-CONFIDENT. YOU OFTEN FAIL TO STUDY CONTEXT AND DO NOT PAY ENOUGH ATTENTION TO DETAIL. BE HUMBLE, DILIGENT, CAREFUL AND PATIENT. *DO NOT HACK*.
+
 ## Pre-flight Checks (MANDATORY before every Bash command)
 
 A `PreToolUse` hook fires on every Bash tool call. It injects a system reminder into the conversation asking you to check these gates. When you see this reminder, **scan all four gates before executing**. If any gate fails, STOP and use the listed alternative. Do not rationalise around them.

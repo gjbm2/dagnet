@@ -1307,27 +1307,48 @@ design; implementation is post-Phase A.
   logging by default, with verbose output only in a diagnostic mode
   (e.g. `?bayes_debug=1` or a dev-tools toggle).
 
-- **Historical DSL epoch hash discovery for Bayes**: when a graph's
-  `dataInterestsDSL` changes over time (e.g. Jan: `context(channel)`,
-  Feb: `context(browser_type)`, Mar: uncontexted), snapshot data from
-  earlier epochs lives under different `core_hash` families.
-  `enumeratePlausibleContextKeySets` in `snapshotRetrievalsService.ts`
-  correctly discovers these historical families by inspecting stored
-  param file `values[]` entries — but this is only used on the read
-  path (evidence tooltips, coverage checks). The Bayes commissioning
-  path (`buildCandidateRegimesByEdge` in `candidateRegimeService.ts`)
-  only enumerates hash families from the **current** DSL. For a
-  31-Mar query spanning Jan–Mar, the Bayes pipeline would only query
-  the Mar (uncontexted) hash, missing Jan and Feb data entirely.
-  Fix: `buildCandidateRegimesByEdge` should also inspect stored param
-  file slice topology (same as `enumeratePlausibleContextKeySets`)
-  to discover historical hash families. `select_regime_rows` on the
-  BE side already handles per-date regime selection correctly — it
-  just needs the full candidate set from the FE. Test coverage exists
-  for the read path (15+ tests in `snapshotQueryNarrowing.test.ts`)
-  but not for the Bayes commissioning path. Priority: medium — only
-  affects graphs whose `dataInterestsDSL` has changed context
-  dimensions over time.
+- ~~**Historical DSL epoch hash discovery for Bayes**~~: **RESOLVED
+  12-Apr-26.** `buildCandidateRegimesByEdge` Step 5 now inspects
+  stored param file `values[]` entries via `enumeratePlausibleContextKeySets`
+  to discover hash families not in the current DSL. Also fixed: window
+  and cohort temporal modes are now grouped into one candidate regime
+  per context key-set (previously they competed, with regime selection
+  discarding all cohort data for contexted graphs). See journal
+  12-Apr-26 update 5.
+
+- **Phase 2 per-slice modelling not implemented**: Phase 2 (cohort pass
+  with frozen Phase 1 posteriors) is aggregate-only for contexted
+  graphs. All per-slice logic in `model.py` is gated behind
+  `not is_phase2`: Section 2b (per-slice Dirichlets), Section 5
+  (per-slice emissions), Section 4 (per-slice cohort latency). Phase 2
+  builds a 7-RV aggregate model. Per-slice cohort posteriors in the
+  output are copies of window posteriors (labelled `[window-copy]`).
+  Fix requires: per-slice p hierarchy in Phase 2, per-slice branch
+  group Dirichlets, per-slice cohort latency triples, per-slice
+  emission in the Phase 2 Section 5 loop. Priority: high — affects
+  all contexted graphs. See journal 12-Apr-26 update 4.
+
+- **Topo pass not producing per-slice priors**: the analytic topo pass
+  (`analyse_topology`) produces one set of priors per edge (aggregate
+  k/n ratio from param file values[]). For contexted graphs, each
+  slice should get its own analytic prior derived from per-context
+  values[] entries. Without this, per-slice analytic comparison in
+  the regression report compares per-slice posteriors against aggregate
+  analytic baselines. The LOO null model also uses aggregate baselines.
+  Priority: medium — affects regression reporting accuracy and LOO
+  scoring, not model correctness (the model uses its own hierarchy).
+
+- **Phase 1 contexted compilation performance**: `synth-simple-abc-context`
+  (2 edges × 3 slices, 57 free RVs) takes ~70s for nutpie/Rust
+  compilation before MCMC starts. Larger contexted graphs (diamond,
+  lattice) would take much longer. The compilation time scales
+  super-linearly with free RV count. Per-slice latency hierarchy
+  (eps_mu, eps_sigma, eps_onset per slice) contributes ~18 RVs for
+  3 slices. With `latency_dispersion=true`, per-slice kappa_lat adds
+  ~6 more. Options: (a) share latency across slices (only p varies),
+  (b) disable latency_dispersion for per-slice Potentials,
+  (c) investigate nutpie compilation optimisation. Priority: high —
+  blocks full contexted regression suite. See doc 37.
 
 - **Bayes test hardening — immature cohort recovery**: the Phase A
   `test_completeness_prevents_p_underestimate` test (A4 scenario) is

@@ -1139,8 +1139,6 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                     tau_sigma_slice = pm.HalfNormal(f"tau_sigma_slice_{safe_id}", sigma=0.2)
                     tau_onset_slice = pm.HalfNormal(f"tau_onset_slice_{safe_id}", sigma=0.5)
 
-                _slice_emissions = []  # per-slice only
-
                 for dim_key, group in ev.slice_groups.items():
                     for ctx_key, s_obs in group.slices.items():
                         ctx_safe = _safe_var_name(ctx_key)
@@ -1184,81 +1182,36 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                             has_window=s_obs.has_window, has_cohort=s_obs.has_cohort,
                             total_n=s_obs.total_n, latency_prior=ev.latency_prior,
                             kappa_warm=ev.kappa_warm, cohort_latency_warm=ev.cohort_latency_warm)
-                        _slice_emissions.append((_sfx, p_s, ks, s_ev, _lv, _ov))
+                        _emissions.append((_sfx, p_s, ks, s_ev, _lv, _ov))
 
-                # Emit per-slice: skip trajectory Potentials (batched below)
-                for _sfx, _p_ov, _kp, _ev, _lv, _ov in _slice_emissions:
-                    _emit_edge_likelihoods(
-                        _sfx, _p_ov, _kp, _ev, et, edge_id,
-                        p_base_var=_p_ov,
-                        alpha=alpha, beta_param=beta_param,
-                        edge_var_names=edge_var_names,
-                        emit_window_binomial=emit_window_binomial,
-                        is_phase2=is_phase2, phase2_frozen=phase2_frozen,
-                        bg_p_vars=bg_p_vars,
-                        topology=topology, model=model,
-                        latency_vars=_lv, onset_vars=_ov,
-                        cohort_latency_vars=cohort_latency_vars,
-                        diagnostics=diagnostics, features=features, settings=_s,
-                        _softplus_k=_softplus_k,
-                        _s_dirichlet_conc_floor=_s_dirichlet_conc_floor,
-                        _fallback_prior_ess=_fallback_prior_ess,
-                        feat_window_only=feat_window_only,
-                        skip_trajectory_potentials=True,
-                    )
-
-                # Batch trajectory Potentials across all slices (1 Potential
-                # per obs_type instead of S, same posterior).
-                _emit_batched_slice_trajectories(
-                    edge_id, safe_id, _slice_emissions, et, topology,
-                    diagnostics, features=features, settings=_s,
-                    _softplus_k=_softplus_k,
-                )
-
-                # If not all exhaustive, also emit aggregate (full, no skip)
+                # If not all exhaustive, also emit aggregate
                 _all_exhaustive = all(sg.is_exhaustive for sg in ev.slice_groups.values())
                 if not _all_exhaustive:
-                    _emit_edge_likelihoods(
-                        safe_id, None, edge_kappa, ev, et, edge_id,
-                        p_base_var=p_base_var if p_base_var is not None else p,
-                        alpha=alpha, beta_param=beta_param,
-                        edge_var_names=edge_var_names,
-                        emit_window_binomial=emit_window_binomial,
-                        is_phase2=is_phase2, phase2_frozen=phase2_frozen,
-                        bg_p_vars=bg_p_vars,
-                        topology=topology, model=model,
-                        latency_vars=latency_vars, onset_vars=onset_vars,
-                        cohort_latency_vars=cohort_latency_vars,
-                        diagnostics=diagnostics, features=features, settings=_s,
-                        _softplus_k=_softplus_k,
-                        _s_dirichlet_conc_floor=_s_dirichlet_conc_floor,
-                        _fallback_prior_ess=_fallback_prior_ess,
-                        feat_window_only=feat_window_only,
-                    )
+                    _emissions.append((safe_id, p, edge_kappa, ev, latency_vars, onset_vars))
                 else:
                     diagnostics.append(f"  slices: {edge_id[:8]}… exhaustive, aggregate suppressed")
             else:
                 # No slices or Phase 2: single aggregate emission
                 _emissions.append((safe_id, None, edge_kappa, ev, latency_vars, onset_vars))
 
-                for _sfx, _p_ov, _kp, _ev, _lv, _ov in _emissions:
-                    _emit_edge_likelihoods(
-                        _sfx, _p_ov, _kp, _ev, et, edge_id,
-                        p_base_var=p_base_var if _p_ov is None else _p_ov,
-                        alpha=alpha, beta_param=beta_param,
-                        edge_var_names=edge_var_names,
-                        emit_window_binomial=emit_window_binomial,
-                        is_phase2=is_phase2, phase2_frozen=phase2_frozen,
-                        bg_p_vars=bg_p_vars,
-                        topology=topology, model=model,
-                        latency_vars=_lv, onset_vars=_ov,
-                        cohort_latency_vars=cohort_latency_vars,
-                        diagnostics=diagnostics, features=features, settings=_s,
-                        _softplus_k=_softplus_k,
-                        _s_dirichlet_conc_floor=_s_dirichlet_conc_floor,
-                        _fallback_prior_ess=_fallback_prior_ess,
-                        feat_window_only=feat_window_only,
-                    )
+            for _sfx, _p_ov, _kp, _ev, _lv, _ov in _emissions:
+                _emit_edge_likelihoods(
+                    _sfx, _p_ov, _kp, _ev, et, edge_id,
+                    p_base_var=p_base_var if _p_ov is None else _p_ov,
+                    alpha=alpha, beta_param=beta_param,
+                    edge_var_names=edge_var_names,
+                    emit_window_binomial=emit_window_binomial,
+                    is_phase2=is_phase2, phase2_frozen=phase2_frozen,
+                    bg_p_vars=bg_p_vars,
+                    topology=topology, model=model,
+                    latency_vars=_lv, onset_vars=_ov,
+                    cohort_latency_vars=cohort_latency_vars,
+                    diagnostics=diagnostics, features=features, settings=_s,
+                    _softplus_k=_softplus_k,
+                    _s_dirichlet_conc_floor=_s_dirichlet_conc_floor,
+                    _fallback_prior_ess=_fallback_prior_ess,
+                    feat_window_only=feat_window_only,
+                )
 
         # =============================================================
         # SECTION 6: BRANCH GROUP MULTINOMIAL LIKELIHOODS

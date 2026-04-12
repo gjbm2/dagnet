@@ -373,7 +373,8 @@ def bind_snapshot_evidence(
             diagnostics.append(
                 f"INFO edge {edge_id[:8]}…: {len(rows)} snapshot rows "
                 f"→ window({_w_trajs} trajs, {_w_daily} daily), "
-                f"cohort({_c_trajs} trajs, {_c_daily} daily)"
+                f"cohort({_c_trajs} trajs, {_c_daily} daily) "
+                f"(aggregate + per-context combined)"
             )
 
             # Supplement with file-based data for uncovered anchor_days.
@@ -678,7 +679,8 @@ def _bind_from_snapshot_rows(
     if n_ctx_aggregated > 0:
         diagnostics.append(
             f"INFO edge {ev.edge_id[:8]}…: aggregated {n_ctx_aggregated} "
-            f"context-prefixed rows into bare window()/cohort()"
+            f"context-prefixed rows into bare window()/cohort() "
+            f"(aggregate may be suppressed if slices are exhaustive)"
         )
     if n_ctx_non_mece_skipped > 0:
         diagnostics.append(
@@ -1195,11 +1197,17 @@ def _supplement_from_param_file(
             continue
         slice_dsl = v.get("sliceDSL", "") or ""
 
-        # Only supplement cohort daily arrays — these have per-anchor_day
+        # Only supplement BARE cohort daily arrays — these have per-anchor_day
         # granularity that can be precisely deduplicated against snapshot
         # trajectories.  Window aggregates (sum across window period) and
         # cohort aggregates cannot be deduplicated at the anchor_day level.
+        # Context-qualified entries (from bayesEngorge) carry aggregate n/k
+        # values, not per-context — supplementing with them would inject
+        # aggregate denominators into per-slice evidence.  The snapshot
+        # path already provides correct per-context data.
         if not _is_cohort(slice_dsl):
+            continue
+        if "context(" in slice_dsl:
             continue
 
         n_daily = v.get("n_daily") or []
@@ -1724,6 +1732,10 @@ def _route_slices(
             f"exhaustive={group.is_exhaustive}"
         )
 
+
+# ---------------------------------------------------------------------------
+# Snapshot → WindowObservation synthesis
+# ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
 # Completeness computation

@@ -49,21 +49,35 @@ export async function buildCandidateRegimesByEdge(
   const explodedSlices = await explodeDSL(pinnedDsl);
   if (explodedSlices.length === 0) return {};
 
-  // Step 2: Extract distinct (context key-set × temporal mode) groups.
+  // Step 2: Extract distinct context key-set groups.
   // All values within one MECE dimension share one hash, so we only
-  // need one representative slice per group. Temporal mode (window vs
-  // cohort) is included because cohort_mode is part of the core hash
-  // signature — different modes produce different hashes and must each
-  // appear as a candidate regime so regime selection can match DB rows.
-  const keySetMap = new Map<string, { keys: string[]; representativeSlice: string }>();
+  // need one representative slice per group.
+  //
+  // Window and cohort temporal modes produce different core_hashes
+  // (cohort_mode is part of the signature), but they are NOT competing
+  // regimes — they are complementary data for the same epoch.  We
+  // collect both representative slices per key-set so Step 3 can
+  // compute hashes for both, but they are grouped into ONE candidate
+  // regime per key-set (with both hashes as equivalents) so regime
+  // selection keeps both.
+  const keySetMap = new Map<string, { keys: string[]; representativeSlices: string[] }>();
   for (const slice of explodedSlices) {
     try {
       const parsed = parseConstraints(slice);
       const keys = extractContextKeysFromConstraints(parsed).sort();
-      const temporalMode = parsed.cohort ? 'cohort' : 'window';
-      const keySetId = `${temporalMode}::${keys.join('||')}`;
+      const keySetId = keys.join('||');
       if (!keySetMap.has(keySetId)) {
-        keySetMap.set(keySetId, { keys, representativeSlice: slice });
+        keySetMap.set(keySetId, { keys, representativeSlices: [slice] });
+      } else {
+        // Add this temporal mode's slice if it's a different mode
+        const entry = keySetMap.get(keySetId)!;
+        const existingModes = new Set(entry.representativeSlices.map(s => {
+          try { return parseConstraints(s).cohort ? 'cohort' : 'window'; } catch { return '?'; }
+        }));
+        const thisMode = parsed.cohort ? 'cohort' : 'window';
+        if (!existingModes.has(thisMode)) {
+          entry.representativeSlices.push(slice);
+        }
       }
     } catch {
       // Skip unparseable slices
@@ -87,34 +101,45 @@ export async function buildCandidateRegimesByEdge(
 
   const result: Record<string, CandidateRegime[]> = {};
 
-  for (const [_keySetId, { keys, representativeSlice }] of Array.from(keySetMap.entries())) {
+  for (const [_keySetId, { keys, representativeSlices }] of Array.from(keySetMap.entries())) {
     try {
-      // Build fetch plan for this representative slice to get per-edge signatures
-      const { plan } = await buildFetchPlanProduction(
-        graph as any,
-        representativeSlice,
-        dummyWindow,
-      );
+      // Build fetch plans for ALL representative slices (window + cohort).
+      // Collect all core_hashes per edge for this key-set, then emit ONE
+      // candidate with the first hash as primary and the rest as equivalents.
+      // This prevents regime selection from treating window and cohort as
+      // competing regimes — they are complementary temporal modes for the
+      // same context epoch.
+      const edgeHashes: Record<string, string[]> = {};
 
-      if (!plan?.items) continue;
+      for (const repSlice of representativeSlices) {
+        const { plan } = await buildFetchPlanProduction(
+          graph as any,
+          repSlice,
+          dummyWindow,
+        );
+        if (!plan?.items) continue;
 
-      for (const item of plan.items) {
-        if (!item.querySignature) continue;
+        for (const item of plan.items) {
+          if (!item.querySignature || !item.targetId) continue;
+          const coreHash = await computeShortCoreHash(item.querySignature);
+          if (!edgeHashes[item.targetId]) edgeHashes[item.targetId] = [];
+          if (!edgeHashes[item.targetId].includes(coreHash)) {
+            edgeHashes[item.targetId].push(coreHash);
+          }
+        }
+      }
 
-        const edgeId = item.targetId;
-        if (!edgeId) continue;
-
-        const coreHash = await computeShortCoreHash(item.querySignature);
-        const closureEntries = getClosureSet(coreHash);
-        const equivalentHashes = closureEntries.map(e => e.core_hash);
-
+      for (const [edgeId, hashes] of Object.entries(edgeHashes)) {
         if (!result[edgeId]) result[edgeId] = [];
-
-        // Avoid duplicates (same hash from different representative slices)
-        const existing = result[edgeId].find(r => r.core_hash === coreHash);
-        if (!existing) {
+        const primaryHash = hashes[0];
+        const closureEntries = getClosureSet(primaryHash);
+        const equivalentHashes = [
+          ...closureEntries.map(e => e.core_hash),
+          ...hashes.slice(1),
+        ];
+        if (!result[edgeId].find(r => r.core_hash === primaryHash)) {
           result[edgeId].push({
-            core_hash: coreHash,
+            core_hash: primaryHash,
             equivalent_hashes: equivalentHashes,
             context_keys: keys,
           });

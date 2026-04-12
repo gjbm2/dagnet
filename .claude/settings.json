@@ -133,7 +133,9 @@
       "Bash(xargs kill:*)",
       "Bash(awk '{print $2}')",
       "Bash(xargs -r kill)",
-      "Bash(awk '/def test_bare_overrides_context/,/def test_/' /home/reg/dev/dagnet/bayes/tests/test_data_binding_adversarial.py)"
+      "Bash(awk '/def test_bare_overrides_context/,/def test_/' /home/reg/dev/dagnet/bayes/tests/test_data_binding_adversarial.py)",
+      "Bash(scripts/bayes-monitor.sh)",
+      "WebFetch(domain:docs.pymc.io)"
     ],
     "additionalDirectories": [
       "/home/reg/dev/dagnet/.claude",

@@ -1189,6 +1189,8 @@ def main():
 
             _print(f"\n  {pid}")
             for sk, sv in slices.items():
+                if sk.startswith("_"):
+                    continue  # internal metadata (e.g. _tau_slice), not a real slice
                 alpha = sv.get("alpha", 0)
                 beta_v = sv.get("beta", 0)
                 p_mean = alpha / (alpha + beta_v) if (alpha + beta_v) > 0 else 0
@@ -1232,8 +1234,9 @@ def main():
                     bayes_p = bayes_alpha / (bayes_alpha + bayes_beta) if (bayes_alpha + bayes_beta) > 0 else 0
                     ratio = bayes_p / analytic_mean if isinstance(analytic_mean, (int, float)) and analytic_mean > 0 else None
                     ratio_str = f" (ratio={ratio:.2f}x)" if ratio is not None else ""
+                    prov = ws.get("provenance", "?")
                     _print(f"  {pid}: analytic={analytic_mean} (k/n={analytic_k}/{analytic_n}) "
-                           f"→ bayes={bayes_p:.4f}{ratio_str}")
+                           f"→ bayes={bayes_p:.4f} [{prov}]{ratio_str}")
                 else:
                     _print(f"  {pid}: analytic={analytic_mean} (k/n={analytic_k}/{analytic_n}) → no bayes window()")
             else:
