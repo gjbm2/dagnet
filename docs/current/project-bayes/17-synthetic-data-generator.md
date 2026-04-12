@@ -484,7 +484,8 @@ simulation:
   fetch_mode: simple         # simple (all anchor_days) | realistic (t95 staleness)
   seed: 42
   base_date: "2025-11-01"   # first cohort day
-  kappa_sim_default: 50      # Level 0: mild overdispersion
+  kappa_sim_default: 50      # Level 0: mild entry-day overdispersion
+  # kappa_step_default: 0   # set to 0 for single-source mode (doc 38 PPC calibration)
 
 # Per-edge ground-truth parameters
 # core_hashes from test harness edge configs (FE-visible, no SYNTH prefix)

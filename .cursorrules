@@ -520,6 +520,7 @@ Services must NOT import UI components or dialogs directly. Accept callbacks ins
 | Snapshot regime selection | `snapshot_regime_selection.py` (BE), `candidateRegimeService.ts` (FE) | `test_snapshot_regime_selection.py`, `test_regime_consumer_integration.py` |
 | BE subject resolution (doc 31) | `analysis_subject_resolution.py` (BE), `graph_select.py` (BE) | `test_analysis_subject_resolution.py`, `test_doc31_parity.py`, CLI `parity-test.sh` |
 | LOO-ELPD model adequacy | `bayes/compiler/loo.py` (BE), `bayesQualityTier.ts` (FE) | `test_loo.py` |
+| PPC calibration | `bayes/compiler/calibration.py` (BE) | (validated via `--diag` on synth graphs) |
 | Schema validation | `lib/schema.ts` | `schemaParityAutomated.test.ts` |
 | Non-blocking pull | `nonBlockingPullService.ts` | `nonBlockingPullService.test.ts` |
 | Automation runs | `dailyRetrieveAllAutomationService.ts` | `dailyRetrieveAllAutomationService.test.ts` |

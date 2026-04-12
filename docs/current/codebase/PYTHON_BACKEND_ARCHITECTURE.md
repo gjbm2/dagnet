@@ -202,7 +202,9 @@ MCMC inference. Five modules form a strict pipeline:
 | 2. Evidence | `evidence.py` | TopologyAnalysis + param files + snapshot DB | `BoundEvidence` — per-edge observations with recency weights |
 | 3. Model | `model.py` | BoundEvidence + settings | PyMC model (Beta/Binomial, Dirichlet, latent onset, latency CDF) |
 | 4. Inference | `inference.py` | PyMC model | MCMC samples via nutpie (4 chains, 1000 draws) |
-| 5. Summary | `inference.py` | Samples | `PosteriorSummary` per edge — HDI, ESS, rhat, evidence grade |
+| 5a. LOO | `loo.py` | Samples + evidence | Per-edge LOO-ELPD vs analytic null (doc 32) |
+| 5b. PPC | `calibration.py` | Samples + evidence | Per-edge coverage@90%, PIT uniformity (doc 38). Opt-in via `--diag` |
+| 6. Summary | `inference.py` | Samples + LOO + PPC | `PosteriorSummary` per edge — HDI, ESS, rhat, LOO, PPC, evidence grade |
 
 The pipeline runs twice per fit (**two-phase model**):
 - **Phase 1 (window)**: fits window() observations only. Extracts
@@ -226,7 +228,15 @@ Key implemented features:
   builds mixture CDF at join nodes with moment matching. Differentiable
   PyTensor variant (`pt_moment_matched_collapse`) for MCMC gradients.
 - **Unified MCMC kappa**: single dispersion parameter per edge with
-  LogNormal prior, replacing external Williams MLE.
+  LogNormal prior. Prior centre: (1) warm-start from previous
+  posterior, (2) BetaBinomial MLE from endpoint data (empirical Bayes,
+  doc 38), (3) default log(30). The MLE prior adapts to the data
+  rather than imposing a fixed centre.
+- **PPC calibration** (`calibration.py`): posterior predictive
+  coverage check — are the model's 90% intervals honest? Two
+  categories: endpoint/daily (tests κ) and trajectory intervals
+  (tests κ_lat). Opt-in via `--diag` flag. On synth graphs, computes
+  true PIT from ground truth for machinery validation. See doc 38.
 - **Quality-gated warm-start**: previous posteriors used as priors only
   if rhat < 1.10 and ESS >= 100.
 - **Phase C contexted models**: per-slice hierarchy with native vector
@@ -237,11 +247,11 @@ Key implemented features:
   `_emit_batched_window_trajectories()`. Slice-axis metadata in
   `build_model` return dict maps `ctx_key → slice_idx` for posterior
   extraction. See doc 38c.
-- **Auto low-rank mass matrix**: `inference.py` auto-selects
-  `PyNutsSettings.LowRank` when `n_dim > 20` (contexted models with
-  hierarchical funnels). Captures tau-eps correlations that diagonal
-  mass matrices cannot, yielding ~50% larger step sizes and ~70% fewer
-  leapfrog steps per draw. Overridable via `SamplingConfig.lowrank_mass_matrix`.
+- **Low-rank mass matrix**: `inference.py` always uses
+  `PyNutsSettings.LowRank`. Captures parameter correlations (tau-eps
+  funnels in contexted models, onset-mu ridges in all latency models)
+  that diagonal mass matrices cannot, yielding ~50% larger step sizes
+  and ~70% fewer leapfrog steps per draw.
 
 ### Quality gates
 

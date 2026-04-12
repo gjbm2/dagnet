@@ -39,6 +39,12 @@ For sequencing, priorities, and current status snapshot, see
 |---|------|--------|-------|
 | 37 | [37-contexted-compilation-investigation.md](37-contexted-compilation-investigation.md) | **Resolved** (12-Apr-26) | Contexted model compilation + sampling performance. Original OOM resolved by vector RV batching (doc 38c). Remaining: sampler geometry (tau funnels) partially mitigated by lowrank mass matrix |
 
+## Performance
+
+| # | File | Status | Notes |
+|---|------|--------|-------|
+| 38 | [38-contexted-compilation-performance.md](38-contexted-compilation-performance.md) | **Active** (12-Apr-26) | Like-for-like performance comparison: bare-DSL vs contexted on same data. Phase 1 sampling 11-23× slower with slices. NUTS geometry diagnostics, edge-level sigma/onset optimisation, lowrank mass matrix |
+
 ## Open defects
 
 | # | File | Status | Notes |
@@ -47,6 +53,7 @@ For sequencing, priorities, and current status snapshot, see
 | 19B | [19-be-stats-engine-bugs.md](19-be-stats-engine-bugs.md) | **Open** | Three-way prior discrepancy (FE/BE/topology). Low priority — warm-start bypasses |
 | 33 | [33-bayes-compiler-dispersion-forensic-review.md](33-bayes-compiler-dispersion-forensic-review.md) | **Open** | Engineering-facing forensic review of six compiler dispersion defects. Highest-risk items are endpoint double-counting and the order-dependent Phase 2 non-exhaustive branch-group prior |
 | 33B | [33-snapshot-query-batching.md](33-snapshot-query-batching.md) | **Open** | Sequential per-subject DB queries in `worker.py` — 2N round-trips for N edges. Affects Bayes worker, analysis prep, retrieve-all |
+| 39 | [39-data-binding-parity-defects.md](39-data-binding-parity-defects.md) | **Open** (12-Apr-26) | Systemic class: data binding parity failures between contexted and bare DSL paths. 5 defects found and fixed; 6 parity invariants defined. Blind test coverage needed |
 
 ## Reference and operational docs
 

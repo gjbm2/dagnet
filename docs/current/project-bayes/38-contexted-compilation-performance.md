@@ -589,4 +589,4 @@ nutpie supports `PyNutsSettings.LowRank` — a low-rank modified mass matrix tha
 
 **Recommendation**: enable low-rank by default for contexted models with n_dim > ~20. Increase default tune to 1000 (from current 1000 — already correct). For small uncontexted models (n_dim < 15), diagonal is sufficient and avoids the low-rank warmup overhead.
 
-**Implemented (12-Apr-26)**: `inference.py` auto-selects `PyNutsSettings.LowRank` when `compiled_model.n_dim > 20`. Phase 1 of synth-simple-abc-context (n_dim=35) gets lowrank; Phase 2 (n_dim=19) gets diag. Overridable via `SamplingConfig.lowrank_mass_matrix` or `--feature lowrank_mass_matrix=true/false`.
+**Implemented (12-Apr-26)**: `inference.py` always uses `PyNutsSettings.LowRank`. The warmup overhead is negligible for small models and the geometry benefit is significant for all but trivial ones — even uncontexted models have onset-mu ridges (correlation ≈ −0.78, journal 6-Apr-26) that lowrank handles better than diagonal.

@@ -306,6 +306,22 @@ Clearing layer 1 is useless unless you also handle layers 2-4. UpdateManager map
 
 **Broader principle**: the analogue of kappa for any distribution is a scalar that inflates variance at the observation level, not per-subject latent variables. This is the frailty model insight from survival analysis: Gamma frailty marginalises out per-subject effects analytically, leaving a single dispersion parameter.
 
+## Anti-pattern 34: Duplicate payload/subject construction in devtools
+
+**Signature**: a test harness, CLI tool, or script constructs its own snapshot subjects, MECE dimensions, or candidate regimes instead of calling the canonical FE CLI path. The devtool's output diverges silently as the FE pipeline evolves — missing supplementary hash discovery, missing MECE dimensions, missing cohort hashes, wrong total_n.
+
+**Root cause**: the devtool was written before the FE CLI existed (or before it handled the relevant feature), and a shortcut was taken to build subjects directly. When `candidateRegimeService.ts` gained Step 5, `computeMeceDimensions`, and window/cohort regime grouping, the devtool's parallel path didn't get any of it.
+
+**Fix**: eliminate the duplicate path. Call `_build_payload_via_cli` (the FE CLI) as the single canonical code path for payload construction. Layer devtool-specific extras on top. See `test_harness.py` refactor (12-Apr-26) and doc 39 for the full defect inventory.
+
+## Anti-pattern 35: Silent data substitution on binding failure
+
+**Signature**: when evidence binding can't aggregate context rows (dimension not declared MECE, no bare rows), the binder silently substitutes a single context slice as the "aggregate proxy". The model runs on a fraction of the data with no error — the binding receipt looks clean.
+
+**Root cause**: defensive fallback that treated modelling on partial data as better than modelling on no data. But the user sees a clean receipt and assumes all data was used.
+
+**Fix**: removed the fallback (`evidence.py` 12-Apr-26). The binder now logs a warning and leaves the aggregate empty. The correct fix is to declare the dimension MECE so context rows can be summed.
+
 ## When to add to this document
 
 After completing a multi-attempt fix, check: does my bug match a generalisable pattern? If so, add it here following the format: Signature (how to recognise it), Root cause (why it happens), Fix (what to do), Example (optional, specific instance).

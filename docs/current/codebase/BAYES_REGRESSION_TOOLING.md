@@ -133,6 +133,8 @@ synthetic harness logs).
 | `--clean` | All three | Clear stale caches: `__pycache__` dirs + `.synth-meta.json`. Prevents stale bytecode from masking source edits and stale meta from skipping re-bootstrap after hash computation changes. |
 | `--exclude SUBSTR` | `run_regression.py` | Skip graphs whose name contains the substring. |
 | `--job-label LABEL` | `param_recovery.py`, `test_harness.py` | Unique label for log + lock files. `run_regression.py` auto-generates `{graph}-r{timestamp}` to prevent parallel runs from colliding. |
+| `--diag` | `param_recovery.py`, `test_harness.py` | Enable PPC calibration (doc 38). Computes coverage@90% per edge per category (endpoint/daily, trajectory). On synth graphs, also computes true PIT from ground-truth parameters for machinery validation. Sets `settings.run_calibration=true`. |
+| `--dsl-override DSL` | `param_recovery.py`, `test_harness.py` | Override the graph's pinnedDSL before payload construction. Used for bare-on-contexted isolation tests. |
 
 ---
 

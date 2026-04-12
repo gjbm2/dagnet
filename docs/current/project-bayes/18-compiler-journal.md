@@ -5057,3 +5057,73 @@ The tau_slice and tau_mu_slice funnels still exist — lowrank
 mitigates but doesn't eliminate. Further options not yet tried:
 centred parameterisation for the p hierarchy, fixed tau (empirical
 Bayes), or reparameterisation of the latency CDF coupling.
+
+---
+
+## 12-Apr-26 (update 8): Phase 2 per-slice implementation + data binding parity defects
+
+### Phase 2 per-slice
+
+Phase 2 (cohort) was aggregate-only — the `not is_phase2` gate at
+`model.py` line 1140 skipped the entire per-slice block. This was
+never a deliberate design decision; it was simply unimplemented.
+
+**Implementation** (3 files):
+
+- `worker.py`: extracts per-slice Phase 1 posteriors (`p_slice_vec`,
+  `mu_slice_vec`, `kappa_slice_vec`) from Phase 1 trace into
+  `phase2_frozen[edge_id]["slices"]`, keyed by context key.
+- `model.py`: Phase 2 per-slice block creates `p_cohort_slice_*` (Beta
+  with frozen Phase 1 alpha/beta), `kappa_cohort_slice_*`, emits
+  per-slice cohort trajectory Potentials using edge-level cohort latency.
+  No hierarchy (no tau/eps) — Phase 1 posteriors ARE the priors.
+- `worker.py` summary: extracts `p_cohort_slice_*` from Phase 2 trace,
+  moment-matches to Beta, replaces `[window-copy]` provenance with
+  `[bayesian]` in per-slice cohort entries.
+
+**Verification**: synth-simple-abc-context, 1000 tune / 500 draws / 2 chains.
+Phase 2 model: 22 free RVs, 6 Potentials. Compiled in ~23s, sampled in ~34s.
+rhat=1.011, ESS=1425, 0 divergences. Per-slice cohort p values agree with
+window within 0.001 (expected — same generating rates in synth).
+
+**Gate needed**: Phase 1 convergence gate before Phase 2. With Phase 1
+ESS=48 (from 500 draws / 2 chains), Phase 2 stalled. With 1000 tune,
+Phase 1 ESS rose and Phase 2 completed normally.
+
+### Data binding parity defects (doc 39)
+
+While building the performance comparison (bare-DSL vs contexted on
+same data), discovered 5 data binding defects that caused the two
+paths to model on different data. See doc 39 for full inventory.
+
+Key fixes:
+1. Removed "largest non-MECE context as aggregate proxy" fallback —
+   was silently modelling on 1/3 of data.
+2. Eliminated duplicate payload builder in test harness — now calls
+   FE CLI as single canonical path.
+3. Fixed Step 5 supplementary hash discovery to find both window AND
+   cohort hashes (was using `explodedSlices[0]` only).
+4. Fixed Step 5 to group window/cohort as one candidate (was creating
+   separate competing regimes, regime selection dropped half).
+5. Fixed `total_n` to reflect actual modelled data volume (was
+   reporting regime-stripped aggregate when slices were exhaustive).
+
+### `latency_dispersion` default change
+
+Changed default from `False` to `True` in `model.py` (3 locations).
+This is the production-intended setting — per-interval BetaBinomial
+overdispersion on trajectory hazards.
+
+### Ground truth recovery in harness log
+
+Added GROUND TRUTH RECOVERY section to `test_harness.py` verbose
+output. For synth graphs with `.truth.yaml`, compares every posterior
+(aggregate + per-slice, p + mu + sigma + onset + kappa) against
+ground truth with z-scores and MISS flags.
+
+### Per-slice sigma/onset display fix
+
+Per-slice summary entries showed `sigma=0.000 onset=0.0` because
+sigma and onset are edge-level (doc 38 optimisation) and the
+per-slice extraction didn't inherit them. Fixed in `inference.py` to
+copy edge-level sigma/onset into per-slice entries.
