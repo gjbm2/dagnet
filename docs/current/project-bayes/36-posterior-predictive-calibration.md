@@ -1,8 +1,9 @@
 # Doc 36: Posterior Predictive Calibration
 
-**Status**: Proposal
-**Date**: 11-Apr-26
+**Status**: Partial — `calibration.py` implemented, endpoint validated, trajectory blocked on synth DGP
+**Date**: 11-Apr-26 (design), 12-Apr-26 (implementation)
 **Depends on**: Doc 34 (kappa_lat), Doc 32 (LOO-ELPD), Doc 14 (Phase C)
+**Implementation**: Doc 38 (findings and results)
 
 ---
 

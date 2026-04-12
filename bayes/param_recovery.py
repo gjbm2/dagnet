@@ -56,6 +56,8 @@ def main():
                              "Prevents parallel runs from cross-contaminating logs.")
     parser.add_argument("--dsl-override", type=str, default=None,
                         help="Override pinnedDSL (forwarded to harness --dsl-override)")
+    parser.add_argument("--diag", action="store_true",
+                        help="Enable extra diagnostics (forwarded to harness --diag)")
     args = parser.parse_args()
 
     # --- Resolve graph and truth file ---
@@ -126,6 +128,43 @@ def main():
             with open(settings_json_path, "w") as sf:
                 json.dump({"slice_truth_baselines": slice_truth_baselines}, sf)
 
+    # --- Build calibration truth for PPC (doc 38) ---
+    # Pass ground-truth parameters so calibration can compute the true
+    # PIT alongside the model PIT — validates both model AND machinery.
+    #
+    # The synth generator has TWO independent kappa sources (entry-day
+    # and step-day), composed multiplicatively.  Endpoint observations
+    # see the composed variation (effective κ ≈ κ/2).  Trajectory
+    # intervals see step-day variation primarily (effective κ ≈ κ_step).
+    if args.diag:
+        _sim = truth.get("simulation", {})
+        _kappa_entry = _sim.get("kappa_sim_default", _sim.get("user_kappa", 50.0))
+        _kappa_step = _sim.get("kappa_step_default", _kappa_entry)
+        # Effective endpoint kappa: two composed Beta draws.
+        # Var(p_eff) ≈ Var(p_entry) + Var(p_step) for small variances.
+        # κ_eff ≈ 1 / (1/κ_entry + 1/κ_step)  (harmonic mean).
+        _kappa_endpoint = 1.0 / (1.0 / _kappa_entry + 1.0 / _kappa_step) if _kappa_step > 0 else _kappa_entry
+        cal_truth: dict[str, dict] = {}
+        for pid, t in truth_edges.items():
+            cal_truth[pid] = {
+                "p": t["p"],
+                "kappa_endpoint": t.get("kappa", _kappa_endpoint),
+                "kappa_trajectory": t.get("kappa", _kappa_step),
+                "mu": t.get("mu", 0.0),
+                "sigma": t.get("sigma", 0.01),
+                "onset": t.get("onset", 0.0),
+            }
+        settings_payload = {}
+        if settings_json_path and os.path.isfile(settings_json_path):
+            with open(settings_json_path) as sf:
+                settings_payload = json.load(sf)
+        settings_payload["calibration_truth"] = cal_truth
+        if not settings_json_path:
+            import tempfile
+            settings_json_path = tempfile.mktemp(suffix=".json", prefix="bayes_settings_")
+        with open(settings_json_path, "w") as sf:
+            json.dump(settings_payload, sf)
+
     # --- Run harness ---
     cmd = [
         sys.executable, os.path.join(REPO_ROOT, "bayes", "test_harness.py"),
@@ -154,6 +193,8 @@ def main():
         cmd.extend(["--job-label", args.job_label])
     if args.dsl_override:
         cmd.extend(["--dsl-override", args.dsl_override])
+    if args.diag:
+        cmd.append("--diag")
 
     print(f"Running: {' '.join(cmd[-6:])}")
     print()

@@ -158,6 +158,17 @@ data-constrained. Single-source validation:
   obs contributing -inf at starting point on 3way-join, fanout,
   join-branch, lattice, skip. Independently resolved.
 
+- **PPC calibration** — **PARTIAL 12-Apr-26**. See doc 38.
+  `bayes/compiler/calibration.py` implemented: two-category PIT
+  (endpoint/daily, trajectory), true-PIT baseline from synth ground
+  truth, `--diag` flag. Endpoint PPC machinery validated. Trajectory
+  PPC blocked on synth DGP mismatch: the synth generator has two
+  composed kappa sources (entry-day + step-day) but the model has one.
+  **Next**: add single-source synth flag (`kappa_step_default: null`)
+  to enable clean trajectory validation. MLE kappa empirical Bayes
+  prior implemented (priority 2 in `build_model` kappa chain) — fixes
+  endpoint coverage from 1.00 → 0.90 on synth-simple-abc.
+
 - **Snapshot query batching** — **OPEN 9-Apr-26**. See
   `33-snapshot-query-batching.md`. `_query_snapshot_subjects()` in
   `worker.py` makes one DB round-trip per snapshot subject (2N queries
@@ -380,6 +391,8 @@ active docs only; see `archive/` for implemented work.
 | **BE subject resolution** | `31-be-analysis-subject-resolution.md` | Implemented (8-Apr-26) | `resolve_analysis_subjects()` + parity tests. Wired into `api_handlers.py` |
 | **Posterior scoring** | `32-posterior-predictive-scoring-design.md` | Partial (Phase 1 done 8-Apr-26) | LOO-ELPD Phase 1 done; Phase 2 (trajectory) pending |
 | **BE stats bugs** | `19-be-stats-engine-bugs.md` | Open defect | Three-way latency prior discrepancy |
+| **PPC calibration design** | `36-posterior-predictive-calibration.md` | Partial (12-Apr-26) | PIT uniformity, coverage curves, per-edge KS test |
+| **PPC calibration findings** | `38-ppc-calibration-findings.md` | Partial (12-Apr-26) | Implementation, three-layer validation, synth DGP mismatch |
 
 ### Reference and operational docs (still in place)
 

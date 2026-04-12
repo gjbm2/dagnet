@@ -8,6 +8,63 @@ Entries are reverse-chronological (newest first).
 
 ---
 
+## 12-Apr-26 (update 7): PPC calibration implementation and DGP mismatch discovery
+
+### What was built
+
+`bayes/compiler/calibration.py` — posterior predictive calibration
+(doc 36), gated behind `--diag` flag. Two categories: endpoint/daily
+(tests κ) and trajectory intervals (tests κ_lat). Computes randomised
+PIT values, coverage curves at standard levels, KS uniformity test.
+
+When synth ground truth is provided, computes **true PIT** alongside
+model PIT — validates the PPC machinery itself, not just the model.
+
+MLE κ empirical Bayes prior: `_estimate_cohort_kappa()` called at
+`build_model` time to centre the κ prior on the data-implied value.
+Priority chain: warm-start → MLE → default. Improved endpoint
+coverage from 1.00 → 0.90 on synth-simple-abc.
+
+### Key discovery: synth DGP two-kappa composition
+
+The synth generator has two independent overdispersion sources
+(entry-day and step-day), composed multiplicatively. Endpoint
+observations see the composed variation with effective
+κ = harmonic_mean(κ_entry, κ_step) ≈ κ/2. Trajectory intervals see
+step-day variation through the conditional hazard lens, which doesn't
+factor cleanly into independent BetaBinomial intervals.
+
+Result: true PIT is uniform for endpoint (machinery validated at
+κ_eff=25), but non-uniform for trajectory (structural DGP mismatch).
+The trajectory PPC produces an overcoverage ceiling of ~0.95 that
+cannot be fixed by adjusting κ_lat.
+
+### Lesson
+
+In-sample PPC without a ground-truth baseline is circular — the model
+was fit to the data it's being checked against. True PIT from known
+DGP parameters separates machinery bugs from model error. The
+three-layer approach (true PIT → model PIT → gap analysis) would have
+caught the DGP mismatch immediately; the model-only PIT appeared
+fine at 0.89.
+
+### Next step
+
+Add `kappa_step_default: null` flag to `synth_gen.py` to disable
+step-day variation. Single-source DGP enables clean validation of
+both categories and the model's single-κ estimation.
+
+### Files changed
+
+- `bayes/compiler/calibration.py` — NEW
+- `bayes/compiler/model.py` — MLE κ prior, `features` in metadata
+- `bayes/worker.py` — calibration call (gated)
+- `bayes/param_recovery.py` — `--diag`, truth passthrough
+- `bayes/test_harness.py` — `--diag`, `--settings-json` in fe-payload path
+- `docs/current/project-bayes/38-ppc-calibration-findings.md` — NEW
+
+---
+
 ## 12-Apr-26 (update 6): Full MCMC recovery with all data fixes
 
 ### Results

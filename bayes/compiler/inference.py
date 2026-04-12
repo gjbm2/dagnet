@@ -1041,9 +1041,11 @@ def summarise_posteriors(
                         _kappa_str = f" kappa={_slice_entry['kappa_mean']:.1f}±{_slice_entry['kappa_sd']:.1f}"
                     _lat_str = ""
                     if "mu_mean" in _slice_entry:
-                        _lat_str = (f" mu={_slice_entry['mu_mean']:.3f}±{_slice_entry['mu_sd']:.3f}"
-                                    f" sigma={_slice_entry['sigma_mean']:.3f}±{_slice_entry['sigma_sd']:.3f}"
-                                    f" onset={_slice_entry['onset_mean']:.2f}±{_slice_entry['onset_sd']:.2f}")
+                        _lat_str = f" mu={_slice_entry['mu_mean']:.3f}±{_slice_entry['mu_sd']:.3f}"
+                        if "sigma_mean" in _slice_entry:
+                            _lat_str += f" sigma={_slice_entry['sigma_mean']:.3f}±{_slice_entry['sigma_sd']:.3f}"
+                        if "onset_mean" in _slice_entry:
+                            _lat_str += f" onset={_slice_entry['onset_mean']:.2f}±{_slice_entry['onset_sd']:.2f}"
                     diagnostics.append(
                         f"  p_slice {edge_id[:8]}… {_ctx_key}: "
                         f"{_pred_mean:.4f}±{_pred_std:.4f} "
@@ -1532,7 +1534,7 @@ def _sample_nutpie(model, config: SamplingConfig, report_progress=None,
 
         # Build the sampler manually so we can inject our ProgressType.
         # This mirrors what nutpie.sample() does internally.
-        settings = nutpie_lib.PyNutsSettings.Diag(config.random_seed)
+        settings = nutpie_lib.PyNutsSettings.LowRank(config.random_seed)
         settings.num_tune = config.tune
         settings.num_draws = config.draws
         settings.num_chains = config.chains
@@ -1556,7 +1558,7 @@ def _sample_nutpie(model, config: SamplingConfig, report_progress=None,
         phase_tag = f" {phase_label}" if phase_label else ""
         print(f"[nutpie{phase_tag}] cores={cores}, os.cpu_count={os.cpu_count()}, "
               f"chains={config.chains}, draws={config.draws}, tune={config.tune}, "
-              f"compile={compile_ms}ms", flush=True)
+              f"compile={compile_ms}ms, n_dim={compiled_model.n_dim}", flush=True)
 
         sampler = compiled_model._make_sampler(
             settings, init_mean, cores, progress_type, store,
@@ -1594,6 +1596,44 @@ def _sample_nutpie(model, config: SamplingConfig, report_progress=None,
         # No progress callback — use nutpie.sample() directly (simpler)
         trace = nutpie.sample(compiled_model, **sample_kwargs)
         heartbeat_stop.set()
+
+    # --- NUTS geometry diagnostics ---
+    sampling_ms = int((time.time() - t_phase_start) * 1000) - compile_ms if 'compile_ms' in dir() else None
+    _nuts_tag = f" {phase_label}" if phase_label else ""
+    if hasattr(trace, "sample_stats"):
+        _ss = trace.sample_stats
+        _diag_parts = []
+        if "depth" in _ss:
+            import numpy as _np
+            _depths = _ss["depth"].values.flatten()
+            _diag_parts.append(
+                f"tree_depth: mean={_np.mean(_depths):.1f}, "
+                f"max={int(_np.max(_depths))}, "
+                f"pct_at_max={100*_np.mean(_depths == _np.max(_depths)):.0f}%"
+            )
+        if "step_size" in _ss:
+            import numpy as _np
+            _steps = _ss["step_size"].values.flatten()
+            _diag_parts.append(f"step_size: mean={_np.mean(_steps):.4f}")
+        if "n_steps" in _ss:
+            import numpy as _np
+            _nsteps = _ss["n_steps"].values.flatten()
+            _diag_parts.append(
+                f"n_steps: mean={_np.mean(_nsteps):.0f}, "
+                f"median={_np.median(_nsteps):.0f}, "
+                f"max={int(_np.max(_nsteps))}"
+            )
+        if "energy" in _ss:
+            import numpy as _np
+            _energy = _ss["energy"].values.flatten()
+            _diag_parts.append(f"energy: mean={_np.mean(_energy):.1f}, sd={_np.std(_energy):.1f}")
+        if sampling_ms is not None:
+            _diag_parts.append(f"sampling_ms={sampling_ms}")
+        if _diag_parts:
+            print(f"[nutpie{_nuts_tag}] NUTS diagnostics: {'; '.join(_diag_parts)}", flush=True)
+        else:
+            # List available keys so we can find the right names
+            print(f"[nutpie{_nuts_tag}] sample_stats keys: {list(_ss.data_vars)}", flush=True)
 
     # Enrich InferenceData with observed/constant data and attrs,
     # same as PyMC's _sample_external_nuts does.

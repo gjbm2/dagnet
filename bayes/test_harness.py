@@ -288,23 +288,31 @@ def _run_preflight(
     conn = psycopg2.connect(db_connection)
     cur = conn.cursor()
     total_db_rows = 0
+    rows_per_edge: dict[str, int] = {}
     for subj in snapshot_subjects:
         ch = subj.get("core_hash", "")
         pid = subj.get("param_id", "")
-        eid = subj.get("edge_id", "")[:8]
+        eid = subj.get("edge_id", "")
         cur.execute("SELECT COUNT(*) FROM snapshots WHERE core_hash = %s", (ch,))
         count = cur.fetchone()[0]
         total_db_rows += count
-        status = "PASS" if count > 0 else "FAIL"
-        if count == 0:
-            results["db_ok"] = False
-        print(f"  {status} {pid} ({eid}…) hash={ch[:16]}…: {count} rows")
+        rows_per_edge[eid] = rows_per_edge.get(eid, 0) + count
+        status = "PASS" if count > 0 else "ok"  # ok = empty but not fatal
+        print(f"  {status} {pid} ({eid[:8]}…) hash={ch[:16]}…: {count} rows")
     conn.close()
 
-    if not results["db_ok"]:
-        print("\n  ABORT: Some subjects have 0 rows in DB.")
-        print("  The harness will fall back to param files, not snapshot trajectories.")
+    # Check that each edge with a parameter has at least SOME data across
+    # all its subjects. Individual subjects may be empty (e.g. bare hash
+    # when data is context-only — that's fine as long as contexted hashes
+    # for the same edge have data).
+    _expected_edges = {eid for _, eid, _, _ in _edges}
+    edges_with_no_data = [eid for eid in _expected_edges
+                          if rows_per_edge.get(eid, 0) == 0]
+    if edges_with_no_data:
+        print(f"\n  ABORT: {len(edges_with_no_data)} edge(s) have 0 rows across ALL subjects.")
         print("  Run synth_gen.py --write-files to populate DB, or check hash parity.")
+        for eid in edges_with_no_data:
+            print(f"    {eid[:8]}…: 0 rows")
         sys.exit(1)
     print(f"  Total: {total_db_rows} DB rows across {len(snapshot_subjects)} subjects")
 
@@ -420,6 +428,8 @@ def main():
                         help="Override the graph's pinnedDSL before payload construction. "
                              "Use to force uncontexted runs on contexted graphs, e.g. "
                              "'window(12-Dec-25:21-Mar-26);cohort(12-Dec-25:21-Mar-26)'")
+    parser.add_argument("--diag", action="store_true",
+                        help="Enable extra diagnostics: PPC calibration (doc 36).")
     parser.add_argument("--clean", action="store_true",
                         help="Clear stale caches before running: (1) delete __pycache__ "
                              "dirs under bayes/ and graph-editor/lib/ so no stale bytecode "
@@ -570,6 +580,10 @@ def main():
             settings["chains"] = args.chains
         if args.cores:
             settings["cores"] = args.cores
+        if args.diag:
+            settings["run_calibration"] = True
+        if args.settings_json:
+            settings.update(_load_settings_json(args.settings_json))
 
         # Ensure DB_CONNECTION is set
         db_connection = payload.get("db_connection", "")
@@ -741,210 +755,76 @@ def main():
             else:
                 print(f"\n── Synth data gate: {_vsd['status']} ({_vsd['reason']}) ──")
 
-        # --- Compute FE-authoritative hashes via Node.js ---
-        print("\n── Compute hashes (Node.js) ──")
-        hash_source_path = args.hash_source or graph_path
-        fe_data = _compute_fe_hashes(hash_source_path)
-        _edges = [(e["param_id"], e["edge_uuid"], e["window_hash"], e["cohort_hash"])
-                  for e in fe_data["edges"]]
-        print(f"  {len(_edges)} edges resolved")
-        for e in fe_data["edges"]:
-            print(f"    {e['param_id']}: w={e['window_hash'][:16]}… c={e['cohort_hash'][:16]}…")
+        # --- Build payload via FE CLI (single canonical code path) ---
+        # The FE CLI handles hash computation, subject generation,
+        # candidateRegimesByEdge (incl. supplementary hash discovery),
+        # MECE dimensions, stats pass, and engorged graph edges.
+        # No duplicate logic here.
+        print("\n── Build payload via FE CLI ──")
 
-        # --- Derive anchor date range ---
-        _dsl = graph.get("pinnedDSL", "") or graph.get("dataInterestsDSL", "")
-        _date_match = re.search(r"(\d{1,2}-\w{3}-\d{2}):(\d{1,2}-\w{3}-\d{2})", _dsl)
-        if _date_match:
-            _from_dt = datetime.strptime(_date_match.group(1), "%d-%b-%y")
-            _to_dt = datetime.strptime(_date_match.group(2), "%d-%b-%y")
-            anchor_from = _from_dt.strftime("%Y-%m-%d")
-            anchor_to = _to_dt.strftime("%Y-%m-%d")
-        else:
-            ref_date = asat_date if asat_date else date.today()
-            anchor_to = ref_date.isoformat()
-            anchor_from = (ref_date - timedelta(days=120)).isoformat()
-        print(f"  Anchor range: {anchor_from} → {anchor_to}")
+        # --dsl-override: temporarily patch the graph JSON's pinnedDSL
+        # before CLI construction so subjects are computed from the
+        # overridden DSL. Restored after the CLI call.
+        _dsl_backup = None
+        _graph_json_path = graph_path
+        if getattr(args, 'dsl_override', None) and os.path.isfile(graph_path):
+            with open(graph_path) as _gf:
+                _gj = json.load(_gf)
+            _dsl_backup = (_gj.get('pinnedDSL'), _gj.get('dataInterestsDSL'))
+            _gj['pinnedDSL'] = args.dsl_override
+            _gj['dataInterestsDSL'] = args.dsl_override
+            with open(graph_path, 'w') as _gf:
+                json.dump(_gj, _gf, indent=2)
+            print(f"  DSL override applied: {args.dsl_override}")
 
-        # --- Load param files ---
-        if args.params_dir:
-            param_files = {}
-            params_dir = os.path.abspath(args.params_dir)
-            for fname in os.listdir(params_dir):
-                if fname.endswith(".yaml") and "index" not in fname:
-                    with open(os.path.join(params_dir, fname)) as f:
-                        param_id = fname.replace(".yaml", "")
-                        param_files[f"parameter-{param_id}"] = yaml.safe_load(f)
-            print(f"  Using {len(param_files)} param files from: {params_dir}")
-        elif asat_date and param_files_asat:
-            param_files = param_files_asat
-            print(f"  Using {len(param_files)} param files from git (asat {asat_date})")
-            params_dir = None
-        else:
-            param_files = {}
-            params_dir = os.path.join(data_repo_path, "parameters")
-            for fname in os.listdir(params_dir):
-                if fname.endswith(".yaml") and "index" not in fname:
-                    with open(os.path.join(params_dir, fname)) as f:
-                        param_id = fname.replace(".yaml", "")
-                        param_files[f"parameter-{param_id}"] = yaml.safe_load(f)
+        try:
+            # Derive graph_dir from graph_path: parent of "graphs/"
+            graphs_parent = os.path.dirname(graph_path)  # .../graphs
+            cli_graph_dir = os.path.dirname(graphs_parent)  # .../nous-conversion
+            payload = _build_payload_via_cli(graph_name, cli_graph_dir)
+        finally:
+            # Restore original DSL
+            if _dsl_backup is not None and _graph_json_path and os.path.isfile(_graph_json_path):
+                with open(_graph_json_path) as _gf:
+                    _gj = json.load(_gf)
+                _gj['pinnedDSL'] = _dsl_backup[0]
+                _gj['dataInterestsDSL'] = _dsl_backup[1]
+                with open(_graph_json_path, 'w') as _gf:
+                    json.dump(_gj, _gf, indent=2)
+                print("  DSL override restored")
 
-        # --- Run BE stats/topo pass (full port of FE enhanceGraphLatencies) ---
-        print("\n── Stats pass (BE analytics engine) ──")
-        from runner.stats_engine import CohortData, enhance_graph_latencies
-        import copy
+        # Extract fields from CLI payload for downstream use
+        graph = payload.get("graph_snapshot", graph)
+        param_files = payload.get("parameter_files", {})
+        snapshot_subjects = payload.get("snapshot_subjects", [])
 
-        # Build CohortData per edge from param file values[].
-        # Separate cohort and window slices (FE parity: they're aggregated independently).
-        from runner.stats_engine import EdgeContext
-        cohort_lookup: dict[str, list] = {}
-        edge_contexts: dict[str, EdgeContext] = {}
+        n_subjects = len(snapshot_subjects)
+        n_params = len(param_files)
+        n_regimes = sum(len(v) for v in payload.get("candidate_regimes_by_edge", {}).values())
+        mece_dims = payload.get("mece_dimensions", [])
+        print(f"  {n_subjects} subjects, {n_params} param files, "
+              f"{n_regimes} candidate regimes, MECE: {mece_dims}")
 
-        def _parse_date_to_age(d_str: str) -> float:
-            """Parse a date string and return age in days from now."""
-            for fmt in ("%d-%b-%y", "%Y-%m-%d", "%d-%b-%Y"):
-                try:
-                    dt = datetime.strptime(str(d_str), fmt)
-                    return float(max(0, (datetime.now() - dt).days))
-                except (ValueError, TypeError):
-                    continue
-            return 30.0  # conservative fallback
-
-        def _extract_cohorts_from_values(values: list) -> tuple:
-            """Extract CohortData from values[], returning (cohort_slice_cohorts, window_slice_cohorts)."""
-            cohort_cohorts = []
-            window_cohorts = []
-            for v in values:
-                dsl = v.get("sliceDSL", "") or ""
-                is_window = "window(" in dsl
-                is_cohort = "cohort(" in dsl
-                # If no DSL, treat as cohort (default)
-                target = window_cohorts if is_window and not is_cohort else cohort_cohorts
-
-                dates = v.get("dates", [])
-                n_daily = v.get("n_daily", [])
-                k_daily = v.get("k_daily", [])
-                # Try both field name conventions
-                median_lag = v.get("median_lag_daily") or v.get("median_lag_days", [])
-                mean_lag = v.get("mean_lag_daily") or v.get("mean_lag_days", [])
-                anchor_median = v.get("anchor_median_lag_daily") or v.get("anchor_median_lag_days", [])
-                anchor_mean = v.get("anchor_mean_lag_daily") or v.get("anchor_mean_lag_days", [])
-                if not dates or not n_daily:
-                    continue
-                for i, d in enumerate(dates):
-                    n = int(n_daily[i]) if i < len(n_daily) else 0
-                    k = int(k_daily[i]) if i < len(k_daily) else 0
-                    if n <= 0:
-                        continue
-                    age_days = _parse_date_to_age(d)
-                    ml = float(median_lag[i]) if isinstance(median_lag, list) and i < len(median_lag) and median_lag[i] else None
-                    mnl = float(mean_lag[i]) if isinstance(mean_lag, list) and i < len(mean_lag) and mean_lag[i] else None
-                    aml = float(anchor_median[i]) if isinstance(anchor_median, list) and i < len(anchor_median) and anchor_median[i] else None
-                    amnl = float(anchor_mean[i]) if isinstance(anchor_mean, list) and i < len(anchor_mean) and anchor_mean[i] else None
-                    target.append(CohortData(
-                        date=str(d), age=age_days, n=n, k=k,
-                        median_lag_days=ml, mean_lag_days=mnl,
-                        anchor_median_lag_days=aml, anchor_mean_lag_days=amnl,
-                    ))
-            return cohort_cohorts, window_cohorts
-
-        for edge in graph.get("edges", []):
-            pid = edge.get("p", {}).get("id")
-            if not pid:
-                continue
-            pf = param_files.get(f"parameter-{pid}") or param_files.get(pid)
-            if not pf:
-                continue
-
-            cohort_cohorts, window_cohorts = _extract_cohorts_from_values(pf.get("values", []))
-
-            # Use all cohorts (both slices) as the main cohort data — FE does this
-            # via aggregateCohortData which processes both slice types into CohortData[].
-            all_cohorts = cohort_cohorts + window_cohorts
-            eid = edge.get("uuid", "")
-            if all_cohorts:
-                cohort_lookup[eid] = all_cohorts
-
-            # Build EdgeContext: onset from window slices, window cohorts for forecast, nBaseline
-            ctx = EdgeContext()
-            # Onset from window slice latency blocks
-            lat_v = edge.get("p", {}).get("latency") or {}
-            window_vals = [v for v in pf.get("values", []) if "window(" in (v.get("sliceDSL", "") or "")]
-            onset_vals = [v.get("latency", {}).get("onset_delta_days") for v in window_vals
-                          if isinstance(v.get("latency", {}).get("onset_delta_days"), (int, float))]
-            if onset_vals:
-                ctx.onset_from_window_slices = sorted(onset_vals)[len(onset_vals) // 2]  # median
-            if window_cohorts:
-                ctx.window_cohorts = window_cohorts
-            window_n = sum(v.get("n", 0) or 0 for v in window_vals if isinstance(v.get("n"), (int, float)) and v["n"] > 0)
-            if window_n > 0:
-                ctx.n_baseline_from_window = window_n
-            edge_contexts[eid] = ctx
-
-        topo_result = enhance_graph_latencies(graph, cohort_lookup, edge_contexts=edge_contexts)
-
-        # Apply results to graph in memory
-        graph = copy.deepcopy(graph)
-        edges_by_uuid = {e["uuid"]: e for e in graph.get("edges", [])}
-        n_lat = 0
-        for ev in topo_result.edge_values:
-            edge = edges_by_uuid.get(ev.edge_uuid)
-            if not edge:
-                continue
-            lat = edge.setdefault("p", {}).setdefault("latency", {})
-            if ev.mu is not None:
-                lat["mu"] = ev.mu
-                lat["sigma"] = ev.sigma
-                lat["onset_delta_days"] = ev.onset_delta_days
-                lat["t95"] = ev.t95
-                lat["path_t95"] = ev.path_t95
-                lat["path_mu"] = ev.path_mu
-                lat["path_sigma"] = ev.path_sigma
-                lat["path_onset_delta_days"] = ev.path_onset_delta_days
-                n_lat += 1
-                pid = edge.get("p", {}).get("id", "?")
-                print(f"    {pid}: mu={ev.mu:.3f}, sigma={ev.sigma:.3f}, "
-                      f"onset={ev.onset_delta_days:.1f}, t95={ev.t95:.1f}, "
-                      f"path_t95={ev.path_t95:.1f}")
-            if ev.blended_mean is not None:
-                edge["p"]["mean"] = ev.blended_mean
-            if ev.p_infinity is not None and ev.forecast_available:
-                edge["p"].setdefault("forecast", {})["mean"] = ev.p_infinity
-        print(f"  {n_lat} edges with latency priors")
-
-        # --- Build snapshot subjects ---
-        equiv_map: dict[str, list[dict]] = {}
-        for subj in fe_data.get("subjects", []):
+        # Reconstruct _edges list for pre-flight and param recovery
+        _edges = []
+        _seen_params = set()
+        for subj in snapshot_subjects:
+            pid = subj.get("param_id", "")
+            eid = subj.get("edge_id", "")
             ch = subj.get("core_hash", "")
-            eh = subj.get("equivalent_hashes", [])
-            if ch and eh:
-                equiv_map[ch] = eh
-
-        snapshot_subjects = []
-        for param_id, edge_id, window_hash, cohort_hash in _edges:
-            base = {
-                "param_id": param_id,
-                "subject_id": f"parameter:{param_id}:{edge_id}:p:",
-                "canonical_signature": "",
-                "read_mode": "sweep_simple",
-                "target": {"targetId": edge_id},
-                "edge_id": edge_id,
-                "slice_keys": [""],
-                "anchor_from": anchor_from,
-                "anchor_to": anchor_to,
-                "sweep_from": anchor_from,
-                "sweep_to": asat_date.isoformat() if asat_date else anchor_to,
-            }
-            snapshot_subjects.append({
-                **base,
-                "core_hash": window_hash,
-                "equivalent_hashes": equiv_map.get(window_hash, []),
-            })
-            snapshot_subjects.append({
-                **base,
-                "core_hash": cohort_hash,
-                "equivalent_hashes": equiv_map.get(cohort_hash, []),
-            })
-        print(f"\nSnapshot subjects: {len(snapshot_subjects)} ({len(_edges)} edges × 2 slices)")
+            if pid and eid and (pid, eid) not in _seen_params:
+                _seen_params.add((pid, eid))
+                # Find window and cohort hashes for this edge
+                w_hash = ""
+                c_hash = ""
+                for s2 in snapshot_subjects:
+                    if s2.get("edge_id") == eid:
+                        sk = s2.get("slice_keys", [""])[0] if s2.get("slice_keys") else ""
+                        if not w_hash:
+                            w_hash = s2.get("core_hash", "")
+                        if w_hash and s2.get("core_hash", "") != w_hash:
+                            c_hash = s2.get("core_hash", "")
+                _edges.append((pid, eid, w_hash, c_hash))
 
         # --- Pre-flight checks (MANDATORY before MCMC) ---
         preflight = _run_preflight(snapshot_subjects, db_connection, graph, param_files, _edges)
@@ -962,29 +842,38 @@ def main():
         if args.placeholder:
             pass  # Skip pre-flight warnings for placeholder mode
 
-        # --- Build payload ---
-        payload = {
-            "graph_id": graph_id,
-            "graph_snapshot": graph,
-            "parameter_files": param_files,
-            "parameters_index": {},
-            "snapshot_subjects": snapshot_subjects,
-            "db_connection": db_connection,
-            "webhook_url": "" if args.no_webhook else "http://localhost:5173/api/bayes-webhook",
-            "callback_token": "test-harness",
-            "settings": {
-                **({"placeholder": True} if args.placeholder else {}),
-                **({"features": feature_flags} if feature_flags else {}),
-                **({"model_inspect_only": True} if args.no_mcmc else {}),
-                **({"draws": args.draws} if args.draws else {}),
-                **({"tune": args.tune} if args.tune else {}),
-                **({"chains": args.chains} if args.chains else {}),
-                **({"cores": args.cores} if args.cores else {}),
-                **({"dump_evidence_path": args.dump_evidence} if args.dump_evidence else {}),
-                **(_load_settings_json(args.settings_json) if args.settings_json else {}),
-            },
-            "_job_id": f"harness-{int(time.time())}",
-        }
+        # Ensure DB_CONNECTION is in the payload
+        if not payload.get("db_connection"):
+            payload["db_connection"] = db_connection
+
+        # Ensure webhook settings
+        if args.no_webhook:
+            payload["webhook_url"] = ""
+        elif not payload.get("webhook_url"):
+            payload["webhook_url"] = "http://localhost:5173/api/bayes-webhook"
+
+        # Merge CLI overrides into payload settings
+        settings = payload.setdefault("settings", {})
+        if feature_flags:
+            settings.setdefault("features", {}).update(feature_flags)
+        if args.no_mcmc:
+            settings["model_inspect_only"] = True
+        if args.dump_evidence:
+            settings["dump_evidence_path"] = args.dump_evidence
+        if args.draws:
+            settings["draws"] = args.draws
+        if args.tune:
+            settings["tune"] = args.tune
+        if args.chains:
+            settings["chains"] = args.chains
+        if args.cores:
+            settings["cores"] = args.cores
+        if args.diag:
+            settings["run_calibration"] = True
+        if args.settings_json:
+            settings.update(_load_settings_json(args.settings_json))
+
+        payload["_job_id"] = f"harness-{int(time.time())}"
 
         if args.curl:
             payload_path = "/tmp/bayes-test-payload.json"

@@ -762,7 +762,12 @@ def simulate_graph(
     # Effective p = entry_day_p × (step_day_p / p_expected)
     # This composes both deviations multiplicatively.
     day_kappa = sim_config.get("kappa_sim_default", 100.0)
-    step_kappa = sim_config.get("kappa_step_default", day_kappa)
+    _step_raw = sim_config.get("kappa_step_default", day_kappa)
+    # None / 0 / null disables step-day variation (single-source mode).
+    # This makes the DGP match the model's single-kappa BetaBinomial,
+    # enabling clean PPC calibration validation (doc 38).
+    step_kappa = float(_step_raw) if _step_raw else 0.0
+    _step_day_enabled = step_kappa > 0
 
     def _draw_day_p(p_expected: float, kappa: float) -> float:
         """Draw a single day-level p from Beta(p*kappa, (1-p)*kappa)."""
@@ -791,6 +796,8 @@ def simulate_graph(
     daily_growth = (1.0 + growth_rate_mom) ** (1.0 / 30.0) if growth_rate_mom > 0 else 1.0
 
     print(f"  Simulating {total_sim_days} days ({burn_in_days} burn-in + {n_days} observable)...", flush=True)
+    if not _step_day_enabled:
+        print(f"  Step-day dispersion: DISABLED (single-source mode, entry-day κ={day_kappa})", flush=True)
     if growth_rate_mom > 0:
         print(f"  Growth: {growth_rate_mom * 100:.1f}% MoM ({(daily_growth - 1) * 100:.3f}%/day)", flush=True)
     traffic_cv = sim_config.get("traffic_cv", 0.0)
@@ -883,7 +890,7 @@ def simulate_graph(
                 user_sigmas=user_sigmas,
                 user_onsets=user_onsets,
                 day_idx=day_idx,
-                step_day_fn=_get_step_day_p,
+                step_day_fn=_get_step_day_p if _step_day_enabled else None,
             )
             day_arrivals.append(person)
 

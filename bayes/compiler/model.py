@@ -356,7 +356,7 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
     feat_latent_onset = features.get("latent_onset", True)
     feat_window_only = features.get("window_only", False)
     feat_neutral_prior = features.get("neutral_prior", False)
-    feat_latency_dispersion = features.get("latency_dispersion", False)
+    feat_latency_dispersion = features.get("latency_dispersion", True)
     is_phase2 = phase2_frozen is not None
 
     # Settings-driven model constants (fall back to module-level defaults).
@@ -1093,15 +1093,37 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
 
             if feat_overdispersion:
                 # LogNormal prior on κ: log(κ) ~ Normal(mu, sigma).
-                # Warm-start centres the prior on the previous posterior;
-                # otherwise use default hyperparameters.
-                # See journal 30-Mar-26 "Dispersion estimation".
+                # Priority: (1) warm-start from previous posterior,
+                # (2) moment-match from endpoint data (empirical Bayes,
+                #     doc 38), (3) default hyperparameters.
                 if ev.kappa_warm is not None:
                     _log_kappa_mu = np.log(max(ev.kappa_warm, 1.0))
-                    _log_kappa_sigma = 1.0  # tighter than default — warm-start
+                    _log_kappa_sigma = 1.0  # tighter — warm-start
                 else:
-                    _log_kappa_mu = _log_kappa_mu_default
-                    _log_kappa_sigma = _log_kappa_sigma_default
+                    # Empirical Bayes: use BetaBinomial MLE from endpoint
+                    # data to centre the prior (doc 38 option 2).
+                    _kappa_mle = None
+                    try:
+                        from .inference import _estimate_cohort_kappa
+                        _p_prior = alpha / (alpha + beta_param) if (alpha + beta_param) > 0 else 0.5
+                        _kappa_diag: list[str] = []
+                        _kappa_mle = _estimate_cohort_kappa(
+                            ev, et, topology,
+                            p_cohort_mean=_p_prior,
+                            diagnostics=_kappa_diag,
+                            obs_type_filter="window",
+                        )
+                    except Exception:
+                        pass
+                    if _kappa_mle is not None and _kappa_mle > 1.0:
+                        _log_kappa_mu = np.log(_kappa_mle)
+                        _log_kappa_sigma = 1.0  # tighter — data-informed
+                        diagnostics.append(
+                            f"  kappa_prior {edge_id[:8]}…: MLE "
+                            f"κ={_kappa_mle:.1f} → log_kappa_mu={_log_kappa_mu:.2f}")
+                    else:
+                        _log_kappa_mu = _log_kappa_mu_default
+                        _log_kappa_sigma = _log_kappa_sigma_default
                 _log_kappa = pm.Normal(f"log_kappa_{safe_id}",
                                        mu=_log_kappa_mu, sigma=_log_kappa_sigma)
                 edge_kappa = pm.Deterministic(f"kappa_{safe_id}",
@@ -1128,7 +1150,9 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                     tau_slice = pm.HalfNormal(f"tau_slice_{safe_id}", sigma=0.5)
                     logit_p_base = pt.log(p / (1.0 - p))
 
-                # Per-slice latency hierarchy taus (shared across slices of this edge)
+                # Per-slice latency hierarchy: only mu varies by slice.
+                # sigma and onset are edge-level (shared across slices) to
+                # reduce funnel geometry — see doc 38 §NUTS diagnostics.
                 if et.has_latency:
                     _lv_base = latency_vars.get(edge_id)
                     _ov_base = onset_vars.get(edge_id)
@@ -1136,8 +1160,6 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                     _sigma_base = _lv_base[1] if _lv_base else pt.as_tensor_variable(np.float64(max(et.sigma_prior, 0.01)))
                     _onset_base = _ov_base if _ov_base is not None else pt.as_tensor_variable(np.float64(et.onset_delta_days))
                     tau_mu_slice = pm.HalfNormal(f"tau_mu_slice_{safe_id}", sigma=0.3)
-                    tau_sigma_slice = pm.HalfNormal(f"tau_sigma_slice_{safe_id}", sigma=0.2)
-                    tau_onset_slice = pm.HalfNormal(f"tau_onset_slice_{safe_id}", sigma=0.5)
 
                 for dim_key, group in ev.slice_groups.items():
                     for ctx_key, s_obs in group.slices.items():
@@ -1158,19 +1180,15 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                                          mu=LOG_KAPPA_MU, sigma=LOG_KAPPA_SIGMA)
                         ks = pm.Deterministic(f"kappa_slice_{safe_id}_{ctx_safe}", pt.exp(_lks))
 
-                        # Per-slice latency
+                        # Per-slice latency: only mu varies by slice.
+                        # sigma and onset stay at edge level (shared) — see
+                        # doc 38 §NUTS diagnostics for rationale.
                         if et.has_latency:
                             _em = pm.Normal(f"eps_mu_slice_{safe_id}_{ctx_safe}", mu=0, sigma=1)
-                            _es = pm.Normal(f"eps_sigma_slice_{safe_id}_{ctx_safe}", mu=0, sigma=1)
-                            _eo = pm.Normal(f"eps_onset_slice_{safe_id}_{ctx_safe}", mu=0, sigma=1)
                             pm.Deterministic(f"mu_slice_{safe_id}_{ctx_safe}", _mu_base + _em * tau_mu_slice)
-                            pm.Deterministic(f"sigma_slice_{safe_id}_{ctx_safe}",
-                                             pt.maximum(_sigma_base + _es * tau_sigma_slice, 0.01))
-                            pm.Deterministic(f"onset_slice_{safe_id}_{ctx_safe}",
-                                             pt.maximum(_onset_base + _eo * tau_onset_slice, 0.0))
                             _lv = {edge_id: (model[f"mu_slice_{safe_id}_{ctx_safe}"],
-                                             model[f"sigma_slice_{safe_id}_{ctx_safe}"])}
-                            _ov = {edge_id: model[f"onset_slice_{safe_id}_{ctx_safe}"]}
+                                             _sigma_base)}
+                            _ov = {edge_id: _onset_base}
                         else:
                             _lv = latency_vars
                             _ov = onset_vars
@@ -1267,6 +1285,7 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
         "latent_onset_edges": set(onset_vars.keys()),
         "cohort_latency_edges": set(cohort_latency_vars.keys()),
         "diagnostics": diagnostics,
+        "features": features or {},
     }
 
     return model, metadata
@@ -2130,7 +2149,7 @@ def _emit_cohort_likelihoods(
                 # timing overdispersion — the latency analogue of kappa
                 # for p. Same mean, inflated variance. One parameter per
                 # edge, no per-cohort latents.
-                _feat_ld = (features or {}).get("latency_dispersion", False)
+                _feat_ld = (features or {}).get("latency_dispersion", True)
                 _use_kappa_lat = _feat_ld and has_latent_latency
                 if _use_kappa_lat:
                     _ld_suffix = f"{safe_id}_{obs_type}"
@@ -2472,7 +2491,7 @@ def _emit_batched_slice_trajectories(
     _s = settings or {}
     _sigma_floor = float(_s.get("BAYES_SIGMA_FLOOR",
                                 _s.get("bayes_sigma_floor", SIGMA_FLOOR)))
-    _feat_ld = (features or {}).get("latency_dispersion", False)
+    _feat_ld = (features or {}).get("latency_dispersion", True)
 
     for obs_type in ["window"]:
         # Phase 1 per-slice: only window trajectories are emitted.

@@ -823,6 +823,25 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
             loo_diag.append(f"LOO: failed: {e}")
         for d in loo_diag:
             _log(log, f"  {d}")
+
+        # ── 6a. PPC calibration (doc 36) — opt-in via --diag ──
+        calibration_results = {}
+        if settings.get("run_calibration"):
+            from compiler.calibration import compute_calibration
+            cal_diag: list[str] = []
+            _cal_truth = settings.get("calibration_truth")
+            try:
+                calibration_results = compute_calibration(
+                    trace, evidence, topology, metadata,
+                    diagnostics=cal_diag,
+                    calibration_truth=_cal_truth,
+                )
+            except Exception as e:
+                calibration_results = {}
+                cal_diag.append(f"calibration: failed: {e}")
+            for d in cal_diag:
+                _log(log, f"  {d}")
+
         inference_result = summarise_posteriors(trace, topology, evidence, metadata, quality,
                                                 settings=settings, loo_scores=loo_scores)
 
@@ -1070,6 +1089,20 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
                 loo_diag2.append(f"LOO Phase 2: failed: {e}")
             for d in loo_diag2:
                 _log(log, f"  {d}")
+
+            # PPC calibration Phase 2 (doc 36) — opt-in via --diag
+            if settings.get("run_calibration"):
+                cal_diag2: list[str] = []
+                try:
+                    calibration_results2 = compute_calibration(
+                        trace2, evidence, topology, metadata2,
+                        diagnostics=cal_diag2,
+                    )
+                except Exception as e:
+                    cal_diag2.append(f"calibration Phase 2: failed: {e}")
+                for d in cal_diag2:
+                    _log(log, f"  {d}")
+
             inference_result2 = summarise_posteriors(
                 trace2, topology, evidence, metadata2, quality2,
                 settings=settings, loo_scores=loo_scores2,

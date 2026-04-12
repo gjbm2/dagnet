@@ -205,12 +205,17 @@ export async function buildCandidateRegimesByEdge(
       const { extractSliceDimensions } = await import('./sliceIsolation');
       const edges = (graph as any).edges ?? [];
 
-      // Get the bare temporal clause for synthesising contexted DSL slices.
-      const firstSlice = explodedSlices[0] || '';
-      const bareTemporal = firstSlice
-        .replace(/\.?context\([^)]*\)/g, '')
-        .replace(/^\./,  '')
-        .trim();
+      // Get ALL unique bare temporal clauses from exploded slices.
+      // A DSL like "window(...);cohort(...)" explodes into two slices;
+      // we need both so Step 5 discovers hashes for both temporal modes.
+      const bareTemporals = new Set<string>();
+      for (const slice of explodedSlices) {
+        const bare = slice
+          .replace(/\.?context\([^)]*\)/g, '')
+          .replace(/^\./,  '')
+          .trim();
+        if (bare) bareTemporals.add(bare);
+      }
 
       for (const edge of edges) {
         const edgeId = edge.uuid;
@@ -231,41 +236,59 @@ export async function buildCandidateRegimesByEdge(
         for (const keys of keySets) {
           const keySetId = keys.sort().join('||');
           if (existingKeySetIds.has(keySetId)) continue;  // already covered
-
-          // Synthesise a DSL slice with these context keys
-          let synthSlice = bareTemporal;
-          if (keys.length > 0 && synthSlice) {
-            const ctxSuffix = keys.map(k => `context(${k})`).join('.');
-            // Wrap: (window(...);cohort(...)).context(dim)
-            synthSlice = `(${synthSlice}).${ctxSuffix}`;
-          }
-          if (!synthSlice) continue;
+          if (bareTemporals.size === 0) continue;
 
           try {
-            const { plan: suppPlan } = await buildFetchPlanProduction(
-              graph as any,
-              synthSlice,
-              dummyWindow,
-            );
-            if (!suppPlan?.items) continue;
+            // Collect ALL hashes for this key-set across all temporal modes
+            // (window + cohort), then emit ONE candidate per edge with the
+            // first hash as primary and the rest as equivalents. Same pattern
+            // as Step 2-3: prevents regime selection from treating window and
+            // cohort as competing regimes.
+            const suppEdgeHashes: string[] = [];
 
-            for (const item of suppPlan.items) {
-              if (!item.querySignature || !item.targetId) continue;
-              if (item.targetId !== edgeId) continue;
+            for (const tSlice of bareTemporals) {
+              let singleSlice = tSlice;
+              if (keys.length > 0) {
+                const ctxSuffix = keys.map(k => `context(${k})`).join('.');
+                singleSlice = `${tSlice}.${ctxSuffix}`;
+              }
+              if (!singleSlice) continue;
 
-              const coreHash = await computeShortCoreHash(item.querySignature);
-              if (result[edgeId].find(r => r.core_hash === coreHash)) continue;
+              const { plan: suppPlan } = await buildFetchPlanProduction(
+                graph as any,
+                singleSlice,
+                dummyWindow,
+              );
+              if (!suppPlan?.items) continue;
 
-              const closureEntries = getClosureSet(coreHash);
-              const equivalentHashes = closureEntries.map(e => e.core_hash);
+              for (const item of suppPlan.items) {
+                if (!item.querySignature || !item.targetId) continue;
+                if (item.targetId !== edgeId) continue;
 
-              result[edgeId].push({
-                core_hash: coreHash,
-                equivalent_hashes: equivalentHashes,
-                context_keys: keys,
-              });
-              existingKeySetIds.add(keySetId);
+                const coreHash = await computeShortCoreHash(item.querySignature);
+                if (!suppEdgeHashes.includes(coreHash)) {
+                  suppEdgeHashes.push(coreHash);
+                }
+              }
             }
+
+            // Emit one candidate with first hash as primary, rest as equivalents
+            if (suppEdgeHashes.length > 0) {
+              const primaryHash = suppEdgeHashes[0];
+              if (!result[edgeId].find(r => r.core_hash === primaryHash)) {
+                const closureEntries = getClosureSet(primaryHash);
+                const equivalentHashes = [
+                  ...closureEntries.map(e => e.core_hash),
+                  ...suppEdgeHashes.slice(1),
+                ];
+                result[edgeId].push({
+                  core_hash: primaryHash,
+                  equivalent_hashes: equivalentHashes,
+                  context_keys: keys,
+                });
+              }
+            }
+            existingKeySetIds.add(keySetId);
           } catch {
             // Non-fatal: skip key-sets that fail to compute
           }

@@ -140,7 +140,8 @@
     "additionalDirectories": [
       "/home/reg/dev/dagnet/.claude",
       "/home/reg/dev/dagnet/.claude/skills",
-      "/home/reg/dev/dagnet/.claude/commands"
+      "/home/reg/dev/dagnet/.claude/commands",
+      "/home/reg/.claude/projects/-home-reg-dev-dagnet/ea2eb8e4-1272-408b-91f5-81bf7b7b9571/tool-results"
     ]
   },
   "hooks": {

@@ -168,6 +168,20 @@ def bind_evidence(
         # --- Phase C: route sliced observations to SliceGroups ---
         _route_slices(ev, settings, diagnostics)
 
+        # --- Recompute total_n to reflect actual modelled data ---
+        _pf_slice_n = sum(
+            s_obs.total_n
+            for sg in ev.slice_groups.values()
+            for s_obs in sg.slices.values()
+        )
+        _pf_all_exhaustive = all(
+            sg.is_exhaustive for sg in ev.slice_groups.values()
+        ) if ev.slice_groups else False
+        if _pf_all_exhaustive and _pf_slice_n > 0:
+            ev.total_n = _pf_slice_n
+        elif _pf_slice_n > 0:
+            ev.total_n = max(ev.total_n, _pf_slice_n)
+
         # --- Minimum-n gate ---
         min_n = settings.get("min_n_threshold", MIN_N_THRESHOLD)
         if ev.total_n < min_n and ev.total_n > 0:
@@ -409,17 +423,26 @@ def bind_snapshot_evidence(
         # --- Phase C: route sliced observations to SliceGroups ---
         _route_slices(ev, settings, diagnostics, commissioned=edge_commissioned)
 
-        # --- Minimum-n gate ---
-        # Include SliceGroup observations: when regime partitioning removes
-        # aggregate rows, per-context data in SliceGroups may be the only
-        # evidence. Without this, pure-context-only edges are incorrectly
-        # skipped despite having substantial per-slice data.
+        # --- Recompute total_n to reflect actual modelled data ---
+        # When slices are exhaustive the aggregate is suppressed — total_n
+        # must reflect per-slice totals, not the (regime-stripped) aggregate.
         slice_n = sum(
             s_obs.total_n
             for sg in ev.slice_groups.values()
             for s_obs in sg.slices.values()
         )
-        effective_n = ev.total_n + slice_n
+        _all_exhaustive = all(
+            sg.is_exhaustive for sg in ev.slice_groups.values()
+        ) if ev.slice_groups else False
+        if _all_exhaustive and slice_n > 0:
+            ev.total_n = slice_n
+        elif slice_n > 0:
+            # Non-exhaustive: aggregate + slices both contribute.
+            # Use the larger of aggregate or slice total to avoid
+            # double-counting (they overlap).
+            ev.total_n = max(ev.total_n, slice_n)
+
+        effective_n = ev.total_n
         min_n = settings.get("min_n_threshold", MIN_N_THRESHOLD)
         if effective_n < min_n and effective_n > 0:
             ev.skipped = True
@@ -533,9 +556,8 @@ def _bind_from_snapshot_rows(
     ctx_window_rows: dict[str, dict[str, list[dict]]] = defaultdict(lambda: defaultdict(list))
     ctx_cohort_rows: dict[str, dict[str, list[dict]]] = defaultdict(lambda: defaultdict(list))
 
-    # Non-MECE fallback: collect skipped non-MECE context rows by context_key.
-    # Used only if no bare/MECE rows produce an aggregate (Defect 4 fix).
-    _non_mece_by_ctx: dict[str, list[dict]] = {}
+    # Track non-MECE context keys for diagnostic reporting.
+    _non_mece_ctx_keys: set[str] = set()
 
     for row in rows:
         anchor_day = str(row.get("anchor_day", ""))
@@ -568,15 +590,11 @@ def _bind_from_snapshot_rows(
                     ctx_window_rows[ctx_part][anchor_day].append(dict(row))
 
         # Non-MECE context rows cannot be aggregated — skip them.
-        # Collect them in case we need a fallback (no bare rows at all).
         if is_ctx and not is_mece_ctx:
             n_ctx_non_mece_skipped += 1
             _ctx_part = context_key(slice_key)
             if _ctx_part:
-                if _is_cohort(slice_key):
-                    _non_mece_by_ctx.setdefault(_ctx_part, []).append(dict(row))
-                else:
-                    _non_mece_by_ctx.setdefault(_ctx_part, []).append(dict(row))
+                _non_mece_ctx_keys.add(_ctx_part)
             continue
 
         day_bucket = bucket[anchor_day]
@@ -604,32 +622,17 @@ def _bind_from_snapshot_rows(
             if is_ctx:
                 n_ctx_aggregated += 1
 
-    # Defect 4 fix: when ALL rows were non-MECE context-qualified and no
-    # bare/MECE rows produced an aggregate, fall back to the single largest-n
-    # context key's rows. This is a conservative lower bound — no double-
-    # counting because we use only one context's data. The x values
-    # underestimate the true population, giving wider posterior uncertainty,
-    # which is appropriate when the full population is unobserved.
+    # When ALL rows are non-MECE context-qualified and no bare/MECE rows
+    # produced an aggregate, log a warning but do NOT silently substitute
+    # a single context slice as an aggregate proxy. That would model on a
+    # fraction of the data without the user knowing. The correct fix is
+    # for the FE to declare the dimension as MECE so rows can be summed.
     _agg_empty = not agg_window and not agg_cohort
-    if _agg_empty and _non_mece_by_ctx and n_ctx_non_mece_skipped > 0:
-        # Pick the context key with the most total x (largest population slice)
-        _best_ctx = max(
-            _non_mece_by_ctx.keys(),
-            key=lambda c: sum(r.get("x", 0) for r in _non_mece_by_ctx[c])
-        )
-        _fallback_rows = _non_mece_by_ctx[_best_ctx]
-        for _fb_row in _fallback_rows:
-            _fb_anchor = str(_fb_row.get("anchor_day", ""))
-            _fb_ret = str(_fb_row.get("retrieved_at", ""))
-            _fb_sk = str(_fb_row.get("slice_key", ""))
-            if _is_cohort(_fb_sk):
-                agg_cohort[_fb_anchor][_fb_ret] = dict(_fb_row)
-            elif _is_window(_fb_sk):
-                agg_window[_fb_anchor][_fb_ret] = dict(_fb_row)
+    if _agg_empty and _non_mece_ctx_keys and n_ctx_non_mece_skipped > 0:
         diagnostics.append(
             f"WARN edge {ev.edge_id[:8]}…: no bare or MECE aggregate — "
-            f"using largest non-MECE context '{_best_ctx}' as aggregate proxy "
-            f"({len(_fallback_rows)} rows, conservative lower bound on population)"
+            f"{n_ctx_non_mece_skipped} context rows skipped (dimension not in mece_dimensions). "
+            f"Aggregate will be empty. Declare dimension as MECE to enable aggregation."
         )
 
     # §5.7 Per-date regime partitioning: remove MECE-regime rows from
@@ -2141,7 +2144,21 @@ def bind_evidence_from_graph(
         # --- Phase C: route sliced observations to SliceGroups ---
         _route_slices(ev, settings, diagnostics)
 
-        # --- Minimum-n gate (reuse existing logic) ---
+        # --- Recompute total_n to reflect actual modelled data ---
+        _ep_slice_n = sum(
+            s_obs.total_n
+            for sg in ev.slice_groups.values()
+            for s_obs in sg.slices.values()
+        )
+        _ep_all_exhaustive = all(
+            sg.is_exhaustive for sg in ev.slice_groups.values()
+        ) if ev.slice_groups else False
+        if _ep_all_exhaustive and _ep_slice_n > 0:
+            ev.total_n = _ep_slice_n
+        elif _ep_slice_n > 0:
+            ev.total_n = max(ev.total_n, _ep_slice_n)
+
+        # --- Minimum-n gate ---
         min_n = settings.get("min_n_threshold", MIN_N_THRESHOLD)
         if ev.total_n < min_n and ev.total_n > 0:
             ev.skipped = True

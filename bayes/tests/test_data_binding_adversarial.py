@@ -831,15 +831,14 @@ class TestNonMeceContextOnlyData:
     (just context-qualified).
     """
 
-    def test_context_only_non_mece_uses_largest_as_proxy(self):
+    def test_context_only_non_mece_gets_empty_aggregate(self):
         """Edge has ONLY context-qualified rows, dimension not MECE.
         No bare rows exist.
 
-        The binder should fall back to the largest single context key's
-        rows as an aggregate proxy, rather than dropping all data.
-
-        Regression: previously, all non-MECE context rows were silently
-        dropped, leaving total_n=0 and falling back to param file priors.
+        The binder must NOT silently substitute a single context slice
+        as an aggregate proxy — that would model on a fraction of the
+        data. The aggregate should be empty; the correct fix is for the
+        FE to declare the dimension as MECE.
         """
         topo, pf = _topo_and_pf(("e1", "A", "B", "p1"))
 
@@ -864,16 +863,12 @@ class TestNonMeceContextOnlyData:
 
         e = ev.edges["e1"]
 
-        # Data must survive — the largest context key (google, x=60)
-        # should be used as aggregate proxy
-        assert e.total_n > 0, (
-            f"total_n=0 despite {e.rows_received} snapshot rows. "
-            f"Non-MECE context rows should fall back to largest "
-            f"context key as aggregate proxy."
+        # Aggregate must be empty — non-MECE context rows cannot be
+        # aggregated without double-counting risk
+        assert e.total_n == 0, (
+            f"total_n={e.total_n} but should be 0 — non-MECE context rows "
+            f"must not be silently used as aggregate proxy."
         )
-        # The proxy uses google (x=60), so trajectories should have n=60
-        n_traj = sum(len(c.trajectories) for c in e.cohort_obs)
-        assert n_traj > 0, "No trajectories from non-MECE fallback"
 
     def test_context_only_mece_data_survives(self):
         """Control: same data but with channel declared as MECE.
