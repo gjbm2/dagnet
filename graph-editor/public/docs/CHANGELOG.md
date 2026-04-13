@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.10.3b
+**Released:** 13-Apr-26
+
+Significant behind-the-scenes work on Phsae C, tooling, and other aspects, ahead of forecast generalisation and Bayes ga
+
+---
+
 ## Version 1.10.2b
 **Released:** 9-Apr-26
 
