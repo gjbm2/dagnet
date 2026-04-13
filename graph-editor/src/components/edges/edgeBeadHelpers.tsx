@@ -681,7 +681,9 @@ export function buildBeadDefinitions(
   whatIfDSL?: string | null,
   visibleStartOffset?: number, // Distance from path start to visible start (after chevron)
   getScenarioVisibilityMode?: (scenarioId: string) => ScenarioVisibilityMode,
-  useDataValuesView?: boolean
+  beadDisplayMode?: import('../../types').BeadDisplayMode,
+  inboundNMap?: Map<string, { n: number; forecast_k: number }>,
+  anchorN?: number
 ): BeadDefinition[] {
   if (!scenariosContext || !graph) {
     console.warn('[buildBeadDefinitions] Missing scenariosContext or graph');
@@ -838,15 +840,37 @@ export function buildBeadDefinitions(
         getScenarioVisibilityMode,
         whatIfDSL
       );
-      if (useDataValuesView && layerN !== undefined && layerN > 0) {
-        // Use real observed k when available, otherwise derive from rate × n
-        const k = (layerK !== undefined) ? layerK : Math.round(value * layerN);
-        const n = Math.round(layerN);
-        return { value: `${k}/${n}` as any, prefix, isDerived };
+      // Must match getEdgeId in computeInboundN: uuid || id
+      const edgeId = edge.uuid || edge.id;
+      const inboundEntry = edgeId ? inboundNMap?.get(edgeId) : undefined;
+
+      if (beadDisplayMode === 'data-values') {
+        // Data values: show k/n as integer counts
+        if (inboundEntry && inboundEntry.n > 0) {
+          const n = Math.round(inboundEntry.n);
+          const k = Math.round(value * inboundEntry.n);
+          return { value: `${k}\t${n}` as any, prefix, isDerived };
+        }
+        // Fallback: use per-edge evidence if inbound-n not available
+        if (layerN !== undefined && layerN > 0) {
+          const k = (layerK !== undefined) ? layerK : Math.round(value * layerN);
+          const n = Math.round(layerN);
+          return { value: `${k}\t${n}` as any, prefix, isDerived };
+        }
       }
+
+      if (beadDisplayMode === 'path-rate' && anchorN && anchorN > 0) {
+        // Path rate: show k/anchor_n as a percentage
+        if (inboundEntry && inboundEntry.n > 0) {
+          const k = value * inboundEntry.n;
+          const pathRate = k / anchorN;
+          return { value: pathRate, stdev: undefined, prefix, isDerived };
+        }
+      }
+
       return { value, stdev, prefix, isDerived };
     },
-    buildLabel: useDataValuesView
+    buildLabel: beadDisplayMode === 'data-values'
       ? BeadLabelBuilder.buildDataValuesLabel
       : BeadLabelBuilder.buildProbabilityLabel,
     backgroundColor: '#000000',

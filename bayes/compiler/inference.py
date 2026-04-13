@@ -1248,6 +1248,24 @@ def summarise_posteriors(
                         f"  onset {edge_id[:8]}…: {onset_post_mean:.2f}±{onset_post_sd:.2f} "
                         f"(prior={onset:.2f}), corr(onset,mu)={onset_mu_corr:.3f}"
                     )
+
+                # (m, a, r) reparam diagnostics (doc 34 §11.8.9)
+                _m_var = f"m_lat_{safe_eid}"
+                _a_var = f"a_lat_{safe_eid}"
+                _r_var = f"r_lat_{safe_eid}"
+                if all(v in trace.posterior for v in (_m_var, _a_var, _r_var)):
+                    _m_s = trace.posterior[_m_var].values.flatten()
+                    _a_s = trace.posterior[_a_var].values.flatten()
+                    _r_s = trace.posterior[_r_var].values.flatten()
+                    _corr_ma = float(np.corrcoef(_m_s, _a_s)[0, 1])
+                    _corr_mr = float(np.corrcoef(_m_s, _r_s)[0, 1])
+                    _corr_ar = float(np.corrcoef(_a_s, _r_s)[0, 1])
+                    diagnostics.append(
+                        f"  reparam {edge_id[:8]}…: "
+                        f"corr(m,a)={_corr_ma:.3f}, "
+                        f"corr(m,r)={_corr_mr:.3f}, "
+                        f"corr(a,r)={_corr_ar:.3f}"
+                    )
             else:
                 # Phase S fallback: echo fixed point estimate
                 mu = lp.mu

@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { useTabContext } from './TabContext';
-import type { ViewOverlayMode } from '../types';
+import type { ViewOverlayMode, BeadDisplayMode } from '../types';
 
 export interface ViewPreferencesState {
   useUniformScaling: boolean;
@@ -8,7 +8,7 @@ export interface ViewPreferencesState {
   autoReroute: boolean;
   snapToGuides: boolean;
   useSankeyView: boolean;
-  useDataValuesView: boolean;
+  beadDisplayMode: BeadDisplayMode;
   showNodeImages: boolean;
   confidenceIntervalLevel: 'none' | '80' | '90' | '95' | '99';
   animateFlow: boolean;
@@ -21,7 +21,7 @@ interface ViewPreferencesContextValue extends ViewPreferencesState {
   setAutoReroute: (value: boolean) => void;
   setSnapToGuides: (value: boolean) => void;
   setUseSankeyView: (value: boolean) => void;
-  setUseDataValuesView: (value: boolean) => void;
+  setBeadDisplayMode: (value: BeadDisplayMode) => void;
   setShowNodeImages: (value: boolean) => void;
   setConfidenceIntervalLevel: (value: 'none' | '80' | '90' | '95' | '99') => void;
   setAnimateFlow: (value: boolean) => void;
@@ -46,7 +46,7 @@ export function ViewPreferencesProvider({ tabId, children }: { tabId?: string; c
   const [autoReroute, setAutoRerouteLocal] = useState<boolean>(editorState.autoReroute ?? true);
   const [snapToGuides, setSnapToGuidesLocal] = useState<boolean>(editorState.snapToGuides ?? true);
   const [useSankeyView, setUseSankeyViewLocal] = useState<boolean>(editorState.useSankeyView ?? false);
-  const [useDataValuesView, setUseDataValuesViewLocal] = useState<boolean>(editorState.useDataValuesView ?? false);
+  const [beadDisplayMode, setBeadDisplayModeLocal] = useState<BeadDisplayMode>((editorState.beadDisplayMode as BeadDisplayMode) ?? 'edge-rate');
   const [showNodeImages, setShowNodeImagesLocal] = useState<boolean>(editorState.showNodeImages ?? true);
   const [confidenceIntervalLevel, setConfidenceIntervalLevelLocal] = useState<'none' | '80' | '90' | '95' | '99'>(
     (editorState.confidenceIntervalLevel as 'none' | '80' | '90' | '95' | '99') ?? 'none'
@@ -73,8 +73,8 @@ export function ViewPreferencesProvider({ tabId, children }: { tabId?: string; c
     if (editorState.useSankeyView !== undefined) setUseSankeyViewLocal(editorState.useSankeyView);
   }, [editorState.useSankeyView]);
   useEffect(() => {
-    if (editorState.useDataValuesView !== undefined) setUseDataValuesViewLocal(editorState.useDataValuesView);
-  }, [editorState.useDataValuesView]);
+    if (editorState.beadDisplayMode !== undefined) setBeadDisplayModeLocal(editorState.beadDisplayMode as BeadDisplayMode);
+  }, [editorState.beadDisplayMode]);
   useEffect(() => {
     if (editorState.showNodeImages !== undefined) setShowNodeImagesLocal(editorState.showNodeImages);
   }, [editorState.showNodeImages]);
@@ -111,9 +111,9 @@ export function ViewPreferencesProvider({ tabId, children }: { tabId?: string; c
     setUseSankeyViewLocal(value);
     if (tabId) tabOps.updateTabState(tabId, { useSankeyView: value });
   };
-  const setUseDataValuesView = (value: boolean) => {
-    setUseDataValuesViewLocal(value);
-    if (tabId) tabOps.updateTabState(tabId, { useDataValuesView: value });
+  const setBeadDisplayMode = (value: BeadDisplayMode) => {
+    setBeadDisplayModeLocal(value);
+    if (tabId) tabOps.updateTabState(tabId, { beadDisplayMode: value });
   };
   const setShowNodeImages = (value: boolean) => {
     setShowNodeImagesLocal(value);
@@ -138,7 +138,7 @@ export function ViewPreferencesProvider({ tabId, children }: { tabId?: string; c
     autoReroute,
     snapToGuides,
     useSankeyView,
-    useDataValuesView,
+    beadDisplayMode,
     showNodeImages,
     confidenceIntervalLevel,
     animateFlow,
@@ -148,12 +148,12 @@ export function ViewPreferencesProvider({ tabId, children }: { tabId?: string; c
     setAutoReroute,
     setSnapToGuides,
     setUseSankeyView,
-    setUseDataValuesView,
+    setBeadDisplayMode,
     setShowNodeImages,
     setConfidenceIntervalLevel,
     setAnimateFlow,
     setViewOverlayMode
-  }), [useUniformScaling, massGenerosity, autoReroute, snapToGuides, useSankeyView, useDataValuesView, showNodeImages, confidenceIntervalLevel, animateFlow, viewOverlayMode]);
+  }), [useUniformScaling, massGenerosity, autoReroute, snapToGuides, useSankeyView, beadDisplayMode, showNodeImages, confidenceIntervalLevel, animateFlow, viewOverlayMode]);
 
   return (
     <ViewPreferencesContext.Provider value={value}>

@@ -408,6 +408,22 @@ def main():
                 "onset_mu_corr": float(onset_match.group(5)),
             })
 
+        # inference:   reparam 7008ad7a…: corr(m,a)=-0.305, corr(m,r)=-0.462, corr(a,r)=0.742
+        reparam_match = re.search(
+            r"inference:\s+reparam (\w{8})…:\s+"
+            r"corr\(m,a\)=([-\d.]+),\s+"
+            r"corr\(m,r\)=([-\d.]+),\s+"
+            r"corr\(a,r\)=([-\d.]+)",
+            line
+        )
+        if reparam_match:
+            eid_prefix = reparam_match.group(1)
+            posteriors.setdefault(eid_prefix, {}).update({
+                "corr_m_a": float(reparam_match.group(2)),
+                "corr_m_r": float(reparam_match.group(3)),
+                "corr_a_r": float(reparam_match.group(4)),
+            })
+
         # inference:   kappa b91c2820…: 3.6±1.1
         kappa_match = re.search(
             r"inference:\s+kappa (\w{8})…:\s+([\d.]+)±([\d.]+)",
@@ -630,6 +646,8 @@ def main():
             corr_str = ""
             if param == "onset" and "onset_mu_corr" in post:
                 corr_str = f"  corr(onset,mu)={post['onset_mu_corr']:.3f}"
+            if param == "onset" and "corr_m_a" in post:
+                corr_str += f"  corr(m,a)={post['corr_m_a']:.3f}"
 
             err_str = f"Δ={abs_err:.3f}" if abs_err < abs_tol and z_score >= 3.0 else f"z={z_score:5.2f}"
             print(f"    {param:<8s}  truth={truth_val:7.3f}  post={post_val:7.3f}±{post_sd:.3f}  "
@@ -639,6 +657,10 @@ def main():
             print(f"    {'kappa':<8s}  sim={t.get('kappa', 50.0):7.1f}  post={post['kappa_mean']:7.1f}±{post['kappa_sd']:.1f}")
         if "rhat" in post:
             print(f"    {'rhat':<8s}  {post['rhat']:.4f}  ess={post.get('ess', '?')}")
+        if "corr_m_a" in post:
+            print(f"    {'reparam':<8s}  corr(m,a)={post['corr_m_a']:.3f}  "
+                  f"corr(m,r)={post['corr_m_r']:.3f}  "
+                  f"corr(a,r)={post['corr_a_r']:.3f}")
         print()
 
     # --- Phase C: per-slice posterior comparison ---

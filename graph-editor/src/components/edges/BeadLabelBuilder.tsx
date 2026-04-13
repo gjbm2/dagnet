@@ -304,32 +304,102 @@ export class BeadLabelBuilder {
     };
   }
   
-  /**
-   * Static helper: Data values formatter (n/k counts)
-   * Value is pre-formatted as a string "k/n", so just pass through.
-   */
-  static formatDataValues(value: number | string): string {
-    return String(value);
+  /** Format an integer with thousands separators (e.g. 16267 → "16,267") */
+  private static fmtInt(n: number): string {
+    return n.toLocaleString('en-GB');
   }
 
   /**
-   * Static helper: Build a label for data values beads (n/k display)
+   * Render a single data-values entry: "k/n" where /n is dimmed.
+   * value is encoded as "k\tn" (tab-separated integers).
+   */
+  private static renderDataValue(
+    encoded: string,
+    colour: string,
+    prefix?: string,
+    isDerived?: boolean,
+    key?: string | number
+  ): React.ReactNode {
+    // If value doesn't contain tab separator, it's a fallback number — show as percentage
+    if (!encoded.includes('\t')) {
+      const num = parseFloat(encoded);
+      const formatted = isNaN(num)
+        ? encoded
+        : BeadLabelBuilder.formatProbability(num);
+      const prefixStr = prefix ? `${prefix} ` : '';
+      const inner = isDerived ? `[${prefixStr}${formatted}]` : `${prefixStr}${formatted}`;
+      return <span key={key} style={{ color: colour }}>{inner}</span>;
+    }
+    const [kStr, nStr] = encoded.split('\t');
+    const k = parseInt(kStr, 10);
+    const n = parseInt(nStr, 10);
+    const kFmt = isNaN(k) ? kStr : BeadLabelBuilder.fmtInt(k);
+    const nFmt = isNaN(n) ? nStr : BeadLabelBuilder.fmtInt(n);
+    const prefixStr = prefix ? `${prefix} ` : '';
+    const inner = (
+      <>
+        {prefixStr}{kFmt}<span style={{ opacity: 0.7, fontWeight: 400 }}>/{nFmt}</span>
+      </>
+    );
+    const wrapped = isDerived ? <>[{inner}]</> : inner;
+    return <span key={key} style={{ color: colour }}>{wrapped}</span>;
+  }
+
+  /**
+   * Static helper: Build a label for data values beads (n/k display).
+   * Handles deduplication, hidden-current, and per-scenario colouring
+   * identically to other bead types, but renders k with full opacity
+   * and /n with reduced opacity.
    */
   static buildDataValuesLabel(
     values: BeadValue[],
     hiddenCurrent?: HiddenCurrentValue,
     hasExistenceVariation: boolean = false
   ): { displayText: React.ReactNode; allIdentical: boolean } {
+    // Use a plain-string builder just for deduplication logic
     const builder = new BeadLabelBuilder(
       values,
       hiddenCurrent,
-      BeadLabelBuilder.formatDataValues as ValueFormatter,
+      (v) => String(v),
       hasExistenceVariation
     );
-    return {
-      displayText: builder.buildDisplayText(),
-      allIdentical: builder.shouldFullyDeduplicate()
-    };
+    const allIdentical = builder.shouldFullyDeduplicate();
+
+    // Render with custom k/n styling
+    if (allIdentical && values.length > 0) {
+      return {
+        displayText: BeadLabelBuilder.renderDataValue(
+          String(values[0].value), '#FFFFFF', values[0].prefix, values[0].isDerived
+        ),
+        allIdentical: true,
+      };
+    }
+
+    const segments: React.ReactNode[] = [];
+
+    if (builder.areAllValuesIdentical() && hiddenCurrent && !builder.doesHiddenCurrentMatch()) {
+      // All visible same, hidden differs
+      segments.push(BeadLabelBuilder.renderDataValue(
+        String(values[0].value), '#FFFFFF', values[0].prefix, values[0].isDerived, 'visible'
+      ));
+    } else {
+      values.forEach((val, idx) => {
+        segments.push(BeadLabelBuilder.renderDataValue(
+          String(val.value), val.colour, val.prefix, val.isDerived, `v-${idx}`
+        ));
+        if (idx < values.length - 1) segments.push(' ');
+      });
+    }
+
+    if (hiddenCurrent && !builder.doesHiddenCurrentMatch()) {
+      segments.push(' (');
+      segments.push(BeadLabelBuilder.renderDataValue(
+        String(hiddenCurrent.value), '#808080', hiddenCurrent.prefix, hiddenCurrent.isDerived, 'hidden'
+      ));
+      segments.push(')');
+    }
+
+    return { displayText: <>{segments}</>, allIdentical: false };
   }
 
   /**

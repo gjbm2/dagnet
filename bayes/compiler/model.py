@@ -364,7 +364,13 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
     feat_window_only = features.get("window_only", False)
     feat_neutral_prior = features.get("neutral_prior", False)
     feat_latency_dispersion = features.get("latency_dispersion", True)
+    feat_latency_reparam = features.get("latency_reparam", False)
     is_phase2 = phase2_frozen is not None
+    # latency_reparam implies both latent_onset and latent_latency (doc 34 §11.8.5).
+    use_reparam = (feat_latency_reparam
+                   and feat_latent_onset
+                   and feat_latent_latency
+                   and not is_phase2)
 
     # Settings-driven model constants (fall back to module-level defaults).
     # Keys match the UPPER_CASE convention used in settings.yaml and the FE.
@@ -385,7 +391,9 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                        f"overdispersion={feat_overdispersion}, "
                        f"latent_onset={feat_latent_onset}, "
                        f"window_only={feat_window_only}, "
-                       f"latency_dispersion={feat_latency_dispersion}")
+                       f"latency_dispersion={feat_latency_dispersion}, "
+                       f"latency_reparam={feat_latency_reparam} "
+                       f"(use_reparam={use_reparam})")
     edge_var_names: dict[str, str] = {}  # edge_id → primary p variable name
     slice_axes: dict[str, dict] = {}     # edge_id → {ctx_keys, ctx_to_idx, n_slices, safe_id}
 
@@ -424,6 +432,9 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
         # cohort data does not re-learn onset.
         # =============================================================
         onset_vars: dict[str, object] = {}
+        # For reparam edges, onset_obs metadata is computed here in §1
+        # but the pm.Normal call is deferred to §3 (doc 34 §11.8.5).
+        _onset_obs_deferred: dict[str, dict] = {}
         if feat_latent_onset:
             for edge_id in topology.topo_order:
                 et = topology.edges.get(edge_id)
@@ -435,6 +446,13 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                 safe_id = _safe_var_name(edge_id)
                 lp = ev.latency_prior
 
+                # Will this edge use (m, a, r) reparam in §3?
+                _edge_uses_reparam = (
+                    use_reparam
+                    and ev.latency_prior is not None
+                    and ev.latency_prior.sigma > _sigma_floor
+                )
+
                 if is_phase2:
                     # Phase 2: onset is a constant (not learned). We take
                     # the value from Phase 1's posterior and lock it in.
@@ -445,6 +463,35 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                     onset_vars[edge_id] = onset_var
                     diagnostics.append(
                         f"  onset: {edge_id[:8]}… {onset_frozen:.1f}d → frozen (Phase 1)"
+                    )
+                elif _edge_uses_reparam:
+                    # Reparam edge: onset variable will be created in §3
+                    # from (m, a) coordinates. Pre-compute onset_obs
+                    # metadata here and stash for deferred emission.
+                    onset_obs = getattr(lp, 'onset_observations', None)
+                    if onset_obs and len(onset_obs) >= 3:
+                        onset_obs_np = np.array(onset_obs, dtype=np.float64)
+                        raw_std = float(np.std(onset_obs_np))
+                        sigma_obs = max(raw_std, 1.0 if raw_std < 1e-6 else 0.01)
+                        onset_obs_mean = float(np.mean(onset_obs_np))
+                        n_obs = len(onset_obs_np)
+                        if n_obs >= 4 and np.std(onset_obs_np) > 1e-9:
+                            rho = float(np.corrcoef(onset_obs_np[:-1], onset_obs_np[1:])[0, 1])
+                            rho = rho if np.isfinite(rho) else 0.0
+                            rho = max(min(rho, 0.99), 0.0)
+                        else:
+                            rho = 0.0
+                        n_eff = max(n_obs * (1 - rho) / (1 + rho), 1.0)
+                        sigma_eff = sigma_obs / max(n_eff ** 0.5, 1.0)
+                        _onset_obs_deferred[edge_id] = {
+                            "onset_obs_mean": onset_obs_mean,
+                            "sigma_eff": sigma_eff,
+                            "n_obs": n_obs,
+                            "rho": rho,
+                            "n_eff": n_eff,
+                        }
+                    diagnostics.append(
+                        f"  onset: {edge_id[:8]}… → deferred to §3 (reparam)"
                     )
                 else:
                     # Phase 1: onset is a free parameter the model learns.
@@ -772,6 +819,98 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                         f"  latency: {edge_id[:8]}… mu={mu_frozen:.3f}, "
                         f"sigma={sigma_frozen:.3f} → frozen (Phase 1)"
                     )
+                elif use_reparam:
+                    # ─── (m, a, r) reparameterisation (doc 34 §11.8) ───
+                    # Sample unconstrained (m, a, r), derive (onset, mu,
+                    # sigma, t50, t95) as Deterministics.
+                    lp = ev.latency_prior
+                    onset_prior_days = max(lp.onset_delta_days, 0.0)
+                    mu_prior = lp.mu
+                    sigma_prior = lp.sigma
+
+                    # Forward transform into (m, a, r) coordinates
+                    t50_prior_days = onset_prior_days + _math.exp(mu_prior)
+                    m_prior = _math.log(t50_prior_days)
+
+                    if onset_prior_days < 1e-6:
+                        a_prior = -5.0
+                    else:
+                        a_prior = _math.log(
+                            onset_prior_days
+                            / (t50_prior_days - onset_prior_days))
+
+                    r_prior = _math.log(_math.expm1(Z_95 * sigma_prior))
+
+                    # Prior widths (doc 34 §11.8.4)
+                    m_sigma = max(_mu_prior_sigma_floor, sigma_prior, 0.3)
+                    a_sigma = 2.0
+                    r_sigma = 0.5
+
+                    # Unconstrained sampling coordinates
+                    m_lat = pm.Normal(
+                        f"m_lat_{safe_id}", mu=m_prior, sigma=m_sigma)
+                    a_lat = pm.Normal(
+                        f"a_lat_{safe_id}", mu=a_prior, sigma=a_sigma)
+                    r_lat = pm.Normal(
+                        f"r_lat_{safe_id}", mu=r_prior, sigma=r_sigma)
+
+                    # Deterministic back-transform
+                    t50_var = pm.Deterministic(
+                        f"t50_lat_{safe_id}", pt.exp(m_lat))
+                    onset_frac_var = pm.Deterministic(
+                        f"onset_frac_{safe_id}", pm.math.invlogit(a_lat))
+                    onset_var = pm.Deterministic(
+                        f"onset_{safe_id}", t50_var * onset_frac_var)
+                    mu_var = pm.Deterministic(
+                        f"mu_lat_{safe_id}",
+                        m_lat - pt.softplus(a_lat))
+                    sigma_var = pm.Deterministic(
+                        f"sigma_lat_{safe_id}",
+                        pt.softplus(r_lat) / Z_95)
+                    t95_var = pm.Deterministic(
+                        f"t95_lat_{safe_id}",
+                        onset_var + pt.exp(mu_var + Z_95 * sigma_var))
+
+                    onset_vars[edge_id] = onset_var
+                    latency_vars[edge_id] = (mu_var, sigma_var)
+
+                    diagnostics.append(
+                        f"  latency: {edge_id[:8]}… "
+                        f"m_prior={m_prior:.3f}, a_prior={a_prior:.3f}, "
+                        f"r_prior={r_prior:.3f} "
+                        f"(a_sigma={a_sigma:.1f}, r_sigma={r_sigma:.1f})"
+                        f" → latent [reparam]")
+
+                    # Deferred onset observations from §1
+                    _deferred = _onset_obs_deferred.get(edge_id)
+                    if _deferred is not None:
+                        pm.Normal(
+                            f"onset_obs_{safe_id}",
+                            mu=onset_var,
+                            sigma=_deferred["sigma_eff"],
+                            observed=np.float64(_deferred["onset_obs_mean"]),
+                        )
+                        diagnostics.append(
+                            f"  onset_obs: {edge_id[:8]}… "
+                            f"mean={_deferred['onset_obs_mean']:.1f}d, "
+                            f"σ_eff={_deferred['sigma_eff']:.2f}d → "
+                            f"deferred from §1")
+
+                    # t95 soft constraint (retained in Stage 1)
+                    if et.t95_days is not None:
+                        t95_analytic = float(et.t95_days)
+                        sigma_t95 = max(t95_analytic * 0.2, 2.0)
+                        pm.Normal(
+                            f"t95_obs_{safe_id}",
+                            mu=t95_var,
+                            sigma=sigma_t95,
+                            observed=np.float64(t95_analytic),
+                        )
+                        diagnostics.append(
+                            f"  t95: {edge_id[:8]}… analytic={t95_analytic:.1f}d "
+                            f"(σ_t95={sigma_t95:.1f}d) → soft constraint"
+                            f" on derived t95 [reparam]")
+
                 else:
                     # Phase 1: μ and σ are free parameters the model learns.
                     mu_prior = ev.latency_prior.mu
@@ -1417,6 +1556,7 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
         "slice_axes": slice_axes,
         "diagnostics": diagnostics,
         "features": features or {},
+        "use_reparam": use_reparam,
     }
 
     return model, metadata

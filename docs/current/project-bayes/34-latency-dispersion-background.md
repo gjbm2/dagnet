@@ -1007,10 +1007,10 @@ constraints to enforce. The transform is clean.
 - **Phase 2 frozen latency** — Phase 2 freezes `(mu, sigma, onset)`
   as constants (`model.py:760-770`). This path doesn't sample
   anything, so the reparameterisation is irrelevant. No change needed.
-- **Phase C per-slice latency** — the `tau_mu_slice` / `tau_sigma_slice`
-  cross-slice shrinkage parameters operate on (mu, sigma) space. They
-  would need analogous treatment for full consistency, but can be
-  deferred behind the feature flag.
+- **Phase C per-slice latency** — currently only mu varies by slice;
+  sigma and onset are shared. With the ridge broken, per-slice sigma
+  and onset become feasible via hierarchical (m, a, r) offsets. See
+  Stage 3 design in §11.9.1.
 - **Mixture (join-node) paths** — these compute a weighted CDF sum
   where t50/t95 are not simply the shifted lognormal quantiles.
   Deferred, matching the kappa_lat scope (§6.4).
@@ -1286,21 +1286,294 @@ Proposal A is documented as a fallback if Proposal B encounters
 unexpected difficulties (e.g. the onset observation block interacts
 badly with the (m, a) derived onset).
 
+### 11.9.1 Stage 3: per-slice latency RVs via (m, a, r)
+
+**Status**: Design. Contingent on Stage 1 validation.
+**Date**: 14-Apr-26.
+
+#### 11.9.1.1 Motivation
+
+Contexted (Phase C) graphs currently give per-slice RVs only to mu.
+Sigma and onset are shared across all context slices for the same
+edge (`_sigma_base`, `_onset_base` at `model.py:1429-1430`). The
+comment at `model.py:1370-1372` explains why:
+
+```
+# Per-slice latency hierarchy: only mu varies by slice.
+# sigma and onset are edge-level (shared across slices) to
+# reduce funnel geometry — see doc 38 §NUTS diagnostics.
+```
+
+The "funnel geometry" is the onset-mu-sigma ridge documented in §10.
+If one slice's onset trades off with its mu, and another slice's
+sigma trades off with its onset, and both are weakly identified, the
+resulting posterior is a high-dimensional funnel that NUTS cannot
+explore.
+
+With the (m, a, r) reparameterisation breaking the ridge for
+uncontexted edges (Stage 1), the same coordinates should enable
+per-slice sigma and onset as free RVs — the exact problem that
+prevented this is the one we just solved.
+
+#### 11.9.1.2 What changes in the model
+
+**Current Phase C slice hierarchy** (mu only):
+
+```
+# Edge-level:
+m_edge, a_edge, r_edge  → onset_edge, mu_edge, sigma_edge
+
+# Per-slice:
+tau_mu_slice ~ HalfNormal(0.3)
+eps_mu_slice[s] ~ Normal(0, 1)
+mu_slice[s] = mu_edge + eps_mu_slice[s] × tau_mu_slice
+sigma_slice[s] = sigma_edge     ← shared
+onset_slice[s] = onset_edge     ← shared
+```
+
+**Proposed Stage 3** (all three latency params per-slice):
+
+```
+# Edge-level:
+m_edge, a_edge, r_edge  → onset_edge, mu_edge, sigma_edge
+
+# Per-slice — hierarchical offsets in (m, a, r) space:
+tau_m_slice ~ HalfNormal(0.3)
+tau_a_slice ~ HalfNormal(0.5)
+tau_r_slice ~ HalfNormal(0.3)
+
+eps_m_slice[s] ~ Normal(0, 1)
+eps_a_slice[s] ~ Normal(0, 1)
+eps_r_slice[s] ~ Normal(0, 1)
+
+m_slice[s] = m_edge + eps_m_slice[s] × tau_m_slice
+a_slice[s] = a_edge + eps_a_slice[s] × tau_a_slice
+r_slice[s] = r_edge + eps_r_slice[s] × tau_r_slice
+
+# Derive physical quantities per slice:
+t50_slice[s]   = exp(m_slice[s])
+onset_slice[s] = t50_slice[s] × sigmoid(a_slice[s])
+mu_slice[s]    = m_slice[s] - softplus(a_slice[s])
+sigma_slice[s] = softplus(r_slice[s]) / Z_95
+```
+
+**Why offsets in (m, a, r) space, not (onset, mu, sigma) space**:
+
+The current mu offset (`mu_edge + eps × tau`) works in mu-space.
+That's fine for mu alone, but if we added onset and sigma offsets
+in their native spaces, the per-slice parameters would inherit the
+onset-mu-sigma ridge. By working in (m, a, r) space, each slice's
+offsets are in the decorrelated coordinates. The hierarchical
+shrinkage (tau controls how far slices deviate from the edge mean)
+operates on the well-behaved axes.
+
+**Why HalfNormal for tau, not something else**: this matches the
+existing `tau_mu_slice` prior (`HalfNormal(0.3)`). The tau
+parameters control cross-slice variation — "how much does the
+organic slice's timescale differ from the paid slice's?" A
+HalfNormal(0.3) on m-space means slices' log-timescales differ by
+about ±0.3 at 1σ — roughly a factor of 1.35× in the median delay.
+
+**tau_a_slice default of 0.5**: wider than tau_m because the onset
+fraction is inherently more uncertain across contexts. "Organic
+traffic might have a 2-day onset while paid has 0 days" is a
+plausible scenario where a differs substantially across slices.
+
+**tau_r_slice default of 0.3**: matching tau_m. Tail stretch
+differences across slices should be modest unless contexts have
+genuinely different conversion dynamics.
+
+#### 11.9.1.3 Interaction with existing vectorised emission
+
+The vectorised emission path (`_emit_sliced_cohort_likelihoods` at
+`model.py:1480+`) currently takes:
+
+```python
+mu_slice_vec    # shape [n_slices] — per-slice mu
+sigma_base      # scalar — shared across slices
+onset_base      # scalar — shared across slices
+```
+
+Under Stage 3, this becomes:
+
+```python
+mu_slice_vec    # shape [n_slices] — per-slice mu (derived)
+sigma_slice_vec # shape [n_slices] — per-slice sigma (NEW)
+onset_slice_vec # shape [n_slices] — per-slice onset (NEW)
+```
+
+The emission function signatures need updating. The per-slice loop
+at `model.py:1413-1442` currently sets:
+
+```python
+_lv = {edge_id: (_mu_slice_vec[_si], _sigma_base)}
+_ov = {edge_id: _onset_base}
+```
+
+This becomes:
+
+```python
+_lv = {edge_id: (_mu_slice_vec[_si], _sigma_slice_vec[_si])}
+_ov = {edge_id: _onset_slice_vec[_si]}
+```
+
+The vectorised path (`_emit_sliced_window_likelihoods`,
+`_emit_sliced_cohort_likelihoods`) would need analogous changes to
+index `sigma_slice_vec` and `onset_slice_vec` per-age.
+
+#### 11.9.1.4 Vectorisation strategy
+
+Stage 1 creates scalar (m, a, r) per edge. Stage 3 creates
+vector `(m_vec, a_vec, r_vec)` of shape `[n_slices]` per edge,
+with the edge-level values as the hierarchical mean.
+
+This mirrors the existing pattern for p (scalar `p` for the
+edge, vector `p_slice_vec` for slices via logit offset) and mu
+(scalar `mu_base`, vector `mu_slice_vec` via additive offset).
+
+The vector RVs:
+
+```python
+eps_m_slice_vec = pm.Normal(
+    f"eps_m_slice_vec_{safe_id}", mu=0, sigma=1,
+    shape=(_n_slices,))
+eps_a_slice_vec = pm.Normal(
+    f"eps_a_slice_vec_{safe_id}", mu=0, sigma=1,
+    shape=(_n_slices,))
+eps_r_slice_vec = pm.Normal(
+    f"eps_r_slice_vec_{safe_id}", mu=0, sigma=1,
+    shape=(_n_slices,))
+
+m_slice_vec = pm.Deterministic(
+    f"m_slice_vec_{safe_id}",
+    m_lat + eps_m_slice_vec * tau_m_slice)
+a_slice_vec = pm.Deterministic(
+    f"a_slice_vec_{safe_id}",
+    a_lat + eps_a_slice_vec * tau_a_slice)
+r_slice_vec = pm.Deterministic(
+    f"r_slice_vec_{safe_id}",
+    r_lat + eps_r_slice_vec * tau_r_slice)
+
+# Derived per-slice physical quantities
+mu_slice_vec = pm.Deterministic(
+    f"mu_slice_vec_{safe_id}",
+    m_slice_vec - pt.softplus(a_slice_vec))
+sigma_slice_vec = pm.Deterministic(
+    f"sigma_slice_vec_{safe_id}",
+    pt.softplus(r_slice_vec) / Z_95)
+onset_slice_vec = pm.Deterministic(
+    f"onset_slice_vec_{safe_id}",
+    pt.exp(m_slice_vec) * pm.math.invlogit(a_slice_vec))
+```
+
+All vectorised — no per-slice Python loop for RV creation.
+
+#### 11.9.1.5 Posterior extraction
+
+`inference.py` currently extracts only `mu_mean` and `mu_sd` per
+slice (from `mu_slice_vec`). Stage 3 adds `sigma_mean`, `sigma_sd`,
+`onset_mean`, `onset_sd` per slice from the new Deterministic
+vectors. The extraction pattern is identical — index into the
+vector's trace samples by slice index.
+
+`LatencyPosteriorSummary` already has `sigma_mean`, `sigma_sd`,
+`onset_mean`, `onset_sd` fields (used for edge-level posteriors).
+Per-slice posteriors use a separate dict structure in
+`_build_unified_slices` (`worker.py`). The per-slice dict entries
+would gain `sigma_mean`, `sigma_sd`, `onset_mean`, `onset_sd` keys.
+
+#### 11.9.1.6 Parameter count and identifiability
+
+For an edge with S context slices, Stage 3 adds:
+
+| Component | Current (mu only) | Stage 3 (m, a, r) |
+|-----------|-------------------|-------------------|
+| Edge-level latents | eps_onset + mu + sigma = 3 | m + a + r = 3 |
+| Shrinkage taus | tau_mu_slice = 1 | tau_m + tau_a + tau_r = 3 |
+| Per-slice offsets | S × eps_mu = S | S × (eps_m + eps_a + eps_r) = 3S |
+| **Total latency params** | **S + 4** | **3S + 6** |
+
+For S = 5 slices: 9 → 21 parameters. This is a meaningful increase.
+The tau parameters provide regularisation (shrinking slices toward
+the edge mean), but with few slices the taus themselves become weakly
+identified.
+
+**Minimum slice count**: with S = 2, each tau is informed by 2
+offset observations — barely enough. Consider requiring S ≥ 3 for
+per-slice sigma/onset, falling back to the shared (mu-only) hierarchy
+for S < 3.
+
+**Phased activation**: an intermediate option is to activate per-slice
+offsets one at a time:
+
+1. Stage 3a: per-slice m offsets (replaces current mu offsets)
+2. Stage 3b: add per-slice r offsets (per-slice sigma)
+3. Stage 3c: add per-slice a offsets (per-slice onset)
+
+Each can be validated independently. Stage 3a is the most natural
+starting point because it directly replaces the existing mu offset
+with the m-space equivalent.
+
+#### 11.9.1.7 Files changed
+
+| File | Change | Scope |
+|------|--------|-------|
+| `model.py` Phase C block | Replace `tau_mu_slice` + `eps_mu_slice_vec` with `tau_m/a/r` + `eps_m/a/r_slice_vec`. Derive `mu/sigma/onset_slice_vec`. | ~40 lines replaced |
+| `model.py` emission | Update `_lv` and `_ov` dicts in per-slice loop to use slice vectors. | ~5 lines changed |
+| `model.py` vectorised emission | Update `_emit_sliced_*` signatures to accept `sigma_slice_vec`, `onset_slice_vec`. | ~20 lines changed |
+| `inference.py` | Extract per-slice sigma/onset from trace. Add to slice posterior dicts. | ~20 lines added |
+| `worker.py` | Thread per-slice sigma/onset through `_build_unified_slices`. | ~10 lines added |
+| `types.py` | No change — per-slice posteriors use dicts, not typed dataclasses. | 0 |
+
+#### 11.9.1.8 Validation plan
+
+1. Feature-flag: `latency_reparam_slices` (default `false`).
+   Requires `latency_reparam=true` (Stage 1) as prerequisite.
+2. Run on the 3 contexted synth graphs. Key diagnostics:
+   - Per-slice onset and sigma posteriors should be non-degenerate
+     (SD > 0, not collapsed to edge-level values).
+   - Tau posteriors: `tau_m`, `tau_a`, `tau_r` should be estimable
+     (ESS > 50, rhat < 1.1).
+   - Parameter recovery: per-slice truth values for onset, mu, sigma
+     should be recovered within the existing thresholds.
+   - No regression on p recovery.
+3. Compare against current (mu-only slices) to measure improvement
+   in per-slice latency prediction.
+
+#### 11.9.1.9 Prerequisite: contexted synth builders
+
+The existing synth builders in `bayes/tests/synthetic.py` produce
+uncontexted evidence only. Stage 3 requires a builder that generates
+contexted evidence with per-slice latency variation — i.e. different
+`(onset, mu, sigma)` truths per context slice. This is one of the
+known test infrastructure gaps listed in CLAUDE.md §Testing Standards.
+
+Building this test infrastructure is part of the Stage 3 work, not
+a follow-up.
+
 ### 11.10 Implementation roadmap
 
 1. **Proposal B Stage 1** (§11.8.11) — geometry change only. Swap
    sampling coordinates, retain all observations. Feature-flagged as
    `latency_reparam`. Validate via regression (§11.8.9).
+   **Status**: implemented, initial results promising (§11.8.9).
 
 2. **Proposal B Stage 2** (§11.8.10, contingent on Stage 1 success)
    — optionally remove t95_obs, tune prior widths based on Stage 1
    results. Evaluate separately.
 
-3. **Option D** (graph-derived onset priors, §10.3) — can be layered
+3. **Proposal B Stage 3** (§11.9.1, contingent on Stage 1 success)
+   — per-slice sigma and onset as free RVs via hierarchical (m, a, r)
+   offsets. Enables the latency model to capture genuine cross-context
+   timing differences, not just rate differences. This was previously
+   blocked by the onset-mu-sigma ridge and is the primary payoff of
+   the reparameterisation.
+
+4. **Option D** (graph-derived onset priors, §10.3) — can be layered
    on as a tighter prior on `a` for edges where graph topology
    constrains onset. Complementary to Proposal B, not competing.
 
-4. **Ex-Gaussian** (§11.3) — research track if the shifted lognormal
+5. **Ex-Gaussian** (§11.3) — research track if the shifted lognormal
    family proves fundamentally unsuitable despite reparameterisation.
 
 ### 11.7 Additional references

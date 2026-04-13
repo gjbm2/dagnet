@@ -2037,20 +2037,19 @@ export async function runStage2EnhancementsAndInboundN(
                 } else if (edge.p) {
                   upsertModelVars(edge.p, entry);
                   // Write BE-computed scalars to edge (doc 29 Phase 2).
-                  // The BE uses the promoted model resolver and produces
-                  // better values than the FE topo pass. These overwrite
-                  // the FE's initial estimates.
+                  // BE topo pass results. Only overwrite fields that the BE
+                  // genuinely adds (completeness_stdev, path-level t95).
+                  // Do NOT overwrite mu/sigma/onset — those are managed by
+                  // the promotion cascade (bayesian > analytic_be > analytic).
+                  // Writing heuristic re-fits here would clobber Bayesian
+                  // posteriors that promotion already placed.
                   if (beScalars && edge.p.latency) {
                     if (beScalars.completeness != null) edge.p.latency.completeness = beScalars.completeness;
                     if (beScalars.completeness_stdev != null) edge.p.latency.completeness_stdev = beScalars.completeness_stdev;
-                    if (beScalars.mu != null) edge.p.latency.mu = beScalars.mu;
-                    if (beScalars.sigma != null) edge.p.latency.sigma = beScalars.sigma;
+                    // Path-level t95 from topo accumulation (not managed by promotion)
                     if (beScalars.t95 != null) edge.p.latency.promoted_t95 = beScalars.t95;
                     if (beScalars.path_t95 != null) edge.p.latency.promoted_path_t95 = beScalars.path_t95;
-                    if (beScalars.onset_delta_days != null) edge.p.latency.promoted_onset_delta_days = beScalars.onset_delta_days;
-                    if (beScalars.path_mu != null) edge.p.latency.path_mu = beScalars.path_mu;
-                    if (beScalars.path_sigma != null) edge.p.latency.path_sigma = beScalars.path_sigma;
-                    if (beScalars.path_onset_delta_days != null) edge.p.latency.path_onset_delta_days = beScalars.path_onset_delta_days;
+                    // Lag stats (observational, not model params)
                     if (beScalars.median_lag_days != null) edge.p.latency.median_lag_days = beScalars.median_lag_days;
                     if (beScalars.mean_lag_days != null) edge.p.latency.mean_lag_days = beScalars.mean_lag_days;
                   }

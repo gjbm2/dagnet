@@ -286,8 +286,12 @@ class TestCohortModeCompletenessSynth:
         assert 0 <= edge_c <= 1
         assert 0 <= conv_c <= 1
 
-        # The topo pass uses Fenton-Wilkinson approximation to the
-        # convolution. Check it's reasonable (within 10% of brute-force).
-        fw_delta = abs(tp_c - conv_c)
-        print(f"  FW approximation error:         {fw_delta:.6f} "
-              f"({fw_delta / max(conv_c, 1e-10):.2%})")
+        # Phase 3: topo pass now uses upstream-aware convolution.
+        # Should match brute-force within 5% (numerical discretisation).
+        conv_delta = abs(tp_c - conv_c)
+        print(f"  Convolution error:              {conv_delta:.6f} "
+              f"({conv_delta / max(conv_c, 1e-10):.2%})")
+
+        assert conv_delta < 0.05 * max(conv_c, 0.01), \
+            f"Upstream-aware completeness parity failed: tp={tp_c:.6f} " \
+            f"conv={conv_c:.6f} delta={conv_delta:.6f} (>{5}%)"

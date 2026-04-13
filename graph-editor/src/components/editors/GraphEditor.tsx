@@ -27,7 +27,7 @@ import { useURLScenarios } from '../../hooks/useURLScenarios';
 import { useDashboardMode } from '../../hooks/useDashboardMode';
 import { useViewOverlayMode } from '../../hooks/useViewOverlayMode';
 import { usePutToBaseRequestListener } from '../../hooks/usePutToBaseRequestListener';
-import { Layers, FileText, Wrench, BarChart3, X, Activity, GitBranch, LayoutDashboard, Database, Hash } from 'lucide-react';
+import { Layers, FileText, Wrench, BarChart3, X, Activity, GitBranch, LayoutDashboard, Database, Hash, Route } from 'lucide-react';
 import { DEFAULT_SIDEBAR_WIDTH, MIN_SIDEBAR_WIDTH } from '../../lib/uiConstants';
 import { SelectorModal } from '../SelectorModal';
 import { ItemBase } from '../../hooks/useItemFiltering';
@@ -163,6 +163,7 @@ function ScenarioLegendWrapper({ tabId }: { tabId: string }) {
   const scenariosContext = useScenariosContextOptional();
   const { operations, tabs } = useTabContext();
   const activeDsl = useGraphStore((s) => s.currentDSL);
+  const setCurrentDSL = useGraphStore((s) => s.setCurrentDSL);
   const baseDsl = useGraphStore((s) => (s.graph as any)?.currentQueryDSL ?? null);
   const canvasViews = useGraphStore((s) => (s.graph as any)?.canvasViews ?? []);
   const { isDashboardMode, toggleDashboardMode } = useDashboardMode();
@@ -175,7 +176,7 @@ function ScenarioLegendWrapper({ tabId }: { tabId: string }) {
 
   // Build view mode items for the submenu.
   const isSankey = viewPrefs?.useSankeyView ?? false;
-  const isDataValues = viewPrefs?.useDataValuesView ?? false;
+  const beadDisplayMode = viewPrefs?.beadDisplayMode ?? 'edge-rate';
   const dashboardCycleMs = tabs.find(t => t.id === tabId)?.editorState?.dashboardViewCycleMs ?? (isDashboardMode ? 30000 : null);
   const setDashboardCycleMs = React.useCallback((ms: number | null) => {
     if (tabId) operations.updateTabState(tabId, { dashboardViewCycleMs: ms });
@@ -191,6 +192,14 @@ function ScenarioLegendWrapper({ tabId }: { tabId: string }) {
   ];
 
   const effectiveCycleMs = dashboardCycleMs;
+  // Auto-disable path-rate when DSL switches to window mode
+  const isCohortDsl = activeDsl?.includes('cohort(') ?? false;
+  React.useEffect(() => {
+    if (beadDisplayMode === 'path-rate' && !isCohortDsl && activeDsl) {
+      viewPrefs?.setBeadDisplayMode('edge-rate');
+    }
+  }, [isCohortDsl, beadDisplayMode, activeDsl]);
+
   const dashboardSubmenu = React.useMemo(() =>
     CYCLE_OPTIONS.map(opt => ({
       label: `Cycle views: ${opt.label}`,
@@ -225,8 +234,26 @@ function ScenarioLegendWrapper({ tabId }: { tabId: string }) {
       id: 'data-values',
       label: 'Data Values',
       icon: Hash,
-      isActive: () => isDataValues,
-      toggle: () => viewPrefs?.setUseDataValuesView(!isDataValues),
+      isActive: () => beadDisplayMode === 'data-values',
+      toggle: () => viewPrefs?.setBeadDisplayMode(beadDisplayMode === 'data-values' ? 'edge-rate' : 'data-values'),
+    },
+    {
+      id: 'path-rate',
+      label: 'Path View',
+      icon: Route,
+      isActive: () => beadDisplayMode === 'path-rate',
+      toggle: () => {
+        if (beadDisplayMode === 'path-rate') {
+          viewPrefs?.setBeadDisplayMode('edge-rate');
+        } else {
+          viewPrefs?.setBeadDisplayMode('path-rate');
+          // Path view requires cohort mode — switch DSL if currently window
+          if (activeDsl && !activeDsl.includes('cohort(')) {
+            const switched = activeDsl.replace(/window\(/, 'cohort(');
+            if (switched !== activeDsl) setCurrentDSL(switched);
+          }
+        }
+      },
     },
     {
       id: 'dashboard',
@@ -236,7 +263,7 @@ function ScenarioLegendWrapper({ tabId }: { tabId: string }) {
       toggle: () => toggleDashboardMode({ updateUrl: true }),
       activeSubmenu: dashboardSubmenu,
     },
-  ], [viewOverlayMode, setViewOverlayMode, isDashboardMode, toggleDashboardMode, isSankey, isDataValues, viewPrefs, dashboardSubmenu]);
+  ], [viewOverlayMode, setViewOverlayMode, isDashboardMode, toggleDashboardMode, isSankey, beadDisplayMode, viewPrefs, dashboardSubmenu, activeDsl, setCurrentDSL]);
 
   // Forecast quality hides scenario chips; dashboard does not.
   const hideScenarioChips = viewOverlayMode === 'forecast-quality' || viewOverlayMode === 'data-depth';

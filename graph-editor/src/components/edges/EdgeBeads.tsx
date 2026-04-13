@@ -81,8 +81,8 @@ interface EdgeBeadsProps {
   onMouseDown?: (e: React.MouseEvent) => void;
   /** When set to 'forecast-quality', replaces normal beads with a quality tier bead. */
   viewOverlayMode?: ViewOverlayMode;
-  /** When true, beads show n/k counts instead of percentage rates. */
-  useDataValuesView?: boolean;
+  /** Controls how probability beads render: edge-rate (%), data-values (k/n), path-rate (path %). */
+  beadDisplayMode?: import('../../types').BeadDisplayMode;
 }
 
 interface BeadState {
@@ -113,7 +113,7 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
     onMouseLeave: onBeadMouseLeave,
     onMouseDown: onBeadMouseDown,
     viewOverlayMode,
-    useDataValuesView = false,
+    beadDisplayMode = 'edge-rate',
   } = props;
   
   // Create a memoized path element from pathD for accurate position calculations
@@ -190,6 +190,62 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
       }];
     }
 
+    // Compute coherent inbound-n map for data values mode.
+    // This gives each edge a consistent population (n) derived from upstream
+    // convolution, so that downstream n = sum of upstream k at each node.
+    const needsInboundN = beadDisplayMode === 'data-values' || beadDisplayMode === 'path-rate';
+    let inboundNMap: Map<string, { n: number; forecast_k: number }> | undefined;
+    if (needsInboundN && graph.edges?.length) {
+      const endpointIds = new Set<string>();
+      for (const e of graph.edges) {
+        if (typeof (e as any).from === 'string') endpointIds.add((e as any).from);
+        if (typeof (e as any).to === 'string') endpointIds.add((e as any).to);
+      }
+      const nodeKey = (n: any): string => {
+        const uuid = typeof n?.uuid === 'string' ? n.uuid : undefined;
+        const id = typeof n?.id === 'string' ? n.id : undefined;
+        if (uuid && endpointIds.has(uuid)) return uuid;
+        if (id && endpointIds.has(id)) return id;
+        return uuid || id || '';
+      };
+      const graphForN = {
+        nodes: (graph.nodes || []).map(n => ({ id: nodeKey(n), type: n.type, entry: n.entry })),
+        edges: (graph.edges || []).map(e => ({
+          id: e.id, uuid: e.uuid, from: e.from, to: e.to,
+          p: e.p ? { mean: e.p.mean, evidence: e.p.evidence ? { n: e.p.evidence.n, k: e.p.evidence.k } : undefined, n: (e.p as any).n } : undefined,
+        })),
+      };
+      // IMPORTANT: computeInboundN uses getEdgeId which returns uuid || id.
+      // activeEdges and getEffectiveP must use the same key order.
+      const edgeKey = (e: GraphEdge) => e.uuid || e.id || '';
+      const activeEdges = new Set(graph.edges.map(edgeKey));
+      inboundNMap = computeInboundN(
+        graphForN as any,
+        activeEdges,
+        (edgeId) => {
+          const e = graph.edges.find(ed => edgeKey(ed) === edgeId);
+          return e?.p?.mean ?? 0;
+        }
+      );
+    }
+
+    // For path-rate mode, compute anchor_n (seed population from START node)
+    let anchorN: number | undefined;
+    if (beadDisplayMode === 'path-rate' && graph.nodes && graph.edges) {
+      const startNodeIds = new Set(
+        graph.nodes
+          .filter(n => (n as any).type === 'start' || (n as any).entry?.is_start)
+          .map(n => n.uuid || n.id)
+      );
+      let maxN = 0;
+      for (const e of graph.edges) {
+        if (startNodeIds.has((e as any).from) && e.p?.evidence?.n) {
+          maxN = Math.max(maxN, e.p.evidence.n);
+        }
+      }
+      if (maxN > 0) anchorN = maxN;
+    }
+
     const beads = buildBeadDefinitions(
       edge,
       graph,
@@ -201,7 +257,9 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
       whatIfDSL,
       visibleStartOffset,
       getScenarioVisibilityMode,
-      useDataValuesView
+      beadDisplayMode,
+      inboundNMap,
+      anchorN
     );
 
     return beads;
@@ -252,7 +310,7 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
     visibleStartOffset, // Visible start offset
     visibilityModesKey, // Visibility modes (stable string)
     viewOverlayMode, // View overlay (forecast quality replaces beads)
-    useDataValuesView, // Data values mode (n/k instead of %)
+    beadDisplayMode, // Bead display mode (edge-rate, data-values, path-rate)
     edge.p?.posterior, // Posterior data (for quality tier bead)
     dataDepthScores, // Data depth scores (composite overlay)
   ]);
@@ -518,12 +576,12 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
           return `#${[rNew, gNew, bNew].map(x => x.toString(16).padStart(2, '0')).join('')}`;
         };
         
-        // Extract text and colours from ReactNode
-        const extractTextAndColours = (node: React.ReactNode): Array<{ text: string; colour: string }> => {
-          const result: Array<{ text: string; colour: string }> = [];
-          
+        // Extract text, colours, and opacity from ReactNode
+        const extractTextAndColours = (node: React.ReactNode, inheritedOpacity?: number, inheritedFontWeight?: number): Array<{ text: string; colour: string; opacity?: number; fontWeight?: number }> => {
+          const result: Array<{ text: string; colour: string; opacity?: number; fontWeight?: number }> = [];
+
           if (typeof node === 'string' || typeof node === 'number') {
-            result.push({ text: String(node), colour: defaultTextColour });
+            result.push({ text: String(node), colour: defaultTextColour, opacity: inheritedOpacity, fontWeight: inheritedFontWeight });
           } else if (React.isValidElement(node)) {
             if (node.type === 'span') {
               // Use the span's color, but ensure it's bright (never black) and lighten it
@@ -535,23 +593,26 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
                 // Lighten the colour to make it brighter
                 colour = lightenColour(colour);
               }
+              // Inherit opacity from span style
+              const spanOpacity = node.props.style?.opacity ?? inheritedOpacity;
+              const spanFontWeight = node.props.style?.fontWeight ?? inheritedFontWeight;
               const children = React.Children.toArray(node.props.children);
               children.forEach(child => {
-                const extracted = extractTextAndColours(child);
+                const extracted = extractTextAndColours(child, spanOpacity, spanFontWeight);
                 extracted.forEach(item => {
-                  result.push({ text: item.text, colour });
+                  result.push({ text: item.text, colour, opacity: item.opacity ?? spanOpacity, fontWeight: item.fontWeight ?? spanFontWeight });
                 });
               });
             } else {
               const children = React.Children.toArray(node.props.children);
               children.forEach(child => {
-                const extracted = extractTextAndColours(child);
+                const extracted = extractTextAndColours(child, inheritedOpacity, inheritedFontWeight);
                 result.push(...extracted);
               });
             }
           } else if (Array.isArray(node)) {
             node.forEach(item => {
-              const extracted = extractTextAndColours(item);
+              const extracted = extractTextAndColours(item, inheritedOpacity, inheritedFontWeight);
               result.push(...extracted);
             });
           }
@@ -571,8 +632,11 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
         return segments.map((seg, idx) => {
           // When peeking, fade segments whose colour doesn't match the highlighted scenario
           const faded = peekColour && seg.colour !== '#FFFFFF' && seg.colour !== peekColour;
+          const baseOpacity = seg.opacity ?? 1;
+          const finalOpacity = faded ? 0.3 : baseOpacity;
+          const fw = seg.fontWeight;
           return (
-            <tspan key={idx} fill={seg.colour} dx={idx === 0 ? 0 : undefined} opacity={faded ? 0.3 : 1} style={{ transition: faded ? 'opacity 3.5s ease' : 'opacity 0.5s ease' }}>
+            <tspan key={idx} fill={seg.colour} dx={idx === 0 ? 0 : undefined} opacity={finalOpacity} fontWeight={fw} style={{ transition: faded ? 'opacity 3.5s ease' : 'opacity 0.5s ease' }}>
               {seg.text}
             </tspan>
           );
@@ -921,7 +985,8 @@ export const EdgeBeadsRenderer = React.memo(function EdgeBeadsRenderer(props: Ed
     prevProps.edgeWidth === nextProps.edgeWidth &&
     // CRITICAL: pathD determines bead positions - must re-render when path changes
     prevProps.pathD === nextProps.pathD &&
-    prevProps.viewOverlayMode === nextProps.viewOverlayMode
+    prevProps.viewOverlayMode === nextProps.viewOverlayMode &&
+    prevProps.beadDisplayMode === nextProps.beadDisplayMode
   );
 });
 

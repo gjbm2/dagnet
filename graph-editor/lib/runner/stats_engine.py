@@ -215,6 +215,149 @@ def calculate_completeness_with_tail_constraint(
 
 
 # ─────────────────────────────────────────────────────────────
+# Per-node arrival CDF — Phase 3 upstream-aware completeness
+# ─────────────────────────────────────────────────────────────
+
+# Resolution for numerical CDF arrays (days per bin).
+_ARRIVAL_CDF_DT = 0.5
+# Max tau for arrival CDF arrays (days). Truncated beyond this.
+_ARRIVAL_CDF_MAX_TAU = 400
+
+
+def _make_arrival_cdf_delta() -> List[float]:
+    """Arrival CDF for the anchor node: instant arrival (step function at τ=0)."""
+    n = int(_ARRIVAL_CDF_MAX_TAU / _ARRIVAL_CDF_DT) + 1
+    return [1.0] * n
+
+
+def _make_edge_cdf(mu: float, sigma: float, onset: float) -> List[float]:
+    """Lognormal CDF for a single edge, sampled at _ARRIVAL_CDF_DT resolution."""
+    n = int(_ARRIVAL_CDF_MAX_TAU / _ARRIVAL_CDF_DT) + 1
+    cdf = []
+    for i in range(n):
+        tau = i * _ARRIVAL_CDF_DT
+        age_x = to_model_space_age_days(onset, tau)
+        cdf.append(log_normal_cdf(age_x, mu, sigma) if age_x > 0 else 0.0)
+    return cdf
+
+
+def _convolve_arrival_with_edge(
+    upstream_cdf: List[float],
+    edge_cdf: List[float],
+    edge_p: float,
+) -> List[float]:
+    """Convolve upstream arrival CDF with edge CDF to get downstream arrival CDF.
+
+    arrival_downstream(τ) = p × ∫₀ᵗ f_upstream(u) × CDF_edge(τ - u) du
+
+    where f_upstream is the PDF of arrivals at the upstream node
+    (numerical derivative of upstream_cdf).
+    """
+    n = min(len(upstream_cdf), len(edge_cdf))
+    dt = _ARRIVAL_CDF_DT
+    result = [0.0] * n
+
+    for tau_idx in range(n):
+        total = 0.0
+        for u_idx in range(tau_idx + 1):
+            # PDF of upstream arrivals at time u
+            if u_idx == 0:
+                f_up = upstream_cdf[0] / dt if upstream_cdf[0] > 0 else 0.0
+            else:
+                f_up = (upstream_cdf[u_idx] - upstream_cdf[u_idx - 1]) / dt
+            if f_up <= 0:
+                continue
+            # Edge CDF at remaining time (tau - u)
+            remaining_idx = tau_idx - u_idx
+            c_edge = edge_cdf[remaining_idx]
+            total += f_up * c_edge * dt
+        result[tau_idx] = min(edge_p * total, 1.0)
+
+    return result
+
+
+def _merge_arrival_cdfs(
+    cdfs_and_weights: List[Tuple[List[float], float]],
+) -> List[float]:
+    """Merge arrival CDFs from multiple incoming edges (additive mass).
+
+    Each edge contributes its probability-weighted arrival CDF.
+    The result is the total arrival CDF at the node.
+    """
+    if not cdfs_and_weights:
+        return [0.0] * (int(_ARRIVAL_CDF_MAX_TAU / _ARRIVAL_CDF_DT) + 1)
+
+    n = min(len(cdf) for cdf, _ in cdfs_and_weights)
+    result = [0.0] * n
+    for cdf, _weight in cdfs_and_weights:
+        for i in range(n):
+            result[i] += cdf[i]
+    # Cap at 1.0
+    for i in range(n):
+        result[i] = min(result[i], 1.0)
+    return result
+
+
+def calculate_completeness_upstream_aware(
+    cohorts: List['CohortData'],
+    edge_mu: float,
+    edge_sigma: float,
+    edge_onset: float,
+    upstream_arrival_cdf: List[float],
+) -> float:
+    """Compute n-weighted completeness using upstream arrival CDF convolution.
+
+    For each cohort age τ, completeness of edge X→Y given upstream
+    arrivals at X is:
+
+        C(τ) = (1/reach_X) × ∫₀ᵗ f_upstream(u) × CDF_edge(τ - u) du
+
+    where reach_X = upstream_cdf(∞) is the total probability of
+    reaching X. This normalisation ensures completeness is in [0, 1]
+    (fraction of those who reached X that also completed X→Y by τ).
+    """
+    dt = _ARRIVAL_CDF_DT
+    # Normalise: reach at upstream node
+    reach = upstream_arrival_cdf[-1] if upstream_arrival_cdf else 0.0
+    if reach <= 0:
+        return 0.0
+
+    total_n = 0
+    weighted_c = 0.0
+
+    for c in cohorts:
+        if c.n == 0:
+            continue
+        tau = c.age
+        tau_idx = int(tau / dt)
+        if tau_idx <= 0:
+            total_n += c.n
+            continue
+
+        # Convolve: (1/reach) × ∫₀ᵗ f_upstream(u) × CDF_edge(τ - u) du
+        conv = 0.0
+        max_idx = min(tau_idx + 1, len(upstream_arrival_cdf))
+        for u_idx in range(max_idx):
+            if u_idx == 0:
+                f_up = upstream_arrival_cdf[0] / dt if upstream_arrival_cdf[0] > 0 else 0.0
+            else:
+                f_up = (upstream_arrival_cdf[u_idx] - upstream_arrival_cdf[u_idx - 1]) / dt
+            if f_up <= 0:
+                continue
+            remaining = tau - u_idx * dt
+            age_x = to_model_space_age_days(edge_onset, remaining)
+            c_edge = log_normal_cdf(age_x, edge_mu, edge_sigma) if age_x > 0 else 0.0
+            conv += f_up * c_edge * dt
+
+        # Normalise by reach
+        completeness_at_tau = min(conv / reach, 1.0)
+        weighted_c += c.n * completeness_at_tau
+        total_n += c.n
+
+    return weighted_c / total_n if total_n > 0 else 0.0
+
+
+# ─────────────────────────────────────────────────────────────
 # Tail constraint (improve fit with authoritative t95)
 # ─────────────────────────────────────────────────────────────
 
@@ -776,6 +919,10 @@ def enhance_graph_latencies(
     node_path_onset_sd: Dict[str, float] = {anchor_id: 0.0}
     node_median_lag_prior: Dict[str, float] = {anchor_id: 0.0}
     node_dominant_edge: Dict[str, str] = {}  # D9 FIX: track winning edge for tie-breaking
+    # Phase 3: per-node arrival CDF for upstream-aware completeness
+    node_arrival_cdf: Dict[str, List[float]] = {anchor_id: _make_arrival_cdf_delta()}
+    # Per-edge arrival CDF (after probability weighting + convolution)
+    edge_arrival_cdf: Dict[str, List[float]] = {}
 
     # D9 FIX: Kahn's topo sort — use list (insertion order) instead of set for
     # deterministic traversal. Sort initial queue by node ID for stable tie-breaking.
@@ -853,6 +1000,9 @@ def enhance_graph_latencies(
                     node_dominant_edge,
                     node_path_mu_sd, node_path_sigma_sd, node_path_onset_sd,
                 )
+                # Phase 3: propagate arrival CDF (pass-through, probability-weighted)
+                _propagate_arrival_cdf_passthrough(
+                    node_id, to_node, edge_prob, node_arrival_cdf)
                 _decrement_and_enqueue(to_node, in_degree, queue)
                 continue
 
@@ -883,6 +1033,9 @@ def enhance_graph_latencies(
                     node_dominant_edge,
                     node_path_mu_sd, node_path_sigma_sd, node_path_onset_sd,
                 )
+                # Phase 3: propagate arrival CDF (use graph params if available)
+                _propagate_arrival_cdf_with_edge(
+                    node_id, to_node, edge_id, edge_prob, lat_block, node_arrival_cdf, edge_arrival_cdf)
                 _decrement_and_enqueue(to_node, in_degree, queue)
                 continue
 
@@ -1049,9 +1202,49 @@ def enhance_graph_latencies(
             path_sigma_sd = math.sqrt(latency_stats.sigma_sd ** 2 + up_sigma_sd ** 2)
             path_onset_sd = math.sqrt(latency_stats.onset_sd ** 2 + up_onset_sd ** 2)
 
-            # Cohort-mode completeness: A→Y path-anchored
+            # ── Phase 3: Build edge arrival CDF and propagate ────────
+            # Use raw promoted params for the arrival CDF (not fitted/tail-
+            # constrained — those are fitting artefacts). The promoted params
+            # are the best-available model estimate, matching v2's approach.
+            _raw_mu = lat_block.get('promoted_mu') or lat_block.get('mu')
+            _raw_sigma = lat_block.get('promoted_sigma') or lat_block.get('sigma')
+            _raw_mu = float(_raw_mu) if isinstance(_raw_mu, (int, float)) and math.isfinite(_raw_mu) else latency_stats.completeness_cdf.mu
+            _raw_sigma = float(_raw_sigma) if isinstance(_raw_sigma, (int, float)) and _raw_sigma > 0 else latency_stats.completeness_cdf.sigma
+
+            edge_cdf_arr = _make_edge_cdf(_raw_mu, _raw_sigma, onset)
+            # Convolve with upstream arrival CDF at from-node
+            from_arrival_cdf = node_arrival_cdf.get(node_id)
+            if from_arrival_cdf is not None:
+                downstream_cdf = _convolve_arrival_with_edge(
+                    from_arrival_cdf, edge_cdf_arr, max(0, edge_prob),
+                )
+                edge_arrival_cdf[edge_id] = downstream_cdf
+                # Merge into to-node's arrival CDF (additive from multiple edges)
+                existing = node_arrival_cdf.get(to_node)
+                if existing is None:
+                    node_arrival_cdf[to_node] = list(downstream_cdf)
+                else:
+                    for i in range(min(len(existing), len(downstream_cdf))):
+                        existing[i] = min(existing[i] + downstream_cdf[i], 1.0)
+
+            # Cohort-mode completeness: upstream-aware convolution (Phase 3)
+            # or FW path-anchored fallback
             completeness_used = latency_stats.completeness
-            if path_mu is not None and path_sigma is not None:
+            _used_convolution = False
+            if not is_window_mode and from_arrival_cdf is not None and node_id != anchor_id:
+                # Upstream-aware: convolve upstream arrival CDF with edge CDF
+                conv_completeness = calculate_completeness_upstream_aware(
+                    cohorts_scoped,
+                    _raw_mu, _raw_sigma, onset,
+                    from_arrival_cdf,
+                )
+                if math.isfinite(conv_completeness) and conv_completeness >= 0:
+                    completeness_used = conv_completeness
+                    _used_convolution = True
+
+            # Fallback: FW path-anchored (for window mode, anchor edges,
+            # or if convolution not available)
+            if not _used_convolution and path_mu is not None and path_sigma is not None:
                 # D4 FIX: prefer promoted_path_t95 over path_t95
                 auth_path_t95 = max(
                     edge_path_t95_val,
@@ -1349,6 +1542,59 @@ def enhance_graph_latencies(
 # ─────────────────────────────────────────────────────────────
 # Topo pass helpers
 # ─────────────────────────────────────────────────────────────
+
+def _propagate_arrival_cdf_passthrough(
+    from_node: str, to_node: str, edge_p: float,
+    node_arrival_cdf: Dict[str, List[float]],
+) -> None:
+    """Propagate arrival CDF for a pass-through edge (no latency).
+
+    The upstream arrival CDF is scaled by edge probability and
+    merged additively into the to-node.
+    """
+    upstream = node_arrival_cdf.get(from_node)
+    if upstream is None:
+        return
+    p = max(0, edge_p)
+    scaled = [min(v * p, 1.0) for v in upstream]
+    existing = node_arrival_cdf.get(to_node)
+    if existing is None:
+        node_arrival_cdf[to_node] = scaled
+    else:
+        for i in range(min(len(existing), len(scaled))):
+            existing[i] = min(existing[i] + scaled[i], 1.0)
+
+
+def _propagate_arrival_cdf_with_edge(
+    from_node: str, to_node: str, edge_id: str,
+    edge_p: float, lat_block: Dict,
+    node_arrival_cdf: Dict[str, List[float]],
+    edge_arrival_cdf: Dict[str, List[float]],
+) -> None:
+    """Propagate arrival CDF through an edge using graph-stored latency params.
+
+    Used when the edge has latency params on the graph but no cohort data
+    for this run. Falls back to pass-through if no mu/sigma available.
+    """
+    upstream = node_arrival_cdf.get(from_node)
+    if upstream is None:
+        return
+    mu = lat_block.get('promoted_mu') or lat_block.get('mu')
+    sigma = lat_block.get('promoted_sigma') or lat_block.get('sigma')
+    onset = lat_block.get('onset_delta_days', 0.0) or 0.0
+    if mu and sigma and isinstance(mu, (int, float)) and isinstance(sigma, (int, float)) and sigma > 0:
+        edge_cdf_arr = _make_edge_cdf(float(mu), float(sigma), float(onset))
+        downstream = _convolve_arrival_with_edge(upstream, edge_cdf_arr, max(0, edge_p))
+        edge_arrival_cdf[edge_id] = downstream
+        existing = node_arrival_cdf.get(to_node)
+        if existing is None:
+            node_arrival_cdf[to_node] = list(downstream)
+        else:
+            for i in range(min(len(existing), len(downstream))):
+                existing[i] = min(existing[i] + downstream[i], 1.0)
+    else:
+        _propagate_arrival_cdf_passthrough(from_node, to_node, edge_p, node_arrival_cdf)
+
 
 def _propagate_path_state(
     edge_id: str, from_node: str, to_node: str,

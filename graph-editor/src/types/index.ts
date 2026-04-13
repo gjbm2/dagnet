@@ -38,6 +38,14 @@ export type ViewMode = 'interactive' | 'raw-json' | 'raw-yaml';
 export type ViewOverlayMode = 'none' | 'forecast-quality' | 'data-depth';
 
 /**
+ * Bead display mode — controls how probability beads render values.
+ * 'edge-rate': default percentage (k/n as %)
+ * 'data-values': absolute counts (k/n as integers)
+ * 'path-rate': path-level percentage (k/anchor_n as %)
+ */
+export type BeadDisplayMode = 'edge-rate' | 'data-values' | 'path-rate';
+
+/**
  * Source information for a file
  */
 export interface FileSource {
@@ -124,7 +132,7 @@ export interface TabState {
     autoReroute?: boolean;
     snapToGuides?: boolean;
     useSankeyView?: boolean;
-    useDataValuesView?: boolean;
+    beadDisplayMode?: BeadDisplayMode;
     showNodeImages?: boolean;
     confidenceIntervalLevel?: 'none' | '80' | '90' | '95' | '99';
     animateFlow?: boolean;

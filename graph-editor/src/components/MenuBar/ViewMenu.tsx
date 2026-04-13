@@ -5,7 +5,7 @@ import { useNavigatorContext } from '../../contexts/NavigatorContext';
 import EdgeScalingControl from '../EdgeScalingControl';
 import { useViewPreferencesContext } from '../../contexts/ViewPreferencesContext';
 import { useSankeyView } from '../../hooks/useSankeyView';
-import { useDataValuesView } from '../../hooks/useDataValuesView';
+import { useBeadDisplayMode } from '../../hooks/useDataValuesView';
 import { useNodeImageView } from '../../hooks/useNodeImageView';
 import { useDashboardMode } from '../../hooks/useDashboardMode';
 import { useViewOverlayMode } from '../../hooks/useViewOverlayMode';
@@ -46,7 +46,7 @@ export function ViewMenu() {
   
   // Use centralised hooks for view toggles
   const { useSankeyView: isSankeyView, toggleSankeyView } = useSankeyView();
-  const { useDataValuesView: isDataValuesView, toggleDataValuesView } = useDataValuesView();
+  const { beadDisplayMode, setBeadDisplayMode } = useBeadDisplayMode();
   const { showNodeImages, toggleNodeImageView } = useNodeImageView();
   const { isForecastQuality, toggleForecastQuality, isDataDepth, toggleDataDepth } = useViewOverlayMode();
   
@@ -216,11 +216,20 @@ export function ViewMenu() {
 
               <Menubar.CheckboxItem
                 className="menubar-item menubar-item--checkable"
-                checked={isDataValuesView}
-                onCheckedChange={toggleDataValuesView}
+                checked={beadDisplayMode === 'data-values'}
+                onCheckedChange={() => setBeadDisplayMode(beadDisplayMode === 'data-values' ? 'edge-rate' : 'data-values')}
               >
                 <Menubar.ItemIndicator className="menubar-item-indicator">✓</Menubar.ItemIndicator>
                 Data Values
+              </Menubar.CheckboxItem>
+
+              <Menubar.CheckboxItem
+                className="menubar-item menubar-item--checkable"
+                checked={beadDisplayMode === 'path-rate'}
+                onCheckedChange={() => setBeadDisplayMode(beadDisplayMode === 'path-rate' ? 'edge-rate' : 'path-rate')}
+              >
+                <Menubar.ItemIndicator className="menubar-item-indicator">✓</Menubar.ItemIndicator>
+                Path View
               </Menubar.CheckboxItem>
 
               <Menubar.CheckboxItem
