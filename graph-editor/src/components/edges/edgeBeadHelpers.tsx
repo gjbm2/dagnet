@@ -15,7 +15,11 @@ import { darkenCaseColour } from '@/lib/conditionalColours';
 import type { ScenarioParams } from '../../types/scenarios';
 import type { Graph, GraphEdge } from '../../types';
 import type { ScenarioVisibilityMode } from '../../types';
-import { BeadLabelBuilder, type BeadValue, type HiddenCurrentValue } from './BeadLabelBuilder';
+import { BeadLabelBuilder, type BeadValue, type HiddenCurrentValue, type ValueFormatter } from './BeadLabelBuilder';
+import {
+  EDGE_COMPLETENESS_PERCENT_DECIMAL_PLACES,
+  EDGE_MEDIAN_LAG_DAYS_DECIMAL_PLACES,
+} from '@/constants/edgeDisplay';
 import { hasAnyEdgeQueryOverride, hasAnyOverriddenFlag, listOverriddenFlagPaths } from '../../utils/overrideFlags';
 import { computeEFBasisForLayer } from '../../services/efBasisResolver';
 
@@ -433,26 +437,15 @@ function getProbabilityBeadValueForLayer(
     }
   }
 
-  // ForecastState-aware stdev (doc 29 Phase 4).
-  // When forecast_state is available from the BE topo pass, use its
-  // composed uncertainty instead of the raw p.stdev / p.forecast.stdev.
-  // E mode is unchanged (binomial sampling SD is already correct).
-  const fs = pForLayer?.forecast_state;
-
   if (mode === 'f') {
-    // F mode: rate_unconditioned_sd includes both p and completeness uncertainty
-    const fStdev = (fs?.rate_unconditioned_sd != null)
-      ? fs.rate_unconditioned_sd
-      : (typeof forecastMean === 'number' ? forecastStdev : stdev);
     return {
       value: (typeof forecastMean === 'number' ? forecastMean : mean) ?? 0,
-      stdev: fStdev,
+      stdev: typeof forecastMean === 'number' ? forecastStdev : stdev,
       prefix: 'F'
     };
   }
 
   if (mode === 'e') {
-    // E mode: unchanged — binomial sampling SD is already correct
     return {
       value: (typeof evidenceMean === 'number' ? evidenceMean : mean) ?? 0,
       stdev: typeof evidenceMean === 'number' ? evidenceStdev : stdev,
@@ -460,11 +453,11 @@ function getProbabilityBeadValueForLayer(
     };
   }
 
-  // F+E (default): rate_conditioned_sd composes all three uncertainty sources
-  const feStdev = (fs?.rate_conditioned_sd != null)
-    ? fs.rate_conditioned_sd
-    : stdev;
-  return { value: mean ?? 0, stdev: feStdev };
+  // F+E (default): show blended p.mean
+  // p.stdev now incorporates completeness uncertainty when the BE topo
+  // pass has run (doc 29 Phase 2 — improved p_sd flows through
+  // model_vars[analytic_be] → applyPromotion → p.stdev).
+  return { value: mean ?? 0, stdev };
 }
 
 function getEdgeCostGBPForLayer(
@@ -876,7 +869,25 @@ export function buildBeadDefinitions(
       return false;
     },
     extractFromLayer: (layerId) => getEdgeLatencyForLayer(layerId, edge, graph, scenariosContext),
-    buildLabel: BeadLabelBuilder.buildLatencyLabel,
+    buildLabel: (values, hiddenCurrent, hasExistenceVariation) => {
+      // Capture completeness_stdev from the edge to show ± on completeness
+      // (doc 29 Phase 4). The stdev field on BeadValue carries completeness
+      // (not an actual stdev), so we inject completeness_stdev into the
+      // formatter via closure.
+      const cStdev = (edge as any).p?.latency?.completeness_stdev as number | undefined;
+      const formatter: ValueFormatter = (value, stdev) => {
+        const days = Number(Number(value).toFixed(EDGE_MEDIAN_LAG_DAYS_DECIMAL_PLACES));
+        const compPct = stdev !== undefined
+          ? Number((Number(stdev) * 100).toFixed(EDGE_COMPLETENESS_PERCENT_DECIMAL_PLACES))
+          : 0;
+        if (typeof cStdev === 'number' && cStdev > 0.001) {
+          const sdPct = Number((cStdev * 100).toFixed(EDGE_COMPLETENESS_PERCENT_DECIMAL_PLACES));
+          return `${days}d / ${compPct}% ± ${sdPct}%`;
+        }
+        return `${days}d / ${compPct}%`;
+      };
+      return BeadLabelBuilder.buildCustomLabel(values, hiddenCurrent, formatter, hasExistenceVariation);
+    },
     backgroundColor: '#000000',
     hasParameterConnection: false,
     isOverridden: hasAnyOverriddenFlag((edge as any).p?.latency),

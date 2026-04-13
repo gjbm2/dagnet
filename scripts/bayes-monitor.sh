@@ -89,19 +89,20 @@ lock_alive() {
     fi
 }
 
-# ── Get currently RUNNING graph names (sorted, deduped) ──
-# Returns one name per line. Skips archive log files.
+# ── Get graphs eligible for tail panes (running first, then finished) ──
+# Returns one name per line: running graphs first (sorted), then finished
+# graphs (sorted).  Skips archive log files.  Caller picks up to 4.
 # If a filter file exists, only returns graphs matching the filter.
-get_running_graphs() {
+get_tail_graphs() {
     local filter_file="/tmp/_bayes_monitor_filter"
+    local running=() finished=()
     for f in /tmp/bayes_harness-*.log; do
         [[ -f "$f" ]] || continue
         local name
         name=$(basename "$f" .log)
         name="${name#bayes_harness-}"
         is_archive "$name" && continue
-        local lock="/tmp/bayes-harness-${name}.lock"
-        lock_alive "$lock" || continue
+        [[ ! -s "$f" ]] && continue          # skip empty logs
         # If filter is set, check against it (match full name or stripped name)
         if [[ -f "$filter_file" ]]; then
             local short="${name#graph-}"
@@ -110,8 +111,23 @@ get_running_graphs() {
                 continue
             fi
         fi
-        echo "$name"
-    done | sort -u
+        local lock="/tmp/bayes-harness-${name}.lock"
+        if lock_alive "$lock"; then
+            running+=("$name")
+        else
+            finished+=("$name")
+        fi
+    done
+    # Running first (sorted), then finished (sorted by most-recently-modified first)
+    printf '%s\n' "${running[@]}" 2>/dev/null | sort -u
+    # Sort finished by mtime descending so the most recent finish is shown first
+    for fn in "${finished[@]}"; do
+        echo "$fn"
+    done 2>/dev/null | while IFS= read -r fn; do
+        local ts
+        ts=$(stat -c '%Y' "/tmp/bayes_harness-${fn}.log" 2>/dev/null) || ts=0
+        echo "$ts $fn"
+    done | sort -rn | awk '{print $2}'
 }
 
 # ── Write a tail script for a graph ──
@@ -270,7 +286,7 @@ trap _handle_clear USR1
 echo $$ > /tmp/_bayes_monitor_status_pid
 
 # ── Main loop ──
-_prev_running=""
+_prev_tails=""
 
 while true; do
 
@@ -291,7 +307,7 @@ while true; do
             rm -f "/tmp/_bayes_tail_${_cname}.sh" 2>/dev/null
         done
         # Force tail rebuild on next cycle
-        _prev_running="__cleared__"
+        _prev_tails="__cleared__"
     fi
 
     # ── 1. Poll CPU (1s blocking) ──
@@ -439,11 +455,12 @@ while true; do
     echo -e "$frame"
 
     # ── 5. Dynamic tail pane management ──
-    # Compare current running set to previous; rebuild tail panes on change.
-    _current_running=$(get_running_graphs)
-    if [[ "$_current_running" != "$_prev_running" ]]; then
-        rebuild_tails "$_current_running"
-        _prev_running="$_current_running"
+    # Running graphs first, then finished (most recent first), cap at 4.
+    # Only rebuild when the set actually changes.
+    _current_tails=$(get_tail_graphs | head -4)
+    if [[ "$_current_tails" != "$_prev_tails" ]]; then
+        rebuild_tails "$_current_tails"
+        _prev_tails="$_current_tails"
     fi
 
     # Use wait so USR1 signal can interrupt the sleep immediately

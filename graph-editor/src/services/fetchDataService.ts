@@ -2025,7 +2025,7 @@ export async function runStage2EnhancementsAndInboundN(
             );
             if (beEntries.length > 0 && finalGraph?.edges) {
               let applied = 0;
-              for (const { edgeUuid, conditionalIndex, entry, forecastState } of beEntries) {
+              for (const { edgeUuid, conditionalIndex, entry, completenessStdev } of beEntries) {
                 const edge = finalGraph.edges?.find((e: any) => e.uuid === edgeUuid || e.id === edgeUuid);
                 if (!edge) continue;
                 if (conditionalIndex != null) {
@@ -2036,13 +2036,30 @@ export async function runStage2EnhancementsAndInboundN(
                   }
                 } else if (edge.p) {
                   upsertModelVars(edge.p, entry);
-                  // Write ForecastState to edge (doc 29 Phase 2)
-                  if (forecastState) {
-                    edge.p.forecast_state = forecastState;
+                  // Write completeness_stdev to latency block (doc 29 Phase 2)
+                  if (completenessStdev != null && edge.p.latency) {
+                    edge.p.latency.completeness_stdev = completenessStdev;
                   }
                   applied++;
                 }
               }
+              // Log completeness_stdev for edges that received it
+              const edgesWithCStdev = beEntries.filter(e => e.completenessStdev != null);
+              if (edgesWithCStdev.length > 0 && batchLogId) {
+                const sample = edgesWithCStdev.slice(0, 5).map(e => {
+                  const edge = finalGraph.edges?.find((ed: any) => ed.uuid === e.edgeUuid || ed.id === e.edgeUuid);
+                  const edgeId = edge?.id || e.edgeUuid.substring(0, 12);
+                  const feC = edge?.p?.latency?.completeness;
+                  const fePct = feC != null ? (feC * 100).toFixed(1) : '?';
+                  const sdPct = (e.completenessStdev! * 100).toFixed(1);
+                  return `${edgeId}: completeness=${fePct}% (FE), stdev=±${sdPct}% (BE)`;
+                });
+                sessionLogService.addChild(batchLogId, 'info', 'COMPLETENESS_STDEV',
+                  `Completeness uncertainty computed for ${edgesWithCStdev.length} edges`,
+                  sample.join(', '),
+                  { edgesWithStdev: edgesWithCStdev.length, sample });
+              }
+
               if (applied > 0) {
                 setGraph(finalGraph);
                 console.log(`[fetchDataService] BE topo pass: upserted ${applied} analytic_be entries into finalGraph`);

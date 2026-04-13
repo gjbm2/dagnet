@@ -1341,6 +1341,11 @@
           "maximum": 1,
           "description": "Maturity progress 0-1 (display only)"
         },
+        "completeness_stdev": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Uncertainty on completeness from latency dispersions (doc 29)"
+        },
         "mu": {
           "type": "number",
           "description": "Fitted log-normal mu parameter (internal, not UI-exposed)"

@@ -3724,9 +3724,11 @@ def handle_stats_topo_pass(data: Dict[str, Any]) -> Dict[str, Any]:
             }, _f, indent=2)
         print(f'[lag/topo-pass] Golden fixture written to {fixture_path}')
 
-    # ── Compute ForecastState per edge (doc 29 Phase 2) ─────────────
+    # ── Compute completeness_stdev per edge (doc 29 Phase 2) ────────
+    import time as _time
+    _cstdev_t0 = _time.monotonic()
     from runner.model_resolver import resolve_model_params
-    from runner.forecast_state import compute_forecast_state_window
+    from runner.forecast_state import compute_completeness_with_sd, _compose_rate_sd
 
     edges_by_uuid = {}
     for e in graph.get('edges', []):
@@ -3737,45 +3739,39 @@ def handle_stats_topo_pass(data: Dict[str, Any]) -> Dict[str, Any]:
 
     edges_out = []
     for ev in result.edge_values:
+        # Compute completeness_stdev if edge has latency dispersions
+        completeness_stdev = None
+        improved_p_sd = ev.p_sd
         edge_dict = edges_by_uuid.get(ev.edge_uuid)
-
-        # Compute ForecastState if edge has model params
-        fs_dict = None
         if edge_dict is not None:
             scope = 'edge' if is_window else 'path'
             temporal = 'window' if is_window else 'cohort'
             resolved = resolve_model_params(edge_dict, scope=scope,
                                             temporal_mode=temporal)
             if resolved and resolved.latency.sigma > 0:
-                # Build cohort ages+weights from the parsed cohort data
                 cohorts_raw = param_lookup.get(ev.edge_uuid, [])
                 cohort_ages_and_weights = [
                     (c.age, c.n) for c in cohorts_raw if c.n > 0 and c.age >= 0
                 ]
-                # Evidence rate from topo pass result
-                evidence_rate = ev.p_evidence if ev.p_evidence else None
-
-                fs = compute_forecast_state_window(
-                    edge_id=ev.edge_uuid,
-                    resolved=resolved,
-                    cohort_ages_and_weights=cohort_ages_and_weights,
-                    evidence_rate=evidence_rate,
-                )
-                fs_dict = {
-                    'edge_id': fs.edge_id,
-                    'source': fs.source,
-                    'fitted_at': fs.fitted_at,
-                    'tier': fs.tier,
-                    'completeness': fs.completeness,
-                    'completeness_sd': fs.completeness_sd,
-                    'rate_unconditioned': fs.rate_unconditioned,
-                    'rate_unconditioned_sd': fs.rate_unconditioned_sd,
-                    'rate_conditioned': fs.rate_conditioned,
-                    'rate_conditioned_sd': fs.rate_conditioned_sd,
-                    'tau_observed': fs.tau_observed,
-                    'mode': fs.mode,
-                    'path_aware': fs.path_aware,
-                }
+                if cohort_ages_and_weights:
+                    # N-weighted completeness_stdev
+                    total_n = 0.0
+                    weighted_sd_sq = 0.0
+                    for age_days, n in cohort_ages_and_weights:
+                        _, c_sd = compute_completeness_with_sd(
+                            float(age_days), resolved.latency)
+                        weighted_sd_sq += n * n * c_sd * c_sd
+                        total_n += n
+                    if total_n > 0:
+                        import math
+                        completeness_stdev = math.sqrt(weighted_sd_sq) / total_n
+                        # Improve p_sd: compose p uncertainty with
+                        # completeness uncertainty (doc 29 §F mode)
+                        if completeness_stdev > 0 and ev.completeness > 0:
+                            improved_p_sd = _compose_rate_sd(
+                                resolved.p_mean, resolved.p_sd,
+                                ev.completeness, completeness_stdev,
+                            )
 
         edges_out.append({
             'edge_uuid': ev.edge_uuid,
@@ -3783,6 +3779,7 @@ def handle_stats_topo_pass(data: Dict[str, Any]) -> Dict[str, Any]:
             't95': ev.t95,
             'path_t95': ev.path_t95,
             'completeness': ev.completeness,
+            'completeness_stdev': completeness_stdev,
             'mu': ev.mu,
             'sigma': ev.sigma,
             'onset_delta_days': ev.onset_delta_days,
@@ -3795,8 +3792,9 @@ def handle_stats_topo_pass(data: Dict[str, Any]) -> Dict[str, Any]:
             'p_evidence': ev.p_evidence,
             'forecast_available': ev.forecast_available,
             'blended_mean': ev.blended_mean,
-            # Heuristic dispersion
-            'p_sd': ev.p_sd,
+            # Heuristic dispersion (p_sd improved with completeness
+            # uncertainty when available — doc 29 §F mode)
+            'p_sd': improved_p_sd,
             'mu_sd': ev.mu_sd,
             'sigma_sd': ev.sigma_sd,
             'onset_sd': ev.onset_sd,
@@ -3804,9 +3802,12 @@ def handle_stats_topo_pass(data: Dict[str, Any]) -> Dict[str, Any]:
             'path_mu_sd': ev.path_mu_sd,
             'path_sigma_sd': ev.path_sigma_sd,
             'path_onset_sd': ev.path_onset_sd,
-            # ForecastState (doc 29 Phase 2)
-            'forecast_state': fs_dict,
         })
+
+    _cstdev_ms = (_time.monotonic() - _cstdev_t0) * 1000
+    _cstdev_count = sum(1 for e in edges_out if e.get('completeness_stdev') is not None)
+    print(f"[topo-pass] completeness_stdev: {_cstdev_count}/{len(edges_out)} edges "
+          f"in {_cstdev_ms:.0f}ms")
 
     return {
         'success': True,
@@ -3814,5 +3815,7 @@ def handle_stats_topo_pass(data: Dict[str, Any]) -> Dict[str, Any]:
         'summary': {
             'edges_processed': result.edges_processed,
             'edges_with_lag': result.edges_with_lag,
+            'completeness_stdev_count': _cstdev_count,
+            'completeness_stdev_ms': round(_cstdev_ms),
         },
     }

@@ -163,7 +163,18 @@
       "Bash(tmux list-panes:*)",
       "Bash(tmux capture-pane:*)",
       "Bash(tmux kill-session:*)",
-      "Bash(wait)"
+      "Bash(wait)",
+      "WebFetch(domain:www.martinmodrak.cz)",
+      "WebFetch(domain:groups.google.com)",
+      "WebFetch(domain:rss.onlinelibrary.wiley.com)",
+      "WebFetch(domain:pubsonline.informs.org)",
+      "WebFetch(domain:lindeloev.github.io)",
+      "Bash(git -C /home/reg/dev/dagnet log --oneline --max-count=30)",
+      "Bash(head -50 /home/reg/dev/dagnet/graph-editor/src/services/*.ts)",
+      "Bash(git -C /home/reg/dev/dagnet config --local user.name)",
+      "Bash(git -C /home/reg/dev/dagnet config --global user.name)",
+      "Bash(git -C /home/reg/dev/dagnet log --format=\"%h %an %ae\" --max-count=50)",
+      "Bash(git -C /home/reg/dev/dagnet log --oneline --all)"
     ],
     "additionalDirectories": [
       "/home/reg/dev/dagnet/.claude",

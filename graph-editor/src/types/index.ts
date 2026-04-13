@@ -574,11 +574,10 @@ export interface LatencyConfig {
   /** Weighted mean lag in days (used with median to compute t95) */
   mean_lag_days?: number;
   
-  /** Maturity progress 0-1 (see design §5.5).
-   *  Bare number for backward compatibility; object form adds stdev
-   *  from latency dispersions (doc 29 §completeness with uncertainty).
-   */
-  completeness?: number | { value: number; stdev?: number };
+  /** Maturity progress 0-1 (see design §5.5) */
+  completeness?: number;
+  /** Uncertainty on completeness from latency dispersions (doc 29 §completeness with uncertainty) */
+  completeness_stdev?: number;
 
   /** Fitted log-normal mu parameter (internal, not UI-exposed) */
   mu?: number;

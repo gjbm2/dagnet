@@ -43,14 +43,14 @@ implementations.
 
 | Component | Status |
 |-----------|--------|
-| `ForecastState` contract (Pydantic) | Design only. Fields defined in this doc. |
+| Completeness stdev computation | Design only. One new field: latency.completeness_stdev. |
 | Promoted model resolver (unified) | Design only. Currently scattered across 4 locations. |
 | Completeness with uncertainty (`completeness_sd`) | Design only. Requires sampling from latency dispersions. |
 | `rate_conditioned_sd` / `rate_unconditioned_sd` | Design only. Composed uncertainty from p + completeness. |
-| Two-tier FE/BE delivery of ForecastState | Design only. Pattern exists for topo pass; not yet applied to ForecastState. |
-| Graph-wide topo pass with per-node arrival caching | Design only. Propagation engine scoped to ForecastState scalars. |
-| Surprise gauge migration to ForecastState | Design only. Currently ~400 lines of independent computation. |
-| Edge card migration to ForecastState | Design only. Currently ~500 lines of scattered annotation. |
+| Two-tier FE/BE delivery | Design only. Pattern exists for topo pass; not yet applied to improved engine computations. |
+| Graph-wide topo pass with per-node arrival caching | Design only. Propagation engine scoped to improved completeness and rate scalars. |
+| Surprise gauge migration to engine | Design only. Currently ~400 lines of independent computation. |
+| Edge card migration to engine | Design only. Currently ~500 lines of scattered annotation. |
 | `cohort_maturity_v3` (clean-room engine consumer) | Design only. v2 frozen as parity reference. |
 | `asat()` support in engine (three-date model) | Design only. evidence_cutoff / evaluation / posterior_cutoff. |
 | Posterior covariance matrix (5×5 per edge) | Design only. Future enhancement for joint draws. |
@@ -142,78 +142,66 @@ distinction — consumers need to know which mode they're in.
 
 ---
 
-## `ForecastState` Contract
+## Schema Change and Field Mapping
 
-The intermediate representation between "raw data + model" and
-"consumer-specific output". Produced per edge per subject.
+The engine improves the computation behind existing graph fields. It
+does not introduce a new persisted object on the schema.
+
+### One new schema field
+
+`latency.completeness` changes from a bare number to an object:
 
 ```
-ForecastState:
-  # Identity
-  edge_id: str
-  source: str                  # 'analytic' | 'analytic_be' | 'bayesian' | 'manual'
-  fitted_at: Optional[str]     # when the model was fitted (null for manual)
-  tier: str                    # 'fe_instant' | 'be_forecast' | 'fe_only'
-  #   fe_instant: FE provisional estimate, BE pending
-  #   be_forecast: BE result received, replaces FE estimate
-  #   fe_only: BE unavailable or timed out, FE estimate is final
-
-  # Query context (all three default to now; diverge when asat ≠ now)
-  evaluation_date: str         # compute completeness at this date's age
-  evidence_cutoff_date: str    # snapshots on or before this date
-  posterior_cutoff_date: str   # model fitted on or before this date
-
-  # Completeness
-  completeness: float          # at evaluation age (0–1)
-  completeness_sd: Optional[float]  # null when tier='fe_instant'
-
-  # Model (unconditioned — pure model, no evidence)
-  rate_unconditioned: Optional[float]   # null when tier='fe_instant'
-  rate_unconditioned_sd: Optional[float]
-
-  # Evidence-conditioned
-  rate_conditioned: float      # blend of evidence and model
-  rate_conditioned_sd: Optional[float]  # null when tier='fe_instant'
-  tau_observed: int            # aggregate evidence frontier age (days)
-
-  # Raw dispersions (for consumers that need components)
-  dispersions: Optional[Dispersions]  # null when tier='fe_instant'
-  #   p_sd, mu_sd, sigma_sd, onset_sd
-
-  # Mode metadata
-  mode: 'window' | 'cohort'
-  path_aware: bool             # whether upstream dynamics were modelled
-
-  # Trajectory (optional — only when consumer requests a tau range)
-  trajectory?: List[TrajectoryPoint]
-  # Each TrajectoryPoint has: tau, completeness, completeness_sd,
-  #   rate_unconditioned, rate_unconditioned_sd,
-  #   rate_conditioned, rate_conditioned_sd
-
-  # Resolved params (for MC consumers like cohort_maturity_v3)
-  resolved_params?: ResolvedModelParams
-  # Includes per-cohort frontier info (tau_observed per cohort)
-  # needed for v3's per-cohort D/C split and IS conditioning
+completeness?: number
+completeness_stdev?: number
 ```
 
-**Nullable fields and tiers**: the FE instant path produces only
-`completeness` (aggregate CDF, same as today), `rate_conditioned`
-(existing blended mean), `tau_observed`, and mode metadata. All SD
-fields, the unconditioned rate, dispersions, and per-cohort frontier
-data are null until the BE result arrives. Consumers must handle
-null — display the value without ± when SD is unavailable.
+`stdev` is the uncertainty on the completeness estimate, derived by
+sampling from the latency dispersions (mu_sd, sigma_sd, onset_sd,
+onset_mu_corr). When the topo pass cannot compute a stdev (e.g. no
+dispersions available), `stdev` is omitted and consumers display the
+value without ±.
 
-`tier = 'fe_only'` represents the permanent state when the BE is
-unreachable. The FE estimate is final, not provisional. This is
-distinct from `'fe_instant'` (BE pending) because it tells consumers
-not to expect an upgrade.
+This follows the existing `{ mean, stdev }` pattern used by
+`p.evidence`, `p.forecast`, and `ModelVarsProbability`. The field is
+`value` rather than `mean` because completeness is a maturity
+fraction, not a probability mean.
 
-**Per-cohort frontier**: the scalar `tau_observed` on ForecastState
-is an aggregate (n-weighted across cohorts) — sufficient for surprise
-gauge and edge cards. Per-cohort frontier ages are carried inside
-`resolved_params` for consumers that need them (v3's per-cohort D/C
-split and IS conditioning). The contract does not expose per-cohort
-detail at the top level.
+Impact: 29 TS files read `latency.completeness` as a number. All
+need updating. See schema cleanup doc 39.
+
+### Engine output → existing graph field mapping
+
+Every other value the engine computes maps to an existing field. The
+engine improves the computation; it does not add fields.
+
+| Engine computation | Writes to | Currently written by | What improves |
+|---|---|---|---|
+| Completeness point estimate | `latency.completeness` | FE/BE topo pass | Uses promoted model params; upstream-aware in cohort mode |
+| Completeness uncertainty | `latency.completeness_stdev` | **New** | Samples from latency dispersions |
+| Forecast rate | `p.forecast.mean` | FE topo pass (`estimatePInfinity`) | Uses promoted model |
+| Forecast rate uncertainty | `p.forecast.stdev` | FE topo pass (heuristic dispersion) | Incorporates completeness uncertainty |
+| Evidence rate | `p.evidence.mean` | `addEvidenceAndForecastScalars` | Unchanged |
+| Evidence rate uncertainty | `p.evidence.stdev` | `addEvidenceAndForecastScalars` (binomial) | Unchanged |
+| Blended rate | `p.mean` | FE topo pass (`computeBlendedMean`) | Uses promoted model + upstream-aware completeness |
+| Blended rate uncertainty | `p.stdev` | FE topo pass | Incorporates completeness uncertainty (all three sources in F+E) |
+| Latency fit params | `latency.mu`, `latency.sigma` | `applyPromotion` | Unchanged (already promoted) |
+| Path-level params | `latency.path_mu`, `latency.path_sigma` | FE/BE topo pass (FW composition) | Unchanged |
+| Latency dispersions | `latency.promoted_mu_sd` etc. | `applyPromotion` from `model_vars` | Unchanged (moves to `latency.promoted.*` after schema cleanup doc 39) |
+| Horizons | `latency.promoted_t95` etc. | `applyPromotion` | Unchanged (moves to `latency.promoted.*` after doc 39) |
+| Model source | `model_vars[]` + `model_source_preference` | `applyPromotion` | Unchanged |
+
+### Internal computation structure
+
+The engine uses a transient in-memory structure during computation
+(in Python). This is **not** persisted on the graph and **not** part
+of the schema. Its purpose is to collect intermediate results
+(completeness with stdev, composed rate SDs, resolved model params)
+before writing them to the existing graph fields listed above.
+
+For chart API calls (cohort maturity, surprise gauge), the engine
+returns resolved model params as part of the API response — not as
+a persisted graph field. v3 consumes these for MC fan bands.
 
 ### Completeness with uncertainty
 
@@ -283,7 +271,7 @@ just the observation point:
   model's honest statement of what it expects, given parameter
   uncertainty
 
-The three dates in `ForecastState`:
+The three dates affecting the computation:
 - `evidence_cutoff_date`: filter snapshots. For asat < now, this is
   asat. For asat > now, this is now (no future snapshots exist).
 - `evaluation_date`: compute completeness at this date's age. Always
@@ -295,7 +283,7 @@ The three dates in `ForecastState`:
 
 - **Descriptive, not prescriptive.** No tau bucketing, no rate-vs-count
   mode, no fan bands, no zones. Those are consumer-specific.
-- **Unconditioned vs conditioned is first-class.** Every `ForecastState`
+- **Unconditioned vs conditioned is first-class.** Every edge's forecast
   carries both. Surprise gauge needs the unconditioned baseline to
   measure surprise against. Edge cards need the conditioned estimate.
 - **Completeness uncertainty is first-class.** `completeness_sd`
@@ -306,12 +294,12 @@ The three dates in `ForecastState`:
   The trajectory is the same engine called at every tau in a range —
   not a separate abstraction layer.
 - **Resolved params are optional.** Only MC consumers (v3) need them.
-  The engine provides them alongside the deterministic ForecastState so
+  The engine provides them alongside the deterministic scalars so
   v3 can run its own MC sampling without re-deriving model resolution.
 
 **Consumer mapping**:
 
-| Consumer | Reads from ForecastState |
+| Consumer | Reads from graph |
 |----------|--------------------------|
 | Edge display (chevron/bead) | `completeness ± completeness_sd`, `rate_conditioned ± rate_conditioned_sd` |
 | Surprise gauge | `rate_unconditioned ± rate_unconditioned_sd` vs observed |
@@ -324,8 +312,7 @@ The three dates in `ForecastState`:
 
 The graph canvas renders per-edge: a probability label, a completeness
 chevron with bead, a lag indicator, and (optionally) a Sankey
-completeness line. These are the primary consumers of `ForecastState`
-in the topo-pass path.
+completeness line.
 
 ### Current state
 
@@ -333,51 +320,28 @@ After Stage-2, the FE reads from `edge.p`:
 
 | Display element | Current source | What it reads |
 |----------------|----------------|---------------|
-| Probability label | `forecast.mean` or promoted `model_vars` | Scalar p |
-| Completeness chevron position | `latency.completeness` | Scalar 0–1 |
+| Probability label | `p.mean` (F+E), `p.forecast.mean` (F), `p.evidence.mean` (E) | Scalar p |
+| Probability ± | `p.stdev` (F+E), `p.forecast.stdev` (F), `p.evidence.stdev` (E) | Scalar stdev |
+| Completeness chevron | `latency.completeness` | Scalar 0–1 |
 | Bead label ("5d / 70%") | `latency.median_lag_days`, `latency.completeness` | Two scalars |
 | Sankey completeness line | `latency.completeness` | Scalar 0–1 |
-| Lag anchor fade band | `latency.completeness` | Scalar 0–1 (fade from 0% to completeness%) |
-| Quality tier badge | `model_vars[].source`, `quality.gate_passed` | Source + gate |
+| Lag anchor fade band | `latency.completeness` | Scalar 0–1 |
 
-All are scalars. No uncertainty is shown on the edge today.
+No uncertainty is shown on completeness today.
 
-### With ForecastState
+### After engine improvement
 
-The FE needs these fields from `ForecastState` to render the graph
-after a fetch:
+The engine writes improved values to the same fields. No new fields
+on the graph except `latency.completeness_stdev`.
 
-| Display element | ForecastState field | Change from current |
-|----------------|---------------------|---------------------|
-| Probability label | `rate_conditioned` | Uses evidence-conditioned rate, not raw `forecast.mean`. More honest. |
-| Probability uncertainty | `rate_conditioned_sd` | **New.** Could render as ± band or colour coding on the label. |
-| Completeness chevron | `completeness` | Same scalar, better computation (promoted model, upstream-aware in cohort mode). |
-| Completeness uncertainty | `completeness_sd` | **New.** Chevron could span ±1σ range instead of a single point. |
-| Bead label | `completeness`, `tau_observed` | `tau_observed` replaces `median_lag_days` for the "5d" part if we want age-at-frontier. |
-| Quality tier | `tier`, `source` | Shows 'fe_instant' vs 'be_forecast' and which model source. |
-| Lag anchor fade | `completeness` | Same. |
-
-### What the FE does NOT need from ForecastState
-
-- `trajectory` — edge display is a single point, not a curve
-- `resolved_params` — only chart MC consumers need these
-- `dispersions` (raw component SDs) — the FE uses the composed
-  `completeness_sd` and `rate_conditioned_sd`, not the individual
-  mu_sd/sigma_sd/onset_sd/p_sd
-
-### Wire format
-
-The BE topo pass returns `ForecastState` per edge. The FE writes
-the relevant fields to `edge.p.forecast_state` (new block) or
-enriches the existing `edge.p.latency` fields. Either way, the
-render pipeline (`buildScenarioRenderEdges.ts` →
-`ConversionEdge.tsx`) reads scalars — no structural change to the
-rendering code, just richer inputs.
-
-The `tier` field ('fe_instant' | 'be_forecast') drives a small
-visual indicator so the user knows whether they're seeing the fast
-FE estimate or the proper BE forecast. Same pattern as the existing
-quality tier badges on Bayesian posteriors.
+| Display element | Source field | What changes |
+|----------------|-------------|--------------|
+| Probability ± (F mode) | `p.forecast.stdev` | Now incorporates completeness uncertainty |
+| Probability ± (F+E mode) | `p.stdev` | Now properly composes all three uncertainty sources |
+| Probability ± (E mode) | `p.evidence.stdev` | Unchanged — binomial sampling SD is already correct |
+| Completeness value | `latency.completeness` | Better computation (promoted model, upstream-aware in cohort mode) |
+| Completeness ± | `latency.completeness_stdev` | **New.** Displayed as e.g. "5d / 70% ± 5%" on the latency bead |
+| Everything else | Same fields as today | Better computations, same schema |
 
 ### Three uncertainty regimes
 
@@ -393,8 +357,7 @@ One uncertainty source:
 
 No model involved. Completeness doesn't feature.
 
-**Current implementation**: `p.evidence.stdev`. This is correct — it
-is the sampling stdev from the observed evidence. No change needed.
+**Current implementation**: `p.evidence.stdev`. Correct. No change.
 
 ---
 
@@ -404,15 +367,13 @@ Even if the model is right about p, we're not sure how much of the
 eventual conversion we've captured yet."
 
 Two uncertainty sources:
-1. **Epistemic + aleatoric model uncertainty** — how uncertain is the
-   model's prediction of the eventual rate? From `p_sd` (posterior
-   width or heuristic dispersion)
-2. **Completeness uncertainty** — how uncertain is our estimate of
-   maturity? From `completeness_sd` (latency dispersions propagated
-   through the CDF)
+1. **Epistemic + aleatoric model uncertainty** — from `p.forecast.stdev`
+   (posterior width or heuristic dispersion)
+2. **Completeness uncertainty** — from `latency.completeness_stdev`
+   (latency dispersions propagated through the CDF)
 
-Combined (assuming independence of p and latency params):
-`rate_unconditioned_sd ≈ sqrt((p × completeness_sd)² +
+The topo pass composes these into `p.forecast.stdev`:
+`p.forecast.stdev ≈ sqrt((p × completeness_stdev)² +
 (completeness × p_sd)²)`
 
 **Independence assumption and measurement indeterminacy**: the
@@ -430,63 +391,12 @@ This means:
   factor alone — when p is sampled high, CDF is sampled low (because
   mu is compensatingly higher), and vice versa.
 - The independent formula **overestimates** combined uncertainty.
-  The covariance term `2 × CDF × p × cov(p, CDF)` is negative,
-  which would reduce `rate_sd`. Conservative (wider bands than
-  warranted), not dangerous.
+  Conservative (wider bands than warranted), not dangerous.
+- The proper fix is joint posterior draws via a transformed-space
+  covariance matrix (see §Future Enhancements).
 
-**Does the existing MC sampling handle this?** Partially. The v2
-row builder draws p, mu, sigma, onset from independent marginals
-(Beta for p, Normal for latency params), then IS-conditions on
-frontier evidence. IS reweighting partially corrects by down-weighting
-draws inconsistent with the observed frontier, but it doesn't enforce
-the structural p–mu anti-correlation across all tau. The result is
-fan bands that are somewhat wider than the true joint posterior would
-produce — conservative but not optimal.
-
-**Proper fix — joint posterior draws**: the MCMC sampler produces a
-trace of ~2000 joint draws where all parameters are sampled together.
-Each draw is a complete (p, mu, sigma, onset) tuple that respects the
-posterior correlations — the anti-correlation between p and mu is
-baked in. Today the compiler summarises this trace into marginal
-statistics (p_mean, p_sd, mu_mean, mu_sd, onset_mu_corr) and
-discards the joint structure. The forecast engine then reconstructs
-draws from independent marginals, losing the correlation.
-
-**Proposed solution — posterior covariance matrix in transformed
-space**: the compiler emits a 5×5 symmetric covariance matrix per
-edge in the same transformed coordinates the v2 row builder already
-uses for its drift layer: `(logit(p), mu, log(sigma), log1p(onset),
-...)`. Computing this from the MCMC trace is straightforward:
-transform the trace columns, then `np.cov()`. The forecast engine
-draws from `MVN(transformed_means, transformed_cov)` and
-back-transforms to constrained space, preserving support constraints
-(p ∈ [0,1], sigma > 0, onset ≥ 0).
-
-Drawing in raw (p, mu, sigma, onset) space would violate support
-constraints — raw-space MVN is not a safe contract. Transformed-space
-MVN captures the p–mu anti-correlation (and all other linear
-correlations in transformed space) while respecting parameter bounds.
-
-The only loss vs raw trace draws is non-Gaussian posterior shape
-(skewness, multimodality) in transformed space, which is rare for
-these parameters.
-
-**Storage**: 15 unique values per edge (5×5 symmetric). Could live
-on the edge in `p.latency.posterior.transformed_cov` or in the patch
-file as a new field. For a 20-edge graph this is 300 floats —
-negligible. The existing `onset_mu_corr` scalar becomes redundant
-(it's one entry in the matrix) but can be preserved for backward
-compatibility.
-
-For now, the independence assumption is explicitly conservative
-(overestimates rate_sd). The covariance matrix is a future
-enhancement that improves accuracy without changing the engine
-contract — `ForecastState` fields stay the same, only the internal
-draw quality improves.
-
-**Current implementation**: `p.forecast.stdev` — raw model stdev.
-Does not include completeness uncertainty. **Needs correction**: the
-engine replaces this with `rate_unconditioned_sd`.
+**Current implementation**: `p.forecast.stdev` is raw model stdev
+without completeness uncertainty. The engine improves this.
 
 ---
 
@@ -503,33 +413,32 @@ Three uncertainty sources:
    predicts what fraction of conversions have been observed
    (completeness), then we observe that fraction. But if completeness
    itself is uncertain, the boundary between "observed" and "forecast"
-   is uncertain. This is additional Binomial sampling noise when the
-   model's completeness estimate is applied to partition the evidence.
+   is uncertain.
 
 As completeness → 1: F+E converges to E (evidence dominates, model
 uncertainty vanishes). As completeness → 0: F+E converges to F (no
 evidence, pure model). The blend weights are driven by completeness.
 
-**Current implementation**: `p.stdev` — the blended/composite stdev.
-Does not properly compose the three sources. **Needs correction**: the
-engine replaces this with `rate_conditioned_sd`.
+The topo pass composes these into `p.stdev`.
+
+**Current implementation**: `p.stdev` does not properly compose the
+three sources. The engine improves this.
 
 ---
 
 ### Summary of bead ± changes
 
-| Regime | Current source | ForecastState source | Change |
-|--------|---------------|---------------------|--------|
-| E | `p.evidence.stdev` | unchanged | None — already correct |
-| F | `p.forecast.stdev` | `rate_unconditioned_sd` | Adds completeness uncertainty |
-| F+E | `p.stdev` | `rate_conditioned_sd` | Properly composes all 3 sources |
-| Completeness | bare "70%" | `completeness ± completeness_sd` | **New** ± on completeness |
+| Regime | Current source | What changes |
+|--------|---------------|--------------|
+| E | `p.evidence.stdev` | Unchanged |
+| F | `p.forecast.stdev` | Incorporates completeness uncertainty |
+| F+E | `p.stdev` | Properly composes all three sources |
+| Completeness | bare "70%" | Shows "70% ± 5%" from `latency.completeness_stdev` |
 
-The completeness chevron rendering is unchanged — it stays at the
-point estimate position. Uncertainty band rendering on the chevron
-is a future UX decision.
+The completeness chevron position is unchanged — it stays at the
+point estimate. Uncertainty band on the chevron is a future UX
+decision.
 
----
 
 ## Promoted Model Resolver (Prerequisite)
 
@@ -582,7 +491,7 @@ FE fetch → persist to param file → sync to graph →
        - Reads: promoted model params, evidence, mode
        - Window path: CDF → completeness, rate, dispersions
        - Cohort path: upstream-aware → completeness, rate, dispersions
-       - Writes: ForecastState to edge
+       - Writes improved values to existing graph fields + completeness_stdev
     5. Graph write + render
 ```
 
@@ -592,23 +501,23 @@ The same pattern already used for the topo pass:
 
 1. **FE runs immediately** — computes completeness from its existing
    aggregate-CDF approach (what `enhanceGraphLatencies` does today).
-   Edge renders instantly. `ForecastState.tier = 'fe_instant'`.
+   Edge renders instantly. The FE writes to the same fields as today..
 
 2. **BE forecast engine commissioned in parallel.** If it returns
-   within ~500ms, its `ForecastState` replaces the FE estimate before
+   within ~500ms, its improved values replace the FE estimates before
    the user notices. If not, the FE estimate stands until the BE
    result arrives.
 
 3. **When the BE result arrives (even late)**, it overwrites the FE
    estimate and the edge re-renders with the better number.
-   `ForecastState.tier = 'be_forecast'`. Quality tier indicator shows
-   which source is active.
+   Quality indicator shows
+   which model source produced the values.
 
 **Contract**: the FE estimate must never be worse than what exists
 today. The FE path is the floor — aggregate CDF, n-weighted,
 path-anchored in cohort mode. The BE path adds: upstream-aware
 completeness, promoted model resolution, dispersions,
-unconditioned/conditioned split. Strictly better but not free.
+completeness_stdev. Strictly better but not free.
 
 ### Cohort-mode upstream computation in Stage-2
 
@@ -639,8 +548,8 @@ cached. That cached per-node arrival state *is* the x_provider for
 every outgoing edge from that node.
 
 This is the propagation engine described in
-`cohort-backend-propagation-engine-design.md`, scoped to producing
-`ForecastState` scalars rather than full MC trajectories.
+`cohort-backend-propagation-engine-design.md`, scoped to producing improved
+completeness and rate scalars rather than full MC trajectories.
 
 **Per-node cache contents**:
 
@@ -650,7 +559,7 @@ This is the propagation engine described in
 - Evidence observations at this node (for IS conditioning)
 
 Each outgoing edge reads this cache and combines it with its own
-edge-level model to produce `ForecastState`. No re-traversal of the
+edge-level model to produce improved completeness and rate values. No re-traversal of the
 upstream subgraph.
 
 **Single-edge query**: the graph-wide topo pass serves edge display
@@ -680,9 +589,9 @@ engine development — no risk of breaking the working implementation
 while extracting from it. v3 provides a live benchmark during
 development, just as v1 constrained v2.
 
-**What v3 is**: a consumer of `ForecastState` (deterministic trajectory
-+ resolved params). The engine provides the deterministic forecast
-(completeness, rates, dispersions at every tau) plus the resolved model
+**What v3 is**: a consumer of the engine (deterministic trajectory
++ resolved model params). The engine provides the deterministic forecast
+(completeness with stdev, rates at every tau) plus the resolved model
 params (span kernel CDF, upstream carrier, posterior alpha/beta, SDs).
 v3 reads those and runs its own MC loop for fan bands.
 
@@ -692,8 +601,8 @@ IS conditioning are all rendering concerns that other consumers don't
 need. Forcing MC into the engine to make v3 thinner would make the
 topo pass ~1000x heavier for a feature only one consumer uses.
 
-So v3 is not a *pure* consumer of `ForecastState` — it also consumes
-`resolved_params`. But model resolution, upstream carrier computation,
+So v3 is not a pure consumer of the engine's scalar output — it also consumes
+the resolved model params. But model resolution, upstream carrier computation,
 and completeness are fully delegated to the engine. v3 owns only the
 MC sampling and row schema.
 
@@ -704,9 +613,9 @@ When v3 passes parity, v2 is retired wholesale.
 **Implementation sequence**:
 
 1. Register `cohort_maturity_v3` as analysis type (FE+BE)
-2. v3 handler calls the engine to get `ForecastState` with trajectory
-   + `resolved_params`
-3. v3 row builder uses `resolved_params` to run MC fan bands
+2. v3 handler calls the engine to get the deterministic trajectory
+   + resolved model params
+3. v3 row builder uses resolved model params to run MC fan bands
    (span kernel CDF, upstream carrier, posterior concentration, SDs)
 4. Parity gate: v2 vs v3 on adjacent subjects
 5. Multi-hop acceptance: v3 on multi-edge spans
@@ -727,7 +636,7 @@ block the generalised engine:
    may use different posterior bases
 4. **Frontier semantics are consumer-specific** — cohort maturity uses
    per-Cohort `tau_observed`; surprise gauge uses aggregate
-   completeness. The `ForecastState` contract exposes both.
+   completeness. The completeness field exposes the aggregate; per-cohort data is in the API response.
 
 ---
 
@@ -736,24 +645,24 @@ block the generalised engine:
 | Phase | What | Notes |
 |-------|------|-------|
 | **1** | **Promoted model resolver** | Prerequisite. See INDEX.md §6. |
-| **2** | **Window-mode ForecastState** — extract from `forecast_application.py`, add dispersions, inject into BE topo pass. FE instant path unchanged. | Low risk. Surprise gauge and edge cards in window mode consume this. |
-| **3** | **Cohort-mode ForecastState** — graph-wide topo pass with per-node arrival caching. Upstream-aware completeness. | Substantive new work. This is the propagation engine scoped to scalars. |
-| **4** | **Wire surprise gauge** — replace `_compute_surprise_gauge` (~400 lines) with promoted resolver + ForecastState read. | First consumer migration. |
-| **5** | **Wire edge cards** — replace scattered completeness annotation (~500 lines) with ForecastState read. | Second consumer. |
-| **6** | **`cohort_maturity_v3`** — clean-room consumer of ForecastState trajectory. v2 frozen as parity reference. MC fan bands remain chart-specific. | Largest consumer. v2→v3 parity gate before retiring v2. |
+| **2** | **Window-mode engine** — extract from `forecast_application.py`, add completeness_stdev, improve p.stdev and p.forecast.stdev, inject into BE topo pass. FE instant path unchanged. | Low risk. Surprise gauge and edge cards in window mode consume this. |
+| **3** | **Cohort-mode engine** — graph-wide topo pass with per-node arrival caching. Upstream-aware completeness. | Substantive new work. This is the propagation engine scoped to scalars. |
+| **4** | **Wire surprise gauge** — replace `_compute_surprise_gauge` (~400 lines) with promoted resolver + improved graph field reads. | First consumer migration. |
+| **5** | **Wire edge cards** — replace scattered completeness annotation (~500 lines) with improved graph field reads. | Second consumer. |
+| **6** | **`cohort_maturity_v3`** — clean-room consumer of engine trajectory + resolved params. v2 frozen as parity reference. MC fan bands remain chart-specific. | Largest consumer. v2→v3 parity gate before retiring v2. |
 | **7** | **Parity and contract tests** | Gate for promotion. |
 
 ### Test plan
 
-1. **FE vs BE ForecastState parity** (window mode): FE instant
+1. **FE vs BE completeness parity** (window mode): FE instant
    completeness vs BE forecast completeness — must be within tolerance.
 2. **Mature-limit convergence**: as tau → ∞, completeness → 1 and
    forecast rate → posterior mean. Analytical invariant for both modes.
 3. **Consumer parity on shared payload**: surprise gauge's expected-p
    must equal cohort maturity's unconditioned rate at tau_observed when
-   fed the same ForecastState.
+   fed the same inputs.
 4. **Cohort-mode completeness convergence**: edge-display completeness
-   from ForecastState must match what the cohort maturity chart shows
+   from the engine must match what the cohort maturity chart shows
    for the same edge at the same tau.
 5. **FE vs BE surprise gauge parity**: validate before retiring the FE
    implementation.

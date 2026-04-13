@@ -84,6 +84,7 @@ class LatencyConfig(BaseModel):
     median_lag_days: Optional[float] = Field(None, ge=0, description="Weighted median lag in days (display only)")
     mean_lag_days: Optional[float] = Field(None, ge=0, description="Weighted mean lag in days (used with median to compute t95)")
     completeness: Optional[float] = Field(None, ge=0, le=1, description="Maturity progress 0-1 (display only)")
+    completeness_stdev: Optional[float] = Field(None, ge=0, description="Uncertainty on completeness from latency dispersions (doc 29)")
     mu: Optional[float] = Field(None, description="Fitted log-normal mu parameter (internal, not UI-exposed)")
     sigma: Optional[float] = Field(None, ge=0, description="Fitted log-normal sigma parameter (internal, not UI-exposed)")
     path_mu: Optional[float] = Field(None, description="Path-level A→Y log-normal mu (Fenton–Wilkinson, internal)")
