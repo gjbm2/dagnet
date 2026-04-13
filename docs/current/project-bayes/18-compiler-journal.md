@@ -8,6 +8,87 @@ Entries are reverse-chronological (newest first).
 
 ---
 
+## 13-Apr-26 (update 11): Diamond-context Phase 2 — onset drift and convergence failure
+
+### Context
+
+First successful Phase 2 MCMC run on diamond-context (via numba
+fallback after JAX init failure). 4 chains, 1000 draws, 2000 tune,
+75 dimensions. Convergence: rhat=2.10, ESS=5, converged=40%.
+
+### Key finding: `onset_cohort` drifts massively upward
+
+The Phase 2 path-level onset variables (`onset_cohort`) drift far
+from their Phase 1 composed values:
+
+| Edge | Truth onset | Phase 1 (frozen) | Phase 2 onset | Drift |
+|------|------------|------------------|---------------|-------|
+| gate-to-path-a | 2.0 | 2.01 | 5.4 | +3.4 |
+| gate-to-path-b | 3.0 | 2.90 | 5.3 | +2.4 |
+| path-a-to-join | 1.0 | 0.99 | 6.9 | +5.9 |
+| path-b-to-join | 2.0 | 2.01 | 7.1 | +5.1 |
+
+The `onset_cohort` variables are free to deviate from the Phase 1
+composed values via `eps_onset_cohort × path_onset_sd`. With
+`path_onset_sd ≈ 0.1`, the drift of 3-6 days corresponds to
+30-60 SD — the sampler has found a local mode where onset is
+radically wrong.
+
+### Consequence: p overestimate
+
+Larger onset → fewer conversions expected → model compensates with
+higher p. The join-to-outcome edge (mixture path, 4 edges deep)
+is worst: truth p=0.500, Phase 2 p=0.893.
+
+### Why the t95 constraint doesn't prevent this
+
+The `path_t95_obs` soft constraint (line 1020 in model.py) penalises
+`onset_cohort + exp(mu_cohort + 1.645 × sigma_cohort)` deviating
+from the analytic t95. But the constraint strength (`sigma_path_t95 =
+max(t95 × 0.1, 2.0)`) is too loose: with t95 ≈ 30 days and
+sigma_path_t95 = 3.0, the constraint allows ±9 days of t95 drift.
+The onset drift of +5 days is within this envelope because mu_cohort
+can decrease to compensate.
+
+### This is NOT a number-of-draws issue
+
+4 chains × 1000 draws with rhat=2.10 means the chains are stuck in
+different modes, not that they haven't had enough time to explore.
+More draws would not help — the posterior geometry has multiple
+modes separated by energy barriers.
+
+### Per-slice recovery (Phase C)
+
+Per-slice cohort p recovery is mixed:
+
+- **Google (60% weight)**: All 6 edges OK. Worst z=2.69.
+- **Direct (30% weight)**: All 6 edges OK. Worst z=2.96.
+- **Email (10% weight)**: 4 OK, 2 MISS. path-b-to-join z=9.05,
+  join-to-outcome z=9.84. Low-traffic slice, p overestimated.
+
+The per-slice p values are reasonable where the aggregate onset is
+reasonable (anchor-to-gate: onset=0.99, close to truth=1.0).
+The overestimates correlate with onset drift, not with slice weight.
+
+### Outstanding work
+
+1. **Tighter onset constraint**: The Phase 2 onset needs a stronger
+   prior or a different parameterisation. Options:
+   - Reduce `path_onset_sd` from 0.1 to a value derived from the
+     Phase 1 posterior (currently fixed at 0.1)
+   - Add a per-edge onset observation (not just t95)
+   - Reparameterise: instead of `onset_cohort = softplus(composed +
+     eps × sd)`, use `onset_cohort = composed × (1 + eps × small_sd)`
+     (multiplicative, prevents additive drift)
+
+2. **Phase 2 mu drift**: mu_cohort also drifts (truth=2.0, Phase 2=2.9
+   for path-a-to-join). The mu–onset coupling means both can drift
+   together. A joint constraint (not just t95) may be needed.
+
+3. **JAX gradient NaN**: Still unresolved. See update 10 and doc 39.
+
+---
+
 ## 13-Apr-26 (update 10): Phase 2 JAX init failure — root cause and workaround
 
 ### Context

@@ -1,7 +1,7 @@
 # Project Bayes: Programme
 
 **Status**: Active
-**Updated**: 12-Apr-26
+**Updated**: 13-Apr-26
 **Purpose**: Phased delivery plan for Project Bayes. This doc owns sequencing;
 design docs contain the detail.
 
@@ -199,6 +199,39 @@ data-constrained. Single-source validation:
   potential parity gap worth discussing: should Bayes incorporate
   observed anchor lags as an alternative or additional signal?
   Discovered 3-Apr-26 during exhaustive cohort() code trace.
+
+- **JAX gradient NaN on Phase 2 join-node graphs** — **RESOLVED
+  13-Apr-26**. Root cause: `gradient_backend='jax'` uses
+  `jax.value_and_grad()` on the forward pass, hitting `0 × inf` in
+  deep erfc/softplus chains. Fix: `gradient_backend='pytensor'`
+  (symbolic gradients first, then JAX compile). See anti-pattern 36,
+  doc 39, compiler journal update 10.
+
+- **Phase 2 onset_cohort drift on diamond-context** — **OPEN
+  13-Apr-26**. See compiler journal update 11. The Phase 2
+  `onset_cohort` variables drift 3-6 days above truth on edges
+  with composed path onset > 3 days. Consequence: `p_cohort`
+  overestimates to compensate (join-to-outcome: truth=0.50,
+  post=0.89). rhat=2.10, ESS=5 with 4 chains × 1000 draws — chains
+  stuck in different modes, NOT a number-of-draws issue. Root cause:
+  onset and mu can trade off while keeping t95 constant (the t95
+  soft constraint allows ±9 days of drift). Potential fixes:
+  (a) derive `path_onset_sd` from Phase 1 posterior instead of
+  fixed 0.1; (b) reparameterise onset multiplicatively;
+  (c) add joint onset+mu constraint that penalises the ridge
+  directly. Affects diamond, likely 3-way-join, lattice topologies.
+  Skip-context and fanout-context are unaffected (no deep paths).
+
+- **Phase 2 devtooling quality** — **OPEN 13-Apr-26**. The
+  `--phase2-from-dump` flag and associated `param_recovery.py`
+  changes work end-to-end but lack automated test coverage:
+  (a) No e2e test for the replay path (`phase2_from_dump` setting
+  in `_fit_graph_compiler`); (b) `param_recovery.py` parsing
+  changes (cohort p, Phase 1 frozen loading, per-slice merge)
+  untested against known-good output; (c) analytic comparison fix
+  (param files in minimal payload) untested; (d) early-abort
+  timeout guard (`timeout_s > 0`) untested. All exercised manually
+  in the 13-Apr-26 session but need proper test infrastructure.
 
 *Not yet built*:
 - **Topology signatures** (doc 10) — current code computes a single

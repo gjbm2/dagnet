@@ -201,7 +201,7 @@ MCMC inference. Five modules form a strict pipeline:
 | 1. Topology | `topology.py` | Graph JSON | `TopologyAnalysis` — edges, branch groups, paths, reachability |
 | 2. Evidence | `evidence.py` | TopologyAnalysis + param files + snapshot DB | `BoundEvidence` — per-edge observations with recency weights |
 | 3. Model | `model.py` | BoundEvidence + settings | PyMC model (Beta/Binomial, Dirichlet, latent onset, latency CDF) |
-| 4. Inference | `inference.py` | PyMC model | MCMC samples via nutpie (4 chains, 1000 draws) |
+| 4. Inference | `inference.py` | PyMC model | MCMC samples via nutpie (4 chains, 1000 draws). Always uses `gradient_backend='pytensor'` — see doc 39 |
 | 5a. LOO | `loo.py` | Samples + evidence | Per-edge LOO-ELPD vs analytic null (doc 32) |
 | 5b. PPC | `calibration.py` | Samples + evidence | Per-edge coverage@90%, PIT uniformity (doc 38). Opt-in via `--diag` |
 | 6. Summary | `inference.py` | Samples + LOO + PPC | `PosteriorSummary` per edge — HDI, ESS, rhat, LOO, PPC, evidence grade |

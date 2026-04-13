@@ -201,15 +201,26 @@ def main():
     # Build a minimal payload with just graph_id and settings, pass via --payload.
     _payload_path = None
     if args.phase2_from_dump:
-        import tempfile
-        # Load graph JSON for the payload (needed for graph_id)
+        import tempfile, glob as _glob
+        # Load graph JSON and param files for the payload
         with open(graph_path) as _gf:
             _graph_json = json.load(_gf)
+        # Load param files (needed for analytic comparison in harness)
+        _param_files = {}
+        _params_index = {}
+        _params_dir = os.path.join(data_repo, "parameters")
+        for _pf_path in _glob.glob(os.path.join(_params_dir, "*.yaml")):
+            _pf_name = os.path.basename(_pf_path).replace(".yaml", "")
+            if "index" in _pf_name:
+                continue
+            with open(_pf_path) as _pff:
+                _param_files[_pf_name] = yaml.safe_load(_pff) or {}
+            _params_index[_pf_name] = {"file_path": f"parameters/{_pf_name}.yaml"}
         _minimal_payload = {
             "graph_id": f"graph-{args.graph}",
             "graph_snapshot": _graph_json,
-            "parameter_files": {},
-            "parameters_index": {},
+            "parameter_files": _param_files,
+            "parameters_index": _params_index,
             "settings": {
                 "phase2_from_dump": args.phase2_from_dump,
             },

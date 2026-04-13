@@ -1493,7 +1493,12 @@ def _sample_nutpie(model, config: SamplingConfig, report_progress=None,
     n_pot = len(model.potentials)
     n_det = len(model.deterministics)
     _backend = "jax" if config.jax_backend else "numba"
-    _grad_backend = "jax" if config.jax_backend else "pytensor"
+    # Always use pytensor for symbolic gradients, even with JAX backend.
+    # jax.value_and_grad on pytensor's JAX-compiled forward pass produces
+    # NaN for deep-onset edges (doc 39). pytensor's own symbolic gradient
+    # handles the erfc/softplus chain correctly, then compiles to JAX.
+    # Same JIT performance, no NaN. Gradient agreement: ~3e-9.
+    _grad_backend = "pytensor"
     _device_info = ""
     if config.jax_backend:
         try:
