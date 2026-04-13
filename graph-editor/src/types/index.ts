@@ -1327,6 +1327,8 @@ export interface ConversionGraph {
   containers?: Container[];
   canvasAnalyses?: CanvasAnalysis[];
   canvasViews?: CanvasView[];
+  /** Graph-level scenarios, seeded into IndexedDB on first open. */
+  scenarios?: Scenario[];
   debugging?: boolean;
   
   // Contexts: Data interests specification for nightly runner

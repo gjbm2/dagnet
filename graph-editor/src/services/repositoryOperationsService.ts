@@ -884,6 +884,20 @@ class RepositoryOperationsService {
    */
   private async serializeFileData(file: FileState): Promise<string> {
     if (file.type === 'graph') {
+      // Attach current IDB scenarios to graph data before serialisation
+      // so they persist in the JSON file for seeding on other machines.
+      try {
+        const dbScenarios = await db.scenarios
+          .where('fileId')
+          .equals(file.fileId)
+          .toArray();
+        if (dbScenarios.length > 0) {
+          const cleaned = dbScenarios.map(({ fileId: _fid, ...rest }) => rest);
+          file.data.scenarios = cleaned;
+        }
+      } catch (e) {
+        console.warn('[repoOps] Failed to attach scenarios to graph for serialisation', e);
+      }
       return JSON.stringify(file.data, null, 2);
     } else {
       const YAML = await import('yaml');
