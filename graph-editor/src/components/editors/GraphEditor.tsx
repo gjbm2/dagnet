@@ -27,7 +27,7 @@ import { useURLScenarios } from '../../hooks/useURLScenarios';
 import { useDashboardMode } from '../../hooks/useDashboardMode';
 import { useViewOverlayMode } from '../../hooks/useViewOverlayMode';
 import { usePutToBaseRequestListener } from '../../hooks/usePutToBaseRequestListener';
-import { Layers, FileText, Wrench, BarChart3, X, Activity, GitBranch, LayoutDashboard, Database } from 'lucide-react';
+import { Layers, FileText, Wrench, BarChart3, X, Activity, GitBranch, LayoutDashboard, Database, Hash } from 'lucide-react';
 import { DEFAULT_SIDEBAR_WIDTH, MIN_SIDEBAR_WIDTH } from '../../lib/uiConstants';
 import { SelectorModal } from '../SelectorModal';
 import { ItemBase } from '../../hooks/useItemFiltering';
@@ -175,6 +175,7 @@ function ScenarioLegendWrapper({ tabId }: { tabId: string }) {
 
   // Build view mode items for the submenu.
   const isSankey = viewPrefs?.useSankeyView ?? false;
+  const isDataValues = viewPrefs?.useDataValuesView ?? false;
   const dashboardCycleMs = tabs.find(t => t.id === tabId)?.editorState?.dashboardViewCycleMs ?? (isDashboardMode ? 30000 : null);
   const setDashboardCycleMs = React.useCallback((ms: number | null) => {
     if (tabId) operations.updateTabState(tabId, { dashboardViewCycleMs: ms });
@@ -221,6 +222,13 @@ function ScenarioLegendWrapper({ tabId }: { tabId: string }) {
       toggle: () => viewPrefs?.setUseSankeyView(!isSankey),
     },
     {
+      id: 'data-values',
+      label: 'Data Values',
+      icon: Hash,
+      isActive: () => isDataValues,
+      toggle: () => viewPrefs?.setUseDataValuesView(!isDataValues),
+    },
+    {
       id: 'dashboard',
       label: 'Dashboard',
       icon: LayoutDashboard,
@@ -228,7 +236,7 @@ function ScenarioLegendWrapper({ tabId }: { tabId: string }) {
       toggle: () => toggleDashboardMode({ updateUrl: true }),
       activeSubmenu: dashboardSubmenu,
     },
-  ], [viewOverlayMode, setViewOverlayMode, isDashboardMode, toggleDashboardMode, isSankey, viewPrefs, dashboardSubmenu]);
+  ], [viewOverlayMode, setViewOverlayMode, isDashboardMode, toggleDashboardMode, isSankey, isDataValues, viewPrefs, dashboardSubmenu]);
 
   // Forecast quality hides scenario chips; dashboard does not.
   const hideScenarioChips = viewOverlayMode === 'forecast-quality' || viewOverlayMode === 'data-depth';

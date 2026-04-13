@@ -10,6 +10,7 @@ import { EdgeLabelRenderer } from 'reactflow';
 import { Plug, ZapOff } from 'lucide-react';
 import { buildBeadDefinitions, type BeadDefinition } from './edgeBeadHelpers';
 import type { Graph, GraphEdge } from '../../types';
+import { computeInboundN, type InboundNResult } from '../../services/statisticalEnhancementService';
 import type { ScenarioVisibilityMode, ViewOverlayMode } from '../../types';
 import { computeQualityTier } from '../../utils/bayesQualityTier';
 import { useDataDepthContext } from '../../contexts/DataDepthContext';
@@ -80,6 +81,8 @@ interface EdgeBeadsProps {
   onMouseDown?: (e: React.MouseEvent) => void;
   /** When set to 'forecast-quality', replaces normal beads with a quality tier bead. */
   viewOverlayMode?: ViewOverlayMode;
+  /** When true, beads show n/k counts instead of percentage rates. */
+  useDataValuesView?: boolean;
 }
 
 interface BeadState {
@@ -110,6 +113,7 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
     onMouseLeave: onBeadMouseLeave,
     onMouseDown: onBeadMouseDown,
     viewOverlayMode,
+    useDataValuesView = false,
   } = props;
   
   // Create a memoized path element from pathD for accurate position calculations
@@ -196,7 +200,8 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
       scenarioColours,
       whatIfDSL,
       visibleStartOffset,
-      getScenarioVisibilityMode
+      getScenarioVisibilityMode,
+      useDataValuesView
     );
 
     return beads;
@@ -247,6 +252,7 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
     visibleStartOffset, // Visible start offset
     visibilityModesKey, // Visibility modes (stable string)
     viewOverlayMode, // View overlay (forecast quality replaces beads)
+    useDataValuesView, // Data values mode (n/k instead of %)
     edge.p?.posterior, // Posterior data (for quality tier bead)
     dataDepthScores, // Data depth scores (composite overlay)
   ]);

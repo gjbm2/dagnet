@@ -63,8 +63,8 @@ export async function runBeTopoPass(
   lagSliceSource: 'cohort' | 'window' | 'none' = 'cohort',
   /** D5 FIX: FE-computed active edge set so BE skips the same edges. */
   activeEdges?: Set<string>,
-): Promise<Array<{ edgeUuid: string; conditionalIndex?: number; entry: ModelVarsEntry; completenessStdev?: number }>> {
-  const result: Array<{ edgeUuid: string; conditionalIndex?: number; entry: ModelVarsEntry }> = [];
+): Promise<Array<{ edgeUuid: string; conditionalIndex?: number; entry: ModelVarsEntry; beScalars?: BeTopoEdgeResult }>> {
+  const result: Array<{ edgeUuid: string; conditionalIndex?: number; entry: ModelVarsEntry; beScalars?: BeTopoEdgeResult }> = [];
 
   // 1. Aggregate cohort data per edge (same as FE topo pass input)
   const cohortData: Record<string, any[]> = {};
@@ -310,7 +310,7 @@ export async function runBeTopoPass(
       edgeUuid: edge.edge_uuid,
       conditionalIndex: edge.conditional_index ?? undefined,
       entry,
-      completenessStdev: edge.completeness_stdev ?? undefined,
+      beScalars: edge,
     });
   }
 

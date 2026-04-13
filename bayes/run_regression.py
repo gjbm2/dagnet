@@ -454,9 +454,17 @@ def assert_recovery(graph_name: str, parsed: dict, truth: dict) -> dict:
         if edge_data is None:
             continue
 
+        # Zero-latency (instant) edges have mu=0, sigma=0, onset=0 — the model
+        # doesn't create latency RVs for these, so don't expect them in recovery.
+        _is_instant = (
+            edge_truth.get("mu") == 0
+            and edge_truth.get("sigma") == 0
+            and edge_truth.get("onset") == 0
+        )
         expected_params = [
             param for param in ("p", "mu", "sigma", "onset")
             if edge_truth.get(param) is not None
+            and not (_is_instant and param in ("mu", "sigma", "onset"))
         ]
         missing_params = [param for param in expected_params if param not in edge_data]
         if missing_params:
@@ -519,9 +527,15 @@ def assert_recovery(graph_name: str, parsed: dict, truth: dict) -> dict:
         slice_data = parsed_slices.get(slice_label)
         if slice_data is None:
             continue
+        _is_instant = (
+            edge_truth.get("mu") == 0
+            and edge_truth.get("sigma") == 0
+            and edge_truth.get("onset") == 0
+        )
         expected_params = [
             param for param in ("p", "mu", "sigma", "onset")
             if edge_truth.get(param) is not None
+            and not (_is_instant and param in ("mu", "sigma", "onset"))
         ]
         missing_params = [param for param in expected_params if param not in slice_data]
         if missing_params:

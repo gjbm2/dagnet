@@ -538,7 +538,7 @@ class SamplingConfig:
     target_accept: float = DEFAULT_TARGET_ACCEPT
     random_seed: int | None = None
     lowrank_mass_matrix: bool = False
-    jax_backend: bool = False
+    jax_backend: bool = True
 
 
 @dataclass

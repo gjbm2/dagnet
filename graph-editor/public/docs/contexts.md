@@ -358,10 +358,83 @@ Use **Data > Get All Data** to fetch conversion rates for all channels.
 
 ---
 
+## Variant Contexts (Behavioural Segment Filters)
+
+*New in v1.8.17b*
+
+Context definitions can use **behavioural segment filters** to partition users by event properties — for example, A/B test variants — without editing event files.
+
+### How It Works
+
+A variant context adds a `filters` block that references event-level properties rather than user-level attributes. DagNet's Amplitude adapter translates these into segment definitions at query time.
+
+### Example: A/B Test Variant
+
+```yaml
+id: ab-test-checkout
+name: Checkout Experiment
+description: A/B test on the new checkout flow
+values:
+  - id: control
+    name: Control
+    filters:
+      event_property: experiment_variant
+      value: control
+  - id: treatment
+    name: Treatment
+    filters:
+      event_property: experiment_variant
+      value: treatment
+otherPolicy: computed
+```
+
+This context partitions users by which experiment variant they saw, using the `experiment_variant` event property. No changes to event definitions are needed.
+
+### Hash Guard
+
+When you edit a context definition in a way that changes its query signature (e.g. adding a new value, renaming a filter), DagNet's **commit-time hash guard** detects the change and offers to create a **hash mapping** — a link between the old and new signatures that preserves historical snapshot data. Without this mapping, data stored under the old signature would become orphaned.
+
+CLI tools for hash management: `compute-hash`, `diff-hash`, `add-mapping`. See the [hash mappings playbook](https://github.com/gjbm2/dagnet/blob/main/graph-ops/playbooks/manage-hash-mappings.md) for the full workflow.
+
+---
+
+## Contexts in Bayesian Inference (Phase C)
+
+When a Bayesian model is fitted to a graph with context-segmented data, the compiler uses **hierarchical Dirichlet priors** (Phase C slice pooling) to estimate per-context conversion rates while sharing statistical strength across slices. This means:
+
+- Each context value gets its own posterior distribution
+- Low-volume slices borrow strength from the overall aggregate
+- The aggregate posterior is consistent with the per-slice posteriors (MECE constraint)
+
+Per-context posteriors appear in the Edge Info Model tab and are used by the forecast engine for context-conditioned predictions.
+
+---
+
+## Uncontexted Slice Syntax
+
+When defining `dataInterestsDSL` to fetch both per-context and aggregate data, use the **uncontexted slice** syntax:
+
+```
+context(channel);context()
+```
+
+Or equivalently, using a trailing semicolon:
+
+```
+context(channel);
+```
+
+Both forms tell DagNet to fetch data for each channel value **plus** the uncontexted aggregate. This is important for Bayesian fitting, which needs both the per-slice and aggregate observations.
+
+See [Query Expressions](./query-expressions.md) for the full semicolon/or composition syntax.
+
+---
+
 ## Related Documentation
 
 - [Query Expressions](./query-expressions.md) — Full DSL reference
 - [Data Connections](./data-connections.md) — Adapter configuration
-- [What-If Analysis](./what-ifs-with-conditionals.md) — Scenario modeling
+- [What-If Analysis](./what-ifs-with-conditionals.md) — Scenario modelling
 - [Scenarios](./scenarios.md) — Parameter overlays
+- [Glossary](./glossary.md) — Term definitions (variant context, snapshot regime, MECE)
 

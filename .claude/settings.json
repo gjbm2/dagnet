@@ -174,7 +174,10 @@
       "Bash(git -C /home/reg/dev/dagnet config --local user.name)",
       "Bash(git -C /home/reg/dev/dagnet config --global user.name)",
       "Bash(git -C /home/reg/dev/dagnet log --format=\"%h %an %ae\" --max-count=50)",
-      "Bash(git -C /home/reg/dev/dagnet log --oneline --all)"
+      "Bash(git -C /home/reg/dev/dagnet log --oneline --all)",
+      "Bash(awk '{print $6, $7, $8, $9}')",
+      "Bash(xargs -I{} basename {})",
+      "Bash(awk -F'\"' '{print $2}')"
     ],
     "additionalDirectories": [
       "/home/reg/dev/dagnet/.claude",

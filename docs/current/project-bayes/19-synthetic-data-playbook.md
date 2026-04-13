@@ -320,18 +320,78 @@ Alternatively, trigger a Bayes fit from the FE:
 
 ## 6. Available Test Graphs
 
-| Name | Topology | Edges | Purpose |
-|------|----------|-------|---------|
-| `simple-abc` | A→B→C linear | 2 | Basic recovery, solo edges, no joins |
-| `fanout-test` | Anchor→Gate→{Fast,Slow} | 3 | Branch group Dirichlet, uncontexted |
-| `context-solo` | Anchor→Target (solo, MECE context) | 1 | Phase C: per-slice p/kappa/latency, solo edge |
-| `fanout-context` | Anchor→Gate→{Fast,Slow} (MECE context) | 3 | Phase C: per-slice Dirichlet, branch group |
-| `diamond-test` | A→{B,C}→D→E | 6 | Splits, joins, branch groups |
-| `skip-test` | Linear with skip edge | 3 | Non-adjacent edges |
-| `3way-join-test` | Three paths joining | 5 | Multiple join points |
-| `join-branch-test` | Branch + join | 4 | Branch group with downstream join |
-| `lattice-test` | 2×2 lattice | 4 | Multiple paths, shared nodes |
-| `mirror-4step` | 4-step linear | 4 | Deep path latency accumulation |
+### 6.1 Uncontexted graphs
+
+| Name | Topology | Edges | Purpose | Regression (13-Apr-26) |
+|------|----------|-------|---------|----------------------|
+| `simple-abc` | A→B→C linear | 2 | Basic recovery, solo edges, no joins | PASS — rhat=1.008, ESS=2475, 100% |
+| `fanout-test` | Anchor→Gate→{Fast,Slow} | 3 | Branch group Dirichlet | PASS* — rhat=1.010, ESS=487, 100% |
+| `diamond-test` | A→{B,C}→D→E | 6 | Splits, joins, branch groups | PASS — rhat=1.007, ESS=1398, 100% |
+| `skip-test` | Linear with skip edge | 4 | Non-adjacent edges | PASS — rhat=1.006, ESS=712, 100% |
+| `3way-join-test` | Three paths joining | 7 | Multiple join points | PASS — rhat=1.010, ESS=748, 100% |
+| `join-branch-test` | Branch + join | 6 | Branch group with downstream join | PASS — rhat=1.010, ESS=515, 100% |
+| `lattice-test` | 2×2 lattice | 9 | Multiple paths, shared nodes | PASS — rhat=1.009, ESS=682, 100% |
+| `mirror-4step` | 4-step linear | 4 | Deep path latency accumulation | PASS* — rhat=1.007, ESS=2040, 100% |
+| `forecast-test` | Anchor→{Gate,Alt}→Hub→Outcome | 5 | Forecast horizon testing | PASS* — rhat=1.018, ESS=352, 98% |
+| `drift10d10d` | A→B (drift) | 2 | Moderate random-walk drift on p | PASS — rhat=1.004, ESS=2149, 100% |
+| `drift3d10d` | A→B (drift) | 2 | Fast random-walk drift on p | PASS — rhat=1.005, ESS=1886, 100% |
+
+\* These graphs contain zero-latency (instant) edges where mu=0, sigma=0,
+onset=0. The model correctly omits latency RVs for these edges. The
+regression tool skips latency recovery comparison for instant edges.
+
+**Onset recovery on onset=0 edges**: all uncontexted graphs recover onset=0
+edges to approximately 0.15–0.20 (z=2.4–3.4) due to the softplus boundary
+constraint preventing onset from reaching exactly 0. This is a known
+limitation of the current parameterisation, not a convergence issue. The
+`forecast-test` graph has the worst onset recovery (z=3.4, z=3.3 on two
+edges), passing only due to the absolute-delta floor.
+
+All uncontexted graphs converge cleanly with the JAX backend
+(`gradient_backend='pytensor'`, now the default). Regression run:
+2 chains, 500 draws, 1000 tune.
+
+### 6.2 Contexted graphs (Phase C)
+
+| Name | Topology | Edges | Purpose | Recovery (13-Apr-26) |
+|------|----------|-------|---------|---------------------|
+| `context-solo` | Anchor→Target | 1 | Simplest per-slice test | rhat=1.022, ESS=100, 58%. 2/3 onset MISS |
+| `context-solo-mixed` | Anchor→Target | 1 | Mixed context variant | rhat=1.023, ESS=70, 58%. 2/3 onset MISS, 1 mu MISS |
+| `simple-abc-context` | A→B→C | 2 | Linear chain with context | rhat=1.034, ESS=66, 68%. 2/6 onset MISS |
+| `skip-context` | Linear + skip | 4 | Skip edges with context | rhat=1.016, ESS=120, 80%. 4/12 onset MISS |
+| `fanout-context` | Gate→{Fast,Slow} | 3 | Branch group per-slice Dirichlet | rhat=1.027, ESS=52, 80%. Stochastic (run 1: rhat=1.9) |
+| `mirror-4step-context` | 4-step linear | 4 | Deep path with context | rhat=1.026, ESS=150, 75%. 3 sigma MISS |
+| `diamond-context` | A→{B,C}→D→E | 6 | Joins with context | rhat=1.046, ESS=78, 78%. 5 onset MISS, 2 p MISS |
+| `3way-join-context` | Three paths joining | 7 | 3-way join with context | rhat=1.108, ESS=18, 76%. 9 onset MISS, 2 mu MISS |
+| `join-branch-context` | Branch + join | 6 | Branch+join with context | rhat=1.065, ESS=32, 78%. 7 onset MISS, 2 mu MISS |
+| `lattice-context` | 2×2 lattice | 9 | Lattice with context | rhat=1.071, ESS=30, 77%. 7 onset MISS, 2 mu MISS |
+
+All contexted graphs run with JAX backend, 2 chains, 500 draws, 1000 tune.
+
+**Per-slice onset is not modelled as a random variable.** The current
+architecture deliberately keeps onset and sigma at the edge level (shared
+across all context slices); only mu varies per-slice. This is documented
+in `model.py:1231-1233`. Per-slice onset MISSes in the table above are
+therefore expected — the recovery tool compares against per-slice truth
+values that the model cannot represent. The onset MISSes appear whenever
+the per-slice truth onset differs from the edge-level onset.
+
+**Why onset is edge-level only**: the onset-mu ridge (strong negative
+correlation between onset and mu) makes per-slice onset RVs
+unidentifiable with the current parameterisation. A planned quintile
+reparameterisation (naturally orthogonal) may make per-slice onset
+viable in future.
+
+**Convergence quality**: no contexted graph achieves clean convergence
+(rhat<1.01, ESS>400). All are in a marginal zone (rhat 1.02–1.1,
+ESS 18–150). Stochastic risk is real — `fanout-context` failed hard
+on one run (rhat=1.9, ESS=3) and recovered on the next. Larger
+topologies (3way-join, join-branch, lattice) have lower ESS.
+
+**The diamond-context graph is no longer uniquely problematic.** The
+prior session's rhat=2.10/ESS=5 failure was caused by
+`gradient_backend='jax'` (now fixed to `'pytensor'`). With the fix,
+diamond-context converges comparably to other contexted graphs.
 
 Graphs prefixed `synth-` in `nous-conversion/graphs/`. Each has a `.truth.yaml`
 sidecar, a `.synth-meta.json` (written by the generator), and supporting

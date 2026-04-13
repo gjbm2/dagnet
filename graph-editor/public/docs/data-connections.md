@@ -737,8 +737,42 @@ The first interpretation is correct for flow partitioning: it tells you what **f
 8. **Understand Flow Partitioning**: For upstream-conditioned queries, remember that n comes from the base query (all users at 'from'), not from the conditioned super-funnel
 9. **Use Explicit n_query for Shared Events**: When your 'from' node shares an event with sibling nodes and you need n to represent a specific path, use the explicit `n_query` field
 
+## Snapshot Storage on Fetch
+
+Every time you fetch data from an external source (Amplitude, Google Sheets, etc.), DagNet automatically stores a **snapshot** of the raw conversion data in the snapshot database. This happens transparently — you don't need to do anything extra.
+
+Each snapshot records:
+- **Cohort anchor date**: The entry date for that cohort
+- **Conversion counts**: n (exposed) and k (converted)
+- **Retrieval timestamp**: When the data was fetched
+- **Slice key**: The context/segment qualifier (if any)
+- **Query signature**: The content-addressed hash of the query definition
+
+This longitudinal record powers all snapshot-backed analysis types (Lag Histogram, Daily Conversions, Cohort Maturity, Lag Fit) and enables `asat()` historical queries.
+
+## Retrieve All
+
+**Retrieve All** fetches data for every edge and slice in a graph (or multiple graphs) in one operation:
+
+- **Single graph**: Right-click a graph → **Retrieve All**, or use **Data > Retrieve All**
+- **Multi-graph**: Use **Data > Retrieve All (All Graphs)** to fetch across all open graphs
+- **Automated**: Use the `?retrieveall` URL parameter or daily-fetch mode for scheduled overnight runs (see [Automation](automation-and-scheduling.md))
+
+Retrieve All respects incremental fetching — it only fetches dates not already in the snapshot database, making repeated runs efficient.
+
+## Staleness Nudges
+
+DagNet tracks when data was last fetched for each edge. When data becomes stale (typically after 24 hours), visual nudges appear:
+
+- **Edge indicators**: Stale edges show a subtle staleness marker
+- **Auto-update policy**: In automation mode, stale data triggers automatic refetch
+
+The staleness threshold and nudge behaviour are configurable in settings.
+
 ## Further Reading
 
-- [Query Expressions Documentation](./query-expressions.md) - Learn about DagNet Query DSL
-- [Credentials Setup](./CREDENTIALS_INIT_FLOW.md) - Detailed credentials configuration guide
+- [Query Expressions Documentation](./query-expressions.md) — Learn about DagNet Query DSL
+- [Credentials Setup](./CREDENTIALS_INIT_FLOW.md) — Detailed credentials configuration guide
+- [Automation and Scheduling](./automation-and-scheduling.md) — Overnight data refresh
+- [Contexts](./contexts.md) — Context segmentation and variant contexts
 

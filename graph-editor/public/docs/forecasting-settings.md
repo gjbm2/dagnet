@@ -206,4 +206,57 @@ The default is **999999**, which effectively disables the guardrail (i.e. the fi
 - Too low: real heavy tails get suppressed (tail “cut‑off”), which can break completeness and horizons.
 - Too high: pathological inputs can produce very large \(\sigma\) and unstable fits (use with care if changing from the shipped default).
 
+## Model Source Preference — `model_source_preference`
+
+**What it controls**
+Which candidate model source is promoted to drive completeness, forecast, and blended probability for each edge.
+
+**Options**
+
+| Value | Behaviour |
+|-------|-----------|
+| `best_available` | Default. Prefers Bayesian (if present and quality gate passed), then analytic (FE), then analytic (BE) |
+| `bayesian` | Forces Bayesian source (falls back to analytic if no posterior exists) |
+| `analytic` | Forces FE analytic source |
+| `analytic_be` | Forces BE analytic source |
+| `manual` | Forces user-edited values |
+
+**Scope**
+Can be set per-edge (with `model_source_preference_overridden` flag) or as a graph-level default in graph metadata. Per-edge overrides take precedence.
+
+**Where to change it**
+- **Per-edge**: Edge Info → Model tab → Source Preference dropdown
+- **Graph-level**: Graph metadata (edit via Properties panel or YAML)
+
+See [LAG Statistics Reference §12](lag-statistics-reference.md) for the full promotion waterfall.
+
+## Quality Tiers (Bayesian fit results)
+
+After a Bayesian fit completes, each edge receives a quality tier based on MCMC diagnostics. Quality tiers determine:
+
+1. **Display**: Shown in the Bayesian Posterior Card, operations toast, and session log
+2. **Warm-start eligibility**: Only Good and Fair posteriors can be reused as starting values for the next fit
+3. **Promotion**: `best_available` source preference only promotes Bayesian posteriors that pass the quality gate
+
+| Tier | Meaning |
+|------|---------|
+| **Good** | Converged, adequate effective sample size |
+| **Fair** | Minor convergence warnings |
+| **Poor** | Convergence issues — use with caution. Amber warning persists until dismissed |
+| **Very poor** | Failed convergence — results unreliable |
+
+## Run Bayes — `runBayes` flag
+
+**What it controls**
+Whether a graph is included in nightly Bayesian model fitting.
+
+**How to enable**
+Mark a graph for automatic Bayes fitting via graph metadata. When enabled, the daily automation pipeline includes a Bayes submission step after the retrieve-all completes:
+
+1. Daily fetch pulls latest data
+2. Retrieve All fetches all slices
+3. **Bayes fit is submitted** for the graph
+4. Results are delivered via webhook and committed as patch files
+
+**Prerequisite**: The Python backend must be available (locally or via Modal) for Bayes fits to execute.
 

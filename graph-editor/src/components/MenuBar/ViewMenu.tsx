@@ -5,6 +5,7 @@ import { useNavigatorContext } from '../../contexts/NavigatorContext';
 import EdgeScalingControl from '../EdgeScalingControl';
 import { useViewPreferencesContext } from '../../contexts/ViewPreferencesContext';
 import { useSankeyView } from '../../hooks/useSankeyView';
+import { useDataValuesView } from '../../hooks/useDataValuesView';
 import { useNodeImageView } from '../../hooks/useNodeImageView';
 import { useDashboardMode } from '../../hooks/useDashboardMode';
 import { useViewOverlayMode } from '../../hooks/useViewOverlayMode';
@@ -45,6 +46,7 @@ export function ViewMenu() {
   
   // Use centralised hooks for view toggles
   const { useSankeyView: isSankeyView, toggleSankeyView } = useSankeyView();
+  const { useDataValuesView: isDataValuesView, toggleDataValuesView } = useDataValuesView();
   const { showNodeImages, toggleNodeImageView } = useNodeImageView();
   const { isForecastQuality, toggleForecastQuality, isDataDepth, toggleDataDepth } = useViewOverlayMode();
   
@@ -210,6 +212,15 @@ export function ViewMenu() {
               >
                 <Menubar.ItemIndicator className="menubar-item-indicator">✓</Menubar.ItemIndicator>
                 Sankey View
+              </Menubar.CheckboxItem>
+
+              <Menubar.CheckboxItem
+                className="menubar-item menubar-item--checkable"
+                checked={isDataValuesView}
+                onCheckedChange={toggleDataValuesView}
+              >
+                <Menubar.ItemIndicator className="menubar-item-indicator">✓</Menubar.ItemIndicator>
+                Data Values
               </Menubar.CheckboxItem>
 
               <Menubar.CheckboxItem

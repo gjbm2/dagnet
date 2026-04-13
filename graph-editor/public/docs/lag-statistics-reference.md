@@ -1372,3 +1372,39 @@ Key defaults used in LAG calculations:
 | `ONSET_AGGREGATION_BETA` | 0.5 | Weighted β-quantile used when aggregating onset across slice families |
 | `LATENCY_MAX_MEAN_MEDIAN_RATIO` | 999999 | Max mean/median ratio guardrail for lognormal moment fits (effectively disabled by default) |
 | `PRECISION_DECIMAL_PLACES` | 4 | Decimal precision for probability values |
+
+---
+
+## 14. Bayesian Quality Tiers and Model Adequacy
+
+### 14.1 Quality Tiers
+
+When a Bayesian fit completes, each edge receives a quality tier based on MCMC convergence diagnostics (Rhat, ESS):
+
+| Tier | Criteria | Warm-start eligible? |
+|------|----------|---------------------|
+| **Good** | Rhat < 1.05, ESS ≥ 400 | Yes |
+| **Fair** | Rhat < 1.10, ESS ≥ 100 | Yes |
+| **Poor** | Convergence warnings | No |
+| **Very poor** | Failed convergence or insufficient ESS | No |
+
+Quality tiers appear in the Bayesian Posterior Card (click the Bayes indicator on an edge), in the operations toast, and in the session log. Only Good and Fair posteriors are eligible for warm-start reuse in subsequent fits.
+
+### 14.2 LOO-ELPD (Model Adequacy Scoring)
+
+After fitting, the compiler computes **LOO-ELPD** (Leave-One-Out Expected Log Predictive Density) per edge using Pareto-smoothed importance sampling (PSIS-LOO via ArviZ). This answers: "does the Bayesian model improve on analytic point estimates for this edge?"
+
+- **ΔELPD > 0**: the Bayesian model adds predictive value
+- **ΔELPD < 0**: the analytic estimate is better — the model may be overfitting or misspecified
+- **Pareto k > 0.7**: the LOO estimate itself is unreliable for this edge
+
+LOO-ELPD surfaces in three places:
+1. **Forecast Quality overlay** — warning tier when ΔELPD < 0 or pareto_k > 0.7
+2. **Edge Info Model tab** — per-edge ΔELPD value and interpretation
+3. **PosteriorIndicator popover** — summary quality assessment
+
+### 14.3 Promoted Model Terminology
+
+The `model_vars` system (§12) uses the term "promoted" to describe the active model source. When the resolution waterfall (§12.2) selects a source, that source's parameters are **promoted** — meaning they are copied to the edge's active `p.latency.*` and `p.forecast.mean` fields, where they drive completeness, blending, and all downstream display quantities.
+
+The promoted source is displayed in the Edge Info Model tab alongside its provenance (analytic, bayesian, or manual) and quality tier (for Bayesian sources).

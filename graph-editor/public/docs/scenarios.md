@@ -284,3 +284,37 @@ Flatten is a good way to **lock in** a scenario you like as the new baseline bef
 - **Validate before Apply** – the editor runs validation, but read warnings; unresolved HRNs mean the key didn’t match any current node/edge.
 
 For more detail on the underlying HRN grammar and scenario semantics, see `SCENARIOS_MANAGER_SPEC.md` in the docs.
+
+---
+
+## 9. Scenarios on Canvas Analyses
+
+Canvas analyses (charts pinned to the graph canvas) respect the scenario system:
+
+- **Multi-scenario rendering**: Each visible scenario is rendered as a separate series on the chart, using the scenario's assigned colour
+- **Visibility modes**: Canvas analyses respect F+E / F only / E only / Hidden per scenario, just like the Analytics panel
+- **Three canvas modes**: Live analyses inherit scenario changes automatically. Custom analyses compose their own DSL onto the live base. Fixed analyses are frozen and don't respond to scenario changes
+
+### Tristate Mode Cycling
+
+Canvas analysis charts support **tristate cycling** on scenario visibility. Click a scenario's visibility icon to cycle through:
+
+1. **Visible** (full colour) — scenario is rendered on the chart
+2. **Reference** (dimmed) — scenario is rendered as a faded reference line
+3. **Hidden** — scenario is excluded from the chart
+
+This allows comparing a primary scenario against dimmed reference scenarios without hiding them entirely.
+
+---
+
+## 10. Live, Custom, and Fixed Modes
+
+Canvas analyses operate in one of three modes:
+
+| Mode | DSL source | Scenario tracking | Use case |
+|------|-----------|-------------------|----------|
+| **Live** | Inherits from navigator context | Tracks all scenario changes | Default. Chart updates automatically as you change the query or scenarios |
+| **Custom** | Chart-owned delta DSL composed onto the live base | Tracks scenario changes, but with its own query overlay | Pin a specific analysis type or subject while still responding to scenario changes |
+| **Fixed** | Fully self-contained | Frozen — does not respond to scenario changes | Capture a specific view at a point in time |
+
+Toggle modes via the chart toolbar or Properties panel.

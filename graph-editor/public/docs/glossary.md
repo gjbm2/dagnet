@@ -1,6 +1,7 @@
 # DAGNet Glossary: Statistical & Graph Terms
 
-**Status:** Draft  
+**Version:** 2.0  
+**Last updated:** 13-Apr-26  
 **Audience:** DAGNet users (product, ops, data, engineering)  
 
 This glossary explains common terms used in DAGNet’s **conversion graphs**, **latency modelling**, and **analytics**.  
@@ -260,7 +261,7 @@ In DAGNet this is used to estimate `path_t95` from anchor lag (A→X) plus edge 
 
 ---
 
-## Bayesian Terms (for later phases)
+## Bayesian & Statistical Modelling
 
 **Bayes / Bayesian inference**  
 Updating beliefs (a distribution over parameters) as new data arrives.  
@@ -288,6 +289,36 @@ Controls which `model_vars` entry promotes its values to `p.mean`/`p.stdev`. Opt
 
 **Path onset (`path_onset_delta_days`)**
 Cumulative onset dead-time along the path from the anchor node to this edge. Computed as a DP sum of per-edge `onset_delta_days` values. Used internally for path-level lag model fitting. Related fields: `path_onset_sd`, `path_onset_hdi_lower`, `path_onset_hdi_upper` (posterior statistics when onset is estimated as a latent variable).
+
+**Promoted model**
+The `model_vars` entry currently selected by `model_source_preference` as the active model for an edge. Its values are "promoted" to `p.mean`, `p.stdev`, and latency parameters. The promotion resolver picks from available candidates (Bayesian posterior → analytic MLE → manual override → prior default) based on the preference setting.
+
+**Quality tier**
+A classification of a Bayesian fit result: **good** (converged, adequate sample), **fair**, **poor**, or **very poor** (failed convergence or insufficient effective sample size). Derived from MCMC diagnostics (Rhat, ESS) and reported in the Bayesian Posterior Card, operations toast, and session log. Quality tiers gate warm-start reuse — only good/fair posteriors are eligible.
+
+**LOO-ELPD (Leave-One-Out Expected Log Predictive Density)**
+A model adequacy score computed per edge after Bayesian fitting. Measures how well the fitted model predicts held-out observations compared to an analytic null baseline. A positive ΔELPD means the Bayesian model improves on point estimates; negative means it does not. Surfaced in the Forecast Quality overlay, Edge Info Model tab, and PosteriorIndicator popover. Uses Pareto-smoothed importance sampling (PSIS-LOO) via ArviZ.
+
+**Two-phase model**
+The Bayesian compiler fits models in two phases. **Phase 1** (window mode, step-day granularity) fits per-edge conversion rates and latency using Beta/Binomial likelihoods. **Phase 2** (cohort mode, entry-day granularity) reuses Phase 1 posteriors as priors and fits cohort-level rates with Dirichlet/Binomial likelihoods at branch groups. Phase 2 posteriors are the final promoted values.
+
+**Phase C (slice pooling)**
+Extension of the two-phase model that handles context-segmented data. Hierarchical Dirichlet priors allow per-slice (e.g. per-channel, per-device) conversion rate estimation while sharing strength across slices. Produces per-context posterior distributions.
+
+**Warm start**
+Reusing posteriors from a previous Bayesian fit as initial values for a new fit. Reduces sampling time and improves convergence. Gated by quality tier — only good/fair posteriors are reused. Warm-start eligibility is tracked via model fingerprinting.
+
+**Span kernel**
+The mathematical mechanism for multi-hop cohort maturity. Composes per-edge lag distributions into a path-level arrival kernel via node-level dynamic-programming convolution. Enables "of cohorts entering at A, what fraction reached Z by time τ?" across arbitrary DAG paths, not just adjacent edges.
+
+**Canvas analysis**
+A live, updating chart or result card pinned directly onto the graph canvas. Supports all analysis types. Three modes: **Live** (tracks the navigator's query context), **Custom** (chart-owned DSL composed onto the live base), **Fixed** (fully self-contained, frozen). Multi-tab containers allow several analyses in one canvas object.
+
+**Snapshot regime**
+The authoritative selection of one coherent hash family per (edge, anchor_day, retrieval) triple. Performed by the BE to prevent double-counting when multiple context dimensions produce multiple hashes for the same underlying conversions. Eliminates the FE preflight round-trip that previously resolved this.
+
+**Variant context**
+A context definition that uses behavioural segment filters to partition users by event properties (e.g. A/B test variants) without editing event files. Introduced in v1.8.17b alongside the commit-time hash guard.
 
 ---
 

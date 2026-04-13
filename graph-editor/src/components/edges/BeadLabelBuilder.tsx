@@ -305,6 +305,34 @@ export class BeadLabelBuilder {
   }
   
   /**
+   * Static helper: Data values formatter (n/k counts)
+   * Value is pre-formatted as a string "k/n", so just pass through.
+   */
+  static formatDataValues(value: number | string): string {
+    return String(value);
+  }
+
+  /**
+   * Static helper: Build a label for data values beads (n/k display)
+   */
+  static buildDataValuesLabel(
+    values: BeadValue[],
+    hiddenCurrent?: HiddenCurrentValue,
+    hasExistenceVariation: boolean = false
+  ): { displayText: React.ReactNode; allIdentical: boolean } {
+    const builder = new BeadLabelBuilder(
+      values,
+      hiddenCurrent,
+      BeadLabelBuilder.formatDataValues as ValueFormatter,
+      hasExistenceVariation
+    );
+    return {
+      displayText: builder.buildDisplayText(),
+      allIdentical: builder.shouldFullyDeduplicate()
+    };
+  }
+
+  /**
    * Static helper: Build a label with custom formatter
    */
   static buildCustomLabel(

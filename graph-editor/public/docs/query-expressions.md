@@ -1,7 +1,7 @@
 # DagNet DSL: Parameter Addressing Guide
 
-**Version:** 2.1  
-**Last Updated:** December 2025
+**Version:** 3.0  
+**Last Updated:** April 2026
 
 ---
 
@@ -492,6 +492,98 @@ The Snapshot Manager's **"View graph at DATE"** button combines historical file 
 
 ---
 
+## Composition: Semicolons, `or()`, and Multi-Slice Queries
+
+*New in v1.9*
+
+### Semicolon Expansion
+
+Semicolons create multiple atomic slices from a single query:
+
+```
+context(channel:google);context(channel:facebook)
+```
+
+This produces two separate queries — one for Google, one for Facebook — each fetched and stored independently.
+
+### Parenthetical Distribution
+
+Parentheses with semicolons distribute shared clauses to each branch:
+
+```
+(context(channel:google);context(channel:facebook)).window(-90d:)
+```
+
+Expands to:
+- `context(channel:google).window(-90d:)`
+- `context(channel:facebook).window(-90d:)`
+
+### `or()` Function
+
+Explicit OR grouping, equivalent to semicolons:
+
+```
+or(context(channel:google),context(channel:facebook)).window(-90d:)
+```
+
+Produces the same two queries as the semicolon form above.
+
+### Bare Key Expansion
+
+`context(key)` with no value triggers Cartesian expansion across all known values:
+
+```
+context(channel).window(-90d:)
+```
+
+If "channel" has values `google`, `facebook`, `organic`, this expands to three queries — one per value.
+
+Multiple bare keys produce a full Cartesian product:
+
+```
+context(channel).context(browser)
+```
+
+Expands to `channel × browser` — every combination.
+
+### Uncontexted Slice (Aggregate)
+
+To fetch per-context data **plus** the uncontexted aggregate, use an empty element in the semicolon list:
+
+```
+context(channel);context()
+```
+
+Or equivalently, with a trailing semicolon:
+
+```
+context(channel);
+```
+
+Both forms produce one query per channel value **plus** one query without any context filter (the aggregate). This is the recommended pattern for `dataInterestsDSL` when you want both per-segment and total data.
+
+All of these forms are equivalent:
+- `(window(-90d:)).(context(channel);context())`
+- `(window(-90d:)).(context(channel);)`
+- `(window(-90d:)).(;context(channel))`
+- `(window(-90d:)).or(context(channel),)`
+
+---
+
+## Variant Contexts
+
+*New in v1.8.17b*
+
+Context definitions can use **behavioural segment filters** to partition users by event properties (e.g. A/B test variants) without editing event files. In the DSL, variant contexts use the same `context(key:value)` syntax as any other context:
+
+```
+context(ab-test-checkout:treatment).window(-30d:)
+```
+
+See [Contexts](./contexts.md) for how to define variant context files and the hash guard that preserves data continuity when definitions change.
+
+---
+
 ## Validation & Errors
 
 ### Valid References
@@ -760,6 +852,7 @@ For Google Sheets:
 ---
 
 **Version History:**
+- **3.0** (April 2026): Added semicolon/or composition, uncontexted slice syntax, variant contexts, bare key expansion
 - **2.1** (December 2025): Added cohort windows and LAG-related DSL
 - **2.0** (November 2025): Simplified user guide format, correct conditional probability syntax
 - **1.0** (November 2025): Initial release

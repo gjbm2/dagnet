@@ -432,7 +432,11 @@ plausible delay through all upstream paths.
 - **Combines well with Options A or B**: graph priors constrain onset,
   reparameterisation improves the mu-side geometry.
 
-### 10.4 Recommended approach
+### 10.4 Recommended approach (superseded by §11.8 — see Proposal B)
+
+The recommendation below was written before the three-way ridge
+analysis (§11.1) and the (m, a, r) reparameterisation (§11.8).
+Retained for historical context.
 
 Combine **Option A** (sample median_excess) with **Option D**
 (graph-derived onset priors) as a first step:
@@ -601,6 +605,12 @@ priors on log-scale parameters. "Median conversion delay is 10–20
 days" is directly expressible as a prior on p50. "90th percentile
 delay is 30–60 days" is directly expressible as a prior on p90.
 
+**Relationship to Proposal B (§11.8)**: this line of thinking led to
+Proposal B, which refines the quantile idea into unconstrained
+coordinates (m, a, r) that avoid the ordering constraints and handle
+onset=0 gracefully. The (m, a, r) coordinates *are* a quantile
+parameterisation: m ≈ log(t50), r encodes the t50-to-t95 stretch.
+
 ### 11.3 Alternative families
 
 If reparameterisation within the shifted lognormal family proves
@@ -725,25 +735,48 @@ Proposal B.
 
 ### 11.8 Proposal B: sample (m, a, r) — full reparameterisation
 
-**Status**: Proposed. Reviewed. Reference implementation drafted.
-**Date**: 13-Apr-26.
+**Status**: Proposed. Reviewed. Phased implementation plan agreed.
+**Date**: 13-Apr-26 (initial); 13-Apr-26 (phased rewrite).
 **Origin**: External review of Proposal A identified that sampling
 `(onset, mu, raw_gap)` is topologically `(onset, mu, sigma)` and
 leaves the onset-mu ridge untouched. This proposal replaces all three
 sampling coordinates.
 
-#### 11.8.1 The key insight
+#### 11.8.1 What is actually changing
 
-The data most directly constrains t50 (the median delay including
-onset). The onset-mu ridge exists because the data pins t50 tightly
-but is largely indifferent to how t50 decomposes into onset vs
-exp(mu). A good parameterisation should make t50 a sampled coordinate
-and relegate the onset/mu split to a separate axis.
+This proposal is a **coordinate transform of the sampling space**.
+The shifted lognormal model, the likelihood, and the data are all
+unchanged. Downstream code continues to see `(onset, mu, sigma)` via
+Deterministic nodes.
 
-Similarly, the onset-sigma ridge exists because the data constrains
-the tail position (approximately t95) but is indifferent to how that
-is decomposed. The tail stretch relative to the median gap should be
-a separate axis.
+The implementation is staged to isolate the geometry change from any
+model changes:
+
+- **Stage 1** (§11.8.11): pure geometry change. Swap sampling
+  coordinates from `(eps_onset, mu, sigma)` to `(m, a, r)`. Retain
+  all existing observation terms (onset_obs AND t95_obs), repointed
+  to the derived Deterministic nodes. The only model difference is
+  the prior shape (three independent Normals on (m, a, r) vs the
+  current softplus(Normal) × Normal × Gamma on (onset, mu, sigma))
+  — this is an unavoidable consequence of changing coordinates, but
+  the prior centres and widths are derived from the same analytic
+  inputs as today.
+
+- **Stage 2** (§11.8.10, future, only if Stage 1 succeeds):
+  optionally remove t95_obs and fold that information into the
+  r_prior. This is a deliberate model change and should be evaluated
+  separately.
+
+**Why this staging matters**: if Stage 1 shows improved sampling
+(lower parameter correlations, higher ESS, equal or better recovery),
+we know it's from the geometry. If we also removed t95_obs in the
+same step, any improvement could be from the geometry, the removed
+observation, or both — and we couldn't tell which.
+
+(Note: "Stage 1/2" here refers to the rollout stages of this
+proposal. The compiler's "Phase 1/Phase 2" (single-edge vs
+multi-edge inference, controlled by `is_phase2`) is a separate
+concept.)
 
 #### 11.8.2 The (m, a, r) coordinates
 
@@ -773,9 +806,9 @@ a = logit(onset / (onset + exp(mu)))
 r = log(expm1(Z_95 × sigma))       [= inverse_softplus(Z_95 × sigma)]
 ```
 
-This is exact and invertible. The model is mathematically identical
-to the current shifted lognormal — it is a coordinate transform of
-the sampling space, nothing more.
+This is exact and invertible. The coordinate transform is bijective:
+for any `(onset, mu, sigma)` with `onset ≥ 0` and `sigma > 0`, there
+is exactly one `(m, a, r)` and vice versa.
 
 **Algebraic verification of `mu = m - softplus(a)`**:
 
@@ -790,6 +823,18 @@ mu  = log(t50 - onset)
 This identity is critical: it avoids computing `t50 - onset` and
 taking its log (which would need a floor guard). The softplus path
 is smooth everywhere and gradient-friendly.
+
+**Prior shape caveat**: the coordinate transform is bijective, but
+the priors are not the image of the current priors under the
+transform. The current model uses `softplus(Normal)` for onset,
+`Normal` for mu, and `Gamma` for sigma. Three independent Normals on
+(m, a, r) have a different joint density even after accounting for
+the Jacobian. This is an unavoidable consequence of choosing
+tractable priors in the new coordinates. The prior *centres* are
+derived from the same analytic inputs, so the prior modes match, but
+the shapes differ. This is why we retain all observation terms in
+Stage 1 — the observations anchor the posterior regardless of the
+prior shape.
 
 #### 11.8.3 Why these coordinates are better
 
@@ -878,71 +923,48 @@ r_sigma = 0.5
   analytic estimate at ±1σ. Conservative; can be widened if the
   posterior is prior-dominated.
 
-**When t95_days is available**: it provides an independent data source
-for r. Two design options:
+These are tuning parameters for the regression to resolve.
 
-1. **Use t95_days to set r_prior** (preferred when t95 is trusted):
+#### 11.8.5 Interaction with existing model machinery
 
-   ```python
-   if (et.t95_days is not None
-           and float(et.t95_days) > t50_prior_days + 1e-6):
-       t95_prior_days = float(et.t95_days)
-       r_prior = math.log(
-           max((t95_prior_days - t50_prior_days)
-               / max(t50_prior_days - onset_prior_days, 0.25),
-               1e-6))
-   ```
+**Feature flag interaction**: `latency_reparam` implies both
+`latent_onset=true` and `latent_latency=true`. The (m, a, r)
+coordinates inherently make onset latent (onset = exp(m) × sigmoid(a)),
+so there is no meaningful "fixed onset with (m, a, r)" path. When
+either `latent_onset` or `latent_latency` is false, `latency_reparam`
+is ignored and the current Section 1 / Section 3 paths are used
+unchanged.
 
-   This replaces the sigma-derived r_prior with a t95-derived one.
-   When both t95_days and sigma_prior are available, t95_days is
-   preferred because it comes directly from the histogram tail rather
-   than via the analytic fit.
+```python
+use_reparam = (feat_latency_reparam
+               and feat_latent_onset
+               and feat_latent_latency)
+```
 
-2. **Retain t95 as an optional soft observation** on the derived
-   t95 Deterministic node. This provides extra anchoring from the
-   histogram without changing the sampling coordinates:
+**Section 1 (onset)**: for reparam edges, Section 1 skips onset
+variable creation (to avoid creating onset twice). However, Section 1
+still computes the onset observation metadata (onset_obs_mean,
+sigma_eff, n_eff, rho) and stashes it in a dict — these are pure
+data computations that don't depend on PyMC variables. The actual
+`pm.Normal("onset_obs_...")` call is deferred to Section 3, where
+it is attached to the derived onset Deterministic.
 
-   ```python
-   if et.t95_days is not None:
-       pm.Normal(f"t95_obs_{safe_id}",
-                 mu=t95_var, sigma=t95_sigma,
-                 observed=np.float64(et.t95_days))
-   ```
+**Section 3 (latency)**: for reparam edges, Section 3 creates the
+(m, a, r) latents, derives (onset, mu, sigma, t50, t95) as
+Deterministic nodes, then emits:
+- The deferred `pm.Normal("onset_obs_...")` on derived onset (using
+  pre-computed metadata from Section 1).
+- The existing `pm.Normal("t95_obs_...")` on derived t95 (unchanged
+  from current model — retained in Stage 1).
 
-   This is separate from the coordinate definition and can be
-   toggled independently.
+**onset_vars dict**: maps `edge_id → onset_var` as today. Under the
+reparam, onset_var is a `pm.Deterministic` derived from (m, a). The
+dict interface is unchanged — downstream code sees a tensor.
 
-The revised reference implementation (§11.8.10) uses option 1 for
-the prior and does not include a t95 observation. Option 2 can be
-added later if the regression shows the tail is under-constrained.
-
-#### 11.8.5 Interaction with existing onset machinery
-
-The current model has substantial onset infrastructure (§11.6):
-non-centred `eps_onset` parameterisation, per-retrieval onset
-observations, autocorrelation-corrected effective sample size
-(`model.py:449-530`). Under Proposal B, onset is derived from
-`(m, a)` rather than sampled directly.
-
-**The onset observations can still be used.** The derived onset
-`= exp(m) × sigmoid(a)` is a Deterministic node. Per-retrieval
-onset observations can be attached to it as `pm.Normal` observations
-exactly as today. The difference is that the gradient flows back
-through m and a rather than through eps_onset.
-
-**The non-centred onset parameterisation is replaced**, not adapted.
-Currently `eps_onset ~ N(0,1)` feeds through `softplus(prior + eps ×
-sigma)` to produce onset. Under Proposal B, onset is
-`exp(m) × sigmoid(a)` — the sampling coordinates are m and a, not
-eps_onset. The softplus non-centring trick is no longer needed because
-m and a are unconstrained reals (no positivity constraint to enforce
-on the sampling coordinates).
-
-**onset_vars dict**: currently maps `edge_id → onset_var` (a PyMC
-variable). Under Proposal B, onset_var is a `pm.Deterministic` node
-derived from m and a. The dict interface is unchanged — downstream
-code that reads `onset_vars[edge_id]` sees a tensor, doesn't care
-how it was produced.
+**Non-centred onset parameterisation**: replaced, not adapted. The
+`eps_onset` + `softplus` trick is no longer needed because m and a
+are unconstrained reals — no positivity constraint to enforce on the
+sampling coordinates.
 
 #### 11.8.6 Positivity and ordering constraints
 
@@ -953,27 +975,35 @@ All constraints are handled by the transform structure:
 - **t50 > onset**: `t50 - onset = exp(m) × sigmoid(-a)`, always
   positive.
 - **sigma > 0**: `sigma = softplus(r) / Z_95`, always positive.
+  (Note: softplus(r) can get arbitrarily close to zero for large
+  negative r. The prior on r keeps it in a reasonable range; no
+  floor clamp is applied.)
 - **t95 > t50**: `t95 - t50 = exp(r) × (t50 - onset)`, always
   positive (exp(r) > 0 and t50 > onset as above).
 
 No floor clamps, no gradient discontinuities, no ordering
 constraints to enforce. The transform is clean.
 
-#### 11.8.7 Files changed
+#### 11.8.7 Files changed (Stage 1)
 
 | File | Change | Scope |
 |------|--------|-------|
-| `model.py` §3 | Replace `pm.Normal("mu_lat_...")` + `pm.Gamma("sigma_lat_...")` + `eps_onset` + `softplus` with `pm.Normal("m_lat_...")` + `pm.Normal("a_lat_...")` + `pm.Normal("r_lat_...")`. Derive onset, mu, sigma, t50, t95 as `pm.Deterministic` nodes. | ~50 lines replaced |
-| `model.py` §3 | Prior arithmetic: compute `(m_prior, a_prior, r_prior)` from `(onset_prior, mu_prior, sigma_prior)`. Handle onset=0 case. Use t95_days for r_prior when available. | ~15 lines added |
-| `model.py` §3 | Onset observations block: repoint to derived onset Deterministic. Unchanged in structure. | ~5 lines changed |
-| `model.py` §3 | Remove t95 soft constraint block (`model.py:803-825`). t95 information enters through r_prior instead. | ~20 lines removed |
-| `inference.py` | Extraction of mu/sigma/onset unchanged (Deterministic nodes in trace). Add extraction of m/a/r for diagnostics (correlation checks). | ~10 lines added |
+| `model.py` §1 | Add `use_reparam` guard: skip onset variable creation for reparam edges. Pre-compute onset_obs metadata (mean, sigma_eff, n_eff, rho) and stash in dict for deferred use in §3. | ~15 lines changed |
+| `model.py` §3 | For reparam edges: replace `pm.Normal("mu_lat_...")` + `pm.Gamma("sigma_lat_...")` with three `pm.Normal` latents (m, a, r). Derive onset, mu, sigma, t50, t95 as `pm.Deterministic` nodes. | ~50 lines replaced |
+| `model.py` §3 | Prior arithmetic: compute `(m_prior, a_prior, r_prior)` from `(onset_prior, mu_prior, sigma_prior)`. Handle onset=0 case. | ~15 lines added |
+| `model.py` §3 | Emit deferred `pm.Normal("onset_obs_...")` on derived onset, using pre-computed metadata from §1. | ~15 lines added |
+| `model.py` §3 | Repoint `pm.Normal("t95_obs_...")` to derived t95 Deterministic. | ~3 lines changed |
+| `inference.py` | Extraction of mu/sigma/onset unchanged (Deterministic nodes in trace). Add extraction of m/a/r samples, compute pairwise correlations corr(m,a), corr(m,r), corr(a,r), include in diagnostics. | ~15 lines added |
+| `param_recovery.py` | Parse new correlation fields from inference diagnostics for regression reporting. | ~10 lines added |
 | `worker.py` | No change — consumes mu_mean, sigma_mean, onset_mean, etc. | 0 |
 | `types.py` | No change to `LatencyPosteriorSummary`. | 0 |
 | FE code | No change. | 0 |
 
 #### 11.8.8 What this does NOT address
 
+- **`latent_onset=true, latent_latency=false`** — the reparam only
+  activates when both flags are true. When either is false, the
+  current Section 1 / Section 3 paths are used unchanged.
 - **Phase 2 frozen latency** — Phase 2 freezes `(mu, sigma, onset)`
   as constants (`model.py:760-770`). This path doesn't sample
   anything, so the reparameterisation is irrelevant. No change needed.
@@ -989,9 +1019,19 @@ constraints to enforce. The transform is clean.
   would need the same reparameterisation for consistency. Can be
   deferred.
 
-#### 11.8.9 Validation plan
+#### 11.8.9 Validation plan (Stage 1)
+
+**Prerequisites** (must be implemented before validation runs):
+- `inference.py`: extract m/a/r samples from trace, compute
+  corr(m,a), corr(m,r), corr(a,r), emit in diagnostics output.
+- `param_recovery.py`: parse new correlation fields from diagnostics.
+  Without this, the headline success criteria are not measurable.
+
+**Validation steps**:
 
 1. Feature-flag the change (`latency_reparam`, default `false`).
+   Only activates when `latent_onset=true` AND
+   `latent_latency=true`.
 2. Run `param_recovery.py` on the 4 simple-chain synth graphs
    (simple-abc, mirror-4step, drift10d10d, drift3d10d) with the flag
    on. Key diagnostics:
@@ -1010,18 +1050,45 @@ constraints to enforce. The transform is clean.
 5. If onset=0 edges show pathological behaviour (a drifting to -∞),
    tighten `a_sigma` or add a mild `pm.Potential` penalty.
 
-#### 11.8.10 Reference implementation (reviewed)
+**Stage 1 success criteria**: corr(m, a) < |0.5| on at least 3 of 4
+synth graphs (vs current corr(onset, mu) ≈ 0.97), with no regression
+in parameter recovery.
 
-The following block replaces the Phase 1 onset + latency sections
-in `model.py` §3. It has been through two rounds of external review;
-review notes are recorded in §11.8.11.
+#### 11.8.10 Stage 2 (future, contingent on Stage 1)
+
+Only after Stage 1 is validated and merged:
+
+1. **Remove t95_obs**: fold t95 information into r_prior instead
+   of retaining the observation on derived t95. Use t95_days to set
+   r_prior when available (see prior code in §11.8.4); fall back to
+   sigma_prior-derived r_prior otherwise.
+
+2. **Tune prior widths**: the Stage 1 regression results will reveal
+   whether `a_sigma`, `r_sigma`, and `m_sigma` defaults are
+   appropriate. Adjust based on observed prior-posterior contraction.
+
+3. **Evaluate**: compare Stage 2 results against Stage 1 to measure
+   the effect of removing the t95 observation. If Stage 2 is worse,
+   keep Stage 1 as the final form.
+
+This staging ensures that Stage 1 is a clean geometry experiment —
+the only model difference from current is the prior shape (three
+independent Normals vs the current prior forms). All observation
+terms are retained.
+
+#### 11.8.11 Reference implementation (Stage 1)
+
+The following block replaces the onset + latency sections in
+`model.py` §3 for reparam edges. It retains both onset_obs and
+t95_obs on the derived Deterministic nodes.
 
 ```python
-# Proposal B: sample (m, a, r), derive onset/mu/sigma/t95.
+# Proposal B Stage 1: sample (m, a, r), derive onset/mu/sigma/t95.
+# All existing observations retained — geometry change only.
 #
 #   m = log(t50)
 #   a = logit(onset / t50)
-#   r = inverse_softplus(Z_95 * sigma) = log(exp(Z_95 * sigma) - 1)
+#   r = inverse_softplus(Z_95 * sigma)
 #
 # Exact back-transform:
 #   t50   = exp(m)
@@ -1031,7 +1098,7 @@ review notes are recorded in §11.8.11.
 #   t95   = onset + exp(mu + Z_95 * sigma)
 
 if is_phase2:
-    # unchanged
+    # unchanged — frozen from Phase 1 posterior
     frozen = phase2_frozen.get(edge_id, {})
     mu_frozen = frozen.get("mu", ev.latency_prior.mu)
     sigma_frozen = frozen.get("sigma", ev.latency_prior.sigma)
@@ -1041,19 +1108,17 @@ if is_phase2:
     latency_vars[edge_id] = (mu_var, sigma_var)
     diagnostics.append(
         f"  latency: {edge_id[:8]}… mu={mu_frozen:.3f}, "
-        f"sigma={sigma_frozen:.3f} → frozen (Phase 1)"
-    )
+        f"sigma={sigma_frozen:.3f} → frozen (Phase 1)")
 else:
     # ── Inputs from current analytic prior machinery ──
     onset_prior_days = max(lp.onset_delta_days, 0.0)
     mu_prior = ev.latency_prior.mu
     sigma_prior = ev.latency_prior.sigma
 
-    # ── Forward transform of current priors into (m, a, r) ──
+    # ── Forward transform into (m, a, r) coordinates ──
     t50_prior_days = onset_prior_days + _math.exp(mu_prior)
     m_prior = _math.log(t50_prior_days)
 
-    # Handle onset=0 without sending a_prior to -inf
     if onset_prior_days < 1e-6:
         a_prior = -5.0
     else:
@@ -1061,24 +1126,9 @@ else:
             onset_prior_days
             / (t50_prior_days - onset_prior_days))
 
-    # Prefer analytic t95 for r_prior when available;
-    # otherwise derive from sigma_prior.
-    if (et.t95_days is not None
-            and float(et.t95_days) > t50_prior_days + 1e-6):
-        t95_prior_days = float(et.t95_days)
-        r_prior = _math.log(
-            max((t95_prior_days - t50_prior_days)
-                / max(t50_prior_days - onset_prior_days,
-                      0.25),
-                1e-6))
-    else:
-        # inverse_softplus(Z_95 * sigma_prior)
-        r_prior = _math.log(_math.expm1(Z_95 * sigma_prior))
+    r_prior = _math.log(_math.expm1(Z_95 * sigma_prior))
 
     # ── Prior widths ──
-    # m_sigma: heuristic carry-over from current model
-    # (uses lognormal sigma as proxy for log-location
-    # uncertainty — not principled, but status quo).
     m_sigma = max(_mu_prior_sigma_floor, sigma_prior, 0.3)
     a_sigma = 2.0
     r_sigma = 0.5
@@ -1091,7 +1141,7 @@ else:
     r_lat = pm.Normal(
         f"r_lat_{safe_id}", mu=r_prior, sigma=r_sigma)
 
-    # ── Deterministic quantile / shape nodes ──
+    # ── Deterministic back-transform ──
     t50_var = pm.Deterministic(
         f"t50_lat_{safe_id}", pt.exp(m_lat))
     onset_frac_var = pm.Deterministic(
@@ -1116,77 +1166,93 @@ else:
         f"m_prior={m_prior:.3f}, a_prior={a_prior:.3f}, "
         f"r_prior={r_prior:.3f} "
         f"(a_sigma={a_sigma:.1f}, r_sigma={r_sigma:.1f})"
-        f" → latent")
+        f" → latent [reparam]")
 
-    # The existing onset-observation block (onset_obs,
-    # pm.Normal("onset_obs_...")) is kept unchanged,
-    # repointed to onset_var.
-    #
-    # The old t95 soft-constraint block is removed.
-    # t95 information enters through r_prior (or
-    # optionally via a pm.Normal on t95_var — see §11.8.4).
+    # ── Onset observations (deferred from §1) ──
+    # Pre-computed onset_obs metadata was stashed in
+    # _onset_obs_deferred[edge_id] during Section 1.
+    _deferred = _onset_obs_deferred.get(edge_id)
+    if _deferred is not None:
+        pm.Normal(
+            f"onset_obs_{safe_id}",
+            mu=onset_var,
+            sigma=_deferred["sigma_eff"],
+            observed=np.float64(_deferred["onset_obs_mean"]))
+        diagnostics.append(
+            f"  onset_obs: {edge_id[:8]}… "
+            f"mean={_deferred['onset_obs_mean']:.1f}d, "
+            f"σ_eff={_deferred['sigma_eff']:.2f}d → "
+            f"deferred from §1")
+
+    # ── t95 soft constraint (retained in Stage 1) ──
+    if et.t95_days is not None:
+        t95_analytic = float(et.t95_days)
+        sigma_t95 = max(t95_analytic * 0.2, 2.0)
+        pm.Normal(
+            f"t95_obs_{safe_id}",
+            mu=t95_var,
+            sigma=sigma_t95,
+            observed=np.float64(t95_analytic))
+        diagnostics.append(
+            f"  t95: {edge_id[:8]}… analytic={t95_analytic:.1f}d"
+            f" (σ_t95={sigma_t95:.1f}d) → soft constraint"
+            f" on derived t95")
 ```
 
-#### 11.8.11 Review notes
+#### 11.8.12 Review history
 
-**Round 1 review** (on initial draft):
+This proposal has been through three rounds of review. Key decisions
+and their rationale are recorded here for future reference.
 
-1. **`mu = m - softplus(a)` instead of `log(t50 - onset)`**: the
-   initial draft computed mu as `pt.log(pt.maximum(t50 - onset,
-   floor))`. The algebraic identity `mu = m - softplus(a)` is exact,
-   requires no floor constant, and has no gradient discontinuity.
-   Adopted in revised draft.
+**Round 1** (initial draft → revised draft):
 
-2. **sigma floor clamp removed**: the initial draft included
-   `pt.maximum(softplus(r) / Z_95, _sigma_floor)`. Since
-   `softplus(r) > 0` for all r, the floor never activates. Removing
-   it eliminates a gradient discontinuity and is consistent with
-   §11.8.6's claim of "no floor clamps". Adopted.
+1. **`mu = m - softplus(a)`**: replaces `log(max(t50 - onset, floor))`
+   — exact, no floor needed, gradient-friendly. Adopted.
+2. **sigma floor clamp removed**: `softplus(r) / Z_95` can approach
+   zero for large negative r, but the prior keeps r in range. No
+   floor applied. Adopted.
+3. **`a_sigma` widened 1.0 → 2.0**: with 1.0, onset=10% of t50 is
+   ~5σ from prior for onset=0 edges — unreachable. 2.0 makes it
+   ~2σ. Adopted.
+4. **`m_sigma` heuristic**: uses `sigma_prior` as proxy for
+   log-location uncertainty. Not principled, but carried over from
+   status quo. Labelled explicitly.
 
-3. **`a_sigma` widened from 1.0 to 2.0**: with a_sigma=1.0 and
-   a_prior=-5.0 (onset=0 case), reaching onset = 10% of t50
-   requires moving ~5σ from the prior — effectively impossible. The
-   current model allows onset to wander ~2 days from zero via
-   `softplus(0 + eps)`. With a_sigma=2.0, reaching that level of
-   onset fraction is ~2σ from the prior — reachable. Adopted.
+**Round 2** (external review of revised draft):
 
-4. **`m_sigma` heuristic acknowledged**: the use of `sigma_prior`
-   (lognormal sigma) as prior width on m is not principled — it
-   conflates the distribution's spread with uncertainty about its
-   location. Carried over from the current model as status quo.
-   Labelled explicitly. For edges with large sigma (≈ 1.5), m_sigma
-   may be too wide even if the analytic t50 is precise. The
-   regression will test this.
+5. **"Not a pure reparameterisation"**: correctly identified that
+   (a) the prior shape differs and (b) the original draft removed
+   t95_obs. Led to the staged approach — Stage 1 retains all
+   observations.
+6. **`latent_onset` / `latent_latency` flag interaction**: the
+   reparam derives onset inside the latency block, which would break
+   `latent_onset=true, latent_latency=false`. Resolved by requiring
+   both flags true for reparam activation.
+7. **Onset observation block placement**: the onset_obs machinery
+   lives in §1 before latency variables exist. For reparam edges,
+   metadata computation stays in §1 but the `pm.Normal` call is
+   deferred to §3. ~20 lines of refactoring, not ~5.
+8. **Validation instrumentation gap**: corr(m,a) and corr(m,r) need
+   to be emitted by inference.py and parsed by param_recovery.py.
+   Added to files-changed table.
+9. **sigma floor reasoning corrected**: softplus(r)/Z_95 *can*
+   approach zero; the prior on r is what keeps sigma reasonable, not
+   a mathematical impossibility.
 
-5. **`onset_frac_var` Deterministic retained**: diagnostic-only
-   (useful for prior-posterior contraction checks on a). Increases
-   trace size slightly per edge. Can be dropped if trace size
-   becomes a concern on larger graphs.
+**Round 3** (phasing discussion):
 
-6. **`t95_var` Deterministic retained**: enables direct posterior
-   predictive checks on the 95th percentile. Useful for diagnostics
-   and for the optional t95 observation (§11.8.4 option 2).
+10. **Stage 1 retains t95_obs**: the clean experiment is geometry
+    only. Removing t95_obs is a model change that should be evaluated
+    separately in Phase 2.
+11. **`latency_reparam` implies `latent_onset`**: there is no
+    meaningful "fixed onset + (m, a, r)" path. Fixing onset means
+    fixing a, which collapses the parameterisation.
+12. **No ablation plan needed for Phase 1**: because t95_obs is
+    retained and the only difference is geometry + prior shape,
+    Phase 1 *is* the clean experiment. Ablations are only needed if
+    Phase 2 (t95_obs removal) is pursued.
 
-**Round 2 review** (on revised draft):
-
-7. **m_sigma still includes sigma_prior in the max**: acknowledged
-   as heuristic. For high-dispersion edges (sigma ≈ 1.5), the prior
-   on m is wide even when the analytic t50 is precise. Monitor in
-   regression.
-
-8. **t95_var chains through three Deterministic nodes**: PyTensor
-   should optimise this. The direct form
-   `exp(m) × (1 + sigmoid(-a) × exp(r))` avoids the intermediate
-   graph but is less readable. Not worth doing unless compilation
-   time regresses.
-
-9. **a_sigma for edges with vs without onset observations**: the
-   onset observations attached to onset_var will tighten a's
-   posterior for edges with ≥3 retrievals. For edges without, 2.0
-   is all you have. Consider widening to 2.5–3.0 for those edges
-   if the regression shows a is prior-dominated.
-
-**Open tuning questions** (for regression to resolve):
+**Open tuning questions** (for Stage 1 regression to resolve):
 
 - `a_sigma`: 2.0 default, possibly 2.5–3.0 for edges without
   onset observations.
@@ -1197,37 +1263,44 @@ else:
 
 ### 11.9 Proposal A vs Proposal B: decision record
 
-| Criterion | Proposal A (onset, mu, raw_gap) | Proposal B (m, a, r) |
-|-----------|--------------------------------|----------------------|
+| Criterion | Proposal A (onset, mu, raw_gap) | Proposal B Phase 1 (m, a, r) |
+|-----------|--------------------------------|-------------------------------|
 | Onset-sigma ridge | Resolved | Resolved |
 | Onset-mu ridge | **Not addressed** | Resolved |
-| Implementation complexity | Low (~30 lines) | Moderate (~80 lines) |
-| Onset observation compatibility | Unchanged | Requires repointing to derived onset |
+| Observations retained | All | All (onset_obs + t95_obs repointed) |
+| Prior shape change | None | Yes (Normal×Normal×Gamma → Normal×Normal×Normal) |
+| Implementation complexity | Low (~30 lines) | Moderate (~80 lines + §1/§3 split) |
+| Feature flag interaction | None (onset stays in §1) | Requires `latent_onset ∧ latent_latency` guard |
 | onset=0 handling | No issue | Needs `a_prior = -5.0` regularisation |
-| Downstream changes | Zero | Zero (same Deterministic names) |
+| Downstream changes (inference/worker/FE) | Zero | Zero (same Deterministic names) |
 | Sampler geometry | One axis improved | All three axes improved |
 
-**Recommendation**: Proposal B. The onset-mu ridge is the more severe
-of the two ridges (§10.1 documents `corr(onset, mu) ≈ 0.97`). A
-reparameterisation that only addresses onset-sigma (Proposal A) leaves
-the harder problem untouched. Proposal B addresses both for moderate
-additional implementation cost.
+**Recommendation**: Proposal B Phase 1. The onset-mu ridge is the
+more severe of the two ridges (§10.1 documents
+`corr(onset, mu) ≈ 0.97`). A reparameterisation that only addresses
+onset-sigma (Proposal A) leaves the harder problem untouched.
+Proposal B Phase 1 addresses both ridges while retaining all
+observation terms, making it a clean geometry experiment.
 
 Proposal A is documented as a fallback if Proposal B encounters
 unexpected difficulties (e.g. the onset observation block interacts
 badly with the (m, a) derived onset).
 
-### 11.10 General recommendation (updated)
+### 11.10 Implementation roadmap
 
-1. **Proposal B (m, a, r) reparameterisation** (§11.8) — resolve both
-   the onset-mu and onset-sigma ridges in one change. Uses only prior
-   information we have today. Zero downstream changes.
+1. **Proposal B Stage 1** (§11.8.11) — geometry change only. Swap
+   sampling coordinates, retain all observations. Feature-flagged as
+   `latency_reparam`. Validate via regression (§11.8.9).
 
-2. **Option D** (graph-derived onset priors, §10.3) — can be layered
+2. **Proposal B Stage 2** (§11.8.10, contingent on Stage 1 success)
+   — optionally remove t95_obs, tune prior widths based on Stage 1
+   results. Evaluate separately.
+
+3. **Option D** (graph-derived onset priors, §10.3) — can be layered
    on as a tighter prior on `a` for edges where graph topology
-   constrains onset. Complementary, not competing.
+   constrains onset. Complementary to Proposal B, not competing.
 
-3. **Ex-Gaussian** (§11.3) — research track if the shifted lognormal
+4. **Ex-Gaussian** (§11.3) — research track if the shifted lognormal
    family proves fundamentally unsuitable despite reparameterisation.
 
 ### 11.7 Additional references

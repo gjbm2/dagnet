@@ -1,85 +1,26 @@
 # DagNet Release Notes
-## Version 1.10.3b
-**Released:** 13-Apr-26
+## Version 1.10.x Series (9-Apr-26 to 13-Apr-26)
+**Phase C tooling, CLI, and forecast generalisation prep**
 
-Significant behind-the-scenes work on Phsae C, tooling, and other aspects, ahead of forecast generalisation and Bayes ga
-
----
-
-## Version 1.10.2b
-**Released:** 9-Apr-26
-
-Further retrieveall performance diagnostics
+- **Headless CLI**: `param-pack` and `analyse` commands for full parameter extraction and analysis from the terminal. Same codepath as the browser. Multi-scenario, scalar extraction, disk bundle caching
+- Phase C slice pooling work (contexted compilation, per-slice Dirichlet emission, per-slice posterior extraction)
+- Retrieve-all performance diagnostics and fixes
+- Cohort maturity v1/v2 parity gate preparation
+- Various contract fixes between FE and BE
 
 ---
 
-## Version 1.10.0b
-**Released:** 9-Apr-26
+## Version 1.9.x Series (31-Mar-26 to 7-Apr-26)
+**Context segmentation, fan charts, Bayes quality gates**
 
-Along with many contract fixes, added cli support for analysis and param extraction
-
----
-
-## Version 1.9.20b
-**Released:** 7-Apr-26
-
-CohortMaturity fixes
-
----
-
-## Version 1.9.19b
-**Released:** 7-Apr-26
-
-Bayes completion now reports quality gate results (good/fair/poor/very poor) in the operations toast and session log. Poor/very poor results show amber warning that persists until dismissed. Deep integrity check now queries snapshot DB for coverage gaps across all plausible hashes (epoch variants + equivalence closures).
-
----
-
-## Version 1.9.18b
-**Released:** 6-Apr-26
-
-Improvements to retrieveall logic
-
----
-
-## Version 1.9.14b
-**Released:** 3-Apr-26
-
-Fix to retrieveall
-
----
-
-## Version 1.9.7b
-**Released:** 1-Apr-26
-
-Fix to dashboarda auto-pull
-
----
-
-## Version 1.9.5b
-**Released:** 1-Apr-26
-
-Most of the way to proper fancharts...just one cohort() defect to fix
-
----
-
-## Version 1.9.3b
-**Released:** 31-Mar-26
-
-Fixed exploding dsl issue
-
----
-
-## Version 1.9.1b
-**Released:** 31-Mar-26
-
-Integrity check for hash chain continuity
-
----
-
-## Version 1.9.0b
-**Released:** 31-Mar-26
-
-"Context support for event segemnts.
+- **Bayes quality gates**: Fit completion now reports quality tier results (good/fair/poor/very poor) in the operations toast and session log. Poor/very poor results show amber warning that persists until dismissed
+- **Deep integrity check**: Now queries snapshot DB for coverage gaps across all plausible hashes (epoch variants + equivalence closures)
+- **Context support for event segments**: Context-based data segmentation
+- **Hash chain integrity check**: Verifies signature continuity
+- Cohort maturity fan chart improvements (cohort mode mostly working)
+- Dashboard auto-pull fix
+- Retrieve-all logic improvements and fixes
+- DSL explosion fix
 
 ---
 
@@ -90,59 +31,16 @@ Integrity check for hash chain continuity
 
 ---
 
-## Version 1.8.16b
-**Released:** 28-Mar-26
+## Version 1.8.2b–1.8.16b (24-Mar-26 to 28-Mar-26)
+**Bayesian model surfacing, canvas minimise, gauge charts**
 
-Completeness fixes. F estimation improvements.
-
----
-
-## Version 1.8.14b
-**Released:** 27-Mar-26
-
-Good progress with model fits. Scenarios in views. Polish.
-
----
-
-## Version 1.8.13b
-**Released:** 26-Mar-26
-
-Persistent views, dashboard loops
-
----
-
-## Version 1.8.12b
-**Released:** 26-Mar-26
-
-minimise & maximise analysis objects. also tons of wasted effort with bayes that I'll nevre get back again
-
----
-
-## Version 1.8.10b
-**Released:** 25-Mar-26
-
-Gauge charts, dynamically from Bayes
-
----
-
-## Version 1.8.8b
-**Released:** 24-Mar-26
-
-Fixes to live share, Bayes run now working
-
----
-
-## Version 1.8.3b
-**Released:** 24-Mar-26
-
-Fixed lossless compression issue in model by clipping floors
-
----
-
-## Version 1.8.2b
-**Released:** 24-Mar-26
-
-Progress with Bayes toplogies, cohort maturity curves, BE/FE stats modelling
+- **Gauge charts**: Expectation gauge dynamically driven from Bayes posteriors
+- **Canvas minimise/maximise**: Analysis objects can be minimised to compact form
+- **Persistent views**: Dashboard loops with persistent view state
+- **Bayes model fits**: Progress with topologies, cohort maturity curves, BE/FE stats modelling
+- **Live share fixes**: Fixes to live share boot and hydration
+- Completeness fixes and forecast estimation improvements
+- Lossless compression fix (model clipping floors)
 
 ---
 

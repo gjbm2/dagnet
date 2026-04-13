@@ -124,6 +124,7 @@ export interface TabState {
     autoReroute?: boolean;
     snapToGuides?: boolean;
     useSankeyView?: boolean;
+    useDataValuesView?: boolean;
     showNodeImages?: boolean;
     confidenceIntervalLevel?: 'none' | '80' | '90' | '95' | '99';
     animateFlow?: boolean;

@@ -218,8 +218,41 @@ Logs are persisted to IndexedDB before any close, so the record is never lost. U
 
 ---
 
+## Nightly Bayesian Model Fitting
+
+Graphs with the `runBayes` flag enabled are automatically included in Bayesian model fitting after the daily retrieve-all completes.
+
+### How it works
+
+The daily automation pipeline extends to three phases when `runBayes` is enabled:
+
+1. **Phase 0 — Patch apply**: Any pending Bayesian result patches are applied and cascaded
+2. **Phase 1 — Fetch + Commission**: Pull latest → Retrieve All → Submit Bayes fit
+3. **Phase 2 — Drain**: Wait for Bayes results to arrive via webhook, apply patches, commit
+
+### Enabling runBayes
+
+Mark a graph for nightly Bayes fitting in the graph metadata. The flag is independent of the "Fetch daily" checkbox — you can have graphs that fetch daily without running Bayes, or vice versa (though running Bayes without fetching fresh data is less useful).
+
+### Prerequisites
+
+- The Python backend must be available (locally or via Modal deployment)
+- The graph must have edges with snapshot data (Bayes fits require evidence)
+- Credentials must be configured for webhook delivery (AES-GCM encrypted token)
+
+### Monitoring
+
+Bayes run progress and quality tier results (good/fair/poor/very poor) are reported in the Session Log and operations toast. Poor/very poor results show an amber warning.
+
+### Reconnect on browser reopen
+
+If the browser closes during a Bayes run, DagNet's reconnect mechanism (`reconcileBayesFitJob`) detects in-progress fits on the next session start and resumes polling for results.
+
+---
+
 ## Related documentation
 
 - **Developer**: `public/docs/dev/URL_PARAMS.md`
 - **Data retrieval**: `data-connections.md`
 - **Contexts and slicing**: `contexts.md`
+- **Forecasting settings**: `forecasting-settings.md` — includes `runBayes` flag and quality tier details

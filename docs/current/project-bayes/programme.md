@@ -5,29 +5,41 @@
 **Purpose**: Phased delivery plan for Project Bayes. This doc owns sequencing;
 design docs contain the detail.
 
-### Current status snapshot (10-Apr-26)
+### Current status snapshot (13-Apr-26)
 
 **Done**: Async infrastructure, Phase A–D compiler, FE overlay (basic
 + quality + model CDF + confidence bands), unified posterior schema,
-synthetic data generator + 10-graph param recovery suite, two-phase
-model architecture (posterior-as-prior), likelihood rewrite
-(DM→Binomial), endpoint BetaBinomial for rate estimation, onset
-observations, t95 soft constraint, posterior slice resolution (doc 25),
-Phase 2 join-node CDF fix, full warm-start wiring with quality guard,
-synth context data fix (`emit_context_slices` truth flag), unified
-MCMC κ estimation (journal 30-31-Mar-26), snapshot regime selection
-(doc 30 — BE+FE, 24+ tests), BE analysis subject resolution (doc 31),
-LOO-ELPD model adequacy scoring Phase 1 (doc 32), Bayes reconnect
-mechanism (doc 28 — 3-phase automation pipeline), Phase C slice
-pooling partial (slice routing, per-slice Dirichlet emission,
+synthetic data generator + 21-graph param recovery suite (11 uncontexted
++ 10 contexted), two-phase model architecture (posterior-as-prior),
+likelihood rewrite (DM→Binomial), endpoint BetaBinomial for rate
+estimation, onset observations, t95 soft constraint, posterior slice
+resolution (doc 25), Phase 2 join-node CDF fix, full warm-start wiring
+with quality guard, synth context data fix (`emit_context_slices` truth
+flag), unified MCMC κ estimation (journal 30-31-Mar-26), snapshot regime
+selection (doc 30 — BE+FE, 24+ tests), BE analysis subject resolution
+(doc 31), LOO-ELPD model adequacy scoring Phase 1 (doc 32), Bayes
+reconnect mechanism (doc 28 — 3-phase automation pipeline), Phase C
+slice pooling partial (slice routing, per-slice Dirichlet emission,
 per-slice posterior extraction), multi-hop cohort maturity Phase A
 substantially implemented (`cohort_forecast_v2.py`, span kernel,
-x_provider, `cohort_maturity_v2` analysis type registered FE+BE).
+x_provider, `cohort_maturity_v2` analysis type registered FE+BE),
+JAX backend as default (`gradient_backend='pytensor'`, anti-pattern 36),
+Phase 2 debug dump and `--phase2-from-dump` replay devtooling.
 
-**Synth regression**: 5/10 pass, 5/10 fail. Failures are onset
-convergence issues (pre-existing "Initial evaluation failed"), not
-κ-related. Mirror-4step, simple-abc, diamond, drift10d10d, drift3d10d
-pass.
+**Synth regression (uncontexted)**: 11/11 pass. All graphs converge
+cleanly (rhat<1.02, ESS>350, 98-100%). JAX backend is the default.
+Three graphs (fanout-test, mirror-4step, forecast-test) previously
+reported as FAIL — these were false alarms from zero-latency edges
+where the recovery tool expected latency params that the model
+correctly omits. Tool now fixed.
+
+**Synth regression (contexted)**: 10/10 run to completion. None achieve
+clean convergence (rhat 1.02–1.1, ESS 18–150, converged 58–80%).
+Per-slice p and mu recover well. Per-slice onset is universally pinned
+to the edge-level frozen value — this is by design (onset is edge-level
+only; per-slice onset RVs omitted due to onset-mu ridge). Stochastic
+risk present: `fanout-context` failed hard on one run (rhat=1.9) and
+recovered on the next. See doc 19 §6.2 for full per-graph results.
 
 **Dispersion (κ) recovery — synth-mirror-4step**:
 Phase 1 (window, step-day) and Phase 2 (cohort, entry-day) both
@@ -201,26 +213,31 @@ data-constrained. Single-source validation:
   Discovered 3-Apr-26 during exhaustive cohort() code trace.
 
 - **JAX gradient NaN on Phase 2 join-node graphs** — **RESOLVED
-  13-Apr-26**. Root cause: `gradient_backend='jax'` uses
+  13-Apr-26, deployed**. Root cause: `gradient_backend='jax'` uses
   `jax.value_and_grad()` on the forward pass, hitting `0 × inf` in
   deep erfc/softplus chains. Fix: `gradient_backend='pytensor'`
-  (symbolic gradients first, then JAX compile). See anti-pattern 36,
-  doc 39, compiler journal update 10.
+  (symbolic gradients first, then JAX compile). Now the default for
+  all graphs. See anti-pattern 36, doc 39, compiler journal update 10.
 
-- **Phase 2 onset_cohort drift on diamond-context** — **OPEN
-  13-Apr-26**. See compiler journal update 11. The Phase 2
-  `onset_cohort` variables drift 3-6 days above truth on edges
-  with composed path onset > 3 days. Consequence: `p_cohort`
-  overestimates to compensate (join-to-outcome: truth=0.50,
-  post=0.89). rhat=2.10, ESS=5 with 4 chains × 1000 draws — chains
-  stuck in different modes, NOT a number-of-draws issue. Root cause:
-  onset and mu can trade off while keeping t95 constant (the t95
-  soft constraint allows ±9 days of drift). Potential fixes:
-  (a) derive `path_onset_sd` from Phase 1 posterior instead of
-  fixed 0.1; (b) reparameterise onset multiplicatively;
-  (c) add joint onset+mu constraint that penalises the ridge
-  directly. Affects diamond, likely 3-way-join, lattice topologies.
-  Skip-context and fanout-context are unaffected (no deep paths).
+- **Per-slice onset not modelled** — **BY DESIGN, potential future
+  work**. Per-slice onset and sigma are edge-level only
+  (`model.py:1231-1233`); only mu varies per-slice. The onset-mu
+  ridge makes per-slice onset RVs unidentifiable with the current
+  parameterisation. Consequence: per-slice recovery MISSes wherever
+  the per-slice truth onset differs from the edge-level onset. This
+  is universal across all 10 contexted graphs, including the simplest
+  (context-solo, 1 edge). A quintile reparameterisation (naturally
+  orthogonal) is under investigation as a path to making per-slice
+  onset viable.
+
+- **Phase 2 onset_cohort drift on diamond-context** — **SUPERSEDED
+  by per-slice onset finding above**. The prior session's rhat=2.10
+  / ESS=5 failure was primarily caused by `gradient_backend='jax'`
+  (now fixed). With `'pytensor'`, diamond-context achieves
+  rhat=1.046, ESS=78, converged=78% — comparable to other contexted
+  graphs. The remaining onset drift is the same per-slice onset
+  pinning that affects all contexted graphs. Diamond is no longer
+  uniquely problematic.
 
 - **Phase 2 devtooling quality** — **OPEN 13-Apr-26**. The
   `--phase2-from-dump` flag and associated `param_recovery.py`

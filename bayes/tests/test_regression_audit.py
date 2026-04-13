@@ -326,6 +326,21 @@ class TestAssertRecoveryContracts:
             for failure in result["failures"]
         )
 
+    def test_zero_latency_edge_skips_mu_sigma_onset(self):
+        """Instant edges (mu=0, sigma=0, onset=0) should not require latency params."""
+        parsed = _base_parsed()
+        parsed["edges"]["instant-edge"] = {
+            "p": _recovered_param(0.80),
+        }
+        truth = {"edges": {"instant-edge": _truth_edge(p=0.80, mu=0, sigma=0, onset=0)}}
+
+        result = assert_recovery("synth-test", parsed, truth)
+
+        # Should pass — only p is expected for instant edges
+        assert not any(
+            "missing parsed recovery param" in f for f in result["failures"]
+        ), f"Unexpected failure: {result['failures']}"
+
     def test_missing_slice_rows_fail_for_contexted_truth(self):
         parsed = _base_parsed()
         parsed["edges"]["simple-a-to-b"] = {

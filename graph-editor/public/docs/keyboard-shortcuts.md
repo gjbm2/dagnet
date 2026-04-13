@@ -1,6 +1,6 @@
 # DagNet Keyboard Shortcuts
 
-**Version 1.1**
+**Version 2.0**
 
 ## Global Shortcuts
 
@@ -78,6 +78,19 @@
 | `Ctrl/Cmd + Shift + S` | Save All | Save all modified files |
 | `Ctrl/Cmd + Shift + N` | New Graph | Create new graph file |
 | `Ctrl/Cmd + Shift + O` | Open Recent | Show recently opened files |
+
+## Canvas Elements (New in 2.0)
+
+| Action | How to Use |
+|--------|-----------|
+| **Create Post-It** | Click Post-It tool in palette → click-drag on canvas to place |
+| **Create Container** | Click Container tool in palette → click-drag on canvas to place |
+| **Create Analysis** | Click Analysis tool in palette → click-drag on canvas to place |
+| **Minimise** | Right-click canvas object → Minimise (or use context menu) |
+| **Restore** | Click minimised object to restore |
+| **Escape** | Reverts any active creation tool back to Select mode |
+
+All creation tools auto-revert to Select after placement. Use **Elements** menu for keyboard-accessible creation (Elements > Add Post-It, Add Container, Add Analysis).
 
 ## Tips
 

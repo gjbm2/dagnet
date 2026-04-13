@@ -472,7 +472,7 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
                 cores=settings.get("cores"),
                 target_accept=_s_float("target_accept", "bayes_target_accept", "BAYES_TARGET_ACCEPT", 0.90),
                 random_seed=settings.get("random_seed"),
-                jax_backend=features.get("jax_backend", False),
+                jax_backend=features.get("jax_backend", True),
             )
 
             # Run Phase 2 MCMC (with numba fallback)
@@ -941,7 +941,7 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
             target_accept=_s_float("target_accept", "bayes_target_accept", "BAYES_TARGET_ACCEPT", 0.90),
             random_seed=settings.get("random_seed"),
             lowrank_mass_matrix=features.get("lowrank_mass_matrix", False),
-            jax_backend=features.get("jax_backend", False),
+            jax_backend=features.get("jax_backend", True),
         )
 
         progress.set_band(*P1_SAMPLE)

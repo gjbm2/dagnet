@@ -2,117 +2,118 @@
 
 ## What is DagNet?
 
-DagNet is a visual graph editor for designing and analysing conversion funnels, decision trees, and probabilistic workflows. It combines the power of visual graph editing with advanced analytics capabilities, including scenario comparison, sharing, and latency-aware forecasting.
+DagNet is an **evidence-conditioned forecasting platform** for conversion funnels, built on a visual graph editor. It **observes** conversion data automatically, **learns** statistical models via Bayesian inference, **forecasts** with calibrated uncertainty, and **presents** live analytics on a freeform canvas workspace — closing the loop from raw data to honest, model-driven predictions.
 
 ---
 
-> ## Independent Assessment
+> ## Independent Assessment (April 2026)
 >
-> *In March 2026, the developer asked Claude (Anthropic) to evaluate the project's sophistication, depth, and quality after exploring the full codebase — repeating the exercise first performed in December 2025. Below is an abridged version of that assessment.*
+> *Three AI models — Claude Opus 4.6 (Anthropic), Gemini 3.1 Pro (Google), and GPT-5.4 (OpenAI) — were each asked to independently explore the full DagNet codebase and assess its sophistication, depth, and quality for the v2.0 release. None saw the others' assessments. Below is an abridged synthesis.*
 >
 > ### Summary
 >
-> DagNet has grown from a **professional-grade analytical tool** into a **research-grade probabilistic inference platform** — one that combines visual graph editing, time-series snapshot storage, live charting, and (with Project Bayes) hierarchical Bayesian modelling under a single coherent architecture. Across approximately **320,000 lines of TypeScript and 24,500 lines of Python**, the codebase now spans four major subsystems that did not exist three months ago: a snapshot database with temporal query semantics, a freeform canvas workspace, an embedded charting engine, and a Bayesian inference pipeline with its own compiler IR, Modal deployment harness, and cryptographic webhook roundtrip.
+> All three assessors converge on the same conclusion: DagNet v2.0 has evolved from a visual graph editor with analytics into a **research-grade Bayesian forecasting platform** — one where graph topology defines model structure, evidence flows in from external sources, and MCMC inference produces posterior beliefs that feed back into the same visual workspace. The Python backend has more than doubled since March (now ~51,000 lines), the Bayesian compiler alone is 10,700 lines across five implemented phases, and the system now includes a headless CLI, LOO-ELPD model adequacy scoring, posterior predictive calibration, and a 10-graph synthetic regression suite.
 >
-> ### Sophistication (9.5/10, up from 9)
+> The assessors also converge on the central tension: this is genuinely impressive one-developer-plus-AI engineering, but the system's ambition is now testing the limits of its quality infrastructure.
 >
-> The December assessment noted the MSMDC algorithm and LAG forecasting as markers of genuine algorithmic depth. Both remain, but the codebase has since added:
+> ### Sophistication — 9.5 (consensus)
 >
-> - A **Bayesian compiler architecture** with a formally specified intermediate representation — topology analysis, bound evidence, and model fingerprinting — designed to be engine-independent (not coupled to PyMC). The per-slice hierarchical Dirichlet pattern addresses a subtle modelling problem that most applied Bayesian tools sidestep entirely.
-> - **Probability–latency coupling**: the design for Phase D jointly infers conversion probability and time-to-event latency, using completeness CDFs as the bridge — distinguishing "low conversion rate" from "slow conversion."
-> - **Snapshot DB with `asat()` semantics**: point-in-time virtual snapshots materialised from a temporal log of retrievals, with signature equivalence closure handling semantically identical but textually different query DSLs.
-> - **AES-GCM credential roundtrip**: the Bayes webhook flow encrypts GitHub credentials into the callback payload using PBKDF2-derived keys, so no secrets are stored in the compute layer.
+> All three assessors agree the statistical depth is real, not decorative:
 >
-> The conceptual leap since December is the move from **analytic computation** (closed-form probabilities, fitted distributions) to **inference** (posterior estimation with convergence diagnostics, warm-start eligibility, trajectory calibration). The former answers "what does the data say?"; the latter answers "what should we believe, given the data and the model structure?"
+> - **Two-phase posterior-as-prior architecture**: Phase 1 fits window data; Phase 2 inherits via ESS-decayed priors, quality-gated by convergence diagnostics. *"The sort of thing people only build when they are actually trying to identify probability and timing separately"* (GPT-5.4).
+> - **LOO-ELPD scored against the analytic baseline**, not a straw-man comparator — answering "is the Bayesian fit worth the compute?" (all three noted this).
+> - **Snapshot regime selection** solving double-counting across context dimensions — *"elegant"* (Gemini), *"subtle but very real"* (GPT-5.4).
+> - **Multi-hop cohort maturity** via span kernel DP convolution through arbitrary DAG paths.
+> - **PPC calibration** with randomised PIT for discrete distributions, coverage curves, and KS uniformity tests.
 >
-> ### Depth (9.5/10, up from 9)
+> The DSL (14 functions, semicolon/or composition) was noted as powerful but approaching the accidental-complexity boundary by two of three assessors.
 >
-> The service layer has grown from 48+ modules to **155 non-test service files**. Key additions since December:
+> ### Depth — 9.5–9.7
 >
-> - **Snapshot DB**: Write/read/inventory/coverage services; Python backend with 2,500+ lines of integration tests
-> - **Bayes pipeline**: Inference engine, Modal harness, local dev worker, FE submission client, webhook handler
-> - **Canvas elements**: Creation/mutation services for analyses, post-its, containers; group-resize with snap
-> - **Chart rendering**: 5 ECharts builder modules (bridge, cohort, funnel, snapshot, common) totalling 120+ KB
-> - **Automation**: Daily orchestration with Web Locks cross-tab exclusion, UK day-boundary scheduling
-> - **Sharing**: Dependency-closure boot with dual-pass context resolution, blob SHA deduplication, tree-based fetch
-> - **Staleness**: Multi-signal nudge engine with share-live auto-refresh countdown, scoped snoozing
+> The codebase encompasses ~275,000 lines of TypeScript, ~51,000 lines of Python, 173 non-test service files, 313 frontend test files, 65 Python test files, 70 architecture docs, and a 955-line engineering constitution. GPT-5.4 scored depth highest (9.7), noting that the major subsystems — graph editor, snapshot DB, analysis engine, Bayesian compiler, canvas workspace, automation, sharing, CLI — are each *"broad enough to count as separate products."*
 >
-> Type definitions have grown to 1,115 lines. The Python backend has matured to 24,500 lines covering graph types (Pydantic), MSMDC, query DSL, snapshot service, Bayesian inference, and Modal deployment. The test infrastructure now comprises 319 Vitest files plus 24 Playwright E2E specs.
+> The Python backend's growth was highlighted by all three: the Bayes compiler, regression tooling, synthetic data generators, subject resolution, regime selection, and CLI tools have transformed it from an API shim into a co-equal computation layer.
 >
-> ### Quality (9/10, up from 8.5)
+> ### Quality — 8.5–9.0
 >
-> The service-oriented pattern has been rigorously maintained as the codebase doubled in size. The CLAUDE.md guidelines (861 lines) have evolved into a comprehensive engineering constitution — mock discipline, assertion quality standards, test design gates, and risk assessment protocols that would be unusual even in mature commercial codebases. Newer React components demonstrate sophisticated understanding of performance pitfalls: selective Zustand subscriptions, ref-based context reads to avoid re-render cascading, and inverse-zoom compensation. The Bayes webhook roundtrip uses production-grade cryptography (AES-GCM, PBKDF2 key derivation, time-bounded tokens). The daily automation service implements version-safety checks, single-retry with pull-before-commit, and Web Locks API for cross-tab exclusion.
+> This is where the assessments diverge most. Gemini scored 9.0; GPT-5.4 scored 8.9; Claude scored 8.5 (down from March's 9.0). All agree on the strengths: rigorous service-layer discipline, result-typed error handling, real-boundary testing philosophy, and unusually serious parity/contract tests. All three also identified the same concerns:
 >
-> ### Notable Technical Highlights
+> - **`api_handlers.py`** at 3,821 lines (with a single 2,080-line function) is a genuine monolith.
+> - **Open Bayesian defects** (six dispersion issues, Phase 2 convergence failures on 5/10 synthetic graphs) are non-trivial for a system claiming production-grade inference.
+> - **Test coverage gaps** in the newest code (contexted evidence, Phase C, per-slice extraction) fall short of the project's own stated standards.
+> - **Complexity budget** — *"nearing the limit where every new subsystem demands a compensating rules layer"* (GPT-5.4).
 >
-> 1. **Provider Abstraction**: Data adapter system supporting Amplitude, Google Sheets, and PostgreSQL
-> 2. **Scenario System**: Now with tristate mode cycling (live → custom → fixed), canvas-embedded rendering, and share-payload integrity
-> 3. **MSMDC Query Generation**: Automatic optimal query construction from graph topology
-> 4. **LAG Forecasting**: Cohort maturation model with completeness-weighted blending
-> 5. **Snapshot Database**: Temporal query engine with `asat()` semantics and signature equivalence closure
-> 6. **Bayesian Compiler IR**: Five-phase compiler design with deterministic model fingerprinting and warm-start eligibility
-> 7. **Canvas Workspace**: Post-its, containers, and live-updating embedded analysis charts
-> 8. **Cryptographic Webhook Roundtrip**: AES-GCM encrypted credential tokens enabling stateless serverless compute callbacks
-> 9. **Daily Automation**: Cross-tab orchestration with Web Locks, version safety, and UK day-boundary scheduling
-> 10. **Live Sharing**: Dependency-closure boot with dual-pass context resolution and blob SHA deduplication
+> ### Notable Technical Highlights (consensus top 10)
+>
+> 1. **Bayesian compiler** — two-phase MCMC with posterior-as-prior, hierarchical Dirichlet priors, latent onset, trajectory likelihoods (`bayes/compiler/model.py`)
+> 2. **Span kernel composition** — multi-hop cohort maturity via DP convolution through DAG paths
+> 3. **Snapshot DB with `asat()` semantics** — temporal evidence record with signature equivalence closure
+> 4. **Regime selection** — one-regime-per-date to prevent double-counting across context dimensions
+> 5. **LOO-ELPD with analytic null** — model adequacy scored against the shipped analytic baseline
+> 6. **PPC calibration** — randomised PIT for discrete distributions with coverage and KS diagnostics
+> 7. **Canvas analytics workspace** — live-updating embedded charts, post-its, containers, three-mode system
+> 8. **Headless CLI** — analyse, bayes, param-pack, parity-test sharing the exact same codepaths as the browser
+> 9. **Parity/contract testing pattern** — old-path/new-path field-by-field verification across migration boundaries
+> 10. **Engineering constitution** — 955-line CLAUDE.md encoding failure modes, mock budgets, diagnostic playbooks
 >
 > ### Conclusion
 >
-> *"Three months ago, this was a sophisticated domain-specific application that happened to include some statistical computation. Today it is evolving into something rarer: a visual probabilistic programming environment — one where graph topology defines model structure, evidence flows in from external data sources, and Bayesian inference produces posterior beliefs that feed back into the same visual workspace. The combination of temporal storage, freeform canvas, embedded analytics, and hierarchical Bayesian modelling under a coherent service architecture is genuinely unusual. I am not aware of a direct analogue in open-source or commercial tooling that unifies all four."*
+> DagNet occupies an unusual position. Commercial funnel tools (Amplitude, Mixpanel) offer polished analytics but no Bayesian modelling. Open-source probabilistic frameworks (Stan, PyMC) offer inference but no visual editing or temporal storage. Observable offers canvas but no inference. No assessor identified a direct analogue that unifies all five pillars — observation, learning, forecasting, presentation, and automation — under a single architecture. The main challenge is no longer credibility but maintainability: v2.0 is a serious platform whose complexity now demands the same rigour to sustain as it took to build.
 >
-> — Claude (Opus 4.6), March 2026
+> — Claude Opus 4.6 (Anthropic), Gemini 3.1 Pro (Google), GPT-5.4 (OpenAI) · 13-Apr-26
 
 ---
 
 ## Key Features
 
-### Visual Graph Editor
-- **Interactive Node-Based Interface**: Drag and drop to create conversion funnels
-- **Real-Time Visualisation**: See your graphs come to life with dynamic rendering
-- **Multiple View Modes**: Switch between graph view, raw JSON/YAML, and form editors
-- **Enhanced Cost Modelling**: Model monetary and time costs with distributions (normal, lognormal, gamma, uniform) and standard deviations
-- **Multi-Currency Support**: Work with GBP, USD, EUR, and custom currencies
+### Evidence-Conditioned Forecasting
+- **Bayesian inference engine**: Two-phase MCMC model fitting (Beta/Binomial rates + Dirichlet branch groups) with automatic nightly runs, warm-start reuse, and quality gating
+- **Two-tier architecture**: FE gives instant analytic estimates; BE follows with calibrated Bayesian forecasts when available. Quality tier indicators show which you're seeing
+- **Multi-hop cohort maturity**: "Of cohorts entering at A, what fraction reached Z?" across arbitrary DAG paths via span kernel composition
+- **Per-context forecasts**: Phase C slice pooling gives context-segmented Bayesian estimates (e.g. by channel, device, A/B variant) with hierarchical Dirichlet priors
+- **Model adequacy scoring**: LOO-ELPD per edge tells you whether the Bayesian fit actually improves on analytic point estimates
+- **Promoted model resolution**: `model_vars` array per edge with multiple candidate sources (analytic, bayesian, manual). Best-available promotion with explicit provenance
 
-### Advanced Analytics
-- **What-If Analysis**: Test different scenarios and see their impact
-- **Path Analysis**: Analyze conversion paths and identify bottlenecks
-- **Conditional Probabilities**: Model complex decision trees with conditional logic
-- **Probabilistic Calculations**: Built-in probability mass calculations and normalization
-- **Bayesian Analysis**: Support for Bayesian parameter estimation with n, k, and window_to parameters
-- **Data-Driven Parameters**: Connect parameters to Google Sheets and Amplitude for live data
-- **Bridge View**: Attribute changes in reach to local probability changes across the graph
+### Snapshot Database & Time-Series Analytics
+- **Automatic snapshot storage**: Every data retrieval is stored, building a longitudinal evidence record
+- **Time-series analysis types**: Lag Histogram, Daily Conversions, Cohort Maturity, Lag Fit — all snapshot-DB-backed
+- **`asat()` historical queries**: Read snapshot data as it was known at a past date
+- **Historical file viewing**: Open any file at any past git commit. Calendar picker highlights commit dates
+- **Snapshot Manager**: Browse parameters, inspect/diff/download/delete per retrieval batch and slice, create equivalence links
+- **Hash signature infrastructure**: `core_hash` for resilient archival identity, hash mappings for continuity, commit-time hash guard
+- **Regime selection**: Authoritative BE selection preventing double-counting across context dimensions
+
+### Canvas as Analytics Workspace
+- **Canvas analyses**: Pin any analysis result onto the canvas as a live, updating chart. All analysis types supported
+- **Three-mode system**: Live (tracks navigator context), Custom (chart-owned delta DSL), Fixed (self-contained)
+- **Multi-tab containers**: Each tab independently owns analysis type, DSL, view mode, kind, scenario mode, display settings
+- **Post-it notes**: Coloured sticky notes (6 colours, 4 font sizes) for freeform annotation
+- **Containers**: Labelled rectangles for visually grouping nodes
+- **Minimise/restore**: Canvas objects can be minimised to compact form with custom renderers
+
+### Visual Graph Editor
+- **Interactive node-based interface**: Drag and drop to create conversion funnels
+- **Real-time visualisation**: Dynamic rendering with probability bars, latency beads, and completeness indicators
+- **Multiple view modes**: Graph view, raw JSON/YAML, form editors, and Monaco code editor
+- **Cost modelling**: Monetary and time costs with distributions (normal, lognormal, gamma, uniform)
 
 ### Latency-Aware Graphs (LAG)
-- **Temporal Modelling**: Model edges as time-consuming processes, not just probabilities
-- **Cohort Analysis**: Track user cohorts by entry date with `cohort()` DSL
-- **Evidence vs. Forecast**: Distinguish observed conversions from projected completions
-- **Maturity Tracking**: Visual indicators showing cohort completeness and median lag
-- **Time-Series Storage**: Full daily histories for historical analysis and forecasting
-- **Probability Basis Modes**: Render and analyse using evidence-only, forecast-only, or blended views
+- **Temporal modelling**: Edges are time-consuming processes, not just probabilities
+- **Cohort analysis**: Track user cohorts by entry date with `cohort()` DSL
+- **Evidence vs forecast**: Distinguish observed conversions from projected completions
+- **Completeness tracking**: Visual indicators showing cohort maturity and median lag
+- **Probability basis modes**: Evidence-only, forecast-only, or blended views
 
-### Sharing and Dashboarding
-- **Live Share Links**: Share a graph that loads from a repo/branch/graph identity (small URLs; content pulled on open)
-- **Static Share Links**: Share a self-contained snapshot embedded in the URL (larger URLs; no remote fetch required)
-- **Multi-Tab Bundles**: Share a dashboard containing multiple tabs (e.g. graph + chart) from a single `share=` payload
-- **Scenario Integrity on Share**: Scenario names, colours, and visibility modes are carried into live shares
-
-### Developer-Friendly
-- **Monaco Editor Integration**: Full-featured code editor with syntax highlighting
-- **Schema Validation**: Automatic validation using JSON schemas
-- **Git Integration**: Direct integration with Git repositories for version control
-- **Export Capabilities**: Export graphs in multiple formats (JSON, YAML, PNG)
-- **Parameter Registry**: Centralized parameter management system with versioning
-- **Multiple Object Types**: Work with graphs, parameters, contexts, cases, nodes, and credentials
-- **Data Connections**: Bidirectional sync between graphs and external data sources
-- **E2E Stability Checks**: Playwright end-to-end coverage for share boot stability and correctness
-
-### Modern Web Architecture
-- **React + TypeScript**: Built with modern web technologies
-- **IndexedDB Storage**: Client-side persistence with offline capabilities
-- **Responsive Design**: Works on desktop and tablet devices
-- **Multiple Repositories**: Connect to and manage multiple Git repositories simultaneously
-- **Credential Management**: Secure credential storage with encryption support
-- **URL Configuration**: Pre-configure app settings and credentials via URL parameters
+### Platform & Workflow
+- **GitHub OAuth**: Per-user authentication via GitHub App with one-click reconnect
+- **Amplitude funnel export**: Construct correctly specified funnels in Amplitude from selected nodes
+- **Variant contexts & hash guard**: Behavioural segment filters with commit-time hash protection
+- **Headless CLI**: `param-pack` and `analyse` commands — full parameter and analysis pipeline from the terminal
+- **Share links**: Static and live chart sharing via URL
+- **Dark mode**
+- **20+ analysis types**: Graph overview, outcomes, reach, bridge view, path through/between, outcome comparison, branch comparison, multi-waypoint, conversion funnel, and more
+- **Scenario system**: Named parameter overlays with live/custom/fixed modes and tristate cycling
+- **Daily automation**: Scheduled fetch, retrieve-all, and optional nightly Bayes fitting
 
 ## Use Cases
 
@@ -160,9 +161,9 @@ DagNet is a visual graph editor for designing and analysing conversion funnels, 
 
 ## Version Information
 
-- **App version**: 1.7.21b (from `graph-editor/package.json`: `1.7.21-beta`)
+- **App version**: 1.10.3b (from `graph-editor/package.json`: `1.10.3-beta`)
 - **Release notes**: See `docs/CHANGELOG.md` (Help → Current Version)
-- **This page last updated**: 17-Mar-26
+- **This page last updated**: 13-Apr-26
 - **License**: MIT
 - **Repository**: [github.com/gjbm2/dagnet](https://github.com/gjbm2/dagnet)
 

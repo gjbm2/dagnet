@@ -1,16 +1,18 @@
 # DagNet User Guide
 
-**Version 1.1** | [Changelog](CHANGELOG.md)
+**Version 2.0** | [Changelog](CHANGELOG.md)
 
 ## Getting Started
 
 ### What is DagNet?
 
-DagNet is a **temporal probability engine** disguised as a graph editor.
+DagNet is an **evidence-conditioned forecasting platform** built on a visual graph editor.
 
-While most analytics tools show you a static conversion rate ("45% of users convert"), DagNet answers the question that actually matters: **"When will they convert?"**
+It answers the question that actually matters about your conversion funnel: **"What's actually happening, and what should I expect?"** — with calibrated confidence, automatically, every day.
 
-With version 1.0 (Project LAG), every edge in your graph can model not just *probability* but *latency* — the time it takes for users to complete each step. This transforms your funnel from a snapshot into a **flow simulation**.
+DagNet **observes** (every data retrieval is stored, building a longitudinal evidence record), **learns** (a Bayesian inference engine fits statistical models nightly), **forecasts** (conditioned on fitted models, with honest uncertainty bands), and **presents** (live charts and analytics on a freeform canvas workspace).
+
+Every edge in your graph models not just *probability* but *latency* — the time it takes for users to complete each step. Where Bayesian posteriors are available, forecasts are conditioned on real evidence with calibrated uncertainty. Where they're not, analytic estimates provide instant results.
 
 ### First Steps
 
@@ -407,6 +409,148 @@ You can open any file (graph, parameter, case, event, node, or context) as it wa
 **From the Snapshot Manager:**
 - The "View graph at DATE" button opens the historical version of the graph closest to a signature's creation date
 - It also injects an `asat(DATE)` clause into the graph's DSL query, so you see historical data with the historical graph structure
+
+## Bayesian Model Fitting
+
+DagNet includes a Bayesian inference engine that automatically fits statistical models to your conversion data. When enabled, this produces posterior distributions with calibrated uncertainty — replacing point estimates with honest forecasts.
+
+### How It Works
+
+The Bayesian compiler fits models in **two phases**:
+
+1. **Phase 1 (window mode)**: Fits per-edge conversion rates and latency using Beta/Binomial likelihoods at step-day granularity
+2. **Phase 2 (cohort mode)**: Reuses Phase 1 posteriors as priors and fits cohort-level rates with Dirichlet/Binomial likelihoods at branch groups
+
+When context-segmented data is available, **Phase C** (slice pooling) fits hierarchical Dirichlet priors that produce per-context posterior distributions while sharing strength across slices.
+
+### Triggering a Bayes Run
+
+- **Manual**: Right-click a graph → **Run Bayes** to submit a fit for the current graph
+- **Automatic**: Enable the `runBayes` flag on a graph to include it in nightly automation. After the daily data fetch completes, Bayes fits are submitted automatically
+
+### Quality Tiers
+
+After a Bayes run completes, each edge receives a **quality tier** based on MCMC diagnostics:
+
+| Tier | Meaning |
+|------|---------|
+| **Good** | Converged, adequate effective sample size |
+| **Fair** | Minor convergence warnings |
+| **Poor** | Convergence issues — use with caution |
+| **Very poor** | Failed convergence — results unreliable |
+
+Quality tiers are shown in the Bayesian Posterior Card (click the Bayes indicator on an edge), in the operations toast when a fit completes, and in the session log. Poor/very poor results show an amber warning that persists until dismissed.
+
+### Model Source Preference
+
+Each edge can have multiple candidate model sources in its `model_vars` array:
+
+- **Analytic**: From the FE statistics pass (instant, always available)
+- **Bayesian**: From MCMC posterior fitting (higher quality, requires a completed run)
+- **Manual**: From user override
+
+The `model_source_preference` setting (per-edge or graph-level) controls which source is promoted to the active `p.mean`/`p.stdev`. Options: `best_available` (default — prefers Bayesian if available), `bayesian`, `analytic`, `manual`.
+
+### Two-Tier Forecasting
+
+DagNet uses a **two-tier architecture** for forecasting:
+
+1. **FE quick pass**: The frontend analytics pass provides instant results using analytic estimates. Always available, even offline
+2. **BE follow-up**: When the Python backend is reachable and Bayesian posteriors exist, a higher-quality MC-based forecast replaces the FE estimate, conditioned on snapshot evidence
+
+The UI indicates which tier you're seeing via a quality indicator on each edge and analysis result.
+
+### Model Adequacy (LOO-ELPD)
+
+After fitting, DagNet computes **LOO-ELPD** (Leave-One-Out Expected Log Predictive Density) per edge. This measures whether the Bayesian model actually improves on analytic point estimates:
+
+- **Positive ΔELPD**: The Bayesian model adds value
+- **Negative ΔELPD**: The analytic estimate is better — the model may be overfitting or misspecified
+
+LOO-ELPD results appear in the **Forecast Quality overlay**, the **Edge Info Model tab**, and the **PosteriorIndicator** popover.
+
+### Confidence Bands
+
+On cohort maturity charts, Bayesian posteriors produce **confidence bands** — shaded regions showing the credible interval around the model curve. Configurable via the `bayes_band_level` display setting: off, 80%, 90%, 95%, or 99%.
+
+---
+
+## Canvas Workspace
+
+The graph canvas is a freeform analytics workspace where live charts, annotations, and grouping sit alongside conversion nodes.
+
+### Canvas Analyses (Charts on Canvas)
+
+Pin any analysis result directly onto the canvas as a live, updating chart:
+
+- **Drag from analytics panel**: Drag a chart preview from the sidebar and drop onto the canvas
+- **Draw on canvas**: Click the chart tool in the tools palette, then click-drag a rectangle
+- **Blank chart**: Create via the tools palette or Elements > Add Analysis; configure in Properties
+
+Canvas analyses support three modes:
+
+| Mode | Behaviour |
+|------|-----------|
+| **Live** | Tracks the navigator's query context. Updates automatically when the graph changes |
+| **Custom** | Chart-owned DSL composed onto the live base. Keeps your custom query while inheriting scenario changes |
+| **Fixed** | Fully self-contained. Frozen in time — does not update |
+
+### Multi-Tab Containers
+
+Each canvas analysis can have multiple tabs. Each tab independently owns its analysis type, DSL, view mode, kind, scenario mode, and display settings. Drag tabs between containers.
+
+### Post-It Notes
+
+Coloured sticky notes on the canvas for freeform annotation. Six colours, four font sizes. Double-click to edit text inline.
+
+### Containers
+
+Labelled rectangles for visually grouping nodes. Drag a container and all enclosed nodes move with it.
+
+### Minimise / Restore
+
+Canvas objects can be minimised to a compact form. Custom minimised renderers are available for bridge view and expectation gauge analyses.
+
+---
+
+## Headless CLI
+
+DagNet includes a command-line interface for running parameter extraction and analysis without a browser.
+
+### `param-pack`
+
+Extract parameter packs from disk-based graph and parameter files:
+
+```bash
+bash graph-ops/scripts/param-pack.sh <graph-name> <query-dsl> [options]
+```
+
+### `analyse`
+
+Run any analysis type from the terminal:
+
+```bash
+bash graph-ops/scripts/analyse.sh <graph-name> <query-dsl> --type <analysis-type> [options]
+```
+
+Both commands use the same codepath as the browser. They support multi-scenario, scalar extraction, and disk bundle caching. See `graph-ops/playbooks/cli-param-pack.md` and `graph-ops/playbooks/cli-analyse.md` for full reference.
+
+---
+
+## Multi-Hop Cohort Maturity
+
+DagNet can answer "of cohorts entering at A, what fraction reached Z?" across arbitrary DAG paths — not just adjacent edges. The **span kernel** composes per-edge lag distributions into a path-level arrival model via dynamic-programming convolution through the DAG.
+
+To use multi-hop cohort maturity:
+
+1. Select the start and end nodes of your path
+2. Open the Analytics panel
+3. Choose **Cohort Maturity** as the analysis type
+4. The chart shows the full path maturity trajectory with model curve and confidence bands
+
+This works for chains, branching paths, and fan-in topologies.
+
+---
 
 ## Tips and Best Practices
 

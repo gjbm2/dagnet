@@ -2918,6 +2918,7 @@ export default function ConversionEdge({
                 onMouseLeave={data?.scenarioOverlay ? undefined : handleTooltipMouseLeave}
                 onMouseDown={data?.scenarioOverlay ? undefined : handleEdgeMouseDown}
                 viewOverlayMode={viewOverlayMode}
+                useDataValuesView={viewPrefs?.useDataValuesView}
               />
             );
           })()}

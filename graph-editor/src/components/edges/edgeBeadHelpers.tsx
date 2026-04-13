@@ -329,7 +329,7 @@ function getProbabilityBeadValueForLayer(
   scenariosContext: any,
   getScenarioVisibilityMode?: (scenarioId: string) => ScenarioVisibilityMode,
   whatIfDSL?: string | null
-): { value: number; stdev?: number; prefix?: string; isDerived?: boolean } {
+): { value: number; stdev?: number; prefix?: string; isDerived?: boolean; layerN?: number; layerK?: number } {
   // Mode selection is per-layer (scenario). Default is F+E which uses p.mean.
   const mode: ScenarioVisibilityMode = getScenarioVisibilityMode?.(layerId) ?? 'f+e';
 
@@ -397,6 +397,18 @@ function getProbabilityBeadValueForLayer(
     return undefined;
   })();
 
+  // Layer population: prefer observed evidence.n, fall back to forecast population (p.n)
+  const layerN: number | undefined =
+    (typeof pForLayer?.evidence?.n === 'number' ? pForLayer.evidence.n : undefined)
+    ?? (typeof pForLayer?.n === 'number' ? pForLayer.n : undefined)
+    ?? (typeof fallbackP?.evidence?.n === 'number' ? fallbackP.evidence.n : undefined)
+    ?? (typeof fallbackP?.n === 'number' ? fallbackP.n : undefined);
+
+  // Observed conversions (integer from data source — use directly when available)
+  const layerK: number | undefined =
+    (typeof pForLayer?.evidence?.k === 'number' ? pForLayer.evidence.k : undefined)
+    ?? (typeof fallbackP?.evidence?.k === 'number' ? fallbackP.evidence.k : undefined);
+
   // Mean/stdev basis (for F+E mode)
   const mean =
     typeof pForLayer?.mean === 'number' ? pForLayer.mean
@@ -419,7 +431,8 @@ function getProbabilityBeadValueForLayer(
           value: basis.value,
           stdev: typeof evidenceMean === 'number' ? evidenceStdev : stdev,
           prefix: 'E',
-          isDerived: derivedFlag
+          isDerived: derivedFlag,
+          layerN, layerK
         };
       }
     }
@@ -431,7 +444,8 @@ function getProbabilityBeadValueForLayer(
           value: basis.value,
           stdev: typeof forecastMean === 'number' ? forecastStdev : stdev,
           prefix: 'F',
-          isDerived: derivedFlag
+          isDerived: derivedFlag,
+          layerN, layerK
         };
       }
     }
@@ -441,7 +455,8 @@ function getProbabilityBeadValueForLayer(
     return {
       value: (typeof forecastMean === 'number' ? forecastMean : mean) ?? 0,
       stdev: typeof forecastMean === 'number' ? forecastStdev : stdev,
-      prefix: 'F'
+      prefix: 'F',
+      layerN, layerK
     };
   }
 
@@ -449,7 +464,8 @@ function getProbabilityBeadValueForLayer(
     return {
       value: (typeof evidenceMean === 'number' ? evidenceMean : mean) ?? 0,
       stdev: typeof evidenceMean === 'number' ? evidenceStdev : stdev,
-      prefix: 'E'
+      prefix: 'E',
+      layerN, layerK
     };
   }
 
@@ -457,7 +473,7 @@ function getProbabilityBeadValueForLayer(
   // p.stdev now incorporates completeness uncertainty when the BE topo
   // pass has run (doc 29 Phase 2 — improved p_sd flows through
   // model_vars[analytic_be] → applyPromotion → p.stdev).
-  return { value: mean ?? 0, stdev };
+  return { value: mean ?? 0, stdev, layerN, layerK };
 }
 
 function getEdgeCostGBPForLayer(
@@ -664,7 +680,8 @@ export function buildBeadDefinitions(
   scenarioColours: Map<string, string>,
   whatIfDSL?: string | null,
   visibleStartOffset?: number, // Distance from path start to visible start (after chevron)
-  getScenarioVisibilityMode?: (scenarioId: string) => ScenarioVisibilityMode
+  getScenarioVisibilityMode?: (scenarioId: string) => ScenarioVisibilityMode,
+  useDataValuesView?: boolean
 ): BeadDefinition[] {
   if (!scenariosContext || !graph) {
     console.warn('[buildBeadDefinitions] Missing scenariosContext or graph');
@@ -813,7 +830,7 @@ export function buildBeadDefinitions(
     beadType: 'probability',
     checkExists: () => true, // Every edge has probability
     extractFromLayer: (layerId) => {
-      const { value, stdev, prefix, isDerived } = getProbabilityBeadValueForLayer(
+      const { value, stdev, prefix, isDerived, layerN, layerK } = getProbabilityBeadValueForLayer(
         layerId,
         edge,
         graph,
@@ -821,9 +838,17 @@ export function buildBeadDefinitions(
         getScenarioVisibilityMode,
         whatIfDSL
       );
+      if (useDataValuesView && layerN !== undefined && layerN > 0) {
+        // Use real observed k when available, otherwise derive from rate × n
+        const k = (layerK !== undefined) ? layerK : Math.round(value * layerN);
+        const n = Math.round(layerN);
+        return { value: `${k}/${n}` as any, prefix, isDerived };
+      }
       return { value, stdev, prefix, isDerived };
     },
-    buildLabel: BeadLabelBuilder.buildProbabilityLabel,
+    buildLabel: useDataValuesView
+      ? BeadLabelBuilder.buildDataValuesLabel
+      : BeadLabelBuilder.buildProbabilityLabel,
     backgroundColor: '#000000',
     hasParameterConnection: !!(edge as any).p?.id,
     // IMPORTANT: this must reflect *all* override flags under `edge.p` (including latency overrides),

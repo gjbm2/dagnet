@@ -2025,7 +2025,7 @@ export async function runStage2EnhancementsAndInboundN(
             );
             if (beEntries.length > 0 && finalGraph?.edges) {
               let applied = 0;
-              for (const { edgeUuid, conditionalIndex, entry, completenessStdev } of beEntries) {
+              for (const { edgeUuid, conditionalIndex, entry, beScalars } of beEntries) {
                 const edge = finalGraph.edges?.find((e: any) => e.uuid === edgeUuid || e.id === edgeUuid);
                 if (!edge) continue;
                 if (conditionalIndex != null) {
@@ -2036,28 +2036,55 @@ export async function runStage2EnhancementsAndInboundN(
                   }
                 } else if (edge.p) {
                   upsertModelVars(edge.p, entry);
-                  // Write completeness_stdev to latency block (doc 29 Phase 2)
-                  if (completenessStdev != null && edge.p.latency) {
-                    edge.p.latency.completeness_stdev = completenessStdev;
+                  // Write BE-computed scalars to edge (doc 29 Phase 2).
+                  // The BE uses the promoted model resolver and produces
+                  // better values than the FE topo pass. These overwrite
+                  // the FE's initial estimates.
+                  if (beScalars && edge.p.latency) {
+                    if (beScalars.completeness != null) edge.p.latency.completeness = beScalars.completeness;
+                    if (beScalars.completeness_stdev != null) edge.p.latency.completeness_stdev = beScalars.completeness_stdev;
+                    if (beScalars.mu != null) edge.p.latency.mu = beScalars.mu;
+                    if (beScalars.sigma != null) edge.p.latency.sigma = beScalars.sigma;
+                    if (beScalars.t95 != null) edge.p.latency.promoted_t95 = beScalars.t95;
+                    if (beScalars.path_t95 != null) edge.p.latency.promoted_path_t95 = beScalars.path_t95;
+                    if (beScalars.onset_delta_days != null) edge.p.latency.promoted_onset_delta_days = beScalars.onset_delta_days;
+                    if (beScalars.path_mu != null) edge.p.latency.path_mu = beScalars.path_mu;
+                    if (beScalars.path_sigma != null) edge.p.latency.path_sigma = beScalars.path_sigma;
+                    if (beScalars.path_onset_delta_days != null) edge.p.latency.path_onset_delta_days = beScalars.path_onset_delta_days;
+                    if (beScalars.median_lag_days != null) edge.p.latency.median_lag_days = beScalars.median_lag_days;
+                    if (beScalars.mean_lag_days != null) edge.p.latency.mean_lag_days = beScalars.mean_lag_days;
+                  }
+                  if (beScalars) {
+                    // Probability scalars
+                    if (beScalars.blended_mean != null) edge.p.mean = beScalars.blended_mean;
+                    if (beScalars.p_sd != null) edge.p.stdev = beScalars.p_sd;
+                    // Forecast
+                    if (beScalars.p_infinity != null) {
+                      if (!edge.p.forecast) edge.p.forecast = {};
+                      edge.p.forecast.mean = beScalars.p_infinity;
+                    }
+                    // Evidence rate (don't overwrite — FE evidence from actual data is authoritative)
                   }
                   applied++;
                 }
               }
-              // Log completeness_stdev for edges that received it
-              const edgesWithCStdev = beEntries.filter(e => e.completenessStdev != null);
-              if (edgesWithCStdev.length > 0 && batchLogId) {
-                const sample = edgesWithCStdev.slice(0, 5).map(e => {
+              // Log BE scalars applied to edges
+              const edgesWithBE = beEntries.filter(e => e.beScalars != null);
+              if (edgesWithBE.length > 0 && batchLogId) {
+                const sample = edgesWithBE.slice(0, 5).map(e => {
                   const edge = finalGraph.edges?.find((ed: any) => ed.uuid === e.edgeUuid || ed.id === e.edgeUuid);
                   const edgeId = edge?.id || e.edgeUuid.substring(0, 12);
-                  const feC = edge?.p?.latency?.completeness;
-                  const fePct = feC != null ? (feC * 100).toFixed(1) : '?';
-                  const sdPct = (e.completenessStdev! * 100).toFixed(1);
-                  return `${edgeId}: completeness=${fePct}% (FE), stdev=±${sdPct}% (BE)`;
+                  const be = e.beScalars!;
+                  const cPct = be.completeness != null ? (be.completeness * 100).toFixed(1) : '?';
+                  const sdPct = be.completeness_stdev != null ? `±${(be.completeness_stdev * 100).toFixed(1)}%` : '';
+                  const pMean = be.blended_mean != null ? ` p=${(be.blended_mean * 100).toFixed(1)}%` : '';
+                  const pSd = be.p_sd != null ? `±${(be.p_sd * 100).toFixed(1)}%` : '';
+                  return `${edgeId}: c=${cPct}%${sdPct}${pMean}${pSd}`;
                 });
-                sessionLogService.addChild(batchLogId, 'info', 'COMPLETENESS_STDEV',
-                  `Completeness uncertainty computed for ${edgesWithCStdev.length} edges`,
+                sessionLogService.addChild(batchLogId, 'info', 'BE_FORECAST_SCALARS',
+                  `BE forecast scalars applied to ${edgesWithBE.length} edges`,
                   sample.join(', '),
-                  { edgesWithStdev: edgesWithCStdev.length, sample });
+                  { edgesApplied: edgesWithBE.length, sample });
               }
 
               if (applied > 0) {
