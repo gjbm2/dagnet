@@ -1,7 +1,7 @@
 # Project Bayes — Document Index
 
-**Last updated**: 12-Apr-26
-**Verified against codebase**: 12-Apr-26
+**Last updated**: 13-Apr-26
+**Verified against codebase**: 13-Apr-26
 
 For sequencing, priorities, and current status snapshot, see
 [programme.md](programme.md).
@@ -21,7 +21,7 @@ For sequencing, priorities, and current status snapshot, see
 | 27 | [27-fit-history-fidelity-and-asat-posterior.md](27-fit-history-fidelity-and-asat-posterior.md) | **Design only** | Types (`FitHistoryEntry`), settings (`max_days=100`) | `worker.py` does not write to `fit_history`. No archival, no asat() reconstruction |
 | 29 | [29-generalised-forecast-engine-design.md](29-generalised-forecast-engine-design.md) | **Partial** (10-Apr-26) | Phase A infrastructure landed: `compose_path_maturity_frames` (`span_evidence.py`), `compose_span_kernel` (`span_kernel.py`), `XProvider` (`cohort_forecast.py`), `cohort_maturity_v2` registered FE+BE, `cohort_forecast_v2.py` (1000+ lines). Steps 1–3 building blocks exist as Phase A code | `ForecastState` contract (Step 1) not yet a standalone type. `evaluate_forecast_at_tau` scalar helper (Step 3) not extracted. Unified basis resolver (Step 2) not started. Generalisation to non-cohort-maturity consumers (Steps 4–6) not started |
 | 29b | [29b-span-kernel-operator-algebra.md](29b-span-kernel-operator-algebra.md) | **Reference** | Companion design stress-test for doc 29. Operator algebra implemented in `span_kernel.py` | n/a |
-| 29c | [29c-phase-a-design.md](29c-phase-a-design.md) | **Substantially implemented** (10-Apr-26) | `cohort_forecast_v2.py` (1000+ lines): span kernel integration, x_provider, fan computation. `span_evidence.py`: evidence frame composition. `span_kernel.py`: conditional kernel. `span_adapter.py`: adapter layer. `cohort_maturity_v2` registered as analysis type FE+BE. Parity tests in `test_doc31_parity.py` | Single-hop parity gate (A.4) and multi-hop acceptance tests (A.5) need formal pass confirmation |
+| 29c | [29c-phase-a-design.md](29c-phase-a-design.md) | **Substantially implemented** (10-Apr-26). **Single-hop parity PASSED 13-Apr-26** | `cohort_forecast_v2.py` (1000+ lines): span kernel integration, x_provider, fan computation. `span_evidence.py`: evidence frame composition. `span_kernel.py`: conditional kernel. `span_adapter.py`: adapter layer. `cohort_maturity_v2` registered as analysis type FE+BE. Parity tests in `test_doc31_parity.py` | Multi-hop acceptance tests (A.5) — parallel quality work |
 | 29d | [29d-phase-b-design.md](29d-phase-b-design.md) | **Design only** | — | Depends on Phase A parity gate. Not yet implemented |
 | 30 | [30-snapshot-regime-selection-contract.md](30-snapshot-regime-selection-contract.md) | **Substantially implemented** (10-Apr-26) | BE `select_regime_rows()` + `CandidateRegime` + `mece_dimensions`, FE `candidateRegimeService.ts` (`buildCandidateRegimes`), 24+ tests (12 unit + 6 integration + DB integration), wired into analysis prep + Bayes trigger | FE preflight removal (Phase 5), Bayes evidence binder regime tests (RB-001-005) |
 | 30b | [30b-regime-selection-worked-examples.md](30b-regime-selection-worked-examples.md) | **Reference** | Companion to doc 30 | n/a |

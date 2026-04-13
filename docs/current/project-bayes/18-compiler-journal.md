@@ -8,6 +8,101 @@ Entries are reverse-chronological (newest first).
 
 ---
 
+## 13-Apr-26 (update 10): Phase 2 JAX init failure — root cause and workaround
+
+### Context
+
+Diamond-context Phase 2 model (74 free, 19 observed, 18 potentials) fails
+during nutpie initialisation with JAX backend: `RuntimeError: All
+initialization points failed — Could not initialize state because of bad
+initial gradient`. Phase 1 completes successfully (~13 min).
+
+### Root cause
+
+Two `eps_onset_cohort` variables (edges `31c26576` path-b-to-join and
+`395d3cb6` gate-to-path-b) have NaN autodiff gradients through JAX at the
+default init point (x=0). The **numerical gradient is finite and healthy**
+(~49 and ~89 respectively), confirming the model is mathematically correct.
+
+The NaN is JAX-specific. Numba backend computes the same gradient correctly
+and samples the Phase 2 model without issue. The root cause is somewhere in
+JAX's backward pass through pytensor's compiled computation graph — possibly
+in `pad` operations emitted by pytensor for array indexing, or in the `erfc`
+gradient chain when the CDF underflows to exact 0.
+
+### What was investigated
+
+1. **erfc underflow hypothesis**: At young ages (< composed path onset
+   of 5.9 days), the shifted lognormal CDF is 0.0 exactly. `erfc(-z)`
+   for z < -27 underflows to 0.0 in float64. Added `Z_ERFC_FLOOR = -25`
+   clamp before erfc — **did not fix** the NaN, though the clamp is
+   retained as a correctness safeguard.
+
+2. **Trajectory interval sentinel index hypothesis**: The interval
+   decomposition uses `-1` as a sentinel for first intervals, remapped
+   to index 0 via `prev_safe = np.where(prev_idx >= 0, prev_idx, 0)`.
+   JAX's `pad` backward pass through this gather-with-sentinel produces
+   NaN. Tried two alternative patterns:
+   - Prepend zero to CDF array and shift indices +1
+   - Point prev to curr_idx for first intervals, zero via numpy mask
+   
+   **Neither fixed the NaN**. The NaN persists through all four
+   interval decomposition sites.
+
+3. **Feature flag isolation**: Disabling `cohort_latency=False` eliminates
+   the NaN (no `onset_cohort` variables in the model). Disabling
+   `overdispersion` or `latency_dispersion` does not help. The NaN is
+   specifically from the cohort latency path.
+
+4. **Numba backend**: Phase 2 compiles (180s) and samples (33s for
+   100 draws / 50 tune / 2 chains) without issue. The model is correct;
+   the NaN is purely a JAX autodiff artefact.
+
+### Workaround
+
+For Phase 2 on diamond-context (and likely other join-node graphs with
+deep path onsets), fall back to numba backend. The 180s compilation penalty
+is acceptable as a temporary measure.
+
+Added `--phase2-from-dump` flag to test_harness.py to skip Phase 1 and
+load artefacts from the debug dump directory directly. This enables
+iterating on Phase 2 without re-running the 13-min Phase 1 MCMC.
+
+### Alternatives not taken
+
+**Full log-CDF refactor (Option B)**: Restructure the trajectory likelihood
+to work in log-CDF space using an asymptotic series expansion of
+`log(erfc(t))` for the deep tail (same approach as `jax.scipy.special.log_ndtr`
+and `scipy.special.log_ndtr`). This would eliminate all erfc underflow
+issues and produce clean gradients. However:
+- Requires restructuring `delta_F = CDF_curr - CDF_prev` into
+  `log(exp(log_cdf_curr) - exp(log_cdf_prev))` via `logsubexp`
+- Touches the core of every trajectory potential (4 code paths)
+- High regression risk for a change that may not even fix the actual
+  NaN (which appears to be in `pad`, not `erfc`)
+- The correct fix requires first identifying the exact JAX op that
+  produces the NaN, which we have not yet done
+
+**PyMC's `normal_lcdf`**: Already implements stable log-CDF via `erfcx`,
+but `pt.erfcx` has no JAX dispatch — would require `tfp-nightly`.
+
+### Pending work
+
+- Investigate the exact JAX op producing NaN (deeper JAX tracing needed)
+- Re-implement JAX backend for Phase 2 once root cause is found
+- The 180s numba compile vs ~20s JAX compile is a 9x penalty
+
+### Debug artefact dump — VERIFIED WORKING
+
+The `NameError` fix (`graph_name` → `payload.get('graph_id', 'unknown')`)
+and try/except wrapper in worker.py were validated by the diamond-context
+run. Dump files at `/tmp/bayes_debug-graph-synth-diamond-context/`:
+phase2_frozen.json (7KB), evidence.pkl (1MB), topology.pkl (4.5KB),
+settings.json (4KB). These artefacts enabled all offline Phase 2
+debugging without re-running Phase 1.
+
+---
+
 ## 12-Apr-26 (update 9): JAX backend — M3 compilation fix validated
 
 ### Context

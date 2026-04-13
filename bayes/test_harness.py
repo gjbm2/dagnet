@@ -406,6 +406,11 @@ def main():
                              "'window(12-Dec-25:21-Mar-26);cohort(12-Dec-25:21-Mar-26)'")
     parser.add_argument("--diag", action="store_true",
                         help="Enable extra diagnostics: PPC calibration (doc 36).")
+    parser.add_argument("--phase2-from-dump", type=str, default=None, metavar="PATH",
+                        help="Skip Phase 1 entirely: load topology, evidence, and "
+                             "phase2_frozen from a debug dump directory (created by "
+                             "a previous run). Runs Phase 2 model build + MCMC directly. "
+                             "e.g. --phase2-from-dump /tmp/bayes_debug-graph-synth-diamond-context")
     parser.add_argument("--clean", action="store_true",
                         help="Clear __pycache__ dirs under bayes/ and graph-editor/lib/ "
                              "so no stale bytecode masks source edits.")
@@ -712,8 +717,37 @@ def main():
             timeout_s = max(expected_sample_s * 3, 120)  # 3x expected or at least 2 min
         print(f"  Timeout: {timeout_s}s (expected sampling: {expected_sample_s}s)")
 
+        # --- Phase 2 from dump: skip payload construction entirely ---
+        _skip_payload_construction = False
+        if args.phase2_from_dump:
+            print(f"\n  PHASE 2 FROM DUMP: {args.phase2_from_dump}")
+            print(f"  Skipping hash computation, synth gate, pre-flight.")
+            payload = {
+                "graph_id": graph_id,
+                "graph_snapshot": graph,
+                "parameter_files": {},
+                "parameters_index": {},
+                "settings": {},
+            }
+            # Merge CLI settings
+            settings = payload.setdefault("settings", {})
+            if feature_flags:
+                settings.setdefault("features", {}).update(feature_flags)
+            settings["phase2_from_dump"] = args.phase2_from_dump
+            if args.draws:
+                settings["draws"] = args.draws
+            if args.tune:
+                settings["tune"] = args.tune
+            if args.chains:
+                settings["chains"] = args.chains
+            if args.cores:
+                settings["cores"] = args.cores
+            if args.settings_json:
+                settings.update(_load_settings_json(args.settings_json))
+            _skip_payload_construction = True
+
         # --- Synth data gate: verify DB has rows, bootstrap if needed ---
-        if graph_name.startswith("synth-"):
+        if graph_name.startswith("synth-") and not _skip_payload_construction:
             from synth_gen import verify_synth_data
             _vsd = verify_synth_data(graph_name, data_repo_path)
             if _vsd["status"] in ("missing", "stale"):
@@ -818,6 +852,8 @@ def main():
             settings["cores"] = args.cores
         if args.diag:
             settings["run_calibration"] = True
+        if args.phase2_from_dump:
+            settings["phase2_from_dump"] = args.phase2_from_dump
         if args.settings_json:
             settings.update(_load_settings_json(args.settings_json))
 
@@ -891,7 +927,8 @@ def main():
         _print(f"  [{pct:3d}%] {elapsed:6.1f}s  {stage}: {detail}")
 
         # Early abort: if sampling estimate exceeds 3x expected
-        if stage == "sampling" and "minutes remaining" in detail:
+        # Skip when timeout_s == 0 (--no-timeout / --timeout 0).
+        if stage == "sampling" and "minutes remaining" in detail and timeout_s > 0:
             try:
                 mins = int(detail.split("—")[1].strip().split()[0])
                 if mins * 60 > expected_sample_s * 3 and pct < 10:

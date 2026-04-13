@@ -1,6 +1,7 @@
 # DagNet v2.0 — Milestone Release Plan
 
 **Date**: 10-Apr-26
+**Revised**: 13-Apr-26 — Block 0.1 passed, reframed Block 0 as parallel
 **Status**: Draft — for review
 **Branch**: `feature/snapshot-db-phase0`
 
@@ -203,15 +204,16 @@ alongside conversion nodes.
 
 ## Remaining work to ship v2.0
 
-### Block 0: Phase A parity gate (critical path entry)
+### Block 0: Phase A parity gate ~~(critical path entry)~~ — PASSED / parallel
 
-| # | Work | Est | Risk |
-|---|------|-----|------|
-| 0.1 | Single-hop parity gate: `cohort_maturity` v1 vs v2 on adjacent subjects, field-by-field, real graph data | S (0.5–1d) | Low — code exists |
-| 0.2 | Multi-hop acceptance tests: evidence parity across topologies, forecast convergence (τ→∞ → span_p), frontier conditioning | M (2–3d) | Med — first real multi-hop exercise |
-| 0.3 | Fix issues surfaced, promote `cohort_maturity_v2` as default | ? (0–3d) | Buffer — debugging MC simulator if parity fails |
+| # | Work | Est | Status |
+|---|------|-----|--------|
+| 0.1 | Single-hop parity gate: `cohort_maturity` v1 vs v2 on adjacent subjects, field-by-field, real graph data | S (0.5–1d) | **PASSED 13-Apr-26** — window and cohort modes |
+| 0.2 | Multi-hop acceptance tests: evidence parity across topologies, forecast convergence (τ→∞ → span_p), frontier conditioning | M (2–3d) | Parallel quality work — does not block engine extraction |
+| 0.3 | Promote `cohort_maturity_v2` as default | S (0.5–1d) | Parallel — can happen any time after 0.1 |
 
-**Block total: 3–7d.** Risk concentrated in 0.3.
+**Block 0 no longer gates the critical path.** 0.1 passed; 0.2 and
+0.3 are quality improvements that run in parallel with Block 1.
 
 ### Block 1: Generalised forecast engine (core new work)
 
@@ -252,14 +254,24 @@ The 1,154-line file gets smaller, not duplicated.
 
 ### Block 4: Nightly Bayes + Phase C (parallel with Blocks 1–3)
 
+**Bayes GA depends on completing Phase C.** Phase C is currently
+**blocked** on Phase 2 div-by-zero issues in the JAX backend —
+diamond-context models fail at init with bad gradients (likely
+`log(0)` or `0/0` in the mixture CDF hazard decomposition). See
+handover `12-Apr-26-jax-backend-contexted-compilation.md` for details.
+The debug artefact dump has a `NameError` that must be fixed before
+the root cause can be investigated.
+
 | # | Work | Est | Notes |
 |---|------|-----|-------|
+| 4.0 | **Phase 2 div 0 fix** — fix debug artefact `NameError`, then diagnose and fix Phase 2 init failure on diamond-context models (JAX and numba) | M (2–4d) | **BLOCKER for Phase C GA.** Not JAX-specific — model construction issue |
 | 4.1 | Nightly Bayes production test — enable `runBayes` on real graph, verify end-to-end | S (1d) | Operational, not coding. May surface env issues |
 | 4.2 | Phase C test suite + RB-001–005 regime tests — ~6 test classes, compiler type fixtures | M (3–4d) | No existing test infrastructure for this |
 | 4.3 | Per-slice visualisation in FE (minimum viable: Edge Info Model tab shows per-context breakdown) | S–M (1–2d) | Data already flows via patch service |
 | 4.4 | Dispersion defects (doc 33): synth rerun to measure impact → fix endpoint double-counting and non-exhaustive prior if material | S–M (1–3d) | Fix only if production impact confirmed |
 
-**Block total: 6–10d (parallel with critical path).**
+**Block total: 8–14d (parallel with critical path). Phase 2 div 0
+(4.0) is the gating item for Bayes GA.**
 
 ### Block 5: FE improvements
 
@@ -285,9 +297,10 @@ Small user-facing improvements included in the v2.0 scope.
 ### Critical path
 
 ```
-Block 0 (parity) → Block 1 (extract engine) → Block 2 (consumers) → Block 3 (two-tier) → Block 6 (ship)
+Block 1 (extract engine) → Block 2 (consumers) → Block 3 (two-tier) → Block 6 (ship)
                                                       ↑
-                          Block 4 (nightly + Phase C) ─┘  [parallel]
+                          Block 0 (parity quality)  ──┘  [parallel]
+                          Block 4 (nightly + Phase C) ─┘  [parallel — Phase 2 div 0 gates Bayes GA]
                           Block 5 (FE improvements)   ─┘  [parallel]
 ```
 
@@ -295,17 +308,19 @@ Block 0 (parity) → Block 1 (extract engine) → Block 2 (consumers) → Block 
 
 | Block | Scope | Days (full) | Days (1.4 deferred) | Critical path? |
 |-------|-------|-------------|---------------------|----------------|
-| **0** Phase A parity | 3 items | 3–7 | 3–7 | Yes — gate |
+| **0** Phase A parity | 3 items | 0.1 done; 1–4 remaining | 1–4 | No — parallel |
 | **1** Forecast engine | 5 items | 9–13 | 6–8 | Yes |
 | **2** Wire consumers | 3 items | 5–8 | 5–8 | Yes |
 | **3** Two-tier FE/BE | 3 items | 3–4 | 3–4 | Yes |
-| **4** Nightly + Phase C | 4 items | 6–10 | 6–10 | Parallel |
+| **4** Nightly + Phase C | 5 items | 8–14 | 8–14 | Parallel — but Phase 2 div 0 gates Bayes GA |
 | **5** FE improvements | 3 items | 3–4 | 3–4 | Parallel |
 | **6** Release polish | 2 items | 5–6 | 5–6 | Yes (tail) |
-| | | **34–52** | **31–47** | |
+| | | **34–53** | **31–48** | |
 
-**Critical path (sequential): 0→1→2→3→6 = 25–38d full, 22–33d with 1.4 deferred.**
-**Parallel work (Blocks 4+5) absorbed into critical path duration.**
+**Critical path (sequential): 1→2→3→6 = 22–33d full, 19–26d with 1.4 deferred.**
+**Parallel work (Blocks 0+4+5) absorbed into critical path duration.**
+**Bayes GA blocker**: Phase 2 div 0 in Block 4.0 must be resolved for
+contexted models to ship.
 
 ---
 
@@ -336,6 +351,8 @@ These are important but do not block the v2.0 milestone.
   parameter files, and workflows continue to work unchanged.
 - Not feature-complete for Bayes. Phase B (x provider), topology
   signatures, and the full FE stats deletion follow in v2.1+.
+  **Bayes GA depends on completing Phase C** — currently blocked on
+  Phase 2 div-by-zero issues in the JAX backend (Block 4.0).
 
 The version number reflects the magnitude of what has been built —
 five major capability pillars that collectively transform what DagNet

@@ -585,6 +585,29 @@ After completing a fix that required more than one attempt, or that required und
 
 **How to propose**: tell the user *"This fix revealed that [subsystem] works differently than documented — I'd like to update [doc name] with [brief description]. OK?"* Then make the edit if approved. Small, targeted updates to existing docs are preferred over new docs.
 
+### Devtool and Logging Integrity (BLOCKING — no workarounds)
+
+**CRITICAL**: Devtools and logging machinery are the agent's eyes. A broken devtool doesn't just affect one task — it degrades every future session that depends on it. A broken logging pipeline means the agent is blind to everything and *won't know it's blind* because the tool runs without error, producing incomplete or wrong output.
+
+**What counts as infrastructure** (not an exhaustive list):
+
+- **Log streaming pipeline**: `debug/tmp.browser-console.jsonl`, `debug/tmp.session-log.jsonl`, `debug/tmp.python-server.jsonl`, the mirroring code that writes to them, mark injection into all three streams
+- **Log extraction and diagnostics**: `scripts/extract-mark-logs.sh`, graph snapshot capture (`debug/graph-snapshots/`)
+- **Session log service**: `sessionLogService.ts` — levels, thresholds, `startOperation`/`endOperation` lifecycle, viewer rendering
+- **Test harnesses**: `bayes/test_harness.py`, `bayes/param_recovery.py`, `bayes/synth_gen.py`, synthetic builders in `bayes/tests/synthetic.py`
+- **Graph-ops scripts**: `graph-ops/scripts/*.sh` (parity, validation, param-pack, analyse)
+- **Any script the agent is told to run** as part of a diagnostic or verification step
+
+**Rule 1 — Broken infrastructure is a blocking issue.** If you discover that a devtool or logging component is defective — not just inconvenient, but producing wrong results, missing data, or failing — treat it as a **blocking issue**. Do not work around it. Do not patch over the symptom. Fix it properly or escalate to the user immediately. A workaround that makes a broken tool *look* like it works is worse than a hard failure, because it silently corrupts every downstream diagnosis.
+
+**Rule 2 — Correctness, not minimality.** For feature code, the rule is "smallest change that accomplishes the intent." For infrastructure, the standard is **full correctness**. A minimal patch to a broken diagnostic tool means the tool looks like it works but still lies to you. If the proper fix is larger than a patch, do the proper fix. If you can only patch, say so explicitly: *"This is a patch, not a proper fix. The tool is still broken because [reason]. A proper fix requires [scope]."*
+
+**Rule 3 — No silent workarounds.** If you find yourself working around an infrastructure limitation — manually parsing output that a script should handle, skipping a verification step because a tool crashes, reading raw JSONL because the extraction script returns wrong results — you must **immediately flag it**: *"I'm working around a defect in [tool]. This should be fixed properly — here's what's wrong: [root cause]. Shall I fix the tool now?"* The workaround must be visible, not silent. Silent workarounds accumulate across sessions and nobody notices until the tool is deeply broken.
+
+**Rule 4 — Logging fidelity is non-negotiable.** Log streams and session logs are the primary evidence source for debugging sync, state, and data-flow issues. If a log stream is missing entries, writing to the wrong file, dropping marks, producing malformed JSONL, or silently swallowing errors, that is not a minor issue — it is equivalent to a test harness that passes broken code. Fix it with the same urgency you would fix a test that produces false passes.
+
+**Why this section exists**: agents repeatedly encounter broken devtools and treat them as background friction — applying a minimal patch or simply working around the breakage. This accumulates: each session leaves the tool slightly more broken, each workaround is invisible to the next session, and eventually the tool is so degraded that it actively misleads. The pattern is: patch, patch, patch, catastrophic misdiagnosis. The fix is: treat infrastructure breakage as urgent, not incidental.
+
 ## Testing Standards
 
 ### Philosophy: fewer tests, real boundaries, zero tolerance for mock-driven false confidence

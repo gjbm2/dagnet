@@ -185,21 +185,10 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
     if (stalenessNudgeService.isSnoozed('git-pull', pullScope, Date.now(), storage)) return;
     if (isNonBlockingPullActive()) return;
 
-    // Dashboard mode: use remote-wins pull to avoid surfacing conflicts
-    // on an unattended terminal. Same strategy as handleStalenessAutoPull.
-    if (isDashboardMode) {
-      repositoryOperationsService.pullLatestRemoteWins(repository, branch).then(() => {
-        stalenessNudgeService.clearDismissedRemoteSha(repository, branch, storage);
-        if (retrieveDue) {
-          jobSchedulerService.run('retrieve-nudge');
-        }
-      }).catch((err) => {
-        console.warn('[useStalenessNudges] dashboard remote-wins pull failed:', err);
-      });
-      return;
-    }
-
     startNonBlockingPull({
+      // Dashboard mode: auto-resolve conflicts as remote-wins (unattended terminal).
+      // Shorter countdown (3s) since nobody is watching to veto.
+      ...(isDashboardMode && { remoteWins: true, countdownSeconds: 3 }),
       repository,
       branch,
       remoteSha: detectedRemoteSha,

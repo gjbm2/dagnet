@@ -5,9 +5,8 @@
 on deeper understanding of the pipeline injection point, two-tier FE/BE
 delivery, and the structural difference between window and cohort modes.
 Phase A material (§Generalised Cohort Maturity below) unchanged.
-**Status**: Phase A infrastructure (span kernel, x_provider, evidence
-composition, `cohort_maturity_v2`) substantially implemented — see doc
-29c. Generalised forecast engine (this section) is design only.
+**Status**: see §Implementation Status below for what exists as code
+vs what is design only.
 
 ## Motivation
 
@@ -17,6 +16,53 @@ components to allow generalised forecasting across the app — edge cards,
 overlays, surprise gauge, cohort maturity, and future consumers should
 all draw from a single forecast engine rather than maintaining parallel
 implementations.
+
+---
+
+## Implementation Status (12-Apr-26)
+
+### Already built
+
+| Component | Location | Status |
+|-----------|----------|--------|
+| Span kernel (DP convolution, all topologies) | `runner/span_kernel.py` | Implemented. Includes `mc_span_cdfs` for per-draw reconvolution. |
+| Evidence composition (multi-hop) | `runner/span_evidence.py` | Implemented. Handles branching at x, fan-in at y. |
+| Span adapter (kernel → edge_params bridge) | `runner/span_adapter.py` | Implemented. Transitional — target is direct kernel consumption. |
+| x_provider (upstream arrival model) | `runner/cohort_forecast.py`, `cohort_forecast_v2.py` | Implemented. Three-tier carrier hierarchy (parametric, empirical, weak prior). |
+| v2 row builder (factorised X_x + K_{x→y}) | `runner/cohort_forecast_v2.py` | Implemented (1154 lines). Full MC fan bands, IS conditioning, D/C split. |
+| `cohort_maturity_v2` analysis type | FE + BE registered | Implemented. Parallel handler in `api_handlers.py`. |
+| Completeness computation (point estimate) | `runner/forecast_application.py` | Implemented. `compute_completeness()` — single CDF evaluation. |
+| Blend formula (evidence + model) | `runner/forecast_application.py` | Implemented. `annotate_data_point()` — per-point blend. |
+| FE topo pass (aggregate CDF completeness) | `statisticalEnhancementService.ts` | Implemented. n-weighted CDF, path-anchored override in cohort mode. |
+| BE topo pass (parity computation) | `stats_engine.py` via `/api/lag/topo-pass` | Implemented. Mirrors FE computation. |
+| Model vars infrastructure | `modelVarsResolution.ts`, `bayesPatchService.ts` | Implemented. Multi-source (analytic, analytic_be, bayesian, manual), quality gates, promotion. |
+| Posterior slice resolution | `posteriorSliceResolution.ts` | Implemented. Edge ← window(), path ← cohort() routing. |
+| p.evidence.stdev (binomial sampling) | `evidenceForecastScalars.ts` | Implemented. `sqrt(p(1-p)/n)`. Correct for E-mode display. |
+
+### Not yet built (design only in this document)
+
+| Component | Status |
+|-----------|--------|
+| `ForecastState` contract (Pydantic) | Design only. Fields defined in this doc. |
+| Promoted model resolver (unified) | Design only. Currently scattered across 4 locations. |
+| Completeness with uncertainty (`completeness_sd`) | Design only. Requires sampling from latency dispersions. |
+| `rate_conditioned_sd` / `rate_unconditioned_sd` | Design only. Composed uncertainty from p + completeness. |
+| Two-tier FE/BE delivery of ForecastState | Design only. Pattern exists for topo pass; not yet applied to ForecastState. |
+| Graph-wide topo pass with per-node arrival caching | Design only. Propagation engine scoped to ForecastState scalars. |
+| Surprise gauge migration to ForecastState | Design only. Currently ~400 lines of independent computation. |
+| Edge card migration to ForecastState | Design only. Currently ~500 lines of scattered annotation. |
+| `cohort_maturity_v3` (clean-room engine consumer) | Design only. v2 frozen as parity reference. |
+| `asat()` support in engine (three-date model) | Design only. evidence_cutoff / evaluation / posterior_cutoff. |
+| Posterior covariance matrix (5×5 per edge) | Design only. Future enhancement for joint draws. |
+| F-mode and F+E-mode bead ± correction | Design only. Currently shows raw stdev; needs composed uncertainty. |
+
+### Parity gates
+
+| Gate | Status |
+|------|--------|
+| v1 vs v2 single-hop parity (field-by-field) | **PASSED 13-Apr-26.** Window and cohort modes on real graph data. Tests in `test_doc31_parity.py`. |
+| v2 multi-hop acceptance | Pending — parallel quality work, does not block engine extraction. |
+| v2 → v3 parity | Not applicable yet (v3 not started). |
 
 ---
 
@@ -46,13 +92,19 @@ unconditioned and conditioned on evidence.**
 
 ### Resolution boundary
 
-The FE resolves contexts, epochs, and slice_keys into subjects before
-any of this runs. The forecast engine receives pre-resolved subjects.
-It does not know about contexts, DSL, or epoch planning — that boundary
-is the FE's job. In cohort mode, the FE's epoch planning is more
-complex (per-day regime selection, multiple subjects per edge with
-different slice_keys per epoch), but this complexity is fully upstream
-of the engine.
+The FE plans which subjects to query: it resolves the DSL into edges,
+determines candidate regimes per edge, segments the sweep range into
+epochs (per-day regime grouping), and sends subjects with slice_keys
+and candidate_regimes to the BE. The BE performs the actual regime
+*selection* — `select_regime_rows()` in `snapshot_regime_selection.py`
+filters rows to one coherent regime per (edge, date, retrieval),
+consuming the candidates the FE provided (doc 30).
+
+The forecast engine receives pre-resolved, regime-selected data. It
+does not know about contexts, DSL, epoch planning, or regime selection
+— all of that is upstream. In cohort mode, the FE's epoch planning
+is more complex (multiple subjects per edge with different slice_keys
+per epoch), but this complexity is fully upstream of the engine.
 
 ---
 
@@ -99,31 +151,145 @@ The intermediate representation between "raw data + model" and
 ForecastState:
   # Identity
   edge_id: str
-  source: str                  # 'analytic' | 'analytic_be' | 'bayesian'
-  fitted_at: str               # when the model was fitted
-  tier: str                    # 'fe_instant' | 'be_forecast'
+  source: str                  # 'analytic' | 'analytic_be' | 'bayesian' | 'manual'
+  fitted_at: Optional[str]     # when the model was fitted (null for manual)
+  tier: str                    # 'fe_instant' | 'be_forecast' | 'fe_only'
+  #   fe_instant: FE provisional estimate, BE pending
+  #   be_forecast: BE result received, replaces FE estimate
+  #   fe_only: BE unavailable or timed out, FE estimate is final
+
+  # Query context (all three default to now; diverge when asat ≠ now)
+  evaluation_date: str         # compute completeness at this date's age
+  evidence_cutoff_date: str    # snapshots on or before this date
+  posterior_cutoff_date: str   # model fitted on or before this date
+
+  # Completeness
+  completeness: float          # at evaluation age (0–1)
+  completeness_sd: Optional[float]  # null when tier='fe_instant'
 
   # Model (unconditioned — pure model, no evidence)
-  completeness: float          # at tau_observed (0–1)
-  rate_unconditioned: float    # p × CDF(tau_observed) — or path-aware
-  dispersions:
-    p_sd: float
-    mu_sd: float
-    sigma_sd: float
-    onset_sd: float
+  rate_unconditioned: Optional[float]   # null when tier='fe_instant'
+  rate_unconditioned_sd: Optional[float]
 
   # Evidence-conditioned
   rate_conditioned: float      # blend of evidence and model
-  tau_observed: int            # evidence frontier age (days)
+  rate_conditioned_sd: Optional[float]  # null when tier='fe_instant'
+  tau_observed: int            # aggregate evidence frontier age (days)
+
+  # Raw dispersions (for consumers that need components)
+  dispersions: Optional[Dispersions]  # null when tier='fe_instant'
+  #   p_sd, mu_sd, sigma_sd, onset_sd
 
   # Mode metadata
   mode: 'window' | 'cohort'
   path_aware: bool             # whether upstream dynamics were modelled
 
   # Trajectory (optional — only when consumer requests a tau range)
-  trajectory?: List[{tau, completeness, rate_unconditioned,
-                      rate_conditioned}]
+  trajectory?: List[TrajectoryPoint]
+  # Each TrajectoryPoint has: tau, completeness, completeness_sd,
+  #   rate_unconditioned, rate_unconditioned_sd,
+  #   rate_conditioned, rate_conditioned_sd
+
+  # Resolved params (for MC consumers like cohort_maturity_v3)
+  resolved_params?: ResolvedModelParams
+  # Includes per-cohort frontier info (tau_observed per cohort)
+  # needed for v3's per-cohort D/C split and IS conditioning
 ```
+
+**Nullable fields and tiers**: the FE instant path produces only
+`completeness` (aggregate CDF, same as today), `rate_conditioned`
+(existing blended mean), `tau_observed`, and mode metadata. All SD
+fields, the unconditioned rate, dispersions, and per-cohort frontier
+data are null until the BE result arrives. Consumers must handle
+null — display the value without ± when SD is unavailable.
+
+`tier = 'fe_only'` represents the permanent state when the BE is
+unreachable. The FE estimate is final, not provisional. This is
+distinct from `'fe_instant'` (BE pending) because it tells consumers
+not to expect an upgrade.
+
+**Per-cohort frontier**: the scalar `tau_observed` on ForecastState
+is an aggregate (n-weighted across cohorts) — sufficient for surprise
+gauge and edge cards. Per-cohort frontier ages are carried inside
+`resolved_params` for consumers that need them (v3's per-cohort D/C
+split and IS conditioning). The contract does not expose per-cohort
+detail at the top level.
+
+### Completeness with uncertainty
+
+Completeness today is a point estimate: `CDF(age, mu, sigma)`. But
+mu and sigma themselves have uncertainty (from posterior SDs or
+heuristic dispersion estimates). A large `mu_sd` means the CDF at this
+age could range widely — e.g. from 0.2 to 0.5 — even if p is
+well-known.
+
+The engine should sample from the latency dispersions to produce
+`completeness_sd`: the standard deviation of the completeness estimate
+given parameter uncertainty. Concretely: draw `(mu, sigma, onset)` from
+their joint distribution (using mu_sd, sigma_sd, onset_sd, and
+onset_mu_corr), evaluate the CDF at the current age for each draw,
+take the standard deviation across draws.
+
+**Why this matters beyond surprise gauge**:
+
+- **Surprise gauge**: currently compares observed rate against
+  `p × completeness` and uses `p_sd` for the error band. But if
+  `completeness_sd` is large, the expected rate itself is uncertain.
+  The gauge should combine both sources of uncertainty:
+  `rate_sd ≈ sqrt((p × completeness_sd)² + (completeness × p_sd)²)`.
+  Without this, a discrepancy at low completeness with high latency
+  uncertainty looks more surprising than it is.
+
+- **Edge display**: the completeness chevron could show an uncertainty
+  band (e.g. the chevron spans the ±1σ range rather than sitting at a
+  single point). This communicates "we think maturity is 40–60%" vs
+  "maturity is exactly 50%".
+
+- **Staleness nudges**: an edge with high `completeness_sd` relative
+  to its completeness value is one where more data would materially
+  reduce uncertainty. This could inform fetch priority.
+
+- **Cohort maturity chart**: the trajectory's per-tau `completeness_sd`
+  feeds into the forecast uncertainty — the fan bands should be wider
+  when the maturity estimate itself is uncertain.
+
+### `asat()` semantics
+
+`asat(date)` varies the epistemic basis for the entire forecast, not
+just the observation point:
+
+**asat < now** ("what would have been seen at date X?"):
+- Evidence filtered to snapshots retrieved on or before X
+- Posterior selected from fit history at or before X (via
+  `resolveAsatPosterior`). If the Bayesian posterior didn't exist yet,
+  it must not be used
+- Completeness evaluated at age = (asat_date - anchor_day), which is
+  younger than today's age
+- The user sees a historical view with less evidence and potentially a
+  different (older, less informed) model
+
+**asat = now** (default):
+- Normal operation. All three dates are "now".
+
+**asat > now** ("what do we expect to see at future date X?"):
+- No new snapshots exist (haven't been retrieved yet). Evidence is
+  frozen at today's frontier.
+- Completeness evaluated at the *future* age =
+  (asat_date - anchor_day), which is larger than today's age
+- The model projects forward: completeness increases, the blend shifts
+  toward the model rate
+- The gap between evidence_cutoff (now) and evaluation_date (future)
+  is the forecast horizon. Uncertainty bands across that gap are the
+  model's honest statement of what it expects, given parameter
+  uncertainty
+
+The three dates in `ForecastState`:
+- `evidence_cutoff_date`: filter snapshots. For asat < now, this is
+  asat. For asat > now, this is now (no future snapshots exist).
+- `evaluation_date`: compute completeness at this date's age. Always
+  the asat date itself.
+- `posterior_cutoff_date`: select model. For asat < now, use
+  historical fit. For asat > now, use current best-available.
 
 **Design rules**:
 
@@ -132,19 +298,236 @@ ForecastState:
 - **Unconditioned vs conditioned is first-class.** Every `ForecastState`
   carries both. Surprise gauge needs the unconditioned baseline to
   measure surprise against. Edge cards need the conditioned estimate.
+- **Completeness uncertainty is first-class.** `completeness_sd`
+  derived from latency dispersions. Consumers use it for honest error
+  bands.
 - **The trajectory is optional.** Surprise gauge and edge cards need a
   scalar at `tau_observed`. Only cohort maturity needs the full curve.
   The trajectory is the same engine called at every tau in a range —
   not a separate abstraction layer.
+- **Resolved params are optional.** Only MC consumers (v3) need them.
+  The engine provides them alongside the deterministic ForecastState so
+  v3 can run its own MC sampling without re-deriving model resolution.
 
 **Consumer mapping**:
 
 | Consumer | Reads from ForecastState |
 |----------|--------------------------|
-| Edge display (chevron/bead) | `completeness` |
-| Surprise gauge | `rate_unconditioned` vs observed → surprise |
-| Edge cards / overlays | `completeness`, `rate_conditioned` |
-| Cohort maturity chart | `trajectory` (full tau range) |
+| Edge display (chevron/bead) | `completeness ± completeness_sd`, `rate_conditioned ± rate_conditioned_sd` |
+| Surprise gauge | `rate_unconditioned ± rate_unconditioned_sd` vs observed |
+| Edge cards / overlays | `completeness`, `rate_conditioned ± rate_conditioned_sd` |
+| Cohort maturity chart (v3) | `trajectory` + `resolved_params` (for MC fan bands) |
+
+---
+
+## What the FE Graph Display Needs
+
+The graph canvas renders per-edge: a probability label, a completeness
+chevron with bead, a lag indicator, and (optionally) a Sankey
+completeness line. These are the primary consumers of `ForecastState`
+in the topo-pass path.
+
+### Current state
+
+After Stage-2, the FE reads from `edge.p`:
+
+| Display element | Current source | What it reads |
+|----------------|----------------|---------------|
+| Probability label | `forecast.mean` or promoted `model_vars` | Scalar p |
+| Completeness chevron position | `latency.completeness` | Scalar 0–1 |
+| Bead label ("5d / 70%") | `latency.median_lag_days`, `latency.completeness` | Two scalars |
+| Sankey completeness line | `latency.completeness` | Scalar 0–1 |
+| Lag anchor fade band | `latency.completeness` | Scalar 0–1 (fade from 0% to completeness%) |
+| Quality tier badge | `model_vars[].source`, `quality.gate_passed` | Source + gate |
+
+All are scalars. No uncertainty is shown on the edge today.
+
+### With ForecastState
+
+The FE needs these fields from `ForecastState` to render the graph
+after a fetch:
+
+| Display element | ForecastState field | Change from current |
+|----------------|---------------------|---------------------|
+| Probability label | `rate_conditioned` | Uses evidence-conditioned rate, not raw `forecast.mean`. More honest. |
+| Probability uncertainty | `rate_conditioned_sd` | **New.** Could render as ± band or colour coding on the label. |
+| Completeness chevron | `completeness` | Same scalar, better computation (promoted model, upstream-aware in cohort mode). |
+| Completeness uncertainty | `completeness_sd` | **New.** Chevron could span ±1σ range instead of a single point. |
+| Bead label | `completeness`, `tau_observed` | `tau_observed` replaces `median_lag_days` for the "5d" part if we want age-at-frontier. |
+| Quality tier | `tier`, `source` | Shows 'fe_instant' vs 'be_forecast' and which model source. |
+| Lag anchor fade | `completeness` | Same. |
+
+### What the FE does NOT need from ForecastState
+
+- `trajectory` — edge display is a single point, not a curve
+- `resolved_params` — only chart MC consumers need these
+- `dispersions` (raw component SDs) — the FE uses the composed
+  `completeness_sd` and `rate_conditioned_sd`, not the individual
+  mu_sd/sigma_sd/onset_sd/p_sd
+
+### Wire format
+
+The BE topo pass returns `ForecastState` per edge. The FE writes
+the relevant fields to `edge.p.forecast_state` (new block) or
+enriches the existing `edge.p.latency` fields. Either way, the
+render pipeline (`buildScenarioRenderEdges.ts` →
+`ConversionEdge.tsx`) reads scalars — no structural change to the
+rendering code, just richer inputs.
+
+The `tier` field ('fe_instant' | 'be_forecast') drives a small
+visual indicator so the user knows whether they're seeing the fast
+FE estimate or the proper BE forecast. Same pattern as the existing
+quality tier badges on Bayesian posteriors.
+
+### Three uncertainty regimes
+
+The ± shown on edge beads means different things in each display
+regime. The three regimes layer different sources of uncertainty:
+
+**E (evidence only)**: "We observed k conversions from n trials. The
+true population rate is somewhere around k/n, but sampling uncertainty
+means it could be higher or lower."
+
+One uncertainty source:
+1. **Sampling uncertainty** — binomial: `sqrt(p(1-p)/n)`
+
+No model involved. Completeness doesn't feature.
+
+**Current implementation**: `p.evidence.stdev`. This is correct — it
+is the sampling stdev from the observed evidence. No change needed.
+
+---
+
+**F (forecast only)**: "The model predicts this rate, but we're
+uncertain about both the rate itself and how mature these cohorts are.
+Even if the model is right about p, we're not sure how much of the
+eventual conversion we've captured yet."
+
+Two uncertainty sources:
+1. **Epistemic + aleatoric model uncertainty** — how uncertain is the
+   model's prediction of the eventual rate? From `p_sd` (posterior
+   width or heuristic dispersion)
+2. **Completeness uncertainty** — how uncertain is our estimate of
+   maturity? From `completeness_sd` (latency dispersions propagated
+   through the CDF)
+
+Combined (assuming independence of p and latency params):
+`rate_unconditioned_sd ≈ sqrt((p × completeness_sd)² +
+(completeness × p_sd)²)`
+
+**Independence assumption and measurement indeterminacy**: the
+formula above assumes p and latency params are independent. In
+practice they are anti-correlated in the posterior due to
+measurement indeterminacy: the model observes (k, n, lag_days) per
+cohort, and a high-p/high-mu explanation (many will convert, but
+slowly — so few observed yet) is hard to distinguish from a
+low-p/low-mu explanation (few will convert, but quickly — so most
+already observed). The posterior captures this as negative
+correlation between p and mu.
+
+This means:
+- The product `p × CDF(age)` is **more constrained** than either
+  factor alone — when p is sampled high, CDF is sampled low (because
+  mu is compensatingly higher), and vice versa.
+- The independent formula **overestimates** combined uncertainty.
+  The covariance term `2 × CDF × p × cov(p, CDF)` is negative,
+  which would reduce `rate_sd`. Conservative (wider bands than
+  warranted), not dangerous.
+
+**Does the existing MC sampling handle this?** Partially. The v2
+row builder draws p, mu, sigma, onset from independent marginals
+(Beta for p, Normal for latency params), then IS-conditions on
+frontier evidence. IS reweighting partially corrects by down-weighting
+draws inconsistent with the observed frontier, but it doesn't enforce
+the structural p–mu anti-correlation across all tau. The result is
+fan bands that are somewhat wider than the true joint posterior would
+produce — conservative but not optimal.
+
+**Proper fix — joint posterior draws**: the MCMC sampler produces a
+trace of ~2000 joint draws where all parameters are sampled together.
+Each draw is a complete (p, mu, sigma, onset) tuple that respects the
+posterior correlations — the anti-correlation between p and mu is
+baked in. Today the compiler summarises this trace into marginal
+statistics (p_mean, p_sd, mu_mean, mu_sd, onset_mu_corr) and
+discards the joint structure. The forecast engine then reconstructs
+draws from independent marginals, losing the correlation.
+
+**Proposed solution — posterior covariance matrix in transformed
+space**: the compiler emits a 5×5 symmetric covariance matrix per
+edge in the same transformed coordinates the v2 row builder already
+uses for its drift layer: `(logit(p), mu, log(sigma), log1p(onset),
+...)`. Computing this from the MCMC trace is straightforward:
+transform the trace columns, then `np.cov()`. The forecast engine
+draws from `MVN(transformed_means, transformed_cov)` and
+back-transforms to constrained space, preserving support constraints
+(p ∈ [0,1], sigma > 0, onset ≥ 0).
+
+Drawing in raw (p, mu, sigma, onset) space would violate support
+constraints — raw-space MVN is not a safe contract. Transformed-space
+MVN captures the p–mu anti-correlation (and all other linear
+correlations in transformed space) while respecting parameter bounds.
+
+The only loss vs raw trace draws is non-Gaussian posterior shape
+(skewness, multimodality) in transformed space, which is rare for
+these parameters.
+
+**Storage**: 15 unique values per edge (5×5 symmetric). Could live
+on the edge in `p.latency.posterior.transformed_cov` or in the patch
+file as a new field. For a 20-edge graph this is 300 floats —
+negligible. The existing `onset_mu_corr` scalar becomes redundant
+(it's one entry in the matrix) but can be preserved for backward
+compatibility.
+
+For now, the independence assumption is explicitly conservative
+(overestimates rate_sd). The covariance matrix is a future
+enhancement that improves accuracy without changing the engine
+contract — `ForecastState` fields stay the same, only the internal
+draw quality improves.
+
+**Current implementation**: `p.forecast.stdev` — raw model stdev.
+Does not include completeness uncertainty. **Needs correction**: the
+engine replaces this with `rate_unconditioned_sd`.
+
+---
+
+**F+E (forecast conditioned on evidence)**: "We have some evidence
+AND a model. The evidence pins down the mature portion; the model
+fills in the immature portion. The ± reflects all three sources."
+
+Three uncertainty sources:
+1. **Sampling uncertainty** — from the observed evidence (the mature
+   portion). Same as E.
+2. **Model uncertainty** — from the forecast for the immature portion.
+   Same as F.
+3. **Completeness uncertainty applied to evidence** — the model
+   predicts what fraction of conversions have been observed
+   (completeness), then we observe that fraction. But if completeness
+   itself is uncertain, the boundary between "observed" and "forecast"
+   is uncertain. This is additional Binomial sampling noise when the
+   model's completeness estimate is applied to partition the evidence.
+
+As completeness → 1: F+E converges to E (evidence dominates, model
+uncertainty vanishes). As completeness → 0: F+E converges to F (no
+evidence, pure model). The blend weights are driven by completeness.
+
+**Current implementation**: `p.stdev` — the blended/composite stdev.
+Does not properly compose the three sources. **Needs correction**: the
+engine replaces this with `rate_conditioned_sd`.
+
+---
+
+### Summary of bead ± changes
+
+| Regime | Current source | ForecastState source | Change |
+|--------|---------------|---------------------|--------|
+| E | `p.evidence.stdev` | unchanged | None — already correct |
+| F | `p.forecast.stdev` | `rate_unconditioned_sd` | Adds completeness uncertainty |
+| F+E | `p.stdev` | `rate_conditioned_sd` | Properly composes all 3 sources |
+| Completeness | bare "70%" | `completeness ± completeness_sd` | **New** ± on completeness |
+
+The completeness chevron rendering is unchanged — it stays at the
+point estimate position. Uncertainty band rendering on the chevron
+is a future UX decision.
 
 ---
 
@@ -270,11 +653,19 @@ Each outgoing edge reads this cache and combines it with its own
 edge-level model to produce `ForecastState`. No re-traversal of the
 upstream subgraph.
 
-**Single-edge query**: for ad-hoc consumers (surprise gauge on one
-edge, or a standalone API call), a function that computes one edge's
-`ForecastState` without running the full graph pass is still needed.
-It uses the same logic but builds the upstream carrier on demand
-rather than reading from the topo-pass cache.
+**Single-edge query**: the graph-wide topo pass serves edge display
+only (chevrons and beads after a fetch). Charts always run their own
+computation via the `snapshot_analyze` API with specific query
+parameters. Within a single API request containing multiple subjects
+(edges), the same per-node arrival cache applies — shared upstream
+structure is computed once.
+
+Cross-request caching (reusing topo pass results when a chart asks for
+the same edge) is not worth pursuing initially — the chart may have
+different DSL parameters, date range, or asat. Snapshot query results
+are already cached, which reduces the main DB cost. If performance
+becomes an issue, caching the per-node arrival state keyed by
+(graph_hash, query_mode, date_range) is the natural optimisation.
 
 ---
 
@@ -289,12 +680,22 @@ engine development — no risk of breaking the working implementation
 while extracting from it. v3 provides a live benchmark during
 development, just as v1 constrained v2.
 
-**What v3 is**: a thin consumer of the `ForecastState` trajectory. It
-calls the engine at every tau, gets back the full curve, then does
-only the chart-specific work: MC fan bands, epoch segmentation, row
-schema emission. Model resolution, upstream carrier, completeness, and
-unconditioned/conditioned rates all come from the engine, not from
-v3's own code.
+**What v3 is**: a consumer of `ForecastState` (deterministic trajectory
++ resolved params). The engine provides the deterministic forecast
+(completeness, rates, dispersions at every tau) plus the resolved model
+params (span kernel CDF, upstream carrier, posterior alpha/beta, SDs).
+v3 reads those and runs its own MC loop for fan bands.
+
+The MC sampling is genuinely chart-specific: drift fraction, sampling
+mode (binomial/normal/none), band levels (80/90/95/99%), per-cohort
+IS conditioning are all rendering concerns that other consumers don't
+need. Forcing MC into the engine to make v3 thinner would make the
+topo pass ~1000x heavier for a feature only one consumer uses.
+
+So v3 is not a *pure* consumer of `ForecastState` — it also consumes
+`resolved_params`. But model resolution, upstream carrier computation,
+and completeness are fully delegated to the engine. v3 owns only the
+MC sampling and row schema.
 
 **Parity gate**: v3 on adjacent single-edge subjects must produce
 identical output to v2, field by field. Same discipline as v1→v2.
@@ -303,10 +704,10 @@ When v3 passes parity, v2 is retired wholesale.
 **Implementation sequence**:
 
 1. Register `cohort_maturity_v3` as analysis type (FE+BE)
-2. v3 handler calls the engine's graph-wide pass (or single-edge
-   function) to get `ForecastState` with trajectory
-3. v3 row builder consumes `ForecastState.trajectory` + does MC fan
-   bands (chart-specific, not extracted into engine)
+2. v3 handler calls the engine to get `ForecastState` with trajectory
+   + `resolved_params`
+3. v3 row builder uses `resolved_params` to run MC fan bands
+   (span kernel CDF, upstream carrier, posterior concentration, SDs)
 4. Parity gate: v2 vs v3 on adjacent subjects
 5. Multi-hop acceptance: v3 on multi-edge spans
 6. Retire v2, promote v3 as `cohort_maturity`
@@ -914,9 +1315,19 @@ SpanKernel interface directly, these legacy keys are no longer needed.
 Doc 30's per-edge regime selection guarantees one coherent regime per
 (edge, anchor_day, retrieved_at). For multi-hop composition, different
 edges need **not** use the same regime. The composition takes arrivals
-at x from x-incident edges and arrivals at y from y-incident edges — as
-long as each edge's own regime is coherent (guaranteed by doc 30), the
-composed rate is correct. No cross-edge regime enforcement needed.
+at x from x-incident edges and arrivals at y from y-incident edges.
+
+This is an approximation, not a proof of correctness: if different
+edges' regimes report different populations for the same cohort (e.g.
+because contexted and uncontexted retrievals produce different x
+values at x-incident edges), the "take the maximum" heuristic in
+`compose_path_maturity_frames` may produce inconsistent denominators.
+Per-edge regime coherence (doc 30) ensures no double-counting *within*
+an edge, but does not guarantee cross-edge population consistency.
+In practice the effect is small because regime selection within
+`mece_dimensions` constrains the context decomposition to be
+compatible across edges. This approximation should be monitored
+during multi-hop acceptance testing (Phase 0.2).
 
 ### Note: docs 30+31 are implemented
 

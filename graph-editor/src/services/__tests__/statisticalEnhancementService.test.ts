@@ -545,13 +545,16 @@ describe('LAG Lag Distribution Fitting (§5.4)', () => {
       expect(fit.quality_failure_reason).toContain('Invalid median');
     });
 
-    it('should handle mean = median (σ = 0 case)', () => {
-      // When mean = median, ratio = 1, ln(1) = 0, σ = 0
+    it('should handle mean = median (degenerate σ → default)', () => {
+      // When mean = median, ratio = 1, ln(1) = 0, computed σ = 0.
+      // A σ of 0 produces a point-mass (instant latency) which breaks
+      // forecasting, so the guard substitutes LATENCY_DEFAULT_SIGMA.
       const fit = fitLagDistribution(5, 5, 100);
 
       expect(fit.mu).toBeCloseTo(Math.log(5), 6);
-      expect(fit.sigma).toBe(0);
+      expect(fit.sigma).toBe(LATENCY_DEFAULT_SIGMA);
       expect(fit.empirical_quality_ok).toBe(true);
+      expect(fit.quality_failure_reason).toContain('degenerate');
     });
   });
 

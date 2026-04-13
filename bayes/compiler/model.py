@@ -180,6 +180,13 @@ LOG_ARG_FLOOR = 1e-30       # argument to pt.log()
 CDF_INCREMENT_FLOOR = 1e-15  # ΔF (CDF change over a trajectory interval)
 SURVIVAL_FLOOR = 1e-10       # 1 − p×F (fraction not yet converted)
 EFFECTIVE_AGE_FLOOR = 1e-6   # age − onset on fixed-onset path (numpy)
+Z_ERFC_FLOOR = -25.0         # floor on z before erfc(-z) to prevent gradient NaN
+                              # erfc(25) ≈ 2.8e-278 — representable in float64,
+                              # but erfc(28) underflows to 0.0 exactly. When CDF
+                              # is exact 0, JAX autodiff produces 0 × inf = NaN
+                              # in the erfc gradient chain. Clamping z > -25
+                              # keeps erfc(-z) > 0 and the gradient finite (≈0).
+                              # See compiler journal 12-Apr-26 update 10.
 
 # Softplus sharpness for onset boundary ---
 # Standard softplus(x) = ln(1 + eˣ) leaks mass below onset: at x=-2.5
@@ -2127,6 +2134,10 @@ def _emit_cohort_likelihoods(
                     effective_ages_np = np.maximum(ages_raw_np - float(onset_val), EFFECTIVE_AGE_FLOOR)
                     log_ages = pt.log(pt.as_tensor_variable(effective_ages_np))
                 z = (log_ages - mu_val) / (sigma_val * pt.sqrt(2.0))
+                # Clamp z to prevent erfc(-z) underflowing to exact 0,
+                # which causes NaN gradients via 0 × inf in JAX autodiff.
+                # See Z_ERFC_FLOOR definition and journal 12-Apr-26.
+                z = pt.maximum(z, Z_ERFC_FLOOR)
                 return 0.5 * pt.erfc(-z)
 
             if is_mixture:
@@ -2175,20 +2186,27 @@ def _emit_cohort_likelihoods(
                 weights_np = np.array(interval_weights, dtype=np.float64)
                 curr_idx_np = np.array(curr_indices, dtype=np.int64)
                 prev_idx_np = np.array(prev_indices, dtype=np.int64)
-                prev_safe = np.where(prev_idx_np >= 0, prev_idx_np, 0)
-                is_first = (prev_idx_np < 0).astype(np.float64)
+
+                # For first intervals (prev=-1), point prev to index 0
+                # (same as curr) then zero the contribution with a numpy
+                # mask. This avoids any sentinel/pad pattern that causes
+                # NaN gradients in JAX autodiff backward pass.
+                is_first_np = (prev_idx_np < 0).astype(np.float64)
+                prev_idx_np = np.where(prev_idx_np >= 0, prev_idx_np, curr_idx_np)
 
                 # Look up mixture CDF values at each interval boundary.
                 pcdf_curr = p_cdf_sum[curr_idx_np]
-                pcdf_prev = p_cdf_sum[prev_safe]
+                pcdf_prev = p_cdf_sum[prev_idx_np]
 
                 # ΔpCDF = change in cumulative incidence over this interval.
-                # For the first interval (is_first=1), prev is zero.
-                delta_pcdf = pcdf_curr - pcdf_prev * (1.0 - is_first)
+                # For first intervals, prev points to same as curr but
+                # is_first_np zeroes out the prev contribution (numpy constant,
+                # no gradient path through the mask).
+                delta_pcdf = pcdf_curr - pcdf_prev * (1.0 - is_first_np)
 
                 # Survival = fraction of population NOT yet converted
                 # at the start of this interval.
-                surv_prev = 1.0 - pcdf_prev * (1.0 - is_first)
+                surv_prev = 1.0 - pcdf_prev * (1.0 - is_first_np)
                 surv_prev = pt.maximum(surv_prev, SURVIVAL_FLOOR)
 
                 # Conditional hazard: probability of converting in this
@@ -2237,9 +2255,12 @@ def _emit_cohort_likelihoods(
                 weights_np = np.array(interval_weights, dtype=np.float64)
                 curr_idx_np = np.array(curr_indices, dtype=np.int64)
                 prev_idx_np = np.array(prev_indices, dtype=np.int64)
-                prev_safe = np.where(prev_idx_np >= 0, prev_idx_np, 0)
-                is_first = (prev_idx_np < 0).astype(np.float64)
                 traj_idx_np = np.array(traj_idx_per_interval, dtype=np.int64)
+
+                # First-interval handling: point prev to curr (valid gather),
+                # then zero via numpy mask. See mixture path comment above.
+                is_first_np = (prev_idx_np < 0).astype(np.float64)
+                prev_idx_np = np.where(prev_idx_np >= 0, prev_idx_np, curr_idx_np)
 
                 # Resolve p for each interval:
                 #   Hierarchical mode: each trajectory has its own p_i
@@ -2251,16 +2272,15 @@ def _emit_cohort_likelihoods(
 
                 # Look up CDF values at interval boundaries.
                 cdf_curr = cdf_all[curr_idx_np]
-                cdf_prev = cdf_all[prev_safe]
+                cdf_prev = cdf_all[prev_idx_np]
 
-                # ΔF = CDF increment over this interval (how much of the
-                # maturation curve was "used up" in this time window).
-                delta_F = cdf_curr - cdf_prev * (1.0 - is_first)
+                # ΔF = CDF increment over this interval.
+                delta_F = cdf_curr - cdf_prev * (1.0 - is_first_np)
                 delta_F = pt.maximum(delta_F, CDF_INCREMENT_FLOOR)
 
                 # Survival = fraction not yet converted at interval start.
                 # p × F_{j-1} = fraction of original pop already converted.
-                F_prev = cdf_prev * (1.0 - is_first)
+                F_prev = cdf_prev * (1.0 - is_first_np)
                 surv_prev = 1.0 - p_per_interval * F_prev
                 surv_prev = pt.maximum(surv_prev, SURVIVAL_FLOOR)
 
@@ -2692,8 +2712,6 @@ def _emit_batched_window_trajectories(
     weights_np = np.array(all_weights, dtype=np.float64)
     curr_idx_np = np.array(all_curr_idx, dtype=np.int64)
     prev_idx_np = np.array(all_prev_idx, dtype=np.int64)
-    prev_safe = np.where(prev_idx_np >= 0, prev_idx_np, 0)
-    is_first = (prev_idx_np < 0).astype(np.float64)
     interval_slice_np = np.array(interval_to_slice, dtype=np.int64)
     age_slice_np = np.array(age_to_slice, dtype=np.int64)
 
@@ -2730,15 +2748,21 @@ def _emit_batched_window_trajectories(
 
     cdf_all = 0.5 * pt.erfc(-z)
 
+    # Prepend a constant 0 to the CDF array so first intervals
+    # (prev=-1) can index position 0 → CDF=0 without a sentinel.
+    # First-interval handling: point prev to curr, zero via numpy mask.
+    is_first_np = (prev_idx_np < 0).astype(np.float64)
+    prev_idx_np = np.where(prev_idx_np >= 0, prev_idx_np, curr_idx_np)
+
     # ---- Interval decomposition (same math as per-slice path) ----
     cdf_curr = cdf_all[curr_idx_np]
-    cdf_prev = cdf_all[prev_safe]
-    delta_F = cdf_curr - cdf_prev * (1.0 - is_first)
+    cdf_prev = cdf_all[prev_idx_np]
+    delta_F = cdf_curr - cdf_prev * (1.0 - is_first_np)
     delta_F = pt.maximum(delta_F, CDF_INCREMENT_FLOOR)
 
     # p varies per slice — index into vector RV
     p_per_interval = p_slice_vec[interval_slice_np]
-    F_prev = cdf_prev * (1.0 - is_first)
+    F_prev = cdf_prev * (1.0 - is_first_np)
     surv_prev = 1.0 - p_per_interval * F_prev
     surv_prev = pt.maximum(surv_prev, SURVIVAL_FLOOR)
     q_j = pt.clip(p_per_interval * delta_F / surv_prev,
@@ -2873,9 +2897,6 @@ def _emit_batched_window_trajectories_perslice(
         weights_np = sdata["weights"]
         curr_idx = sdata["curr_idx"]
         prev_idx = sdata["prev_idx"]
-        prev_safe = np.where(prev_idx >= 0, prev_idx, 0)
-        is_first = (prev_idx < 0).astype(np.float64)
-
         ages_t = pt.as_tensor_variable(ages_np)
 
         if has_latent_latency:
@@ -2900,13 +2921,17 @@ def _emit_batched_window_trajectories_perslice(
 
         cdf_s = 0.5 * pt.erfc(-z)
 
+        # First-interval handling: point prev to curr, zero via numpy mask.
+        is_first_np = (prev_idx < 0).astype(np.float64)
+        prev_idx = np.where(prev_idx >= 0, prev_idx, curr_idx)
+
         cdf_curr = cdf_s[curr_idx]
-        cdf_prev = cdf_s[prev_safe]
-        delta_F = cdf_curr - cdf_prev * (1.0 - is_first)
+        cdf_prev = cdf_s[prev_idx]
+        delta_F = cdf_curr - cdf_prev * (1.0 - is_first_np)
         delta_F = pt.maximum(delta_F, CDF_INCREMENT_FLOOR)
 
         p_s = p_slice_vec[s_idx]
-        F_prev = cdf_prev * (1.0 - is_first)
+        F_prev = cdf_prev * (1.0 - is_first_np)
         surv_prev = 1.0 - p_s * F_prev
         surv_prev = pt.maximum(surv_prev, SURVIVAL_FLOOR)
         q_j = pt.clip(p_s * delta_F / surv_prev,
@@ -3061,6 +3086,7 @@ def _emit_edge_likelihoods(
                         _t = pt.as_tensor_variable(_cep_ages_arr)
                         _eff = pt.softplus(_t - _ep_onset_var)
                         _z = (pt.log(pt.maximum(_eff, 1e-30)) - _ep_mu_var) / (_ep_sigma_var * pt.sqrt(2.0))
+                        _z = pt.maximum(_z, Z_ERFC_FLOOR)
                         _cep_p_eff = pm.math.clip(p * 0.5 * pt.erfc(-_z), 1e-6, 1.0 - 1e-6)
                     pm.BetaBinomial(f"cohort_endpoint_bb_{safe_id}", n=_cep_n_arr,
                                     alpha=_cep_p_eff * edge_kappa,
@@ -3127,6 +3153,7 @@ def _emit_edge_likelihoods(
                     ages_t = pt.as_tensor_variable(ep_ages)
                     eff_ages = pt.softplus(_softplus_k * (ages_t - ep_onset_var)) / _softplus_k
                     z = (pt.log(pt.maximum(eff_ages, 1e-30)) - ep_mu_var) / (ep_sigma_var * pt.sqrt(2.0))
+                    z = pt.maximum(z, Z_ERFC_FLOOR)
                     p_eff = pm.math.clip(p * 0.5 * pt.erfc(-z), 1e-6, 1.0 - 1e-6)
                     pm.BetaBinomial(f"endpoint_bb_{safe_id}", n=ep_n,
                                     alpha=p_eff * edge_kappa,

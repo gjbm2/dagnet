@@ -45,9 +45,13 @@ python bayes/param_recovery.py --graph synth-simple-abc          # 2-step (~270s
 python bayes/param_recovery.py --graph synth-mirror-4step        # 4-step (~130s)
 python bayes/param_recovery.py --graph synth-simple-abc --chains 3 --cores 3  # reduced core budget
 python bayes/param_recovery.py --graph synth-fanout-context --feature jax_backend=true  # contexted
+python bayes/param_recovery.py --graph synth-diamond-context \
+  --phase2-from-dump /tmp/bayes_debug-graph-synth-diamond-context \
+  --feature jax_backend=true --chains 2 --draws 500 --tune 1000 --timeout 0  # Phase 2 replay
 # Reads .truth.yaml, runs MCMC, prints structured truth vs posterior comparison.
 # NOT for production data — use test_harness.py directly.
 # --clean: clear __pycache__ only. --rebuild: also delete .synth-meta.json (heavy DB re-insert).
+# --phase2-from-dump: skip Phase 1, load artefacts from dump dir, run Phase 2 only.
 
 # ── Regression suite (preferred — discovery, bootstrap, core-aware parallel, assertions) ──
 python bayes/run_regression.py                                   # full suite, all discovered graphs

@@ -419,10 +419,177 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
     result_skipped: list[dict] = []
     quality_dict = {"max_rhat": 0.0, "min_ess": 0, "converged_pct": 0.0}
     binding_receipt = None
+    db_conn = None
 
     try:
         # ── 0. Environment diagnostic ──
         _log_env_diagnostic(log)
+
+        # ── Phase 2 from dump: skip Phase 1 entirely ──
+        _p2_dump = (payload.get("settings") or {}).get("phase2_from_dump")
+        if _p2_dump:
+            _log(log, f"── PHASE 2 FROM DUMP: {_p2_dump} ──")
+            import json as _jl, pickle as _pkl2
+            from compiler import analyse_topology, build_model
+            from compiler import run_inference, summarise_posteriors, inspect_model
+            from compiler.types import SamplingConfig
+
+            with open(os.path.join(_p2_dump, "topology.pkl"), "rb") as _f:
+                topology = _pkl2.load(_f)
+            with open(os.path.join(_p2_dump, "evidence.pkl"), "rb") as _f:
+                evidence = _pkl2.load(_f)
+            with open(os.path.join(_p2_dump, "phase2_frozen.json")) as _f:
+                phase2_frozen = _jl.load(_f)
+            with open(os.path.join(_p2_dump, "settings.json")) as _f:
+                _dump_sb = _jl.load(_f)
+
+            settings = payload.get("settings", {})
+            features = settings.get("features") or _dump_sb.get("features", {})
+            graph_snapshot = payload.get("graph_snapshot", {})
+
+            _log(log, f"  topology: {len(topology.edges)} edges")
+            _log(log, f"  evidence: {sum(1 for e in evidence.edges.values() if not e.skipped)} with data")
+            _log(log, f"  frozen: {len(phase2_frozen)} edges")
+
+            # Build Phase 2 model
+            model2, metadata2 = build_model(
+                topology, evidence, features=features,
+                phase2_frozen=phase2_frozen, settings=settings,
+            )
+            _log(log, f"  Phase 2 model: {len(model2.free_RVs)} free, "
+                       f"{len(model2.observed_RVs)} obs, {len(model2.potentials)} pot")
+
+            # Sampling config
+            def _s_int(kl, kc, ku, default):
+                return int(settings.get(kl, settings.get(kc, settings.get(ku, default))))
+            def _s_float(kl, kc, ku, default):
+                return float(settings.get(kl, settings.get(kc, settings.get(ku, default))))
+
+            sampling_config = SamplingConfig(
+                draws=_s_int("draws", "bayes_draws", "BAYES_DRAWS", 2000),
+                tune=_s_int("tune", "bayes_tune", "BAYES_TUNE", 1000),
+                chains=_s_int("chains", "bayes_chains", "BAYES_CHAINS", 4),
+                cores=settings.get("cores"),
+                target_accept=_s_float("target_accept", "bayes_target_accept", "BAYES_TARGET_ACCEPT", 0.90),
+                random_seed=settings.get("random_seed"),
+                jax_backend=features.get("jax_backend", False),
+            )
+
+            # Run Phase 2 MCMC (with numba fallback)
+            progress.set_band(0, 90)
+            t_sample2 = time.time()
+            try:
+                trace2, quality2 = run_inference(model2, sampling_config, report, phase_label="Phase 2 (from dump)")
+            except RuntimeError as _p2_err:
+                if "initialization" in str(_p2_err).lower() and sampling_config.jax_backend:
+                    _log(log, f"  Phase 2 JAX init failed: {_p2_err}")
+                    _log(log, "  Retrying with numba backend…")
+                    _numba_cfg = SamplingConfig(
+                        draws=sampling_config.draws, tune=sampling_config.tune,
+                        chains=sampling_config.chains, cores=sampling_config.cores,
+                        target_accept=sampling_config.target_accept,
+                        random_seed=sampling_config.random_seed, jax_backend=False,
+                    )
+                    trace2, quality2 = run_inference(model2, _numba_cfg, report, phase_label="Phase 2 (numba)")
+                    _log(log, "  numba fallback succeeded")
+                else:
+                    raise
+            timings["sampling_phase2_ms"] = int((time.time() - t_sample2) * 1000)
+            _log(log, f"  Phase 2 sampling: {timings['sampling_phase2_ms']}ms, "
+                       f"rhat={quality2.max_rhat:.3f}, ess={quality2.min_ess:.0f}")
+
+            # Summarise Phase 2
+            inference_result = summarise_posteriors(
+                trace2, topology, evidence, metadata2, quality2,
+                settings=settings,
+            )
+            quality_dict = {
+                "max_rhat": round(quality2.max_rhat, 4),
+                "min_ess": round(quality2.min_ess, 1),
+                "converged_pct": quality2.converged_pct,
+            }
+
+            # Log Phase 2 p_cohort values from trace
+            for edge_id in topology.topo_order:
+                safe_eid = edge_id.replace("-", "_")
+                p_cohort_name = f"p_cohort_{safe_eid}"
+                eps_drift_name = f"eps_drift_{safe_eid}"
+                if p_cohort_name in trace2.posterior:
+                    samples = trace2.posterior[p_cohort_name].values.flatten()
+                    _log(log, f"  Phase 2 p_cohort {edge_id[:8]}…: "
+                              f"mean={samples.mean():.4f} std={samples.std():.4f}")
+                if eps_drift_name in trace2.posterior:
+                    eps = trace2.posterior[eps_drift_name].values.flatten()
+                    _log(log, f"  Phase 2 eps_drift {edge_id[:8]}…: "
+                              f"mean={eps.mean():.3f} std={eps.std():.3f}")
+
+            # Extract per-slice cohort posteriors from trace2
+            import numpy as _np2
+            for post in inference_result.posteriors:
+                edge_id = post.edge_id
+                safe_eid = edge_id.replace("-", "_")
+                ev_edge = evidence.edges.get(edge_id)
+                if not ev_edge or not ev_edge.slice_groups:
+                    continue
+                cohort_slice_posts = {}
+                for _dk, _sg in ev_edge.slice_groups.items():
+                    for ctx_key in _sg.slices:
+                        ctx_safe = ctx_key.replace("-", "_")
+                        p_name = f"p_cohort_slice_{safe_eid}_{ctx_safe}"
+                        if p_name in trace2.posterior:
+                            _ps = trace2.posterior[p_name].values.flatten()
+                            _p_mean = float(_ps.mean())
+                            _p_std = float(_ps.std())
+                            _alpha, _beta = _p_mean, 1.0 - _p_mean
+                            if _p_std > 1e-6 and 0 < _p_mean < 1:
+                                _v = _p_std ** 2
+                                _c = _p_mean * (1 - _p_mean) / _v - 1
+                                if _c > 0:
+                                    _alpha = max(_p_mean * _c, 0.5)
+                                    _beta = max((1 - _p_mean) * _c, 0.5)
+                            cohort_slice_posts[ctx_key] = {
+                                "alpha": _alpha,
+                                "beta": _beta,
+                                "p_mean": _p_mean,
+                                "p_sd": _p_std,
+                            }
+                            _log(log, f"  Phase 2 slice {edge_id[:8]}… {ctx_key}: "
+                                      f"p={_p_mean:.4f}±{_p_std:.4f}")
+                if cohort_slice_posts:
+                    post.cohort_slice_posteriors = cohort_slice_posts
+
+            # Merge cohort latency posteriors from Phase 2
+            for eid, lat2 in inference_result.latency_posteriors.items():
+                # Log path-level latency if available
+                if lat2.path_mu_mean is not None:
+                    _log(log, f"  Phase 2 path_latency {eid[:8]}…: "
+                              f"onset={lat2.path_onset_delta_days} "
+                              f"mu={lat2.path_mu_mean} sigma={lat2.path_sigma_mean}")
+
+            # Format edges for webhook/result
+            params_index = payload.get("parameters_index", {})
+            param_id_to_path = _build_path_lookup(params_index)
+            for post in inference_result.posteriors:
+                lat_post = inference_result.latency_posteriors.get(post.edge_id)
+                slices = _build_unified_slices(post, lat_post)
+                result_edges.append({
+                    "param_id": post.param_id,
+                    "file_path": _resolve_file_path(post.param_id, evidence, param_id_to_path),
+                    "slices": slices,
+                    "_model_state": inference_result.model_state,
+                    "prior_tier": post.prior_tier,
+                    "evidence_grade": 3 if post.ess >= 400 and (not post.rhat or post.rhat < 1.05) else 0,
+                    "divergences": post.divergences,
+                })
+            result_skipped = inference_result.skipped
+
+            _log(log, f"posteriors: {len(result_edges)} edges, {len(result_skipped)} skipped")
+            report("complete", 100, "Phase 2 from dump complete")
+            return _build_result(
+                None, log, timings, t0, result_edges, result_skipped,
+                quality_dict, webhook_response,
+                binding_receipt=binding_receipt,
+            )
 
         # ── 1. DB connection ──
         progress.set_band(0, 3)
@@ -1127,9 +1294,29 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
                 _log(log, line)
 
             # Run Phase 2 MCMC
+            # If JAX backend fails init (NaN gradients on join-node graphs),
+            # fall back to numba. See compiler journal 13-Apr-26 update 10.
             progress.set_band(*P2_SAMPLE)
             t_sample2 = time.time()
-            trace2, quality2 = run_inference(model2, sampling_config, report, phase_label=phase2_label)
+            try:
+                trace2, quality2 = run_inference(model2, sampling_config, report, phase_label=phase2_label)
+            except RuntimeError as _p2_err:
+                if "initialization" in str(_p2_err).lower() and sampling_config.jax_backend:
+                    _log(log, f"  Phase 2 JAX init failed: {_p2_err}")
+                    _log(log, "  Retrying Phase 2 with numba backend…")
+                    _numba_config = SamplingConfig(
+                        draws=sampling_config.draws,
+                        tune=sampling_config.tune,
+                        chains=sampling_config.chains,
+                        cores=sampling_config.cores,
+                        target_accept=sampling_config.target_accept,
+                        random_seed=sampling_config.random_seed,
+                        jax_backend=False,
+                    )
+                    trace2, quality2 = run_inference(model2, _numba_config, report, phase_label=phase2_label)
+                    _log(log, "  Phase 2 numba fallback succeeded")
+                else:
+                    raise
             timings["sampling_phase2_ms"] = int((time.time() - t_sample2) * 1000)
             _log(log,
                 f"  Phase 2 sampling: {timings['sampling_phase2_ms']}ms, "

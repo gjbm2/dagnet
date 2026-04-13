@@ -150,7 +150,13 @@
       "Bash(xargs -r kill -9)",
       "Bash(kill 4064831 4064851 4068594 4068597 4068598)",
       "Bash(git -C /home/reg/dev/dagnet diff --stat HEAD)",
-      "Bash(git -C /home/reg/dev/dagnet diff --name-only HEAD)"
+      "Bash(git -C /home/reg/dev/dagnet diff --name-only HEAD)",
+      "Bash(git -C nous-conversion log --oneline --all -- parameters/synth-anchor-to-gate.yaml)",
+      "Bash(git -C nous-conversion diff 92803b8..HEAD -- parameters/synth-anchor-to-gate.yaml)",
+      "Bash(git -C nous-conversion status -- parameters/synth-anchor-to-gate.yaml)",
+      "Bash(git -C nous-conversion diff -- parameters/synth-anchor-to-gate.yaml)",
+      "WebFetch(domain:engineering.fb.com)",
+      "WebFetch(domain:addyosmani.com)"
     ],
     "additionalDirectories": [
       "/home/reg/dev/dagnet/.claude",

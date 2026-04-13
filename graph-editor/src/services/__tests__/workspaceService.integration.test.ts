@@ -1300,6 +1300,8 @@ describe('POLICY: pullLatestRemoteWins usage is restricted to headless contexts'
     'stalenessNudgeService.ts',
     // useStalenessNudges wires the callback but stalenessNudgeService gates it
     'useStalenessNudges.ts',
+    // nonBlockingPullService uses it when remoteWins option is set (dashboard mode)
+    'nonBlockingPullService.ts',
   ]);
 
   it('should only be called from explicitly headless/unattended code paths', async () => {

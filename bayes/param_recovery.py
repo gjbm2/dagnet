@@ -101,6 +101,9 @@ def main():
                         help="Override pinnedDSL (forwarded to harness --dsl-override)")
     parser.add_argument("--diag", action="store_true",
                         help="Enable extra diagnostics (forwarded to harness --diag)")
+    parser.add_argument("--phase2-from-dump", type=str, default=None, metavar="PATH",
+                        help="Skip Phase 1: load artefacts from dump dir, run Phase 2 only "
+                             "(forwarded to harness --phase2-from-dump)")
     args = parser.parse_args()
 
     # --- Resolve graph and truth file ---
@@ -194,13 +197,38 @@ def main():
             json.dump(settings_payload, sf)
 
     # --- Run harness ---
+    # When --phase2-from-dump is set, skip the expensive --fe-payload CLI call.
+    # Build a minimal payload with just graph_id and settings, pass via --payload.
+    _payload_path = None
+    if args.phase2_from_dump:
+        import tempfile
+        # Load graph JSON for the payload (needed for graph_id)
+        with open(graph_path) as _gf:
+            _graph_json = json.load(_gf)
+        _minimal_payload = {
+            "graph_id": f"graph-{args.graph}",
+            "graph_snapshot": _graph_json,
+            "parameter_files": {},
+            "parameters_index": {},
+            "settings": {
+                "phase2_from_dump": args.phase2_from_dump,
+            },
+        }
+        _payload_path = tempfile.mktemp(suffix=".json", prefix="bayes_p2dump_")
+        with open(_payload_path, "w") as _pf:
+            json.dump(_minimal_payload, _pf)
+        print(f"  Phase 2 from dump: minimal payload at {_payload_path}")
+
     cmd = [
         sys.executable, os.path.join(REPO_ROOT, "bayes", "test_harness.py"),
         "--graph", args.graph,
-        "--fe-payload",
         "--no-webhook",
         "--timeout", str(args.timeout),
     ]
+    if _payload_path:
+        cmd.extend(["--payload", _payload_path])
+    else:
+        cmd.append("--fe-payload")
     if settings_json_path:
         cmd.extend(["--settings-json", settings_json_path])
     if args.no_mcmc:
@@ -225,6 +253,8 @@ def main():
         cmd.extend(["--dsl-override", args.dsl_override])
     if args.diag:
         cmd.append("--diag")
+    if args.phase2_from_dump:
+        cmd.extend(["--phase2-from-dump", args.phase2_from_dump])
 
     print(f"Running: {' '.join(cmd[-6:])}")
     print()
@@ -301,6 +331,35 @@ def main():
 
     # Extract per-edge latency posteriors
     posteriors: dict[str, dict] = {}
+    _last_cohort_p_entry = None
+    _slice_posteriors: dict[str, dict] = {}  # eid_prefix → {ctx_key → {p_mean, p_sd}}
+
+    # When using --phase2-from-dump, seed posteriors with Phase 1 frozen values.
+    # These are the Phase 1 MCMC results (p, mu, sigma, onset) that the dump captured.
+    if args.phase2_from_dump:
+        _frozen_path = os.path.join(args.phase2_from_dump, "phase2_frozen.json")
+        if os.path.isfile(_frozen_path):
+            with open(_frozen_path) as _ff:
+                _frozen = json.load(_ff)
+            # Map edge UUIDs to 8-char prefixes for posteriors dict
+            with open(graph_path) as _gf2:
+                _g2 = json.load(_gf2)
+            for _e2 in _g2.get("edges", []):
+                _uuid2 = _e2.get("uuid", "")
+                if _uuid2 and _uuid2 in _frozen:
+                    _fe = _frozen[_uuid2]
+                    posteriors[_uuid2[:8]] = {
+                        "p_mean": _fe.get("p"),
+                        "p_sd": _fe.get("p_sd"),
+                        "mu_mean": _fe.get("mu"),
+                        "mu_sd": _fe.get("mu_sd"),
+                        "sigma_mean": _fe.get("sigma"),
+                        "sigma_sd": _fe.get("sigma_sd"),
+                        "onset_mean": _fe.get("onset"),
+                        "onset_sd": _fe.get("onset_sd"),
+                        "_source": "phase1_frozen",
+                    }
+
     for line in output.split("\n"):
         # inference:   latency 7a26c540…: mu=1.476±0.032 (prior=1.531), sigma=0.599±0.021 (prior=0.467), rhat=1.001, ess=7647
         lat_match = re.search(
@@ -368,6 +427,49 @@ def main():
             p_sd = float((p_alpha * p_beta / (_ab ** 2 * (_ab + 1))) ** 0.5) if _ab > 0 else 0.0
             _last_p_entry = {"p_mean": p_val, "p_sd": p_sd, "p_alpha": p_alpha, "p_beta": p_beta}
 
+        # Phase 2 cohort p from posterior summary:
+        #     cohort(): p=0.5175 (α=86.4, β=80.6)  ess=3 rhat=1.828 [bayesian]
+        cohort_p_match = re.search(
+            r"cohort\(\):\s+p=([\d.]+)\s+\(α=([\d.]+),\s*β=([\d.]+)\)\s+ess=([\d.]+)\s+rhat=([\d.]+)",
+            line
+        )
+        if cohort_p_match:
+            _c_val = float(cohort_p_match.group(1))
+            _c_alpha = float(cohort_p_match.group(2))
+            _c_beta = float(cohort_p_match.group(3))
+            _c_ab = _c_alpha + _c_beta
+            _c_sd = float((_c_alpha * _c_beta / (_c_ab ** 2 * (_c_ab + 1))) ** 0.5) if _c_ab > 0 else 0.0
+            _last_cohort_p_entry = {"cohort_p_mean": _c_val, "cohort_p_sd": _c_sd}
+
+        # Phase 2 per-slice cohort p from worker log:
+        #   Phase 2 slice 790a6277… context(synth-channel:direct): p=0.5196±0.0062
+        slice_p_match = re.search(
+            r"Phase 2 slice (\w{8})…\s+(context\([^)]+\)):\s+p=([\d.]+)±([\d.]+)",
+            line
+        )
+        if slice_p_match:
+            _sp_eid = slice_p_match.group(1)
+            _sp_ctx = slice_p_match.group(2)
+            _sp_p = float(slice_p_match.group(3))
+            _sp_sd = float(slice_p_match.group(4))
+            _slice_posteriors.setdefault(_sp_eid, {})[_sp_ctx] = {
+                "p_mean": _sp_p, "p_sd": _sp_sd,
+            }
+
+        # Phase 2 path latency from worker log:
+        #   Phase 2 path_latency 60daa859…: onset=3.0 mu=2.966 sigma=0.386
+        path_lat_match = re.search(
+            r"Phase 2 path_latency (\w{8})…:\s+onset=([\d.]+)\s+mu=([\d.]+)\s+sigma=([\d.]+)",
+            line
+        )
+        if path_lat_match:
+            _pl_eid = path_lat_match.group(1)
+            posteriors.setdefault(_pl_eid, {}).update({
+                "onset_mean": float(path_lat_match.group(2)),
+                "mu_mean": float(path_lat_match.group(3)),
+                "sigma_mean": float(path_lat_match.group(4)),
+            })
+
         # Match edge name lines to associate p with the right edge
         #   synth-context-solo-synth-ctx1-anchor-to-target
         eid_line_match = re.search(r"^\s{2}(\S+)$", line)
@@ -406,6 +508,22 @@ def main():
                 if _upid == _last_edge_name or _last_edge_name.endswith(_upid):
                     posteriors.setdefault(_upfx, {}).update({
                         "p_mean": p_val, "p_sd": p_sd,
+                    })
+        # Also parse cohort() p and store as cohort_p_mean
+        cohort_p_match2 = re.search(
+            r"cohort\(\):\s+p=([\d.]+)\s+\(α=([\d.]+),\s*β=([\d.]+)\)",
+            line
+        )
+        if cohort_p_match2 and _last_edge_name:
+            _c2_val = float(cohort_p_match2.group(1))
+            _c2_alpha = float(cohort_p_match2.group(2))
+            _c2_beta = float(cohort_p_match2.group(3))
+            _c2_ab = _c2_alpha + _c2_beta
+            _c2_sd = float((_c2_alpha * _c2_beta / (_c2_ab ** 2 * (_c2_ab + 1))) ** 0.5) if _c2_ab > 0 else 0.0
+            for _upfx, _upid in uuid_to_pid.items():
+                if _upid == _last_edge_name or _last_edge_name.endswith(_upid):
+                    posteriors.setdefault(_upfx, {}).update({
+                        "cohort_p_mean": _c2_val, "cohort_p_sd": _c2_sd,
                     })
                     break
 
@@ -456,8 +574,11 @@ def main():
             continue
 
         # Compare all parent parameters (p + latency + kappa)
-        for param, truth_key, post_key, sd_key in [
-            ("p",     "p",     "p_mean",     "p_sd"),
+        # Show window p and cohort p separately when both exist.
+        _p_rows = [("p",     "p",     "p_mean",     "p_sd")]
+        if "cohort_p_mean" in post:
+            _p_rows.append(("p_coh", "p", "cohort_p_mean", "cohort_p_sd"))
+        for param, truth_key, post_key, sd_key in _p_rows + [
             ("mu",    "mu",    "mu_mean",    "mu_sd"),
             ("sigma", "sigma", "sigma_mean", "sigma_sd"),
             ("onset", "onset", "onset_mean", "onset_sd"),
@@ -511,6 +632,9 @@ def main():
 
     # --- Phase C: per-slice posterior comparison ---
     slice_posteriors = _parse_slice_posteriors(output)
+    # Merge Phase 2 per-slice posteriors (from --phase2-from-dump log lines)
+    for _sp_eid, _sp_slices in _slice_posteriors.items():
+        slice_posteriors.setdefault(_sp_eid, {}).update(_sp_slices)
 
     def _print_slice_recovery_block(
         label: str,

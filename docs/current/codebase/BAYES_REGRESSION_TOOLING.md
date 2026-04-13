@@ -293,3 +293,65 @@ Per-graph timeouts are read from the truth file's `testing.timeout` or
 `simulation.expected_sample_seconds` fields. These were set for numba
 compilation; JAX runs may complete faster than the budget, but the
 budget should not be relied upon for large or novel graphs.
+
+### Debug artefact dump and Phase 2 replay (13-Apr-26)
+
+When Phase 2 runs, the worker dumps artefacts to
+`/tmp/bayes_debug-{graph_id}/` before attempting Phase 2 MCMC:
+
+| File | Contents |
+|------|----------|
+| `phase2_frozen.json` | Frozen Phase 1 posteriors (per-edge p, mu, sigma, onset, per-slice) |
+| `evidence.pkl` | Full bound evidence (pickle) |
+| `topology.pkl` | Graph topology (pickle) |
+| `settings.json` | Feature flags and settings |
+
+These enable **offline Phase 2 debugging** without re-running the
+expensive Phase 1 MCMC (~13 min for diamond-context). Load with:
+
+```python
+import pickle, json
+with open("/tmp/bayes_debug-.../topology.pkl", "rb") as f:
+    topo = pickle.load(f)
+with open("/tmp/bayes_debug-.../evidence.pkl", "rb") as f:
+    evidence = pickle.load(f)
+with open("/tmp/bayes_debug-.../phase2_frozen.json") as f:
+    frozen = json.load(f)
+from compiler.model import build_model
+model2, meta2 = build_model(topo, evidence, phase2_frozen=frozen)
+```
+
+The dump is wrapped in try/except — if it fails, a warning is logged
+but Phase 2 model build proceeds.
+
+### `--phase2-from-dump` flag (13-Apr-26)
+
+Skips Phase 1 entirely and runs Phase 2 from a dump directory:
+
+```bash
+python bayes/param_recovery.py --graph synth-diamond-context \
+  --phase2-from-dump /tmp/bayes_debug-graph-synth-diamond-context \
+  --feature jax_backend=true --chains 2 --draws 500 --tune 1000 --timeout 0
+```
+
+This bypasses graph loading, CLI hash computation, synth data gate,
+and pre-flight checks — goes straight to Phase 2 model build + MCMC.
+Enables rapid iteration on Phase 2 issues.
+
+Available on both `param_recovery.py` and `test_harness.py`.
+
+### Phase 2 numba fallback (13-Apr-26)
+
+When `jax_backend=true` and Phase 2 init fails (JAX gradient NaN on
+join-node graphs with deep path onsets), the worker automatically
+retries Phase 2 with the numba backend. Log shows:
+
+```
+Phase 2 JAX init failed: All initialization points failed...
+Retrying Phase 2 with numba backend…
+numba fallback succeeded
+```
+
+The numba compile adds ~180s but the model samples correctly. This
+is a workaround — the JAX NaN root cause is documented in compiler
+journal 13-Apr-26 update 10 and tracked as pending work.

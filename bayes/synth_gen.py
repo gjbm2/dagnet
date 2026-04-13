@@ -1801,7 +1801,12 @@ def write_to_snapshot_db(
             # Registry entry (one per param_id + core_hash)
             if (db_pid, core_hash) not in registry_entries:
                 bare_pid = r["param_id"]
-                sig_key = "window_sig" if "window" in slice_key else "cohort_sig"
+                is_ctx = "context(" in slice_key
+                is_window = "window" in slice_key
+                if is_ctx:
+                    sig_key = "ctx_window_sig" if is_window else "ctx_cohort_sig"
+                else:
+                    sig_key = "window_sig" if is_window else "cohort_sig"
                 real_sig = (hash_lookup or {}).get(bare_pid, {}).get(sig_key)
                 canonical = real_sig if real_sig else f"synthetic:{db_pid}:{slice_key}"
                 registry_entries[(db_pid, core_hash)] = canonical
@@ -2081,7 +2086,7 @@ def write_parameter_files(
             },
             "forecast": round(mean, 6),
         }
-        if hash_lookup and pid in hash_lookup and "window_sig" in hash_lookup[pid]:
+        if hash_lookup and pid in hash_lookup and hash_lookup[pid].get("window_sig"):
             window_entry["query_signature"] = hash_lookup[pid]["window_sig"]
 
         # Cohort values[] entry
@@ -2108,7 +2113,7 @@ def write_parameter_files(
             },
             "forecast": round(mean, 6),
         }
-        if hash_lookup and pid in hash_lookup and "cohort_sig" in hash_lookup[pid]:
+        if hash_lookup and pid in hash_lookup and hash_lookup[pid].get("cohort_sig"):
             cohort_entry["query_signature"] = hash_lookup[pid]["cohort_sig"]
 
         # Context-qualified values[] entries (one per context value per obs type).
@@ -2136,8 +2141,8 @@ def write_parameter_files(
                         "data_source": {"type": "synthetic", "retrieved_at": now_str, "full_query": query},
                         "forecast": round(mean, 6),
                     }
-                    if hash_lookup and pid in hash_lookup and "window_sig" in hash_lookup[pid]:
-                        ctx_window["query_signature"] = hash_lookup[pid]["window_sig"]
+                    if hash_lookup and pid in hash_lookup and "ctx_window_sig" in hash_lookup[pid] and hash_lookup[pid]["ctx_window_sig"]:
+                        ctx_window["query_signature"] = hash_lookup[pid]["ctx_window_sig"]
                     context_entries.append(ctx_window)
 
                     ctx_cohort: dict[str, Any] = {
@@ -2159,8 +2164,8 @@ def write_parameter_files(
                         "data_source": {"type": "synthetic", "retrieved_at": now_str, "full_query": query},
                         "forecast": round(mean, 6),
                     }
-                    if hash_lookup and pid in hash_lookup and "cohort_sig" in hash_lookup[pid]:
-                        ctx_cohort["query_signature"] = hash_lookup[pid]["cohort_sig"]
+                    if hash_lookup and pid in hash_lookup and "ctx_cohort_sig" in hash_lookup[pid] and hash_lookup[pid]["ctx_cohort_sig"]:
+                        ctx_cohort["query_signature"] = hash_lookup[pid]["ctx_cohort_sig"]
                     context_entries.append(ctx_cohort)
 
         param_data = {
@@ -2747,62 +2752,93 @@ Examples:
             sys.exit(1)
         return json.loads(r.stdout[r.stdout.index("{"):])
 
-    # --- Call 1: full DSL (context-qualified subjects + candidate regimes) ---
-    print(f"  CLI call 1 (full DSL)…", end="", flush=True)
-    _t0 = _time.time()
-    _payload = _cli_call(full_dsl)
-    _all_subj = _payload.get("snapshot_subjects", [])
-    _cr = _payload.get("candidate_regimes_by_edge", {})
-    print(f" {len(_all_subj)} subjects, {sum(len(v) for v in _cr.values())} regimes ({_time.time() - _t0:.1f}s)", flush=True)
-
-    # Classify subjects into hash families by slice_key content
+    # --- CLI calls: one per DSL clause for unambiguous hash classification ---
+    # The CLI subjects don't carry a cohort_mode flag, so calling with
+    # a compound DSL ("window(...);cohort(...)") makes it impossible to
+    # distinguish which subject is window vs cohort.  Splitting by clause
+    # removes ambiguity: all subjects from a window clause are window, etc.
     window_hashes: dict[str, str] = {}   # edge_uuid → bare window hash
     cohort_hashes: dict[str, str] = {}
     ctx_window_hashes: dict[str, str] = {}
     ctx_cohort_hashes: dict[str, str] = {}
-    for subj in _all_subj:
-        eid = subj.get("edge_id", "")
-        ch = subj.get("core_hash", "")
-        sks = subj.get("slice_keys", [])
-        if not eid or not ch:
-            continue
-        sk = sks[0] if sks else ""
-        is_ctx = "context(" in sk
-        is_cohort = "cohort" in sk
-        if is_ctx:
-            if is_cohort:
-                ctx_cohort_hashes[eid] = ch
-            else:
-                ctx_window_hashes[eid] = ch
-        else:
-            if is_cohort:
-                cohort_hashes[eid] = ch
-            else:
-                window_hashes[eid] = ch
+    # Parallel dicts for canonical_signature (structured sig for param file query_signature)
+    window_sigs: dict[str, str] = {}
+    cohort_sigs: dict[str, str] = {}
+    ctx_window_sigs: dict[str, str] = {}
+    ctx_cohort_sigs: dict[str, str] = {}
+    _cr: dict = {}  # candidate regimes (from first call)
 
-    # --- Call 2 (conditional): bare DSL for mixed-epoch data ---
-    # Context-only DSL produces context-qualified hashes only.  Bare
-    # (uncontexted) hashes are different core_hashes.  For mixed-epoch
-    # data we need both families → exactly 1 extra CLI call.
-    _epochs = truth.get("epochs")
-    _has_ctx_epochs = _epochs and any(ep.get("emit_context_slices") for ep in _epochs)
-    _need_bare = ((ctx_window_hashes or ctx_cohort_hashes) and not window_hashes) or _has_ctx_epochs
-    if _need_bare:
-        print(f"  CLI call 2 (bare DSL)…", end="", flush=True)
-        _t0b = _time.time()
-        _bare_payload = _cli_call(bare_dsl)
-        for subj in _bare_payload.get("snapshot_subjects", []):
+    dsl_clauses = [c.strip() for c in full_dsl.split(";") if c.strip()]
+    _call_num = 0
+    for clause in dsl_clauses:
+        _call_num += 1
+        is_cohort_clause = clause.startswith("cohort(") or ".cohort(" in clause
+        is_ctx_clause = "context(" in clause
+        label = ("ctx_" if is_ctx_clause else "") + ("cohort" if is_cohort_clause else "window")
+        print(f"  CLI call {_call_num} ({label}: {clause[:50]})…", end="", flush=True)
+        _t0c = _time.time()
+        _clause_payload = _cli_call(clause)
+        _clause_subj = _clause_payload.get("snapshot_subjects", [])
+        if not _cr:
+            _cr = _clause_payload.get("candidate_regimes_by_edge", {})
+        print(f" {len(_clause_subj)} subjects ({_time.time() - _t0c:.1f}s)", flush=True)
+
+        for subj in _clause_subj:
             eid = subj.get("edge_id", "")
             ch = subj.get("core_hash", "")
             sig = subj.get("canonical_signature", "")
             if not eid or not ch:
                 continue
-            is_cohort = "cohort" in sig or ('"q"' in sig and '"cohort"' in sig)
-            if is_cohort:
-                cohort_hashes.setdefault(eid, ch)
+            if is_ctx_clause:
+                if is_cohort_clause:
+                    ctx_cohort_hashes[eid] = ch
+                    if sig:
+                        ctx_cohort_sigs[eid] = sig
+                else:
+                    ctx_window_hashes[eid] = ch
+                    if sig:
+                        ctx_window_sigs[eid] = sig
             else:
-                window_hashes.setdefault(eid, ch)
-        print(f" done ({_time.time() - _t0b:.1f}s)", flush=True)
+                if is_cohort_clause:
+                    cohort_hashes[eid] = ch
+                    if sig:
+                        cohort_sigs[eid] = sig
+                else:
+                    window_hashes[eid] = ch
+                    if sig:
+                        window_sigs[eid] = sig
+
+    # --- Extra call (conditional): bare DSL for mixed-epoch data ---
+    # Context-only DSL produces context-qualified hashes only.  Bare
+    # (uncontexted) hashes are different core_hashes.  For mixed-epoch
+    # data we need both families → one extra CLI call.
+    _epochs = truth.get("epochs")
+    _has_ctx_epochs = _epochs and any(ep.get("emit_context_slices") for ep in _epochs)
+    _need_bare = ((ctx_window_hashes or ctx_cohort_hashes) and not window_hashes) or _has_ctx_epochs
+    if _need_bare:
+        bare_clauses = [c.strip() for c in bare_dsl.split(";") if c.strip()]
+        for bc in bare_clauses:
+            _call_num += 1
+            is_bc_cohort = bc.startswith("cohort(") or ".cohort(" in bc
+            label = "bare_cohort" if is_bc_cohort else "bare_window"
+            print(f"  CLI call {_call_num} ({label})…", end="", flush=True)
+            _t0b = _time.time()
+            _bare_payload = _cli_call(bc)
+            for subj in _bare_payload.get("snapshot_subjects", []):
+                eid = subj.get("edge_id", "")
+                ch = subj.get("core_hash", "")
+                sig = subj.get("canonical_signature", "")
+                if not eid or not ch:
+                    continue
+                if is_bc_cohort:
+                    cohort_hashes.setdefault(eid, ch)
+                    if sig and eid not in cohort_sigs:
+                        cohort_sigs[eid] = sig
+                else:
+                    window_hashes.setdefault(eid, ch)
+                    if sig and eid not in window_sigs:
+                        window_sigs[eid] = sig
+            print(f" done ({_time.time() - _t0b:.1f}s)", flush=True)
 
     # Build uuid → param_id mapping from graph
     with open(graph_path) as f:
@@ -2819,10 +2855,16 @@ Examples:
         ch = cohort_hashes.get(uuid, "")
         ctx_wh = ctx_window_hashes.get(uuid, "")
         ctx_ch = ctx_cohort_hashes.get(uuid, "")
+        ws = window_sigs.get(uuid, "")
+        cs = cohort_sigs.get(uuid, "")
+        ctx_ws = ctx_window_sigs.get(uuid, "")
+        ctx_cs = ctx_cohort_sigs.get(uuid, "")
         if wh or ch or ctx_wh or ctx_ch:
             hash_lookup[pid] = {
                 "window_hash": wh, "cohort_hash": ch,
                 "ctx_window_hash": ctx_wh, "ctx_cohort_hash": ctx_ch,
+                "window_sig": ws, "cohort_sig": cs,
+                "ctx_window_sig": ctx_ws, "ctx_cohort_sig": ctx_cs,
             }
             if not pid.startswith("parameter-"):
                 hash_lookup[f"parameter-{pid}"] = hash_lookup[pid]

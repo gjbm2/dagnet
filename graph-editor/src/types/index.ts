@@ -696,6 +696,15 @@ export interface SlicePosteriorEntry {
   divergences: number;
   evidence_grade: number;            // 0=cold start, 1=weak, 2=mature, 3=full Bayesian
   provenance: 'bayesian' | 'pooled-fallback' | 'point-estimate' | 'skipped';
+  // LOO-ELPD model adequacy scoring (doc 32)
+  delta_elpd?: number | null;
+  pareto_k_max?: number | null;
+  n_loo_obs?: number | null;
+  // PPC calibration (doc 38)
+  ppc_coverage_90?: number | null;
+  ppc_n_obs?: number | null;
+  ppc_traj_coverage_90?: number | null;
+  ppc_traj_n_obs?: number | null;
 }
 
 /** Per-slice snapshot within a fit_history entry (doc 27 §3).

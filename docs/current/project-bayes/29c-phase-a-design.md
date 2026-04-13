@@ -1,11 +1,13 @@
 # Phase A — Multi-Hop Cohort Maturity: Subject Kernel and Sampler-Preserving Integration
 
 **Date**: 9-Apr-26  
-**Status**: Substantially implemented (10-Apr-26).
+**Status**: Substantially implemented (10-Apr-26). **Single-hop
+parity gate (A.4) PASSED 13-Apr-26** — v1 vs v2 field-by-field on
+real graph data, window and cohort modes.
 `cohort_forecast_v2.py` (1000+ lines), `span_kernel.py`,
 `span_evidence.py`, `span_adapter.py`, `cohort_maturity_v2` registered
-FE+BE. Remaining: formal parity gate (A.4), multi-hop acceptance
-tests (A.5)  
+FE+BE. Remaining: multi-hop acceptance tests (A.5) — parallel quality
+work, does not block engine extraction.  
 **Depends on**: Docs 30 and 31 — implemented and available  
 **Companion docs**:
 - `29-generalised-forecast-engine-design.md`

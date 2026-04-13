@@ -1,6 +1,6 @@
 # Cohort Maturity Documentation Index
 
-**Last updated**: 10-Apr-26
+**Last updated**: 13-Apr-26
 
 This directory contains all design docs, specs, and investigation notes
 for the cohort maturity fan chart and related forecasting work.
@@ -28,11 +28,13 @@ for the cohort maturity fan chart and related forecasting work.
 
 ---
 
-## Current implementation state (10-Apr-26)
+## Current implementation state (13-Apr-26)
 
-### Multi-hop generalisation (Phase A) — substantially implemented
+### Multi-hop generalisation (Phase A) — substantially implemented, single-hop parity PASSED
 
-Phase A (`29c-phase-a-design.md`) is substantially implemented (10-Apr-26):
+Phase A (`29c-phase-a-design.md`) is substantially implemented (10-Apr-26).
+**Single-hop parity gate (A.4) PASSED 13-Apr-26** — v1 vs v2
+field-by-field on real graph data, window and cohort modes.
 
 - `cohort_forecast_v2.py` (1000+ lines): span kernel integration,
   x_provider, fan computation — the full v2 row builder.
@@ -44,13 +46,13 @@ Phase A (`29c-phase-a-design.md`) is substantially implemented (10-Apr-26):
 - `cohort_maturity_v2` registered as analysis type in both FE and BE.
 - Parity tests in `test_doc31_parity.py` (v1 vs v2 on adjacent subjects).
 
-**Remaining**: single-hop parity gate (A.4) and multi-hop acceptance
-tests (A.5) need formal pass confirmation. Phase B (x provider for
+**Remaining**: multi-hop acceptance tests (A.5) — parallel quality
+work, does not block engine extraction. Phase B (x provider for
 x ≠ a) not yet implemented — design in `29d-phase-b-design.md`.
 
-**Next after parity**: extract reusable forecast helpers into a general
-BE library (doc 29 Steps 1–3). Prerequisite: best-available promoted
-model resolution (open issue §6 below).
+**Next**: extract reusable forecast helpers into a general BE library
+(doc 29 Steps 1–3, implementation plan doc 29e). Prerequisite:
+best-available promoted model resolution (open issue §6 below).
 
 ### What the code now does (single-edge)
 

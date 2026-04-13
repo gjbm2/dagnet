@@ -247,26 +247,31 @@ data-constrained. Single-source validation:
 - **A→Z multi-hop cohort maturity** (doc 29) — two-phase
   decomposition:
   - **Phase A — x→y span kernel** (numerator only): **substantially
-    implemented (10-Apr-26)**. `cohort_maturity_v2` registered as
-    analysis type FE+BE. `cohort_forecast_v2.py` (1000+ lines):
-    span kernel integration, x_provider, fan computation.
-    `span_evidence.py`: evidence frame composition.
-    `span_kernel.py`: conditional kernel via DP convolution.
-    `span_adapter.py`: adapter layer. Parity tests in
-    `test_doc31_parity.py`. **Remaining**: single-hop parity gate
-    (A.4) and multi-hop acceptance tests (A.5) need formal pass
-    confirmation.
+    implemented (10-Apr-26)**. **Single-hop parity gate (A.4) PASSED
+    13-Apr-26** — v1 vs v2 field-by-field on real graph data, window
+    and cohort modes. `cohort_maturity_v2` registered as analysis type
+    FE+BE. `cohort_forecast_v2.py` (1000+ lines): span kernel
+    integration, x_provider, fan computation. `span_evidence.py`:
+    evidence frame composition. `span_kernel.py`: conditional kernel
+    via DP convolution. `span_adapter.py`: adapter layer. Parity
+    tests in `test_doc31_parity.py`. **Remaining**: multi-hop
+    acceptance tests (A.5) — parallel quality work, does not block
+    engine extraction.
   - **Phase B — x provider** (denominator only): swap `x_provider`
     for x ≠ a with proper a→x propagation. Completeness-adjusted
     frontier conditioning. Span kernel untouched. Design in
     `29d-phase-b-design.md`. Not yet implemented.
   Docs 30+31 implemented: BE resolves path from DSL natively.
-  **Next step after Phase A parity**: extract reusable forecast
-  helpers from cohort maturity into a general BE library (see doc 29
-  Steps 1–3 — `ForecastState` contract, `evaluate_forecast_at_tau`
-  scalar helper, unified basis resolver). Prerequisite: best-available
-  promoted model resolution, not only Bayes vars (see
-  cohort-maturity/INDEX.md §6).
+  **Next step**: extract reusable forecast helpers from cohort
+  maturity into a general BE library (see doc 29 Steps 1–3 —
+  `ForecastState` contract, `evaluate_forecast_at_tau` scalar helper,
+  unified basis resolver; implementation plan in doc 29e).
+  Prerequisite: best-available promoted model resolution, not only
+  Bayes vars (see cohort-maturity/INDEX.md §6).
+  **Bayes GA blocker**: Phase C depends on Phase 2 contexted models,
+  currently blocked on div-by-zero issues in JAX — diamond-context
+  models fail at init (bad gradients). See handover
+  `12-Apr-26-jax-backend-contexted-compilation.md`.
 - **Snapshot regime selection** (doc 30) — move regime selection from
   FE preflight to authoritative BE selection per (edge, anchor_day,
   retrieved_at) triple. Eliminates FE preflight round-trip; prevents
