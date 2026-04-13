@@ -12,7 +12,7 @@ import pytest
 # Import the function under test
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from run_regression import _audit_harness_log
+from run_regression import _audit_harness_log, _parse_recovery_output, assert_recovery
 
 
 # ---------------------------------------------------------------------------
@@ -81,6 +81,15 @@ Status:      complete
 Quality:     rhat=1.0050, ess=1668.0, converged=100.0%
 """
 
+LOG_COMPOUND_SLICE = """
+Log file: /tmp/bayes_harness-graph-synth-compound-slice.log
+    model: features: latent_latency=True, cohort_latency=True, overdispersion=True, latent_onset=True, window_only=False, latency_dispersion=True
+  p_slice abc12345… context(channel:google).context(device:mobile): 0.4013±0.1175 HDI=[0.2000, 0.6000] kappa=17.2±2.8 mu=1.100±0.005 sigma=0.574±0.004 onset=1.00±0.01
+
+Status:      complete
+Quality:     rhat=1.0050, ess=1668.0, converged=100.0%
+"""
+
 LOG_INCOMPLETE = """
 Log file: /tmp/bayes_harness-graph-synth-incomplete.log
     model: features: latent_latency=True, cohort_latency=True, overdispersion=True, latent_onset=True, window_only=False, latency_dispersion=True
@@ -102,6 +111,44 @@ def _run_audit(log_content: str, graph_name: str = "synth-test") -> dict:
         return _audit_harness_log(graph_name)
     finally:
         os.remove(path)
+
+
+def _truth_edge(
+    *,
+    p: float = 0.55,
+    mu: float = 2.2,
+    sigma: float = 0.45,
+    onset: float = 1.5,
+) -> dict:
+    return {
+        "p": p,
+        "mu": mu,
+        "sigma": sigma,
+        "onset": onset,
+    }
+
+
+def _recovered_param(value: float, *, sd: float = 0.05) -> dict:
+    return {
+        "truth": value,
+        "posterior_mean": value,
+        "posterior_sd": sd,
+        "z_score": 0.0,
+        "abs_error": 0.0,
+        "status": "OK",
+    }
+
+
+def _base_parsed() -> dict:
+    return {
+        "quality": {
+            "rhat": 1.01,
+            "ess": 600,
+            "converged_pct": 100.0,
+        },
+        "edges": {},
+        "slices": {},
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -193,6 +240,14 @@ class TestAuditNoPriors:
         assert abs(a["inference"]["mu_details"][0]["prior"] - 0.0) < 0.001
 
 
+class TestAuditCompoundSlice:
+    def test_compound_slice_ctx_key_is_parsed(self):
+        a = _run_audit(LOG_COMPOUND_SLICE, "synth-compound-slice")
+        assert a["inference"]["slice_details"][0]["ctx_key"] == (
+            "context(channel:google).context(device:mobile)"
+        )
+
+
 class TestAuditIncompleteLog:
     def test_not_completed(self):
         a = _run_audit(LOG_INCOMPLETE, "synth-incomplete")
@@ -241,3 +296,157 @@ class TestAuditJobLabel:
         a = _run_audit(LOG_HEALTHY)
         assert a["log_found"] is True
         assert a["data_binding"]["snapshot_edges"] == 2
+
+
+class TestAssertRecoveryContracts:
+    def test_missing_edge_rows_fail_even_with_good_quality(self):
+        parsed = _base_parsed()
+        truth = {"edges": {"simple-a-to-b": _truth_edge()}}
+
+        result = assert_recovery("synth-test", parsed, truth)
+
+        assert result["passed"] is False
+        assert any(
+            "missing recovery rows" in failure and "simple-a-to-b" in failure
+            for failure in result["failures"]
+        )
+
+    def test_missing_edge_params_fail(self):
+        parsed = _base_parsed()
+        parsed["edges"]["simple-a-to-b"] = {
+            "p": _recovered_param(0.55),
+        }
+        truth = {"edges": {"simple-a-to-b": _truth_edge()}}
+
+        result = assert_recovery("synth-test", parsed, truth)
+
+        assert result["passed"] is False
+        assert any(
+            "simple-a-to-b: missing parsed recovery param(s): mu, sigma, onset" in failure
+            for failure in result["failures"]
+        )
+
+    def test_missing_slice_rows_fail_for_contexted_truth(self):
+        parsed = _base_parsed()
+        parsed["edges"]["simple-a-to-b"] = {
+            "p": _recovered_param(0.55),
+            "mu": _recovered_param(2.2),
+            "sigma": _recovered_param(0.45),
+            "onset": _recovered_param(1.5),
+        }
+        truth = {
+            "edges": {"simple-a-to-b": _truth_edge()},
+            "context_dimensions": [
+                {
+                    "id": "channel",
+                    "values": [
+                        {
+                            "id": "google",
+                            "edges": {"simple-a-to-b": {"p_mult": 1.1}},
+                        }
+                    ],
+                }
+            ],
+        }
+
+        result = assert_recovery("synth-test", parsed, truth)
+
+        assert result["passed"] is False
+        assert any(
+            "missing per-slice recovery rows" in failure
+            or "missing slice recovery rows" in failure
+            for failure in result["failures"]
+        )
+
+    def test_missing_slice_params_fail(self):
+        parsed = _base_parsed()
+        parsed["edges"]["simple-a-to-b"] = {
+            "p": _recovered_param(0.55),
+            "mu": _recovered_param(2.2),
+            "sigma": _recovered_param(0.45),
+            "onset": _recovered_param(1.5),
+        }
+        parsed["slices"]["context(channel:google) :: simple-a-to-b"] = {
+            "p": _recovered_param(0.61),
+        }
+        truth = {
+            "edges": {"simple-a-to-b": _truth_edge()},
+            "context_dimensions": [
+                {
+                    "id": "channel",
+                    "values": [
+                        {
+                            "id": "google",
+                            "edges": {"simple-a-to-b": {"p_mult": 1.1}},
+                        }
+                    ],
+                }
+            ],
+        }
+
+        result = assert_recovery("synth-test", parsed, truth)
+
+        assert result["passed"] is False
+        assert any(
+            "SLICE context(channel:google) :: simple-a-to-b: missing parsed recovery param(s): mu, sigma, onset" in failure
+            for failure in result["failures"]
+        )
+
+    def test_complete_edge_and_slice_surface_passes(self):
+        parsed = _base_parsed()
+        parsed["edges"]["simple-a-to-b"] = {
+            "p": _recovered_param(0.55),
+            "mu": _recovered_param(2.2),
+            "sigma": _recovered_param(0.45),
+            "onset": _recovered_param(1.5),
+        }
+        parsed["slices"]["context(channel:google) :: simple-a-to-b"] = {
+            "p": _recovered_param(0.61),
+            "mu": _recovered_param(2.3),
+            "sigma": _recovered_param(0.50),
+            "onset": _recovered_param(1.6),
+        }
+        truth = {
+            "edges": {"simple-a-to-b": _truth_edge()},
+            "context_dimensions": [
+                {
+                    "id": "channel",
+                    "values": [
+                        {
+                            "id": "google",
+                            "edges": {"simple-a-to-b": {"p_mult": 1.1}},
+                        }
+                    ],
+                }
+            ],
+        }
+
+        result = assert_recovery("synth-test", parsed, truth)
+
+        assert result["passed"] is True
+        assert result["failures"] == []
+
+
+class TestParseRecoveryOutputContracts:
+    def test_compound_slice_labels_are_preserved_verbatim(self):
+        output = """
+======================================================================
+  RECOVERY COMPARISON (17s, rhat=1.0100, ess=600, converged=100%)
+======================================================================
+
+  ─────────────────────────────────────────────────────────────────
+  Per-slice recovery (Phase C)
+  ─────────────────────────────────────────────────────────────────
+
+    context(channel:google).context(device:mobile) :: simple-a-to-b
+      p         truth=  0.610  post=  0.612±0.050      z= 0.04  [OK]
+
+======================================================================
+"""
+
+        parsed = _parse_recovery_output(output)
+
+        assert (
+            "context(channel:google).context(device:mobile) :: simple-a-to-b"
+            in parsed["slices"]
+        )

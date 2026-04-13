@@ -30,6 +30,7 @@ import time
 import argparse
 import atexit
 import signal
+import copy
 import subprocess
 import re
 import yaml
@@ -253,114 +254,89 @@ def _compute_fe_hashes(graph_path: str) -> dict:
 # Pre-flight checks
 # ---------------------------------------------------------------------------
 
-def _run_preflight(
-    snapshot_subjects: list[dict],
-    db_connection: str,
-    graph: dict,
-    param_files: dict,
-    _edges: list[tuple],
-) -> dict:
-    """Verify DB data, bind evidence, and summarise model structure.
+def _build_preflight_payload(payload: dict) -> dict:
+    """Clone payload for worker-backed preflight without MCMC or webhooks."""
+    preflight_payload = copy.deepcopy(payload)
+    preflight_payload["webhook_url"] = ""
+    settings = preflight_payload.setdefault("settings", {})
+    settings["binding_receipt"] = "gate"
+    settings["model_inspect_only"] = True
+    return preflight_payload
 
-    Returns dict with preflight results. Exits with error if critical
-    checks fail.
-    """
-    import psycopg2
-    from compiler.topology import analyse_topology
-    from compiler.evidence import bind_snapshot_evidence
-    from worker import _query_snapshot_subjects
 
-    results = {"db_ok": True, "evidence_ok": True, "warnings": []}
+def _summarise_preflight_result(result: dict) -> dict:
+    """Normalise worker preflight output into a harness decision summary."""
+    receipt = result.get("binding_receipt") or {}
+    edge_receipts = receipt.get("edge_receipts") or {}
+    failed_edges = sorted(
+        edge_id
+        for edge_id, edge_receipt in edge_receipts.items()
+        if edge_receipt.get("verdict") == "fail"
+    )
+    warned_edges = sorted(
+        edge_id
+        for edge_id, edge_receipt in edge_receipts.items()
+        if edge_receipt.get("verdict") == "warn"
+    )
+    edges_failed = int(receipt.get("edges_failed", 0) or 0)
+    edges_warned = int(receipt.get("edges_warned", 0) or 0)
+    safe_to_sample = (
+        result.get("status") == "complete"
+        and not result.get("error")
+        and edges_failed == 0
+        and edges_warned == 0
+    )
+    return {
+        "safe_to_sample": safe_to_sample,
+        "error": result.get("error", ""),
+        "edges_failed": edges_failed,
+        "edges_warned": edges_warned,
+        "edges_skipped": int(receipt.get("edges_skipped", 0) or 0),
+        "edges_fallback": int(receipt.get("edges_fallback", 0) or 0),
+        "edges_no_subjects": int(receipt.get("edges_no_subjects", 0) or 0),
+        "failed_edges": failed_edges,
+        "warned_edges": warned_edges,
+        "binding_receipt": receipt,
+    }
 
-    # 1. DB connectivity
-    print("\n── Pre-flight: DB connectivity ──")
+
+def _run_preflight(payload: dict) -> dict:
+    """Run the worker's real binding/model-inspect path without MCMC."""
+    from worker import fit_graph
+
+    print("\n── Pre-flight: worker-backed binding gate ──")
     try:
-        conn = psycopg2.connect(db_connection)
-        conn.cursor().execute("SELECT 1")
-        conn.close()
-        print("  PASS: DB connected")
+        result = fit_graph(
+            _build_preflight_payload(payload),
+            report_progress=lambda *_args, **_kwargs: None,
+        )
     except Exception as e:
-        print(f"  FAIL: DB connection failed: {e}")
+        print(f"  FAIL: worker preflight crashed: {e}")
         sys.exit(1)
 
-    # 2. Snapshot row counts per subject
-    print("\n── Pre-flight: Snapshot DB row counts ──")
-    conn = psycopg2.connect(db_connection)
-    cur = conn.cursor()
-    total_db_rows = 0
-    rows_per_edge: dict[str, int] = {}
-    for subj in snapshot_subjects:
-        ch = subj.get("core_hash", "")
-        pid = subj.get("param_id", "")
-        eid = subj.get("edge_id", "")
-        cur.execute("SELECT COUNT(*) FROM snapshots WHERE core_hash = %s", (ch,))
-        count = cur.fetchone()[0]
-        total_db_rows += count
-        rows_per_edge[eid] = rows_per_edge.get(eid, 0) + count
-        status = "PASS" if count > 0 else "ok"  # ok = empty but not fatal
-        print(f"  {status} {pid} ({eid[:8]}…) hash={ch[:16]}…: {count} rows")
-    conn.close()
+    interesting_markers = (
+        "connected to Neon",
+        "subjects:",
+        "topology:",
+        "snapshot DB:",
+        "evidence:",
+        "binding receipt",
+        "  binding ",
+        "  slice ",
+    )
+    for line in result.get("log", []):
+        if any(marker in line for marker in interesting_markers):
+            print(f"  {line}")
 
-    # Check that each edge with a parameter has at least SOME data across
-    # all its subjects. Individual subjects may be empty (e.g. bare hash
-    # when data is context-only — that's fine as long as contexted hashes
-    # for the same edge have data).
-    _expected_edges = {eid for _, eid, _, _ in _edges}
-    edges_with_no_data = [eid for eid in _expected_edges
-                          if rows_per_edge.get(eid, 0) == 0]
-    if edges_with_no_data:
-        print(f"\n  ABORT: {len(edges_with_no_data)} edge(s) have 0 rows across ALL subjects.")
-        print("  Run synth_gen.py --write-files to populate DB, or check hash parity.")
-        for eid in edges_with_no_data:
-            print(f"    {eid[:8]}…: 0 rows")
-        sys.exit(1)
-    print(f"  Total: {total_db_rows} DB rows across {len(snapshot_subjects)} subjects")
+    summary = _summarise_preflight_result(result)
+    if summary["error"]:
+        print(f"  FAIL: {summary['error']}")
+    if summary["failed_edges"]:
+        print("  FAIL edges: " + ", ".join(summary["failed_edges"]))
+    if summary["warned_edges"]:
+        print("  WARN edges: " + ", ".join(summary["warned_edges"]))
 
-    # 3. Evidence binding
-    print("\n── Pre-flight: Evidence binding ──")
-    topology = analyse_topology(graph)
-
-    # Query DB via the same path the worker uses
-    log = []
-    snapshot_rows = _query_snapshot_subjects(snapshot_subjects, topology, log)
-    for line in log:
-        print(f"  {line}")
-
-    total_rows_fetched = sum(len(v) for v in snapshot_rows.values())
-    if total_rows_fetched == 0:
-        print(f"\n  ABORT: Worker query returned 0 rows despite DB having data.")
-        print(f"  This means the worker's query path is broken (param_id / hash mismatch).")
-        results["evidence_ok"] = False
-        sys.exit(1)
-
-    evidence = bind_snapshot_evidence(topology, snapshot_rows, param_files, today=date.today().strftime("%-d-%b-%y"))
-
-    print("\n── Pre-flight: Evidence summary ──")
-    for eid, ev in evidence.edges.items():
-        if ev.skipped:
-            continue
-        n_trajs = sum(len(c.trajectories) for c in ev.cohort_obs)
-        n_daily = 0
-        for c in ev.cohort_obs:
-            if isinstance(c.daily, list):
-                n_daily += len(c.daily)
-        max_ages = 0
-        for c in ev.cohort_obs:
-            for t in c.trajectories:
-                ages = len(t.retrieval_ages) if hasattr(t.retrieval_ages, '__len__') else 0
-                if ages > max_ages:
-                    max_ages = ages
-        source = "trajectories" if n_trajs > 0 else "daily"
-        print(f"  {eid[:12]}… {ev.param_id}: {n_trajs} trajs (max {max_ages} ages), {n_daily} daily, total_n={ev.total_n}")
-        if n_trajs == 0 and n_daily > 0:
-            results["warnings"].append(f"{ev.param_id}: using daily fallback, not trajectories")
-
-    if results["warnings"]:
-        print("\n  WARNINGS:")
-        for w in results["warnings"]:
-            print(f"    ⚠ {w}")
-
-    return results
+    return summary
 
 
 # ---------------------------------------------------------------------------
@@ -431,20 +407,22 @@ def main():
     parser.add_argument("--diag", action="store_true",
                         help="Enable extra diagnostics: PPC calibration (doc 36).")
     parser.add_argument("--clean", action="store_true",
-                        help="Clear stale caches before running: (1) delete __pycache__ "
-                             "dirs under bayes/ and graph-editor/lib/ so no stale bytecode "
-                             "masks source edits, (2) delete .synth-meta.json for the target "
-                             "graph so verify_synth_data re-checks DB with fresh hashes.")
+                        help="Clear __pycache__ dirs under bayes/ and graph-editor/lib/ "
+                             "so no stale bytecode masks source edits.")
+    parser.add_argument("--rebuild", action="store_true",
+                        help="Delete .synth-meta.json for the target graph, forcing "
+                             "verify_synth_data to re-check DB with fresh hashes. "
+                             "Heavy — re-inserts all synth rows. Only needed after "
+                             "truth file or synth_gen changes.")
     # Keep --clean-pyc as hidden alias for backwards compat
     parser.add_argument("--clean-pyc", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.clean_pyc:
         args.clean = True
 
-    # Clean caches if requested
+    # Clean bytecode if requested
     if args.clean:
         import shutil
-        # 1. Python bytecode
         _pyc_cleaned = 0
         for _root in [os.path.join(REPO_ROOT, "bayes"),
                       os.path.join(REPO_ROOT, "graph-editor", "lib")]:
@@ -455,7 +433,10 @@ def main():
                         _pyc_cleaned += 1
                     except OSError:
                         pass  # parallel run already deleted it
-        # 2. Synth meta sidecar (forces re-check against DB with fresh hashes)
+        print(f"Cleaned {_pyc_cleaned} __pycache__ dirs")
+
+    # Rebuild synth meta if requested (forces DB re-insert)
+    if args.rebuild:
         _meta_cleaned = 0
         if args.graph and args.graph.startswith("synth-"):
             _conf = _read_private_repos_conf()
@@ -465,7 +446,7 @@ def main():
                 if os.path.isfile(_meta):
                     os.remove(_meta)
                     _meta_cleaned = 1
-        print(f"Cleaned {_pyc_cleaned} __pycache__ dirs, {_meta_cleaned} synth-meta files")
+        print(f"Rebuild: deleted {_meta_cleaned} synth-meta files")
 
     # NOTE: lock acquisition moved after graph name resolution (below)
     job_label = args.job_label  # If set, overrides graph_name for lock + log file
@@ -612,10 +593,14 @@ def main():
             graph_path = os.path.join(REPO_ROOT, data_repo_dir, "graphs", f"{graph_name}.json")
         truth = _load_truth_file(graph_path)
 
-        expected_sample_s = args.timeout or truth.get("simulation", {}).get("expected_sample_seconds", 600)
-        if args.timeout:
+        if args.timeout is not None and args.timeout > 0:
+            expected_sample_s = args.timeout
             timeout_s = args.timeout
+        elif args.timeout == 0:
+            expected_sample_s = 0
+            timeout_s = 0
         else:
+            expected_sample_s = truth.get("simulation", {}).get("expected_sample_seconds", 600)
             timeout_s = max(expected_sample_s * 3, 120)
     else:
         conf = _read_private_repos_conf()
@@ -805,43 +790,6 @@ def main():
         print(f"  {n_subjects} subjects, {n_params} param files, "
               f"{n_regimes} candidate regimes, MECE: {mece_dims}")
 
-        # Reconstruct _edges list for pre-flight and param recovery
-        _edges = []
-        _seen_params = set()
-        for subj in snapshot_subjects:
-            pid = subj.get("param_id", "")
-            eid = subj.get("edge_id", "")
-            ch = subj.get("core_hash", "")
-            if pid and eid and (pid, eid) not in _seen_params:
-                _seen_params.add((pid, eid))
-                # Find window and cohort hashes for this edge
-                w_hash = ""
-                c_hash = ""
-                for s2 in snapshot_subjects:
-                    if s2.get("edge_id") == eid:
-                        sk = s2.get("slice_keys", [""])[0] if s2.get("slice_keys") else ""
-                        if not w_hash:
-                            w_hash = s2.get("core_hash", "")
-                        if w_hash and s2.get("core_hash", "") != w_hash:
-                            c_hash = s2.get("core_hash", "")
-                _edges.append((pid, eid, w_hash, c_hash))
-
-        # --- Pre-flight checks (MANDATORY before MCMC) ---
-        preflight = _run_preflight(snapshot_subjects, db_connection, graph, param_files, _edges)
-
-        if args.preflight_only:
-            print("\n" + "=" * 60)
-            print("PRE-FLIGHT COMPLETE")
-            if preflight["warnings"]:
-                print(f"  {len(preflight['warnings'])} warnings — review above")
-            else:
-                print("  All checks passed. Safe to run MCMC.")
-            print("=" * 60)
-            return
-
-        if args.placeholder:
-            pass  # Skip pre-flight warnings for placeholder mode
-
         # Ensure DB_CONNECTION is in the payload
         if not payload.get("db_connection"):
             payload["db_connection"] = db_connection
@@ -873,6 +821,26 @@ def main():
         if args.settings_json:
             settings.update(_load_settings_json(args.settings_json))
 
+        # --- Pre-flight checks (MANDATORY before MCMC) ---
+        preflight = _run_preflight(payload)
+        if preflight["edges_failed"] > 0 or preflight["error"]:
+            print("\n  ABORT: pre-flight found blocking issues.")
+            sys.exit(1)
+
+        if args.preflight_only:
+            print("\n" + "=" * 60)
+            print("PRE-FLIGHT COMPLETE")
+            if preflight["safe_to_sample"]:
+                print("  All checks passed. Safe to run MCMC.")
+                print("=" * 60)
+                return
+            print("  Pre-flight found warnings — review above before MCMC.")
+            print("=" * 60)
+            sys.exit(1)
+
+        if not preflight["safe_to_sample"] and not args.placeholder:
+            print("\n  NOTE: pre-flight found warnings — continuing because no blocking failures were raised.")
+
         payload["_job_id"] = f"harness-{int(time.time())}"
 
         if args.curl:
@@ -888,16 +856,24 @@ def main():
     # --- Run MCMC ---
     import threading
 
-    LOG_PATH = f"/tmp/bayes_harness-{job_label or graph_name}.log"
+    _label = job_label or graph_name
+    LOG_PATH = f"/tmp/bayes_harness-{_label}.log"
+    # Timestamped archive copy — never overwritten.
+    _ts = time.strftime("%Y%m%d-%H%M%S")
+    LOG_ARCHIVE = f"/tmp/bayes_harness-{_label}-{_ts}.log"
     log_file = open(LOG_PATH, "w")
+    archive_file = open(LOG_ARCHIVE, "w")
 
     def _print(msg="", **kwargs):
         print(msg, flush=True, **kwargs)
         log_file.write(msg + "\n")
         log_file.flush()
+        archive_file.write(msg + "\n")
+        archive_file.flush()
 
     _print(f"Log file: {LOG_PATH}")
     _print(f"  tail -f {LOG_PATH}")
+    _print(f"Archive:  {LOG_ARCHIVE}")
 
     t_start = time.time()
     last_stage = ["idle"]
@@ -957,11 +933,13 @@ def main():
                     _print(f"\n  Killing sampler...")
                     subprocess.run(["pkill", "-P", str(os.getpid())], capture_output=True)
                     log_file.close()
+                    archive_file.close()
                     sys.exit(1)
-                if elapsed > timeout_s:
+                if timeout_s > 0 and elapsed > timeout_s:
                     _print(f"\n  TIMEOUT after {elapsed:.0f}s (last stage: {last_stage[0]})")
                     subprocess.run(["pkill", "-P", str(os.getpid())], capture_output=True)
                     log_file.close()
+                    archive_file.close()
                     sys.exit(1)
                 _print(f"  ... {elapsed:.0f}s elapsed, stage: {last_stage[0]}")
 
@@ -970,11 +948,13 @@ def main():
             _print(f"\nCRASHED after {time.time() - t_start_run:.1f}s: {e}")
             _print(tb)
             log_file.close()
+            archive_file.close()
             sys.exit(1)
 
         if not result_box[0]:
             _print(f"\nNo result returned after {time.time() - t_start_run:.1f}s")
             log_file.close()
+            archive_file.close()
             sys.exit(1)
 
         return result_box[0]
@@ -1230,6 +1210,7 @@ def main():
     _print(f"{'=' * 60}")
 
     log_file.close()
+    archive_file.close()
 
 
 if __name__ == "__main__":

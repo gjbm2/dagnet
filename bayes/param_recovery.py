@@ -31,7 +31,48 @@ import re
 import time
 import argparse
 
+from recovery_slices import (
+    build_slice_truth_baselines,
+    compose_slice_truth,
+    iter_expected_single_slice_specs,
+    make_slice_label,
+    match_truth_edge_key,
+    parse_slice_label,
+)
+
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+_NUMBER_RE = r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?"
+_SLICE_POSTERIOR_RE = re.compile(
+    rf"p_slice (\w{{8}})… (.+?):\s+({_NUMBER_RE})±({_NUMBER_RE})\s+"
+    rf"HDI=\[({_NUMBER_RE}),\s*({_NUMBER_RE})\]"
+)
+
+
+def _parse_slice_posteriors(output: str) -> dict[str, dict[str, dict]]:
+    """Parse per-slice posterior lines from harness diagnostics."""
+    slice_posteriors: dict[str, dict[str, dict]] = {}
+    for line in output.split("\n"):
+        sp_match = _SLICE_POSTERIOR_RE.search(line)
+        if not sp_match:
+            continue
+
+        eid_prefix = sp_match.group(1)
+        ctx_key = sp_match.group(2)
+        entry = {
+            "p_mean": float(sp_match.group(3)),
+            "p_sd": float(sp_match.group(4)),
+            "p_hdi_lower": float(sp_match.group(5)),
+            "p_hdi_upper": float(sp_match.group(6)),
+        }
+        for var in ["kappa", "mu", "sigma", "onset"]:
+            vm = re.search(rf"{var}=({_NUMBER_RE})±({_NUMBER_RE})", line)
+            if vm:
+                entry[f"{var}_mean"] = float(vm.group(1))
+                entry[f"{var}_sd"] = float(vm.group(2))
+        slice_posteriors.setdefault(eid_prefix, {})[ctx_key] = entry
+    return slice_posteriors
 
 
 def main():
@@ -50,7 +91,9 @@ def main():
     parser.add_argument("--no-mcmc", action="store_true",
                         help="Stop after model build, skip MCMC (still shows truth)")
     parser.add_argument("--clean", action="store_true",
-                        help="Pass --clean to harness (clears bytecode + synth meta caches)")
+                        help="Pass --clean to harness (clears __pycache__ bytecode)")
+    parser.add_argument("--rebuild", action="store_true",
+                        help="Pass --rebuild to harness (deletes synth-meta, forces DB re-insert)")
     parser.add_argument("--job-label", type=str, default=None,
                         help="Unique label for log files (forwarded to harness --job-label). "
                              "Prevents parallel runs from cross-contaminating logs.")
@@ -106,22 +149,7 @@ def main():
     settings_json_path = None
     context_dims = truth.get("context_dimensions", [])
     if context_dims:
-        slice_truth_baselines: dict[str, dict[str, dict]] = {}  # edge_key → ctx_key → {p, mu, sigma, onset}
-        for dim in context_dims:
-            dim_id = dim["id"]
-            for val in dim.get("values", []):
-                val_id = val["id"]
-                ctx_key = f"context({dim_id}:{val_id})"
-                for edge_key, overrides in val.get("edges", {}).items():
-                    base = truth_edges.get(edge_key, {})
-                    if "p" not in base:
-                        continue
-                    slice_truth_baselines.setdefault(edge_key, {})[ctx_key] = {
-                        "p": base["p"] * overrides.get("p_mult", 1.0),
-                        "mu": base.get("mu", 0.0) + overrides.get("mu_offset", 0.0),
-                        "sigma": base.get("sigma", 0.5) * overrides.get("sigma_mult", 1.0),
-                        "onset": base.get("onset", 0.0) + overrides.get("onset_offset", 0.0),
-                    }
+        slice_truth_baselines = build_slice_truth_baselines(truth)
         if slice_truth_baselines:
             import tempfile
             settings_json_path = tempfile.mktemp(suffix=".json", prefix="bayes_settings_")
@@ -189,6 +217,8 @@ def main():
         cmd.extend(["--feature", f])
     if args.clean:
         cmd.append("--clean")
+    if args.rebuild:
+        cmd.append("--rebuild")
     if args.job_label:
         cmd.extend(["--job-label", args.job_label])
     if args.dsl_override:
@@ -201,13 +231,29 @@ def main():
 
     # Pin thread counts to prevent BLAS/OpenMP oversubscription during parallel runs.
     # PYTHONDONTWRITEBYTECODE: prevent stale .pyc from masking source edits.
-    env = {**os.environ, "OMP_NUM_THREADS": "1", "MKL_NUM_THREADS": "1",
-           "OPENBLAS_NUM_THREADS": "1", "NUMBA_NUM_THREADS": "1",
-           "PYTHONDONTWRITEBYTECODE": "1"}
+    _jax = any(f.startswith("jax_backend=t") for f in args.feature)
+    if _jax:
+        # JAX's XLA thread pool benefits from all cores — don't pin to 1.
+        # Explicitly enable multi-threaded Eigen and set intra-op threads.
+        import os as _os
+        _ncpu = str(_os.cpu_count() or 16)
+        env = {**os.environ,
+               "PYTHONDONTWRITEBYTECODE": "1",
+               "XLA_FLAGS": "--xla_cpu_multi_thread_eigen=true",
+               "OMP_NUM_THREADS": _ncpu,
+               "MKL_NUM_THREADS": _ncpu,
+               "OPENBLAS_NUM_THREADS": _ncpu,
+               }
+    else:
+        # numba: pin threads to prevent BLAS/OpenMP oversubscription in parallel.
+        env = {**os.environ, "OMP_NUM_THREADS": "1", "MKL_NUM_THREADS": "1",
+               "OPENBLAS_NUM_THREADS": "1", "NUMBA_NUM_THREADS": "1",
+               "PYTHONDONTWRITEBYTECODE": "1"}
 
     t0 = time.time()
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=args.timeout + 60, env=env)
+        _sub_timeout = None if args.timeout == 0 else args.timeout + 60
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=_sub_timeout, env=env)
     finally:
         # Clean up temp settings file
         if settings_json_path and os.path.isfile(settings_json_path):
@@ -464,34 +510,61 @@ def main():
         print()
 
     # --- Phase C: per-slice posterior comparison ---
-    # Parse p_slice lines from inference diagnostics. Full format:
-    #   p_slice 1d62f264… context(synth-channel:google): 0.4013±0.1175 HDI=[...] kappa=17.2±2.8 mu=1.100±0.005 sigma=0.574±0.004 onset=1.00±0.01
-    slice_posteriors: dict[str, dict[str, dict]] = {}  # uuid_prefix → ctx_key → {vars}
-    for line in output.split("\n"):
-        sp_match = re.search(
-            r"p_slice (\w{8})… (context\([^)]+\)):\s+([\d.]+)±([\d.]+)\s+HDI=\[([\d.]+),\s*([\d.]+)\]",
-            line
-        )
-        if sp_match:
-            eid_prefix = sp_match.group(1)
-            ctx_key = sp_match.group(2)
-            entry = {
-                "p_mean": float(sp_match.group(3)),
-                "p_sd": float(sp_match.group(4)),
-                "p_hdi_lower": float(sp_match.group(5)),
-                "p_hdi_upper": float(sp_match.group(6)),
-            }
-            # Extract kappa, mu, sigma, onset from the same line
-            for var in ["kappa", "mu", "sigma", "onset"]:
-                vm = re.search(rf"{var}=([\d.]+)±([\d.]+)", line)
-                if vm:
-                    entry[f"{var}_mean"] = float(vm.group(1))
-                    entry[f"{var}_sd"] = float(vm.group(2))
-            slice_posteriors.setdefault(eid_prefix, {})[ctx_key] = entry
+    slice_posteriors = _parse_slice_posteriors(output)
 
-    # Build ground truth per-slice values from context_dimensions
-    context_dims = truth.get("context_dimensions", [])
-    if context_dims and slice_posteriors:
+    def _print_slice_recovery_block(
+        label: str,
+        slice_truth: dict,
+        sp: dict,
+        *,
+        p_slice_z_threshold: float,
+    ) -> bool:
+        block_failed = False
+        print(f"    {label}")
+
+        for var, truth_val, post_key, sd_key, z_thresh in [
+            ("p",     slice_truth["p"],     "p_mean",     "p_sd",     p_slice_z_threshold),
+            ("mu",    slice_truth["mu"],    "mu_mean",    "mu_sd",    3.0),
+            ("sigma", slice_truth["sigma"], "sigma_mean", "sigma_sd", 3.0),
+            ("onset", slice_truth["onset"], "onset_mean", "onset_sd", 3.0),
+            ("kappa", None,                 "kappa_mean", "kappa_sd", None),
+        ]:
+            post_val = sp.get(post_key)
+            post_sd = sp.get(sd_key)
+            if post_val is None:
+                continue
+
+            if var == "kappa":
+                print(f"      {var:<8s}  post={post_val:7.1f}±{post_sd:.1f}")
+                continue
+
+            if truth_val is None or truth_val == 0:
+                continue
+
+            abs_err = abs(post_val - truth_val)
+            abs_tol = max(0.15, abs(truth_val) * 0.15)
+            if post_sd and post_sd > 0:
+                z_score = abs_err / post_sd
+                recovered = z_score < z_thresh or abs_err < abs_tol
+                status = "OK" if recovered else "MISS"
+            else:
+                z_score = float("inf")
+                recovered = abs_err < abs_tol
+                status = "OK" if recovered else "???"
+
+            if not recovered:
+                block_failed = True
+
+            err_str = f"Δ={abs_err:.3f}" if abs_err < abs_tol and z_score >= z_thresh else f"z={z_score:5.2f}"
+            print(
+                f"      {var:<8s}  truth={truth_val:7.3f}  post={post_val:7.3f}±{post_sd:.3f}  "
+                f"{err_str:>10s}  [{status}]"
+            )
+
+        print()
+        return block_failed
+
+    if context_dims:
         print(f"  {'─' * 65}")
         print(f"  Per-slice recovery (Phase C)")
         print(f"  {'─' * 65}")
@@ -502,84 +575,58 @@ def main():
         per_slice_thresholds = testing.get("per_slice_thresholds", {})
         p_slice_z_threshold = per_slice_thresholds.get("p_slice_z", 3.0)
 
-        for dim in context_dims:
-            dim_id = dim["id"]
-            for val in dim.get("values", []):
-                val_id = val["id"]
-                ctx_key = f"context({dim_id}:{val_id})"
-                edges_overrides = val.get("edges", {})
+        if not slice_posteriors:
+            print("    NO PER-SLICE POSTERIORS FOUND")
+            print()
+            any_fail = True
+        else:
+            parsed_by_label: dict[str, dict] = {}
+            for prefix, slices in slice_posteriors.items():
+                graph_pid = uuid_to_pid.get(prefix, "")
+                if not graph_pid:
+                    continue
+                truth_edge_key = match_truth_edge_key(graph_pid, truth_edges)
+                if not truth_edge_key:
+                    continue
+                for ctx_key, entry in slices.items():
+                    parsed_by_label[make_slice_label(ctx_key, truth_edge_key)] = entry
 
-                for edge_key, overrides in edges_overrides.items():
-                    # Find base edge params from truth
-                    base_edge = truth_edges.get(edge_key, {})
-                    base_p = base_edge.get("p")
-                    if base_p is None:
-                        continue
-
-                    # Compute per-slice ground truth for all vars
-                    slice_truth = {
-                        "p": base_p * overrides.get("p_mult", 1.0),
-                        "mu": base_edge.get("mu", 0.0) + overrides.get("mu_offset", 0.0),
-                        "sigma": base_edge.get("sigma", 0.0) * overrides.get("sigma_mult", 1.0),
-                        "onset": base_edge.get("onset", 0.0) + overrides.get("onset_offset", 0.0),
-                    }
-
-                    # Find the posterior for this slice
-                    sp = None
-                    for prefix, slices in slice_posteriors.items():
-                        mapped_pid = uuid_to_pid.get(prefix, "")
-                        graph_pid = _truth_key_to_graph_pid.get(edge_key, edge_key)
-                        if mapped_pid == graph_pid or mapped_pid == edge_key:
-                            sp = slices.get(ctx_key)
-                            break
-
-                    label = f"{val_id} ({edge_key})"
-                    if sp is None:
-                        print(f"    {label:<35s}  posterior=???")
-                        continue
-
+            seen_labels: set[str] = set()
+            for spec in iter_expected_single_slice_specs(truth):
+                label = spec["label"]
+                sp = parsed_by_label.get(label)
+                if sp is None:
                     print(f"    {label}")
-
-                    # Compare each per-slice variable
-                    for var, truth_val, post_key, sd_key, z_thresh in [
-                        ("p",     slice_truth["p"],     "p_mean",     "p_sd",     p_slice_z_threshold),
-                        ("mu",    slice_truth["mu"],    "mu_mean",    "mu_sd",    3.0),
-                        ("sigma", slice_truth["sigma"], "sigma_mean", "sigma_sd", 3.0),
-                        ("onset", slice_truth["onset"], "onset_mean", "onset_sd", 3.0),
-                        ("kappa", None,                 "kappa_mean", "kappa_sd", None),
-                    ]:
-                        post_val = sp.get(post_key)
-                        post_sd = sp.get(sd_key)
-                        if post_val is None:
-                            continue
-
-                        if var == "kappa":
-                            # Kappa: informational only (no ground truth per-slice)
-                            print(f"      {var:<8s}  post={post_val:7.1f}±{post_sd:.1f}")
-                            continue
-
-                        if truth_val is None or truth_val == 0:
-                            continue
-
-                        abs_err = abs(post_val - truth_val)
-                        abs_tol = max(0.15, abs(truth_val) * 0.15)
-                        if post_sd and post_sd > 0:
-                            z_score = abs_err / post_sd
-                            recovered = z_score < z_thresh or abs_err < abs_tol
-                            status = "OK" if recovered else "MISS"
-                        else:
-                            z_score = float("inf")
-                            recovered = abs_err < abs_tol
-                            status = "OK" if recovered else "???"
-
-                        if not recovered:
-                            any_fail = True
-
-                        err_str = f"Δ={abs_err:.3f}" if abs_err < abs_tol and z_score >= z_thresh else f"z={z_score:5.2f}"
-                        print(f"      {var:<8s}  truth={truth_val:7.3f}  post={post_val:7.3f}±{post_sd:.3f}  "
-                              f"{err_str:>10s}  [{status}]")
-
+                    print("      posterior=???")
                     print()
+                    any_fail = True
+                    continue
+                if _print_slice_recovery_block(
+                    label,
+                    spec["truth"],
+                    sp,
+                    p_slice_z_threshold=p_slice_z_threshold,
+                ):
+                    any_fail = True
+                seen_labels.add(label)
+
+            for label, sp in sorted(parsed_by_label.items()):
+                if label in seen_labels:
+                    continue
+                parsed_label = parse_slice_label(label)
+                if parsed_label is None:
+                    continue
+                ctx_key, edge_key = parsed_label
+                slice_truth = compose_slice_truth(truth, edge_key, ctx_key)
+                if slice_truth is None:
+                    continue
+                if _print_slice_recovery_block(
+                    label,
+                    slice_truth,
+                    sp,
+                    p_slice_z_threshold=p_slice_z_threshold,
+                ):
+                    any_fail = True
 
     print(f"{'=' * 70}")
     if any_fail:

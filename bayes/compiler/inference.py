@@ -1050,9 +1050,10 @@ def summarise_posteriors(
                             _slice_entry["mu_sd"] = float(trace.posterior[_mu_s_name].values.std())
                     # sigma and onset are edge-level (doc 38) — inherit from
                     # edge-level latency so per-slice summary isn't blank.
-                    if sigma_var_name in trace.posterior:
-                        _slice_entry["sigma_mean"] = float(np.mean(trace.posterior[sigma_var_name].values.flatten()))
-                        _slice_entry["sigma_sd"] = float(np.std(trace.posterior[sigma_var_name].values.flatten()))
+                    _sigma_var = f"sigma_lat_{safe_eid}"
+                    if _sigma_var in trace.posterior:
+                        _slice_entry["sigma_mean"] = float(np.mean(trace.posterior[_sigma_var].values.flatten()))
+                        _slice_entry["sigma_sd"] = float(np.std(trace.posterior[_sigma_var].values.flatten()))
                     _onset_var = f"onset_{safe_eid}"
                     if _onset_var in trace.posterior:
                         _slice_entry["onset_mean"] = float(np.mean(trace.posterior[_onset_var].values.flatten()))
@@ -1486,8 +1487,29 @@ def _sample_nutpie(model, config: SamplingConfig, report_progress=None,
         hb_thread.start()
         report_progress("compiling", 0, f"{prefix}Compiling model…")
 
-    compiled_model = nutpie.compile_pymc_model(model)
+    t_compile_start = time.time()
+    n_free = len(model.free_RVs)
+    n_obs = len(model.observed_RVs)
+    n_pot = len(model.potentials)
+    n_det = len(model.deterministics)
+    _backend = "jax" if config.jax_backend else "numba"
+    _grad_backend = "jax" if config.jax_backend else "pytensor"
+    _device_info = ""
+    if config.jax_backend:
+        try:
+            import jax
+            _devices = jax.devices()
+            _device_info = f", jax_devices={[str(d) for d in _devices]}"
+        except Exception:
+            _device_info = ", jax_devices=unknown"
+    print(f"[nutpie-compile] starting: {n_free} free, {n_obs} observed, "
+          f"{n_pot} potentials, {n_det} deterministics, "
+          f"backend={_backend}{_device_info}", flush=True)
+    compiled_model = nutpie.compile_pymc_model(
+        model, backend=_backend, gradient_backend=_grad_backend)
     t_sampling_start = time.time()
+    print(f"[nutpie-compile] done: {int((t_sampling_start - t_compile_start) * 1000)}ms, "
+          f"n_dim={compiled_model.n_dim}", flush=True)
 
     if report_progress:
         report_progress("sampling", 0, f"{prefix}Starting sampler…")

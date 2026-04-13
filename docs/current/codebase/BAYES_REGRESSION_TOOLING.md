@@ -1,6 +1,6 @@
 # Bayes Regression Tooling
 
-**Last updated**: 11-Apr-26
+**Last updated**: 12-Apr-26
 
 How the parameter recovery regression pipeline works: discovery,
 bootstrap, parallel execution, multi-layered audit, and known
@@ -129,8 +129,10 @@ synthetic harness logs).
 
 | Flag | Tool | Purpose |
 |------|------|---------|
-| `--feature KEY=VALUE` | All three | Model feature flag (e.g. `latency_dispersion=true`). Forwarded through the full chain. |
-| `--clean` | All three | Clear stale caches: `__pycache__` dirs + `.synth-meta.json`. Prevents stale bytecode from masking source edits and stale meta from skipping re-bootstrap after hash computation changes. |
+| `--feature KEY=VALUE` | All three | Model feature flag (e.g. `latency_dispersion=true`, `jax_backend=true`). Forwarded through the full chain. |
+| `--clean` | All three | Clear `__pycache__` dirs under `bayes/` and `graph-editor/lib/`. Prevents stale bytecode from masking source edits. Does NOT touch synth data or DB rows. |
+| `--rebuild` | All three | Delete `.synth-meta.json` for the target graph, forcing `verify_synth_data` to re-check DB with fresh hashes. Heavy — triggers full DB re-insert of synth rows. Only needed after truth file or `synth_gen.py` changes. |
+| `--no-timeout` | `run_regression.py` | Disable all timeout layers (subprocess, harness watchdog). Passes `--timeout 0` through the chain. Useful for large contexted graphs where sampling time is unpredictable. |
 | `--exclude SUBSTR` | `run_regression.py` | Skip graphs whose name contains the substring. |
 | `--job-label LABEL` | `param_recovery.py`, `test_harness.py` | Unique label for log + lock files. `run_regression.py` auto-generates `{graph}-r{timestamp}` to prevent parallel runs from colliding. |
 | `--diag` | `param_recovery.py`, `test_harness.py` | Enable PPC calibration (doc 38). Computes coverage@90% per edge per category (endpoint/daily, trajectory). On synth graphs, also computes true PIT from ground-truth parameters for machinery validation. Sets `settings.run_calibration=true`. |
@@ -202,9 +204,9 @@ source files change (e.g. `model.py`, `inference.py`), subprocesses
 may load stale bytecode. Symptoms: feature flags appear in the model
 diagnostics but the model behaviour doesn't match the source code.
 
-Fix: `--clean` flag, or `sys.dont_write_bytecode = True` (set in
-`test_harness.py`), or `PYTHONDONTWRITEBYTECODE=1` in env (set by
-`param_recovery.py` and `run_regression.py`).
+Fix: `--clean` flag (bytecode only), or `sys.dont_write_bytecode = True`
+(set in `test_harness.py`), or `PYTHONDONTWRITEBYTECODE=1` in env (set
+by `param_recovery.py` and `run_regression.py`).
 
 ### Harness log name mismatch
 
@@ -245,6 +247,49 @@ claim data is fresh (truth SHA matches, row count > 0) but the DB
 rows have wrong hashes. `verify_synth_data()` queries the DB with
 the hashes from the meta, which are now wrong.
 
-Fix: `--clean` deletes the `.synth-meta.json`, forcing
+Fix: `--rebuild` deletes the `.synth-meta.json`, forcing
 `verify_synth_data()` to recompute hashes from the graph JSON and
-query the DB with the new (correct) hashes.
+query the DB with the new (correct) hashes. Note: `--clean` does NOT
+delete synth-meta — use `--rebuild` specifically for this case.
+
+### JAX backend for compilation (12-Apr-26)
+
+nutpie's default numba backend has super-linear compilation time with
+respect to pytensor graph size. For contexted models with advanced
+indexing (vector RV gathers across thousands of trajectory intervals),
+numba compilation can exceed 500s on a 3-edge graph — making contexted
+Bayes unusable.
+
+The `jax_backend` feature flag switches nutpie to JAX's XLA compiler,
+which handles gather/scatter operations natively. Measured speedups:
+11.6x on a synthetic 42-dimensional model, and compilation drops from
+500s+ (timeout) to ~5-13s on real contexted graphs.
+
+Usage: `--feature jax_backend=true` on any tool in the chain.
+Implementation: `SamplingConfig.jax_backend` field in
+`compiler/types.py`, wired through `run_inference` →
+`_sample_nutpie` → `nutpie.compile_pymc_model(model, backend='jax',
+gradient_backend='jax')`. Requires `jax[cpu]` (in
+`bayes/requirements.txt`).
+
+JAX also parallelises gradient evaluations across cores internally, so
+`--max-parallel 1` is appropriate when using the JAX backend — each
+graph already utilises all available cores.
+
+### Timeout layers (12-Apr-26)
+
+Three independent timeout mechanisms exist in the pipeline:
+
+1. `test_harness.py` — inner watchdog loop, kills process when
+   `elapsed > timeout_s` (line ~961)
+2. `param_recovery.py` — `subprocess.run(timeout=args.timeout + 60)`
+3. `run_regression.py` — `subprocess.run(timeout=timeout + 120)`
+
+When `--timeout 0` is passed (via `--no-timeout` on
+`run_regression.py`), all three layers disable: the watchdog skips the
+check, and subprocess timeouts are set to `None`.
+
+Per-graph timeouts are read from the truth file's `testing.timeout` or
+`simulation.expected_sample_seconds` fields. These were set for numba
+compilation; JAX runs may complete faster than the budget, but the
+budget should not be relied upon for large or novel graphs.

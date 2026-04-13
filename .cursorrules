@@ -290,7 +290,11 @@ When modifying functionality:
    - If a change needs new assertions, the assistant should normally add them to the most relevant existing test file/suite.
    - Only create a brand-new test file when there is no sensible existing home (e.g. no suite exists for that module/behaviour).
    - **NO NEW TEST FILES** unless there is **manifestly no better place** for the test. Default to extending the most relevant existing suite.
-4. **Add new tests** - For new functionality or bug fixes
+4. **New code path = test BEFORE reporting done (HARD BLOCK)**
+   - This is the most violated rule in the project. The agent repeatedly writes new code, reports it as done, and the user discovers it crashes on first use. A `NameError` in a new code path is proof the path was never executed — not once, not even in a test.
+   - **The rule**: if you add a new branch, conditional, function, or code path, you MUST write and run a test that exercises that path **before** reporting the work as complete. The code is **not finished** without this test. This is not optional. This is not "I should write a test later." The test is part of the deliverable.
+   - **Red flag — expensive-only coverage**: if the only way to exercise your new code is an expensive integration run (MCMC sampling, full harness, 3+ minute cycle), that is a red flag that a fast synthetic test is missing. Write the fast test. The expensive run validates end-to-end behaviour; the fast test catches `NameError`, `KeyError`, `UnboundLocalError`, wrong variable names, and off-by-one scoping — the bugs that actually happen.
+   - **Bayes compiler specifically**: new branches in `build_model`, `summarise_posteriors`, `bind_evidence`, `bind_snapshot_evidence`, or `run_inference` that handle slices, contexts, phases, or new features MUST have a synthetic builder in `bayes/tests/synthetic.py` and a test that calls through the pipeline with that builder. The existing builders cover bare/uncontexted evidence only. If your code path requires contexted/sliced evidence and no builder exists, **creating the builder is part of the work**.
 5. **Run RELEVANT tests only** - Don't run full suite unless explicitly asked
 6. **Write INTEGRATION tests, not unit tests** - See Testing Standards below. Unit tests with mocks don't catch real bugs.
 7. **Test design before test code** - Before writing any test code, produce a prose test design covering invariants, scenarios, and mock decisions. See Test Design Discipline below. Jumping straight to `describe()`/`it()` blocks without this step is a violation.
@@ -298,6 +302,7 @@ When modifying functionality:
 Test files are in:
 - `graph-editor/src/services/__tests__/` - Service integration tests
 - `graph-editor/tests/` - Higher-level integration tests
+- `bayes/tests/` - Bayes compiler pipeline tests (synthetic builders in `synthetic.py`)
 
 ### 5. DATA SOURCES OF TRUTH
 
@@ -663,6 +668,31 @@ Write tests from the **contract**, not from the implementation. Tests shaped by 
 - ✅ `it(‘batched path produces identical coverage to per-edge path on real graph data’)`
 - ✅ `it(‘should use computeShortCoreHash not parseSignature.coreHash for DB lookups’)`
 
+### Test Infrastructure Must Track Feature Domains (STRATEGIC — NOT OPTIONAL)
+
+**This is the most important testing rule in the project and the most expensive one to violate.**
+
+Individual test rules (mock budgets, parity tests, blind tests) govern how to write *a* test. This rule governs whether the **test infrastructure exists at all** for the domain you are working in.
+
+**The failure pattern**: the agent builds an entire new competence domain (contexted evidence, Phase 2 modelling, per-slice hierarchical priors) across multiple sessions. Every code change is validated by running expensive end-to-end cycles (3-minute MCMC, 30-minute regression suites). No fast synthetic test infrastructure is built. Eventually a trivial bug (`NameError`, `UnboundLocalError`, wrong variable scope) crashes every single production run. The user discovers it after wasting 30 minutes of compute. The agent then offers to write "a test" — but the problem was never one missing test. The problem was an **entire untested domain**.
+
+**The rule**: when you are building or extending a capability that introduces a new *category* of inputs, data shapes, or code paths, you must build the test infrastructure for that category alongside the production code. This means:
+
+1. **Synthetic data builders** that produce the new data shape (e.g. sliced evidence with `has_slices=True`, MECE context groups, Phase 2 frozen priors). These go in the relevant test fixtures module (e.g. `bayes/tests/synthetic.py`).
+2. **Pipeline smoke tests** that call through the full code path with synthetic data and assert it completes without crashing. These catch `NameError`, `KeyError`, wrong variable names — the bugs that actually happen when code is written but never executed.
+3. **Recovery/correctness tests** that assert the output is numerically reasonable (posterior means near truth, convergence diagnostics within bounds).
+
+Layer 1 (builders) is a prerequisite for layers 2 and 3. Layer 2 is cheap and catches the most common bugs. Layer 3 is more expensive but proves the system works.
+
+**When this rule applies**: any time you notice that the existing test builders don't cover the data shape your new code handles. If every builder in `synthetic.py` produces bare evidence and your code handles sliced evidence, you cannot test your code with the existing infrastructure. Building the builder is part of the work — not a follow-up, not "we should add tests later", not the user's job to commission.
+
+**Current known gaps** (update this list as gaps are filled):
+- Contexted/sliced evidence builders (`has_slices=True`, `slice_groups` populated) — MISSING
+- Phase 2 frozen-prior pipeline (Phase 1 → moment-match → Phase 2) — MISSING
+- MECE aggregation through `bind_evidence` / `bind_snapshot_evidence` — MISSING
+- `summarise_posteriors` with per-slice extraction — MISSING
+- Per-slice latency inheritance (sigma, onset from edge-level) — MISSING
+
 ### When to Skip Tests
 
 Not every change needs a test. Pure refactors with no behaviour change, documentation edits, and config tweaks do not need tests. But any change that **introduces a new code path, replaces an existing code path, or changes how data flows between subsystems** needs a test — and that test must exercise the real boundary, not a mock of it.
@@ -733,7 +763,7 @@ Before submitting changes:
 Do NOT claim a fix is complete until you have verified it. "I changed the code" is not "it works". The most expensive failure mode is premature "done" — it wastes a full round-trip when the user discovers it's still broken.
 
 **Before reporting completion**:
-1. **Run the relevant test(s)** — not the full suite, but the specific test file(s) covering the changed behaviour. If no test exists, write one first.
+1. **Run the relevant test(s)** — not the full suite, but the specific test file(s) covering the changed behaviour. **If no test exists for the new code path, write one first — this is a hard block, not a suggestion.** See rule 4 in "ALWAYS UPDATE TESTS". A `NameError` or `UnboundLocalError` in untested code that could have been caught by a 10-second pytest is an unacceptable failure mode.
 2. **Check all call sites** — grep for the function/field you changed and verify every caller still works with the new behaviour.
 3. **Verify state in all affected layers** — if you changed something that touches persistence, verify in IDB, FileRegistry, AND GraphStore (not just the one you modified). See SYNC_SYSTEM_OVERVIEW.md for the 4-layer model.
 4. **Test the "already clean" case** — if your fix clears/deletes state, verify it also works when the state is already absent. Idempotency failures are the #1 cause of "worked once, fails on second run" bugs.

@@ -590,3 +590,174 @@ nutpie supports `PyNutsSettings.LowRank` — a low-rank modified mass matrix tha
 **Recommendation**: enable low-rank by default for contexted models with n_dim > ~20. Increase default tune to 1000 (from current 1000 — already correct). For small uncontexted models (n_dim < 15), diagonal is sufficient and avoids the low-rank warmup overhead.
 
 **Implemented (12-Apr-26)**: `inference.py` always uses `PyNutsSettings.LowRank`. The warmup overhead is negligible for small models and the geometry benefit is significant for all but trivial ones — even uncontexted models have onset-mu ridges (correlation ≈ −0.78, journal 6-Apr-26) that lowrank handles better than diagonal.
+
+---
+
+## Compilation Explosion on Mid-Complexity Contexted Graphs (12-Apr-26)
+
+### The problem: fanout-context never compiles
+
+The doc 38 work above was validated on `synth-simple-abc-context` (2 edges, 3 slices). Moving to `synth-fanout-context` (3 data edges, 3 slices, 1 branch group) — a modest increase in complexity — reveals a qualitatively different failure: **nutpie compilation never finishes**. It ran for 574s and hit the 600s timeout without ever starting MCMC.
+
+For comparison, the same graph with an uncontexted `--dsl-override` (bare window+cohort, no slices) compiles in ~20s and completes end-to-end in 114s.
+
+### Controlled comparison: synth-fanout-context
+
+| Metric | Bare DSL (uncontexted) | Contexted | Ratio |
+|--------|----------------------|-----------|-------|
+| Free RVs | ~8 | 24 | 3× |
+| Deterministics | ~6 | 22 | 3.7× |
+| Observed RVs | ~6 | 20 | 3.3× |
+| Potentials | ~2 | 2 (batched) | 1× |
+| Trajectory intervals | ~1800 (est) | 961 + 4451 = 5412 | ~3× |
+| Phase 1 compilation | ~20s | **>574s (TIMEOUT)** | **>29×** |
+| End-to-end | 114s | DNF | — |
+| Recovery | 3/3 edges p OK | — | — |
+
+### Model structure (from harness log)
+
+The contexted model has:
+- 24 free RVs, 22 Deterministics, 2 Potentials, 20 observed RVs
+- 3 data edges × 3 slices = 9 endpoint BetaBinomials + 9 daily BetaBinomials
+- 1 branch group × 3 slices = 3 DirichletMultinomial observed
+- 2 batched trajectory Potentials (one per latency edge):
+  - `traj_window_f29e1a80…_batched`: 3 slices, **961 intervals**, latent_latency=True
+  - `traj_window_87be6baa…_batched`: 3 slices, **4451 intervals**, latent_latency=True
+
+### Why compilation explodes: advanced indexing into vector RVs
+
+The batched trajectory code ([model.py:2700-2726](../../../bayes/compiler/model.py#L2700)) does:
+
+```python
+mu_per_age = mu_slice_vec[age_slice_np]          # shape [n_ages] via int-array index
+p_per_interval = p_slice_vec[interval_slice_np]  # shape [n_intervals] via int-array index
+```
+
+where `age_slice_np` and `interval_slice_np` are numpy integer arrays of length 961/4451. These **advanced indexing** operations on symbolic PyMC vector RVs generate enormous pytensor subgraphs. Each `vec[idx_array]` becomes a symbolic `AdvancedSubtensor` (gather) operation that the numba backend must compile.
+
+The pytensor `local_inline_composite_constants` rewriter repeatedly fails on these graphs with:
+
+```
+TypeError: Cannot convert Type Vector(bool, shape=(7,)) into Type Vector(float64, shape=(7,))
+```
+
+This is a known pytensor issue where the rewriter cannot optimise `Composite` nodes containing boolean intermediates from `pt.maximum`/`pt.clip` operations. The rewriter failure doesn't crash compilation — it's caught — but it means the graph remains **unoptimised**, so numba has to JIT-compile a much larger graph than it would otherwise.
+
+### The scaling problem
+
+The cost is not linear in variable count. It's driven by the **interaction of**:
+
+1. **Advanced indexing** — `vec[numpy_int_array]` creates O(N) gather nodes where N is the array length
+2. **CDF/hazard chain** — each gathered value feeds through `softplus → log → erfc → clip → log` (the CDF + hazard computation), creating O(N) copies of the chain
+3. **Unoptimised graph** — because the rewriter fails, these chains aren't collapsed into a single vectorised operation
+
+For 4451 intervals, this produces tens of thousands of pytensor Apply nodes that numba must compile individually. The compilation time appears **super-linear** in interval count.
+
+On `synth-simple-abc-context` (2 edges, fewer intervals per edge), the same batched approach compiled in 18s. On `synth-fanout-context` with one edge having 4451 intervals, it exceeds 600s. The interval count is roughly 2.5× higher, but compilation is >30× slower — consistent with super-linear scaling.
+
+### Bare DSL recovery results (benchmark)
+
+The uncontexted run completed successfully:
+
+| Edge | p truth | p posterior | z-score | Status |
+|------|---------|-------------|---------|--------|
+| synth-foc-anchor-to-gate | 0.800 | 0.804±0.091 | 0.04 | OK |
+| synth-foc-gate-to-fast | 0.450 | 0.469±0.103 | 0.18 | OK |
+| synth-foc-gate-to-slow | 0.350 | 0.328±0.097 | 0.23 | OK |
+
+Latency recovery: mu and sigma OK. One onset MISS on gate-to-fast (z=3.43, onset-mu correlation = −0.983 — classic ridge). Convergence: rhat=1.016, ESS=356, converged=90%.
+
+### Three candidate mitigations to investigate
+
+| # | Approach | Hypothesis | What changes |
+|---|----------|-----------|-------------|
+| M1 | Replace advanced indexing with `pt.Scan` or custom `Op` | The gather nodes from `vec[int_array]` are the graph blowup. A Scan or custom Op would keep the loop internal to one pytensor node, reducing the graph from O(N) Apply nodes to O(1). | `_emit_batched_window_trajectories` rewritten to use `Scan` for the interval loop, or a `BlackBoxOp` that computes the log-likelihood in numpy and provides a manual gradient. |
+| M2 | Pre-expand vector RVs into concrete scalar Deterministics | Instead of `mu_per_age = mu_vec[idx_array]` (symbolic gather), pre-compute `mu_per_age_np` as a numpy array of Deterministic references: `[mu_vec[0], mu_vec[0], mu_vec[1], ...]`. This replaces one O(N) AdvancedSubtensor with N scalar indexing ops which pytensor can individually optimise. | Change the indexing strategy in `_emit_batched_window_trajectories`. May increase graph width but reduce depth and avoid the failing rewriter. |
+| M3 | Use the JAX backend instead of numba | JAX's XLA compiler handles advanced indexing natively (`jax.numpy` gather) and has different compilation characteristics. The same pytensor graph may compile in seconds on JAX where numba takes minutes. | Change `nutpie` backend from `numba` to `jax`. Requires `nutpie[jax]` or `numpyro` as the sampler. |
+
+All three are independent and can be tested empirically. M1 is the most invasive but most principled. M3 is the least invasive but adds a runtime dependency. M2 is a middle ground.
+
+### Investigation plan
+
+**Goal**: determine which mitigation (M1/M2/M3) unblocks mid-complexity contexted models (3+ edges, 3+ slices, 4000+ trajectory intervals) within a reasonable compilation budget (<60s).
+
+**Step 1: Minimal reproduction** — build a standalone script that constructs a PyMC model matching the fanout-context structure (24 free RVs, 2 batched trajectory Potentials with advanced indexing, 4451 intervals) without needing the full compiler/DB pipeline. Measure: pytensor Apply node count, numba compilation time. This isolates the compilation bottleneck from data binding, DB queries, etc.
+
+**Step 2: M3 (JAX backend)** — test first because it's zero code changes to model.py. Swap the nutpie compilation target from `numba` to `jax` in the minimal reproduction. If JAX compiles the same graph in <60s, M3 is a viable quick fix (even if M1/M2 are better long-term). Check: does `nutpie` support JAX compilation? If not, test `pymc.sampling.jax.sample_numpyro_nuts` as an alternative sampler.
+
+**Step 3: M2 (scalar pre-expansion)** — in the minimal reproduction, replace `mu_vec[idx_array]` with explicit scalar indexing: build `mu_per_age` as `pt.stack([mu_vec[i] for i in idx_array_py])` where `idx_array_py` is a Python list. This trades O(1) AdvancedSubtensor for O(N) basic indexing ops. Measure compilation time. If the pytensor rewriter handles basic indexing better than advanced indexing, this may resolve the explosion with minimal model.py changes.
+
+**Step 4: M1 (Scan or custom Op)** — if M2 and M3 don't resolve it, build a custom pytensor `Op` (a `BlackBoxOp` or `OpFromGraph`) that computes the batched trajectory log-likelihood internally (in numpy/numba) and provides a manual gradient via the adjoint method. This is the nuclear option — it removes the trajectory computation from pytensor's graph entirely, replacing it with a single node. The gradient can be computed analytically (the CDF/hazard chain has a known closed-form gradient). Measure: compilation time should drop to near-zero for the trajectory component.
+
+**Step 5: Validate on real graph** — whichever mitigation works on the minimal reproduction, apply it to `_emit_batched_window_trajectories` in model.py and run `synth-fanout-context` with `--tune 1000 --draws 500 --timeout 1200`. If it compiles and samples, run the join graph (`synth-3way-join-context`) as well.
+
+**Success criteria**: both `synth-fanout-context` (splits) and `synth-3way-join-context` (joins) complete with compilation <120s and acceptable recovery (p z-scores < 2.5).
+
+---
+
+## M2 Results: Per-Slice CDF/Hazard with Scalar Indexing (12-Apr-26)
+
+### What was implemented
+
+New function `_emit_batched_window_trajectories_perslice()` in model.py, gated behind `--feature perslice_traj=true`. The original `_emit_batched_window_trajectories()` is untouched — the FF dispatch is at the top of that function.
+
+**Core change**: instead of flattening all slices' trajectory data into one array and using advanced indexing (`mu_slice_vec[numpy_int_array]` of length 4451) to route each interval to its slice's mu/p, the M2 path:
+
+1. Keeps trajectory data grouped per-slice
+2. Loops over slices, computing CDF/hazard per-slice with scalar indexing (`mu_slice_vec[s_idx]` where `s_idx` is a Python int)
+3. Each per-slice computation produces an independent pytensor subgraph
+4. Sums per-slice log-likelihoods via `pt.add(...)` into one `pm.Potential`
+5. Concatenates per-slice pointwise LL via `pt.concatenate(...)` into one `pm.Deterministic` (for LOO-ELPD)
+
+Same Potential name, same Deterministic name, same statistical model, same number of free RVs and observed RVs. Only the trajectory Potential's internal graph structure differs.
+
+### synth-fanout-context results
+
+Settings: `--tune 1000 --draws 500 --chains 4 --cores 4 --feature perslice_traj=true`
+
+| Metric | Bare DSL (baseline) | M2 perslice_traj | Previous (advanced indexing) |
+|--------|-------------------|------------------|----------------------------|
+| End-to-end | 114s | **190s** | >600s (DNF — compilation timeout) |
+| p recovery | 3/3 OK | 3/3 OK | — |
+| Per-slice p | — | 6/6 OK (all z < 0.4) | — |
+| mu | 2/2 OK | 1/2 MISS (gate-to-fast onset-mu ridge) | — |
+| rhat | 1.016 | 1.561 (poor) | — |
+| ESS | 356 | 7 (poor) | — |
+| Convergence | 90% | 0% | — |
+
+### Interpretation
+
+1. **Compilation is no longer the bottleneck.** The model compiled and sampled to completion in 190s. The previous advanced-indexing path timed out at 600s during compilation alone. This confirms the hypothesis: advanced indexing into vector RVs was the compilation bottleneck.
+
+2. **Per-slice p recovery is good.** All 6 per-slice probabilities recovered within z < 0.4 of truth. The Dirichlet branch group correctly differentiates google/direct/email channel effects.
+
+3. **Convergence is poor.** rhat=1.56, ESS=7. This is the geometry problem (hierarchical funnels, small step size) documented earlier in this doc, not a consequence of M2. The bare DSL run also had modest convergence (rhat=1.016, ESS=356) — the contexted model is harder because of the additional tau-eps funnels.
+
+4. **Next step**: run with more warmup (`--tune 2000`) and/or fewer chains (`--chains 2`) to improve convergence. The compilation fix is validated — the remaining problem is sampler geometry.
+
+### Direct comparison: M2 vs M3 (JAX) on synth-fanout-context
+
+M3 (JAX) was implemented separately (see journal update 9). Ran JAX with matching settings (`--tune 1000 --draws 500 --chains 2 --cores 2 --feature jax_backend=true`) for a direct comparison. Note: M2 ran with 4 chains, JAX with 2 — this favours JAX on wall clock but disfavours it on convergence (fewer chains to diagnose rhat).
+
+| Metric | M2 (perslice_traj, 4ch) | M3 (JAX, 2ch) |
+|--------|------------------------|---------------|
+| End-to-end | 190s | **121s** |
+| p recovery | 3/3 OK | 3/3 OK |
+| Per-slice p | 6/6 OK (z < 0.4) | 6/6 OK (z < 0.4) |
+| rhat | 1.561 | **1.034** |
+| ESS | 7 | **58** |
+| Converged | 0% | **63%** |
+| gate-to-fast mu | MISS (z=3.21) | MISS (z=3.42) |
+| gate-to-fast onset | MISS (z=6.25) | MISS (z=6.00) |
+
+**Verdict**: M3 (JAX) is superior on all metrics. Faster, better convergence, zero model code changes. The mu/onset MISSes on gate-to-fast are identical in both — structural (onset-mu ridge), not backend-related. M2 remains as a numba-only fallback.
+
+### Why JAX is faster at sampling (not just compilation)
+
+On a 16-core machine, JAX with 2 chains shows ~50% total CPU but bayes-monitor reports no cores in use. numba with 2 chains uses exactly 2 cores. JAX's XLA compiles to vectorised ops that parallelise *within each gradient evaluation* via an internal thread pool — each chain's gradient fans out across many cores for the CDF/hazard arithmetic. numba compiles to single-threaded scalar loops.
+
+This means JAX's advantage compounds with interval count: more intervals per gradient → more work to parallelise → bigger per-gradient speedup. For prod-scale graphs (~50k+ total intervals across 72 trajectory subgraphs), the multi-core vectorisation benefit grows further.
+
+### Compilation: UNBLOCKED. Sampling: still the bottleneck for prod scale.
+
+synth-lattice-context (6 edges, 3 slices) expected ~30 min Phase 1 with JAX. Prod graphs (~12 edges, 10-15 slices) would scale to 2.5-5 hours Phase 1 on CPU — not viable. One more structural win in sampling time is needed (fixed tau, centred parameterisation, fewer per-slice params, or GPU).

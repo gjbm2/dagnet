@@ -38,22 +38,27 @@ python bayes/test_harness.py --graph branch --no-webhook --timeout 900  # comple
 # ── Feature flag A/B (no code changes) ──
 python bayes/test_harness.py --graph X --feature latent_onset=false
 python bayes/test_harness.py --graph X --feature overdispersion=false
+python bayes/test_harness.py --graph X --feature jax_backend=true   # JAX compilation (fast)
 
 # ── Parameter recovery (single graph) ──
 python bayes/param_recovery.py --graph synth-simple-abc          # 2-step (~270s)
 python bayes/param_recovery.py --graph synth-mirror-4step        # 4-step (~130s)
 python bayes/param_recovery.py --graph synth-simple-abc --chains 3 --cores 3  # reduced core budget
+python bayes/param_recovery.py --graph synth-fanout-context --feature jax_backend=true  # contexted
 # Reads .truth.yaml, runs MCMC, prints structured truth vs posterior comparison.
 # NOT for production data — use test_harness.py directly.
+# --clean: clear __pycache__ only. --rebuild: also delete .synth-meta.json (heavy DB re-insert).
 
 # ── Regression suite (preferred — discovery, bootstrap, core-aware parallel, assertions) ──
 python bayes/run_regression.py                                   # full suite, all discovered graphs
 python bayes/run_regression.py --graph synth-fanout-test         # single graph
 python bayes/run_regression.py --preflight-only                  # check data integrity only
 python bayes/run_regression.py --chains 2 --max-parallel 4       # override core budget
+python bayes/run_regression.py --include context --max-parallel 1 --feature jax_backend=true --no-timeout
 # Auto-discovers synth-*.truth.yaml, bootstraps missing data, manages
 # parallel execution with core awareness, asserts z-score recovery.
 # Writes to /tmp/bayes_harness-{graph}.log — bayes-monitor compatible.
+# --no-timeout: disable all timeout layers (for large/novel graphs).
 
 # ── Monitor active runs ──
 scripts/bayes-monitor.sh                                         # auto-discover active runs

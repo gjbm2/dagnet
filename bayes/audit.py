@@ -156,7 +156,7 @@ def audit_log(log_content: str) -> dict:
 
         # Per-slice inference posteriors (doc 35)
         sp_m = re.search(
-            r"p_slice (\w{8})… (context\([^)]+\)):\s+([\d.]+)±([\d.]+)\s+"
+            r"p_slice (\w{8})… (.+?):\s+([\d.]+)±([\d.]+)\s+"
             r"HDI=\[([\d.]+),\s*([\d.]+)\]",
             line,
         )

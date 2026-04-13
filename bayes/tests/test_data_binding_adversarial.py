@@ -1173,3 +1173,116 @@ class TestEndToEndRealPipeline:
             f"{n_pot} potentials — expected ≥4 total"
         )
 
+
+# ═══════════════════════════════════════════════════════════════
+# Phase 2 model build with fabricated frozen priors
+# ═══════════════════════════════════════════════════════════════
+#
+# Regression: _resolve_path_latency received cohort_latency_vars
+# (onset, mu, sigma) 3-tuples instead of (mu, sigma) 2-tuples,
+# crashing pt_fw_chain on graphs with join nodes (path_alternatives > 1).
+# This test builds Phase 2 without MCMC by fabricating the frozen dict.
+
+class TestPhase2ModelBuildWithJoinNodes:
+    """Phase 2 model build on a contexted graph with join nodes.
+
+    Uses synth-diamond-context: 6 data edges, 1 join node
+    (join-to-outcome has 2 path alternatives). The crash occurred in
+    Phase 2 when cohort_latency_vars (3-tuples) were passed to
+    _resolve_path_latency which expected (mu, sigma) 2-tuples.
+    """
+
+    @pytest.fixture(scope="class")
+    def diamond_context(self):
+        """Load diamond-context graph, bind evidence from param files.
+
+        Uses bind_evidence (param file path) rather than
+        bind_snapshot_evidence (DB) — no DB connection needed. The param
+        files provide enough data structure (window + cohort obs) to
+        exercise the Phase 2 model build including join-node path
+        latency resolution.
+        """
+        import json, glob as globmod
+        repo_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+        conf_path = os.path.join(repo_root, ".private-repos.conf")
+        data_repo_dir = ""
+        for line in open(conf_path):
+            if line.strip().startswith("DATA_REPO_DIR="):
+                data_repo_dir = line.strip().split("=", 1)[1].strip().strip('"')
+        data_repo = os.path.join(repo_root, data_repo_dir)
+        graph_path = os.path.join(data_repo, "graphs", "synth-diamond-context.json")
+        if not os.path.isfile(graph_path):
+            pytest.skip("synth-diamond-context.json not found")
+
+        with open(graph_path) as f:
+            graph = json.load(f)
+
+        topo = analyse_topology(graph)
+
+        # Load param files for evidence binding (keyed by param_id)
+        import yaml
+        param_files = {}
+        params_dir = os.path.join(data_repo, "parameters")
+        for edge_id, et in topo.edges.items():
+            if not et.param_id:
+                continue
+            param_path = os.path.join(params_dir, f"{et.param_id}.yaml")
+            if os.path.isfile(param_path):
+                with open(param_path) as f:
+                    param_files[et.param_id] = yaml.safe_load(f) or {}
+
+        from bayes.compiler import bind_evidence
+        ev = bind_evidence(topo, param_files, today="1-Mar-25")
+
+        from bayes.compiler.model import build_model
+        model1, meta1 = build_model(topo, ev)
+        return topo, ev, model1, meta1
+
+    def _fabricate_phase2_frozen(self, topo, ev):
+        """Build a plausible phase2_frozen dict without running MCMC.
+
+        Mirrors the structure worker.py produces from Phase 1 posteriors,
+        using prior values as stand-ins. The model build only needs the
+        numeric shape — it doesn't validate posterior quality.
+        """
+        frozen = {}
+        for edge_id in topo.topo_order:
+            et = topo.edges.get(edge_id)
+            edge_ev = ev.edges.get(edge_id)
+            if et is None or edge_ev is None or edge_ev.skipped:
+                continue
+            entry = {
+                "p": 0.5,
+                "p_sd": 0.05,
+                "p_alpha": 50.0,
+                "p_beta": 50.0,
+            }
+            if et.has_latency:
+                entry["mu"] = et.mu_prior
+                entry["mu_sd"] = 0.1
+                entry["sigma"] = max(et.sigma_prior, 0.1)
+                entry["sigma_sd"] = 0.05
+                entry["onset"] = et.onset_delta_days
+                entry["onset_sd"] = 0.1
+            frozen[edge_id] = entry
+        return frozen
+
+    def test_phase1_model_builds(self, diamond_context):
+        """Phase 1 model builds without error."""
+        _, _, model1, _ = diamond_context
+        assert len(model1.free_RVs) > 0
+
+    def test_phase2_model_builds_with_join_nodes(self, diamond_context):
+        """Phase 2 model builds on a graph with join nodes.
+
+        Regression: cohort_latency_vars are (onset, mu, sigma) 3-tuples.
+        _resolve_path_latency passed them to pt_fw_chain which expected
+        (mu, sigma) 2-tuples → ValueError: too many values to unpack.
+        """
+        topo, ev, _, _ = diamond_context
+        frozen = self._fabricate_phase2_frozen(topo, ev)
+        from bayes.compiler.model import build_model
+        model2, meta2 = build_model(topo, ev, phase2_frozen=frozen)
+        assert len(model2.free_RVs) > 0
+        assert len(model2.observed_RVs) + len(list(model2.potentials)) > 0
+

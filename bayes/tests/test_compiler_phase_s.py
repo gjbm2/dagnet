@@ -29,6 +29,7 @@ from bayes.compiler.types import SamplingConfig, RHAT_THRESHOLD, ESS_THRESHOLD
 from bayes.tests.synthetic import (
     build_solo_edge_with_snapshots,
     build_snapshot_with_fallback,
+    build_contexted_solo_edge_with_snapshot_slices,
 )
 
 
@@ -60,6 +61,28 @@ def _run_pipeline_snapshot(graph_snapshot, param_files, snapshot_rows):
     trace, quality = run_inference(model, SAMPLING_CONFIG)
     result = summarise_posteriors(trace, topology, evidence, metadata, quality)
     return result, trace, topology, evidence
+
+
+def _build_contexted_snapshot_model(
+    graph_snapshot,
+    param_files,
+    snapshot_rows,
+    *,
+    commissioned_slices=None,
+    mece_dimensions=None,
+):
+    """Bind commissioned snapshot slices and build the model without MCMC."""
+    topology = analyse_topology(graph_snapshot)
+    evidence = bind_snapshot_evidence(
+        topology,
+        snapshot_rows,
+        param_files,
+        today="1-Mar-25",
+        commissioned_slices=commissioned_slices,
+        mece_dimensions=mece_dimensions,
+    )
+    model, metadata = build_model(topology, evidence)
+    return model, metadata, topology, evidence
 
 
 def _assert_recovery(result, ground_truth, *, absolute_tolerance=0.05,
@@ -204,6 +227,82 @@ class TestSnapshotEvidenceBinding:
         assert ev.prob_prior.source in ("moment_matched", "warm_start"), (
             f"Prior source should be from param file, got '{ev.prob_prior.source}'"
         )
+
+
+class TestSnapshotContextedSlices:
+    """Fast local contracts for commissioned context slices on snapshot data."""
+
+    def test_commissioned_mece_context_rows_create_exhaustive_slice_group(self):
+        graph, params, snap_rows, commissioned, mece_dims, _ = (
+            build_contexted_solo_edge_with_snapshot_slices(seed=63)
+        )
+        topology = analyse_topology(graph)
+        evidence = bind_snapshot_evidence(
+            topology,
+            snap_rows,
+            params,
+            today="1-Mar-25",
+            commissioned_slices=commissioned,
+            mece_dimensions=mece_dims,
+        )
+
+        ev = evidence.edges["edge-a-b"]
+        assert ev.has_slices is True
+        assert "channel" in ev.slice_groups
+
+        sg = ev.slice_groups["channel"]
+        assert sg.is_exhaustive is True
+        assert set(sg.slices.keys()) == commissioned["edge-a-b"]
+        assert all(s_obs.total_n > 0 for s_obs in sg.slices.values())
+        assert ev.has_window is True
+        assert ev.has_cohort is True
+
+    def test_uncommissioned_context_rows_fold_into_aggregate_only(self):
+        graph, params, snap_rows, _, mece_dims, _ = (
+            build_contexted_solo_edge_with_snapshot_slices(seed=63)
+        )
+        topology = analyse_topology(graph)
+        evidence = bind_snapshot_evidence(
+            topology,
+            snap_rows,
+            params,
+            today="1-Mar-25",
+            commissioned_slices=None,
+            mece_dimensions=mece_dims,
+        )
+
+        ev = evidence.edges["edge-a-b"]
+        assert ev.has_slices is False
+        assert ev.slice_groups == {}
+        assert ev.has_window is True
+        assert ev.has_cohort is True
+        assert any(c.slice_dsl == "window(snapshot)" for c in ev.cohort_obs)
+        assert any(c.slice_dsl == "cohort(snapshot)" for c in ev.cohort_obs)
+
+    def test_contexted_snapshot_model_emits_per_slice_vars_and_likelihood_terms(self):
+        graph, params, snap_rows, commissioned, mece_dims, _ = (
+            build_contexted_solo_edge_with_snapshot_slices(seed=63)
+        )
+        model, _, _, evidence = _build_contexted_snapshot_model(
+            graph,
+            params,
+            snap_rows,
+            commissioned_slices=commissioned,
+            mece_dimensions=mece_dims,
+        )
+
+        ev = evidence.edges["edge-a-b"]
+        assert ev.has_slices is True
+
+        names = set(model.named_vars.keys())
+        assert "tau_slice_edge_a_b" in names
+        assert "p_slice_vec_edge_a_b" in names
+        assert "tau_mu_slice_edge_a_b" in names
+        assert "mu_slice_vec_edge_a_b" in names
+        assert len(model.observed_RVs) + len(list(model.potentials)) > 0
+
+        diag_text = "\n".join(evidence.diagnostics)
+        assert "2 slices" in diag_text or "dim=channel" in diag_text
 
 
 class TestSnapshotCohortRecovery:

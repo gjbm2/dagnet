@@ -1,161 +1,382 @@
 # 29 — Generalised Forecast Engine Design
 
-**Date**: 7-Apr-26  
-**Status**: Partially realised (10-Apr-26). Phase A infrastructure
-(span kernel, x_provider, evidence composition, `cohort_maturity_v2`)
-is substantially implemented — see doc 29c. Steps 1–3 building blocks
-exist as Phase A code but are not yet extracted into a standalone
-forecast engine. `ForecastState` contract and `evaluate_forecast_at_tau`
-scalar helper not yet created. Unified basis resolver (Step 2) and
-generalisation to non-cohort-maturity consumers (Steps 4–6) not started
+**Date**: 7-Apr-26
+**Revised**: 12-Apr-26 — substantial rewrite of the engine design based
+on deeper understanding of the pipeline injection point, two-tier FE/BE
+delivery, and the structural difference between window and cohort modes.
+Phase A material (§Generalised Cohort Maturity below) unchanged.
+**Status**: Phase A infrastructure (span kernel, x_provider, evidence
+composition, `cohort_maturity_v2`) substantially implemented — see doc
+29c. Generalised forecast engine (this section) is design only.
 
 ## Motivation
 
-Cohort maturity does a more sophisticated job at estimating forecast and uncertainty than e.g. surprise gauge. We want to generalise the relevant components to allow generalised forecasting across the app — edge cards, overlays, surprise gauge, cohort maturity, and future consumers should all draw from a single forecast engine rather than maintaining parallel implementations.
+Cohort maturity does a more sophisticated job at estimating forecast and
+uncertainty than e.g. surprise gauge. We want to generalise the relevant
+components to allow generalised forecasting across the app — edge cards,
+overlays, surprise gauge, cohort maturity, and future consumers should
+all draw from a single forecast engine rather than maintaining parallel
+implementations.
 
 ---
 
-## Assessment of Proposed Steps
+## Consumers
 
-### Step 1: Canonical backend forecast-state contract
+Three consumers today, each computing forecast/completeness
+independently:
 
-**Current state**: There is no unified `ForecastState` type. The closest thing is `ModelVarsEntry` (probability + latency + quality + provenance), but it is a *parameter* record, not a *forecast state* record. Cohort maturity returns raw frames (anchor_day, x, y, rate, tau). Surprise gauge returns variables (quantile, sigma, zone). These are disjoint schemas.
+1. **Edge display** (completeness chevron, bead label) — reads
+   `edge.p.latency.completeness` set by the FE/BE topo pass
+   (`statisticalEnhancementService.ts` / `stats_engine.py`). Aggregate
+   CDF: `Σ(n_i × F(age_i)) / Σ(n_i)`. Path-anchored override in
+   cohort mode.
 
-**Assessment**: This is the right first move. The proposed fields (observed/forecast x/y, tau_observed, completeness, posterior slice identity, uncertainty summary, provenance) represent the *intermediate representation* that both consumers need but neither currently produces in a reusable form. Today `cohort_forecast.py` computes these internally (e.g. `tau_solid_max`, `tau_future_max`, `x_at_tau`, completeness via CDF) but emits chart-specific rows. Surprise gauge computes its own completeness-adjusted expectation from model_vars. **The contract should sit between "raw snapshot frames + posterior" and "chart-specific output".**
+2. **Surprise gauge** — FE: `localAnalysisComputeService.ts` (~250
+   lines). BE: `_compute_surprise_gauge` in `api_handlers.py` (~400
+   lines). Each independently resolves model params, computes
+   completeness, derives expected rate, compares to observed.
 
-**Risk**: Getting the contract wrong forces all consumers to work around it. The contract must be *descriptive* (what the data says) not *prescriptive* (how to render it). Specifically: do not bake in tau bucketing or rate vs count mode — those are display concerns.
+3. **Cohort maturity chart** — `cohort_forecast.py` (v1, 1570 lines)
+   and `cohort_forecast_v2.py` (v2, 1154 lines). Full trajectory with
+   MC fan bands, D/C split, IS conditioning, upstream carrier hierarchy.
 
-**Recommendation**: Define this in Python (Pydantic) first since the backend is authoritative. The TS mirror follows. Include: per-cohort observed trajectory, per-cohort model trajectory, epoch boundaries (tau_solid_max, tau_future_max), completeness profile c(tau), posterior identity (slice_key, source, fitted_at), and provenance flags. Do *not* include fan bands or zones — those are consumer-specific transformations of the state.
+All three need: **given a pre-resolved subject (edge + cohort group +
+model params), produce completeness, rate, and dispersions — both
+unconditioned and conditioned on evidence.**
 
----
+### Resolution boundary
 
-### Step 2: Unify basis resolution
-
-**Current state**: Basis resolution is scattered across three places:
-
-- `posteriorSliceResolution.ts` — hardcoded rule: edge ← window(), path ← cohort()
-- `beTopoPassService.ts` — sends `lagSliceSource` to BE
-- `cohort_forecast.py` `read_edge_cohort_params()` — its own resolution cascade (cohort posterior → window posterior → forecast mean)
-
-**Assessment**: Correct and important. `read_edge_cohort_params()` re-implements basis resolution with a different priority order than `posteriorSliceResolution.ts`. The FE and BE each have their own notion of "which posterior do I use". Unifying this removes a class of subtle divergence bugs (e.g., FE uses window alpha/beta while cohort_forecast uses path_alpha/path_beta for the same edge).
-
-**Risk**: The resolution logic is *intentionally* different in some cases — `read_edge_cohort_params` prefers path-level posteriors because cohort maturity needs a-anchored parameters, while surprise gauge compares against the slice-matched posterior. A naive unification might force one semantic where two are needed.
-
-**Recommendation**: The unified resolver should accept a `scope` parameter (`edge` | `path`) and a `temporal_mode` (`window` | `cohort`) and return the resolved parameters with provenance. Both cohort_forecast and surprise_gauge then call the same resolver with different scope arguments. This preserves the semantic distinction while eliminating the duplicated cascade logic.
-
----
-
-### Step 3: Split the maths into reusable layers
-
-**Proposed split**:
-
-- **Frontier state** → surprise gauge
-- **Trajectory state** → cohort maturity
-- **Scalar summaries** → edge cards / overlays
-
-This maps well to actual data dependencies:
-
-- **Scalar layer**: p, mu, sigma, onset, completeness at a single tau (or aggregated). This is what surprise gauge and edge cards need.
-- **Trajectory layer**: p(tau), completeness(tau), observed vs forecast over tau range. This is what cohort maturity needs.
-- **Frontier layer**: where tau_observed sits relative to the trajectory — the "how much do we know?" question. Both consumers need this but extract different things from it.
-
-**Risk**: Over-abstraction. If these layers are thin wrappers around `forecast_rate()` and `compute_completeness()`, they add indirection without value. They are only worth it if they encapsulate non-trivial logic (MC sampling, epoch boundary detection, carry-forward) that would otherwise be duplicated.
-
-**Recommendation**: The scalar layer is genuinely reusable today — extract `evaluate_forecast_at_tau(edge_params, tau) → {rate, completeness, uncertainty}` from `cohort_forecast.py`. The trajectory layer is cohort_maturity-specific for now; do not prematurely generalise it until a second consumer exists. The frontier layer (tau_observed, epoch boundaries) should be part of the forecast-state contract from Step 1.
+The FE resolves contexts, epochs, and slice_keys into subjects before
+any of this runs. The forecast engine receives pre-resolved subjects.
+It does not know about contexts, DSL, or epoch planning — that boundary
+is the FE's job. In cohort mode, the FE's epoch planning is more
+complex (per-day regime selection, multiple subjects per edge with
+different slice_keys per epoch), but this complexity is fully upstream
+of the engine.
 
 ---
 
-### Step 4: Finish unresolved cohort() maths before broad reuse
+## Two Structurally Different Modes
 
-**Assessment**: This remains the most important gate, but a few earlier notes
-need correcting against the current implementation.
+Window and cohort modes are not parameter variants of the same
+computation. They are structurally different:
 
-**Already true in code**:
+### Window mode (simple)
 
-- Epoch B carry-forward is implemented in `cohort_forecast.py` via dense
-  `obs_x` and `obs_y` arrays, then reused by the evidence line, midpoint, and
-  fan.
-- The old recursive reach traversal defects are resolved on the primary Bayes
-  path: the code now uses `calculate_path_probability()` plus an explicit
-  `anchor_node_id` when available.
-- The post-frontier arrival term no longer uses an "ultimate-rate" shortcut.
-  The current `Y_C` term already multiplies by the tau-dependent model rate
-  `p × CDF(τ)`.
+x is fixed at observation time. Completeness is `CDF_edge(tau)`.
+Upstream dynamics don't matter. A point estimate is:
 
-**Known approximations** (potential enhancements, not blockers — see
-`cohort-maturity/INDEX.md` for full pros/cons analysis of each):
+```
+(mu, sigma, onset, p, tau) → {completeness, rate, dispersions}
+```
 
-1. **Graph-wide x(s,τ) propagation is not implemented**. The current code
-   uses a subject-edge local shortcut. This works well for typical linear
-   funnels but does not model upstream immaturity. *Enhancement, not required
-   for current use cases or x→y maturity.*
+This is a thin wrapper around `compute_completeness()` + the blend
+formula from `forecast_application.py`.
 
-2. **`Y_C = X_C × model_rate` is still heuristic**. Uses tau-dependent rate
-   but applies it to cumulative arrivals rather than convolving with
-   arrival-time distribution. *Second-order effect for most funnels; needs
-   mathematical design work before implementation.*
+### Cohort mode (upstream-aware)
 
-3. **Mixed probability bases remain in the denominator model**. `reach` and
-   the upstream CDF mixture may use different posterior bases. *Small effect
-   in practice; best addressed as part of the unified basis resolver.*
+x grows over time. Completeness at the edge depends on the entire
+upstream path's maturity dynamics — the x_provider, reach, the upstream
+carrier hierarchy (Tier 1 parametric, Tier 2 empirical, Tier 3 weak
+prior), IS conditioning on upstream evidence, and the factorised
+`X_x + K_{x→y}` representation.
 
-4. **Frontier semantics are consumer-specific**. Cohort maturity uses
-   per-Cohort `tau_observed`; surprise gauge uses aggregate completeness.
-   *Only relevant when building the shared forecast engine contract.*
+You cannot compute completeness for a cohort-mode edge without
+modelling upstream arrivals. A single edge's completeness in cohort mode
+is a function of the entire path from anchor to that edge's from-node.
 
-5. ~~**Primary-path and fallback-path anchoring differ**.~~ **RESOLVED
-   (7-Apr-26)**: The no-Bayes fallback now resolves and passes
-   `anchor_node_id`, matching the primary path.
-
-**Recommendation**: these are accuracy and architecture improvements, not hard
-gates. The forecast-state contract (Phase 0) and x→y maturity (Phase A) can
-proceed without resolving any of them. When the generalised engine is built
-(Phases 2–4), items 1–3 should be addressed as part of that work. Item 4
-is needed only when the shared contract is designed.
+The engine has two paths, not one. The abstraction must not hide this
+distinction — consumers need to know which mode they're in.
 
 ---
 
-### Step 5: Make the backend authoritative
+## `ForecastState` Contract
 
-**Current state**: The FE/BE parallelism doc describes a 3-phase transition:
+The intermediate representation between "raw data + model" and
+"consumer-specific output". Produced per edge per subject.
 
-- Phase 1 (current): parallel run, FE wins
-- Phase 2: FE visible but BE authoritative
-- Phase 3: FE deleted, BE promoted
+```
+ForecastState:
+  # Identity
+  edge_id: str
+  source: str                  # 'analytic' | 'analytic_be' | 'bayesian'
+  fitted_at: str               # when the model was fitted
+  tier: str                    # 'fe_instant' | 'be_forecast'
 
-Surprise gauge has *both* a FE implementation (`localAnalysisComputeService.ts`, ~250 lines) and a BE implementation (`api_handlers.py`, lines 103–510).
+  # Model (unconditioned — pure model, no evidence)
+  completeness: float          # at tau_observed (0–1)
+  rate_unconditioned: float    # p × CDF(tau_observed) — or path-aware
+  dispersions:
+    p_sd: float
+    mu_sd: float
+    sigma_sd: float
+    onset_sd: float
 
-**Assessment**: Correct. The FE surprise gauge is ~250 lines of duplicated statistical logic. It exists because the BE was not ready when surprise gauge shipped. Now that the BE implementation exists, the FE should become a thin renderer. This aligns with the broader Phase 2→3 transition.
+  # Evidence-conditioned
+  rate_conditioned: float      # blend of evidence and model
+  tau_observed: int            # evidence frontier age (days)
 
-**Risk**: The FE fallback is valuable when the Python server is down (e.g., local development, offline mode). Killing it entirely removes resilience.
+  # Mode metadata
+  mode: 'window' | 'cohort'
+  path_aware: bool             # whether upstream dynamics were modelled
 
-**Recommendation**: Keep the FE as a *fallback* but mark it clearly as degraded mode (which it already does with the ⚠ warning). The generalised forecast engine lives in Python; the FE consumes its output. Do not maintain two semantic implementations — maintain one implementation and one fallback that is known-stale.
+  # Trajectory (optional — only when consumer requests a tau range)
+  trajectory?: List[{tau, completeness, rate_unconditioned,
+                      rate_conditioned}]
+```
+
+**Design rules**:
+
+- **Descriptive, not prescriptive.** No tau bucketing, no rate-vs-count
+  mode, no fan bands, no zones. Those are consumer-specific.
+- **Unconditioned vs conditioned is first-class.** Every `ForecastState`
+  carries both. Surprise gauge needs the unconditioned baseline to
+  measure surprise against. Edge cards need the conditioned estimate.
+- **The trajectory is optional.** Surprise gauge and edge cards need a
+  scalar at `tau_observed`. Only cohort maturity needs the full curve.
+  The trajectory is the same engine called at every tau in a range —
+  not a separate abstraction layer.
+
+**Consumer mapping**:
+
+| Consumer | Reads from ForecastState |
+|----------|--------------------------|
+| Edge display (chevron/bead) | `completeness` |
+| Surprise gauge | `rate_unconditioned` vs observed → surprise |
+| Edge cards / overlays | `completeness`, `rate_conditioned` |
+| Cohort maturity chart | `trajectory` (full tau range) |
 
 ---
 
-### Step 6: Parity and contract tests
+## Promoted Model Resolver (Prerequisite)
 
-**Assessment**: Essential and correctly sequenced last. The specific test gaps identified are real:
+Both modes need a single resolver: given an edge, return the
+best-available model params with provenance.
 
-1. **FE vs BE surprise gauge parity**: Currently no test compares FE `localAnalysisComputeService` output against BE `_compute_surprise_gauge` output for identical inputs. This is the highest-priority gap — without it, you cannot retire the FE implementation.
+**Current state**: resolution is scattered across:
 
-2. **Mature-limit convergence**: As tau → ∞, completeness → 1, and the forecast should converge to the posterior mean. This is an analytical invariant that should hold for both window and cohort mode. No test currently verifies this.
+- `resolveActiveModelVars()` in `modelVarsResolution.ts` (FE)
+- `_resolve_promoted_source()` + `_read_edge_model_params()` in
+  `api_handlers.py` (BE)
+- `read_edge_cohort_params()` in `cohort_forecast.py` (cohort-specific)
+- `posteriorSliceResolution.ts` (slice routing)
 
-3. **Join/split tests for cohort-mode x**: When a branching node has multiple outgoing edges, the cohort-mode x values must sum correctly (Dirichlet constraint). No test currently verifies this at the forecast level.
+These implement overlapping but divergent cascades. The FE and BE each
+have their own notion of "which posterior do I use" — e.g.
+`read_edge_cohort_params` prefers path-level posteriors because cohort
+maturity needs a-anchored parameters, while surprise gauge compares
+against the slice-matched posterior.
 
-4. **retrieved_at and asat frontier tests**: `resolveAsatPosterior()` has specific semantics around date boundaries. The cohort_forecast's tau_observed derivation from `evidence_retrieved_at` should agree with this.
+**Target**: one Python-side resolver that:
 
-5. **Consumer parity on shared payload**: If cohort_maturity and surprise_gauge both consume the same forecast-state contract, feeding them identical inputs should produce consistent scalar summaries (e.g., surprise gauge's expected-p should equal cohort_maturity's forecast rate at tau_observed).
+1. Accepts `edge` + `model_vars[]` + `preference` (Bayesian if
+   gated → analytic_be → analytic → manual)
+2. Returns: p (mean + stdev), latency (mu, sigma, onset + SDs),
+   path-level equivalents, quality metadata, provenance (which source
+   won, when fitted)
+3. Respects per-edge and graph-level `model_source_preference`
+4. Handles the scope distinction: window → edge-level params,
+   cohort → path-level params. The resolver accepts `scope`
+   (`edge` | `path`) and `temporal_mode` (`window` | `cohort`).
 
-**Recommendation**: Write tests 1 and 5 first — they validate the contract. Tests 2–4 validate the maths (Step 4). Test design should use real graph data from the data repo, not synthetic fixtures, per the testing standards.
+This eliminates the duplicated cascade logic while preserving the
+semantic distinction between edge-level and path-level resolution.
 
 ---
 
-## Original Sequencing (superseded — see revised sequencing below)
+## Pipeline Injection: Where the Engine Runs
 
-The original sequencing assumed the forecast engine generalisation
-happens first. The revised sequencing (after the x→y traversal section)
-inserts Phases A and B before the engine generalisation.
+The forecast engine does not exist as a standalone endpoint called
+ad hoc. It slots into the existing fetch pipeline:
+
+```
+FE fetch → persist to param file → sync to graph →
+  Stage-2 topo pass:
+    1. LAG fit (existing: mu, sigma, t95, onset — unchanged)
+    2. Model vars upsert (existing: analytic, analytic_be — unchanged)
+    3. Promotion (existing: resolve best-available — unchanged)
+    4. ★ Forecast engine (NEW)
+       - Reads: promoted model params, evidence, mode
+       - Window path: CDF → completeness, rate, dispersions
+       - Cohort path: upstream-aware → completeness, rate, dispersions
+       - Writes: ForecastState to edge
+    5. Graph write + render
+```
+
+### Two-Tier FE/BE Delivery
+
+The same pattern already used for the topo pass:
+
+1. **FE runs immediately** — computes completeness from its existing
+   aggregate-CDF approach (what `enhanceGraphLatencies` does today).
+   Edge renders instantly. `ForecastState.tier = 'fe_instant'`.
+
+2. **BE forecast engine commissioned in parallel.** If it returns
+   within ~500ms, its `ForecastState` replaces the FE estimate before
+   the user notices. If not, the FE estimate stands until the BE
+   result arrives.
+
+3. **When the BE result arrives (even late)**, it overwrites the FE
+   estimate and the edge re-renders with the better number.
+   `ForecastState.tier = 'be_forecast'`. Quality tier indicator shows
+   which source is active.
+
+**Contract**: the FE estimate must never be worse than what exists
+today. The FE path is the floor — aggregate CDF, n-weighted,
+path-anchored in cohort mode. The BE path adds: upstream-aware
+completeness, promoted model resolution, dispersions,
+unconditioned/conditioned split. Strictly better but not free.
+
+### Cohort-mode upstream computation in Stage-2
+
+Today the upstream carrier (x_provider, Tier 1/2/3, IS conditioning)
+only runs inside `compute_cohort_maturity_rows_v2` — it's
+chart-specific. For the generalised engine to produce proper
+cohort-mode completeness on every edge after every fetch, that
+computation needs to move into the BE topo pass.
+
+The current topo-pass completeness in cohort mode is an approximation
+(path-anchored CDF on raw ages). The v2 upstream-aware completeness is
+what users actually see in cohort maturity charts. If the edge display
+shows a different completeness from the chart, that's a divergence the
+engine eliminates.
+
+### Graph-wide topo pass: caching and sequencing
+
+The engine runs for **all edges on a graph** in the Stage-2 pass, not
+just one edge. Naively recomputing the full upstream carrier per edge
+would repeat reach, upstream CDF mixture, and IS conditioning for every
+edge sharing upstream structure. For a 20-edge graph that's wasteful.
+
+**Design**: walk edges in topological order (which the topo pass
+already does). At each node, accumulate the arrival state — the
+distribution of arrivals at that node over time. When you reach a
+node, the arrival distributions from all upstream edges are already
+cached. That cached per-node arrival state *is* the x_provider for
+every outgoing edge from that node.
+
+This is the propagation engine described in
+`cohort-backend-propagation-engine-design.md`, scoped to producing
+`ForecastState` scalars rather than full MC trajectories.
+
+**Per-node cache contents**:
+
+- Deterministic arrival CDF at this node (weighted upstream mixture)
+- MC arrival CDF array (if upstream has uncertainty)
+- Reach from anchor to this node
+- Evidence observations at this node (for IS conditioning)
+
+Each outgoing edge reads this cache and combines it with its own
+edge-level model to produce `ForecastState`. No re-traversal of the
+upstream subgraph.
+
+**Single-edge query**: for ad-hoc consumers (surprise gauge on one
+edge, or a standalone API call), a function that computes one edge's
+`ForecastState` without running the full graph pass is still needed.
+It uses the same logic but builds the upstream carrier on demand
+rather than reading from the topo-pass cache.
+
+---
+
+## `cohort_maturity_v3`: Clean-Room Consumer of the Engine
+
+The same discipline that made v2 work: v1 was frozen as the parity
+reference while v2 was built freely. Now **v2 becomes the frozen
+reference** and v3 is the generalised engine consumer.
+
+**Why v3, not refactoring v2**: v2's 1,154 lines stay untouched during
+engine development — no risk of breaking the working implementation
+while extracting from it. v3 provides a live benchmark during
+development, just as v1 constrained v2.
+
+**What v3 is**: a thin consumer of the `ForecastState` trajectory. It
+calls the engine at every tau, gets back the full curve, then does
+only the chart-specific work: MC fan bands, epoch segmentation, row
+schema emission. Model resolution, upstream carrier, completeness, and
+unconditioned/conditioned rates all come from the engine, not from
+v3's own code.
+
+**Parity gate**: v3 on adjacent single-edge subjects must produce
+identical output to v2, field by field. Same discipline as v1→v2.
+When v3 passes parity, v2 is retired wholesale.
+
+**Implementation sequence**:
+
+1. Register `cohort_maturity_v3` as analysis type (FE+BE)
+2. v3 handler calls the engine's graph-wide pass (or single-edge
+   function) to get `ForecastState` with trajectory
+3. v3 row builder consumes `ForecastState.trajectory` + does MC fan
+   bands (chart-specific, not extracted into engine)
+4. Parity gate: v2 vs v3 on adjacent subjects
+5. Multi-hop acceptance: v3 on multi-edge spans
+6. Retire v2, promote v3 as `cohort_maturity`
+
+---
+
+## Known Approximations
+
+Documented in `cohort-maturity/INDEX.md` with full pros/cons. None
+block the generalised engine:
+
+1. **Graph-wide x(s,τ) propagation not implemented** — current code
+   uses subject-edge local shortcut
+2. **Y_C heuristic** — uses tau-dependent rate but doesn't convolve
+   with arrival-time distribution
+3. **Mixed probability bases in denominator** — reach and upstream CDF
+   may use different posterior bases
+4. **Frontier semantics are consumer-specific** — cohort maturity uses
+   per-Cohort `tau_observed`; surprise gauge uses aggregate
+   completeness. The `ForecastState` contract exposes both.
+
+---
+
+## Sequencing
+
+| Phase | What | Notes |
+|-------|------|-------|
+| **1** | **Promoted model resolver** | Prerequisite. See INDEX.md §6. |
+| **2** | **Window-mode ForecastState** — extract from `forecast_application.py`, add dispersions, inject into BE topo pass. FE instant path unchanged. | Low risk. Surprise gauge and edge cards in window mode consume this. |
+| **3** | **Cohort-mode ForecastState** — graph-wide topo pass with per-node arrival caching. Upstream-aware completeness. | Substantive new work. This is the propagation engine scoped to scalars. |
+| **4** | **Wire surprise gauge** — replace `_compute_surprise_gauge` (~400 lines) with promoted resolver + ForecastState read. | First consumer migration. |
+| **5** | **Wire edge cards** — replace scattered completeness annotation (~500 lines) with ForecastState read. | Second consumer. |
+| **6** | **`cohort_maturity_v3`** — clean-room consumer of ForecastState trajectory. v2 frozen as parity reference. MC fan bands remain chart-specific. | Largest consumer. v2→v3 parity gate before retiring v2. |
+| **7** | **Parity and contract tests** | Gate for promotion. |
+
+### Test plan
+
+1. **FE vs BE ForecastState parity** (window mode): FE instant
+   completeness vs BE forecast completeness — must be within tolerance.
+2. **Mature-limit convergence**: as tau → ∞, completeness → 1 and
+   forecast rate → posterior mean. Analytical invariant for both modes.
+3. **Consumer parity on shared payload**: surprise gauge's expected-p
+   must equal cohort maturity's unconditioned rate at tau_observed when
+   fed the same ForecastState.
+4. **Cohort-mode completeness convergence**: edge-display completeness
+   from ForecastState must match what the cohort maturity chart shows
+   for the same edge at the same tau.
+5. **FE vs BE surprise gauge parity**: validate before retiring the FE
+   implementation.
+
+---
+
+## Superseded Material
+
+The original Steps 1–6 (7-Apr-26) proposed
+`evaluate_forecast_at_tau(edge_params, tau)` as the reusable scalar
+helper. This was wrong:
+
+- The consumer contract is not `(edge_params, tau) → scalar`. It is
+  `(pre-resolved subject + best-available model) → {completeness,
+  rate, dispersions}` in both unconditioned and conditioned modes.
+- Cohort mode requires upstream-aware computation that cannot be
+  hidden behind the same scalar interface as window mode.
+- The engine injects into the existing fetch pipeline (Stage-2 topo
+  pass), not as a standalone endpoint.
+- The "trajectory layer" framing was misleading — cohort maturity just
+  calls the same point-estimate engine at every tau in a range, not a
+  separate abstraction.
+
+The original Steps are retained in git history for reference.
 
 ---
 

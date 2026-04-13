@@ -142,7 +142,15 @@
       "Bash(git -C /home/reg/dev/dagnet log --oneline --format=\"%h %ai %s\" --since=\"2026-04-06\" --no-merges -- bayes/ graph-editor/src/services/candidateRegimeService.ts)",
       "Bash(git -C /home/reg/dev/dagnet log --format=\"%h %ai %s\" --since=\"2026-04-06\" --until=\"2026-04-11\" --no-merges -- bayes/ graph-editor/src/services/candidateRegimeService.ts)",
       "Bash(git -C /home/reg/dev/dagnet log --stat --format=\"%h %ai %s%n\" 8d5ae3eb..384f1af4 --no-merges -- bayes/ graph-editor/src/services/candidateRegimeService.ts graph-editor/lib/)",
-      "Bash(pkill -f \"test_harness.*synth-simple-abc-context\")"
+      "Bash(pkill -f \"test_harness.*synth-simple-abc-context\")",
+      "Bash(kill 1466949 1469588)",
+      "Bash(xargs -I{} basename {} .truth.yaml)",
+      "Bash(.claude/hooks/request-gate.sh package-install:*)",
+      "Bash(.claude/hooks/confirm-gate.sh package-install:*)",
+      "Bash(xargs -r kill -9)",
+      "Bash(kill 4064831 4064851 4068594 4068597 4068598)",
+      "Bash(git -C /home/reg/dev/dagnet diff --stat HEAD)",
+      "Bash(git -C /home/reg/dev/dagnet diff --name-only HEAD)"
     ],
     "additionalDirectories": [
       "/home/reg/dev/dagnet/.claude",

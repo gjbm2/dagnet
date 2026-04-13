@@ -8,6 +8,146 @@ Entries are reverse-chronological (newest first).
 
 ---
 
+## 12-Apr-26 (update 9): JAX backend — M3 compilation fix validated
+
+### Context
+
+M2 (per-slice scalar indexing) fixed the compilation explosion but required restructuring the trajectory emission. M3 (JAX backend) was the cheapest mitigation to test — one-line change to `nutpie.compile_pymc_model()`, no model restructuring needed. Hypothesis from doc 38: JAX's XLA compiler handles `AdvancedSubtensor` (gather) nodes natively, unlike numba which must JIT-compile the full unoptimised pytensor graph.
+
+### Implementation
+
+Added `jax_backend` feature flag to `SamplingConfig` and wired through `run_inference` → `_sample_nutpie`. When enabled, `nutpie.compile_pymc_model(model, backend='jax', gradient_backend='jax')` replaces the default numba backend. Installed `jax[cpu]>=0.4.30` into `bayes/requirements.txt`.
+
+Code changes: `compiler/types.py` (1 field), `compiler/inference.py` (backend selection), `worker.py` (feature flag wiring). Usage: `--feature jax_backend=true`.
+
+### Synthetic benchmark (isolated model, no graph infrastructure)
+
+Built a 42-dimensional model matching fanout-context structure (3 edges × 3 slices, BetaBinomials + trajectory Potentials with advanced indexing into vector RVs):
+
+| Backend | Compile time | Speedup |
+|---------|-------------|---------|
+| numba   | 20,413ms    | —       |
+| jax     | 1,764ms     | **11.6×** |
+
+### Regression: synth-simple-abc-context (2 edges, 3 slices, no BG)
+
+JAX backend, `--tune 200 --draws 100 --chains 2`: 119s total. All p values recovered [OK]. Per-slice recovery consistent with numba baseline. JAX compile estimated ~4s (vs numba ~29s from doc 38).
+
+### Target: synth-fanout-context (3 edges, 3 slices, 1 BG)
+
+JAX backend, `--tune 1000 --draws 500 --chains 2`: **125s total** (vs numba >574s timeout). Breakdown: build_model 531ms, inspect_model 10.4s, Phase 1 sampling 74.9s, Phase 2 sampling 20.7s.
+
+Recovery: all p values [OK] (z = 0.07, 0.97, 1.96). Latency mu/sigma mostly OK. gate-to-fast mu MISS (z=3.08) and onset MISS (z=6.25) — same onset-mu correlation issue as the uncontexted baseline (ρ = −0.544), not a backend regression. 88% converged.
+
+### Comparison: M2 vs M3
+
+| | M2 (per-slice scalar) | M3 (JAX backend) |
+|--|----------------------|-------------------|
+| Model changes | New emission function | None |
+| Code complexity | ~100 lines new code | 5 lines changed |
+| fanout-context total | 190s | 125s |
+| Compilation | Fixed (restructured graph) | Fixed (faster compiler) |
+| Sampling | Same model | Same model |
+| Portability | numba-only | Requires jax[cpu] |
+
+M3 is simpler and faster. M2 remains available as a fallback if JAX is unavailable (e.g. Modal without jax installed). Both can coexist.
+
+### Next steps
+
+- Test on larger contexted graphs (diamond-context: 6 edges × 3 slices, lattice-context)
+- Validate JAX backend produces identical posteriors to numba (parity test)
+- Consider making JAX the default for contexted models (auto-detect based on slice count)
+
+---
+
+## 12-Apr-26 (update 8): Compilation explosion on mid-complexity contexted graphs
+
+### Context
+
+Doc 38 work validated batched trajectory Potentials + native vector RVs on `synth-simple-abc-context` (2 edges, 3 slices) — compilation 18s, sampling 159s, total ~180s. Moved to `synth-fanout-context` (3 data edges, 3 slices, 1 branch group, 5 nodes) to validate on a mid-complexity split topology. Result: **compilation never finished** — 574s spent compiling, hit 600s timeout, MCMC never started.
+
+### What was observed
+
+Ran `synth-fanout-context` with `--tune 1000 --draws 500 --chains 4 --cores 4 --clean`.
+
+Uncontexted baseline (same graph, `--dsl-override "window(...);cohort(...)"`) completed in **114s** total (~20s compilation). Recovery: all 3 edges p OK (z = 0.04, 0.18, 0.23), latency mu/sigma OK, one onset MISS on gate-to-fast (z=3.43, onset-mu ρ = −0.983).
+
+Contexted run: model built successfully (24 free RVs, 22 Deterministics, 2 Potentials, 20 observed) in ~12s. nutpie compilation started at t=25s, logged `Compiling model…` every 3s for 549s, then `TIMEOUT after 600s (last stage: compiling)`. MCMC never started.
+
+pytensor log was full of repeated `local_inline_composite_constants` rewrite failures:
+```
+TypeError: Cannot convert Type Vector(bool, shape=(7,)) into Type Vector(float64, shape=(7,))
+```
+These are non-fatal (caught by the rewriter) but mean the graph stays unoptimised.
+
+### Root cause: advanced indexing × large interval counts
+
+The batched trajectory Potentials use advanced indexing into vector RVs:
+```python
+mu_per_age = mu_slice_vec[age_slice_np]          # [n_ages] via int array
+p_per_interval = p_slice_vec[interval_slice_np]  # [n_intervals] via int array
+```
+
+For the slow edge (`87be6baa…`), `n_intervals = 4451`. Each `vec[int_array]` becomes an `AdvancedSubtensor` (gather) node. The gathered values then feed through `softplus → log → erfc → clip → log` (CDF/hazard chain), producing O(N) copies of the chain. Because the pytensor rewriter fails on the boolean intermediates from `pt.maximum`/`pt.clip`, none of this gets collapsed into vectorised operations. numba must JIT-compile the entire unoptimised graph.
+
+The scaling is **super-linear** in interval count: synth-simple-abc-context had ~400 intervals per edge → 18s compile. synth-fanout-context has 4451 intervals on one edge → >574s. Roughly 10× the intervals produces >30× the compilation time.
+
+### Model structure comparison
+
+| | Bare DSL | Contexted |
+|--|----------|-----------|
+| Free RVs | ~8 | 24 |
+| Observed RVs | ~6 | 20 |
+| Potentials | ~2 | 2 (batched) |
+| Trajectory intervals | ~1800 est | 5412 (961+4451) |
+| Compilation | ~20s | >574s (DNF) |
+
+### Three candidate mitigations identified
+
+- **M1**: Replace advanced indexing with `pt.Scan` or custom `Op` — keeps loop internal to one pytensor node
+- **M2**: Pre-expand `mu_vec[idx_array]` into `pt.stack([mu_vec[i] for i in list])` — basic indexing instead of advanced
+- **M3**: JAX backend instead of numba — different compilation characteristics, may handle gathers natively
+
+See doc 38 §"Three candidate mitigations" and §"Investigation plan" for full details.
+
+### M2 result: per-slice CDF with scalar indexing — COMPILATION FIXED
+
+Implemented `_emit_batched_window_trajectories_perslice()` behind `--feature perslice_traj=true`. Instead of `mu_slice_vec[numpy_int_array_of_4451]` (advanced indexing → graph explosion), loops over S slices computing CDF/hazard per-slice with `mu_slice_vec[s_idx]` (scalar indexing → S small independent subgraphs). Same statistical model, same Potential/Deterministic names.
+
+`synth-fanout-context` with M2: **190s end-to-end** (vs >600s DNF on the advanced-indexing path). All 6 per-slice p values recovered (z < 0.4). Convergence poor (rhat=1.56, ESS=7) — this is the sampler geometry problem, not M2. The compilation bottleneck is resolved.
+
+M1 (Scan/custom Op) not yet tested — M2 may be sufficient. M3 (JAX) being tested separately.
+
+Direct comparison on same graph (`synth-fanout-context --tune 1000 --draws 500`): M3 (JAX, 2ch) 121s, rhat=1.034, ESS=58, 63% converged. M2 (perslice_traj, 4ch) 190s, rhat=1.561, ESS=7, 0% converged. JAX is clearly superior — faster, better convergence, zero model changes. M2 stays as numba-only fallback. M1 deprioritised.
+
+### Why JAX is faster at sampling, not just compilation
+
+Observed: on a 16-core Ultra 9 285H, JAX with 2 chains shows ~50% total CPU usage, but bayes-monitor (which tracks nutpie process-level concurrency) reports no cores in use. numba with 2 chains uses exactly 2 cores.
+
+**Explanation**: numba compiles the pytensor graph to single-threaded scalar loops — one chain = one core. JAX's XLA compiles to vectorised operations that parallelise *within each gradient evaluation* across cores via an internal thread pool. So each chain's gradient call fans out across many cores for the CDF/hazard arithmetic (4451 intervals of softplus → log → erfc → clip → log).
+
+**Implications**:
+- JAX's sampling speedup is not just compilation — per-gradient cost is lower due to multi-core vectorisation
+- Running more chains in parallel with JAX contends for the same core pool (unlike numba where 4 chains = 4 independent threads)
+- For prod-scale graphs (12 edges × 12 slices → 72 trajectory subgraphs, ~50k+ intervals), JAX's internal parallelism becomes even more valuable
+- This partly explains why M2 (per-slice scalar indexing on numba) was slower than JAX even though it fixed compilation — M2 still ran single-threaded numba loops
+- GPU would be additive: replacing JAX's multi-core CPU thread pool with GPU cores for the same vectorised ops
+
+### Prod viability assessment
+
+Compilation is unblocked. synth-lattice-context (6 edges, 3 slices, most complex synth topology) running with JAX — expected ~30 min Phase 1.
+
+Prod graphs: ~12 edges (6 latency), 10-15 slices. Scaling from lattice-context: ~5× more free RVs (543 vs 111), ~6× more trajectory subgraphs (72 vs 12), 8× more observed RVs. Estimated Phase 1: **2.5-5 hours on CPU**. Not viable for a production pipeline.
+
+**One more big win in sampling time is needed** before contexted Bayes is production-viable. Candidates:
+- Fixed tau / empirical Bayes (eliminates funnels entirely — biggest potential win)
+- Centred parameterisation for well-identified slices
+- Fewer per-slice parameters (e.g. only p per-slice, share kappa/mu across slices)
+- GPU acceleration (helps per-gradient cost, doesn't fix geometry)
+- Variational inference for warm-start (ADVI → NUTS with informed mass matrix)
+
+---
+
 ## 12-Apr-26 (update 7): PPC calibration implementation and DGP mismatch discovery
 
 ### What was built

@@ -732,14 +732,20 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
         else:
             _log(log, "settings: no BAYES_* keys in payload — using module defaults")
 
+        t_build = time.time()
         model, metadata = build_model(topology, evidence, features=features, settings=settings)
+        _log(log, f"build_model: {int((time.time() - t_build) * 1000)}ms")
         _log(log,f"model: {len(model.free_RVs)} free vars, {len(model.observed_RVs)} observed")
+        _log(log, f"model graph: {len(model.potentials)} potentials, "
+             f"{len(model.deterministics)} deterministics")
         for d in metadata.get("diagnostics", []):
             _log(log,f"  model: {d}")
 
         # ── 4b. Model inspection (always runs) ──
+        t_inspect = time.time()
         from compiler import inspect_model
         inspection = inspect_model(model, metadata, topology, evidence)
+        _log(log, f"inspect_model: {int((time.time() - t_inspect) * 1000)}ms")
         for line in inspection:
             _log(log,line)
 
@@ -768,6 +774,7 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
             target_accept=_s_float("target_accept", "bayes_target_accept", "BAYES_TARGET_ACCEPT", 0.90),
             random_seed=settings.get("random_seed"),
             lowrank_mass_matrix=features.get("lowrank_mass_matrix", False),
+            jax_backend=features.get("jax_backend", False),
         )
 
         progress.set_band(*P1_SAMPLE)
@@ -1080,6 +1087,27 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
                           f"n_days={n_days}, "
                           f"F_range=[{min(best_by_day[d][2] for d in sorted_days):.2f}, "
                           f"{max(best_by_day[d][2] for d in sorted_days):.2f}])")
+
+            # Dump debug artefacts for offline Phase 2 reproduction.
+            # Avoids re-running the expensive Phase 1 MCMC.
+            # Wrapped in try/except: losing the dump is bad, but crashing
+            # the worker (and losing the Phase 2 attempt) after 14 min
+            # of Phase 1 MCMC is worse.
+            try:
+                import json as _json_dump, pickle as _pkl
+                _debug_dir = f"/tmp/bayes_debug-{payload.get('graph_id', 'unknown')}"
+                os.makedirs(_debug_dir, exist_ok=True)
+                with open(f"{_debug_dir}/phase2_frozen.json", "w") as _fd:
+                    _json_dump.dump(phase2_frozen, _fd, indent=2, default=str)
+                with open(f"{_debug_dir}/evidence.pkl", "wb") as _fd:
+                    _pkl.dump(evidence, _fd)
+                with open(f"{_debug_dir}/topology.pkl", "wb") as _fd:
+                    _pkl.dump(topology, _fd)
+                with open(f"{_debug_dir}/settings.json", "w") as _fd:
+                    _json_dump.dump({"features": features, "settings": settings}, _fd, indent=2, default=str)
+                _log(log, f"  Phase 2 debug artefacts: {_debug_dir}/")
+            except Exception as _dump_err:
+                _log(log, f"  WARNING: Phase 2 debug artefact dump failed: {_dump_err}")
 
             # Build Phase 2 model
             model2, metadata2 = build_model(

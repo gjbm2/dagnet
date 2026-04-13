@@ -805,6 +805,7 @@ def build_solo_edge_with_snapshots(
     return graph_snapshot, param_files, {"edge-a-b": rows}, {"edge-a-b": p_true}
 
 
+
 def build_snapshot_with_fallback(
     p_true_snapshot: float = 0.3,
     p_true_paramfile: float = 0.6,
@@ -859,3 +860,166 @@ def build_snapshot_with_fallback(
     }
 
     return graph_snapshot, param_files, snapshot_rows, ground_truth
+
+
+def build_contexted_solo_edge_with_snapshot_slices(
+    slice_ps: dict[str, float] | None = None,
+    n_per_day: int = 80,
+    n_days: int = 45,
+    *,
+    onset: float = 2.0,
+    mu: float = 2.1,
+    sigma: float = 0.55,
+    seed: int = 63,
+) -> tuple[
+    dict,
+    dict[str, dict],
+    dict[str, list[dict]],
+    dict[str, set[str]],
+    list[str],
+    dict[str, float],
+]:
+    """Snapshot-backed solo edge with commissioned MECE context slices.
+
+    Produces two or more context-qualified hash-sharing slice families for a
+    single latency edge. This is the smallest local fixture that exercises the
+    real Phase C snapshot path:
+
+      snapshot rows -> bind_snapshot_evidence(... commissioned_slices=...)
+                   -> SliceGroups -> build_model()
+
+    Returns:
+      graph_snapshot,
+      param_files,
+      snapshot_rows,
+      commissioned_slices,
+      mece_dimensions,
+      slice_truth   # context_key -> true p
+    """
+    if slice_ps is None:
+        slice_ps = {
+            "google": 0.62,
+            "direct": 0.38,
+        }
+
+    rng = np.random.default_rng(seed)
+    today_str = "2025-03-01"
+
+    from datetime import datetime, timedelta
+
+    today = datetime.strptime(today_str, "%Y-%m-%d")
+    cohort_start = today - timedelta(days=n_days)
+
+    retrieval_dates = []
+    ret = cohort_start + timedelta(days=20)
+    while ret <= today:
+        retrieval_dates.append(ret.strftime("%Y-%m-%d"))
+        ret += timedelta(days=10)
+
+    latency_block = {
+        "latency_parameter": True,
+        "onset_delta_days": onset,
+        "mu": mu,
+        "sigma": sigma,
+        "median_lag_days": onset + float(np.exp(mu)),
+        "mean_lag_days": onset + float(np.exp(mu + sigma**2 / 2)),
+    }
+
+    mean_p = float(np.mean(list(slice_ps.values())))
+
+    graph_snapshot = {
+        "nodes": [
+            _node("node-anchor", is_start=True),
+            _node("node-a"),
+            _node("node-b", absorbing=True),
+        ],
+        "edges": [
+            _edge("edge-anchor-a", "node-anchor", "node-a", "param-anchor-a", p_mean=0.9),
+            _edge(
+                "edge-a-b",
+                "node-a",
+                "node-b",
+                "param-a-b",
+                p_mean=mean_p,
+                latency=latency_block,
+            ),
+        ],
+    }
+
+    param_files = {
+        "param-anchor-a": _window_param_file(
+            n_per_day * n_days * 2,
+            int(n_per_day * n_days * 2 * 0.9),
+            param_id="param-anchor-a",
+        ),
+        "param-a-b": {
+            "id": "param-a-b",
+            "values": [
+                {
+                    "sliceDSL": "window(1-Jan-25:1-Mar-25)",
+                    "n": 100,
+                    "k": int(100 * mean_p),
+                    "mean": mean_p,
+                    "stdev": 0.05,
+                }
+            ],
+        },
+    }
+
+    shared_hash = "ctx-shared-hash"
+    rows: list[dict] = []
+    commissioned = {
+        "edge-a-b": {
+            f"context(channel:{ctx_name})"
+            for ctx_name in slice_ps
+        }
+    }
+    mece_dimensions = ["channel"]
+    slice_truth = {
+        f"context(channel:{ctx_name})": p_true
+        for ctx_name, p_true in slice_ps.items()
+    }
+
+    for ctx_name, p_true in slice_ps.items():
+        ctx_key = f"context(channel:{ctx_name})"
+        rows.extend(
+            generate_snapshot_rows(
+                rng,
+                p_true,
+                n_per_day,
+                n_days,
+                retrieval_dates,
+                onset=onset,
+                mu=mu,
+                sigma=sigma,
+                slice_key=f"{ctx_key}.window(1-Jan-25:1-Mar-25)",
+                param_id="repo-branch-param-a-b",
+                core_hash=shared_hash,
+                today_str=today_str,
+            )
+        )
+        rows.extend(
+            generate_snapshot_rows(
+                rng,
+                p_true,
+                n_per_day,
+                n_days,
+                retrieval_dates,
+                onset=onset,
+                mu=mu,
+                sigma=sigma,
+                slice_key=f"{ctx_key}.cohort(node-anchor,2024-10-01:2025-01-01)",
+                param_id="repo-branch-param-a-b",
+                core_hash=shared_hash,
+                today_str=today_str,
+            )
+        )
+
+    return (
+        graph_snapshot,
+        param_files,
+        {"edge-a-b": rows},
+        commissioned,
+        mece_dimensions,
+        slice_truth,
+    )

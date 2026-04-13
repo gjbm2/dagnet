@@ -105,9 +105,8 @@ echo ""
 PIDS=()
 for graph in "${SELECTED[@]}"; do
     LOG="/tmp/bayes_recovery-${graph}.log"
-    # Truncate logs (pre-create harness log so monitor can find it immediately)
+    # Truncate recovery log (harness log has its own timestamped archive)
     > "$LOG"
-    > "/tmp/bayes_harness-${graph}.log"
 
     (
         eval "$VENV_ACTIVATE"

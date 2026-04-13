@@ -43,6 +43,12 @@ import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime
 
+from recovery_slices import (
+    iter_expected_single_slice_specs,
+    make_slice_label,
+    parse_slice_label,
+)
+
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPO_ROOT, "bayes"))
 
@@ -154,6 +160,7 @@ def _run_one_graph(
     timeout: int,
     feature_flags: list[str] | None = None,
     clean: bool = False,
+    rebuild: bool = False,
     run_id: str = "",
     dsl_override: str | None = None,
 ) -> dict:
@@ -185,15 +192,29 @@ def _run_one_graph(
         cmd.extend(["--feature", ff])
     if clean:
         cmd.append("--clean")
+    if rebuild:
+        cmd.append("--rebuild")
     if dsl_override:
         cmd.extend(["--dsl-override", dsl_override])
-    env = {**os.environ, **_THREAD_PIN_ENV}
+    _jax = any(f.startswith("jax_backend=t") for f in (feature_flags or []))
+    if _jax:
+        _ncpu = str(os.cpu_count() or 16)
+        env = {**os.environ,
+               "PYTHONDONTWRITEBYTECODE": "1",
+               "XLA_FLAGS": "--xla_cpu_multi_thread_eigen=true",
+               "OMP_NUM_THREADS": _ncpu,
+               "MKL_NUM_THREADS": _ncpu,
+               "OPENBLAS_NUM_THREADS": _ncpu,
+               }
+    else:
+        env = {**os.environ, **_THREAD_PIN_ENV}
 
     t0 = time.time()
     try:
+        _sub_timeout = None if timeout == 0 else timeout + 120
         result = subprocess.run(
             cmd, capture_output=True, text=True,
-            timeout=timeout + 120,
+            timeout=_sub_timeout,
             env=env, cwd=REPO_ROOT,
         )
         elapsed = time.time() - t0
@@ -271,13 +292,13 @@ def _parse_recovery_output(output: str) -> dict:
             continue
 
         if in_slice_section:
-            # Per-slice section: headers are like "google (simple-a-to-b)"
-            # i.e. "{val_id} ({edge_key})"
-            slice_header = re.match(r"^(\S+)\s+\(([^)]+)\)\s*$", stripped)
+            # Per-slice section headers use the full context key plus edge key.
+            slice_header = re.match(r"^(.*?)\s+::\s+(.+?)\s*$", stripped)
             if slice_header:
-                val_id = slice_header.group(1)
-                edge_key = slice_header.group(2)
-                current_slice_label = f"{val_id} ({edge_key})"
+                current_slice_label = make_slice_label(
+                    slice_header.group(1),
+                    slice_header.group(2),
+                )
                 continue
 
             if current_slice_label and "truth=" in stripped and "post=" in stripped:
@@ -405,9 +426,48 @@ def assert_recovery(graph_name: str, parsed: dict, truth: dict) -> dict:
     if converged < thresholds["min_converged_pct"]:
         failures.append(f"converged={converged}% < {thresholds['min_converged_pct']}%")
 
+    # Expected recovery surface from the truth file.
+    # New-format truth files may carry structural entries without params.
+    truth_edges = {
+        edge_name: edge_truth
+        for edge_name, edge_truth in truth.get("edges", {}).items()
+        if isinstance(edge_truth, dict) and edge_truth.get("p") is not None
+    }
+    parsed_edges = parsed.get("edges", {})
+    parsed_slices = parsed.get("slices", {})
+
+    missing_edges = sorted(set(truth_edges) - set(parsed_edges))
+    if missing_edges:
+        failures.append(
+            f"missing recovery rows for {len(missing_edges)} truth edge(s): "
+            + ", ".join(missing_edges)
+        )
+
+    unexpected_edges = sorted(set(parsed_edges) - set(truth_edges))
+    if unexpected_edges:
+        warnings.append(
+            f"unexpected parsed recovery rows for edge(s): {', '.join(unexpected_edges)}"
+        )
+
+    for edge_name, edge_truth in truth_edges.items():
+        edge_data = parsed_edges.get(edge_name)
+        if edge_data is None:
+            continue
+
+        expected_params = [
+            param for param in ("p", "mu", "sigma", "onset")
+            if edge_truth.get(param) is not None
+        ]
+        missing_params = [param for param in expected_params if param not in edge_data]
+        if missing_params:
+            failures.append(
+                f"{edge_name}: missing parsed recovery param(s): {', '.join(missing_params)}"
+            )
+
     # Per-parameter z-score checks
-    truth_edges = truth.get("edges", {})
-    for edge_name, edge_data in parsed.get("edges", {}).items():
+    for edge_name, edge_data in parsed_edges.items():
+        if edge_name not in truth_edges:
+            continue
         for param, pdata in edge_data.items():
             if param == "kappa":
                 continue  # not testable (known issue)
@@ -439,6 +499,37 @@ def assert_recovery(graph_name: str, parsed: dict, truth: dict) -> dict:
                     f"{edge_name} {param}: |z|={z:.2f} approaching threshold {z_threshold}"
                 )
 
+    # Per-slice expected coverage from context truth.
+    expected_slice_labels = {
+        spec["label"]: spec["truth"]
+        for spec in iter_expected_single_slice_specs(truth)
+    }
+
+    if expected_slice_labels and not parsed_slices:
+        failures.append("missing per-slice recovery rows for contexted truth")
+
+    missing_slice_labels = sorted(set(expected_slice_labels) - set(parsed_slices))
+    if missing_slice_labels:
+        failures.append(
+            f"missing slice recovery rows for {len(missing_slice_labels)} expected slice(s): "
+            + ", ".join(missing_slice_labels)
+        )
+
+    for slice_label, edge_truth in expected_slice_labels.items():
+        slice_data = parsed_slices.get(slice_label)
+        if slice_data is None:
+            continue
+        expected_params = [
+            param for param in ("p", "mu", "sigma", "onset")
+            if edge_truth.get(param) is not None
+        ]
+        missing_params = [param for param in expected_params if param not in slice_data]
+        if missing_params:
+            failures.append(
+                f"SLICE {slice_label}: missing parsed recovery param(s): "
+                + ", ".join(missing_params)
+            )
+
     # Per-slice z-score checks (doc 35 Phase 5)
     per_slice_thresholds = testing.get("per_slice_thresholds", {})
     p_slice_z = per_slice_thresholds.get("p_slice_z", 3.0)
@@ -453,7 +544,7 @@ def assert_recovery(graph_name: str, parsed: dict, truth: dict) -> dict:
                   per_slice_thresholds.get("onset_slice_abs_floor", 0.3)),
     }
 
-    for slice_label, slice_data in parsed.get("slices", {}).items():
+    for slice_label, slice_data in parsed_slices.items():
         for param, pdata in slice_data.items():
             if param == "kappa":
                 continue  # informational only
@@ -594,10 +685,13 @@ def run_regression(args) -> list[dict]:
     with ProcessPoolExecutor(max_workers=max_parallel) as pool:
         futures = {}
         for g in runnable:
-            timeout = g["truth"].get("testing", {}).get(
-                "timeout",
-                g["truth"].get("simulation", {}).get("expected_sample_seconds", 600),
-            )
+            if getattr(args, 'no_timeout', False):
+                timeout = 0
+            else:
+                timeout = g["truth"].get("testing", {}).get(
+                    "timeout",
+                    g["truth"].get("simulation", {}).get("expected_sample_seconds", 600),
+                )
             future = pool.submit(
                 _run_one_graph,
                 g["graph_name"],
@@ -608,6 +702,7 @@ def run_regression(args) -> list[dict]:
                 timeout=timeout,
                 feature_flags=getattr(args, 'feature', None) or None,
                 clean=getattr(args, 'clean', False),
+                rebuild=getattr(args, 'rebuild', False),
                 run_id=run_id,
                 dsl_override=getattr(args, 'dsl_override', None),
             )
@@ -926,14 +1021,14 @@ def run_regression(args) -> list[dict]:
             else:
                 # Per-slice recovery from parsed slices
                 recovery_slices = r.get("slices", {})
-                # Match slice labels: format is "val_id (edge_key)" — filter by ctx_key
-                # The ctx_key is like "context(dim:val)" — extract val_id from it
-                # e.g. "context(synth-channel:google)" → "google"
-                import re as _re
-                ctx_val_match = _re.search(r":([^)]+)\)$", unit)
-                ctx_val = ctx_val_match.group(1) if ctx_val_match else ""
-                unit_recovery = {k: v for k, v in recovery_slices.items()
-                                 if k.startswith(f"{ctx_val} (")}
+                unit_recovery = {}
+                for label, params in recovery_slices.items():
+                    parsed_label = parse_slice_label(label)
+                    if parsed_label is None:
+                        continue
+                    ctx_key, _edge_key = parsed_label
+                    if ctx_key == unit:
+                        unit_recovery[label] = params
                 if unit_recovery:
                     print(f"{indent}7. Recovery:       {len(unit_recovery)} slice entries")
                     for label, params in unit_recovery.items():
@@ -1064,8 +1159,12 @@ Examples:
     parser.add_argument("--feature", action="append", default=[],
                         help="Model feature flag KEY=VALUE, forwarded to param_recovery.py "
                              "(e.g. --feature latency_dispersion=true)")
+    parser.add_argument("--no-timeout", action="store_true",
+                        help="Disable all timeouts (pass --timeout 0 to harness)")
     parser.add_argument("--clean", action="store_true",
-                        help="Clear bytecode + synth meta caches before each graph run")
+                        help="Clear __pycache__ bytecode before each graph run")
+    parser.add_argument("--rebuild", action="store_true",
+                        help="Delete synth-meta, forcing DB re-insert (heavy)")
     parser.add_argument("--dsl-override", type=str, default=None,
                         help="Override pinnedDSL for all graphs (forwarded to param_recovery.py)")
     args = parser.parse_args()

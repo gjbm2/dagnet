@@ -1357,6 +1357,26 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
             'sigma': float(sigma),
             'onset_delta_days': float(onset) if isinstance(onset, (int, float)) else 0.0,
         }
+        # Bayesian edge-level latency — set only when the posterior carries
+        # these values so the per-source curve builder knows Bayes is available.
+        bayes_mu = lat_posterior.get('mu_mean')
+        bayes_sigma = lat_posterior.get('sigma_mean')
+        if (isinstance(bayes_mu, (int, float)) and math.isfinite(bayes_mu)
+                and isinstance(bayes_sigma, (int, float)) and math.isfinite(bayes_sigma) and bayes_sigma > 0):
+            result['bayes_mu'] = float(bayes_mu)
+            result['bayes_sigma'] = float(bayes_sigma)
+            bayes_onset = lat_posterior.get('onset_delta_days')
+            result['bayes_onset'] = float(bayes_onset) if isinstance(bayes_onset, (int, float)) and math.isfinite(bayes_onset) else 0.0
+            # Edge-level uncertainty SDs from the posterior
+            for _post_key, _result_key in [
+                ('mu_sd', 'bayes_mu_sd'),
+                ('sigma_sd', 'bayes_sigma_sd'),
+                ('onset_sd', 'bayes_onset_sd'),
+                ('onset_mu_corr', 'bayes_onset_mu_corr'),
+            ]:
+                _v = lat_posterior.get(_post_key)
+                if isinstance(_v, (int, float)) and math.isfinite(_v) and (_v > 0 or 'corr' in _post_key):
+                    result[_result_key] = float(_v)
         # Evidence retrieval date — needed for tau_observed in fan chart.
         evidence = p.get('evidence') or {}
         ev_retrieved = evidence.get('retrieved_at')
@@ -1415,6 +1435,27 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
         path_onset = lat_posterior.get('path_onset_delta_days') or latency.get('path_onset_delta_days')
         if isinstance(path_onset, (int, float)) and math.isfinite(path_onset) and path_onset >= 0:
             result['path_onset_delta_days'] = float(path_onset)
+        # Bayesian path-level latency — set only when the posterior carries
+        # path params so the per-source curve builder can distinguish
+        # "path from Bayes posterior" from "path from analytic flat".
+        bayes_path_mu = lat_posterior.get('path_mu_mean')
+        bayes_path_sigma = lat_posterior.get('path_sigma_mean')
+        if (isinstance(bayes_path_mu, (int, float)) and math.isfinite(bayes_path_mu)
+                and isinstance(bayes_path_sigma, (int, float)) and math.isfinite(bayes_path_sigma) and bayes_path_sigma > 0):
+            result['bayes_path_mu'] = float(bayes_path_mu)
+            result['bayes_path_sigma'] = float(bayes_path_sigma)
+            bayes_path_onset = lat_posterior.get('path_onset_delta_days')
+            result['bayes_path_onset'] = float(bayes_path_onset) if isinstance(bayes_path_onset, (int, float)) and math.isfinite(bayes_path_onset) else 0.0
+            # Path-level uncertainty SDs from the posterior
+            for _post_key, _result_key in [
+                ('path_mu_sd', 'bayes_path_mu_sd'),
+                ('path_sigma_sd', 'bayes_path_sigma_sd'),
+                ('path_onset_sd', 'bayes_path_onset_sd'),
+                ('path_onset_mu_corr', 'bayes_path_onset_mu_corr'),
+            ]:
+                _v = lat_posterior.get(_post_key)
+                if isinstance(_v, (int, float)) and math.isfinite(_v) and (_v > 0 or 'corr' in _post_key):
+                    result[_result_key] = float(_v)
         # Per-source model vars — extract latency params from each source
         # so the frontend can render separate overlay curves per model.
         model_vars = p.get('model_vars') or []
