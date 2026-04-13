@@ -32,10 +32,10 @@ See doc 17 for design rationale.
 """
 from __future__ import annotations
 
-import base64
 import bisect
 import hashlib
 import os
+import re
 import sys
 import json
 import math
@@ -301,28 +301,21 @@ def verify_synth_data(graph_name: str, data_repo: str | None = None) -> dict:
         total = 0
 
         # Try meta hashes first (fast path)
+        _hash_keys = ["window_hash", "cohort_hash", "ctx_window_hash", "ctx_cohort_hash"]
         if meta and meta.get("edge_hashes"):
             for edge_hashes in meta["edge_hashes"].values():
-                for h in [edge_hashes.get("window_hash", ""), edge_hashes.get("cohort_hash", "")]:
+                for hk in _hash_keys:
+                    h = edge_hashes.get(hk, "")
                     if h and not h.startswith("PLACEHOLDER") and not h.startswith("SIM-"):
                         cur.execute("SELECT COUNT(*) FROM snapshots WHERE core_hash = %s", (h,))
                         total += cur.fetchone()[0]
         else:
-            # No meta — compute hashes via FE and check DB directly
-            graph_path = os.path.join(graphs_dir, f"{graph_name}.json")
-            if os.path.isfile(graph_path):
-                from compiler.topology import analyse_topology
-                with open(graph_path) as f:
-                    graph = json.load(f)
-                topo = analyse_topology(graph)
-                fe_hashes = compute_core_hashes(graph, topo, data_repo)
-                for pid, hashes in fe_hashes.items():
-                    if pid.startswith("parameter-"):
-                        continue
-                    for h in [hashes.get("window_hash", ""), hashes.get("cohort_hash", "")]:
-                        if h and not h.startswith("PLACEHOLDER") and not h.startswith("SIM-"):
-                            cur.execute("SELECT COUNT(*) FROM snapshots WHERE core_hash = %s", (h,))
-                            total += cur.fetchone()[0]
+            # No meta sidecar — cannot verify without authoritative hashes.
+            # The meta sidecar is always written by the generation pipeline;
+            # its absence means generation hasn't run or was interrupted.
+            conn.close()
+            return {"status": "missing", "reason": "No .synth-meta.json — run synth_gen to generate",
+                    "row_count": 0, "truth_sha256": truth_sha, "meta": meta}
         conn.close()
 
         if truth_stale:
@@ -338,6 +331,24 @@ def verify_synth_data(graph_name: str, data_repo: str | None = None) -> dict:
     except Exception as e:
         return {"status": "missing", "reason": f"DB check failed: {e}",
                 "row_count": 0, "truth_sha256": truth_sha, "meta": meta}
+
+
+def _build_meta_hashes(hash_lookup: dict[str, dict[str, str]]) -> dict[str, dict[str, str]]:
+    """Build the edge_hashes dict for .synth-meta.json from hash_lookup.
+
+    Deduplicates (skips parameter- prefixed keys) and includes all hash
+    families: bare window/cohort AND context window/cohort.
+    """
+    meta: dict[str, dict[str, str]] = {}
+    for pid, h in hash_lookup.items():
+        if not pid.startswith("parameter-"):
+            meta[pid] = {
+                "window_hash": h.get("window_hash", ""),
+                "cohort_hash": h.get("cohort_hash", ""),
+                "ctx_window_hash": h.get("ctx_window_hash", ""),
+                "ctx_cohort_hash": h.get("ctx_cohort_hash", ""),
+            }
+    return meta
 
 
 def save_synth_meta(
@@ -390,184 +401,6 @@ def _load_db_connection() -> str:
     return ""
 
 
-def _sha256_hex(text: str) -> str:
-    """SHA-256 of UTF-8 bytes, full hex digest. Matches FE hashText()."""
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
-
-def _short_hash(canonical: str) -> str:
-    """SHA-256 → first 16 bytes → base64url (no padding).
-
-    Matches coreHashService.ts computeShortCoreHash() and
-    snapshot_service.py short_core_hash_from_canonical_signature().
-    """
-    digest = hashlib.sha256(canonical.strip().encode("utf-8")).digest()[:16]
-    return base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
-
-
-def compute_core_hashes(
-    graph_snapshot: dict,
-    topology,
-    data_repo: str,
-) -> dict[str, dict[str, str]]:
-    """Compute real FE-compatible core hashes for each edge.
-
-    Replicates the FE's querySignature.ts → coreHashService.ts pipeline:
-    1. Build coreCanonical JSON (connection, event_ids, event_def_hashes,
-       query, latency_parameter, etc.)
-    2. coreHash = sha256(coreCanonical).hex()
-    3. structuredSig = JSON.stringify({c: coreHash, x: {}})
-    4. core_hash = sha256(structuredSig)[:16] → base64url
-
-    Two hashes per edge: window (cohort_mode=false) and cohort (cohort_mode=true).
-
-    Returns dict[param_id → {window_hash, cohort_hash}].
-    """
-    # Build node lookups
-    nodes_by_id = {n["id"]: n for n in graph_snapshot.get("nodes", [])}
-    nodes_by_uuid = {n["uuid"]: n for n in graph_snapshot.get("nodes", [])}
-
-    def find_node(ref: str) -> dict | None:
-        return nodes_by_id.get(ref) or nodes_by_uuid.get(ref)
-
-    # Load event definitions from data repo
-    event_defs: dict[str, dict] = {}
-    events_dir = os.path.join(data_repo, "events")
-    if os.path.isdir(events_dir):
-        for fname in os.listdir(events_dir):
-            if fname.endswith(".yaml"):
-                with open(os.path.join(events_dir, fname)) as f:
-                    edef = yaml.safe_load(f) or {}
-                    if edef.get("id"):
-                        event_defs[edef["id"]] = edef
-
-    result: dict[str, dict[str, str]] = {}
-
-    for edge_id, et in topology.edges.items():
-        pid = et.param_id
-        if not pid:
-            continue
-
-        # Find the graph edge object
-        edge = None
-        for e in graph_snapshot.get("edges", []):
-            if e["uuid"] == edge_id:
-                edge = e
-                break
-        if not edge:
-            continue
-
-        query = edge.get("query", "")
-        lat = edge.get("p", {}).get("latency", {})
-        has_latency = lat.get("latency_parameter", False)
-
-        # Resolve event_ids from from/to nodes via query
-        from_node = find_node(et.from_node)
-        to_node = find_node(et.to_node)
-        from_event_id = from_node.get("event_id", "") if from_node else ""
-        to_event_id = to_node.get("event_id", "") if to_node else ""
-
-        # Latency anchor event_id
-        anchor_node_id = lat.get("anchor_node_id", "")
-        anchor_node = find_node(anchor_node_id) if anchor_node_id else None
-        latency_anchor_event_id = anchor_node.get("event_id", "") if anchor_node else ""
-
-        # Normalise query: replace node IDs with event IDs
-        normalized_query = query
-        for node in graph_snapshot.get("nodes", []):
-            nid = node.get("id", "")
-            eid = node.get("event_id", "")
-            if nid and eid:
-                normalized_query = normalized_query.replace(nid, eid)
-
-        # Find anchor node for cohort mode
-        anchor_start_node = None
-        for n in graph_snapshot.get("nodes", []):
-            if n.get("entry", {}).get("is_start"):
-                anchor_start_node = n
-                break
-        anchor_start_eid = anchor_start_node.get("event_id", "") if anchor_start_node else ""
-
-        # Compute window hash (cohort_mode=false) and cohort hash (cohort_mode=true)
-        hashes: dict[str, str] = {}
-        for mode_name, cohort_mode in [("window_hash", False), ("cohort_hash", True)]:
-            # In cohort mode, buildDslFromEdge resolves the anchor node,
-            # sets cohort_anchor_event_id, and loads the anchor event def.
-            # In window mode, cohort_anchor is empty and the anchor event
-            # is only loaded if it's also a from/to node.
-            # When from_node IS the anchor, buildDslFromEdge uses a 2-step
-            # funnel and does NOT set cohort_anchor_event_id.
-            if cohort_mode and from_event_id != anchor_start_eid:
-                cohort_anchor = anchor_start_eid
-            else:
-                cohort_anchor = ""
-
-            # Event definition hashes — per-edge, only events relevant to
-            # this edge. buildDslFromEdge loads from/to events always.
-            # In cohort mode it also loads the cohort anchor event.
-            # The latency anchor event is loaded only if it coincides
-            # with from/to/cohort-anchor.
-            loaded_event_ids = {from_event_id, to_event_id}
-            if cohort_mode and cohort_anchor:
-                loaded_event_ids.add(cohort_anchor)
-
-            all_event_ids = [eid for eid in [from_event_id, to_event_id, latency_anchor_event_id] if eid]
-            event_def_hashes: dict[str, str] = {}
-            for eid in all_event_ids:
-                if eid not in loaded_event_ids:
-                    event_def_hashes[eid] = "not_loaded"
-                    continue
-                edef = event_defs.get(eid)
-                if edef:
-                    normalized = {
-                        "id": edef.get("id"),
-                        "provider_event_names": edef.get("provider_event_names", {}),
-                        "amplitude_filters": edef.get("amplitude_filters", []),
-                    }
-                    event_def_hashes[eid] = _sha256_hex(json.dumps(normalized, separators=(",", ":")))
-                else:
-                    event_def_hashes[eid] = "not_loaded"
-
-            # Connection: read from edge p.connection or graph defaultConnection
-            edge_connection = edge.get("p", {}).get("connection")
-            if not edge_connection:
-                edge_connection = graph_snapshot.get("defaultConnection", "amplitude")
-
-            core_canonical = json.dumps({
-                "connection": edge_connection,
-                "from_event_id": from_event_id,
-                "to_event_id": to_event_id,
-                "visited_event_ids": [],
-                "exclude_event_ids": [],
-                "event_def_hashes": event_def_hashes,
-                "event_filters": {},
-                "case": [],
-                "cohort_mode": cohort_mode,
-                "cohort_anchor_event_id": cohort_anchor,
-                "latency_parameter": has_latency,
-                "latency_anchor_event_id": latency_anchor_event_id,
-                "original_query": normalized_query,
-            }, separators=(",", ":"))
-
-            core_hash_hex = _sha256_hex(core_canonical)
-
-            # Structured signature (no context keys for synthetic data)
-            structured_sig = json.dumps({
-                "c": core_hash_hex,
-                "x": {},
-            }, separators=(",", ":"))
-
-            hashes[mode_name] = _short_hash(structured_sig)
-            # Also store the structured sig for parameter file query_signature
-            sig_key = mode_name.replace("_hash", "_sig")
-            hashes[sig_key] = structured_sig
-
-        result[pid] = hashes
-        # Also store with parameter- prefix
-        if not pid.startswith("parameter-"):
-            result[f"parameter-{pid}"] = hashes
-
-    return result
 
 
 def _build_hash_lookup(gcfg: dict) -> dict[str, dict[str, str]]:
@@ -789,6 +622,7 @@ def simulate_graph(
         else:
             ep = {"p": 0.5, "onset": 0.0, "mu": 1.0, "sigma": 0.5}
         ep.setdefault("kappa_sim", kappa_default)
+        ep.setdefault("tau_mu", 0.0)  # doc 34: cohort-to-cohort timing dispersion
         edge_params[edge_id] = ep
 
     # --- Build adjacency ---
@@ -857,14 +691,19 @@ def simulate_graph(
         base_p: float,
         base_mu: float,
         drift_offset: float,
-    ) -> tuple[float, float]:
-        """Compute per-user effective p and mu from context assignments.
+        base_sigma: float = 0.0,
+        base_onset: float = 0.0,
+    ) -> tuple[float, float, float, float]:
+        """Compute per-user effective p, mu, sigma, onset from context assignments.
 
-        Composes context effects then draws per-user p from Beta.
-        Returns (p_user, mu_user).
+        Composes context effects: p multiplicative, mu additive,
+        sigma multiplicative, onset additive.
+        Returns (p_user, mu_user, sigma_user, onset_user).
         """
         p_mult = 1.0
         mu_offset = 0.0
+        sigma_mult = 1.0
+        onset_offset = 0.0
 
         # Compose effects from all context dimensions
         for dim in context_dims:
@@ -876,9 +715,22 @@ def simulate_graph(
                 if v["id"] == user_val:
                     pid = topology.edges[edge_id].param_id if edge_id in topology.edges else ""
                     bare = pid.replace("parameter-", "") if pid.startswith("parameter-") else pid
-                    overrides = v.get("edges", {}).get(pid) or v.get("edges", {}).get(bare) or {}
+                    # Truth files use short edge keys (e.g. "synth-ctx1-anchor-to-target")
+                    # but param_ids use the full prefixed name (e.g. "synth-context-solo-synth-ctx1-anchor-to-target").
+                    # Try multiple lookup forms.
+                    edges_map = v.get("edges", {})
+                    overrides = edges_map.get(pid) or edges_map.get(bare)
+                    if overrides is None:
+                        # Try matching truth edge keys by suffix
+                        for ekey in edges_map:
+                            if bare.endswith(ekey) or bare.endswith(f"-{ekey}"):
+                                overrides = edges_map[ekey]
+                                break
+                    overrides = overrides or {}
                     p_mult *= overrides.get("p_mult", 1.0)
                     mu_offset += overrides.get("mu_offset", 0.0)
+                    sigma_mult *= overrides.get("sigma_mult", 1.0)
+                    onset_offset += overrides.get("onset_offset", 0.0)
                     break
 
         # Apply drift
@@ -888,11 +740,12 @@ def simulate_graph(
         else:
             p_drifted = base_p
 
-        # Apply context p multiplier, clamp to (0, 1)
+        # Apply context effects, clamp to valid ranges
         p_ctx = min(max(p_drifted * p_mult, 1e-6), 1.0 - 1e-6)
-
         mu_user = base_mu + mu_offset
-        return p_ctx, mu_user
+        sigma_user = max(base_sigma * sigma_mult, 0.01)
+        onset_user = max(base_onset + onset_offset, 0.0)
+        return p_ctx, mu_user, sigma_user, onset_user
 
     # Two independent sources of between-day overdispersion:
     #
@@ -909,7 +762,12 @@ def simulate_graph(
     # Effective p = entry_day_p × (step_day_p / p_expected)
     # This composes both deviations multiplicatively.
     day_kappa = sim_config.get("kappa_sim_default", 100.0)
-    step_kappa = sim_config.get("kappa_step_default", day_kappa)
+    _step_raw = sim_config.get("kappa_step_default", day_kappa)
+    # None / 0 / null disables step-day variation (single-source mode).
+    # This makes the DGP match the model's single-kappa BetaBinomial,
+    # enabling clean PPC calibration validation (doc 38).
+    step_kappa = float(_step_raw) if _step_raw else 0.0
+    _step_day_enabled = step_kappa > 0
 
     def _draw_day_p(p_expected: float, kappa: float) -> float:
         """Draw a single day-level p from Beta(p*kappa, (1-p)*kappa)."""
@@ -938,6 +796,8 @@ def simulate_graph(
     daily_growth = (1.0 + growth_rate_mom) ** (1.0 / 30.0) if growth_rate_mom > 0 else 1.0
 
     print(f"  Simulating {total_sim_days} days ({burn_in_days} burn-in + {n_days} observable)...", flush=True)
+    if not _step_day_enabled:
+        print(f"  Step-day dispersion: DISABLED (single-source mode, entry-day κ={day_kappa})", flush=True)
     if growth_rate_mom > 0:
         print(f"  Growth: {growth_rate_mom * 100:.1f}% MoM ({(daily_growth - 1) * 100:.3f}%/day)", flush=True)
     traffic_cv = sim_config.get("traffic_cv", 0.0)
@@ -964,6 +824,13 @@ def simulate_graph(
         for eid in edge_params:
             day_drift[eid] = float(drift_paths[eid][day_idx])
 
+        # Per-cohort (per-day) mu offsets for latency dispersion (doc 34).
+        # All users on the same day share the same mu offset per edge.
+        day_mu_offsets: dict[str, float] = {}
+        for eid, ep in edge_params.items():
+            _tau = ep.get("tau_mu", 0.0)
+            day_mu_offsets[eid] = float(rng.normal(0, _tau)) if _tau > 0 else 0.0
+
         # Pre-draw day-level p for each (edge, context-combo).
         # All users sharing the same day+edge+context get the same p.
         # This creates between-day overdispersion (controlled by kappa_sim).
@@ -976,7 +843,7 @@ def simulate_graph(
             ctx_key = tuple(sorted(user_contexts.items()))
             cache_key = (edge_id, ctx_key)
             if cache_key not in _day_p_cache:
-                p_expected, _ = _compute_user_params(
+                p_expected, _, _, _ = _compute_user_params(
                     user_contexts, edge_id, base_p, 0.0, drift_offset,
                 )
                 _day_p_cache[cache_key] = _draw_day_p(p_expected, day_kappa)
@@ -996,17 +863,23 @@ def simulate_graph(
             # Use day-level p (shared by all users in this context on this day)
             user_probs: dict[str, float] = {}
             user_mus: dict[str, float] = {}
+            user_sigmas: dict[str, float] = {}
+            user_onsets: dict[str, float] = {}
             for eid, ep in edge_params.items():
                 user_probs[eid] = _get_day_p(
                     eid, user_contexts,
                     ep["p"], day_drift[eid],
                 )
-                _, mu_user = _compute_user_params(
+                _, mu_user, sigma_user, onset_user = _compute_user_params(
                     user_contexts, eid,
                     ep["p"], ep.get("mu", 0.0),
                     day_drift[eid],
+                    base_sigma=ep.get("sigma", 0.0),
+                    base_onset=ep.get("onset", 0.0),
                 )
-                user_mus[eid] = mu_user
+                user_mus[eid] = mu_user + day_mu_offsets.get(eid, 0.0)
+                user_sigmas[eid] = sigma_user
+                user_onsets[eid] = onset_user
 
             person: dict[str, Any] = {"_contexts": user_contexts}
             _traverse(
@@ -1014,8 +887,10 @@ def simulate_graph(
                 topology, adj_out, edge_params, user_probs,
                 edge_to_bg, rng,
                 user_mus=user_mus,
+                user_sigmas=user_sigmas,
+                user_onsets=user_onsets,
                 day_idx=day_idx,
-                step_day_fn=_get_step_day_p,
+                step_day_fn=_get_step_day_p if _step_day_enabled else None,
             )
             day_arrivals.append(person)
 
@@ -1132,10 +1007,11 @@ def simulate_graph(
     # by from-node arrival day across simulation days).
     snapshot_start_offset = sim_config.get("snapshot_start_offset", 0)
     # emit_context_slices: when True, emit per-context rows instead of
-    # bare aggregate rows.  Defaults to False — the compiler doesn't yet
-    # support per-context modelling (Phase C).  Set to True in the truth
+    # bare aggregate rows.  Defaults to False.  Set to True in the truth
     # file to test context-aware pipelines.
+    # When 'epochs' is defined, context emission varies by day.
     emit_context_slices = truth.get("emit_context_slices", False)
+    epochs = truth.get("epochs")
 
     snapshot_rows = _generate_observations_nightly(
         topology, sorted_times, sorted_edge_times, actual_traffic,
@@ -1144,6 +1020,7 @@ def simulate_graph(
         context_dims=context_dims,
         snapshot_start_offset=snapshot_start_offset,
         emit_context_slices=emit_context_slices,
+        epochs=epochs,
     )
 
     # Free the raw person data now
@@ -1180,6 +1057,8 @@ def _traverse(
     edge_to_bg: dict[str, str],
     rng: np.random.Generator,
     user_mus: dict[str, float] | None = None,
+    user_sigmas: dict[str, float] | None = None,
+    user_onsets: dict[str, float] | None = None,
     day_idx: int = 0,
     step_day_fn=None,
 ) -> None:
@@ -1239,7 +1118,8 @@ def _traverse(
             chosen_eid = evented[choice]
             _take_edge(chosen_eid, t_current, person, topology,
                        adj_out, edge_params, day_probs, edge_to_bg, rng,
-                       user_mus=user_mus, day_idx=day_idx,
+                       user_mus=user_mus, user_sigmas=user_sigmas,
+                       user_onsets=user_onsets, day_idx=day_idx,
                        step_day_fn=step_day_fn)
         elif unevented:
             chosen_eid = rng.choice(unevented)
@@ -1258,7 +1138,8 @@ def _traverse(
         if rng.random() < p_eff:
             _take_edge(eid, t_current, person, topology,
                        adj_out, edge_params, day_probs, edge_to_bg, rng,
-                       user_mus=user_mus, day_idx=day_idx,
+                       user_mus=user_mus, user_sigmas=user_sigmas,
+                       user_onsets=user_onsets, day_idx=day_idx,
                        step_day_fn=step_day_fn)
 
 
@@ -1269,6 +1150,8 @@ def _take_edge(
     topology,
     adj_out, edge_params, day_probs, edge_to_bg, rng,
     user_mus: dict[str, float] | None = None,
+    user_sigmas: dict[str, float] | None = None,
+    user_onsets: dict[str, float] | None = None,
     day_idx: int = 0,
     step_day_fn=None,
 ) -> None:
@@ -1276,13 +1159,14 @@ def _take_edge(
 
     Records both node arrival (node_id → t) and edge traversal
     (edge:<edge_id> → t_arrival) so per-edge counts work at joins.
+    Per-user mu/sigma/onset come from context overrides when available.
     """
     et = topology.edges[edge_id]
     params = edge_params[edge_id]
 
     mu = user_mus.get(edge_id, params.get("mu", 0.0)) if user_mus else params.get("mu", 0.0)
-    sigma = params.get("sigma", 0.0)
-    onset = params.get("onset", 0.0)
+    sigma = user_sigmas.get(edge_id, params.get("sigma", 0.0)) if user_sigmas else params.get("sigma", 0.0)
+    onset = user_onsets.get(edge_id, params.get("onset", 0.0)) if user_onsets else params.get("onset", 0.0)
     if sigma > 0.001:
         latency = onset + rng.lognormal(mu, sigma)
     else:
@@ -1292,7 +1176,8 @@ def _take_edge(
     person[f"edge:{edge_id}"] = t_arrival
     _traverse(et.to_node, t_arrival, person, topology,
               adj_out, edge_params, day_probs, edge_to_bg, rng,
-              user_mus=user_mus, day_idx=day_idx,
+              user_mus=user_mus, user_sigmas=user_sigmas,
+              user_onsets=user_onsets, day_idx=day_idx,
               step_day_fn=step_day_fn)
 
 
@@ -1322,6 +1207,7 @@ def _generate_observations_nightly(
     context_dims: list[dict] | None = None,
     snapshot_start_offset: int = 0,
     emit_context_slices: bool = False,
+    epochs: list[dict] | None = None,
 ) -> dict[str, list[dict]]:
     """Generate snapshot rows using nightly fetch simulation.
 
@@ -1355,6 +1241,18 @@ def _generate_observations_nightly(
     window groups by from-node arrival day, cohort groups by anchor entry day.
     """
     result: dict[str, list[dict]] = defaultdict(list)
+
+    # Epoch-aware context emission: resolve per anchor_day whether to
+    # emit context-qualified or bare aggregate rows. When epochs is
+    # defined, each epoch specifies a day range and whether context
+    # slices are emitted. When epochs is None, use the global flag.
+    def _emit_ctx_for_day(day_offset: int) -> bool:
+        if not epochs:
+            return emit_context_slices
+        for ep in epochs:
+            if ep.get("from_day", 0) <= day_offset <= ep.get("to_day", 999999):
+                return ep.get("emit_context_slices", False)
+        return False  # no epoch covers this day
 
     # Pre-compute latency stats per edge for DB rows
     edge_latency_stats: dict[str, dict] = {}
@@ -1391,7 +1289,9 @@ def _generate_observations_nightly(
             }
 
     # Pre-resolve hashes per edge
-    edge_hashes: dict[str, tuple[str, str]] = {}
+    # edge_hashes: (bare_window, bare_cohort, ctx_window, ctx_cohort)
+    # ctx hashes may be empty strings when no context dimensions exist.
+    edge_hashes: dict[str, tuple[str, str, str, str]] = {}
     for edge_id, et in topology.edges.items():
         pid = et.param_id
         hashes = hash_lookup.get(pid)
@@ -1399,9 +1299,12 @@ def _generate_observations_nightly(
             bare = pid.replace("parameter-", "") if pid.startswith("parameter-") else pid
             hashes = hash_lookup.get(bare)
         if hashes:
-            edge_hashes[edge_id] = (hashes["window_hash"], hashes["cohort_hash"])
+            edge_hashes[edge_id] = (
+                hashes["window_hash"], hashes["cohort_hash"],
+                hashes.get("ctx_window_hash", ""), hashes.get("ctx_cohort_hash", ""),
+            )
         else:
-            edge_hashes[edge_id] = (f"SYNTH-{pid}-w", f"SYNTH-{pid}-c")
+            edge_hashes[edge_id] = (f"SYNTH-{pid}-w", f"SYNTH-{pid}-c", "", "")
 
     _tsd = total_sim_days or n_days
 
@@ -1588,14 +1491,15 @@ def _generate_observations_nightly(
                     continue
 
                 pid = et.param_id
-                w_hash, c_hash = edge_hashes[edge_id]
+                w_hash, c_hash, ctx_w_hash, ctx_c_hash = edge_hashes[edge_id]
                 from_times = sorted_times[sim_day].get(et.from_node, [])
                 edge_times = day_edge_sorted.get(edge_id, [])
                 x_cohort = _count_by_age(from_times, age)
                 y_cohort = _count_by_age(edge_times, age)
 
                 lstats = edge_latency_stats.get(edge_id, {})
-                if not ctx_keys or not emit_context_slices:
+                _emit_ctx_this_day = _emit_ctx_for_day(obs_day_offset)
+                if not ctx_keys or not _emit_ctx_this_day:
                     # Bare aggregate cohort row
                     result[edge_id].append({
                         "param_id": pid,
@@ -1615,8 +1519,8 @@ def _generate_observations_nightly(
                     n_cohort_rows += 1
 
                 # Per-context cohort rows (emitted instead of aggregate
-                # when emit_context_slices is True — matches prod behaviour)
-                if emit_context_slices:
+                # when context emission is active for this day)
+                if _emit_ctx_this_day:
                     for ck in ctx_keys:
                         ctx_from = ctx_sorted_times[ck][sim_day].get(et.from_node, [])
                         ctx_edge = ctx_sorted_edge_times[ck][sim_day].get(edge_id, [])
@@ -1626,7 +1530,7 @@ def _generate_observations_nightly(
                         if ctx_a > 0:
                             result[edge_id].append({
                                 "param_id": pid,
-                                "core_hash": c_hash,
+                                "core_hash": ctx_c_hash or c_hash,
                                 "slice_key": f"{ck}.cohort()",
                                 "anchor_day": anchor_day_str,
                                 "retrieved_at": retrieved_at,
@@ -1641,8 +1545,7 @@ def _generate_observations_nightly(
                             })
                             n_cohort_rows += 1
 
-        if (fi + 1) % 10 == 0:
-            print(f"  Cohort observations: {fi + 1}/{len(fetch_nights)} nights, {n_cohort_rows} rows", flush=True)
+    print(f"  Cohort: {len(fetch_nights)} nights, {n_cohort_rows} rows", flush=True)
 
     # ── Generate window rows ────────────────────────────────────────────
     # Window: anchor_day = absolute calendar day person reached from_node,
@@ -1660,7 +1563,7 @@ def _generate_observations_nightly(
                 continue
 
             pid = et.param_id
-            w_hash, _c_hash = edge_hashes[edge_id]
+            w_hash, _c_hash, ctx_w_hash_e, _ctx_c_hash_e = edge_hashes[edge_id]
             edge_window = window_sorted.get(edge_id, {})
 
             for abs_from_day, (total_x, conv_offsets) in edge_window.items():
@@ -1686,7 +1589,8 @@ def _generate_observations_nightly(
 
                 if total_x > 0:
                     lstats = edge_latency_stats.get(edge_id, {})
-                    if not ctx_keys or not emit_context_slices:
+                    _emit_ctx_this_day_w = _emit_ctx_for_day(abs_from_day)
+                    if not ctx_keys or not _emit_ctx_this_day_w:
                         # Bare aggregate window row
                         result[edge_id].append({
                             "param_id": pid,
@@ -1704,8 +1608,8 @@ def _generate_observations_nightly(
                         n_window_rows += 1
 
                     # Per-context window rows (emitted instead of aggregate
-                    # when emit_context_slices is True)
-                    if emit_context_slices:
+                    # when context emission is active for this day)
+                    if _emit_ctx_this_day_w:
                         for ck in ctx_keys:
                             ctx_edge_window = ctx_window_sorted.get(ck, {}).get(edge_id, {})
                             ctx_entry = ctx_edge_window.get(abs_from_day)
@@ -1717,7 +1621,7 @@ def _generate_observations_nightly(
                             ctx_y_w = bisect.bisect_right(ctx_conv, float(w_age))
                             result[edge_id].append({
                                 "param_id": pid,
-                                "core_hash": w_hash,
+                                "core_hash": ctx_w_hash_e or w_hash,
                                 "slice_key": f"{ck}.window()",
                                 "anchor_day": anchor_day_str,
                                 "retrieved_at": retrieved_at,
@@ -1730,9 +1634,7 @@ def _generate_observations_nightly(
                             })
                             n_window_rows += 1
 
-        if (fi + 1) % 10 == 0:
-            print(f"  Window observations: {fi + 1}/{len(fetch_nights)} nights, {n_window_rows} rows", flush=True)
-
+    print(f"  Window: {len(fetch_nights)} nights, {n_window_rows} rows", flush=True)
     print(f"  Total: {sum(len(v) for v in result.values())} rows ({n_cohort_rows} cohort + {n_window_rows} window)", flush=True)
     return dict(result)
 
@@ -1766,13 +1668,45 @@ def _rehash_snapshot_rows(
 
         w_hash = hashes["window_hash"]
         c_hash = hashes["cohort_hash"]
+        ctx_w_hash = hashes.get("ctx_window_hash", "")
+        ctx_c_hash = hashes.get("ctx_cohort_hash", "")
 
         for r in rows:
             sk = r.get("slice_key", "")
+            is_ctx = "context(" in sk
             if "cohort" in sk:
-                r["core_hash"] = c_hash
+                r["core_hash"] = (ctx_c_hash or c_hash) if is_ctx else c_hash
             else:
-                r["core_hash"] = w_hash
+                r["core_hash"] = (ctx_w_hash or w_hash) if is_ctx else w_hash
+
+
+def _build_verify_checks(hashes: dict[str, str]) -> list[tuple[str, str, bool]]:
+    """Build the list of (mode, hash, expect_rows) for verification.
+
+    For each hash family (bare window/cohort, context window/cohort),
+    determine whether 0 DB rows constitutes a failure.
+
+    Rules:
+    - Context hashes with 0 rows → always FAIL (if they exist, data should be there)
+    - Bare hashes with 0 rows → FAIL only if no context hashes exist
+      (uniform-epoch context graphs have all rows under context hashes)
+    """
+    has_ctx = bool(hashes.get("ctx_window_hash") or hashes.get("ctx_cohort_hash"))
+
+    checks: list[tuple[str, str, bool]] = []
+    for mode, key, is_bare in [
+        ("window", "window_hash", True),
+        ("cohort", "cohort_hash", True),
+        ("ctx_window", "ctx_window_hash", False),
+        ("ctx_cohort", "ctx_cohort_hash", False),
+    ]:
+        h = hashes.get(key, "")
+        if not h:
+            continue
+        expect_rows = (not is_bare) or (is_bare and not has_ctx)
+        checks.append((mode, h, expect_rows))
+
+    return checks
 
 
 def _verify_db_data(
@@ -1803,14 +1737,14 @@ def _verify_db_data(
 
         db_pid = f"{workspace_prefix}-{pid}" if workspace_prefix else pid
 
-        for mode, h in [("window", hashes["window_hash"]), ("cohort", hashes["cohort_hash"])]:
+        for mode, h, expect_rows in _build_verify_checks(hashes):
             cur.execute(
                 "SELECT COUNT(*) FROM snapshots WHERE core_hash = %s AND param_id = %s",
                 (h, db_pid),
             )
             count = cur.fetchone()[0]
-            status = "PASS" if count > 0 else "FAIL"
-            if count == 0:
+            status = "PASS" if count > 0 else ("ok" if not expect_rows else "FAIL")
+            if count == 0 and expect_rows:
                 all_ok = False
             print(f"  {status} {pid} {mode}: {count} rows (hash={h[:16]}…, db_pid={db_pid[:40]})")
 
@@ -1830,102 +1764,147 @@ def write_to_snapshot_db(
     db_connection: str,
     workspace_prefix: str = "",
     hash_lookup: dict[str, dict[str, str]] | None = None,
+    progress_fn=None,
 ) -> dict[str, dict[str, str]]:
-    """Write synthetic rows to snapshot DB using the existing snapshot_service.
+    """Write synthetic rows to snapshot DB via bulk INSERT.
 
-    Cleans existing rows for the same core hashes first (idempotent).
-    workspace_prefix: e.g. "nous-conversion-feature/bayes-test-graph" —
-        prepended to param_ids as "${prefix}-${param_id}" to match the FE's
-        buildDbParamId format.
+    Single connection, three phases:
+      1. DELETE existing rows per (param_id, core_hash) — idempotent
+      2. Upsert signature_registry entries
+      3. Bulk INSERT all rows in one execute_values call
+
+    workspace_prefix: e.g. "nous-conversion-feature/bayes-test-graph"
     Returns dict[param_id → {window_hash, cohort_hash}] for test harness.
     """
-    # Use the existing snapshot_service (same as FE fetch pipeline)
-    lib_dir = os.path.join(REPO_ROOT, "graph-editor", "lib")
-    ge_dir = os.path.join(REPO_ROOT, "graph-editor")
-    if lib_dir not in sys.path:
-        sys.path.insert(0, lib_dir)
-    if ge_dir not in sys.path:
-        sys.path.insert(0, ge_dir)
-    os.environ["DB_CONNECTION"] = db_connection
-    from lib.snapshot_service import append_snapshots, delete_snapshots
+    import psycopg2
+    from psycopg2.extras import execute_values
+    import hashlib as _hashlib
 
-    # Group rows by (param_id, core_hash, slice_key, retrieved_at)
-    # — each group becomes one append_snapshots call
-    # Apply workspace prefix to param_ids (FE queries with prefixed IDs)
-    from collections import defaultdict
-    groups: dict[tuple, list[dict]] = defaultdict(list)
+    conn = psycopg2.connect(db_connection)
+    cur = conn.cursor()
+
+    inputs_json = json.dumps({"synthetic": True, "generator": "synth_gen"})
+    sig_algo = "sig_v1_sha256_trunc128_b64url"
+
+    # Collect all rows with workspace-prefixed param_ids
+    all_values = []
+    registry_entries: dict[tuple[str, str], str] = {}  # (db_pid, core_hash) → canonical_sig
+    hash_map: dict[str, dict[str, str]] = {}
+
     for edge_rows in snapshot_rows.values():
         for r in edge_rows:
             db_pid = f"{workspace_prefix}-{r['param_id']}" if workspace_prefix else r["param_id"]
-            key = (db_pid, r["core_hash"], r["slice_key"], r["retrieved_at"])
-            groups[key].append(r)
+            core_hash = r["core_hash"]
+            slice_key = r["slice_key"]
+            retrieved_at = r["retrieved_at"].replace("T", " ")
 
-    # Clean existing data for all param_id + core_hash combos
-    cleaned_combos: set[tuple[str, str]] = set()
-    for (pid, ch, _sk, _ra) in groups:
-        if (pid, ch) not in cleaned_combos:
-            result = delete_snapshots(pid, core_hashes=[ch])
-            if result["success"] and result["deleted"] > 0:
-                print(f"  Cleaned {result['deleted']} existing rows for {pid}/{ch[:12]}…")
-            cleaned_combos.add((pid, ch))
+            # Registry entry (one per param_id + core_hash)
+            if (db_pid, core_hash) not in registry_entries:
+                bare_pid = r["param_id"]
+                is_ctx = "context(" in slice_key
+                is_window = "window" in slice_key
+                if is_ctx:
+                    sig_key = "ctx_window_sig" if is_window else "ctx_cohort_sig"
+                else:
+                    sig_key = "window_sig" if is_window else "cohort_sig"
+                real_sig = (hash_lookup or {}).get(bare_pid, {}).get(sig_key)
+                canonical = real_sig if real_sig else f"synthetic:{db_pid}:{slice_key}"
+                registry_entries[(db_pid, core_hash)] = canonical
 
-    # Insert via append_snapshots
-    total_inserted = 0
-    hash_map: dict[str, dict[str, str]] = {}
+            all_values.append((
+                db_pid,
+                core_hash,
+                None,  # context_def_hashes (deprecated)
+                slice_key,
+                r["anchor_day"],
+                retrieved_at,
+                r.get("a"),
+                r.get("x"),
+                r["y"],
+                r.get("median_lag_days"),
+                r.get("mean_lag_days"),
+                r.get("anchor_median_lag_days"),
+                r.get("anchor_mean_lag_days"),
+                r.get("onset_delta_days"),
+                inputs_json,
+            ))
 
-    for (pid, core_hash, slice_key, retrieved_at_str), rows in groups.items():
-        # Parse retrieved_at regardless of separator (T or space)
-        clean_ra = retrieved_at_str.replace("T", " ")
-        retrieved_at = datetime.strptime(clean_ra, "%Y-%m-%d %H:%M:%S")
+            # Hash map for caller
+            if db_pid not in hash_map:
+                hash_map[db_pid] = {}
+            if "window" in slice_key:
+                hash_map[db_pid]["window_hash"] = core_hash
+            else:
+                hash_map[db_pid]["cohort_hash"] = core_hash
 
-        # Build rows in append_snapshots format
-        append_rows = []
-        for r in rows:
-            append_rows.append({
-                "anchor_day": r["anchor_day"],
-                "A": r.get("a"),
-                "X": r.get("x"),
-                "Y": r["y"],
-                "median_lag_days": r.get("median_lag_days"),
-                "mean_lag_days": r.get("mean_lag_days"),
-                "anchor_median_lag_days": r.get("anchor_median_lag_days"),
-                "anchor_mean_lag_days": r.get("anchor_mean_lag_days"),
-                "onset_delta_days": r.get("onset_delta_days"),
-            })
+    import time as _t
 
-        # Resolve the real structured sig for registry parity.
-        # The FE sends current_signatures from param file query_signature;
-        # the registry canonical_signature must match for family grouping.
-        bare_pid = pid.replace(f"{workspace_prefix}-", "") if workspace_prefix else pid
-        sig_key = "window_sig" if "window" in slice_key else "cohort_sig"
-        real_sig = (hash_lookup or {}).get(bare_pid, {}).get(sig_key)
-        canonical = real_sig if real_sig else f"synthetic:{pid}:{slice_key}"
-
-        result = append_snapshots(
-            param_id=pid,
-            canonical_signature=canonical,
-            inputs_json={"synthetic": True, "generator": "synth_gen"},
-            sig_algo="sig_v1_sha256_trunc128_b64url",
-            slice_key=slice_key,
-            retrieved_at=retrieved_at,
-            rows=append_rows,
-            core_hash=core_hash,
+    # Phase 1: DELETE existing rows per (param_id, core_hash)
+    _t1 = _t.time()
+    total_deleted = 0
+    for (db_pid, core_hash) in registry_entries:
+        cur.execute(
+            "DELETE FROM snapshots WHERE param_id = %s AND core_hash = %s",
+            (db_pid, core_hash),
         )
+        total_deleted += cur.rowcount
+    print(f"  Phase 1 DELETE: {total_deleted} rows in {_t.time() - _t1:.1f}s ({len(registry_entries)} combos)", flush=True)
+    if progress_fn: progress_fn(70, "db_write", f"delete done ({total_deleted} rows, {_t.time() - _t1:.1f}s)")
 
-        if result.get("success"):
-            total_inserted += result.get("inserted", 0)
-        else:
-            print(f"  WARNING: append failed for {pid}/{slice_key}: {result}")
+    # Phase 2: Upsert signature_registry
+    _t2 = _t.time()
+    for (db_pid, core_hash), canonical in registry_entries.items():
+        sig_hash = _hashlib.sha256(canonical.strip().encode("utf-8")).hexdigest()
+        cur.execute(
+            """
+            INSERT INTO signature_registry
+              (param_id, core_hash, canonical_signature, inputs_json, canonical_sig_hash_full, sig_algo)
+            VALUES (%s, %s, %s, %s::jsonb, %s, %s)
+            ON CONFLICT (param_id, core_hash) DO NOTHING
+            """,
+            (db_pid, core_hash, canonical, inputs_json, sig_hash, sig_algo),
+        )
+    print(f"  Phase 2 REGISTRY: {len(registry_entries)} entries in {_t.time() - _t2:.1f}s", flush=True)
+    if progress_fn: progress_fn(72, "db_write", f"registry done ({_t.time() - _t2:.1f}s)")
 
-        # Build hash map
-        if pid not in hash_map:
-            hash_map[pid] = {}
-        if "window" in slice_key:
-            hash_map[pid]["window_hash"] = core_hash
-        else:
-            hash_map[pid]["cohort_hash"] = core_hash
+    # Phase 3: Bulk INSERT all rows (chunked)
+    _t3 = _t.time()
+    CHUNK = 25000
+    total_inserted = 0
+    n_chunks = (len(all_values) + CHUNK - 1) // CHUNK
+    for ci, i in enumerate(range(0, len(all_values), CHUNK)):
+        chunk = all_values[i:i + CHUNK]
+        _tc = _t.time()
+        execute_values(
+            cur,
+            """
+            INSERT INTO snapshots (
+                param_id, core_hash, context_def_hashes, slice_key, anchor_day, retrieved_at,
+                A, X, Y,
+                median_lag_days, mean_lag_days,
+                anchor_median_lag_days, anchor_mean_lag_days,
+                onset_delta_days,
+                write_inputs_json
+            ) VALUES %s
+            ON CONFLICT (param_id, core_hash, slice_key, anchor_day, retrieved_at)
+            DO NOTHING
+            """,
+            chunk,
+            template="(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb)",
+        )
+        total_inserted += len(chunk)
+        print(f"  Phase 3 INSERT chunk {ci+1}/{n_chunks}: {len(chunk)} rows in {_t.time() - _tc:.1f}s", flush=True)
+        if progress_fn:
+            insert_pct = 72 + int(16 * (ci + 1) / n_chunks)
+            progress_fn(insert_pct, "db_write", f"insert chunk {ci+1}/{n_chunks} ({_t.time() - _tc:.1f}s)")
 
-    print(f"  Inserted {total_inserted} rows")
+    _t4 = _t.time()
+    conn.commit()
+    print(f"  COMMIT in {_t.time() - _t4:.1f}s", flush=True)
+    if progress_fn: progress_fn(90, "db_write", f"committed ({_t.time() - _t1:.1f}s total)")
+    conn.close()
+
+    print(f"  Total: {total_inserted} rows in {_t.time() - _t1:.1f}s")
     return hash_map
 
 
@@ -1965,6 +1944,47 @@ def clean_synthetic_data(db_connection: str, gcfg: dict | None = None) -> None:
 def _format_date_dmy(dt: datetime) -> str:
     """Format datetime as d-MMM-yy (e.g. 1-Nov-25)."""
     return dt.strftime("%-d-%b-%y")
+
+
+def write_context_files(truth: dict, data_repo: str) -> list[str]:
+    """Write context definition YAML files from truth file context_dimensions.
+
+    Returns list of written context IDs.
+    """
+    context_dims = truth.get("context_dimensions", [])
+    if not context_dims:
+        return []
+
+    contexts_dir = os.path.join(data_repo, "contexts")
+    os.makedirs(contexts_dir, exist_ok=True)
+    written = []
+
+    for dim in context_dims:
+        dim_id = dim["id"]
+        is_mece = dim.get("mece", False)
+        values = []
+        for v in dim.get("values", []):
+            entry: dict = {"id": v["id"], "label": v.get("label", v["id"])}
+            if v.get("sources"):
+                entry["sources"] = v["sources"]
+            values.append(entry)
+
+        ctx_def: dict = {
+            "id": dim_id,
+            "name": dim.get("label", dim_id),
+            "type": "categorical",
+            "otherPolicy": "null" if is_mece else "undefined",
+            "values": values,
+            "metadata": {"status": "active", "author": "synth_gen", "version": "1.0.0"},
+        }
+
+        ctx_path = os.path.join(contexts_dir, f"{dim_id}.yaml")
+        with open(ctx_path, "w") as f:
+            yaml.dump(ctx_def, f, default_flow_style=False, sort_keys=False)
+        written.append(dim_id)
+        print(f"  {dim_id}: {len(values)} values, mece={is_mece} → {ctx_path}")
+
+    return written
 
 
 def write_parameter_files(
@@ -2066,7 +2086,7 @@ def write_parameter_files(
             },
             "forecast": round(mean, 6),
         }
-        if hash_lookup and pid in hash_lookup and "window_sig" in hash_lookup[pid]:
+        if hash_lookup and pid in hash_lookup and hash_lookup[pid].get("window_sig"):
             window_entry["query_signature"] = hash_lookup[pid]["window_sig"]
 
         # Cohort values[] entry
@@ -2093,7 +2113,7 @@ def write_parameter_files(
             },
             "forecast": round(mean, 6),
         }
-        if hash_lookup and pid in hash_lookup and "cohort_sig" in hash_lookup[pid]:
+        if hash_lookup and pid in hash_lookup and hash_lookup[pid].get("cohort_sig"):
             cohort_entry["query_signature"] = hash_lookup[pid]["cohort_sig"]
 
         # Context-qualified values[] entries (one per context value per obs type).
@@ -2121,8 +2141,8 @@ def write_parameter_files(
                         "data_source": {"type": "synthetic", "retrieved_at": now_str, "full_query": query},
                         "forecast": round(mean, 6),
                     }
-                    if hash_lookup and pid in hash_lookup and "window_sig" in hash_lookup[pid]:
-                        ctx_window["query_signature"] = hash_lookup[pid]["window_sig"]
+                    if hash_lookup and pid in hash_lookup and "ctx_window_sig" in hash_lookup[pid] and hash_lookup[pid]["ctx_window_sig"]:
+                        ctx_window["query_signature"] = hash_lookup[pid]["ctx_window_sig"]
                     context_entries.append(ctx_window)
 
                     ctx_cohort: dict[str, Any] = {
@@ -2144,15 +2164,15 @@ def write_parameter_files(
                         "data_source": {"type": "synthetic", "retrieved_at": now_str, "full_query": query},
                         "forecast": round(mean, 6),
                     }
-                    if hash_lookup and pid in hash_lookup and "cohort_sig" in hash_lookup[pid]:
-                        ctx_cohort["query_signature"] = hash_lookup[pid]["cohort_sig"]
+                    if hash_lookup and pid in hash_lookup and "ctx_cohort_sig" in hash_lookup[pid] and hash_lookup[pid]["ctx_cohort_sig"]:
+                        ctx_cohort["query_signature"] = hash_lookup[pid]["ctx_cohort_sig"]
                     context_entries.append(ctx_cohort)
 
         param_data = {
             "id": file_id,
             "name": file_id,
             "type": "probability",
-            "connection": "synthetic",
+            "connection": graph_snapshot.get("defaultConnection", "amplitude"),
             "query": query,
             "query_overridden": False,
             "n_query_overridden": False,
@@ -2188,6 +2208,34 @@ def write_parameter_files(
     return written
 
 
+def _build_synth_dsl(sim_stats: dict, truth: dict) -> tuple[str, str]:
+    """Build the full DSL and bare (temporal-only) DSL from sim_stats + truth.
+
+    Returns (full_dsl, bare_dsl).  full_dsl includes context qualifiers when
+    any epoch emits context slices; bare_dsl is always window();cohort() only.
+    """
+    base_date = datetime.strptime(sim_stats["base_date"], "%Y-%m-%d")
+    n_days = sim_stats["n_days"]
+    end_date = base_date + timedelta(days=n_days - 1)
+    window_from = _format_date_dmy(base_date)
+    window_to = _format_date_dmy(end_date)
+
+    bare_dsl = f"window({window_from}:{window_to});cohort({window_from}:{window_to})"
+
+    emit_ctx = truth.get("emit_context_slices", False)
+    epochs = truth.get("epochs")
+    if epochs and any(e.get("emit_context_slices") for e in epochs):
+        emit_ctx = True
+    context_dims = truth.get("context_dimensions", [])
+    if emit_ctx and context_dims:
+        ctx_parts = ";".join(f"context({d['id']})" for d in context_dims)
+        full_dsl = f"({bare_dsl})({ctx_parts})"
+    else:
+        full_dsl = bare_dsl
+
+    return full_dsl, bare_dsl
+
+
 def set_simulation_guard(
     graph_path: str,
     enable: bool = True,
@@ -2200,9 +2248,7 @@ def set_simulation_guard(
     preventing real Amplitude fetches from overwriting synthetic data.
 
     Also sets dataInterestsDSL and currentQueryDSL so the FE knows
-    what date range the synthetic data covers. If truth has context
-    dimensions, the DSL includes context qualifiers so the FE expands
-    the cartesian product (obs_type × context_value).
+    what date range the synthetic data covers.
     """
     with open(graph_path) as f:
         graph = json.load(f)
@@ -2213,27 +2259,14 @@ def set_simulation_guard(
         graph["runBayes"] = False
 
         if sim_stats:
+            full_dsl, bare_dsl = _build_synth_dsl(sim_stats, truth or {})
             base_date = datetime.strptime(sim_stats["base_date"], "%Y-%m-%d")
-            n_days = sim_stats["n_days"]
-            end_date = base_date + timedelta(days=n_days - 1)
+            end_date = base_date + timedelta(days=sim_stats["n_days"] - 1)
             window_from = _format_date_dmy(base_date)
             window_to = _format_date_dmy(end_date)
 
-            temporal = f"window({window_from}:{window_to});cohort({window_from}:{window_to})"
-
-            # Add context dimensions to DSL only when emit_context_slices
-            # is True.  Format: (window;cohort)(context(dim1);context(dim2))
-            # The FE expands this as a cartesian product.
-            emit_ctx = (truth or {}).get("emit_context_slices", False)
-            context_dims = (truth or {}).get("context_dimensions", [])
-            if emit_ctx and context_dims:
-                ctx_parts = ";".join(f"context({d['id']})" for d in context_dims)
-                dsl = f"({temporal})({ctx_parts})"
-            else:
-                dsl = temporal
-
-            graph["dataInterestsDSL"] = dsl
-            graph["pinnedDSL"] = dsl
+            graph["dataInterestsDSL"] = full_dsl
+            graph["pinnedDSL"] = full_dsl
             graph["currentQueryDSL"] = f"window({window_from}:{window_to})"
     else:
         graph.pop("simulation", None)
@@ -2339,6 +2372,10 @@ def update_graph_edge_metadata(
         p["latency"] = {
             "latency_parameter": has_latency,
         }
+        if has_latency and edge_truth:
+            p["latency"]["onset_delta_days"] = float(edge_truth.get("onset", 0))
+            p["latency"]["mu"] = float(edge_truth.get("mu", 0))
+            p["latency"]["sigma"] = float(edge_truth.get("sigma", 0.5))
         anchor_id = uuid_to_id.get(
             topology.anchor_node_id, topology.anchor_node_id
         )
@@ -2459,6 +2496,8 @@ Examples:
                         help="Also update data repo: param YAMLs, graph JSON, indexes")
     parser.add_argument("--clean", action="store_true",
                         help="Remove synthetic data from DB and exit")
+    parser.add_argument("--bust-cache", action="store_true",
+                        help="Regenerate even if existing data is fresh")
     args = parser.parse_args()
 
     data_repo = _resolve_data_repo()
@@ -2491,6 +2530,47 @@ Examples:
     truth = load_truth_config(truth_path)
     print(f"Truth: {truth_path}")
 
+    # --- Harness log integration (bayes-monitor visibility) ---
+    import time as _time
+    _harness_log_path = f"/tmp/bayes_harness-{args.graph}.log"
+    _harness_lock_path = f"/tmp/bayes-harness-{args.graph}.lock"
+    _harness_log = open(_harness_log_path, "w")
+    _harness_t0 = _time.time()
+    # Write lock file so bayes-monitor shows this as active
+    with open(_harness_lock_path, "w") as _lf:
+        _lf.write(str(os.getpid()))
+
+    def _progress(pct: int, stage: str, detail: str = "") -> None:
+        elapsed = _time.time() - _harness_t0
+        line = f"  [{pct:3d}%] {elapsed:6.1f}s  {stage}: {detail}"
+        print(line, flush=True)
+        _harness_log.write(line + "\n")
+        _harness_log.flush()
+
+    import atexit
+    def _cleanup_harness_lock():
+        try:
+            os.remove(_harness_lock_path)
+        except FileNotFoundError:
+            pass
+        try:
+            _harness_log.close()
+        except Exception:
+            pass
+    atexit.register(_cleanup_harness_lock)
+
+    _progress(0, "startup", f"graph={args.graph}")
+
+    # --- Freshness check: skip if data is already fresh ---
+    if not args.bust_cache and not args.clean and not args.dry_run:
+        graph_name_for_verify = os.path.basename(truth_path).replace(".truth.yaml", "")
+        freshness = verify_synth_data(graph_name_for_verify, data_repo)
+        if freshness["status"] == "fresh":
+            _progress(100, "done", f"data fresh — skipped")
+            print(f"\nData is fresh — skipping rebuild ({freshness['reason']})")
+            print(f"  Use --bust-cache to regenerate anyway.")
+            return
+
     # --- Generate or load graph ---
     if truth_has_graph_structure(truth):
         # New format: generate graph + entity files from truth
@@ -2498,6 +2578,7 @@ Examples:
         graph_path = os.path.join(data_repo, "graphs", f"{graph_name_resolved}.json")
 
         # Always regenerate — truth file is authoritative
+        _progress(2, "startup", "generating graph from truth")
         print(f"\n── Generate graph from truth ──")
         graph_path = generate_graph_artefacts(truth, data_repo, graph_name_resolved)
     else:
@@ -2543,7 +2624,7 @@ Examples:
             }
             if not pid.startswith("parameter-"):
                 hash_lookup[f"parameter-{pid}"] = hash_lookup[pid]
-    print(f"Hashes: {len(hash_lookup)} edges resolved via FE (Node.js)")
+    print(f"Hashes: {len(hash_lookup)} edges (placeholders — real hashes in Step 2)")
     # Also merge any hashes from truth config edges
     for pid, edata in truth.get("edges", {}).items():
         if "window_hash" in edata and "cohort_hash" in edata:
@@ -2566,13 +2647,13 @@ Examples:
     sim_config = _get_sim_config(truth, cli_overrides)
     sim_config["base_date"] = truth.get("simulation", {}).get("base_date", "2025-12-12")
 
+    _progress(5, "simulating", f"{sim_config['n_days']} days, {sim_config['mean_daily_traffic']}/day")
     print(f"\nSimulating ~{sim_config['mean_daily_traffic']} people/day "
           f"× {sim_config['n_days']} days "
           f"(seed={sim_config['seed']}, "
           f"κ={sim_config['kappa_sim_default']}, "
           f"drift={sim_config['drift_sigma']})...")
 
-    import time as _time
     t0 = _time.time()
 
     snapshot_rows, sim_stats = simulate_graph(
@@ -2580,10 +2661,12 @@ Examples:
     )
     elapsed = _time.time() - t0
     print(f"Simulation complete in {elapsed:.1f}s")
+    _progress(40, "simulating", f"done ({elapsed:.1f}s, {sum(len(v) for v in snapshot_rows.values())} rows)")
 
     print_summary(topology, truth, snapshot_rows, sim_stats)
 
     if args.dry_run:
+        _progress(100, "done", f"dry run completed in {_time.time() - _harness_t0:.1f}s")
         print("\n(Dry run — not writing to DB or files)")
         return
 
@@ -2591,61 +2674,214 @@ Examples:
     # Single-pass: structural metadata → FE hashes → DB → param files → verify.
     # ALL hash computation goes through compute_snapshot_subjects.mjs (Node.js).
     # No Python hash computation. One source of truth.
+    #
+    # The DSL is computed ONCE here from sim_stats + truth, then passed
+    # explicitly to both the CLI calls and set_simulation_guard.  This
+    # eliminates the ordering dependency where Step 1 had to write the
+    # DSL to disk before Step 2 could read it.
 
     import subprocess as _sp
+
+    full_dsl, bare_dsl = _build_synth_dsl(sim_stats, truth)
+    print(f"\nDSL: {full_dsl}")
 
     # 1. Update graph edge structural metadata on disk.
     #    (query, latency_parameter, anchor_node_id, cohort_anchor_event_id)
     #    Does NOT touch analytical params (mu/sigma/t95) — stats pass does that.
     if args.write_files:
+        _t1 = _time.time()
+        _progress(42, "writing", "step 1 — graph metadata")
         print(f"\n── Step 1: Update graph structural metadata ──")
         update_graph_edge_metadata(graph_path, topology, truth, sim_stats)
         print("  Updated: query, latency_parameter, cohort_anchor_event_id")
 
         # Set simulation guard (simulation=true, dailyFetch=false, DSL)
         set_simulation_guard(graph_path, enable=True, sim_stats=sim_stats, truth=truth)
-        print("  Set simulation guard")
+        print(f"  Set simulation guard ({_time.time() - _t1:.1f}s)")
 
-    # 2. Compute authoritative hashes via Node.js (from the graph on disk).
-    #    This MUST happen AFTER structural metadata update (latency_parameter
-    #    affects the hash) but the graph must be on disk for Node to read it.
+    # 1b. Write context definition files from truth file.
+    #     Context definitions affect hash computation (context_def_hashes
+    #     is part of the canonical signature), so they must be on disk
+    #     BEFORE Step 2.
+    ctx_dims = truth.get("context_dimensions", [])
+    if ctx_dims:
+        _progress(45, "writing", "step 1b — context definitions")
+        print(f"\n── Step 1b: Write context definitions ──")
+        write_context_files(truth, data_repo)
+
+    # 2. Compute authoritative hashes via CLI.
+    #    DSL is passed explicitly (computed from sim_stats above) so this
+    #    works regardless of whether --write-files wrote it to disk.
+    _t2 = _time.time()
+    _progress(50, "hashing", "step 2 — CLI hash computation")
     print(f"\n── Step 2: Compute FE-authoritative hashes ──")
-    node_script = os.path.join(REPO_ROOT, "bayes", "compute_snapshot_subjects.mjs")
+    graph_dir = os.path.dirname(os.path.dirname(graph_path))  # .../graphs/X.json → .../
+    graph_name_for_cli = os.path.basename(graph_path).replace(".json", "")
     nvm_prefix = (
         f'export NVM_DIR="$HOME/.nvm" && '
         f'. "$NVM_DIR/nvm.sh" 2>/dev/null && '
         f'cd {os.path.join(REPO_ROOT, "graph-editor")} && '
         f'nvm use "$(cat .nvmrc)" 2>/dev/null && '
     )
-    node_cmd = f'{nvm_prefix}node {node_script} {graph_path}'
-    node_result = _sp.run(node_cmd, shell=True, capture_output=True, text=True, timeout=30)
-    if node_result.returncode != 0:
-        print(f"  ERROR: compute_snapshot_subjects.mjs failed:")
-        print(f"  {node_result.stderr[:300]}")
-        print(f"  Cannot proceed without authoritative hashes.")
-        sys.exit(1)
-    node_stdout = node_result.stdout
-    json_start = node_stdout.index("{")
-    fe_data = json.loads(node_stdout[json_start:])
+
+    def _cli_call(dsl: str) -> dict:
+        """Call CLI with explicit DSL override, return full payload."""
+        import tempfile
+        _t0 = _time.time()
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_graphs = os.path.join(tmp, "graphs")
+            os.makedirs(tmp_graphs)
+            with open(graph_path) as f:
+                g = json.load(f)
+            g["dataInterestsDSL"] = dsl
+            with open(os.path.join(tmp_graphs, f"{graph_name_for_cli}.json"), "w") as f:
+                json.dump(g, f)
+            for d in ("events", "contexts", "parameters", "nodes", "cases", "connections"):
+                src = os.path.abspath(os.path.join(graph_dir, d))
+                if os.path.isdir(src):
+                    os.symlink(src, os.path.join(tmp, d))
+            cmd = (
+                f'{nvm_prefix}'
+                f'npx tsx src/cli/bayes.ts '
+                f'--graph {tmp} --name {graph_name_for_cli} --format json --no-cache'
+            )
+            r = _sp.run(cmd, shell=True, capture_output=True, text=True, timeout=30, cwd=REPO_ROOT)
+        _elapsed = _time.time() - _t0
+        if r.returncode != 0:
+            print(f"  CLI FAILED ({_elapsed:.1f}s): {r.stderr[:300]}")
+            sys.exit(1)
+        return json.loads(r.stdout[r.stdout.index("{"):])
+
+    # --- CLI calls: one per DSL clause for unambiguous hash classification ---
+    # The CLI subjects don't carry a cohort_mode flag, so calling with
+    # a compound DSL ("window(...);cohort(...)") makes it impossible to
+    # distinguish which subject is window vs cohort.  Splitting by clause
+    # removes ambiguity: all subjects from a window clause are window, etc.
+    window_hashes: dict[str, str] = {}   # edge_uuid → bare window hash
+    cohort_hashes: dict[str, str] = {}
+    ctx_window_hashes: dict[str, str] = {}
+    ctx_cohort_hashes: dict[str, str] = {}
+    # Parallel dicts for canonical_signature (structured sig for param file query_signature)
+    window_sigs: dict[str, str] = {}
+    cohort_sigs: dict[str, str] = {}
+    ctx_window_sigs: dict[str, str] = {}
+    ctx_cohort_sigs: dict[str, str] = {}
+    _cr: dict = {}  # candidate regimes (from first call)
+
+    dsl_clauses = [c.strip() for c in full_dsl.split(";") if c.strip()]
+    _call_num = 0
+    for clause in dsl_clauses:
+        _call_num += 1
+        is_cohort_clause = clause.startswith("cohort(") or ".cohort(" in clause
+        is_ctx_clause = "context(" in clause
+        label = ("ctx_" if is_ctx_clause else "") + ("cohort" if is_cohort_clause else "window")
+        print(f"  CLI call {_call_num} ({label}: {clause[:50]})…", end="", flush=True)
+        _t0c = _time.time()
+        _clause_payload = _cli_call(clause)
+        _clause_subj = _clause_payload.get("snapshot_subjects", [])
+        if not _cr:
+            _cr = _clause_payload.get("candidate_regimes_by_edge", {})
+        print(f" {len(_clause_subj)} subjects ({_time.time() - _t0c:.1f}s)", flush=True)
+
+        for subj in _clause_subj:
+            eid = subj.get("edge_id", "")
+            ch = subj.get("core_hash", "")
+            sig = subj.get("canonical_signature", "")
+            if not eid or not ch:
+                continue
+            if is_ctx_clause:
+                if is_cohort_clause:
+                    ctx_cohort_hashes[eid] = ch
+                    if sig:
+                        ctx_cohort_sigs[eid] = sig
+                else:
+                    ctx_window_hashes[eid] = ch
+                    if sig:
+                        ctx_window_sigs[eid] = sig
+            else:
+                if is_cohort_clause:
+                    cohort_hashes[eid] = ch
+                    if sig:
+                        cohort_sigs[eid] = sig
+                else:
+                    window_hashes[eid] = ch
+                    if sig:
+                        window_sigs[eid] = sig
+
+    # --- Extra call (conditional): bare DSL for mixed-epoch data ---
+    # Context-only DSL produces context-qualified hashes only.  Bare
+    # (uncontexted) hashes are different core_hashes.  For mixed-epoch
+    # data we need both families → one extra CLI call.
+    _epochs = truth.get("epochs")
+    _has_ctx_epochs = _epochs and any(ep.get("emit_context_slices") for ep in _epochs)
+    _need_bare = ((ctx_window_hashes or ctx_cohort_hashes) and not window_hashes) or _has_ctx_epochs
+    if _need_bare:
+        bare_clauses = [c.strip() for c in bare_dsl.split(";") if c.strip()]
+        for bc in bare_clauses:
+            _call_num += 1
+            is_bc_cohort = bc.startswith("cohort(") or ".cohort(" in bc
+            label = "bare_cohort" if is_bc_cohort else "bare_window"
+            print(f"  CLI call {_call_num} ({label})…", end="", flush=True)
+            _t0b = _time.time()
+            _bare_payload = _cli_call(bc)
+            for subj in _bare_payload.get("snapshot_subjects", []):
+                eid = subj.get("edge_id", "")
+                ch = subj.get("core_hash", "")
+                sig = subj.get("canonical_signature", "")
+                if not eid or not ch:
+                    continue
+                if is_bc_cohort:
+                    cohort_hashes.setdefault(eid, ch)
+                    if sig and eid not in cohort_sigs:
+                        cohort_sigs[eid] = sig
+                else:
+                    window_hashes.setdefault(eid, ch)
+                    if sig and eid not in window_sigs:
+                        window_sigs[eid] = sig
+            print(f" done ({_time.time() - _t0b:.1f}s)", flush=True)
+
+    # Build uuid → param_id mapping from graph
+    with open(graph_path) as f:
+        _g = json.load(f)
+    uuid_to_pid: dict[str, str] = {}
+    for e in _g.get("edges", []):
+        pid = e.get("p", {}).get("id", "") if isinstance(e.get("p"), dict) else ""
+        if pid and e.get("uuid"):
+            uuid_to_pid[e["uuid"]] = pid
 
     hash_lookup: dict[str, dict[str, str]] = {}
-    for e in fe_data["edges"]:
-        pid = e["param_id"]
-        hash_lookup[pid] = {
-            "window_hash": e["window_hash"],
-            "cohort_hash": e["cohort_hash"],
-            "window_sig": e.get("window_sig", ""),
-            "cohort_sig": e.get("cohort_sig", ""),
-        }
+    for uuid, pid in uuid_to_pid.items():
+        wh = window_hashes.get(uuid, "")
+        ch = cohort_hashes.get(uuid, "")
+        ctx_wh = ctx_window_hashes.get(uuid, "")
+        ctx_ch = ctx_cohort_hashes.get(uuid, "")
+        ws = window_sigs.get(uuid, "")
+        cs = cohort_sigs.get(uuid, "")
+        ctx_ws = ctx_window_sigs.get(uuid, "")
+        ctx_cs = ctx_cohort_sigs.get(uuid, "")
+        if wh or ch or ctx_wh or ctx_ch:
+            hash_lookup[pid] = {
+                "window_hash": wh, "cohort_hash": ch,
+                "ctx_window_hash": ctx_wh, "ctx_cohort_hash": ctx_ch,
+                "window_sig": ws, "cohort_sig": cs,
+                "ctx_window_sig": ctx_ws, "ctx_cohort_sig": ctx_cs,
+            }
+            if not pid.startswith("parameter-"):
+                hash_lookup[f"parameter-{pid}"] = hash_lookup[pid]
+    n_edges = len(hash_lookup) // 2
+    print(f"  {n_edges} edges resolved ({_time.time() - _t2:.1f}s total)")
+    for pid, h in hash_lookup.items():
         if not pid.startswith("parameter-"):
-            hash_lookup[f"parameter-{pid}"] = hash_lookup[pid]
-    print(f"  {len(fe_data['edges'])} edges resolved")
-    for e in fe_data["edges"]:
-        print(f"    {e['param_id']}: w={e['window_hash'][:16]}… c={e['cohort_hash'][:16]}…")
+            ctx_info = ""
+            if h.get("ctx_window_hash"):
+                ctx_info = f" ctx_w={h['ctx_window_hash'][:16]}…"
+            print(f"    {pid}: w={h['window_hash'][:16]}… c={h['cohort_hash'][:16]}…{ctx_info}")
 
     # 3. Write to snapshot DB using FE hashes.
     workspace_prefix = ""
     if db_conn:
+        _t3 = _time.time()
+        _progress(65, "db_write", "step 3 — inserting rows")
         print(f"\n── Step 3: Write to snapshot DB ──")
         repo_name = os.path.basename(data_repo)
         try:
@@ -2662,15 +2898,18 @@ Examples:
         _rehash_snapshot_rows(snapshot_rows, topology, hash_lookup)
 
         try:
-            write_to_snapshot_db(snapshot_rows, db_conn, workspace_prefix, hash_lookup)
+            write_to_snapshot_db(snapshot_rows, db_conn, workspace_prefix, hash_lookup, progress_fn=_progress)
         except Exception as e:
             print(f"  WARNING: DB write failed: {e}")
             print(f"  (Continuing with file generation if --write-files is set)")
+        print(f"  Step 3 done ({_time.time() - _t3:.1f}s)")
     else:
         print(f"\n── Step 3: SKIPPED (no DB_CONNECTION) ──")
 
     # 4. Write parameter files using FE hashes.
     if args.write_files:
+        _t4 = _time.time()
+        _progress(90, "writing", "step 4 — parameter files")
         print(f"\n── Step 4: Write parameter files ──")
         with open(graph_path) as f:
             updated_graph = json.load(f)
@@ -2679,9 +2918,11 @@ Examples:
         )
         print(f"  Wrote {len(written_params)} parameter files")
         update_parameter_index(data_repo, written_params)
+        print(f"  Step 4 done ({_time.time() - _t4:.1f}s)")
 
     # 5. Verify: query DB with the SAME hashes and confirm data exists.
     if db_conn:
+        _progress(95, "verifying", "step 5 — DB verification")
         print(f"\n── Step 5: Verify DB data ──")
         _verify_db_data(hash_lookup, topology, workspace_prefix, db_conn)
 
@@ -2691,18 +2932,12 @@ Examples:
     # Write .synth-meta.json sidecar for integrity checking
     if db_conn or args.write_files:
         total_rows = sum(len(v) for v in snapshot_rows.values())
-        # Serialise edge hashes for the meta sidecar
-        meta_hashes = {}
-        for pid, h in hash_lookup.items():
-            if not pid.startswith("parameter-"):
-                meta_hashes[pid] = {
-                    "window_hash": h.get("window_hash", ""),
-                    "cohort_hash": h.get("cohort_hash", ""),
-                }
+        meta_hashes = _build_meta_hashes(hash_lookup)
         graph_name_for_meta = os.path.basename(truth_path).replace(".truth.yaml", "")
         save_synth_meta(graph_name_for_meta, truth_path, meta_hashes, total_rows, data_repo)
         print(f"Wrote .synth-meta.json (truth_sha256, {total_rows} rows, {len(meta_hashes)} edges)")
 
+    _progress(100, "done", f"completed in {_time.time() - _harness_t0:.1f}s")
     print("\nDone.")
 
 

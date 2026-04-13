@@ -210,7 +210,10 @@ export const SignatureLinksViewer: React.FC = () => {
           effectiveDSL: graphData.currentQueryDSL || '',
           workspace: repo ? { repository: repo, branch } : undefined,
         });
-        if (!cancelled && result) setComputedCoreHash(result.coreHash);
+        if (!cancelled && result) {
+          const { computeShortCoreHash } = await import('../../services/coreHashService');
+          setComputedCoreHash(await computeShortCoreHash(result.signature));
+        }
       } catch { /* ignore */ } finally {
         // Restore original connection
         if (edge?.p) edge.p.connection = originalConn;

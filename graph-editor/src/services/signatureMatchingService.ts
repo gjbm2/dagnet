@@ -4,7 +4,7 @@
  * Provides parsing, serialisation, and subset-aware matching for structured signatures.
  *
  * The signature system splits query identity into two independent components:
- * 1. coreHash: Hash of non-context semantic inputs (connection, events, filters, etc.)
+ * 1. identityHash: Hash of non-context semantic inputs (connection, events, filters, etc.)
  * 2. contextDefHashes: Per-context-key definition hashes
  *
  * This enables cache sharing when:
@@ -15,8 +15,15 @@
  */
 
 export interface StructuredSignature {
-  /** SHA-256 hash of non-context semantic inputs */
-  coreHash: string;
+  /**
+   * SHA-256 hex hash of non-context semantic inputs (~64 chars).
+   *
+   * ⚠ NOT the same as `core_hash` in the snapshots DB table.
+   * The DB `core_hash` is `computeShortCoreHash(serialiseSignature(...))` —
+   * a truncated hash of the FULL structured signature (both identity + context).
+   * See HASH_SIGNATURE_INFRASTRUCTURE.md § "Naming Disambiguation".
+   */
+  identityHash: string;
 
   /**
    * Map from context key → SHA-256 of normalised definition.
@@ -48,29 +55,29 @@ export interface SignatureMatchResult {
 export function parseSignature(sig: string): StructuredSignature {
   // Guard: null/undefined/empty
   if (!sig || typeof sig !== 'string') {
-    return { coreHash: '', contextDefHashes: {} };
+    return { identityHash: '', contextDefHashes: {} };
   }
 
   // Guard: Legacy hex hash (64 chars, hex only)
   if (/^[a-f0-9]{64}$/i.test(sig)) {
     // Legacy signature - return empty structure (will never match)
-    return { coreHash: '', contextDefHashes: {} };
+    return { identityHash: '', contextDefHashes: {} };
   }
 
   // Guard: Not JSON-like
   if (!sig.startsWith('{')) {
-    return { coreHash: '', contextDefHashes: {} };
+    return { identityHash: '', contextDefHashes: {} };
   }
 
   try {
     const parsed = JSON.parse(sig);
     return {
-      coreHash: typeof parsed.c === 'string' ? parsed.c : '',
+      identityHash: typeof parsed.c === 'string' ? parsed.c : '',
       contextDefHashes: parsed.x && typeof parsed.x === 'object' ? parsed.x : {},
     };
   } catch {
     // Malformed JSON - return empty structure
-    return { coreHash: '', contextDefHashes: {} };
+    return { identityHash: '', contextDefHashes: {} };
   }
 }
 
@@ -81,7 +88,7 @@ export function parseSignature(sig: string): StructuredSignature {
  */
 export function serialiseSignature(sig: StructuredSignature): string {
   return JSON.stringify({
-    c: sig.coreHash,
+    c: sig.identityHash,
     x: sig.contextDefHashes,
   });
 }
@@ -104,7 +111,7 @@ export function signatureCanSatisfy(
   querySig: StructuredSignature
 ): SignatureMatchResult {
   // Rule 1: Core semantics must match
-  if (cacheSig.coreHash !== querySig.coreHash) {
+  if (cacheSig.identityHash !== querySig.identityHash) {
     return { compatible: false, reason: 'core_mismatch' };
   }
 

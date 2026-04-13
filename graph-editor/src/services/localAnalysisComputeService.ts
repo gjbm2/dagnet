@@ -324,7 +324,7 @@ function buildNodeInfoResult(graph: ConversionGraph, dsl: string): AnalysisResul
 // edge_info
 // ────────────────────────────────────────────────────────────
 
-function resolveEdgeFromDsl(graph: ConversionGraph, dsl: string): GraphEdge | undefined {
+export function resolveEdgeFromDsl(graph: ConversionGraph, dsl: string): GraphEdge | undefined {
   const parsed = parseDSL(dsl);
   const fromRef = parsed.from;
   const toRef = parsed.to;

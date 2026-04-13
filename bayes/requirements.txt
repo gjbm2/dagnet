@@ -10,6 +10,7 @@ scipy>=1.14
 pymc>=5.28
 arviz>=0.23
 nutpie>=0.16
+jax[cpu]>=0.4.30  # nutpie jax backend (jax_backend feature flag)
 requests>=2.32
 pyyaml>=6.0
 psycopg2-binary>=2.9

@@ -102,6 +102,8 @@ Clearing layer 1 is useless unless you also handle layers 2-4. UpdateManager map
 
 **Example**: the @ menu showed no snapshots for `li-cohort-segmentation-v2` because `resolveContextKeys` fell back to `dataInterestsDSL` (3 context keys) while fetches stored snapshots under single-key signatures. Fixed by replacing the fallback with slice-topology-based enumeration.
 
+**Related**: when multiple context dimensions produce multiple hashes for the same edge, the BE must select one hash per `retrieved_at` date to avoid double-counting. See `snapshot_regime_selection.py` and doc 30 (`30-snapshot-regime-selection-contract.md`). The candidate hashes for regime selection are derived from the current pinned DSL's explosion (which produces specific per-cross-product key-sets), not from a flat union of all dimensions.
+
 ## Anti-pattern 12: Unprefixed IDB key in file lookups
 
 **Signature**: a function loads a file from `db.files.get(fileId)` using the FileRegistry-style unprefixed key (e.g., `event-myEvent`), but IDB stores files under workspace-prefixed keys (e.g., `nous-conversion-main-event-myEvent`). The lookup silently returns nothing.
@@ -121,6 +123,204 @@ Clearing layer 1 is useless unless you also handle layers 2-4. UpdateManager map
 **Fix**: ensure `setup.sh` and `dev-start.sh` install ALL requirement files into the shared venv. Both scripts must produce an identical, complete environment. Grep for all `requirements*.txt` files in the repo and verify each is referenced in both setup paths. When adding a new requirements file to the repo, add the install line to both scripts immediately.
 
 **Broader principle**: any state that exists only because of manual one-off commands will eventually be lost. If the release script gates on it (e.g., bayes compiler tests), the setup script must produce it.
+
+## Anti-pattern 14: Adding fields to Python types but not to `_build_unified_slices`
+
+**Signature**: you add new fields to `PosteriorSummary` or `LatencyPosteriorSummary` (including `to_webhook_dict()`), wire them through `summarise_posteriors`, and expect them to appear in the FE — but they never arrive. The FE patch service reads them from the slice dict, the FE types accept them, the FE components render them, yet the values are always `undefined`.
+
+**Root cause**: Bayes posterior data flows through a **manually-assembled dict**, not through `to_webhook_dict()`. The path is: `summarise_posteriors()` populates `PosteriorSummary` fields → `_build_unified_slices()` in `worker.py` builds the per-slice dicts that go into the webhook patch → FE reads those dicts. `_build_unified_slices` constructs every field by name — it does not call `to_webhook_dict()` or iterate the dataclass fields. If you add a field to the dataclass but not to `_build_unified_slices`, the field exists in Python memory but never reaches the patch file and therefore never reaches the FE.
+
+**Fix**: when adding a field to `PosteriorSummary` or `LatencyPosteriorSummary`, always also add it to `_build_unified_slices()` in `worker.py` (both the `window` dict and the `cohort` dict). Grep for `_build_unified_slices` and trace how each existing field is emitted — follow the same pattern.
+
+**Broader principle**: the Bayes data pipeline has **three serialisation boundaries** that all need updating when a new field is added: (1) Python dataclass, (2) `_build_unified_slices` in worker.py, (3) FE patch service projection in `bayesPatchService.ts`. Missing any one silently drops the field. The `to_webhook_dict()` method on the dataclass is used only by the earlier `model_inspect_only` path and does not affect real MCMC fits.
+
+## Anti-pattern 15: Reimplementing FE logic in CLI instead of calling the same function
+
+**Signature**: you need a FE function in Node but it imports `react-hot-toast` or `window.location`, so you rewrite it from scratch. The rewrite works initially but diverges over time — missing fields (`scope_from/to`), different complement edge computation, different LAG pass inputs.
+
+**Root cause**: the assumption that browser-only imports prevent running FE code in Node. In fact, `react-hot-toast` is a no-op in Node (no DOM to render to), `window.location` can be guarded with `typeof window === 'undefined'`, and `import.meta.env` can be guarded with optional chaining. The browser dependency surface is almost always shallower than expected.
+
+**Fix**: call the real FE function. Guard browser-specific code at the boundary (`import.meta.env?.DEV`, `getUrlSearchParams()` helper). Use `fake-indexeddb/auto` for IDB. If a function truly can't run in Node, fix *that function* with a guard — both browser and CLI benefit.
+
+**Example**: `aggregate.ts` was initially a 280-line reimplementation of `fileToGraphSync.getParameterFromFile()`. It missed `scope_from/to`, computed complements differently, and used a separate LAG helper setup. Replaced with a thin wrapper calling `fetchDataService.fetchItems({ mode: 'from-file' })` — same function the browser calls, zero divergence.
+
+## Anti-pattern 16: E2E test seeding IDB but assuming FileRegistry is populated
+
+**Signature**: you seed data into IDB via `db.files.put()` in a Playwright test, but the from-file pipeline or planner returns empty/stale results because it reads from FileRegistry (in-memory), not IDB.
+
+**Root cause**: `db.files.put()` writes to IndexedDB but does NOT notify FileRegistry. FileRegistry is populated lazily via `restoreFile()` (called during tab hydration) or proactively via `getOrCreateFile()`. The app's boot sequence hydrates the graph file into FileRegistry (via `loadTabsFromDB`), but parameter files remain in IDB until something requests them.
+
+**Fix**: after seeding IDB and reloading, use `dagnetDebug.refetchFromFiles()` to trigger the full from-file pipeline. This causes FileRegistry to lazily load parameter files as the pipeline requests them. Alternatively, seed the `currentQueryDSL` to a different value than the target and then change it after boot — this triggers `useDSLReaggregation` which runs the from-file pipeline.
+
+## Anti-pattern 17: Parity test that bypasses FE normalisation
+
+**Signature**: you write a parity test that calls the BE via raw HTTP and compares responses. The test passes, you cut over, and the app breaks — the FE normalisation layer (e.g. `normaliseSnapshotCohortMaturityResponse` in `graphComputeClient.ts`) transforms the raw response, and that transformation fails with the new data shape.
+
+**Root cause**: the rendering path is FE preparation → HTTP → BE handler → HTTP response → FE normalisation → chart. A raw HTTP test skips the last step. The normalisation often depends on the REQUEST shape (e.g. iterating `snapshot_subjects` keys from the request to build iteration keys for the response), so changing the request shape breaks normalisation even when the BE response is correct.
+
+**Fix**: parity tests must call `runPreparedAnalysis` (which goes through `graphComputeClient` including normalisation), not raw `fetch`. They must also test with the "mixed" state where both old and new fields are present on the request, because that's the browser state during transition.
+
+## Anti-pattern 18: Routing on field presence rather than semantic type
+
+**Signature**: a handler entry-point checks whether a field exists (e.g. `if scenario.get('analytics_dsl')`) to decide which code path to use. A later change attaches that field to ALL requests (not just the ones that need the handler), and unrelated request types get misrouted.
+
+**Root cause**: field presence is an unreliable discriminator. The `analytics_dsl` field was attached to all scenarios for snapshot types, but the BE routing check at `handle_runner_analyze` used its presence to route ALL requests (including `bridge_view`) to the snapshot handler.
+
+**Fix**: route on the semantic type (`analysis_type in ANALYSIS_TYPE_SCOPE_RULES`), not on field presence. The field tells you "the FE provided this data"; the type tells you "this request needs this handler".
+
+## Anti-pattern 19: Conflating distinct DSL concepts in a single variable
+
+**Signature**: a variable called `queryDsl` sometimes holds the analytics DSL (`from(x).to(y)`) and sometimes the temporal DSL (`window(-90d:)`). Code downstream assumes one meaning, but receives the other.
+
+**Root cause**: `analytics_dsl` (data subject, constant across scenarios) and `query_dsl` (temporal/context, varies per scenario) are fundamentally different concepts that happen to use the same DSL syntax. Combining them with `analyticsDsl || currentDSL` loses the distinction — downstream code that needs the temporal DSL gets the path DSL instead, and vice versa.
+
+**Fix**: keep them separate throughout the pipeline. The FE sends `analytics_dsl` at top level (constant — the subject) and `effective_query_dsl` per scenario (varies — the temporal). They are never concatenated on the FE. The BE composes them when needed for snapshot subject resolution. See `DSL_SYNTAX_REFERENCE.md` § "DSL Roles in the Analysis Request Flow" and `docs/current/project-y/8-Apr-26-analysis-contract-fix.md`.
+
+## Anti-pattern 20: Single-scenario parity test missing multi-scenario defects
+
+**Signature**: parity test passes for a single scenario, you cut over, and multi-scenario charts break — each scenario gets the same temporal DSL instead of its own `effective_query_dsl`.
+
+**Root cause**: single-scenario tests use one top-level `query_dsl` which happens to be correct for the only scenario. Multi-scenario requires per-scenario temporal DSLs. The top-level `query_dsl` is the current scenario's DSL — other scenarios get the wrong time bounds.
+
+**Fix**: parity tests must include multi-scenario cases with different temporal DSLs (e.g. `--query "window(-90d:)" --query2 "window(-30d:)"`). The test must verify each scenario's data reflects its own time bounds, not the shared top-level DSL.
+
+## Anti-pattern 21: Display planner forcing single-scenario on multi-scenario-capable charts
+
+**Signature**: a time-series chart type (e.g. `daily_conversions`) has data for multiple scenarios in the result, but only one scenario renders. The legend shows "N" / "Conversion %" instead of per-scenario labels.
+
+**Root cause**: `chartDisplayPlanningService.ts` has a `multiScenarioTimeSeriesKinds` set that controls which time-series chart kinds are allowed to render multiple scenarios. Chart kinds not in this set are forced to `current_only` mode (only the last scenario renders). The `daily_conversions` builder already handles multi-scenario correctly (separate series per scenario, unioned date axis), but the planner blocks it.
+
+**Fix**: add the chart kind to `multiScenarioTimeSeriesKinds` in `chartDisplayPlanningService.ts`. Verify the ECharts builder handles multi-scenario grouping before adding — check that it groups by `scenario_id`, creates separate series per scenario, and aligns to a common date set.
+
+## Anti-pattern 22: Treating transient errors as permanent rate limits
+
+**Signature**: automated retrieve-all run takes hours longer than expected. Logs show repeated 45-minute cooldowns triggered by 30-second timeouts rather than actual 429 responses.
+
+**Root cause**: the error classifier (`rateLimiter.isRateLimitError`) treated both explicit 429s and network timeouts as the same category, triggering a 45-minute cooldown for any transient timeout. In a real incident, 5 consecutive timeouts caused 3h 45m of wasted cooldowns, while a simple 30s retry would have succeeded.
+
+**Fix**: classify errors into two tiers. Use `isExplicitRateLimitError()` for 429s only (triggers long cooldown) and `isTimeoutError()` for transient failures (retry with exponential backoff: 30s → 60s → 120s → cap at 5 min). Only escalate from timeout to cooldown if a retry receives an actual 429. See `rateLimiter.ts`, `retrieveAllSlicesService.ts`.
+
+**Broader principle**: not all errors in the same code path deserve the same recovery strategy. Classify by cause, not by location.
+
+## Anti-pattern 23: js-yaml Date conversion corrupts context definition hashes
+
+**Signature**: CLI tool computes a different `core_hash` from the FE browser for the same graph on the same branch. The `x` (context definition) component of the structured signature differs. Receipt shows "all expected hashes returned no data" despite data existing in the DB.
+
+**Root cause**: `js-yaml`'s default schema converts ISO date strings in YAML (e.g. `created_at: '2025-11-24T00:00:00Z'`) to native JavaScript `Date` objects. The `normalizeObjectKeys` function in `querySignature.ts` checks `typeof v === 'object'` — a `Date` passes this check, but `Object.keys(new Date())` returns `[]`, so the normalised output is `{}` instead of the original date string. The canonical JSON changes, producing a different SHA-256 hash. The FE browser doesn't hit this because IDB stores context definitions as serialised JSON where dates are already strings.
+
+**Fix**: use `YAML.load(raw, { schema: YAML.JSON_SCHEMA })` when loading YAML files in the CLI disk loader (`graph-editor/src/cli/diskLoader.ts`). This prevents js-yaml from converting any scalars to non-string types. Do not change `normalizeObjectKeys` in production — the browser path is correct.
+
+**Broader principle**: YAML loaders that auto-convert types (dates, booleans, octals) are a hash stability hazard. Any data that enters a hashing pipeline must be loaded with type coercion disabled, or coerced back to strings before hashing.
+
+## Anti-pattern 24: Live scenarios not regenerated on boot (F5)
+
+**Signature**: after page refresh, analyses that depend on per-scenario edge probabilities (e.g. bridge chart) show identical values for all scenarios (delta=0), even though scenarios have different DSLs.
+
+**Root cause**: `ScenariosContext` loads scenario objects from IDB on boot but never calls `regenerateAllLive`. The scenario overlays are stale (or empty if the scenario was created before the current DSL diverged). `useDSLReaggregation` skips auto-aggregation on `initial_load` trigger. Both paths assume "trust persisted graph state", but the persisted state only has one set of edge values for `currentQueryDSL`, not per-scenario values.
+
+**Fix**: added a one-shot post-boot effect in `ScenariosContext.tsx` that calls `regenerateAllLive` once `scenariosLoaded`, `graph`, and `tabContextInitDone` are all true and at least one live scenario exists. Mirrors the existing workspace-change and topology-change handlers. Share links are unaffected — they have their own regeneration path via `useShareBundleFromUrl`.
+
+## Anti-pattern 25: FE-only analysis types blocked by scenariosReady gate
+
+**Signature**: pinned canvas `edge_info` or `node_info` analyses show blank content after F5, with console log `[Compute] BLOCKED ... live_scenarios_context_missing`.
+
+**Root cause**: `prepareAnalysisComputeInputs` gates ALL live-mode analyses on `scenariosContext.scenariosReady`. FE-computed types (`edge_info`, `node_info`) are computed entirely from in-memory graph data and don't use scenarios at all, but they're still blocked until the asynchronous IDB scenario load completes.
+
+**Fix**: skip the `scenariosReady` gate for `edge_info` and `node_info` in `analysisComputePreparationService.ts`. These types bypass the scenario composition path entirely.
+
+## Anti-pattern 26: Snapshot fetch fires before navigator workspace is ready
+
+**Signature**: pinned evidence tab on canvas shows no snapshots after F5, but works after interacting with the graph (which triggers a re-render after navigator context loads).
+
+**Root cause**: `NavigatorContext` loads asynchronously and can take several seconds to populate `selectedRepo`/`selectedBranch`. Components that fetch snapshot data using workspace from `useNavigatorContext` fire their fetch immediately on mount — with `workspace: undefined`. `getSnapshotRetrievalsForEdge` can't compute `dbParamId` without workspace, returns `success: false`. The version-counter or dedup-key guards prevent retry even when workspace later becomes available.
+
+**Fix**: guard snapshot fetch effects on `sourceRepo && sourceBranch` being non-empty. The effect re-fires when these deps transition from empty to populated. Same guard needed in the `evidenceTabExtra` memo in `CanvasAnalysisNode`.
+
+**Broader principle**: any effect that depends on async context (navigator, credentials, workspace) must guard on the context being populated, not just the primary data being present. Version-counter dedup patterns are especially vulnerable because a failed initial attempt locks out retries.
+
+## Anti-pattern 27: Confusing context hash filtering with context value filtering
+
+**Signature**: selecting a context value (e.g. `context(channel:paid-search)`) in a snapshot filter returns the same snapshot count as no filter.
+
+**Root cause**: context values within one MECE dimension share the same `core_hash` (the hash encodes the context **definition**, not the specific value). Querying `getSnapshotRetrievalsForEdge` with `context(channel:paid-search)` vs `context(channel:influencer)` returns identical results because both resolve to the same hash family. To filter by value, you need `slice_key` filtering — either via the `slice_keys` parameter on `querySnapshotRetrievals`, or client-side by matching `slice_key` strings in summary rows.
+
+**Two-level model**: (1) context *dimension* changes the hash (channel-contexted ≠ device-contexted ≠ uncontexted); (2) context *value* is carried in `slice_key` within a hash family. Both levels must be filtered for context-specific snapshot views.
+
+**Reference**: `HASH_SIGNATURE_INFRASTRUCTURE.md` §"What is and is not in the hash" — especially lines 63-76.
+
+## Anti-pattern 28: Duplicate hash computation codepaths
+
+**Signature**: hashes computed by path A don't match hashes computed by path B for the same graph. Snapshot DB queries return 0 rows even though data was just written.
+
+**Root cause**: multiple independent implementations of hash/signature computation that diverge over time. Each path makes slightly different choices about what inputs to hash: which event definitions are "loaded", how YAML dates are parsed (`js-yaml` default converts dates to Date objects vs `JSON_SCHEMA` preserves strings), which edge fields are included, how queries are normalised.
+
+**Fix**: ONE codepath for hash computation. The FE service layer (`computeQuerySignature` via `buildFetchPlanProduction` → `mapFetchPlanToSnapshotSubjects`) is the single source of truth. All other hash computations (synth_gen, test harness, scripts) must call the CLI (`bayes.ts`) which uses this real FE code, not hand-rolled Node.js scripts or Python reimplementations.
+
+**Example**: `compute_snapshot_subjects.mjs` diverged from the CLI's hash computation in event definition loading rules, YAML date handling, and visited/exclude event IDs. Produced different hashes for the same graph. Replaced by CLI calls in `synth_gen.py` Step 2.
+
+## Anti-pattern 29: Branch group likelihood not emitted per-slice
+
+**Signature**: per-slice p variables exist in the model (visible as `p_slice_*` deterministics) but all slices have identical posterior values equal to the parent. Per-slice data is present in `SliceObservations` but no per-slice `obs_bg_*` observed variables appear in the model summary.
+
+**Root cause**: `_emit_branch_group_multinomial` reads from `evidence.edges[sib_id]` (the global aggregate `EdgeEvidence`), not from per-slice `SliceObservations`. When slices are exhaustive and the aggregate emission is suppressed, the per-slice p vars have no likelihood driving them — they're only informed by the hierarchical prior, collapsing to the parent mean.
+
+**Fix**: call `_emit_branch_group_multinomial` once per context key (not once per branch group), passing `slice_ctx_key` and `bg_slice_p_vars`. The function uses per-slice observations, per-slice kappa, and per-slice p vars from the Dirichlet. Fixed in `model.py` Section 6 (10-Apr-26).
+
+## Anti-pattern 30: `has_window` not set on SliceObservations from CohortObservation
+
+**Signature**: `SliceObservations.has_window` is False even though the slice has window-type trajectory data. Functions that check `has_window` (like `_emit_branch_group_multinomial`) skip the slice.
+
+**Root cause**: per-context window data created in Step 3b of `_bind_from_snapshot_rows` is stored as `CohortObservation` objects with `slice_dsl=window(snapshot).context(...)`. During `_route_slices`, these go into `sliced_cohort` (because they come from `ev.cohort_obs`). When moved to `SliceObservations`, only `has_cohort` is set — `has_window` remains False because the code only sets it from `sliced_window`, not from `CohortObservation`s containing window-type trajectories.
+
+**Fix**: in `_route_slices`, after adding cohort observations to a `SliceObservations`, check trajectory `obs_type` and `slice_dsl` to set `has_window` correctly. Fixed in `evidence.py` (10-Apr-26).
+
+## Anti-pattern 31: Regex not handling optional prefixes in DSL clauses
+
+**Signature**: `_extract_time_bounds` (or similar DSL parsers) returns today's date instead of the dates in the DSL. Downstream anchor/sweep filters silently exclude all historical data — queries return 0 rows despite data existing in the DB.
+
+**Root cause**: `cohort(anchor,start:end)` has an optional anchor node prefix before the date range. A regex like `cohort\(([^:]*):([^)]*)\)` captures `anchor,start-date` as group 1. `_resolve_date('anchor,12-Dec-25')` fails all date format checks and falls through to the default `today.isoformat()`. The anchor filter becomes `anchor_day >= today` which excludes all historical data.
+
+**Fix**: make the anchor prefix optional in the regex: `cohort\((?:[^,)]*,)?([^:,]*):([^)]*)\)`. The `(?:[^,)]*,)?` non-capturing group matches the anchor prefix and comma if present. Test with both `cohort(start:end)` and `cohort(anchor,start:end)` forms.
+
+**Broader principle**: any DSL clause parser must handle all valid clause forms. Check the grammar in `DSL_SYNTAX_REFERENCE.md` before writing a regex — `cohort()` has both `cohort(start:end)` and `cohort(anchor,start:end)` forms.
+
+## Anti-pattern 32: Signature contamination from param file values
+
+**Signature**: bare and context DSL queries produce identical `core_hash` values. `candidateRegimeService.buildCandidateRegimesByEdge` returns the same hash for both regime families. Regime selection cannot distinguish uncontexted from contexted dates.
+
+**Root cause**: `plannerQuerySignatureService.ts` had an "implicit-uncontexted MECE fulfilment" feature. When computing a signature for a bare query (no `context()` clause), it inspected the parameter file on disk. If the file contained contexted values (from a previous fetch), it extracted those context keys and injected them into `effectiveContextKeys`. This made the bare signature include `contextDefHashes` for keys not in the query — producing an identical hash to the context query.
+
+**Why it existed**: the intent was to help the planner recognise contexted cache as valid for bare queries. But this is already handled by `canCacheSatisfyQuery` (superset matching in `signatureMatchingService.ts`) and by `equivalent_hashes` / closure sets for snapshot DB lookups.
+
+**Fix**: disabled the `candidateContextKeys` block in `plannerQuerySignatureService.ts` (10-Apr-26). The block is commented out with rationale. If bare-query cache recognition regresses, the fix belongs in the matching/closure layer, not in signature contamination.
+
+**Broader principle**: signatures must reflect what the query asks for, not what data happens to exist on disk. Signature identity = hash identity. If two queries need different hashes, they must have different signatures.
+
+## Anti-pattern 33: Per-subject random effects on hazard parameters
+
+**Signature**: adding per-cohort (or per-trajectory) latent offsets to a shared parameter (mu, sigma, onset) in the product-of-conditional-Binomials likelihood. ESS collapses to single digits, shared parameter drifts to its prior, onset-mu correlation approaches ±1.0.
+
+**Root cause**: with N trajectories and N per-cohort offsets, the model has as many parameters as data points. Each cohort's offset absorbs its own trajectory's signal, leaving the shared parameter unconstrained. There is no pooling pressure — unlike kappa (one scalar constrained by many daily observations), per-cohort offsets have a one-to-one parameter-to-data ratio.
+
+**Fix**: use per-interval observation-level overdispersion instead. Replace `Binomial(n_j, q_j)` with `BetaBinomial(n_j, q_j * kappa_lat, (1 - q_j) * kappa_lat)`. This adds ONE scalar parameter per edge, not N. Same pattern as kappa for rate overdispersion. See doc 34 for the full design.
+
+**Broader principle**: the analogue of kappa for any distribution is a scalar that inflates variance at the observation level, not per-subject latent variables. This is the frailty model insight from survival analysis: Gamma frailty marginalises out per-subject effects analytically, leaving a single dispersion parameter.
+
+## Anti-pattern 34: Duplicate payload/subject construction in devtools
+
+**Signature**: a test harness, CLI tool, or script constructs its own snapshot subjects, MECE dimensions, or candidate regimes instead of calling the canonical FE CLI path. The devtool's output diverges silently as the FE pipeline evolves — missing supplementary hash discovery, missing MECE dimensions, missing cohort hashes, wrong total_n.
+
+**Root cause**: the devtool was written before the FE CLI existed (or before it handled the relevant feature), and a shortcut was taken to build subjects directly. When `candidateRegimeService.ts` gained Step 5, `computeMeceDimensions`, and window/cohort regime grouping, the devtool's parallel path didn't get any of it.
+
+**Fix**: eliminate the duplicate path. Call `_build_payload_via_cli` (the FE CLI) as the single canonical code path for payload construction. Layer devtool-specific extras on top. See `test_harness.py` refactor (12-Apr-26) and doc 39 for the full defect inventory.
+
+## Anti-pattern 35: Silent data substitution on binding failure
+
+**Signature**: when evidence binding can't aggregate context rows (dimension not declared MECE, no bare rows), the binder silently substitutes a single context slice as the "aggregate proxy". The model runs on a fraction of the data with no error — the binding receipt looks clean.
+
+**Root cause**: defensive fallback that treated modelling on partial data as better than modelling on no data. But the user sees a clean receipt and assumes all data was used.
+
+**Fix**: removed the fallback (`evidence.py` 12-Apr-26). The binder now logs a warning and leaves the aggregate empty. The correct fix is to declare the dimension MECE so context rows can be summed.
 
 ## When to add to this document
 

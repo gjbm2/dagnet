@@ -151,6 +151,15 @@ export interface BayesPatchEdge {
     divergences: number;
     evidence_grade: number;
     provenance: string;
+    // LOO-ELPD model adequacy scoring (doc 32)
+    delta_elpd?: number | null;
+    pareto_k_max?: number | null;
+    n_loo_obs?: number | null;
+    // PPC calibration (doc 38)
+    ppc_coverage_90?: number | null;
+    ppc_n_obs?: number | null;
+    ppc_traj_coverage_90?: number | null;
+    ppc_traj_n_obs?: number | null;
   }>;
   _model_state?: Record<string, number>;
   prior_tier?: string;
@@ -274,6 +283,21 @@ export async function applyPatch(patch: BayesPatchFile): Promise<number> {
             path_hdi_upper: cohortSlice.p_hdi_upper,
             path_provenance: cohortSlice.provenance,
           } : {}),
+          // LOO-ELPD model adequacy (doc 32)
+          ...(windowSlice.delta_elpd != null ? {
+            delta_elpd: windowSlice.delta_elpd,
+            pareto_k_max: windowSlice.pareto_k_max,
+            n_loo_obs: windowSlice.n_loo_obs,
+          } : {}),
+          // PPC calibration (doc 38)
+          ...(windowSlice.ppc_coverage_90 != null ? {
+            ppc_coverage_90: windowSlice.ppc_coverage_90,
+            ppc_n_obs: windowSlice.ppc_n_obs,
+          } : {}),
+          ...(windowSlice.ppc_traj_coverage_90 != null ? {
+            ppc_traj_coverage_90: windowSlice.ppc_traj_coverage_90,
+            ppc_traj_n_obs: windowSlice.ppc_traj_n_obs,
+          } : {}),
         };
       }
 
@@ -310,6 +334,17 @@ export async function applyPatch(patch: BayesPatchFile): Promise<number> {
             ...(cohortSlice.hdi_t95_lower != null ? { path_hdi_t95_lower: cohortSlice.hdi_t95_lower, path_hdi_t95_upper: cohortSlice.hdi_t95_upper } : {}),
             ...(cohortSlice.onset_mu_corr != null ? { path_onset_mu_corr: cohortSlice.onset_mu_corr } : {}),
             path_provenance: cohortSlice.provenance,
+          } : {}),
+          // LOO-ELPD model adequacy (doc 32)
+          ...(windowSlice.delta_elpd != null ? {
+            delta_elpd: windowSlice.delta_elpd,
+            pareto_k_max: windowSlice.pareto_k_max,
+            n_loo_obs: windowSlice.n_loo_obs,
+          } : {}),
+          // PPC calibration (doc 38)
+          ...(windowSlice.ppc_traj_coverage_90 != null ? {
+            ppc_traj_coverage_90: windowSlice.ppc_traj_coverage_90,
+            ppc_traj_n_obs: windowSlice.ppc_traj_n_obs,
           } : {}),
         };
       }

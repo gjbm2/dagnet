@@ -18,6 +18,8 @@ import type { GraphData } from '../types';
 export interface EdgeSnapshotRetrievalsData {
   /** ISO date strings (YYYY-MM-DD) on which snapshots were retrieved */
   retrievedDays: string[];
+  /** Number of snapshot retrievals per day (keyed by YYYY-MM-DD) */
+  countsByDay: Record<string, number>;
   /** Total snapshot row count */
   count: number;
   /** Latest retrieval timestamp */
@@ -63,8 +65,14 @@ export function useEdgeSnapshotRetrievals(graph: GraphData | undefined) {
       workspace,
     }).then((res: QuerySnapshotRetrievalsResult) => {
       if (res.success && res.count > 0) {
+        const countsByDay: Record<string, number> = {};
+        for (const ts of (res.retrieved_at || [])) {
+          const day = ts.slice(0, 10); // YYYY-MM-DD
+          countsByDay[day] = (countsByDay[day] || 0) + 1;
+        }
         const result: EdgeSnapshotRetrievalsData = {
           retrievedDays: res.retrieved_days || [],
+          countsByDay,
           count: res.count,
           latestRetrievedAt: res.latest_retrieved_at,
         };

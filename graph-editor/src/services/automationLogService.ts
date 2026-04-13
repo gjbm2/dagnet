@@ -1,16 +1,22 @@
 /**
  * Automation Log Service
  *
- * Persists automation run logs (pull → retrieve → commit) to IndexedDB so they
- * survive browser restarts.  This lets the automation window close itself on
- * clean runs while keeping full diagnostics available for later inspection.
+ * Persists automation run logs in two places:
+ *   1. IndexedDB — survives browser restarts, accessible via console helpers
+ *   2. Git repo  — committed to `.dagnet/automation-logs/` periodically during
+ *                   the run and once at completion. Survives browser crashes and
+ *                   is visible to anyone with repo access.
  *
  * Retrieval is via console helpers exposed on `window`:
  *   - `dagnetAutomationLogs(n?)` – summary of last N runs (default 10)
  *   - `dagnetAutomationLogEntries(runId)` – full session-log entries for one run
+ *   - `dagnetExportLog(runId?)` – download a run as JSON file (most recent if no runId)
  */
 
 import { db, type AutomationRunLog } from '../db/appDatabase';
+import { downloadTextFile } from './downloadService';
+import { gitService } from './gitService';
+import { credentialsManager } from '../lib/credentials';
 
 export type { AutomationRunLog };
 
@@ -40,6 +46,24 @@ class AutomationLogService {
       await this.pruneOldLogs();
     } catch (e) {
       console.error('[AutomationLogService] Failed to persist run log:', e);
+    }
+  }
+
+  /**
+   * Progressive flush: upsert a running automation's log to IDB.
+   * Silent — no session log entries, no pruning (the run already exists or is
+   * being created for the first time). Caller is responsible for dirty-checking
+   * before calling to avoid unnecessary writes.
+   */
+  async progressiveFlush(log: AutomationRunLog): Promise<void> {
+    try {
+      const serialised: AutomationRunLog = {
+        ...log,
+        entries: JSON.parse(JSON.stringify(log.entries)),
+      };
+      await db.automationRunLogs.put(serialised);
+    } catch (e) {
+      console.error('[AutomationLogService] Progressive flush failed:', e);
     }
   }
 
@@ -83,6 +107,70 @@ class AutomationLogService {
       console.error('[AutomationLogService] Failed to prune old logs:', e);
     }
   }
+
+  // -------------------------------------------------------------------------
+  // Git-committed automation logs
+  // -------------------------------------------------------------------------
+
+  /**
+   * Commit the current automation log snapshot to the data repo.
+   *
+   * Writes a single JSON file to `.dagnet/automation-logs/{filename}.json`.
+   * The file is overwritten on each call (git tracks history). This is called
+   * periodically during a run and once at completion.
+   *
+   * Best-effort: failures are logged but never thrown — the IDB persist is
+   * the safety net.
+   */
+  async commitLogToRepo(options: {
+    repository: string;
+    branch: string;
+    filename: string;
+    log: Omit<AutomationRunLog, 'runId'> & { runId: string };
+  }): Promise<boolean> {
+    const { repository, branch, filename, log } = options;
+
+    try {
+      // Ensure credentials are loaded and set on gitService
+      const credsResult = await credentialsManager.loadCredentials();
+      if (!credsResult.success || !credsResult.credentials) {
+        console.warn('[AutomationLogService] No credentials — skipping log commit');
+        return false;
+      }
+
+      const gitCreds = credsResult.credentials.git.find(cred => cred.name === repository);
+      if (!gitCreds) {
+        console.warn(`[AutomationLogService] No credentials for ${repository} — skipping log commit`);
+        return false;
+      }
+
+      gitService.setCredentials({
+        ...credsResult.credentials,
+        defaultGitRepo: repository,
+      });
+
+      const serialised = JSON.parse(JSON.stringify(log));
+      const content = JSON.stringify(serialised, null, 2);
+      const path = `.dagnet/automation-logs/${filename}`;
+
+      const result = await gitService.commitAndPushFiles(
+        [{ path, content }],
+        `Automation log snapshot — ${new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: '2-digit' })}`,
+        branch,
+      );
+
+      if (result.success) {
+        console.log(`[AutomationLogService] Log committed to ${path}`);
+        return true;
+      } else {
+        console.warn(`[AutomationLogService] Log commit failed: ${result.error}`);
+        return false;
+      }
+    } catch (e) {
+      console.warn('[AutomationLogService] Log commit failed:', e instanceof Error ? e.message : e);
+      return false;
+    }
+  }
 }
 
 export const automationLogService = AutomationLogService.getInstance();
@@ -109,6 +197,7 @@ if (typeof window !== 'undefined') {
     for (const log of logs) {
       const date = new Date(log.timestamp);
       const outcomeIcon =
+        log.outcome === 'running'  ? '🔄' :
         log.outcome === 'success'  ? '✅' :
         log.outcome === 'warning'  ? '⚠️' :
         log.outcome === 'error'    ? '❌' : '⏹️';
@@ -144,5 +233,34 @@ if (typeof window !== 'undefined') {
     console.log(`Duration: ${(log.durationMs / 1000).toFixed(1)}s\n`);
     console.log(JSON.stringify(log.entries, null, 2));
     return log.entries;
+  };
+
+  /**
+   * Download an automation run log as a JSON file.
+   * Usage:  dagnetExportLog()                                    — most recent run
+   *         dagnetExportLog("retrieveall:1775620803910")         — specific run by ID
+   */
+  (window as any).dagnetExportLog = async (runId?: string): Promise<void> => {
+    let log: AutomationRunLog | undefined;
+
+    if (runId) {
+      log = await automationLogService.getRunLog(runId);
+    } else {
+      const logs = await automationLogService.getRunLogs(1);
+      log = logs[0];
+    }
+
+    if (!log) {
+      console.log(runId ? `No run log found for runId: ${runId}` : 'No automation run logs found.');
+      return;
+    }
+
+    const date = new Date(log.timestamp);
+    const dateStr = `${date.getDate()}-${date.toLocaleString('en-GB', { month: 'short' })}-${String(date.getFullYear()).slice(2)}`;
+    const safeRunId = log.runId.replace(/:/g, '-');
+    const filename = `automation-${safeRunId}-${dateStr}.json`;
+
+    downloadTextFile({ filename, content: JSON.stringify(log, null, 2), mimeType: 'application/json' });
+    console.log(`Downloaded: ${filename} (${log.outcome}, ${log.entries.length} entries)`);
   };
 }

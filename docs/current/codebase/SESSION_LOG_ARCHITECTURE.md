@@ -98,9 +98,19 @@ Top-level entries are filtered by threshold before rendering. Children of expand
 | warning | `AlertTriangle` |
 | error | `AlertCircle` |
 
+### Performance: throttling and windowed rendering
+
+During a large retrieve-all (992 fetches), the session log can accumulate thousands of entries with ~5,000 `notifyListeners()` calls. Two mechanisms prevent this from killing the browser:
+
+**Throttled subscribe** — The viewer's subscribe callback uses a 200ms trailing-edge debounce. Rapid-fire notifications are coalesced into a single React `setState` per 200ms window, reducing re-renders from thousands to approximately 5 per second during bursts.
+
+**Windowed rendering** — Only the last 500 top-level entries are mounted as DOM nodes. A sticky "N older entries not shown" indicator appears at the top when entries exceed this limit. All entries remain in memory — search, Copy All, and export see everything. No data is lost; only the DOM is bounded.
+
+The tail-mode auto-scroll check uses top-level `entries.length` (O(1)) rather than a deep tree walk.
+
 ### Copy
 
-"Copy all" copies only entries at or above the current threshold — it copies what the user sees, not the raw internal data.
+"Copy all" copies only entries at or above the current threshold — it copies what the user sees, not the raw internal data. It copies ALL entries, not just the windowed subset.
 
 ## Downstream Consumers
 
@@ -108,9 +118,9 @@ Top-level entries are filtered by threshold before rendering. Children of expand
 
 Called by `dailyAutomationJob.ts` in the finally block after all operations end. By this point, all `endOperation` calls have stripped sub-threshold children. `getEntries()` returns lean entries. The serialised `AutomationRunLog` is small.
 
-### Git-committed automation logs (planned)
+### Git-committed automation logs
 
-The automation log commit feature (`.dagnet/automation-logs/`) will use the same `getEntries()` output. With debug/trace stripped, committed files are naturally lean.
+`automationLogService.commitLogToRepo()` commits a JSON snapshot to `.dagnet/automation-logs/{date}.json` in the data repo. Called periodically (every 10 min) during a run and once at completion by `dailyAutomationJob.ts`. Uses the same `getEntries()` output — with debug/trace stripped by `endOperation`, committed files are naturally lean. See AUTOMATION_PIPELINE.md for full details.
 
 ## Legacy: Diagnostic Buffering (Removed)
 
@@ -127,6 +137,6 @@ The `getDiagnosticLoggingEnabled()` method is retained but now derives from the 
 | `src/services/sessionLogService.ts` | Core service: levels, threshold, operations, entries |
 | `src/components/editors/SessionLogViewer.tsx` | Viewer: level selector, threshold filtering, Lucide icons |
 | `src/components/editors/SessionLogViewer.css` | Viewer styles: level-specific colours and borders |
-| `src/services/automationLogService.ts` | IDB persistence of automation run logs |
+| `src/services/automationLogService.ts` | IDB persistence + git-committed run logs |
 | `src/services/dailyAutomationJob.ts` | Automation orchestrator (calls persistRunLog in finally block) |
 | `src/services/__tests__/sessionLogService.test.ts` | 24 tests: level suppression, endOperation cleanup, threshold changes, parity |

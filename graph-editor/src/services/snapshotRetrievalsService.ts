@@ -152,7 +152,7 @@ async function loadEventDefinition(eventId: string): Promise<any> {
  *   - Each single MECE context key found in stored slices
  *   - Each multi-key MECE cross-product key-set found in stored slices
  */
-function enumeratePlausibleContextKeySets(
+export function enumeratePlausibleContextKeySets(
   constraintsWithoutAsat: any,
   paramValues: ParameterValue[],
 ): string[][] {
@@ -194,7 +194,9 @@ function enumeratePlausibleContextKeySets(
 
 export interface EdgeSignatureResult {
   signature: string;
-  coreHash: string;
+  /** The inner identity hash (~64-char hex) from the structured signature's `c` field.
+   *  ⚠ NOT the DB `core_hash` (~22-char base64url). Use computeShortCoreHash() to get that. */
+  identityHash: string;
   paramId: string;
   dbParamId: string;
   contextKeys: string[];
@@ -270,8 +272,8 @@ export async function computePlausibleSignaturesForEdge(args: {
         eventDefinitions
       );
       const sigParsed = parseSignature(signature);
-      if (sigParsed.coreHash) {
-        results.push({ signature, coreHash: sigParsed.coreHash, paramId, dbParamId, contextKeys });
+      if (sigParsed.identityHash) {
+        results.push({ signature, identityHash: sigParsed.identityHash, paramId, dbParamId, contextKeys });
       }
     } catch {
       // Skip key-sets that fail signature computation (e.g., context def not loaded)
@@ -305,7 +307,7 @@ export async function buildSnapshotRetrievalsQueryForEdge(args: {
   const sigResult = await computeCurrentSignatureForEdge(args);
   if (!sigResult) return null;
 
-  const { signature, coreHash, paramId, dbParamId } = sigResult;
+  const { signature, identityHash, paramId, dbParamId } = sigResult;
 
   const dslWithoutAsat = stripAsatClause(args.effectiveDSL);
   const contextDims = extractSliceDimensions(dslWithoutAsat);
@@ -314,7 +316,7 @@ export async function buildSnapshotRetrievalsQueryForEdge(args: {
   const wantSliceFilter = !!contextDims && !hasContextAny(dslWithoutAsat);
   if (wantSliceFilter) {
     try {
-      const closureSet = getClosureSet(coreHash);
+      const closureSet = getClosureSet(identityHash);
       const inv = await getBatchInventoryV2([dbParamId], {
         current_signatures: { [dbParamId]: signature },
         ...(closureSet.length > 0

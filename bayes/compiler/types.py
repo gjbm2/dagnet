@@ -285,9 +285,81 @@ class EdgeEvidence:
     slice_groups: dict[str, SliceGroup] = field(default_factory=dict)
     has_slices: bool = False
 
+    # Phase C §5.7: per-date regime classification.
+    # Maps retrieved_at date (ISO prefix, e.g. "2026-01-15") to regime
+    # kind: "mece_partition" or "uncontexted". Populated by evidence
+    # binder from RegimeSelection. Used to partition rows so aggregate
+    # and per-slice likelihoods cover disjoint date sets.
+    regime_per_date: dict[str, str] = field(default_factory=dict)
+
+    # Suppression counts (populated by _bind_from_snapshot_rows)
+    rows_received: int = 0           # rows entering _bind_from_snapshot_rows
+    rows_post_aggregation: int = 0   # rows after context aggregation
+    rows_aggregated: int = 0         # rows removed by context aggregation
+
     # Skip state
     skipped: bool = False
     skip_reason: str = ""
+
+    def content_hash(self) -> str:
+        """SHA-256 of model-input fields for parity comparison.
+
+        Covers everything that affects the model: priors, observations,
+        warm-start hints, skip state. Excludes diagnostic metadata
+        (rows_received, rows_aggregated, file_path) that doesn't enter
+        the likelihood.
+        """
+        import hashlib, json
+
+        def _prior_dict(p: 'ProbabilityPrior') -> dict:
+            return {"alpha": p.alpha, "beta": p.beta, "source": p.source}
+
+        def _lat_dict(lp: 'LatencyPrior | None') -> dict | None:
+            if lp is None:
+                return None
+            return {
+                "onset": lp.onset_delta_days, "mu": lp.mu, "sigma": lp.sigma,
+                "onset_uncertainty": lp.onset_uncertainty, "source": lp.source,
+                "onset_obs": lp.onset_observations,
+            }
+
+        def _traj_dict(t: 'CohortDailyTrajectory') -> dict:
+            return {
+                "date": t.date, "n": t.n, "obs_type": t.obs_type,
+                "ages": t.retrieval_ages, "cum_y": t.cumulative_y,
+                "cum_x": t.cumulative_x, "path": t.path_edge_ids,
+                "recency": round(t.recency_weight, 6),
+            }
+
+        def _daily_dict(d: 'CohortDailyObs') -> dict:
+            return {"date": d.date, "n": d.n, "k": d.k, "age": d.age_days,
+                    "compl": round(d.completeness, 6)}
+
+        def _co_dict(co: 'CohortObservation') -> dict:
+            return {
+                "dsl": co.slice_dsl,
+                "trajs": [_traj_dict(t) for t in co.trajectories],
+                "daily": [_daily_dict(d) for d in co.daily],
+            }
+
+        def _wo_dict(wo: 'WindowObservation') -> dict:
+            return {"n": wo.n, "k": wo.k, "dsl": wo.slice_dsl,
+                    "compl": round(wo.completeness, 6)}
+
+        canonical = {
+            "edge_id": self.edge_id,
+            "param_id": self.param_id,
+            "prior": _prior_dict(self.prob_prior),
+            "latency_prior": _lat_dict(self.latency_prior),
+            "window_obs": [_wo_dict(wo) for wo in self.window_obs],
+            "cohort_obs": [_co_dict(co) for co in self.cohort_obs],
+            "total_n": self.total_n,
+            "kappa_warm": self.kappa_warm,
+            "cohort_latency_warm": self.cohort_latency_warm,
+            "skipped": self.skipped,
+        }
+        blob = json.dumps(canonical, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(blob.encode()).hexdigest()[:16]
 
 
 @dataclass
@@ -298,6 +370,159 @@ class BoundEvidence:
     today: str = ""
     diagnostics: list[str] = field(default_factory=list)
     n_drift_bins: int = 1           # Phase D drift: number of time bins (future)
+
+
+# ---------------------------------------------------------------------------
+# Binding receipt — diagnostic audit trail for evidence binding
+# ---------------------------------------------------------------------------
+
+@dataclass
+class EdgeBindingReceipt:
+    """Per-edge audit receipt produced after evidence binding.
+
+    Captures what data was expected, what arrived, what was filtered,
+    and whether the binding is healthy enough for inference.
+    """
+    edge_id: str = ""
+    param_id: str = ""
+
+    # Verdict: pass / warn / fail
+    verdict: str = "pass"
+
+    # Hash coverage
+    expected_hashes: list[str] = field(default_factory=list)
+    hashes_with_data: list[str] = field(default_factory=list)
+    hashes_empty: list[str] = field(default_factory=list)
+
+    # Row counts through the pipeline
+    rows_raw: int = 0
+    rows_post_regime: int = 0
+    regimes_seen: int = 0
+    regime_selected: str = ""
+
+    # Suppression
+    rows_post_suppression: int = 0
+    rows_suppressed: int = 0
+
+    # Slice coverage
+    expected_slices: list[str] = field(default_factory=list)
+    observed_slices: list[str] = field(default_factory=list)
+    missing_slices: list[str] = field(default_factory=list)
+    unexpected_slices: list[str] = field(default_factory=list)
+    orphan_rows: int = 0
+
+    # Per-slice row counts: ctx_key → {total_n, window_n, cohort_n}
+    slice_row_counts: dict[str, dict[str, int]] = field(default_factory=dict)
+
+    # Evidence source classification
+    evidence_source: str = "none"   # snapshot / param_file / mixed / none
+
+    # Observation counts
+    window_trajectories: int = 0
+    window_daily: int = 0
+    cohort_trajectories: int = 0
+    cohort_daily: int = 0
+    total_n: int = 0
+
+    # Anchor range
+    expected_anchor_from: str = ""
+    expected_anchor_to: str = ""
+    actual_anchor_from: str = ""
+    actual_anchor_to: str = ""
+    anchor_days_covered: int = 0
+
+    # Skip state
+    skipped: bool = False
+    skip_reason: str = ""
+
+    # Content hash of the assembled EdgeEvidence (model inputs).
+    # Used for parity comparison between different payload contracts
+    # (e.g. param-file path vs engorged-graph path). If two paths
+    # produce the same evidence_hash for the same edge, the model
+    # inputs are identical.
+    evidence_hash: str = ""
+
+    # Human-readable divergence notes
+    divergences: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialise to a plain dict for JSON output."""
+        return {
+            "edge_id": self.edge_id,
+            "param_id": self.param_id,
+            "verdict": self.verdict,
+            "expected_hashes": self.expected_hashes,
+            "hashes_with_data": list(self.hashes_with_data),
+            "hashes_empty": list(self.hashes_empty),
+            "rows_raw": self.rows_raw,
+            "rows_post_regime": self.rows_post_regime,
+            "regimes_seen": self.regimes_seen,
+            "regime_selected": self.regime_selected,
+            "rows_post_suppression": self.rows_post_suppression,
+            "rows_suppressed": self.rows_suppressed,
+            "expected_slices": self.expected_slices,
+            "observed_slices": self.observed_slices,
+            "missing_slices": self.missing_slices,
+            "unexpected_slices": self.unexpected_slices,
+            "orphan_rows": self.orphan_rows,
+            "slice_row_counts": self.slice_row_counts,
+            "evidence_source": self.evidence_source,
+            "window_trajectories": self.window_trajectories,
+            "window_daily": self.window_daily,
+            "cohort_trajectories": self.cohort_trajectories,
+            "cohort_daily": self.cohort_daily,
+            "total_n": self.total_n,
+            "expected_anchor_from": self.expected_anchor_from,
+            "expected_anchor_to": self.expected_anchor_to,
+            "actual_anchor_from": self.actual_anchor_from,
+            "actual_anchor_to": self.actual_anchor_to,
+            "anchor_days_covered": self.anchor_days_covered,
+            "skipped": self.skipped,
+            "skip_reason": self.skip_reason,
+            "evidence_hash": self.evidence_hash,
+            "divergences": self.divergences,
+        }
+
+
+@dataclass
+class BindingReceipt:
+    """Graph-level summary of evidence binding outcomes.
+
+    Aggregates per-edge receipts into a single diagnostic object
+    that can be logged, returned in the result payload, or used
+    to gate inference (mode='gate').
+    """
+    edge_receipts: dict[str, EdgeBindingReceipt] = field(default_factory=dict)
+
+    # Graph-level summary counts
+    edges_expected: int = 0
+    edges_bound: int = 0
+    edges_fallback: int = 0
+    edges_skipped: int = 0
+    edges_no_subjects: int = 0
+    edges_warned: int = 0
+    edges_failed: int = 0
+
+    # Mode and halt state
+    mode: str = "log"           # log / gate
+    halted: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialise to a plain dict for JSON output."""
+        return {
+            "edge_receipts": {
+                eid: r.to_dict() for eid, r in self.edge_receipts.items()
+            },
+            "edges_expected": self.edges_expected,
+            "edges_bound": self.edges_bound,
+            "edges_fallback": self.edges_fallback,
+            "edges_skipped": self.edges_skipped,
+            "edges_no_subjects": self.edges_no_subjects,
+            "edges_warned": self.edges_warned,
+            "edges_failed": self.edges_failed,
+            "mode": self.mode,
+            "halted": self.halted,
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -312,6 +537,8 @@ class SamplingConfig:
     cores: int | None = None
     target_accept: float = DEFAULT_TARGET_ACCEPT
     random_seed: int | None = None
+    lowrank_mass_matrix: bool = False
+    jax_backend: bool = False
 
 
 @dataclass
@@ -345,9 +572,31 @@ class PosteriorSummary:
     cohort_hdi_lower: float | None = None
     cohort_hdi_upper: float | None = None
 
+    # Phase C: per-context-slice posteriors (doc 14 §5.2)
+    # context_key → {mean, stdev, alpha, beta, hdi_lower, hdi_upper}
+    slice_posteriors: dict[str, dict[str, float]] = field(default_factory=dict)
+    # Phase 2 per-slice cohort posteriors (context_key → {alpha, beta, p_mean, p_sd})
+    cohort_slice_posteriors: dict[str, dict[str, float]] = field(default_factory=dict)
+    tau_slice_mean: float | None = None
+    tau_slice_sd: float | None = None
+
+    # LOO-ELPD model adequacy scoring (doc 32)
+    elpd: float | None = None
+    elpd_se: float | None = None
+    elpd_null: float | None = None
+    delta_elpd: float | None = None
+    pareto_k_max: float | None = None
+    n_loo_obs: int | None = None
+
+    # PPC calibration (doc 38) — are predictive intervals honest?
+    ppc_coverage_90: float | None = None      # endpoint/daily: empirical coverage at 90% nominal
+    ppc_n_obs: int | None = None              # endpoint/daily: observation count
+    ppc_traj_coverage_90: float | None = None  # trajectory: empirical coverage at 90% nominal
+    ppc_traj_n_obs: int | None = None          # trajectory: observation count
+
     def to_webhook_dict(self) -> dict[str, Any]:
         """Format for the webhook payload's edge.probability block."""
-        return {
+        result = {
             "alpha": round(self.alpha, 4),
             "beta": round(self.beta, 4),
             "mean": round(self.mean, 6),
@@ -359,6 +608,17 @@ class PosteriorSummary:
             "rhat": round(self.rhat, 4) if self.rhat else None,
             "provenance": self.provenance,
         }
+        if self.delta_elpd is not None:
+            result["delta_elpd"] = round(self.delta_elpd, 3)
+            result["pareto_k_max"] = round(self.pareto_k_max, 3) if self.pareto_k_max is not None else None
+            result["n_loo_obs"] = self.n_loo_obs
+        if self.ppc_coverage_90 is not None:
+            result["ppc_coverage_90"] = round(self.ppc_coverage_90, 3)
+            result["ppc_n_obs"] = self.ppc_n_obs
+        if self.ppc_traj_coverage_90 is not None:
+            result["ppc_traj_coverage_90"] = round(self.ppc_traj_coverage_90, 3)
+            result["ppc_traj_n_obs"] = self.ppc_traj_n_obs
+        return result
 
 
 @dataclass
@@ -409,6 +669,22 @@ class LatencyPosteriorSummary:
     path_hdi_t95_upper: float | None = None
     path_provenance: str | None = None
 
+    # Latency dispersion (doc 34) — per-interval timing overdispersion
+    kappa_lat_mean: float | None = None   # posterior mean of kappa_lat
+    kappa_lat_sd: float | None = None     # posterior SD of kappa_lat
+
+    # LOO-ELPD model adequacy scoring (doc 32)
+    elpd: float | None = None
+    elpd_se: float | None = None
+    elpd_null: float | None = None
+    delta_elpd: float | None = None
+    pareto_k_max: float | None = None
+    n_loo_obs: int | None = None
+
+    # PPC calibration (doc 38)
+    ppc_traj_coverage_90: float | None = None
+    ppc_traj_n_obs: int | None = None
+
     def to_webhook_dict(self) -> dict[str, Any]:
         """Format for the webhook payload's edge.latency block.
 
@@ -449,6 +725,19 @@ class LatencyPosteriorSummary:
             result["path_hdi_t95_lower"] = round(self.path_hdi_t95_lower, 1) if self.path_hdi_t95_lower is not None else None
             result["path_hdi_t95_upper"] = round(self.path_hdi_t95_upper, 1) if self.path_hdi_t95_upper is not None else None
             result["path_provenance"] = self.path_provenance or self.provenance
+        # Latency dispersion (doc 34)
+        if self.kappa_lat_mean is not None:
+            result["kappa_lat_mean"] = round(self.kappa_lat_mean, 1)
+            result["kappa_lat_sd"] = round(self.kappa_lat_sd, 1) if self.kappa_lat_sd is not None else None
+        # LOO-ELPD (doc 32)
+        if self.delta_elpd is not None:
+            result["delta_elpd"] = round(self.delta_elpd, 3)
+            result["pareto_k_max"] = round(self.pareto_k_max, 3) if self.pareto_k_max is not None else None
+            result["n_loo_obs"] = self.n_loo_obs
+        # PPC calibration (doc 38)
+        if self.ppc_traj_coverage_90 is not None:
+            result["ppc_traj_coverage_90"] = round(self.ppc_traj_coverage_90, 3)
+            result["ppc_traj_n_obs"] = self.ppc_traj_n_obs
         return result
 
 
@@ -459,6 +748,10 @@ class QualityMetrics:
     converged: bool = False
     total_divergences: int = 0
     converged_pct: float = 0.0
+    # LOO-ELPD graph-level summary (doc 32)
+    total_delta_elpd: float = 0.0
+    worst_pareto_k: float = 0.0
+    n_high_k: int = 0
 
 
 @dataclass

@@ -99,9 +99,11 @@ The underlying constraint: **do not let "the maths could be better" paralyse shi
 
 2. **Write a mathematical design note for item 3 (Y_C convolution)** — work through the discretised form of `Y_C(τ) = ∫ dX_C(t') × p × CDF(τ - t')` to an implementable formula. Consider whether a closed-form exists for the shifted-lognormal or whether numerical integration on the existing tau grid is sufficient. Suggested location: new section in `cohort-maturity-full-bayes-design.md` §7.5 or standalone note.
 
-3. **Begin Phase A implementation (A→Z multi-hop maturity)** — the design is complete in `29-generalised-forecast-engine-design.md` §"Generalised Cohort Maturity (A→Z Traversal)". Start with Steps A.0–A.2 (additive fields + two pure functions). None of the 5 remaining items block this work.
+3. **Begin Phase A implementation (A→Z multi-hop maturity)** — the design is complete in `29-generalised-forecast-engine-design.md` §"Generalised Cohort Maturity (A→Z Traversal)". Start with Steps A.0–A.2 (additive fields + two pure functions). None of the 5 remaining items block this work. **Sequencing choice**: if docs 30+31 land first, Steps A.0 and A.6 are eliminated (BE resolves path natively from DSL) but regime coherence check is required — see doc 29 §"Post-doc-31 variant". If Phase A goes first, use `from_node_uuid`/`to_node_uuid` patch (replaced later).
 
 4. **Complexity assessment for Phase A is available** in this conversation: roughly 1 week of implementation total, with the main risk being frame join alignment on `(anchor_day, snapshot_date)` between first-edge and last-edge frames.
+
+5. **Docs 30+31 (regime selection + BE subject resolution)** — **IMPLEMENTED 8-Apr-26**. Doc 30 prevents double-counting across context dimensions. Doc 31 moves DSL resolution to BE. Post-doc-31 variant is now the active Phase A path: Steps A.0/A.6 eliminated, BE resolves path natively. CLI analyse tooling available for cohort maturity testing during development (`graph-ops/scripts/analyse.sh --type cohort_maturity`). Programme doc updated with both.
 
 ---
 
@@ -110,3 +112,5 @@ The underlying constraint: **do not let "the maths could be better" paralyse shi
 - **Should items 1+2+5 be treated as a single project?** They're natural companions (propagation engine, basis consistency, epoch unification). Doing them together avoids rework but makes the project larger. **Non-blocking** — Phase A proceeds regardless.
 
 - **Is the Y_C convolution (item 3) worth the complexity?** The empirical evidence (§7.5 of the full-bayes design doc) suggests the current approximation works well in practice. The correct formulation may add meaningful complexity for marginal accuracy gain. **Non-blocking** — needs the mathematical design note (next step 2) before this can be properly evaluated.
+
+- ~~**Phase A before or after docs 30+31?**~~ **RESOLVED 8-Apr-26** — docs 30+31 implemented. Post-doc-31 variant is the active path. No throwaway patch fields needed.

@@ -14,8 +14,9 @@
  */
 
 import { PYTHON_API_BASE as API_BASE_URL } from './pythonApiBase';
+import { buildForecastingSettings } from '../constants/latency';
 
-const USE_MOCK = import.meta.env.VITE_USE_MOCK_COMPUTE === 'true';
+const USE_MOCK = (typeof import.meta.env !== 'undefined' && import.meta.env.VITE_USE_MOCK_COMPUTE === 'true');
 
 // ============================================================
 // Request/Response Types
@@ -150,7 +151,13 @@ export class GraphComputeClient {
     this.baseUrl = baseUrl;
     this.useMock = useMock;
   }
-  
+
+  /** Safe URL search params — returns empty params in Node / CLI. */
+  private getUrlSearchParams(): URLSearchParams {
+    if (typeof window === 'undefined') return new URLSearchParams();
+    try { return new URLSearchParams(window.location.search); } catch { return new URLSearchParams(); }
+  }
+
   /**
    * Fast, stable hash to keep cache keys short (FNV-1a 32-bit).
    */
@@ -238,8 +245,8 @@ export class GraphComputeClient {
       if (g.__dagnetComputeNoCache === true) return true;
 
       // URL params.
-      const params = new URLSearchParams(window.location.search);
-      return params.get('nocache') === '1' || params.get('compute_nocache') === '1';
+      const params = this.getUrlSearchParams();
+      return params.get('nocache') === '1' || params.get('no-cache') === '1' || params.get('compute_nocache') === '1';
     } catch {
       return false;
     }
@@ -307,7 +314,7 @@ export class GraphComputeClient {
       // Helper to detect a cohort maturity "result-like" payload.
       const isCohortMaturityResult = (r: any): boolean => {
         if (!r || typeof r !== 'object') return false;
-        if (r.analysis_type === 'cohort_maturity') return true;
+        if (r.analysis_type === 'cohort_maturity' || r.analysis_type === 'cohort_maturity_v2') return true;
         // Some snapshot paths may omit analysis_type but include frames.
         return Array.isArray(r.frames) && r.frames.length >= 0;
       };
@@ -358,7 +365,7 @@ export class GraphComputeClient {
 
       // Only normalise when the request intends cohort maturity (or payload looks like it).
       const anyCohort = blocks.some(b => isCohortMaturityResult(b.result));
-      if (!anyCohort && requestedType !== 'cohort_maturity') return null;
+      if (!anyCohort && requestedType !== 'cohort_maturity' && requestedType !== 'cohort_maturity_v2') return null;
 
       // Build dimension values from request scenarios (names/colours/visibility modes).
       const scenarioDimensionValues: Record<string, DimensionValueMeta> = {};
@@ -429,7 +436,7 @@ export class GraphComputeClient {
         const r = b.result;
         if (!isCohortMaturityResult(r)) continue;
         const frames: any[] = Array.isArray(r.frames) ? r.frames : [];
-        if (import.meta.env.DEV) {
+        if (import.meta.env?.DEV) {
           console.log('[GraphComputeClient] cohort_maturity block:', {
             scenario_id: b.scenario_id,
             subject_id: b.subject_id,
@@ -540,7 +547,15 @@ export class GraphComputeClient {
       // Scenario and subject IDs are added here from the request context.
       const data: Array<Record<string, any>> = [];
 
-      const scenarioSubjectKeys = Array.from(new Set(Array.from(subjectPayloadsByScenarioSubject.keys())));
+      // Derive iteration keys from BOTH request snapshot_subjects AND response
+      // blocks. When the BE uses analytics_dsl (doc 31), response subject IDs
+      // use a different format (resolved:uuid:N) than request subject IDs
+      // (parameter:objectId:edgeUuid:p:). We need both sets so matching works
+      // regardless of which path the BE used.
+      const scenarioSubjectKeys = Array.from(new Set([
+        ...Array.from(subjectPayloadsByScenarioSubject.keys()),
+        ...blocks.map(b => `${b.scenario_id}||${b.subject_id}`),
+      ]));
       for (const ssKey of scenarioSubjectKeys) {
         const [scenarioId, subjectId] = ssKey.split('||');
 
@@ -1069,7 +1084,7 @@ export class GraphComputeClient {
       // immediate children, derive the missing branch as the complement so split-by-child remains
       // intelligible in time-series mode.
       try {
-        const query = request.query_dsl || '';
+        const query = request.analytics_dsl || request.query_dsl || '';
         const match = /visited\(([^)]+)\)/.exec(query);
         const selectedParentId = match?.[1] ? String(match[1]).trim() : '';
         const firstGraph: any = request.scenarios?.[0]?.graph || {};
@@ -1388,27 +1403,28 @@ export class GraphComputeClient {
    */
   async analyzeSelection(
     graph: any,
-    queryDsl?: string,
+    analyticsDsl?: string,
+    effectiveQueryDsl?: string,
     scenarioId: string = 'base',
     scenarioName: string = 'Current',
     scenarioColour: string = '#3b82f6',
     analysisType?: string,
     visibilityMode: 'f+e' | 'f' | 'e' = 'f+e',
-    snapshotSubjects?: SnapshotSubjectPayload[],
+    candidateRegimesByEdge?: Record<string, Array<{ core_hash: string; equivalent_hashes: string[] }>>,
     displaySettings?: Record<string, unknown>,
+    meceDimensions?: string[],
   ): Promise<AnalysisResponse> {
     const bypassCache = this.shouldBypassCache();
-    const snapshotSig = snapshotSubjectsSignature(snapshotSubjects);
-    const testFixture = new URLSearchParams(window.location.search).get('test_fixture');
+    const testFixture = this.getUrlSearchParams().get('test_fixture');
 
     const displaySig = displaySettings ? JSON.stringify(displaySettings) : '';
     const cacheKey =
-      this.generateCacheKey(graph, queryDsl, analysisType, [scenarioId])
+      this.generateCacheKey(graph, analyticsDsl, analysisType, [scenarioId])
+      + `|eqdsl:${this.hashString(effectiveQueryDsl || '')}`
       + `|vis:${visibilityMode}`
-      + (snapshotSig ? `|snap:${this.hashString(snapshotSig)}` : '')
-      + (analysisType === 'cohort_maturity' ? `|cmv:${this.COHORT_MATURITY_CACHE_VERSION}` : '')
+      + ((analysisType === 'cohort_maturity' || analysisType === 'cohort_maturity_v2') ? `|cmv:${this.COHORT_MATURITY_CACHE_VERSION}` : '')
       + (displaySig ? `|ds:${this.hashString(displaySig)}` : '')
-      + (testFixture ? `|tf:${testFixture}:${new URLSearchParams(window.location.search).toString()}` : '');
+      + (testFixture ? `|tf:${testFixture}:${this.getUrlSearchParams().toString()}` : '');
     if (!bypassCache) {
       const cached = this.analysisCache.get(cacheKey);
       if (cached && Date.now() - cached.timestamp < this.CACHE_TTL_MS) {
@@ -1430,7 +1446,7 @@ export class GraphComputeClient {
           metadata: {},
           data: [{ mock: true }],
         },
-        query_dsl: queryDsl,
+        query_dsl: analyticsDsl,
       };
       if (!bypassCache) {
         this.analysisCache.set(cacheKey, { data: result, timestamp: Date.now() });
@@ -1444,13 +1460,14 @@ export class GraphComputeClient {
       colour: scenarioColour,
       visibility_mode: visibilityMode,
       graph,
-      ...(snapshotSubjects?.length ? { snapshot_subjects: snapshotSubjects } : {}),
+      ...(effectiveQueryDsl ? { effective_query_dsl: effectiveQueryDsl } : {}),
+      ...(candidateRegimesByEdge ? { candidate_regimes_by_edge: candidateRegimesByEdge } : {}),
     };
 
     // Collect test fixture override params from URL (?tf_onset=2&tf_mu=1.2 etc.)
     const tfOverrides: Record<string, string> = {};
     if (testFixture) {
-      const sp = new URLSearchParams(window.location.search);
+      const sp = this.getUrlSearchParams();
       for (const k of ['tf_onset', 'tf_mu', 'tf_sigma', 'tf_factor']) {
         const v = sp.get(k);
         if (v) tfOverrides[k] = v;
@@ -1459,13 +1476,18 @@ export class GraphComputeClient {
 
     const request: AnalysisRequest = {
       scenarios: [scenarioEntry],
-      query_dsl: queryDsl,
+      analytics_dsl: analyticsDsl,
       analysis_type: analysisType,
+      ...(meceDimensions?.length ? { mece_dimensions: meceDimensions } : {}),
       ...(displaySettings ? { display_settings: displaySettings } : {}),
       ...(testFixture ? { test_fixture: testFixture, ...tfOverrides } : {}),
+      forecasting_settings: buildForecastingSettings(),
     };
 
-    const response = await fetch(`${this.baseUrl}/api/runner/analyze`, {
+    const analyzeUrl = bypassCache
+      ? `${this.baseUrl}/api/runner/analyze?no-cache=1`
+      : `${this.baseUrl}/api/runner/analyze`;
+    const response = await fetch(analyzeUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(request),
@@ -1484,7 +1506,7 @@ export class GraphComputeClient {
     const raw = await response.json();
 
     // DEV diagnostic: log the raw backend response shape for snapshot analysis debugging
-    if (import.meta.env.DEV && request.analysis_type === 'cohort_maturity') {
+    if (import.meta.env?.DEV && (request.analysis_type === 'cohort_maturity' || request.analysis_type === 'cohort_maturity_v2')) {
       const frames = Array.isArray(raw?.result?.frames) ? raw.result.frames : [];
       console.log('[GraphComputeClient] RAW cohort_maturity response:', {
         success: raw?.success,
@@ -1520,7 +1542,7 @@ export class GraphComputeClient {
       ?? this.normaliseSnapshotBranchComparisonResponse(raw, request)
       ?? this.normaliseSnapshotLagFitResponse(raw, request);
 
-    if (import.meta.env.DEV && request.analysis_type === 'cohort_maturity') {
+    if (import.meta.env?.DEV && (request.analysis_type === 'cohort_maturity' || request.analysis_type === 'cohort_maturity_v2')) {
       console.log('[GraphComputeClient] Normalisation result:', {
         didNormalise: !!normalised,
         normalisedAnalysisType: normalised?.result?.analysis_type,
@@ -1568,10 +1590,16 @@ export class GraphComputeClient {
    * @param analysisType - Optional analysis type override
    */
   async analyzeMultipleScenarios(
-    scenarios: Array<{ scenario_id: string; name: string; graph: any; colour?: string; visibility_mode?: 'f+e' | 'f' | 'e'; snapshot_subjects?: SnapshotSubjectPayload[] }>,
-    queryDsl?: string,
+    scenarios: Array<{
+      scenario_id: string; name: string; graph: any; colour?: string;
+      visibility_mode?: 'f+e' | 'f' | 'e';
+      candidate_regimes_by_edge?: Record<string, Array<{ core_hash: string; equivalent_hashes: string[] }>>;
+      effective_query_dsl?: string;
+    }>,
+    analyticsDsl?: string,
     analysisType?: string,
     displaySettings?: Record<string, unknown>,
+    meceDimensions?: string[],
   ): Promise<AnalysisResponse> {
     const bypassCache = this.shouldBypassCache();
 
@@ -1579,28 +1607,20 @@ export class GraphComputeClient {
     // This ensures cache invalidates when any scenario's data changes
     const scenarioIds = scenarios.map(s => s.scenario_id);
     const visibilityModes = scenarios.map(s => `${s.scenario_id}:${s.visibility_mode || 'f+e'}`).join(',');
-    const snapshotSig = scenarios
-      .map(s => `${s.scenario_id}:${snapshotSubjectsSignature(s.snapshot_subjects)}`)
-      .filter(Boolean)
-      .join('||');
-    
-    // CRITICAL:
-    // Cache key must incorporate ALL scenario graphs (not just scenarios[0]),
-    // otherwise DSL/window changes that only affect non-first scenarios can
-    // incorrectly produce cache hits and prevent chart recomputation.
+
+    // Cache key incorporates ALL scenario graphs + per-scenario effective DSL
     const scenarioGraphKey = scenarios
-      .map(s => `${s.scenario_id}:${this.hashString(this.graphSignature(s.graph))}`)
+      .map(s => `${s.scenario_id}:${this.hashString(this.graphSignature(s.graph))}:${this.hashString(s.effective_query_dsl || '')}`)
       .join(',');
 
-    const multiTestFixture = new URLSearchParams(window.location.search).get('test_fixture');
+    const multiTestFixture = this.getUrlSearchParams().get('test_fixture');
     const multiDisplaySig = displaySettings ? JSON.stringify(displaySettings) : '';
     const cacheKey =
-      `multi|graphs:${scenarioGraphKey}|dsl:${queryDsl || ''}|type:${analysisType || ''}|scenarios:${scenarioIds.join(',')}`
+      `multi|graphs:${scenarioGraphKey}|adsl:${analyticsDsl || ''}|type:${analysisType || ''}|scenarios:${scenarioIds.join(',')}`
       + `|vis:${visibilityModes}`
-      + (snapshotSig ? `|snap:${this.hashString(snapshotSig)}` : '')
-      + (analysisType === 'cohort_maturity' ? `|cmv:${this.COHORT_MATURITY_CACHE_VERSION}` : '')
+      + ((analysisType === 'cohort_maturity' || analysisType === 'cohort_maturity_v2') ? `|cmv:${this.COHORT_MATURITY_CACHE_VERSION}` : '')
       + (multiDisplaySig ? `|ds:${this.hashString(multiDisplaySig)}` : '')
-      + (multiTestFixture ? `|tf:${multiTestFixture}:${new URLSearchParams(window.location.search).toString()}` : '');
+      + (multiTestFixture ? `|tf:${multiTestFixture}:${this.getUrlSearchParams().toString()}` : '');
     
     // Check cache first (unless explicitly bypassed via URL params for debugging).
     if (!bypassCache) {
@@ -1629,7 +1649,7 @@ export class GraphComputeClient {
           },
           data: scenarios.map(s => ({ scenario_id: s.scenario_id, mock: true })),
         },
-        query_dsl: queryDsl,
+        query_dsl: analyticsDsl,
       };
       this.analysisCache.set(cacheKey, { data: result, timestamp: Date.now() });
       return result;
@@ -1637,7 +1657,7 @@ export class GraphComputeClient {
 
     const multiTfOverrides: Record<string, string> = {};
     if (multiTestFixture) {
-      const sp = new URLSearchParams(window.location.search);
+      const sp = this.getUrlSearchParams();
       for (const k of ['tf_onset', 'tf_mu', 'tf_sigma', 'tf_factor']) {
         const v = sp.get(k);
         if (v) multiTfOverrides[k] = v;
@@ -1651,17 +1671,20 @@ export class GraphComputeClient {
         colour: s.colour,
         visibility_mode: s.visibility_mode || 'f+e',
         graph: s.graph,
-        ...(s.snapshot_subjects?.length ? { snapshot_subjects: s.snapshot_subjects } : {}),
+        ...(s.candidate_regimes_by_edge ? { candidate_regimes_by_edge: s.candidate_regimes_by_edge } : {}),
+        ...(s.effective_query_dsl ? { effective_query_dsl: s.effective_query_dsl } : {}),
       })),
-      query_dsl: queryDsl,
+      analytics_dsl: analyticsDsl,
       analysis_type: analysisType,
+      ...(meceDimensions?.length ? { mece_dimensions: meceDimensions } : {}),
       ...(displaySettings ? { display_settings: displaySettings } : {}),
       ...(multiTestFixture ? { test_fixture: multiTestFixture, ...multiTfOverrides } : {}),
+      forecasting_settings: buildForecastingSettings(),
     };
 
     // DEV/forensics: make the exact compute boundary payload easy to copy without
     // using the Network tab (useful for diagnosing share-link discrepancies).
-    if (import.meta.env.DEV && typeof window !== 'undefined') {
+    if (import.meta.env?.DEV && typeof window !== 'undefined') {
       try {
         const g: any = window as any;
         g.__dagnetLastAnalyzeRequest = request;
@@ -1678,7 +1701,10 @@ export class GraphComputeClient {
       console.log('[DagNet][Compute] /api/runner/analyze request payload (copy window.__dagnetLastAnalyzeRequest):', request);
     }
 
-    const response = await fetch(`${this.baseUrl}/api/runner/analyze`, {
+    const multiAnalyzeUrl = bypassCache
+      ? `${this.baseUrl}/api/runner/analyze?no-cache=1`
+      : `${this.baseUrl}/api/runner/analyze`;
+    const response = await fetch(multiAnalyzeUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(request),
@@ -1714,7 +1740,7 @@ export class GraphComputeClient {
       }
     }
 
-    if (import.meta.env.DEV && typeof window !== 'undefined') {
+    if (import.meta.env?.DEV && typeof window !== 'undefined') {
       try {
         const g: any = window as any;
         g.__dagnetLastAnalyzeResponse = result;
@@ -1821,7 +1847,11 @@ export class GraphComputeClient {
     }
 
     try {
-      const response = await fetch(`${this.baseUrl}/api/runner/analyze`, {
+      const snapBypass = this.shouldBypassCache();
+      const snapAnalyzeUrl = snapBypass
+        ? `${this.baseUrl}/api/runner/analyze?no-cache=1`
+        : `${this.baseUrl}/api/runner/analyze`;
+      const response = await fetch(snapAnalyzeUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(request),
@@ -1889,8 +1919,13 @@ export interface ScenarioData {
 
 export interface AnalysisRequest {
   scenarios: ScenarioData[];
+  /** Analysis subject DSL (from/to/visited). Constant across scenarios. */
+  analytics_dsl?: string;
+  /** DEPRECATED — use analytics_dsl. Kept for backward compat. */
   query_dsl?: string;
   analysis_type?: string;
+  /** MECE dimension names for regime selection aggregation safety (doc 30). */
+  mece_dimensions?: string[];
   /** Forecasting settings from buildForecastingSettings(). Sent for snapshot analyses. */
   forecasting_settings?: import('../constants/latency').ForecastingSettings;
   /** Compute-affecting display settings (e.g. bayes_band_level). */
@@ -1959,6 +1994,12 @@ export interface DimensionValueMeta {
   order?: number;
   visibility_mode?: 'f+e' | 'f' | 'e';
   probability_label?: string;
+  /** True when this stage represents a visitedAny group (disjoint branch alternatives). */
+  is_group?: boolean;
+  /** Member node IDs for grouped stages. */
+  members?: string[];
+  /** Map of member ID → human-readable label for grouped stages. */
+  member_labels?: Record<string, string>;
 }
 
 export interface AnalysisResult {
@@ -1974,6 +2015,8 @@ export interface AnalysisResult {
 export interface AnalysisResponse {
   success: boolean;
   result?: AnalysisResult;
+  analytics_dsl?: string;
+  /** DEPRECATED — use analytics_dsl. Kept for backward compat. */
   query_dsl?: string;
   error?: {
     error_type: string;

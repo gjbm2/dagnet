@@ -101,7 +101,7 @@ export function isSnapshotBootChart(analysis: any): boolean {
   const ci = analysis?.content_items?.[0];
   const analysisType = safeString(ci?.analysis_type || analysis?.recipe?.analysis?.analysis_type);
   const chartKind = safeString(ci?.kind || analysis?.chart_kind);
-  if (analysisType === 'cohort_maturity' || analysisType === 'daily_conversions' || analysisType === 'lag_fit') {
+  if (analysisType === 'cohort_maturity' || analysisType === 'cohort_maturity_v2' || analysisType === 'daily_conversions' || analysisType === 'lag_fit') {
     return true;
   }
   return analysisType === 'branch_comparison' && chartKind === 'time_series';
@@ -123,12 +123,12 @@ export function summariseSnapshotCharts(graph: any): SnapshotChartSummary[] {
 }
 
 export function logSnapshotBoot(stage: string, payload: Record<string, unknown>): void {
-  if (!import.meta.env.DEV) return;
+  if (!import.meta.env?.DEV) return;
   console.log(`[SnapshotBootTrace] ${stage}`, payload);
 }
 
 export function logChartReadinessTrace(stage: string, payload: Record<string, unknown>): void {
-  if (!import.meta.env.DEV) return;
+  if (!import.meta.env?.DEV) return;
   console.log(`[ChartReadinessTrace] ${stage}`, payload);
 }
 
@@ -136,7 +136,7 @@ export function recordSnapshotBootLedgerStage(
   stage: SnapshotBootLedgerStage,
   payload: Record<string, unknown> & { analysisId: string },
 ): void {
-  if (!import.meta.env.DEV) return;
+  if (!import.meta.env?.DEV) return;
   const cycleId = resolveCycleId(payload.analysisId, payload);
   const enrichedPayload = {
     ...payload,
@@ -153,7 +153,7 @@ export function registerSnapshotBootExpectations(
   context: Record<string, unknown> = {},
   timeoutMs = 4000,
 ): void {
-  if (!import.meta.env.DEV || charts.length === 0) return;
+  if (!import.meta.env?.DEV || charts.length === 0) return;
   const state = getBootLedgerState();
   charts.forEach((chart) => {
     const cycleId = safeString(context.cycleId) || `cycle-${Date.now()}`;

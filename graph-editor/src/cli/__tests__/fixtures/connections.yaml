@@ -1,0 +1,7 @@
+version: "1.0.0"
+connections:
+  - name: test-conn
+    provider: amplitude
+    kind: http
+    description: "Test connection fixture"
+    enabled: true

@@ -44,11 +44,6 @@ done
 # Discover graphs — first from runner's graph list, then from log files
 # ---------------------------------------------------------------------------
 discover_graphs() {
-    # Prefer the runner's graph list (written before harness logs exist)
-    if [[ -f /tmp/bayes_recovery_graphs ]]; then
-        cat /tmp/bayes_recovery_graphs
-        return
-    fi
     # Fallback: scan log files
     # Default (no --all): only show runs with an active lock (currently running).
     # Finished runs from previous sessions are hidden to reduce clutter.
@@ -92,6 +87,8 @@ fi
 
 # Record initial graph set so the status script can detect new arrivals
 printf "%s\n" "${SELECTED[@]}" > /tmp/_bayes_monitor_initial_graphs
+# Track which graphs already have tail panes (status script adds to this)
+printf "%s\n" "${SELECTED[@]}" > /tmp/_bayes_monitor_tailed_graphs
 
 # ---------------------------------------------------------------------------
 # Create the status summary script (top pane runs this in a loop)
@@ -248,8 +245,15 @@ while true; do
                 rm -f "$_clock" 2>/dev/null
             fi
             rm -f "$f" 2>/dev/null
+            # Kill the tail window for this finished graph
+            _cshort="${_cname#synth-}"
+            _cshort="${_cshort#graph-}"
+            tmux kill-window -t "bayes-monitor:tail-${_cshort}" 2>/dev/null || true
+            # Clean up temp tail script
+            rm -f "/tmp/_bayes_tail_${_cname}.sh" 2>/dev/null
         done
         : > /tmp/_bayes_monitor_initial_graphs 2>/dev/null
+        : > /tmp/_bayes_monitor_tailed_graphs 2>/dev/null
     fi
 
     # ── 1. Poll CPU (1s blocking) ──
@@ -280,7 +284,7 @@ while true; do
         if [[ -n "$last_line" ]]; then
             pct=$(echo "$last_line" | grep -oP '\[\s*\K\d+(?=%)' || echo "?")
             elapsed=$(echo "$last_line" | grep -oP '\d+\.\ds' || echo "?")
-            stage=$(echo "$last_line" | grep -oP '(compiling|sampling|summarising|startup)' || echo "?")
+            stage=$(echo "$last_line" | grep -oP '(compiling|sampling|summarising|startup|simulating|hashing|db_write|writing|verifying|done)' || echo "?")
             detail=$(echo "$last_line" | sed 's/[^:]*: //')
         else
             pct="?"
@@ -350,7 +354,7 @@ while true; do
         # Colour: green if done, yellow if in progress, red if compiling
         local colour
         if [[ "$stage" == "done" ]]; then colour="\033[32m";
-        elif [[ "$stage" == "compiling" ]]; then colour="\033[33m";
+        elif [[ "$stage" == "compiling" || "$stage" == "simulating" || "$stage" == "hashing" ]]; then colour="\033[33m";
         else colour="\033[36m"; fi
         printf "%s${colour}%s\033[0m %3d%%" "$marker" "$bar" "$pct"
     }
@@ -386,20 +390,18 @@ while true; do
     clear
     echo -e "$frame"
 
-    # ── 5. Absorb new graphs into the status display ──
+    # ── 5. Absorb new graphs + auto-create tail panes ──
     # If new harness log files or recovery graph entries appeared since
-    # launch, add them to the initial set so they show up in the job
-    # table above. We do NOT rebuild/exec — that kills the tmux session.
-    # The tail panes stay fixed (showing the original set); the user can
-    # Ctrl-b R to rebuild if they want new tail panes.
-    _new_found=0
+    # launch, add them to the status display AND create tmux tail windows
+    # automatically. Each new graph gets its own tmux window.
+    _new_graphs=()
     for f in /tmp/bayes_harness-*.log; do
         [[ -f "$f" && -s "$f" ]] || continue
         _gname=$(basename "$f" .log)
         _gname="${_gname#bayes_harness-}"
         if ! grep -qxF "$_gname" /tmp/_bayes_monitor_initial_graphs 2>/dev/null; then
             echo "$_gname" >> /tmp/_bayes_monitor_initial_graphs
-            _new_found=$((_new_found + 1))
+            _new_graphs+=("$_gname")
         fi
     done
     if [[ -f /tmp/bayes_recovery_graphs ]]; then
@@ -407,13 +409,46 @@ while true; do
             [[ -n "$_rg" ]] || continue
             if ! grep -qxF "$_rg" /tmp/_bayes_monitor_initial_graphs 2>/dev/null; then
                 echo "$_rg" >> /tmp/_bayes_monitor_initial_graphs
-                _new_found=$((_new_found + 1))
+                _new_graphs+=("$_rg")
             fi
         done < /tmp/bayes_recovery_graphs
     fi
-    if [[ $_new_found -gt 0 ]]; then
-        echo "  ${_new_found} new graph(s) detected — added to status display."
-        echo "  Press Ctrl-b R to rebuild tail panes."
+
+    # Auto-create tail panes for newly discovered graphs
+    _tailed_count=0
+    for _ng in "${_new_graphs[@]}"; do
+        # Skip if this graph already has a tail pane
+        grep -qxF "$_ng" /tmp/_bayes_monitor_tailed_graphs 2>/dev/null && continue
+
+        # Build short label
+        _short="${_ng#synth-}"
+        _short="${_short#graph-}"
+
+        # Write a tail script to a temp file (avoids bash -c escaping issues)
+        _tail_script="/tmp/_bayes_tail_${_ng}.sh"
+        cat > "$_tail_script" << TAILEOF
+#!/usr/bin/env bash
+echo '─── ${_short} ───'
+while true; do
+  for f in /tmp/bayes_harness-*${_ng}*.log /tmp/bayes_harness-*${_short}*.log; do
+    if [[ -s "\$f" ]]; then exec tail -f "\$f"; fi
+  done
+  sleep 0.5
+done
+TAILEOF
+        chmod +x "$_tail_script"
+
+        # Create a new tmux window running the tail script
+        if tmux new-window -t "bayes-monitor" -n "tail-${_short}" "$_tail_script" 2>/dev/null; then
+            echo "$_ng" >> /tmp/_bayes_monitor_tailed_graphs
+            _tailed_count=$((_tailed_count + 1))
+        fi
+    done
+
+    if [[ $_tailed_count -gt 0 ]]; then
+        echo "  ${_tailed_count} new graph(s) detected — tail windows created automatically."
+        # Switch back to the first window (status pane) so user sees the update
+        tmux select-window -t "bayes-monitor:0" 2>/dev/null || true
     fi
 
     # Use wait so USR1 signal can interrupt the sleep immediately
@@ -454,8 +489,21 @@ n_pages=$(( (n_graphs + PANES_PER_PAGE - 1) / PANES_PER_PAGE ))
 tail_cmd() {
     local graph="$1"
     local short="${graph#synth-}"
-    local log="/tmp/bayes_harness-${graph}.log"
-    echo "echo '─── ${short} ───'; tail -f '${log}'"
+    short="${short#graph-}"
+    # The harness may write the log under several name variants:
+    #   bayes_harness-{graph}.log          (direct invocation)
+    #   bayes_harness-graph-{graph}.log    (--fe-payload adds graph- prefix)
+    # And SELECTED may contain a bare name while the log has graph- or
+    # synth- prefixes.  Poll for whichever file gets content first.
+    cat <<TAIL_SCRIPT
+echo '─── ${short} ───'
+while true; do
+  for f in /tmp/bayes_harness-*${graph}*.log /tmp/bayes_harness-*${short}*.log; do
+    if [[ -s "\$f" ]]; then exec tail -f "\$f"; fi
+  done
+  sleep 0.5
+done
+TAIL_SCRIPT
 }
 
 if [[ $n_graphs -eq 0 ]]; then

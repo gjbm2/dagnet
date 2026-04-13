@@ -21,7 +21,7 @@ import { sha256 } from '../../lib/sha256';
  * Compute query signature for consistency checking.
  *
  * Returns a STRUCTURED signature (JSON) with two components:
- * - coreHash: SHA-256 of non-context semantic inputs (connection, events, filters, etc.)
+ * - identityHash: SHA-256 of non-context semantic inputs (connection, events, filters, etc.)
  * - contextDefHashes: Per-context-key definition hashes
  *
  * This enables cache sharing when:
@@ -289,22 +289,22 @@ export async function computeQuerySignature(
       // Normalized query (uses event_ids, not node_ids)
       original_query: normalizedOriginalQuery,
     });
-    const coreHash = await hashText(coreCanonical);
+    const identityHash = await hashText(coreCanonical);
     // DEBUG: expose last coreCanonical for parity testing
     (computeQuerySignature as any).__lastCoreCanonical = coreCanonical;
 
     // ─────────────────────────────────────────────────────────────────────────────
     // BUILD STRUCTURED SIGNATURE
     // ─────────────────────────────────────────────────────────────────────────────
-    const structuredSig = serialiseSignature({ coreHash, contextDefHashes });
+    const structuredSig = serialiseSignature({ identityHash, contextDefHashes });
 
     // ===== DIAGNOSTIC: Show what went into the signature =====
     if (sessionLogService.isLevelEnabled('debug')) {
       sessionLogService.debug('data-fetch', 'SIGNATURE_COMPUTED',
-        `Computed signature: ${coreHash.substring(0, 12)}... (${Object.keys(eventDefHashes).length} events)`,
+        `Computed signature: ${identityHash.substring(0, 12)}... (${Object.keys(eventDefHashes).length} events)`,
         undefined,
         {
-          coreHash: coreHash.substring(0, 16),
+          identityHash: identityHash.substring(0, 16),
           contextKeys: Object.keys(contextDefHashes),
           originalQuery: rawOriginalQuery || 'N/A',
           normalizedOriginalQuery: normalizedOriginalQuery || 'N/A',

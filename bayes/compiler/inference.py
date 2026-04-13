@@ -77,7 +77,28 @@ def run_inference(
                 random_seed=config.random_seed,
                 progressbar=not use_callback,
                 callback=_sampling_callback if use_callback else None,
+                idata_kwargs={"log_likelihood": True},
             )
+
+    # Move pointwise trajectory log-likelihood Deterministics from
+    # posterior to log_likelihood so LOO-ELPD can score them.
+    # pm.Potential doesn't produce log_likelihood entries; the model
+    # stores them as ll_traj_* Deterministics instead (see model.py).
+    _ll_vars = [v for v in trace.posterior.data_vars if v.startswith("ll_traj_")]
+    if _ll_vars:
+        _ll_dict = {}
+        for v in _ll_vars:
+            var_name = v[3:]  # strip "ll_" prefix → "traj_window_..." or "traj_cohort_..."
+            _ll_dict[var_name] = trace.posterior[v]
+        if hasattr(trace, "log_likelihood") and trace.log_likelihood is not None:
+            import xarray as xr
+            existing = {k: trace.log_likelihood[k] for k in trace.log_likelihood.data_vars}
+            existing.update(_ll_dict)
+            trace.log_likelihood = xr.Dataset(existing)
+        else:
+            trace.add_groups({"log_likelihood": _ll_dict})
+        # Remove from posterior to avoid inflating rhat/ess computation
+        trace.posterior = trace.posterior.drop_vars(_ll_vars)
 
     if report_progress:
         report_progress("summarising", 100, f"{prefix}Computing diagnostics…")
@@ -469,6 +490,186 @@ def _estimate_cohort_kappa(
         return None
 
 
+def _predictive_mu_sd(
+    mu_samples: "np.ndarray",
+    sigma_samples: "np.ndarray",
+    onset_samples: "np.ndarray | None",
+    p_samples: "np.ndarray",
+    kl_samples: "np.ndarray",
+    trajectories: list,
+    diagnostics: list[str],
+    edge_id: str,
+) -> float | None:
+    """Compute predictive mu_sd from kappa_lat via MC simulation.
+
+    For each MCMC draw × each valid trajectory, simulate a BetaBinomial
+    maturation curve and fit mu* via weighted least-squares across all
+    intervals. The SD of mu* across (draw, trajectory) pairs is the
+    predictive mu_sd.
+
+    Fixes over the original implementation:
+      #1 Uses ALL valid trajectories, not one representative
+      #2 Sequential n_at_risk from realised BetaBinomial draws
+      #3 Multi-point WLS fit across all intervals, not single-point inversion
+      #5 Floor derived from quadrature: sqrt(posterior² + aleatoric²)
+
+    Returns None if insufficient trajectory data or if the MC fails.
+    """
+    import numpy as np
+    from scipy.special import ndtr, ndtri
+
+    valid_trajs = [t for t in trajectories
+                   if len(t.retrieval_ages) >= 3 and t.n >= 10]
+    if not valid_trajs:
+        return None
+
+    # Cap trajectories to avoid excessive computation
+    max_trajs = 20
+    if len(valid_trajs) > max_trajs:
+        # Prefer trajectories with more intervals (richer signal)
+        valid_trajs = sorted(valid_trajs, key=lambda t: len(t.retrieval_ages),
+                             reverse=True)[:max_trajs]
+
+    # Subsample MCMC draws for speed.
+    N = len(mu_samples)
+    max_draws = 1000
+    rng = np.random.default_rng(42)
+    if N > max_draws:
+        idx = rng.choice(N, max_draws, replace=False)
+        mu_s = mu_samples[idx]
+        sigma_s = sigma_samples[idx]
+        onset_s = onset_samples[idx] if onset_samples is not None else np.zeros(max_draws)
+        p_s = p_samples[idx]
+        kl_s = kl_samples[idx]
+    else:
+        mu_s = mu_samples
+        sigma_s = sigma_samples
+        onset_s = onset_samples if onset_samples is not None else np.zeros(N)
+        p_s = p_samples
+        kl_s = kl_samples
+
+    S = len(mu_s)
+    all_mu_star = []
+
+    for traj in valid_trajs:
+        ages = np.array(traj.retrieval_ages, dtype=np.float64)
+        n_pop = float(traj.n)
+        J = len(ages)
+        if J < 3 or n_pop < 10:
+            continue
+
+        # Vectorised CDF: shape (S, J)
+        ages_2d = ages[np.newaxis, :]
+        onset_2d = onset_s[:, np.newaxis]
+        mu_2d = mu_s[:, np.newaxis]
+        sigma_2d = np.maximum(sigma_s[:, np.newaxis], 0.01)
+
+        effective_age = np.maximum(ages_2d - onset_2d, 1e-12)
+        z = (np.log(effective_age) - mu_2d) / sigma_2d
+        cdf_all = np.where(ages_2d > onset_2d, ndtr(z), 0.0)
+        cdf_all = np.clip(cdf_all, 0.0, 1.0)
+
+        # Conditional hazards q_j
+        p_2d = p_s[:, np.newaxis]
+        cdf_prev = np.zeros_like(cdf_all)
+        cdf_prev[:, 1:] = cdf_all[:, :-1]
+        delta_F = np.maximum(cdf_all - cdf_prev, 1e-12)
+        surv = np.maximum(1.0 - p_2d * cdf_prev, 1e-12)
+        q_j = np.clip(p_2d * delta_F / surv, 1e-12, 1.0 - 1e-12)
+
+        # Fix #2: sequential n_at_risk from realised BetaBinomial draws.
+        # Draw d_j, update n_at_risk for the next interval.
+        kl_2d = kl_s[:, np.newaxis]
+        alpha_bb = np.maximum(q_j * kl_2d, 0.01)
+        beta_bb = np.maximum((1.0 - q_j) * kl_2d, 0.01)
+
+        n_at_risk = np.full((S, J), n_pop)
+        d_sim = np.zeros((S, J), dtype=int)
+        for j in range(J):
+            p_j = rng.beta(alpha_bb[:, j], beta_bb[:, j])
+            p_j = np.clip(p_j, 1e-12, 1.0 - 1e-12)
+            n_j = np.maximum(n_at_risk[:, j].astype(int), 0)
+            d_sim[:, j] = rng.binomial(n_j, p_j)
+            if j < J - 1:
+                n_at_risk[:, j + 1] = np.maximum(n_at_risk[:, j] - d_sim[:, j], 0)
+
+        # Realised cumulative fraction
+        cum_d = np.cumsum(d_sim, axis=1)
+        realised_frac = cum_d / n_pop  # (S, J)
+
+        # Fix #3: multi-point WLS fit for mu* per draw.
+        # For each draw, fit mu* to the simulated curve using
+        # weighted least-squares on the inverse-CDF transform:
+        #   Φ⁻¹(realised_frac / p) ≈ (log(t - onset) - mu*) / sigma
+        # Rearranging: mu* = log(t - onset) - sigma × Φ⁻¹(realised_frac / p)
+        # Use all intervals where 0.01 < realised_frac/p < 0.99.
+        # Weight by CDF gradient (most informative near CDF = 0.5).
+        eff_age_2d = np.maximum(ages_2d - onset_2d, 1e-12)
+        log_eff_age = np.log(eff_age_2d)  # (S, J)
+
+        # target CDF per interval: realised_frac / p
+        target = realised_frac / np.maximum(p_2d, 1e-6)
+        target = np.clip(target, 0.001, 0.999)
+
+        # Inverse normal of target: Φ⁻¹(target)
+        phi_inv = ndtri(target)  # (S, J)
+
+        # mu* per interval: log(t-onset) - sigma × Φ⁻¹(target)
+        mu_star_all = log_eff_age - sigma_2d * phi_inv  # (S, J)
+
+        # Weight: CDF gradient φ(z) — intervals near CDF=0.5 are most informative
+        from scipy.stats import norm as _norm
+        weight = _norm.pdf(phi_inv)  # (S, J)
+
+        # Mask degenerate intervals
+        usable = (target > 0.01) & (target < 0.99) & np.isfinite(mu_star_all) & (weight > 1e-6)
+        n_usable = usable.sum(axis=1)  # (S,)
+
+        # Weighted mean mu* per draw
+        weight_masked = np.where(usable, weight, 0.0)
+        w_sum = weight_masked.sum(axis=1)
+        mu_star_draw = np.where(
+            w_sum > 0,
+            (weight_masked * mu_star_all).sum(axis=1) / w_sum,
+            np.nan,
+        )
+
+        # Keep draws with at least 2 usable intervals
+        good = (n_usable >= 2) & np.isfinite(mu_star_draw) & (np.abs(mu_star_draw - mu_s) < 5.0)
+        all_mu_star.append(mu_star_draw[good])
+
+    if not all_mu_star:
+        diagnostics.append(
+            f"  predictive_mu {edge_id[:8]}…: no valid trajectories for MC"
+        )
+        return None
+
+    mu_star_pooled = np.concatenate(all_mu_star)
+    if len(mu_star_pooled) < 50:
+        diagnostics.append(
+            f"  predictive_mu {edge_id[:8]}…: too few valid MC fits "
+            f"({len(mu_star_pooled)}), falling back to posterior SD"
+        )
+        return None
+
+    aleatoric_sd = float(np.std(mu_star_pooled))
+    posterior_sd = float(np.std(mu_s))
+
+    # Fix #5: principled floor via quadrature.
+    # predictive_sd² = posterior_sd² + aleatoric_sd²
+    # The posterior SD is irreducible epistemic uncertainty; aleatoric_sd
+    # is the timing noise from kappa_lat. The predictive SD combines both.
+    predictive_sd = float(np.sqrt(posterior_sd ** 2 + aleatoric_sd ** 2))
+
+    diagnostics.append(
+        f"  predictive_mu {edge_id[:8]}…: sd={predictive_sd:.4f} "
+        f"(posterior={posterior_sd:.4f}, aleatoric={aleatoric_sd:.4f}, "
+        f"n_trajs={len(valid_trajs)}, n_fits={len(mu_star_pooled)}/{S * len(valid_trajs)})"
+    )
+
+    return predictive_sd
+
+
 def summarise_posteriors(
     trace,
     topology: TopologyAnalysis,
@@ -477,11 +678,15 @@ def summarise_posteriors(
     quality: QualityMetrics,
     phase1_kappa: dict[str, "np.ndarray"] | None = None,
     settings: dict | None = None,
+    loo_scores: dict | None = None,
+    calibration_scores: dict | None = None,
 ) -> InferenceResult:
     """Extract posterior summaries from the MCMC trace.
 
     Produces PosteriorSummary per edge and LatencyPosteriorSummary
     for edges with latency (Phase A: echoes the fixed point estimate).
+
+    loo_scores: optional {edge_id: EdgeLooMetrics} from compute_loo_scores().
     """
     import arviz as az
     import numpy as np
@@ -753,6 +958,133 @@ def summarise_posteriors(
             cohort_hdi_upper=cohort_hdi_hi,
         ))
 
+        # Phase C: extract per-slice posteriors from trace (doc 14 §5.2)
+        if ev.has_slices:
+            post = posteriors[-1]  # the PosteriorSummary we just appended
+            tau_name = f"tau_slice_{safe_eid}"
+            if tau_name in trace.posterior:
+                tau_samples = trace.posterior[tau_name].values.flatten()
+                post.tau_slice_mean = float(np.mean(tau_samples))
+                post.tau_slice_sd = float(np.std(tau_samples))
+
+            # Unpack per-slice posteriors from vector RVs using
+            # slice_axes metadata (doc 38 §Native Vector Batching).
+            _sa = metadata.get("slice_axes", {}).get(edge_id)
+            _p_vec_name = f"p_slice_vec_{safe_eid}"
+            _k_vec_name = f"kappa_slice_vec_{safe_eid}"
+            _mu_vec_name = f"mu_slice_vec_{safe_eid}"
+
+            for _dim_key, _group in ev.slice_groups.items():
+                for _ctx_key, _s_obs in _group.slices.items():
+                    _ctx_safe = _safe_var_name(_ctx_key)
+                    # Look up slice index from metadata
+                    _si = _sa["ctx_to_idx"][_ctx_key] if _sa else None
+
+                    # --- p samples: vector path (preferred) or scalar fallback ---
+                    if _si is not None and _p_vec_name in trace.posterior:
+                        _ps_samples = trace.posterior[_p_vec_name].values[:, :, _si].flatten()
+                    else:
+                        _ps_scalar = f"p_slice_{safe_eid}_{_ctx_safe}"
+                        if _ps_scalar not in trace.posterior:
+                            continue
+                        _ps_samples = trace.posterior[_ps_scalar].values.flatten()
+
+                    _ps_mean = float(np.mean(_ps_samples))
+                    _ps_std = float(np.std(_ps_samples))
+                    _ps_hdi = az.hdi(_ps_samples, hdi_prob=HDI_PROB)
+                    _ps_ab = _fit_beta_to_samples(_ps_samples)
+
+                    # --- kappa samples: vector path or scalar fallback ---
+                    _ks_samples = None
+                    if _si is not None and _k_vec_name in trace.posterior:
+                        _ks_samples = trace.posterior[_k_vec_name].values[:, :, _si].flatten()
+                    else:
+                        _ks_scalar = f"kappa_slice_{safe_eid}_{_ctx_safe}"
+                        if _ks_scalar in trace.posterior:
+                            _ks_samples = trace.posterior[_ks_scalar].values.flatten()
+
+                    if _ks_samples is not None:
+                        # Predictive distribution: Beta(p*kappa, (1-p)*kappa)
+                        _n_use = min(len(_ps_samples), len(_ks_samples))
+                        _pred_alpha, _pred_beta, _pred_hdi_lo, _pred_hdi_hi = _predictive_alpha_beta(
+                            _ps_samples[:_n_use], kappa_samples=_ks_samples[:_n_use])
+                        _pred_mean = float(_pred_alpha / (_pred_alpha + _pred_beta))
+                        _pred_std = float(np.sqrt(
+                            _pred_alpha * _pred_beta /
+                            ((_pred_alpha + _pred_beta) ** 2 * (_pred_alpha + _pred_beta + 1))
+                        ))
+                    else:
+                        _pred_alpha, _pred_beta = _ps_ab
+                        _pred_hdi_lo, _pred_hdi_hi = float(_ps_hdi[0]), float(_ps_hdi[1])
+                        _pred_mean, _pred_std = _ps_mean, _ps_std
+
+                    _slice_entry = {
+                        "mean": _pred_mean,
+                        "stdev": _pred_std,
+                        "alpha": _pred_alpha,
+                        "beta": _pred_beta,
+                        "hdi_lower": _pred_hdi_lo,
+                        "hdi_upper": _pred_hdi_hi,
+                    }
+                    if _ks_samples is not None:
+                        _slice_entry["kappa_mean"] = float(np.mean(_ks_samples))
+                        _slice_entry["kappa_sd"] = float(np.std(_ks_samples))
+
+                    # --- Per-slice latency: vector path or scalar fallback ---
+                    if _si is not None and _mu_vec_name in trace.posterior:
+                        _mu_s = trace.posterior[_mu_vec_name].values[:, :, _si].flatten()
+                        _slice_entry["mu_mean"] = float(np.mean(_mu_s))
+                        _slice_entry["mu_sd"] = float(np.std(_mu_s))
+                        # Latency dispersion (doc 34): per-slice kappa_lat
+                        for _sot in ("cohort", "window"):
+                            _sc = f"kappa_lat_{safe_eid}__{_ctx_safe}_{_sot}"
+                            if _sc in trace.posterior:
+                                _skl = trace.posterior[_sc].values.flatten()
+                                _slice_entry["kappa_lat_mean"] = float(np.mean(_skl))
+                                _slice_entry["kappa_lat_sd"] = float(np.std(_skl))
+                                break
+                    else:
+                        _mu_s_name = f"mu_slice_{safe_eid}_{_ctx_safe}"
+                        if _mu_s_name in trace.posterior:
+                            _slice_entry["mu_mean"] = float(trace.posterior[_mu_s_name].values.mean())
+                            _slice_entry["mu_sd"] = float(trace.posterior[_mu_s_name].values.std())
+                    # sigma and onset are edge-level (doc 38) — inherit from
+                    # edge-level latency so per-slice summary isn't blank.
+                    _sigma_var = f"sigma_lat_{safe_eid}"
+                    if _sigma_var in trace.posterior:
+                        _slice_entry["sigma_mean"] = float(np.mean(trace.posterior[_sigma_var].values.flatten()))
+                        _slice_entry["sigma_sd"] = float(np.std(trace.posterior[_sigma_var].values.flatten()))
+                    _onset_var = f"onset_{safe_eid}"
+                    if _onset_var in trace.posterior:
+                        _slice_entry["onset_mean"] = float(np.mean(trace.posterior[_onset_var].values.flatten()))
+                        _slice_entry["onset_sd"] = float(np.std(trace.posterior[_onset_var].values.flatten()))
+                    elif et and hasattr(et, 'onset_delta_days'):
+                        _slice_entry["onset_mean"] = float(et.onset_delta_days)
+
+                    post.slice_posteriors[_ctx_key] = _slice_entry
+
+                    _kappa_str = ""
+                    if "kappa_mean" in _slice_entry:
+                        _kappa_str = f" kappa={_slice_entry['kappa_mean']:.1f}±{_slice_entry['kappa_sd']:.1f}"
+                    _lat_str = ""
+                    if "mu_mean" in _slice_entry:
+                        _lat_str = f" mu={_slice_entry['mu_mean']:.3f}±{_slice_entry['mu_sd']:.3f}"
+                        if "sigma_mean" in _slice_entry:
+                            _lat_str += f" sigma={_slice_entry['sigma_mean']:.3f}±{_slice_entry['sigma_sd']:.3f}"
+                        if "onset_mean" in _slice_entry:
+                            _lat_str += f" onset={_slice_entry['onset_mean']:.2f}±{_slice_entry['onset_sd']:.2f}"
+                    diagnostics.append(
+                        f"  p_slice {edge_id[:8]}… {_ctx_key}: "
+                        f"{_pred_mean:.4f}±{_pred_std:.4f} "
+                        f"HDI=[{_pred_hdi_lo:.4f}, {_pred_hdi_hi:.4f}]"
+                        f"{_kappa_str}{_lat_str}"
+                    )
+
+            if post.tau_slice_mean is not None:
+                diagnostics.append(
+                    f"  tau_slice {edge_id[:8]}…: {post.tau_slice_mean:.3f}±{post.tau_slice_sd:.3f}"
+                )
+
         # Latency posterior: extract from MCMC trace if latent, else echo prior
         if et.has_latency and ev.latency_prior:
             lp = ev.latency_prior
@@ -840,6 +1172,51 @@ def summarise_posteriors(
                 # Use posterior onset mean as canonical onset_delta_days when latent
                 canonical_onset = onset_post_mean if has_latent_onset else onset
 
+                # Latency dispersion (doc 34): extract kappa_lat if present.
+                # kappa_lat is the timing analogue of kappa for p — it
+                # captures per-interval overdispersion in the discrete-time
+                # hazard via BetaBinomial. Variable name includes obs_type.
+                kappa_lat_name = None
+                for _ot in ("cohort", "window"):
+                    _candidate = f"kappa_lat_{safe_eid}_{_ot}"
+                    if _candidate in trace.posterior:
+                        kappa_lat_name = _candidate
+                        break
+                kappa_lat_mean_val = None
+                kappa_lat_sd_val = None
+                if kappa_lat_name is not None:
+                    _kl_samples = trace.posterior[kappa_lat_name].values.flatten()
+                    kappa_lat_mean_val = float(np.mean(_kl_samples))
+                    kappa_lat_sd_val = float(np.std(_kl_samples))
+
+                # Predictive mu_sd from kappa_lat MC (doc 34).
+                # When kappa_lat is available, simulate BetaBinomial
+                # maturation curves and measure how much mu varies across
+                # realisations. This replaces the epistemic posterior SD
+                # with a proper predictive SD.
+                if kappa_lat_name is not None:
+                    _all_trajs = []
+                    for _co in ev.cohort_obs:
+                        _all_trajs.extend(_co.trajectories)
+                    _onset_s_arr = (onset_samples if has_latent_onset
+                                    else np.full_like(mu_samples, onset))
+                    # Fix #6: match p_samples to kappa_lat obs_type.
+                    # kappa_lat_name is e.g. "kappa_lat_{edge}_window" — the
+                    # obs_type suffix tells us which p to use.
+                    _kl_obs_type = kappa_lat_name.rsplit("_", 1)[-1]  # "window" or "cohort"
+                    _p_for_kl_name = f"p_{_kl_obs_type}_{safe_eid}"
+                    if _p_for_kl_name in trace.posterior:
+                        _p_for_kl = trace.posterior[_p_for_kl_name].values.flatten()
+                    else:
+                        _p_for_kl = samples  # fallback to the main p samples
+                    _pred_mu_sd = _predictive_mu_sd(
+                        mu_samples, sigma_samples, _onset_s_arr,
+                        _p_for_kl, _kl_samples, _all_trajs,
+                        diagnostics, edge_id,
+                    )
+                    if _pred_mu_sd is not None:
+                        mu_sd = _pred_mu_sd
+
                 latency_posteriors[edge_id] = LatencyPosteriorSummary(
                     mu_mean=mu_mean,
                     mu_sd=mu_sd,
@@ -856,11 +1233,15 @@ def summarise_posteriors(
                     onset_hdi_lower=onset_hdi_lower,
                     onset_hdi_upper=onset_hdi_upper,
                     onset_mu_corr=onset_mu_corr,
+                    kappa_lat_mean=kappa_lat_mean_val,
+                    kappa_lat_sd=kappa_lat_sd_val,
                 )
                 diagnostics.append(
                     f"  latency {edge_id[:8]}…: mu={mu_mean:.3f}±{mu_sd:.3f} "
                     f"(prior={lp.mu:.3f}), sigma={sigma_mean:.3f}±{sigma_sd:.3f} "
                     f"(prior={lp.sigma:.3f}), rhat={lat_rhat:.3f}, ess={lat_ess:.0f}"
+                    + (f", kappa_lat={kappa_lat_mean_val:.1f}±{kappa_lat_sd_val:.1f}"
+                       if kappa_lat_mean_val is not None else "")
                 )
                 if has_latent_onset:
                     diagnostics.append(
@@ -991,6 +1372,48 @@ def summarise_posteriors(
         if vname in trace.posterior:
             model_state[vname] = round(float(np.mean(trace.posterior[vname].values.flatten())), 4)
 
+    # Attach LOO-ELPD scores (doc 32) if available
+    if loo_scores:
+        for ps in posteriors:
+            loo = loo_scores.get(ps.edge_id)
+            if loo:
+                ps.elpd = loo.elpd
+                ps.elpd_null = loo.elpd_null
+                ps.delta_elpd = loo.delta_elpd
+                ps.pareto_k_max = loo.pareto_k_max
+                ps.n_loo_obs = loo.n_loo_obs
+        for edge_id, lps in latency_posteriors.items():
+            loo = loo_scores.get(edge_id)
+            if loo:
+                lps.elpd = loo.elpd
+                lps.elpd_null = loo.elpd_null
+                lps.delta_elpd = loo.delta_elpd
+                lps.pareto_k_max = loo.pareto_k_max
+                lps.n_loo_obs = loo.n_loo_obs
+        # Graph-level LOO summary
+        all_loo = list(loo_scores.values())
+        if all_loo:
+            quality.total_delta_elpd = sum(m.delta_elpd for m in all_loo)
+            quality.worst_pareto_k = max(m.pareto_k_max for m in all_loo)
+            quality.n_high_k = sum(1 for m in all_loo if m.pareto_k_max > 0.7)
+
+    # Attach PPC calibration scores (doc 38) if available
+    if calibration_scores:
+        for ps in posteriors:
+            cal = calibration_scores.get(ps.edge_id)
+            if cal:
+                if cal.endpoint_daily:
+                    ps.ppc_coverage_90 = cal.endpoint_daily.coverage_90
+                    ps.ppc_n_obs = cal.endpoint_daily.n_obs
+                if cal.trajectory:
+                    ps.ppc_traj_coverage_90 = cal.trajectory.coverage_90
+                    ps.ppc_traj_n_obs = cal.trajectory.n_obs
+        for edge_id, lps in latency_posteriors.items():
+            cal = calibration_scores.get(edge_id)
+            if cal and cal.trajectory:
+                lps.ppc_traj_coverage_90 = cal.trajectory.coverage_90
+                lps.ppc_traj_n_obs = cal.trajectory.n_obs
+
     return InferenceResult(
         posteriors=posteriors,
         latency_posteriors=latency_posteriors,
@@ -1064,8 +1487,29 @@ def _sample_nutpie(model, config: SamplingConfig, report_progress=None,
         hb_thread.start()
         report_progress("compiling", 0, f"{prefix}Compiling model…")
 
-    compiled_model = nutpie.compile_pymc_model(model)
+    t_compile_start = time.time()
+    n_free = len(model.free_RVs)
+    n_obs = len(model.observed_RVs)
+    n_pot = len(model.potentials)
+    n_det = len(model.deterministics)
+    _backend = "jax" if config.jax_backend else "numba"
+    _grad_backend = "jax" if config.jax_backend else "pytensor"
+    _device_info = ""
+    if config.jax_backend:
+        try:
+            import jax
+            _devices = jax.devices()
+            _device_info = f", jax_devices={[str(d) for d in _devices]}"
+        except Exception:
+            _device_info = ", jax_devices=unknown"
+    print(f"[nutpie-compile] starting: {n_free} free, {n_obs} observed, "
+          f"{n_pot} potentials, {n_det} deterministics, "
+          f"backend={_backend}{_device_info}", flush=True)
+    compiled_model = nutpie.compile_pymc_model(
+        model, backend=_backend, gradient_backend=_grad_backend)
     t_sampling_start = time.time()
+    print(f"[nutpie-compile] done: {int((t_sampling_start - t_compile_start) * 1000)}ms, "
+          f"n_dim={compiled_model.n_dim}", flush=True)
 
     if report_progress:
         report_progress("sampling", 0, f"{prefix}Starting sampler…")
@@ -1155,7 +1599,12 @@ def _sample_nutpie(model, config: SamplingConfig, report_progress=None,
 
         # Build the sampler manually so we can inject our ProgressType.
         # This mirrors what nutpie.sample() does internally.
-        settings = nutpie_lib.PyNutsSettings.Diag(config.random_seed)
+        # Low-rank mass matrix captures parameter correlations (e.g.
+        # tau-eps funnels, onset-mu ridges) that diagonal cannot.
+        # Always on — the warmup overhead is negligible for small models
+        # and the geometry benefit is significant for all but trivial ones.
+        # See doc 38 §Low-rank mass matrix experiment.
+        settings = nutpie_lib.PyNutsSettings.LowRank(config.random_seed)
         settings.num_tune = config.tune
         settings.num_draws = config.draws
         settings.num_chains = config.chains
@@ -1178,8 +1627,8 @@ def _sample_nutpie(model, config: SamplingConfig, report_progress=None,
         compile_ms = int((time.time() - t_phase_start) * 1000)
         phase_tag = f" {phase_label}" if phase_label else ""
         print(f"[nutpie{phase_tag}] cores={cores}, os.cpu_count={os.cpu_count()}, "
-              f"chains={config.chains}, draws={config.draws}, tune={config.tune}, "
-              f"compile={compile_ms}ms", flush=True)
+              f"chains={config.chains}, draws={config.draws}, tune={config.tune}, mass=lowrank, "
+              f"compile={compile_ms}ms, n_dim={compiled_model.n_dim}", flush=True)
 
         sampler = compiled_model._make_sampler(
             settings, init_mean, cores, progress_type, store,
@@ -1218,6 +1667,44 @@ def _sample_nutpie(model, config: SamplingConfig, report_progress=None,
         trace = nutpie.sample(compiled_model, **sample_kwargs)
         heartbeat_stop.set()
 
+    # --- NUTS geometry diagnostics ---
+    sampling_ms = int((time.time() - t_phase_start) * 1000) - compile_ms if 'compile_ms' in dir() else None
+    _nuts_tag = f" {phase_label}" if phase_label else ""
+    if hasattr(trace, "sample_stats"):
+        _ss = trace.sample_stats
+        _diag_parts = []
+        if "depth" in _ss:
+            import numpy as _np
+            _depths = _ss["depth"].values.flatten()
+            _diag_parts.append(
+                f"tree_depth: mean={_np.mean(_depths):.1f}, "
+                f"max={int(_np.max(_depths))}, "
+                f"pct_at_max={100*_np.mean(_depths == _np.max(_depths)):.0f}%"
+            )
+        if "step_size" in _ss:
+            import numpy as _np
+            _steps = _ss["step_size"].values.flatten()
+            _diag_parts.append(f"step_size: mean={_np.mean(_steps):.4f}")
+        if "n_steps" in _ss:
+            import numpy as _np
+            _nsteps = _ss["n_steps"].values.flatten()
+            _diag_parts.append(
+                f"n_steps: mean={_np.mean(_nsteps):.0f}, "
+                f"median={_np.median(_nsteps):.0f}, "
+                f"max={int(_np.max(_nsteps))}"
+            )
+        if "energy" in _ss:
+            import numpy as _np
+            _energy = _ss["energy"].values.flatten()
+            _diag_parts.append(f"energy: mean={_np.mean(_energy):.1f}, sd={_np.std(_energy):.1f}")
+        if sampling_ms is not None:
+            _diag_parts.append(f"sampling_ms={sampling_ms}")
+        if _diag_parts:
+            print(f"[nutpie{_nuts_tag}] NUTS diagnostics: {'; '.join(_diag_parts)}", flush=True)
+        else:
+            # List available keys so we can find the right names
+            print(f"[nutpie{_nuts_tag}] sample_stats keys: {list(_ss.data_vars)}", flush=True)
+
     # Enrich InferenceData with observed/constant data and attrs,
     # same as PyMC's _sample_external_nuts does.
     coords, dims = coords_and_dims_for_inferencedata(model)
@@ -1247,6 +1734,12 @@ def _sample_nutpie(model, config: SamplingConfig, report_progress=None,
         coords=coords,
         dims=dims,
     )
+
+    # Compute per-observation log-likelihoods for LOO-ELPD scoring.
+    # nutpie does not populate log_likelihood during sampling (nutpie#150);
+    # pm.compute_log_likelihood evaluates log p(y_i|θ) for each posterior
+    # draw and each named observation node, populating trace.log_likelihood.
+    pm.compute_log_likelihood(trace, model=model, progressbar=False)
 
     return trace
 

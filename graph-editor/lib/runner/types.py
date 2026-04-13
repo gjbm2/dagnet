@@ -28,27 +28,46 @@ class ScenarioData(BaseModel):
         default_factory=dict,
         description="Parameter overrides for this scenario"
     )
+    effective_query_dsl: Optional[str] = Field(
+        default=None,
+        description="Fully composed temporal/context DSL for this scenario (window, cohort, context, asat)"
+    )
+    candidate_regimes_by_edge: Optional[dict[str, Any]] = Field(
+        default=None,
+        description="Per-edge candidate hash regimes, filtered to this scenario's context dimensions"
+    )
 
 
 class AnalysisRequest(BaseModel):
     """Request to analyze a graph.
-    
-    The query DSL determines what to analyze:
+
+    The analytics_dsl determines what to analyze (the subject):
     - Full path: "from(a).to(b).visited(c)"
     - Partial: "from(a).visitedAny(b,c)"
-    - Constraints only: "visited(x).visited(y)"
+    - Single node: "to(b)"
     - Empty: graph overview
+
+    The effective_query_dsl per scenario carries the temporal/context clause
+    (window, cohort, context, asat). These vary per scenario.
     """
     scenarios: list[ScenarioData] = Field(
         description="Scenarios to analyze (each contains its own graph data)"
     )
+    analytics_dsl: Optional[str] = Field(
+        default=None,
+        description="Analysis subject DSL (from/to/visited). Constant across scenarios."
+    )
     query_dsl: Optional[str] = Field(
         default=None,
-        description="DSL query string (determines analysis type)"
+        description="DEPRECATED — use analytics_dsl (subject) + per-scenario effective_query_dsl (temporal)"
     )
     analysis_type: Optional[str] = Field(
         default=None,
         description="Override automatic analysis type selection"
+    )
+    mece_dimensions: Optional[list[str]] = Field(
+        default=None,
+        description="Context dimensions that are MECE-safe for aggregation (doc 30)"
     )
 
 
@@ -140,7 +159,8 @@ class AnalysisResponse(BaseModel):
         default=None,
         description="Analysis result"
     )
-    query_dsl: Optional[str] = Field(default=None, description="The DSL query used")
+    analytics_dsl: Optional[str] = Field(default=None, description="The analysis subject DSL (from/to/visited)")
+    query_dsl: Optional[str] = Field(default=None, description="DEPRECATED — use analytics_dsl. Echoed for backward compat.")
     error: Optional[dict[str, Any]] = Field(
         default=None,
         description="Error details if success=False"

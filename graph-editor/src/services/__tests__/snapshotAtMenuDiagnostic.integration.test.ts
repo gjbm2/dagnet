@@ -181,7 +181,7 @@ describe('@-menu snapshot diagnostic (zero-mock, real DB)', () => {
           edgeId: string;
           paramId: string;
           signature: string | null;
-          coreHash: string | null;
+          identityHash: string | null;
           shortHash: string | null;
           error: string | null;
         }> = [];
@@ -203,19 +203,19 @@ describe('@-menu snapshot diagnostic (zero-mock, real DB)', () => {
                 edgeId,
                 paramId,
                 signature: sig.signature,
-                coreHash: sig.coreHash,
+                identityHash: sig.identityHash,
                 shortHash,
                 error: null,
               });
             } else {
-              results.push({ edgeId, paramId, signature: null, coreHash: null, shortHash: null, error: 'returned null' });
+              results.push({ edgeId, paramId, signature: null, identityHash: null, shortHash: null, error: 'returned null' });
             }
           } catch (e) {
             results.push({
               edgeId,
               paramId,
               signature: null,
-              coreHash: null,
+              identityHash: null,
               shortHash: null,
               error: String(e),
             });

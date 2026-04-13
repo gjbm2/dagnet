@@ -23,6 +23,7 @@ from runner.lag_model_fitter import (
     fit_model_from_evidence,
 )
 from runner.forecasting_settings import ForecastingSettings
+from runner.lag_distribution_utils import LATENCY_DEFAULT_SIGMA
 
 
 # ─────────────────────────────────────────────────────────────
@@ -186,7 +187,9 @@ class TestFitModelFromEvidence:
         assert 'No evidence' in (result.quality_failure_reason or '')
 
     def test_missing_mean_uses_default_sigma(self):
-        """When mean_lag is None, FE aggregation falls back mean to median, yielding σ=0 (degenerate lognormal)."""
+        """When mean_lag is None, FE aggregation falls back mean to median,
+        yielding a degenerate σ≈0 which the guard replaces with LATENCY_DEFAULT_SIGMA
+        to avoid a point-mass (instant latency) CDF."""
         rows = [
             _row(f'2026-01-{d:02d}', 100, 40, median_lag=5.0, mean_lag=None)
             for d in range(1, 11)
@@ -196,7 +199,7 @@ class TestFitModelFromEvidence:
             r['mean_lag_days'] = None
         result = fit_model_from_evidence(rows, DEFAULTS)
         assert result.quality_ok
-        assert result.sigma == pytest.approx(0.0)
+        assert result.sigma == pytest.approx(LATENCY_DEFAULT_SIGMA)
 
     def test_t95_constraint_widens_sigma(self):
         """Authoritative t95 > moment-fit t95 should widen sigma."""

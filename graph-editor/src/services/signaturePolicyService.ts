@@ -4,7 +4,7 @@
  * ENABLED (29-Jan-26) after implementing structured signatures with subset-aware matching.
  * 
  * The new signature system:
- * - Uses structured signatures with separate coreHash and contextDefHashes
+ * - Uses structured signatures with separate identityHash and contextDefHashes
  * - Supports subset-aware matching: cache with superset of context keys can satisfy query
  * - Fixes the bug where uncontexted queries rejected contexted MECE cache
  * 

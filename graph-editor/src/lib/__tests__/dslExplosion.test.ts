@@ -509,3 +509,78 @@ describe('reordering and mixed nesting', () => {
     expect(sorted(order1)).toEqual(sorted(order2));
   });
 });
+
+// ===========================================================================
+// 8. Uncontexted slice via context() / trailing separator (doc 30 §10)
+// ===========================================================================
+
+describe('uncontexted slice inclusion', () => {
+  it('context(channel);context() produces contexted + uncontexted slices', async () => {
+    const slices = await explodeDSL('window(-90d:).(context(channel);context())');
+    // 3 channel values + 1 uncontexted
+    expect(slices).toHaveLength(4);
+    // Should contain bare window (uncontexted)
+    const bare = slices.filter(s => !s.includes('context('));
+    expect(bare).toHaveLength(1);
+    expect(bare[0]).toMatch(/window\(/);
+    // Should contain 3 channel slices
+    const contexted = slices.filter(s => s.includes('context(channel:'));
+    expect(contexted).toHaveLength(3);
+  });
+
+  it('trailing semicolon produces uncontexted: context(channel);', async () => {
+    const slices = await explodeDSL('window(-90d:).(context(channel);)');
+    expect(slices).toHaveLength(4);
+    const bare = slices.filter(s => !s.includes('context('));
+    expect(bare).toHaveLength(1);
+  });
+
+  it('leading semicolon produces uncontexted: ;context(channel)', async () => {
+    const slices = await explodeDSL('window(-90d:).(;context(channel))');
+    expect(slices).toHaveLength(4);
+    const bare = slices.filter(s => !s.includes('context('));
+    expect(bare).toHaveLength(1);
+  });
+
+  it('or(context(channel),) produces contexted + uncontexted', async () => {
+    const slices = await explodeDSL('window(-90d:).or(context(channel),)');
+    expect(slices).toHaveLength(4);
+    const bare = slices.filter(s => !s.includes('context('));
+    expect(bare).toHaveLength(1);
+  });
+
+  it('or(,context(channel)) produces uncontexted + contexted', async () => {
+    const slices = await explodeDSL('window(-90d:).or(,context(channel))');
+    expect(slices).toHaveLength(4);
+    const bare = slices.filter(s => !s.includes('context('));
+    expect(bare).toHaveLength(1);
+  });
+
+  it('all forms are equivalent', async () => {
+    const form1 = await explodeDSL('window(-90d:).(context(channel);context())');
+    const form2 = await explodeDSL('window(-90d:).(context(channel);)');
+    const form3 = await explodeDSL('window(-90d:).(;context(channel))');
+    const form4 = await explodeDSL('window(-90d:).or(context(channel),)');
+    const form5 = await explodeDSL('window(-90d:).or(,context(channel))');
+    expect(sorted(form1)).toEqual(sorted(form2));
+    expect(sorted(form1)).toEqual(sorted(form3));
+    expect(sorted(form1)).toEqual(sorted(form4));
+    expect(sorted(form1)).toEqual(sorted(form5));
+  });
+
+  it('multi-mode with uncontexted: (window;cohort).(context(channel);context())', async () => {
+    const slices = await explodeDSL('(window(-90d:);cohort(-90d:)).(context(channel);context())');
+    // 3 channel × 2 modes + 2 uncontexted (one per mode) = 8
+    expect(slices).toHaveLength(8);
+    const bare = slices.filter(s => !s.includes('context('));
+    expect(bare).toHaveLength(2); // window + cohort uncontexted
+  });
+
+  it('context() alone with no other context is just the bare slice', async () => {
+    const slices = await explodeDSL('window(-90d:).context()');
+    // context() with no sibling = just the uncontexted slice
+    expect(slices).toHaveLength(1);
+    expect(slices[0]).not.toContain('context(');
+    expect(slices[0]).toMatch(/window\(/);
+  });
+});

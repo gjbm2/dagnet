@@ -174,6 +174,21 @@ python dev-server.py
 - **Local scheduling** — designed for Windows Task Scheduler or cron; no server-side scheduler needed
 - **Daily fetch** — `dailyFetch: true` on a graph enables automatic snapshot accumulation
 
+### CLI (Headless Node.js)
+
+- **Param pack extraction** — produce a param pack for any graph + query DSL from the command line, using the same computation the browser uses
+- **Cache-first** — reads from parameter files on disk (populated by prior browser fetches), no browser required
+- **Full LAG pipeline** — aggregation, evidence/forecast scalars, completeness, blended probabilities, t95/path_t95
+- **Scalar extraction** — `--get "e.edge-id.p.mean"` returns a single bare value for scripting
+- **Multiple formats** — YAML (default), JSON, CSV output to stdout
+
+```bash
+bash graph-ops/scripts/param-pack.sh my-graph "window(-30d:)" --format json
+bash graph-ops/scripts/param-pack.sh my-graph "cohort(1-Jan-26:1-Apr-26)" --get "e.my-edge.p.latency.completeness"
+```
+
+See [`graph-ops/playbooks/cli-param-pack.md`](graph-ops/playbooks/cli-param-pack.md) for full usage.
+
 ---
 
 ## Bayes (Remote Compute)
@@ -226,6 +241,8 @@ dagnet/
 │   │   ├── contexts/           # React contexts
 │   │   ├── hooks/              # Custom hooks
 │   │   ├── services/           # Service layer (48+ modules) — single source of truth for business logic
+│   │   ├── cli/                # CLI tools (Node/tsx, headless — param-pack, etc.)
+│   │   │   └── commands/       # Command modules (paramPack.ts, etc.)
 │   │   ├── lib/                # Client-side libraries (DSL, DAS adapters, graph helpers, share payload)
 │   │   │   └── das/            # Data adapter system (Amplitude, Sheets, PostgreSQL, HTTP)
 │   │   ├── types/              # TypeScript type definitions
@@ -260,6 +277,9 @@ dagnet/
 ├── apps-script/                # Google Apps Script integrations
 ├── bayes/                      # Modal compute worker (Bayesian inference)
 │   └── app.py                  # Modal app: /submit, /status endpoints + fit_graph worker
+├── graph-ops/                  # Graph operations tooling
+│   ├── playbooks/              # Workflow guides (graph creation, validation, CLI usage)
+│   └── scripts/                # Bash wrappers (validate-graph, param-pack, status, etc.)
 ├── scripts/                    # Workspace-level scripts (setup-workspace, extract-mark-logs)
 ├── deploy-modal.sh             # Deploy bayes/app.py to Modal
 ├── dev-start.sh                # Quick-start (frontend + backend in tmux)

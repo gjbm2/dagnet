@@ -1172,7 +1172,7 @@ export async function fetchItems(
       // Without this, each item clones the ORIGINAL graph, losing sibling rebalancing
       const currentGraph = getUpdatedGraph?.() ?? latestGraph ?? graph;
 
-      const result = await fetchSingleItemInternal(
+      let result = await fetchSingleItemInternal(
         effectiveItems[i],
         itemOptions,
         currentGraph,
@@ -1181,11 +1181,72 @@ export async function fetchItems(
         getUpdatedGraph
       );
 
-      // --- Rate limit detection + countdown + retry ---
+      // --- Timeout detection + quick retry with backoff ---
       if (
         !result.success &&
         result.error &&
-        rateLimiter.isRateLimitError(result.error.message)
+        rateLimiter.isTimeoutError(result.error.message) &&
+        !rateLimiter.isExplicitRateLimitError(result.error.message)
+      ) {
+        const MAX_TIMEOUT_RETRIES = 2;
+        const TIMEOUT_BACKOFF_BASE_MS = 15_000; // 15s, 30s for manual runs
+        let retrySucceeded = false;
+
+        for (let attempt = 1; attempt <= MAX_TIMEOUT_RETRIES; attempt++) {
+          const backoffMs = TIMEOUT_BACKOFF_BASE_MS * Math.pow(2, attempt - 1);
+          if (batchLogId) {
+            sessionLogService.addChild(
+              batchLogId,
+              'warning',
+              'TIMEOUT_RETRY',
+              `Item ${effectiveItems[i].name} timed out — retry ${attempt}/${MAX_TIMEOUT_RETRIES} after ${Math.round(backoffMs / 1000)}s`,
+              result.error.message,
+            );
+          }
+
+          await new Promise(resolve => setTimeout(resolve, backoffMs));
+
+          const retryGraph = getUpdatedGraph?.() ?? latestGraph ?? graph;
+          const retryResult = await fetchSingleItemInternal(
+            effectiveItems[i],
+            itemOptions,
+            retryGraph,
+            trackingSetGraph,
+            effectiveDSL,
+            getUpdatedGraph,
+          );
+
+          if (retryResult.success) {
+            results.push(retryResult);
+            successCount++;
+            retrySucceeded = true;
+            break;
+          }
+
+          // If retry got a 429, stop retrying — fall through to cooldown
+          if (retryResult.error && rateLimiter.isExplicitRateLimitError(retryResult.error.message)) {
+            // Use the 429 result for the cooldown path below
+            result = retryResult;
+            break;
+          }
+
+          // Last attempt still failed
+          if (attempt === MAX_TIMEOUT_RETRIES) {
+            results.push(retryResult);
+            errorCount++;
+            retrySucceeded = true; // Not really "succeeded" but handled — skip cooldown
+          }
+        }
+
+        if (retrySucceeded) continue;
+        // If we get here, a retry returned a 429 — fall through to cooldown below
+      }
+
+      // --- Explicit rate limit (429) detection + countdown + retry ---
+      if (
+        !result.success &&
+        result.error &&
+        rateLimiter.isExplicitRateLimitError(result.error.message)
       ) {
         // Don't push the failed result yet — we'll retry after countdown.
         const cooldownMinutes = getEffectiveRateLimitCooloffMinutes();
@@ -1798,7 +1859,7 @@ export async function runStage2EnhancementsAndInboundN(
 
           // Stash FE topo pass outputs so the BE topo pass can log a complete
           // parity fixture (BE inputs + FE outputs) via console mirroring.
-          if (import.meta.env.DEV && typeof window !== 'undefined') {
+          if (import.meta.env?.DEV && typeof window !== 'undefined') {
             (window as any).__feTopoFixtureOutputs = {
               edges_processed: lagResult.edgesProcessed,
               edges_with_lag: lagResult.edgesWithLAG,
@@ -2323,7 +2384,7 @@ export function checkDSLNeedsFetch(dsl: string, graph: Graph): CacheCheckResult 
   // - DEV build
   // - URL contains ?e2e=1
   try {
-    if (import.meta.env.DEV && typeof window !== 'undefined') {
+    if (import.meta.env?.DEV && typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
       if (params.has('e2e')) {
         return { needsFetch: false, items: [] };

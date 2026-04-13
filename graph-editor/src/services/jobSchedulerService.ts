@@ -557,8 +557,18 @@ class JobSchedulerService {
       this.routeUIUpdate(ij, 'cancelled');
       this.onJobTerminal(ij);
       this.emit();
+    } else if (ij.state.phase === 'running') {
+      // Show immediate feedback while waiting for runFn to check shouldAbort().
+      const bannerId = this.getBannerId(ij.def);
+      if (bannerId) {
+        bannerManagerService.setBanner({
+          id: bannerId,
+          priority: bannerId === 'automation' ? 100 : 60,
+          label: 'Stopping…',
+          detail: 'Waiting for current operation to finish',
+        });
+      }
     }
-    // If running, the runFn will check shouldAbort() and exit.
   }
 
   /**

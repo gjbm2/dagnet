@@ -3694,9 +3694,9 @@ export class IntegrityCheckService {
 
             // Build hash_groups from plausible signatures + equivalence closures
             const hashGroups = sigs.map(sig => {
-              const closure = getClosureSet(sig.coreHash, mappings);
+              const closure = getClosureSet(sig.identityHash, mappings);
               return {
-                core_hash: sig.coreHash,
+                core_hash: sig.identityHash,
                 ...(closure.length > 0 ? { equivalent_hashes: closure } : {}),
               };
             });

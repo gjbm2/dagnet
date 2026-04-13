@@ -413,6 +413,216 @@ class TestVisibilityMode:
         assert scenario_values['current']['probability_label'] == 'Probability'
 
 
+def build_diamond_graph():
+    """
+    Diamond graph for visitedAny tests:
+        A → B → C → D → E
+        A → F → G → C
+
+    B and F are siblings (disjoint branches from A, converging at C).
+    """
+    G = nx.DiGraph()
+    G.add_node('a', is_entry=True, absorbing=False, label='A')
+    G.add_node('b', is_entry=False, absorbing=False, label='B')
+    G.add_node('c', is_entry=False, absorbing=False, label='C')
+    G.add_node('d', is_entry=False, absorbing=False, label='D')
+    G.add_node('e', is_entry=False, absorbing=True, label='E')
+    G.add_node('f', is_entry=False, absorbing=False, label='F')
+    G.add_node('g', is_entry=False, absorbing=False, label='G')
+
+    G.add_edge('a', 'b', p=0.6, cost_gbp=0, labour_cost=0)
+    G.add_edge('a', 'f', p=0.4, cost_gbp=0, labour_cost=0)
+    G.add_edge('b', 'c', p=1.0, cost_gbp=0, labour_cost=0)
+    G.add_edge('f', 'g', p=1.0, cost_gbp=0, labour_cost=0)
+    G.add_edge('g', 'c', p=1.0, cost_gbp=0, labour_cost=0)
+    G.add_edge('c', 'd', p=1.0, cost_gbp=0, labour_cost=0)
+    G.add_edge('d', 'e', p=1.0, cost_gbp=0, labour_cost=0)
+
+    return G
+
+
+class TestVisitedAnyGroupedStages:
+    """Test visitedAny grouped stage emission in run_path / run_conversion_funnel."""
+
+    def test_grouped_stage_produces_composite_key(self):
+        """from(a).to(e).visitedAny(b,f).visited(d) → 4 stages, not 5."""
+        from lib.runner.runners import run_conversion_funnel
+        G = build_diamond_graph()
+
+        result = run_conversion_funnel(
+            G, 'a', 'e',
+            intermediate_nodes=['b', 'f', 'd'],
+            visited_any_groups=[['b', 'f']],
+        )
+
+        # Should have 4 logical stages: a, visitedAny:b,f, d, e
+        stage_keys = list(result['dimension_values']['stage'].keys())
+        assert len(stage_keys) == 4
+        assert 'a' in stage_keys
+        assert 'e' in stage_keys
+        assert 'd' in stage_keys
+
+        # One composite key
+        composite_keys = [k for k in stage_keys if k.startswith('visitedAny:')]
+        assert len(composite_keys) == 1
+        composite = composite_keys[0]
+        assert 'b' in composite and 'f' in composite
+
+    def test_grouped_stage_has_member_rows(self):
+        """Grouped stage emits one row per member per scenario."""
+        from lib.runner.runners import run_conversion_funnel
+        G = build_diamond_graph()
+
+        result = run_conversion_funnel(
+            G, 'a', 'e',
+            intermediate_nodes=['b', 'f', 'd'],
+            visited_any_groups=[['b', 'f']],
+        )
+
+        composite_keys = [k for k in result['dimension_values']['stage'] if k.startswith('visitedAny:')]
+        composite = composite_keys[0]
+
+        # Filter rows for the composite stage
+        group_rows = [r for r in result['data'] if r['stage'] == composite and r['scenario_id'] == 'current']
+        assert len(group_rows) == 2  # one per member
+
+        members = {r['stage_member'] for r in group_rows}
+        assert members == {'b', 'f'}
+
+    def test_grouped_stage_member_probabilities(self):
+        """Member probabilities are individually computed from start."""
+        from lib.runner.runners import run_conversion_funnel
+        G = build_diamond_graph()
+
+        result = run_conversion_funnel(
+            G, 'a', 'e',
+            intermediate_nodes=['b', 'f', 'd'],
+            visited_any_groups=[['b', 'f']],
+        )
+
+        composite_keys = [k for k in result['dimension_values']['stage'] if k.startswith('visitedAny:')]
+        composite = composite_keys[0]
+
+        group_rows = [r for r in result['data'] if r['stage'] == composite and r['scenario_id'] == 'current']
+        probs = {r['stage_member']: r['probability'] for r in group_rows}
+
+        assert probs['b'] == pytest.approx(0.6)
+        assert probs['f'] == pytest.approx(0.4)
+        # Sum = 1.0 (all traffic from a goes to b or f)
+        assert sum(probs.values()) == pytest.approx(1.0)
+
+    def test_grouped_stage_dimension_values(self):
+        """dimension_values.stage for composite has is_group, members, member_labels."""
+        from lib.runner.runners import run_conversion_funnel
+        G = build_diamond_graph()
+
+        result = run_conversion_funnel(
+            G, 'a', 'e',
+            intermediate_nodes=['b', 'f', 'd'],
+            visited_any_groups=[['b', 'f']],
+        )
+
+        composite_keys = [k for k in result['dimension_values']['stage'] if k.startswith('visitedAny:')]
+        composite = composite_keys[0]
+        dim = result['dimension_values']['stage'][composite]
+
+        assert dim['is_group'] is True
+        assert set(dim['members']) == {'b', 'f'}
+        assert dim['member_labels']['b'] == 'B'
+        assert dim['member_labels']['f'] == 'F'
+        assert dim['name'] == 'B / F'
+
+    def test_non_group_stages_unchanged(self):
+        """Solo stages (a, d, e) have no is_group flag or stage_member."""
+        from lib.runner.runners import run_conversion_funnel
+        G = build_diamond_graph()
+
+        result = run_conversion_funnel(
+            G, 'a', 'e',
+            intermediate_nodes=['b', 'f', 'd'],
+            visited_any_groups=[['b', 'f']],
+        )
+
+        solo_rows = [r for r in result['data'] if r['stage'] in ('a', 'd', 'e') and r['scenario_id'] == 'current']
+        for row in solo_rows:
+            assert 'stage_member' not in row
+
+        # dimension_values for solo stages should NOT have is_group
+        for stage_key in ('a', 'd', 'e'):
+            dim = result['dimension_values']['stage'][stage_key]
+            assert 'is_group' not in dim
+
+    def test_single_member_group_treated_as_plain(self):
+        """visitedAny with single member degenerates to a plain stage."""
+        from lib.runner.runners import run_conversion_funnel
+        G = build_diamond_graph()
+
+        result = run_conversion_funnel(
+            G, 'a', 'e',
+            intermediate_nodes=['b', 'd'],
+            visited_any_groups=[['b']],
+        )
+
+        # Should be plain stages: a, b, d, e — no composite key
+        stage_keys = list(result['dimension_values']['stage'].keys())
+        composite_keys = [k for k in stage_keys if k.startswith('visitedAny:')]
+        assert len(composite_keys) == 0
+        assert 'b' in stage_keys
+
+    def test_no_groups_backward_compatible(self):
+        """Without visited_any_groups, behaviour is identical to before."""
+        from lib.runner.runners import run_conversion_funnel
+        G = build_diamond_graph()
+
+        result = run_conversion_funnel(
+            G, 'a', 'e',
+            intermediate_nodes=['b', 'd'],
+        )
+
+        stage_keys = list(result['dimension_values']['stage'].keys())
+        assert len(stage_keys) == 4  # a, b, d, e
+        assert all(isinstance(k, str) and not k.startswith('visitedAny:') for k in stage_keys)
+
+
+class TestBranchSpecificWarnings:
+    """Test branch-specific intermediate detection."""
+
+    def test_branch_specific_g_warned(self):
+        """g is only reachable via f, not b — should produce a warning."""
+        from lib.runner.runners import run_conversion_funnel
+        G = build_diamond_graph()
+
+        # DSL: from(a).to(e).visitedAny(b,f).visited(g).visited(d)
+        result = run_conversion_funnel(
+            G, 'a', 'e',
+            intermediate_nodes=['b', 'f', 'g', 'd'],
+            visited_any_groups=[['b', 'f']],
+        )
+
+        warnings = result['metadata'].get('warnings', [])
+        assert len(warnings) >= 1
+        g_warnings = [w for w in warnings if w['node'] == 'g']
+        assert len(g_warnings) == 1
+        assert g_warnings[0]['type'] == 'branch_specific_intermediate'
+        assert 'f' in g_warnings[0]['reachable_from']
+        assert 'b' not in g_warnings[0]['reachable_from']
+
+    def test_no_warning_for_shared_intermediates(self):
+        """d is reachable from both b and f (via c) — no warning."""
+        from lib.runner.runners import run_conversion_funnel
+        G = build_diamond_graph()
+
+        result = run_conversion_funnel(
+            G, 'a', 'e',
+            intermediate_nodes=['b', 'f', 'd'],
+            visited_any_groups=[['b', 'f']],
+        )
+
+        warnings = result['metadata'].get('warnings', [])
+        d_warnings = [w for w in warnings if w['node'] == 'd']
+        assert len(d_warnings) == 0
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
 

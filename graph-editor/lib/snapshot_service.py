@@ -130,35 +130,73 @@ _CACHE_MAX_ENTRIES = 256
 
 _cache: Dict[str, Tuple[float, Any]] = {}   # key -> (expiry_timestamp, result)
 _cache_lock = threading.Lock()
-_cache_stats = {"hits": 0, "misses": 0, "evictions": 0, "invalidations": 0}
+_cache_stats = {"hits": 0, "misses": 0, "evictions": 0, "invalidations": 0, "bypasses": 0}
+
+# Thread-local bypass flag — set via set_cache_bypass() or cache_bypass_ctx().
+_tls = threading.local()
+
+_CACHE_LOG = bool(os.environ.get('DAGNET_CACHE_LOG'))
+
+
+def set_cache_bypass(bypass: bool = True) -> None:
+    """Set the per-thread cache bypass flag (for no-cache requests)."""
+    _tls.bypass = bypass
+
+
+def _is_cache_bypassed() -> bool:
+    return getattr(_tls, 'bypass', False)
+
+
+class cache_bypass_ctx:
+    """Context manager that sets cache bypass for the current thread."""
+    def __enter__(self):
+        self._prev = getattr(_tls, 'bypass', False)
+        _tls.bypass = True
+        return self
+    def __exit__(self, *exc):
+        _tls.bypass = self._prev
 
 
 def _cache_key(fn_name: str, *args, **kwargs) -> str:
-    """Deterministic cache key from function name + arguments."""
+    """Deterministic cache key from function name + arguments.
+    Key is prefixed with fn_name for log readability."""
     raw = json.dumps(
         {"fn": fn_name, "a": args, "kw": kwargs},
         sort_keys=True, default=str
     )
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
+    return f"{fn_name}:{digest}"
 
 
 def _cache_get(key: str) -> Tuple[bool, Any]:
-    """Return (hit, value).  Expired entries are treated as misses."""
+    """Return (hit, value).  Expired entries are treated as misses.
+    Respects per-thread bypass flag."""
+    fn = key.split(':')[0] if ':' in key else key[:24]
+    if _is_cache_bypassed():
+        with _cache_lock:
+            _cache_stats["bypasses"] += 1
+        print(f"[snapshot_cache] BYPASS {fn}")
+        return False, None
     with _cache_lock:
         entry = _cache.get(key)
         if entry is not None:
             expiry, value = entry
             if _time.time() < expiry:
                 _cache_stats["hits"] += 1
+                print(f"[snapshot_cache] HIT {fn} ({len(_cache)} entries)")
                 return True, value
             # Expired — remove.
             del _cache[key]
         _cache_stats["misses"] += 1
+        print(f"[snapshot_cache] MISS {fn} ({len(_cache)} entries)")
         return False, None
 
 
 def _cache_put(key: str, value: Any, ttl_s: int = _CACHE_DEFAULT_TTL_S) -> None:
-    """Store a value with TTL.  Evicts oldest entries if over capacity."""
+    """Store a value with TTL.  Evicts oldest entries if over capacity.
+    Skips storage when bypass is active."""
+    if _is_cache_bypassed():
+        return
     with _cache_lock:
         _cache[key] = (_time.time() + ttl_s, value)
         # Simple eviction: if over capacity, drop oldest (earliest expiry).
@@ -769,6 +807,84 @@ def query_snapshots_for_sweep(
         _cache_put(ck, rows)
         return rows
 
+
+def query_snapshots_for_sweep_batch(
+    core_hashes: List[str],
+    slice_keys: Optional[List[str]] = None,
+    anchor_from: Optional[date] = None,
+    anchor_to: Optional[date] = None,
+    sweep_from: Optional[date] = None,
+    sweep_to: Optional[date] = None,
+    limit: int = 500000,
+) -> Dict[str, List[Dict[str, Any]]]:
+    """
+    Batch variant of query_snapshots_for_sweep: one DB round-trip for all
+    core_hashes, results grouped by core_hash.
+
+    All subjects in a Bayes fit share the same pinnedDSL (same date ranges,
+    same slice_keys). Only core_hash varies. This collapses N per-subject
+    queries into one.
+
+    See: docs/current/project-bayes/33-snapshot-query-batching.md
+    """
+    if not core_hashes:
+        return {}
+
+    unique_hashes = list(set(core_hashes))
+
+    with _pooled_conn() as conn:
+        cur = conn.cursor()
+
+        query = """
+            SELECT
+                param_id, core_hash, slice_key, anchor_day, retrieved_at,
+                A as a, X as x, Y as y,
+                median_lag_days, mean_lag_days,
+                anchor_median_lag_days, anchor_mean_lag_days,
+                onset_delta_days
+            FROM snapshots
+            WHERE core_hash = ANY(%s)
+        """
+        params: List[Any] = [unique_hashes]
+
+        if slice_keys is not None:
+            parts: List[str] = []
+            _append_slice_filter_sql(sql_parts=parts, params=params, slice_keys=slice_keys)
+            if parts:
+                query += " AND " + " AND ".join(parts)
+
+        if anchor_from is not None:
+            query += " AND anchor_day >= %s"
+            params.append(anchor_from)
+        if anchor_to is not None:
+            query += " AND anchor_day <= %s"
+            params.append(anchor_to)
+
+        if sweep_from is not None:
+            query += " AND retrieved_at >= %s"
+            params.append(datetime.combine(sweep_from, datetime.min.time()))
+        if sweep_to is not None:
+            query += " AND retrieved_at < %s"
+            from datetime import timedelta
+            params.append(datetime.combine(sweep_to + timedelta(days=1), datetime.min.time()))
+
+        query += " ORDER BY core_hash, anchor_day, slice_key, retrieved_at"
+        query += f" LIMIT {int(limit)}"
+
+        cur.execute(query, params)
+        columns = [desc[0] for desc in cur.description]
+
+        grouped: Dict[str, List[Dict[str, Any]]] = {}
+        for row_tuple in cur.fetchall():
+            row = dict(zip(columns, row_tuple))
+            if row.get('anchor_day') and hasattr(row['anchor_day'], 'isoformat'):
+                row['anchor_day'] = row['anchor_day'].isoformat()
+            if row.get('retrieved_at') and hasattr(row['retrieved_at'], 'isoformat'):
+                row['retrieved_at'] = row['retrieved_at'].isoformat()
+            ch = row.get('core_hash', '')
+            grouped.setdefault(ch, []).append(row)
+
+        return grouped
 
 
 def get_batch_inventory(param_ids: List[str]) -> Dict[str, Dict[str, Any]]:

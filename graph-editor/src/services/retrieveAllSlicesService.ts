@@ -936,10 +936,166 @@ class RetrieveAllSlicesService {
             
           } catch (err) {
             const errorMessage = err instanceof Error ? err.message : String(err);
-            
-            // Check if this is a rate limit or timeout error.
-            // Amplitude can express throttling as an explicit 429 OR as a hung
-            // request that times out (~30s).  Both trigger cooldown + retry.
+
+            // -----------------------------------------------------------
+            // Timeout errors: retry indefinitely with exponential backoff.
+            // A timeout is NOT a rate limit — never enter 45-min cooldown.
+            // Backoff: 30s → 60s → 120s → 240s → cap at 5 min.
+            // Only stop if: it succeeds, user aborts, or we get a real 429.
+            // -----------------------------------------------------------
+            if (rateLimiter.isTimeoutError(errorMessage) && !rateLimiter.isExplicitRateLimitError(errorMessage)) {
+              const TIMEOUT_BACKOFF_BASE_MS = 30_000;
+              const TIMEOUT_BACKOFF_MAX_MS = 5 * 60_000; // 5 min cap
+              let retrySucceeded = false;
+              let gotExplicit429 = false;
+              let attempt = 0;
+
+              while (true) {
+                attempt++;
+                const backoffMs = Math.min(
+                  TIMEOUT_BACKOFF_BASE_MS * Math.pow(2, attempt - 1),
+                  TIMEOUT_BACKOFF_MAX_MS,
+                );
+                const backoffLabel = `${Math.round(backoffMs / 1000)}s`;
+
+                sessionLogService.addChild(
+                  logOpId,
+                  'warning',
+                  'TIMEOUT_RETRY',
+                  `[${sliceDSL}] ${planItem.itemKey} timed out — retry ${attempt} after ${backoffLabel}`,
+                  errorMessage,
+                  { itemKey: planItem.itemKey, attempt, backoffMs }
+                );
+
+                await new Promise(resolve => setTimeout(resolve, backoffMs));
+
+                if (shouldAbort?.()) {
+                  aborted = true;
+                  break;
+                }
+
+                try {
+                  const g = getGraph();
+                  if (!g) throw new Error('Graph not available for retry');
+
+                  const scopeSKey = getScopeSKey(planItem);
+                  const itemRetrievalBatchAt = getBatchAtForScopeS(scopeSKey);
+                  const bustCacheForThisCall = bustCache || forceBustCacheByScopeS.has(scopeSKey);
+                  const [type, objectId, targetId, slot, conditionalIndexStr] = planItem.itemKey.split(':');
+                  const conditionalIndex =
+                    typeof conditionalIndexStr === 'string' && conditionalIndexStr !== ''
+                      ? Number(conditionalIndexStr)
+                      : undefined;
+
+                  const retryResult =
+                    planItem.type === 'case'
+                      ? await dataOperationsService.getFromSource({
+                          objectType: 'case',
+                          objectId,
+                          targetId,
+                          graph: g,
+                          setGraph: simulate ? (() => {}) : trackingSetGraph,
+                          bustCache: bustCacheForThisCall,
+                          currentDSL: sliceDSL,
+                          dontExecuteHttp: simulate,
+                          onCacheAnalysis: () => {},
+                          enforceAtomicityScopeS: isAutomated === true,
+                          retrievalBatchAt: itemRetrievalBatchAt,
+                        } as any)
+                      : await dataOperationsService.getFromSource({
+                          objectType: 'parameter',
+                          objectId,
+                          targetId,
+                          graph: g,
+                          setGraph: simulate ? (() => {}) : trackingSetGraph,
+                          paramSlot: slot || undefined,
+                          conditionalIndex,
+                          bustCache: bustCacheForThisCall,
+                          currentDSL: sliceDSL,
+                          targetSlice: sliceDSL,
+                          dontExecuteHttp: simulate,
+                          skipCohortBounding: true,
+                          overrideFetchWindows: planItem.windows.map((w) => ({ start: w.start, end: w.end })),
+                          onCacheAnalysis: () => {},
+                          enforceAtomicityScopeS: isAutomated === true,
+                          retrievalBatchAt: itemRetrievalBatchAt,
+                        } as any);
+
+                  // Retry succeeded
+                  forceBustCacheByScopeS.delete(scopeSKey);
+                  sliceSuccess++;
+                  runningTotalProcessed++;
+
+                  if (simulate) {
+                    sliceFetched++;
+                    totalApiFetches++;
+                    sliceDaysFetched += plannedDaysToFetch;
+                    totalDaysFetched += plannedDaysToFetch;
+                  } else if (retryResult.cacheHit) {
+                    sliceCached++;
+                    totalCacheHits++;
+                  } else {
+                    sliceFetched++;
+                    totalApiFetches++;
+                    sliceDaysFetched += retryResult.daysFetched;
+                    totalDaysFetched += retryResult.daysFetched;
+                  }
+
+                  executionRows.push({
+                    itemKey: planItem.itemKey,
+                    classificationPlanned: planItem.classification,
+                    classificationExecuted: 'executed',
+                    plannedWindows: planItem.windows.map(w => ({ ...w })),
+                    cacheHit: simulate ? false : retryResult.cacheHit,
+                    daysFetched: simulate ? plannedDaysToFetch : retryResult.daysFetched,
+                    dryRun: simulate,
+                  });
+
+                  sessionLogService.addChild(
+                    logOpId,
+                    'success',
+                    'TIMEOUT_RETRY_OK',
+                    `[${sliceDSL}] ${planItem.itemKey} succeeded on retry ${attempt}`,
+                  );
+
+                  retrySucceeded = true;
+                  break;
+                } catch (retryErr) {
+                  const retryMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+
+                  // If the retry got an explicit 429, break out — let cooldown handle it
+                  if (rateLimiter.isExplicitRateLimitError(retryMsg)) {
+                    sessionLogService.addChild(
+                      logOpId,
+                      'warning',
+                      'TIMEOUT_RETRY_GOT_429',
+                      `[${sliceDSL}] ${planItem.itemKey} retry ${attempt} got 429 — switching to cooldown`,
+                      retryMsg,
+                    );
+                    gotExplicit429 = true;
+                    break;
+                  }
+
+                  // Still a timeout — loop continues with increased backoff
+                }
+              }
+
+              if (aborted) break;
+              if (retrySucceeded) continue;
+              if (!gotExplicit429) {
+                // Should only reach here if aborted — but guard anyway
+                continue;
+              }
+
+              // Got a 429 during timeout retries — fall through to cooldown below.
+            }
+
+            // -----------------------------------------------------------
+            // Explicit rate limit (429): cooldown path.
+            // Reached when: (a) original error was a 429, or (b) a timeout
+            // retry escalated after receiving a 429.
+            // Pure timeouts never reach here — they're handled entirely above.
+            // -----------------------------------------------------------
             if (rateLimiter.isRateLimitError(errorMessage)) {
               if (isAutomated) {
                 // Automated (cron) run: wait 45 minutes and retry
@@ -952,19 +1108,19 @@ class RetrieveAllSlicesService {
                   errorMessage,
                   { itemKey: planItem.itemKey, cooldownMinutes }
                 );
-                
+
                 // Run cooldown with countdown
                 const cooldownResult = await runRateLimitCooldown({
                   cooldownMinutes,
                   shouldStop: shouldAbort ?? (() => false),
                   logOpId,
                 });
-                
+
                 if (cooldownResult === 'aborted') {
                   aborted = true;
                   break;
                 }
-                
+
                 // After 61+ min cooloff, restart S (param × slice × hash):
                 // - mint a NEW retrieved_at (batch timestamp)
                 // - re-fetch from the start of S (ignore cache) so S does not
@@ -982,7 +1138,7 @@ class RetrieveAllSlicesService {
                 // Manual run: abort immediately with clear explanation
                 const remainingInSlice = fetchPlan.items.length - itemIdx - 1;
                 const remainingSlices = effectiveSlices.length - sliceIdx - 1;
-                
+
                 sessionLogService.addChild(
                   logOpId,
                   'error',
@@ -992,14 +1148,14 @@ class RetrieveAllSlicesService {
                   `All data fetched so far has been saved to files and the snapshot DB. ` +
                   `Run "Retrieve All" again later to continue from where you left off (already-fetched items will be skipped).\n\n` +
                   `Error: ${errorMessage}`,
-                  { 
-                    itemKey: planItem.itemKey, 
+                  {
+                    itemKey: planItem.itemKey,
                     remainingInSlice,
                     remainingSlices,
                     completedSlices: sliceIdx,
                   }
                 );
-                
+
                 sliceErrors++;
                 aborted = true;
                 break;

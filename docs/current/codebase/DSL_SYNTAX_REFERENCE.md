@@ -65,7 +65,7 @@ Examples:
 | `context(key:value)` | Colon-separated key:value | Segment filter (e.g. `context(channel:google)`). |
 | `context(key)` | Key only (no value) | **Enumerate** all values — triggers Cartesian expansion in `explodeDSL`. |
 | `context(key:)` | Key with empty value | **Per-key clear** — removes inherited context for this key in scenario layering. |
-| `context()` | Empty | **Whole clear** — removes all inherited context. |
+| `context()` | Empty | **Whole clear** in scenario layering. **Uncontexted slice** in pinned DSL — see below. |
 | `contextAny(k1:v1, k2:v2, ...)` | Comma-separated key:value pairs | OR over context segments. |
 
 ### Time Windows
@@ -143,6 +143,30 @@ context(channel).context(browser) →
   context(channel:bing).context(browser:safari)
 ```
 
+### Uncontexted Slice in Pinned DSL
+
+In a pinned DSL (graph `dataInterestsDSL`), an empty element in a
+semicolon or `or()` list means "also fetch the uncontexted
+aggregate". All of the following forms are equivalent:
+
+```
+(window(-90d:)).(context(channel);context())    → 3 channel + 1 bare
+(window(-90d:)).(context(channel);)             → same (trailing ;)
+(window(-90d:)).(;context(channel))             → same (leading ;)
+(window(-90d:)).or(context(channel),)            → same (trailing ,)
+(window(-90d:)).or(,context(channel))            → same (leading ,)
+```
+
+`context()` in a semicolon/or position is treated as "include the
+uncontexted slice" — the temporal clause is emitted without any
+context qualifier. This is handled by `explodeDSL` in
+`dslExplosion.ts`.
+
+Note: `context()` retains its "whole clear" meaning in scenario
+delta layering (`composeConstraints`). The disambiguation is by
+context — pinned DSL explosion vs scenario composition use
+different code paths.
+
 ### Context Merging in Scenario Layers
 
 Context supports set/enumerate/clear operations during scenario stacking
@@ -196,6 +220,69 @@ detail):
 3. **Data retrieval** — construct queries for external data sources to fetch
    n/k counts. Critical for multi-parent edges where `exclude()` isolates
    the direct path.
+
+---
+
+## DSL Roles in the Analysis Request Flow
+
+When the FE commissions a snapshot analysis, DSL strings appear in **three
+distinct roles** on the request. Confusing them is a common source of bugs.
+
+### 1. `analytics_dsl` (data subject — per scenario)
+
+The path being analysed: `from(x).to(y)`. Identifies *which edge(s)* to query
+in the snapshot DB. Constant across scenarios for a given chart — it describes
+the data subject, not the temporal window.
+
+- **Set by**: `contentItem.analytics_dsl` (canvas analysis content item)
+- **Sent as**: `scenario.analytics_dsl` in the request
+- **Used by BE**: path resolution in `resolve_analysis_subjects()` (doc 31)
+- **Contains**: `from()`, `to()`, path constraints — never temporal clauses
+
+### 2. `effective_query_dsl` (temporal/context clause — per scenario)
+
+The temporal window, context segmentation, and asat clause: e.g.
+`window(-90d:)`, `cohort(1-Jan-26:1-Apr-26).context(channel:google)`. Varies
+per scenario — each live scenario can have a different window or context.
+
+- **Set by**: scenario's `effective_query_dsl`, derived from `currentDSL` +
+  scenario inheritance + `chartCurrentLayerDsl`
+  (see `scenarioRegenerationService.ts`)
+- **Sent as**: `scenario.effective_query_dsl` per scenario in the request
+- **Used by BE**: time bounds extraction, snapshot DB date filtering.
+  The BE composes `analytics_dsl` + `effective_query_dsl` into a full DSL
+  for `resolve_analysis_subjects()`.
+- **Contains**: `window()`, `cohort()`, `context()`, `asat()` — never `from()`/`to()`
+
+There is no top-level `query_dsl` on the request. The subject
+(`analytics_dsl`) is top-level; the temporal (`effective_query_dsl`) is
+per-scenario. Both snapshot and non-snapshot analysis types use the same
+shape. The BE reads `analytics_dsl` for subject resolution (standard
+runner) and composes it with each scenario's `effective_query_dsl` for
+snapshot subject resolution (doc 31). The `query_dsl` field is deprecated
+and accepted only for backward compatibility with old clients (8-Apr-26).
+
+### 3. `dataInterestsDSL` (pinned query — graph-level)
+
+The nightly retrieval template stored on the graph itself. Controls which
+slices the daily batch runner fetches and caches. Uses enumeration syntax
+(`context(channel)` without a value) to generate Cartesian products of slices.
+
+- **Set by**: Pinned Query Modal (`PinnedQueryModal.tsx`)
+- **Stored on**: `graph.dataInterestsDSL`
+- **Used by**: `candidateRegimeService.ts`, `useBayesTrigger.ts`,
+  nightly automation
+- **Contains**: `window()`, `context()` with enumeration, `or()` — typically
+  no `from()`/`to()`
+
+### Shorthand composition
+
+In the CLI or single-scenario cases, `analytics_dsl` and `query_dsl` are
+sometimes concatenated for convenience: `from(x).to(y).window(-90d:)`. This is
+a valid DSL string but masks the fact that the subject and temporal parts serve
+different purposes and vary independently. The BE must be able to handle them
+arriving separately (per-scenario `analytics_dsl` + top-level `query_dsl`) as
+the canonical form.
 
 ---
 

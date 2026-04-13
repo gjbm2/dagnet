@@ -1,11 +1,11 @@
 # Project Bayes: Programme
 
 **Status**: Active
-**Updated**: 31-Mar-26
+**Updated**: 12-Apr-26
 **Purpose**: Phased delivery plan for Project Bayes. This doc owns sequencing;
 design docs contain the detail.
 
-### Current status snapshot (31-Mar-26)
+### Current status snapshot (10-Apr-26)
 
 **Done**: Async infrastructure, Phase A–D compiler, FE overlay (basic
 + quality + model CDF + confidence bands), unified posterior schema,
@@ -15,7 +15,14 @@ model architecture (posterior-as-prior), likelihood rewrite
 observations, t95 soft constraint, posterior slice resolution (doc 25),
 Phase 2 join-node CDF fix, full warm-start wiring with quality guard,
 synth context data fix (`emit_context_slices` truth flag), unified
-MCMC κ estimation (journal 30-31-Mar-26).
+MCMC κ estimation (journal 30-31-Mar-26), snapshot regime selection
+(doc 30 — BE+FE, 24+ tests), BE analysis subject resolution (doc 31),
+LOO-ELPD model adequacy scoring Phase 1 (doc 32), Bayes reconnect
+mechanism (doc 28 — 3-phase automation pipeline), Phase C slice
+pooling partial (slice routing, per-slice Dirichlet emission,
+per-slice posterior extraction), multi-hop cohort maturity Phase A
+substantially implemented (`cohort_forecast_v2.py`, span kernel,
+x_provider, `cohort_maturity_v2` analysis type registered FE+BE).
 
 **Synth regression**: 5/10 pass, 5/10 fail. Failures are onset
 convergence issues (pre-existing "Initial evaluation failed"), not
@@ -51,8 +58,11 @@ data-constrained. Single-source validation:
    kappa/kappa_p variables and external Williams MLE (which is
    retained for diagnostic comparison only).
 6. Quality-gated warm-start (rhat < 1.10, ESS ≥ 100)
-7. Full kappa→alpha/beta→p_stdev→confidence bands pipeline verified
-   for both window and cohort modes
+7. Window kappa→alpha/beta→p_stdev→confidence bands pipeline verified
+   end-to-end. The cohort export path is under renewed review after the
+   9-Apr-26 forensic review found that current code still routes
+   `cohort()` alpha/beta through `_estimate_cohort_kappa()` rather
+   than a clearly model-based Phase 2 dispersion export. See doc 33.
 
 **Resolved bugs** (29-Mar-26 sweep):
 - ~~Posterior upsert on subsequent runs~~ — **FIXED 29-Mar-26**.
@@ -99,6 +109,15 @@ data-constrained. Single-source validation:
 **Open issues**:
 
 *Model quality — WATCH LIST (no blockers)*:
+- **Compiler dispersion forensic review** — **OPEN 9-Apr-26**. See
+  `docs/current/project-bayes/33-bayes-compiler-dispersion-forensic-review.md`.
+  Current code inspection identifies two likely likelihood-changing
+  defects (trajectory endpoint double-counting and the order-dependent
+  Phase 2 non-exhaustive branch-group prior) plus four export or
+  diagnostic defects (cohort uncertainty export drift, LOO null
+  mismatch, non-deterministic predictive summarisation, and
+  unconditional path provenance). These findings are from forensic code
+  review and targeted evidence, not yet from dedicated synth reruns.
 - ~~**Dispersion estimation: dual-kappa model**~~ — **RESOLVED
   31-Mar-26**. Abandoned external MLE approach. Unified MCMC κ per
   edge (LogNormal prior, daily BB + endpoint BB). Phase 1 κ measures
@@ -138,6 +157,23 @@ data-constrained. Single-source validation:
 - ~~5/10 synth regression failures~~ — **FIXED 31-Mar-26**. Onset
   obs contributing -inf at starting point on 3way-join, fanout,
   join-branch, lattice, skip. Independently resolved.
+
+- **PPC calibration** — **PARTIAL 12-Apr-26**. See doc 38.
+  `bayes/compiler/calibration.py` implemented: two-category PIT
+  (endpoint/daily, trajectory), true-PIT baseline from synth ground
+  truth, `--diag` flag. Endpoint PPC machinery validated. Trajectory
+  PPC blocked on synth DGP mismatch: the synth generator has two
+  composed kappa sources (entry-day + step-day) but the model has one.
+  **Next**: add single-source synth flag (`kappa_step_default: null`)
+  to enable clean trajectory validation. MLE kappa empirical Bayes
+  prior implemented (priority 2 in `build_model` kappa chain) — fixes
+  endpoint coverage from 1.00 → 0.90 on synth-simple-abc.
+
+- **Snapshot query batching** — **OPEN 9-Apr-26**. See
+  `33-snapshot-query-batching.md`. `_query_snapshot_subjects()` in
+  `worker.py` makes one DB round-trip per snapshot subject (2N queries
+  for N parameterised edges with 2 slices). Affects Bayes worker,
+  analysis preparation, retrieve-all.
 
 *Other open*:
 - ~~**Ad hoc hyperparameters**~~ — **RESOLVED 31-Mar-26**. All model
@@ -180,10 +216,81 @@ data-constrained. Single-source validation:
   (e.g. registered-to-success) need mixture of two log-normals.
   Designed, not built.
 - **Phase C posteriors** — context slice pooling, hierarchical
-  shrinkage, per-slice visualisation. Prerequisites done
-  (doc 21 ✓, doc 25 ✓). Includes fixing harness hash mismatch
-  (`compute_snapshot_subjects.mjs` sets context def hashes to `{}`
-  while FE populates them).
+  shrinkage, per-slice visualisation. **Partially implemented
+  (12-Apr-26)**: DSL parsing (`slices.py`), `SliceGroup` routing
+  (`evidence.py`), per-slice hierarchical Dirichlet emission
+  (`model.py` §2b — κ_slice learned concentration), per-slice
+  posterior extraction (`inference.py`), `bayesEngorge.ts` wired.
+  Tested indirectly via `test_model_wiring.py`,
+  `test_snapshot_e2e.py`, `test_param_recovery.py`.
+  **Compilation performance (doc 38c, 12-Apr-26)**: contexted models
+  were unusable at scale (6 per-slice trajectory Potentials, 51 RVs,
+  ~400s). Five changes landed: (1) NUTS geometry diagnostics added to
+  `inference.py`, (2) sigma/onset made edge-level (51→35 RVs, 4
+  fewer funnels), (3) per-slice scalar RVs replaced with native vector
+  RVs (`eps_slice_vec`, `log_kappa_slice_vec`, `eps_mu_slice_vec`),
+  (4) batched Phase 1 window trajectory — one `pm.Potential` per edge
+  instead of per slice (6→2), (5) auto low-rank mass matrix for
+  n_dim>20 (captures tau-eps funnel correlations, step_size +74%,
+  leapfrog steps −76%). Combined: compile −29%, sampling −42%.
+  **Remaining**: `conditional_p` not yet emitted. No dedicated
+  Phase C test suite. Per-slice visualisation in FE not started.
+  ~~Harness hash mismatch~~ — **FIXED 7-Apr-26**.
+  **Design prerequisite** (identified 8-Apr-26): when a pinned DSL
+  has `context(a);context(b)`, both dimensions are independent MECE
+  partitions of the same conversions. Representing them as
+  independent Dirichlets each constraining the parent overcounts
+  evidence at the parent level. See doc 30b §15 for analysis and
+  three possible resolutions. Also: RB-003 (regime tag drives
+  likelihood structure) is a Phase C test prerequisite — see doc 14
+  §14.7.
+- **A→Z multi-hop cohort maturity** (doc 29) — two-phase
+  decomposition:
+  - **Phase A — x→y span kernel** (numerator only): **substantially
+    implemented (10-Apr-26)**. **Single-hop parity gate (A.4) PASSED
+    13-Apr-26** — v1 vs v2 field-by-field on real graph data, window
+    and cohort modes. `cohort_maturity_v2` registered as analysis type
+    FE+BE. `cohort_forecast_v2.py` (1000+ lines): span kernel
+    integration, x_provider, fan computation. `span_evidence.py`:
+    evidence frame composition. `span_kernel.py`: conditional kernel
+    via DP convolution. `span_adapter.py`: adapter layer. Parity
+    tests in `test_doc31_parity.py`. **Remaining**: multi-hop
+    acceptance tests (A.5) — parallel quality work, does not block
+    engine extraction.
+  - **Phase B — x provider** (denominator only): swap `x_provider`
+    for x ≠ a with proper a→x propagation. Completeness-adjusted
+    frontier conditioning. Span kernel untouched. Design in
+    `29d-phase-b-design.md`. Not yet implemented.
+  Docs 30+31 implemented: BE resolves path from DSL natively.
+  **Next step**: extract reusable forecast helpers from cohort
+  maturity into a general BE library (see doc 29 Steps 1–3 —
+  `ForecastState` contract, `evaluate_forecast_at_tau` scalar helper,
+  unified basis resolver; implementation plan in doc 29e).
+  Prerequisite: best-available promoted model resolution, not only
+  Bayes vars (see cohort-maturity/INDEX.md §6).
+  **Bayes GA blocker**: Phase C depends on Phase 2 contexted models,
+  currently blocked on div-by-zero issues in JAX — diamond-context
+  models fail at init (bad gradients). See handover
+  `12-Apr-26-jax-backend-contexted-compilation.md`.
+- **Snapshot regime selection** (doc 30) — move regime selection from
+  FE preflight to authoritative BE selection per (edge, anchor_day,
+  retrieved_at) triple. Eliminates FE preflight round-trip; prevents
+  double-counting across context dimensions. **Implemented 8-Apr-26**
+  — BE utility (`select_regime_rows`, `validate_mece_for_aggregation`)
+  with 24 tests; wired into API handler (3 query sites) and Bayes
+  worker; FE candidate construction (`candidateRegimeService.ts`)
+  and `mece_dimensions` computation; wired into analysis preparation
+  and Bayes trigger. DSL `context()` / trailing separator syntax for
+  uncontexted slices also implemented (8 tests). Worked examples in
+  doc 30b. FE preflight removal (Phase 5) not yet done.
+  **Outstanding**: Bayes evidence binder regime tests (RB-001–005
+  in doc 30 §7.3.5) — verifying `_bind_from_snapshot_rows` handles
+  multi-regime rows correctly. Requires compiler type setup. RB-003
+  is a Phase C prerequisite (doc 14 §14.7).
+- ~~**BE analysis subject resolution** (doc 31)~~ — **IMPLEMENTED
+  8-Apr-26**. DSL resolution moved from FE to BE. BE resolves path
+  structure natively from DSL string. Some further FE/BE contract
+  work continues but does not affect cohort maturity.
 - **Nightly Bayes fit** — automatic posterior updates after daily
   fetch. Reconnect mechanism (doc 28) **implemented 7-Apr-26** —
   all 5 phases complete (`runBayes` flag, `applyPatchAndCascade`,
@@ -204,6 +311,19 @@ data-constrained. Single-source validation:
   May be partially fixed. Low priority — warm-start bypasses
   first-run prior issue, and onset histogram observations provide
   direct data-driven onset priors.
+- **Posterior predictive scoring** (doc 32) — per-edge LOO-ELPD
+  model adequacy scoring, benchmarked against the analytic stats pass
+  as null model. Assesses p and κ via the five named distribution
+  likelihood types (aggregate window, per-anchor-day, window endpoints,
+  cohort endpoints, branch groups). ΔELPD per edge answers "does the
+  Bayesian model improve on the analytic point estimates?" Surfaces in
+  Forecast Quality overlay (warning tier on ΔELPD < 0 or pareto_k > 0.7),
+  Edge Info Model tab, and PosteriorIndicator popover.
+  **Phase 1 implemented 8-Apr-26** — `bayes/compiler/loo.py` with
+  `compute_loo_scores()`, wired into both Phase 1 and Phase 2 in
+  `worker.py`. FE types, patch service, quality tier, and display
+  updated. 8 unit tests passing. Latency shape assessment (trajectory
+  Potential) deferred to Phase 2.
 - **Sampling performance** (doc 22) — compilation time (155s on
   branch graph), GPU experiment, dev-mode draws. Quality-of-life,
   not blocking.
@@ -241,45 +361,73 @@ data-constrained. Single-source validation:
 6. **Topology signatures** (doc 10) — data integrity: stale-posterior
    detection, param_id reassignment guards. Complex and intricate
    but not strictly blocking nightly scheduling.
-7. **Phase C** (context slices) — prerequisites done.
+7. **Phase C** (context slices) — partially implemented (slice
+   routing, Dirichlet emission, posterior extraction). Remaining:
+   `conditional_p`, dedicated test suite, FE per-slice visualisation.
 8. **FE stats deletion** — ~4000 lines. Graph-level parity proven
    (2-Apr-26). Remaining: D11 onset discrepancy design decision,
    Pattern A fragility review, heuristic dispersion FE parity.
+9. ~~**x→y multi-hop: Phase A — span kernel** (doc 29)~~ —
+   **SUBSTANTIALLY IMPLEMENTED 10-Apr-26**. `cohort_forecast_v2.py`,
+   `span_kernel.py`, `span_evidence.py`, `span_adapter.py`.
+   `cohort_maturity_v2` registered FE+BE. Remaining: formal parity
+   gate (A.4) and multi-hop acceptance tests (A.5).
+10. **x→y multi-hop: Phase B — x provider** — proper a→x propagation
+    for x ≠ a. Completeness-adjusted frontier conditioning. Span
+    kernel untouched. Design in `29d-phase-b-design.md`.
+11. **Generalised forecast helpers** — extract reusable forecast
+    library from cohort maturity (doc 29 Steps 1–3): `ForecastState`
+    contract, `evaluate_forecast_at_tau` scalar helper, unified basis
+    resolver. Prerequisite: best-available promoted model resolution
+    (cohort-maturity/INDEX.md §6).
 
 ---
 
 ## Design docs
 
+**Full index**: [INDEX.md](INDEX.md) — complete catalogue of all docs
+(active + archived, code-verified status). The table below lists
+active docs only; see `archive/` for implemented work.
+
+### Active design docs
+
+| Short name | File | Status | Scope |
+|---|---|---|---|
+| **Model contract** | `1-cohort-completeness-model-contract.md` | Partial | Cohort semantics, evaluator unification |
+| **asat() completion** | `7-asat-analysis-completion.md` | Partial | Historic/future asat through analysis/charting |
+| **Compiler phases** | `8-compiler-implementation-phases.md` | Partial | A-D done; Phase C model emission + Phase E not started |
+| **Topology signatures** | `10-topology-signatures.md` | Design only | Per-fit-unit staleness detection |
+| **Quality gating** | `13-model-quality-gating-and-preview.md` | Partial | Quality tiers done; accept/reject preview not built |
+| **Phase C design** | `14-phase-c-slice-pooling-design.md` | Design only | Hierarchical Dirichlet pooling for context slices |
+| **Lag array defect** | `16-lag-array-population-defect.md` | Open defect | Window values[] lag arrays mostly zero |
+| **Fit history fidelity** | `27-fit-history-fidelity-and-asat-posterior.md` | Design only | Full-fidelity archival, asat() reconstruction |
+| **Generalised forecast** | `29-generalised-forecast-engine-design.md` | Design only | A→Z multi-hop maturity, forecast-state contract |
+| **Regime selection** | `30-snapshot-regime-selection-contract.md` | Partial | BE utility + FE candidates + mece_dimensions done; Phase 5 + RB tests pending |
+| **BE subject resolution** | `31-be-analysis-subject-resolution.md` | Implemented (8-Apr-26) | `resolve_analysis_subjects()` + parity tests. Wired into `api_handlers.py` |
+| **Posterior scoring** | `32-posterior-predictive-scoring-design.md` | Partial (Phase 1 done 8-Apr-26) | LOO-ELPD Phase 1 done; Phase 2 (trajectory) pending |
+| **BE stats bugs** | `19-be-stats-engine-bugs.md` | Open defect | Three-way latency prior discrepancy |
+| **PPC calibration design** | `36-posterior-predictive-calibration.md` | Partial (12-Apr-26) | PIT uniformity, coverage curves, per-edge KS test |
+| **PPC calibration findings** | `38-ppc-calibration-findings.md` | Partial (12-Apr-26) | Implementation, three-layer validation, synth DGP mismatch |
+
+### Reference and operational docs (still in place)
+
 | Short name | File | Scope |
 |---|---|---|
-| **Logical blocks** | `0-high-level-logical-blocks.md` | Graph-to-hierarchy compiler, model structure, inference pipeline |
-| **Model contract** | `1-cohort-completeness-model-contract.md` | Cohort semantics, model ownership, evaluator unification |
-| **Reference impl** | `2-reference-implementation-notes.md` | PyMC patterns, prior art review |
-| **Compute arch** | `3-compute-and-deployment-architecture.md` | Compute vendor, deployment topology, shared code, DB access |
-| **Async infra** | `4-async-roundtrip-infrastructure.md` | Async roundtrip: submission, webhook, git commit, schema |
-| **Local dev setup** | `5-local-dev-setup.md` | Local dev environment, tunnel, deployment |
-| **Compiler + worker** | `6-compiler-and-worker-pipeline.md` | Compiler IR, model materialisation, worker orchestration, evidence assembly |
-| **asat() completion** | `7-asat-analysis-completion.md` | Historic asat through analysis/charting (Phase A), future asat with forecasts (Phase B) |
-| **Compiler phases** | `8-compiler-implementation-phases.md` | Phased delivery plan for compiler: A (independent), B (Dirichlet), S (snapshot evidence), C (slices), D (latency coupling), E (fan-out) |
-| **FE posterior consumption** | `9-fe-posterior-consumption-and-overlay.md` | FE changes for posterior display, settings, fit guidance, stats deletion schedule |
-| **Topology signatures** | `10-topology-signatures.md` | Per-fit-unit structural fingerprinting for posterior staleness detection |
-| **Snapshot evidence** | `11-snapshot-evidence-assembly.md` | Phase S: direct snapshot DB queries replace inline param-file evidence. FE fetch plan, worker DB integration, maturation trajectories. Phase D (latent latency + temporal drift) now sequenced before Phase C: A → B → **S** → **D** → C. |
-| **Quality gating** | `13-model-quality-gating-and-preview.md` | Model quality signalling (progress, session log, Graph Issues), auto-enable Forecast Quality, accept/reject preview workflow |
-| **Phase C design** | `14-phase-c-slice-pooling-design.md` | Phase C detailed design: slice DSL parsing, IR extension, solo-edge pooling, hierarchical Dirichlet for branch groups, conditional_p, posterior.slices output, Phase D interaction |
-| **Model vars provenance** | `15-model-vars-provenance-design.md` | Model variable sets with provenance on graph edges, source selection, scalar promotion. Supersedes §"Model variable precedence" below and doc 9 §5.7–5.8. |
-| **Lag array defect** | `16-lag-array-population-defect.md` | Window-type values[] entries have zero lag arrays; blocks sensible first-run latency priors. Investigation scope and fix approach. |
-| **Latent onset** | `18-latent-onset-design.md` | Latent edge-level onset, graph-level onset hyperprior and dispersion (`tau_onset`), path-level onset with learned dispersion, FE onset posterior display. Replaces fixed histogram-derived onset. |
-| **Synthetic data generator** | `17-synthetic-data-generator.md` | Monte Carlo simulator for parameter recovery testing. General-purpose over any graph topology, DB-backed, phased (Phase 1: core sim, Phase 2: context slices). |
-| **Compiler journal** | `18-compiler-journal.md` | Chronological record of what was tried, what worked, what failed, and key invariants discovered. Prevents re-exploring dead ends. |
-| **Trajectory compression** | `20-trajectory-compression-briefing.md` | Zero-count bin filter, smooth clip floors fix, NUTS sensitivity analysis. Resolved 24-Mar-26. |
-| **Production/consumption separation** | `19-model-vars-production-consumption-separation.md` | `promoted_t95` separates user-configured t95 from model output. Done. |
-| **Unified posterior schema** | `21-unified-posterior-schema.md` | Single `posterior.slices` keyed by DSL replaces split probability/latency posterior blocks. Per-slice p + latency, `_model_state` for warm-start. Done 25-Mar-26. |
-| **BE stats engine bugs** | `19-be-stats-engine-bugs.md` | Three-way prior discrepancy (FE vs BE vs topology) on latency inference. Open. |
-| **Synthetic data playbook** | `19-synthetic-data-playbook.md` | Step-by-step guide for creating synth graphs, generating data, running parameter recovery. Operational reference. |
-| **Join-node convergence** | `bayes-join-node-convergence-briefing.md` | Join-node latency model geometry. Resolved by mixture CDF (journal 23-Mar-26). |
-| **Statistical domain summary** | `statistical-domain-summary.md` | Reference: statistical foundations and domain concepts. |
-| **Sampling performance** | `22-sampling-performance.md` | MCMC performance bottleneck analysis: compilation time, GPU vs CPU research, optimisation paths (compilation fix, dev-mode draws, more chains, NumPyro vectorised, faster cloud CPUs). Experiment protocol. |
-| **Posterior slice resolution** | `25-posterior-slice-resolution-and-analysis-type-review.md` | Query-driven posterior slice projection in cascade + analysis graph composition. Systematic review of all analysis types for correct promoted scalars, window/cohort/context sensitivity, and chart visualisation. |
+| **Reference impl** | `2-reference-implementation-notes.md` | PyMC patterns, prior art |
+| **Local dev setup** | `5-local-dev-setup.md` | Local dev environment, tunnel |
+| **Synth generator** | `17-synthetic-data-generator.md` | Phase 1 done; Phase 2 not built. Active reference |
+| **Compiler journal** | `18-compiler-journal.md` | Ongoing (~4400 lines, last entry 6-Apr-26) |
+| **Synth playbook** | `19-synthetic-data-playbook.md` | Operational guide |
+| **Sampling perf** | `22-sampling-performance.md` | Research complete; no experiments run |
+| **Stats domain** | `statistical-domain-summary.md` | Statistical foundations reference |
+| **Regime examples** | `30b-regime-selection-worked-examples.md` | Companion to doc 30 |
+
+### Archived docs (22 docs — see `archive/` and INDEX.md)
+
+Implemented and superseded docs moved to `archive/` on 8-Apr-26.
+Essential knowledge captured in codebase docs:
+`PYTHON_BACKEND_ARCHITECTURE.md`, `STATISTICAL_DOMAIN_SUMMARY.md`,
+`FE_BE_STATS_PARALLELISM.md`.
 
 **Context**: `../codebase/APP_ARCHITECTURE.md` (app architecture),
 `../project-db/` (snapshot DB)
@@ -599,7 +747,15 @@ cross-phase feature activation. Summary:
   queries DB for maturation trajectories, replaces inline param-file
   evidence (doc 11). Must precede Phase C because slice pooling needs
   rich per-slice evidence.
-- Phase C: slice pooling + hierarchical Dirichlet
+- Phase C: slice pooling + hierarchical Dirichlet.
+  Phase 1 per-slice: DONE (12-Apr-26). Phase 2 per-slice: DONE (12-Apr-26) —
+  frozen Phase 1 per-slice posteriors as Beta priors, per-slice cohort
+  trajectory Potentials, per-slice cohort p extraction to summary.
+  Remaining: Phase 1 convergence gate before Phase 2 — if Phase 1
+  ESS < threshold or rhat > threshold, skip Phase 2 per-slice and fall
+  back to aggregate-only (prevents bad Phase 1 posteriors poisoning
+  Phase 2 priors). Observed: Phase 1 ESS=48 with 500 draws / 2 chains
+  caused Phase 2 to stall; Phase 1 ESS=1425 with 1000 tune worked.
 - Phase D: probability–latency coupling through completeness
 - Phase E (optional): per-chain fan-out across workers
 
@@ -1187,6 +1343,49 @@ design; implementation is post-Phase A.
   logging by default, with verbose output only in a diagnostic mode
   (e.g. `?bayes_debug=1` or a dev-tools toggle).
 
+- ~~**Historical DSL epoch hash discovery for Bayes**~~: **RESOLVED
+  12-Apr-26.** `buildCandidateRegimesByEdge` Step 5 now inspects
+  stored param file `values[]` entries via `enumeratePlausibleContextKeySets`
+  to discover hash families not in the current DSL. Also fixed: window
+  and cohort temporal modes are now grouped into one candidate regime
+  per context key-set (previously they competed, with regime selection
+  discarding all cohort data for contexted graphs). See journal
+  12-Apr-26 update 5.
+
+- **Phase 2 per-slice modelling not implemented**: Phase 2 (cohort pass
+  with frozen Phase 1 posteriors) is aggregate-only for contexted
+  graphs. All per-slice logic in `model.py` is gated behind
+  `not is_phase2`: Section 2b (per-slice Dirichlets), Section 5
+  (per-slice emissions), Section 4 (per-slice cohort latency). Phase 2
+  builds a 7-RV aggregate model. Per-slice cohort posteriors in the
+  output are copies of window posteriors (labelled `[window-copy]`).
+  Fix requires: per-slice p hierarchy in Phase 2, per-slice branch
+  group Dirichlets, per-slice cohort latency triples, per-slice
+  emission in the Phase 2 Section 5 loop. Priority: high — affects
+  all contexted graphs. See journal 12-Apr-26 update 4.
+
+- **Topo pass not producing per-slice priors**: the analytic topo pass
+  (`analyse_topology`) produces one set of priors per edge (aggregate
+  k/n ratio from param file values[]). For contexted graphs, each
+  slice should get its own analytic prior derived from per-context
+  values[] entries. Without this, per-slice analytic comparison in
+  the regression report compares per-slice posteriors against aggregate
+  analytic baselines. The LOO null model also uses aggregate baselines.
+  Priority: medium — affects regression reporting accuracy and LOO
+  scoring, not model correctness (the model uses its own hierarchy).
+
+- **Phase 1 contexted compilation performance**: `synth-simple-abc-context`
+  (2 edges × 3 slices, 57 free RVs) takes ~70s for nutpie/Rust
+  compilation before MCMC starts. Larger contexted graphs (diamond,
+  lattice) would take much longer. The compilation time scales
+  super-linearly with free RV count. Per-slice latency hierarchy
+  (eps_mu, eps_sigma, eps_onset per slice) contributes ~18 RVs for
+  3 slices. With `latency_dispersion=true`, per-slice kappa_lat adds
+  ~6 more. Options: (a) share latency across slices (only p varies),
+  (b) disable latency_dispersion for per-slice Potentials,
+  (c) investigate nutpie compilation optimisation. Priority: high —
+  blocks full contexted regression suite. See doc 37.
+
 - **Bayes test hardening — immature cohort recovery**: the Phase A
   `test_completeness_prevents_p_underestimate` test (A4 scenario) is
   `xfail` — the fixed-latency model cannot recover true p from
@@ -1446,3 +1645,18 @@ current constants were guessed, producing confidence bands that span
 Bands will be either too wide (noise covering the chart — current state)
 or too narrow (hiding real uncertainty). Either undermines user trust.
 **This feature must not ship until calibrated.**
+
+### Upstream blocker: Bayesian latency SDs overstate predictive certainty (9-Apr-26)
+
+The Bayesian compiler's latency posterior SDs (`mu_sd`, `sigma_sd`,
+`onset_sd`) are raw MCMC posterior SDs — they measure parameter
+estimation precision, not predictive spread. With many trajectories
+they shrink to ±0.005 (mu) or ±0.010 (onset), implying sub-day
+prediction precision. In reality, individual conversion times vary
+with spread `sigma` (the LogNormal scale parameter). The predictive
+spread should incorporate sigma, analogous to how predictive p
+incorporates kappa via `Beta(p*κ, (1-p)*κ)`. This affects both
+uncontexted and per-slice posteriors. Until fixed, the Bayesian
+"ground truth" SDs used to calibrate heuristic dispersions (§ above)
+are themselves wrong — any heuristic calibrated against them will
+inherit the same overstatement of certainty.

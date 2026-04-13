@@ -1,0 +1,4 @@
+id: start-event
+name: Start Event
+provider_event_names:
+  amplitude: "test_start_event"

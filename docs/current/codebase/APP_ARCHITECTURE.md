@@ -147,10 +147,56 @@ workers. The FE is the orchestrator for all operations.
 
 ---
 
+## CLI layer (headless Node.js)
+
+A second entry point into the same orchestration modules — runs in
+Node via `tsx`, no browser required. Lives in `graph-editor/src/cli/`
+with wrapper scripts in `graph-ops/scripts/`.
+
+The CLI calls the **same functions** the browser calls — no parallel
+reimplementations. `react-hot-toast` imports work in Node (no-op
+without DOM). `fake-indexeddb/auto` provides the Dexie shim.
+`import.meta.env?.` optional chaining guards the Vite-specific
+environment variables.
+
+- **`diskLoader.ts`** — reads graph JSON + YAML files from the data
+  repo on disk, seeds `fileRegistry` and `contextRegistry` in memory
+  (replacing the IDB/git loading path)
+- **`aggregate.ts`** — thin wrapper that calls
+  `fetchDataService.fetchItems({ mode: 'from-file' })` — the same
+  function the browser's `useDSLReaggregation` hook calls
+- **`commands/analyse.ts`** — calls `prepareAnalysisComputeInputs` →
+  `runPreparedAnalysis` — the same functions the browser's
+  `useCanvasAnalysisCompute` hook calls
+- **`bootstrap.ts`** — shared arg parsing, graph loading, registry
+  seeding; new commands extend this rather than duplicating setup
+
+**Known limitation**: the `from-file` fetch path calls
+`getParameterFromFile` → `fileRegistry.restoreFile()` which hits IDB.
+In Node, IDB operations fail silently — parameter values are never
+written onto graph edges, and Stage 2 (FE topo pass) produces nothing.
+Parameter file data IS loaded into `bundle.parameters` by diskLoader,
+but it doesn't reach the graph edges via the normal fetch pipeline.
+The `--topo-pass` flag on `analyse.ts` works around this by reading
+cohort evidence directly from `bundle.parameters` and calling the BE
+`/api/lag/topo-pass` endpoint. See `FE_BE_STATS_PARALLELISM.md` §CLI
+topo pass.
+
+E2E parity is verified by a Playwright test
+(`e2e/cliParityGraphOverview.spec.ts`) that loads the same graph in
+the browser, runs the from-file pipeline, and compares the BE result
+field-by-field against the CLI's output.
+
+See `docs/current/project-cli/programme.md` for the full design and
+`docs/current/codebase/GRAPH_OPS_TOOLING.md` for the CLI reference.
+
+---
+
 ## Orchestration model
 
-All orchestration is **browser-side and Promise-driven**. The FE triggers
-operations, awaits results, and writes them into the persistence layers.
+All orchestration is **browser-side and Promise-driven** (or
+**Node-side** in the CLI). The FE/CLI triggers operations, awaits
+results, and writes them into the persistence layers.
 Progress is reported via callbacks (`onProgress?: (p) => void`), not
 polling.
 
@@ -158,10 +204,10 @@ This means the app has no server-side state management, no job queues, and
 no long-lived server processes. Every server-side call is a stateless
 request/response within Vercel's execution limits.
 
-The first exception to this pattern will be MCMC inference (see
-`project-bayes/3-compute-and-deployment-architecture.md`), which delegates
-long-running computation to an external compute vendor with results
-returning via webhook → git commit.
+The first exception to this pattern is MCMC inference (see
+`PYTHON_BACKEND_ARCHITECTURE.md` §Bayesian Computation), which delegates
+long-running computation to Modal with results returning via webhook →
+atomic git commit.
 
 ## Related Docs
 

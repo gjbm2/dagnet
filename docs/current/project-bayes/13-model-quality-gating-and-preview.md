@@ -8,9 +8,10 @@
 ## Purpose
 
 When a Bayes fit completes, the model may have converged poorly —
-edges with `rhat > 1.05`, `ESS < 400`, high divergence counts, or
-`provenance: pooled-fallback`. Today the system applies posteriors
-unconditionally. This document specifies:
+edges with `rhat > 1.05`, `ESS < 400`, high divergence counts,
+`provenance: pooled-fallback`, or poor predictive fit (LOO-ELPD,
+doc 32). Today the system applies posteriors unconditionally. This
+document specifies:
 
 1. Quality signalling (progress indicator, session log, Graph Issues)
 2. Auto-enable Forecast Quality view for poor fits
@@ -34,6 +35,18 @@ For graph-level summary, derive a composite quality word from
 | Otherwise | **very poor** |
 
 These thresholds are indicative and may be tuned with experience.
+
+The graph-level `_bayes.quality` block also includes LOO-ELPD summary
+fields (doc 32): `total_delta_elpd`, `worst_pareto_k`, `n_high_k`.
+These are informational and do not yet gate the composite tier word.
+
+Per-edge warning conditions added to `bayesQualityTier.ts` (doc 32):
+- `pareto_k_max > 0.7` → warning: "influential obs"
+- `delta_elpd < 0` → warning: "worse than analytic"
+
+These trigger the amber warning tier on individual edges but do not
+affect the graph-level composite tier (which uses `converged_pct` and
+`max_rhat` only).
 
 ### 1.2 Progress indicator completion message
 

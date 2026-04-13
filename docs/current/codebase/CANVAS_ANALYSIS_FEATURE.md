@@ -144,6 +144,32 @@ Tab labels map `kind` to display names: Overview, Structure, Evidence, Model, La
 
 `normaliseCanvasAnalysis()` migrates old flat fields (recipe, mode, view_mode, chart_kind, title, display) into `content_items[]` and strips them from the container on load.
 
+## Evidence Tab (Snapshot Calendar)
+
+The `edge_info` analysis type supports a `evidence` card kind which renders `SnapshotCalendarSection` — a dual-month calendar showing which days have snapshot data for that edge.
+
+### Single codepath for hover and canvas
+
+`SnapshotCalendarSection` is defined in `HoverAnalysisPreview.tsx` and exported for use by both:
+- **Hover preview**: `ConversionEdge` passes a `snapshotSource` prop to `HoverAnalysisPreview`, which renders `SnapshotCalendarSection` via `tabExtra`
+- **Canvas pinned**: `CanvasAnalysisNode` resolves the edge from `analyticsDsl` via `resolveEdgeFromDsl` (exported from `localAnalysisComputeService.ts`), then passes `source` to `SnapshotCalendarSection` via `evidenceTabExtra`
+
+Both paths pass a `source` object `{ graph, edgeId, effectiveDSL, workspace }`. The component self-fetches via `getSnapshotRetrievalsForEdge` (unfiltered) or `buildSnapshotRetrievalsQueryForEdge` + `querySnapshotRetrievals` (context-filtered with `slice_keys`).
+
+### Context filtering
+
+The evidence tab includes a context filter UI driven by `useContextDropdown` (shared hook, same as WindowSelector's "+ Context" button). The three-state UI pattern: button → `ContextValueSelector` dropdown → `QueryExpressionEditor` chips.
+
+Context filtering uses two levels:
+1. **Hash level**: context *dimension* changes the `core_hash` (channel-contexted ≠ device-contexted ≠ uncontexted). Selecting a dimension causes a re-fetch with the dimension-specific hash.
+2. **Slice level**: context *value* is carried in `slice_key` within a hash family. All values in one dimension share the same hash. Value-level filtering requires the `slice_keys` parameter on the query, constructed by `buildSnapshotRetrievalsQueryForEdge`.
+
+### Boot timing
+
+The evidence tab depends on `NavigatorContext` for workspace (`selectedRepo`, `selectedBranch`). Navigator loads asynchronously and can take several seconds after F5. The fetch effect guards on `sourceRepo && sourceBranch` being non-empty to avoid firing with `workspace: undefined`. The `evidenceTabExtra` memo in `CanvasAnalysisNode` also guards on `navState.selectedRepo && navState.selectedBranch`.
+
+Additionally, `edge_info` is a FE-only analysis type that bypasses the `scenariosReady` gate in `analysisComputePreparationService.ts` — it doesn't need scenario composition.
+
 ## Key Design Principles
 
 1. **Container-only placement, content-only logic**: container owns position/size, content items own everything else
@@ -162,3 +188,5 @@ Tab labels map `kind` to display names: Overview, Structure, Evidence, Model, La
 | `src/utils/canvasAnalysisAccessors.ts` | Accessors, legacy migration, helpers |
 | `src/components/CanvasAnalysisCard.tsx` | Shared renderer for pinned and hover modes |
 | `src/components/CanvasAnalysisContextMenu.tsx` | Per-analysis context menu |
+| `src/hooks/useContextDropdown.ts` | Shared context filter dropdown state (used by WindowSelector + evidence tab) |
+| `src/components/HoverAnalysisPreview.tsx` | `SnapshotCalendarSection` — dual-month snapshot calendar with context filter |

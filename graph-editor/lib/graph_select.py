@@ -23,6 +23,7 @@ This module implements #1 only. Data retrieval query construction is separate.
 Uses schema-based Pydantic types from graph_types.py - NO manual dict parsing.
 """
 
+from dataclasses import dataclass
 from typing import List, Set, Union, Dict, Any
 import networkx as nx
 from query_dsl import ParsedQuery, parse_query_strict
@@ -156,22 +157,29 @@ def _parse_minimal_graph(graph_dict: Dict[str, Any]) -> Graph:
 def _build_networkx_graph(graph: Graph) -> nx.DiGraph:
     """
     Convert Graph object to NetworkX directed graph.
-    
-    Uses schema-based types - nodes have .id, edges have .from_node and .to
+
+    Uses node.id as the graph key (human-readable, matches DSL from()/to()).
+    Edge from_node/to fields may be UUIDs — these are mapped to node.id
+    via a UUID→id lookup.
     """
     G = nx.DiGraph()
-    
-    # Add nodes (using schema-based Node type)
+
+    # Build UUID → id mapping for nodes.
+    uuid_to_id: Dict[str, str] = {}
     for node in graph.nodes:
         G.add_node(node.id)
-    
-    # Add edges (using schema-based Edge type)
+        node_uuid = getattr(node, 'uuid', None) or ''
+        if node_uuid:
+            uuid_to_id[node_uuid] = node.id
+        # Also map id→id for graphs where edges use IDs directly.
+        uuid_to_id[node.id] = node.id
+
+    # Add edges, resolving from_node/to from UUID to node.id.
     for edge in graph.edges:
-        # Edge uses from_node (with alias 'from') and to
-        source = edge.from_node
-        target = edge.to
+        source = uuid_to_id.get(edge.from_node, edge.from_node)
+        target = uuid_to_id.get(edge.to, edge.to)
         G.add_edge(source, target)
-    
+
     return G
 
 
@@ -216,6 +224,198 @@ def _find_paths_matching_query(G: nx.DiGraph, query: ParsedQuery) -> List[List[s
     return valid_paths
 
 
+@dataclass
+class ResolvedEdge:
+    """An edge on a resolved path with its structural role."""
+    edge_uuid: str
+    from_node_id: str
+    to_node_id: str
+    path_role: str  # 'first', 'last', 'intermediate', or 'only' (single-edge path)
+
+
+@dataclass
+class ResolvedPath:
+    """Ordered edges on the resolved path(s) from source to target."""
+    from_node: str
+    to_node: str
+    ordered_edges: List[ResolvedEdge]
+    all_edge_uuids: Set[str]
+
+
+def resolve_ordered_path(
+    graph_input: Union[Graph, Dict[str, Any]],
+    query_string: str,
+) -> ResolvedPath:
+    """Resolve a DSL query to an ordered list of edges on valid paths.
+
+    Uses the same path-finding logic as apply_query_to_graph but returns
+    structured edge information with first/last/intermediate annotations
+    rather than a filtered graph.
+
+    Args:
+        graph_input: Graph object or dict
+        query_string: DSL string with from()/to() endpoints
+
+    Returns:
+        ResolvedPath with ordered edges and path roles.
+        If no valid path exists, returns a ResolvedPath with empty edges.
+    """
+    if isinstance(graph_input, dict):
+        graph = _parse_minimal_graph(graph_input)
+    else:
+        graph = graph_input
+
+    query = parse_query_strict(query_string)
+    G = _build_networkx_graph(graph)
+    valid_paths = _find_paths_matching_query(G, query)
+
+    if not valid_paths:
+        return ResolvedPath(
+            from_node=query.from_node,
+            to_node=query.to_node,
+            ordered_edges=[],
+            all_edge_uuids=set(),
+        )
+
+    # Build UUID → node.id mapping for resolving edge endpoints.
+    uuid_to_id: Dict[str, str] = {}
+    for node in graph.nodes:
+        node_uuid = getattr(node, 'uuid', None) or ''
+        if node_uuid:
+            uuid_to_id[node_uuid] = node.id
+        uuid_to_id[node.id] = node.id
+
+    # Build a lookup from (from_node_id, to_node_id) → edge objects.
+    # Edge from_node/to may be UUIDs — resolve to node.id.
+    edge_lookup: Dict[tuple, list] = {}
+    for edge in graph.edges:
+        src_id = uuid_to_id.get(edge.from_node, edge.from_node)
+        tgt_id = uuid_to_id.get(edge.to, edge.to)
+        key = (src_id, tgt_id)
+        edge_lookup.setdefault(key, []).append(edge)
+
+    # Collect all (from, to) pairs across all valid paths, preserving
+    # topological order from the longest path for edge ordering.
+    # Use the union of all paths to get the full edge set.
+    all_pairs_ordered: List[tuple] = []
+    seen_pairs: Set[tuple] = set()
+
+    # Sort paths longest-first so the ordering reflects the full chain.
+    for path in sorted(valid_paths, key=len, reverse=True):
+        for i in range(len(path) - 1):
+            pair = (path[i], path[i + 1])
+            if pair not in seen_pairs:
+                seen_pairs.add(pair)
+                all_pairs_ordered.append(pair)
+
+    # Identify which node IDs are the from-node and to-node of the query.
+    from_id = query.from_node
+    to_id = query.to_node
+
+    # Build resolved edges with path roles.
+    resolved: List[ResolvedEdge] = []
+    all_uuids: Set[str] = set()
+
+    for pair in all_pairs_ordered:
+        edges_for_pair = edge_lookup.get(pair, [])
+        for edge in edges_for_pair:
+            is_first = (pair[0] == from_id)
+            is_last = (pair[1] == to_id)
+
+            if is_first and is_last:
+                role = 'only'
+            elif is_first:
+                role = 'first'
+            elif is_last:
+                role = 'last'
+            else:
+                role = 'intermediate'
+
+            edge_uuid = getattr(edge, 'uuid', '') or ''
+            resolved.append(ResolvedEdge(
+                edge_uuid=edge_uuid,
+                from_node_id=pair[0],
+                to_node_id=pair[1],
+                path_role=role,
+            ))
+            if edge_uuid:
+                all_uuids.add(edge_uuid)
+
+    return ResolvedPath(
+        from_node=from_id,
+        to_node=to_id,
+        ordered_edges=resolved,
+        all_edge_uuids=all_uuids,
+    )
+
+
+def resolve_children_edges(
+    graph_input: Union[Graph, Dict[str, Any]],
+    parent_node_id: str,
+) -> List[ResolvedEdge]:
+    """Resolve all outgoing edges from a node (children_of_selected_node scope).
+
+    Args:
+        graph_input: Graph object or dict
+        parent_node_id: The node ID whose outgoing edges to return
+
+    Returns:
+        List of ResolvedEdge with path_role=None (no path ordering).
+    """
+    if isinstance(graph_input, dict):
+        graph = _parse_minimal_graph(graph_input)
+    else:
+        graph = graph_input
+
+    # Build UUID → node.id mapping.
+    uuid_to_id: Dict[str, str] = {}
+    for node in graph.nodes:
+        node_uuid = getattr(node, 'uuid', None) or ''
+        if node_uuid:
+            uuid_to_id[node_uuid] = node.id
+        uuid_to_id[node.id] = node.id
+
+    result: List[ResolvedEdge] = []
+    for edge in graph.edges:
+        src_id = uuid_to_id.get(edge.from_node, edge.from_node)
+        if src_id == parent_node_id:
+            tgt_id = uuid_to_id.get(edge.to, edge.to)
+            result.append(ResolvedEdge(
+                edge_uuid=getattr(edge, 'uuid', '') or '',
+                from_node_id=src_id,
+                to_node_id=tgt_id,
+                path_role='child',
+            ))
+    return result
+
+
+def resolve_all_parameter_edges(
+    graph_input: Union[Graph, Dict[str, Any]],
+) -> List[ResolvedEdge]:
+    """Return all edges in the graph (all_graph_parameters scope).
+
+    Args:
+        graph_input: Graph object or dict
+
+    Returns:
+        List of ResolvedEdge with path_role=None.
+    """
+    if isinstance(graph_input, dict):
+        graph = _parse_minimal_graph(graph_input)
+    else:
+        graph = graph_input
+
+    return [
+        ResolvedEdge(
+            edge_uuid=getattr(edge, 'uuid', '') or '',
+            from_node_id=edge.from_node,
+            to_node_id=edge.to,
+            path_role='all',
+        )
+        for edge in graph.edges
+    ]
+
+
 def _extract_node_ids_from_paths(paths: List[List[str]]) -> Set[str]:
     """Extract unique node IDs from all valid paths."""
     node_ids = set()
@@ -226,17 +426,27 @@ def _extract_node_ids_from_paths(paths: List[List[str]]) -> Set[str]:
 
 def _extract_edges_from_paths(paths: List[List[str]], graph: Graph) -> List:
     """Extract Edge objects that appear in any valid path."""
-    
-    # Build set of (source, target) pairs from paths
+
+    # Build set of (source, target) pairs from paths (node IDs).
     path_edges = set()
     for path in paths:
         for i in range(len(path) - 1):
             path_edges.add((path[i], path[i + 1]))
-    
-    # Filter graph edges to those in valid paths
+
+    # Build UUID → node.id mapping.
+    uuid_to_id: Dict[str, str] = {}
+    for node in graph.nodes:
+        node_uuid = getattr(node, 'uuid', None) or ''
+        if node_uuid:
+            uuid_to_id[node_uuid] = node.id
+        uuid_to_id[node.id] = node.id
+
+    # Filter graph edges to those in valid paths (resolve UUIDs to IDs).
     relevant_edges = []
     for edge in graph.edges:
-        if (edge.from_node, edge.to) in path_edges:
+        src_id = uuid_to_id.get(edge.from_node, edge.from_node)
+        tgt_id = uuid_to_id.get(edge.to, edge.to)
+        if (src_id, tgt_id) in path_edges:
             relevant_edges.append(edge)
-    
+
     return relevant_edges

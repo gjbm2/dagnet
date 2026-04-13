@@ -1,0 +1,167 @@
+{
+  "success": true,
+  "result": {
+    "analysis_type": "graph_overview",
+    "analysis_name": "Graph Overview",
+    "analysis_description": "Overall outcomes from all entry points",
+    "metadata": {
+      "node_count": 12,
+      "edge_count": 17,
+      "entry_nodes": [
+        {
+          "id": "household-created",
+          "label": "Household created"
+        }
+      ]
+    },
+    "semantics": {
+      "dimensions": [
+        {
+          "id": "outcome",
+          "name": "Outcome",
+          "type": "node",
+          "role": "primary"
+        },
+        {
+          "id": "scenario_id",
+          "name": "Scenario",
+          "type": "scenario",
+          "role": "secondary"
+        }
+      ],
+      "metrics": [
+        {
+          "id": "probability",
+          "name": "Probability",
+          "type": "probability",
+          "format": "percent",
+          "role": "primary"
+        },
+        {
+          "id": "expected_cost_gbp",
+          "name": "Expected Cost (£)",
+          "type": "currency",
+          "format": "currency_gbp",
+          "role": null
+        },
+        {
+          "id": "expected_labour_cost",
+          "name": "Expected Cost (Labour)",
+          "type": "duration",
+          "format": "number",
+          "role": null
+        }
+      ],
+      "chart": {
+        "recommended": "bar_grouped",
+        "alternatives": [
+          "pie",
+          "table"
+        ],
+        "hints": {
+          "sort": {
+            "by": "probability",
+            "order": "desc"
+          }
+        }
+      }
+    },
+    "dimension_values": {
+      "outcome": {
+        "addb99b6-5773-482c-a437-4661c8433ff7": {
+          "name": "abandonned-before-delegation",
+          "colour": null,
+          "order": 0,
+          "visibility_mode": null,
+          "probability_label": null
+        },
+        "30aabc44-e448-4359-b0d0-338a231edb92": {
+          "name": "Switch success",
+          "colour": null,
+          "order": 1,
+          "visibility_mode": null,
+          "probability_label": null
+        },
+        "940fd8cc-f7f6-4ec5-a973-fb4cc037fa64": {
+          "name": "Post recommendation failure",
+          "colour": null,
+          "order": 2,
+          "visibility_mode": null,
+          "probability_label": null
+        },
+        "386e6cf6-ccc7-412a-81b3-ee730b8bf775": {
+          "name": "Post registration failure",
+          "colour": null,
+          "order": 3,
+          "visibility_mode": null,
+          "probability_label": null
+        },
+        "7115e4a9-d4c2-4f24-b5b0-8b224b7bea2f": {
+          "name": "No recommendation sent",
+          "colour": null,
+          "order": 4,
+          "visibility_mode": null,
+          "probability_label": null
+        }
+      },
+      "scenario_id": {
+        "current": {
+          "name": "Scenario 1",
+          "colour": "#3b82f6",
+          "order": null,
+          "visibility_mode": "f+e",
+          "probability_label": "Probability"
+        }
+      }
+    },
+    "data": [
+      {
+        "outcome": "addb99b6-5773-482c-a437-4661c8433ff7",
+        "scenario_id": "current",
+        "scenario_name": "Scenario 1",
+        "visibility_mode": "f+e",
+        "probability": 0.4549,
+        "expected_cost_gbp": 0.00605000658301397,
+        "expected_labour_cost": 0
+      },
+      {
+        "outcome": "30aabc44-e448-4359-b0d0-338a231edb92",
+        "scenario_id": "current",
+        "scenario_name": "Scenario 1",
+        "visibility_mode": "f+e",
+        "probability": 0.045243884304051296,
+        "expected_cost_gbp": 0.00605000658301397,
+        "expected_labour_cost": 0
+      },
+      {
+        "outcome": "940fd8cc-f7f6-4ec5-a973-fb4cc037fa64",
+        "scenario_id": "current",
+        "scenario_name": "Scenario 1",
+        "visibility_mode": "f+e",
+        "probability": 0.3777338452361596,
+        "expected_cost_gbp": 0.00605000658301397,
+        "expected_labour_cost": 0
+      },
+      {
+        "outcome": "386e6cf6-ccc7-412a-81b3-ee730b8bf775",
+        "scenario_id": "current",
+        "scenario_name": "Scenario 1",
+        "visibility_mode": "f+e",
+        "probability": 0.019501227750973453,
+        "expected_cost_gbp": 0.00605000658301397,
+        "expected_labour_cost": 0
+      },
+      {
+        "outcome": "7115e4a9-d4c2-4f24-b5b0-8b224b7bea2f",
+        "scenario_id": "current",
+        "scenario_name": "Scenario 1",
+        "visibility_mode": "f+e",
+        "probability": 0.09275407522210534,
+        "expected_cost_gbp": 0.00605000658301397,
+        "expected_labour_cost": 0
+      }
+    ]
+  },
+  "query_dsl": "window(-30d:)",
+  "error": null
+}

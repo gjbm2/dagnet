@@ -127,6 +127,37 @@ def _dump_evidence(evidence, topology, path: str, log: list[str]) -> None:
                     "completeness": d.completeness,
                 })
             edge_dump["cohort_obs"].append(co_dump)
+
+        # Regime per date (R2d)
+        edge_dump["regime_per_date"] = ev.regime_per_date or {}
+
+        # Slice groups (Phase C)
+        edge_dump["slice_groups"] = {}
+        for dim, sg in (ev.slice_groups or {}).items():
+            sg_dump = {
+                "is_exhaustive": sg.is_exhaustive,
+                "slices": {},
+            }
+            for sk, so in sg.slices.items():
+                so_dump = {
+                    "has_window": so.has_window,
+                    "total_n": so.total_n,
+                    "window_obs": [
+                        {"n": w.n, "k": w.k, "completeness": w.completeness}
+                        for w in (so.window_obs or [])
+                    ],
+                    "cohort_obs": [],
+                }
+                for c_obs in (so.cohort_obs or []):
+                    so_dump["cohort_obs"].append({
+                        "slice_dsl": c_obs.slice_dsl,
+                        "n_trajectories": len(c_obs.trajectories),
+                        "n_daily": len(c_obs.daily),
+                        "total_n": sum(t.n for t in c_obs.trajectories),
+                    })
+                sg_dump["slices"][sk] = so_dump
+            edge_dump["slice_groups"][dim] = sg_dump
+
         dump[edge_id] = edge_dump
 
     with open(path, "w") as f:
@@ -387,10 +418,178 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
     result_edges: list[dict] = []
     result_skipped: list[dict] = []
     quality_dict = {"max_rhat": 0.0, "min_ess": 0, "converged_pct": 0.0}
+    binding_receipt = None
+    db_conn = None
 
     try:
         # ── 0. Environment diagnostic ──
         _log_env_diagnostic(log)
+
+        # ── Phase 2 from dump: skip Phase 1 entirely ──
+        _p2_dump = (payload.get("settings") or {}).get("phase2_from_dump")
+        if _p2_dump:
+            _log(log, f"── PHASE 2 FROM DUMP: {_p2_dump} ──")
+            import json as _jl, pickle as _pkl2
+            from compiler import analyse_topology, build_model
+            from compiler import run_inference, summarise_posteriors, inspect_model
+            from compiler.types import SamplingConfig
+
+            with open(os.path.join(_p2_dump, "topology.pkl"), "rb") as _f:
+                topology = _pkl2.load(_f)
+            with open(os.path.join(_p2_dump, "evidence.pkl"), "rb") as _f:
+                evidence = _pkl2.load(_f)
+            with open(os.path.join(_p2_dump, "phase2_frozen.json")) as _f:
+                phase2_frozen = _jl.load(_f)
+            with open(os.path.join(_p2_dump, "settings.json")) as _f:
+                _dump_sb = _jl.load(_f)
+
+            settings = payload.get("settings", {})
+            features = settings.get("features") or _dump_sb.get("features", {})
+            graph_snapshot = payload.get("graph_snapshot", {})
+
+            _log(log, f"  topology: {len(topology.edges)} edges")
+            _log(log, f"  evidence: {sum(1 for e in evidence.edges.values() if not e.skipped)} with data")
+            _log(log, f"  frozen: {len(phase2_frozen)} edges")
+
+            # Build Phase 2 model
+            model2, metadata2 = build_model(
+                topology, evidence, features=features,
+                phase2_frozen=phase2_frozen, settings=settings,
+            )
+            _log(log, f"  Phase 2 model: {len(model2.free_RVs)} free, "
+                       f"{len(model2.observed_RVs)} obs, {len(model2.potentials)} pot")
+
+            # Sampling config
+            def _s_int(kl, kc, ku, default):
+                return int(settings.get(kl, settings.get(kc, settings.get(ku, default))))
+            def _s_float(kl, kc, ku, default):
+                return float(settings.get(kl, settings.get(kc, settings.get(ku, default))))
+
+            sampling_config = SamplingConfig(
+                draws=_s_int("draws", "bayes_draws", "BAYES_DRAWS", 2000),
+                tune=_s_int("tune", "bayes_tune", "BAYES_TUNE", 1000),
+                chains=_s_int("chains", "bayes_chains", "BAYES_CHAINS", 4),
+                cores=settings.get("cores"),
+                target_accept=_s_float("target_accept", "bayes_target_accept", "BAYES_TARGET_ACCEPT", 0.90),
+                random_seed=settings.get("random_seed"),
+                jax_backend=features.get("jax_backend", False),
+            )
+
+            # Run Phase 2 MCMC (with numba fallback)
+            progress.set_band(0, 90)
+            t_sample2 = time.time()
+            try:
+                trace2, quality2 = run_inference(model2, sampling_config, report, phase_label="Phase 2 (from dump)")
+            except RuntimeError as _p2_err:
+                if "initialization" in str(_p2_err).lower() and sampling_config.jax_backend:
+                    _log(log, f"  Phase 2 JAX init failed: {_p2_err}")
+                    _log(log, "  Retrying with numba backend…")
+                    _numba_cfg = SamplingConfig(
+                        draws=sampling_config.draws, tune=sampling_config.tune,
+                        chains=sampling_config.chains, cores=sampling_config.cores,
+                        target_accept=sampling_config.target_accept,
+                        random_seed=sampling_config.random_seed, jax_backend=False,
+                    )
+                    trace2, quality2 = run_inference(model2, _numba_cfg, report, phase_label="Phase 2 (numba)")
+                    _log(log, "  numba fallback succeeded")
+                else:
+                    raise
+            timings["sampling_phase2_ms"] = int((time.time() - t_sample2) * 1000)
+            _log(log, f"  Phase 2 sampling: {timings['sampling_phase2_ms']}ms, "
+                       f"rhat={quality2.max_rhat:.3f}, ess={quality2.min_ess:.0f}")
+
+            # Summarise Phase 2
+            inference_result = summarise_posteriors(
+                trace2, topology, evidence, metadata2, quality2,
+                settings=settings,
+            )
+            quality_dict = {
+                "max_rhat": round(quality2.max_rhat, 4),
+                "min_ess": round(quality2.min_ess, 1),
+                "converged_pct": quality2.converged_pct,
+            }
+
+            # Log Phase 2 p_cohort values from trace
+            for edge_id in topology.topo_order:
+                safe_eid = edge_id.replace("-", "_")
+                p_cohort_name = f"p_cohort_{safe_eid}"
+                eps_drift_name = f"eps_drift_{safe_eid}"
+                if p_cohort_name in trace2.posterior:
+                    samples = trace2.posterior[p_cohort_name].values.flatten()
+                    _log(log, f"  Phase 2 p_cohort {edge_id[:8]}…: "
+                              f"mean={samples.mean():.4f} std={samples.std():.4f}")
+                if eps_drift_name in trace2.posterior:
+                    eps = trace2.posterior[eps_drift_name].values.flatten()
+                    _log(log, f"  Phase 2 eps_drift {edge_id[:8]}…: "
+                              f"mean={eps.mean():.3f} std={eps.std():.3f}")
+
+            # Extract per-slice cohort posteriors from trace2
+            import numpy as _np2
+            for post in inference_result.posteriors:
+                edge_id = post.edge_id
+                safe_eid = edge_id.replace("-", "_")
+                ev_edge = evidence.edges.get(edge_id)
+                if not ev_edge or not ev_edge.slice_groups:
+                    continue
+                cohort_slice_posts = {}
+                for _dk, _sg in ev_edge.slice_groups.items():
+                    for ctx_key in _sg.slices:
+                        ctx_safe = ctx_key.replace("-", "_")
+                        p_name = f"p_cohort_slice_{safe_eid}_{ctx_safe}"
+                        if p_name in trace2.posterior:
+                            _ps = trace2.posterior[p_name].values.flatten()
+                            _p_mean = float(_ps.mean())
+                            _p_std = float(_ps.std())
+                            _alpha, _beta = _p_mean, 1.0 - _p_mean
+                            if _p_std > 1e-6 and 0 < _p_mean < 1:
+                                _v = _p_std ** 2
+                                _c = _p_mean * (1 - _p_mean) / _v - 1
+                                if _c > 0:
+                                    _alpha = max(_p_mean * _c, 0.5)
+                                    _beta = max((1 - _p_mean) * _c, 0.5)
+                            cohort_slice_posts[ctx_key] = {
+                                "alpha": _alpha,
+                                "beta": _beta,
+                                "p_mean": _p_mean,
+                                "p_sd": _p_std,
+                            }
+                            _log(log, f"  Phase 2 slice {edge_id[:8]}… {ctx_key}: "
+                                      f"p={_p_mean:.4f}±{_p_std:.4f}")
+                if cohort_slice_posts:
+                    post.cohort_slice_posteriors = cohort_slice_posts
+
+            # Merge cohort latency posteriors from Phase 2
+            for eid, lat2 in inference_result.latency_posteriors.items():
+                # Log path-level latency if available
+                if lat2.path_mu_mean is not None:
+                    _log(log, f"  Phase 2 path_latency {eid[:8]}…: "
+                              f"onset={lat2.path_onset_delta_days} "
+                              f"mu={lat2.path_mu_mean} sigma={lat2.path_sigma_mean}")
+
+            # Format edges for webhook/result
+            params_index = payload.get("parameters_index", {})
+            param_id_to_path = _build_path_lookup(params_index)
+            for post in inference_result.posteriors:
+                lat_post = inference_result.latency_posteriors.get(post.edge_id)
+                slices = _build_unified_slices(post, lat_post)
+                result_edges.append({
+                    "param_id": post.param_id,
+                    "file_path": _resolve_file_path(post.param_id, evidence, param_id_to_path),
+                    "slices": slices,
+                    "_model_state": inference_result.model_state,
+                    "prior_tier": post.prior_tier,
+                    "evidence_grade": 3 if post.ess >= 400 and (not post.rhat or post.rhat < 1.05) else 0,
+                    "divergences": post.divergences,
+                })
+            result_skipped = inference_result.skipped
+
+            _log(log, f"posteriors: {len(result_edges)} edges, {len(result_skipped)} skipped")
+            report("complete", 100, "Phase 2 from dump complete")
+            return _build_result(
+                None, log, timings, t0, result_edges, result_skipped,
+                quality_dict, webhook_response,
+                binding_receipt=binding_receipt,
+            )
 
         # ── 1. DB connection ──
         progress.set_band(0, 3)
@@ -422,8 +621,15 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
         settings = payload.get("settings", {})
 
         topology = analyse_topology(graph_snapshot)
+        _dsl = graph_snapshot.get("dataInterestsDSL", "")
+        if _dsl:
+            _log(log, f"DSL: {_dsl}")
+        _n_subjects = len(payload.get("snapshot_subjects", []))
+        _n_regimes = sum(len(v) for v in (payload.get("candidate_regimes_by_edge") or {}).values())
+        _log(log, f"subjects: {_n_subjects} snapshot subjects, {_n_regimes} candidate regimes")
+        _n_data_edges = sum(1 for et in topology.edges.values() if et.param_id)
         _log(log,
-            f"topology: {len(topology.edges)} edges, "
+            f"topology: {len(topology.edges)} edges ({_n_data_edges} with data), "
             f"{len(topology.branch_groups)} branch groups, "
             f"anchor={topology.anchor_node_id[:8]}…"
         )
@@ -445,6 +651,7 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
             t_snap = time.time()
             snapshot_rows = _query_snapshot_subjects(
                 snapshot_subjects, topology, log,
+                candidate_regimes_by_edge=payload.get("candidate_regimes_by_edge"),
             )
             snap_ms = int((time.time() - t_snap) * 1000)
             _log(log,
@@ -455,10 +662,92 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
         elif snapshot_subjects and not db_url:
             _log(log,"snapshot_subjects provided but no db_connection — falling back to param files")
 
+        # Doc 30: apply regime selection per edge if candidate_regimes_by_edge provided.
+        candidate_regimes_by_edge = payload.get("candidate_regimes_by_edge")
+        # Capture pre-regime row counts and hashes for binding receipt
+        rows_raw_per_edge: dict[str, int] = {eid: len(rows) for eid, rows in snapshot_rows.items()}
+        hashes_seen_per_edge: dict[str, set] = {
+            eid: {r.get('core_hash', '') for r in rows}
+            for eid, rows in snapshot_rows.items()
+        }
+        regime_selections: dict = {}
+        if snapshot_rows and candidate_regimes_by_edge and isinstance(candidate_regimes_by_edge, dict):
+            try:
+                import sys as _sys
+                _sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'graph-editor', 'lib'))
+                from snapshot_regime_selection import CandidateRegime, select_regime_rows
+                for edge_id, edge_rows in list(snapshot_rows.items()):
+                    cr_raw = candidate_regimes_by_edge.get(edge_id, [])
+                    if not cr_raw:
+                        continue
+                    regimes = [
+                        CandidateRegime(
+                            core_hash=r.get('core_hash', ''),
+                            equivalent_hashes=[
+                                e.get('core_hash', '') if isinstance(e, dict) else str(e)
+                                for e in (r.get('equivalent_hashes') or [])
+                            ],
+                        )
+                        for r in cr_raw if isinstance(r, dict) and r.get('core_hash')
+                    ]
+                    if regimes:
+                        selection = select_regime_rows(edge_rows, regimes)
+                        regime_selections[edge_id] = selection
+                        snapshot_rows[edge_id] = selection.rows
+                        n_before = len(edge_rows)
+                        n_after = len(selection.rows)
+                        if n_before != n_after:
+                            _log(log, f"  regime selection {edge_id[:8]}…: {n_before} → {n_after} rows")
+            except Exception as e:
+                _log(log, f"  regime selection failed (non-blocking): {e}")
+
+        # Detect engorged graph (doc 14 §9A): edges carry _bayes_evidence dicts.
+        # When engorged, pass graph_snapshot to bind_snapshot_evidence so it
+        # reads priors and file-based evidence from graph edges instead of
+        # param files. Snapshot row handling is unchanged.
+        is_engorged = any(
+            isinstance(e.get("_bayes_evidence"), dict)
+            for e in graph_snapshot.get("edges", [])
+        )
+        if is_engorged:
+            _log(log, "evidence: engorged graph detected (doc 14 §9A)")
+
+        # R2-prereq-i: extract commissioned context slices from FE subjects.
+        # The binder must only create SliceGroups for slices the FE explicitly
+        # commissioned via pinnedDSL, not whatever happens to be in the DB rows.
+        commissioned_slices: dict[str, set[str]] = {}
+        if snapshot_subjects:
+            import re as _re_cs
+            for subj in snapshot_subjects:
+                eid = subj.get("edge_id") or (subj.get("target", {}) or {}).get("targetId", "")
+                if not eid:
+                    continue
+                for sk in (subj.get("slice_keys") or []):
+                    ctx = _re_cs.sub(r'(window|cohort|asat)\([^)]*\)', '', sk).strip('.')
+                    ctx = _re_cs.sub(r'\.{2,}', '.', ctx)
+                    if ctx:  # non-empty = has context qualifier
+                        commissioned_slices.setdefault(eid, set()).add(ctx)
+            if commissioned_slices:
+                _log(log, f"  commissioned slices: {sum(len(v) for v in commissioned_slices.values())} "
+                     f"across {len(commissioned_slices)} edges")
+
+        mece_dimensions: list[str] = payload.get("mece_dimensions") or []
+        if mece_dimensions:
+            _log(log, f"  MECE dimensions: {mece_dimensions}")
+
         if snapshot_rows:
             from compiler import bind_snapshot_evidence
             evidence = bind_snapshot_evidence(
                 topology, snapshot_rows, param_files, params_index, settings,
+                graph_snapshot=graph_snapshot if is_engorged else None,
+                commissioned_slices=commissioned_slices or None,
+                mece_dimensions=mece_dimensions or None,
+                regime_selections=regime_selections or None,
+            )
+        elif is_engorged:
+            from compiler import bind_evidence_from_graph
+            evidence = bind_evidence_from_graph(
+                topology, graph_snapshot, settings,
             )
         else:
             evidence = bind_evidence(
@@ -471,33 +760,78 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
         for d in evidence.diagnostics:
             _log(log,f"  evidence: {d}")
 
-        # Intermediate evidence summary — what data is the model actually getting?
-        for edge_id, edge_ev in evidence.edges.items():
-            if edge_ev.skipped:
-                continue
-            n_cohort_obs = len(edge_ev.cohort_obs)
-            n_window_traj = 0
-            n_cohort_traj = 0
-            n_window_daily = 0
-            n_cohort_daily = 0
-            for co in edge_ev.cohort_obs:
-                for t in co.trajectories:
-                    if t.obs_type == "window":
-                        n_window_traj += 1
-                    else:
-                        n_cohort_traj += 1
-                for d in co.daily:
-                    # daily obs don't have obs_type yet; infer from slice_dsl
-                    if "window" in co.slice_dsl:
-                        n_window_daily += 1
-                    else:
-                        n_cohort_daily += 1
-            has_snapshot = n_window_traj + n_cohort_traj + n_window_daily + n_cohort_daily > 0
+        # Build binding receipt — structured audit of what evidence was bound
+        receipt_mode = settings.get("binding_receipt", "log")
+        binding_receipt = _build_binding_receipt(
+            topology=topology,
+            evidence=evidence,
+            snapshot_subjects=snapshot_subjects,
+            candidate_regimes_by_edge=candidate_regimes_by_edge or {},
+            rows_raw_per_edge=rows_raw_per_edge,
+            hashes_seen_per_edge=hashes_seen_per_edge,
+            regime_selections=regime_selections,
+            mode=receipt_mode,
+        )
+
+        # Log receipt summary (replaces ad-hoc evidence detail block)
+        _log(log,
+            f"binding receipt: {binding_receipt.edges_bound} bound, "
+            f"{binding_receipt.edges_fallback} fallback, "
+            f"{binding_receipt.edges_skipped} skipped, "
+            f"{binding_receipt.edges_no_subjects} no-subjects, "
+            f"{binding_receipt.edges_warned} warned, "
+            f"{binding_receipt.edges_failed} failed "
+            f"(mode={binding_receipt.mode})"
+        )
+        # Log per-edge receipt summaries. Only log divergences for
+        # warn/fail edges to avoid flooding the log on large graphs.
+        for eid, er in binding_receipt.edge_receipts.items():
+            if er.verdict == "pass" and not er.divergences:
+                continue  # skip clean edges in log
             _log(log,
-                f"  evidence detail {edge_id[:8]}…: "
-                f"source={'snapshot' if has_snapshot else 'param_file'}, "
-                f"window_traj={n_window_traj}, cohort_traj={n_cohort_traj}, "
-                f"window_daily={n_window_daily}, cohort_daily={n_cohort_daily}"
+                f"  binding {eid[:8]}…: "
+                f"verdict={er.verdict}, "
+                f"source={er.evidence_source}, "
+                f"db_rows={er.rows_raw}→{er.rows_post_regime} (post-regime), "
+                f"total_n={er.total_n} (observations)"
+            )
+            for div in er.divergences:
+                # Truncate long divergence messages (e.g. 32-slice lists)
+                _log(log, f"    {div[:120]}{'…' if len(div) > 120 else ''}")
+
+        # Per-slice row counts — logged for ALL edges with slices (doc 35)
+        for eid, er in binding_receipt.edge_receipts.items():
+            for ctx_key, counts in er.slice_row_counts.items():
+                _log(log,
+                    f"  slice {eid[:8]}… {ctx_key}: "
+                    f"total_n={counts['total_n']} "
+                    f"window={counts['window_n']} cohort={counts['cohort_n']}"
+                )
+
+        if binding_receipt.mode == "preflight":
+            # Preflight mode: always return after receipt, never run MCMC.
+            # Used by CLI --preflight for data binding assurance.
+            _log(log, f"binding receipt preflight: {binding_receipt.edges_failed} failed, "
+                 f"{binding_receipt.edges_warned} warned, {binding_receipt.edges_bound} bound")
+            binding_receipt.halted = True
+            report("complete", 100)
+            return _build_result(
+                None if binding_receipt.edges_failed == 0 else
+                    f"binding receipt preflight: {binding_receipt.edges_failed} edges failed",
+                log, timings, t0, result_edges, result_skipped,
+                quality_dict, webhook_response,
+                binding_receipt=binding_receipt,
+            )
+
+        if binding_receipt.mode == "gate" and binding_receipt.edges_failed > 0:
+            error = f"binding receipt gate: {binding_receipt.edges_failed} edges failed"
+            _log(log, error)
+            binding_receipt.halted = True
+            report("complete", 100)
+            return _build_result(
+                error, log, timings, t0, result_edges, result_skipped,
+                quality_dict, webhook_response,
+                binding_receipt=binding_receipt,
             )
 
         timings["evidence_ms"] = int((time.time() - t0) * 1000) - timings.get("neon_ms", 0) - timings.get("topology_ms", 0)
@@ -511,6 +845,7 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
             return _build_result(
                 None, log, timings, t0, result_edges, result_skipped,
                 quality_dict, webhook_response,
+                binding_receipt=binding_receipt,
             )
 
         if n_with_data == 0:
@@ -520,6 +855,7 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
             return _build_result(
                 error, log, timings, t0, result_edges, result_skipped,
                 quality_dict, webhook_response,
+                binding_receipt=binding_receipt,
             )
 
         # ── 4. Build model ──
@@ -563,14 +899,20 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
         else:
             _log(log, "settings: no BAYES_* keys in payload — using module defaults")
 
+        t_build = time.time()
         model, metadata = build_model(topology, evidence, features=features, settings=settings)
+        _log(log, f"build_model: {int((time.time() - t_build) * 1000)}ms")
         _log(log,f"model: {len(model.free_RVs)} free vars, {len(model.observed_RVs)} observed")
+        _log(log, f"model graph: {len(model.potentials)} potentials, "
+             f"{len(model.deterministics)} deterministics")
         for d in metadata.get("diagnostics", []):
             _log(log,f"  model: {d}")
 
         # ── 4b. Model inspection (always runs) ──
+        t_inspect = time.time()
         from compiler import inspect_model
         inspection = inspect_model(model, metadata, topology, evidence)
+        _log(log, f"inspect_model: {int((time.time() - t_inspect) * 1000)}ms")
         for line in inspection:
             _log(log,line)
 
@@ -581,6 +923,7 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
             return _build_result(
                 None, log, timings, t0, result_edges, result_skipped,
                 quality_dict, webhook_response,
+                binding_receipt=binding_receipt,
             )
 
         # ── 5. Run inference ──
@@ -597,6 +940,8 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
             cores=settings.get("cores"),
             target_accept=_s_float("target_accept", "bayes_target_accept", "BAYES_TARGET_ACCEPT", 0.90),
             random_seed=settings.get("random_seed"),
+            lowrank_mass_matrix=features.get("lowrank_mass_matrix", False),
+            jax_backend=features.get("jax_backend", False),
         )
 
         progress.set_band(*P1_SAMPLE)
@@ -609,11 +954,72 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
             f"divergences={quality.total_divergences}"
         )
 
-        # ── 6. Summarise Phase 1 posteriors ──
+        # ── 6. LOO-ELPD scoring + Summarise Phase 1 posteriors ──
         progress.set_band(*P1_SUMMARISE)
         report("summarising", 100, f"{phase1_label}: Computing diagnostics…")
+        from compiler.loo import compute_loo_scores, extract_analytic_baselines, AnalyticBaseline
+        analytic_baselines = extract_analytic_baselines(graph_snapshot, topology, evidence=evidence)
+
+        # Build per-slice truth baselines from settings (doc 35).
+        # Written by param_recovery.py from the truth file's context_dimensions.
+        _slice_baselines = None
+        _stb_raw = settings.get("slice_truth_baselines")
+        if _stb_raw and isinstance(_stb_raw, dict):
+            _slice_baselines = {}
+            # Map truth edge_key → actual edge_id via param_id matching
+            _pid_to_eid = {}
+            for eid, et in topology.edges.items():
+                if et.param_id:
+                    _pid_to_eid[et.param_id] = eid
+            for edge_key, ctx_map in _stb_raw.items():
+                eid = _pid_to_eid.get(edge_key, edge_key)
+                _slice_baselines[eid] = {}
+                for ctx_key, vals in ctx_map.items():
+                    _slice_baselines[eid][ctx_key] = AnalyticBaseline(
+                        p=vals["p"],
+                        p_sd=0.01,  # tight — truth is exact
+                        onset=vals.get("onset", 0.0),
+                        mu=vals.get("mu", 0.0),
+                        sigma=vals.get("sigma", 0.5),
+                        has_latency=vals.get("mu", 0.0) > 0,
+                    )
+
+        loo_diag = []
+        try:
+            loo_scores, _slice_loo = compute_loo_scores(
+                trace, evidence, topology,
+                analytic_baselines=analytic_baselines,
+                slice_baselines=_slice_baselines,
+                diagnostics=loo_diag,
+            )
+        except Exception as e:
+            loo_scores = None
+            _slice_loo = {}
+            loo_diag.append(f"LOO: failed: {e}")
+        for d in loo_diag:
+            _log(log, f"  {d}")
+
+        # ── 6a. PPC calibration (doc 36) — opt-in via --diag ──
+        calibration_results = {}
+        if settings.get("run_calibration"):
+            from compiler.calibration import compute_calibration
+            cal_diag: list[str] = []
+            _cal_truth = settings.get("calibration_truth")
+            try:
+                calibration_results = compute_calibration(
+                    trace, evidence, topology, metadata,
+                    diagnostics=cal_diag,
+                    calibration_truth=_cal_truth,
+                )
+            except Exception as e:
+                calibration_results = {}
+                cal_diag.append(f"calibration: failed: {e}")
+            for d in cal_diag:
+                _log(log, f"  {d}")
+
         inference_result = summarise_posteriors(trace, topology, evidence, metadata, quality,
-                                                settings=settings)
+                                                settings=settings, loo_scores=loo_scores,
+                                                calibration_scores=calibration_results)
 
         # ── 6b. Phase 2: cohort pass with frozen Phase 1 results ──
         # Extract Phase 1 posterior means and build Phase 2 model.
@@ -674,6 +1080,49 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
                     frozen_edge["onset"] = float(on_s.mean())
                     frozen_edge["onset_sd"] = float(on_s.std())
 
+                # Per-slice posteriors for Phase 2 contexted modelling.
+                # Extract from Phase 1 trace vectors (p_slice_vec, mu_slice_vec, etc.)
+                # keyed by context key in the same order as slice_axes.
+                if ev.has_slices and ev.slice_groups:
+                    slice_frozen = {}
+                    # Reconstruct slice axis ordering (must match model.py's ordering)
+                    _slice_ctx_keys = []
+                    for _dk, _sg in ev.slice_groups.items():
+                        for _ck in _sg.slices:
+                            _slice_ctx_keys.append(_ck)
+
+                    p_vec_name = f"p_slice_vec_{safe_eid}"
+                    mu_vec_name = f"mu_slice_vec_{safe_eid}"
+                    kappa_vec_name = f"kappa_slice_vec_{safe_eid}"
+
+                    p_vec_samples = trace.posterior.get(p_vec_name)
+                    mu_vec_samples = trace.posterior.get(mu_vec_name)
+                    kappa_vec_samples = trace.posterior.get(kappa_vec_name)
+
+                    for si, ctx_key in enumerate(_slice_ctx_keys):
+                        sf = {}
+                        if p_vec_samples is not None:
+                            _ps = p_vec_samples.values[:, :, si].flatten()
+                            sf["p"] = float(_ps.mean())
+                            sf["p_sd"] = float(_ps.std())
+                            if sf["p_sd"] > 1e-6 and 0 < sf["p"] < 1:
+                                _v = sf["p_sd"] ** 2
+                                _c = sf["p"] * (1 - sf["p"]) / _v - 1
+                                if _c > 0:
+                                    sf["p_alpha"] = max(sf["p"] * _c, 0.5)
+                                    sf["p_beta"] = max((1 - sf["p"]) * _c, 0.5)
+                        if mu_vec_samples is not None:
+                            _ms = mu_vec_samples.values[:, :, si].flatten()
+                            sf["mu"] = float(_ms.mean())
+                            sf["mu_sd"] = float(_ms.std())
+                        if kappa_vec_samples is not None:
+                            _ks = kappa_vec_samples.values[:, :, si].flatten()
+                            sf["kappa"] = float(_ks.mean())
+                        if sf:
+                            slice_frozen[ctx_key] = sf
+                    if slice_frozen:
+                        frozen_edge["slices"] = slice_frozen
+
                 if frozen_edge:
                     phase2_frozen[edge_id] = frozen_edge
                     parts = [f"p={frozen_edge.get('p', 0):.4f}±{frozen_edge.get('p_sd', 0):.4f}"]
@@ -684,6 +1133,12 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
                     if 'onset' in frozen_edge:
                         parts.append(f"onset={frozen_edge['onset']:.2f}±{frozen_edge['onset_sd']:.2f}")
                     _log(log, f"  phase1_posterior {edge_id[:8]}…: {', '.join(parts)}")
+                    if "slices" in frozen_edge:
+                        for _sk, _sf in frozen_edge["slices"].items():
+                            _sp = [f"p={_sf.get('p', 0):.4f}"]
+                            if "mu" in _sf:
+                                _sp.append(f"mu={_sf['mu']:.3f}")
+                            _log(log, f"    slice {_sk}: {', '.join(_sp)}")
 
             # Estimate per-edge drift rate via variogram on mature daily obs.
             #
@@ -800,6 +1255,27 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
                           f"F_range=[{min(best_by_day[d][2] for d in sorted_days):.2f}, "
                           f"{max(best_by_day[d][2] for d in sorted_days):.2f}])")
 
+            # Dump debug artefacts for offline Phase 2 reproduction.
+            # Avoids re-running the expensive Phase 1 MCMC.
+            # Wrapped in try/except: losing the dump is bad, but crashing
+            # the worker (and losing the Phase 2 attempt) after 14 min
+            # of Phase 1 MCMC is worse.
+            try:
+                import json as _json_dump, pickle as _pkl
+                _debug_dir = f"/tmp/bayes_debug-{payload.get('graph_id', 'unknown')}"
+                os.makedirs(_debug_dir, exist_ok=True)
+                with open(f"{_debug_dir}/phase2_frozen.json", "w") as _fd:
+                    _json_dump.dump(phase2_frozen, _fd, indent=2, default=str)
+                with open(f"{_debug_dir}/evidence.pkl", "wb") as _fd:
+                    _pkl.dump(evidence, _fd)
+                with open(f"{_debug_dir}/topology.pkl", "wb") as _fd:
+                    _pkl.dump(topology, _fd)
+                with open(f"{_debug_dir}/settings.json", "w") as _fd:
+                    _json_dump.dump({"features": features, "settings": settings}, _fd, indent=2, default=str)
+                _log(log, f"  Phase 2 debug artefacts: {_debug_dir}/")
+            except Exception as _dump_err:
+                _log(log, f"  WARNING: Phase 2 debug artefact dump failed: {_dump_err}")
+
             # Build Phase 2 model
             model2, metadata2 = build_model(
                 topology, evidence, features=features,
@@ -818,9 +1294,29 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
                 _log(log, line)
 
             # Run Phase 2 MCMC
+            # If JAX backend fails init (NaN gradients on join-node graphs),
+            # fall back to numba. See compiler journal 13-Apr-26 update 10.
             progress.set_band(*P2_SAMPLE)
             t_sample2 = time.time()
-            trace2, quality2 = run_inference(model2, sampling_config, report, phase_label=phase2_label)
+            try:
+                trace2, quality2 = run_inference(model2, sampling_config, report, phase_label=phase2_label)
+            except RuntimeError as _p2_err:
+                if "initialization" in str(_p2_err).lower() and sampling_config.jax_backend:
+                    _log(log, f"  Phase 2 JAX init failed: {_p2_err}")
+                    _log(log, "  Retrying Phase 2 with numba backend…")
+                    _numba_config = SamplingConfig(
+                        draws=sampling_config.draws,
+                        tune=sampling_config.tune,
+                        chains=sampling_config.chains,
+                        cores=sampling_config.cores,
+                        target_accept=sampling_config.target_accept,
+                        random_seed=sampling_config.random_seed,
+                        jax_backend=False,
+                    )
+                    trace2, quality2 = run_inference(model2, _numba_config, report, phase_label=phase2_label)
+                    _log(log, "  Phase 2 numba fallback succeeded")
+                else:
+                    raise
             timings["sampling_phase2_ms"] = int((time.time() - t_sample2) * 1000)
             _log(log,
                 f"  Phase 2 sampling: {timings['sampling_phase2_ms']}ms, "
@@ -843,12 +1339,39 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
                               f"mean={eps.mean():.3f} std={eps.std():.3f} "
                               f"range=[{eps.min():.3f}, {eps.max():.3f}]")
 
-            # Summarise Phase 2 — cohort posteriors
+            # LOO-ELPD scoring + Summarise Phase 2 — cohort posteriors
             progress.set_band(*P2_SUMMARISE)
             report("summarising", 100, f"{phase2_label}: Computing diagnostics…")
+            loo_diag2 = []
+            try:
+                loo_scores2, _slice_loo2 = compute_loo_scores(
+                    trace2, evidence, topology,
+                    analytic_baselines=analytic_baselines,
+                    slice_baselines=_slice_baselines,
+                    diagnostics=loo_diag2,
+                )
+            except Exception as e:
+                loo_scores2 = None
+                loo_diag2.append(f"LOO Phase 2: failed: {e}")
+            for d in loo_diag2:
+                _log(log, f"  {d}")
+
+            # PPC calibration Phase 2 (doc 36) — opt-in via --diag
+            if settings.get("run_calibration"):
+                cal_diag2: list[str] = []
+                try:
+                    calibration_results2 = compute_calibration(
+                        trace2, evidence, topology, metadata2,
+                        diagnostics=cal_diag2,
+                    )
+                except Exception as e:
+                    cal_diag2.append(f"calibration Phase 2: failed: {e}")
+                for d in cal_diag2:
+                    _log(log, f"  {d}")
+
             inference_result2 = summarise_posteriors(
                 trace2, topology, evidence, metadata2, quality2,
-                settings=settings,
+                settings=settings, loo_scores=loo_scores2,
             )
 
             # Merge Phase 2 cohort results into Phase 1 results.
@@ -864,6 +1387,41 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
                             post1.cohort_hdi_lower = post2.cohort_hdi_lower
                             post1.cohort_hdi_upper = post2.cohort_hdi_upper
                         break
+
+            # Extract Phase 2 per-slice cohort posteriors from trace2.
+            # These replace the window-copy fallback in _build_unified_slices.
+            import numpy as _np2
+            for post1 in inference_result.posteriors:
+                edge_id = post1.edge_id
+                safe_eid = edge_id.replace("-", "_")
+                ev = evidence.edges.get(edge_id)
+                if not ev or not ev.slice_groups:
+                    continue
+                cohort_slice_posts = {}
+                for _dk, _sg in ev.slice_groups.items():
+                    for ctx_key in _sg.slices:
+                        # Must match model.py _safe_var_name: replace hyphens with underscores
+                        ctx_safe = ctx_key.replace("-", "_")
+                        p_name = f"p_cohort_slice_{safe_eid}_{ctx_safe}"
+                        if p_name in trace2.posterior:
+                            _ps = trace2.posterior[p_name].values.flatten()
+                            _p_mean = float(_ps.mean())
+                            _p_std = float(_ps.std())
+                            _alpha, _beta = _p_mean, 1.0 - _p_mean  # fallback
+                            if _p_std > 1e-6 and 0 < _p_mean < 1:
+                                _v = _p_std ** 2
+                                _c = _p_mean * (1 - _p_mean) / _v - 1
+                                if _c > 0:
+                                    _alpha = max(_p_mean * _c, 0.5)
+                                    _beta = max((1 - _p_mean) * _c, 0.5)
+                            cohort_slice_posts[ctx_key] = {
+                                "alpha": _alpha,
+                                "beta": _beta,
+                                "p_mean": _p_mean,
+                                "p_sd": _p_std,
+                            }
+                if cohort_slice_posts:
+                    post1.cohort_slice_posteriors = cohort_slice_posts
 
             # Merge cohort latency posteriors from Phase 2.
             # Phase 2's path-level latency (onset, mu, sigma) overrides
@@ -993,7 +1551,384 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
     return _build_result(
         error, log, timings, t0, result_edges, result_skipped,
         quality_dict, webhook_response,
+        binding_receipt=binding_receipt,
     )
+
+
+# ---------------------------------------------------------------------------
+# Binding receipt construction
+# ---------------------------------------------------------------------------
+
+def _build_binding_receipt(
+    topology,
+    evidence,
+    snapshot_subjects: list,
+    candidate_regimes_by_edge: dict,
+    rows_raw_per_edge: dict,
+    hashes_seen_per_edge: dict,
+    regime_selections: dict,
+    mode: str = "log",
+):
+    """Build a structured binding receipt from evidence binding outcomes.
+
+    Inspects the bound evidence alongside the raw inputs (snapshot subjects,
+    regime selections, row counts) to produce a per-edge audit trail with
+    verdicts and graph-level summary counts.
+    """
+    import re as _re
+    from compiler.types import EdgeBindingReceipt, BindingReceipt
+
+    def _extract_context_key(slice_dsl: str) -> str:
+        """Extract context identity from a full slice_dsl string.
+
+        Strips temporal qualifiers: window(...), cohort(...), asat(...).
+        Leaves context(...), visited(...), case(...) etc.
+        For uncontexted data, returns "" (matching FE convention).
+        """
+        stripped = _re.sub(r'(window|cohort|asat)\([^)]*\)', '', slice_dsl)
+        stripped = stripped.strip('.')
+        stripped = _re.sub(r'\.{2,}', '.', stripped)
+        return stripped
+
+    # Group snapshot subjects by edge_id
+    subjects_by_edge: dict[str, list[dict]] = {}
+    for subj in (snapshot_subjects or []):
+        eid = subj.get("edge_id") or subj.get("target", {}).get("targetId", "")
+        if eid:
+            subjects_by_edge.setdefault(eid, []).append(subj)
+
+    edge_receipts: dict[str, EdgeBindingReceipt] = {}
+    n_bound = 0
+    n_fallback = 0
+    n_skipped = 0
+    n_no_subjects = 0
+    n_warned = 0
+    n_failed = 0
+
+    for edge_id, et in topology.edges.items():
+        edge_ev = evidence.edges.get(edge_id)
+
+        er = EdgeBindingReceipt(edge_id=edge_id, param_id=et.param_id or "")
+
+        # Edge not processed by evidence binder at all (e.g. no param_id)
+        if not edge_ev:
+            edge_subjects = subjects_by_edge.get(edge_id, [])
+            if not edge_subjects:
+                n_no_subjects += 1
+            else:
+                n_skipped += 1
+            er.evidence_source = "none"
+            er.skipped = True
+            er.skip_reason = "no evidence (edge not processed by binder)"
+            er.verdict = "pass"
+            edge_receipts[edge_id] = er
+            continue
+
+        # --- Subjects and hash coverage ---
+        edge_subjects = subjects_by_edge.get(edge_id, [])
+        if not edge_subjects:
+            n_no_subjects += 1
+            er.evidence_source = "param_file" if not edge_ev.skipped else "none"
+            er.skipped = edge_ev.skipped
+            er.skip_reason = edge_ev.skip_reason or ""
+            if not edge_ev.skipped:
+                n_fallback += 1
+            else:
+                n_skipped += 1
+            er.verdict = "pass"
+            edge_receipts[edge_id] = er
+            continue
+
+        # Collect expected hashes from candidate regimes
+        cr_raw = candidate_regimes_by_edge.get(edge_id, [])
+        expected_hashes = []
+        for cr in cr_raw:
+            if isinstance(cr, dict) and cr.get("core_hash"):
+                expected_hashes.append(cr["core_hash"])
+        er.expected_hashes = expected_hashes
+
+        # Hashes actually seen in raw rows
+        seen = hashes_seen_per_edge.get(edge_id, set())
+        er.hashes_with_data = sorted(h for h in expected_hashes if h in seen)
+        er.hashes_empty = sorted(h for h in expected_hashes if h not in seen)
+
+        # Collect expected slices from subjects, normalised to context-only
+        # keys (same treatment as observed slices — strip temporal qualifiers)
+        expected_slices_raw = []
+        for subj in edge_subjects:
+            for sk in (subj.get("slice_keys") or []):
+                if sk not in expected_slices_raw:
+                    expected_slices_raw.append(sk)
+        expected_slices = sorted(set(_extract_context_key(sk) for sk in expected_slices_raw))
+        er.expected_slices = expected_slices
+
+        # Anchor range from subjects
+        anchor_froms = [s.get("anchor_from", "") for s in edge_subjects if s.get("anchor_from")]
+        anchor_tos = [s.get("anchor_to", "") for s in edge_subjects if s.get("anchor_to")]
+        if anchor_froms:
+            er.expected_anchor_from = min(anchor_froms)
+        if anchor_tos:
+            er.expected_anchor_to = max(anchor_tos)
+
+        # --- Row counts ---
+        er.rows_raw = rows_raw_per_edge.get(edge_id, 0)
+
+        # Regime selection details
+        sel = regime_selections.get(edge_id)
+        if sel:
+            er.rows_post_regime = len(sel.rows)
+            er.regimes_seen = len(sel.regime_per_date) if hasattr(sel, 'regime_per_date') else 0
+            # Pick the most common regime as regime_selected
+            if hasattr(sel, 'regime_per_date') and sel.regime_per_date:
+                from collections import Counter
+                hash_counts = Counter(
+                    r.core_hash for r in sel.regime_per_date.values()
+                )
+                er.regime_selected = hash_counts.most_common(1)[0][0] if hash_counts else ""
+        else:
+            er.rows_post_regime = er.rows_raw
+
+        # Suppression counts from EdgeEvidence
+        er.rows_post_suppression = edge_ev.rows_post_aggregation
+        er.rows_suppressed = edge_ev.rows_aggregated
+
+        # --- Observation counts ---
+        w_traj = 0
+        w_daily = 0
+        c_traj = 0
+        c_daily = 0
+        observed_slices_raw = set()  # full slice_dsl strings
+        actual_anchors = set()
+
+        for co in edge_ev.cohort_obs:
+            observed_slices_raw.add(co.slice_dsl)
+            for t in co.trajectories:
+                if t.obs_type == "window":
+                    w_traj += 1
+                else:
+                    c_traj += 1
+                if t.date:
+                    actual_anchors.add(t.date)
+            for d in co.daily:
+                if "window" in co.slice_dsl:
+                    w_daily += 1
+                else:
+                    c_daily += 1
+                if d.date:
+                    actual_anchors.add(d.date)
+
+        for wo in edge_ev.window_obs:
+            observed_slices_raw.add(wo.slice_dsl)
+
+        # Also scan slice_groups — after _route_slices, per-context
+        # observations are moved from cohort_obs/window_obs into
+        # SliceGroups. The context_key on each SliceObservations is
+        # already normalised (no temporal qualifier).
+        slice_row_counts: dict[str, dict[str, int]] = {}
+        for dim_key, sg in edge_ev.slice_groups.items():
+            for ctx_key, sobs in sg.slices.items():
+                observed_slices_raw.add(ctx_key)
+                # Tally per-slice row counts from SliceObservations.
+                # Window data may live in WindowObservation objects (from
+                # param file values[]) OR in CohortObservation trajectories
+                # with obs_type="window" (from snapshot rows).  Count both.
+                s_window_n = sum(w.n for w in sobs.window_obs) if sobs.window_obs else 0
+                s_cohort_n = 0
+                if sobs.cohort_obs:
+                    for co in sobs.cohort_obs:
+                        for t in (co.trajectories or []):
+                            if t.obs_type == "window":
+                                s_window_n += t.n
+                            else:
+                                s_cohort_n += t.n
+                        for d in (co.daily or []):
+                            if "window" in co.slice_dsl:
+                                s_window_n += d.n
+                            else:
+                                s_cohort_n += d.n
+                slice_row_counts[ctx_key] = {
+                    "total_n": sobs.total_n,
+                    "window_n": s_window_n,
+                    "cohort_n": s_cohort_n,
+                }
+        er.slice_row_counts = slice_row_counts
+
+        er.window_trajectories = w_traj
+        er.window_daily = w_daily
+        er.cohort_trajectories = c_traj
+        er.cohort_daily = c_daily
+        er.total_n = edge_ev.total_n
+
+        # --- Slice comparison ---
+        # Both expected and observed slices are normalised to context-only
+        # keys via _extract_context_key (strips window/cohort/asat).
+
+        observed_context_keys = set()
+        for raw_dsl in observed_slices_raw:
+            observed_context_keys.add(_extract_context_key(raw_dsl))
+
+        er.observed_slices = sorted(observed_context_keys)
+        er.missing_slices = sorted(s for s in expected_slices if s not in observed_context_keys)
+        # The aggregate slice ("") is always present alongside contexted
+        # slices — the evidence binder produces both aggregate and
+        # per-context observations. Don't flag it as unexpected.
+        er.unexpected_slices = sorted(
+            s for s in observed_context_keys
+            if s not in expected_slices and s != ""
+        )
+
+        # --- Anchor coverage ---
+        # Dates on trajectories/daily obs may be in ISO format ("2025-08-19")
+        # from snapshot DB rows, or UK format ("1-Dec-25") from param file
+        # supplementation. Normalise to date objects for correct sorting.
+        if actual_anchors:
+            from datetime import date as _date
+            parsed_anchors = set()
+            for d in actual_anchors:
+                try:
+                    parsed_anchors.add(_date.fromisoformat(d))
+                except (ValueError, TypeError):
+                    # Try UK format: d-MMM-yy
+                    try:
+                        from datetime import datetime as _dt
+                        parsed_anchors.add(_dt.strptime(d, "%d-%b-%y").date())
+                    except (ValueError, TypeError):
+                        pass  # unparseable — skip
+            if parsed_anchors:
+                sorted_anchors = sorted(parsed_anchors)
+                er.actual_anchor_from = sorted_anchors[0].isoformat()
+                er.actual_anchor_to = sorted_anchors[-1].isoformat()
+                er.anchor_days_covered = len(parsed_anchors)
+
+        # Evidence source classification
+        has_snapshot = (w_traj + c_traj + w_daily + c_daily) > 0
+        has_param = any(
+            "param" in co.slice_dsl or "file" in co.slice_dsl
+            for co in edge_ev.cohort_obs
+        ) or len(edge_ev.window_obs) > 0
+        if has_snapshot and has_param:
+            er.evidence_source = "mixed"
+        elif has_snapshot:
+            er.evidence_source = "snapshot"
+        elif not edge_ev.skipped:
+            er.evidence_source = "param_file"
+        else:
+            er.evidence_source = "none"
+
+        # Skip state
+        er.skipped = edge_ev.skipped
+        er.skip_reason = edge_ev.skip_reason
+
+        # Content hash — checksums the assembled model inputs for
+        # parity comparison between payload contracts.
+        er.evidence_hash = edge_ev.content_hash()
+
+        # --- Verdict ---
+        divergences = []
+
+        if er.expected_hashes and all(h in er.hashes_empty for h in er.expected_hashes):
+            divergences.append("all expected hashes returned no data")
+
+        if er.rows_raw > 0 and er.total_n == 0:
+            divergences.append(
+                f"rows_raw={er.rows_raw} but total_n=0 — all data lost in pipeline"
+            )
+
+        if er.expected_hashes and er.hashes_empty and not all(h in er.hashes_empty for h in er.expected_hashes):
+            divergences.append(
+                f"{len(er.hashes_empty)} of {len(er.expected_hashes)} expected hashes empty"
+            )
+
+        if er.rows_raw > 0 and er.rows_raw > er.rows_post_regime:
+            regime_pct = 1.0 - (er.rows_post_regime / er.rows_raw)
+            if regime_pct > 0.5:
+                divergences.append(
+                    f"regime dedup removed {regime_pct:.0%} of rows "
+                    f"({er.rows_raw} → {er.rows_post_regime})"
+                )
+
+        if er.evidence_source == "param_file" and er.expected_hashes:
+            divergences.append("snapshot expected but fell back to param_file")
+
+        if (er.expected_anchor_from and er.actual_anchor_from and
+                er.expected_anchor_to and er.actual_anchor_to):
+            try:
+                from datetime import date as _date
+                exp_days = (_date.fromisoformat(er.expected_anchor_to) -
+                            _date.fromisoformat(er.expected_anchor_from)).days
+                act_days = (_date.fromisoformat(er.actual_anchor_to) -
+                            _date.fromisoformat(er.actual_anchor_from)).days
+                if exp_days > 0 and act_days < (exp_days * 0.5):
+                    divergences.append(
+                        f"anchor range covers {act_days}d of {exp_days}d expected (<50%)"
+                    )
+            except (ValueError, TypeError):
+                pass  # date parsing failed — skip this check
+
+        # Slice coverage divergences (Phase C — populated when context routing active)
+        if er.missing_slices:
+            divergences.append(
+                f"{len(er.missing_slices)} expected slices missing: "
+                f"{', '.join(er.missing_slices)}"
+            )
+
+        if er.unexpected_slices:
+            divergences.append(
+                f"{len(er.unexpected_slices)} unexpected slices found: "
+                f"{', '.join(er.unexpected_slices)}"
+            )
+
+        if er.orphan_rows > 0:
+            divergences.append(f"{er.orphan_rows} rows could not be routed to any slice")
+
+        er.divergences = divergences
+
+        # Assign verdict
+        # All expected hashes empty is only a fail if data didn't arrive
+        # via equivalence (rows_raw == 0 or total_n == 0). If data was
+        # found via equivalent hashes, the primary hash being absent is
+        # a warn, not a fail.
+        all_hashes_empty = er.expected_hashes and all(h in er.hashes_empty for h in er.expected_hashes)
+        all_hashes_empty_and_no_data = all_hashes_empty and (er.rows_raw == 0 or er.total_n == 0)
+        all_slices_missing = (er.expected_slices and er.missing_slices
+                              and set(er.missing_slices) == set(er.expected_slices))
+        has_fail = (
+            all_hashes_empty_and_no_data or
+            (er.rows_raw > 0 and er.total_n == 0) or
+            all_slices_missing
+        )
+        has_warn = len(divergences) > 0 and not has_fail
+
+        if edge_ev.skipped and not edge_subjects:
+            # Skipped with no subjects = expected, not a problem
+            er.verdict = "pass"
+            n_skipped += 1
+        elif has_fail:
+            er.verdict = "fail"
+            n_failed += 1
+        elif has_warn:
+            er.verdict = "warn"
+            n_warned += 1
+            n_bound += 1
+        else:
+            er.verdict = "pass"
+            n_bound += 1
+
+        edge_receipts[edge_id] = er
+
+    receipt = BindingReceipt(
+        edge_receipts=edge_receipts,
+        edges_expected=len(topology.edges),
+        edges_bound=n_bound,
+        edges_fallback=n_fallback,
+        edges_skipped=n_skipped,
+        edges_no_subjects=n_no_subjects,
+        edges_warned=n_warned,
+        edges_failed=n_failed,
+        mode=mode,
+        halted=False,
+    )
+    return receipt
 
 
 # ---------------------------------------------------------------------------
@@ -1004,33 +1939,37 @@ def _query_snapshot_subjects(
     snapshot_subjects: list[dict],
     topology,
     log: list[str],
+    candidate_regimes_by_edge: dict | None = None,
 ) -> dict[str, list[dict]]:
-    """Query snapshot DB for each subject, return rows grouped by edge_id.
+    """Query snapshot DB for all subjects in one batch, return rows grouped by edge_id.
 
-    Uses the same snapshot_service.query_snapshots_for_sweep() that the
-    BE analysis path uses. The FE sends identical SnapshotSubjectPayload
-    shapes for both Bayes and analysis — same fields, same hash-mapping
-    ClosureEntry objects.
+    All subjects in a Bayes fit share the same pinnedDSL (same date ranges,
+    same slice_keys). Only core_hash varies per subject. We collect the union
+    of all core_hashes (primary + equivalents), issue one DB query, and
+    distribute results back to edge_ids by core_hash lookup.
 
-    Subjects have: param_id, core_hash, slice_keys, anchor_from/to,
-    sweep_from/to, equivalent_hashes (ClosureEntry[]), edge_id (or
-    target.targetId).
+    See: docs/current/project-bayes/33-snapshot-query-batching.md
     """
     from datetime import date
     try:
-        # Modal: graph-editor/lib is on PYTHONPATH as /root/lib
-        from snapshot_service import query_snapshots_for_sweep
+        from snapshot_service import query_snapshots_for_sweep_batch
     except ImportError:
-        # Local dev: add graph-editor/lib to path
         import sys
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'graph-editor', 'lib'))
-        from snapshot_service import query_snapshots_for_sweep
+        from snapshot_service import query_snapshots_for_sweep_batch
 
-    result: dict[str, list[dict]] = {}
+    # ── 1. Parse subjects: resolve edge_id, collect hashes, extract shared dates ──
+    # Map core_hash → list of edge_ids (a hash can appear in multiple subjects)
+    hash_to_edges: dict[str, list[str]] = {}
+    all_hashes: set[str] = set()
+    all_slice_keys: set[str] = set()
+    shared_anchor_from: date | None = None
+    shared_anchor_to: date | None = None
+    shared_sweep_from: date | None = None
+    shared_sweep_to: date | None = None
+    dates_parsed = False
 
     for subj in snapshot_subjects:
-        # edge_id: flat field or nested target.targetId (FE flattens it,
-        # but handle both for robustness)
         edge_id = subj.get("edge_id", "")
         if not edge_id:
             target = subj.get("target")
@@ -1039,46 +1978,104 @@ def _query_snapshot_subjects(
 
         core_hash = subj.get("core_hash", "")
         if not core_hash or not edge_id:
-            _log(log,f"  snapshot: skipping subject (no core_hash or edge_id)")
+            _log(log, f"  snapshot: skipping subject (no core_hash or edge_id)")
             continue
 
-        param_id = subj.get("param_id", "")
-        slice_keys = subj.get("slice_keys", [""])
-        anchor_from_str = subj.get("anchor_from", "")
-        anchor_to_str = subj.get("anchor_to", "")
-        sweep_from_str = subj.get("sweep_from", "")
-        sweep_to_str = subj.get("sweep_to", "")
-        equivalent_hashes = subj.get("equivalent_hashes") or None
+        # Collect primary hash
+        all_hashes.add(core_hash)
+        hash_to_edges.setdefault(core_hash, []).append(edge_id)
 
-        try:
-            anchor_from = date.fromisoformat(anchor_from_str) if anchor_from_str else None
-            anchor_to = date.fromisoformat(anchor_to_str) if anchor_to_str else None
-            sweep_from = date.fromisoformat(sweep_from_str) if sweep_from_str else None
-            sweep_to = date.fromisoformat(sweep_to_str) if sweep_to_str else None
+        # Collect equivalent hashes — map them to the same edge_id
+        equivalent_hashes = subj.get("equivalent_hashes") or []
+        for eh in equivalent_hashes:
+            eh_hash = eh.get("core_hash", "") if isinstance(eh, dict) else ""
+            if eh_hash:
+                all_hashes.add(eh_hash)
+                hash_to_edges.setdefault(eh_hash, []).append(edge_id)
 
-            rows = query_snapshots_for_sweep(
-                param_id=param_id,
-                core_hash=core_hash,
-                slice_keys=slice_keys,
-                anchor_from=anchor_from,
-                anchor_to=anchor_to,
-                sweep_from=sweep_from,
-                sweep_to=sweep_to,
-                equivalent_hashes=equivalent_hashes,
-            )
+        # Collect all slice_keys across subjects (union)
+        for sk in (subj.get("slice_keys") or [""]):
+            all_slice_keys.add(sk)
 
-            if rows:
-                if edge_id not in result:
-                    result[edge_id] = []
-                result[edge_id].extend(rows)
-                _log(log,f"  snapshot: {edge_id[:8]}… → {len(rows)} rows")
-            else:
-                _log(log,f"  snapshot: {edge_id[:8]}… → 0 rows (will fall back to param file)")
+        # Extract shared dates from first valid subject
+        if not dates_parsed:
+            a_from = subj.get("anchor_from", "")
+            a_to = subj.get("anchor_to", "")
+            s_from = subj.get("sweep_from", "")
+            s_to = subj.get("sweep_to", "")
+            try:
+                shared_anchor_from = date.fromisoformat(a_from) if a_from else None
+                shared_anchor_to = date.fromisoformat(a_to) if a_to else None
+                shared_sweep_from = date.fromisoformat(s_from) if s_from else None
+                shared_sweep_to = date.fromisoformat(s_to) if s_to else None
+                dates_parsed = True
+            except (ValueError, TypeError) as e:
+                _log(log, f"  snapshot: date parse failed: {e}")
 
-        except Exception as e:
-            # Debug: log the types of each param to trace 'can't adapt type' errors
-            eh_types = f", equiv_hashes types={[type(h).__name__ for h in (equivalent_hashes or [])]}" if equivalent_hashes else ""
-            _log(log,f"  snapshot: {edge_id[:8]}… query failed: {e} [slice_keys={slice_keys}{eh_types}]")
+    # Include ALL candidate regime hashes (not just subject hashes).
+    # In mixed-epoch scenarios, subjects carry context hashes but the
+    # DB also has bare (uncontexted) rows under different hashes from
+    # earlier epochs. candidate_regimes_by_edge lists all hash families
+    # per edge — include them all so the batch query fetches everything.
+    if candidate_regimes_by_edge:
+        for edge_id, regimes in candidate_regimes_by_edge.items():
+            for cr in regimes:
+                if not isinstance(cr, dict):
+                    continue
+                ch = cr.get("core_hash", "")
+                if ch:
+                    all_hashes.add(ch)
+                    hash_to_edges.setdefault(ch, []).append(edge_id)
+                for eh in (cr.get("equivalent_hashes") or []):
+                    eh_hash = eh.get("core_hash", "") if isinstance(eh, dict) else ""
+                    if eh_hash:
+                        all_hashes.add(eh_hash)
+                        hash_to_edges.setdefault(eh_hash, []).append(edge_id)
+
+    if not all_hashes:
+        _log(log, "  snapshot: no valid hashes to query")
+        return {}
+
+    # Always include "" (broad fetch) so bare aggregate rows from
+    # uncontexted epochs are fetched alongside context-qualified rows.
+    # Regime selection handles the per-date filtering downstream.
+    all_slice_keys.add("")
+
+    # ── 2. One batch query ──
+    _log(log, f"  snapshot: batch query for {len(all_hashes)} unique hashes")
+    try:
+        rows_by_hash = query_snapshots_for_sweep_batch(
+            core_hashes=list(all_hashes),
+            slice_keys=list(all_slice_keys),
+            anchor_from=shared_anchor_from,
+            anchor_to=shared_anchor_to,
+            sweep_from=shared_sweep_from,
+            sweep_to=shared_sweep_to,
+        )
+    except Exception as e:
+        _log(log, f"  snapshot: batch query failed: {e}")
+        return {}
+
+    # ── 3. Distribute rows to edge_ids ──
+    # Deduplicate edge_ids per hash: multiple subjects may share the same
+    # (core_hash, edge_id) pair when they differ only in slice_keys.
+    result: dict[str, list[dict]] = {}
+    for core_hash, rows in rows_by_hash.items():
+        edge_ids = set(hash_to_edges.get(core_hash, []))
+        for edge_id in edge_ids:
+            if edge_id not in result:
+                result[edge_id] = []
+            result[edge_id].extend(rows)
+
+    for edge_id, rows in result.items():
+        _log(log, f"  snapshot: {edge_id[:8]}… → {len(rows)} rows")
+
+    # Log edges with no data
+    all_edge_ids = set()
+    for edges in hash_to_edges.values():
+        all_edge_ids.update(edges)
+    for edge_id in all_edge_ids - set(result.keys()):
+        _log(log, f"  snapshot: {edge_id[:8]}… → 0 rows (will fall back to param file)")
 
     return result
 
@@ -1127,9 +2124,27 @@ def _build_unified_slices(
         window["hdi_t95_upper"] = round(lat.hdi_t95_upper, 1)
         if lat.onset_mu_corr is not None:
             window["onset_mu_corr"] = round(lat.onset_mu_corr, 3)
+        # Latency dispersion (doc 34)
+        if lat.kappa_lat_mean is not None:
+            window["kappa_lat_mean"] = round(lat.kappa_lat_mean, 1)
+            window["kappa_lat_sd"] = round(lat.kappa_lat_sd, 1) if lat.kappa_lat_sd is not None else None
         # Use worst-of for combined quality
         window["ess"] = round(min(prob.ess, lat.ess), 1)
         window["rhat"] = round(max(prob.rhat or 0, lat.rhat or 0), 4) or None
+
+    # LOO-ELPD model adequacy (doc 32)
+    if prob.delta_elpd is not None:
+        window["delta_elpd"] = round(prob.delta_elpd, 3)
+        window["pareto_k_max"] = round(prob.pareto_k_max, 3) if prob.pareto_k_max is not None else None
+        window["n_loo_obs"] = prob.n_loo_obs
+
+    # PPC calibration (doc 38)
+    if prob.ppc_coverage_90 is not None:
+        window["ppc_coverage_90"] = round(prob.ppc_coverage_90, 3)
+        window["ppc_n_obs"] = prob.ppc_n_obs
+    if prob.ppc_traj_coverage_90 is not None:
+        window["ppc_traj_coverage_90"] = round(prob.ppc_traj_coverage_90, 3)
+        window["ppc_traj_n_obs"] = prob.ppc_traj_n_obs
 
     slices = {"window()": window}
 
@@ -1161,7 +2176,89 @@ def _build_unified_slices(
             cohort["onset_mean"] = round(lat.path_onset_delta_days, 2)
         if lat.path_onset_sd is not None:
             cohort["onset_sd"] = round(lat.path_onset_sd, 2)
+        # Latency dispersion (doc 34) — cohort slice gets kappa_lat too
+        if lat.kappa_lat_mean is not None:
+            cohort["kappa_lat_mean"] = round(lat.kappa_lat_mean, 1)
+            cohort["kappa_lat_sd"] = round(lat.kappa_lat_sd, 1) if lat.kappa_lat_sd is not None else None
+        # LOO-ELPD (doc 32) — cohort slice gets same edge-level scores
+        if prob.delta_elpd is not None:
+            cohort["delta_elpd"] = round(prob.delta_elpd, 3)
+            cohort["pareto_k_max"] = round(prob.pareto_k_max, 3) if prob.pareto_k_max is not None else None
+            cohort["n_loo_obs"] = prob.n_loo_obs
+        # PPC calibration (doc 38)
+        if prob.ppc_coverage_90 is not None:
+            cohort["ppc_coverage_90"] = round(prob.ppc_coverage_90, 3)
+            cohort["ppc_n_obs"] = prob.ppc_n_obs
+        if prob.ppc_traj_coverage_90 is not None:
+            cohort["ppc_traj_coverage_90"] = round(prob.ppc_traj_coverage_90, 3)
+            cohort["ppc_traj_n_obs"] = prob.ppc_traj_n_obs
         slices["cohort()"] = cohort
+
+    # Phase C: per-context-slice entries (doc 14 §5.2)
+    # Each slice is denominated with temporal qualifier: context(...).window()
+    # and optionally context(...).cohort() — mirroring the parent window()/cohort() pair.
+    for ctx_key, sp in prob.slice_posteriors.items():
+        ctx_part = f"context({ctx_key})" if not ctx_key.startswith("context(") else ctx_key
+
+        # Build the per-slice entry with full vars
+        entry: dict = {
+            "alpha": round(sp["alpha"], 4),
+            "beta": round(sp["beta"], 4),
+            "p_hdi_lower": round(sp["hdi_lower"], 6),
+            "p_hdi_upper": round(sp["hdi_upper"], 6),
+            "ess": round(prob.ess, 1),
+            "rhat": round(prob.rhat, 4) if prob.rhat else None,
+            "provenance": "bayesian",
+        }
+        if "kappa_mean" in sp:
+            entry["kappa_mean"] = round(sp["kappa_mean"], 2)
+            entry["kappa_sd"] = round(sp["kappa_sd"], 2)
+        if "mu_mean" in sp:
+            entry["mu_mean"] = round(sp["mu_mean"], 4)
+            entry["mu_sd"] = round(sp["mu_sd"], 4)
+        if "sigma_mean" in sp:
+            entry["sigma_mean"] = round(sp["sigma_mean"], 4)
+            entry["sigma_sd"] = round(sp["sigma_sd"], 4)
+        if "onset_mean" in sp:
+            entry["onset_mean"] = round(sp["onset_mean"], 2)
+            entry["onset_sd"] = round(sp.get("onset_sd", 0), 2)
+
+        # window-denominated entry (always)
+        slices[f"{ctx_part}.window()"] = entry
+
+        # cohort-denominated entry (when parent has cohort)
+        if "cohort()" in slices:
+            # Use Phase 2 per-slice cohort posteriors if available
+            _csp = prob.cohort_slice_posteriors.get(ctx_key) if prob.cohort_slice_posteriors else None
+            if _csp:
+                cohort_entry: dict = {
+                    "alpha": round(_csp["alpha"], 4),
+                    "beta": round(_csp["beta"], 4),
+                    "p_hdi_lower": entry["p_hdi_lower"],  # TODO: compute from cohort posterior
+                    "p_hdi_upper": entry["p_hdi_upper"],
+                    "ess": entry["ess"],
+                    "rhat": entry["rhat"],
+                    "provenance": "bayesian",
+                }
+            else:
+                cohort_entry = {
+                    "alpha": entry["alpha"],
+                    "beta": entry["beta"],
+                    "p_hdi_lower": entry["p_hdi_lower"],
+                    "p_hdi_upper": entry["p_hdi_upper"],
+                    "ess": entry["ess"],
+                    "rhat": entry["rhat"],
+                    "provenance": "window-copy",
+                }
+            if "kappa_mean" in entry:
+                cohort_entry["kappa_mean"] = entry["kappa_mean"]
+                cohort_entry["kappa_sd"] = entry["kappa_sd"]
+            slices[f"{ctx_part}.cohort()"] = cohort_entry
+    if prob.tau_slice_mean is not None:
+        slices["_tau_slice"] = {
+            "mean": round(prob.tau_slice_mean, 4),
+            "sd": round(prob.tau_slice_sd, 4) if prob.tau_slice_sd else None,
+        }
 
     return slices
 
@@ -1172,10 +2269,11 @@ def _build_unified_slices(
 
 def _build_result(
     error, log, timings, t0, edges, skipped, quality, webhook_response,
+    binding_receipt=None,
 ) -> dict:
     duration_ms = int((time.time() - t0) * 1000)
     timings["total_ms"] = duration_ms
-    return {
+    result = {
         "status": "failed" if error else "complete",
         "duration_ms": duration_ms,
         "timings": timings,
@@ -1188,6 +2286,18 @@ def _build_result(
         "webhook_response": webhook_response,
         "error": error,
     }
+    if binding_receipt is not None:
+        result["binding_receipt"] = binding_receipt.to_dict()
+
+    # Structured audit — always computed from the log list.
+    # Available to the FE via the result payload for trace-level diagnostics.
+    try:
+        from audit import audit_log
+        result["audit"] = audit_log("\n".join(log))
+    except Exception:
+        pass  # non-fatal — audit is diagnostic, not load-bearing
+
+    return result
 
 
 def _build_path_lookup(params_index: dict | None) -> dict[str, str]:

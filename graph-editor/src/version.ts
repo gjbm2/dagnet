@@ -53,12 +53,12 @@ function formatVersionShort(version: string): string {
 /**
  * Build timestamp (injected at build time)
  */
-export const BUILD_TIMESTAMP = import.meta.env.VITE_BUILD_TIMESTAMP || new Date().toISOString();
+export const BUILD_TIMESTAMP = import.meta.env?.VITE_BUILD_TIMESTAMP || new Date().toISOString();
 
 /**
  * Git commit hash (injected at build time, if available)
  */
-export const GIT_COMMIT = import.meta.env.VITE_GIT_COMMIT || 'unknown';
+export const GIT_COMMIT = import.meta.env?.VITE_GIT_COMMIT || 'unknown';
 
 /**
  * Full version info for debugging

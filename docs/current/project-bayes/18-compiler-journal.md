@@ -8,6 +8,866 @@ Entries are reverse-chronological (newest first).
 
 ---
 
+## 13-Apr-26 (update 10): Phase 2 JAX init failure — root cause and workaround
+
+### Context
+
+Diamond-context Phase 2 model (74 free, 19 observed, 18 potentials) fails
+during nutpie initialisation with JAX backend: `RuntimeError: All
+initialization points failed — Could not initialize state because of bad
+initial gradient`. Phase 1 completes successfully (~13 min).
+
+### Root cause
+
+Two `eps_onset_cohort` variables (edges `31c26576` path-b-to-join and
+`395d3cb6` gate-to-path-b) have NaN autodiff gradients through JAX at the
+default init point (x=0). The **numerical gradient is finite and healthy**
+(~49 and ~89 respectively), confirming the model is mathematically correct.
+
+The NaN is JAX-specific. Numba backend computes the same gradient correctly
+and samples the Phase 2 model without issue. The root cause is somewhere in
+JAX's backward pass through pytensor's compiled computation graph — possibly
+in `pad` operations emitted by pytensor for array indexing, or in the `erfc`
+gradient chain when the CDF underflows to exact 0.
+
+### What was investigated
+
+1. **erfc underflow hypothesis**: At young ages (< composed path onset
+   of 5.9 days), the shifted lognormal CDF is 0.0 exactly. `erfc(-z)`
+   for z < -27 underflows to 0.0 in float64. Added `Z_ERFC_FLOOR = -25`
+   clamp before erfc — **did not fix** the NaN, though the clamp is
+   retained as a correctness safeguard.
+
+2. **Trajectory interval sentinel index hypothesis**: The interval
+   decomposition uses `-1` as a sentinel for first intervals, remapped
+   to index 0 via `prev_safe = np.where(prev_idx >= 0, prev_idx, 0)`.
+   JAX's `pad` backward pass through this gather-with-sentinel produces
+   NaN. Tried two alternative patterns:
+   - Prepend zero to CDF array and shift indices +1
+   - Point prev to curr_idx for first intervals, zero via numpy mask
+   
+   **Neither fixed the NaN**. The NaN persists through all four
+   interval decomposition sites.
+
+3. **Feature flag isolation**: Disabling `cohort_latency=False` eliminates
+   the NaN (no `onset_cohort` variables in the model). Disabling
+   `overdispersion` or `latency_dispersion` does not help. The NaN is
+   specifically from the cohort latency path.
+
+4. **Numba backend**: Phase 2 compiles (180s) and samples (33s for
+   100 draws / 50 tune / 2 chains) without issue. The model is correct;
+   the NaN is purely a JAX autodiff artefact.
+
+### Workaround
+
+For Phase 2 on diamond-context (and likely other join-node graphs with
+deep path onsets), fall back to numba backend. The 180s compilation penalty
+is acceptable as a temporary measure.
+
+Added `--phase2-from-dump` flag to test_harness.py to skip Phase 1 and
+load artefacts from the debug dump directory directly. This enables
+iterating on Phase 2 without re-running the 13-min Phase 1 MCMC.
+
+### Alternatives not taken
+
+**Full log-CDF refactor (Option B)**: Restructure the trajectory likelihood
+to work in log-CDF space using an asymptotic series expansion of
+`log(erfc(t))` for the deep tail (same approach as `jax.scipy.special.log_ndtr`
+and `scipy.special.log_ndtr`). This would eliminate all erfc underflow
+issues and produce clean gradients. However:
+- Requires restructuring `delta_F = CDF_curr - CDF_prev` into
+  `log(exp(log_cdf_curr) - exp(log_cdf_prev))` via `logsubexp`
+- Touches the core of every trajectory potential (4 code paths)
+- High regression risk for a change that may not even fix the actual
+  NaN (which appears to be in `pad`, not `erfc`)
+- The correct fix requires first identifying the exact JAX op that
+  produces the NaN, which we have not yet done
+
+**PyMC's `normal_lcdf`**: Already implements stable log-CDF via `erfcx`,
+but `pt.erfcx` has no JAX dispatch — would require `tfp-nightly`.
+
+### Pending work
+
+- Investigate the exact JAX op producing NaN (deeper JAX tracing needed)
+- Re-implement JAX backend for Phase 2 once root cause is found
+- The 180s numba compile vs ~20s JAX compile is a 9x penalty
+
+### Debug artefact dump — VERIFIED WORKING
+
+The `NameError` fix (`graph_name` → `payload.get('graph_id', 'unknown')`)
+and try/except wrapper in worker.py were validated by the diamond-context
+run. Dump files at `/tmp/bayes_debug-graph-synth-diamond-context/`:
+phase2_frozen.json (7KB), evidence.pkl (1MB), topology.pkl (4.5KB),
+settings.json (4KB). These artefacts enabled all offline Phase 2
+debugging without re-running Phase 1.
+
+---
+
+## 12-Apr-26 (update 9): JAX backend — M3 compilation fix validated
+
+### Context
+
+M2 (per-slice scalar indexing) fixed the compilation explosion but required restructuring the trajectory emission. M3 (JAX backend) was the cheapest mitigation to test — one-line change to `nutpie.compile_pymc_model()`, no model restructuring needed. Hypothesis from doc 38: JAX's XLA compiler handles `AdvancedSubtensor` (gather) nodes natively, unlike numba which must JIT-compile the full unoptimised pytensor graph.
+
+### Implementation
+
+Added `jax_backend` feature flag to `SamplingConfig` and wired through `run_inference` → `_sample_nutpie`. When enabled, `nutpie.compile_pymc_model(model, backend='jax', gradient_backend='jax')` replaces the default numba backend. Installed `jax[cpu]>=0.4.30` into `bayes/requirements.txt`.
+
+Code changes: `compiler/types.py` (1 field), `compiler/inference.py` (backend selection), `worker.py` (feature flag wiring). Usage: `--feature jax_backend=true`.
+
+### Synthetic benchmark (isolated model, no graph infrastructure)
+
+Built a 42-dimensional model matching fanout-context structure (3 edges × 3 slices, BetaBinomials + trajectory Potentials with advanced indexing into vector RVs):
+
+| Backend | Compile time | Speedup |
+|---------|-------------|---------|
+| numba   | 20,413ms    | —       |
+| jax     | 1,764ms     | **11.6×** |
+
+### Regression: synth-simple-abc-context (2 edges, 3 slices, no BG)
+
+JAX backend, `--tune 200 --draws 100 --chains 2`: 119s total. All p values recovered [OK]. Per-slice recovery consistent with numba baseline. JAX compile estimated ~4s (vs numba ~29s from doc 38).
+
+### Target: synth-fanout-context (3 edges, 3 slices, 1 BG)
+
+JAX backend, `--tune 1000 --draws 500 --chains 2`: **125s total** (vs numba >574s timeout). Breakdown: build_model 531ms, inspect_model 10.4s, Phase 1 sampling 74.9s, Phase 2 sampling 20.7s.
+
+Recovery: all p values [OK] (z = 0.07, 0.97, 1.96). Latency mu/sigma mostly OK. gate-to-fast mu MISS (z=3.08) and onset MISS (z=6.25) — same onset-mu correlation issue as the uncontexted baseline (ρ = −0.544), not a backend regression. 88% converged.
+
+### Comparison: M2 vs M3
+
+| | M2 (per-slice scalar) | M3 (JAX backend) |
+|--|----------------------|-------------------|
+| Model changes | New emission function | None |
+| Code complexity | ~100 lines new code | 5 lines changed |
+| fanout-context total | 190s | 125s |
+| Compilation | Fixed (restructured graph) | Fixed (faster compiler) |
+| Sampling | Same model | Same model |
+| Portability | numba-only | Requires jax[cpu] |
+
+M3 is simpler and faster. M2 remains available as a fallback if JAX is unavailable (e.g. Modal without jax installed). Both can coexist.
+
+### Next steps
+
+- Test on larger contexted graphs (diamond-context: 6 edges × 3 slices, lattice-context)
+- Validate JAX backend produces identical posteriors to numba (parity test)
+- Consider making JAX the default for contexted models (auto-detect based on slice count)
+
+---
+
+## 12-Apr-26 (update 8): Compilation explosion on mid-complexity contexted graphs
+
+### Context
+
+Doc 38 work validated batched trajectory Potentials + native vector RVs on `synth-simple-abc-context` (2 edges, 3 slices) — compilation 18s, sampling 159s, total ~180s. Moved to `synth-fanout-context` (3 data edges, 3 slices, 1 branch group, 5 nodes) to validate on a mid-complexity split topology. Result: **compilation never finished** — 574s spent compiling, hit 600s timeout, MCMC never started.
+
+### What was observed
+
+Ran `synth-fanout-context` with `--tune 1000 --draws 500 --chains 4 --cores 4 --clean`.
+
+Uncontexted baseline (same graph, `--dsl-override "window(...);cohort(...)"`) completed in **114s** total (~20s compilation). Recovery: all 3 edges p OK (z = 0.04, 0.18, 0.23), latency mu/sigma OK, one onset MISS on gate-to-fast (z=3.43, onset-mu ρ = −0.983).
+
+Contexted run: model built successfully (24 free RVs, 22 Deterministics, 2 Potentials, 20 observed) in ~12s. nutpie compilation started at t=25s, logged `Compiling model…` every 3s for 549s, then `TIMEOUT after 600s (last stage: compiling)`. MCMC never started.
+
+pytensor log was full of repeated `local_inline_composite_constants` rewrite failures:
+```
+TypeError: Cannot convert Type Vector(bool, shape=(7,)) into Type Vector(float64, shape=(7,))
+```
+These are non-fatal (caught by the rewriter) but mean the graph stays unoptimised.
+
+### Root cause: advanced indexing × large interval counts
+
+The batched trajectory Potentials use advanced indexing into vector RVs:
+```python
+mu_per_age = mu_slice_vec[age_slice_np]          # [n_ages] via int array
+p_per_interval = p_slice_vec[interval_slice_np]  # [n_intervals] via int array
+```
+
+For the slow edge (`87be6baa…`), `n_intervals = 4451`. Each `vec[int_array]` becomes an `AdvancedSubtensor` (gather) node. The gathered values then feed through `softplus → log → erfc → clip → log` (CDF/hazard chain), producing O(N) copies of the chain. Because the pytensor rewriter fails on the boolean intermediates from `pt.maximum`/`pt.clip`, none of this gets collapsed into vectorised operations. numba must JIT-compile the entire unoptimised graph.
+
+The scaling is **super-linear** in interval count: synth-simple-abc-context had ~400 intervals per edge → 18s compile. synth-fanout-context has 4451 intervals on one edge → >574s. Roughly 10× the intervals produces >30× the compilation time.
+
+### Model structure comparison
+
+| | Bare DSL | Contexted |
+|--|----------|-----------|
+| Free RVs | ~8 | 24 |
+| Observed RVs | ~6 | 20 |
+| Potentials | ~2 | 2 (batched) |
+| Trajectory intervals | ~1800 est | 5412 (961+4451) |
+| Compilation | ~20s | >574s (DNF) |
+
+### Three candidate mitigations identified
+
+- **M1**: Replace advanced indexing with `pt.Scan` or custom `Op` — keeps loop internal to one pytensor node
+- **M2**: Pre-expand `mu_vec[idx_array]` into `pt.stack([mu_vec[i] for i in list])` — basic indexing instead of advanced
+- **M3**: JAX backend instead of numba — different compilation characteristics, may handle gathers natively
+
+See doc 38 §"Three candidate mitigations" and §"Investigation plan" for full details.
+
+### M2 result: per-slice CDF with scalar indexing — COMPILATION FIXED
+
+Implemented `_emit_batched_window_trajectories_perslice()` behind `--feature perslice_traj=true`. Instead of `mu_slice_vec[numpy_int_array_of_4451]` (advanced indexing → graph explosion), loops over S slices computing CDF/hazard per-slice with `mu_slice_vec[s_idx]` (scalar indexing → S small independent subgraphs). Same statistical model, same Potential/Deterministic names.
+
+`synth-fanout-context` with M2: **190s end-to-end** (vs >600s DNF on the advanced-indexing path). All 6 per-slice p values recovered (z < 0.4). Convergence poor (rhat=1.56, ESS=7) — this is the sampler geometry problem, not M2. The compilation bottleneck is resolved.
+
+M1 (Scan/custom Op) not yet tested — M2 may be sufficient. M3 (JAX) being tested separately.
+
+Direct comparison on same graph (`synth-fanout-context --tune 1000 --draws 500`): M3 (JAX, 2ch) 121s, rhat=1.034, ESS=58, 63% converged. M2 (perslice_traj, 4ch) 190s, rhat=1.561, ESS=7, 0% converged. JAX is clearly superior — faster, better convergence, zero model changes. M2 stays as numba-only fallback. M1 deprioritised.
+
+### Why JAX is faster at sampling, not just compilation
+
+Observed: on a 16-core Ultra 9 285H, JAX with 2 chains shows ~50% total CPU usage, but bayes-monitor (which tracks nutpie process-level concurrency) reports no cores in use. numba with 2 chains uses exactly 2 cores.
+
+**Explanation**: numba compiles the pytensor graph to single-threaded scalar loops — one chain = one core. JAX's XLA compiles to vectorised operations that parallelise *within each gradient evaluation* across cores via an internal thread pool. So each chain's gradient call fans out across many cores for the CDF/hazard arithmetic (4451 intervals of softplus → log → erfc → clip → log).
+
+**Implications**:
+- JAX's sampling speedup is not just compilation — per-gradient cost is lower due to multi-core vectorisation
+- Running more chains in parallel with JAX contends for the same core pool (unlike numba where 4 chains = 4 independent threads)
+- For prod-scale graphs (12 edges × 12 slices → 72 trajectory subgraphs, ~50k+ intervals), JAX's internal parallelism becomes even more valuable
+- This partly explains why M2 (per-slice scalar indexing on numba) was slower than JAX even though it fixed compilation — M2 still ran single-threaded numba loops
+- GPU would be additive: replacing JAX's multi-core CPU thread pool with GPU cores for the same vectorised ops
+
+### Prod viability assessment
+
+Compilation is unblocked. synth-lattice-context (6 edges, 3 slices, most complex synth topology) running with JAX — expected ~30 min Phase 1.
+
+Prod graphs: ~12 edges (6 latency), 10-15 slices. Scaling from lattice-context: ~5× more free RVs (543 vs 111), ~6× more trajectory subgraphs (72 vs 12), 8× more observed RVs. Estimated Phase 1: **2.5-5 hours on CPU**. Not viable for a production pipeline.
+
+**One more big win in sampling time is needed** before contexted Bayes is production-viable. Candidates:
+- Fixed tau / empirical Bayes (eliminates funnels entirely — biggest potential win)
+- Centred parameterisation for well-identified slices
+- Fewer per-slice parameters (e.g. only p per-slice, share kappa/mu across slices)
+- GPU acceleration (helps per-gradient cost, doesn't fix geometry)
+- Variational inference for warm-start (ADVI → NUTS with informed mass matrix)
+
+---
+
+## 12-Apr-26 (update 7): PPC calibration implementation and DGP mismatch discovery
+
+### What was built
+
+`bayes/compiler/calibration.py` — posterior predictive calibration
+(doc 36), gated behind `--diag` flag. Two categories: endpoint/daily
+(tests κ) and trajectory intervals (tests κ_lat). Computes randomised
+PIT values, coverage curves at standard levels, KS uniformity test.
+
+When synth ground truth is provided, computes **true PIT** alongside
+model PIT — validates the PPC machinery itself, not just the model.
+
+MLE κ empirical Bayes prior: `_estimate_cohort_kappa()` called at
+`build_model` time to centre the κ prior on the data-implied value.
+Priority chain: warm-start → MLE → default. Improved endpoint
+coverage from 1.00 → 0.90 on synth-simple-abc.
+
+### Key discovery: synth DGP two-kappa composition
+
+The synth generator has two independent overdispersion sources
+(entry-day and step-day), composed multiplicatively. Endpoint
+observations see the composed variation with effective
+κ = harmonic_mean(κ_entry, κ_step) ≈ κ/2. Trajectory intervals see
+step-day variation through the conditional hazard lens, which doesn't
+factor cleanly into independent BetaBinomial intervals.
+
+Result: true PIT is uniform for endpoint (machinery validated at
+κ_eff=25), but non-uniform for trajectory (structural DGP mismatch).
+The trajectory PPC produces an overcoverage ceiling of ~0.95 that
+cannot be fixed by adjusting κ_lat.
+
+### Lesson
+
+In-sample PPC without a ground-truth baseline is circular — the model
+was fit to the data it's being checked against. True PIT from known
+DGP parameters separates machinery bugs from model error. The
+three-layer approach (true PIT → model PIT → gap analysis) would have
+caught the DGP mismatch immediately; the model-only PIT appeared
+fine at 0.89.
+
+### Next step
+
+Add `kappa_step_default: null` flag to `synth_gen.py` to disable
+step-day variation. Single-source DGP enables clean validation of
+both categories and the model's single-κ estimation.
+
+### Files changed
+
+- `bayes/compiler/calibration.py` — NEW
+- `bayes/compiler/model.py` — MLE κ prior, `features` in metadata
+- `bayes/worker.py` — calibration call (gated)
+- `bayes/param_recovery.py` — `--diag`, truth passthrough
+- `bayes/test_harness.py` — `--diag`, `--settings-json` in fe-payload path
+- `docs/current/project-bayes/38-ppc-calibration-findings.md` — NEW
+
+---
+
+## 12-Apr-26 (update 6): Full MCMC recovery with all data fixes
+
+### Results
+
+`synth-simple-abc-context`, 2 chains × 500 draws, `latency_dispersion=true`, all data binding fixes applied:
+
+- **405s total** (70s nutpie compilation + ~300s sampling + 5s Phase 2)
+- **rhat=1.02, ESS=217, 85% converged, 11 divergences**
+- **Per-slice p recovery**: all within threshold except direct a→b onset (MISS, z=4.07)
+- **Binding verified**: `window=15050 cohort=15050` for direct (equal, correct)
+- **29250 → 29250 rows** post-regime (no cohort data lost)
+- **Phase 2**: aggregate-only (known deficiency, journalled in update 4)
+
+The onset MISS on direct a→b (truth=1.0, posterior=1.57) is a model sensitivity issue, not a data binding problem — it persists across runs with different data fixes. The direct slice has moderate data volume (15050 observations) but the onset-mu ridge may be poorly constrained for this context weight.
+
+### Known deficiencies programmed
+
+Three items added to `programme.md` § Future work:
+1. Phase 2 per-slice modelling (high priority)
+2. Topo pass per-slice priors (medium priority)
+3. Phase 1 contexted compilation performance — 70s for 2 edges × 3 slices (high priority, blocks full regression suite)
+
+---
+
+## 12-Apr-26 (update 5): Regime selection kills ALL cohort data for contexted graphs
+
+### Finding
+
+`buildCandidateRegimesByEdge` created separate candidate regimes for window-contexted and cohort-contexted hashes (because `cohort_mode` is part of the core_hash signature). Regime selection then picked ONE candidate per date — always window — discarding all cohort rows. For `synth-simple-abc-context`: `29250 → 14625 rows` = exactly half removed = all cohort rows gone. Per-slice evidence had `cohort(0 trajs, 0 daily)`.
+
+This affected every contexted graph since regime selection was implemented. The 1047s successful run on 11-Apr had this bug too — Phase 1 window recovery worked but Phase 2 had no cohort data.
+
+### Root cause
+
+`candidateRegimeService.ts` Step 2 used `temporalMode::contextKeys` as the key-set ID, creating separate candidates for `window::synth-channel` and `cohort::synth-channel`. Regime selection's "pick one hash per date" model treated them as competing regimes for the same epoch.
+
+### Fix
+
+Step 2 now groups by context key-set only (no temporal mode in key-set ID). Each key-set collects representative slices for ALL temporal modes. Step 3 computes hashes for all modes and emits ONE candidate per edge per key-set with the first hash as primary and additional temporal-mode hashes as equivalents. Regime selection sees one candidate, keeps all hashes.
+
+### Also fixed
+
+`_supplement_from_param_file` in `evidence.py` now skips context-qualified param file entries. These were injected by `bayesEngorge.ts` with aggregate n/k values (not per-context), inflating per-slice cohort counts with aggregate denominators.
+
+### Also fixed
+
+Slice row count diagnostic (`worker.py` line 1396) now correctly counts window trajectories from CohortObservation objects by checking `obs_type`, instead of only counting `WindowObservation` objects.
+
+---
+
+## 12-Apr-26 (update 4): Phase 2 per-slice collapse — pre-existing model bug (NOT current blocker)
+
+### Finding
+
+Phase 2 (cohort pass with frozen Phase 1 posteriors) silently collapses back to aggregate-per-edge modelling for contexted graphs. All per-slice logic is gated behind `not is_phase2`:
+
+- **Section 2b** (`model.py` ~line 642): `bg_slice_p_vars` (per-slice branch group Dirichlets) only populated when `not is_phase2`. Phase 2 gets no per-slice p hierarchy.
+- **Section 5** (`model.py` ~line 1117): `if ev.has_slices and not is_phase2` gates the entire per-slice emission loop. Phase 2 falls through to the `else` branch: single aggregate emission per edge.
+- **Section 4** (`model.py` ~line 900): `cohort_latency_vars` creates one `(onset_cohort, mu_cohort, sigma_cohort)` triple per edge, not per slice.
+
+Result: Phase 2 fits contexted cohort evidence against one aggregate cohort model per edge. Per-slice p, per-slice Dirichlets, per-slice cohort latency — all absent.
+
+### Status
+
+**Not the current blocker.** Phase 2 only starts after Phase 1 has built and sampled successfully (`worker.py` ~line 827: `if has_cohort_data and not settings.get("model_inspect_only")`). The current failure is Phase 1 compilation. This defect is deferred until Phase 1 contexted compilation works.
+
+### Scope of fix (when addressed)
+
+1. Per-slice p hierarchy in Phase 2 (Section 2b needs `is_phase2` path)
+2. Per-slice branch group Dirichlets in Phase 2
+3. Per-slice cohort latency in Phase 2 (Section 4 needs per-slice triples)
+4. Per-slice emission in Phase 2 (Section 5 needs slice loop for `is_phase2`)
+
+---
+
+## 12-Apr-26 (update 3): Batched refactor identified as the regression
+
+### Finding
+
+The "lossless" batched trajectory refactor introduced in this session changed the PyTensor graph structure in a way that prevents compilation:
+
+- **Before (working, 1047s on 11-Apr)**: S separate trajectory Potentials, each depending on ~5 of its own per-slice variables (onset_s, mu_s, sigma_s, p_s, kappa_s). PyTensor can factorise the `dlogp` gradient into S independent blocks.
+- **After (broken)**: 1 stacked trajectory Potential using `pt.stack(slice_onset_list)[age_slice_np]` to index into all per-slice variables. The single Potential depends on ALL ~30 per-slice variables simultaneously. PyTensor cannot factorise the gradient — it must compile one monolithic function.
+
+The stacking + indexing (`pt.stack` → `Subtensor` → gradient produces `IncSubtensor` scatter ops) creates a compilation target that is structurally worse than S independent Potentials, even though the total number of Potentials is smaller.
+
+### Action
+
+Revert the emission loop to its pre-refactor state (S independent Potentials per slice, no batching, no `skip_trajectory_potentials` flag). Keep the other session work intact (supplementary hash discovery, `--dsl-override`, cohort bug fix). Then confirm `synth-simple-abc-context` compiles with its original contexted DSL.
+
+### Lesson
+
+"Fewer Potentials" is not the same as "smaller compilation target". PyTensor compiles better when gradient computation can be factorised into independent blocks. Stacking variables to reduce Potential count defeats this factorisation. The optimisation (if still needed) should preserve per-slice Potential independence.
+
+---
+
+## 12-Apr-26 (update 2): Bogus cohort Potentials removed — still fails
+
+### Finding
+
+The batched trajectory helper (`_emit_batched_slice_trajectories`) was iterating both `"window"` and `"cohort"` obs_types, but it's only called from the Phase 1 slice path where cohort trajectories must be skipped (`skip_cohort_trajectories=True`). The helper was emitting malformed cohort Potentials that lacked path probability resolution, join mixture handling, and x-denominator rewriting — features only `_emit_cohort_likelihoods` handles correctly.
+
+### Fix applied
+
+Changed the loop from `for obs_type in ["window", "cohort"]` to `for obs_type in ["window"]` in `_emit_batched_slice_trajectories` (`model.py` ~line 2524). All 79 existing tests pass.
+
+### Result
+
+Still fails. The contexted model still never leaves the "compiling" stage. The bogus cohort Potentials were a genuine bug (wrong model, not just expensive), but removing them did not resolve the compilation hang. The root cause is elsewhere.
+
+### Implication
+
+The problem is not a single broken Potential — it's the per-slice model complexity in aggregate. Continue with the hypothesis testing from doc 37: H1 (disable BetaBinomial) is next.
+
+---
+
+## 12-Apr-26: Contexted model compilation — total failure, investigation opened
+
+### The problem
+
+The contexted Bayes model never compiles. Every attempt to run a contexted synth graph (`synth-simple-abc-context` and larger) causes PyTensor C compilation of the `dlogp` function to exhaust memory, crashing the WSL2 VM. Three separate attempts across two sessions ended with `E_UNEXPECTED / Catastrophic failure`. The model never reaches MCMC sampling — it hangs at the "compiling" stage.
+
+The uncontexted model for the same graph structure compiles and samples in seconds. This is a contexted-specific failure.
+
+### Isolation test
+
+Built a `--dsl-override` flag to run a contexted graph (same DB data, same evidence pipeline) but with a bare DSL, suppressing per-slice emission. Required closing a design gap first: the Bayes commissioning path only enumerated hash families from the current pinned DSL. Added supplementary hash family discovery (`candidateRegimeService.ts` Step 5) so bare DSL subjects can find contexted DB data.
+
+Result: bare-DSL-on-contexted-data compiles in 37s, recovers all parameters. Contexted DSL on the same data never compiles.
+
+| | Bare DSL (works) | Contexted DSL (crashes) |
+|---|---|---|
+| Data | Same 29,250 rows | Same 29,250 rows |
+| `has_slices` | False | True |
+| Free RVs | ~13 | ~46 |
+| Trajectory Potentials | 2 | 2 (batched — same structure) |
+| Per-slice likelihoods | None | 6 daily BBs + window Binomials |
+| Compilation | 37s | Never completes |
+
+### What we built (not yet verified on contexted)
+
+1. **Batched trajectory Potentials** (`model.py` `_emit_batched_slice_trajectories`): Vectorises CDF computation across all slices of one edge. Reduces O(E×S) Potentials to O(E). Mathematically identical posterior. Confirmed via synthetic test (1 batched Potential vs 3 unbatched). Not yet tested against real PyTensor C compilation for a contexted model.
+
+2. **Supplementary hash discovery** (`candidateRegimeService.ts` Step 5): Scans stored param file `values[]` to discover hash families not in the current DSL. Closes programme.md gap (lines 1310-1330). Verified working.
+
+3. **`--dsl-override` flag** (threaded through `run_regression.py` → `param_recovery.py` → `test_harness.py`): Enables the isolation test. Verified working.
+
+### Root cause hypothesis
+
+The per-slice code path creates ~33 additional free RVs (per-slice eps, kappa, latency offsets, kappa_lat). PyTensor must compile a single C function computing the gradient of the full log-posterior w.r.t. all ~46 free variables. Each gradient path passes through complex symbolic subgraphs (BetaBinomial gammaln, CDF erfc/softplus). The generated C source is too large for the C compiler to handle in WSL's memory budget.
+
+Five hypotheses documented in `docs/current/project-bayes/37-contexted-compilation-investigation.md`:
+
+1. **H1**: BetaBinomial gammaln gradient is the primary cost driver. Test: `latency_dispersion=false`.
+2. **H3**: PyTensor graph optimisation (rewrite rules) causes exponential blowup. Test: `pytensor.config.optimizer='fast_compile'`.
+3. **H2**: Per-slice variable count exceeds compilation budget regardless of likelihood type. Test: share latency across slices.
+4. **H4**: Batched Potential worse than unbatched for compilation (index ops prevent gradient factorisation).
+5. **H5**: nutpie compilation path differs from default PyMC.
+
+### Next step
+
+Test H1 first: run `synth-simple-abc-context` with `--feature latency_dispersion=false` (contexted DSL, no BetaBinomial). If it compiles, the bottleneck is BetaBinomial gammaln in per-slice Potentials.
+
+---
+
+## 11-Apr-26: kappa_lat does not deliver predictive mu_sd — design review
+
+### The problem
+
+kappa_lat (per-interval BetaBinomial overdispersion on the discrete-time
+hazard q_j) was built to produce a predictive mu_sd analogous to how
+kappa produces predictive p_sd. It doesn't. The mechanism is
+fundamentally wrong for this goal.
+
+### Why kappa works for p (and kappa_lat doesn't work for mu)
+
+For p, the generative model is:
+
+```
+p_cohort ~ Beta(p × kappa, (1 - p) × kappa)
+d ~ Binomial(n, p_cohort)
+```
+
+BetaBinomial(n, p×kappa, (1-p)×kappa) is the **marginalised** form —
+integrates out p_cohort analytically. One scalar kappa, no per-cohort
+latents. At export time, drawing `p_new ~ Beta(p_i × kappa_i,
+(1-p_i) × kappa_i)` gives the predictive directly: "what p will the
+next cohort have?" The spread of those draws = predictive p_sd. Cheap,
+correct, closed-form.
+
+For mu, the analogous generative model would be:
+
+```
+mu_cohort ~ Normal(mu, tau_mu)
+q_j = p × ΔF(mu_cohort) / (1 - p × F_{j-1}(mu_cohort))
+d_j ~ Binomial(n_j, q_j)
+```
+
+The marginalised form = `∫ ∏_j Binomial(d_j | n_j, q_j(mu')) ×
+Normal(mu' | mu, tau_mu) dmu'`. This integral has **no closed form**
+because q_j depends on mu through the shifted lognormal CDF
+nonlinearly. There is no "BetaBinomial for mu" — no distribution
+family where the marginal is tractable.
+
+kappa_lat replaces `Binomial(n_j, q_j)` with `BetaBinomial(n_j,
+q_j × kappa_lat, (1 - q_j) × kappa_lat)`. This inflates variance on
+q_j per-interval, but q_j is a derived quantity — a function of p,
+mu, sigma, onset, and the CDF. kappa_lat does not parameterise
+variation in mu. There is no `mu_new ~ f(mu, kappa_lat)` because
+kappa_lat acts on q_j, not on mu.
+
+The posterior `np.std(mu_samples)` is epistemic (shrinks with data).
+kappa_lat does not meaningfully widen it. Adding kappa_lat to the
+model and then still exporting `np.std(mu_samples)` as mu_sd gives
+essentially the same useless epistemic SD as before.
+
+### What was tried and failed (for the record)
+
+1. **Per-cohort mu random effects** (10-Apr-26): `mu_c = mu +
+   tau_mu × u_c` with N per-cohort offsets. ESS collapsed to 3.
+   One-to-one parameter-to-data ratio. Anti-pattern #33.
+
+2. **Per-interval BetaBinomial** (kappa_lat, 10-11-Apr-26): well-
+   identified scalar, but models interval-level noise, not
+   trajectory-level timing variation. Cannot produce predictive
+   mu_sd without an expensive simulation step, defeating the purpose.
+
+### Approaches not yet tried
+
+#### A. Empirical tau_mu from trajectory residuals (post-hoc estimator)
+
+Analogous to `_estimate_cohort_kappa` for p. No model changes.
+
+After fitting, for each trajectory t:
+- Compute the maturation curve from posterior means (p, mu, sigma,
+  onset) → expected cumulative at each retrieval age
+- Find mu_t* = the mu that minimises the trajectory residual
+  (one-parameter fit, cheap: bisection on CDF(mu) vs observed
+  cumulative fraction)
+- tau_mu_empirical = std(mu_t* across trajectories)
+
+At export: `mu_sd_predictive = sqrt(mu_sd_posterior² + tau_mu²)`.
+
+At fan-chart draw time: `mu_new = mu_i + Normal(0, tau_mu)` per MCMC
+draw, same pattern as `p_new ~ Beta(p_i × kappa_i, ...)`.
+
+**Pros:**
+- Zero model changes. Zero MCMC cost. Computed in inference.py.
+- Same pattern as empirical cohort kappa (proven to work for p).
+- Directly gives the quantity we need.
+- Cheap: one bisection per trajectory (50-100 trajectories).
+
+**Cons:**
+- Post-hoc estimator, not sampled — no posterior uncertainty on
+  tau_mu itself.
+- Assumes the trajectories are a representative sample of timing
+  variation (they are — they're cohorts).
+- Doesn't account for sigma/onset variation (only mu). But mu is the
+  dominant timing parameter; sigma and onset dispersion can be added
+  later with the same approach.
+
+#### B. Marginalised trajectory likelihood via Laplace approximation
+
+Add tau_mu as a latent scalar in the model. For each cohort, instead
+of evaluating L(data | mu, sigma, onset, p), evaluate the marginalised
+likelihood ∫ L(data | mu', ...) N(mu' | mu, tau_mu) dmu' using a
+Laplace approximation around mu. This requires the Hessian of log L
+w.r.t. mu, which is computable from the CDF derivatives.
+
+**Pros:**
+- tau_mu is a proper latent variable with posterior uncertainty.
+- No per-cohort parameters.
+- One scalar per edge, like kappa.
+
+**Cons:**
+- Requires implementing the Hessian of the trajectory log-likelihood
+  w.r.t. mu inside PyTensor (for gradient-based sampling).
+- The Laplace approximation may be poor if the per-trajectory
+  likelihood is non-Gaussian in mu (unlikely for well-observed
+  trajectories, possible for short ones).
+- Significantly more complex than approach A.
+
+#### C. Observation-level LogNormal random effect (OLRE analogue)
+
+The OLRE trick for overdispersed counts adds a Normal(0, sigma_obs)
+to the linear predictor of each observation. The analogue here: add
+Normal(0, tau_mu) to mu for each trajectory (not each interval).
+
+This IS per-cohort random effects, but with a trick: treat each
+trajectory as a single observation with a compound likelihood, and
+use the non-centred parameterisation with a shared tau_mu. The
+difference from the failed attempt: instead of N uncorrelated
+offsets, the offsets are drawn from a single shared distribution
+with one scale parameter.
+
+Wait — this IS the same as the failed attempt. The problem was not
+the parameterisation, it was the N-to-N ratio. Skip.
+
+### Approach D: sufficient-statistics meta-analysis (inside model)
+
+Pre-compute per-trajectory mu estimates before building the PyMC
+model:
+1. For each trajectory, fit mu_hat_c by minimising the trajectory
+   residual against the observed maturation curve (holding
+   sigma/onset at their analytic priors). One-parameter MLE per
+   trajectory — cheap. Also compute se_c (standard error of the
+   per-trajectory fit).
+2. In the PyMC model, add:
+   ```
+   tau_mu ~ HalfNormal(prior)
+   hat_mu_c ~ Normal(mu, sqrt(tau_mu² + se_c²))   [observed]
+   ```
+   hat_mu_c are data, not latent variables. tau_mu is the only new
+   latent — one scalar per edge.
+
+This is a textbook random-effects meta-analysis model. PyMC handles
+it natively. No custom Ops. No per-group latents. NUTS samples
+(mu, tau_mu, ...) in the same low-dimensional space as today.
+
+At export: `mu_sd_predictive = sqrt(posterior_mu_sd² + tau_mu²)`.
+Or: for each MCMC draw, `mu_new ~ Normal(mu_i, tau_mu_i)` — the
+predictive draw, exactly analogous to `p_new ~ Beta(p_i × kappa_i,
+...)`.
+
+**Pros:**
+- tau_mu is a proper posterior variable with uncertainty.
+- One scalar per edge, like kappa.
+- No custom PyTensor Ops. Standard PyMC.
+- The approximation (per-trajectory MLE is approx normal) is very
+  reasonable for trajectories with 10+ intervals.
+- Pre-computation of hat_mu_c is fast (one bisection per trajectory)
+  and happens once before MCMC.
+
+**Cons:**
+- Requires the per-trajectory MLE step before model building. This
+  is straightforward but adds a pre-processing step.
+- The per-trajectory standard error se_c is itself an approximation
+  (Fisher information at the MLE). For very short trajectories
+  (2-3 intervals) this may be inaccurate, but such trajectories are
+  already low-weight.
+
+### The fundamental constraint
+
+**Individual trajectories do not strongly constrain mu independently.**
+Each trajectory is one cohort's maturation curve observed at 10-30
+retrieval ages. The CDF shape depends on (mu, sigma, onset) jointly,
+with onset-mu correlation often >0.9. A single trajectory cannot
+reliably decompose "how fast did this cohort mature?" into a mu
+estimate with meaningful precision.
+
+This is why:
+- Per-cohort random effects failed (anti-pattern 33): N weakly-
+  identified offsets for N trajectories → ESS collapse.
+- Per-interval BetaBinomial (kappa_lat) was appealing: it avoids
+  per-cohort latents. But it operates on q_j, not mu, so it
+  doesn't deliver predictive mu_sd.
+- Sufficient-statistics meta-analysis (approach D) would pre-compute
+  per-trajectory mu estimates. But those estimates inherit the same
+  weak-identification problem: if se_c is large relative to the
+  signal, tau_mu is dominated by noise.
+- Post-hoc empirical tau_mu (approach A) has the same issue.
+- Laplace marginalisation (approach B) is more principled but still
+  requires the per-trajectory integral to be well-behaved, which it
+  won't be when individual trajectories weakly identify mu.
+
+All approaches that estimate per-trajectory mu variation founder on
+the same rock: trajectories don't constrain mu independently.
+
+### Where this leaves us
+
+The anti-pattern 33 "broader principle" — observation-level
+overdispersion as the analogue of kappa — was the best idea from
+the survival analysis literature. We implemented it (kappa_lat).
+It is well-identified and samples fine. But it models interval-level
+noise, not trajectory-level timing variation, and cannot produce
+predictive mu_sd.
+
+### Resolution: post-MCMC simulation translates kappa_lat → predictive mu_sd
+
+The missing insight was about what question we're answering.
+
+Wrong question: "how much does mu vary across cohorts?" — this
+requires per-trajectory mu identification, which is weak.
+
+Right question: "given known (p, mu, sigma, onset, kappa_lat), what
+is the range of maturation curves a new cohort will actually
+exhibit?" — this is a forward simulation from the fitted model.
+
+kappa_lat IS the right model parameter for this. It captures per-
+interval overdispersion on the hazard. The problem was that inference
+extracted it and exported it as telemetry without using it to compute
+anything.
+
+The fix: a post-MCMC numpy step in `inference.py` (`_predictive_mu_sd`).
+For each MCMC draw (p_i, mu_i, sigma_i, onset_i, kappa_lat_i):
+
+1. Compute CDF at a reference age grid → derive conditional hazards q_j
+2. Draw d_j ~ BetaBinomial(n_ref, q_j × kappa_lat_i, (1−q_j) × kappa_lat_i)
+   — one synthetic cohort's realised conversions
+3. Fit mu* by closed-form CDF inversion at the inflection point:
+   mu* = log(t − onset) − sigma × Φ⁻¹(realised_fraction / p)
+
+SD of mu* across draws = predictive mu_sd. This replaces the
+epistemic `np.std(mu_samples)` in the export.
+
+No model changes. No additional MCMC. Pure numpy, seconds not minutes.
+Uses a representative trajectory from the edge's evidence as the
+reference age grid and n.
+
+kappa_lat stays in the model — it is the input to this computation.
+The export path now consumes it properly.
+
+**Implemented in**: `bayes/compiler/inference.py` — `_predictive_mu_sd()`
+helper function, called from the latency extraction block when
+kappa_lat samples are available.
+
+---
+
+## 11-Apr-26: Regression infrastructure and per-slice reporting (doc 35)
+
+### Regression runner per-slice reporting
+
+`run_regression.py` extended to iterate Layers 3-8 per context slice
+(not just per edge). Binding receipts, audit parsing, recovery parsing,
+LOO scoring, report renderer, pass/fail gates — all per-slice. Per-slice
+LOO null falls back to edge-level AnalyticBaseline (no per-slice
+model_vars in production yet).
+
+### Context data binding bugs (10-11-Apr)
+
+Two rounds of fixes to the evidence binder for contexted graphs:
+
+1. **Regime-per-date classification** — `evidence.py` now tags each
+   retrieved_at date as `mece_partition` or `uncontexted` via the
+   RegimeSelection result. Rows are partitioned so aggregate and
+   per-slice likelihoods cover disjoint date sets.
+
+2. **Synth generator context slice fidelity** — `synth_gen.py`
+   rewired to emit per-context trajectories with correct channel
+   proportions, per-channel p/mu/sigma truth values, and proper
+   CohortObservation routing. 307→552-line rewrite with test suite
+   (`test_synth_gen.py`).
+
+3. **Per-slice posterior extraction** — `inference.py` updated to
+   extract per-slice p, kappa, mu, sigma, onset from the MCMC trace.
+   Slice posteriors keyed by context string in `PosteriorSummary.slice_posteriors`.
+
+4. **Worker per-slice diagnostics** — `worker.py` now logs per-slice
+   row counts, trajectory counts, and evidence binding receipts.
+
+### Adversarial test suites (11-Apr)
+
+Three new adversarial test files covering edge cases in evidence
+binding, regime selection, and stats engine interaction with
+contexted data:
+- `test_data_binding_adversarial.py` (773 lines)
+- `test_evidence_binding_adversarial.py` (690 lines)
+- `test_regime_selection_adversarial.py` (431 lines)
+- `test_stats_engine_adversarial.py` (666 lines)
+- `test_regression_audit.py` (243 lines)
+
+---
+
+## 10-Apr-26: Latency dispersion (doc 34) and Phase C dirichlets running
+
+### Latency dispersion (kappa_lat)
+
+Per-interval BetaBinomial overdispersion for trajectory likelihoods.
+One `kappa_lat` scalar per edge (or per slice), captures timing noise
+analogous to how kappa captures rate noise. Feature-flagged
+`latency_dispersion`. Uses `pm.BetaBinomial.dist()` + `pm.logp()` for
+optimised PyTensor compilation (avoids manual gammaln graph). 10/11
+uncontexted graphs pass regression.
+
+### Phase C dirichlets running end-to-end
+
+First successful contexted model MCMC run. Per-slice hierarchical
+emission with non-centred parameterisation for p offsets
+(`logit(p_base) + eps * tau_slice`), per-slice kappa, per-slice
+latency hierarchy (mu, sigma, onset offsets from edge-level base).
+`synth-simple-abc-context` (2 edges × 3 slices): 51 free RVs, 6
+trajectory Potentials, compiled and sampled (slowly — 400s+).
+
+### candidateRegimeService.ts — supplementary hash discovery
+
+Step 5 added: scans stored param file `values[]` to discover hash
+families not in the current DSL. Required for `--dsl-override` to
+find contexted DB data when running bare DSL. Fixed two bugs:
+single temporal mode only (missed cohort hash), and window/cohort
+treated as competing regimes (regime selection dropped cohort).
+
+---
+
+## 9-Apr-26: Phase C data contract (doc 14) and compiler phase C implementation
+
+### Evidence binder Phase C (evidence.py)
+
+Major extension (523+ lines) to `bind_snapshot_evidence()`:
+- Context-qualified rows routed to `SliceGroup` / `SliceObservations`
+- MECE dimension handling — exhaustive slices suppress aggregate emission
+- Per-slice trajectory and daily observation construction
+- Binding receipts (`EdgeBindingReceipt`) for audit trail
+
+### Worker Phase C orchestration (worker.py)
+
+152-line rewrite of the evidence-to-model threading:
+- Per-slice subject commissioning via FE CLI
+- MECE dimensions threaded through payload
+- Per-slice evidence summary logging
+- Phase 2 aggregate-only (known limitation, not per-slice yet)
+
+### Model Phase C emission (model.py)
+
+Per-slice hierarchical emission:
+- Branch group: per-slice Dirichlet priors via `bg_slice_p_vars`
+- Solo edges: non-centred p hierarchy (logit_p_base + eps × tau_slice)
+- Per-slice kappa (log_kappa_slice → kappa_slice)
+- Per-slice latency (eps_mu, eps_sigma, eps_onset with per-edge taus)
+- Exhaustive slices suppress aggregate emission
+
+### Types (types.py)
+
+New types: `SliceObservations`, `SliceGroup`, `EdgeBindingReceipt`.
+Extended `EdgeEvidence` with `slice_groups`, `has_slices`,
+`regime_per_date`, binding receipt fields.
+
+### Test infrastructure
+
+- `test_engorged_parity.py` (386 lines): verifies FE CLI payload
+  matches harness-built payload
+- `test_snapshot_e2e.py` (146 lines): end-to-end snapshot binding
+- `test_binding_receipt.py` (642 lines): binding receipt generation
+
+---
+
+## 8-Apr-26: LOO-ELPD scoring (doc 32), BE analysis subject resolution (doc 31)
+
+### LOO-ELPD model adequacy scoring
+
+`bayes/compiler/loo.py` (275+ lines): PSIS-LOO via arviz, analytic null
+baseline (per-edge Beta(alpha, beta) → Binomial logp), per-edge
+delta_elpd attribution. Wired into `worker.py` for both Phase 1 and
+Phase 2 passes. 117+ tests. Per-slice LOO scoring with per-slice
+null model.
+
+### BE analysis subject resolution (doc 31)
+
+`analysis_subject_resolution.py` (461 lines): `resolve_analysis_subjects()`
+with per-scope resolvers, `synthesise_snapshot_subjects()`. Wired into
+`api_handlers.py`. 781 unit tests + parity tests (`test_doc31_parity.py`).
+
+### candidateRegimeService.ts
+
+185-line extension: `buildCandidateRegimesByEdge()` for Step 2-3 of
+the regime selection pipeline (context key-set grouping, hash family
+computation, candidate emission).
+
+---
+
+## 7-Apr-26: Hash contract revisions
+
+Version bumps (1.9.19 → 1.9.21). Revised BE/FE hash contracts —
+ensuring `core_hash` computation is consistent between FE
+(`candidateRegimeService.ts`) and BE (`snapshot_regime_selection.py`).
+Supplementary hash family discovery started (completed 10-Apr).
+
+---
+
 ## 6-Apr-26: Harness/FE snapshot parity gap and hash-mapping closure cross-contamination
 
 ### Bug 1: Harness does not use FE hash-mapping closure
@@ -4351,3 +5211,154 @@ does not eliminate the stochastic warmup failure.
   a JSON file into the harness payload.
 - `test_harness.py --graph-path` / `--hash-source` / `--params-dir`
   — run harness against graphs/params outside the data repo.
+
+---
+
+## 12-Apr-26: Contexted compilation performance (doc 38c)
+
+### Problem
+
+synth-simple-abc-context (2 edges, 3 context slices each) took 394s
+end-to-end: 29s compile + 335s sampling. 57 free RVs, 6 trajectory
+Potentials. The per-slice scalar RV approach created near-identical
+CDF/hazard subgraphs for each slice, bloating the PyTensor graph.
+NUTS geometry was severely degraded by hierarchical tau-eps funnels.
+
+### NUTS diagnostics (new instrumentation)
+
+Added `sample_stats` logging to `inference.py`: tree_depth, step_size,
+n_steps (leapfrog evaluations), energy, plus `n_dim` on the compile
+line. This immediately revealed the geometry problem:
+
+Phase 1 baseline (51 RVs, 6 Potentials, diagonal mass matrix):
+- step_size=0.070, n_steps=339/draw, tree_depth=8.0, 3 divergences
+- Phase 2 healthy reference: step_size=0.70, n_steps=6/draw
+
+The 10x step size gap confirmed hierarchical funnels (tau→0 in
+non-centred parameterisation forces tiny steps).
+
+### Changes (cumulative, each verified by parity run)
+
+1. **Edge-level sigma and onset** — sigma and onset are structural
+   properties of the measurement lag, not context-specific. Removed
+   `tau_sigma_slice`, `tau_onset_slice`, `eps_sigma_slice_*`,
+   `eps_onset_slice_*`. Only mu varies by slice. 51→35 RVs, 4 fewer
+   funnels. Sampling −25%.
+
+2. **Native vector RVs** — replaced per-slice scalar `eps_slice_*`,
+   `log_kappa_slice_*`, `eps_mu_slice_*` (18 nodes) with 3 vector RVs
+   of shape `[n_slices]` per edge. Same n_dim (35), fewer PyMC nodes
+   (35→23). Sampling −7% (graph smaller but Potentials unchanged).
+
+3. **Batched Phase 1 window trajectory** — new
+   `_emit_batched_window_trajectories()` concatenates all slices'
+   intervals with `slice_idx` arrays, computes CDF once using
+   `mu_slice_vec[age_slice_idx]` (advanced indexing into the native
+   vector RV), `sigma_base`/`onset_base` broadcast (edge-level).
+   One `pm.Potential` per edge instead of per slice: 6→2. Compile
+   −29%. The old dead `_emit_batched_slice_trajectories` (which used
+   `pt.stack` of scalars and never compiled) was replaced.
+
+4. **Auto low-rank mass matrix** — `inference.py` auto-selects
+   `PyNutsSettings.LowRank` when `compiled_model.n_dim > 20`.
+   Captures tau-eps funnel correlations that diagonal cannot.
+   step_size +52% (0.08→0.12), n_steps −70% (263→78). Needs more
+   warmup (tune=1000 vs 500) for adequate mass matrix adaptation.
+   Per-draw cost ~4x better.
+
+### Posterior extraction
+
+`summarise_posteriors()` updated to read vector traces via
+`slice_axes` metadata (`ctx_key → slice_idx`). Indexes into
+`trace.posterior["p_slice_vec_{edge}"][:, :, idx]` etc. Scalar
+name fallback retained for backward compatibility.
+
+### Combined results (synth-simple-abc-context, 2 chains, tune=1000, draws=500)
+
+| Metric | Original | Final |
+|--------|----------|-------|
+| n_dim | 51 | 35 |
+| Potentials | 6 | 2 |
+| compile_ms | 26,410 | 15,699 (−41%) |
+| sampling_ms | 199,486 | 116,095 (−42%) |
+| step_size | 0.070 | 0.122 (+74%) |
+| n_steps/draw | 339 | 82 (−76%) |
+
+Posteriors consistent across all runs (within MCMC noise).
+
+### Remaining geometry work
+
+The tau_slice and tau_mu_slice funnels still exist — lowrank
+mitigates but doesn't eliminate. Further options not yet tried:
+centred parameterisation for the p hierarchy, fixed tau (empirical
+Bayes), or reparameterisation of the latency CDF coupling.
+
+---
+
+## 12-Apr-26 (update 8): Phase 2 per-slice implementation + data binding parity defects
+
+### Phase 2 per-slice
+
+Phase 2 (cohort) was aggregate-only — the `not is_phase2` gate at
+`model.py` line 1140 skipped the entire per-slice block. This was
+never a deliberate design decision; it was simply unimplemented.
+
+**Implementation** (3 files):
+
+- `worker.py`: extracts per-slice Phase 1 posteriors (`p_slice_vec`,
+  `mu_slice_vec`, `kappa_slice_vec`) from Phase 1 trace into
+  `phase2_frozen[edge_id]["slices"]`, keyed by context key.
+- `model.py`: Phase 2 per-slice block creates `p_cohort_slice_*` (Beta
+  with frozen Phase 1 alpha/beta), `kappa_cohort_slice_*`, emits
+  per-slice cohort trajectory Potentials using edge-level cohort latency.
+  No hierarchy (no tau/eps) — Phase 1 posteriors ARE the priors.
+- `worker.py` summary: extracts `p_cohort_slice_*` from Phase 2 trace,
+  moment-matches to Beta, replaces `[window-copy]` provenance with
+  `[bayesian]` in per-slice cohort entries.
+
+**Verification**: synth-simple-abc-context, 1000 tune / 500 draws / 2 chains.
+Phase 2 model: 22 free RVs, 6 Potentials. Compiled in ~23s, sampled in ~34s.
+rhat=1.011, ESS=1425, 0 divergences. Per-slice cohort p values agree with
+window within 0.001 (expected — same generating rates in synth).
+
+**Gate needed**: Phase 1 convergence gate before Phase 2. With Phase 1
+ESS=48 (from 500 draws / 2 chains), Phase 2 stalled. With 1000 tune,
+Phase 1 ESS rose and Phase 2 completed normally.
+
+### Data binding parity defects (doc 39)
+
+While building the performance comparison (bare-DSL vs contexted on
+same data), discovered 5 data binding defects that caused the two
+paths to model on different data. See doc 39 for full inventory.
+
+Key fixes:
+1. Removed "largest non-MECE context as aggregate proxy" fallback —
+   was silently modelling on 1/3 of data.
+2. Eliminated duplicate payload builder in test harness — now calls
+   FE CLI as single canonical path.
+3. Fixed Step 5 supplementary hash discovery to find both window AND
+   cohort hashes (was using `explodedSlices[0]` only).
+4. Fixed Step 5 to group window/cohort as one candidate (was creating
+   separate competing regimes, regime selection dropped half).
+5. Fixed `total_n` to reflect actual modelled data volume (was
+   reporting regime-stripped aggregate when slices were exhaustive).
+
+### `latency_dispersion` default change
+
+Changed default from `False` to `True` in `model.py` (3 locations).
+This is the production-intended setting — per-interval BetaBinomial
+overdispersion on trajectory hazards.
+
+### Ground truth recovery in harness log
+
+Added GROUND TRUTH RECOVERY section to `test_harness.py` verbose
+output. For synth graphs with `.truth.yaml`, compares every posterior
+(aggregate + per-slice, p + mu + sigma + onset + kappa) against
+ground truth with z-scores and MISS flags.
+
+### Per-slice sigma/onset display fix
+
+Per-slice summary entries showed `sigma=0.000 onset=0.0` because
+sigma and onset are edge-level (doc 38 optimisation) and the
+per-slice extraction didn't inherit them. Fixed in `inference.py` to
+copy edge-level sigma/onset into per-slice entries.

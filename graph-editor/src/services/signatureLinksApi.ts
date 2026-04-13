@@ -19,7 +19,7 @@
 
 import { PYTHON_API_BASE } from '../lib/pythonApiBase';
 
-const SIGS_ENABLED = import.meta.env.VITE_SNAPSHOTS_ENABLED !== 'false';
+const SIGS_ENABLED = import.meta.env?.VITE_SNAPSHOTS_ENABLED !== 'false';
 
 // -----------------------------------------------------------------------------
 // Types (mirror backend handlers)

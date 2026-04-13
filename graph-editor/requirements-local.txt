@@ -22,3 +22,4 @@ pytest-watch>=4.2.0
 
 # Modal CLI (Bayes deploys; Modal worker image uses bayes/requirements.txt)
 modal>=1.0.0
+

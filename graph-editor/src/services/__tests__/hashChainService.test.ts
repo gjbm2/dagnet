@@ -23,7 +23,7 @@ import type { HashMapping } from '../hashMappingsService';
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function makeSig(seed: string): Promise<string> {
-  return serialiseSignature({ coreHash: seed.padEnd(64, '0'), contextDefHashes: {} });
+  return serialiseSignature({ identityHash: seed.padEnd(64, '0'), contextDefHashes: {} });
 }
 
 async function makeHash(seed: string): Promise<string> {

@@ -1,0 +1,33 @@
+{
+  "success": true,
+  "result": {
+    "analysis_type": "cohort_maturity",
+    "analysis_name": "Cohort Maturity",
+    "analysis_description": "No snapshot data found for this query and date range",
+    "metadata": {
+      "sweep_from": "2026-01-08",
+      "sweep_to": "2026-04-08",
+      "source": "snapshot_db",
+      "empty": true
+    },
+    "semantics": {
+      "dimensions": [],
+      "metrics": [],
+      "chart": {
+        "recommended": "cohort_maturity",
+        "alternatives": []
+      }
+    },
+    "dimension_values": {
+      "scenario_id": {
+        "current": {
+          "name": "Scenario 1",
+          "colour": "#3b82f6",
+          "visibility_mode": "f+e"
+        }
+      }
+    },
+    "data": []
+  },
+  "query_dsl": "from(household-delegated).to(switch-registered).cohort(-90d:)"
+}

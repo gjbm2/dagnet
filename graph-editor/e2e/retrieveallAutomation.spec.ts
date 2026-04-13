@@ -239,14 +239,16 @@ async function waitForDb(page: any) {
 }
 
 async function waitForAutomationComplete(page: any) {
-  // Poll for the automation run log in IDB (persisted before window.close decision).
+  // Poll for the automation run log in IDB with a terminal outcome
+  // (not 'running', which is written by progressive flush mid-run).
   await expect
     .poll(
       async () => page.evaluate(async () => {
         const db = (window as any).db;
         if (!db) return false;
         const logs = await db.automationRunLogs.toArray();
-        return logs && logs.length > 0;
+        if (!logs || logs.length === 0) return false;
+        return logs.some((l: any) => l.outcome && l.outcome !== 'running');
       }),
       { timeout: 45_000, intervals: [500] }
     )
@@ -259,7 +261,10 @@ async function getAutomationLog(page: any) {
     if (!db) return null;
     const logs = await db.automationRunLogs.toArray();
     if (!logs || logs.length === 0) return null;
-    return logs.sort((a: any, b: any) => b.timestamp - a.timestamp)[0];
+    // Prefer completed logs (non-'running') over progressive flush snapshots.
+    const completed = logs.filter((l: any) => l.outcome && l.outcome !== 'running');
+    const pool = completed.length > 0 ? completed : logs;
+    return pool.sort((a: any, b: any) => b.timestamp - a.timestamp)[0];
   });
 }
 
@@ -359,8 +364,11 @@ test('pull completes before any graph tab is opened', async ({ page, baseURL }) 
   expect(log).not.toBeNull();
 
   // Find the pull entry and graph-start entry in the run log.
+  // Flatten the hierarchical log (children are nested) so we can search all operations.
   const entries = log.entries as any[];
-  const flatOps = entries.map((e: any) => e.operation);
+  const flatten = (items: any[]): any[] =>
+    items.flatMap((e: any) => [e, ...(Array.isArray(e.children) ? flatten(e.children) : [])]);
+  const flatOps = flatten(entries).map((e: any) => e.operation);
 
   const pullIndex = flatOps.indexOf('DAILY_RETRIEVE_ALL_PRE_PULL');
   const graphStartIndex = flatOps.indexOf('DAILY_RETRIEVE_ALL_GRAPH_START');

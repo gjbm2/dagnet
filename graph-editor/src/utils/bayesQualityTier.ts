@@ -89,6 +89,16 @@ export function computeQualityTier(posterior: Posterior | null | undefined): Qua
     warnings.push(`degraded provenance: ${posterior.provenance}`);
   }
 
+  // LOO-ELPD model adequacy (doc 32)
+  const paretoK = 'pareto_k_max' in posterior ? (posterior as ProbabilityPosterior).pareto_k_max : null;
+  if (paretoK != null && paretoK > 0.7) {
+    warnings.push('influential observations');
+  }
+  const deltaElpd = 'delta_elpd' in posterior ? (posterior as ProbabilityPosterior).delta_elpd : null;
+  if (deltaElpd != null && deltaElpd < 0) {
+    warnings.push('worse than analytic');
+  }
+
   if (warnings.length > 0) {
     return { tier: 'warning', reason: warnings.join('; ') };
   }

@@ -18,7 +18,7 @@ const RESULT_WITH_FE = {
 } as any;
 
 describe('chartDisplayPlanningService', () => {
-  it('should collapse multi-scenario time-series to last visible scenario', () => {
+  it('should keep all visible scenarios for daily_conversions (multi-scenario overlay)', () => {
     const plan = planChartDisplay({
       result: RESULT_WITH_FE,
       requestedChartKind: 'daily_conversions',
@@ -27,9 +27,9 @@ describe('chartDisplayPlanningService', () => {
     });
 
     expect(plan.xAxisMode).toBe('time');
-    expect(plan.scenarioIdsToRender).toEqual(['current']);
-    expect(plan.scenarioSelectionMode).toBe('current_only');
-    expect(plan.fallbackReasons.length).toBeGreaterThan(0);
+    expect(plan.scenarioIdsToRender).toEqual(['base', 'current']);
+    expect(plan.scenarioSelectionMode).toBe('all_visible');
+    expect(plan.fallbackReasons.length).toBe(0);
   });
 
   it('should keep all visible scenarios for cohort_maturity (multi-scenario overlay)', () => {

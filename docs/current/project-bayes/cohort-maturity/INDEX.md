@@ -1,6 +1,6 @@
 # Cohort Maturity Documentation Index
 
-**Last updated**: 7-Apr-26
+**Last updated**: 13-Apr-26
 
 This directory contains all design docs, specs, and investigation notes
 for the cohort maturity fan chart and related forecasting work.
@@ -28,9 +28,33 @@ for the cohort maturity fan chart and related forecasting work.
 
 ---
 
-## Current implementation state (7-Apr-26)
+## Current implementation state (13-Apr-26)
 
-### What the code now does
+### Multi-hop generalisation (Phase A) — substantially implemented, single-hop parity PASSED
+
+Phase A (`29c-phase-a-design.md`) is substantially implemented (10-Apr-26).
+**Single-hop parity gate (A.4) PASSED 13-Apr-26** — v1 vs v2
+field-by-field on real graph data, window and cohort modes.
+
+- `cohort_forecast_v2.py` (1000+ lines): span kernel integration,
+  x_provider, fan computation — the full v2 row builder.
+- `span_evidence.py`: `compose_path_maturity_frames()` — evidence frame
+  composition across multi-edge paths, all topologies.
+- `span_kernel.py`: `compose_span_kernel()` — conditional x→y kernel via
+  node-level DP convolution through DAG, including branching.
+- `span_adapter.py`: adapter layer bridging span kernel to row builder.
+- `cohort_maturity_v2` registered as analysis type in both FE and BE.
+- Parity tests in `test_doc31_parity.py` (v1 vs v2 on adjacent subjects).
+
+**Remaining**: multi-hop acceptance tests (A.5) — parallel quality
+work, does not block engine extraction. Phase B (x provider for
+x ≠ a) not yet implemented — design in `29d-phase-b-design.md`.
+
+**Next**: extract reusable forecast helpers into a general BE library
+(doc 29 Steps 1–3, implementation plan doc 29e). Prerequisite:
+best-available promoted model resolution (open issue §6 below).
+
+### What the code now does (single-edge)
 
 `graph-editor/lib/runner/cohort_forecast.py` is now a posterior-predictive
 simulator, not the earlier CDF-ratio fan prototype.
@@ -285,6 +309,34 @@ propagation engine (item 1) — do them together when the time comes.
 
 **Current documentation**: `cohort-backend-propagation-engine-design.md` §1,
 `DATE_MODEL_COHORT_MATURITY.md` §3.
+
+---
+
+#### 6. Forecasting generalisation requires best-available promoted model, not only Bayes vars
+
+**Current approach**: The cohort maturity forecast pipeline consumes Bayes
+posterior variables (draws from the MVN posterior) as its model input. This
+couples the forecast to the Bayes compilation and update cycle.
+
+**What the enhancement would do**: Before generalising forecasting for broader
+consumption in the app (e.g. edge card overlays, scenario-level maturity,
+automated staleness nudges), the pipeline must be able to consume the **best
+available promoted model** — not only Bayes vars. This means the forecast
+engine should resolve the best available model for an edge (which may be a
+promoted Bayes posterior, a promoted MLE fit, or a prior-only default) and
+use that uniformly, rather than requiring a full Bayes posterior to exist.
+
+**Why this matters**:
+- Many edges will never have a Bayes posterior (insufficient data, no Bayes
+  run configured, or Bayes run not yet complete).
+- Generalised consumers should not fail or degrade silently when Bayes vars
+  are absent — they should use the best model available.
+- The promoted-model concept already exists in the snapshot DB; the gap is
+  that the forecast pipeline does not yet resolve and consume it generically.
+
+**Verdict**: Prerequisite for generalising forecasting beyond the current
+cohort maturity chart. Must be addressed before broader forecast consumption
+is rolled out.
 
 ---
 

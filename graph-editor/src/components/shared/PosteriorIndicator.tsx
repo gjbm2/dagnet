@@ -188,6 +188,38 @@ function ProbabilityPosteriorDetails({ posterior, tier, colour, retrievedAt, the
             {qualityTierLabel(tier.tier)}
           </td>
         </tr>
+        {posterior.delta_elpd != null && (
+          <tr>
+            <td className="posterior-details-label">ΔELPD</td>
+            <td className="posterior-details-value" style={posterior.delta_elpd < 0 ? { color: qualityTierToColour('warning', theme) } : undefined}>
+              {posterior.delta_elpd > 0 ? '+' : ''}{posterior.delta_elpd.toFixed(2)}
+            </td>
+          </tr>
+        )}
+        {posterior.pareto_k_max != null && (
+          <tr>
+            <td className="posterior-details-label">Pareto k</td>
+            <td className="posterior-details-value" style={posterior.pareto_k_max > 0.7 ? { color: qualityTierToColour('warning', theme) } : undefined}>
+              {posterior.pareto_k_max.toFixed(3)}
+            </td>
+          </tr>
+        )}
+        {'ppc_coverage_90' in posterior && (posterior as any).ppc_coverage_90 != null && (
+          <tr>
+            <td className="posterior-details-label">PPC cov@90%</td>
+            <td className="posterior-details-value" style={(posterior as any).ppc_coverage_90 < 0.82 || (posterior as any).ppc_coverage_90 > 0.97 ? { color: qualityTierToColour('warning', theme) } : undefined}>
+              {((posterior as any).ppc_coverage_90 * 100).toFixed(0)}% <span style={{ opacity: 0.5 }}>({(posterior as any).ppc_n_obs} obs)</span>
+            </td>
+          </tr>
+        )}
+        {posterior.ppc_traj_coverage_90 != null && (
+          <tr>
+            <td className="posterior-details-label">PPC traj@90%</td>
+            <td className="posterior-details-value" style={posterior.ppc_traj_coverage_90 < 0.82 || posterior.ppc_traj_coverage_90 > 0.97 ? { color: qualityTierToColour('warning', theme) } : undefined}>
+              {(posterior.ppc_traj_coverage_90 * 100).toFixed(0)}% <span style={{ opacity: 0.5 }}>({posterior.ppc_traj_n_obs} obs)</span>
+            </td>
+          </tr>
+        )}
 
         {/* ── Metadata ── */}
         <SectionHeader label="Metadata" theme={theme} />
@@ -386,6 +418,38 @@ function LatencyPosteriorDetails({ posterior, tier, colour, retrievedAt, theme, 
             {qualityTierLabel(tier.tier)}
           </td>
         </tr>
+        {posterior.delta_elpd != null && (
+          <tr>
+            <td className="posterior-details-label">ΔELPD</td>
+            <td className="posterior-details-value" style={posterior.delta_elpd < 0 ? { color: qualityTierToColour('warning', theme) } : undefined}>
+              {posterior.delta_elpd > 0 ? '+' : ''}{posterior.delta_elpd.toFixed(2)}
+            </td>
+          </tr>
+        )}
+        {posterior.pareto_k_max != null && (
+          <tr>
+            <td className="posterior-details-label">Pareto k</td>
+            <td className="posterior-details-value" style={posterior.pareto_k_max > 0.7 ? { color: qualityTierToColour('warning', theme) } : undefined}>
+              {posterior.pareto_k_max.toFixed(3)}
+            </td>
+          </tr>
+        )}
+        {'ppc_coverage_90' in posterior && (posterior as any).ppc_coverage_90 != null && (
+          <tr>
+            <td className="posterior-details-label">PPC cov@90%</td>
+            <td className="posterior-details-value" style={(posterior as any).ppc_coverage_90 < 0.82 || (posterior as any).ppc_coverage_90 > 0.97 ? { color: qualityTierToColour('warning', theme) } : undefined}>
+              {((posterior as any).ppc_coverage_90 * 100).toFixed(0)}% <span style={{ opacity: 0.5 }}>({(posterior as any).ppc_n_obs} obs)</span>
+            </td>
+          </tr>
+        )}
+        {posterior.ppc_traj_coverage_90 != null && (
+          <tr>
+            <td className="posterior-details-label">PPC traj@90%</td>
+            <td className="posterior-details-value" style={posterior.ppc_traj_coverage_90 < 0.82 || posterior.ppc_traj_coverage_90 > 0.97 ? { color: qualityTierToColour('warning', theme) } : undefined}>
+              {(posterior.ppc_traj_coverage_90 * 100).toFixed(0)}% <span style={{ opacity: 0.5 }}>({posterior.ppc_traj_n_obs} obs)</span>
+            </td>
+          </tr>
+        )}
 
         {/* ── Metadata ── */}
         <SectionHeader label="Metadata" theme={theme} />

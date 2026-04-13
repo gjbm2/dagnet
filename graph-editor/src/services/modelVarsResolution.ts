@@ -126,6 +126,13 @@ export function promoteModelVars(
           path_sigma: entry.latency.path_sigma,
           path_t95: entry.latency.path_t95,
           path_onset_delta_days: entry.latency.path_onset_delta_days,
+          mu_sd: entry.latency.mu_sd,
+          sigma_sd: entry.latency.sigma_sd,
+          onset_sd: entry.latency.onset_sd,
+          onset_mu_corr: entry.latency.onset_mu_corr,
+          path_mu_sd: entry.latency.path_mu_sd,
+          path_sigma_sd: entry.latency.path_sigma_sd,
+          path_onset_sd: entry.latency.path_onset_sd,
         }
       : undefined,
     activeSource: entry.source,

@@ -252,7 +252,17 @@ export function fitLagDistribution(
   }
 
   const sigma = Math.sqrt(2 * Math.log(ratio));
-  // σ = 0 is a valid degenerate lognormal when mean == median (ratio == 1).
+  // σ ≈ 0 when mean ≈ median (ratio ≈ 1): use default σ to avoid a degenerate
+  // step-function CDF that produces binary completeness with no smooth transition.
+  if (sigma < 1e-12) {
+    return {
+      mu,
+      sigma: LATENCY_DEFAULT_SIGMA,
+      empirical_quality_ok: true,
+      total_k: totalK,
+      quality_failure_reason: 'Mean/median ratio ≈ 1.0 (σ degenerate), using default σ',
+    };
+  }
   if (!Number.isFinite(sigma) || sigma < 0) {
     return {
       mu,

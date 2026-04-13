@@ -599,6 +599,10 @@ Reproduce the issue and share the console outpu
 - download CSV built from selected funnel (or generate Google spreadsheet?)
 - systematically review that DELETE graph changes  go through UpdateManager
 
+### Future feature ideas
+- **Smarter confidence-aware charting** — bridge, funnel, and cohort maturity over time charts should incorporate uncertainty bands and confidence intervals from the Bayesian engine, not just point estimates
+- **Proper what-if for graph changes (into scenario)** — allow users to make structural graph changes (add/remove edges, change topology) as a scenario, so they can compare "current graph" vs "proposed graph" side by side with full analytical support
+
 ### Analytics / Model Fitting (Future)
 - speed of chevron animation scale on log lag
 

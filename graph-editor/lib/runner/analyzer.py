@@ -58,7 +58,8 @@ def analyze(request: AnalysisRequest) -> AnalysisResponse:
             return AnalysisResponse(
                 success=False,
                 error={'error_type': 'ValueError', 'message': 'No scenarios provided'},
-                query_dsl=request.query_dsl,
+                analytics_dsl=request.analytics_dsl,
+                query_dsl=request.analytics_dsl or request.query_dsl,
             )
         
         result = analyze_scenario(
@@ -72,7 +73,8 @@ def analyze(request: AnalysisRequest) -> AnalysisResponse:
         return AnalysisResponse(
             success=True,
             result=result,
-            query_dsl=request.query_dsl,
+            analytics_dsl=request.analytics_dsl,
+            query_dsl=request.analytics_dsl or request.query_dsl,  # backward compat
         )
     
     except Exception as e:
@@ -82,7 +84,8 @@ def analyze(request: AnalysisRequest) -> AnalysisResponse:
                 'error_type': type(e).__name__,
                 'message': str(e),
             },
-            query_dsl=request.query_dsl,
+            analytics_dsl=request.analytics_dsl,
+            query_dsl=request.analytics_dsl or request.query_dsl,
         )
 
 
@@ -157,6 +160,15 @@ def analyze_scenario(
     if to_node:
         dsl_nodes.append(to_node)
     
+    # Resolve visited_any_groups to graph keys (UUIDs) for the runner
+    from .graph_builder import get_graph_key as _get_graph_key
+    resolved_visited_any_groups = []
+    for group in visited_any_groups:
+        resolved_group = [_get_graph_key(G, nid) for nid in group]
+        resolved_group = [g for g in resolved_group if g is not None]
+        if resolved_group:
+            resolved_visited_any_groups.append(resolved_group)
+
     # Run the appropriate runner
     runner_result = dispatch_runner(
         runner_name=analysis_def.runner,
@@ -167,6 +179,7 @@ def analyze_scenario(
         dsl_nodes=dsl_nodes,
         pruning=pruning,
         all_scenarios=all_scenarios,
+        visited_any_groups=resolved_visited_any_groups,
     )
     
     # Translate UUIDs to human-readable IDs in the results
@@ -204,12 +217,13 @@ def dispatch_runner(
     dsl_nodes: list[str],
     pruning: Optional[PruningResult],
     all_scenarios: Optional[list] = None,
+    visited_any_groups: Optional[list[list[str]]] = None,
 ) -> dict[str, Any]:
     """
     Dispatch to the appropriate runner based on runner name.
-    
+
     All node information comes from DSL parsing, not UI selection.
-    
+
     Args:
         runner_name: Name from analysis definition
         G: NetworkX graph
@@ -219,7 +233,8 @@ def dispatch_runner(
         all_scenarios: All scenario data for multi-scenario analysis
         dsl_nodes: All nodes mentioned in DSL (human-readable IDs)
         pruning: Computed pruning result
-    
+        visited_any_groups: Groups of node UUIDs from visitedAny() clauses
+
     Returns:
         Runner result dict
     """
@@ -274,19 +289,23 @@ def dispatch_runner(
         if resolved_from and resolved_to:
             # Get intermediates (nodes that aren't from/to)
             intermediates = [n for n in resolved_nodes if n != resolved_from and n != resolved_to]
-            return run_path(G, resolved_from, resolved_to, intermediates, pruning, all_scenarios)
+            return run_path(G, resolved_from, resolved_to, intermediates, pruning=pruning,
+                            all_scenarios=all_scenarios, visited_any_groups=visited_any_groups)
         return {'error': 'Path requires from() and to() nodes'}
-    
+
     elif runner_name == 'conversion_funnel_runner':
         if resolved_from and resolved_to:
             intermediates = [n for n in resolved_nodes if n != resolved_from and n != resolved_to]
-            return run_conversion_funnel(G, resolved_from, resolved_to, intermediates, all_scenarios)
+            return run_conversion_funnel(G, resolved_from, resolved_to, intermediates,
+                                         all_scenarios=all_scenarios,
+                                         visited_any_groups=visited_any_groups)
         return {'error': 'Conversion funnel requires from() and to() nodes'}
-    
+
     elif runner_name == 'constrained_path_runner':
         if resolved_from and resolved_to:
             intermediates = [n for n in resolved_nodes if n != resolved_from and n != resolved_to]
-            return run_path(G, resolved_from, resolved_to, intermediates, pruning, all_scenarios)
+            return run_path(G, resolved_from, resolved_to, intermediates, pruning=pruning,
+                            all_scenarios=all_scenarios, visited_any_groups=visited_any_groups)
         return {'error': 'Constrained path requires from() and to() nodes'}
     
     elif runner_name == 'branches_from_start_runner':

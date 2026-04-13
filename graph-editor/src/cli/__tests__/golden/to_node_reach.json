@@ -1,0 +1,111 @@
+{
+  "success": true,
+  "result": {
+    "analysis_type": "to_node_reach",
+    "analysis_name": "Reach Probability",
+    "analysis_description": "Probability of reaching this node from entries",
+    "metadata": {
+      "node_id": "switch-success",
+      "node_label": "Switch success"
+    },
+    "semantics": {
+      "dimensions": [
+        {
+          "id": "scenario_id",
+          "name": "Scenario",
+          "type": "scenario",
+          "role": "primary"
+        }
+      ],
+      "metrics": [
+        {
+          "id": "probability",
+          "name": "Probability",
+          "type": "probability",
+          "format": "percent",
+          "role": "primary"
+        },
+        {
+          "id": "n",
+          "name": "n (start)",
+          "type": "count",
+          "format": "number",
+          "role": null
+        },
+        {
+          "id": "k",
+          "name": "k (reached)",
+          "type": "count",
+          "format": "number",
+          "role": null
+        },
+        {
+          "id": "completeness",
+          "name": "Completeness",
+          "type": "ratio",
+          "format": "percent",
+          "role": null
+        },
+        {
+          "id": "expected_cost_gbp",
+          "name": "Expected Cost (£)",
+          "type": "currency",
+          "format": "currency_gbp",
+          "role": null
+        },
+        {
+          "id": "expected_cost_gbp_given_success",
+          "name": "Cost (£) Given success",
+          "type": "currency",
+          "format": "currency_gbp",
+          "role": null
+        },
+        {
+          "id": "cost_per_success_gbp",
+          "name": "Cost (£) per success",
+          "type": "currency",
+          "format": "currency_gbp",
+          "role": null
+        }
+      ],
+      "chart": {
+        "recommended": "bar",
+        "alternatives": [
+          "table"
+        ],
+        "hints": {}
+      }
+    },
+    "dimension_values": {
+      "scenario_id": {
+        "current": {
+          "name": "Scenario 1",
+          "colour": "#3b82f6",
+          "order": null,
+          "visibility_mode": "f+e",
+          "probability_label": "Probability"
+        }
+      }
+    },
+    "data": [
+      {
+        "scenario_id": "current",
+        "scenario_name": "Scenario 1",
+        "visibility_mode": "f+e",
+        "probability_label": "Probability",
+        "probability": 0.045243884304051296,
+        "n": 16178,
+        "k": 826,
+        "completeness": 0.9066682249329128,
+        "expected_cost_gbp": 0.00605000658301397,
+        "expected_labour_cost": 0,
+        "expected_cost_gbp_given_success": 0.012276419062926284,
+        "expected_labour_cost_given_success": 0,
+        "cost_per_success_gbp": 0.13371987564896656,
+        "cost_per_success_labour": 0
+      }
+    ]
+  },
+  "query_dsl": "to(switch-success).window(-30d:)",
+  "error": null
+}

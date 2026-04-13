@@ -33,6 +33,115 @@ import pytest
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(REPO_ROOT, "bayes"))
 
+from param_recovery import _parse_slice_posteriors
+from recovery_slices import build_slice_truth_baselines
+from test_harness import _build_preflight_payload, _summarise_preflight_result
+
+
+class TestHarnessPreflightContracts:
+    def test_build_preflight_payload_uses_worker_gate_without_mutating_input(self):
+        payload = {
+            "webhook_url": "http://example.test/webhook",
+            "settings": {"draws": 400},
+        }
+
+        preflight = _build_preflight_payload(payload)
+
+        assert preflight["webhook_url"] == ""
+        assert preflight["settings"]["binding_receipt"] == "gate"
+        assert preflight["settings"]["model_inspect_only"] is True
+        assert payload["webhook_url"] == "http://example.test/webhook"
+        assert "binding_receipt" not in payload["settings"]
+
+    def test_warned_receipt_is_not_marked_safe(self):
+        result = {
+            "status": "complete",
+            "error": None,
+            "binding_receipt": {
+                "edges_failed": 0,
+                "edges_warned": 1,
+                "edges_skipped": 0,
+                "edges_fallback": 0,
+                "edges_no_subjects": 0,
+                "edge_receipts": {
+                    "edge-a-b": {"verdict": "warn"},
+                },
+            },
+        }
+
+        summary = _summarise_preflight_result(result)
+
+        assert summary["safe_to_sample"] is False
+        assert summary["warned_edges"] == ["edge-a-b"]
+        assert summary["edges_warned"] == 1
+
+
+class TestSliceRecoveryHelpers:
+    def test_parse_slice_posteriors_accepts_compound_context_keys(self):
+        output = (
+            "  p_slice abc12345… context(channel:google).context(device:mobile): "
+            "0.4013±0.1175 HDI=[0.2000, 0.6000] "
+            "kappa=17.2±2.8 mu=1.100±0.005 sigma=0.574±0.004 onset=1.00±0.01"
+        )
+
+        parsed = _parse_slice_posteriors(output)
+
+        entry = parsed["abc12345"]["context(channel:google).context(device:mobile)"]
+        assert entry["p_mean"] == pytest.approx(0.4013)
+        assert entry["p_sd"] == pytest.approx(0.1175)
+        assert entry["mu_mean"] == pytest.approx(1.1)
+        assert entry["sigma_mean"] == pytest.approx(0.574)
+        assert entry["onset_mean"] == pytest.approx(1.0)
+
+    def test_build_slice_truth_baselines_include_compound_context_compositions(self):
+        truth = {
+            "edges": {
+                "simple-a-to-b": {
+                    "p": 0.5,
+                    "mu": 2.0,
+                    "sigma": 0.4,
+                    "onset": 1.0,
+                },
+            },
+            "context_dimensions": [
+                {
+                    "id": "channel",
+                    "values": [
+                        {
+                            "id": "google",
+                            "edges": {"simple-a-to-b": {"p_mult": 1.2, "mu_offset": 0.3}},
+                        },
+                        {"id": "direct", "edges": {}},
+                    ],
+                },
+                {
+                    "id": "device",
+                    "values": [
+                        {
+                            "id": "mobile",
+                            "edges": {"simple-a-to-b": {"p_mult": 0.9, "sigma_mult": 1.5, "onset_offset": 0.4}},
+                        },
+                        {"id": "desktop", "edges": {}},
+                    ],
+                },
+            ],
+        }
+
+        baselines = build_slice_truth_baselines(truth)
+        edge_baselines = baselines["simple-a-to-b"]
+
+        assert edge_baselines["context(channel:google)"]["p"] == pytest.approx(0.6)
+        assert edge_baselines["context(device:mobile)"]["sigma"] == pytest.approx(0.6)
+
+        combo = edge_baselines["context(channel:google).context(device:mobile)"]
+        assert combo["p"] == pytest.approx(0.54)
+        assert combo["mu"] == pytest.approx(2.3)
+        assert combo["sigma"] == pytest.approx(0.6)
+        assert combo["onset"] == pytest.approx(1.4)
+
+        reverse_combo = edge_baselines["context(device:mobile).context(channel:google)"]
+        assert reverse_combo == combo
+
 
 # ---------------------------------------------------------------------------
 # Skip conditions

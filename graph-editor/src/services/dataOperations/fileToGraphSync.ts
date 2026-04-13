@@ -211,14 +211,14 @@ export async function getParameterFromFile(options: {
         return { success: true, warning: 'No snapshot data (missing query signature)' };
       }
       const sigParsed = parseSignature(signatureStr);
-      if (!sigParsed.coreHash) {
+      if (!sigParsed.identityHash) {
         console.warn('[DataOperationsService] asat: invalid query_signature in parameter file; snapshot lookup skipped');
         sessionLogService.endOperation(asatLogOpId, 'warning', 'asat: invalid query_signature (snapshot lookup skipped)');
         return { success: true, warning: 'No snapshot data (invalid query signature)' };
       }
-      
+
       console.log('[DataOperationsService] asat query params:', {
-        dbParamId, anchorFromISO, anchorToISO, asAtISO, sliceKeyArray, coreHash: sigParsed.coreHash
+        dbParamId, anchorFromISO, anchorToISO, asAtISO, sliceKeyArray, identityHash: sigParsed.identityHash
       });
       sessionLogService.addChild(
         asatLogOpId,
@@ -232,7 +232,7 @@ export async function getParameterFromFile(options: {
           anchor_to: anchorToISO,
           as_at: asAtISO,
           slice_keys: sliceKeyArray,
-          core_hash: sigParsed.coreHash,
+          identity_hash: sigParsed.identityHash,
         }
       );
       

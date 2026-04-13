@@ -23,6 +23,8 @@ export interface NonBlockingPullOptions {
   countdownSeconds?: number;
   /** Remote SHA that triggered this pull (for audit). */
   remoteSha?: string;
+  /** When true, auto-resolve conflicts as remote-wins (dashboard/unattended mode). */
+  remoteWins?: boolean;
   /** Called after pull completes successfully (e.g. to cascade to retrieve-all). */
   onComplete?: () => void;
   /** Called when user cancels the countdown (e.g. to dismiss the remote SHA). */
@@ -185,14 +187,11 @@ async function executePull(opId: string, opts: NonBlockingPullOptions): Promise<
   operationRegistryService.setLabel(opId, 'Pulling latest changes…');
 
   try {
-    // IMPORTANT: Use pullLatest (3-way merge) instead of pullLatestRemoteWins.
-    // In an interactive session, the user may have dirty local files. Auto-resolving
-    // as "remote wins" silently destroys their work. Instead, merge and surface
-    // conflicts as a warning so the user can resolve at their convenience.
-    const result = await repositoryOperationsService.pullLatest(
-      opts.repository,
-      opts.branch
-    );
+    // remoteWins mode (dashboard/unattended): auto-resolve conflicts as remote-wins.
+    // Interactive mode: 3-way merge, surface conflicts for user resolution.
+    const result = opts.remoteWins
+      ? await repositoryOperationsService.pullLatestRemoteWins(opts.repository, opts.branch)
+      : await repositoryOperationsService.pullLatest(opts.repository, opts.branch);
 
     const conflicts = result.conflicts || [];
     if (conflicts.length > 0) {

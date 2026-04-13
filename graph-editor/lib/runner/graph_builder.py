@@ -718,48 +718,73 @@ def get_probability_label(mode: str) -> str:
     return labels.get(mode, 'Probability')
 
 
+def _translate_stage_id(G: nx.DiGraph, stage_id: str) -> str:
+    """Translate a stage ID (possibly composite visitedAny:uuid1,uuid2) to human-readable IDs."""
+    if stage_id.startswith('visitedAny:'):
+        prefix = 'visitedAny:'
+        member_uuids = stage_id[len(prefix):].split(',')
+        translated = [get_human_id(G, m) for m in member_uuids]
+        return prefix + ','.join(sorted(translated))
+    return get_human_id(G, stage_id)
+
+
 def translate_uuids_to_ids(G: nx.DiGraph, data: any) -> any:
     """
     Recursively translate UUIDs to human-readable IDs in analysis results.
-    
+
     This ensures the API returns human-readable IDs that match the DSL input format,
     making results immediately usable for display without frontend translation.
-    
+
     Args:
         G: NetworkX DiGraph (for UUID -> ID lookup)
         data: Analysis result data (dict, list, or primitive)
-    
+
     Returns:
         Data with UUIDs replaced by human-readable IDs
     """
     if data is None:
         return None
-    
+
     if isinstance(data, dict):
         result = {}
         for key, value in data.items():
+            # Translate stage and stage_member fields (may contain composite visitedAny IDs)
+            if key == 'stage' and isinstance(value, str):
+                result[key] = _translate_stage_id(G, value)
+            elif key == 'stage' and isinstance(value, dict):
+                # dimension_values.stage: translate dict keys (stage IDs) and recurse into values
+                result[key] = {
+                    _translate_stage_id(G, k): translate_uuids_to_ids(G, v)
+                    for k, v in value.items()
+                }
+            elif key == 'stage_member' and isinstance(value, str):
+                result[key] = get_human_id(G, value)
             # Translate values in node ID fields (both uuid and human-readable name conventions)
-            if key in ('node_id', 'from_node', 'to_node', 'start_node', 'end_node', 
+            elif key in ('node_id', 'from_node', 'to_node', 'start_node', 'end_node',
                        'source', 'target', 'id', 'node'):
                 if isinstance(value, str):
                     result[key] = get_human_id(G, value)
                 else:
                     result[key] = translate_uuids_to_ids(G, value)
             # Translate lists of node IDs (string lists)
-            elif key in ('node_ids', 'entry_nodes', 'absorbing_nodes', 'case_nodes', 
-                         'intermediate_nodes', 'visited_nodes', 'excluded_nodes', 'path', 'nodes'):
+            elif key in ('node_ids', 'entry_nodes', 'absorbing_nodes', 'case_nodes',
+                         'intermediate_nodes', 'visited_nodes', 'excluded_nodes', 'path',
+                         'nodes', 'members', 'reachable_from', 'group'):
                 if isinstance(value, list):
                     result[key] = [get_human_id(G, v) if isinstance(v, str) else translate_uuids_to_ids(G, v) for v in value]
                 else:
                     result[key] = translate_uuids_to_ids(G, value)
+            # Translate member_labels dict keys (uuid -> human ID)
+            elif key == 'member_labels' and isinstance(value, dict):
+                result[key] = {get_human_id(G, k): v for k, v in value.items()}
             # Recurse into nested structures
             else:
                 result[key] = translate_uuids_to_ids(G, value)
         return result
-    
+
     elif isinstance(data, list):
         return [translate_uuids_to_ids(G, item) for item in data]
-    
+
     # Primitives pass through
     return data
 

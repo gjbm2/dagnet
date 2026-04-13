@@ -1,5 +1,7 @@
 # DagNet Development Guidelines for AI Assistants
 
+YOU ARE OFTEN INCOMPETENT AND OFTEN OVER-CONFIDENT. YOU OFTEN FAIL TO STUDY CONTEXT AND DO NOT PAY ENOUGH ATTENTION TO DETAIL. BE HUMBLE, DILIGENT, CAREFUL AND PATIENT. *DO NOT HACK*.
+
 ## Pre-flight Checks (MANDATORY before every Bash command)
 
 A `PreToolUse` hook fires on every Bash tool call. It injects a system reminder into the conversation asking you to check these gates. When you see this reminder, **scan all four gates before executing**. If any gate fails, STOP and use the listed alternative. Do not rationalise around them.
@@ -71,9 +73,6 @@ the file first — never modify, truncate, or delete.**
 2. `docs/current/codebase/RESERVED_QUERY_TERMS_GLOSSARY.md` — term definitions (Cohort vs cohort(), window mode vs cohort mode, edge-level vs path-level latency, anchor_median_lag_days) that affect every subsystem
 3. `docs/current/codebase/DEV_ENVIRONMENT_AND_HMR.md` — staleness diagnostic section only (5-step checklist). Do NOT blame HMR for bugs unless this checklist confirms code staleness.
 
-**Then check for handover notes**:
-4. List `docs/current/handover/` — if a recent handover exists for your work area, read it in full before starting
-
 **Why this exists**: agents repeatedly spend 3-6 attempts on fixes that would have been one-shot with this context. The sync overview alone would have prevented the 6-attempt posterior deletion failure (each attempt missed a different layer). The glossary prevents misusing cohort/window semantics. The HMR doc prevents false staleness diagnoses.
 
 ---
@@ -88,13 +87,22 @@ These are **non-negotiable reflexes**. When the user's message matches a trigger
 | "run tests" (without specific files) | Run only tests related to files you changed — use file paths, not patterns |
 | "dry run" / "run the script" | Requires `required_permissions: ["all"]` — the sandbox hides `node_modules` and env files |
 | **"RTFM"**, "rtfm", or any derivation (e.g. "read the manual", "check the docs", "did you even read the rules") | The user is telling you that your recent response missed context that is already documented. **Three mandatory steps**: **(1)** Re-read this entire CLAUDE.md file systematically — do not skim. **(2)** Review relevant codebase docs (`docs/current/`, `docs/current/project-contexts/`, `graph-editor/docs/`, and any files referenced in the current discussion) to rebuild working knowledge. **(3)** Revise your most recent response/analysis in light of what you missed, and respond with corrected, properly contextualised guidance. **Do NOT defend the original response.** The user is not asking for justification — they are telling you that you were wrong. |
-| **"pick up handover"**, "pick up latest handover", "continue from handover", "read the handover" | **(1)** List files in `docs/current/handover/` and find the most recent one (by date in filename, format `d-MMM-yy`). **(2)** Read it in full. **(3)** Summarise the objective, current state, and next steps back to the user. **(4)** Ask the user which next step to start on, or begin the first one if the user said "and go" or similar. Do NOT start coding without confirming the handover context makes sense. |
-| **"write handover"**, "do a handover", "handover note" | Write a detailed handover note following the template in `.claude/skills/handover/SKILL.md`. Write to `docs/current/handover/` with a `d-MMM-yy` dated filename. Review the **full conversation** — capture objective, current state, all key decisions and rationale, discoveries, gotchas, relevant files, next steps, and open questions. No code snippets — prose only. Tell the user the file path when done. |
+| **"/handover"** (literal slash command — no other phrasing triggers this) | Invoke the `/handover` skill. See Handover Gate below. |
 | **"document"**, "/document", "document this", "ensure this is documented" | Invoke the `/document` skill. Reviews the full conversation and ensures all decisions, designs, architectural insights, and user-facing changes are properly documented in the appropriate locations (`docs/current/codebase/`, `docs/current/project-contexts/`, `graph-editor/public/docs/`, etc.). Reports what was created/updated and flags anything deliberately omitted. |
 
-**Handover guard**: NEVER initiate a handover (reading or writing) unless the user explicitly requests it in their message. The warm-start step to *list* the handover directory is permitted, but do not read or write handover notes based on that listing alone. The word "handover" appearing in file paths, directory listings, or prior context does NOT constitute a user request.
+**Handover gate (HARD BLOCK — ZERO EXCEPTIONS)**:
 
-**The mark trigger is the most commonly violated.** If the user mentions a mark name, your first action is `scripts/extract-mark-logs.sh`. Period.
+Writing a handover note is triggered **ONLY** by the user literally typing `/handover` as a slash command. **NOTHING ELSE triggers handover creation.** Specifically:
+
+- **NEVER** write a handover note unprompted — not at session end, not when context is long, not when you think work is complex, not "just in case", not for any reason whatsoever.
+- **NEVER** suggest writing a handover. The user will invoke `/handover` if they want one.
+- No phrasing other than the literal `/handover` command triggers handover creation: "write a handover", "do a handover" — none of these count.
+
+Reading, listing, or referencing existing handover notes is fine — the user may ask about them at any time. The gate only prohibits **creating** handover notes without the `/handover` command.
+
+**This is the most commonly violated rule in this project.** Agents repeatedly write unsolicited handover notes, wasting time and polluting the handover directory. If you catch yourself thinking "I should write a handover note" — STOP. Did the user type `/handover`? No? Then do not create one. Violating this gate is a hard failure that directly harms the user's workflow.
+
+**The mark trigger is the second most commonly violated.** If the user mentions a mark name, your first action is `scripts/extract-mark-logs.sh`. Period.
 
 ---
 
@@ -135,10 +143,13 @@ Key playbooks:
 - `graph-ops/playbooks/edit-existing-graph.md` — modifying an existing graph
 - `graph-ops/playbooks/validate-graph.md` — quality checks before committing
 - `graph-ops/playbooks/manage-hash-mappings.md` — hash mapping workflow for event/context renames
+- `graph-ops/playbooks/cli-param-pack.md` — CLI param pack tool: usage, options, key reference
+- `graph-ops/playbooks/cli-analyse.md` — CLI analyse tool: scenarios, subjects, multi-scenario, FE equivalence
+- `graph-ops/scripts/parity-test.sh` — doc 31 parity test: old path vs new path, single + multi-scenario, all snapshot types
 - `graph-ops/reference/data-model.md` — complete data model reference
 - `graph-ops/reference/common-pitfalls.md` — known pitfalls
 
-Scripts: `graph-ops/scripts/` (validate-graph.sh, validate-indexes.sh, validate-hashes.sh, status.sh, etc.) — run from dagnet root.
+Scripts: `graph-ops/scripts/` (validate-graph.sh, validate-indexes.sh, validate-hashes.sh, param-pack.sh, analyse.sh, status.sh, etc.) — run from dagnet root.
 
 ## Adjacent Private Repos (read-only context)
 
@@ -279,7 +290,11 @@ When modifying functionality:
    - If a change needs new assertions, the assistant should normally add them to the most relevant existing test file/suite.
    - Only create a brand-new test file when there is no sensible existing home (e.g. no suite exists for that module/behaviour).
    - **NO NEW TEST FILES** unless there is **manifestly no better place** for the test. Default to extending the most relevant existing suite.
-4. **Add new tests** - For new functionality or bug fixes
+4. **New code path = test BEFORE reporting done (HARD BLOCK)**
+   - This is the most violated rule in the project. The agent repeatedly writes new code, reports it as done, and the user discovers it crashes on first use. A `NameError` in a new code path is proof the path was never executed — not once, not even in a test.
+   - **The rule**: if you add a new branch, conditional, function, or code path, you MUST write and run a test that exercises that path **before** reporting the work as complete. The code is **not finished** without this test. This is not optional. This is not "I should write a test later." The test is part of the deliverable.
+   - **Red flag — expensive-only coverage**: if the only way to exercise your new code is an expensive integration run (MCMC sampling, full harness, 3+ minute cycle), that is a red flag that a fast synthetic test is missing. Write the fast test. The expensive run validates end-to-end behaviour; the fast test catches `NameError`, `KeyError`, `UnboundLocalError`, wrong variable names, and off-by-one scoping — the bugs that actually happen.
+   - **Bayes compiler specifically**: new branches in `build_model`, `summarise_posteriors`, `bind_evidence`, `bind_snapshot_evidence`, or `run_inference` that handle slices, contexts, phases, or new features MUST have a synthetic builder in `bayes/tests/synthetic.py` and a test that calls through the pipeline with that builder. The existing builders cover bare/uncontexted evidence only. If your code path requires contexted/sliced evidence and no builder exists, **creating the builder is part of the work**.
 5. **Run RELEVANT tests only** - Don't run full suite unless explicitly asked
 6. **Write INTEGRATION tests, not unit tests** - See Testing Standards below. Unit tests with mocks don't catch real bugs.
 7. **Test design before test code** - Before writing any test code, produce a prose test design covering invariants, scenarios, and mock decisions. See Test Design Discipline below. Jumping straight to `describe()`/`it()` blocks without this step is a violation.
@@ -287,6 +302,7 @@ When modifying functionality:
 Test files are in:
 - `graph-editor/src/services/__tests__/` - Service integration tests
 - `graph-editor/tests/` - Higher-level integration tests
+- `bayes/tests/` - Bayes compiler pipeline tests (synthetic builders in `synthetic.py`)
 
 ### 5. DATA SOURCES OF TRUTH
 
@@ -368,6 +384,9 @@ Identify your task type below, then read the listed docs **before writing any co
 - FE_BE_STATS_PARALLELISM.md **(full)** — why both FE and BE run the topo pass, parity comparison
 - STATISTICAL_DOMAIN_SUMMARY.md **(full)** — statistical architecture, data pipeline
 - PROBABILITY_BLENDING.md **(skim)** — blending cohort-mode latency edge probabilities
+- `docs/current/project-bayes/32-posterior-predictive-scoring-design.md` **(ref if touching LOO/ELPD)** — per-edge model adequacy scoring, analytic null comparison
+- `docs/current/project-bayes/34-latency-dispersion-background.md` **(ref if touching latency dispersion / kappa_lat)** — per-interval BetaBinomial timing overdispersion
+- BAYES_REGRESSION_TOOLING.md **(ref if running regression / modifying devtools)** — multi-layered audit, `--clean`, `--feature`, parallel safety
 
 **Modifying snapshot DB, signatures, or hash infrastructure**:
 - SNAPSHOT_DB_ARCHITECTURE.md **(full)** — data model and objectives
@@ -386,12 +405,14 @@ Identify your task type below, then read the listed docs **before writing any co
 - SLICE_PLANNING_RETRIEVAL.md **(full)** — retrieve-all planning and execution
 - CONTEXT_SYSTEM.md **(skim)** — context registration, MECE aggregation
 - DATA_DEPTH_SCORING.md **(ref)** — coverage scoring
+- HASH_SIGNATURE_INFRASTRUCTURE.md **(skim — regime selection section)** — when multiple context dimensions produce multiple hashes, the BE must select one per date
+- `docs/current/project-bayes/30-snapshot-regime-selection-contract.md` **(ref if touching snapshot aggregation)** — regime selection contract and `mece_dimensions`
 
 **Modifying automation, scheduling, or staleness**:
 - AUTOMATION_PIPELINE.md **(full)** — daily fetch, retrieve-all automation, run logging
 - JOB_SCHEDULER.md **(skim)** — unified system for recurring work
 - STALENESS_AND_AUTO_UPDATE.md **(skim)** — nudges, auto-update policy
-- `docs/current/project-bayes/28-bayes-run-reconnect-design.md` **(skim if touching Bayes automation)** — 3-phase pipeline (Phase 0 patch apply, Phase 1 fetch+commission, Phase 2 drain), `runBayes` flag, reconnect mechanism
+- `docs/current/project-bayes/archive/28-bayes-run-reconnect-design.md` **(skim if touching Bayes automation)** — 3-phase pipeline (Phase 0 patch apply, Phase 1 fetch+commission, Phase 2 drain), `runBayes` flag, reconnect mechanism. Essential knowledge also in `PYTHON_BACKEND_ARCHITECTURE.md` §Automation.
 
 **Modifying share links, live share, or bundles**:
 - SHARE_AND_LIVE_SHARE.md **(full)** — static/live shares, boot/hydration/sync
@@ -501,6 +522,10 @@ Services must NOT import UI components or dialogs directly. Accept callbacks ins
 | 3-way merge | `mergeService.ts` | `mergeService.test.ts` |
 | Session logging | `sessionLogService.ts` | `sessionLogService.test.ts` |
 | Hash/signature computation | `coreHashService.ts`, `signatureMatchingService.ts` | `coreHashService.test.ts`, `signatureMatchingService.test.ts` |
+| Snapshot regime selection | `snapshot_regime_selection.py` (BE), `candidateRegimeService.ts` (FE) | `test_snapshot_regime_selection.py`, `test_regime_consumer_integration.py` |
+| BE subject resolution (doc 31) | `analysis_subject_resolution.py` (BE), `graph_select.py` (BE) | `test_analysis_subject_resolution.py`, `test_doc31_parity.py`, CLI `parity-test.sh` |
+| LOO-ELPD model adequacy | `bayes/compiler/loo.py` (BE), `bayesQualityTier.ts` (FE) | `test_loo.py` |
+| PPC calibration | `bayes/compiler/calibration.py` (BE) | (validated via `--diag` on synth graphs) |
 | Schema validation | `lib/schema.ts` | `schemaParityAutomated.test.ts` |
 | Non-blocking pull | `nonBlockingPullService.ts` | `nonBlockingPullService.test.ts` |
 | Automation runs | `dailyRetrieveAllAutomationService.ts` | `dailyRetrieveAllAutomationService.test.ts` |
@@ -509,6 +534,9 @@ Services must NOT import UI components or dialogs directly. Accept callbacks ins
 | Bayes patch apply + cascade | `bayesPatchService.ts` | `bayesPatchServiceMerge.integration.test.ts` |
 | Bayes reconnect + automation submit | `bayesReconnectService.ts` | (no dedicated test yet) |
 | Daily fetch / runBayes flags | `dailyFetchService.ts` | `dailyFetchService.test.ts` |
+| CLI disk loader | `src/cli/diskLoader.ts` | (smoke-tested manually) |
+| CLI aggregation + LAG | `src/cli/aggregate.ts` | (smoke-tested manually) |
+| CLI bootstrap (shared) | `src/cli/bootstrap.ts` | (smoke-tested manually) |
 
 ## Debugging Discipline
 
@@ -556,6 +584,29 @@ After completing a fix that required more than one attempt, or that required und
 **What NOT to capture**: the specific bug itself (that belongs in the commit message), or anything derivable from reading the current code.
 
 **How to propose**: tell the user *"This fix revealed that [subsystem] works differently than documented — I'd like to update [doc name] with [brief description]. OK?"* Then make the edit if approved. Small, targeted updates to existing docs are preferred over new docs.
+
+### Devtool and Logging Integrity (BLOCKING — no workarounds)
+
+**CRITICAL**: Devtools and logging machinery are the agent's eyes. A broken devtool doesn't just affect one task — it degrades every future session that depends on it. A broken logging pipeline means the agent is blind to everything and *won't know it's blind* because the tool runs without error, producing incomplete or wrong output.
+
+**What counts as infrastructure** (not an exhaustive list):
+
+- **Log streaming pipeline**: `debug/tmp.browser-console.jsonl`, `debug/tmp.session-log.jsonl`, `debug/tmp.python-server.jsonl`, the mirroring code that writes to them, mark injection into all three streams
+- **Log extraction and diagnostics**: `scripts/extract-mark-logs.sh`, graph snapshot capture (`debug/graph-snapshots/`)
+- **Session log service**: `sessionLogService.ts` — levels, thresholds, `startOperation`/`endOperation` lifecycle, viewer rendering
+- **Test harnesses**: `bayes/test_harness.py`, `bayes/param_recovery.py`, `bayes/synth_gen.py`, synthetic builders in `bayes/tests/synthetic.py`
+- **Graph-ops scripts**: `graph-ops/scripts/*.sh` (parity, validation, param-pack, analyse)
+- **Any script the agent is told to run** as part of a diagnostic or verification step
+
+**Rule 1 — Broken infrastructure is a blocking issue.** If you discover that a devtool or logging component is defective — not just inconvenient, but producing wrong results, missing data, or failing — treat it as a **blocking issue**. Do not work around it. Do not patch over the symptom. Fix it properly or escalate to the user immediately. A workaround that makes a broken tool *look* like it works is worse than a hard failure, because it silently corrupts every downstream diagnosis.
+
+**Rule 2 — Correctness, not minimality.** For feature code, the rule is "smallest change that accomplishes the intent." For infrastructure, the standard is **full correctness**. A minimal patch to a broken diagnostic tool means the tool looks like it works but still lies to you. If the proper fix is larger than a patch, do the proper fix. If you can only patch, say so explicitly: *"This is a patch, not a proper fix. The tool is still broken because [reason]. A proper fix requires [scope]."*
+
+**Rule 3 — No silent workarounds.** If you find yourself working around an infrastructure limitation — manually parsing output that a script should handle, skipping a verification step because a tool crashes, reading raw JSONL because the extraction script returns wrong results — you must **immediately flag it**: *"I'm working around a defect in [tool]. This should be fixed properly — here's what's wrong: [root cause]. Shall I fix the tool now?"* The workaround must be visible, not silent. Silent workarounds accumulate across sessions and nobody notices until the tool is deeply broken.
+
+**Rule 4 — Logging fidelity is non-negotiable.** Log streams and session logs are the primary evidence source for debugging sync, state, and data-flow issues. If a log stream is missing entries, writing to the wrong file, dropping marks, producing malformed JSONL, or silently swallowing errors, that is not a minor issue — it is equivalent to a test harness that passes broken code. Fix it with the same urgency you would fix a test that produces false passes.
+
+**Why this section exists**: agents repeatedly encounter broken devtools and treat them as background friction — applying a minimal patch or simply working around the breakage. This accumulates: each session leaves the tool slightly more broken, each workaround is invisible to the next session, and eventually the tool is so degraded that it actively misleads. The pattern is: patch, patch, patch, catastrophic misdiagnosis. The fix is: treat infrastructure breakage as urgent, not incidental.
 
 ## Testing Standards
 
@@ -640,6 +691,31 @@ Write tests from the **contract**, not from the implementation. Tests shaped by 
 - ✅ `it(‘batched path produces identical coverage to per-edge path on real graph data’)`
 - ✅ `it(‘should use computeShortCoreHash not parseSignature.coreHash for DB lookups’)`
 
+### Test Infrastructure Must Track Feature Domains (STRATEGIC — NOT OPTIONAL)
+
+**This is the most important testing rule in the project and the most expensive one to violate.**
+
+Individual test rules (mock budgets, parity tests, blind tests) govern how to write *a* test. This rule governs whether the **test infrastructure exists at all** for the domain you are working in.
+
+**The failure pattern**: the agent builds an entire new competence domain (contexted evidence, Phase 2 modelling, per-slice hierarchical priors) across multiple sessions. Every code change is validated by running expensive end-to-end cycles (3-minute MCMC, 30-minute regression suites). No fast synthetic test infrastructure is built. Eventually a trivial bug (`NameError`, `UnboundLocalError`, wrong variable scope) crashes every single production run. The user discovers it after wasting 30 minutes of compute. The agent then offers to write "a test" — but the problem was never one missing test. The problem was an **entire untested domain**.
+
+**The rule**: when you are building or extending a capability that introduces a new *category* of inputs, data shapes, or code paths, you must build the test infrastructure for that category alongside the production code. This means:
+
+1. **Synthetic data builders** that produce the new data shape (e.g. sliced evidence with `has_slices=True`, MECE context groups, Phase 2 frozen priors). These go in the relevant test fixtures module (e.g. `bayes/tests/synthetic.py`).
+2. **Pipeline smoke tests** that call through the full code path with synthetic data and assert it completes without crashing. These catch `NameError`, `KeyError`, wrong variable names — the bugs that actually happen when code is written but never executed.
+3. **Recovery/correctness tests** that assert the output is numerically reasonable (posterior means near truth, convergence diagnostics within bounds).
+
+Layer 1 (builders) is a prerequisite for layers 2 and 3. Layer 2 is cheap and catches the most common bugs. Layer 3 is more expensive but proves the system works.
+
+**When this rule applies**: any time you notice that the existing test builders don't cover the data shape your new code handles. If every builder in `synthetic.py` produces bare evidence and your code handles sliced evidence, you cannot test your code with the existing infrastructure. Building the builder is part of the work — not a follow-up, not "we should add tests later", not the user's job to commission.
+
+**Current known gaps** (update this list as gaps are filled):
+- Contexted/sliced evidence builders (`has_slices=True`, `slice_groups` populated) — MISSING
+- Phase 2 frozen-prior pipeline (Phase 1 → moment-match → Phase 2) — MISSING
+- MECE aggregation through `bind_evidence` / `bind_snapshot_evidence` — MISSING
+- `summarise_posteriors` with per-slice extraction — MISSING
+- Per-slice latency inheritance (sigma, onset from edge-level) — MISSING
+
 ### When to Skip Tests
 
 Not every change needs a test. Pure refactors with no behaviour change, documentation edits, and config tweaks do not need tests. But any change that **introduces a new code path, replaces an existing code path, or changes how data flows between subsystems** needs a test — and that test must exercise the real boundary, not a mock of it.
@@ -710,7 +786,7 @@ Before submitting changes:
 Do NOT claim a fix is complete until you have verified it. "I changed the code" is not "it works". The most expensive failure mode is premature "done" — it wastes a full round-trip when the user discovers it's still broken.
 
 **Before reporting completion**:
-1. **Run the relevant test(s)** — not the full suite, but the specific test file(s) covering the changed behaviour. If no test exists, write one first.
+1. **Run the relevant test(s)** — not the full suite, but the specific test file(s) covering the changed behaviour. **If no test exists for the new code path, write one first — this is a hard block, not a suggestion.** See rule 4 in "ALWAYS UPDATE TESTS". A `NameError` or `UnboundLocalError` in untested code that could have been caught by a 10-second pytest is an unacceptable failure mode.
 2. **Check all call sites** — grep for the function/field you changed and verify every caller still works with the new behaviour.
 3. **Verify state in all affected layers** — if you changed something that touches persistence, verify in IDB, FileRegistry, AND GraphStore (not just the one you modified). See SYNC_SYSTEM_OVERVIEW.md for the 4-layer model.
 4. **Test the "already clean" case** — if your fix clears/deletes state, verify it also works when the state is already absent. Idempotency failures are the #1 cause of "worked once, fails on second run" bugs.
@@ -729,6 +805,7 @@ Do NOT claim a fix is complete until you have verified it. "I changed the code" 
 - [ ] **UpdateManager** - If field contains node references, update on node ID rename
 - [ ] **Services** - Storage, retrieval, sync logic (dataOperationsService, etc.)
 - [ ] **Override patterns** - If field has `_overridden` companion, mirror the pattern
+- [ ] **Bayes posterior fields** - If adding to `PosteriorSummary` or `LatencyPosteriorSummary`, also add to `_build_unified_slices()` in `worker.py` (both window and cohort dicts) AND to `bayesPatchService.ts` projection. See anti-pattern 14.
 
 **Finding companion fields**: grep for a similar field (e.g. `query_overridden`, `.query\b`) across `.ts`, `.tsx`, `.py`, `.yaml` to find all places where the pattern is used, then replicate for the new field.
 

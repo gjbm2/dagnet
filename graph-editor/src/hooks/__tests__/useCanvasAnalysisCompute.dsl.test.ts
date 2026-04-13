@@ -474,7 +474,10 @@ describe('useCanvasAnalysisCompute DSL handling', () => {
     rerender({ currentAnalysis: analysis });
 
     await waitFor(() => {
-      expect(mockResolveSnapshotSubjectsForScenario).toHaveBeenCalled();
+      // Doc 31: the FE no longer calls resolveSnapshotSubjectsForScenario.
+      // Instead, the preparation service checks planner readiness via
+      // getSnapshotPlannerInputsStatus and attaches analytics_dsl directly.
+      expect(mockGetSnapshotPlannerInputsStatus).toHaveBeenCalled();
       expect(mockAnalyzeMultipleScenarios).toHaveBeenCalled();
       expect(result.current.waitingForDeps).toBe(false);
       expect(result.current.result).not.toBeNull();
@@ -557,7 +560,8 @@ describe('useCanvasAnalysisCompute DSL handling', () => {
     await waitFor(() => {
       expect(result.current.waitingForDeps).toBe(true);
     });
-    expect(mockResolveSnapshotSubjectsForScenario).not.toHaveBeenCalled();
+    // Doc 31: the FE no longer calls resolveSnapshotSubjectsForScenario.
+    // The preparation service checks planner readiness and attaches analytics_dsl directly.
     expect(mockAnalyzeMultipleScenarios).not.toHaveBeenCalled();
     expect(mockHydrateSnapshotPlannerInputs).toHaveBeenCalledWith({
       fileIds: ['parameter-edge-a'],
@@ -574,7 +578,9 @@ describe('useCanvasAnalysisCompute DSL handling', () => {
     fileRegistrySubscribers.get('parameter-edge-a')?.forEach((callback) => callback());
 
     await waitFor(() => {
-      expect(mockResolveSnapshotSubjectsForScenario).toHaveBeenCalledTimes(2);
+      // Planner status checked multiple times: during blocked phase, then again
+      // after hydration (once per scenario in the preparation loop).
+      expect(mockGetSnapshotPlannerInputsStatus.mock.calls.length).toBeGreaterThanOrEqual(2);
       expect(mockAnalyzeMultipleScenarios).toHaveBeenCalledTimes(1);
       expect(result.current.waitingForDeps).toBe(false);
     });
@@ -818,10 +824,10 @@ describe('activeContentIndex: compute must use the selected tab properties', () 
 
     // Assert the backend received the tab 1 DSL, not tab 0's
     const call = mockAnalyzeSelection.mock.calls[0];
-    // analyzeSelection(graph, queryDsl, scenarioId, scenarioName, scenarioColour, analysisType, ...)
-    const [, queryDsl, , , , analysisType] = call;
+    // analyzeSelection(graph, analyticsDsl, effectiveQueryDsl, scenarioId, scenarioName, scenarioColour, analysisType, ...)
+    const [, analyticsDsl, , , , , analysisType] = call;
     expect(analysisType).toBe('graph_overview');
-    expect(queryDsl).toContain('from(delegated).to(registered)');
+    expect(analyticsDsl).toContain('from(delegated).to(registered)');
   });
 });
 

@@ -168,6 +168,20 @@ def bind_evidence(
         # --- Phase C: route sliced observations to SliceGroups ---
         _route_slices(ev, settings, diagnostics)
 
+        # --- Recompute total_n to reflect actual modelled data ---
+        _pf_slice_n = sum(
+            s_obs.total_n
+            for sg in ev.slice_groups.values()
+            for s_obs in sg.slices.values()
+        )
+        _pf_all_exhaustive = all(
+            sg.is_exhaustive for sg in ev.slice_groups.values()
+        ) if ev.slice_groups else False
+        if _pf_all_exhaustive and _pf_slice_n > 0:
+            ev.total_n = _pf_slice_n
+        elif _pf_slice_n > 0:
+            ev.total_n = max(ev.total_n, _pf_slice_n)
+
         # --- Minimum-n gate ---
         min_n = settings.get("min_n_threshold", MIN_N_THRESHOLD)
         if ev.total_n < min_n and ev.total_n > 0:
@@ -201,6 +215,10 @@ def bind_snapshot_evidence(
     params_index: dict | None = None,
     settings: dict | None = None,
     today: str | None = None,
+    graph_snapshot: dict | None = None,
+    commissioned_slices: dict[str, set[str]] | None = None,
+    mece_dimensions: list[str] | None = None,
+    regime_selections: dict | None = None,
 ) -> BoundEvidence:
     """Bind evidence from snapshot DB rows, falling back to parameter files.
 
@@ -214,12 +232,34 @@ def bind_snapshot_evidence(
         anchor_day for cohort, latest for window). Ignore param file values[].
       - If no snapshot data: fall back to param file values[] (existing path).
       - Priors always come from param files (warm-start / moment-matched).
+
+    graph_snapshot: optional engorged graph (doc 14 §9A). When provided,
+    priors and file-based evidence are read from ``_bayes_priors`` and
+    ``_bayes_evidence`` on graph edges instead of from param_files.
+    Snapshot row handling is completely unchanged.
+
+    commissioned_slices: optional dict of edge_id → set of normalised
+    context keys (e.g. {"context(channel:google)", ...}). When provided,
+    _route_slices only creates SliceGroups for these commissioned keys,
+    ignoring any other context data in the DB rows. This is the FE
+    commissioning contract (R2-prereq-i, doc 14 §R2-prereq-i).
     """
     diagnostics: list[str] = []
     settings = settings or {}
     today_date = _parse_today(today)
 
     param_id_to_path = _build_path_lookup(params_index)
+
+    # Engorged graph lookup (doc 14 §9A): when the graph carries
+    # _bayes_priors and _bayes_evidence on edges, use those instead
+    # of param files for priors and file-based evidence.
+    engorged_edges: dict[str, dict] = {}
+    if graph_snapshot:
+        for ge in graph_snapshot.get("edges", []):
+            eid = ge.get("uuid", "")
+            if eid and isinstance(ge.get("_bayes_priors"), dict):
+                engorged_edges[eid] = ge
+
     edges_evidence: dict[str, EdgeEvidence] = {}
 
     for edge_id, et in topology.edges.items():
@@ -229,6 +269,20 @@ def bind_snapshot_evidence(
             continue
 
         pf_data = _resolve_param_file(param_id, param_files)
+        ge = engorged_edges.get(edge_id)
+        edge_commissioned = commissioned_slices.get(edge_id) if commissioned_slices else None
+
+        # Per-date regime classification from RegimeSelection.
+        # Trust the caller's regime decisions — they were computed by
+        # snapshot_regime_selection.py using candidate regime hashes and
+        # per-date row coverage. Re-deriving from data here would ignore
+        # the upstream selection logic and silently override the caller's
+        # intent (e.g. overriding "uncontexted" to "mece_partition" when
+        # context rows happen to exist for that date).
+        edge_regime_per_date: dict[str, str] | None = None
+        if regime_selections and edge_id in regime_selections:
+            rs = regime_selections[edge_id]
+            edge_regime_per_date = dict(rs.regime_per_date)
 
         file_path = param_id_to_path.get(param_id, "")
         if not file_path:
@@ -243,47 +297,82 @@ def bind_snapshot_evidence(
             file_path=file_path,
         )
 
-        # --- Prior (always from param file) ---
-        if pf_data:
-            ev.prob_prior = _resolve_prior(pf_data, topology.fingerprint)
+        # --- Prior ---
+        # Engorged: read pre-resolved priors from graph edge.
+        # Legacy: resolve from param file.
+        if ge:
+            bp = ge["_bayes_priors"]
+            ev.prob_prior = ProbabilityPrior(
+                alpha=float(bp.get("prob_alpha", 1.0)),
+                beta=float(bp.get("prob_beta", 1.0)),
+                source=bp.get("prob_source", "uninformative"),
+            )
+            if et.has_latency and bp.get("latency_mu") is not None:
+                ev.latency_prior = LatencyPrior(
+                    onset_delta_days=float(bp.get("latency_onset") or 0),
+                    mu=float(bp.get("latency_mu", 0)),
+                    sigma=float(bp.get("latency_sigma", 0.5)),
+                    source=bp.get("latency_source", "topology"),
+                    onset_uncertainty=float(bp.get("onset_uncertainty") or max(1.0, float(bp.get("latency_onset") or 0) * 0.3)),
+                    onset_observations=bp.get("onset_observations"),
+                )
+            elif et.has_latency:
+                ev.latency_prior = LatencyPrior(
+                    onset_delta_days=et.onset_delta_days,
+                    mu=et.mu_prior,
+                    sigma=et.sigma_prior,
+                    source="topology",
+                    onset_uncertainty=max(1.0, et.onset_delta_days * 0.3),
+                )
+            # Warm-start extras from engorged priors
+            if bp.get("kappa") is not None:
+                ev.kappa_warm = float(bp["kappa"])
+            if bp.get("cohort_mu") is not None:
+                ev.cohort_latency_warm = {
+                    "mu": float(bp["cohort_mu"]),
+                    "sigma": float(bp.get("cohort_sigma", 0.5)),
+                    "onset": float(bp.get("cohort_onset", 0)),
+                }
         else:
-            ev.prob_prior = ProbabilityPrior(alpha=1.0, beta=1.0, source="uninformative")
-
-        # --- Latency prior (doc 21: warm-start from previous posterior) ---
-        if et.has_latency:
-            ev.latency_prior = _resolve_latency_prior(et, pf_data)
+            # Legacy: resolve from param file
+            if pf_data:
+                ev.prob_prior = _resolve_prior(pf_data, topology.fingerprint)
+            else:
+                ev.prob_prior = ProbabilityPrior(alpha=1.0, beta=1.0, source="uninformative")
+            if et.has_latency:
+                ev.latency_prior = _resolve_latency_prior(et, pf_data)
+            _resolve_warm_start_extras(ev, et, pf_data)
 
         # --- Settings-level prior overrides (e.g. sensitivity testing) ---
         _apply_prior_overrides(ev, et, edge_id, settings)
 
-        # --- Warm-start: kappa, kappa_p, cohort latency ---
-        _resolve_warm_start_extras(ev, et, pf_data)
-
-        # --- Evidence: merge snapshot rows + param file ---
+        # --- Evidence: merge snapshot rows + file-based data ---
         #
         # Snapshot rows provide rich multi-retrieval trajectories per
-        # anchor_day.  Param-file values[] provide single-point observations
-        # (latest snapshot) for each anchor_day.  They originate from the
-        # same fetch pipeline so they almost always overlap, but may diverge
-        # after hash migrations, DB purges, or failed writes.
+        # anchor_day.  File-based data (from param files or engorged
+        # graph edges) provides single-point observations (latest
+        # snapshot) for each anchor_day.
         #
         # Strategy:
         #   1. Bind snapshot rows as trajectories (richer signal).
-        #   2. Supplement with param-file cohort daily points for any
-        #      anchor_days NOT already covered by snapshot trajectories.
-        #   3. Window aggregates from param files are NOT supplemented when
-        #      snapshot window trajectories exist — the per-day trajectories
-        #      are strictly richer than the aggregate.
+        #   2. Supplement with file-based data for any anchor_days NOT
+        #      already covered by snapshot trajectories.
+        #   3. Window aggregates from files are NOT supplemented when
+        #      snapshot window trajectories exist.
         #   4. When no snapshot rows exist at all, fall back entirely to
-        #      param-file evidence (preserving existing behaviour).
+        #      file-based evidence.
         rows = snapshot_rows.get(edge_id, [])
 
         if rows:
             snapshot_covered_days = _bind_from_snapshot_rows(
                 ev, et, rows, today_date, diagnostics,
                 settings=settings,
+                commissioned=edge_commissioned,
+                mece_dimensions=mece_dimensions,
+                regime_per_date=edge_regime_per_date,
             )
-            # Count what actually got bound (trajectories + daily obs per slice type)
+            if edge_regime_per_date:
+                ev.regime_per_date = edge_regime_per_date
             _w_trajs = sum(len(c.trajectories) for c in ev.cohort_obs if "window" in c.slice_dsl)
             _w_daily = sum(len(c.daily) for c in ev.cohort_obs if "window" in c.slice_dsl)
             _c_trajs = sum(len(c.trajectories) for c in ev.cohort_obs if "cohort" in c.slice_dsl)
@@ -291,10 +380,11 @@ def bind_snapshot_evidence(
             diagnostics.append(
                 f"INFO edge {edge_id[:8]}…: {len(rows)} snapshot rows "
                 f"→ window({_w_trajs} trajs, {_w_daily} daily), "
-                f"cohort({_c_trajs} trajs, {_c_daily} daily)"
+                f"cohort({_c_trajs} trajs, {_c_daily} daily) "
+                f"(aggregate + per-context combined)"
             )
 
-            # Supplement with param-file data for uncovered anchor_days.
+            # Supplement with file-based data for uncovered anchor_days.
             if pf_data:
                 n_supplemented = _supplement_from_param_file(
                     ev, et, pf_data, today_date, settings,
@@ -305,6 +395,14 @@ def bind_snapshot_evidence(
                         f"INFO edge {edge_id[:8]}…: supplemented {n_supplemented} "
                         f"daily obs from param file (anchor_days not in snapshot DB)"
                     )
+        elif ge and isinstance(ge.get("_bayes_evidence"), dict):
+            # Engorged fallback: use _bayes_evidence from graph edge
+            _bind_from_engorged_edge(
+                ev, et, ge["_bayes_evidence"], today_date, settings, diagnostics,
+            )
+            diagnostics.append(
+                f"INFO edge {edge_id[:8]}…: no snapshot data, using engorged graph edge"
+            )
         elif pf_data:
             _bind_from_param_file(
                 ev, et, pf_data, today_date, settings, diagnostics,
@@ -315,14 +413,36 @@ def bind_snapshot_evidence(
         else:
             diagnostics.append(f"SKIP edge {edge_id[:8]}…: no snapshot data and no param file")
 
-        # --- Minimum-n gate ---
+        # --- Phase C: route sliced observations to SliceGroups ---
+        _route_slices(ev, settings, diagnostics, commissioned=edge_commissioned)
+
+        # --- Recompute total_n to reflect actual modelled data ---
+        # When slices are exhaustive the aggregate is suppressed — total_n
+        # must reflect per-slice totals, not the (regime-stripped) aggregate.
+        slice_n = sum(
+            s_obs.total_n
+            for sg in ev.slice_groups.values()
+            for s_obs in sg.slices.values()
+        )
+        _all_exhaustive = all(
+            sg.is_exhaustive for sg in ev.slice_groups.values()
+        ) if ev.slice_groups else False
+        if _all_exhaustive and slice_n > 0:
+            ev.total_n = slice_n
+        elif slice_n > 0:
+            # Non-exhaustive: aggregate + slices both contribute.
+            # Use the larger of aggregate or slice total to avoid
+            # double-counting (they overlap).
+            ev.total_n = max(ev.total_n, slice_n)
+
+        effective_n = ev.total_n
         min_n = settings.get("min_n_threshold", MIN_N_THRESHOLD)
-        if ev.total_n < min_n and ev.total_n > 0:
+        if effective_n < min_n and effective_n > 0:
             ev.skipped = True
-            ev.skip_reason = f"total_n={ev.total_n} < min_n={min_n}"
+            ev.skip_reason = f"effective_n={effective_n} < min_n={min_n}"
             ev.prob_prior = ProbabilityPrior(source="prior-only")
             diagnostics.append(f"PRIOR-ONLY edge {edge_id[:8]}…: {ev.skip_reason}")
-        elif ev.total_n == 0:
+        elif effective_n == 0:
             ev.skipped = True
             ev.skip_reason = "no observations"
             diagnostics.append(f"SKIP edge {edge_id[:8]}…: no observations")
@@ -379,6 +499,9 @@ def _bind_from_snapshot_rows(
     today: datetime,
     diagnostics: list[str],
     settings: dict | None = None,
+    commissioned: set[str] | None = None,
+    mece_dimensions: list[str] | None = None,
+    regime_per_date: dict[str, str] | None = None,
 ) -> set[str]:
     """Convert snapshot DB rows to Cohort-first trajectory objects.
 
@@ -398,22 +521,36 @@ def _bind_from_snapshot_rows(
     """
     from collections import defaultdict
 
+    # Record incoming row count for binding receipt
+    ev.rows_received = len(rows)
+
     # Step 1: Classify each row and group by (obs_type, anchor_day).
     # Rows from different slice_keys for the same anchor_day are the
     # same Cohort observed via different queries — merge them.
     window_by_day: dict[str, list[dict]] = defaultdict(list)
     cohort_by_day: dict[str, list[dict]] = defaultdict(list)
 
-    # Aggregate context-prefixed rows into bare window()/cohort().
-    # Context slices are MECE — summing their x and y values for the
-    # same (anchor_day, retrieved_at) recovers the aggregate row.
-    # Until Phase C per-context modelling is built, the compiler
-    # operates on aggregate data only. If a bare aggregate row already
-    # exists, it takes precedence (context rows for that retrieval are
-    # dropped). See doc 25.
+    # Aggregate MECE context-prefixed rows into bare window()/cohort().
+    # Only dimensions declared MECE by the FE (via mece_dimensions) may
+    # be summed — summing non-MECE (overlapping) slices would double-count.
+    # If a bare aggregate row already exists, it takes precedence
+    # (context rows for that retrieval are dropped). See doc 25.
+    #
+    # Phase C addition: also collect per-context rows separately for
+    # slice routing. The aggregate feeds p_base; per-context feeds
+    # per-slice likelihoods via _route_slices → SliceGroups.
+    mece_set = set(mece_dimensions) if mece_dimensions else set()
     agg_window: dict[str, dict[str, dict]] = defaultdict(dict)  # anchor → ret → row
     agg_cohort: dict[str, dict[str, dict]] = defaultdict(dict)
     n_ctx_aggregated = 0
+    n_ctx_non_mece_skipped = 0
+
+    # Phase C: per-context rows for slice routing (context_key → anchor → [rows])
+    ctx_window_rows: dict[str, dict[str, list[dict]]] = defaultdict(lambda: defaultdict(list))
+    ctx_cohort_rows: dict[str, dict[str, list[dict]]] = defaultdict(lambda: defaultdict(list))
+
+    # Track non-MECE context keys for diagnostic reporting.
+    _non_mece_ctx_keys: set[str] = set()
 
     for row in rows:
         anchor_day = str(row.get("anchor_day", ""))
@@ -428,6 +565,60 @@ def _bind_from_snapshot_rows(
         else:
             continue
 
+        # Check if this context row's dimension is declared MECE
+        is_mece_ctx = False
+        if is_ctx and mece_set:
+            ctx_part = context_key(slice_key)
+            if ctx_part:
+                dim = dimension_key(ctx_part)
+                is_mece_ctx = dim in mece_set
+
+        # Phase C: collect per-context rows for commissioned slices.
+        #
+        # Two gates control collection:
+        #
+        # (a) MECE or commissioned: non-MECE context rows skip the
+        #     aggregate (below), so per-context obs from them have no
+        #     aggregate counterpart. Step 3b doesn't increment total_n
+        #     (it assumes the aggregate accounts for the full volume).
+        #     When all rows are non-MECE and no aggregate exists, that
+        #     assumption is false → total_n=0, silent data loss. Only
+        #     collect non-MECE rows when they are explicitly commissioned
+        #     (the FE intends to model them as slices).
+        #
+        # (b) Regime per date: on "uncontexted" dates the aggregate
+        #     handles the full data volume. Collecting per-context rows
+        #     for those dates would produce SliceGroup observations that
+        #     overlap the aggregate → double-counting in the model.
+        #     Only collect rows from dates with "mece_partition" regime
+        #     (where the aggregate is stripped and slices take over).
+        #     When no regime info exists, collect unconditionally
+        #     (backward compat: all dates are implicitly mece_partition).
+        if is_ctx and (is_mece_ctx or commissioned):
+            ctx_part = context_key(slice_key)
+            if ctx_part and (commissioned is None or ctx_part in commissioned):
+                # Gate (b): skip rows from "uncontexted" regime dates
+                ret_date = ret_key[:10]
+                _regime_for_date = (
+                    regime_per_date.get(ret_date) if regime_per_date else None
+                )
+                _collect = (
+                    _regime_for_date != "uncontexted"  # mece_partition or no regime info
+                )
+                if _collect:
+                    if _is_cohort(slice_key):
+                        ctx_cohort_rows[ctx_part][anchor_day].append(dict(row))
+                    else:
+                        ctx_window_rows[ctx_part][anchor_day].append(dict(row))
+
+        # Non-MECE context rows cannot be aggregated — skip them.
+        if is_ctx and not is_mece_ctx:
+            n_ctx_non_mece_skipped += 1
+            _ctx_part = context_key(slice_key)
+            if _ctx_part:
+                _non_mece_ctx_keys.add(_ctx_part)
+            continue
+
         day_bucket = bucket[anchor_day]
         if ret_key in day_bucket:
             existing = day_bucket[ret_key]
@@ -436,7 +627,7 @@ def _bind_from_snapshot_rows(
                 n_ctx_aggregated += 1
                 continue
             if is_ctx:
-                # Sum into existing context-aggregated row
+                # MECE: sum into existing context-aggregated row
                 existing["x"] = (existing.get("x") or 0) + (row.get("x") or 0)
                 existing["y"] = (existing.get("y") or 0) + (row.get("y") or 0)
                 if row.get("a") is not None and existing.get("a") is not None:
@@ -453,16 +644,73 @@ def _bind_from_snapshot_rows(
             if is_ctx:
                 n_ctx_aggregated += 1
 
+    # When ALL rows are non-MECE context-qualified and no bare/MECE rows
+    # produced an aggregate, log a warning but do NOT silently substitute
+    # a single context slice as an aggregate proxy. That would model on a
+    # fraction of the data without the user knowing. The correct fix is
+    # for the FE to declare the dimension as MECE so rows can be summed.
+    _agg_empty = not agg_window and not agg_cohort
+    if _agg_empty and _non_mece_ctx_keys and n_ctx_non_mece_skipped > 0:
+        diagnostics.append(
+            f"WARN edge {ev.edge_id[:8]}…: no bare or MECE aggregate — "
+            f"{n_ctx_non_mece_skipped} context rows skipped (dimension not in mece_dimensions). "
+            f"Aggregate will be empty. Declare dimension as MECE to enable aggregation."
+        )
+
+    # §5.7 Per-date regime partitioning: remove MECE-regime rows from
+    # aggregate buckets. On dates where the regime is mece_partition,
+    # per-context rows (in ctx_window_rows/ctx_cohort_rows) provide the
+    # data — the aggregate must not also include them (double-counting).
+    # Only apply when slices are commissioned — if no slices, all data
+    # stays in the aggregate (the per-context rows have nowhere to go).
+    n_regime_filtered = 0
+    _has_ctx_data = bool(ctx_window_rows or ctx_cohort_rows)
+    if regime_per_date and commissioned and _has_ctx_data:
+        for anchor_day in list(agg_window.keys()):
+            ret_map = agg_window[anchor_day]
+            for ret_key in list(ret_map.keys()):
+                ret_date = ret_key[:10]
+                if regime_per_date.get(ret_date) == "mece_partition":
+                    del ret_map[ret_key]
+                    n_regime_filtered += 1
+            if not ret_map:
+                del agg_window[anchor_day]
+        for anchor_day in list(agg_cohort.keys()):
+            ret_map = agg_cohort[anchor_day]
+            for ret_key in list(ret_map.keys()):
+                ret_date = ret_key[:10]
+                if regime_per_date.get(ret_date) == "mece_partition":
+                    del ret_map[ret_key]
+                    n_regime_filtered += 1
+            if not ret_map:
+                del agg_cohort[anchor_day]
+        if n_regime_filtered > 0:
+            diagnostics.append(
+                f"INFO edge {ev.edge_id[:8]}…: regime routing removed {n_regime_filtered} "
+                f"MECE-regime rows from aggregate (§5.7 — per-slice likelihoods only)"
+            )
+
     # Flatten aggregated rows back into per-day lists
     for anchor_day, ret_map in agg_window.items():
         window_by_day[anchor_day].extend(ret_map.values())
     for anchor_day, ret_map in agg_cohort.items():
         cohort_by_day[anchor_day].extend(ret_map.values())
 
+    # Record post-aggregation row counts for binding receipt
+    _n_post_agg = sum(len(v) for v in window_by_day.values()) + sum(len(v) for v in cohort_by_day.values())
+    ev.rows_post_aggregation = _n_post_agg
+    ev.rows_aggregated = n_ctx_aggregated
+
     if n_ctx_aggregated > 0:
         diagnostics.append(
             f"INFO edge {ev.edge_id[:8]}…: aggregated {n_ctx_aggregated} "
-            f"context-prefixed rows into bare window()/cohort()"
+            f"context-prefixed rows into bare window()/cohort() "
+            f"(aggregate may be suppressed if slices are exhaustive)"
+        )
+    if n_ctx_non_mece_skipped > 0:
+        diagnostics.append(
+            f"WARN edge {ev.edge_id[:8]}…: skipped {n_ctx_non_mece_skipped} "
+            f"context rows from non-MECE dimensions (cannot aggregate)"
         )
 
     # Step 2: Build trajectories for each obs_type.
@@ -502,6 +750,37 @@ def _bind_from_snapshot_rows(
             ev.total_n += t.n
         for d in cohort_daily:
             ev.total_n += d.n
+
+    # Step 3b: Phase C — per-context observations for slice routing.
+    # These decompose the same data that the aggregate observations
+    # cover. _route_slices (called downstream) will move them into
+    # SliceGroups. We do NOT add to total_n — the aggregate already
+    # accounts for the full data volume.
+    for ctx_part in sorted(ctx_window_rows.keys()):
+        ctx_by_day = ctx_window_rows[ctx_part]
+        ctx_trajs, ctx_daily = _build_trajectories_for_obs_type(
+            ctx_by_day, "window", et, today, diagnostics,
+            zero_count_filter=zcf,
+        )
+        if ctx_trajs or ctx_daily:
+            ev.cohort_obs.append(CohortObservation(
+                slice_dsl=f"window(snapshot).{ctx_part}",
+                daily=ctx_daily,
+                trajectories=ctx_trajs,
+            ))
+
+    for ctx_part in sorted(ctx_cohort_rows.keys()):
+        ctx_by_day = ctx_cohort_rows[ctx_part]
+        ctx_trajs, ctx_daily = _build_trajectories_for_obs_type(
+            ctx_by_day, "cohort", et, today, diagnostics,
+            zero_count_filter=zcf,
+        )
+        if ctx_trajs or ctx_daily:
+            ev.cohort_obs.append(CohortObservation(
+                slice_dsl=f"cohort(snapshot).{ctx_part}",
+                daily=ctx_daily,
+                trajectories=ctx_trajs,
+            ))
 
     # Step 4: Collect per-retrieval-date onset observations.
     # onset_delta_days is derived once per retrieval date per edge from
@@ -817,6 +1096,86 @@ def _bind_from_param_file(
                 ev.total_n += n
 
 
+def _bind_from_engorged_edge(
+    ev: EdgeEvidence,
+    et,
+    bayes_evidence: dict,
+    today: datetime,
+    settings: dict,
+    diagnostics: list[str],
+) -> None:
+    """Bind evidence from engorged graph edge _bayes_evidence (doc 14 §9A).
+
+    Reads the same observation fields as _bind_from_param_file but from
+    the structured _bayes_evidence dict instead of param file values[].
+    Completeness computed locally from edge topology latency.
+    """
+    # Window observations
+    for wo in (bayes_evidence.get("window") or []):
+        n = _safe_int(wo.get("n"))
+        k = _safe_int(wo.get("k"))
+        slice_dsl = wo.get("sliceDSL", "") or ""
+        if n is not None and k is not None and n > 0:
+            compl = _compute_window_completeness(
+                slice_dsl, today,
+                et.onset_delta_days, et.mu_prior, et.sigma_prior,
+                et.has_latency,
+            )
+            ev.window_obs.append(WindowObservation(
+                n=n, k=k,
+                slice_dsl=slice_dsl,
+                completeness=compl,
+            ))
+            ev.has_window = True
+            ev.total_n += n
+
+    # Cohort observations
+    for co in (bayes_evidence.get("cohort") or []):
+        slice_dsl = co.get("sliceDSL", "") or ""
+        n_daily = co.get("n_daily") or []
+        k_daily = co.get("k_daily") or []
+        dates = co.get("dates") or []
+        n = _safe_int(co.get("n"))
+        k = _safe_int(co.get("k"))
+
+        if n_daily and k_daily and dates and len(n_daily) == len(k_daily) == len(dates):
+            daily_obs = _build_cohort_daily(
+                n_daily, k_daily, dates, today,
+                et.path_latency.path_delta,
+                et.path_latency.path_mu,
+                et.path_latency.path_sigma,
+                et.has_latency,
+            )
+            if daily_obs:
+                ev.cohort_obs.append(CohortObservation(
+                    slice_dsl=slice_dsl,
+                    daily=daily_obs,
+                ))
+                ev.has_cohort = True
+                ev.total_n += sum(d.n for d in daily_obs)
+        elif n is not None and k is not None and n > 0:
+            # Aggregate fallback (no daily arrays)
+            cohort_age = _estimate_cohort_age(slice_dsl, today)
+            compl = _compute_cohort_completeness(
+                cohort_age,
+                et.path_latency.path_delta,
+                et.path_latency.path_mu,
+                et.path_latency.path_sigma,
+                et.has_latency,
+            )
+            ev.cohort_obs.append(CohortObservation(
+                slice_dsl=slice_dsl,
+                daily=[CohortDailyObs(
+                    date="aggregate",
+                    n=n, k=k,
+                    age_days=cohort_age,
+                    completeness=compl,
+                )],
+            ))
+            ev.has_cohort = True
+            ev.total_n += n
+
+
 def _normalise_date_key(date_str: str) -> str:
     """Normalise a date string to ISO YYYY-MM-DD for dedup keying.
 
@@ -863,11 +1222,17 @@ def _supplement_from_param_file(
             continue
         slice_dsl = v.get("sliceDSL", "") or ""
 
-        # Only supplement cohort daily arrays — these have per-anchor_day
+        # Only supplement BARE cohort daily arrays — these have per-anchor_day
         # granularity that can be precisely deduplicated against snapshot
         # trajectories.  Window aggregates (sum across window period) and
         # cohort aggregates cannot be deduplicated at the anchor_day level.
+        # Context-qualified entries (from bayesEngorge) carry aggregate n/k
+        # values, not per-context — supplementing with them would inject
+        # aggregate denominators into per-slice evidence.  The snapshot
+        # path already provides correct per-context data.
         if not _is_cohort(slice_dsl):
+            continue
+        if "context(" in slice_dsl:
             continue
 
         n_daily = v.get("n_daily") or []
@@ -1240,6 +1605,7 @@ def _route_slices(
     ev: EdgeEvidence,
     settings: dict,
     diagnostics: list[str],
+    commissioned: set[str] | None = None,
 ) -> None:
     """Route sliced observations from aggregate lists into SliceGroups.
 
@@ -1252,44 +1618,58 @@ def _route_slices(
     5. Detects exhaustiveness for MECE dimensions
     6. Computes residuals for partial MECE dimensions
 
-    Modifies ev in place. No-op if no sliced observations exist.
+    commissioned: the set of context keys the FE commissioned via
+    pinnedDSL. Only these are modelled as slices. If None (no FE
+    subjects), no slices are created — context modelling requires
+    explicit commission.
+
+    Modifies ev in place. No-op if no commissioned slices.
     """
+    if not commissioned:
+        return  # no slices commissioned — context modelling requires explicit FE commission
+
     min_n_slice = settings.get("min_n_slice", MIN_N_THRESHOLD)
 
-    # Collect all sliceDSL strings to discover dimensions
-    all_dsls: list[str] = []
-    for w in ev.window_obs:
-        all_dsls.append(w.slice_dsl)
-    for c in ev.cohort_obs:
-        all_dsls.append(c.slice_dsl)
-
-    # Build dimension → [context_key, ...] mapping
-    from .slices import extract_dimensions
-    dim_map = extract_dimensions(all_dsls)
-    if not dim_map:
-        return  # no sliced observations
-
-    # Partition window_obs and cohort_obs into aggregate vs sliced
+    # Partition window_obs and cohort_obs into aggregate vs sliced.
+    # Only commissioned context keys become slices.
     agg_window: list[WindowObservation] = []
-    sliced_window: dict[str, list[WindowObservation]] = {}  # context_key → [obs]
+    sliced_window: dict[str, list[WindowObservation]] = {}
+    n_uncommissioned = 0
     for w in ev.window_obs:
         ctx = context_key(w.slice_dsl)
-        if ctx:
+        if ctx and ctx in commissioned:
             sliced_window.setdefault(ctx, []).append(w)
         else:
+            if ctx:
+                n_uncommissioned += 1
             agg_window.append(w)
 
     agg_cohort: list[CohortObservation] = []
     sliced_cohort: dict[str, list[CohortObservation]] = {}
     for c in ev.cohort_obs:
         ctx = context_key(c.slice_dsl)
-        if ctx:
+        if ctx and ctx in commissioned:
             sliced_cohort.setdefault(ctx, []).append(c)
         else:
+            if ctx:
+                n_uncommissioned += 1
             agg_cohort.append(c)
 
+    if n_uncommissioned > 0:
+        diagnostics.append(
+            f"  slices: {ev.edge_id[:8]}… {n_uncommissioned} uncommissioned "
+            f"context observations folded into aggregate"
+        )
+
     if not sliced_window and not sliced_cohort:
-        return  # all observations are aggregate
+        return  # commissioned slices had no matching data
+
+    # Build dimension → [context_key, ...] mapping from commissioned keys
+    from .slices import extract_dimensions
+    all_dsls: list[str] = list(sliced_window.keys()) + list(sliced_cohort.keys())
+    dim_map = extract_dimensions(all_dsls)
+    if not dim_map:
+        return
 
     # Replace aggregate lists with only the true aggregates
     ev.window_obs = agg_window
@@ -1321,7 +1701,18 @@ def _route_slices(
                     t.n for t in c.trajectories
                 )
                 s_obs.total_n += n_from_cohort
-                s_obs.has_cohort = True
+                # CohortObservation may contain window-type trajectories
+                # (from Step 3b: per-context rows stored as CohortObservation
+                # with slice_dsl=window(snapshot).context(...))
+                if any(t.obs_type == "window" for t in c.trajectories):
+                    s_obs.has_window = True
+                if any(t.obs_type == "cohort" for t in c.trajectories):
+                    s_obs.has_cohort = True
+                if c.daily:
+                    if "window" in c.slice_dsl:
+                        s_obs.has_window = True
+                    else:
+                        s_obs.has_cohort = True
 
             # Per-slice min-n gate
             if s_obs.total_n < min_n_slice:
@@ -1366,6 +1757,10 @@ def _route_slices(
             f"exhaustive={group.is_exhaustive}"
         )
 
+
+# ---------------------------------------------------------------------------
+# Snapshot → WindowObservation synthesis
+# ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
 # Completeness computation
@@ -1562,3 +1957,356 @@ def _build_path_lookup(params_index: dict | None) -> dict[str, str]:
             result[f"parameter-{pid}"] = fpath
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# Engorged graph evidence binding (doc 14 §9A)
+# ---------------------------------------------------------------------------
+
+def bind_evidence_from_graph(
+    topology: TopologyAnalysis,
+    graph_snapshot: dict,
+    settings: dict | None = None,
+    today: str | None = None,
+) -> BoundEvidence:
+    """Bind evidence from an engorged graph snapshot.
+
+    The FE pre-resolves priors and extracts observations, writing them
+    as ``_bayes_evidence`` and ``_bayes_priors`` on each edge.  This
+    function reads them directly — no param file resolution needed.
+
+    Parameters
+    ----------
+    topology : TopologyAnalysis
+        Structural decomposition (from analyse_topology).
+    graph_snapshot : dict
+        The graph dict whose ``edges`` list carries ``_bayes_evidence``
+        and ``_bayes_priors`` dicts on each edge.
+    settings : dict | None
+        User settings from the submit payload.
+    today : str | None
+        Reference date string (d-MMM-yy or ISO).  Defaults to now.
+    """
+    diagnostics: list[str] = []
+    settings = settings or {}
+    today_date = _parse_today(today)
+
+    # Build edge UUID → graph edge dict lookup
+    edge_lookup: dict[str, dict] = {}
+    for ge in graph_snapshot.get("edges", []):
+        eid = ge.get("uuid", "")
+        if eid:
+            edge_lookup[eid] = ge
+
+    edges_evidence: dict[str, EdgeEvidence] = {}
+
+    for edge_id, et in topology.edges.items():
+        ge = edge_lookup.get(edge_id)
+        if ge is None:
+            diagnostics.append(f"SKIP edge {edge_id[:8]}…: not found in graph snapshot")
+            continue
+
+        bayes_priors = ge.get("_bayes_priors")
+        bayes_evidence = ge.get("_bayes_evidence")
+        if not isinstance(bayes_priors, dict):
+            diagnostics.append(f"SKIP edge {edge_id[:8]}…: no _bayes_priors on graph edge")
+            continue
+
+        param_id = et.param_id
+        bare_id = param_id
+        if bare_id.startswith("parameter-"):
+            bare_id = bare_id[len("parameter-"):]
+        file_path = f"parameters/{bare_id}.yaml"
+
+        ev = EdgeEvidence(
+            edge_id=edge_id,
+            param_id=param_id,
+            file_path=file_path,
+        )
+
+        # --- Probability prior (from pre-resolved _bayes_priors) ---
+        alpha = bayes_priors.get("prob_alpha")
+        beta = bayes_priors.get("prob_beta")
+        prob_source = bayes_priors.get("prob_source", "uninformative")
+        if alpha is not None and beta is not None and float(alpha) > 0 and float(beta) > 0:
+            a_val = float(alpha)
+            b_val = float(beta)
+            # ESS cap (same logic as _resolve_prior)
+            ess = a_val + b_val
+            capped = False
+            if ess > ESS_CAP:
+                scale = ESS_CAP / ess
+                a_val *= scale
+                b_val *= scale
+                capped = True
+            ev.prob_prior = ProbabilityPrior(
+                alpha=a_val, beta=b_val,
+                source=prob_source,
+                ess_cap_applied=capped,
+            )
+        else:
+            ev.prob_prior = ProbabilityPrior(alpha=1.0, beta=1.0, source="uninformative")
+
+        # --- Latency prior (from pre-resolved _bayes_priors) ---
+        if et.has_latency:
+            lat_mu = bayes_priors.get("latency_mu")
+            lat_sigma = bayes_priors.get("latency_sigma")
+            lat_onset = bayes_priors.get("latency_onset")
+            lat_source = bayes_priors.get("latency_source", "topology")
+            onset_unc = bayes_priors.get("onset_uncertainty")
+            onset_obs = bayes_priors.get("onset_observations")
+
+            if lat_mu is not None and lat_sigma is not None:
+                onset_val = float(lat_onset) if lat_onset is not None else et.onset_delta_days
+                ev.latency_prior = LatencyPrior(
+                    onset_delta_days=onset_val,
+                    mu=float(lat_mu),
+                    sigma=float(lat_sigma),
+                    onset_uncertainty=float(onset_unc) if onset_unc is not None else max(1.0, onset_val * 0.3),
+                    source=lat_source,
+                    onset_observations=onset_obs,
+                )
+            else:
+                # Fallback to topology-derived
+                ev.latency_prior = LatencyPrior(
+                    onset_delta_days=et.onset_delta_days,
+                    mu=et.mu_prior,
+                    sigma=et.sigma_prior,
+                    onset_uncertainty=max(1.0, et.onset_delta_days * 0.3),
+                    source="topology",
+                )
+
+        # --- Settings-level prior overrides (reuse existing) ---
+        _apply_prior_overrides(ev, et, edge_id, settings)
+
+        # --- Warm-start: kappa from _bayes_priors ---
+        kappa_val = bayes_priors.get("kappa")
+        if kappa_val is not None and float(kappa_val) > 0:
+            ev.kappa_warm = float(kappa_val)
+
+        # --- Cohort latency warm-start from _bayes_priors ---
+        c_mu = bayes_priors.get("cohort_mu")
+        c_sigma = bayes_priors.get("cohort_sigma")
+        c_onset = bayes_priors.get("cohort_onset")
+        if c_mu is not None and c_sigma is not None:
+            ev.cohort_latency_warm = {
+                "mu": float(c_mu),
+                "sigma": float(c_sigma),
+                "onset": float(c_onset) if c_onset is not None else None,
+            }
+
+        # --- Parse _bayes_evidence observations ---
+        if isinstance(bayes_evidence, dict):
+            # Window entries
+            for wv in (bayes_evidence.get("window") or []):
+                n = _safe_int(wv.get("n"))
+                k = _safe_int(wv.get("k"))
+                slice_dsl = wv.get("sliceDSL", "") or ""
+                if n is not None and k is not None and n > 0:
+                    compl = _compute_window_completeness(
+                        slice_dsl, today_date,
+                        et.onset_delta_days, et.mu_prior, et.sigma_prior,
+                        et.has_latency,
+                    )
+                    ev.window_obs.append(WindowObservation(
+                        n=n, k=k,
+                        slice_dsl=slice_dsl,
+                        completeness=compl,
+                    ))
+                    ev.has_window = True
+                    ev.total_n += n
+
+            # Cohort entries
+            for cv in (bayes_evidence.get("cohort") or []):
+                slice_dsl = cv.get("sliceDSL", "") or ""
+                n_daily = cv.get("n_daily") or []
+                k_daily = cv.get("k_daily") or []
+                dates = cv.get("dates") or []
+
+                if n_daily and k_daily and dates and len(n_daily) == len(k_daily) == len(dates):
+                    daily_obs = _build_cohort_daily(
+                        n_daily, k_daily, dates, today_date,
+                        et.path_latency.path_delta,
+                        et.path_latency.path_mu,
+                        et.path_latency.path_sigma,
+                        et.has_latency,
+                    )
+                    if daily_obs:
+                        ev.cohort_obs.append(CohortObservation(
+                            slice_dsl=slice_dsl,
+                            daily=daily_obs,
+                        ))
+                        ev.has_cohort = True
+                        ev.total_n += sum(d.n for d in daily_obs)
+                else:
+                    # Aggregate fallback (no daily arrays)
+                    n = _safe_int(cv.get("n"))
+                    k = _safe_int(cv.get("k"))
+                    if n is not None and k is not None and n > 0:
+                        cohort_age = _estimate_cohort_age(slice_dsl, today_date)
+                        compl = _compute_cohort_completeness(
+                            cohort_age,
+                            et.path_latency.path_delta,
+                            et.path_latency.path_mu,
+                            et.path_latency.path_sigma,
+                            et.has_latency,
+                        )
+                        ev.cohort_obs.append(CohortObservation(
+                            slice_dsl=slice_dsl,
+                            daily=[CohortDailyObs(
+                                date="aggregate",
+                                n=n, k=k,
+                                age_days=cohort_age,
+                                completeness=compl,
+                            )],
+                        ))
+                        ev.has_cohort = True
+                        ev.total_n += n
+
+        # --- Phase C: route sliced observations to SliceGroups ---
+        _route_slices(ev, settings, diagnostics)
+
+        # --- Recompute total_n to reflect actual modelled data ---
+        _ep_slice_n = sum(
+            s_obs.total_n
+            for sg in ev.slice_groups.values()
+            for s_obs in sg.slices.values()
+        )
+        _ep_all_exhaustive = all(
+            sg.is_exhaustive for sg in ev.slice_groups.values()
+        ) if ev.slice_groups else False
+        if _ep_all_exhaustive and _ep_slice_n > 0:
+            ev.total_n = _ep_slice_n
+        elif _ep_slice_n > 0:
+            ev.total_n = max(ev.total_n, _ep_slice_n)
+
+        # --- Minimum-n gate ---
+        min_n = settings.get("min_n_threshold", MIN_N_THRESHOLD)
+        if ev.total_n < min_n and ev.total_n > 0:
+            ev.skipped = True
+            ev.skip_reason = f"total_n={ev.total_n} < min_n={min_n}"
+            ev.prob_prior = ProbabilityPrior(source="prior-only")
+            diagnostics.append(f"PRIOR-ONLY edge {edge_id[:8]}…: {ev.skip_reason}")
+        elif ev.total_n == 0:
+            ev.skipped = True
+            ev.skip_reason = "no observations"
+            diagnostics.append(f"SKIP edge {edge_id[:8]}…: no observations")
+
+        edges_evidence[edge_id] = ev
+
+    return BoundEvidence(
+        edges=edges_evidence,
+        settings=settings,
+        today=today_date.strftime("%-d-%b-%y"),
+        diagnostics=diagnostics,
+    )
+
+
+def engorge_graph_for_test(
+    graph_snapshot: dict,
+    param_files: dict[str, dict],
+    params_index: dict | None,
+    topology: TopologyAnalysis,
+) -> dict:
+    """Simulate FE engorging by writing _bayes_evidence and _bayes_priors onto edges.
+
+    Uses the SAME resolution functions as bind_evidence() so parity is
+    guaranteed by construction.  Intended for parity testing only.
+
+    Returns the mutated graph_snapshot (edges are modified in place).
+    """
+    for ge in graph_snapshot.get("edges", []):
+        edge_id = ge.get("uuid", "")
+        et = topology.edges.get(edge_id)
+        if et is None:
+            continue
+
+        param_id = et.param_id
+        if not param_id:
+            continue
+
+        pf_data = _resolve_param_file(param_id, param_files)
+        if pf_data is None:
+            continue
+
+        # --- Resolve priors using the same functions as bind_evidence ---
+        prob_prior = _resolve_prior(pf_data, topology.fingerprint)
+        priors_dict: dict = {
+            "prob_alpha": prob_prior.alpha,
+            "prob_beta": prob_prior.beta,
+            "prob_source": prob_prior.source,
+        }
+
+        if et.has_latency:
+            lat_prior = _resolve_latency_prior(et, pf_data)
+            priors_dict["latency_onset"] = lat_prior.onset_delta_days
+            priors_dict["latency_mu"] = lat_prior.mu
+            priors_dict["latency_sigma"] = lat_prior.sigma
+            priors_dict["latency_source"] = lat_prior.source
+            priors_dict["onset_uncertainty"] = lat_prior.onset_uncertainty
+            priors_dict["onset_observations"] = lat_prior.onset_observations
+
+        # --- Warm-start extras (same path as _resolve_warm_start_extras) ---
+        if isinstance(pf_data, dict):
+            posterior = pf_data.get("posterior")
+            if isinstance(posterior, dict):
+                slices = posterior.get("slices")
+                if isinstance(slices, dict):
+                    ws = slices.get("window()", {})
+                    if _warm_start_acceptable(ws):
+                        ms = posterior.get("_model_state") or {}
+                        safe_eid = edge_id.replace("-", "_")
+                        kappa_key = f"kappa_{safe_eid}"
+                        if kappa_key in ms:
+                            val = float(ms[kappa_key])
+                            if val > 0:
+                                priors_dict["kappa"] = val
+
+                        cs = slices.get("cohort()", {})
+                        if cs and _warm_start_acceptable(cs):
+                            c_mu = cs.get("mu_mean")
+                            c_sigma = cs.get("sigma_mean")
+                            c_onset = cs.get("onset_mean")
+                            if c_mu is not None and c_sigma is not None:
+                                priors_dict["cohort_mu"] = float(c_mu)
+                                priors_dict["cohort_sigma"] = float(c_sigma)
+                                priors_dict["cohort_onset"] = float(c_onset) if c_onset is not None else None
+
+        ge["_bayes_priors"] = priors_dict
+
+        # --- Extract observations from values[] ---
+        evidence_dict: dict = {"window": [], "cohort": []}
+        values = pf_data.get("values") or []
+        for v in values:
+            if not isinstance(v, dict):
+                continue
+            slice_dsl = v.get("sliceDSL", "") or ""
+            n = _safe_int(v.get("n"))
+            k = _safe_int(v.get("k"))
+
+            if _is_cohort(slice_dsl):
+                entry: dict = {"sliceDSL": slice_dsl}
+                n_daily = v.get("n_daily") or []
+                k_daily = v.get("k_daily") or []
+                dates = v.get("dates") or []
+                if n_daily and k_daily and dates and len(n_daily) == len(k_daily) == len(dates):
+                    entry["n_daily"] = list(n_daily)
+                    entry["k_daily"] = list(k_daily)
+                    entry["dates"] = list(dates)
+                else:
+                    # Aggregate fallback
+                    entry["n"] = n
+                    entry["k"] = k
+                evidence_dict["cohort"].append(entry)
+
+            elif _is_window(slice_dsl) or (n is not None and k is not None):
+                if n is not None and k is not None and n > 0:
+                    evidence_dict["window"].append({
+                        "sliceDSL": slice_dsl,
+                        "n": n,
+                        "k": k,
+                    })
+
+        ge["_bayes_evidence"] = evidence_dict
+
+    return graph_snapshot

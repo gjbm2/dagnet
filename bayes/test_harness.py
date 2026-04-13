@@ -21,11 +21,16 @@ Only one instance at a time — the harness enforces this via a lock file.
 
 import sys
 import os
+
+# Prevent stale .pyc from masking source edits during development.
+sys.dont_write_bytecode = True
+
 import json
 import time
 import argparse
 import atexit
 import signal
+import copy
 import subprocess
 import re
 import yaml
@@ -119,6 +124,72 @@ def _load_env(path: str) -> dict:
     return env
 
 
+def _build_payload_via_cli(graph_name: str, graph_dir: str | None = None) -> dict:
+    """Call the FE CLI to build payload via the FE service layer.
+
+    When graph_dir is None, uses bayes.sh which resolves the data repo
+    automatically. When graph_dir is given (e.g. for synth graphs in
+    nous-conversion/), calls the tsx CLI directly with --graph <dir>.
+    Returns the parsed payload dict.
+    """
+    if graph_dir:
+        # Direct tsx invocation for non-data-repo graphs (synth, etc.)
+        nvm_prefix = (
+            f'export NVM_DIR="${{NVM_DIR:-$HOME/.nvm}}" && '
+            f'. "$NVM_DIR/nvm.sh" 2>/dev/null; '
+            f'cd {os.path.join(REPO_ROOT, "graph-editor")} && '
+            f'nvm use "$(cat .nvmrc)" 2>/dev/null; '
+        )
+        tsx_cmd = (
+            f'{nvm_prefix}'
+            f'npx tsx src/cli/bayes.ts '
+            f'--graph {graph_dir} --name {graph_name} --format json --no-cache'
+        )
+        cmd = ["bash", "-c", tsx_cmd]
+    else:
+        script = os.path.join(REPO_ROOT, "graph-ops", "scripts", "bayes.sh")
+        if not os.path.isfile(script):
+            print(f"ERROR: bayes.sh not found: {script}")
+            sys.exit(1)
+        cmd = ["bash", script, graph_name, "--format", "json"]
+
+    print(f"Building payload via CLI: {' '.join(cmd)}")
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=120,
+            cwd=REPO_ROOT,
+        )
+    except subprocess.TimeoutExpired:
+        print("ERROR: CLI payload construction timed out (120s)")
+        sys.exit(1)
+
+    if result.returncode != 0:
+        print(f"ERROR: CLI failed (exit {result.returncode})")
+        if result.stderr:
+            print(result.stderr[-2000:])
+        sys.exit(1)
+
+    # The CLI writes payload JSON to stdout. Log lines may precede it
+    # (from nvm, bootstrap, etc.) — find the JSON object.
+    stdout = result.stdout
+    json_start = stdout.find('{')
+    if json_start < 0:
+        print("ERROR: No JSON in CLI output")
+        print(stdout[-2000:])
+        sys.exit(1)
+
+    try:
+        payload = json.loads(stdout[json_start:])
+    except json.JSONDecodeError as e:
+        print(f"ERROR: Could not parse CLI output as JSON: {e}")
+        print(stdout[-2000:])
+        sys.exit(1)
+
+    print(f"  CLI payload: {len(payload.get('snapshot_subjects', []))} subjects, "
+          f"{len(payload.get('parameter_files', {}))} param files")
+    return payload
+
+
 def _load_settings_json(path: str) -> dict:
     """Load extra settings from a JSON file."""
     if not path or not os.path.isfile(path):
@@ -183,106 +254,89 @@ def _compute_fe_hashes(graph_path: str) -> dict:
 # Pre-flight checks
 # ---------------------------------------------------------------------------
 
-def _run_preflight(
-    snapshot_subjects: list[dict],
-    db_connection: str,
-    graph: dict,
-    param_files: dict,
-    _edges: list[tuple],
-) -> dict:
-    """Verify DB data, bind evidence, and summarise model structure.
+def _build_preflight_payload(payload: dict) -> dict:
+    """Clone payload for worker-backed preflight without MCMC or webhooks."""
+    preflight_payload = copy.deepcopy(payload)
+    preflight_payload["webhook_url"] = ""
+    settings = preflight_payload.setdefault("settings", {})
+    settings["binding_receipt"] = "gate"
+    settings["model_inspect_only"] = True
+    return preflight_payload
 
-    Returns dict with preflight results. Exits with error if critical
-    checks fail.
-    """
-    import psycopg2
-    from compiler.topology import analyse_topology
-    from compiler.evidence import bind_snapshot_evidence
-    from worker import _query_snapshot_subjects
 
-    results = {"db_ok": True, "evidence_ok": True, "warnings": []}
+def _summarise_preflight_result(result: dict) -> dict:
+    """Normalise worker preflight output into a harness decision summary."""
+    receipt = result.get("binding_receipt") or {}
+    edge_receipts = receipt.get("edge_receipts") or {}
+    failed_edges = sorted(
+        edge_id
+        for edge_id, edge_receipt in edge_receipts.items()
+        if edge_receipt.get("verdict") == "fail"
+    )
+    warned_edges = sorted(
+        edge_id
+        for edge_id, edge_receipt in edge_receipts.items()
+        if edge_receipt.get("verdict") == "warn"
+    )
+    edges_failed = int(receipt.get("edges_failed", 0) or 0)
+    edges_warned = int(receipt.get("edges_warned", 0) or 0)
+    safe_to_sample = (
+        result.get("status") == "complete"
+        and not result.get("error")
+        and edges_failed == 0
+        and edges_warned == 0
+    )
+    return {
+        "safe_to_sample": safe_to_sample,
+        "error": result.get("error", ""),
+        "edges_failed": edges_failed,
+        "edges_warned": edges_warned,
+        "edges_skipped": int(receipt.get("edges_skipped", 0) or 0),
+        "edges_fallback": int(receipt.get("edges_fallback", 0) or 0),
+        "edges_no_subjects": int(receipt.get("edges_no_subjects", 0) or 0),
+        "failed_edges": failed_edges,
+        "warned_edges": warned_edges,
+        "binding_receipt": receipt,
+    }
 
-    # 1. DB connectivity
-    print("\n── Pre-flight: DB connectivity ──")
+
+def _run_preflight(payload: dict) -> dict:
+    """Run the worker's real binding/model-inspect path without MCMC."""
+    from worker import fit_graph
+
+    print("\n── Pre-flight: worker-backed binding gate ──")
     try:
-        conn = psycopg2.connect(db_connection)
-        conn.cursor().execute("SELECT 1")
-        conn.close()
-        print("  PASS: DB connected")
+        result = fit_graph(
+            _build_preflight_payload(payload),
+            report_progress=lambda *_args, **_kwargs: None,
+        )
     except Exception as e:
-        print(f"  FAIL: DB connection failed: {e}")
+        print(f"  FAIL: worker preflight crashed: {e}")
         sys.exit(1)
 
-    # 2. Snapshot row counts per subject
-    print("\n── Pre-flight: Snapshot DB row counts ──")
-    conn = psycopg2.connect(db_connection)
-    cur = conn.cursor()
-    total_db_rows = 0
-    for subj in snapshot_subjects:
-        ch = subj.get("core_hash", "")
-        pid = subj.get("param_id", "")
-        eid = subj.get("edge_id", "")[:8]
-        cur.execute("SELECT COUNT(*) FROM snapshots WHERE core_hash = %s", (ch,))
-        count = cur.fetchone()[0]
-        total_db_rows += count
-        status = "PASS" if count > 0 else "FAIL"
-        if count == 0:
-            results["db_ok"] = False
-        print(f"  {status} {pid} ({eid}…) hash={ch[:16]}…: {count} rows")
-    conn.close()
+    interesting_markers = (
+        "connected to Neon",
+        "subjects:",
+        "topology:",
+        "snapshot DB:",
+        "evidence:",
+        "binding receipt",
+        "  binding ",
+        "  slice ",
+    )
+    for line in result.get("log", []):
+        if any(marker in line for marker in interesting_markers):
+            print(f"  {line}")
 
-    if not results["db_ok"]:
-        print("\n  ABORT: Some subjects have 0 rows in DB.")
-        print("  The harness will fall back to param files, not snapshot trajectories.")
-        print("  Run synth_gen.py --write-files to populate DB, or check hash parity.")
-        sys.exit(1)
-    print(f"  Total: {total_db_rows} DB rows across {len(snapshot_subjects)} subjects")
+    summary = _summarise_preflight_result(result)
+    if summary["error"]:
+        print(f"  FAIL: {summary['error']}")
+    if summary["failed_edges"]:
+        print("  FAIL edges: " + ", ".join(summary["failed_edges"]))
+    if summary["warned_edges"]:
+        print("  WARN edges: " + ", ".join(summary["warned_edges"]))
 
-    # 3. Evidence binding
-    print("\n── Pre-flight: Evidence binding ──")
-    topology = analyse_topology(graph)
-
-    # Query DB via the same path the worker uses
-    log = []
-    snapshot_rows = _query_snapshot_subjects(snapshot_subjects, topology, log)
-    for line in log:
-        print(f"  {line}")
-
-    total_rows_fetched = sum(len(v) for v in snapshot_rows.values())
-    if total_rows_fetched == 0:
-        print(f"\n  ABORT: Worker query returned 0 rows despite DB having data.")
-        print(f"  This means the worker's query path is broken (param_id / hash mismatch).")
-        results["evidence_ok"] = False
-        sys.exit(1)
-
-    evidence = bind_snapshot_evidence(topology, snapshot_rows, param_files, today=date.today().strftime("%-d-%b-%y"))
-
-    print("\n── Pre-flight: Evidence summary ──")
-    for eid, ev in evidence.edges.items():
-        if ev.skipped:
-            continue
-        n_trajs = sum(len(c.trajectories) for c in ev.cohort_obs)
-        n_daily = 0
-        for c in ev.cohort_obs:
-            if isinstance(c.daily, list):
-                n_daily += len(c.daily)
-        max_ages = 0
-        for c in ev.cohort_obs:
-            for t in c.trajectories:
-                ages = len(t.retrieval_ages) if hasattr(t.retrieval_ages, '__len__') else 0
-                if ages > max_ages:
-                    max_ages = ages
-        source = "trajectories" if n_trajs > 0 else "daily"
-        print(f"  {eid[:12]}… {ev.param_id}: {n_trajs} trajs (max {max_ages} ages), {n_daily} daily, total_n={ev.total_n}")
-        if n_trajs == 0 and n_daily > 0:
-            results["warnings"].append(f"{ev.param_id}: using daily fallback, not trajectories")
-
-    if results["warnings"]:
-        print("\n  WARNINGS:")
-        for w in results["warnings"]:
-            print(f"    ⚠ {w}")
-
-    return results
+    return summary
 
 
 # ---------------------------------------------------------------------------
@@ -338,7 +392,66 @@ def main():
                         help="Override the graph name for lock file and log file. "
                              "Enables parallel runs of the same graph (e.g. convergence matrix). "
                              "Lock: /tmp/bayes-harness-{LABEL}.lock, Log: /tmp/bayes_harness-{LABEL}.log")
+    parser.add_argument("--payload", type=str, default=None, metavar="PATH",
+                        help="Path to a pre-built payload JSON (from CLI --output). "
+                             "Skips graph loading, hash computation, and subject construction. "
+                             "Uses the real FE service layer codepath for slice commissioning.")
+    parser.add_argument("--fe-payload", action="store_true",
+                        help="Build payload via CLI on demand (calls dagnet-cli bayes --output). "
+                             "Same as --payload but constructs it automatically for --graph. "
+                             "Ensures slice commissioning follows the FE codepath.")
+    parser.add_argument("--dsl-override", type=str, default=None, metavar="DSL",
+                        help="Override the graph's pinnedDSL before payload construction. "
+                             "Use to force uncontexted runs on contexted graphs, e.g. "
+                             "'window(12-Dec-25:21-Mar-26);cohort(12-Dec-25:21-Mar-26)'")
+    parser.add_argument("--diag", action="store_true",
+                        help="Enable extra diagnostics: PPC calibration (doc 36).")
+    parser.add_argument("--phase2-from-dump", type=str, default=None, metavar="PATH",
+                        help="Skip Phase 1 entirely: load topology, evidence, and "
+                             "phase2_frozen from a debug dump directory (created by "
+                             "a previous run). Runs Phase 2 model build + MCMC directly. "
+                             "e.g. --phase2-from-dump /tmp/bayes_debug-graph-synth-diamond-context")
+    parser.add_argument("--clean", action="store_true",
+                        help="Clear __pycache__ dirs under bayes/ and graph-editor/lib/ "
+                             "so no stale bytecode masks source edits.")
+    parser.add_argument("--rebuild", action="store_true",
+                        help="Delete .synth-meta.json for the target graph, forcing "
+                             "verify_synth_data to re-check DB with fresh hashes. "
+                             "Heavy — re-inserts all synth rows. Only needed after "
+                             "truth file or synth_gen changes.")
+    # Keep --clean-pyc as hidden alias for backwards compat
+    parser.add_argument("--clean-pyc", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
+    if args.clean_pyc:
+        args.clean = True
+
+    # Clean bytecode if requested
+    if args.clean:
+        import shutil
+        _pyc_cleaned = 0
+        for _root in [os.path.join(REPO_ROOT, "bayes"),
+                      os.path.join(REPO_ROOT, "graph-editor", "lib")]:
+            for _dp, _dn, _ in os.walk(_root):
+                if "__pycache__" in _dn:
+                    try:
+                        shutil.rmtree(os.path.join(_dp, "__pycache__"))
+                        _pyc_cleaned += 1
+                    except OSError:
+                        pass  # parallel run already deleted it
+        print(f"Cleaned {_pyc_cleaned} __pycache__ dirs")
+
+    # Rebuild synth meta if requested (forces DB re-insert)
+    if args.rebuild:
+        _meta_cleaned = 0
+        if args.graph and args.graph.startswith("synth-"):
+            _conf = _read_private_repos_conf()
+            _dr = _conf.get("DATA_REPO_DIR", "")
+            if _dr:
+                _meta = os.path.join(REPO_ROOT, _dr, "graphs", f"{args.graph}.synth-meta.json")
+                if os.path.isfile(_meta):
+                    os.remove(_meta)
+                    _meta_cleaned = 1
+        print(f"Rebuild: deleted {_meta_cleaned} synth-meta files")
 
     # NOTE: lock acquisition moved after graph name resolution (below)
     job_label = args.job_label  # If set, overrides graph_name for lock + log file
@@ -362,384 +475,441 @@ def main():
     if feature_flags:
         print(f"Feature flags: {feature_flags}")
 
-    # --- Resolve paths (all absolute) ---
-    conf = _read_private_repos_conf()
-    data_repo_dir = conf.get("DATA_REPO_DIR", "")
-    if not data_repo_dir:
-        print("ERROR: DATA_REPO_DIR not set in .private-repos.conf")
-        sys.exit(1)
-    data_repo_path = os.path.join(REPO_ROOT, data_repo_dir)
-
-    env = _load_env(os.path.join(REPO_ROOT, "graph-editor", ".env.local"))
-    db_connection = env.get("DB_CONNECTION", "")
-    if not db_connection:
-        print("ERROR: No DB_CONNECTION in graph-editor/.env.local")
-        sys.exit(1)
-    # Set in environment so snapshot_service and worker can find it
-    os.environ["DB_CONNECTION"] = db_connection
-
-    # --- Resolve asat date ---
-    asat_date = None
-    if args.asat:
-        asat_date = datetime.strptime(args.asat, "%Y-%m-%d").date()
-        print(f"ASAT mode: reproducing run as of {asat_date}")
-
-    # --- Resolve graph file ---
-    GRAPH_SHORTCUTS = {
-        "simple": "bayes-test-gm-rebuild",
-        "branch": "conversion-flow-v2-recs-collapsed",
-    }
-
-    if args.graph_path:
-        # Absolute path mode — bypass data repo lookup
-        graph_path = os.path.abspath(args.graph_path)
-        if not os.path.isfile(graph_path):
-            print(f"ERROR: Graph not found: {graph_path}")
-            sys.exit(1)
-        graph_name = os.path.basename(graph_path).replace(".json", "")
-        _acquire_lock(job_label or graph_name)
-        with open(graph_path) as f:
-            graph = json.load(f)
-        graph_file = os.path.basename(graph_path)
-        if asat_date:
-            print("WARNING: --asat is ignored when --graph-path is used")
-            asat_date = None
-    elif asat_date:
-        graph_name = GRAPH_SHORTCUTS.get(args.graph, args.graph)
-        _acquire_lock(job_label or graph_name)
-        graph_file = f"{graph_name}.json"
-        # Load graph from git at the asat date
-        import subprocess as _sp
-        asat_iso = asat_date.isoformat()
-        # Find the last commit on or before asat_date in the data repo
-        git_rev = _sp.run(
-            ["git", "log", "--before", f"{asat_iso}T23:59:59", "--format=%H", "-1"],
-            capture_output=True, text=True, cwd=data_repo_path,
-        ).stdout.strip()
-        if not git_rev:
-            print(f"ERROR: No git commit found before {asat_iso} in data repo")
-            sys.exit(1)
-        print(f"  Git rev: {git_rev[:12]}… (data repo at {asat_iso})")
-
-        # Load graph JSON from that commit
-        graph_json_str = _sp.run(
-            ["git", "show", f"{git_rev}:graphs/{graph_file}"],
-            capture_output=True, text=True, cwd=data_repo_path,
-        ).stdout
-        if not graph_json_str:
-            print(f"ERROR: graphs/{graph_file} not found at {git_rev[:12]}")
-            sys.exit(1)
-        graph = json.loads(graph_json_str)
-
-        # Load param files from that commit
-        param_files_asat = {}
-        params_dir_listing = _sp.run(
-            ["git", "ls-tree", "--name-only", f"{git_rev}:parameters/"],
-            capture_output=True, text=True, cwd=data_repo_path,
-        ).stdout.strip().split("\n")
-        for fname in params_dir_listing:
-            if fname.endswith(".yaml") and "index" not in fname:
-                content = _sp.run(
-                    ["git", "show", f"{git_rev}:parameters/{fname}"],
-                    capture_output=True, text=True, cwd=data_repo_path,
-                ).stdout
-                if content:
-                    param_id = fname.replace(".yaml", "")
-                    param_files_asat[f"parameter-{param_id}"] = yaml.safe_load(content)
-        print(f"  Loaded {len(param_files_asat)} param files from git at {asat_iso}")
-        graph_path = os.path.join(data_repo_path, "graphs", graph_file)  # still needed for hash computation
-    else:
-        graph_name = GRAPH_SHORTCUTS.get(args.graph, args.graph)
-        _acquire_lock(job_label or graph_name)
-        graph_file = f"{graph_name}.json"
-        graph_path = os.path.join(data_repo_path, "graphs", graph_file)
-        if not os.path.isfile(graph_path):
-            print(f"ERROR: Graph not found: {graph_path}")
-            sys.exit(1)
-        with open(graph_path) as f:
-            graph = json.load(f)
-    graph_id = f"graph-{graph_name}"
-    print(f"Graph [{graph_name}]: {len(graph.get('edges', []))} edges")
-
-    # --- Load truth file (for expected_sample_seconds) ---
-    truth = _load_truth_file(graph_path)
-    expected_sample_s = truth.get("simulation", {}).get("expected_sample_seconds", 300)
-
-    # --- Timeout: from CLI, truth file, or default ---
-    if args.timeout is not None:
-        timeout_s = args.timeout
-    else:
-        timeout_s = max(expected_sample_s * 3, 120)  # 3x expected or at least 2 min
-    print(f"  Timeout: {timeout_s}s (expected sampling: {expected_sample_s}s)")
-
-    # --- Compute FE-authoritative hashes via Node.js ---
-    print("\n── Compute hashes (Node.js) ──")
-    hash_source_path = args.hash_source or graph_path
-    fe_data = _compute_fe_hashes(hash_source_path)
-    _edges = [(e["param_id"], e["edge_uuid"], e["window_hash"], e["cohort_hash"])
-              for e in fe_data["edges"]]
-    print(f"  {len(_edges)} edges resolved")
-    for e in fe_data["edges"]:
-        print(f"    {e['param_id']}: w={e['window_hash'][:16]}… c={e['cohort_hash'][:16]}…")
-
-    # --- Derive anchor date range ---
-    _dsl = graph.get("pinnedDSL", "") or graph.get("dataInterestsDSL", "")
-    _date_match = re.search(r"(\d{1,2}-\w{3}-\d{2}):(\d{1,2}-\w{3}-\d{2})", _dsl)
-    if _date_match:
-        _from_dt = datetime.strptime(_date_match.group(1), "%d-%b-%y")
-        _to_dt = datetime.strptime(_date_match.group(2), "%d-%b-%y")
-        anchor_from = _from_dt.strftime("%Y-%m-%d")
-        anchor_to = _to_dt.strftime("%Y-%m-%d")
-    else:
-        ref_date = asat_date if asat_date else date.today()
-        anchor_to = ref_date.isoformat()
-        anchor_from = (ref_date - timedelta(days=120)).isoformat()
-    print(f"  Anchor range: {anchor_from} → {anchor_to}")
-
-    # --- Load param files ---
-    if args.params_dir:
-        param_files = {}
-        params_dir = os.path.abspath(args.params_dir)
-        for fname in os.listdir(params_dir):
-            if fname.endswith(".yaml") and "index" not in fname:
-                with open(os.path.join(params_dir, fname)) as f:
-                    param_id = fname.replace(".yaml", "")
-                    param_files[f"parameter-{param_id}"] = yaml.safe_load(f)
-        print(f"  Using {len(param_files)} param files from: {params_dir}")
-    elif asat_date and param_files_asat:
-        param_files = param_files_asat
-        print(f"  Using {len(param_files)} param files from git (asat {asat_date})")
-        params_dir = None
-    else:
-        param_files = {}
-        params_dir = os.path.join(data_repo_path, "parameters")
-        for fname in os.listdir(params_dir):
-            if fname.endswith(".yaml") and "index" not in fname:
-                with open(os.path.join(params_dir, fname)) as f:
-                    param_id = fname.replace(".yaml", "")
-                    param_files[f"parameter-{param_id}"] = yaml.safe_load(f)
-
-    # --- Run BE stats/topo pass (full port of FE enhanceGraphLatencies) ---
-    print("\n── Stats pass (BE analytics engine) ──")
-    from runner.stats_engine import CohortData, enhance_graph_latencies
-    import copy
-
-    # Build CohortData per edge from param file values[].
-    # Separate cohort and window slices (FE parity: they're aggregated independently).
-    from runner.stats_engine import EdgeContext
-    cohort_lookup: dict[str, list] = {}
-    edge_contexts: dict[str, EdgeContext] = {}
-
-    def _parse_date_to_age(d_str: str) -> float:
-        """Parse a date string and return age in days from now."""
-        for fmt in ("%d-%b-%y", "%Y-%m-%d", "%d-%b-%Y"):
-            try:
-                dt = datetime.strptime(str(d_str), fmt)
-                return float(max(0, (datetime.now() - dt).days))
-            except (ValueError, TypeError):
-                continue
-        return 30.0  # conservative fallback
-
-    def _extract_cohorts_from_values(values: list) -> tuple:
-        """Extract CohortData from values[], returning (cohort_slice_cohorts, window_slice_cohorts)."""
-        cohort_cohorts = []
-        window_cohorts = []
-        for v in values:
-            dsl = v.get("sliceDSL", "") or ""
-            is_window = "window(" in dsl
-            is_cohort = "cohort(" in dsl
-            # If no DSL, treat as cohort (default)
-            target = window_cohorts if is_window and not is_cohort else cohort_cohorts
-
-            dates = v.get("dates", [])
-            n_daily = v.get("n_daily", [])
-            k_daily = v.get("k_daily", [])
-            # Try both field name conventions
-            median_lag = v.get("median_lag_daily") or v.get("median_lag_days", [])
-            mean_lag = v.get("mean_lag_daily") or v.get("mean_lag_days", [])
-            anchor_median = v.get("anchor_median_lag_daily") or v.get("anchor_median_lag_days", [])
-            anchor_mean = v.get("anchor_mean_lag_daily") or v.get("anchor_mean_lag_days", [])
-            if not dates or not n_daily:
-                continue
-            for i, d in enumerate(dates):
-                n = int(n_daily[i]) if i < len(n_daily) else 0
-                k = int(k_daily[i]) if i < len(k_daily) else 0
-                if n <= 0:
-                    continue
-                age_days = _parse_date_to_age(d)
-                ml = float(median_lag[i]) if isinstance(median_lag, list) and i < len(median_lag) and median_lag[i] else None
-                mnl = float(mean_lag[i]) if isinstance(mean_lag, list) and i < len(mean_lag) and mean_lag[i] else None
-                aml = float(anchor_median[i]) if isinstance(anchor_median, list) and i < len(anchor_median) and anchor_median[i] else None
-                amnl = float(anchor_mean[i]) if isinstance(anchor_mean, list) and i < len(anchor_mean) and anchor_mean[i] else None
-                target.append(CohortData(
-                    date=str(d), age=age_days, n=n, k=k,
-                    median_lag_days=ml, mean_lag_days=mnl,
-                    anchor_median_lag_days=aml, anchor_mean_lag_days=amnl,
-                ))
-        return cohort_cohorts, window_cohorts
-
-    for edge in graph.get("edges", []):
-        pid = edge.get("p", {}).get("id")
-        if not pid:
-            continue
-        pf = param_files.get(f"parameter-{pid}") or param_files.get(pid)
-        if not pf:
-            continue
-
-        cohort_cohorts, window_cohorts = _extract_cohorts_from_values(pf.get("values", []))
-
-        # Use all cohorts (both slices) as the main cohort data — FE does this
-        # via aggregateCohortData which processes both slice types into CohortData[].
-        all_cohorts = cohort_cohorts + window_cohorts
-        eid = edge.get("uuid", "")
-        if all_cohorts:
-            cohort_lookup[eid] = all_cohorts
-
-        # Build EdgeContext: onset from window slices, window cohorts for forecast, nBaseline
-        ctx = EdgeContext()
-        # Onset from window slice latency blocks
-        lat_v = edge.get("p", {}).get("latency") or {}
-        window_vals = [v for v in pf.get("values", []) if "window(" in (v.get("sliceDSL", "") or "")]
-        onset_vals = [v.get("latency", {}).get("onset_delta_days") for v in window_vals
-                      if isinstance(v.get("latency", {}).get("onset_delta_days"), (int, float))]
-        if onset_vals:
-            ctx.onset_from_window_slices = sorted(onset_vals)[len(onset_vals) // 2]  # median
-        if window_cohorts:
-            ctx.window_cohorts = window_cohorts
-        window_n = sum(v.get("n", 0) or 0 for v in window_vals if isinstance(v.get("n"), (int, float)) and v["n"] > 0)
-        if window_n > 0:
-            ctx.n_baseline_from_window = window_n
-        edge_contexts[eid] = ctx
-
-    topo_result = enhance_graph_latencies(graph, cohort_lookup, edge_contexts=edge_contexts)
-
-    # Apply results to graph in memory
-    graph = copy.deepcopy(graph)
-    edges_by_uuid = {e["uuid"]: e for e in graph.get("edges", [])}
-    n_lat = 0
-    for ev in topo_result.edge_values:
-        edge = edges_by_uuid.get(ev.edge_uuid)
-        if not edge:
-            continue
-        lat = edge.setdefault("p", {}).setdefault("latency", {})
-        if ev.mu is not None:
-            lat["mu"] = ev.mu
-            lat["sigma"] = ev.sigma
-            lat["onset_delta_days"] = ev.onset_delta_days
-            lat["t95"] = ev.t95
-            lat["path_t95"] = ev.path_t95
-            lat["path_mu"] = ev.path_mu
-            lat["path_sigma"] = ev.path_sigma
-            lat["path_onset_delta_days"] = ev.path_onset_delta_days
-            n_lat += 1
-            pid = edge.get("p", {}).get("id", "?")
-            print(f"    {pid}: mu={ev.mu:.3f}, sigma={ev.sigma:.3f}, "
-                  f"onset={ev.onset_delta_days:.1f}, t95={ev.t95:.1f}, "
-                  f"path_t95={ev.path_t95:.1f}")
-        if ev.blended_mean is not None:
-            edge["p"]["mean"] = ev.blended_mean
-        if ev.p_infinity is not None and ev.forecast_available:
-            edge["p"].setdefault("forecast", {})["mean"] = ev.p_infinity
-    print(f"  {n_lat} edges with latency priors")
-
-    # --- Build snapshot subjects ---
-    equiv_map: dict[str, list[dict]] = {}
-    for subj in fe_data.get("subjects", []):
-        ch = subj.get("core_hash", "")
-        eh = subj.get("equivalent_hashes", [])
-        if ch and eh:
-            equiv_map[ch] = eh
-
-    snapshot_subjects = []
-    for param_id, edge_id, window_hash, cohort_hash in _edges:
-        base = {
-            "param_id": param_id,
-            "subject_id": f"parameter:{param_id}:{edge_id}:p:",
-            "canonical_signature": "",
-            "read_mode": "sweep_simple",
-            "target": {"targetId": edge_id},
-            "edge_id": edge_id,
-            "slice_keys": [""],
-            "anchor_from": anchor_from,
-            "anchor_to": anchor_to,
-            "sweep_from": anchor_from,
-            "sweep_to": asat_date.isoformat() if asat_date else anchor_to,
-        }
-        snapshot_subjects.append({
-            **base,
-            "core_hash": window_hash,
-            "equivalent_hashes": equiv_map.get(window_hash, []),
-        })
-        snapshot_subjects.append({
-            **base,
-            "core_hash": cohort_hash,
-            "equivalent_hashes": equiv_map.get(cohort_hash, []),
-        })
-    print(f"\nSnapshot subjects: {len(snapshot_subjects)} ({len(_edges)} edges × 2 slices)")
-
-    # --- Pre-flight checks (MANDATORY before MCMC) ---
-    preflight = _run_preflight(snapshot_subjects, db_connection, graph, param_files, _edges)
-
-    if args.preflight_only:
-        print("\n" + "=" * 60)
-        print("PRE-FLIGHT COMPLETE")
-        if preflight["warnings"]:
-            print(f"  {len(preflight['warnings'])} warnings — review above")
+    # --- FE payload mode (R2-prereq-ii) ---
+    # Use the CLI to construct the payload via the real FE service layer.
+    # This ensures slice commissioning (pinnedDSL → explodeDSL → subjects)
+    # follows the production codepath. Accepts either:
+    #   --payload /path/to/file.json  (pre-built)
+    #   --fe-payload                  (call CLI on demand)
+    if args.payload or getattr(args, 'fe_payload', False):
+        if args.payload:
+            payload_path = os.path.abspath(args.payload)
+            if not os.path.isfile(payload_path):
+                print(f"ERROR: Payload file not found: {payload_path}")
+                sys.exit(1)
+            with open(payload_path) as f:
+                payload = json.load(f)
         else:
-            print("  All checks passed. Safe to run MCMC.")
-        print("=" * 60)
-        return
+            # Call CLI to build payload on demand.
+            # If --graph-path was given, derive graph name and directory
+            # from the path (e.g. nous-conversion/graphs/synth-foo.json
+            # → name="synth-foo", dir="nous-conversion").
 
-    if args.placeholder:
-        pass  # Skip pre-flight warnings for placeholder mode
+            # --dsl-override: temporarily patch the graph JSON's pinnedDSL
+            # before CLI construction so subjects are computed from the
+            # overridden DSL. Restored after the CLI call.
+            _dsl_backup = None
+            _graph_json_path = None
+            if getattr(args, 'dsl_override', None):
+                # Find graph JSON: check nous-conversion/graphs/ first,
+                # then fall back to --graph-path.
+                _candidates = [
+                    os.path.join(REPO_ROOT, "nous-conversion", "graphs", f"{args.graph}.json"),
+                ]
+                if args.graph_path:
+                    _candidates.append(os.path.abspath(args.graph_path))
+                for _cp in _candidates:
+                    if os.path.isfile(_cp):
+                        _graph_json_path = _cp
+                        break
+                if _graph_json_path and os.path.isfile(_graph_json_path):
+                    with open(_graph_json_path) as _gf:
+                        _gj = json.load(_gf)
+                    _dsl_backup = (_gj.get('pinnedDSL'), _gj.get('dataInterestsDSL'))
+                    _gj['pinnedDSL'] = args.dsl_override
+                    _gj['dataInterestsDSL'] = args.dsl_override
+                    with open(_graph_json_path, 'w') as _gf:
+                        json.dump(_gj, _gf, indent=2)
+                    print(f"DSL override applied: {args.dsl_override}")
 
-    # --- Build payload ---
-    payload = {
-        "graph_id": graph_id,
-        "graph_snapshot": graph,
-        "parameter_files": param_files,
-        "parameters_index": {},
-        "snapshot_subjects": snapshot_subjects,
-        "db_connection": db_connection,
-        "webhook_url": "" if args.no_webhook else "http://localhost:5173/api/bayes-webhook",
-        "callback_token": "test-harness",
-        "settings": {
-            **({"placeholder": True} if args.placeholder else {}),
-            **({"features": feature_flags} if feature_flags else {}),
-            **({"model_inspect_only": True} if args.no_mcmc else {}),
-            **({"draws": args.draws} if args.draws else {}),
-            **({"tune": args.tune} if args.tune else {}),
-            **({"chains": args.chains} if args.chains else {}),
-            **({"cores": args.cores} if args.cores else {}),
-            **({"dump_evidence_path": args.dump_evidence} if args.dump_evidence else {}),
-            **(_load_settings_json(args.settings_json) if args.settings_json else {}),
-        },
-        "_job_id": f"harness-{int(time.time())}",
-    }
+            try:
+                if args.graph_path:
+                    gp = os.path.abspath(args.graph_path)
+                    cli_graph_name = os.path.basename(gp).replace(".json", "")
+                    # graph_dir is the parent of "graphs/" — e.g. nous-conversion/
+                    graphs_parent = os.path.dirname(gp)  # .../graphs
+                    cli_graph_dir = os.path.dirname(graphs_parent)  # .../nous-conversion
+                    payload = _build_payload_via_cli(cli_graph_name, cli_graph_dir)
+                else:
+                    payload = _build_payload_via_cli(args.graph)
+            finally:
+                # Restore original DSL
+                if _dsl_backup is not None and _graph_json_path:
+                    with open(_graph_json_path) as _gf:
+                        _gj = json.load(_gf)
+                    _gj['pinnedDSL'] = _dsl_backup[0]
+                    _gj['dataInterestsDSL'] = _dsl_backup[1]
+                    with open(_graph_json_path, 'w') as _gf:
+                        json.dump(_gj, _gf, indent=2)
+                    print("DSL override restored")
 
-    if args.curl:
-        payload_path = "/tmp/bayes-test-payload.json"
-        with open(payload_path, "w") as f:
-            json.dump(payload, f, cls=DateEncoder)
-        print(f"\nPayload written to {payload_path} ({os.path.getsize(payload_path)} bytes)")
-        print(f"\nSubmit:")
-        print(f'  curl -s -X POST http://localhost:9000/api/bayes/submit '
-              f'-H "Content-Type: application/json" -d @{payload_path}')
-        return
+        graph_name = payload.get("graph_id", "unknown")
+        graph = payload.get("graph_snapshot", {})
+        job_label = args.job_label or graph_name
+        _acquire_lock(job_label)
+
+        # Merge CLI overrides into payload settings
+        settings = payload.setdefault("settings", {})
+        if feature_flags:
+            settings.setdefault("features", {}).update(feature_flags)
+        if args.no_mcmc:
+            settings["model_inspect_only"] = True
+        if args.dump_evidence:
+            settings["dump_evidence_path"] = args.dump_evidence
+        if args.no_webhook:
+            payload["webhook_url"] = ""
+        if args.draws:
+            settings["draws"] = args.draws
+        if args.tune:
+            settings["tune"] = args.tune
+        if args.chains:
+            settings["chains"] = args.chains
+        if args.cores:
+            settings["cores"] = args.cores
+        if args.diag:
+            settings["run_calibration"] = True
+        if args.settings_json:
+            settings.update(_load_settings_json(args.settings_json))
+
+        # Ensure DB_CONNECTION is set
+        db_connection = payload.get("db_connection", "")
+        if not db_connection:
+            env = _load_env(os.path.join(REPO_ROOT, "graph-editor", ".env.local"))
+            db_connection = env.get("DB_CONNECTION", "")
+            payload["db_connection"] = db_connection
+        if db_connection:
+            os.environ["DB_CONNECTION"] = db_connection
+
+        param_files = payload.get("parameter_files", {})
+        n_subjects = len(payload.get("snapshot_subjects", []))
+        n_params = len(param_files)
+        print(f"\n{'=' * 60}")
+        print(f"  FE PAYLOAD MODE: {graph_name}")
+        print(f"  {n_subjects} snapshot subjects, {n_params} param files")
+        print(f"{'=' * 60}\n")
+
+        # Resolve graph_path for truth file loading + param recovery
+        if args.graph_path:
+            graph_path = os.path.abspath(args.graph_path)
+        else:
+            # Derive from data repo
+            conf = _read_private_repos_conf()
+            data_repo_dir = conf.get("DATA_REPO_DIR", "")
+            graph_path = os.path.join(REPO_ROOT, data_repo_dir, "graphs", f"{graph_name}.json")
+        truth = _load_truth_file(graph_path)
+
+        if args.timeout is not None and args.timeout > 0:
+            expected_sample_s = args.timeout
+            timeout_s = args.timeout
+        elif args.timeout == 0:
+            expected_sample_s = 0
+            timeout_s = 0
+        else:
+            expected_sample_s = truth.get("simulation", {}).get("expected_sample_seconds", 600)
+            timeout_s = max(expected_sample_s * 3, 120)
+    else:
+        conf = _read_private_repos_conf()
+        data_repo_dir = conf.get("DATA_REPO_DIR", "")
+        if not data_repo_dir:
+            print("ERROR: DATA_REPO_DIR not set in .private-repos.conf")
+            sys.exit(1)
+        data_repo_path = os.path.join(REPO_ROOT, data_repo_dir)
+
+        env = _load_env(os.path.join(REPO_ROOT, "graph-editor", ".env.local"))
+        db_connection = env.get("DB_CONNECTION", "")
+        if not db_connection:
+            print("ERROR: No DB_CONNECTION in graph-editor/.env.local")
+            sys.exit(1)
+        # Set in environment so snapshot_service and worker can find it
+        os.environ["DB_CONNECTION"] = db_connection
+
+        # --- Resolve asat date ---
+        asat_date = None
+        if args.asat:
+            asat_date = datetime.strptime(args.asat, "%Y-%m-%d").date()
+            print(f"ASAT mode: reproducing run as of {asat_date}")
+
+        # --- Resolve graph file ---
+        GRAPH_SHORTCUTS = {
+            "simple": "bayes-test-gm-rebuild",
+            "branch": "conversion-flow-v2-recs-collapsed",
+        }
+
+        if args.graph_path:
+            # Absolute path mode — bypass data repo lookup
+            graph_path = os.path.abspath(args.graph_path)
+            if not os.path.isfile(graph_path):
+                print(f"ERROR: Graph not found: {graph_path}")
+                sys.exit(1)
+            graph_name = os.path.basename(graph_path).replace(".json", "")
+            _acquire_lock(job_label or graph_name)
+            with open(graph_path) as f:
+                graph = json.load(f)
+            graph_file = os.path.basename(graph_path)
+            if asat_date:
+                print("WARNING: --asat is ignored when --graph-path is used")
+                asat_date = None
+        elif asat_date:
+            graph_name = GRAPH_SHORTCUTS.get(args.graph, args.graph)
+            _acquire_lock(job_label or graph_name)
+            graph_file = f"{graph_name}.json"
+            # Load graph from git at the asat date
+            import subprocess as _sp
+            asat_iso = asat_date.isoformat()
+            # Find the last commit on or before asat_date in the data repo
+            git_rev = _sp.run(
+                ["git", "log", "--before", f"{asat_iso}T23:59:59", "--format=%H", "-1"],
+                capture_output=True, text=True, cwd=data_repo_path,
+            ).stdout.strip()
+            if not git_rev:
+                print(f"ERROR: No git commit found before {asat_iso} in data repo")
+                sys.exit(1)
+            print(f"  Git rev: {git_rev[:12]}… (data repo at {asat_iso})")
+
+            # Load graph JSON from that commit
+            graph_json_str = _sp.run(
+                ["git", "show", f"{git_rev}:graphs/{graph_file}"],
+                capture_output=True, text=True, cwd=data_repo_path,
+            ).stdout
+            if not graph_json_str:
+                print(f"ERROR: graphs/{graph_file} not found at {git_rev[:12]}")
+                sys.exit(1)
+            graph = json.loads(graph_json_str)
+
+            # Load param files from that commit
+            param_files_asat = {}
+            params_dir_listing = _sp.run(
+                ["git", "ls-tree", "--name-only", f"{git_rev}:parameters/"],
+                capture_output=True, text=True, cwd=data_repo_path,
+            ).stdout.strip().split("\n")
+            for fname in params_dir_listing:
+                if fname.endswith(".yaml") and "index" not in fname:
+                    content = _sp.run(
+                        ["git", "show", f"{git_rev}:parameters/{fname}"],
+                        capture_output=True, text=True, cwd=data_repo_path,
+                    ).stdout
+                    if content:
+                        param_id = fname.replace(".yaml", "")
+                        param_files_asat[f"parameter-{param_id}"] = yaml.safe_load(content)
+            print(f"  Loaded {len(param_files_asat)} param files from git at {asat_iso}")
+            graph_path = os.path.join(data_repo_path, "graphs", graph_file)  # still needed for hash computation
+        else:
+            graph_name = GRAPH_SHORTCUTS.get(args.graph, args.graph)
+            _acquire_lock(job_label or graph_name)
+            graph_file = f"{graph_name}.json"
+            graph_path = os.path.join(data_repo_path, "graphs", graph_file)
+            if not os.path.isfile(graph_path):
+                print(f"ERROR: Graph not found: {graph_path}")
+                sys.exit(1)
+            with open(graph_path) as f:
+                graph = json.load(f)
+        graph_id = f"graph-{graph_name}"
+        print(f"Graph [{graph_name}]: {len(graph.get('edges', []))} edges")
+
+        # --- Load truth file (for expected_sample_seconds) ---
+        truth = _load_truth_file(graph_path)
+        expected_sample_s = truth.get("simulation", {}).get("expected_sample_seconds", 300)
+
+        # --- Timeout: from CLI, truth file, or default ---
+        if args.timeout is not None:
+            timeout_s = args.timeout
+        else:
+            timeout_s = max(expected_sample_s * 3, 120)  # 3x expected or at least 2 min
+        print(f"  Timeout: {timeout_s}s (expected sampling: {expected_sample_s}s)")
+
+        # --- Phase 2 from dump: skip payload construction entirely ---
+        _skip_payload_construction = False
+        if args.phase2_from_dump:
+            print(f"\n  PHASE 2 FROM DUMP: {args.phase2_from_dump}")
+            print(f"  Skipping hash computation, synth gate, pre-flight.")
+            payload = {
+                "graph_id": graph_id,
+                "graph_snapshot": graph,
+                "parameter_files": {},
+                "parameters_index": {},
+                "settings": {},
+            }
+            # Merge CLI settings
+            settings = payload.setdefault("settings", {})
+            if feature_flags:
+                settings.setdefault("features", {}).update(feature_flags)
+            settings["phase2_from_dump"] = args.phase2_from_dump
+            if args.draws:
+                settings["draws"] = args.draws
+            if args.tune:
+                settings["tune"] = args.tune
+            if args.chains:
+                settings["chains"] = args.chains
+            if args.cores:
+                settings["cores"] = args.cores
+            if args.settings_json:
+                settings.update(_load_settings_json(args.settings_json))
+            _skip_payload_construction = True
+
+        # --- Synth data gate: verify DB has rows, bootstrap if needed ---
+        if graph_name.startswith("synth-") and not _skip_payload_construction:
+            from synth_gen import verify_synth_data
+            _vsd = verify_synth_data(graph_name, data_repo_path)
+            if _vsd["status"] in ("missing", "stale"):
+                print(f"\n── Synth data gate: {_vsd['status']} ({_vsd['reason']}) ──")
+                print(f"  Bootstrapping {graph_name} via synth_gen.py --write-files...")
+                import subprocess as _sp
+                _boot = _sp.run(
+                    [sys.executable, os.path.join(REPO_ROOT, "bayes", "synth_gen.py"),
+                     "--graph", graph_name, "--write-files"],
+                    capture_output=False, text=True, timeout=600, cwd=REPO_ROOT,
+                )
+                if _boot.returncode != 0:
+                    print(f"  ABORT: Bootstrap failed (exit {_boot.returncode})")
+                    sys.exit(1)
+                # Re-verify after bootstrap
+                _vsd2 = verify_synth_data(graph_name, data_repo_path)
+                if _vsd2["status"] != "fresh":
+                    print(f"  ABORT: Still {_vsd2['status']} after bootstrap ({_vsd2['reason']})")
+                    sys.exit(1)
+                print(f"  Bootstrap OK: {_vsd2['row_count']} rows verified")
+                # Reload graph JSON — bootstrap may have regenerated it
+                with open(graph_path) as f:
+                    graph = json.load(f)
+            else:
+                print(f"\n── Synth data gate: {_vsd['status']} ({_vsd['reason']}) ──")
+
+        # --- Build payload via FE CLI (single canonical code path) ---
+        # The FE CLI handles hash computation, subject generation,
+        # candidateRegimesByEdge (incl. supplementary hash discovery),
+        # MECE dimensions, stats pass, and engorged graph edges.
+        # No duplicate logic here.
+        print("\n── Build payload via FE CLI ──")
+
+        # --dsl-override: temporarily patch the graph JSON's pinnedDSL
+        # before CLI construction so subjects are computed from the
+        # overridden DSL. Restored after the CLI call.
+        _dsl_backup = None
+        _graph_json_path = graph_path
+        if getattr(args, 'dsl_override', None) and os.path.isfile(graph_path):
+            with open(graph_path) as _gf:
+                _gj = json.load(_gf)
+            _dsl_backup = (_gj.get('pinnedDSL'), _gj.get('dataInterestsDSL'))
+            _gj['pinnedDSL'] = args.dsl_override
+            _gj['dataInterestsDSL'] = args.dsl_override
+            with open(graph_path, 'w') as _gf:
+                json.dump(_gj, _gf, indent=2)
+            print(f"  DSL override applied: {args.dsl_override}")
+
+        try:
+            # Derive graph_dir from graph_path: parent of "graphs/"
+            graphs_parent = os.path.dirname(graph_path)  # .../graphs
+            cli_graph_dir = os.path.dirname(graphs_parent)  # .../nous-conversion
+            payload = _build_payload_via_cli(graph_name, cli_graph_dir)
+        finally:
+            # Restore original DSL
+            if _dsl_backup is not None and _graph_json_path and os.path.isfile(_graph_json_path):
+                with open(_graph_json_path) as _gf:
+                    _gj = json.load(_gf)
+                _gj['pinnedDSL'] = _dsl_backup[0]
+                _gj['dataInterestsDSL'] = _dsl_backup[1]
+                with open(_graph_json_path, 'w') as _gf:
+                    json.dump(_gj, _gf, indent=2)
+                print("  DSL override restored")
+
+        # Extract fields from CLI payload for downstream use
+        graph = payload.get("graph_snapshot", graph)
+        param_files = payload.get("parameter_files", {})
+        snapshot_subjects = payload.get("snapshot_subjects", [])
+
+        n_subjects = len(snapshot_subjects)
+        n_params = len(param_files)
+        n_regimes = sum(len(v) for v in payload.get("candidate_regimes_by_edge", {}).values())
+        mece_dims = payload.get("mece_dimensions", [])
+        print(f"  {n_subjects} subjects, {n_params} param files, "
+              f"{n_regimes} candidate regimes, MECE: {mece_dims}")
+
+        # Ensure DB_CONNECTION is in the payload
+        if not payload.get("db_connection"):
+            payload["db_connection"] = db_connection
+
+        # Ensure webhook settings
+        if args.no_webhook:
+            payload["webhook_url"] = ""
+        elif not payload.get("webhook_url"):
+            payload["webhook_url"] = "http://localhost:5173/api/bayes-webhook"
+
+        # Merge CLI overrides into payload settings
+        settings = payload.setdefault("settings", {})
+        if feature_flags:
+            settings.setdefault("features", {}).update(feature_flags)
+        if args.no_mcmc:
+            settings["model_inspect_only"] = True
+        if args.dump_evidence:
+            settings["dump_evidence_path"] = args.dump_evidence
+        if args.draws:
+            settings["draws"] = args.draws
+        if args.tune:
+            settings["tune"] = args.tune
+        if args.chains:
+            settings["chains"] = args.chains
+        if args.cores:
+            settings["cores"] = args.cores
+        if args.diag:
+            settings["run_calibration"] = True
+        if args.phase2_from_dump:
+            settings["phase2_from_dump"] = args.phase2_from_dump
+        if args.settings_json:
+            settings.update(_load_settings_json(args.settings_json))
+
+        # --- Pre-flight checks (MANDATORY before MCMC) ---
+        preflight = _run_preflight(payload)
+        if preflight["edges_failed"] > 0 or preflight["error"]:
+            print("\n  ABORT: pre-flight found blocking issues.")
+            sys.exit(1)
+
+        if args.preflight_only:
+            print("\n" + "=" * 60)
+            print("PRE-FLIGHT COMPLETE")
+            if preflight["safe_to_sample"]:
+                print("  All checks passed. Safe to run MCMC.")
+                print("=" * 60)
+                return
+            print("  Pre-flight found warnings — review above before MCMC.")
+            print("=" * 60)
+            sys.exit(1)
+
+        if not preflight["safe_to_sample"] and not args.placeholder:
+            print("\n  NOTE: pre-flight found warnings — continuing because no blocking failures were raised.")
+
+        payload["_job_id"] = f"harness-{int(time.time())}"
+
+        if args.curl:
+            payload_path = "/tmp/bayes-test-payload.json"
+            with open(payload_path, "w") as f:
+                json.dump(payload, f, cls=DateEncoder)
+            print(f"\nPayload written to {payload_path} ({os.path.getsize(payload_path)} bytes)")
+            print(f"\nSubmit:")
+            print(f'  curl -s -X POST http://localhost:9000/api/bayes/submit '
+                  f'-H "Content-Type: application/json" -d @{payload_path}')
+            return
 
     # --- Run MCMC ---
     import threading
 
-    LOG_PATH = f"/tmp/bayes_harness-{job_label or graph_name}.log"
+    _label = job_label or graph_name
+    LOG_PATH = f"/tmp/bayes_harness-{_label}.log"
+    # Timestamped archive copy — never overwritten.
+    _ts = time.strftime("%Y%m%d-%H%M%S")
+    LOG_ARCHIVE = f"/tmp/bayes_harness-{_label}-{_ts}.log"
     log_file = open(LOG_PATH, "w")
+    archive_file = open(LOG_ARCHIVE, "w")
 
     def _print(msg="", **kwargs):
         print(msg, flush=True, **kwargs)
         log_file.write(msg + "\n")
         log_file.flush()
+        archive_file.write(msg + "\n")
+        archive_file.flush()
 
     _print(f"Log file: {LOG_PATH}")
     _print(f"  tail -f {LOG_PATH}")
+    _print(f"Archive:  {LOG_ARCHIVE}")
 
     t_start = time.time()
     last_stage = ["idle"]
@@ -757,7 +927,8 @@ def main():
         _print(f"  [{pct:3d}%] {elapsed:6.1f}s  {stage}: {detail}")
 
         # Early abort: if sampling estimate exceeds 3x expected
-        if stage == "sampling" and "minutes remaining" in detail:
+        # Skip when timeout_s == 0 (--no-timeout / --timeout 0).
+        if stage == "sampling" and "minutes remaining" in detail and timeout_s > 0:
             try:
                 mins = int(detail.split("—")[1].strip().split()[0])
                 if mins * 60 > expected_sample_s * 3 and pct < 10:
@@ -799,11 +970,13 @@ def main():
                     _print(f"\n  Killing sampler...")
                     subprocess.run(["pkill", "-P", str(os.getpid())], capture_output=True)
                     log_file.close()
+                    archive_file.close()
                     sys.exit(1)
-                if elapsed > timeout_s:
+                if timeout_s > 0 and elapsed > timeout_s:
                     _print(f"\n  TIMEOUT after {elapsed:.0f}s (last stage: {last_stage[0]})")
                     subprocess.run(["pkill", "-P", str(os.getpid())], capture_output=True)
                     log_file.close()
+                    archive_file.close()
                     sys.exit(1)
                 _print(f"  ... {elapsed:.0f}s elapsed, stage: {last_stage[0]}")
 
@@ -812,11 +985,13 @@ def main():
             _print(f"\nCRASHED after {time.time() - t_start_run:.1f}s: {e}")
             _print(tb)
             log_file.close()
+            archive_file.close()
             sys.exit(1)
 
         if not result_box[0]:
             _print(f"\nNo result returned after {time.time() - t_start_run:.1f}s")
             log_file.close()
+            archive_file.close()
             sys.exit(1)
 
         return result_box[0]
@@ -920,6 +1095,8 @@ def main():
 
             _print(f"\n  {pid}")
             for sk, sv in slices.items():
+                if sk.startswith("_"):
+                    continue  # internal metadata (e.g. _tau_slice), not a real slice
                 alpha = sv.get("alpha", 0)
                 beta_v = sv.get("beta", 0)
                 p_mean = alpha / (alpha + beta_v) if (alpha + beta_v) > 0 else 0
@@ -963,12 +1140,104 @@ def main():
                     bayes_p = bayes_alpha / (bayes_alpha + bayes_beta) if (bayes_alpha + bayes_beta) > 0 else 0
                     ratio = bayes_p / analytic_mean if isinstance(analytic_mean, (int, float)) and analytic_mean > 0 else None
                     ratio_str = f" (ratio={ratio:.2f}x)" if ratio is not None else ""
+                    prov = ws.get("provenance", "?")
                     _print(f"  {pid}: analytic={analytic_mean} (k/n={analytic_k}/{analytic_n}) "
-                           f"→ bayes={bayes_p:.4f}{ratio_str}")
+                           f"→ bayes={bayes_p:.4f} [{prov}]{ratio_str}")
                 else:
                     _print(f"  {pid}: analytic={analytic_mean} (k/n={analytic_k}/{analytic_n}) → no bayes window()")
             else:
                 _print(f"  {pid}: no analytic values")
+
+    # --- Ground truth recovery comparison (synth graphs only) ---
+    if truth and truth.get("edges"):
+        _print(f"\n{'─' * 60}")
+        _print("  GROUND TRUTH RECOVERY")
+        _print(f"{'─' * 60}")
+        truth_edges = truth["edges"]
+        ctx_dims = truth.get("context_dimensions", [])
+
+        def _z(truth_val, post_mean, post_sd):
+            if post_sd and post_sd > 1e-6:
+                return abs(truth_val - post_mean) / post_sd
+            return float("inf") if abs(truth_val - post_mean) > 0.01 else 0.0
+
+        def _fmt(name, truth_val, post_mean, post_sd=None):
+            z = _z(truth_val, post_mean, post_sd) if post_sd else None
+            z_str = f" z={z:.1f}" if z is not None else ""
+            err = post_mean - truth_val
+            flag = " MISS" if z is not None and z > 3.0 else ""
+            return f"    {name:>12}: truth={truth_val:.4f} post={post_mean:.4f} Δ={err:+.4f}{z_str}{flag}"
+
+        for edge in webhook_edges:
+            pid = edge.get("param_id", "?")
+            # Match truth edge by param_id suffix (e.g. "synth-simple-abc-context-simple-a-to-b" → "simple-a-to-b")
+            truth_edge = None
+            truth_edge_key = ""
+            for tk, tv in truth_edges.items():
+                if pid.endswith(tk):
+                    truth_edge = tv
+                    truth_edge_key = tk
+                    break
+            if not truth_edge:
+                continue
+
+            truth_p = truth_edge.get("p", 0)
+            truth_mu = truth_edge.get("mu", 0)
+            truth_sigma = truth_edge.get("sigma", 0)
+            truth_onset = truth_edge.get("onset", 0)
+            truth_kappa = truth.get("simulation", {}).get("user_kappa", 50)
+
+            slices = edge.get("slices", {})
+            ws = slices.get("window()", {})
+
+            _print(f"\n  {pid} (truth: p={truth_p}, mu={truth_mu}, σ={truth_sigma}, onset={truth_onset})")
+
+            # Aggregate
+            if ws:
+                _wa, _wb = ws.get("alpha", 0), ws.get("beta", 0)
+                bayes_p = _wa / (_wa + _wb) if (_wa + _wb) > 0 else 0
+                _print(_fmt("p", truth_p, bayes_p))
+                if "mu_mean" in ws:
+                    _print(_fmt("mu", truth_mu, ws["mu_mean"], ws.get("mu_sd")))
+                if "sigma_mean" in ws:
+                    _print(_fmt("sigma", truth_sigma, ws["sigma_mean"], ws.get("sigma_sd")))
+                if "onset_mean" in ws:
+                    _print(_fmt("onset", truth_onset, ws["onset_mean"], ws.get("onset_sd")))
+                if "kappa_mean" in ws:
+                    _print(_fmt("kappa", truth_kappa, ws["kappa_mean"], ws.get("kappa_sd")))
+
+            # Per-slice
+            for dim in ctx_dims:
+                dim_id = dim["id"]
+                for cv in dim.get("values", []):
+                    cv_id = cv["id"]
+                    ctx_key_w = f"context({dim_id}:{cv_id}).window()"
+                    ctx_key_c = f"context({dim_id}:{cv_id}).cohort()"
+                    edge_overrides = cv.get("edges", {}).get(truth_edge_key, {})
+                    slice_truth_p = truth_p * edge_overrides.get("p_mult", 1.0)
+                    slice_truth_mu = truth_mu + edge_overrides.get("mu_offset", 0.0)
+                    slice_truth_onset = truth_onset + edge_overrides.get("onset_offset", 0.0)
+
+                    sw = slices.get(ctx_key_w, {})
+                    if sw:
+                        _sa, _sb = sw.get("alpha", 0), sw.get("beta", 0)
+                        sp = _sa / (_sa + _sb) if (_sa + _sb) > 0 else 0
+                        _print(f"    {ctx_key_w}:")
+                        _print(_fmt("p", slice_truth_p, sp))
+                        if "mu_mean" in sw:
+                            _print(_fmt("mu", slice_truth_mu, sw["mu_mean"], sw.get("mu_sd")))
+                        if "sigma_mean" in sw and sw["sigma_mean"] > 0:
+                            _print(_fmt("sigma", truth_sigma, sw["sigma_mean"], sw.get("sigma_sd")))
+                        if "onset_mean" in sw and sw["onset_mean"] > 0:
+                            _print(_fmt("onset", slice_truth_onset, sw["onset_mean"], sw.get("onset_sd")))
+
+                    sc = slices.get(ctx_key_c, {})
+                    if sc:
+                        _ca, _cb = sc.get("alpha", 0), sc.get("beta", 0)
+                        scp = _ca / (_ca + _cb) if (_ca + _cb) > 0 else 0
+                        prov = sc.get("provenance", "?")
+                        _print(f"    {ctx_key_c} [{prov}]:")
+                        _print(_fmt("p", slice_truth_p, scp))
 
     _print(f"\n{'=' * 60}")
     if result.get("status") == "complete" or result.get("edges_fitted", 0) > 0:
@@ -978,6 +1247,7 @@ def main():
     _print(f"{'=' * 60}")
 
     log_file.close()
+    archive_file.close()
 
 
 if __name__ == "__main__":

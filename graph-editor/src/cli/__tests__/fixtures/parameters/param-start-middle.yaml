@@ -1,0 +1,35 @@
+# Test fixture: start → middle edge parameter
+# 10 days of data, 1-Jan-26 to 10-Jan-26
+# Daily: n=100 each day, k=40 each day
+# Window total: n=1000, k=400, mean=0.4, stdev=sqrt(0.4*0.6/1000)=0.01549
+#
+# Days 1-5 (1-Jan to 5-Jan): n=100, k=40 each → sub-window n=500, k=200
+# Days 6-10 (6-Jan to 10-Jan): n=100, k=40 each → sub-window n=500, k=200
+#
+# Median lag: 3.0 days each day (constant for simplicity)
+
+id: param-start-middle
+name: Start to Middle
+type: probability
+values:
+  - mean: 0.4
+    n: 1000
+    k: 400
+    n_daily: [100, 100, 100, 100, 100, 100, 100, 100, 100, 100]
+    k_daily: [40, 40, 40, 40, 40, 40, 40, 40, 40, 40]
+    dates: ["1-Jan-26", "2-Jan-26", "3-Jan-26", "4-Jan-26", "5-Jan-26", "6-Jan-26", "7-Jan-26", "8-Jan-26", "9-Jan-26", "10-Jan-26"]
+    median_lag_days: [3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0]
+    mean_lag_days: [3.5, 3.5, 3.5, 3.5, 3.5, 3.5, 3.5, 3.5, 3.5, 3.5]
+    window_from: "1-Jan-26"
+    window_to: "10-Jan-26"
+    sliceDSL: "window(1-Jan-26:10-Jan-26)"
+    forecast: 0.45
+    latency:
+      onset_delta_days: 0.5
+    data_source:
+      type: amplitude
+      retrieved_at: "2026-01-11T10:00:00Z"
+metadata:
+  version: "1.0.0"
+  status: active
+  created_at: "2026-01-01T00:00:00Z"

@@ -71,9 +71,9 @@
       "expected_quality_ok": false, "tol_mu": 0, "tol_sigma": 0
     },
     {
-      "_comment": "mean == median (ratio 1.0): sigma = 0",
+      "_comment": "mean == median (ratio 1.0): degenerate sigma clamped to default",
       "median_lag": 3, "mean_lag": 3, "total_k": 200,
-      "expected_mu": 1.0986122886681098, "expected_sigma": 0.0,
+      "expected_mu": 1.0986122886681098, "expected_sigma": 0.5,
       "expected_quality_ok": true, "tol_mu": 1e-12, "tol_sigma": 1e-12
     },
     {

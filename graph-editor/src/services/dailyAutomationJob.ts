@@ -20,7 +20,189 @@ import { workspaceService } from './workspaceService';
 import { APP_VERSION } from '../version';
 import { db } from '../db/appDatabase';
 import { fileRegistry } from '../contexts/TabContext';
+import { formatDateUK } from '../lib/dateFormat';
 import type { RepositoryItem, GraphData, ViewMode } from '../types';
+
+/** Interval (ms) between periodic log commits to the data repo. */
+const LOG_COMMIT_INTERVAL_MS = 10 * 60_000; // 10 minutes
+
+// ---------------------------------------------------------------------------
+// Heap / memory diagnostic — Chromium-only (performance.memory).
+// Written into the git-persisted automation log on each 10-min commit so we
+// can see memory growth over the full multi-hour run.
+// ---------------------------------------------------------------------------
+
+interface SysDiag {
+  kind: 'sysdiag';
+  ts_ms: number;
+  ts_iso: string;
+  elapsedMinutes: number;
+  snapshotIndex: number;
+
+  // ---- V8 heap (Chromium-only) ----
+  heap: {
+    usedMB: number;
+    totalMB: number;
+    limitMB: number;
+    deltaMB: number | null;       // change since previous snapshot
+    growthFromBaselineMB: number;  // change since run start
+  } | null;
+
+  // ---- Session log accumulation ----
+  sessionLog: {
+    topLevelEntries: number;
+    /** Estimated total including children (cheap walk). */
+    totalEntriesDeep: number;
+    activeOperations: number;
+  };
+
+  // ---- FileRegistry ----
+  fileRegistry: {
+    totalFiles: number;
+    /** Per-type breakdown: { graph: 2, parameter: 31, ... } */
+    byType: Record<string, number>;
+    /** Estimated in-memory size of the 5 largest files (data + originalData). */
+    largestFiles: Array<{
+      fileId: string;
+      type: string;
+      dataSizeKB: number;
+      originalDataSizeKB: number;
+      isDirty: boolean;
+    }>;
+  };
+
+  // ---- IDB ----
+  idb: {
+    fileCount: number | null;
+    automationLogCount: number | null;
+  };
+
+  // ---- DOM ----
+  dom: {
+    nodeCount: number | null;
+  };
+}
+
+let _heapBaselineUsedMB: number | null = null;
+let _heapPrevUsedMB: number | null = null;
+let _snapshotIndex = 0;
+
+/** Estimate the JSON-serialised size of an object in KB without allocating a full string. */
+function estimateSizeKB(obj: unknown): number {
+  if (obj === null || obj === undefined) return 0;
+  try {
+    // Use a replacer that counts characters via a side-effect counter.
+    // JSON.stringify still allocates the string, but this is bounded to the
+    // 5 largest files and only runs every 10 minutes.
+    const s = JSON.stringify(obj);
+    return Math.round(s.length / 1024 * 10) / 10;
+  } catch {
+    return -1;
+  }
+}
+
+async function takeSysDiag(runStartMs: number): Promise<SysDiag> {
+  const now = Date.now();
+  const toMB = (bytes: number) => Math.round(bytes / 1024 / 1024 * 10) / 10;
+
+  // ---- Heap ----
+  let heap: SysDiag['heap'] = null;
+  try {
+    const mem = (performance as any).memory;
+    if (mem) {
+      const usedMB = toMB(mem.usedJSHeapSize);
+      const totalMB = toMB(mem.totalJSHeapSize);
+      const limitMB = toMB(mem.jsHeapSizeLimit);
+      if (_heapBaselineUsedMB === null) _heapBaselineUsedMB = usedMB;
+      const deltaMB = _heapPrevUsedMB !== null
+        ? Math.round((usedMB - _heapPrevUsedMB) * 10) / 10
+        : null;
+      const growthMB = Math.round((usedMB - _heapBaselineUsedMB) * 10) / 10;
+      _heapPrevUsedMB = usedMB;
+      heap = { usedMB, totalMB, limitMB, deltaMB, growthFromBaselineMB: growthMB };
+    }
+  } catch { /* best effort */ }
+
+  // ---- Session log ----
+  let topLevelEntries = 0;
+  let totalEntriesDeep = 0;
+  let activeOperations = 0;
+  try {
+    const entries = sessionLogService.getEntries();
+    topLevelEntries = entries.length;
+    totalEntriesDeep = entries.reduce(
+      (n: number, e: any) => n + 1 + (Array.isArray(e.children) ? e.children.length : 0), 0);
+    // activeOperations is private — approximate via entries with children but no endTime/duration.
+    activeOperations = entries.filter(
+      (e: any) => Array.isArray(e.children) && e.context?.duration === undefined).length;
+  } catch { /* best effort */ }
+
+  // ---- FileRegistry ----
+  let totalFiles = 0;
+  const byType: Record<string, number> = {};
+  const largestFiles: SysDiag['fileRegistry']['largestFiles'] = [];
+  try {
+    const allFiles = fileRegistry.getAllFiles();
+    totalFiles = allFiles.length;
+    // Type breakdown
+    for (const f of allFiles) {
+      const t = (f as any).type || 'unknown';
+      byType[t] = (byType[t] || 0) + 1;
+    }
+    // Find the 5 largest files by data size (quick estimate on a subset).
+    // Sort by a rough heuristic (files with more nodes/values/schedules are bigger).
+    const scored = allFiles.map((f: any) => {
+      const d = f.data;
+      const rough = (d?.nodes?.length || 0) * 500
+        + (d?.edges?.length || 0) * 500
+        + (d?.values?.length || 0) * 200
+        + (d?.schedules?.length || 0) * 200
+        + (d?.canvasAnalyses?.length || 0) * 1000;
+      return { file: f, rough };
+    }).sort((a, b) => b.rough - a.rough).slice(0, 5);
+
+    for (const { file: f } of scored) {
+      largestFiles.push({
+        fileId: (f as any).fileId,
+        type: (f as any).type || 'unknown',
+        dataSizeKB: estimateSizeKB((f as any).data),
+        originalDataSizeKB: estimateSizeKB((f as any).originalData),
+        isDirty: !!(f as any).isDirty,
+      });
+    }
+  } catch { /* best effort */ }
+
+  // ---- IDB counts (async, best-effort) ----
+  let idbFileCount: number | null = null;
+  let idbAutomationLogCount: number | null = null;
+  try {
+    idbFileCount = await db.files.count();
+  } catch { /* best effort */ }
+  try {
+    idbAutomationLogCount = await db.automationRunLogs.count();
+  } catch { /* best effort */ }
+
+  // ---- DOM ----
+  let domNodeCount: number | null = null;
+  try {
+    if (typeof document !== 'undefined') {
+      domNodeCount = document.querySelectorAll('*').length;
+    }
+  } catch { /* best effort */ }
+
+  return {
+    kind: 'sysdiag',
+    ts_ms: now,
+    ts_iso: new Date(now).toISOString(),
+    elapsedMinutes: Math.round((now - runStartMs) / 60_000 * 10) / 10,
+    snapshotIndex: _snapshotIndex++,
+    heap,
+    sessionLog: { topLevelEntries, totalEntriesDeep, activeOperations },
+    fileRegistry: { totalFiles, byType, largestFiles },
+    idb: { fileCount: idbFileCount, automationLogCount: idbAutomationLogCount },
+    dom: { nodeCount: domNodeCount },
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Context store — written by the hook, read by the job runFn
@@ -211,6 +393,92 @@ async function runDailyAutomation(ctx: JobContext): Promise<void> {
   const logStartIndex = sessionLogService.getEntries().length;
   let repoForLog = 'unknown';
   let branchForLog = 'unknown';
+  let logCommitAborted = false;
+  const logFilename = `retrieve-all-${formatDateUK(new Date())}.json`;
+
+  /** Snapshot current run entries and commit to repo. Best-effort. */
+  const commitLogSnapshot = async () => {
+    if (repoForLog === 'unknown') return;
+    try {
+      const allEntries = sessionLogService.getEntries();
+      const runEntries = allEntries.slice(logStartIndex);
+
+      // Append sysdiag snapshot as a synthetic entry so it appears in the
+      // git-persisted log only (not in the session log UI or IDB).
+      try {
+        const diag = await takeSysDiag(waitStartedAt);
+        runEntries.push(diag as any);
+      } catch { /* best effort — never block log commit */ }
+
+      await automationLogService.commitLogToRepo({
+        repository: repoForLog,
+        branch: branchForLog,
+        filename: logFilename,
+        log: {
+          runId: `retrieveall:${waitStartedAt}`,
+          timestamp: waitStartedAt,
+          graphs: targetGraphNames,
+          outcome: 'in-progress',
+          appVersion: APP_VERSION,
+          repository: repoForLog,
+          branch: branchForLog,
+          durationMs: Date.now() - waitStartedAt,
+          entries: runEntries,
+        },
+      });
+    } catch (e) {
+      console.warn('[dailyAutomationJob] Periodic log commit failed:', e);
+    }
+  };
+
+  // ---------------------------------------------------------------------------
+  // Progressive flush — write log state to IDB every 60s so a crash/kill
+  // doesn't lose hours of diagnostic context.  The timer is silent: no session
+  // log entries on each tick.  Only writes when new entries have appeared.
+  // ---------------------------------------------------------------------------
+  const FLUSH_INTERVAL_MS = 60_000;
+  const runId = `retrieveall:${waitStartedAt}`;
+  let lastFlushedEntryCount = 0;
+  let progressiveFlushTimer: ReturnType<typeof setInterval> | null = null;
+
+  const countEntriesDeep = (entries: any[]): number =>
+    entries.reduce((n, e) => n + 1 + (e.children?.length ?? 0), 0);
+
+  const doProgressiveFlush = async () => {
+    try {
+      const allEntries = sessionLogService.getEntries();
+      const runEntries = allEntries.slice(logStartIndex);
+      const totalCount = countEntriesDeep(runEntries);
+      if (totalCount === lastFlushedEntryCount) return; // no change
+      lastFlushedEntryCount = totalCount;
+      await automationLogService.progressiveFlush({
+        runId,
+        timestamp: waitStartedAt,
+        graphs: targetGraphNames,
+        outcome: 'running',
+        appVersion: APP_VERSION,
+        repository: repoForLog,
+        branch: branchForLog,
+        durationMs: Date.now() - waitStartedAt,
+        entries: runEntries,
+      });
+    } catch { /* best effort — never let flush errors interrupt the run */ }
+  };
+
+  const startProgressiveFlush = () => {
+    sessionLogService.info('session', 'PROGRESSIVE_LOG_FLUSH_ENABLED',
+      `Progressive log writes enabled (every ${FLUSH_INTERVAL_MS / 1000}s) — runId: ${runId}`);
+    // Initial flush: create the 'running' record in IDB immediately.
+    void doProgressiveFlush();
+    progressiveFlushTimer = setInterval(doProgressiveFlush, FLUSH_INTERVAL_MS);
+  };
+
+  const stopProgressiveFlush = () => {
+    if (progressiveFlushTimer != null) {
+      clearInterval(progressiveFlushTimer);
+      progressiveFlushTimer = null;
+    }
+  };
 
   try {
     setAutomationTitle('starting');
@@ -255,6 +523,17 @@ async function runDailyAutomation(ctx: JobContext): Promise<void> {
     const branchFinal = automationCtx.selectedBranch || 'main';
     repoForLog = repoFinal;
     branchForLog = branchFinal;
+
+    // Start periodic log commit loop (wall-clock based, not setInterval).
+    // Uses absolute deadlines so browser throttling of background tabs can't
+    // cause drift or missed commits.
+    void (async () => {
+      while (!logCommitAborted) {
+        await sleepUntilDeadline(LOG_COMMIT_INTERVAL_MS);
+        if (logCommitAborted) break;
+        await commitLogSnapshot();
+      }
+    })();
 
     // -----------------------------------------------------------------------
     // Upfront pull (remote wins) — ALWAYS, both enumeration and explicit mode.
@@ -344,6 +623,9 @@ async function runDailyAutomation(ctx: JobContext): Promise<void> {
       logTabId = (await sessionLogService.openLogTab()) ?? undefined;
       if (logTabId) reassertTabFocus(logTabId, [0, 50, 200, 750]);
     } catch { /* best effort */ }
+
+    // Begin progressive log flushing now that we know the target graphs.
+    startProgressiveFlush();
 
     // Start delay (countdown).
     const startDelayMs = getStartDelayMs();
@@ -574,6 +856,8 @@ async function runDailyAutomation(ctx: JobContext): Promise<void> {
       `Automation crashed: ${msg}`, stack);
     // Do NOT re-throw — let the finally block persist the log with the error.
   } finally {
+    stopProgressiveFlush();
+    logCommitAborted = true;
     document.title = originalTitle;
 
     // Clean URL params.
@@ -584,7 +868,9 @@ async function runDailyAutomation(ctx: JobContext): Promise<void> {
       window.history.replaceState({}, document.title, url.toString());
     } catch { /* best effort */ }
 
-    // Persist automation run log and auto-close window.
+    // Final persist — overwrites the progressive 'running' record with the
+    // definitive outcome. This is the same record (same runId) so there is
+    // no duplication.
     try {
       const allEntries = sessionLogService.getEntries();
       const runEntries = allEntries.slice(logStartIndex);
@@ -610,8 +896,8 @@ async function runDailyAutomation(ctx: JobContext): Promise<void> {
         outcome = 'success';
       }
 
-      await automationLogService.persistRunLog({
-        runId: `retrieveall:${waitStartedAt}`,
+      const runLog = {
+        runId,
         timestamp: waitStartedAt,
         graphs: targetGraphNames,
         outcome,
@@ -620,20 +906,33 @@ async function runDailyAutomation(ctx: JobContext): Promise<void> {
         branch: branchForLog,
         durationMs: Date.now() - waitStartedAt,
         entries: runEntries,
-      });
+      };
+
+      // Persist to IDB (primary safety net).
+      await automationLogService.persistRunLog(runLog);
+
+      // Final commit to git repo (best-effort).
+      if (repoForLog !== 'unknown') {
+        await automationLogService.commitLogToRepo({
+          repository: repoForLog,
+          branch: branchForLog,
+          filename: logFilename,
+          log: runLog,
+        });
+      }
 
       const closeDelayMs = getCloseDelayMs(outcome);
 
       if (closeDelayMs === Infinity) {
         sessionLogService.info('session', 'AUTOMATION_WINDOW_KEPT_OPEN',
           '?noclose: window will remain open for inspection',
-          'Logs have been persisted to IndexedDB. Run dagnetAutomationLogs() in the console to review past runs.');
+          'Logs persisted to IndexedDB and git repo.');
       } else {
         const closeDelayLabel = outcome === 'success' ? '10 seconds' : `${Math.round(closeDelayMs / 60_000)} minutes`;
 
         sessionLogService.info('session', 'AUTOMATION_WINDOW_CLOSE',
           `Automation finished (${outcome}) — closing browser window in ${closeDelayLabel}`,
-          'Logs have been persisted to IndexedDB. Run dagnetAutomationLogs() in the console to review past runs.');
+          'Logs persisted to IndexedDB and git repo.');
 
         await sleepUntilDeadline(closeDelayMs);
         try { window.close(); } catch { /* best effort */ }

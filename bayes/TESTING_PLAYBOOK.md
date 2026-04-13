@@ -38,22 +38,31 @@ python bayes/test_harness.py --graph branch --no-webhook --timeout 900  # comple
 # ── Feature flag A/B (no code changes) ──
 python bayes/test_harness.py --graph X --feature latent_onset=false
 python bayes/test_harness.py --graph X --feature overdispersion=false
+python bayes/test_harness.py --graph X --feature jax_backend=true   # JAX compilation (fast)
 
 # ── Parameter recovery (single graph) ──
 python bayes/param_recovery.py --graph synth-simple-abc          # 2-step (~270s)
 python bayes/param_recovery.py --graph synth-mirror-4step        # 4-step (~130s)
 python bayes/param_recovery.py --graph synth-simple-abc --chains 3 --cores 3  # reduced core budget
+python bayes/param_recovery.py --graph synth-fanout-context --feature jax_backend=true  # contexted
+python bayes/param_recovery.py --graph synth-diamond-context \
+  --phase2-from-dump /tmp/bayes_debug-graph-synth-diamond-context \
+  --feature jax_backend=true --chains 2 --draws 500 --tune 1000 --timeout 0  # Phase 2 replay
 # Reads .truth.yaml, runs MCMC, prints structured truth vs posterior comparison.
 # NOT for production data — use test_harness.py directly.
+# --clean: clear __pycache__ only. --rebuild: also delete .synth-meta.json (heavy DB re-insert).
+# --phase2-from-dump: skip Phase 1, load artefacts from dump dir, run Phase 2 only.
 
 # ── Regression suite (preferred — discovery, bootstrap, core-aware parallel, assertions) ──
 python bayes/run_regression.py                                   # full suite, all discovered graphs
 python bayes/run_regression.py --graph synth-fanout-test         # single graph
 python bayes/run_regression.py --preflight-only                  # check data integrity only
 python bayes/run_regression.py --chains 2 --max-parallel 4       # override core budget
+python bayes/run_regression.py --include context --max-parallel 1 --feature jax_backend=true --no-timeout
 # Auto-discovers synth-*.truth.yaml, bootstraps missing data, manages
 # parallel execution with core awareness, asserts z-score recovery.
 # Writes to /tmp/bayes_harness-{graph}.log — bayes-monitor compatible.
+# --no-timeout: disable all timeout layers (for large/novel graphs).
 
 # ── Monitor active runs ──
 scripts/bayes-monitor.sh                                         # auto-discover active runs
@@ -406,6 +415,17 @@ to hand-craft graph JSON or entity files.
 - **Slow-latency trajectory density**: truth mu > 2.0 produces 50-80
   ages per trajectory after dedup, causing long compilation and slow
   sampling. Truth files use mu ≤ 1.5 where possible.
+- **Latency posterior SDs overstate predictive certainty** (9-Apr-26):
+  `mu_sd`, `sigma_sd`, `onset_sd` are raw MCMC posterior SDs — they
+  measure parameter estimation precision, not predictive spread.
+  With many trajectories, these shrink to ±0.005 (mu) or ±0.010
+  (onset), implying we can predict conversion timing to sub-day
+  precision. In reality, individual conversion times vary with
+  spread `sigma` (the LogNormal scale parameter). The fix: derive
+  predictive latency uncertainty that incorporates sigma, analogous
+  to how predictive p incorporates kappa via `Beta(p*κ, (1-p)*κ)`.
+  Applies to both uncontexted and per-slice latency posteriors.
+  Pre-existing issue — not specific to Phase C.
 
 ---
 

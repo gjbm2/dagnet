@@ -126,37 +126,106 @@ at runtime.
 
 ```bash
 . graph-editor/venv/bin/activate
-cd bayes
 
 # Dry run (verify topology, no writes)
-python synth_gen.py --graph {name} --dry-run
+python bayes/synth_gen.py --graph {name} --dry-run
 
 # Full generation (DB + files)
-python synth_gen.py --graph {name} --write-files
+python bayes/synth_gen.py --graph {name} --write-files
 
 # With options
-python synth_gen.py --graph {name} --write-files \
+python bayes/synth_gen.py --graph {name} --write-files \
   --people 10000 --days 200 --kappa 20 --drift 0.02 --growth 0.05
 ```
 
-**What `--write-files` does**:
-1. Runs Monte Carlo simulation (with burn-in warm-up)
-2. Writes snapshot rows to DB (window + cohort, both hashes)
-3. Updates graph JSON (structural fields only)
-4. Writes parameter YAML files (with empirical lag stats)
-5. Updates parameters-index.yaml
-6. Sets simulation guard (simulation=true, dailyFetch=false, pinnedDSL)
+### 3.1 Pipeline steps
 
-### 3.1 Verify hash parity
+The generator pipeline is strictly ordered. Each step depends on
+artefacts from previous steps.
+
+**Step 0 — Monte Carlo simulation** (always runs):
+- Reads truth file and graph topology
+- Simulates daily user cohorts with known parameters
+- For contexted graphs: allocates users across context values by
+  weight, applies per-slice `p_mult`/`mu_offset`/`onset_offset`
+- Produces in-memory snapshot rows (not yet hashed)
+
+**Step 1 — Update graph structural metadata** (`--write-files` only):
+- Writes `query`, `latency_parameter`, `cohort_anchor_event_id`
+  on graph edges
+- Sets simulation guard (`simulation=true`, `dailyFetch=false`,
+  `dataInterestsDSL` with context qualifiers if applicable)
+
+**Step 1b — Write context definitions** (contexted graphs only):
+- Reads `context_dimensions` from truth file
+- Writes `contexts/{dim-id}.yaml` with correct `otherPolicy`
+  (`"null"` for MECE, `"undefined"` otherwise)
+- Must happen before Step 2 because context definitions affect
+  the core_hash computation
+
+**Step 2 — Compute FE-authoritative hashes** (always runs):
+- Calls the CLI (`graph-editor/src/cli/bayes.ts`) twice: once
+  with `window(…)` DSL, once with `cohort(…)` DSL
+- Each call uses the full FE service layer: `loadGraphFromDisk`
+  → `seedFileRegistry` → `buildFetchPlanProduction` →
+  `mapFetchPlanToSnapshotSubjects` → `computeQuerySignature`
+- Returns `{edge_uuid → core_hash}` for window and cohort
+  separately, mapped to param_ids via the graph edge structure
+- Creates a temp directory with the graph JSON (DSL overridden)
+  and symlinks to the data repo's supporting dirs
+
+**Step 3 — Write to snapshot DB** (when `DB_CONNECTION` available):
+- Re-hashes in-memory snapshot rows with the authoritative hashes
+  from Step 2
+- Calls `write_to_snapshot_db()` with workspace prefix
+
+**Step 4 — Write parameter files** (`--write-files` only):
+- Writes parameter YAML files with empirical lag stats
+- Updates `parameters-index.yaml`
+
+**Step 5 — Verify DB data** (when DB available):
+- Queries DB with the same hashes and confirms data exists
+- Sanity check that the round-trip is clean
+
+**Synth-meta sidecar** — writes `.synth-meta.json` alongside the
+graph JSON, recording truth hash, generation timestamp, row count,
+and per-edge hashes. Used for integrity checking.
+
+### 3.2 Hash computation architecture
+
+**Single source of truth**: all hashes are computed via the CLI
+(`bayes.ts`), which uses the real FE service layer. This guarantees
+hashes match what the FE would send in a live Bayes commission.
+
+**Why not `compute_snapshot_subjects.mjs`**: an earlier Node.js
+script (`bayes/compute_snapshot_subjects.mjs`) hand-rolled hash
+computation that diverged from the real FE code in multiple ways:
+different event definition loading rules, different YAML date
+handling (`js-yaml` default vs `JSON_SCHEMA`), hardcoded
+visited/exclude arrays. This produced hashes that didn't match the
+CLI or FE, causing persistent data-not-found failures. The
+generator now bypasses this script entirely.
+
+**Hash-affecting inputs**: the core_hash depends on graph edge
+structure (from/to event IDs, connection name), event definitions
+(provider_event_names), context definitions (normalised and hashed),
+and query normalisation. Changing ANY of these invalidates existing
+DB data — regeneration required.
+
+**Context definitions affect hashes**: the `otherPolicy` field on
+a context YAML is included in the context definition hash. A
+mismatch between `otherPolicy: none` and `otherPolicy: "null"`
+produces different hashes. The generator writes context files from
+the truth file to prevent this class of mismatch.
+
+### 3.3 Verify hash parity
+
+After generation, verify FE hash computation matches DB:
 
 ```bash
 cd graph-editor
 npm test -- --run src/services/__tests__/synthHashParity.test.ts
 ```
-
-This runs the FE's `computeCurrentSignatureForEdge` against the synth
-graph and verifies the computed hashes match what's in the param files
-and DB.
 
 ---
 
@@ -253,8 +322,106 @@ Alternatively, trigger a Bayes fit from the FE:
 
 | Name | Topology | Edges | Purpose |
 |------|----------|-------|---------|
-| `simple` | A→B→C linear | 2 | Basic recovery, no joins |
-| `diamond` | A→{B,C}→D→E | 6 | Splits, joins, branch groups |
+| `simple-abc` | A→B→C linear | 2 | Basic recovery, solo edges, no joins |
+| `fanout-test` | Anchor→Gate→{Fast,Slow} | 3 | Branch group Dirichlet, uncontexted |
+| `context-solo` | Anchor→Target (solo, MECE context) | 1 | Phase C: per-slice p/kappa/latency, solo edge |
+| `fanout-context` | Anchor→Gate→{Fast,Slow} (MECE context) | 3 | Phase C: per-slice Dirichlet, branch group |
+| `diamond-test` | A→{B,C}→D→E | 6 | Splits, joins, branch groups |
+| `skip-test` | Linear with skip edge | 3 | Non-adjacent edges |
+| `3way-join-test` | Three paths joining | 5 | Multiple join points |
+| `join-branch-test` | Branch + join | 4 | Branch group with downstream join |
+| `lattice-test` | 2×2 lattice | 4 | Multiple paths, shared nodes |
+| `mirror-4step` | 4-step linear | 4 | Deep path latency accumulation |
+
+Graphs prefixed `synth-` in `nous-conversion/graphs/`. Each has a `.truth.yaml`
+sidecar, a `.synth-meta.json` (written by the generator), and supporting
+event/node/context/parameter files in the data repo.
+
+---
+
+## 6b. Contexted Synthetic Graphs (Phase C)
+
+Phase C graphs test per-slice modelling. They extend the truth file
+with context dimensions that define how conversion rates vary by
+segment.
+
+### 6b.1 Truth file extensions for context
+
+```yaml
+emit_context_slices: true
+
+context_dimensions:
+  - id: synth-channel
+    mece: true
+    values:
+      - id: google
+        label: Google
+        weight: 0.60          # traffic share
+        sources:
+          amplitude:
+            field: utm_medium
+            filter: utm_medium == 'google'
+        edges:
+          {edge-param-id}:
+            p_mult: 1.22       # per-slice p = base_p * p_mult
+            mu_offset: -0.3    # per-slice mu = base_mu + mu_offset
+            onset_offset: -0.3 # per-slice onset = base_onset + onset_offset
+```
+
+- `emit_context_slices: true` tells the generator to produce
+  context-qualified snapshot rows (e.g.
+  `context(synth-channel:google).window()`)
+- `mece: true` means the values are mutually exclusive and collectively
+  exhaustive — all traffic is assigned to exactly one value
+- `weight` controls traffic allocation across values (must sum to 1.0)
+- `p_mult` scales the base edge probability per slice (simplex
+  maintained for branch groups)
+- `mu_offset` / `onset_offset` shift latency parameters per slice
+
+### 6b.2 Context definition files
+
+The generator writes context YAML files to `contexts/` in Step 1b,
+derived from the truth file. When `mece: true`, the context definition
+gets `otherPolicy: "null"` — this is how the FE identifies MECE
+dimensions for the `mece_dimensions` payload field.
+
+Previously context files were created manually. This caused hash
+mismatches when the `otherPolicy` value was wrong (e.g. `none` instead
+of `null`), because the context definition hash is part of the
+core_hash computation.
+
+### 6b.3 What the generator produces for contexted graphs
+
+For a graph with 1 MECE dimension × 3 context values:
+
+- **Snapshot rows**: each `(anchor_day, retrieved_at)` produces 3
+  context-qualified rows per obs type (e.g.
+  `context(synth-channel:google).window()`). No bare aggregate rows.
+- **MECE aggregation**: the evidence binder sums the 3 context rows
+  per `(anchor_day, retrieved_at)` to recover the aggregate — this
+  only happens when `mece_dimensions` declares the dimension MECE.
+- **Context file**: `contexts/synth-channel.yaml` with
+  `otherPolicy: "null"`.
+- **Graph DSL**: `(window(…);cohort(…))(context(synth-channel))` — the
+  FE explodes this into per-context subjects.
+
+### 6b.4 Control vs treatment testing
+
+The definitive test for the commissioning contract: run the same
+graph twice via `--fe-payload`, varying ONLY the pinnedDSL:
+
+1. **Control**: strip context from DSL → `window(…);cohort(…)`.
+   Context rows in DB are aggregated via MECE into parent.
+   Model produces parent-only vars. No per-slice Multinomials.
+
+2. **Treatment**: original DSL with context → `(window(…);cohort(…))(context(…))`.
+   FE commissions per-slice subjects. Model produces parent + per-slice
+   vars. Per-slice DirichletMultinomials emitted.
+
+Both use the same data, same graph, same hashes. The ONLY difference
+is the `dataInterestsDSL`. Build the control by copying the graph
+JSON to a temp directory with the stripped DSL (symlink supporting
+dirs).
 
 ---
 
@@ -273,3 +440,8 @@ Alternatively, trigger a Bayes fit from the FE:
 | `Missing X%` on every node | No complement edges to absorbing node | Add dropout edges from every non-absorbing node |
 | Handles not connecting | Wrong handle format | Source: `{dir}-out`, Target: `{dir}` (no -out) |
 | Pull gate blocking updates | IDB holding stale graph version | Force Full Reload, or close and reopen workspace |
+| `--fe-payload` returns 0 rows | CLI hashes don't match DB | Regenerate with `--write-files` — hashes depend on graph+events+contexts on disk. Any change invalidates. |
+| `mece_dimensions` empty in payload | Context YAML has `otherPolicy: none` instead of `"null"` | Regenerate — Step 1b writes correct `otherPolicy` from truth `mece: true` |
+| Context rows skipped as "non-MECE" | `mece_dimensions` not populated in payload | Check `otherPolicy` in context YAML. Must be `"null"` or `"computed"` for MECE. Generator handles this automatically. |
+| Per-slice posteriors identical to parent | Branch group Multinomials not emitted per-slice | Fixed 10-Apr-26. Check `obs_bg_*__context(*)` in OBSERVED RVs section of model summary. |
+| `dataInterestsDSL` missing after gen | Ran without `--write-files` after a previous run wiped it | Always run with `--write-files` for the final generation pass |

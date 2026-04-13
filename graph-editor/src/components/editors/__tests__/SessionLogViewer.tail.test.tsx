@@ -3,7 +3,7 @@
  */
 
 import React from 'react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, act } from '@testing-library/react';
 
 import { sessionLogService } from '../../../services/sessionLogService';
@@ -11,7 +11,12 @@ import { SessionLogViewer } from '../SessionLogViewer';
 
 describe('SessionLogViewer tail mode', () => {
   beforeEach(() => {
+    vi.useFakeTimers();
     sessionLogService.clear();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it('keeps tail enabled and scrolls to bottom when new entries arrive', async () => {
@@ -34,6 +39,8 @@ describe('SessionLogViewer tail mode', () => {
 
     await act(async () => {
       sessionLogService.info('session', 'T1', 'First');
+      // Advance past the 200ms throttle so the viewer picks up the entry
+      vi.advanceTimersByTime(250);
     });
 
     // Tail should have scrolled us to the bottom.
@@ -56,11 +63,10 @@ describe('SessionLogViewer tail mode', () => {
 
     await act(async () => {
       sessionLogService.info('session', 'T2', 'Second');
+      vi.advanceTimersByTime(250);
     });
 
     // Because user scrolled up, we do NOT auto-scroll; we keep position until they jump.
     expect(entriesEl.scrollTop).toBe(0);
   });
 });
-
-

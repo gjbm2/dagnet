@@ -115,6 +115,68 @@ Currently `analytic` wins by default. The transition plan makes `analytic_be` th
 
 **Feature flag**: `FORECASTING_PARALLEL_RUN = true` in `forecastingParityService.ts`
 
+## Heuristic dispersion SDs
+
+When Bayes has not run, the analytic stats pass produces heuristic
+uncertainty estimates so downstream consumers (fan chart, confidence
+bands) have non-zero envelopes. Implemented in both FE and BE with
+edge-level parity at 1e-9 (Vector 6 contract test).
+
+**Edge-level** (`stats_engine.py:608-650`, FE equivalent in
+`statisticalEnhancementService.ts`):
+
+| Field | Derivation | Section |
+|-------|-----------|---------|
+| `p_sd` | Beta-binomial SD: `sqrt(p*(1-p)*(1+kappa)/(n+1))` | §3.1 |
+| `mu_sd` | Normalised moment: `sigma / sqrt(2*n_converters)` | §3.2 |
+| `sigma_sd` | Default-safe scale: `sigma / sqrt(2*n_converters)` | §3.3 |
+| `onset_sd` | Onset constraint: `max(1.0, onset * 0.15)` | §3.4 |
+| `onset_mu_corr` | Fixed correlation: `-0.5` (onset↔mu anti-correlation) | §3.5 |
+
+**Path-level** (`stats_engine.py:1038-1044`): quadrature sum
+propagation — `path_mu_sd = sqrt(mu_sd^2 + upstream_mu_sd^2)`,
+same for `sigma_sd` and `onset_sd`.
+
+**FE consumption**: `confidence_bands.py:70,103` builds a 4x4
+covariance matrix from these 5 fields for MC band generation.
+
+Design: `project-bayes/archive/heuristic-dispersion-design.md`.
+
+## Promoted fields (production/consumption separation)
+
+Model output writes to `promoted_*` fields to avoid overwriting
+user-configured values:
+
+| User field | Model output field | Fallback |
+|------------|-------------------|----------|
+| `latency.t95` | `latency.promoted_t95` | `promoted_t95 ?? t95` |
+| `latency.onset_delta_days` | `latency.promoted_onset_delta_days` | `promoted_onset ?? onset` |
+
+Defined in `graph_types.py:72-74`. FE consumers use fallback chains
+(e.g. `localAnalysisComputeService.ts:417,576,623`).
+
+## CLI topo pass
+
+The CLI (`src/cli/commands/analyse.ts`) has a `--topo-pass` flag that
+calls the same BE `/api/lag/topo-pass` endpoint. This is necessary
+because the FE topo pass (Stage 2 of the fetch pipeline) does not run
+in Node — `getParameterFromFile` calls `fileRegistry.restoreFile()`
+which hits IDB, and IDB is unavailable in the CLI's Node environment.
+The fetch pipeline fails silently, leaving `model_vars` and
+`promoted_*` fields unpopulated.
+
+The CLI workaround builds `cohort_data` directly from
+`bundle.parameters` (parameter YAML files loaded from disk by
+`diskLoader.ts`), converts per-day parallel arrays into per-date
+`CohortData` records, and sends them alongside the graph to the BE
+topo pass endpoint. The returned per-edge stats are written as
+`promoted_*` fields onto the base graph before analysis dispatch.
+
+This is functionally equivalent to the browser path (FE topo pass →
+`applyPromotion`) but bypasses IDB entirely. The stats engine
+receives the same inputs and produces the same outputs — only the
+transport layer differs.
+
 ## Key files
 
 | File | Role |
@@ -126,3 +188,4 @@ Currently `analytic` wins by default. The transition plan makes `analytic_be` th
 | `src/services/modelVarsResolution.ts` | Preference hierarchy for model_vars |
 | `lib/runner/stats_engine.py` | BE topo pass implementation (Python port of FE) |
 | `lib/api_handlers.py` | `/api/lag/topo-pass` endpoint handler |
+| `src/cli/commands/analyse.ts` | CLI `--topo-pass` flag (builds cohort_data from disk, calls BE) |
