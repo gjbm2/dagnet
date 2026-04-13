@@ -14,8 +14,7 @@ for f in /tmp/bayes_harness-*.log; do
         rm -f "$lock" 2>/dev/null
     fi
     rm -f "$f" 2>/dev/null
+    rm -f "/tmp/_bayes_tail_${name}.sh" 2>/dev/null
     cleared=$((cleared + 1))
 done
-# Also clean up the initial graphs list so status loop stops showing them
-: > /tmp/_bayes_monitor_initial_graphs 2>/dev/null
 echo "Cleared ${cleared} finished log(s)."

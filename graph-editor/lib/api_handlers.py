@@ -3724,8 +3724,59 @@ def handle_stats_topo_pass(data: Dict[str, Any]) -> Dict[str, Any]:
             }, _f, indent=2)
         print(f'[lag/topo-pass] Golden fixture written to {fixture_path}')
 
+    # ── Compute ForecastState per edge (doc 29 Phase 2) ─────────────
+    from runner.model_resolver import resolve_model_params
+    from runner.forecast_state import compute_forecast_state_window
+
+    edges_by_uuid = {}
+    for e in graph.get('edges', []):
+        eid = str(e.get('uuid', e.get('id', '')))
+        edges_by_uuid[eid] = e
+
+    is_window = query_mode in ('window', 'none')
+
     edges_out = []
     for ev in result.edge_values:
+        edge_dict = edges_by_uuid.get(ev.edge_uuid)
+
+        # Compute ForecastState if edge has model params
+        fs_dict = None
+        if edge_dict is not None:
+            scope = 'edge' if is_window else 'path'
+            temporal = 'window' if is_window else 'cohort'
+            resolved = resolve_model_params(edge_dict, scope=scope,
+                                            temporal_mode=temporal)
+            if resolved and resolved.latency.sigma > 0:
+                # Build cohort ages+weights from the parsed cohort data
+                cohorts_raw = param_lookup.get(ev.edge_uuid, [])
+                cohort_ages_and_weights = [
+                    (c.age, c.n) for c in cohorts_raw if c.n > 0 and c.age >= 0
+                ]
+                # Evidence rate from topo pass result
+                evidence_rate = ev.p_evidence if ev.p_evidence else None
+
+                fs = compute_forecast_state_window(
+                    edge_id=ev.edge_uuid,
+                    resolved=resolved,
+                    cohort_ages_and_weights=cohort_ages_and_weights,
+                    evidence_rate=evidence_rate,
+                )
+                fs_dict = {
+                    'edge_id': fs.edge_id,
+                    'source': fs.source,
+                    'fitted_at': fs.fitted_at,
+                    'tier': fs.tier,
+                    'completeness': fs.completeness,
+                    'completeness_sd': fs.completeness_sd,
+                    'rate_unconditioned': fs.rate_unconditioned,
+                    'rate_unconditioned_sd': fs.rate_unconditioned_sd,
+                    'rate_conditioned': fs.rate_conditioned,
+                    'rate_conditioned_sd': fs.rate_conditioned_sd,
+                    'tau_observed': fs.tau_observed,
+                    'mode': fs.mode,
+                    'path_aware': fs.path_aware,
+                }
+
         edges_out.append({
             'edge_uuid': ev.edge_uuid,
             'conditional_index': ev.conditional_index,
@@ -3753,6 +3804,8 @@ def handle_stats_topo_pass(data: Dict[str, Any]) -> Dict[str, Any]:
             'path_mu_sd': ev.path_mu_sd,
             'path_sigma_sd': ev.path_sigma_sd,
             'path_onset_sd': ev.path_onset_sd,
+            # ForecastState (doc 29 Phase 2)
+            'forecast_state': fs_dict,
         })
 
     return {

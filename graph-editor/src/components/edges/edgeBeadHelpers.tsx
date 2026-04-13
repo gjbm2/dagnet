@@ -433,15 +433,26 @@ function getProbabilityBeadValueForLayer(
     }
   }
 
+  // ForecastState-aware stdev (doc 29 Phase 4).
+  // When forecast_state is available from the BE topo pass, use its
+  // composed uncertainty instead of the raw p.stdev / p.forecast.stdev.
+  // E mode is unchanged (binomial sampling SD is already correct).
+  const fs = pForLayer?.forecast_state;
+
   if (mode === 'f') {
+    // F mode: rate_unconditioned_sd includes both p and completeness uncertainty
+    const fStdev = (fs?.rate_unconditioned_sd != null)
+      ? fs.rate_unconditioned_sd
+      : (typeof forecastMean === 'number' ? forecastStdev : stdev);
     return {
       value: (typeof forecastMean === 'number' ? forecastMean : mean) ?? 0,
-      stdev: typeof forecastMean === 'number' ? forecastStdev : stdev,
+      stdev: fStdev,
       prefix: 'F'
     };
   }
 
   if (mode === 'e') {
+    // E mode: unchanged — binomial sampling SD is already correct
     return {
       value: (typeof evidenceMean === 'number' ? evidenceMean : mean) ?? 0,
       stdev: typeof evidenceMean === 'number' ? evidenceStdev : stdev,
@@ -449,8 +460,11 @@ function getProbabilityBeadValueForLayer(
     };
   }
 
-  // F+E (default): show blended p.mean
-  return { value: mean ?? 0, stdev };
+  // F+E (default): rate_conditioned_sd composes all three uncertainty sources
+  const feStdev = (fs?.rate_conditioned_sd != null)
+    ? fs.rate_conditioned_sd
+    : stdev;
+  return { value: mean ?? 0, stdev: feStdev };
 }
 
 function getEdgeCostGBPForLayer(

@@ -156,7 +156,14 @@
       "Bash(git -C nous-conversion status -- parameters/synth-anchor-to-gate.yaml)",
       "Bash(git -C nous-conversion diff -- parameters/synth-anchor-to-gate.yaml)",
       "WebFetch(domain:engineering.fb.com)",
-      "WebFetch(domain:addyosmani.com)"
+      "WebFetch(domain:addyosmani.com)",
+      "Bash(xxd /tmp/bayes-harness-graph-synth-skip-context.lock)",
+      "Bash(bash scripts/bayes-monitor.sh)",
+      "Bash(tmux list-sessions:*)",
+      "Bash(tmux list-panes:*)",
+      "Bash(tmux capture-pane:*)",
+      "Bash(tmux kill-session:*)",
+      "Bash(wait)"
     ],
     "additionalDirectories": [
       "/home/reg/dev/dagnet/.claude",

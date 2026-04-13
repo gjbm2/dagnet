@@ -32,7 +32,7 @@ Each phase has explicit entry gates, exit gates, and the files touched.
 **Entry gate**: Phase A code exists (`cohort_maturity_v2` registered,
 `cohort_forecast_v2.py` implemented, span kernel working).
 
-### 0.1 Single-hop parity gate — PASSED 13-Apr-26
+### 0.1 Single-hop parity gate — PASSED 13-Apr-26 ✓
 
 v1 vs v2 field-by-field on real graph data, window and cohort modes.
 Tests in `test_doc31_parity.py` (`TestCohortMaturityV1V2Parity`).

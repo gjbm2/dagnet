@@ -42,6 +42,22 @@ interface BeTopoEdgeResult {
   path_mu_sd?: number;
   path_sigma_sd?: number;
   path_onset_sd?: number;
+  // ForecastState (doc 29 Phase 2)
+  forecast_state?: {
+    edge_id: string;
+    source: string;
+    fitted_at?: string;
+    tier: string;
+    completeness: number;
+    completeness_sd?: number;
+    rate_unconditioned?: number;
+    rate_unconditioned_sd?: number;
+    rate_conditioned: number;
+    rate_conditioned_sd?: number;
+    tau_observed: number;
+    mode: string;
+    path_aware: boolean;
+  };
 }
 
 /**
@@ -61,7 +77,7 @@ export async function runBeTopoPass(
   lagSliceSource: 'cohort' | 'window' | 'none' = 'cohort',
   /** D5 FIX: FE-computed active edge set so BE skips the same edges. */
   activeEdges?: Set<string>,
-): Promise<Array<{ edgeUuid: string; conditionalIndex?: number; entry: ModelVarsEntry }>> {
+): Promise<Array<{ edgeUuid: string; conditionalIndex?: number; entry: ModelVarsEntry; forecastState?: BeTopoEdgeResult['forecast_state'] }>> {
   const result: Array<{ edgeUuid: string; conditionalIndex?: number; entry: ModelVarsEntry }> = [];
 
   // 1. Aggregate cohort data per edge (same as FE topo pass input)
@@ -308,6 +324,7 @@ export async function runBeTopoPass(
       edgeUuid: edge.edge_uuid,
       conditionalIndex: edge.conditional_index ?? undefined,
       entry,
+      forecastState: edge.forecast_state ?? undefined,
     });
   }
 

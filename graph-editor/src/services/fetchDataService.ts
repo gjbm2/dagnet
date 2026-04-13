@@ -2025,7 +2025,7 @@ export async function runStage2EnhancementsAndInboundN(
             );
             if (beEntries.length > 0 && finalGraph?.edges) {
               let applied = 0;
-              for (const { edgeUuid, conditionalIndex, entry } of beEntries) {
+              for (const { edgeUuid, conditionalIndex, entry, forecastState } of beEntries) {
                 const edge = finalGraph.edges?.find((e: any) => e.uuid === edgeUuid || e.id === edgeUuid);
                 if (!edge) continue;
                 if (conditionalIndex != null) {
@@ -2036,6 +2036,10 @@ export async function runStage2EnhancementsAndInboundN(
                   }
                 } else if (edge.p) {
                   upsertModelVars(edge.p, entry);
+                  // Write ForecastState to edge (doc 29 Phase 2)
+                  if (forecastState) {
+                    edge.p.forecast_state = forecastState;
+                  }
                   applied++;
                 }
               }
