@@ -1,4 +1,13 @@
 # DagNet Release Notes
+## Version 1.10.6b
+**Released:** 14-Apr-26
+
+Scenario seeding from graph JSON — scenarios defined in the graph file are now seeded into IndexedDB on first open, making them portable across machines and enabling
+programmatic scenario creation. Scenarios are also serialised back to the graph JSON on commit, closing the round-trip. Includes PRD, Codex review, and schema parity
+updates.
+
+---
+
 ## Version 1.10.3b
 **Released:** 13-Apr-26
 
