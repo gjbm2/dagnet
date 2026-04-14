@@ -1,7 +1,7 @@
 # Doc 34 — Latency Dispersion: Background, Design, and Implementation
 
 **Date**: 10-Apr-26
-**Updated**: 13-Apr-26
+**Updated**: 14-Apr-26
 **Status**: Implemented (feature-flagged `latency_dispersion`).
 Per-interval BetaBinomial approach. Regression: 10/11 uncontexted
 graphs pass parameter recovery with flag on. Remaining failure
@@ -2055,10 +2055,108 @@ Zero divergences on a 122-dimensional model. ESS=68 is low but
 the graph is genuinely hard. The non-centred version at comparable
 step count would predict ~470s with likely dozens of divergences.
 
-**Next step**: apply centred parameterisation as the default for
-per-slice mu (and test on the (m, a, r) reparam path where the
-same non-centred pattern is used for per-slice m and r offsets).
-Validate on the full contexted regression suite.
+#### 11.11.9 Reparam + centred stacked: negative result (14-Apr-26)
+
+**Hypothesis**: the (m, a, r) reparameterisation (§11.8, fixes
+edge-level onset-mu ridge) and centred per-slice hierarchy (§11.11.8,
+fixes hierarchy eps absorption) are orthogonal fixes that should
+stack.
+
+**Result**: they do NOT stack well. On synth-3way-join-context:
+
+| Config | n_dim | Ph1 time | ESS | Diverg | conv% |
+|--------|-------|----------|-----|--------|-------|
+| Baseline + centred | 122 | 151s | 68 | 0 | 87.5% |
+| **Reparam + centred** | **150** | **218s** | **26** | **92** | **47.5%** |
+
+The reparam adds 28 dimensions (per-slice m and r offsets instead
+of just mu offsets) and produces 92 divergences.
+
+**Mu recovery comparison** (edge-level posteriors vs truth):
+
+| Edge | Truth mu | Baseline+centred | Reparam+centred |
+|------|----------|------------------|-----------------|
+| f065 | 0.600 | 0.532±0.147 | 0.560±0.142 |
+| 3a09 | 1.000 | 1.057±0.202 | **0.558±0.117** |
+| 51d0 | 1.300 | 1.387±0.199 | **1.033±0.062** |
+| 76ed | 0.700 | 0.732±0.154 | **0.178±0.233** |
+| 3833 | 0.900 | 0.969±0.220 | **0.482±0.113** |
+| c07f | 1.000 | 1.115±0.217 | **0.308±0.076** |
+| 38c8 | 0.800 | 0.835±0.175 | **-0.176±0.124** |
+
+The reparam produces badly biased mu posteriors — confidently wrong
+(tight SDs far from truth). The extra per-slice m and r offsets
+absorb signal that should constrain the edge-level mu. With 92
+divergences the sampler is not exploring the posterior properly.
+
+**Onset recovery**: essentially identical between the two configs.
+Both recover onset well because all edges have onset_obs from synth
+Amplitude data. The reparam's per-slice onset variation doesn't
+help when onset_obs already pins the edge-level onset.
+
+**Why the reparam hurts in the contexted case**:
+
+The reparam's value is for **uncontexted** edges where the onset-mu
+ridge is the primary geometry problem. It replaces (onset, mu, sigma)
+with (m, a, r) coordinates that break the ridge — validated in
+§11.8.9.1 (4/4 uncontexted graphs PASS, corr(m,a) down from -0.97
+to -0.26).
+
+For **contexted** edges, the dominant problem is the per-slice
+hierarchy (§11.11.7), not the edge-level ridge. The centred
+parameterisation fixes the hierarchy problem directly. Adding the
+reparam on top introduces per-slice m and r offsets (2S extra params
+per edge vs S for mu-only) that:
+
+1. Increase n_dim by 23% (122 → 150)
+2. Create additional hierarchy levels that the centred fix doesn't
+   fully resolve
+3. Allow per-slice m offsets to absorb edge-level mu signal (the
+   same eps-absorption problem, now in m-space)
+
+**Conclusion**: for contexted graphs, the optimal configuration is:
+
+- **Edge-level**: baseline parameterisation (onset/mu/sigma with
+  existing latent onset via eps_onset + softplus). The onset-mu
+  ridge exists but is manageable because onset_obs anchors it.
+- **Per-slice**: centred mu hierarchy (`mu_slice ~ Normal(mu_base,
+  tau_mu)`). This fixes the dominant geometry problem.
+- **No reparam**: the (m, a, r) coordinates add DOF that hurt more
+  than they help in the contexted setting.
+
+The reparam remains valuable for **uncontexted** graphs. The two
+parameterisations can coexist: reparam for uncontexted edges,
+baseline+centred for contexted edges. This is controlled by existing
+feature flags (`latency_reparam` for uncontexted, `centred_latency_slices`
+for contexted).
+
+**Open question**: the reparam + centred combination might work
+better on graphs with fewer edges or without onset_obs (where the
+onset-mu ridge is genuinely the bottleneck). The negative result
+here is specific to a 7-edge graph with onset_obs on all edges.
+Testing on synth-simple-abc-context (2 edges, simpler topology)
+would clarify whether the reparam helps or hurts on simpler
+contexted graphs.
+
+#### 11.11.10 Recommended default configuration for contexted graphs
+
+Based on the isolation experiment (§11.11.7) and the centred
+parameterisation results (§11.11.8, §11.11.9):
+
+| Setting | Value | Rationale |
+|---------|-------|-----------|
+| `latency_reparam` | `false` for contexted | Reparam adds DOF that hurt; baseline onset/mu/sigma is adequate when onset_obs exists |
+| `centred_latency_slices` | `true` | Fixes the dominant per-slice hierarchy geometry problem |
+| `shared_p_slices` | `false` (per-slice p active) | Per-slice p is a modest 1.5× cost with no divergences |
+| `shared_latency_slices` | `false` (per-slice mu active) | Per-slice mu is essential for capturing cross-context timing differences; centred makes it affordable |
+
+Expected performance on synth-skip-context (7 edges, 3 slices):
+~66s Phase 1 (vs 369s non-centred, vs 40s fully-shared baseline).
+Zero divergences.
+
+**Next step**: validate this configuration across the full contexted
+synth regression suite (all 8 contexted graphs) with production-style
+params.
 
 **Why centred works here**: the standard advice (Stan manual,
 Betancourt 2017) is that non-centred is better for weakly-informed
@@ -2075,13 +2173,164 @@ that eps can absorb.
 6. **Regression tooling improvement** — `run_regression.py` holds
    all param_recovery output in memory and only writes a summary at
    the end. This means (a) killing a long run loses the summary even
-   though per-graph harness logs are on disk, (b) the audit fails to
-   find logs due to a path prefix mismatch (`graph-` prefix), and
-   (c) there is no incremental summary file. The fix: write a
-   per-graph summary line to a persistent file (e.g.
-   `/tmp/bayes_regression-{run_id}.summary`) as each graph completes,
-   and fix the audit log path lookup. Discovered during the 14-Apr-26
-   regression run.
+   though per-graph harness logs are on disk, and (b) there is no
+   incremental summary file. **Fixed 14-Apr-26**: incremental summary
+   written to `/tmp/bayes_regression-{run_id}.summary` per graph.
+
+7. **Phase 2 pathology investigation** — Phase 2 (cohort MCMC)
+   stochastically stalls on some graphs (~10× slower, stuck at
+   ~50-80% progress). Observed on synth-skip-context and
+   synth-lattice-context. Phase 1 is consistently fast. The pathology
+   appears to be bad NUTS initialisation hitting a region with high
+   curvature. See §11.11.6 for experiment design.
+
+   **Devtools fixes made** (14-Apr-26):
+   - `test_harness.py`: stdout tee to harness log — worker Phase 2
+     diagnostics captured even on kill
+   - `test_harness.py`: feature flag parser accepts integers
+   - `run_regression.py`: incremental summary file
+   - `scripts/hunt-phase2-pathology.sh`: automated detection +
+     Phase 1 dump preservation for offline Phase 2 replay
+
+#### 11.11.6 Phase 2 pathology experiment design
+
+**Date**: 14-Apr-26.
+**Status**: Designed. Ready to run.
+
+**Observation**: synth-skip-context with `centred_latency_slices=true`
+shows stochastic Phase 2 failures. Phase 1 is consistently fast
+(~50s, ESS ~700). Phase 2 sometimes completes normally (~40s, ESS
+~680) and sometimes stalls (>200s at 56% progress, ~10× slower per
+step). The pathology appears stochastic — same graph, same settings,
+different outcomes.
+
+**Experiment**: `scripts/hunt-phase2-pathology.sh` runs the graph
+repeatedly (up to 20 attempts). On first Phase 2 stall (>120s), it:
+1. Preserves the Phase 1 dump (`/tmp/bayes_phase2_pathology_dump/`)
+   — contains topology.pkl, evidence.pkl, phase2_frozen.json,
+   settings.json
+2. Preserves the harness log (has Phase 2 model diagnostics via
+   the stdout tee fix)
+3. Exits with a replay command
+
+**Replay**: using the preserved dump, Phase 2 can be re-run
+repeatedly without re-running Phase 1:
+
+```bash
+python bayes/test_harness.py --graph synth-skip-context --fe-payload \
+  --tune 1000 --draws 500 --chains 2 \
+  --feature shared_p_slices=true --feature centred_latency_slices=true \
+  --phase2-from-dump /tmp/bayes_phase2_pathology_dump
+```
+
+**What to investigate once captured**:
+- Phase 2 Free RVs: which parameters are free, how many
+- Phase 2 model diagnostics: onset_cohort parameterisation, prior
+  widths, composed values from Phase 1
+- Divergence count and location
+- Whether the stall is one chain or all chains
+- Whether the Phase 1 posteriors that triggered the pathology have
+  unusual values (e.g. onset near zero, very tight sigma)
+
+#### 11.11.11 Phase 2 pathology hunt results (14-Apr-26)
+
+**Hunt results** (no pathology detected):
+
+| Graph | Config | Tune/Draws | Attempts | Result |
+|-------|--------|------------|----------|--------|
+| synth-skip-context | centred_latency_slices + shared_p_slices | 1000/500 ×2ch | 20/20 | All pass |
+| synth-diamond-context | centred_latency_slices only | 1000/500 ×2ch | 1/20 | p2=161s (flagged but graph is heavy — 6 edges, all contexted) |
+| synth-mirror-4step-context | centred_latency_slices only | 1000/500 ×2ch | Aborted (no failures seen) |
+
+The Phase 2 stall observed earlier may be sensitive to sample count
+(2000 tune/2000 draws), specific Phase 1 posterior realisations, or
+the `shared_p_slices` flag. Not reproducible at 1000/500 in 40+ attempts
+across three graphs.
+
+**Note**: the hunt script's Phase 2 timing extraction was broken (grepped
+for `Phase 2.*elapsed` but actual format is `sampling_phase2_ms: Nms`).
+Fixed during this session.
+
+#### 11.11.12 (m, a, r) reparam enabled for Phase 2 (14-Apr-26)
+
+**Change**: removed the `and not is_phase2` gate from `use_reparam`
+(model.py line ~376). The (m, a, r) reparameterisation is now active
+in both Phase 1 and Phase 2 when `latency_reparam=true`.
+
+**Rationale**: the quantile parameterisation is a bijective coordinate
+transform. There is no mathematical reason it should only apply to
+Phase 1. The Phase 2 cohort latency code at line ~1101 already
+implemented the (m, a, r) transform but was gated off. Removing the
+gate lets Phase 2 cohort latency use the same decorrelated coordinates
+as Phase 1.
+
+**First result** — synth-skip-context, `latency_reparam=true` +
+`centred_latency_slices=true`, 1000 tune / 500 draws / 2 chains:
+
+```
+COMPLETE  total=163s  p1=42s  p2=40s  rhat=1.023  ess=77  conv=86%  worst_ratio=0.91x(anchor→middle)
+```
+
+- Phase 2 completed normally (40s), no stall.
+- Onset is now **free and varying** across slices (0.1d–1.3d window,
+  2.5d–4.3d cohort) — this is the unpinned behaviour we wanted.
+- ESS is lower (77 vs 660 baseline) and convergence dropped to 86%.
+  The `corr(onset,mu)` values are 0.15–0.40 in Phase 1, suggesting the
+  ridge is reduced but not fully broken in the slice hierarchy.
+- Recovery ratios are good (0.91x–0.99x analytic comparison).
+
+**Second result** — same config, 1000 tune / 1000 draws / 2 chains:
+
+```
+COMPLETE  total=175s  p1=55s  p2=41s  rhat=1.015  ess=203  conv=96%  worst_ratio=0.90x(anchor→middle)
+```
+
+More draws improved convergence (86→96%) and rhat (1.023→1.015) but
+ESS remained low. Bottom-5 ESS diagnostic revealed the bottleneck:
+
+```
+Phase 1 bottom-5 ESS: tau_slice_421f=203, tau_slice_049f=207, eps_slice_vec_049f=230
+Phase 2 bottom-5 ESS: p_cohort_slice_049f=2094, mu_cohort_421f=2156  (healthy)
+```
+
+**The bottleneck is not latency.** The low-ESS variables are all
+`tau_slice` — the hierarchical scale parameters for the **probability**
+slice offsets. The latency ESS values are healthy (363–1257). Phase 2
+is excellent (ess=2094, 0 divergences).
+
+This is the classic funnel problem: when tau is small, eps is tightly
+constrained but tau itself is hard to sample. The latency reparam is
+doing its job; the headline ESS is dragged down by the p-slice
+hierarchy, which is an independent problem.
+
+**Experiment**: `centred_p_slices=true` flag added (analogous to
+`centred_latency_slices`). Centred form samples `logit_p_slice`
+directly from `Normal(logit_p_base, tau_slice)` instead of the
+`logit_p_base + eps * tau` decomposition. This should help when
+per-slice data is strong enough to constrain each slice directly.
+**Result** — synth-skip-context, all three centred flags + reparam,
+1000 tune / 1000 draws / 2 chains:
+
+```
+COMPLETE  total=159s  p1=30s  p2=42s  rhat=1.008  ess=627  conv=100%  worst_ratio=0.90x(anchor→middle)
+```
+
+| Config | ESS | rhat | conv | p1 | p2 |
+|--------|-----|------|------|----|----|
+| Baseline (centred lat, no reparam) | 660 | 1.021 | 100% | ~8s | 35s |
+| Reparam + centred lat | 203 | 1.015 | 96% | 55s | 41s |
+| Reparam + centred lat + centred p | 627 | 1.008 | 100% | 30s | 42s |
+
+Centred p slices eliminated the tau_slice funnel. New Phase 1
+bottleneck is `tau_r_slice=627` (the per-slice sigma scale), which
+is healthy. Phase 2 excellent (ess=1937, 0 divergences).
+
+**Assessment**: with both centred flags, the reparam achieves
+comparable ESS to baseline (627 vs 660) while also freeing onset.
+Phase 1 is slower than baseline (30s vs ~8s) due to the additional
+latency RVs, but convergence and quality metrics are equivalent.
+This is a viable default configuration for contexted graphs with
+strong per-slice data.
 
 ### 11.7 Additional references
 
@@ -2110,7 +2359,118 @@ that eps can absorb.
 
 ---
 
-## 12. Devtool improvements made during this work
+## 12. Winning formula validation and resilience strategies (14-Apr-26)
+
+### 12.1 The winning formula
+
+Three feature flags together constitute the current best configuration
+for contexted graphs:
+
+| Flag | What it does |
+|------|-------------|
+| `latency_reparam=true` | (m, a, r) quantile reparameterisation of shifted lognormal (§11.8) |
+| `centred_latency_slices=true` | Centred parameterisation for per-slice latency variation (§11.9) |
+| `centred_p_slices=true` | Centred parameterisation for per-slice probability (§11.11) |
+
+These address three independent geometry problems: the onset-mu-sigma
+identifiability ridge (reparam), the non-centred funnel in per-slice
+latency with strong data (centred latency), and the tau_slice ESS
+bottleneck in per-slice probability (centred p).
+
+### 12.2 Diamond-context results (14-Apr-26)
+
+First full winning-formula run on `synth-diamond-context` (6 edges ×
+3 context slices, 1000/1000/2ch):
+
+- **Completed**: 482s, rhat=1.0118, ess=311, converged=99%
+- **Edge-level recovery**: 5/6 edges all-OK. One MISS: `synth-path-b-to-join`
+  mu (z=5.97, truth=2.200, post=1.854). All other p/mu/sigma/onset OK.
+- **Per-slice p recovery**: mostly good. Email slice (weakest data) shows
+  MISS on `path-b-to-join` p (z=3.89) and `join-to-outcome` p (z=4.39).
+- **Per-slice onset recovery**: systematically poor. Onset posteriors
+  biased high across most slices (z=3.4–7.2). This is a known limitation:
+  onset is poorly identified per-slice when the shift is small relative to
+  the observation window.
+- **Per-slice mu/sigma**: generally good, with some sigma inflation on
+  email slice (weakest data).
+
+**Assessment**: the winning formula produces a stable, converging run on
+diamond-context — the heaviest contexted graph. No Phase 1 stall on this
+run (though stalls have been observed stochastically on prior runs).
+Recovery quality is adequate for p and latency shape (mu, sigma) but
+onset per-slice remains a challenge.
+
+### 12.3 Residual challenges
+
+1. **Stochastic Phase 1 stalls**: on diamond-context, one chain
+   occasionally hits a bad region and crawls (~1 draw/2s vs normal pace).
+   This is stochastic — same config succeeds on re-run. The (m, a, r)
+   geometry may interact badly with the Dirichlet branch group on large
+   models. Not yet root-caused.
+
+2. **Per-slice onset recovery**: onset is systematically biased high
+   across slices. The `a` parameter (logit onset fraction) is shared
+   across slices by design (§11.9.1.3) because per-slice `a` was poorly
+   identified. But per-slice m offsets shift the entire distribution,
+   and the onset constraint may not propagate correctly through the
+   shared `a` → per-slice onset transform.
+
+3. **Email slice degradation**: the weakest data slice shows broader
+   failures (p, sigma, onset). This is expected — centred parameterisation
+   is optimal for strong data but can struggle with weak slices. A
+   per-slice adaptive centring strategy (centred for strong, non-centred
+   for weak) would be ideal but is not trivial to implement.
+
+### 12.4 Resilience strategies for stochastic stalls
+
+The stochastic stall problem cannot be solved by model reparameterisation
+alone — it's a property of the posterior geometry that varies by compiled
+graph and random initialisation. We need a general-purpose sampling
+resilience mechanism.
+
+**Research findings** (14-Apr-26):
+
+- No major MCMC framework (Stan, PyMC, NumPyro, JAGS) implements
+  mid-run chain replacement. Stan's position: stuck chains are diagnostic
+  — fix the model. The emcee/astrophysics community pragmatically prunes
+  stuck walkers post-hoc; this is the closest precedent.
+- For unimodal posteriors (which ours are, with informative hierarchical
+  priors), discarding a stuck chain does not bias the result — there is
+  no secondary mode being explored.
+- nutpie chains are fully independent (no cross-chain adaptation during
+  warmup), so running them separately is semantically identical to
+  running them together.
+
+**Three strategies under evaluation**:
+
+| # | Strategy | Mechanism | Rationale |
+|---|----------|-----------|-----------|
+| 1 | Baseline | N chains, default target_accept (0.90) | Reference — how often do stalls occur? |
+| 2 | High accept | N chains, target_accept=0.95 | Smaller step size avoids violent leapfrog overshoots into bad regions. All chains pay a speed tax. |
+| 3 | Over-provision | N×1.5 chains launched, keep first N to finish | Let chains run at full speed; accept some will fail; have spares. Abort stragglers when enough finish. |
+
+**Implementation** (`scripts/resilience-strategies.py`):
+
+- Over-provision mechanism added to `_sample_nutpie` in `inference.py`
+  via `SamplingConfig.overprovision_chains`. Uses nutpie's progress
+  callback to track per-chain completion; sets a `threading.Event` when
+  enough chains finish; main thread calls `sampler.abort()` to stop
+  stragglers; completed chains extracted from partial trace by filtering
+  NaN-padded draws.
+- Comparison script runs diamond-context with winning formula: 1×
+  baseline (until success), 3× high-accept, 10× over-provision.
+  Sequential execution (JAX fans out across CPUs). Captures wall time,
+  ESS, rhat, convergence%, recovery quality per run.
+
+**Status**: implemented, not yet run. Results will populate this section.
+
+### 12.5 Resilience strategy results
+
+_Pending — to be filled after `scripts/resilience-strategies.py` completes._
+
+---
+
+## 13. Devtool improvements made during this work
 
 Several regression infrastructure defects were discovered and fixed:
 

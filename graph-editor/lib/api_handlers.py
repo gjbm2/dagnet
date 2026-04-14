@@ -620,8 +620,13 @@ def handle_runner_analyze(data: Dict[str, Any]) -> Dict[str, Any]:
         s.get('snapshot_subjects') for s in data.get('scenarios', [])
     )
     if is_snapshot_type and has_snapshot_data:
+        # cohort_maturity → v3 engine (doc 29 Phase 5)
+        if analysis_type in ('cohort_maturity', 'cohort_maturity_v3'):
+            return _handle_cohort_maturity_v3(data)
         if analysis_type == 'cohort_maturity_v2':
             return _handle_cohort_maturity_v2(data)
+        if analysis_type == 'cohort_maturity_v1':
+            return _handle_snapshot_analyze_subjects(data)
         return _handle_snapshot_analyze_subjects(data)
 
     # Legacy path: snapshot_query (single subject)
@@ -1221,6 +1226,210 @@ def _handle_cohort_maturity_v2(data: Dict[str, Any]) -> Dict[str, Any]:
         "success": True,
         "scenarios": per_scenario_results,
     }
+
+
+def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Doc 29 Phase 5: cohort maturity consuming the forecast engine.
+
+    Reuses v2's subject resolution and evidence framing pipeline, then
+    calls cohort_forecast_v3.compute_cohort_maturity_rows_v3 which
+    delegates completeness/carrier/model resolution to the engine.
+    """
+    import math
+    from datetime import date, timedelta
+    from runner.cohort_maturity_derivation import derive_cohort_maturity
+    from runner.cohort_forecast_v3 import compute_cohort_maturity_rows_v3
+    from runner.span_evidence import compose_path_maturity_frames
+    from snapshot_service import query_snapshots_for_sweep
+
+    analysis_type = 'cohort_maturity'
+    scenarios = data.get('scenarios', [])
+    top_analytics_dsl = data.get('analytics_dsl', '')
+    display_settings = data.get('display_settings') or {}
+
+    per_scenario_results: List[Dict[str, Any]] = []
+
+    for scenario in scenarios:
+        scenario_id = scenario.get('scenario_id', 'unknown')
+        graph_data = scenario.get('graph') or {}
+
+        # ── Resolve subjects from DSL (shared with v2) ───────────────
+        subjects = None
+        subject_dsl = top_analytics_dsl or scenario.get('analytics_dsl', '')
+        if subject_dsl:
+            try:
+                from analysis_subject_resolution import resolve_analysis_subjects, synthesise_snapshot_subjects
+                temporal_dsl = scenario.get('effective_query_dsl', '')
+                full_dsl = f"{subject_dsl}.{temporal_dsl}" if subject_dsl and temporal_dsl else (subject_dsl or temporal_dsl)
+                resolved = resolve_analysis_subjects(
+                    graph=graph_data, query_dsl=full_dsl, analysis_type=analysis_type,
+                    candidate_regimes_by_edge=scenario.get('candidate_regimes_by_edge', {}),
+                )
+                subjects = synthesise_snapshot_subjects(resolved, analysis_type)
+                print(f"[v3] Resolved {len(subjects)} subjects from DSL "
+                      f"'{full_dsl}' (scenario={scenario_id})")
+            except Exception as e:
+                print(f"[v3] WARNING: DSL resolution failed: {e}")
+
+        if not subjects:
+            subjects = scenario.get('snapshot_subjects', [])
+        if not subjects:
+            per_scenario_results.append({
+                "scenario_id": scenario_id, "success": True,
+                "subjects": [], "rows_analysed": 0,
+            })
+            continue
+
+        # ── Determine query nodes and anchor ─────────────────────────
+        query_from_node = query_to_node = anchor_node = None
+        for subj in subjects:
+            role = subj.get('path_role', '')
+            if role in ('first', 'only'):
+                query_from_node = subj.get('from_node')
+            if role in ('last', 'only'):
+                query_to_node = subj.get('to_node')
+
+        # Resolve anchor
+        for n in graph_data.get('nodes', []):
+            if n.get('entry', {}).get('is_start'):
+                anchor_node = n.get('id') or n.get('uuid')
+                break
+
+        temporal_dsl = scenario.get('effective_query_dsl', '')
+        query_dsl = data.get('query_dsl') or top_analytics_dsl or ''
+        is_window = 'window(' in temporal_dsl or 'window(' in query_dsl
+
+        # ── Derive frames per edge (shared with v2) ──────────────────
+        per_edge_results: List[Dict[str, Any]] = []
+        total_rows = 0
+        for subj in subjects:
+            sweep_from = subj.get('sweep_from')
+            sweep_to_str = subj.get('sweep_to')
+            try:
+                rows = query_snapshots_for_sweep(
+                    param_id=subj['param_id'], core_hash=subj['core_hash'],
+                    slice_keys=subj.get('slice_keys', ['']),
+                    anchor_from=date.fromisoformat(subj['anchor_from']),
+                    anchor_to=date.fromisoformat(subj['anchor_to']),
+                    sweep_from=date.fromisoformat(sweep_from) if sweep_from else None,
+                    sweep_to=date.fromisoformat(sweep_to_str) if sweep_to_str else None,
+                    equivalent_hashes=subj.get('equivalent_hashes'),
+                )
+            except Exception as e:
+                print(f"[v3] WARNING: snapshot query failed: {e}")
+                rows = []
+            total_rows += len(rows)
+            derivation = derive_cohort_maturity(rows, sweep_from=sweep_from, sweep_to=sweep_to_str)
+            per_edge_results.append({
+                'path_role': subj.get('path_role', 'only'),
+                'from_node': subj.get('from_node', ''),
+                'to_node': subj.get('to_node', ''),
+                'subject': subj,
+                'derivation_result': derivation,
+            })
+
+        # ── Compose span-level evidence (shared with v2) ─────────────
+        composed = compose_path_maturity_frames(
+            per_edge_results=per_edge_results,
+            query_from_node=query_from_node or '',
+            query_to_node=query_to_node or '',
+            anchor_node=anchor_node,
+        )
+        composed_frames = composed.get('frames', [])
+        print(f"[v3] Composed: from={query_from_node} to={query_to_node} "
+              f"anchor={anchor_node} frames={len(composed_frames)} "
+              f"cohorts={composed.get('cohorts_analysed', 0)}")
+
+        # ── Find last edge ───────────────────────────────────────────
+        last_edge_id = None
+        for entry in per_edge_results:
+            if entry['path_role'] in ('last', 'only'):
+                last_edge_id = (entry['subject'].get('target') or {}).get('targetId')
+                break
+
+        # ── Axis extent ──────────────────────────────────────────────
+        tau_extent_raw = display_settings.get('tau_extent')
+        axis_tau_max = None
+        if tau_extent_raw and str(tau_extent_raw) not in ('auto', 'Auto'):
+            try:
+                axis_tau_max = int(float(tau_extent_raw))
+            except (ValueError, TypeError):
+                pass
+
+        band_raw = display_settings.get('bayes_band_level', '90')
+        try:
+            band_level = float(band_raw) / 100.0 if band_raw not in ('off', 'blend') else 0.90
+        except (ValueError, TypeError):
+            band_level = 0.90
+
+        # ── Annotate frames (shared with v2) ─────────────────────────
+        if composed_frames and last_edge_id:
+            from runner.model_resolver import resolve_model_params
+            from runner.cohort_forecast import find_edge_by_id
+            edge = find_edge_by_id(graph_data, last_edge_id)
+            if edge:
+                scope = 'edge' if is_window else 'path'
+                temporal = 'window' if is_window else 'cohort'
+                resolved = resolve_model_params(edge, scope=scope, temporal_mode=temporal)
+                if resolved and resolved.latency.sigma > 0:
+                    from runner.forecast_application import annotate_rows
+                    for frame in composed_frames:
+                        sd = frame.get('snapshot_date', '') or frame.get('as_at_date', '')
+                        if frame.get('data_points'):
+                            frame['data_points'] = annotate_rows(
+                                frame['data_points'],
+                                resolved.latency.mu, resolved.latency.sigma,
+                                resolved.latency.onset_delta_days,
+                                forecast_mean=resolved.p_mean,
+                                retrieved_at_override=sd,
+                            )
+
+        # ── Call v3 row builder ───────────────────────────────────────
+        maturity_rows = []
+        if composed_frames and last_edge_id:
+            anchor_from_str = subjects[0].get('anchor_from', '')
+            anchor_to_str = subjects[0].get('anchor_to', '')
+            sweep_to_final = subjects[0].get('sweep_to') or subjects[0].get('anchor_to', '')
+
+            maturity_rows = compute_cohort_maturity_rows_v3(
+                frames=composed_frames,
+                graph=graph_data,
+                target_edge_id=last_edge_id,
+                query_from_node=query_from_node or '',
+                query_to_node=query_to_node or '',
+                anchor_from=anchor_from_str,
+                anchor_to=anchor_to_str,
+                sweep_to=sweep_to_final,
+                is_window=is_window,
+                axis_tau_max=axis_tau_max,
+                band_level=band_level,
+                anchor_node_id=anchor_node,
+                display_settings=display_settings,
+            )
+
+        print(f"[v3] compute_cohort_maturity_rows returned {len(maturity_rows)} rows")
+
+        # ── Build response (same shape as v2) ────────────────────────
+        per_scenario_results.append({
+            "scenario_id": scenario_id,
+            "success": True,
+            "subjects": [{
+                "subject_id": f"v3:{query_from_node}:{query_to_node}",
+                "success": True,
+                "result": {
+                    'analysis_type': analysis_type,
+                    'maturity_rows': maturity_rows,
+                    'frames': composed_frames,
+                    'span_kernel': None,  # v3 doesn't build a span kernel
+                },
+                "rows_analysed": total_rows,
+            }],
+            "rows_analysed": total_rows,
+        })
+
+    if len(per_scenario_results) == 1:
+        return per_scenario_results[0]
+    return {"success": True, "scenarios": per_scenario_results}
 
 
 def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
@@ -3729,8 +3938,7 @@ def handle_stats_topo_pass(data: Dict[str, Any]) -> Dict[str, Any]:
     _fs_t0 = _time.monotonic()
     from runner.model_resolver import resolve_model_params
     from runner.forecast_state import (
-        compute_forecast_state_window,
-        compute_forecast_state_cohort,
+        compute_conditioned_forecast,
         build_node_arrival_cache,
     )
 
@@ -3766,44 +3974,57 @@ def handle_stats_topo_pass(data: Dict[str, Any]) -> Dict[str, Any]:
         improved_p_sd = ev.p_sd
         edge_dict = edges_by_uuid.get(ev.edge_uuid)
         if edge_dict is not None:
-            scope = 'edge' if is_window else 'path'
-            temporal = 'window' if is_window else 'cohort'
-            resolved = resolve_model_params(edge_dict, scope=scope,
-                                            temporal_mode=temporal)
+            # Always resolve edge-level params for the engine.
+            # Carrier convolution handles upstream lag — using path-level
+            # params would double-apply it (review finding #8).
+            _graph_pref = graph.get('model_source_preference')
+            resolved = resolve_model_params(edge_dict, scope='edge',
+                                            temporal_mode='window' if is_window else 'cohort',
+                                            graph_preference=_graph_pref)
             if resolved and resolved.latency.sigma > 0:
-                cohorts_raw = param_lookup.get(ev.edge_uuid, [])
+                # Review finding #7: use scoped cohorts (FE-filtered)
+                # when available, not raw cohort_data.
+                _ec = edge_contexts.get(ev.edge_uuid)
+                cohorts_raw = (
+                    (_ec.scoped_cohorts if _ec and _ec.scoped_cohorts else None)
+                    or param_lookup.get(ev.edge_uuid, [])
+                )
                 cohort_ages_and_weights = [
                     (c.age, c.n) for c in cohorts_raw if c.n > 0 and c.age >= 0
                 ]
+                evidence = [
+                    (c.age, c.n, c.k) for c in cohorts_raw
+                    if c.n > 0 and c.age >= 0 and c.k >= 0
+                ]
                 if cohort_ages_and_weights:
-                    # Compute evidence rate from topo pass results
-                    evidence_rate = ev.p_evidence if ev.p_evidence > 0 else None
-                    # Phase 3: cohort-mode uses upstream-aware computation
+                    # Phase 3 + doc 29g: IS-conditioned forecast
                     from_node_id = edge_dict.get('from', '')
                     _from_arrival = (
                         _node_arrival_cache.get(from_node_id)
                         if _node_arrival_cache else None
                     )
-                    if not is_window and _from_arrival is not None:
-                        fs = compute_forecast_state_cohort(
-                            edge_id=ev.edge_uuid,
-                            resolved=resolved,
-                            cohort_ages_and_weights=cohort_ages_and_weights,
-                            from_node_arrival=_from_arrival,
-                            evidence_rate=evidence_rate,
-                        )
-                    else:
-                        fs = compute_forecast_state_window(
-                            edge_id=ev.edge_uuid,
-                            resolved=resolved,
-                            cohort_ages_and_weights=cohort_ages_and_weights,
-                            evidence_rate=evidence_rate,
-                        )
+                    cf = compute_conditioned_forecast(
+                        edge_id=ev.edge_uuid,
+                        resolved=resolved,
+                        cohort_ages_and_weights=cohort_ages_and_weights,
+                        evidence=evidence,
+                        from_node_arrival=_from_arrival if not is_window else None,
+                    )
+                    # Wrap into a lightweight object with the fields
+                    # the response builder reads
+                    class _FS:
+                        pass
+                    fs = _FS()
+                    fs.completeness = cf.completeness
+                    fs.completeness_sd = cf.completeness_sd
+                    fs.rate_conditioned = cf.rate_conditioned
+                    fs.rate_conditioned_sd = cf.rate_conditioned_sd
                     _fs_count += 1
                     # Use engine's improved p_sd when completeness
-                    # uncertainty is available (doc 29 §F mode)
-                    if fs.completeness_sd and fs.completeness_sd > 0:
-                        improved_p_sd = fs.rate_unconditioned_sd or ev.p_sd
+                    # uncertainty is available (doc 29 §Consumer mapping:
+                    # edge display reads rate_conditioned ± rate_conditioned_sd)
+                    if cf.completeness_sd and cf.completeness_sd > 0:
+                        improved_p_sd = cf.rate_conditioned_sd or ev.p_sd
 
         # Doc 29 §Schema Change: engine writes to existing fields,
         # not a separate forecast_state object. When the engine ran,

@@ -101,7 +101,7 @@ export function isSnapshotBootChart(analysis: any): boolean {
   const ci = analysis?.content_items?.[0];
   const analysisType = safeString(ci?.analysis_type || analysis?.recipe?.analysis?.analysis_type);
   const chartKind = safeString(ci?.kind || analysis?.chart_kind);
-  if (analysisType === 'cohort_maturity' || analysisType === 'cohort_maturity_v2' || analysisType === 'daily_conversions' || analysisType === 'lag_fit') {
+  if (analysisType === 'cohort_maturity' || analysisType === 'cohort_maturity_v1' || analysisType === 'cohort_maturity_v2' || analysisType === 'daily_conversions' || analysisType === 'lag_fit') {
     return true;
   }
   return analysisType === 'branch_comparison' && chartKind === 'time_series';

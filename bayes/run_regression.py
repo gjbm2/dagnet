@@ -855,9 +855,9 @@ def run_regression(args) -> list[dict]:
             _q = assertion.get("quality", {})
             with open(summary_path, "a") as _sf:
                 _sf.write(f"{name:<45s} {status:<6s} {elapsed:6.0f}s  "
-                          f"rhat={_q.get('rhat', '?'):<8s} "
+                          f"rhat={str(_q.get('rhat', '?')):<8s} "
                           f"ess={str(_q.get('ess', '?')):<8s} "
-                          f"conv={_q.get('converged', '?')}\n")
+                          f"conv={str(_q.get('converged', '?'))}\n")
                 for _fail in assertion.get("failures", []):
                     _sf.write(f"  ** {_fail}\n")
 

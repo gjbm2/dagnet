@@ -30,6 +30,8 @@ from bayes.tests.synthetic import (
     build_solo_edge_with_snapshots,
     build_snapshot_with_fallback,
     build_contexted_solo_edge_with_snapshot_slices,
+    build_two_dimension_solo_edge,
+    build_staggered_two_dimension_solo_edge,
 )
 
 
@@ -351,4 +353,267 @@ class TestSnapshotFallback:
         )
         assert "param file" in diag_text.lower() or "param file" in diag_text, (
             f"Diagnostics should mention param file fallback: {evidence.diagnostics}"
+        )
+
+
+class TestTwoDimensionModelWiring:
+    """Verify that two independent MECE dimensions produce per-dimension
+    tau variables and separate slice groups in the model."""
+
+    def test_two_dimension_evidence_has_two_slice_groups(self):
+        """Evidence binding should produce separate SliceGroups per dimension."""
+        graph, params, snap_rows, commissioned, mece_dims, _ = (
+            build_two_dimension_solo_edge(seed=64)
+        )
+        topology = analyse_topology(graph)
+        evidence = bind_snapshot_evidence(
+            topology,
+            snap_rows,
+            params,
+            today="1-Mar-25",
+            commissioned_slices=commissioned,
+            mece_dimensions=mece_dims,
+        )
+
+        ev = evidence.edges["edge-a-b"]
+        assert ev.has_slices is True
+        assert "channel" in ev.slice_groups, f"Missing channel dim: {list(ev.slice_groups.keys())}"
+        assert "device" in ev.slice_groups, f"Missing device dim: {list(ev.slice_groups.keys())}"
+        assert len(ev.slice_groups) == 2
+
+        # Each dimension has the right context keys
+        channel_keys = set(ev.slice_groups["channel"].slices.keys())
+        device_keys = set(ev.slice_groups["device"].slices.keys())
+        assert "context(channel:google)" in channel_keys
+        assert "context(channel:direct)" in channel_keys
+        assert "context(device:mobile)" in device_keys
+        assert "context(device:desktop)" in device_keys
+
+    def test_two_dimension_model_compiles_without_error(self):
+        """Model should compile with two dimensions — no crash, no NameError."""
+        graph, params, snap_rows, commissioned, mece_dims, _ = (
+            build_two_dimension_solo_edge(seed=64)
+        )
+        model, metadata, topology, evidence = _build_contexted_snapshot_model(
+            graph, params, snap_rows,
+            commissioned_slices=commissioned,
+            mece_dimensions=mece_dims,
+        )
+
+        names = set(model.named_vars.keys())
+        # Should have slice-related variables
+        assert any("slice" in n for n in names), (
+            f"No slice variables in model: {sorted(names)}"
+        )
+
+    def test_two_dimension_model_has_per_dimension_tau(self):
+        """After R2g Gap 1 fix: each dimension gets its own tau_slice variable."""
+        graph, params, snap_rows, commissioned, mece_dims, _ = (
+            build_two_dimension_solo_edge(seed=64)
+        )
+        model, _, _, _ = _build_contexted_snapshot_model(
+            graph, params, snap_rows,
+            commissioned_slices=commissioned,
+            mece_dimensions=mece_dims,
+        )
+
+        names = set(model.named_vars.keys())
+        # Per-dimension tau: tau_slice_{edge}_{dim}
+        assert "tau_slice_edge_a_b__channel" in names, (
+            f"Missing per-dim tau for channel. Variables: {sorted(n for n in names if 'tau' in n)}"
+        )
+        assert "tau_slice_edge_a_b__device" in names, (
+            f"Missing per-dim tau for device. Variables: {sorted(n for n in names if 'tau' in n)}"
+        )
+        # Should NOT have the old single tau
+        assert "tau_slice_edge_a_b" not in names, (
+            "Old single tau_slice should not exist with multi-dimension"
+        )
+
+    def test_two_dimension_model_has_1_over_n_kappa_correction(self):
+        """With 2 dimensions, aggregate kappa should be scaled by 1/2."""
+        graph, params, snap_rows, commissioned, mece_dims, _ = (
+            build_two_dimension_solo_edge(seed=64)
+        )
+        model, _, _, _ = _build_contexted_snapshot_model(
+            graph, params, snap_rows,
+            commissioned_slices=commissioned,
+            mece_dimensions=mece_dims,
+        )
+
+        names = set(model.named_vars.keys())
+        assert "kappa_agg_corrected_edge_a_b" in names, (
+            f"Missing 1/N kappa correction. Variables with 'kappa': "
+            f"{sorted(n for n in names if 'kappa' in n)}"
+        )
+
+    def test_single_dimension_no_kappa_correction(self):
+        """Single dimension should NOT have a kappa correction variable."""
+        graph, params, snap_rows, commissioned, mece_dims, _ = (
+            build_contexted_solo_edge_with_snapshot_slices(seed=63)
+        )
+        model, _, _, _ = _build_contexted_snapshot_model(
+            graph, params, snap_rows,
+            commissioned_slices=commissioned,
+            mece_dimensions=mece_dims,
+        )
+
+        names = set(model.named_vars.keys())
+        assert "kappa_agg_corrected_edge_a_b" not in names, (
+            "Single dimension should not have 1/N kappa correction"
+        )
+
+
+class TestStaggeredDimensionBinding:
+    """Blind tests for staggered A→B→D dimension evidence binding.
+
+    These test the CONTRACT: what the binder should produce given
+    staggered data, written from the spec without reading the binder code.
+
+    Invariants:
+      - Channel SliceGroup has observations (from states B+D)
+      - Device SliceGroup has observations (from state D only)
+      - Device has fewer observation days than channel
+      - Both dimensions present in slice_groups
+      - Aggregate observations exist (from state A bare data)
+      - has_slices is True
+    """
+
+    def test_staggered_evidence_has_both_slice_groups(self):
+        """Both channel and device SliceGroups should exist."""
+        graph, params, snap_rows, commissioned, mece_dims, _ = (
+            build_staggered_two_dimension_solo_edge(seed=65)
+        )
+        topology = analyse_topology(graph)
+        evidence = bind_snapshot_evidence(
+            topology, snap_rows, params, today="1-Mar-25",
+            commissioned_slices=commissioned,
+            mece_dimensions=mece_dims,
+        )
+
+        ev = evidence.edges["edge-a-b"]
+        assert ev.has_slices is True
+        assert "channel" in ev.slice_groups, (
+            f"Missing channel dim: {list(ev.slice_groups.keys())}")
+        assert "device" in ev.slice_groups, (
+            f"Missing device dim: {list(ev.slice_groups.keys())}")
+
+    def test_staggered_channel_has_more_observations_than_device(self):
+        """Channel appears in states B+D, device only D. Channel should have
+        more raw snapshot rows feeding its SliceGroup."""
+        graph, params, snap_rows, commissioned, mece_dims, _ = (
+            build_staggered_two_dimension_solo_edge(seed=65)
+        )
+        # Check raw rows before binding — the ground truth
+        all_rows = snap_rows["edge-a-b"]
+        chan_rows = [r for r in all_rows if "context(channel:" in r.get("slice_key", "")]
+        dev_rows = [r for r in all_rows if "context(device:" in r.get("slice_key", "")]
+        assert len(chan_rows) > len(dev_rows), (
+            f"Channel raw rows ({len(chan_rows)}) should exceed device ({len(dev_rows)}) "
+            f"because channel covers states B+D while device covers only D"
+        )
+
+    def test_staggered_aggregate_has_observations(self):
+        """State A bare data should produce aggregate observations."""
+        graph, params, snap_rows, commissioned, mece_dims, _ = (
+            build_staggered_two_dimension_solo_edge(seed=65)
+        )
+        topology = analyse_topology(graph)
+        evidence = bind_snapshot_evidence(
+            topology, snap_rows, params, today="1-Mar-25",
+            commissioned_slices=commissioned,
+            mece_dimensions=mece_dims,
+        )
+
+        ev = evidence.edges["edge-a-b"]
+        assert ev.total_n > 0, "Aggregate should have observations from state A"
+        assert ev.has_window or ev.has_cohort, "Aggregate should have temporal obs"
+
+    def test_staggered_all_slice_values_have_data(self):
+        """Every commissioned context key should have observations."""
+        graph, params, snap_rows, commissioned, mece_dims, _ = (
+            build_staggered_two_dimension_solo_edge(seed=65)
+        )
+        topology = analyse_topology(graph)
+        evidence = bind_snapshot_evidence(
+            topology, snap_rows, params, today="1-Mar-25",
+            commissioned_slices=commissioned,
+            mece_dimensions=mece_dims,
+        )
+
+        ev = evidence.edges["edge-a-b"]
+        for dim_key, sg in ev.slice_groups.items():
+            for ctx_key, obs in sg.slices.items():
+                assert obs.total_n > 0, (
+                    f"Slice {ctx_key} in {dim_key} should have data, got total_n=0"
+                )
+
+
+class TestStaggeredDimensionModel:
+    """Blind tests for model compilation with staggered evidence.
+
+    Written from the design spec: per-dimension tau, 1/N kappa, no crash.
+    """
+
+    def test_staggered_model_compiles_without_error(self):
+        """Staggered evidence should compile to a valid PyMC model."""
+        graph, params, snap_rows, commissioned, mece_dims, _ = (
+            build_staggered_two_dimension_solo_edge(seed=65)
+        )
+        model, _, _, _ = _build_contexted_snapshot_model(
+            graph, params, snap_rows,
+            commissioned_slices=commissioned,
+            mece_dimensions=mece_dims,
+        )
+        # Model should have named variables — not empty
+        assert len(model.named_vars) > 0
+
+    def test_staggered_model_has_per_dimension_tau(self):
+        """Each dimension should get its own tau (shrinkage) variable."""
+        graph, params, snap_rows, commissioned, mece_dims, _ = (
+            build_staggered_two_dimension_solo_edge(seed=65)
+        )
+        model, _, _, _ = _build_contexted_snapshot_model(
+            graph, params, snap_rows,
+            commissioned_slices=commissioned,
+            mece_dimensions=mece_dims,
+        )
+
+        names = set(model.named_vars.keys())
+        assert "tau_slice_edge_a_b__channel" in names, (
+            f"Missing channel tau. Tau vars: {sorted(n for n in names if 'tau' in n)}")
+        assert "tau_slice_edge_a_b__device" in names, (
+            f"Missing device tau. Tau vars: {sorted(n for n in names if 'tau' in n)}")
+
+    def test_staggered_model_has_per_slice_p_variables(self):
+        """Per-slice p variables should exist for all 4 context values
+        (2 channel + 2 device)."""
+        graph, params, snap_rows, commissioned, mece_dims, _ = (
+            build_staggered_two_dimension_solo_edge(seed=65)
+        )
+        model, _, _, _ = _build_contexted_snapshot_model(
+            graph, params, snap_rows,
+            commissioned_slices=commissioned,
+            mece_dimensions=mece_dims,
+        )
+
+        names = set(model.named_vars.keys())
+        assert "p_slice_vec_edge_a_b" in names, (
+            f"Missing p_slice_vec. Names: {sorted(n for n in names if 'p_slice' in n)}")
+
+    def test_staggered_model_has_1_over_n_kappa(self):
+        """With 2 dimensions, aggregate kappa should be corrected."""
+        graph, params, snap_rows, commissioned, mece_dims, _ = (
+            build_staggered_two_dimension_solo_edge(seed=65)
+        )
+        model, _, _, _ = _build_contexted_snapshot_model(
+            graph, params, snap_rows,
+            commissioned_slices=commissioned,
+            mece_dimensions=mece_dims,
+        )
+
+        names = set(model.named_vars.keys())
+        assert "kappa_agg_corrected_edge_a_b" in names, (
+            f"Missing 1/N kappa correction. Kappa vars: "
+            f"{sorted(n for n in names if 'kappa' in n)}"
         )

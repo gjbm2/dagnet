@@ -4,7 +4,8 @@
 **Revised**: 12-Apr-26 — substantial rewrite of the engine design based
 on deeper understanding of the pipeline injection point, two-tier FE/BE
 delivery, and the structural difference between window and cohort modes.
-Phase A material (§Generalised Cohort Maturity below) unchanged.
+**Revised**: 14-Apr-26 — implementation status updated. Phases 2-5
+complete, Phase 4 eliminated, v3 live as `cohort_maturity`.
 **Status**: see §Implementation Status below for what exists as code
 vs what is design only.
 
@@ -39,22 +40,29 @@ implementations.
 | Posterior slice resolution | `posteriorSliceResolution.ts` | Implemented. Edge ← window(), path ← cohort() routing. |
 | p.evidence.stdev (binomial sampling) | `evidenceForecastScalars.ts` | Implemented. `sqrt(p(1-p)/n)`. Correct for E-mode display. |
 
+### Built (14-Apr-26)
+
+| Component | Location | Status |
+|-----------|----------|--------|
+| Completeness stdev computation | `runner/forecast_state.py` | Implemented. MC sampling from latency dispersions. One new field: `latency.completeness_stdev`. |
+| Promoted model resolver (unified) | `runner/model_resolver.py` | Implemented. `resolve_model_params(edge, scope, temporal_mode)` with preference cascade. 8 tests. |
+| Completeness with uncertainty | `runner/forecast_state.py` | Implemented. `compute_completeness_with_sd()` — 200-draw MC. |
+| `rate_conditioned_sd` / `rate_unconditioned_sd` | `runner/forecast_state.py` | Implemented. `_compose_rate_sd()` — independence-assumption composition. |
+| Two-tier FE/BE delivery | `fetchDataService.ts`, `api_handlers.py` | Implemented. BE writes to same fields as FE. Session log shows FE→BE parity per edge. |
+| Graph-wide topo pass with per-node arrival caching | `runner/forecast_state.py` | Implemented. `build_node_arrival_cache()` — topo-order walk, calls v2 carrier hierarchy. |
+| F-mode and F+E-mode bead ± correction | `edgeBeadHelpers.tsx`, `api_handlers.py` | Implemented. F-mode: composed at display time from `p.forecast.stdev` + `completeness_stdev`. F+E-mode: BE writes composed `p_sd`. |
+| IS-conditioned forecast engine | `runner/forecast_state.py` | Implemented. `compute_conditioned_forecast()` — aggregate IS with tempering (doc 29g). |
+| `cohort_maturity_v3` | `runner/cohort_forecast_v3.py` | Implemented (185 lines). Routes as `cohort_maturity` (prod). v1/v2 gated to dev only. |
+
 ### Not yet built (design only in this document)
 
 | Component | Status |
 |-----------|--------|
-| Completeness stdev computation | Design only. One new field: latency.completeness_stdev. |
-| Promoted model resolver (unified) | Design only. Currently scattered across 4 locations. |
-| Completeness with uncertainty (`completeness_sd`) | Design only. Requires sampling from latency dispersions. |
-| `rate_conditioned_sd` / `rate_unconditioned_sd` | Design only. Composed uncertainty from p + completeness. |
-| Two-tier FE/BE delivery | Design only. Pattern exists for topo pass; not yet applied to improved engine computations. |
-| Graph-wide topo pass with per-node arrival caching | Design only. Propagation engine scoped to improved completeness and rate scalars. |
 | Surprise gauge migration to engine | Design only. Currently ~400 lines of independent computation. |
 | Edge card migration to engine | Design only. Currently ~500 lines of scattered annotation. |
-| `cohort_maturity_v3` (clean-room engine consumer) | Design only. v2 frozen as parity reference. |
 | `asat()` support in engine (three-date model) | Design only. evidence_cutoff / evaluation / posterior_cutoff. |
 | Posterior covariance matrix (5×5 per edge) | Design only. Future enhancement for joint draws. |
-| F-mode and F+E-mode bead ± correction | Design only. Currently shows raw stdev; needs composed uncertainty. |
+| Trajectory-shape IS conditioning | Design only (doc 29g §5). Multinomial weight on interval increments for latency draws. |
 
 ### Parity gates
 
@@ -62,6 +70,7 @@ implementations.
 |------|--------|
 | v1 vs v2 single-hop parity (field-by-field) | **PASSED 13-Apr-26.** Window and cohort modes on real graph data. Tests in `test_doc31_parity.py`. |
 | v2 multi-hop acceptance | Pending — parallel quality work, does not block engine extraction. |
+| Phase 3 cohort-mode engine vs v2 | **PASSED 14-Apr-26.** 1.75% delta on enriched `synth-simple-abc`. Tests in `test_forecast_state_cohort.py` (12 tests) + `test_be_topo_pass_parity.py` (4 tests). |
 | v2 → v3 parity | Not applicable yet (v3 not started). |
 
 ---

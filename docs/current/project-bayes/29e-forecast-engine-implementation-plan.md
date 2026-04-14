@@ -343,13 +343,17 @@ typical graphs).
 
 ---
 
-## Phase 4: Consumer Migrations
+## Phase 4: Consumer Migrations — ELIMINATED
 
-**Purpose**: wire existing consumers to read from ForecastState
-instead of computing independently.
+**Status**: eliminated 14-Apr-26. The engine writes to existing graph
+fields per doc 29 §Schema Change. Consumers already read those fields.
+No `ForecastState` TS interface, no `forecast_state` sidecar on the
+graph. The BE topo pass is a full upgrade of FE values — consumers
+automatically get improved completeness, composed p_sd, and
+completeness_stdev without any migration.
 
-**Entry gate**: Phase 3 complete. ForecastState available on edges
-after topo pass.
+**Original purpose (no longer applicable)**: wire existing consumers
+to read from ForecastState instead of computing independently.
 
 ### 4.1 Edge bead ± correction
 
@@ -436,47 +440,146 @@ Bead ± values are correct per regime. Surprise gauge parity passes.
 
 ## Phase 5: `cohort_maturity_v3`
 
-**Purpose**: clean-room cohort maturity implementation consuming
-ForecastState. v2 frozen as parity reference.
+**Purpose**: clean-room cohort maturity implementation that consumes
+the forecast engine directly. v2 (1154 lines) is frozen as the parity
+reference. v3 should be substantially smaller because the engine
+handles completeness, carrier hierarchy, and model resolution.
 
-**Entry gate**: Phase 4 complete. ForecastState + resolved_params
-available from the engine.
+**Entry gate**: Phase 3 complete. Engine functions available:
+`build_node_arrival_cache`, `compute_forecast_state_cohort/window`,
+`resolve_model_params`. Phase 4 eliminated (engine writes to existing
+fields — no consumer migration needed).
+
+### What v3 replaces
+
+v2 reimplements completeness, carrier hierarchy, IS conditioning, MC
+fan bands, and model resolution internally. v3 delegates all of that
+to the engine and focuses solely on:
+
+1. Assembling per-τ rows from evidence frames + engine output
+2. Running MC fan bands using engine-resolved params
+3. Epoch classification (solid/dashed/dotted regions)
+
+### What v3 preserves (non-negotiable FE contract)
+
+The FE chart builder (`buildCohortMaturityEChartsOption` in
+`cohortComparisonBuilders.ts`) reads these fields per row. v3 must
+emit the identical row schema:
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `tau_days` | int | Age in days (X-axis) |
+| `rate` | float? | Observed evidence rate y/x |
+| `rate_pure` | float? | Pure evidence rate (only real obs) |
+| `evidence_y`, `evidence_x` | float? | Raw observed counts |
+| `projected_rate` | float? | Annotation projected rate |
+| `forecast_y`, `forecast_x` | float? | Forecast counts |
+| `midpoint` | float? | Bayesian posterior median (primary forecast) |
+| `fan_upper`, `fan_lower` | float? | Default-level quantiles |
+| `fan_bands` | dict? | Multi-level: `{'80': [lo,hi], '90': [lo,hi], ...}` |
+| `model_midpoint` | float? | Prior median (unconditioned) |
+| `model_fan_upper`, `model_fan_lower` | float? | Prior quantiles |
+| `model_bands` | dict? | Prior multi-level bands |
+| `tau_solid_max` | int | All cohorts present (epoch A boundary) |
+| `tau_future_max` | int | Some cohorts present (epoch B boundary) |
+| `boundary_date` | str | Sweep-to date |
+| `cohorts_covered_base` | int? | Cohorts with obs at τ |
+| `cohorts_covered_projected` | int? | Cohorts with projected data |
+
+The response wrapper is also preserved:
+`{subjects: [{subject_id, result: {maturity_rows, frames, span_kernel}}]}`
 
 ### 5.1 Register analysis type
 
 `cohort_maturity_v3` registered FE + BE. Reuses existing ECharts
-chart builder (row schema unchanged).
+chart builder — row schema unchanged, so no FE chart code changes.
 
 **Files touched**:
-- `graph-editor/lib/runner/analysis_types.yaml`
+- `graph-editor/lib/runner/analysis_types.yaml` — new entry
 - `graph-editor/lib/api_handlers.py` — new handler
-  `_handle_cohort_maturity_v3`
-- `graph-editor/src/services/analysisTypeResolutionService.ts`
-- `graph-editor/src/components/panels/analysisTypes.ts`
-- `graph-editor/src/lib/graphComputeClient.ts` — type registration
+  `_handle_cohort_maturity_v3` (dispatch only — delegates to v3 module)
+- `graph-editor/src/services/analysisTypeResolutionService.ts` — register
+- `graph-editor/src/components/panels/analysisTypes.ts` — register
+- `graph-editor/src/lib/graphComputeClient.ts` — type registration,
+  normalisation maps to same `cohort_maturity` response shape
 
-### 5.2 v3 handler
+### 5.2 v3 module: `cohort_forecast_v3.py`
 
-Calls the engine to get `ForecastState` with trajectory +
-`resolved_params`. Then runs MC fan bands using resolved_params
-(span kernel CDF, upstream carrier, posterior alpha/beta, SDs).
-Emits the same row schema as v2.
+New file. Target: under 400 lines (v2 is 1154).
+
+**What v3 does**:
+
+1. **Subject resolution and evidence framing** — reuses the existing
+   `resolve_analysis_subjects` + `derive_cohort_maturity` +
+   `compose_path_maturity_frames` pipeline (same as v2's handler).
+   No reimplementation.
+
+2. **Engine call** — for the target edge:
+   - `resolve_model_params(edge, scope, temporal_mode)` → resolved params
+   - `build_node_arrival_cache(graph, anchor_id)` → per-node arrival
+   - For each τ in range:
+     `compute_forecast_state_cohort(edge_id, resolved, [(τ, 1)], from_node)`
+     → completeness at that τ
+   - This replaces v2's `build_span_params` + `_cdf()` + carrier
+     convolution (~300 lines)
+
+3. **MC fan bands** — using resolved params from the engine:
+   - Draw `(mu, sigma, onset)` from joint distribution (using
+     `resolved.latency.mu_sd`, `sigma_sd`, `onset_sd`, `onset_mu_corr`)
+   - For each draw, evaluate CDF at each τ → per-draw CDF array
+   - Draw `p` from Beta(alpha, beta) posterior
+   - Per-τ rate draws = p_draw × CDF_draw(τ)
+   - IS conditioning on frontier evidence (same as v2 lines 762-790)
+   - Quantiles → `fan_bands`, `midpoint`, `fan_upper`, `fan_lower`
+   - This replaces v2's MC section (~250 lines) but reuses the same
+     maths — just reads params from the engine resolver instead of
+     reimplementing the resolution cascade
+
+4. **Evidence extraction** — from composed frames, extract per-τ:
+   - `rate = y/x` (observed)
+   - `evidence_y`, `evidence_x` (raw counts)
+   - `cohorts_covered_base` (count with obs at τ)
+   - Epoch boundaries from frame date range
+
+5. **Row assembly** — combine evidence + engine completeness + MC
+   fan bands into the row schema above. One row per τ.
+
+**What v3 does NOT do** (delegated to engine):
+- Model resolution (preference cascade, quality gates)
+- Carrier hierarchy (Tier 1/2/3)
+- Completeness computation (CDF evaluation, upstream convolution)
+- Completeness SD (MC sampling from dispersions)
+- Rate composition (p × completeness, SD propagation)
 
 **Files touched**:
-- `graph-editor/lib/runner/` — new file `cohort_forecast_v3.py`
+- `graph-editor/lib/runner/cohort_forecast_v3.py` — new file
 - `graph-editor/lib/api_handlers.py` — `_handle_cohort_maturity_v3`
 
 ### 5.3 Parity gate (v2 → v3)
 
-v3 on adjacent single-edge subjects must produce identical output to
-v2, field by field.
+v3 must produce identical output to v2 for single-edge subjects on
+the enriched synth graph (`synth-simple-abc`). Field-by-field
+comparison of `maturity_rows`:
+
+- `rate` — must match exactly (same evidence frames)
+- `midpoint` — within 2% (MC sampling variance)
+- `fan_bands` — within 5% per quantile (MC variance)
+- `tau_solid_max`, `tau_future_max` — must match exactly
+- `evidence_y`, `evidence_x` — must match exactly
+
+Test uses the synth graph with DB data (same pattern as
+`test_be_topo_pass_parity.py`).
 
 **Files touched**:
-- `graph-editor/lib/tests/` — new `test_v2_v3_parity.py`
+- `graph-editor/lib/tests/test_v2_v3_parity.py` — new test file
 
 ### 5.4 Multi-hop acceptance
 
-v3 on multi-edge spans. Same acceptance criteria as Phase 0.2.
+v3 on multi-edge spans (e.g. `synth-simple-abc` A→C via B). Same
+acceptance criteria as Phase 0.2: v3 output is structurally valid
+and quantitatively reasonable (not necessarily identical to v2 for
+multi-hop, since v3 uses the engine's carrier convolution which
+differs from v2's path-param approach by ~2%).
 
 ### 5.5 Retire v2
 
@@ -484,17 +587,12 @@ When v3 passes parity:
 - Remove `cohort_forecast_v2.py` (1154 lines)
 - Remove `_handle_cohort_maturity_v2` from `api_handlers.py`
 - Remove `span_adapter.py` (transitional, 160 lines)
-- Rename v3 → `cohort_maturity` (or keep as-is)
-
-**Files touched**:
-- `graph-editor/lib/runner/cohort_forecast_v2.py` (delete)
-- `graph-editor/lib/runner/span_adapter.py` (delete)
-- `graph-editor/lib/api_handlers.py` (remove v2 handler)
-- `graph-editor/lib/runner/analysis_types.yaml` (rename)
-- FE type registrations (rename)
+- Update FE type registrations to route `cohort_maturity` → v3 handler
+- Update `analysis_types.yaml`
+- Unfreeze `cohort_forecast.py`, `span_kernel.py`, `span_evidence.py`
 
 **Exit gate**: v3 is the sole cohort maturity implementation. v2 code
-deleted. All existing tests pass against v3.
+deleted. All existing tests pass against v3. v3 is under 400 lines.
 
 ---
 
@@ -587,23 +685,26 @@ pass is too slow for interactive use.
 ## Dependency Graph
 
 ```
-Phase 0 (parity gates)
+Phase 0 (parity gates)              ✅
   │
   ▼
-Phase 1 (promoted resolver)
+Phase 1 (promoted resolver)         ✅ partial
   │
   ▼
-Phase 2 (window ForecastState)
+Phase 2 (window-mode engine)        ✅
   │
   ▼
-Phase 3 (cohort ForecastState)  ──────────────────────┐
-  │                                                    │
-  ▼                                                    ▼
-Phase 4 (consumer migrations)              Phase 5 (v3)
-  │                                           │
-  ▼                                           ▼
-Phase 6 (contract tests) ◄────────────────────┘
-
+Phase 3 (cohort-mode engine)        ✅ parity 1.75%
+  │
+  ▼
+Phase 4 (consumer migrations)       ELIMINATED — engine writes to existing fields
+  │
+  ▼
+Phase 5 (cohort_maturity_v3)        ← NEXT
+  │
+  ▼
+Phase 6 (contract tests)
+  │
 Phase 7.1–7.4 (enhancements) — independent, any time after Phase 3
 ```
 

@@ -248,6 +248,7 @@ export function AnalysisChartContainer(props: {
     if (t === 'lag_histogram') return 'histogram';
     if (t === 'daily_conversions') return 'daily_conversions';
     if (t === 'cohort_maturity') return 'cohort_maturity';
+    if (t === 'cohort_maturity_v1') return 'cohort_maturity';
     if (t === 'cohort_maturity_v2') return 'cohort_maturity';
     if (t === 'lag_fit') return 'lag_fit';
     if (t === 'surprise_gauge') return 'surprise_gauge';

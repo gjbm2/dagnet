@@ -104,6 +104,9 @@ def main():
     parser.add_argument("--phase2-from-dump", type=str, default=None, metavar="PATH",
                         help="Skip Phase 1: load artefacts from dump dir, run Phase 2 only "
                              "(forwarded to harness --phase2-from-dump)")
+    parser.add_argument("--settings-json", type=str, default=None, metavar="PATH",
+                        help="Path to extra settings JSON to merge into the payload "
+                             "(e.g. target_accept, overprovision_chains)")
     args = parser.parse_args()
 
     # --- Resolve graph and truth file ---
@@ -195,6 +198,24 @@ def main():
             settings_json_path = tempfile.mktemp(suffix=".json", prefix="bayes_settings_")
         with open(settings_json_path, "w") as sf:
             json.dump(settings_payload, sf)
+
+    # --- Merge external settings JSON (e.g. target_accept, overprovision_chains) ---
+    if args.settings_json:
+        with open(args.settings_json) as _ext_f:
+            _ext_settings = json.load(_ext_f)
+        if _ext_settings:
+            # Merge into existing settings payload or create one
+            if settings_json_path and os.path.isfile(settings_json_path):
+                with open(settings_json_path) as _sf:
+                    _existing = json.load(_sf)
+                _existing.update(_ext_settings)
+                with open(settings_json_path, "w") as _sf:
+                    json.dump(_existing, _sf)
+            else:
+                import tempfile
+                settings_json_path = tempfile.mktemp(suffix=".json", prefix="bayes_settings_")
+                with open(settings_json_path, "w") as _sf:
+                    json.dump(_ext_settings, _sf)
 
     # --- Run harness ---
     # When --phase2-from-dump is set, skip the expensive --fe-payload CLI call.

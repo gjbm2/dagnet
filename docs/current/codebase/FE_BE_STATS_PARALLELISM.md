@@ -190,4 +190,32 @@ transport layer differs.
 | `src/services/modelVarsResolution.ts` | Preference hierarchy for model_vars |
 | `lib/runner/stats_engine.py` | BE topo pass implementation (Python port of FE) |
 | `lib/api_handlers.py` | `/api/lag/topo-pass` endpoint handler |
+| `lib/runner/forecast_state.py` | Forecast engine: `ForecastState`, `build_node_arrival_cache`, `compute_forecast_state_window/cohort` |
+| `lib/runner/model_resolver.py` | Promoted model resolver: `resolve_model_params(edge, scope, temporal_mode)` |
 | `src/cli/commands/analyse.ts` | CLI `--topo-pass` flag (builds cohort_data from disk, calls BE) |
+
+## Forecast engine (doc 29, Phases 2-5 complete 14-Apr-26)
+
+The BE topo pass runs a **forecast engine** after the stats engine
+(`compute_conditioned_forecast` in `forecast_state.py`). Per edge:
+
+1. Resolves best-available model params from `model_vars[]` entries
+   (reads from selected source, not flat promoted fields)
+2. Builds per-node upstream carrier (cohort mode only)
+3. MC draws from joint posterior (p, mu, sigma, onset)
+4. IS conditioning against observed evidence (aggregate with ESS
+   tempering — doc 29g)
+5. Computes completeness, completeness_sd, composed rate SDs
+
+The engine writes to the **same existing fields** as the FE topo pass
+(`latency.completeness`, `p.mean`, `p.stdev`, etc.). It does not add
+a new schema object. One new field: `latency.completeness_stdev`.
+
+The BE pass is a **full upgrade** of the FE pass — every field the FE
+writes, the BE also writes with improved values. The FE pass runs
+first (instant render), then the BE overwrites when its response
+arrives. Session log shows FE→BE parity per edge (`FE_BE_PARITY`
+entries at info level, with before/after values).
+
+`cohort_maturity` analysis type now routes to v3 (engine consumer,
+185 lines). v1 and v2 are gated to dev only (`devOnly: true`).

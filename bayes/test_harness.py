@@ -919,12 +919,35 @@ def main():
     log_file = open(LOG_PATH, "w")
     archive_file = open(LOG_ARCHIVE, "w")
 
+    # Tee stdout to the harness log so worker print() calls
+    # (model diagnostics, Phase 2 info) are captured even if
+    # the run is killed before the result log is written.
+    class _TeeStdout:
+        def __init__(self, original, log_f, archive_f):
+            self._orig = original
+            self._log = log_f
+            self._archive = archive_f
+        def write(self, msg):
+            self._orig.write(msg)
+            self._orig.flush()
+            self._log.write(msg)
+            self._log.flush()
+            self._archive.write(msg)
+            self._archive.flush()
+        def flush(self):
+            self._orig.flush()
+            self._log.flush()
+            self._archive.flush()
+        def __getattr__(self, name):
+            return getattr(self._orig, name)
+    _original_stdout = sys.stdout
+    sys.stdout = _TeeStdout(_original_stdout, log_file, archive_file)
+
+    def _restore_stdout():
+        sys.stdout = _original_stdout
+
     def _print(msg="", **kwargs):
         print(msg, flush=True, **kwargs)
-        log_file.write(msg + "\n")
-        log_file.flush()
-        archive_file.write(msg + "\n")
-        archive_file.flush()
 
     _print(f"Log file: {LOG_PATH}")
     _print(f"  tail -f {LOG_PATH}")
@@ -988,12 +1011,14 @@ def main():
                 if sampling_abort[0]:
                     _print(f"\n  Killing sampler...")
                     subprocess.run(["pkill", "-P", str(os.getpid())], capture_output=True)
+                    _restore_stdout()
                     log_file.close()
                     archive_file.close()
                     sys.exit(1)
                 if timeout_s > 0 and elapsed > timeout_s:
                     _print(f"\n  TIMEOUT after {elapsed:.0f}s (last stage: {last_stage[0]})")
                     subprocess.run(["pkill", "-P", str(os.getpid())], capture_output=True)
+                    _restore_stdout()
                     log_file.close()
                     archive_file.close()
                     sys.exit(1)
@@ -1003,12 +1028,14 @@ def main():
             e, tb = error_box[0]
             _print(f"\nCRASHED after {time.time() - t_start_run:.1f}s: {e}")
             _print(tb)
+            _restore_stdout()
             log_file.close()
             archive_file.close()
             sys.exit(1)
 
         if not result_box[0]:
             _print(f"\nNo result returned after {time.time() - t_start_run:.1f}s")
+            _restore_stdout()
             log_file.close()
             archive_file.close()
             sys.exit(1)
@@ -1341,13 +1368,104 @@ def main():
                         _print(f"    {ctx_key_c} [{prov}]:")
                         _print(_fmt("p", slice_truth_p, scp))
 
+    # --- Summary line: timing, quality, recovery ---
     _print(f"\n{'=' * 60}")
-    if result.get("status") == "complete" or result.get("edges_fitted", 0) > 0:
-        _print("PASS")
-    else:
-        _print("FAIL")
+    status = result.get("status", "error")
+    dur_s = (result.get("duration_ms") or 0) / 1000
+    t = result.get("timings", {})
+    p1_s = (t.get("sampling_ms", 0) - t.get("sampling_phase2_ms", 0)) / 1000
+    p2_s = t.get("sampling_phase2_ms", 0) / 1000
+
+    # Quality metrics
+    q = result.get("quality", {})
+    rhat = q.get("max_rhat")
+    ess = q.get("min_ess")
+    conv = q.get("converged_pct")
+
+    # Worst recovery ratio (analytic comparison)
+    worst_ratio = None
+    worst_ratio_edge = None
+    for edge in webhook_edges:
+        pid = edge.get("param_id", "?")
+        pf_key = f"parameter-{pid}" if not pid.startswith("parameter-") else pid
+        pf = param_files.get(pf_key) or param_files.get(pid, {})
+        vals = pf.get("values", []) if pf else []
+        if vals and isinstance(vals[0], dict):
+            analytic_mean = vals[0].get("mean")
+            if not isinstance(analytic_mean, (int, float)) or analytic_mean <= 0:
+                continue
+            ws = edge.get("slices", {}).get("window()", {})
+            if ws:
+                ba, bb = ws.get("alpha", 0), ws.get("beta", 0)
+                if (ba + bb) > 0:
+                    ratio = (ba / (ba + bb)) / analytic_mean
+                    deviation = abs(ratio - 1.0)
+                    if worst_ratio is None or deviation > abs(worst_ratio - 1.0):
+                        worst_ratio = ratio
+                        worst_ratio_edge = pid.split("-")[-3] + "→" + pid.split("-")[-1] if pid.count("-") >= 3 else pid
+
+    # Worst truth z-score (synth graphs)
+    worst_z = None
+    worst_z_param = None
+    if truth and truth.get("edges"):
+        for edge in webhook_edges:
+            pid = edge.get("param_id", "?")
+            te = None
+            for tk, tv in truth["edges"].items():
+                if pid.endswith(tk):
+                    te = tv
+                    break
+            if not te:
+                continue
+            ws = edge.get("slices", {}).get("window()", {})
+            if not ws:
+                continue
+            short = pid.split("-")[-3] + "→" + pid.split("-")[-1] if pid.count("-") >= 3 else pid
+            # Check p recovery
+            tp = te.get("p", 0)
+            wa, wb = ws.get("alpha", 0), ws.get("beta", 0)
+            if (wa + wb) > 0:
+                bp = wa / (wa + wb)
+                # z for beta-distributed mean: use posterior sd ≈ sqrt(ab/((a+b)^2(a+b+1)))
+                import math
+                psd = math.sqrt(wa * wb / ((wa + wb) ** 2 * (wa + wb + 1))) if (wa + wb) > 1 else 0.1
+                zp = abs(tp - bp) / psd if psd > 1e-6 else 0
+                if worst_z is None or zp > worst_z:
+                    worst_z = zp
+                    worst_z_param = f"p({short})"
+            # Check mu, onset
+            for param, tkey in [("mu", "mu"), ("onset", "onset")]:
+                tv = te.get(tkey)
+                if tv is None:
+                    continue
+                pm = ws.get(f"{param}_mean")
+                psd = ws.get(f"{param}_sd")
+                if pm is not None and psd and psd > 1e-6:
+                    z = abs(tv - pm) / psd
+                    if worst_z is None or z > worst_z:
+                        worst_z = z
+                        worst_z_param = f"{param}({short})"
+
+    # Build summary
+    parts = [status.upper()]
+    parts.append(f"total={dur_s:.0f}s")
+    if p2_s > 0:
+        parts.append(f"p1={p1_s:.0f}s")
+        parts.append(f"p2={p2_s:.0f}s")
+    if rhat is not None:
+        parts.append(f"rhat={rhat:.3f}")
+    if ess is not None:
+        parts.append(f"ess={ess:.0f}")
+    if conv is not None:
+        parts.append(f"conv={conv:.0f}%")
+    if worst_ratio is not None:
+        parts.append(f"worst_ratio={worst_ratio:.2f}x({worst_ratio_edge})")
+    if worst_z is not None:
+        parts.append(f"worst_z={worst_z:.1f}({worst_z_param})")
+    _print("  ".join(parts))
     _print(f"{'=' * 60}")
 
+    _restore_stdout()
     log_file.close()
     archive_file.close()
 

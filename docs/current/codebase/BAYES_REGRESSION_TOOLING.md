@@ -1,6 +1,6 @@
 # Bayes Regression Tooling
 
-**Last updated**: 13-Apr-26
+**Last updated**: 14-Apr-26
 
 How the parameter recovery regression pipeline works: discovery,
 bootstrap, parallel execution, multi-layered audit, and known
@@ -26,6 +26,57 @@ run_regression.py
   → assert_recovery()            # z-score + threshold checks
   → verbose report (layers 0-8 per graph)
 ```
+
+---
+
+## Running synth graphs manually
+
+When testing synth graphs outside the full regression pipeline, three rules apply:
+
+1. **Always use `param_recovery.py`, not `test_harness.py` directly.** Synth graphs have `.truth.yaml` sidecars containing ground-truth parameters. `param_recovery.py` wraps the harness and compares posteriors against truth — it produces recovery z-scores, absolute errors, and per-edge comparison tables. Running `test_harness.py` directly discards the ground-truth comparison, which is the entire point of using synth graphs.
+
+2. **Run one graph at a time.** JAX parallelises gradient evaluations across all available CPU cores internally (see §JAX backend below). Running multiple graphs concurrently causes them to contend for cores, slowing both down. Use `--timeout 0` for exploratory runs on heavy contexted graphs where sampling time is unpredictable.
+
+3. **Use `python3 -u` for background runs.** Python buffers stdout when piped to a file. Without `-u`, no output appears until the process exits — making long-running background runs appear frozen. Always use unbuffered mode.
+
+Example (single graph, no timeout):
+
+```bash
+. graph-editor/venv/bin/activate
+python3 bayes/param_recovery.py \
+  --graph synth-diamond-context \
+  --tune 1000 --draws 1000 --chains 2 --timeout 0
+```
+
+The winning formula flags (`latency_reparam`, `centred_latency_slices`,
+`centred_p_slices`) are all `True` by default since 14-Apr-26. No
+`--feature` flags needed unless disabling them.
+
+### Running a full regression
+
+```bash
+. graph-editor/venv/bin/activate
+python3 -u bayes/run_regression.py --max-parallel 1 --tune 2000 --draws 2000
+```
+
+Key points:
+- **`--max-parallel 1`** is required — JAX fans out across all CPU cores per graph.
+- **`python3 -u`** for unbuffered output (see rule 3 above).
+- **Do not use `--no-timeout`** — truth files have per-graph timeouts (updated 14-Apr-26). The stall detector catches stuck chains before timeout.
+- **Incremental summary**: written to `/tmp/bayes_regression-{run_id}.summary` after each graph. Monitor with `tail -f`.
+- **Per-graph harness logs**: `/tmp/bayes_harness-{graph}-{run_id}.log` — full diagnostic output for every run.
+- **Editing truth files triggers STALE**: changing `expected_sample_seconds` or any other field in `.truth.yaml` causes all affected graphs to re-bootstrap (re-insert synth data into DB). This adds time but is harmless.
+
+### Truth file timeouts (updated 14-Apr-26)
+
+`expected_sample_seconds` in each `.truth.yaml` controls the hard
+timeout for that graph. Values were updated for 2000/2000 runs:
+
+| Category | Timeout | Graphs |
+|----------|---------|--------|
+| Heavy contexted | 2700s (45 min) | diamond-context, lattice-context, join-branch-context |
+| Medium contexted | 1800s (30 min) | 3way-join-context, fanout-context, skip-context, mirror-4step-context, simple-abc-context, context-solo, context-solo-mixed |
+| Uncontexted | 900s (15 min) | all `-test` graphs, mirror-4step, drift*, simple-abc, forecast-test |
 
 ---
 
@@ -283,6 +334,55 @@ gradient_backend='pytensor')`. Requires `jax[cpu]` (in
 JAX parallelises gradient evaluations across cores internally, so
 `--max-parallel 1` is appropriate when using the JAX backend — each
 graph already utilises all available cores.
+
+### Winning formula defaults (14-Apr-26)
+
+Three feature flags that together produce the best sampling geometry
+for contexted graphs now default to `True`:
+
+| Flag | Default | What it does |
+|------|---------|-------------|
+| `latency_reparam` | `True` | (m, a, r) quantile reparameterisation — decorrelates onset-mu-sigma ridge (doc 34 §11.8) |
+| `centred_latency_slices` | `True` | Centred parameterisation for per-slice latency — 20x P1 speedup with strong data (§11.9) |
+| `centred_p_slices` | `True` | Centred parameterisation for per-slice probability — fixes tau_slice ESS bottleneck (§11.11) |
+
+No `--feature` flags needed for normal runs. To disable:
+`--feature latency_reparam=false` etc.
+
+### Chain stall detection and retry (14-Apr-26)
+
+Heavy contexted graphs (diamond-context, lattice-context) stochastically
+hit bad posterior regions where one NUTS chain's draw rate collapses
+while others continue normally. This is geometry, not compute — the
+same graph succeeds on re-run with a fresh seed.
+
+**Detection** (`ChainStallDetector` in `compiler/inference.py`):
+- Tracks per-chain velocity via exponentially weighted moving average (EMA)
+- Each chain's peak EMA establishes its "cruising speed"
+- A chain enters the **stall zone** when its EMA drops below 10% of peak
+- A chain exits the stall zone only when EMA recovers above 30% of peak (hysteresis — small wobbles within the crawl don't count as recovery)
+- After 30s in the stall zone without recovery → `ChainStallError` raised
+- Stalls are not detected during warmup (before chains reach 5 draws/s cruising speed)
+
+**Retry** (`worker.py`):
+- `run_inference` calls are wrapped in a retry loop (max 3 attempts by default)
+- On `ChainStallError`, the run is aborted and restarted with a fresh random seed
+- After 3 consecutive stalls, `RuntimeError` propagates — the graph is marked FAILED
+- Both Phase 1 and Phase 2 have independent retry loops
+
+**Per-chain progress template**: the nutpie Jinja2 template
+(`_NUTPIE_PROGRESS_TEMPLATE`) emits per-chain `finished_draws` every
+500ms. The stall detector consumes this in `_throttled_on_progress`.
+
+**Test coverage**: `bayes/tests/test_stall_detector.py` — 12 tests
+covering healthy runs, stall detection, grace period, hysteresis,
+warmup suppression, and edge cases. All use synthetic draw sequences
+with controlled timing — no MCMC needed.
+
+**Observed stall patterns** (14-Apr-26 regression):
+- `synth-diamond-context`: Phase 1 completes fine, Phase 2 stalls at ~5% (600/12000 draws) on all 3 attempts. Different chains each time.
+- `synth-lattice-context`: Phase 1 stalls at varying points (3%, 98%, 6%). One attempt was 168 draws from finishing when the chain died.
+- All other contexted graphs (3way-join, join-branch, skip, mirror-4step, fanout, simple-abc) completed without stalls.
 
 ### Timeout layers (12-Apr-26)
 

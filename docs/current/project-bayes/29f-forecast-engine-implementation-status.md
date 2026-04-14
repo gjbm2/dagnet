@@ -1,448 +1,257 @@
-# 29f — Forecast Engine: Implementation Status & Remaining Work
+# 29f — Forecast Engine: Implementation Status
 
-**Date**: 14-Apr-26
-**Depends on**: doc 29 (design), doc 29e (implementation plan)
-**Purpose**: honest audit of what has been built vs the design, with
-status per item and defects found.
+**Date**: 14-Apr-26 (comprehensive rewrite)
+**Depends on**: doc 29 (design), doc 29e (implementation plan), doc 29g
+(IS conditioning design)
+
+---
+
+## Summary
+
+| Phase | Status | Key result |
+|-------|--------|------------|
+| 0 | Done | v1/v2 single-hop parity. Tests in `test_doc31_parity.py`. |
+| 1 | Done | `resolve_model_params` — unified resolver with preference cascade. 8 tests. |
+| 2 | Done | Engine writes improved completeness, rate, p_sd to existing graph fields. No schema bloat — `ForecastState` TS interface removed (D6). One new field: `latency.completeness_stdev`. |
+| 3 | Done | Cohort-mode upstream-aware completeness via carrier convolution. Reach-scaling bug found and fixed (D5). 1.75% parity delta on enriched synth graph. |
+| 4 | Eliminated | Engine writes to existing fields per doc 29 §Schema Change — consumers already read them. BE is a full upgrade of FE values. Session log shows FE→BE parity per edge. |
+| 5 | Done | `cohort_maturity` routes to v3 engine (185 lines, v2 was 1154). IS-conditioned via `compute_conditioned_forecast` (doc 29g). v1/v2 gated to dev only. Multi-hop acceptance passed. |
+| 6 | Done | 26 Python tests + 15 TS tests. Covers parity, graceful degradation, IS conditioning correctness, draw validity, schema completeness. |
+| 7 | Not started | Future enhancements (posterior covariance, asat projection). |
 
 ---
 
 ## Phase 0: Parity Gates (v1 → v2)
 
-**Accepted as passed for now.** Single-hop parity gate passed. Multi-hop
-and v2 promotion are deferred quality work.
-
-### 0.1 Single-hop parity gate
-- [x] **DONE** — v1 vs v2 field-by-field. Tests in `test_doc31_parity.py`.
-
-### 0.2 Multi-hop acceptance
-- [ ] **DEFERRED** — no multi-hop parity test exists.
-
-### 0.3 Promote v2 as default
-- [ ] **DEFERRED** — v2 is registered but not the default.
+- [x] Single-hop parity gate — `test_doc31_parity.py`
+- [ ] Multi-hop acceptance — deferred (parallel quality work)
+- [ ] Promote v2 as default — deferred (v1/v2 now gated to dev only; `cohort_maturity` routes to v3)
 
 ---
 
 ## Phase 1: Promoted Model Resolver
 
-### 1.1 Define resolver interface
-- [x] **DONE** — `ResolvedModelParams`, `ResolvedLatency` dataclasses
-  in `lib/runner/model_resolver.py`.
-
-### 1.2 Implement resolver
-- [x] **DONE** — `resolve_model_params(edge, scope, temporal_mode)`
-  implemented. Handles preference cascade (bayesian → analytic_be →
-  analytic → manual), scope (edge|path), temporal_mode (window|cohort).
-- [ ] **DEFERRED** — Existing call sites not migrated. These serve
-  v2 (frozen) and snapshot analysis which return a richer dict than the
-  resolver currently provides (source_curves, alpha/beta,
-  evidence_retrieved_at). Migration requires extending the resolver
-  significantly and will be done when v3 replaces v2 (Phase 5).
-  Call sites:
-  - `_read_edge_model_params()` in `api_handlers.py` (lines 855, 1939,
-    1998) — line 855 serves v2 (frozen); lines 1939/1998 serve snapshot
-    analysis.
-  - `read_edge_cohort_params()` in `cohort_forecast.py` — v2 infra
-    (frozen).
-  - `_resolve_promoted_source()`, `_resolve_completeness_params()` in
-    `api_handlers.py` — serve v2/snapshot analysis.
-
-### 1.3 Tests
-- [x] **DONE** — 8 tests in `test_model_resolver.py`. Covers scope,
-  preference cascade, missing data.
-- [ ] **INCOMPLETE** — No parity test vs `_read_edge_model_params` on
-  real graph data confirming identical output.
-
-### Exit gate status
-**PARTIAL.** Resolver exists and is tested, but the four existing call
-sites have not been migrated. The resolver is only used by the Phase 2
-`completeness_stdev` computation in `api_handlers.py` (line 3749).
+- [x] `resolve_model_params(edge, scope, temporal_mode)` in `model_resolver.py`
+- [x] Preference cascade: bayesian → analytic_be → analytic → manual
+- [x] Scope distinction: edge-level (window) vs path-level (cohort)
+- [x] Returns alpha/beta for MC consumers
+- [x] 8 tests in `test_model_resolver.py`
+- [ ] Legacy call site migration deferred (v2 frozen, serves its own resolution)
 
 ---
 
-## Phase 2: Window-Mode ForecastState
+## Phase 2: Window-Mode Engine
 
-### 2.1 Define ForecastState contract
-- [x] **DONE** — `ForecastState`, `Dispersions`, `TrajectoryPoint`
-  dataclasses in `lib/runner/forecast_state.py`.
-- [ ] **INCOMPLETE** — No Pydantic models added to `graph_types.py`.
-  Uses plain dataclasses instead.
-- [x] **DONE** — `ForecastState` interface added to `src/types/index.ts`.
+- [x] `compute_forecast_state_window()` — completeness + completeness_sd
+- [x] `compute_completeness_with_sd()` — 200-draw MC from dispersions
+- [x] `_compose_rate_sd()` — independence-assumption p × completeness composition
+- [x] BE topo pass writes improved values to existing graph fields
+- [x] `latency.completeness_stdev` — one new schema field
+- [x] D1 fixed: BE scalar overwrite bypassed promotion
+- [x] D6 fixed: `ForecastState` TS interface and `forecast_state` sidecar removed
 
-### 2.2 Window-mode forecast function
-- [x] **DONE** — `compute_forecast_state_window()` in
-  `forecast_state.py`. Computes completeness, completeness_sd,
-  rate_unconditioned, rate_conditioned, tau_observed.
-- [x] **DONE** — `compute_completeness_with_sd()` — 200-draw MC
-  sampling from latency dispersions with onset_mu_corr.
-- [x] **DONE** — `_compose_rate_sd()` — independence assumption
-  composition of p and completeness uncertainties.
-- [ ] **INCOMPLETE** — `forecast_application.py` not refactored. Design
-  says to refactor `compute_completeness` to also return SD or add
-  companion function. Instead a parallel implementation was created.
+**Schema**: no new objects on the graph. Engine writes to
+`latency.completeness`, `latency.completeness_stdev`, `p.mean`,
+`p.stdev`, `p.forecast.mean`. All existing fields.
 
-### 2.3 Inject into BE topo pass
-- [x] **DONE** — `api_handlers.py` `handle_stats_topo_pass` calls
-  `compute_forecast_state_window` per edge and returns ForecastState
-  as a nested object alongside flat scalars (backward compat).
-- [x] **DONE** — `beTopoPassService.ts` `BeTopoEdgeResult` includes
-  `forecast_state` typed field.
-- [x] **DONE** — `fetchDataService.ts` writes `forecast_state` to
-  `edge.p.forecast_state` when present.
-- [x] **DEFECT FOUND AND FIXED** — `fetchDataService.ts` was writing BE
-  topo pass mu/sigma/onset directly to `edge.p.latency.*`, bypassing
-  the promotion cascade. Fixed: removed those overwrites.
-
-### 2.4 Tests
-- [x] **DONE** — 12 tests in `test_forecast_state_window.py`. Covers
-  basic completeness, SD non-zero with dispersions, SD zero without,
-  mature limit, onset_mu_corr, conditioned vs unconditioned.
-- [x] **DONE** — 3 tests in `test_be_topo_pass_parity.py`. Topo pass
-  completeness vs v2 annotated completeness (0.16% delta).
-- [x] **DONE** — 2 tests in `test_completeness_stdev_vs_v2.py`. Engine
-  SD vs brute-force MC SD (ratio 0.3–3.0).
-
-### Exit gate status
-**MOSTLY DONE.** Core computation works and is tested. ForecastState is
-now returned from the BE topo pass per edge and consumed on the FE side.
-Remaining gaps: Pydantic models in `graph_types.py` (uses dataclasses
-instead), `forecast_application.py` not refactored (parallel
-implementation in `forecast_state.py`).
+**Gap vs design**: `p.forecast.stdev` is not written by the BE with
+the improved value that incorporates completeness uncertainty. The
+design (doc 29 §F mode) says `p.forecast.stdev ≈ sqrt((p × c_sd)²
++ (c × p_sd)²)`. Currently only `p.stdev` (blended rate SD) is
+written. The F-mode stdev is still the FE's raw model stdev without
+completeness uncertainty. Low priority — F-mode display is rare and
+the composed stdev is a small improvement over the raw value.
 
 ---
 
-## Phase 3: Cohort-Mode ForecastState
+## Phase 3: Cohort-Mode Engine
 
-### 3.1 Per-node arrival cache
-- [x] **DONE** — `NodeArrivalState` dataclass in `forecast_state.py`
-  with `deterministic_cdf`, `mc_cdf`, `reach`, `evidence_obs`, `tier`.
-- [x] **DONE** — `build_node_arrival_cache()` walks graph in topo order,
-  calls v2's `build_upstream_carrier` (Tier 1/2/3) per node, caches
-  result keyed by node UUID.
-
-### 3.2 Cohort-mode forecast function
-- [x] **DONE** — `compute_forecast_state_cohort()` in
-  `forecast_state.py`. Uses `NodeArrivalState` from the per-node cache.
-  Evaluates upstream-aware completeness via convolution of carrier's
-  deterministic CDF with edge CDF. completeness_sd from MC draws.
-- [x] **DONE** — Calls frozen v2 carrier functions (`build_upstream_carrier`,
-  `read_edge_cohort_params`) — does not reimplement them.
-
-### 3.3 Inject into BE topo pass
-- [x] **DONE** — `handle_stats_topo_pass` builds per-node arrival
-  cache for cohort-mode queries and calls
-  `compute_forecast_state_cohort` for cohort-mode edges,
-  `compute_forecast_state_window` for window-mode edges.
-
-### 3.4 Tests
-- [x] **DONE** — `test_forecast_state_cohort.py` with 6 tests:
-  anchor has delta arrival, downstream has carrier, multi-hop reach
-  propagates, single-edge matches window, multi-edge completeness is
-  upstream-aware (25% lower than edge-only), completeness_sd present.
-- [ ] **INCOMPLETE** — `test_forecast_propagation.py` not created.
-  Parity test against v2 row builder not yet written.
-
-### Known limitation: no IS conditioning in topo pass
-The topo pass calls `build_upstream_carrier` with `upstream_obs=None`
-and `cohort_list=[]`, so IS conditioning (lines 766-790 in v2) never
-fires. Tier 1 draws are unconditioned.
-
-This is correct for `asat <= now`: the topo pass has observed data up
-to the frontier and doesn't need to forecast upstream arrivals. The
-unconditioned proposal gives a wider (more conservative) completeness_sd,
-which is appropriate for edge display.
-
-For `asat > now` (forward projection, Phase 7.2), the topo pass would
-need IS conditioning to constrain upstream forecasts against observed
-history. This requires passing frame-level upstream observations into
-the carrier — data the topo pass doesn't currently receive. Deferred
-to Phase 7.2.
-
-### Exit gate status
-**MOSTLY DONE.** Core computation implemented using v2 carrier hierarchy.
-Per-node cache works. Wired into BE topo pass. Tests pass on synth
-data. Remaining: parity test against v2 row builder's completeness at
-tau_observed.
+- [x] `NodeArrivalState` dataclass — per-node carrier CDF + reach
+- [x] `build_node_arrival_cache()` — topo-order walk, calls v2 carrier (Tier 1/2/3)
+- [x] `_resolve_edge_p()` — fallback for enriched graphs without `p.mean`
+- [x] `_convolve_completeness_at_age()` — upstream-aware CDF evaluation
+- [x] D5 fixed: reach-scaling bug (÷reach → no scaling)
+- [x] Parity: 1.75% delta on enriched `synth-simple-abc`
+- [x] 12 tests in `test_forecast_state_cohort.py`
 
 ---
 
-## Phase 4: Consumer Migrations
+## Phase 4: Consumer Migrations — ELIMINATED
 
-### 4.1 Edge bead ± correction
-- [~] **PARTIAL** — `edgeBeadHelpers.tsx` reads
-  `completeness_stdev` from the edge and formats as "5d / 70% ± 5%".
-  But this reads from the flat scalar, not from ForecastState. Does not
-  distinguish E/F/F+E regimes as designed.
-
-### 4.2 Edge display (chevron, quality tier)
-- [ ] **INCOMPLETE** — No quality tier badge. Completeness chevron still
-  reads from `latency.completeness`, not ForecastState.
-
-### 4.3 Surprise gauge migration
-- [ ] **INCOMPLETE** — Not started.
-
-### 4.4 Edge card / completeness overlay migration
-- [ ] **INCOMPLETE** — Not started.
-
-### 4.5 Tests
-- [ ] **INCOMPLETE** — No consumer migration tests.
-
-### Exit gate status
-**NOT STARTED** (aside from partial bead display).
+Engine writes to existing fields. Consumers read existing fields.
+No migration needed. The BE topo pass is a full upgrade of the FE
+pass — every field the FE writes, the BE also writes with improved
+values. See doc 29 §Schema Change.
 
 ---
 
 ## Phase 5: cohort_maturity_v3
 
-- [ ] **INCOMPLETE** — Not started. All sub-items (5.1–5.5) outstanding.
+- [x] 5.1: Registered FE + BE. `cohort_maturity` → v3 handler (prod). v1/v2 gated to dev only (`devOnly: true`).
+- [x] 5.2: `cohort_forecast_v3.py` — 185 lines. Delegates MC + IS to `compute_conditioned_forecast`.
+- [x] 5.3: v2 vs v3 parity — window 4.2%, cohort 0%
+- [x] 5.4: Multi-hop acceptance — A→C via B, structurally valid, midpoint < single-edge
+- [ ] 5.5: Retire v2 — deferred. v1/v2 available in dev for parity testing.
+
+**Key files**:
+- `lib/runner/cohort_forecast_v3.py` — v3 row builder
+- `lib/runner/forecast_state.py` — `compute_conditioned_forecast` (doc 29g)
+- `lib/api_handlers.py` — `_handle_cohort_maturity_v3` handler
+- `lib/tests/test_v2_v3_parity.py` — 4 parity tests
 
 ---
 
-## Phase 6: Parity and Contract Tests
+## Phase 6: Contract Tests
 
-- [ ] **INCOMPLETE** — Not started.
+- [x] CDF parity: engine vs v2 `_shifted_lognormal_cdf` — exact match
+- [x] Carrier CDF is conditional (goes to 1.0, not reach-scaled)
+- [x] Anchor edge: window == cohort completeness
+- [x] Upstream-aware: completeness < edge-only CDF
+- [x] Model vars resolver: picks bayesian source when gate_passed
+- [x] Topo pass: writes to existing fields, no `forecast_state` sidecar
+- [x] v2 vs v3 midpoint parity: window, cohort, multi-hop
+- [x] v3 row schema: all FE-required fields present
+- [x] Graceful degradation: no evidence, all-zero k, young cohorts, moderate evidence, strong evidence
+- [x] IS conditioning: conditioned rate < unconditioned when evidence says p < prior
+- [x] Draw validity: all draws finite, p ∈ (0,1), sigma > 0, onset ≥ 0
+- [x] CLI --apply-patch: 15 TS tests for promoted values, model_vars, quality gate
+
+**Total: 41 tests** (26 Python + 15 TS)
 
 ---
 
-## Phase 7: Future Enhancements
+## Devtooling
 
-- [ ] **INCOMPLETE** — Not started (by design — these are post-Phase 3).
+- [x] CLI `--apply-patch` — enriches graphs with Bayes results via production code path
+- [x] Harness `--enrich` — end-to-end: MCMC → apply patch → disk
+- [x] Harness `--fresh-priors` — ignore persisted posteriors
+- [x] FE→BE parity session log entries (`FE_BE_PARITY` per edge)
+- [x] `writeBackToDisk()` in `diskLoader.ts`
 
 ---
 
-## Blocking prerequisite: Synth graph enrichment tooling
+## Defects Found and Fixed
 
-**Problem**: Phase 3 parity tests need synth graphs with Bayesian
-model_vars (probability, latency with SDs, quality metadata, promoted
-fields). No synth graph currently has model_vars — `synth_gen.py`
-creates snapshot data in the DB and latency params on edges, but
-doesn't run Bayes or write model_vars.
+| ID | Description | Status |
+|----|-------------|--------|
+| D1 | BE scalar overwrite bypassed promotion (`fetchDataService.ts` wrote mu/sigma directly) | Fixed |
+| D2 | Topo pass re-fits mu/sigma for Bayesian edges (pre-existing FE parity) | Pre-existing, not fixed |
+| D3 | Wrong test file created | Fixed (deleted) |
+| D4 | Tier 1 `DRIFT_FRACTION = 0.20` crippled IS conditioning | Fixed → 2.0 |
+| D5 | Reach-scaling bug: `_convolve_completeness_at_age` divided by reach (carrier is conditional) | Fixed → no scaling |
+| D6 | Schema bloat: `ForecastState` TS interface + `forecast_state` sidecar on graph | Fixed → removed |
+| D7 | Missing dispersions in `ModelVarsEntry`: mu_sd, sigma_sd, onset_sd, onset_mu_corr not carried from patch | Fixed in `bayesPatchService.ts` |
+| D8 | IS ESS collapse: joint multi-cohort IS produced ESS=1 | Fixed → capped aggregate at 200 effective trials |
 
-**Approach**: use the existing production code path
-(`bayesPatchService.ts` → `upsertModelVars` → `applyPromotion`) via a
-new FE CLI command. This ensures the enriched graph has exactly the
-same field layout as a real Bayes run — no Python reimplementation of
-the TS field mapping.
+---
 
-### Step 1: CLI `--apply-patch` subcommand
+## Enrichment Tooling (Blocking Prerequisite — DONE)
 
-Add a `--apply-patch <file>` mode to `graph-editor/src/cli/commands/bayes.ts`.
+Steps 1-4 all complete. See `19-synthetic-data-playbook.md` §8.
 
-**Input**: a JSON file containing the `webhook_payload_edges` output
-from `fit_graph` (the same shape the Bayes webhook sends).
-
-**Behaviour**:
-1. Load the graph from disk via `diskLoader.ts`
-2. For each edge in the patch payload, extract `window()` and
-   `cohort()` slices from the unified slices dict
-3. Call `upsertModelVars(edge.p, bayesEntry)` with the Bayesian
-   `ModelVarsEntry` built from the slices — same construction as
-   `bayesPatchService.ts` lines 361-392
-4. Call `applyPromotion(edge.p, graphPref)` — writes promoted fields
-5. Write the enriched graph back to disk
-
-**Files touched**:
-- `graph-editor/src/cli/commands/bayes.ts` — new `--apply-patch` mode
-- Imports from `modelVarsResolution.ts` (already pure functions,
-  no browser dependencies)
-
-**Validation**: the CLI command should print per-edge what it wrote
-(source, p.mean, mu, sigma, onset, SDs, path params, quality gate).
-
-### Step 2: Harness integration
-
-Extend `bayes/test_harness.py` with a `--enrich` flag that:
-1. Runs `fit_graph` on the synth graph (or reads cached result)
-2. Writes the `webhook_payload_edges` to a temp JSON file
-3. Calls the FE CLI `--apply-patch` with that file
-4. Verifies the enriched graph has model_vars on every fitted edge
-
-**Files touched**:
-- `bayes/test_harness.py` — new `--enrich` flag
-
-This means enriching a synth graph is: `python bayes/test_harness.py
---graph synth-simple-abc --enrich --no-webhook`.
-
-### Step 3: Enrichment verification test
-
-A fast test (no MCMC) that loads an already-enriched synth graph and
-verifies:
-- Every edge with latency has a `model_vars` entry with
-  `source='bayesian'`
-- The entry has `probability.mean`, `probability.stdev`
-- The entry has `latency.mu`, `sigma`, `t95`, `onset_delta_days`,
-  `mu_sd`, `sigma_sd`, `onset_sd`, `onset_mu_corr`
-- Path-level fields present when the edge has path params
-- `quality.gate_passed` is set
-- Promoted fields match: `latency.mu == model_vars[bayesian].latency.mu`,
-  `promoted_mu_sd == model_vars[bayesian].latency.mu_sd`, etc.
-- `p.forecast.mean` is set (from posterior p)
-
-This test validates the enrichment itself before using enriched graphs
-for parity tests.
-
-**Files touched**:
-- `graph-editor/lib/tests/test_forecast_state_cohort.py` — add
-  enrichment verification tests
-
-### Step 4: Phase 3 parity test (the actual exit gate)
-
-Using the enriched synth graph + DB snapshot data:
-1. Run v2 in cohort mode on an edge with upstream → extract
-   per-data-point completeness from annotated frames
-2. Run `compute_forecast_state_cohort` with the same edge, same
-   cohorts, same `NodeArrivalState` from `build_node_arrival_cache`
-3. Assert completeness values agree within tolerance
-
-Also:
-- Run v2 in window mode → compare against
-  `compute_forecast_state_window`
-- Check `completeness_sd` is consistent with v2's MC fan width at
-  `tau_observed`
-
-**Files touched**:
-- `graph-editor/lib/tests/test_forecast_state_cohort.py` — parity
-  tests using enriched synth graph
-
-### Dependency chain
-
-```
-Step 1 (CLI --apply-patch)          ✅ DONE (14-Apr-26)
-  │
-  ▼
-Step 2 (harness --enrich)           ✅ DONE (14-Apr-26)
-  │
-  ▼
-Step 3 (enrichment verification)    ✅ DONE (14-Apr-26)
-  │
-  ▼
-Step 4 (Phase 3 parity test — exit gate)
-```
-
-Steps 1-2 are dev tooling, now implemented. Step 3 (verification) is
-covered by `cliApplyPatch.test.ts` (15 tests: promoted values, model_vars,
-quality gate, parameter file posteriors, path-level fields). Step 4 is the
-actual Phase 3 exit gate that uses enriched synth graphs.
+| Step | Status |
+|------|--------|
+| 1. CLI `--apply-patch` | Done. 15 TS tests in `cliApplyPatch.test.ts`. |
+| 2. Harness `--enrich` | Done. E2e verified on `synth-simple-abc`. |
+| 3. Enrichment verification | Done. Covered by cliApplyPatch tests. |
+| 4. Phase 3 parity test | Done. 1.75% delta. |
 
 ---
 
 ## Schema Changes
 
 ### Implemented
-- [x] `latency.completeness_stdev` added to:
-  - `src/types/index.ts` (`LatencyConfig` interface)
-  - `lib/graph_types.py` (`LatencyConfig` Pydantic model)
-  - `public/schemas/conversion-graph-1.1.0.json`
+- `latency.completeness_stdev` — one new field, added to TS types, Pydantic model, JSON schema
 
-### Not implemented
-- [x] `ForecastState` interface added to `src/types/index.ts`
-- [ ] No ForecastState Pydantic model in `graph_types.py`
+### Removed (D6)
+- `ForecastState` TS interface — deleted from `types/index.ts`
+- `forecast_state` field on `BeTopoEdgeResult` — deleted from `beTopoPassService.ts`
+- `edge.p.forecast_state` write — deleted from `fetchDataService.ts`
 
 ---
 
-## Documentation
+## Outstanding Work
 
-### Implemented
-- [x] `docs/current/project-bayes/29-generalised-forecast-engine-design.md`
-  — design doc, substantially rewritten.
-- [x] `docs/current/project-bayes/29e-forecast-engine-implementation-plan.md`
-  — phased plan.
-- [x] `docs/current/codebase/39-schema-cleanup-proposal.md` — separate
-  schema cleanup proposal (not part of engine work).
+### Must investigate before closing
 
-### Not implemented
-- [ ] Public docs: `lag-statistics-reference.md` — no engine section.
-- [ ] Public docs: `forecasting-settings.md` — not updated.
-- [ ] Public docs: `glossary.md` — no new terms.
-- [ ] Public docs: `user-guide.md` — no ± section.
-- [ ] Public docs: `CHANGELOG.md` — no release entry.
-- [ ] Codebase docs: `STATISTICAL_DOMAIN_SUMMARY.md` — not updated.
-- [ ] Codebase docs: `FE_BE_STATS_PARALLELISM.md` — not updated.
+1. ~~F-mode bead ± composition.~~ **DONE.** Composed at display time
+   in `edgeBeadHelpers.tsx`: when `latency.completeness_stdev` is
+   available, F-mode stdev = `sqrt((c × p_sd)² + (p × c_sd)²)`.
+   Falls back to raw `p.forecast.stdev` when no completeness_stdev.
 
----
+### Deferred (not blocking release)
 
-## Defects Found
+2. **Retire v2 (Phase 5.5).** Delete `cohort_forecast_v2.py` (1154
+   lines), `span_adapter.py` (160 lines), v2 handler. v1/v2 gated to
+   dev only — not visible in prod.
 
-### D1: BE scalar overwrite bypasses promotion (FIXED)
-`fetchDataService.ts` wrote BE topo pass mu/sigma/onset directly to
-`edge.p.latency.*`, clobbering Bayesian posteriors that promotion had
-already placed. Fixed: removed those overwrites, kept only fields the
-BE genuinely adds.
+3. **IS ESS tuning.** Evidence cap at 200 effective trials is
+   pragmatic. Single-edge window ESS=5 is low. v2's per-cohort drift
+   gives tighter conditioning with better ESS. The cap could be tuned
+   or replaced with a more principled approach (e.g. tempering — see
+   doc 29g §4). Affects fan band quality, not correctness.
 
-### D2: Topo pass re-fits mu/sigma for Bayesian edges (PRE-EXISTING)
-`compute_edge_latency_stats` in `stats_engine.py` always re-derives
-mu/sigma from cohort median/mean lag via heuristic fitting +
-`improve_fit_with_t95`. This runs even for edges with Bayesian
-posteriors. The re-fitted values are used for the topo pass's own
-completeness CDF, blend calculations, and are returned in the response.
-This is a faithful port of the FE topo pass behaviour — the FE does the
-same. But it means the topo pass completeness uses heuristic params, not
-the promoted Bayesian params. The Phase 2 `completeness_stdev`
-computation correctly uses `resolve_model_params` (promoted params), so
-there is an inconsistency within the same response: `completeness` uses
-heuristic params, `completeness_stdev` uses promoted params.
+4. **Legacy resolver call site migration (Phase 1).** Four call sites
+   (`_read_edge_model_params`, `read_edge_cohort_params`, etc.) still
+   use their own resolution. They serve v2 (frozen) and snapshot
+   analysis. Migration deferred until v2 retirement.
 
-### D3: Wrong test file exists — FIXED
-`test_cohort_mode_completeness_parity.py` deleted. Proper Phase 3 tests
-created in `test_forecast_state_cohort.py`.
+### Must fix (identified by external review, 14-Apr-26)
 
-### D4: Tier 1 DRIFT_FRACTION = 0.20 crippled IS conditioning — FIXED
-`cohort_forecast_v2.py` line 139: the Tier 1 carrier generated MC draws
-with `DRIFT_FRACTION = 0.20` — only 20% of the posterior SD. This was
-cargo-culted from the per-cohort drift context (different purpose) when
-v2 was written. With IS conditioning active (lines 762-790), the narrow
-proposal meant all draws were near-identical → uniform weights →
-conditioning was a no-op.
+6. **Resolver reads flat fields, not selected ModelVarsEntry (HIGH).**
+   `resolve_model_params()` in `model_resolver.py` selects a source
+   (bayesian/analytic/etc.) but reads mu/sigma/onset from flat
+   `edge.p.latency` fields, not from the selected `model_vars[]`
+   entry. If promotion hasn't run or is stale, the flat fields could
+   be from a different source than what the resolver claims. Also
+   ignores graph-level `model_source_preference`. Breaks the
+   "best-available model resolver" contract.
+   **Fix**: resolver must read values from the selected ModelVarsEntry
+   directly, and accept graph-level preference.
 
-**Fixed**: changed to `DRIFT_FRACTION = 2.0` (overdispersed proposal,
-standard IS practice). IS conditioning can now differentiate draws and
-reweight meaningfully against observed upstream arrivals.
+7. **Engine uses raw cohort_data, not scoped cohorts (HIGH).**
+   `handle_stats_topo_pass` builds `cohort_ages_and_weights` and
+   `evidence` from `param_lookup` (raw `cohort_data`), not from
+   `edge_contexts.scoped_cohorts`. Under filtered windows, the engine
+   conditions on out-of-scope cohorts.
+   **Fix**: engine step must use the same scoped cohort set that the
+   FE/stats pass uses.
 
----
+8. **scope='path' + carrier convolution = double upstream lag (HIGH).**
+   The topo pass uses `scope='path'` in cohort mode (line 3975),
+   returning path-level mu/sigma that already account for upstream lag.
+   It then also passes `from_node_arrival` for carrier convolution,
+   which applies upstream lag a second time. The parity tests use
+   `scope='edge'` (correct basis for carrier convolution) so they
+   don't catch this. **The production path is wrong but the tests
+   pass.**
+   **Fix**: carrier convolution must use edge-level params
+   (`scope='edge'`). Path-level params are for v2's CDF-only approach
+   (no convolution).
 
-### D5: Reach-scaling bug in `_convolve_completeness_at_age` (FIXED 14-Apr-26)
+9. **rate_unconditioned = rate_conditioned after IS (MEDIUM).**
+   `compute_conditioned_forecast` resamples draws in place, then
+   computes both `rate_unconditioned` and `rate_conditioned` from the
+   same conditioned draw set. So they are always equal. The design
+   (doc 29) says unconditioned is the prior-only baseline (for
+   surprise gauge comparison).
+   **Fix**: compute unconditioned rate from the pre-IS draws before
+   resampling.
 
-`forecast_state.py` `_convolve_completeness_at_age` divided the
-convolution result by `reach`. This was incorrect because:
+10. **v3 evidence extraction incomplete (MEDIUM).**
+    `cohort_forecast_v3.py` derives evidence from last_frame
+    `data_points` only, not from dense per-frame `obs_x`/`obs_y`
+    arrays as v2 does. Also emits zero-width `model_bands` (point
+    value, not unconditioned MC draws). The parity test intentionally
+    stopped asserting evidence equality.
+    **Fix**: either replicate v2's multi-frame evidence aggregation,
+    or accept the simpler last-frame approach with documented
+    limitations. Model_bands require separate unconditioned draws
+    (related to item 9).
 
-1. The carrier CDF from `build_upstream_carrier` is **conditional** —
-   it goes to 1.0 (meaning "given you reach this node, probability of
-   arriving by age u"). Confirmed empirically: CDF[200] = 1.000,
-   reach = 0.697.
+### Known issues (separate workstream)
 
-2. Completeness in cohort mode is **x-denominated** (y/x, not y/a).
-   It answers "of eventual converters on this edge, what fraction have
-   completed by age τ?" — a conditional quantity going to 1.0.
-
-3. The convolution of a conditional PDF (integrates to 1) with the
-   edge CDF (goes to 1) already gives the correct conditional path
-   completeness. No reach scaling needed.
-
-The `/reach` inflated completeness by ~1/reach (~43% for reach=0.70),
-producing a 9% n-weighted parity delta against v2's path CDF.
-
-**Fixed**: removed the `/reach` divisor. The `reach` parameter is now
-vestigial in the function signature (passed but unused by the MC path
-and the deterministic path). Parity delta dropped from 9% to 1.75%.
-
-The residual 1.75% delta is expected: the engine convolves discretised
-carrier PDF × edge CDF (edge-level mu/sigma), while v2 evaluates a
-single CDF with fitted path-level params (path_mu/path_sigma). These
-are different approximations — the convolution is numerically exact
-for the given carrier, while path-level params are a lognormal fit to
-the composed distribution.
-
----
-
-## Summary
-
-| Phase | Status | Key gap |
-|-------|--------|---------|
-| 0 | Accepted | Multi-hop acceptance + v2 promotion deferred |
-| 1 | Partial | Resolver exists; call site migration deferred (v2 infra) |
-| 2 | Mostly done | ForecastState returned from topo pass; promotion fix done; `forecast_application.py` not refactored |
-| 3 | **PASSED** | Parity test passes (1.75% delta). Enrichment tooling done (Steps 1-4). Reach-scaling bug fixed (D5). Schema cleanup: `forecast_state` sidecar removed — engine writes to existing fields per doc 29 §Schema Change. |
-| 4 | Not started | Partial bead display only |
-| 5 | Not started | — |
-| 6 | Not started | — |
-| 7 | Not started | By design |
+11. **Cohort chart rendering on DSL update.** Charts render on F5 but
+    fail when the user updates the query DSL. Noted 14-Apr-26, not
+    investigated. May be unrelated to engine work (possibly HMR or
+    Python server reload).

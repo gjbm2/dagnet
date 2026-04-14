@@ -10,6 +10,115 @@ from __future__ import annotations
 import math
 import time
 
+
+class ChainStallError(RuntimeError):
+    """Raised when a chain's draw rate collapses during sampling.
+
+    The caller should catch this and retry the run with a fresh seed.
+    Attributes:
+        stalled_chain: index of the chain that stalled
+        phase_label: which phase (e.g. "Phase 1 of 2")
+        draws_completed: total draws across all chains at time of abort
+    """
+    def __init__(self, message: str, *, stalled_chain: int = -1,
+                 phase_label: str = "", draws_completed: int = 0):
+        super().__init__(message)
+        self.stalled_chain = stalled_chain
+        self.phase_label = phase_label
+        self.draws_completed = draws_completed
+
+
+class ChainStallDetector:
+    """Detect MCMC chain stalls via EMA velocity tracking.
+
+    Monitors per-chain draw rate.  A stall is when a chain's EMA velocity
+    drops below `stall_trigger` fraction of its peak (established cruising
+    speed) and stays there for `grace_s` seconds without recovering above
+    `recovery_threshold`.
+
+    Usage:
+        detector = ChainStallDetector()
+        # Call on every progress update:
+        stall = detector.update(chain_index, draws, timestamp)
+        if stall is not None:
+            # stall is a dict with chain, rate, peak info
+    """
+
+    def __init__(
+        self,
+        grace_s: float = 30.0,
+        stall_trigger: float = 0.10,
+        recovery_threshold: float = 0.30,
+        ema_alpha: float = 0.3,
+        min_peak: float = 5.0,
+    ):
+        self.grace_s = grace_s
+        self.stall_trigger = stall_trigger
+        self.recovery_threshold = recovery_threshold
+        self.ema_alpha = ema_alpha
+        self.min_peak = min_peak
+
+        self._ema: dict[int, float] = {}
+        self._peak: dict[int, float] = {}
+        self._last_draws: dict[int, int] = {}
+        self._last_time: dict[int, float] = {}
+        self._stall_since: dict[int, float | None] = {}
+
+    def update(self, chain: int, draws: int, now: float) -> dict | None:
+        """Update chain state and return stall info if stall confirmed.
+
+        Returns None if no stall, or a dict with keys:
+            chain, rate, peak, ratio, stalled_for
+        """
+        if chain not in self._ema:
+            self._ema[chain] = 0.0
+            self._peak[chain] = 0.0
+            self._last_draws[chain] = draws
+            self._last_time[chain] = now
+            self._stall_since[chain] = None
+            return None
+
+        dt = now - self._last_time[chain]
+        if dt < 0.1:
+            return None
+
+        dd = draws - self._last_draws[chain]
+        instant_rate = dd / dt if dt > 0 else 0.0
+        self._last_draws[chain] = draws
+        self._last_time[chain] = now
+
+        # Update EMA
+        self._ema[chain] = (self.ema_alpha * instant_rate
+                            + (1 - self.ema_alpha) * self._ema[chain])
+
+        # Update peak
+        if self._ema[chain] > self._peak[chain]:
+            self._peak[chain] = self._ema[chain]
+
+        peak = self._peak[chain]
+        if peak < self.min_peak:
+            return None  # hasn't reached cruising speed
+
+        ratio = self._ema[chain] / peak
+
+        if ratio < self.stall_trigger:
+            if self._stall_since[chain] is None:
+                self._stall_since[chain] = now
+            elif now - self._stall_since[chain] >= self.grace_s:
+                return {
+                    "chain": chain,
+                    "rate": self._ema[chain],
+                    "peak": peak,
+                    "ratio": ratio,
+                    "stalled_for": now - self._stall_since[chain],
+                }
+        elif ratio > self.recovery_threshold:
+            self._stall_since[chain] = None
+        # else: hysteresis dead zone — no action
+
+        return None
+
+
 from .types import (
     TopologyAnalysis,
     BoundEvidence,
@@ -125,6 +234,20 @@ def run_inference(
 
     max_rhat = max(rhat_values) if rhat_values else 0.0
     min_ess = min(ess_values) if ess_values else 0.0
+
+    # Report bottom-5 ESS variables for diagnostics
+    var_ess_pairs = []
+    for var_name in ess_ds.data_vars:
+        arr = ess_ds[var_name].values
+        for val in arr.flat:
+            val = float(val)
+            if not math.isnan(val):
+                var_ess_pairs.append((val, var_name))
+    var_ess_pairs.sort()
+    if var_ess_pairs:
+        bottom5 = var_ess_pairs[:5]
+        print(f"  {prefix}bottom-5 ESS: "
+              + ", ".join(f"{name}={ess:.0f}" for ess, name in bottom5))
 
     n_divergences = 0
     if hasattr(trace, "sample_stats") and "diverging" in trace.sample_stats:
@@ -1465,6 +1588,7 @@ _NUTPIE_PROGRESS_TEMPLATE = (
     "{{ total_finished_draws }}|{{ total_draws }}"
     "|{{ time_remaining_estimate }}"
     "|{{ finished_chains }}|{{ num_chains }}"
+    "|{% for chain in chains %}{{ chain.finished_draws }}{% if not loop.last %},{% endif %}{% endfor %}"
 )
 
 
@@ -1589,6 +1713,11 @@ def _sample_nutpie(model, config: SamplingConfig, report_progress=None,
             except Exception as exc:
                 report_progress("sampling", 0, f"progress error: {exc}")
 
+        # --- Stall detection setup ---
+        _stall_detector = ChainStallDetector()
+        _stall_detected = threading.Event()
+        _stall_info: dict = {}
+
         # nutpie fires the callback every `progress_rate` ms from Rust.
         # We throttle on the Python side: only forward to report_progress
         # if ≥2s have elapsed or pct changed by ≥5pp.  This avoids spamming
@@ -1607,6 +1736,7 @@ def _sample_nutpie(model, config: SamplingConfig, report_progress=None,
                 pct = int(100 * done / total) if total > 0 else 0
             except (ValueError, IndexError):
                 pct = -1
+                parts = []
 
             elapsed_since_last = now - _last_report[0]
             pct_delta = abs(pct - _last_report[1])
@@ -1623,8 +1753,31 @@ def _sample_nutpie(model, config: SamplingConfig, report_progress=None,
                 elapsed_total = time.time() - t_phase_start
                 phase_tag = f" {phase_label}" if phase_label else ""
                 print(f"[nutpie{phase_tag}] {pct}% ({done}/{total}) "
-                      f"elapsed={elapsed_total:.0f}s eta={parts[2].strip()}",
+                      f"elapsed={elapsed_total:.0f}s eta={parts[2].strip() if len(parts) > 2 else '?'}",
                       flush=True)
+
+            # --- Per-chain draw tracking and stall detection ---
+            if len(parts) >= 6 and not _stall_detected.is_set():
+                try:
+                    per_chain_str = parts[5].strip()
+                    per_chain_draws = [int(x) for x in per_chain_str.split(",") if x]
+                except (ValueError, IndexError):
+                    per_chain_draws = []
+
+                for c, draws in enumerate(per_chain_draws):
+                    stall = _stall_detector.update(c, draws, now)
+                    if stall is not None:
+                        phase_tag = f" {phase_label}" if phase_label else ""
+                        print(f"[nutpie{phase_tag}] STALL DETECTED: "
+                              f"chain {stall['chain']} "
+                              f"EMA={stall['rate']:.1f} draws/s "
+                              f"({stall['ratio']:.0%} of peak {stall['peak']:.1f}), "
+                              f"stalled for {stall['stalled_for']:.0f}s",
+                              flush=True)
+                        _stall_info.update(stall)
+                        _stall_info["draws"] = per_chain_draws
+                        _stall_detected.set()
+                        break
 
         progress_type = nutpie_lib.ProgressType.template_callback(
             500,  # ms between Rust-side renders
@@ -1669,12 +1822,47 @@ def _sample_nutpie(model, config: SamplingConfig, report_progress=None,
         sampler = compiled_model._make_sampler(
             settings, init_mean, cores, progress_type, store,
         )
+        _sampling_error = None
         try:
-            sampler.wait()
+            # Poll with 5s intervals: check for stall detection between waits.
+            while not _stall_detected.is_set():
+                try:
+                    sampler.wait(timeout_seconds=5.0)
+                    break  # finished normally
+                except TimeoutError:
+                    continue
+            if _stall_detected.is_set():
+                sampler.abort()
+                heartbeat_stop.set()
+                del sampler
+                del progress_type
+                _sc = _stall_info.get("chain", -1)
+                _sr = _stall_info.get("rate", 0)
+                raise ChainStallError(
+                    f"Chain {_sc} stalled at {_sr:.2f} draws/s "
+                    f"during {phase_label or 'sampling'}",
+                    stalled_chain=_sc,
+                    phase_label=phase_label,
+                    draws_completed=sum(_stall_info.get("draws", [])),
+                )
         except KeyboardInterrupt:
             sampler.abort()
+        except ChainStallError:
+            raise  # already cleaned up above
+        except Exception as _samp_err:
+            # Sampling failed (Rust panic, init error, OOM, etc.)
+            # Clean up before re-raising so heartbeat/sampler don't leak.
+            heartbeat_stop.set()
+            try:
+                sampler.abort()
+            except Exception:
+                pass
+            del sampler
+            del progress_type
+            raise
 
         heartbeat_stop.set()
+
         results = sampler.take_results()
 
         # Release Rust sampler + progress callback before processing results.

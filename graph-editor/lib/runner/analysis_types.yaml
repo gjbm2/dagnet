@@ -93,7 +93,7 @@ analyses:
       has_to: true
     runner: path_runner
 
-  # from(A).to(B) - cohort maturity (snapshot DB analysis)
+  # from(A).to(B) - cohort maturity (forecast engine, doc 29 Phase 5)
   - id: cohort_maturity
     name: "Cohort Maturity"
     description: "How conversion rates evolved over time for a cohort range"
@@ -103,14 +103,27 @@ analyses:
       has_to: true
     runner: path_runner
 
-  # from(A).to(B) - cohort maturity v2 (Phase A multi-hop span kernel)
-  - id: cohort_maturity_v2
-    name: "Cohort Maturity v2"
-    description: "Multi-hop cohort maturity with span kernel (Phase A)"
+  # from(A).to(B) - cohort maturity v1 (legacy, dev only)
+  - id: cohort_maturity_v1
+    name: "Cohort Maturity v1"
+    description: "Legacy cohort maturity (dev only)"
+    dev_only: true
     when:
       node_count: 2
       has_from: true
       has_to: true
+    runner: path_runner
+
+  # from(A).to(B) - cohort maturity v2 (span kernel, dev only)
+  - id: cohort_maturity_v2
+    name: "Cohort Maturity v2"
+    description: "Multi-hop cohort maturity with span kernel (dev only)"
+    dev_only: true
+    when:
+      node_count: 2
+      has_from: true
+      has_to: true
+    runner: path_runner
     runner: path_runner
 
   # from(A).to(B) - lag histogram (snapshot DB analysis)

@@ -720,3 +720,309 @@ def _compute_weighted_completeness_sd(
     if total_n > 0:
         return (total_n, math.sqrt(weighted_sd_sq) / total_n)
     return (0.0, 0.0)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Conditioned forecast (doc 29g)
+# ═══════════════════════════════════════════════════════════════════════
+
+_IS_DRAWS = 2000
+
+
+@dataclass
+class ConditionedForecast:
+    """Engine output with IS-conditioned draws.
+
+    Point estimates are computed from the conditioned draws.
+    The draw arrays are exposed for consumers that need quantiles
+    (e.g. cohort maturity chart fan bands).
+    """
+    completeness: float = 0.0
+    completeness_sd: float = 0.0
+    rate_conditioned: float = 0.0
+    rate_conditioned_sd: float = 0.0
+    rate_unconditioned: float = 0.0
+    rate_unconditioned_sd: float = 0.0
+
+    # Conditioned draws — consumers evaluate CDF at display τ values
+    # using these pre-conditioned params to get fan bands.
+    p_draws: np.ndarray = field(default_factory=lambda: np.array([]))
+    mu_draws: np.ndarray = field(default_factory=lambda: np.array([]))
+    sigma_draws: np.ndarray = field(default_factory=lambda: np.array([]))
+    onset_draws: np.ndarray = field(default_factory=lambda: np.array([]))
+
+    # Unconditioned draws (pre-IS) for model-only fan bands
+    p_draws_unconditioned: np.ndarray = field(default_factory=lambda: np.array([]))
+    mu_draws_unconditioned: np.ndarray = field(default_factory=lambda: np.array([]))
+    sigma_draws_unconditioned: np.ndarray = field(default_factory=lambda: np.array([]))
+    onset_draws_unconditioned: np.ndarray = field(default_factory=lambda: np.array([]))
+
+    # Metadata
+    source: str = ''
+    mode: str = 'window'
+    is_ess: float = 0.0  # effective sample size after IS
+    is_tempering_lambda: float = 1.0  # aggregate likelihood tempering strength
+
+
+def compute_conditioned_forecast(
+    edge_id: str,
+    resolved: ResolvedModelParams,
+    cohort_ages_and_weights: List[tuple],
+    evidence: List[tuple],               # [(τ_i, n_i, k_i), ...]
+    from_node_arrival: Optional['NodeArrivalState'] = None,
+    num_draws: int = _IS_DRAWS,
+) -> ConditionedForecast:
+    """Compute ESS-regularised aggregate IS-conditioned forecast.
+
+    Draws (p, mu, sigma, onset) from the joint posterior, evaluates
+    completeness at each cohort age per draw, applies IS conditioning
+    against observed evidence, and returns conditioned draws + point
+    estimates.
+
+    The conditioned draws can be used by consumers to evaluate CDF
+    at any display τ range without re-doing MC or IS conditioning.
+
+    Args:
+        edge_id: edge UUID.
+        resolved: from resolve_model_params.
+        cohort_ages_and_weights: [(age_days, n), ...] for completeness.
+        evidence: [(τ_i, n_i, k_i), ...] for IS conditioning.
+        from_node_arrival: upstream carrier (cohort mode).
+        num_draws: MC draw count (default 2000 for IS).
+
+    Returns:
+        ConditionedForecast with point estimates and draw arrays.
+    """
+    lat = resolved.latency
+    p_mean = resolved.p_mean
+    S = num_draws
+    rng = np.random.default_rng(seed=42)
+    total_n = sum(n for _, n in cohort_ages_and_weights if n > 0)
+
+    # ── Draw p from Beta posterior ───────────────────────────────
+    alpha = resolved.alpha if resolved.alpha and resolved.alpha > 0 else 1.0
+    beta = resolved.beta if resolved.beta and resolved.beta > 0 else 1.0
+    p_draws = rng.beta(alpha, beta, size=S)
+
+    # ── Draw latency params (correlated mu-onset) ────────────────
+    has_dispersions = (lat.mu_sd > 0 or lat.sigma_sd > 0 or lat.onset_sd > 0)
+    if has_dispersions:
+        mu_draws = rng.normal(lat.mu, max(lat.mu_sd, 1e-10), size=S)
+        if abs(lat.onset_mu_corr) > 1e-6 and lat.mu_sd > 0:
+            rho = lat.onset_mu_corr
+            onset_draws = (
+                lat.onset_delta_days
+                + rho * (max(lat.onset_sd, 1e-10) / max(lat.mu_sd, 1e-10))
+                * (mu_draws - lat.mu)
+                + rng.normal(0, max(lat.onset_sd, 1e-10)
+                             * math.sqrt(max(1 - rho * rho, 0)), size=S)
+            )
+        else:
+            onset_draws = rng.normal(
+                lat.onset_delta_days, max(lat.onset_sd, 1e-10), size=S)
+        onset_draws = np.maximum(onset_draws, 0.0)
+        sigma_draws = np.clip(
+            rng.normal(lat.sigma, max(lat.sigma_sd, 1e-10), size=S),
+            0.01, 20.0)
+    else:
+        mu_draws = np.full(S, lat.mu)
+        sigma_draws = np.full(S, lat.sigma)
+        onset_draws = np.full(S, lat.onset_delta_days)
+
+    upstream_cdf = (from_node_arrival.deterministic_cdf
+                    if from_node_arrival else None)
+    reach = from_node_arrival.reach if from_node_arrival else 0.0
+
+    def _cdf_at_age_for_draw(
+        age: float,
+        mu: float,
+        sigma: float,
+        onset: float,
+    ) -> float:
+        if upstream_cdf is not None and reach > 0:
+            return _convolve_completeness_at_age(
+                age, upstream_cdf, reach,
+                mu, sigma, onset)
+        return _compute_completeness_at_age(
+            age, mu, sigma, onset)
+
+    def _weighted_completeness_draws(
+        mu_values: np.ndarray,
+        sigma_values: np.ndarray,
+        onset_values: np.ndarray,
+    ) -> np.ndarray:
+        mc_completeness = np.zeros(len(mu_values), dtype=float)
+        if total_n <= 0:
+            return mc_completeness
+
+        for age, n in cohort_ages_and_weights:
+            if n <= 0:
+                continue
+            age_f = float(age)
+            for s in range(len(mu_values)):
+                mc_completeness[s] += n * _cdf_at_age_for_draw(
+                    age_f,
+                    float(mu_values[s]),
+                    float(sigma_values[s]),
+                    float(onset_values[s]),
+                )
+
+        mc_completeness /= total_n
+        return mc_completeness
+
+    def _normalise_log_weights(log_weights: np.ndarray) -> Optional[np.ndarray]:
+        if log_weights.size == 0:
+            return None
+        max_log_weight = float(np.max(log_weights))
+        if not math.isfinite(max_log_weight):
+            return None
+        shifted = np.clip(log_weights - max_log_weight, -745.0, 0.0)
+        weights = np.exp(shifted)
+        weight_sum = float(np.sum(weights))
+        if not math.isfinite(weight_sum) or weight_sum <= 0:
+            return None
+        return weights / weight_sum
+
+    def _weights_and_ess(
+        log_likelihood: np.ndarray,
+        tempering_lambda: float,
+    ) -> tuple[Optional[np.ndarray], float]:
+        weights = _normalise_log_weights(log_likelihood * tempering_lambda)
+        if weights is None:
+            return (None, 0.0)
+        ess = float(1.0 / np.sum(np.square(weights)))
+        return (weights, ess)
+
+    # Preserve the true pre-evidence baseline. Downstream consumers use
+    # this to compare conditioned vs unconditioned forecasts.
+    p_draws_unconditioned = p_draws.copy()
+    mu_draws_unconditioned = mu_draws.copy()
+    sigma_draws_unconditioned = sigma_draws.copy()
+    onset_draws_unconditioned = onset_draws.copy()
+    mc_completeness_unconditioned = _weighted_completeness_draws(
+        mu_draws_unconditioned,
+        sigma_draws_unconditioned,
+        onset_draws_unconditioned,
+    )
+
+    # ── IS conditioning against evidence (doc 29d §parameterisation B) ─
+    # Under the engine's shared-p assumption, aggregate (k, E) is the
+    # sufficient statistic. The practical problem is not aggregation,
+    # but finite-draw weight collapse when the aggregate likelihood is
+    # too sharp. We therefore temper the aggregate likelihood just
+    # enough to preserve a minimum ESS instead of hard-capping trials.
+    _IS_TARGET_ESS = 20.0
+    _IS_TEMPERING_STEPS = 24
+    is_ess = float(S)
+    is_tempering_lambda = 1.0
+    if evidence:
+        # Compute aggregate (k, E) across all cohorts per draw
+        total_k = 0.0
+        total_E = np.zeros(S)
+        for tau_i, n_i, k_i in evidence:
+            if n_i <= 0 or k_i < 0:
+                continue
+            total_k += k_i
+            for s in range(S):
+                c_s = _cdf_at_age_for_draw(
+                    float(tau_i),
+                    float(mu_draws[s]),
+                    float(sigma_draws[s]),
+                    float(onset_draws[s]),
+                )
+                total_E[s] += n_i * c_s
+
+        is_E_eff = np.maximum(total_E, total_k)
+        is_fail = is_E_eff - total_k
+        can_condition = (is_E_eff > 0).any() and (is_fail >= 1.0).any()
+
+        if can_condition and total_k > 0:
+            p_clip = np.clip(p_draws, 1e-15, 1 - 1e-15)
+            log_likelihood = total_k * np.log(p_clip) + is_fail * np.log(1 - p_clip)
+            target_ess = min(_IS_TARGET_ESS, float(S))
+            weights, is_ess = _weights_and_ess(log_likelihood, tempering_lambda=1.0)
+
+            if weights is not None and is_ess < target_ess:
+                low = 0.0
+                high = 1.0
+                best_weights = None
+                best_ess = float(S)
+                best_lambda = 0.0
+                for _ in range(_IS_TEMPERING_STEPS):
+                    mid = (low + high) / 2.0
+                    mid_weights, mid_ess = _weights_and_ess(log_likelihood, mid)
+                    if mid_weights is None:
+                        high = mid
+                        continue
+                    if mid_ess >= target_ess:
+                        low = mid
+                        best_weights = mid_weights
+                        best_ess = mid_ess
+                        best_lambda = mid
+                    else:
+                        high = mid
+
+                if best_weights is not None:
+                    weights = best_weights
+                    is_ess = best_ess
+                    is_tempering_lambda = best_lambda
+            elif weights is not None:
+                is_tempering_lambda = 1.0
+
+            if weights is not None:
+                indices = rng.choice(S, size=S, p=weights)
+                p_draws = p_draws[indices]
+                mu_draws = mu_draws[indices]
+                sigma_draws = sigma_draws[indices]
+                onset_draws = onset_draws[indices]
+
+    # ── Compute point estimates from conditioned draws ───────────
+    mc_completeness = _weighted_completeness_draws(
+        mu_draws,
+        sigma_draws,
+        onset_draws,
+    )
+    completeness = float(np.mean(mc_completeness)) if mc_completeness.size else 0.0
+    completeness_sd = float(np.std(mc_completeness)) if mc_completeness.size else 0.0
+
+    # Rates
+    rate_unconditioned_draws = p_draws_unconditioned * mc_completeness_unconditioned
+    rate_unconditioned = (
+        float(np.mean(rate_unconditioned_draws))
+        if rate_unconditioned_draws.size else 0.0
+    )
+    rate_unconditioned_sd = (
+        float(np.std(rate_unconditioned_draws))
+        if rate_unconditioned_draws.size else 0.0
+    )
+
+    rate_conditioned_draws = p_draws * mc_completeness
+    rate_conditioned = (
+        float(np.mean(rate_conditioned_draws))
+        if rate_conditioned_draws.size else 0.0
+    )
+    rate_conditioned_sd = (
+        float(np.std(rate_conditioned_draws))
+        if rate_conditioned_draws.size else 0.0
+    )
+
+    return ConditionedForecast(
+        completeness=completeness,
+        completeness_sd=completeness_sd,
+        rate_conditioned=rate_conditioned,
+        rate_conditioned_sd=rate_conditioned_sd,
+        rate_unconditioned=rate_unconditioned,
+        rate_unconditioned_sd=rate_unconditioned_sd,
+        p_draws=p_draws,
+        mu_draws=mu_draws,
+        sigma_draws=sigma_draws,
+        onset_draws=onset_draws,
+        p_draws_unconditioned=p_draws_unconditioned,
+        mu_draws_unconditioned=mu_draws_unconditioned,
+        sigma_draws_unconditioned=sigma_draws_unconditioned,
+        onset_draws_unconditioned=onset_draws_unconditioned,
+        source=resolved.source,
+        mode='cohort' if from_node_arrival else 'window',
+        is_ess=is_ess,
+        is_tempering_lambda=is_tempering_lambda,
+    )

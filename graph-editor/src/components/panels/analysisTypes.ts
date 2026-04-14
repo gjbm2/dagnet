@@ -101,6 +101,9 @@ export interface AnalysisTypeMeta {
   /** If true, this type is used by backend pipelines only (e.g. Bayes compiler)
    *  and should never appear in user-facing selectors or chart/satellite UI. */
   internal?: boolean;
+  /** If true, only visible in local dev (import.meta.env.DEV). Used for
+   *  legacy analysis types kept for parity testing but hidden in prod. */
+  devOnly?: boolean;
   /**
    * Optional custom renderer for minimised state on the canvas.
    * When provided (and returns non-null), replaces the generic 32×32 icon
@@ -331,11 +334,27 @@ export const ANALYSIS_TYPES: AnalysisTypeMeta[] = [
     },
   },
   {
-    id: 'cohort_maturity_v2',
-    name: 'Cohort Maturity v2',
-    shortDescription: 'Multi-hop cohort maturity with span kernel (Phase A)',
+    id: 'cohort_maturity_v1',
+    name: 'Cohort Maturity v1',
+    shortDescription: 'Legacy cohort maturity (dev only)',
     selectionHint: 'Use from(a).to(b) with a window() or cohort() range',
     icon: TrendingUp,
+    devOnly: true,
+    snapshotContract: {
+      scopeRule: 'funnel_path',
+      readMode: 'cohort_maturity',
+      slicePolicy: 'mece_fulfilment_allowed',
+      timeBoundsSource: 'query_dsl_window',
+      perScenario: false,
+    },
+  },
+  {
+    id: 'cohort_maturity_v2',
+    name: 'Cohort Maturity v2',
+    shortDescription: 'Multi-hop cohort maturity with span kernel (dev only)',
+    selectionHint: 'Use from(a).to(b) with a window() or cohort() range',
+    icon: TrendingUp,
+    devOnly: true,
     snapshotContract: {
       scopeRule: 'funnel_path',
       readMode: 'cohort_maturity',

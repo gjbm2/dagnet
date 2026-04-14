@@ -391,10 +391,25 @@ function getProbabilityBeadValueForLayer(
     return undefined;
   })();
 
-  const forecastStdev = (() => {
+  const rawForecastStdev = (() => {
     if (typeof pForLayer?.forecast?.stdev === 'number') return pForLayer.forecast.stdev;
     if (typeof fallbackP?.forecast?.stdev === 'number') return fallbackP.forecast.stdev;
     return undefined;
+  })();
+
+  // Doc 29 §F mode: compose forecast stdev with completeness uncertainty.
+  // rate_sd ≈ sqrt((p × c_sd)² + (c × p_sd)²)
+  const forecastStdev = (() => {
+    const cSd = pForLayer?.latency?.completeness_stdev ?? fallbackP?.latency?.completeness_stdev;
+    if (typeof cSd !== 'number' || cSd <= 0 || typeof rawForecastStdev !== 'number') {
+      return rawForecastStdev;
+    }
+    const c = pForLayer?.latency?.completeness ?? fallbackP?.latency?.completeness ?? 1;
+    const p = typeof forecastMean === 'number' ? forecastMean : (typeof pForLayer?.mean === 'number' ? pForLayer.mean : 0);
+    if (typeof c !== 'number' || c <= 0) return rawForecastStdev;
+    const termP = c * rawForecastStdev;
+    const termC = p * cSd;
+    return Math.sqrt(termP * termP + termC * termC);
   })();
 
   // Layer population: prefer observed evidence.n, fall back to forecast population (p.n)

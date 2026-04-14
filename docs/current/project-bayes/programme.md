@@ -169,6 +169,14 @@ data-constrained. Single-source validation:
 - ~~5/10 synth regression failures~~ — **FIXED 31-Mar-26**. Onset
   obs contributing -inf at starting point on 3way-join, fanout,
   join-branch, lattice, skip. Independently resolved.
+- **Centred parameterisation sparsity robustness** — **OPEN 14-Apr-26**.
+  The 5–20× speedup from centred parameterisation (doc 34, 14-Apr-26
+  handover) was validated on synthetic data with generous per-slice
+  observation counts. Production graphs will contain thin slices,
+  unbalanced MECE partitions, and structural zeros where centred may
+  degrade. Needs sparse synthetic scenarios and regression before
+  shipping centred as the unconditional default. See
+  `docs/current/project-bayes/40-centred-param-sparsity-robustness.md`.
 
 - **PPC calibration** — **PARTIAL 12-Apr-26**. See doc 38.
   `bayes/compiler/calibration.py` implemented: two-category PIT

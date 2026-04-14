@@ -432,6 +432,7 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
             import json as _jl, pickle as _pkl2
             from compiler import analyse_topology, build_model
             from compiler import run_inference, summarise_posteriors, inspect_model
+            from compiler.inference import ChainStallError
             from compiler.types import SamplingConfig
 
             with open(os.path.join(_p2_dump, "topology.pkl"), "rb") as _f:
@@ -475,11 +476,21 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
                 jax_backend=features.get("jax_backend", True),
             )
 
-            # Run Phase 2 MCMC (with numba fallback)
+            # Run Phase 2 MCMC (with stall retry + numba fallback)
+            _MAX_STALL_RETRIES = 20
             progress.set_band(0, 90)
             t_sample2 = time.time()
             try:
-                trace2, quality2 = run_inference(model2, sampling_config, report, phase_label="Phase 2 (from dump)")
+                for _stall_attempt in range(_MAX_STALL_RETRIES):
+                    try:
+                        trace2, quality2 = run_inference(model2, sampling_config, report, phase_label="Phase 2 (from dump)")
+                        break
+                    except ChainStallError as _stall:
+                        _log(log, f"  Phase 2 stall ({_stall}), attempt {_stall_attempt + 1}/{_MAX_STALL_RETRIES}")
+                        if _stall_attempt + 1 >= _MAX_STALL_RETRIES:
+                            raise RuntimeError(f"Phase 2 stall persisted after {_MAX_STALL_RETRIES} retries") from _stall
+                        _log(log, "  Retrying with fresh seed…")
+                        t_sample2 = time.time()
             except RuntimeError as _p2_err:
                 if "initialization" in str(_p2_err).lower() and sampling_config.jax_backend:
                     _log(log, f"  Phase 2 JAX init failed: {_p2_err}")
@@ -613,6 +624,7 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
         report("compiling", 0, "Analysing topology…")
         from compiler import analyse_topology, bind_evidence, build_model
         from compiler import run_inference, summarise_posteriors
+        from compiler.inference import ChainStallError
         from compiler.types import SamplingConfig
 
         graph_snapshot = payload.get("graph_snapshot", {})
@@ -946,7 +958,19 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
 
         progress.set_band(*P1_SAMPLE)
         t_sample = time.time()
-        trace, quality = run_inference(model, sampling_config, report, phase_label=phase1_label)
+        _MAX_STALL_RETRIES = 20
+        for _stall_attempt in range(_MAX_STALL_RETRIES):
+            try:
+                trace, quality = run_inference(model, sampling_config, report, phase_label=phase1_label)
+                break
+            except ChainStallError as _stall:
+                _log(log, f"  Chain stall detected ({_stall}), attempt {_stall_attempt + 1}/{_MAX_STALL_RETRIES}")
+                if _stall_attempt + 1 >= _MAX_STALL_RETRIES:
+                    raise RuntimeError(
+                        f"Chain stall persisted after {_MAX_STALL_RETRIES} retries: {_stall}"
+                    ) from _stall
+                _log(log, "  Retrying with fresh seed…")
+                t_sample = time.time()  # reset timer for retry
         timings["sampling_ms"] = int((time.time() - t_sample) * 1000)
         _log(log,
             f"sampling: {timings['sampling_ms']}ms, "
@@ -1299,7 +1323,18 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
             progress.set_band(*P2_SAMPLE)
             t_sample2 = time.time()
             try:
-                trace2, quality2 = run_inference(model2, sampling_config, report, phase_label=phase2_label)
+                for _stall_attempt2 in range(_MAX_STALL_RETRIES):
+                    try:
+                        trace2, quality2 = run_inference(model2, sampling_config, report, phase_label=phase2_label)
+                        break
+                    except ChainStallError as _stall2:
+                        _log(log, f"  Phase 2 chain stall ({_stall2}), attempt {_stall_attempt2 + 1}/{_MAX_STALL_RETRIES}")
+                        if _stall_attempt2 + 1 >= _MAX_STALL_RETRIES:
+                            raise RuntimeError(
+                                f"Phase 2 chain stall persisted after {_MAX_STALL_RETRIES} retries: {_stall2}"
+                            ) from _stall2
+                        _log(log, "  Retrying Phase 2 with fresh seed…")
+                        t_sample2 = time.time()
             except RuntimeError as _p2_err:
                 if "initialization" in str(_p2_err).lower() and sampling_config.jax_backend:
                     _log(log, f"  Phase 2 JAX init failed: {_p2_err}")

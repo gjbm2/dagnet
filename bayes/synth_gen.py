@@ -301,14 +301,21 @@ def verify_synth_data(graph_name: str, data_repo: str | None = None) -> dict:
         total = 0
 
         # Try meta hashes first (fast path)
-        _hash_keys = ["window_hash", "cohort_hash", "ctx_window_hash", "ctx_cohort_hash"]
         if meta and meta.get("edge_hashes"):
+            _seen: set[str] = set()
             for edge_hashes in meta["edge_hashes"].values():
-                for hk in _hash_keys:
-                    h = edge_hashes.get(hk, "")
-                    if h and not h.startswith("PLACEHOLDER") and not h.startswith("SIM-"):
-                        cur.execute("SELECT COUNT(*) FROM snapshots WHERE core_hash = %s", (h,))
-                        total += cur.fetchone()[0]
+                for hk, h in edge_hashes.items():
+                    if not h or not isinstance(h, str):
+                        continue
+                    if not hk.endswith("_hash") and "_hash_" not in hk:
+                        continue
+                    if h.startswith("PLACEHOLDER") or h.startswith("SIM-"):
+                        continue
+                    if h in _seen:
+                        continue
+                    _seen.add(h)
+                    cur.execute("SELECT COUNT(*) FROM snapshots WHERE core_hash = %s", (h,))
+                    total += cur.fetchone()[0]
         else:
             # No meta sidecar — cannot verify without authoritative hashes.
             # The meta sidecar is always written by the generation pipeline;
@@ -337,17 +344,23 @@ def _build_meta_hashes(hash_lookup: dict[str, dict[str, str]]) -> dict[str, dict
     """Build the edge_hashes dict for .synth-meta.json from hash_lookup.
 
     Deduplicates (skips parameter- prefixed keys) and includes all hash
-    families: bare window/cohort AND context window/cohort.
+    families: bare window/cohort AND per-dimension context window/cohort.
     """
     meta: dict[str, dict[str, str]] = {}
     for pid, h in hash_lookup.items():
         if not pid.startswith("parameter-"):
-            meta[pid] = {
+            entry: dict[str, str] = {
                 "window_hash": h.get("window_hash", ""),
                 "cohort_hash": h.get("cohort_hash", ""),
+                # Backward compat: single ctx hashes
                 "ctx_window_hash": h.get("ctx_window_hash", ""),
                 "ctx_cohort_hash": h.get("ctx_cohort_hash", ""),
             }
+            # Include per-dimension hashes
+            for key, val in h.items():
+                if key.startswith("ctx_window_hash_") or key.startswith("ctx_cohort_hash_"):
+                    entry[key] = val
+            meta[pid] = entry
     return meta
 
 
@@ -537,6 +550,10 @@ DEFAULT_SIM_CONFIG = {
     "growth_rate_mom": 0.0,       # monthly growth rate (0.05 = 5% MoM exponential)
     "snapshot_start_offset": 0,   # 0 = full coverage; >0 = snapshot DB rows only for last N days
     "traffic_cv": 0.0,           # coefficient of variation for daily traffic (0 = Poisson only)
+    # Sparsity layer — simulates real snapshot DB availability patterns (doc 40)
+    "frame_drop_rate": 0.0,      # per-row random drop probability (independent of failure_rate)
+    "toggle_rate": 0.0,          # per-date probability that an edge×slice toggles emitting on/off
+    "initial_absent_pct": 0.0,   # fraction of edge×slice combos that start not-emitting
 }
 
 
@@ -579,6 +596,9 @@ def simulate_graph(
     drift_sigma = sim_config["drift_sigma"]
     drift_rate = sim_config.get("drift_rate", 0.0)
     failure_rate = sim_config["failure_rate"]
+    frame_drop_rate = sim_config.get("frame_drop_rate", 0.0)
+    toggle_rate = sim_config.get("toggle_rate", 0.0)
+    initial_absent_pct = sim_config.get("initial_absent_pct", 0.0)
     seed = sim_config["seed"]
     base_date_str = sim_config.get("base_date", "2025-11-01")
     base_date = datetime.strptime(base_date_str, "%Y-%m-%d")
@@ -1021,6 +1041,9 @@ def simulate_graph(
         snapshot_start_offset=snapshot_start_offset,
         emit_context_slices=emit_context_slices,
         epochs=epochs,
+        frame_drop_rate=frame_drop_rate,
+        toggle_rate=toggle_rate,
+        initial_absent_pct=initial_absent_pct,
     )
 
     # Free the raw person data now
@@ -1041,6 +1064,9 @@ def simulate_graph(
         "total_rows": total_rows,
         "base_date": base_date_str,
         "edge_daily": edge_daily,
+        "frame_drop_rate": frame_drop_rate,
+        "toggle_rate": toggle_rate,
+        "initial_absent_pct": initial_absent_pct,
     }
 
     return snapshot_rows, sim_stats
@@ -1208,6 +1234,9 @@ def _generate_observations_nightly(
     snapshot_start_offset: int = 0,
     emit_context_slices: bool = False,
     epochs: list[dict] | None = None,
+    frame_drop_rate: float = 0.0,
+    toggle_rate: float = 0.0,
+    initial_absent_pct: float = 0.0,
 ) -> dict[str, list[dict]]:
     """Generate snapshot rows using nightly fetch simulation.
 
@@ -1242,17 +1271,29 @@ def _generate_observations_nightly(
     """
     result: dict[str, list[dict]] = defaultdict(list)
 
-    # Epoch-aware context emission: resolve per anchor_day whether to
-    # emit context-qualified or bare aggregate rows. When epochs is
-    # defined, each epoch specifies a day range and whether context
-    # slices are emitted. When epochs is None, use the global flag.
-    def _emit_ctx_for_day(day_offset: int) -> bool:
+    # Epoch-aware context emission: resolve per anchor_day which
+    # dimensions emit context-qualified rows. Returns set of dimension
+    # IDs (e.g. {"channel", "device"}). Empty set = bare aggregate only.
+    #
+    # Supports two epoch formats:
+    #   emit_context_slices: true/false  — all-or-nothing (backward compat)
+    #   emit_dimensions: ["channel", "device"]  — per-dimension control
+    _all_dim_ids = {d["id"] for d in (context_dims or [])}
+
+    def _emit_dims_for_day(day_offset: int) -> set[str]:
         if not epochs:
-            return emit_context_slices
+            return _all_dim_ids if emit_context_slices else set()
         for ep in epochs:
             if ep.get("from_day", 0) <= day_offset <= ep.get("to_day", 999999):
-                return ep.get("emit_context_slices", False)
-        return False  # no epoch covers this day
+                # Per-dimension list takes priority over boolean flag
+                if "emit_dimensions" in ep:
+                    return set(ep["emit_dimensions"])
+                return _all_dim_ids if ep.get("emit_context_slices", False) else set()
+        return set()  # no epoch covers this day
+
+    # Backward-compat wrapper used in row emission loops
+    def _emit_ctx_for_day(day_offset: int) -> bool:
+        return bool(_emit_dims_for_day(day_offset))
 
     # Pre-compute latency stats per edge for DB rows
     edge_latency_stats: dict[str, dict] = {}
@@ -1440,6 +1481,47 @@ def _generate_observations_nightly(
             continue
         fetch_nights.append(fn)
 
+    # ── Sparsity layer (doc 40) ───────────────────────────────────────
+    # Simulates real snapshot DB availability: random missing frames,
+    # start/stop signals, and initial absence.  Applied per edge×slice_key
+    # during row emission.  Does not affect the underlying population sim.
+    _sparsity_active = (frame_drop_rate > 0 or toggle_rate > 0 or initial_absent_pct > 0)
+    # Build list of all (edge_id, slice_key) combos that will be emitted
+    _sparsity_emitting: dict[tuple[str, str], bool] = {}
+    if _sparsity_active:
+        param_edge_ids = [eid for eid, et in topology.edges.items() if et.param_id]
+        bare_slices = ["cohort()", "window()"]
+        ctx_slices = [f"{ck}.cohort()" for ck in ctx_keys] + [f"{ck}.window()" for ck in ctx_keys]
+        all_slice_keys = bare_slices + ctx_slices
+        for eid in param_edge_ids:
+            for sk in all_slice_keys:
+                # initial_absent_pct: fraction start not-emitting
+                _sparsity_emitting[(eid, sk)] = bool(rng.random() >= initial_absent_pct)
+        n_absent = sum(1 for v in _sparsity_emitting.values() if not v)
+        n_total = len(_sparsity_emitting)
+        if n_absent > 0:
+            print(f"  Sparsity: {n_absent}/{n_total} edge×slice combos start absent "
+                  f"(frame_drop={frame_drop_rate:.2f}, toggle={toggle_rate:.3f})", flush=True)
+
+    def _sparsity_gate(edge_id: str, slice_key: str) -> bool:
+        """Return True if this row should be emitted (not dropped by sparsity)."""
+        if not _sparsity_active:
+            return True
+        key = (edge_id, slice_key)
+        if not _sparsity_emitting.get(key, True):
+            return False
+        if frame_drop_rate > 0 and rng.random() < frame_drop_rate:
+            return False
+        return True
+
+    def _sparsity_toggle_day() -> None:
+        """At the start of each fetch night, flip emitting state per toggle_rate."""
+        if not _sparsity_active or toggle_rate <= 0:
+            return
+        for key in _sparsity_emitting:
+            if rng.random() < toggle_rate:
+                _sparsity_emitting[key] = not _sparsity_emitting[key]
+
     # Pre-draw per-retrieval-date onset observations with noise.
     # In production, Amplitude computes onset per retrieval date from the
     # lag histogram (1% mass point). Different retrieval dates give slightly
@@ -1464,7 +1546,9 @@ def _generate_observations_nightly(
     # to_node by retrieval age.
     # sim_day_idx is 0-based from sim_start; observable days start at burn_in_days.
     n_cohort_rows = 0
+    n_sparsity_dropped = 0
     for fi, fetch_night in enumerate(fetch_nights):
+        _sparsity_toggle_day()  # flip emitting state per toggle_rate (doc 40)
         retrieved_at = (base_date + timedelta(days=fetch_night)).strftime(
             "%Y-%m-%d 02:00:00"
         )
@@ -1498,40 +1582,48 @@ def _generate_observations_nightly(
                 y_cohort = _count_by_age(edge_times, age)
 
                 lstats = edge_latency_stats.get(edge_id, {})
-                _emit_ctx_this_day = _emit_ctx_for_day(obs_day_offset)
-                if not ctx_keys or not _emit_ctx_this_day:
-                    # Bare aggregate cohort row
-                    result[edge_id].append({
-                        "param_id": pid,
-                        "core_hash": c_hash,
-                        "slice_key": "cohort()",
-                        "anchor_day": anchor_day_str,
-                        "retrieved_at": retrieved_at,
-                        "a": n_people,
-                        "x": x_cohort,
-                        "y": y_cohort,
-                        "median_lag_days": lstats.get("median_lag_days"),
-                        "mean_lag_days": lstats.get("mean_lag_days"),
-                        "anchor_median_lag_days": lstats.get("anchor_median_lag_days"),
-                        "anchor_mean_lag_days": lstats.get("anchor_mean_lag_days"),
-                        "onset_delta_days": onset_obs_by_edge.get(edge_id, {}).get(fetch_night, lstats.get("onset")),
-                    })
-                    n_cohort_rows += 1
+                _emit_dims_this_day = _emit_dims_for_day(obs_day_offset)
+                # Filter ctx_keys to only dimensions emitted on this day
+                _active_ctx_keys = [
+                    ck for ck in ctx_keys
+                    if _extract_dimension_from_slice_key(ck) in _emit_dims_this_day
+                ] if _emit_dims_this_day else []
+                if not _active_ctx_keys:
+                    # Bare aggregate cohort row (no context dims active)
+                    if _sparsity_gate(edge_id, "cohort()"):
+                        result[edge_id].append({
+                            "param_id": pid,
+                            "core_hash": c_hash,
+                            "slice_key": "cohort()",
+                            "anchor_day": anchor_day_str,
+                            "retrieved_at": retrieved_at,
+                            "a": n_people,
+                            "x": x_cohort,
+                            "y": y_cohort,
+                            "median_lag_days": lstats.get("median_lag_days"),
+                            "mean_lag_days": lstats.get("mean_lag_days"),
+                            "anchor_median_lag_days": lstats.get("anchor_median_lag_days"),
+                            "anchor_mean_lag_days": lstats.get("anchor_mean_lag_days"),
+                            "onset_delta_days": onset_obs_by_edge.get(edge_id, {}).get(fetch_night, lstats.get("onset")),
+                        })
+                        n_cohort_rows += 1
+                    else:
+                        n_sparsity_dropped += 1
 
-                # Per-context cohort rows (emitted instead of aggregate
-                # when context emission is active for this day)
-                if _emit_ctx_this_day:
-                    for ck in ctx_keys:
+                # Per-context cohort rows (emitted for active dimensions)
+                if _active_ctx_keys:
+                    for ck in _active_ctx_keys:
                         ctx_from = ctx_sorted_times[ck][sim_day].get(et.from_node, [])
                         ctx_edge = ctx_sorted_edge_times[ck][sim_day].get(edge_id, [])
                         ctx_a = ctx_anchor_traffic[ck][sim_day]
                         ctx_x = _count_by_age(ctx_from, age)
                         ctx_y = _count_by_age(ctx_edge, age)
-                        if ctx_a > 0:
+                        ctx_sk = f"{ck}.cohort()"
+                        if ctx_a > 0 and _sparsity_gate(edge_id, ctx_sk):
                             result[edge_id].append({
                                 "param_id": pid,
                                 "core_hash": ctx_c_hash or c_hash,
-                                "slice_key": f"{ck}.cohort()",
+                                "slice_key": ctx_sk,
                                 "anchor_day": anchor_day_str,
                                 "retrieved_at": retrieved_at,
                                 "a": ctx_a,
@@ -1544,6 +1636,8 @@ def _generate_observations_nightly(
                                 "onset_delta_days": onset_obs_by_edge.get(edge_id, {}).get(fetch_night, lstats.get("onset")),
                             })
                             n_cohort_rows += 1
+                        elif ctx_a > 0:
+                            n_sparsity_dropped += 1
 
     print(f"  Cohort: {len(fetch_nights)} nights, {n_cohort_rows} rows", flush=True)
 
@@ -1589,28 +1683,34 @@ def _generate_observations_nightly(
 
                 if total_x > 0:
                     lstats = edge_latency_stats.get(edge_id, {})
-                    _emit_ctx_this_day_w = _emit_ctx_for_day(abs_from_day)
-                    if not ctx_keys or not _emit_ctx_this_day_w:
+                    _emit_dims_this_day_w = _emit_dims_for_day(abs_from_day)
+                    _active_ctx_keys_w = [
+                        ck for ck in ctx_keys
+                        if _extract_dimension_from_slice_key(ck) in _emit_dims_this_day_w
+                    ] if _emit_dims_this_day_w else []
+                    if not _active_ctx_keys_w:
                         # Bare aggregate window row
-                        result[edge_id].append({
-                            "param_id": pid,
-                            "core_hash": w_hash,
-                            "slice_key": "window()",
-                            "anchor_day": anchor_day_str,
-                            "retrieved_at": retrieved_at,
-                            "a": None,
-                            "x": total_x,
-                            "y": y_window,
-                            "median_lag_days": lstats.get("median_lag_days"),
-                            "mean_lag_days": lstats.get("mean_lag_days"),
-                            "onset_delta_days": onset_obs_by_edge.get(edge_id, {}).get(fetch_night, lstats.get("onset")),
-                        })
-                        n_window_rows += 1
+                        if _sparsity_gate(edge_id, "window()"):
+                            result[edge_id].append({
+                                "param_id": pid,
+                                "core_hash": w_hash,
+                                "slice_key": "window()",
+                                "anchor_day": anchor_day_str,
+                                "retrieved_at": retrieved_at,
+                                "a": None,
+                                "x": total_x,
+                                "y": y_window,
+                                "median_lag_days": lstats.get("median_lag_days"),
+                                "mean_lag_days": lstats.get("mean_lag_days"),
+                                "onset_delta_days": onset_obs_by_edge.get(edge_id, {}).get(fetch_night, lstats.get("onset")),
+                            })
+                            n_window_rows += 1
+                        else:
+                            n_sparsity_dropped += 1
 
-                    # Per-context window rows (emitted instead of aggregate
-                    # when context emission is active for this day)
-                    if _emit_ctx_this_day_w:
-                        for ck in ctx_keys:
+                    # Per-context window rows (emitted for active dimensions)
+                    if _active_ctx_keys_w:
+                        for ck in _active_ctx_keys_w:
                             ctx_edge_window = ctx_window_sorted.get(ck, {}).get(edge_id, {})
                             ctx_entry = ctx_edge_window.get(abs_from_day)
                             if ctx_entry is None:
@@ -1618,11 +1718,15 @@ def _generate_observations_nightly(
                             ctx_x, ctx_conv = ctx_entry
                             if ctx_x <= 0:
                                 continue
+                            ctx_sk_w = f"{ck}.window()"
+                            if not _sparsity_gate(edge_id, ctx_sk_w):
+                                n_sparsity_dropped += 1
+                                continue
                             ctx_y_w = bisect.bisect_right(ctx_conv, float(w_age))
                             result[edge_id].append({
                                 "param_id": pid,
                                 "core_hash": ctx_w_hash_e or w_hash,
-                                "slice_key": f"{ck}.window()",
+                                "slice_key": ctx_sk_w,
                                 "anchor_day": anchor_day_str,
                                 "retrieved_at": retrieved_at,
                                 "a": None,
@@ -1635,6 +1739,9 @@ def _generate_observations_nightly(
                             n_window_rows += 1
 
     print(f"  Window: {len(fetch_nights)} nights, {n_window_rows} rows", flush=True)
+    if n_sparsity_dropped > 0:
+        print(f"  Sparsity: {n_sparsity_dropped} rows dropped (frame_drop={frame_drop_rate:.2f}, "
+              f"toggle={toggle_rate:.3f}, initial_absent={initial_absent_pct:.2f})", flush=True)
     print(f"  Total: {sum(len(v) for v in result.values())} rows ({n_cohort_rows} cohort + {n_window_rows} window)", flush=True)
     return dict(result)
 
@@ -1642,6 +1749,17 @@ def _generate_observations_nightly(
 # ---------------------------------------------------------------------------
 # Hash rehashing + verification
 # ---------------------------------------------------------------------------
+
+def _extract_dimension_from_slice_key(slice_key: str) -> str:
+    """Extract the dimension id from a context-qualified slice_key.
+
+    E.g. "context(channel:organic).window()" → "channel"
+         "context(device:mobile).cohort()" → "device"
+    Returns "" if no context() found.
+    """
+    m = re.search(r"context\(([^:)]+)", slice_key)
+    return m.group(1) if m else ""
+
 
 def _rehash_snapshot_rows(
     snapshot_rows: dict[str, list[dict]],
@@ -1653,6 +1771,11 @@ def _rehash_snapshot_rows(
     snapshot_rows were generated with whatever hashes existed at simulation
     time. This function overwrites them with the FE-computed hashes so the
     DB write uses the correct hashes.
+
+    For multi-dimension context graphs, each dimension has its own
+    core_hash stored as ctx_window_hash_{dim} / ctx_cohort_hash_{dim}
+    in hash_lookup. Rows are assigned the hash for their specific
+    dimension based on the slice_key.
     """
     for edge_id, rows in snapshot_rows.items():
         et = topology.edges.get(edge_id)
@@ -1668,16 +1791,26 @@ def _rehash_snapshot_rows(
 
         w_hash = hashes["window_hash"]
         c_hash = hashes["cohort_hash"]
-        ctx_w_hash = hashes.get("ctx_window_hash", "")
-        ctx_c_hash = hashes.get("ctx_cohort_hash", "")
 
         for r in rows:
             sk = r.get("slice_key", "")
             is_ctx = "context(" in sk
-            if "cohort" in sk:
-                r["core_hash"] = (ctx_c_hash or c_hash) if is_ctx else c_hash
+            is_cohort = "cohort" in sk
+            if is_ctx:
+                dim_id = _extract_dimension_from_slice_key(sk)
+                if is_cohort:
+                    # Try per-dimension hash, fall back to generic ctx hash
+                    ctx_h = (hashes.get(f"ctx_cohort_hash_{dim_id}")
+                             or hashes.get("ctx_cohort_hash", "")
+                             or c_hash)
+                    r["core_hash"] = ctx_h
+                else:
+                    ctx_h = (hashes.get(f"ctx_window_hash_{dim_id}")
+                             or hashes.get("ctx_window_hash", "")
+                             or w_hash)
+                    r["core_hash"] = ctx_h
             else:
-                r["core_hash"] = (ctx_w_hash or w_hash) if is_ctx else w_hash
+                r["core_hash"] = c_hash if is_cohort else w_hash
 
 
 def _build_verify_checks(hashes: dict[str, str]) -> list[tuple[str, str, bool]]:
@@ -1690,21 +1823,46 @@ def _build_verify_checks(hashes: dict[str, str]) -> list[tuple[str, str, bool]]:
     - Context hashes with 0 rows → always FAIL (if they exist, data should be there)
     - Bare hashes with 0 rows → FAIL only if no context hashes exist
       (uniform-epoch context graphs have all rows under context hashes)
+
+    Supports per-dimension context hashes (ctx_window_hash_{dim}).
     """
-    has_ctx = bool(hashes.get("ctx_window_hash") or hashes.get("ctx_cohort_hash"))
+    # Collect all ctx hashes (both legacy single and per-dimension)
+    _ctx_hashes: list[tuple[str, str]] = []  # (mode_label, hash)
+    for key, val in hashes.items():
+        if not val:
+            continue
+        if key.startswith("ctx_window_hash"):
+            dim_suffix = key.replace("ctx_window_hash", "").lstrip("_")
+            label = f"ctx_window[{dim_suffix}]" if dim_suffix else "ctx_window"
+            _ctx_hashes.append((label, val))
+        elif key.startswith("ctx_cohort_hash"):
+            dim_suffix = key.replace("ctx_cohort_hash", "").lstrip("_")
+            label = f"ctx_cohort[{dim_suffix}]" if dim_suffix else "ctx_cohort"
+            _ctx_hashes.append((label, val))
+
+    # Deduplicate (legacy ctx_window_hash duplicates ctx_window_hash_{first_dim})
+    _seen_hashes: set[str] = set()
+    ctx_checks: list[tuple[str, str]] = []
+    for label, h in _ctx_hashes:
+        if h not in _seen_hashes:
+            _seen_hashes.add(h)
+            ctx_checks.append((label, h))
+
+    has_ctx = bool(ctx_checks)
 
     checks: list[tuple[str, str, bool]] = []
     for mode, key, is_bare in [
         ("window", "window_hash", True),
         ("cohort", "cohort_hash", True),
-        ("ctx_window", "ctx_window_hash", False),
-        ("ctx_cohort", "ctx_cohort_hash", False),
     ]:
         h = hashes.get(key, "")
         if not h:
             continue
         expect_rows = (not is_bare) or (is_bare and not has_ctx)
         checks.append((mode, h, expect_rows))
+
+    for label, h in ctx_checks:
+        checks.append((label, h, True))
 
     return checks
 
@@ -2224,12 +2382,34 @@ def _build_synth_dsl(sim_stats: dict, truth: dict) -> tuple[str, str]:
 
     emit_ctx = truth.get("emit_context_slices", False)
     epochs = truth.get("epochs")
-    if epochs and any(e.get("emit_context_slices") for e in epochs):
-        emit_ctx = True
+    if epochs:
+        for ep in epochs:
+            if ep.get("emit_context_slices"):
+                emit_ctx = True
+            if ep.get("emit_dimensions"):
+                emit_ctx = True
     context_dims = truth.get("context_dimensions", [])
     if emit_ctx and context_dims:
-        ctx_parts = ";".join(f"context({d['id']})" for d in context_dims)
-        full_dsl = f"({bare_dsl})({ctx_parts})"
+        # Include all dimensions that appear in any epoch's emit_dimensions,
+        # or all dimensions if emit_context_slices is used (backward compat)
+        _emitted_dim_ids: set[str] = set()
+        if epochs:
+            for ep in epochs:
+                if ep.get("emit_dimensions"):
+                    _emitted_dim_ids.update(ep["emit_dimensions"])
+                elif ep.get("emit_context_slices"):
+                    _emitted_dim_ids.update(d["id"] for d in context_dims)
+        if not _emitted_dim_ids:
+            # Global flag, no epochs — all dims
+            _emitted_dim_ids = {d["id"] for d in context_dims}
+        ctx_parts = ";".join(
+            f"context({d['id']})" for d in context_dims
+            if d["id"] in _emitted_dim_ids
+        )
+        if ctx_parts:
+            full_dsl = f"({bare_dsl})({ctx_parts})"
+        else:
+            full_dsl = bare_dsl
     else:
         full_dsl = bare_dsl
 
@@ -2759,13 +2939,14 @@ Examples:
     # removes ambiguity: all subjects from a window clause are window, etc.
     window_hashes: dict[str, str] = {}   # edge_uuid → bare window hash
     cohort_hashes: dict[str, str] = {}
-    ctx_window_hashes: dict[str, str] = {}
-    ctx_cohort_hashes: dict[str, str] = {}
+    # Per-dimension context hashes: edge_uuid → {dim_id → hash}
+    ctx_window_hashes: dict[str, dict[str, str]] = {}
+    ctx_cohort_hashes: dict[str, dict[str, str]] = {}
     # Parallel dicts for canonical_signature (structured sig for param file query_signature)
     window_sigs: dict[str, str] = {}
     cohort_sigs: dict[str, str] = {}
-    ctx_window_sigs: dict[str, str] = {}
-    ctx_cohort_sigs: dict[str, str] = {}
+    ctx_window_sigs: dict[str, dict[str, str]] = {}
+    ctx_cohort_sigs: dict[str, dict[str, str]] = {}
     _cr: dict = {}  # candidate regimes (from first call)
 
     dsl_clauses = [c.strip() for c in full_dsl.split(";") if c.strip()]
@@ -2783,21 +2964,28 @@ Examples:
             _cr = _clause_payload.get("candidate_regimes_by_edge", {})
         print(f" {len(_clause_subj)} subjects ({_time.time() - _t0c:.1f}s)", flush=True)
 
+        # Extract dimension id from context clause (e.g. "context(channel)" → "channel")
+        _ctx_dim_id = ""
+        if is_ctx_clause:
+            _m = re.search(r"context\(([^)]+)\)", clause)
+            if _m:
+                _ctx_dim_id = _m.group(1)
+
         for subj in _clause_subj:
             eid = subj.get("edge_id", "")
             ch = subj.get("core_hash", "")
             sig = subj.get("canonical_signature", "")
             if not eid or not ch:
                 continue
-            if is_ctx_clause:
+            if is_ctx_clause and _ctx_dim_id:
                 if is_cohort_clause:
-                    ctx_cohort_hashes[eid] = ch
+                    ctx_cohort_hashes.setdefault(eid, {})[_ctx_dim_id] = ch
                     if sig:
-                        ctx_cohort_sigs[eid] = sig
+                        ctx_cohort_sigs.setdefault(eid, {})[_ctx_dim_id] = sig
                 else:
-                    ctx_window_hashes[eid] = ch
+                    ctx_window_hashes.setdefault(eid, {})[_ctx_dim_id] = ch
                     if sig:
-                        ctx_window_sigs[eid] = sig
+                        ctx_window_sigs.setdefault(eid, {})[_ctx_dim_id] = sig
             else:
                 if is_cohort_clause:
                     cohort_hashes[eid] = ch
@@ -2853,27 +3041,50 @@ Examples:
     for uuid, pid in uuid_to_pid.items():
         wh = window_hashes.get(uuid, "")
         ch = cohort_hashes.get(uuid, "")
-        ctx_wh = ctx_window_hashes.get(uuid, "")
-        ctx_ch = ctx_cohort_hashes.get(uuid, "")
+        # Per-dimension context hashes: dict[dim_id, hash]
+        ctx_wh_map = ctx_window_hashes.get(uuid, {})
+        ctx_ch_map = ctx_cohort_hashes.get(uuid, {})
         ws = window_sigs.get(uuid, "")
         cs = cohort_sigs.get(uuid, "")
-        ctx_ws = ctx_window_sigs.get(uuid, "")
-        ctx_cs = ctx_cohort_sigs.get(uuid, "")
-        if wh or ch or ctx_wh or ctx_ch:
-            hash_lookup[pid] = {
+        ctx_ws_map = ctx_window_sigs.get(uuid, {})
+        ctx_cs_map = ctx_cohort_sigs.get(uuid, {})
+        if wh or ch or ctx_wh_map or ctx_ch_map:
+            entry: dict[str, str] = {
                 "window_hash": wh, "cohort_hash": ch,
-                "ctx_window_hash": ctx_wh, "ctx_cohort_hash": ctx_ch,
                 "window_sig": ws, "cohort_sig": cs,
-                "ctx_window_sig": ctx_ws, "ctx_cohort_sig": ctx_cs,
             }
+            # Store per-dimension context hashes as ctx_window_hash_{dim}
+            for dim_id, dim_hash in ctx_wh_map.items():
+                entry[f"ctx_window_hash_{dim_id}"] = dim_hash
+            for dim_id, dim_hash in ctx_ch_map.items():
+                entry[f"ctx_cohort_hash_{dim_id}"] = dim_hash
+            for dim_id, dim_sig in ctx_ws_map.items():
+                entry[f"ctx_window_sig_{dim_id}"] = dim_sig
+            for dim_id, dim_sig in ctx_cs_map.items():
+                entry[f"ctx_cohort_sig_{dim_id}"] = dim_sig
+            # Backward compat: ctx_window_hash / ctx_cohort_hash point to
+            # the first dimension (single-dimension graphs unchanged).
+            _first_dim_w = next(iter(ctx_wh_map.values()), "")
+            _first_dim_c = next(iter(ctx_ch_map.values()), "")
+            entry["ctx_window_hash"] = _first_dim_w
+            entry["ctx_cohort_hash"] = _first_dim_c
+            _first_dim_ws = next(iter(ctx_ws_map.values()), "")
+            _first_dim_cs = next(iter(ctx_cs_map.values()), "")
+            entry["ctx_window_sig"] = _first_dim_ws
+            entry["ctx_cohort_sig"] = _first_dim_cs
+            hash_lookup[pid] = entry
             if not pid.startswith("parameter-"):
                 hash_lookup[f"parameter-{pid}"] = hash_lookup[pid]
     n_edges = len(hash_lookup) // 2
     print(f"  {n_edges} edges resolved ({_time.time() - _t2:.1f}s total)")
     for pid, h in hash_lookup.items():
         if not pid.startswith("parameter-"):
+            ctx_dims = [k.replace("ctx_window_hash_", "") for k in h
+                        if k.startswith("ctx_window_hash_")]
             ctx_info = ""
-            if h.get("ctx_window_hash"):
+            for d in ctx_dims:
+                ctx_info += f" ctx_w[{d}]={h[f'ctx_window_hash_{d}'][:16]}…"
+            if not ctx_dims and h.get("ctx_window_hash"):
                 ctx_info = f" ctx_w={h['ctx_window_hash'][:16]}…"
             print(f"    {pid}: w={h['window_hash'][:16]}… c={h['cohort_hash'][:16]}…{ctx_info}")
 

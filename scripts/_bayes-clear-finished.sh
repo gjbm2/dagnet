@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
-cleared=0
+# Clear finished graphs from the bayes-monitor DISPLAY.
+# Does NOT touch log files — they are primary diagnostic data.
+# Writes hidden graph names to /tmp/_bayes_monitor_hidden so the
+# monitor status loop skips them.
+hidden=0
 for f in /tmp/bayes_harness-*.log; do
     [[ -f "$f" ]] || continue
     name=$(basename "$f" .log)
@@ -13,8 +17,10 @@ for f in /tmp/bayes_harness-*.log; do
         fi
         rm -f "$lock" 2>/dev/null
     fi
-    rm -f "$f" 2>/dev/null
+    # Hide from monitor display (log file untouched)
+    echo "$name" >> /tmp/_bayes_monitor_hidden
+    # Clean up tail scripts (display artefacts, not data)
     rm -f "/tmp/_bayes_tail_${name}.sh" 2>/dev/null
-    cleared=$((cleared + 1))
+    hidden=$((hidden + 1))
 done
-echo "Cleared ${cleared} finished log(s)."
+echo "Hidden ${hidden} finished graph(s) from monitor display. Log files preserved."

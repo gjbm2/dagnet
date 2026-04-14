@@ -1411,10 +1411,13 @@ trusted.
 **Gate**: parameter recovery passes for solo edges and branch groups.
 Real test graph produces sensible per-slice posteriors.
 
-### R2g — Multi-dimension and advanced cases
+### R2g — Multi-dimension and advanced cases (compound `;` DSLs)
 
-Builds on R2a-R2f. Only needed when real graphs have multiple
-context dimensions.
+Builds on R2a-R2f. **Required before compound pinned DSLs with
+orthogonal hierarchies can be supported** — i.e. any pinned DSL using
+`;` to combine independent MECE dimensions (e.g.
+`(window();cohort()).(context(channel);context(variant)).`). See
+§15A.2 for the structural gaps this milestone closes.
 
 **R2g-i — Independent dimensions** (`compiler/model.py`):
 - Two separate Dirichlets sharing a parent (§5.6)
@@ -1915,10 +1918,18 @@ context. All resolved — no open issues remain.
 
 ### 15A.2 Structural gaps (multi-dimension)
 
+**Known limitation — compound pinned DSLs not supported**: pinned DSL
+strings with `;`-separated orthogonal hierarchies (e.g.
+`(window(-30d:);cohort(li-c-account-created,-30d:)).(context(channel);context(onboarding-blueprint-variant);context(energy-blueprint-variant)).`)
+cannot be correctly modelled until Gaps 1–3 below are resolved. The
+core issue is that overlapping/orthogonal dimension groups each
+constrain the same base edge variables (`p_base`, `kappa`), requiring
+per-dimension τ (Gap 1) and 1/N κ correction (Gap 2) to avoid
+over-constraining the parent. This is the R2g milestone.
+
 These gaps are invisible on single-dimension synth graphs but will
 produce misspecified models on production graphs with multiple context
-dimensions (e.g. `context(channel);context(onboarding-variant);
-context(energy-variant)`).
+dimensions.
 
 **Gap 1 — Single τ across all dimensions (CRITICAL)**
 
@@ -1939,23 +1950,35 @@ This applies to p, mu, m, r — every hierarchical parameter.
 Fix: iterate over `ev.slice_groups.items()` creating per-dimension
 τ and offset vectors. Each dimension's slices get their own shrinkage.
 
-**Gap 2 — 1/N κ correction not implemented**
+**Status (14-Apr-26): FIXED.** `model.py` now creates per-dimension
+tau variables (`tau_slice_{edge}__{dim}`, `tau_m_slice_{edge}__{dim}`,
+`tau_r_slice_{edge}__{dim}`, `tau_mu_slice_{edge}__{dim}`) when
+multiple dimensions exist. Single-dimension graphs unchanged. Branch
+group kappa is also per-dimension (`kappa_slice_bg_{group}__{dim}`).
+Tested in `test_compiler_phase_s.py::TestTwoDimensionModelWiring`.
+
+**Gap 2 — 1/N κ correction ~~not implemented~~**
 
 Design (§5A.7, §14.6d): with N independent MECE dimensions each
 constraining the same parent, the parent sees N× the information it
 should. A 1/N κ correction prevents parent overconfidence.
 
-Implementation: no correction exists. With multiple dimensions, the
-parent `p_base` would be over-constrained.
+**Status (14-Apr-26): FIXED.** When N > 1 dimensions, the aggregate
+emission's kappa is scaled by 1/N via `kappa_agg_corrected_{edge}`.
+This is an approximate correction (see risk table). Tested in
+`test_compiler_phase_s.py::TestTwoDimensionModelWiring`.
 
-**Gap 3 — No multi-dimension synth graphs (R2g never tested)**
+**Gap 3 — Multi-dimension synth graphs ~~(R2g never tested)~~**
 
 Design (§11, Graph S3): specifies a two-dimension synth graph
 (channel + device) to validate independent Dirichlets and 1/N κ.
 
-Implementation: no such synth graph exists. R2g-i (independent
-dimensions), R2g-ii (multi-level hierarchy for subsumption), and
-R2g-iii (`conditional_p`) are entirely untested.
+**Status (14-Apr-26): PARTIAL.** S5 truth file created
+(`synth-context-two-dim.truth.yaml`) with channel (3 values) + device
+(2 values). Graph JSON generated. Dry run passes. Synth generator hash
+pipeline fixed for multi-dimension (per-dimension `core_hash` storage
+and assignment). Full MCMC param recovery not yet run. R2g-ii
+(subsumption) and R2g-iii (`conditional_p`) remain untested.
 
 **Gap 4 — `conditional_p` not implemented**
 
@@ -2053,31 +2076,26 @@ implications.
 
 ### 15A.4 Priority ordering
 
-**Prerequisite — contexted geometry (BLOCKING)**
+**Prerequisite — contexted geometry (RESOLVED 14-Apr-26)**
 
-Before any of the gaps below can be addressed, the contexted graph
-performance collapse must be solved. Adding contexts drops ESS from
-690–1356 to 66–113 (6–20× worse), reintroduces the onset-mu ridge
-at the edge level (corr(m,a) = -0.998 vs -0.26 uncontexted), and
-increases sampling time 3–7×. This is a qualitative failure, not a
-marginal degradation.
+Geometry was previously blocking: adding contexts dropped ESS from
+690–1356 to 66–113. Centred parameterisation (doc 34 §11.11.7) and
+(m, a, r) quantile coordinates (doc 34 §11.9.1) resolved this —
+performance is now adequate.
 
-Fixing per-dimension τ and adding multi-dimension hierarchies would
-add more complexity to a model that is already struggling. The
-geometry must be solved first. See doc 34 §11.11.6 for the three
-compounding effects and the strategic sequencing argument.
+**Sequencing (updated 14-Apr-26):**
 
-**After geometry is solved:**
-
-1. **Gap 1 (per-dimension τ)** — structural correctness for any
-   multi-dimension graph. Prerequisite for everything else.
+1. **Gap 1 (per-dimension τ)** — **DONE.** Structural correctness for
+   multi-dimension graphs. Per-dimension tau and kappa implemented.
 2. **`per_slice_latency` flag** — enables practical use of per-slice
    latency without geometry collapse. Also reduces compute load for
    complex multi-context graphs by eliminating unnecessary per-slice
    latency RVs on dimensions where timing doesn't vary.
-3. **Gap 2 (1/N κ correction)** — prevents parent overconfidence
-   with multiple dimensions.
-4. **Gap 3 (multi-dimension synth graphs)** — validates Gaps 1-2.
+3. **Gap 2 (1/N κ correction)** — **DONE.** Aggregate kappa scaled by
+   1/N when N > 1 dimensions.
+4. **Gap 3 (multi-dimension synth graphs)** — **PARTIAL.** S5 truth
+   file + graph created. Synth generator hash pipeline fixed. Full
+   MCMC param recovery pending.
 5. **Gap 4 (`conditional_p`)** — not needed until production graphs
    use conditionals.
 6. **Gap 5 (subsumption hierarchy)** — not needed until production

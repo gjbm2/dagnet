@@ -191,7 +191,16 @@
       "Bash(bc)",
       "Bash(kill 2063954)",
       "Bash(kill 2056524 2063954)",
-      "Bash(stat -c '%s %n' /tmp/bayes_harness-*synth-simple-abc-r1776153333*)"
+      "Bash(stat -c '%s %n' /tmp/bayes_harness-*synth-simple-abc-r1776153333*)",
+      "Bash(bash graph-ops/scripts/param-pack.sh --help)",
+      "Bash(bash graph-ops/scripts/param-pack.sh synth-simple-abc \"window\\(-30d:\\)\" --format json)",
+      "Bash(chmod +x /home/reg/dev/dagnet/scripts/hunt-phase2-pathology.sh)",
+      "Bash(kill -9 2381079 2381080)",
+      "Bash(scripts/hunt-phase2-pathology.sh)",
+      "Bash(bash scripts/hunt-phase2-pathology.sh synth-mirror-4step-context)",
+      "Bash(bash scripts/hunt-phase2-pathology.sh synth-skip-context)",
+      "Bash(pkill -f \"hunt-phase2-pathology\")",
+      "Bash(pkill -f \"test_harness.*synth-skip\")"
     ],
     "additionalDirectories": [
       "/home/reg/dev/dagnet/.claude",

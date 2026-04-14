@@ -364,16 +364,16 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
     feat_window_only = features.get("window_only", False)
     feat_neutral_prior = features.get("neutral_prior", False)
     feat_latency_dispersion = features.get("latency_dispersion", True)
-    feat_latency_reparam = features.get("latency_reparam", False)
+    feat_latency_reparam = features.get("latency_reparam", True)
     feat_shared_p_slices = features.get("shared_p_slices", False)
     feat_shared_latency_slices = features.get("shared_latency_slices", False)
-    feat_centred_latency_slices = features.get("centred_latency_slices", False)
+    feat_centred_latency_slices = features.get("centred_latency_slices", True)
+    feat_centred_p_slices = features.get("centred_p_slices", True)
     is_phase2 = phase2_frozen is not None
     # latency_reparam implies both latent_onset and latent_latency (doc 34 §11.8.5).
     use_reparam = (feat_latency_reparam
                    and feat_latent_onset
-                   and feat_latent_latency
-                   and not is_phase2)
+                   and feat_latent_latency)
 
     # Settings-driven model constants (fall back to module-level defaults).
     # Keys match the UPPER_CASE convention used in settings.yaml and the FE.
@@ -396,7 +396,9 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                        f"window_only={feat_window_only}, "
                        f"latency_dispersion={feat_latency_dispersion}, "
                        f"latency_reparam={feat_latency_reparam} "
-                       f"(use_reparam={use_reparam})")
+                       f"(use_reparam={use_reparam}), "
+                       f"centred_latency_slices={feat_centred_latency_slices}, "
+                       f"centred_p_slices={feat_centred_p_slices}")
     edge_var_names: dict[str, str] = {}  # edge_id → primary p variable name
     slice_axes: dict[str, dict] = {}     # edge_id → {ctx_keys, ctx_to_idx, n_slices, safe_id}
 
@@ -701,18 +703,20 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
             for group_id, bg in topology.branch_groups.items():
                 # Check if any sibling in this group has slices
                 any_slices = False
-                group_slice_keys: set[str] = set()
+                # Per-dimension slice keys: dim_key → set of ctx_keys
+                _bg_dim_keys: dict[str, set[str]] = {}
                 for sib_id in bg.sibling_edge_ids:
                     ev_sib = evidence.edges.get(sib_id)
                     if ev_sib and ev_sib.has_slices:
                         any_slices = True
-                        for sg in ev_sib.slice_groups.values():
-                            group_slice_keys.update(sg.slices.keys())
+                        for dk, sg in ev_sib.slice_groups.items():
+                            _bg_dim_keys.setdefault(dk, set()).update(sg.slices.keys())
 
                 if not any_slices:
                     continue
 
                 safe_group = _safe_var_name(bg.group_id)
+                _bg_n_dims = len(_bg_dim_keys)
 
                 # Collect base weights from Section 2's Dirichlet
                 sibling_edges = []
@@ -734,42 +738,48 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
 
                 n_components = len(sibling_edges) + (0 if bg.is_exhaustive else 1)
 
-                # Per-group concentration for slice Dirichlets
-                # LogNormal prior: moderate concentration, learned from data
-                _log_kappa_bg = pm.Normal(
-                    f"log_kappa_slice_bg_{safe_group}",
-                    mu=np.log(float(n_components) * 5.0),
-                    sigma=1.0,
-                )
-                kappa_bg = pm.Deterministic(
-                    f"kappa_slice_bg_{safe_group}",
-                    pt.exp(_log_kappa_bg),
-                )
-
-                # Per-slice Dirichlet for each context key
-                for ctx_key in sorted(group_slice_keys):
-                    ctx_safe = _safe_var_name(ctx_key)
-                    conc_vec = kappa_bg * base_weight_vec
-                    # Floor concentrations to avoid degenerate Dirichlet
-                    conc_vec = pt.maximum(conc_vec, _s_dirichlet_conc_floor)
-
-                    slice_weights = pm.Dirichlet(
-                        f"weights_slice_{safe_group}_{ctx_safe}",
-                        a=conc_vec,
+                # Per-dimension concentration for slice Dirichlets (R2g Gap 1).
+                # Each dimension gets its own kappa so "channel has high p
+                # variation" vs "device has low p variation" can be expressed.
+                for _dk, _dk_ctx_keys in sorted(_bg_dim_keys.items()):
+                    _dk_safe = _safe_var_name(_dk)
+                    _kappa_suffix = (f"{safe_group}__{_dk_safe}"
+                                     if _bg_n_dims > 1
+                                     else safe_group)
+                    _log_kappa_bg = pm.Normal(
+                        f"log_kappa_slice_bg_{_kappa_suffix}",
+                        mu=np.log(float(n_components) * 5.0),
+                        sigma=1.0,
+                    )
+                    kappa_bg = pm.Deterministic(
+                        f"kappa_slice_bg_{_kappa_suffix}",
+                        pt.exp(_log_kappa_bg),
                     )
 
-                    for i, sib_id in enumerate(sibling_edges):
-                        sib_safe = _safe_var_name(sib_id)
-                        p_slice_var = pm.Deterministic(
-                            f"p_slice_{sib_safe}_{ctx_safe}",
-                            slice_weights[i],
+                    # Per-slice Dirichlet for each context key in this dimension
+                    for ctx_key in sorted(_dk_ctx_keys):
+                        ctx_safe = _safe_var_name(ctx_key)
+                        conc_vec = kappa_bg * base_weight_vec
+                        # Floor concentrations to avoid degenerate Dirichlet
+                        conc_vec = pt.maximum(conc_vec, _s_dirichlet_conc_floor)
+
+                        slice_weights = pm.Dirichlet(
+                            f"weights_slice_{safe_group}_{ctx_safe}",
+                            a=conc_vec,
                         )
-                        bg_slice_p_vars.setdefault(sib_id, {})[ctx_key] = p_slice_var
 
-                    diagnostics.append(
-                        f"  branch_group_slice: {safe_group} {ctx_key} → "
-                        f"Dir({n_components}, κ_bg)"
-                    )
+                        for i, sib_id in enumerate(sibling_edges):
+                            sib_safe = _safe_var_name(sib_id)
+                            p_slice_var = pm.Deterministic(
+                                f"p_slice_{sib_safe}_{ctx_safe}",
+                                slice_weights[i],
+                            )
+                            bg_slice_p_vars.setdefault(sib_id, {})[ctx_key] = p_slice_var
+
+                        diagnostics.append(
+                            f"  branch_group_slice: {safe_group}[{_dk}] {ctx_key} → "
+                            f"Dir({n_components}, κ_bg)"
+                        )
 
         # =============================================================
         # SECTION 3: PER-EDGE LATENCY VARIABLES
@@ -1097,28 +1107,73 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                     f"sd_onset={path_onset_sd:.2f}, sd_mu={path_mu_sd:.3f}, sd_sigma={path_sigma_sd:.3f})"
                 )
 
-                # onset_cohort: softplus(Normal) centred on Phase 1 composed value
-                eps_onset_cohort = pm.Normal(f"eps_onset_cohort_{safe_id}", mu=0, sigma=1)
-                onset_cohort = pm.Deterministic(
-                    f"onset_cohort_{safe_id}",
-                    pt.softplus(ws_onset + eps_onset_cohort * path_onset_sd),
-                )
-                # mu_cohort: Normal centred on FW-composed value
-                mu_cohort = pm.Normal(
-                    f"mu_cohort_{safe_id}",
-                    mu=ws_mu,
-                    sigma=path_mu_sd,
-                )
-                # sigma_cohort: Gamma with mode at FW-composed value
-                from .completeness import gamma_params_from_mode
-                gamma_a, gamma_b = gamma_params_from_mode(
-                    max(ws_sigma, 0.1),
-                    spread=max(path_sigma_sd / max(ws_sigma, 0.1), 0.05),
-                )
-                sigma_cohort = pm.Gamma(
-                    f"sigma_cohort_{safe_id}",
-                    alpha=gamma_a, beta=gamma_b,
-                )
+                if use_reparam:
+                    # (m, a, r) reparameterisation for Phase 2 cohort
+                    # latency (doc 34 §11.11). Same transform as Stage 1
+                    # but with priors from Phase 1 composed values.
+                    _t50_cohort = ws_onset + _math.exp(ws_mu)
+                    _m_cohort_prior = _math.log(max(_t50_cohort, 0.25))
+                    if ws_onset < 1e-6:
+                        _a_cohort_prior = -5.0
+                    else:
+                        _a_cohort_prior = _math.log(
+                            ws_onset / max(_t50_cohort - ws_onset, 0.25))
+                    _r_cohort_prior = _math.log(
+                        _math.expm1(Z_95 * max(ws_sigma, _sigma_floor)))
+
+                    # Prior widths from Phase 1 uncertainty
+                    _m_cohort_sd = max(path_mu_sd, 0.1)
+                    _a_cohort_sd = max(
+                        path_onset_sd / max(_t50_cohort, 1.0), 0.3)
+                    _r_cohort_sd = max(path_sigma_sd, 0.1)
+
+                    m_cohort = pm.Normal(
+                        f"m_cohort_{safe_id}",
+                        mu=_m_cohort_prior, sigma=_m_cohort_sd)
+                    a_cohort = pm.Normal(
+                        f"a_cohort_{safe_id}",
+                        mu=_a_cohort_prior, sigma=_a_cohort_sd)
+                    r_cohort = pm.Normal(
+                        f"r_cohort_{safe_id}",
+                        mu=_r_cohort_prior, sigma=_r_cohort_sd)
+
+                    onset_cohort = pm.Deterministic(
+                        f"onset_cohort_{safe_id}",
+                        pt.exp(m_cohort) * pm.math.invlogit(a_cohort))
+                    mu_cohort = pm.Deterministic(
+                        f"mu_cohort_{safe_id}",
+                        m_cohort - pt.softplus(a_cohort))
+                    sigma_cohort = pm.Deterministic(
+                        f"sigma_cohort_{safe_id}",
+                        pt.softplus(r_cohort) / Z_95)
+
+                    diagnostics.append(
+                        f"  cohort_latency: {edge_id[:8]}… "
+                        f"(m,a,r) reparam: m={_m_cohort_prior:.3f} "
+                        f"a={_a_cohort_prior:.3f} r={_r_cohort_prior:.3f}")
+                else:
+                    # onset_cohort: softplus(Normal) centred on Phase 1 composed value
+                    eps_onset_cohort = pm.Normal(f"eps_onset_cohort_{safe_id}", mu=0, sigma=1)
+                    onset_cohort = pm.Deterministic(
+                        f"onset_cohort_{safe_id}",
+                        pt.softplus(ws_onset + eps_onset_cohort * path_onset_sd),
+                    )
+                    # mu_cohort: Normal centred on FW-composed value
+                    mu_cohort = pm.Normal(
+                        f"mu_cohort_{safe_id}",
+                        mu=ws_mu,
+                        sigma=path_mu_sd,
+                    )
+                    # sigma_cohort: Gamma with mode at FW-composed value
+                    from .completeness import gamma_params_from_mode
+                    gamma_a, gamma_b = gamma_params_from_mode(
+                        max(ws_sigma, 0.1),
+                        spread=max(path_sigma_sd / max(ws_sigma, 0.1), 0.05),
+                    )
+                    sigma_cohort = pm.Gamma(
+                        f"sigma_cohort_{safe_id}",
+                        alpha=gamma_a, beta=gamma_b,
+                    )
             else:
                 # Phase 1: tight non-centred around live edge latency.
                 if feat_latent_onset and hasattr(onset_prior, 'name'):
@@ -1301,11 +1356,15 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                 # Batching for design rationale.
                 _slice_ctx_keys = []
                 _slice_obs_ordered = []
+                # Per-dimension mapping: flat index → dimension key
+                _slice_dim_keys: list[str] = []
                 for _dk, _sg in ev.slice_groups.items():
                     for _ck, _so in _sg.slices.items():
                         _slice_ctx_keys.append(_ck)
                         _slice_obs_ordered.append(_so)
+                        _slice_dim_keys.append(_dk)
                 _n_slices = len(_slice_ctx_keys)
+                _n_dims = len(ev.slice_groups)
                 _ctx_to_idx = {ck: i for i, ck in enumerate(_slice_ctx_keys)}
                 slice_axes[edge_id] = {
                     "ctx_keys": _slice_ctx_keys,
@@ -1368,7 +1427,16 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                     _is_bg = edge_id in bg_slice_p_vars
                     _shared_p = feat_shared_p_slices and not _is_bg
                     if not _is_bg and not _shared_p:
-                        tau_slice = pm.HalfNormal(f"tau_slice_{safe_id}", sigma=0.5)
+                        # Per-dimension tau for p hierarchy (R2g Gap 1).
+                        # When only one dimension exists, this is identical
+                        # to the old single tau_slice.
+                        _tau_slice_by_dim: dict[str, object] = {}
+                        for _dk in ev.slice_groups:
+                            _dk_safe = _safe_var_name(_dk)
+                            _tau_name = (f"tau_slice_{safe_id}__{_dk_safe}"
+                                         if _n_dims > 1
+                                         else f"tau_slice_{safe_id}")
+                            _tau_slice_by_dim[_dk] = pm.HalfNormal(_tau_name, sigma=0.5)
                         logit_p_base = pt.log(p / (1.0 - p))
 
                     # Per-slice latency hierarchy.
@@ -1400,33 +1468,49 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                             _r_base_var = model[_r_edge]
 
                             # Per-slice m offsets (always when reparam_slices >= 1)
-                            tau_m_slice = pm.HalfNormal(
-                                f"tau_m_slice_{safe_id}", sigma=0.3)
+                            # Per-dimension tau for latency (R2g Gap 1).
+                            _tau_m_by_dim: dict[str, object] = {}
+                            for _dk in ev.slice_groups:
+                                _dk_safe = _safe_var_name(_dk)
+                                _tm_name = (f"tau_m_slice_{safe_id}__{_dk_safe}"
+                                            if _n_dims > 1
+                                            else f"tau_m_slice_{safe_id}")
+                                _tau_m_by_dim[_dk] = pm.HalfNormal(_tm_name, sigma=0.3)
+                            # Build tau vector: each position uses its dimension's tau
+                            _tau_m_vec = pt.stack([_tau_m_by_dim[dk] for dk in _slice_dim_keys])
+
                             if feat_centred_latency_slices:
                                 _m_slice_vec = pm.Normal(
                                     f"m_slice_vec_{safe_id}",
-                                    mu=_m_base_var, sigma=tau_m_slice,
+                                    mu=_m_base_var, sigma=_tau_m_vec,
                                     shape=(_n_slices,))
                             else:
                                 _eps_m_slice_vec = pm.Normal(
                                     f"eps_m_slice_vec_{safe_id}",
                                     mu=0, sigma=1, shape=(_n_slices,))
-                                _m_slice_vec = _m_base_var + _eps_m_slice_vec * tau_m_slice
+                                _m_slice_vec = _m_base_var + _eps_m_slice_vec * _tau_m_vec
 
                             # Per-slice r offsets (only when reparam_slices >= 2)
                             if _reparam_slice_level >= 2:
-                                tau_r_slice = pm.HalfNormal(
-                                    f"tau_r_slice_{safe_id}", sigma=0.3)
+                                _tau_r_by_dim: dict[str, object] = {}
+                                for _dk in ev.slice_groups:
+                                    _dk_safe = _safe_var_name(_dk)
+                                    _tr_name = (f"tau_r_slice_{safe_id}__{_dk_safe}"
+                                                if _n_dims > 1
+                                                else f"tau_r_slice_{safe_id}")
+                                    _tau_r_by_dim[_dk] = pm.HalfNormal(_tr_name, sigma=0.3)
+                                _tau_r_vec = pt.stack([_tau_r_by_dim[dk] for dk in _slice_dim_keys])
+
                                 if feat_centred_latency_slices:
                                     _r_slice_vec = pm.Normal(
                                         f"r_slice_vec_{safe_id}",
-                                        mu=_r_base_var, sigma=tau_r_slice,
+                                        mu=_r_base_var, sigma=_tau_r_vec,
                                         shape=(_n_slices,))
                                 else:
                                     _eps_r_slice_vec = pm.Normal(
                                         f"eps_r_slice_vec_{safe_id}",
                                         mu=0, sigma=1, shape=(_n_slices,))
-                                    _r_slice_vec = _r_base_var + _eps_r_slice_vec * tau_r_slice
+                                    _r_slice_vec = _r_base_var + _eps_r_slice_vec * _tau_r_vec
                                 _sigma_per_slice = True
                             else:
                                 _sigma_per_slice = False
@@ -1453,7 +1537,15 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                                 f"{_n_slices} slices [reparam]")
                         else:
                             if not feat_shared_latency_slices:
-                                tau_mu_slice = pm.HalfNormal(f"tau_mu_slice_{safe_id}", sigma=0.3)
+                                # Per-dimension tau for non-reparam mu offsets (R2g Gap 1)
+                                _tau_mu_by_dim: dict[str, object] = {}
+                                for _dk in ev.slice_groups:
+                                    _dk_safe = _safe_var_name(_dk)
+                                    _tmu_name = (f"tau_mu_slice_{safe_id}__{_dk_safe}"
+                                                 if _n_dims > 1
+                                                 else f"tau_mu_slice_{safe_id}")
+                                    _tau_mu_by_dim[_dk] = pm.HalfNormal(_tmu_name, sigma=0.3)
+                                _tau_mu_vec = pt.stack([_tau_mu_by_dim[dk] for dk in _slice_dim_keys])
                             _use_slice_latency_vecs = False
 
                     # ── Vector RVs for per-slice families (doc 38 §Native
@@ -1467,12 +1559,25 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                             f"  shared_p: {edge_id[:8]}… p shared across "
                             f"{_n_slices} slices [shared_p_slices flag]")
                     elif not _is_bg:
-                        _eps_slice_vec = pm.Normal(
-                            f"eps_slice_vec_{safe_id}",
-                            mu=0, sigma=1, shape=(_n_slices,))
-                        _p_slice_vec = pm.Deterministic(
-                            f"p_slice_vec_{safe_id}",
-                            pm.math.invlogit(logit_p_base + _eps_slice_vec * tau_slice))
+                        # Build per-dimension tau vector for p offsets
+                        _tau_p_vec = pt.stack([_tau_slice_by_dim[dk] for dk in _slice_dim_keys])
+                        if feat_centred_p_slices:
+                            # Centred: sample logit_p directly per slice
+                            _logit_p_slice_vec = pm.Normal(
+                                f"logit_p_slice_vec_{safe_id}",
+                                mu=logit_p_base, sigma=_tau_p_vec,
+                                shape=(_n_slices,))
+                            _p_slice_vec = pm.Deterministic(
+                                f"p_slice_vec_{safe_id}",
+                                pm.math.invlogit(_logit_p_slice_vec))
+                        else:
+                            # Non-centred (default): eps * tau on logit scale
+                            _eps_slice_vec = pm.Normal(
+                                f"eps_slice_vec_{safe_id}",
+                                mu=0, sigma=1, shape=(_n_slices,))
+                            _p_slice_vec = pm.Deterministic(
+                                f"p_slice_vec_{safe_id}",
+                                pm.math.invlogit(logit_p_base + _eps_slice_vec * _tau_p_vec))
 
                     # Kappa: per-slice vector or shared edge-level.
                     # When both p and latency are shared, kappa should
@@ -1498,7 +1603,7 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                             # buffered by eps. See doc 34 §11.11.7.
                             _mu_slice_vec = pm.Normal(
                                 f"mu_slice_vec_{safe_id}",
-                                mu=_mu_base, sigma=tau_mu_slice,
+                                mu=_mu_base, sigma=_tau_mu_vec,
                                 shape=(_n_slices,))
                         else:
                             # Non-centred (default): mu_slice = mu_base + eps * tau
@@ -1507,7 +1612,7 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                                 mu=0, sigma=1, shape=(_n_slices,))
                             _mu_slice_vec = pm.Deterministic(
                                 f"mu_slice_vec_{safe_id}",
-                                _mu_base + _eps_mu_slice_vec * tau_mu_slice)
+                                _mu_base + _eps_mu_slice_vec * _tau_mu_vec)
                     elif et.has_latency and feat_shared_latency_slices:
                         # shared_latency_slices: broadcast edge-level mu
                         # across all slices so batched trajectory path works.
@@ -1557,10 +1662,21 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                             kappa_warm=ev.kappa_warm, cohort_latency_warm=ev.cohort_latency_warm)
                         _emissions.append((_sfx, p_s, ks, s_ev, _lv, _ov))
 
-                    # If not all exhaustive, also emit aggregate
+                    # If not all exhaustive, also emit aggregate.
+                    # 1/N kappa correction (R2g Gap 2, doc 14 §14.6d):
+                    # With N independent dimensions, the aggregate's kappa
+                    # is scaled by 1/N to prevent parent overconfidence.
                     _all_exhaustive = all(sg.is_exhaustive for sg in ev.slice_groups.values())
                     if not _all_exhaustive:
-                        _emissions.append((safe_id, p, edge_kappa, ev, latency_vars, onset_vars))
+                        _agg_kappa = edge_kappa
+                        if _n_dims > 1:
+                            _agg_kappa = pm.Deterministic(
+                                f"kappa_agg_corrected_{safe_id}",
+                                edge_kappa / float(_n_dims))
+                            diagnostics.append(
+                                f"  1/N_kappa: {edge_id[:8]}… N={_n_dims}, "
+                                f"aggregate kappa scaled by 1/{_n_dims}")
+                        _emissions.append((safe_id, p, _agg_kappa, ev, latency_vars, onset_vars))
                     else:
                         diagnostics.append(f"  slices: {edge_id[:8]}… exhaustive, aggregate suppressed")
             else:

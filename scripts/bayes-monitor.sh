@@ -45,6 +45,9 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# Clear display-only hidden list from previous session
+rm -f /tmp/_bayes_monitor_hidden
+
 # Write filter file: if specific graphs requested, only tail those
 FILTER_FILE="/tmp/_bayes_monitor_filter"
 if [[ ${#SELECTED[@]} -gt 0 ]]; then
@@ -108,6 +111,14 @@ get_tail_graphs() {
             local short="${name#graph-}"
             if ! grep -qxF "$name" "$filter_file" 2>/dev/null &&
                ! grep -qxF "$short" "$filter_file" 2>/dev/null; then
+                continue
+            fi
+        fi
+        # Skip graphs hidden by ^b e (display-only, logs untouched)
+        local hidden_file="/tmp/_bayes_monitor_hidden"
+        if [[ -f "$hidden_file" ]] && grep -qxF "$name" "$hidden_file" 2>/dev/null; then
+            # Un-hide if it started running again
+            if ! lock_alive "$lock"; then
                 continue
             fi
         fi
@@ -291,19 +302,21 @@ _prev_tails=""
 while true; do
 
     # ── 0. Handle clear request (^b e) ──
+    # Clears finished graphs from the MONITOR DISPLAY only.
+    # Does NOT touch log files — they are primary diagnostic data.
     if [[ $_do_clear -eq 1 ]]; then
         _do_clear=0
+        # Write a hide-list: finished graph names to suppress from display
         for f in /tmp/bayes_harness-*.log; do
             [[ -f "$f" ]] || continue
             _cname=$(basename "$f" .log)
             _cname="${_cname#bayes_harness-}"
+            is_archive "$_cname" && continue
             _clock="/tmp/bayes-harness-${_cname}.lock"
-            if [[ -f "$_clock" ]]; then
-                _cpid=$(cat "$_clock" 2>/dev/null)
-                [[ -n "$_cpid" ]] && kill -0 "$_cpid" 2>/dev/null && continue
-                rm -f "$_clock" 2>/dev/null
+            if ! lock_alive "$_clock"; then
+                echo "$_cname" >> /tmp/_bayes_monitor_hidden
             fi
-            rm -f "$f" 2>/dev/null
+            # Clean up tail scripts (display artefacts, not data)
             rm -f "/tmp/_bayes_tail_${_cname}.sh" 2>/dev/null
         done
         # Force tail rebuild on next cycle
@@ -323,6 +336,10 @@ while true; do
         name="${name#bayes_harness-}"
         # Skip archive copies
         is_archive "$name" && continue
+        # Skip graphs hidden by ^b e (display-only, logs untouched)
+        if [[ -f /tmp/_bayes_monitor_hidden ]] && grep -qxF "$name" /tmp/_bayes_monitor_hidden 2>/dev/null; then
+            continue
+        fi
         lock="/tmp/bayes-harness-${name}.lock"
 
         if lock_alive "$lock"; then

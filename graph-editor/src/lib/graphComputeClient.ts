@@ -314,7 +314,7 @@ export class GraphComputeClient {
       // Helper to detect a cohort maturity "result-like" payload.
       const isCohortMaturityResult = (r: any): boolean => {
         if (!r || typeof r !== 'object') return false;
-        if (r.analysis_type === 'cohort_maturity' || r.analysis_type === 'cohort_maturity_v2') return true;
+        if (r.analysis_type === 'cohort_maturity' || r.analysis_type === 'cohort_maturity_v2' || r.analysis_type === 'cohort_maturity_v1') return true;
         // Some snapshot paths may omit analysis_type but include frames.
         return Array.isArray(r.frames) && r.frames.length >= 0;
       };
@@ -365,7 +365,7 @@ export class GraphComputeClient {
 
       // Only normalise when the request intends cohort maturity (or payload looks like it).
       const anyCohort = blocks.some(b => isCohortMaturityResult(b.result));
-      if (!anyCohort && requestedType !== 'cohort_maturity' && requestedType !== 'cohort_maturity_v2') return null;
+      if (!anyCohort && requestedType !== 'cohort_maturity' && requestedType !== 'cohort_maturity_v2' && requestedType !== 'cohort_maturity_v1') return null;
 
       // Build dimension values from request scenarios (names/colours/visibility modes).
       const scenarioDimensionValues: Record<string, DimensionValueMeta> = {};
@@ -1422,7 +1422,7 @@ export class GraphComputeClient {
       this.generateCacheKey(graph, analyticsDsl, analysisType, [scenarioId])
       + `|eqdsl:${this.hashString(effectiveQueryDsl || '')}`
       + `|vis:${visibilityMode}`
-      + ((analysisType === 'cohort_maturity' || analysisType === 'cohort_maturity_v2') ? `|cmv:${this.COHORT_MATURITY_CACHE_VERSION}` : '')
+      + ((analysisType === 'cohort_maturity' || analysisType === 'cohort_maturity_v2' || analysisType === 'cohort_maturity_v1') ? `|cmv:${this.COHORT_MATURITY_CACHE_VERSION}` : '')
       + (displaySig ? `|ds:${this.hashString(displaySig)}` : '')
       + (testFixture ? `|tf:${testFixture}:${this.getUrlSearchParams().toString()}` : '');
     if (!bypassCache) {
@@ -1506,7 +1506,7 @@ export class GraphComputeClient {
     const raw = await response.json();
 
     // DEV diagnostic: log the raw backend response shape for snapshot analysis debugging
-    if (import.meta.env?.DEV && (request.analysis_type === 'cohort_maturity' || request.analysis_type === 'cohort_maturity_v2')) {
+    if (import.meta.env?.DEV && (request.analysis_type === 'cohort_maturity' || request.analysis_type === 'cohort_maturity_v2' || request.analysis_type === 'cohort_maturity_v1')) {
       const frames = Array.isArray(raw?.result?.frames) ? raw.result.frames : [];
       console.log('[GraphComputeClient] RAW cohort_maturity response:', {
         success: raw?.success,
@@ -1542,7 +1542,7 @@ export class GraphComputeClient {
       ?? this.normaliseSnapshotBranchComparisonResponse(raw, request)
       ?? this.normaliseSnapshotLagFitResponse(raw, request);
 
-    if (import.meta.env?.DEV && (request.analysis_type === 'cohort_maturity' || request.analysis_type === 'cohort_maturity_v2')) {
+    if (import.meta.env?.DEV && (request.analysis_type === 'cohort_maturity' || request.analysis_type === 'cohort_maturity_v2' || request.analysis_type === 'cohort_maturity_v1')) {
       console.log('[GraphComputeClient] Normalisation result:', {
         didNormalise: !!normalised,
         normalisedAnalysisType: normalised?.result?.analysis_type,
@@ -1618,7 +1618,7 @@ export class GraphComputeClient {
     const cacheKey =
       `multi|graphs:${scenarioGraphKey}|adsl:${analyticsDsl || ''}|type:${analysisType || ''}|scenarios:${scenarioIds.join(',')}`
       + `|vis:${visibilityModes}`
-      + ((analysisType === 'cohort_maturity' || analysisType === 'cohort_maturity_v2') ? `|cmv:${this.COHORT_MATURITY_CACHE_VERSION}` : '')
+      + ((analysisType === 'cohort_maturity' || analysisType === 'cohort_maturity_v2' || analysisType === 'cohort_maturity_v1') ? `|cmv:${this.COHORT_MATURITY_CACHE_VERSION}` : '')
       + (multiDisplaySig ? `|ds:${this.hashString(multiDisplaySig)}` : '')
       + (multiTestFixture ? `|tf:${multiTestFixture}:${this.getUrlSearchParams().toString()}` : '');
     

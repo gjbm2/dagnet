@@ -1023,3 +1023,357 @@ def build_contexted_solo_edge_with_snapshot_slices(
         mece_dimensions,
         slice_truth,
     )
+
+
+def build_two_dimension_solo_edge(
+    dim1_ps: dict[str, float] | None = None,
+    dim2_ps: dict[str, float] | None = None,
+    n_per_day: int = 80,
+    n_days: int = 45,
+    *,
+    onset: float = 2.0,
+    mu: float = 2.1,
+    sigma: float = 0.55,
+    seed: int = 64,
+) -> tuple[
+    dict,
+    dict[str, dict],
+    dict[str, list[dict]],
+    dict[str, set[str]],
+    list[str],
+    dict[str, float],
+]:
+    """Snapshot-backed solo edge with TWO independent MECE context dimensions.
+
+    Produces context-qualified rows for two orthogonal dimensions (e.g.
+    channel and device). Each dimension has its own core_hash family and
+    its own set of context keys. This exercises the multi-dimension model
+    path: per-dimension tau, per-dimension kappa, and 1/N kappa correction.
+
+    Returns same shape as build_contexted_solo_edge_with_snapshot_slices.
+    slice_truth maps all context keys from both dimensions.
+    """
+    if dim1_ps is None:
+        dim1_ps = {"google": 0.62, "direct": 0.38}
+    if dim2_ps is None:
+        dim2_ps = {"mobile": 0.55, "desktop": 0.45}
+
+    rng = np.random.default_rng(seed)
+    today_str = "2025-03-01"
+
+    from datetime import datetime, timedelta
+
+    today = datetime.strptime(today_str, "%Y-%m-%d")
+    cohort_start = today - timedelta(days=n_days)
+
+    retrieval_dates = []
+    ret = cohort_start + timedelta(days=20)
+    while ret <= today:
+        retrieval_dates.append(ret.strftime("%Y-%m-%d"))
+        ret += timedelta(days=10)
+
+    latency_block = {
+        "latency_parameter": True,
+        "onset_delta_days": onset,
+        "mu": mu,
+        "sigma": sigma,
+        "median_lag_days": onset + float(np.exp(mu)),
+        "mean_lag_days": onset + float(np.exp(mu + sigma**2 / 2)),
+    }
+
+    mean_p = float(np.mean(list(dim1_ps.values()) + list(dim2_ps.values())))
+
+    graph_snapshot = {
+        "nodes": [
+            _node("node-anchor", is_start=True),
+            _node("node-a"),
+            _node("node-b", absorbing=True),
+        ],
+        "edges": [
+            _edge("edge-anchor-a", "node-anchor", "node-a", "param-anchor-a", p_mean=0.9),
+            _edge(
+                "edge-a-b",
+                "node-a",
+                "node-b",
+                "param-a-b",
+                p_mean=mean_p,
+                latency=latency_block,
+            ),
+        ],
+    }
+
+    param_files = {
+        "param-anchor-a": _window_param_file(
+            n_per_day * n_days * 2,
+            int(n_per_day * n_days * 2 * 0.9),
+            param_id="param-anchor-a",
+        ),
+        "param-a-b": {
+            "id": "param-a-b",
+            "values": [
+                {
+                    "sliceDSL": "window(1-Jan-25:1-Mar-25)",
+                    "n": 100,
+                    "k": int(100 * mean_p),
+                    "mean": mean_p,
+                    "stdev": 0.05,
+                }
+            ],
+        },
+    }
+
+    # Different core_hash per dimension
+    hash_dim1 = "ctx-hash-dim1"
+    hash_dim2 = "ctx-hash-dim2"
+    rows: list[dict] = []
+
+    # Build commissioned slices and truth for both dimensions
+    commissioned: dict[str, set[str]] = {"edge-a-b": set()}
+    slice_truth: dict[str, float] = {}
+
+    # Dimension 1: channel
+    for ctx_name, p_true in dim1_ps.items():
+        ctx_key = f"context(channel:{ctx_name})"
+        commissioned["edge-a-b"].add(ctx_key)
+        slice_truth[ctx_key] = p_true
+        rows.extend(
+            generate_snapshot_rows(
+                rng, p_true, n_per_day, n_days, retrieval_dates,
+                onset=onset, mu=mu, sigma=sigma,
+                slice_key=f"{ctx_key}.window(1-Jan-25:1-Mar-25)",
+                param_id="repo-branch-param-a-b",
+                core_hash=hash_dim1,
+                today_str=today_str,
+            )
+        )
+        rows.extend(
+            generate_snapshot_rows(
+                rng, p_true, n_per_day, n_days, retrieval_dates,
+                onset=onset, mu=mu, sigma=sigma,
+                slice_key=f"{ctx_key}.cohort(node-anchor,2024-10-01:2025-01-01)",
+                param_id="repo-branch-param-a-b",
+                core_hash=hash_dim1,
+                today_str=today_str,
+            )
+        )
+
+    # Dimension 2: device
+    for ctx_name, p_true in dim2_ps.items():
+        ctx_key = f"context(device:{ctx_name})"
+        commissioned["edge-a-b"].add(ctx_key)
+        slice_truth[ctx_key] = p_true
+        rows.extend(
+            generate_snapshot_rows(
+                rng, p_true, n_per_day, n_days, retrieval_dates,
+                onset=onset, mu=mu, sigma=sigma,
+                slice_key=f"{ctx_key}.window(1-Jan-25:1-Mar-25)",
+                param_id="repo-branch-param-a-b",
+                core_hash=hash_dim2,
+                today_str=today_str,
+            )
+        )
+        rows.extend(
+            generate_snapshot_rows(
+                rng, p_true, n_per_day, n_days, retrieval_dates,
+                onset=onset, mu=mu, sigma=sigma,
+                slice_key=f"{ctx_key}.cohort(node-anchor,2024-10-01:2025-01-01)",
+                param_id="repo-branch-param-a-b",
+                core_hash=hash_dim2,
+                today_str=today_str,
+            )
+        )
+
+    mece_dimensions = ["channel", "device"]
+
+    return (
+        graph_snapshot,
+        param_files,
+        {"edge-a-b": rows},
+        commissioned,
+        mece_dimensions,
+        slice_truth,
+    )
+
+
+def build_staggered_two_dimension_solo_edge(
+    dim1_ps: dict[str, float] | None = None,
+    dim2_ps: dict[str, float] | None = None,
+    n_per_day: int = 80,
+    *,
+    onset: float = 2.0,
+    mu: float = 2.1,
+    sigma: float = 0.55,
+    seed: int = 65,
+) -> tuple[
+    dict,
+    dict[str, dict],
+    dict[str, list[dict]],
+    dict[str, set[str]],
+    list[str],
+    dict[str, float],
+]:
+    """Snapshot-backed solo edge with staggered dimension introduction.
+
+    Simulates the production A→B→D trajectory:
+      - Days 0-14:  state A — bare aggregate only
+      - Days 15-29: state B — channel only (no device rows)
+      - Days 30-44: state D — both channel and device
+
+    Each state produces rows with distinct retrieval dates so the binder
+    can route them by regime.
+
+    Returns same shape as build_two_dimension_solo_edge.
+    """
+    if dim1_ps is None:
+        dim1_ps = {"google": 0.62, "direct": 0.38}
+    if dim2_ps is None:
+        dim2_ps = {"mobile": 0.55, "desktop": 0.45}
+
+    rng = np.random.default_rng(seed)
+    n_days = 45
+    today_str = "2025-03-01"
+
+    from datetime import datetime, timedelta
+
+    today = datetime.strptime(today_str, "%Y-%m-%d")
+    cohort_start = today - timedelta(days=n_days)
+
+    # Retrieval dates spread across the full period, as in the working builders
+    all_ret_dates = []
+    ret = cohort_start + timedelta(days=15)
+    while ret <= today:
+        all_ret_dates.append(ret.strftime("%Y-%m-%d"))
+        ret += timedelta(days=5)
+
+    # Split into three epochs by retrieval date index
+    n_ret = len(all_ret_dates)
+    third = n_ret // 3
+    epoch_a_dates = all_ret_dates[:third]            # state A: bare
+    epoch_b_dates = all_ret_dates[third:2*third]     # state B: channel only
+    epoch_d_dates = all_ret_dates[2*third:]           # state D: both
+
+    latency_block = {
+        "latency_parameter": True,
+        "onset_delta_days": onset,
+        "mu": mu, "sigma": sigma,
+        "median_lag_days": onset + float(np.exp(mu)),
+        "mean_lag_days": onset + float(np.exp(mu + sigma**2 / 2)),
+    }
+
+    mean_p = float(np.mean(list(dim1_ps.values()) + list(dim2_ps.values())))
+
+    graph_snapshot = {
+        "nodes": [
+            _node("node-anchor", is_start=True),
+            _node("node-a"),
+            _node("node-b", absorbing=True),
+        ],
+        "edges": [
+            _edge("edge-anchor-a", "node-anchor", "node-a", "param-anchor-a", p_mean=0.9),
+            _edge("edge-a-b", "node-a", "node-b", "param-a-b",
+                  p_mean=mean_p, latency=latency_block),
+        ],
+    }
+
+    param_files = {
+        "param-anchor-a": _window_param_file(
+            n_per_day * n_days * 2, int(n_per_day * n_days * 2 * 0.9),
+            param_id="param-anchor-a"),
+        "param-a-b": {
+            "id": "param-a-b",
+            "values": [{"sliceDSL": "window(1-Jan-25:1-Mar-25)",
+                         "n": 100, "k": int(100 * mean_p),
+                         "mean": mean_p, "stdev": 0.05}],
+        },
+    }
+
+    hash_bare = "hash-bare"
+    hash_dim1 = "hash-channel"
+    hash_dim2 = "hash-device"
+    rows: list[dict] = []
+    commissioned: dict[str, set[str]] = {"edge-a-b": set()}
+    slice_truth: dict[str, float] = {}
+
+    # State A: bare aggregate rows
+    rows.extend(generate_snapshot_rows(
+        rng, mean_p, n_per_day, n_days, epoch_a_dates,
+        onset=onset, mu=mu, sigma=sigma,
+        slice_key="window(1-Jan-25:1-Mar-25)",
+        param_id="repo-branch-param-a-b",
+        core_hash=hash_bare, today_str=today_str,
+    ))
+    rows.extend(generate_snapshot_rows(
+        rng, mean_p, n_per_day, n_days, epoch_a_dates,
+        onset=onset, mu=mu, sigma=sigma,
+        slice_key="cohort(node-anchor,2024-10-01:2025-01-01)",
+        param_id="repo-branch-param-a-b",
+        core_hash=hash_bare, today_str=today_str,
+    ))
+
+    # State B: channel slices only
+    for ctx_name, p_true in dim1_ps.items():
+        ctx_key = f"context(channel:{ctx_name})"
+        commissioned["edge-a-b"].add(ctx_key)
+        slice_truth[ctx_key] = p_true
+        rows.extend(generate_snapshot_rows(
+            rng, p_true, n_per_day, n_days, epoch_b_dates,
+            onset=onset, mu=mu, sigma=sigma,
+            slice_key=f"{ctx_key}.window(1-Jan-25:1-Mar-25)",
+            param_id="repo-branch-param-a-b",
+            core_hash=hash_dim1, today_str=today_str,
+        ))
+        rows.extend(generate_snapshot_rows(
+            rng, p_true, n_per_day, n_days, epoch_b_dates,
+            onset=onset, mu=mu, sigma=sigma,
+            slice_key=f"{ctx_key}.cohort(node-anchor,2024-10-01:2025-01-01)",
+            param_id="repo-branch-param-a-b",
+            core_hash=hash_dim1, today_str=today_str,
+        ))
+
+    # State D: both channel + device slices
+    for ctx_name, p_true in dim1_ps.items():
+        ctx_key = f"context(channel:{ctx_name})"
+        rows.extend(generate_snapshot_rows(
+            rng, p_true, n_per_day, n_days, epoch_d_dates,
+            onset=onset, mu=mu, sigma=sigma,
+            slice_key=f"{ctx_key}.window(1-Jan-25:1-Mar-25)",
+            param_id="repo-branch-param-a-b",
+            core_hash=hash_dim1, today_str=today_str,
+        ))
+        rows.extend(generate_snapshot_rows(
+            rng, p_true, n_per_day, n_days, epoch_d_dates,
+            onset=onset, mu=mu, sigma=sigma,
+            slice_key=f"{ctx_key}.cohort(node-anchor,2024-10-01:2025-01-01)",
+            param_id="repo-branch-param-a-b",
+            core_hash=hash_dim1, today_str=today_str,
+        ))
+
+    for ctx_name, p_true in dim2_ps.items():
+        ctx_key = f"context(device:{ctx_name})"
+        commissioned["edge-a-b"].add(ctx_key)
+        slice_truth[ctx_key] = p_true
+        rows.extend(generate_snapshot_rows(
+            rng, p_true, n_per_day, n_days, epoch_d_dates,
+            onset=onset, mu=mu, sigma=sigma,
+            slice_key=f"{ctx_key}.window(1-Jan-25:1-Mar-25)",
+            param_id="repo-branch-param-a-b",
+            core_hash=hash_dim2, today_str=today_str,
+        ))
+        rows.extend(generate_snapshot_rows(
+            rng, p_true, n_per_day, n_days, epoch_d_dates,
+            onset=onset, mu=mu, sigma=sigma,
+            slice_key=f"{ctx_key}.cohort(node-anchor,2024-10-01:2025-01-01)",
+            param_id="repo-branch-param-a-b",
+            core_hash=hash_dim2, today_str=today_str,
+        ))
+
+    mece_dimensions = ["channel", "device"]
+
+    return (
+        graph_snapshot,
+        param_files,
+        {"edge-a-b": rows},
+        commissioned,
+        mece_dimensions,
+        slice_truth,
+    )

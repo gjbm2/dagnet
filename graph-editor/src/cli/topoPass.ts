@@ -57,7 +57,7 @@ function buildCohortData(
     const edgeId = edge.id || '';
     paramIdToEdgeUuid.set(edgeId, eid);
   }
-  for (const [paramId, paramData] of parameters) {
+  for (const [paramId, paramData] of Array.from(parameters)) {
     const edgeUuid = paramIdToEdgeUuid.get(paramId);
     if (!edgeUuid) continue;
     const vals = paramData.values || [];
