@@ -3,7 +3,7 @@
 **Date**: 13-Mar-26 (updated 17-Mar-26 — locations updated for B1 sync engine extraction)
 **Status**: Documents the CURRENT system as-built, including a critical instability in the FileRegistry pending update mechanism.
 
-**Related**: `APP_ARCHITECTURE.md`, `REACTFLOW_CONTROLLED_MODE.md`
+**Related**: `SYNC_SYSTEM_OVERVIEW.md` (the integrative map — this doc details one specific flow within it), `SYNC_ENGINE_GUARD_STATE_MACHINE.md` (the guard refs that gate the sync directions described here), `GRAPH_MUTATION_UPDATE_MANAGER.md` (UpdateManager detail), `APP_ARCHITECTURE.md`, `REACTFLOW_CONTROLLED_MODE.md`
 
 **Note on locations**: The B1 sync engine extraction moved guards, sync effects, and resize/drag handlers from `GraphCanvas.tsx` into `useGraphSync.ts` and `syncGuards.ts`. Line numbers below are from the original pre-extraction layout — use function/variable names to find current locations.
 

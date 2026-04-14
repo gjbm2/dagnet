@@ -344,6 +344,39 @@ async function loadYamlDirectory(dirPath: string): Promise<Map<string, any>> {
 
 
 /**
+ * Write enriched graph and parameter files back to disk from fileRegistry.
+ *
+ * After applyPatch mutates files in fileRegistry (graph + parameter files),
+ * this function persists those changes back to the on-disk files. The graph
+ * is written as JSON; parameter files as YAML (matching the original format).
+ */
+export async function writeBackToDisk(bundle: GraphBundle): Promise<{ graph: boolean; parameters: string[] }> {
+  const written: { graph: boolean; parameters: string[] } = { graph: false, parameters: [] };
+
+  // Write graph JSON
+  const graphFile = fileRegistry.getFile(`graph-${bundle.graphName}`);
+  if (graphFile?.data) {
+    const graphPath = join(bundle.graphDir, 'graphs', `${bundle.graphName}.json`);
+    await writeFile(graphPath, JSON.stringify(graphFile.data, null, 2) + '\n', 'utf-8');
+    written.graph = true;
+    log.info(`Wrote enriched graph: ${graphPath}`);
+  }
+
+  // Write parameter YAML files
+  for (const [id] of bundle.parameters) {
+    const paramFile = fileRegistry.getFile(`parameter-${id}`);
+    if (paramFile?.data) {
+      const paramPath = join(bundle.graphDir, 'parameters', `${id}.yaml`);
+      const yamlStr = YAML.dump(paramFile.data, { lineWidth: -1, noRefs: true });
+      await writeFile(paramPath, yamlStr, 'utf-8');
+      written.parameters.push(id);
+    }
+  }
+
+  return written;
+}
+
+/**
  * Recursively convert Date objects to ISO strings in place.
  *
  * js-yaml's default schema converts ISO date strings to native Date

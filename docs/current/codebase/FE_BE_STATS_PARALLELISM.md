@@ -2,6 +2,8 @@
 
 Why both frontend and backend run the same statistical topo pass, how they're coordinated, and the transition plan.
 
+**See also**: `LAG_ANALYSIS_SUBSYSTEM.md` (what the topo pass actually computes — t95, mu/sigma, lag fit detail), `STATISTICAL_DOMAIN_SUMMARY.md` (broader statistical architecture), `PROBABILITY_BLENDING.md` (how computed values feed into blended probabilities)
+
 ## Context
 
 DagNet currently runs the same "analytic topo pass" (Stage 2 of the fetch pipeline) in **both** TypeScript (FE) and Python (BE). This is intentional and temporary — a zero-downtime migration strategy from FE-only to BE-only computation.

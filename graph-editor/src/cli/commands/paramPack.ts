@@ -11,6 +11,7 @@ import { extractParamsFromGraph } from '../../services/GraphParamExtractor';
 import { flattenParams, toYAML, toJSON, toCSV } from '../../services/ParamPackDSLService';
 import { computePlausibleSignaturesForEdge } from '../../services/snapshotRetrievalsService';
 import { aggregateAndPopulateGraph } from '../aggregate';
+import { runCliTopoPass } from '../topoPass';
 
 const USAGE = `
 dagnet-cli param-pack
@@ -87,6 +88,12 @@ async function runParamPack() {
   for (const w of warnings) {
     log.warn(w);
   }
+
+  // BE topo pass — engine-computed completeness, blended rate, dispersions.
+  // Overwrites FE-only values with engine values. Falls back gracefully
+  // if the BE is unreachable.
+  log.info('Running BE topo pass...');
+  await runCliTopoPass(populatedGraph, bundle.parameters);
 
   // Extract + serialise
   const params = extractParamsFromGraph(populatedGraph);

@@ -505,3 +505,82 @@ dirs).
 | Context rows skipped as "non-MECE" | `mece_dimensions` not populated in payload | Check `otherPolicy` in context YAML. Must be `"null"` or `"computed"` for MECE. Generator handles this automatically. |
 | Per-slice posteriors identical to parent | Branch group Multinomials not emitted per-slice | Fixed 10-Apr-26. Check `obs_bg_*__context(*)` in OBSERVED RVs section of model summary. |
 | `dataInterestsDSL` missing after gen | Ran without `--write-files` after a previous run wiped it | Always run with `--write-files` for the final generation pass |
+
+---
+
+## 8. Enriching Synth Graphs with Bayesian Posteriors
+
+After a successful Bayes fit, the graph and parameter files on disk do not
+have `model_vars`, posteriors, or promoted latency values. The enrichment
+tooling writes these back via the production code path
+(`bayesPatchService.applyPatch` → `upsertModelVars` → `applyPromotion`).
+
+### 8.1 Automatic enrichment via test harness
+
+Add `--enrich` to a harness run. After MCMC completes, the harness writes
+the result to a temp file and shells out to the FE CLI `--apply-patch`:
+
+```
+python bayes/test_harness.py --graph synth-simple-abc --enrich --no-webhook
+```
+
+This writes to the graph and parameter files on disk:
+- `model_vars[bayesian]` entry with probability, latency, and quality fields
+- `edge.p.posterior` (probability shape) and `edge.p.latency.posterior`
+- Promoted latency scalars (`mu`, `sigma`, `t95`, `onset_delta_days`)
+- `_bayes` block on the graph with quality metadata
+- Unified posterior on parameter files (`posterior.slices["window()"]` and
+  `cohort()`)
+
+### 8.2 Standalone CLI enrichment
+
+Apply a pre-existing patch file (e.g. saved from a previous run):
+
+```
+cd graph-editor
+npx tsx src/cli/bayes.ts \
+  --graph /path/to/data-repo --name synth-simple-abc \
+  --apply-patch /tmp/result.json --no-cache
+```
+
+The patch file can be either:
+- A raw worker result (with `webhook_payload_edges` — auto-wrapped)
+- A `BayesPatchFile` (the shape the webhook writes to git)
+
+### 8.3 Warm-start from persisted posteriors
+
+Once a graph is enriched, subsequent Bayes runs automatically warm-start
+from the persisted posteriors. The compiler's `_resolve_latency_prior`
+(`evidence.py`) reads `posterior.slices["window()"].mu_mean/sigma_mean`
+from the parameter file and uses them as priors (source: `warm_start`).
+The probability prior (`_resolve_prior`) similarly reads
+`posterior.slices["window()"].alpha/beta`.
+
+To **disable** warm-start from persisted posteriors:
+
+- **Per-edge**: set `bayes_reset: true` on the edge's latency block in
+  the parameter file. The compiler skips warm-start when this flag is
+  present and falls back to topology-derived priors.
+
+- **All edges via harness**: use `--fresh-priors`. This sets `bayes_reset`
+  on every parameter file in the payload and clears `posterior` blocks
+  before submission. The compiler uses uninformative or topology-derived
+  priors as if the graph had never been fitted.
+
+```
+python bayes/test_harness.py --graph synth-simple-abc --fresh-priors --no-webhook
+```
+
+Combine with `--enrich` to re-fit from scratch and overwrite persisted
+posteriors:
+
+```
+python bayes/test_harness.py --graph synth-simple-abc --fresh-priors --enrich --no-webhook
+```
+
+### 8.4 Test coverage
+
+`graph-editor/src/cli/__tests__/cliApplyPatch.test.ts` — 15 integration
+tests verifying promoted values, model_vars, quality gating, parameter file
+posteriors, path-level fields, and untouched-edge isolation. Uses the CLI
+test fixtures with hand-computable expected values.

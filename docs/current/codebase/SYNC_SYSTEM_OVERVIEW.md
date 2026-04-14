@@ -2,7 +2,15 @@
 
 Unified view of how data flows between Git, IndexedDB, FileRegistry, GraphStore, and ReactFlow — the sync arrows, triggers, guards, suppression mechanisms, and known races.
 
-This is the integrative "map" that ties together the detailed docs: INDEXEDDB_PERSISTENCE_LAYER.md, FILE_REGISTRY_LIFECYCLE.md, GIT_OPERATIONS_ARCHITECTURE.md, GRAPH_WRITE_SYNC_ARCHITECTURE.md, SYNC_ENGINE_GUARD_STATE_MACHINE.md, and STATE_MANAGEMENT_REFERENCE.md.
+This is the integrative "map" that ties together the detailed docs:
+
+- `STATE_MANAGEMENT_REFERENCE.md` — inventory of all state storage layers and scopes (overlaps on the layer model; this doc focuses on *flow between layers*, that doc on *what lives where*)
+- `GRAPH_WRITE_SYNC_ARCHITECTURE.md` — edit propagation pipeline detail (UI → UpdateManager → mutation → persistence)
+- `SYNC_ENGINE_GUARD_STATE_MACHINE.md` — the 9 guard refs controlling sync direction and mutual exclusion
+- `GRAPH_MUTATION_UPDATE_MANAGER.md` — how UpdateManager drives entity updates and topology changes
+- `INDEXEDDB_PERSISTENCE_LAYER.md` — DB identity, tables, prefix contract
+- `FILE_REGISTRY_LIFECYCLE.md` — in-memory cache lifecycle, dirty detection
+- `GIT_OPERATIONS_ARCHITECTURE.md` — clone/pull/push/commit via GitHub API
 
 ## The five layers
 

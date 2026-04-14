@@ -34,6 +34,7 @@ dagnet-cli bayes
     --name,  -n              Graph name (filename without .json in graphs/)
     --preflight              POST with binding_receipt: "gate", display receipt
     --submit                 POST, poll until done, display result
+    --apply-patch <path>     Apply a Bayes patch JSON to the graph on disk
     --output <path>          Write payload JSON to file instead of stdout
     --format, -f             Output format: json (default), yaml
     --no-cache               Bypass disk bundle cache
@@ -55,6 +56,9 @@ dagnet-cli bayes
 
     # Full submit + poll
     bash graph-ops/scripts/bayes.sh my-graph --submit
+
+    # Apply Bayes results to graph files on disk
+    npx tsx src/cli/bayes.ts --graph /path/to/repo --name my-graph --apply-patch /tmp/patch.json
 `;
 
 export async function run() {
@@ -71,6 +75,7 @@ async function runBayes() {
     extraOptions: {
       preflight: { type: 'boolean', default: false },
       submit: { type: 'boolean', default: false },
+      'apply-patch': { type: 'string' },
       output: { type: 'string' },
     },
   });
@@ -82,6 +87,7 @@ async function runBayes() {
   const { bundle, workspace, format, extraArgs } = ctx;
   const preflight = !!extraArgs.preflight;
   const submit = !!extraArgs.submit;
+  const applyPatchPath = extraArgs['apply-patch'] as string | undefined;
   const outputPath = extraArgs.output as string | undefined;
 
   const graphId = `graph-${bundle.graphName}`;
@@ -315,6 +321,67 @@ async function runBayes() {
   // -----------------------------------------------------------------------
   // 9. Mode dispatch
   // -----------------------------------------------------------------------
+
+  // --apply-patch: apply a Bayes patch file to the graph on disk using the
+  // production applyPatch code path (bayesPatchService). This enriches the
+  // graph and parameter files with model_vars, posteriors, and promoted
+  // latency values — identical to what happens when a webhook result lands
+  // in the browser.
+  if (applyPatchPath) {
+    log.info(`Apply-patch mode — reading patch from ${applyPatchPath}`);
+
+    const patchRaw = await readFile(applyPatchPath, 'utf-8');
+    const patchData = JSON.parse(patchRaw);
+
+    // The patch may be a full BayesPatchFile or the raw worker result.
+    // If it has webhook_payload_edges (raw result), wrap it.
+    const { applyPatch } = await import('../../services/bayesPatchService');
+    const { writeBackToDisk } = await import('../diskLoader.js');
+
+    let patch: any;
+    if (patchData.webhook_payload_edges) {
+      // Raw worker result — wrap into BayesPatchFile shape
+      patch = {
+        job_id: patchData.job_id || patchData._job_id || 'cli-enrich',
+        graph_id: `graph-${bundle.graphName}`,
+        graph_file_path: `graph-${bundle.graphName}.yaml`,
+        fitted_at: patchData.fitted_at || new Date().toISOString(),
+        fingerprint: patchData.fingerprint || '',
+        model_version: patchData.model_version ?? 1,
+        quality: patchData.quality || { max_rhat: null, min_ess: null, converged_pct: 0 },
+        edges: patchData.webhook_payload_edges,
+        skipped: patchData.skipped || [],
+      };
+    } else {
+      // Already a BayesPatchFile — ensure graph_id matches the loaded graph
+      patch = { ...patchData, graph_id: `graph-${bundle.graphName}` };
+    }
+
+    const edgesUpdated = await applyPatch(patch);
+    log.info(`Patch applied: ${edgesUpdated}/${patch.edges.length} edges updated`);
+
+    // Write enriched files back to disk
+    const written = await writeBackToDisk(bundle);
+    log.info(`Written to disk: graph=${written.graph}, ${written.parameters.length} parameter files`);
+
+    // Print per-edge summary to stdout
+    const summary: any[] = [];
+    for (const edge of patch.edges) {
+      const graphEdge = bundle.graph.edges?.find((e: any) => e.p?.id === edge.param_id);
+      const mv = graphEdge?.p?.model_vars?.find((m: any) => m.source === 'bayesian');
+      summary.push({
+        param_id: edge.param_id,
+        slices: Object.keys(edge.slices || {}),
+        model_vars_source: mv?.source ?? 'none',
+        promoted_mu: graphEdge?.p?.latency?.mu,
+        promoted_sigma: graphEdge?.p?.latency?.sigma,
+        promoted_t95: graphEdge?.p?.latency?.promoted_t95,
+      });
+    }
+    process.stdout.write(JSON.stringify({ edges_updated: edgesUpdated, edges: summary }, null, 2) + '\n');
+    return;
+  }
+
   if (preflight) {
     log.info('Preflight mode — submitting with binding_receipt: "preflight"');
     (payload.settings as Record<string, unknown>).binding_receipt = 'preflight';

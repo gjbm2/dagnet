@@ -615,10 +615,22 @@ def run_regression(args) -> list[dict]:
     # so parallel runs don't cross-contaminate.
     run_id = f"r{int(time.time())}"
 
+    # Incremental summary file — written after each graph completes.
+    # Survives kill/crash, unlike the in-memory results list.
+    summary_path = f"/tmp/bayes_regression-{run_id}.summary"
+    with open(summary_path, "w") as f:
+        f.write(f"# Regression {run_id}\n")
+        f.write(f"# Started: {time.strftime('%d-%b-%y %H:%M')}\n")
+        f.write(f"# Features: {getattr(args, 'feature', [])}\n")
+        f.write(f"# Sampling: {args.chains} chains, {args.draws} draws, "
+                f"{args.tune} tune\n\n")
+
     # 1. Discover + preflight
     print("=" * 60)
     print("  PARAM RECOVERY REGRESSION")
     print("=" * 60)
+    print(f"  Run ID:  {run_id}")
+    print(f"  Summary: {summary_path}")
     print()
 
     graphs = discover_and_preflight(data_repo, args.graph)
@@ -730,6 +742,9 @@ def run_regression(args) -> list[dict]:
 
             if run_result["error"]:
                 print(f"  {name}: ERROR ({run_result['error']}) [{elapsed:.0f}s]")
+                with open(summary_path, "a") as _sf:
+                    _sf.write(f"{name:<45s} ERROR  {elapsed:6.0f}s  "
+                              f"{run_result['error']}\n")
                 results.append({
                     "graph_name": name,
                     "passed": False,
@@ -748,6 +763,9 @@ def run_regression(args) -> list[dict]:
 
             if run_result["exit_code"] != 0 and not parsed.get("edges"):
                 print(f"  {name}: HARNESS FAIL (exit {run_result['exit_code']}) [{elapsed:.0f}s]")
+                with open(summary_path, "a") as _sf:
+                    _sf.write(f"{name:<45s} FAIL   {elapsed:6.0f}s  "
+                              f"harness exit {run_result['exit_code']}\n")
                 # Dump captured output so failures are diagnosable
                 out = run_result.get("output", "").strip()
                 if out:
@@ -832,6 +850,16 @@ def run_regression(args) -> list[dict]:
             elif assertion["xfail"] and assertion["passed"]:
                 status = "XPASS"
             print(f"  {name}: {status} [{elapsed:.0f}s]")
+
+            # Incremental summary — survives kill/crash
+            _q = assertion.get("quality", {})
+            with open(summary_path, "a") as _sf:
+                _sf.write(f"{name:<45s} {status:<6s} {elapsed:6.0f}s  "
+                          f"rhat={_q.get('rhat', '?'):<8s} "
+                          f"ess={str(_q.get('ess', '?')):<8s} "
+                          f"conv={_q.get('converged', '?')}\n")
+                for _fail in assertion.get("failures", []):
+                    _sf.write(f"  ** {_fail}\n")
 
     # Clean up monitor files
     try:

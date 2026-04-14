@@ -4,7 +4,9 @@
 **Last Updated**: 28-Oct-25 (note added 17-Mar-26)
 **Purpose**: Comprehensive reference for state management across the DagNet Graph Editor
 
-**Note on locations**: The B1 sync engine extraction (Mar-26) moved guards, sync effects, and resize/drag handlers from `GraphCanvas.tsx` into `useGraphSync.ts` and `syncGuards.ts`. Line numbers and some handler locations referenced below may be stale — use function/variable names to find current locations. See also `GRAPH_WRITE_SYNC_ARCHITECTURE.md` and `REACTFLOW_CONTROLLED_MODE.md` for deeper coverage of the sync pipeline and controlled mode pitfalls.
+**See also**: `SYNC_SYSTEM_OVERVIEW.md` (integrative map of data flow between layers — overlaps on the layer model; this doc is the *inventory*, that doc is the *flow*), `GRAPH_WRITE_SYNC_ARCHITECTURE.md` and `REACTFLOW_CONTROLLED_MODE.md` for deeper coverage of the sync pipeline and controlled mode pitfalls.
+
+**Note on locations**: The B1 sync engine extraction (Mar-26) moved guards, sync effects, and resize/drag handlers from `GraphCanvas.tsx` into `useGraphSync.ts` and `syncGuards.ts`. Line numbers and some handler locations referenced below may be stale — use function/variable names to find current locations.
 
 ---
 

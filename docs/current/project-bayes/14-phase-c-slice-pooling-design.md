@@ -1894,6 +1894,197 @@ context. All resolved — no open issues remain.
 
 ---
 
+## 15A. Implementation status audit (14-Apr-26)
+
+### 15A.1 What is correctly implemented
+
+- DSL parsing and `SliceGroup` routing (`slices.py`, `evidence.py`)
+- Per-slice hierarchical p emission for **single-dimension** graphs
+  (solo edges: logit-Normal offset + τ_slice; branch groups:
+  hierarchical Dirichlet with κ)
+- Per-slice posterior extraction (`inference.py`)
+- Per-slice mu offsets (tau_mu_slice) — mu-only latency hierarchy
+- Per-slice (m, r) offsets via `latency_reparam` (doc 34 §11.9.1) —
+  per-slice onset and sigma variation, shared a
+- Per-date regime filtering in evidence binder (`evidence.py:668-684`)
+  — aggregate rows removed on `mece_partition` dates, achieving §5.7's
+  intent at the data level rather than the emission level
+- Aggregate emission suppression for exhaustive MECE slices
+- `bayesEngorge.ts` wired for FE→BE payload
+- Per-slice regression reporting (doc 35)
+
+### 15A.2 Structural gaps (multi-dimension)
+
+These gaps are invisible on single-dimension synth graphs but will
+produce misspecified models on production graphs with multiple context
+dimensions (e.g. `context(channel);context(onboarding-variant);
+context(energy-variant)`).
+
+**Gap 1 — Single τ across all dimensions (CRITICAL)**
+
+Design (§5.6, line 409): each dimension has its own τ_slice (solo
+edges) or κ + base_weights (branch groups).
+
+Implementation: `model.py:1299-1305` flattens all slices from all
+context dimensions into a single list. One `tau_slice` governs all
+slices across all dimensions. One `tau_mu_slice` / `tau_m_slice` /
+`tau_r_slice` similarly shared.
+
+Impact: cannot express "channel has high p variation but low latency
+variation" vs "onboarding has low p variation but high latency
+variation." The single τ is forced to compromise, over-shrinking the
+high-variation dimension and under-shrinking the low-variation one.
+This applies to p, mu, m, r — every hierarchical parameter.
+
+Fix: iterate over `ev.slice_groups.items()` creating per-dimension
+τ and offset vectors. Each dimension's slices get their own shrinkage.
+
+**Gap 2 — 1/N κ correction not implemented**
+
+Design (§5A.7, §14.6d): with N independent MECE dimensions each
+constraining the same parent, the parent sees N× the information it
+should. A 1/N κ correction prevents parent overconfidence.
+
+Implementation: no correction exists. With multiple dimensions, the
+parent `p_base` would be over-constrained.
+
+**Gap 3 — No multi-dimension synth graphs (R2g never tested)**
+
+Design (§11, Graph S3): specifies a two-dimension synth graph
+(channel + device) to validate independent Dirichlets and 1/N κ.
+
+Implementation: no such synth graph exists. R2g-i (independent
+dimensions), R2g-ii (multi-level hierarchy for subsumption), and
+R2g-iii (`conditional_p`) are entirely untested.
+
+**Gap 4 — `conditional_p` not implemented**
+
+Design (§6): conditional populations get separate simplexes.
+
+Implementation: `conditional_p` does not appear in `model.py`.
+
+**Gap 5 — Multi-level hierarchy for subsumption not implemented**
+
+Design (§5A.3 Rule 2): when one dimension subsumes another, a
+multi-level hierarchy with per-date suppression should be built.
+
+Implementation: not implemented. Only independent dimensions handled
+(and those incorrectly per Gap 1).
+
+### 15A.3 Proposed addition: `per_slice_latency` context flag
+
+**Date**: 14-Apr-26.
+**Status**: Proposed. Not yet implemented.
+
+**Problem**: per-slice latency parameters (doc 34 §11.9.1) add
+significant model complexity — 2S+5 latency params per edge vs 3
+for shared latency. For context dimensions that don't affect timing
+(e.g. acquisition channel), this complexity is wasted: the sampler
+explores a direction where there's nothing to find, the edge-level
+mean becomes weakly identified for no benefit, and convergence
+suffers (doc 34 §11.11).
+
+**Observation**: whether a context dimension affects latency is
+genuine domain knowledge that the user can provide. Channel is
+unlikely to affect timing (the funnel steps have the same mechanics
+regardless of acquisition source). Onboarding flow variant genuinely
+changes the process steps and timing. The model doesn't need to
+discover this — it's structural prior knowledge.
+
+**Proposal**: add a `per_slice_latency` boolean to the context
+definition. Default `false`.
+
+- **`per_slice_latency: false`** (default): this dimension's slices
+  share edge-level latency (onset, mu, sigma). Only p varies per
+  slice. All slice data constrains the shared (m, a, r) directly.
+  No latency-related τ or offset RVs for this dimension.
+
+- **`per_slice_latency: true`**: this dimension gets per-slice
+  latency offsets (m and r, shared a — doc 34 §11.9.1). Per-dimension
+  τ_m and τ_r control shrinkage independently.
+
+**Where the flag lives**: on the context definition YAML, not on the
+edge or graph. It is a property of the context dimension:
+
+```yaml
+contexts:
+  channel:
+    slices: [google, direct, email, ...]
+    per_slice_latency: false    # timing doesn't vary by channel
+  onboarding-blueprint-variant:
+    slices: [flow_a, flow_b, flow_c]
+    per_slice_latency: true     # timing genuinely differs
+  energy-blueprint-variant:
+    slices: [plan_x, plan_y]
+    per_slice_latency: false    # timing unaffected
+```
+
+Could also be specified per-edge if needed (some edges may have
+channel-dependent timing while others don't). Context-level with
+edge-level override is the pragmatic default.
+
+**Parameter count impact** (5-edge graph, 3 context dims as above):
+
+| Configuration | Latency params / edge | Total |
+|---|---|---|
+| All shared (all flags false) | 3 | 15 |
+| Onboarding only true (S=3) | 2×3 + 5 = 11 | 55 |
+| All true (S=5+3+2=10) | 2×10 + 5 = 25 | 125 |
+
+**PPC validation**: if the user sets `per_slice_latency: false`
+incorrectly, per-slice timing residuals in the PPC layer will show
+systematic patterns (one slice's maturation curve consistently faster
+or slower than predicted). This provides a feedback loop: default
+conservative → run → check PPC → upgrade to `true` if residuals
+indicate timing heterogeneity.
+
+**Interaction with Gap 1**: the per-dimension τ fix (Gap 1) is a
+prerequisite for this flag. Without per-dimension τ, there's no
+mechanism to apply different shrinkage to different dimensions. With
+per-dimension τ, the flag simply controls whether the latency τ and
+offsets are created for a given dimension.
+
+**Interaction with multi-dimension latency**: with multiple
+`per_slice_latency: true` dimensions, each gets its own τ_m and τ_r.
+Per-slice m for a trajectory is additive:
+`m_slice = m_edge + Σ(delta_m_dim[dim_index])`. This is a main-effects
+model — no interaction terms. See doc 34 §11.11 for the geometry
+implications.
+
+### 15A.4 Priority ordering
+
+**Prerequisite — contexted geometry (BLOCKING)**
+
+Before any of the gaps below can be addressed, the contexted graph
+performance collapse must be solved. Adding contexts drops ESS from
+690–1356 to 66–113 (6–20× worse), reintroduces the onset-mu ridge
+at the edge level (corr(m,a) = -0.998 vs -0.26 uncontexted), and
+increases sampling time 3–7×. This is a qualitative failure, not a
+marginal degradation.
+
+Fixing per-dimension τ and adding multi-dimension hierarchies would
+add more complexity to a model that is already struggling. The
+geometry must be solved first. See doc 34 §11.11.6 for the three
+compounding effects and the strategic sequencing argument.
+
+**After geometry is solved:**
+
+1. **Gap 1 (per-dimension τ)** — structural correctness for any
+   multi-dimension graph. Prerequisite for everything else.
+2. **`per_slice_latency` flag** — enables practical use of per-slice
+   latency without geometry collapse. Also reduces compute load for
+   complex multi-context graphs by eliminating unnecessary per-slice
+   latency RVs on dimensions where timing doesn't vary.
+3. **Gap 2 (1/N κ correction)** — prevents parent overconfidence
+   with multiple dimensions.
+4. **Gap 3 (multi-dimension synth graphs)** — validates Gaps 1-2.
+5. **Gap 4 (`conditional_p`)** — not needed until production graphs
+   use conditionals.
+6. **Gap 5 (subsumption hierarchy)** — not needed until production
+   DSLs use nested dimensions.
+
+---
+
 ## 16. Binding receipt: FE expectation vs BE reality (9-Apr-26)
 
 ### 16.1 Problem

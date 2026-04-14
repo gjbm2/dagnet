@@ -3762,7 +3762,7 @@ def handle_stats_topo_pass(data: Dict[str, Any]) -> Dict[str, Any]:
     edges_out = []
     _fs_count = 0
     for ev in result.edge_values:
-        forecast_state_dict = None
+        fs = None
         improved_p_sd = ev.p_sd
         edge_dict = edges_by_uuid.get(ev.edge_uuid)
         if edge_dict is not None:
@@ -3800,42 +3800,21 @@ def handle_stats_topo_pass(data: Dict[str, Any]) -> Dict[str, Any]:
                             evidence_rate=evidence_rate,
                         )
                     _fs_count += 1
-                    # Serialise ForecastState for the response
-                    forecast_state_dict = {
-                        'edge_id': fs.edge_id,
-                        'source': fs.source,
-                        'fitted_at': fs.fitted_at,
-                        'tier': fs.tier,
-                        'completeness': fs.completeness,
-                        'completeness_sd': fs.completeness_sd,
-                        'rate_unconditioned': fs.rate_unconditioned,
-                        'rate_unconditioned_sd': fs.rate_unconditioned_sd,
-                        'rate_conditioned': fs.rate_conditioned,
-                        'rate_conditioned_sd': fs.rate_conditioned_sd,
-                        'tau_observed': fs.tau_observed,
-                        'mode': fs.mode,
-                        'path_aware': fs.path_aware,
-                        'dispersions': {
-                            'p_sd': fs.dispersions.p_sd,
-                            'mu_sd': fs.dispersions.mu_sd,
-                            'sigma_sd': fs.dispersions.sigma_sd,
-                            'onset_sd': fs.dispersions.onset_sd,
-                        } if fs.dispersions else None,
-                    }
-                    # Use ForecastState's improved p_sd for the flat response
+                    # Use engine's improved p_sd when completeness
+                    # uncertainty is available (doc 29 §F mode)
                     if fs.completeness_sd and fs.completeness_sd > 0:
                         improved_p_sd = fs.rate_unconditioned_sd or ev.p_sd
 
+        # Doc 29 §Schema Change: engine writes to existing fields,
+        # not a separate forecast_state object. When the engine ran,
+        # its improved values replace the stats-engine defaults.
         edges_out.append({
             'edge_uuid': ev.edge_uuid,
             'conditional_index': ev.conditional_index,
             't95': ev.t95,
             'path_t95': ev.path_t95,
-            'completeness': ev.completeness,
-            'completeness_stdev': (
-                forecast_state_dict['completeness_sd']
-                if forecast_state_dict else None
-            ),
+            'completeness': fs.completeness if fs else ev.completeness,
+            'completeness_stdev': fs.completeness_sd if fs else None,
             'mu': ev.mu,
             'sigma': ev.sigma,
             'onset_delta_days': ev.onset_delta_days,
@@ -3847,9 +3826,7 @@ def handle_stats_topo_pass(data: Dict[str, Any]) -> Dict[str, Any]:
             'p_infinity': ev.p_infinity,
             'p_evidence': ev.p_evidence,
             'forecast_available': ev.forecast_available,
-            'blended_mean': ev.blended_mean,
-            # Heuristic dispersion (p_sd improved with completeness
-            # uncertainty when available — doc 29 §F mode)
+            'blended_mean': fs.rate_conditioned if fs else ev.blended_mean,
             'p_sd': improved_p_sd,
             'mu_sd': ev.mu_sd,
             'sigma_sd': ev.sigma_sd,
@@ -3858,8 +3835,6 @@ def handle_stats_topo_pass(data: Dict[str, Any]) -> Dict[str, Any]:
             'path_mu_sd': ev.path_mu_sd,
             'path_sigma_sd': ev.path_sigma_sd,
             'path_onset_sd': ev.path_onset_sd,
-            # Doc 29: ForecastState per edge
-            'forecast_state': forecast_state_dict,
         })
 
     _fs_ms = (_time.monotonic() - _fs_t0) * 1000

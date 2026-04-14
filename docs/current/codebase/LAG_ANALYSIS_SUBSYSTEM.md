@@ -2,6 +2,8 @@
 
 How DagNet models time-to-conversion delays, computes lag horizons, and aggregates lag distributions across contexts.
 
+**See also**: `FE_BE_STATS_PARALLELISM.md` (why FE and BE both run this computation, and the migration plan), `PROBABILITY_BLENDING.md` (how lag-derived completeness feeds into blended probabilities), `DATE_MODEL_COHORT_MATURITY.md` (canonical date concepts used by lag analysis)
+
 ## What Lag Analysis Computes
 
 ### Lag fit

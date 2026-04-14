@@ -4,6 +4,8 @@
 **Status**: Implemented (10-Feb-26)
 **Last reviewed**: 17-Mar-26
 
+**See also**: `HASH_SIGNATURE_INFRASTRUCTURE.md` (the broader five-layer hash system — this doc details one specific layer: the signature registry and equivalence links used for archival resilience)
+
 ---
 
 ## 1. Problem Statement

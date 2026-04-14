@@ -2025,9 +2025,18 @@ export async function runStage2EnhancementsAndInboundN(
             );
             if (beEntries.length > 0 && finalGraph?.edges) {
               let applied = 0;
-              for (const { edgeUuid, conditionalIndex, entry, beScalars } of beEntries) {
+              for (const beEntry of beEntries) {
+                const { edgeUuid, conditionalIndex, entry, beScalars } = beEntry;
                 const edge = finalGraph.edges?.find((e: any) => e.uuid === edgeUuid || e.id === edgeUuid);
                 if (!edge) continue;
+                // Snapshot FE values before BE overwrites them (for parity log)
+                if (beScalars && edge.p) {
+                  (beEntry as any)._feSnapshot = {
+                    completeness: edge.p.latency?.completeness ?? null,
+                    pMean: edge.p.mean ?? null,
+                    pSd: edge.p.stdev ?? null,
+                  };
+                }
                 if (conditionalIndex != null) {
                   const cp = edge.conditional_p?.[conditionalIndex];
                   if (cp?.p) {
@@ -2052,10 +2061,6 @@ export async function runStage2EnhancementsAndInboundN(
                     // Lag stats (observational, not model params)
                     if (beScalars.median_lag_days != null) edge.p.latency.median_lag_days = beScalars.median_lag_days;
                     if (beScalars.mean_lag_days != null) edge.p.latency.mean_lag_days = beScalars.mean_lag_days;
-                    // ForecastState (doc 29 Phase 2) — store on edge for consumers
-                    if (beScalars.forecast_state) {
-                      (edge.p as any).forecast_state = beScalars.forecast_state;
-                    }
                   }
                   if (beScalars) {
                     // Probability scalars
@@ -2071,23 +2076,35 @@ export async function runStage2EnhancementsAndInboundN(
                   applied++;
                 }
               }
-              // Log BE scalars applied to edges
+              // Log FE→BE parity: side-by-side for each edge
               const edgesWithBE = beEntries.filter(e => e.beScalars != null);
               if (edgesWithBE.length > 0 && batchLogId) {
-                const sample = edgesWithBE.slice(0, 5).map(e => {
+                for (const e of edgesWithBE) {
                   const edge = finalGraph.edges?.find((ed: any) => ed.uuid === e.edgeUuid || ed.id === e.edgeUuid);
-                  const edgeId = edge?.id || e.edgeUuid.substring(0, 12);
+                  const edgeId = edge?.p?.id || e.edgeUuid.substring(0, 12);
                   const be = e.beScalars!;
-                  const cPct = be.completeness != null ? (be.completeness * 100).toFixed(1) : '?';
-                  const sdPct = be.completeness_stdev != null ? `±${(be.completeness_stdev * 100).toFixed(1)}%` : '';
-                  const pMean = be.blended_mean != null ? ` p=${(be.blended_mean * 100).toFixed(1)}%` : '';
-                  const pSd = be.p_sd != null ? `±${(be.p_sd * 100).toFixed(1)}%` : '';
-                  return `${edgeId}: c=${cPct}%${sdPct}${pMean}${pSd}`;
-                });
-                sessionLogService.addChild(batchLogId, 'info', 'BE_FORECAST_SCALARS',
-                  `BE forecast scalars applied to ${edgesWithBE.length} edges`,
-                  sample.join(', '),
-                  { edgesApplied: edgesWithBE.length, sample });
+                  const fe = (e as any)._feSnapshot;
+                  if (!fe) continue;
+
+                  const fmt = (v: number | null | undefined, pct = true) =>
+                    v != null ? (pct ? `${(v * 100).toFixed(1)}%` : v.toFixed(3)) : '—';
+
+                  sessionLogService.addChild(batchLogId, 'info', 'FE_BE_PARITY',
+                    `${edgeId}: completeness FE=${fmt(fe.completeness)} → BE=${fmt(be.completeness)}` +
+                    (be.completeness_stdev != null ? ` ±${fmt(be.completeness_stdev)}` : '') +
+                    ` | p.mean FE=${fmt(fe.pMean)} → BE=${fmt(be.blended_mean)}` +
+                    ` | p.sd FE=${fmt(fe.pSd)} → BE=${fmt(be.p_sd)}`,
+                    undefined,
+                    {
+                      edge_id: edgeId,
+                      fe: { completeness: fe.completeness, p_mean: fe.pMean, p_sd: fe.pSd },
+                      be: {
+                        completeness: be.completeness, completeness_stdev: be.completeness_stdev,
+                        p_mean: be.blended_mean, p_sd: be.p_sd,
+                      },
+                    },
+                  );
+                }
               }
 
               if (applied > 0) {

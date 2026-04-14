@@ -365,6 +365,9 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
     feat_neutral_prior = features.get("neutral_prior", False)
     feat_latency_dispersion = features.get("latency_dispersion", True)
     feat_latency_reparam = features.get("latency_reparam", False)
+    feat_shared_p_slices = features.get("shared_p_slices", False)
+    feat_shared_latency_slices = features.get("shared_latency_slices", False)
+    feat_centred_latency_slices = features.get("centred_latency_slices", False)
     is_phase2 = phase2_frozen is not None
     # latency_reparam implies both latent_onset and latent_latency (doc 34 §11.8.5).
     use_reparam = (feat_latency_reparam
@@ -1363,7 +1366,8 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
 
                     # Per-edge p shrinkage (solo edges; branch groups use Dirichlet)
                     _is_bg = edge_id in bg_slice_p_vars
-                    if not _is_bg:
+                    _shared_p = feat_shared_p_slices and not _is_bg
+                    if not _is_bg and not _shared_p:
                         tau_slice = pm.HalfNormal(f"tau_slice_{safe_id}", sigma=0.5)
                         logit_p_base = pt.log(p / (1.0 - p))
 
@@ -1398,19 +1402,31 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                             # Per-slice m offsets (always when reparam_slices >= 1)
                             tau_m_slice = pm.HalfNormal(
                                 f"tau_m_slice_{safe_id}", sigma=0.3)
-                            _eps_m_slice_vec = pm.Normal(
-                                f"eps_m_slice_vec_{safe_id}",
-                                mu=0, sigma=1, shape=(_n_slices,))
-                            _m_slice_vec = _m_base_var + _eps_m_slice_vec * tau_m_slice
+                            if feat_centred_latency_slices:
+                                _m_slice_vec = pm.Normal(
+                                    f"m_slice_vec_{safe_id}",
+                                    mu=_m_base_var, sigma=tau_m_slice,
+                                    shape=(_n_slices,))
+                            else:
+                                _eps_m_slice_vec = pm.Normal(
+                                    f"eps_m_slice_vec_{safe_id}",
+                                    mu=0, sigma=1, shape=(_n_slices,))
+                                _m_slice_vec = _m_base_var + _eps_m_slice_vec * tau_m_slice
 
                             # Per-slice r offsets (only when reparam_slices >= 2)
                             if _reparam_slice_level >= 2:
                                 tau_r_slice = pm.HalfNormal(
                                     f"tau_r_slice_{safe_id}", sigma=0.3)
-                                _eps_r_slice_vec = pm.Normal(
-                                    f"eps_r_slice_vec_{safe_id}",
-                                    mu=0, sigma=1, shape=(_n_slices,))
-                                _r_slice_vec = _r_base_var + _eps_r_slice_vec * tau_r_slice
+                                if feat_centred_latency_slices:
+                                    _r_slice_vec = pm.Normal(
+                                        f"r_slice_vec_{safe_id}",
+                                        mu=_r_base_var, sigma=tau_r_slice,
+                                        shape=(_n_slices,))
+                                else:
+                                    _eps_r_slice_vec = pm.Normal(
+                                        f"eps_r_slice_vec_{safe_id}",
+                                        mu=0, sigma=1, shape=(_n_slices,))
+                                    _r_slice_vec = _r_base_var + _eps_r_slice_vec * tau_r_slice
                                 _sigma_per_slice = True
                             else:
                                 _sigma_per_slice = False
@@ -1436,13 +1452,21 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                                 f"per-slice {_label} shared a, "
                                 f"{_n_slices} slices [reparam]")
                         else:
-                            tau_mu_slice = pm.HalfNormal(f"tau_mu_slice_{safe_id}", sigma=0.3)
+                            if not feat_shared_latency_slices:
+                                tau_mu_slice = pm.HalfNormal(f"tau_mu_slice_{safe_id}", sigma=0.3)
                             _use_slice_latency_vecs = False
 
                     # ── Vector RVs for per-slice families (doc 38 §Native
                     # Vector Batching).  One vector per family, shape [n_slices].
                     # Non-BG p offsets:
-                    if not _is_bg:
+                    if _shared_p:
+                        # shared_p_slices: all slices use p_base directly.
+                        # No tau, no eps, no per-slice p hierarchy.
+                        _p_slice_vec = None  # sentinel — use p directly
+                        diagnostics.append(
+                            f"  shared_p: {edge_id[:8]}… p shared across "
+                            f"{_n_slices} slices [shared_p_slices flag]")
+                    elif not _is_bg:
                         _eps_slice_vec = pm.Normal(
                             f"eps_slice_vec_{safe_id}",
                             mu=0, sigma=1, shape=(_n_slices,))
@@ -1450,23 +1474,44 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                             f"p_slice_vec_{safe_id}",
                             pm.math.invlogit(logit_p_base + _eps_slice_vec * tau_slice))
 
-                    # Kappa (all edges, including BG):
-                    _log_kappa_slice_vec = pm.Normal(
-                        f"log_kappa_slice_vec_{safe_id}",
-                        mu=LOG_KAPPA_MU, sigma=LOG_KAPPA_SIGMA,
-                        shape=(_n_slices,))
-                    _kappa_slice_vec = pm.Deterministic(
-                        f"kappa_slice_vec_{safe_id}",
-                        pt.exp(_log_kappa_slice_vec))
+                    # Kappa: per-slice vector or shared edge-level.
+                    # When both p and latency are shared, kappa should
+                    # also be shared to avoid per-slice RVs.
+                    _shared_kappa = _shared_p and feat_shared_latency_slices
+                    if not _shared_kappa:
+                        _log_kappa_slice_vec = pm.Normal(
+                            f"log_kappa_slice_vec_{safe_id}",
+                            mu=LOG_KAPPA_MU, sigma=LOG_KAPPA_SIGMA,
+                            shape=(_n_slices,))
+                        _kappa_slice_vec = pm.Deterministic(
+                            f"kappa_slice_vec_{safe_id}",
+                            pt.exp(_log_kappa_slice_vec))
+                    else:
+                        _kappa_slice_vec = None  # use edge_kappa
 
                     # Mu offsets (latency edges only):
-                    if et.has_latency and not _use_slice_latency_vecs:
-                        _eps_mu_slice_vec = pm.Normal(
-                            f"eps_mu_slice_vec_{safe_id}",
-                            mu=0, sigma=1, shape=(_n_slices,))
-                        _mu_slice_vec = pm.Deterministic(
-                            f"mu_slice_vec_{safe_id}",
-                            _mu_base + _eps_mu_slice_vec * tau_mu_slice)
+                    if et.has_latency and not _use_slice_latency_vecs and not feat_shared_latency_slices:
+                        if feat_centred_latency_slices:
+                            # Centred parameterisation: sample mu_slice
+                            # directly. Gradient from per-slice likelihood
+                            # flows to mu_base through the prior, not
+                            # buffered by eps. See doc 34 §11.11.7.
+                            _mu_slice_vec = pm.Normal(
+                                f"mu_slice_vec_{safe_id}",
+                                mu=_mu_base, sigma=tau_mu_slice,
+                                shape=(_n_slices,))
+                        else:
+                            # Non-centred (default): mu_slice = mu_base + eps * tau
+                            _eps_mu_slice_vec = pm.Normal(
+                                f"eps_mu_slice_vec_{safe_id}",
+                                mu=0, sigma=1, shape=(_n_slices,))
+                            _mu_slice_vec = pm.Deterministic(
+                                f"mu_slice_vec_{safe_id}",
+                                _mu_base + _eps_mu_slice_vec * tau_mu_slice)
+                    elif et.has_latency and feat_shared_latency_slices:
+                        # shared_latency_slices: broadcast edge-level mu
+                        # across all slices so batched trajectory path works.
+                        _mu_slice_vec = pt.full((_n_slices,), _mu_base)
 
                     # ─�� Build per-slice emissions by indexing into vectors.
                     # Phase 3 will replace this loop with a batched Potential;
@@ -1479,20 +1524,26 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                         # Per-slice p (scalar view into vector)
                         if _is_bg and _ck in bg_slice_p_vars.get(edge_id, {}):
                             p_s = bg_slice_p_vars[edge_id][_ck]
-                        else:
+                        elif _p_slice_vec is not None:
                             p_s = _p_slice_vec[_si]
+                        else:
+                            p_s = p  # shared_p_slices: use p_base directly
 
-                        # Per-slice kappa (scalar view)
-                        ks = _kappa_slice_vec[_si]
+                        # Per-slice kappa (scalar view) or edge-level
+                        ks = _kappa_slice_vec[_si] if _kappa_slice_vec is not None else edge_kappa
 
                         # Per-slice latency
                         if et.has_latency and _use_slice_latency_vecs:
                             _sigma_s = _sigma_slice_vec[_si] if _sigma_slice_vec is not None else _sigma_base
                             _lv = {edge_id: (_mu_slice_vec[_si], _sigma_s)}
                             _ov = {edge_id: _onset_slice_vec[_si]}
-                        elif et.has_latency:
+                        elif et.has_latency and not feat_shared_latency_slices:
                             _lv = {edge_id: (_mu_slice_vec[_si], _sigma_base)}
                             _ov = {edge_id: _onset_base}
+                        elif et.has_latency:
+                            # shared_latency_slices: all slices use edge-level latency
+                            _lv = latency_vars
+                            _ov = onset_vars
                         else:
                             _lv = latency_vars
                             _ov = onset_vars
@@ -1551,7 +1602,10 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                 _emit_batched_window_trajectories(
                     edge_id=edge_id,
                     safe_id=safe_id,
-                    p_slice_vec=_p_slice_vec if not _is_bg else pt.stack(
+                    p_slice_vec=(
+                        _p_slice_vec if _p_slice_vec is not None
+                        else pt.full((_n_slices,), p)
+                    ) if not _is_bg else pt.stack(
                         [bg_slice_p_vars[edge_id][ck]
                          for ck in _slice_ctx_keys]),
                     mu_slice_vec=_mu_slice_vec if et.has_latency else None,

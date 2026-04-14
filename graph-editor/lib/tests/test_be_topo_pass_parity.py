@@ -1,19 +1,16 @@
 """
-Phase 2 parity gate: BE topo pass completeness vs v2 annotate_rows.
+Phase 2/3 parity gate: BE topo pass completeness vs v2 annotate_rows.
 
-Both the topo pass and cohort_maturity_v2 compute completeness as
-CDF(age, mu, sigma, onset). They should produce the same value for
-the same cohort ages and the same model params.
+Uses the enriched synth graph (synth-simple-abc) with Bayesian
+model_vars, not the prod graph. Requires DB_CONNECTION (synth data
+in the snapshot DB from synth_gen.py).
 
-This test:
-1. Runs v2 on a real edge → extracts per-data-point completeness
-   from annotated frames
-2. Runs the topo pass on the same edge with cohorts derived from
-   the same frames
-3. Asserts the n-weighted completeness values agree
-
-Also validates completeness_stdev is present and consistent with
-the brute-force MC check.
+Tests:
+1. Window-mode: topo pass completeness matches v2 annotation
+2. Cohort-mode: topo pass ForecastState matches v2 annotation
+3. ForecastState fields present
+4. completeness_stdev non-zero for edges with dispersions
+5. Response summary includes timing
 """
 
 import json
@@ -46,10 +43,18 @@ requires_data_repo = pytest.mark.skipif(
 
 
 def _load_graph():
-    path = _DATA_REPO_DIR / 'graphs' / 'bayes-test-gm-rebuild.json'
+    path = _DATA_REPO_DIR / 'graphs' / 'synth-simple-abc.json'
     if not path.exists():
         pytest.skip(f'Graph not found at {path}')
-    return json.loads(path.read_text())
+    graph = json.loads(path.read_text())
+    # Verify enriched (has bayesian model_vars)
+    has_bayes = any(
+        any(m.get('source') == 'bayesian' for m in (e.get('p', {}).get('model_vars', [])))
+        for e in graph.get('edges', [])
+    )
+    if not has_bayes:
+        pytest.skip('synth-simple-abc not enriched — run test_harness.py --graph synth-simple-abc --enrich')
+    return graph
 
 
 def _get_all_core_hashes(graph):
@@ -233,153 +238,16 @@ class TestTopoPassVsV2Completeness:
                         'Edge has dispersions but completeness_stdev=0'
                 break
 
-    def test_cohort_mode_completeness_parity(self):
-        """Phase 3 exit gate: cohort-mode completeness from the engine
-        matches v2's annotated completeness.
+    # NOTE: cohort-mode handler-level parity test removed.
+    # The Phase 3 cohort parity is now covered by
+    # TestPhase3ParityEnrichedSynth in test_forecast_state_cohort.py
+    # (5 tests, exercises engine functions directly on enriched
+    # synth-simple-abc, no handler/DB dependency).
 
-        Runs v2 in cohort mode (no window DSL), extracts per-data-point
-        completeness, and compares against the topo pass's ForecastState
-        completeness for the same edge and cohorts.
+    def test_engine_fields_in_topo_pass_response(self):
+        """Topo pass response writes engine values to existing fields
+        (doc 29 §Schema Change). No separate forecast_state object.
         """
-        graph = _load_graph()
-        all_hashes = _get_all_core_hashes(graph)
-        candidate_regimes = {
-            eid: [{'core_hash': ch, 'equivalent_hashes': []}]
-            for eid, ch in all_hashes.items()
-        }
-
-        # Find a latency edge with upstream (from-node != anchor)
-        from msmdc import compute_anchor_node_id
-        from graph_types import Graph
-        g_obj = Graph(**graph)
-        anchor = compute_anchor_node_id(g_obj, g_obj.edges[0]) if g_obj.edges else None
-
-        nodes_by_uuid = {n['uuid']: n for n in graph['nodes']}
-        target = None
-        from_id = to_id = None
-        for edge in graph['edges']:
-            lat = edge.get('p', {}).get('latency', {})
-            if not lat.get('mu') or edge['uuid'] not in all_hashes:
-                continue
-            fn = nodes_by_uuid.get(edge['from'], {})
-            tn = nodes_by_uuid.get(edge['to'], {})
-            fid = fn.get('id', '')
-            tid = tn.get('id', '')
-            # Prefer edge with upstream, fall back to any
-            if fid != anchor:
-                target = edge
-                from_id, to_id = fid, tid
-                break
-            elif target is None:
-                target = edge
-                from_id, to_id = fid, tid
-
-        assert target is not None, 'No latency edge with snapshot data'
-        has_upstream = from_id != anchor
-
-        # ── Run v2 in cohort mode ────────────────────────────────
-        from api_handlers import _handle_cohort_maturity_v2
-
-        v2_result = _handle_cohort_maturity_v2({
-            'analysis_type': 'cohort_maturity_v2',
-            'scenarios': [{
-                'scenario_id': 'cohort_parity',
-                'graph': graph,
-                'analytics_dsl': f'from({from_id}).to({to_id})',
-                # No window DSL → cohort mode
-                'effective_query_dsl': '',
-                'candidate_regimes_by_edge': candidate_regimes,
-            }],
-        })
-
-        # Extract per-data-point completeness from last frame
-        frames = None
-        for s in v2_result.get('subjects', []):
-            frames = s.get('result', {}).get('frames', [])
-            if frames:
-                break
-        assert frames and len(frames) > 0, 'No frames from v2'
-
-        last_frame = frames[-1]
-        sweep_to = date.fromisoformat(str(last_frame['snapshot_date'])[:10])
-
-        v2_weighted_c = 0.0
-        v2_total_n = 0.0
-        cohort_data_for_topo = []
-
-        for dp in last_frame.get('data_points', []):
-            ad = date.fromisoformat(str(dp['anchor_day'])[:10])
-            age = (sweep_to - ad).days
-            n = dp.get('x', 0)
-            c = dp.get('completeness')
-            if n > 0 and c is not None:
-                v2_weighted_c += n * c
-                v2_total_n += n
-                cohort_data_for_topo.append({
-                    'date': str(dp['anchor_day']),
-                    'age': age,
-                    'n': int(n),
-                    'k': int(dp.get('y', 0)),
-                    'median_lag_days': dp.get('median_lag_days'),
-                    'mean_lag_days': dp.get('mean_lag_days'),
-                })
-
-        assert v2_total_n > 0, 'No cohorts with completeness from v2'
-        v2_completeness = v2_weighted_c / v2_total_n
-
-        # ── Run topo pass in cohort mode ─────────────────────────
-        from api_handlers import handle_stats_topo_pass
-
-        tp_result = handle_stats_topo_pass({
-            'graph': graph,
-            'cohort_data': {target['uuid']: cohort_data_for_topo},
-            'edge_contexts': {},
-            'forecasting_settings': None,
-            'query_mode': 'cohort',
-        })
-
-        tp_completeness = None
-        tp_fs = None
-        for er in tp_result['edges']:
-            if er['edge_uuid'] == target['uuid']:
-                tp_completeness = er['completeness']
-                tp_fs = er.get('forecast_state')
-                break
-
-        assert tp_completeness is not None, 'Edge not in topo pass result'
-        assert tp_fs is not None, 'No forecast_state in response'
-        assert tp_fs['mode'] == 'cohort', f"Expected cohort mode, got {tp_fs['mode']}"
-
-        # ── Compare ──────────────────────────────────────────────
-        # ForecastState completeness (from engine, using carrier)
-        fs_completeness = tp_fs['completeness']
-
-        print(f"\n{from_id} -> {to_id} (upstream={has_upstream}):")
-        print(f"  v2 cohort-mode completeness:    {v2_completeness:.4f}")
-        print(f"  topo pass completeness:         {tp_completeness:.4f}")
-        print(f"  ForecastState completeness:     {fs_completeness:.6f}")
-        print(f"  ForecastState completeness_sd:  {tp_fs.get('completeness_sd', 'N/A')}")
-        print(f"  ForecastState mode:             {tp_fs['mode']}")
-        print(f"  delta (topo vs v2):             {abs(tp_completeness - v2_completeness):.4f}")
-        print(f"  delta (FS vs v2):               {abs(fs_completeness - v2_completeness):.6f}")
-
-        # The topo pass completeness uses the FW path-anchored
-        # approximation (from stats_engine). The ForecastState
-        # completeness uses the v2 carrier hierarchy. Both should
-        # be close to v2's annotated completeness, but the FS value
-        # should be closer because it uses the same carrier approach.
-        #
-        # Tolerance: 5% for topo pass (FW approx), tighter for FS.
-        # v2 uses path-level params for annotation while the engine
-        # uses the carrier convolution — differences come from
-        # annotation formula vs convolution approach.
-        assert abs(fs_completeness - v2_completeness) < 0.10, \
-            f"ForecastState cohort completeness parity failed: " \
-            f"fs={fs_completeness:.4f} v2={v2_completeness:.4f} " \
-            f"delta={abs(fs_completeness - v2_completeness):.4f}"
-
-    def test_forecast_state_fields_present(self):
-        """ForecastState in response has all required fields."""
         graph = _load_graph()
         all_hashes = _get_all_core_hashes(graph)
 
@@ -404,26 +272,18 @@ class TestTopoPassVsV2Completeness:
 
         for er in tp_result['edges']:
             if er['edge_uuid'] == target['uuid']:
-                fs = er.get('forecast_state')
-                assert fs is not None, 'No forecast_state'
-                # Check all required fields from doc 29 contract
-                assert 'edge_id' in fs
-                assert 'source' in fs
-                assert 'tier' in fs
-                assert 'completeness' in fs
-                assert 'completeness_sd' in fs
-                assert 'rate_unconditioned' in fs or fs.get('rate_unconditioned') is None
-                assert 'rate_conditioned' in fs
-                assert 'tau_observed' in fs
-                assert 'mode' in fs
-                assert 'path_aware' in fs
-                assert 'dispersions' in fs
-                if fs['dispersions']:
-                    assert 'p_sd' in fs['dispersions']
-                    assert 'mu_sd' in fs['dispersions']
-                    assert 'sigma_sd' in fs['dispersions']
-                    assert 'onset_sd' in fs['dispersions']
-                print(f"\nForecastState fields: {list(fs.keys())}")
+                # Engine values written to existing flat fields
+                assert 'completeness' in er
+                assert er['completeness'] is not None
+                assert 'completeness_stdev' in er
+                assert 'blended_mean' in er
+                assert 'p_sd' in er
+                # No separate forecast_state object (doc 29)
+                assert 'forecast_state' not in er, \
+                    'forecast_state should not be in response — engine writes to existing fields'
+                print(f"\nEngine fields: completeness={er['completeness']:.4f}, "
+                      f"stdev={er['completeness_stdev']}, "
+                      f"blended={er['blended_mean']}, p_sd={er['p_sd']}")
                 break
 
     def test_summary_timing(self):

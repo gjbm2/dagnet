@@ -9,6 +9,10 @@ WindowSelector.
 
 - Node 22+ (via nvm, resolved from `graph-editor/.nvmrc`)
 - Data repo cloned (path in `.private-repos.conf`)
+- **Python BE running** (`python dev-server.py` on localhost:9000, or
+  set `PYTHON_API_URL` for a remote instance). The BE runs the forecast
+  engine (doc 29) for engine-computed completeness, blended rates, and
+  uncertainty. Without it, param-pack falls back to FE-only values.
 - Parameter files populated by prior browser fetches or retrieveAll
   (the CLI reads cached data from disk by default)
 - For live Amplitude fetching: `.env.amplitude.local` at the repo
@@ -93,6 +97,7 @@ e.<edge-id>.p.evidence.n                # Sample size
 e.<edge-id>.p.evidence.k                # Conversions
 e.<edge-id>.p.forecast.mean             # Mature-day baseline forecast
 e.<edge-id>.p.latency.completeness      # Maturity fraction (0–1)
+e.<edge-id>.p.latency.completeness_stdev # Completeness uncertainty (from engine)
 e.<edge-id>.p.latency.t95              # 95th percentile lag (edge-local)
 e.<edge-id>.p.latency.path_t95         # Cumulative lag from anchor
 e.<edge-id>.p.latency.median_lag_days  # Median conversion lag
@@ -106,14 +111,19 @@ The CLI runs the same computation the browser runs:
    `dates`)
 2. Filters to the requested date range
 3. Computes evidence scalars (n, k, mean = k/n, stdev)
-4. Runs the full LAG topological pass:
-   - Fits lag distribution per edge
-   - Computes t95, path_t95 (cumulative across graph)
-   - Computes completeness (CDF-based maturity)
-   - Blends evidence with forecast weighted by completeness
+4. Runs the FE LAG topological pass (evidence aggregation, lag fitting)
+5. Calls the **BE topo pass** (forecast engine — doc 29):
+   - Engine-computed completeness with uncertainty (completeness_stdev)
+   - Conditioned blended rate (p.mean) incorporating latency maturity
+   - Composed rate uncertainty (p.stdev) from probability + completeness
+   - Promoted latency fields (mu, sigma, onset, dispersions)
 
-All computation uses the same TS modules as the browser — there is
-no separate implementation.
+The BE topo pass overwrites FE-only values with engine-computed values.
+If the Python BE is unreachable, a warning is logged and FE-only values
+are used (degraded — no completeness uncertainty, no engine blending).
+
+**Requires the Python BE running** (`python dev-server.py` on
+localhost:9000, or set `PYTHON_API_URL`).
 
 ## Troubleshooting
 

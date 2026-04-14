@@ -419,6 +419,16 @@ def main():
                              "verify_synth_data to re-check DB with fresh hashes. "
                              "Heavy — re-inserts all synth rows. Only needed after "
                              "truth file or synth_gen changes.")
+    parser.add_argument("--enrich", action="store_true",
+                        help="After fit completes, apply Bayes results back to the "
+                             "graph on disk via the FE CLI --apply-patch. Writes "
+                             "model_vars, posteriors, and promoted latency values "
+                             "to the graph and parameter files (production code path).")
+    parser.add_argument("--fresh-priors", action="store_true",
+                        help="Ignore persisted Bayesian posteriors on parameter files. "
+                             "Sets bayes_reset on all param files and clears posterior "
+                             "blocks before submission, so the compiler uses topology-"
+                             "derived priors instead of warm-starting from previous fit.")
     # Keep --clean-pyc as hidden alias for backwards compat
     parser.add_argument("--clean-pyc", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
@@ -464,14 +474,23 @@ def main():
             sys.exit(1)
         k, v = fstr.split("=", 1)
         k = k.strip()
-        v_lower = v.strip().lower()
-        if v_lower in ("true", "1", "yes"):
+        v_stripped = v.strip()
+        v_lower = v_stripped.lower()
+        if v_lower in ("true", "yes"):
             feature_flags[k] = True
-        elif v_lower in ("false", "0", "no"):
+        elif v_lower in ("false", "no"):
             feature_flags[k] = False
         else:
-            print(f"ERROR: --feature value must be true/false, got: {v}")
-            sys.exit(1)
+            # Try integer (e.g. latency_reparam_slices=2)
+            try:
+                feature_flags[k] = int(v_stripped)
+            except ValueError:
+                # Try float
+                try:
+                    feature_flags[k] = float(v_stripped)
+                except ValueError:
+                    # Pass as string
+                    feature_flags[k] = v_stripped
     if feature_flags:
         print(f"Feature flags: {feature_flags}")
 
@@ -1029,6 +1048,25 @@ def main():
         _print(f"\n  Warm-start: patched {patched_count} edges with posteriors as priors")
         return patched
 
+    # --- Fresh priors: strip persisted posteriors from parameter files ---
+    if args.fresh_priors:
+        pf = payload.get("parameter_files", {})
+        n_reset = 0
+        for pf_id, pf_data in pf.items():
+            if not isinstance(pf_data, dict):
+                continue
+            # Set bayes_reset so compiler skips warm-start
+            lat = pf_data.get("latency")
+            if lat is None:
+                pf_data["latency"] = {"bayes_reset": True}
+            else:
+                lat["bayes_reset"] = True
+            # Also clear the posterior block so there's nothing to warm-start from
+            if "posterior" in pf_data:
+                del pf_data["posterior"]
+            n_reset += 1
+        _print(f"  --fresh-priors: cleared posteriors and set bayes_reset on {n_reset} parameter files")
+
     # --- Run ---
     result = _run_once(payload, label="pass 1" if args.warmstart else "")
 
@@ -1040,6 +1078,70 @@ def main():
         payload2 = {**payload, "graph_snapshot": patched_graph,
                     "_job_id": f"harness-warmstart-{int(time.time())}"}
         result = _run_once(payload2, label="pass 2 (warm-started)")
+
+    # --- Enrich graph on disk (--enrich) ---
+    if args.enrich:
+        webhook_edges = result.get("webhook_payload_edges", [])
+        if not webhook_edges:
+            _print("\n  --enrich: no webhook_payload_edges in result — skipping")
+        else:
+            _print(f"\n  --enrich: applying {len(webhook_edges)} edge posteriors to graph on disk...")
+            import tempfile
+            patch_file_data = {
+                "webhook_payload_edges": webhook_edges,
+                "job_id": result.get("job_id", f"harness-enrich-{int(time.time())}"),
+                "fitted_at": result.get("fitted_at", ""),
+                "fingerprint": result.get("fingerprint", ""),
+                "model_version": result.get("model_version", 1),
+                "quality": result.get("quality", {}),
+                "skipped": result.get("skipped", []),
+            }
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+                json.dump(patch_file_data, f)
+                enrich_patch_path = f.name
+
+            # Derive graph_dir from graph_path: parent of "graphs/"
+            enrich_graph_dir = os.path.dirname(os.path.dirname(graph_path))
+
+            # Shell out to FE CLI --apply-patch
+            nvm_prefix = (
+                f'export NVM_DIR="${{NVM_DIR:-$HOME/.nvm}}" && '
+                f'. "$NVM_DIR/nvm.sh" 2>/dev/null; '
+                f'cd {os.path.join(REPO_ROOT, "graph-editor")} && '
+                f'nvm use "$(cat .nvmrc)" 2>/dev/null; '
+            )
+            tsx_cmd = (
+                f'{nvm_prefix}'
+                f'npx tsx src/cli/bayes.ts '
+                f'--graph {enrich_graph_dir} --name {graph_name} '
+                f'--apply-patch {enrich_patch_path} --no-cache'
+            )
+            try:
+                enrich_result = subprocess.run(
+                    ["bash", "-c", tsx_cmd],
+                    capture_output=True, text=True, timeout=60,
+                    cwd=REPO_ROOT,
+                )
+                if enrich_result.returncode == 0:
+                    # Parse summary from stdout
+                    stdout = enrich_result.stdout
+                    json_start = stdout.find('{')
+                    if json_start >= 0:
+                        summary = json.loads(stdout[json_start:])
+                        _print(f"  --enrich: {summary.get('edges_updated', '?')} edges enriched on disk")
+                        for e in summary.get("edges", []):
+                            _print(f"    {e['param_id']}: mu={e.get('promoted_mu')}, "
+                                   f"sigma={e.get('promoted_sigma')}, t95={e.get('promoted_t95')}")
+                    else:
+                        _print(f"  --enrich: CLI completed (no JSON summary)")
+                else:
+                    _print(f"  --enrich: CLI failed (exit {enrich_result.returncode})")
+                    if enrich_result.stderr:
+                        _print(f"  stderr: {enrich_result.stderr[-1000:]}")
+            except subprocess.TimeoutExpired:
+                _print("  --enrich: CLI timed out (60s)")
+            finally:
+                os.unlink(enrich_patch_path)
 
     # --- Print results ---
     _print(f"\n{'=' * 60}")

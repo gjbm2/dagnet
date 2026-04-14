@@ -522,15 +522,21 @@ def _convolve_completeness_at_age(
 ) -> float:
     """Evaluate convolution of upstream arrival PDF with edge CDF at a single age.
 
-    C(τ) = (1/reach) × Σ_u f_upstream(u) × CDF_edge(τ - u)
+    C(τ) = Σ_u f_upstream(u) × CDF_edge(τ - u)
 
-    Uses the deterministic upstream CDF (from the carrier hierarchy).
-    The upstream CDF is already scaled by reach, so we normalise by
-    reach to get completeness in [0, 1].
+    The carrier CDF from build_upstream_carrier is conditional (goes to
+    1.0, meaning "given you reach this node, probability of arriving by
+    age u"). Its derivative f_upstream is a proper PDF (integrates to 1).
 
-    This is the same operation as v2's effective exposure computation
-    (Σ_u ΔX_x(u) × C(a_i - u)) but evaluated analytically against
-    the carrier CDF rather than observed x_at_tau.
+    The convolution gives the conditional path completeness: "of the
+    eventual converters on this edge, what fraction have completed by
+    age τ?" This matches v2's completeness annotation, which evaluates
+    CDF(age, path_mu, path_sigma, path_onset) — also a conditional
+    quantity going to 1.0.
+
+    No reach scaling: completeness is x-denominated (y/x), not
+    a-denominated (y/a). Reach affects absolute counts but not the
+    rate at which observed conversions approach their asymptote.
     """
     if reach <= 0 or age_days <= 0:
         return 0.0
@@ -538,7 +544,7 @@ def _convolve_completeness_at_age(
     max_idx = min(int(age_days) + 1, len(upstream_cdf))
     conv = 0.0
     for u in range(max_idx):
-        # PDF: incremental arrivals at upstream node at age u
+        # PDF: conditional incremental arrivals at upstream node at age u
         if u == 0:
             f_up = upstream_cdf[0] if upstream_cdf[0] > 0 else 0.0
         else:
@@ -550,7 +556,33 @@ def _convolve_completeness_at_age(
         c_edge = _compute_completeness_at_age(remaining, mu, sigma, onset)
         conv += f_up * c_edge
 
-    return min(conv / reach, 1.0)
+    return min(conv, 1.0)
+
+
+def _resolve_edge_p(edge: Dict[str, Any]) -> float:
+    """Get edge probability from p.mean, model_vars, or posterior.
+
+    On enriched synth graphs p.mean may be None (it's a topo-pass
+    display quantity). Fall back to model_vars or posterior alpha/beta.
+    """
+    p_obj = edge.get('p') or {}
+    # Direct flat value (production graphs after topo pass)
+    mean = p_obj.get('mean')
+    if isinstance(mean, (int, float)) and mean > 0:
+        return float(mean)
+    # model_vars (enriched graphs)
+    for mv in (p_obj.get('model_vars') or []):
+        prob = mv.get('probability') or {}
+        mv_mean = prob.get('mean')
+        if isinstance(mv_mean, (int, float)) and mv_mean > 0:
+            return float(mv_mean)
+    # posterior alpha/beta
+    post = p_obj.get('posterior') or {}
+    alpha = post.get('alpha')
+    beta = post.get('beta')
+    if alpha and beta and (alpha + beta) > 0:
+        return float(alpha) / float(alpha + beta)
+    return 0.0
 
 
 def build_node_arrival_cache(
@@ -635,7 +667,7 @@ def build_node_arrival_cache(
             reach = 0.0
             for ie in inc_edges:
                 from_id = ie.get('from', '')
-                edge_p = (ie.get('p') or {}).get('mean', 0.0) or 0.0
+                edge_p = _resolve_edge_p(ie)
                 reach += node_reach.get(from_id, 0.0) * max(0, edge_p)
             node_reach[node_id] = reach
 

@@ -179,7 +179,19 @@
       "Bash(xargs -I{} basename {})",
       "Bash(awk -F'\"' '{print $2}')",
       "Bash(chmod +x /home/reg/dev/dagnet/scripts/run-reparam-regression.sh)",
-      "Bash(scripts/run-reparam-regression.sh)"
+      "Bash(scripts/run-reparam-regression.sh)",
+      "Bash(awk '{printf \"%-40s %-6s rhat=%-8s ess=%-8s %s\\\\n\", $1, $2, $5, $6, $7}')",
+      "Bash(cp /home/reg/dev/dagnet/nous-conversion/events/*.yaml /tmp/test-enrich/events/)",
+      "Bash(cp /home/reg/dev/dagnet/nous-conversion/contexts/*.yaml /tmp/test-enrich/contexts/)",
+      "Bash(bash /tmp/check_docs.sh)",
+      "Bash(bash /tmp/verify_coverage.sh)",
+      "Bash(awk '{ins+=$4; del+=$6} END {print \"Total insertions:\", ins, \"deletions:\", del}')",
+      "Bash(awk '{print $1}')",
+      "Bash(awk '{ins+=$1} END {print ins, \"lines inserted into .md files\"}')",
+      "Bash(bc)",
+      "Bash(kill 2063954)",
+      "Bash(kill 2056524 2063954)",
+      "Bash(stat -c '%s %n' /tmp/bayes_harness-*synth-simple-abc-r1776153333*)"
     ],
     "additionalDirectories": [
       "/home/reg/dev/dagnet/.claude",

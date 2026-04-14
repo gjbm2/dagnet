@@ -23,6 +23,7 @@ import {
   type PreparedAnalysisComputeReady,
 } from '../../services/analysisComputePreparationService';
 import type { ScenarioVisibilityMode } from '../../types';
+import { runCliTopoPass } from '../topoPass';
 
 const USAGE = `
 dagnet-cli analyse
@@ -170,104 +171,11 @@ async function runAnalyse() {
   // automatically on graph open).
   if (extraArgs['topo-pass']) {
     log.info('Running BE topo pass...');
-
-    // Build cohort_data from bundle.parameters — the topo pass needs
-    // per-date cohort observations to fit latency distributions.
-    const cohortData: Record<string, any[]> = {};
-    const paramIdToEdgeUuid = new Map<string, string>();
-    for (const edge of (baseGraph.edges || [])) {
-      const eid = edge.uuid || edge.id;
-      const edgeId = edge.id || '';
-      // Map edge ID → UUID (param files use edge ID as their file ID)
-      paramIdToEdgeUuid.set(edgeId, eid);
-    }
-    for (const [paramId, paramData] of bundle.parameters) {
-      const edgeUuid = paramIdToEdgeUuid.get(paramId);
-      if (!edgeUuid) continue;
-      const vals = paramData.values || [];
-      if (vals.length === 0) continue;
-      // Use the first values entry (window or cohort — both have the daily arrays)
-      const v = vals[0];
-      const nDaily: number[] = v.n_daily || [];
-      const kDaily: number[] = v.k_daily || [];
-      const dates: string[] = v.dates || [];
-      const medianLagDaily: number[] = v.median_lag_days || [];
-      const meanLagDaily: number[] = v.mean_lag_days || [];
-      const anchorMedianDaily: number[] = v.anchor_median_lag_days || [];
-      const anchorMeanDaily: number[] = v.anchor_mean_lag_days || [];
-      // Convert parallel arrays to per-date CohortData records
-      const cohorts: any[] = [];
-      for (let d = 0; d < dates.length; d++) {
-        if ((nDaily[d] || 0) === 0) continue;
-        cohorts.push({
-          date: dates[d],
-          age: dates.length - d, // days from observation to end
-          n: nDaily[d] || 0,
-          k: kDaily[d] || 0,
-          median_lag_days: medianLagDaily[d] ?? null,
-          mean_lag_days: meanLagDaily[d] ?? null,
-          anchor_median_lag_days: anchorMedianDaily[d] ?? null,
-          anchor_mean_lag_days: anchorMeanDaily[d] ?? null,
-        });
-      }
-      if (cohorts.length > 0) {
-        cohortData[edgeUuid] = cohorts;
-      }
-    }
-    log.info(`Built cohort data for ${Object.keys(cohortData).length} edges from parameter files`);
-
-    const { PYTHON_API_BASE } = await import('../../lib/pythonApiBase');
-    const topoUrl = `${PYTHON_API_BASE}/api/lag/topo-pass`;
-    const topoResponse = await fetch(topoUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ graph: baseGraph, cohort_data: cohortData }),
-    });
-    if (!topoResponse.ok) {
-      log.error(`Topo pass failed: ${topoResponse.status} ${topoResponse.statusText}`);
+    const ok = await runCliTopoPass(baseGraph, bundle.parameters);
+    if (!ok) {
+      log.error('BE topo pass failed — cannot proceed');
       process.exit(1);
     }
-    const topoResult = await topoResponse.json() as {
-      success: boolean;
-      edges: Array<{
-        edge_uuid: string;
-        mu_sd?: number; sigma_sd?: number; onset_sd?: number; onset_mu_corr?: number;
-        path_mu_sd?: number; path_sigma_sd?: number; path_onset_sd?: number;
-        mu?: number; sigma?: number; onset_delta_days?: number;
-        t95?: number; path_t95?: number; path_mu?: number; path_sigma?: number;
-        path_onset_delta_days?: number; completeness?: number;
-        p_infinity?: number; p_evidence?: number; blended_mean?: number;
-      }>;
-      summary: { edges_processed: number; edges_with_lag: number };
-    };
-    if (!topoResult.success) {
-      log.error('Topo pass returned success=false');
-      process.exit(1);
-    }
-    // Write promoted fields onto the base graph edges
-    const edgeMap = new Map(topoResult.edges.map(e => [e.edge_uuid, e]));
-    for (const edge of (baseGraph.edges || [])) {
-      const eid = edge.uuid || edge.id;
-      const te = edgeMap.get(eid);
-      if (!te) continue;
-      const lat = ((edge.p ??= {}).latency ??= {});
-      if (te.t95 != null) lat.promoted_t95 = te.t95;
-      if (te.onset_delta_days != null) lat.promoted_onset_delta_days = te.onset_delta_days;
-      if (te.mu_sd != null) lat.promoted_mu_sd = te.mu_sd;
-      if (te.sigma_sd != null) lat.promoted_sigma_sd = te.sigma_sd;
-      if (te.onset_sd != null) lat.promoted_onset_sd = te.onset_sd;
-      if (te.onset_mu_corr != null) lat.promoted_onset_mu_corr = te.onset_mu_corr;
-      if (te.path_mu_sd != null) lat.promoted_path_mu_sd = te.path_mu_sd;
-      if (te.path_sigma_sd != null) lat.promoted_path_sigma_sd = te.path_sigma_sd;
-      if (te.path_onset_sd != null) lat.promoted_path_onset_sd = te.path_onset_sd;
-      if (te.path_t95 != null) lat.promoted_path_t95 = te.path_t95;
-      if (te.path_mu != null) lat.promoted_path_mu = te.path_mu;
-      if (te.path_sigma != null) lat.promoted_path_sigma = te.path_sigma;
-      if (te.path_onset_delta_days != null) lat.promoted_path_onset_delta_days = te.path_onset_delta_days;
-      if (te.mu != null) lat.promoted_mu = te.mu;
-      if (te.sigma != null) lat.promoted_sigma = te.sigma;
-    }
-    log.info(`Topo pass complete: ${topoResult.summary.edges_processed} edges processed, ${topoResult.summary.edges_with_lag} with lag`);
   }
 
   // ── Split combined DSL into subject + temporal ──────────────────

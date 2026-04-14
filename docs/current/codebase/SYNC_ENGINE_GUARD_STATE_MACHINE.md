@@ -5,6 +5,8 @@
 
 This doc encodes the implicit state machine that governs GraphCanvas's sync guard behaviour — the set of refs that control which sync direction fires and when.
 
+**See also**: `SYNC_SYSTEM_OVERVIEW.md` (integrative map), `GRAPH_WRITE_SYNC_ARCHITECTURE.md` (the edit propagation pipeline these guards protect)
+
 ---
 
 ## 1. The Guard Refs

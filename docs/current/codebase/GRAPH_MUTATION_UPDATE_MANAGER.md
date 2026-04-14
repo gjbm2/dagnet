@@ -2,6 +2,8 @@
 
 How graph edits propagate from UI through mutation services to persistence, and how UpdateManager manages all automated entity updates.
 
+**See also**: `GRAPH_WRITE_SYNC_ARCHITECTURE.md` (the broader sync pipeline this feeds into), `SYNC_SYSTEM_OVERVIEW.md` (integrative map of all data flows)
+
 ## Edit Propagation Pipeline
 
 ```

@@ -151,7 +151,7 @@ export function extractParamsFromGraph(graph: Graph | null): ScenarioParams {
  * - p.mean, p.stdev
  * - p.forecast.mean, p.forecast.stdev
  * - p.evidence.mean, p.evidence.stdev, p.evidence.n, p.evidence.k
- * - p.latency.completeness, p.latency.t95, p.latency.median_lag_days
+ * - p.latency.completeness, p.latency.completeness_stdev, p.latency.t95, p.latency.median_lag_days
  * 
  * NOT IN PARAM PACK (internal/config):
  * - distribution, min, max, alpha, beta
@@ -193,12 +193,13 @@ function extractEdgeParams(edge: GraphEdge): EdgeParamDiff | null {
     if (pAny.latency) {
       const latency: any = {};
       if (pAny.latency.completeness !== undefined) latency.completeness = pAny.latency.completeness;
+      if (pAny.latency.completeness_stdev !== undefined) latency.completeness_stdev = pAny.latency.completeness_stdev;
       if (pAny.latency.t95 !== undefined) latency.t95 = pAny.latency.t95;
       if (pAny.latency.path_t95 !== undefined) latency.path_t95 = pAny.latency.path_t95;
       if (pAny.latency.median_lag_days !== undefined) latency.median_lag_days = pAny.latency.median_lag_days;
       if (Object.keys(latency).length > 0) p.latency = latency;
     }
-    
+
     if (Object.keys(p).length > 0) {
       params.p = p;
     }
@@ -236,6 +237,7 @@ function extractEdgeParams(edge: GraphEdge): EdgeParamDiff | null {
       if (condPAny?.latency) {
         const latency: any = {};
         if (condPAny.latency.completeness !== undefined) latency.completeness = condPAny.latency.completeness;
+        if (condPAny.latency.completeness_stdev !== undefined) latency.completeness_stdev = condPAny.latency.completeness_stdev;
         if (condPAny.latency.t95 !== undefined) latency.t95 = condPAny.latency.t95;
         if (condPAny.latency.path_t95 !== undefined) latency.path_t95 = condPAny.latency.path_t95;
         if (condPAny.latency.median_lag_days !== undefined) latency.median_lag_days = condPAny.latency.median_lag_days;

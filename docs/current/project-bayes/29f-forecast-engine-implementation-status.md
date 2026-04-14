@@ -307,20 +307,22 @@ Also:
 ### Dependency chain
 
 ```
-Step 1 (CLI --apply-patch)
+Step 1 (CLI --apply-patch)          ✅ DONE (14-Apr-26)
   │
   ▼
-Step 2 (harness --enrich)
+Step 2 (harness --enrich)           ✅ DONE (14-Apr-26)
   │
   ▼
-Step 3 (enrichment verification)
+Step 3 (enrichment verification)    ✅ DONE (14-Apr-26)
   │
   ▼
 Step 4 (Phase 3 parity test — exit gate)
 ```
 
-Steps 1-2 are dev tooling. Step 3 validates the tooling. Step 4 is the
-actual Phase 3 exit gate that should have been written first.
+Steps 1-2 are dev tooling, now implemented. Step 3 (verification) is
+covered by `cliApplyPatch.test.ts` (15 tests: promoted values, model_vars,
+quality gate, parameter file posteriors, path-level fields). Step 4 is the
+actual Phase 3 exit gate that uses enriched synth graphs.
 
 ---
 
@@ -398,6 +400,40 @@ reweight meaningfully against observed upstream arrivals.
 
 ---
 
+### D5: Reach-scaling bug in `_convolve_completeness_at_age` (FIXED 14-Apr-26)
+
+`forecast_state.py` `_convolve_completeness_at_age` divided the
+convolution result by `reach`. This was incorrect because:
+
+1. The carrier CDF from `build_upstream_carrier` is **conditional** —
+   it goes to 1.0 (meaning "given you reach this node, probability of
+   arriving by age u"). Confirmed empirically: CDF[200] = 1.000,
+   reach = 0.697.
+
+2. Completeness in cohort mode is **x-denominated** (y/x, not y/a).
+   It answers "of eventual converters on this edge, what fraction have
+   completed by age τ?" — a conditional quantity going to 1.0.
+
+3. The convolution of a conditional PDF (integrates to 1) with the
+   edge CDF (goes to 1) already gives the correct conditional path
+   completeness. No reach scaling needed.
+
+The `/reach` inflated completeness by ~1/reach (~43% for reach=0.70),
+producing a 9% n-weighted parity delta against v2's path CDF.
+
+**Fixed**: removed the `/reach` divisor. The `reach` parameter is now
+vestigial in the function signature (passed but unused by the MC path
+and the deterministic path). Parity delta dropped from 9% to 1.75%.
+
+The residual 1.75% delta is expected: the engine convolves discretised
+carrier PDF × edge CDF (edge-level mu/sigma), while v2 evaluates a
+single CDF with fitted path-level params (path_mu/path_sigma). These
+are different approximations — the convolution is numerically exact
+for the given carrier, while path-level params are a lognormal fit to
+the composed distribution.
+
+---
+
 ## Summary
 
 | Phase | Status | Key gap |
@@ -405,7 +441,7 @@ reweight meaningfully against observed upstream arrivals.
 | 0 | Accepted | Multi-hop acceptance + v2 promotion deferred |
 | 1 | Partial | Resolver exists; call site migration deferred (v2 infra) |
 | 2 | Mostly done | ForecastState returned from topo pass; promotion fix done; `forecast_application.py` not refactored |
-| 3 | **BLOCKED** | Engine code done; **parity test blocked on synth enrichment tooling** (Steps 1-4 above) |
+| 3 | **PASSED** | Parity test passes (1.75% delta). Enrichment tooling done (Steps 1-4). Reach-scaling bug fixed (D5). Schema cleanup: `forecast_state` sidecar removed — engine writes to existing fields per doc 29 §Schema Change. |
 | 4 | Not started | Partial bead display only |
 | 5 | Not started | — |
 | 6 | Not started | — |

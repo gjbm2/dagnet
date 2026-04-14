@@ -2,6 +2,8 @@
 
 How DagNet content-addresses query semantics, tracks hash discontinuities, and prevents data loss during event/context renames.
 
+**See also**: `SNAPSHOT_DB_SIGNATURES.md` (deep-dive on layer 2+3: the signature registry and equivalence links for archival resilience)
+
 ## Overview
 
 The hash/signature system ensures that snapshot data keyed by query semantics remains discoverable even when event or context definitions change. It has five layers:

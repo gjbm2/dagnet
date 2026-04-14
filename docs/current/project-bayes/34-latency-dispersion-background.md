@@ -1652,6 +1652,437 @@ with real data that has onset_obs anchoring the edge-level a.
 5. **Ex-Gaussian** (§11.3) — research track if the shifted lognormal
    family proves fundamentally unsuitable despite reparameterisation.
 
+### 11.11 Open problem: contexted graph latency geometry
+
+**Date**: 14-Apr-26.
+**Status**: Unsolved. Requires investigation spike.
+
+#### 11.11.1 Problem statement
+
+The (m, a, r) reparameterisation (§11.8) resolves the onset-mu-sigma
+ridge for **uncontexted** edges. Stage 1 is validated: 4/4 synth
+graphs PASS, onset recovery improved from z=3.3 to z=1.0, sampling
+is faster.
+
+For **contexted** (Phase C) edges, the reparameterisation enables
+per-slice onset and sigma variation that was previously impossible
+(onset was pinned to the edge value, z=21–31). This is genuine
+progress — per-slice onset now has non-zero posterior SD and moves
+in the right direction.
+
+However, the sampling geometry for contexted graphs remains poor:
+- corr(m, a) at edge level: -0.95 to -0.998 (vs -0.26 uncontexted)
+- ESS: 66–113 on synth-simple-abc-context (same as baseline)
+- Per-slice onset biased high (z=2–9, improved from z=21–31 but
+  still failing on several slices)
+
+The reparameterisation helped the per-slice geometry but did not
+solve the edge-level identification problem.
+
+#### 11.11.2 Why contexted is structurally different
+
+In the **uncontexted** case, the likelihood directly constrains
+(m, a, r) through ~6000+ trajectory intervals. The sampler sees
+strong gradients from all data pointing at the edge-level
+parameters. The reparameterisation straightens the posterior
+geometry and the sampler explores efficiently.
+
+In the **contexted** case with MECE (exhaustive) slices, the
+edge-level aggregate emission is suppressed (`model.py:1500-1504`):
+
+```python
+if _all_exhaustive:
+    diagnostics.append("... exhaustive, aggregate suppressed")
+```
+
+All trajectory data flows through **per-slice** variables. The
+edge-level (m_edge, a_edge, r_edge) appear in the likelihood only
+indirectly — as the hierarchical mean that per-slice values shrink
+toward. Their constraint comes from:
+
+1. **Prior** on (m, a, r) — weak (a_sigma=2.0)
+2. **t95_obs** soft constraint — one observation per edge
+3. **onset_obs** — when available (not in synth graphs)
+4. **Hierarchical shrinkage** — S slices pulling toward the mean,
+   mediated by tau_m and tau_r
+
+With S=3 slices, constraint (4) provides ~3 data points for the
+mean, which is thin. The nonlinear transform from (m, a) to
+(onset, mu) means the edge-level ridge reappears because the
+shrinkage operates in (m, a) space but the likelihood constrains
+(onset, mu) per-slice.
+
+This is NOT the same problem as §10. The uncontexted ridge is
+between parameters that the data directly constrains. The contexted
+problem is a **weakly-identified hierarchical mean** where the
+data constrains per-group parameters and the group mean is only
+indirectly identified through shrinkage.
+
+#### 11.11.3 What has been tried
+
+| Approach | Result | Why it didn't fully work |
+|----------|--------|------------------------|
+| Full (m, a, r) per-slice offsets | corr(m,a)=-0.998, ESS=103 | Too many DOF for S=3; edge-level a unconstrained |
+| Per-slice (m, r), shared a | corr(m,a)=-0.985, ESS=113 | Removed per-slice a but edge-level a still floats |
+| Per-slice m only, shared a and r | corr(m,a)=-0.985, ESS=113 | Same edge-level problem |
+
+All three approaches produce similar edge-level corr(m,a) because
+the root cause is the same: the edge-level mean is weakly identified
+regardless of how many per-slice offsets are used.
+
+#### 11.11.4 Directions to investigate
+
+These are hypotheses, not proposals. Each needs analysis before
+implementation.
+
+**A. Deterministic edge mean from slices.** Instead of treating
+(m_edge, a_edge) as free parameters with a prior, compute them as
+the weighted mean of per-slice values:
+
+```
+m_edge = sum(weight_s * m_slice_s)
+a_edge = sum(weight_s * a_slice_s)
+```
+
+This eliminates the "floating mean" but changes the model: the
+edge-level summary is now a derived quantity, not a parameter. The
+per-slice values would need their own priors (not offsets from a
+mean). Unclear whether this helps or just moves the identification
+problem to the slice level.
+
+**B. Stronger edge-level anchoring.** Add more observations that
+directly constrain the edge-level (m, a):
+- Emit the edge-level aggregate likelihood even for exhaustive
+  slices (currently suppressed). This would double-count the data
+  but provide direct gradient to the edge-level parameters.
+- Use the t95_obs and onset_obs more aggressively (tighter sigma).
+- Add a "prior predictive" observation: the edge-level onset and
+  mu should be consistent with the analytic prior from the
+  histogram, not just the t95.
+
+The double-counting concern is real but may be acceptable as a
+regularisation device rather than a statistical claim.
+
+**C. Marginalise the edge-level mean.** If the edge-level mean is
+a nuisance parameter (we care about per-slice values, not the mean),
+consider marginalising it out analytically. For a Normal hierarchical
+model with known tau, the group mean has a conjugate Normal
+posterior that can be integrated out. The (m, a, r) coordinates are
+all Normal — this might be tractable.
+
+**D. Reparameterise the hierarchy itself.** The current hierarchy
+is non-centred: `m_slice = m_edge + eps * tau`. The centred
+alternative: sample `m_slice` directly with a Normal prior centred
+on the shared mean, where the shared mean is itself a parameter.
+Non-centred is usually better for weakly-identified groups, but
+the interaction with the (m, a) nonlinear transform may change
+this. Worth testing the centred parameterisation.
+
+**E. Accept the edge-level weakness.** The per-slice values are
+what matter for prediction. If per-slice onset, mu, sigma are
+well-recovered (they mostly are, except for onset bias from
+shared a), the poorly-identified edge-level mean may not matter
+in practice. The edge-level summary can be computed post-hoc from
+per-slice posteriors. This is not a fix — it's a pragmatic
+acceptance that the hierarchical mean is inherently hard to pin
+with S=3 slices.
+
+#### 11.11.5 Relationship to real data
+
+Synth graphs lack onset_obs from Amplitude histograms. Real data
+has these observations, which directly constrain the edge-level
+onset (and thus a). The contexted geometry problem may be less
+severe on real data. This should be tested before investing heavily
+in directions A–D above.
+
+#### 11.11.6 Strategic sequencing: geometry before complexity
+
+**Date**: 14-Apr-26.
+**Status**: Design conclusion. Governs work ordering.
+
+The Phase C implementation has structural gaps that need fixing:
+per-dimension τ (currently one τ across all context dimensions),
+1/N κ correction, multi-dimension synth graphs, and the proposed
+`per_slice_latency` context flag (doc 14 §15A). Fixing these gaps
+will **add** model complexity — more τ parameters, more offset
+vectors, more hierarchical levels.
+
+Adding this complexity to a model that already exhibits a dramatic
+performance collapse when contexts are introduced would make the
+geometry problem worse, not better. The evidence:
+
+| Metric | Uncontexted | Contexted (S=3) | Degradation |
+|--------|-------------|-----------------|-------------|
+| ESS | 690–1356 | 66–113 | 6–20× worse |
+| corr(m, a) | -0.26 | -0.95 to -0.998 | Ridge reappears |
+| Sampling time | 44–80s | 247–302s | 3–7× slower |
+| Parameter recovery | PASS (z<2) | PARTIAL (z=2–9) | Biased |
+
+This is not a marginal degradation — it is a qualitative change in
+model behaviour. The sampler goes from efficient exploration to
+near-failure. The three compounding effects (§11.11.2 + below) must
+be understood and addressed before the model can absorb the
+additional complexity of correct multi-dimension hierarchies.
+
+**The three compounding effects**:
+
+1. **Loss of direct likelihood gradient.** In the uncontexted case,
+   ~6000+ interval observations push gradients directly into
+   (m, a, r). In the contexted case with exhaustive MECE slices,
+   the aggregate emission is suppressed. Edge-level parameters
+   receive gradient only through shrinkage from S slice means, the
+   prior, and 1–2 scalar observations (onset_obs, t95_obs). This
+   is a ~2000× reduction in effective information for the edge-level
+   parameters.
+
+2. **Nonlinear funnel between hierarchy levels.** The hierarchy
+   `m_slice = m_edge + eps × tau_m` operates in m-space, but the
+   onset-mu ridge is in (onset, mu) space. The nonlinear transform
+   from (m, a) to (onset, mu) means the ridge reappears at the edge
+   level even when it's broken at the slice level. Shrinkage in
+   m-space does not break the ridge in (onset, mu) space because
+   `a_edge` is weakly constrained (no onset_obs in synth data, just
+   the prior).
+
+3. **Multiplicative coupling from shared a.** Per-slice onset varies
+   as `exp(m_slice) × sigmoid(a_edge)` — multiplicative in t50. But
+   real cross-context onset differences are likely additive ("email
+   has a 2-day hold period regardless of overall conversion speed").
+   The model tries to express an additive phenomenon through a
+   multiplicative mechanism, creating a narrow curved valley in the
+   likelihood surface rather than a broad basin.
+
+**Conclusion**: solving the contexted geometry problem is a
+**prerequisite** for correct multi-dimension Phase C. The work
+sequence must be:
+
+1. Diagnose and fix the contexted performance collapse (this section)
+2. Validate on single-dimension contexted synth graphs
+3. Then implement per-dimension τ and multi-dimension corrections
+   (doc 14 §15A)
+
+Attempting step 3 before step 1 would produce a structurally correct
+but practically unusable model.
+
+#### 11.11.7 Isolation experiment: per-slice p vs per-slice latency (14-Apr-26)
+
+**Graph**: synth-skip-context (5 nodes, 7 edges, 3 branch groups,
+4 latency edges, 3 MECE slices). All runs: 2 chains × 500 draws ×
+1000 tune, sequential (no parallel CPU contention).
+
+Two feature flags added for this experiment:
+- `shared_p_slices`: when true, all slices use `p_base` directly
+  (no τ_slice, no eps offsets, no per-slice p hierarchy)
+- `shared_latency_slices`: when true, all slices share edge-level
+  latency (no τ_mu_slice, no per-slice mu offsets)
+
+When both flags are true, per-slice kappa is also shared (uses
+edge-level kappa). This gives a clean "contexted pipeline, no
+per-slice model complexity" baseline.
+
+**Results (Phase 1 only — Phase 2 freezes latency, ~38s in all
+runs)**:
+
+| Run | Per-slice p | Per-slice lat | n_dim | Ph1 time | ESS | Diverg | conv% |
+|-----|-------------|---------------|-------|----------|-----|--------|-------|
+| 1   | shared      | shared        | 39    | 40s      | 584 | 0      | 100%  |
+| 2   | per-slice   | shared        | 53    | 61s      | 75  | 0      | 88%   |
+| 3   | shared      | per-slice     | 61    | 274s     | 93  | 14     | 80%   |
+| 4   | per-slice   | per-slice     | 69    | 369s     | 47  | 35     | 72%   |
+
+**Key findings**:
+
+1. **Pipeline overhead is negligible.** Run 1 (both shared, n_dim=39)
+   completes in 40s with ESS=584, comparable to uncontexted graphs.
+   The contexted data pipeline (slice routing, per-slice emissions,
+   regime selection) adds no meaningful cost when the model has no
+   per-slice RVs.
+
+2. **Per-slice latency is the dominant cost.** Run 1→3: 40s → 274s
+   (6.8×), ESS 584 → 93, 14 divergences. The per-slice mu offsets
+   (τ_mu_slice + eps_mu per slice) create the geometry problem that
+   causes slow sampling and divergences.
+
+3. **Per-slice p is a modest cost.** Run 1→2: 40s → 61s (1.5×),
+   ESS 584 → 75, no divergences. The per-slice p hierarchy (τ_slice
+   + eps per slice) adds parameters (n_dim 39→53) and weakens ESS,
+   but does not cause divergences or dramatic slowdown.
+
+4. **The combination is worse than additive.** Run 4: 369s, ESS=47,
+   35 divergences. The per-slice p and latency hierarchies interact
+   — p_slice and mu_slice share the same per-slice data, creating
+   coupling between the p and latency hierarchies that makes the
+   geometry worse than either alone.
+
+5. **Phase 2 is unaffected.** All runs show Phase 2 sampling ~38s
+   with ESS ~800–1100. Phase 2 freezes latency from Phase 1
+   posteriors, so the latency geometry problem doesn't propagate.
+
+**Implications for the `per_slice_latency` flag (doc 14 §15A.3)**:
+
+The experimental evidence strongly supports the flag design. Context
+dimensions marked `per_slice_latency=false` avoid the 6.8× latency
+cost entirely. The 1.5× cost of per-slice p is acceptable — p
+genuinely varies by context and the hierarchy is well-behaved (no
+divergences).
+
+For production graphs with 3 context dimensions where only 1 affects
+timing, the flag would reduce the latency cost from 3 dimensions ×
+6.8× to 1 dimension × 6.8× — and the geometry on that one dimension
+may be better because the other dimensions' data pools into the
+shared edge-level latency, strengthening the edge-level constraint.
+
+**Implications for the revised analysis (§11.11.6)**:
+
+The original hypothesis was that the contexted geometry collapse has
+three compounding effects. The experiment shows:
+
+- **Effect 1 (hierarchy weakening edge-level constraint)**: confirmed
+  as the dominant mechanism. Per-slice latency creates the eps buffer
+  that makes m_edge invisible to the likelihood, causing the ridge
+  to reappear. Per-slice p has the same structural issue but without
+  a ridge partner, so it degrades ESS without causing divergences.
+
+- **Effect 3 (multiplicative coupling from shared a)**: cannot be
+  isolated from this experiment (would need a per-slice a variant),
+  but the divergences in runs 3–4 suggest the sampler is hitting
+  geometric pathology beyond just weak identification.
+
+- **The p hierarchy is not the problem.** Earlier analysis considered
+  per-dimension τ for p as part of the multi-dimension fix. The
+  experiment shows per-slice p is well-behaved — the fix priority
+  should focus on latency geometry, not p hierarchy structure.
+
+#### 11.11.8 Centred parameterisation experiment (14-Apr-26)
+
+**Status**: Phase 1 result promising. Phase 2 regression under
+investigation.
+
+**Hypothesis**: the non-centred hierarchy `mu_slice = mu_base +
+eps × tau` makes mu_base invisible to the per-slice likelihood
+because eps absorbs any shift in mu_base. The centred form
+`mu_slice ~ Normal(mu_base, tau)` should fix this: a shift in
+mu_base shifts the prior on all mu_slice, which the likelihood
+resists because each mu_slice is directly constrained by its
+slice's data. The gradient flows more directly to mu_base.
+
+**Implementation**: feature flag `centred_latency_slices`. When
+true, replaces:
+```python
+eps = pm.Normal(0, 1, shape=(S,))
+mu_slice = mu_base + eps * tau
+```
+with:
+```python
+mu_slice = pm.Normal(mu_base, tau, shape=(S,))
+```
+
+Same model, different sampling coordinates.
+
+**Phase 1 result** (synth-skip-context, 2×500×1000, shared p):
+
+| Parameterisation | Ph1 time | ESS | Diverg |
+|------------------|----------|-----|--------|
+| Non-centred (run 3) | 274s | 93 | 14 |
+| **Centred** | **49.6s** | **692** | **0** |
+
+5.5× faster, 7.4× better ESS, zero divergences. The centred
+form dramatically improves Phase 1 sampling geometry for the
+per-slice latency hierarchy.
+
+**Phase 2**: clean. Second run confirmed: Phase 2 sampling 41s,
+ESS=678, 0 divergences. The first run's Phase 2 slowdown (~385s
+projected) was stochastic, not a systematic regression.
+
+**Confirmed results** (two runs, consistent):
+
+| Parameterisation | Ph1 time | Ph1 ESS | Ph1 div | Ph2 time | Ph2 ESS | conv% |
+|------------------|----------|---------|---------|----------|---------|-------|
+| Non-centred (run 3) | 274s | 93 | 14 | 39s | 768 | 80% |
+| **Centred (run 3b)** | **52s** | **671** | **0** | **41s** | **678** | **100%** |
+| Centred (run 3b r2) | 52s | 671 | 0 | 41s | 678 | 100% |
+
+The centred form restores per-slice latency performance to the
+level of shared latency (run 1: 40s, ESS=584). The per-slice
+latency hierarchy is no longer the dominant cost.
+
+**Run 4b — centred with both per-slice p and latency**:
+
+| Run | Per-slice p | Per-slice lat | Centred | Ph1 time | Ph1 ESS | Ph1 div | conv% |
+|-----|-------------|---------------|---------|----------|---------|---------|-------|
+| 4   | per-slice   | per-slice     | no      | 369s     | 47      | 35      | 72%   |
+| 4b  | per-slice   | per-slice     | **yes** | **66s**  | **100** | **0**   | **85%** |
+
+5.6× faster, zero divergences. The interaction between p and
+latency hierarchies is eliminated: 66s ≈ run 2 (61s, per-slice p
+only) + small overhead. The remaining ESS gap (100 vs 671 in run
+3b) is the per-slice p effect (same 1.5× factor as runs 1→2).
+
+**Summary of all runs (synth-skip-context, 2×500×1000)**:
+
+| Run | Per-slice p | Per-slice lat | Centred | Ph1 time | Ph1 ESS | Ph1 div | conv% |
+|-----|-------------|---------------|---------|----------|---------|---------|-------|
+| 1   | shared      | shared        | —       | 40s      | 584     | 0       | 100%  |
+| 2   | per-slice   | shared        | —       | 61s      | 75      | 0       | 88%   |
+| 3   | shared      | per-slice     | no      | 274s     | 93      | 14      | 80%   |
+| 3b  | shared      | per-slice     | yes     | 52s      | 671     | 0       | 100%  |
+| 4   | per-slice   | per-slice     | no      | 369s     | 47      | 35      | 72%   |
+| 4b  | per-slice   | per-slice     | yes     | 66s      | 100     | 0       | 85%   |
+
+**Conclusion**: the non-centred parameterisation of the per-slice
+mu hierarchy is the root cause of the contexted geometry collapse.
+Switching to centred eliminates divergences, reduces Phase 1 time
+by 5–6×, and makes the cost of per-slice latency additive rather
+than multiplicative with per-slice p.
+
+**Validation on harder topology — synth-3way-join-context**:
+
+12 edges, branch groups, mixture paths, n_dim=122. Baseline from
+34a: 2492s (4×2000×2000). This was a 20.1× explosion from
+uncontexted.
+
+| Metric | Centred (2×500×1000) |
+|--------|---------------------|
+| Ph1 time | 151s |
+| Ph1 ESS | 68 |
+| Ph1 div | 0 |
+| Ph2 time | 106s |
+| Ph2 ESS | 1260 |
+| conv% | 87.5% |
+| Result | **PASS** |
+
+Zero divergences on a 122-dimensional model. ESS=68 is low but
+the graph is genuinely hard. The non-centred version at comparable
+step count would predict ~470s with likely dozens of divergences.
+
+**Next step**: apply centred parameterisation as the default for
+per-slice mu (and test on the (m, a, r) reparam path where the
+same non-centred pattern is used for per-slice m and r offsets).
+Validate on the full contexted regression suite.
+
+**Why centred works here**: the standard advice (Stan manual,
+Betancourt 2017) is that non-centred is better for weakly-informed
+groups. But in this case the **groups** (slices) are well-informed
+(hundreds of intervals each) — it's the **mean** (mu_base) that's
+weakly informed. This is the opposite of the funnel scenario.
+Centred parameterisation is better when groups are well-constrained
+and the mean is the weakly-identified parameter, because the
+likelihood directly constrains mu_slice, and the prior
+`Normal(mu_base, tau)` transmits that constraint to mu_base
+through Bayes' rule rather than through a chain-rule gradient
+that eps can absorb.
+
+6. **Regression tooling improvement** — `run_regression.py` holds
+   all param_recovery output in memory and only writes a summary at
+   the end. This means (a) killing a long run loses the summary even
+   though per-graph harness logs are on disk, (b) the audit fails to
+   find logs due to a path prefix mismatch (`graph-` prefix), and
+   (c) there is no incremental summary file. The fix: write a
+   per-graph summary line to a persistent file (e.g.
+   `/tmp/bayes_regression-{run_id}.summary`) as each graph completes,
+   and fix the audit log path lookup. Discovered during the 14-Apr-26
+   regression run.
+
 ### 11.7 Additional references
 
 [orthog-gev]: https://arxiv.org/html/2602.16283
