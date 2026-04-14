@@ -23,6 +23,17 @@ Phase 7: Future enhancements (posterior covariance, asat projection)
 
 Each phase has explicit entry gates, exit gates, and the files touched.
 
+### HARD RULE: v2 is frozen
+
+`cohort_forecast_v2.py` and its call sites (`_handle_cohort_maturity_v2`
+in `api_handlers.py`) must not be modified. v2 is the parity reference
+that all engine work tests against. This also applies to v2's
+infrastructure: `cohort_forecast.py` (v1 carrier hierarchy),
+`span_kernel.py`, `span_evidence.py`, `span_adapter.py`. All frozen
+until v3 passes parity and v2 is retired (Phase 5.5).
+
+If the engine cannot match v2's output, the engine is wrong — not v2.
+
 ---
 
 ## Phase 0: Parity Gates (v1 → v2)

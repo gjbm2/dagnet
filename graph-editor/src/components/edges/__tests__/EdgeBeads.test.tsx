@@ -355,6 +355,7 @@ describe('EdgeBeads - buildBeadDefinitions', () => {
         p: {
           mean: 0.5,
           latency: {
+            latency_parameter: true,
             median_lag_days: 2,
             t95: 12,
             t95_overridden: true
@@ -462,6 +463,7 @@ describe('EdgeBeads - buildBeadDefinitions', () => {
         p: {
           mean: 0.5,
           latency: {
+            latency_parameter: true,
             median_lag_days: 2,
             anchor_node_id: 'A',
             anchor_node_id_overridden: true

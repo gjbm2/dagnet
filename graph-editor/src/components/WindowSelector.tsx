@@ -686,7 +686,11 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
     }
     
     // Build window/cohort part with d-MMM-yy format (using current queryMode)
-    const dateRangePart = `${queryMode}(${startUK}:${endUK})`;
+    // Preserve cohort anchor if present in existing DSL (e.g. cohort(Landing-page,22-Mar-26:28-Mar-26))
+    const cohortAnchor = queryMode === 'cohort' ? parsed.cohort?.anchor : undefined;
+    const dateRangePart = cohortAnchor
+      ? `cohort(${cohortAnchor},${startUK}:${endUK})`
+      : `${queryMode}(${startUK}:${endUK})`;
     
     // Preserve asat clause if present in current DSL
     const asatPart = parsed.asat ? `asat(${parsed.asat})` : '';
@@ -1047,6 +1051,7 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
               maxWidth: 'min(450px, 40vw)'
             }}>
               <QueryExpressionEditor
+                suggestionsScope="graph"
                 value={contextOnlyDSL}
                 onChange={(newContextDSL) => {
                   // Use getLatestGraph() to avoid stale closure
@@ -1067,12 +1072,15 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
                     newContextParts.push(`contextAny(${pairs})`);
                   }
 
-                  // Preserve window/cohort (using current queryMode)
+                  // Preserve window/cohort (using current queryMode), including cohort anchor
                   let dateRangePart = '';
                   if (oldParsed.window) {
                     dateRangePart = `${queryMode}(${oldParsed.window.start || ''}:${oldParsed.window.end || ''})`;
                   } else if (oldParsed.cohort) {
-                    dateRangePart = `${queryMode}(${oldParsed.cohort.start || ''}:${oldParsed.cohort.end || ''})`;
+                    const anchor = oldParsed.cohort.anchor;
+                    dateRangePart = anchor
+                      ? `cohort(${anchor},${oldParsed.cohort.start || ''}:${oldParsed.cohort.end || ''})`
+                      : `${queryMode}(${oldParsed.cohort.start || ''}:${oldParsed.cohort.end || ''})`;
                   } else if (window) {
                     dateRangePart = `${queryMode}(${normalizeToUK(window.start)}:${normalizeToUK(window.end)})`;
                   }
@@ -1159,6 +1167,11 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
                   let dateRangePart = '';
                   if (existingWindow) {
                     dateRangePart = `${queryMode}(${existingWindow.start || ''}:${existingWindow.end || ''})`;
+                  } else if (parsed.cohort) {
+                    const anchor = parsed.cohort.anchor;
+                    dateRangePart = anchor
+                      ? `cohort(${anchor},${parsed.cohort.start || ''}:${parsed.cohort.end || ''})`
+                      : `${queryMode}(${parsed.cohort.start || ''}:${parsed.cohort.end || ''})`;
                   } else if (window) {
                     dateRangePart = `${queryMode}(${normalizeToUK(window.start)}:${normalizeToUK(window.end)})`;
                   }
@@ -1199,6 +1212,7 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
           <span style={{ fontSize: '12px', color: '#6B7280', fontWeight: 500 }}>Full query:</span>
           <div style={{ flex: 1 }}>
             <QueryExpressionEditor
+              suggestionsScope="graph"
               value={(() => {
                 // Parse current DSL to extract contexts (strip any window)
                 const parsed = parseConstraints(graph?.currentQueryDSL || '');
@@ -1213,8 +1227,12 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
                 }
 
                 // Add current window/cohort (using queryMode)
+                // Preserve cohort anchor if present in graph DSL
+                const cohortAnchor = queryMode === 'cohort' ? parsed.cohort?.anchor : undefined;
                 const dateRangePart = window
-                  ? `${queryMode}(${normalizeToUK(window.start)}:${normalizeToUK(window.end)})`
+                  ? (cohortAnchor
+                    ? `cohort(${cohortAnchor},${normalizeToUK(window.start)}:${normalizeToUK(window.end)})`
+                    : `${queryMode}(${normalizeToUK(window.start)}:${normalizeToUK(window.end)})`)
                   : '';
 
                 // Preserve asat clause if present in the current DSL

@@ -250,6 +250,24 @@ Clearing layer 1 is useless unless you also handle layers 2-4. UpdateManager map
 
 See compiler journal 13-Apr-26 update 11.
 
+## Anti-pattern 35: Edge ID key order mismatch (uuid-first vs id-first)
+
+**Signature**: `computeInboundN` returns different n values for sibling edges from the same node, or returns an empty/partial map despite the graph having data. The bug is silent — no errors, just wrong numbers.
+
+**Root cause**: `computeInboundN` uses `getEdgeId()` which returns `edge.uuid || edge.id` (uuid-first). If the caller builds the `activeEdges` set or `getEffectiveP` lookup using `edge.id || edge.uuid` (id-first), edges with both fields populated resolve to different keys. The edge is absent from `activeEdges`, so the topo walk skips it. Downstream nodes receive incomplete population, and siblings get different n values.
+
+**Fix**: all call sites that interact with `computeInboundN` must use `uuid || id` (uuid-first) consistently. Search for `edge.id || edge.uuid` near any `computeInboundN` usage and reverse the order.
+
+**Broader principle**: whenever a function uses an internal key derivation (like `getEdgeId`), all callers must match that derivation exactly. A mismatch is invisible at the type level (both are strings) and produces silently wrong results.
+
+## Anti-pattern 36: Latency bead gate checking data presence instead of feature enablement
+
+**Signature**: non-latency edges (with `latency_parameter: false` or undefined) show latency beads after a BE topo pass run.
+
+**Root cause**: the `checkExists` gate for the latency bead checked `edge.p.latency.median_lag_days !== undefined` without also checking `latency_parameter === true`. The BE topo pass writes `median_lag_days` to any edge with a `latency` block, regardless of whether latency tracking is enabled. An edge can have `latency: { latency_parameter: false, median_lag_days: 5 }` — the block exists (from a prior edit or schema default) but the feature is disabled.
+
+**Fix**: gate on `latency_parameter === true && median_lag_days !== undefined`. More generally: always gate feature-specific UI on the feature's enablement flag, not on the presence of data that the feature would consume.
+
 ## When to add to this document
 
 After completing a multi-attempt fix, check: does my bug match a generalisable pattern? If so, add it here following the format: Signature (how to recognise it), Root cause (why it happens), Fix (what to do), Example (optional, specific instance).

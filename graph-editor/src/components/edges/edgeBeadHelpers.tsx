@@ -872,7 +872,9 @@ export function buildBeadDefinitions(
     },
     buildLabel: beadDisplayMode === 'data-values'
       ? BeadLabelBuilder.buildDataValuesLabel
-      : BeadLabelBuilder.buildProbabilityLabel,
+      : beadDisplayMode === 'path-rate'
+        ? BeadLabelBuilder.buildPathRateLabel
+        : BeadLabelBuilder.buildProbabilityLabel,
     backgroundColor: '#000000',
     hasParameterConnection: !!(edge as any).p?.id,
     // IMPORTANT: this must reflect *all* override flags under `edge.p` (including latency overrides),
@@ -903,17 +905,20 @@ export function buildBeadDefinitions(
   const latencyBead = buildParameterBead({
     beadType: 'latency',
     checkExists: () => {
+      // Only show latency bead when latency tracking is enabled (latency_parameter === true)
+      // AND lag stats are available. An edge with latency_parameter: false should never
+      // show a latency bead even if the BE topo pass wrote median_lag_days to it.
+      const hasLatency = (lat: any) => lat?.latency_parameter === true && lat?.median_lag_days !== undefined;
       // Check current
-      if (edge.p?.latency?.median_lag_days !== undefined) return true;
+      if (hasLatency(edge.p?.latency)) return true;
       // Check base
-      if (edgeKeyForLatency && scenariosContext.baseParams.edges?.[edgeKeyForLatency]?.p?.latency?.median_lag_days !== undefined) return true;
+      if (edgeKeyForLatency && hasLatency(scenariosContext.baseParams.edges?.[edgeKeyForLatency]?.p?.latency)) return true;
       // Check all visible scenarios
       for (const scenarioId of orderedVisibleIds) {
         if (scenarioId === 'current' || scenarioId === 'base') continue;
-        // Look for explicit latency on this scenario (not the synthetic 0d/100%)
         const scenario = scenariosContext.scenarios?.find((s: any) => s.id === scenarioId);
         const latency = scenario?.params?.edges?.[edgeKeyForLatency]?.p?.latency;
-        if (latency?.median_lag_days !== undefined) return true;
+        if (hasLatency(latency)) return true;
       }
       return false;
     },

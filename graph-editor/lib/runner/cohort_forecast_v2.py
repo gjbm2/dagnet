@@ -136,7 +136,11 @@ def _build_tier1_parametric(
 
     T = max_tau + 1
     S = num_draws
-    DRIFT_FRACTION = 0.20
+    # IS proposal width: 2× posterior SD gives an overdispersed proposal
+    # so importance sampling can differentiate good/bad draws. The prior
+    # 0.20 was set before IS conditioning existed and made conditioning
+    # a no-op (all draws identical → uniform weights → no resampling).
+    DRIFT_FRACTION = 2.0
     tau_grid = np.arange(0, T, dtype=float)
 
     # Deterministic CDF

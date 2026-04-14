@@ -428,6 +428,7 @@ Identify your task type below, then read the listed docs **before writing any co
 - CANVAS_RENDERING_ARCHITECTURE.md **(skim)** — z-index model, transform pipeline
 - CANVAS_OBJECT_DISPLAY_STATES.md **(skim)** — minimise/restore mechanics if touching canvas objects
 - EDGE_RENDERING_PERF_ROOT_CAUSE.md **(ref)** — beads/chevrons performance
+- BEAD_DISPLAY_MODE.md **(full if touching bead values/formatting)** — BeadDisplayMode enum, data values, path view, inbound-n topo walk, anchor resolution, latency bead gate
 
 **Creating, editing, or validating conversion graphs** (in data repo):
 - `graph-ops/playbooks/` **(full — pick the relevant playbook)** — tested procedures for graph work

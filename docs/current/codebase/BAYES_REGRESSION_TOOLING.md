@@ -1,6 +1,6 @@
 # Bayes Regression Tooling
 
-**Last updated**: 12-Apr-26
+**Last updated**: 13-Apr-26
 
 How the parameter recovery regression pipeline works: discovery,
 bootstrap, parallel execution, multi-layered audit, and known
@@ -129,7 +129,7 @@ synthetic harness logs).
 
 | Flag | Tool | Purpose |
 |------|------|---------|
-| `--feature KEY=VALUE` | All three | Model feature flag (e.g. `latency_dispersion=true`, `jax_backend=true`). Forwarded through the full chain. |
+| `--feature KEY=VALUE` | All three | Model feature flag (e.g. `latency_dispersion=true`). Forwarded through the full chain. `jax_backend` defaults to `true` since 13-Apr-26 — no flag needed. |
 | `--clean` | All three | Clear `__pycache__` dirs under `bayes/` and `graph-editor/lib/`. Prevents stale bytecode from masking source edits. Does NOT touch synth data or DB rows. |
 | `--rebuild` | All three | Delete `.synth-meta.json` for the target graph, forcing `verify_synth_data` to re-check DB with fresh hashes. Heavy — triggers full DB re-insert of synth rows. Only needed after truth file or `synth_gen.py` changes. |
 | `--no-timeout` | `run_regression.py` | Disable all timeout layers (subprocess, harness watchdog). Passes `--timeout 0` through the chain. Useful for large contexted graphs where sampling time is unpredictable. |
@@ -252,27 +252,35 @@ Fix: `--rebuild` deletes the `.synth-meta.json`, forcing
 query the DB with the new (correct) hashes. Note: `--clean` does NOT
 delete synth-meta — use `--rebuild` specifically for this case.
 
-### JAX backend for compilation (12-Apr-26)
+### JAX backend is the default (13-Apr-26)
 
-nutpie's default numba backend has super-linear compilation time with
-respect to pytensor graph size. For contexted models with advanced
-indexing (vector RV gathers across thousands of trajectory intervals),
-numba compilation can exceed 500s on a 3-edge graph — making contexted
-Bayes unusable.
+nutpie's numba backend has super-linear compilation time with respect
+to pytensor graph size. For contexted models with advanced indexing
+(vector RV gathers across thousands of trajectory intervals), numba
+compilation can exceed 500s on a 3-edge graph — making contexted Bayes
+unusable.
 
-The `jax_backend` feature flag switches nutpie to JAX's XLA compiler,
-which handles gather/scatter operations natively. Measured speedups:
-11.6x on a synthetic 42-dimensional model, and compilation drops from
-500s+ (timeout) to ~5-13s on real contexted graphs.
+The JAX backend (`SamplingConfig.jax_backend`, default `True` since
+13-Apr-26) switches nutpie to JAX's XLA compiler, which handles
+gather/scatter operations natively. Measured speedups: 11.6x on a
+synthetic 42-dimensional model, and compilation drops from 500s+
+(timeout) to ~5-13s on real contexted graphs.
 
-Usage: `--feature jax_backend=true` on any tool in the chain.
-Implementation: `SamplingConfig.jax_backend` field in
-`compiler/types.py`, wired through `run_inference` →
+The gradient backend is fixed to `'pytensor'` (not `'jax'`). JAX's
+reverse-mode AD hits `0 × inf = NaN` on deep erfc/softplus chains in
+join-node graphs. Pytensor computes symbolic gradients first (handling
+numerical edge cases), then compiles both forward and gradient to JAX.
+Same runtime performance, slightly longer compile, no NaN. See
+anti-pattern 36.
+
+No `--feature` flag is needed — JAX is the default. To disable:
+`--feature jax_backend=false`. Implementation: `SamplingConfig` in
+`compiler/types.py:541`, wired through `run_inference` →
 `_sample_nutpie` → `nutpie.compile_pymc_model(model, backend='jax',
-gradient_backend='jax')`. Requires `jax[cpu]` (in
+gradient_backend='pytensor')`. Requires `jax[cpu]` (in
 `bayes/requirements.txt`).
 
-JAX also parallelises gradient evaluations across cores internally, so
+JAX parallelises gradient evaluations across cores internally, so
 `--max-parallel 1` is appropriate when using the JAX backend — each
 graph already utilises all available cores.
 
@@ -331,7 +339,7 @@ Skips Phase 1 entirely and runs Phase 2 from a dump directory:
 ```bash
 python bayes/param_recovery.py --graph synth-diamond-context \
   --phase2-from-dump /tmp/bayes_debug-graph-synth-diamond-context \
-  --feature jax_backend=true --chains 2 --draws 500 --tune 1000 --timeout 0
+  --chains 2 --draws 500 --tune 1000 --timeout 0
 ```
 
 This bypasses graph loading, CLI hash computation, synth data gate,
@@ -342,16 +350,33 @@ Available on both `param_recovery.py` and `test_harness.py`.
 
 ### Phase 2 numba fallback (13-Apr-26)
 
-When `jax_backend=true` and Phase 2 init fails (JAX gradient NaN on
-join-node graphs with deep path onsets), the worker automatically
-retries Phase 2 with the numba backend. Log shows:
+When `jax_backend=true` and Phase 2 init fails, the worker
+automatically retries Phase 2 with the numba backend. The numba
+compile adds ~180s but the model samples correctly.
 
-```
-Phase 2 JAX init failed: All initialization points failed...
-Retrying Phase 2 with numba backend…
-numba fallback succeeded
-```
+This fallback is now defence-in-depth only. The root cause (JAX
+gradient NaN from `gradient_backend='jax'`) is fixed —
+`gradient_backend` is now always `'pytensor'` (see anti-pattern 36).
+The fallback remains in `worker.py:1167-1180` for robustness.
 
-The numba compile adds ~180s but the model samples correctly. This
-is a workaround — the JAX NaN root cause is documented in compiler
-journal 13-Apr-26 update 10 and tracked as pending work.
+### Zero-latency (instant) edges in recovery (13-Apr-26)
+
+Edges with truth `mu=0, sigma=0, onset=0` are instant conversions —
+the model correctly creates no latency random variables for them.
+The recovery audit in `run_regression.py` now skips mu/sigma/onset
+comparison for these edges, reporting only p recovery. Previously
+these caused false FAIL results ("missing parsed recovery param").
+
+Affected graphs: `synth-fanout-test` (1 instant edge),
+`synth-mirror-4step` (2 instant edges), `synth-forecast-test`
+(1 instant edge).
+
+### Missing: execution timing in recovery output
+
+`param_recovery.py` does not surface per-phase timing breakdown
+(compile time, Phase 1 sampling, Phase 2 sampling, model size).
+The worker tracks this internally in the `timings` dict, and
+`[nutpie-compile]` lines are printed to stdout, but the recovery
+comparison summary shows only total wall time. This is a known gap
+— performance comparisons between parameterisations require manually
+reading the harness log or worker output.

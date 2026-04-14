@@ -195,7 +195,7 @@ function ScenarioLegendWrapper({ tabId }: { tabId: string }) {
   // Auto-disable path-rate when DSL switches to window mode
   const isCohortDsl = activeDsl?.includes('cohort(') ?? false;
   React.useEffect(() => {
-    if (beadDisplayMode === 'path-rate' && !isCohortDsl && activeDsl) {
+    if (beadDisplayMode === 'path-rate' && !isCohortDsl && !!activeDsl) {
       viewPrefs?.setBeadDisplayMode('edge-rate');
     }
   }, [isCohortDsl, beadDisplayMode, activeDsl]);

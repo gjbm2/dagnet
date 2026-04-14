@@ -92,7 +92,8 @@ function callBuildBeads(
   graph: Graph,
   beadDisplayMode: import('../../../types').BeadDisplayMode,
   inboundNMap?: Map<string, { n: number; forecast_k: number }>,
-  visibilityMode?: ScenarioVisibilityMode
+  visibilityMode?: ScenarioVisibilityMode,
+  anchorN?: number
 ) {
   const ctx = { scenarios: [], baseParams: { edges: {} }, currentParams: { edges: {} } };
   const getMode = visibilityMode
@@ -103,8 +104,32 @@ function callBuildBeads(
     [], ['current'], ['current'],
     new Map([['current', '#FFF']]),
     undefined, 0, getMode,
-    beadDisplayMode, inboundNMap
+    beadDisplayMode, inboundNMap, anchorN
   );
+}
+
+/** Compute anchor_n for a graph (max evidence.n from START node outgoing edges) */
+function computeAnchorN(graph: Graph): number {
+  const startNodeIds = new Set(
+    graph.nodes
+      .filter(n => (n as any).type === 'start' || (n as any).entry?.is_start)
+      .map(n => (n as any).uuid || (n as any).id)
+  );
+  let maxN = 0;
+  for (const e of graph.edges) {
+    if (startNodeIds.has((e as any).from) && e.p?.evidence?.n) {
+      maxN = Math.max(maxN, e.p.evidence.n);
+    }
+  }
+  return maxN;
+}
+
+/** Extract percentage from bead displayText */
+function parsePercent(displayText: any): number | null {
+  const text = extractText(displayText);
+  const match = text.match(/([\d.]+)%/);
+  if (!match) return null;
+  return parseFloat(match[1]);
 }
 
 /** Extract k/n for every edge in a graph. Returns map edgeId → {k, n}. */
@@ -432,6 +457,145 @@ describe('Data Values — structural invariants', () => {
       // Should fall back to % since there's no population to show.
       const text = extractText(probBead!.displayText);
       expect(text).toContain('%');
+    });
+  });
+});
+
+// ===========================================================================
+// Path Rate Mode Tests
+// ===========================================================================
+
+describe('Path Rate view mode', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  describe('path rate = k / anchor_n (linear funnel)', () => {
+    it('should show path-level percentages relative to anchor population', () => {
+      // Linear: START → A (p=0.8) → B (p=0.5) → C (p=0.25)
+      // anchor_n = 1000
+      // e1: path_rate = (0.8*1000)/1000 = 80%
+      // e2: path_rate = (0.5*800)/1000  = 40%
+      // e3: path_rate = (0.25*400)/1000 = 10%
+      const graph = linearFunnel();
+      const nMap = buildInboundNMap(graph);
+      const aN = computeAnchorN(graph);
+      expect(aN).toBe(1000);
+
+      const pcts = new Map<string, number>();
+      for (const edge of graph.edges) {
+        const beads = callBuildBeads(edge, graph, 'path-rate', nMap, undefined, aN);
+        const probBead = beads.find(b => b.type === 'probability');
+        expect(probBead).toBeDefined();
+        const pct = parsePercent(probBead!.displayText);
+        expect(pct).not.toBeNull();
+        pcts.set(edge.uuid!, pct!);
+      }
+
+      expect(pcts.get('e1')).toBe(80);
+      expect(pcts.get('e2')).toBe(40);
+      expect(pcts.get('e3')).toBe(10);
+    });
+  });
+
+  describe('path rate (branching funnel)', () => {
+    it('should show path-level percentages for siblings', () => {
+      // Branch: START → A (p=0.8), A → B (p=0.5), A → C (p=0.3)
+      // anchor_n = 500
+      // e1: 0.8*500 / 500 = 80%
+      // e2: 0.5*400 / 500 = 40%
+      // e3: 0.3*400 / 500 = 24%
+      const graph = branchingFunnel();
+      const nMap = buildInboundNMap(graph);
+      const aN = computeAnchorN(graph);
+
+      const pcts = new Map<string, number>();
+      for (const edge of graph.edges) {
+        const beads = callBuildBeads(edge, graph, 'path-rate', nMap, undefined, aN);
+        const probBead = beads.find(b => b.type === 'probability');
+        const pct = parsePercent(probBead!.displayText);
+        expect(pct).not.toBeNull();
+        pcts.set(edge.uuid!, pct!);
+      }
+
+      expect(pcts.get('e1')).toBe(80);
+      expect(pcts.get('e2')).toBe(40);
+      expect(pcts.get('e3')).toBe(24);
+    });
+  });
+
+  describe('path rate (diamond — merge node)', () => {
+    it('should show correct path rates through diamond', () => {
+      // Diamond: START→A (p=1.0), A→B (p=0.6), A→C (p=0.4), B→D (p=0.5), C→D (p=0.5)
+      // anchor_n = 1000
+      // e1: 1.0*1000/1000 = 100%
+      // e2: 0.6*1000/1000 = 60%
+      // e3: 0.4*1000/1000 = 40%
+      // e4: 0.5*600/1000  = 30%
+      // e5: 0.5*400/1000  = 20%
+      const graph = diamondGraph();
+      const nMap = buildInboundNMap(graph);
+      const aN = computeAnchorN(graph);
+
+      const pcts = new Map<string, number>();
+      for (const edge of graph.edges) {
+        const beads = callBuildBeads(edge, graph, 'path-rate', nMap, undefined, aN);
+        const probBead = beads.find(b => b.type === 'probability');
+        const pct = parsePercent(probBead!.displayText);
+        expect(pct).not.toBeNull();
+        pcts.set(edge.uuid!, pct!);
+      }
+
+      expect(pcts.get('e1')).toBe(100);
+      expect(pcts.get('e2')).toBe(60);
+      expect(pcts.get('e3')).toBe(40);
+      expect(pcts.get('e4')).toBe(30);
+      expect(pcts.get('e5')).toBe(20);
+    });
+  });
+
+  describe('path rate invariants', () => {
+    it('anchor edge path rate equals its own edge rate', () => {
+      const graph = linearFunnel();
+      const nMap = buildInboundNMap(graph);
+      const aN = computeAnchorN(graph);
+
+      // Anchor edge in path mode should show same % as edge mode
+      const pathBeads = callBuildBeads(graph.edges[0], graph, 'path-rate', nMap, undefined, aN);
+      const edgeBeads = callBuildBeads(graph.edges[0], graph, 'edge-rate');
+
+      const pathPct = parsePercent(pathBeads.find(b => b.type === 'probability')!.displayText);
+      const edgePct = parsePercent(edgeBeads.find(b => b.type === 'probability')!.displayText);
+      expect(pathPct).toBe(edgePct);
+    });
+
+    it('downstream path rates are always ≤ upstream path rates', () => {
+      const graph = linearFunnel();
+      const nMap = buildInboundNMap(graph);
+      const aN = computeAnchorN(graph);
+
+      const pcts: number[] = [];
+      for (const edge of graph.edges) {
+        const beads = callBuildBeads(edge, graph, 'path-rate', nMap, undefined, aN);
+        const pct = parsePercent(beads.find(b => b.type === 'probability')!.displayText);
+        pcts.push(pct!);
+      }
+
+      // Each path rate should be ≤ the previous (monotonically decreasing in a linear funnel)
+      for (let i = 1; i < pcts.length; i++) {
+        expect(pcts[i]).toBeLessThanOrEqual(pcts[i - 1]);
+      }
+    });
+
+    it('falls back to edge rate when no anchor population exists', () => {
+      const graph = noDataGraph();
+      const nMap = buildInboundNMap(graph);
+      const aN = computeAnchorN(graph); // 0 — no evidence
+
+      const beads = callBuildBeads(graph.edges[0], graph, 'path-rate', nMap, undefined, aN || undefined);
+      const probBead = beads.find(b => b.type === 'probability');
+      const text = extractText(probBead!.displayText);
+      // Should show normal edge-rate percentage as fallback
+      expect(text).toContain('%');
+      expect(parsePercent(probBead!.displayText)).toBe(50); // p.mean = 0.5
     });
   });
 });

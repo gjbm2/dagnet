@@ -3724,11 +3724,15 @@ def handle_stats_topo_pass(data: Dict[str, Any]) -> Dict[str, Any]:
             }, _f, indent=2)
         print(f'[lag/topo-pass] Golden fixture written to {fixture_path}')
 
-    # ── Compute completeness_stdev per edge (doc 29 Phase 2) ────────
+    # ── Compute ForecastState per edge (doc 29 Phase 2 + 3) ─────────
     import time as _time
-    _cstdev_t0 = _time.monotonic()
+    _fs_t0 = _time.monotonic()
     from runner.model_resolver import resolve_model_params
-    from runner.forecast_state import compute_completeness_with_sd, _compose_rate_sd
+    from runner.forecast_state import (
+        compute_forecast_state_window,
+        compute_forecast_state_cohort,
+        build_node_arrival_cache,
+    )
 
     edges_by_uuid = {}
     for e in graph.get('edges', []):
@@ -3737,10 +3741,28 @@ def handle_stats_topo_pass(data: Dict[str, Any]) -> Dict[str, Any]:
 
     is_window = query_mode in ('window', 'none')
 
+    # Phase 3: build per-node arrival cache for cohort-mode edges
+    _node_arrival_cache = None
+    if not is_window:
+        try:
+            # Find anchor node (same logic as stats_engine)
+            _anchor_id = None
+            for n in graph.get('nodes', []):
+                if (n.get('entry') or {}).get('is_start'):
+                    _anchor_id = n.get('uuid') or n.get('id')
+                    break
+            if _anchor_id is None and graph.get('nodes'):
+                _anchor_id = graph['nodes'][0].get('uuid') or graph['nodes'][0].get('id', '')
+            if _anchor_id:
+                _node_arrival_cache = build_node_arrival_cache(
+                    graph, anchor_id=_anchor_id, max_tau=400)
+        except Exception as _e:
+            print(f"[topo-pass] WARNING: node arrival cache failed: {_e}")
+
     edges_out = []
+    _fs_count = 0
     for ev in result.edge_values:
-        # Compute completeness_stdev if edge has latency dispersions
-        completeness_stdev = None
+        forecast_state_dict = None
         improved_p_sd = ev.p_sd
         edge_dict = edges_by_uuid.get(ev.edge_uuid)
         if edge_dict is not None:
@@ -3754,24 +3776,55 @@ def handle_stats_topo_pass(data: Dict[str, Any]) -> Dict[str, Any]:
                     (c.age, c.n) for c in cohorts_raw if c.n > 0 and c.age >= 0
                 ]
                 if cohort_ages_and_weights:
-                    # N-weighted completeness_stdev
-                    total_n = 0.0
-                    weighted_sd_sq = 0.0
-                    for age_days, n in cohort_ages_and_weights:
-                        _, c_sd = compute_completeness_with_sd(
-                            float(age_days), resolved.latency)
-                        weighted_sd_sq += n * n * c_sd * c_sd
-                        total_n += n
-                    if total_n > 0:
-                        import math
-                        completeness_stdev = math.sqrt(weighted_sd_sq) / total_n
-                        # Improve p_sd: compose p uncertainty with
-                        # completeness uncertainty (doc 29 §F mode)
-                        if completeness_stdev > 0 and ev.completeness > 0:
-                            improved_p_sd = _compose_rate_sd(
-                                resolved.p_mean, resolved.p_sd,
-                                ev.completeness, completeness_stdev,
-                            )
+                    # Compute evidence rate from topo pass results
+                    evidence_rate = ev.p_evidence if ev.p_evidence > 0 else None
+                    # Phase 3: cohort-mode uses upstream-aware computation
+                    from_node_id = edge_dict.get('from', '')
+                    _from_arrival = (
+                        _node_arrival_cache.get(from_node_id)
+                        if _node_arrival_cache else None
+                    )
+                    if not is_window and _from_arrival is not None:
+                        fs = compute_forecast_state_cohort(
+                            edge_id=ev.edge_uuid,
+                            resolved=resolved,
+                            cohort_ages_and_weights=cohort_ages_and_weights,
+                            from_node_arrival=_from_arrival,
+                            evidence_rate=evidence_rate,
+                        )
+                    else:
+                        fs = compute_forecast_state_window(
+                            edge_id=ev.edge_uuid,
+                            resolved=resolved,
+                            cohort_ages_and_weights=cohort_ages_and_weights,
+                            evidence_rate=evidence_rate,
+                        )
+                    _fs_count += 1
+                    # Serialise ForecastState for the response
+                    forecast_state_dict = {
+                        'edge_id': fs.edge_id,
+                        'source': fs.source,
+                        'fitted_at': fs.fitted_at,
+                        'tier': fs.tier,
+                        'completeness': fs.completeness,
+                        'completeness_sd': fs.completeness_sd,
+                        'rate_unconditioned': fs.rate_unconditioned,
+                        'rate_unconditioned_sd': fs.rate_unconditioned_sd,
+                        'rate_conditioned': fs.rate_conditioned,
+                        'rate_conditioned_sd': fs.rate_conditioned_sd,
+                        'tau_observed': fs.tau_observed,
+                        'mode': fs.mode,
+                        'path_aware': fs.path_aware,
+                        'dispersions': {
+                            'p_sd': fs.dispersions.p_sd,
+                            'mu_sd': fs.dispersions.mu_sd,
+                            'sigma_sd': fs.dispersions.sigma_sd,
+                            'onset_sd': fs.dispersions.onset_sd,
+                        } if fs.dispersions else None,
+                    }
+                    # Use ForecastState's improved p_sd for the flat response
+                    if fs.completeness_sd and fs.completeness_sd > 0:
+                        improved_p_sd = fs.rate_unconditioned_sd or ev.p_sd
 
         edges_out.append({
             'edge_uuid': ev.edge_uuid,
@@ -3779,7 +3832,10 @@ def handle_stats_topo_pass(data: Dict[str, Any]) -> Dict[str, Any]:
             't95': ev.t95,
             'path_t95': ev.path_t95,
             'completeness': ev.completeness,
-            'completeness_stdev': completeness_stdev,
+            'completeness_stdev': (
+                forecast_state_dict['completeness_sd']
+                if forecast_state_dict else None
+            ),
             'mu': ev.mu,
             'sigma': ev.sigma,
             'onset_delta_days': ev.onset_delta_days,
@@ -3802,12 +3858,13 @@ def handle_stats_topo_pass(data: Dict[str, Any]) -> Dict[str, Any]:
             'path_mu_sd': ev.path_mu_sd,
             'path_sigma_sd': ev.path_sigma_sd,
             'path_onset_sd': ev.path_onset_sd,
+            # Doc 29: ForecastState per edge
+            'forecast_state': forecast_state_dict,
         })
 
-    _cstdev_ms = (_time.monotonic() - _cstdev_t0) * 1000
-    _cstdev_count = sum(1 for e in edges_out if e.get('completeness_stdev') is not None)
-    print(f"[topo-pass] completeness_stdev: {_cstdev_count}/{len(edges_out)} edges "
-          f"in {_cstdev_ms:.0f}ms")
+    _fs_ms = (_time.monotonic() - _fs_t0) * 1000
+    print(f"[topo-pass] forecast_state: {_fs_count}/{len(edges_out)} edges "
+          f"in {_fs_ms:.0f}ms")
 
     return {
         'success': True,
@@ -3815,7 +3872,7 @@ def handle_stats_topo_pass(data: Dict[str, Any]) -> Dict[str, Any]:
         'summary': {
             'edges_processed': result.edges_processed,
             'edges_with_lag': result.edges_with_lag,
-            'completeness_stdev_count': _cstdev_count,
-            'completeness_stdev_ms': round(_cstdev_ms),
+            'forecast_state_count': _fs_count,
+            'forecast_state_ms': round(_fs_ms),
         },
     }

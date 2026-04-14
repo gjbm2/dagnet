@@ -606,6 +606,44 @@ export interface LatencyConfig {
   posterior?: LatencyPosterior;  // Graph-edge only (projected by cascade, not on file)
 }
 
+// ── Forecast engine output (doc 29) ──────────────────────────────────────────
+
+/** Per-edge forecast state from the generalised forecast engine.
+ *  Produced by the BE topo pass. Consumers read from this rather than
+ *  independently computing completeness, rate, and dispersions.
+ *  See doc 29 §ForecastState Contract.
+ */
+export interface ForecastState {
+  edge_id: string;
+  source: string;               // 'analytic' | 'analytic_be' | 'bayesian' | 'manual'
+  fitted_at?: string;
+  tier: string;                 // 'fe_instant' | 'be_forecast' | 'fe_only'
+
+  evaluation_date: string;
+  evidence_cutoff_date: string;
+  posterior_cutoff_date: string;
+
+  completeness: number;
+  completeness_sd?: number;
+
+  rate_unconditioned?: number;
+  rate_unconditioned_sd?: number;
+
+  rate_conditioned: number;
+  rate_conditioned_sd?: number;
+  tau_observed: number;
+
+  mode: string;                 // 'window' | 'cohort'
+  path_aware: boolean;
+
+  dispersions?: {
+    p_sd: number;
+    mu_sd: number;
+    sigma_sd: number;
+    onset_sd: number;
+  };
+}
+
 // ── Model variable provenance (doc 15) ──────────────────────────────────────
 
 /** Source of a model variable set.

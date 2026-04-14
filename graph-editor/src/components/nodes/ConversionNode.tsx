@@ -13,6 +13,7 @@ import { useTheme } from '@/contexts/ThemeContext';
 import { fileRegistry } from '@/contexts/TabContext';
 import { ExternalLink, ZapOff } from 'lucide-react';
 import { countNodeOverrides } from '../../hooks/useRemoveOverrides';
+import { parseConstraints } from '../../lib/queryDSL';
 import { ImageStackIndicator } from '../ImageStackIndicator';
 import { ImageHoverPreview } from '../ImageHoverPreview';
 import { ImageLoupeView } from '../ImageLoupeView';
@@ -117,6 +118,16 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
   const whatIfAnalysis = activeTab?.editorState?.whatIfAnalysis;
   const whatIfDSL = activeTab?.editorState?.whatIfDSL;
   
+  // Detect if this node is the cohort anchor
+  const currentDSL = useGraphStore((s) => s.currentDSL);
+  const isCohortAnchor = useMemo(() => {
+    if (!currentDSL) return false;
+    const parsed = parseConstraints(currentDSL);
+    const anchorId = parsed.cohort?.anchor;
+    if (!anchorId) return false;
+    return data.id === anchorId || data.uuid === anchorId;
+  }, [currentDSL, data.id, data.uuid]);
+
   // Track hover state
   const [isHovered, setIsHovered] = useState(false);
 
@@ -583,6 +594,7 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
         position: 'relative',
         padding: '8px',
         border: outlinePathD ? 'none' : (selected ? `5px solid ${dark ? '#e0e0e0' : '#333'}` :
+                isCohortAnchor ? `3px solid ${dark ? '#60a5fa' : '#2563eb'}` :
                 ((probabilityMass && !probabilityMass.isComplete) || (conditionalValidation?.hasProbSumError)) ? '2px solid #ff6b6b' :
                 `2px solid ${nodeBorder}`),
         ...nodeShape,
@@ -735,11 +747,12 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
               fill="none"
               stroke={
                 selected ? (dark ? '#e0e0e0' : '#333')
+                  : isCohortAnchor ? (dark ? '#60a5fa' : '#2563eb')
                   : (probabilityMass && !probabilityMass.isComplete) || conditionalValidation?.hasProbSumError
                     ? '#ff6b6b'
                     : nodeBorder
               }
-              strokeWidth={selected ? 5 : 2}
+              strokeWidth={selected ? 5 : isCohortAnchor ? 3 : 2}
             />
           </g>
           </svg>

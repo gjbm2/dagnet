@@ -2052,6 +2052,10 @@ export async function runStage2EnhancementsAndInboundN(
                     // Lag stats (observational, not model params)
                     if (beScalars.median_lag_days != null) edge.p.latency.median_lag_days = beScalars.median_lag_days;
                     if (beScalars.mean_lag_days != null) edge.p.latency.mean_lag_days = beScalars.mean_lag_days;
+                    // ForecastState (doc 29 Phase 2) — store on edge for consumers
+                    if (beScalars.forecast_state) {
+                      (edge.p as any).forecast_state = beScalars.forecast_state;
+                    }
                   }
                   if (beScalars) {
                     // Probability scalars

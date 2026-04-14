@@ -11,6 +11,7 @@ import { Plug, ZapOff } from 'lucide-react';
 import { buildBeadDefinitions, type BeadDefinition } from './edgeBeadHelpers';
 import type { Graph, GraphEdge } from '../../types';
 import { computeInboundN, type InboundNResult } from '../../services/statisticalEnhancementService';
+import { parseConstraints } from '../../lib/queryDSL';
 import type { ScenarioVisibilityMode, ViewOverlayMode } from '../../types';
 import { computeQualityTier } from '../../utils/bayesQualityTier';
 import { useDataDepthContext } from '../../contexts/DataDepthContext';
@@ -229,21 +230,51 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
       );
     }
 
-    // For path-rate mode, compute anchor_n (seed population from START node)
+    // For path-rate mode, compute anchor_n:
+    // 1. Parse DSL for explicit cohort anchor node
+    // 2. Find that node's population in the topo walk
+    // 3. Fallback: START node population (max evidence.n on outgoing edges)
     let anchorN: number | undefined;
     if (beadDisplayMode === 'path-rate' && graph.nodes && graph.edges) {
-      const startNodeIds = new Set(
-        graph.nodes
-          .filter(n => (n as any).type === 'start' || (n as any).entry?.is_start)
-          .map(n => n.uuid || n.id)
-      );
-      let maxN = 0;
-      for (const e of graph.edges) {
-        if (startNodeIds.has((e as any).from) && e.p?.evidence?.n) {
-          maxN = Math.max(maxN, e.p.evidence.n);
+      const dsl = (graph as any).currentQueryDSL || '';
+      const parsed = parseConstraints(dsl);
+      const anchorNodeLabel = parsed.cohort?.anchor;
+
+      if (anchorNodeLabel && inboundNMap) {
+        // Find the anchor node — DSL anchor is a node ID (e.g. "household-created")
+        const anchorNode = graph.nodes.find(
+          n => n.id === anchorNodeLabel || n.uuid === anchorNodeLabel
+        );
+        if (anchorNode) {
+          // Edge endpoints may use uuid or id — check both
+          const nodeUuid = anchorNode.uuid;
+          const nodeId = anchorNode.id;
+          const outEdge = graph.edges.find(e =>
+            (e as any).from === nodeUuid || (e as any).from === nodeId
+          );
+          if (outEdge) {
+            const outKey = outEdge.uuid || outEdge.id || '';
+            const entry = inboundNMap.get(outKey);
+            if (entry && entry.n > 0) anchorN = entry.n;
+          }
         }
       }
-      if (maxN > 0) anchorN = maxN;
+
+      // Fallback: START node population
+      if (!anchorN) {
+        const startNodeIds = new Set(
+          graph.nodes
+            .filter(n => (n as any).type === 'start' || (n as any).entry?.is_start)
+            .map(n => n.uuid || n.id)
+        );
+        let maxN = 0;
+        for (const e of graph.edges) {
+          if (startNodeIds.has((e as any).from) && e.p?.evidence?.n) {
+            maxN = Math.max(maxN, e.p.evidence.n);
+          }
+        }
+        if (maxN > 0) anchorN = maxN;
+      }
     }
 
     const beads = buildBeadDefinitions(

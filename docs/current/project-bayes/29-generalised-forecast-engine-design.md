@@ -584,6 +584,16 @@ The same discipline that made v2 work: v1 was frozen as the parity
 reference while v2 was built freely. Now **v2 becomes the frozen
 reference** and v3 is the generalised engine consumer.
 
+**HARD RULE: `cohort_forecast_v2.py` and its call sites in
+`_handle_cohort_maturity_v2` are frozen. Do not modify them.** v2 is
+the parity reference that Phase 3–6 test against. Any change to v2
+invalidates the parity baseline. The engine must produce the same
+results as v2 independently — if it can't, the engine is wrong, not v2.
+This rule also applies to `cohort_forecast.py` (v1 carrier hierarchy
+used by v2) and `span_kernel.py` / `span_evidence.py` / `span_adapter.py`
+(v2 infrastructure). All of these are frozen until v3 passes parity
+and v2 is retired (Phase 5.5).
+
 **Why v3, not refactoring v2**: v2's 1,154 lines stay untouched during
 engine development — no risk of breaking the working implementation
 while extracting from it. v3 provides a live benchmark during

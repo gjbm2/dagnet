@@ -1367,16 +1367,77 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                         tau_slice = pm.HalfNormal(f"tau_slice_{safe_id}", sigma=0.5)
                         logit_p_base = pt.log(p / (1.0 - p))
 
-                    # Per-slice latency hierarchy: only mu varies by slice.
-                    # sigma and onset are edge-level (shared across slices) to
-                    # reduce funnel geometry — see doc 38 §NUTS diagnostics.
+                    # Per-slice latency hierarchy.
+                    # With latency_reparam (doc 34 §11.9.1), all three
+                    # latency params (mu, sigma, onset) vary per-slice via
+                    # hierarchical offsets in (m, a, r) space. Without
+                    # reparam, only mu varies (sigma/onset edge-level).
+                    _use_slice_latency_vecs = False
                     if et.has_latency:
                         _lv_base = latency_vars.get(edge_id)
                         _ov_base = onset_vars.get(edge_id)
                         _mu_base = _lv_base[0] if _lv_base else pt.as_tensor_variable(np.float64(et.mu_prior))
                         _sigma_base = _lv_base[1] if _lv_base else pt.as_tensor_variable(np.float64(max(et.sigma_prior, 0.01)))
                         _onset_base = _ov_base if _ov_base is not None else pt.as_tensor_variable(np.float64(et.onset_delta_days))
-                        tau_mu_slice = pm.HalfNormal(f"tau_mu_slice_{safe_id}", sigma=0.3)
+
+                        # latency_reparam_slices: how many per-slice
+                        # latency RVs to use (doc 34 §11.9.1).
+                        #   2 = per-slice m + r offsets (onset + sigma vary)
+                        #   1 = per-slice m offsets only (onset varies, sigma shared)
+                        #   0/false = mu-only offsets (current default)
+                        _reparam_slice_level = int(features.get(
+                            "latency_reparam_slices", 2) if use_reparam else 0)
+                        if _reparam_slice_level >= 1 and _n_slices >= 3:
+                            _m_edge = f"m_lat_{safe_id}"
+                            _a_edge = f"a_lat_{safe_id}"
+                            _r_edge = f"r_lat_{safe_id}"
+                            _m_base_var = model[_m_edge]
+                            _a_base_var = model[_a_edge]
+                            _r_base_var = model[_r_edge]
+
+                            # Per-slice m offsets (always when reparam_slices >= 1)
+                            tau_m_slice = pm.HalfNormal(
+                                f"tau_m_slice_{safe_id}", sigma=0.3)
+                            _eps_m_slice_vec = pm.Normal(
+                                f"eps_m_slice_vec_{safe_id}",
+                                mu=0, sigma=1, shape=(_n_slices,))
+                            _m_slice_vec = _m_base_var + _eps_m_slice_vec * tau_m_slice
+
+                            # Per-slice r offsets (only when reparam_slices >= 2)
+                            if _reparam_slice_level >= 2:
+                                tau_r_slice = pm.HalfNormal(
+                                    f"tau_r_slice_{safe_id}", sigma=0.3)
+                                _eps_r_slice_vec = pm.Normal(
+                                    f"eps_r_slice_vec_{safe_id}",
+                                    mu=0, sigma=1, shape=(_n_slices,))
+                                _r_slice_vec = _r_base_var + _eps_r_slice_vec * tau_r_slice
+                                _sigma_per_slice = True
+                            else:
+                                _sigma_per_slice = False
+
+                            # a is always edge-level (shared across slices)
+                            _mu_slice_vec = pm.Deterministic(
+                                f"mu_slice_vec_{safe_id}",
+                                _m_slice_vec - pt.softplus(_a_base_var))
+                            if _sigma_per_slice:
+                                _sigma_slice_vec = pm.Deterministic(
+                                    f"sigma_slice_vec_{safe_id}",
+                                    pt.softplus(_r_slice_vec) / Z_95)
+                            else:
+                                _sigma_slice_vec = None  # use _sigma_base
+                            _onset_slice_vec = pm.Deterministic(
+                                f"onset_slice_vec_{safe_id}",
+                                pt.exp(_m_slice_vec) * pm.math.invlogit(_a_base_var))
+
+                            _use_slice_latency_vecs = True
+                            _label = "(m,r)" if _reparam_slice_level >= 2 else "(m)"
+                            diagnostics.append(
+                                f"  slice_latency: {edge_id[:8]}… "
+                                f"per-slice {_label} shared a, "
+                                f"{_n_slices} slices [reparam]")
+                        else:
+                            tau_mu_slice = pm.HalfNormal(f"tau_mu_slice_{safe_id}", sigma=0.3)
+                            _use_slice_latency_vecs = False
 
                     # ── Vector RVs for per-slice families (doc 38 §Native
                     # Vector Batching).  One vector per family, shape [n_slices].
@@ -1399,7 +1460,7 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                         pt.exp(_log_kappa_slice_vec))
 
                     # Mu offsets (latency edges only):
-                    if et.has_latency:
+                    if et.has_latency and not _use_slice_latency_vecs:
                         _eps_mu_slice_vec = pm.Normal(
                             f"eps_mu_slice_vec_{safe_id}",
                             mu=0, sigma=1, shape=(_n_slices,))
@@ -1425,7 +1486,11 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                         ks = _kappa_slice_vec[_si]
 
                         # Per-slice latency
-                        if et.has_latency:
+                        if et.has_latency and _use_slice_latency_vecs:
+                            _sigma_s = _sigma_slice_vec[_si] if _sigma_slice_vec is not None else _sigma_base
+                            _lv = {edge_id: (_mu_slice_vec[_si], _sigma_s)}
+                            _ov = {edge_id: _onset_slice_vec[_si]}
+                        elif et.has_latency:
                             _lv = {edge_id: (_mu_slice_vec[_si], _sigma_base)}
                             _ov = {edge_id: _onset_base}
                         else:
@@ -1492,6 +1557,8 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                     mu_slice_vec=_mu_slice_vec if et.has_latency else None,
                     sigma_base=_sigma_base,
                     onset_base=_onset_base,
+                    sigma_slice_vec=_sigma_slice_vec if (et.has_latency and _use_slice_latency_vecs and _sigma_slice_vec is not None) else None,
+                    onset_slice_vec=_onset_slice_vec if (et.has_latency and _use_slice_latency_vecs) else None,
                     slice_obs_list=_slice_obs_ordered,
                     slice_ctx_keys=_slice_ctx_keys,
                     diagnostics=diagnostics,
@@ -2760,6 +2827,8 @@ def _emit_batched_window_trajectories(
     features: dict | None = None,
     settings: dict | None = None,
     _softplus_k: float = SOFTPLUS_SHARPNESS,
+    sigma_slice_vec=None,
+    onset_slice_vec=None,
 ) -> None:
     """Emit ONE Phase 1 window trajectory Potential for all slices of one edge.
 
@@ -2781,6 +2850,8 @@ def _emit_batched_window_trajectories(
             slice_obs_list=slice_obs_list, slice_ctx_keys=slice_ctx_keys,
             diagnostics=diagnostics, features=features,
             settings=settings, _softplus_k=_softplus_k,
+            sigma_slice_vec=sigma_slice_vec,
+            onset_slice_vec=onset_slice_vec,
         )
 
     import pymc as pm
@@ -2856,27 +2927,36 @@ def _emit_batched_window_trajectories(
     age_slice_np = np.array(age_to_slice, dtype=np.int64)
 
     # ---- Vectorised CDF computation ----
-    # mu varies per-slice (vector RV); sigma and onset are edge-level.
+    # mu varies per-slice (vector RV); sigma and onset may be
+    # edge-level (shared) or per-slice (doc 34 §11.9.1 reparam).
     ages_tensor = pt.as_tensor_variable(
         np.array(all_ages_raw, dtype=np.float64))
 
+    _has_per_slice_onset = onset_slice_vec is not None
+    _has_per_slice_sigma = sigma_slice_vec is not None
+
     if has_latent_latency:
-        # onset is edge-level (shared) — broadcast, no indexing
-        onset_is_latent = hasattr(onset_base, 'name')
-        if onset_is_latent:
+        # Onset: per-slice vector or edge-level scalar
+        if _has_per_slice_onset:
+            onset_per_age = onset_slice_vec[age_slice_np]
+            age_minus_onset = ages_tensor - onset_per_age
+        elif hasattr(onset_base, 'name'):
             age_minus_onset = ages_tensor - onset_base
-            effective_ages = (pt.softplus(_softplus_k * age_minus_onset)
-                              / _softplus_k)
         else:
             age_minus_onset = ages_tensor - float(onset_base)
-            effective_ages = (pt.softplus(_softplus_k * age_minus_onset)
-                              / _softplus_k)
+        effective_ages = (pt.softplus(_softplus_k * age_minus_onset)
+                          / _softplus_k)
         log_ages = pt.log(pt.maximum(effective_ages, LOG_ARG_FLOOR))
 
         # mu varies per slice — index into vector RV
         mu_per_age = mu_slice_vec[age_slice_np]
-        # sigma is edge-level — broadcast
-        z = (log_ages - mu_per_age) / (sigma_base * pt.sqrt(2.0))
+
+        # sigma: per-slice vector or edge-level scalar
+        if _has_per_slice_sigma:
+            sigma_per_age = sigma_slice_vec[age_slice_np]
+            z = (log_ages - mu_per_age) / (sigma_per_age * pt.sqrt(2.0))
+        else:
+            z = (log_ages - mu_per_age) / (sigma_base * pt.sqrt(2.0))
     else:
         # Fixed latency — precompute
         ages_raw_np = np.array(all_ages_raw, dtype=np.float64)
@@ -2939,6 +3019,8 @@ def _emit_batched_window_trajectories_perslice(
     features: dict | None = None,
     settings: dict | None = None,
     _softplus_k: float = SOFTPLUS_SHARPNESS,
+    sigma_slice_vec=None,
+    onset_slice_vec=None,
 ) -> None:
     """M2 alternative: per-slice CDF/hazard with scalar indexing.
 
@@ -3040,7 +3122,10 @@ def _emit_batched_window_trajectories_perslice(
         ages_t = pt.as_tensor_variable(ages_np)
 
         if has_latent_latency:
-            if onset_is_latent:
+            # Onset: per-slice or edge-level
+            if onset_slice_vec is not None:
+                age_minus_onset = ages_t - onset_slice_vec[s_idx]
+            elif onset_is_latent:
                 age_minus_onset = ages_t - onset_base
             else:
                 age_minus_onset = ages_t - float(onset_base)
@@ -3048,7 +3133,9 @@ def _emit_batched_window_trajectories_perslice(
             log_ages = pt.log(pt.maximum(effective_ages, LOG_ARG_FLOOR))
 
             mu_s = mu_slice_vec[s_idx]
-            z = (log_ages - mu_s) / (sigma_base * pt.sqrt(2.0))
+            # Sigma: per-slice or edge-level
+            sigma_s = sigma_slice_vec[s_idx] if sigma_slice_vec is not None else sigma_base
+            z = (log_ages - mu_s) / (sigma_s * pt.sqrt(2.0))
         else:
             effective_ages_np = np.maximum(
                 ages_np - float(onset_base), EFFECTIVE_AGE_FLOOR)

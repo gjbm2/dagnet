@@ -191,6 +191,35 @@ export class BeadLabelBuilder {
   }
   
   /**
+   * Static helper: Path-rate formatter (1 d.p.)
+   */
+  static formatPathRate(value: number, stdev?: number): string {
+    const percent = value * 100;
+    const rounded = Number(percent.toFixed(1));
+    return `${rounded}%`;
+  }
+
+  /**
+   * Static helper: Build a label for path-rate beads (1 d.p. percentages)
+   */
+  static buildPathRateLabel(
+    values: BeadValue[],
+    hiddenCurrent?: HiddenCurrentValue,
+    hasExistenceVariation: boolean = false
+  ): { displayText: React.ReactNode; allIdentical: boolean } {
+    const builder = new BeadLabelBuilder(
+      values,
+      hiddenCurrent,
+      BeadLabelBuilder.formatPathRate as ValueFormatter,
+      hasExistenceVariation
+    );
+    return {
+      displayText: builder.buildDisplayText(),
+      allIdentical: builder.shouldFullyDeduplicate()
+    };
+  }
+
+  /**
    * Static helper: Standard cost GBP formatter
    */
   static formatCostGBP(value: number, stdev?: number): string {

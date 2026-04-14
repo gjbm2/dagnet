@@ -177,7 +177,9 @@
       "Bash(git -C /home/reg/dev/dagnet log --oneline --all)",
       "Bash(awk '{print $6, $7, $8, $9}')",
       "Bash(xargs -I{} basename {})",
-      "Bash(awk -F'\"' '{print $2}')"
+      "Bash(awk -F'\"' '{print $2}')",
+      "Bash(chmod +x /home/reg/dev/dagnet/scripts/run-reparam-regression.sh)",
+      "Bash(scripts/run-reparam-regression.sh)"
     ],
     "additionalDirectories": [
       "/home/reg/dev/dagnet/.claude",

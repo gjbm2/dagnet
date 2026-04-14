@@ -1,7 +1,10 @@
 # DagNet Release Notes
-## Version 1.10.x Series (9-Apr-26 to 13-Apr-26)
-**Phase C tooling, CLI, and forecast generalisation prep**
+## Version 1.10.x Series (9-Apr-26 to 14-Apr-26)
+**Phase C tooling, CLI, forecast generalisation prep, bead display modes**
 
+- **Bead display modes**: Three mutually exclusive ways to read edge beads — *Edge Rate* (default %), *Data Values* (k/n integer counts with coherent population flow), and *Path View* (path-level % relative to cohort anchor). Toggle via View menu or scenario legend pill. See `docs/current/codebase/BEAD_DISPLAY_MODE.md`
+- **Cohort anchor highlight**: When a cohort anchor is specified in the DSL (e.g. `cohort(household-created,...)`), the anchor node gets a distinctive blue border
+- **Latency bead regression fix**: Non-latency edges no longer show latency beads. The gate now requires `latency_parameter === true`, not just `median_lag_days` presence
 - **Headless CLI**: `param-pack` and `analyse` commands for full parameter extraction and analysis from the terminal. Same codepath as the browser. Multi-scenario, scalar extraction, disk bundle caching
 - Phase C slice pooling work (contexted compilation, per-slice Dirichlet emission, per-slice posterior extraction)
 - Retrieve-all performance diagnostics and fixes

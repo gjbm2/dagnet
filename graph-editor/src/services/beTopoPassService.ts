@@ -44,6 +44,28 @@ interface BeTopoEdgeResult {
   path_onset_sd?: number;
   // Completeness uncertainty (doc 29 Phase 2)
   completeness_stdev?: number;
+  // ForecastState (doc 29 Phase 2) — full engine output per edge
+  forecast_state?: {
+    edge_id: string;
+    source: string;
+    fitted_at?: string;
+    tier: string;
+    completeness: number;
+    completeness_sd?: number;
+    rate_unconditioned?: number;
+    rate_unconditioned_sd?: number;
+    rate_conditioned: number;
+    rate_conditioned_sd?: number;
+    tau_observed: number;
+    mode: string;
+    path_aware: boolean;
+    dispersions?: {
+      p_sd: number;
+      mu_sd: number;
+      sigma_sd: number;
+      onset_sd: number;
+    };
+  };
 }
 
 /**

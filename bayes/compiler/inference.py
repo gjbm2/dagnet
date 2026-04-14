@@ -1048,18 +1048,31 @@ def summarise_posteriors(
                         if _mu_s_name in trace.posterior:
                             _slice_entry["mu_mean"] = float(trace.posterior[_mu_s_name].values.mean())
                             _slice_entry["mu_sd"] = float(trace.posterior[_mu_s_name].values.std())
-                    # sigma and onset are edge-level (doc 38) — inherit from
-                    # edge-level latency so per-slice summary isn't blank.
-                    _sigma_var = f"sigma_lat_{safe_eid}"
-                    if _sigma_var in trace.posterior:
-                        _slice_entry["sigma_mean"] = float(np.mean(trace.posterior[_sigma_var].values.flatten()))
-                        _slice_entry["sigma_sd"] = float(np.std(trace.posterior[_sigma_var].values.flatten()))
-                    _onset_var = f"onset_{safe_eid}"
-                    if _onset_var in trace.posterior:
-                        _slice_entry["onset_mean"] = float(np.mean(trace.posterior[_onset_var].values.flatten()))
-                        _slice_entry["onset_sd"] = float(np.std(trace.posterior[_onset_var].values.flatten()))
-                    elif et and hasattr(et, 'onset_delta_days'):
-                        _slice_entry["onset_mean"] = float(et.onset_delta_days)
+                    # Per-slice sigma: vector path (reparam) or edge-level fallback.
+                    _sigma_vec_name = f"sigma_slice_vec_{safe_eid}"
+                    if _si is not None and _sigma_vec_name in trace.posterior:
+                        _sigma_s = trace.posterior[_sigma_vec_name].values[:, :, _si].flatten()
+                        _slice_entry["sigma_mean"] = float(np.mean(_sigma_s))
+                        _slice_entry["sigma_sd"] = float(np.std(_sigma_s))
+                    else:
+                        _sigma_var = f"sigma_lat_{safe_eid}"
+                        if _sigma_var in trace.posterior:
+                            _slice_entry["sigma_mean"] = float(np.mean(trace.posterior[_sigma_var].values.flatten()))
+                            _slice_entry["sigma_sd"] = float(np.std(trace.posterior[_sigma_var].values.flatten()))
+
+                    # Per-slice onset: vector path (reparam) or edge-level fallback.
+                    _onset_vec_name = f"onset_slice_vec_{safe_eid}"
+                    if _si is not None and _onset_vec_name in trace.posterior:
+                        _onset_s = trace.posterior[_onset_vec_name].values[:, :, _si].flatten()
+                        _slice_entry["onset_mean"] = float(np.mean(_onset_s))
+                        _slice_entry["onset_sd"] = float(np.std(_onset_s))
+                    else:
+                        _onset_var = f"onset_{safe_eid}"
+                        if _onset_var in trace.posterior:
+                            _slice_entry["onset_mean"] = float(np.mean(trace.posterior[_onset_var].values.flatten()))
+                            _slice_entry["onset_sd"] = float(np.std(trace.posterior[_onset_var].values.flatten()))
+                        elif et and hasattr(et, 'onset_delta_days'):
+                            _slice_entry["onset_mean"] = float(et.onset_delta_days)
 
                     post.slice_posteriors[_ctx_key] = _slice_entry
 
