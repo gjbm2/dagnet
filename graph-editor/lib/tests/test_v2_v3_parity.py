@@ -562,6 +562,15 @@ class TestRowLevelParity:
                                     issues.append(
                                         f"{bands_field}[{level}][{label}]: "
                                         f"v2={v2_band[i]:.4f} v3={v3_band[i]:.4f} Δ={d:.4f}")
+                            # Fan width parity: width = hi - lo
+                            v2_w = float(v2_band[1]) - float(v2_band[0])
+                            v3_w = float(v3_band[1]) - float(v3_band[0])
+                            if v2_w > 0.01:  # only check meaningful widths
+                                w_ratio = v3_w / v2_w if v2_w > 0 else 0
+                                if abs(w_ratio - 1.0) > 0.35:  # 35% width tolerance
+                                    issues.append(
+                                        f"{bands_field}[{level}] width: "
+                                        f"v2={v2_w:.4f} v3={v3_w:.4f} ratio={w_ratio:.2f}")
                 elif (v2b is None) != (v3b is None):
                     # v3 may emit bands where v2 doesn't — accept
                     if v2b is not None and v3b is None:
@@ -610,6 +619,389 @@ class TestRowLevelParity:
             'from(simple-a).to(simple-c)', 'cohort(-90d:)')
         self._assert_parity(v2_rows, v3_rows, 'Multi-hop A→C',
                             midpoint_tol=0.05)
+
+    def test_single_edge_cohort_with_upstream_parity(self):
+        """Single-edge cohort B→C where anchor=A ≠ from_node=B.
+
+        This is the case that breaks when cohort mode doesn't
+        account for upstream lag. Ages are anchor-relative (from A)
+        but the edge is B→C. Without path-level latency, the CDF
+        is wrong and midpoint/fan diverge wildly from v2.
+        """
+        v2_rows, v3_rows = self._run_both(
+            'from(simple-b).to(simple-c)', 'cohort(-90d:)')
+        self._assert_parity(v2_rows, v3_rows,
+                            'Single-edge cohort B→C (upstream lag)')
+
+
+def _load_mirror4_graph():
+    """Load the enriched synth-mirror-4step graph (A→B→C→D chain)."""
+    path = _DATA_REPO_DIR / 'graphs' / 'synth-mirror-4step.json'
+    if not path.exists():
+        pytest.skip(f'Graph not found at {path}')
+    graph = json.loads(path.read_text())
+    has_bayes = any(
+        any(m.get('source') == 'bayesian' for m in (e.get('p', {}).get('model_vars', [])))
+        for e in graph.get('edges', [])
+    )
+    if not has_bayes:
+        pytest.skip('synth-mirror-4step not enriched')
+    return graph
+
+
+@requires_db
+@requires_data_repo
+class TestUpstreamLagParity:
+    """Cohort mode parity on synth-mirror-4step (4-node chain).
+
+    Tests from(m4-registered).to(m4-success) in cohort mode where
+    anchor=m4-landing ≠ from_node=m4-registered. This exercises the
+    single-edge cohort case with upstream lag — the case that breaks
+    when the engine uses edge-level CDF instead of path-level.
+
+    Also tests multi-hop from(m4-delegated).to(m4-success) in cohort
+    mode for the multi-hop upstream lag case.
+    """
+
+    def _run_both_m4(self, dsl, query_dsl):
+        from api_handlers import _handle_cohort_maturity_v2, _handle_cohort_maturity_v3
+
+        graph = _load_mirror4_graph()
+        regimes = _get_candidate_regimes(graph)
+
+        v2_rows = _run_handler(_handle_cohort_maturity_v2, graph, dsl, query_dsl, regimes)
+        v3_rows = _run_handler(_handle_cohort_maturity_v3, graph, dsl, query_dsl, regimes)
+
+        assert len(v2_rows) > 0, 'v2 returned no rows'
+        assert len(v3_rows) > 0, 'v3 returned no rows'
+        return v2_rows, v3_rows
+
+    def _assert_parity(self, v2_rows, v3_rows, label, midpoint_tol=0.03):
+        v2_by_tau = {r['tau_days']: r for r in v2_rows}
+        v3_by_tau = {r['tau_days']: r for r in v3_rows}
+        shared = sorted(set(v2_by_tau) & set(v3_by_tau))
+        assert len(shared) > 5, f'Too few shared τ: {len(shared)}'
+
+        failures = []
+        for tau in shared:
+            r2, r3 = v2_by_tau[tau], v3_by_tau[tau]
+            issues = []
+
+            mid2, mid3 = r2.get('midpoint'), r3.get('midpoint')
+            if mid2 is not None and mid3 is not None:
+                d = abs(mid2 - mid3)
+                if d > midpoint_tol:
+                    issues.append(f"midpoint: v2={mid2:.4f} v3={mid3:.4f} Δ={d:.4f}")
+
+            fb2 = (r2.get('fan_bands') or {}).get('90')
+            fb3 = (r3.get('fan_bands') or {}).get('90')
+            if fb2 and fb3:
+                w2 = fb2[1] - fb2[0]
+                w3 = fb3[1] - fb3[0]
+                if w2 > 0.01:
+                    wr = w3 / w2
+                    if abs(wr - 1.0) > 0.35:
+                        issues.append(f"fan_w90: v2={w2:.4f} v3={w3:.4f} ratio={wr:.2f}")
+
+            if issues:
+                failures.append(f"τ={tau}: " + "; ".join(issues))
+
+        _f = lambda v: f"{v:8.4f}" if isinstance(v, (int, float)) else "    None"
+        print(f"\n{label}: {len(shared)} shared τ")
+        for tau in shared[:20]:
+            r2, r3 = v2_by_tau[tau], v3_by_tau[tau]
+            m2, m3 = r2.get('midpoint'), r3.get('midpoint')
+            d = abs(m2 - m3) if m2 is not None and m3 is not None else 0
+            print(f"  τ={tau:3d}  mid:{_f(m2)}/{_f(m3)} Δ={d:.4f}")
+
+        assert len(failures) == 0, \
+            f"{label}: {len(failures)} τ diverge:\n" + "\n".join(failures[:15])
+
+    def test_single_edge_cohort_upstream(self):
+        """Single-edge cohort: m4-registered→m4-success, anchor=m4-landing.
+
+        anchor ≠ from_node, so ages are anchor-relative with upstream
+        lag. v3 must use path-level CDF, not edge-level.
+
+        Uses -14d: window so youngest cohorts are immature and the
+        forecast zone is populated (midpoint not None).
+        """
+        v2, v3 = self._run_both_m4(
+            'from(m4-registered).to(m4-success)', 'cohort(-14d:)')
+        # Must have some forecast-zone rows (midpoint not None)
+        v3_forecast = [r for r in v3 if r.get('midpoint') is not None]
+        assert len(v3_forecast) > 0, \
+            'No forecast-zone rows — test is vacuous without midpoints'
+        self._assert_parity(v2, v3, 'M4 single-edge cohort (upstream lag)')
+
+    def test_multihop_cohort_upstream(self):
+        """Multi-hop cohort: m4-delegated→m4-success, anchor=m4-landing.
+
+        Two-edge span in cohort mode with upstream lag.
+        """
+        v2, v3 = self._run_both_m4(
+            'from(m4-delegated).to(m4-success)', 'cohort(-14d:)')
+        v3_forecast = [r for r in v3 if r.get('midpoint') is not None]
+        assert len(v3_forecast) > 0, \
+            'No forecast-zone rows — test is vacuous without midpoints'
+        self._assert_parity(v2, v3, 'M4 multi-hop cohort (upstream lag)',
+                            midpoint_tol=0.05)
+
+    def test_window_mode_baseline(self):
+        """Window mode baseline — should be perfect parity."""
+        v2, v3 = self._run_both_m4(
+            'from(m4-registered).to(m4-success)', 'window(-14d:)')
+        self._assert_parity(v2, v3, 'M4 window baseline')
+
+
+def _load_prod_graph():
+    path = _DATA_REPO_DIR / 'graphs' / 'bayes-test-gm-rebuild.json'
+    if not path.exists():
+        pytest.skip(f'Prod graph not found at {path}')
+    return json.loads(path.read_text())
+
+
+@requires_db
+@requires_data_repo
+class TestProdGraphCohortParity:
+    """Cohort mode parity on the production graph.
+
+    Tests the exact queries the FE renders. Catches regressions
+    that synth graph tests miss because the production graph has
+    different topology (anchor far upstream, path params populated
+    by FE topo pass, no bayesian model_vars on some edges).
+    """
+
+    def _run_both_prod(self, dsl, query_dsl):
+        from api_handlers import _handle_cohort_maturity_v2, _handle_cohort_maturity_v3
+
+        graph = _load_prod_graph()
+        regimes = _get_candidate_regimes(graph)
+
+        v2_rows = _run_handler(_handle_cohort_maturity_v2, graph, dsl, query_dsl, regimes)
+        v3_rows = _run_handler(_handle_cohort_maturity_v3, graph, dsl, query_dsl, regimes)
+
+        assert len(v2_rows) > 0, 'v2 returned no rows'
+        assert len(v3_rows) > 0, 'v3 returned no rows'
+        return v2_rows, v3_rows
+
+    def test_single_edge_cohort_midpoint(self):
+        """Single-edge cohort: midpoint must track v2 within 5%.
+
+        Uses a narrow recent window matching the FE render query
+        to exercise the case with few young cohorts.
+        """
+        v2, v3 = self._run_both_prod(
+            'from(switch-registered).to(switch-success)',
+            'cohort(-7d:)')
+
+        v2_by_tau = {r['tau_days']: r for r in v2}
+        v3_by_tau = {r['tau_days']: r for r in v3}
+        shared = sorted(set(v2_by_tau) & set(v3_by_tau))
+
+        failures = []
+        for tau in shared:
+            m2 = v2_by_tau[tau].get('midpoint')
+            m3 = v3_by_tau[tau].get('midpoint')
+            if m2 is not None and m3 is not None:
+                d = abs(m2 - m3)
+                if d > 0.05:
+                    failures.append(f"τ={tau}: v2={m2:.4f} v3={m3:.4f} Δ={d:.4f}")
+
+        if failures:
+            # Print full comparison for diagnosis
+            for tau in shared:
+                m2 = v2_by_tau[tau].get('midpoint')
+                m3 = v3_by_tau[tau].get('midpoint')
+                d = abs(m2 - m3) if m2 is not None and m3 is not None else 0
+                _f = lambda v: f"{v:.4f}" if isinstance(v, (int, float)) else "None"
+                print(f"  τ={tau:3d}  mid:{_f(m2)}/{_f(m3)} Δ={d:.4f}")
+
+        assert len(failures) == 0, \
+            f"Midpoint diverges >10% at {len(failures)} τ:\n" + "\n".join(failures[:10])
+
+
+class _TestUpstreamLagParityInline:
+    """DISABLED — inline synth graphs don't exercise real snapshot pipeline.
+    Use TestUpstreamLagParity (synth-mirror-4step) instead.
+    """
+
+    @staticmethod
+    def _build_chain_graph():
+        """A→B→C→D chain with latency and path params on downstream edges."""
+        return {
+            'nodes': [
+                {'uuid': 'na', 'id': 'chain-a', 'entry': {'is_start': True}},
+                {'uuid': 'nb', 'id': 'chain-b'},
+                {'uuid': 'nc', 'id': 'chain-c'},
+                {'uuid': 'nd', 'id': 'chain-d'},
+            ],
+            'edges': [
+                {
+                    'uuid': 'e-ab', 'from': 'na', 'to': 'nb',
+                    'p': {
+                        'id': 'chain-a-to-b',
+                        'forecast': {'mean': 0.60},
+                        'latency': {
+                            'mu': 1.5, 'sigma': 0.8,
+                            'onset_delta_days': 2.0, 't95': 20.0,
+                            'mu_sd': 0.08, 'sigma_sd': 0.04, 'onset_sd': 0.5,
+                        },
+                        'posterior': {'alpha': 30.0, 'beta': 20.0},
+                        'model_vars': [{'source': 'analytic',
+                            'latency': {'mu': 1.5, 'sigma': 0.8,
+                                        'onset_delta_days': 2.0,
+                                        'mu_sd': 0.08, 'sigma_sd': 0.04,
+                                        'onset_sd': 0.5},
+                            'probability': {'mean': 0.60}}],
+                    },
+                },
+                {
+                    'uuid': 'e-bc', 'from': 'nb', 'to': 'nc',
+                    'p': {
+                        'id': 'chain-b-to-c',
+                        'forecast': {'mean': 0.70},
+                        'latency': {
+                            'mu': 2.0, 'sigma': 0.6,
+                            'onset_delta_days': 3.0, 't95': 25.0,
+                            'mu_sd': 0.06, 'sigma_sd': 0.03, 'onset_sd': 0.4,
+                            # Path-level: A→C via FW composition
+                            'path_mu': 2.8, 'path_sigma': 0.55,
+                            'path_onset_delta_days': 5.0, 'path_t95': 40.0,
+                        },
+                        'posterior': {'alpha': 35.0, 'beta': 15.0},
+                        'model_vars': [{'source': 'analytic',
+                            'latency': {'mu': 2.0, 'sigma': 0.6,
+                                        'onset_delta_days': 3.0,
+                                        'mu_sd': 0.06, 'sigma_sd': 0.03,
+                                        'onset_sd': 0.4},
+                            'probability': {'mean': 0.70}}],
+                    },
+                },
+                {
+                    'uuid': 'e-cd', 'from': 'nc', 'to': 'nd',
+                    'p': {
+                        'id': 'chain-c-to-d',
+                        'forecast': {'mean': 0.80},
+                        'latency': {
+                            'mu': 1.8, 'sigma': 0.5,
+                            'onset_delta_days': 1.0, 't95': 18.0,
+                            'mu_sd': 0.05, 'sigma_sd': 0.03, 'onset_sd': 0.3,
+                            # Path-level: A→D via FW composition
+                            'path_mu': 3.2, 'path_sigma': 0.5,
+                            'path_onset_delta_days': 6.0, 'path_t95': 50.0,
+                        },
+                        'posterior': {'alpha': 40.0, 'beta': 10.0},
+                        'model_vars': [{'source': 'analytic',
+                            'latency': {'mu': 1.8, 'sigma': 0.5,
+                                        'onset_delta_days': 1.0,
+                                        'mu_sd': 0.05, 'sigma_sd': 0.03,
+                                        'onset_sd': 0.3},
+                            'probability': {'mean': 0.80}}],
+                    },
+                },
+            ],
+            'policies': {
+                'default_outcome': 'dropout',
+                'overflow_policy': 'auto',
+                'free_edge_policy': 'auto',
+            },
+        }
+
+    @staticmethod
+    def _build_chain_frames(n_cohorts=12, n_per_cohort=200,
+                            true_rate=0.65, sweep_days=50):
+        """Synthetic frames for the B→D span.
+
+        Anchor-relative ages: cohort members entered A, so age 0 is
+        when they entered A. By age ~10 they reach B, by age ~20
+        they reach C, and conversions at D happen from age ~25+.
+        """
+        from datetime import date, timedelta
+        import random
+        random.seed(42)
+
+        anchor_to = date(2026, 3, 1)
+        sweep_to = anchor_to + timedelta(days=sweep_days)
+
+        frames = []
+        for day_offset in range(sweep_days + 1):
+            snapshot_date = anchor_to + timedelta(days=day_offset)
+            data_points = []
+            for c in range(n_cohorts):
+                anchor_day = anchor_to - timedelta(days=c * 3)
+                age = (snapshot_date - anchor_day).days
+                x = n_per_cohort
+                # Simulate path-level maturity: slow ramp reflecting
+                # upstream lag (cohorts take ~10 days to reach B)
+                effective_age = max(0, age - 10)
+                y = int(true_rate * x * min(1.0, effective_age / 25.0))
+                y = min(y, x)
+                data_points.append({
+                    'anchor_day': anchor_day.isoformat(),
+                    'x': x,
+                    'y': y,
+                    'a': x * 3,
+                })
+            frames.append({
+                'snapshot_date': snapshot_date.isoformat(),
+                'data_points': data_points,
+            })
+
+        return frames, anchor_to.isoformat(), sweep_to.isoformat()
+
+    def test_multihop_cohort_upstream_lag(self):
+        """from(b).to(d) cohort: anchor=A, multi-hop B→C→D.
+
+        v2 and v3 must agree on midpoint trajectory. This catches
+        the case where v3 uses edge-level CDF instead of path-level
+        for anchor-relative ages.
+        """
+        from api_handlers import _handle_cohort_maturity_v2, _handle_cohort_maturity_v3
+
+        graph = self._build_chain_graph()
+        frames, anchor_from, sweep_to = self._build_chain_frames()
+
+        # Call v3 directly (no DB needed — inline graph + frames)
+        from runner.cohort_forecast_v3 import compute_cohort_maturity_rows_v3
+        from runner.cohort_forecast import compute_cohort_maturity_rows
+
+        # v3
+        v3_rows = compute_cohort_maturity_rows_v3(
+            frames=frames, graph=graph,
+            target_edge_id='e-cd',
+            query_from_node='chain-b',
+            query_to_node='chain-d',
+            anchor_from=anchor_from,
+            anchor_to=anchor_from,
+            sweep_to=sweep_to,
+            is_window=False,
+            band_level=0.90,
+            anchor_node_id='chain-a',
+            is_multi_hop=True,
+        )
+
+        assert len(v3_rows) > 0, 'v3 returned no rows'
+
+        # Basic sanity: at maturity (τ≥40), midpoint should reflect
+        # true_rate (~0.65), not edge-level p (0.80) or path-level
+        # p (much lower).
+        mature = [r for r in v3_rows
+                  if r.get('midpoint') is not None and r['tau_days'] >= 40]
+        assert len(mature) > 0, 'No mature rows'
+        avg_mid = sum(r['midpoint'] for r in mature) / len(mature)
+        print(f'\n  Mature midpoint avg: {avg_mid:.4f} (expected ~0.65)')
+        assert 0.30 < avg_mid < 0.90, \
+            f'Mature midpoint {avg_mid:.4f} outside reasonable range'
+
+        # Fan should exist and have nonzero width
+        fan_rows = [r for r in v3_rows
+                    if r.get('fan_bands') and r['fan_bands'].get('90')]
+        assert len(fan_rows) > 5, f'Too few fan rows: {len(fan_rows)}'
+        widths = [r['fan_bands']['90'][1] - r['fan_bands']['90'][0]
+                  for r in fan_rows]
+        assert all(w > 0 for w in widths), 'Zero-width fan bands'
+        print(f'  Fan width range: [{min(widths):.4f}, {max(widths):.4f}]')
 
     def test_row_count_exact_match(self):
         """v3 row count must exactly match v2 for all modes.

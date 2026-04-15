@@ -39,6 +39,12 @@ def compute_cohort_maturity_rows_v3(
     x_provider_override=None,
     span_alpha=None,
     span_beta=None,
+    span_mu_sd=None,
+    span_sigma_sd=None,
+    span_onset_sd=None,
+    span_onset_mu_corr=None,
+    is_multi_hop=False,
+    resolved_override=None,
 ) -> List[Dict[str, Any]]:
     """Compute per-τ rows for cohort maturity v3 chart.
 
@@ -67,8 +73,13 @@ def compute_cohort_maturity_rows_v3(
         return []
 
     # ── Resolve model params ────────────────────────────────────────
-    temporal = 'window' if is_window else 'cohort'
-    resolved = resolve_model_params(target_edge, scope='edge', temporal_mode=temporal)
+    # Default: edge-level. When resolved_override is provided (e.g.
+    # collapsed shortcut with path latency + edge p), use it directly.
+    if resolved_override is not None:
+        resolved = resolved_override
+    else:
+        temporal = 'window' if is_window else 'cohort'
+        resolved = resolve_model_params(target_edge, scope='edge', temporal_mode=temporal)
     if not resolved or resolved.latency.sigma <= 0:
         return []
 
@@ -309,15 +320,28 @@ def compute_cohort_maturity_rows_v3(
         _cohort_x_at_tau.append(x_at_tau)
 
     # ── Engine call: per-cohort population model sweep ──────────────
+    # When to pass mc_cdf_arr from the span kernel:
+    # - Window mode: always (edge CDF, from-node-relative ages)
+    # - Cohort mode, multi-hop: always (span kernel = query path CDF)
+    # - Cohort mode, single-edge, anchor == from_node: yes (path = edge)
+    # - Cohort mode, single-edge, anchor != from_node: NO — edge CDF
+    #   doesn't match anchor-relative ages. Use path params from resolver.
+    _sweep_cdf = mc_cdf_arr
+    _sweep_p = mc_p_s
     sweep = compute_forecast_sweep(
         resolved=resolved,
         cohorts=engine_cohorts,
         max_tau=max_tau,
         from_node_arrival=from_node_arrival,
-        mc_cdf_arr=mc_cdf_arr,
-        mc_p_s=mc_p_s,
+        mc_cdf_arr=_sweep_cdf,
+        mc_p_s=_sweep_p,
         span_alpha=span_alpha,
         span_beta=span_beta,
+        span_mu_sd=span_mu_sd,
+        span_sigma_sd=span_sigma_sd,
+        span_onset_sd=span_onset_sd,
+        span_onset_mu_corr=span_onset_mu_corr,
+        det_norm_cdf=det_norm_cdf,
     )
 
     print(f"[v3] Engine sweep: IS_ESS={sweep.is_ess:.0f} "

@@ -291,6 +291,42 @@ def _ess_decay_scale(
     return 1.0 / (1.0 + elapsed_days * drift_sigma2 / v_phase1)
 
 
+def _compute_onset_obs_meta(onset_obs: list[float]) -> dict:
+    """Compute onset observation metadata for deferred emission.
+
+    Returns dict with onset_obs_mean, sigma_eff, n_obs, rho, n_eff.
+    Used for both edge-level and per-slice onset anchors.
+
+    The autocorrelation correction (rho) is critical: consecutive
+    onset measurements share overlapping populations and the same
+    histogram method. In production, rho ≈ 0.85. In synth data,
+    the onset generator uses AR(1) noise with matching rho. This
+    produces n_eff ≈ n * (1-rho)/(1+rho), giving sigma_eff in
+    the range 0.08–0.15 (informative but not dominating).
+    """
+    import numpy as np
+    onset_obs_np = np.array(onset_obs, dtype=np.float64)
+    raw_std = float(np.std(onset_obs_np))
+    sigma_obs = max(raw_std, 1.0 if raw_std < 1e-6 else 0.01)
+    onset_obs_mean = float(np.mean(onset_obs_np))
+    n_obs = len(onset_obs_np)
+    if n_obs >= 4 and np.std(onset_obs_np) > 1e-9:
+        rho = float(np.corrcoef(onset_obs_np[:-1], onset_obs_np[1:])[0, 1])
+        rho = rho if np.isfinite(rho) else 0.0
+        rho = max(min(rho, 0.99), 0.0)
+    else:
+        rho = 0.0
+    n_eff = max(n_obs * (1 - rho) / (1 + rho), 1.0)
+    sigma_eff = sigma_obs / max(n_eff ** 0.5, 1.0)
+    return {
+        "onset_obs_mean": onset_obs_mean,
+        "sigma_eff": sigma_eff,
+        "n_obs": n_obs,
+        "rho": rho,
+        "n_eff": n_eff,
+    }
+
+
 def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                 features: dict | None = None,
                 phase2_frozen: dict | None = None,
@@ -444,6 +480,8 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
         # For reparam edges, onset_obs metadata is computed here in §1
         # but the pm.Normal call is deferred to §3 (doc 34 §11.8.5).
         _onset_obs_deferred: dict[str, dict] = {}
+        # Per-slice onset deferral (doc 41a): edge_id → {ctx_key → meta}
+        _onset_obs_deferred_slice: dict[str, dict[str, dict]] = {}
         if feat_latent_onset:
             for edge_id in topology.topo_order:
                 et = topology.edges.get(edge_id)
@@ -479,29 +517,26 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                     # metadata here and stash for deferred emission.
                     onset_obs = getattr(lp, 'onset_observations', None)
                     if onset_obs and len(onset_obs) >= 3:
-                        onset_obs_np = np.array(onset_obs, dtype=np.float64)
-                        raw_std = float(np.std(onset_obs_np))
-                        sigma_obs = max(raw_std, 1.0 if raw_std < 1e-6 else 0.01)
-                        onset_obs_mean = float(np.mean(onset_obs_np))
-                        n_obs = len(onset_obs_np)
-                        if n_obs >= 4 and np.std(onset_obs_np) > 1e-9:
-                            rho = float(np.corrcoef(onset_obs_np[:-1], onset_obs_np[1:])[0, 1])
-                            rho = rho if np.isfinite(rho) else 0.0
-                            rho = max(min(rho, 0.99), 0.0)
-                        else:
-                            rho = 0.0
-                        n_eff = max(n_obs * (1 - rho) / (1 + rho), 1.0)
-                        sigma_eff = sigma_obs / max(n_eff ** 0.5, 1.0)
-                        _onset_obs_deferred[edge_id] = {
-                            "onset_obs_mean": onset_obs_mean,
-                            "sigma_eff": sigma_eff,
-                            "n_obs": n_obs,
-                            "rho": rho,
-                            "n_eff": n_eff,
-                        }
+                        _onset_obs_deferred[edge_id] = _compute_onset_obs_meta(onset_obs)
                     diagnostics.append(
                         f"  onset: {edge_id[:8]}… → deferred to §3 (reparam)"
                     )
+
+                    # Per-slice onset deferral (doc 41a): when per_slice_a
+                    # is active, also stash per-slice onset metadata.
+                    if feat_per_slice_a and ev.has_slices:
+                        for _sg in ev.slice_groups.values():
+                            for _ck, _so in _sg.slices.items():
+                                _so_onset = getattr(_so, 'onset_observations', None)
+                                if _so_onset and len(_so_onset) >= 3:
+                                    if edge_id not in _onset_obs_deferred_slice:
+                                        _onset_obs_deferred_slice[edge_id] = {}
+                                    _onset_obs_deferred_slice[edge_id][_ck] = (
+                                        _compute_onset_obs_meta(_so_onset))
+                                    diagnostics.append(
+                                        f"  onset_slice: {edge_id[:8]}… "
+                                        f"{_ck} → deferred to §3"
+                                    )
                 else:
                     # Phase 1: onset is a free parameter the model learns.
                     #
@@ -1585,6 +1620,36 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                                     _a_slice_vec))
 
                             _use_slice_latency_vecs = True
+
+                            # Per-slice onset anchors (doc 41a §per-slice
+                            # onset anchors): when per_slice_a is active
+                            # and per-slice onset observations exist, emit
+                            # one onset_obs per slice constraining
+                            # onset_slice_vec[k].
+                            _slice_deferred = _onset_obs_deferred_slice.get(
+                                edge_id, {})
+                            if _a_per_slice and _slice_deferred:
+                                _ctx_to_idx = {
+                                    ck: i for i, ck in enumerate(
+                                        _slice_ctx_keys)}
+                                for _ck, _sd in _slice_deferred.items():
+                                    _si = _ctx_to_idx.get(_ck)
+                                    if _si is None:
+                                        continue
+                                    _ck_safe = _safe_var_name(_ck)
+                                    pm.Normal(
+                                        f"onset_obs_slice_{safe_id}__{_ck_safe}",
+                                        mu=_onset_slice_vec[_si],
+                                        sigma=_sd["sigma_eff"],
+                                        observed=np.float64(
+                                            _sd["onset_obs_mean"]),
+                                    )
+                                    diagnostics.append(
+                                        f"  onset_obs_slice: "
+                                        f"{edge_id[:8]}… {_ck} "
+                                        f"mean={_sd['onset_obs_mean']:.1f}d"
+                                        f" σ_eff={_sd['sigma_eff']:.2f}d")
+
                             _parts = ["m"]
                             if _a_per_slice:
                                 _parts.append("a")

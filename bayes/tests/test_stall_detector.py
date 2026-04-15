@@ -42,15 +42,15 @@ class TestNoFalsePositives:
 
     def test_steady_fast(self):
         """Chain cruising at 50 draws/s — no stall."""
-        d = ChainStallDetector(grace_s=30, min_peak=10)
+        d = ChainStallDetector(grace_s=30, warmup_s=10)
         result = _feed(d, 0, [
             (120.0, 50.0, 0.5),  # 2 min at 50 draws/s
         ])
         assert result is None
 
     def test_steady_slow(self):
-        """Chain at 8 draws/s — below crawl_floor but peak never reaches min_peak."""
-        d = ChainStallDetector(grace_s=30, min_peak=10)
+        """Chain at 8 draws/s — above crawl_floor, no stall."""
+        d = ChainStallDetector(grace_s=30, warmup_s=10)
         result = _feed(d, 0, [
             (120.0, 8.0, 0.5),
         ])
@@ -58,7 +58,7 @@ class TestNoFalsePositives:
 
     def test_brief_dip_and_recovery(self):
         """Cruises at 50, dips to 2 for 10s, recovers. Not a stall."""
-        d = ChainStallDetector(grace_s=30, min_peak=10)
+        d = ChainStallDetector(grace_s=30, warmup_s=10)
         result = _feed(d, 0, [
             (30.0, 50.0, 0.5),   # establish peak
             (10.0, 2.0, 0.5),    # brief dip — under 30s grace
@@ -68,7 +68,7 @@ class TestNoFalsePositives:
 
     def test_moderate_slowdown(self):
         """Cruises at 50, slows to 20. That's 40% of peak — not crawling."""
-        d = ChainStallDetector(grace_s=30, min_peak=10)
+        d = ChainStallDetector(grace_s=30, warmup_s=10)
         result = _feed(d, 0, [
             (30.0, 50.0, 0.5),
             (60.0, 20.0, 0.5),  # slow but >10% of peak and >crawl_floor
@@ -77,7 +77,7 @@ class TestNoFalsePositives:
 
     def test_five_draws_per_second(self):
         """Cruises at 50, drops to 5. That's above crawl_floor of 3. Not a stall."""
-        d = ChainStallDetector(grace_s=30, crawl_floor=3.0, min_peak=10)
+        d = ChainStallDetector(grace_s=30, crawl_floor=3.0, warmup_s=10)
         result = _feed(d, 0, [
             (30.0, 50.0, 0.5),
             (60.0, 5.0, 0.5),
@@ -86,7 +86,7 @@ class TestNoFalsePositives:
 
     def test_end_of_run_slowdown(self):
         """Rate drops from 50 to 10 near end of run. Still 10 draws/s — fine."""
-        d = ChainStallDetector(grace_s=30, min_peak=10)
+        d = ChainStallDetector(grace_s=30, warmup_s=10)
         result = _feed(d, 0, [
             (60.0, 50.0, 0.5),
             (60.0, 10.0, 0.5),  # slower but well above crawl_floor
@@ -95,7 +95,7 @@ class TestNoFalsePositives:
 
     def test_intermittent_slow(self):
         """Alternates 50 and 2 draws/s every 10s. Never sustained for 30s."""
-        d = ChainStallDetector(grace_s=30, min_peak=10)
+        d = ChainStallDetector(grace_s=30, warmup_s=10)
         segments = []
         segments.append((20.0, 50.0, 0.5))  # establish peak
         for _ in range(10):
@@ -110,7 +110,7 @@ class TestRealStalls:
 
     def test_sustained_crawl(self):
         """Cruises at 50, drops to 0.5 for 60s. Genuine stall."""
-        d = ChainStallDetector(grace_s=30, min_peak=10)
+        d = ChainStallDetector(grace_s=30, warmup_s=10)
         result = _feed(d, 0, [
             (30.0, 50.0, 0.5),   # establish peak
             (60.0, 0.5, 0.5),    # crawl for 60s — well past 30s grace
@@ -121,7 +121,7 @@ class TestRealStalls:
 
     def test_sustained_near_zero(self):
         """Cruises at 50, drops to 0.1. Classic sandbank."""
-        d = ChainStallDetector(grace_s=30, min_peak=10)
+        d = ChainStallDetector(grace_s=30, warmup_s=10)
         result = _feed(d, 0, [
             (30.0, 50.0, 0.5),
             (60.0, 0.1, 0.5),
@@ -131,7 +131,7 @@ class TestRealStalls:
 
     def test_crawl_at_two_draws_per_second(self):
         """Cruises at 50, drops to 2. That's <3 AND <10% of 50. Stall."""
-        d = ChainStallDetector(grace_s=30, crawl_floor=3.0, min_peak=10)
+        d = ChainStallDetector(grace_s=30, crawl_floor=3.0, warmup_s=10)
         result = _feed(d, 0, [
             (30.0, 50.0, 0.5),
             (60.0, 2.0, 0.5),
@@ -140,7 +140,7 @@ class TestRealStalls:
 
     def test_stall_fires_after_grace_not_before(self):
         """Stall should fire at ~30s of crawl, not at 10s."""
-        d = ChainStallDetector(grace_s=30, min_peak=10)
+        d = ChainStallDetector(grace_s=30, warmup_s=10)
         # Cruise then crawl — check it doesn't fire too early
         t = 0.0
         total = 0.0
@@ -164,7 +164,7 @@ class TestRealStalls:
 
     def test_correct_chain_identified(self):
         """Two chains, only one crawls. Correct chain reported."""
-        d = ChainStallDetector(grace_s=10, min_peak=10)  # short grace for test speed
+        d = ChainStallDetector(grace_s=10, warmup_s=10)  # short grace for test speed
         t = 0.0
         total0 = 0.0
         total1 = 0.0
@@ -184,10 +184,10 @@ class TestRealStalls:
 class TestEdgeCases:
 
     def test_warmup_not_detected(self):
-        """Slow warmup (below min_peak) — no stall."""
-        d = ChainStallDetector(grace_s=30, min_peak=10)
+        """During warmup period — no stall even if rate is low."""
+        d = ChainStallDetector(grace_s=30, warmup_s=60)
         result = _feed(d, 0, [
-            (60.0, 2.0, 0.5),  # slow warmup — peak never reaches 10
+            (55.0, 2.0, 0.5),  # 55s — still within warmup_s=60
         ])
         assert result is None
 
@@ -197,7 +197,7 @@ class TestEdgeCases:
         Both conditions required."""
         # Above floor (4 draws/s) but below 10% of peak (50 → threshold 5)
         # 4 > 3 (floor) so NOT crawling
-        d = ChainStallDetector(grace_s=30, crawl_floor=3.0, min_peak=10)
+        d = ChainStallDetector(grace_s=30, crawl_floor=3.0, warmup_s=10)
         result = _feed(d, 0, [
             (30.0, 50.0, 0.5),
             (60.0, 4.0, 0.5),
@@ -208,7 +208,7 @@ class TestEdgeCases:
         """Peak is 12 draws/s, drops to 2. 2/12=17% > 10% ratio — no stall.
         But 2 < 3 floor. Both conditions must hold: 2 < 3 AND 2 < 1.2 (10% of 12)?
         2 is NOT < 1.2 so not crawling."""
-        d = ChainStallDetector(grace_s=30, crawl_floor=3.0, crawl_ratio=0.10, min_peak=10)
+        d = ChainStallDetector(grace_s=30, crawl_floor=3.0, crawl_ratio=0.10, warmup_s=10)
         result = _feed(d, 0, [
             (30.0, 12.0, 0.5),
             (60.0, 2.0, 0.5),
@@ -217,76 +217,50 @@ class TestEdgeCases:
         assert result is None
 
 
-class TestLaggardDetection:
-    """Cross-chain laggard detection — chains slow from the start."""
+class TestWarmupAndSlowChains:
+    """Chains that are slow from the start — detected after warmup_s."""
 
-    def test_laggard_detected_when_far_behind_siblings(self):
-        """Chain 0 never fast, siblings 10x ahead → laggard stall."""
-        d = ChainStallDetector(grace_s=30, min_peak=10)
+    def test_slow_from_start_detected_after_warmup(self):
+        """Chain at 0.5 draws/s from the start → stall after warmup + grace."""
+        d = ChainStallDetector(grace_s=30, warmup_s=60)
+        result = _feed(d, 0, [
+            (120.0, 0.5, 0.5),  # 2 min at 0.5 draws/s
+        ])
+        assert result is not None
+        assert result["rate"] < 3.0
+
+    def test_slow_from_start_not_detected_during_warmup(self):
+        """During warmup_s, even very slow chains are not flagged."""
+        d = ChainStallDetector(grace_s=30, warmup_s=60)
+        result = _feed(d, 0, [
+            (55.0, 0.5, 0.5),  # 55s — still in warmup
+        ])
+        assert result is None
+
+    def test_multiple_slow_chains_detected(self):
+        """Two slow chains, one fast — slow ones detected after warmup."""
+        d = ChainStallDetector(grace_s=30, warmup_s=60)
         t = 0.0
         result = None
-        # Simulate 3 chains: 0 is slow (0.5 draws/s), 1 and 2 fast (50 draws/s)
-        # Call check_laggard on every tick (mirrors the real sampling loop)
-        for step in range(200):  # 100 seconds at 0.5s intervals
+        for step in range(400):  # 200 seconds
             t += 0.5
-            d.update(0, int(0.5 * t), t)
-            d.update(1, int(50.0 * t), t)
-            d.update(2, int(50.0 * t), t)
-            all_draws = [int(0.5 * t), int(50.0 * t), int(50.0 * t)]
-            r = d.check_laggard(all_draws, t)
-            if r is not None:
-                result = r
-                break
-
+            d.update(0, int(50.0 * t), t)   # fast
+            d.update(1, int(0.5 * t), t)     # slow
+            d.update(2, int(0.6 * t), t)     # slow
+            if result is None:
+                r1 = d.update(1, int(0.5 * t), t)
+                r2 = d.update(2, int(0.6 * t), t)
+                result = r1 or r2
+        # After warmup (60s) + grace (30s), slow chains should be caught
         assert result is not None
-        assert result["chain"] == 0
-        assert result.get("laggard") is True
 
-    def test_no_laggard_when_all_similar(self):
-        """All chains at similar speed → no laggard."""
-        d = ChainStallDetector(grace_s=30, min_peak=10)
-        t = 0.0
-        for step in range(200):
-            t += 0.5
-            d.update(0, int(8.0 * t), t)
-            d.update(1, int(10.0 * t), t)
-            d.update(2, int(9.0 * t), t)
-        all_draws = [int(8.0 * t), int(10.0 * t), int(9.0 * t)]
-        result = d.check_laggard(all_draws, t)
-        assert result is None
-
-    def test_laggard_not_triggered_before_grace(self):
-        """Laggard must persist for grace_s before firing."""
-        d = ChainStallDetector(grace_s=30, min_peak=10)
-        t = 0.0
-        # Only 20 seconds — below grace_s of 30
-        for step in range(40):
-            t += 0.5
-            d.update(0, int(0.5 * t), t)
-            d.update(1, int(50.0 * t), t)
-        all_draws = [int(0.5 * t), int(50.0 * t)]
-        result = d.check_laggard(all_draws, t)
-        assert result is None
-
-    def test_laggard_skips_chain_with_high_peak(self):
-        """Chain that established high peak but later slowed is handled
-        by the normal detector, not the laggard path."""
-        d = ChainStallDetector(grace_s=30, min_peak=10)
-        t = 0.0
-        # Chain 0 starts fast then dies
-        for step in range(20):
-            t += 0.5
-            d.update(0, int(50.0 * t), t)
-            d.update(1, int(50.0 * t), t)
-        # Chain 0 stops progressing
-        frozen_draws = int(50.0 * t)
-        for step in range(200):
-            t += 0.5
-            d.update(0, frozen_draws, t)
-            d.update(1, int(50.0 * t), t)
-        all_draws = [frozen_draws, int(50.0 * t)]
-        result = d.check_laggard(all_draws, t)
-        # Should be None — chain 0 had high peak, normal detector handles it
+    def test_chain_that_warms_up_late_not_false_positive(self):
+        """Chain slow for 50s then accelerates → no stall."""
+        d = ChainStallDetector(grace_s=30, warmup_s=60)
+        result = _feed(d, 0, [
+            (70.0, 0.5, 0.5),   # slow through warmup + 10s
+            (60.0, 50.0, 0.5),  # then fast
+        ])
         assert result is None
 
 

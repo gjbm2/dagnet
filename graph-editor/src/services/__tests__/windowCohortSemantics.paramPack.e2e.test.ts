@@ -4,7 +4,7 @@
  * IMPORTANT — THIS FILE IS DELIBERATELY OUTCOME-FIRST.
  * ----------------------------------------------------
  * These tests are written from *first principles* / user-visible outcomes and are intended to
- * drive implementation. Do not “fix” these tests by mirroring current code behaviour.
+ * drive implementation. Do not "fix" these tests by mirroring current code behaviour.
  *
  * Canonical references (treat as spec):
  * - `graph-editor/public/docs/lag-statistics-reference.md`
@@ -36,6 +36,9 @@ import type { Graph } from '../../types';
 import { computeBlendedMean } from '../statisticalEnhancementService';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+/** Deterministic analysis date for LAG age calculations. */
+const QUERY_DATE = new Date('2025-12-15T12:00:00.000Z');
 
 function loadTestParameterYaml(id: string): any {
   const paramPath = path.resolve(__dirname, `../../../../param-registry/test/parameters/${id}.yaml`);
@@ -176,7 +179,7 @@ describe('Window/Cohort LAG semantics (param-pack integration)', () => {
       // CRITICAL: Use fetchItems (not fetchItem) to trigger the LAG topo pass.
       // fetchItem is a low-level primitive that skips LAG; fetchItems runs the full pipeline.
       const dsl = 'window(8-Nov-25:10-Nov-25)';
-      const results = await fetchDataService.fetchItems(items, { mode: 'from-file' }, graph as Graph, setGraph, dsl, getUpdatedGraph);
+      const results = await fetchDataService.fetchItems(items, { mode: 'from-file', queryDate: QUERY_DATE }, graph as Graph, setGraph, dsl, getUpdatedGraph);
       expect(results.every(r => r.success)).toBe(true);
 
       const updated = graph as any;
@@ -222,7 +225,7 @@ describe('Window/Cohort LAG semantics (param-pack integration)', () => {
 
       // Earlier window subset: first 3 days are 0% conversion in the fixture.
       const dsl = 'window(1-Nov-25:3-Nov-25)';
-      const results = await fetchDataService.fetchItems(items, { mode: 'from-file' }, graph as Graph, setGraph, dsl, getUpdatedGraph);
+      const results = await fetchDataService.fetchItems(items, { mode: 'from-file', queryDate: QUERY_DATE }, graph as Graph, setGraph, dsl, getUpdatedGraph);
       expect(results.every(r => r.success)).toBe(true);
 
       const updated = graph as any;
@@ -257,7 +260,7 @@ describe('Window/Cohort LAG semantics (param-pack integration)', () => {
       // Huge query window that fully contains the stored 1–10 Nov slice.
       const results = await fetchDataService.fetchItems(
         items,
-        { mode: 'from-file' },
+        { mode: 'from-file', queryDate: QUERY_DATE },
         graph as Graph,
         setGraph,
         'window(1-Oct-25:30-Nov-25)',
@@ -294,7 +297,7 @@ describe('Window/Cohort LAG semantics (param-pack integration)', () => {
         paramSlot: 'p',
       };
 
-      const result = await fetchItem(item, { mode: 'from-file' }, graph as Graph, setGraph, 'window(1-Nov-25:3-Nov-25)', () => graph);
+      const result = await fetchItem(item, { mode: 'from-file', queryDate: QUERY_DATE }, graph as Graph, setGraph, 'window(1-Nov-25:3-Nov-25)', () => graph);
       expect(result.success).toBe(true);
 
       const edge = (graph as any).edges.find((e: any) => e.id === 'edge-A-B');
@@ -328,7 +331,7 @@ describe('Window/Cohort LAG semantics (param-pack integration)', () => {
       ];
 
       const dsl = 'window(8-Nov-25:10-Nov-25)';
-      const results = await fetchDataService.fetchItems(items, { mode: 'from-file' }, graph as Graph, setGraph, dsl, getUpdatedGraph);
+      const results = await fetchDataService.fetchItems(items, { mode: 'from-file', queryDate: QUERY_DATE }, graph as Graph, setGraph, dsl, getUpdatedGraph);
       expect(results.every(r => r.success)).toBe(true);
 
       const updated = graph as any;
@@ -433,7 +436,7 @@ describe('Window/Cohort LAG semantics (param-pack integration)', () => {
 
         const items: FetchItem[] = [createFetchItem('parameter', paramId, 'edge-A-B')];
         const dsl = 'cohort(A,6-Dec-25:8-Dec-25)';
-        const results = await fetchDataService.fetchItems(items, { mode: 'from-file' }, graph as Graph, setGraph, dsl, getUpdatedGraph);
+        const results = await fetchDataService.fetchItems(items, { mode: 'from-file', queryDate: QUERY_DATE }, graph as Graph, setGraph, dsl, getUpdatedGraph);
         expect(results.every(r => r.success)).toBe(true);
 
         const edge = (graph as any).edges.find((e: any) => e.id === 'edge-A-B');
@@ -617,7 +620,7 @@ describe('Window/Cohort LAG semantics (param-pack integration)', () => {
         // into downstream completeness calculations.
         await fetchDataService.fetchItems(
           items,
-          { mode: 'from-file' },
+          { mode: 'from-file', queryDate: QUERY_DATE },
           currentGraph as Graph,
           setGraph,
           'cohort(A,1-Dec-25:7-Dec-25)',
@@ -647,5 +650,4 @@ describe('Window/Cohort LAG semantics (param-pack integration)', () => {
 
   // (Phase 2 override tests are now enabled above.)
 });
-
 

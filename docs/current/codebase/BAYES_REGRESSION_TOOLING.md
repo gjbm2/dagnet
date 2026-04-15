@@ -182,7 +182,7 @@ synthetic harness logs).
 |------|------|---------|
 | `--feature KEY=VALUE` | All three | Model feature flag (e.g. `latency_dispersion=true`). Forwarded through the full chain. `jax_backend` defaults to `true` since 13-Apr-26 — no flag needed. |
 | `--clean` | All three | Clear `__pycache__` dirs under `bayes/` and `graph-editor/lib/`. Prevents stale bytecode from masking source edits. Does NOT touch synth data or DB rows. |
-| `--rebuild` | All three | Delete `.synth-meta.json` for the target graph, forcing `verify_synth_data` to re-check DB with fresh hashes. Heavy — triggers full DB re-insert of synth rows. Only needed after truth file or `synth_gen.py` changes. |
+| `--rebuild` | All three | Delete `.synth-meta.json` for the target graph, forcing `verify_synth_data` to re-check DB with fresh hashes. Heavy — triggers full DB re-insert of synth rows. Only needed after truth file or `synth_gen.py` changes. **Does NOT work with `--no-mcmc`** — see pitfall below. |
 | `--no-timeout` | `run_regression.py` | Disable all timeout layers (subprocess, harness watchdog). Passes `--timeout 0` through the chain. Useful for large contexted graphs where sampling time is unpredictable. |
 | `--exclude SUBSTR` | `run_regression.py` | Skip graphs whose name contains the substring. |
 | `--job-label LABEL` | `param_recovery.py`, `test_harness.py` | Unique label for log + lock files. `run_regression.py` auto-generates `{graph}-r{timestamp}` to prevent parallel runs from colliding. |
@@ -226,6 +226,29 @@ it automatically bootstraps via `synth_gen.py --write-files`.
 The gate runs after graph loading and before hash computation. It
 uses `verify_synth_data()` from `synth_gen.py`, which checks both
 the `.synth-meta.json` sidecar and actual DB row counts.
+
+### Direct rebuild
+
+To force synth data regeneration without running MCMC:
+
+```
+synth_gen.py --graph synth-X --write-files --bust-cache
+```
+
+This runs the full pipeline (simulate, hash, write to DB, write
+param files, write synth-meta) in ~10s. The output includes an
+onset observation summary showing per-edge and per-slice onset
+means — use this to verify per-slice onset values are correct
+before running recovery tests.
+
+### Onset observation noise (15-Apr-26)
+
+Onset observations use log-normal noise (`onset * lognormal(0,
+log_sigma)` where `log_sigma` defaults to 0.3). This replaced
+clipped Gaussian noise which introduced systematic upward bias
+on small-onset edges via `max(0, ...)` clipping. The
+`log_sigma` is configurable per edge via `onset_obs_log_sigma`
+in the truth file.
 
 ---
 
@@ -302,6 +325,41 @@ Fix: `--rebuild` deletes the `.synth-meta.json`, forcing
 `verify_synth_data()` to recompute hashes from the graph JSON and
 query the DB with the new (correct) hashes. Note: `--clean` does NOT
 delete synth-meta — use `--rebuild` specifically for this case.
+
+### `--rebuild --no-mcmc` is a no-op for synth data (15-Apr-26)
+
+`--rebuild` deletes `.synth-meta.json`. But `--no-mcmc` skips
+payload construction, which skips the synth data gate
+(`test_harness.py` line 769: `if graph_name.startswith("synth-")
+and not _skip_payload_construction`). So `verify_synth_data` never
+runs and the DB rows are never re-inserted.
+
+The rebuild only takes effect on the NEXT run that does NOT use
+`--no-mcmc`. To force immediate re-bootstrap, use `--rebuild`
+with minimal MCMC (`--tune 10 --draws 10 --chains 1`) instead of
+`--no-mcmc`.
+
+### Persistent recovery logs (15-Apr-26)
+
+`param_recovery.py` tees all output to a persistent log file at
+`/tmp/bayes_recovery-{job_label}.log`. This survives parent
+process death — if a comparison script is killed mid-run,
+completed graphs' results are on disk. Each run should use a
+unique `--job-label` (e.g. with a timestamp suffix) to prevent
+log collisions across runs.
+
+### Stall detector: laggard chains (15-Apr-26)
+
+The `ChainStallDetector` has a `min_peak` threshold (10 draws/s)
+— chains that never reach this peak rate are not checked for
+stalls. This misses chains that are slow from the start (they
+never establish a peak rate). The `check_laggard()` method
+(added 15-Apr-26) performs a cross-chain comparison: if a chain
+has completed <10% of the median draws across siblings AND its
+rate is below `crawl_floor` for `grace_s`, it is flagged as a
+laggard stall. This catches the case where one chain is
+pathologically slow from initialisation while siblings run
+normally.
 
 ### JAX backend is the default (13-Apr-26)
 

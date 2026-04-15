@@ -416,6 +416,17 @@ def bind_snapshot_evidence(
         # --- Phase C: route sliced observations to SliceGroups ---
         _route_slices(ev, settings, diagnostics, commissioned=edge_commissioned)
 
+        # --- Apply pending per-slice onset observations (doc 41a) ---
+        _pending = getattr(ev, '_pending_slice_onset', None)
+        if _pending and ev.slice_groups:
+            for _sg in ev.slice_groups.values():
+                for _ctx_key, _s_obs in _sg.slices.items():
+                    _so_data = _pending.get(_ctx_key)
+                    if _so_data and _so_data["obs"]:
+                        _s_obs.onset_observations = _so_data["obs"]
+            if hasattr(ev, '_pending_slice_onset'):
+                del ev._pending_slice_onset
+
         # --- Recompute total_n to reflect actual modelled data ---
         # When slices are exhaustive the aggregate is suppressed — total_n
         # must reflect per-slice totals, not the (regime-stripped) aggregate.
@@ -798,21 +809,44 @@ def _bind_from_snapshot_rows(
         _filter_ctx = bool(commissioned)
         seen_dates: set[str] = set()
         onset_obs: list[float] = []
+        # Per-slice onset collection (doc 41a): keyed by context prefix
+        _slice_onset: dict[str, dict] = {}  # ctx_key → {seen_dates, obs}
         for row in rows:
-            if _filter_ctx:
-                _sk = row.get("slice_key", "")
-                if _sk and "context(" in _sk:
-                    continue
+            _sk = row.get("slice_key", "")
+            _is_ctx = bool(_sk and "context(" in _sk)
+
             onset_val = row.get("onset_delta_days")
             if onset_val is None:
                 continue
             ret_date = str(row.get("retrieved_at", ""))[:10]
+
+            # Per-slice collection: bucket by context prefix
+            if _is_ctx and _filter_ctx:
+                # Extract context key: "context(ch:goog).window(...)" → "context(ch:goog)"
+                _dot = _sk.find(".")
+                _ctx_key = _sk[:_dot] if _dot >= 0 else _sk
+                if _ctx_key not in _slice_onset:
+                    _slice_onset[_ctx_key] = {"seen": set(), "obs": []}
+                _so = _slice_onset[_ctx_key]
+                if ret_date not in _so["seen"]:
+                    _so["seen"].add(ret_date)
+                    _so["obs"].append(float(onset_val))
+                continue  # don't include in edge-level
+
+            # Edge-level (aggregate rows)
             if ret_date in seen_dates:
                 continue
             seen_dates.add(ret_date)
             onset_obs.append(float(onset_val))
+
         if onset_obs:
             ev.latency_prior.onset_observations = onset_obs
+
+        # Stash per-slice onset obs on SliceObservations (populated
+        # after _route_slices runs — we store them on ev temporarily
+        # and apply in a post-pass below).
+        if _slice_onset:
+            ev._pending_slice_onset = _slice_onset
 
     # Return covered anchor_days so the caller can deduplicate
     # param-file supplementation.

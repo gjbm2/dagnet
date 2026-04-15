@@ -2493,7 +2493,7 @@ export function enhanceGraphLatencies(
       // makes completeness look artificially high.
       let observedAnchorMedianDays = 0;
       const cohortsWithAnchorLag = (cohortsAll.length > 0 ? cohortsAll : cohortsScoped).filter(c =>
-        c.anchor_median_lag_days !== undefined && 
+        c.anchor_median_lag_days !== undefined &&
         Number.isFinite(c.anchor_median_lag_days) &&
         c.anchor_median_lag_days > 0 &&
         c.n > 0

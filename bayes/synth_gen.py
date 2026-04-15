@@ -1669,11 +1669,26 @@ def _generate_observations_nightly(
             onset = ep.get("onset", 0.0)
             if onset <= 0:
                 continue
-            obs_sigma = ep.get("onset_obs_sigma", max(onset * 0.1, 0.1))
+            # Per-observation onset noise: aligned with onset_uncertainty
+            # Log-normal noise with temporal autocorrelation.
+            #
+            # In production, onset estimates from consecutive retrieval
+            # dates share overlapping user populations and the same
+            # histogram method — they're highly correlated (rho ≈ 0.85).
+            # Independent draws produce n_eff ≈ n, shrinking sigma_eff
+            # to ~0.03 and making the anchor dominate trajectory data.
+            # AR(1) correlated draws produce n_eff ≈ n*(1-rho)/(1+rho),
+            # giving sigma_eff ≈ 0.08–0.11 — informative but not
+            # dominating (doc 41 §5).
+            _log_sigma = ep.get("onset_obs_log_sigma", 0.3)
+            _onset_rho = ep.get("onset_obs_rho", 0.85)
             # Edge-level (bare aggregate) onset observations
             onset_obs_by_edge[edge_id] = {}
+            _log_noise = 0.0  # AR(1) state
+            _innov_sigma = _log_sigma * math.sqrt(1 - _onset_rho ** 2)
             for fn in fetch_nights:
-                noisy = max(0.0, float(rng.normal(onset, obs_sigma)))
+                _log_noise = _onset_rho * _log_noise + rng.normal(0, _innov_sigma)
+                noisy = float(onset * math.exp(_log_noise))
                 onset_obs_by_edge[edge_id][fn] = round(noisy, 2)
             # Per-slice onset observations (with context offsets)
             for dim in context_dims:
@@ -1693,12 +1708,30 @@ def _generate_observations_nightly(
                     slice_onset = max(onset + _ov.get("onset_offset", 0.0), 0.0)
                     if slice_onset <= 0:
                         continue
-                    slice_sigma = max(slice_onset * 0.1, 0.1)
                     ctx_key = f"context({dim['id']}:{val['id']})"
                     onset_obs_by_slice[(edge_id, ctx_key)] = {}
+                    _sl_log_noise = 0.0
                     for fn in fetch_nights:
-                        noisy = max(0.0, float(rng.normal(slice_onset, slice_sigma)))
+                        _sl_log_noise = (_onset_rho * _sl_log_noise
+                                         + rng.normal(0, _innov_sigma))
+                        noisy = float(slice_onset * math.exp(_sl_log_noise))
                         onset_obs_by_slice[(edge_id, ctx_key)][fn] = round(noisy, 2)
+
+    # ── Onset observation summary ──────────────────────────────────────
+    if onset_obs_by_edge:
+        print("  Onset observations:", flush=True)
+        for eid, obs in onset_obs_by_edge.items():
+            pid = topology.edges[eid].param_id if eid in topology.edges else eid
+            vals = list(obs.values())
+            mean_v = sum(vals) / len(vals) if vals else 0
+            print(f"    {pid[:40]:<40s} base mean={mean_v:.2f} "
+                  f"({len(vals)} obs)", flush=True)
+        for (eid, ck), obs in onset_obs_by_slice.items():
+            vals = list(obs.values())
+            mean_v = sum(vals) / len(vals) if vals else 0
+            pid = topology.edges[eid].param_id if eid in topology.edges else eid
+            print(f"    {pid[:25]:<25s} {ck:<30s} mean={mean_v:.2f} "
+                  f"({len(vals)} obs)", flush=True)
 
     # ── Generate cohort rows ────────────────────────────────────────────
     # Cohort: anchor_day = simulation day (within observable window only),
@@ -2720,8 +2753,11 @@ def update_graph_edge_metadata(
             continue
 
         p = edge.setdefault("p", {})
-        # Clear stale analytical fields from prior runs
-        for stale_key in ["mean", "n", "forecast", "stdev", "evidence"]:
+        # Clear stale analytical fields from prior runs.
+        # forecast, mean, evidence etc. are populated by the hydrate
+        # step (graph-ops/scripts/hydrate.sh) which runs the real FE
+        # aggregation + promotion + topo pass pipeline.
+        for stale_key in ["mean", "n", "stdev", "evidence", "forecast"]:
             p.pop(stale_key, None)
 
         # Set query string at edge top level (FE reads edge.query)
@@ -2780,6 +2816,34 @@ def update_graph_edge_metadata(
                 break
         if anchor_node and anchor_node.get("event_id"):
             p["cohort_anchor_event_id"] = anchor_node["event_id"]
+
+    # ── Write path-level latency from topology's FW composition ────
+    # The compiler topology already computes path_latency via FW
+    # composition in _compute_paths. Write these to the graph so
+    # resolve_model_params(scope='path') can find them.
+    for edge_id, et in topology.edges.items():
+        if not et.path_latency:
+            continue
+        edge = edge_by_uuid.get(edge_id)
+        if not edge:
+            continue
+        lat = edge.get("p", {}).get("latency", {})
+        e_mu = lat.get("mu")
+        if e_mu is None:
+            continue
+        pl = et.path_latency
+        # Only write path params when they differ from edge-level
+        # (i.e. there's upstream latency contributing)
+        if abs(pl.path_mu - float(e_mu)) > 0.001 or pl.path_delta > 0.01:
+            lat["path_mu"] = round(pl.path_mu, 4)
+            lat["path_sigma"] = round(pl.path_sigma, 4)
+            lat["path_onset_delta_days"] = round(pl.path_delta, 2)
+            try:
+                from runner.lag_distribution_utils import log_normal_inverse_cdf
+                lat["path_t95"] = round(
+                    pl.path_delta + log_normal_inverse_cdf(0.95, pl.path_mu, pl.path_sigma), 2)
+            except Exception:
+                lat["path_t95"] = round(pl.path_delta + 30, 2)
 
     with open(graph_path, "w") as f:
         json.dump(graph, f, indent=2, ensure_ascii=False)

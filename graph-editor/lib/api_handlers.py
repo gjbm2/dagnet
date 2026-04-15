@@ -962,8 +962,14 @@ def _handle_cohort_maturity_v2(data: Dict[str, Any]) -> Dict[str, Any]:
                 try:
                     from runner.graph_builder import build_networkx_graph
                     from runner.path_runner import calculate_path_probability
+                    # build_networkx_graph uses UUIDs; anchor_node and
+                    # query_from_node are human IDs — must convert.
+                    _id_to_uuid_v2 = {n.get('id', ''): n['uuid']
+                                      for n in graph_data.get('nodes', [])}
+                    _a_uuid_v2 = _id_to_uuid_v2.get(anchor_node, anchor_node)
+                    _x_uuid_v2 = _id_to_uuid_v2.get(query_from_node, query_from_node)
                     G = build_networkx_graph(graph_data)
-                    path_result = calculate_path_probability(G, anchor_node, query_from_node)
+                    path_result = calculate_path_probability(G, _a_uuid_v2, _x_uuid_v2)
                     _reach_to_x = path_result.probability
                 except Exception as _e:
                     print(f"[v2] reach computation failed: {_e}")
@@ -1429,71 +1435,136 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
         _det_span_p = None
         _span_alpha_v3 = None
         _span_beta_v3 = None
+        _span_params_v3 = None
+        # Collapsed shortcut flag: single-edge cohort mode with path
+        # params available. Mirrors v2 planner (line 1107-1122).
+        # When true, build span topology from anchor → to_node (path
+        # CDF) instead of from_node → to_node (edge CDF), and skip the
+        # carrier — upstream timing is already in the path CDF.
+        _v3_use_collapsed = False
         if composed_frames and last_edge_id and query_from_node and query_to_node:
             from runner.span_kernel import compose_span_kernel, _build_span_topology, mc_span_cdfs
-            # Deterministic span kernel for forecast_y/forecast_x (v2 parity)
+            _is_multi_hop_v3 = len(subjects) > 1
+
+            # Detect collapsed shortcut admissibility (v2 parity)
+            _v3_has_path_params = False
+            if not _is_multi_hop_v3 and not is_window and anchor_node and anchor_node != query_from_node:
+                from runner.cohort_forecast import find_edge_by_id
+                _v3_edge = find_edge_by_id(graph_data, last_edge_id)
+                if _v3_edge:
+                    _v3_lat = _v3_edge.get('p', {}).get('latency', {})
+                    _v3_has_path_params = (
+                        _v3_lat.get('path_mu') is not None
+                        and _v3_lat.get('path_sigma') is not None
+                        and (_v3_lat.get('path_sigma') or 0) > 0
+                    )
+            _v3_use_collapsed = not _is_multi_hop_v3 and _v3_has_path_params and not is_window
+
+            # Choose span topology: anchor → to_node for collapsed shortcut,
+            # from_node → to_node otherwise.
+            _span_x_node = anchor_node if _v3_use_collapsed else query_from_node
+            if _v3_use_collapsed:
+                print(f"[v3] planner: collapsed shortcut (single-edge, path params available, "
+                      f"span {_span_x_node}→{query_to_node})")
+            else:
+                print(f"[v3] planner: factorised (multi_hop={_is_multi_hop_v3} "
+                      f"path_params={_v3_has_path_params} window={is_window})")
+
+            # Deterministic span kernel for forecast_y/forecast_x (v2 parity).
             _kernel_v3 = compose_span_kernel(
                 graph=graph_data,
-                x_node_id=query_from_node,
+                x_node_id=_span_x_node,
                 y_node_id=query_to_node,
                 is_window=is_window,
                 max_tau=400,
             )
             if _kernel_v3 is not None and _kernel_v3.span_p > 0:
-                _det_span_p = _kernel_v3.span_p
                 _det_norm_cdf = [
                     min(max(_kernel_v3.cdf_at(t) / _kernel_v3.span_p, 0.0), 1.0)
                     for t in range(401)
                 ]
-                # Span-adapted alpha/beta for IS conditioning parity
-                # (v2 uses build_span_params which gets these from span_adapter)
+                if _v3_use_collapsed:
+                    # Collapsed shortcut: path CDF for timing, edge p for rate.
+                    # Build a separate edge kernel to get edge span_p.
+                    _edge_kernel = compose_span_kernel(
+                        graph=graph_data,
+                        x_node_id=query_from_node,
+                        y_node_id=query_to_node,
+                        is_window=is_window,
+                        max_tau=400,
+                    )
+                    _det_span_p = _edge_kernel.span_p if _edge_kernel else _kernel_v3.span_p
+                else:
+                    _det_span_p = _kernel_v3.span_p
+                # Span-adapted params for IS conditioning parity
+                # (v2 uses build_span_params which gets alpha/beta and SDs
+                # from span_adapter, NOT from resolve_model_params)
                 from runner.span_adapter import span_kernel_to_edge_params
+                from runner.cohort_forecast_v2 import build_span_params
                 _span_edge_params = span_kernel_to_edge_params(
                     _kernel_v3, graph_data, last_edge_id, is_window=is_window)
-                if is_window:
-                    _raw_a = _span_edge_params.get('posterior_alpha', 0.0) or 0.0
-                    _raw_b = _span_edge_params.get('posterior_beta', 0.0) or 0.0
-                else:
-                    _raw_a = _span_edge_params.get('posterior_path_alpha', 0.0) or 0.0
-                    _raw_b = _span_edge_params.get('posterior_path_beta', 0.0) or 0.0
-                if _raw_a > 0 and _raw_b > 0:
-                    kappa = _raw_a + _raw_b
-                    _span_alpha_v3 = _det_span_p * kappa
-                    _span_beta_v3 = (1.0 - _det_span_p) * kappa
-                else:
-                    _KAPPA_DEFAULT = 20.0
-                    _span_alpha_v3 = _det_span_p * _KAPPA_DEFAULT
-                    _span_beta_v3 = (1.0 - _det_span_p) * _KAPPA_DEFAULT
-            # MC draws for fan bands / midpoint
-            _span_topo_v3 = _build_span_topology(graph_data, query_from_node, query_to_node)
-            if _span_topo_v3 is not None:
-                import numpy as _np
-                _rng_v3 = _np.random.default_rng(42)
-                _mc_cdf_v3, _mc_p_v3 = mc_span_cdfs(
-                    topo=_span_topo_v3,
-                    graph=graph_data,
-                    is_window=is_window,
-                    max_tau=400,
-                    num_draws=2000,
-                    rng=_rng_v3,
-                )
+                def _norm_cdf_v3(tau):
+                    raw = _kernel_v3.cdf_at(int(round(tau)))
+                    return raw / _kernel_v3.span_p
+                _span_params_v3 = build_span_params(
+                    _norm_cdf_v3, _kernel_v3.span_p, 400,
+                    _span_edge_params, is_window=is_window)
+                _span_alpha_v3 = _span_params_v3.alpha_0
+                _span_beta_v3 = _span_params_v3.beta_0
+            # MC draws.
+            # Collapsed shortcut: DON'T pass mc_cdf_arr — let the engine
+            # generate CDF from path-level resolved latency (continuous
+            # lognormal, matching v1). Pass resolved_override with path
+            # latency + edge p instead.
+            if not _v3_use_collapsed:
+                _span_topo_v3 = _build_span_topology(graph_data, query_from_node, query_to_node)
+                if _span_topo_v3 is not None:
+                    import numpy as _np
+                    _rng_v3 = _np.random.default_rng(42)
+                    _mc_cdf_v3, _mc_p_v3 = mc_span_cdfs(
+                        topo=_span_topo_v3,
+                        graph=graph_data,
+                        is_window=is_window,
+                        max_tau=400,
+                        num_draws=2000,
+                        rng=_rng_v3,
+                    )
 
         # ── Build x_provider (matching v2 handler construction) ────────
+        # Skip carrier when using collapsed shortcut — upstream timing
+        # is already in the path CDF, building a carrier would double-count.
         _v3_x_provider = None
-        if not is_window and query_from_node and anchor_node:
+        if _v3_use_collapsed:
+            # Pass a dummy x_provider with reach=0 to prevent the row
+            # builder from building its own carrier from the graph.
+            from runner.cohort_forecast import XProvider
+            _v3_x_provider = XProvider(
+                reach=0.0,
+                upstream_params_list=[],
+                enabled=False,
+                ingress_carrier=None,
+                upstream_obs=None,
+            )
+        elif not is_window and query_from_node and anchor_node:
             from runner.cohort_forecast import XProvider, get_incoming_edges, read_edge_cohort_params
             _v3_ingress = []
             for inc_edge in get_incoming_edges(graph_data, query_from_node):
                 _params = read_edge_cohort_params(inc_edge)
                 if _params:
                     _v3_ingress.append(_params)
-            # Compute reach from anchor to x
+            # Compute reach from anchor to x.
+            # build_networkx_graph uses UUIDs; anchor_node and
+            # query_from_node are human IDs — must convert.
             _v3_reach = 0.0
             try:
                 from runner.graph_builder import build_networkx_graph
                 from runner.path_runner import calculate_path_probability
+                _id_to_uuid = {n.get('id', ''): n['uuid']
+                               for n in graph_data.get('nodes', [])}
+                _a_uuid = _id_to_uuid.get(anchor_node, anchor_node)
+                _x_uuid = _id_to_uuid.get(query_from_node, query_from_node)
                 G = build_networkx_graph(graph_data)
-                path_result = calculate_path_probability(G, anchor_node, query_from_node)
+                path_result = calculate_path_probability(G, _a_uuid, _x_uuid)
                 _v3_reach = path_result.probability
             except Exception:
                 pass
@@ -1508,7 +1579,41 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
                 upstream_obs=None,
             )
 
+        # ── Build resolved_override for collapsed shortcut ────────────
+        # Collapsed shortcut: path latency (for CDF timing) + edge p
+        # (for rate). Matches v1's behaviour: CDF uses path_mu/path_sigma,
+        # probability stays edge-level.
+        _v3_resolved_override = None
+        if _v3_use_collapsed and last_edge_id:
+            from runner.model_resolver import resolve_model_params as _rmp
+            from runner.cohort_forecast import find_edge_by_id as _find_edge
+            _v3_edge_for_resolve = _find_edge(graph_data, last_edge_id)
+            if _v3_edge_for_resolve:
+                # Path latency
+                _r_path = _rmp(_v3_edge_for_resolve, scope='path', temporal_mode='cohort')
+                # Edge probability
+                _r_edge = _rmp(_v3_edge_for_resolve, scope='edge', temporal_mode='window')
+                if _r_path and _r_edge and _r_path.latency.sigma > 0:
+                    from runner.model_resolver import ResolvedModelParams as _RMP
+                    _v3_resolved_override = _RMP(
+                        p_mean=_r_edge.p_mean,
+                        p_sd=_r_edge.p_sd,
+                        alpha=_r_edge.alpha,
+                        beta=_r_edge.beta,
+                        edge_latency=_r_path.edge_latency,
+                        path_latency=_r_path.path_latency,
+                        source=_r_path.source,
+                        fitted_at=_r_path.fitted_at,
+                        gate_passed=_r_path.gate_passed,
+                        evidence_retrieved_at=_r_path.evidence_retrieved_at,
+                        source_curves=_r_path.source_curves,
+                    )
+                    print(f"[v3] collapsed override: path_mu={_r_path.latency.mu:.3f} "
+                          f"path_sigma={_r_path.latency.sigma:.3f} "
+                          f"edge_p={_r_edge.p_mean:.4f}")
+
         # ── Call v3 row builder ───────────────────────────────────────
+        _is_multi_hop = len(subjects) > 1
         maturity_rows = []
         if composed_frames and last_edge_id:
             anchor_to_str = subjects[0].get('anchor_to', '')
@@ -1534,6 +1639,12 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
                 x_provider_override=_v3_x_provider,
                 span_alpha=_span_alpha_v3,
                 span_beta=_span_beta_v3,
+                span_mu_sd=_span_params_v3.mu_sd if _span_params_v3 else None,
+                span_sigma_sd=_span_params_v3.sigma_sd if _span_params_v3 else None,
+                span_onset_sd=_span_params_v3.onset_sd if _span_params_v3 else None,
+                span_onset_mu_corr=_span_params_v3.onset_mu_corr if _span_params_v3 else None,
+                is_multi_hop=_is_multi_hop,
+                resolved_override=_v3_resolved_override,
             )
 
         print(f"[v3] compute_cohort_maturity_rows returned {len(maturity_rows)} rows")
@@ -4363,6 +4474,8 @@ def handle_stats_topo_pass(data: Dict[str, Any]) -> Dict[str, Any]:
                     fs.completeness_sd = cf.completeness_sd
                     fs.rate_conditioned = cf.rate_conditioned
                     fs.rate_conditioned_sd = cf.rate_conditioned_sd
+                    fs.p_conditioned = cf.p_conditioned
+                    fs.p_conditioned_sd = cf.p_conditioned_sd
                     _fs_count += 1
                     # Use engine's improved p_sd when completeness
                     # uncertainty is available (doc 29 §Consumer mapping:

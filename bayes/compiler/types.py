@@ -240,6 +240,7 @@ class SliceObservations:
     total_n: int = 0
     has_window: bool = False
     has_cohort: bool = False
+    onset_observations: list[float] | None = None  # per-slice onset (doc 41a)
 
 
 @dataclass

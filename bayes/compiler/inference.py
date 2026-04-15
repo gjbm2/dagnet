@@ -59,18 +59,19 @@ class ChainStallDetector:
         crawl_floor: float = 3.0,
         crawl_ratio: float = 0.10,
         rate_window_s: float = 5.0,
-        min_peak: float = 10.0,
+        warmup_s: float = 60.0,
     ):
         self.grace_s = grace_s
         self.crawl_floor = crawl_floor      # absolute: below this AND below ratio = crawling
         self.crawl_ratio = crawl_ratio      # relative: below this fraction of peak = crawling
         self.rate_window_s = rate_window_s  # seconds over which to compute current rate
-        self.min_peak = min_peak            # chain must reach this before detection activates
+        self.warmup_s = warmup_s            # ignore all chains for this long after first update
 
         # Per-chain state
         self._snapshots: dict[int, list[tuple[float, int]]] = {}
         self._peak_rate: dict[int, float] = {}
         self._crawl_since: dict[int, float | None] = {}
+        self._first_update: float | None = None
 
     def update(self, chain: int, draws: int, now: float) -> dict | None:
         """Update chain state. Returns stall info dict if stall confirmed."""
@@ -78,6 +79,8 @@ class ChainStallDetector:
             self._snapshots[chain] = [(now, draws)]
             self._peak_rate[chain] = 0.0
             self._crawl_since[chain] = None
+            if self._first_update is None:
+                self._first_update = now
             return None
 
         snaps = self._snapshots[chain]
@@ -90,9 +93,8 @@ class ChainStallDetector:
         if rate is not None and rate > self._peak_rate[chain]:
             self._peak_rate[chain] = rate
 
-        # Don't check until chain has reached cruising speed
-        peak = self._peak_rate[chain]
-        if peak < self.min_peak:
+        # Don't check during warmup — chains are compiling/tuning
+        if now - self._first_update < self.warmup_s:
             self._trim(chain, now)
             return None
 
@@ -102,7 +104,14 @@ class ChainStallDetector:
             return None
 
         # Is the chain crawling?
-        is_crawling = (rate < self.crawl_floor and rate < self.crawl_ratio * peak)
+        # Two conditions (both must hold):
+        #   1. Rate below absolute floor (crawl_floor)
+        #   2. Rate below ratio of peak (crawl_ratio * peak),
+        #      OR chain never established a peak (peak < crawl_floor)
+        peak = self._peak_rate[chain]
+        is_crawling = (rate < self.crawl_floor
+                       and (peak < self.crawl_floor
+                            or rate < self.crawl_ratio * peak))
 
         if is_crawling:
             if self._crawl_since[chain] is None:
@@ -123,64 +132,6 @@ class ChainStallDetector:
         self._trim(chain, now)
         return None
 
-    def check_laggard(self, all_draws: list[int], now: float,
-                      laggard_ratio: float = 0.1) -> dict | None:
-        """Cross-chain check: detect a chain that never reached cruising
-        speed but is dramatically behind its siblings.
-
-        This catches the case where a chain is slow from the start — its
-        peak rate never reaches min_peak, so the per-chain detector
-        never activates.  The condition: the chain's draw count is below
-        `laggard_ratio` of the median of other chains, AND its rate is
-        below crawl_floor, AND this has persisted for grace_s.
-
-        Call this after updating all chains.
-        """
-        if len(all_draws) < 2:
-            return None
-
-        sorted_draws = sorted(all_draws)
-        median_draws = sorted_draws[len(sorted_draws) // 2]
-
-        # Only check once siblings have made meaningful progress
-        if median_draws < 100:
-            return None
-
-        for c, draws in enumerate(all_draws):
-            # Skip chains that already have high peak (normal detector
-            # handles those)
-            if self._peak_rate.get(c, 0) >= self.min_peak:
-                continue
-
-            # Is this chain dramatically behind?
-            if draws > laggard_ratio * median_draws:
-                # Not a laggard — reset
-                self._crawl_since[c] = None
-                continue
-
-            rate = self._rate_over_window(c, now, draws,
-                                          self.rate_window_s)
-            if rate is not None and rate >= self.crawl_floor:
-                # Slow but not crawling — reset
-                self._crawl_since[c] = None
-                continue
-
-            # Laggard and crawling
-            if self._crawl_since.get(c) is None:
-                self._crawl_since[c] = now
-            elif now - self._crawl_since[c] >= self.grace_s:
-                return {
-                    "chain": c,
-                    "rate": rate or 0.0,
-                    "peak": self._peak_rate.get(c, 0),
-                    "ratio": draws / median_draws if median_draws > 0 else 0,
-                    "stalled_for": now - self._crawl_since[c],
-                    "laggard": True,
-                    "draws": draws,
-                    "median_draws": median_draws,
-                }
-
-        return None
 
     def _rate_over_window(self, chain: int, now: float, current_draws: int,
                           window: float) -> float | None:
@@ -1965,26 +1916,6 @@ def _sample_nutpie(model, config: SamplingConfig, report_progress=None,
                         _stall_detected.set()
                         break
 
-                # Cross-chain laggard check: catches chains that were
-                # slow from the start (never reached min_peak).
-                if not _stall_detected.is_set() and per_chain_draws:
-                    laggard = _stall_detector.check_laggard(
-                        per_chain_draws, now)
-                    if laggard is not None:
-                        _draws_str = ",".join(
-                            str(d) for d in per_chain_draws)
-                        print(f"[nutpie{phase_tag}] LAGGARD STALL: "
-                              f"chain {laggard['chain']} "
-                              f"draws={laggard['draws']} "
-                              f"({laggard['ratio']:.0%} of median "
-                              f"{laggard['median_draws']}), "
-                              f"crawling for "
-                              f"{laggard['stalled_for']:.0f}s, "
-                              f"per_chain=[{_draws_str}]",
-                              flush=True)
-                        _stall_info.update(laggard)
-                        _stall_info["draws"] = per_chain_draws
-                        _stall_detected.set()
 
         progress_type = nutpie_lib.ProgressType.template_callback(
             500,  # ms between Rust-side renders

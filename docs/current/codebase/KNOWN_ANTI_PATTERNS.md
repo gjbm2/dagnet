@@ -306,6 +306,26 @@ Multiple code paths can regenerate the graph JSON: `graph_from_truth.py` (truth-
 
 **Broader principle**: when a file is regenerated, ALL required fields must be set by the generator — not split across multiple tools invoked in a specific order. If field X is required for the file to function, the generator must set field X unconditionally. Deferring to a separate step creates a fragile dependency chain where any code path that skips the step silently produces a broken artefact.
 
+## Anti-pattern 40: `--rebuild --no-mcmc` no-op for synth data
+
+**Signature**: agent runs `param_recovery.py --rebuild --no-mcmc` expecting synth data to be regenerated, but the DB rows remain unchanged. Subsequent MCMC runs produce identical results to pre-rebuild.
+
+**Root cause**: `--rebuild` deletes `.synth-meta.json`, which would trigger `verify_synth_data` to re-bootstrap on the next harness run. But `--no-mcmc` skips the harness subprocess entirely — `param_recovery.py` just prints the truth table and exits. The synth data gate in `test_harness.py` (line 769) only runs during payload construction, which `--no-mcmc` bypasses. The rebuild takes effect only on the NEXT run without `--no-mcmc`.
+
+**Fix**: to force immediate synth data regeneration, use `synth_gen.py --graph X --write-files --bust-cache` directly. This runs the full generation pipeline (simulate, hash, write to DB, write param files) without any harness or MCMC indirection.
+
+**Broader principle**: a flag that prepares state for a later step is invisible when the later step is skipped. If `--rebuild` means "regenerate data", it should regenerate data — not set a flag that a different code path checks later. When combining flags, verify the end-to-end effect, not just that each flag does its documented thing.
+
+## Anti-pattern 41: BE results bypassing UpdateManager sibling rebalancing
+
+**Signature**: after a fetch completes, one edge's `p.mean` is correct (reflecting BE topo pass blended_mean) but its sibling edges still show stale pre-fetch probabilities. Siblings don't sum to 1. Refreshing or fetching again appears to fix it (because the FE path runs first and rebalances).
+
+**Root cause**: the BE topo pass wrote `edge.p.mean = beScalars.blended_mean` directly on the graph object, then called `setGraph()`. This bypassed `UpdateManager.applyBatchLAGValues`, which is the single code path for sibling probability rebalancing. The FE path correctly used `applyBatchLAGValues` (which collects edges whose `p.mean` changed and runs `findSiblingsForRebalance` + `rebalanceSiblingEdges`), but the BE path skipped it entirely.
+
+**Fix**: restructured the fetch pipeline so both FE and BE results flow through `applyBatchLAGValues`. BE scalars are merged into the FE `EdgeLAGValues` array before application, rather than applied as a separate direct-mutation pass. See `FE_BE_STATS_PARALLELISM.md` §Orchestration for the race-based flow.
+
+**Broader principle**: when a subsystem has a single canonical mutation path (UpdateManager for graph state), every code path that writes the same fields must go through it. A "shortcut" that writes directly to the object and calls `setGraph` bypasses all the invariants the canonical path maintains — rebalancing, override flag checks, conditional probability propagation. The more code paths that write the same field, the more likely one of them forgets a side effect.
+
 ## When to add to this document
 
 After completing a multi-attempt fix, check: does my bug match a generalisable pattern? If so, add it here following the format: Signature (how to recognise it), Root cause (why it happens), Fix (what to do), Example (optional, specific instance).

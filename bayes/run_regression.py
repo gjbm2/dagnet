@@ -599,7 +599,130 @@ def assert_recovery(graph_name: str, parsed: dict, truth: dict) -> dict:
         "warnings": warnings,
         "quality": quality,
         "thresholds": thresholds,
+        "parsed_edges": parsed_edges,
+        "parsed_slices": parsed_slices,
     }
+
+
+def _bias_profile(parsed_edges: dict, parsed_slices: dict) -> str:
+    """Build a descriptive per-parameter bias profile from recovery data.
+
+    Returns a multi-line string summarising systematic patterns:
+    mean bias, max |z|, and whether bias direction is consistent.
+    Covers both edge-level and slice-level parameters.
+    """
+    from collections import defaultdict
+    # Collect signed errors per parameter across all edges + slices
+    param_errors: dict[str, list[tuple[str, float, float, float, float]]] = defaultdict(list)
+    # (label, signed_error, z_score, truth, posterior_mean)
+
+    for edge_name, edge_data in parsed_edges.items():
+        for param, pdata in edge_data.items():
+            if param == "kappa":
+                continue
+            truth = pdata.get("truth")
+            post = pdata.get("posterior_mean")
+            sd = pdata.get("posterior_sd", 0)
+            z = pdata.get("z_score", 0)
+            if truth is not None and post is not None:
+                param_errors[param].append(
+                    (edge_name, post - truth, z, truth, post))
+
+    for slice_label, slice_data in parsed_slices.items():
+        for param, pdata in slice_data.items():
+            if param == "kappa":
+                continue
+            truth = pdata.get("truth")
+            post = pdata.get("posterior_mean")
+            sd = pdata.get("posterior_sd", 0)
+            z = pdata.get("z_score", 0)
+            if truth is not None and post is not None:
+                param_errors[f"{param}(slice)"].append(
+                    (slice_label, post - truth, z, truth, post))
+
+    if not param_errors:
+        return ""
+
+    lines = []
+    for param in ["p", "mu", "sigma", "onset",
+                   "p(slice)", "mu(slice)", "sigma(slice)", "onset(slice)"]:
+        errs = param_errors.get(param)
+        if not errs:
+            continue
+        signed = [e[1] for e in errs]
+        zscores = [e[2] for e in errs]
+        n = len(signed)
+        mean_bias = sum(signed) / n
+        n_pos = sum(1 for s in signed if s > 0)
+        n_neg = n - n_pos
+        max_z = max(zscores)
+        max_z_entry = max(errs, key=lambda e: e[2])
+        direction = "+" if n_pos > n_neg else "-" if n_neg > n_pos else "~"
+        consistency = f"{max(n_pos, n_neg)}/{n}"
+
+        lines.append(
+            f"    {param:<14s} n={n:<3d} bias={mean_bias:+.3f} "
+            f"dir={direction}({consistency})  max|z|={max_z:.1f} "
+            f"({max_z_entry[0]})")
+
+    if not lines:
+        return ""
+    return "  Bias profile:\n" + "\n".join(lines) + "\n"
+
+
+def _aggregate_bias_profile(all_results: list[dict]) -> str:
+    """Cross-graph aggregate bias profile from all regression results."""
+    from collections import defaultdict
+    param_all: dict[str, list[float]] = defaultdict(list)
+    param_z: dict[str, list[float]] = defaultdict(list)
+
+    for r in all_results:
+        for edge_data in r.get("parsed_edges", {}).values():
+            for param, pdata in edge_data.items():
+                if param == "kappa":
+                    continue
+                truth = pdata.get("truth")
+                post = pdata.get("posterior_mean")
+                if truth is not None and post is not None:
+                    param_all[param].append(post - truth)
+                    param_z[param].append(pdata.get("z_score", 0))
+        for slice_data in r.get("parsed_slices", {}).values():
+            for param, pdata in slice_data.items():
+                if param == "kappa":
+                    continue
+                truth = pdata.get("truth")
+                post = pdata.get("posterior_mean")
+                if truth is not None and post is not None:
+                    param_all[f"{param}(slice)"].append(post - truth)
+                    param_z[f"{param}(slice)"].append(pdata.get("z_score", 0))
+
+    if not param_all:
+        return ""
+
+    lines = []
+    lines.append("=" * 70)
+    lines.append("  AGGREGATE BIAS PROFILE (across all graphs)")
+    lines.append("=" * 70)
+    for param in ["p", "mu", "sigma", "onset",
+                   "p(slice)", "mu(slice)", "sigma(slice)", "onset(slice)"]:
+        errs = param_all.get(param)
+        if not errs:
+            continue
+        zs = param_z[param]
+        n = len(errs)
+        mean_bias = sum(errs) / n
+        median_bias = sorted(errs)[n // 2]
+        n_pos = sum(1 for e in errs if e > 0)
+        max_z = max(zs)
+        mean_z = sum(zs) / n
+        direction = "+" if n_pos > n // 2 + 1 else "-" if n_pos < n // 2 - 1 else "~"
+
+        lines.append(
+            f"  {param:<14s} n={n:<4d} mean_bias={mean_bias:+.4f} "
+            f"median={median_bias:+.4f}  dir={direction}({n_pos}/{n} +ve)  "
+            f"mean|z|={mean_z:.2f}  max|z|={max_z:.1f}")
+
+    return "\n".join(lines) + "\n"
 
 
 # ---------------------------------------------------------------------------
@@ -850,6 +973,11 @@ def run_regression(args) -> list[dict]:
             elif assertion["xfail"] and assertion["passed"]:
                 status = "XPASS"
             print(f"  {name}: {status} [{elapsed:.0f}s]")
+            _bp = _bias_profile(
+                assertion.get("parsed_edges", {}),
+                assertion.get("parsed_slices", {}))
+            if _bp:
+                print(_bp, end="")
 
             # Incremental summary — survives kill/crash
             _q = assertion.get("quality", {})
@@ -860,6 +988,8 @@ def run_regression(args) -> list[dict]:
                           f"conv={str(_q.get('converged', '?'))}\n")
                 for _fail in assertion.get("failures", []):
                     _sf.write(f"  ** {_fail}\n")
+                if _bp:
+                    _sf.write(_bp)
 
     # Clean up monitor files
     try:
@@ -1161,6 +1291,15 @@ def run_regression(args) -> list[dict]:
     print(f"  {len(passed)} passed, {len(failed)} failed, "
           f"{len(xfailed)} expected failures, {len(xpassed)} unexpected passes "
           f"(of {total} total)")
+
+    # Aggregate bias profile across all graphs
+    agg = _aggregate_bias_profile(results)
+    if agg:
+        print()
+        print(agg)
+        # Also append to summary file
+        with open(summary_path, "a") as _sf:
+            _sf.write("\n" + agg)
 
     if failed:
         print(f"\n  REGRESSION FAILED")

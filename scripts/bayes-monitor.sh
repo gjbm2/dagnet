@@ -298,6 +298,7 @@ echo $$ > /tmp/_bayes_monitor_status_pid
 
 # ── Main loop ──
 _prev_tails=""
+_start_epoch=$(date +%s)
 
 while true; do
 
@@ -306,7 +307,8 @@ while true; do
     # Does NOT touch log files — they are primary diagnostic data.
     if [[ $_do_clear -eq 1 ]]; then
         _do_clear=0
-        # Write a hide-list: finished graph names to suppress from display
+        # Rebuild hidden list from scratch (avoids unbounded growth)
+        rm -f /tmp/_bayes_monitor_hidden
         for f in /tmp/bayes_harness-*.log; do
             [[ -f "$f" ]] || continue
             _cname=$(basename "$f" .log)
@@ -316,8 +318,10 @@ while true; do
             if ! lock_alive "$_clock"; then
                 echo "$_cname" >> /tmp/_bayes_monitor_hidden
             fi
-            # Clean up tail scripts (display artefacts, not data)
-            rm -f "/tmp/_bayes_tail_${_cname}.sh" 2>/dev/null
+            # Clean up tail scripts for finished graphs only (not running)
+            if ! lock_alive "$_clock"; then
+                rm -f "/tmp/_bayes_tail_${_cname}.sh" 2>/dev/null
+            fi
         done
         # Force tail rebuild on next cycle
         _prev_tails="__cleared__"
@@ -336,11 +340,13 @@ while true; do
         name="${name#bayes_harness-}"
         # Skip archive copies
         is_archive "$name" && continue
-        # Skip graphs hidden by ^b e (display-only, logs untouched)
-        if [[ -f /tmp/_bayes_monitor_hidden ]] && grep -qxF "$name" /tmp/_bayes_monitor_hidden 2>/dev/null; then
-            continue
-        fi
         lock="/tmp/bayes-harness-${name}.lock"
+        # Skip graphs hidden by ^b e — but un-hide if running again
+        if [[ -f /tmp/_bayes_monitor_hidden ]] && grep -qxF "$name" /tmp/_bayes_monitor_hidden 2>/dev/null; then
+            if ! lock_alive "$lock"; then
+                continue
+            fi
+        fi
 
         if lock_alive "$lock"; then
             marker="*"
@@ -348,15 +354,15 @@ while true; do
         else
             marker=" "
             if [[ $SHOW_ALL -eq 0 ]]; then
-                # In default mode, only show running graphs in the table
-                # (finished ones are hidden unless --all)
-                if [[ ! -s "$f" ]]; then
+                # Default mode: skip finished graphs from before monitor started
+                local mtime
+                mtime=$(stat -c '%Y' "$f" 2>/dev/null) || mtime=0
+                if [[ $mtime -lt $_start_epoch ]]; then
                     continue
                 fi
-                # Check if it's actually finished (has result markers)
+                # Still need PASS/FAIL marker to count as finished
                 if ! grep -q "^PASS$\|^FAIL$\|=== FINISHED" "$f" 2>/dev/null; then
-                    # No result and not running — stale/empty, skip
-                    [[ ! -s "$f" ]] && continue
+                    continue
                 fi
             else
                 [[ ! -s "$f" ]] && continue

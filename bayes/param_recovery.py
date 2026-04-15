@@ -710,9 +710,13 @@ def main():
 
     # --- Phase C: per-slice posterior comparison ---
     slice_posteriors = _parse_slice_posteriors(output)
-    # Merge Phase 2 per-slice posteriors (from --phase2-from-dump log lines)
+    # Merge Phase 2 per-slice posteriors (from --phase2-from-dump log lines).
+    # Use per-key merge, not dict.update(), to avoid overwriting Phase 1
+    # latency fields (mu, sigma, onset) with Phase 2 p-only entries.
     for _sp_eid, _sp_slices in _slice_posteriors.items():
-        slice_posteriors.setdefault(_sp_eid, {}).update(_sp_slices)
+        for _sp_ctx, _sp_entry in _sp_slices.items():
+            existing = slice_posteriors.setdefault(_sp_eid, {}).setdefault(_sp_ctx, {})
+            existing.update(_sp_entry)
 
     def _print_slice_recovery_block(
         label: str,

@@ -2,7 +2,7 @@
 
 **Date**: 15-Apr-26
 **Depends on**: doc 41 (root cause analysis, §4)
-**Status**: Plan only. No code written.
+**Status**: Implemented (15-Apr-26). Four-way comparison complete. See doc 41 §5 for results.
 
 ---
 
@@ -53,10 +53,11 @@ when `per_slice_a` is True and `_reparam_slice_level >= 1` and
   determines pooling strength — no arbitrary fudge numbers.
 
 - Add `delta_a_slice_vec` with zero-sum constraint. The
-  implementation should sample K-1 free offsets and derive the
-  Kth as the negative sum of the others, or use a softmax-style
-  centring. The constraint ensures `a_base` remains the true
-  edge-level onset fraction, not a floating hierarchy mean.
+  implementation samples K unconstrained deltas per dimension,
+  then subtracts the mean (mean-centring). This is exchangeable
+  — no slice is privileged. Applied per dimension to avoid
+  coupling unrelated context dimensions. The constraint ensures
+  `a_base` remains the true edge-level onset fraction.
 
 - Centred parameterisation (consistent with winning formula):
   `a_slice_vec = a_base + delta_a_slice_vec`.
@@ -95,6 +96,39 @@ context rows.
 When no aggregate rows exist (fully exhaustive slices with no
 bare rows), fall back to the current pooled behaviour or skip
 the onset anchor entirely for this edge.
+
+---
+
+## Phase 2b: Per-slice onset anchors
+
+### 2b.1 Per-slice onset observation collection
+
+In `evidence.py`, the onset observation collector (Step 4)
+now also collects onset observations per context slice, keyed
+by the context prefix extracted from `slice_key`. These are
+stored on `SliceObservations.onset_observations` (new field
+added to `types.py`). Applied after `_route_slices` populates
+`ev.slice_groups`.
+
+### 2b.2 Per-slice onset likelihood emission
+
+In `model.py` §1, per-slice onset metadata is computed
+alongside edge-level (`_onset_obs_deferred_slice` dict). In
+§3, when `per_slice_a` is active and per-slice onset data
+exists, `pm.Normal("onset_obs_slice_...")` is emitted per
+slice, constraining `onset_slice_vec[k]`.
+
+### 2b.3 Synth data onset noise
+
+`synth_gen.py` onset observation noise changed from clipped
+Gaussian (`max(0, Normal(onset, sigma))`) to log-normal
+(`onset * lognormal(0, 0.3)`). Three issues with the original:
+(a) 10% sigma was unrealistically tight; (b) increasing sigma
+to realistic levels introduced clipping bias via `max(0, ...)`
+on small-onset edges; (c) log-normal is the natural noise model
+for an inherently positive quantity. The `log_sigma=0.3` gives
+~30% coefficient of variation, configurable per edge via
+`onset_obs_log_sigma` in the truth file.
 
 ---
 
@@ -186,11 +220,17 @@ returns, per-slice r is not safe to combine with per-slice a.
 
 | File | Change |
 |------|--------|
-| `bayes/compiler/model.py` | Feature flags (`per_slice_a`, `shared_sigma_slices`), per-slice a hierarchy, back-transforms, sigma sharing gate |
-| `bayes/compiler/evidence.py` | Onset anchor binding (aggregate-only filter) |
-| `bayes/compiler/inference.py` | Per-slice ESS/Rhat/correlation diagnostics |
-| `bayes/compiler/types.py` | Add `per_slice_a` to feature flag type if needed |
-| `bayes/test_harness.py` | Per-slice recovery comparison against truth |
+| `bayes/compiler/model.py` | Feature flags, per-slice a hierarchy, back-transforms, sigma sharing gate, `_compute_onset_obs_meta` helper, per-slice onset anchor emission |
+| `bayes/compiler/evidence.py` | Onset anchor binding (aggregate-only filter), per-slice onset observation collection |
+| `bayes/compiler/inference.py` | Per-slice ESS/Rhat/correlation diagnostics, `RIDGE_CORR_THRESHOLD` import |
+| `bayes/compiler/types.py` | `SliceObservations.onset_observations` field, `RIDGE_CORR_THRESHOLD` constant |
+| `bayes/synth_gen.py` | Onset observation noise fix (0.1→0.3/1.0), onset summary diagnostic output |
+| `bayes/param_recovery.py` | Persistent recovery log (`_TeeWriter`) |
+| `bayes/tests/test_compiler_phase_s.py` | 8 `TestPerSliceAWiring` tests |
+| `bayes/tests/test_model_wiring.py` | Fixed stale `test_latency_edge_gets_onset_variables` |
+| `bayes/tests/test_stall_detector.py` | 4 `TestLaggardDetection` tests |
+| `scripts/compare-per-slice-a.py` | New: four-way comparison harness |
+| `scripts/resilience-strategies.py` | Unique job labels with timestamps |
 
 ---
 
@@ -223,7 +263,7 @@ returns, per-slice r is not safe to combine with per-slice a.
    per dimension. For K=3: 4 extra parameters. For K=10: 11
    extra. Modest.
 
-4. **Zero-sum implementation**: the constraint must be correctly
-   implemented. Standard approach: sample K-1 unconstrained
-   deltas, derive Kth as negative sum. Verify by checking
-   `sum(delta_a_slice_vec)` ≈ 0 in posterior.
+4. **Zero-sum implementation**: implemented via mean-centring
+   (sample K, subtract mean) per dimension. Exchangeable — no
+   slice is privileged. Verified by wiring tests
+   (`TestPerSliceAWiring`, 8 tests).

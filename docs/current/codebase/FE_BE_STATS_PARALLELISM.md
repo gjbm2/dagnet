@@ -28,34 +28,46 @@ Per edge, given raw cohort evidence:
 - **Blocks UI**: yes — runs synchronously in the fetch pipeline
 - **Source of truth**: currently authoritative (UI displays these results)
 
-### BE topo pass (non-blocking, fire-and-forget)
+### BE topo pass (non-blocking, race-based)
 
 - **Service**: `beTopoPassService.ts` → `runBeTopoPass()`
 - **Endpoint**: `POST /api/lag/topo-pass` → `lib/runner/stats_engine.py` (Python port of the FE logic)
-- **Triggered by**: `fetchDataService.ts` Stage 2, fired as a background async IIFE after FE topo pass completes
-- **Writes to**: `analytic_be` model_vars entry on each edge
-- **Blocks UI**: no — runs in background, failure logged but ignored
-- **Source of truth**: not yet authoritative (validation only)
+- **Triggered by**: `fetchDataService.ts` Stage 2, fired concurrently with FE result hold, raced against 500ms deadline
+- **Writes to**: `analytic_be` model_vars entry on each edge; BE scalars merged into `EdgeLAGValues` before `applyBatchLAGValues`
+- **Blocks UI**: partially — waits up to 500ms (fast path avoids double render), then proceeds with FE
+- **Source of truth**: preferred when available (merged over FE values)
 
 **Note**: the BE topo pass (`/api/lag/topo-pass` via `stats_engine.py`) is distinct from the generic `/api/stats-enhance` endpoint (`stats_enhancement.py`), which handles raw-aggregation enhancement (trends, MCMC-style summaries, robust stats).
 
 ## Orchestration in the fetch pipeline
 
-```
-fetchDataService.ts Stage 2:
+The FE and BE topo passes are coordinated via a **race-based flow** in `fetchDataService.ts` Stage 2. The design ensures sibling rebalancing always runs through `UpdateManager.applyBatchLAGValues` regardless of which source provides `p.mean`.
 
-1. FE topo pass (synchronous, blocking)
-   enhanceGraphLatencies(graph, paramLookup, queryDate, ...)
-   → writes analytic model_vars
-   → applies results to graph immediately
+**Flow**:
 
-2. BE topo pass (async, fire-and-forget)
-   (async () => {
-     beEntries = await runBeTopoPass(graph, paramLookup, queryDate, ...)
-     → writes analytic_be model_vars
-     → if FORECASTING_PARALLEL_RUN: compareModelVarsSources()
-   })()
-```
+1. FE topo pass runs synchronously (`enhanceGraphLatencies`), producing `EdgeLAGValues[]`. Results are **held, not applied**.
+2. BE topo pass fires immediately (`runBeTopoPass`), returning a promise.
+3. `Promise.race` waits up to **500ms** for the BE response.
+
+Three outcomes:
+
+| Scenario | Renders | What happens |
+|----------|---------|--------------|
+| BE responds < 500ms | 1 | BE scalars merged into FE `EdgeLAGValues` → single `applyBatchLAGValues` call |
+| BE responds 500ms–3s | 2 | FE applied first via `applyBatchLAGValues` → BE arrives → merged results re-applied (second render) |
+| BE exceeds 3s or fails | 1 | FE only. Warning logged to session log (`BE_TOPO_PASS` at warning level). |
+
+**Merge semantics**: when BE results are available, BE scalars (blended_mean, mu, sigma, t95, completeness, dispersion SDs, etc.) overwrite the corresponding FE fields in each `EdgeLAGValues` entry. Evidence (n, k, evidence.mean) stays from FE — it is authoritative from actual data. The merged values then flow through `applyBatchLAGValues`, which handles `p.mean` writes **and** sibling probability rebalancing in a single atomic operation.
+
+**Why the race**: the BE topo pass typically returns in 100–300ms for normal-sized graphs. Waiting 500ms avoids a double-render in the common case. The 3s hard cap prevents unbounded waits when the Python server is slow or unhealthy. Results arriving after 3s are discarded — if the BE is that slow, something is wrong and the session log warning surfaces it.
+
+**Session log entries** (operation type `BE_TOPO_PASS`):
+- `info` — BE topo pass started (edge count)
+- `info` — BE returned within 500ms (fast path, single render)
+- `info` — FE results applied (BE still pending)
+- `info` — BE completed at Nms (late merge, second render)
+- `warning` — BE exceeded 3s, results discarded
+- `error` — BE network/parse failure
 
 ## What FE sends to BE
 
@@ -105,7 +117,7 @@ Currently `analytic` wins by default. The transition plan makes `analytic_be` th
 
 | Phase | State | FE computes | BE computes | UI shows |
 |-------|-------|-------------|-------------|----------|
-| **1 (current)** | Parallel run | `analytic` (blocking) | `analytic_be` (fire-and-forget) | FE results |
+| **1 (current)** | Parallel run | `analytic` (held) | `analytic_be` (race, 500ms/3s deadline) | BE if fast, else FE then BE merge |
 | **2** | Validated parity | `analytic` (blocking) | `analytic_be` (fire-and-forget) | BE results (switched) |
 | **3** | FE deprecated | Removed | `analytic` (promoted, blocking) | BE results |
 
@@ -212,10 +224,13 @@ The engine writes to the **same existing fields** as the FE topo pass
 a new schema object. One new field: `latency.completeness_stdev`.
 
 The BE pass is a **full upgrade** of the FE pass — every field the FE
-writes, the BE also writes with improved values. The FE pass runs
-first (instant render), then the BE overwrites when its response
-arrives. Session log shows FE→BE parity per edge (`FE_BE_PARITY`
-entries at info level, with before/after values).
+writes, the BE also writes with improved values. Both FE and BE results
+flow through the same `applyBatchLAGValues` path, which handles
+`p.mean` writes and sibling probability rebalancing atomically. When
+BE responds within 500ms, only one render occurs with BE values. When
+BE is slow, FE renders first, then BE merges trigger a second render.
+Session log shows FE→BE parity per edge (`FE_BE_PARITY` entries at
+info level, with before/after values).
 
 `cohort_maturity` analysis type now routes to v3 (engine consumer,
 185 lines). v1 and v2 are gated to dev only (`devOnly: true`).

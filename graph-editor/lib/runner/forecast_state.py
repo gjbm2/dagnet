@@ -739,8 +739,10 @@ class ConditionedForecast:
     """
     completeness: float = 0.0
     completeness_sd: float = 0.0
-    rate_conditioned: float = 0.0
+    rate_conditioned: float = 0.0      # p × C(age) — maturity-adjusted rate
     rate_conditioned_sd: float = 0.0
+    p_conditioned: float = 0.0        # mean(p_draws) — asymptotic probability after IS
+    p_conditioned_sd: float = 0.0
     rate_unconditioned: float = 0.0
     rate_unconditioned_sd: float = 0.0
 
@@ -800,9 +802,18 @@ def compute_conditioned_forecast(
     total_n = sum(n for _, n in cohort_ages_and_weights if n > 0)
 
     # ── Draw p from Beta posterior ───────────────────────────────
-    alpha = resolved.alpha if resolved.alpha and resolved.alpha > 0 else 1.0
-    beta = resolved.beta if resolved.beta and resolved.beta > 0 else 1.0
-    p_draws = rng.beta(alpha, beta, size=S)
+    alpha = resolved.alpha if resolved.alpha and resolved.alpha > 0 else 0.0
+    beta_ = resolved.beta if resolved.beta and resolved.beta > 0 else 0.0
+    if alpha <= 0 or beta_ <= 0:
+        # No posterior available — construct a weak informative prior
+        # centred on the forecast mean. Kappa=20 gives enough flexibility
+        # for IS conditioning to move the draws, but prevents collapse
+        # from a flat Beta(1,1) under sequential resampling.
+        _KAPPA_DEFAULT = 20.0
+        _p = max(min(p_mean or 0.5, 0.99), 0.01)
+        alpha = _p * _KAPPA_DEFAULT
+        beta_ = (1.0 - _p) * _KAPPA_DEFAULT
+    p_draws = rng.beta(alpha, beta_, size=S)
 
     # ── Draw latency params (correlated mu-onset) ────────────────
     has_dispersions = (lat.mu_sd > 0 or lat.sigma_sd > 0 or lat.onset_sd > 0)
@@ -839,10 +850,30 @@ def compute_conditioned_forecast(
         sigma: float,
         onset: float,
     ) -> float:
+        """Path-level completeness (with carrier convolution when available).
+
+        Used for the output completeness estimate. NOT for IS conditioning
+        — IS uses edge-level completeness because evidence is edge-level y/x.
+        """
         if upstream_cdf is not None and reach > 0:
             return _convolve_completeness_at_age(
                 age, upstream_cdf, reach,
                 mu, sigma, onset)
+        return _compute_completeness_at_age(
+            age, mu, sigma, onset)
+
+    def _edge_cdf_at_age_for_draw(
+        age: float,
+        mu: float,
+        sigma: float,
+        onset: float,
+    ) -> float:
+        """Edge-level completeness (no carrier convolution).
+
+        Used for IS conditioning E_i computation. Evidence is edge-level
+        y/x so the completeness must also be edge-level, regardless of
+        whether a carrier exists.
+        """
         return _compute_completeness_at_age(
             age, mu, sigma, onset)
 
@@ -905,40 +936,33 @@ def compute_conditioned_forecast(
         onset_draws_unconditioned,
     )
 
-    # ── IS conditioning against evidence (doc 29d §parameterisation B) ─
-    # Per-cohort drift + IS, matching v2 (cohort_forecast_v2.py lines
-    # 731-861). Each cohort gets drifted p draws and is IS-conditioned
-    # independently using its own (k_i, E_eff_i).
+    # ── IS conditioning against evidence (doc 29g §aggregate IS) ────
+    # Aggregate IS: compute log-likelihood across ALL cohorts
+    # simultaneously, then resample once with tempering to maintain
+    # ESS ≥ target. This replaces the sequential per-cohort resampling
+    # which collapsed draws over 200+ cohorts.
     #
-    # The drift ensures the proposal distribution covers the evidence
-    # region even when the posterior is tight (e.g. alpha=40, beta=10).
-    # Without drift, IS collapses because no draws are near the
-    # observed rate. v2 uses DRIFT_FRACTION=0.20 (line 732).
-    _IS_MIN_ESS = 5.0
-    _DRIFT_FRACTION = 0.20
+    # Per draw s, the aggregate log-likelihood is:
+    #   log w_s = Σ_i [ k_i × log(p_s) + (E_i,s - k_i) × log(1 - p_s) ]
+    # where E_i,s = n_i × CDF_s(τ_i) is the effective exposure for
+    # cohort i under latency draw s.
+    _IS_TARGET_ESS = 20.0
     is_ess = float(S)
     is_tempering_lambda = 1.0
     n_cohorts_conditioned = 0
     if evidence:
-        # Compute drift SDs in logit(p) space, matching v2 lines 733-747
-        _p_clamp = max(min(resolved.p_mean, 0.99), 0.01)
-        _p_sd = math.sqrt(alpha * beta / ((alpha + beta) ** 2 * (alpha + beta + 1)))
-        _p_var_logit = _p_sd ** 2 / (_p_clamp * (1 - _p_clamp)) ** 2
-        _drift_sd_logit_p = math.sqrt(_DRIFT_FRACTION * _p_var_logit)
-
-        # Transform base p draws to logit space
-        from scipy.special import logit as _logit, expit as _expit
-        _base_logit_p = _logit(np.clip(p_draws, 1e-10, 1 - 1e-10))
-
+        # Accumulate aggregate log-likelihood across all cohorts
+        log_lik = np.zeros(S)
         for tau_i, n_i, k_i in evidence:
             if n_i <= 0 or k_i < 0:
                 continue
 
-            # Per-cohort drifted p (v2 line 833-835)
-            delta_p = rng.normal(0.0, _drift_sd_logit_p, size=S)
-            p_i = _expit(_base_logit_p + delta_p)
-
-            # Effective exposure for this cohort
+            # E_i per draw: effective exposure at this cohort's age.
+            # Uses _cdf_at_age_for_draw which is path-level (with
+            # carrier convolution) in cohort mode — correct because
+            # evidence ages are anchor-relative and E_i must reflect
+            # the fraction of anchor entrants who have had time to
+            # reach AND convert at this edge by age τ.
             E_i = np.zeros(S)
             for s in range(S):
                 c_s = _cdf_at_age_for_draw(
@@ -952,33 +976,47 @@ def compute_conditioned_forecast(
             E_eff = np.maximum(E_i, float(k_i))
             E_fail = E_eff - float(k_i)
 
-            # Skip when failure count < 1 (v2 line 852)
-            if not ((E_eff > 0).any() and (E_fail >= 1.0).any()):
+            # Only include cohorts with meaningful failure count
+            mask = E_fail >= 1.0
+            if not mask.any():
                 continue
 
-            p_clip = np.clip(p_i, 1e-15, 1 - 1e-15)
-            log_w = (float(k_i) * np.log(p_clip)
-                     + E_fail * np.log(1 - p_clip))
-            weights = _normalise_log_weights(log_w)
-            if weights is None:
-                continue
-
-            ess = 1.0 / np.sum(np.square(weights))
-            if ess < _IS_MIN_ESS:
-                continue
-
-            # Resample all draws by this cohort's weights (v2 lines 859-861)
-            indices = rng.choice(S, size=S, replace=True, p=weights)
-            p_draws = p_i[indices]
-            mu_draws = mu_draws[indices]
-            sigma_draws = sigma_draws[indices]
-            onset_draws = onset_draws[indices]
-            # Update base logit for next cohort's drift
-            _base_logit_p = _logit(np.clip(p_draws, 1e-10, 1 - 1e-10))
-            is_ess = ess
+            p_clip = np.clip(p_draws, 1e-15, 1 - 1e-15)
+            # Accumulate per-cohort contribution to aggregate likelihood
+            cohort_log_w = np.where(
+                mask,
+                float(k_i) * np.log(p_clip) + E_fail * np.log(1 - p_clip),
+                0.0,
+            )
+            log_lik += cohort_log_w
             n_cohorts_conditioned += 1
 
-        is_tempering_lambda = 1.0 if n_cohorts_conditioned > 0 else 0.0
+        if n_cohorts_conditioned > 0:
+            # Tempered resampling: binary search for λ ∈ [0, 1] such
+            # that ESS(Lik^λ) ≥ target (doc 29g §4).
+            lo, hi = 0.0, 1.0
+            best_w, best_ess, best_lam = None, 0.0, 0.0
+            for _ in range(20):  # bisection iterations
+                mid = (lo + hi) / 2.0
+                w, ess = _weights_and_ess(log_lik, mid)
+                if w is not None and ess >= _IS_TARGET_ESS:
+                    best_w, best_ess, best_lam = w, ess, mid
+                    lo = mid  # try stronger tempering
+                else:
+                    hi = mid  # back off
+            # Try full strength (λ=1)
+            w_full, ess_full = _weights_and_ess(log_lik, 1.0)
+            if w_full is not None and ess_full >= _IS_TARGET_ESS:
+                best_w, best_ess, best_lam = w_full, ess_full, 1.0
+
+            if best_w is not None and best_ess >= _IS_TARGET_ESS:
+                indices = rng.choice(S, size=S, replace=True, p=best_w)
+                p_draws = p_draws[indices]
+                mu_draws = mu_draws[indices]
+                sigma_draws = sigma_draws[indices]
+                onset_draws = onset_draws[indices]
+                is_ess = best_ess
+                is_tempering_lambda = best_lam
 
     # ── Compute point estimates from conditioned draws ───────────
     mc_completeness = _weighted_completeness_draws(
@@ -989,32 +1027,35 @@ def compute_conditioned_forecast(
     completeness = float(np.mean(mc_completeness)) if mc_completeness.size else 0.0
     completeness_sd = float(np.std(mc_completeness)) if mc_completeness.size else 0.0
 
-    # Rates
-    rate_unconditioned_draws = p_draws_unconditioned * mc_completeness_unconditioned
+    # rate_unconditioned: the prior asymptotic edge probability
+    # (before IS conditioning). Used by surprise gauge as baseline.
     rate_unconditioned = (
-        float(np.mean(rate_unconditioned_draws))
-        if rate_unconditioned_draws.size else 0.0
+        float(np.mean(p_draws_unconditioned))
+        if p_draws_unconditioned.size else 0.0
     )
     rate_unconditioned_sd = (
-        float(np.std(rate_unconditioned_draws))
-        if rate_unconditioned_draws.size else 0.0
+        float(np.std(p_draws_unconditioned))
+        if p_draws_unconditioned.size else 0.0
     )
 
-    rate_conditioned_draws = p_draws * mc_completeness
-    rate_conditioned = (
-        float(np.mean(rate_conditioned_draws))
-        if rate_conditioned_draws.size else 0.0
-    )
-    rate_conditioned_sd = (
-        float(np.std(rate_conditioned_draws))
-        if rate_conditioned_draws.size else 0.0
-    )
+    # rate_conditioned: the IS-conditioned asymptotic edge probability.
+    # This is mean(p_draws) after IS resampling — the posterior estimate
+    # of the true edge rate given evidence. NOT p × completeness.
+    # Completeness is a separate orthogonal output.
+    rate_conditioned = float(np.mean(p_draws)) if p_draws.size else 0.0
+    rate_conditioned_sd = float(np.std(p_draws)) if p_draws.size else 0.0
+
+    # Legacy alias — same value, kept for clarity at call sites
+    p_conditioned = rate_conditioned
+    p_conditioned_sd = rate_conditioned_sd
 
     return ConditionedForecast(
         completeness=completeness,
         completeness_sd=completeness_sd,
         rate_conditioned=rate_conditioned,
         rate_conditioned_sd=rate_conditioned_sd,
+        p_conditioned=p_conditioned,
+        p_conditioned_sd=p_conditioned_sd,
         rate_unconditioned=rate_unconditioned,
         rate_unconditioned_sd=rate_unconditioned_sd,
         p_draws=p_draws,
@@ -1084,6 +1125,11 @@ def compute_forecast_sweep(
     mc_p_s: Optional[np.ndarray] = None,
     span_alpha: Optional[float] = None,
     span_beta: Optional[float] = None,
+    span_mu_sd: Optional[float] = None,
+    span_sigma_sd: Optional[float] = None,
+    span_onset_sd: Optional[float] = None,
+    span_onset_mu_corr: Optional[float] = None,
+    det_norm_cdf: Optional[list] = None,
 ) -> ForecastSweepResult:
     """Per-cohort population model sweep — generalised from v2.
 
@@ -1142,18 +1188,21 @@ def compute_forecast_sweep(
     else:
         has_dispersions = (lat.mu_sd > 0 or lat.sigma_sd > 0 or lat.onset_sd > 0)
         if has_dispersions:
-            _means = np.array([[_p_mean, lat.mu, lat.sigma, lat.onset_delta_days]])
-            _sds = np.array([[_p_sd, max(lat.mu_sd, 1e-10),
-                              max(lat.sigma_sd, 1e-10), max(lat.onset_sd, 1e-10)]])
-            _draws = rng.normal(
-                loc=_means[None, :, :],
-                scale=_sds[None, :, :],
-                size=(S, 1, 4),
-            )
-            p_draws = np.clip(_draws[:, 0, 0], 1e-6, 1 - 1e-6)
-            mu_draws = _draws[:, 0, 1]
-            sigma_draws = np.clip(_draws[:, 0, 2], 0.01, 20.0)
-            onset_draws = np.maximum(_draws[:, 0, 3], 0.0)
+            # Use multivariate_normal with onset_mu_corr (matching v1's
+            # fan computation in cohort_forecast.py:741). Independent
+            # draws produce systematically wider fans because onset and
+            # mu are typically anticorrelated.
+            _means_4 = np.array([_p_mean, lat.mu, lat.sigma, lat.onset_delta_days])
+            _sds_4 = np.array([_p_sd, max(lat.mu_sd, 1e-10),
+                               max(lat.sigma_sd, 1e-10), max(lat.onset_sd, 1e-10)])
+            _cov = np.diag(_sds_4 ** 2)
+            # onset–mu correlation (off-diagonal)
+            _cov[3, 1] = _cov[1, 3] = lat.onset_mu_corr * _sds_4[3] * _sds_4[1]
+            _draws = rng.multivariate_normal(_means_4, _cov, size=S)
+            p_draws = np.clip(_draws[:, 0], 1e-6, 1 - 1e-6)
+            mu_draws = _draws[:, 1]
+            sigma_draws = np.clip(_draws[:, 2], 0.01, 20.0)
+            onset_draws = np.maximum(_draws[:, 3], 0.0)
         else:
             _means = np.array([[_p_mean, lat.mu, lat.sigma, lat.onset_delta_days]])
             _sds = np.array([[_p_sd, 0.0, 0.0, 0.0]])
@@ -1179,9 +1228,14 @@ def compute_forecast_sweep(
                         float(onset_draws[s]))
 
     # ── Deterministic CDF for E_i computation ────────────────────
-    det_cdf = [_compute_completeness_at_age(
-        float(t), lat.mu, lat.sigma, lat.onset_delta_days)
-        for t in range(T)]
+    # Use span-level normalised CDF when provided (multi-hop parity).
+    # v2 uses sp.C (normalised span kernel CDF) for E_i, not edge-level.
+    if det_norm_cdf is not None and len(det_norm_cdf) >= T:
+        det_cdf = list(det_norm_cdf[:T])
+    else:
+        det_cdf = [_compute_completeness_at_age(
+            float(t), lat.mu, lat.sigma, lat.onset_delta_days)
+            for t in range(T)]
 
     # ── Drift setup (v2 lines 731-747) ───────────────────────────
     # Use span-level alpha/beta when provided (multi-hop parity).
@@ -1191,11 +1245,15 @@ def compute_forecast_sweep(
     _p_sd = math.sqrt(_drift_alpha * _drift_beta / (
         (_drift_alpha + _drift_beta) ** 2 * (_drift_alpha + _drift_beta + 1)))
     _p_var_logit = _p_sd ** 2 / (_p_clamp * (1 - _p_clamp)) ** 2
-    _mu_var = lat.mu_sd ** 2 if lat.mu_sd > 0 else 0.01 ** 2
-    _sigma_var_log = (lat.sigma_sd / max(lat.sigma, 0.01)) ** 2 \
-        if lat.sigma_sd > 0 else 0.01 ** 2
-    _onset_var_log1p = (lat.onset_sd / max(1 + lat.onset_delta_days, 1.0)) ** 2 \
-        if lat.onset_sd > 0 else 0.01 ** 2
+    # Use span-level SDs when provided (v2 parity for multi-hop)
+    _eff_mu_sd = span_mu_sd if span_mu_sd and span_mu_sd > 0 else lat.mu_sd
+    _eff_sigma_sd = span_sigma_sd if span_sigma_sd and span_sigma_sd > 0 else lat.sigma_sd
+    _eff_onset_sd = span_onset_sd if span_onset_sd and span_onset_sd > 0 else lat.onset_sd
+    _mu_var = _eff_mu_sd ** 2 if _eff_mu_sd > 0 else 0.01 ** 2
+    _sigma_var_log = (_eff_sigma_sd / max(lat.sigma, 0.01)) ** 2 \
+        if _eff_sigma_sd > 0 else 0.01 ** 2
+    _onset_var_log1p = (_eff_onset_sd / max(1 + lat.onset_delta_days, 1.0)) ** 2 \
+        if _eff_onset_sd > 0 else 0.01 ** 2
     drift_sds = np.sqrt(_SWEEP_DRIFT_FRACTION * np.array([
         _p_var_logit, _mu_var, _sigma_var_log, _onset_var_log1p,
     ]))
@@ -1298,7 +1356,8 @@ def compute_forecast_sweep(
             remaining_cdf = np.maximum(cdf_i - cdf_at_a[:, None], 0.0)
             q_late = (p_i[:, None] * remaining_cdf) / (1 - q_early)
             q_late = np.clip(q_late, 0.0, 1.0)
-            Y_D = remaining * q_late  # deterministic (sampling_mode='none')
+            # v2 default is binomial sampling (display_settings.continuous_forecast)
+            Y_D = _loop_rng.binomial(int(remaining), q_late)
 
             # Pop C: post-frontier upstream arrivals (v2 lines 888-898)
             X_C = np.zeros((S, T), dtype=np.float64)

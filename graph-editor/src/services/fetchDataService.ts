@@ -147,6 +147,17 @@ export interface FetchOptions {
    * (e.g. 10y) where “missing history” is expected and not actionable.
    */
   suppressMissingDataToast?: boolean;
+
+  /**
+   * Override the “analysis date” used for cohort age calculations in the LAG topo pass.
+   *
+   * Default: `new Date()` (current system time).
+   *
+   * Intended for tests that need deterministic cohort ages without relying on
+   * `vi.useFakeTimers`, which does not reliably intercept `new Date()` across
+   * module boundaries in vitest's worker pool.
+   */
+  queryDate?: Date;
 }
 
 export interface FetchResult {
@@ -1686,7 +1697,7 @@ export async function runStage2EnhancementsAndInboundN(
           // Cohort dates come from Amplitude; as time passes, cohorts age and
           // completeness should converge towards 1 for long-ago cohorts,
           // independent of the cohort() window bounds.
-          const queryDateForLAG = new Date();
+          const queryDateForLAG = itemOptions?.queryDate ?? new Date();
           
           // Pass LAG slice window so completeness is computed from cohorts in the
           // same date range as the evidence (whether from cohort() or window() DSL).
@@ -1876,247 +1887,317 @@ export async function runStage2EnhancementsAndInboundN(
             };
           }
           
-          // Apply ALL LAG values in ONE atomic operation via UpdateManager
-          // Single call: clone once, apply all latency + means, rebalance once
+          // ════════════════════════════════════════════════════════════════
+          // UNIFIED FE/BE TOPO PASS APPLICATION
+          //
+          // Design: FE topo pass results are held (not applied immediately).
+          // BE topo pass is fired concurrently. We race BE against a 500ms
+          // deadline:
+          //   - BE wins:  merge BE into FE results → single applyBatchLAGValues
+          //   - Timeout:  apply FE results → await BE up to 3s hard cap →
+          //               if BE arrives, re-apply merged results (second render)
+          //               if BE exceeds 3s, discard + warn in session log
+          //
+          // This ensures sibling rebalancing ALWAYS runs through UpdateManager
+          // (single code path) regardless of which source provides p.mean.
+          // ════════════════════════════════════════════════════════════════
           if (lagResult.edgeValues.length > 0 && finalGraph?.edges) {
             const updateManager = new UpdateManager();
-
-            // In from-file mode, the parameter file already contains slice-level latency
-            // summaries (median/t95/completeness). The LAG topo pass is primarily needed
-            // for path_t95 and (in cohort mode) blended p.mean. Do not overwrite the
-            // file-provided latency summary fields.
             const preserveLatencySummaryFromFile = itemOptions?.mode === 'from-file';
+            const feEdgeValues = lagResult.edgeValues;
 
-            // Phase 2: apply blended p.mean for latency edges in BOTH window() and cohort() modes.
-            const edgeValuesToApply = lagResult.edgeValues;
-            
-            // DEBUG: Log p.mean values BEFORE LAG application
-            console.log('[fetchDataService] BEFORE applyBatchLAGValues:', {
-              edgeMeans: edgeValuesToApply.slice(0, 3).map(ev => {
-                const edge = finalGraph.edges?.find((e: any) => e.uuid === ev.edgeUuid || e.id === ev.edgeUuid);
-                return {
-                  id: ev.edgeUuid,
-                  currentMean: edge?.p?.mean,
-                  targetBlendedMean: ev.blendedMean,
-                };
-              }),
-            });
-            
-      const nextGraph = updateManager.applyBatchLAGValues(
-              finalGraph,
-              edgeValuesToApply.map(ev => ({
-                edgeId: ev.edgeUuid,
-                conditionalIndex: ev.conditionalIndex, // PARITY: Pass conditionalIndex for conditional_p writes
-                latency: preserveLatencySummaryFromFile
-                  ? (() => {
-                      const edge = finalGraph.edges?.find((e: any) => e.uuid === ev.edgeUuid || e.id === ev.edgeUuid);
-                      // For conditional probabilities, get existing latency from conditional_p[i].p.latency
-                      const existing = typeof ev.conditionalIndex === 'number'
-                        ? edge?.conditional_p?.[ev.conditionalIndex]?.p?.latency
-                        : edge?.p?.latency;
-                      return selectLatencyToApplyForTopoPass(ev.latency, existing, true);
-                    })()
-                  : ev.latency,
-                blendedMean: ev.blendedMean,
-                forecast: ev.forecast,
-                evidence: ev.evidence,
-              })),
-              { writeHorizonsToGraph: itemOptions?.writeLagHorizonsToGraph === true }
-            );
-
-            // CRITICAL: Commit the post-LAG graph to state immediately.
-            //
-            // Otherwise, if inbound-n is a no-op (or setGraph is suppressed by a batching wrapper),
-            // the UI can display stale p.latency.* / p.mean until a subsequent fetch triggers
-            // another state update. This was showing up as "only updates when I fetch AGAIN".
-      setGraph(nextGraph);
-
-      // Keep local reference for inbound-n debugging and computation
-      finalGraph = nextGraph;
-
-      // NOTE (policy):
-      // We do NOT persist derived horizons (t95/path_t95) back to parameter files as a side-effect
-      // of ordinary fetches. Persisting horizons is an explicit action (e.g. after Retrieve All, or
-      // via a dedicated "LAG horizons" menu action) so users can control automation via override flags.
-
-      // ── Update analytic model_vars entries with topo pass results ──
-      // The analytic entry was initially built by UpdateManager with raw
-      // evidence rate. Now that the topo pass has run, update it with the
-      // model's forecast (p∞) and full latency params.
-      {
-        const { upsertModelVars, applyPromotion } = await import('./modelVarsResolution');
-        for (const ev of edgeValuesToApply) {
-          const edge = finalGraph.edges?.find((e: any) => e.uuid === ev.edgeUuid || e.id === ev.edgeUuid);
-          if (!edge?.p?.model_vars) continue;
-          const existing = edge.p.model_vars.find((v: any) => v.source === 'analytic');
-          if (!existing) continue;
-
-          // Update probability.mean to p∞ (forecast), not raw evidence.
-          // Preserve existing stdev (evidence uncertainty) — the forecast
-          // has no separate uncertainty estimate, but zeroing stdev would
-          // clobber the evidence stdev when applyPromotion runs.
-          const pInfinity = ev.forecast?.mean;
-          if (typeof pInfinity === 'number' && Number.isFinite(pInfinity)) {
-            existing.probability.mean = pInfinity;
-          }
-
-          // Update latency from topo pass (may have been missing at UpdateManager time).
-          // Preserve existing path params when the current topo pass doesn't produce
-          // them (e.g. window mode doesn't compute path_mu/path_sigma).
-          if (ev.latency?.mu != null) {
-            const prev: Record<string, any> = existing.latency || {};
-            existing.latency = {
-              mu: ev.latency.mu!,
-              sigma: ev.latency.sigma!,
-              t95: ev.latency.t95,
-              onset_delta_days: ev.latency.promoted_onset_delta_days ?? 0,
-              // Path params: use new value if available, otherwise preserve previous
-              ...((ev.latency.path_mu ?? prev.path_mu) != null ? { path_mu: ev.latency.path_mu ?? prev.path_mu } : {}),
-              ...((ev.latency.path_sigma ?? prev.path_sigma) != null ? { path_sigma: ev.latency.path_sigma ?? prev.path_sigma } : {}),
-              ...((ev.latency.path_t95 ?? prev.path_t95) != null ? { path_t95: ev.latency.path_t95 ?? prev.path_t95 } : {}),
-              ...((ev.latency.path_onset_delta_days ?? prev.path_onset_delta_days) != null ? { path_onset_delta_days: ev.latency.path_onset_delta_days ?? prev.path_onset_delta_days } : {}),
-              // Heuristic dispersion
-              ...(ev.latency.mu_sd != null ? { mu_sd: ev.latency.mu_sd } : {}),
-              ...(ev.latency.sigma_sd != null ? { sigma_sd: ev.latency.sigma_sd } : {}),
-              ...(ev.latency.onset_sd != null ? { onset_sd: ev.latency.onset_sd } : {}),
-              ...(ev.latency.onset_mu_corr != null ? { onset_mu_corr: ev.latency.onset_mu_corr } : {}),
-              ...(ev.latency.path_mu_sd != null ? { path_mu_sd: ev.latency.path_mu_sd } : {}),
-              ...(ev.latency.path_sigma_sd != null ? { path_sigma_sd: ev.latency.path_sigma_sd } : {}),
-              ...(ev.latency.path_onset_sd != null ? { path_onset_sd: ev.latency.path_onset_sd } : {}),
-            };
-          }
-          // Update probability.stdev with heuristic p_sd if available
-          if (ev.latency?.p_sd != null && Number.isFinite(ev.latency.p_sd) && ev.latency.p_sd > 0) {
-            existing.probability.stdev = ev.latency.p_sd;
-          }
-        }
-        // Re-run promotion so promoted scalars reflect updated entries
-        for (const edge of (finalGraph.edges ?? []) as any[]) {
-          if (edge.p?.model_vars?.length) {
-            applyPromotion(edge.p, (finalGraph as any).model_source_preference);
-          }
-        }
-      }
-            
-            // DEBUG: Log p.mean values AFTER LAG application
-            console.log('[fetchDataService] AFTER applyBatchLAGValues:', {
-              edgeMeans: edgeValuesToApply.slice(0, 3).map(ev => {
-                const edge = finalGraph.edges?.find((e: any) => e.uuid === ev.edgeUuid || e.id === ev.edgeUuid);
-                return {
-                  id: ev.edgeUuid,
-                  newMean: edge?.p?.mean,
-                  expectedBlendedMean: ev.blendedMean,
-                  match: edge?.p?.mean === Math.round((ev.blendedMean ?? 0) * 1000) / 1000,
-                };
-              }),
-            });
-          }
-
-          // ── BE topo pass (analytic_be model_vars) + parity comparison ──
-          // Awaited: applies BE entries to finalGraph directly so inbound-n (below)
-          // sees both FE and BE results. Previously fire-and-forget, which raced with
-          // inbound-n — last writer won, discarding the other's results.
-          try {
+            // Fire BE topo pass immediately (non-blocking)
             const { runBeTopoPass } = await import('./beTopoPassService');
-            const { upsertModelVars } = await import('./modelVarsResolution');
-            const beEntries = await runBeTopoPass(
+            const bePromise = runBeTopoPass(
               finalGraph, paramLookup, queryDateForLAG, lagHelpers, lagCohortWindow,
               lagSliceSource, activeEdgesForLAG,
-            );
-            if (beEntries.length > 0 && finalGraph?.edges) {
-              let applied = 0;
-              for (const beEntry of beEntries) {
-                const { edgeUuid, conditionalIndex, entry, beScalars } = beEntry;
-                const edge = finalGraph.edges?.find((e: any) => e.uuid === edgeUuid || e.id === edgeUuid);
-                if (!edge) continue;
-                // Snapshot FE values before BE overwrites them (for parity log)
-                if (beScalars && edge.p) {
-                  (beEntry as any)._feSnapshot = {
-                    completeness: edge.p.latency?.completeness ?? null,
-                    pMean: edge.p.mean ?? null,
-                    pSd: edge.p.stdev ?? null,
-                  };
-                }
-                if (conditionalIndex != null) {
-                  const cp = edge.conditional_p?.[conditionalIndex];
-                  if (cp?.p) {
-                    upsertModelVars(cp.p, entry);
-                    applied++;
+            ).catch(e => {
+              console.warn('[fetchDataService] BE topo pass failed:', e);
+              if (batchLogId) {
+                sessionLogService.addChild(batchLogId, 'error', 'BE_TOPO_PASS',
+                  `BE topo pass failed: ${e?.message || e}`,
+                );
+              }
+              return null;
+            });
+
+            const beStartTime = Date.now();
+            if (batchLogId) {
+              sessionLogService.addChild(batchLogId, 'info', 'BE_TOPO_PASS',
+                `BE topo pass started for ${feEdgeValues.length} edges`,
+              );
+            }
+
+            // Race: wait up to 500ms for BE
+            const BE_FAST_DEADLINE_MS = 500;
+            const BE_HARD_CAP_MS = 3000;
+            const timeoutSentinel = Symbol('timeout');
+            const raceResult = await Promise.race([
+              bePromise,
+              new Promise<typeof timeoutSentinel>(resolve =>
+                setTimeout(() => resolve(timeoutSentinel), BE_FAST_DEADLINE_MS)
+              ),
+            ]);
+
+            const beResolvedFast = raceResult !== timeoutSentinel;
+            const beEntries = beResolvedFast ? raceResult : null;
+
+            // ── Helper: merge BE scalars into FE edge values ──
+            const mergeBeIntoFe = (
+              feValues: typeof feEdgeValues,
+              beResults: NonNullable<Awaited<ReturnType<typeof runBeTopoPass>>>,
+            ): typeof feEdgeValues => {
+              const beByKey = new Map<string, (typeof beResults)[number]>();
+              for (const be of beResults) {
+                const key = be.conditionalIndex != null
+                  ? `${be.edgeUuid}::${be.conditionalIndex}`
+                  : be.edgeUuid;
+                beByKey.set(key, be);
+              }
+
+              return feValues.map(fe => {
+                const key = fe.conditionalIndex != null
+                  ? `${fe.edgeUuid}::${fe.conditionalIndex}`
+                  : fe.edgeUuid;
+                const be = beByKey.get(key);
+                if (!be?.beScalars) return fe;
+
+                const bs = be.beScalars;
+                return {
+                  ...fe,
+                  // BE latency overwrites FE latency where available
+                  latency: {
+                    ...fe.latency,
+                    ...(bs.mu != null ? { mu: bs.mu } : {}),
+                    ...(bs.sigma != null ? { sigma: bs.sigma } : {}),
+                    ...(bs.t95 != null ? { t95: bs.t95 } : {}),
+                    ...(bs.onset_delta_days != null ? { promoted_onset_delta_days: bs.onset_delta_days } : {}),
+                    ...(bs.completeness != null ? { completeness: bs.completeness } : {}),
+                    ...(bs.completeness_stdev != null ? { completeness_stdev: bs.completeness_stdev } : {}),
+                    ...(bs.path_t95 != null ? { path_t95: bs.path_t95 } : {}),
+                    ...(bs.path_mu != null ? { path_mu: bs.path_mu } : {}),
+                    ...(bs.path_sigma != null ? { path_sigma: bs.path_sigma } : {}),
+                    ...(bs.path_onset_delta_days != null ? { path_onset_delta_days: bs.path_onset_delta_days } : {}),
+                    ...(bs.median_lag_days != null ? { median_lag_days: bs.median_lag_days } : {}),
+                    ...(bs.mean_lag_days != null ? { mean_lag_days: bs.mean_lag_days } : {}),
+                    // Heuristic dispersion
+                    ...(bs.mu_sd != null ? { mu_sd: bs.mu_sd } : {}),
+                    ...(bs.sigma_sd != null ? { sigma_sd: bs.sigma_sd } : {}),
+                    ...(bs.onset_sd != null ? { onset_sd: bs.onset_sd } : {}),
+                    ...(bs.onset_mu_corr != null ? { onset_mu_corr: bs.onset_mu_corr } : {}),
+                    ...(bs.p_sd != null ? { p_sd: bs.p_sd } : {}),
+                    ...(bs.path_mu_sd != null ? { path_mu_sd: bs.path_mu_sd } : {}),
+                    ...(bs.path_sigma_sd != null ? { path_sigma_sd: bs.path_sigma_sd } : {}),
+                    ...(bs.path_onset_sd != null ? { path_onset_sd: bs.path_onset_sd } : {}),
+                  },
+                  // BE probability overwrites FE
+                  blendedMean: bs.blended_mean ?? fe.blendedMean,
+                  forecast: bs.p_infinity != null
+                    ? { mean: bs.p_infinity }
+                    : fe.forecast,
+                  // Evidence stays from FE (authoritative from actual data)
+                  evidence: fe.evidence,
+                };
+              });
+            };
+
+            // ── Helper: apply edge values through UpdateManager + model_vars ──
+            const applyEdgeValues = async (
+              graph: any,
+              edgeValues: typeof feEdgeValues,
+              beResults: NonNullable<Awaited<ReturnType<typeof runBeTopoPass>>> | null,
+              source: string,
+            ): Promise<any> => {
+              const nextGraph = updateManager.applyBatchLAGValues(
+                graph,
+                edgeValues.map(ev => ({
+                  edgeId: ev.edgeUuid,
+                  conditionalIndex: ev.conditionalIndex,
+                  latency: preserveLatencySummaryFromFile
+                    ? (() => {
+                        const edge = graph.edges?.find((e: any) => e.uuid === ev.edgeUuid || e.id === ev.edgeUuid);
+                        const existing = typeof ev.conditionalIndex === 'number'
+                          ? edge?.conditional_p?.[ev.conditionalIndex]?.p?.latency
+                          : edge?.p?.latency;
+                        return selectLatencyToApplyForTopoPass(ev.latency, existing, true);
+                      })()
+                    : ev.latency,
+                  blendedMean: ev.blendedMean,
+                  forecast: ev.forecast,
+                  evidence: ev.evidence,
+                })),
+                { writeHorizonsToGraph: itemOptions?.writeLagHorizonsToGraph === true }
+              );
+
+              // Update analytic model_vars with topo pass results
+              const { upsertModelVars, applyPromotion } = await import('./modelVarsResolution');
+
+              // Upsert analytic_be model_vars entries if BE results available
+              if (beResults) {
+                for (const beEntry of beResults) {
+                  const edge = nextGraph.edges?.find((e: any) => e.uuid === beEntry.edgeUuid || e.id === beEntry.edgeUuid);
+                  if (!edge) continue;
+                  if (beEntry.conditionalIndex != null) {
+                    const cp = edge.conditional_p?.[beEntry.conditionalIndex];
+                    if (cp?.p) upsertModelVars(cp.p, beEntry.entry);
+                  } else if (edge.p) {
+                    upsertModelVars(edge.p, beEntry.entry);
                   }
-                } else if (edge.p) {
-                  upsertModelVars(edge.p, entry);
-                  // Write BE-computed scalars to edge (doc 29 Phase 2).
-                  // BE topo pass results. Only overwrite fields that the BE
-                  // genuinely adds (completeness_stdev, path-level t95).
-                  // Do NOT overwrite mu/sigma/onset — those are managed by
-                  // the promotion cascade (bayesian > analytic_be > analytic).
-                  // Writing heuristic re-fits here would clobber Bayesian
-                  // posteriors that promotion already placed.
-                  if (beScalars && edge.p.latency) {
-                    if (beScalars.completeness != null) edge.p.latency.completeness = beScalars.completeness;
-                    if (beScalars.completeness_stdev != null) edge.p.latency.completeness_stdev = beScalars.completeness_stdev;
-                    // Path-level t95 from topo accumulation (not managed by promotion)
-                    if (beScalars.t95 != null) edge.p.latency.promoted_t95 = beScalars.t95;
-                    if (beScalars.path_t95 != null) edge.p.latency.promoted_path_t95 = beScalars.path_t95;
-                    // Lag stats (observational, not model params)
-                    if (beScalars.median_lag_days != null) edge.p.latency.median_lag_days = beScalars.median_lag_days;
-                    if (beScalars.mean_lag_days != null) edge.p.latency.mean_lag_days = beScalars.mean_lag_days;
-                  }
-                  if (beScalars) {
-                    // Probability scalars
-                    if (beScalars.blended_mean != null) edge.p.mean = beScalars.blended_mean;
-                    if (beScalars.p_sd != null) edge.p.stdev = beScalars.p_sd;
-                    // Forecast
-                    if (beScalars.p_infinity != null) {
-                      if (!edge.p.forecast) edge.p.forecast = {};
-                      edge.p.forecast.mean = beScalars.p_infinity;
-                    }
-                    // Evidence rate (don't overwrite — FE evidence from actual data is authoritative)
-                  }
-                  applied++;
                 }
               }
-              // Log FE→BE parity: side-by-side for each edge
-              const edgesWithBE = beEntries.filter(e => e.beScalars != null);
-              if (edgesWithBE.length > 0 && batchLogId) {
-                for (const e of edgesWithBE) {
-                  const edge = finalGraph.edges?.find((ed: any) => ed.uuid === e.edgeUuid || ed.id === e.edgeUuid);
-                  const edgeId = edge?.p?.id || e.edgeUuid.substring(0, 12);
-                  const be = e.beScalars!;
-                  const fe = (e as any)._feSnapshot;
-                  if (!fe) continue;
 
-                  const fmt = (v: number | null | undefined, pct = true) =>
-                    v != null ? (pct ? `${(v * 100).toFixed(1)}%` : v.toFixed(3)) : '—';
+              // Update analytic entries with forecast/latency from topo pass
+              for (const ev of edgeValues) {
+                const edge = nextGraph.edges?.find((e: any) => e.uuid === ev.edgeUuid || e.id === ev.edgeUuid);
+                if (!edge?.p?.model_vars) continue;
+                const existing = edge.p.model_vars.find((v: any) => v.source === 'analytic');
+                if (!existing) continue;
 
-                  sessionLogService.addChild(batchLogId, 'info', 'FE_BE_PARITY',
-                    `${edgeId}: completeness FE=${fmt(fe.completeness)} → BE=${fmt(be.completeness)}` +
-                    (be.completeness_stdev != null ? ` ±${fmt(be.completeness_stdev)}` : '') +
-                    ` | p.mean FE=${fmt(fe.pMean)} → BE=${fmt(be.blended_mean)}` +
-                    ` | p.sd FE=${fmt(fe.pSd)} → BE=${fmt(be.p_sd)}`,
-                    undefined,
-                    {
-                      edge_id: edgeId,
-                      fe: { completeness: fe.completeness, p_mean: fe.pMean, p_sd: fe.pSd },
-                      be: {
-                        completeness: be.completeness, completeness_stdev: be.completeness_stdev,
-                        p_mean: be.blended_mean, p_sd: be.p_sd,
-                      },
+                const pInfinity = ev.forecast?.mean;
+                if (typeof pInfinity === 'number' && Number.isFinite(pInfinity)) {
+                  existing.probability.mean = pInfinity;
+                }
+
+                if (ev.latency?.mu != null) {
+                  const prev: Record<string, any> = existing.latency || {};
+                  existing.latency = {
+                    mu: ev.latency.mu!,
+                    sigma: ev.latency.sigma!,
+                    t95: ev.latency.t95,
+                    onset_delta_days: ev.latency.promoted_onset_delta_days ?? 0,
+                    ...((ev.latency.path_mu ?? prev.path_mu) != null ? { path_mu: ev.latency.path_mu ?? prev.path_mu } : {}),
+                    ...((ev.latency.path_sigma ?? prev.path_sigma) != null ? { path_sigma: ev.latency.path_sigma ?? prev.path_sigma } : {}),
+                    ...((ev.latency.path_t95 ?? prev.path_t95) != null ? { path_t95: ev.latency.path_t95 ?? prev.path_t95 } : {}),
+                    ...((ev.latency.path_onset_delta_days ?? prev.path_onset_delta_days) != null ? { path_onset_delta_days: ev.latency.path_onset_delta_days ?? prev.path_onset_delta_days } : {}),
+                    ...(ev.latency.mu_sd != null ? { mu_sd: ev.latency.mu_sd } : {}),
+                    ...(ev.latency.sigma_sd != null ? { sigma_sd: ev.latency.sigma_sd } : {}),
+                    ...(ev.latency.onset_sd != null ? { onset_sd: ev.latency.onset_sd } : {}),
+                    ...(ev.latency.onset_mu_corr != null ? { onset_mu_corr: ev.latency.onset_mu_corr } : {}),
+                    ...(ev.latency.path_mu_sd != null ? { path_mu_sd: ev.latency.path_mu_sd } : {}),
+                    ...(ev.latency.path_sigma_sd != null ? { path_sigma_sd: ev.latency.path_sigma_sd } : {}),
+                    ...(ev.latency.path_onset_sd != null ? { path_onset_sd: ev.latency.path_onset_sd } : {}),
+                  };
+                }
+                if (ev.latency?.p_sd != null && Number.isFinite(ev.latency.p_sd) && ev.latency.p_sd > 0) {
+                  existing.probability.stdev = ev.latency.p_sd;
+                }
+              }
+
+              // Re-run promotion so promoted scalars reflect updated entries
+              for (const edge of (nextGraph.edges ?? []) as any[]) {
+                if (edge.p?.model_vars?.length) {
+                  applyPromotion(edge.p, (nextGraph as any).model_source_preference);
+                }
+              }
+
+              setGraph(nextGraph);
+              console.log(`[fetchDataService] ${source}: applied ${edgeValues.length} edges via UpdateManager`);
+
+              if (FORECASTING_PARALLEL_RUN) {
+                compareModelVarsSources(nextGraph);
+              }
+
+              return nextGraph;
+            };
+
+            // ── Helper: log FE→BE parity ──
+            const logParity = (
+              graph: any,
+              feValues: typeof feEdgeValues,
+              beResults: NonNullable<Awaited<ReturnType<typeof runBeTopoPass>>>,
+            ) => {
+              if (!batchLogId) return;
+              const fmt = (v: number | null | undefined, pct = true) =>
+                v != null ? (pct ? `${(v * 100).toFixed(1)}%` : v.toFixed(3)) : '—';
+
+              for (const be of beResults) {
+                if (!be.beScalars) continue;
+                const feVal = feValues.find(f =>
+                  f.edgeUuid === be.edgeUuid &&
+                  f.conditionalIndex === (be.conditionalIndex ?? undefined)
+                );
+                if (!feVal) continue;
+
+                const edge = graph.edges?.find((e: any) => e.uuid === be.edgeUuid || e.id === be.edgeUuid);
+                const edgeId = edge?.p?.id || be.edgeUuid.substring(0, 12);
+                const bs = be.beScalars;
+
+                sessionLogService.addChild(batchLogId, 'info', 'FE_BE_PARITY',
+                  `${edgeId}: completeness FE=${fmt(feVal.latency.completeness)} → BE=${fmt(bs.completeness)}` +
+                  (bs.completeness_stdev != null ? ` ±${fmt(bs.completeness_stdev)}` : '') +
+                  ` | p.mean FE=${fmt(feVal.blendedMean)} → BE=${fmt(bs.blended_mean)}` +
+                  ` | p.sd FE=${fmt(feVal.latency.p_sd)} → BE=${fmt(bs.p_sd)}`,
+                  undefined,
+                  {
+                    edge_id: edgeId,
+                    fe: { completeness: feVal.latency.completeness, p_mean: feVal.blendedMean, p_sd: feVal.latency.p_sd },
+                    be: {
+                      completeness: bs.completeness, completeness_stdev: bs.completeness_stdev,
+                      p_mean: bs.blended_mean, p_sd: bs.p_sd,
                     },
+                  },
+                );
+              }
+            };
+
+            // ── Main flow: race BE against 500ms deadline ──
+            if (beEntries && beEntries.length > 0) {
+              // FAST PATH: BE responded within 500ms — use merged results, single render
+              const beElapsed = Date.now() - beStartTime;
+              const merged = mergeBeIntoFe(feEdgeValues, beEntries);
+              finalGraph = await applyEdgeValues(finalGraph, merged, beEntries, 'BE fast path');
+              logParity(finalGraph, feEdgeValues, beEntries);
+
+              if (batchLogId) {
+                sessionLogService.addChild(batchLogId, 'info', 'BE_TOPO_PASS',
+                  `BE topo pass completed in ${beElapsed}ms (fast path, single render)`,
+                );
+              }
+            } else if (beEntries === null) {
+              // BE failed — use FE results only
+              finalGraph = await applyEdgeValues(finalGraph, feEdgeValues, null, 'FE only (BE failed)');
+            } else {
+              // SLOW PATH: BE didn't respond in 500ms — apply FE now, await BE up to 3s
+              finalGraph = await applyEdgeValues(finalGraph, feEdgeValues, null, 'FE (BE pending)');
+
+              if (batchLogId) {
+                sessionLogService.addChild(batchLogId, 'info', 'BE_TOPO_PASS',
+                  `BE topo pass still pending after ${BE_FAST_DEADLINE_MS}ms, applied FE results`,
+                );
+              }
+
+              // Continue awaiting BE with hard 3s cap (remaining time after fast deadline)
+              const remainingMs = BE_HARD_CAP_MS - BE_FAST_DEADLINE_MS;
+              const lateResult = await Promise.race([
+                bePromise,
+                new Promise<typeof timeoutSentinel>(resolve =>
+                  setTimeout(() => resolve(timeoutSentinel), remainingMs)
+                ),
+              ]);
+
+              const beElapsed = Date.now() - beStartTime;
+
+              if (lateResult === timeoutSentinel || lateResult === null) {
+                // BE exceeded 3s hard cap or failed — discard, warn
+                if (lateResult === timeoutSentinel && batchLogId) {
+                  sessionLogService.addChild(batchLogId, 'warning', 'BE_TOPO_PASS',
+                    `BE topo pass exceeded ${BE_HARD_CAP_MS}ms hard cap — results discarded`,
+                  );
+                }
+                console.warn(`[fetchDataService] BE topo pass exceeded ${BE_HARD_CAP_MS}ms, discarding`);
+              } else if (lateResult.length > 0) {
+                // BE arrived within 3s — merge and re-apply (second render)
+                const merged = mergeBeIntoFe(feEdgeValues, lateResult);
+                finalGraph = await applyEdgeValues(finalGraph, merged, lateResult, `BE late merge (${beElapsed}ms)`);
+                logParity(finalGraph, feEdgeValues, lateResult);
+
+                if (batchLogId) {
+                  sessionLogService.addChild(batchLogId, 'info', 'BE_TOPO_PASS',
+                    `BE topo pass completed in ${beElapsed}ms (late merge, second render)`,
                   );
                 }
               }
-
-              if (applied > 0) {
-                setGraph(finalGraph);
-                console.log(`[fetchDataService] BE topo pass: upserted ${applied} analytic_be entries into finalGraph`);
-                if (FORECASTING_PARALLEL_RUN) {
-                  compareModelVarsSources(finalGraph);
-                }
-              }
             }
-          } catch (e) {
-            console.warn('[fetchDataService] BE topo pass failed (non-blocking):', e);
           }
 
           if (batchLogId) {

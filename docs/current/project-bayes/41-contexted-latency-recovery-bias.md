@@ -1,7 +1,7 @@
 # Doc 41 — Contexted Latency Recovery Bias
 
 **Date**: 15-Apr-26
-**Status**: Per-slice `a` + shared sigma reduces onset misses by 50%. Residual small-onset bias under investigation.
+**Status**: Resolved. Config D (per-slice `a` + shared sigma + per-slice onset anchors + log-normal synth noise) eliminates onset bias: context-solo 4→0, diamond-context 16→2 (2 remaining are p misses, not latency). Full regression pending.
 **Depends on**: Doc 34 §11.8–11.9 (reparameterisation), §11.11 (centred slices)
 
 ---
@@ -534,21 +534,102 @@ possibly the onset anchor (edge-level `onset_obs` likelihood)
 or the softplus onset boundary creating an asymmetric pull on
 small-onset edges. Investigation ongoing.
 
-### 5.5 Assessment
+### 5.5 Per-slice onset anchors (15-Apr-26)
 
-Per-slice `a` with shared sigma (config D) is a substantial
-improvement:
-- 50% reduction in onset misses (12→6 on diamond)
-- Sigma inflation eliminated
-- Mu recovery clean throughout
-- 20% faster than baseline
+Per-slice onset observation likelihoods were added to directly
+constrain `onset_slice_vec[k]` from per-slice `onset_delta_days`
+in the DB rows. This required:
 
-But it is not a complete fix. A residual onset-high bias
-persists on small-onset edges. This residual is independent of
-the shared-a / free-sigma degeneracy identified in §3.3–3.4
-and requires separate investigation.
+1. Collecting onset observations per slice in `evidence.py`
+   (keyed by context prefix in `slice_key`, stored on
+   `SliceObservations.onset_observations`)
+2. Computing per-slice `sigma_eff` in `model.py` §1 (same
+   autocorrelation-corrected formula as edge-level)
+3. Emitting `pm.Normal("onset_obs_slice_...")` per slice in §3
 
-### 5.6 Stall detector gap found and fixed
+Initial testing showed the onset anchors completely dominating
+the posteriors (±0.01 uncertainty). Root cause: synth onset
+observation noise was unrealistically low — `max(onset * 0.1,
+0.1)` per observation, giving `sigma_eff ≈ 0.01` with 84
+retrieval dates. Fixed by aligning with the codebase's
+existing `onset_uncertainty` scale: `max(onset * 0.3, 1.0)`.
+This gives `sigma_eff ≈ 0.11`, informative but not dominating.
+
+### 5.6 Synth onset observation noise — three iterations
+
+The synth onset observation noise went through three stages:
+
+1. **Original** (`max(onset * 0.1, 0.1)`, clipped Gaussian):
+   unrealistically precise. With 84 retrieval dates,
+   `sigma_eff ≈ 0.01`, making onset anchors dominate over
+   trajectory data entirely. No clipping bias (sigma too small
+   for any draws to go negative).
+
+2. **Realistic scale** (`max(onset * 0.3, 1.0)`, clipped
+   Gaussian): correct dispersion but introduced clipping bias
+   via `max(0.0, ...)`. For onset=0.7 with sigma=1.0,
+   `P(draw < 0) ≈ 24%` — clipping those to 0 pulls the mean
+   upward by ~0.14 days. This caused a residual onset-HIGH
+   bias concentrated on small-onset edges, exactly matching
+   the observed pattern.
+
+3. **Log-normal noise** (current): `onset * lognormal(0, 0.3)`.
+   Always positive (no clipping), symmetric in log-space (no
+   bias), naturally produces larger absolute noise for larger
+   onset. `log_sigma=0.3` gives ~30% coefficient of variation.
+
+### 5.7 Results with log-normal onset noise
+
+Synth graphs rebuilt with `--bust-cache` after log-normal fix.
+
+**synth-context-solo** (1 edge, 3 slices):
+
+| Config | Onset misses | Sigma misses | p misses | Total |
+|--------|-------------|-------------|---------|-------|
+| A (baseline) | 3/3 | 1 | 0 | 4 |
+| D (full fix) | 0/3 | 0 | 0 | **0** |
+
+Config D per-slice detail:
+- google: onset 0.70→0.79, Δ=0.09 **OK**
+- direct: onset 1.00→1.07, z=2.33 **OK**
+- email: onset 1.50→1.54, z=0.67 **OK**
+- sigma: 0.540 uniform, all OK
+- mu: all OK
+
+**synth-diamond-context** (6 edges, 1 join, 3 slices):
+
+| Config | Onset misses | Sigma misses | p misses | Total |
+|--------|-------------|-------------|---------|-------|
+| A (baseline) | 12/18 | 2 | 2 | 16 |
+| D (full fix) | 0/18 | 0 | 2 | **2** |
+
+All 12 onset misses eliminated. All 2 sigma misses eliminated.
+The 2 remaining misses are both probability (`p`) on weak email
+slices — pre-existing and unrelated to the latency bias work.
+Onset recovery clean on all 18 per-slice values including
+small-onset edges (0.8→0.83, 0.8→0.86, 0.8→0.89).
+
+### 5.8 Assessment
+
+The onset-HIGH / mu-LOW bias is **resolved** on the two graphs
+tested. The fix comprises four components:
+
+| Component | What it addresses |
+|-----------|------------------|
+| Per-slice `a` (model) | Cross-slice compromise (§3.3) |
+| Shared sigma (model) | Within-slice (a,σ) ridge (§3.4) |
+| Per-slice onset anchors (model) | Direct onset identification |
+| Log-normal onset noise (synth) | Clipping bias on small onset |
+
+The first two address real model issues. The third uses data
+already present in the DB. The fourth fixes a synth data
+artefact that was masking the model fixes' effectiveness.
+
+**Remaining work**: full contexted regression to confirm across
+all topologies, then uncontexted regression to verify no
+regression.
+
+### 5.9 Stall detector gap found and fixed
 
 During the diamond-context runs, config A stalled on chain 0
 (368 draws after 800+ seconds, while chains 1–2 completed at
