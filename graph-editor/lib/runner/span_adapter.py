@@ -127,7 +127,15 @@ def span_kernel_to_edge_params(
 
         # Posterior SDs for MC fan — read from promoted model fields.
         # The FE's applyPromotion writes promoted_mu_sd etc. from
-        # whichever model_var won.  Fall back to posterior (Bayes).
+        # whichever model_var won.  Fall back to posterior (Bayes),
+        # then to winning model_var's latency block. The third
+        # fallback is necessary for BE-only execution (CLI, API,
+        # tests) where the FE promotion step hasn't run.
+        _winning_mv_lat = {}
+        for _mv in p_data.get('model_vars', []):
+            if _mv.get('source') == 'bayesian':
+                _winning_mv_lat = _mv.get('latency', {})
+                break
         _sd_map = {
             'bayes_mu_sd':              ('promoted_mu_sd',              'mu_sd'),
             'bayes_sigma_sd':           ('promoted_sigma_sd',           'sigma_sd'),
@@ -139,7 +147,9 @@ def span_kernel_to_edge_params(
             'bayes_path_onset_mu_corr': ('promoted_path_onset_mu_corr', 'path_onset_mu_corr'),
         }
         for param_key, (promoted_key, posterior_key) in _sd_map.items():
-            val = latency.get(promoted_key) or posterior.get(posterior_key)
+            val = (latency.get(promoted_key)
+                   or posterior.get(posterior_key)
+                   or _winning_mv_lat.get(posterior_key))
             if isinstance(val, (int, float)):
                 params[param_key] = float(val)
 

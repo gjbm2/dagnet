@@ -1,7 +1,7 @@
 # Project Bayes — Document Index
 
-**Last updated**: 13-Apr-26
-**Verified against codebase**: 13-Apr-26
+**Last updated**: 14-Apr-26
+**Verified against codebase**: 14-Apr-26
 
 For sequencing, priorities, and current status snapshot, see
 [programme.md](programme.md).
@@ -54,6 +54,7 @@ For sequencing, priorities, and current status snapshot, see
 | 33 | [33-bayes-compiler-dispersion-forensic-review.md](33-bayes-compiler-dispersion-forensic-review.md) | **Open** | Engineering-facing forensic review of six compiler dispersion defects. Highest-risk items are endpoint double-counting and the order-dependent Phase 2 non-exhaustive branch-group prior |
 | 33B | [33-snapshot-query-batching.md](33-snapshot-query-batching.md) | **Open** | Sequential per-subject DB queries in `worker.py` — 2N round-trips for N edges. Affects Bayes worker, analysis prep, retrieve-all |
 | 39 | [39-data-binding-parity-defects.md](39-data-binding-parity-defects.md) | **Open** (12-Apr-26) | Systemic class: data binding parity failures between contexted and bare DSL paths. 5 defects found and fixed; 6 parity invariants defined. Blind test coverage needed |
+| 40 | [40-centred-param-sparsity-robustness.md](40-centred-param-sparsity-robustness.md) | **Ready to run** (14-Apr-26) | Centred parameterisation may degrade on sparse data. Sparsity layer built in `synth_gen.py` (3 params: `frame_drop_rate`, `toggle_rate`, `initial_absent_pct`). Sweep script (`scripts/sparsity-sweep.py`) generates variants and runs centred vs non-centred via `param_recovery.py`. 9 blind tests, 2 sparse truth YAMLs. Queued run in `programme.md` |
 
 ## Reference and operational docs
 

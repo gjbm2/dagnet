@@ -919,6 +919,7 @@ def enhance_graph_latencies(
             # D1 FIX: Anchor delay — exponential credibility blend (FE lines 2194-2256)
             # Window mode: FE skips anchor delay blend entirely (window cohorts are not
             # anchored at the entry node A, so the prior/blend mechanism is meaningless).
+            anchor_cohorts = []
             if is_window_mode:
                 anchor_median_lag = 0.0
             else:

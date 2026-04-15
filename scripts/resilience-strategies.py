@@ -59,6 +59,8 @@ def run_once(
         with os.fdopen(fd, "w") as f:
             json.dump(settings, f)
 
+    # Unique job label with timestamp for persistent log retrieval
+    unique_label = f"{run_label}-r{int(time.time())}"
     cmd = [
         sys.executable, os.path.join(REPO_ROOT, "bayes", "param_recovery.py"),
         "--graph", graph,
@@ -66,7 +68,7 @@ def run_once(
         "--draws", str(draws),
         "--chains", str(chains),
         "--timeout", "0",
-        "--job-label", run_label,
+        "--job-label", unique_label,
         *WINNING_FORMULA,
     ]
     if settings_path:

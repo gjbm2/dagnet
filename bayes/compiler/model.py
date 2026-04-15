@@ -369,6 +369,8 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
     feat_shared_latency_slices = features.get("shared_latency_slices", False)
     feat_centred_latency_slices = features.get("centred_latency_slices", True)
     feat_centred_p_slices = features.get("centred_p_slices", True)
+    feat_per_slice_a = features.get("per_slice_a", False)
+    feat_shared_sigma_slices = features.get("shared_sigma_slices", False)
     is_phase2 = phase2_frozen is not None
     # latency_reparam implies both latent_onset and latent_latency (doc 34 §11.8.5).
     use_reparam = (feat_latency_reparam
@@ -398,7 +400,9 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                        f"latency_reparam={feat_latency_reparam} "
                        f"(use_reparam={use_reparam}), "
                        f"centred_latency_slices={feat_centred_latency_slices}, "
-                       f"centred_p_slices={feat_centred_p_slices}")
+                       f"centred_p_slices={feat_centred_p_slices}, "
+                       f"per_slice_a={feat_per_slice_a}, "
+                       f"shared_sigma_slices={feat_shared_sigma_slices}")
     edge_var_names: dict[str, str] = {}  # edge_id → primary p variable name
     slice_axes: dict[str, dict] = {}     # edge_id → {ctx_keys, ctx_to_idx, n_slices, safe_id}
 
@@ -1490,8 +1494,9 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                                     mu=0, sigma=1, shape=(_n_slices,))
                                 _m_slice_vec = _m_base_var + _eps_m_slice_vec * _tau_m_vec
 
-                            # Per-slice r offsets (only when reparam_slices >= 2)
-                            if _reparam_slice_level >= 2:
+                            # Per-slice r offsets (only when reparam_slices >= 2
+                            # and shared_sigma_slices is not forcing shared sigma)
+                            if _reparam_slice_level >= 2 and not feat_shared_sigma_slices:
                                 _tau_r_by_dim: dict[str, object] = {}
                                 for _dk in ev.slice_groups:
                                     _dk_safe = _safe_var_name(_dk)
@@ -1515,10 +1520,59 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                             else:
                                 _sigma_per_slice = False
 
-                            # a is always edge-level (shared across slices)
+                            # Per-slice a offsets (doc 41a): when per_slice_a
+                            # is enabled, each slice gets its own a via a
+                            # zero-sum delta per dimension.  Otherwise a is
+                            # edge-level (shared).
+                            _a_per_slice = False
+                            if feat_per_slice_a:
+                                _tau_a_by_dim: dict[str, object] = {}
+                                for _dk in ev.slice_groups:
+                                    _dk_safe = _safe_var_name(_dk)
+                                    _ta_name = (f"tau_a_slice_{safe_id}__{_dk_safe}"
+                                                if _n_dims > 1
+                                                else f"tau_a_slice_{safe_id}")
+                                    _tau_a_by_dim[_dk] = pm.HalfNormal(
+                                        _ta_name, sigma=1.0)
+
+                                # Zero-sum per dimension: for each dim with
+                                # K_d slices, sample K_d unconstrained then
+                                # centre (subtract mean).  This is
+                                # exchangeable — no slice is privileged.
+                                _delta_a_parts: list = []
+                                _dim_offset = 0
+                                for _dk, _sg in ev.slice_groups.items():
+                                    _k_d = len(_sg.slices)
+                                    _dk_safe = _safe_var_name(_dk)
+                                    _da_name = (
+                                        f"delta_a_raw_{safe_id}__{_dk_safe}"
+                                        if _n_dims > 1
+                                        else f"delta_a_raw_{safe_id}")
+                                    _da_raw = pm.Normal(
+                                        _da_name, mu=0,
+                                        sigma=_tau_a_by_dim[_dk],
+                                        shape=(_k_d,))
+                                    # Centre: subtract mean → zero-sum
+                                    _da_centred = _da_raw - pt.mean(_da_raw)
+                                    _delta_a_parts.append(_da_centred)
+                                    _dim_offset += _k_d
+                                _delta_a_vec = pt.concatenate(
+                                    _delta_a_parts) if len(
+                                    _delta_a_parts) > 1 else _delta_a_parts[0]
+                                pm.Deterministic(
+                                    f"delta_a_vec_{safe_id}", _delta_a_vec)
+
+                                _a_slice_vec = pm.Deterministic(
+                                    f"a_slice_vec_{safe_id}",
+                                    _a_base_var + _delta_a_vec)
+                                _a_per_slice = True
+                            else:
+                                _a_slice_vec = _a_base_var  # scalar broadcasts
+
+                            # Back-transforms using per-slice or shared a
                             _mu_slice_vec = pm.Deterministic(
                                 f"mu_slice_vec_{safe_id}",
-                                _m_slice_vec - pt.softplus(_a_base_var))
+                                _m_slice_vec - pt.softplus(_a_slice_vec))
                             if _sigma_per_slice:
                                 _sigma_slice_vec = pm.Deterministic(
                                     f"sigma_slice_vec_{safe_id}",
@@ -1527,13 +1581,21 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                                 _sigma_slice_vec = None  # use _sigma_base
                             _onset_slice_vec = pm.Deterministic(
                                 f"onset_slice_vec_{safe_id}",
-                                pt.exp(_m_slice_vec) * pm.math.invlogit(_a_base_var))
+                                pt.exp(_m_slice_vec) * pm.math.invlogit(
+                                    _a_slice_vec))
 
                             _use_slice_latency_vecs = True
-                            _label = "(m,r)" if _reparam_slice_level >= 2 else "(m)"
+                            _parts = ["m"]
+                            if _a_per_slice:
+                                _parts.append("a")
+                            if _sigma_per_slice:
+                                _parts.append("r")
+                            _label = "(" + ",".join(_parts) + ")"
+                            _a_desc = ("per-slice a" if _a_per_slice
+                                       else "shared a")
                             diagnostics.append(
                                 f"  slice_latency: {edge_id[:8]}… "
-                                f"per-slice {_label} shared a, "
+                                f"per-slice {_label} {_a_desc}, "
                                 f"{_n_slices} slices [reparam]")
                         else:
                             if not feat_shared_latency_slices:
@@ -1785,8 +1847,113 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                         bg, topology, evidence, edge_var_names, model, diagnostics,
                     )
 
+        # =============================================================
+        # SECTION 7: CONDITIONAL_P — INDEPENDENT POPULATIONS (doc 14 §6)
+        # =============================================================
+        # Each conditional_p entry is a parallel evidence stream with its
+        # own param file, own core_hash, own latency. The model emits
+        # independent p (Beta for solo, part of a separate Dirichlet for
+        # branch groups) and independent latency variables per condition.
+        #
+        # Conditionals supervene on the graph: they share the upstream
+        # topology but have fully independent probability and evidence.
+
+        _cond_edge_var_names: dict[str, dict[str, str]] = {}
+
+        for edge_id, et in topology.edges.items():
+            if not et.conditional_p:
+                continue
+            safe_id = _safe_var_name(edge_id)
+
+            for _ci, cp in enumerate(et.conditional_p):
+                if cp.evidence is None:
+                    continue
+                if cp.evidence.skipped:
+                    continue
+
+                cond_safe = _safe_var_name(cp.condition)
+                _csfx = f"{safe_id}__cond{_ci}_{cond_safe}"
+
+                diagnostics.append(
+                    f"  conditional_p: {edge_id[:8]}… [{_ci}] "
+                    f"{cp.condition} (param={cp.param_id}, "
+                    f"n={cp.evidence.total_n})")
+
+                # Independent p for this conditional population
+                _cp_alpha = max(cp.p_mean * 4.0, 0.5)
+                _cp_beta = max((1.0 - cp.p_mean) * 4.0, 0.5)
+                p_cond = pm.Beta(f"p_cond_{_csfx}", alpha=_cp_alpha, beta=_cp_beta)
+                _cond_edge_var_names.setdefault(edge_id, {})[cp.condition] = f"p_cond_{_csfx}"
+
+                # Independent kappa
+                _lk_cond = pm.Normal(f"log_kappa_cond_{_csfx}",
+                                     mu=LOG_KAPPA_MU, sigma=LOG_KAPPA_SIGMA)
+                k_cond = pm.Deterministic(f"kappa_cond_{_csfx}", pt.exp(_lk_cond))
+
+                # Independent latency variables (if conditional has latency)
+                _cond_lv: dict = {}
+                _cond_ov: dict = {}
+                if cp.has_latency:
+                    _cp_mu = max(cp.mu_prior, 0.01)
+                    _cp_sigma = max(cp.sigma_prior, 0.01)
+                    _cp_onset = cp.onset_delta_days
+
+                    if use_reparam:
+                        import math as _math_cond
+                        _cp_t50 = _cp_onset + np.exp(_cp_mu)
+                        _cp_m_prior = np.log(max(_cp_t50, 0.01))
+                        _cp_a_prior = (_math_cond.log(_cp_onset / max(_cp_t50 - _cp_onset, 0.01))
+                                       if _cp_onset > 0 and _cp_t50 > _cp_onset
+                                       else 0.0)
+                        _cp_r_prior = _math_cond.log(_math_cond.expm1(Z_95 * _cp_sigma))
+
+                        _m_cond = pm.Normal(f"m_lat_cond_{_csfx}",
+                                            mu=_cp_m_prior, sigma=1.0)
+                        _a_cond = pm.Normal(f"a_lat_cond_{_csfx}",
+                                            mu=_cp_a_prior, sigma=2.0)
+                        _r_cond = pm.Normal(f"r_lat_cond_{_csfx}",
+                                            mu=_cp_r_prior, sigma=0.5)
+                        _mu_cond = pm.Deterministic(
+                            f"mu_cond_{_csfx}", _m_cond - pt.softplus(_a_cond))
+                        _sigma_cond = pm.Deterministic(
+                            f"sigma_cond_{_csfx}", pt.softplus(_r_cond) / Z_95)
+                        _onset_cond = pm.Deterministic(
+                            f"onset_cond_{_csfx}",
+                            pt.exp(_m_cond) * pm.math.invlogit(_a_cond))
+                        _cond_lv[edge_id] = (_mu_cond, _sigma_cond)
+                        _cond_ov[edge_id] = _onset_cond
+                    else:
+                        _mu_cond = pm.Normal(f"mu_cond_{_csfx}", mu=_cp_mu, sigma=0.5)
+                        _sigma_cond_val = np.float64(_cp_sigma)
+                        _cond_lv[edge_id] = (_mu_cond, pt.as_tensor_variable(_sigma_cond_val))
+                        _cond_ov[edge_id] = pt.as_tensor_variable(np.float64(_cp_onset))
+                else:
+                    _cond_lv = latency_vars
+                    _cond_ov = onset_vars
+
+                # Emit likelihood terms from conditional's evidence
+                _emit_edge_likelihoods(
+                    _csfx, p_cond, k_cond, cp.evidence, et, edge_id,
+                    p_base_var=p_cond,
+                    alpha=_cp_alpha, beta_param=_cp_beta,
+                    edge_var_names={},
+                    emit_window_binomial=emit_window_binomial,
+                    is_phase2=is_phase2, phase2_frozen=phase2_frozen,
+                    bg_p_vars={},
+                    topology=topology, model=model,
+                    latency_vars=_cond_lv, onset_vars=_cond_ov,
+                    cohort_latency_vars={},
+                    diagnostics=diagnostics, features=features, settings=_s,
+                    _softplus_k=_softplus_k,
+                    _s_dirichlet_conc_floor=_s_dirichlet_conc_floor,
+                    _fallback_prior_ess=_fallback_prior_ess,
+                    feat_window_only=feat_window_only,
+                    skip_trajectory_potentials=False,
+                )
+
     metadata = {
         "edge_var_names": edge_var_names,
+        "cond_edge_var_names": _cond_edge_var_names,
         "latent_latency_edges": set(latency_vars.keys()),
         "latent_onset_edges": set(onset_vars.keys()),
         "cohort_latency_edges": set(cohort_latency_vars.keys()),

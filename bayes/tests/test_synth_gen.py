@@ -1941,3 +1941,550 @@ class TestSparsityLayer:
         assert total == 0, (
             f"100% initial absence + no toggle should produce 0 rows, got {total}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Doc 41 — contexted synth data defect fixes (D1, D2, D3, D4, D6)
+# ---------------------------------------------------------------------------
+
+
+class TestContextedSynthDataFixes:
+    """Verify that contexted synth data generation produces per-slice
+    onset observations, lag stats, daily aggregates, and param-file entries.
+
+    These tests target the defects identified in doc 41 §3.7 (D1–D6).
+    """
+
+    @staticmethod
+    def _make_context_graph():
+        """Simple 2-edge graph with latency and context dimensions.
+
+        Edge param-a-b has onset=2.0, mu=2.0, sigma=0.5.
+        Context dimension 'channel' with two slices:
+          - google (weight 0.6): onset_offset=+1.0, mu_offset=+0.3
+          - direct (weight 0.4): onset_offset=-0.5, mu_offset=-0.2
+        """
+        graph = {
+            "nodes": [
+                _node("node-anchor", is_start=True),
+                _node("node-a"),
+                _node("node-b", absorbing=True),
+            ],
+            "edges": [
+                _edge("edge-anchor-a", "node-anchor", "node-a",
+                      "param-anchor-a", p_mean=0.9),
+                _edge("edge-a-b", "node-a", "node-b", "param-a-b",
+                      p_mean=0.5,
+                      latency={"latency_parameter": True,
+                               "onset_delta_days": 2.0,
+                               "mu": 2.0, "sigma": 0.5}),
+            ],
+        }
+        return graph
+
+    @staticmethod
+    def _context_truth_overlay():
+        """Context dimensions with per-edge onset/mu offsets."""
+        return {
+            "emit_context_slices": True,
+            "context_dimensions": [
+                {
+                    "id": "channel",
+                    "mece": True,
+                    "values": [
+                        {
+                            "id": "google",
+                            "weight": 0.6,
+                            "edges": {
+                                "param-a-b": {
+                                    "onset_offset": 1.0,
+                                    "mu_offset": 0.3,
+                                },
+                            },
+                        },
+                        {
+                            "id": "direct",
+                            "weight": 0.4,
+                            "edges": {
+                                "param-a-b": {
+                                    "onset_offset": -0.5,
+                                    "mu_offset": -0.2,
+                                },
+                            },
+                        },
+                    ],
+                },
+            ],
+        }
+
+    def _run(self):
+        graph = self._make_context_graph()
+        topology = analyse_topology(graph)
+        truth = _make_truth(topology, graph)
+        truth.update(self._context_truth_overlay())
+
+        hash_lookup = _make_hash_lookup(topology)
+        for pid in hash_lookup:
+            hash_lookup[pid]["ctx_window_hash"] = f"CTX-W-{pid}"
+            hash_lookup[pid]["ctx_cohort_hash"] = f"CTX-C-{pid}"
+
+        rows, stats = simulate_graph(
+            graph, topology, truth,
+            {
+                "n_days": 30,
+                "mean_daily_traffic": 300,
+                "kappa_sim_default": 50.0,
+                "drift_sigma": 0.0,
+                "failure_rate": 0.0,
+                "seed": 42,
+                "base_date": "2025-11-01",
+            },
+            hash_lookup,
+        )
+        return topology, rows, stats, truth
+
+    def test_d6_ctx_edge_daily_exists_and_differs(self):
+        """D6: per-context edge_daily should exist and have different
+        n_daily/k_daily from aggregate (different traffic weights)."""
+        topo, rows, stats, truth = self._run()
+        ctx_daily = stats.get("ctx_edge_daily", {})
+        edge_daily = stats.get("edge_daily", {})
+
+        # Find the latency edge
+        lat_eid = None
+        for eid, et in topo.edges.items():
+            if et.param_id == "param-a-b":
+                lat_eid = eid
+                break
+        assert lat_eid is not None
+
+        ck_google = f"context(channel:google)"
+        ck_direct = f"context(channel:direct)"
+        assert (lat_eid, ck_google) in ctx_daily, "Missing google slice daily"
+        assert (lat_eid, ck_direct) in ctx_daily, "Missing direct slice daily"
+
+        agg = edge_daily[lat_eid]
+        google_d = ctx_daily[(lat_eid, ck_google)]
+        direct_d = ctx_daily[(lat_eid, ck_direct)]
+
+        # Per-slice k_daily should sum to roughly the aggregate k_daily
+        agg_k = sum(agg["k_daily"])
+        google_k = sum(google_d["k_daily"])
+        direct_k = sum(direct_d["k_daily"])
+        assert google_k + direct_k == agg_k, (
+            f"Per-slice k should sum to aggregate: {google_k}+{direct_k} != {agg_k}"
+        )
+        # Google has weight 0.6, direct 0.4 — google should have more n
+        google_n = sum(google_d["n_daily"])
+        direct_n = sum(direct_d["n_daily"])
+        assert google_n > direct_n, (
+            f"Google (w=0.6) should have more n than direct (w=0.4): {google_n} vs {direct_n}"
+        )
+
+    def test_d1_onset_obs_by_slice_uses_offsets(self):
+        """D1: onset observations for context slices should reflect
+        the per-slice onset (base + onset_offset), not just base onset."""
+        topo, rows, stats, truth = self._run()
+        lat_eid = None
+        for eid, et in topo.edges.items():
+            if et.param_id == "param-a-b":
+                lat_eid = eid
+                break
+
+        # Context snapshot rows should have onset_delta_days reflecting
+        # per-slice onset (2.0+1.0=3.0 for google, 2.0-0.5=1.5 for direct)
+        # rather than base onset (2.0).
+        google_onsets = []
+        direct_onsets = []
+        for r in rows.get(lat_eid, []):
+            sk = r.get("slice_key", "")
+            if "context(channel:google)" in sk:
+                od = r.get("onset_delta_days")
+                if od is not None:
+                    google_onsets.append(od)
+            elif "context(channel:direct)" in sk:
+                od = r.get("onset_delta_days")
+                if od is not None:
+                    direct_onsets.append(od)
+
+        assert len(google_onsets) > 0, "No google context rows with onset"
+        assert len(direct_onsets) > 0, "No direct context rows with onset"
+        # Google onset truth = 3.0 (2.0 + 1.0), with noise.
+        # Direct onset truth = 1.5 (2.0 - 0.5), with noise.
+        # Mean should be near truth (within ±0.5 for 30 days).
+        mean_google = sum(google_onsets) / len(google_onsets)
+        mean_direct = sum(direct_onsets) / len(direct_onsets)
+        assert mean_google > 2.5, (
+            f"Google onset mean {mean_google:.2f} should be near 3.0 (base 2.0 + offset 1.0)"
+        )
+        assert mean_direct < 2.0, (
+            f"Direct onset mean {mean_direct:.2f} should be near 1.5 (base 2.0 - offset 0.5)"
+        )
+
+    def test_d2_context_snapshot_rows_have_per_slice_lag_stats(self):
+        """D2: context snapshot rows should have lag stats computed from
+        per-slice onset/mu/sigma, not base edge values."""
+        topo, rows, stats, truth = self._run()
+        lat_eid = None
+        for eid, et in topo.edges.items():
+            if et.param_id == "param-a-b":
+                lat_eid = eid
+                break
+
+        # Base edge: onset=2.0, mu=2.0 → median_lag = 2.0 + exp(2.0) ≈ 9.39
+        # Google:    onset=3.0, mu=2.3 → median_lag = 3.0 + exp(2.3) ≈ 12.97
+        # Direct:    onset=1.5, mu=1.8 → median_lag = 1.5 + exp(1.8) ≈ 7.55
+        base_median = 2.0 + math.exp(2.0)  # ≈ 9.39
+        google_median = 3.0 + math.exp(2.3)  # ≈ 12.97
+        direct_median = 1.5 + math.exp(1.8)  # ≈ 7.55
+
+        google_lags = []
+        direct_lags = []
+        for r in rows.get(lat_eid, []):
+            sk = r.get("slice_key", "")
+            ml = r.get("median_lag_days")
+            if ml is None:
+                continue
+            if "context(channel:google)" in sk:
+                google_lags.append(ml)
+            elif "context(channel:direct)" in sk:
+                direct_lags.append(ml)
+
+        assert len(google_lags) > 0
+        assert len(direct_lags) > 0
+        # All google rows should have the same median_lag (it's computed
+        # from truth, not empirical per-row)
+        assert all(ml == google_lags[0] for ml in google_lags), (
+            f"Google lag values should all be equal: {set(google_lags)}"
+        )
+        assert abs(google_lags[0] - google_median) < 0.01, (
+            f"Google median lag {google_lags[0]:.2f} should be ≈ {google_median:.2f}"
+        )
+        assert abs(direct_lags[0] - direct_median) < 0.01, (
+            f"Direct median lag {direct_lags[0]:.2f} should be ≈ {direct_median:.2f}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Truth-to-output consistency (blind assurance tests — doc 41 lesson)
+# ---------------------------------------------------------------------------
+#
+# These tests verify that when the truth config specifies per-slice variation,
+# the generated output reflects that variation. Written from the contract
+# (truth config → output shape), not from implementation.
+#
+# The truth config below uses deliberately asymmetric offsets so that
+# collapsing any slice to the aggregate/base produces a detectable deviation.
+
+
+class TestTruthToOutputConsistency:
+    """Assurance tests: generated output must reflect truth-config per-slice
+    variation.  Catches any bug where context data silently collapses to the
+    aggregate, regardless of mechanism."""
+
+    # -- Truth oracle --
+    # Two edges with latency.  Two context dimensions (channel × device)
+    # to test multi-dimensional composition.  Weights and offsets are
+    # deliberately asymmetric so that any collapse is detectable.
+    BASE_ONSET_AB = 2.0
+    BASE_MU_AB = 2.0
+    BASE_SIGMA_AB = 0.5
+    BASE_P_AB = 0.5
+
+    BASE_ONSET_BC = 1.0
+    BASE_MU_BC = 1.5
+    BASE_SIGMA_BC = 0.4
+    BASE_P_BC = 0.6
+
+    CONTEXT_DIMS = [
+        {
+            "id": "channel",
+            "mece": True,
+            "values": [
+                {
+                    "id": "organic",
+                    "weight": 0.7,
+                    "edges": {
+                        "param-a-b": {"onset_offset": 1.5, "mu_offset": 0.4, "p_mult": 0.8},
+                        "param-b-c": {"onset_offset": 0.5, "mu_offset": 0.2, "p_mult": 0.9},
+                    },
+                },
+                {
+                    "id": "paid",
+                    "weight": 0.3,
+                    "edges": {
+                        "param-a-b": {"onset_offset": -0.8, "mu_offset": -0.3, "p_mult": 1.3},
+                        "param-b-c": {"onset_offset": -0.3, "mu_offset": -0.1, "p_mult": 1.1},
+                    },
+                },
+            ],
+        },
+    ]
+
+    @classmethod
+    def _graph(cls):
+        return {
+            "nodes": [
+                _node("node-anchor", is_start=True),
+                _node("node-a"),
+                _node("node-b"),
+                _node("node-c", absorbing=True),
+            ],
+            "edges": [
+                _edge("edge-anchor-a", "node-anchor", "node-a",
+                      "param-anchor-a", p_mean=0.95),
+                _edge("edge-a-b", "node-a", "node-b", "param-a-b",
+                      p_mean=cls.BASE_P_AB,
+                      latency={"latency_parameter": True,
+                               "onset_delta_days": cls.BASE_ONSET_AB,
+                               "mu": cls.BASE_MU_AB,
+                               "sigma": cls.BASE_SIGMA_AB}),
+                _edge("edge-b-c", "node-b", "node-c", "param-b-c",
+                      p_mean=cls.BASE_P_BC,
+                      latency={"latency_parameter": True,
+                               "onset_delta_days": cls.BASE_ONSET_BC,
+                               "mu": cls.BASE_MU_BC,
+                               "sigma": cls.BASE_SIGMA_BC}),
+            ],
+        }
+
+    @classmethod
+    def _run(cls):
+        graph = cls._graph()
+        topology = analyse_topology(graph)
+        truth = _make_truth(topology, graph)
+        truth["emit_context_slices"] = True
+        truth["context_dimensions"] = cls.CONTEXT_DIMS
+
+        hash_lookup = _make_hash_lookup(topology)
+        for pid in hash_lookup:
+            hash_lookup[pid]["ctx_window_hash"] = f"CTX-W-{pid}"
+            hash_lookup[pid]["ctx_cohort_hash"] = f"CTX-C-{pid}"
+
+        rows, stats = simulate_graph(
+            graph, topology, truth,
+            {
+                "n_days": 60,
+                "mean_daily_traffic": 500,
+                "kappa_sim_default": 80.0,
+                "drift_sigma": 0.0,
+                "failure_rate": 0.0,
+                "seed": 99,
+                "base_date": "2025-10-01",
+            },
+            hash_lookup,
+        )
+        return topology, rows, stats, truth
+
+    @classmethod
+    def _find_edge(cls, topo, param_id):
+        for eid, et in topo.edges.items():
+            if et.param_id == param_id:
+                return eid
+        raise ValueError(f"No edge with param_id={param_id}")
+
+    @classmethod
+    def _slice_rows(cls, rows, edge_id, ctx_key):
+        return [r for r in rows.get(edge_id, [])
+                if ctx_key in r.get("slice_key", "")]
+
+    # ── Invariant 1: per-slice onset fidelity ──────────────────────────
+
+    def test_onset_observations_reflect_per_slice_truth(self):
+        """onset_delta_days on context rows must be centred on
+        base_onset + onset_offset, not on base_onset."""
+        topo, rows, stats, _ = self._run()
+        eid = self._find_edge(topo, "param-a-b")
+
+        for slice_id, offset in [("organic", 1.5), ("paid", -0.8)]:
+            expected = self.BASE_ONSET_AB + offset
+            ctx_rows = self._slice_rows(rows, eid, f"context(channel:{slice_id})")
+            onsets = [r["onset_delta_days"] for r in ctx_rows
+                      if r.get("onset_delta_days") is not None]
+            assert len(onsets) > 10, f"{slice_id}: too few onset observations"
+            mean_onset = sum(onsets) / len(onsets)
+            assert abs(mean_onset - expected) < 0.5, (
+                f"{slice_id}: onset mean {mean_onset:.2f} should be near "
+                f"{expected:.2f} (base {self.BASE_ONSET_AB} + offset {offset})"
+            )
+
+    def test_onset_observations_differ_between_slices(self):
+        """Organic and paid onset observations must NOT be interchangeable.
+        This catches any mechanism that collapses all slices to the same value."""
+        topo, rows, stats, _ = self._run()
+        eid = self._find_edge(topo, "param-a-b")
+
+        org = [r["onset_delta_days"] for r in self._slice_rows(rows, eid, "context(channel:organic)")
+               if r.get("onset_delta_days") is not None]
+        paid = [r["onset_delta_days"] for r in self._slice_rows(rows, eid, "context(channel:paid)")
+                if r.get("onset_delta_days") is not None]
+        assert len(org) > 0 and len(paid) > 0
+        mean_org = sum(org) / len(org)
+        mean_paid = sum(paid) / len(paid)
+        # Offsets are +1.5 vs -0.8, so means should differ by ~2.3
+        assert abs(mean_org - mean_paid) > 1.0, (
+            f"Organic and paid onset means should differ substantially: "
+            f"{mean_org:.2f} vs {mean_paid:.2f}"
+        )
+
+    # ── Invariant 2: per-slice lag stat fidelity ───────────────────────
+
+    def test_lag_stats_reflect_per_slice_truth(self):
+        """median_lag_days on context rows must equal
+        (base_onset + onset_offset) + exp(base_mu + mu_offset),
+        not the base edge formula."""
+        topo, rows, stats, _ = self._run()
+
+        for param_id, base_onset, base_mu, base_sigma in [
+            ("param-a-b", self.BASE_ONSET_AB, self.BASE_MU_AB, self.BASE_SIGMA_AB),
+            ("param-b-c", self.BASE_ONSET_BC, self.BASE_MU_BC, self.BASE_SIGMA_BC),
+        ]:
+            eid = self._find_edge(topo, param_id)
+            base_median = base_onset + math.exp(base_mu)
+
+            for v in self.CONTEXT_DIMS[0]["values"]:
+                oo = v["edges"][param_id]["onset_offset"]
+                mo = v["edges"][param_id]["mu_offset"]
+                expected_median = (base_onset + oo) + math.exp(base_mu + mo)
+                ctx_rows = self._slice_rows(rows, eid, f"context(channel:{v['id']})")
+                lags = [r["median_lag_days"] for r in ctx_rows
+                        if r.get("median_lag_days") is not None]
+                assert len(lags) > 0, f"{param_id}/{v['id']}: no lag values"
+                # All rows should carry the same truth-derived lag stat
+                assert abs(lags[0] - expected_median) < 0.02, (
+                    f"{param_id}/{v['id']}: median_lag {lags[0]:.2f} should be "
+                    f"≈ {expected_median:.2f}, not base {base_median:.2f}"
+                )
+
+    def test_lag_stats_differ_from_base_edge(self):
+        """Context rows must NOT carry the base edge lag stats.
+        This catches any mechanism where per-slice stats collapse to base."""
+        topo, rows, stats, _ = self._run()
+        eid = self._find_edge(topo, "param-a-b")
+        base_median = round(self.BASE_ONSET_AB + math.exp(self.BASE_MU_AB), 2)
+
+        for slice_id in ["organic", "paid"]:
+            ctx_rows = self._slice_rows(rows, eid, f"context(channel:{slice_id})")
+            lags = [r["median_lag_days"] for r in ctx_rows
+                    if r.get("median_lag_days") is not None]
+            assert len(lags) > 0
+            assert lags[0] != base_median, (
+                f"{slice_id}: median_lag {lags[0]} equals base edge value "
+                f"{base_median} — per-slice offset was not applied"
+            )
+
+    # ── Invariant 3: per-slice count additivity ────────────────────────
+
+    def test_per_slice_k_daily_sums_to_aggregate(self):
+        """Sum of per-slice k_daily must equal aggregate k_daily.
+        Catches context-blind aggregation (cloned aggregates would give
+        N_slices × aggregate)."""
+        topo, _, stats, _ = self._run()
+        ctx_daily = stats.get("ctx_edge_daily", {})
+        edge_daily = stats.get("edge_daily", {})
+
+        for param_id in ["param-a-b", "param-b-c"]:
+            eid = self._find_edge(topo, param_id)
+            agg_k = sum(edge_daily[eid]["k_daily"])
+
+            slice_k_total = 0
+            for v in self.CONTEXT_DIMS[0]["values"]:
+                ck = f"context(channel:{v['id']})"
+                assert (eid, ck) in ctx_daily, f"Missing ctx_daily for {param_id}/{v['id']}"
+                slice_k_total += sum(ctx_daily[(eid, ck)]["k_daily"])
+
+            assert slice_k_total == agg_k, (
+                f"{param_id}: per-slice k sum {slice_k_total} != aggregate {agg_k}. "
+                f"If slice_k > agg_k, slices are clones of aggregate."
+            )
+
+    def test_per_slice_n_daily_sums_to_aggregate(self):
+        """Sum of per-slice n_daily must equal aggregate n_daily."""
+        topo, _, stats, _ = self._run()
+        ctx_daily = stats.get("ctx_edge_daily", {})
+        edge_daily = stats.get("edge_daily", {})
+
+        for param_id in ["param-a-b", "param-b-c"]:
+            eid = self._find_edge(topo, param_id)
+            agg_n = sum(edge_daily[eid]["n_daily"])
+
+            slice_n_total = 0
+            for v in self.CONTEXT_DIMS[0]["values"]:
+                ck = f"context(channel:{v['id']})"
+                slice_n_total += sum(ctx_daily[(eid, ck)]["n_daily"])
+
+            assert slice_n_total == agg_n, (
+                f"{param_id}: per-slice n sum {slice_n_total} != aggregate {agg_n}"
+            )
+
+    # ── Invariant 4: per-slice count proportionality ───────────────────
+
+    def test_per_slice_n_proportional_to_weight(self):
+        """Per-slice n counts should be roughly proportional to context
+        weights.  Organic (w=0.7) should have more n than paid (w=0.3).
+        Catches cloned aggregates (which would show 50/50)."""
+        topo, _, stats, _ = self._run()
+        ctx_daily = stats.get("ctx_edge_daily", {})
+
+        eid = self._find_edge(topo, "param-a-b")
+        org_n = sum(ctx_daily[(eid, "context(channel:organic)")]["n_daily"])
+        paid_n = sum(ctx_daily[(eid, "context(channel:paid)")]["n_daily"])
+        total = org_n + paid_n
+        org_frac = org_n / total
+
+        # Weight is 0.7; with 500 people/day × 60 days, should be close.
+        # Allow ±0.08 for sampling noise.
+        assert 0.55 < org_frac < 0.85, (
+            f"Organic fraction {org_frac:.2f} should be near 0.70 "
+            f"(organic_n={org_n}, paid_n={paid_n})"
+        )
+
+    # ── Invariant 5: per-slice p reflects p_mult ───────────────────────
+
+    def test_per_slice_conversion_rate_reflects_p_mult(self):
+        """Per-slice empirical p (k/n) should reflect the truth p_mult.
+        Organic has p_mult=0.8 → expected p ≈ 0.5×0.8=0.40.
+        Paid has p_mult=1.3 → expected p ≈ 0.5×1.3=0.65.
+        Catches cloned aggregates (which would show ~0.50 for both)."""
+        topo, _, stats, _ = self._run()
+        ctx_daily = stats.get("ctx_edge_daily", {})
+
+        eid = self._find_edge(topo, "param-a-b")
+        for slice_id, p_mult in [("organic", 0.8), ("paid", 1.3)]:
+            ck = f"context(channel:{slice_id})"
+            d = ctx_daily[(eid, ck)]
+            n = sum(d["n_daily"])
+            k = sum(d["k_daily"])
+            assert n > 0
+            empirical_p = k / n
+            expected_p = self.BASE_P_AB * p_mult
+            # Allow ±0.12 for kappa-driven overdispersion + finite sample
+            assert abs(empirical_p - expected_p) < 0.12, (
+                f"{slice_id}: empirical p={empirical_p:.3f} should be near "
+                f"{expected_p:.3f} (base {self.BASE_P_AB} × p_mult {p_mult})"
+            )
+
+    # ── Invariant 6: multi-edge consistency ────────────────────────────
+
+    def test_second_edge_also_has_per_slice_variation(self):
+        """Both edges with latency must show per-slice variation, not just
+        the first one found.  Catches bugs that only process one edge."""
+        topo, rows, stats, _ = self._run()
+        eid_bc = self._find_edge(topo, "param-b-c")
+
+        org_rows = self._slice_rows(rows, eid_bc, "context(channel:organic)")
+        paid_rows = self._slice_rows(rows, eid_bc, "context(channel:paid)")
+
+        org_onsets = [r["onset_delta_days"] for r in org_rows
+                      if r.get("onset_delta_days") is not None]
+        paid_onsets = [r["onset_delta_days"] for r in paid_rows
+                       if r.get("onset_delta_days") is not None]
+
+        assert len(org_onsets) > 0 and len(paid_onsets) > 0
+        # BC offsets: organic +0.5, paid -0.3
+        mean_org = sum(org_onsets) / len(org_onsets)
+        mean_paid = sum(paid_onsets) / len(paid_onsets)
+        assert mean_org > mean_paid, (
+            f"param-b-c: organic onset ({mean_org:.2f}) should be > paid ({mean_paid:.2f}) "
+            f"given offsets +0.5 vs -0.3"
+        )

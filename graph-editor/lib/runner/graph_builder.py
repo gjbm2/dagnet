@@ -202,7 +202,7 @@ def _extract_probability(edge: dict, graph_data: dict) -> Optional[float]:
         return p.get('mean')
     elif isinstance(p, (int, float)):
         return float(p)
-    
+
     return None
 
 

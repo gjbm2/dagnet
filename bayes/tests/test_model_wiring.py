@@ -233,14 +233,21 @@ class TestPerEdgeOnset:
     """Per-edge latent onset variable wiring."""
 
     def test_latency_edge_gets_onset_variables(self):
-        """Latency edge → eps_onset, onset (Deterministic) in model."""
+        """Latency edge → onset Deterministic in model.
+
+        With latency_reparam=True (default), onset is derived from
+        (m, a, r) coordinates: onset = exp(m) * sigmoid(a).  The old
+        eps_onset non-centred variable no longer exists.
+        """
         graph, params = _solo_edge_with_latency(onset=3.0)
         model, metadata, _, _ = _build(graph, params, features={"latent_onset": True})
         names = _model_var_names(model)
         safe = _safe("edge-a-b")
 
-        assert f"eps_onset_{safe}" in names, "non-centred eps missing"
+        # (m, a, r) reparam: onset is a Deterministic derived from m and a
         assert f"onset_{safe}" in names, "onset Deterministic missing"
+        assert f"m_lat_{safe}" in names, "m latent missing"
+        assert f"a_lat_{safe}" in names, "a latent missing"
 
     # NOTE: test_positive_onset_gets_soft_observation deleted — onset_obs_
     # (histogram soft observation) was removed with the graph-level hierarchy.

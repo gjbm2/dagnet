@@ -1022,7 +1022,12 @@ def main():
                     log_file.close()
                     archive_file.close()
                     sys.exit(1)
-                _print(f"  ... {elapsed:.0f}s elapsed, stage: {last_stage[0]}")
+                # Only print heartbeat if no progress callback is firing
+                # (i.e. during compilation or pre-sampling setup).
+                # Once nutpie's template_callback is active, it provides
+                # richer progress — this line is just noise alongside it.
+                if last_stage[0] not in ("sampling",):
+                    _print(f"  ... {elapsed:.0f}s elapsed, stage: {last_stage[0]}")
 
         if error_box[0]:
             e, tb = error_box[0]

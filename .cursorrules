@@ -445,6 +445,11 @@ Identify your task type below, then read the listed docs **before writing any co
 - GRAPH_MUTATION_UPDATE_MANAGER.md **(skim)** — override patterns, node reference fields
 - PARAMETER_SYSTEM.md **(skim if touching param schemas)** — param schema role
 
+**Modifying devtools, monitors, regression scripts, or diagnostic infrastructure**:
+- DEVTOOL_ENGINEERING_PRINCIPLES.md **(full)** — data vs display separation, no silent deletion, output visibility, audit checklist
+- BAYES_REGRESSION_TOOLING.md **(full)** — regression pipeline, stall detection, truth file timeouts, winning formula defaults
+- KNOWN_ANTI_PATTERNS.md **(ref — anti-patterns 37-38)** — devtool data deletion incidents
+
 **Modifying Python backend, MSMDC, or compute server**:
 - PYTHON_BACKEND_ARCHITECTURE.md **(full)** — FastAPI endpoints, MSMDC, Bayes, FE-BE communication
 
@@ -472,6 +477,8 @@ Identify your task type below, then read the listed docs **before writing any co
 - `INTEGRITY_CHECK_ADDITIONS.md` — structural integrity checks
 - `TEST_COVERAGE_SURVEY.md` — test coverage analysis
 - `STATE_MANAGEMENT_REFERENCE.md` — state layers reference
+- `DEVTOOL_ENGINEERING_PRINCIPLES.md` — devtool engineering standards, data safety, audit checklist
+- `AGENT_VERIFICATION_GAP.md` — problem statement: agent launches untested code
 
 ### Service Layer Pattern
 ```typescript
@@ -564,6 +571,8 @@ After completing a fix that required more than one attempt, or that required und
 - **Log extraction and diagnostics**: `scripts/extract-mark-logs.sh`, graph snapshot capture (`debug/graph-snapshots/`)
 - **Session log service**: `sessionLogService.ts` — levels, thresholds, `startOperation`/`endOperation` lifecycle, viewer rendering
 - **Test harnesses**: `bayes/test_harness.py`, `bayes/param_recovery.py`, `bayes/synth_gen.py`, synthetic builders in `bayes/tests/synthetic.py`
+- **Regression and monitoring**: `bayes/run_regression.py`, `scripts/bayes-monitor.sh`, `scripts/resilience-strategies.py`, `scripts/hunt-phase2-pathology.sh`
+- **Sampling infrastructure**: `ChainStallDetector` in `bayes/compiler/inference.py` (EMA-based stall detection, retry logic in `bayes/worker.py`)
 - **Graph-ops scripts**: `graph-ops/scripts/*.sh` (parity, validation, param-pack, analyse)
 - **Any script the agent is told to run** as part of a diagnostic or verification step
 
@@ -574,6 +583,8 @@ After completing a fix that required more than one attempt, or that required und
 **Rule 3 — No silent workarounds.** If you find yourself working around an infrastructure limitation — manually parsing output that a script should handle, skipping a verification step because a tool crashes, reading raw JSONL because the extraction script returns wrong results — you must **immediately flag it**: *"I'm working around a defect in [tool]. This should be fixed properly — here's what's wrong: [root cause]. Shall I fix the tool now?"* The workaround must be visible, not silent. Silent workarounds accumulate across sessions and nobody notices until the tool is deeply broken.
 
 **Rule 4 — Logging fidelity is non-negotiable.** Log streams and session logs are the primary evidence source for debugging sync, state, and data-flow issues. If a log stream is missing entries, writing to the wrong file, dropping marks, producing malformed JSONL, or silently swallowing errors, that is not a minor issue — it is equivalent to a test harness that passes broken code. Fix it with the same urgency you would fix a test that produces false passes.
+
+**Rule 5 — Devtools must NEVER silently delete diagnostic data.** Log files, trace outputs, recovery results, and harness logs are primary evidence. No devtool action — keybinding, "clear" function, "cleanup" script, monitor helper — may delete these files. Display-layer operations (hiding entries from a dashboard, clearing a terminal, resetting a scroll position) must operate on display state only, never on the underlying data files. If a genuinely destructive action is needed (freeing disk space), it must be a separate, explicitly-named command with a confirmation prompt. See anti-patterns 37 and 38 for the incident that prompted this rule: a `^b e` keybinding labelled "clear finished" that `rm -f`'d all harness log files, destroying an entire regression run's results.
 
 **Why this section exists**: agents repeatedly encounter broken devtools and treat them as background friction — applying a minimal patch or simply working around the breakage. This accumulates: each session leaves the tool slightly more broken, each workaround is invisible to the next session, and eventually the tool is so degraded that it actively misleads. The pattern is: patch, patch, patch, catastrophic misdiagnosis. The fix is: treat infrastructure breakage as urgent, not incidental.
 

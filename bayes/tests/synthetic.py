@@ -1195,6 +1195,176 @@ def build_two_dimension_solo_edge(
     )
 
 
+def build_conditional_p_solo_edge(
+    base_p: float = 0.30,
+    cond_p: float = 0.55,
+    n_per_day: int = 80,
+    n_days: int = 45,
+    *,
+    onset: float = 2.0,
+    mu: float = 2.1,
+    sigma: float = 0.55,
+    cond_mu: float = 1.8,
+    cond_onset: float = 1.5,
+    seed: int = 66,
+) -> tuple[
+    dict,
+    dict[str, dict],
+    dict[str, list[dict]],
+    dict[str, set[str]],
+    list[str],
+    dict[str, float],
+]:
+    """Solo edge with a conditional_p condition — separate param file.
+
+    The edge has base p=0.30 (param-a-b) and a conditional population
+    visited(treatment-node) with p=0.55 (param-a-b-cond-visited).
+    Each has its own param file, own snapshot rows, own latency priors.
+
+    This mirrors production: each conditional_p entry has its own p.id
+    pointing to a separate param file populated by MSMDC.
+    """
+    rng = np.random.default_rng(seed)
+    today_str = "2025-03-01"
+
+    from datetime import datetime, timedelta
+
+    today = datetime.strptime(today_str, "%Y-%m-%d")
+    cohort_start = today - timedelta(days=n_days)
+
+    retrieval_dates = []
+    ret = cohort_start + timedelta(days=20)
+    while ret <= today:
+        retrieval_dates.append(ret.strftime("%Y-%m-%d"))
+        ret += timedelta(days=10)
+
+    base_latency = {
+        "latency_parameter": True,
+        "onset_delta_days": onset,
+        "mu": mu, "sigma": sigma,
+        "median_lag_days": onset + float(np.exp(mu)),
+        "mean_lag_days": onset + float(np.exp(mu + sigma**2 / 2)),
+    }
+
+    cond_latency = {
+        "latency_parameter": True,
+        "onset_delta_days": cond_onset,
+        "mu": cond_mu, "sigma": sigma,
+        "median_lag_days": cond_onset + float(np.exp(cond_mu)),
+        "mean_lag_days": cond_onset + float(np.exp(cond_mu + sigma**2 / 2)),
+    }
+
+    graph_snapshot = {
+        "nodes": [
+            _node("node-anchor", is_start=True),
+            _node("node-a"),
+            _node("node-b", absorbing=True),
+        ],
+        "edges": [
+            _edge("edge-anchor-a", "node-anchor", "node-a", "param-anchor-a", p_mean=0.9),
+            {
+                **_edge("edge-a-b", "node-a", "node-b", "param-a-b",
+                        p_mean=base_p, latency=base_latency),
+                "conditional_p": [
+                    {
+                        "condition": "visited(treatment-node)",
+                        "p": {
+                            "id": "param-a-b-cond-visited",
+                            "mean": cond_p,
+                            "stdev": 0.05,
+                            "latency": cond_latency,
+                        },
+                        "query": "from(node-a).to(node-b).visited(treatment-node)",
+                    },
+                ],
+            },
+        ],
+    }
+
+    # Base param file
+    param_files = {
+        "param-anchor-a": _window_param_file(
+            n_per_day * n_days * 2, int(n_per_day * n_days * 2 * 0.9),
+            param_id="param-anchor-a"),
+        "param-a-b": {
+            "id": "param-a-b",
+            "values": [{"sliceDSL": "window(1-Jan-25:1-Mar-25)",
+                         "n": 100, "k": int(100 * base_p),
+                         "mean": base_p, "stdev": 0.05}],
+        },
+        # Conditional's own param file — separate from base
+        "param-a-b-cond-visited": {
+            "id": "param-a-b-cond-visited",
+            "values": [{"sliceDSL": "window(1-Jan-25:1-Mar-25)",
+                         "n": int(100 * 0.4),
+                         "k": int(100 * 0.4 * cond_p),
+                         "mean": cond_p, "stdev": 0.05}],
+        },
+    }
+
+    hash_bare = "hash-bare-cond"
+    hash_cond = "hash-visited-cond"
+
+    # Base edge snapshot rows
+    base_rows: list[dict] = []
+    base_rows.extend(generate_snapshot_rows(
+        rng, base_p, n_per_day, n_days, retrieval_dates,
+        onset=onset, mu=mu, sigma=sigma,
+        slice_key="window(1-Jan-25:1-Mar-25)",
+        param_id="repo-branch-param-a-b",
+        core_hash=hash_bare, today_str=today_str,
+    ))
+    base_rows.extend(generate_snapshot_rows(
+        rng, base_p, n_per_day, n_days, retrieval_dates,
+        onset=onset, mu=mu, sigma=sigma,
+        slice_key="cohort(node-anchor,2024-10-01:2025-01-01)",
+        param_id="repo-branch-param-a-b",
+        core_hash=hash_bare, today_str=today_str,
+    ))
+
+    # Conditional's own snapshot rows (separate param_id, separate hash)
+    cond_rows: list[dict] = []
+    cond_rows.extend(generate_snapshot_rows(
+        rng, cond_p, int(n_per_day * 0.4), n_days, retrieval_dates,
+        onset=cond_onset, mu=cond_mu, sigma=sigma,
+        slice_key="window(1-Jan-25:1-Mar-25)",
+        param_id="repo-branch-param-a-b-cond-visited",
+        core_hash=hash_cond, today_str=today_str,
+    ))
+    cond_rows.extend(generate_snapshot_rows(
+        rng, cond_p, int(n_per_day * 0.4), n_days, retrieval_dates,
+        onset=cond_onset, mu=cond_mu, sigma=sigma,
+        slice_key="cohort(node-anchor,2024-10-01:2025-01-01)",
+        param_id="repo-branch-param-a-b-cond-visited",
+        core_hash=hash_cond, today_str=today_str,
+    ))
+
+    # snapshot_rows keyed by edge_id for base, but conditional has its own
+    # param_id. The worker needs to route conditional rows separately.
+    # For the synthetic test, we store them under a synthetic edge key
+    # that the test harness can use to bind conditional evidence.
+    snapshot_rows = {
+        "edge-a-b": base_rows,
+        "edge-a-b::cond::visited(treatment-node)": cond_rows,
+    }
+
+    commissioned: dict[str, set[str]] = {}
+    mece_dimensions: list[str] = []
+    slice_truth = {
+        "base": base_p,
+        "visited(treatment-node)": cond_p,
+    }
+
+    return (
+        graph_snapshot,
+        param_files,
+        snapshot_rows,
+        commissioned,
+        mece_dimensions,
+        slice_truth,
+    )
+
+
 def build_staggered_two_dimension_solo_edge(
     dim1_ps: dict[str, float] | None = None,
     dim2_ps: dict[str, float] | None = None,

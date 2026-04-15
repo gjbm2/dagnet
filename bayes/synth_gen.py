@@ -1022,6 +1022,83 @@ def simulate_graph(
             "anchor_n_daily": anchor_n_daily_list,
         }
 
+    # --- Per-context daily aggregates (D6 fix: context-aware edge_daily) ---
+    # For each (edge, context_key): n_daily, k_daily, lag stats computed
+    # from context-filtered people only.  Used by D2 (snapshot lag stats)
+    # and D4 (param-file context entries).
+    ctx_edge_daily: dict[tuple[str, str], dict] = {}  # (edge_id, ctx_key) → daily agg
+    if context_dims:
+        for dim in context_dims:
+            for v in dim.get("values", []):
+                ctx_key = f"context({dim['id']}:{v['id']})"
+                for edge_id, et in topology.edges.items():
+                    if not et.param_id:
+                        continue
+                    c_n_daily: list[int] = []
+                    c_k_daily: list[int] = []
+                    c_dates: list[str] = []
+                    c_median_lag_daily: list[float] = []
+                    c_mean_lag_daily: list[float] = []
+                    c_anchor_median_lag_daily: list[float] = []
+                    c_anchor_mean_lag_daily: list[float] = []
+                    c_anchor_n_daily: list[int] = []
+                    edge_key = f"edge:{edge_id}"
+
+                    for day_idx in range(burn_in_days, total_sim_days):
+                        day_date = base_date + timedelta(days=day_idx - burn_in_days)
+                        c_dates.append(day_date.strftime("%-d-%b-%y"))
+                        people = arrivals_by_day[day_idx]
+                        ctx_people = [
+                            p for p in people
+                            if p.get("_contexts", {}).get(dim["id"]) == v["id"]
+                        ]
+                        from_times = [p[et.from_node] for p in ctx_people if et.from_node in p]
+                        edge_times = [p[edge_key] for p in ctx_people if edge_key in p]
+                        c_n_daily.append(len(from_times))
+                        c_k_daily.append(len(edge_times))
+                        anchor_count = sum(1 for p in ctx_people if topology.anchor_node_id in p)
+                        c_anchor_n_daily.append(anchor_count)
+
+                        # Per-context lag stats
+                        edge_lags: list[float] = []
+                        anchor_lags: list[float] = []
+                        for person in ctx_people:
+                            if edge_key not in person:
+                                continue
+                            if et.from_node not in person:
+                                continue
+                            edge_lags.append(person[edge_key] - person[et.from_node])
+                            anchor_lags.append(person[et.from_node])
+
+                        if edge_lags:
+                            edge_lags_sorted = sorted(edge_lags)
+                            n_conv = len(edge_lags_sorted)
+                            c_median_lag_daily.append(round(edge_lags_sorted[n_conv // 2], 2))
+                            c_mean_lag_daily.append(round(sum(edge_lags) / n_conv, 2))
+                        else:
+                            c_median_lag_daily.append(0)
+                            c_mean_lag_daily.append(0)
+
+                        if anchor_lags:
+                            anchor_lags_sorted = sorted(anchor_lags)
+                            n_conv = len(anchor_lags_sorted)
+                            c_anchor_median_lag_daily.append(round(anchor_lags_sorted[n_conv // 2], 2))
+                            c_anchor_mean_lag_daily.append(round(sum(anchor_lags) / n_conv, 2))
+                        else:
+                            c_anchor_median_lag_daily.append(0)
+                            c_anchor_mean_lag_daily.append(0)
+
+                    ctx_edge_daily[(edge_id, ctx_key)] = {
+                        "n_daily": c_n_daily,
+                        "k_daily": c_k_daily,
+                        "dates": c_dates,
+                        "median_lag_daily": c_median_lag_daily,
+                        "mean_lag_daily": c_mean_lag_daily,
+                        "anchor_median_lag_daily": c_anchor_median_lag_daily,
+                        "anchor_mean_lag_daily": c_anchor_mean_lag_daily,
+                        "anchor_n_daily": c_anchor_n_daily,
+                    }
+
     # --- Generate observations via nightly fetch model ---
     # arrivals_by_day is needed for window index construction (grouping
     # by from-node arrival day across simulation days).
@@ -1064,6 +1141,7 @@ def simulate_graph(
         "total_rows": total_rows,
         "base_date": base_date_str,
         "edge_daily": edge_daily,
+        "ctx_edge_daily": ctx_edge_daily,
         "frame_drop_rate": frame_drop_rate,
         "toggle_rate": toggle_rate,
         "initial_absent_pct": initial_absent_pct,
@@ -1329,6 +1407,54 @@ def _generate_observations_nightly(
                 "anchor_mean_lag_days": round(anchor_mean, 2),
             }
 
+    # D2 fix: per-slice latency stats from truth onset/mu/sigma + offsets
+    slice_latency_stats: dict[tuple[str, str], dict] = {}  # (edge_id, ctx_key) → stats
+    if edge_params and context_dims:
+        for edge_id, ep in edge_params.items():
+            base_onset = ep.get("onset", 0.0)
+            base_mu = ep.get("mu", 0.0)
+            base_sigma = ep.get("sigma", 0.0)
+            et = topology.edges.get(edge_id)
+            pid = et.param_id if et else ""
+            bare = pid.replace("parameter-", "") if pid.startswith("parameter-") else pid
+            for dim in context_dims:
+                for val in dim.get("values", []):
+                    ctx_key = f"context({dim['id']}:{val['id']})"
+                    edges_map = val.get("edges", {})
+                    _ov = edges_map.get(pid) or edges_map.get(bare)
+                    if _ov is None:
+                        for ekey, edata in edges_map.items():
+                            if bare.endswith(ekey) or bare.endswith(f"-{ekey}"):
+                                _ov = edata
+                                break
+                    _ov = _ov or {}
+                    s_onset = base_onset + _ov.get("onset_offset", 0.0)
+                    s_mu = base_mu + _ov.get("mu_offset", 0.0)
+                    s_sigma = max(base_sigma * _ov.get("sigma_mult", 1.0), 0.0)
+                    if s_sigma > 0.001:
+                        s_median = s_onset + math.exp(s_mu)
+                        s_mean = s_onset + math.exp(s_mu + s_sigma ** 2 / 2)
+                    else:
+                        s_median = s_onset
+                        s_mean = s_onset
+                    # Path-level anchor latency (same for all slices)
+                    if et and not et.path_latency.is_trivial:
+                        pd = et.path_latency.path_delta
+                        pm = et.path_latency.path_mu
+                        ps = et.path_latency.path_sigma
+                        s_anchor_median = pd + math.exp(pm)
+                        s_anchor_mean = pd + math.exp(pm + ps ** 2 / 2)
+                    else:
+                        s_anchor_median = s_median
+                        s_anchor_mean = s_mean
+                    slice_latency_stats[(edge_id, ctx_key)] = {
+                        "onset": s_onset,
+                        "median_lag_days": round(s_median, 2),
+                        "mean_lag_days": round(s_mean, 2),
+                        "anchor_median_lag_days": round(s_anchor_median, 2),
+                        "anchor_mean_lag_days": round(s_anchor_mean, 2),
+                    }
+
     # Pre-resolve hashes per edge
     # edge_hashes: (bare_window, bare_cohort, ctx_window, ctx_cohort)
     # ctx hashes may be empty strings when no context dimensions exist.
@@ -1528,17 +1654,51 @@ def _generate_observations_nightly(
     # different onset estimates due to finite sample size. We simulate
     # this with Gaussian noise around the truth onset.
     # Default: 10% of onset or 0.1d, whichever is larger.
+    #
+    # For contexted edges, generate per-slice onset observations using
+    # the per-slice onset (base + onset_offset from truth file context
+    # dimensions). This mirrors production, where each slice's histogram
+    # produces its own onset estimate. Without this, all slices get the
+    # base edge onset, creating a tug-of-war between the edge-level onset
+    # anchor and per-slice trajectory timing (see doc 41).
     onset_obs_by_edge: dict[str, dict[int, float]] = {}  # edge → fetch_night → noisy onset
+    # onset_obs_by_slice: (edge, context_key) → fetch_night → noisy onset
+    onset_obs_by_slice: dict[tuple[str, str], dict[int, float]] = {}
     if edge_params:
         for edge_id, ep in edge_params.items():
             onset = ep.get("onset", 0.0)
             if onset <= 0:
                 continue
             obs_sigma = ep.get("onset_obs_sigma", max(onset * 0.1, 0.1))
+            # Edge-level (bare aggregate) onset observations
             onset_obs_by_edge[edge_id] = {}
             for fn in fetch_nights:
                 noisy = max(0.0, float(rng.normal(onset, obs_sigma)))
                 onset_obs_by_edge[edge_id][fn] = round(noisy, 2)
+            # Per-slice onset observations (with context offsets)
+            for dim in context_dims:
+                for val in dim.get("values", []):
+                    edges_map = val.get("edges", {})
+                    # D1 fix: match via param_id (same logic as
+                    # _compute_user_params at line ~736), not UUID.
+                    pid = topology.edges[edge_id].param_id if edge_id in topology.edges else ""
+                    bare = pid.replace("parameter-", "") if pid.startswith("parameter-") else pid
+                    _ov = edges_map.get(pid) or edges_map.get(bare)
+                    if _ov is None:
+                        for ekey, edata in edges_map.items():
+                            if bare.endswith(ekey) or bare.endswith(f"-{ekey}"):
+                                _ov = edata
+                                break
+                    _ov = _ov or {}
+                    slice_onset = max(onset + _ov.get("onset_offset", 0.0), 0.0)
+                    if slice_onset <= 0:
+                        continue
+                    slice_sigma = max(slice_onset * 0.1, 0.1)
+                    ctx_key = f"context({dim['id']}:{val['id']})"
+                    onset_obs_by_slice[(edge_id, ctx_key)] = {}
+                    for fn in fetch_nights:
+                        noisy = max(0.0, float(rng.normal(slice_onset, slice_sigma)))
+                        onset_obs_by_slice[(edge_id, ctx_key)][fn] = round(noisy, 2)
 
     # ── Generate cohort rows ────────────────────────────────────────────
     # Cohort: anchor_day = simulation day (within observable window only),
@@ -1629,11 +1789,11 @@ def _generate_observations_nightly(
                                 "a": ctx_a,
                                 "x": ctx_x,
                                 "y": ctx_y,
-                                "median_lag_days": lstats.get("median_lag_days"),
-                                "mean_lag_days": lstats.get("mean_lag_days"),
-                                "anchor_median_lag_days": lstats.get("anchor_median_lag_days"),
-                                "anchor_mean_lag_days": lstats.get("anchor_mean_lag_days"),
-                                "onset_delta_days": onset_obs_by_edge.get(edge_id, {}).get(fetch_night, lstats.get("onset")),
+                                "median_lag_days": slice_latency_stats.get((edge_id, ck), lstats).get("median_lag_days"),
+                                "mean_lag_days": slice_latency_stats.get((edge_id, ck), lstats).get("mean_lag_days"),
+                                "anchor_median_lag_days": slice_latency_stats.get((edge_id, ck), lstats).get("anchor_median_lag_days"),
+                                "anchor_mean_lag_days": slice_latency_stats.get((edge_id, ck), lstats).get("anchor_mean_lag_days"),
+                                "onset_delta_days": onset_obs_by_slice.get((edge_id, ck), onset_obs_by_edge.get(edge_id, {})).get(fetch_night, slice_latency_stats.get((edge_id, ck), lstats).get("onset")),
                             })
                             n_cohort_rows += 1
                         elif ctx_a > 0:
@@ -1732,9 +1892,9 @@ def _generate_observations_nightly(
                                 "a": None,
                                 "x": ctx_x,
                                 "y": ctx_y_w,
-                                "median_lag_days": lstats.get("median_lag_days"),
-                                "mean_lag_days": lstats.get("mean_lag_days"),
-                                "onset_delta_days": onset_obs_by_edge.get(edge_id, {}).get(fetch_night, lstats.get("onset")),
+                                "median_lag_days": slice_latency_stats.get((edge_id, ck), lstats).get("median_lag_days"),
+                                "mean_lag_days": slice_latency_stats.get((edge_id, ck), lstats).get("mean_lag_days"),
+                                "onset_delta_days": onset_obs_by_slice.get((edge_id, ck), onset_obs_by_edge.get(edge_id, {})).get(fetch_night, slice_latency_stats.get((edge_id, ck), lstats).get("onset")),
                             })
                             n_window_rows += 1
 
@@ -1759,7 +1919,6 @@ def _extract_dimension_from_slice_key(slice_key: str) -> str:
     """
     m = re.search(r"context\(([^:)]+)", slice_key)
     return m.group(1) if m else ""
-
 
 def _rehash_snapshot_rows(
     snapshot_rows: dict[str, list[dict]],
@@ -2276,51 +2435,79 @@ def write_parameter_files(
 
         # Context-qualified values[] entries (one per context value per obs type).
         # Only emitted when emit_context_slices is True in the truth file.
+        # D4 fix: use per-context daily aggregates and per-slice onset.
         context_entries: list[dict] = []
+        ctx_edge_daily = sim_stats.get("ctx_edge_daily", {})
         emit_ctx = truth.get("emit_context_slices", False)
         if emit_ctx:
             context_dims = truth.get("context_dimensions", [])
+            bare_pid = pid.replace("parameter-", "") if pid.startswith("parameter-") else pid
             for dim in context_dims:
                 for v in dim.get("values", []):
                     ctx_prefix = f"context({dim['id']}:{v['id']})"
+                    ctx_key = ctx_prefix
+                    # Per-slice daily aggregates (D6)
+                    c_daily = ctx_edge_daily.get((edge_id, ctx_key), daily)
+                    c_n_daily = c_daily["n_daily"]
+                    c_k_daily = c_daily["k_daily"]
+                    c_dates = c_daily["dates"]
+                    c_total_n = sum(c_n_daily)
+                    c_total_k = sum(c_k_daily)
+                    c_mean = c_total_k / c_total_n if c_total_n > 0 else 0.0
+                    c_median_lag = c_daily.get("median_lag_daily", [0] * len(c_dates))
+                    c_mean_lag = c_daily.get("mean_lag_daily", [0] * len(c_dates))
+                    c_anchor_median = c_daily.get("anchor_median_lag_daily", [0] * len(c_dates))
+                    c_anchor_mean = c_daily.get("anchor_mean_lag_daily", [0] * len(c_dates))
+                    c_anchor_n = c_daily.get("anchor_n_daily", [0] * len(c_dates))
+                    # Per-slice onset from truth offsets
+                    edges_map = v.get("edges", {})
+                    _ov = edges_map.get(pid) or edges_map.get(bare_pid)
+                    if _ov is None:
+                        for ekey in edges_map:
+                            if bare_pid.endswith(ekey) or bare_pid.endswith(f"-{ekey}"):
+                                _ov = edges_map[ekey]
+                                break
+                    _ov = _ov or {}
+                    c_onset = onset + _ov.get("onset_offset", 0.0)
+
                     ctx_window: dict[str, Any] = {
-                        "mean": round(mean, 6),
-                        "n": total_n,
-                        "k": total_k,
-                        "n_daily": n_daily,
-                        "k_daily": k_daily,
-                        "dates": dates,
+                        "mean": round(c_mean, 6),
+                        "n": c_total_n,
+                        "k": c_total_k,
+                        "n_daily": c_n_daily,
+                        "k_daily": c_k_daily,
+                        "dates": c_dates,
                         "window_from": _format_date_dmy(base_date),
                         "window_to": _format_date_dmy(end_date),
                         "sliceDSL": f"{ctx_prefix}.{window_dsl}",
-                        "median_lag_days": median_lag_daily,
-                        "mean_lag_days": mean_lag_daily,
-                        "latency": {"onset_delta_days": onset},
+                        "median_lag_days": c_median_lag,
+                        "mean_lag_days": c_mean_lag,
+                        "latency": {"onset_delta_days": c_onset},
                         "data_source": {"type": "synthetic", "retrieved_at": now_str, "full_query": query},
-                        "forecast": round(mean, 6),
+                        "forecast": round(c_mean, 6),
                     }
                     if hash_lookup and pid in hash_lookup and "ctx_window_sig" in hash_lookup[pid] and hash_lookup[pid]["ctx_window_sig"]:
                         ctx_window["query_signature"] = hash_lookup[pid]["ctx_window_sig"]
                     context_entries.append(ctx_window)
 
                     ctx_cohort: dict[str, Any] = {
-                        "mean": round(mean, 6),
-                        "n": total_n,
-                        "k": total_k,
-                        "n_daily": n_daily,
-                        "k_daily": k_daily,
-                        "dates": dates,
-                        "anchor_n_daily": anchor_n_daily,
+                        "mean": round(c_mean, 6),
+                        "n": c_total_n,
+                        "k": c_total_k,
+                        "n_daily": c_n_daily,
+                        "k_daily": c_k_daily,
+                        "dates": c_dates,
+                        "anchor_n_daily": c_anchor_n,
                         "cohort_from": _format_date_dmy(base_date),
                         "cohort_to": _format_date_dmy(end_date),
                         "sliceDSL": f"{ctx_prefix}.{cohort_dsl}",
-                        "median_lag_days": median_lag_daily,
-                        "mean_lag_days": mean_lag_daily,
-                        "anchor_median_lag_days": anchor_median_daily,
-                        "anchor_mean_lag_days": anchor_mean_daily,
-                        "latency": {"onset_delta_days": onset},
+                        "median_lag_days": c_median_lag,
+                        "mean_lag_days": c_mean_lag,
+                        "anchor_median_lag_days": c_anchor_median,
+                        "anchor_mean_lag_days": c_anchor_mean,
+                        "latency": {"onset_delta_days": c_onset},
                         "data_source": {"type": "synthetic", "retrieved_at": now_str, "full_query": query},
-                        "forecast": round(mean, 6),
+                        "forecast": round(c_mean, 6),
                     }
                     if hash_lookup and pid in hash_lookup and "ctx_cohort_sig" in hash_lookup[pid] and hash_lookup[pid]["ctx_cohort_sig"]:
                         ctx_cohort["query_signature"] = hash_lookup[pid]["ctx_cohort_sig"]
@@ -2560,6 +2747,29 @@ def update_graph_edge_metadata(
             topology.anchor_node_id, topology.anchor_node_id
         )
         p["latency"]["anchor_node_id"] = anchor_id
+
+        # Promote SDs from winning model_var (mimics FE applyPromotion).
+        # Without this, BE-only consumers (span_adapter, v2 handler)
+        # cannot find mu_sd etc. and skip IS conditioning.
+        for mv in p.get("model_vars", []):
+            if mv.get("source") != "bayesian":
+                continue
+            mv_lat = mv.get("latency", {})
+            _promo_map = {
+                "promoted_mu_sd": "mu_sd",
+                "promoted_sigma_sd": "sigma_sd",
+                "promoted_onset_sd": "onset_sd",
+                "promoted_onset_mu_corr": "onset_mu_corr",
+                "promoted_path_mu_sd": "path_mu_sd",
+                "promoted_path_sigma_sd": "path_sigma_sd",
+                "promoted_path_onset_sd": "path_onset_sd",
+                "promoted_t95": "t95",
+            }
+            for promoted_key, source_key in _promo_map.items():
+                val = mv_lat.get(source_key)
+                if isinstance(val, (int, float)):
+                    p["latency"][promoted_key] = val
+            break  # only promote from the first (winning) bayesian entry
 
         # cohort_anchor_event_id — FE uses this to derive the cohort
         # anchor for snapshot queries

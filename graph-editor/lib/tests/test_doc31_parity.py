@@ -467,7 +467,7 @@ class TestCohortMaturityV1V2Parity:
         from_id, to_id, edge = _find_adjacent_edge(graph)
         query_dsl = f'from({from_id}).to({to_id}).cohort(-90d:)'
 
-        v1_result = self._run_analysis(graph, from_id, to_id, edge, 'cohort_maturity', query_dsl)
+        v1_result = self._run_analysis(graph, from_id, to_id, edge, 'cohort_maturity_v1', query_dsl)
         v2_result = self._run_analysis(graph, from_id, to_id, edge, 'cohort_maturity_v2', query_dsl)
 
         v1_rows = self._extract_maturity_rows(v1_result, 'v1')
@@ -510,7 +510,7 @@ class TestCohortMaturityV1V2Parity:
         from_id, to_id, edge = _find_adjacent_edge(graph)
         query_dsl = f'from({from_id}).to({to_id}).window(-90d:)'
 
-        v1_result = self._run_analysis(graph, from_id, to_id, edge, 'cohort_maturity', query_dsl)
+        v1_result = self._run_analysis(graph, from_id, to_id, edge, 'cohort_maturity_v1', query_dsl)
         v2_result = self._run_analysis(graph, from_id, to_id, edge, 'cohort_maturity_v2', query_dsl)
 
         v1_rows = self._extract_maturity_rows(v1_result, 'v1')

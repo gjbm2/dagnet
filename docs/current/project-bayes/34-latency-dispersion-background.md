@@ -2462,11 +2462,79 @@ resilience mechanism.
   Sequential execution (JAX fans out across CPUs). Captures wall time,
   ESS, rhat, convergence%, recovery quality per run.
 
-**Status**: implemented, not yet run. Results will populate this section.
+**Status**: over-provision strategy abandoned after testing showed
+~20-25% slower than baseline with no stall resilience benefit.
+Replaced by stall detection + retry (§12.4a below).
 
-### 12.5 Resilience strategy results
+### 12.5 Stall detection (revised approach, 15-Apr-26)
 
-_Pending — to be filled after `scripts/resilience-strategies.py` completes._
+The over-provision and high-accept strategies were tested and found
+too expensive (~20-25% overhead). The adopted approach is stall
+detection with automatic retry:
+
+- Monitor per-chain draw rate during sampling
+- Detect when a chain drops to a sustained crawl (< 3 draws/s AND
+  < 10% of peak, for 30 consecutive seconds)
+- Abort the run and retry with a fresh seed (up to 20 attempts)
+
+The first implementation (EMA-based) was too sensitive — it killed
+healthy runs that were merely slow at end-of-run (e.g. 5 draws/s
+at 98% completion). Revised to use raw rate measurement with no
+smoothing and strict dual-condition gate.
+
+See `BAYES_REGRESSION_TOOLING.md` §Chain stall detection for full
+algorithm details and test coverage.
+
+### 12.6 Graph regeneration bug (15-Apr-26)
+
+`graph_from_truth.py` did not set `pinnedDSL` / `dataInterestsDSL`
+when generating graph JSON. This meant any regeneration of the graph
+(via `--bust-cache`, `--clean`, or truth file changes triggering
+re-bootstrap) silently stripped the DSL. Without the DSL, the FE
+CLI produces zero snapshot subjects, causing complete evidence
+binding failure.
+
+Fixed: `graph_from_truth.py` now sets all three DSL fields
+(`pinnedDSL`, `dataInterestsDSL`, `currentQueryDSL`) directly
+during generation, using simulation dates and context dimensions
+from the truth file. See anti-pattern 39.
+
+### 12.7 Hypothesis: join-node mu/onset recovery failure (15-Apr-26)
+
+Regression run `r1776210023` (2000/2000/3ch, winning formula defaults)
+shows a systematic pattern on contexted graphs with join nodes:
+
+| Graph | mu bias | onset bias | ESS | Completed? |
+|-------|---------|------------|-----|------------|
+| lattice-context (2 joins) | mu biased LOW (z=5-6, truth ~0.9, post ~0.3) | onset biased HIGH | 307 | Yes, no stalls |
+| 3way-join-context (1 join, 3 inputs) | mu biased LOW (z=3-9) | onset biased HIGH | 154 | Yes, no stalls |
+| join-branch-context (1 join) | passed, but worst_ratio=0.88x | — | 1334 | Yes |
+
+The common factor: edges feeding into or exiting join nodes have
+systematically underestimated mu (model thinks conversions happen
+faster than truth) and overestimated onset (compensatory — pushes
+shift up to partially offset the low mu).
+
+**Possible causes** (not yet investigated):
+
+1. **Path-composed mu prior**: join-downstream edges get their
+   `mu_path_prior` forward-composed from upstream edges. If the
+   composition over-constrains mu (prior too tight, centred too low),
+   the posterior can't escape.
+
+2. **(m, a, r) geometry at joins**: the `a` parameter (logit onset
+   fraction) is shared across slices. At join nodes with multiple
+   upstream paths, the shared `a` may create an identifiability
+   issue between the mu offset and the onset shift.
+
+3. **Dirichlet branch group interaction**: join nodes downstream of
+   branch groups have constrained probability mass. The latency
+   parameters may be absorbing probability misfit as mu/onset bias.
+
+**Next steps**: compare edge-level mu priors against posteriors to
+see if the prior is pulling in the wrong direction. Check whether
+the path composition formula produces sensible mu priors for
+join-downstream edges on these graph topologies.
 
 ---
 

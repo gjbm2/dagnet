@@ -105,21 +105,69 @@ def build_x_provider_from_graph(
     if not from_node_id:
         return XProvider(reach=0.0, upstream_params_list=[], enabled=False)
 
+    # Compute reach via topo walk using _resolve_edge_p (same as
+    # build_node_arrival_cache in forecast_state.py). Reads from
+    # model_vars/posterior — no dependency on p.mean (which is a
+    # topo-pass output and would be circular).
     reach = 0.0
     try:
-        from .graph_builder import build_networkx_graph
-        from .path_runner import calculate_path_probability
-        from .graph_builder import find_entry_nodes
-        G = build_networkx_graph(graph)
-        if anchor_node_id:
-            path_result = calculate_path_probability(G, anchor_node_id, from_node_id)
-            reach = path_result.probability
-        else:
-            entry_nodes = find_entry_nodes(G)
-            for entry in entry_nodes:
-                pr = calculate_path_probability(G, entry, from_node_id)
-                if pr.probability > reach:
-                    reach = pr.probability
+        from .forecast_state import _resolve_edge_p
+
+        # Build adjacency and topo-sort
+        edges = graph.get('edges', [])
+        # Edges reference nodes by UUID; anchor_node_id may be a
+        # human-readable ID. Build a lookup to resolve.
+        id_to_uuid: Dict[str, str] = {}
+        node_ids = []
+        for n in graph.get('nodes', []):
+            uuid = n.get('uuid', '')
+            hid = n.get('id', '')
+            nid = uuid or hid
+            node_ids.append(nid)
+            if hid and uuid:
+                id_to_uuid[hid] = uuid
+        incoming_map: Dict[str, List[Dict]] = {}
+        in_degree: Dict[str, int] = {nid: 0 for nid in node_ids}
+        for e in edges:
+            to_id = e.get('to', '')
+            if to_id not in incoming_map:
+                incoming_map[to_id] = []
+            incoming_map[to_id].append(e)
+            in_degree[to_id] = in_degree.get(to_id, 0) + 1
+
+        # Walk in topo order, accumulate reach per node
+        node_reach: Dict[str, float] = {}
+        anchor = anchor_node_id or ''
+        # Resolve human-readable ID to UUID if needed
+        if anchor and anchor in id_to_uuid:
+            anchor = id_to_uuid[anchor]
+        if anchor:
+            node_reach[anchor] = 1.0
+        queue = sorted([nid for nid in node_ids if in_degree.get(nid, 0) == 0])
+        if anchor and anchor not in queue:
+            queue.append(anchor)
+        visited: set = set()
+        while queue:
+            nid = queue.pop(0)
+            if nid in visited:
+                continue
+            visited.add(nid)
+            if nid != anchor and nid in incoming_map:
+                r = 0.0
+                for ie in incoming_map[nid]:
+                    ie_from = ie.get('from', '')
+                    r += node_reach.get(ie_from, 0.0) * max(0, _resolve_edge_p(ie))
+                node_reach[nid] = r
+            elif nid not in node_reach:
+                node_reach[nid] = 0.0
+            for e in edges:
+                if e.get('from', '') == nid:
+                    to_id = e.get('to', '')
+                    in_degree[to_id] = in_degree.get(to_id, 0) - 1
+                    if in_degree[to_id] <= 0 and to_id not in visited:
+                        queue.append(to_id)
+
+        reach = node_reach.get(from_node_id, 0.0)
         if _COHORT_DEBUG:
             print(f"[REACH] from_node={from_node_id} anchor={anchor_node_id} "
                   f"reach={reach:.6f}")

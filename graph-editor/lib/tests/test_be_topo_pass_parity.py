@@ -302,3 +302,92 @@ class TestTopoPassVsV2Completeness:
 
         assert 'forecast_state_count' in result['summary']
         assert 'forecast_state_ms' in result['summary']
+
+    def test_engine_uses_scoped_cohorts_over_raw(self):
+        """When edge_contexts provides scoped_cohorts, the engine uses
+        them instead of raw cohort_data for IS conditioning. Review
+        finding #7.
+
+        Scenario: raw cohort_data has a young cohort (age=5, low
+        completeness) and a mature cohort (age=200, high completeness).
+        scoped_cohorts has only the mature cohort. If the engine uses
+        scoped_cohorts, the n-weighted completeness will be high
+        (mature only). If it uses raw, the young cohort drags it down.
+
+        Uses the enriched synth graph so the stats engine produces
+        EdgeLAGValues (required for the engine step to run).
+        """
+        graph = _load_graph()
+
+        target = None
+        for edge in graph['edges']:
+            lat = edge.get('p', {}).get('latency', {})
+            if lat.get('mu') and lat.get('sigma'):
+                target = edge
+                break
+        assert target is not None, 'No latency edge found'
+        uuid = target['uuid']
+
+        # Raw cohort_data: young (age=5) + mature (age=200)
+        # Both sets must produce a valid lag fit for the stats engine.
+        raw_cohorts = [
+            {'date': '2026-01-01', 'age': 5, 'n': 100, 'k': 10,
+             'median_lag_days': 5, 'mean_lag_days': 5},
+            {'date': '2025-09-01', 'age': 200, 'n': 100, 'k': 70,
+             'median_lag_days': 20, 'mean_lag_days': 25},
+        ]
+
+        # Scoped: mature only (age=200)
+        scoped_cohorts = [
+            {'date': '2025-09-01', 'age': 200, 'n': 100, 'k': 70,
+             'median_lag_days': 20, 'mean_lag_days': 25},
+        ]
+
+        from api_handlers import handle_stats_topo_pass
+
+        # Run WITH scoped_cohorts
+        result_scoped = handle_stats_topo_pass({
+            'graph': graph,
+            'cohort_data': {uuid: raw_cohorts},
+            'edge_contexts': {uuid: {
+                'scoped_cohorts': scoped_cohorts,
+            }},
+            'forecasting_settings': None,
+            'query_mode': 'none',
+        })
+
+        # Run WITHOUT scoped_cohorts (falls back to raw)
+        result_raw = handle_stats_topo_pass({
+            'graph': graph,
+            'cohort_data': {uuid: raw_cohorts},
+            'edge_contexts': {},
+            'forecasting_settings': None,
+            'query_mode': 'none',
+        })
+
+        c_scoped = None
+        c_raw = None
+        for er in result_scoped['edges']:
+            if er['edge_uuid'] == uuid:
+                c_scoped = er.get('completeness')
+                break
+        for er in result_raw['edges']:
+            if er['edge_uuid'] == uuid:
+                c_raw = er.get('completeness')
+                break
+
+        assert c_scoped is not None, \
+            f"No completeness from scoped run. Edges returned: " \
+            f"{[e['edge_uuid'] for e in result_scoped['edges']]}"
+        assert c_raw is not None, \
+            f"No completeness from raw run. Edges returned: " \
+            f"{[e['edge_uuid'] for e in result_raw['edges']]}"
+
+        # Scoped (mature only) must have higher completeness than raw
+        # (which includes the young cohort dragging the average down)
+        print(f"\nScoped cohorts test:")
+        print(f"  completeness (scoped, mature only): {c_scoped:.4f}")
+        print(f"  completeness (raw, young+mature):   {c_raw:.4f}")
+        assert c_scoped > c_raw, \
+            f"Scoped completeness ({c_scoped:.4f}) should be > raw ({c_raw:.4f}). " \
+            f"Engine may not be using scoped_cohorts."

@@ -32,6 +32,8 @@ DEFAULT_TARGET_ACCEPT = 0.90
 # Convergence thresholds
 RHAT_THRESHOLD = 1.05
 ESS_THRESHOLD = 400
+# Ridge diagnostic: |corr(a_slice, sigma)| above this triggers a warning
+RIDGE_CORR_THRESHOLD = 0.8
 
 
 # ---------------------------------------------------------------------------
@@ -90,6 +92,37 @@ class EdgeTopology:
 
     # σ of A→X path — upstream of this edge (for τ_cohort)
     path_sigma_ax: float = 0.0
+
+    # conditional_p: independent probability populations (doc 14 §6).
+    # Each entry is a ConditionalPop with its own param file, evidence,
+    # and latency. Conditions use visited() / case() / exclude() qualifiers.
+    # Model emits separate (non-pooled) priors per condition.
+    conditional_p: list["ConditionalPop"] = field(default_factory=list)
+
+
+@dataclass
+class ConditionalPop:
+    """An independent population defined by a conditional_p entry.
+
+    Each conditional is structurally a parallel edge — its own param file,
+    its own snapshot data, its own core_hash, its own latency. The condition
+    (visited/exclude/case) is baked into the MSMDC query at data retrieval
+    time; the compiler treats it as an independent evidence stream.
+
+    Supervenes on the graph: shares upstream topology but has fully
+    independent probability, latency, and evidence.
+    """
+    condition: str              # "visited(gave-bds-in-onboarding)"
+    param_id: str               # FK to this conditional's param file
+    p_mean: float               # prior from conditional's p.mean
+    # Latency priors (from conditional's p.latency block)
+    has_latency: bool = False
+    onset_delta_days: float = 0.0
+    mu_prior: float = 0.0
+    sigma_prior: float = 0.5
+    # Evidence bound from this conditional's own param file / snapshot rows.
+    # Populated by the worker after binding. None until then.
+    evidence: "EdgeEvidence | None" = None
 
 
 @dataclass

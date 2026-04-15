@@ -30,6 +30,8 @@ Every instance follows the same sequence:
 | Proposed baselining when user only asked for winning formula | Listening to the user |
 | Launched a 3-hour background run with buffered stdout — no incremental output visible | Running 1 iteration in foreground first |
 | Wrote over-provision callback that was bound *after* the progress_type was created — would never fire | Tracing the code path once |
+| `run_regression.py` crashed on line 858 with `ValueError` from a float in a `:<8s` format string | Running 1 graph before launching the full suite |
+| `bayes-monitor.sh` `^b e` handler deleted all harness log files — labelled "clear finished" | Reading the handler code before writing it; asking "what does this delete?" |
 
 ## Why existing rules don't work
 

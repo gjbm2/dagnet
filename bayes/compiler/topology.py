@@ -20,6 +20,7 @@ from .types import (
     TopologyAnalysis,
     EdgeTopology,
     BranchGroup,
+    ConditionalPop,
     PathLatency,
 )
 from .completeness import (
@@ -147,6 +148,25 @@ def analyse_topology(graph_snapshot: dict) -> TopologyAnalysis:
         path_t95_raw = latency.get("path_t95")
         path_t95_days = float(path_t95_raw) if path_t95_raw is not None and float(path_t95_raw) > 0 else None
 
+        # conditional_p: independent probability populations (doc 14 §6)
+        _cond_p_raw = e.get("conditional_p", [])
+        _cond_p: list[ConditionalPop] = []
+        if isinstance(_cond_p_raw, list):
+            for cp in _cond_p_raw:
+                if isinstance(cp, dict) and cp.get("condition"):
+                    _cp_p = cp.get("p", {}) if isinstance(cp.get("p"), dict) else {}
+                    _cp_lat = _cp_p.get("latency", {}) if isinstance(_cp_p.get("latency"), dict) else {}
+                    _cp_has_lat = bool(_cp_lat.get("latency_parameter"))
+                    _cond_p.append(ConditionalPop(
+                        condition=cp["condition"],
+                        param_id=_cp_p.get("id", ""),
+                        p_mean=float(_cp_p.get("mean", 0.5)),
+                        has_latency=_cp_has_lat,
+                        onset_delta_days=float(_cp_lat.get("onset_delta_days", 0.0)),
+                        mu_prior=float(_cp_lat.get("mu", 0.0)),
+                        sigma_prior=float(_cp_lat.get("sigma", 0.5)),
+                    ))
+
         edges[edge_id] = EdgeTopology(
             edge_id=edge_id,
             from_node=e["from"],
@@ -160,6 +180,7 @@ def analyse_topology(graph_snapshot: dict) -> TopologyAnalysis:
             sigma_prior=sigma_prior,
             t95_days=t95_days,
             path_t95_days=path_t95_days,
+            conditional_p=_cond_p,
         )
 
     # 5. Topological sort (BFS from anchor)

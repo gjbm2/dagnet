@@ -1534,6 +1534,27 @@ export class GraphComputeClient {
           sampleValues: pts.slice(0, 3).map((p: any) => ({ x: p?.x, y: p?.y, rate: p?.rate, anchor_day: p?.anchor_day })),
         });
       }
+      // Log maturity_rows sample — the actual chart data contract
+      const rows = Array.isArray(raw?.result?.maturity_rows) ? raw.result.maturity_rows : [];
+      if (rows.length > 0) {
+        const sampleTaus = [0, 5, 10, 15, 20, 25, 30];
+        const sampleRows = rows.filter((r: any) => sampleTaus.includes(r?.tau_days));
+        console.log('[GraphComputeClient] maturity_rows sample:', {
+          totalRows: rows.length,
+          tau_solid_max: rows[0]?.tau_solid_max,
+          tau_future_max: rows[0]?.tau_future_max,
+          rows: sampleRows.map((r: any) => ({
+            tau: r.tau_days,
+            rate: r.rate != null ? +r.rate.toFixed(4) : null,
+            mid: r.midpoint != null ? +r.midpoint.toFixed(4) : null,
+            fan_lo: r.fan_lower != null ? +r.fan_lower.toFixed(4) : null,
+            fan_hi: r.fan_upper != null ? +r.fan_upper.toFixed(4) : null,
+            model_mid: r.model_midpoint != null ? +r.model_midpoint.toFixed(4) : null,
+            ev_x: r.evidence_x,
+            ev_y: r.evidence_y,
+          })),
+        });
+      }
     }
 
     const normalised =

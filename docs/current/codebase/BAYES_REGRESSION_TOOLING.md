@@ -1,6 +1,6 @@
 # Bayes Regression Tooling
 
-**Last updated**: 14-Apr-26
+**Last updated**: 14-Apr-26 (sparsity sweep added)
 
 How the parameter recovery regression pipeline works: discovery,
 bootstrap, parallel execution, multi-layered audit, and known
@@ -357,32 +357,54 @@ while others continue normally. This is geometry, not compute — the
 same graph succeeds on re-run with a fresh seed.
 
 **Detection** (`ChainStallDetector` in `compiler/inference.py`):
-- Tracks per-chain velocity via exponentially weighted moving average (EMA)
-- Each chain's peak EMA establishes its "cruising speed"
-- A chain enters the **stall zone** when its EMA drops below 10% of peak
-- A chain exits the stall zone only when EMA recovers above 30% of peak (hysteresis — small wobbles within the crawl don't count as recovery)
-- After 30s in the stall zone without recovery → `ChainStallError` raised
-- Stalls are not detected during warmup (before chains reach 5 draws/s cruising speed)
+
+A stall is detected when a chain's draw rate drops to a sustained crawl.
+Two conditions must BOTH hold:
+
+1. **Entry**: the chain's rate (draws over the last 5s) drops below
+   `crawl_floor` (3 draws/s) AND below `crawl_ratio` (10%) of the
+   chain's established peak rate. Both conditions are required —
+   a chain doing 4 draws/s is never flagged regardless of peak, and
+   a slow model with peak 8 draws/s won't flag at 2 draws/s (since
+   2 > 10% of 8 = 0.8).
+
+2. **Sustained**: the chain remains in crawl state for a full
+   `grace_s` (30s) consecutive seconds. If the rate rises above
+   the crawl thresholds at ANY point, the timer resets entirely.
+
+Detection does not activate until a chain reaches `min_peak`
+(10 draws/s) cruising speed, preventing false positives during
+warmup.
+
+**Design history**: the first implementation used an EMA with
+hysteresis thresholds. This was too sensitive — the EMA decayed
+fast on brief pauses (normal NUTS tree-depth variation), causing
+false positives that killed healthy runs at 98% completion. The
+current implementation uses raw draws-in-window rate measurement
+with no smoothing. A chain must genuinely crawl (< 3 draws/s)
+for a full 30 consecutive seconds to trigger.
+
+**Logging**: three log lines trace the detector's decisions:
+- `CRAWL ENTERED: chain X rate=Y (peak=Z)` — entry into crawl state
+- `CRAWL RECOVERED: chain X` — rate recovered, timer reset
+- `STALL CONFIRMED: chain X rate=Y ... crawling for Zs, per_chain=[...]` — 30s sustained, abort triggered
 
 **Retry** (`worker.py`):
-- `run_inference` calls are wrapped in a retry loop (max 3 attempts by default)
+- `run_inference` calls are wrapped in a retry loop (max 20 attempts)
 - On `ChainStallError`, the run is aborted and restarted with a fresh random seed
-- After 3 consecutive stalls, `RuntimeError` propagates — the graph is marked FAILED
+- After all retries exhausted, `RuntimeError` propagates — the graph is marked FAILED
 - Both Phase 1 and Phase 2 have independent retry loops
 
 **Per-chain progress template**: the nutpie Jinja2 template
 (`_NUTPIE_PROGRESS_TEMPLATE`) emits per-chain `finished_draws` every
-500ms. The stall detector consumes this in `_throttled_on_progress`.
+500ms. Every throttled progress line now includes `chains=[N,M,...]`
+showing per-chain draw counts.
 
-**Test coverage**: `bayes/tests/test_stall_detector.py` — 12 tests
-covering healthy runs, stall detection, grace period, hysteresis,
-warmup suppression, and edge cases. All use synthetic draw sequences
-with controlled timing — no MCMC needed.
-
-**Observed stall patterns** (14-Apr-26 regression):
-- `synth-diamond-context`: Phase 1 completes fine, Phase 2 stalls at ~5% (600/12000 draws) on all 3 attempts. Different chains each time.
-- `synth-lattice-context`: Phase 1 stalls at varying points (3%, 98%, 6%). One attempt was 168 draws from finishing when the chain died.
-- All other contexted graphs (3way-join, join-branch, skip, mirror-4step, fanout, simple-abc) completed without stalls.
+**Test coverage**: `bayes/tests/test_stall_detector.py` — 15 tests
+covering: no false positives (steady, brief dip, moderate slowdown,
+5 draws/s, end-of-run, intermittent), real stalls (sustained crawl,
+near-zero, 2 draws/s, grace timing, chain identification), and edge
+cases (warmup, dual-condition gate, low-peak models).
 
 ### Timeout layers (12-Apr-26)
 
@@ -480,3 +502,70 @@ The worker tracks this internally in the `timings` dict, and
 comparison summary shows only total wall time. This is a known gap
 — performance comparisons between parameterisations require manually
 reading the harness log or worker output.
+
+---
+
+## Sparsity sweep (doc 40, 14-Apr-26)
+
+`scripts/sparsity-sweep.py` wraps the existing regression toolchain
+to compare centred vs non-centred parameterisation under varying
+snapshot DB sparsity.
+
+### Sparsity layer in synth_gen.py
+
+Three simulation parameters gate snapshot row emission without
+affecting the underlying population simulation or param file data
+(`edge_daily`):
+
+| Parameter | What it does |
+|-----------|-------------|
+| `frame_drop_rate` | Per-row random drop probability (independent per edge×slice×date) |
+| `toggle_rate` | Per fetch-night probability that an edge×slice flips emitting on/off |
+| `initial_absent_pct` | Fraction of edge×slice combos that start not-emitting |
+
+All three default to 0.0 (no sparsity). Set in the `simulation`
+block of truth YAML files, same level as `failure_rate`.
+
+**Key invariant**: param file data (`edge_daily`) is always
+complete — sparsity only affects snapshot DB rows. Users always
+have at least one full view available via the param file.
+
+### Sweep script
+
+```bash
+. graph-editor/venv/bin/activate
+python3 -u scripts/sparsity-sweep.py \
+  --draws 20 --base-graph synth-skip-context-sparse \
+  --tune 1000 --mcmc-draws 1000 --chains 2 --timeout 0
+```
+
+The script:
+1. Samples sparsity parameters from distributions per draw
+2. Writes temporary truth YAML variants in the data repo
+3. Calls `param_recovery.py` twice per variant (centred via defaults,
+   non-centred via `--feature centred_p_slices=false
+   --feature centred_latency_slices=false`)
+4. Uses `--rebuild` per variant (sparsity changes the DB contents)
+5. Collates nine-layer audit output to incremental CSV
+6. Cleans up variant truth files after each draw
+
+Output CSV: `/tmp/sparsity-sweep-{timestamp}.csv` with per-draw
+sparsity params, ESS, divergences, convergence %, recovery counts.
+
+### Sparse truth YAML variants
+
+Two base variants exist for manual testing outside the sweep:
+
+- `synth-skip-context-sparse` — skip topology, 15%/0.02/25% sparsity
+- `synth-diamond-context-sparse` — diamond topology, same defaults
+
+Both auto-discovered by `discover_synth_graphs()`. Wider z-score
+thresholds (3.5–4.0) to account for reduced data.
+
+### Test coverage
+
+9 blind tests in `bayes/tests/test_synth_gen.py::TestSparsityLayer`
+covering: zero-sparsity baseline parity, frame drop magnitude,
+initial absence, toggle gaps, edge_daily integrity, context row
+gating, heavy sparsity survival, stats recording, full absence
+boundary.

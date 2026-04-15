@@ -787,10 +787,22 @@ def _bind_from_snapshot_rows(
     # the Amplitude lag histogram (1% mass point). Each DB row carries
     # the same onset for that retrieval — rows are NOT independent.
     # Deduplicate by retrieval date to get one observation per date.
+    #
+    # When context slices are commissioned for this edge, use only
+    # aggregate (bare) rows so the edge-level onset anchor is centred
+    # on aggregate data, not a row-order-dependent mix of aggregate
+    # and context rows (doc 41a §Phase 2).  We gate on the
+    # `commissioned` set passed by the caller, not on row content,
+    # so uncommissioned context data is not affected.
     if et.has_latency and ev.latency_prior is not None:
+        _filter_ctx = bool(commissioned)
         seen_dates: set[str] = set()
         onset_obs: list[float] = []
         for row in rows:
+            if _filter_ctx:
+                _sk = row.get("slice_key", "")
+                if _sk and "context(" in _sk:
+                    continue
             onset_val = row.get("onset_delta_days")
             if onset_val is None:
                 continue

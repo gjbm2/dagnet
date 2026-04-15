@@ -169,14 +169,46 @@ data-constrained. Single-source validation:
 - ~~5/10 synth regression failures~~ — **FIXED 31-Mar-26**. Onset
   obs contributing -inf at starting point on 3way-join, fanout,
   join-branch, lattice, skip. Independently resolved.
-- **Centred parameterisation sparsity robustness** — **OPEN 14-Apr-26**.
-  The 5–20× speedup from centred parameterisation (doc 34, 14-Apr-26
-  handover) was validated on synthetic data with generous per-slice
-  observation counts. Production graphs will contain thin slices,
-  unbalanced MECE partitions, and structural zeros where centred may
-  degrade. Needs sparse synthetic scenarios and regression before
-  shipping centred as the unconditional default. See
-  `docs/current/project-bayes/40-centred-param-sparsity-robustness.md`.
+- **Centred parameterisation sparsity robustness** — **READY TO RUN
+  14-Apr-26**. The 5–20× speedup from centred parameterisation (doc 34,
+  14-Apr-26 handover) was validated on synthetic data with generous
+  per-slice observation counts. Production graphs will contain thin
+  slices, unbalanced MECE partitions, and structural zeros where centred
+  may degrade. Infrastructure is now built and tested:
+  - **Sparsity layer** in `synth_gen.py`: three parameters
+    (`frame_drop_rate`, `toggle_rate`, `initial_absent_pct`) gate
+    snapshot DB row emission per edge×slice. Param file data (edge_daily)
+    is unaffected — users always have at least one full view.
+  - **Two sparse truth YAMLs**: `synth-skip-context-sparse` and
+    `synth-diamond-context-sparse` (15%/0.02/25% sparsity defaults).
+    Auto-discovered by the regression pipeline.
+  - **Sweep script** (`scripts/sparsity-sweep.py`): generates N truth
+    variants with sparsity parameters drawn from distributions, runs
+    `param_recovery.py` twice per variant (centred vs non-centred via
+    `--feature` flags), collates nine-layer audit output to CSV.
+  - **9 blind tests** in `test_synth_gen.py::TestSparsityLayer` — all
+    pass, 88/88 suite total.
+  - **Dry runs confirmed**: both sparse variants generate valid data
+    with ~50% row reduction at default sparsity levels.
+
+  **Queued run** (doc 40 §5):
+  ```
+  . graph-editor/venv/bin/activate
+  python3 -u scripts/sparsity-sweep.py \
+    --draws 20 --base-graph synth-skip-context-sparse \
+    --tune 1000 --mcmc-draws 1000 --chains 2 --timeout 0
+  ```
+  Expect ~20–40 hours wall time (20 draws × 2 configs × ~30 min each).
+  Use `--draws 5` for a quick feasibility check first. Output CSV
+  contains per-draw sparsity params, ESS, divergences, convergence %,
+  and recovery z-scores — the key deliverable is the crossover curve
+  of recovery quality vs effective per-slice n.
+
+  **Decision gate**: if centred degrades on sparse data, implement
+  adaptive per-slice parameterisation (doc 40 §3.1). If robust, ship
+  centred as default with a monitoring gate on per-slice effective n.
+
+  See `docs/current/project-bayes/40-centred-param-sparsity-robustness.md`.
 
 - **PPC calibration** — **PARTIAL 12-Apr-26**. See doc 38.
   `bayes/compiler/calibration.py` implemented: two-category PIT
@@ -1718,3 +1750,15 @@ uncontexted and per-slice posteriors. Until fixed, the Bayesian
 "ground truth" SDs used to calibrate heuristic dispersions (§ above)
 are themselves wrong — any heuristic calibrated against them will
 inherit the same overstatement of certainty.
+
+### Defect: per-slice param file latency values are not slice-aware (15-Apr-26)
+
+Param file `values[]` entries for contexted edges have per-slice
+`sliceDSL` but repeat the base edge's `onset_delta_days` for every
+slice (e.g. 0.5 for google, direct, and email when truth onset is
+0.3, 0.5, 0.7 respectively). `mu` and `sigma` are absent from
+per-slice latency blocks entirely. This means the model receives
+identical latency priors for all slices, pulling onset toward the
+edge mean regardless of the true per-slice value. Fix: the synth
+generator (and production topo pass) should write per-slice onset,
+mu, and sigma to each param file values entry. See doc 41 §4.

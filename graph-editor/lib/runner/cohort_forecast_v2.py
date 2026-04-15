@@ -712,6 +712,7 @@ def compute_cohort_maturity_rows_v2(
     fan_quantiles: Optional[Dict[int, Any]] = None
 
     has_uncertainty = sp.span_p > 0 and sp.mu_sd > 0
+    print(f"[v2] MC gate: has_uncertainty={has_uncertainty} span_p={sp.span_p:.4f} mu_sd={sp.mu_sd:.6f}")
 
     if has_uncertainty and mc_cdf_arr is not None and mc_p_s is not None:
         import numpy as np

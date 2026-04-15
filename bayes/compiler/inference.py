@@ -29,94 +29,183 @@ class ChainStallError(RuntimeError):
 
 
 class ChainStallDetector:
-    """Detect MCMC chain stalls via EMA velocity tracking.
+    """Detect MCMC chain stalls: sustained crawl relative to established pace.
 
-    Monitors per-chain draw rate.  A stall is when a chain's EMA velocity
-    drops below `stall_trigger` fraction of its peak (established cruising
-    speed) and stays there for `grace_s` seconds without recovering above
-    `recovery_threshold`.
+    A stall has two conditions, both of which must hold simultaneously:
+
+    1. **Entry**: the chain's current rate (draws in last `rate_window_s`)
+       drops below `crawl_floor` draws/s AND below `crawl_ratio` of
+       the chain's established peak rate.
+
+    2. **Sustained**: the chain remains in the crawl state for a full
+       `grace_s` consecutive seconds.  If the rate rises above the
+       crawl thresholds at ANY point, the timer resets.
+
+    This avoids false positives on:
+    - Brief hard regions (high tree depth → slow for a few seconds, then recovers)
+    - End-of-run slowdown (2 chains finish, last chain has CPU but is still progressing)
+    - Genuinely slow models (peak is 4 draws/s, so 3 draws/s is normal)
 
     Usage:
         detector = ChainStallDetector()
-        # Call on every progress update:
         stall = detector.update(chain_index, draws, timestamp)
         if stall is not None:
-            # stall is a dict with chain, rate, peak info
+            # stall confirmed — chain has been crawling for grace_s
     """
 
     def __init__(
         self,
         grace_s: float = 30.0,
-        stall_trigger: float = 0.10,
-        recovery_threshold: float = 0.30,
-        ema_alpha: float = 0.3,
-        min_peak: float = 5.0,
+        crawl_floor: float = 3.0,
+        crawl_ratio: float = 0.10,
+        rate_window_s: float = 5.0,
+        min_peak: float = 10.0,
     ):
         self.grace_s = grace_s
-        self.stall_trigger = stall_trigger
-        self.recovery_threshold = recovery_threshold
-        self.ema_alpha = ema_alpha
-        self.min_peak = min_peak
+        self.crawl_floor = crawl_floor      # absolute: below this AND below ratio = crawling
+        self.crawl_ratio = crawl_ratio      # relative: below this fraction of peak = crawling
+        self.rate_window_s = rate_window_s  # seconds over which to compute current rate
+        self.min_peak = min_peak            # chain must reach this before detection activates
 
-        self._ema: dict[int, float] = {}
-        self._peak: dict[int, float] = {}
-        self._last_draws: dict[int, int] = {}
-        self._last_time: dict[int, float] = {}
-        self._stall_since: dict[int, float | None] = {}
+        # Per-chain state
+        self._snapshots: dict[int, list[tuple[float, int]]] = {}
+        self._peak_rate: dict[int, float] = {}
+        self._crawl_since: dict[int, float | None] = {}
 
     def update(self, chain: int, draws: int, now: float) -> dict | None:
-        """Update chain state and return stall info if stall confirmed.
-
-        Returns None if no stall, or a dict with keys:
-            chain, rate, peak, ratio, stalled_for
-        """
-        if chain not in self._ema:
-            self._ema[chain] = 0.0
-            self._peak[chain] = 0.0
-            self._last_draws[chain] = draws
-            self._last_time[chain] = now
-            self._stall_since[chain] = None
+        """Update chain state. Returns stall info dict if stall confirmed."""
+        if chain not in self._snapshots:
+            self._snapshots[chain] = [(now, draws)]
+            self._peak_rate[chain] = 0.0
+            self._crawl_since[chain] = None
             return None
 
-        dt = now - self._last_time[chain]
-        if dt < 0.1:
-            return None
+        snaps = self._snapshots[chain]
+        snaps.append((now, draws))
 
-        dd = draws - self._last_draws[chain]
-        instant_rate = dd / dt if dt > 0 else 0.0
-        self._last_draws[chain] = draws
-        self._last_time[chain] = now
+        # Compute current rate over the last rate_window_s
+        rate = self._rate_over_window(chain, now, draws, self.rate_window_s)
 
-        # Update EMA
-        self._ema[chain] = (self.ema_alpha * instant_rate
-                            + (1 - self.ema_alpha) * self._ema[chain])
+        # Update peak rate (only from the rate_window measurement)
+        if rate is not None and rate > self._peak_rate[chain]:
+            self._peak_rate[chain] = rate
 
-        # Update peak
-        if self._ema[chain] > self._peak[chain]:
-            self._peak[chain] = self._ema[chain]
-
-        peak = self._peak[chain]
+        # Don't check until chain has reached cruising speed
+        peak = self._peak_rate[chain]
         if peak < self.min_peak:
-            return None  # hasn't reached cruising speed
+            self._trim(chain, now)
+            return None
 
-        ratio = self._ema[chain] / peak
+        if rate is None:
+            # Not enough history for rate calculation
+            self._trim(chain, now)
+            return None
 
-        if ratio < self.stall_trigger:
-            if self._stall_since[chain] is None:
-                self._stall_since[chain] = now
-            elif now - self._stall_since[chain] >= self.grace_s:
+        # Is the chain crawling?
+        is_crawling = (rate < self.crawl_floor and rate < self.crawl_ratio * peak)
+
+        if is_crawling:
+            if self._crawl_since[chain] is None:
+                self._crawl_since[chain] = now
+            elif now - self._crawl_since[chain] >= self.grace_s:
+                self._trim(chain, now)
                 return {
                     "chain": chain,
-                    "rate": self._ema[chain],
+                    "rate": rate,
                     "peak": peak,
-                    "ratio": ratio,
-                    "stalled_for": now - self._stall_since[chain],
+                    "ratio": rate / peak if peak > 0 else 0,
+                    "stalled_for": now - self._crawl_since[chain],
                 }
-        elif ratio > self.recovery_threshold:
-            self._stall_since[chain] = None
-        # else: hysteresis dead zone — no action
+        else:
+            # Not crawling — reset timer
+            self._crawl_since[chain] = None
+
+        self._trim(chain, now)
+        return None
+
+    def check_laggard(self, all_draws: list[int], now: float,
+                      laggard_ratio: float = 0.1) -> dict | None:
+        """Cross-chain check: detect a chain that never reached cruising
+        speed but is dramatically behind its siblings.
+
+        This catches the case where a chain is slow from the start — its
+        peak rate never reaches min_peak, so the per-chain detector
+        never activates.  The condition: the chain's draw count is below
+        `laggard_ratio` of the median of other chains, AND its rate is
+        below crawl_floor, AND this has persisted for grace_s.
+
+        Call this after updating all chains.
+        """
+        if len(all_draws) < 2:
+            return None
+
+        sorted_draws = sorted(all_draws)
+        median_draws = sorted_draws[len(sorted_draws) // 2]
+
+        # Only check once siblings have made meaningful progress
+        if median_draws < 100:
+            return None
+
+        for c, draws in enumerate(all_draws):
+            # Skip chains that already have high peak (normal detector
+            # handles those)
+            if self._peak_rate.get(c, 0) >= self.min_peak:
+                continue
+
+            # Is this chain dramatically behind?
+            if draws > laggard_ratio * median_draws:
+                # Not a laggard — reset
+                self._crawl_since[c] = None
+                continue
+
+            rate = self._rate_over_window(c, now, draws,
+                                          self.rate_window_s)
+            if rate is not None and rate >= self.crawl_floor:
+                # Slow but not crawling — reset
+                self._crawl_since[c] = None
+                continue
+
+            # Laggard and crawling
+            if self._crawl_since.get(c) is None:
+                self._crawl_since[c] = now
+            elif now - self._crawl_since[c] >= self.grace_s:
+                return {
+                    "chain": c,
+                    "rate": rate or 0.0,
+                    "peak": self._peak_rate.get(c, 0),
+                    "ratio": draws / median_draws if median_draws > 0 else 0,
+                    "stalled_for": now - self._crawl_since[c],
+                    "laggard": True,
+                    "draws": draws,
+                    "median_draws": median_draws,
+                }
 
         return None
+
+    def _rate_over_window(self, chain: int, now: float, current_draws: int,
+                          window: float) -> float | None:
+        """Compute draws/s over the last `window` seconds."""
+        snaps = self._snapshots[chain]
+        cutoff = now - window
+        old_snap = None
+        for ts, d in snaps:
+            if ts <= cutoff:
+                old_snap = (ts, d)
+            else:
+                break
+        if old_snap is None:
+            return None
+        dt = now - old_snap[0]
+        if dt < window * 0.5:
+            return None  # not enough history
+        return (current_draws - old_snap[1]) / dt if dt > 0 else 0.0
+
+    def _trim(self, chain: int, now: float):
+        """Remove old snapshots to bound memory."""
+        cutoff = now - max(self.grace_s, self.rate_window_s) * 3
+        snaps = self._snapshots[chain]
+        while len(snaps) > 2 and snaps[0][0] < cutoff:
+            snaps.pop(0)
 
 
 from .types import (
@@ -130,6 +219,7 @@ from .types import (
     HDI_PROB,
     RHAT_THRESHOLD,
     ESS_THRESHOLD,
+    RIDGE_CORR_THRESHOLD,
 )
 
 
@@ -1402,6 +1492,64 @@ def summarise_posteriors(
                         f"corr(m,r)={_corr_mr:.3f}, "
                         f"corr(a,r)={_corr_ar:.3f}"
                     )
+
+                # Per-slice a diagnostics (doc 41a)
+                _a_slice_var = f"a_slice_vec_{safe_eid}"
+                if _a_slice_var in trace.posterior:
+                    import arviz as az
+                    _a_sl_data = trace.posterior[_a_slice_var]
+                    # shape: (chains, draws, K)
+                    _a_vals = _a_sl_data.values
+                    _n_sl = _a_vals.shape[-1]
+                    _a_flat = _a_vals.reshape(-1, _n_sl)
+                    _n_chains = _a_vals.shape[0]
+                    _n_draws = _a_vals.shape[1]
+                    for _k in range(_n_sl):
+                        # Preserve chain dim for rhat: (chains, draws)
+                        _per_chain = _a_vals[:, :, _k]
+                        _ess_k = float(az.ess(
+                            {"x": _per_chain},
+                            var_names=["x"])["x"].values)
+                        _rhat_k = float(az.rhat(
+                            {"x": _per_chain},
+                            var_names=["x"])["x"].values)
+                        if _ess_k < ESS_THRESHOLD or _rhat_k > RHAT_THRESHOLD:
+                            diagnostics.append(
+                                f"  WARN a_slice[{_k}] "
+                                f"{edge_id[:8]}…: "
+                                f"ESS={_ess_k:.0f}, "
+                                f"Rhat={_rhat_k:.4f}")
+                    # Ridge diagnostic: corr(a_slice, r_slice)
+                    # or corr(a_slice, sigma_base) when sigma shared
+                    _r_sl_var = f"r_slice_vec_{safe_eid}"
+                    _r_base_var = f"r_lat_{safe_eid}"
+                    if _r_sl_var in trace.posterior:
+                        _r_flat = trace.posterior[
+                            _r_sl_var].values.reshape(-1, _n_sl)
+                        for _k in range(_n_sl):
+                            _corr_ar_k = float(np.corrcoef(
+                                _a_flat[:, _k],
+                                _r_flat[:, _k])[0, 1])
+                            if abs(_corr_ar_k) > RIDGE_CORR_THRESHOLD:
+                                diagnostics.append(
+                                    f"  WARN ridge "
+                                    f"a_slice[{_k}]~r_slice[{_k}] "
+                                    f"{edge_id[:8]}…: "
+                                    f"corr={_corr_ar_k:.3f}")
+                    elif _r_base_var in trace.posterior:
+                        # Shared sigma: check corr(a_slice, r_base)
+                        _r_base_flat = trace.posterior[
+                            _r_base_var].values.flatten()
+                        for _k in range(_n_sl):
+                            _corr_ar_k = float(np.corrcoef(
+                                _a_flat[:, _k],
+                                _r_base_flat)[0, 1])
+                            if abs(_corr_ar_k) > RIDGE_CORR_THRESHOLD:
+                                diagnostics.append(
+                                    f"  WARN ridge "
+                                    f"a_slice[{_k}]~r_base "
+                                    f"{edge_id[:8]}…: "
+                                    f"corr={_corr_ar_k:.3f}")
             else:
                 # Phase S fallback: echo fixed point estimate
                 mu = lp.mu
@@ -1752,8 +1900,11 @@ def _sample_nutpie(model, config: SamplingConfig, report_progress=None,
                 # Also print to stdout so it appears in Modal logs
                 elapsed_total = time.time() - t_phase_start
                 phase_tag = f" {phase_label}" if phase_label else ""
+                _pc_str = ""
+                if len(parts) >= 6:
+                    _pc_str = f" chains=[{parts[5].strip()}]"
                 print(f"[nutpie{phase_tag}] {pct}% ({done}/{total}) "
-                      f"elapsed={elapsed_total:.0f}s eta={parts[2].strip() if len(parts) > 2 else '?'}",
+                      f"elapsed={elapsed_total:.0f}s eta={parts[2].strip() if len(parts) > 2 else '?'}{_pc_str}",
                       flush=True)
 
             # --- Per-chain draw tracking and stall detection ---
@@ -1764,20 +1915,76 @@ def _sample_nutpie(model, config: SamplingConfig, report_progress=None,
                 except (ValueError, IndexError):
                     per_chain_draws = []
 
+                # Per-chain target = (tune + draws). Chains that have
+                # reached their target are finished — don't stall-check them.
+                try:
+                    _total = int(parts[1])
+                    _nch = int(parts[4])
+                    _per_chain_target = _total // _nch if _nch > 0 else 0
+                except (ValueError, IndexError):
+                    _per_chain_target = 0
+
                 for c, draws in enumerate(per_chain_draws):
+                    # Skip finished chains — their draw count stops advancing,
+                    # which looks like a stall but isn't.
+                    if _per_chain_target > 0 and draws >= _per_chain_target:
+                        continue
+                    _was_crawling = _stall_detector._crawl_since.get(c) is not None
                     stall = _stall_detector.update(c, draws, now)
+                    _is_crawling = _stall_detector._crawl_since.get(c) is not None
+                    phase_tag = f" {phase_label}" if phase_label else ""
+
+                    # Log crawl entry
+                    if _is_crawling and not _was_crawling:
+                        _rate = _stall_detector._rate_over_window(c, now, draws, _stall_detector.rate_window_s)
+                        _peak = _stall_detector._peak_rate.get(c, 0)
+                        print(f"[nutpie{phase_tag}] CRAWL ENTERED: "
+                              f"chain {c} rate={_rate:.1f} draws/s "
+                              f"(peak={_peak:.1f}), "
+                              f"per_chain=[{','.join(str(d) for d in per_chain_draws)}]",
+                              flush=True)
+
+                    # Log crawl exit (recovery)
+                    if _was_crawling and not _is_crawling and stall is None:
+                        print(f"[nutpie{phase_tag}] CRAWL RECOVERED: "
+                              f"chain {c}, "
+                              f"per_chain=[{','.join(str(d) for d in per_chain_draws)}]",
+                              flush=True)
+
                     if stall is not None:
-                        phase_tag = f" {phase_label}" if phase_label else ""
-                        print(f"[nutpie{phase_tag}] STALL DETECTED: "
+                        _draws_str = ",".join(str(d) for d in per_chain_draws)
+                        print(f"[nutpie{phase_tag}] STALL CONFIRMED: "
                               f"chain {stall['chain']} "
-                              f"EMA={stall['rate']:.1f} draws/s "
+                              f"rate={stall['rate']:.1f} draws/s "
                               f"({stall['ratio']:.0%} of peak {stall['peak']:.1f}), "
-                              f"stalled for {stall['stalled_for']:.0f}s",
+                              f"crawling for {stall['stalled_for']:.0f}s, "
+                              f"per_chain=[{_draws_str}]",
                               flush=True)
                         _stall_info.update(stall)
                         _stall_info["draws"] = per_chain_draws
                         _stall_detected.set()
                         break
+
+                # Cross-chain laggard check: catches chains that were
+                # slow from the start (never reached min_peak).
+                if not _stall_detected.is_set() and per_chain_draws:
+                    laggard = _stall_detector.check_laggard(
+                        per_chain_draws, now)
+                    if laggard is not None:
+                        _draws_str = ",".join(
+                            str(d) for d in per_chain_draws)
+                        print(f"[nutpie{phase_tag}] LAGGARD STALL: "
+                              f"chain {laggard['chain']} "
+                              f"draws={laggard['draws']} "
+                              f"({laggard['ratio']:.0%} of median "
+                              f"{laggard['median_draws']}), "
+                              f"crawling for "
+                              f"{laggard['stalled_for']:.0f}s, "
+                              f"per_chain=[{_draws_str}]",
+                              flush=True)
+                        _stall_info.update(laggard)
+                        _stall_info["draws"] = per_chain_draws
+                        _stall_detected.set()
 
         progress_type = nutpie_lib.ProgressType.template_callback(
             500,  # ms between Rust-side renders

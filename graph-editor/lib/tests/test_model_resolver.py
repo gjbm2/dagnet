@@ -219,3 +219,89 @@ class TestResolverParity:
         assert result is not None
         assert result.source == 'manual'
         # fitted_at may be source_at or None — both are acceptable
+
+    def test_resolver_reads_model_vars_entry_not_flat_fields(self):
+        """When flat fields and ModelVarsEntry disagree, resolver picks
+        ModelVarsEntry values. This is the specific scenario that
+        review finding #6 addressed — stale promotion leaving flat
+        fields from a different source than the selected one.
+        """
+        from runner.model_resolver import resolve_model_params
+
+        # Flat fields: mu=2.0, sigma=0.5 (from a stale analytic run)
+        # ModelVarsEntry (analytic_be): mu=3.5, sigma=0.8 (current best)
+        # The resolver should select analytic_be and return 3.5/0.8,
+        # NOT the flat 2.0/0.5.
+        edge = {
+            'p': {
+                'forecast': {'mean': 0.6},
+                'latency': {
+                    'mu': 2.0,
+                    'sigma': 0.5,
+                    'onset_delta_days': 1.0,
+                },
+                'model_vars': [
+                    {
+                        'source': 'analytic',
+                        'latency': {'mu': 2.0, 'sigma': 0.5, 'onset_delta_days': 1.0},
+                        'probability': {'mean': 0.55},
+                    },
+                    {
+                        'source': 'analytic_be',
+                        'latency': {'mu': 3.5, 'sigma': 0.8, 'onset_delta_days': 2.0,
+                                    'mu_sd': 0.1, 'sigma_sd': 0.05, 'onset_sd': 0.5},
+                        'probability': {'mean': 0.6},
+                    },
+                ],
+            }
+        }
+        result = resolve_model_params(edge, scope='edge', temporal_mode='window')
+        assert result is not None
+        # analytic_be wins over analytic in best_available cascade
+        assert result.source == 'analytic_be'
+        # Values must come from the analytic_be entry, not flat fields
+        assert abs(result.edge_latency.mu - 3.5) < 1e-6, \
+            f"mu should be 3.5 (from analytic_be), got {result.edge_latency.mu}"
+        assert abs(result.edge_latency.sigma - 0.8) < 1e-6, \
+            f"sigma should be 0.8 (from analytic_be), got {result.edge_latency.sigma}"
+        assert abs(result.edge_latency.onset_delta_days - 2.0) < 1e-6, \
+            f"onset should be 2.0 (from analytic_be), got {result.edge_latency.onset_delta_days}"
+        # Dispersions from the entry
+        assert abs(result.edge_latency.mu_sd - 0.1) < 1e-6
+        assert abs(result.edge_latency.sigma_sd - 0.05) < 1e-6
+
+    def test_graph_preference_overrides_edge_preference(self):
+        """graph_preference parameter overrides edge-level
+        model_source_preference. Review finding #6.
+        """
+        from runner.model_resolver import resolve_model_params
+
+        edge = {
+            'p': {
+                'forecast': {'mean': 0.5},
+                'latency': {'mu': 2.0, 'sigma': 0.5},
+                'model_source_preference': 'analytic',
+                'model_vars': [
+                    {
+                        'source': 'analytic',
+                        'latency': {'mu': 2.0, 'sigma': 0.5},
+                        'probability': {'mean': 0.5},
+                    },
+                    {
+                        'source': 'manual',
+                        'latency': {'mu': 4.0, 'sigma': 1.0},
+                        'probability': {'mean': 0.7},
+                    },
+                ],
+            }
+        }
+        # Without graph_preference: edge says analytic
+        result = resolve_model_params(edge, scope='edge', temporal_mode='window')
+        assert result.source == 'analytic'
+        assert abs(result.edge_latency.mu - 2.0) < 1e-6
+
+        # With graph_preference=manual: overrides edge-level
+        result = resolve_model_params(edge, scope='edge', temporal_mode='window',
+                                       graph_preference='manual')
+        assert result.source == 'manual'
+        assert abs(result.edge_latency.mu - 4.0) < 1e-6

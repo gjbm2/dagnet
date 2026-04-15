@@ -47,6 +47,7 @@ get_tail_graphs() {
                 continue
             fi
         fi
+        local lock="/tmp/bayes-harness-${name}.lock"
         # Skip graphs hidden by ^b e (display-only, logs untouched)
         local hidden_file="/tmp/_bayes_monitor_hidden"
         if [[ -f "$hidden_file" ]] && grep -qxF "$name" "$hidden_file" 2>/dev/null; then
@@ -55,7 +56,6 @@ get_tail_graphs() {
                 continue
             fi
         fi
-        local lock="/tmp/bayes-harness-${name}.lock"
         if lock_alive "$lock"; then
             running+=("$name")
         else

@@ -19,7 +19,7 @@ import json
 import os
 import uuid
 import yaml
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 
@@ -231,8 +231,32 @@ def generate_graph_artefacts(
                 "query": "",
             })
 
+    # --- Build pinnedDSL from simulation config ---
+    # The FE CLI needs pinnedDSL to build snapshot subjects and compute
+    # core_hashes.  Without it, no snapshot data is queried and evidence
+    # binding falls back to param files only.  This MUST be set here —
+    # not deferred to set_simulation_guard — because any code path that
+    # regenerates the graph JSON (--bust-cache, --clean, etc.) would
+    # otherwise strip the DSL silently.
+    base_date_str = sim_cfg.get("base_date", "2025-12-12")
+    n_days = sim_cfg.get("n_days", 100)
+    _bd = datetime.strptime(base_date_str, "%Y-%m-%d")
+    _ed = _bd + timedelta(days=n_days - 1)
+    _fmt = lambda dt: dt.strftime("%-d-%b-%y")
+    bare_dsl = f"window({_fmt(_bd)}:{_fmt(_ed)});cohort({_fmt(_bd)}:{_fmt(_ed)})"
+
+    context_dims = truth.get("context_dimensions", [])
+    emit_ctx = truth.get("emit_context_slices", False)
+    epochs = truth.get("epochs")
+    if epochs and any(e.get("emit_context_slices") for e in epochs):
+        emit_ctx = True
+    if emit_ctx and context_dims:
+        ctx_parts = ";".join(f"context({d['id']})" for d in context_dims)
+        pinned_dsl = f"({bare_dsl})({ctx_parts})"
+    else:
+        pinned_dsl = bare_dsl
+
     # --- Assemble graph JSON ---
-    base_date = sim_cfg.get("base_date", "2025-12-12")
     graph_json = {
         "nodes": graph_nodes,
         "edges": graph_edges,
@@ -240,6 +264,9 @@ def generate_graph_artefacts(
         "simulation": True,
         "dailyFetch": False,
         "runBayes": False,
+        "pinnedDSL": pinned_dsl,
+        "dataInterestsDSL": pinned_dsl,
+        "currentQueryDSL": f"window({_fmt(_bd)}:{_fmt(_ed)})",
         "metadata": {
             "name": name,
             "description": description,

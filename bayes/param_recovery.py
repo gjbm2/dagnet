@@ -132,6 +132,30 @@ def main():
         print("  For production data, use test_harness.py directly.")
         sys.exit(1)
 
+    # --- Persistent recovery log ---
+    # Every run writes its full output to a persistent log file so results
+    # survive parent process death.  Keyed by job_label (unique per run).
+    _recovery_label = args.job_label or args.graph
+    _recovery_log_path = f"/tmp/bayes_recovery-{_recovery_label}.log"
+    _recovery_log = open(_recovery_log_path, "w")
+
+    # Tee: duplicate all print() output to the log file
+    _orig_stdout = sys.stdout
+
+    class _TeeWriter:
+        def __init__(self, primary, secondary):
+            self._primary = primary
+            self._secondary = secondary
+        def write(self, s):
+            self._primary.write(s)
+            self._secondary.write(s)
+            self._secondary.flush()
+        def flush(self):
+            self._primary.flush()
+            self._secondary.flush()
+
+    sys.stdout = _TeeWriter(_orig_stdout, _recovery_log)
+
     # --- Load truth ---
     with open(truth_path) as f:
         truth = yaml.safe_load(f)
@@ -809,10 +833,17 @@ def main():
     print(f"{'=' * 70}")
     if any_fail:
         print("  RECOVERY: PARTIAL — some parameters not recovered")
-        sys.exit(1)
     else:
         print("  RECOVERY: PASS — all parameters within threshold of truth")
     print(f"{'=' * 70}")
+
+    # Close the persistent recovery log
+    print(f"\n  Recovery log: {_recovery_log_path}")
+    sys.stdout = _orig_stdout
+    _recovery_log.close()
+
+    if any_fail:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

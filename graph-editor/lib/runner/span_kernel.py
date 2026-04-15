@@ -132,6 +132,13 @@ def _extract_edge_params(edge_data: Dict, is_window: bool) -> Tuple[float, float
     prob_posterior = p_data.get('posterior', {})
     forecast = p_data.get('forecast', {})
 
+    # Winning model_var latency — fallback for BE-only execution
+    _mv_lat = {}
+    for _mv in p_data.get('model_vars', []):
+        if _mv.get('source') == 'bayesian':
+            _mv_lat = _mv.get('latency', {})
+            break
+
     edge_p = (
         prob_posterior.get('alpha', 0) / (prob_posterior.get('alpha', 0) + prob_posterior.get('beta', 1))
         if prob_posterior.get('alpha', 0) > 0 and prob_posterior.get('beta', 0) > 0
@@ -141,8 +148,8 @@ def _extract_edge_params(edge_data: Dict, is_window: bool) -> Tuple[float, float
     )
 
     # Check whether the edge actually has a latency model
-    _raw_mu = posterior.get('mu_mean') or latency.get('mu')
-    _raw_sigma = posterior.get('sigma_mean') or latency.get('sigma')
+    _raw_mu = posterior.get('mu_mean') or latency.get('mu') or _mv_lat.get('mu')
+    _raw_sigma = posterior.get('sigma_mean') or latency.get('sigma') or _mv_lat.get('sigma')
     _has_latency = (
         isinstance(_raw_mu, (int, float)) and _raw_mu != 0
         and isinstance(_raw_sigma, (int, float)) and _raw_sigma > 0
@@ -154,6 +161,7 @@ def _extract_edge_params(edge_data: Dict, is_window: bool) -> Tuple[float, float
         onset = (posterior.get('onset_delta_days')
                  or latency.get('promoted_onset_delta_days')
                  or latency.get('onset_delta_days')
+                 or _mv_lat.get('onset_delta_days')
                  or 0.0)
         if not isinstance(onset, (int, float)):
             onset = 0.0
@@ -419,10 +427,16 @@ def mc_span_cdfs(
             edge_sds.append((float(p_sd), 0.0, 0.0, 0.0))
         else:
             # Use promoted model SDs (written by FE applyPromotion),
-            # falling back to posterior (Bayes).
-            mu_sd = latency.get('promoted_mu_sd') or posterior.get('mu_sd') or 0.0
-            sigma_sd = latency.get('promoted_sigma_sd') or posterior.get('sigma_sd') or 0.0
-            onset_sd = latency.get('promoted_onset_sd') or posterior.get('onset_sd') or 0.0
+            # falling back to posterior (Bayes), then to winning
+            # model_var's latency block (BE-only execution path).
+            _mv_lat = {}
+            for _mv in p_data.get('model_vars', []):
+                if _mv.get('source') == 'bayesian':
+                    _mv_lat = _mv.get('latency', {})
+                    break
+            mu_sd = latency.get('promoted_mu_sd') or posterior.get('mu_sd') or _mv_lat.get('mu_sd') or 0.0
+            sigma_sd = latency.get('promoted_sigma_sd') or posterior.get('sigma_sd') or _mv_lat.get('sigma_sd') or 0.0
+            onset_sd = latency.get('promoted_onset_sd') or posterior.get('onset_sd') or _mv_lat.get('onset_sd') or 0.0
             if not isinstance(mu_sd, (int, float)):
                 mu_sd = 0.0
             if not isinstance(sigma_sd, (int, float)):

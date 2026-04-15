@@ -1289,11 +1289,15 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
             if role in ('last', 'only'):
                 query_to_node = subj.get('to_node')
 
-        # Resolve anchor
-        for n in graph_data.get('nodes', []):
-            if n.get('entry', {}).get('is_start'):
-                anchor_node = n.get('id') or n.get('uuid')
-                break
+        # Resolve anchor (same method as v2)
+        try:
+            from msmdc import compute_anchor_node_id
+            from graph_types import Graph
+            g_obj = Graph(**graph_data) if graph_data else None
+            if g_obj and g_obj.edges:
+                anchor_node = compute_anchor_node_id(g_obj, g_obj.edges[0])
+        except Exception:
+            pass
 
         temporal_dsl = scenario.get('effective_query_dsl', '')
         query_dsl = data.get('query_dsl') or top_analytics_dsl or ''
@@ -1347,14 +1351,48 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
                 last_edge_id = (entry['subject'].get('target') or {}).get('targetId')
                 break
 
-        # ── Axis extent ──────────────────────────────────────────────
+        # ── Axis extent (matching v2's multi-candidate approach) ─────
+        anchor_from_str = subjects[0].get('anchor_from', '')
+        sweep_to_final = subjects[0].get('sweep_to') or subjects[0].get('anchor_to', '')
+
         tau_extent_raw = display_settings.get('tau_extent')
-        axis_tau_max = None
+        _sweep_span = None
+        try:
+            if anchor_from_str and sweep_to_final:
+                from datetime import date as _date_cls
+                _af_d = _date_cls.fromisoformat(str(anchor_from_str)[:10])
+                _st_d = _date_cls.fromisoformat(str(sweep_to_final)[:10])
+                _sweep_span = (_st_d - _af_d).days
+        except (ValueError, TypeError):
+            pass
+
+        # Edge-level and path-level t95 — read from edge latency block
+        # (same source as v2's span_adapter, not scope-gated by resolver)
+        _edge_t95 = None
+        _path_t95 = None
+        if last_edge_id:
+            from runner.cohort_forecast import find_edge_by_id
+            _t95_edge = find_edge_by_id(graph_data, last_edge_id)
+            if _t95_edge:
+                _t95_lat = _t95_edge.get('p', {}).get('latency', {})
+                _t95_val = _t95_lat.get('promoted_t95') or _t95_lat.get('t95')
+                if isinstance(_t95_val, (int, float)) and _t95_val > 0:
+                    _edge_t95 = float(_t95_val)
+                _pt95_val = _t95_lat.get('promoted_path_t95') or _t95_lat.get('path_t95')
+                if isinstance(_pt95_val, (int, float)) and _pt95_val > 0:
+                    _path_t95 = float(_pt95_val)
+
+        _tau_extent_setting = None
         if tau_extent_raw and str(tau_extent_raw) not in ('auto', 'Auto'):
             try:
-                axis_tau_max = int(float(tau_extent_raw))
+                _tau_extent_setting = float(tau_extent_raw)
             except (ValueError, TypeError):
                 pass
+
+        _axis_candidates = [c for c in [_sweep_span, _edge_t95, _path_t95, _tau_extent_setting] if c and c > 0]
+        axis_tau_max = int(math.ceil(max(_axis_candidates))) if _axis_candidates else None
+        print(f"[v3] axis_tau_max={axis_tau_max} candidates={_axis_candidates} "
+              f"last_edge_id={last_edge_id is not None}")
 
         band_raw = display_settings.get('bayes_band_level', '90')
         try:
@@ -1384,12 +1422,96 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
                                 retrieved_at_override=sd,
                             )
 
+        # ── Build span kernel + MC draws (shared with v2 for parity) ──
+        _mc_cdf_v3 = None
+        _mc_p_v3 = None
+        _det_norm_cdf = None
+        _det_span_p = None
+        _span_alpha_v3 = None
+        _span_beta_v3 = None
+        if composed_frames and last_edge_id and query_from_node and query_to_node:
+            from runner.span_kernel import compose_span_kernel, _build_span_topology, mc_span_cdfs
+            # Deterministic span kernel for forecast_y/forecast_x (v2 parity)
+            _kernel_v3 = compose_span_kernel(
+                graph=graph_data,
+                x_node_id=query_from_node,
+                y_node_id=query_to_node,
+                is_window=is_window,
+                max_tau=400,
+            )
+            if _kernel_v3 is not None and _kernel_v3.span_p > 0:
+                _det_span_p = _kernel_v3.span_p
+                _det_norm_cdf = [
+                    min(max(_kernel_v3.cdf_at(t) / _kernel_v3.span_p, 0.0), 1.0)
+                    for t in range(401)
+                ]
+                # Span-adapted alpha/beta for IS conditioning parity
+                # (v2 uses build_span_params which gets these from span_adapter)
+                from runner.span_adapter import span_kernel_to_edge_params
+                _span_edge_params = span_kernel_to_edge_params(
+                    _kernel_v3, graph_data, last_edge_id, is_window=is_window)
+                if is_window:
+                    _raw_a = _span_edge_params.get('posterior_alpha', 0.0) or 0.0
+                    _raw_b = _span_edge_params.get('posterior_beta', 0.0) or 0.0
+                else:
+                    _raw_a = _span_edge_params.get('posterior_path_alpha', 0.0) or 0.0
+                    _raw_b = _span_edge_params.get('posterior_path_beta', 0.0) or 0.0
+                if _raw_a > 0 and _raw_b > 0:
+                    kappa = _raw_a + _raw_b
+                    _span_alpha_v3 = _det_span_p * kappa
+                    _span_beta_v3 = (1.0 - _det_span_p) * kappa
+                else:
+                    _KAPPA_DEFAULT = 20.0
+                    _span_alpha_v3 = _det_span_p * _KAPPA_DEFAULT
+                    _span_beta_v3 = (1.0 - _det_span_p) * _KAPPA_DEFAULT
+            # MC draws for fan bands / midpoint
+            _span_topo_v3 = _build_span_topology(graph_data, query_from_node, query_to_node)
+            if _span_topo_v3 is not None:
+                import numpy as _np
+                _rng_v3 = _np.random.default_rng(42)
+                _mc_cdf_v3, _mc_p_v3 = mc_span_cdfs(
+                    topo=_span_topo_v3,
+                    graph=graph_data,
+                    is_window=is_window,
+                    max_tau=400,
+                    num_draws=2000,
+                    rng=_rng_v3,
+                )
+
+        # ── Build x_provider (matching v2 handler construction) ────────
+        _v3_x_provider = None
+        if not is_window and query_from_node and anchor_node:
+            from runner.cohort_forecast import XProvider, get_incoming_edges, read_edge_cohort_params
+            _v3_ingress = []
+            for inc_edge in get_incoming_edges(graph_data, query_from_node):
+                _params = read_edge_cohort_params(inc_edge)
+                if _params:
+                    _v3_ingress.append(_params)
+            # Compute reach from anchor to x
+            _v3_reach = 0.0
+            try:
+                from runner.graph_builder import build_networkx_graph
+                from runner.path_runner import calculate_path_probability
+                G = build_networkx_graph(graph_data)
+                path_result = calculate_path_probability(G, anchor_node, query_from_node)
+                _v3_reach = path_result.probability
+            except Exception:
+                pass
+            _v3_upstream_enabled = _v3_reach > 0
+            print(f"[v3] upstream: ingress={len(_v3_ingress)} reach={_v3_reach:.6f} "
+                  f"x={query_from_node} a={anchor_node} enabled={_v3_upstream_enabled}")
+            _v3_x_provider = XProvider(
+                reach=_v3_reach,
+                upstream_params_list=_v3_ingress,
+                enabled=_v3_upstream_enabled,
+                ingress_carrier=_v3_ingress if _v3_ingress else None,
+                upstream_obs=None,
+            )
+
         # ── Call v3 row builder ───────────────────────────────────────
         maturity_rows = []
         if composed_frames and last_edge_id:
-            anchor_from_str = subjects[0].get('anchor_from', '')
             anchor_to_str = subjects[0].get('anchor_to', '')
-            sweep_to_final = subjects[0].get('sweep_to') or subjects[0].get('anchor_to', '')
 
             maturity_rows = compute_cohort_maturity_rows_v3(
                 frames=composed_frames,
@@ -1405,31 +1527,419 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
                 band_level=band_level,
                 anchor_node_id=anchor_node,
                 display_settings=display_settings,
+                mc_cdf_arr=_mc_cdf_v3,
+                mc_p_s=_mc_p_v3,
+                det_norm_cdf=_det_norm_cdf,
+                det_span_p=_det_span_p,
+                x_provider_override=_v3_x_provider,
+                span_alpha=_span_alpha_v3,
+                span_beta=_span_beta_v3,
             )
 
         print(f"[v3] compute_cohort_maturity_rows returned {len(maturity_rows)} rows")
 
-        # ── Build response (same shape as v2) ────────────────────────
+        # ── Model curve generation (FE overlay contract) ─────────────
+        # The FE chart builder reads model_curve, model_curve_params,
+        # source_model_curves, and promoted_source from the result to
+        # render CDF overlay curves. v3 generates these from the
+        # resolver output (same data, different source than v2 which
+        # reads from a flat model_params dict).
+        subject_result: Dict[str, Any] = {
+            'analysis_type': analysis_type,
+            'maturity_rows': maturity_rows,
+            'frames': composed_frames,
+            'span_kernel': None,
+        }
+
+        if composed_frames and last_edge_id:
+            from runner.forecast_application import compute_completeness
+            from runner.confidence_bands import compute_confidence_band
+
+            edge = find_edge_by_id(graph_data, last_edge_id)
+            if edge:
+                scope = 'edge' if is_window else 'path'
+                temporal = 'window' if is_window else 'cohort'
+                _graph_pref = graph_data.get('model_source_preference')
+                mc_resolved = resolve_model_params(
+                    edge, scope=scope, temporal_mode=temporal,
+                    graph_preference=_graph_pref)
+
+                if mc_resolved and mc_resolved.latency.sigma > 0:
+                    lat = mc_resolved.latency
+                    cdf_mu = lat.mu
+                    cdf_sigma = lat.sigma
+                    cdf_onset = lat.onset_delta_days
+                    cdf_mode = 'cohort_path' if scope == 'path' and mc_resolved.path_latency else 'window'
+                    forecast_mean = mc_resolved.p_mean
+
+                    # Determine axis extent
+                    _tau_max_candidates = []
+                    if maturity_rows:
+                        _tau_max_candidates.append(maturity_rows[-1]['tau_days'])
+                    if axis_tau_max:
+                        _tau_max_candidates.append(axis_tau_max)
+                    try:
+                        from runner.lag_distribution_utils import log_normal_inverse_cdf
+                        _t95 = log_normal_inverse_cdf(0.95, cdf_mu, cdf_sigma) + cdf_onset
+                        _tau_max_candidates.append(int(math.ceil(_t95)))
+                    except Exception:
+                        pass
+                    _curve_tau_max = int(max(_tau_max_candidates)) if _tau_max_candidates else 0
+
+                    if _curve_tau_max > 0:
+                        # Promoted model curve
+                        curve = []
+                        for tau in range(0, _curve_tau_max + 1):
+                            c = compute_completeness(float(tau), cdf_mu, cdf_sigma, cdf_onset)
+                            c = max(0.0, min(1.0, float(c)))
+                            curve.append({'tau_days': tau, 'model_rate': round(forecast_mean * c, 8)})
+                        subject_result['model_curve'] = curve
+                        subject_result['model_curve_params'] = {
+                            'mu': cdf_mu, 'sigma': cdf_sigma,
+                            'onset_delta_days': cdf_onset,
+                            'forecast_mean': forecast_mean,
+                            'mode': cdf_mode,
+                            'promoted_source': mc_resolved.source or 'unknown',
+                        }
+                        subject_result['promoted_source'] = mc_resolved.source or 'best_available'
+
+                        # Per-source model curves (analytic, analytic_be, bayesian)
+                        source_curve_results: Dict[str, Any] = {}
+                        _sc = dict(mc_resolved.source_curves)
+
+                        # Bayesian source: read from posterior on the edge
+                        # (canonical Bayes data, not model_vars copy)
+                        p_block = edge.get('p', {})
+                        lat_post = p_block.get('latency', {}).get('posterior', {})
+                        post_block = p_block.get('posterior', {})
+                        if lat_post.get('mu_mean'):
+                            if cdf_mode == 'cohort_path' and lat_post.get('path_mu_mean'):
+                                s_mu = lat_post['path_mu_mean']
+                                s_sigma = lat_post['path_sigma_mean']
+                                s_onset = lat_post.get('path_onset_delta_days', 0.0)
+                                s_mu_sd = lat_post.get('path_mu_sd')
+                                s_sigma_sd = lat_post.get('path_sigma_sd')
+                                s_onset_sd = lat_post.get('path_onset_sd')
+                            else:
+                                s_mu = lat_post['mu_mean']
+                                s_sigma = lat_post['sigma_mean']
+                                s_onset = lat_post.get('onset_delta_days', 0.0)
+                                s_mu_sd = lat_post.get('mu_sd')
+                                s_sigma_sd = lat_post.get('sigma_sd')
+                                s_onset_sd = lat_post.get('onset_sd')
+                            if not is_window and post_block.get('path_alpha'):
+                                _pa = post_block['path_alpha']
+                                _pb = post_block['path_beta']
+                                s_fm = _pa / (_pa + _pb) if (_pa + _pb) > 0 else forecast_mean
+                            elif post_block.get('alpha'):
+                                _pa = post_block['alpha']
+                                _pb = post_block['beta']
+                                s_fm = _pa / (_pa + _pb) if (_pa + _pb) > 0 else forecast_mean
+                            else:
+                                s_fm = forecast_mean
+                            bayes_entry: Dict[str, Any] = {
+                                'mu': s_mu, 'sigma': s_sigma,
+                                'onset_delta_days': s_onset,
+                                'forecast_mean': s_fm,
+                            }
+                            if s_mu_sd is not None:
+                                bayes_entry['mu_sd'] = s_mu_sd
+                            if s_sigma_sd is not None:
+                                bayes_entry['sigma_sd'] = s_sigma_sd
+                            if s_onset_sd is not None:
+                                bayes_entry['onset_sd'] = s_onset_sd
+                            # p_stdev from posterior alpha/beta (for confidence bands)
+                            if not is_window and post_block.get('path_alpha'):
+                                _pa = float(post_block['path_alpha'])
+                                _pb = float(post_block['path_beta'])
+                                _s = _pa + _pb
+                                if _s > 0:
+                                    bayes_entry['p_stdev'] = math.sqrt(_pa * _pb / (_s * _s * (_s + 1)))
+                            elif post_block.get('alpha'):
+                                _pa = float(post_block['alpha'])
+                                _pb = float(post_block['beta'])
+                                _s = _pa + _pb
+                                if _s > 0:
+                                    bayes_entry['p_stdev'] = math.sqrt(_pa * _pb / (_s * _s * (_s + 1)))
+                            # onset_mu_corr from posterior
+                            _omc = lat_post.get('onset_mu_corr')
+                            if _omc is not None:
+                                bayes_entry['onset_mu_corr'] = float(_omc)
+                            _sc['bayesian'] = bayes_entry
+
+                        for src_name, src_params in _sc.items():
+                            s_mu = src_params.get('mu')
+                            s_sigma = src_params.get('sigma')
+                            s_onset = src_params.get('onset_delta_days', 0.0)
+                            s_fm = src_params.get('forecast_mean', forecast_mean)
+                            if s_mu is None or s_sigma is None:
+                                continue
+
+                            # Cohort path: use path params for non-bayesian sources
+                            if cdf_mode == 'cohort_path' and src_name != 'bayesian':
+                                s_pmu = src_params.get('path_mu')
+                                s_psigma = src_params.get('path_sigma')
+                                s_ponset = src_params.get('path_onset_delta_days')
+                                if s_pmu is not None and s_psigma is not None and s_psigma > 0:
+                                    s_mu, s_sigma = s_pmu, s_psigma
+                                    if s_ponset is not None:
+                                        s_onset = s_ponset
+                                else:
+                                    continue
+
+                            s_curve = []
+                            for tau in range(0, _curve_tau_max + 1):
+                                sc = compute_completeness(float(tau), s_mu, s_sigma, s_onset)
+                                sc = max(0.0, min(1.0, float(sc)))
+                                s_curve.append({'tau_days': tau, 'model_rate': round(s_fm * sc, 8)})
+
+                            src_entry: Dict[str, Any] = {
+                                'curve': s_curve,
+                                'params': {
+                                    'mu': s_mu, 'sigma': s_sigma,
+                                    'onset_delta_days': s_onset,
+                                    'forecast_mean': s_fm,
+                                    'source': src_name,
+                                },
+                            }
+
+                            # Confidence bands
+                            _use_path = (cdf_mode == 'cohort_path')
+                            band_mu_sd = float(
+                                (src_params.get('path_mu_sd') if _use_path else None)
+                                or src_params.get('mu_sd') or 0.0)
+                            band_sigma_sd = float(
+                                (src_params.get('path_sigma_sd') if _use_path else None)
+                                or src_params.get('sigma_sd') or 0.0)
+                            band_onset_sd = float(
+                                (src_params.get('path_onset_sd') if _use_path else None)
+                                or src_params.get('onset_sd') or 0.0)
+                            band_p_sd = float(src_params.get('p_stdev', 0.0) or 0.0)
+                            band_onset_mu_corr = float(
+                                src_params.get('onset_mu_corr', 0.0) or 0.0)
+
+                            if band_mu_sd > 0:
+                                ages = list(range(0, _curve_tau_max + 1))
+                                upper_rates, lower_rates, _median_rates = compute_confidence_band(
+                                    ages=ages,
+                                    p=s_fm, mu=s_mu, sigma=s_sigma, onset=s_onset,
+                                    p_sd=band_p_sd, mu_sd=band_mu_sd,
+                                    sigma_sd=band_sigma_sd, onset_sd=band_onset_sd,
+                                    onset_mu_corr=band_onset_mu_corr,
+                                    level=0.90,
+                                )
+                                src_entry['band_upper'] = [
+                                    {'tau_days': t, 'model_rate': round(r, 8)}
+                                    for t, r in zip(ages, upper_rates)]
+                                src_entry['band_lower'] = [
+                                    {'tau_days': t, 'model_rate': round(r, 8)}
+                                    for t, r in zip(ages, lower_rates)]
+
+                            source_curve_results[src_name] = src_entry
+
+                        if source_curve_results:
+                            subject_result['source_model_curves'] = source_curve_results
+
+        # ── Synthetic future frames (forecast tail) ──────────────────
+        if composed_frames and last_edge_id:
+            edge = find_edge_by_id(graph_data, last_edge_id)
+            if edge:
+                scope = 'edge' if is_window else 'path'
+                temporal = 'window' if is_window else 'cohort'
+                _graph_pref = graph_data.get('model_source_preference')
+                ft_resolved = resolve_model_params(
+                    edge, scope=scope, temporal_mode=temporal,
+                    graph_preference=_graph_pref)
+                if ft_resolved and ft_resolved.latency.sigma > 0:
+                    anchor_to_str_ft = subjects[0].get('anchor_to', '')
+                    if anchor_to_str_ft:
+                        _append_synthetic_frames_impl({
+                            'result': subject_result,
+                            'mu': ft_resolved.latency.mu,
+                            'sigma': ft_resolved.latency.sigma,
+                            'onset_delta_days': ft_resolved.latency.onset_delta_days,
+                            'forecast_mean': ft_resolved.p_mean,
+                            'anchor_to': anchor_to_str_ft,
+                            'tau_extent': axis_tau_max,
+                        })
+
+        # ── Build response (same shape as v1/v2) ─────────────────────
         per_scenario_results.append({
             "scenario_id": scenario_id,
             "success": True,
             "subjects": [{
                 "subject_id": f"v3:{query_from_node}:{query_to_node}",
                 "success": True,
-                "result": {
-                    'analysis_type': analysis_type,
-                    'maturity_rows': maturity_rows,
-                    'frames': composed_frames,
-                    'span_kernel': None,  # v3 doesn't build a span kernel
-                },
+                "result": subject_result,
                 "rows_analysed": total_rows,
             }],
             "rows_analysed": total_rows,
         })
 
+    # Simplify response for single-scenario / single-subject cases
+    # (must match _handle_snapshot_analyze_subjects flattening)
     if len(per_scenario_results) == 1:
-        return per_scenario_results[0]
+        single_scenario = per_scenario_results[0]
+        subjects_list = single_scenario.get("subjects", [])
+        if len(subjects_list) == 1:
+            single = subjects_list[0]
+            return {
+                "success": single.get("success", False),
+                "result": single.get("result"),
+                "error": single.get("error"),
+                "rows_analysed": single.get("rows_analysed", 0),
+                "subject_id": single.get("subject_id"),
+                "scenario_id": single_scenario.get("scenario_id"),
+            }
+        return {
+            "success": single_scenario.get("success", False),
+            "scenario_id": single_scenario.get("scenario_id"),
+            "subjects": subjects_list,
+            "rows_analysed": single_scenario.get("rows_analysed", 0),
+        }
     return {"success": True, "scenarios": per_scenario_results}
+
+
+def _append_synthetic_frames_impl(args: Dict[str, Any]) -> None:
+    """Append synthetic future frames (forecast-only tail) to a cohort maturity result.
+
+    Extracted to module level so both _handle_snapshot_analyze_subjects and
+    _handle_cohort_maturity_v3 can call it. Mutates result['frames'] in place.
+
+    Args dict keys: result, mu, sigma, onset_delta_days, forecast_mean,
+    anchor_to, tau_extent (optional).
+    """
+    import math
+    from datetime import date, timedelta
+    from runner.forecast_application import compute_completeness
+    from runner.lag_distribution_utils import log_normal_inverse_cdf
+
+    result = args.get('result') or {}
+    frames = result.get('frames') if isinstance(result, dict) else None
+    if not isinstance(frames, list) or len(frames) == 0:
+        return
+
+    mu = float(args['mu'])
+    sigma = float(args['sigma'])
+    onset = float(args.get('onset_delta_days') or 0.0)
+    fm = float(args.get('forecast_mean') or 0.0)
+    anchor_to = args.get('anchor_to')
+    if not isinstance(anchor_to, str) or not anchor_to:
+        return
+
+    real_frames = [f for f in frames if not f.get('is_synthetic')]
+    if not real_frames:
+        return
+
+    last_real = None
+    for f in reversed(real_frames):
+        if isinstance(f, dict) and isinstance(f.get('data_points'), list) and len(f.get('data_points')) > 0:
+            last_real = f
+            break
+    if not last_real:
+        return
+
+    last_as_at = str(last_real.get('snapshot_date') or last_real.get('as_at_date') or '')[:10]
+    if not last_as_at:
+        return
+
+    try:
+        last_as_at_d = date.fromisoformat(last_as_at)
+        anchor_to_d = date.fromisoformat(anchor_to[:10])
+    except ValueError:
+        return
+
+    try:
+        t95_model = log_normal_inverse_cdf(0.95, mu, sigma)
+    except Exception:
+        return
+    if not isinstance(t95_model, (int, float)) or not math.isfinite(t95_model) or t95_model <= 0:
+        return
+
+    tail_days = int(math.ceil(float(t95_model) + onset))
+    tau_extent = args.get('tau_extent')
+    if isinstance(tau_extent, (int, float)) and tau_extent > 0 and tau_extent > tail_days:
+        tail_days = int(math.ceil(tau_extent))
+    if tail_days <= 0:
+        return
+
+    tail_to_d = anchor_to_d + timedelta(days=tail_days)
+    start_d = last_as_at_d + timedelta(days=1)
+    if start_d > tail_to_d:
+        return
+
+    base_points = last_real.get('data_points') or []
+    if not isinstance(base_points, list) or len(base_points) == 0:
+        return
+
+    new_frames: List[Dict[str, Any]] = []
+    d = start_d
+    while d <= tail_to_d:
+        as_at_iso = d.isoformat()
+        synth_points: List[Dict[str, Any]] = []
+        total_y = 0.0
+
+        for p in base_points:
+            if not isinstance(p, dict):
+                continue
+            anchor_day = str(p.get('anchor_day') or '')[:10]
+            if not anchor_day:
+                continue
+            x = p.get('x') or 0
+            a = p.get('a') or 0
+            try:
+                x = float(x)
+            except (ValueError, TypeError):
+                x = 0.0
+            try:
+                a = float(a)
+            except (ValueError, TypeError):
+                a = 0.0
+            if not math.isfinite(x) or x <= 0:
+                continue
+            if fm <= 0:
+                continue
+            y_evidence = float(p.get('y') or p.get('Y') or 0)
+            try:
+                cohort_age_days = (d - date.fromisoformat(anchor_day)).days
+            except ValueError:
+                cohort_age_days = 0
+            c_future = compute_completeness(float(cohort_age_days), mu, sigma, onset)
+            c_future = max(0.0, min(1.0, float(c_future)))
+            projected_y = x * fm * c_future
+            projected_y = min(projected_y, x)
+            forecast_y = max(0.0, projected_y - y_evidence)
+            rate = (y_evidence / x) if x > 0 else 0.0
+            rate = max(0.0, min(1.0, rate))
+            total_y += y_evidence
+            synth_points.append({
+                "anchor_day": anchor_day,
+                "y": y_evidence,
+                "x": x,
+                "a": a,
+                "rate": rate,
+                "completeness": c_future,
+                "layer": "forecast",
+                "evidence_y": y_evidence,
+                "forecast_y": forecast_y,
+                "projected_y": projected_y,
+            })
+
+        new_frames.append({
+            "snapshot_date": as_at_iso,
+            "is_synthetic": True,
+            "data_points": synth_points,
+            "total_y": total_y,
+        })
+        d += timedelta(days=1)
+
+    result['frames'] = frames + new_frames
+    result['forecast_tail'] = {
+        "from": start_d.isoformat(),
+        "to": tail_to_d.isoformat(),
+        "t95_model_days": float(t95_model),
+        "onset_delta_days": float(onset),
+    }
 
 
 def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
@@ -1453,7 +1963,7 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
     from runner.lag_distribution_utils import log_normal_cdf, log_normal_inverse_cdf, standard_normal_inverse_cdf
 
     analysis_type = data.get('analysis_type', 'lag_histogram')
-    _is_cohort_maturity = analysis_type == 'cohort_maturity'  # v2 never reaches here
+    _is_cohort_maturity = analysis_type in ('cohort_maturity', 'cohort_maturity_v1')  # v2/v3 have own handlers
     scenarios = data.get('scenarios', [])
     # Doc 30 §4.1: MECE dimension names for aggregation safety.
     # Currently logged for diagnostics; enforcement in derivation
@@ -1759,174 +2269,8 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
         return result
 
     def _append_synthetic_cohort_maturity_frames(args: Dict[str, Any]) -> None:
-        """
-        Phase 2 (cohort maturity): append synthetic future frames (forecast-only tail).
-
-        This does NOT change the meaning of existing (real) frames. It simply extends
-        `result['frames']` with additional frames beyond the latest real snapshot_date so
-        the frontend can plot a forecast-only tail.
-
-        Contract:
-        - Synthetic frames are tagged with `is_synthetic: true`.
-        - Each synthetic frame uses the same `data_points` shape as real frames.
-        - Data points are re-annotated using annotate_rows with retrieved_at_override set
-          to the synthetic snapshot_date.
-        """
-        result = args.get('result') or {}
-        frames = result.get('frames') if isinstance(result, dict) else None
-        if not isinstance(frames, list) or len(frames) == 0:
-            return
-
-        mu = float(args['mu'])
-        sigma = float(args['sigma'])
-        onset = float(args.get('onset_delta_days') or 0.0)
-        fm = float(args.get('forecast_mean') or 0.0)
-        anchor_to = args.get('anchor_to')
-        if not isinstance(anchor_to, str) or not anchor_to:
-            return
-
-        # Only append tail when there is at least one real frame with data points
-        # and those points have projected_y (requires completeness annotation).
-        real_frames = [f for f in frames if not f.get('is_synthetic')]
-        if not real_frames:
-            return
-
-        # Last real frame with any data points.
-        last_real = None
-        for f in reversed(real_frames):
-            if isinstance(f, dict) and isinstance(f.get('data_points'), list) and len(f.get('data_points')) > 0:
-                last_real = f
-                break
-        if not last_real:
-            return
-
-        last_as_at = str(last_real.get('snapshot_date') or last_real.get('as_at_date') or '')[:10]
-        if not last_as_at:
-            return
-
-        try:
-            last_as_at_d = date.fromisoformat(last_as_at)
-            anchor_to_d = date.fromisoformat(anchor_to[:10])
-        except ValueError:
-            return
-
-        # Determine tail horizon: extend until the latest cohort (anchor_to) reaches ~t95
-        # under the fitted lognormal model.
-        #
-        # We use 0.95 here (Phase 2). If/when forecasting_settings.t95_percentile is threaded
-        # into snapshot_analyze, swap to that request value.
-        try:
-            t95_model = log_normal_inverse_cdf(0.95, mu, sigma)
-        except Exception:
-            return
-        if not isinstance(t95_model, (int, float)) or not math.isfinite(t95_model) or t95_model <= 0:
-            return
-
-        tail_days = int(math.ceil(float(t95_model) + onset))
-        # Honour user-requested tau_extent: extend tail if the user asked
-        # for more days than the model's t95 would naturally produce.
-        tau_extent = args.get('tau_extent')
-        if isinstance(tau_extent, (int, float)) and tau_extent > 0 and tau_extent > tail_days:
-            tail_days = int(math.ceil(tau_extent))
-        if tail_days <= 0:
-            return
-
-        tail_to_d = anchor_to_d + timedelta(days=tail_days)
-        start_d = last_as_at_d + timedelta(days=1)
-        if start_d > tail_to_d:
-            return
-
-        base_points = last_real.get('data_points') or []
-        if not isinstance(base_points, list) or len(base_points) == 0:
-            return
-
-        # Build tail frames at daily cadence.
-        #
-        # Each synthetic point carries:
-        #   y          = frozen evidence (last real observation) — keeps Σy stable
-        #   x          = frozen x (last real observation) — keeps Σx stable
-        #   projected_y = model prediction at this τ — the forecast curve
-        #   forecast_y  = max(0, projected_y - y) — the crown
-        #
-        # The FE computes evidence_rate = Σy/Σx (stable, plateauing) and
-        # projected_rate = Σprojected_y/Σx (rising toward model). The crown
-        # is the gap between them.
-        new_frames: List[Dict[str, Any]] = []
-        d = start_d
-        while d <= tail_to_d:
-            as_at_iso = d.isoformat()
-            synth_points: List[Dict[str, Any]] = []
-            total_y = 0.0
-
-            for p in base_points:
-                if not isinstance(p, dict):
-                    continue
-                anchor_day = str(p.get('anchor_day') or '')[:10]
-                if not anchor_day:
-                    continue
-                x = p.get('x') or 0
-                a = p.get('a') or 0
-                try:
-                    x = float(x)
-                except (ValueError, TypeError):
-                    x = 0.0
-                try:
-                    a = float(a)
-                except (ValueError, TypeError):
-                    a = 0.0
-
-                if not math.isfinite(x) or x <= 0:
-                    continue
-                if fm <= 0:
-                    continue
-
-                # Frozen evidence from last real frame.
-                y_evidence = float(p.get('y') or p.get('Y') or 0)
-
-                # Model prediction at this future age.
-                try:
-                    cohort_age_days = (d - date.fromisoformat(anchor_day)).days
-                except ValueError:
-                    cohort_age_days = 0
-                c_future = compute_completeness(float(cohort_age_days), mu, sigma, onset)
-                c_future = max(0.0, min(1.0, float(c_future)))
-                projected_y = x * fm * c_future
-                projected_y = min(projected_y, x)
-
-                forecast_y = max(0.0, projected_y - y_evidence)
-                rate = (y_evidence / x) if x > 0 else 0.0
-                rate = max(0.0, min(1.0, rate))
-                total_y += y_evidence
-                synth_points.append({
-                    "anchor_day": anchor_day,
-                    "y": y_evidence,
-                    "x": x,
-                    "a": a,
-                    "rate": rate,
-                    "completeness": c_future,
-                    "layer": "forecast",
-                    "evidence_y": y_evidence,
-                    "forecast_y": forecast_y,
-                    "projected_y": projected_y,
-                })
-
-            new_frames.append({
-                "snapshot_date": as_at_iso,
-                "is_synthetic": True,
-                "data_points": synth_points,
-                "total_y": total_y,
-            })
-            d += timedelta(days=1)
-
-        # Append and keep chronological ordering.
-        # We preserve the original (real) frames as-is and append the future tail.
-        result['frames'] = frames + new_frames
-        result['forecast_tail'] = {
-            "from": start_d.isoformat(),
-            "to": tail_to_d.isoformat(),
-            "t95_model_days": float(t95_model),
-            "onset_delta_days": float(onset),
-        }
+        """Thin wrapper — delegates to module-level _append_synthetic_frames_impl."""
+        _append_synthetic_frames_impl(args)
 
     per_scenario_results: List[Dict[str, Any]] = []
     total_rows = 0
