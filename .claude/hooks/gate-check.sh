@@ -38,18 +38,6 @@ fi
 
 [ -z "$COMMAND" ] && exit 0
 
-# ── Exempt: data repo git operations ──
-DATA_REPO_CONF="$CLAUDE_PROJECT_DIR/.private-repos.conf"
-if [ -f "$DATA_REPO_CONF" ]; then
-  DATA_REPO_NAME=$(grep DATA_REPO_DIR "$DATA_REPO_CONF" | cut -d= -f2)
-  if [ -n "$DATA_REPO_NAME" ]; then
-    if echo "$COMMAND" | grep -q "$DATA_REPO_NAME" || pwd | grep -q "$DATA_REPO_NAME"; then
-      exit 0
-    fi
-  fi
-fi
-
-
 # ── Normalise: strip path prefixes from git binary ────────────────
 # Catches /usr/bin/git, /usr/local/bin/git, $(which git), etc.
 COMMAND=$(echo "$COMMAND" | sed -E 's|[^ ]*/git |git |g')

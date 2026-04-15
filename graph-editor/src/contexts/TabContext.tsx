@@ -2175,35 +2175,6 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
         if (result.success && result.data) {
           data = result.data.content;
           console.log(`TabContext: Loaded graph data with ${data.nodes?.length || 0} nodes`);
-
-          // Seed scenarios from graph JSON when IDB has none for this file.
-          // Mirrors the share-bundle seeding pattern (lines 1705-1727).
-          if (Array.isArray(data.scenarios) && data.scenarios.length > 0) {
-            try {
-              const existingCount = await db.scenarios.where('fileId').equals(fileId).count();
-              if (existingCount === 0) {
-                const toSeed = data.scenarios
-                  .filter((s: any) => s.id && s.name)
-                  .map((s: any) => ({
-                    ...s,
-                    id: crypto.randomUUID(),   // Fresh UUID to avoid cross-file collisions
-                    sourceId: s.id,            // Preserve original ID for debugging
-                    fileId,
-                    createdAt: s.createdAt || new Date().toISOString(),
-                    updatedAt: new Date().toISOString(),
-                    colour: s.colour || s.color || '#94a3b8',
-                    version: s.version || 1,
-                    params: s.params || {},
-                  }));
-                if (toSeed.length > 0) {
-                  await db.scenarios.bulkPut(toSeed);
-                  console.log(`TabContext: Seeded ${toSeed.length} scenarios from graph JSON for ${fileId}`);
-                }
-              }
-            } catch (e) {
-              console.warn('[TabContext] Failed to seed scenarios from graph JSON', e);
-            }
-          }
         } else {
           console.warn(`TabContext: Graph load failed or no data`);
         }

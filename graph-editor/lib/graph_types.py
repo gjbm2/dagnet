@@ -740,7 +740,6 @@ class Graph(BaseModel):
     containers: Optional[List[Container]] = Field(None, description="Canvas annotations: grouping rectangles (visual only, not graph semantics)")
     canvasAnalyses: Optional[List[CanvasAnalysis]] = Field(None, description="Canvas annotations: live analyses pinned to the canvas")
     canvasViews: Optional[List['CanvasView']] = Field(None, description="Named saved layout states for canvas objects (min/max configurations)")
-    scenarios: Optional[List[dict]] = Field(None, description="Graph-level scenarios, seeded into IndexedDB on first open")
     baseDSL: Optional[str] = Field(None, description="Base DSL that is always applied (e.g. global context filters)")
     currentQueryDSL: Optional[str] = Field(None, description="Current user query DSL for UI persistence")
     dataInterestsDSL: Optional[str] = Field(None, description="Pinned DSL for batch/overnight fetches")

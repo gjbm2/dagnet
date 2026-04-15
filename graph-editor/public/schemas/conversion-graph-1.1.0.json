@@ -91,13 +91,6 @@
         "$ref": "#/$defs/CanvasView"
       }
     },
-    "scenarios": {
-      "type": "array",
-      "description": "Graph-level scenarios, seeded into IndexedDB on first open",
-      "items": {
-        "type": "object"
-      }
-    },
     "_bayes": {
       "type": "object",
       "description": "Graph-level metadata from the most recent Bayesian fitting run",
