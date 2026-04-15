@@ -525,7 +525,7 @@ print_blue "[1/9] Updating package.json..."
 (cd graph-editor && npm version "$NEW_VERSION" --no-git-tag-version)
 
 # Update Bayes APP_VERSION so Modal deploy always matches the release
-sed -i "s/^APP_VERSION = .*/APP_VERSION = \"${NEW_VERSION}\"/" bayes/app.py
+sed -i.bak "s/^APP_VERSION = .*/APP_VERSION = \"${NEW_VERSION}\"/" bayes/app.py && rm -f bayes/app.py.bak
 
 # Verify the version was updated correctly
 UPDATED_VERSION=$(node -p "require('./graph-editor/package.json').version")
