@@ -978,6 +978,136 @@ def handle_runner_analyze(data: Dict[str, Any]) -> Dict[str, Any]:
     return response.model_dump()
 
 
+def _fetch_upstream_observations(
+    graph_data: Dict[str, Any],
+    anchor_node: str,
+    query_from_node: str,
+    per_edge_results: List[Dict[str, Any]],
+    candidate_regimes_by_edge: Dict[str, Any],
+    anchor_from: str,
+    anchor_to: str,
+    sweep_from: str,
+    sweep_to: str,
+    axis_tau_max: Optional[int] = None,
+    log_prefix: str = '[upstream]',
+) -> Optional[Dict[str, Any]]:
+    """Fetch upstream edge snapshot data for empirical carrier (Tier 2).
+
+    Shared by v2 and v3 handlers. Queries the snapshot DB for edges
+    on the path from anchor to from_node, derives cohort maturity
+    frames, and extracts upstream observations.
+
+    Returns upstream_obs dict (for XProvider) or None if fetch fails.
+    """
+    from datetime import date, timedelta
+    from runner.span_kernel import _build_span_topology
+    from runner.span_upstream import extract_upstream_observations
+    from runner.cohort_maturity_derivation import derive_cohort_maturity
+    from snapshot_service import query_snapshots_for_sweep
+
+    # Collect evidence frames for edges entering from_node
+    up_edge_frames: Dict[str, List[Dict[str, Any]]] = {}
+
+    # Index subject edges we already have
+    for entry in per_edge_results:
+        target_id = (entry.get('subject') or {}).get('target', {}).get('targetId', '')
+        if target_id:
+            up_edge_frames[target_id] = (
+                entry.get('derivation_result', {}).get('frames', [])
+            )
+
+    # Find upstream edges not already in subject set
+    up_topo = _build_span_topology(graph_data, anchor_node, query_from_node)
+    if up_topo is None:
+        return None
+
+    def _edge_uuid(e_dict):
+        return str(e_dict.get('uuid', e_dict.get('id', '')))
+
+    missing_eids = [
+        _edge_uuid(e_data) for _, _, e_data in up_topo.edge_list
+        if _edge_uuid(e_data) not in up_edge_frames
+    ]
+    if missing_eids:
+        print(f"{log_prefix} fetching {len(missing_eids)} upstream edges")
+        fetch_ok = True
+        for eid in missing_eids:
+            regimes = candidate_regimes_by_edge.get(eid, [])
+            if not regimes:
+                print(f"{log_prefix} no regime for {eid[:20]}")
+                fetch_ok = False
+                break
+            regime = regimes[0]
+            if isinstance(regime, str):
+                core_hash = regime
+                regime = {'core_hash': regime, 'equivalent_hashes': []}
+            else:
+                core_hash = regime.get('core_hash', '')
+            if not core_hash:
+                fetch_ok = False
+                break
+            up_edge = None
+            for e in graph_data.get('edges', []):
+                if str(e.get('uuid', e.get('id', ''))) == str(eid):
+                    up_edge = e
+                    break
+            if not up_edge:
+                fetch_ok = False
+                break
+            p_id = up_edge.get('p', {}).get('id', '') or eid
+            # Widen anchor_from for upstream fetch so Tier 2 can
+            # discover older donor cohorts (doc 29d §donor-fetch).
+            try:
+                af_d = date.fromisoformat(anchor_from)
+                lookback_days = max((axis_tau_max or 0) * 2, 60)
+                af_widened = (af_d - timedelta(days=lookback_days)).isoformat()
+            except (ValueError, TypeError):
+                af_widened = anchor_from
+            try:
+                up_rows = query_snapshots_for_sweep(
+                    param_id=p_id,
+                    core_hash=core_hash,
+                    slice_keys=[''],
+                    anchor_from=date.fromisoformat(af_widened),
+                    anchor_to=date.fromisoformat(anchor_to),
+                    sweep_from=date.fromisoformat(af_widened),
+                    sweep_to=date.fromisoformat(sweep_to) if sweep_to else None,
+                    equivalent_hashes=[
+                        h if isinstance(h, dict) else {'core_hash': h}
+                        for h in (regime.get('equivalent_hashes') or [])
+                    ],
+                )
+                print(f"{log_prefix} edge {eid[:20]} → {len(up_rows)} rows")
+                up_derivation = derive_cohort_maturity(
+                    up_rows, sweep_from=sweep_from, sweep_to=sweep_to,
+                )
+                up_edge_frames[eid] = up_derivation.get('frames', [])
+            except Exception as ex:
+                import traceback
+                print(f"{log_prefix} query failed for {eid[:20]}: {ex}")
+                traceback.print_exc()
+                fetch_ok = False
+                break
+        if not fetch_ok:
+            print(f"{log_prefix} incomplete fetch, discarding partial evidence")
+            up_edge_frames = {}
+
+    # Extract observations (sum y across edges entering from_node)
+    if up_edge_frames:
+        upstream_obs = extract_upstream_observations(
+            graph=graph_data,
+            anchor_node_id=anchor_node,
+            x_node_id=query_from_node,
+            per_edge_frames=up_edge_frames,
+        )
+        if upstream_obs:
+            total_obs = sum(len(v) for v in upstream_obs.values())
+            print(f"{log_prefix} {total_obs} observations "
+                  f"across {len(upstream_obs)} cohorts")
+        return upstream_obs
+    return None
+
+
 def _handle_cohort_maturity_v2(data: Dict[str, Any]) -> Dict[str, Any]:
     """Phase A: completely parallel cohort_maturity_v2 handler.
 
@@ -1858,12 +1988,32 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
             _v3_upstream_enabled = _v3_reach > 0
             print(f"[v3] upstream: ingress={len(_v3_ingress)} reach={_v3_reach:.6f} "
                   f"x={query_from_node} a={anchor_node} enabled={_v3_upstream_enabled}")
+            # Fetch upstream evidence for empirical carrier (Tier 2)
+            _v3_upstream_obs = None
+            if _v3_upstream_enabled and query_from_node != anchor_node:
+                _v3_af = subjects[0].get('anchor_from', '')
+                _v3_at = subjects[0].get('anchor_to', '')
+                _v3_sf = subjects[0].get('sweep_from', _v3_af)
+                _v3_st = subjects[0].get('sweep_to', _v3_at)
+                _v3_upstream_obs = _fetch_upstream_observations(
+                    graph_data=graph_data,
+                    anchor_node=anchor_node,
+                    query_from_node=query_from_node,
+                    per_edge_results=per_edge_results,
+                    candidate_regimes_by_edge=scenario.get('candidate_regimes_by_edge', {}),
+                    anchor_from=_v3_af,
+                    anchor_to=_v3_at,
+                    sweep_from=_v3_sf,
+                    sweep_to=_v3_st,
+                    axis_tau_max=axis_tau_max,
+                    log_prefix='[v3] upstream:',
+                )
             _v3_x_provider = XProvider(
                 reach=_v3_reach,
                 upstream_params_list=_v3_ingress,
                 enabled=_v3_upstream_enabled,
                 ingress_carrier=_v3_ingress if _v3_ingress else None,
-                upstream_obs=None,
+                upstream_obs=_v3_upstream_obs,
             )
 
         _v3_resolved_override = None

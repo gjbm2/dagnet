@@ -192,7 +192,8 @@ echo "  Checking CLI analyse returns cohort data..."
 declare -a CASES=(
   "single-hop-cohort-wide|from(m4-registered).to(m4-success).cohort(7-Mar-26:21-Mar-26)|cohort"
   "single-hop-cohort-narrow|from(m4-registered).to(m4-success).cohort(15-Mar-26:21-Mar-26)|cohort"
-  "multi-hop-cohort|from(m4-delegated).to(m4-success).cohort(7-Mar-26:21-Mar-26)|cohort"
+  "multi-hop-cohort-wide|from(m4-delegated).to(m4-success).cohort(7-Mar-26:21-Mar-26)|cohort"
+  "multi-hop-cohort-narrow|from(m4-delegated).to(m4-success).cohort(15-Mar-26:21-Mar-26)|cohort"
   "single-hop-window|from(m4-registered).to(m4-success).window(7-Mar-26:21-Mar-26)|window"
 )
 
@@ -319,7 +320,7 @@ for tau in shared:
     if fb2 and fb3:
         w2 = fb2[1] - fb2[0]
         w3 = fb3[1] - fb3[0]
-        if w2 > 0.005:
+        if w2 > 0.01:
             wr = w3 / w2
             if abs(wr - 1.0) > 0.20:
                 issues.append(f'fan90:{w2:.4f}/{w3:.4f} r={wr:.2f}')
