@@ -326,6 +326,28 @@ Multiple code paths can regenerate the graph JSON: `graph_from_truth.py` (truth-
 
 **Broader principle**: when a subsystem has a single canonical mutation path (UpdateManager for graph state), every code path that writes the same fields must go through it. A "shortcut" that writes directly to the object and calls `setGraph` bypasses all the invariants the canonical path maintains — rebalancing, override flag checks, conditional probability propagation. The more code paths that write the same field, the more likely one of them forgets a side effect.
 
+## Anti-pattern 39: Reimplementing the FE pipeline in test code
+
+**Signature**: a test for a BE handler builds its own hash lookup, candidate regime construction, or subject resolution — bypassing the FE's `prepareAnalysisComputeInputs` → `runPreparedAnalysis` path. The test passes but the production render shows completely different behaviour.
+
+**Root cause**: the FE pipeline does hash computation (`computeShortCoreHash`), temporal-mode-aware regime selection, snapshot contract resolution, and FE normalisation. Reimplementing any of this in Python test helpers creates a parallel path that silently diverges from production. The most common failure: the test's manual hash lookup returns the wrong temporal mode's hash (e.g. window hash for a cohort query), so the snapshot query returns 0 rows, the handler runs the zero-cohort code path, and the test "passes" because both v2 and v3 produce the same zero-cohort output — exercising a completely different code path from production.
+
+**Fix**: use the CLI tooling (`graph-ops/scripts/analyse.sh`) which calls the same FE functions the browser does. Run it twice with different `--type` values and compare the JSON output. See `graph-ops/scripts/v2-v3-parity-test.sh` for the working implementation.
+
+**Non-vacuousness gate**: any parity test MUST assert that `evidence_x > 0` for at least some rows. If every row has `evidence_x = 0` or `evidence_x = None`, the test is vacuous — it's testing the zero-cohort early-return path, not the population model with IS conditioning, carrier, and forecast_x growth.
+
+**Broader principle**: when CLI tooling exists that exercises the real production pipeline, always use it for testing. The cost of reimplementing is not just the initial effort — it's the silent divergence that makes every test pass while production is broken.
+
+## Anti-pattern 40: Vacuous synth graph tests (missing snapshot data linkage)
+
+**Signature**: a parity test on a synth graph shows `cohorts=0` or `rows=0`. The handler runs the zero-cohort model-only code path. The test passes but catches none of the real bugs (carrier scaling, IS conditioning, forecast_x growth).
+
+**Root cause**: the synth graph's core_hash (as computed by the FE's hash function) doesn't match what `synth_gen.py` wrote to the snapshot DB. This happens when: (a) the test helper computes hashes differently from the FE, (b) hydration changed edge fields that affect the hash, or (c) the query window's date range doesn't overlap the synth data's date range.
+
+**Fix**: use `analyse.sh --topo-pass --no-snapshot-cache` which computes hashes identically to the FE. For query windows, use absolute dates matching the synth data range (check `base_date` in the synth config and the `anchor_day` range in the DB). Relative dates like `-14d:` fail because they're relative to today, which may be months after the synth data.
+
+**Detection**: the `v2-v3-parity-test.sh` Phase 1 health checks assert `evidence_x > 0`. If this fails, the snapshot linkage is broken and the parity comparison would be vacuous.
+
 ## When to add to this document
 
 After completing a multi-attempt fix, check: does my bug match a generalisable pattern? If so, add it here following the format: Signature (how to recognise it), Root cause (why it happens), Fix (what to do), Example (optional, specific instance).

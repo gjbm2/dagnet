@@ -405,8 +405,8 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
     feat_shared_latency_slices = features.get("shared_latency_slices", False)
     feat_centred_latency_slices = features.get("centred_latency_slices", True)
     feat_centred_p_slices = features.get("centred_p_slices", True)
-    feat_per_slice_a = features.get("per_slice_a", False)
-    feat_shared_sigma_slices = features.get("shared_sigma_slices", False)
+    feat_per_slice_a = features.get("per_slice_a", True)
+    feat_shared_sigma_slices = features.get("shared_sigma_slices", True)
     is_phase2 = phase2_frozen is not None
     # latency_reparam implies both latent_onset and latent_latency (doc 34 §11.8.5).
     use_reparam = (feat_latency_reparam
@@ -1789,6 +1789,10 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                             kappa_warm=ev.kappa_warm, cohort_latency_warm=ev.cohort_latency_warm)
                         _emissions.append((_sfx, p_s, ks, s_ev, _lv, _ov))
 
+                    # If not all exhaustive, also emit aggregate.
+                    # 1/N kappa correction (R2g Gap 2, doc 14 §14.6d):
+                    # With N independent dimensions, the aggregate's kappa
+                    # is scaled by 1/N to prevent parent overconfidence.
                     # If not all exhaustive, also emit aggregate.
                     # 1/N kappa correction (R2g Gap 2, doc 14 §14.6d):
                     # With N independent dimensions, the aggregate's kappa

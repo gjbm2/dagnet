@@ -270,6 +270,75 @@ at module scope or in function bodies. These throw in Node because
 - Entry points: `cliEntry.ts` polyfills `import.meta.env = { DEV: false }`
   before any imports
 
+### hydrate
+
+**Script**: `graph-ops/scripts/hydrate.sh`
+
+Runs FE aggregation + promotion + BE topo pass on a graph, then writes
+the hydrated graph back to disk. Produces a graph JSON equivalent to
+what the FE would have after opening the graph and running the full
+Stage 2 topo pass.
+
+```bash
+bash graph-ops/scripts/hydrate.sh <graph-name> "<query-dsl>"
+```
+
+**When to use**: after `synth_gen.py` creates a new graph, the graph
+JSON has raw posteriors but no `model_vars`, promoted fields, or
+path-level latency params. The FE populates these during aggregation
+and the topo pass. Hydration runs this offline so the graph on disk
+matches what the FE would produce.
+
+**Note**: `analyse.sh --topo-pass` achieves the same effect per
+analysis run without persisting to disk. Hydrate is useful when you
+want the graph JSON itself to be in the hydrated state (e.g. for
+loading into other tools).
+
+### v2-v3-parity-test
+
+**Script**: `graph-ops/scripts/v2-v3-parity-test.sh`
+
+End-to-end v2-vs-v3 cohort maturity parity test using the CLI
+`analyse` tool. Runs the full FE pipeline (aggregation, subject
+resolution, hash lookup, snapshot query, BE handler, FE normalisation)
+for both `cohort_maturity_v2` and `cohort_maturity` analysis types,
+then compares the output field by field.
+
+```bash
+# Run on synth graph (requires Python BE running)
+bash graph-ops/scripts/v2-v3-parity-test.sh synth-mirror-4step
+
+# With verbose diagnostic tables
+bash graph-ops/scripts/v2-v3-parity-test.sh synth-mirror-4step --verbose
+
+# Regenerate synth data first
+bash graph-ops/scripts/v2-v3-parity-test.sh synth-mirror-4step --generate
+```
+
+**Phase 1 — data health checks** (non-vacuousness):
+- Graph JSON exists with expected edges
+- Snapshot DB has rows for each edge (cohort + window slice_keys)
+- CLI analyse returns rows with `evidence_x > 0` (observed cohorts
+  present — without this the test is vacuous)
+
+**Phase 2 — parity comparison**:
+- midpoint: Δ < 0.03
+- fan width (90% band) ratio: within [0.65, 1.35]
+- forecast_x ratio: within [0.80, 1.20]
+- forecast_y ratio: within [0.80, 1.20]
+
+**Critical design principle**: the test uses `analyse.sh` (the CLI
+tooling) to run analyses, NOT reimplemented Python handler calls. The
+CLI exercises the exact same pipeline as the browser — including FE
+hash computation, subject resolution, and snapshot queries. Reimplementing
+any part of this pipeline in test code creates a parallel path that
+diverges from production and misses real bugs.
+
+**Query window**: uses absolute dates matching the synth data range
+(the synth `base_date` determines when snapshot data exists). Relative
+dates like `-14d:` don't work because they're relative to today, which
+may be months after the synth data was generated.
+
 ## Key Invariants
 
 - All graph node/edge UUIDs must be unique **across graphs** — shared

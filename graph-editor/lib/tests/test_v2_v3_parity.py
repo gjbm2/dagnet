@@ -83,11 +83,14 @@ def _get_candidate_regimes(graph):
     """Build candidate regimes from DB for each edge.
 
     Finds the bare (uncontexted) window and cohort core_hashes for
-    each edge's param_id. Bare hashes have slice_keys like 'window()'
-    or 'cohort()' without a context(...) prefix.
+    each edge's param_id. Groups them into a single regime with all
+    hashes as equivalents so the snapshot query can find rows regardless
+    of which hash is primary. This mirrors how the FE constructs
+    candidate regimes.
 
-    Returns both as candidates so the subject resolution can pick the
-    one matching the query's temporal mode.
+    Without this grouping, the subject resolution picks the first hash
+    alphabetically as primary — which may be the wrong temporal mode
+    (e.g. window hash for a cohort query), causing 0 rows returned.
     """
     from snapshot_service import _pooled_conn
     regimes = {}
@@ -98,19 +101,24 @@ def _get_candidate_regimes(graph):
             if not p_id:
                 continue
             # Find bare hashes: slice_key = 'window()' or 'cohort()'
-            # (no context prefix)
+            # (no context prefix). Exclude PLACEHOLDER hashes.
             cur.execute(
                 "SELECT DISTINCT core_hash, slice_key FROM snapshots "
                 "WHERE param_id LIKE %s AND core_hash != '' "
+                "AND core_hash NOT LIKE 'PLACEHOLDER%%' "
                 "AND slice_key NOT LIKE 'context%%' "
                 "ORDER BY core_hash",
                 (f'%{p_id}',),
             )
             rows = cur.fetchall()
             if rows:
+                # Group all hashes into one regime with equivalents.
+                # Primary = first hash; all others are equivalents.
+                # equivalent_hashes is List[str] (not list of dicts).
+                all_hashes = [r[0] for r in rows]
+                primary = all_hashes[0]
                 regimes[edge['uuid']] = [
-                    {'core_hash': r[0], 'equivalent_hashes': []}
-                    for r in rows
+                    {'core_hash': primary, 'equivalent_hashes': all_hashes[1:]}
                 ]
     return regimes
 
@@ -687,12 +695,14 @@ class TestUpstreamLagParity:
             r2, r3 = v2_by_tau[tau], v3_by_tau[tau]
             issues = []
 
+            # ── Midpoint ──────────────────────────────────────────
             mid2, mid3 = r2.get('midpoint'), r3.get('midpoint')
             if mid2 is not None and mid3 is not None:
                 d = abs(mid2 - mid3)
                 if d > midpoint_tol:
                     issues.append(f"midpoint: v2={mid2:.4f} v3={mid3:.4f} Δ={d:.4f}")
 
+            # ── Fan width (90% band) ──────────────────────────────
             fb2 = (r2.get('fan_bands') or {}).get('90')
             fb3 = (r3.get('fan_bands') or {}).get('90')
             if fb2 and fb3:
@@ -703,16 +713,42 @@ class TestUpstreamLagParity:
                     if abs(wr - 1.0) > 0.35:
                         issues.append(f"fan_w90: v2={w2:.4f} v3={w3:.4f} ratio={wr:.2f}")
 
+            # ── Forecast x (denominator scaling) ──────────────────
+            # The x denominator must track v2: if v3 scales x slower
+            # (missing carrier / Pop C), the rate curve shape diverges.
+            fx2, fx3 = r2.get('forecast_x'), r3.get('forecast_x')
+            if fx2 is not None and fx3 is not None and fx2 > 1.0:
+                fx_ratio = fx3 / fx2
+                if abs(fx_ratio - 1.0) > 0.20:
+                    issues.append(f"forecast_x: v2={fx2:.1f} v3={fx3:.1f} ratio={fx_ratio:.2f}")
+
+            # ── Forecast y (numerator) ────────────────────────────
+            fy2, fy3 = r2.get('forecast_y'), r3.get('forecast_y')
+            if fy2 is not None and fy3 is not None and fy2 > 1.0:
+                fy_ratio = fy3 / fy2
+                if abs(fy_ratio - 1.0) > 0.20:
+                    issues.append(f"forecast_y: v2={fy2:.1f} v3={fy3:.1f} ratio={fy_ratio:.2f}")
+
             if issues:
                 failures.append(f"τ={tau}: " + "; ".join(issues))
 
         _f = lambda v: f"{v:8.4f}" if isinstance(v, (int, float)) else "    None"
+        _fx = lambda v: f"{v:8.1f}" if isinstance(v, (int, float)) else "    None"
         print(f"\n{label}: {len(shared)} shared τ")
         for tau in shared[:20]:
             r2, r3 = v2_by_tau[tau], v3_by_tau[tau]
             m2, m3 = r2.get('midpoint'), r3.get('midpoint')
             d = abs(m2 - m3) if m2 is not None and m3 is not None else 0
-            print(f"  τ={tau:3d}  mid:{_f(m2)}/{_f(m3)} Δ={d:.4f}")
+            fx2, fx3 = r2.get('forecast_x'), r3.get('forecast_x')
+            fy2, fy3 = r2.get('forecast_y'), r3.get('forecast_y')
+            fb2 = (r2.get('fan_bands') or {}).get('90')
+            fb3 = (r3.get('fan_bands') or {}).get('90')
+            w2 = (fb2[1] - fb2[0]) if fb2 else None
+            w3 = (fb3[1] - fb3[0]) if fb3 else None
+            print(f"  τ={tau:3d}  mid:{_f(m2)}/{_f(m3)} Δ={d:.4f}"
+                  f"  fx:{_fx(fx2)}/{_fx(fx3)}"
+                  f"  fy:{_fx(fy2)}/{_fx(fy3)}"
+                  f"  w90:{_f(w2)}/{_f(w3)}")
 
         assert len(failures) == 0, \
             f"{label}: {len(failures)} τ diverge:\n" + "\n".join(failures[:15])

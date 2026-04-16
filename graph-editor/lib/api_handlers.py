@@ -103,6 +103,285 @@ def handle_generate_all_parameters(data: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _surprise_gauge_engine_p(
+    edge: Dict[str, Any],
+    graph_data: Dict[str, Any],
+    subj: Dict[str, Any],
+    is_cohort: bool,
+) -> Optional[Dict[str, Any]]:
+    """Compute p variable z-score using the forecast engine's MC draws.
+
+    Queries snapshots for per-cohort evidence, calls compute_conditioned_forecast,
+    and derives the posterior-predictive z-score from unconditioned draws.
+
+    Returns a surprise variable dict for 'p', or None if the engine path
+    is not available (missing data, no snapshots, etc.).
+    """
+    import numpy as np
+    from datetime import date as date_type
+
+    def norm_cdf(z: float) -> float:
+        return 0.5 * math.erfc(-z / math.sqrt(2.0))
+
+    def classify_zone(q: float) -> str:
+        tail = abs(q - 0.5) * 2
+        if tail < 0.60:   return 'expected'
+        if tail < 0.80:   return 'noteworthy'
+        if tail < 0.90:   return 'unusual'
+        if tail < 0.98:   return 'surprising'
+        return 'alarming'
+
+    try:
+        from runner.model_resolver import resolve_model_params
+        from runner.forecast_state import (
+            compute_conditioned_forecast,
+            build_node_arrival_cache,
+            _compute_completeness_at_age,
+            _convolve_completeness_at_age,
+            NodeArrivalState,
+        )
+        from runner.cohort_maturity_derivation import derive_cohort_maturity
+        from snapshot_service import query_snapshots_for_sweep
+    except ImportError as e:
+        print(f"[surprise_gauge] engine import failed: {e}")
+        return None
+
+    # Resolve model params
+    scope = 'path' if is_cohort else 'edge'
+    temporal = 'cohort' if is_cohort else 'window'
+    _graph_pref = graph_data.get('model_source_preference') if isinstance(graph_data, dict) else None
+    resolved = resolve_model_params(edge, scope=scope, temporal_mode=temporal,
+                                    graph_preference=_graph_pref)
+    if not resolved or resolved.latency.sigma <= 0:
+        print("[surprise_gauge] engine: no resolved params or sigma=0")
+        return None
+
+    # Query snapshots for per-cohort evidence
+    param_id = subj.get('param_id')
+    core_hash = subj.get('core_hash')
+    anchor_from_str = subj.get('anchor_from')
+    anchor_to_str = subj.get('anchor_to')
+    if not param_id or not core_hash or not anchor_from_str or not anchor_to_str:
+        print("[surprise_gauge] engine: missing subject fields for snapshot query")
+        return None
+
+    try:
+        anchor_from = date_type.fromisoformat(str(anchor_from_str)[:10])
+        anchor_to = date_type.fromisoformat(str(anchor_to_str)[:10])
+        rows = query_snapshots_for_sweep(
+            param_id=param_id,
+            core_hash=core_hash,
+            slice_keys=subj.get('slice_keys', ['']),
+            anchor_from=anchor_from,
+            anchor_to=anchor_to,
+            equivalent_hashes=subj.get('equivalent_hashes'),
+        )
+    except Exception as e:
+        print(f"[surprise_gauge] engine: snapshot query failed: {e}")
+        return None
+
+    if not rows:
+        print("[surprise_gauge] engine: no snapshot rows")
+        return None
+
+    # Derive cohort maturity frames
+    derivation = derive_cohort_maturity(rows)
+    frames = derivation.get('frames', [])
+    if not frames:
+        print("[surprise_gauge] engine: no frames from derivation")
+        return None
+
+    # Extract per-cohort (age, n, k) from last frame
+    last_frame = frames[-1]
+    data_points = last_frame.get('data_points', [])
+    if not data_points:
+        print("[surprise_gauge] engine: last frame has no data_points")
+        return None
+
+    last_frame_date = None
+    sd_str = str(last_frame.get('snapshot_date', ''))[:10]
+    if sd_str:
+        try:
+            last_frame_date = date_type.fromisoformat(sd_str)
+        except (ValueError, TypeError):
+            pass
+
+    cohort_ages_and_weights = []
+    evidence = []
+    total_k = 0.0
+    total_n = 0.0
+    for dp in data_points:
+        ad_str = str(dp.get('anchor_day', ''))[:10]
+        try:
+            ad = date_type.fromisoformat(ad_str)
+        except (ValueError, TypeError):
+            continue
+        if ad < anchor_from or ad > anchor_to:
+            continue
+        x_val = dp.get('x', 0)
+        y_val = dp.get('y', 0)
+        if not isinstance(x_val, (int, float)) or x_val <= 0:
+            continue
+        if not isinstance(y_val, (int, float)):
+            y_val = 0
+        age = (last_frame_date - ad).days if last_frame_date else 0
+        if age < 0:
+            continue
+        cohort_ages_and_weights.append((age, float(x_val)))
+        evidence.append((age, float(x_val), float(y_val)))
+        total_k += float(y_val)
+        total_n += float(x_val)
+
+    if not cohort_ages_and_weights or total_n <= 0:
+        print("[surprise_gauge] engine: no valid cohorts extracted")
+        return None
+
+    # Use edge-level evidence k/n for observed rate (not snapshot x/y which
+    # is a-denominated). Snapshot x = upstream population, y = edge converters,
+    # so y/x is the path-level rate. The gauge compares against edge-level
+    # expected = p × completeness, so observed must also be edge-level.
+    p_block = edge.get('p') or {}
+    ev_block = p_block.get('evidence') or {}
+    edge_k = ev_block.get('k')
+    edge_n = ev_block.get('n')
+    if not (isinstance(edge_k, (int, float)) and isinstance(edge_n, (int, float)) and edge_n > 0):
+        print("[surprise_gauge] engine: no edge-level evidence k/n")
+        return None
+    obs_rate = float(edge_k) / float(edge_n)
+
+    # Build node arrival cache for cohort mode
+    from_node_arrival = None
+    if is_cohort:
+        try:
+            _anchor_id = None
+            for n in graph_data.get('nodes', []):
+                if (n.get('entry') or {}).get('is_start'):
+                    _anchor_id = n.get('uuid') or n.get('id')
+                    break
+            if _anchor_id is None and graph_data.get('nodes'):
+                _anchor_id = graph_data['nodes'][0].get('uuid') or graph_data['nodes'][0].get('id', '')
+            if _anchor_id:
+                cache = build_node_arrival_cache(graph_data, anchor_id=_anchor_id, max_tau=400)
+                from_id = edge.get('from', '')
+                from_node_arrival = cache.get(from_id)
+        except Exception as e:
+            print(f"[surprise_gauge] engine: node arrival cache failed: {e}")
+
+    # Call the engine
+    try:
+        cf = compute_conditioned_forecast(
+            edge_id=str(edge.get('uuid') or edge.get('id', '')),
+            resolved=resolved,
+            cohort_ages_and_weights=cohort_ages_and_weights,
+            evidence=evidence,
+            from_node_arrival=from_node_arrival if is_cohort else None,
+        )
+    except Exception as e:
+        print(f"[surprise_gauge] engine: compute_conditioned_forecast failed: {e}")
+        return None
+
+    # Posterior-predictive z-score from unconditioned draws.
+    # For each draw s: expected_rate_s = p_s × C(ages; mu_s, sigma_s, onset_s)
+    # n-weighted across cohorts.
+    S = len(cf.p_draws_unconditioned)
+    if S == 0:
+        return None
+
+    p_unc = cf.p_draws_unconditioned
+    mu_unc = cf.mu_draws_unconditioned
+    sigma_unc = cf.sigma_draws_unconditioned
+    onset_unc = cf.onset_draws_unconditioned
+
+    expected_rates = np.zeros(S)
+    for s in range(S):
+        wc = 0.0
+        for age, n_i in cohort_ages_and_weights:
+            if is_cohort and from_node_arrival is not None and from_node_arrival.deterministic_cdf is not None:
+                c_s = _convolve_completeness_at_age(
+                    float(age), from_node_arrival.deterministic_cdf,
+                    from_node_arrival.reach,
+                    float(mu_unc[s]), float(sigma_unc[s]), float(onset_unc[s]),
+                )
+            else:
+                c_s = _compute_completeness_at_age(
+                    float(age), float(mu_unc[s]), float(sigma_unc[s]), float(onset_unc[s]),
+                )
+            wc += n_i * c_s
+        completeness_s = wc / total_n if total_n > 0 else 0.0
+        expected_rates[s] = float(p_unc[s]) * completeness_s
+
+    mean_expected = float(np.mean(expected_rates))
+    sd_expected = float(np.std(expected_rates))
+
+    if sd_expected < 1e-12:
+        print("[surprise_gauge] engine: posterior-predictive SD ~ 0")
+        return None
+
+    z = (obs_rate - mean_expected) / sd_expected
+    quantile = float(norm_cdf(z))
+
+    # Completeness point estimate (mean across draws)
+    c_mean = mean_expected / max(float(np.mean(p_unc)), 1e-12) if float(np.mean(p_unc)) > 1e-12 else 0.0
+    c_mean = min(c_mean, 1.0)
+
+    # Evidence retrieved_at for display
+    p_block = edge.get('p') or {}
+    ev_block = p_block.get('evidence') or {}
+    data_source = p_block.get('data_source') or {}
+    evidence_retrieved_at = (
+        data_source.get('source_retrieved_at')
+        or data_source.get('retrieved_at')
+        or ev_block.get('retrieved_at')
+    )
+
+    print(f"[surprise_gauge] engine p: obs={obs_rate:.4f} expected={mean_expected:.4f} "
+          f"sd={sd_expected:.4f} z={z:.3f} q={quantile:.4f} "
+          f"completeness={c_mean:.3f} cohorts={len(cohort_ages_and_weights)} "
+          f"is_ess={cf.is_ess:.1f}")
+
+    return {
+        'name': 'p',
+        'label': 'Conversion rate',
+        'quantile': round(quantile, 6),
+        'sigma': round(z, 3),
+        'observed': round(obs_rate, 6),
+        'expected': round(mean_expected, 6),
+        'expected_longrun': round(float(np.mean(p_unc)), 6),
+        'posterior_sd': round(sd_expected, 6),
+        'combined_sd': round(sd_expected, 6),
+        'completeness': round(c_mean, 4),
+        'evidence_n': int(edge_n),
+        'evidence_k': int(edge_k),
+        'evidence_retrieved_at': _format_retrieved_at_for_display(evidence_retrieved_at),
+        'zone': classify_zone(quantile),
+        'available': True,
+        'engine': True,
+        'is_ess': round(cf.is_ess, 1),
+    }
+
+
+def _format_retrieved_at_for_display(retrieved_at) -> Optional[str]:
+    """Format a retrieved_at value for gauge display (d-MMM-yy)."""
+    if not retrieved_at:
+        return None
+    try:
+        from datetime import date as date_type, datetime
+        months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+        if isinstance(retrieved_at, str):
+            # Already in d-MMM-yy?
+            if any(m in retrieved_at for m in months):
+                return retrieved_at
+            d = date_type.fromisoformat(str(retrieved_at)[:10])
+        elif isinstance(retrieved_at, (date_type, datetime)):
+            d = retrieved_at if isinstance(retrieved_at, date_type) else retrieved_at.date()
+        else:
+            return str(retrieved_at)
+        return f"{d.day}-{months[d.month - 1]}-{str(d.year)[-2:]}"
+    except (ValueError, TypeError):
+        return str(retrieved_at) if retrieved_at else None
+
+
 def _compute_surprise_gauge(
     graph_data: Dict[str, Any],
     target_id: Optional[str],
@@ -112,8 +391,9 @@ def _compute_surprise_gauge(
     """
     Compute surprise gauge: compare current evidence against Bayesian posterior.
 
-    Phase 1: uses parameter file scalars (k, n, median_lag, mean_lag).
-    Phase 2: will add snapshot DB queries for onset evidence.
+    Uses the forecast engine (compute_conditioned_forecast) for the p variable
+    when snapshot data is available, falling back to the analytic formula.
+    mu/sigma use resolve_model_params for canonical SDs.
 
     Returns:
         { analysis_type, variables: [{ name, quantile, observed, expected,
@@ -294,10 +574,11 @@ def _compute_surprise_gauge(
     evidence_k = evidence.get('k')
     evidence_n = evidence.get('n')
 
-    # Completeness from the topo pass (n-weighted aggregate across cohort dates).
+    # Completeness from the topo pass. Use the stored value directly — it's the
+    # same n-weighted average the graph display uses. No local recomputation.
     c_w = latency.get('completeness')
     if not isinstance(c_w, (int, float)) or c_w <= 0:
-        c_w = 1.0  # Default: assume fully mature when no lag model
+        c_w = 1.0
 
     # --- Observed latency params (from analytic evidence, not promoted/blended) ---
     analytic_entry = next(
@@ -351,58 +632,82 @@ def _compute_surprise_gauge(
     variables = []
 
     # --- p (conversion rate) ---
-    # Completeness-adjusted comparison: pure evidence k/n vs posterior Beta(α,β)
-    # scaled by per-date completeness. See surprise-gauge-design.md §5.1.
-    b_alpha = b_alpha_raw
-    b_beta_param = b_beta_raw
-
-    if (isinstance(b_alpha, (int, float)) and isinstance(b_beta_param, (int, float))
-            and b_alpha > 0 and b_beta_param > 0
-            and isinstance(evidence_k, (int, float)) and isinstance(evidence_n, (int, float))
-            and evidence_n > 0):
-        mu_p = b_alpha / (b_alpha + b_beta_param)
-        sigma2_p = (b_alpha * b_beta_param) / ((b_alpha + b_beta_param) ** 2 * (b_alpha + b_beta_param + 1))
-        obs_rate = float(evidence_k) / float(evidence_n)
-
-        # Completeness-adjusted expected rate and variance (§5.1)
-        expected = mu_p * c_w
-        var_post = sigma2_p * (c_w ** 2)
-        # Sampling variance at the expected rate
-        var_samp = expected * (1.0 - expected) / float(evidence_n)
-        combined_sd = math.sqrt(max(1e-20, var_post + var_samp))
-
-        z = (obs_rate - expected) / combined_sd
-        quantile = float(norm_cdf(z))
-        variables.append({
-            'name': 'p',
-            'label': 'Conversion rate',
-            'quantile': round(quantile, 6),
-            'sigma': round(z, 3),
-            'observed': round(obs_rate, 6),
-            'expected': round(expected, 6),
-            'expected_longrun': round(mu_p, 6),
-            'posterior_sd': round(math.sqrt(sigma2_p), 6),
-            'combined_sd': round(combined_sd, 6),
-            'completeness': round(c_w, 4),
-            'zone': classify_zone(quantile),
-            'available': True,
-        })
+    # Primary: use forecast engine MC draws for posterior-predictive z-score.
+    # Fallback: analytic formula with scalar completeness.
+    engine_p = _surprise_gauge_engine_p(edge, graph_data, subj, is_cohort)
+    if engine_p is not None:
+        variables.append(engine_p)
+        print(f"[surprise_gauge] p: engine path succeeded")
     else:
-        reason = 'No evidence (k/n)' if not (isinstance(evidence_n, (int, float)) and evidence_n > 0) else 'Missing posterior (alpha/beta)'
-        variables.append({
-            'name': 'p',
-            'label': 'Conversion rate',
-            'available': False,
-            'reason': reason,
-        })
+        # Fallback: analytic scalar approach (Phase 1 formula)
+        print(f"[surprise_gauge] p: falling back to analytic formula")
+        b_alpha = b_alpha_raw
+        b_beta_param = b_beta_raw
+
+        if (isinstance(b_alpha, (int, float)) and isinstance(b_beta_param, (int, float))
+                and b_alpha > 0 and b_beta_param > 0
+                and isinstance(evidence_k, (int, float)) and isinstance(evidence_n, (int, float))
+                and evidence_n > 0):
+            mu_p = b_alpha / (b_alpha + b_beta_param)
+            sigma2_p = (b_alpha * b_beta_param) / ((b_alpha + b_beta_param) ** 2 * (b_alpha + b_beta_param + 1))
+            obs_rate = float(evidence_k) / float(evidence_n)
+
+            # Completeness-adjusted expected rate and variance (§5.1)
+            expected = mu_p * c_w
+            var_post = sigma2_p * (c_w ** 2)
+            # Sampling variance at the expected rate
+            var_samp = expected * (1.0 - expected) / float(evidence_n)
+            combined_sd = math.sqrt(max(1e-20, var_post + var_samp))
+
+            z = (obs_rate - expected) / combined_sd
+            quantile = float(norm_cdf(z))
+            variables.append({
+                'name': 'p',
+                'label': 'Conversion rate',
+                'quantile': round(quantile, 6),
+                'sigma': round(z, 3),
+                'observed': round(obs_rate, 6),
+                'expected': round(expected, 6),
+                'expected_longrun': round(mu_p, 6),
+                'posterior_sd': round(math.sqrt(sigma2_p), 6),
+                'combined_sd': round(combined_sd, 6),
+                'completeness': round(c_w, 4),
+                'zone': classify_zone(quantile),
+                'available': True,
+            })
+        else:
+            reason = 'No evidence (k/n)' if not (isinstance(evidence_n, (int, float)) and evidence_n > 0) else 'Missing posterior (alpha/beta)'
+            variables.append({
+                'name': 'p',
+                'label': 'Conversion rate',
+                'available': False,
+                'reason': reason,
+            })
 
     # --- mu (latency location) ---
     # Combined-SD normal approximation: posterior SD + sampling SE. See §5.2.
-    b_mu_mean = ref_lat_params.get('mu_mean')
-    b_mu_sd = ref_lat_params.get('mu_sd')
-    b_onset_mean = ref_lat_params.get('onset_mean') or ref_lat_params.get('onset_delta_days') or 0
-    # sigma_lag for sampling SE of median
-    sigma_lag = ref_lat_params.get('sigma_mean') or latency.get('sigma')
+    # Prefer resolve_model_params for canonical SDs when available.
+    _resolved = None
+    try:
+        from runner.model_resolver import resolve_model_params as _rmp
+        _scope = 'path' if is_cohort else 'edge'
+        _temporal = 'cohort' if is_cohort else 'window'
+        _graph_pref = graph_data.get('model_source_preference') if isinstance(graph_data, dict) else None
+        _resolved = _rmp(edge, scope=_scope, temporal_mode=_temporal, graph_preference=_graph_pref)
+    except Exception:
+        pass
+
+    if _resolved and _resolved.latency.mu_sd > 0:
+        b_mu_mean = _resolved.latency.mu
+        b_mu_sd = _resolved.latency.mu_sd
+        b_onset_mean = _resolved.latency.onset_delta_days
+        sigma_lag = _resolved.latency.sigma
+    else:
+        b_mu_mean = ref_lat_params.get('mu_mean')
+        b_mu_sd = ref_lat_params.get('mu_sd')
+        b_onset_mean = ref_lat_params.get('onset_mean') or ref_lat_params.get('onset_delta_days') or 0
+        # sigma_lag for sampling SE of median
+        sigma_lag = ref_lat_params.get('sigma_mean') or latency.get('sigma')
 
     if (isinstance(b_mu_mean, (int, float)) and isinstance(b_mu_sd, (int, float))
             and b_mu_sd > 0
@@ -439,8 +744,12 @@ def _compute_surprise_gauge(
 
     # --- sigma (latency spread) ---
     # Combined-SD normal approximation with n_dates guard. See §5.2.
-    b_sigma_mean_val = ref_lat_params.get('sigma_mean')
-    b_sigma_sd = ref_lat_params.get('sigma_sd')
+    if _resolved and _resolved.latency.sigma_sd > 0:
+        b_sigma_mean_val = _resolved.latency.sigma
+        b_sigma_sd = _resolved.latency.sigma_sd
+    else:
+        b_sigma_mean_val = ref_lat_params.get('sigma_mean')
+        b_sigma_sd = ref_lat_params.get('sigma_sd')
 
     if (isinstance(b_sigma_mean_val, (int, float)) and isinstance(b_sigma_sd, (int, float))
             and b_sigma_sd > 0
@@ -1104,50 +1413,29 @@ def _handle_cohort_maturity_v2(data: Dict[str, Any]) -> Dict[str, Any]:
                 upstream_obs=_upstream_obs,
             )
 
-            # ── Planner: choose factorised vs collapsed shortcut ─────
-            # Doc 29c §Row-builder representation consistency:
-            # - Collapsed shortcut: when a compatible cohort(a, x-y)
-            #   exists (edge has path-level params), use v1 row builder
-            #   with collapsed representation — exact single-edge parity.
-            # - Factorised: multi-hop, or single-edge without path-level
-            #   params.  Uses v2 row builder with X_x + C_{x→y}.
+            # ── Span topology for mc_span_cdfs ─────────────────────────
+            # For single-edge cohort with anchor ≠ from_node, widen the
+            # span to anchor → to_node so mc_span_cdfs produces a
+            # path-level CDF. This gives correct Pop D timing for
+            # anchor-relative ages. The carrier handles x growth (Pop C).
             #
-            # Shortcut admissibility: single-edge, not window mode, and
-            # the edge has path-level latency params.
-            _has_path_params = (
-                edge_params.get('path_mu') is not None
-                and edge_params.get('path_sigma') is not None
-                and edge_params.get('path_sigma', 0) > 0
+            # For multi-hop, the span is already from → to (path-level).
+            # For window mode, edge-level is correct (ages are from-node-relative).
+            _widen_span = (
+                not is_multi_hop
+                and not is_window
+                and anchor_node
+                and query_from_node
+                and anchor_node != query_from_node
             )
-            _use_collapsed = not is_multi_hop and _has_path_params and not is_window
-            if _use_collapsed:
-                print(f"[v2] planner: collapsed shortcut (single-edge, path params available)")
-            else:
-                print(f"[v2] planner: factorised (multi_hop={is_multi_hop} "
-                      f"path_params={_has_path_params} window={is_window})")
+            _span_x = anchor_node if _widen_span else query_from_node
+            print(f"[v2] planner: factorised (multi_hop={is_multi_hop} "
+                  f"widen_span={_widen_span} span={_span_x}→{query_to_node})")
 
             try:
-                if _use_collapsed:
-                    # Collapsed shortcut: use v1 row builder with the
-                    # edge_params as-is (path-level CDF, path alpha/beta).
-                    # This is the v1 code path — exact single-edge parity.
-                    from runner.cohort_forecast import compute_cohort_maturity_rows
-                    maturity_rows = compute_cohort_maturity_rows(
-                        frames=composed_frames,
-                        graph=graph_data,
-                        target_edge_id=last_edge_id,
-                        edge_params=edge_params,
-                        anchor_from=anchor_from_str,
-                        anchor_to=anchor_to_str,
-                        sweep_to=sweep_to_final,
-                        is_window=is_window,
-                        axis_tau_max=axis_tau_max,
-                        band_level=band_level,
-                        anchor_node_id=anchor_node,
-                        sampling_mode=sampling_mode,
-                    )
-                elif kernel is not None and kernel.span_p > 0:
-                    # Factorised: v2 row builder with X_x + C_{x→y}
+                if kernel is not None and kernel.span_p > 0:
+                    # Build span params from the edge kernel (edge p for
+                    # rate asymptote, edge SDs for IS conditioning).
                     def _norm_cdf(tau: float) -> float:
                         raw = kernel.cdf_at(int(round(tau)))
                         return raw / kernel.span_p
@@ -1160,7 +1448,8 @@ def _handle_cohort_maturity_v2(data: Dict[str, Any]) -> Dict[str, Any]:
                         is_window=is_window,
                     )
 
-                    _span_topo = _build_span_topology(graph_data, query_from_node, query_to_node)
+                    # MC CDF: from widened span (path-level) or edge span.
+                    _span_topo = _build_span_topology(graph_data, _span_x, query_to_node)
                     _mc_cdf_arr = None
                     _mc_p_s = None
                     if _span_topo is not None:
@@ -1174,6 +1463,23 @@ def _handle_cohort_maturity_v2(data: Dict[str, Any]) -> Dict[str, Any]:
                             num_draws=2000,
                             rng=_rng,
                         )
+                        # When span is widened, mc_p_s is path probability
+                        # (product of all edge p's). Override with edge p
+                        # from the edge-level span so the rate converges
+                        # to the target edge's p, not the path p.
+                        if _widen_span:
+                            _edge_topo = _build_span_topology(
+                                graph_data, query_from_node, query_to_node)
+                            if _edge_topo is not None:
+                                _rng_edge = _np.random.default_rng(42)
+                                _, _mc_p_s = mc_span_cdfs(
+                                    topo=_edge_topo,
+                                    graph=graph_data,
+                                    is_window=is_window,
+                                    max_tau=max_tau,
+                                    num_draws=2000,
+                                    rng=_rng_edge,
+                                )
 
                     maturity_rows = compute_cohort_maturity_rows_v2(
                         frames=composed_frames,
@@ -1436,116 +1742,97 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
         _span_alpha_v3 = None
         _span_beta_v3 = None
         _span_params_v3 = None
-        # Collapsed shortcut flag: single-edge cohort mode with path
-        # params available. Mirrors v2 planner (line 1107-1122).
-        # When true, build span topology from anchor → to_node (path
-        # CDF) instead of from_node → to_node (edge CDF), and skip the
-        # carrier — upstream timing is already in the path CDF.
-        _v3_use_collapsed = False
         if composed_frames and last_edge_id and query_from_node and query_to_node:
             from runner.span_kernel import compose_span_kernel, _build_span_topology, mc_span_cdfs
             _is_multi_hop_v3 = len(subjects) > 1
 
-            # Detect collapsed shortcut admissibility (v2 parity)
-            _v3_has_path_params = False
-            if not _is_multi_hop_v3 and not is_window and anchor_node and anchor_node != query_from_node:
-                from runner.cohort_forecast import find_edge_by_id
-                _v3_edge = find_edge_by_id(graph_data, last_edge_id)
-                if _v3_edge:
-                    _v3_lat = _v3_edge.get('p', {}).get('latency', {})
-                    _v3_has_path_params = (
-                        _v3_lat.get('path_mu') is not None
-                        and _v3_lat.get('path_sigma') is not None
-                        and (_v3_lat.get('path_sigma') or 0) > 0
-                    )
-            _v3_use_collapsed = not _is_multi_hop_v3 and _v3_has_path_params and not is_window
+            # ── Span widening (matching v2) ───────────────────────────
+            _widen_span_v3 = (
+                not _is_multi_hop_v3
+                and not is_window
+                and anchor_node
+                and query_from_node
+                and anchor_node != query_from_node
+            )
+            _span_x_v3 = anchor_node if _widen_span_v3 else query_from_node
+            print(f"[v3] planner: factorised (multi_hop={_is_multi_hop_v3} "
+                  f"widen_span={_widen_span_v3} span={_span_x_v3}→{query_to_node})")
 
-            # Choose span topology: anchor → to_node for collapsed shortcut,
-            # from_node → to_node otherwise.
-            _span_x_node = anchor_node if _v3_use_collapsed else query_from_node
-            if _v3_use_collapsed:
-                print(f"[v3] planner: collapsed shortcut (single-edge, path params available, "
-                      f"span {_span_x_node}→{query_to_node})")
-            else:
-                print(f"[v3] planner: factorised (multi_hop={_is_multi_hop_v3} "
-                      f"path_params={_v3_has_path_params} window={is_window})")
-
-            # Deterministic span kernel for forecast_y/forecast_x (v2 parity).
-            _kernel_v3 = compose_span_kernel(
+            # Edge kernel (span_p for rate asymptote, span_params for IS)
+            _edge_kernel_v3 = compose_span_kernel(
                 graph=graph_data,
-                x_node_id=_span_x_node,
+                x_node_id=query_from_node,
                 y_node_id=query_to_node,
                 is_window=is_window,
                 max_tau=400,
             )
+            # CDF kernel (widened or edge)
+            _kernel_v3 = (compose_span_kernel(
+                graph=graph_data,
+                x_node_id=_span_x_v3,
+                y_node_id=query_to_node,
+                is_window=is_window,
+                max_tau=400,
+            ) if _widen_span_v3 else _edge_kernel_v3)
+
             if _kernel_v3 is not None and _kernel_v3.span_p > 0:
+                _det_span_p = _edge_kernel_v3.span_p if _edge_kernel_v3 else _kernel_v3.span_p
+                # det_norm_cdf from edge kernel (for E_i), matching v2's
+                # sp.C which uses the edge kernel's CDF. Edge CDF gives
+                # larger E_i at young frontier ages → IS conditioning fires.
+                _det_cdf_kernel = _edge_kernel_v3 or _kernel_v3
                 _det_norm_cdf = [
-                    min(max(_kernel_v3.cdf_at(t) / _kernel_v3.span_p, 0.0), 1.0)
+                    min(max(_det_cdf_kernel.cdf_at(t) / _det_cdf_kernel.span_p, 0.0), 1.0)
                     for t in range(401)
                 ]
-                if _v3_use_collapsed:
-                    # Collapsed shortcut: path CDF for timing, edge p for rate.
-                    # Build a separate edge kernel to get edge span_p.
-                    _edge_kernel = compose_span_kernel(
-                        graph=graph_data,
-                        x_node_id=query_from_node,
-                        y_node_id=query_to_node,
-                        is_window=is_window,
-                        max_tau=400,
-                    )
-                    _det_span_p = _edge_kernel.span_p if _edge_kernel else _kernel_v3.span_p
-                else:
-                    _det_span_p = _kernel_v3.span_p
-                # Span-adapted params for IS conditioning parity
-                # (v2 uses build_span_params which gets alpha/beta and SDs
-                # from span_adapter, NOT from resolve_model_params)
+                # Span-adapted params from edge kernel
                 from runner.span_adapter import span_kernel_to_edge_params
                 from runner.cohort_forecast_v2 import build_span_params
+                _ek = _edge_kernel_v3 or _kernel_v3
                 _span_edge_params = span_kernel_to_edge_params(
-                    _kernel_v3, graph_data, last_edge_id, is_window=is_window)
+                    _ek, graph_data, last_edge_id, is_window=is_window)
                 def _norm_cdf_v3(tau):
-                    raw = _kernel_v3.cdf_at(int(round(tau)))
-                    return raw / _kernel_v3.span_p
+                    raw = _ek.cdf_at(int(round(tau)))
+                    return raw / _ek.span_p
                 _span_params_v3 = build_span_params(
-                    _norm_cdf_v3, _kernel_v3.span_p, 400,
+                    _norm_cdf_v3, _ek.span_p, 400,
                     _span_edge_params, is_window=is_window)
                 _span_alpha_v3 = _span_params_v3.alpha_0
                 _span_beta_v3 = _span_params_v3.beta_0
-            # MC draws.
-            # Collapsed shortcut: DON'T pass mc_cdf_arr — let the engine
-            # generate CDF from path-level resolved latency (continuous
-            # lognormal, matching v1). Pass resolved_override with path
-            # latency + edge p instead.
-            if not _v3_use_collapsed:
-                _span_topo_v3 = _build_span_topology(graph_data, query_from_node, query_to_node)
-                if _span_topo_v3 is not None:
-                    import numpy as _np
-                    _rng_v3 = _np.random.default_rng(42)
-                    _mc_cdf_v3, _mc_p_v3 = mc_span_cdfs(
-                        topo=_span_topo_v3,
-                        graph=graph_data,
-                        is_window=is_window,
-                        max_tau=400,
-                        num_draws=2000,
-                        rng=_rng_v3,
-                    )
+
+            # MC draws: CDF from widened span, p from edge span
+            _span_topo_v3 = _build_span_topology(graph_data, _span_x_v3, query_to_node)
+            if _span_topo_v3 is not None:
+                import numpy as _np
+                _rng_v3 = _np.random.default_rng(42)
+                _mc_cdf_v3, _mc_p_v3 = mc_span_cdfs(
+                    topo=_span_topo_v3,
+                    graph=graph_data,
+                    is_window=is_window,
+                    max_tau=400,
+                    num_draws=2000,
+                    rng=_rng_v3,
+                )
+                if _widen_span_v3:
+                    _edge_topo_v3 = _build_span_topology(
+                        graph_data, query_from_node, query_to_node)
+                    if _edge_topo_v3 is not None:
+                        _rng_edge_v3 = _np.random.default_rng(42)
+                        _, _mc_p_v3 = mc_span_cdfs(
+                            topo=_edge_topo_v3,
+                            graph=graph_data,
+                            is_window=is_window,
+                            max_tau=400,
+                            num_draws=2000,
+                            rng=_rng_edge_v3,
+                        )
 
         # ── Build x_provider (matching v2 handler construction) ────────
-        # Skip carrier when using collapsed shortcut — upstream timing
-        # is already in the path CDF, building a carrier would double-count.
+        # Carrier is needed even for collapsed shortcut: path CDF handles
+        # conversion timing, carrier handles x growth (Pop C upstream
+        # arrivals). These are orthogonal, not double-counting.
         _v3_x_provider = None
-        if _v3_use_collapsed:
-            # Pass a dummy x_provider with reach=0 to prevent the row
-            # builder from building its own carrier from the graph.
-            from runner.cohort_forecast import XProvider
-            _v3_x_provider = XProvider(
-                reach=0.0,
-                upstream_params_list=[],
-                enabled=False,
-                ingress_carrier=None,
-                upstream_obs=None,
-            )
-        elif not is_window and query_from_node and anchor_node:
+        if not is_window and query_from_node and anchor_node:
             from runner.cohort_forecast import XProvider, get_incoming_edges, read_edge_cohort_params
             _v3_ingress = []
             for inc_edge in get_incoming_edges(graph_data, query_from_node):
@@ -1579,38 +1866,7 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
                 upstream_obs=None,
             )
 
-        # ── Build resolved_override for collapsed shortcut ────────────
-        # Collapsed shortcut: path latency (for CDF timing) + edge p
-        # (for rate). Matches v1's behaviour: CDF uses path_mu/path_sigma,
-        # probability stays edge-level.
         _v3_resolved_override = None
-        if _v3_use_collapsed and last_edge_id:
-            from runner.model_resolver import resolve_model_params as _rmp
-            from runner.cohort_forecast import find_edge_by_id as _find_edge
-            _v3_edge_for_resolve = _find_edge(graph_data, last_edge_id)
-            if _v3_edge_for_resolve:
-                # Path latency
-                _r_path = _rmp(_v3_edge_for_resolve, scope='path', temporal_mode='cohort')
-                # Edge probability
-                _r_edge = _rmp(_v3_edge_for_resolve, scope='edge', temporal_mode='window')
-                if _r_path and _r_edge and _r_path.latency.sigma > 0:
-                    from runner.model_resolver import ResolvedModelParams as _RMP
-                    _v3_resolved_override = _RMP(
-                        p_mean=_r_edge.p_mean,
-                        p_sd=_r_edge.p_sd,
-                        alpha=_r_edge.alpha,
-                        beta=_r_edge.beta,
-                        edge_latency=_r_path.edge_latency,
-                        path_latency=_r_path.path_latency,
-                        source=_r_path.source,
-                        fitted_at=_r_path.fitted_at,
-                        gate_passed=_r_path.gate_passed,
-                        evidence_retrieved_at=_r_path.evidence_retrieved_at,
-                        source_curves=_r_path.source_curves,
-                    )
-                    print(f"[v3] collapsed override: path_mu={_r_path.latency.mu:.3f} "
-                          f"path_sigma={_r_path.latency.sigma:.3f} "
-                          f"edge_p={_r_edge.p_mean:.4f}")
 
         # ── Call v3 row builder ───────────────────────────────────────
         _is_multi_hop = len(subjects) > 1

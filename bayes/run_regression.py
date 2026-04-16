@@ -1321,8 +1321,8 @@ Examples:
   python bayes/run_regression.py --chains 2 --max-parallel 4
 """,
     )
-    parser.add_argument("--graph", default=None,
-                        help="Run single graph (default: all discovered)")
+    parser.add_argument("--graph", nargs="+", default=None,
+                        help="Run specific graph(s) (default: all discovered)")
     parser.add_argument("--include", default=None,
                         help="Include only graphs matching this substring (e.g. --include context)")
     parser.add_argument("--exclude", default=None,

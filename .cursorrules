@@ -39,68 +39,47 @@ IndexedDB `.clear()` / `.delete()` / `deleteDatabase()`.
 - **Pass condition**: you have checked which requirements/package file the
   dependency belongs in **before** running the install.
 - **Rules**:
-  - **Python**: dev-only packages (testing, linting, dev-server, CLI tools) go
-    in `graph-editor/requirements-local.txt`. Only packages imported at runtime
-    by `api/python-api.py` go in `graph-editor/requirements.txt` (Vercel prod).
-  - **Node**: check whether the package is `dependencies` vs `devDependencies`
-    in `graph-editor/package.json`.
-  - After installing, **update the correct requirements/package file** so the
-    dependency is tracked. Do not leave untracked installs.
+  - **Python**: dev-only packages go in `graph-editor/requirements-local.txt`. Only runtime imports for `api/python-api.py` go in `graph-editor/requirements.txt` (Vercel prod).
+  - **Node**: check `dependencies` vs `devDependencies` in `graph-editor/package.json`.
+  - After installing, **update the correct requirements/package file**.
 
 ### Gate 4: Memory system writes
 
 `~/.claude/projects/*/memory/`, `MEMORY.md`, or any memory files.
 
-- **Always fails.** The memory system is not used in this project. All shared
-  context belongs in the repo (CLAUDE.md, docs/, code comments).
+- **Always fails.** The memory system is not used in this project. All shared context belongs in the repo (CLAUDE.md, docs/, code comments).
 
 ### Why these gates exist
 
-These commands **destroy user work that cannot be recovered**. A `git checkout --`
-wipes uncommitted edits. An `rm` deletes files permanently. An IDB `.clear()`
-erases the workspace source of truth. The cost of asking first is a few seconds;
-the cost of getting it wrong is lost work and lost trust. **When in doubt, READ
-the file first — never modify, truncate, or delete.**
+These commands **destroy user work that cannot be recovered**. The cost of asking first is a few seconds; the cost of getting it wrong is lost work and lost trust. **When in doubt, READ the file first — never modify, truncate, or delete.**
 
 ---
 
 ## Agent Warm Start (MANDATORY at session start)
 
-**Before doing ANY work**, read these foundational docs in full. They take ~5 minutes and prevent the most common multi-attempt failures. This is not optional — skipping this step is the single biggest cause of wasted iterations.
+**Before doing ANY work**, read these foundational docs in full:
+1. `docs/current/codebase/SYNC_SYSTEM_OVERVIEW.md` — 4-layer data model, sync flows, known races
+2. `docs/current/codebase/RESERVED_QUERY_TERMS_GLOSSARY.md` — term definitions that affect every subsystem
+3. `docs/current/codebase/DEV_ENVIRONMENT_AND_HMR.md` — staleness diagnostic checklist only
 
-**Read in full (every session)**:
-1. `docs/current/codebase/SYNC_SYSTEM_OVERVIEW.md` — where data lives (4 layers: param file → graph edge → stashed slices → React render tree), how it flows between Git/IDB/FileRegistry/GraphStore/ReactFlow, known races, suppression mechanisms, and the "posterior propagation lesson" that explains why clearing state from one layer is useless unless you handle all four
-2. `docs/current/codebase/RESERVED_QUERY_TERMS_GLOSSARY.md` — term definitions (Cohort vs cohort(), window mode vs cohort mode, edge-level vs path-level latency, anchor_median_lag_days) that affect every subsystem
-3. `docs/current/codebase/DEV_ENVIRONMENT_AND_HMR.md` — staleness diagnostic section only (5-step checklist). Do NOT blame HMR for bugs unless this checklist confirms code staleness.
-
-**Why this exists**: agents repeatedly spend 3-6 attempts on fixes that would have been one-shot with this context. The sync overview alone would have prevented the 6-attempt posterior deletion failure (each attempt missed a different layer). The glossary prevents misusing cohort/window semantics. The HMR doc prevents false staleness diagnoses.
+Then identify your task type and read the relevant docs from `docs/current/codebase/TASK_TYPE_READING_GUIDE.md`.
 
 ---
 
 ## Instant-Action Triggers (DO IMMEDIATELY — NO THINKING, NO SEARCHING)
 
-These are **non-negotiable reflexes**. When the user's message matches a trigger, execute the action **as your very first tool call** before doing anything else. Do not search for files, do not reason about the problem, do not read code. Just run the command.
+These are **non-negotiable reflexes**. When the user's message matches a trigger, execute the action **as your very first tool call** before doing anything else.
 
 | User says (any variation) | Action |
 |---|---|
 | **"see mark X"**, "inspect mark X", "check mark X", "review mark X", "look at mark X", or **any message containing "mark 'X'"** | `scripts/extract-mark-logs.sh "X"` — then analyse the output. **NEVER** search for log files manually. **NEVER** try to reason without the logs. |
 | "run tests" (without specific files) | Run only tests related to files you changed — use file paths, not patterns |
 | "dry run" / "run the script" | Requires `required_permissions: ["all"]` — the sandbox hides `node_modules` and env files |
-| **"RTFM"**, "rtfm", or any derivation (e.g. "read the manual", "check the docs", "did you even read the rules") | The user is telling you that your recent response missed context that is already documented. **Three mandatory steps**: **(1)** Re-read this entire CLAUDE.md file systematically — do not skim. **(2)** Review relevant codebase docs (`docs/current/`, `docs/current/project-contexts/`, `graph-editor/docs/`, and any files referenced in the current discussion) to rebuild working knowledge. **(3)** Revise your most recent response/analysis in light of what you missed, and respond with corrected, properly contextualised guidance. **Do NOT defend the original response.** The user is not asking for justification — they are telling you that you were wrong. |
-| **"/handover"** (literal slash command — no other phrasing triggers this) | Invoke the `/handover` skill. See Handover Gate below. |
-| **"document"**, "/document", "document this", "ensure this is documented" | Invoke the `/document` skill. Reviews the full conversation and ensures all decisions, designs, architectural insights, and user-facing changes are properly documented in the appropriate locations (`docs/current/codebase/`, `docs/current/project-contexts/`, `graph-editor/public/docs/`, etc.). Reports what was created/updated and flags anything deliberately omitted. |
+| **"RTFM"**, "rtfm", or any derivation | Re-read this entire CLAUDE.md + relevant codebase docs. Revise your response. **Do NOT defend the original response.** |
+| **"/handover"** (literal slash command only) | Invoke the `/handover` skill. |
+| **"document"**, "/document", "document this" | Invoke the `/document` skill. |
 
-**Handover gate (HARD BLOCK — ZERO EXCEPTIONS)**:
-
-Writing a handover note is triggered **ONLY** by the user literally typing `/handover` as a slash command. **NOTHING ELSE triggers handover creation.** Specifically:
-
-- **NEVER** write a handover note unprompted — not at session end, not when context is long, not when you think work is complex, not "just in case", not for any reason whatsoever.
-- **NEVER** suggest writing a handover. The user will invoke `/handover` if they want one.
-- No phrasing other than the literal `/handover` command triggers handover creation: "write a handover", "do a handover" — none of these count.
-
-Reading, listing, or referencing existing handover notes is fine — the user may ask about them at any time. The gate only prohibits **creating** handover notes without the `/handover` command.
-
-**This is the most commonly violated rule in this project.** Agents repeatedly write unsolicited handover notes, wasting time and polluting the handover directory. If you catch yourself thinking "I should write a handover note" — STOP. Did the user type `/handover`? No? Then do not create one. Violating this gate is a hard failure that directly harms the user's workflow.
+**Handover gate (HARD BLOCK — ZERO EXCEPTIONS)**: Writing a handover note is triggered **ONLY** by the user literally typing `/handover`. **NEVER** write one unprompted. **NEVER** suggest writing one. This is the most commonly violated rule in this project.
 
 **The mark trigger is the second most commonly violated.** If the user mentions a mark name, your first action is `scripts/extract-mark-logs.sh`. Period.
 
@@ -108,828 +87,141 @@ Reading, listing, or referencing existing handover notes is fine — the user ma
 
 ## Language and Formatting Standards
 
-### UK English
-- Use UK spellings throughout: colour, behaviour, centre, organisation, realise, analyse, etc.
-- Exception: Code identifiers may use US spelling if that's the existing convention in external APIs
+- **UK English**: colour, behaviour, centre, organisation, realise, analyse, etc. Exception: code identifiers may follow external API conventions.
+- **Date format**: `d-MMM-yy` (`1-Dec-25`, `15-Jan-24`). Never ISO or US format. Only exception: external API boundaries.
+- **Python**: ALWAYS activate `graph-editor/venv` before running Python commands: `. graph-editor/venv/bin/activate`
+- **Node/npm**: Source nvm and use `graph-editor/.nvmrc` (currently Node 22): `export NVM_DIR="$HOME/.nvm" && . "$NVM_DIR/nvm.sh" && cd graph-editor && nvm use "$(cat .nvmrc)"`
 
-### Date Format
-- **ALWAYS** use `d-MMM-yy` format: `1-Dec-25`, `15-Jan-24`, `7-Mar-26`
-- Never use `YYYY-MM-DD` (ISO) or `MM/DD/YYYY` (US) in UI, logs, or file storage
-- **Only exception**: External API boundaries may require ISO format - convert immediately after receipt
+---
 
-### Python / Virtualenv (REQUIRED)
-- **ALWAYS** activate the repo venv before running any Python commands: `graph-editor/venv`
-- In terminal tool calls, prefix Python steps with: `. graph-editor/venv/bin/activate`
-- Use the venv executables (`python`, `python3`, `pip`, etc.) from `graph-editor/venv` (i.e. `which python3` must resolve inside the venv), not the system interpreter.
+## Graph-Ops Playbooks
 
-### Node / npm (repo-pinned via nvm)
-- Node major version is pinned in `graph-editor/.nvmrc` (currently `22`).
-- In some environments `npm` is not on PATH until **nvm is sourced**.
-- **Technique (no repo scripts required)**:
-  - `export NVM_DIR="$HOME/.nvm"`
-  - `. "$NVM_DIR/nvm.sh"` (only if it exists)
-  - `cd graph-editor && nvm use "$(cat .nvmrc)"`
-  - After this, `node` and `npm` should be available for `npm test`, etc.
-
-## Graph-Ops Playbooks (in dagnet repo)
-
-`graph-ops/` at the dagnet repo root contains playbooks, reference docs, and scripts for creating, editing, and validating conversion graphs. **Read these before doing graph operations work** — they encode tested procedures for graph editing, entity creation, validation, and the git branch workflow.
-
-Key playbooks:
-- `graph-ops/playbooks/branch-workflow.md` — git lifecycle: branch, commit, push, test, merge
-- `graph-ops/playbooks/create-graph.md` — building a new conversion funnel from scratch
-- `graph-ops/playbooks/build-funnel-graph.md` — end-to-end guide: audit, entity creation, wiring, validation
-- `graph-ops/playbooks/create-entities.md` — creating nodes, events, parameters, contexts
-- `graph-ops/playbooks/edit-existing-graph.md` — modifying an existing graph
-- `graph-ops/playbooks/validate-graph.md` — quality checks before committing
-- `graph-ops/playbooks/manage-hash-mappings.md` — hash mapping workflow for event/context renames
-- `graph-ops/playbooks/cli-param-pack.md` — CLI param pack tool: usage, options, key reference
-- `graph-ops/playbooks/cli-analyse.md` — CLI analyse tool: scenarios, subjects, multi-scenario, FE equivalence
-- `graph-ops/scripts/parity-test.sh` — doc 31 parity test: old path vs new path, single + multi-scenario, all snapshot types
-- `graph-ops/reference/data-model.md` — complete data model reference
-- `graph-ops/reference/common-pitfalls.md` — known pitfalls
-
-Scripts: `graph-ops/scripts/` (validate-graph.sh, validate-indexes.sh, validate-hashes.sh, param-pack.sh, analyse.sh, status.sh, etc.) — run from dagnet root.
+`graph-ops/` contains playbooks, reference docs, and scripts for graph operations. **Read the relevant playbook before doing graph work.** Key entry points: `graph-ops/playbooks/` (procedures), `graph-ops/reference/` (data model, pitfalls), `graph-ops/scripts/` (validation, parity, param-pack, analyse).
 
 ## Adjacent Private Repos (read-only context)
 
-Two private repos are cloned into the workspace root for reference. They are git-excluded and protected by a pre-commit hook — they must **NEVER** be committed to the public dagnet repo.
-
-### Safety rules
+Two private repos are cloned into the workspace root. They are git-excluded and protected by a pre-commit hook — they must **NEVER** be committed to dagnet.
 
 | Rule | Rationale |
 |------|-----------|
-| **Never commit** private repo files to dagnet | Pre-commit hook blocks this, but don’t attempt it |
-| **Never reveal** literal directory names in chat, docs, or code | Names are confidential. Use "the data repo" / "the monorepo" or config vars `DATA_REPO_DIR` / `MONOREPO_DIR` |
-| **Do not modify** monorepo files unless explicitly asked | It’s read-only context for understanding production |
+| **Never commit** private repo files to dagnet | Pre-commit hook blocks this, but don't attempt it |
+| **Never reveal** literal directory names in chat, docs, or code | Use "the data repo" / "the monorepo" or config vars `DATA_REPO_DIR` / `MONOREPO_DIR` |
+| **Do not modify** monorepo files unless explicitly asked | Read-only context for understanding production |
 | **Data repo edits** must follow `graph-ops/playbooks/branch-workflow.md` | Never commit to main; always use feature branches |
 
-### Discovering directory names
+Read `.private-repos.conf` at the repo root to resolve paths. Never hardcode or assume directory names.
 
-Read `.private-repos.conf` at the repo root to resolve paths. Never hardcode or assume the directory names.
-
-### When to consult each repo
-
-- **Monorepo** (`MONOREPO_DIR`) — when you need to understand production behaviour: tracing API endpoints, checking how features work in production, verifying data flows. Read-only inspection.
-- **Data repo** (`DATA_REPO_DIR`) — when working with real conversion graphs, event definitions, node/parameter YAML files. Contains its own `graph-ops/` (may differ from dagnet’s copy). For data repo edits, always follow the branch workflow.
+---
 
 ## Core Principles
 
-### 0. SYSTEMATIC CAUTION UNTIL FULL CONTEXT IS UNDERSTOOD
-**CRITICAL**: Do not make behavioural or semantic changes (especially caching, query semantics, data shape, or persistence) until you have absorbed the *relevant* code context end-to-end.
+### 0. SYSTEMATIC CAUTION
+**CRITICAL**: Do not make behavioural or semantic changes until you have absorbed the relevant code context end-to-end. Before proposing a semantic change: confirm warm start completed, TRIPLE-SEARCH the repo for existing implementations, trace the full path (UI → hooks → services → storage → caches → persistence), identify all call sites, read relevant project context docs, and write down the invariants.
 
-This repo is large and subtle; over-confidence causes regressions. The assistant must default to *cautious, systematic* work.
+**Uncertainty discipline**: If unsure, say so and ask. Avoid "this is correct" / "done" / "fixed" until confirmed. Prefer "I believe…", "Based on the current implementation…".
 
-**Before proposing or implementing a semantic change** (e.g. “X should be part of the cache signature”):
-- **Confirm warm start completed**: if you haven't read the 3 foundational docs in *Agent Warm Start* above, do that first. Then consult the *Task-Type Reading Guide* in *Architecture Patterns* below for task-specific docs.
-- **TRIPLE-SEARCH** the repo for existing implementations and prior decisions (`grep` + `codebase_search`), including docs in `docs/current/`.
-- **Trace the full path** for the behaviour: UI entry points → hooks → services → storage/adapters → caches → persistence formats.
-- **Identify all call sites** and *all* related “signature/key” mechanisms (often there are multiple caches with different purposes).
-- **Read relevant project context docs first**: `docs/current/project-contexts/` and any referenced design docs.
-- **Write down the invariants** you believe the system relies on (e.g. what is expected to invalidate cache vs remain stable).
+**Change discipline**: Make the smallest change. Re-check assumptions after reading each key module. Run relevant tests before claiming success.
 
-**Uncertainty discipline**:
-- If you are not sure, **say so explicitly** and ask clarifying questions *before changing code*.
-- Avoid definitive language like “this is correct”, “done”, “fixed” until confirmed by code inspection and relevant tests.
-- Prefer: “I believe…”, “Based on the current implementation…”, “I haven’t yet confirmed X; next I will…”.
+### 0.5 APPROVAL + RISK DISCIPLINE
+**CRITICAL**: Prefer explicit agreement before behavioural/source-code changes. If agreement is not clear, pause and ask.
 
-**Change discipline**:
-- Make the **smallest** change that accomplishes the intent.
-- Re-check assumptions after reading each key module (e.g. where the query payload is constructed, where signatures are computed, where caches are consumed).
-- After changes, **run only the relevant tests** and do not claim success until they pass.
+**OK to write code when**: explicit approval given, agreed plan exists and you stay in-scope, or high-confidence change with stated risk assessment (low risk only — otherwise get approval).
 
-### 0.5 APPROVAL + RISK DISCIPLINE (NO “CODE FIRST, ASK LATER”)
-**CRITICAL**: Shift judgement away from “code first, ask questions later”.
+**Applies to**: behavioural changes in code files, state-changing terminal commands, UI tweaks that change behaviour. **Does NOT apply to**: routine doc edits (unless they encode design decisions).
 
-This section is about **behavioural/source-code changes** and other changes with meaningful blast radius. It is **not** intended to add bureaucracy to routine documentation edits.
+**If you started coding without agreement**: stop, show what changed, ask how to revert.
 
-**Default posture**:
-- Prefer **explicit agreement** before making behavioural/source-code changes.
-- If agreement is not yet clear, **pause** and ask clarifying questions first.
-
-**When it is OK to write code**:
-- **Explicit approval**: the user says “yes/go ahead/approved”, etc.
-- **Agreed plan**: you wrote a prose implementation plan, the user agreed, and you stay strictly in-scope.
-- **High-confidence, fully-understood change**: you have traced the relevant end-to-end code path, identified call sites and invariants, considered unintended consequences, and stated a brief **risk assessment** (why it is low/medium/high risk). If risk is not low, get explicit approval.
-
-**What this discipline applies to**:
-- **Behavioural changes** in `.ts/.tsx/.js/.py/.ps1/.sh/.yaml/.json` that affect runtime logic, persistence, caches, data shape, git/file ops, scheduling, credentials, or external calls
-- Terminal commands that **modify state** (installs, migrations, checkouts/resets, codegen, etc.)
-- “Small UI copy tweaks” that actually change behaviour (e.g. default actions, automatic execution, safety prompts)
-
-**What it does NOT apply to (by default)**:
-- Routine edits to `.md` docs and notes that do not change behaviour or operational safety.
-  - If a doc change is effectively a design/behaviour decision, treat it like a behavioural change: write a plan and get agreement.
-
-**If you realise you started coding without sufficient agreement**:
-- Stop immediately.
-- Show exactly what changed (`git diff` / precise regions).
-- Ask the user how they want it reverted; do not do broad resets without consent.
-
-### 0.6 DISCUSSION MODE CONFIRMATION (CURSOR WORKFLOW SAFETY)
-**CRITICAL**: When we are *discussing* possible code changes, the assistant must:
-
-- **Positively confirm before edits**: Explicitly ask and receive a clear “yes/go ahead” from the user **before** starting any code edits or running state-changing commands.
-- **If in doubt, check**: If there is any ambiguity about whether we are still discussing vs implementing, **pause and ask the user** rather than proceeding.
+### 0.6 DISCUSSION MODE CONFIRMATION
+When *discussing* possible changes, positively confirm before edits. If ambiguous whether discussing vs implementing, pause and ask.
 
 ### 1. NO LOGIC IN UI/MENU FILES
-**CRITICAL**: Menu files, context menus, and UI components are ACCESS POINTS ONLY.
-
-- ✅ **DO**: Call centralized service methods or hooks
-- ✅ **DO**: Create a hook if same operation appears in multiple menus
-- ❌ **DON'T**: Implement business logic inline
-- ❌ **DON'T**: Duplicate logic across multiple call sites
-- ❌ **DON'T**: Put git operations, file operations, validation, or data transformations in UI files
-- ❌ **DON'T**: Copy/paste handlers between NavigatorItemContextMenu, TabContextMenu, and FileMenu
-
-**Pattern**: menus call a service method directly, or a shared hook that wraps the service call. Example: `usePullFile(fileId)` is used by NavigatorItemContextMenu, TabContextMenu, and FileMenu — one hook, one code path.
+Menus and UI components are ACCESS POINTS ONLY. Call service methods or shared hooks. Never implement business logic inline or duplicate across call sites.
 
 ### 2. NEVER CREATE DUPLICATE CODE PATHS
-**CRITICAL**: Multiple code paths to achieve the same thing cause GRAVE HARM.
+Before creating ANY new functionality: TRIPLE-SEARCH for existing implementations, favour generalising existing code, check all call sites, trace the full path. **If in doubt, ASK before creating a new code path.**
 
-Before creating ANY new functionality:
-
-1. **TRIPLE CHECK** for existing implementations - Use `grep` or `codebase_search` exhaustively
-2. **Favor generalizing existing code** over creating new paths - Ask user if unsure
-3. **If similar functionality exists**, extend it rather than duplicate
-4. **Check all call sites** - If updating a service method, check ALL places it's called
-5. **Trace the full path** - Understand the complete flow from UI → Service → Storage
-
-**Required checks before writing new code**:
-- [ ] TRIPLE-searched codebase for similar functionality
-- [ ] Checked if a service already handles this operation
-- [ ] Identified all existing call sites
-- [ ] Verified no duplicate implementations exist
-- [ ] If plausible existing path exists, generalized it instead of creating new
-
-**If in doubt**: ASK THE USER before creating a new code path. Duplicate paths are the Devil's work.
-
-### 3. CENTRALIZE SHARED CODE
-**Services are the single source of truth** for business logic:
-
-- `repositoryOperationsService.ts` - Git operations (pull, push, commit, clone, status)
-- `fileOperationsService.ts` - File CRUD (create, open, delete, duplicate, rename)
-- `dataOperationsService.ts` - Data sync (Get/Put between files ↔ graph ↔ external sources)
-- `workspaceService.ts` - IndexedDB workspace management
-- `gitService.ts` - Direct GitHub API calls
-- `indexRebuildService.ts` - Index file management
-
-**If logic is used in multiple places**, it MUST be in a service, NOT duplicated.
+### 3. CENTRALISE SHARED CODE
+Services are the single source of truth: `repositoryOperationsService.ts` (git), `fileOperationsService.ts` (file CRUD), `dataOperationsService.ts` (data sync), `workspaceService.ts` (IDB workspace), `gitService.ts` (GitHub API), `indexRebuildService.ts` (indexes). See `docs/current/codebase/SERVICE_DIRECTORY.md` for full lookup table.
 
 ### 4. ALWAYS UPDATE TESTS
-When modifying functionality:
-
-1. **Update existing tests** - Don't leave tests broken or outdated
-2. **CRITICAL: Do not weaken tests without explicit approval**
-   - Updating tests **as part of an agreed scope/design change** is allowed and expected.
-   - However, any test change that could **soften coverage** or reduce safety requires **explicit approval**.
-   - Examples that require explicit approval: loosening assertions, widening tolerances, removing/weakening scenarios, snapshot updates that remove important signal.
-   - Non-softening updates (e.g. aligning expectations with an explicitly agreed behaviour change, adding assertions, fixing deterministic failures) do not require a separate approval step beyond the approved change scope.
-3. **Prefer editing existing test files over creating new ones**
-   - The intent of the authorisation rule is to prevent silent weakening of test coverage, **not** to force test-file proliferation.
-   - If a change needs new assertions, the assistant should normally add them to the most relevant existing test file/suite.
-   - Only create a brand-new test file when there is no sensible existing home (e.g. no suite exists for that module/behaviour).
-   - **NO NEW TEST FILES** unless there is **manifestly no better place** for the test. Default to extending the most relevant existing suite.
-4. **New code path = test BEFORE reporting done (HARD BLOCK)**
-   - This is the most violated rule in the project. The agent repeatedly writes new code, reports it as done, and the user discovers it crashes on first use. A `NameError` in a new code path is proof the path was never executed — not once, not even in a test.
-   - **The rule**: if you add a new branch, conditional, function, or code path, you MUST write and run a test that exercises that path **before** reporting the work as complete. The code is **not finished** without this test. This is not optional. This is not "I should write a test later." The test is part of the deliverable.
-   - **Red flag — expensive-only coverage**: if the only way to exercise your new code is an expensive integration run (MCMC sampling, full harness, 3+ minute cycle), that is a red flag that a fast synthetic test is missing. Write the fast test. The expensive run validates end-to-end behaviour; the fast test catches `NameError`, `KeyError`, `UnboundLocalError`, wrong variable names, and off-by-one scoping — the bugs that actually happen.
-   - **Bayes compiler specifically**: new branches in `build_model`, `summarise_posteriors`, `bind_evidence`, `bind_snapshot_evidence`, or `run_inference` that handle slices, contexts, phases, or new features MUST have a synthetic builder in `bayes/tests/synthetic.py` and a test that calls through the pipeline with that builder. The existing builders cover bare/uncontexted evidence only. If your code path requires contexted/sliced evidence and no builder exists, **creating the builder is part of the work**.
-5. **Run RELEVANT tests only** - Don't run full suite unless explicitly asked
-6. **Write INTEGRATION tests, not unit tests** - See Testing Standards below. Unit tests with mocks don't catch real bugs.
-7. **Test design before test code** - Before writing any test code, produce a prose test design covering invariants, scenarios, and mock decisions. See Test Design Discipline below. Jumping straight to `describe()`/`it()` blocks without this step is a violation.
-
-Test files are in:
-- `graph-editor/src/services/__tests__/` - Service integration tests
-- `graph-editor/tests/` - Higher-level integration tests
-- `bayes/tests/` - Bayes compiler pipeline tests (synthetic builders in `synthetic.py`)
+- Update existing tests, never weaken without explicit approval.
+- Prefer editing existing test files over creating new ones.
+- **New code path = test BEFORE reporting done (HARD BLOCK)**. If you add a new branch/function/path, write and run a test first. The code is not finished without this. For Bayes compiler: new branches MUST have a synthetic builder in `bayes/tests/synthetic.py`.
+- Run RELEVANT tests only. Write INTEGRATION tests. Produce prose test design before test code.
+- Full testing standards: `docs/current/codebase/TESTING_STANDARDS.md`
 
 ### 5. DATA SOURCES OF TRUTH
+**IndexedDB** is source of truth for file content, dirty state, git SHAs, workspace state. **FileRegistry** is an in-memory cache only. **Critical**: Always use `db.getDirtyFiles()` for git operations, NOT `fileRegistry.getDirtyFiles()`.
 
-**IndexedDB is the source of truth** for:
-- File content and dirty state
-- Git SHAs and metadata
-- Workspace state
+### 6. SESSION LOGGING
+All external/data operations must have session logging via `sessionLogService`. See `docs/current/codebase/SESSION_LOG_ARCHITECTURE.md` for full details.
 
-**FileRegistry is an in-memory cache**:
-- Used for performance (open tabs)
-- NOT the source of truth for dirty files or git operations
-- Must sync with IndexedDB
-
-**Critical**: Always use `db.getDirtyFiles()` for git operations, NOT `fileRegistry.getDirtyFiles()`.
-
-### 6. SESSION LOGGING FOR EXTERNAL/DATA OPERATIONS
-**CRITICAL**: All operations interacting with external systems or data must have session logging.
-
-Operations requiring session logging:
-- **Git operations**: clone, pull, push, commit, rollback, fetch history
-- **File operations**: create, delete, rename, duplicate, rollback
-- **Data operations**: get from source, put to file, clear data, sync
-- **Workspace operations**: clone, load, rollback, sync
-
-Use `sessionLogService` from `services/sessionLogService.ts`:
-- **Simple**: `sessionLogService.info('git', 'GIT_PULL', message, detail?, metadata?)` — also `.success()`, `.error()`, `.warning()`, `.debug()`, `.trace()`
-- **Hierarchical**: `startOperation()` → `addChild()` → `endOperation()` for multi-step operations
-- **Operation types**: `'session' | 'git' | 'file' | 'workspace' | 'msmdc' | 'data-fetch' | 'data-update' | 'graph' | 'index' | 'merge' | 'integrity'`
-- **Levels**: `trace < debug < info = success < warning < error`. Session logs are for **Business Analysts** — use info for business events, debug for developer diagnostics, trace for raw payloads. See `SESSION_LOG_ARCHITECTURE.md` for full details.
-- **Allocation gates**: Gate expensive trace-level entries with `if (sessionLogService.isLevelEnabled('trace'))` to avoid unconditional `JSON.stringify` costs.
+---
 
 ## Architecture Patterns
 
-### Codebase architecture docs (`docs/current/codebase/`)
+Codebase architecture docs live in `docs/current/codebase/`. Two rules:
+1. Before debugging a system-level problem, check for an existing doc.
+2. After resolving a problem requiring non-obvious understanding, add or update a doc.
 
-Hard-won understanding of how subsystems actually work. Two rules:
-1. **Before debugging a system-level problem**: check for an existing doc. Reading it first saves hours.
-2. **After resolving a problem that required non-obvious understanding**: add or update a doc encoding the mental model.
+**Service layer pattern**: UI calls service (no logic in UI) → service contains all business logic. Services must NOT import UI components; accept callbacks for dialogs.
 
-#### Task-Type Reading Guide
+**Index file requirements**: Index files at root (`nodes-index.yaml`, `parameters-index.yaml`). Data files in subdirectories. IDB uses workspace-prefixed IDs.
 
-Identify your task type below, then read the listed docs **before writing any code**. Docs marked **(full)** must be read completely; **(skim)** means read the overview sections and consult detail sections as needed; **(ref)** means look up specific entries only when you hit a relevant term or mechanism.
-
-**Fixing a state/sync/dirty-tracking bug**:
-- DIAGNOSTIC_PLAYBOOKS.md **(full — find matching symptom)** — structured checklists by symptom type
-- KNOWN_ANTI_PATTERNS.md **(skim)** — check if your bug matches a previously-seen pattern
-- SYNC_SYSTEM_OVERVIEW.md **(full)** — the 4-layer propagation model, all sync flows, known races
-- GRAPH_WRITE_SYNC_ARCHITECTURE.md **(full)** — store↔file sync detail, suppression windows
-- INDEXEDDB_PERSISTENCE_LAYER.md **(skim)** — prefix contract, dual-storage invariant
-- FILE_REGISTRY_LIFECYCLE.md **(skim)** — dirty detection, initialisation phase
-- SYNC_ENGINE_GUARD_STATE_MACHINE.md **(ref)** — look up specific guard refs when you encounter them
-
-**Modifying git operations (pull/push/commit/clone)**:
-- GIT_OPERATIONS_ARCHITECTURE.md **(full)** — service layering, atomic commit, credentials
-- INDEXEDDB_PERSISTENCE_LAYER.md **(skim)** — workspace prefix contract
-- MERGE_CONFLICT_RESOLUTION.md **(full if touching merge)** — 3-way merge, conflict UI
-
-**Modifying graph structure, node IDs, or queries**:
-- GRAPH_MUTATION_UPDATE_MANAGER.md **(full)** — edit propagation, node ID renaming, override flags
-- DSL_PARSING_ARCHITECTURE.md **(skim)** — queryDSL.ts as single source of truth
-- DATA_RETRIEVAL_QUERIES.md **(skim)** — three purposes of query DSL strings
-- FETCH_PLANNING_PRINCIPLES.md **(ref)** — fill missing + refresh stale contract
-
-**Adding or modifying analysis types / charts / canvas analyses**:
-- adding-analysis-types.md **(full)** — checklist
-- CHART_PIPELINE_ARCHITECTURE.md **(full)** — recipes, hydration, compute, display planning
-- CANVAS_ANALYSIS_FEATURE.md **(full if touching canvas)** — container+content, three-mode scenarios
-- ANALYSIS_RETURN_SCHEMA.md **(ref)** — result schema contract
-
-**Modifying scenarios, what-if, or parameter overlays**:
-- SCENARIO_SYSTEM_ARCHITECTURE.md **(full)** — composition, regeneration, provenance
-- WHAT_IF_ANALYSIS.md **(full if touching what-if)** — override types, DSL, effective probability
-
-**Modifying parameters, param packs, or model variables**:
-- PARAMETER_SYSTEM.md **(full)** — data model, extraction, model variable resolution
-- FE_BE_STATS_PARALLELISM.md **(skim)** — analytic vs analytic_be entries, transition plan
-
-**Modifying statistical/Bayesian/forecasting logic**:
-- FE_BE_STATS_PARALLELISM.md **(full)** — why both FE and BE run the topo pass, parity comparison
-- STATISTICAL_DOMAIN_SUMMARY.md **(full)** — statistical architecture, data pipeline
-- PROBABILITY_BLENDING.md **(skim)** — blending cohort-mode latency edge probabilities
-- `docs/current/project-bayes/32-posterior-predictive-scoring-design.md` **(ref if touching LOO/ELPD)** — per-edge model adequacy scoring, analytic null comparison
-- `docs/current/project-bayes/34-latency-dispersion-background.md` **(ref if touching latency dispersion / kappa_lat)** — per-interval BetaBinomial timing overdispersion
-- BAYES_REGRESSION_TOOLING.md **(ref if running regression / modifying devtools)** — multi-layered audit, `--clean`, `--feature`, parallel safety
-
-**Modifying snapshot DB, signatures, or hash infrastructure**:
-- SNAPSHOT_DB_ARCHITECTURE.md **(full)** — data model and objectives
-- SNAPSHOT_FIELD_SEMANTICS.md **(full)** — field meanings by slice_key type
-- HASH_SIGNATURE_INFRASTRUCTURE.md **(full)** — core hash, matching, mappings, chain tracing
-- SNAPSHOT_DB_SIGNATURES.md **(skim)** — flexible signature matching
-- SNAPSHOT_DB_CONTEXT_EPOCHS.md **(ref)** — context epochs
-- snapshot-db-data-paths.md **(ref)** — data flow through snapshots table
-
-**Modifying lag analysis, horizons, or projections**:
-- LAG_ANALYSIS_SUBSYSTEM.md **(full)** — lag fit, horizons, mixture aggregation
-- PROJECTION_MODE.md **(full if touching projection)** — convolution computation
-- DATE_MODEL_COHORT_MATURITY.md **(skim)** — canonical date concepts
-
-**Modifying data fetching, retrieve-all, or slice planning**:
-- SLICE_PLANNING_RETRIEVAL.md **(full)** — retrieve-all planning and execution
-- CONTEXT_SYSTEM.md **(skim)** — context registration, MECE aggregation
-- DATA_DEPTH_SCORING.md **(ref)** — coverage scoring
-- HASH_SIGNATURE_INFRASTRUCTURE.md **(skim — regime selection section)** — when multiple context dimensions produce multiple hashes, the BE must select one per date
-- `docs/current/project-bayes/30-snapshot-regime-selection-contract.md` **(ref if touching snapshot aggregation)** — regime selection contract and `mece_dimensions`
-
-**Modifying automation, scheduling, or staleness**:
-- AUTOMATION_PIPELINE.md **(full)** — daily fetch, retrieve-all automation, run logging
-- JOB_SCHEDULER.md **(skim)** — unified system for recurring work
-- STALENESS_AND_AUTO_UPDATE.md **(skim)** — nudges, auto-update policy
-- `docs/current/project-bayes/archive/28-bayes-run-reconnect-design.md` **(skim if touching Bayes automation)** — 3-phase pipeline (Phase 0 patch apply, Phase 1 fetch+commission, Phase 2 drain), `runBayes` flag, reconnect mechanism. Essential knowledge also in `PYTHON_BACKEND_ARCHITECTURE.md` §Automation.
-
-**Modifying share links, live share, or bundles**:
-- SHARE_AND_LIVE_SHARE.md **(full)** — static/live shares, boot/hydration/sync
-- URL_PARAMS.md **(ref)** — supported URL parameters
-
-**Modifying UI components, panels, context menus, modals, or display states**:
-- UI_COMPONENT_MAP.md **(full)** — visual hierarchy, all 11 context menus, 21 modals, display state decision tree
-- CANVAS_OBJECT_DISPLAY_STATES.md **(full if touching minimise/collapse)** — canvas analysis/post-it minimise, position offsets, canvas view integration
-- SIDEBAR_AND_PANELS_ARCHITECTURE.md **(full if touching sidebar)** — rc-dock, panel persistence, sidebar state
-
-**Modifying ReactFlow canvas, edge rendering, or layout**:
-- REACTFLOW_CONTROLLED_MODE.md **(full)** — controlled mode pitfalls and reliable patterns
-- CANVAS_RENDERING_ARCHITECTURE.md **(skim)** — z-index model, transform pipeline
-- CANVAS_OBJECT_DISPLAY_STATES.md **(skim)** — minimise/restore mechanics if touching canvas objects
-- EDGE_RENDERING_PERF_ROOT_CAUSE.md **(ref)** — beads/chevrons performance
-- BEAD_DISPLAY_MODE.md **(full if touching bead values/formatting)** — BeadDisplayMode enum, data values, path view, inbound-n topo walk, anchor resolution, latency bead gate
-
-**Creating, editing, or validating conversion graphs** (in data repo):
-- `graph-ops/playbooks/` **(full — pick the relevant playbook)** — tested procedures for graph work
-- `graph-ops/reference/data-model.md` **(skim)** — complete data model reference
-- `graph-ops/reference/common-pitfalls.md` **(full)** — known pitfalls
-- HASH_SIGNATURE_INFRASTRUCTURE.md **(skim if renaming events/contexts)** — hash mapping workflow
-
-**Modifying FormEditor, Monaco, RJSF widgets, or UI schemas**:
-- FORM_EDITOR_AND_MONACO.md **(full)** — dynamic form system, custom widgets, UI schema patterns, Monaco integration points
-
-**Modifying schemas, types, or adding new fields**:
-- SCHEMA_AND_TYPE_PARITY.md **(full)** — all schema locations, parity pairs, drift tests, new-field checklist
-- FORM_EDITOR_AND_MONACO.md **(skim — UI schema section)** — UI schema must stay in sync with data schema
-- GRAPH_MUTATION_UPDATE_MANAGER.md **(skim)** — override patterns, node reference fields
-- PARAMETER_SYSTEM.md **(skim if touching param schemas)** — param schema role
-
-**Modifying devtools, monitors, regression scripts, or diagnostic infrastructure**:
-- DEVTOOL_ENGINEERING_PRINCIPLES.md **(full)** — data vs display separation, no silent deletion, output visibility, audit checklist
-- BAYES_REGRESSION_TOOLING.md **(full)** — regression pipeline, stall detection, truth file timeouts, winning formula defaults
-- KNOWN_ANTI_PATTERNS.md **(ref — anti-patterns 37-38)** — devtool data deletion incidents
-
-**Modifying Python backend, MSMDC, or compute server**:
-- PYTHON_BACKEND_ARCHITECTURE.md **(full)** — FastAPI endpoints, MSMDC, Bayes, FE-BE communication
-
-**Other subsystem docs** (consult when relevant):
-- `DIAGNOSTIC_PLAYBOOKS.md` — symptom → checklist for common bugs
-- `KNOWN_ANTI_PATTERNS.md` — failure patterns with known fixes
-- `DSL_SYNTAX_REFERENCE.md` — full DSL grammar, all 14 functions, composition rules, examples
-- `ANALYSIS_TYPES_CATALOGUE.md` — what each analysis type computes, inputs, outputs, chart kinds
-- `DATA_SOURCES_REFERENCE.md` — external data sources, credential types, schema file catalogue
-- `SCHEMA_AND_TYPE_PARITY.md` — schema locations, parity pairs, drift tests
-- `UI_COMPONENT_MAP.md` — visual hierarchy, context menus, modals, display state patterns
-- `CANVAS_OBJECT_DISPLAY_STATES.md` — canvas analysis/post-it minimise, container states
-- `SIDEBAR_AND_PANELS_ARCHITECTURE.md` — nested rc-dock, panel persistence
-- `CREDENTIALS_INIT_FLOW.md` — three-tier credentials, initialisation
-- `IMAGE_HANDLING.md` — upload, compression, blob URL serving
-- `APP_ARCHITECTURE.md` — browser-based graph editor overview
-- `COMPLEXITY_ANALYSIS.md` — most complex aspects of DagNet
-- `COMPETITIVE_ANALYSIS.md` — competitive landscape
-- `cohort-maturity-forecast-design.md` — cohort maturity forecast chart
-- `surprise-gauge-design.md` — surprise analysis type
-- `BAYESIAN_ENGINE_RESEARCH.md` — Bayesian tool research
-- `SESSION_LOG_ARCHITECTURE.md` — session log levels, thresholds, viewer, endOperation cleanup
-- `DEV_LOG_STREAMING.md` — three JSONL log streams
-- `GRAPH_OPS_TOOLING.md` — graph validation tools
-- `INTEGRITY_CHECK_ADDITIONS.md` — structural integrity checks
-- `TEST_COVERAGE_SURVEY.md` — test coverage analysis
-- `STATE_MANAGEMENT_REFERENCE.md` — state layers reference
-- `DEVTOOL_ENGINEERING_PRINCIPLES.md` — devtool engineering standards, data safety, audit checklist
-- `AGENT_VERIFICATION_GAP.md` — problem statement: agent launches untested code
-
-### Service Layer Pattern
-```typescript
-// 1. UI calls service (no business logic in UI)
-const handleAction = async () => {
-  await someService.doOperation(params, callbacks);
-};
-
-// 2. Service contains all business logic
-class SomeService {
-  async doOperation(params, callbacks) {
-    // Load data
-    // Validate
-    // Transform
-    // Show dialogs (via callback)
-    // Execute operation
-    // Update state
-    // Notify listeners
-  }
-}
-```
-
-### Callback Pattern for UI Interactions
-Services must NOT import UI components or dialogs directly. Accept callbacks instead (e.g. `showConfirmDialog: (options) => Promise<boolean>`). UI callers pass their own dialog function from `useDialog()` hook.
-
-### Index File Requirements
-- Index files MUST be at root: `nodes-index.yaml`, `parameters-index.yaml` (plural names)
-- Data files MUST be in subdirectories: `nodes/my-node.yaml`, `parameters/my-param.yaml`
-- Index files use workspace-prefixed IDs in IndexedDB: `repo-branch-node-index`
-- Index files must be marked `isDirty: true` when modified
-
-### Service Directory
-
-See `docs/current/codebase/SERVICE_DIRECTORY.md` for the full service → test file lookup table.
+---
 
 ## Debugging Discipline
 
-### No "Not My Problem" Dismissals (APPLIES TO EVERYTHING)
+**Full details**: `docs/current/codebase/DEBUGGING_DISCIPLINE.md`
 
-**CRITICAL**: "This isn't caused by my changes" is **never** an acceptable reason to stop investigating. It applies to test failures, unexpected behaviour, broken UI, stale state, console errors — anything you encounter while working.
+**Key rules kept here because they are the most violated**:
 
-You may (and should) note provenance: *"This doesn't appear related to edits made in this thread."* But that observation is the **start** of the investigation, not the end. The user hired you to solve problems, not to assign blame.
+- **No "Not My Problem" dismissals**: every issue you encounter is yours to investigate, regardless of who caused it. Investigate, report, propose action.
+- **Root-Cause Gate**: Can you name the root cause in one sentence with a "because"? If not, you are not ready to write code.
+- **Recurring defect = multiple code paths**: grep ALL call sites, verify fix applies to ALL, consolidate into ONE canonical function.
+- **Broken infrastructure is a blocking issue**: devtools, log streams, test harnesses — fix properly or escalate. No silent workarounds.
 
-**Required response to any issue you encounter:**
-1. **Investigate** — trace the cause with the same rigour you'd apply to your own bugs.
-2. **Report** — explain what's wrong and why, with file paths and line numbers.
-3. **Propose action** — fix it (if in scope and low risk), or flag it with enough context for the user to act.
+---
 
-"Not invented here" is never an acceptable pattern. The user sees a broken system, not a clean division of responsibility between you and prior commits. If you found it, you own the investigation.
+## Testing and Build
 
-### Root-Cause Gate (MANDATORY before writing any fix)
+**Full standards**: `docs/current/codebase/TESTING_STANDARDS.md`
 
-**Can you name the root cause in one sentence?** If not, you are not ready to write code. Continue investigating.
+- **Run relevant tests only**: `cd graph-editor && npm test -- --run path/to/file.test.ts` or `pytest tests/specific_test.py` (venv first)
+- **NEVER use `head`, `tail`, or any truncation on test/build output.** This is NON-NEGOTIABLE.
+- **Do NOT run `npm run build`** unless explicitly instructed.
 
-A root cause is not "X is wrong" — it's "X is wrong **because** Y writes to Z without updating W". If your explanation doesn't include the **because**, you're describing a symptom and your fix will be a patch. Consult `docs/current/codebase/DIAGNOSTIC_PLAYBOOKS.md` for structured checklists by symptom type. Consult `docs/current/codebase/KNOWN_ANTI_PATTERNS.md` for failure patterns that have happened before.
-
-### Recurring Defect = Multiple Code Paths
-
-When the user reports the same defect a second time after you "fixed" it, the most likely cause is **multiple code paths performing the same operation**. Before debugging further:
-
-1. **Grep for ALL call sites** that perform the same mutation/operation
-2. **List every code path** that can trigger it (context menus, toolbars, properties panels, inline pickers, keyboard shortcuts, drag-and-drop handlers)
-3. **Verify your fix applies to ALL paths**, not just the one you found first
-4. **Consolidate into ONE canonical function** that all paths call — do not fix each path independently
-
-Example: changing an analysis type was done in 4 places (inline picker, chart toolbar, properties panel, context menu). Fixing one left three broken. The fix was `setContentItemAnalysisType()` — one function, all four call sites use it.
-
-**If the user raises the same defect twice, assume multiple code paths until proven otherwise.**
-
-### Post-Debugging: Update Codebase Docs (MANDATORY after non-trivial fixes)
-
-After completing a fix that required more than one attempt, or that required understanding non-obvious system behaviour, **proactively propose a codebase doc update** before moving on. Do not wait for the user to ask.
-
-**What to capture** (generalisable insights only, not the specific bug):
-- **How the subsystem actually works** — if you discovered a data flow, guard mechanism, or invariant that isn't documented, add it to the relevant codebase doc
-- **Diagnostic procedures** — if you developed a sequence of checks that would help the next agent diagnose similar issues faster, add it as a "Diagnostic checklist" section
-- **Heuristics** — if "always check X before assuming Y" would have saved attempts, write it down
-
-**What NOT to capture**: the specific bug itself (that belongs in the commit message), or anything derivable from reading the current code.
-
-**How to propose**: tell the user *"This fix revealed that [subsystem] works differently than documented — I'd like to update [doc name] with [brief description]. OK?"* Then make the edit if approved. Small, targeted updates to existing docs are preferred over new docs.
-
-### Devtool and Logging Integrity (BLOCKING — no workarounds)
-
-**CRITICAL**: Devtools and logging machinery are the agent's eyes. A broken devtool doesn't just affect one task — it degrades every future session that depends on it. A broken logging pipeline means the agent is blind to everything and *won't know it's blind* because the tool runs without error, producing incomplete or wrong output.
-
-**What counts as infrastructure** (not an exhaustive list):
-
-- **Log streaming pipeline**: `debug/tmp.browser-console.jsonl`, `debug/tmp.session-log.jsonl`, `debug/tmp.python-server.jsonl`, the mirroring code that writes to them, mark injection into all three streams
-- **Log extraction and diagnostics**: `scripts/extract-mark-logs.sh`, graph snapshot capture (`debug/graph-snapshots/`)
-- **Session log service**: `sessionLogService.ts` — levels, thresholds, `startOperation`/`endOperation` lifecycle, viewer rendering
-- **Test harnesses**: `bayes/test_harness.py`, `bayes/param_recovery.py`, `bayes/synth_gen.py`, synthetic builders in `bayes/tests/synthetic.py`
-- **Regression and monitoring**: `bayes/run_regression.py`, `scripts/bayes-monitor.sh`, `scripts/resilience-strategies.py`, `scripts/hunt-phase2-pathology.sh`
-- **Sampling infrastructure**: `ChainStallDetector` in `bayes/compiler/inference.py` (EMA-based stall detection, retry logic in `bayes/worker.py`)
-- **Graph-ops scripts**: `graph-ops/scripts/*.sh` (parity, validation, param-pack, analyse)
-- **Any script the agent is told to run** as part of a diagnostic or verification step
-
-**Rule 1 — Broken infrastructure is a blocking issue.** If you discover that a devtool or logging component is defective — not just inconvenient, but producing wrong results, missing data, or failing — treat it as a **blocking issue**. Do not work around it. Do not patch over the symptom. Fix it properly or escalate to the user immediately. A workaround that makes a broken tool *look* like it works is worse than a hard failure, because it silently corrupts every downstream diagnosis.
-
-**Rule 2 — Correctness, not minimality.** For feature code, the rule is "smallest change that accomplishes the intent." For infrastructure, the standard is **full correctness**. A minimal patch to a broken diagnostic tool means the tool looks like it works but still lies to you. If the proper fix is larger than a patch, do the proper fix. If you can only patch, say so explicitly: *"This is a patch, not a proper fix. The tool is still broken because [reason]. A proper fix requires [scope]."*
-
-**Rule 3 — No silent workarounds.** If you find yourself working around an infrastructure limitation — manually parsing output that a script should handle, skipping a verification step because a tool crashes, reading raw JSONL because the extraction script returns wrong results — you must **immediately flag it**: *"I'm working around a defect in [tool]. This should be fixed properly — here's what's wrong: [root cause]. Shall I fix the tool now?"* The workaround must be visible, not silent. Silent workarounds accumulate across sessions and nobody notices until the tool is deeply broken.
-
-**Rule 4 — Logging fidelity is non-negotiable.** Log streams and session logs are the primary evidence source for debugging sync, state, and data-flow issues. If a log stream is missing entries, writing to the wrong file, dropping marks, producing malformed JSONL, or silently swallowing errors, that is not a minor issue — it is equivalent to a test harness that passes broken code. Fix it with the same urgency you would fix a test that produces false passes.
-
-**Rule 5 — Devtools must NEVER silently delete diagnostic data.** Log files, trace outputs, recovery results, and harness logs are primary evidence. No devtool action — keybinding, "clear" function, "cleanup" script, monitor helper — may delete these files. Display-layer operations (hiding entries from a dashboard, clearing a terminal, resetting a scroll position) must operate on display state only, never on the underlying data files. If a genuinely destructive action is needed (freeing disk space), it must be a separate, explicitly-named command with a confirmation prompt. See anti-patterns 37 and 38 for the incident that prompted this rule: a `^b e` keybinding labelled "clear finished" that `rm -f`'d all harness log files, destroying an entire regression run's results.
-
-**Why this section exists**: agents repeatedly encounter broken devtools and treat them as background friction — applying a minimal patch or simply working around the breakage. This accumulates: each session leaves the tool slightly more broken, each workaround is invisible to the next session, and eventually the tool is so degraded that it actively misleads. The pattern is: patch, patch, patch, catastrophic misdiagnosis. The fix is: treat infrastructure breakage as urgent, not incidental.
-
-## Testing Standards
-
-### Philosophy: fewer tests, real boundaries, zero tolerance for mock-driven false confidence
-
-A test exists to prove **the system works**, not to prove **the code runs**. “The code runs” means a function returns something when called. “The system works” means when a user performs an action, the correct outcome occurs end-to-end. The first can be proven with mocks. The second cannot.
-
-**The strategic default is zero mocks.** Load real files, hit real servers, use real data. A test that requires the Python server running on localhost is not a problem — it is a prerequisite, just like a test that requires `fake-indexeddb`. Mark it and move on.
-
-**Fewer, better tests.** Three integration tests that exercise real code paths across real boundaries are worth more than thirty unit tests with mocked everything. Do not write tests to increase count. Write tests to catch bugs that would otherwise reach the user.
-
-**A mock that hides a bug is worse than no test at all.** It creates false confidence, wastes investigation time when the bug surfaces in production, and teaches the agent that passing tests mean working code. They do not.
-
-### The Mock Budget
-
-Every test gets a **mock budget of zero by default**. Each mock introduced must pass this gate:
-
-1. **Name the assumption**: what behaviour does this mock encode? (e.g. “the inventory endpoint returns a matched family for this core_hash”)
-2. **Name the risk**: what bug could this assumption hide? (e.g. “if the real endpoint doesn’t match because the core_hash format is wrong, the test still passes”)
-3. **Justify why the real thing is impractical**: not “it’s easier to mock” — a concrete reason like “requires Amplitude API credentials and rate-limited external calls”
-
-If you cannot complete all three steps, do not add the mock.
-
-**What to mock** (the only legitimate cases):
-- External third-party APIs (Amplitude, GitHub) where hitting the real service is impractical or rate-limited
-- Browser APIs not available in Node (e.g. `window.location`, `navigator`) — use the narrowest possible shim
-
-**What to NEVER mock**:
-- The Python server on localhost — it’s part of our system, start it as a test prerequisite
-- `computeQuerySignature`, `computeShortCoreHash`, or any hash/signature function — these are where format mismatches hide
-- `getBatchInventoryV2`, `querySnapshotRetrievals`, `getBatchRetrievals` or any snapshot service function — mock the `fetch` boundary if you must, never the service
-- FileRegistry, IDB, GraphStore — `fake-indexeddb` exists, use it
-- Any function in the code path you are testing — that is testing the mock, not the system
-
-### Parity Tests (MANDATORY when replacing a code path)
-
-When a new implementation replaces an existing working one (e.g. batched version of a per-item function), the agent MUST write a **parity test** before claiming done:
-
-1. **Call both paths** with identical inputs
-2. **Assert identical outputs** — field by field, not just `success: true`
-3. **Use real data** — load actual graph/event/parameter files from the data repo
-4. **Hit the real server** — if the code path makes HTTP calls, those calls must reach the real Python server
-5. **Mock nothing** — if the parity test passes with mocks but fails in the real UI, the test is wrong
-
-The parity test is the **only** gate for switching to the new path. If it fails, the new path is not ready. If it passes with mocks, it has not been tested.
-
-### Test Design Gate (MANDATORY before writing test code)
-
-Before writing any `describe()` or `it()` blocks, the agent must produce a brief **prose test design** covering:
-
-- **What real bug would this test catch?** — name a specific failure mode, not “it should work”
-- **What is real vs mocked and why?** — apply the mock budget (above). Default: everything real.
-- **What would a false pass look like?** — describe a scenario where the test passes but the system is broken. If you can describe one, your test design has a gap.
-
-### Blind Tests
-
-Write tests from the **contract**, not from the implementation. Tests shaped by reading the code mirror its assumptions, including its bugs.
-
-- **New functionality**: design tests from the spec/plan *before* reading the implementation.
-- **Bug fixes**: write a failing test reproducing the reported behaviour *before* reading the fix.
-- **Code path replacement**: write the parity test from the *function signature and return type*, not from the implementation body.
-
-### Assertion Standards
-
-**Assert on observable outcomes at real boundaries**, not on intermediate state or mock return values.
-
-**Banned**:
-- `expect(result).toBeDefined()`, `expect(result).toBeTruthy()`, `expect(fn).not.toThrow()` as primary assertions
-- Asserting that a mock was called with specific arguments — this tests the mock wiring, not the system
-- Asserting on values that the test itself configured (circular)
-
-**Required**:
-- Assert on **specific values** that would change if the behaviour broke
-- For multi-subsystem operations, assert state in **each affected subsystem**
-- For parity tests, assert **field-by-field equality** between old and new paths
-
-### Test Names as Specification
-
-- ❌ `it(‘should work’)`, `it(‘handles the edge case’)`, `it(‘returns correct result’)`
-- ❌ `it(‘calls the service’)`, `it(‘updates state’)`
-- ✅ `it(‘should propagate dirty flag from IDB to FileRegistry when file content changes’)`
-- ✅ `it(‘batched path produces identical coverage to per-edge path on real graph data’)`
-- ✅ `it(‘should use computeShortCoreHash not parseSignature.coreHash for DB lookups’)`
-
-### Test Infrastructure Must Track Feature Domains (STRATEGIC — NOT OPTIONAL)
-
-**This is the most important testing rule in the project and the most expensive one to violate.**
-
-Individual test rules (mock budgets, parity tests, blind tests) govern how to write *a* test. This rule governs whether the **test infrastructure exists at all** for the domain you are working in.
-
-**The failure pattern**: the agent builds an entire new competence domain (contexted evidence, Phase 2 modelling, per-slice hierarchical priors) across multiple sessions. Every code change is validated by running expensive end-to-end cycles (3-minute MCMC, 30-minute regression suites). No fast synthetic test infrastructure is built. Eventually a trivial bug (`NameError`, `UnboundLocalError`, wrong variable scope) crashes every single production run. The user discovers it after wasting 30 minutes of compute. The agent then offers to write "a test" — but the problem was never one missing test. The problem was an **entire untested domain**.
-
-**The rule**: when you are building or extending a capability that introduces a new *category* of inputs, data shapes, or code paths, you must build the test infrastructure for that category alongside the production code. This means:
-
-1. **Synthetic data builders** that produce the new data shape (e.g. sliced evidence with `has_slices=True`, MECE context groups, Phase 2 frozen priors). These go in the relevant test fixtures module (e.g. `bayes/tests/synthetic.py`).
-2. **Pipeline smoke tests** that call through the full code path with synthetic data and assert it completes without crashing. These catch `NameError`, `KeyError`, wrong variable names — the bugs that actually happen when code is written but never executed.
-3. **Recovery/correctness tests** that assert the output is numerically reasonable (posterior means near truth, convergence diagnostics within bounds).
-
-Layer 1 (builders) is a prerequisite for layers 2 and 3. Layer 2 is cheap and catches the most common bugs. Layer 3 is more expensive but proves the system works.
-
-**When this rule applies**: any time you notice that the existing test builders don't cover the data shape your new code handles. If every builder in `synthetic.py` produces bare evidence and your code handles sliced evidence, you cannot test your code with the existing infrastructure. Building the builder is part of the work — not a follow-up, not "we should add tests later", not the user's job to commission.
-
-**Current known gaps** (update this list as gaps are filled):
-- Contexted/sliced evidence builders (`has_slices=True`, `slice_groups` populated) — MISSING
-- Phase 2 frozen-prior pipeline (Phase 1 → moment-match → Phase 2) — MISSING
-- MECE aggregation through `bind_evidence` / `bind_snapshot_evidence` — MISSING
-- `summarise_posteriors` with per-slice extraction — MISSING
-- Per-slice latency inheritance (sigma, onset from edge-level) — MISSING
-
-### When to Skip Tests
-
-Not every change needs a test. Pure refactors with no behaviour change, documentation edits, and config tweaks do not need tests. But any change that **introduces a new code path, replaces an existing code path, or changes how data flows between subsystems** needs a test — and that test must exercise the real boundary, not a mock of it.
-
-## File Structure Requirements
-
-- Services: `graph-editor/src/services/`
-- Tests: `graph-editor/src/services/__tests__/` and `graph-editor/tests/`
-- UI Components: `graph-editor/src/components/`
-- Contexts: `graph-editor/src/contexts/`
-- Types: `graph-editor/src/types/`
-
-## Documentation Structure
-
-### User-Facing Documentation
-**Location:** `graph-editor/public/docs/`
-
-User guides, references, and changelogs accessible in-app and on GitHub:
-- `user-guide.md` - Getting started and core concepts
-- `query-expressions.md` - Query DSL reference
-- `api-reference.md` - Programmatic access
-- `keyboard-shortcuts.md` - Productivity tips
-- `CHANGELOG.md` - Release history
-
-### Technical Documentation
-**Location:** `docs/`
-
-Developer and architecture documentation:
-
-1. **Current Docs** (`docs/current/`)
-   - Active technical specs
-   - Architecture decisions
-   - **Project Contexts** (`docs/current/project-contexts/`) - ALWAYS check here for current work plans and system status
-   - **Handover Notes** (`docs/current/handover/`) - Session continuity notes from previous agent sessions. If one exists for your current work area, **read it first** — it contains decisions, rationale, and gotchas that are expensive to re-derive.
-
-2. **Component Docs** (`graph-editor/docs/`)
-   - Component-specific technical documentation
-   - Setup guides (e.g., `AMPLITUDE_CREDENTIALS_SETUP.md`)
-   - Testing guides (`INTEGRATION_TESTING_GUIDE.md`, `TESTING_STRATEGY.md`)
-
-3. **Archive** (`docs/archive/`)
-   - Historical documentation
-   - Completed work - useful for understanding design decisions
-
-### When Making System Changes
-
-**ALWAYS check relevant docs BEFORE making changes:**
-1. Check `docs/current/handover/` for any handover notes relevant to the current work area
-2. Check `docs/current/project-contexts/` for current project status
-3. Search `docs/current/` for architecture decisions
-4. Search `docs/archive/` for historical context on design decisions
-5. Update `graph-editor/public/docs/` if user-facing behavior changes
+---
 
 ## Change Checklist
 
-Before submitting changes:
-- [ ] Traced the full code path and identified all call sites
-- [ ] No business logic in UI/menu files — all in services
-- [ ] No duplicate code paths — centralised in one canonical function
-- [ ] IndexedDB is source of truth for git operations (`db.getDirtyFiles()`)
-- [ ] Workspace prefixes handled correctly (IDB: `repo-branch-fileId`, FileRegistry: `fileId`)
-- [ ] Index files at root with plural names (`nodes-index.yaml`, `parameters-index.yaml`)
-- [ ] Tests updated, new tests for bug fixes, relevant tests passing
-- [ ] All UI entry points use the same code path
+**Full checklist**: `docs/current/codebase/CHANGE_CHECKLIST.md`
 
-### Pre-Completion Verification (MANDATORY before saying "done" or "fixed")
+Before reporting done: run relevant tests (write new ones if needed), check all call sites, verify state in all affected layers, test the "already clean" case, state what you verified and how.
 
-Do NOT claim a fix is complete until you have verified it. "I changed the code" is not "it works". The most expensive failure mode is premature "done" — it wastes a full round-trip when the user discovers it's still broken.
+---
 
-**Before reporting completion**:
-1. **Run the relevant test(s)** — not the full suite, but the specific test file(s) covering the changed behaviour. **If no test exists for the new code path, write one first — this is a hard block, not a suggestion.** See rule 4 in "ALWAYS UPDATE TESTS". A `NameError` or `UnboundLocalError` in untested code that could have been caught by a 10-second pytest is an unacceptable failure mode.
-2. **Check all call sites** — grep for the function/field you changed and verify every caller still works with the new behaviour.
-3. **Verify state in all affected layers** — if you changed something that touches persistence, verify in IDB, FileRegistry, AND GraphStore (not just the one you modified). See SYNC_SYSTEM_OVERVIEW.md for the 4-layer model.
-4. **Test the "already clean" case** — if your fix clears/deletes state, verify it also works when the state is already absent. Idempotency failures are the #1 cause of "worked once, fails on second run" bugs.
-5. **State what you verified and how** — tell the user: "Verified by running [test]. Checked [N] call sites. Confirmed state cleared in [layers]." If you can't state what you verified, you didn't verify it.
+## Documentation Structure
 
-### Adding New Fields or Features - FULL IMPACT ASSESSMENT
+**Full details**: `docs/current/codebase/DOCUMENTATION_STRUCTURE.md`
 
-**CRITICAL**: When adding a new field (e.g., `n_query`), you MUST check ALL places where similar fields are handled.
+- User-facing: `graph-editor/public/docs/`
+- Technical: `docs/current/` (active), `docs/archive/` (historical)
+- Project contexts: `docs/current/project-contexts/`
+- Handover notes: `docs/current/handover/` — read if one exists for your work area
+- Always check relevant docs BEFORE making changes
 
-**Required checklist for new fields:**
-- [ ] **TypeScript types** (`src/types/index.ts`) - Add to relevant interfaces
-- [ ] **Python Pydantic models** (`lib/graph_types.py`) - Add to relevant models
-- [ ] **YAML schemas** (`public/param-schemas/`) - Add field definitions
-- [ ] **Service types** (`src/services/*Service.ts`) - Add to any service-specific interfaces
-- [ ] **UI components** - PropertiesPanel, editors that display/edit the field
-- [ ] **UpdateManager** - If field contains node references, update on node ID rename
-- [ ] **Services** - Storage, retrieval, sync logic (dataOperationsService, etc.)
-- [ ] **Override patterns** - If field has `_overridden` companion, mirror the pattern
-- [ ] **Bayes posterior fields** - If adding to `PosteriorSummary` or `LatencyPosteriorSummary`, also add to `_build_unified_slices()` in `worker.py` (both window and cohort dicts) AND to `bayesPatchService.ts` projection. See anti-pattern 14.
-
-**Finding companion fields**: grep for a similar field (e.g. `query_overridden`, `.query\b`) across `.ts`, `.tsx`, `.py`, `.yaml` to find all places where the pattern is used, then replicate for the new field.
-
-**Patterns to mirror**: `field` + `field_overridden` pair, UpdateManager node ID replacement, PropertiesPanel blur-to-save, service layer push/fallback. Add tests for storage/retrieval, override behaviour, and UpdateManager replacement if the field contains node references.
-
-## Key Lessons from Recent Bugs
-
-- **Index files in wrong locations** → single source of truth for index file paths (root, plural names)
-- **Commit not showing dirty index files** → `db.getDirtyFiles()` (IDB), never `fileRegistry.getDirtyFiles()`
-- **Logic duplicated across menus** → centralised in `repositoryOperationsService`, shared hooks for all call sites
-
-## Testing and Build Guidelines
-
-### Running Tests
-**CRITICAL: Only run RELEVANT tests, not the full suite.**
-
-**Cursor sandbox note**: The default Cursor sandbox hides `node_modules`. Use `required_permissions: ["all"]` on Shell tool calls that run npm/vitest.
-
-**Standard invocation**: `cd graph-editor && npm test -- --run src/services/__tests__/yourFile.test.ts`
-
-- **ALWAYS use file paths, NOT patterns** — patterns are extremely slow in Vitest. Never use `--testNamePattern`.
-- **Default**: run only tests related to files you changed. **Full suite**: only when user explicitly requests it.
-- **Frontend**: `npm test -- --run path/to/file.test.ts`
-- **Python**: `pytest tests/specific_test.py` (activate venv first)
-- Run BOTH only if changes affect both frontend and Python
-
-### Investigating Test Failures
-This is a specific application of the **"No 'Not My Problem' Dismissals"** rule above. Every test failure is your responsibility to investigate, regardless of whether your changes caused it. You **own** the investigation.
-
-Your job for **every** failure:
-
-1. **Read the failing test** — understand what invariant it protects.
-2. **Check recent changes** — use `git log` and `git diff` to identify what changed in the file under test or its dependencies.
-3. **Trace the root cause** — determine whether the failure is from your change (indirect coupling), a recent commit on the branch, or a genuinely flaky test.
-4. **Report findings** — tell the user exactly what broke and why, with file paths and line numbers.
-5. **Propose a fix or flag it** — either fix it (if within scope and low risk) or explicitly flag it as needing attention with enough context for the user to act.
-
-Never say "unrelated, pre-existing" without evidence. If you haven't checked the git history and the test's dependencies, you don't know whether it's pre-existing. Even when a failure genuinely predates your work, the user still needs the investigation — they may not have seen it before.
-
-### Running Playwright E2E Tests (DagNet)
-**CRITICAL: Playwright tests MUST be brisk. If a single Playwright spec does not complete in ~10–15s, treat that as a PROBLEM WITH THE TEST (or environment), not a cue to increase timeouts.**
-
-**Default posture**:
-- **Run a single spec** (or a small set) by file path, not the full suite, unless explicitly asked.
-- **Hard cap the run** with `--global-timeout` so it cannot silently hang.
-- **Never “fix” flakiness by inflating timeouts**; instead reduce work (fewer page reloads, fewer waits), improve determinism, or add targeted E2E hooks (DEV + `?e2e=1` only).
-
-**Standard invocation (single spec, hard cap, single worker, no retries)**:
-- Ensure Node is available via `graph-editor/.nvmrc` (see Node section above).
-- Then run:
-  - `cd graph-editor`
-  - `CI= PLAYWRIGHT_BROWSERS_PATH="$HOME/.cache/ms-playwright" npm run -s e2e -- e2e/yourSpec.spec.ts --workers=1 --retries=0 --reporter=line --timeout=10000 --global-timeout=15000`
-
-**Key rules**:
-- **Always run in the foreground** (do not background long runs).
-- **Reuse server**: when running locally, ensure `CI` is unset (`CI=`) so Playwright can reuse the existing dev server (`reuseExistingServer: true`).
-- **Browser path sanity**: if Playwright complains a browser executable is missing but you know it is installed, check for a **bad `PLAYWRIGHT_BROWSERS_PATH`** pointing at a sandbox/tmp directory. Prefer `"$HOME/.cache/ms-playwright"` in this repo’s environment.
-
-**If a spec is slow (>15s)**:
-- First assume the test is doing too much: too many reloads, slow selectors, unnecessary waits, or nondeterministic UI interactions (especially SVG hit-testing).
-- Make the test smaller and more deterministic; if needed, add a **dev-only** E2E hook behind `import.meta.env.DEV` + `?e2e=1` to avoid brittle UI gestures.
-
-### Building
-- **DO NOT** run `npm run build` unless explicitly instructed
-- Build is slow and usually unnecessary during development
-- Only build when user asks to verify production readiness
-
-### Terminal Output
-**ABSOLUTELY NEVER USE `head`, `tail`, OR ANY TRUNCATION ON TEST/BUILD OUTPUT.**
-- This rule is NON-NEGOTIABLE. The user has repeatedly told you this.
-- Always show FULL output so user can see ALL results
-- If output is very long, it will be saved to a file automatically
-- Truncating output hides errors and wastes the user's time
-- **VIOLATION OF THIS RULE IS UNACCEPTABLE**
-
-## Cursor Debugging Workflow (Mirrored Logs + Marks)
-
-For flaky sync issues (Graph ↔ FileRegistry ↔ store), **do not paste console output into chat**.
-Instead, use the dev-only mirroring workflow:
-
-- **Console stream file**: `debug/tmp.browser-console.jsonl`
-- **Session log stream file**: `debug/tmp.session-log.jsonl`
-- **Python server stream file**: `debug/tmp.python-server.jsonl`
-- **Graph snapshots (per mark)**: `debug/graph-snapshots/*.json`
-
-All three streams support **MARK** boundaries:
-- Use the top-right dev UI (Console toggle + mark input), or run `window.dagnetMark('your label')` in DevTools.
-- Marks are written to **all three** streams (console, session log, and Python server).
-- The Python server stream is captured automatically when the dev server runs — no opt-in needed.
-
-### How the agent should analyse logs
-
-**CRITICAL (see also: Instant-Action Triggers at top of file)**: When the user mentions a mark — **any phrasing**: "see mark X", "inspect mark X", "check mark X", "review mark X", "look at mark X", or just a message containing "mark 'X'" — run the extraction script **immediately as your first tool call**. Do not search for files. Do not try to reason without the logs. Do not use Glob/Grep on the debug directory. Just run the script.
-
-**Primary tool** — `scripts/extract-mark-logs.sh`:
-
-```bash
-# Extract the LAST mark matching the label (substring, case-insensitive)
-scripts/extract-mark-logs.sh "bug-20"
-
-# Flags
-scripts/extract-mark-logs.sh "bug-20" --all            # every matching mark, not just the last
-scripts/extract-mark-logs.sh "bug-20" --console-only    # skip session + python streams
-scripts/extract-mark-logs.sh "bug-20" --session-only    # skip console + python streams
-scripts/extract-mark-logs.sh "bug-20" --python-only     # skip console + session streams
-```
-
-The script:
-1. Searches all three streams: `debug/tmp.browser-console.jsonl`, `debug/tmp.session-log.jsonl`, and `debug/tmp.python-server.jsonl`.
-2. Extracts the window from the matched mark to the next mark (or EOF).
-3. Lists matching graph snapshots from `debug/graph-snapshots/`.
-
-**Trimming** — the log files grow unboundedly; trim them proactively when they exceed ~20K lines, or when the user asks:
-
-```bash
-scripts/extract-mark-logs.sh --trim          # keep last 20K lines (default)
-scripts/extract-mark-logs.sh --trim 10000    # keep last 10K lines
-```
-
-Trim snaps the cut point to the nearest mark boundary so partial windows aren't left behind.
-
-**Manual fallback**: if the script is unavailable, `grep -n` for mark boundaries (`"kind":"mark"` in console/python streams, `"operation":"DEV_MARK"` in session stream), then `sed -n 'N,$p'` to extract from that line onwards.
-
-Reference: `docs/current/codebase/DEV_LOG_STREAMING.md`
+---
 
 ## Code Surface Area
 
-### MINIMIZE CODE - Especially Pre-Release
-- **NO backward compatibility shims** - Let it break, then fix properly
-- **NO deprecated aliases** - Remove old names, update all references
-- **NO "just in case" code** - If it's not used, delete it
-- **NO legacy wrappers** - Migrate callers to new APIs directly
-
-### When Renaming/Refactoring
-Make the change cleanly, find all broken references, fix them directly, delete old code entirely. Never leave legacy aliases (`export type OldName = NewName`) — just update all references.
+- **NO backward compatibility shims**, deprecated aliases, "just in case" code, or legacy wrappers.
+- When renaming/refactoring: make the change cleanly, update all references, delete old code entirely.
 
 ## Documentation Standards
 
-### Implementation Plans
-**CRITICAL**: Implementation plans are PROSE ONLY — no code snippets, examples, pseudo-code, test assertions, mock setups, or function signatures whatsoever.
-
-Plans should contain: file paths and what changes are needed (in words), test file paths and scenarios to cover (in words), cross-references to design docs, and dependencies between phases.
+**Implementation plans are PROSE ONLY** — no code snippets, pseudo-code, test assertions, or function signatures.
 
 ## Remember
 
 > "Menus are access points. Services are logic. Tests are proof."
-

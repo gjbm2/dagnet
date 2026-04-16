@@ -535,8 +535,11 @@ class TestTwoDimensionModelWiring:
             "Old single tau_slice should not exist with multi-dimension"
         )
 
-    def test_two_dimension_model_has_1_over_n_kappa_correction(self):
-        """With 2 dimensions, aggregate kappa should be scaled by 1/2."""
+    def test_two_dimension_exhaustive_suppresses_aggregate(self):
+        """With 2 exhaustive MECE dimensions (after cross-dim aggregate
+        guard), aggregate is suppressed — no kappa_agg_corrected needed.
+        The 1/N correction only applies to the aggregate, and with correct
+        aggregate sizing both dimensions are exhaustive."""
         graph, params, snap_rows, commissioned, mece_dims, _ = (
             build_two_dimension_solo_edge(seed=64)
         )
@@ -547,9 +550,15 @@ class TestTwoDimensionModelWiring:
         )
 
         names = set(model.named_vars.keys())
-        assert "kappa_agg_corrected_edge_a_b" in names, (
-            f"Missing 1/N kappa correction. Variables with 'kappa': "
-            f"{sorted(n for n in names if 'kappa' in n)}"
+        # Aggregate suppressed → no kappa_agg_corrected
+        assert "kappa_agg_corrected_edge_a_b" not in names, (
+            f"Aggregate should be suppressed for exhaustive dims. "
+            f"Variables with 'kappa': {sorted(n for n in names if 'kappa' in n)}"
+        )
+        # Per-slice kappa should still exist (not replaced by 1/N scalar)
+        assert "kappa_slice_vec_edge_a_b" in names, (
+            f"Per-slice kappa vector should exist. "
+            f"Variables with 'kappa': {sorted(n for n in names if 'kappa' in n)}"
         )
 
     def test_single_dimension_no_kappa_correction(self):
@@ -706,8 +715,8 @@ class TestStaggeredDimensionModel:
         assert "p_slice_vec_edge_a_b" in names, (
             f"Missing p_slice_vec. Names: {sorted(n for n in names if 'p_slice' in n)}")
 
-    def test_staggered_model_has_1_over_n_kappa(self):
-        """With 2 dimensions, aggregate kappa should be corrected."""
+    def test_staggered_model_exhaustive_suppresses_aggregate(self):
+        """Same as two-dim: exhaustive dims suppress aggregate."""
         graph, params, snap_rows, commissioned, mece_dims, _ = (
             build_staggered_two_dimension_solo_edge(seed=65)
         )
@@ -718,10 +727,11 @@ class TestStaggeredDimensionModel:
         )
 
         names = set(model.named_vars.keys())
-        assert "kappa_agg_corrected_edge_a_b" in names, (
-            f"Missing 1/N kappa correction. Kappa vars: "
+        assert "kappa_agg_corrected_edge_a_b" not in names, (
+            f"Aggregate should be suppressed. Kappa vars: "
             f"{sorted(n for n in names if 'kappa' in n)}"
         )
+        assert "kappa_slice_vec_edge_a_b" in names
 
 
 def _bind_conditional_evidence(topology, graph, params, snap_rows):

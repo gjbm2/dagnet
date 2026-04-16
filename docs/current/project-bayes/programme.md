@@ -120,6 +120,34 @@ data-constrained. Single-source validation:
 
 **Open issues**:
 
+*Orthogonal context hierarchies — ACTIVE 16-Apr-26*:
+- **Aggregate double-counting** — **FIXED 16-Apr-26**. Evidence binder
+  summed context rows from all N dimensions into one aggregate, inflating
+  by N×. Cross-dimension guard added: only one dimension's rows feed the
+  aggregate. Row-level dedup also added for multi-hash duplicates. Both
+  dimensions now correctly exhaustive; aggregate suppressed. See journal
+  16-Apr-26.
+- **Batched trajectory missing kappa_lat** — **OPEN**. The batched
+  window trajectory path (`_emit_batched_window_trajectories`) uses plain
+  Binomial, not BetaBinomial. All Phase 1 latency edges with slices use
+  the batched path, so `kappa_lat` is never created for contexted edges.
+  This affects single-dimension graphs too. Needs design work: should
+  `kappa_lat` be per-slice or per-edge in the batched path? How to
+  integrate BetaBinomial into the vectorised interval computation?
+- **Phase 2 orthogonal context gaps** — **OPEN**. Phase 2 does not
+  propagate per-slice latency (mu/onset) from Phase 1 frozen priors.
+  No 1/N aggregate kappa correction in Phase 2. Per-slice kappa is
+  independent with no shared-population awareness.
+- **No per-slice t95 anchor** — **OPEN**. `t95_obs` constrains
+  edge-level only. Individual slices with extreme onset via `delta_a`
+  are unconstrained. May contribute to residual onset bias.
+- **Residual onset/mu bias on two-dim graph** — **OPEN**. Config D
+  eliminates bias on single-dim graphs (doc 41 §5.7) but two-dim
+  (`synth-context-two-dim`) still shows channel onset z=3.4–7.0 and
+  device desktop mu z=15.0. Root cause unclear — may be model geometry
+  (cross-dimensional interaction), missing kappa_lat, or per-slice t95.
+  Needs further investigation after the above issues are resolved.
+
 *Model quality — WATCH LIST (no blockers)*:
 - **Compiler dispersion forensic review** — **OPEN 9-Apr-26**. See
   `docs/current/project-bayes/33-bayes-compiler-dispersion-forensic-review.md`.

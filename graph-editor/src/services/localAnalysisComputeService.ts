@@ -785,53 +785,17 @@ function fmtDate(d: string | Date): string {
  */
 function _computeCompletenessAtRetrievedAt(
   latencyObj: Record<string, any>,
-  evidenceObj: Record<string, any>,
-  retrievedAt: string | Date | undefined,
+  _evidenceObj: Record<string, any>,
+  _retrievedAt: string | Date | undefined,
 ): number {
-  const storedCompleteness: number =
-    typeof latencyObj.completeness === 'number' && latencyObj.completeness > 0
-      ? latencyObj.completeness
-      : 1.0;
-
-  // Use path-level CDF params when available (cohort queries use A→Y path
-  // completeness, not edge-level X→Y). Path params include upstream latency
-  // and produce significantly lower completeness for downstream edges.
-  const pathMu = latencyObj.path_mu;
-  const pathSigma = latencyObj.path_sigma;
-  const hasPathParams = typeof pathMu === 'number' && typeof pathSigma === 'number';
-  const mu = hasPathParams ? pathMu : latencyObj.mu;
-  const sigma = hasPathParams ? pathSigma : latencyObj.sigma;
-  const edgeOnsetFallback = latencyObj.promoted_onset_delta_days ?? latencyObj.onset_delta_days;
-  const onset = (hasPathParams ? (latencyObj.path_onset_delta_days ?? edgeOnsetFallback) : edgeOnsetFallback) ?? 0;
-  if (typeof mu !== 'number' || typeof sigma !== 'number' || !retrievedAt) {
-    return storedCompleteness;
+  // Use the topo-pass completeness directly. The topo pass computes the
+  // correct n-weighted average across scoped cohort dates. Any local
+  // recomputation (e.g. midpoint approximation) diverges from the graph
+  // display value and introduces Jensen's inequality error.
+  if (typeof latencyObj.completeness === 'number' && latencyObj.completeness > 0) {
+    return latencyObj.completeness;
   }
-
-  // Parse retrieved_at to a Date
-  const refDate = _parseLooseDate(retrievedAt);
-  if (!refDate) return storedCompleteness;
-
-  // Use evidence scope_from/scope_to (on p.evidence) as the cohort date range.
-  // Approximate via midpoint — the topo pass uses n-weighted average across
-  // individual cohort dates, but we don't have per-date data here.
-  const scopeFrom = evidenceObj?.scope_from;
-  const scopeTo = evidenceObj?.scope_to;
-
-  if (scopeFrom && scopeTo) {
-    const fromD = _parseLooseDate(scopeFrom);
-    const toD = _parseLooseDate(scopeTo);
-    if (fromD && toD) {
-      const midMs = (fromD.getTime() + toD.getTime()) / 2;
-      const midDate = new Date(midMs);
-      const ageDays = Math.max(0, (refDate.getTime() - midDate.getTime()) / 86400000);
-      const ageModel = toModelSpaceAgeDays(onset, ageDays);
-      const c = logNormalCDF(ageModel, mu, sigma);
-      if (Number.isFinite(c) && c > 0) return c;
-    }
-  }
-
-  // Fallback: stored completeness (computed at topo-pass time)
-  return storedCompleteness;
+  return 1.0;
 }
 
 function _parseLooseDate(s: string | Date | unknown): Date | null {
@@ -1042,7 +1006,11 @@ function buildSurpriseGaugeResult(graph: ConversionGraph, queryDsl: string): Ana
     const expected = muP * cW;
     const varPost = sigma2P * (cW ** 2);
     const varSamp = expected * (1 - expected) / evidenceN;
-    const combinedSd = Math.sqrt(Math.max(1e-20, varPost + varSamp));
+    // Completeness uncertainty from the engine (completeness_stdev on p.latency).
+    // This captures MC-based uncertainty in maturity that the analytic formula misses.
+    const cSd = (latencyObj as any).completeness_stdev;
+    const varCompleteness = (typeof cSd === 'number' && cSd > 0) ? (cSd ** 2) * (muP ** 2) : 0;
+    const combinedSd = Math.sqrt(Math.max(1e-20, varPost + varSamp + varCompleteness));
 
     const z = (obsRate - expected) / combinedSd;
     const quantile = normalCdf(z);

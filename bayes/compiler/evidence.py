@@ -563,6 +563,22 @@ def _bind_from_snapshot_rows(
     # Track non-MECE context keys for diagnostic reporting.
     _non_mece_ctx_keys: set[str] = set()
 
+    # Dedup guard: when multiple core_hashes map to the same edge (e.g.
+    # per-dimension context hashes in multi-dim graphs), identical rows
+    # appear under each hash.  Deduplicate by (anchor_day, ret_key,
+    # slice_key) so each logical observation is processed exactly once.
+    _seen_rows: set[tuple[str, str, str]] = set()
+    n_dedup_skipped = 0
+
+    # Cross-dimension aggregate guard: for multi-dimension MECE graphs,
+    # each dimension's context rows independently sum to the full
+    # population.  Summing rows from N dimensions inflates the aggregate
+    # by N×.  Track which dimension seeded each aggregate bucket entry
+    # and skip rows from other dimensions.
+    # Key: (obs_type, anchor_day, ret_key) → first dimension key
+    _agg_first_dim: dict[tuple[str, str, str]] = {}
+    n_cross_dim_skipped = 0
+
     for row in rows:
         anchor_day = str(row.get("anchor_day", ""))
         slice_key = str(row.get("slice_key", ""))
@@ -571,18 +587,28 @@ def _bind_from_snapshot_rows(
 
         if _is_cohort(slice_key):
             bucket = agg_cohort
+            _obs_type = "c"
         elif _is_window(slice_key):
             bucket = agg_window
+            _obs_type = "w"
         else:
             continue
 
+        # Dedup: skip rows already seen under a different core_hash.
+        _row_key = (anchor_day, ret_key, slice_key)
+        if _row_key in _seen_rows:
+            n_dedup_skipped += 1
+            continue
+        _seen_rows.add(_row_key)
+
         # Check if this context row's dimension is declared MECE
         is_mece_ctx = False
+        _dim = ""
         if is_ctx and mece_set:
             ctx_part = context_key(slice_key)
             if ctx_part:
-                dim = dimension_key(ctx_part)
-                is_mece_ctx = dim in mece_set
+                _dim = dimension_key(ctx_part)
+                is_mece_ctx = _dim in mece_set
 
         # Phase C: collect per-context rows for commissioned slices.
         #
@@ -629,6 +655,22 @@ def _bind_from_snapshot_rows(
             if _ctx_part:
                 _non_mece_ctx_keys.add(_ctx_part)
             continue
+
+        # Cross-dimension aggregate guard: only aggregate rows from one
+        # MECE dimension per (obs_type, anchor_day, ret_key).  Each MECE
+        # dimension's rows independently sum to the full population, so
+        # the first dimension is sufficient.  Rows from other dimensions
+        # are still collected per-context above but excluded from the
+        # aggregate to prevent N× inflation (doc 41, forensic trace).
+        if is_ctx and _dim:
+            _agg_slot = (_obs_type, anchor_day, ret_key)
+            _first = _agg_first_dim.get(_agg_slot)
+            if _first is None:
+                _agg_first_dim[_agg_slot] = _dim
+            elif _dim != _first:
+                n_cross_dim_skipped += 1
+                n_ctx_aggregated += 1
+                continue
 
         day_bucket = bucket[anchor_day]
         if ret_key in day_bucket:
@@ -722,6 +764,17 @@ def _bind_from_snapshot_rows(
         diagnostics.append(
             f"WARN edge {ev.edge_id[:8]}…: skipped {n_ctx_non_mece_skipped} "
             f"context rows from non-MECE dimensions (cannot aggregate)"
+        )
+    if n_dedup_skipped > 0:
+        diagnostics.append(
+            f"INFO edge {ev.edge_id[:8]}…: dedup skipped {n_dedup_skipped} "
+            f"duplicate rows (same anchor_day/retrieved_at/slice_key across hashes)"
+        )
+    if n_cross_dim_skipped > 0:
+        diagnostics.append(
+            f"INFO edge {ev.edge_id[:8]}…: cross-dim aggregate guard skipped "
+            f"{n_cross_dim_skipped} rows from secondary MECE dimensions "
+            f"(prevents N×dim inflation)"
         )
 
     # Step 2: Build trajectories for each obs_type.

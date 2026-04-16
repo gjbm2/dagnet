@@ -532,14 +532,13 @@ function makeSurpriseGraph(overrides?: {
 }
 
 describe('surprise_gauge: completeness anchored to retrieved_at', () => {
-  it('should use completeness computed at data_source.retrieved_at, not the stored topo-pass value', () => {
-    // Setup: data actually fetched 20-Mar-26, scope midpoint ~ 10-Mar-26
-    // Stored completeness (computed by topo pass at ~29-Mar-26) = 0.71
-    // Completeness at retrieved_at should be ~0.24 (much lower)
-    // evidence.retrieved_at is set to today by "Get from source" — must be ignored
+  it('should use the stored topo-pass completeness (matching graph display)', () => {
+    // The gauge must use the same completeness as the graph display.
+    // The topo pass computes the correct n-weighted average across scoped
+    // cohort dates. Any local recomputation diverges from the graph.
     const graph = makeSurpriseGraph({
       data_source_retrieved_at: '2026-03-20T12:00:00Z',
-      evidence_retrieved_at: '2026-03-29T12:00:00Z', // stale — overwritten by cache read
+      evidence_retrieved_at: '2026-03-29T12:00:00Z',
       stored_completeness: 0.71,
     });
 
@@ -550,15 +549,8 @@ describe('surprise_gauge: completeness anchored to retrieved_at', () => {
     expect(pVar).toBeDefined();
     expect(pVar.available).toBe(true);
 
-    // The completeness used should be recomputed at data_source.retrieved_at (~0.24),
-    // NOT the stored value (0.71) and NOT based on evidence.retrieved_at (today)
-    expect(pVar.completeness).toBeLessThan(0.5);
-    expect(pVar.completeness).toBeGreaterThan(0.1);
-
-    // The expected value (muP * completeness) should reflect the lower completeness
-    const muP = 4.2 / (4.2 + 45.8); // 0.084
-    expect(pVar.expected).toBeLessThan(muP * 0.5);
-    expect(pVar.expected).toBeGreaterThan(muP * 0.1);
+    // Uses the stored topo-pass completeness directly
+    expect(pVar.completeness).toBeCloseTo(0.71, 2);
   });
 
   it('should prefer data_source.retrieved_at over evidence.retrieved_at', () => {
@@ -589,8 +581,9 @@ describe('surprise_gauge: completeness anchored to retrieved_at', () => {
     expect(pVar.completeness).toBeCloseTo(0.71, 2);
   });
 
-  it('should fall back to evidence.retrieved_at when data_source is absent', () => {
+  it('should use stored completeness when data_source is absent', () => {
     // No data_source, but evidence.retrieved_at is set (pre-migration data)
+    // Completeness still comes from the topo pass, not recomputed
     const graph = makeSurpriseGraph({
       evidence_retrieved_at: '2026-03-20T12:00:00Z',
       stored_completeness: 0.71,
@@ -599,8 +592,7 @@ describe('surprise_gauge: completeness anchored to retrieved_at', () => {
     const response = computeLocalResult(graph, 'surprise_gauge', 'from(A).to(B)');
     const pVar = response.result!.variables.find((v: any) => v.name === 'p');
 
-    // Should recompute at evidence.retrieved_at since data_source is absent
-    expect(pVar.completeness).toBeLessThan(0.5);
+    expect(pVar.completeness).toBeCloseTo(0.71, 2);
     expect(pVar.evidence_retrieved_at).toBe('20-Mar-26');
   });
 
@@ -649,8 +641,8 @@ describe('surprise_gauge: completeness anchored to retrieved_at', () => {
     const pVar = response.result!.variables.find((v: any) => v.name === 'p');
 
     expect(pVar.evidence_retrieved_at).toBe('16-Mar-26');
-    // Completeness should be recomputed at 16-Mar, not today
-    expect(pVar.completeness).toBeLessThan(0.5);
+    // Completeness comes from stored topo-pass value
+    expect(pVar.completeness).toBeCloseTo(0.71, 2);
   });
 });
 

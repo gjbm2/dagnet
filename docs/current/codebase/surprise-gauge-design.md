@@ -1,7 +1,7 @@
 # Surprise Gauge Analysis Type
 
-**Status**: Phase 1 — statistical correction in progress
-**Date**: 27-Mar-26 (revised; original 24-Mar-26)
+**Status**: Phase 2 — engine-backed posterior-predictive
+**Date**: 16-Apr-26 (Phase 2); 27-Mar-26 (Phase 1 revised; original 24-Mar-26)
 
 ---
 
@@ -97,63 +97,66 @@ model and observation separate.
 - **f-only mode**: gauge shows "no evidence available" — comparing
   a forecast against its own posterior is meaningless
 
-### 5.1 p — completeness-adjusted posterior predictive
+### 5.1 p — engine-backed posterior-predictive (Phase 2)
 
-#### The problem: cohort maturity
+The BE surprise gauge calls `compute_conditioned_forecast` from the
+forecast engine (doc 29) to compute a proper MC-based posterior-predictive
+z-score. This replaces the Phase 1 analytic formula.
 
-The query window (e.g. `window(-7d:)`) spans multiple daily cohorts,
-each at a different stage of maturation. The model posterior Beta(α, β)
-describes the **long-run** conversion rate, but a cohort that is only
-3 days old has only observed a fraction of its eventual conversions.
+#### How it works
 
-Naively comparing `evidence.k / evidence.n` against the posterior's
-long-run rate would systematically flag every recent window as
-"surprisingly low" — not because the data is surprising, but because
-the cohorts are immature.
-
-#### Completeness: read from the edge
-
-The topo pass computes `edge.p.latency.completeness` (c̄_w) as the
-n-weighted average completeness across cohort dates:
+1. `resolve_model_params` resolves the edge's best-available model
+   (respecting source preference, temporal mode, quality gate).
+2. Snapshot query retrieves per-cohort evidence `(age, n, k)` — same
+   pattern as cohort maturity v3.
+3. `compute_conditioned_forecast` draws S=2000 samples from the joint
+   posterior `(p, μ, σ, onset)` with correlated onset-μ draws.
+4. For each draw s, compute the n-weighted expected evidence rate:
 
 ```
-c̄_w = Σ(n_d × c_d) / n_total
+expected_rate_s = p_s × Σ(n_i × C(age_i; μ_s, σ_s, onset_s)) / n_total
 ```
 
-The surprise gauge reads this value directly — it does not recompute
-completeness. This is the same value used by the per-day blending
-loop for p.mean.
+   where C is the lognormal CDF (with carrier convolution in cohort mode).
 
-#### Corrected z-score
+5. The z-score is:
 
 ```
-μ_p      = α / (α + β)
-σ²_p     = α·β / ((α+β)² · (α+β+1))
+z = (k_total/n_total − mean(expected_rate)) / sd(expected_rate)
+```
 
-c̄_w     = edge.p.latency.completeness
-n_total  = evidence.n
-k_total  = evidence.k
+   where mean and sd are taken across the S unconditioned draws.
 
+#### What this captures that the analytic formula missed
+
+- **Completeness uncertainty**: each draw evaluates CDF at different
+  latency params, so the spread of `expected_rate_s` includes maturity
+  uncertainty. The analytic formula treated completeness as known exactly.
+- **Carrier convolution** (cohort mode): upstream arrival lag from the
+  node arrival cache. The analytic formula used simple edge-level CDF.
+- **Joint posterior correlations**: onset-μ correlation narrows the
+  true posterior-predictive spread. The analytic formula assumed
+  independence between p and latency.
+- **No separate var_samp term**: MC spread already includes the full
+  posterior-predictive variance. No need to compose posterior + sampling
+  components analytically.
+
+#### Fallback: analytic formula (Phase 1)
+
+When snapshot data is unavailable (no param_id, DB error, no rows),
+the gauge falls back to the Phase 1 analytic formula:
+
+```
 expected = μ_p × c̄_w
-var_post = σ²_p × c̄_w²                       # posterior uncertainty
-var_samp = expected × (1 − expected) / n_total  # binomial sampling noise
-combined = sqrt(var_post + var_samp)
-
+var_post = σ²_p × c̄_w²
+var_samp = expected × (1 − expected) / n_total
+var_c    = c_sd² × μ_p²                         # completeness_stdev from engine
+combined = sqrt(var_post + var_samp + var_c)
 z        = (k_total/n_total − expected) / combined
-quantile = Φ(z)
 ```
 
-#### Behaviour at limits
-
-- **Fully mature window** (c̄_w ≈ 1): reduces to the simple
-  posterior-vs-observation comparison with binomial sampling noise.
-- **Immature window** (c̄_w small): expected rate is low
-  (μ_p × c̄_w), so a low observed rate is not surprising.
-- **Large n**: sampling variance shrinks, z is driven by whether
-  the rate genuinely deviates from the completeness-adjusted
-  expectation.
-- **No lag model** (completeness unavailable): fall back to c̄_w = 1
-  (assume full maturity).
+The FE local compute always uses this analytic fallback (no BE access),
+but now includes `completeness_stdev` from the topo pass when available.
 
 ### 5.2 mu, sigma — combined-SD normal approximation
 
@@ -227,10 +230,23 @@ to absorb it.
 - Horizontal band renderer for multi-var/multi-scenario
 - Display settings: variable selector, orientation toggle
 
-### Phase 2
+### Phase 2 (implemented 16-Apr-26)
 
-**Backend additions**:
-- Snapshot DB query for onset evidence (min lag where y > 0)
+**Backend** (`_surprise_gauge_engine_p` in `api_handlers.py`):
+- Calls `resolve_model_params` + `query_snapshots_for_sweep` + `compute_conditioned_forecast`
+- MC posterior-predictive z-score from unconditioned draws (see §5.1)
+- Carrier convolution in cohort mode via `build_node_arrival_cache`
+- Falls back to Phase 1 analytic formula when snapshots unavailable
+
+**Frontend** (`localAnalysisComputeService.ts`):
+- Includes `completeness_stdev` in combined SD when available from topo pass
+
+**mu/sigma**: `resolve_model_params` provides canonical mu_sd/sigma_sd,
+replacing ad-hoc posterior lookup chains.
+
+### Phase 3 (future)
+
+- Onset variable: snapshot DB query for observed onset (min lag where y > 0)
 - Path onset from cohort frames
 - Add `onset` and `path_onset` to variable selector options
 
@@ -245,7 +261,7 @@ shortDescription: 'How surprising is current evidence given the Bayesian posteri
 icon: Gauge (or AlertTriangle)
 snapshotContract: {
   scopeRule: 'single_edge',
-  readMode: 'none',          // no snapshot read needed in Phase 1
+  readMode: 'none',          // gauge queries snapshots internally for engine path
   slicePolicy: 'any',
   timeBoundsSource: 'query_dsl_window',
   perScenario: true,

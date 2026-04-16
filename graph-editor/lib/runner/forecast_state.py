@@ -1402,6 +1402,14 @@ def compute_forecast_sweep(
         X_safe = np.maximum(X_total, 1e-10)
         rate = Y_total / X_safe
 
+        # Diagnostic: median Y/X at a few τ values for parity debugging
+        if len(cohorts) > 0:
+            _ym = np.median(Y_total, axis=0)
+            _xm = np.median(X_total, axis=0)
+            _taus = [t for t in [5, 10, 15, 20, 25, 30, 35, 40] if t < T]
+            _diag = " ".join(f"t{t}:Y={_ym[t]:.1f}/X={_xm[t]:.1f}" for t in _taus)
+            print(f"[sweep_diag] apply_is={apply_is} {_diag}")
+
         # Fallback when no evidence (v2 line 920)
         _x_median = np.median(X_total, axis=0)
         if not np.any(_x_median >= 1.0):

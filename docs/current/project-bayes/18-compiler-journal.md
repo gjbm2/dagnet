@@ -8,6 +8,113 @@ Entries are reverse-chronological (newest first).
 
 ---
 
+## 16-Apr-26 (update 12): Orthogonal context hierarchies — forensic trace and aggregate fix
+
+### Context
+
+First param recovery run on `synth-context-two-dim` (2 orthogonal
+MECE dimensions: channel×3 + device×2 = 5 slices). Config D defaults
+(`per_slice_a=True`, `shared_sigma_slices=True`). Onset and mu
+recovery showed persistent bias despite Config D fixes from doc 41.
+
+### Finding 1: Aggregate double-counting in evidence binder
+
+**Root cause**: `_bind_from_snapshot_rows()` in `evidence.py` sums
+all MECE context rows for the same `(anchor_day, retrieved_at)` into
+one aggregate bucket. With two orthogonal dimensions, each person
+appears in one row per dimension (e.g. `context(channel:google)` and
+`context(device:mobile)`). The aggregate was inflated by N_dims ×
+the true population.
+
+**Downstream effects**:
+- Exhaustiveness check: `slice_n / agg_n ≈ 0.5` (should be ~1.0),
+  so both dimensions were marked `exhaustive=False`
+- Aggregate not suppressed: inflated aggregate entered model as
+  endpoint BB + trajectory potential
+- 1/N kappa correction was compensating for the inflation rather
+  than being a principled statistical correction
+
+**Fix applied** (`evidence.py`):
+1. **Row-level dedup**: `_seen_rows` set keyed by
+   `(anchor_day, ret_key, slice_key)` skips duplicate rows from
+   different core_hashes (same data stored under per-dimension hash
+   families).
+2. **Cross-dimension aggregate guard**: `_agg_first_dim` tracks which
+   dimension seeded each aggregate bucket entry. Rows from secondary
+   dimensions are skipped — one MECE dimension's rows already sum to
+   the total population.
+3. Diagnostic logging for both guards.
+
+**Result**: Both dimensions now correctly `exhaustive=True`. Aggregate
+correctly suppressed. No change to single-dimension graphs (guard is
+a no-op when only one dimension exists).
+
+### Finding 2: Batched trajectory path lacks latency dispersion
+
+`_emit_batched_window_trajectories()` (line 3408) uses plain Binomial
+log-likelihood. The per-slice unbatched path in
+`_emit_cohort_likelihoods` uses BetaBinomial with `kappa_lat`. All
+Phase 1 latency edges with slices go through the batched path,
+so **all contexted latency edges lose latency dispersion**.
+
+This affects single-dimension graphs too — not orthogonal-specific.
+`kappa_lat` is never created when the batched trajectory path is used.
+
+**Status**: Not fixed. Needs design decision on whether `kappa_lat`
+should be per-slice or per-edge in the batched path, and how to
+integrate BetaBinomial into the vectorised CDF computation.
+
+### Finding 3: Phase 2 missing orthogonal context support
+
+Phase 2 per-slice handling (lines 1383-1448):
+- No 1/N kappa correction (correction is inside `elif not is_phase2`)
+- Per-slice latency is edge-level only — Phase 1's per-slice
+  mu/onset vectors are not propagated into Phase 2 frozen priors
+- Per-slice kappa is independent LogNormal with no awareness of
+  shared population across dimensions
+
+**Status**: Not fixed. Phase 2 orthogonal context support is future
+work.
+
+### Finding 4: No per-slice t95 anchor
+
+`t95_obs` constrains only edge-level timing. Individual slices with
+extreme onset deviations (via `delta_a`) are unconstrained by t95.
+The zero-sum constraint on `delta_a` partially mitigates this.
+
+**Status**: Not fixed. May contribute to the residual onset bias on
+channel slices. Needs investigation.
+
+### Mistake: 1/N kappa correction scope
+
+During this session, the 1/N kappa correction was incorrectly
+extended to per-slice kappas (replacing `kappa_slice_vec[_si]` with
+a single scalar `edge_kappa / N_dims`). This:
+- Created 10 unused RVs (`log_kappa_slice_vec` + `kappa_slice_vec`)
+  sampled by MCMC for nothing
+- Lost per-slice overdispersion heterogeneity
+- Was logically wrong: the 1/N correction is for base/aggregate
+  variables, not per-slice likelihoods (each slice uses its own data)
+
+**Reverted**. The 1/N correction now only applies to the aggregate
+kappa, as originally designed. With the cross-dim aggregate guard,
+exhaustive dimensions suppress the aggregate entirely, so the
+correction is moot for fully exhaustive orthogonal graphs.
+
+### Current recovery status (synth-context-two-dim, Config D)
+
+Persistent misses after aggregate fix (3 chains, 2000 draws, 1000 tune):
+- Channel onset: google z=7.0, direct z=4.6, email z=3.4 — biased HIGH
+- Device desktop mu: z=15.0 — biased LOW
+- Sigma: uniform 0.608 (truth 0.500) — systematic +0.108 inflation
+- All p values: recovered well across all 5 slices
+
+The onset/mu bias pattern is similar to doc 41 §2.2 but persists
+despite Config D. The two-dimension case may expose additional
+model geometry issues not present in single-dimension graphs.
+
+---
+
 ## 13-Apr-26 (update 11): Diamond-context Phase 2 — onset drift and convergence failure
 
 ### Context
