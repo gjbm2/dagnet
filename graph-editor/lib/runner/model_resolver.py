@@ -314,6 +314,36 @@ def resolve_model_params(
         fm = forecast_block.get('mean', 0) or 0
         p_mean = float(fm)
 
+    # D20 FIX: when no posterior alpha/beta, derive from evidence n/k
+    # or construct a prior whose concentration reflects the evidence
+    # base. Without this, the sweep falls back to Beta(1,1) and IS
+    # conditioning overwhelms the prior for per-cohort evaluation.
+    if alpha <= 0 or beta <= 0:
+        ev_n = evidence_block.get('n')
+        ev_k = evidence_block.get('k')
+        if (isinstance(ev_n, (int, float)) and ev_n > 0
+                and isinstance(ev_k, (int, float)) and ev_k >= 0):
+            # Use evidence counts directly as the Beta prior.
+            # This gives a prior whose concentration reflects all
+            # observed evidence for this edge — typically hundreds
+            # to thousands of trials. IS conditioning then updates
+            # this with per-cohort evidence, producing a sensible
+            # posterior. Add 1 to both for Bayesian smoothing.
+            alpha = float(ev_k) + 1.0
+            beta = float(ev_n - ev_k) + 1.0
+            if p_mean <= 0:
+                p_mean = alpha / (alpha + beta)
+        elif p_mean > 0:
+            # No evidence counts available — use p_mean with moderate
+            # concentration. kappa=200 gives a prior equivalent to
+            # ~200 trials, which resists single-cohort IS better than
+            # kappa=20 while still allowing aggregate evidence to move
+            # the posterior.
+            _KAPPA_FALLBACK = 200.0
+            _p = max(min(p_mean, 0.99), 0.01)
+            alpha = _p * _KAPPA_FALLBACK
+            beta = (1.0 - _p) * _KAPPA_FALLBACK
+
     # p_sd from alpha/beta or from model_vars
     p_sd = 0.0
     if alpha > 0 and beta > 0:

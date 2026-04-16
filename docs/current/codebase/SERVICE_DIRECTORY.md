@@ -37,6 +37,9 @@ Quick-lookup table: what you need to do → which service owns it → where the 
 |------------|---------|-------------------|
 | Snapshot regime selection | `snapshot_regime_selection.py`, FE: `candidateRegimeService.ts` | `test_snapshot_regime_selection.py`, `test_regime_consumer_integration.py` |
 | BE subject resolution (doc 31) | `analysis_subject_resolution.py`, `graph_select.py` | `test_analysis_subject_resolution.py`, `test_doc31_parity.py`, CLI `parity-test.sh` |
+| Forecast engine (doc 29) | `runner/forecast_state.py` (`_evaluate_cohort`, `compute_forecast_sweep`), `runner/model_resolver.py` | `test_v2_v3_parity.py`, `test_forecast_state_cohort.py`, CLI `v2-v3-parity-test.sh`, `chart-graph-agreement-test.sh` |
+| Cohort maturity v3 | `runner/cohort_forecast_v3.py` | `test_v2_v3_parity.py`, CLI `v2-v3-parity-test.sh` |
+| BE topo pass (stats + forecast) | `runner/stats_engine.py`, `api_handlers.py:handle_stats_topo_pass` | `test_stats_engine_parity.py`, `test_be_topo_pass_parity.py` |
 | LOO-ELPD model adequacy | `bayes/compiler/loo.py`, FE: `bayesQualityTier.ts` | `test_loo.py` |
 | PPC calibration | `bayes/compiler/calibration.py` | (validated via `--diag` on synth graphs) |
 
@@ -47,3 +50,4 @@ Quick-lookup table: what you need to do → which service owns it → where the 
 | CLI disk loader | `src/cli/diskLoader.ts` | (smoke-tested manually) |
 | CLI aggregation + LAG | `src/cli/aggregate.ts` | (smoke-tested manually) |
 | CLI bootstrap (shared) | `src/cli/bootstrap.ts` | (smoke-tested manually) |
+| CLI topo pass (D18) | `src/cli/topoPass.ts` | (tested via CLI parity scripts) |

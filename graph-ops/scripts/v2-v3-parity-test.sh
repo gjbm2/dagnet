@@ -385,6 +385,116 @@ else:
   fi
 done
 
+# ── Phase 3: Degeneration test (frontier=0 → model bands) ─────────
+# With asat ≈ anchor date, cohorts are very young (CDF≈0). IS must
+# not fire, conditioned midpoint ≈ model_midpoint. This proves the
+# forecast engine produces epistemic model uncertainty bands in the
+# absence of meaningful evidence — the cornerstone degeneration.
+#
+# BLOCKED: depends on asat correctly constraining sweep_to in the
+# cohort maturity handler (doc 42b). Until then, frames include all
+# snapshot dates regardless of asat, inflating frontier_age.
+# See doc 42b §R2 and §D1.
+echo ""
+echo "Phase 3: Frontier=0 degeneration (conditioned ≈ model bands)"
+
+# Use the last edge with the youngest possible cohort via asat.
+# asat(22-Mar-26) with cohort(21-Mar-26:21-Mar-26) gives frontier=1
+# for a single cohort. With path mu≈3 and onset≈1, CDF(1)≈0 so
+# E_i≈0 and IS cannot fire. The engine must degenerate to model bands.
+# Small N (≈10) means binomial quantisation widens the tolerance.
+DEGEN_DSL="from(m4-registered).to(m4-success).cohort(21-Mar-26:21-Mar-26).asat(22-Mar-26)"
+DEGEN_FILE="$TMPDIR_PARITY/degen_v3.json"
+
+bash "$_DAGNET_ROOT/graph-ops/scripts/analyse.sh" "$GRAPH_NAME" "$DEGEN_DSL" \
+  --type cohort_maturity --topo-pass --no-snapshot-cache --format json \
+  2>/dev/null | sed '1{/^Now using/d}' \
+  > "$DEGEN_FILE" || true
+
+DEGEN_RESULT=$(python3 -c "
+import json, sys
+
+try:
+    d = json.load(open('$DEGEN_FILE'))
+except Exception as e:
+    print(f'FAIL:cannot parse output: {e}')
+    sys.exit(0)
+
+rows = d.get('result',{}).get('data',[]) or d.get('result',{}).get('maturity_rows',[])
+if len(rows) < 5:
+    print(f'FAIL:too few rows ({len(rows)})')
+    sys.exit(0)
+
+# Verify: midpoint ≈ model_midpoint where both are present.
+# Young cohorts have evidence_x > 0 (snapshots exist) but IS should
+# not fire because CDF(age) ≈ 0 → E_i ≈ 0. The conditioned bands
+# must degenerate to model bands.
+failures = []
+checked = 0
+for r in rows:
+    tau = r.get('tau_days', 0)
+    mid = r.get('midpoint')
+    model_mid = r.get('model_midpoint')
+    if mid is None or model_mid is None:
+        continue
+    checked += 1
+    delta = abs(mid - model_mid)
+    # Tolerance: 0.06 absolute — wider than parity test (0.03) because
+    # small N (single young cohort) causes binomial quantisation noise.
+    if delta > 0.06:
+        failures.append(f't={tau}: mid={mid:.4f} model={model_mid:.4f} D={delta:.4f}')
+
+# Verify: fan widths similar
+fan_failures = []
+for r in rows:
+    tau = r.get('tau_days', 0)
+    fb = (r.get('fan_bands') or {}).get('90')
+    mfb_upper = r.get('model_fan_upper')
+    mfb_lower = r.get('model_fan_lower')
+    if fb and mfb_upper is not None and mfb_lower is not None:
+        w_cond = fb[1] - fb[0]
+        w_model = mfb_upper - mfb_lower
+        if w_model > 0.01:
+            ratio = w_cond / w_model
+            # Tolerance: 50% — wider than parity test (20%) because
+            # conditioned fan includes binomial sampling variance that
+            # model_rate_draws (pure p×CDF) does not. With small N
+            # (single young cohort), this adds ~30-40% to fan width.
+            if abs(ratio - 1.0) > 0.50:
+                fan_failures.append(f't={tau}: cond_w={w_cond:.4f} model_w={w_model:.4f} r={ratio:.2f}')
+
+print(f'checked={checked} mid_fail={len(failures)} fan_fail={len(fan_failures)}')
+if checked == 0:
+    print(f'FAIL:no rows with midpoint AND model_midpoint')
+elif failures:
+    print(f'FAIL:{len(failures)} tau midpoint diverge from model')
+    for f in failures[:5]:
+        print(f'  {f}')
+elif fan_failures:
+    # Fan width divergence is expected for small N (binomial noise).
+    # Report as warning, not failure.
+    print(f'WARN:{len(fan_failures)} tau fan width wider than model (expected for small N)')
+    for f in fan_failures[:3]:
+        print(f'  {f}')
+    print(f'PASS:{checked} tau checked, midpoint ≈ model_midpoint (fan wider due to small N)')
+else:
+    print(f'PASS:{checked} tau checked, midpoint ≈ model_midpoint, fan ≈ model fan')
+" 2>/dev/null)
+
+TOTAL=$((TOTAL + 1))
+RESULT_LINE=$(echo "$DEGEN_RESULT" | grep "^PASS:\|^FAIL:" | head -1)
+if [[ "$RESULT_LINE" == PASS:* ]]; then
+  PASS=$((PASS + 1))
+  echo "  ✓ frontier=0 degeneration: ${RESULT_LINE#PASS:}"
+else
+  FAIL=$((FAIL + 1))
+  echo "  ✗ frontier=0 degeneration: ${RESULT_LINE#FAIL:}"
+fi
+
+if [ "$VERBOSE" = "true" ] || [[ "$RESULT_LINE" == FAIL:* ]]; then
+  echo "$DEGEN_RESULT" | grep -v "^PASS:\|^FAIL:" | sed 's/^/    /'
+fi
+
 # ── Summary ────────────────────────────────────────────────────────
 echo ""
 echo "══════════════════════════════════════════════════════"

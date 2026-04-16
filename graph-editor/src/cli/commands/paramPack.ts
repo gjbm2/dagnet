@@ -93,7 +93,7 @@ async function runParamPack() {
   // Overwrites FE-only values with engine values. Falls back gracefully
   // if the BE is unreachable.
   log.info('Running BE topo pass...');
-  await runCliTopoPass(populatedGraph, bundle.parameters);
+  await runCliTopoPass(populatedGraph, bundle.parameters, queryDsl);
 
   // Extract + serialise
   const params = extractParamsFromGraph(populatedGraph);

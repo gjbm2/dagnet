@@ -348,6 +348,7 @@ def compute_cohort_maturity_rows_v3(
           f"cohorts_conditioned={sweep.n_cohorts_conditioned} "
           f"shape={sweep.rate_draws.shape}")
 
+
     # ── Compute evidence display from cohort data (v2 lines 990-1008) ─
     # Evidence at each τ = aggregate obs across all cohorts, using the
     # same population model as the sweep: observed values for cohorts
@@ -398,79 +399,11 @@ def compute_cohort_maturity_rows_v3(
             'n_mature': n_mature,
         }
 
-    # ── Deterministic forecast totals (v2 lines 1020-1071) ────────────
-    # Uses point-estimate CDF and carrier, NOT MC median. This matches
-    # v2's per-cohort deterministic population model exactly.
-    def _cdf_det(tau_val: int) -> float:
-        if det_norm_cdf is None:
-            return 0.0
-        if tau_val < 0:
-            return 0.0
-        if tau_val >= len(det_norm_cdf):
-            return det_norm_cdf[-1] if det_norm_cdf else 0.0
-        return det_norm_cdf[tau_val]
-
-    _span_p = det_span_p if det_span_p else 0.0
-    if _span_p <= 0 and resolved:
-        _span_p = resolved.p_mean or 0.0
-
-    def _compute_det_totals(tau: int) -> tuple:
-        """v2 lines 1020-1071: deterministic per-cohort forecast totals."""
-        total_x = 0.0
-        total_y = 0.0
-        for idx, (ci, ce) in enumerate(zip(cohort_list, engine_cohorts)):
-            _c_obs = ci.get('tau_observed', ci['tau_max'])
-            if tau <= _c_obs:
-                total_x += ce.obs_x[tau]
-                total_y += ce.obs_y[tau]
-            else:
-                N_i_det = ce.x_frozen
-                k_i_det = ce.y_frozen
-                a_i_det = _c_obs
-                # Effective exposure E_i (v2 lines 1032-1044)
-                _obs_x_det = ce.obs_x
-                _E_i_det = 0.0
-                if _obs_x_det and a_i_det > 0:
-                    _prev = 0.0
-                    for _u in range(min(a_i_det + 1, len(_obs_x_det))):
-                        _dx = _obs_x_det[_u] - _prev
-                        _prev = _obs_x_det[_u]
-                        _lag = a_i_det - _u
-                        _cv = _cdf_det(_lag)
-                        _E_i_det += max(_dx, 0.0) * _cv
-                else:
-                    _E_i_det = float(N_i_det)
-                _E_i_det = min(_E_i_det, float(N_i_det))
-                cdf_a_det = _cdf_det(a_i_det)
-                cdf_tau_det = _cdf_det(tau)
-                q_early_det = _span_p * cdf_a_det
-                q_early_det = min(q_early_det, 1 - 1e-10)
-                remaining_det = max(0.0, cdf_tau_det - cdf_a_det)
-                q_late_det = (_span_p * remaining_det) / (1 - q_early_det)
-                q_late_det = min(max(q_late_det, 0.0), 1.0)
-                _remaining_det = max(N_i_det - k_i_det, 0.0)
-                Y_D_det = _remaining_det * q_late_det
-
-                # Pop C deterministic (v2 lines 1056-1065)
-                X_C_det = 0.0
-                Y_C_det = 0.0
-                if upstream_path_cdf_arr is not None and reach > 0 and x_provider is not None and x_provider.enabled:
-                    _a_pop_det = ci.get('a_frozen', N_i_det) or N_i_det or 1.0
-                    tau_clamped = min(tau, len(upstream_path_cdf_arr) - 1)
-                    a_clamped = min(a_i_det, len(upstream_path_cdf_arr) - 1)
-                    X_C_det = max(0.0, _a_pop_det * reach * (
-                        upstream_path_cdf_arr[tau_clamped] - upstream_path_cdf_arr[a_clamped]))
-                    model_rate_det = _span_p * cdf_tau_det
-                    Y_C_det = X_C_det * min(model_rate_det, 1.0)
-
-                x_total_det = N_i_det + X_C_det
-                y_total_det = k_i_det + Y_D_det + Y_C_det
-                y_total_det = min(y_total_det, x_total_det)
-                total_x += x_total_det
-                total_y += y_total_det
-        return total_y, total_x
-
     # ── Assemble rows from sweep result ─────────────────────────────
+    # D19 fix (G.4): forecast_y/forecast_x now read from sweep.det_y_total
+    # / sweep.det_x_total (median IS-conditioned Y/X across draws).
+    # This replaces _compute_det_totals which used unconditioned p and
+    # edge-level CDF, diverging up to 50% on multi-hop narrow queries.
     S = sweep.rate_draws.shape[0]
     T = sweep.rate_draws.shape[1]
     band_levels = [0.80, 0.90, 0.95, 0.99]
@@ -479,7 +412,12 @@ def compute_cohort_maturity_rows_v3(
     for tau in range(T):
         ev = _compute_evidence_at_tau(tau)
         rate = ev['sum_y'] / ev['sum_x'] if ev and ev['sum_x'] > 0 else None
-        _det_y_tau, _det_x_tau = _compute_det_totals(tau)
+        # D19 fix: use MC median Y/X from sweep (IS-conditioned, same
+        # draws as midpoint). Replaces _compute_det_totals which used
+        # unconditioned p and edge-level CDF — diverging up to 50% on
+        # multi-hop narrow queries.
+        _det_y_tau = float(sweep.det_y_total[tau]) if sweep.det_y_total is not None and tau < len(sweep.det_y_total) else 0.0
+        _det_x_tau = float(sweep.det_x_total[tau]) if sweep.det_x_total is not None and tau < len(sweep.det_x_total) else 0.0
         rate_pure = (ev['sum_y_pure'] / ev['sum_x_pure']
                      if ev and ev.get('sum_x_pure', 0) > 0 else None)
 

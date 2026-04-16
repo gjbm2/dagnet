@@ -95,6 +95,7 @@ class ParsedQuery:
     cases: List[KeyValuePair]         # Case/variant filters (e.g., test-id:variant)
     minus: List[List[str]]            # Subtractive node sets (coefficient -1, inherits base from/to)
     plus: List[List[str]]             # Add-back node sets (coefficient +1, inherits base from/to)
+    asat: Optional[str] = None        # Historical query: as-at date (UK format d-MMM-yy or relative)
     
     @property
     def raw(self) -> str:
@@ -227,7 +228,11 @@ def parse_query(query: str, require_endpoints: bool = False) -> ParsedQuery:
     # Extract minus/plus clauses (now just node lists, not nested queries)
     minus_node_sets = _extract_node_groups(query, 'minus')
     plus_node_sets = _extract_node_groups(query, 'plus')
-    
+
+    # Extract asat()/at() — historical query date (doc 42)
+    asat_match = re.search(r'(?:asat|at)\(([^)]*)\)', query)
+    asat = asat_match.group(1).strip() if asat_match and asat_match.group(1).strip() else None
+
     return ParsedQuery(
         from_node=from_node,
         to_node=to_node,
@@ -239,7 +244,8 @@ def parse_query(query: str, require_endpoints: bool = False) -> ParsedQuery:
         window=window,
         cases=cases,
         minus=minus_node_sets,
-        plus=plus_node_sets
+        plus=plus_node_sets,
+        asat=asat,
     )
 
 

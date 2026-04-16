@@ -110,240 +110,157 @@ export async function getParameterFromFile(options: {
     const todayUK = formatDateUK(new Date());
 
     // ============================================================================
-    // asat() Historical Query Fork Point (getParameterFromFile)
+    // asat() Evidence Reconstruction (doc 42 §3)
     // ============================================================================
-    // If asat is present, route to snapshot DB instead of reading from file.
-    // Per §3.2 of 3-asat.md: Signature validation is MANDATORY.
+    // When asat is present, reconstruct the daily arrays from the snapshot DB
+    // as-of the asat date, then let the normal pipeline process them.
+    // This is NOT a fork — it replaces the data source, not the processing.
+    //
+    // Tier 1: snapshot DB available → reconstruct arrays (correct maturity)
+    // Tier 2: no snapshots → truncate file arrays by date (approximation)
+    // Tier 3: no file data either → no evidence
+    let asatApplied = false;
+    let asatDateUK: string | undefined;
+
     if (parsed.asat) {
-      console.log(`[DataOperationsService] Detected asat(${parsed.asat}) in getParameterFromFile - routing to snapshot DB`);
-      const asatLogOpId = sessionLogService.startOperation(
-        'info',
-        'data-fetch',
-        'ASAT_FROM_FILE',
-        `As-at snapshot query (from-file): ${paramId}`,
-        { paramId, edgeId, fileId: `parameter-${paramId}`, dsl: targetSlice },
-        { diagnostic: true }
-      );
-      
-      // Build workspace-prefixed param_id from parameter file source metadata
+      asatDateUK = resolveRelativeDate(parsed.asat);
+      console.log(`[DataOperationsService] asat(${asatDateUK}) — reconstructing evidence from snapshot DB`);
+
+      // Build workspace-prefixed param_id
       const paramFile = fileRegistry.getFile(`parameter-${paramId}`);
       const workspaceRepo = paramFile?.source?.repository;
       const workspaceBranch = paramFile?.source?.branch;
-      // Signature is part of the DB lookup key, and param_id is workspace-prefixed.
-      // If we can't form the workspace prefix, we can't query snapshots. Treat as "no data".
-      if (!workspaceRepo || !workspaceBranch) {
-        console.warn('[DataOperationsService] asat: missing parameter file source metadata (repository/branch); snapshot lookup skipped');
-        sessionLogService.endOperation(asatLogOpId, 'warning', 'asat: missing workspace metadata (snapshot lookup skipped)');
-        return { success: true, warning: 'No snapshot data (missing workspace metadata)' };
-      }
-      const dbParamId = `${workspaceRepo}-${workspaceBranch}-${paramId}`;
-      
-      // Resolve window/cohort dates
-      let anchorFrom: string | undefined;
-      let anchorTo: string | undefined;
-      
-      if (parsed.cohort?.start || parsed.cohort?.end) {
-        anchorFrom = parsed.cohort.start ? resolveRelativeDate(parsed.cohort.start) : undefined;
-        anchorTo = parsed.cohort.end ? resolveRelativeDate(parsed.cohort.end) : todayUK;
-      } else if (parsed.window?.start || parsed.window?.end) {
-        anchorFrom = parsed.window.start ? resolveRelativeDate(parsed.window.start) : undefined;
-        anchorTo = parsed.window.end ? resolveRelativeDate(parsed.window.end) : todayUK;
-      } else {
-        // Default window
-        anchorFrom = resolveRelativeDate('-60d');
-        anchorTo = todayUK;
-      }
-      
-      if (!anchorFrom || !anchorTo) {
-        console.warn('[DataOperationsService] asat query missing valid date range');
-        sessionLogService.endOperation(asatLogOpId, 'warning', 'asat: missing valid window/cohort range (snapshot lookup skipped)');
-        return { success: false, warning: 'Historical query requires a valid date range' };
-      }
-      
-      // Convert UK dates to ISO for API (defensive: treat inverted bounds as unordered)
-      const aFromDate = parseUKDate(anchorFrom);
-      const aToDate = parseUKDate(anchorTo);
-      const fromISO = aFromDate.toISOString().split('T')[0];
-      const toISO = aToDate.toISOString().split('T')[0];
-      const anchorFromISO = fromISO <= toISO ? fromISO : toISO;
-      const anchorToISO = fromISO <= toISO ? toISO : fromISO;
-      
-      // Convert asat date to ISO datetime (end of day, UTC)
-      const asatDateUK = resolveRelativeDate(parsed.asat);
-      const asatDateObj = parseUKDate(asatDateUK);
-      asatDateObj.setUTCHours(23, 59, 59, 999);
-      const asAtISO = asatDateObj.toISOString();
-      
-      // Extract slice_keys (slice-family selectors):
-      // slice identity = context/case dims + temporal mode (window vs cohort).
-      // We intentionally ignore window/cohort *arguments* for matching.
-      const sliceDims = extractSliceDimensions(targetSlice);
-      const modeClause = parsed.cohort ? 'cohort()' : (parsed.window ? 'window()' : '');
-      const sliceFamilyKey = [sliceDims, modeClause].filter(Boolean).join('.');
 
-      // IMPORTANT:
-      // If the DSL is uncontexted (no explicit context dims), do NOT apply a slice filter.
-      // Uncontexted reads must be able to aggregate across MECE context slices. Slice filtering
-      // here is unnecessary and can incorrectly return 0 rows depending on how slice_key was written.
-      const sliceKeyArray = sliceDims ? (sliceFamilyKey ? [sliceFamilyKey] : undefined) : undefined;
-      
-      // ========================================================================
-      // MANDATORY: Signature integrity (do NOT recompute).
-      // ========================================================================
-      // Snapshot reads MUST be keyed by the exact canonical signature that was written
-      // with the fetched data. Recomputing here is unsafe (context/pinned-dims and
-      // normalisation drift can produce a different signature and yield 0 rows).
-      const signatureStr = (() => {
-        const values: any[] = Array.isArray((paramFile as any)?.data?.values) ? (paramFile as any).data.values : [];
-        const mode: 'window' | 'cohort' = parsed.cohort ? 'cohort' : 'window';
-        return selectQuerySignatureForAsat({ values, mode });
-      })();
-      if (!signatureStr) {
-        const modeLabel = parsed.cohort ? 'cohort' : 'window';
-        console.warn(
-          `[DataOperationsService] asat: no query_signature matching mode=${modeLabel} in parameter file; snapshot lookup skipped`
-        );
-        sessionLogService.endOperation(
-          asatLogOpId,
-          'warning',
-          `asat: no mode-matching query_signature (${modeLabel}) (snapshot lookup skipped)`
-        );
-        return { success: true, warning: 'No snapshot data (missing query signature)' };
-      }
-      const sigParsed = parseSignature(signatureStr);
-      if (!sigParsed.identityHash) {
-        console.warn('[DataOperationsService] asat: invalid query_signature in parameter file; snapshot lookup skipped');
-        sessionLogService.endOperation(asatLogOpId, 'warning', 'asat: invalid query_signature (snapshot lookup skipped)');
-        return { success: true, warning: 'No snapshot data (invalid query signature)' };
-      }
+      if (workspaceRepo && workspaceBranch) {
+        const dbParamId = `${workspaceRepo}-${workspaceBranch}-${paramId}`;
 
-      console.log('[DataOperationsService] asat query params:', {
-        dbParamId, anchorFromISO, anchorToISO, asAtISO, sliceKeyArray, identityHash: sigParsed.identityHash
-      });
-      sessionLogService.addChild(
-        asatLogOpId,
-        'info',
-        'ASAT_QUERY',
-        `Querying virtual snapshot: ${anchorFromISO} to ${anchorToISO} as-at ${asatDateUK}`,
-        undefined,
-        {
-          param_id: dbParamId,
-          anchor_from: anchorFromISO,
-          anchor_to: anchorToISO,
-          as_at: asAtISO,
-          slice_keys: sliceKeyArray,
-          identity_hash: sigParsed.identityHash,
+        // Resolve date range
+        let anchorFrom: string | undefined;
+        let anchorTo: string | undefined;
+        if (parsed.cohort?.start || parsed.cohort?.end) {
+          anchorFrom = parsed.cohort.start ? resolveRelativeDate(parsed.cohort.start) : undefined;
+          anchorTo = parsed.cohort.end ? resolveRelativeDate(parsed.cohort.end) : todayUK;
+        } else if (parsed.window?.start || parsed.window?.end) {
+          anchorFrom = parsed.window.start ? resolveRelativeDate(parsed.window.start) : undefined;
+          anchorTo = parsed.window.end ? resolveRelativeDate(parsed.window.end) : todayUK;
+        } else {
+          anchorFrom = resolveRelativeDate('-60d');
+          anchorTo = todayUK;
         }
-      );
-      
-      // Call virtual snapshot query with MANDATORY canonical_signature
-      const virtualResult = await querySnapshotsVirtual({
-        param_id: dbParamId,
-        as_at: asAtISO,
-        anchor_from: anchorFromISO,
-        anchor_to: anchorToISO,
-        slice_keys: sliceKeyArray,
-        canonical_signature: signatureStr,
-      });
-      
-      if (!virtualResult.success) {
-        console.error('[DataOperationsService] Virtual snapshot query failed:', virtualResult.error);
-        sessionLogService.endOperation(asatLogOpId, 'error', `Virtual snapshot query failed: ${virtualResult.error}`);
-        return { success: false, warning: `Snapshot query failed: ${virtualResult.error}` };
-      }
-      
-      console.log('[DataOperationsService] Virtual snapshot returned', virtualResult.count, 'rows');
-      sessionLogService.addChild(
-        asatLogOpId,
-        'info',
-        'ASAT_RESULT',
-        `Virtual snapshot returned ${virtualResult.count} rows`,
-        undefined,
-        {
-          count: virtualResult.count,
-          latestRetrievedAt: virtualResult.latest_retrieved_at_used,
-          hasAnchorTo: virtualResult.has_anchor_to,
-          hasAnyRows: virtualResult.has_any_rows,
-          hasMatchingCoreHash: virtualResult.has_matching_core_hash,
-        }
-      );
 
-      if (virtualResult.count === 0) {
-        // Avoid spamming UI error toasts for every item in batch mode.
-        // Propagate as a failure so the batch summary + session log explains what happened.
-        const mismatchHint =
-          virtualResult.has_any_rows && virtualResult.has_matching_core_hash === false
-            ? 'Snapshot DB contains rows for this param/window, but none match the current query signature.'
-            : undefined;
-        const msg =
-          mismatchHint
-            ? `No snapshot rows matched signature as-at ${asatDateUK}. ${mismatchHint}`
-            : `No snapshot data available as-at ${asatDateUK}.`;
-        sessionLogService.endOperation(asatLogOpId, 'warning', msg);
-        return { success: false, warning: msg };
-      }
-      
-      // Fire warnings per §6.3 (batch-aware)
-      const entityLabel = paramId;
-      fireAsatWarnings(
-        asatDateUK,
-        virtualResult.latest_retrieved_at_used,
-        virtualResult.has_anchor_to,
-        anchorTo,
-        entityLabel
-      );
-      
-      // Convert to time series and apply to graph
-      // Use the slice-family key (dims + mode), or mode-only key for uncontexted queries.
-      // (convertVirtualSnapshotToTimeSeries handles normalised matching + implicit aggregation.)
-      const targetSliceKey = sliceDims ? (sliceFamilyKey || '') : '';
-      const timeSeries = convertVirtualSnapshotToTimeSeries(virtualResult.rows, targetSliceKey, {
-        workspace: { repository: workspaceRepo, branch: workspaceBranch },
-      });
-      
-      if (graph && setGraph && edgeId) {
-        const targetEdge: any = graph.edges?.find((e: any) => e.uuid === edgeId || e.id === edgeId);
-        if (targetEdge) {
-          // Simple aggregation
-          const totalN = timeSeries.reduce((sum, pt) => sum + pt.n, 0);
-          const totalK = timeSeries.reduce((sum, pt) => sum + pt.k, 0);
-          
-          const newGraph = { ...graph };
-          const newEdges = [...(newGraph.edges || [])];
-          const edgeIndex = newEdges.findIndex((e: any) => e.uuid === edgeId || e.id === edgeId);
-          
-          if (edgeIndex >= 0) {
-            const newEdge = { ...newEdges[edgeIndex] };
-            const paramObj = conditionalIndex !== undefined 
-              ? newEdge.conditional_p?.[conditionalIndex]?.p 
-              : newEdge.p;
-            
-            if (paramObj && typeof paramObj === 'object') {
-              (paramObj as any).n = totalN;
-              (paramObj as any).k = totalK;
-              (paramObj as any).n_daily = timeSeries.map(pt => pt.n);
-              (paramObj as any).k_daily = timeSeries.map(pt => pt.k);
-              (paramObj as any).dates = timeSeries.map(pt => pt.date);
-              (paramObj as any)._asat = parsed.asat;
-              (paramObj as any)._asat_retrieved_at = virtualResult.latest_retrieved_at_used;
+        if (anchorFrom && anchorTo) {
+          const aFromDate = parseUKDate(anchorFrom);
+          const aToDate = parseUKDate(anchorTo);
+          const fromISO = aFromDate.toISOString().split('T')[0];
+          const toISO = aToDate.toISOString().split('T')[0];
+          const anchorFromISO = fromISO <= toISO ? fromISO : toISO;
+          const anchorToISO = fromISO <= toISO ? toISO : fromISO;
+
+          // asat date → end of day UTC
+          const asatDateObj = parseUKDate(asatDateUK);
+          asatDateObj.setUTCHours(23, 59, 59, 999);
+          const asAtISO = asatDateObj.toISOString();
+
+          // Slice keys
+          const sliceDims = extractSliceDimensions(targetSlice);
+          const modeClause = parsed.cohort ? 'cohort()' : (parsed.window ? 'window()' : '');
+          const sliceFamilyKey = [sliceDims, modeClause].filter(Boolean).join('.');
+          const sliceKeyArray = sliceDims ? (sliceFamilyKey ? [sliceFamilyKey] : undefined) : undefined;
+
+          // Signature from file (mandatory — do not recompute)
+          const signatureStr = (() => {
+            const values: any[] = Array.isArray((paramFile as any)?.data?.values) ? (paramFile as any).data.values : [];
+            const mode: 'window' | 'cohort' = parsed.cohort ? 'cohort' : 'window';
+            return selectQuerySignatureForAsat({ values, mode });
+          })();
+
+          if (signatureStr) {
+            const sigParsed = parseSignature(signatureStr);
+            if (sigParsed.identityHash) {
+              const virtualResult = await querySnapshotsVirtual({
+                param_id: dbParamId,
+                as_at: asAtISO,
+                anchor_from: anchorFromISO,
+                anchor_to: anchorToISO,
+                slice_keys: sliceKeyArray,
+                canonical_signature: signatureStr,
+              });
+
+              if (virtualResult.success && virtualResult.count > 0) {
+                // Tier 1: reconstruct daily arrays from snapshot rows
+                // For uncontexted queries, use the mode clause as the slice key
+                // (e.g. 'window()' or 'cohort()') — snapshot rows are keyed by this.
+                const targetSliceKey = sliceFamilyKey || modeClause || '';
+                const timeSeries = convertVirtualSnapshotToTimeSeries(virtualResult.rows, targetSliceKey, {
+                  workspace: { repository: workspaceRepo, branch: workspaceBranch },
+                });
+
+                if (timeSeries.length > 0 && paramFile?.data?.values) {
+                  // Replace the daily arrays on the matching value entry
+                  const values = paramFile.data.values as any[];
+                  for (const v of values) {
+                    if (v.n_daily || v.k_daily) {
+                      v.n_daily = timeSeries.map(pt => pt.n);
+                      v.k_daily = timeSeries.map(pt => pt.k);
+                      v.dates = timeSeries.map(pt => pt.date);
+                      v.n = timeSeries.reduce((sum: number, pt: any) => sum + pt.n, 0);
+                      v.k = timeSeries.reduce((sum: number, pt: any) => sum + pt.k, 0);
+                      v._asat = parsed.asat;
+                      v._asat_retrieved_at = virtualResult.latest_retrieved_at_used;
+                    }
+                  }
+                  asatApplied = true;
+                  console.log(`[DataOperationsService] asat tier 1: reconstructed ${timeSeries.length} daily points from snapshot DB`);
+                }
+
+                // Fire warnings
+                fireAsatWarnings(
+                  asatDateUK,
+                  virtualResult.latest_retrieved_at_used,
+                  virtualResult.has_anchor_to,
+                  anchorTo,
+                  paramId
+                );
+              } else {
+                console.log(`[DataOperationsService] asat: no snapshot rows — falling back to tier 2 truncation`);
+              }
             }
-            
-            newEdges[edgeIndex] = newEdge;
-            newGraph.edges = newEdges;
-            setGraph(newGraph);
           }
         }
       }
-      
-      sessionLogService.endOperation(
-        asatLogOpId,
-        'success',
-        `Historical query complete: ${timeSeries.length} data points from snapshot as-at ${asatDateUK}`
-      );
-      return { success: true };
+
+      // Tier 2: truncate file arrays by asat date (approximation —
+      // cohorts appear too mature because Y values are latest observation)
+      if (!asatApplied) {
+        const paramFile = fileRegistry.getFile(`parameter-${paramId}`);
+        if (paramFile?.data?.values) {
+          const asatDateObj = parseUKDate(asatDateUK);
+          const values = paramFile.data.values as any[];
+          for (const v of values) {
+            if (v.dates && v.n_daily && v.k_daily) {
+              const filteredIndices: number[] = [];
+              for (let i = 0; i < v.dates.length; i++) {
+                try {
+                  const d = parseUKDate(normalizeToUK(v.dates[i]));
+                  if (d <= asatDateObj) filteredIndices.push(i);
+                } catch { /* skip unparseable */ }
+              }
+              v.n_daily = filteredIndices.map(i => v.n_daily[i]);
+              v.k_daily = filteredIndices.map(i => v.k_daily[i]);
+              v.dates = filteredIndices.map(i => v.dates[i]);
+              v.n = v.n_daily.reduce((s: number, x: number) => s + x, 0);
+              v.k = v.k_daily.reduce((s: number, x: number) => s + x, 0);
+              v._asat = parsed.asat;
+              v._asat_truncated = true;  // Mark as approximation
+            }
+          }
+          asatApplied = true;
+          console.log(`[DataOperationsService] asat tier 2: truncated file arrays to dates <= ${asatDateUK} (approximation)`);
+        }
+      }
     }
     // ============================================================================
-    // End asat() Fork
+    // End asat() Evidence Reconstruction — normal pipeline continues below
     // ============================================================================
 
     if (parsed.cohort?.start) {

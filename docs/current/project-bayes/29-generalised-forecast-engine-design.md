@@ -46,10 +46,10 @@ implementations.
 |-----------|----------|--------|
 | Completeness stdev computation | `runner/forecast_state.py` | Implemented. MC sampling from latency dispersions. One new field: `latency.completeness_stdev`. |
 | Promoted model resolver (unified) | `runner/model_resolver.py` | Implemented. `resolve_model_params(edge, scope, temporal_mode)` with preference cascade. 8 tests. |
-| Completeness with uncertainty | `runner/forecast_state.py` | Implemented. `compute_completeness_with_sd()` — 200-draw MC. |
-| `rate_conditioned_sd` / `rate_unconditioned_sd` | `runner/forecast_state.py` | Implemented. `_compose_rate_sd()` — independence-assumption composition. |
-| Two-tier FE/BE delivery | `fetchDataService.ts`, `api_handlers.py` | Implemented. BE writes to same fields as FE. Session log shows FE→BE parity per edge. |
-| Graph-wide topo pass with per-node arrival caching | `runner/forecast_state.py` | Implemented. `build_node_arrival_cache()` — topo-order walk, calls v2 carrier hierarchy. |
+| Completeness with uncertainty | `runner/forecast_state.py` | Implemented. `compute_completeness_with_sd()` — 200-draw MC. Used by `compute_forecast_state_window/cohort` (not on production codepath) and indirectly by `compute_conditioned_forecast` (topo pass). |
+| `rate_conditioned_sd` / `rate_unconditioned_sd` | `runner/forecast_state.py` | Implemented. `_compose_rate_sd()` — independence-assumption composition. Used by `compute_forecast_state_window/cohort` only (not on production codepath). The topo pass derives rate SD from `compute_conditioned_forecast` draw arrays. |
+| Two-tier FE/BE delivery | `fetchDataService.ts`, `api_handlers.py` | Implemented. BE writes to same fields as FE. Session log shows FE→BE parity per edge. **Note**: topo pass uses `compute_conditioned_forecast`, not the same `compute_forecast_sweep` that v3 uses — see doc 29f §Codepath Divergence Analysis. |
+| Graph-wide topo pass with per-node arrival caching | `runner/forecast_state.py` | Implemented. `build_node_arrival_cache()` — topo-order walk, calls v2 carrier hierarchy. **Note**: builds Tier 3 (weak prior) carriers because it lacks upstream observations. Chart handler builds Tier 2 (empirical) — see doc 29f §Codepath Divergence Analysis. |
 | F-mode and F+E-mode bead ± correction | `edgeBeadHelpers.tsx`, `api_handlers.py` | Implemented. F-mode: composed at display time from `p.forecast.stdev` + `completeness_stdev`. F+E-mode: BE writes composed `p_sd`. |
 | IS-conditioned forecast engine | `runner/forecast_state.py` | Implemented. `compute_conditioned_forecast()` — aggregate IS with tempering (doc 29g). |
 | `cohort_maturity_v3` | `runner/cohort_forecast_v3.py` | Implemented (185 lines). Routes as `cohort_maturity` (prod). v1/v2 gated to dev only. |
@@ -58,6 +58,7 @@ implementations.
 
 | Component | Status |
 |-----------|--------|
+| **Codepath generalisation (Phase G)** | **Design in doc 29f §Phase G.** The topo pass and chart currently use structurally different forecast functions (`compute_conditioned_forecast` vs `compute_forecast_sweep`). Phase G unifies them so graph display calls the same codepath as v3. This is the critical missing piece for the "single engine" promise. |
 | Surprise gauge migration to engine | Design only. Currently ~400 lines of independent computation. |
 | Edge card migration to engine | Design only. Currently ~500 lines of scattered annotation. |
 | `asat()` support in engine (three-date model) | Design only. evidence_cutoff / evaluation / posterior_cutoff. |
@@ -71,7 +72,8 @@ implementations.
 | v1 vs v2 single-hop parity (field-by-field) | **PASSED 13-Apr-26.** Window and cohort modes on real graph data. Tests in `test_doc31_parity.py`. |
 | v2 multi-hop acceptance | Pending — parallel quality work, does not block engine extraction. |
 | Phase 3 cohort-mode engine vs v2 | **PASSED 14-Apr-26.** 1.75% delta on enriched `synth-simple-abc`. Tests in `test_forecast_state_cohort.py` (12 tests) + `test_be_topo_pass_parity.py` (4 tests). |
-| v2 → v3 parity | Not applicable yet (v3 not started). |
+| v2 → v3 parity | **PASSED 16-Apr-26.** CLI parity test green 17/17 on synth-mirror-4step. |
+| Topo pass ↔ chart agreement | **NOT YET TESTED.** Phase G prerequisite. Topo pass uses different codepath — see doc 29f §Codepath Divergence Analysis. |
 
 ---
 

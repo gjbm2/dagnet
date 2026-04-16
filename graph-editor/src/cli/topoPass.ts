@@ -4,10 +4,18 @@
  * Builds cohort_data from disk-loaded parameter files, calls the BE
  * /api/lag/topo-pass endpoint, and writes engine-computed values onto
  * the graph edges. Used by param-pack (always) and analyse (--topo-pass).
+ *
+ * D18 FIX: When a queryDsl is provided, cohorts are scoped to the
+ * DSL date range for IS conditioning (scoped_cohorts in edge_contexts).
+ * Model fitting uses all cohorts (cohort_data). This matches the FE
+ * browser behaviour in beTopoPassService.ts.
  */
 
 import { log } from './logger';
 import { PYTHON_API_BASE } from '../lib/pythonApiBase';
+import { parseConstraints } from '../lib/queryDSL';
+import { parseDate } from '../services/windowAggregationService';
+import { resolveRelativeDate, formatDateUK } from '../lib/dateFormat';
 
 interface TopoEdgeResult {
   edge_uuid: string;
@@ -43,14 +51,43 @@ interface TopoPassResult {
 }
 
 /**
- * Build cohort_data from bundle.parameters (disk-loaded param files).
- * Returns a map from edge UUID → per-date cohort records.
+ * Build a single cohort record from a param file's daily arrays.
  */
-function buildCohortData(
+function buildCohortRecord(
+  dates: string[], d: number,
+  nDaily: number[], kDaily: number[],
+  medianLagDaily: number[], meanLagDaily: number[],
+  anchorMedianDaily: number[], anchorMeanDaily: number[],
+): any {
+  return {
+    date: dates[d],
+    age: dates.length - d,
+    n: nDaily[d] || 0,
+    k: kDaily[d] || 0,
+    median_lag_days: medianLagDaily[d] ?? null,
+    mean_lag_days: meanLagDaily[d] ?? null,
+    anchor_median_lag_days: anchorMedianDaily[d] ?? null,
+    anchor_mean_lag_days: anchorMeanDaily[d] ?? null,
+  };
+}
+
+/**
+ * Build cohort_data (all cohorts, for model fitting) and optionally
+ * edge_contexts with scoped_cohorts (DSL-filtered, for conditioning).
+ *
+ * D18 FIX: when scopeWindow is provided, cohorts whose dates fall
+ * within the window are emitted as scoped_cohorts in edge_contexts.
+ * The BE uses scoped_cohorts for IS conditioning while using the
+ * full cohort_data for model fitting — matching the FE browser
+ * behaviour in beTopoPassService.ts.
+ */
+function buildCohortDataAndContexts(
   graph: any,
   parameters: Map<string, any>,
-): Record<string, any[]> {
+  scopeWindow?: { start: Date; end: Date },
+): { cohortData: Record<string, any[]>; edgeContexts: Record<string, any> } {
   const cohortData: Record<string, any[]> = {};
+  const edgeContexts: Record<string, any> = {};
   const paramIdToEdgeUuid = new Map<string, string>();
   for (const edge of (graph.edges || [])) {
     const eid = edge.uuid || edge.id;
@@ -70,25 +107,41 @@ function buildCohortData(
     const meanLagDaily: number[] = v.mean_lag_days || [];
     const anchorMedianDaily: number[] = v.anchor_median_lag_days || [];
     const anchorMeanDaily: number[] = v.anchor_mean_lag_days || [];
-    const cohorts: any[] = [];
+
+    const cohortsAll: any[] = [];
+    const cohortsScoped: any[] = [];
+
     for (let d = 0; d < dates.length; d++) {
       if ((nDaily[d] || 0) === 0) continue;
-      cohorts.push({
-        date: dates[d],
-        age: dates.length - d,
-        n: nDaily[d] || 0,
-        k: kDaily[d] || 0,
-        median_lag_days: medianLagDaily[d] ?? null,
-        mean_lag_days: meanLagDaily[d] ?? null,
-        anchor_median_lag_days: anchorMedianDaily[d] ?? null,
-        anchor_mean_lag_days: anchorMeanDaily[d] ?? null,
-      });
+      const rec = buildCohortRecord(
+        dates, d, nDaily, kDaily,
+        medianLagDaily, meanLagDaily,
+        anchorMedianDaily, anchorMeanDaily,
+      );
+      cohortsAll.push(rec);
+
+      if (scopeWindow) {
+        try {
+          const cohortDate = parseDate(dates[d]);
+          if (cohortDate >= scopeWindow.start && cohortDate <= scopeWindow.end) {
+            cohortsScoped.push(rec);
+          }
+        } catch {
+          // Unparseable date — skip from scoped set
+        }
+      }
     }
-    if (cohorts.length > 0) {
-      cohortData[edgeUuid] = cohorts;
+
+    if (cohortsAll.length > 0) {
+      cohortData[edgeUuid] = cohortsAll;
+    }
+
+    // Only send scoped_cohorts when the scope actually reduces the set
+    if (scopeWindow && cohortsScoped.length > 0 && cohortsScoped.length !== cohortsAll.length) {
+      edgeContexts[edgeUuid] = { scoped_cohorts: cohortsScoped };
     }
   }
-  return cohortData;
+  return { cohortData, edgeContexts };
 }
 
 /**
@@ -138,10 +191,50 @@ function writeTopoResultsToGraph(graph: any, edges: TopoEdgeResult[]): void {
 }
 
 /**
+ * Parse a cohort/window date range from a query DSL string.
+ * Returns a scope window {start, end} or undefined if no temporal
+ * clause is found.
+ *
+ * Handles absolute dates (cohort(7-Mar-26:21-Mar-26)) and relative
+ * dates (cohort(-30d:), window(-2w:)) via resolveRelativeDate.
+ * Open-ended ranges (no end date) default to today.
+ *
+ * Follows the same resolution pattern as the FE browser path
+ * (fetchDataService.ts:1527, fetchOrchestratorService.ts:48).
+ */
+function parseScopeWindow(queryDsl: string): { start: Date; end: Date } | undefined {
+  const parsed = parseConstraints(queryDsl);
+
+  // Prefer cohort() range, fall back to window()
+  const temporal = parsed.cohort ?? parsed.window;
+  if (!temporal) return undefined;
+
+  const startStr = temporal.start;
+  if (!startStr) return undefined;
+
+  // Open-ended range (no end) defaults to today — same as FE
+  const endStr = temporal.end || formatDateUK(new Date());
+
+  try {
+    const resolvedStart = resolveRelativeDate(startStr);
+    const resolvedEnd = resolveRelativeDate(endStr);
+    const start = parseDate(resolvedStart);
+    const end = parseDate(resolvedEnd);
+    if (isNaN(start.getTime()) || isNaN(end.getTime())) return undefined;
+    return { start, end };
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Run the BE topo pass on a graph using disk-loaded parameter files.
  *
  * Builds cohort data from bundle.parameters, calls the BE endpoint,
  * and writes results onto the graph edges in place.
+ *
+ * When queryDsl is provided, cohorts are scoped to the DSL date range
+ * for IS conditioning (D18 fix). Model fitting uses all cohorts.
  *
  * Returns true if the topo pass ran successfully, false if the BE was
  * unreachable (graph is unchanged — FE-only values remain).
@@ -149,9 +242,21 @@ function writeTopoResultsToGraph(graph: any, edges: TopoEdgeResult[]): void {
 export async function runCliTopoPass(
   graph: any,
   parameters: Map<string, any>,
+  queryDsl?: string,
 ): Promise<boolean> {
-  const cohortData = buildCohortData(graph, parameters);
-  log.info(`Built cohort data for ${Object.keys(cohortData).length} edges from parameter files`);
+  // Parse temporal scope from DSL
+  const scopeWindow = queryDsl ? parseScopeWindow(queryDsl) : undefined;
+  if (scopeWindow) {
+    log.info(`Scoping topo pass cohorts to ${scopeWindow.start.toISOString().slice(0, 10)} – ${scopeWindow.end.toISOString().slice(0, 10)}`);
+  }
+
+  const { cohortData, edgeContexts } = buildCohortDataAndContexts(graph, parameters, scopeWindow);
+  const scopedCount = Object.keys(edgeContexts).length;
+  log.info(`Built cohort data for ${Object.keys(cohortData).length} edges` +
+    (scopedCount > 0 ? ` (${scopedCount} with scoped_cohorts)` : ''));
+
+  // Determine query mode from DSL
+  const queryMode = queryDsl?.includes('window(') ? 'window' : 'cohort';
 
   const topoUrl = `${PYTHON_API_BASE}/api/lag/topo-pass`;
   let topoResponse: Response;
@@ -159,7 +264,12 @@ export async function runCliTopoPass(
     topoResponse = await fetch(topoUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ graph, cohort_data: cohortData }),
+      body: JSON.stringify({
+        graph,
+        cohort_data: cohortData,
+        edge_contexts: edgeContexts,
+        query_mode: queryMode,
+      }),
     });
   } catch (err: any) {
     log.warn(`BE topo pass unavailable (${err.message}) — using FE-only values`);

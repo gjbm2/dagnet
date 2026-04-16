@@ -1,0 +1,21 @@
+{
+    "name": "two-dim",
+    "description": "Two-dimension and cross-product DSL graphs",
+    "graphs": {
+        "include": [
+            "synth-context-two-dim",
+            "synth-context-staggered",
+            "synth-diamond-context-two-dim",
+            "synth-abc-context-two-dim"
+        ]
+    },
+    "sampling": {
+        "chains": 3,
+        "draws": 1500,
+        "tune": 750,
+        "no_timeout": true
+    },
+    "features": [],
+    "settings": {},
+    "tags": ["2-dim", "cross-product", "orth"]
+}

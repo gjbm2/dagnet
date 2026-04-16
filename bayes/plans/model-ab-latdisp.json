@@ -1,0 +1,34 @@
+{
+    "name": "model-ab-latdisp",
+    "description": "A/B comparison — baseline vs latency_dispersion on key graphs",
+    "graphs": {
+        "include": [
+            "synth-simple-abc",
+            "synth-diamond-test",
+            "synth-diamond-context",
+            "synth-mirror-4step",
+            "synth-context-solo",
+            "synth-context-two-dim"
+        ]
+    },
+    "sampling": {
+        "chains": 3,
+        "draws": 1000,
+        "tune": 500
+    },
+    "features": [],
+    "settings": {},
+    "tags": ["model-comparison", "latency-dispersion"],
+    "variants": [
+        {
+            "name": "baseline",
+            "features": [],
+            "settings": {}
+        },
+        {
+            "name": "latdisp",
+            "features": ["latency_dispersion=true"],
+            "settings": {"target_accept": 0.95}
+        }
+    ]
+}

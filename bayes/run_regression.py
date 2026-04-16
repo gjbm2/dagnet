@@ -1301,12 +1301,82 @@ def run_regression(args) -> list[dict]:
         with open(summary_path, "a") as _sf:
             _sf.write("\n" + agg)
 
+    # Write structured JSON results alongside the text summary
+    results_json_path = summary_path.replace(".summary", ".json")
+    _write_structured_results(results, results_json_path, run_id)
+    print(f"\n  Structured results: {results_json_path}")
+
     if failed:
         print(f"\n  REGRESSION FAILED")
         return results
     else:
         print(f"\n  ALL PASSED")
         return results
+
+
+def _write_structured_results(
+    results: list[dict],
+    path: str,
+    run_id: str,
+) -> None:
+    """Write machine-readable JSON results for programmatic analysis."""
+    def _serialise_graph(r: dict) -> dict:
+        return {
+            "graph_name": r.get("graph_name", ""),
+            "passed": r.get("passed", False),
+            "xfail": r.get("xfail", False),
+            "xfail_reason": r.get("xfail_reason", ""),
+            "failures": r.get("failures", []),
+            "warnings": r.get("warnings", []),
+            "quality": r.get("quality", {}),
+            "thresholds": r.get("thresholds", {}),
+            "edges": {
+                edge_name: {
+                    param: {
+                        "truth": pdata.get("truth"),
+                        "posterior_mean": pdata.get("posterior_mean"),
+                        "posterior_sd": pdata.get("posterior_sd"),
+                        "z_score": pdata.get("z_score"),
+                        "abs_error": pdata.get("abs_error"),
+                        "status": pdata.get("status"),
+                    }
+                    for param, pdata in edge_params.items()
+                }
+                for edge_name, edge_params in r.get("parsed_edges", r.get("edges", {})).items()
+            },
+            "slices": {
+                label: {
+                    param: {
+                        "truth": pdata.get("truth"),
+                        "posterior_mean": pdata.get("posterior_mean"),
+                        "posterior_sd": pdata.get("posterior_sd"),
+                        "z_score": pdata.get("z_score"),
+                        "abs_error": pdata.get("abs_error"),
+                        "status": pdata.get("status"),
+                    }
+                    for param, pdata in slice_params.items()
+                    if isinstance(pdata, dict)
+                }
+                for label, slice_params in r.get("parsed_slices", r.get("slices", {})).items()
+            },
+        }
+
+    passed = [r for r in results if r.get("passed") and not r.get("xfail")]
+    failed = [r for r in results if not r.get("passed") and not r.get("xfail")]
+    xfailed = [r for r in results if not r.get("passed") and r.get("xfail")]
+
+    envelope = {
+        "run_id": run_id,
+        "timestamp": datetime.now().strftime("%d-%b-%y %H:%M"),
+        "total": len(results),
+        "passed": len(passed),
+        "failed": len(failed),
+        "xfailed": len(xfailed),
+        "graphs": [_serialise_graph(r) for r in results],
+    }
+
+    with open(path, "w") as f:
+        json.dump(envelope, f, indent=2)
 
 
 def main():

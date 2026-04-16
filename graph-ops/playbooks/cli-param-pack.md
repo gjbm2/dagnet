@@ -81,6 +81,10 @@ The `--query` argument accepts the same DSL the browser uses:
 - `cohort(8-Jan-26:7-Apr-26)` — cohort mode with date range
 - `context(channel:google).window(-30d:)` — context-filtered window
   (context filtering not yet fully wired — uses all values currently)
+- `window(-30d:).asat(15-Jan-26)` — historical view: evidence filtered
+  to snapshots retrieved on or before the asat date (doc 42). Data comes
+  from the snapshot DB, not from Amplitude. Read-only — no file writes.
+- `at(15-Jan-26)` — sugar for `asat(15-Jan-26)`
 
 Trailing dots are tolerated (e.g. `"cohort(8-Jan-26:7-Apr-26)."` works).
 

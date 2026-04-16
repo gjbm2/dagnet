@@ -283,6 +283,163 @@ export function wrapAxisLabel(raw: string, maxCharsPerLine = 12, maxLines = 2): 
   return lines.slice(0, maxLines).join('\n') || s;
 }
 
+// ─── Multi-scenario legend utility ─────────────────────────────────────────
+
+/**
+ * A visual concept in the chart's legend — explains one element of the
+ * chart's visual language (e.g. "Evidence" bar, "Forecast %" dashed line).
+ * Shown once in neutral colour regardless of how many scenarios are visible.
+ */
+export interface LegendConcept {
+  /** Display label in legend (e.g. "Evidence", "Forecast %") */
+  label: string;
+  /** Series type for the invisible concept series */
+  seriesType: 'bar' | 'line';
+  /** ECharts legend icon override: 'roundRect', 'line', or SVG path string */
+  icon?: string;
+  /** itemStyle for bar concepts (colour, opacity, decal) */
+  itemStyle?: any;
+  /** lineStyle for line concepts (type: 'solid'|'dashed', colour) */
+  lineStyle?: any;
+}
+
+export interface ScenarioSwatch {
+  /** Display label (scenario name) */
+  name: string;
+  /** Scenario colour */
+  colour: string;
+}
+
+/**
+ * Build a legend that shows visual concepts once plus one colour swatch
+ * per scenario.
+ *
+ * Single scenario: returns null — caller should use a plain legend config
+ * and let ECharts auto-discover series names.
+ *
+ * Multi-scenario: returns a `data` array for the legend that references
+ * real series from the first scenario as concept representatives, plus
+ * one swatch per scenario (using each scenario's evidence bar series).
+ * No synthetic series are created — ECharts requires legend items to
+ * reference series with actual data, otherwise legend layout collapses
+ * to position (0,0).
+ *
+ * The caller's series naming convention must be:
+ *   Single scenario: "{concept}" (e.g. "Evidence", "Forecast %")
+ *   Multi-scenario:  "{scenarioName} · {concept}"
+ */
+export function buildScenarioLegend(opts: {
+  concepts: LegendConcept[];
+  scenarios: ScenarioSwatch[];
+  seriesArray: any[];
+  neutralColour?: string;
+}): { data: any[]; formatter: (name: string) => string } | null {
+  const { concepts, scenarios, neutralColour = '#808080' } = opts;
+
+  if (scenarios.length <= 1) return null;
+
+  const data: any[] = [];
+  const firstScenarioName = scenarios[0]?.name || '';
+
+  // 1. Concept entries — use the first scenario's series as representatives.
+  //    Legend shows them with neutral styling; formatter strips the scenario prefix.
+  for (const ct of concepts) {
+    const seriesName = `${firstScenarioName} · ${ct.label}`;
+    data.push({
+      name: seriesName,
+      ...(ct.icon ? { icon: ct.icon } : {}),
+      itemStyle: ct.itemStyle || { color: neutralColour },
+    });
+  }
+
+  // 2. Scenario colour swatches — use each scenario's first concept series
+  //    (typically "Evidence" bar) as the representative.
+  const firstConceptLabel = concepts[0]?.label || '';
+  for (const sc of scenarios) {
+    const seriesName = `${sc.name} · ${firstConceptLabel}`;
+    data.push({
+      name: seriesName,
+      icon: 'roundRect',
+      itemStyle: { color: sc.colour },
+    });
+  }
+
+  // 3. Formatter: strip "{Scenario} · " prefix for concept entries,
+  //    show just the scenario name for swatches.
+  const conceptSuffixes = new Set(concepts.map(ct => ct.label));
+  const scenarioNames = new Set(scenarios.map(sc => sc.name));
+  const formatter = (name: string): string => {
+    const dotIdx = name.indexOf(' · ');
+    if (dotIdx >= 0) {
+      const suffix = name.slice(dotIdx + 3);
+      const prefix = name.slice(0, dotIdx);
+      // Concept entry (first scenario representative) → show concept label only
+      if (prefix === firstScenarioName && conceptSuffixes.has(suffix)) {
+        return suffix;
+      }
+      // Swatch entry → show scenario name only
+      if (scenarioNames.has(prefix) && suffix === firstConceptLabel) {
+        return prefix;
+      }
+    }
+    return name;
+  };
+
+  return { data, formatter };
+}
+
+// ─── Rate smoothing ────────────────────────────────────────────────────────
+
+export type RateSmoothingMethod = 'off' | 'l3d' | 'l7d' | 'weekly' | 'monthly' | 'ewma3d' | 'ewma7d';
+
+/**
+ * Smooth an array of [date, rate|null] pairs using a trailing window.
+ * Returns a new array with the same dates but smoothed rates.
+ * Nulls are preserved (not filled). SMA outputs null until the window
+ * has enough data. EWMA initialises from the first non-null value.
+ */
+export function smoothRates(
+  data: Array<[string, number | null]>,
+  method: RateSmoothingMethod,
+): Array<[string, number | null]> {
+  if (method === 'off' || !method) return data;
+
+  const smaWindows: Record<string, number> = { l3d: 3, l7d: 7, weekly: 7, monthly: 30 };
+  if (method in smaWindows) {
+    const n = smaWindows[method];
+    return data.map(([d, _v], i) => {
+      const window: number[] = [];
+      for (let j = Math.max(0, i - n + 1); j <= i; j++) {
+        const val = data[j][1];
+        if (val !== null && Number.isFinite(val)) window.push(val);
+      }
+      if (window.length === 0) return [d, null] as [string, number | null];
+      // Require at least half the window to be populated
+      if (window.length < Math.ceil(n / 2)) return [d, null] as [string, number | null];
+      return [d, window.reduce((a, b) => a + b, 0) / window.length] as [string, number | null];
+    });
+  }
+
+  if (method === 'ewma3d' || method === 'ewma7d') {
+    const span = method === 'ewma3d' ? 3 : 7;
+    const alpha = 2 / (span + 1);
+    let ewma: number | null = null;
+    return data.map(([d, v]) => {
+      if (v === null || !Number.isFinite(v)) {
+        return [d, ewma] as [string, number | null];
+      }
+      if (ewma === null) {
+        ewma = v;
+      } else {
+        ewma = alpha * v + (1 - alpha) * ewma;
+      }
+      return [d, ewma] as [string, number | null];
+    });
+  }
+
+  return data;
+}
+
 export function getScenarioTitleWithBasis(result: AnalysisResult, scenarioId: string): string {
   const name = getDimLabel(result.dimension_values, 'scenario_id', scenarioId);
   const basis = (result.dimension_values?.scenario_id?.[scenarioId] as any)?.probability_label;

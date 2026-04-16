@@ -8,7 +8,7 @@
 
 // ─── Local imports (used by buildChartOption below) ─────────────────────────
 
-import { applyCommonSettings } from './analysisECharts/echartsCommon';
+import { applyCommonSettings, echartsThemeColours } from './analysisECharts/echartsCommon';
 import { buildFunnelBarEChartsOption } from './analysisECharts/funnelBuilders';
 import { buildBridgeEChartsOption } from './analysisECharts/bridgeBuilders';
 import { buildHistogramEChartsOption, buildDailyConversionsEChartsOption } from './analysisECharts/snapshotBuilders';
@@ -179,6 +179,42 @@ export function buildChartOption(
       });
     }
     return null;
+  }
+
+  // ── Model source hint (generalised — doc 29f §Phase G) ──────────────
+  // When the promoted model source is not Bayesian, show a subtle hint
+  // so the user knows the forecast quality could be improved. Applied to
+  // all chart types that use model-derived values. The surprise gauge
+  // builder has its own hint rendering (from result.hint); this covers
+  // all other chart types via promoted_source on the result metadata.
+  if (opt && chartKind !== 'surprise_gauge') {
+    const promotedSource = result?.promoted_source
+      || result?.metadata?.promoted_source
+      || result?.reference_source;
+    if (promotedSource && promotedSource !== 'bayesian' && promotedSource !== 'best_available') {
+      const hint = 'Run Bayes model for better forecasts';
+      const c = echartsThemeColours();
+      const hintColour = c.text === '#e0e0e0' ? '#6b7280' : '#9ca3af';
+      const graphics: any[] = Array.isArray(opt.graphic) ? [...opt.graphic] : [];
+      graphics.push(
+        {
+          type: 'text',
+          right: 6,
+          top: 4,
+          style: { text: '\u26A0', fontSize: 14, fill: '#f59e0b' },
+          silent: true,
+          z: 100,
+        },
+        {
+          type: 'text',
+          right: 8,
+          bottom: 4,
+          style: { text: hint, fontSize: 9, fill: hintColour, fontStyle: 'italic' },
+          silent: true,
+        },
+      );
+      opt.graphic = graphics;
+    }
   }
 
   // ── Time grouping (re-bucket time-series data into week/month bins) ──

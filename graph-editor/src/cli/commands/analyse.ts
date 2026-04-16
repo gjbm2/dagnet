@@ -54,6 +54,7 @@ dagnet-cli analyse
     --no-snapshot-cache      Bypass BE snapshot service cache. Use after synth_gen
                              or any DB repopulation to avoid stale cached results.
     --allow-external-fetch   Fetch live from external sources (e.g. Amplitude)
+    --display <json>          Display settings JSON (e.g. '{"show_latency_bands":true}')
     --no-cache               Bypass disk bundle cache
     --verbose, -v            Show all console.log/warn output
     --help, -h               Show this help
@@ -98,6 +99,7 @@ async function runAnalyse() {
       scenario: { type: 'string', multiple: true },
       'topo-pass': { type: 'boolean' },
       'no-snapshot-cache': { type: 'boolean' },
+      display: { type: 'string' },
     },
   });
   if (!ctx) {
@@ -108,6 +110,17 @@ async function runAnalyse() {
   const { bundle, queryDsl, workspace, getKey, format, flags, extraArgs } = ctx;
   const analysisType = (extraArgs.type as string) || 'graph_overview';
   const subject = extraArgs.subject as string | undefined;
+
+  // Parse --display JSON for chart settings
+  let cliDisplaySettings: Record<string, unknown> | undefined;
+  if (extraArgs.display) {
+    try {
+      cliDisplaySettings = JSON.parse(extraArgs.display as string);
+    } catch {
+      log.error(`Invalid --display JSON: ${extraArgs.display}`);
+      process.exit(1);
+    }
+  }
 
   // Bypass the BE snapshot service in-memory cache. Essential during synth
   // gen cycles where the DB is repopulated between runs.
@@ -171,7 +184,7 @@ async function runAnalyse() {
   // automatically on graph open).
   if (extraArgs['topo-pass']) {
     log.info('Running BE topo pass...');
-    const ok = await runCliTopoPass(baseGraph, bundle.parameters);
+    const ok = await runCliTopoPass(baseGraph, bundle.parameters, queryDsl);
     if (!ok) {
       log.error('BE topo pass failed — cannot proceed');
       process.exit(1);
@@ -251,6 +264,7 @@ async function runAnalyse() {
       currentParams: currentEntry.params,
       scenariosReady: true,
     },
+    display: cliDisplaySettings,
     whatIfDSL: null,
     getScenarioVisibilityMode: (id: string) => {
       const entry = scenarioEntries.find(e => e.id === id);

@@ -195,116 +195,11 @@ def _compose_rate_sd(
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# Window-mode ForecastState computation
+# Cohort-mode upstream arrival state
 # ═══════════════════════════════════════════════════════════════════════
 
-def compute_forecast_state_window(
-    edge_id: str,
-    resolved: ResolvedModelParams,
-    cohort_ages_and_weights: List[tuple],
-    evaluation_date: str = '',
-    evidence_cutoff_date: str = '',
-    posterior_cutoff_date: str = '',
-    evidence_rate: Optional[float] = None,
-) -> ForecastState:
-    """Compute ForecastState for a window-mode edge.
+_COHORT_MC_DRAWS = 2000
 
-    Args:
-        edge_id: edge UUID.
-        resolved: resolved model params from the promoted resolver.
-        cohort_ages_and_weights: list of (age_days, n) tuples for
-            the cohorts in the query window. Used to compute
-            n-weighted completeness.
-        evaluation_date: asat date or "now".
-        evidence_cutoff_date: snapshot cutoff.
-        posterior_cutoff_date: model cutoff.
-        evidence_rate: observed k/n if available (for conditioning).
-
-    Returns:
-        ForecastState with all window-mode fields populated.
-    """
-    lat = resolved.latency
-    p = resolved.p_mean
-
-    # ── N-weighted completeness with SD ──────────────────────────
-    total_n = 0.0
-    weighted_c = 0.0
-    weighted_c_sd_sq = 0.0  # variance, n-weighted
-
-    for age_days, n in cohort_ages_and_weights:
-        c, c_sd = compute_completeness_with_sd(float(age_days), lat)
-        weighted_c += n * c
-        weighted_c_sd_sq += n * n * c_sd * c_sd
-        total_n += n
-
-    if total_n > 0:
-        completeness = weighted_c / total_n
-        # SD of weighted mean: sqrt(Σ(n_i² × sd_i²)) / Σ(n_i)
-        completeness_sd = math.sqrt(weighted_c_sd_sq) / total_n
-    else:
-        completeness = 0.0
-        completeness_sd = 0.0
-
-    # ── Rates ────────────────────────────────────────────────────
-    rate_unconditioned = p * completeness
-    rate_unconditioned_sd = _compose_rate_sd(p, resolved.p_sd,
-                                             completeness, completeness_sd)
-
-    # Evidence-conditioned: blend
-    if evidence_rate is not None and completeness > 0:
-        # Blend: c × evidence + (1-c) × model
-        model_rate = p * completeness
-        rate_conditioned = (
-            completeness * evidence_rate
-            + (1 - completeness) * model_rate
-        )
-        # Conditioned SD shrinks as completeness → 1
-        # At c=1: pure evidence, SD = evidence sampling SD (not computed here)
-        # At c=0: pure model, SD = rate_unconditioned_sd
-        rate_conditioned_sd = (1 - completeness) * rate_unconditioned_sd
-    else:
-        rate_conditioned = rate_unconditioned
-        rate_conditioned_sd = rate_unconditioned_sd
-
-    # ── Tau observed (n-weighted age) ────────────────────────────
-    tau_observed = 0
-    if total_n > 0 and cohort_ages_and_weights:
-        tau_observed = int(round(
-            sum(age * n for age, n in cohort_ages_and_weights) / total_n
-        ))
-
-    dispersions = Dispersions(
-        p_sd=resolved.p_sd,
-        mu_sd=lat.mu_sd,
-        sigma_sd=lat.sigma_sd,
-        onset_sd=lat.onset_sd,
-    )
-
-    return ForecastState(
-        edge_id=edge_id,
-        source=resolved.source,
-        fitted_at=resolved.fitted_at,
-        tier='be_forecast',
-        evaluation_date=evaluation_date,
-        evidence_cutoff_date=evidence_cutoff_date,
-        posterior_cutoff_date=posterior_cutoff_date,
-        completeness=completeness,
-        completeness_sd=completeness_sd,
-        rate_unconditioned=rate_unconditioned,
-        rate_unconditioned_sd=rate_unconditioned_sd,
-        rate_conditioned=rate_conditioned,
-        rate_conditioned_sd=rate_conditioned_sd,
-        tau_observed=tau_observed,
-        dispersions=dispersions,
-        mode='window',
-        path_aware=False,
-        resolved_params=resolved,
-    )
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# Phase 3: Cohort-mode upstream-aware completeness
-# ═══════════════════════════════════════════════════════════════════════
 
 @dataclass
 class NodeArrivalState:
@@ -322,194 +217,6 @@ class NodeArrivalState:
     reach: float = 0.0                                 # probability of reaching this node from anchor
     evidence_obs: Optional[Dict[str, Any]] = None      # observations for IS conditioning
     tier: str = 'none'                                 # carrier tier used: 'parametric'|'empirical'|'weak_prior'|'none'
-
-
-_COHORT_MC_DRAWS = 2000
-
-
-def compute_forecast_state_cohort(
-    edge_id: str,
-    resolved: ResolvedModelParams,
-    cohort_ages_and_weights: List[tuple],
-    from_node_arrival: NodeArrivalState,
-    evaluation_date: str = '',
-    evidence_cutoff_date: str = '',
-    posterior_cutoff_date: str = '',
-    evidence_rate: Optional[float] = None,
-) -> ForecastState:
-    """Compute ForecastState for a cohort-mode edge using upstream arrival state.
-
-    Uses the upstream carrier (from_node_arrival) to compute
-    upstream-aware completeness — same maths as cohort_forecast_v2's
-    effective exposure computation.
-
-    For each cohort age τ:
-        C(τ) = ∫₀ᵗ f_upstream(u) × CDF_edge(τ - u) du / reach
-
-    where f_upstream is the PDF of arrivals at the from-node (derivative
-    of the carrier's deterministic CDF), CDF_edge is the edge's
-    lognormal CDF, and reach normalises to [0, 1].
-
-    When the from-node has MC draws, completeness_sd is computed from
-    the spread across draws (same principle as window-mode but with
-    upstream uncertainty included).
-
-    Args:
-        edge_id: edge UUID.
-        resolved: resolved model params from the promoted resolver.
-        cohort_ages_and_weights: list of (age_days, n) tuples.
-        from_node_arrival: NodeArrivalState from the per-node cache.
-        evaluation_date, evidence_cutoff_date, posterior_cutoff_date: dates.
-        evidence_rate: observed k/n if available.
-
-    Returns:
-        ForecastState with cohort-mode fields populated.
-    """
-    lat = resolved.latency
-    p = resolved.p_mean
-
-    upstream_cdf = from_node_arrival.deterministic_cdf
-    upstream_mc = from_node_arrival.mc_cdf
-    reach = from_node_arrival.reach
-
-    # ── Upstream-aware completeness ──────────────────────────────
-    # Analytical evaluation: for each cohort age τ, evaluate the
-    # convolution of upstream arrival PDF with edge CDF.
-    total_n = 0.0
-    weighted_c = 0.0
-
-    if upstream_cdf is not None and reach > 0:
-        max_tau = len(upstream_cdf)
-        for age_days, n in cohort_ages_and_weights:
-            if n <= 0:
-                continue
-            c_tau = _convolve_completeness_at_age(
-                age_days, upstream_cdf, reach,
-                lat.mu, lat.sigma, lat.onset_delta_days,
-            )
-            weighted_c += n * c_tau
-            total_n += n
-    else:
-        # No upstream: fall back to simple CDF (window-mode equivalent)
-        for age_days, n in cohort_ages_and_weights:
-            if n <= 0:
-                continue
-            c = _compute_completeness_at_age(
-                age_days, lat.mu, lat.sigma, lat.onset_delta_days)
-            weighted_c += n * c
-            total_n += n
-
-    completeness = weighted_c / total_n if total_n > 0 else 0.0
-
-    # ── Completeness SD from joint MC draws ─────────────────────
-    # Both upstream carrier uncertainty AND edge latency dispersions
-    # contribute. For each draw, sample both the upstream CDF (from
-    # carrier mc_cdf) and the edge params (mu, sigma, onset with SDs).
-    completeness_sd = 0.0
-    has_edge_dispersions = (lat.mu_sd > 0 or lat.sigma_sd > 0 or lat.onset_sd > 0)
-    if (upstream_mc is not None or has_edge_dispersions) and total_n > 0:
-        S = upstream_mc.shape[0] if upstream_mc is not None else _COMPLETENESS_SD_DRAWS
-        rng = np.random.default_rng(seed=71)
-
-        # Sample edge latency params (same correlated draw as window mode)
-        if has_edge_dispersions:
-            mu_draws = rng.normal(lat.mu, max(lat.mu_sd, 1e-10), size=S)
-            if abs(lat.onset_mu_corr) > 1e-6 and lat.mu_sd > 0:
-                rho = lat.onset_mu_corr
-                onset_draws = (
-                    lat.onset_delta_days
-                    + rho * (max(lat.onset_sd, 1e-10) / max(lat.mu_sd, 1e-10)) * (mu_draws - lat.mu)
-                    + rng.normal(0, max(lat.onset_sd, 1e-10) * math.sqrt(max(1 - rho * rho, 0)), size=S)
-                )
-            else:
-                onset_draws = rng.normal(lat.onset_delta_days, max(lat.onset_sd, 1e-10), size=S)
-            onset_draws = np.maximum(onset_draws, 0.0)
-            sigma_draws = np.clip(
-                rng.normal(lat.sigma, max(lat.sigma_sd, 1e-10), size=S), 0.01, 20.0)
-        else:
-            mu_draws = np.full(S, lat.mu)
-            sigma_draws = np.full(S, lat.sigma)
-            onset_draws = np.full(S, lat.onset_delta_days)
-
-        mc_completeness = np.zeros(S)
-        for s in range(S):
-            # Upstream CDF for this draw (or deterministic if no MC)
-            if upstream_mc is not None and s < upstream_mc.shape[0]:
-                draw_cdf = upstream_mc[s].tolist()
-            elif upstream_cdf is not None:
-                draw_cdf = upstream_cdf
-            else:
-                draw_cdf = None
-
-            wc = 0.0
-            tn = 0.0
-            for age_days, n in cohort_ages_and_weights:
-                if n <= 0:
-                    continue
-                if draw_cdf is not None and reach > 0:
-                    c_tau = _convolve_completeness_at_age(
-                        age_days, draw_cdf, reach,
-                        float(mu_draws[s]), float(sigma_draws[s]),
-                        float(onset_draws[s]),
-                    )
-                else:
-                    c_tau = _compute_completeness_at_age(
-                        age_days, float(mu_draws[s]),
-                        float(sigma_draws[s]), float(onset_draws[s]))
-                wc += n * c_tau
-                tn += n
-            mc_completeness[s] = wc / tn if tn > 0 else 0.0
-        completeness_sd = float(np.std(mc_completeness))
-
-    # ── Rates ────────────────────────────────────────────────────
-    rate_unconditioned = p * completeness
-    rate_unconditioned_sd = _compose_rate_sd(p, resolved.p_sd,
-                                             completeness, completeness_sd)
-
-    if evidence_rate is not None and completeness > 0:
-        model_rate = p * completeness
-        rate_conditioned = (
-            completeness * evidence_rate
-            + (1 - completeness) * model_rate
-        )
-        rate_conditioned_sd = (1 - completeness) * rate_unconditioned_sd
-    else:
-        rate_conditioned = rate_unconditioned
-        rate_conditioned_sd = rate_unconditioned_sd
-
-    tau_observed = 0
-    if total_n > 0 and cohort_ages_and_weights:
-        tau_observed = int(round(
-            sum(age * n for age, n in cohort_ages_and_weights) / total_n
-        ))
-
-    dispersions = Dispersions(
-        p_sd=resolved.p_sd,
-        mu_sd=lat.mu_sd,
-        sigma_sd=lat.sigma_sd,
-        onset_sd=lat.onset_sd,
-    )
-
-    return ForecastState(
-        edge_id=edge_id,
-        source=resolved.source,
-        fitted_at=resolved.fitted_at,
-        tier='be_forecast',
-        evaluation_date=evaluation_date,
-        evidence_cutoff_date=evidence_cutoff_date,
-        posterior_cutoff_date=posterior_cutoff_date,
-        completeness=completeness,
-        completeness_sd=completeness_sd,
-        rate_unconditioned=rate_unconditioned,
-        rate_unconditioned_sd=rate_unconditioned_sd,
-        rate_conditioned=rate_conditioned,
-        rate_conditioned_sd=rate_conditioned_sd,
-        tau_observed=tau_observed,
-        dispersions=dispersions,
-        mode='cohort',
-        path_aware=True,
-        resolved_params=resolved,
-    )
 
 
 def _convolve_completeness_at_age(
@@ -704,24 +411,6 @@ def build_node_arrival_cache(
     return cache
 
 
-def _compute_weighted_completeness_sd(
-    cohort_ages_and_weights: List[tuple],
-    lat: ResolvedLatency,
-) -> tuple:
-    """Compute n-weighted completeness SD from latency dispersions (window-mode fallback)."""
-    total_n = 0.0
-    weighted_sd_sq = 0.0
-    for age_days, n in cohort_ages_and_weights:
-        if n <= 0:
-            continue
-        _, c_sd = compute_completeness_with_sd(float(age_days), lat)
-        weighted_sd_sq += n * n * c_sd * c_sd
-        total_n += n
-    if total_n > 0:
-        return (total_n, math.sqrt(weighted_sd_sq) / total_n)
-    return (0.0, 0.0)
-
-
 # ═══════════════════════════════════════════════════════════════════════
 # Conditioned forecast (doc 29g)
 # ═══════════════════════════════════════════════════════════════════════
@@ -802,17 +491,15 @@ def compute_conditioned_forecast(
     total_n = sum(n for _, n in cohort_ages_and_weights if n > 0)
 
     # ── Draw p from Beta posterior ───────────────────────────────
+    # D20: the resolver now always provides alpha/beta (from Bayesian
+    # posterior, evidence n/k, or kappa=200 fallback). The sweep
+    # should not need its own fallback. Safety net only.
     alpha = resolved.alpha if resolved.alpha and resolved.alpha > 0 else 0.0
     beta_ = resolved.beta if resolved.beta and resolved.beta > 0 else 0.0
     if alpha <= 0 or beta_ <= 0:
-        # No posterior available — construct a weak informative prior
-        # centred on the forecast mean. Kappa=20 gives enough flexibility
-        # for IS conditioning to move the draws, but prevents collapse
-        # from a flat Beta(1,1) under sequential resampling.
-        _KAPPA_DEFAULT = 20.0
         _p = max(min(p_mean or 0.5, 0.99), 0.01)
-        alpha = _p * _KAPPA_DEFAULT
-        beta_ = (1.0 - _p) * _KAPPA_DEFAULT
+        alpha = _p * 200.0
+        beta_ = (1.0 - _p) * 200.0
     p_draws = rng.beta(alpha, beta_, size=S)
 
     # ── Draw latency params (correlated mu-onset) ────────────────
@@ -1083,6 +770,11 @@ class CohortEvidence:
 
     Each cohort is one anchor-day's worth of evidence: observed x/y
     trajectories up to the frontier age, plus frozen frontier values.
+
+    Coordinate B (per-cohort evaluation at a specific date):
+    Set anchor_day + eval_date and the engine computes eval_age
+    internally. Or set eval_age directly for consumers that work
+    in τ coordinates (cohort maturity chart).
     """
     obs_x: List[float]     # x at each τ from 0..frontier_age
     obs_y: List[float]     # y at each τ from 0..frontier_age
@@ -1090,29 +782,209 @@ class CohortEvidence:
     y_frozen: float        # k_i — y at frontier
     frontier_age: int      # a_i — last observed age (days)
     a_pop: float           # population for upstream scaling
+    eval_age: Optional[int] = None  # coordinate B: τᵢ at which to
+    # stash per-cohort draws. When set, the sweep retains (S,) draws
+    # at this column for this cohort. When None (cohort maturity),
+    # no per-cohort stashing — only aggregate Y_total/X_total.
+    anchor_day: Optional[str] = None   # ISO date string (e.g. '2026-03-07')
+    eval_date: Optional[str] = None    # ISO date string — asat or today
+
+    def __post_init__(self):
+        """Compute eval_age from anchor_day + eval_date when not set."""
+        if self.eval_age is None and self.anchor_day and self.eval_date:
+            from datetime import date as _date
+            try:
+                a = _date.fromisoformat(str(self.anchor_day)[:10])
+                e = _date.fromisoformat(str(self.eval_date)[:10])
+                age = (e - a).days
+                if age >= 0:
+                    self.eval_age = age
+            except (ValueError, TypeError):
+                pass
+
+
+@dataclass
+class CohortForecastAtEval:
+    """Coordinate B output for a single cohort at its eval_age.
+
+    Retained by the sweep when CohortEvidence.eval_age is set.
+    Consumers (daily conversions, topo pass) read per-cohort
+    forecast values from these without re-running the MC.
+    """
+    y_draws: np.ndarray    # (S,) Y at eval_age per draw
+    x_draws: np.ndarray    # (S,) X at eval_age per draw
+    eval_age: int          # τᵢ this was evaluated at
+    conditioned: bool      # whether IS fired for this cohort
 
 
 @dataclass
 class ForecastSweepResult:
     """Output of the per-cohort population model sweep.
 
-    rate_draws (S, T) is the per-draw aggregate rate at each τ.
-    Consumers take quantiles for midpoint/fan bands.
-    model_rate_draws (S, T) is the unconditioned equivalent (for
-    model-only bands).
+    Coordinate A: rate_draws (S, T) is the per-draw aggregate rate
+    at each τ. Consumers take quantiles for midpoint/fan bands.
+    model_rate_draws (S, T) is the unconditioned equivalent.
+
+    Coordinate B: cohort_evals is a list of per-cohort draws at each
+    cohort's eval_age (when CohortEvidence.eval_age was set). Empty
+    for pure coordinate A consumers (cohort maturity chart).
     """
-    rate_draws: np.ndarray           # (S, T) conditioned
-    model_rate_draws: np.ndarray     # (S, T) unconditioned
-    # Deterministic totals (median across draws) for forecast_y/forecast_x
+    rate_draws: np.ndarray           # (S, T) conditioned — coord A
+    model_rate_draws: np.ndarray     # (S, T) unconditioned — coord A
+    # Coordinate A totals (median across draws)
     det_y_total: Optional[np.ndarray] = None  # (T,) median Y across draws
     det_x_total: Optional[np.ndarray] = None  # (T,) median X across draws
     is_ess: float = 0.0
     n_cohorts_conditioned: int = 0
+    # Coordinate B per-cohort output (populated when eval_age is set)
+    cohort_evals: Optional[List[CohortForecastAtEval]] = None
+    # Raw unconditioned draws — for consumers that need the prior
+    # predictive (e.g. surprise gauge computes p × completeness per draw)
+    p_draws: Optional[np.ndarray] = None          # (S,)
+    mu_draws: Optional[np.ndarray] = None         # (S,)
+    sigma_draws: Optional[np.ndarray] = None      # (S,)
+    onset_draws: Optional[np.ndarray] = None      # (S,)
 
 
 # Default draw count for the sweep — same as v2's MC_SAMPLES.
 _SWEEP_DRAWS = 2000
 _SWEEP_DRIFT_FRACTION = 0.20
+
+
+def _evaluate_cohort(
+    cohort: CohortEvidence,
+    S: int,
+    T: int,
+    det_cdf: list,
+    drift_sds: np.ndarray,
+    theta_transformed: np.ndarray,
+    cdf_arr: np.ndarray,
+    upstream_cdf_mc: Optional[np.ndarray],
+    reach: float,
+    apply_is: bool,
+    loop_rng: np.random.Generator,
+    _expit,
+) -> tuple:
+    """Evaluate the population model for a single cohort.
+
+    Shared primitive extracted from _run_cohort_loop (doc 29f §G.0).
+    Both the chart sweep and the future general forecast call this
+    with identical arithmetic — the only difference is the τ range
+    (full sweep vs single-τ).
+
+    Returns (Y_cohort, X_cohort, is_ess, conditioned):
+      Y_cohort: (S, T) forecast + observed y per draw
+      X_cohort: (S, T) forecast + observed x per draw
+      is_ess:   float, ESS after IS (0 if no IS fired)
+      conditioned: bool, True if IS resampling fired
+
+    RNG contract: consumes loop_rng in exactly this order per call:
+      1. normal(size=(S,4)) — drift
+      2. choice(S, size=S) — IS resampling (only if conditioned)
+      3. binomial(remaining, q_late) — Pop D sampling
+    Callers must pass the same loop_rng instance sequentially across
+    cohorts to preserve the RNG stream.
+    """
+    N_i = cohort.x_frozen
+    k_i = cohort.y_frozen
+    a_i = cohort.frontier_age
+    a_pop = cohort.a_pop
+
+    if N_i <= 0 and a_pop <= 0:
+        return None  # Caller must skip — no RNG consumed (matches original `continue`)
+
+    a_idx = min(a_i, T - 1)
+
+    # E_i from obs_x trajectory (v2 lines 818-830)
+    E_i = 0.0
+    if cohort.obs_x and a_i > 0:
+        prev_x = 0.0
+        for u in range(min(a_i + 1, len(cohort.obs_x))):
+            dx = cohort.obs_x[u] - prev_x
+            prev_x = cohort.obs_x[u]
+            lag = a_i - u
+            c_val = det_cdf[min(lag, T - 1)]
+            E_i += max(dx, 0.0) * c_val
+    else:
+        E_i = float(N_i)
+    E_i = min(E_i, float(N_i))
+
+    # Per-cohort drift (v2 lines 833-835)
+    delta_i = loop_rng.normal(0.0, drift_sds, size=(S, 4))
+    theta_i = theta_transformed + delta_i
+    p_i = _expit(theta_i[:, 0])
+    # Drift only affects p, not CDF (v2 line 839)
+    cdf_i = cdf_arr.copy()
+
+    # IS conditioning (v2 lines 841-861)
+    is_ess = 0.0
+    conditioned = False
+    if apply_is:
+        E_eff = max(E_i, k_i)
+        _E_fail = E_eff - k_i
+        # v2 resamples unconditionally (no ESS guard) whenever
+        # there is meaningful evidence. Match that behaviour.
+        if E_eff > 0 and a_i > 0 and _E_fail >= 1.0:
+            p_i_clip = np.clip(p_i, 1e-15, 1 - 1e-15)
+            log_w_i = (k_i * np.log(p_i_clip)
+                       + _E_fail * np.log(1 - p_i_clip))
+            log_w_i -= np.max(log_w_i)
+            w_i = np.exp(log_w_i)
+            w_i /= w_i.sum()
+            resample_idx = loop_rng.choice(S, size=S,
+                                           replace=True, p=w_i)
+            p_i = p_i[resample_idx]
+            cdf_i = cdf_i[resample_idx]
+            is_ess = 1.0 / np.sum(w_i ** 2)
+            conditioned = True
+
+    # Pop D: frontier survivors (v2 lines 863-886)
+    cdf_at_a = cdf_i[:, a_idx]
+    remaining = max(N_i - k_i, 0.0)
+    q_early = p_i[:, None] * cdf_at_a[:, None]
+    q_early = np.clip(q_early, 0.0, 1 - 1e-10)
+    remaining_cdf = np.maximum(cdf_i - cdf_at_a[:, None], 0.0)
+    q_late = (p_i[:, None] * remaining_cdf) / (1 - q_early)
+    q_late = np.clip(q_late, 0.0, 1.0)
+    # v2 default is binomial sampling (display_settings.continuous_forecast)
+    Y_D = loop_rng.binomial(int(remaining), q_late)
+
+    # Pop C: post-frontier upstream arrivals (v2 lines 888-898)
+    X_C = np.zeros((S, T), dtype=np.float64)
+    Y_C = np.zeros((S, T), dtype=np.float64)
+    if upstream_cdf_mc is not None and reach > 0:
+        _up_scaled = a_pop * reach * upstream_cdf_mc
+        _up_at_frontier = _up_scaled[:, a_idx:a_idx + 1]
+        X_C = np.maximum(_up_scaled - _up_at_frontier, 0.0)
+        model_rate = p_i[:, None] * cdf_i
+        model_rate = np.clip(model_rate, 0.0, 1.0)
+        Y_C = X_C * model_rate
+
+    # Combine (v2 lines 900-903)
+    X_forecast = float(N_i) + X_C
+    Y_forecast = float(k_i) + Y_D.astype(np.float64) + Y_C
+    Y_forecast = np.clip(Y_forecast, float(k_i), X_forecast)
+
+    # Splice observed/forecast (v2 lines 905-909)
+    _obs_x_len = len(cohort.obs_x)
+    _obs_y_len = len(cohort.obs_y)
+    obs_x_padded = np.zeros(T)
+    obs_y_padded = np.zeros(T)
+    obs_x_padded[:min(_obs_x_len, T)] = cohort.obs_x[:T]
+    obs_y_padded[:min(_obs_y_len, T)] = cohort.obs_y[:T]
+    if _obs_x_len < T:
+        obs_x_padded[_obs_x_len:] = cohort.x_frozen
+    if _obs_y_len < T:
+        obs_y_padded[_obs_y_len:] = cohort.y_frozen
+
+    tau_grid = np.arange(T, dtype=float)
+    mature_mask = tau_grid <= a_i
+    Y_cohort = np.where(mature_mask[None, :],
+                        obs_y_padded[None, :], Y_forecast)
+    X_cohort = np.where(mature_mask[None, :],
+                        obs_x_padded[None, :], X_forecast)
+
+    return (Y_cohort, X_cohort, is_ess, conditioned)
 
 
 def compute_forecast_sweep(
@@ -1170,8 +1042,13 @@ def compute_forecast_sweep(
     # rng.normal() call. Numpy generates different sequences for one
     # (S,1,4) call vs four (S,) calls, so the interleaving matters for
     # RNG-stream parity.
-    alpha = resolved.alpha if resolved.alpha and resolved.alpha > 0 else 1.0
-    beta_ = resolved.beta if resolved.beta and resolved.beta > 0 else 1.0
+    # D20: resolver now provides alpha/beta. Safety net with kappa=200.
+    alpha = resolved.alpha if resolved.alpha and resolved.alpha > 0 else 0.0
+    beta_ = resolved.beta if resolved.beta and resolved.beta > 0 else 0.0
+    if alpha <= 0 or beta_ <= 0:
+        _p_fb = max(min(resolved.p_mean or 0.5, 0.99), 0.01)
+        alpha = _p_fb * 200.0
+        beta_ = (1.0 - _p_fb) * 200.0
     _p_mean = alpha / (alpha + beta_)
     _p_sd = math.sqrt(alpha * beta_ / ((alpha + beta_) ** 2 * (alpha + beta_ + 1)))
 
@@ -1289,114 +1166,50 @@ def compute_forecast_sweep(
         Uses a fresh rng(42) for drift + IS resampling, matching v2's
         per-cohort loop (cohort_forecast_v2.py:720) which creates its
         own rng(42) independent of mc_span_cdfs' rng.
+
+        Delegates per-cohort computation to _evaluate_cohort (doc 29f
+        §G.0). The loop here accumulates Y_total/X_total and handles
+        the rate computation and diagnostics.
         """
         _loop_rng = np.random.default_rng(seed=42)
         Y_total = np.zeros((S, T))
         X_total = np.zeros((S, T))
         _is_ess_last = float(S)
         _n_conditioned = 0
+        _cohort_evals: List[CohortForecastAtEval] = []
 
         for cohort in cohorts:
-            N_i = cohort.x_frozen
-            k_i = cohort.y_frozen
-            a_i = cohort.frontier_age
-            a_pop = cohort.a_pop
-
-            if N_i <= 0 and a_pop <= 0:
+            result = _evaluate_cohort(
+                cohort=cohort,
+                S=S, T=T,
+                det_cdf=det_cdf,
+                drift_sds=drift_sds,
+                theta_transformed=theta_transformed,
+                cdf_arr=cdf_arr,
+                upstream_cdf_mc=upstream_cdf_mc,
+                reach=reach,
+                apply_is=apply_is,
+                loop_rng=_loop_rng,
+                _expit=_expit,
+            )
+            if result is None:
                 continue
+            Y_c, X_c, c_ess, c_cond = result
+            Y_total += Y_c
+            X_total += X_c
+            if c_cond:
+                _is_ess_last = c_ess
+                _n_conditioned += 1
 
-            a_idx = min(a_i, T - 1)
-
-            # E_i from obs_x trajectory (v2 lines 818-830)
-            E_i = 0.0
-            if cohort.obs_x and a_i > 0:
-                prev_x = 0.0
-                for u in range(min(a_i + 1, len(cohort.obs_x))):
-                    dx = cohort.obs_x[u] - prev_x
-                    prev_x = cohort.obs_x[u]
-                    lag = a_i - u
-                    c_val = det_cdf[min(lag, T - 1)]
-                    E_i += max(dx, 0.0) * c_val
-            else:
-                E_i = float(N_i)
-            E_i = min(E_i, float(N_i))
-
-            # Per-cohort drift (v2 lines 833-835)
-            delta_i = _loop_rng.normal(0.0, drift_sds, size=(S, 4))
-            theta_i = theta_transformed + delta_i
-            p_i = _expit(theta_i[:, 0])
-            # Drift only affects p, not CDF (v2 line 839)
-            cdf_i = cdf_arr.copy()
-
-            # IS conditioning (v2 lines 841-861)
-            if apply_is:
-                E_eff = max(E_i, k_i)
-                _E_fail = E_eff - k_i
-                # v2 resamples unconditionally (no ESS guard) whenever
-                # there is meaningful evidence. Match that behaviour.
-                if E_eff > 0 and a_i > 0 and _E_fail >= 1.0:
-                    p_i_clip = np.clip(p_i, 1e-15, 1 - 1e-15)
-                    log_w_i = (k_i * np.log(p_i_clip)
-                               + _E_fail * np.log(1 - p_i_clip))
-                    log_w_i -= np.max(log_w_i)
-                    w_i = np.exp(log_w_i)
-                    w_i /= w_i.sum()
-                    resample_idx = _loop_rng.choice(S, size=S,
-                                              replace=True, p=w_i)
-                    p_i = p_i[resample_idx]
-                    cdf_i = cdf_i[resample_idx]
-                    _is_ess_last = 1.0 / np.sum((w_i) ** 2)
-                    _n_conditioned += 1
-
-            # Pop D: frontier survivors (v2 lines 863-886)
-            cdf_at_a = cdf_i[:, a_idx]
-            remaining = max(N_i - k_i, 0.0)
-            q_early = p_i[:, None] * cdf_at_a[:, None]
-            q_early = np.clip(q_early, 0.0, 1 - 1e-10)
-            remaining_cdf = np.maximum(cdf_i - cdf_at_a[:, None], 0.0)
-            q_late = (p_i[:, None] * remaining_cdf) / (1 - q_early)
-            q_late = np.clip(q_late, 0.0, 1.0)
-            # v2 default is binomial sampling (display_settings.continuous_forecast)
-            Y_D = _loop_rng.binomial(int(remaining), q_late)
-
-            # Pop C: post-frontier upstream arrivals (v2 lines 888-898)
-            X_C = np.zeros((S, T), dtype=np.float64)
-            Y_C = np.zeros((S, T), dtype=np.float64)
-            if upstream_cdf_mc is not None and reach > 0:
-                _up_scaled = a_pop * reach * upstream_cdf_mc
-                _up_at_frontier = _up_scaled[:, a_idx:a_idx + 1]
-                X_C = np.maximum(_up_scaled - _up_at_frontier, 0.0)
-                model_rate = p_i[:, None] * cdf_i
-                model_rate = np.clip(model_rate, 0.0, 1.0)
-                Y_C = X_C * model_rate
-
-            # Combine (v2 lines 900-903)
-            X_forecast = float(N_i) + X_C
-            Y_forecast = float(k_i) + Y_D.astype(np.float64) + Y_C
-            Y_forecast = np.clip(Y_forecast, float(k_i), X_forecast)
-
-            # Splice observed/forecast (v2 lines 905-909)
-            _obs_x_len = len(cohort.obs_x)
-            _obs_y_len = len(cohort.obs_y)
-            obs_x_padded = np.zeros(T)
-            obs_y_padded = np.zeros(T)
-            obs_x_padded[:min(_obs_x_len, T)] = cohort.obs_x[:T]
-            obs_y_padded[:min(_obs_y_len, T)] = cohort.obs_y[:T]
-            # Extend obs beyond trajectory length with frontier value
-            if _obs_x_len < T:
-                obs_x_padded[_obs_x_len:] = cohort.x_frozen
-            if _obs_y_len < T:
-                obs_y_padded[_obs_y_len:] = cohort.y_frozen
-
-            tau_grid = np.arange(T, dtype=float)
-            mature_mask = tau_grid <= a_i
-            Y_cohort = np.where(mature_mask[None, :],
-                                obs_y_padded[None, :], Y_forecast)
-            X_cohort = np.where(mature_mask[None, :],
-                                obs_x_padded[None, :], X_forecast)
-
-            Y_total += Y_cohort
-            X_total += X_cohort
+            # Coordinate B: stash per-cohort draws at eval_age
+            if cohort.eval_age is not None and apply_is:
+                t_i = min(cohort.eval_age, T - 1)
+                _cohort_evals.append(CohortForecastAtEval(
+                    y_draws=Y_c[:, t_i].copy(),
+                    x_draws=X_c[:, t_i].copy(),
+                    eval_age=cohort.eval_age,
+                    conditioned=c_cond,
+                ))
 
         # Rate draws (v2 lines 914-920)
         X_safe = np.maximum(X_total, 1e-10)
@@ -1415,9 +1228,9 @@ def compute_forecast_sweep(
         if not np.any(_x_median >= 1.0):
             rate = p_draws[:S, None] * cdf_arr[:S]
 
-        return rate, _is_ess_last, _n_conditioned, Y_total, X_total
+        return rate, _is_ess_last, _n_conditioned, Y_total, X_total, _cohort_evals
 
-    rate_conditioned, is_ess, n_conditioned, Y_cond, X_cond = _run_cohort_loop(apply_is=True)
+    rate_conditioned, is_ess, n_conditioned, Y_cond, X_cond, cohort_evals = _run_cohort_loop(apply_is=True)
     # Model rate: pure p × CDF, no evidence splice or population model.
     # Matches v2's rate_model = p_s × cdf_arr (span_kernel.py:951).
     rate_model = p_draws[:S, None] * cdf_arr[:S]
@@ -1433,4 +1246,9 @@ def compute_forecast_sweep(
         det_x_total=_det_x,
         is_ess=is_ess,
         n_cohorts_conditioned=n_conditioned,
+        cohort_evals=cohort_evals if cohort_evals else None,
+        p_draws=p_draws,
+        mu_draws=mu_draws,
+        sigma_draws=sigma_draws,
+        onset_draws=onset_draws,
     )

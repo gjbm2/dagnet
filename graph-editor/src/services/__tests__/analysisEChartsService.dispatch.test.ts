@@ -378,9 +378,9 @@ describe('buildHistogramEChartsOption', () => {
 
 const DAILY_CONVERSIONS_RESULT = {
   data: [
-    { scenario_id: 'current', subject_id: 'edge1', date: '2025-10-01', rate: 0.42, x: 1000, y: 420 },
-    { scenario_id: 'current', subject_id: 'edge1', date: '2025-10-02', rate: 0.45, x: 1100, y: 495 },
-    { scenario_id: 'current', subject_id: 'edge1', date: '2025-10-03', rate: 0.40, x: 950, y: 380 },
+    { scenario_id: 'current', subject_id: 'edge1', date: '2025-10-01', rate: 0.42, x: 1000, y: 420, evidence_y: 350, forecast_y: 70, projected_y: 420 },
+    { scenario_id: 'current', subject_id: 'edge1', date: '2025-10-02', rate: 0.45, x: 1100, y: 495, evidence_y: 400, forecast_y: 95, projected_y: 495 },
+    { scenario_id: 'current', subject_id: 'edge1', date: '2025-10-03', rate: 0.40, x: 950, y: 380, evidence_y: 380, forecast_y: 0, projected_y: 380 },
   ],
   dimension_values: {
     scenario_id: { current: { name: 'Base', colour: '#3b82f6' } },
@@ -389,20 +389,66 @@ const DAILY_CONVERSIONS_RESULT = {
 };
 
 describe('buildDailyConversionsEChartsOption', () => {
-  it('should produce dual-axis series (bar N + line rate)', () => {
+  // f+e mode (default): 3 stacked bars (E, F, N remainder) + 2 rate lines (E%, F%)
+  it('should produce E+F+N bars and E%+F% lines in f+e mode', () => {
     const option = buildDailyConversionsEChartsOption(DAILY_CONVERSIONS_RESULT, {}, { visibleScenarioIds: ['current'] });
     expect(option).not.toBeNull();
-    expect(option.series).toHaveLength(2);
-    expect(option.series[0].type).toBe('bar');
-    expect(option.series[0].data).toHaveLength(3);
-    expect(option.series[1].type).toBe('line');
-    expect(option.series[1].data).toHaveLength(3);
+    // 3 bars (E, F, N) + 2 lines (E%, F%) = 5 series
+    expect(option.series).toHaveLength(5);
+    const bars = option.series.filter((s: any) => s.type === 'bar');
+    const lines = option.series.filter((s: any) => s.type === 'line');
+    expect(bars).toHaveLength(3);
+    expect(lines).toHaveLength(2);
+    // Each has 3 dates
+    for (const s of option.series) {
+      expect(s.data).toHaveLength(3);
+    }
   });
 
-  it('should assign bar to yAxisIndex 0 and line to yAxisIndex 1', () => {
+  it('should assign bars to yAxisIndex 0 and lines to yAxisIndex 1', () => {
     const option = buildDailyConversionsEChartsOption(DAILY_CONVERSIONS_RESULT, {}, { visibleScenarioIds: ['current'] });
-    expect(option.series[0].yAxisIndex).toBe(0);
-    expect(option.series[1].yAxisIndex).toBe(1);
+    for (const s of option.series) {
+      expect(s.yAxisIndex).toBe(s.type === 'bar' ? 0 : 1);
+    }
+  });
+
+  it('should use grey (#808080) for single-scenario', () => {
+    const option = buildDailyConversionsEChartsOption(DAILY_CONVERSIONS_RESULT, {}, { visibleScenarioIds: ['current'] });
+    const eLine = option.series.find((s: any) => s.type === 'line' && s.lineStyle?.type === 'solid');
+    expect(eLine.lineStyle.color).toBe('#808080');
+  });
+
+  it('should use striated decal on forecast bar', () => {
+    const option = buildDailyConversionsEChartsOption(DAILY_CONVERSIONS_RESULT, {}, { visibleScenarioIds: ['current'] });
+    const fBar = option.series.find((s: any) => s.name === 'Forecast' && s.type === 'bar' && s.data?.length > 0);
+    expect(fBar).toBeDefined();
+    expect(fBar.itemStyle.decal).toBeDefined();
+    expect(fBar.itemStyle.decal.rotation).toBeCloseTo(-Math.PI / 4);
+  });
+
+  it('should render solid E% line and dashed F% line', () => {
+    const option = buildDailyConversionsEChartsOption(DAILY_CONVERSIONS_RESULT, {}, { visibleScenarioIds: ['current'] });
+    const lines = option.series.filter((s: any) => s.type === 'line');
+    const solidLine = lines.find((s: any) => s.lineStyle?.type === 'solid');
+    const dashedLine = lines.find((s: any) => s.lineStyle?.type === 'dashed');
+    expect(solidLine).toBeDefined();
+    expect(dashedLine).toBeDefined();
+    // Solid (E) has markers, dashed (F) does not
+    expect(dashedLine.showSymbol).toBe(false);
+  });
+
+  it('should stack bars so total height = N', () => {
+    const option = buildDailyConversionsEChartsOption(DAILY_CONVERSIONS_RESULT, {}, { visibleScenarioIds: ['current'] });
+    const bars = option.series.filter((s: any) => s.type === 'bar');
+    // 3 bars: E (named), F (named), N remainder (unnamed)
+    expect(bars).toHaveLength(3);
+    for (let i = 0; i < 3; i++) {
+      const e = bars[0].data[i][1];
+      const f = bars[1].data[i][1];
+      const n = bars[2].data[i][1];
+      const row = DAILY_CONVERSIONS_RESULT.data[i];
+      expect(e + f + n).toBeCloseTo(row.x);
+    }
   });
 
   it('should filter by visibleScenarioIds', () => {
@@ -416,7 +462,7 @@ describe('buildDailyConversionsEChartsOption', () => {
 
   it('should compute rateMax from data with headroom capped at 1.0', () => {
     const option = buildDailyConversionsEChartsOption(DAILY_CONVERSIONS_RESULT, {}, { visibleScenarioIds: ['current'] });
-    expect(option.yAxis[1].max).toBeGreaterThan(0.45);
+    expect(option.yAxis[1].max).toBeGreaterThan(0);
     expect(option.yAxis[1].max).toBeLessThanOrEqual(1.0);
   });
 
@@ -428,7 +474,7 @@ describe('buildDailyConversionsEChartsOption', () => {
   it('should dispatch via buildChartOption', () => {
     const option = buildChartOption('daily_conversions', DAILY_CONVERSIONS_RESULT, {}, { visibleScenarioIds: ['current'] });
     expect(option).not.toBeNull();
-    expect(option.series).toHaveLength(2);
+    expect(option.series).toHaveLength(5);
   });
 });
 

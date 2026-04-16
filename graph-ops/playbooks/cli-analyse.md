@@ -109,6 +109,20 @@ bash graph-ops/scripts/analyse.sh my-graph \
 The `--subject` DSL is joined with the first scenario's DSL to form
 the `query_dsl` sent to the BE. It's constant across scenarios.
 
+### Historical analysis with `asat()`
+
+Add `.asat(d-MMM-yy)` to the DSL to analyse using historical snapshot
+data (doc 42). Evidence is filtered to snapshots retrieved on or before
+the asat date. Read-only — no file writes.
+
+```bash
+bash graph-ops/scripts/analyse.sh my-graph \
+  "from(landing-page).to(household-created).cohort(1-Jan-26:1-Mar-26).asat(15-Jan-26)" \
+  --type cohort_maturity --no-snapshot-cache
+```
+
+`at()` is accepted as sugar for `asat()`.
+
 ## Extracting values
 
 Use `--get` with dot-path notation to extract specific values:

@@ -1,0 +1,24 @@
+{
+    "name": "topology-bare",
+    "description": "All bare (uncontexted) topologies — baseline recovery check",
+    "graphs": {
+        "include": [
+            "synth-simple-abc",
+            "synth-diamond-test",
+            "synth-skip-test",
+            "synth-fanout-test",
+            "synth-mirror-4step",
+            "synth-join-branch-test",
+            "synth-3way-join-test",
+            "synth-lattice-test"
+        ]
+    },
+    "sampling": {
+        "chains": 3,
+        "draws": 1000,
+        "tune": 500
+    },
+    "features": [],
+    "settings": {},
+    "tags": ["bare", "topology"]
+}

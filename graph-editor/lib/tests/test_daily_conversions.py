@@ -194,3 +194,98 @@ class TestDailyConversionsDerivation:
         assert date_map.get('2025-10-02', 0) == 5
         assert date_map.get('2025-10-03', 0) == 7
         assert result['total_conversions'] == 12
+
+
+class TestDailyConversionsEngineAnnotation:
+    """G.1b: forecast engine annotation via compute_forecast_sweep coordinate B."""
+
+    def test_engine_annotates_immature_cohorts(self):
+        """Immature Cohorts (young age) should get projected_y > evidence_y."""
+        from runner.forecast_state import compute_forecast_sweep, CohortEvidence
+        from runner.model_resolver import ResolvedModelParams, ResolvedLatency
+        from runner.forecast_application import compute_completeness
+        import numpy as np
+
+        # Synthetic edge: mu=2.5, sigma=0.6, p=0.3, alpha/beta from p
+        lat = ResolvedLatency(mu=2.5, sigma=0.6, onset_delta_days=0.0, t95=30,
+                              mu_sd=0.1, sigma_sd=0.05, onset_sd=0.0, onset_mu_corr=0.0)
+        resolved = ResolvedModelParams(
+            p_mean=0.3, p_sd=0.05,
+            alpha=6.0, beta=14.0,  # ~Beta(6,14) → mean 0.3
+            edge_latency=lat,
+            source='analytic',
+        )
+
+        # eval_age set to maturity horizon (t95), NOT the Cohort's actual age.
+        # The sweep at maturity τ gives the eventual total forecast.
+        # frontier_age=0 (window mode convention).
+        import math
+        from runner.lag_distribution_utils import log_normal_inverse_cdf
+        t95 = int(math.ceil(log_normal_inverse_cdf(0.95, lat.mu, lat.sigma)))
+        maturity_tau = max(t95, 30)
+
+        cohorts = [
+            CohortEvidence(
+                obs_x=[100.0], obs_y=[28.0],
+                x_frozen=100.0, y_frozen=28.0,
+                frontier_age=0, a_pop=100.0,
+                eval_age=maturity_tau,
+            ),
+            CohortEvidence(
+                obs_x=[100.0], obs_y=[2.0],
+                x_frozen=100.0, y_frozen=2.0,
+                frontier_age=0, a_pop=100.0,
+                eval_age=maturity_tau,
+            ),
+        ]
+
+        sweep = compute_forecast_sweep(
+            resolved=resolved,
+            cohorts=cohorts,
+            max_tau=maturity_tau,
+        )
+
+        assert sweep.cohort_evals is not None
+        assert len(sweep.cohort_evals) == 2
+
+        # Key invariant: immature Cohort (y=2, x=100) should get
+        # projected_y >> evidence_y at maturity τ.
+        ce_immature = sweep.cohort_evals[1]
+        proj_y_immature = float(np.mean(ce_immature.y_draws))
+        forecast_residual = proj_y_immature - 2.0
+        assert forecast_residual > 5, (
+            f"Immature Cohort should have substantial forecast at maturity, "
+            f"got projected_y={proj_y_immature:.1f} (evidence_y=2.0)"
+        )
+
+        # Mature Cohort (y=28, x=100) should have projected_y >= evidence_y
+        ce_mature = sweep.cohort_evals[0]
+        proj_y_mature = float(np.mean(ce_mature.y_draws))
+        assert proj_y_mature >= 27.0, (
+            f"Mature Cohort projected_y={proj_y_mature:.1f} unexpectedly below evidence=28"
+        )
+
+    def test_engine_eval_age_from_dates(self):
+        """CohortEvidence computes eval_age from anchor_day + eval_date."""
+        from runner.forecast_state import CohortEvidence
+
+        ce = CohortEvidence(
+            obs_x=[50.0], obs_y=[5.0],
+            x_frozen=50.0, y_frozen=5.0,
+            frontier_age=0, a_pop=50.0,
+            anchor_day='2026-04-10', eval_date='2026-04-16',
+        )
+        assert ce.eval_age == 6
+
+    def test_engine_eval_age_direct_override(self):
+        """Direct eval_age takes precedence over dates."""
+        from runner.forecast_state import CohortEvidence
+
+        ce = CohortEvidence(
+            obs_x=[50.0], obs_y=[5.0],
+            x_frozen=50.0, y_frozen=5.0,
+            frontier_age=10, a_pop=50.0,
+            eval_age=10,
+            anchor_day='2026-04-10', eval_date='2026-04-16',
+        )
+        assert ce.eval_age == 10  # not recomputed from dates

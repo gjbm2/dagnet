@@ -1,0 +1,17 @@
+{
+    "name": "overnight-full",
+    "description": "Full regression — all synth graphs, full sampling, no timeout",
+    "graphs": {
+        "include": ["*"],
+        "exclude": ["synth-forecast-test"]
+    },
+    "sampling": {
+        "chains": 3,
+        "draws": 1000,
+        "tune": 500,
+        "no_timeout": true
+    },
+    "features": [],
+    "settings": {},
+    "tags": ["full", "overnight"]
+}

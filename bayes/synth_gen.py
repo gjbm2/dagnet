@@ -46,6 +46,8 @@ from datetime import datetime, timedelta
 from collections import defaultdict
 from typing import Any
 
+from bayes.dsl_explosion import explode_dsl
+
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPO_ROOT, "bayes"))
 
@@ -1991,18 +1993,70 @@ def _rehash_snapshot_rows(
             if is_ctx:
                 dim_id = _extract_dimension_from_slice_key(sk)
                 if is_cohort:
-                    # Try per-dimension hash, fall back to generic ctx hash
                     ctx_h = (hashes.get(f"ctx_cohort_hash_{dim_id}")
-                             or hashes.get("ctx_cohort_hash", "")
-                             or c_hash)
+                             or hashes.get("ctx_cohort_hash", ""))
+                    if not ctx_h:
+                        raise ValueError(
+                            f"Contexted cohort row has no matching ctx hash "
+                            f"(param={pid}, dim={dim_id}, slice_key={sk}). "
+                            f"This means the CLI call for the contexted cohort "
+                            f"clause failed or was never made — check DSL expansion."
+                        )
                     r["core_hash"] = ctx_h
                 else:
                     ctx_h = (hashes.get(f"ctx_window_hash_{dim_id}")
-                             or hashes.get("ctx_window_hash", "")
-                             or w_hash)
+                             or hashes.get("ctx_window_hash", ""))
+                    if not ctx_h:
+                        raise ValueError(
+                            f"Contexted window row has no matching ctx hash "
+                            f"(param={pid}, dim={dim_id}, slice_key={sk}). "
+                            f"This means the CLI call for the contexted window "
+                            f"clause failed or was never made — check DSL expansion."
+                        )
                     r["core_hash"] = ctx_h
             else:
                 r["core_hash"] = c_hash if is_cohort else w_hash
+
+
+def _verify_hash_family_consistency(
+    snapshot_rows: dict[str, list[dict]],
+    hash_lookup: dict[str, dict[str, str]],
+) -> None:
+    """Verify that every row's core_hash matches its slice_key family.
+
+    Bare slice_keys (no 'context(') must have a bare hash.
+    Contexted slice_keys must have a contexted hash (different from bare).
+    If bare and contexted rows share the same core_hash, that is the
+    doc-43 defect — raise immediately.
+    """
+    errors: list[str] = []
+    for pid, rows in snapshot_rows.items():
+        if not rows:
+            continue
+        # Collect bare and contexted hashes for this param
+        bare_hashes: set[str] = set()
+        ctx_hashes: set[str] = set()
+        for r in rows:
+            sk = r.get("slice_key", "")
+            ch = r.get("core_hash", "")
+            if not ch:
+                continue
+            if "context(" in sk:
+                ctx_hashes.add(ch)
+            else:
+                bare_hashes.add(ch)
+
+        # If both families exist, they must be disjoint
+        overlap = bare_hashes & ctx_hashes
+        if overlap:
+            errors.append(
+                f"  param={pid}: bare and contexted rows share core_hash "
+                f"{overlap} — hash-family separation violated"
+            )
+
+    if errors:
+        msg = "Hash-family verification FAILED:\n" + "\n".join(errors)
+        raise ValueError(msg)
 
 
 def _build_verify_checks(hashes: dict[str, str]) -> list[tuple[str, str, bool]]:
@@ -3126,7 +3180,7 @@ Examples:
 
     # ── WRITE PIPELINE ──────────────────────────────────────────────
     # Single-pass: structural metadata → FE hashes → DB → param files → verify.
-    # ALL hash computation goes through compute_snapshot_subjects.mjs (Node.js).
+    # ALL hash computation goes through bayes.ts CLI (Node.js).
     # No Python hash computation. One source of truth.
     #
     # The DSL is computed ONCE here from sim_stats + truth, then passed
@@ -3223,7 +3277,22 @@ Examples:
     ctx_cohort_sigs: dict[str, dict[str, str]] = {}
     _cr: dict = {}  # candidate regimes (from first call)
 
-    dsl_clauses = [c.strip() for c in full_dsl.split(";") if c.strip()]
+    # Explode compound DSL into atomic clauses using proper recursive
+    # descent (fixes doc-43: naive semicolon split broke compound forms
+    # like (window;cohort)(context(dim))).
+    #
+    # For mixed-epoch graphs we need BOTH bare and contexted hashes.
+    # full_dsl explosion gives contexted clauses; bare_dsl gives bare.
+    # We merge both sets, deduplicating by string identity.
+    _ctx_clauses = explode_dsl(full_dsl)
+    _bare_clauses = explode_dsl(bare_dsl)
+    _seen_clauses: set[str] = set()
+    dsl_clauses: list[str] = []
+    for c in _ctx_clauses + _bare_clauses:
+        if c not in _seen_clauses:
+            _seen_clauses.add(c)
+            dsl_clauses.append(c)
+
     _call_num = 0
     for clause in dsl_clauses:
         _call_num += 1
@@ -3251,6 +3320,32 @@ Examples:
             sig = subj.get("canonical_signature", "")
             if not eid or not ch:
                 continue
+
+            # Skip supplementary subjects (injected by candidateRegimeService
+            # from param-file hash families). These carry hashes from a
+            # DIFFERENT context family and must not contaminate per-clause
+            # hash collection. See doc 43b.
+            _subj_id = subj.get("subject_id", "")
+            if _subj_id.startswith("supp_"):
+                continue
+
+            # Guard: verify the subject's canonical_signature context keys
+            # match the clause's context keys. A contexted clause must only
+            # collect contexted hashes; a bare clause only bare hashes.
+            if sig:
+                try:
+                    _sig_obj = json.loads(sig)
+                    _x = _sig_obj.get("x", {})
+                    _sig_has_ctx = len(_x) > 0
+                    if is_ctx_clause and not _sig_has_ctx:
+                        # Bare sig on a contexted clause — skip
+                        continue
+                    if not is_ctx_clause and _sig_has_ctx:
+                        # Contexted sig on a bare clause — skip
+                        continue
+                    print(f"    {eid[:8]}… hash={ch[:12]}… x={_x}")
+                except (json.JSONDecodeError, TypeError):
+                    print(f"    {eid[:8]}… hash={ch[:12]}… sig=<unparseable>")
             if is_ctx_clause and _ctx_dim_id:
                 if is_cohort_clause:
                     ctx_cohort_hashes.setdefault(eid, {})[_ctx_dim_id] = ch
@@ -3269,38 +3364,6 @@ Examples:
                     window_hashes[eid] = ch
                     if sig:
                         window_sigs[eid] = sig
-
-    # --- Extra call (conditional): bare DSL for mixed-epoch data ---
-    # Context-only DSL produces context-qualified hashes only.  Bare
-    # (uncontexted) hashes are different core_hashes.  For mixed-epoch
-    # data we need both families → one extra CLI call.
-    _epochs = truth.get("epochs")
-    _has_ctx_epochs = _epochs and any(ep.get("emit_context_slices") for ep in _epochs)
-    _need_bare = ((ctx_window_hashes or ctx_cohort_hashes) and not window_hashes) or _has_ctx_epochs
-    if _need_bare:
-        bare_clauses = [c.strip() for c in bare_dsl.split(";") if c.strip()]
-        for bc in bare_clauses:
-            _call_num += 1
-            is_bc_cohort = bc.startswith("cohort(") or ".cohort(" in bc
-            label = "bare_cohort" if is_bc_cohort else "bare_window"
-            print(f"  CLI call {_call_num} ({label})…", end="", flush=True)
-            _t0b = _time.time()
-            _bare_payload = _cli_call(bc)
-            for subj in _bare_payload.get("snapshot_subjects", []):
-                eid = subj.get("edge_id", "")
-                ch = subj.get("core_hash", "")
-                sig = subj.get("canonical_signature", "")
-                if not eid or not ch:
-                    continue
-                if is_bc_cohort:
-                    cohort_hashes.setdefault(eid, ch)
-                    if sig and eid not in cohort_sigs:
-                        cohort_sigs[eid] = sig
-                else:
-                    window_hashes.setdefault(eid, ch)
-                    if sig and eid not in window_sigs:
-                        window_sigs[eid] = sig
-            print(f" done ({_time.time() - _t0b:.1f}s)", flush=True)
 
     # Build uuid → param_id mapping from graph
     with open(graph_path) as f:
@@ -3381,6 +3444,7 @@ Examples:
         # Re-hash snapshot_rows with the authoritative hashes
         # (snapshot_rows was generated with whatever hash_lookup existed at sim time)
         _rehash_snapshot_rows(snapshot_rows, topology, hash_lookup)
+        _verify_hash_family_consistency(snapshot_rows, hash_lookup)
 
         try:
             write_to_snapshot_db(snapshot_rows, db_conn, workspace_prefix, hash_lookup, progress_fn=_progress)

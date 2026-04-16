@@ -1,0 +1,22 @@
+{
+    "name": "mixed-epoch",
+    "description": "Mixed-epoch and staggered graphs — epoch boundary regression",
+    "graphs": {
+        "include": [
+            "synth-context-solo-mixed",
+            "synth-fanout-context-mixed",
+            "synth-context-staggered",
+            "synth-diamond-context-mixed",
+            "synth-abc-context-mixed"
+        ]
+    },
+    "sampling": {
+        "chains": 3,
+        "draws": 1000,
+        "tune": 500,
+        "no_timeout": true
+    },
+    "features": [],
+    "settings": {},
+    "tags": ["mixed-epoch", "staggered", "regression"]
+}

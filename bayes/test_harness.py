@@ -215,40 +215,6 @@ class DateEncoder(json.JSONEncoder):
         return super().default(obj)
 
 
-# ---------------------------------------------------------------------------
-# Node.js hash computation
-# ---------------------------------------------------------------------------
-
-def _compute_fe_hashes(graph_path: str) -> dict:
-    """Call compute_snapshot_subjects.mjs and return parsed JSON.
-
-    Returns dict with 'edges' and 'subjects' lists.
-    Exits with error if the Node.js script fails.
-    """
-    node_script = os.path.join(REPO_ROOT, "bayes", "compute_snapshot_subjects.mjs")
-    ge_dir = os.path.join(REPO_ROOT, "graph-editor")
-    nvm_prefix = (
-        f'export NVM_DIR="$HOME/.nvm" && '
-        f'. "$NVM_DIR/nvm.sh" 2>/dev/null && '
-        f'cd {ge_dir} && '
-        f'nvm use "$(cat .nvmrc)" 2>/dev/null && '
-    )
-    cmd = f'{nvm_prefix}node {node_script} {graph_path}'
-    result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=30)
-    if result.returncode != 0:
-        print(f"ERROR: compute_snapshot_subjects.mjs failed:")
-        print(f"  {result.stderr[:500]}")
-        sys.exit(1)
-
-    stdout = result.stdout
-    try:
-        json_start = stdout.index("{")
-        return json.loads(stdout[json_start:])
-    except (ValueError, json.JSONDecodeError) as e:
-        print(f"ERROR: Failed to parse Node.js output: {e}")
-        print(f"  stdout: {stdout[:500]}")
-        sys.exit(1)
-
 
 # ---------------------------------------------------------------------------
 # Pre-flight checks

@@ -65,7 +65,7 @@ export async function runHydrate(): Promise<void> {
 
   // BE topo pass — engine-computed completeness, blended rate, dispersions
   log.info('Running BE topo pass...');
-  await runCliTopoPass(populatedGraph, bundle.parameters);
+  await runCliTopoPass(populatedGraph, bundle.parameters, queryDsl);
 
   // Write back to disk
   const graphPath = join(bundle.graphDir, 'graphs', `${bundle.graphName}.json`);

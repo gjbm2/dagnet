@@ -1,0 +1,16 @@
+{
+    "name": "sparsity-sweep",
+    "description": "Sparse graphs only — tests degradation under missing data",
+    "graphs": {
+        "include": ["*-sparse*"]
+    },
+    "sampling": {
+        "chains": 3,
+        "draws": 1500,
+        "tune": 750,
+        "no_timeout": true
+    },
+    "features": [],
+    "settings": {},
+    "tags": ["sparse", "robustness"]
+}

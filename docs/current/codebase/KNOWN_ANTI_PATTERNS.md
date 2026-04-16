@@ -348,6 +348,38 @@ Multiple code paths can regenerate the graph JSON: `graph_from_truth.py` (truth-
 
 **Detection**: the `v2-v3-parity-test.sh` Phase 1 health checks assert `evidence_x > 0`. If this fails, the snapshot linkage is broken and the parity comparison would be vacuous.
 
+## Anti-pattern 42: Silent `except Exception` hiding missing imports
+
+**Signature**: new code in a Python module runs correctly in direct testing (`PYTHONPATH=lib python3 -c "from module import func; func(...)"`) but has no effect when called via the running server. No error in logs. The feature silently falls back to default behaviour.
+
+**Root cause**: the new code uses a standard library module (e.g. `re`, `json`, `os`) inside a `try/except Exception` block, but the module isn't imported at the top of the file. The `NameError` is caught by the broad `except` and the fallback branch runs. No logging means no trace of the error.
+
+**Why direct testing works**: the REPL or test script imports the module at the top level or in a context where the global namespace already has it. The production code path doesn't.
+
+**Fix**: (1) always check imports when adding code to a file you didn't write — don't assume standard library modules are available. (2) Never use bare `except Exception` without logging the error. At minimum: `except Exception as e: print(f"WARNING: {e}", flush=True)`. (3) After adding code, run it through the actual server code path, not just a direct function call.
+
+**Example**: `analysis_subject_resolution.py` used `re.match()` inside a `try/except Exception` to parse the asat date. `re` wasn't imported. The `NameError` was caught silently, and `sweep_to` fell back to today. The asat date was correctly parsed but never used.
+
+## Anti-pattern 43: CLI topo pass not scoping to query DSL
+
+**Signature**: param-pack or `analyse --topo-pass` produces `p.mean` or `completeness` values that don't match the cohort maturity chart on the same data. The discrepancy is large (e.g. 0.72 vs 0.40) and doesn't shrink with wider date ranges.
+
+**Root cause**: the CLI topo pass sends `cohort_data` from the full param file without filtering to the query DSL's date range. The BE uses all cohorts for IS conditioning, not just the scoped ones. The FE browser path correctly sends `scoped_cohorts` in `edge_contexts`.
+
+**Fix**: `runCliTopoPass` must parse the query DSL, extract the date range, filter cohorts, and send `edge_contexts` with `scoped_cohorts` alongside `cohort_data`. See D18 fix in `src/cli/topoPass.ts`.
+
+**How to spot**: compare param-pack output against chart output for a narrow cohort date range. If `p.mean` is close to the full-evidence-base rate rather than the scoped-cohort rate, scoping is broken.
+
+## Anti-pattern 44: Weak Beta prior overwhelmed by per-cohort IS conditioning
+
+**Signature**: per-cohort forecast values (daily conversions `forecast_y`, or per-cohort `projected_y`) swing wildly from the model rate. A single young cohort with moderate evidence produces a conditioned rate 3-5× the prior. Aggregate consumers (chart, topo pass) are stable because many cohorts average out the IS noise.
+
+**Root cause**: the MC sweep's p draws use a Beta prior with insufficient concentration. When `resolved.alpha/beta` are not available (analytic sources), the fallback prior is too weak — `Beta(1,1)` or `Beta(p×20, (1-p)×20)` gives only 2-20 effective trials. A single cohort with 1000+ trials overwhelms it completely.
+
+**Fix**: the model resolver should derive `alpha`/`beta` from the edge's `evidence.n`/`evidence.k` (actual observation counts) when no Bayesian posterior is available. This gives a prior whose concentration reflects the real evidence base. See D20 fix in `runner/model_resolver.py`.
+
+**How to spot**: check `resolved.alpha` and `resolved.beta`. If they sum to < 50 for an edge with hundreds of observations, the prior is too weak for per-cohort IS.
+
 ## When to add to this document
 
 After completing a multi-attempt fix, check: does my bug match a generalisable pattern? If so, add it here following the format: Signature (how to recognise it), Root cause (why it happens), Fix (what to do), Example (optional, specific instance).

@@ -1,0 +1,19 @@
+{
+    "name": "context-focus",
+    "description": "All contexted graphs — 1-dim, 2-dim, mixed-epoch, staggered",
+    "graphs": {
+        "include": [
+            "synth-*-context*",
+            "synth-context-*"
+        ],
+        "exclude": []
+    },
+    "sampling": {
+        "chains": 3,
+        "draws": 1000,
+        "tune": 500
+    },
+    "features": [],
+    "settings": {},
+    "tags": ["context", "1-dim", "2-dim", "mixed-epoch", "staggered"]
+}

@@ -38,7 +38,7 @@ import { isolateSlice, extractSliceDimensions, hasContextAny } from '../sliceIso
 import { sessionLogService } from '../sessionLogService';
 
 import { isSignatureWritingEnabled } from '../signaturePolicyService';
-import { parseSignature } from '../signatureMatchingService';
+// parseSignature removed — was only used by old asat fork (doc 42b)
 import { forecastingSettingsService } from '../forecastingSettingsService';
 import { deriveOnsetDeltaDaysFromLagHistogram, roundTo1dp } from '../onsetDerivationService';
 import { normalizeConstraintString, parseConstraints, parseDSL } from '../../lib/queryDSL';
@@ -49,7 +49,7 @@ import { rateLimiter } from '../rateLimiter';
 import { buildDslFromEdge } from '../../lib/das/buildDslFromEdge';
 import { createDASRunner } from '../../lib/das';
 import { db } from '../../db/appDatabase';
-import { querySnapshotsVirtual } from '../snapshotWriteService';
+// querySnapshotsVirtual removed — asat delegates to getParameterFromFile (doc 42b)
 import { RECENCY_HALF_LIFE_DAYS, DEFAULT_T95_DAYS } from '../../constants/latency';
 import { LATENCY_PATH_T95_PERCENTILE } from '../../constants/latency';
 
@@ -67,9 +67,8 @@ import {
   extractContextKeysFromConstraints,
 } from './querySignature';
 import {
-  selectQuerySignatureForAsat,
-  convertVirtualSnapshotToTimeSeries,
-  fireAsatWarnings,
+  // selectQuerySignatureForAsat, convertVirtualSnapshotToTimeSeries, fireAsatWarnings
+  // removed — asat delegates to getParameterFromFile (doc 42b)
   buildDenseSnapshotRowsForDbWrite,
 } from './asatQuerySupport';
 import {
@@ -307,205 +306,42 @@ export async function getFromSourceDirect(options: {
   
   try {
     // ============================================================================
-    // asat() Historical Query Fork Point
+    // asat() → delegate to from-file path (doc 42b §3 D1)
     // ============================================================================
-    // Check for asat() clause in DSL. If present, route to snapshot DB instead of DAS.
-    // This is read-only: no file mutations, no DAS requests.
+    // asat queries are read-only: no DAS fetch, no file writes. The from-file
+    // path (getParameterFromFile) handles asat correctly — it reconstructs
+    // daily arrays from the snapshot DB (tier 1) or truncates file arrays
+    // (tier 2), then runs the normal pipeline (evidence scalars, topo pass).
+    // No need for a parallel implementation here.
     const effectiveDSL = targetSlice || currentDSL || '';
     const parsedDSLForAsat = parseConstraints(effectiveDSL);
-    
-    if (parsedDSLForAsat.asat && objectType === 'parameter' && objectId) {
-      sessionLogService.addChild(logOpId, 'debug', 'ASAT_FORK',
-        `Detected asat(${parsedDSLForAsat.asat}) - routing to snapshot DB`,
-        effectiveDSL,
-        { asat: parsedDSLForAsat.asat });
-      
-      // Build workspace-prefixed param_id from parameter file source metadata
-      const paramFile = fileRegistry.getFile(`parameter-${objectId}`);
-      const workspaceRepo = paramFile?.source?.repository;
-      const workspaceBranch = paramFile?.source?.branch;
-      if (!workspaceRepo || !workspaceBranch) {
-        // Can't form DB param_id → treat as no-data for this key.
-        sessionLogService.endOperation(logOpId, 'warning', 'asat: missing workspace metadata (snapshot lookup skipped)');
-        return errorResult;
-      }
-      const paramId = `${workspaceRepo}-${workspaceBranch}-${objectId}`;
 
-      // MANDATORY: signature integrity. Use the existing stored query_signature from the parameter file.
-      // This is the canonical signature produced by the normal fetch path.
-      const signatureStr = (() => {
-        const values: any[] = Array.isArray((paramFile as any)?.data?.values) ? (paramFile as any).data.values : [];
-        const mode: 'window' | 'cohort' = parsedDSLForAsat.cohort ? 'cohort' : 'window';
-        return selectQuerySignatureForAsat({ values, mode });
-      })();
-      if (!signatureStr) {
-        // No signature available → cannot form lookup key → no-data.
-        const modeLabel = parsedDSLForAsat.cohort ? 'cohort' : 'window';
-        console.warn(
-          `[DataOperationsService] asat: no query_signature matching mode=${modeLabel} in parameter file; snapshot lookup skipped`
-        );
-        sessionLogService.endOperation(
-          logOpId,
-          'warning',
-          `asat: no mode-matching query_signature (${modeLabel}) (snapshot lookup skipped)`
-        );
-        return errorResult;
-      }
-      const parsedSig = parseSignature(signatureStr);
-      if (!parsedSig.identityHash) {
-        sessionLogService.endOperation(logOpId, 'warning', 'asat: invalid query_signature (snapshot lookup skipped)');
-        return errorResult;
-      }
-      
-      // Resolve window/cohort dates
-      const todayUK = formatDateUK(new Date());
-      let anchorFrom: string | undefined;
-      let anchorTo: string | undefined;
-      
-      if (parsedDSLForAsat.cohort?.start || parsedDSLForAsat.cohort?.end) {
-        // Cohort mode (A-anchored)
-        anchorFrom = parsedDSLForAsat.cohort.start 
-          ? resolveRelativeDate(parsedDSLForAsat.cohort.start) 
-          : undefined;
-        anchorTo = parsedDSLForAsat.cohort.end 
-          ? resolveRelativeDate(parsedDSLForAsat.cohort.end) 
-          : todayUK;
-      } else if (parsedDSLForAsat.window?.start || parsedDSLForAsat.window?.end) {
-        // Window mode (X-anchored)
-        anchorFrom = parsedDSLForAsat.window.start 
-          ? resolveRelativeDate(parsedDSLForAsat.window.start) 
-          : undefined;
-        anchorTo = parsedDSLForAsat.window.end 
-          ? resolveRelativeDate(parsedDSLForAsat.window.end) 
-          : todayUK;
-      } else {
-        // No window/cohort specified - use default window
-        const defaultStart = resolveRelativeDate('-60d');
-        anchorFrom = defaultStart;
-        anchorTo = todayUK;
-      }
-      
-      if (!anchorFrom || !anchorTo) {
-        sessionLogService.endOperation(logOpId, 'warning', 'asat: missing valid window/cohort range (snapshot lookup skipped)');
-        return errorResult;
-      }
-      
-      // Convert UK dates to ISO for API
-      const anchorFromISO = parseUKDate(anchorFrom).toISOString().split('T')[0];
-      const anchorToISO = parseUKDate(anchorTo).toISOString().split('T')[0];
-      
-      // Convert asat date to ISO datetime (end of day, UTC)
-      const asatDateUK = resolveRelativeDate(parsedDSLForAsat.asat);
-      const asatDateObj = parseUKDate(asatDateUK);
-      asatDateObj.setUTCHours(23, 59, 59, 999);
-      const asAtISO = asatDateObj.toISOString();
-      
-      // Extract slice_keys from context constraints
-      const sliceKeys = extractSliceDimensions(effectiveDSL);
-      const sliceKeyArray = sliceKeys ? [sliceKeys] : undefined; // Empty string = uncontexted
-      
-      sessionLogService.addChild(logOpId, 'debug', 'ASAT_QUERY',
-        `Querying virtual snapshot: ${anchorFromISO} to ${anchorToISO} as-at ${asatDateUK}`,
-        undefined,
-        { paramId, anchorFrom: anchorFromISO, anchorTo: anchorToISO, asAt: asAtISO, sliceKeys: sliceKeyArray });
-      
-      // Call virtual snapshot query
-      const virtualResult = await querySnapshotsVirtual({
-        param_id: paramId,
-        as_at: asAtISO,
-        anchor_from: anchorFromISO,
-        anchor_to: anchorToISO,
-        slice_keys: sliceKeyArray,
-        canonical_signature: signatureStr,
+    if (parsedDSLForAsat.asat && objectType === 'parameter' && objectId) {
+      sessionLogService.addChild(logOpId, 'debug', 'ASAT_DELEGATE',
+        `Detected asat(${parsedDSLForAsat.asat}) — delegating to from-file path`,
+        effectiveDSL);
+
+      const result = await getParameterFromFile({
+        paramId: objectId,
+        edgeId: targetId,
+        graph,
+        setGraph,
+        targetSlice: effectiveDSL,
+        conditionalIndex,
       });
-      
-      if (!virtualResult.success) {
-        sessionLogService.endOperation(logOpId, 'error', `Virtual snapshot query failed: ${virtualResult.error}`);
-        toast.error(`Historical query failed: ${virtualResult.error}`);
-        return errorResult;
-      }
-      
-      sessionLogService.addChild(logOpId, 'debug', 'ASAT_RESULT',
-        `Virtual snapshot returned ${virtualResult.count} rows`,
-        undefined,
-        { 
-          count: virtualResult.count, 
-          latestRetrievedAt: virtualResult.latest_retrieved_at_used,
-          hasAnchorTo: virtualResult.has_anchor_to 
-        });
-      
-      // Fire warnings per §6.3
-      fireAsatWarnings(
-        asatDateUK,
-        virtualResult.latest_retrieved_at_used,
-        virtualResult.has_anchor_to,
-        anchorTo,
-        entityLabel
-      );
-      
-      // Convert virtual snapshot rows to time series format
-      const sliceDims = extractSliceDimensions(effectiveDSL);
-      const modeClause = parsedDSLForAsat.cohort ? 'cohort()' : (parsedDSLForAsat.window ? 'window()' : '');
-      const sliceFamilyKey = [sliceDims, modeClause].filter(Boolean).join('.');
-      const targetSliceKey = sliceFamilyKey || '';
-      const timeSeries = convertVirtualSnapshotToTimeSeries(virtualResult.rows, targetSliceKey, {
-        workspace: { repository: workspaceRepo, branch: workspaceBranch },
-      });
-      
-      // If we have a graph and setGraph, apply the data to the graph
-      if (graph && setGraph && targetId) {
-        const targetEdge: any = graph.edges?.find((e: any) => e.uuid === targetId || e.id === targetId);
-        if (targetEdge) {
-          // Simple aggregation: sum n and k from time series
-          const totalN = timeSeries.reduce((sum, pt) => sum + pt.n, 0);
-          const totalK = timeSeries.reduce((sum, pt) => sum + pt.k, 0);
-          const aggregatedP = totalN > 0 ? totalK / totalN : 0;
-          
-          // Apply to graph edge
-          const newGraph = { ...graph };
-          const newEdges = [...(newGraph.edges || [])];
-          const edgeIndex = newEdges.findIndex((e: any) => e.uuid === targetId || e.id === targetId);
-          
-          if (edgeIndex >= 0) {
-            const newEdge = { ...newEdges[edgeIndex] };
-            const paramObj = conditionalIndex !== undefined 
-              ? newEdge.conditional_p?.[conditionalIndex]?.p 
-              : (paramSlot ? newEdge[paramSlot as keyof typeof newEdge] : newEdge.p);
-            
-            if (paramObj && typeof paramObj === 'object') {
-              // Apply aggregated values
-              (paramObj as any).n = totalN;
-              (paramObj as any).k = totalK;
-              
-              // Store daily data for display
-              (paramObj as any).n_daily = timeSeries.map(pt => pt.n);
-              (paramObj as any).k_daily = timeSeries.map(pt => pt.k);
-              (paramObj as any).dates = timeSeries.map(pt => pt.date);
-              
-              // Mark as from asat query (read-only, no writes)
-              (paramObj as any)._asat = parsedDSLForAsat.asat;
-              (paramObj as any)._asat_retrieved_at = virtualResult.latest_retrieved_at_used;
-            }
-            
-            newEdges[edgeIndex] = newEdge;
-            newGraph.edges = newEdges;
-            setGraph(newGraph);
-          }
-        }
-      }
-      
-      sessionLogService.endOperation(logOpId, 'success', 
-        `Historical query complete: ${timeSeries.length} data points from snapshot as-at ${asatDateUK}`);
-      
+
+      sessionLogService.endOperation(logOpId, result.success ? 'success' : 'warning',
+        result.warning || `asat query via from-file: ${result.success ? 'success' : 'failed'}`);
+
       return {
-        success: true,
-        cacheHit: true, // Virtual snapshot is effectively a "cache hit" from DB
+        success: result.success,
+        cacheHit: true,
         daysFetched: 0,
-        daysFromCache: timeSeries.length,
+        daysFromCache: 0,
       };
     }
     // ============================================================================
-    // End asat() Fork - Continue normal DAS path
+    // End asat() delegation — normal DAS path continues below
     // ============================================================================
     
     let connectionName: string | undefined;

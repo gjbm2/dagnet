@@ -4,6 +4,47 @@ Tools for managing conversion graphs in the data repo. Scripts live in
 `graph-ops/scripts/` in the dagnet repo. They operate on graph files
 in the data repo (path resolved from `.private-repos.conf`).
 
+## Quick Reference
+
+**Setup (run once per session)**:
+```bash
+# Node (required for all CLI tools)
+export NVM_DIR="$HOME/.nvm" && . "$NVM_DIR/nvm.sh" && cd graph-editor && nvm use "$(cat .nvmrc)" && cd ..
+
+# Python BE (required for analyse, hydrate, bayes — NOT needed for param-pack or validate)
+cd graph-editor && . venv/bin/activate && python dev-server.py &
+cd ..
+```
+
+**Most common commands**:
+```bash
+# Validate a graph (no BE needed)
+bash graph-ops/scripts/validate-graph.sh graphs/<name>.json
+
+# Get param pack for a graph
+bash graph-ops/scripts/param-pack.sh <graph> "window(-30d:)"
+
+# Run graph overview analysis (BE required)
+bash graph-ops/scripts/analyse.sh <graph> "window(-30d:)" --type graph_overview
+
+# Run edge-level analysis
+bash graph-ops/scripts/analyse.sh <graph> \
+  "from(x).to(y).window(-30d:)" --type cohort_maturity
+
+# Run analysis on synth graph (after synth_gen.py)
+bash graph-ops/scripts/analyse.sh <graph> "<dsl>" \
+  --type cohort_maturity_v2 --topo-pass --no-snapshot-cache
+
+# List available graphs
+bash graph-ops/scripts/list-graph.sh
+```
+
+**Key flags**: `--verbose` (debug output), `--format json` (pipe to jq),
+`--no-cache` (bypass disk bundle cache), `--topo-pass` (populate promoted
+stats via BE), `--no-snapshot-cache` (bypass BE cache after DB changes).
+
+**Diagnostics go to stderr, data to stdout.** Use `2>/dev/null` when piping.
+
 ## Graph Validation
 
 **Script**: `graph-ops/scripts/validate-graph.sh`

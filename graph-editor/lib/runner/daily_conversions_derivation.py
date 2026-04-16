@@ -51,6 +51,10 @@ def derive_daily_conversions(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     # Keyed by anchor_day → accumulated (x, y) across slices.
     cohort_xy: Dict[date, Dict[str, int]] = defaultdict(lambda: {'x': 0, 'y': 0})
 
+    # Per-(anchor_day, age, slice_key) → latest Y at that age for that slice.
+    # After the series loop, we sum across slices per (anchor_day, age).
+    _y_per_series_age: Dict[tuple, int] = {}
+
     for (anchor_day, _slice_key), snapshots in by_series.items():
         snapshots_sorted = sorted(snapshots, key=lambda r: _parse_datetime(r['retrieved_at']))
         prev_Y = 0
@@ -66,12 +70,45 @@ def derive_daily_conversions(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
 
             prev_Y = current_Y
 
+            # Track Y at each age for this slice (latency bands).
+            age_days = (retrieved.date() - anchor_day).days
+            if age_days >= 0 and isinstance(current_Y, (int, float)):
+                # Last-write-wins per (anchor_day, age, slice)
+                _y_per_series_age[(anchor_day, age_days, _slice_key)] = int(current_Y)
+
         # Latest snapshot in this series gives the most up-to-date X and Y
         latest = snapshots_sorted[-1]
         latest_x = latest.get('x') or latest.get('X') or 0
         latest_y = latest.get('y') or latest.get('Y') or 0
         cohort_xy[anchor_day]['x'] += latest_x
         cohort_xy[anchor_day]['y'] += latest_y
+
+    # Build per-cohort cumulative Y trajectory across all slices.
+    # For each (anchor_day, age), the total Y = sum of each slice's
+    # latest-known Y at or before that age. This is naturally monotonic
+    # because each slice's Y is cumulative and carry-forward preserves it.
+    #
+    # Step 1: collect all ages per cohort, and all slices per cohort.
+    _cohort_slices: Dict[date, set] = defaultdict(set)
+    _cohort_ages: Dict[date, set] = defaultdict(set)
+    for (ad, age, sk) in _y_per_series_age:
+        _cohort_slices[ad].add(sk)
+        _cohort_ages[ad].add(age)
+
+    # Step 2: for each cohort, walk ages in order. At each age, sum
+    # each slice's latest Y (carry-forward from last observed age).
+    cohort_y_at_age: Dict[tuple, int] = {}
+    for ad in _cohort_ages:
+        slices = sorted(_cohort_slices[ad])
+        ages = sorted(_cohort_ages[ad])
+        # Per-slice carry-forward state
+        slice_latest_y: Dict[str, int] = {sk: 0 for sk in slices}
+        for age in ages:
+            for sk in slices:
+                obs = _y_per_series_age.get((ad, age, sk))
+                if obs is not None:
+                    slice_latest_y[sk] = obs
+            cohort_y_at_age[(ad, age)] = sum(slice_latest_y.values())
     
     total = sum(daily_totals.values())
     sorted_dates = sorted(daily_totals.keys())
@@ -94,10 +131,19 @@ def derive_daily_conversions(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
             'rate': rate,
         })
     
+    # Convert cohort_y_at_age to string-keyed for JSON serialisation
+    y_at_age_out: Dict[str, Dict[str, int]] = {}
+    for (ad, age), y_val in cohort_y_at_age.items():
+        ad_str = ad.isoformat()
+        if ad_str not in y_at_age_out:
+            y_at_age_out[ad_str] = {}
+        y_at_age_out[ad_str][str(age)] = y_val
+
     return {
         'analysis_type': 'daily_conversions',
         'data': data,
         'rate_by_cohort': rate_by_cohort,
+        'cohort_y_at_age': y_at_age_out,
         'total_conversions': total,
         'date_range': {
             'from': sorted_dates[0].isoformat() if sorted_dates else None,

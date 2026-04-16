@@ -14,6 +14,7 @@ See: docs/current/project-bayes/31-be-analysis-subject-resolution.md
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Union
 
@@ -183,14 +184,38 @@ def _resolve_funnel_path(
     ]
 
     # For cohort_maturity, sweep_from defaults to anchor_from,
-    # sweep_to defaults to today.
+    # sweep_to defaults to asat date if present, else today (doc 42 §2).
     sweep_from = None
     sweep_to = None
     if analysis_type in ('cohort_maturity', 'cohort_maturity_v1', 'cohort_maturity_v2'):
         sweep_from = anchor_from
-        # sweep_to: use asat if present, else today
         import datetime
-        sweep_to = datetime.date.today().isoformat()
+        if parsed.asat:
+            # Resolve relative dates (e.g. -7d) to absolute
+            try:
+                from dateutil.parser import parse as _dateutil_parse
+                # asat is UK format (d-MMM-yy) or relative — try parsing
+                _asat_str = parsed.asat.strip()
+                # Relative offsets (e.g. -7d) — resolve from today
+                if re.match(r'^-?\d+[dwmy]$', _asat_str):
+                    sweep_to = datetime.date.today().isoformat()
+                else:
+                    # UK date: parse d-MMM-yy
+                    _months = {'Jan':1,'Feb':2,'Mar':3,'Apr':4,'May':5,'Jun':6,
+                               'Jul':7,'Aug':8,'Sep':9,'Oct':10,'Nov':11,'Dec':12}
+                    _m = re.match(r'^(\d{1,2})-([A-Z][a-z]{2})-(\d{2})$', _asat_str)
+                    if _m:
+                        _y = 2000 + int(_m.group(3))
+                        _mo = _months.get(_m.group(2), 1)
+                        _d = int(_m.group(1))
+                        sweep_to = datetime.date(_y, _mo, _d).isoformat()
+                    else:
+                        # Try ISO fallback
+                        sweep_to = datetime.date.fromisoformat(_asat_str[:10]).isoformat()
+            except Exception:
+                sweep_to = datetime.date.today().isoformat()
+        else:
+            sweep_to = datetime.date.today().isoformat()
 
     return ResolvedAnalysisResult(
         from_node=resolved_path.from_node,

@@ -27,6 +27,17 @@ When graph structure changes (event definition, filter, latency_parameter toggle
 
 Returns ONE row per `(anchor_day, slice_key)` — the **latest** row as-of a given `as_at` timestamp. "Latest wins" — older retrievals are superseded by newer ones. This gives a single cross-sectional picture: "what does the data look like right now?"
 
+**asat() evidence reconstruction** (doc 42): when `asat(date)` is in
+the DSL, `getParameterFromFile` in `fileToGraphSync.ts` calls
+`querySnapshotsVirtual` with `as_at = asat_date` to reconstruct the
+daily arrays (n_daily, k_daily, dates) as they would have appeared at
+the asat date. The reconstructed arrays replace the file-cached arrays
+in memory, then flow through the normal aggregation pipeline (evidence
+scalars, topo pass, blended rate). If no snapshot rows exist for the
+asat date, falls back to truncating file-cached arrays by anchor date
+(approximation — cohorts appear too mature). The `getFromSourceDirect`
+path delegates to `getParameterFromFile` for asat queries.
+
 ### 2. Sweep Query (`query_snapshots_for_sweep`)
 
 **Used by**: Bayes compiler (via `worker._query_snapshot_subjects`)

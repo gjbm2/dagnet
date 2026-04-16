@@ -1,0 +1,19 @@
+{
+    "name": "smoke",
+    "description": "Quick sanity check — 3 small graphs, reduced sampling",
+    "graphs": {
+        "include": [
+            "synth-simple-abc",
+            "synth-context-solo",
+            "synth-fanout-test"
+        ]
+    },
+    "sampling": {
+        "chains": 2,
+        "draws": 500,
+        "tune": 300
+    },
+    "features": [],
+    "settings": {},
+    "tags": ["quick", "ci"]
+}

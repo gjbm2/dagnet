@@ -660,6 +660,14 @@ export class GraphComputeClient {
           sweep_to: firstMeta?.sweep_range?.to ?? firstMeta?.sweep_to,
           // Hint to UIs that this came from snapshot reads.
           source: 'snapshot_db',
+          // Promoted model source — used by chart hint rendering.
+          // Read from the first subject's model curve entry.
+          promoted_source: (() => {
+            for (const [, entry] of modelCurveBySubject) {
+              if (entry.promotedSource) return entry.promotedSource;
+            }
+            return undefined;
+          })(),
           // Model CDF curves per subject (for overlay on maturity chart).
           model_curves: Object.fromEntries(modelCurveBySubject),
           // Export-only tables (avoid polluting the primary `data` rows used by charts).
@@ -827,6 +835,8 @@ export class GraphComputeClient {
               evidence_y: row.evidence_y != null ? Number(row.evidence_y) : null,
               forecast_y: row.forecast_y != null ? Number(row.forecast_y) : null,
               projected_y: row.projected_y != null ? Number(row.projected_y) : null,
+              forecast_bands: row.forecast_bands ?? null,
+              latency_bands: row.latency_bands ?? null,
             });
           }
         } else {
@@ -878,6 +888,9 @@ export class GraphComputeClient {
         ])
       );
 
+      // Promoted source from first block that has it (for hint rendering)
+      const dcPromotedSource = blocks.find(b => b.result?.promoted_source)?.result?.promoted_source;
+
       const result: AnalysisResult = {
         analysis_type: 'daily_conversions',
         analysis_name: 'Daily Conversions',
@@ -886,6 +899,7 @@ export class GraphComputeClient {
           source: 'snapshot_db',
           date_range: { from: globalDateFrom, to: globalDateTo },
           total_conversions: globalTotalConversions,
+          promoted_source: dcPromotedSource,
         },
         semantics: {
           dimensions: [

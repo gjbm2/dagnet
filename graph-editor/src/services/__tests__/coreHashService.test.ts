@@ -61,3 +61,63 @@ describe('computeShortCoreHash — golden parity', () => {
     await expect(computeShortCoreHash(undefined as any)).rejects.toThrow('required');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Hash-family separation (doc 43b)
+//
+// The structured signature is {"c":"<identityHash>","x":{<contextDefHashes>}}.
+// Bare queries have x: {}, contexted queries have x: {"dim": "<hash>"}.
+// These MUST produce different core_hash values — otherwise hash-family
+// separation is broken and the snapshot DB cannot distinguish bare from
+// contexted data by hash alone.
+//
+// What real bug would this test catch?
+//   - serialiseSignature ignoring the x field
+//   - computeShortCoreHash not being sensitive to x differences
+//   - x: {} being serialised identically to x: {"dim": "..."}
+//     (e.g. if both were normalised to the same string)
+// ---------------------------------------------------------------------------
+
+describe('hash-family separation (doc 43b)', () => {
+  const sameIdentityHash = 'abc123def456';
+
+  it('bare (x={}) and contexted (x={"dim":"hash"}) produce different core_hash', async () => {
+    const bareSig = JSON.stringify({ c: sameIdentityHash, x: {} });
+    const ctxSig = JSON.stringify({ c: sameIdentityHash, x: { 'synth-channel': 'def789' } });
+
+    const bareHash = await computeShortCoreHash(bareSig);
+    const ctxHash = await computeShortCoreHash(ctxSig);
+
+    expect(bareHash).not.toBe(ctxHash);
+  });
+
+  it('two different context dimensions produce different core_hash', async () => {
+    const sig1 = JSON.stringify({ c: sameIdentityHash, x: { channel: 'aaa' } });
+    const sig2 = JSON.stringify({ c: sameIdentityHash, x: { device: 'bbb' } });
+
+    const hash1 = await computeShortCoreHash(sig1);
+    const hash2 = await computeShortCoreHash(sig2);
+
+    expect(hash1).not.toBe(hash2);
+  });
+
+  it('same dimension, different def hash → different core_hash', async () => {
+    const sig1 = JSON.stringify({ c: sameIdentityHash, x: { channel: 'version1' } });
+    const sig2 = JSON.stringify({ c: sameIdentityHash, x: { channel: 'version2' } });
+
+    const hash1 = await computeShortCoreHash(sig1);
+    const hash2 = await computeShortCoreHash(sig2);
+
+    expect(hash1).not.toBe(hash2);
+  });
+
+  it('multi-dimension contexted differs from single-dimension', async () => {
+    const single = JSON.stringify({ c: sameIdentityHash, x: { channel: 'aaa' } });
+    const multi = JSON.stringify({ c: sameIdentityHash, x: { channel: 'aaa', device: 'bbb' } });
+
+    const singleHash = await computeShortCoreHash(single);
+    const multiHash = await computeShortCoreHash(multi);
+
+    expect(singleHash).not.toBe(multiHash);
+  });
+});

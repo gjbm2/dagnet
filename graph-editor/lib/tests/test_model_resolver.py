@@ -305,3 +305,505 @@ class TestResolverParity:
                                        graph_preference='manual')
         assert result.source == 'manual'
         assert abs(result.edge_latency.mu - 4.0) < 1e-6
+
+
+class TestResolverNonBayes:
+    """Resolver produces usable params when Bayes vars are absent.
+
+    Confirms that edges fitted by analytic-only pipelines (no Bayesian
+    model_vars) resolve correctly through the preference cascade and
+    produce params that the forecast engine can consume.
+    """
+
+    def test_analytic_only_model_vars(self):
+        """Edge with only analytic model_vars — no bayesian entry."""
+        from runner.model_resolver import resolve_model_params
+
+        edge = {
+            'p': {
+                'forecast': {'mean': 0.4},
+                'latency': {'mu': 3.0, 'sigma': 0.6},
+                'posterior': {'alpha': 12, 'beta': 18},
+                'model_vars': [{
+                    'source': 'analytic',
+                    'latency': {'mu': 3.0, 'sigma': 0.6, 'onset_delta_days': 0.0},
+                    'probability': {'mean': 0.4, 'stdev': 0.05},
+                }],
+            }
+        }
+        result = resolve_model_params(edge, scope='edge', temporal_mode='window')
+        assert result is not None
+        assert result.source == 'analytic'
+        assert abs(result.edge_latency.mu - 3.0) < 1e-6
+        assert abs(result.edge_latency.sigma - 0.6) < 1e-6
+        assert result.edge_latency.sigma > 0, 'sigma must be > 0 for engine'
+        # Dispersions: analytic entry has none → zero SDs
+        assert result.edge_latency.mu_sd == 0.0
+        assert result.edge_latency.sigma_sd == 0.0
+        # Probability from posterior alpha/beta
+        assert result.alpha == 12
+        assert result.beta == 18
+        assert abs(result.p_mean - 12 / 30) < 1e-6
+
+    def test_analytic_only_cohort_mode(self):
+        """Cohort mode with analytic-only: path latency from flat fields."""
+        from runner.model_resolver import resolve_model_params
+
+        edge = {
+            'p': {
+                'forecast': {'mean': 0.3},
+                'latency': {
+                    'mu': 2.5, 'sigma': 0.5,
+                    'path_mu': 3.2, 'path_sigma': 0.7,
+                    'path_onset_delta_days': 1.0,
+                },
+                'posterior': {
+                    'alpha': 10, 'beta': 20,
+                    'path_alpha': 8, 'path_beta': 25,
+                },
+                'model_vars': [{
+                    'source': 'analytic',
+                    'latency': {'mu': 2.5, 'sigma': 0.5},
+                    'probability': {'mean': 0.3},
+                }],
+            }
+        }
+        result = resolve_model_params(edge, scope='path', temporal_mode='cohort')
+        assert result is not None
+        assert result.source == 'analytic'
+        # Path latency from flat fields
+        assert result.path_latency is not None
+        assert abs(result.path_latency.mu - 3.2) < 1e-6
+        assert abs(result.path_latency.sigma - 0.7) < 1e-6
+        assert result.latency is result.path_latency
+        # Cohort mode prefers path_alpha/path_beta
+        assert abs(result.alpha - 8) < 1e-6
+        assert abs(result.beta - 25) < 1e-6
+
+    def test_no_model_vars_flat_fields_only(self):
+        """Edge with no model_vars at all — resolver falls back to flat
+        latency and posterior fields. This is the pre-Bayes edge shape.
+        """
+        from runner.model_resolver import resolve_model_params
+
+        edge = {
+            'p': {
+                'forecast': {'mean': 0.35},
+                'latency': {
+                    'mu': 2.8, 'sigma': 0.55, 'onset_delta_days': 0.5,
+                    'promoted_t95': 14.0,
+                    'promoted_mu_sd': 0.15, 'promoted_sigma_sd': 0.08,
+                },
+                'posterior': {'alpha': 15, 'beta': 28},
+                # No model_vars key at all
+            }
+        }
+        result = resolve_model_params(edge, scope='edge', temporal_mode='window')
+        assert result is not None
+        assert result.source == '', 'No source when no model_vars'
+        # Latency from flat fields
+        assert abs(result.edge_latency.mu - 2.8) < 1e-6
+        assert abs(result.edge_latency.sigma - 0.55) < 1e-6
+        assert result.edge_latency.sigma > 0, 'sigma > 0 for engine'
+        assert abs(result.edge_latency.onset_delta_days - 0.5) < 1e-6
+        assert abs(result.edge_latency.t95 - 14.0) < 1e-6
+        # Dispersions from promoted_ fields
+        assert abs(result.edge_latency.mu_sd - 0.15) < 1e-6
+        assert abs(result.edge_latency.sigma_sd - 0.08) < 1e-6
+        # Probability from posterior
+        assert result.alpha == 15
+        assert result.beta == 28
+        assert abs(result.p_mean - 15 / 43) < 1e-6
+
+    def test_no_model_vars_posterior_latency(self):
+        """Edge with lat_posterior fields (fitted by topo pass) but no
+        model_vars. Resolver should read from latency.posterior.
+        """
+        from runner.model_resolver import resolve_model_params
+
+        edge = {
+            'p': {
+                'forecast': {'mean': 0.5},
+                'latency': {
+                    'mu': 1.0, 'sigma': 0.3,  # stale flat fields
+                    'posterior': {
+                        'mu_mean': 2.2, 'sigma_mean': 0.45,
+                        'onset_delta_days': 0.8,
+                        'mu_sd': 0.1, 'sigma_sd': 0.04,
+                    },
+                },
+                'posterior': {'alpha': 20, 'beta': 20},
+            }
+        }
+        result = resolve_model_params(edge, scope='edge', temporal_mode='window')
+        assert result is not None
+        # Should prefer posterior values over flat fields
+        assert abs(result.edge_latency.mu - 2.2) < 1e-6
+        assert abs(result.edge_latency.sigma - 0.45) < 1e-6
+        assert abs(result.edge_latency.onset_delta_days - 0.8) < 1e-6
+        assert abs(result.edge_latency.mu_sd - 0.1) < 1e-6
+
+    def test_no_posterior_no_model_vars_forecast_mean_only(self):
+        """Edge with only forecast.mean for probability — minimal viable
+        edge. Resolver should still produce usable params if latency
+        flat fields are present.
+        """
+        from runner.model_resolver import resolve_model_params
+
+        edge = {
+            'p': {
+                'forecast': {'mean': 0.25},
+                'latency': {'mu': 4.0, 'sigma': 1.0},
+                # No posterior, no model_vars
+            }
+        }
+        result = resolve_model_params(edge, scope='edge', temporal_mode='window')
+        assert result is not None
+        assert abs(result.p_mean - 0.25) < 1e-6
+        # D20: resolver now derives alpha/beta from kappa=200 fallback
+        # when no posterior or evidence counts are available.
+        assert result.alpha > 0, 'D20: resolver should provide alpha'
+        assert result.beta > 0, 'D20: resolver should provide beta'
+        kappa = result.alpha + result.beta
+        assert abs(kappa - 200.0) < 1e-6, f'Expected kappa=200 fallback, got {kappa}'
+        assert abs(result.alpha / kappa - 0.25) < 1e-6, 'Alpha should reflect p_mean'
+        assert abs(result.edge_latency.mu - 4.0) < 1e-6
+        assert abs(result.edge_latency.sigma - 1.0) < 1e-6
+
+
+class TestForecastEngineNonBayes:
+    """Integration: compute_forecast_sweep produces valid output when
+    fed resolved params from non-Bayes edges.
+
+    Confirms the engine doesn't crash, produces non-trivial draws,
+    and the rate converges toward p for mature cohorts.
+    """
+
+    def _make_analytic_resolved(self, with_dispersions=False):
+        """Build a ResolvedModelParams as if from an analytic-only edge."""
+        from runner.model_resolver import ResolvedModelParams, ResolvedLatency
+
+        lat = ResolvedLatency(
+            mu=3.0, sigma=0.6, onset_delta_days=0.0, t95=12.0,
+            mu_sd=0.12 if with_dispersions else 0.0,
+            sigma_sd=0.05 if with_dispersions else 0.0,
+            onset_sd=0.0,
+            onset_mu_corr=0.0,
+        )
+        return ResolvedModelParams(
+            p_mean=0.4, p_sd=0.05,
+            alpha=12, beta=18,
+            edge_latency=lat,
+            path_latency=None,
+            source='analytic',
+        )
+
+    def _make_cohorts(self, n_cohorts=3, max_tau=50):
+        """Build synthetic CohortEvidence with plausible observations."""
+        from runner.forecast_state import CohortEvidence
+        import numpy as np
+
+        cohorts = []
+        rng = np.random.default_rng(99)
+        for i in range(n_cohorts):
+            N_i = 100.0
+            frontier = 10 + i * 5  # ages 10, 15, 20
+            # Simulate observations: x constant, y growing with CDF shape
+            obs_x = [N_i] * (max_tau + 1)
+            obs_y = [0.0] * (max_tau + 1)
+            for t in range(frontier + 1):
+                # Rough lognormal CDF approximation for y
+                if t > 0:
+                    frac = min(1.0, 0.4 * (1 - math.exp(-0.1 * t)))
+                    obs_y[t] = N_i * frac
+                    # Add small noise
+                    obs_y[t] += rng.normal(0, 0.5)
+                    obs_y[t] = max(0, min(obs_y[t], N_i))
+            y_frozen = obs_y[frontier]
+            cohorts.append(CohortEvidence(
+                obs_x=obs_x, obs_y=obs_y,
+                x_frozen=N_i, y_frozen=y_frozen,
+                frontier_age=frontier, a_pop=N_i,
+            ))
+        return cohorts
+
+    def test_sweep_analytic_no_dispersions(self):
+        """Engine runs with analytic-only params (zero SDs).
+
+        The no-dispersion branch uses fixed mu/sigma/onset with only
+        p varying. Should produce a valid rate forecast.
+        """
+        from runner.forecast_state import compute_forecast_sweep
+        import numpy as np
+
+        resolved = self._make_analytic_resolved(with_dispersions=False)
+        cohorts = self._make_cohorts(n_cohorts=3, max_tau=50)
+        result = compute_forecast_sweep(
+            resolved=resolved, cohorts=cohorts, max_tau=50,
+            num_draws=500,
+        )
+
+        assert result.rate_draws.shape == (500, 51)
+        assert result.model_rate_draws.shape == (500, 51)
+        # Rate at mature τ (beyond all frontiers) should be near p=0.4
+        median_rate_at_40 = float(np.median(result.rate_draws[:, 40]))
+        assert 0.1 < median_rate_at_40 < 0.8, \
+            f"Median rate at τ=40 should be plausible, got {median_rate_at_40}"
+        # Rate should not be all zeros
+        assert np.any(result.rate_draws > 0), 'Rate draws should not be all zeros'
+        # Fan should be narrower than with dispersions (all draws use same CDF)
+        spread_at_40 = float(np.std(result.rate_draws[:, 40]))
+        assert spread_at_40 > 0, 'Should have some spread from p variation'
+
+    def test_sweep_analytic_with_dispersions(self):
+        """Engine runs with analytic params that have SDs (e.g. from
+        promoted_mu_sd fields). Fan should be wider than zero-SD case.
+        """
+        from runner.forecast_state import compute_forecast_sweep
+        import numpy as np
+
+        resolved_no_sd = self._make_analytic_resolved(with_dispersions=False)
+        resolved_with_sd = self._make_analytic_resolved(with_dispersions=True)
+        cohorts = self._make_cohorts(n_cohorts=3, max_tau=50)
+
+        result_no_sd = compute_forecast_sweep(
+            resolved=resolved_no_sd, cohorts=cohorts, max_tau=50,
+            num_draws=500,
+        )
+        result_with_sd = compute_forecast_sweep(
+            resolved=resolved_with_sd, cohorts=cohorts, max_tau=50,
+            num_draws=500,
+        )
+
+        # Both should produce valid output
+        assert result_no_sd.rate_draws.shape == (500, 51)
+        assert result_with_sd.rate_draws.shape == (500, 51)
+
+        # Fan with dispersions should be wider (more uncertainty).
+        # Use model_rate_draws (unconditioned) to avoid IS compression
+        # masking the dispersion effect.
+        spread_no_sd = float(np.std(result_no_sd.model_rate_draws[:, 40]))
+        spread_with_sd = float(np.std(result_with_sd.model_rate_draws[:, 40]))
+        assert spread_with_sd > spread_no_sd, \
+            f"With-SD model spread ({spread_with_sd:.4f}) should exceed " \
+            f"no-SD model spread ({spread_no_sd:.4f})"
+
+    def test_sweep_forecast_mean_only_no_alpha_beta(self):
+        """Edge with only forecast.mean (no posterior alpha/beta).
+
+        Resolver sets alpha=0, beta=0. Engine should still produce
+        valid draws using p_mean directly.
+        """
+        from runner.model_resolver import ResolvedModelParams, ResolvedLatency
+        from runner.forecast_state import compute_forecast_sweep
+        import numpy as np
+
+        lat = ResolvedLatency(mu=3.0, sigma=0.6)
+        resolved = ResolvedModelParams(
+            p_mean=0.25, p_sd=0.0,
+            alpha=0, beta=0,  # no posterior
+            edge_latency=lat,
+            source='',
+        )
+        cohorts = self._make_cohorts(n_cohorts=2, max_tau=40)
+        result = compute_forecast_sweep(
+            resolved=resolved, cohorts=cohorts, max_tau=40,
+            num_draws=500,
+        )
+
+        assert result.rate_draws.shape == (500, 41)
+        # Should still produce non-trivial output
+        median_rate = float(np.median(result.rate_draws[:, 35]))
+        assert median_rate > 0, f"Rate should be > 0, got {median_rate}"
+
+    def test_sweep_frontier_zero_degenerates_to_model_bands(self):
+        """When all cohorts have frontier_age=0 (no evidence), conditioned
+        rate_draws should degenerate to model_rate_draws.
+
+        This is the cornerstone property: at the limit where frontier=asat,
+        the forecast produces epistemic model uncertainty bands, not
+        evidence-conditioned bands. IS doesn't fire (E_i=0, k_i=0).
+
+        Uses large N_i to minimise binomial sampling noise.
+        """
+        from runner.model_resolver import ResolvedModelParams, ResolvedLatency
+        from runner.forecast_state import compute_forecast_sweep, CohortEvidence
+        import numpy as np
+
+        lat = ResolvedLatency(mu=3.0, sigma=0.6, onset_delta_days=0.0, t95=12.0)
+        resolved = ResolvedModelParams(
+            p_mean=0.4, p_sd=0.05,
+            alpha=12, beta=18,
+            edge_latency=lat,
+            source='analytic',
+        )
+
+        max_tau = 50
+        # Large N_i so binomial noise is negligible
+        N_i = 10000.0
+        cohorts = []
+        for _ in range(3):
+            cohorts.append(CohortEvidence(
+                obs_x=[N_i] * (max_tau + 1),
+                obs_y=[0.0] * (max_tau + 1),
+                x_frozen=N_i,
+                y_frozen=0.0,
+                frontier_age=0,
+                a_pop=N_i,
+            ))
+
+        result = compute_forecast_sweep(
+            resolved=resolved, cohorts=cohorts, max_tau=max_tau,
+            num_draws=2000,
+        )
+
+        # IS should not fire (no evidence)
+        assert result.n_cohorts_conditioned == 0, \
+            f"IS should not fire with frontier=0, got {result.n_cohorts_conditioned} conditioned"
+
+        # At several τ past onset, conditioned median ≈ model median
+        for tau in [10, 20, 30, 40]:
+            cond_median = float(np.median(result.rate_draws[:, tau]))
+            model_median = float(np.median(result.model_rate_draws[:, tau]))
+            assert abs(cond_median - model_median) < 0.02, \
+                f"τ={tau}: conditioned median ({cond_median:.4f}) should ≈ " \
+                f"model median ({model_median:.4f})"
+
+        # Fan widths should also be close (90% band)
+        for tau in [15, 30]:
+            cond_width = float(
+                np.quantile(result.rate_draws[:, tau], 0.95)
+                - np.quantile(result.rate_draws[:, tau], 0.05))
+            model_width = float(
+                np.quantile(result.model_rate_draws[:, tau], 0.95)
+                - np.quantile(result.model_rate_draws[:, tau], 0.05))
+            ratio = cond_width / max(model_width, 1e-10)
+            assert 0.8 < ratio < 1.3, \
+                f"τ={tau}: fan width ratio {ratio:.2f} (cond={cond_width:.4f}, " \
+                f"model={model_width:.4f}) — should be ≈1.0"
+
+    def test_sweep_zero_sigma_returns_empty(self):
+        """Edge with sigma=0 — engine returns zeros (no valid CDF)."""
+        from runner.model_resolver import ResolvedModelParams, ResolvedLatency
+        from runner.forecast_state import compute_forecast_sweep
+        import numpy as np
+
+        lat = ResolvedLatency(mu=3.0, sigma=0.0)
+        resolved = ResolvedModelParams(
+            p_mean=0.4, p_sd=0.05,
+            alpha=12, beta=18,
+            edge_latency=lat,
+            source='',
+        )
+        cohorts = self._make_cohorts(n_cohorts=1, max_tau=20)
+        result = compute_forecast_sweep(
+            resolved=resolved, cohorts=cohorts, max_tau=20,
+            num_draws=100,
+        )
+
+        # sigma=0 → early return with zeros
+        assert np.all(result.rate_draws == 0.0)
+
+
+class TestSurpriseGaugeNonBayes:
+    """Surprise gauge works for non-Bayes edges when SDs are available.
+
+    The topo pass writes promoted_mu_sd/promoted_sigma_sd for any source.
+    The gauge should use these for the surprise quantile computation,
+    not gate on Bayesian source.
+    """
+
+    def _make_graph_with_edge(self, edge):
+        return {'edges': [edge]}
+
+    def _make_analytic_edge(self, with_promoted_sds=True):
+        """Edge with analytic model_vars and topo-pass promoted SDs."""
+        edge = {
+            'uuid': 'test-edge-1',
+            'p': {
+                'forecast': {'mean': 0.4},
+                'latency': {
+                    'mu': 3.0, 'sigma': 0.6,
+                    'onset_delta_days': 0.5,
+                    'completeness': 0.85,
+                },
+                'posterior': {'alpha': 12, 'beta': 18},
+                'evidence': {'k': 35, 'n': 100},
+                'model_vars': [{
+                    'source': 'analytic',
+                    'latency': {'mu': 3.0, 'sigma': 0.6, 'onset_delta_days': 0.5},
+                    'probability': {'mean': 0.4, 'stdev': 0.05},
+                }],
+            }
+        }
+        if with_promoted_sds:
+            edge['p']['latency']['promoted_mu_sd'] = 0.15
+            edge['p']['latency']['promoted_sigma_sd'] = 0.08
+        return edge
+
+    def _call_gauge(self, edge, n_dates=30):
+        import sys, os
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+        from api_handlers import _compute_surprise_gauge
+
+        graph = self._make_graph_with_edge(edge)
+        subj = {
+            'anchor_from': '2026-03-01',
+            'anchor_to': '2026-03-30',
+            'slice_keys': [],
+        }
+        data = {'query_dsl': 'from(A).to(B)'}
+        return _compute_surprise_gauge(graph, 'test-edge-1', subj, data)
+
+    def test_analytic_with_promoted_sds_mu_available(self):
+        """Analytic edge with promoted_mu_sd from topo pass: mu gauge
+        should be available.
+        """
+        edge = self._make_analytic_edge(with_promoted_sds=True)
+        result = self._call_gauge(edge)
+
+        mu_var = next(v for v in result['variables'] if v['name'] == 'mu')
+        assert mu_var['available'] is True, \
+            f"mu gauge should be available with promoted_mu_sd, got: {mu_var}"
+        assert 'quantile' in mu_var
+        assert 0.0 <= mu_var['quantile'] <= 1.0
+
+    def test_analytic_with_promoted_sds_sigma_available(self):
+        """Analytic edge with promoted_sigma_sd from topo pass: sigma
+        gauge should be available (with sufficient n_dates).
+        """
+        edge = self._make_analytic_edge(with_promoted_sds=True)
+        result = self._call_gauge(edge, n_dates=30)
+
+        sigma_var = next(v for v in result['variables'] if v['name'] == 'sigma')
+        assert sigma_var['available'] is True, \
+            f"sigma gauge should be available with promoted_sigma_sd, got: {sigma_var}"
+
+    def test_analytic_without_sds_mu_unavailable(self):
+        """Analytic edge without promoted SDs: mu gauge correctly reports
+        unavailable (no dispersion estimate).
+        """
+        edge = self._make_analytic_edge(with_promoted_sds=False)
+        result = self._call_gauge(edge)
+
+        mu_var = next(v for v in result['variables'] if v['name'] == 'mu')
+        assert mu_var['available'] is False
+
+    def test_analytic_p_variable_available(self):
+        """p (conversion rate) gauge works for analytic edges —
+        uses alpha/beta from posterior (source-agnostic).
+        """
+        edge = self._make_analytic_edge(with_promoted_sds=True)
+        result = self._call_gauge(edge)
+
+        p_var = next(v for v in result['variables'] if v['name'] == 'p')
+        assert p_var['available'] is True, \
+            f"p gauge should be available with posterior alpha/beta, got: {p_var}"
+
+    def test_reference_source_is_analytic(self):
+        """Gauge correctly identifies analytic as the reference source."""
+        edge = self._make_analytic_edge(with_promoted_sds=True)
+        result = self._call_gauge(edge)
+
+        assert result.get('reference_source') == 'analytic'
+        assert result.get('hint') == 'Run Bayes model for better indicators'

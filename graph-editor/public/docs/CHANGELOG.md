@@ -1,4 +1,16 @@
 # DagNet Release Notes
+## Version 1.11.x Series (16-Apr-26)
+**asat() evidence filtering, analysis pipeline asat support**
+
+- **asat() evidence reconstruction**: `asat()` queries now produce correct evidence blocks (n, k, mean, stdev) and blended rates. Previously, the asat path bypassed the aggregation pipeline and produced no evidence. The fix reconstructs daily arrays from the snapshot DB (tier 1) or truncates file arrays (tier 2), then feeds them through the normal pipeline. See doc 42b
+- **asat() in analysis pipeline**: `cohort_maturity` analysis now respects the asat date for `sweep_to`, constraining `tau_solid_max` and `boundary_date` to the asat date instead of today. The Python DSL parser (`query_dsl.py`) now parses `asat()`/`at()` clauses
+- **Duplicate asat fork eliminated**: the `getFromSourceDirect.ts` asat fork (200 lines of broken parallel code) replaced with a 15-line delegation to `getParameterFromFile`, which handles asat correctly
+- **Blind test suite**: `graph-ops/scripts/asat-blind-test.sh` — 14 outside-in tests using CLI tooling (`param-pack.sh`, `analyse.sh`) on synth graphs, covering evidence filtering, signature exclusion, hash matching, read-only invariants, mixed-epoch data, and analysis pipeline zone boundaries
+- **asat() consolidated contract**: doc 42 — single authoritative reference for what asat() means, the three-date model, evidence filtering, posterior resolution, and testable invariants
+- **Synth gen hash verification**: `_verify_hash_family_consistency()` added to synth generator — prevents bare and contexted rows from sharing the same `core_hash` (doc 43)
+
+---
+
 ## Version 1.10.x Series (9-Apr-26 to 14-Apr-26)
 **Phase C tooling, CLI, forecast generalisation prep, bead display modes**
 

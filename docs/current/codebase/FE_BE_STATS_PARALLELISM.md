@@ -202,26 +202,45 @@ transport layer differs.
 | `src/services/modelVarsResolution.ts` | Preference hierarchy for model_vars |
 | `lib/runner/stats_engine.py` | BE topo pass implementation (Python port of FE) |
 | `lib/api_handlers.py` | `/api/lag/topo-pass` endpoint handler |
-| `lib/runner/forecast_state.py` | Forecast engine: `ForecastState`, `build_node_arrival_cache`, `compute_forecast_state_window/cohort` |
-| `lib/runner/model_resolver.py` | Promoted model resolver: `resolve_model_params(edge, scope, temporal_mode)` |
-| `src/cli/commands/analyse.ts` | CLI `--topo-pass` flag (builds cohort_data from disk, calls BE) |
+| `lib/runner/forecast_state.py` | Forecast engine: `_evaluate_cohort` (shared primitive), `compute_forecast_sweep`, `build_node_arrival_cache`, `compute_conditioned_forecast` (surprise gauge only) |
+| `lib/runner/model_resolver.py` | Promoted model resolver: `resolve_model_params(edge, scope, temporal_mode)` — also derives alpha/beta from evidence n/k when no Bayesian posterior (D20) |
+| `src/cli/topoPass.ts` | CLI topo pass: builds cohort_data + scoped edge_contexts from DSL (D18), calls BE endpoint |
+| `src/cli/commands/analyse.ts` | CLI `--topo-pass` flag |
 
-## Forecast engine (doc 29, Phases 2-5 complete 14-Apr-26)
+## Forecast engine (doc 29, Phase G complete 16-Apr-26)
 
-The BE topo pass runs a **forecast engine** after the stats engine
-(`compute_conditioned_forecast` in `forecast_state.py`). Per edge:
+The BE topo pass runs a **forecast engine** after the stats engine,
+using the same `_evaluate_cohort` primitive as the cohort maturity
+chart (`compute_forecast_sweep` in `forecast_state.py`). Per edge:
 
 1. Resolves best-available model params from `model_vars[]` entries
-   (reads from selected source, not flat promoted fields)
-2. Builds per-node upstream carrier (cohort mode only)
-3. MC draws from joint posterior (p, mu, sigma, onset)
-4. IS conditioning against observed evidence (aggregate with ESS
-   tempering — doc 29g)
-5. Computes completeness, completeness_sd, composed rate SDs
+   (reads from selected source, not flat promoted fields). Derives
+   alpha/beta from evidence n/k when no Bayesian posterior (D20).
+2. Builds `CohortEvidence` objects with `eval_age` (coordinate B:
+   each cohort evaluated at its own age)
+3. Calls `compute_forecast_sweep` → `_evaluate_cohort` per cohort
+4. Reads per-cohort draws from `cohort_evals` (coordinate B output)
+5. Aggregates into scalar blended_mean, completeness, p_sd
+
+Two coordinate systems read from the same MC draws (doc 29f §Phase
+G):
+- **Coordinate A (τ-rebased)**: cohort maturity chart sweeps all τ.
+  `midpoint`, `fan_bands`.
+- **Coordinate B (date)**: topo pass and daily conversions read each
+  cohort at its own age. `blended_mean`, `completeness`.
+
+Both are lossy collapses of the per-cohort `(S, T)` draw arrays.
+Neither can be reconstructed from the other. Both must be read from
+the pre-collapsed arrays within the same sweep call.
 
 The engine writes to the **same existing fields** as the FE topo pass
 (`latency.completeness`, `p.mean`, `p.stdev`, etc.). It does not add
 a new schema object. One new field: `latency.completeness_stdev`.
+
+The CLI topo pass (D18) scopes cohorts to the query DSL: `cohort_data`
+contains all cohorts (for model fitting), `edge_contexts.scoped_cohorts`
+contains DSL-windowed cohorts (for IS conditioning). Supports absolute
+and relative date expressions.
 
 The BE pass is a **full upgrade** of the FE pass — every field the FE
 writes, the BE also writes with improved values. Both FE and BE results

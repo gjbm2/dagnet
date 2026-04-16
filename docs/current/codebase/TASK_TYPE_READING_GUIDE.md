@@ -88,6 +88,18 @@ All docs are in `docs/current/codebase/` unless a full path is given.
 - EDGE_RENDERING_PERF_ROOT_CAUSE.md **(ref)** — beads/chevrons performance
 - BEAD_DISPLAY_MODE.md **(full if touching bead values/formatting)** — BeadDisplayMode enum, data values, path view, inbound-n topo walk, anchor resolution, latency bead gate
 
+## Running CLI tools (analyse, param-pack, hydrate, parity, validation)
+- `GRAPH_OPS_TOOLING.md` **(full — start with Quick Reference)** — all CLI scripts, options, architecture, invariants
+- `graph-ops/playbooks/cli-analyse.md` **(full if running analyse)** — scenarios, subject, topo-pass, troubleshooting
+- `graph-ops/playbooks/cli-param-pack.md` **(full if running param-pack)** — query DSL, output formats, --get
+- `graph-ops/reference/common-pitfalls.md` **(skim)** — known pitfalls that affect CLI output
+- `DSL_SYNTAX_REFERENCE.md` **(ref)** — query DSL grammar for constructing CLI arguments
+
+**Prerequisites (check before running anything)**:
+- Node 22 via nvm: `export NVM_DIR="$HOME/.nvm" && . "$NVM_DIR/nvm.sh" && cd graph-editor && nvm use "$(cat .nvmrc)"`
+- Python BE running for `analyse.sh`, `hydrate.sh`, `bayes.sh`: `cd graph-editor && . venv/bin/activate && python dev-server.py`
+- Data repo present (path in `.private-repos.conf`)
+
 ## Creating, editing, or validating conversion graphs (in data repo)
 - `graph-ops/playbooks/` **(full — pick the relevant playbook)** — tested procedures for graph work
 - `graph-ops/reference/data-model.md` **(skim)** — complete data model reference
@@ -131,7 +143,7 @@ All docs are in `docs/current/codebase/` unless a full path is given.
 - `BAYESIAN_ENGINE_RESEARCH.md` — Bayesian tool research
 - `SESSION_LOG_ARCHITECTURE.md` — session log levels, thresholds, viewer, endOperation cleanup
 - `DEV_LOG_STREAMING.md` — three JSONL log streams
-- `GRAPH_OPS_TOOLING.md` — graph validation tools
+- `GRAPH_OPS_TOOLING.md` — **full CLI reference**: all graph-ops scripts (analyse, param-pack, hydrate, validate, parity), options, architecture, key invariants
 - `INTEGRITY_CHECK_ADDITIONS.md` — structural integrity checks
 - `TEST_COVERAGE_SURVEY.md` — test coverage analysis
 - `STATE_MANAGEMENT_REFERENCE.md` — state layers reference

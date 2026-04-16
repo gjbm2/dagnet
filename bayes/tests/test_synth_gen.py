@@ -985,27 +985,23 @@ class TestRehashSnapshotRows:
              if "context(" in r["slice_key"] and "cohort" in r["slice_key"]][0]
         assert r["core_hash"] == "AUTH-CC"
 
-    def test_context_window_falls_back_to_bare_when_ctx_empty(self):
-        """When ctx_window_hash is empty, context window rows should
-        fall back to bare window_hash."""
+    def test_context_window_raises_when_ctx_hash_missing(self):
+        """When ctx_window_hash is empty, _rehash must raise rather than
+        silently falling back to the bare hash (doc-43 fix)."""
         rows, topo, lookup, eid = self._make_rows_and_lookup()
         pid = list(lookup.keys())[0]
         lookup[pid]["ctx_window_hash"] = ""
-        _rehash_snapshot_rows(rows, topo, lookup)
-        r = [r for r in rows[eid]
-             if "context(" in r["slice_key"] and "window" in r["slice_key"]][0]
-        assert r["core_hash"] == "AUTH-W"
+        with pytest.raises(ValueError, match="Contexted window row has no matching ctx hash"):
+            _rehash_snapshot_rows(rows, topo, lookup)
 
-    def test_context_cohort_falls_back_to_bare_when_ctx_empty(self):
-        """When ctx_cohort_hash is empty, context cohort rows should
-        fall back to bare cohort_hash."""
+    def test_context_cohort_raises_when_ctx_hash_missing(self):
+        """When ctx_cohort_hash is empty, _rehash must raise rather than
+        silently falling back to the bare hash (doc-43 fix)."""
         rows, topo, lookup, eid = self._make_rows_and_lookup()
         pid = list(lookup.keys())[0]
         lookup[pid]["ctx_cohort_hash"] = ""
-        _rehash_snapshot_rows(rows, topo, lookup)
-        r = [r for r in rows[eid]
-             if "context(" in r["slice_key"] and "cohort" in r["slice_key"]][0]
-        assert r["core_hash"] == "AUTH-C"
+        with pytest.raises(ValueError, match="Contexted cohort row has no matching ctx hash"):
+            _rehash_snapshot_rows(rows, topo, lookup)
 
     def test_all_rows_rehashed_no_placeholders_remain(self):
         """After rehash, no row should still have the placeholder hash."""
