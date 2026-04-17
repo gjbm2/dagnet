@@ -1102,6 +1102,11 @@ export function computeAndApplyInboundN(
  * @param getUpdatedGraph - Optional getter for fresh graph after each fetch
  * @returns Array of FetchResult objects
  */
+// Generation counter: each fetchItems call increments this. The conditioned
+// forecast closure captures the current generation and discards its result
+// if a newer fetch cycle has started (prevents stale p.mean clobbering).
+let _conditionedForecastGeneration = 0;
+
 export async function fetchItems(
   items: FetchItem[],
   options: FetchOptions & { onProgress?: (current: number, total: number, item: FetchItem) => void } | undefined,
@@ -2009,11 +2014,12 @@ export async function runStage2EnhancementsAndInboundN(
                     ...(bs.path_sigma_sd != null ? { path_sigma_sd: bs.path_sigma_sd } : {}),
                     ...(bs.path_onset_sd != null ? { path_onset_sd: bs.path_onset_sd } : {}),
                   },
-                  // BE probability overwrites FE
-                  blendedMean: bs.blended_mean ?? fe.blendedMean,
-                  forecast: bs.p_infinity != null
-                    ? { mean: bs.p_infinity }
-                    : fe.forecast,
+                  // Doc 45: BE topo pass is Job A (model vars only).
+                  // It must NOT write p.mean — that is Job B
+                  // (conditioned forecast). Keep FE probability values
+                  // as-is; the conditioned forecast overwrites later.
+                  blendedMean: fe.blendedMean,
+                  forecast: fe.forecast,
                   // Evidence stays from FE (authoritative from actual data)
                   evidence: fe.evidence,
                 };
@@ -2072,10 +2078,9 @@ export async function runStage2EnhancementsAndInboundN(
                 const existing = edge.p.model_vars.find((v: any) => v.source === 'analytic');
                 if (!existing) continue;
 
-                const pInfinity = ev.forecast?.mean;
-                if (typeof pInfinity === 'number' && Number.isFinite(pInfinity)) {
-                  existing.probability.mean = pInfinity;
-                }
+                // Doc 45: topo pass (Job A) writes model vars only.
+                // p.mean is set by the conditioned forecast (Job B).
+                // Do NOT write forecast.mean → probability.mean here.
 
                 if (ev.latency?.mu != null) {
                   const prev: Record<string, any> = existing.latency || {};
@@ -2329,6 +2334,70 @@ export async function runStage2EnhancementsAndInboundN(
 
           // Parity comparison now runs inside the BE topo pass block above
           // (after analytic_be entries are written to the graph).
+
+          // ── Conditioned forecast (doc 45) ────────────────────────────
+          // Fire the BE conditioned forecast (non-blocking). Uses the full
+          // MC population model with snapshot DB evidence to compute an
+          // IS-conditioned p.mean per edge. Same numbers as v3 chart.
+          // When the result arrives, it overwrites p.mean on the graph
+          // and triggers a re-render.
+          //
+          // Uses the dsl parameter passed to this function.
+          //
+          // Generation counter prevents stale results from a previous
+          // fetch cycle clobbering the current graph.
+          try {
+            const { runConditionedForecast, applyConditionedForecastToGraph } = await import('./conditionedForecastService');
+            const _forecastGen = ++_conditionedForecastGeneration;
+            const _forecastGraph = finalGraph;
+            const _setGraph = setGraph;
+            const _forecastStartMs = Date.now();
+            if (batchLogId) {
+              sessionLogService.addChild(batchLogId, 'info', 'CONDITIONED_FORECAST',
+                `Conditioned forecast started (gen ${_forecastGen}, dsl=${(dsl || '').slice(0, 80)})`);
+            }
+            runConditionedForecast(
+              _forecastGraph,
+              dsl,
+            ).then(results => {
+              const elapsed = Date.now() - _forecastStartMs;
+              if (_forecastGen !== _conditionedForecastGeneration) {
+                if (batchLogId) {
+                  sessionLogService.addChild(batchLogId, 'warning', 'CONDITIONED_FORECAST',
+                    `Conditioned forecast discarded after ${elapsed}ms (gen ${_forecastGen} < ${_conditionedForecastGeneration})`);
+                }
+                return;
+              }
+              if (results.length > 0 && results[0].edges.length > 0) {
+                const edgeResults = results[0].edges;
+                applyConditionedForecastToGraph(_forecastGraph, results);
+                _setGraph({ ..._forecastGraph } as any);
+                if (batchLogId) {
+                  sessionLogService.addChild(batchLogId, 'info', 'CONDITIONED_FORECAST',
+                    `Conditioned forecast applied in ${elapsed}ms: ${edgeResults.length} edges`,
+                    undefined,
+                    { edges: edgeResults.map(e => ({ uuid: e.edge_uuid?.slice(0, 12), p_mean: e.p_mean, p_sd: e.p_sd })) });
+                }
+              } else {
+                if (batchLogId) {
+                  sessionLogService.addChild(batchLogId, 'warning', 'CONDITIONED_FORECAST',
+                    `Conditioned forecast returned empty after ${elapsed}ms (scenarios=${results.length}, edges=${results[0]?.edges?.length ?? 0})`);
+                }
+              }
+            }).catch(e => {
+              const elapsed = Date.now() - _forecastStartMs;
+              if (batchLogId) {
+                sessionLogService.addChild(batchLogId, 'error', 'CONDITIONED_FORECAST',
+                  `Conditioned forecast failed after ${elapsed}ms: ${e?.message || e}`);
+              }
+            });
+          } catch (e: any) {
+            if (batchLogId) {
+              sessionLogService.addChild(batchLogId, 'error', 'CONDITIONED_FORECAST',
+                `Conditioned forecast import failed: ${e?.message || e}`);
+            }
+            console.warn('[fetchDataService] Conditioned forecast import failed:', e);
+          }
         }
         
         // ═══════════════════════════════════════════════════════════════════

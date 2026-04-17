@@ -136,21 +136,23 @@ Commit everything that ISN'T the topo pass rewrite:
 
 ### Step 3: Implement BE conditioned forecast (Job B)
 
-This is the new work. It follows the existing BE analysis pattern.
+This is the new work. The conditioned forecast is a **graph
+enrichment endpoint** — not an analysis type. It produces per-edge
+scalars written back to the graph, using the analysis contract's
+data pipeline (snapshot subjects, scenarios, regime selection).
 
-**3a. Register analysis type `graph_forecast`**
+**3a. Register endpoint**
 
-- Add to `analysis_types.yaml` (or equivalent registry)
-- Register handler in the BE router (same pattern as
-  `cohort_maturity`)
-- Contract: receives the standard analysis payload (graph with
-  promoted model vars, scenarios with snapshot subjects and candidate
-  regimes, temporal DSL). Returns per-edge scalars: `p_mean`,
-  `p_sd`, `completeness`, `completeness_sd`.
+- New route: `POST /api/forecast/conditioned`
+- Registered in the Flask/FastAPI router alongside
+  `/api/lag/topo-pass`
+- NOT routed through `handle_runner_analyze` — standalone handler
+- Contract: receives scenarios with graphs, candidate regimes,
+  temporal DSL. Returns per-edge per-scenario scalars.
 
 **3b. Implement BE handler**
 
-The handler reuses the v3 pipeline almost entirely:
+`handle_conditioned_forecast` in `api_handlers.py`. Per scenario:
 
 1. Subject resolution: `resolve_analysis_subjects` +
    `synthesise_snapshot_subjects` (same as v3)
@@ -161,37 +163,31 @@ The handler reuses the v3 pipeline almost entirely:
    function from Step 2)
 5. Span kernel + carrier: same construction as v3 handler (lines
    2002-2180 of current api_handlers.py). Extract into a shared
-   preparation function that both v3 and graph_forecast call.
+   preparation function that both v3 and conditioned_forecast call.
 6. Engine call: `compute_forecast_sweep` with full arguments (same
    14 parameters as v3)
-7. **Read coordinate B**: instead of returning chart rows (coordinate
-   A), aggregate per-cohort draws at each cohort's own tau_i. Return
-   scalar p.mean = median(aggregate rate), p_sd = std, completeness,
-   completeness_sd.
+7. Read per-edge scalars from sweep: p.mean = median(rate_draws[:,
+   -1]), p_sd = std(rate_draws[:, -1]), completeness, completeness_sd.
 
-Steps 1-6 are literally the same code as v3. Step 7 is the only
-difference — it's a different read from the same MC draw arrays (per
-doc 29f §Phase G: "one computation, two reads").
+Steps 1-6 are the v3 handler code. Step 7 reads scalars instead of
+building chart rows — the only new logic.
 
 The shared preparation function (step 5) should be extracted from
-the v3 handler into a module-level function. Both v3 and
-graph_forecast call it. This is the `_build_sweep_params_for_edge`
-concept done correctly — as a shared function consumed by analysis
-handlers, not bolted onto the topo pass.
+the v3 handler into a module-level function. Both v3 and the
+conditioned forecast call it.
 
 **3c. Wire FE trigger**
 
 - The current BE topo pass trigger mechanism (~500ms after graph
   open, cancellation on navigation, update-on-arrival) moves to
-  drive `graph_forecast` instead
+  drive `/api/forecast/conditioned` instead
 - BE topo pass retriggers to fire immediately alongside the FE topo
   pass (same commissioning event)
-- When the `graph_forecast` result arrives, overwrite p.mean (and
-  p_sd, completeness) on each edge
-- The FE preparation is already built: `analysisComputePreparationService`
-  computes candidate regimes, builds snapshot subjects. A
-  `graph_forecast` call uses the same preparation path as
-  `cohort_maturity`.
+- When the conditioned forecast result arrives, overwrite p.mean
+  (and p_sd, completeness) on each edge per scenario
+- FE preparation reuses `analysisComputePreparationService` to
+  build candidate regimes and scenario payloads — same preparation,
+  different endpoint
 
 **3d. Wire CLI**
 

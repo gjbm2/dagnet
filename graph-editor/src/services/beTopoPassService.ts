@@ -279,8 +279,11 @@ export async function runBeTopoPass(
       source: 'analytic_be',
       source_at: sourceAt,
       probability: {
-        // p∞ (forecast) when available, else evidence rate as fallback
-        mean: edge.p_infinity ?? edge.p_evidence,
+        // Doc 45: this probability lives in the model_vars entry for
+        // display in model cards. It does NOT get promoted to p.mean
+        // (applyPromotion only promotes latency). p.mean is set by
+        // the conditioned forecast (Job B), not the topo pass.
+        mean: edge.p_infinity ?? edge.p_evidence ?? 0,
         stdev: edge.p_sd ?? 0,
       },
       ...(edge.mu != null ? {

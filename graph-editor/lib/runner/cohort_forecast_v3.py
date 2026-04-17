@@ -411,7 +411,7 @@ def compute_cohort_maturity_rows_v3(
         span_onset_sd=span_onset_sd,
         span_onset_mu_corr=span_onset_mu_corr,
         det_norm_cdf=det_norm_cdf,
-        edge_cdf_arr=edge_cdf_arr,
+        edge_cdf_arr=None,
     )
 
     print(f"[v3] Engine sweep: IS_ESS={sweep.is_ess:.0f} "

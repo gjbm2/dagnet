@@ -912,6 +912,57 @@ def compute_cohort_maturity_rows_v2(
             Y_total += Y_cohort
             X_total += X_cohort
 
+        # Forensic diagnostic for V2/V3 comparison
+        _v2_forensic_taus = [5, 6, 7, 8, 10, 15, 20, 30]
+        _v2_forensic = {}
+        for _ft in _v2_forensic_taus:
+            if _ft < T:
+                _ym = float(np.median(Y_total[:, _ft]))
+                _xm = float(np.median(X_total[:, _ft]))
+                X_safe_ft = np.maximum(X_total[:, _ft], 1e-10)
+                _rm = float(np.median(Y_total[:, _ft] / X_safe_ft))
+                _v2_forensic[_ft] = {'Y_med': round(_ym, 2), 'X_med': round(_xm, 2), 'rate_med': round(_rm, 4)}
+        import json as _json_v2f
+        # Add sweep inputs to forensic
+        _v2_forensic['_inputs'] = {
+            'n_cohorts': len(cohort_list),
+            'T': T,
+            'max_tau': max_tau,
+            'S': S,
+            'has_upstream_cdf_mc': upstream_cdf_mc is not None,
+            'reach': round(reach, 6),
+            'span_p': round(sp.span_p, 6),
+            'sp_alpha': round(sp.alpha_0, 4),
+            'sp_beta': round(sp.beta_0, 4),
+            'sp_mu': round(sp.mu, 4),
+            'sp_sigma': round(sp.sigma, 4),
+            'sp_onset': round(sp.onset, 4),
+            'sp_mu_sd': round(sp.mu_sd, 4),
+            'sp_sigma_sd': round(sp.sigma_sd, 4),
+            'cdf_arr_shape': list(cdf_arr.shape) if cdf_arr is not None else None,
+            'cdf_arr_at_taus': {t: round(float(np.median(cdf_arr[:, t])), 6) for t in [5, 10, 15, 20, 30] if t < T} if cdf_arr is not None else None,
+            'p_s_median': round(float(np.median(p_s)), 6),
+            'p_s_std': round(float(np.std(p_s)), 6),
+            'det_cdf_at_taus': {t: round(sp.C[t], 6) for t in [5, 10, 15, 20, 30] if t < len(sp.C)},
+        }
+        # Per-cohort inputs (first 5 + last 2)
+        _v2_forensic['_cohorts'] = []
+        for _ci, c in enumerate(cohort_list):
+            if _ci < 5 or _ci >= len(cohort_list) - 2:
+                _v2_forensic['_cohorts'].append({
+                    'i': _ci, 'N': round(c['x_frozen'], 1), 'k': round(c['y_frozen'], 1),
+                    'a_i': c.get('tau_observed', c['tau_max']),
+                    'a_pop': round(c.get('a_frozen', c['x_frozen']), 1),
+                    'obs_x_len': len(c.get('obs_x', [])),
+                })
+        _v2f_msg = _json_v2f.dumps(_v2_forensic)
+        print(f"[v2-forensic] {_v2f_msg}")
+        try:
+            with open('/tmp/v2_forensic.json', 'w') as _vf:
+                _vf.write(_v2f_msg)
+        except Exception:
+            pass
+
         # ── Aggregate rate quantiles ──────────────────────────────────
         _x_median = np.median(X_total, axis=0)
         if np.any(_x_median >= 1.0):

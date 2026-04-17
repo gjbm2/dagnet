@@ -58,7 +58,7 @@ async function runParamPack() {
     process.exit(1);
   }
 
-  const { bundle, queryDsl, workspace, getKey, format, flags } = ctx;
+  const { bundle, queryDsl, getKey, format, flags } = ctx;
 
   // Signatures diagnostic
   if (flags.showSignatures) {
@@ -94,7 +94,7 @@ async function runParamPack() {
   // Overwrites FE-only values with engine values. Falls back gracefully
   // if the BE is unreachable.
   log.info('Running BE topo pass...');
-  await runCliTopoPass(populatedGraph, bundle.parameters, queryDsl, workspace);
+  await runCliTopoPass(populatedGraph, bundle.parameters, queryDsl);
 
   // Extract + serialise
   const params = extractParamsFromGraph(populatedGraph);

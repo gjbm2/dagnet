@@ -441,6 +441,25 @@ async def lag_topo_pass_alias(request: Request):
     return await lag_topo_pass(request)
 
 
+# ── Conditioned forecast — graph enrichment endpoint (doc 45) ──────
+# Produces per-edge per-scenario scalars (p.mean, p_sd, completeness)
+# using the full MC population model with snapshot DB evidence.
+# Same data pipeline as cohort_maturity v3, different output format.
+@app.post("/api/forecast/conditioned")
+async def forecast_conditioned(request: Request):
+    try:
+        data = await request.json()
+        from api_handlers import handle_conditioned_forecast
+        return handle_conditioned_forecast(data)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        import traceback
+        print(f"[forecast/conditioned] Error: {e}")
+        print(f"[forecast/conditioned] Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # Simple roundtrip test endpoint: Parse DSL query string
 @app.post("/api/parse-query")
 async def parse_query_endpoint(request: Request):

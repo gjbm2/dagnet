@@ -49,7 +49,7 @@ export async function runHydrate(): Promise<void> {
     console.error(USAGE);
     process.exit(1);
   }
-  const { bundle, queryDsl, workspace, flags } = ctx;
+  const { bundle, queryDsl, flags } = ctx;
 
   if (!queryDsl) {
     console.error(USAGE);
@@ -66,7 +66,7 @@ export async function runHydrate(): Promise<void> {
 
   // BE topo pass — engine-computed completeness, blended rate, dispersions
   log.info('Running BE topo pass...');
-  await runCliTopoPass(populatedGraph, bundle.parameters, queryDsl, workspace);
+  await runCliTopoPass(populatedGraph, bundle.parameters, queryDsl);
 
   // Write back to disk
   const graphPath = join(bundle.graphDir, 'graphs', `${bundle.graphName}.json`);

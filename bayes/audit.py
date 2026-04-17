@@ -127,6 +127,15 @@ def audit_log(log_content: str) -> dict:
             audit["model"]["kappa_lat_edges"] = len(kl_set)
         elif "kappa_lat ~ LogNormal, BetaBinomial" in line and not klm:
             audit["model"]["kappa_lat_edges"] += 1
+        # Batched kappa_lat_slice_vec (per-slice latency dispersion)
+        klm_batched = re.search(
+            r"latency_dispersion (\S+) \((batched|perslice_traj)\).*kappa_lat_slice_vec", line)
+        if klm_batched:
+            kl_set = audit["model"].setdefault("_kl_uuids", set())
+            kl_set.add(klm_batched.group(1))
+            audit["model"]["kappa_lat_edges"] = len(kl_set)
+        if "Potential traj_window_" in line and "_batched:" in line:
+            audit["model"]["has_batched_trajectories"] = True
         if "sampling_ms:" in line:
             audit["model"]["phase1_sampled"] = True
         if "sampling_phase2_ms:" in line:

@@ -243,7 +243,6 @@ export async function runCliTopoPass(
   graph: any,
   parameters: Map<string, any>,
   queryDsl?: string,
-  workspace?: { repository: string; branch: string },
 ): Promise<boolean> {
   // Parse temporal scope from DSL
   const scopeWindow = queryDsl ? parseScopeWindow(queryDsl) : undefined;
@@ -258,48 +257,6 @@ export async function runCliTopoPass(
 
   // Determine query mode from DSL
   const queryMode = queryDsl?.includes('window(') ? 'window' : 'cohort';
-
-  // ── Build snapshot_evidence for parity with v3 ──────────────────
-  // Design invariant: p.mean from topo pass == p@∞ from v3 cohort
-  // maturity. Both must use the same snapshot DB evidence. When
-  // workspace is available, compute candidate regimes and date bounds
-  // so the BE can query the DB instead of using parameter file cohorts.
-  let snapshotEvidence: Record<string, any> | undefined;
-  if (workspace && scopeWindow && queryDsl) {
-    try {
-      const { buildCandidateRegimesByEdge, filterCandidatesByContext } = await import('../services/candidateRegimeService');
-      const fullInventory = await buildCandidateRegimesByEdge(graph, workspace);
-      let candidateRegimesByEdge = fullInventory;
-      if (Object.keys(fullInventory).length > 0) {
-        const filtered = await filterCandidatesByContext(fullInventory, queryDsl);
-        if (Object.keys(filtered).length > 0) {
-          candidateRegimesByEdge = filtered;
-        }
-      }
-      if (Object.keys(candidateRegimesByEdge).length > 0) {
-        const anchorFrom = scopeWindow.start.toISOString().slice(0, 10);
-        const anchorTo = scopeWindow.end.toISOString().slice(0, 10);
-        snapshotEvidence = {
-          candidate_regimes_by_edge: candidateRegimesByEdge,
-          anchor_from: anchorFrom,
-          anchor_to: anchorTo,
-          sweep_from: anchorFrom,
-          sweep_to: anchorTo,
-        };
-        log.info(`Snapshot evidence: ${Object.keys(candidateRegimesByEdge).length} edges with candidate regimes`);
-        if (isDiagnostic()) {
-          log.diag('── Topo pass: snapshot evidence ──');
-          for (const [eid, cands] of Object.entries(candidateRegimesByEdge)) {
-            for (const c of cands as any[]) {
-              log.diag(`  ${eid.slice(0, 12)}: hash=${c.core_hash?.slice(0, 16)} mode=${c.temporal_mode || '?'} eq=${(c.equivalent_hashes || []).length}`);
-            }
-          }
-        }
-      }
-    } catch (err: any) {
-      log.warn(`Failed to build snapshot evidence: ${err.message} — falling back to parameter files`);
-    }
-  }
 
   const topoUrl = `${PYTHON_API_BASE}/api/lag/topo-pass`;
 
@@ -325,7 +282,6 @@ export async function runCliTopoPass(
         cohort_data: cohortData,
         edge_contexts: edgeContexts,
         query_mode: queryMode,
-        ...(snapshotEvidence ? { snapshot_evidence: snapshotEvidence } : {}),
       }),
     });
   } catch (err: any) {
@@ -345,9 +301,7 @@ export async function runCliTopoPass(
   }
 
   writeTopoResultsToGraph(graph, topoResult.edges);
-  const snapCount = (topoResult.summary as any).forecast_state_snapshot_count ?? 0;
-  log.info(`BE topo pass: ${topoResult.summary.edges_processed} edges, ${topoResult.summary.edges_with_lag} with lag` +
-    (snapCount > 0 ? `, ${snapCount} via snapshot DB` : ''));
+  log.info(`BE topo pass: ${topoResult.summary.edges_processed} edges, ${topoResult.summary.edges_with_lag} with lag`);
 
   // Diagnostic: per-edge topo pass results
   if (isDiagnostic()) {

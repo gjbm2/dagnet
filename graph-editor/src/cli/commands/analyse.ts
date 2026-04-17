@@ -137,8 +137,10 @@ async function runAnalyse() {
     ? scenarioSpecs
     : [{ name: 'Scenario 1', queryDsl, colour: SCENARIO_COLOURS[0], visibilityMode: 'f+e' as const }];
 
-  // Determine whether this analysis type needs snapshots
-  const needsSnapshots = !!getSnapshotContract(analysisType);
+  // Determine whether this analysis type needs snapshots.
+  // conditioned_forecast always needs snapshots (it IS the snapshot-based
+  // forecast) even though it's not a registered analysis type.
+  const needsSnapshots = analysisType === 'conditioned_forecast' || !!getSnapshotContract(analysisType);
 
   // Aggregate each scenario independently and extract params
   const scenarioEntries: Array<{
@@ -188,7 +190,7 @@ async function runAnalyse() {
   // automatically on graph open).
   if (extraArgs['topo-pass']) {
     log.info('Running BE topo pass...');
-    const ok = await runCliTopoPass(baseGraph, bundle.parameters, queryDsl, workspace);
+    const ok = await runCliTopoPass(baseGraph, bundle.parameters, queryDsl);
     if (!ok) {
       log.error('BE topo pass failed — cannot proceed');
       process.exit(1);
@@ -313,8 +315,37 @@ async function runAnalyse() {
     }
   }
 
-  // Dispatch to BE via the same path the FE uses
-  const result = await runPreparedAnalysis(prepared as PreparedAnalysisComputeReady);
+  // Dispatch to BE
+  let result: any;
+  if (analysisType === 'conditioned_forecast') {
+    // Conditioned forecast: same preparation, different endpoint (doc 45).
+    // Sends to /api/forecast/conditioned which returns per-edge scalars.
+    const { PYTHON_API_BASE } = await import('../../lib/pythonApiBase');
+    const forecastUrl = `${PYTHON_API_BASE}/api/forecast/conditioned`;
+    // Build the payload from the prepared scenarios
+    const forecastPayload = {
+      analytics_dsl: prepared.analyticsDsl,
+      scenarios: prepared.scenarios.map((sc: any) => ({
+        scenario_id: sc.scenario_id,
+        graph: sc.graph,
+        effective_query_dsl: sc.effective_query_dsl,
+        candidate_regimes_by_edge: sc.candidate_regimes_by_edge || {},
+        analytics_dsl: sc.analytics_dsl,
+      })),
+    };
+    const resp = await fetch(forecastUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(forecastPayload),
+    });
+    if (!resp.ok) {
+      log.fatal(`Conditioned forecast failed: ${resp.status} ${resp.statusText}`);
+    }
+    result = await resp.json();
+  } else {
+    // Standard analysis dispatch
+    result = await runPreparedAnalysis(prepared as PreparedAnalysisComputeReady);
+  }
 
   if (!result.success) {
     log.fatal('Analysis failed');

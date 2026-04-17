@@ -3397,11 +3397,44 @@ def _emit_batched_window_trajectories(
     q_j = pt.clip(p_per_interval * delta_F / surv_prev,
                    SURVIVAL_FLOOR, 1.0 - SURVIVAL_FLOOR)
 
-    # ---- Log-likelihood (Binomial, no latency dispersion in v1) ----
-    _ll_pointwise = weights_np * (
-        d_np * pt.log(q_j)
-        + (n_at_risk_np - d_np) * pt.log(1.0 - q_j))
-    logp = pt.sum(_ll_pointwise)
+    # ---- Log-likelihood ----
+    # Latency dispersion (doc 34): replace per-interval Binomial with
+    # BetaBinomial. kappa_lat is per-slice (vector), indexed per interval.
+    _feat_ld = (_feat.get("latency_dispersion", True)
+                and has_latent_latency)
+    n_slices = len(slice_obs_list)
+
+    if _feat_ld:
+        _log_kl_vec = pm.Normal(
+            f"log_kappa_lat_slice_vec_{safe_id}",
+            mu=LOG_KAPPA_MU, sigma=LOG_KAPPA_SIGMA,
+            shape=(n_slices,))
+        _kappa_lat_vec = pm.Deterministic(
+            f"kappa_lat_slice_vec_{safe_id}",
+            pt.exp(_log_kl_vec))
+
+        # Index per-slice kappa_lat to per-interval
+        kappa_lat_per_interval = _kappa_lat_vec[interval_slice_np]
+
+        _alpha = q_j * kappa_lat_per_interval
+        _beta = (1.0 - q_j) * kappa_lat_per_interval
+        _bb_dist = pm.BetaBinomial.dist(
+            alpha=_alpha, beta=_beta,
+            n=pt.as_tensor_variable(n_at_risk_np))
+        _lp = pm.logp(_bb_dist, pt.as_tensor_variable(d_np))
+        _ll_pointwise = weights_np * _lp
+        logp = pt.sum(_ll_pointwise)
+
+        diagnostics.append(
+            f"  latency_dispersion {safe_id} (batched): "
+            f"kappa_lat_slice_vec ~ LogNormal({n_slices}), "
+            f"BetaBinomial intervals")
+    else:
+        # Standard Binomial log-likelihood
+        _ll_pointwise = weights_np * (
+            d_np * pt.log(q_j)
+            + (n_at_risk_np - d_np) * pt.log(1.0 - q_j))
+        logp = pt.sum(_ll_pointwise)
 
     pm.Deterministic(
         f"ll_traj_window_{safe_id}_batched", _ll_pointwise)
@@ -3514,6 +3547,25 @@ def _emit_batched_window_trajectories_perslice(
     if total_intervals == 0:
         return
 
+    # ---- Latency dispersion (per-slice kappa_lat) ----
+    _feat = features or {}
+    _use_kappa_lat = (_feat.get("latency_dispersion", True)
+                      and has_latent_latency)
+    _kappa_lat_vec = None
+    n_slices = len(slice_obs_list)
+    if _use_kappa_lat:
+        _log_kl_vec = pm.Normal(
+            f"log_kappa_lat_slice_vec_{safe_id}",
+            mu=LOG_KAPPA_MU, sigma=LOG_KAPPA_SIGMA,
+            shape=(n_slices,))
+        _kappa_lat_vec = pm.Deterministic(
+            f"kappa_lat_slice_vec_{safe_id}",
+            pt.exp(_log_kl_vec))
+        diagnostics.append(
+            f"  latency_dispersion {safe_id} (perslice_traj): "
+            f"kappa_lat_slice_vec ~ LogNormal({n_slices}), "
+            f"BetaBinomial intervals")
+
     # ---- Per-slice CDF/hazard computation ----
     slice_ll_parts = []
     slice_ll_pointwise = []
@@ -3573,9 +3625,20 @@ def _emit_batched_window_trajectories_perslice(
         q_j = pt.clip(p_s * delta_F / surv_prev,
                        SURVIVAL_FLOOR, 1.0 - SURVIVAL_FLOOR)
 
-        ll_pw_s = weights_np * (
-            d_np * pt.log(q_j)
-            + (n_at_risk_np - d_np) * pt.log(1.0 - q_j))
+        # Latency dispersion: BetaBinomial or standard Binomial
+        if _use_kappa_lat:
+            kl_s = _kappa_lat_vec[s_idx]
+            _alpha_s = q_j * kl_s
+            _beta_s = (1.0 - q_j) * kl_s
+            _bb_dist = pm.BetaBinomial.dist(
+                alpha=_alpha_s, beta=_beta_s,
+                n=pt.as_tensor_variable(n_at_risk_np))
+            _lp_s = pm.logp(_bb_dist, pt.as_tensor_variable(d_np))
+            ll_pw_s = weights_np * _lp_s
+        else:
+            ll_pw_s = weights_np * (
+                d_np * pt.log(q_j)
+                + (n_at_risk_np - d_np) * pt.log(1.0 - q_j))
         slice_ll_pointwise.append(ll_pw_s)
         slice_ll_parts.append(pt.sum(ll_pw_s))
 

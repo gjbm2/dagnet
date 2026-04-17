@@ -146,27 +146,85 @@ conditioning dispersions, and rate asymptote. The sources (FE
 analytic, BE analytic, Bayes compiler) compete on quality; the
 preference setting picks the winner; the forecast consumes the result.
 
+### What the conditioned forecast IS
+
+It is a **graph enrichment endpoint** — not an analysis type.
+
+- **Like the topo pass** in purpose: it produces per-edge scalars
+  (p.mean, p_sd, completeness) that get written back to the graph.
+  Triggered automatically on graph open. Result improves graph
+  display state.
+
+- **Like analysis** in plumbing: it needs snapshot subjects with
+  candidate regimes, per-scenario processing (each scenario has
+  its own DSL, date range, evidence), and regime selection. It
+  reuses the analysis preparation pipeline to build these inputs.
+
+- **Not an analysis type**: it does not produce chart rows,
+  dimension metadata, or semantic descriptors. It does not render
+  in a chart builder. It does not appear in any analysis type
+  registry or dropdown. The result goes back to the graph, not to
+  an analysis panel.
+
+The endpoint contract:
+
+    POST /api/forecast/conditioned
+
+    Request: {
+      scenarios: [{
+        scenario_id, graph, effective_query_dsl,
+        candidate_regimes_by_edge, analytics_dsl
+      }],
+      analytics_dsl,   // shared subject DSL (from/to)
+    }
+
+    Response: {
+      success: true,
+      scenarios: [{
+        scenario_id,
+        edges: [{
+          edge_uuid, p_mean, p_sd,
+          completeness, completeness_sd
+        }]
+      }]
+    }
+
 ### What this means for the codebase
 
 **Topo pass handler** (`handle_stats_topo_pass`): revert all
 snapshot DB / forecast sweep additions. It calls
 `enhance_graph_latencies` and returns promoted stats. That's it.
 
-**BE forecast**: either a new analysis type (`graph_forecast`) or a
-mode of the existing `cohort_maturity` v3 handler that returns
-coordinate B scalars instead of (or alongside) coordinate A chart
-rows. The handler code is the same — the difference is output format.
+**BE handler** (`handle_conditioned_forecast` in `api_handlers.py`):
+new function at a new endpoint. Per scenario, the handler:
+1. Resolves subjects from DSL + candidate regimes (same as v3)
+2. Queries snapshot DB, applies regime selection (same as v3)
+3. Derives frames, builds CohortEvidence (shared function)
+4. Builds span kernel + carrier (same as v3)
+5. Runs `compute_forecast_sweep` (same as v3)
+6. Reads per-edge scalars from the sweep result
 
-**FE caller**: `analysisComputePreparationService` already prepares
-snapshot subjects for analysis calls. A new "forecast" analysis type
-would use the same preparation path. The FE triggers it after graph
-open (alongside or after the topo pass), and writes the result to the
-edge's p.mean when it arrives.
+Steps 1-5 are the v3 handler code. Step 6 reads coordinate A at
+the horizon (rate_draws[:, -1]) for p.mean — the asymptotic
+conditioned rate. This is the same read as what the topo pass
+attempted, but using the full evidence and span kernel.
 
-**CLI**: `param-pack` calls the topo pass (Job A) for model vars. To
-get an accurate p.mean, it additionally calls `analyse --type
-graph_forecast` (Job B). The two are independent commands with
-independent contracts.
+The handler does NOT need to be routed through
+`handle_runner_analyze`. It is a standalone endpoint registered
+alongside `/api/lag/topo-pass` in the Flask/FastAPI router.
+
+**FE caller**: reuses `analysisComputePreparationService` to build
+the scenario payloads (it already computes candidate regimes and
+snapshot subjects). A new service or function prepares the request,
+sends to `/api/forecast/conditioned`, and writes per-edge scalars
+back to the graph on response. The trigger mechanism is the current
+BE topo pass trigger (~500ms after graph open).
+
+**CLI**: `param-pack` calls the topo pass (Job A) for model vars.
+A new CLI command or flag (e.g. `analyse --type conditioned_forecast`
+or a dedicated `forecast` command) runs Job B. The existing
+`analyse` command can dispatch to the new endpoint when the type
+is `conditioned_forecast`.
 
 ## Relationship to doc 29f Phase G
 
@@ -211,24 +269,23 @@ the topo pass. These should be:
 
 ## Open questions
 
-1. **Analysis type naming**: `graph_forecast` as a new type, or a
-   mode/flag on `cohort_maturity`? The latter avoids duplicating the
-   handler but conflates chart and scalar consumers.
+1. **Scope**: the conditioned forecast endpoint processes per
+   scenario, and within each scenario per subject (edge span). The
+   topo pass is graph-wide (all edges at once). The conditioned
+   forecast needs a subject DSL (from/to) to know which edges to
+   forecast. For graph-wide forecasting (all edges), the FE would
+   need to make one call per edge, or the endpoint would need to
+   accept an "all edges" mode. Which is right?
 
-2. **Commissioning**: FE and BE model vars should be commissioned
-   together (same event). Both write to their own source slot in
-   `model_vars`. Promotion is pass-through — `resolve_model_params`
-   reads the edge's `model_vars` and picks the winner based on
-   `model_source_preference` at read time. No race.
-
-3. **Scope**: per-edge or graph-wide? The topo pass is graph-wide
-   (all edges). The analysis pipeline is subject-specific (one edge
-   span per call). A graph-wide BE forecast would need N analysis
-   calls or a batched endpoint.
-
-4. **Trigger reuse**: the current BE topo pass trigger mechanism
+2. **Trigger reuse**: the current BE topo pass trigger mechanism
    (~500ms delay, cancellation on navigation, update-on-arrival) is
    the right pattern for the BE conditioned forecast. What changes
-   are needed to retarget it from the topo pass endpoint to an
-   analysis dispatch call? Can the topo pass move to immediate
+   are needed to retarget it? Can the topo pass move to immediate
    fire without breaking anything?
+
+3. **Which p.mean?**: should the endpoint return the asymptotic rate
+   (coordinate A at horizon = p@infinity) or the rate at the current
+   evaluation date (coordinate B, maturity-dependent)? The topo pass
+   currently returns the latter. Cohort maturity v3 shows the former
+   at high tau. For graph display, p.mean is typically understood as
+   the edge's true conversion probability (asymptotic).

@@ -850,10 +850,14 @@ class ForecastSweepResult:
     mu_draws: Optional[np.ndarray] = None         # (S,)
     sigma_draws: Optional[np.ndarray] = None      # (S,)
     onset_draws: Optional[np.ndarray] = None      # (S,)
+    # Forensic diagnostic (temporary)
+    _forensic: Optional[Dict[str, Any]] = None
 
 
 # Default draw count for the sweep — same as v2's MC_SAMPLES.
 _SWEEP_DRAWS = 2000
+# Temporary forensic stash — last sweep's forensic data.
+_last_forensic: Optional[Dict[str, Any]] = None
 _SWEEP_DRIFT_FRACTION = 0.20
 
 
@@ -1073,6 +1077,26 @@ def compute_forecast_sweep(
     S = num_draws
     T = max_tau + 1
     rng = np.random.default_rng(seed=42)
+
+    # Diagnostic: trace what's passed to the sweep
+    _has_mc = mc_cdf_arr is not None
+    _has_det = det_norm_cdf is not None
+    _has_carrier = from_node_arrival is not None
+    _has_edge_cdf = edge_cdf_arr is not None
+    _diag_msg = (f"[sweep-diag] mc_cdf={_has_mc} det_norm_cdf={_has_det} "
+          f"carrier={_has_carrier} edge_cdf={_has_edge_cdf} "
+          f"span_alpha={span_alpha} span_mu_sd={span_mu_sd} "
+          f"mu={lat.mu:.3f} sigma={lat.sigma:.3f} onset={lat.onset_delta_days:.1f} "
+          f"max_tau={max_tau} n_cohorts={len(cohorts)}")
+    print(_diag_msg)
+    import sys; sys.stderr.write(_diag_msg + '\n')
+    if _has_mc:
+        _mc_med = np.median(mc_cdf_arr[:min(S, mc_cdf_arr.shape[0])], axis=0)
+        _taus = [5, 10, 20, 30, 50]
+        _cdf_vals = [(t, round(float(_mc_med[t]), 4) if t < len(_mc_med) else 0) for t in _taus]
+        _mc_msg = f"[sweep-diag] mc_cdf median: {_cdf_vals}"
+        print(_mc_msg)
+        import sys; sys.stderr.write(_mc_msg + '\n')
 
     if lat.sigma <= 0:
         empty = np.zeros((S, T))
@@ -1299,6 +1323,82 @@ def compute_forecast_sweep(
         _comp_mean = float(np.mean(_comp_draws))
         _comp_sd = float(np.std(_comp_draws))
 
+    # Forensic: per-tau median Y/X/rate for debugging V2/V3 divergence
+    global _last_forensic
+    _forensic_taus = [5, 6, 7, 8, 10, 15, 20, 30]
+    # Per-cohort forensic at tau=10 — trace exactly what each cohort contributes
+    _per_cohort_at_10 = []
+    if T > 10:
+        for _ci, c in enumerate(cohorts):
+            _is_mature = c.frontier_age >= 10
+            _obs_x_10 = c.obs_x[10] if len(c.obs_x) > 10 else 0
+            _obs_y_10 = c.obs_y[10] if len(c.obs_y) > 10 else 0
+            _per_cohort_at_10.append({
+                'i': _ci, 'N': round(c.x_frozen, 1), 'k': round(c.y_frozen, 1),
+                'a_i': c.frontier_age, 'mature': _is_mature,
+                'obs_x_10': round(_obs_x_10, 1), 'obs_y_10': round(_obs_y_10, 1),
+                'a_pop': round(c.a_pop, 1),
+            })
+        # Y/X contributions at tau=10
+        _y10 = float(np.median(Y_cond[:, 10]))
+        _x10 = float(np.median(X_cond[:, 10]))
+    _forensic = {}
+    for _ft in _forensic_taus:
+        if _ft < T:
+            _ym = float(np.median(Y_cond[:, _ft]))
+            _xm = float(np.median(X_cond[:, _ft]))
+            _rm = float(np.median(rate_conditioned[:, _ft]))
+            _forensic[_ft] = {'Y_med': round(_ym, 2), 'X_med': round(_xm, 2), 'rate_med': round(_rm, 4)}
+    _forensic['_inputs'] = {
+        'n_cohorts': len(cohorts),
+        'T': T,
+        'max_tau': max_tau,
+        'S': S,
+        'has_upstream_cdf_mc': upstream_cdf_mc is not None,
+        'reach': round(reach, 6),
+        'has_mc_cdf_arr': mc_cdf_arr is not None,
+        'has_det_norm_cdf': det_norm_cdf is not None,
+        'span_alpha': round(span_alpha, 4) if span_alpha else None,
+        'span_beta': round(span_beta, 4) if span_beta else None,
+        'span_mu_sd': round(span_mu_sd, 4) if span_mu_sd else None,
+        'span_sigma_sd': round(span_sigma_sd, 4) if span_sigma_sd else None,
+        'lat_mu': round(lat.mu, 4),
+        'lat_sigma': round(lat.sigma, 4),
+        'lat_onset': round(lat.onset_delta_days, 4),
+        'lat_mu_sd': round(lat.mu_sd, 4),
+        'lat_sigma_sd': round(lat.sigma_sd, 4),
+        'cdf_arr_shape': list(cdf_arr.shape),
+        'cdf_arr_at_taus': {t: round(float(np.median(cdf_arr[:, t])), 6) for t in [5, 10, 15, 20, 30] if t < T},
+        'p_draws_median': round(float(np.median(p_draws)), 6),
+        'p_draws_std': round(float(np.std(p_draws)), 6),
+        'det_cdf_at_taus': {t: round(det_cdf[t], 6) for t in [5, 10, 15, 20, 30] if t < len(det_cdf)},
+    }
+    if T > 10:
+        _forensic['per_cohort_at_10'] = _per_cohort_at_10
+        _forensic['Y10_total'] = round(_y10, 2)
+        _forensic['X10_total'] = round(_x10, 2)
+        _forensic['has_carrier'] = upstream_cdf_mc is not None
+        _forensic['reach'] = round(reach, 6)
+    # Per-cohort E_i and a_i
+    _forensic['cohorts'] = []
+    for _ci, c in enumerate(cohorts):
+        _forensic['cohorts'].append({
+            'i': _ci, 'N': round(c.x_frozen, 1), 'k': round(c.y_frozen, 1),
+            'a_i': c.frontier_age, 'a_pop': round(c.a_pop, 1),
+            'obs_x_len': len(c.obs_x),
+        })
+        if _ci >= 29:
+            _forensic['cohorts'].append({'...': f'{len(cohorts) - 30} more'})
+            break
+
+    _last_forensic = _forensic
+    try:
+        import json as _jf
+        with open('/tmp/v3_forensic.json', 'w') as _ff:
+            _ff.write(_jf.dumps(_forensic, default=str))
+    except Exception:
+        pass
+
     return ForecastSweepResult(
         rate_draws=rate_conditioned,
         model_rate_draws=rate_model,
@@ -1313,4 +1413,5 @@ def compute_forecast_sweep(
         mu_draws=mu_draws,
         sigma_draws=sigma_draws,
         onset_draws=onset_draws,
+        _forensic=_forensic,
     )

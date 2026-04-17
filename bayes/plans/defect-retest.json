@@ -1,0 +1,24 @@
+{
+    "name": "defect-retest",
+    "description": "Retest graphs affected by defect 1 (onset=0) and defect 2 (two-dim regime)",
+    "graphs": {
+        "include": [
+            "synth-context-two-dim",
+            "synth-context-staggered",
+            "synth-skip-context",
+            "synth-skip-context-sparse",
+            "synth-join-branch-context",
+            "synth-fanout-context",
+            "synth-fanout-context-mixed"
+        ]
+    },
+    "sampling": {
+        "chains": 3,
+        "draws": 1000,
+        "tune": 500,
+        "no_timeout": true
+    },
+    "features": [],
+    "settings": {},
+    "tags": ["defect-retest", "doc44"]
+}
