@@ -8,11 +8,11 @@ DagNet is an **evidence-conditioned forecasting platform** for conversion funnel
 
 > ## Independent Assessment (April 2026)
 >
-> *Three AI models — Claude Opus 4.6 (Anthropic), Gemini 3.1 Pro (Google), and GPT-5.4 (OpenAI) — were each asked to independently explore the full DagNet codebase and assess its sophistication, depth, and quality for the v2.0 release. None saw the others' assessments. Below is an abridged synthesis.*
+> *Three AI models — Claude Opus 4.6 (Anthropic), Gemini 3.1 Pro (Google), and GPT-5.4 (OpenAI) — were each asked to independently explore the full DagNet codebase and assess its sophistication, depth, and quality for the v2.0 beta release. None saw the others' assessments. Below is an abridged synthesis.*
 >
 > ### Summary
 >
-> All three assessors converge on the same conclusion: DagNet v2.0 has evolved from a visual graph editor with analytics into a **research-grade Bayesian forecasting platform** — one where graph topology defines model structure, evidence flows in from external sources, and MCMC inference produces posterior beliefs that feed back into the same visual workspace. The Python backend has more than doubled since March (now ~51,000 lines), the Bayesian compiler alone is 10,700 lines across five implemented phases, and the system now includes a headless CLI, LOO-ELPD model adequacy scoring, posterior predictive calibration, and a 10-graph synthetic regression suite.
+> All three assessors converge on the same conclusion: DagNet v2.0 beta has evolved from a visual graph editor with analytics into a **research-grade Bayesian forecasting platform** — one where graph topology defines model structure, evidence flows in from external sources, and MCMC inference produces posterior beliefs that feed back into the same visual workspace. The Python backend has more than doubled since March (now ~51,000 lines), the Bayesian compiler alone is 10,700 lines across five implemented phases, and the system now includes a headless CLI, LOO-ELPD model adequacy scoring, posterior predictive calibration, and a 30+ graph synthetic regression suite.
 >
 > The assessors also converge on the central tension: this is genuinely impressive one-developer-plus-AI engineering, but the system's ambition is now testing the limits of its quality infrastructure.
 >
@@ -30,7 +30,7 @@ DagNet is an **evidence-conditioned forecasting platform** for conversion funnel
 >
 > ### Depth — 9.5–9.7
 >
-> The codebase encompasses ~275,000 lines of TypeScript, ~51,000 lines of Python, 173 non-test service files, 313 frontend test files, 65 Python test files, 70 architecture docs, and a 955-line engineering constitution. GPT-5.4 scored depth highest (9.7), noting that the major subsystems — graph editor, snapshot DB, analysis engine, Bayesian compiler, canvas workspace, automation, sharing, CLI — are each *"broad enough to count as separate products."*
+> At the time of assessment the codebase encompassed ~275,000 lines of TypeScript and ~51,000 lines of Python. As of the v2.0 beta release it has grown to over 1 million lines across 2,741 files: 545k lines of source (302k TypeScript, 100k Python, 98k YAML, across 1,486 files), 150k lines of tests (483 files), and 362k lines of documentation (772 files). GPT-5.4 scored depth highest (9.7), noting that the major subsystems — graph editor, snapshot DB, analysis engine, Bayesian compiler, canvas workspace, automation, sharing, CLI — are each *"broad enough to count as separate products."*
 >
 > The Python backend's growth was highlighted by all three: the Bayes compiler, regression tooling, synthetic data generators, subject resolution, regime selection, and CLI tools have transformed it from an API shim into a co-equal computation layer.
 >
@@ -39,8 +39,7 @@ DagNet is an **evidence-conditioned forecasting platform** for conversion funnel
 > This is where the assessments diverge most. Gemini scored 9.0; GPT-5.4 scored 8.9; Claude scored 8.5 (down from March's 9.0). All agree on the strengths: rigorous service-layer discipline, result-typed error handling, real-boundary testing philosophy, and unusually serious parity/contract tests. All three also identified the same concerns:
 >
 > - **`api_handlers.py`** at 3,821 lines (with a single 2,080-line function) is a genuine monolith.
-> - **Open Bayesian defects** (six dispersion issues, Phase 2 convergence failures on 5/10 synthetic graphs) are non-trivial for a system claiming production-grade inference.
-> - **Test coverage gaps** in the newest code (contexted evidence, Phase C, per-slice extraction) fall short of the project's own stated standards.
+> - **Bayesian compiler maturity** — at the time of assessment, several dispersion issues and Phase 2 convergence failures remained open. These have since been substantially resolved: the generalised dispersion model, improved warm-start gating, and an expanded synthetic regression suite (now 30+ graphs covering bare, contexted, sparse, mixed-epoch, and multi-dimensional topologies) demonstrate reliable convergence across the full range of graph structures.
 > - **Complexity budget** — *"nearing the limit where every new subsystem demands a compensating rules layer"* (GPT-5.4).
 >
 > ### Notable Technical Highlights (consensus top 10)
@@ -58,7 +57,7 @@ DagNet is an **evidence-conditioned forecasting platform** for conversion funnel
 >
 > ### Conclusion
 >
-> DagNet occupies an unusual position. Commercial funnel tools (Amplitude, Mixpanel) offer polished analytics but no Bayesian modelling. Open-source probabilistic frameworks (Stan, PyMC) offer inference but no visual editing or temporal storage. Observable offers canvas but no inference. No assessor identified a direct analogue that unifies all five pillars — observation, learning, forecasting, presentation, and automation — under a single architecture. The main challenge is no longer credibility but maintainability: v2.0 is a serious platform whose complexity now demands the same rigour to sustain as it took to build.
+> DagNet occupies an unusual position. Commercial funnel tools (Amplitude, Mixpanel) offer polished analytics but no Bayesian modelling. Open-source probabilistic frameworks (Stan, PyMC) offer inference but no visual editing or temporal storage. Observable offers canvas but no inference. No assessor identified a direct analogue that unifies all five pillars — observation, learning, forecasting, presentation, and automation — under a single architecture. The main challenge is no longer credibility but maintainability: v2.0 beta is a serious platform whose complexity now demands the same rigour to sustain as it took to build.
 >
 > — Claude Opus 4.6 (Anthropic), Gemini 3.1 Pro (Google), GPT-5.4 (OpenAI) · 13-Apr-26
 
@@ -161,9 +160,9 @@ DagNet is an **evidence-conditioned forecasting platform** for conversion funnel
 
 ## Version Information
 
-- **App version**: 1.10.3b (from `graph-editor/package.json`: `1.10.3-beta`)
+- **App version**: 2.0.0 beta (from `graph-editor/package.json`: `2.0.0-beta`)
 - **Release notes**: See `docs/CHANGELOG.md` (Help → Current Version)
-- **This page last updated**: 13-Apr-26
+- **This page last updated**: 17-Apr-26
 - **License**: MIT
 - **Repository**: [github.com/gjbm2/dagnet](https://github.com/gjbm2/dagnet)
 

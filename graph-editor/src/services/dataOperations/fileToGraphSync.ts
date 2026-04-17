@@ -77,6 +77,9 @@ export async function getParameterFromFile(options: {
   includePermissions?: boolean;
   /** New: explicit copy options for GET-from-file */
   copyOptions?: GetFromFileCopyOptions;
+  /** Pre-computed query signature from the fetch planner. When provided, the asat
+   *  path uses this directly for snapshot DB lookups instead of guessing from file values. */
+  querySignature?: string;
 }): Promise<{ success: boolean; warning?: string }> {
   const timingStart = performance.now();
   const timings: Record<string, number> = {};
@@ -167,8 +170,12 @@ export async function getParameterFromFile(options: {
           const sliceFamilyKey = [sliceDims, modeClause].filter(Boolean).join('.');
           const sliceKeyArray = sliceDims ? (sliceFamilyKey ? [sliceFamilyKey] : undefined) : undefined;
 
-          // Signature from file (mandatory — do not recompute)
+          // Signature for snapshot DB lookup.
+          // Prefer the planner's pre-computed querySignature (context-aware, canonical).
+          // Fall back to selectQuerySignatureForAsat (picks from file values by recency)
+          // for callers that don't have a planner signature.
           const signatureStr = (() => {
+            if (options.querySignature) return options.querySignature;
             const values: any[] = Array.isArray((paramFile as any)?.data?.values) ? (paramFile as any).data.values : [];
             const mode: 'window' | 'cohort' = parsed.cohort ? 'cohort' : 'window';
             return selectQuerySignatureForAsat({ values, mode });
@@ -196,18 +203,19 @@ export async function getParameterFromFile(options: {
                 });
 
                 if (timeSeries.length > 0 && paramFile?.data?.values) {
-                  // Replace the daily arrays on the matching value entry
+                  // Replace the daily arrays on the matching value entry.
+                  // asat data comes from snapshot DB — the param file may not
+                  // have daily arrays yet (e.g. first asat query before any
+                  // DAS fetch). Create them unconditionally.
                   const values = paramFile.data.values as any[];
                   for (const v of values) {
-                    if (v.n_daily || v.k_daily) {
-                      v.n_daily = timeSeries.map(pt => pt.n);
-                      v.k_daily = timeSeries.map(pt => pt.k);
-                      v.dates = timeSeries.map(pt => pt.date);
-                      v.n = timeSeries.reduce((sum: number, pt: any) => sum + pt.n, 0);
-                      v.k = timeSeries.reduce((sum: number, pt: any) => sum + pt.k, 0);
-                      v._asat = parsed.asat;
-                      v._asat_retrieved_at = virtualResult.latest_retrieved_at_used;
-                    }
+                    v.n_daily = timeSeries.map(pt => pt.n);
+                    v.k_daily = timeSeries.map(pt => pt.k);
+                    v.dates = timeSeries.map(pt => pt.date);
+                    v.n = timeSeries.reduce((sum: number, pt: any) => sum + pt.n, 0);
+                    v.k = timeSeries.reduce((sum: number, pt: any) => sum + pt.k, 0);
+                    v._asat = parsed.asat;
+                    v._asat_retrieved_at = virtualResult.latest_retrieved_at_used;
                   }
                   asatApplied = true;
                   console.log(`[DataOperationsService] asat tier 1: reconstructed ${timeSeries.length} daily points from snapshot DB`);
@@ -1230,6 +1238,16 @@ export async function getParameterFromFile(options: {
             // Preserve any existing latency summary so values[latest].latency.* is available
             // to UpdateManager mappings (file → graph) for p.latency.median_lag_days, etc.
             ...(latestLatencySummary && { latency: latestLatencySummary }),
+            // Preserve asat metadata from tier 1/2 reconstruction so it
+            // reaches the graph edge (p._asat, p.n_daily, p.k_daily).
+            ...((latestValueWithSource as any)?._asat && {
+              _asat: (latestValueWithSource as any)._asat,
+              _asat_retrieved_at: (latestValueWithSource as any)._asat_retrieved_at,
+              _asat_truncated: (latestValueWithSource as any)._asat_truncated,
+            }),
+            // Carry daily arrays through to the graph edge for display
+            n_daily: allTimeSeries.map(p => p.n),
+            k_daily: allTimeSeries.map(p => p.k),
             // NOTE: Latency stats (t95, completeness, forecast) are computed in the
             // graph-level topo pass after all fetches complete. They are NOT stored
             // in the param file; the graph edge is the source of truth for these.
@@ -1703,6 +1721,22 @@ export async function getParameterFromFile(options: {
       
       // Apply changes to the edge (base p slot)
       applyChanges(nextGraph.edges[edgeIndex], result.changes);
+
+      // Evidence counts: n, k, n_daily, k_daily are not in the UpdateManager's
+      // field mapping (it maps mean/stdev/evidence scalars only). Copy them
+      // directly from the aggregated data so the graph edge reflects the
+      // current evidence base. Critical for asat() which reconstructs these
+      // from the snapshot DB.
+      const latestAggValue = (aggregatedData?.values as any[])?.[0];
+      if (latestAggValue && nextGraph.edges[edgeIndex].p) {
+        const ep = nextGraph.edges[edgeIndex].p as any;
+        if (typeof latestAggValue.n === 'number') ep.n = latestAggValue.n;
+        if (typeof latestAggValue.k === 'number') ep.k = latestAggValue.k;
+        if (latestAggValue.n_daily) ep.n_daily = latestAggValue.n_daily;
+        if (latestAggValue.k_daily) ep.k_daily = latestAggValue.k_daily;
+        if (latestAggValue._asat) ep._asat = latestAggValue._asat;
+        if (latestAggValue._asat_retrieved_at) ep._asat_retrieved_at = latestAggValue._asat_retrieved_at;
+      }
 
       // MODEL_VARS: Upsert analytic entry built by UpdateManager (doc 15 §5.1)
       // Preserve path params from the existing entry — the parameter file doesn't

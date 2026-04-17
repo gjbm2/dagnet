@@ -311,7 +311,10 @@ class TestParamRecovery:
             pytest.fail(f"No result found for {graph_name} — graph may have been skipped during bootstrap")
 
         if not result["passed"]:
-            failures_str = "\n".join(f"  {f}" for f in result["failures"])
+            failures_str = "\n".join(
+                f"  {f['message'] if isinstance(f, dict) else f}"
+                for f in result["failures"]
+            )
             q = result.get("quality", {})
             quality_str = ""
             if q:

@@ -233,32 +233,72 @@ def discover_synth_graphs(data_repo: str | None = None) -> list[dict]:
     return results
 
 
-def verify_synth_data(graph_name: str, data_repo: str | None = None) -> dict:
+def verify_synth_data(
+    graph_name: str,
+    data_repo: str | None = None,
+    *,
+    check_enrichment: bool = False,
+    check_param_files: bool = False,
+    check_event_hashes: bool = False,
+) -> dict:
     """Check whether synth data for a graph is present and fresh.
 
+    Performs a comprehensive freshness check across all dimensions:
+    truth file hash, graph JSON hash, DB row integrity, and optionally
+    event definition hashes, parameter file consistency, and enrichment
+    state.
+
     Returns dict with:
-        status: "fresh" | "stale" | "missing" | "no_truth"
-        reason: human-readable explanation
+        status: "fresh" | "stale" | "missing" | "no_truth" | "needs_enrichment"
+        reason: human-readable summary (worst issue)
+        reasons: list[str] — all issues found
         row_count: total DB rows (0 if not checked)
         truth_sha256: current truth file hash
+        graph_sha256: current graph JSON hash
+        enriched: bool — whether bayesian model_vars are present
         meta: loaded .synth-meta.json (empty dict if absent)
     """
     if data_repo is None:
         data_repo = _resolve_data_repo()
     graphs_dir = os.path.join(data_repo, "graphs")
 
+    def _result(status, reason, *, reasons=None, row_count=0,
+                truth_sha256="", graph_sha256="", enriched=False, meta=None):
+        return {
+            "status": status,
+            "reason": reason,
+            "reasons": reasons or ([reason] if reason else []),
+            "row_count": row_count,
+            "truth_sha256": truth_sha256,
+            "graph_sha256": graph_sha256,
+            "enriched": enriched,
+            "meta": meta or {},
+        }
+
     truth_path = os.path.join(graphs_dir, f"{graph_name}.truth.yaml")
     if not os.path.isfile(truth_path):
-        return {"status": "no_truth", "reason": f"No truth file: {truth_path}",
-                "row_count": 0, "truth_sha256": "", "meta": {}}
+        return _result("no_truth", f"No truth file: {truth_path}")
 
     # Current truth file fingerprint
     with open(truth_path, "rb") as f:
         truth_sha = hashlib.sha256(f.read()).hexdigest()
 
+    # Current graph JSON fingerprint
+    graph_path = os.path.join(graphs_dir, f"{graph_name}.json")
+    graph_sha = ""
+    graph_data = None
+    if os.path.isfile(graph_path):
+        with open(graph_path, "rb") as f:
+            graph_bytes = f.read()
+            graph_sha = hashlib.sha256(graph_bytes).hexdigest()
+        try:
+            graph_data = json.loads(graph_bytes)
+        except json.JSONDecodeError:
+            pass
+
     # Load meta sidecar
     meta_path = os.path.join(graphs_dir, f"{graph_name}.synth-meta.json")
-    meta = {}
+    meta: dict = {}
     if os.path.isfile(meta_path):
         with open(meta_path) as f:
             try:
@@ -266,43 +306,121 @@ def verify_synth_data(graph_name: str, data_repo: str | None = None) -> dict:
             except json.JSONDecodeError:
                 meta = {}
 
-    # Check truth file hash against meta
-    truth_stale = False
-    if meta and meta.get("truth_sha256") != truth_sha:
-        truth_stale = True
+    # ── Accumulate reasons ──────────────────────────────────────────
+    reasons: list[str] = []
 
-    # Check DB rows — either via meta hashes or via FE hash computation
+    # Schema version: v1 meta (no schema_version) forces regen
+    if meta and meta.get("schema_version", 1) < 2:
+        reasons.append("Meta sidecar is v1 (pre-comprehensive checks) — regen required")
+
+    # Truth file hash
+    if meta and meta.get("truth_sha256") != truth_sha:
+        reasons.append("Truth file changed since last generation")
+
+    # Graph JSON hash
+    if meta and graph_sha and meta.get("graph_sha256") and meta["graph_sha256"] != graph_sha:
+        reasons.append("Graph JSON changed since last generation")
+
+    # Connection string: compare graph defaultConnection to meta
+    if meta and graph_data and meta.get("default_connection"):
+        current_conn = graph_data.get("defaultConnection", "")
+        if current_conn != meta["default_connection"]:
+            reasons.append(
+                f"Connection string changed: meta='{meta['default_connection']}' "
+                f"graph='{current_conn}'"
+            )
+
+    # Event definition hashes (optional, for thoroughness)
+    if check_event_hashes and meta and meta.get("event_hashes") and graph_data:
+        events_dir = os.path.join(data_repo, "events")
+        for node in graph_data.get("nodes", []):
+            evt_id = node.get("event_id", "")
+            if not evt_id:
+                continue
+            evt_path = os.path.join(events_dir, f"{evt_id}.yaml")
+            if os.path.isfile(evt_path):
+                with open(evt_path, "rb") as f:
+                    current_evt_sha = hashlib.sha256(f.read()).hexdigest()
+                stored_evt_sha = meta["event_hashes"].get(evt_id, "")
+                if stored_evt_sha and current_evt_sha != stored_evt_sha:
+                    reasons.append(f"Event definition changed: {evt_id}")
+
+    # Parameter file checks (optional)
+    if check_param_files and meta and meta.get("edge_hashes"):
+        params_dir = os.path.join(data_repo, "parameters")
+        for pid, hashes in meta["edge_hashes"].items():
+            param_path = os.path.join(params_dir, f"{pid}.yaml")
+            if not os.path.isfile(param_path):
+                reasons.append(f"Parameter file missing: {pid}")
+                continue
+            # Check query_signature matches stored window hash
+            try:
+                import yaml as _yaml
+                with open(param_path) as f:
+                    param_data = _yaml.safe_load(f)
+                values = param_data.get("values", []) if param_data else []
+                stored_window_hash = hashes.get("window_hash", "")
+                if stored_window_hash and values:
+                    sigs = [v.get("query_signature", "") for v in values if v.get("query_signature")]
+                    if sigs and stored_window_hash not in sigs:
+                        reasons.append(f"Param file query_signature mismatch: {pid}")
+            except Exception:
+                reasons.append(f"Param file unreadable: {pid}")
+
+    # Enrichment check (optional).
+    # "Enriched" means model_vars are present from any source (analytic
+    # from hydrate/topo-pass, or bayesian from MCMC). Hydrate is the
+    # standard enrichment path; bayesian is an additional expensive step.
+    enriched = False
+    if graph_data:
+        for edge in graph_data.get("edges", []):
+            model_vars = edge.get("p", {}).get("model_vars", [])
+            if model_vars:
+                enriched = True
+                break
+    # Enrichment is NOT added to reasons — it's a separate status
+    # ("needs_enrichment") that triggers --enrich, not a full regen.
+
+    # ── DB checks ───────────────────────────────────────────────────
     db_conn = _load_db_connection()
+    total = 0
 
     if not db_conn:
-        # Can't verify DB — trust the meta if it exists and is fresh
         if not meta:
-            return {"status": "missing", "reason": "No .synth-meta.json and no DB available",
-                    "row_count": 0, "truth_sha256": truth_sha, "meta": meta}
-        if truth_stale:
-            return {"status": "stale", "reason": "Truth file changed since last generation",
-                    "row_count": 0, "truth_sha256": truth_sha, "meta": meta}
+            return _result("missing", "No .synth-meta.json and no DB available",
+                           truth_sha256=truth_sha, graph_sha256=graph_sha,
+                           enriched=enriched, meta=meta)
+        if reasons:
+            return _result("stale", reasons[0], reasons=reasons,
+                           truth_sha256=truth_sha, graph_sha256=graph_sha,
+                           enriched=enriched, meta=meta)
         stored_count = meta.get("row_count", 0)
         if stored_count > 0:
-            return {"status": "fresh", "reason": f"Meta says {stored_count} rows (DB not checked)",
-                    "row_count": stored_count, "truth_sha256": truth_sha, "meta": meta}
-        return {"status": "missing", "reason": "Meta shows 0 rows and DB not available",
-                "row_count": 0, "truth_sha256": truth_sha, "meta": meta}
+            # Enrichment-only gap: data is fresh but not enriched
+            if check_enrichment and not enriched:
+                return _result("needs_enrichment", "Graph not enriched",
+                               reasons=reasons, row_count=stored_count,
+                               truth_sha256=truth_sha, graph_sha256=graph_sha,
+                               enriched=False, meta=meta)
+            return _result("fresh", f"Meta says {stored_count} rows (DB not checked)",
+                           row_count=stored_count, truth_sha256=truth_sha,
+                           graph_sha256=graph_sha, enriched=enriched, meta=meta)
+        return _result("missing", "Meta shows 0 rows and DB not available",
+                       truth_sha256=truth_sha, graph_sha256=graph_sha,
+                       enriched=enriched, meta=meta)
 
-    # No meta and no graph JSON → definitely missing (skip DB entirely)
-    graph_path = os.path.join(graphs_dir, f"{graph_name}.json")
+    # No meta and no graph JSON → definitely missing
     if not meta and not os.path.isfile(graph_path):
-        return {"status": "missing", "reason": "No meta sidecar and no graph JSON",
-                "row_count": 0, "truth_sha256": truth_sha, "meta": meta}
+        return _result("missing", "No meta sidecar and no graph JSON",
+                       truth_sha256=truth_sha, graph_sha256=graph_sha,
+                       enriched=enriched, meta=meta)
 
     # DB is available — verify row counts
     try:
         import psycopg2
         conn = psycopg2.connect(db_conn)
         cur = conn.cursor()
-        total = 0
 
-        # Try meta hashes first (fast path)
         if meta and meta.get("edge_hashes"):
             _seen: set[str] = set()
             for edge_hashes in meta["edge_hashes"].values():
@@ -319,27 +437,52 @@ def verify_synth_data(graph_name: str, data_repo: str | None = None) -> dict:
                     cur.execute("SELECT COUNT(*) FROM snapshots WHERE core_hash = %s", (h,))
                     total += cur.fetchone()[0]
         else:
-            # No meta sidecar — cannot verify without authoritative hashes.
-            # The meta sidecar is always written by the generation pipeline;
-            # its absence means generation hasn't run or was interrupted.
             conn.close()
-            return {"status": "missing", "reason": "No .synth-meta.json — run synth_gen to generate",
-                    "row_count": 0, "truth_sha256": truth_sha, "meta": meta}
+            return _result("missing", "No .synth-meta.json — run synth_gen to generate",
+                           truth_sha256=truth_sha, graph_sha256=graph_sha,
+                           enriched=enriched, meta=meta)
+
+        # Check for empty core_hash rows (corruption indicator)
+        if meta and meta.get("edge_hashes"):
+            for pid in meta["edge_hashes"]:
+                cur.execute(
+                    "SELECT COUNT(*) FROM snapshots WHERE core_hash = '' AND param_id LIKE %s",
+                    (f"%{pid}",),
+                )
+                empty_count = cur.fetchone()[0]
+                if empty_count > 0:
+                    reasons.append(f"DB has {empty_count} rows with empty core_hash for {pid}")
+
         conn.close()
-
-        if truth_stale:
-            return {"status": "stale", "reason": "Truth file changed since last generation",
-                    "row_count": total, "truth_sha256": truth_sha, "meta": meta}
-
-        if total == 0:
-            return {"status": "missing", "reason": "0 DB rows found",
-                    "row_count": 0, "truth_sha256": truth_sha, "meta": meta}
-
-        return {"status": "fresh", "reason": f"{total} DB rows verified",
-                "row_count": total, "truth_sha256": truth_sha, "meta": meta}
     except Exception as e:
-        return {"status": "missing", "reason": f"DB check failed: {e}",
-                "row_count": 0, "truth_sha256": truth_sha, "meta": meta}
+        return _result("missing", f"DB check failed: {e}",
+                       truth_sha256=truth_sha, graph_sha256=graph_sha,
+                       enriched=enriched, meta=meta)
+
+    # Staleness reasons take priority — if the truth/graph/events changed,
+    # the data is stale regardless of DB row count.
+    if reasons:
+        return _result("stale", reasons[0], reasons=reasons, row_count=total,
+                       truth_sha256=truth_sha, graph_sha256=graph_sha,
+                       enriched=enriched, meta=meta)
+
+    # No rows and no staleness reasons → data genuinely missing
+    if total == 0:
+        return _result("missing", "0 DB rows found",
+                       truth_sha256=truth_sha, graph_sha256=graph_sha,
+                       enriched=enriched, meta=meta)
+
+    # Enrichment-only gap
+    if check_enrichment and not enriched:
+        return _result("needs_enrichment", "Graph not enriched",
+                       reasons=["Graph not enriched (no bayesian model_vars)"],
+                       row_count=total,
+                       truth_sha256=truth_sha, graph_sha256=graph_sha,
+                       enriched=False, meta=meta)
+
+    return _result("fresh", f"{total} DB rows verified", row_count=total,
+                   truth_sha256=truth_sha, graph_sha256=graph_sha,
+                   enriched=enriched, meta=meta)
 
 
 def _build_meta_hashes(hash_lookup: dict[str, dict[str, str]]) -> dict[str, dict[str, str]]:
@@ -372,8 +515,18 @@ def save_synth_meta(
     edge_hashes: dict[str, dict[str, str]],
     row_count: int,
     data_repo: str | None = None,
+    *,
+    graph_path: str | None = None,
+    event_hashes: dict[str, str] | None = None,
+    default_connection: str | None = None,
+    enriched: bool = False,
 ) -> None:
-    """Write .synth-meta.json sidecar after successful generation."""
+    """Write .synth-meta.json sidecar after successful generation.
+
+    v2 schema: records graph JSON hash, event definition hashes,
+    connection string, and enrichment state alongside the existing
+    truth hash, row count, and edge hashes.
+    """
     if data_repo is None:
         data_repo = _resolve_data_repo()
     graphs_dir = os.path.join(data_repo, "graphs")
@@ -381,8 +534,19 @@ def save_synth_meta(
     with open(truth_path, "rb") as f:
         truth_sha = hashlib.sha256(f.read()).hexdigest()
 
+    graph_sha = ""
+    if graph_path and os.path.isfile(graph_path):
+        with open(graph_path, "rb") as f:
+            graph_sha = hashlib.sha256(f.read()).hexdigest()
+
     meta = {
+        "schema_version": 2,
         "truth_sha256": truth_sha,
+        "graph_sha256": graph_sha,
+        "event_hashes": event_hashes or {},
+        "default_connection": default_connection or "",
+        "enriched": enriched,
+        "enriched_at": datetime.now().strftime("%-d-%b-%y %H:%M:%S") if enriched else None,
         "generated_at": datetime.now().strftime("%-d-%b-%y %H:%M:%S"),
         "row_count": row_count,
         "edge_hashes": edge_hashes,
@@ -2966,6 +3130,64 @@ def print_edge_config(
 
 
 # ---------------------------------------------------------------------------
+# Enrichment
+# ---------------------------------------------------------------------------
+
+def enrich_graph(graph_name: str, data_repo: str, *,
+                 graph_path: str | None = None,
+                 query_dsl: str = "window(-90d:)") -> bool:
+    """Run hydrate.sh to enrich a synth graph with topo pass output.
+
+    Produces model_vars, promoted posteriors, forecast mean — the
+    analytical params that synth_gen deliberately clears.
+
+    Requires the Python BE running on localhost:9000.
+
+    Returns True on success.
+    """
+    import subprocess as _sp
+
+    hydrate_script = os.path.join(REPO_ROOT, "graph-ops", "scripts", "hydrate.sh")
+    if not os.path.isfile(hydrate_script):
+        print(f"  ERROR: hydrate.sh not found at {hydrate_script}")
+        return False
+
+    cmd = ["bash", hydrate_script, graph_name, query_dsl]
+    print(f"  Running: {' '.join(cmd)}")
+    try:
+        result = _sp.run(
+            cmd, capture_output=True, text=True, timeout=120,
+            cwd=REPO_ROOT,
+        )
+        if result.returncode != 0:
+            print(f"  hydrate.sh failed (exit {result.returncode}):")
+            print(f"  {result.stderr[:500]}")
+            return False
+    except _sp.TimeoutExpired:
+        print("  hydrate.sh timed out (120s)")
+        return False
+    except Exception as e:
+        print(f"  hydrate.sh error: {e}")
+        return False
+
+    # Verify enrichment: reload graph, check for model_vars (any source)
+    check_path = graph_path or os.path.join(data_repo, "graphs", f"{graph_name}.json")
+    if os.path.isfile(check_path):
+        with open(check_path) as f:
+            g = json.load(f)
+        has_bayes = any(
+            bool(e.get("p", {}).get("model_vars", []))
+            for e in g.get("edges", [])
+        )
+        if not has_bayes:
+            print("  WARNING: hydrate completed but no bayesian model_vars found")
+            return False
+
+    print("  Enrichment complete — bayesian model_vars verified")
+    return True
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -3006,6 +3228,8 @@ Examples:
                         help="Remove synthetic data from DB and exit")
     parser.add_argument("--bust-cache", action="store_true",
                         help="Regenerate even if existing data is fresh")
+    parser.add_argument("--enrich", action="store_true",
+                        help="Run hydration (topo pass + promotion) after generation")
     args = parser.parse_args()
 
     data_repo = _resolve_data_repo()
@@ -3072,11 +3296,37 @@ Examples:
     # --- Freshness check: skip if data is already fresh ---
     if not args.bust_cache and not args.clean and not args.dry_run:
         graph_name_for_verify = os.path.basename(truth_path).replace(".truth.yaml", "")
-        freshness = verify_synth_data(graph_name_for_verify, data_repo)
+        freshness = verify_synth_data(graph_name_for_verify, data_repo,
+                                      check_enrichment=getattr(args, 'enrich', False))
         if freshness["status"] == "fresh":
             _progress(100, "done", f"data fresh — skipped")
             print(f"\nData is fresh — skipping rebuild ({freshness['reason']})")
             print(f"  Use --bust-cache to regenerate anyway.")
+            return
+        if freshness["status"] == "needs_enrichment" and args.enrich:
+            # Data is fresh but not enriched — skip regen, just enrich
+            print(f"\nData fresh but not enriched — running enrichment only.")
+            graph_path = os.path.join(data_repo, "graphs", f"{graph_name_for_verify}.json")
+            ok = enrich_graph(graph_name_for_verify, data_repo, graph_path=graph_path)
+            if ok:
+                # Update meta sidecar
+                meta_hashes = _build_meta_hashes(
+                    {pid: freshness["meta"].get("edge_hashes", {}).get(pid, {})
+                     for pid in freshness["meta"].get("edge_hashes", {})})
+                _event_hashes = freshness["meta"].get("event_hashes", {})
+                with open(graph_path) as _gf:
+                    _graph = json.load(_gf)
+                save_synth_meta(
+                    graph_name_for_verify, truth_path,
+                    freshness["meta"].get("edge_hashes", {}),
+                    freshness["row_count"], data_repo,
+                    graph_path=graph_path,
+                    event_hashes=_event_hashes,
+                    default_connection=_graph.get("defaultConnection", ""),
+                    enriched=True,
+                )
+                print("Updated .synth-meta.json: enriched=True")
+            _progress(100, "done", f"enrichment {'complete' if ok else 'failed'}")
             return
 
     # --- Generate or load graph ---
@@ -3483,8 +3733,43 @@ Examples:
         total_rows = sum(len(v) for v in snapshot_rows.values())
         meta_hashes = _build_meta_hashes(hash_lookup)
         graph_name_for_meta = os.path.basename(truth_path).replace(".truth.yaml", "")
-        save_synth_meta(graph_name_for_meta, truth_path, meta_hashes, total_rows, data_repo)
-        print(f"Wrote .synth-meta.json (truth_sha256, {total_rows} rows, {len(meta_hashes)} edges)")
+        # Compute event definition hashes for v2 meta
+        _event_hashes: dict[str, str] = {}
+        events_dir = os.path.join(data_repo, "events")
+        for node in graph.get("nodes", []):
+            evt_id = node.get("event_id", "")
+            if evt_id:
+                evt_path = os.path.join(events_dir, f"{evt_id}.yaml")
+                if os.path.isfile(evt_path):
+                    with open(evt_path, "rb") as _ef:
+                        _event_hashes[evt_id] = hashlib.sha256(_ef.read()).hexdigest()
+
+        save_synth_meta(
+            graph_name_for_meta, truth_path, meta_hashes, total_rows, data_repo,
+            graph_path=graph_path,
+            event_hashes=_event_hashes,
+            default_connection=graph.get("defaultConnection", ""),
+            enriched=False,
+        )
+        print(f"Wrote .synth-meta.json v2 (truth_sha256, {total_rows} rows, {len(meta_hashes)} edges)")
+
+    # ── Enrichment (optional) ──────────────────────────────────────────
+    if args.enrich:
+        print(f"\n── Enrichment: hydrating {args.graph} ──")
+        ok = enrich_graph(args.graph, data_repo, graph_path=graph_path)
+        if ok:
+            # Update meta sidecar to record enrichment
+            if db_conn or args.write_files:
+                save_synth_meta(
+                    graph_name_for_meta, truth_path, meta_hashes, total_rows, data_repo,
+                    graph_path=graph_path,
+                    event_hashes=_event_hashes,
+                    default_connection=graph.get("defaultConnection", ""),
+                    enriched=True,
+                )
+                print("  Updated .synth-meta.json: enriched=True")
+        else:
+            print("  WARNING: enrichment failed — graph not enriched")
 
     _progress(100, "done", f"completed in {_time.time() - _harness_t0:.1f}s")
     print("\nDone.")

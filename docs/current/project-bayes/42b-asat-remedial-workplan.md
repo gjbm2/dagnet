@@ -6,7 +6,7 @@
 
 ---
 
-## 1. Blind Test Results (current — after R1)
+## 1. Blind Test Results (current — 18/18 pass)
 
 Tests: `graph-ops/scripts/asat-blind-test.sh`
 
@@ -14,7 +14,7 @@ Tests: `graph-ops/scripts/asat-blind-test.sh`
 |------|-------|--------|---------|
 | T1a | synth-simple-abc | PASS | Baseline evidence.k = 346497 |
 | T1b | synth-simple-abc | PASS | asat evidence.k = 77875 (tier 1 snapshot reconstruction) |
-| T1c | synth-simple-abc | PASS | p.mean differs: 0.743 (asat) vs 0.708 (baseline) |
+| T1c | synth-simple-abc | PASS | p.mean differs: 0.637 (asat) vs 0.887 (baseline) |
 | T2 | synth-simple-abc | PASS | asat before first retrieval returns k=0 |
 | T3 | synth-simple-abc | PASS | Signature hash identical with/without asat |
 | T3b | synth-simple-abc | PASS | evidence.n differs: 170483 (asat) vs 495905 (baseline) |
@@ -22,7 +22,14 @@ Tests: `graph-ops/scripts/asat-blind-test.sh`
 | T5 | synth-simple-abc | PASS | Param files unchanged after asat query |
 | T6 | synth-context-solo-mixed | PASS | Bare-epoch asat: k=5571 < baseline 14775 |
 | T7 | synth-context-solo-mixed | PASS | Later asat: k=7485 > k_epoch1 5571 |
-| T8 | synth-context-solo-mixed | PASS | Context-qualified asat: k=1301 (tier 2 fallback) |
+| T8 | synth-context-solo-mixed | PASS | Context-qualified asat: k=9942 |
+| D5a | synth-simple-abc | PASS | tau_solid_max=1 with asat (baseline=26) |
+| D5b | synth-simple-abc | PASS | boundary_date reflects asat, not today |
+| D5c | synth-simple-abc | PASS | evidence_x differs with asat |
+| D3a | synth-simple-abc | PASS | completeness 0.6525 (asat) < 0.8896 (baseline) |
+| D3b | synth-simple-abc | PASS | p.stdev 0.0230 (asat) > 0.0215 (baseline) |
+| D3c | synth-simple-abc | PASS | No completeness returned for asat before data |
+| D3d | synth-simple-abc | PASS | Completeness monotonic: 0.6525 < 0.8165 < 0.8896 |
 
 ---
 
@@ -191,5 +198,3 @@ normalisation drift (AP 28) and context-key mismatches (AP 11).
 - Multi-epoch signatures: picks most recent; may miss earlier epoch
   data under a different hash
 - No equivalence expansion: `equivalent_hashes` not passed
-- Context hash parity (doc 43b): bare and contexted queries produce
-  the same hash, so tier 1 can't distinguish them

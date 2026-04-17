@@ -45,6 +45,7 @@ def compute_cohort_maturity_rows_v3(
     span_onset_mu_corr=None,
     is_multi_hop=False,
     resolved_override=None,
+    edge_cdf_arr=None,
 ) -> List[Dict[str, Any]]:
     """Compute per-τ rows for cohort maturity v3 chart.
 
@@ -140,8 +141,6 @@ def compute_cohort_maturity_rows_v3(
     # (v2 lines 599-635)
     cohort_at_tau: Dict[str, Dict[int, tuple]] = defaultdict(dict)
     evidence_by_tau: Dict[int, Dict] = {}
-    # Projected rate aggregation (from annotated frames, v2 lines 632-635)
-    proj_by_tau: Dict[int, Dict] = {}
 
     for f in frames:
         sd_str = str(f.get('snapshot_date', ''))[:10]
@@ -162,25 +161,8 @@ def compute_cohort_maturity_rows_v3(
             y_val = dp.get('y')
             if not isinstance(x_val, (int, float)) or x_val <= 0:
                 continue
-            # v2 only adds to cohort_at_tau when y_val is valid (line 623)
             if not isinstance(y_val, (int, float)) or y_val is None:
-                # Still aggregate projected_y below, but skip cohort_at_tau
-                proj_y = dp.get('projected_y')
-                if proj_y is not None and isinstance(proj_y, (int, float)):
-                    if tau not in proj_by_tau:
-                        proj_by_tau[tau] = {'sum_proj_y': 0.0, 'sum_proj_x': 0.0, 'count': 0}
-                    proj_by_tau[tau]['sum_proj_y'] += float(proj_y)
-                    proj_by_tau[tau]['sum_proj_x'] += float(x_val)
-                    proj_by_tau[tau]['count'] += 1
                 continue
-            # Aggregate projected_y for projected_rate (v2 lines 632-635)
-            proj_y = dp.get('projected_y')
-            if proj_y is not None and isinstance(proj_y, (int, float)):
-                if tau not in proj_by_tau:
-                    proj_by_tau[tau] = {'sum_proj_y': 0.0, 'sum_proj_x': 0.0, 'count': 0}
-                proj_by_tau[tau]['sum_proj_y'] += float(proj_y)
-                proj_by_tau[tau]['sum_proj_x'] += float(x_val)
-                proj_by_tau[tau]['count'] += 1
 
             cohort_at_tau[ad_str][tau] = (float(x_val), float(y_val))
 
@@ -342,6 +324,7 @@ def compute_cohort_maturity_rows_v3(
         span_onset_sd=span_onset_sd,
         span_onset_mu_corr=span_onset_mu_corr,
         det_norm_cdf=det_norm_cdf,
+        edge_cdf_arr=edge_cdf_arr,
     )
 
     print(f"[v3] Engine sweep: IS_ESS={sweep.is_ess:.0f} "
@@ -459,9 +442,9 @@ def compute_cohort_maturity_rows_v3(
             'rate_pure': rate_pure,
             'evidence_y': ev['sum_y'] if ev else None,
             'evidence_x': ev['sum_x'] if ev else None,
-            'projected_rate': (max(0.0, min(1.0, proj_by_tau[tau]['sum_proj_y'] / proj_by_tau[tau]['sum_proj_x']))
-                               if tau in proj_by_tau and proj_by_tau[tau]['sum_proj_x'] > 0
-                               else float(np.mean(draws))),
+            # G.4: projected_rate from MC draws (replaces legacy
+            # annotate_rows projected_y aggregation).
+            'projected_rate': float(np.mean(draws)),
             'forecast_y': round(_det_y_tau, 1) if midpoint is not None else None,
             'forecast_x': round(_det_x_tau, 1) if midpoint is not None else None,
             'midpoint': midpoint,

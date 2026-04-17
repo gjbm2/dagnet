@@ -210,14 +210,15 @@ class FetchOrchestratorService {
     dsl: string;
     skipStage2?: boolean;
     parentLogId?: string;
+    querySignatures?: Record<string, string>;
   }): Promise<void> {
-    const { graph, setGraph, dsl, skipStage2 = false, parentLogId } = input;
+    const { graph, setGraph, dsl, skipStage2 = false, parentLogId, querySignatures } = input;
     const items = fetchDataService.getItemsForFromFileLoad(graph);
     if (items.length === 0) return;
 
     await fetchDataService.fetchItems(
       items,
-      { mode: 'from-file', skipStage2, parentLogId, suppressBatchToast: true } as any,
+      { mode: 'from-file', skipStage2, parentLogId, suppressBatchToast: true, querySignatures } as any,
       graph,
       setGraph,
       dsl,
@@ -237,6 +238,7 @@ class FetchOrchestratorService {
     parentLogId?: string;
     attempts?: number;
     delayMs?: number;
+    querySignatures?: Record<string, string>;
   }): Promise<{ attempts: number; failures: number }> {
     const {
       graphGetter,
@@ -246,6 +248,7 @@ class FetchOrchestratorService {
       parentLogId,
       attempts = 6,
       delayMs = 75,
+      querySignatures,
     } = input;
 
     let lastFailures = 0;
@@ -257,7 +260,7 @@ class FetchOrchestratorService {
 
       const results = await fetchDataService.fetchItems(
         items,
-        { mode: 'from-file', skipStage2, parentLogId, suppressBatchToast: true } as any,
+        { mode: 'from-file', skipStage2, parentLogId, suppressBatchToast: true, querySignatures } as any,
         g,
         setGraph,
         dsl,

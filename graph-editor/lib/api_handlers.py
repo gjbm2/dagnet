@@ -1280,7 +1280,9 @@ def _handle_cohort_maturity_v2(data: Dict[str, Any]) -> Dict[str, Any]:
                   f"role={subj.get('path_role')} from={subj.get('from_node')} "
                   f"to={subj.get('to_node')} rows={len(rows)} "
                   f"param_id={subj.get('param_id','?')[:40]} "
-                  f"core_hash={subj.get('core_hash','?')[:20]}")
+                  f"core_hash={subj.get('core_hash','?')} "
+                  f"eq_hashes={len(subj.get('equivalent_hashes') or [])} "
+                  f"slice_keys={subj.get('slice_keys')}")
 
             derivation = derive_cohort_maturity(
                 rows,
@@ -1413,9 +1415,13 @@ def _handle_cohort_maturity_v2(data: Dict[str, Any]) -> Dict[str, Any]:
                     _tau_extent_setting = float(tau_extent_raw)
                 except (ValueError, TypeError):
                     pass
-            _axis_candidates = [c for c in [_sweep_span, _edge_t95, _path_t95, _tau_extent_setting] if c and c > 0]
-            axis_tau_max = int(math.ceil(max(_axis_candidates))) if _axis_candidates else None
-            print(f"[v2] axis_tau_max={axis_tau_max} candidates={_axis_candidates}")
+            # User-explicit tau_extent overrides auto-derived candidates.
+            if _tau_extent_setting and _tau_extent_setting > 0:
+                axis_tau_max = int(math.ceil(_tau_extent_setting))
+            else:
+                _axis_candidates = [c for c in [_sweep_span, _edge_t95, _path_t95] if c and c > 0]
+                axis_tau_max = int(math.ceil(max(_axis_candidates))) if _axis_candidates else None
+            print(f"[v2] axis_tau_max={axis_tau_max} tau_extent_setting={_tau_extent_setting}")
 
             # Sampling mode from display settings
             sampling_mode = display_settings.get('continuous_forecast', 'binomial')
@@ -1816,6 +1822,10 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
                 print(f"[v3] WARNING: snapshot query failed: {e}")
                 rows = []
             total_rows += len(rows)
+            print(f"[v3] Subject {subj.get('from_node','?')}→{subj.get('to_node','?')}: "
+                  f"rows={len(rows)} hash={subj.get('core_hash','?')[:20]} "
+                  f"slice_keys={subj.get('slice_keys')} "
+                  f"param_id={subj.get('param_id','?')[-30:]}")
             derivation = derive_cohort_maturity(rows, sweep_from=sweep_from, sweep_to=sweep_to_str)
             per_edge_results.append({
                 'path_role': subj.get('path_role', 'only'),
@@ -1882,9 +1892,13 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
             except (ValueError, TypeError):
                 pass
 
-        _axis_candidates = [c for c in [_sweep_span, _edge_t95, _path_t95, _tau_extent_setting] if c and c > 0]
-        axis_tau_max = int(math.ceil(max(_axis_candidates))) if _axis_candidates else None
-        print(f"[v3] axis_tau_max={axis_tau_max} candidates={_axis_candidates} "
+        # User-explicit tau_extent overrides auto-derived candidates.
+        if _tau_extent_setting and _tau_extent_setting > 0:
+            axis_tau_max = int(math.ceil(_tau_extent_setting))
+        else:
+            _axis_candidates = [c for c in [_sweep_span, _edge_t95, _path_t95] if c and c > 0]
+            axis_tau_max = int(math.ceil(max(_axis_candidates))) if _axis_candidates else None
+        print(f"[v3] axis_tau_max={axis_tau_max} tau_extent_setting={_tau_extent_setting} "
               f"last_edge_id={last_edge_id is not None}")
 
         band_raw = display_settings.get('bayes_band_level', '90')
@@ -1893,36 +1907,24 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
         except (ValueError, TypeError):
             band_level = 0.90
 
-        # ── Annotate frames (shared with v2) ─────────────────────────
-        if composed_frames and last_edge_id:
-            from runner.model_resolver import resolve_model_params
-            from runner.cohort_forecast import find_edge_by_id
-            edge = find_edge_by_id(graph_data, last_edge_id)
-            if edge:
-                scope = 'edge' if is_window else 'path'
-                temporal = 'window' if is_window else 'cohort'
-                resolved = resolve_model_params(edge, scope=scope, temporal_mode=temporal)
-                if resolved and resolved.latency.sigma > 0:
-                    from runner.forecast_application import annotate_rows
-                    for frame in composed_frames:
-                        sd = frame.get('snapshot_date', '') or frame.get('as_at_date', '')
-                        if frame.get('data_points'):
-                            frame['data_points'] = annotate_rows(
-                                frame['data_points'],
-                                resolved.latency.mu, resolved.latency.sigma,
-                                resolved.latency.onset_delta_days,
-                                forecast_mean=resolved.p_mean,
-                                retrieved_at_override=sd,
-                            )
+        # G.4: annotate_rows removed from v3. projected_rate now uses
+        # MC mean from the sweep (same draws as midpoint/fan bands).
+        # Frame annotation was only needed for projected_y aggregation
+        # which is superseded by the engine.
+        from runner.model_resolver import resolve_model_params
+        from runner.cohort_forecast import find_edge_by_id
 
         # ── Build span kernel + MC draws (shared with v2 for parity) ──
         _mc_cdf_v3 = None
         _mc_p_v3 = None
+        _is_multi_hop_v3 = False
+        _edge_mc_cdf_v3 = None  # Edge-level CDF for Pop C (multi-hop only)
         _det_norm_cdf = None
         _det_span_p = None
         _span_alpha_v3 = None
         _span_beta_v3 = None
         _span_params_v3 = None
+        _edge_kernel_v3 = None
         if composed_frames and last_edge_id and query_from_node and query_to_node:
             from runner.span_kernel import compose_span_kernel, _build_span_topology, mc_span_cdfs
             _is_multi_hop_v3 = len(subjects) > 1
@@ -1999,7 +2001,7 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
                         graph_data, query_from_node, query_to_node)
                     if _edge_topo_v3 is not None:
                         _rng_edge_v3 = _np.random.default_rng(42)
-                        _, _mc_p_v3 = mc_span_cdfs(
+                        _edge_mc_cdf_v3, _mc_p_v3 = mc_span_cdfs(
                             topo=_edge_topo_v3,
                             graph=graph_data,
                             is_window=is_window,
@@ -2007,6 +2009,31 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
                             num_draws=2000,
                             rng=_rng_edge_v3,
                         )
+
+        # ── Edge-level MC CDF for Pop C (multi-hop only) ─────────────
+        # Pop C arrivals have traversed upstream edges and need the
+        # EDGE-level CDF for conversion timing, not the path CDF.
+        # Build from the last edge in the query path.
+        if _is_multi_hop_v3 and _edge_mc_cdf_v3 is None and _mc_cdf_v3 is not None:
+            _last_entry = next(
+                (e for e in per_edge_results if e['path_role'] in ('last', 'only')),
+                None,
+            )
+            if _last_entry:
+                _last_from = _last_entry['from_node']
+                _last_to = _last_entry['to_node']
+                _last_edge_topo = _build_span_topology(graph_data, _last_from, _last_to)
+                if _last_edge_topo is not None:
+                    import numpy as _np
+                    _rng_last_edge = _np.random.default_rng(42)
+                    _edge_mc_cdf_v3, _ = mc_span_cdfs(
+                        topo=_last_edge_topo,
+                        graph=graph_data,
+                        is_window=is_window,
+                        max_tau=400,
+                        num_draws=2000,
+                        rng=_rng_last_edge,
+                    )
 
         # ── Build x_provider (matching v2 handler construction) ────────
         # Carrier is needed even for collapsed shortcut: path CDF handles
@@ -2102,6 +2129,7 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
                 span_onset_mu_corr=_span_params_v3.onset_mu_corr if _span_params_v3 else None,
                 is_multi_hop=_is_multi_hop,
                 resolved_override=_v3_resolved_override,
+                edge_cdf_arr=_edge_mc_cdf_v3,
             )
 
         print(f"[v3] compute_cohort_maturity_rows returned {len(maturity_rows)} rows")
@@ -2109,9 +2137,11 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
         # ── Model curve generation (FE overlay contract) ─────────────
         # The FE chart builder reads model_curve, model_curve_params,
         # source_model_curves, and promoted_source from the result to
-        # render CDF overlay curves. v3 generates these from the
-        # resolver output (same data, different source than v2 which
-        # reads from a flat model_params dict).
+        # render CDF overlay curves.
+        #
+        # Single-hop: resolve from the target edge (as before).
+        # Multi-hop:  use the convolved span kernel so the CDF and p
+        #             reflect the full x→y path, not the last edge.
         subject_result: Dict[str, Any] = {
             'analysis_type': analysis_type,
             'maturity_rows': maturity_rows,
@@ -2132,7 +2162,123 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
                     edge, scope=scope, temporal_mode=temporal,
                     graph_preference=_graph_pref)
 
+                # ── Determine axis extent ──────────────────────────────
+                _tau_max_candidates = []
+                if maturity_rows:
+                    _tau_max_candidates.append(maturity_rows[-1]['tau_days'])
+                if axis_tau_max:
+                    _tau_max_candidates.append(axis_tau_max)
                 if mc_resolved and mc_resolved.latency.sigma > 0:
+                    try:
+                        from runner.lag_distribution_utils import log_normal_inverse_cdf
+                        _lat = mc_resolved.latency
+                        _t95 = log_normal_inverse_cdf(0.95, _lat.mu, _lat.sigma) + _lat.onset_delta_days
+                        _tau_max_candidates.append(int(math.ceil(_t95)))
+                    except Exception:
+                        pass
+                # For multi-hop, use 95th percentile of the span CDF
+                # (not the full grid which is 400 — too wide)
+                if _is_multi_hop and _edge_kernel_v3 is not None and _edge_kernel_v3.span_p > 0:
+                    _sp = _edge_kernel_v3.span_p
+                    for _t in range(min(_edge_kernel_v3.max_tau + 1, 401)):
+                        if _edge_kernel_v3.cdf_at(_t) >= 0.95 * _sp:
+                            _tau_max_candidates.append(_t)
+                            break
+                _curve_tau_max = int(max(_tau_max_candidates)) if _tau_max_candidates else 0
+
+                # ── Multi-hop: convolved span kernel curves ─────────���──
+                if _is_multi_hop and _edge_kernel_v3 is not None and _edge_kernel_v3.span_p > 0 and _curve_tau_max > 0:
+                    from runner.span_kernel import (
+                        compose_span_kernel_for_source,
+                        mc_span_cdfs_for_source,
+                        _build_span_topology,
+                    )
+                    import numpy as _np_bands
+
+                    _span_p = _edge_kernel_v3.span_p
+                    # Promoted curve from the convolved kernel
+                    curve = []
+                    for tau in range(0, _curve_tau_max + 1):
+                        rate = _edge_kernel_v3.cdf_at(tau)
+                        curve.append({'tau_days': tau, 'model_rate': round(rate, 8)})
+                    subject_result['model_curve'] = curve
+                    subject_result['model_curve_params'] = {
+                        'forecast_mean': _span_p,
+                        'mode': 'span_convolved',
+                        'promoted_source': mc_resolved.source if mc_resolved else 'unknown',
+                    }
+                    subject_result['promoted_source'] = mc_resolved.source if mc_resolved else 'best_available'
+
+                    # Per-source curves via per-source span convolution
+                    # Build topology once, reuse for point-estimate and MC
+                    _mc_topo = _build_span_topology(
+                        graph_data, query_from_node, query_to_node)
+                    source_curve_results: Dict[str, Any] = {}
+                    for src_name in ('analytic', 'analytic_be', 'bayesian'):
+                        src_kernel = compose_span_kernel_for_source(
+                            graph=graph_data,
+                            x_node_id=query_from_node,
+                            y_node_id=query_to_node,
+                            source_name=src_name,
+                            is_window=is_window,
+                            max_tau=_curve_tau_max,
+                        )
+                        if src_kernel is None or src_kernel.span_p <= 0:
+                            continue
+
+                        s_curve = []
+                        for tau in range(0, _curve_tau_max + 1):
+                            rate = src_kernel.cdf_at(tau)
+                            s_curve.append({'tau_days': tau, 'model_rate': round(rate, 8)})
+
+                        src_entry: Dict[str, Any] = {
+                            'curve': s_curve,
+                            'params': {
+                                'forecast_mean': src_kernel.span_p,
+                                'source': src_name,
+                                'mode': 'span_convolved',
+                            },
+                        }
+
+                        # Per-source MC reconvolution for confidence bands
+                        if _mc_topo is not None:
+                            _src_rng = _np_bands.random.default_rng(
+                                hash(src_name) & 0xFFFFFFFF)
+                            _src_cdf, _src_p = mc_span_cdfs_for_source(
+                                topo=_mc_topo,
+                                graph=graph_data,
+                                source_name=src_name,
+                                is_window=is_window,
+                                max_tau=_curve_tau_max,
+                                num_draws=500,
+                                rng=_src_rng,
+                            )
+                            T_mc = min(_src_cdf.shape[1], _curve_tau_max + 1)
+                            # absolute rate = normalised_cdf * span_p
+                            abs_rates = _src_cdf[:, :T_mc] * _src_p[:, None]
+                            band_upper_arr = _np_bands.quantile(
+                                abs_rates, 0.95, axis=0)
+                            band_lower_arr = _np_bands.quantile(
+                                abs_rates, 0.05, axis=0)
+                            src_entry['band_upper'] = [
+                                {'tau_days': t, 'model_rate': round(
+                                    float(band_upper_arr[t]), 8)}
+                                for t in range(T_mc)]
+                            src_entry['band_lower'] = [
+                                {'tau_days': t, 'model_rate': round(
+                                    float(band_lower_arr[t]), 8)}
+                                for t in range(T_mc)]
+
+                        source_curve_results[src_name] = src_entry
+
+                    if source_curve_results:
+                        subject_result['source_model_curves'] = source_curve_results
+
+                    print(f"[v3] model curves: multi-hop convolved, "
+                          f"span_p={_span_p:.4f}, sources={list(source_curve_results.keys())}")
+
+                # ── Single-hop: resolve from last edge (existing logic) ─
+                elif mc_resolved and mc_resolved.latency.sigma > 0 and _curve_tau_max > 0:
                     lat = mc_resolved.latency
                     cdf_mu = lat.mu
                     cdf_sigma = lat.sigma
@@ -2140,173 +2286,158 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
                     cdf_mode = 'cohort_path' if scope == 'path' and mc_resolved.path_latency else 'window'
                     forecast_mean = mc_resolved.p_mean
 
-                    # Determine axis extent
-                    _tau_max_candidates = []
-                    if maturity_rows:
-                        _tau_max_candidates.append(maturity_rows[-1]['tau_days'])
-                    if axis_tau_max:
-                        _tau_max_candidates.append(axis_tau_max)
-                    try:
-                        from runner.lag_distribution_utils import log_normal_inverse_cdf
-                        _t95 = log_normal_inverse_cdf(0.95, cdf_mu, cdf_sigma) + cdf_onset
-                        _tau_max_candidates.append(int(math.ceil(_t95)))
-                    except Exception:
-                        pass
-                    _curve_tau_max = int(max(_tau_max_candidates)) if _tau_max_candidates else 0
+                    # Promoted model curve
+                    curve = []
+                    for tau in range(0, _curve_tau_max + 1):
+                        c = compute_completeness(float(tau), cdf_mu, cdf_sigma, cdf_onset)
+                        c = max(0.0, min(1.0, float(c)))
+                        curve.append({'tau_days': tau, 'model_rate': round(forecast_mean * c, 8)})
+                    subject_result['model_curve'] = curve
+                    subject_result['model_curve_params'] = {
+                        'mu': cdf_mu, 'sigma': cdf_sigma,
+                        'onset_delta_days': cdf_onset,
+                        'forecast_mean': forecast_mean,
+                        'mode': cdf_mode,
+                        'promoted_source': mc_resolved.source or 'unknown',
+                    }
+                    subject_result['promoted_source'] = mc_resolved.source or 'best_available'
 
-                    if _curve_tau_max > 0:
-                        # Promoted model curve
-                        curve = []
-                        for tau in range(0, _curve_tau_max + 1):
-                            c = compute_completeness(float(tau), cdf_mu, cdf_sigma, cdf_onset)
-                            c = max(0.0, min(1.0, float(c)))
-                            curve.append({'tau_days': tau, 'model_rate': round(forecast_mean * c, 8)})
-                        subject_result['model_curve'] = curve
-                        subject_result['model_curve_params'] = {
-                            'mu': cdf_mu, 'sigma': cdf_sigma,
-                            'onset_delta_days': cdf_onset,
-                            'forecast_mean': forecast_mean,
-                            'mode': cdf_mode,
-                            'promoted_source': mc_resolved.source or 'unknown',
+                    # Per-source model curves (analytic, analytic_be, bayesian)
+                    source_curve_results: Dict[str, Any] = {}
+                    _sc = dict(mc_resolved.source_curves)
+
+                    # Bayesian source: read from posterior on the edge
+                    # (canonical Bayes data, not model_vars copy)
+                    p_block = edge.get('p', {})
+                    lat_post = p_block.get('latency', {}).get('posterior', {})
+                    post_block = p_block.get('posterior', {})
+                    if lat_post.get('mu_mean'):
+                        if cdf_mode == 'cohort_path' and lat_post.get('path_mu_mean'):
+                            s_mu = lat_post['path_mu_mean']
+                            s_sigma = lat_post['path_sigma_mean']
+                            s_onset = lat_post.get('path_onset_delta_days', 0.0)
+                            s_mu_sd = lat_post.get('path_mu_sd')
+                            s_sigma_sd = lat_post.get('path_sigma_sd')
+                            s_onset_sd = lat_post.get('path_onset_sd')
+                        else:
+                            s_mu = lat_post['mu_mean']
+                            s_sigma = lat_post['sigma_mean']
+                            s_onset = lat_post.get('onset_delta_days', 0.0)
+                            s_mu_sd = lat_post.get('mu_sd')
+                            s_sigma_sd = lat_post.get('sigma_sd')
+                            s_onset_sd = lat_post.get('onset_sd')
+                        if not is_window and post_block.get('path_alpha'):
+                            _pa = post_block['path_alpha']
+                            _pb = post_block['path_beta']
+                            s_fm = _pa / (_pa + _pb) if (_pa + _pb) > 0 else forecast_mean
+                        elif post_block.get('alpha'):
+                            _pa = post_block['alpha']
+                            _pb = post_block['beta']
+                            s_fm = _pa / (_pa + _pb) if (_pa + _pb) > 0 else forecast_mean
+                        else:
+                            s_fm = forecast_mean
+                        bayes_entry: Dict[str, Any] = {
+                            'mu': s_mu, 'sigma': s_sigma,
+                            'onset_delta_days': s_onset,
+                            'forecast_mean': s_fm,
                         }
-                        subject_result['promoted_source'] = mc_resolved.source or 'best_available'
+                        if s_mu_sd is not None:
+                            bayes_entry['mu_sd'] = s_mu_sd
+                        if s_sigma_sd is not None:
+                            bayes_entry['sigma_sd'] = s_sigma_sd
+                        if s_onset_sd is not None:
+                            bayes_entry['onset_sd'] = s_onset_sd
+                        # p_stdev from posterior alpha/beta (for confidence bands)
+                        if not is_window and post_block.get('path_alpha'):
+                            _pa = float(post_block['path_alpha'])
+                            _pb = float(post_block['path_beta'])
+                            _s = _pa + _pb
+                            if _s > 0:
+                                bayes_entry['p_stdev'] = math.sqrt(_pa * _pb / (_s * _s * (_s + 1)))
+                        elif post_block.get('alpha'):
+                            _pa = float(post_block['alpha'])
+                            _pb = float(post_block['beta'])
+                            _s = _pa + _pb
+                            if _s > 0:
+                                bayes_entry['p_stdev'] = math.sqrt(_pa * _pb / (_s * _s * (_s + 1)))
+                        # onset_mu_corr from posterior
+                        _omc = lat_post.get('onset_mu_corr')
+                        if _omc is not None:
+                            bayes_entry['onset_mu_corr'] = float(_omc)
+                        _sc['bayesian'] = bayes_entry
 
-                        # Per-source model curves (analytic, analytic_be, bayesian)
-                        source_curve_results: Dict[str, Any] = {}
-                        _sc = dict(mc_resolved.source_curves)
+                    for src_name, src_params in _sc.items():
+                        s_mu = src_params.get('mu')
+                        s_sigma = src_params.get('sigma')
+                        s_onset = src_params.get('onset_delta_days', 0.0)
+                        s_fm = src_params.get('forecast_mean', forecast_mean)
+                        if s_mu is None or s_sigma is None:
+                            continue
 
-                        # Bayesian source: read from posterior on the edge
-                        # (canonical Bayes data, not model_vars copy)
-                        p_block = edge.get('p', {})
-                        lat_post = p_block.get('latency', {}).get('posterior', {})
-                        post_block = p_block.get('posterior', {})
-                        if lat_post.get('mu_mean'):
-                            if cdf_mode == 'cohort_path' and lat_post.get('path_mu_mean'):
-                                s_mu = lat_post['path_mu_mean']
-                                s_sigma = lat_post['path_sigma_mean']
-                                s_onset = lat_post.get('path_onset_delta_days', 0.0)
-                                s_mu_sd = lat_post.get('path_mu_sd')
-                                s_sigma_sd = lat_post.get('path_sigma_sd')
-                                s_onset_sd = lat_post.get('path_onset_sd')
+                        # Cohort path: use path params for non-bayesian sources
+                        if cdf_mode == 'cohort_path' and src_name != 'bayesian':
+                            s_pmu = src_params.get('path_mu')
+                            s_psigma = src_params.get('path_sigma')
+                            s_ponset = src_params.get('path_onset_delta_days')
+                            if s_pmu is not None and s_psigma is not None and s_psigma > 0:
+                                s_mu, s_sigma = s_pmu, s_psigma
+                                if s_ponset is not None:
+                                    s_onset = s_ponset
                             else:
-                                s_mu = lat_post['mu_mean']
-                                s_sigma = lat_post['sigma_mean']
-                                s_onset = lat_post.get('onset_delta_days', 0.0)
-                                s_mu_sd = lat_post.get('mu_sd')
-                                s_sigma_sd = lat_post.get('sigma_sd')
-                                s_onset_sd = lat_post.get('onset_sd')
-                            if not is_window and post_block.get('path_alpha'):
-                                _pa = post_block['path_alpha']
-                                _pb = post_block['path_beta']
-                                s_fm = _pa / (_pa + _pb) if (_pa + _pb) > 0 else forecast_mean
-                            elif post_block.get('alpha'):
-                                _pa = post_block['alpha']
-                                _pb = post_block['beta']
-                                s_fm = _pa / (_pa + _pb) if (_pa + _pb) > 0 else forecast_mean
-                            else:
-                                s_fm = forecast_mean
-                            bayes_entry: Dict[str, Any] = {
+                                continue
+
+                        s_curve = []
+                        for tau in range(0, _curve_tau_max + 1):
+                            sc = compute_completeness(float(tau), s_mu, s_sigma, s_onset)
+                            sc = max(0.0, min(1.0, float(sc)))
+                            s_curve.append({'tau_days': tau, 'model_rate': round(s_fm * sc, 8)})
+
+                        src_entry: Dict[str, Any] = {
+                            'curve': s_curve,
+                            'params': {
                                 'mu': s_mu, 'sigma': s_sigma,
                                 'onset_delta_days': s_onset,
                                 'forecast_mean': s_fm,
-                            }
-                            if s_mu_sd is not None:
-                                bayes_entry['mu_sd'] = s_mu_sd
-                            if s_sigma_sd is not None:
-                                bayes_entry['sigma_sd'] = s_sigma_sd
-                            if s_onset_sd is not None:
-                                bayes_entry['onset_sd'] = s_onset_sd
-                            # p_stdev from posterior alpha/beta (for confidence bands)
-                            if not is_window and post_block.get('path_alpha'):
-                                _pa = float(post_block['path_alpha'])
-                                _pb = float(post_block['path_beta'])
-                                _s = _pa + _pb
-                                if _s > 0:
-                                    bayes_entry['p_stdev'] = math.sqrt(_pa * _pb / (_s * _s * (_s + 1)))
-                            elif post_block.get('alpha'):
-                                _pa = float(post_block['alpha'])
-                                _pb = float(post_block['beta'])
-                                _s = _pa + _pb
-                                if _s > 0:
-                                    bayes_entry['p_stdev'] = math.sqrt(_pa * _pb / (_s * _s * (_s + 1)))
-                            # onset_mu_corr from posterior
-                            _omc = lat_post.get('onset_mu_corr')
-                            if _omc is not None:
-                                bayes_entry['onset_mu_corr'] = float(_omc)
-                            _sc['bayesian'] = bayes_entry
+                                'source': src_name,
+                            },
+                        }
 
-                        for src_name, src_params in _sc.items():
-                            s_mu = src_params.get('mu')
-                            s_sigma = src_params.get('sigma')
-                            s_onset = src_params.get('onset_delta_days', 0.0)
-                            s_fm = src_params.get('forecast_mean', forecast_mean)
-                            if s_mu is None or s_sigma is None:
-                                continue
+                        # Confidence bands
+                        _use_path = (cdf_mode == 'cohort_path')
+                        band_mu_sd = float(
+                            (src_params.get('path_mu_sd') if _use_path else None)
+                            or src_params.get('mu_sd') or 0.0)
+                        band_sigma_sd = float(
+                            (src_params.get('path_sigma_sd') if _use_path else None)
+                            or src_params.get('sigma_sd') or 0.0)
+                        band_onset_sd = float(
+                            (src_params.get('path_onset_sd') if _use_path else None)
+                            or src_params.get('onset_sd') or 0.0)
+                        band_p_sd = float(src_params.get('p_stdev', 0.0) or 0.0)
+                        band_onset_mu_corr = float(
+                            src_params.get('onset_mu_corr', 0.0) or 0.0)
 
-                            # Cohort path: use path params for non-bayesian sources
-                            if cdf_mode == 'cohort_path' and src_name != 'bayesian':
-                                s_pmu = src_params.get('path_mu')
-                                s_psigma = src_params.get('path_sigma')
-                                s_ponset = src_params.get('path_onset_delta_days')
-                                if s_pmu is not None and s_psigma is not None and s_psigma > 0:
-                                    s_mu, s_sigma = s_pmu, s_psigma
-                                    if s_ponset is not None:
-                                        s_onset = s_ponset
-                                else:
-                                    continue
+                        if band_mu_sd > 0:
+                            ages = list(range(0, _curve_tau_max + 1))
+                            upper_rates, lower_rates, _median_rates = compute_confidence_band(
+                                ages=ages,
+                                p=s_fm, mu=s_mu, sigma=s_sigma, onset=s_onset,
+                                p_sd=band_p_sd, mu_sd=band_mu_sd,
+                                sigma_sd=band_sigma_sd, onset_sd=band_onset_sd,
+                                onset_mu_corr=band_onset_mu_corr,
+                                level=0.90,
+                            )
+                            src_entry['band_upper'] = [
+                                {'tau_days': t, 'model_rate': round(r, 8)}
+                                for t, r in zip(ages, upper_rates)]
+                            src_entry['band_lower'] = [
+                                {'tau_days': t, 'model_rate': round(r, 8)}
+                                for t, r in zip(ages, lower_rates)]
 
-                            s_curve = []
-                            for tau in range(0, _curve_tau_max + 1):
-                                sc = compute_completeness(float(tau), s_mu, s_sigma, s_onset)
-                                sc = max(0.0, min(1.0, float(sc)))
-                                s_curve.append({'tau_days': tau, 'model_rate': round(s_fm * sc, 8)})
+                        source_curve_results[src_name] = src_entry
 
-                            src_entry: Dict[str, Any] = {
-                                'curve': s_curve,
-                                'params': {
-                                    'mu': s_mu, 'sigma': s_sigma,
-                                    'onset_delta_days': s_onset,
-                                    'forecast_mean': s_fm,
-                                    'source': src_name,
-                                },
-                            }
-
-                            # Confidence bands
-                            _use_path = (cdf_mode == 'cohort_path')
-                            band_mu_sd = float(
-                                (src_params.get('path_mu_sd') if _use_path else None)
-                                or src_params.get('mu_sd') or 0.0)
-                            band_sigma_sd = float(
-                                (src_params.get('path_sigma_sd') if _use_path else None)
-                                or src_params.get('sigma_sd') or 0.0)
-                            band_onset_sd = float(
-                                (src_params.get('path_onset_sd') if _use_path else None)
-                                or src_params.get('onset_sd') or 0.0)
-                            band_p_sd = float(src_params.get('p_stdev', 0.0) or 0.0)
-                            band_onset_mu_corr = float(
-                                src_params.get('onset_mu_corr', 0.0) or 0.0)
-
-                            if band_mu_sd > 0:
-                                ages = list(range(0, _curve_tau_max + 1))
-                                upper_rates, lower_rates, _median_rates = compute_confidence_band(
-                                    ages=ages,
-                                    p=s_fm, mu=s_mu, sigma=s_sigma, onset=s_onset,
-                                    p_sd=band_p_sd, mu_sd=band_mu_sd,
-                                    sigma_sd=band_sigma_sd, onset_sd=band_onset_sd,
-                                    onset_mu_corr=band_onset_mu_corr,
-                                    level=0.90,
-                                )
-                                src_entry['band_upper'] = [
-                                    {'tau_days': t, 'model_rate': round(r, 8)}
-                                    for t, r in zip(ages, upper_rates)]
-                                src_entry['band_lower'] = [
-                                    {'tau_days': t, 'model_rate': round(r, 8)}
-                                    for t, r in zip(ages, lower_rates)]
-
-                            source_curve_results[src_name] = src_entry
-
-                        if source_curve_results:
-                            subject_result['source_model_curves'] = source_curve_results
+                    if source_curve_results:
+                        subject_result['source_model_curves'] = source_curve_results
 
         # ── Synthetic future frames (forecast tail) ──────────────────
         if composed_frames and last_edge_id:
@@ -3188,8 +3319,17 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                 if has_window_slice or has_cohort_slice:
                     is_window = has_window_slice and not has_cohort_slice
                 else:
-                    query_dsl = data.get('query_dsl') or ''
-                    is_window = 'window(' in query_dsl or '.window(' in query_dsl
+                    # Check per-scenario effective_query_dsl first (carries
+                    # the temporal mode), then top-level query_dsl as fallback.
+                    _eff_dsl_mode = scenario.get('effective_query_dsl', '')
+                    _top_dsl_mode = data.get('query_dsl') or ''
+                    _combined_dsl = _eff_dsl_mode + ' ' + _top_dsl_mode
+                    if 'cohort(' in _combined_dsl:
+                        is_window = False
+                    elif 'window(' in _combined_dsl:
+                        is_window = True
+                    else:
+                        is_window = True  # default: window semantics
 
                 mu, sigma, onset, cdf_mode = _resolve_completeness_params(model_params, is_window)
 
@@ -3239,7 +3379,8 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                         )
                         _temporal = 'window' if is_window else 'cohort'
                         _graph_pref = graph.get('model_source_preference')
-                        _resolved = (_rmp(_edge_dict, scope='edge',
+                        _resolved = (_rmp(_edge_dict,
+                                         scope='edge' if is_window else 'path',
                                          temporal_mode=_temporal,
                                          graph_preference=_graph_pref)
                                      if _edge_dict else None)
@@ -5124,7 +5265,8 @@ def handle_stats_topo_pass(data: Dict[str, Any]) -> Dict[str, Any]:
         edge_dict = edges_by_uuid.get(ev.edge_uuid)
         if edge_dict is not None:
             _graph_pref = graph.get('model_source_preference')
-            resolved = resolve_model_params(edge_dict, scope='edge',
+            resolved = resolve_model_params(edge_dict,
+                                            scope='edge' if is_window else 'path',
                                             temporal_mode='window' if is_window else 'cohort',
                                             graph_preference=_graph_pref)
             if resolved and resolved.latency.sigma > 0:
@@ -5183,8 +5325,11 @@ def handle_stats_topo_pass(data: Dict[str, Any]) -> Dict[str, Any]:
                             class _FS:
                                 pass
                             fs = _FS()
-                            fs.completeness = float(ev.completeness or 0.0)
-                            fs.completeness_sd = None
+                            # Use engine's blended completeness (n-weighted
+                            # CDF at each cohort's eval_age, with posterior
+                            # uncertainty on latency params).
+                            fs.completeness = sweep.completeness_mean if sweep.completeness_mean is not None else ev.completeness
+                            fs.completeness_sd = sweep.completeness_sd if sweep.completeness_sd is not None else 0.0
                             fs.rate_conditioned = float(_np.median(rate_draws))
                             fs.rate_conditioned_sd = float(_np.std(rate_draws))
                             fs.p_conditioned = fs.rate_conditioned

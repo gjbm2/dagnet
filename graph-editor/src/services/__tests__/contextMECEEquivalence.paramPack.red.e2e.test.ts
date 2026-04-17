@@ -85,7 +85,9 @@ function expectPacksClose(a: Record<string, any>, b: Record<string, any>, tol = 
       const tolForKey =
         k.endsWith('.p.stdev') || k.endsWith('.p.evidence.stdev')
           ? 1e-4 // stdev is often rounded in the pipeline; keep tight but realistic
-          : tol;
+          : k.endsWith('.p.forecast.mean')
+            ? 1e-6 // forecast.mean is a weighted average (division) — IEEE 754 diffs up to ~1e-7
+            : tol;
       const extra =
         k.endsWith('.p.mean')
           ? `\nA: ${JSON.stringify(

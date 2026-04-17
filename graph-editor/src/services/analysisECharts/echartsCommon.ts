@@ -440,6 +440,18 @@ export function smoothRates(
   return data;
 }
 
+/**
+ * Darken a hex colour by mixing it toward black.
+ * factor=0 returns the original, factor=1 returns black.
+ */
+export function darkenHex(hex: string, factor: number): string {
+  const num = parseInt(hex.replace('#', ''), 16);
+  const r = Math.round(((num >> 16) & 0xff) * (1 - factor));
+  const g = Math.round(((num >> 8) & 0xff) * (1 - factor));
+  const b = Math.round((num & 0xff) * (1 - factor));
+  return `#${((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1)}`;
+}
+
 export function getScenarioTitleWithBasis(result: AnalysisResult, scenarioId: string): string {
   const name = getDimLabel(result.dimension_values, 'scenario_id', scenarioId);
   const basis = (result.dimension_values?.scenario_id?.[scenarioId] as any)?.probability_label;

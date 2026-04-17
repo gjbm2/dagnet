@@ -168,11 +168,28 @@ cd graph-editor && . venv/bin/activate
 DB_CONNECTION="$(grep DB_CONNECTION .env.local | cut -d= -f2-)" \
   python ../bayes/synth_gen.py --graph synth-simple-abc --write-files
 
+# 1b. Generate + enrich (adds model_vars via topo pass — needed for
+#     tests that check bayesian posteriors, e.g. test_be_topo_pass_parity)
+#     Requires Python BE running on localhost:9000.
+DB_CONNECTION="$(grep DB_CONNECTION .env.local | cut -d= -f2-)" \
+  python ../bayes/synth_gen.py --graph synth-simple-abc --write-files --enrich
+
 # 2. Run v2 analysis with topo pass and cache bypass
 cd .. && bash graph-ops/scripts/analyse.sh synth-simple-abc \
   "from(simple-a).to(simple-c).cohort(simple-a,12-Dec-25:21-Mar-26)" \
   --type cohort_maturity_v2 --topo-pass --no-snapshot-cache --format json
 ```
+
+**Freshness checking**: `synth_gen.py` performs a comprehensive
+freshness check before regenerating. It verifies truth file hash,
+graph JSON hash, event definition hashes, DB row integrity (non-empty
+`core_hash`), param file `query_signature` consistency, and enrichment
+state. Use `--bust-cache` to bypass the check and force regeneration.
+
+**Automated regen in tests**: Python tests using `@requires_synth`
+(from `graph-editor/lib/tests/conftest.py`) automatically trigger
+regen when the freshness check fails. See `bayes/TESTING_PLAYBOOK.md`
+for details.
 
 **Why `--topo-pass` is needed**: the CLI's aggregate step calls the
 same `fetchDataService.fetchItems` as the browser, but IDB is

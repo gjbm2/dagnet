@@ -350,7 +350,7 @@ class CommitHashGuardService {
         }
       }
 
-      const connectionName = edge.p?.connection || 'amplitude';
+      const connectionName = edge.p?.connection || graph?.defaultConnection || 'amplitude';
       const signature = await computeQuerySignature(
         { context: contextKeys.map(k => ({ key: k })), event_filters: {}, case: [] },
         connectionName,

@@ -641,7 +641,7 @@ def compute_conditioned_forecast(
         # Accumulate aggregate log-likelihood across all cohorts
         log_lik = np.zeros(S)
         for tau_i, n_i, k_i in evidence:
-            if n_i <= 0 or k_i < 0:
+            if n_i <= 0 or k_i <= 0:
                 continue
 
             # E_i per draw: effective exposure at this cohort's age.
@@ -838,6 +838,12 @@ class ForecastSweepResult:
     n_cohorts_conditioned: int = 0
     # Coordinate B per-cohort output (populated when eval_age is set)
     cohort_evals: Optional[List[CohortForecastAtEval]] = None
+    # Blended completeness: n-weighted CDF at each cohort's eval_age,
+    # with posterior uncertainty on (mu, sigma, onset). Populated when
+    # any cohort has eval_age set (coordinate B consumers: topo pass,
+    # asat, daily conversions).
+    completeness_mean: Optional[float] = None
+    completeness_sd: Optional[float] = None
     # Raw unconditioned draws — for consumers that need the prior
     # predictive (e.g. surprise gauge computes p × completeness per draw)
     p_draws: Optional[np.ndarray] = None          # (S,)
@@ -864,6 +870,7 @@ def _evaluate_cohort(
     apply_is: bool,
     loop_rng: np.random.Generator,
     _expit,
+    edge_cdf_arr: Optional[np.ndarray] = None,
 ) -> tuple:
     """Evaluate the population model for a single cohort.
 
@@ -916,14 +923,27 @@ def _evaluate_cohort(
     # Drift only affects p, not CDF (v2 line 839)
     cdf_i = cdf_arr.copy()
 
-    # IS conditioning (v2 lines 841-861)
+    # IS conditioning with SMC mutation (replaces pure IS resampling).
+    #
+    # Pure IS reweights a fixed set of prior draws. After many cohorts,
+    # all weight concentrates on one draw (ESS→1) — degenerate posterior.
+    # SMC adds a mutation step after resampling: perturb the resampled
+    # particles in logit space using the empirical posterior spread as
+    # the kernel width. This maintains draw diversity while respecting
+    # the evidence — the posterior concentrates naturally but draws fill
+    # the concentrated region properly.
+    #
+    # The mutation kernel width is the empirical SD of the resampled
+    # logit-p, scaled by _SMC_MUTATION_SCALE (0.5). Too large → over-
+    # dispersed (ignores evidence). Too small → degenerate (same as
+    # pure IS). 0.5 is a standard choice for random-walk Metropolis
+    # kernels in SMC literature.
+    _SMC_MUTATION_SCALE = 0.5
     is_ess = 0.0
     conditioned = False
     if apply_is:
         E_eff = max(E_i, k_i)
         _E_fail = E_eff - k_i
-        # v2 resamples unconditionally (no ESS guard) whenever
-        # there is meaningful evidence. Match that behaviour.
         if E_eff > 0 and a_i > 0 and _E_fail >= 1.0:
             p_i_clip = np.clip(p_i, 1e-15, 1 - 1e-15)
             log_w_i = (k_i * np.log(p_i_clip)
@@ -936,27 +956,48 @@ def _evaluate_cohort(
             p_i = p_i[resample_idx]
             cdf_i = cdf_i[resample_idx]
             is_ess = 1.0 / np.sum(w_i ** 2)
+
+            # SMC mutation: perturb resampled p in logit space.
+            # Kernel width = empirical SD of resampled logit-p × scale.
+            _logit_p = np.log(np.clip(p_i, 1e-10, 1 - 1e-10)
+                              / (1 - np.clip(p_i, 1e-10, 1 - 1e-10)))
+            _logit_sd = max(float(np.std(_logit_p)), 0.01)
+            _mutation = loop_rng.normal(0.0, _logit_sd * _SMC_MUTATION_SCALE, size=S)
+            p_i = _expit(_logit_p + _mutation)
+
             conditioned = True
 
     # Pop D: frontier survivors (v2 lines 863-886)
-    cdf_at_a = cdf_i[:, a_idx]
+    # For multi-hop, use edge-level CDF when available. Frontier
+    # survivors are from-node arrivals who haven't converted at the
+    # LAST EDGE yet. Their conversion timing is edge-level, not
+    # path-level (they've already completed upstream edges).
+    _pop_d_cdf = edge_cdf_arr[:S, :T] if edge_cdf_arr is not None else cdf_i
+    cdf_at_a = _pop_d_cdf[:, a_idx]
     remaining = max(N_i - k_i, 0.0)
     q_early = p_i[:, None] * cdf_at_a[:, None]
     q_early = np.clip(q_early, 0.0, 1 - 1e-10)
-    remaining_cdf = np.maximum(cdf_i - cdf_at_a[:, None], 0.0)
+    remaining_cdf = np.maximum(_pop_d_cdf - cdf_at_a[:, None], 0.0)
     q_late = (p_i[:, None] * remaining_cdf) / (1 - q_early)
     q_late = np.clip(q_late, 0.0, 1.0)
     # v2 default is binomial sampling (display_settings.continuous_forecast)
     Y_D = loop_rng.binomial(int(remaining), q_late)
 
     # Pop C: post-frontier upstream arrivals (v2 lines 888-898)
+    # Pop C arrivals have already traversed upstream edges — they arrive
+    # at the from-node and only need the EDGE-level CDF for conversion
+    # timing. Using the path CDF (cdf_i) underestimates their conversion
+    # rate because the path CDF includes upstream latency they've already
+    # completed. When edge_cdf_arr is provided (multi-hop), use it;
+    # otherwise fall back to cdf_i (single-hop, where path = edge).
     X_C = np.zeros((S, T), dtype=np.float64)
     Y_C = np.zeros((S, T), dtype=np.float64)
     if upstream_cdf_mc is not None and reach > 0:
         _up_scaled = a_pop * reach * upstream_cdf_mc
         _up_at_frontier = _up_scaled[:, a_idx:a_idx + 1]
         X_C = np.maximum(_up_scaled - _up_at_frontier, 0.0)
-        model_rate = p_i[:, None] * cdf_i
+        _pop_c_cdf = edge_cdf_arr[:S, :T] if edge_cdf_arr is not None else cdf_i
+        model_rate = p_i[:, None] * _pop_c_cdf
         model_rate = np.clip(model_rate, 0.0, 1.0)
         Y_C = X_C * model_rate
 
@@ -1002,6 +1043,7 @@ def compute_forecast_sweep(
     span_onset_sd: Optional[float] = None,
     span_onset_mu_corr: Optional[float] = None,
     det_norm_cdf: Optional[list] = None,
+    edge_cdf_arr: Optional[np.ndarray] = None,
 ) -> ForecastSweepResult:
     """Per-cohort population model sweep — generalised from v2.
 
@@ -1191,6 +1233,7 @@ def compute_forecast_sweep(
                 apply_is=apply_is,
                 loop_rng=_loop_rng,
                 _expit=_expit,
+                edge_cdf_arr=edge_cdf_arr,
             )
             if result is None:
                 continue
@@ -1239,6 +1282,23 @@ def compute_forecast_sweep(
     _det_y = np.median(Y_cond, axis=0)
     _det_x = np.median(X_cond, axis=0)
 
+    # Blended completeness: n-weighted CDF at each cohort's eval_age.
+    # cdf_arr[s, t] = CDF(t, mu_s, sigma_s, onset_s) per draw — this
+    # IS completeness, with full posterior uncertainty on latency params.
+    _comp_mean = None
+    _comp_sd = None
+    _comp_n = 0.0
+    _comp_draws = np.zeros(S)
+    for c in cohorts:
+        if c.eval_age is not None and c.x_frozen > 0:
+            t_i = min(c.eval_age, T - 1)
+            _comp_draws += c.x_frozen * cdf_arr[:S, t_i]
+            _comp_n += c.x_frozen
+    if _comp_n > 0:
+        _comp_draws /= _comp_n
+        _comp_mean = float(np.mean(_comp_draws))
+        _comp_sd = float(np.std(_comp_draws))
+
     return ForecastSweepResult(
         rate_draws=rate_conditioned,
         model_rate_draws=rate_model,
@@ -1247,6 +1307,8 @@ def compute_forecast_sweep(
         is_ess=is_ess,
         n_cohorts_conditioned=n_conditioned,
         cohort_evals=cohort_evals if cohort_evals else None,
+        completeness_mean=_comp_mean,
+        completeness_sd=_comp_sd,
         p_draws=p_draws,
         mu_draws=mu_draws,
         sigma_draws=sigma_draws,

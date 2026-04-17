@@ -1580,8 +1580,13 @@ def compute_cohort_maturity_rows(
             _fl = f"{fan_lower:.4f}" if fan_lower is not None else "null"
             print(f"[fan_diag] tau={tau} ev={_ev} mid={_mp} bucket_y/x={_bsy:.1f}/{_bsx:.1f} aug_y/x={total_y_aug:.1f}/{total_x_aug:.1f} fan=[{_fl},{_fu}]")
 
-        # Skip empty rows
-        if evidence_rate is None and midpoint is None and projected_rate is None:
+        # Skip rows with no evidence, no midpoint, no projection, AND no
+        # model values. Tau=0 often has model_fan_quantiles but no evidence;
+        # emitting it keeps v1 output aligned with v2.
+        has_model = (model_fan_quantiles is not None
+                     and model_fan_quantiles.get(tau) is not None)
+        if (evidence_rate is None and midpoint is None
+                and projected_rate is None and not has_model):
             continue
 
         row: Dict[str, Any] = {

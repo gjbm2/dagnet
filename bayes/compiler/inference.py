@@ -509,11 +509,12 @@ def _estimate_cohort_kappa(
         f_values.append(f_val)
         recency_weights.append(_recency_weight(date_key))
 
-    if len(k_values) < 5:
+    eff_sample_size = sum(recency_weights) if recency_weights else 0.0
+    if eff_sample_size < 5.0:
         diagnostics.append(
             f"  empirical_kappa {ev.edge_id[:8]}…: insufficient data "
-            f"({len(k_values)} cohorts after filtering, "
-            f"skipped {n_skipped_x} low-x, {n_skipped_f} immature)"
+            f"({len(k_values)} cohorts, eff_n={eff_sample_size:.1f} after "
+            f"recency weighting, skipped {n_skipped_x} low-x, {n_skipped_f} immature)"
         )
         return None
 

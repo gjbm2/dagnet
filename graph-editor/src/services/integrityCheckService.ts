@@ -3563,7 +3563,7 @@ export class IntegrityCheckService {
 
             const currentSig = await computeQuerySignature(
               { context: contextKeys.map((k: string) => ({ key: k })), event_filters: {}, case: [] },
-              edge.p?.connection || 'amplitude',
+              edge.p?.connection || graph?.defaultConnection || 'amplitude',
               graph, edge, [...new Set(contextKeys)].sort(),
               undefined, eventDefs,
             );

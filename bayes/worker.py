@@ -20,6 +20,8 @@ import os
 import time
 from datetime import datetime
 
+WORKER_VERSION = "0.9.0"
+
 
 def _noop_progress(stage: str, pct: int, detail: str = "") -> None:
     pass
@@ -2310,6 +2312,7 @@ def _build_result(
     timings["total_ms"] = duration_ms
     result = {
         "status": "failed" if error else "complete",
+        "version": WORKER_VERSION,
         "duration_ms": duration_ms,
         "timings": timings,
         "edges_fitted": len(edges) if not error else 0,

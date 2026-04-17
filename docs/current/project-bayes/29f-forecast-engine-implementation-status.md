@@ -20,7 +20,7 @@ divergence analysis added (§Codepath Divergence Analysis).
 | 5 | **In progress** | v3 row builder uses `compute_forecast_sweep` for MC population model. Parity test (`v2-v3-parity-test.sh`) green on synth-mirror-4step (17/17). Two critical fixes landed 16-Apr-26: span widening for single-hop cohort, upstream evidence fetch for empirical carrier. |
 | 6 | Done | CLI-based parity test (`v2-v3-parity-test.sh`) with data health checks, non-vacuousness gates, and 20% fan tolerance. 44 Python tests + 15 TS tests. |
 | 7 | Not started | Future enhancements (posterior covariance, asat projection). |
-| **G** | **Not started** | **Codepath generalisation** — unify topo pass and chart onto shared engine primitives. See §Codepath Divergence Analysis and §Generalisation Plan. |
+| **G** | **In progress** | **Codepath generalisation** — unify topo pass and chart onto shared engine primitives. G.0 done, G.1 done, G.1b done (daily conversions), G.3 done, D20 fixed. See §Codepath Divergence Analysis and §Generalisation Plan. |
 
 ---
 
@@ -130,7 +130,7 @@ This workstream took far longer than it should have. The root causes:
 | D17 | v3 carrier falls to weak prior (missing upstream evidence fetch) | **Fixed 16-Apr-26** — shared `_fetch_upstream_observations` |
 | D18 | CLI topo pass does not scope cohorts to query DSL — IS conditioning uses full param file instead of DSL-windowed cohorts. All CLI topo pass outputs (param-pack, analyse --topo-pass, hydrate) affected. | **Fixed 16-Apr-26** — `runCliTopoPass` now parses DSL date range, builds `edge_contexts` with `scoped_cohorts`, sends `query_mode`. |
 | D19 | Deterministic `forecast_y` diverges from MC `midpoint` for multi-hop-narrow. Root cause: `_compute_det_totals` uses unconditioned p (0.72) while MC uses IS-conditioned p (0.016). 45× difference in effective p. Pre-existing in v2. Blocks G.4. | **Open.** See `29f-defect-d19-det-mc-pop-c-divergence.md`. |
-| D20 | Weak prior (kappa=20 or Beta(1,1)) in forecast sweep allows IS conditioning to overwhelm for per-cohort evaluation. Single young cohort with 1247 trials swings posterior from 10% to 50%. Manifests in daily conversions; stable in aggregate consumers (chart, topo pass). | **Open.** See `29f-defect-d20-weak-prior-is-collapse.md`. |
+| D20 | Weak prior (kappa=20 or Beta(1,1)) in forecast sweep allows IS conditioning to overwhelm for per-cohort evaluation. Single young cohort with 1247 trials swings posterior from 10% to 50%. Manifests in daily conversions; stable in aggregate consumers (chart, topo pass). | **Fixed 16-Apr-26** — model resolver derives alpha/beta from evidence n/k; kappa=200 fallback. See `29f-defect-d20-weak-prior-is-collapse.md`. |
 
 ---
 
@@ -635,7 +635,7 @@ G.0 (extract _evaluate_cohort)              ✅ DONE
   │
   ├── G.1 (wire topo pass — coord B)       ✅ DONE
   │
-  ├── G.1b (wire daily conversions — coord B, per-cohort)  ← see guidance note
+  ├── G.1b (wire daily conversions — coord B, per-cohort)  ✅ DONE
   │
   ├── G.2 (improve carrier fidelity)       ← independent, not blocking
   │
@@ -644,7 +644,7 @@ G.0 (extract _evaluate_cohort)              ✅ DONE
   ├── G.4 (retire _compute_det_totals + annotate_rows)
   │     └── prerequisite: D19 (det/MC Pop C divergence)
   │
-  ├── D20 (weak prior fix)                 ✅ DONE
+  ├── D20 (weak prior fix)                 ✅ FIXED
   │
   └── G.5 (centralise evidence aggregation) ← lowest priority
 ```

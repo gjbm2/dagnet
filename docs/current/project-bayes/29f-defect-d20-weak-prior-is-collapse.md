@@ -1,7 +1,8 @@
 # D20: Weak prior in forecast sweep allows IS conditioning to overwhelm
 
 **Date**: 16-Apr-26
-**Status**: Open.
+**Resolved**: 16-Apr-26 — model resolver derives alpha/beta from evidence n/k (kappa=200 fallback).
+**Status**: **Fixed.**
 **Severity**: High for per-cohort consumers (daily conversions).
 Lower for aggregate consumers (cohort maturity chart, topo pass)
 where many cohorts stabilise the IS.

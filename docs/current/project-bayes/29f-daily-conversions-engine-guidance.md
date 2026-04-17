@@ -1,8 +1,9 @@
 # Daily Conversions: Engine Integration Guidance
 
 **Date**: 16-Apr-26
+**Implemented**: 16-Apr-26 — G.1b landed. Daily conversions handler in `api_handlers.py` (lines ~3198-3450) calls `compute_forecast_sweep` per edge, reads `cohort_evals` for per-cohort projected_y/completeness. Fallback to legacy `annotate_rows` if engine fails.
 **Context**: doc 29f §Phase G, G.1b
-**Audience**: whoever wires daily conversions to the forecast engine
+**Audience**: maintainers of the daily conversions forecast integration
 
 ---
 

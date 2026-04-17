@@ -52,6 +52,7 @@ import { LATENCY_HORIZON_DECIMAL_PLACES } from '../constants/latency';
 import { roundToDecimalPlaces } from '../utils/rounding';
 import { forecastingSettingsService } from './forecastingSettingsService';
 import { enumerateFetchTargets } from './fetchTargetEnumerationService';
+import { buildItemKey } from './fetchPlanTypes';
 import { rateLimiter, getEffectiveRateLimitCooloffMinutes } from './rateLimiter';
 import { startRateLimitCountdown } from './rateLimitCountdownService';
 
@@ -158,6 +159,13 @@ export interface FetchOptions {
    * module boundaries in vitest's worker pool.
    */
   queryDate?: Date;
+
+  /**
+   * Pre-computed query signatures from the fetch planner, keyed by FetchPlan itemKey.
+   * When provided, the from-file path passes the matching signature to getParameterFromFile
+   * so the asat evidence path can use it for snapshot DB lookups.
+   */
+  querySignatures?: Record<string, string>;
 }
 
 export interface FetchResult {
@@ -607,6 +615,16 @@ async function fetchSingleItemInternal(
     if (mode === 'from-file') {
       // ===== FROM FILE: No API call, just load from file =====
       if (item.type === 'parameter') {
+        // Look up pre-computed planner signature for this item (if available).
+        const itemKey = buildItemKey({
+          type: item.type,
+          objectId: item.objectId,
+          targetId: item.targetId,
+          slot: item.paramSlot,
+          conditionalIndex: item.conditionalIndex,
+        });
+        const plannerSignature = options?.querySignatures?.[itemKey];
+
         const result = await dataOperationsService.getParameterFromFile({
           paramId: item.objectId,
           edgeId: item.targetId,
@@ -618,6 +636,7 @@ async function fetchSingleItemInternal(
           includePermissions: options?.includePermissions === true,
           copyOptions: options?.copyOptions,
           suppressMissingDataToast: options?.suppressMissingDataToast === true,
+          querySignature: plannerSignature,
         });
         // If getParameterFromFile returned a failure or warning, propagate it
         if (!result.success) {
@@ -2153,9 +2172,9 @@ export async function runStage2EnhancementsAndInboundN(
                   `BE topo pass completed in ${beElapsed}ms (fast path, single render)`,
                 );
               }
-            } else if (beEntries === null) {
-              // BE failed — use FE results only
-              finalGraph = await applyEdgeValues(finalGraph, feEdgeValues, null, 'FE only (BE failed)');
+            } else if (beEntries === null || beEntries.length === 0) {
+              // BE failed or returned no results — use FE results only
+              finalGraph = await applyEdgeValues(finalGraph, feEdgeValues, null, 'FE only (BE empty/failed)');
             } else {
               // SLOW PATH: BE didn't respond in 500ms — apply FE now, await BE up to 3s
               finalGraph = await applyEdgeValues(finalGraph, feEdgeValues, null, 'FE (BE pending)');

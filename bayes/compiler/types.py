@@ -168,6 +168,7 @@ class WindowObservation:
     k: int
     slice_dsl: str
     completeness: float = 1.0     # edge-level, pre-computed from fixed latency
+    recency_weight: float = 1.0   # exp(-ln2 * age / half_life), 1.0 = most recent
 
 
 @dataclass
@@ -178,6 +179,7 @@ class CohortDailyObs:
     k: int
     age_days: float
     completeness: float = 1.0     # path-level, pre-computed from fixed latency
+    recency_weight: float = 1.0   # exp(-ln2 * age / half_life), 1.0 = most recent
 
 
 @dataclass
@@ -367,7 +369,8 @@ class EdgeEvidence:
 
         def _daily_dict(d: 'CohortDailyObs') -> dict:
             return {"date": d.date, "n": d.n, "k": d.k, "age": d.age_days,
-                    "compl": round(d.completeness, 6)}
+                    "compl": round(d.completeness, 6),
+                    "recency": round(d.recency_weight, 6)}
 
         def _co_dict(co: 'CohortObservation') -> dict:
             return {
@@ -378,7 +381,8 @@ class EdgeEvidence:
 
         def _wo_dict(wo: 'WindowObservation') -> dict:
             return {"n": wo.n, "k": wo.k, "dsl": wo.slice_dsl,
-                    "compl": round(wo.completeness, 6)}
+                    "compl": round(wo.completeness, 6),
+                    "recency": round(wo.recency_weight, 6)}
 
         canonical = {
             "edge_id": self.edge_id,

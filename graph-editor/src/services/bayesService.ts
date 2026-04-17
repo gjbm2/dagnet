@@ -47,7 +47,9 @@ interface BayesStatusResult {
   progress?: BayesProgress;
   result?: {
     status: string;
+    version?: string;
     duration_ms: number;
+    timings?: Record<string, number>;
     edges_fitted: number;
     edges_skipped: number;
     quality: { max_rhat: number; min_ess: number };

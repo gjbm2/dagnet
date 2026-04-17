@@ -9,6 +9,7 @@
 - [ ] Workspace prefixes handled correctly (IDB: `repo-branch-fileId`, FileRegistry: `fileId`)
 - [ ] Index files at root with plural names (`nodes-index.yaml`, `parameters-index.yaml`)
 - [ ] Tests updated, new tests for bug fixes, relevant tests passing
+- [ ] If test uses synth data: uses `@requires_synth` from conftest (not copy-pasted boilerplate)
 - [ ] All UI entry points use the same code path
 
 ## Pre-Completion Verification (MANDATORY before saying "done" or "fixed")

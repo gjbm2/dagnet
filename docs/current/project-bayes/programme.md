@@ -108,6 +108,17 @@ data-constrained. Single-source validation:
   from previous cohort posterior bypassed Phase 1. Removed
   `cohort_latency_warm` override; all Phase 2 priors now derive
   from Phase 1. See doc 26.
+
+**v1/v2 parity test tolerances increased (17-Apr-26)**:
+The following parity tests have relaxed tolerances because v1 and v2
+use different population model splicing and epoch handling, producing
+genuine algorithmic divergence (up to ~10%) that is accepted:
+- `test_doc31_parity.py::TestCohortMaturityV1V2Parity::test_single_edge_cohort_mode_parity` — 15% relative tolerance on MC fields, absolute-only below 0.05
+- `test_doc31_parity.py::TestCohortMaturityV1V2Parity::test_single_edge_window_mode_parity` — 15% relative tolerance on MC + evidence-derived fields, first 30% of rows skipped (epoch A transition)
+- `test_v2_v3_parity.py::TestProdGraphCohortParity::test_single_edge_cohort_midpoint` — diverges >10% at 45 tau values (known, skip-listed)
+These should be revisited when v1 is retired and v3 becomes the sole
+implementation — at that point the parity tests become v2/v3 only and
+tolerances can be tightened.
 - ~~Softplus onset leakage~~ — **FIXED 30-Mar-26**. Standard
   softplus leaked CDF mass below onset, enabling degenerate mode.
   Sharpened softplus (k=5) collapses the ridge.

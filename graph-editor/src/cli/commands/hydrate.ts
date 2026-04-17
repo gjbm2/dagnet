@@ -50,9 +50,9 @@ export async function runHydrate(): Promise<void> {
   }
   const { bundle, queryDsl, flags } = ctx;
 
-  if (flags.help || !queryDsl) {
+  if (!queryDsl) {
     console.error(USAGE);
-    process.exit(flags.help ? 0 : 1);
+    process.exit(1);
   }
 
   // Aggregate + FE LAG pass (same as param-pack)

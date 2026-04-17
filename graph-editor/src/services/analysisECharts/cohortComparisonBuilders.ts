@@ -14,6 +14,7 @@ import {
   getDimOrder,
   wrapAxisLabel,
   getScenarioTitleWithBasis,
+  darkenHex,
 } from './echartsCommon';
 
 // ─── Band fill patterns ─────────────────────────────────────────────────────
@@ -264,9 +265,11 @@ export function buildCohortMaturityEChartsOption(
     smooth?: boolean;
     emphasis?: any;
     showInLegend?: boolean;
+    darken?: boolean;
   }): any | null => {
     if (args.data.length === 0) return null;
     const inLegend = args.showInLegend !== false && !!args.name;
+    const lineColour = (args.darken !== false && args.colour) ? darkenHex(args.colour, 0.3) : args.colour;
     return {
       id: args.id,
       ...(args.name ? { name: args.name } : {}),
@@ -275,8 +278,8 @@ export function buildCohortMaturityEChartsOption(
       symbolSize: 6,
       smooth: args.smooth ?? (settings.smooth || false),
       connectNulls: false,
-      lineStyle: { width: 2, color: args.colour, type: args.lineType, opacity: args.opacity ?? 1 },
-      itemStyle: { color: args.colour, opacity: args.opacity ?? 1 },
+      lineStyle: { width: 2, color: lineColour, type: args.lineType, opacity: args.opacity ?? 1 },
+      itemStyle: { color: lineColour, opacity: args.opacity ?? 1 },
       emphasis: args.emphasis ?? { focus: 'series' },
       ...(args.areaStyle ? { areaStyle: args.areaStyle } : {}),
       ...(args.z !== undefined ? { z: args.z } : {}),
@@ -634,6 +637,8 @@ export function buildCohortMaturityEChartsOption(
 
   // Model CDF overlay
   const modelCurves = result?.metadata?.model_curves;
+  let promotedBandRendered = false;
+  let promotedSource: string = 'analytic';
   if (modelCurves && typeof modelCurves === 'object') {
     const entry = modelCurves[effectiveSubjectId];
     // ── Model overlay styling ──────────────────────────────────────────
@@ -662,7 +667,7 @@ export function buildCohortMaturityEChartsOption(
       return m === 'f';
     });
     const showPromoted = hasForecastOnlyScenario || settings.show_model_promoted !== false;
-    const promotedSource: string = entry?.params?.promoted_source || entry?.promotedSource || 'analytic';
+    promotedSource = entry?.params?.promoted_source || entry?.promotedSource || 'analytic';
     const isBayesianPromoted = promotedSource === 'bayesian';
 
     if (showPromoted && entry?.curve && Array.isArray(entry.curve) && entry.curve.length > 0) {
@@ -734,7 +739,7 @@ export function buildCohortMaturityEChartsOption(
       if (srcWithBands?.band_upper) bandUpper = srcWithBands.band_upper;
       if (srcWithBands?.band_lower) bandLower = srcWithBands.band_lower;
     }
-    let promotedBandRendered = false;
+    promotedBandRendered = false;
     const bandStroke = c.text === '#e0e0e0' ? 'rgba(156,163,175,0.45)' : 'rgba(107,114,128,0.40)';
     if (Array.isArray(bandUpper) && bandUpper.length > 0 && Array.isArray(bandLower) && bandLower.length > 0) {
       const upperPts = bandUpper
@@ -902,13 +907,12 @@ export function buildCohortMaturityEChartsOption(
 
   }
 
-  // Y-axis max from data with headroom.
-  // For stacked band series, the visual max is lower + delta — account for
-  // that by checking the raw upper band data (pre-delta) if present.
+  // Y-axis max: scan ONLY rendered series in seriesOut.  Everything in
+  // seriesOut is visible; everything not in seriesOut is hidden.  No raw
+  // metadata scan — the axis adapts purely to what's on screen.
   let maxRate = 0;
   for (const s of seriesOut) {
-    if (s.id === 'bayes_band') continue; // handled below via raw upper data
-    // Fan series data is [tau, upper, lower] arrays — check index 1 (upper).
+    // Fan series: [tau, upper, lower] — check upper (index 1)
     if (typeof s.id === 'string' && s.id.endsWith('::fan')) {
       for (const d of (s.data || [])) {
         const v = Array.isArray(d) ? d[1] : undefined;
@@ -916,32 +920,25 @@ export function buildCohortMaturityEChartsOption(
       }
       continue;
     }
+    // Band series (bayes_band, band_*): custom render [tau, upper, lower]
+    if (s.id === 'bayes_band' || (typeof s.id === 'string' && s.id.startsWith('band_'))) {
+      for (const d of (s.data || [])) {
+        const v = Array.isArray(d) ? d[1] : undefined;
+        if (typeof v === 'number' && Number.isFinite(v) && v > maxRate) maxRate = v;
+      }
+      continue;
+    }
+    // Standard series: { value: [x, y] }
     for (const d of (s.data || [])) {
       const v = d?.value?.[1];
       if (typeof v === 'number' && Number.isFinite(v) && v > maxRate) maxRate = v;
     }
   }
-  // Include the actual Bayes band upper envelope (not the delta) in yMax.
-  if (modelCurves && typeof modelCurves === 'object') {
-    const bandEntry = modelCurves[effectiveSubjectId];
-    // Legacy band
-    const rawUpper = bandEntry?.bayesBandUpper;
-    if (Array.isArray(rawUpper)) {
-      for (const p of rawUpper) {
-        const v = p?.model_rate;
-        if (typeof v === 'number' && Number.isFinite(v) && v > maxRate) maxRate = v;
-      }
-    }
-    // Per-source Bayesian band
-    const srcBayes = bandEntry?.sourceModelCurves?.bayesian;
-    if (srcBayes?.band_upper && Array.isArray(srcBayes.band_upper)) {
-      for (const p of srcBayes.band_upper) {
-        const v = p?.model_rate;
-        if (typeof v === 'number' && Number.isFinite(v) && v > maxRate) maxRate = v;
-      }
-    }
-  }
-  const yMaxAuto = Math.min(1.0, Math.max(0.05, Math.ceil((maxRate * 1.2) * 20) / 20));
+  // Adaptive grid: 1% steps below 10%, 5% steps above.
+  // Prevents excessive headroom on small values (e.g. 5% data → 10% axis).
+  const _headroom = maxRate * 1.15;
+  const _grid = _headroom < 0.10 ? 100 : 20;
+  const yMaxAuto = Math.min(1.0, Math.max(0.02, Math.ceil(_headroom * _grid) / _grid));
   const yMaxSetting = settings.rate_extent ?? settings.y_axis_max;
   const yMax = (yMaxSetting && yMaxSetting !== 'auto' && Number.isFinite(Number(yMaxSetting)))
     ? Number(yMaxSetting) : yMaxAuto;

@@ -366,6 +366,120 @@ def compose_span_kernel(
     )
 
 
+def _extract_edge_params_for_source(
+    edge_data: Dict, source_name: str, is_window: bool,
+) -> Optional[Tuple[float, float, float, float]]:
+    """Extract (p, mu, sigma, onset) for a specific model_var source.
+
+    Returns None if the source has no usable params on this edge,
+    in which case the caller should fall back to the promoted params.
+    """
+    p_data = edge_data.get('p', {})
+    model_vars = p_data.get('model_vars', [])
+    mv_entry = None
+    for mv in model_vars:
+        if mv.get('source') == source_name:
+            mv_entry = mv
+            break
+    if mv_entry is None:
+        return None
+
+    mv_lat = mv_entry.get('latency') or {}
+    mv_prob = mv_entry.get('probability') or {}
+
+    # p from this source's probability block
+    edge_p = mv_prob.get('mean', 0)
+    if not isinstance(edge_p, (int, float)) or edge_p <= 0:
+        # Fall back to posterior alpha/beta if available
+        prob_posterior = p_data.get('posterior', {})
+        alpha = prob_posterior.get('alpha', 0)
+        beta = prob_posterior.get('beta', 0)
+        if isinstance(alpha, (int, float)) and isinstance(beta, (int, float)) and alpha > 0 and beta > 0:
+            edge_p = alpha / (alpha + beta)
+        else:
+            forecast = p_data.get('forecast', {})
+            edge_p = forecast.get('mean', 0) or p_data.get('value', 0) or 0.0
+
+    # Bayesian source: prefer posterior means over model_var copy
+    if source_name == 'bayesian':
+        posterior = p_data.get('latency', {}).get('posterior', {})
+        prob_post = p_data.get('posterior', {})
+        if posterior.get('mu_mean'):
+            mu = float(posterior['mu_mean'])
+            sigma = float(posterior.get('sigma_mean', 0))
+            onset = float(posterior.get('onset_delta_days', 0) or 0)
+            # p from posterior alpha/beta
+            alpha = prob_post.get('alpha', 0)
+            beta = prob_post.get('beta', 0)
+            if isinstance(alpha, (int, float)) and isinstance(beta, (int, float)) and alpha > 0 and beta > 0:
+                edge_p = float(alpha) / (float(alpha) + float(beta))
+            if sigma > 0:
+                return (float(min(edge_p, 1.0)), mu, sigma, onset)
+
+    # Latency from the model_var
+    raw_mu = mv_lat.get('mu')
+    raw_sigma = mv_lat.get('sigma')
+    has_latency = (
+        isinstance(raw_mu, (int, float)) and raw_mu != 0
+        and isinstance(raw_sigma, (int, float)) and raw_sigma > 0
+    )
+    if has_latency:
+        mu = float(raw_mu)
+        sigma = float(raw_sigma)
+        onset = float(mv_lat.get('onset_delta_days', 0) or 0)
+    else:
+        # No latency: pure probability gate
+        mu, sigma, onset = 0.0, 0.0, 0.0
+
+    if not isinstance(edge_p, (int, float)) or edge_p <= 0:
+        edge_p = 0.0
+
+    return (float(min(edge_p, 1.0)), float(mu), float(sigma), float(onset))
+
+
+def compose_span_kernel_for_source(
+    graph: Dict[str, Any],
+    x_node_id: str,
+    y_node_id: str,
+    source_name: str,
+    is_window: bool,
+    max_tau: int = 400,
+) -> Optional[SpanKernel]:
+    """Compose the x→y span kernel using a specific model source's params.
+
+    For each edge, reads (p, mu, sigma, onset) from the named model_var
+    source (e.g. 'analytic', 'analytic_be', 'bayesian'). Falls back to
+    the promoted/default params if the source is missing on an edge.
+
+    Returns None if no path exists or the kernel is degenerate.
+    """
+    topo = _build_span_topology(graph, x_node_id, y_node_id)
+    if topo is None:
+        return None
+
+    edge_params: Dict[Tuple[str, str], Tuple[float, float, float, float]] = {}
+    for from_id, to_id, e in topo.edge_list:
+        source_params = _extract_edge_params_for_source(e, source_name, is_window)
+        if source_params is not None:
+            edge_params[(from_id, to_id)] = source_params
+        else:
+            # Fall back to promoted params for this edge
+            edge_params[(from_id, to_id)] = _extract_edge_params(e, is_window)
+
+    K = _run_dp(topo, edge_params, max_tau)
+    span_p = float(K[-1]) if len(K) > 0 else 0.0
+    if span_p <= 0:
+        return None
+    density = np.diff(K, prepend=0.0)
+
+    return SpanKernel(
+        density=density,
+        K=K,
+        span_p=span_p,
+        max_tau=max_tau,
+    )
+
+
 def mc_span_cdfs(
     topo: SpanTopology,
     graph: Dict[str, Any],
@@ -488,6 +602,130 @@ def mc_span_cdfs(
         p_s[s] = span_p_draw
 
         # Normalise to [0, 1] CDF for the row builder
+        if span_p_draw > 0:
+            cdf_arr[s, :] = K / span_p_draw
+        else:
+            cdf_arr[s, :] = 0.0
+
+    return cdf_arr, p_s
+
+
+def _extract_edge_sds_for_source(
+    edge_data: Dict, source_name: str, mean_sigma: float,
+) -> Tuple[float, float, float, float]:
+    """Extract (p_sd, mu_sd, sigma_sd, onset_sd) for a specific source.
+
+    Falls back to posterior/promoted SDs when the source's own SDs are
+    unavailable (same cascade as mc_span_cdfs but scoped to source).
+    """
+    p_data = edge_data.get('p', {})
+    prob_posterior = p_data.get('posterior', {})
+
+    # p SD from alpha/beta (shared across sources)
+    alpha = prob_posterior.get('alpha', 0)
+    beta = prob_posterior.get('beta', 0)
+    if isinstance(alpha, (int, float)) and isinstance(beta, (int, float)) and alpha > 0 and beta > 0:
+        s = float(alpha) + float(beta)
+        p_sd = math.sqrt(float(alpha) * float(beta) / (s * s * (s + 1)))
+    else:
+        p_sd = 0.05
+
+    # Non-latency edge: zero latency SDs
+    if mean_sigma <= 0:
+        return (float(p_sd), 0.0, 0.0, 0.0)
+
+    # Find the source's model_var for latency SDs
+    mv_lat: Dict = {}
+    for mv in p_data.get('model_vars', []):
+        if mv.get('source') == source_name:
+            mv_lat = mv.get('latency', {}) or {}
+            break
+
+    # Source-specific SDs, falling back to posterior, then promoted
+    latency = p_data.get('latency', {})
+    posterior = latency.get('posterior', {})
+
+    mu_sd = mv_lat.get('mu_sd') or posterior.get('mu_sd') or latency.get('promoted_mu_sd') or 0.0
+    sigma_sd = mv_lat.get('sigma_sd') or posterior.get('sigma_sd') or latency.get('promoted_sigma_sd') or 0.0
+    onset_sd = mv_lat.get('onset_sd') or posterior.get('onset_sd') or latency.get('promoted_onset_sd') or 0.0
+    if not isinstance(mu_sd, (int, float)):
+        mu_sd = 0.0
+    if not isinstance(sigma_sd, (int, float)):
+        sigma_sd = 0.0
+    if not isinstance(onset_sd, (int, float)):
+        onset_sd = 0.0
+
+    return (float(p_sd), float(mu_sd), float(sigma_sd), float(onset_sd))
+
+
+def mc_span_cdfs_for_source(
+    topo: SpanTopology,
+    graph: Dict[str, Any],
+    source_name: str,
+    is_window: bool,
+    max_tau: int,
+    num_draws: int,
+    rng: np.random.Generator,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Per-source MC reconvolution of the span kernel.
+
+    Same algorithm as mc_span_cdfs but uses the named source's
+    point-estimate params as means and that source's SDs for draws.
+
+    Returns (cdf_arr, p_s) — same contract as mc_span_cdfs.
+    """
+    T = max_tau + 1
+
+    edge_keys: List[Tuple[str, str]] = []
+    edge_means: List[Tuple[float, float, float, float]] = []
+    edge_sds: List[Tuple[float, float, float, float]] = []
+
+    for from_id, to_id, e in topo.edge_list:
+        src_params = _extract_edge_params_for_source(e, source_name, is_window)
+        if src_params is not None:
+            p, mu, sigma, onset = src_params
+        else:
+            p, mu, sigma, onset = _extract_edge_params(e, is_window)
+
+        edge_keys.append((from_id, to_id))
+        edge_means.append((p, mu, sigma, onset))
+        edge_sds.append(_extract_edge_sds_for_source(e, source_name, sigma))
+
+    n_edges = len(edge_keys)
+    means_arr = np.array(edge_means)
+    sds_arr = np.array(edge_sds)
+
+    draws = rng.normal(
+        loc=means_arr[None, :, :],
+        scale=sds_arr[None, :, :],
+        size=(num_draws, n_edges, 4),
+    )
+
+    # Clip to valid ranges
+    draws[:, :, 0] = np.clip(draws[:, :, 0], 1e-6, 1 - 1e-6)
+    _latency_mask = means_arr[None, :, 2] > 0
+    draws[:, :, 2] = np.where(
+        _latency_mask,
+        np.clip(draws[:, :, 2], 0.01, 20.0),
+        0.0,
+    )
+
+    cdf_arr = np.zeros((num_draws, T), dtype=np.float64)
+    p_s = np.zeros(num_draws, dtype=np.float64)
+
+    for s in range(num_draws):
+        params: Dict[Tuple[str, str], Tuple[float, float, float, float]] = {}
+        for i, key in enumerate(edge_keys):
+            params[key] = (
+                float(draws[s, i, 0]),
+                float(draws[s, i, 1]),
+                float(draws[s, i, 2]),
+                float(draws[s, i, 3]),
+            )
+        K = _run_dp(topo, params, max_tau)
+        span_p_draw = float(K[-1]) if len(K) > 0 else 0.0
+        p_s[s] = span_p_draw
+
         if span_p_draw > 0:
             cdf_arr[s, :] = K / span_p_draw
         else:

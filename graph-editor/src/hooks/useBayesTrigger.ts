@@ -577,7 +577,7 @@ export function useBayesTrigger(computeMode: BayesComputeMode = 'local') {
         const r = finalStatus.result as Record<string, unknown> | undefined;
         const ver = r?.version ?? 'unknown';
         const timings = r?.timings as Record<string, number> | undefined;
-        const timingSummary = timings ? ` | neon=${timings.neon_ms}ms fitting=${timings.fitting_ms}ms total=${timings.total_ms}ms` : '';
+        const timingSummary = timings ? ` | neon=${timings.neon_ms}ms sampling=${timings.sampling_ms}ms total=${timings.total_ms}ms` : '';
         sessionLogService.success('bayes', 'BAYES_DEV_COMPLETE', `Job ${jobId} complete (v${ver}${timingSummary})`, JSON.stringify(finalStatus.result, null, 2), { jobId });
 
         // 10. Fetch and apply the Bayes patch file directly.

@@ -401,7 +401,13 @@ def _audit_harness_log(graph_name: str, job_label: str | None = None) -> dict:
 
 
 def assert_recovery(graph_name: str, parsed: dict, truth: dict) -> dict:
-    """Apply tiered assertions. Returns dict with pass/fail and details."""
+    """Apply tiered assertions. Returns dict with pass/fail and details.
+
+    Failures and warnings are structured dicts (see results_schema.make_failure).
+    Each has a `message` field for human-readable display.
+    """
+    from results_schema import make_failure
+
     testing = truth.get("testing", {})
     thresholds = {**DEFAULT_THRESHOLDS}
     # Per-graph overrides
@@ -416,15 +422,28 @@ def assert_recovery(graph_name: str, parsed: dict, truth: dict) -> dict:
     # Global convergence gates
     rhat = quality.get("rhat", 99)
     if rhat > thresholds["rhat_max"]:
-        failures.append(f"rhat={rhat:.4f} > {thresholds['rhat_max']}")
+        failures.append(make_failure(
+            "convergence",
+            f"rhat={rhat:.4f} > {thresholds['rhat_max']}",
+            metric="rhat", value=rhat, threshold=thresholds["rhat_max"],
+        ))
 
     ess = quality.get("ess", 0)
     if ess < thresholds["min_ess"]:
-        failures.append(f"ESS={ess} < {thresholds['min_ess']}")
+        failures.append(make_failure(
+            "convergence",
+            f"ESS={ess} < {thresholds['min_ess']}",
+            metric="ess", value=ess, threshold=thresholds["min_ess"],
+        ))
 
     converged = quality.get("converged_pct", 0)
     if converged < thresholds["min_converged_pct"]:
-        failures.append(f"converged={converged}% < {thresholds['min_converged_pct']}%")
+        failures.append(make_failure(
+            "convergence",
+            f"converged={converged}% < {thresholds['min_converged_pct']}%",
+            metric="converged_pct", value=converged,
+            threshold=thresholds["min_converged_pct"],
+        ))
 
     # Expected recovery surface from the truth file.
     # New-format truth files may carry structural entries without params.
@@ -438,16 +457,20 @@ def assert_recovery(graph_name: str, parsed: dict, truth: dict) -> dict:
 
     missing_edges = sorted(set(truth_edges) - set(parsed_edges))
     if missing_edges:
-        failures.append(
+        failures.append(make_failure(
+            "missing_edge",
             f"missing recovery rows for {len(missing_edges)} truth edge(s): "
-            + ", ".join(missing_edges)
-        )
+            + ", ".join(missing_edges),
+            count=len(missing_edges), items=missing_edges,
+        ))
 
     unexpected_edges = sorted(set(parsed_edges) - set(truth_edges))
     if unexpected_edges:
-        warnings.append(
-            f"unexpected parsed recovery rows for edge(s): {', '.join(unexpected_edges)}"
-        )
+        warnings.append(make_failure(
+            "missing_edge",
+            f"unexpected parsed recovery rows for edge(s): {', '.join(unexpected_edges)}",
+            items=unexpected_edges,
+        ))
 
     for edge_name, edge_truth in truth_edges.items():
         edge_data = parsed_edges.get(edge_name)
@@ -468,9 +491,11 @@ def assert_recovery(graph_name: str, parsed: dict, truth: dict) -> dict:
         ]
         missing_params = [param for param in expected_params if param not in edge_data]
         if missing_params:
-            failures.append(
-                f"{edge_name}: missing parsed recovery param(s): {', '.join(missing_params)}"
-            )
+            failures.append(make_failure(
+                "missing_param",
+                f"{edge_name}: missing parsed recovery param(s): {', '.join(missing_params)}",
+                edge=edge_name, items=missing_params,
+            ))
 
     # Per-parameter z-score checks
     for edge_name, edge_data in parsed_edges.items():
@@ -492,20 +517,35 @@ def assert_recovery(graph_name: str, parsed: dict, truth: dict) -> dict:
             z_pass = z <= z_threshold
             abs_pass = abs_err <= abs_floor
 
+            _common = dict(
+                edge=edge_name, param=param,
+                z_score=z, threshold=z_threshold,
+                abs_error=abs_err, abs_floor=abs_floor,
+                truth=pdata.get("truth"),
+                posterior_mean=pdata.get("posterior_mean"),
+                posterior_sd=pdata.get("posterior_sd"),
+            )
+
             if not z_pass and not abs_pass:
-                failures.append(
+                failures.append(make_failure(
+                    "z_score",
                     f"{edge_name} {param}: |z|={z:.2f} > {z_threshold} "
                     f"Δ={abs_err:.3f} > {abs_floor} "
-                    f"(truth={pdata['truth']:.3f} post={pdata['posterior_mean']:.3f}±{pdata['posterior_sd']:.3f})"
-                )
+                    f"(truth={pdata['truth']:.3f} post={pdata['posterior_mean']:.3f}±{pdata['posterior_sd']:.3f})",
+                    **_common,
+                ))
             elif not z_pass and abs_pass:
-                warnings.append(
-                    f"{edge_name} {param}: |z|={z:.2f} > {z_threshold} but Δ={abs_err:.3f} < {abs_floor} (abs floor pass)"
-                )
+                warnings.append(make_failure(
+                    "z_score",
+                    f"{edge_name} {param}: |z|={z:.2f} > {z_threshold} but Δ={abs_err:.3f} < {abs_floor} (abs floor pass)",
+                    **_common,
+                ))
             elif z > z_threshold * 0.8:
-                warnings.append(
-                    f"{edge_name} {param}: |z|={z:.2f} approaching threshold {z_threshold}"
-                )
+                warnings.append(make_failure(
+                    "z_score",
+                    f"{edge_name} {param}: |z|={z:.2f} approaching threshold {z_threshold}",
+                    **_common,
+                ))
 
     # Per-slice expected coverage from context truth.
     expected_slice_labels = {
@@ -514,14 +554,19 @@ def assert_recovery(graph_name: str, parsed: dict, truth: dict) -> dict:
     }
 
     if expected_slice_labels and not parsed_slices:
-        failures.append("missing per-slice recovery rows for contexted truth")
+        failures.append(make_failure(
+            "missing_slice",
+            "missing per-slice recovery rows for contexted truth",
+        ))
 
     missing_slice_labels = sorted(set(expected_slice_labels) - set(parsed_slices))
     if missing_slice_labels:
-        failures.append(
+        failures.append(make_failure(
+            "missing_slice",
             f"missing slice recovery rows for {len(missing_slice_labels)} expected slice(s): "
-            + ", ".join(missing_slice_labels)
-        )
+            + ", ".join(missing_slice_labels),
+            count=len(missing_slice_labels), items=missing_slice_labels,
+        ))
 
     for slice_label, edge_truth in expected_slice_labels.items():
         slice_data = parsed_slices.get(slice_label)
@@ -539,10 +584,12 @@ def assert_recovery(graph_name: str, parsed: dict, truth: dict) -> dict:
         ]
         missing_params = [param for param in expected_params if param not in slice_data]
         if missing_params:
-            failures.append(
+            failures.append(make_failure(
+                "missing_param",
                 f"SLICE {slice_label}: missing parsed recovery param(s): "
-                + ", ".join(missing_params)
-            )
+                + ", ".join(missing_params),
+                slice=slice_label, items=missing_params,
+            ))
 
     # Per-slice z-score checks (doc 35 Phase 5)
     per_slice_thresholds = testing.get("per_slice_thresholds", {})
@@ -570,22 +617,37 @@ def assert_recovery(graph_name: str, parsed: dict, truth: dict) -> dict:
             z_pass = z <= z_threshold
             abs_pass = abs_err <= abs_floor
 
+            _common = dict(
+                slice=slice_label, param=param,
+                z_score=z, threshold=z_threshold,
+                abs_error=abs_err, abs_floor=abs_floor,
+                truth=pdata.get("truth"),
+                posterior_mean=pdata.get("posterior_mean"),
+                posterior_sd=pdata.get("posterior_sd"),
+            )
+
             if not z_pass and not abs_pass:
-                failures.append(
+                failures.append(make_failure(
+                    "z_score",
                     f"SLICE {slice_label} {param}: |z|={z:.2f} > {z_threshold} "
                     f"Δ={abs_err:.3f} > {abs_floor} "
                     f"(truth={pdata['truth']:.3f} post={pdata['posterior_mean']:.3f}"
-                    f"±{pdata['posterior_sd']:.3f})"
-                )
+                    f"±{pdata['posterior_sd']:.3f})",
+                    **_common,
+                ))
             elif not z_pass and abs_pass:
-                warnings.append(
+                warnings.append(make_failure(
+                    "z_score",
                     f"SLICE {slice_label} {param}: |z|={z:.2f} > {z_threshold} "
-                    f"but Δ={abs_err:.3f} < {abs_floor} (abs floor pass)"
-                )
+                    f"but Δ={abs_err:.3f} < {abs_floor} (abs floor pass)",
+                    **_common,
+                ))
             elif z > z_threshold * 0.8:
-                warnings.append(
-                    f"SLICE {slice_label} {param}: |z|={z:.2f} approaching threshold {z_threshold}"
-                )
+                warnings.append(make_failure(
+                    "z_score",
+                    f"SLICE {slice_label} {param}: |z|={z:.2f} approaching threshold {z_threshold}",
+                    **_common,
+                ))
 
     is_xfail = bool(testing.get("xfail_reason"))
     passed = len(failures) == 0
@@ -917,53 +979,72 @@ def run_regression(args) -> list[dict]:
             assertion["edges"] = parsed.get("edges", {})
             assertion["slices"] = parsed.get("slices", {})
 
+            from results_schema import make_failure as _mf
+
             # Layer: log found
             if not audit["log_found"]:
                 assertion["passed"] = False
-                assertion["failures"].append("AUDIT: harness log not found or empty")
+                assertion["failures"].append(_mf(
+                    "audit", "AUDIT: harness log not found or empty"))
 
             # Layer: completion
             if audit["log_found"] and not audit["completed"]:
-                assertion["warnings"].append("AUDIT: run did not reach completion status")
+                assertion["warnings"].append(_mf(
+                    "audit", "AUDIT: run did not reach completion status"))
 
             # Layer: data binding
             db = audit["data_binding"]
             if db["fallback_edges"] > 0:
                 assertion["passed"] = False
-                assertion["failures"].append(
+                assertion["failures"].append(_mf(
+                    "binding",
                     f"DATA BINDING: {db['fallback_edges']} edges used param file "
-                    f"fallback (no snapshot data). Hash alignment broken.")
+                    f"fallback (no snapshot data). Hash alignment broken.",
+                    count=db["fallback_edges"],
+                ))
             if db["total_failed"] > 0:
                 assertion["passed"] = False
-                assertion["failures"].append(
-                    f"DATA BINDING: {db['total_failed']} edges failed binding")
+                assertion["failures"].append(_mf(
+                    "binding",
+                    f"DATA BINDING: {db['total_failed']} edges failed binding",
+                    count=db["total_failed"],
+                ))
 
             # Layer: feature flags
             md = audit["model"]
             if md["latency_dispersion_flag"] and md["kappa_lat_edges"] == 0:
                 assertion["passed"] = False
-                assertion["failures"].append(
-                    f"KAPPA_LAT: latency_dispersion=True but 0 kappa_lat variables. "
-                    f"Check mixture path / stale cache.")
+                assertion["failures"].append(_mf(
+                    "audit",
+                    "KAPPA_LAT: latency_dispersion=True but 0 kappa_lat variables. "
+                    "Check mixture path / stale cache.",
+                ))
 
             # Layer: priors
             if audit["priors"]["edges_with_latency_prior"] == 0 and \
                audit["inference"]["edges_with_mu"] > 0:
-                assertion["warnings"].append(
-                    "PRIORS: no mu_prior lines found — priors may be uninformative")
+                assertion["warnings"].append(_mf(
+                    "audit",
+                    "PRIORS: no mu_prior lines found — priors may be uninformative",
+                ))
 
             # Layer: LOO-ELPD
             loo = audit.get("loo", {})
             if loo.get("status") == "failed":
-                assertion["warnings"].append(
+                assertion["warnings"].append(_mf(
+                    "audit",
                     f"LOO-ELPD: computation failed — "
-                    f"{'; '.join(loo.get('diagnostics', []))}")
+                    f"{'; '.join(loo.get('diagnostics', []))}",
+                ))
             elif loo.get("status") == "scored":
                 pk = loo.get("worst_pareto_k", 0)
                 if pk > 0.7:
-                    assertion["warnings"].append(
+                    assertion["warnings"].append(_mf(
+                        "audit",
                         f"LOO-ELPD: worst pareto_k={pk:.2f} > 0.7 — "
-                        f"estimates unreliable for some data points")
+                        f"estimates unreliable for some data points",
+                        value=pk, threshold=0.7,
+                    ))
 
             results.append(assertion)
 
@@ -987,7 +1068,8 @@ def run_regression(args) -> list[dict]:
                           f"ess={str(_q.get('ess', '?')):<8s} "
                           f"conv={str(_q.get('converged', '?'))}\n")
                 for _fail in assertion.get("failures", []):
-                    _sf.write(f"  ** {_fail}\n")
+                    _msg = _fail["message"] if isinstance(_fail, dict) else str(_fail)
+                    _sf.write(f"  ** {_msg}\n")
                 if _bp:
                     _sf.write(_bp)
 
@@ -1280,9 +1362,11 @@ def run_regression(args) -> list[dict]:
 
         # Parameter recovery failures/warnings
         for f in r.get("failures", []):
-            print(f"    ** FAIL: {f}")
+            _msg = f["message"] if isinstance(f, dict) else str(f)
+            print(f"    ** FAIL: {_msg}")
         for w in r.get("warnings", []):
-            print(f"    ** WARN: {w}")
+            _msg = w["message"] if isinstance(w, dict) else str(w)
+            print(f"    ** WARN: {_msg}")
 
     # Totals
     print()
@@ -1320,46 +1404,7 @@ def _write_structured_results(
     run_id: str,
 ) -> None:
     """Write machine-readable JSON results for programmatic analysis."""
-    def _serialise_graph(r: dict) -> dict:
-        return {
-            "graph_name": r.get("graph_name", ""),
-            "passed": r.get("passed", False),
-            "xfail": r.get("xfail", False),
-            "xfail_reason": r.get("xfail_reason", ""),
-            "failures": r.get("failures", []),
-            "warnings": r.get("warnings", []),
-            "quality": r.get("quality", {}),
-            "thresholds": r.get("thresholds", {}),
-            "edges": {
-                edge_name: {
-                    param: {
-                        "truth": pdata.get("truth"),
-                        "posterior_mean": pdata.get("posterior_mean"),
-                        "posterior_sd": pdata.get("posterior_sd"),
-                        "z_score": pdata.get("z_score"),
-                        "abs_error": pdata.get("abs_error"),
-                        "status": pdata.get("status"),
-                    }
-                    for param, pdata in edge_params.items()
-                }
-                for edge_name, edge_params in r.get("parsed_edges", r.get("edges", {})).items()
-            },
-            "slices": {
-                label: {
-                    param: {
-                        "truth": pdata.get("truth"),
-                        "posterior_mean": pdata.get("posterior_mean"),
-                        "posterior_sd": pdata.get("posterior_sd"),
-                        "z_score": pdata.get("z_score"),
-                        "abs_error": pdata.get("abs_error"),
-                        "status": pdata.get("status"),
-                    }
-                    for param, pdata in slice_params.items()
-                    if isinstance(pdata, dict)
-                }
-                for label, slice_params in r.get("parsed_slices", r.get("slices", {})).items()
-            },
-        }
+    from results_schema import serialise_result
 
     passed = [r for r in results if r.get("passed") and not r.get("xfail")]
     failed = [r for r in results if not r.get("passed") and not r.get("xfail")]
@@ -1372,7 +1417,7 @@ def _write_structured_results(
         "passed": len(passed),
         "failed": len(failed),
         "xfailed": len(xfailed),
-        "graphs": [_serialise_graph(r) for r in results],
+        "graphs": [serialise_result(r) for r in results],
     }
 
     with open(path, "w") as f:

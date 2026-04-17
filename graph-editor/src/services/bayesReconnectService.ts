@@ -374,7 +374,7 @@ export async function submitBayesFitForAutomation(args: {
   if (!credsResult.success || !credsResult.credentials) {
     throw new Error('Failed to load credentials for Bayes submission');
   }
-  const [owner, repoName] = repo.split('/');
+  const repoName = repo.includes('/') ? repo.split('/')[1] : repo;
   const gitCred = credsResult.credentials.git.find((g: any) => g.name === repoName || `${g.owner}/${g.name}` === repo);
   if (!gitCred) {
     throw new Error(`No git credentials found for repo: ${repo}`);

@@ -415,7 +415,8 @@ describe('buildDailyConversionsEChartsOption', () => {
   it('should use grey (#808080) for single-scenario', () => {
     const option = buildDailyConversionsEChartsOption(DAILY_CONVERSIONS_RESULT, {}, { visibleScenarioIds: ['current'] });
     const eLine = option.series.find((s: any) => s.type === 'line' && s.lineStyle?.type === 'solid');
-    expect(eLine.lineStyle.color).toBe('#808080');
+    // Main lines are darkened 30% from #808080 → #5a5a5a
+    expect(eLine.lineStyle.color).toBe('#5a5a5a');
   });
 
   it('should use striated decal on forecast bar', () => {
@@ -430,11 +431,11 @@ describe('buildDailyConversionsEChartsOption', () => {
     const option = buildDailyConversionsEChartsOption(DAILY_CONVERSIONS_RESULT, {}, { visibleScenarioIds: ['current'] });
     const lines = option.series.filter((s: any) => s.type === 'line');
     const solidLine = lines.find((s: any) => s.lineStyle?.type === 'solid');
-    const dashedLine = lines.find((s: any) => s.lineStyle?.type === 'dashed');
+    const dottedLine = lines.find((s: any) => s.lineStyle?.type === 'dotted');
     expect(solidLine).toBeDefined();
-    expect(dashedLine).toBeDefined();
-    // Solid (E) has markers, dashed (F) does not
-    expect(dashedLine.showSymbol).toBe(false);
+    expect(dottedLine).toBeDefined();
+    // Solid (E epoch A) has markers, dotted (F) does not
+    expect(dottedLine.showSymbol).toBe(false);
   });
 
   it('should stack bars so total height = N', () => {

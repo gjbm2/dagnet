@@ -380,6 +380,45 @@ Multiple code paths can regenerate the graph JSON: `graph_from_truth.py` (truth-
 
 **How to spot**: check `resolved.alpha` and `resolved.beta`. If they sum to < 50 for an edge with hundreds of observations, the prior is too weak for per-cohort IS.
 
+## Anti-pattern 45: ECharts legend `data` array referencing empty-data series
+
+**Signature**: legend items render at coordinate (0, 0) — a cluster of icons piled in the top-left corner of the chart. Or the legend collapses to a single point when a second scenario is added.
+
+**Root cause**: ECharts' legend `data` array contains entries that reference series whose `data` array is empty (`[]`). ECharts renders the legend item but cannot resolve its position, falling back to (0, 0). This happens when building a multi-scenario legend with synthetic entries for concept labels (e.g. "Evidence %", "Forecast %") backed by series that have no data points in certain scenarios.
+
+**Fix**: only include entries in `legend.data` that reference series with actual data points. For multi-scenario legends, omit `data` entirely (let ECharts auto-discover from real series) or filter the data array to only include series names that have non-empty data. Do not create synthetic zero-data series just to drive legend rendering.
+
+**Example**: daily conversions multi-scenario legend created concept entries + colour swatch entries, where the concept entries had empty-data proxy series. Fix was to reference only real data-bearing series.
+
+## Anti-pattern 46: Synth graph hash divergence from connection string inconsistency
+
+**Signature**: synth graph tests return zero snapshot rows. `candidate_regimes_by_edge` is empty or `core_hash` is `''`. DB has rows but they're under a different hash than what the FE computes at runtime.
+
+**Root cause**: the connection name is part of the canonical signature used to compute `core_hash`. If the graph JSON says one connection name (e.g. `defaultConnection: "amplitude-prod"`) but the FE hash computation path uses a different name (e.g. hardcoded `'amplitude'` fallback), the hashes diverge. The CLI (called by `synth_gen.py` Step 2) and the FE runtime must resolve the same connection name for the same graph.
+
+Three specific failure modes:
+1. `graph_from_truth.py` writes a connection name that doesn't match what the FE expects
+2. FE call sites don't read `graph.defaultConnection` and fall back to a hardcoded default
+3. Synth graphs use a real connection name (`amplitude-prod`) instead of a fake one (`amplitude`), risking accidental live fetches
+
+**Fix**: ensure all FE connection resolution paths follow the `edge.p.connection → graph.defaultConnection → 'amplitude'` chain (`fetchPlanBuilderService.ts` is the reference implementation). Synth graphs must use a fake connection name that can't trigger real fetches. The v2 freshness checker (`verify_synth_data`) now validates connection string consistency between the graph JSON and the meta sidecar.
+
+**How to spot**: `verify_synth_data(graph_name, data_repo)` returns `"stale"` with reason mentioning "Connection string changed". Or DB query `SELECT COUNT(*) FROM snapshots WHERE core_hash = '' AND param_id LIKE '%synth%'` returns non-zero.
+
+## Anti-pattern 47: `path_alpha`/`path_beta` terminology confusion
+
+**Signature**: model resolver returns wrong alpha/beta in cohort mode, causing IS conditioning to target the wrong rate. Tests assert against edge-level alpha/beta when the resolver correctly returns cohort-mode posterior.
+
+**Root cause**: `posterior.path_alpha` / `posterior.path_beta` is confusingly named. "path" does NOT mean "compound product of upstream probabilities". It means "the edge's own rate (y/x), posterior-estimated from cohort-mode evidence (anchor-anchored data with path-level latency)". The name refers to the latency model used during fitting, not to the probability being estimated.
+
+In both window and cohort modes, the displayed rate is y/x at this edge. The difference is:
+- **Window mode**: `alpha`/`beta` — fitted from window evidence (edge-local latency)
+- **Cohort mode**: `path_alpha`/`path_beta` — fitted from cohort evidence (anchor-anchored, path latency)
+
+Both encode the posterior on the same quantity (p_edge). The `model_resolver.py` correctly prefers `path_alpha`/`path_beta` when `temporal_mode == 'cohort'`.
+
+**Fix**: when writing tests or assertions about cohort-mode alpha/beta, use `posterior.path_alpha`/`path_beta`, not `posterior.alpha`/`beta`. When the resolver returns a p_mean that doesn't match `alpha/(alpha+beta)` from the edge-level posterior, check whether cohort mode is active — the resolver may be correctly using the cohort-mode posterior.
+
 ## When to add to this document
 
 After completing a multi-attempt fix, check: does my bug match a generalisable pattern? If so, add it here following the format: Signature (how to recognise it), Root cause (why it happens), Fix (what to do), Example (optional, specific instance).

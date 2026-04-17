@@ -79,10 +79,14 @@ pytest bayes/tests/test_param_recovery.py -k "synth-simple-abc" -v -s  # single
 
 # ── Synthetic data generation ──
 python bayes/synth_gen.py --graph simple --write-files           # regen DB + param files
+python bayes/synth_gen.py --graph simple --write-files --enrich  # regen + hydrate (topo pass)
 python bayes/synth_gen.py --graph simple --dry-run               # preview only
 python bayes/synth_gen.py --clean --graph simple                 # remove synth rows from DB
+python bayes/synth_gen.py --graph simple --write-files --bust-cache  # force regen even if fresh
 # IMPORTANT: --write-files is required to update param files on disk.
 # synth_gen FAILS without a .truth.yaml sidecar (no silent defaults).
+# --enrich runs hydrate.sh after generation (requires Python BE on localhost:9000).
+# --bust-cache skips the freshness check and regenerates unconditionally.
 
 # ── Graph validation (before committing data repo changes) ──
 bash graph-ops/scripts/validate-graph.sh graphs/<name>.json       # structural (~1s)
@@ -129,6 +133,24 @@ python bayes/diag_run.py --exclude delegation-straight           # exclude edge
 
 Both live in the data repo as full artefact sets (graph JSON, node
 YAMLs, event YAMLs, param YAMLs, indexes).
+
+### Truth file formats
+
+All synth graphs use the new-format truth file (with `graph:`,
+`nodes:`, and `edges:` sections containing `from`/`to`). Ten older
+graphs were migrated from the old format (edges-only) on 17-Apr-26
+using `bayes/migrate_truth_files.py`. These carry `raw_ids: true` in
+the `graph:` section, which tells `graph_from_truth.py` to use node
+and edge IDs as-is without prefixing.
+
+New graphs created from scratch do NOT need `raw_ids` — the default
+prefixing convention (short keys prefixed with the graph name) is
+correct for them.
+
+**Connection string**: all synth graphs use `defaultConnection: "amplitude"`
+(a fake name that can't trigger real Amplitude fetches). Do NOT use
+`"amplitude-prod"` — that's the real connection and could cause
+accidental live data queries.
 
 ### Creating new test graphs
 
@@ -221,6 +243,61 @@ After generating synthetic data:
 4. Verify the CDF curve shape matches the ground truth's latency
    parameters
 5. Verify the conversion rates match the ground truth's p values
+
+### Freshness checking
+
+`verify_synth_data(graph_name, data_repo)` performs a comprehensive
+v2 freshness check across all dimensions:
+
+- Truth file SHA256 matches `.synth-meta.json`
+- Graph JSON SHA256 matches meta
+- Event definition hashes match meta
+- DB rows exist for each stored hash with non-empty `core_hash`
+- Parameter files exist with matching `query_signature` (when `check_param_files=True`)
+- Enrichment state (bayesian `model_vars` present, when `check_enrichment=True`)
+- Connection string consistency (`graph.defaultConnection` vs meta)
+- Meta sidecar schema version (v1 → forces regen)
+
+Returns `{status, reason, reasons, row_count, truth_sha256, graph_sha256, enriched, meta}`.
+
+### Declarative test fixtures
+
+Tests that depend on synth graphs use the `@requires_synth` decorator
+from `graph-editor/lib/tests/conftest.py`:
+
+```python
+from conftest import requires_synth, requires_db, requires_data_repo
+
+@requires_db
+@requires_data_repo
+class TestMyFeature:
+    @requires_synth("synth-simple-abc", enriched=True)
+    def test_something(self):
+        # Graph is guaranteed to be fresh + enriched at this point.
+        # If it was stale, synth_gen.py ran automatically.
+        # If it wasn't enriched, hydrate.sh ran automatically.
+        ...
+```
+
+The decorator:
+- Calls `verify_synth_data()` with comprehensive checks
+- If stale/missing: runs `synth_gen.py --write-files` as subprocess
+- If `enriched=True` and not enriched: runs `synth_gen.py --enrich`
+- If no data repo or DB: skips the test cleanly
+- Session-scoped: regen happens at most once per graph per session
+
+Shared fixtures also available: `requires_db`, `requires_data_repo`,
+`_resolve_data_repo_dir()`, `_resolve_db_url()`.
+
+### Enrichment
+
+Enrichment populates analytical params (`model_vars`, promoted
+posteriors, forecast mean) via the FE topo pass pipeline. This is
+what `hydrate.sh` does, and what `synth_gen.py --enrich` commissions.
+
+Tests that need enriched graphs (e.g. `test_be_topo_pass_parity.py`,
+`test_v2_v3_parity.py`) should use `@requires_synth(name, enriched=True)`.
+Enrichment requires the Python BE running on localhost:9000.
 
 ---
 

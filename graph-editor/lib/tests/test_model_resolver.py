@@ -128,8 +128,14 @@ class TestResolverParity:
                 'Path latency should be None when no path params'
             assert result.latency is result.edge_latency
 
-    def test_cohort_mode_prefers_path_alpha_beta(self):
-        """Cohort-mode resolver prefers path_alpha/path_beta for probability."""
+    def test_cohort_mode_uses_cohort_posterior(self):
+        """Cohort-mode resolver uses cohort-mode posterior (path_alpha/path_beta).
+
+        path_alpha/path_beta is the posterior on this edge's rate (y/x)
+        estimated from anchor-anchored evidence with path latency. The
+        name is confusing — "path" refers to the latency model used
+        during fitting, not to a compound path probability.
+        """
         g, edge = _discover_graph_with_model_params()
 
         from runner.model_resolver import resolve_model_params
@@ -144,9 +150,16 @@ class TestResolverParity:
         if path_alpha > 0 and path_beta > 0:
             expected_p = path_alpha / (path_alpha + path_beta)
             assert abs(result.p_mean - expected_p) < 1e-6, \
-                f"Cohort p_mean should use path_alpha/path_beta: {result.p_mean} vs {expected_p}"
+                f"Cohort p_mean should use cohort posterior: {result.p_mean} vs {expected_p}"
             assert abs(result.alpha - path_alpha) < 1e-6
             assert abs(result.beta - path_beta) < 1e-6
+        else:
+            # No cohort posterior — falls back to edge-level
+            edge_alpha = post.get('alpha', 0) or 0
+            edge_beta = post.get('beta', 0) or 0
+            if edge_alpha > 0 and edge_beta > 0:
+                expected_p = edge_alpha / (edge_alpha + edge_beta)
+                assert abs(result.p_mean - expected_p) < 1e-6
 
     def test_source_preference_respected(self):
         """Resolver respects model_source_preference."""
@@ -376,7 +389,10 @@ class TestResolverNonBayes:
         assert abs(result.path_latency.mu - 3.2) < 1e-6
         assert abs(result.path_latency.sigma - 0.7) < 1e-6
         assert result.latency is result.path_latency
-        # Cohort mode prefers path_alpha/path_beta
+        # Cohort mode uses cohort-mode posterior (path_alpha/path_beta):
+        # same edge rate (y/x), but estimated from anchor-anchored
+        # evidence with path latency. "path" in the name refers to the
+        # latency model used during fitting, not a compound path product.
         assert abs(result.alpha - 8) < 1e-6
         assert abs(result.beta - 25) < 1e-6
 

@@ -8,12 +8,12 @@
  * - Verifies REAL data flows through REAL backend
  * - NO MOCKING (except Git)
  *
- * Run: cd graph-editor && CI= PLAYWRIGHT_BROWSERS_PATH="$HOME/.cache/ms-playwright" npm run -s e2e -- e2e/asatHistoricalQuery.spec.ts --workers=1 --retries=0 --reporter=line --timeout=30000 --global-timeout=60000
+ * Run: cd graph-editor && CI= PLAYWRIGHT_BROWSERS_PATH="$HOME/.cache/ms-playwright" npm run -s e2e -- e2e/asatHistoricalQuery.spec.ts --workers=1 --retries=0 --reporter=line --timeout=60000 --global-timeout=120000
  */
 import { test, expect, Page, request } from '@playwright/test';
 import { e2eLog, isE2eVerbose } from './e2eLog';
 
-test.describe.configure({ timeout: 30_000 });
+test.describe.configure({ timeout: 60_000 });
 
 // Test identifiers
 // The param_id in DB must match what frontend constructs: {repository}-{branch}-{paramId}

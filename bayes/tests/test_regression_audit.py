@@ -306,9 +306,10 @@ class TestAssertRecoveryContracts:
         result = assert_recovery("synth-test", parsed, truth)
 
         assert result["passed"] is False
+        msgs = [f.get("message", "") if isinstance(f, dict) else f for f in result["failures"]]
         assert any(
-            "missing recovery rows" in failure and "simple-a-to-b" in failure
-            for failure in result["failures"]
+            "missing recovery rows" in m and "simple-a-to-b" in m
+            for m in msgs
         )
 
     def test_missing_edge_params_fail(self):
@@ -321,9 +322,10 @@ class TestAssertRecoveryContracts:
         result = assert_recovery("synth-test", parsed, truth)
 
         assert result["passed"] is False
+        msgs = [f.get("message", "") if isinstance(f, dict) else f for f in result["failures"]]
         assert any(
-            "simple-a-to-b: missing parsed recovery param(s): mu, sigma, onset" in failure
-            for failure in result["failures"]
+            "simple-a-to-b: missing parsed recovery param(s): mu, sigma, onset" in m
+            for m in msgs
         )
 
     def test_zero_latency_edge_skips_mu_sigma_onset(self):
@@ -337,8 +339,9 @@ class TestAssertRecoveryContracts:
         result = assert_recovery("synth-test", parsed, truth)
 
         # Should pass — only p is expected for instant edges
+        msgs = [f.get("message", "") if isinstance(f, dict) else f for f in result["failures"]]
         assert not any(
-            "missing parsed recovery param" in f for f in result["failures"]
+            "missing parsed recovery param" in m for m in msgs
         ), f"Unexpected failure: {result['failures']}"
 
     def test_missing_slice_rows_fail_for_contexted_truth(self):
@@ -367,10 +370,11 @@ class TestAssertRecoveryContracts:
         result = assert_recovery("synth-test", parsed, truth)
 
         assert result["passed"] is False
+        msgs = [f.get("message", "") if isinstance(f, dict) else f for f in result["failures"]]
         assert any(
-            "missing per-slice recovery rows" in failure
-            or "missing slice recovery rows" in failure
-            for failure in result["failures"]
+            "missing per-slice recovery rows" in m
+            or "missing slice recovery rows" in m
+            for m in msgs
         )
 
     def test_missing_slice_params_fail(self):
@@ -402,9 +406,10 @@ class TestAssertRecoveryContracts:
         result = assert_recovery("synth-test", parsed, truth)
 
         assert result["passed"] is False
+        msgs = [f.get("message", "") if isinstance(f, dict) else f for f in result["failures"]]
         assert any(
-            "SLICE context(channel:google) :: simple-a-to-b: missing parsed recovery param(s): mu, sigma, onset" in failure
-            for failure in result["failures"]
+            "SLICE context(channel:google) :: simple-a-to-b: missing parsed recovery param(s): mu, sigma, onset" in m
+            for m in msgs
         )
 
     def test_complete_edge_and_slice_surface_passes(self):

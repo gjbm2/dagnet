@@ -40,19 +40,35 @@ def generate_graph_artefacts(
     edges_cfg = truth.get("edges", {})
     sim_cfg = truth.get("simulation", {})
 
-    # Prefix for all IDs in this graph
-    prefix = name.replace("synth-", "").replace("-test", "")
-    if not prefix.startswith("synth"):
-        prefix = f"synth-{prefix}"
-    # Actually, use the node IDs as-is with a graph prefix
+    # ID prefixing: by default, short truth keys get a graph-name prefix
+    # for namespacing (e.g. "anchor" → "synth-forecast-anchor"). Truth
+    # files with raw_ids: true use keys as-is (for migrated old-format
+    # graphs whose IDs predate the prefixing convention).
+    raw_ids = graph_cfg.get("raw_ids", False)
+    prefix = ""
+    if not raw_ids:
+        prefix = name.replace("synth-", "").replace("-test", "")
+        if not prefix.startswith("synth"):
+            prefix = f"synth-{prefix}"
+
     def _node_id(short: str) -> str:
-        return f"{prefix}-{short}" if not short.startswith(prefix) else short
+        if raw_ids or not prefix:
+            return short
+        if short.startswith(prefix) or short.startswith(name):
+            return short
+        return f"{prefix}-{short}"
 
     def _edge_id(short: str) -> str:
-        return f"{prefix}-{short}" if not short.startswith(prefix) else short
+        if raw_ids or not prefix:
+            return short
+        if short.startswith(prefix) or short.startswith(name):
+            return short
+        return f"{prefix}-{short}"
+
+    graphs_dir = os.path.join(data_repo, "graphs")
 
     # --- Generate UUIDs ---
-    # Deterministic from name + node/edge id for reproducibility
+    # Deterministic from graph name + kind + key.
     def _uuid_for(kind: str, key: str) -> str:
         return str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{name}.{kind}.{key}"))
 
@@ -110,7 +126,7 @@ def generate_graph_artefacts(
         node_uuid_map[nid] = node_uuid
 
         is_absorbing = ncfg.get("absorbing", False)
-        is_start = ncfg.get("start", False)
+        is_start = ncfg.get("is_start", ncfg.get("start", False))
 
         node: dict[str, Any] = {
             "uuid": node_uuid,

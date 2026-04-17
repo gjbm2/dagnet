@@ -106,6 +106,44 @@ Layer 1 (builders) is a prerequisite for layers 2 and 3. Layer 2 is cheap and ca
 - `summarise_posteriors` with per-slice extraction — MISSING
 - Per-slice latency inheritance (sigma, onset from edge-level) — MISSING
 
+## Synth Graph Test Fixtures
+
+Tests that depend on synth graphs from the data repo use the `@requires_synth` decorator (defined in `graph-editor/lib/tests/conftest.py`). This replaces the copy-pasted boilerplate that was previously in every test file.
+
+**Usage:**
+
+```python
+from conftest import requires_synth, requires_db, requires_data_repo
+
+@requires_db
+@requires_data_repo
+class TestMyAnalysis:
+    @requires_synth("synth-simple-abc", enriched=True)
+    def test_cohort_maturity_output(self):
+        # Synth graph is guaranteed fresh + enriched.
+        ...
+```
+
+**What it does:**
+- Runs `verify_synth_data()` with comprehensive v2 freshness checks (truth hash, graph hash, event hashes, core_hash integrity, param files, enrichment state)
+- If stale or missing: auto-bootstraps via `synth_gen.py --write-files`
+- If `enriched=True` and not enriched: auto-enriches via `synth_gen.py --enrich` (requires Python BE on localhost:9000)
+- If no data repo or DB: skips cleanly
+- Session-scoped: regen happens at most once per graph per session
+
+**Shared fixtures also available:**
+- `requires_db` — skip marker when `DB_CONNECTION` not set
+- `requires_data_repo` — skip marker when data repo unavailable
+- `_resolve_data_repo_dir()` — returns `Path` to data repo or `None`
+- `_resolve_db_url()` — returns DB connection string or `''`
+
+**Key rule:** Do NOT copy-paste data repo resolution or DB markers into test files. Import from `conftest` instead.
+
+**`synth_gen.py` flags for manual use:**
+- `--write-files` — generate graph + simulation + hashes + DB + param files
+- `--enrich` — also run hydrate (topo pass + promotion) after generation
+- `--bust-cache` — skip freshness check, regenerate unconditionally
+
 ## When to Skip Tests
 
 Not every change needs a test. Pure refactors with no behaviour change, documentation edits, and config tweaks do not need tests. But any change that **introduces a new code path, replaces an existing code path, or changes how data flows between subsystems** needs a test — and that test must exercise the real boundary, not a mock of it.

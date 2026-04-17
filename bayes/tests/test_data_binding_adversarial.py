@@ -318,8 +318,9 @@ class TestModelLikelihoodStructureWithLatency:
         m, _ = build_model(t, ev)
 
         free_names = [v.name for v in m.free_RVs]
-        has_mu = any("mu_" in n for n in free_names)
-        has_sigma = any("sigma_" in n or "log_sigma_" in n for n in free_names)
+        # Latency mu is named m_lat_{eid} (log-median), sigma is a_lat_{eid}
+        has_mu = any("m_lat_" in n or "mu_" in n for n in free_names)
+        has_sigma = any("a_lat_" in n or "sigma_" in n or "log_sigma_" in n for n in free_names)
         assert has_mu, f"No mu variable. Free RVs: {free_names}"
         assert has_sigma, f"No sigma variable. Free RVs: {free_names}"
 

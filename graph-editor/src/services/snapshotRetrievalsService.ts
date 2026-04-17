@@ -247,6 +247,7 @@ export async function computePlausibleSignaturesForEdge(args: {
     edge?.p?.connection ||
     edge?.cost_gbp?.connection ||
     edge?.labour_cost?.connection ||
+    graph?.defaultConnection ||
     'amplitude';
 
   const { buildDslFromEdge } = await import('../lib/das/buildDslFromEdge');

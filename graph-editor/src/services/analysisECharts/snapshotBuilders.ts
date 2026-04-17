@@ -11,6 +11,7 @@ import {
   echartsTooltipStyle,
   buildScenarioLegend,
   smoothRates,
+  darkenHex,
   type RateSmoothingMethod,
 } from './echartsCommon';
 
@@ -395,22 +396,72 @@ export function buildDailyConversionsEChartsOption(
       });
     }
 
-    // --- Rate lines ---
+    // --- Rate lines (epoch A/B/forecast convention) ---
+    // Main lines use a darker shade for visual prominence over latency bands.
+    const mainLineColour = darkenHex(scenarioColour, 0.3);
+    // Epoch A: mature Cohorts (completeness ≥ 0.95) — solid + markers
+    // Epoch B: immature Cohorts (completeness < 0.95) — dashed, no markers
+    // Forecast: dotted, no markers
     if (showRates) {
       if (showE) {
-        allSeries.push({
-          name: isSingleScenario ? 'Evidence %' : `${name} · Evidence %`,
-          type: 'line',
-          yAxisIndex: rateAxisIndex,
-          showSymbol: sortedDates.length <= 30,
-          symbolSize: 6,
-          smooth: lineSmooth,
-          connectNulls: false,
-          lineStyle: { width: 2, color: scenarioColour, type: 'solid' },
-          itemStyle: { color: scenarioColour },
-          emphasis: { focus: 'series' },
-          data: alignedERate,
-        });
+        // Split evidence into epoch A (solid) and epoch B (dashed)
+        const epochARate: Array<[string, number | null]> = [];
+        const epochBRate: Array<[string, number | null]> = [];
+        for (let di = 0; di < sortedDates.length; di++) {
+          const d = sortedDates[di];
+          const p = pointsByDate.get(d);
+          const rate = alignedERate[di]?.[1] ?? null;
+          // Use raw row completeness to determine epoch
+          const rawRow = filteredRows.find((r: any) =>
+            String(r?.date) === d && String(r?.[seriesKey]) === key);
+          const c = rawRow?.completeness ?? 1;
+          if (c >= 0.95) {
+            epochARate.push([d, rate]);
+            epochBRate.push([d, null]);
+          } else {
+            epochARate.push([d, null]);
+            epochBRate.push([d, rate]);
+          }
+        }
+        // Overlap point for line continuity at the epoch boundary
+        for (let di = 1; di < sortedDates.length; di++) {
+          if (epochARate[di][1] === null && epochARate[di - 1][1] !== null
+              && epochBRate[di][1] !== null) {
+            epochBRate[di - 1] = [epochBRate[di - 1][0], epochARate[di - 1][1]];
+          }
+        }
+
+        // Epoch A — solid, circle markers
+        if (epochARate.some(d => d[1] !== null)) {
+          allSeries.push({
+            name: isSingleScenario ? 'Evidence %' : `${name} · Evidence %`,
+            type: 'line',
+            yAxisIndex: rateAxisIndex,
+            showSymbol: sortedDates.length <= 30,
+            symbolSize: 6,
+            smooth: lineSmooth,
+            connectNulls: false,
+            lineStyle: { width: 2, color: mainLineColour, type: 'solid' },
+            itemStyle: { color: mainLineColour },
+            emphasis: { focus: 'series' },
+            data: epochARate,
+          });
+        }
+
+        // Epoch B — dashed, no markers
+        if (epochBRate.some(d => d[1] !== null)) {
+          allSeries.push({
+            type: 'line',
+            yAxisIndex: rateAxisIndex,
+            showSymbol: false,
+            smooth: lineSmooth,
+            connectNulls: false,
+            lineStyle: { width: 2, color: mainLineColour, type: 'dashed', opacity: 0.75 },
+            itemStyle: { color: mainLineColour, opacity: 0.75 },
+            emphasis: { focus: 'series' },
+            data: epochBRate,
+          });
+        }
       }
 
       if (showF) {
@@ -421,8 +472,8 @@ export function buildDailyConversionsEChartsOption(
           showSymbol: false,
           smooth: lineSmooth,
           connectNulls: false,
-          lineStyle: { width: 2, color: scenarioColour, type: 'dashed', opacity: 0.75 },
-          itemStyle: { color: scenarioColour, opacity: 0.75 },
+          lineStyle: { width: 2, color: mainLineColour, type: 'dotted', opacity: 0.6 },
+          itemStyle: { color: mainLineColour, opacity: 0.6 },
           emphasis: { focus: 'series' },
           data: alignedFRate,
         });
@@ -451,6 +502,7 @@ export function buildDailyConversionsEChartsOption(
         ?? 'f+e';
       if (scMode === 'e') continue; // no forecast bands in evidence-only mode
       const points = (byKey.get(key) || []).slice().sort((a, b) => a.date.localeCompare(b.date));
+      const pointsByDate = new Map(points.map(p => [p.date, p]));
       const scenarioColour = isSingleScenario
         ? NEUTRAL
         : (meta?.[key]?.colour || NEUTRAL);
@@ -464,21 +516,32 @@ export function buildDailyConversionsEChartsOption(
           }
         }
         if (rawPoly.length < 2) continue;
-        // Band = smoothed forecast rate ± smoothed half-width.
-        // The forecast rate line (alignedFRate) is already smoothed.
-        // Read the smoothed rate at each band date and add the
-        // smoothed half-width. This guarantees the band is centred
-        // exactly on the rendered forecast line.
-        const halfWidths = rawPoly.map(p => [p.date, (p.upper - p.lower) / 2] as [string, number | null]);
-        const smoothedHalf = smoothRates(halfWidths, movingAvgMethod);
+        // Band edges are asymmetric around the forecast rate (the
+        // y_draws distribution is right-skewed for immature cohorts).
+        // Decompose into separate upper/lower offsets from the raw
+        // forecast rate, smooth each independently, then reconstruct
+        // around the smoothed forecast rate. This preserves asymmetry
+        // and guarantees the lower edge stays >= evidence rate.
         const _storedFRate = smoothedFRateByKey.get(key) || [];
         const fRateByDate = new Map(_storedFRate.map(d => [d[0], d[1]]));
+        const upperOffsets = rawPoly.map(p => {
+          const rawFR = pointsByDate.get(p.date)?.forecastRate;
+          return [p.date, rawFR != null ? p.upper - rawFR : null] as [string, number | null];
+        });
+        const lowerOffsets = rawPoly.map(p => {
+          const rawFR = pointsByDate.get(p.date)?.forecastRate;
+          return [p.date, rawFR != null ? rawFR - p.lower : null] as [string, number | null];
+        });
+        const smoothedUpper = smoothRates(upperOffsets, movingAvgMethod);
+        const smoothedLower = smoothRates(lowerOffsets, movingAvgMethod);
         const poly = rawPoly
           .map((p, j) => {
             const rate = fRateByDate.get(p.date);
-            const hw = smoothedHalf[j]?.[1];
-            if (rate == null || hw == null) return null;
-            return { date: p.date, upper: rate + hw, lower: Math.max(0, rate - hw) };
+            const uo = smoothedUpper[j]?.[1];
+            const lo = smoothedLower[j]?.[1];
+            if (rate == null || uo == null || lo == null) return null;
+            const evRate = pointsByDate.get(p.date)?.evidenceRate ?? 0;
+            return { date: p.date, upper: rate + uo, lower: Math.max(evRate, rate - lo) };
           })
           .filter((p): p is { date: string; upper: number; lower: number } => p !== null);
 
@@ -546,13 +609,15 @@ export function buildDailyConversionsEChartsOption(
   // --- Latency band lines (optional) ---
   // Per-τ rate lines showing how conversion rate varies by cohort date
   // at fixed maturity ages (25th/50th/75th percentile of latency CDF).
-  // Solid where evidence exists (age ≥ τ), dashed+fan where forecast (age < τ).
-  // Dash sparsity reflects maturity: sparser = more immature slice.
-  const LATENCY_DASH_PATTERNS: Record<number, number[]> = {
-    0: [8, 6],       // sparsest — youngest maturity slice
-    1: [6, 4],       // medium
-    2: [3, 2],       // densest — most mature slice
-  };
+  // One unified line per band — dash pattern encodes the percentile:
+  //   25% (sparsest): ·    ·    ·    ·
+  //   50% (medium):   ·   ·   ·   ·
+  //   75% (densest):  ·  ·  ·  ·
+  const LATENCY_DASH_PATTERNS: number[][] = [
+    [2, 8],   // 25% — dot, long gap (sparsest)
+    [2, 5],   // 50% — dot, medium gap
+    [2, 3],   // 75% — dot, short gap (densest)
+  ];
   const LATENCY_BAND_OPACITY = 0.55;
 
   for (let ki = 0; ki < keys.length && showRates; ki++) {
@@ -582,142 +647,99 @@ export function buildDailyConversionsEChartsOption(
 
     for (let bi = 0; bi < sortedBandKeys.length; bi++) {
       const bk = sortedBandKeys[bi];
-      const dashPattern = LATENCY_DASH_PATTERNS[Math.min(bi, 2)] || [6, 4];
+      const dashPattern = LATENCY_DASH_PATTERNS[Math.min(bi, LATENCY_DASH_PATTERNS.length - 1)];
       const bandName = isSingleScenario ? bk : `${meta?.[key]?.name || key} · ${bk}`;
 
-      // Build evidence (solid) and forecast (dashed) segments
-      const evidenceData: Array<[string, number | null]> = [];
-      const forecastData: Array<[string, number | null]> = [];
+      // Skip bands where evidence is too sparse to be meaningful.
+      // If fewer than 30% of evidence points are non-zero, the band
+      // is mostly noise (e.g. too-young τ for this edge's latency).
+      {
+        let _evTotal = 0, _evNonZero = 0;
+        for (const p of points) {
+          const lb = p.latencyBands?.[bk];
+          if (lb && lb.source === 'evidence') {
+            _evTotal++;
+            if (lb.rate > 0.001) _evNonZero++;
+          }
+        }
+        if (_evTotal > 0 && _evNonZero / _evTotal < 0.3) continue;
+      }
 
+      // Smooth the combined data first (one EWMA pass), then split
+      // into evidence/forecast for rendering with different opacities.
+      // This avoids EWMA discontinuity at the evidence→forecast boundary.
+      const combinedRaw: Array<[string, number | null]> = [];
+      const sourceMap: Array<'evidence' | 'forecast' | null> = [];
       for (const p of points) {
         const lb = p.latencyBands?.[bk];
         if (!lb) {
-          evidenceData.push([p.date, null]);
-          forecastData.push([p.date, null]);
-          continue;
-        }
-        if (lb.source === 'evidence') {
-          evidenceData.push([p.date, lbShowE ? lb.rate : null]);
-          forecastData.push([p.date, null]);
+          combinedRaw.push([p.date, null]);
+          sourceMap.push(null);
+        } else if (lb.source === 'evidence') {
+          combinedRaw.push([p.date, lbShowE ? lb.rate : null]);
+          sourceMap.push('evidence');
         } else {
-          evidenceData.push([p.date, null]);
-          forecastData.push([p.date, lbShowF ? lb.rate : null]);
-          // Fan band data collected per level below
+          combinedRaw.push([p.date, lbShowF ? lb.rate : null]);
+          sourceMap.push('forecast');
+        }
+      }
+      const smoothedCombined = smoothRates(combinedRaw, movingAvgMethod);
+
+      // Split into evidence (75% opacity) and forecast (30% opacity).
+      // Duplicate the last evidence point as the first forecast point
+      // so the two segments connect without a gap.
+      let lastEvidenceIdx = -1;
+      for (let j = smoothedCombined.length - 1; j >= 0; j--) {
+        if (sourceMap[j] === 'evidence' && smoothedCombined[j][1] != null) {
+          lastEvidenceIdx = j;
+          break;
         }
       }
 
-      // Apply smoothing to latency band rate data
-      const smoothedEvidence = smoothRates(evidenceData, movingAvgMethod);
-      const smoothedForecast = smoothRates(forecastData, movingAvgMethod);
+      const evidenceData = smoothedCombined.map((d, j) =>
+        [d[0], sourceMap[j] === 'evidence' ? d[1] : null] as [string, number | null]);
+      const forecastData = smoothedCombined.map((d, j) =>
+        [d[0], sourceMap[j] === 'forecast' ? d[1] : null] as [string, number | null]);
 
-      // Evidence portion — solid thin line with markers
-      if (smoothedEvidence.some(d => d[1] !== null)) {
+      // Bridge: copy last evidence point into forecast array
+      if (lastEvidenceIdx >= 0 && smoothedCombined[lastEvidenceIdx][1] != null) {
+        forecastData[lastEvidenceIdx] = [
+          smoothedCombined[lastEvidenceIdx][0],
+          smoothedCombined[lastEvidenceIdx][1],
+        ];
+      }
+
+      // Evidence segment — 75% opacity
+      if (evidenceData.some(d => d[1] !== null)) {
         allSeries.push({
           name: bandName,
-          type: 'line',
-          yAxisIndex: rateAxisIndex,
-          showSymbol: true,
-          symbolSize: 4,
-          smooth: lineSmooth,
-          connectNulls: false,
-          lineStyle: { width: 1.5, color: scenarioColour, type: 'solid', opacity: LATENCY_BAND_OPACITY },
-          itemStyle: { color: scenarioColour, opacity: LATENCY_BAND_OPACITY },
-          emphasis: { focus: 'series' },
-          data: smoothedEvidence,
-        });
-      }
-
-      // Forecast portion — dashed thin line, no markers
-      const forecastName = `${bandName} (f)`;
-      if (smoothedForecast.some(d => d[1] !== null)) {
-        allSeries.push({
-          name: forecastName,
           type: 'line',
           yAxisIndex: rateAxisIndex,
           showSymbol: false,
           smooth: lineSmooth,
           connectNulls: false,
-          lineStyle: { width: 1.5, color: scenarioColour, type: dashPattern, opacity: LATENCY_BAND_OPACITY },
-          itemStyle: { color: scenarioColour, opacity: LATENCY_BAND_OPACITY },
+          lineStyle: { width: 1.5, color: scenarioColour, type: dashPattern, opacity: 0.75 },
+          itemStyle: { color: scenarioColour, opacity: 0.75 },
           emphasis: { focus: 'series' },
-          data: smoothedForecast,
+          data: evidenceData,
         });
       }
 
-      // Fan polygons for forecast region — per band level, striated
-      const latBandSetting = String(settings.latency_band_level ?? 'off');
-      const latBandOff = latBandSetting === 'off' || latBandSetting === 'Off';
-      const latBandBlend = !latBandOff && (latBandSetting === 'blend' || latBandSetting === 'Blend');
-      const latBandLevels = latBandOff
-        ? []
-        : latBandBlend
-          ? ['99', '95', '90', '80']
-          : [latBandSetting];
-
-      for (const latLvl of latBandLevels) {
-        const fanPoly: Array<{ date: string; upper: number; lower: number }> = [];
-        for (const p of points) {
-          const lb = p.latencyBands?.[bk];
-          if (lb && lb.source === 'forecast' && lbShowF && lb.bands) {
-            const b = lb.bands[latLvl];
-            if (b && Number.isFinite(b[0]) && Number.isFinite(b[1]) && b[1] > b[0] + 0.001) {
-              fanPoly.push({ date: p.date, upper: b[1], lower: b[0] });
-            }
-          }
-        }
-        if (fanPoly.length < 4) continue;
-
-        const fanAlphaHex = latBandBlend ? '03' : '08';
+      // Forecast segment — 30% opacity, same dash pattern
+      if (forecastData.some(d => d[1] !== null)) {
         allSeries.push({
-          type: 'custom' as any,
-          coordinateSystem: 'cartesian2d',
+          type: 'line',
           yAxisIndex: rateAxisIndex,
-          encode: { x: 0, y: 1 },
-          silent: true,
-          renderItem: (params: any, api: any) => {
-            if (params.dataIndex !== 0) return;
-            const pts: number[][] = [];
-            for (let j = 0; j < fanPoly.length; j++) {
-              pts.push(api.coord([fanPoly[j].date, fanPoly[j].upper]));
-            }
-            for (let j = fanPoly.length - 1; j >= 0; j--) {
-              pts.push(api.coord([fanPoly[j].date, fanPoly[j].lower]));
-            }
-            const gr = params.coordSys;
-            const lastPt = api.coord([fanPoly[fanPoly.length - 1].date, 0]);
-            const clipWidth = lastPt[0] - gr.x;
-            const clipRect = { x: gr.x, y: gr.y, width: clipWidth, height: gr.height };
-            const hLines: any[] = [];
-            const diag = clipWidth + gr.height;
-            for (let dd = 0; dd < diag; dd += 8) {
-              hLines.push({
-                type: 'line',
-                shape: { x1: gr.x + dd, y1: gr.y, x2: gr.x + dd - gr.height, y2: gr.y + gr.height },
-                style: { stroke: hexToRgba(scenarioColour, 0.20), lineWidth: 1 },
-                silent: true,
-              });
-            }
-            return {
-              type: 'group',
-              children: [
-                {
-                  type: 'polygon',
-                  shape: { points: pts, smooth: lineSmooth || 0 },
-                  style: { fill: `${scenarioColour}${fanAlphaHex}`, stroke: 'none' },
-                },
-                {
-                  type: 'group',
-                  children: hLines,
-                  clipPath: { type: 'polygon', shape: { points: pts, smooth: lineSmooth || 0 } },
-                },
-              ],
-              clipPath: { type: 'rect', shape: clipRect },
-              silent: true,
-            };
-          },
-          data: fanPoly.map(p => [p.date, p.upper]),
+          showSymbol: false,
+          smooth: lineSmooth,
+          connectNulls: false,
+          lineStyle: { width: 1.5, color: scenarioColour, type: dashPattern, opacity: 0.30 },
+          itemStyle: { color: scenarioColour, opacity: 0.30 },
+          emphasis: { focus: 'series' },
+          data: forecastData,
         });
       }
+
     }
   }
 
@@ -788,6 +810,7 @@ export function buildDailyConversionsEChartsOption(
       nameLocation: 'middle',
       nameGap: 30,
       nameTextStyle: { fontSize: 8, color: c.text },
+      minInterval: 86400000, // 1 day — prevent sub-day ticks
       axisLabel: {
         fontSize: 9,
         rotate: 30,

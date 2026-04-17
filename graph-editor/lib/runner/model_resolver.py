@@ -286,12 +286,16 @@ def resolve_model_params(
             )
 
     # ── Probability ────────────────────────────────────────────────
-    # In cohort mode, prefer path-level alpha/beta.
-    # In window mode, use edge-level alpha/beta.
+    # In cohort mode, prefer path_alpha/path_beta — these are the
+    # posterior on this edge's rate estimated from cohort-mode evidence
+    # (anchor-anchored, path latency). In window mode, use alpha/beta
+    # (fitted from window-mode evidence). Both target the same rate
+    # (Y/X at this edge) but from different evidence sets.
     alpha = 0.0
     beta = 0.0
     p_mean = 0.0
 
+    # Cohort mode: prefer cohort-mode posterior when available
     if temporal_mode == 'cohort':
         path_alpha = posterior_block.get('path_alpha', 0) or 0
         path_beta = posterior_block.get('path_beta', 0) or 0
@@ -300,8 +304,8 @@ def resolve_model_params(
             beta = float(path_beta)
             p_mean = alpha / (alpha + beta)
 
-    if p_mean == 0:
-        # Fall back to edge-level posterior
+    # Fall back to edge-level posterior
+    if alpha <= 0 or beta <= 0:
         post_alpha = posterior_block.get('alpha', 0) or 0
         post_beta = posterior_block.get('beta', 0) or 0
         if post_alpha > 0 and post_beta > 0:

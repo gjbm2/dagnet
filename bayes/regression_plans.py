@@ -356,59 +356,14 @@ def _print_variant_comparison(all_results: dict[str, list[dict]]) -> None:
     print()
 
 
-def serialise_result(r: dict) -> dict:
-    """Extract the JSON-safe subset of a single graph result.
-
-    Drops non-serialisable or overly verbose fields (raw audit log text)
-    while preserving everything needed for programmatic analysis.
-    """
-    return {
-        "graph_name": r.get("graph_name", ""),
-        "passed": r.get("passed", False),
-        "xfail": r.get("xfail", False),
-        "xfail_reason": r.get("xfail_reason", ""),
-        "failures": r.get("failures", []),
-        "warnings": r.get("warnings", []),
-        "quality": r.get("quality", {}),
-        "thresholds": r.get("thresholds", {}),
-        "edges": {
-            edge_name: {
-                param: {
-                    "truth": pdata.get("truth"),
-                    "posterior_mean": pdata.get("posterior_mean"),
-                    "posterior_sd": pdata.get("posterior_sd"),
-                    "z_score": pdata.get("z_score"),
-                    "abs_error": pdata.get("abs_error"),
-                    "status": pdata.get("status"),
-                }
-                for param, pdata in edge_params.items()
-            }
-            for edge_name, edge_params in r.get("parsed_edges", r.get("edges", {})).items()
-        },
-        "slices": {
-            label: {
-                param: {
-                    "truth": pdata.get("truth"),
-                    "posterior_mean": pdata.get("posterior_mean"),
-                    "posterior_sd": pdata.get("posterior_sd"),
-                    "z_score": pdata.get("z_score"),
-                    "abs_error": pdata.get("abs_error"),
-                    "status": pdata.get("status"),
-                }
-                for param, pdata in slice_params.items()
-                if isinstance(pdata, dict)
-            }
-            for label, slice_params in r.get("parsed_slices", r.get("slices", {})).items()
-        },
-    }
-
-
 def write_results_json(
     plan: dict,
     all_results: dict[str, list[dict]],
     output_dir: str = "/tmp",
 ) -> str:
     """Write structured JSON results file. Returns the file path.
+
+    Uses results_schema.serialise_result for per-graph serialisation.
 
     Output schema:
         {
@@ -425,6 +380,8 @@ def write_results_json(
             }
         }
     """
+    from results_schema import serialise_result as _serialise
+
     envelope = {
         "plan": plan.get("name", "unknown"),
         "description": plan.get("description", ""),
@@ -444,7 +401,7 @@ def write_results_json(
             "passed": len(passed),
             "failed": len(failed),
             "xfailed": len(xfailed),
-            "graphs": [serialise_result(r) for r in results],
+            "graphs": [_serialise(r) for r in results],
         }
 
     run_id = f"plan-{plan.get('name', 'unknown')}-{int(time.time())}"

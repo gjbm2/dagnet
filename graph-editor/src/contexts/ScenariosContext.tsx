@@ -1004,6 +1004,17 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
           );
         }
 
+        // Extract planner-computed signatures from the plan so the from-file
+        // refresh can pass them through to getParameterFromFile. This ensures
+        // the asat evidence path uses the correct context-aware signature for
+        // snapshot DB lookups rather than guessing from file values.
+        const plannerSignatures: Record<string, string> = {};
+        for (const item of plan.items) {
+          if (item.querySignature) {
+            plannerSignatures[item.itemKey] = item.querySignature;
+          }
+        }
+
         const refreshRes = await fetchOrchestratorService.refreshFromFilesWithRetries({
           graphGetter: () => scenarioGraph as any,
           setGraph: setScenarioGraph as any,
@@ -1012,6 +1023,7 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
           parentLogId: regenLogId,
           attempts: 6,
           delayMs: 75,
+          querySignatures: Object.keys(plannerSignatures).length > 0 ? plannerSignatures : undefined,
         });
         if (refreshRes.failures > 0) {
           // Mirror existing semantics: surface as explicit "failed to load from file cache".

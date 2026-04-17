@@ -2277,18 +2277,17 @@ def _emit_window_likelihoods(
     See journal 26-Mar-26.
     """
     import pymc as pm
+    import pytensor.tensor as pt
 
     for i, w_obs in enumerate(ev.window_obs):
         if w_obs.n <= 0:
             continue
         suffix = f"_{i}" if len(ev.window_obs) > 1 else ""
         p_effective = pm.math.clip(p_var * w_obs.completeness, P_CLIP_LO, P_CLIP_HI)
-        pm.Binomial(
-            f"obs_w_{safe_id}{suffix}",
-            n=w_obs.n,
-            p=p_effective,
-            observed=min(w_obs.k, w_obs.n),
-        )
+        w = getattr(w_obs, 'recency_weight', 1.0)
+        _bin_dist = pm.Binomial.dist(n=w_obs.n, p=p_effective)
+        _lp = pm.logp(_bin_dist, pt.as_tensor_variable(min(w_obs.k, w_obs.n)))
+        pm.Potential(f"obs_w_{safe_id}{suffix}", w * _lp)
 
 
 def _emit_cohort_likelihoods(
@@ -2399,6 +2398,7 @@ def _emit_cohort_likelihoods(
                     k=traj.cumulative_y[-1] if traj.cumulative_y else 0,
                     age_days=traj.retrieval_ages[-1] if traj.retrieval_ages else 1.0,
                     completeness=1.0,
+                    recency_weight=getattr(traj, 'recency_weight', 1.0),
                 ))
                 continue
             if traj.obs_type == "window":
@@ -3028,31 +3028,34 @@ def _emit_cohort_likelihoods(
         n_arr = np.array([d.n for d in all_daily], dtype=np.int64)
         k_arr = np.array([min(d.k, d.n) for d in all_daily], dtype=np.int64)
         compl_arr = np.array([d.completeness for d in all_daily], dtype=np.float64)
+        weights_arr = np.array([getattr(d, 'recency_weight', 1.0) for d in all_daily],
+                               dtype=np.float64)
 
         mask = n_arr > 0
         if mask.any():
             n_arr = n_arr[mask]
             k_arr = k_arr[mask]
             compl_arr = compl_arr[mask]
+            weights_arr = weights_arr[mask]
 
             p_effective = pm.math.clip(p_var * compl_arr, P_CLIP_LO, P_CLIP_HI)
 
             if kappa is not None:
-                # BetaBinomial: per-day overdispersion.
-                pm.BetaBinomial(
-                    f"obs_daily_{safe_id}",
+                # BetaBinomial: per-day overdispersion, recency-weighted.
+                _bb_dist = pm.BetaBinomial.dist(
                     n=n_arr,
                     alpha=p_effective * kappa,
                     beta=(1.0 - p_effective) * kappa,
-                    observed=k_arr,
                 )
+                _lp = pm.logp(_bb_dist, pt.as_tensor_variable(k_arr))
+                pm.Potential(f"obs_daily_{safe_id}", pt.sum(weights_arr * _lp))
             else:
-                pm.Binomial(
-                    f"obs_daily_{safe_id}",
+                _bin_dist = pm.Binomial.dist(
                     n=n_arr,
                     p=p_effective,
-                    observed=k_arr,
                 )
+                _lp = pm.logp(_bin_dist, pt.as_tensor_variable(k_arr))
+                pm.Potential(f"obs_daily_{safe_id}", pt.sum(weights_arr * _lp))
 
 
 def _resolve_path_latency(
@@ -3692,7 +3695,7 @@ def _emit_edge_likelihoods(
                     _ep_mu_var = pt.as_tensor_variable(np.float64(_ep_mu_f))
                     _ep_sigma_var = pt.as_tensor_variable(np.float64(_ep_sigma_f))
 
-                _cep_n, _cep_y, _cep_ages, _cep_skipped = [], [], [], 0
+                _cep_n, _cep_y, _cep_ages, _cep_w, _cep_skipped = [], [], [], [], 0
                 for c_obs in ev.cohort_obs:
                     for traj in c_obs.trajectories:
                         if traj.obs_type != "cohort" or len(traj.retrieval_ages) < 2 or traj.n <= 0:
@@ -3708,11 +3711,13 @@ def _emit_edge_likelihoods(
                         _cep_n.append(traj.n)
                         _cep_y.append(min(traj.cumulative_y[-1], traj.n) if traj.cumulative_y else 0)
                         _cep_ages.append(getattr(traj, 'max_retrieval_age', None) or traj.retrieval_ages[-1])
+                        _cep_w.append(getattr(traj, 'recency_weight', 1.0))
 
                 if len(_cep_n) >= 3:
                     _cep_n_arr = np.array(_cep_n, dtype=np.int64)
                     _cep_y_arr = np.array(_cep_y, dtype=np.int64)
                     _cep_ages_arr = np.array(_cep_ages, dtype=np.float64)
+                    _cep_w_arr = np.array(_cep_w, dtype=np.float64)
                     if not et.has_latency:
                         _cep_p_eff = pm.math.clip(p, 1e-6, 1.0 - 1e-6)
                     else:
@@ -3721,10 +3726,13 @@ def _emit_edge_likelihoods(
                         _z = (pt.log(pt.maximum(_eff, 1e-30)) - _ep_mu_var) / (_ep_sigma_var * pt.sqrt(2.0))
                         _z = pt.maximum(_z, Z_ERFC_FLOOR)
                         _cep_p_eff = pm.math.clip(p * 0.5 * pt.erfc(-_z), 1e-6, 1.0 - 1e-6)
-                    pm.BetaBinomial(f"cohort_endpoint_bb_{safe_id}", n=_cep_n_arr,
-                                    alpha=_cep_p_eff * edge_kappa,
-                                    beta=(1.0 - _cep_p_eff) * edge_kappa,
-                                    observed=_cep_y_arr)
+                    _cep_bb_dist = pm.BetaBinomial.dist(
+                        n=pt.as_tensor_variable(_cep_n_arr),
+                        alpha=_cep_p_eff * edge_kappa,
+                        beta=(1.0 - _cep_p_eff) * edge_kappa,
+                    )
+                    _cep_lp = pm.logp(_cep_bb_dist, pt.as_tensor_variable(_cep_y_arr))
+                    pm.Potential(f"cohort_endpoint_bb_{safe_id}", pt.sum(_cep_w_arr * _cep_lp))
                     diagnostics.append(
                         f"  cohort_endpoint_bb: {edge_id[:8]}… "
                         f"{len(_cep_n)} mature ({_cep_skipped} immature excluded)")
@@ -3766,7 +3774,7 @@ def _emit_edge_likelihoods(
                 else:
                     ep_onset_var = pt.as_tensor_variable(np.float64(ep_onset))
 
-                ep_n_list, ep_y_list, ep_ages_list, ep_skipped = [], [], [], 0
+                ep_n_list, ep_y_list, ep_ages_list, ep_w_list, ep_skipped = [], [], [], [], 0
                 for c_obs in ev.cohort_obs:
                     for traj in c_obs.trajectories:
                         if traj.obs_type != "window" or len(traj.retrieval_ages) < 2 or traj.n <= 0:
@@ -3778,20 +3786,25 @@ def _emit_edge_likelihoods(
                         ep_n_list.append(traj.n)
                         ep_y_list.append(min(traj.cumulative_y[-1], traj.n) if traj.cumulative_y else 0)
                         ep_ages_list.append(traj.retrieval_ages[-1])
+                        ep_w_list.append(getattr(traj, 'recency_weight', 1.0))
 
                 if len(ep_n_list) >= 3:
                     ep_n = np.array(ep_n_list, dtype=np.int64)
                     ep_y = np.array(ep_y_list, dtype=np.int64)
                     ep_ages = np.array(ep_ages_list, dtype=np.float64)
+                    ep_weights = np.array(ep_w_list, dtype=np.float64)
                     ages_t = pt.as_tensor_variable(ep_ages)
                     eff_ages = pt.softplus(_softplus_k * (ages_t - ep_onset_var)) / _softplus_k
                     z = (pt.log(pt.maximum(eff_ages, 1e-30)) - ep_mu_var) / (ep_sigma_var * pt.sqrt(2.0))
                     z = pt.maximum(z, Z_ERFC_FLOOR)
                     p_eff = pm.math.clip(p * 0.5 * pt.erfc(-z), 1e-6, 1.0 - 1e-6)
-                    pm.BetaBinomial(f"endpoint_bb_{safe_id}", n=ep_n,
-                                    alpha=p_eff * edge_kappa,
-                                    beta=(1.0 - p_eff) * edge_kappa,
-                                    observed=ep_y)
+                    _bb_dist = pm.BetaBinomial.dist(
+                        n=pt.as_tensor_variable(ep_n),
+                        alpha=p_eff * edge_kappa,
+                        beta=(1.0 - p_eff) * edge_kappa,
+                    )
+                    _lp = pm.logp(_bb_dist, pt.as_tensor_variable(ep_y))
+                    pm.Potential(f"endpoint_bb_{safe_id}", pt.sum(ep_weights * _lp))
                     diagnostics.append(
                         f"  endpoint_bb: {edge_id[:8]}… "
                         f"{len(ep_n_list)} mature ({ep_skipped} immature excluded)")
@@ -3931,6 +3944,10 @@ def _emit_branch_group_multinomial(
             sum(w.n * w.completeness for w in _win_obs) / total_n
             if total_n > 0 else 1.0
         )
+        avg_recency = (
+            sum(w.n * getattr(w, 'recency_weight', 1.0) for w in _win_obs) / total_n
+            if total_n > 0 else 1.0
+        )
 
         # Trajectory path: aggregate window trajectories
         if total_n == 0:
@@ -3945,6 +3962,10 @@ def _emit_branch_group_multinomial(
                     for t in window_trajs
                 )
                 avg_completeness = 1.0  # trajectory CDF handles completeness
+                avg_recency = (
+                    sum(t.n * getattr(t, 'recency_weight', 1.0) for t in window_trajs) / total_n
+                    if total_n > 0 else 1.0
+                )
 
         if total_n > 0:
             sibling_info.append({
@@ -3953,6 +3974,7 @@ def _emit_branch_group_multinomial(
                 "k": total_k,
                 "n": total_n,
                 "completeness": avg_completeness,
+                "recency_weight": avg_recency,
             })
 
     if len(sibling_info) < 2:
@@ -4064,20 +4086,24 @@ def _emit_branch_group_multinomial(
             kappa_var = rv
             break
 
+    # Recency weight: minimum across siblings (conservative — the group
+    # observation is only as recent as its oldest component).
+    bg_recency = min(s.get("recency_weight", 1.0) for s in sibling_info)
+
     if kappa_var is not None:
-        pm.DirichletMultinomial(
-            f"obs_bg_{safe_group}{ctx_suffix}",
+        _dm_dist = pm.DirichletMultinomial.dist(
             n=effective_n,
             a=kappa_var * p_full,
-            observed=k_full,
         )
+        _lp = pm.logp(_dm_dist, pt.as_tensor_variable(k_full))
+        pm.Potential(f"obs_bg_{safe_group}{ctx_suffix}", bg_recency * _lp)
     else:
-        pm.Multinomial(
-            f"obs_bg_{safe_group}{ctx_suffix}",
+        _mn_dist = pm.Multinomial.dist(
             n=effective_n,
             p=p_full,
-            observed=k_full,
         )
+        _lp = pm.logp(_mn_dist, pt.as_tensor_variable(k_full))
+        pm.Potential(f"obs_bg_{safe_group}{ctx_suffix}", bg_recency * _lp)
 
     diagnostics.append(
         f"INFO: branch group {bg.group_id}: DirichletMultinomial emitted, "

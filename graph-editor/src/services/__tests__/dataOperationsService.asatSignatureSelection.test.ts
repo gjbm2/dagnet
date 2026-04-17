@@ -48,4 +48,3 @@ describe('dataOperationsService selectQuerySignatureForAsat', () => {
     expect(selectQuerySignatureForAsat({ values, mode: 'window' })).toBeUndefined();
   });
 });
-

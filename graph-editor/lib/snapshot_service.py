@@ -808,6 +808,120 @@ def query_snapshots_for_sweep(
         return rows
 
 
+def query_snapshots_for_sweep_aggregated(
+    param_id: str,
+    core_hash: str,
+    slice_keys: Optional[List[str]] = None,
+    anchor_from: Optional[date] = None,
+    anchor_to: Optional[date] = None,
+    sweep_from: Optional[date] = None,
+    sweep_to: Optional[date] = None,
+    equivalent_hashes: Optional[List[Dict[str, Any]]] = None,
+) -> List[Dict[str, Any]]:
+    """
+    SQL-aggregated sweep query: produces one row per (anchor_day, tau)
+    with summed x/y/a across slice_keys.
+
+    Returns the same logical data as query_snapshots_for_sweep →
+    derive_cohort_maturity → frame flattening, but pushes the
+    aggregation into SQL. For a 100-day sweep with 100 anchor days,
+    this returns ~10K rows vs ~250K raw rows.
+
+    Each returned row has:
+        anchor_day (date), tau (int), snapshot_date (date),
+        x (float), y (float), a (float)
+
+    tau = snapshot_date - anchor_day (days).
+
+    The GROUP BY (anchor_day, snapshot_date::date) with SUM(x), SUM(y)
+    matches derive_cohort_maturity's per-frame aggregation across
+    slice_keys. The DISTINCT ON per (anchor_day, slice_key,
+    snapshot_date::date) picks the latest retrieval within each day,
+    matching the virtual-snapshot reconstruction.
+    """
+    ck = _cache_key("query_snapshots_for_sweep_aggregated", param_id, core_hash,
+                     slice_keys, anchor_from, anchor_to, sweep_from,
+                     sweep_to, equivalent_hashes)
+    hit, cached = _cache_get(ck)
+    if hit:
+        return cached
+
+    with _pooled_conn() as conn:
+        cur = conn.cursor()
+
+        if equivalent_hashes is not None and len(equivalent_hashes) > 0:
+            hashes = [core_hash] + [e['core_hash'] for e in equivalent_hashes if e.get('core_hash')]
+        else:
+            hashes = [core_hash]
+
+        # Two-level aggregation:
+        # 1. Inner: DISTINCT ON picks latest retrieval per
+        #    (anchor_day, slice_key, calendar_date)
+        # 2. Outer: SUM across slice_keys per (anchor_day, calendar_date)
+        #    and compute tau = calendar_date - anchor_day
+        query = """
+            SELECT
+                anchor_day,
+                frame_date - anchor_day AS tau,
+                frame_date AS snapshot_date,
+                SUM(x) AS x,
+                SUM(y) AS y,
+                SUM(a) AS a
+            FROM (
+                SELECT DISTINCT ON (anchor_day, slice_key, (retrieved_at AT TIME ZONE 'UTC')::date)
+                    anchor_day,
+                    (retrieved_at AT TIME ZONE 'UTC')::date AS frame_date,
+                    slice_key,
+                    X AS x, Y AS y, A AS a
+                FROM snapshots
+                WHERE core_hash = ANY(%s)
+        """
+        params: List[Any] = [hashes]
+
+        if slice_keys is not None:
+            parts: List[str] = []
+            _append_slice_filter_sql(sql_parts=parts, params=params, slice_keys=slice_keys)
+            if parts:
+                query += " AND " + " AND ".join(parts)
+
+        if anchor_from is not None:
+            query += " AND anchor_day >= %s"
+            params.append(anchor_from)
+        if anchor_to is not None:
+            query += " AND anchor_day <= %s"
+            params.append(anchor_to)
+
+        if sweep_from is not None:
+            query += " AND retrieved_at >= %s"
+            params.append(datetime.combine(sweep_from, datetime.min.time()))
+        if sweep_to is not None:
+            from datetime import timedelta
+            query += " AND retrieved_at < %s"
+            params.append(datetime.combine(sweep_to + timedelta(days=1), datetime.min.time()))
+
+        query += """
+                ORDER BY anchor_day, slice_key, (retrieved_at AT TIME ZONE 'UTC')::date, retrieved_at DESC
+            ) AS latest_per_day
+            GROUP BY anchor_day, frame_date
+            ORDER BY anchor_day, frame_date
+        """
+
+        cur.execute(query, params)
+        columns = [desc[0] for desc in cur.description]
+        rows = [dict(zip(columns, row)) for row in cur.fetchall()]
+
+        for row in rows:
+            if row.get('anchor_day') and hasattr(row['anchor_day'], 'isoformat'):
+                row['anchor_day'] = row['anchor_day'].isoformat()
+            if row.get('snapshot_date') and hasattr(row['snapshot_date'], 'isoformat'):
+                row['snapshot_date'] = row['snapshot_date'].isoformat()
+            if row.get('tau') and hasattr(row['tau'], 'days'):
+                row['tau'] = row['tau'].days
+
+        _cache_put(ck, rows)
+        return rows
+
+
 def query_snapshots_for_sweep_batch(
     core_hashes: List[str],
     slice_keys: Optional[List[str]] = None,

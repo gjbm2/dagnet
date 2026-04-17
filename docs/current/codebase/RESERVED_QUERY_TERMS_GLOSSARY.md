@@ -82,6 +82,20 @@ The accumulated time-to-conversion from anchor A through all upstream edges to Y
 
 Fields: `path_t95`, `path_mu`, `path_sigma`, `path_onset_delta_days`
 
+**`path_alpha` / `path_beta`**
+
+The Bayesian posterior on this edge's conversion rate (y/x), estimated
+from **cohort-mode** evidence (anchor-anchored data, path-level latency).
+Despite the `path_` prefix, these encode the **edge rate**, not a compound
+path product. The prefix refers to the latency model used during
+fitting (path CDF), not to the probability being estimated.
+
+- `posterior.alpha` / `posterior.beta` → window-mode posterior on p_edge
+- `posterior.path_alpha` / `posterior.path_beta` → cohort-mode posterior on p_edge (same rate, different evidence set)
+
+The model resolver (`runner/model_resolver.py`) selects the appropriate
+pair based on `temporal_mode`: window → `alpha/beta`, cohort → `path_alpha/path_beta`.
+
 **`anchor_median_lag_days`**
 
 The upstream path lag from anchor `a` to the edge's `from_node` (A→X), **NOT** from anchor to `to_node` (A→Y). This is the single most important semantic distinction in the snapshot field model. It represents how long it took the Cohort to reach the edge's starting point, which determines:

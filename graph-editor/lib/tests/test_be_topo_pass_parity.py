@@ -27,22 +27,10 @@ load_dotenv(os.path.join(os.path.dirname(__file__), '../../.env.local'))
 
 import pytest
 
-DB_URL = os.environ.get('DB_CONNECTION', '')
-requires_db = pytest.mark.skipif(not DB_URL, reason='DB_CONNECTION not set')
+# Shared fixtures from conftest
+from conftest import requires_db, requires_data_repo, requires_synth, _resolve_data_repo_dir
 
-_DAGNET_ROOT = Path(__file__).parent.parent.parent.parent
-_CONF_FILE = _DAGNET_ROOT / '.private-repos.conf'
-_DATA_REPO_DIR = None
-if _CONF_FILE.exists():
-    for line in _CONF_FILE.read_text().splitlines():
-        if line.startswith('DATA_REPO_DIR='):
-            _DATA_REPO_DIR = _DAGNET_ROOT / line.split('=', 1)[1].strip()
-            break
-
-requires_data_repo = pytest.mark.skipif(
-    _DATA_REPO_DIR is None or not (_DATA_REPO_DIR / 'graphs').is_dir(),
-    reason='Data repo not available',
-)
+_DATA_REPO_DIR = _resolve_data_repo_dir()
 
 
 def _load_graph():
@@ -50,13 +38,6 @@ def _load_graph():
     if not path.exists():
         pytest.skip(f'Graph not found at {path}')
     graph = json.loads(path.read_text())
-    # Verify enriched (has bayesian model_vars)
-    has_bayes = any(
-        any(m.get('source') == 'bayesian' for m in (e.get('p', {}).get('model_vars', [])))
-        for e in graph.get('edges', [])
-    )
-    if not has_bayes:
-        pytest.skip('synth-simple-abc not enriched — run test_harness.py --graph synth-simple-abc --enrich')
     return graph
 
 
@@ -83,6 +64,7 @@ def _get_all_core_hashes(graph):
 
 @requires_db
 @requires_data_repo
+@requires_synth("synth-simple-abc", enriched=True)
 class TestTopoPassVsV2Completeness:
     """Topo pass completeness matches v2 annotated completeness."""
 

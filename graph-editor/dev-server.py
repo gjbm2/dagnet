@@ -732,14 +732,14 @@ async def runner_analyze_endpoint(request: Request):
     """
     try:
         data = await request.json()
-        
+
         # Delegate to the centralised handler (api_handlers.py) which correctly
         # routes snapshot-based analysis vs standard analysis.
         # DO NOT duplicate the routing logic here — see .cursorrules §2.
         from api_handlers import handle_runner_analyze
         response = handle_runner_analyze(data)
         return response
-        
+
     except HTTPException:
         raise
     except ValueError as e:

@@ -238,11 +238,14 @@ These require snapshot data and route to the Python backend via
 | | |
 |---|---|
 | **Selection** | Path via `from(A).to(B)` with `window()` or `cohort()` |
-| **Computes** | Conversion counts by calendar date |
+| **Computes** | Conversion counts by calendar date, with forecast engine integration (G.1b) |
 | **Dimensions** | date |
-| **Metrics** | conversions, cumulative_conversions |
+| **Metrics** | conversions, cumulative_conversions, evidence_y, forecast_y, projected_y, completeness |
 | **Chart kinds** | daily_conversions, table, time_series |
 | **Snapshot** | readMode: raw_snapshots |
+| **Engine** | Per-cohort coordinate B via `compute_forecast_sweep` with `CohortEvidence.eval_age` set to maturity τ. Reads `cohort_evals` from `ForecastSweepResult`. Fallback to legacy `annotate_rows` if engine fails. |
+| **Display settings** | `show_bars`, `show_rates`, `smooth_lines`, `moving_avg`, `aggregate`, `bayes_band_level`, `show_latency_bands` |
+| **Chart features** | 3-layer stacked bars (E/F/N), dual rate lines with epoch A/B/forecast styling, forecast dispersion bands (MC draws), optional latency bands at 25/50/75 percentile maturity ages. Latency bands only for latency edges. |
 
 ### cohort_maturity
 

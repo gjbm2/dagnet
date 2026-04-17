@@ -316,7 +316,7 @@ export async function getFromSourceDirect(options: {
     const effectiveDSL = targetSlice || currentDSL || '';
     const parsedDSLForAsat = parseConstraints(effectiveDSL);
 
-    if (parsedDSLForAsat.asat && objectType === 'parameter' && objectId) {
+    if (parsedDSLForAsat.asat && objectType === 'parameter' && objectId && graph !== undefined && setGraph) {
       sessionLogService.addChild(logOpId, 'debug', 'ASAT_DELEGATE',
         `Detected asat(${parsedDSLForAsat.asat}) — delegating to from-file path`,
         effectiveDSL);

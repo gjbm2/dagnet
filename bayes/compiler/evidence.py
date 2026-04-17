@@ -487,19 +487,37 @@ def _apply_recency_weights(
     """
     import math
     ln2 = math.log(2)
-    n_weighted = 0
+    n_traj = 0
+    n_window = 0
+    n_daily = 0
     for ev in evidence.edges.values():
         if ev.skipped:
             continue
+        # Trajectories
         for co in ev.cohort_obs:
             for traj in co.trajectories:
                 age = _date_age(traj.date, today)
                 traj.recency_weight = math.exp(-ln2 * age / half_life_days)
-                n_weighted += 1
-    if n_weighted > 0:
+                n_traj += 1
+            # Daily observations
+            for daily in co.daily:
+                if daily.date == "aggregate":
+                    continue
+                age = _date_age(daily.date, today)
+                daily.recency_weight = math.exp(-ln2 * age / half_life_days)
+                n_daily += 1
+        # Window observations
+        for wo in ev.window_obs:
+            end_date = _extract_date_from_dsl(wo.slice_dsl, position="end")
+            if end_date is not None:
+                age = max(0.0, (today - end_date).days)
+                wo.recency_weight = math.exp(-ln2 * age / half_life_days)
+                n_window += 1
+    n_total = n_traj + n_window + n_daily
+    if n_total > 0:
         diagnostics.append(
-            f"INFO recency: {n_weighted} trajectories weighted "
-            f"(half_life={half_life_days:.0f}d)"
+            f"INFO recency: {n_traj} trajectories, {n_window} window obs, "
+            f"{n_daily} daily obs weighted (half_life={half_life_days:.0f}d)"
         )
 
 

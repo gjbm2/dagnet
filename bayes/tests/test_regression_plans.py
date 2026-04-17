@@ -24,9 +24,9 @@ from regression_plans import (
     _build_args,
     _print_variant_comparison,
     _write_settings_json,
-    serialise_result,
     write_results_json,
 )
+from results_schema import serialise_result
 
 
 # ---------------------------------------------------------------------------
@@ -453,11 +453,13 @@ class TestPrintVariantComparison:
         results = {
             "baseline": [
                 {"graph_name": "g1", "passed": True, "quality": {"rhat": 1.001}},
-                {"graph_name": "g2", "passed": False, "xfail": False, "failures": ["z too high"]},
+                {"graph_name": "g2", "passed": False, "xfail": False,
+                 "failures": [{"type": "z_score", "message": "z too high"}]},
             ],
             "experimental": [
                 {"graph_name": "g1", "passed": True, "quality": {"rhat": 1.002}},
-                {"graph_name": "g2", "passed": False, "xfail": True, "failures": ["known"]},
+                {"graph_name": "g2", "passed": False, "xfail": True,
+                 "failures": [{"type": "z_score", "message": "known"}]},
             ],
         }
         _print_variant_comparison(results)
@@ -535,6 +537,12 @@ class TestBuiltinPlansValid:
 # ---------------------------------------------------------------------------
 
 class TestSerialiseResult:
+    """Integration tests — serialise_result is now in results_schema.py.
+
+    Thorough unit tests are in test_results_schema.py. These confirm
+    the import path works and basic behaviour is correct.
+    """
+
     def test_happy_path(self):
         r = {
             "graph_name": "synth-abc",
@@ -542,7 +550,7 @@ class TestSerialiseResult:
             "xfail": False,
             "xfail_reason": "",
             "failures": [],
-            "warnings": ["minor"],
+            "warnings": [],
             "quality": {"rhat": 1.001, "ess": 5000, "converged_pct": 100},
             "thresholds": {"p_z": 2.5},
             "parsed_edges": {
@@ -564,43 +572,6 @@ class TestSerialiseResult:
         assert s["graph_name"] == "synth-abc"
         assert s["passed"] is True
         assert s["edges"]["edge-a-b"]["p"]["truth"] == 0.7
-        assert s["edges"]["edge-a-b"]["p"]["z_score"] == 0.4
-        assert s["slices"] == {}
-
-    def test_slice_data_serialised(self):
-        r = {
-            "graph_name": "synth-ctx",
-            "passed": True,
-            "xfail": False,
-            "failures": [],
-            "warnings": [],
-            "quality": {},
-            "thresholds": {},
-            "parsed_edges": {},
-            "parsed_slices": {
-                "context(channel:google) :: edge-a-b": {
-                    "p": {
-                        "truth": 0.84,
-                        "posterior_mean": 0.83,
-                        "posterior_sd": 0.01,
-                        "z_score": 1.0,
-                        "abs_error": 0.01,
-                        "status": "OK",
-                    },
-                    "kappa": {
-                        "posterior_mean": 50.0,
-                        "posterior_sd": 5.0,
-                    },
-                },
-            },
-        }
-        s = serialise_result(r)
-
-        label = "context(channel:google) :: edge-a-b"
-        assert label in s["slices"]
-        assert s["slices"][label]["p"]["truth"] == 0.84
-        # kappa has no truth — still serialised with None fields
-        assert s["slices"][label]["kappa"]["truth"] is None
 
     def test_missing_fields_default_gracefully(self):
         r = {"graph_name": "bare", "passed": False}
@@ -610,20 +581,6 @@ class TestSerialiseResult:
         assert s["passed"] is False
         assert s["edges"] == {}
         assert s["slices"] == {}
-        assert s["failures"] == []
-
-    def test_uses_edges_key_fallback(self):
-        """Some results use 'edges' instead of 'parsed_edges'."""
-        r = {
-            "graph_name": "g",
-            "passed": True,
-            "edges": {
-                "e1": {"p": {"truth": 0.5, "posterior_mean": 0.5, "posterior_sd": 0.01,
-                             "z_score": 0.0, "abs_error": 0.0, "status": "OK"}},
-            },
-        }
-        s = serialise_result(r)
-        assert "e1" in s["edges"]
 
 
 # ---------------------------------------------------------------------------
@@ -673,7 +630,8 @@ class TestWriteResultsJson:
             ],
             "experimental": [
                 {"graph_name": "g1", "passed": False, "xfail": False,
-                 "failures": ["z too high"], "warnings": [], "quality": {},
+                 "failures": [{"type": "z_score", "message": "z too high"}],
+                 "warnings": [], "quality": {},
                  "thresholds": {}, "parsed_edges": {}, "parsed_slices": {}},
             ],
         }
@@ -692,7 +650,8 @@ class TestWriteResultsJson:
         all_results = {
             "default": [
                 {"graph_name": "g1", "passed": False, "xfail": True,
-                 "xfail_reason": "known", "failures": ["x"],
+                 "xfail_reason": "known",
+                 "failures": [{"type": "z_score", "message": "x"}],
                  "warnings": [], "quality": {}, "thresholds": {},
                  "parsed_edges": {}, "parsed_slices": {}},
             ],

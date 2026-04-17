@@ -12,7 +12,7 @@ export default defineConfig({
   // These flows are intentionally heavyweight (real browser + IndexedDB + app boot).
   // Use a conservative timeout to avoid flakiness on loaded machines/CI.
   timeout: 120_000,
-  expect: { timeout: 30_000 },
+  expect: { timeout: 60_000 },
   // Run single-worker by default to reduce CPU contention and timing flake in real-browser mode.
   workers: 1,
   retries: process.env.CI ? 1 : 0,

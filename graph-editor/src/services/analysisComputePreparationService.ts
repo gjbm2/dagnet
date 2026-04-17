@@ -490,8 +490,9 @@ export async function prepareAnalysisComputeInputs(
         scenarios[0]?.graph as any,
         params.workspace!,
       );
-    } catch {
+    } catch (regimeErr: any) {
       // Non-blocking: regime selection degrades to pass-through on the BE
+      console.warn('[AnalysisPrepare] buildCandidateRegimesByEdge failed:', regimeErr?.message || regimeErr);
     }
 
     for (let index = 0; index < scenarios.length; index += 1) {
