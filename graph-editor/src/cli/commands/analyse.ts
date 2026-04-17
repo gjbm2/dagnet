@@ -10,7 +10,7 @@
  * Requires the Python BE to be running.
  */
 
-import { log } from '../logger';
+import { log, isDiagnostic } from '../logger';
 import { SCENARIO_COLOURS } from '../constants';
 import { parseScenarioFlags, type ScenarioSpec } from '../scenarioParser';
 import { getSnapshotContract } from '../analysisTypeRegistry';
@@ -56,6 +56,7 @@ dagnet-cli analyse
     --allow-external-fetch   Fetch live from external sources (e.g. Amplitude)
     --display <json>          Display settings JSON (e.g. '{"show_latency_bands":true}')
     --no-cache               Bypass disk bundle cache
+    --diagnostic, --diag     Show detailed pipeline trace (per-edge state at each stage)
     --verbose, -v            Show all console.log/warn output
     --help, -h               Show this help
 
@@ -127,6 +128,9 @@ async function runAnalyse() {
   if (extraArgs['no-snapshot-cache']) {
     (globalThis as any).__dagnetComputeNoCache = true;
   }
+  if (isDiagnostic()) {
+    (globalThis as any).__dagnetDiagnostics = true;
+  }
 
   // Build scenario list: --scenario flags, or --query as single scenario
   const scenarios: ScenarioSpec[] = scenarioSpecs.length > 0
@@ -184,7 +188,7 @@ async function runAnalyse() {
   // automatically on graph open).
   if (extraArgs['topo-pass']) {
     log.info('Running BE topo pass...');
-    const ok = await runCliTopoPass(baseGraph, bundle.parameters, queryDsl);
+    const ok = await runCliTopoPass(baseGraph, bundle.parameters, queryDsl, workspace);
     if (!ok) {
       log.error('BE topo pass failed — cannot proceed');
       process.exit(1);
@@ -290,6 +294,25 @@ async function runAnalyse() {
 
   log.info(`Analysis prepared (type: ${prepared.analysisType}, scenarios: ${prepared.scenarios.length})`);
 
+  // Diagnostic: prepared analysis detail
+  if (isDiagnostic()) {
+    log.diag('── Analysis preparation detail ──');
+    log.diag(`  analysisType=${prepared.analysisType}  analyticsDsl=${prepared.analyticsDsl}`);
+    log.diag(`  status=${prepared.status}  scenarios=${prepared.scenarios.length}`);
+    for (const sc of prepared.scenarios) {
+      const nSubjects = Array.isArray(sc.snapshot_subjects) ? sc.snapshot_subjects.length : 0;
+      log.diag(`  scenario ${sc.scenario_id}:`);
+      log.diag(`    analytics_dsl="${sc.analytics_dsl || '—'}"`);
+      log.diag(`    effective_query_dsl="${sc.effective_query_dsl || '—'}"`);
+      log.diag(`    snapshot_subjects=${nSubjects}`);
+      if (nSubjects > 0 && isDiagnostic()) {
+        for (const subj of sc.snapshot_subjects!) {
+          log.diag(`      subject: ${subj.subject_id || subj.core_hash || '—'}  edge=${(subj as any).edge_id || subj.target?.targetId || '—'}`);
+        }
+      }
+    }
+  }
+
   // Dispatch to BE via the same path the FE uses
   const result = await runPreparedAnalysis(prepared as PreparedAnalysisComputeReady);
 
@@ -298,6 +321,15 @@ async function runAnalyse() {
   }
 
   log.info(`Analysis complete (type: ${result.result?.analysis_type || analysisType})`);
+
+  // Diagnostic: BE-side diagnostics (regime selection, evidence binding)
+  if (isDiagnostic() && (result as any)._diagnostics) {
+    const diag = (result as any)._diagnostics;
+    log.diag('── BE diagnostics ──');
+    for (const [k, v] of Object.entries(diag)) {
+      log.diag(`  ${k}: ${JSON.stringify(v)}`);
+    }
+  }
 
   // --get: extract a single value via dot-path
   if (getKey) {

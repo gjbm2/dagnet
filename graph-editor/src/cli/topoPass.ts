@@ -11,7 +11,7 @@
  * browser behaviour in beTopoPassService.ts.
  */
 
-import { log } from './logger';
+import { log, isDiagnostic } from './logger';
 import { PYTHON_API_BASE } from '../lib/pythonApiBase';
 import { parseConstraints } from '../lib/queryDSL';
 import { parseDate } from '../services/windowAggregationService';
@@ -91,8 +91,8 @@ function buildCohortDataAndContexts(
   const paramIdToEdgeUuid = new Map<string, string>();
   for (const edge of (graph.edges || [])) {
     const eid = edge.uuid || edge.id;
-    const edgeId = edge.id || '';
-    paramIdToEdgeUuid.set(edgeId, eid);
+    const pId = edge.p?.id;
+    if (pId) paramIdToEdgeUuid.set(pId, eid);
   }
   for (const [paramId, paramData] of Array.from(parameters)) {
     const edgeUuid = paramIdToEdgeUuid.get(paramId);
@@ -243,6 +243,7 @@ export async function runCliTopoPass(
   graph: any,
   parameters: Map<string, any>,
   queryDsl?: string,
+  workspace?: { repository: string; branch: string },
 ): Promise<boolean> {
   // Parse temporal scope from DSL
   const scopeWindow = queryDsl ? parseScopeWindow(queryDsl) : undefined;
@@ -258,7 +259,62 @@ export async function runCliTopoPass(
   // Determine query mode from DSL
   const queryMode = queryDsl?.includes('window(') ? 'window' : 'cohort';
 
+  // ── Build snapshot_evidence for parity with v3 ──────────────────
+  // Design invariant: p.mean from topo pass == p@∞ from v3 cohort
+  // maturity. Both must use the same snapshot DB evidence. When
+  // workspace is available, compute candidate regimes and date bounds
+  // so the BE can query the DB instead of using parameter file cohorts.
+  let snapshotEvidence: Record<string, any> | undefined;
+  if (workspace && scopeWindow && queryDsl) {
+    try {
+      const { buildCandidateRegimesByEdge, filterCandidatesByContext } = await import('../services/candidateRegimeService');
+      const fullInventory = await buildCandidateRegimesByEdge(graph, workspace);
+      let candidateRegimesByEdge = fullInventory;
+      if (Object.keys(fullInventory).length > 0) {
+        const filtered = await filterCandidatesByContext(fullInventory, queryDsl);
+        if (Object.keys(filtered).length > 0) {
+          candidateRegimesByEdge = filtered;
+        }
+      }
+      if (Object.keys(candidateRegimesByEdge).length > 0) {
+        const anchorFrom = scopeWindow.start.toISOString().slice(0, 10);
+        const anchorTo = scopeWindow.end.toISOString().slice(0, 10);
+        snapshotEvidence = {
+          candidate_regimes_by_edge: candidateRegimesByEdge,
+          anchor_from: anchorFrom,
+          anchor_to: anchorTo,
+          sweep_from: anchorFrom,
+          sweep_to: anchorTo,
+        };
+        log.info(`Snapshot evidence: ${Object.keys(candidateRegimesByEdge).length} edges with candidate regimes`);
+        if (isDiagnostic()) {
+          log.diag('── Topo pass: snapshot evidence ──');
+          for (const [eid, cands] of Object.entries(candidateRegimesByEdge)) {
+            for (const c of cands as any[]) {
+              log.diag(`  ${eid.slice(0, 12)}: hash=${c.core_hash?.slice(0, 16)} mode=${c.temporal_mode || '?'} eq=${(c.equivalent_hashes || []).length}`);
+            }
+          }
+        }
+      }
+    } catch (err: any) {
+      log.warn(`Failed to build snapshot evidence: ${err.message} — falling back to parameter files`);
+    }
+  }
+
   const topoUrl = `${PYTHON_API_BASE}/api/lag/topo-pass`;
+
+  // Diagnostic: per-edge cohort detail
+  if (isDiagnostic()) {
+    log.diag('── Topo pass: cohort data detail ──');
+    for (const [edgeUuid, cohorts] of Object.entries(cohortData)) {
+      const scoped = edgeContexts[edgeUuid]?.scoped_cohorts;
+      const totalN = (cohorts as any[]).reduce((sum: number, c: any) => sum + (c.n || 0), 0);
+      const totalK = (cohorts as any[]).reduce((sum: number, c: any) => sum + (c.k || 0), 0);
+      log.diag(`  ${edgeUuid}: ${(cohorts as any[]).length} cohorts (total n=${totalN}, k=${totalK})${scoped ? `, ${scoped.length} scoped` : ''}`);
+    }
+    log.diag(`  query_mode=${queryMode}`);
+    log.diag(`  endpoint=${topoUrl}`);
+  }
   let topoResponse: Response;
   try {
     topoResponse = await fetch(topoUrl, {
@@ -269,6 +325,7 @@ export async function runCliTopoPass(
         cohort_data: cohortData,
         edge_contexts: edgeContexts,
         query_mode: queryMode,
+        ...(snapshotEvidence ? { snapshot_evidence: snapshotEvidence } : {}),
       }),
     });
   } catch (err: any) {
@@ -288,6 +345,27 @@ export async function runCliTopoPass(
   }
 
   writeTopoResultsToGraph(graph, topoResult.edges);
-  log.info(`BE topo pass: ${topoResult.summary.edges_processed} edges, ${topoResult.summary.edges_with_lag} with lag`);
+  const snapCount = (topoResult.summary as any).forecast_state_snapshot_count ?? 0;
+  log.info(`BE topo pass: ${topoResult.summary.edges_processed} edges, ${topoResult.summary.edges_with_lag} with lag` +
+    (snapCount > 0 ? `, ${snapCount} via snapshot DB` : ''));
+
+  // Diagnostic: per-edge topo pass results
+  if (isDiagnostic()) {
+    log.diag('── Topo pass: per-edge results ──');
+    for (const te of topoResult.edges) {
+      const parts: string[] = [];
+      if (te.completeness != null) parts.push(`completeness=${te.completeness.toFixed(4)}`);
+      if (te.blended_mean != null) parts.push(`blended_mean=${te.blended_mean.toFixed(4)}`);
+      if (te.p_sd != null) parts.push(`p_sd=${te.p_sd.toFixed(4)}`);
+      if (te.t95 != null) parts.push(`t95=${te.t95.toFixed(1)}`);
+      if (te.mu != null) parts.push(`mu=${te.mu.toFixed(3)}`);
+      if (te.sigma != null) parts.push(`sigma=${te.sigma.toFixed(3)}`);
+      if (te.onset_delta_days != null) parts.push(`onset=${te.onset_delta_days.toFixed(1)}`);
+      if (te.path_t95 != null) parts.push(`path_t95=${te.path_t95.toFixed(1)}`);
+      if (te.path_mu != null) parts.push(`path_mu=${te.path_mu.toFixed(3)}`);
+      log.diag(`  ${te.edge_uuid}: ${parts.join('  ')}`);
+    }
+  }
+
   return true;
 }

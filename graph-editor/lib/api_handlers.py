@@ -982,6 +982,7 @@ def handle_runner_analyze(data: Dict[str, Any]) -> Dict[str, Any]:
     if is_snapshot_type and has_snapshot_data:
         # cohort_maturity → v3 engine (doc 29 Phase 5)
         if analysis_type in ('cohort_maturity', 'cohort_maturity_v3'):
+            print("[v3-router] DISPATCHING TO V3 HANDLER")
             return _handle_cohort_maturity_v3(data)
         if analysis_type == 'cohort_maturity_v2':
             return _handle_cohort_maturity_v2(data)
@@ -1159,6 +1160,232 @@ def _fetch_upstream_observations(
     return None
 
 
+def _build_sweep_params_for_edge(
+    graph_data: Dict[str, Any],
+    from_node_id: str,
+    to_node_id: str,
+    is_window: bool,
+    anchor_node: str = '',
+    subjects: list = None,
+    per_edge_results: list = None,
+    candidate_regimes_by_edge: Dict[str, Any] = None,
+    axis_tau_max: int = None,
+) -> Dict[str, Any]:
+    """Build span kernel + carrier + dispersion params for compute_forecast_sweep.
+
+    Shared between the v3 cohort maturity handler and the topo pass
+    Phase 2 forecast sweep. Returns a dict of keyword arguments that
+    can be splat-passed to compute_forecast_sweep alongside the
+    evidence-derived arguments (resolved, cohorts, max_tau).
+
+    For a single-edge (non-multi-hop) query, from_node_id and
+    to_node_id define the edge span. The anchor_node may differ in
+    cohort mode (span widening).
+
+    Design invariant: the topo pass and v3 must pass identical sweep
+    params for the same edge so p.mean == p@∞.
+    """
+    from runner.span_kernel import compose_span_kernel, _build_span_topology, mc_span_cdfs
+    from runner.cohort_forecast import XProvider, get_incoming_edges, read_edge_cohort_params
+    import numpy as _np
+
+    result: Dict[str, Any] = {
+        'mc_cdf_arr': None,
+        'mc_p_s': None,
+        'span_alpha': None,
+        'span_beta': None,
+        'span_mu_sd': None,
+        'span_sigma_sd': None,
+        'span_onset_sd': None,
+        'span_onset_mu_corr': None,
+        'det_norm_cdf': None,
+        'edge_cdf_arr': None,
+        'x_provider': None,
+    }
+
+    if not from_node_id or not to_node_id:
+        return result
+
+    # Span widening: cohort mode, single-hop, anchor != from_node
+    _widen_span = (
+        not is_window
+        and anchor_node
+        and from_node_id
+        and anchor_node != from_node_id
+    )
+    _span_x = anchor_node if _widen_span else from_node_id
+
+    # Edge kernel (span_p for rate asymptote, span_params for IS)
+    _edge_kernel = compose_span_kernel(
+        graph=graph_data,
+        x_node_id=from_node_id,
+        y_node_id=to_node_id,
+        is_window=is_window,
+        max_tau=400,
+    )
+    # CDF kernel (widened or edge)
+    _kernel = (compose_span_kernel(
+        graph=graph_data,
+        x_node_id=_span_x,
+        y_node_id=to_node_id,
+        is_window=is_window,
+        max_tau=400,
+    ) if _widen_span else _edge_kernel)
+
+    if _kernel is not None and _kernel.span_p > 0:
+        _det_cdf_kernel = _edge_kernel or _kernel
+        result['det_norm_cdf'] = [
+            min(max(_det_cdf_kernel.cdf_at(t) / _det_cdf_kernel.span_p, 0.0), 1.0)
+            for t in range(401)
+        ]
+        # Span-adapted params from edge kernel
+        from runner.span_adapter import span_kernel_to_edge_params
+        from runner.cohort_forecast_v2 import build_span_params
+        _ek = _edge_kernel or _kernel
+        # Find edge UUID for the from→to edge
+        _target_edge_id = ''
+        for _e in graph_data.get('edges', []):
+            if str(_e.get('from', '')) == from_node_id and str(_e.get('to', '')) == to_node_id:
+                _target_edge_id = str(_e.get('uuid', _e.get('id', '')))
+                break
+        _span_edge_params = span_kernel_to_edge_params(
+            _ek, graph_data, _target_edge_id, is_window=is_window)
+        def _norm_cdf(tau):
+            raw = _ek.cdf_at(int(round(tau)))
+            return raw / _ek.span_p
+        _span_params = build_span_params(
+            _norm_cdf, _ek.span_p, 400,
+            _span_edge_params, is_window=is_window)
+        result['span_alpha'] = _span_params.alpha_0
+        result['span_beta'] = _span_params.beta_0
+        result['span_mu_sd'] = _span_params.mu_sd
+        result['span_sigma_sd'] = _span_params.sigma_sd
+        result['span_onset_sd'] = _span_params.onset_sd
+        result['span_onset_mu_corr'] = _span_params.onset_mu_corr
+
+    # MC draws: CDF from widened span, p from edge span
+    _span_topo = _build_span_topology(graph_data, _span_x, to_node_id)
+    if _span_topo is not None:
+        _rng = _np.random.default_rng(42)
+        _mc_cdf, _mc_p = mc_span_cdfs(
+            topo=_span_topo,
+            graph=graph_data,
+            is_window=is_window,
+            max_tau=400,
+            num_draws=2000,
+            rng=_rng,
+        )
+        result['mc_cdf_arr'] = _mc_cdf
+        result['mc_p_s'] = _mc_p
+
+    # x_provider for upstream carrier (cohort mode)
+    if not is_window and from_node_id and anchor_node:
+        _ingress = []
+        for inc_edge in get_incoming_edges(graph_data, from_node_id):
+            _params = read_edge_cohort_params(inc_edge)
+            if _params:
+                _ingress.append(_params)
+        _reach = 0.0
+        try:
+            from runner.graph_builder import build_networkx_graph
+            from runner.path_runner import calculate_path_probability
+            _id_to_uuid = {n.get('id', ''): n['uuid']
+                           for n in graph_data.get('nodes', [])}
+            _a_uuid = _id_to_uuid.get(anchor_node, anchor_node)
+            _x_uuid = _id_to_uuid.get(from_node_id, from_node_id)
+            G = build_networkx_graph(graph_data)
+            path_result = calculate_path_probability(G, _a_uuid, _x_uuid)
+            _reach = path_result.probability
+        except Exception:
+            pass
+        _upstream_enabled = _reach > 0
+        # Fetch upstream observations for empirical carrier
+        _upstream_obs = None
+        if _upstream_enabled and from_node_id != anchor_node:
+            if subjects and per_edge_results is not None and candidate_regimes_by_edge is not None:
+                _af = subjects[0].get('anchor_from', '')
+                _at = subjects[0].get('anchor_to', '')
+                _sf = subjects[0].get('sweep_from', _af)
+                _st = subjects[0].get('sweep_to', _at)
+                _upstream_obs = _fetch_upstream_observations(
+                    graph_data=graph_data,
+                    anchor_node=anchor_node,
+                    query_from_node=from_node_id,
+                    per_edge_results=per_edge_results,
+                    candidate_regimes_by_edge=candidate_regimes_by_edge,
+                    anchor_from=_af, anchor_to=_at,
+                    sweep_from=_sf, sweep_to=_st,
+                    axis_tau_max=axis_tau_max,
+                    log_prefix='[sweep-params] upstream:',
+                )
+        result['x_provider'] = XProvider(
+            reach=_reach,
+            upstream_params_list=_ingress,
+            enabled=_upstream_enabled,
+            ingress_carrier=_ingress if _ingress else None,
+            upstream_obs=_upstream_obs,
+        )
+
+    return result
+
+
+def _apply_temporal_regime_selection(
+    rows: List[Dict[str, Any]],
+    subj: Dict[str, Any],
+    is_window: bool,
+) -> List[Dict[str, Any]]:
+    """Apply regime selection with temporal mode preference ordering.
+
+    Window and cohort are separate evidence families (x-anchored vs
+    a-anchored) with different core_hashes. The FE emits them as
+    separate CandidateRegime entries with temporal_mode tags. This
+    function reorders the candidates so the requested mode is tried
+    first, then delegates to select_regime_rows which picks one
+    regime per retrieved_at date.
+
+    When candidate_regimes is absent (backward compat), returns rows
+    unchanged.
+    """
+    from snapshot_regime_selection import CandidateRegime, select_regime_rows
+
+    cr_raw = subj.get('candidate_regimes')
+    if not cr_raw or not isinstance(cr_raw, list):
+        print(f"[temporal_regime] NO candidate_regimes on subject (rows={len(rows)})")
+        return rows
+    print(f"[temporal_regime] {len(cr_raw)} candidates, modes={[r.get('temporal_mode','?') for r in cr_raw if isinstance(r,dict)]}")
+
+    regimes = [
+        CandidateRegime(
+            core_hash=r.get('core_hash', ''),
+            equivalent_hashes=[
+                e.get('core_hash', '') if isinstance(e, dict) else str(e)
+                for e in (r.get('equivalent_hashes') or [])
+            ],
+        )
+        for r in cr_raw if isinstance(r, dict) and r.get('core_hash')
+    ]
+    if not regimes:
+        return rows
+
+    # Reorder: preferred temporal mode first. The temporal_mode tag
+    # on each raw candidate tells us which evidence family it represents.
+    # Candidates matching the requested mode rank before others so
+    # regime selection picks them when data exists for a given date.
+    preferred = 'window' if is_window else 'cohort'
+    tagged = [(r, cr_raw[i].get('temporal_mode', '')) for i, r in enumerate(regimes) if i < len(cr_raw)]
+    preferred_regimes = [r for r, m in tagged if m == preferred]
+    other_regimes = [r for r, m in tagged if m != preferred]
+    ordered = preferred_regimes + other_regimes
+
+    selection = select_regime_rows(rows, ordered if ordered else regimes)
+
+    if len(selection.rows) != len(rows):
+        print(f"[temporal_regime] {len(rows)} → {len(selection.rows)} rows "
+              f"(mode={preferred}, {len(selection.regime_per_date)} dates)")
+
+    return selection.rows
+
+
 def _handle_cohort_maturity_v2(data: Dict[str, Any]) -> Dict[str, Any]:
     """Phase A: completely parallel cohort_maturity_v2 handler.
 
@@ -1284,6 +1511,7 @@ def _handle_cohort_maturity_v2(data: Dict[str, Any]) -> Dict[str, Any]:
                   f"eq_hashes={len(subj.get('equivalent_hashes') or [])} "
                   f"slice_keys={subj.get('slice_keys')}")
 
+            rows = _apply_temporal_regime_selection(rows, subj, is_window)
             derivation = derive_cohort_maturity(
                 rows,
                 sweep_from=sweep_from,
@@ -1745,6 +1973,8 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
     scenarios = data.get('scenarios', [])
     top_analytics_dsl = data.get('analytics_dsl', '')
     display_settings = data.get('display_settings') or {}
+    _emit_diagnostics = bool(data.get('_diagnostics'))
+    _diag: Dict[str, Any] = {} if _emit_diagnostics else {}
 
     per_scenario_results: List[Dict[str, Any]] = []
 
@@ -1822,10 +2052,34 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
                 print(f"[v3] WARNING: snapshot query failed: {e}")
                 rows = []
             total_rows += len(rows)
+            _pre_regime_count = len(rows)
+            _cands_raw = subj.get('candidate_regimes') or []
+            _n_cands = len(_cands_raw)
+            _cand_modes = [c.get('temporal_mode', '?') for c in _cands_raw if isinstance(c, dict)]
+            rows = _apply_temporal_regime_selection(rows, subj, is_window)
+            _post_regime_count = len(rows)
+            # Count rows by core_hash to verify temporal separation
+            _hash_counts: Dict[str, int] = {}
+            for _r in rows:
+                _h = str(_r.get('core_hash', ''))[:16]
+                _hash_counts[_h] = _hash_counts.get(_h, 0) + 1
             print(f"[v3] Subject {subj.get('from_node','?')}→{subj.get('to_node','?')}: "
-                  f"rows={len(rows)} hash={subj.get('core_hash','?')[:20]} "
-                  f"slice_keys={subj.get('slice_keys')} "
-                  f"param_id={subj.get('param_id','?')[-30:]}")
+                  f"rows={_pre_regime_count}→{_post_regime_count} "
+                  f"cands={_n_cands} modes={_cand_modes} "
+                  f"hashes_surviving={_hash_counts}")
+            if _emit_diagnostics:
+                _diag['regime_selection'] = {
+                    'pre_rows': _pre_regime_count,
+                    'post_rows': _post_regime_count,
+                    'n_candidates': _n_cands,
+                    'candidate_modes': _cand_modes,
+                    'is_window': is_window,
+                    'hashes_surviving': _hash_counts,
+                    'candidate_hashes': [
+                        {'core': c.get('core_hash','')[:16], 'eq': [str(e)[:16] for e in (c.get('equivalent_hashes') or [])], 'mode': c.get('temporal_mode','?')}
+                        for c in _cands_raw if isinstance(c, dict)
+                    ],
+                }
             derivation = derive_cohort_maturity(rows, sweep_from=sweep_from, sweep_to=sweep_to_str)
             per_edge_results.append({
                 'path_role': subj.get('path_role', 'only'),
@@ -2471,6 +2725,12 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
                 "success": True,
                 "result": subject_result,
                 "rows_analysed": total_rows,
+                "_debug_regime": {
+                    "pre_count": _pre_regime_count,
+                    "post_count": _post_regime_count,
+                    "n_candidates": _n_cands,
+                    "is_window": is_window,
+                },
             }],
             "rows_analysed": total_rows,
         })
@@ -2482,7 +2742,7 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
         subjects_list = single_scenario.get("subjects", [])
         if len(subjects_list) == 1:
             single = subjects_list[0]
-            return {
+            resp = {
                 "success": single.get("success", False),
                 "result": single.get("result"),
                 "error": single.get("error"),
@@ -2490,6 +2750,9 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
                 "subject_id": single.get("subject_id"),
                 "scenario_id": single_scenario.get("scenario_id"),
             }
+            if _diag:
+                resp["_diagnostics"] = _diag
+            return resp
         return {
             "success": single_scenario.get("success", False),
             "scenario_id": single_scenario.get("scenario_id"),
@@ -5218,10 +5481,16 @@ def handle_stats_topo_pass(data: Dict[str, Any]) -> Dict[str, Any]:
             }, _f, indent=2)
         print(f'[lag/topo-pass] Golden fixture written to {fixture_path}')
 
-    # ── Compute forecast per edge via shared engine (doc 29f §G.1) ──
-    # Uses the same _evaluate_cohort primitive as the cohort maturity
-    # chart (coordinate B: per-cohort at each cohort's own age,
-    # aggregated into scalars).
+    # ── Phase 2: Compute forecast per edge via shared engine ─────────
+    # Design invariant: p.mean from this topo pass == p@∞ from v3
+    # cohort maturity. Both use the same shared evidence pipeline
+    # (snapshot DB → derive → build_cohort_evidence_from_frames →
+    # compute_forecast_sweep → rate_draws[:, -1]).
+    #
+    # When snapshot_evidence is provided (candidate_regimes_by_edge +
+    # date bounds), queries the snapshot DB for full maturity
+    # trajectories — the same data v3 sees. Falls back to parameter
+    # file cohorts when snapshot_evidence is absent (backward compat).
     import time as _time
     _fs_t0 = _time.monotonic()
     from runner.model_resolver import resolve_model_params
@@ -5231,6 +5500,10 @@ def handle_stats_topo_pass(data: Dict[str, Any]) -> Dict[str, Any]:
         NodeArrivalState,
         build_node_arrival_cache,
     )
+    from runner.cohort_forecast_v3 import build_cohort_evidence_from_frames
+    from runner.cohort_maturity_derivation import derive_cohort_maturity
+    from snapshot_service import query_snapshots_for_sweep
+    from datetime import date as _date_cls
     import numpy as _np
 
     edges_by_uuid = {}
@@ -5240,25 +5513,54 @@ def handle_stats_topo_pass(data: Dict[str, Any]) -> Dict[str, Any]:
 
     is_window = query_mode in ('window', 'none')
 
-    # Phase 3: build per-node arrival cache for cohort-mode edges
+    # Parse snapshot_evidence — the shared data contract with v3.
+    # When present, the topo pass queries the snapshot DB instead of
+    # using parameter file cohorts, producing identical evidence.
+    snap_ev = data.get('snapshot_evidence') or {}
+    snap_regimes_by_edge = snap_ev.get('candidate_regimes_by_edge') or {}
+    snap_anchor_from = snap_ev.get('anchor_from')
+    snap_anchor_to = snap_ev.get('anchor_to')
+    snap_sweep_from = snap_ev.get('sweep_from')
+    snap_sweep_to = snap_ev.get('sweep_to')
+    _has_snapshot_evidence = bool(
+        snap_regimes_by_edge and snap_anchor_from and snap_anchor_to
+    )
+    if _has_snapshot_evidence:
+        print(f"[topo-pass] snapshot_evidence: {len(snap_regimes_by_edge)} edges, "
+              f"anchor={snap_anchor_from}..{snap_anchor_to} "
+              f"sweep={snap_sweep_from}..{snap_sweep_to}")
+    else:
+        print("[topo-pass] No snapshot_evidence — falling back to parameter file cohorts")
+
+    # Find anchor node (human ID) — needed for span widening and carrier
+    _anchor_node_id = ''
+    for n in graph.get('nodes', []):
+        if (n.get('entry') or {}).get('is_start'):
+            _anchor_node_id = n.get('id', n.get('uuid', ''))
+            break
+    if not _anchor_node_id and graph.get('nodes'):
+        _anchor_node_id = graph['nodes'][0].get('id', graph['nodes'][0].get('uuid', ''))
+
+    # Build per-node arrival cache for cohort-mode edges (fallback path only)
     _node_arrival_cache = None
     if not is_window:
         try:
-            _anchor_id = None
+            _anchor_uuid = None
             for n in graph.get('nodes', []):
                 if (n.get('entry') or {}).get('is_start'):
-                    _anchor_id = n.get('uuid') or n.get('id')
+                    _anchor_uuid = n.get('uuid') or n.get('id')
                     break
-            if _anchor_id is None and graph.get('nodes'):
-                _anchor_id = graph['nodes'][0].get('uuid') or graph['nodes'][0].get('id', '')
-            if _anchor_id:
+            if _anchor_uuid is None and graph.get('nodes'):
+                _anchor_uuid = graph['nodes'][0].get('uuid') or graph['nodes'][0].get('id', '')
+            if _anchor_uuid:
                 _node_arrival_cache = build_node_arrival_cache(
-                    graph, anchor_id=_anchor_id, max_tau=400)
+                    graph, anchor_id=_anchor_uuid, max_tau=400)
         except Exception as _e:
             print(f"[topo-pass] WARNING: node arrival cache failed: {_e}")
 
     edges_out = []
     _fs_count = 0
+    _fs_snapshot_count = 0
     for ev in result.edge_values:
         fs = None
         improved_p_sd = ev.p_sd
@@ -5266,83 +5568,205 @@ def handle_stats_topo_pass(data: Dict[str, Any]) -> Dict[str, Any]:
         if edge_dict is not None:
             _graph_pref = graph.get('model_source_preference')
             resolved = resolve_model_params(edge_dict,
-                                            scope='edge' if is_window else 'path',
+                                            scope='edge',
                                             temporal_mode='window' if is_window else 'cohort',
                                             graph_preference=_graph_pref)
             if resolved and resolved.latency.sigma > 0:
-                # D18 + review finding #7: use scoped cohorts when available
-                _ec = edge_contexts.get(ev.edge_uuid)
-                cohorts_raw = (
-                    (_ec.scoped_cohorts if _ec and _ec.scoped_cohorts else None)
-                    or param_lookup.get(ev.edge_uuid, [])
-                )
-                # Build CohortEvidence with eval_age (coordinate B)
-                engine_cohorts = []
-                max_age = 0
-                for c in cohorts_raw:
-                    if c.n <= 0 or c.age < 0:
-                        continue
-                    age_i = int(round(c.age))
-                    if age_i > max_age:
-                        max_age = age_i
-                    # Minimal obs_x/obs_y: single-point at frontier.
-                    # _evaluate_cohort degrades gracefully (E_i = N_i).
-                    obs_x = [float(c.n)]
-                    obs_y = [float(c.k) if c.k >= 0 else 0.0]
-                    engine_cohorts.append(CohortEvidence(
-                        obs_x=obs_x,
-                        obs_y=obs_y,
-                        x_frozen=float(c.n),
-                        y_frozen=float(c.k) if c.k >= 0 else 0.0,
-                        frontier_age=0 if is_window else age_i,
-                        a_pop=float(c.n),
-                        eval_age=age_i,
-                    ))
-                if engine_cohorts and max_age > 0:
-                    from_node_id = edge_dict.get('from', '')
-                    _from_arrival = (
-                        _node_arrival_cache.get(from_node_id)
-                        if _node_arrival_cache else None
-                    )
+                # ── Primary path: snapshot DB evidence (shared with v3) ──
+                # Uses the same pipeline as cohort maturity v3: query DB →
+                # regime selection → derive frames → build CohortEvidence →
+                # compute_forecast_sweep. Produces identical numbers.
+                _used_snapshot = False
+                edge_regimes = snap_regimes_by_edge.get(ev.edge_uuid, [])
+                if _has_snapshot_evidence and edge_regimes:
                     try:
-                        sweep = compute_forecast_sweep(
-                            resolved=resolved,
-                            cohorts=engine_cohorts,
-                            max_tau=max_age,
-                            from_node_arrival=_from_arrival if not is_window else None,
+                        # Get param_id from the edge
+                        _param_id = (edge_dict.get('p') or {}).get('id', '')
+                        if not _param_id:
+                            raise ValueError("No param_id on edge")
+
+                        # Pick the preferred candidate (temporal mode match first)
+                        preferred_mode = 'window' if is_window else 'cohort'
+                        preferred = [r for r in edge_regimes
+                                     if isinstance(r, dict) and r.get('temporal_mode') == preferred_mode]
+                        _regime = preferred[0] if preferred else (edge_regimes[0] if edge_regimes else None)
+                        if not _regime or not isinstance(_regime, dict):
+                            raise ValueError("No valid candidate regime")
+
+                        _core_hash = _regime.get('core_hash', '')
+                        _eq_hashes = _regime.get('equivalent_hashes', [])
+
+                        # Query snapshot DB — same call as v3 handler
+                        rows = query_snapshots_for_sweep(
+                            param_id=_param_id,
+                            core_hash=_core_hash,
+                            slice_keys=[''],
+                            anchor_from=_date_cls.fromisoformat(snap_anchor_from),
+                            anchor_to=_date_cls.fromisoformat(snap_anchor_to),
+                            sweep_from=_date_cls.fromisoformat(snap_sweep_from) if snap_sweep_from else None,
+                            sweep_to=_date_cls.fromisoformat(snap_sweep_to) if snap_sweep_to else None,
+                            equivalent_hashes=_eq_hashes if _eq_hashes else None,
                         )
-                        # Read coordinate B: aggregate per-cohort draws
-                        if sweep.cohort_evals:
-                            total_n = sum(c.n for c in cohorts_raw if c.n > 0 and c.age >= 0)
-                            sum_y_draws = _np.zeros(sweep.rate_draws.shape[0])
-                            sum_x_draws = _np.zeros(sweep.rate_draws.shape[0])
-                            for ce in sweep.cohort_evals:
-                                sum_y_draws += ce.y_draws
-                                sum_x_draws += ce.x_draws
-                            x_safe = _np.maximum(sum_x_draws, 1e-10)
-                            rate_draws = sum_y_draws / x_safe
 
-                            class _FS:
-                                pass
-                            fs = _FS()
-                            # Use engine's blended completeness (n-weighted
-                            # CDF at each cohort's eval_age, with posterior
-                            # uncertainty on latency params).
-                            fs.completeness = sweep.completeness_mean if sweep.completeness_mean is not None else ev.completeness
-                            fs.completeness_sd = sweep.completeness_sd if sweep.completeness_sd is not None else 0.0
-                            fs.rate_conditioned = float(_np.median(rate_draws))
-                            fs.rate_conditioned_sd = float(_np.std(rate_draws))
-                            fs.p_conditioned = fs.rate_conditioned
-                            fs.p_conditioned_sd = fs.rate_conditioned_sd
-                            _fs_count += 1
-                            if fs.rate_conditioned_sd > 0:
-                                improved_p_sd = fs.rate_conditioned_sd
-                    except Exception as _sweep_err:
-                        print(f"[topo-pass] WARNING: sweep failed for {ev.edge_uuid}: {_sweep_err}")
+                        # Apply temporal regime selection — same as v3
+                        _subj_for_regime = {
+                            'candidate_regimes': edge_regimes,
+                        }
+                        rows = _apply_temporal_regime_selection(rows, _subj_for_regime, is_window)
 
-        # Doc 29 §Schema Change: engine writes to existing fields,
-        # not a separate forecast_state object. When the engine ran,
-        # its improved values replace the stats-engine defaults.
+                        if rows:
+                            # Derive maturity frames — same as v3
+                            derivation = derive_cohort_maturity(
+                                rows,
+                                sweep_from=snap_sweep_from or snap_anchor_from,
+                                sweep_to=snap_sweep_to or snap_anchor_to,
+                            )
+                            frames = derivation.get('frames', [])
+
+                            if frames:
+                                # Build CohortEvidence — shared function with v3
+                                fe = build_cohort_evidence_from_frames(
+                                    frames=frames,
+                                    target_edge=edge_dict,
+                                    anchor_from=snap_anchor_from,
+                                    anchor_to=snap_anchor_to,
+                                    sweep_to=snap_sweep_to or snap_anchor_to,
+                                    is_window=is_window,
+                                    resolved=resolved,
+                                )
+                                if fe is not None and fe.engine_cohorts:
+                                    _edge_from = edge_dict.get('from', '')
+                                    _edge_to = edge_dict.get('to', '')
+                                    # Build span kernel + carrier — same as v3
+                                    _sp = _build_sweep_params_for_edge(
+                                        graph_data=graph,
+                                        from_node_id=_edge_from,
+                                        to_node_id=_edge_to,
+                                        is_window=is_window,
+                                        anchor_node=_anchor_node_id,
+                                    )
+                                    # Build upstream carrier from x_provider
+                                    _from_arrival = None
+                                    if _sp.get('x_provider') and not is_window:
+                                        from runner.cohort_forecast_v2 import build_upstream_carrier
+                                        _xp = _sp['x_provider']
+                                        if _xp.reach > 0:
+                                            _ups_list = _xp.ingress_carrier or _xp.upstream_params_list
+                                            _carrier_rng = _np.random.default_rng(43)
+                                            _det_cdf, _mc_cdf_carrier, _ = build_upstream_carrier(
+                                                upstream_params_list=_ups_list,
+                                                upstream_obs=_xp.upstream_obs,
+                                                cohort_list=fe.cohort_list,
+                                                reach=_xp.reach,
+                                                is_window=is_window,
+                                                max_tau=fe.max_tau,
+                                                num_draws=2000,
+                                                rng=_carrier_rng,
+                                            )
+                                            if _det_cdf is not None or _mc_cdf_carrier is not None:
+                                                _from_arrival = NodeArrivalState(
+                                                    deterministic_cdf=_det_cdf,
+                                                    mc_cdf=_mc_cdf_carrier,
+                                                    reach=_xp.reach,
+                                                    tier='empirical',
+                                                )
+                                    sweep = compute_forecast_sweep(
+                                        resolved=resolved,
+                                        cohorts=fe.engine_cohorts,
+                                        max_tau=fe.max_tau,
+                                        from_node_arrival=_from_arrival,
+                                        mc_cdf_arr=_sp.get('mc_cdf_arr'),
+                                        mc_p_s=_sp.get('mc_p_s'),
+                                        span_alpha=_sp.get('span_alpha'),
+                                        span_beta=_sp.get('span_beta'),
+                                        span_mu_sd=_sp.get('span_mu_sd'),
+                                        span_sigma_sd=_sp.get('span_sigma_sd'),
+                                        span_onset_sd=_sp.get('span_onset_sd'),
+                                        span_onset_mu_corr=_sp.get('span_onset_mu_corr'),
+                                        det_norm_cdf=_sp.get('det_norm_cdf'),
+                                        edge_cdf_arr=_sp.get('edge_cdf_arr'),
+                                    )
+                                    if sweep.rate_draws.shape[1] > 0:
+                                        rate_at_horizon = sweep.rate_draws[:, -1]
+
+                                        class _FS:
+                                            pass
+                                        fs = _FS()
+                                        fs.completeness = sweep.completeness_mean if sweep.completeness_mean is not None else ev.completeness
+                                        fs.completeness_sd = sweep.completeness_sd if sweep.completeness_sd is not None else 0.0
+                                        fs.rate_conditioned = float(_np.median(rate_at_horizon))
+                                        fs.rate_conditioned_sd = float(_np.std(rate_at_horizon))
+                                        _fs_count += 1
+                                        _fs_snapshot_count += 1
+                                        _used_snapshot = True
+                                        if fs.rate_conditioned_sd > 0:
+                                            improved_p_sd = fs.rate_conditioned_sd
+                                        print(f"[topo-pass] {ev.edge_uuid[:12]}: snapshot DB → "
+                                              f"p={fs.rate_conditioned:.4f}±{fs.rate_conditioned_sd:.4f} "
+                                              f"({len(rows)} rows, {len(fe.engine_cohorts)} cohorts, "
+                                              f"max_tau={fe.max_tau})")
+                    except Exception as _snap_err:
+                        print(f"[topo-pass] WARNING: snapshot evidence failed for {ev.edge_uuid}: {_snap_err}")
+
+                # ── Fallback: parameter file cohorts (backward compat) ──
+                # Used when snapshot_evidence is not provided or when
+                # snapshot DB query fails for this edge.
+                if not _used_snapshot:
+                    _ec = edge_contexts.get(ev.edge_uuid)
+                    cohorts_raw = (
+                        (_ec.scoped_cohorts if _ec and _ec.scoped_cohorts else None)
+                        or param_lookup.get(ev.edge_uuid, [])
+                    )
+                    engine_cohorts = []
+                    max_age = 0
+                    for c in cohorts_raw:
+                        if c.n <= 0 or c.age < 0:
+                            continue
+                        age_i = int(round(c.age))
+                        if age_i > max_age:
+                            max_age = age_i
+                        obs_x = [float(c.n)]
+                        obs_y = [float(c.k) if c.k >= 0 else 0.0]
+                        engine_cohorts.append(CohortEvidence(
+                            obs_x=obs_x,
+                            obs_y=obs_y,
+                            x_frozen=float(c.n),
+                            y_frozen=float(c.k) if c.k >= 0 else 0.0,
+                            frontier_age=age_i,
+                            a_pop=float(c.n),
+                            eval_age=age_i,
+                        ))
+                    if engine_cohorts and max_age > 0:
+                        from_node_id = edge_dict.get('from', '')
+                        _from_arrival = (
+                            _node_arrival_cache.get(from_node_id)
+                            if _node_arrival_cache else None
+                        )
+                        _edge_t95 = ev.path_t95 if ev.path_t95 > 0 else (ev.t95 if ev.t95 > 0 else 60)
+                        _sweep_max_tau = max(max_age, int(_edge_t95 * 2), 100)
+                        try:
+                            sweep = compute_forecast_sweep(
+                                resolved=resolved,
+                                cohorts=engine_cohorts,
+                                max_tau=_sweep_max_tau,
+                                from_node_arrival=_from_arrival if not is_window else None,
+                            )
+                            if sweep.rate_draws.shape[1] > 0:
+                                rate_at_horizon = sweep.rate_draws[:, -1]
+
+                                class _FS:
+                                    pass
+                                fs = _FS()
+                                fs.completeness = sweep.completeness_mean if sweep.completeness_mean is not None else ev.completeness
+                                fs.completeness_sd = sweep.completeness_sd if sweep.completeness_sd is not None else 0.0
+                                fs.rate_conditioned = float(_np.median(rate_at_horizon))
+                                fs.rate_conditioned_sd = float(_np.std(rate_at_horizon))
+                                _fs_count += 1
+                                if fs.rate_conditioned_sd > 0:
+                                    improved_p_sd = fs.rate_conditioned_sd
+                        except Exception as _sweep_err:
+                            print(f"[topo-pass] WARNING: sweep failed for {ev.edge_uuid}: {_sweep_err}")
+
         edges_out.append({
             'edge_uuid': ev.edge_uuid,
             'conditional_index': ev.conditional_index,
@@ -5374,7 +5798,7 @@ def handle_stats_topo_pass(data: Dict[str, Any]) -> Dict[str, Any]:
 
     _fs_ms = (_time.monotonic() - _fs_t0) * 1000
     print(f"[topo-pass] forecast_state: {_fs_count}/{len(edges_out)} edges "
-          f"in {_fs_ms:.0f}ms")
+          f"({_fs_snapshot_count} via snapshot DB) in {_fs_ms:.0f}ms")
 
     return {
         'success': True,
@@ -5383,6 +5807,7 @@ def handle_stats_topo_pass(data: Dict[str, Any]) -> Dict[str, Any]:
             'edges_processed': result.edges_processed,
             'edges_with_lag': result.edges_with_lag,
             'forecast_state_count': _fs_count,
+            'forecast_state_snapshot_count': _fs_snapshot_count,
             'forecast_state_ms': round(_fs_ms),
         },
     }

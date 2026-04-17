@@ -689,29 +689,17 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
             try:
                 import sys as _sys
                 _sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'graph-editor', 'lib'))
-                from snapshot_regime_selection import CandidateRegime, select_regime_rows
+                from snapshot_regime_selection import select_regime_rows_multidim
                 for edge_id, edge_rows in list(snapshot_rows.items()):
                     cr_raw = candidate_regimes_by_edge.get(edge_id, [])
                     if not cr_raw:
                         continue
-                    regimes = [
-                        CandidateRegime(
-                            core_hash=r.get('core_hash', ''),
-                            equivalent_hashes=[
-                                e.get('core_hash', '') if isinstance(e, dict) else str(e)
-                                for e in (r.get('equivalent_hashes') or [])
-                            ],
-                        )
-                        for r in cr_raw if isinstance(r, dict) and r.get('core_hash')
-                    ]
-                    if regimes:
-                        selection = select_regime_rows(edge_rows, regimes)
-                        regime_selections[edge_id] = selection
-                        snapshot_rows[edge_id] = selection.rows
-                        n_before = len(edge_rows)
-                        n_after = len(selection.rows)
-                        if n_before != n_after:
-                            _log(log, f"  regime selection {edge_id[:8]}…: {n_before} → {n_after} rows")
+                    n_before = len(edge_rows)
+                    selected = select_regime_rows_multidim(edge_rows, cr_raw)
+                    snapshot_rows[edge_id] = selected
+                    n_after = len(selected)
+                    if n_before != n_after:
+                        _log(log, f"  regime selection {edge_id[:8]}…: {n_before} → {n_after} rows")
             except Exception as e:
                 _log(log, f"  regime selection failed (non-blocking): {e}")
 

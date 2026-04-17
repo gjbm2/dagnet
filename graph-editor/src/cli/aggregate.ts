@@ -13,6 +13,7 @@ import type { Graph } from '../types';
 import { fetchItems, getItemsForFromFileLoad } from '../services/fetchDataService';
 import type { FetchMode } from '../services/fetchDataService';
 import type { GraphBundle } from './diskLoader';
+import { log, isDiagnostic } from './logger';
 
 export interface AggregateOptions {
   /** Fetch mode — 'from-file' (default) reads cached parameter files only;
@@ -42,6 +43,13 @@ export async function aggregateAndPopulateGraph(
 
   // Collect all fetchable items from the graph (topologically sorted)
   const items = getItemsForFromFileLoad(graph);
+
+  if (isDiagnostic()) {
+    log.diag('── Aggregation: fetchable items ──');
+    for (const item of items) {
+      log.diag(`  ${item.name || item.id}: type=${item.type || '—'}`);
+    }
+  }
 
   if (items.length === 0) {
     warnings.push('No fetchable items found in graph');
@@ -80,6 +88,28 @@ export async function aggregateAndPopulateGraph(
     }
   } catch (err: any) {
     warnings.push(`Fetch pipeline error: ${err.message}`);
+  }
+
+  // Diagnostic: post-aggregation edge state
+  if (isDiagnostic()) {
+    log.diag('── Aggregation: post-aggregation edge state ──');
+    for (const edge of (currentGraph.edges || [])) {
+      const eid = edge.id || edge.uuid;
+      const p = edge.p || {};
+      const lat = p.latency || {};
+      log.diag(`  ${eid}:`);
+      log.diag(`    p.mean=${p.mean ?? '—'}  p.stdev=${p.stdev ?? '—'}`);
+      log.diag(`    evidence: n=${p.evidence?.n ?? '—'} k=${p.evidence?.k ?? '—'} mean=${p.evidence?.mean ?? '—'}`);
+      log.diag(`    forecast.mean=${p.forecast?.mean ?? '—'}`);
+      log.diag(`    latency: completeness=${lat.completeness ?? '—'} t95=${lat.t95 ?? '—'} median_lag=${lat.median_lag_days ?? '—'}`);
+      if (lat.mu != null || lat.sigma != null) {
+        log.diag(`    latency fit: mu=${lat.mu ?? '—'} sigma=${lat.sigma ?? '—'} onset=${lat.onset_delta_days ?? '—'}`);
+      }
+      const latKeys = Object.keys(lat);
+      if (latKeys.length > 0) {
+        log.diag(`    latency keys: [${latKeys.join(', ')}]`);
+      }
+    }
   }
 
   return { graph: currentGraph, warnings };

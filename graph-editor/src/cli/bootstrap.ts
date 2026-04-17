@@ -12,7 +12,7 @@
  */
 
 import { execSync } from 'node:child_process';
-import { log } from './logger';
+import { log, isDiagnostic } from './logger';
 import type { GraphBundle } from './diskLoader';
 
 // ------------------------------------------------------------------
@@ -32,6 +32,7 @@ export interface CLIContext {
   format: 'yaml' | 'json' | 'csv';
   flags: {
     verbose: boolean;
+    diagnostic: boolean;
     sessionLog: boolean;
     showSignatures: boolean;
     allowExternalFetch: boolean;
@@ -59,6 +60,8 @@ export const SHARED_OPTIONS = {
   'show-signatures': { type: 'boolean' as const, default: false },
   'no-cache': { type: 'boolean' as const, default: false },
   verbose: { type: 'boolean' as const, short: 'v', default: false },
+  diagnostic: { type: 'boolean' as const, default: false },
+  diag: { type: 'boolean' as const, default: false },
   'session-log': { type: 'boolean' as const, default: false },
   help: { type: 'boolean' as const, short: 'h', default: false },
 } as const;
@@ -120,6 +123,30 @@ export async function bootstrap(
   log.info(`Workspace: ${workspace.repository}/${workspace.branch}`);
   if (queryDsl) log.info(`Query DSL: ${queryDsl}`);
 
+  // Diagnostic: detailed graph + parameter inventory
+  if (isDiagnostic()) {
+    log.diag('── Graph load detail ──');
+    for (const node of (bundle.graph.nodes || [])) {
+      log.diag(`  node: ${node.id || node.uuid} (label: ${node.label || node.name || '—'})`);
+    }
+    for (const edge of (bundle.graph.edges || [])) {
+      const eid = edge.id || edge.uuid;
+      const pId = edge.p?.id || '—';
+      const hasMean = edge.p?.mean != null;
+      const hasLatency = edge.p?.latency != null;
+      const hasModelVars = Array.isArray(edge.p?.model_vars) && edge.p.model_vars.length > 0;
+      log.diag(`  edge: ${eid}  param_id=${pId}  p.mean=${hasMean ? edge.p.mean : '—'}  latency=${hasLatency}  model_vars=${hasModelVars}`);
+    }
+    log.diag(`  parameter files: ${Array.from(bundle.parameters.keys()).join(', ') || '(none)'}`);
+    for (const [paramId, paramData] of Array.from(bundle.parameters)) {
+      const vals = paramData.values || [];
+      const v = vals[0];
+      const nDates = v?.dates?.length ?? 0;
+      const nDaily = v?.n_daily?.length ?? 0;
+      log.diag(`    ${paramId}: ${vals.length} value set(s), ${nDates} dates, ${nDaily} daily obs`);
+    }
+  }
+
   // Extract extra args (command-specific options)
   const extraArgs: Record<string, any> = {};
   if (commandOptions?.extraOptions) {
@@ -138,6 +165,7 @@ export async function bootstrap(
     format,
     flags: {
       verbose: !!args.verbose,
+      diagnostic: !!args.diagnostic || !!args.diag,
       sessionLog: !!args['session-log'],
       showSignatures: !!args['show-signatures'],
       allowExternalFetch: !!args['allow-external-fetch'],

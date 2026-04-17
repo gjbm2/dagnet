@@ -5,7 +5,7 @@
  * then runs aggregation + LAG pass + param extraction + serialisation.
  */
 
-import { log } from '../logger';
+import { log, isDiagnostic } from '../logger';
 import { bootstrap } from '../bootstrap';
 import { extractParamsFromGraph } from '../../services/GraphParamExtractor';
 import { flattenParams, toYAML, toJSON, toCSV } from '../../services/ParamPackDSLService';
@@ -26,6 +26,7 @@ dagnet-cli param-pack
     --get <key>              Extract a single value (bare scalar to stdout)
     --format, -f             Output format: yaml (default), json, csv
     --show-signatures        Show computed signatures per edge (diagnostic)
+    --diagnostic, --diag     Show detailed pipeline trace (per-edge state at each stage)
     --verbose, -v            Show all console.log/warn output (LAG debug, etc.)
     --session-log            Show session log output
     --allow-external-fetch   Allow fetching from external sources if cache is stale/missing
@@ -57,7 +58,7 @@ async function runParamPack() {
     process.exit(1);
   }
 
-  const { bundle, queryDsl, getKey, format, flags } = ctx;
+  const { bundle, queryDsl, workspace, getKey, format, flags } = ctx;
 
   // Signatures diagnostic
   if (flags.showSignatures) {
@@ -93,13 +94,24 @@ async function runParamPack() {
   // Overwrites FE-only values with engine values. Falls back gracefully
   // if the BE is unreachable.
   log.info('Running BE topo pass...');
-  await runCliTopoPass(populatedGraph, bundle.parameters, queryDsl);
+  await runCliTopoPass(populatedGraph, bundle.parameters, queryDsl, workspace);
 
   // Extract + serialise
   const params = extractParamsFromGraph(populatedGraph);
   const edgeCount = Object.keys(params.edges ?? {}).length;
   const nodeCount = Object.keys(params.nodes ?? {}).length;
   log.info(`Extracted params: ${edgeCount} edges, ${nodeCount} nodes`);
+
+  // Diagnostic: full extracted param pack inventory
+  if (isDiagnostic()) {
+    log.diag('── Param extraction: full key inventory ──');
+    const flat = flattenParams(params);
+    const allKeys = Object.keys(flat).sort();
+    for (const key of allKeys) {
+      log.diag(`  ${key} = ${JSON.stringify(flat[key])}`);
+    }
+    log.diag(`  ${allKeys.length} keys total`);
+  }
 
   // --get: extract a single scalar value
   if (getKey) {

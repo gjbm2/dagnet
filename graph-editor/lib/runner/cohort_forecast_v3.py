@@ -14,8 +14,237 @@ CohortEvidence from frames and assembles rows from the sweep result.
 import math
 import numpy as np
 from collections import defaultdict
+from dataclasses import dataclass, field
 from datetime import date as _date
 from typing import Any, Dict, List, Optional
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Shared evidence builder — used by both v3 chart and topo pass p.mean
+# ═══════════════════════════════════════════════════════════════════════
+
+@dataclass
+class FrameEvidence:
+    """Intermediate evidence extracted from derived maturity frames.
+
+    Produced by build_cohort_evidence_from_frames() and consumed by
+    both the v3 chart builder (compute_cohort_maturity_rows_v3) and
+    the topo pass forecast sweep (handle_stats_topo_pass Phase 2).
+
+    Design invariant: both consumers call compute_forecast_sweep with
+    the SAME engine_cohorts built from the SAME snapshot DB evidence,
+    so p@∞ from v3 == p.mean from the topo pass.
+    """
+    engine_cohorts: list           # List[CohortEvidence]
+    cohort_list: List[Dict]        # sorted cohort_info dicts
+    cohort_at_tau: Dict            # per-cohort tau observations
+    evidence_by_tau: Dict          # aggregate evidence at each tau
+    max_tau: int
+    tau_solid_max: int
+    tau_future_max: int
+    last_frame_date: Optional[_date] = None
+
+
+def build_cohort_evidence_from_frames(
+    frames: List[Dict[str, Any]],
+    target_edge: Dict[str, Any],
+    anchor_from: str,
+    anchor_to: str,
+    sweep_to: str,
+    is_window: bool,
+    resolved: Any,
+    axis_tau_max: Optional[int] = None,
+) -> Optional[FrameEvidence]:
+    """Build CohortEvidence from derived maturity frames.
+
+    Shared between the v3 chart builder and the topo pass forecast
+    sweep. Encapsulates: last-frame extraction, cohort_info, per-tau
+    observation building, tau range computation, and CohortEvidence
+    construction.
+
+    Returns None if no usable evidence is found.
+    """
+    from .forecast_state import CohortEvidence
+
+    try:
+        anchor_from_d = _date.fromisoformat(str(anchor_from)[:10])
+        anchor_to_d = _date.fromisoformat(str(anchor_to)[:10])
+        sweep_to_d = _date.fromisoformat(str(sweep_to)[:10])
+    except (ValueError, TypeError):
+        return None
+
+    lat = resolved.latency
+
+    # ── Find last frame ────────────────────────────────────────────
+    last_frame = None
+    last_frame_date: Optional[_date] = None
+    for f in frames:
+        sd_str = str(f.get('snapshot_date', ''))[:10]
+        if sd_str and sd_str <= str(sweep_to)[:10]:
+            last_frame = f
+            try:
+                last_frame_date = _date.fromisoformat(sd_str)
+            except (ValueError, TypeError):
+                pass
+
+    # ── Build per-cohort info from last frame ──────────────────────
+    cohort_info: Dict[str, Dict[str, Any]] = {}
+    if last_frame and last_frame.get('data_points'):
+        for dp in last_frame['data_points']:
+            ad_str = str(dp.get('anchor_day', ''))[:10]
+            try:
+                ad = _date.fromisoformat(ad_str)
+            except (ValueError, TypeError):
+                continue
+            if ad < anchor_from_d or ad > anchor_to_d:
+                continue
+            x_val = dp.get('x', 0)
+            y_val = dp.get('y', 0)
+            a_val = dp.get('a', 0)
+            if not isinstance(x_val, (int, float)):
+                x_val = 0
+            if not isinstance(a_val, (int, float)) or a_val <= 0:
+                a_val = max(x_val, 1)
+            tau_max_c = (last_frame_date - ad).days if last_frame_date else 0
+            cohort_info[ad_str] = {
+                'x_frozen': float(x_val),
+                'y_frozen': float(y_val) if isinstance(y_val, (int, float)) else 0.0,
+                'a_frozen': float(a_val),
+                'tau_max': max(tau_max_c, 0),
+                'anchor_day': ad,
+            }
+
+    if not cohort_info:
+        return None
+
+    # ── Build per-(cohort, τ) observations from all frames ─────────
+    cohort_at_tau: Dict[str, Dict[int, tuple]] = defaultdict(dict)
+
+    for f in frames:
+        sd_str = str(f.get('snapshot_date', ''))[:10]
+        for dp in (f.get('data_points') or []):
+            ad_str = str(dp.get('anchor_day', ''))[:10]
+            ci = cohort_info.get(ad_str)
+            if ci is None:
+                continue
+            try:
+                sd_d = _date.fromisoformat(sd_str)
+                ad_d = _date.fromisoformat(ad_str)
+            except (ValueError, TypeError):
+                continue
+            tau = (sd_d - ad_d).days
+            if tau < 0:
+                continue
+            x_val = dp.get('x')
+            y_val = dp.get('y')
+            if not isinstance(x_val, (int, float)) or x_val <= 0:
+                continue
+            if not isinstance(y_val, (int, float)) or y_val is None:
+                continue
+            cohort_at_tau[ad_str][tau] = (float(x_val), float(y_val))
+
+    # Aggregate evidence_by_tau from cohort_at_tau (deduplicated)
+    evidence_by_tau: Dict[int, Dict] = {}
+    for ad_str, tau_data in cohort_at_tau.items():
+        for tau, (x, y) in tau_data.items():
+            if tau not in evidence_by_tau:
+                evidence_by_tau[tau] = {'sum_y': 0.0, 'sum_x': 0.0, 'n_cohorts': 0}
+            evidence_by_tau[tau]['sum_y'] += y
+            evidence_by_tau[tau]['sum_x'] += x
+            evidence_by_tau[tau]['n_cohorts'] += 1
+
+    # ── tau_observed per cohort ────────────────────────────────────
+    for ad_str, ci in cohort_info.items():
+        tau_obs = 0
+        if last_frame_date:
+            try:
+                ad_d = _date.fromisoformat(ad_str)
+                tau_obs = (last_frame_date - ad_d).days
+            except (ValueError, TypeError):
+                pass
+        ci['tau_observed'] = min(tau_obs, ci['tau_max'])
+
+    # ── Build cohort_list and epoch boundaries ─────────────────────
+    cohort_list = sorted(cohort_info.values(), key=lambda c: c['anchor_day'])
+    tau_solid_max = 0
+    tau_future_max = max(0, (sweep_to_d - anchor_from_d).days)
+    if cohort_list:
+        youngest = cohort_list[-1]
+        tau_solid_max = youngest.get('tau_observed', youngest['tau_max'])
+        oldest = cohort_list[0]
+        tau_future_max = oldest['tau_max']
+
+    # ── Determine tau range ────────────────────────────────────────
+    max_tau = tau_future_max
+    if axis_tau_max is not None and axis_tau_max > max_tau:
+        max_tau = axis_tau_max
+    if lat.sigma > 0:
+        try:
+            from .lag_distribution_utils import log_normal_inverse_cdf
+            t95 = log_normal_inverse_cdf(0.95, lat.mu, lat.sigma) + lat.onset_delta_days
+            max_tau = max(max_tau, int(math.ceil(t95)))
+        except Exception:
+            pass
+    _max_t95 = 0.0
+    _lat_block = target_edge.get('p', {}).get('latency', {})
+    for _t95_key in ('promoted_path_t95', 'path_t95', 'promoted_t95', 't95'):
+        _t95_v = _lat_block.get(_t95_key)
+        if isinstance(_t95_v, (int, float)) and _t95_v > 0:
+            _max_t95 = max(_max_t95, float(_t95_v))
+    if _max_t95 > 0:
+        max_tau = max(max_tau, int(math.ceil(_max_t95 * 2)))
+    max_tau = max(max_tau, 100)
+    max_tau = min(max_tau, 400)
+
+    # ── Build CohortEvidence per cohort ────────────────────────────
+    engine_cohorts: list = []
+    for ci in cohort_list:
+        N_i = ci['x_frozen']
+        a_i = ci.get('tau_observed', ci['tau_max'])
+        a_pop = ci.get('a_frozen', N_i) or N_i or 1.0
+        ad_str = ci['anchor_day'].isoformat()
+        tau_data = cohort_at_tau.get(ad_str, {})
+
+        obs_x = [0.0] * (max_tau + 1)
+        obs_y = [0.0] * (max_tau + 1)
+        last_x = float(N_i) if is_window else 0.0
+        last_y = 0.0
+        for t in range(max_tau + 1):
+            if t <= a_i:
+                obs = tau_data.get(t)
+                if obs:
+                    last_x = obs[0]
+                    last_y = obs[1]
+                elif is_window:
+                    last_x = float(N_i)
+                obs_x[t] = last_x
+                obs_y[t] = last_y
+            else:
+                obs_x[t] = last_x if last_x > 0 else float(N_i)
+                obs_y[t] = last_y
+
+        engine_cohorts.append(CohortEvidence(
+            obs_x=obs_x,
+            obs_y=obs_y,
+            x_frozen=N_i,
+            y_frozen=ci['y_frozen'],
+            frontier_age=a_i,
+            a_pop=a_pop,
+        ))
+
+    if not engine_cohorts:
+        return None
+
+    return FrameEvidence(
+        engine_cohorts=engine_cohorts,
+        cohort_list=cohort_list,
+        cohort_at_tau=dict(cohort_at_tau),
+        evidence_by_tau=evidence_by_tau,
+        max_tau=max_tau,
+        tau_solid_max=tau_solid_max,
+        tau_future_max=tau_future_max,
+        last_frame_date=last_frame_date,
+    )
 
 
 def compute_cohort_maturity_rows_v3(
@@ -66,13 +295,6 @@ def compute_cohort_maturity_rows_v3(
     if target_edge is None:
         return []
 
-    try:
-        anchor_from_d = _date.fromisoformat(str(anchor_from)[:10])
-        anchor_to_d = _date.fromisoformat(str(anchor_to)[:10])
-        sweep_to_d = _date.fromisoformat(str(sweep_to)[:10])
-    except (ValueError, TypeError):
-        return []
-
     # ── Resolve model params ────────────────────────────────────────
     # Default: edge-level. When resolved_override is provided (e.g.
     # collapsed shortcut with path latency + edge p), use it directly.
@@ -98,163 +320,28 @@ def compute_cohort_maturity_rows_v3(
         except Exception as e:
             print(f"[v3] WARNING: x_provider build failed: {e}")
 
-    # ── Find last frame ─────────────────────────────────────────────
-    last_frame = None
-    last_frame_date: Optional[_date] = None
-    for f in frames:
-        sd_str = str(f.get('snapshot_date', ''))[:10]
-        if sd_str and sd_str <= str(sweep_to)[:10]:
-            last_frame = f
-            try:
-                last_frame_date = _date.fromisoformat(sd_str)
-            except (ValueError, TypeError):
-                pass
+    # ── Build evidence from frames (shared with topo pass) ─────────
+    fe = build_cohort_evidence_from_frames(
+        frames=frames,
+        target_edge=target_edge,
+        anchor_from=anchor_from,
+        anchor_to=anchor_to,
+        sweep_to=sweep_to,
+        is_window=is_window,
+        resolved=resolved,
+        axis_tau_max=axis_tau_max,
+    )
+    if fe is None:
+        return []
 
-    # ── Build per-cohort info from last frame (v2 lines 562-585) ────
-    cohort_info: Dict[str, Dict[str, Any]] = {}
-    if last_frame and last_frame.get('data_points'):
-        for dp in last_frame['data_points']:
-            ad_str = str(dp.get('anchor_day', ''))[:10]
-            try:
-                ad = _date.fromisoformat(ad_str)
-            except (ValueError, TypeError):
-                continue
-            if ad < anchor_from_d or ad > anchor_to_d:
-                continue
-            x_val = dp.get('x', 0)
-            y_val = dp.get('y', 0)
-            a_val = dp.get('a', 0)
-            if not isinstance(x_val, (int, float)):
-                x_val = 0
-            if not isinstance(a_val, (int, float)) or a_val <= 0:
-                a_val = max(x_val, 1)
-            tau_max_c = (last_frame_date - ad).days if last_frame_date else 0
-            cohort_info[ad_str] = {
-                'x_frozen': float(x_val),
-                'y_frozen': float(y_val) if isinstance(y_val, (int, float)) else 0.0,
-                'a_frozen': float(a_val),
-                'tau_max': max(tau_max_c, 0),
-                'anchor_day': ad,
-            }
-
-    # ── Build per-(cohort, τ) observations from all frames ──────────
-    # (v2 lines 599-635)
-    cohort_at_tau: Dict[str, Dict[int, tuple]] = defaultdict(dict)
-    evidence_by_tau: Dict[int, Dict] = {}
-
-    for f in frames:
-        sd_str = str(f.get('snapshot_date', ''))[:10]
-        for dp in (f.get('data_points') or []):
-            ad_str = str(dp.get('anchor_day', ''))[:10]
-            ci = cohort_info.get(ad_str)
-            if ci is None:
-                continue
-            try:
-                sd_d = _date.fromisoformat(sd_str)
-                ad_d = _date.fromisoformat(ad_str)
-            except (ValueError, TypeError):
-                continue
-            tau = (sd_d - ad_d).days
-            if tau < 0:
-                continue
-            x_val = dp.get('x')
-            y_val = dp.get('y')
-            if not isinstance(x_val, (int, float)) or x_val <= 0:
-                continue
-            if not isinstance(y_val, (int, float)) or y_val is None:
-                continue
-
-            cohort_at_tau[ad_str][tau] = (float(x_val), float(y_val))
-
-            # Aggregate evidence for display (sum across cohorts at each τ)
-            if tau not in evidence_by_tau:
-                evidence_by_tau[tau] = {'sum_y': 0.0, 'sum_x': 0.0, 'n_cohorts': 0}
-            # Only count once per (cohort, τ) — last frame wins
-            # This is approximate; v2 counts all frames. For display
-            # evidence it's close enough.
-
-    # Re-aggregate evidence_by_tau from cohort_at_tau (deduplicated)
-    evidence_by_tau = {}
-    for ad_str, tau_data in cohort_at_tau.items():
-        for tau, (x, y) in tau_data.items():
-            if tau not in evidence_by_tau:
-                evidence_by_tau[tau] = {'sum_y': 0.0, 'sum_x': 0.0, 'n_cohorts': 0}
-            evidence_by_tau[tau]['sum_y'] += y
-            evidence_by_tau[tau]['sum_x'] += x
-            evidence_by_tau[tau]['n_cohorts'] += 1
-
-    # ── tau_observed per cohort (v2 lines 638-646) ──────────────────
-    for ad_str, ci in cohort_info.items():
-        tau_obs = 0
-        if last_frame_date:
-            try:
-                ad_d = _date.fromisoformat(ad_str)
-                tau_obs = (last_frame_date - ad_d).days
-            except (ValueError, TypeError):
-                pass
-        ci['tau_observed'] = min(tau_obs, ci['tau_max'])
-
-    # ── Build cohort_list and epoch boundaries (v2 lines 649-654) ───
-    cohort_list = sorted(cohort_info.values(), key=lambda c: c['anchor_day'])
-    tau_solid_max = 0
-    tau_future_max = max(0, (sweep_to_d - anchor_from_d).days)
-    if cohort_list:
-        youngest = cohort_list[-1]
-        tau_solid_max = youngest.get('tau_observed', youngest['tau_max'])
-        oldest = cohort_list[0]
-        tau_future_max = oldest['tau_max']
-
-    # ── Determine tau range ─────────────────────────────────────────
-    max_tau = tau_future_max
-    if axis_tau_max is not None and axis_tau_max > max_tau:
-        max_tau = axis_tau_max
-    elif lat.sigma > 0:
-        try:
-            from .lag_distribution_utils import log_normal_inverse_cdf
-            t95 = log_normal_inverse_cdf(0.95, lat.mu, lat.sigma) + lat.onset_delta_days
-            max_tau = max(max_tau, int(math.ceil(t95)))
-        except Exception:
-            pass
-    max_tau = min(max_tau, 400)
-
-    # ── Build obs_x / obs_y per cohort (v2 lines 672-708) ────────
-    # Then convert to CohortEvidence for the engine.
-    engine_cohorts: List[CohortEvidence] = []
-    # Per-cohort x_at_tau for evidence display (v2 lines 700-708)
-    _cohort_x_at_tau: List[List[float]] = []
-    for ci in cohort_list:
-        N_i = ci['x_frozen']
-        a_i = ci.get('tau_observed', ci['tau_max'])
-        a_pop = ci.get('a_frozen', N_i) or N_i or 1.0
-        ad_str = ci['anchor_day'].isoformat()
-        tau_data = cohort_at_tau.get(ad_str, {})
-
-        obs_x = [0.0] * (max_tau + 1)
-        obs_y = [0.0] * (max_tau + 1)
-        last_x = float(N_i) if is_window else 0.0
-        last_y = 0.0
-        for t in range(max_tau + 1):
-            if t <= a_i:
-                obs = tau_data.get(t)
-                if obs:
-                    last_x = obs[0]
-                    last_y = obs[1]
-                elif is_window:
-                    last_x = float(N_i)
-                obs_x[t] = last_x
-                obs_y[t] = last_y
-            else:
-                obs_x[t] = last_x if last_x > 0 else float(N_i)
-                obs_y[t] = last_y
-
-        engine_cohorts.append(CohortEvidence(
-            obs_x=obs_x,
-            obs_y=obs_y,
-            x_frozen=N_i,
-            y_frozen=ci['y_frozen'],
-            frontier_age=a_i,
-            a_pop=a_pop,
-        ))
+    engine_cohorts = fe.engine_cohorts
+    cohort_list = fe.cohort_list
+    cohort_at_tau = fe.cohort_at_tau
+    evidence_by_tau = fe.evidence_by_tau
+    max_tau = fe.max_tau
+    tau_solid_max = fe.tau_solid_max
+    tau_future_max = fe.tau_future_max
+    last_frame_date = fe.last_frame_date
 
     # ── Build upstream carrier (deferred — v2 lines 656-669) ────────
     # Now that cohort_list is populated, Tier 2 can classify donors.

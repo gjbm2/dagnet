@@ -50,6 +50,25 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [
       react(),
+      // Server freshness endpoint — agents use this to verify code is live.
+      {
+        name: 'dagnet-server-info',
+        configureServer(server) {
+          const bootEpoch = Date.now() / 1000;
+          server.middlewares.use((req, res, next) => {
+            if (req.url === '/__dagnet/server-info') {
+              res.setHeader('Content-Type', 'application/json');
+              res.end(JSON.stringify({
+                boot_epoch: bootEpoch,
+                pid: process.pid,
+                server: 'vite',
+              }));
+              return;
+            }
+            next();
+          });
+        },
+      },
       // DAS Proxy plugin
       {
         name: 'das-proxy',

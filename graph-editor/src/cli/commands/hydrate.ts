@@ -31,6 +31,7 @@ dagnet-cli hydrate
     --name,  -n              Graph name (filename without .json in graphs/)
     --query, -q              Query DSL expression (e.g. "window(-90d:)")
     --allow-external-fetch   Allow fetching from external sources
+    --diagnostic, --diag     Show detailed pipeline trace (per-edge state at each stage)
     --verbose, -v            Show all console.log/warn output
     --help, -h               Show this help
 
@@ -48,7 +49,7 @@ export async function runHydrate(): Promise<void> {
     console.error(USAGE);
     process.exit(1);
   }
-  const { bundle, queryDsl, flags } = ctx;
+  const { bundle, queryDsl, workspace, flags } = ctx;
 
   if (!queryDsl) {
     console.error(USAGE);
@@ -65,7 +66,7 @@ export async function runHydrate(): Promise<void> {
 
   // BE topo pass — engine-computed completeness, blended rate, dispersions
   log.info('Running BE topo pass...');
-  await runCliTopoPass(populatedGraph, bundle.parameters, queryDsl);
+  await runCliTopoPass(populatedGraph, bundle.parameters, queryDsl, workspace);
 
   // Write back to disk
   const graphPath = join(bundle.graphDir, 'graphs', `${bundle.graphName}.json`);

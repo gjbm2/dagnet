@@ -5,6 +5,7 @@ Identify your task type below, then read the listed docs **before writing any co
 All docs are in `docs/current/codebase/` unless a full path is given.
 
 ## Fixing a state/sync/dirty-tracking bug
+- DEV_ENVIRONMENT_AND_HMR.md **(ref — "Server freshness verification" section)** — run `scripts/dev-server-check.sh` before blaming staleness
 - DIAGNOSTIC_PLAYBOOKS.md **(full — find matching symptom)** — structured checklists by symptom type
 - KNOWN_ANTI_PATTERNS.md **(skim)** — check if your bug matches a previously-seen pattern
 - SYNC_SYSTEM_OVERVIEW.md **(full)** — the 4-layer propagation model, all sync flows, known races
@@ -116,6 +117,7 @@ All docs are in `docs/current/codebase/` unless a full path is given.
 - PARAMETER_SYSTEM.md **(skim if touching param schemas)** — param schema role
 
 ## Modifying devtools, monitors, regression scripts, or diagnostic infrastructure
+- DEV_ENVIRONMENT_AND_HMR.md **(full)** — server freshness endpoints, HMR behaviour, dev startup, `scripts/dev-server-check.sh`
 - DEVTOOL_ENGINEERING_PRINCIPLES.md **(full)** — data vs display separation, no silent deletion, output visibility, audit checklist
 - BAYES_REGRESSION_TOOLING.md **(full)** — regression pipeline, stall detection, truth file timeouts, winning formula defaults
 - KNOWN_ANTI_PATTERNS.md **(ref — anti-patterns 37-38)** — devtool data deletion incidents

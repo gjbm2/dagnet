@@ -2160,7 +2160,11 @@ export async function runStage2EnhancementsAndInboundN(
             };
 
             // ── Main flow: race BE against 500ms deadline ──
-            if (beEntries && beEntries.length > 0) {
+            // Three outcomes:
+            //   1. BE resolved within 500ms with results → fast path (single render)
+            //   2. BE resolved within 500ms but failed/empty → FE only
+            //   3. Timeout won → slow path: apply FE now, await BE up to 3s hard cap
+            if (beResolvedFast && beEntries && beEntries.length > 0) {
               // FAST PATH: BE responded within 500ms — use merged results, single render
               const beElapsed = Date.now() - beStartTime;
               const merged = mergeBeIntoFe(feEdgeValues, beEntries);
@@ -2172,9 +2176,14 @@ export async function runStage2EnhancementsAndInboundN(
                   `BE topo pass completed in ${beElapsed}ms (fast path, single render)`,
                 );
               }
-            } else if (beEntries === null || beEntries.length === 0) {
-              // BE failed or returned no results — use FE results only
+            } else if (beResolvedFast) {
+              // BE resolved within 500ms but failed or returned no results — FE only
               finalGraph = await applyEdgeValues(finalGraph, feEdgeValues, null, 'FE only (BE empty/failed)');
+              if (batchLogId) {
+                sessionLogService.addChild(batchLogId, 'warning', 'BE_TOPO_PASS',
+                  `BE topo pass returned ${beEntries === null ? 'null (failed)' : 'empty results'} — using FE only`,
+                );
+              }
             } else {
               // SLOW PATH: BE didn't respond in 500ms — apply FE now, await BE up to 3s
               finalGraph = await applyEdgeValues(finalGraph, feEdgeValues, null, 'FE (BE pending)');
@@ -2198,12 +2207,14 @@ export async function runStage2EnhancementsAndInboundN(
 
               if (lateResult === timeoutSentinel || lateResult === null) {
                 // BE exceeded 3s hard cap or failed — discard, warn
-                if (lateResult === timeoutSentinel && batchLogId) {
+                if (batchLogId) {
                   sessionLogService.addChild(batchLogId, 'warning', 'BE_TOPO_PASS',
-                    `BE topo pass exceeded ${BE_HARD_CAP_MS}ms hard cap — results discarded`,
+                    lateResult === timeoutSentinel
+                      ? `BE topo pass exceeded ${BE_HARD_CAP_MS}ms hard cap — results discarded`
+                      : `BE topo pass failed after ${beElapsed}ms — results discarded`,
                   );
                 }
-                console.warn(`[fetchDataService] BE topo pass exceeded ${BE_HARD_CAP_MS}ms, discarding`);
+                console.warn(`[fetchDataService] BE topo pass ${lateResult === timeoutSentinel ? 'exceeded ' + BE_HARD_CAP_MS + 'ms' : 'failed'}, discarding`);
               } else if (lateResult.length > 0) {
                 // BE arrived within 3s — merge and re-apply (second render)
                 const merged = mergeBeIntoFe(feEdgeValues, lateResult);
@@ -2215,6 +2226,11 @@ export async function runStage2EnhancementsAndInboundN(
                     `BE topo pass completed in ${beElapsed}ms (late merge, second render)`,
                   );
                 }
+              } else if (batchLogId) {
+                // BE arrived within 3s but returned empty
+                sessionLogService.addChild(batchLogId, 'warning', 'BE_TOPO_PASS',
+                  `BE topo pass returned empty results after ${beElapsed}ms — FE values retained`,
+                );
               }
             }
           }

@@ -13,7 +13,7 @@
 
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { log } from '../logger';
+import { log, isDiagnostic } from '../logger';
 import { bootstrap } from '../bootstrap';
 import { fileRegistry } from '../../contexts/TabContext';
 import { PYTHON_API_BASE } from '../../lib/pythonApiBase';
@@ -38,6 +38,7 @@ dagnet-cli bayes
     --output <path>          Write payload JSON to file instead of stdout
     --format, -f             Output format: json (default), yaml
     --no-cache               Bypass disk bundle cache
+    --diagnostic, --diag     Show detailed pipeline trace (per-edge state at each stage)
     --verbose, -v            Show all console.log/warn output
     --help, -h               Show this help
 
@@ -316,6 +317,20 @@ async function runBayes() {
   }
   if (meceDimensions.length > 0) {
     payload.mece_dimensions = meceDimensions;
+  }
+
+  // Diagnostic: payload summary
+  if (isDiagnostic()) {
+    log.diag('── Bayes payload detail ──');
+    log.diag(`  graph_id=${payload.graph_id}  repo=${payload.repo}  branch=${payload.branch}`);
+    log.diag(`  edges=${graphEdges.length}  referenced_param_ids=${referencedParamIds.size}  matched_param_files=${Object.keys(parameterFiles).length}`);
+    log.diag(`  snapshot_subjects=${snapshotSubjects.length}  candidate_regime_edges=${Object.keys(candidateRegimesByEdge).length}  mece_dims=[${meceDimensions.join(',')}]`);
+    for (const [paramFileId, paramFileData] of Object.entries(parameterFiles)) {
+      const data = paramFileData as any;
+      const nValues = data?.values?.length ?? 0;
+      const nDates = data?.values?.[0]?.dates?.length ?? 0;
+      log.diag(`    param_file ${paramFileId}: ${nValues} value set(s), ${nDates} dates`);
+    }
   }
 
   // -----------------------------------------------------------------------

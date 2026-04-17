@@ -1488,6 +1488,8 @@ export class GraphComputeClient {
       }
     }
 
+    const diagnosticsRequested = !!(globalThis as any).__dagnetDiagnostics;
+
     const request: AnalysisRequest = {
       scenarios: [scenarioEntry],
       analytics_dsl: analyticsDsl,
@@ -1495,6 +1497,7 @@ export class GraphComputeClient {
       ...(meceDimensions?.length ? { mece_dimensions: meceDimensions } : {}),
       ...(displaySettings ? { display_settings: displaySettings } : {}),
       ...(testFixture ? { test_fixture: testFixture, ...tfOverrides } : {}),
+      ...(diagnosticsRequested ? { _diagnostics: true } : {}),
       forecasting_settings: buildForecastingSettings(),
     };
 
@@ -1587,6 +1590,11 @@ export class GraphComputeClient {
     }
 
     const result = normalised ?? raw;
+
+    // Preserve BE diagnostics through normalisation
+    if (diagnosticsRequested && raw?._diagnostics && result) {
+      (result as any)._diagnostics = raw._diagnostics;
+    }
 
     // Patch dimension_values.scenario_id with name/colour from request.
     if (result?.result && scenarioId) {

@@ -216,22 +216,39 @@ chart (`compute_forecast_sweep` in `forecast_state.py`). Per edge:
 1. Resolves best-available model params from `model_vars[]` entries
    (reads from selected source, not flat promoted fields). Derives
    alpha/beta from evidence n/k when no Bayesian posterior (D20).
-2. Builds `CohortEvidence` objects with `eval_age` (coordinate B:
-   each cohort evaluated at its own age)
+2. Builds `CohortEvidence` objects with `eval_age` set to each
+   cohort's current age (for completeness computation)
 3. Calls `compute_forecast_sweep` → `_evaluate_cohort` per cohort
-4. Reads per-cohort draws from `cohort_evals` (coordinate B output)
+4. Reads `blended_mean` from coordinate A at the horizon τ (the
+   IS-conditioned projected rate after all conversions complete);
+   reads `completeness` from coordinate B (n-weighted CDF at each
+   cohort's current age)
 5. Aggregates into scalar blended_mean, completeness, p_sd
 
 Two coordinate systems read from the same MC draws (doc 29f §Phase
 G):
 - **Coordinate A (τ-rebased)**: cohort maturity chart sweeps all τ.
-  `midpoint`, `fan_bands`.
-- **Coordinate B (date)**: topo pass and daily conversions read each
-  cohort at its own age. `blended_mean`, `completeness`.
+  `midpoint`, `fan_bands`. The topo pass reads the rate at the last
+  τ (horizon) as `blended_mean` — this is the IS-conditioned
+  projected rate after the population model has projected all cohorts
+  to completion.
+- **Coordinate B (date)**: completeness at each cohort's current age.
+  Each `CohortEvidence` has `eval_age` set, and the sweep computes
+  `completeness_mean` as the n-weighted CDF at those ages.
 
-Both are lossy collapses of the per-cohort `(S, T)` draw arrays.
-Neither can be reconstructed from the other. Both must be read from
-the pre-collapsed arrays within the same sweep call.
+**Coordinate A vs B for rate**: The topo pass must read the rate from
+coordinate A at the horizon (large τ), NOT from coordinate B at each
+cohort's frontier age. The population model's evidence splice
+(`_evaluate_cohort` line 1021) returns observed k/n at τ ≤
+frontier_age. Reading Y/X at the frontier gives the raw evidence
+mean, not the projected rate. The population model only adds value
+(Pop D survivors, Pop C upstream arrivals) at τ > frontier_age. The
+`max_tau` for the sweep must extend beyond t95 for the rate to
+converge (`api_handlers.py` line 5311).
+
+Both coordinate outputs are lossy collapses of the per-cohort `(S, T)`
+draw arrays. Neither can be reconstructed from the other. Both must be
+read from the pre-collapsed arrays within the same sweep call.
 
 The engine writes to the **same existing fields** as the FE topo pass
 (`latency.completeness`, `p.mean`, `p.stdev`, etc.). It does not add

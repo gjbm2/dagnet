@@ -134,6 +134,9 @@ Read `.private-repos.conf` at the repo root to resolve paths. Never hardcode or 
 ### 0.6 DISCUSSION MODE CONFIRMATION
 When *discussing* possible changes, positively confirm before edits. If ambiguous whether discussing vs implementing, pause and ask.
 
+### 0.7 DEV TOOLS ARE FIRST CLASS
+CLI tooling, test harnesses, validation scripts, and dev infrastructure are **production-quality deliverables**, not afterthoughts. They must be fast, reliable, and usable by agents. If a tool isn't good enough, **fix the tool** — don't work around it. Broken or slow dev tooling blocks everything downstream and compounds over time. See `docs/current/project-assure/PROPOSAL.md` for the CLI hardening strategy.
+
 ### 1. NO LOGIC IN UI/MENU FILES
 Menus and UI components are ACCESS POINTS ONLY. Call service methods or shared hooks. Never implement business logic inline or duplicate across call sites.
 
@@ -180,6 +183,7 @@ Codebase architecture docs live in `docs/current/codebase/`. Two rules:
 - **Root-Cause Gate**: Can you name the root cause in one sentence with a "because"? If not, you are not ready to write code.
 - **Recurring defect = multiple code paths**: grep ALL call sites, verify fix applies to ALL, consolidate into ONE canonical function.
 - **Broken infrastructure is a blocking issue**: devtools, log streams, test harnesses — fix properly or escalate. No silent workarounds.
+- **NEVER blame server staleness without proof (HARD BLOCK)**. Before saying "the server may not have restarted" or "HMR may not have picked up the change", run `scripts/dev-server-check.sh <file-you-edited>`. If it says FRESH, **the problem is your code** — investigate the logic. If it says STALE, check the server terminal pane for syntax/import errors that blocked the reload. See `docs/current/codebase/DEV_ENVIRONMENT_AND_HMR.md` for details.
 
 ---
 
@@ -207,7 +211,9 @@ Before reporting done: run relevant tests (write new ones if needed), check all 
 
 - User-facing: `graph-editor/public/docs/`
 - Technical: `docs/current/` (active), `docs/archive/` (historical)
-- Project contexts: `docs/current/project-contexts/`
+- Active docs default to `docs/current/` root — design specs, investigation records, open issues, pending plans
+- Codebase reference: `docs/current/codebase/` — curated, indexed library of how the app works. NOT a dumping ground.
+- Contexts feature project: `docs/current/project-contexts/` — design docs for the "contexts" app feature ONLY. Not a general bucket.
 - Handover notes: `docs/current/handover/` — read if one exists for your work area
 - Always check relevant docs BEFORE making changes
 

@@ -36,6 +36,7 @@ class CandidateRegime:
     """
     core_hash: str
     equivalent_hashes: list[str] = field(default_factory=list)
+    temporal_mode: str = ''  # 'window' | 'cohort' | '' (untagged legacy)
 
     def all_hashes(self) -> set[str]:
         """All hashes that belong to this regime (core + equivalents)."""
@@ -114,6 +115,96 @@ def select_regime_rows(
         regime_per_date[date_key] = winner
 
     return RegimeSelection(rows=out_rows, regime_per_date=regime_per_date)
+
+
+def select_regime_rows_multidim(
+    rows: list[dict[str, Any]],
+    candidate_regimes_raw: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Dimension-aware regime selection for orthogonal context dimensions.
+
+    When candidate regimes span multiple context dimensions (e.g. channel
+    AND device), regimes from different dimensions must NOT compete.
+    This function groups candidates by their `context_keys`, runs
+    `select_regime_rows` independently per dimension group, and unions
+    the surviving rows.
+
+    Each dimension group includes bare (uncontexted) regimes as fallback,
+    so mixed-epoch dates where only bare data exists are handled.
+
+    Args:
+        rows: All snapshot rows for one edge.
+        candidate_regimes_raw: List of dicts with keys:
+            core_hash: str
+            equivalent_hashes: list[str]  (optional)
+            context_keys: list[str]       (optional, e.g. ["channel"])
+
+    Returns:
+        Filtered rows — union of per-dimension selections.
+        If only one dimension group exists, falls back to standard
+        single-pass selection.
+    """
+    if not rows or not candidate_regimes_raw:
+        return []
+
+    # Group by dimension key-set
+    dim_groups: dict[str, list[dict]] = defaultdict(list)
+    for r in candidate_regimes_raw:
+        if not isinstance(r, dict) or not r.get('core_hash'):
+            continue
+        dim_key = '||'.join(sorted(r.get('context_keys') or []))
+        dim_groups[dim_key].append(r)
+
+    def _to_candidate(raw: dict) -> CandidateRegime:
+        return CandidateRegime(
+            core_hash=raw.get('core_hash', ''),
+            equivalent_hashes=[
+                e.get('core_hash', '') if isinstance(e, dict) else str(e)
+                for e in (raw.get('equivalent_hashes') or [])
+            ],
+        )
+
+    # Single dimension group — standard selection
+    if len(dim_groups) <= 1:
+        regimes = [_to_candidate(r) for r in candidate_regimes_raw
+                    if isinstance(r, dict) and r.get('core_hash')]
+        if not regimes:
+            return []
+        return select_regime_rows(rows, regimes).rows
+
+    # Multi-dimension: run per-dimension, union results.
+    bare_raw = dim_groups.pop('', [])
+    kept_ids: set[int] = set()
+    all_kept: list[dict] = []
+    covered_dates: set[str] = set()
+
+    for _dim_key, group_raw in dim_groups.items():
+        combined = group_raw + bare_raw
+        regimes = [_to_candidate(r) for r in combined]
+        selection = select_regime_rows(rows, regimes)
+        for row in selection.rows:
+            rid = id(row)
+            if rid not in kept_ids:
+                kept_ids.add(rid)
+                all_kept.append(row)
+            covered_dates.add(str(row.get('retrieved_at', ''))[:10])
+
+    # Bare-only dates not already covered by any dimension group.
+    # Without this, bare rows on context-covered dates would leak through
+    # and cause double-counting.
+    if bare_raw:
+        bare_regimes = [_to_candidate(r) for r in bare_raw]
+        bare_sel = select_regime_rows(rows, bare_regimes)
+        for row in bare_sel.rows:
+            date_key = str(row.get('retrieved_at', ''))[:10]
+            if date_key in covered_dates:
+                continue
+            rid = id(row)
+            if rid not in kept_ids:
+                kept_ids.add(rid)
+                all_kept.append(row)
+
+    return all_kept
 
 
 def validate_mece_for_aggregation(

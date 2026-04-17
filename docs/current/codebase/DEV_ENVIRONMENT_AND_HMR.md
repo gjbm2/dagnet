@@ -55,31 +55,78 @@ Uvicorn runs with `reload=True`, watching all `*.py` files. Any change to `lib/*
 | `pip install` new dep | n/a | **Restart Python** |
 | Edit `tsconfig.json` | **Restart Vite** | n/a |
 
-## HMR is almost never the cause of bugs
+## Server freshness verification (MANDATORY before blaming staleness)
 
-**Critical guidance for agents**: when debugging unexpected behaviour, **do not blame HMR** unless you have concrete evidence of stale code. HMR failures are rare and have obvious symptoms:
+Both dev servers expose a `/__dagnet/server-info` endpoint that returns the process boot timestamp and PID. A wrapper script compares file mtimes to server boot times to give a definitive FRESH/STALE verdict.
 
-- **HMR failure looks like**: console shows `[vite] hmr update failed`, or a yellow toast appears saying "page reload needed"
-- **HMR failure does NOT look like**: incorrect state, wrong data, sync issues, race conditions, stale IDB data
+### The script
 
-If you suspect stale code:
-1. Check the browser console for HMR errors — if none, HMR is fine
-2. Check the Vite terminal pane for compilation errors — if none, the code is current
-3. If truly suspicious, a hard refresh (`Ctrl+Shift+R`) is definitive — if the bug persists after hard refresh, it's not HMR
+```
+scripts/dev-server-check.sh [file ...]
+```
 
-**The vast majority of bugs agents attribute to HMR are actually**: sync state races, stale IDB data from a previous session, FileRegistry/GraphStore desync, or incorrect assumptions about the data propagation pipeline.
+**With file args** — checks whether each file's mtime is older than the relevant server's boot time:
 
-## Quick staleness diagnostic
+```
+$ scripts/dev-server-check.sh graph-editor/lib/runner.py
+FRESH: graph-editor/lib/runner.py — python server reloaded 1.2s after save
 
-Before blaming code staleness, run this diagnostic sequence:
+All checked files are live. If the bug persists, it is in your code.
+```
 
-1. **Browser console**: any `[vite] hmr` errors? → if no, code is current
+```
+$ scripts/dev-server-check.sh graph-editor/lib/runner.py
+STALE: graph-editor/lib/runner.py — python server boot is 3.1s BEFORE file save
+       Server has not reloaded. Check for syntax errors in the python terminal pane.
+```
+
+**Without args** — reports both servers' status:
+
+```
+$ scripts/dev-server-check.sh
+=== Dev Server Status ===
+
+Vite:   PID=12345  boot=1713400000.0  age=42s  (port 5173)
+Python: PID=12346  boot=1713400002.0  age=40s  (port 9000)
+```
+
+Exit codes: `0` = fresh, `1` = stale after retries, `2` = server unreachable.
+
+The script auto-detects which server to check based on file extension (`.py` → Python, `.ts/.tsx/.js/.jsx/.css` → Vite). For Python, it retries for up to 5 seconds since uvicorn reload takes 1-2s.
+
+### The endpoints
+
+| Server | URL | Returns |
+|--------|-----|---------|
+| Vite | `http://localhost:5173/__dagnet/server-info` | `{"boot_epoch": N, "pid": N, "server": "vite"}` |
+| Python | `http://localhost:9000/__dagnet/server-info` | `{"boot_epoch": N, "pid": N, "server": "python"}` |
+
+- **Vite**: `boot_epoch` is set when the Vite dev server plugin loads. HMR updates do not change it (they don't need to — HMR is near-instant and in-browser). A changed `boot_epoch` means Vite was restarted.
+- **Python**: `boot_epoch` is set at module level (`_BOOT_EPOCH = time.time()`). Since uvicorn `reload=True` kills and restarts the process, every reload produces a new `boot_epoch`.
+
+### Agent rules (HARD BLOCK)
+
+1. **NEVER say "the server may not have restarted"** without first running `scripts/dev-server-check.sh <file>`.
+2. If the script says **FRESH** → the problem is your code. Investigate logic, not infrastructure.
+3. If the script says **STALE** → check the server terminal pane for syntax/import errors that blocked the reload. Fix the error and re-run the check.
+4. If the script says **UNREACHABLE** → the server isn't running. Start it with `./dev-start.sh`.
+
+### What staleness actually looks like
+
+HMR failures are rare and have obvious symptoms:
+- **HMR failure**: console shows `[vite] hmr update failed`, or a yellow toast appears saying "page reload needed"
+- **Python reload failure**: traceback in the Python terminal pane, or uvicorn exits
+
+**The vast majority of bugs agents attribute to staleness are actually**: sync state races, stale IDB data from a previous session, FileRegistry/GraphStore desync, or incorrect assumptions about the data propagation pipeline.
+
+### Manual diagnostic (fallback)
+
+If the script is unavailable, this manual sequence still works:
+
+1. **Browser console**: any `[vite] hmr` errors? → if no, frontend code is current
 2. **Vite pane**: any red compilation errors? → if no, TypeScript compiled successfully
 3. **Python pane**: any reload errors or tracebacks? → if no, Python is current
 4. **Hard refresh** (`Ctrl+Shift+R`): does the bug persist? → if yes, it's not staleness
-5. **IDB check**: is the file in IDB stale? Open DevTools → Application → IndexedDB → DagNetGraphEditor → files → check the record
-
-If all five pass, the issue is **logic**, not staleness.
 
 ## Dev startup sequence
 

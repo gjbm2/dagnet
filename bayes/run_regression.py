@@ -136,8 +136,10 @@ def bootstrap_graph(graph_name: str, timeout: int = 300) -> bool:
         "--write-files",
     ]
     print(f"  Bootstrapping {graph_name}...")
+    env = {**os.environ, "PYTHONPATH": REPO_ROOT}
     result = subprocess.run(
         cmd, capture_output=True, text=True, timeout=timeout, cwd=REPO_ROOT,
+        env=env,
     )
     if result.returncode != 0:
         print(f"  FAIL: {graph_name} bootstrap failed (exit {result.returncode})")

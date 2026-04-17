@@ -18,6 +18,7 @@
 
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
+import { setDiagnostic } from './logger';
 
 /**
  * Load key=value pairs from a dotenv file into process.env.
@@ -47,6 +48,11 @@ export function initCLI(): void {
   const rawArgs = process.argv.slice(2);
   const verbose = rawArgs.includes('--verbose') || rawArgs.includes('-v');
   const showSessionLog = rawArgs.includes('--session-log');
+  const diagnostic = rawArgs.includes('--diagnostic') || rawArgs.includes('--diag');
+
+  if (diagnostic) {
+    setDiagnostic(true);
+  }
 
   if (!verbose) {
     const noop = () => {};

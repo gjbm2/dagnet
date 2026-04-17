@@ -477,6 +477,7 @@ export async function prepareAnalysisComputeInputs(
     })),
   });
 
+  console.error(`[diag] needsSnapshots=${params.needsSnapshots} workspace=${!!params.workspace}`);
   if (params.needsSnapshots) {
     if (!params.workspace) {
       return logBlockedResult(params, { status: 'blocked', reason: 'workspace_missing' });
@@ -490,9 +491,18 @@ export async function prepareAnalysisComputeInputs(
         scenarios[0]?.graph as any,
         params.workspace!,
       );
+      // Diagnostic: regime inventory summary
+      const _regimeEdgeCount = Object.keys(fullRegimeInventory).length;
+      if (_regimeEdgeCount > 0) {
+        console.error(`[diag] ── Regime inventory: ${_regimeEdgeCount} edges ──`);
+        for (const [eid, cands] of Object.entries(fullRegimeInventory)) {
+          for (const c of cands as any[]) {
+            console.error(`[diag]   ${eid.slice(0, 12)}: hash=${c.core_hash?.slice(0, 16)} mode=${c.temporal_mode || '?'} eq=${(c.equivalent_hashes || []).length} ctx=${JSON.stringify(c.context_keys || [])}`);
+          }
+        }
+      }
     } catch (regimeErr: any) {
-      // Non-blocking: regime selection degrades to pass-through on the BE
-      console.warn('[AnalysisPrepare] buildCandidateRegimesByEdge failed:', regimeErr?.message || regimeErr);
+      console.error('[diag] buildCandidateRegimesByEdge FAILED:', regimeErr?.message || regimeErr);
     }
 
     for (let index = 0; index < scenarios.length; index += 1) {

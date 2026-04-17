@@ -744,7 +744,7 @@ def main():
                 print(f"      {var:<8s}  post={post_val:7.1f}±{post_sd:.1f}")
                 continue
 
-            if truth_val is None or truth_val == 0:
+            if truth_val is None:
                 continue
 
             abs_err = abs(post_val - truth_val)

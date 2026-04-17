@@ -335,6 +335,7 @@ def _lookup_regimes(
             regimes.append(CandidateRegime(
                 core_hash=entry.get('core_hash', ''),
                 equivalent_hashes=entry.get('equivalent_hashes', []),
+                temporal_mode=entry.get('temporal_mode', ''),
             ))
     return regimes
 
@@ -382,7 +383,8 @@ def synthesise_snapshot_subjects(
             'core_hash': primary_hash,
             'equivalent_hashes': eq_hashes,
             'candidate_regimes': [
-                {'core_hash': r.core_hash, 'equivalent_hashes': r.equivalent_hashes}
+                {'core_hash': r.core_hash, 'equivalent_hashes': r.equivalent_hashes,
+                 **({'temporal_mode': r.temporal_mode} if getattr(r, 'temporal_mode', None) else {})}
                 for r in subj.candidate_regimes
             ],
             'read_mode': read_mode,

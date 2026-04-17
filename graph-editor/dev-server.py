@@ -9,6 +9,11 @@ from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import sys
 import os
+import time
+
+# Boot timestamp — reset on every uvicorn reload (process restart).
+# Used by /__dagnet/server-info so agents can verify code freshness.
+_BOOT_EPOCH = time.time()
 
 # Load .env.local (same env vars Vite reads — DB_CONNECTION, BAYES_WEBHOOK_SECRET, etc.)
 _env_local = os.path.join(os.path.dirname(__file__), '.env.local')
@@ -100,6 +105,16 @@ def health():
         "status": "ok",
         "service": "dagnet-graph-compute",
         "env": "local"
+    }
+
+
+# Server freshness endpoint — agents use this to verify code is live.
+@app.get("/__dagnet/server-info")
+def server_info():
+    return {
+        "boot_epoch": _BOOT_EPOCH,
+        "pid": os.getpid(),
+        "server": "python",
     }
 
 

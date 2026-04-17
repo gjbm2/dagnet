@@ -45,12 +45,27 @@ After completing a fix that required more than one attempt, or that required und
 
 **How to propose**: tell the user *"This fix revealed that [subsystem] works differently than documented — I'd like to update [doc name] with [brief description]. OK?"* Then make the edit if approved. Small, targeted updates to existing docs are preferred over new docs.
 
+## Server Freshness Verification (HARD BLOCK — before blaming staleness)
+
+**NEVER say "the server may not have restarted"** without running the check script first:
+
+```bash
+scripts/dev-server-check.sh <file-you-edited>
+```
+
+- **FRESH** → the problem is your code. Investigate logic, not infrastructure.
+- **STALE** → check the server terminal pane for syntax/import errors that blocked the reload. Fix the error and re-run.
+- **UNREACHABLE** → the server isn't running. Start it with `./dev-start.sh`.
+
+Both dev servers expose `GET /__dagnet/server-info` (boot timestamp + PID). The script compares file mtime to server boot time and retries for up to 5s for Python (uvicorn reload takes 1-2s). Full details in `DEV_ENVIRONMENT_AND_HMR.md`.
+
 ## Devtool and Logging Integrity (BLOCKING — no workarounds)
 
 **CRITICAL**: Devtools and logging machinery are the agent's eyes. A broken devtool doesn't just affect one task — it degrades every future session that depends on it. A broken logging pipeline means the agent is blind to everything and *won't know it's blind* because the tool runs without error, producing incomplete or wrong output.
 
 **What counts as infrastructure** (not an exhaustive list):
 
+- **Server freshness endpoints**: `/__dagnet/server-info` on both Vite and Python, and the `scripts/dev-server-check.sh` wrapper
 - **Log streaming pipeline**: `debug/tmp.browser-console.jsonl`, `debug/tmp.session-log.jsonl`, `debug/tmp.python-server.jsonl`, the mirroring code that writes to them, mark injection into all three streams
 - **Log extraction and diagnostics**: `scripts/extract-mark-logs.sh`, graph snapshot capture (`debug/graph-snapshots/`)
 - **Session log service**: `sessionLogService.ts` — levels, thresholds, `startOperation`/`endOperation` lifecycle, viewer rendering
