@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 2.0.1b
+**Released:** 18-Apr-26
+
+Significant post-release fixes to forecasting, orth contexts and charting.
+
+---
+
 
 ## Version 2.0 Beta
 **Released:** 17-Apr-26
