@@ -2370,8 +2370,8 @@ export async function runStage2EnhancementsAndInboundN(
               }
               if (results.length > 0 && results[0].edges.length > 0) {
                 const edgeResults = results[0].edges;
-                applyConditionedForecastToGraph(_forecastGraph, results);
-                _setGraph({ ..._forecastGraph } as any);
+                const updatedGraph = applyConditionedForecastToGraph(_forecastGraph, results);
+                _setGraph(updatedGraph);
                 if (batchLogId) {
                   sessionLogService.addChild(batchLogId, 'info', 'CONDITIONED_FORECAST',
                     `Conditioned forecast applied in ${elapsed}ms: ${edgeResults.length} edges`,

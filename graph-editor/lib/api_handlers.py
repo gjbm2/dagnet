@@ -1312,6 +1312,11 @@ def _handle_cohort_maturity_v2(data: Dict[str, Any]) -> Dict[str, Any]:
         is_window = 'window(' in temporal_dsl or 'window(' in query_dsl
 
         # ── Derive frames per edge ────────────────────────────────────
+        # Doc #47: multi-hop cohort must use window evidence for subject
+        # frames. See v3 handler comment for rationale.
+        is_multihop = len(subjects) > 1
+        subject_is_window = is_window or is_multihop
+
         per_edge_results: List[Dict[str, Any]] = []
         total_rows = 0
 
@@ -1342,7 +1347,7 @@ def _handle_cohort_maturity_v2(data: Dict[str, Any]) -> Dict[str, Any]:
                   f"eq_hashes={len(subj.get('equivalent_hashes') or [])} "
                   f"slice_keys={subj.get('slice_keys')}")
 
-            rows = _apply_temporal_regime_selection(rows, subj, is_window)
+            rows = _apply_temporal_regime_selection(rows, subj, subject_is_window)
             derivation = derive_cohort_maturity(
                 rows,
                 sweep_from=sweep_from,
@@ -1864,6 +1869,14 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
         is_window = 'window(' in temporal_dsl or 'window(' in query_dsl
 
         # ── Derive frames per edge (shared with v2) ──────────────────
+        # Doc #47: for multi-hop cohort queries, subject-frame construction
+        # must use window evidence. Cohort semantics apply at the path level
+        # (x_provider, frontier, IS conditioning, path CDF), not at per-edge
+        # evidence selection. Without this override, cohort evidence is
+        # maturity-diluted and suppresses the baseline.
+        is_multihop = len(subjects) > 1
+        subject_is_window = is_window or is_multihop
+
         per_edge_results: List[Dict[str, Any]] = []
         total_rows = 0
         for subj in subjects:
@@ -1887,7 +1900,7 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
             _cands_raw = subj.get('candidate_regimes') or []
             _n_cands = len(_cands_raw)
             _cand_modes = [c.get('temporal_mode', '?') for c in _cands_raw if isinstance(c, dict)]
-            rows = _apply_temporal_regime_selection(rows, subj, is_window)
+            rows = _apply_temporal_regime_selection(rows, subj, subject_is_window)
             _post_regime_count = len(rows)
             # Count rows by core_hash to verify temporal separation
             _hash_counts: Dict[str, int] = {}
@@ -2625,13 +2638,18 @@ def handle_conditioned_forecast(data: Dict[str, Any]) -> Dict[str, Any]:
         scenario_id = scenario.get('scenario_id', 'unknown')
         graph_data = scenario.get('graph') or {}
 
-        # ── Resolve subjects from DSL (same as v3) ──────────────────
+        # ── Resolve subjects ────────────────────────────────────────
+        # Two modes:
+        #   (a) analytics_dsl provided → funnel_path scope (single edge/path)
+        #   (b) no analytics_dsl → all_graph_parameters scope (doc 47)
+        # Mode (b) is the whole-graph conditioned forecast pass.
         subjects = None
         subject_dsl = top_analytics_dsl or scenario.get('analytics_dsl', '')
-        if subject_dsl:
-            try:
-                from analysis_subject_resolution import resolve_analysis_subjects, synthesise_snapshot_subjects
-                temporal_dsl = scenario.get('effective_query_dsl', '')
+        temporal_dsl = scenario.get('effective_query_dsl', '')
+        try:
+            from analysis_subject_resolution import resolve_analysis_subjects, synthesise_snapshot_subjects
+            if subject_dsl:
+                # Mode (a): single-edge/path via analytics DSL
                 full_dsl = f"{subject_dsl}.{temporal_dsl}" if subject_dsl and temporal_dsl else (subject_dsl or temporal_dsl)
                 resolved = resolve_analysis_subjects(
                     graph=graph_data, query_dsl=full_dsl, analysis_type='cohort_maturity',
@@ -2640,11 +2658,18 @@ def handle_conditioned_forecast(data: Dict[str, Any]) -> Dict[str, Any]:
                 subjects = synthesise_snapshot_subjects(resolved, 'cohort_maturity')
                 print(f"[forecast] Resolved {len(subjects)} subjects from DSL "
                       f"'{full_dsl}' (scenario={scenario_id})")
-            except Exception as e:
-                print(f"[forecast] WARNING: DSL resolution failed: {e}")
-        else:
-            print(f"[forecast] WARNING: No analytics_dsl provided — cannot resolve "
-                  f"subjects. Pass from(X).to(Y) in the DSL. (scenario={scenario_id})")
+            else:
+                # Mode (b): whole-graph — resolve ALL parameterised edges
+                resolved = resolve_analysis_subjects(
+                    graph=graph_data, query_dsl=temporal_dsl, analysis_type='conditioned_forecast',
+                    candidate_regimes_by_edge=scenario.get('candidate_regimes_by_edge', {}),
+                )
+                subjects = synthesise_snapshot_subjects(resolved, 'conditioned_forecast')
+                print(f"[forecast] Resolved {len(subjects)} subjects from graph "
+                      f"(all_graph_parameters, scenario={scenario_id})")
+        except Exception as e:
+            print(f"[forecast] WARNING: subject resolution failed: {e}")
+            import traceback; traceback.print_exc()
 
         if not subjects:
             subjects = scenario.get('snapshot_subjects', [])
@@ -2654,296 +2679,331 @@ def handle_conditioned_forecast(data: Dict[str, Any]) -> Dict[str, Any]:
             })
             continue
 
-        # ── Determine query nodes and anchor (same as v3) ────────────
-        query_from_node = query_to_node = anchor_node = None
-        for subj in subjects:
-            role = subj.get('path_role', '')
-            if role in ('first', 'only'):
-                query_from_node = subj.get('from_node')
-            if role in ('last', 'only'):
-                query_to_node = subj.get('to_node')
+        # ── Whole-graph mode: iterate per-edge ──────────────────────
+        # In whole-graph mode (path_role='all'), each subject is an
+        # independent edge. Process each one as a single-edge pipeline
+        # pass, identical to the v3 chart path with path_role='only'.
+        # This guarantees parity with the single-edge reference (doc 47).
+        #
+        # Edges are processed in topological order so upstream edges
+        # are computed before downstream edges. Derivation results are
+        # cached and passed to _fetch_upstream_observations so downstream
+        # edges get empirical carrier evidence (Tier 2) without re-querying.
+        is_whole_graph = any(s.get('path_role') == 'all' for s in subjects)
+        if is_whole_graph:
+            # Build topo order for edge processing
+            eligible_subjects = [
+                dict(s, path_role='only')
+                for s in subjects
+                if s.get('core_hash')
+            ]
+            # Sort by topological depth: edges from START nodes first,
+            # then edges whose from_node is another edge's to_node.
+            _start_uuids = {
+                n['uuid'] for n in graph_data.get('nodes', [])
+                if n.get('entry', {}).get('is_start')
+            }
+            def _topo_key(s):
+                from_uuid = None
+                for n in graph_data.get('nodes', []):
+                    if n.get('id') == s.get('from_node'):
+                        from_uuid = n['uuid']
+                        break
+                return 0 if from_uuid in _start_uuids else 1
+            eligible_subjects.sort(key=_topo_key)
+            subject_groups = [[s] for s in eligible_subjects]
+        else:
+            subject_groups = [subjects]
 
-        try:
-            from msmdc import compute_anchor_node_id
-            from graph_types import Graph
-            g_obj = Graph(**graph_data) if graph_data else None
-            if g_obj and g_obj.edges:
-                anchor_node = compute_anchor_node_id(g_obj, g_obj.edges[0])
-        except Exception:
-            pass
-
-        temporal_dsl = scenario.get('effective_query_dsl', '')
         query_dsl = data.get('query_dsl') or top_analytics_dsl or ''
         is_window = 'window(' in temporal_dsl or 'window(' in query_dsl
 
-        # ── Derive frames per edge (same as v3) ─────────────────────
-        per_edge_results: List[Dict[str, Any]] = []
-        total_rows = 0
-        for subj in subjects:
-            sweep_from = subj.get('sweep_from')
-            sweep_to_str = subj.get('sweep_to')
+        edge_results: List[Dict[str, Any]] = []
+        skipped_edges: List[Dict[str, Any]] = []
+        # Running cache of derivation results across edges (whole-graph mode).
+        # Passed to _fetch_upstream_observations so downstream edges find
+        # upstream frames already cached, enabling Tier 2 empirical carriers.
+        all_per_edge_results: List[Dict[str, Any]] = []
+
+        for subj_group in subject_groups:
+            # ── Determine query nodes and anchor ────────────────────
+            query_from_node = query_to_node = anchor_node = None
+            for subj in subj_group:
+                role = subj.get('path_role', '')
+                if role in ('first', 'only'):
+                    query_from_node = subj.get('from_node')
+                if role in ('last', 'only'):
+                    query_to_node = subj.get('to_node')
+
+            if not query_from_node or not query_to_node:
+                continue
+
+            # Per-edge anchor (doc 47: use compute_all_anchor_nodes)
             try:
-                rows = query_snapshots_for_sweep(
-                    param_id=subj['param_id'], core_hash=subj['core_hash'],
-                    slice_keys=subj.get('slice_keys', ['']),
-                    anchor_from=date.fromisoformat(subj['anchor_from']),
-                    anchor_to=date.fromisoformat(subj['anchor_to']),
-                    sweep_from=date.fromisoformat(sweep_from) if sweep_from else None,
-                    sweep_to=date.fromisoformat(sweep_to_str) if sweep_to_str else None,
-                    equivalent_hashes=subj.get('equivalent_hashes'),
-                )
-            except Exception as e:
-                print(f"[forecast] WARNING: snapshot query failed: {e}")
-                rows = []
-            total_rows += len(rows)
-            rows = _apply_temporal_regime_selection(rows, subj, is_window)
-            derivation = derive_cohort_maturity(rows, sweep_from=sweep_from, sweep_to=sweep_to_str)
-            per_edge_results.append({
-                'path_role': subj.get('path_role', 'only'),
-                'from_node': subj.get('from_node', ''),
-                'to_node': subj.get('to_node', ''),
-                'subject': subj,
-                'derivation_result': derivation,
-            })
-
-        # ── Compose span-level evidence (same as v3) ────────────────
-        composed = compose_path_maturity_frames(
-            per_edge_results=per_edge_results,
-            query_from_node=query_from_node or '',
-            query_to_node=query_to_node or '',
-            anchor_node=anchor_node,
-        )
-        composed_frames = composed.get('frames', [])
-
-        # ── Find last edge ──────────────────────────────────────────
-        last_edge_id = None
-        for entry in per_edge_results:
-            if entry['path_role'] in ('last', 'only'):
-                last_edge_id = (entry['subject'].get('target') or {}).get('targetId')
-                break
-
-        # ── Dates ───────────────────────────────────────────────────
-        anchor_from_str = subjects[0].get('anchor_from', '')
-        sweep_to_final = subjects[0].get('sweep_to') or subjects[0].get('anchor_to', '')
-
-        # ── Build span kernel + carrier + x_provider (same as v3) ───
-        # This block is identical to the v3 handler's span kernel
-        # construction. Both handlers must produce the same sweep
-        # params for the design invariant to hold.
-        from runner.model_resolver import resolve_model_params
-        from runner.cohort_forecast import find_edge_by_id
-
-        _mc_cdf = None
-        _mc_p = None
-        _is_multi_hop = len(subjects) > 1
-        _edge_mc_cdf = None
-        _det_norm_cdf = None
-        _span_alpha = None
-        _span_beta = None
-        _span_params = None
-        _edge_kernel = None
-        if composed_frames and last_edge_id and query_from_node and query_to_node:
-            from runner.span_kernel import compose_span_kernel, _build_span_topology, mc_span_cdfs
-            _widen_span = (
-                not _is_multi_hop
-                and not is_window
-                and anchor_node
-                and query_from_node
-                and anchor_node != query_from_node
-            )
-            _span_x = anchor_node if _widen_span else query_from_node
-
-            _edge_kernel = compose_span_kernel(
-                graph=graph_data, x_node_id=query_from_node,
-                y_node_id=query_to_node, is_window=is_window, max_tau=400,
-            )
-            _kernel = (compose_span_kernel(
-                graph=graph_data, x_node_id=_span_x,
-                y_node_id=query_to_node, is_window=is_window, max_tau=400,
-            ) if _widen_span else _edge_kernel)
-
-            if _kernel is not None and _kernel.span_p > 0:
-                _det_cdf_kernel = _edge_kernel or _kernel
-                _det_norm_cdf = [
-                    min(max(_det_cdf_kernel.cdf_at(t) / _det_cdf_kernel.span_p, 0.0), 1.0)
-                    for t in range(401)
-                ]
-                from runner.span_adapter import span_kernel_to_edge_params
-                from runner.cohort_forecast_v2 import build_span_params
-                _ek = _edge_kernel or _kernel
-                _span_edge_params = span_kernel_to_edge_params(
-                    _ek, graph_data, last_edge_id, is_window=is_window)
-                def _norm_cdf(tau):
-                    return _ek.cdf_at(int(round(tau))) / _ek.span_p
-                _span_params = build_span_params(
-                    _norm_cdf, _ek.span_p, 400,
-                    _span_edge_params, is_window=is_window)
-                _span_alpha = _span_params.alpha_0
-                _span_beta = _span_params.beta_0
-
-            _span_topo = _build_span_topology(graph_data, _span_x, query_to_node)
-            if _span_topo is not None:
-                _rng = _np.random.default_rng(42)
-                _mc_cdf, _mc_p = mc_span_cdfs(
-                    topo=_span_topo, graph=graph_data,
-                    is_window=is_window, max_tau=400, num_draws=2000, rng=_rng,
-                )
-                if _widen_span:
-                    _edge_topo = _build_span_topology(graph_data, query_from_node, query_to_node)
-                    if _edge_topo is not None:
-                        _rng_edge = _np.random.default_rng(42)
-                        _edge_mc_cdf, _mc_p = mc_span_cdfs(
-                            topo=_edge_topo, graph=graph_data,
-                            is_window=is_window, max_tau=400, num_draws=2000, rng=_rng_edge,
-                        )
-
-        # Multi-hop edge CDF (same as v3)
-        if _is_multi_hop and _edge_mc_cdf is None and _mc_cdf is not None:
-            _last_entry = next(
-                (e for e in per_edge_results if e['path_role'] in ('last', 'only')), None)
-            if _last_entry:
-                from runner.span_kernel import _build_span_topology, mc_span_cdfs
-                _last_topo = _build_span_topology(graph_data, _last_entry['from_node'], _last_entry['to_node'])
-                if _last_topo is not None:
-                    _rng_last = _np.random.default_rng(42)
-                    _edge_mc_cdf, _ = mc_span_cdfs(
-                        topo=_last_topo, graph=graph_data,
-                        is_window=is_window, max_tau=400, num_draws=2000, rng=_rng_last,
-                    )
-
-        # x_provider (same as v3)
-        _x_provider = None
-        if not is_window and query_from_node and anchor_node:
-            from runner.cohort_forecast import XProvider, get_incoming_edges, read_edge_cohort_params
-            _ingress = []
-            for inc_edge in get_incoming_edges(graph_data, query_from_node):
-                _params = read_edge_cohort_params(inc_edge)
-                if _params:
-                    _ingress.append(_params)
-            _reach = 0.0
-            try:
-                from runner.graph_builder import build_networkx_graph
-                from runner.path_runner import calculate_path_probability
-                _id_to_uuid = {n.get('id', ''): n['uuid'] for n in graph_data.get('nodes', [])}
-                _a_uuid = _id_to_uuid.get(anchor_node, anchor_node)
-                _x_uuid = _id_to_uuid.get(query_from_node, query_from_node)
-                G = build_networkx_graph(graph_data)
-                path_result = calculate_path_probability(G, _a_uuid, _x_uuid)
-                _reach = path_result.probability
+                from msmdc import compute_anchor_node_id
+                from graph_types import Graph
+                g_obj = Graph(**graph_data) if graph_data else None
+                if g_obj:
+                    edge_uuid = subj_group[0].get('target', {}).get('targetId', '')
+                    g_edge = next((e for e in g_obj.edges if e.uuid == edge_uuid), None)
+                    if g_edge:
+                        anchor_node = compute_anchor_node_id(g_obj, g_edge)
+                    elif g_obj.edges:
+                        anchor_node = compute_anchor_node_id(g_obj, g_obj.edges[0])
             except Exception:
                 pass
-            _upstream_enabled = _reach > 0
-            _upstream_obs = None
-            if _upstream_enabled and query_from_node != anchor_node:
-                _af = subjects[0].get('anchor_from', '')
-                _at = subjects[0].get('anchor_to', '')
-                _sf = subjects[0].get('sweep_from', _af)
-                _st = subjects[0].get('sweep_to', _at)
-                _upstream_obs = _fetch_upstream_observations(
-                    graph_data=graph_data, anchor_node=anchor_node,
-                    query_from_node=query_from_node,
-                    per_edge_results=per_edge_results,
-                    candidate_regimes_by_edge=scenario.get('candidate_regimes_by_edge', {}),
-                    anchor_from=_af, anchor_to=_at, sweep_from=_sf, sweep_to=_st,
-                    log_prefix='[forecast] upstream:',
-                )
-            _x_provider = XProvider(
-                reach=_reach, upstream_params_list=_ingress,
-                enabled=_upstream_enabled,
-                ingress_carrier=_ingress if _ingress else None,
-                upstream_obs=_upstream_obs,
-            )
 
-        # Diagnostic: trace span kernel params
-        _sweep_diag = {
-            'is_window': is_window,
-            'mc_cdf': _mc_cdf is not None,
-            'mc_p': _mc_p is not None,
-            'det_norm_cdf': _det_norm_cdf is not None,
-            'det_norm_cdf_at_taus': {t: round(_det_norm_cdf[t], 4) for t in [5, 10, 15, 20, 30] if _det_norm_cdf and t < len(_det_norm_cdf)} if _det_norm_cdf else None,
-            'span_alpha': _span_alpha,
-            'span_beta': _span_beta,
-            'span_mu_sd': _span_params.mu_sd if _span_params else None,
-            'edge_kernel': _edge_kernel is not None,
-            'widen_span': bool(not _is_multi_hop and not is_window and anchor_node and query_from_node and anchor_node != query_from_node),
-            'anchor_node': anchor_node,
-            'x_provider_reach': _x_provider.reach if _x_provider else None,
-        }
-        if _mc_cdf is not None:
-            _mc_med = _np.median(_mc_cdf[:min(2000, _mc_cdf.shape[0])], axis=0)
-            _sweep_diag['mc_cdf_at_taus'] = {
-                t: round(float(_mc_med[t]), 4) if t < len(_mc_med) else None
-                for t in [5, 10, 15, 20, 30, 50]
-            }
-        print(f"[forecast] sweep_diag: {_sweep_diag}")
+            # ── Derive frames per edge (same as v3) ─────────────────
+            per_edge_results: List[Dict[str, Any]] = []
+            total_rows = 0
+            for subj in subj_group:
+                sweep_from = subj.get('sweep_from')
+                sweep_to_str = subj.get('sweep_to')
+                try:
+                    rows = query_snapshots_for_sweep(
+                        param_id=subj['param_id'], core_hash=subj['core_hash'],
+                        slice_keys=subj.get('slice_keys', ['']),
+                        anchor_from=date.fromisoformat(subj['anchor_from']),
+                        anchor_to=date.fromisoformat(subj['anchor_to']),
+                        sweep_from=date.fromisoformat(sweep_from) if sweep_from else None,
+                        sweep_to=date.fromisoformat(sweep_to_str) if sweep_to_str else None,
+                        equivalent_hashes=subj.get('equivalent_hashes'),
+                    )
+                except Exception as e:
+                    print(f"[forecast] WARNING: snapshot query failed: {e}")
+                    rows = []
+                total_rows += len(rows)
+                rows = _apply_temporal_regime_selection(rows, subj, is_window)
+                derivation = derive_cohort_maturity(rows, sweep_from=sweep_from, sweep_to=sweep_to_str)
+                per_edge_results.append({
+                    'path_role': subj.get('path_role', 'only'),
+                    'from_node': subj.get('from_node', ''),
+                    'to_node': subj.get('to_node', ''),
+                    'subject': subj,
+                    'derivation_result': derivation,
+                })
 
-        # ── Call v3 row builder and read scalars ────────────────────
-        # Run the SAME compute_cohort_maturity_rows_v3 that the chart
-        # uses, then read p@∞ from the last row. Guarantees identical
-        # numbers — same engine, same evidence, same draws.
-        edge_results: List[Dict[str, Any]] = []
-        if composed_frames and last_edge_id:
-            anchor_to_str = subjects[0].get('anchor_to', '')
-            maturity_rows = compute_cohort_maturity_rows_v3(
-                frames=composed_frames,
-                graph=graph_data,
-                target_edge_id=last_edge_id,
+            # Cache derivation results for downstream carrier building
+            all_per_edge_results.extend(per_edge_results)
+
+            if total_rows == 0:
+                edge_uuid = subj_group[0].get('target', {}).get('targetId', '')
+                skipped_edges.append({
+                    'edge_uuid': edge_uuid,
+                    'reason': 'no snapshot rows after regime selection',
+                })
+                continue
+
+            # ── Compose span-level evidence (same as v3) ────────────
+            composed = compose_path_maturity_frames(
+                per_edge_results=per_edge_results,
                 query_from_node=query_from_node or '',
                 query_to_node=query_to_node or '',
-                anchor_from=anchor_from_str,
-                anchor_to=anchor_to_str,
-                sweep_to=sweep_to_final,
-                is_window=is_window,
-                anchor_node_id=anchor_node,
-                mc_cdf_arr=_mc_cdf,
-                mc_p_s=_mc_p,
-                det_norm_cdf=_det_norm_cdf,
-                x_provider_override=_x_provider,
-                span_alpha=_span_alpha,
-                span_beta=_span_beta,
-                span_mu_sd=_span_params.mu_sd if _span_params else None,
-                span_sigma_sd=_span_params.sigma_sd if _span_params else None,
-                span_onset_sd=_span_params.onset_sd if _span_params else None,
-                span_onset_mu_corr=_span_params.onset_mu_corr if _span_params else None,
-                is_multi_hop=_is_multi_hop,
-                edge_cdf_arr=_edge_mc_cdf,
+                anchor_node=anchor_node,
             )
+            composed_frames = composed.get('frames', [])
 
-            if maturity_rows:
-                # p@∞ = midpoint of the last row (highest tau, fully converged)
-                last_row = maturity_rows[-1]
-                p_mean = last_row.get('midpoint')
-                # p_sd from fan bands at the last row
-                fan_upper = last_row.get('fan_upper')
-                fan_lower = last_row.get('fan_lower')
-                p_sd = None
-                if fan_upper is not None and fan_lower is not None and p_mean is not None:
-                    # Approximate SD from 90% fan band (±1.645σ)
-                    p_sd = (fan_upper - fan_lower) / (2 * 1.645)
+            # ── Find last edge ──────────────────────────────────────
+            last_edge_id = None
+            for entry in per_edge_results:
+                if entry['path_role'] in ('last', 'only'):
+                    last_edge_id = (entry['subject'].get('target') or {}).get('targetId')
+                    break
 
-                # Read forensic from sweep stash
-                from runner.forecast_state import _last_forensic
-                edge_results.append({
-                    'edge_uuid': last_edge_id,
-                    'from_node': query_from_node,
-                    'to_node': query_to_node,
-                    'p_mean': p_mean,
-                    'p_sd': p_sd,
-                    'tau_max': last_row.get('tau'),
-                    'n_rows': len(maturity_rows),
-                    'n_cohorts': composed.get('cohorts_analysed', 0),
-                    '_forensic': _last_forensic,
-                })
-                print(f"[forecast] {scenario_id}: {query_from_node}→{query_to_node} "
-                      f"p={p_mean:.4f} tau_max={last_row.get('tau')} "
-                      f"cohorts={composed.get('cohorts_analysed', 0)} "
-                      f"rows={total_rows}")
+            # ── Dates ───────────────────────────────────────────────
+            anchor_from_str = subj_group[0].get('anchor_from', '')
+            sweep_to_final = subj_group[0].get('sweep_to') or subj_group[0].get('anchor_to', '')
+
+            # ── Build span kernel + carrier + x_provider (same as v3)
+            from runner.model_resolver import resolve_model_params
+            from runner.cohort_forecast import find_edge_by_id
+
+            _mc_cdf = None
+            _mc_p = None
+            _is_multi_hop = len(subj_group) > 1
+            _edge_mc_cdf = None
+            _det_norm_cdf = None
+            _span_alpha = None
+            _span_beta = None
+            _span_params = None
+            _edge_kernel = None
+            if composed_frames and last_edge_id and query_from_node and query_to_node:
+                from runner.span_kernel import compose_span_kernel, _build_span_topology, mc_span_cdfs
+                _widen_span = (
+                    not _is_multi_hop
+                    and not is_window
+                    and anchor_node
+                    and query_from_node
+                    and anchor_node != query_from_node
+                )
+                _span_x = anchor_node if _widen_span else query_from_node
+
+                _edge_kernel = compose_span_kernel(
+                    graph=graph_data, x_node_id=query_from_node,
+                    y_node_id=query_to_node, is_window=is_window, max_tau=400,
+                )
+                _kernel = (compose_span_kernel(
+                    graph=graph_data, x_node_id=_span_x,
+                    y_node_id=query_to_node, is_window=is_window, max_tau=400,
+                ) if _widen_span else _edge_kernel)
+
+                if _kernel is not None and _kernel.span_p > 0:
+                    _det_cdf_kernel = _edge_kernel or _kernel
+                    _det_norm_cdf = [
+                        min(max(_det_cdf_kernel.cdf_at(t) / _det_cdf_kernel.span_p, 0.0), 1.0)
+                        for t in range(401)
+                    ]
+                    from runner.span_adapter import span_kernel_to_edge_params
+                    from runner.cohort_forecast_v2 import build_span_params
+                    _ek = _edge_kernel or _kernel
+                    _span_edge_params = span_kernel_to_edge_params(
+                        _ek, graph_data, last_edge_id, is_window=is_window)
+                    def _norm_cdf(tau):
+                        return _ek.cdf_at(int(round(tau))) / _ek.span_p
+                    _span_params = build_span_params(
+                        _norm_cdf, _ek.span_p, 400,
+                        _span_edge_params, is_window=is_window)
+                    _span_alpha = _span_params.alpha_0
+                    _span_beta = _span_params.beta_0
+
+                _span_topo = _build_span_topology(graph_data, _span_x, query_to_node)
+                if _span_topo is not None:
+                    _rng = _np.random.default_rng(42)
+                    _mc_cdf, _mc_p = mc_span_cdfs(
+                        topo=_span_topo, graph=graph_data,
+                        is_window=is_window, max_tau=400, num_draws=2000, rng=_rng,
+                    )
+                    if _widen_span:
+                        _edge_topo = _build_span_topology(graph_data, query_from_node, query_to_node)
+                        if _edge_topo is not None:
+                            _rng_edge = _np.random.default_rng(42)
+                            _edge_mc_cdf, _mc_p = mc_span_cdfs(
+                                topo=_edge_topo, graph=graph_data,
+                                is_window=is_window, max_tau=400, num_draws=2000, rng=_rng_edge,
+                            )
+
+            # Multi-hop edge CDF (same as v3)
+            if _is_multi_hop and _edge_mc_cdf is None and _mc_cdf is not None:
+                _last_entry = next(
+                    (e for e in per_edge_results if e['path_role'] in ('last', 'only')), None)
+                if _last_entry:
+                    from runner.span_kernel import _build_span_topology, mc_span_cdfs
+                    _last_topo = _build_span_topology(graph_data, _last_entry['from_node'], _last_entry['to_node'])
+                    if _last_topo is not None:
+                        _rng_last = _np.random.default_rng(42)
+                        _edge_mc_cdf, _ = mc_span_cdfs(
+                            topo=_last_topo, graph=graph_data,
+                            is_window=is_window, max_tau=400, num_draws=2000, rng=_rng_last,
+                        )
+
+            # x_provider (same as v3)
+            _x_provider = None
+            if not is_window and query_from_node and anchor_node:
+                from runner.cohort_forecast import XProvider, get_incoming_edges, read_edge_cohort_params
+                _ingress = []
+                for inc_edge in get_incoming_edges(graph_data, query_from_node):
+                    _params = read_edge_cohort_params(inc_edge)
+                    if _params:
+                        _ingress.append(_params)
+                _reach = 0.0
+                try:
+                    from runner.graph_builder import build_networkx_graph
+                    from runner.path_runner import calculate_path_probability
+                    _id_to_uuid = {n.get('id', ''): n['uuid'] for n in graph_data.get('nodes', [])}
+                    _a_uuid = _id_to_uuid.get(anchor_node, anchor_node)
+                    _x_uuid = _id_to_uuid.get(query_from_node, query_from_node)
+                    G = build_networkx_graph(graph_data)
+                    path_result = calculate_path_probability(G, _a_uuid, _x_uuid)
+                    _reach = path_result.probability
+                except Exception:
+                    pass
+                _upstream_enabled = _reach > 0
+                _upstream_obs = None
+                if _upstream_enabled and query_from_node != anchor_node:
+                    _af = subj_group[0].get('anchor_from', '')
+                    _at = subj_group[0].get('anchor_to', '')
+                    _sf = subj_group[0].get('sweep_from', _af)
+                    _st = subj_group[0].get('sweep_to', _at)
+                    # In whole-graph mode, pass all_per_edge_results so
+                    # upstream edges' derivation frames are found in the
+                    # cache instead of re-querying the DB. This gives
+                    # downstream edges the same Tier 2 empirical carrier
+                    # that the single-edge v3 path computes (doc 47 §Phase 4).
+                    _upstream_cache = all_per_edge_results if is_whole_graph else per_edge_results
+                    _upstream_obs = _fetch_upstream_observations(
+                        graph_data=graph_data, anchor_node=anchor_node,
+                        query_from_node=query_from_node,
+                        per_edge_results=_upstream_cache,
+                        candidate_regimes_by_edge=scenario.get('candidate_regimes_by_edge', {}),
+                        anchor_from=_af, anchor_to=_at, sweep_from=_sf, sweep_to=_st,
+                        log_prefix='[forecast] upstream:',
+                    )
+                _x_provider = XProvider(
+                    reach=_reach, upstream_params_list=_ingress,
+                    enabled=_upstream_enabled,
+                    ingress_carrier=_ingress if _ingress else None,
+                    upstream_obs=_upstream_obs,
+                )
+
+            # ── Call v3 row builder and read scalars ────────────────
+            if composed_frames and last_edge_id:
+                anchor_to_str = subj_group[0].get('anchor_to', '')
+                maturity_rows = compute_cohort_maturity_rows_v3(
+                    frames=composed_frames,
+                    graph=graph_data,
+                    target_edge_id=last_edge_id,
+                    query_from_node=query_from_node or '',
+                    query_to_node=query_to_node or '',
+                    anchor_from=anchor_from_str,
+                    anchor_to=anchor_to_str,
+                    sweep_to=sweep_to_final,
+                    is_window=is_window,
+                    anchor_node_id=anchor_node,
+                    mc_cdf_arr=_mc_cdf,
+                    mc_p_s=_mc_p,
+                    det_norm_cdf=_det_norm_cdf,
+                    x_provider_override=_x_provider,
+                    span_alpha=_span_alpha,
+                    span_beta=_span_beta,
+                    span_mu_sd=_span_params.mu_sd if _span_params else None,
+                    span_sigma_sd=_span_params.sigma_sd if _span_params else None,
+                    span_onset_sd=_span_params.onset_sd if _span_params else None,
+                    span_onset_mu_corr=_span_params.onset_mu_corr if _span_params else None,
+                    is_multi_hop=_is_multi_hop,
+                    edge_cdf_arr=_edge_mc_cdf,
+                )
+
+                if maturity_rows:
+                    last_row = maturity_rows[-1]
+                    p_mean = last_row.get('midpoint')
+                    fan_upper = last_row.get('fan_upper')
+                    fan_lower = last_row.get('fan_lower')
+                    p_sd = None
+                    if fan_upper is not None and fan_lower is not None and p_mean is not None:
+                        p_sd = (fan_upper - fan_lower) / (2 * 1.645)
+
+                    from runner.forecast_state import _last_forensic
+                    edge_results.append({
+                        'edge_uuid': last_edge_id,
+                        'from_node': query_from_node,
+                        'to_node': query_to_node,
+                        'p_mean': p_mean,
+                        'p_sd': p_sd,
+                        'tau_max': last_row.get('tau'),
+                        'n_rows': len(maturity_rows),
+                        'n_cohorts': composed.get('cohorts_analysed', 0),
+                        '_forensic': _last_forensic,
+                    })
+                    print(f"[forecast] {scenario_id}: {query_from_node}→{query_to_node} "
+                          f"p={p_mean:.4f} tau_max={last_row.get('tau')} "
+                          f"cohorts={composed.get('cohorts_analysed', 0)} "
+                          f"rows={total_rows}")
 
         per_scenario_results.append({
             "scenario_id": scenario_id,
             "success": True,
             "edges": edge_results,
-            "_sweep_diag": _sweep_diag,
+            "skipped_edges": skipped_edges,
         })
 
     return {"success": True, "scenarios": per_scenario_results}
@@ -3476,6 +3536,20 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
         per_subject_results: List[Dict[str, Any]] = []
         scenario_rows = 0
 
+        # ── Determine temporal mode early (needed for regime selection) ──
+        # Doc #47: regime selection must prefer the correct evidence family
+        # BEFORE derivation runs. The same logic is used later for annotation
+        # (line ~3822) but we need it here for _apply_temporal_regime_selection.
+        _eff_dsl_early = scenario.get('effective_query_dsl', '')
+        _top_dsl_early = data.get('query_dsl') or ''
+        _combined_dsl_early = _eff_dsl_early + ' ' + _top_dsl_early
+        if 'cohort(' in _combined_dsl_early:
+            _scenario_is_window = False
+        elif 'window(' in _combined_dsl_early:
+            _scenario_is_window = True
+        else:
+            _scenario_is_window = True  # default: window semantics
+
         # ── Epoch unification for cohort_maturity ─────────────────
         # Group epoch siblings (baseId::epoch:0, baseId::epoch:1, ...)
         # so we can merge their frames into a single call to
@@ -3666,8 +3740,17 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                     equivalent_hashes=subj.get('equivalent_hashes'),
                 )
 
-                # Doc 30: apply regime selection before derivation
-                rows = _apply_regime_selection(rows, subj)
+                # Doc 30 + Doc #47: apply regime selection with temporal
+                # preference before derivation. Per-subject slice_keys
+                # override the scenario-level mode if present.
+                _subj_slice_keys = subj.get('slice_keys') or []
+                _has_w_slice = any('window(' in str(sk) for sk in _subj_slice_keys)
+                _has_c_slice = any('cohort(' in str(sk) for sk in _subj_slice_keys)
+                if _has_w_slice or _has_c_slice:
+                    _subj_is_window = _has_w_slice and not _has_c_slice
+                else:
+                    _subj_is_window = _scenario_is_window
+                rows = _apply_temporal_regime_selection(rows, subj, _subj_is_window)
                 scenario_rows += len(rows)
 
                 if not rows:

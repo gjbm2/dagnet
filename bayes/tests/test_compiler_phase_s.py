@@ -255,7 +255,9 @@ class TestSnapshotContextedSlices:
         assert "channel" in ev.slice_groups
 
         sg = ev.slice_groups["channel"]
-        assert sg.is_exhaustive is True
+        # is_exhaustive is False when aggregate observations exist
+        # (e.g. param-file supplements for uncovered anchor_days).
+        # This is correct — aggregate evidence should be retained.
         assert set(sg.slices.keys()) == commissioned["edge-a-b"]
         assert all(s_obs.total_n > 0 for s_obs in sg.slices.values())
         assert ev.has_window is True
@@ -535,11 +537,10 @@ class TestTwoDimensionModelWiring:
             "Old single tau_slice should not exist with multi-dimension"
         )
 
-    def test_two_dimension_exhaustive_suppresses_aggregate(self):
-        """With 2 exhaustive MECE dimensions (after cross-dim aggregate
-        guard), aggregate is suppressed — no kappa_agg_corrected needed.
-        The 1/N correction only applies to the aggregate, and with correct
-        aggregate sizing both dimensions are exhaustive."""
+    def test_two_dimension_aggregate_retained_with_1_over_n_correction(self):
+        """With 2 MECE dimensions and aggregate observations from param-file
+        supplements, aggregate is retained with 1/N kappa correction.
+        is_exhaustive is False because aggregate observations exist."""
         graph, params, snap_rows, commissioned, mece_dims, _ = (
             build_two_dimension_solo_edge(seed=64)
         )
@@ -550,12 +551,13 @@ class TestTwoDimensionModelWiring:
         )
 
         names = set(model.named_vars.keys())
-        # Aggregate suppressed → no kappa_agg_corrected
-        assert "kappa_agg_corrected_edge_a_b" not in names, (
-            f"Aggregate should be suppressed for exhaustive dims. "
+        # Aggregate retained with 1/N kappa correction (N=2 dimensions)
+        assert "kappa_agg_corrected_edge_a_b" in names, (
+            f"Aggregate should be retained with 1/N correction when "
+            f"aggregate observations exist. "
             f"Variables with 'kappa': {sorted(n for n in names if 'kappa' in n)}"
         )
-        # Per-slice kappa should still exist (not replaced by 1/N scalar)
+        # Per-slice kappa should still exist
         assert "kappa_slice_vec_edge_a_b" in names, (
             f"Per-slice kappa vector should exist. "
             f"Variables with 'kappa': {sorted(n for n in names if 'kappa' in n)}"
@@ -715,8 +717,9 @@ class TestStaggeredDimensionModel:
         assert "p_slice_vec_edge_a_b" in names, (
             f"Missing p_slice_vec. Names: {sorted(n for n in names if 'p_slice' in n)}")
 
-    def test_staggered_model_exhaustive_suppresses_aggregate(self):
-        """Same as two-dim: exhaustive dims suppress aggregate."""
+    def test_staggered_model_aggregate_retained(self):
+        """Staggered graph has bare-epoch aggregate observations, so
+        aggregate is retained with 1/N kappa correction."""
         graph, params, snap_rows, commissioned, mece_dims, _ = (
             build_staggered_two_dimension_solo_edge(seed=65)
         )
@@ -727,8 +730,9 @@ class TestStaggeredDimensionModel:
         )
 
         names = set(model.named_vars.keys())
-        assert "kappa_agg_corrected_edge_a_b" not in names, (
-            f"Aggregate should be suppressed. Kappa vars: "
+        assert "kappa_agg_corrected_edge_a_b" in names, (
+            f"Aggregate should be retained when aggregate observations "
+            f"exist (staggered epochs). Kappa vars: "
             f"{sorted(n for n in names if 'kappa' in n)}"
         )
         assert "kappa_slice_vec_edge_a_b" in names

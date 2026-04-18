@@ -1841,14 +1841,19 @@ def _route_slices(
         if not group.slices:
             continue  # all slices below min-n
 
-        # Exhaustiveness check for MECE dimensions
+        # Exhaustiveness check for MECE dimensions.
+        # Exhaustive = there are no aggregate-only observations.
+        # When aggregate observations exist (e.g. bare dates in a
+        # mixed-epoch graph), the aggregate emission must be retained
+        # so those observations contribute to the likelihood.
+        # Previous heuristic (coverage > 0.85) could silence aggregate
+        # evidence from bare-only dates when they were a small fraction.
         agg_n = sum(w.n for w in agg_window) + sum(
             sum(d.n for d in c.daily) + sum(t.n for t in c.trajectories)
             for c in agg_cohort
         )
-        if mece and agg_n > 0:
-            coverage = total_slice_n / agg_n if agg_n > 0 else 0
-            group.is_exhaustive = coverage > 0.85
+        if mece:
+            group.is_exhaustive = not agg_window and not agg_cohort
             # For partial MECE: compute residual
             if not group.is_exhaustive:
                 residual_n = max(0, agg_n - total_slice_n)

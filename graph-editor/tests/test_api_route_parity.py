@@ -96,6 +96,8 @@ def extract_python_api_routes(content: str) -> set:
             routes.add('/api/cache/clear')
         elif endpoint == 'cache-stats':
             routes.add('/api/cache/stats')
+        elif endpoint == 'forecast-conditioned':
+            routes.add('/api/forecast/conditioned')
         else:
             routes.add(f'/api/{endpoint}')
     return routes

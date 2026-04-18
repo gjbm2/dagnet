@@ -79,6 +79,7 @@ ANALYSIS_TYPE_SCOPE_RULES: Dict[str, str] = {
     'outcome_comparison': 'children_of_selected_node',
     'branch_comparison': 'children_of_selected_node',
     'bayes_fit': 'all_graph_parameters',
+    'conditioned_forecast': 'all_graph_parameters',
 }
 
 ANALYSIS_TYPE_READ_MODES: Dict[str, str] = {
@@ -92,6 +93,7 @@ ANALYSIS_TYPE_READ_MODES: Dict[str, str] = {
     'outcome_comparison': 'raw_snapshots',
     'branch_comparison': 'raw_snapshots',
     'bayes_fit': 'sweep_simple',
+    'conditioned_forecast': 'cohort_maturity',
 }
 
 
@@ -301,6 +303,17 @@ def _resolve_all_parameters(
         for edge in edges
     ]
 
+    # Sweep date defaults: same logic as _resolve_funnel_path.
+    # conditioned_forecast uses cohort_maturity read mode, so it needs
+    # sweep_from=anchor_from and sweep_to=today (unless asat overrides).
+    sweep_from = None
+    sweep_to = None
+    read_mode = ANALYSIS_TYPE_READ_MODES.get(analysis_type, '')
+    if read_mode in ('cohort_maturity', 'sweep_simple'):
+        sweep_from = anchor_from
+        import datetime
+        sweep_to = datetime.date.today().isoformat()
+
     return ResolvedAnalysisResult(
         from_node=None,
         to_node=None,
@@ -310,6 +323,8 @@ def _resolve_all_parameters(
         temporal_mode=temporal_mode,
         anchor_from=anchor_from,
         anchor_to=anchor_to,
+        sweep_from=sweep_from,
+        sweep_to=sweep_to,
     )
 
 
@@ -399,7 +414,7 @@ def synthesise_snapshot_subjects(
 
         if read_mode in ('cohort_maturity', 'sweep_simple'):
             synth['sweep_from'] = result.sweep_from or result.anchor_from or ''
-            synth['sweep_to'] = result.sweep_to or ''
+            synth['sweep_to'] = result.sweep_to or result.anchor_to or ''
 
         subjects.append(synth)
 

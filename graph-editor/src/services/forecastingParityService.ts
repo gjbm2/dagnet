@@ -56,8 +56,10 @@ export function compareModelVarsSources(graph: any): ParityMismatch[] {
     const edgeUuid = edge.uuid || edge.id || '';
     compared++;
 
-    // Compare probability
-    _check(mismatches, edgeUuid, 'p.mean', fe.probability.mean, be.probability.mean, 'relative');
+    // Doc 45: probability is NOT compared here. The topo pass (Job A)
+    // produces latency model vars only. p.mean is set by the conditioned
+    // forecast (Job B) which may use a different engine. The analytic
+    // and analytic_be probability.mean values are expected to diverge.
 
     // Compare latency if both have it
     if (fe.latency && be.latency) {

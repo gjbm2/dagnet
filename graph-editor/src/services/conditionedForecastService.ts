@@ -13,6 +13,7 @@
  */
 
 import { PYTHON_API_BASE } from '../lib/pythonApiBase';
+import { UpdateManager } from './UpdateManager';
 
 /** Per-edge result from the conditioned forecast endpoint. */
 export interface ConditionedForecastEdgeResult {
@@ -31,6 +32,7 @@ export interface ConditionedForecastScenarioResult {
   scenario_id: string;
   success: boolean;
   edges: ConditionedForecastEdgeResult[];
+  skipped_edges?: Array<{ edge_uuid: string; reason: string }>;
 }
 
 /**
@@ -105,7 +107,7 @@ export async function runConditionedForecast(
   let response: Response;
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10_000); // 10s timeout
+    const timeout = setTimeout(() => controller.abort(), 20_000); // 20s timeout (doc 47)
     response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -139,35 +141,52 @@ export async function runConditionedForecast(
 /**
  * Apply conditioned forecast results to graph edges.
  *
- * Overwrites p.mean and p.stdev on edges where the forecast produced
- * a valid result. Also updates the 'analytic_be' model_vars entry's
- * probability.mean if present.
+ * Routes through UpdateManager.applyBatchLAGValues so probability
+ * writes trigger sibling rebalancing and the graph is cloned
+ * atomically (doc 47 §Phase 5).
+ *
+ * Returns the new (cloned) graph. The input graph is NOT mutated.
  */
 export function applyConditionedForecastToGraph(
   graph: any,
   results: ConditionedForecastScenarioResult[],
-): void {
+): any {
+  const updateManager = new UpdateManager();
+
+  const edgeUpdates: Array<{
+    edgeId: string;
+    latency: { t95: number; completeness: number; path_t95: number };
+    blendedMean?: number;
+    forecast?: { mean?: number };
+  }> = [];
+
   for (const scenario of results) {
     for (const edge of scenario.edges) {
       if (edge.p_mean == null) continue;
 
+      // Find existing edge to preserve its latency values
       const graphEdge = (graph.edges ?? []).find(
         (e: any) => (e.uuid || e.id) === edge.edge_uuid
       );
       if (!graphEdge?.p) continue;
 
-      // Write conditioned p.mean
-      graphEdge.p.mean = edge.p_mean;
-      if (edge.p_sd != null) {
-        graphEdge.p.stdev = edge.p_sd;
-      }
-
-      // Also update the forecast.mean (p∞ from the conditioned engine)
-      if (graphEdge.p.forecast) {
-        graphEdge.p.forecast.mean = edge.p_mean;
-      }
+      const lat = graphEdge.p.latency ?? {};
+      edgeUpdates.push({
+        edgeId: edge.edge_uuid,
+        latency: {
+          t95: lat.t95 ?? 0,
+          completeness: lat.completeness ?? 0,
+          path_t95: lat.path_t95 ?? 0,
+        },
+        blendedMean: edge.p_mean,
+        forecast: { mean: edge.p_mean },
+      });
 
       console.log(`[conditionedForecast] ${edge.edge_uuid.slice(0, 12)}: p.mean=${edge.p_mean.toFixed(4)}`);
     }
   }
+
+  if (edgeUpdates.length === 0) return graph;
+
+  return updateManager.applyBatchLAGValues(graph, edgeUpdates);
 }

@@ -398,18 +398,27 @@ def resolve_all_parameter_edges(
         graph_input: Graph object or dict
 
     Returns:
-        List of ResolvedEdge with path_role=None.
+        List of ResolvedEdge with path_role='all'.
     """
     if isinstance(graph_input, dict):
         graph = _parse_minimal_graph(graph_input)
     else:
         graph = graph_input
 
+    # Map UUID → node.id (same convention as resolve_ordered_path).
+    # Edge from_node/to may be UUIDs — callers expect node IDs.
+    uuid_to_id: Dict[str, str] = {}
+    for node in graph.nodes:
+        node_uuid = getattr(node, 'uuid', None) or ''
+        if node_uuid:
+            uuid_to_id[node_uuid] = node.id
+        uuid_to_id[node.id] = node.id
+
     return [
         ResolvedEdge(
             edge_uuid=getattr(edge, 'uuid', '') or '',
-            from_node_id=edge.from_node,
-            to_node_id=edge.to,
+            from_node_id=uuid_to_id.get(edge.from_node, edge.from_node),
+            to_node_id=uuid_to_id.get(edge.to, edge.to),
             path_role='all',
         )
         for edge in graph.edges

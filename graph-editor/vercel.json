@@ -112,6 +112,10 @@
       "destination": "/api/python-api?endpoint=lag-topo-pass"
     },
     {
+      "source": "/api/forecast/conditioned",
+      "destination": "/api/python-api?endpoint=forecast-conditioned"
+    },
+    {
       "source": "/api/cache/clear",
       "destination": "/api/python-api?endpoint=cache-clear"
     },

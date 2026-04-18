@@ -1764,14 +1764,22 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                         # Per-slice kappa (scalar view) or edge-level
                         ks = _kappa_slice_vec[_si] if _kappa_slice_vec is not None else edge_kappa
 
-                        # Per-slice latency
+                        # Per-slice latency.
+                        # Copy latency_vars so upstream edges retain their
+                        # learned latent variables; override only the current
+                        # edge with per-slice values. Without this, upstream
+                        # edges fall back to fixed priors in _resolve_path_latency.
                         if et.has_latency and _use_slice_latency_vecs:
                             _sigma_s = _sigma_slice_vec[_si] if _sigma_slice_vec is not None else _sigma_base
-                            _lv = {edge_id: (_mu_slice_vec[_si], _sigma_s)}
-                            _ov = {edge_id: _onset_slice_vec[_si]}
+                            _lv = dict(latency_vars)
+                            _lv[edge_id] = (_mu_slice_vec[_si], _sigma_s)
+                            _ov = dict(onset_vars) if onset_vars else {}
+                            _ov[edge_id] = _onset_slice_vec[_si]
                         elif et.has_latency and not feat_shared_latency_slices:
-                            _lv = {edge_id: (_mu_slice_vec[_si], _sigma_base)}
-                            _ov = {edge_id: _onset_base}
+                            _lv = dict(latency_vars)
+                            _lv[edge_id] = (_mu_slice_vec[_si], _sigma_base)
+                            _ov = dict(onset_vars) if onset_vars else {}
+                            _ov[edge_id] = _onset_base
                         elif et.has_latency:
                             # shared_latency_slices: all slices use edge-level latency
                             _lv = latency_vars
@@ -1893,22 +1901,26 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                 )
 
                 if _any_slices and _all_exhaustive_bg:
-                    # Per-slice Multinomials replace the aggregate
-                    # Collect context keys from first edge that has slices
-                    _ref_ev = next(
-                        evidence.edges[sid] for sid in bg.sibling_edge_ids
-                        if evidence.edges.get(sid) and evidence.edges[sid].slice_groups
-                    )
-                    for _dim_key, _sg in _ref_ev.slice_groups.items():
-                        for _ctx_key in _sg.slices:
+                    # Per-slice Multinomials replace the aggregate.
+                    # Use union of all siblings' slice keys (not just the
+                    # first sibling) — matches Section 2b's pattern.
+                    _bg_all_ctx_keys: dict[str, set[str]] = {}
+                    for sid in bg.sibling_edge_ids:
+                        ev_sib = evidence.edges.get(sid)
+                        if ev_sib and ev_sib.slice_groups:
+                            for dk, sg in ev_sib.slice_groups.items():
+                                _bg_all_ctx_keys.setdefault(dk, set()).update(sg.slices.keys())
+
+                    for _dim_key, _ctx_keys in sorted(_bg_all_ctx_keys.items()):
+                        for _ctx_key in sorted(_ctx_keys):
                             _emit_branch_group_multinomial(
                                 bg, topology, evidence, edge_var_names, model,
                                 diagnostics, slice_ctx_key=_ctx_key,
                                 bg_slice_p_vars=bg_slice_p_vars,
                             )
                     diagnostics.append(
-                        f"  bg {group_id[:8]}…: {len(_ref_ev.slice_groups)} dims, "
-                        f"per-slice Multinomials emitted"
+                        f"  bg {group_id[:8]}…: {len(_bg_all_ctx_keys)} dims, "
+                        f"per-slice Multinomials emitted (union of siblings)"
                     )
                 else:
                     # Aggregate Multinomial (uncontexted or non-exhaustive)
@@ -3692,7 +3704,7 @@ def _emit_edge_likelihoods(
 
     # --- Case A: edge has BOTH window and cohort data ---
     if ev.has_window and ev.has_cohort:
-        if is_phase2:
+        if is_phase2 and p_override is None:
             if edge_id in bg_p_vars:
                 p = bg_p_vars[edge_id]
             else:

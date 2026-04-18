@@ -185,15 +185,6 @@ def build_cohort_evidence_from_frames(
             max_tau = max(max_tau, int(math.ceil(t95)))
         except Exception:
             pass
-    _max_t95 = 0.0
-    _lat_block = target_edge.get('p', {}).get('latency', {})
-    for _t95_key in ('promoted_path_t95', 'path_t95', 'promoted_t95', 't95'):
-        _t95_v = _lat_block.get(_t95_key)
-        if isinstance(_t95_v, (int, float)) and _t95_v > 0:
-            _max_t95 = max(_max_t95, float(_t95_v))
-    if _max_t95 > 0:
-        max_tau = max(max_tau, int(math.ceil(_max_t95 * 2)))
-    max_tau = max(max_tau, 100)
     max_tau = min(max_tau, 400)
 
     # ── Build CohortEvidence per cohort ────────────────────────────

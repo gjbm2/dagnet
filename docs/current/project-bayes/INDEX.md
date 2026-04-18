@@ -1,6 +1,6 @@
 # Project Bayes — Document Index
 
-**Last updated**: 16-Apr-26
+**Last updated**: 18-Apr-26
 **Verified against codebase**: 16-Apr-26
 
 For sequencing, priorities, and current status snapshot, see
@@ -38,6 +38,7 @@ For sequencing, priorities, and current status snapshot, see
 | 36 | [36-posterior-predictive-calibration.md](36-posterior-predictive-calibration.md) | **Partial** (12-Apr-26) | Posterior predictive calibration: PIT uniformity, coverage curves, per-edge KS test. `calibration.py` implemented. Endpoint validated; trajectory blocked on synth DGP. | LOO-PIT for production graphs not yet wired |
 | 38 | [38-ppc-calibration-findings.md](38-ppc-calibration-findings.md) | **Partial** (12-Apr-26) | PPC implementation, three-layer validation (true PIT baseline), synth two-kappa DGP mismatch discovery, MLE empirical Bayes prior for kappa. | Single-source synth flag needed for trajectory validation |
 | 38c | [38-contexted-compilation-performance.md](38-contexted-compilation-performance.md) | **Implemented** (12-Apr-26) | NUTS geometry diagnostics, edge-level sigma/onset, native vector RVs, batched Phase 1 window trajectory (6→2 Potentials), auto low-rank mass matrix (n_dim>20). compile −29%, sampling −42%, step_size +74%. | Sampler geometry (tau funnels) partially addressed by lowrank; centred parameterisation not yet tried |
+| 48 | [48-bayes-remediation-action-plan.md](48-bayes-remediation-action-plan.md) | **Proposed** (18-Apr-26) | Sequenced remediation plan for the current Bayes issue set. Separates fitted-posterior correctness, export/diagnostic contract work, and forecast-path convergence. | Execution not started. Depends on issue revalidation, parity harnesses, and follow-up updates to docs 33, 46, 47, and 29f |
 
 ## Open investigations
 

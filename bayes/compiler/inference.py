@@ -817,14 +817,17 @@ def _predictive_mu_sd(
         )
         return None
 
-    aleatoric_sd = float(np.std(mu_star_pooled))
+    # mu_star_pooled already combines both sources of variation:
+    # epistemic (different mu_i across MCMC draws) and aleatoric
+    # (BetaBinomial noise within each draw). Its SD is the predictive SD
+    # directly — no quadrature needed.
+    #
+    # Previous implementation (Fix #5) added posterior_sd via quadrature,
+    # which double-counted the epistemic component since it was already
+    # present in the mu_star scatter.
+    predictive_sd = float(np.std(mu_star_pooled))
     posterior_sd = float(np.std(mu_s))
-
-    # Fix #5: principled floor via quadrature.
-    # predictive_sd² = posterior_sd² + aleatoric_sd²
-    # The posterior SD is irreducible epistemic uncertainty; aleatoric_sd
-    # is the timing noise from kappa_lat. The predictive SD combines both.
-    predictive_sd = float(np.sqrt(posterior_sd ** 2 + aleatoric_sd ** 2))
+    aleatoric_sd = float(np.sqrt(max(0.0, predictive_sd ** 2 - posterior_sd ** 2)))
 
     diagnostics.append(
         f"  predictive_mu {edge_id[:8]}…: sd={predictive_sd:.4f} "
@@ -1200,14 +1203,22 @@ def summarise_posteriors(
                         _mu_s = trace.posterior[_mu_vec_name].values[:, :, _si].flatten()
                         _slice_entry["mu_mean"] = float(np.mean(_mu_s))
                         _slice_entry["mu_sd"] = float(np.std(_mu_s))
-                        # Latency dispersion (doc 34): per-slice kappa_lat
-                        for _sot in ("cohort", "window"):
-                            _sc = f"kappa_lat_{safe_eid}__{_ctx_safe}_{_sot}"
-                            if _sc in trace.posterior:
-                                _skl = trace.posterior[_sc].values.flatten()
-                                _slice_entry["kappa_lat_mean"] = float(np.mean(_skl))
-                                _slice_entry["kappa_lat_sd"] = float(np.std(_skl))
-                                break
+                        # Latency dispersion (doc 34): per-slice kappa_lat.
+                        # Two paths: batched (kappa_lat_slice_vec indexed by _si)
+                        # or scalar (kappa_lat_{eid}__{ctx}_{obs_type}).
+                        _kl_vec_name = f"kappa_lat_slice_vec_{safe_eid}"
+                        if _kl_vec_name in trace.posterior:
+                            _skl = trace.posterior[_kl_vec_name].values[:, :, _si].flatten()
+                            _slice_entry["kappa_lat_mean"] = float(np.mean(_skl))
+                            _slice_entry["kappa_lat_sd"] = float(np.std(_skl))
+                        else:
+                            for _sot in ("cohort", "window"):
+                                _sc = f"kappa_lat_{safe_eid}__{_ctx_safe}_{_sot}"
+                                if _sc in trace.posterior:
+                                    _skl = trace.posterior[_sc].values.flatten()
+                                    _slice_entry["kappa_lat_mean"] = float(np.mean(_skl))
+                                    _slice_entry["kappa_lat_sd"] = float(np.std(_skl))
+                                    break
                     else:
                         _mu_s_name = f"mu_slice_{safe_eid}_{_ctx_safe}"
                         if _mu_s_name in trace.posterior:
@@ -1353,17 +1364,33 @@ def summarise_posteriors(
                 # Latency dispersion (doc 34): extract kappa_lat if present.
                 # kappa_lat is the timing analogue of kappa for p — it
                 # captures per-interval overdispersion in the discrete-time
-                # hazard via BetaBinomial. Variable name includes obs_type.
+                # hazard via BetaBinomial.
+                # Two paths: batched (kappa_lat_slice_vec — aggregate across
+                # slices for edge-level summary) or scalar (kappa_lat_{eid}_{ot}).
                 kappa_lat_name = None
-                for _ot in ("cohort", "window"):
-                    _candidate = f"kappa_lat_{safe_eid}_{_ot}"
-                    if _candidate in trace.posterior:
-                        kappa_lat_name = _candidate
-                        break
+                _kl_vec_name = f"kappa_lat_slice_vec_{safe_eid}"
+                if _kl_vec_name in trace.posterior:
+                    # Batched path: report mean across all slices as edge-level summary
+                    kappa_lat_name = _kl_vec_name
+                else:
+                    for _ot in ("cohort", "window"):
+                        _candidate = f"kappa_lat_{safe_eid}_{_ot}"
+                        if _candidate in trace.posterior:
+                            kappa_lat_name = _candidate
+                            break
                 kappa_lat_mean_val = None
                 kappa_lat_sd_val = None
+                _kl_is_vec = kappa_lat_name == _kl_vec_name if kappa_lat_name else False
                 if kappa_lat_name is not None:
-                    _kl_samples = trace.posterior[kappa_lat_name].values.flatten()
+                    _kl_raw = trace.posterior[kappa_lat_name].values
+                    if _kl_is_vec:
+                        # Vector path: shape (chains, draws, n_slices).
+                        # Edge-level summary: mean across slices per draw,
+                        # then report mean/sd across draws.
+                        _kl_per_draw = _kl_raw.mean(axis=-1)  # (chains, draws)
+                        _kl_samples = _kl_per_draw.flatten()
+                    else:
+                        _kl_samples = _kl_raw.flatten()
                     kappa_lat_mean_val = float(np.mean(_kl_samples))
                     kappa_lat_sd_val = float(np.std(_kl_samples))
 
@@ -1379,9 +1406,12 @@ def summarise_posteriors(
                     _onset_s_arr = (onset_samples if has_latent_onset
                                     else np.full_like(mu_samples, onset))
                     # Fix #6: match p_samples to kappa_lat obs_type.
-                    # kappa_lat_name is e.g. "kappa_lat_{edge}_window" — the
-                    # obs_type suffix tells us which p to use.
-                    _kl_obs_type = kappa_lat_name.rsplit("_", 1)[-1]  # "window" or "cohort"
+                    # Scalar path: kappa_lat_name is e.g. "kappa_lat_{edge}_window"
+                    # Vector path: kappa_lat_name is "kappa_lat_slice_vec_{edge}" — default to window
+                    if _kl_is_vec:
+                        _kl_obs_type = "window"  # batched path is window-only
+                    else:
+                        _kl_obs_type = kappa_lat_name.rsplit("_", 1)[-1]  # "window" or "cohort"
                     _p_for_kl_name = f"p_{_kl_obs_type}_{safe_eid}"
                     if _p_for_kl_name in trace.posterior:
                         _p_for_kl = trace.posterior[_p_for_kl_name].values.flatten()
