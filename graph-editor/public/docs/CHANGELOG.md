@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 2.0.2b
+**Released:** 18-Apr-26
+
+Doc improvements
+
+---
+
 ## Version 2.0.1b
 **Released:** 18-Apr-26
 
