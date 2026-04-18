@@ -53,6 +53,7 @@ import './styles/theme-tokens.css'; // Light/dark theme CSS variables
 import './styles/app-shell-theme.css'; // AppShell dark mode overrides
 import './styles/components-dark.css'; // Panels, editors, modals dark mode
 import './styles/popup-menu.css'; // Shared popup/context menu styling
+import './styles/tooltip.css'; // Shared tooltip styling
 
 // NOTE: We intentionally do NOT create a permanent right-dock panel.
 // Session Log is "right docked" by splitting the existing main panel at open-time.

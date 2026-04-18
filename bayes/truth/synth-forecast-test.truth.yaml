@@ -1,0 +1,110 @@
+# Synthetic graph for Phase B forecast engine testing.
+#
+# Exercises all corners of the multi-hop cohort maturity machinery:
+#   - Non-latency probability gate (gate -> hub): delta-0 kernel test
+#   - Multi-hop span with real latency (hub -> target -> outcome)
+#   - Fan-in at hub (from gate AND alt): upstream evidence summing
+#   - Fast upstream (anchor -> gate): saturated at short horizons
+#   - Slow upstream path (anchor -> alt -> hub): unsaturated at same horizon
+#   - Wide span with slow latency (hub -> target): large in-transit mass
+#
+# Test queries:
+#   from(ft-gate).to(ft-outcome)    -- 3-hop, delta-0 first hop
+#   from(ft-hub).to(ft-outcome)     -- 2-hop, normal multi-hop
+#   from(ft-hub).to(ft-target)      -- single-hop slow, E_i << N_i
+#   from(ft-target).to(ft-outcome)  -- single-hop medium, baseline
+#   from(ft-gate).to(ft-target)     -- 2-hop with delta-0 first hop
+#
+# Topology:
+#
+#   ft-anchor --[fast]--> ft-gate --[no-latency]--> ft-hub --[slow]--> ft-target --[medium]--> ft-outcome
+#       |                                             ^
+#       +----------[fast]--------> ft-alt --[med]-----+
+#
+
+graph:
+  id: graph-synth-forecast-test
+  name: synth-forecast-test
+  anchor: ft-anchor
+
+nodes:
+  ft-anchor:
+    label: Anchor
+    is_start: true
+    event_id: ft-anchor-event
+  ft-gate:
+    label: Gate
+    event_id: ft-gate-event
+  ft-alt:
+    label: Alt Path
+    event_id: ft-alt-event
+  ft-hub:
+    label: Hub
+    event_id: ft-hub-event
+  ft-target:
+    label: Target
+    event_id: ft-target-event
+  ft-outcome:
+    label: Outcome
+    absorbing: true
+    event_id: ft-outcome-event
+
+edges:
+  ft-anchor-to-gate:
+    from: ft-anchor
+    to: ft-gate
+    p: 0.60
+    onset: 0.0
+    mu: 0.5
+    sigma: 0.3
+
+  ft-gate-to-hub:
+    from: ft-gate
+    to: ft-hub
+    p: 0.80
+    onset: 0.0
+    mu: 0.0
+    sigma: 0.0
+
+  ft-hub-to-target:
+    from: ft-hub
+    to: ft-target
+    p: 0.30
+    onset: 3.0
+    mu: 2.5
+    sigma: 0.7
+
+  ft-target-to-outcome:
+    from: ft-target
+    to: ft-outcome
+    p: 0.50
+    onset: 1.0
+    mu: 1.2
+    sigma: 0.4
+
+  ft-anchor-to-alt:
+    from: ft-anchor
+    to: ft-alt
+    p: 0.25
+    onset: 0.0
+    mu: 0.7
+    sigma: 0.4
+
+  ft-alt-to-hub:
+    from: ft-alt
+    to: ft-hub
+    p: 0.40
+    onset: 1.0
+    mu: 1.5
+    sigma: 0.5
+
+simulation:
+  mean_daily_traffic: 2000
+  n_days: 120
+  kappa_sim_default: 40.0
+  failure_rate: 0.03
+  drift_sigma: 0.0
+  growth_rate_mom: 0.0
+  seed: 7
+  base_date: "2025-12-01"
+  expected_sample_seconds: 900

@@ -137,6 +137,11 @@ export interface BayesPatchEdge {
     beta: number;
     p_hdi_lower: number;
     p_hdi_upper: number;
+    // Predictive (kappa-inflated, doc 49 §A.6). Absent when kappa is absent.
+    alpha_pred?: number;
+    beta_pred?: number;
+    hdi_lower_pred?: number;
+    hdi_upper_pred?: number;
     mu_mean?: number;
     mu_sd?: number;
     sigma_mean?: number;
@@ -275,13 +280,13 @@ export async function applyPatch(patch: BayesPatchFile): Promise<number> {
           provenance: windowSlice.provenance,
           divergences: windowSlice.divergences,
           prior_tier: patchEdge.prior_tier || 'uninformative',
-          // Path-level from cohort() slice
+          // Cohort-mode probability from cohort() slice
           ...(cohortSlice?.alpha != null ? {
-            path_alpha: cohortSlice.alpha,
-            path_beta: cohortSlice.beta,
-            path_hdi_lower: cohortSlice.p_hdi_lower,
-            path_hdi_upper: cohortSlice.p_hdi_upper,
-            path_provenance: cohortSlice.provenance,
+            cohort_alpha: cohortSlice.alpha,
+            cohort_beta: cohortSlice.beta,
+            cohort_hdi_lower: cohortSlice.p_hdi_lower,
+            cohort_hdi_upper: cohortSlice.p_hdi_upper,
+            cohort_provenance: cohortSlice.provenance,
           } : {}),
           // LOO-ELPD model adequacy (doc 32)
           ...(windowSlice.delta_elpd != null ? {
@@ -358,15 +363,21 @@ export async function applyPatch(patch: BayesPatchFile): Promise<number> {
           windowSlice.mu_mean != null ? { ess: windowSlice.ess, rhat: windowSlice.rhat } : undefined,
         );
 
+        // For model_vars display: use predictive alpha/beta when available
+        // (gives the "how noisy are daily observations" stdev), fall back to
+        // epistemic when kappa absent (doc 49 §A.9).
+        const displayAlpha = windowSlice.alpha_pred ?? windowSlice.alpha;
+        const displayBeta = windowSlice.beta_pred ?? windowSlice.beta;
+        const displaySum = displayAlpha + displayBeta;
+
         const bayesEntry: ModelVarsEntry = {
           source: 'bayesian',
           source_at: patch.fitted_at,
           probability: {
             mean: windowSlice.alpha / (windowSlice.alpha + windowSlice.beta),
-            stdev: Math.sqrt(
-              (windowSlice.alpha * windowSlice.beta) /
-              ((windowSlice.alpha + windowSlice.beta) ** 2 * (windowSlice.alpha + windowSlice.beta + 1))
-            ),
+            stdev: displaySum > 0
+              ? Math.sqrt((displayAlpha * displayBeta) / (displaySum ** 2 * (displaySum + 1)))
+              : 0,
           },
           ...(windowSlice.mu_mean != null ? {
             latency: {

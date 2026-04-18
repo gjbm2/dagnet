@@ -1,0 +1,112 @@
+# Ground truth for synth-simple-abc-context
+#
+# A → B → C (2 solo edges, linear chain)
+# Same topology as synth-simple-abc, with MECE context dimension.
+#
+# Tests hierarchical Beta shrinkage on a simple chain — verifies
+# context doesn't destabilise the most basic topology.
+
+simulation:
+  mean_daily_traffic: 500
+  n_days: 100
+  user_kappa: 50
+  failure_rate: 0.05
+  drift_sigma: 0.0
+  seed: 42
+  expected_sample_seconds: 1800
+
+emit_context_slices: true
+
+context_dimensions:
+  - id: synth-channel
+    mece: true
+    values:
+      - id: google
+        label: Google
+        weight: 0.60
+        sources:
+          amplitude:
+            field: utm_medium
+            filter: utm_medium == 'google'
+        edges:
+          simple-a-to-b:
+            p_mult: 1.20
+            mu_offset: -0.2
+            onset_offset: -0.2
+          simple-b-to-c:
+            p_mult: 1.15
+            mu_offset: -0.3
+            onset_offset: -0.2
+      - id: direct
+        label: Direct
+        weight: 0.30
+        sources:
+          amplitude:
+            field: utm_medium
+            filter: utm_medium == 'direct'
+        edges:
+          simple-a-to-b:
+            p_mult: 1.0
+          simple-b-to-c:
+            p_mult: 1.0
+      - id: email
+        label: Email
+        weight: 0.10
+        sources:
+          amplitude:
+            field: utm_medium
+            filter: utm_medium == 'email'
+        edges:
+          simple-a-to-b:
+            p_mult: 0.70
+            mu_offset: 0.3
+            onset_offset: 0.3
+          simple-b-to-c:
+            p_mult: 0.65
+            mu_offset: 0.4
+            onset_offset: 0.3
+
+edges:
+  simple-a-to-b:
+    from: a
+    to: b
+    p: 0.70
+    onset: 1.0
+    mu: 2.3
+    sigma: 0.5
+  simple-b-to-c:
+    from: b
+    to: c
+    p: 0.60
+    onset: 2.0
+    mu: 2.5
+    sigma: 0.6
+
+nodes:
+  a:
+    start: true
+    type: entry
+    label: A
+    event_id: synth-abc-a
+  b:
+    type: event
+    label: B
+    event_id: synth-abc-b
+  c:
+    type: event
+    label: C
+    event_id: synth-abc-c
+
+graph:
+  name: synth-simple-abc-context
+  description: "Linear chain A->B->C with MECE context. Hierarchical Beta stability test."
+
+testing:
+  thresholds:
+    p_z: 2.5
+    mu_z: 2.5
+    sigma_z: 3.0
+    onset_z: 3.0
+  per_slice_thresholds:
+    p_slice_z: 3.0
+    weight_z: 3.0

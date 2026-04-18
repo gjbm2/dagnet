@@ -1,9 +1,17 @@
 # Cohort Maturity Documentation Index
 
-**Last updated**: 13-Apr-26
+**Last updated**: 13-Apr-26 (content); 18-Apr-26 (curated-list pointer)
 
 This directory contains all design docs, specs, and investigation notes
 for the cohort maturity fan chart and related forecasting work.
+
+**Open work**: all open cohort-maturity items (P3.10–P3.18) are tracked
+in the single curated list at
+[../programme.md §Open items (curated)](../programme.md#open-items-curated).
+Verification 18-Apr-26 showed three claims in this directory are stale
+(fan-chart-mc-bug sparse carry-forward; best-available model fallback;
+topo-pass snapshot access); see the "Stale claims and doc drift" subsection
+in programme.md.
 
 ---
 

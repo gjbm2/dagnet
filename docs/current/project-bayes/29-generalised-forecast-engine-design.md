@@ -1065,7 +1065,7 @@ The approach:
    CDF shape. Aggregate across draws for quantile bands.
 
 4. **Prior composition for multi-hop**: Phase A uses the last edge's
-   `posterior_path_alpha/beta` as the span prior. These are already
+   `posterior_cohort_alpha/beta` as the span prior. These are already
    path-composed by the Bayes engine for the anchor→y path. When x = a
    this is exactly right. When x ≠ a it's an approximation (the prior
    reflects the a→y rate, not the x→y rate). This matches the single-
@@ -1232,7 +1232,7 @@ Edge-level: `mu`, `sigma`, `onset_delta_days`, `forecast_mean`,
 `bayes_onset_mu_corr`, `t95`, `evidence_retrieved_at`.
 
 Path-level: `path_mu`, `path_sigma`, `path_onset_delta_days`,
-`posterior_p_cohort`, `posterior_path_alpha`, `posterior_path_beta`,
+`posterior_p_cohort`, `posterior_cohort_alpha`, `posterior_cohort_beta`,
 `p_stdev_cohort`, `bayes_path_mu_sd`, `bayes_path_sigma_sd`,
 `bayes_path_onset_sd`, `bayes_path_onset_mu_corr`, `path_t95`.
 

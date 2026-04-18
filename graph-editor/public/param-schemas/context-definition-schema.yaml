@@ -51,7 +51,16 @@ properties:
       - explicit: "other" is a regular value with explicit mappings
       - undefined: No "other"; values NOT MECE (can't aggregate to total)
     default: undefined
-  
+
+  independent:
+    type: boolean
+    default: false
+    description: |
+      When true, disables hierarchical pooling for this dimension (doc 14
+      §15A.5). Slices receive independent priors with no shrinkage toward
+      the edge-level base rate. Use for dimensions that encode structurally
+      separate journeys rather than exchangeable variations.
+
   values:
     type: array
     minItems: 2

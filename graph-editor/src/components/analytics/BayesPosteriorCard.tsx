@@ -10,6 +10,7 @@ import ReactECharts from 'echarts-for-react';
 import type { ProbabilityPosterior, LatencyPosterior } from '../../types';
 import { computeQualityTier, qualityTierToColour, qualityTierLabel } from '../../utils/bayesQualityTier';
 import { formatRelativeTime, getFreshnessLevel, freshnessColour } from '../../utils/freshnessDisplay';
+import GlossaryTooltip from '../GlossaryTooltip';
 
 function fmtPct(v: number | null | undefined): string {
   if (v == null) return '–';
@@ -39,8 +40,8 @@ export function BayesPosteriorCard({ probability, latency, t95, pathT95, theme =
   const lat = latency;
 
   const hasEdgeP = post?.alpha != null && post?.beta != null;
-  const pa = (post as any)?.path_alpha;
-  const pb = (post as any)?.path_beta;
+  const pa = (post as any)?.cohort_alpha;
+  const pb = (post as any)?.cohort_beta;
   const hasPathP = pa != null && pb != null;
   const hasEdgeLat = lat?.mu_mean != null;
   const hasPathLat = lat?.path_mu_mean != null;
@@ -73,15 +74,16 @@ export function BayesPosteriorCard({ probability, latency, t95, pathT95, theme =
   // Raw values remain in PosteriorIndicator diagnostic popover.
 
   // ── Shared components ──
-  const Label = ({ children }: { children: string }) => (
+  const Label = ({ children }: { children: React.ReactNode }) => (
     <span style={{ color: 'var(--text-muted, #999)', fontSize: 10 }}>{children}</span>
   );
   const Value = ({ children }: { children: string }) => (
     <span style={{ fontSize: 11, fontVariantNumeric: 'tabular-nums' }}>{children}</span>
   );
-  const Row = ({ label, value }: { label: string; value: string }) => (
+  const Row = ({ label, value, term }: { label: string; value: string; term?: string }) => (
     <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, lineHeight: '17px' }}>
-      <Label>{label}</Label><Value>{value}</Value>
+      <Label>{term ? <GlossaryTooltip term={term}>{label}</GlossaryTooltip> : label}</Label>
+      <Value>{value}</Value>
     </div>
   );
   const SectionLabel = ({ children }: { children: string }) => (
@@ -94,37 +96,42 @@ export function BayesPosteriorCard({ probability, latency, t95, pathT95, theme =
   // ── Build column content ──
   const edgeProbRows = hasEdgeP ? (
     <>
-      <Row label="p" value={`${fmtPct(edgePMean)} ± ${fmtPct(edgePSd)}`} />
-      {post!.hdi_lower != null && <Row label="HDI" value={`${fmtPct(post!.hdi_lower)} — ${fmtPct(post!.hdi_upper)}`} />}
+      <Row label="p" term="probability" value={`${fmtPct(edgePMean)} ± ${fmtPct(edgePSd)}`} />
+      {post!.hdi_lower != null && <Row label="HDI" term="hdi" value={`${fmtPct(post!.hdi_lower)} — ${fmtPct(post!.hdi_upper)}`} />}
     </>
   ) : null;
 
   const pathProbRows = hasPathP ? (
     <>
-      <Row label="p" value={`${fmtPct(pathPMean)} ± ${fmtPct(pathPSd)}`} />
-      {(post as any)?.path_hdi_lower != null && <Row label="HDI" value={`${fmtPct((post as any).path_hdi_lower)} — ${fmtPct((post as any).path_hdi_upper)}`} />}
+      <Row label="p" term="probability" value={`${fmtPct(pathPMean)} ± ${fmtPct(pathPSd)}`} />
+      {(post as any)?.path_hdi_lower != null && <Row label="HDI" term="hdi" value={`${fmtPct((post as any).path_hdi_lower)} — ${fmtPct((post as any).path_hdi_upper)}`} />}
     </>
   ) : null;
 
+  // Doc 49 §A.9: sigma_sd and onset_sd are epistemic (no predictive mechanism),
+  // while mu_sd and p.stdev are predictive. Mark epistemic ± with *.
+  const _epist = '*';
+  const _hasEpistFootnote = hasEdgeLat || hasPathLat;
+
   const edgeLatRows = hasEdgeLat ? (
     <>
-      <Row label="onset" value={`${fmt(lat!.onset_delta_days ?? lat!.onset_mean, 1)}d${lat!.onset_sd != null ? ` ± ${fmt(lat!.onset_sd, 1)}d` : ''}`} />
-      {lat!.onset_hdi_lower != null && <Row label="onset HDI" value={`${fmt(lat!.onset_hdi_lower, 1)}d — ${fmt(lat!.onset_hdi_upper, 1)}d`} />}
-      <Row label="μ" value={`${fmt(lat!.mu_mean, 3)} ± ${fmt(lat!.mu_sd, 3)}`} />
-      <Row label="σ" value={`${fmt(lat!.sigma_mean, 3)} ± ${fmt(lat!.sigma_sd, 3)}`} />
-      {lat!.hdi_t95_lower != null && <Row label="t95 HDI" value={`${fmt(lat!.hdi_t95_lower, 1)}d — ${fmt(lat!.hdi_t95_upper, 1)}d`} />}
-      {lat!.onset_mu_corr != null && <Row label="onset↔μ" value={fmt(lat!.onset_mu_corr, 3)} />}
+      <Row label="onset" term="onset" value={`${fmt(lat!.onset_delta_days ?? lat!.onset_mean, 1)}d${lat!.onset_sd != null ? ` ± ${fmt(lat!.onset_sd, 1)}d${_epist}` : ''}`} />
+      {lat!.onset_hdi_lower != null && <Row label="onset HDI" term="hdi" value={`${fmt(lat!.onset_hdi_lower, 1)}d — ${fmt(lat!.onset_hdi_upper, 1)}d`} />}
+      <Row label="μ" term="mu" value={`${fmt(lat!.mu_mean, 3)} ± ${fmt(lat!.mu_sd, 3)}`} />
+      <Row label="σ" term="sigma" value={`${fmt(lat!.sigma_mean, 3)} ± ${fmt(lat!.sigma_sd, 3)}${_epist}`} />
+      {lat!.hdi_t95_lower != null && <Row label="t95 HDI" term="t95-hdi" value={`${fmt(lat!.hdi_t95_lower, 1)}d — ${fmt(lat!.hdi_t95_upper, 1)}d`} />}
+      {lat!.onset_mu_corr != null && <Row label="onset↔μ" term="onset-mu-corr" value={fmt(lat!.onset_mu_corr, 3)} />}
     </>
   ) : null;
 
   const pathLatRows = hasPathLat ? (
     <>
-      <Row label="onset" value={`${fmt(lat!.path_onset_delta_days, 1)}d${lat!.path_onset_sd != null ? ` ± ${fmt(lat!.path_onset_sd, 1)}d` : ''}`} />
-      {lat!.path_onset_hdi_lower != null && <Row label="onset HDI" value={`${fmt(lat!.path_onset_hdi_lower, 1)}d — ${fmt(lat!.path_onset_hdi_upper, 1)}d`} />}
-      <Row label="μ" value={`${fmt(lat!.path_mu_mean, 3)} ± ${fmt(lat!.path_mu_sd, 3)}`} />
-      <Row label="σ" value={`${fmt(lat!.path_sigma_mean, 3)} ± ${fmt(lat!.path_sigma_sd, 3)}`} />
-      {(lat as any)?.path_hdi_t95_lower != null && <Row label="t95 HDI" value={`${fmt((lat as any).path_hdi_t95_lower, 1)}d — ${fmt((lat as any).path_hdi_t95_upper, 1)}d`} />}
-      {(lat as any)?.path_onset_mu_corr != null && <Row label="onset↔μ" value={fmt((lat as any).path_onset_mu_corr, 3)} />}
+      <Row label="onset" term="onset" value={`${fmt(lat!.path_onset_delta_days, 1)}d${lat!.path_onset_sd != null ? ` ± ${fmt(lat!.path_onset_sd, 1)}d${_epist}` : ''}`} />
+      {lat!.path_onset_hdi_lower != null && <Row label="onset HDI" term="hdi" value={`${fmt(lat!.path_onset_hdi_lower, 1)}d — ${fmt(lat!.path_onset_hdi_upper, 1)}d`} />}
+      <Row label="μ" term="mu" value={`${fmt(lat!.path_mu_mean, 3)} ± ${fmt(lat!.path_mu_sd, 3)}`} />
+      <Row label="σ" term="sigma" value={`${fmt(lat!.path_sigma_mean, 3)} ± ${fmt(lat!.path_sigma_sd, 3)}${_epist}`} />
+      {(lat as any)?.path_hdi_t95_lower != null && <Row label="t95 HDI" term="t95-hdi" value={`${fmt((lat as any).path_hdi_t95_lower, 1)}d — ${fmt((lat as any).path_hdi_t95_upper, 1)}d`} />}
+      {(lat as any)?.path_onset_mu_corr != null && <Row label="onset↔μ" term="onset-mu-corr" value={fmt((lat as any).path_onset_mu_corr, 3)} />}
     </>
   ) : null;
 
@@ -164,6 +171,16 @@ export function BayesPosteriorCard({ probability, latency, t95, pathT95, theme =
         )}
       </div>
       {footer}
+      {_hasEpistFootnote && (
+        <div style={{
+          fontSize: 9, lineHeight: '13px', color: 'var(--text-muted, #888)',
+          padding: '2px 0', fontStyle: 'italic',
+        }}
+        title="This &#177; reflects how precisely the model knows this parameter given the data it has seen. It does not include day-to-day variation (overdispersion). The probability and &#956; lines include observation-level variation."
+        >
+          * Epistemic — precision of the model&apos;s estimate
+        </div>
+      )}
       {(onResetPriors || onDeleteHistory) && (
         <div style={{
           display: 'flex', gap: 12, padding: '4px 0 2px',

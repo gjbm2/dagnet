@@ -240,10 +240,10 @@ describe('CLI --apply-patch (bayesPatchService via diskLoader)', () => {
     const edge = (graphFile!.data as any).edges.find((e: any) => e.p?.id === PARAM_ID);
     const post = edge.p.posterior;
 
-    expect(post.path_alpha).toBe(COHORT_ALPHA);
-    expect(post.path_beta).toBe(COHORT_BETA);
-    expect(post.path_hdi_lower).toBe(0.81);
-    expect(post.path_hdi_upper).toBe(0.93);
+    expect(post.cohort_alpha).toBe(COHORT_ALPHA);
+    expect(post.cohort_beta).toBe(COHORT_BETA);
+    expect(post.cohort_hdi_lower).toBe(0.81);
+    expect(post.cohort_hdi_upper).toBe(0.93);
   });
 
   // ── Latency posterior on edge.p.latency.posterior ──────────────────

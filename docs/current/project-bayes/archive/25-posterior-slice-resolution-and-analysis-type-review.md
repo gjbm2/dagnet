@@ -87,7 +87,7 @@ checks `gate_passed` and respects the preference hierarchy.
 query context.
 **Fix after §2**: Once the cascade projects the right slice onto the graph
 edge, the gauge no longer needs `isCohortQuery` branching between
-`alpha/beta` and `path_alpha/path_beta`. It reads `p.posterior.alpha/beta`
+`alpha/beta` and `cohort_alpha/cohort_beta`. It reads `p.posterior.alpha/beta`
 unconditionally — the cascade already selected the right slice.
 
 ### 3.3 BE model CDF — uses window p for all queries

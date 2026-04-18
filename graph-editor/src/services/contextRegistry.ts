@@ -15,6 +15,7 @@ export interface ContextDefinition {
   description: string;
   type: 'categorical' | 'ordinal' | 'continuous';
   otherPolicy?: 'null' | 'computed' | 'explicit' | 'undefined';
+  independent?: boolean;  // doc 14 §15A.5: no pooling for this dimension
   values: ContextValue[];
   metadata: {
     category?: string;

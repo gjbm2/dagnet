@@ -766,8 +766,9 @@ export function useCanvasAnalysisCompute({
         setError(null);
       } else {
         completedRunKeyRef.current = runKey;
-        console.warn(`[Compute] NO-RESULT ${analysis.id} (${analysisType}×${chartKind})`);
-        setError('No result returned from compute');
+        const beErr = (response as any)?.error;
+        console.warn(`[Compute] NO-RESULT ${analysis.id} (${analysisType}×${chartKind})`, beErr ? { error: beErr } : undefined);
+        setError(beErr || 'No result returned from compute');
       }
     } catch (err: any) {
       if (thisCompute !== computeCountRef.current || !mountedRef.current) return;
@@ -822,12 +823,21 @@ export function useCanvasAnalysisCompute({
 
     const activeRunKey = activeRunKeyRef.current;
     const completedRunKey = completedRunKeyRef.current;
-    const hasSettledCurrentResult = completedRunKey === runKey && !!result && !loading && !error && !backendUnavailable;
+    // A run counts as settled if it ran to completion for this runKey,
+    // regardless of whether it produced a result or errored. Retrying on
+    // error without a dependency change creates a tight retry loop
+    // (setError triggers useEffect → retry → setError → ...). Manual
+    // refresh or dependency change is required to re-run after an error.
+    const hasSettledCurrentResult = completedRunKey === runKey
+      && !loading
+      && !backendUnavailable
+      && (!!result || !!error);
     if (activeRunKey === runKey || hasSettledCurrentResult) {
       console.log(`[Compute] SKIP-dup ${analysis.id} (${analysisType}×${chartKind})`, {
         activeMatch: activeRunKey === runKey,
         settled: hasSettledCurrentResult,
         hasResult: !!result,
+        hasError: !!error,
       });
       return;
     }

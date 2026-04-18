@@ -27,7 +27,7 @@ import { chartDepsSignatureV1 } from '../../lib/chartDeps';
 import { dslDependsOnReferenceDay } from '../../lib/dslDynamics';
 import { ukReferenceDayService } from '../../services/ukReferenceDayService';
 import { getScenarioVisibilityOverlayStyle } from '../../lib/scenarioVisibilityModeStyles';
-import { SCENARIO_PALETTE } from '../../contexts/ScenariosContext';
+import { SCENARIO_PALETTE } from '../../contexts/scenarioPalette';
 import { ScenarioQueryEditModal } from '../modals/ScenarioQueryEditModal';
 import { resolveAnalysisType } from '../../services/analysisTypeResolutionService';
 import { augmentChartKindOptionsForAnalysisType } from '../../services/chartDisplayPlanningService';

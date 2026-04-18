@@ -437,19 +437,21 @@ export function useBayesTrigger(computeMode: BayesComputeMode = 'local') {
       // 7d. Build candidate regimes + MECE dimensions (doc 30 §4.1)
       let candidateRegimesByEdge: Record<string, Array<{ core_hash: string; equivalent_hashes: string[] }>> = {};
       let meceDimensions: string[] = [];
+      let independentDimensions: string[] = [];
       try {
-        const { buildCandidateRegimesByEdge, computeMeceDimensions } = await import('../services/candidateRegimeService');
+        const { buildCandidateRegimesByEdge, computeMeceDimensions, computeIndependentDimensions } = await import('../services/candidateRegimeService');
         const workspace = {
           repository: `${gitCred.owner}/${gitCred.name}`,
           branch: navState.selectedBranch || 'main',
         };
-        [candidateRegimesByEdge, meceDimensions] = await Promise.all([
+        [candidateRegimesByEdge, meceDimensions, independentDimensions] = await Promise.all([
           buildCandidateRegimesByEdge(graphFile.data as any, workspace),
           computeMeceDimensions(graphFile.data as any, workspace),
+          computeIndependentDimensions(graphFile.data as any, workspace),
         ]);
         sessionLogService.info('bayes', 'BAYES_REGIME_CANDIDATES',
           `Built candidate regimes: ${Object.keys(candidateRegimesByEdge).length} edges, ` +
-          `${meceDimensions.length} MECE dims: [${meceDimensions.join(', ')}]`);
+          `${meceDimensions.length} MECE dims, ${independentDimensions.length} independent dims`);
       } catch (err: any) {
         sessionLogService.warning('bayes', 'BAYES_REGIME_CANDIDATES_FAILED',
           `Failed to build candidate regimes (non-blocking): ${err.message}`);
@@ -495,6 +497,7 @@ export function useBayesTrigger(computeMode: BayesComputeMode = 'local') {
         ...(snapshotSubjects.length > 0 ? { snapshot_subjects: snapshotSubjects } : {}),
         ...(Object.keys(candidateRegimesByEdge).length > 0 ? { candidate_regimes_by_edge: candidateRegimesByEdge } : {}),
         ...(meceDimensions.length > 0 ? { mece_dimensions: meceDimensions } : {}),
+        ...(independentDimensions.length > 0 ? { independent_dimensions: independentDimensions } : {}),
         callback_token: callbackToken,
         db_connection: config.db_connection,
         webhook_url: webhookUrl,

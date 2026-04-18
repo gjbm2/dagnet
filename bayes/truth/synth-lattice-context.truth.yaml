@@ -1,0 +1,253 @@
+# Ground truth for synth-lattice-context
+#
+# Anchor → {Top, Bottom} → {Left, Right} → Target → Outcome
+# Lattice with cross-connections and nested joins, plus MECE context.
+# Most complex topology in the regression set.
+#
+# 3 branch groups:
+#   Anchor: top (0.45) + bottom (0.35) = 0.80
+#   Top:    left (0.50) + right (0.30) = 0.80
+#   Bottom: left (0.40) + right (0.35) = 0.75
+# All safe with google p_mult 1.15
+
+simulation:
+  mean_daily_traffic: 500
+  n_days: 100
+  user_kappa: 100
+  failure_rate: 0.05
+  drift_sigma: 0.0
+  seed: 42
+  expected_sample_seconds: 3600
+
+emit_context_slices: true
+
+context_dimensions:
+  - id: synth-channel
+    mece: true
+    values:
+      - id: google
+        label: Google
+        weight: 0.60
+        sources:
+          amplitude:
+            field: utm_medium
+            filter: utm_medium == 'google'
+        edges:
+          anchor-to-top:
+            p_mult: 1.15
+            mu_offset: -0.1
+            onset_offset: 0.0
+          anchor-to-bottom:
+            p_mult: 1.15
+            mu_offset: -0.2
+            onset_offset: -0.1
+          top-to-left:
+            p_mult: 1.15
+            mu_offset: -0.2
+            onset_offset: -0.1
+          top-to-right:
+            p_mult: 1.15
+            mu_offset: -0.1
+            onset_offset: 0.0
+          bottom-to-left:
+            p_mult: 1.15
+            mu_offset: -0.2
+            onset_offset: -0.1
+          bottom-to-right:
+            p_mult: 1.15
+            mu_offset: -0.2
+            onset_offset: -0.2
+          left-to-target:
+            p_mult: 1.15
+            mu_offset: -0.2
+            onset_offset: -0.1
+          right-to-target:
+            p_mult: 1.20
+            mu_offset: -0.2
+            onset_offset: -0.1
+          target-to-outcome:
+            p_mult: 1.10
+            mu_offset: -0.1
+            onset_offset: 0.0
+      - id: direct
+        label: Direct
+        weight: 0.30
+        sources:
+          amplitude:
+            field: utm_medium
+            filter: utm_medium == 'direct'
+        edges:
+          anchor-to-top:
+            p_mult: 1.0
+          anchor-to-bottom:
+            p_mult: 1.0
+          top-to-left:
+            p_mult: 1.0
+          top-to-right:
+            p_mult: 1.0
+          bottom-to-left:
+            p_mult: 1.0
+          bottom-to-right:
+            p_mult: 1.0
+          left-to-target:
+            p_mult: 1.0
+          right-to-target:
+            p_mult: 1.0
+          target-to-outcome:
+            p_mult: 1.0
+      - id: email
+        label: Email
+        weight: 0.10
+        sources:
+          amplitude:
+            field: utm_medium
+            filter: utm_medium == 'email'
+        edges:
+          anchor-to-top:
+            p_mult: 0.75
+            mu_offset: 0.2
+            onset_offset: 0.0
+          anchor-to-bottom:
+            p_mult: 0.75
+            mu_offset: 0.3
+            onset_offset: 0.2
+          top-to-left:
+            p_mult: 0.70
+            mu_offset: 0.3
+            onset_offset: 0.2
+          top-to-right:
+            p_mult: 0.70
+            mu_offset: 0.3
+            onset_offset: 0.0
+          bottom-to-left:
+            p_mult: 0.75
+            mu_offset: 0.3
+            onset_offset: 0.2
+          bottom-to-right:
+            p_mult: 0.75
+            mu_offset: 0.3
+            onset_offset: 0.3
+          left-to-target:
+            p_mult: 0.70
+            mu_offset: 0.3
+            onset_offset: 0.2
+          right-to-target:
+            p_mult: 0.65
+            mu_offset: 0.3
+            onset_offset: 0.2
+          target-to-outcome:
+            p_mult: 0.80
+            mu_offset: 0.2
+            onset_offset: 0.0
+
+edges:
+  anchor-to-top:
+    from: anchor
+    to: top
+    p: 0.45
+    onset: 0.0
+    mu: 0.6
+    sigma: 0.3
+  anchor-to-bottom:
+    from: anchor
+    to: bottom
+    p: 0.35
+    onset: 0.5
+    mu: 0.9
+    sigma: 0.4
+  top-to-left:
+    from: top
+    to: left
+    p: 0.50
+    onset: 0.5
+    mu: 0.8
+    sigma: 0.3
+  top-to-right:
+    from: top
+    to: right
+    p: 0.30
+    onset: 0.0
+    mu: 0.7
+    sigma: 0.4
+  bottom-to-left:
+    from: bottom
+    to: left
+    p: 0.40
+    onset: 0.5
+    mu: 1.0
+    sigma: 0.4
+  bottom-to-right:
+    from: bottom
+    to: right
+    p: 0.35
+    onset: 1.0
+    mu: 1.1
+    sigma: 0.5
+  left-to-target:
+    from: left
+    to: target
+    p: 0.60
+    onset: 0.5
+    mu: 0.8
+    sigma: 0.3
+  right-to-target:
+    from: right
+    to: target
+    p: 0.55
+    onset: 0.5
+    mu: 0.9
+    sigma: 0.4
+  target-to-outcome:
+    from: target
+    to: outcome
+    p: 0.70
+    onset: 0.0
+    mu: 0.5
+    sigma: 0.3
+
+nodes:
+  anchor:
+    start: true
+    type: entry
+    label: Anchor
+    event_id: synth-lat-anchor
+  top:
+    type: event
+    label: Top
+    event_id: synth-lat-top
+  bottom:
+    type: event
+    label: Bottom
+    event_id: synth-lat-bottom
+  left:
+    type: event
+    label: Left
+    event_id: synth-lat-left
+  right:
+    type: event
+    label: Right
+    event_id: synth-lat-right
+  target:
+    type: event
+    label: Target
+    event_id: synth-lat-target
+  outcome:
+    absorbing: true
+    type: event
+    label: Outcome
+    event_id: synth-lat-outcome
+    outcome_type: success
+
+graph:
+  name: synth-lattice-context
+  description: "Lattice with cross-connections and MECE context. Most complex topology."
+
+testing:
+  thresholds:
+    p_z: 2.5
+    mu_z: 2.5
+    sigma_z: 3.0
+    onset_z: 3.0
+  per_slice_thresholds:
+    p_slice_z: 3.0
+    weight_z: 3.0

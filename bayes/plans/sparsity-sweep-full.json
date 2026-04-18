@@ -1,0 +1,23 @@
+{
+    "name": "sparsity-sweep-full",
+    "description": "Full sparsity sweep: 3 topologies × 6 sparsity configs. Tests recovery degradation under random frame drops, structured treatment lifecycles, and combined.",
+    "graphs": {
+        "include": [
+            "synth-solo-sparse-*",
+            "synth-solo-lifecycle*",
+            "synth-abc-sparse-*",
+            "synth-abc-lifecycle*",
+            "synth-diamond-sparse-*",
+            "synth-diamond-lifecycle*"
+        ]
+    },
+    "sampling": {
+        "chains": 3,
+        "draws": 1500,
+        "tune": 750,
+        "no_timeout": true
+    },
+    "features": [],
+    "settings": {},
+    "tags": ["sparsity", "sweep", "degradation", "lifecycle"]
+}

@@ -780,45 +780,81 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                 # Per-dimension concentration for slice Dirichlets (R2g Gap 1).
                 # Each dimension gets its own kappa so "channel has high p
                 # variation" vs "device has low p variation" can be expressed.
+                # Independent dimensions (doc 14 §15A.5) skip the shared
+                # learned kappa — each slice gets a Dirichlet with the base
+                # prior-derived concentration directly.
+
+                # Detect dimension independence via any sibling's SliceGroup
+                _bg_dim_independent: dict[str, bool] = {}
+                for sib_id in bg.sibling_edge_ids:
+                    ev_sib = evidence.edges.get(sib_id)
+                    if ev_sib and ev_sib.has_slices:
+                        for dk, sg in ev_sib.slice_groups.items():
+                            if dk not in _bg_dim_independent:
+                                _bg_dim_independent[dk] = sg.independent
+                        break  # all siblings share the same dimension config
+
                 for _dk, _dk_ctx_keys in sorted(_bg_dim_keys.items()):
                     _dk_safe = _safe_var_name(_dk)
-                    _kappa_suffix = (f"{safe_group}__{_dk_safe}"
-                                     if _bg_n_dims > 1
-                                     else safe_group)
-                    _log_kappa_bg = pm.Normal(
-                        f"log_kappa_slice_bg_{_kappa_suffix}",
-                        mu=np.log(float(n_components) * 5.0),
-                        sigma=1.0,
-                    )
-                    kappa_bg = pm.Deterministic(
-                        f"kappa_slice_bg_{_kappa_suffix}",
-                        pt.exp(_log_kappa_bg),
-                    )
+                    _dk_is_independent = _bg_dim_independent.get(_dk, False)
 
-                    # Per-slice Dirichlet for each context key in this dimension
-                    for ctx_key in sorted(_dk_ctx_keys):
-                        ctx_safe = _safe_var_name(ctx_key)
-                        conc_vec = kappa_bg * base_weight_vec
-                        # Floor concentrations to avoid degenerate Dirichlet
-                        conc_vec = pt.maximum(conc_vec, _s_dirichlet_conc_floor)
+                    if _dk_is_independent:
+                        # Independent: use base alpha_vec directly, no shared kappa
+                        _base_conc = pt.maximum(base_weight_vec, _s_dirichlet_conc_floor)
 
-                        slice_weights = pm.Dirichlet(
-                            f"weights_slice_{safe_group}_{ctx_safe}",
-                            a=conc_vec,
-                        )
-
-                        for i, sib_id in enumerate(sibling_edges):
-                            sib_safe = _safe_var_name(sib_id)
-                            p_slice_var = pm.Deterministic(
-                                f"p_slice_{sib_safe}_{ctx_safe}",
-                                slice_weights[i],
+                        for ctx_key in sorted(_dk_ctx_keys):
+                            ctx_safe = _safe_var_name(ctx_key)
+                            slice_weights = pm.Dirichlet(
+                                f"weights_slice_{safe_group}_{ctx_safe}",
+                                a=_base_conc,
                             )
-                            bg_slice_p_vars.setdefault(sib_id, {})[ctx_key] = p_slice_var
-
-                        diagnostics.append(
-                            f"  branch_group_slice: {safe_group}[{_dk}] {ctx_key} → "
-                            f"Dir({n_components}, κ_bg)"
+                            for i, sib_id in enumerate(sibling_edges):
+                                sib_safe = _safe_var_name(sib_id)
+                                p_slice_var = pm.Deterministic(
+                                    f"p_slice_{sib_safe}_{ctx_safe}",
+                                    slice_weights[i],
+                                )
+                                bg_slice_p_vars.setdefault(sib_id, {})[ctx_key] = p_slice_var
+                            diagnostics.append(
+                                f"  branch_group_slice: {safe_group}[{_dk}] {ctx_key} → "
+                                f"Dir({n_components}, independent)")
+                    else:
+                        # Pooled: shared learned kappa per dimension
+                        _kappa_suffix = (f"{safe_group}__{_dk_safe}"
+                                         if _bg_n_dims > 1
+                                         else safe_group)
+                        _log_kappa_bg = pm.Normal(
+                            f"log_kappa_slice_bg_{_kappa_suffix}",
+                            mu=np.log(float(n_components) * 5.0),
+                            sigma=1.0,
                         )
+                        kappa_bg = pm.Deterministic(
+                            f"kappa_slice_bg_{_kappa_suffix}",
+                            pt.exp(_log_kappa_bg),
+                        )
+
+                        for ctx_key in sorted(_dk_ctx_keys):
+                            ctx_safe = _safe_var_name(ctx_key)
+                            conc_vec = kappa_bg * base_weight_vec
+                            conc_vec = pt.maximum(conc_vec, _s_dirichlet_conc_floor)
+
+                            slice_weights = pm.Dirichlet(
+                                f"weights_slice_{safe_group}_{ctx_safe}",
+                                a=conc_vec,
+                            )
+
+                            for i, sib_id in enumerate(sibling_edges):
+                                sib_safe = _safe_var_name(sib_id)
+                                p_slice_var = pm.Deterministic(
+                                    f"p_slice_{sib_safe}_{ctx_safe}",
+                                    slice_weights[i],
+                                )
+                                bg_slice_p_vars.setdefault(sib_id, {})[ctx_key] = p_slice_var
+
+                            diagnostics.append(
+                                f"  branch_group_slice: {safe_group}[{_dk}] {ctx_key} → "
+                                f"Dir({n_components}, κ_bg)"
+                            )
 
         # =============================================================
         # SECTION 3: PER-EDGE LATENCY VARIABLES
@@ -1445,7 +1481,7 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                             total_n=_so.total_n, latency_prior=ev.latency_prior,
                             kappa_warm=ev.kappa_warm, cohort_latency_warm=ev.cohort_latency_warm)
                         _emissions.append((_sfx, p_s, ks, s_ev,
-                                           cohort_latency_vars or latency_vars, onset_vars))
+                                           latency_vars, onset_vars))
 
                     _all_exhaustive = all(sg.is_exhaustive for sg in ev.slice_groups.values())
                     if not _all_exhaustive:
@@ -1469,14 +1505,22 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                         # Per-dimension tau for p hierarchy (R2g Gap 1).
                         # When only one dimension exists, this is identical
                         # to the old single tau_slice.
+                        # Independent dimensions (doc 14 §15A.5) get no tau —
+                        # their slices receive direct Beta priors instead of
+                        # hierarchical offsets from p_base.
                         _tau_slice_by_dim: dict[str, object] = {}
+                        _any_pooled = False
                         for _dk in ev.slice_groups:
+                            if ev.slice_groups[_dk].independent:
+                                _tau_slice_by_dim[_dk] = None  # no tau for independent dims
+                                continue
+                            _any_pooled = True
                             _dk_safe = _safe_var_name(_dk)
                             _tau_name = (f"tau_slice_{safe_id}__{_dk_safe}"
                                          if _n_dims > 1
                                          else f"tau_slice_{safe_id}")
                             _tau_slice_by_dim[_dk] = pm.HalfNormal(_tau_name, sigma=0.5)
-                        logit_p_base = pt.log(p / (1.0 - p))
+                        logit_p_base = pt.log(p / (1.0 - p)) if _any_pooled else None
 
                     # Per-slice latency hierarchy.
                     # With latency_reparam (doc 34 §11.9.1), all three
@@ -1508,8 +1552,12 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
 
                             # Per-slice m offsets (always when reparam_slices >= 1)
                             # Per-dimension tau for latency (R2g Gap 1).
+                            # Independent dims get no latency tau (doc 14 §15A.5).
                             _tau_m_by_dim: dict[str, object] = {}
                             for _dk in ev.slice_groups:
+                                if ev.slice_groups[_dk].independent:
+                                    _tau_m_by_dim[_dk] = pt.as_tensor_variable(np.float64(0.0))
+                                    continue
                                 _dk_safe = _safe_var_name(_dk)
                                 _tm_name = (f"tau_m_slice_{safe_id}__{_dk_safe}"
                                             if _n_dims > 1
@@ -1534,6 +1582,9 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                             if _reparam_slice_level >= 2 and not feat_shared_sigma_slices:
                                 _tau_r_by_dim: dict[str, object] = {}
                                 for _dk in ev.slice_groups:
+                                    if ev.slice_groups[_dk].independent:
+                                        _tau_r_by_dim[_dk] = pt.as_tensor_variable(np.float64(0.0))
+                                        continue
                                     _dk_safe = _safe_var_name(_dk)
                                     _tr_name = (f"tau_r_slice_{safe_id}__{_dk_safe}"
                                                 if _n_dims > 1
@@ -1563,6 +1614,9 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                             if feat_per_slice_a:
                                 _tau_a_by_dim: dict[str, object] = {}
                                 for _dk in ev.slice_groups:
+                                    if ev.slice_groups[_dk].independent:
+                                        _tau_a_by_dim[_dk] = pt.as_tensor_variable(np.float64(0.0))
+                                        continue
                                     _dk_safe = _safe_var_name(_dk)
                                     _ta_name = (f"tau_a_slice_{safe_id}__{_dk_safe}"
                                                 if _n_dims > 1
@@ -1667,6 +1721,9 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                                 # Per-dimension tau for non-reparam mu offsets (R2g Gap 1)
                                 _tau_mu_by_dim: dict[str, object] = {}
                                 for _dk in ev.slice_groups:
+                                    if ev.slice_groups[_dk].independent:
+                                        _tau_mu_by_dim[_dk] = pt.as_tensor_variable(np.float64(0.0))
+                                        continue
                                     _dk_safe = _safe_var_name(_dk)
                                     _tmu_name = (f"tau_mu_slice_{safe_id}__{_dk_safe}"
                                                  if _n_dims > 1
@@ -1686,25 +1743,75 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                             f"  shared_p: {edge_id[:8]}… p shared across "
                             f"{_n_slices} slices [shared_p_slices flag]")
                     elif not _is_bg:
-                        # Build per-dimension tau vector for p offsets
-                        _tau_p_vec = pt.stack([_tau_slice_by_dim[dk] for dk in _slice_dim_keys])
-                        if feat_centred_p_slices:
-                            # Centred: sample logit_p directly per slice
-                            _logit_p_slice_vec = pm.Normal(
-                                f"logit_p_slice_vec_{safe_id}",
-                                mu=logit_p_base, sigma=_tau_p_vec,
-                                shape=(_n_slices,))
+                        # Identify which slice indices are independent vs pooled.
+                        _indep_indices = [i for i, dk in enumerate(_slice_dim_keys)
+                                          if _tau_slice_by_dim.get(dk) is None]
+                        _pooled_indices = [i for i, dk in enumerate(_slice_dim_keys)
+                                           if _tau_slice_by_dim.get(dk) is not None]
+                        _all_independent = len(_pooled_indices) == 0
+
+                        # Independent slices: direct Beta priors (doc 14 §15A.5).
+                        # Same prior source as p_base — no hierarchy, no shrinkage.
+                        _indep_p_vars: dict[int, object] = {}
+                        for _ii in _indep_indices:
+                            _ck_ii = _slice_ctx_keys[_ii]
+                            _ctx_safe_ii = _safe_var_name(_ck_ii)
+                            _indep_p_vars[_ii] = pm.Beta(
+                                f"p_slice_{safe_id}_{_ctx_safe_ii}",
+                                alpha=alpha, beta=beta_param)
+
+                        if _all_independent:
+                            # All slices independent: assemble from per-slice Betas.
+                            _p_slice_vec = pt.stack(
+                                [_indep_p_vars[i] for i in range(_n_slices)])
+                        elif _indep_indices:
+                            # Mixed: pooled vector for pooled slices, insert
+                            # independent Betas at the right positions.
+                            _n_pooled = len(_pooled_indices)
+                            _tau_p_pooled = pt.stack([_tau_slice_by_dim[_slice_dim_keys[i]]
+                                                      for i in _pooled_indices])
+                            if feat_centred_p_slices:
+                                _logit_p_pooled = pm.Normal(
+                                    f"logit_p_slice_vec_{safe_id}",
+                                    mu=logit_p_base, sigma=_tau_p_pooled,
+                                    shape=(_n_pooled,))
+                                _p_pooled = pm.math.invlogit(_logit_p_pooled)
+                            else:
+                                _eps_pooled = pm.Normal(
+                                    f"eps_slice_vec_{safe_id}",
+                                    mu=0, sigma=1, shape=(_n_pooled,))
+                                _p_pooled = pm.math.invlogit(
+                                    logit_p_base + _eps_pooled * _tau_p_pooled)
+                            # Assemble full vector: pooled and independent interleaved.
+                            _full_parts: list[object] = []
+                            _pi = 0  # pooled counter
+                            for _si_mix in range(_n_slices):
+                                if _si_mix in _indep_p_vars:
+                                    _full_parts.append(_indep_p_vars[_si_mix].reshape((1,)))
+                                else:
+                                    _full_parts.append(_p_pooled[_pi].reshape((1,)))
+                                    _pi += 1
                             _p_slice_vec = pm.Deterministic(
                                 f"p_slice_vec_{safe_id}",
-                                pm.math.invlogit(_logit_p_slice_vec))
+                                pt.concatenate(_full_parts))
                         else:
-                            # Non-centred (default): eps * tau on logit scale
-                            _eps_slice_vec = pm.Normal(
-                                f"eps_slice_vec_{safe_id}",
-                                mu=0, sigma=1, shape=(_n_slices,))
-                            _p_slice_vec = pm.Deterministic(
-                                f"p_slice_vec_{safe_id}",
-                                pm.math.invlogit(logit_p_base + _eps_slice_vec * _tau_p_vec))
+                            # All pooled (original path)
+                            _tau_p_vec = pt.stack([_tau_slice_by_dim[dk] for dk in _slice_dim_keys])
+                            if feat_centred_p_slices:
+                                _logit_p_slice_vec = pm.Normal(
+                                    f"logit_p_slice_vec_{safe_id}",
+                                    mu=logit_p_base, sigma=_tau_p_vec,
+                                    shape=(_n_slices,))
+                                _p_slice_vec = pm.Deterministic(
+                                    f"p_slice_vec_{safe_id}",
+                                    pm.math.invlogit(_logit_p_slice_vec))
+                            else:
+                                _eps_slice_vec = pm.Normal(
+                                    f"eps_slice_vec_{safe_id}",
+                                    mu=0, sigma=1, shape=(_n_slices,))
+                                _p_slice_vec = pm.Deterministic(
+                                    f"p_slice_vec_{safe_id}",
+                                    pm.math.invlogit(logit_p_base + _eps_slice_vec * _tau_p_vec))
 
                     # Kappa: per-slice vector or shared edge-level.
                     # When both p and latency are shared, kappa should

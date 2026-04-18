@@ -39,7 +39,8 @@ class FrameEvidence:
     cohort_list: List[Dict]        # sorted cohort_info dicts
     cohort_at_tau: Dict            # per-cohort tau observations
     evidence_by_tau: Dict          # aggregate evidence at each tau
-    max_tau: int
+    max_tau: int                   # display range (rows, chart x-axis)
+    saturation_tau: int            # sweep horizon (for p.infinity evaluation)
     tau_solid_max: int
     tau_future_max: int
     last_frame_date: Optional[_date] = None
@@ -174,7 +175,12 @@ def build_cohort_evidence_from_frames(
         oldest = cohort_list[0]
         tau_future_max = oldest['tau_max']
 
-    # ── Determine tau range ────────────────────────────────────────
+    # ── Determine tau ranges ───────────────────────────────────────
+    # max_tau         : display/row range — drives chart x-axis (unchanged).
+    # saturation_tau  : internal sweep horizon — extends to 2*t95 (window)
+    #                   or 2*path_t95 (cohort) so median(rate_draws[:, sat])
+    #                   is p@∞. May exceed max_tau when path-level latency
+    #                   dominates A→Y timing (cohort mode, multi-hop).
     max_tau = tau_future_max
     if axis_tau_max is not None and axis_tau_max > max_tau:
         max_tau = axis_tau_max
@@ -187,6 +193,33 @@ def build_cohort_evidence_from_frames(
             pass
     max_tau = min(max_tau, 400)
 
+    saturation_tau = max_tau
+    if lat.sigma > 0:
+        try:
+            from .lag_distribution_utils import log_normal_inverse_cdf
+            mu_s, sigma_s, onset_s = lat.mu, lat.sigma, lat.onset_delta_days
+            if not is_window:
+                # Cohort mode: the relevant lag for evaluating p@∞ is the
+                # path-level A→Y CDF, not the edge-local one. Re-resolve
+                # with scope='path' because build_cohort_evidence receives
+                # `resolved` from an earlier scope='edge' call (so
+                # resolved.path_latency is None on this side).
+                from .model_resolver import resolve_model_params
+                try:
+                    path_resolved = resolve_model_params(
+                        target_edge, scope='path', temporal_mode='cohort'
+                    )
+                    pl = getattr(path_resolved, 'path_latency', None) if path_resolved else None
+                    if pl is not None and pl.sigma > 0:
+                        mu_s, sigma_s, onset_s = pl.mu, pl.sigma, pl.onset_delta_days
+                except Exception:
+                    pass
+            t95_sat = log_normal_inverse_cdf(0.95, mu_s, sigma_s) + onset_s
+            saturation_tau = max(saturation_tau, int(math.ceil(2.0 * t95_sat)))
+        except Exception:
+            pass
+    saturation_tau = min(saturation_tau, 400)
+
     # ── Build CohortEvidence per cohort ────────────────────────────
     engine_cohorts: list = []
     for ci in cohort_list:
@@ -196,11 +229,11 @@ def build_cohort_evidence_from_frames(
         ad_str = ci['anchor_day'].isoformat()
         tau_data = cohort_at_tau.get(ad_str, {})
 
-        obs_x = [0.0] * (max_tau + 1)
-        obs_y = [0.0] * (max_tau + 1)
+        obs_x = [0.0] * (saturation_tau + 1)
+        obs_y = [0.0] * (saturation_tau + 1)
         last_x = float(N_i) if is_window else 0.0
         last_y = 0.0
-        for t in range(max_tau + 1):
+        for t in range(saturation_tau + 1):
             if t <= a_i:
                 obs = tau_data.get(t)
                 if obs:
@@ -221,6 +254,16 @@ def build_cohort_evidence_from_frames(
             y_frozen=ci['y_frozen'],
             frontier_age=a_i,
             a_pop=a_pop,
+            # Doc 45 §Response contract: the CF endpoint and the
+            # cohort maturity chart share this engine. Setting
+            # eval_age = frontier_age tells compute_forecast_sweep to
+            # populate `sweep.completeness_mean` / `completeness_sd`
+            # (n-weighted CDF across cohorts at their own frontiers).
+            # Without this, the sweep leaves those fields None and
+            # downstream consumers (the CF endpoint, maturity rows)
+            # have nothing to report — the exact gap that let
+            # completeness go AWOL end-to-end.
+            eval_age=a_i,
         ))
 
     if not engine_cohorts:
@@ -232,6 +275,7 @@ def build_cohort_evidence_from_frames(
         cohort_at_tau=dict(cohort_at_tau),
         evidence_by_tau=evidence_by_tau,
         max_tau=max_tau,
+        saturation_tau=saturation_tau,
         tau_solid_max=tau_solid_max,
         tau_future_max=tau_future_max,
         last_frame_date=last_frame_date,
@@ -329,7 +373,8 @@ def compute_cohort_maturity_rows_v3(
     cohort_list = fe.cohort_list
     cohort_at_tau = fe.cohort_at_tau
     evidence_by_tau = fe.evidence_by_tau
-    max_tau = fe.max_tau
+    max_tau = fe.max_tau                # display/rows (chart x-axis)
+    saturation_tau = fe.saturation_tau  # sweep horizon (p@∞ evaluation)
     tau_solid_max = fe.tau_solid_max
     tau_future_max = fe.tau_future_max
     last_frame_date = fe.last_frame_date
@@ -352,7 +397,7 @@ def compute_cohort_maturity_rows_v3(
             cohort_list=cohort_list,
             reach=x_provider.reach,
             is_window=is_window,
-            max_tau=max_tau,
+            max_tau=saturation_tau,
             num_draws=2000,
             rng=_carrier_rng,
         )
@@ -373,10 +418,10 @@ def compute_cohort_maturity_rows_v3(
         N_i = ci['x_frozen']
         a_pop = ci.get('a_frozen', N_i) or N_i or 1.0
         if upstream_path_cdf_arr is None:
-            x_at_tau = [float(N_i)] * (max_tau + 1)
+            x_at_tau = [float(N_i)] * (saturation_tau + 1)
         else:
             x_at_tau = [max(a_pop * reach * upstream_path_cdf_arr[t], float(N_i))
-                        for t in range(max_tau + 1)]
+                        for t in range(saturation_tau + 1)]
         _cohort_x_at_tau.append(x_at_tau)
 
     # ── Engine call: per-cohort population model sweep ──────────────
@@ -391,7 +436,7 @@ def compute_cohort_maturity_rows_v3(
     sweep = compute_forecast_sweep(
         resolved=resolved,
         cohorts=engine_cohorts,
-        max_tau=max_tau,
+        max_tau=saturation_tau,
         from_node_arrival=from_node_arrival,
         mc_cdf_arr=_sweep_cdf,
         mc_p_s=_sweep_p,
@@ -470,7 +515,17 @@ def compute_cohort_maturity_rows_v3(
     band_levels = [0.80, 0.90, 0.95, 0.99]
     rows = []
 
-    for tau in range(T):
+    # p@∞: median of IS-conditioned rate draws at saturation τ. Sweep
+    # ran out to saturation_tau (2·t95 window / 2·path_t95 cohort); rows
+    # stay clipped to max_tau so the chart axis is unchanged. Exposed on
+    # every row so consumers (CF endpoint) read one scalar off last_row
+    # without a separate channel — see handle_conditioned_forecast.
+    _sat_tau = min(saturation_tau, T - 1)
+    _asymp_draws = sweep.rate_draws[:, _sat_tau]
+    _p_infinity_mean = float(np.median(_asymp_draws))
+    _p_infinity_sd = float(np.std(_asymp_draws))
+
+    for tau in range(max_tau + 1):
         ev = _compute_evidence_at_tau(tau)
         rate = ev['sum_y'] / ev['sum_x'] if ev and ev['sum_x'] > 0 else None
         # D19 fix: use MC median Y/X from sweep (IS-conditioned, same
@@ -538,6 +593,16 @@ def compute_cohort_maturity_rows_v3(
             'boundary_date': str(sweep_to)[:10],
             'cohorts_covered_base': ev['n_mature'] if ev else 0,
             'cohorts_covered_projected': ev['n_mature'] if ev else 0,
+            # Doc 45 §Response contract — scalar, same for all rows
+            # (horizon-evaluated; sweep computes it once). Exposed on
+            # every row so consumers (CF endpoint `last_row` read;
+            # cohort maturity chart display) can pick it up without a
+            # separate out-of-band channel. None if the sweep could
+            # not compute it (e.g. no cohorts with eval_age).
+            'completeness': sweep.completeness_mean,
+            'completeness_sd': sweep.completeness_sd,
+            'p_infinity_mean': _p_infinity_mean,
+            'p_infinity_sd': _p_infinity_sd,
         })
 
     return rows

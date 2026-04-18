@@ -669,7 +669,7 @@ drive the fan chart.
 
 Key posterior fields:
 - `posterior.alpha/beta` → window-level posterior p (edge-level)
-- `posterior.path_alpha/path_beta` → cohort-level posterior p (path-composed)
+- `posterior.cohort_alpha/cohort_beta` → cohort-level posterior p (cohort-mode evidence)
 - `latency.posterior.mu_mean/sigma_mean` → edge-level latency
 - `latency.posterior.path_mu_mean/path_sigma_mean` → path-level latency
 - `model_vars[source='bayesian'].latency.mu_sd/sigma_sd/onset_sd` → uncertainties

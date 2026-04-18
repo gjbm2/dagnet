@@ -36,6 +36,9 @@ export interface CLIContext {
     sessionLog: boolean;
     showSignatures: boolean;
     allowExternalFetch: boolean;
+    /** Emit per-edge model_vars blocks (analytic + analytic_be) as JSON on stdout,
+     *  intended for blind FE↔BE topo parity diffing (doc 45). */
+    diagModelVars: boolean;
   };
 }
 
@@ -58,6 +61,7 @@ export const SHARED_OPTIONS = {
   format: { type: 'string' as const, short: 'f', default: 'yaml' },
   'allow-external-fetch': { type: 'boolean' as const, default: false },
   'show-signatures': { type: 'boolean' as const, default: false },
+  'diag-model-vars': { type: 'boolean' as const, default: false },
   'no-cache': { type: 'boolean' as const, default: false },
   verbose: { type: 'boolean' as const, short: 'v', default: false },
   diagnostic: { type: 'boolean' as const, default: false },
@@ -169,6 +173,7 @@ export async function bootstrap(
       sessionLog: !!args['session-log'],
       showSignatures: !!args['show-signatures'],
       allowExternalFetch: !!args['allow-external-fetch'],
+      diagModelVars: !!args['diag-model-vars'],
     },
     extraArgs,
   };

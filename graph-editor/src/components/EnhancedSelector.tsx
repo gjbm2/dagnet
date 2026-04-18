@@ -9,7 +9,7 @@ import { fileRegistry } from '../contexts/TabContext';
 import { registryService, RegistryItem } from '../services/registryService';
 import { getObjectTypeTheme } from '../theme/objectTypeTheme';
 import { useTheme } from '../contexts/ThemeContext';
-import { useSelectionContext } from './editors/GraphEditor';
+import { useSelectionContext } from './editors/SelectionContext';
 import { ItemBase } from '../hooks/useItemFiltering';
 import { LightningMenu } from './LightningMenu';
 import { fileOperationsService } from '../services/fileOperationsService';

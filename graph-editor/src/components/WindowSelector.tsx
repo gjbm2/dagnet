@@ -32,6 +32,8 @@ import { useIsReadOnlyShare } from '../contexts/ShareModeContext';
 import { getSnapshotRetrievalsForEdge, getSnapshotCoverageForEdges } from '../services/snapshotRetrievalsService';
 import { querySelectionUuids } from '../hooks/useQuerySelectionUuids';
 import { parseDate } from '../services/windowAggregationService';
+import Tooltip from './Tooltip';
+import GlossaryTooltip from './GlossaryTooltip';
 
 
 interface WindowSelectorProps {
@@ -862,32 +864,32 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
       <div className="window-selector-main">
       <div className="window-selector-content">
         {/* Cohort/Window mode toggle - leftmost element per design §7.5 */}
-        <button
-          type="button"
-          className={`window-selector-mode-toggle ${queryMode === 'cohort' ? 'cohort' : 'window'}`}
-          onClick={() => {
-            const newMode = queryMode === 'cohort' ? 'window' : 'cohort';
-            setQueryMode(newMode);
-            
-            // Update DSL with new mode, preserving date range
-            if (window) {
-              const newDSL = buildDSLFromState(window, newMode);
-              setCurrentDSL(newDSL);
-              const currentGraph = getLatestGraph();
-              if (currentGraph && setGraph) {
-                setGraph({ ...currentGraph, currentQueryDSL: newDSL });
+        <GlossaryTooltip term={queryMode === 'cohort' ? 'cohort' : 'window'}>
+          <button
+            type="button"
+            aria-label={queryMode === 'cohort' ? 'Cohort mode' : 'Window mode'}
+            className={`window-selector-mode-toggle ${queryMode === 'cohort' ? 'cohort' : 'window'}`}
+            onClick={() => {
+              const newMode = queryMode === 'cohort' ? 'window' : 'cohort';
+              setQueryMode(newMode);
+
+              // Update DSL with new mode, preserving date range
+              if (window) {
+                const newDSL = buildDSLFromState(window, newMode);
+                setCurrentDSL(newDSL);
+                const currentGraph = getLatestGraph();
+                if (currentGraph && setGraph) {
+                  setGraph({ ...currentGraph, currentQueryDSL: newDSL });
+                }
               }
-            }
-            
-            toast.success(`Switched to ${newMode} mode`, { duration: 1500 });
-          }}
-          title={queryMode === 'cohort' 
-            ? 'Cohort mode: dates refer to when users entered the funnel' 
-            : 'Window mode: dates refer to when events occurred'}
-        >
-          {queryMode === 'cohort' ? <ToggleLeft size={16} /> : <ToggleRight size={16} />}
-          <span className="mode-label">{queryMode === 'cohort' ? 'Cohort' : 'Window'}</span>
-        </button>
+
+              toast.success(`Switched to ${newMode} mode`, { duration: 1500 });
+            }}
+          >
+            {queryMode === 'cohort' ? <ToggleLeft size={16} /> : <ToggleRight size={16} />}
+            <span className="mode-label">{queryMode === 'cohort' ? 'Cohort' : 'Window'}</span>
+          </button>
+        </GlossaryTooltip>
         
         <div className="window-selector-presets">
           <button
@@ -935,26 +937,30 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
 
         {/* Phase 2: `@` asat() picker */}
         <div className="window-selector-asat">
-          <button
-            ref={asatButtonRef}
-            type="button"
-            data-testid="asat-toggle"
-            className={`window-selector-asat-toggle ${activeAsat ? 'active' : ''}`}
-            onClick={() => {
-              void openAsatDropdown();
-            }}
-            disabled={isReadOnlyShare}
-            title={
+          <GlossaryTooltip
+            term="asat"
+            description={
               isReadOnlyShare
-                ? 'Disabled in static share mode'
+                ? 'Disabled in static share mode.'
                 : activeAsat
-                  ? `asat(${activeAsat})`
-                  : 'Choose as-at snapshot date'
+                  ? `Currently pinned to asat(${activeAsat}). Click to change.`
+                  : undefined
             }
-            aria-pressed={!!activeAsat}
           >
-            <AtSign size={16} />
-          </button>
+            <button
+              ref={asatButtonRef}
+              type="button"
+              data-testid="asat-toggle"
+              className={`window-selector-asat-toggle ${activeAsat ? 'active' : ''}`}
+              onClick={() => {
+                void openAsatDropdown();
+              }}
+              disabled={isReadOnlyShare}
+              aria-pressed={!!activeAsat}
+            >
+              <AtSign size={16} />
+            </button>
+          </GlossaryTooltip>
 
           {isAsatDropdownOpen && (
             <div
@@ -1209,7 +1215,7 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
           onClick={(e) => e.stopPropagation()}
           onMouseDown={(e) => e.stopPropagation()}
         >
-          <span style={{ fontSize: '12px', color: '#6B7280', fontWeight: 500 }}>Full query:</span>
+          <GlossaryTooltip term="full-query-dsl"><span style={{ fontSize: '12px', color: '#6B7280', fontWeight: 500 }}>Full query:</span></GlossaryTooltip>
           <div style={{ flex: 1 }}>
             <QueryExpressionEditor
               suggestionsScope="graph"
@@ -1283,19 +1289,23 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
             />
           </div>
           <span style={{ color: '#ccc', fontSize: '18px' }}>│</span>
-          <button
-            className="window-selector-preset"
-            onClick={() => setShowPinnedQueryModal(true)}
-            title={graph?.dataInterestsDSL || 'Click to set pinned query'}
-            style={{
-              padding: '4px 12px',
-              background: graph?.dataInterestsDSL ? '#e3f2fd' : '#f5f5f5',
-              border: graph?.dataInterestsDSL ? '1px solid #90caf9' : '1px solid #d0d0d0',
-              whiteSpace: 'nowrap'
-            }}
+          <GlossaryTooltip
+            term="pinned-query"
+            description={graph?.dataInterestsDSL ? `Current: ${graph.dataInterestsDSL}` : undefined}
           >
-            Pinned query {graph?.dataInterestsDSL && '✓'}
-          </button>
+            <button
+              className="window-selector-preset"
+              onClick={() => setShowPinnedQueryModal(true)}
+              style={{
+                padding: '4px 12px',
+                background: graph?.dataInterestsDSL ? '#e3f2fd' : '#f5f5f5',
+                border: graph?.dataInterestsDSL ? '1px solid #90caf9' : '1px solid #d0d0d0',
+                whiteSpace: 'nowrap'
+              }}
+            >
+              Pinned query {graph?.dataInterestsDSL && '✓'}
+            </button>
+          </GlossaryTooltip>
         </div>
       )}
       </div>{/* End window-selector-main */}
@@ -1306,22 +1316,26 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
           Hidden for temporary/historical files to avoid irrelevant nudging. */}
       {hasParameterFiles && !isTemporaryFile && (
         <div className="window-selector-fetch-column">
-          <button
-            onClick={handleFetchData}
-            disabled={isAnalysing || isFetching || isReadOnlyShare}
-            className={`window-selector-button ${showShimmer && buttonNeedsAttention ? 'shimmer' : ''}`}
-            title={
+          <GlossaryTooltip
+            term="fetch-data"
+            description={
               isReadOnlyShare
-                ? "Data operations disabled in static share mode"
+                ? 'Data operations disabled in static share mode.'
                 : isAnalysing
-                  ? "Checking data coverage..."
+                  ? 'Checking data coverage...'
                   : isFetching
-                    ? "Fetching data..."
-                    : buttonTooltip
+                    ? 'Fetching data...'
+                    : buttonTooltip || undefined
             }
           >
-            {isAnalysing ? 'Checking...' : isFetching ? 'Fetching...' : buttonLabel}
-          </button>
+            <button
+              onClick={handleFetchData}
+              disabled={isAnalysing || isFetching || isReadOnlyShare}
+              className={`window-selector-button ${showShimmer && buttonNeedsAttention ? 'shimmer' : ''}`}
+            >
+              {isAnalysing ? 'Checking...' : isFetching ? 'Fetching...' : buttonLabel}
+            </button>
+          </GlossaryTooltip>
         </div>
       )}
       

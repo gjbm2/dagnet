@@ -28,8 +28,9 @@ import {
   ChevronDown,
 } from 'lucide-react';
 import type { ScenarioLayerItem } from '../../types/scenarioLayerList';
-import type { ScenarioColourPalette } from '../../contexts/ScenariosContext';
-import { SCENARIO_PALETTE_OPTIONS } from '../../contexts/ScenariosContext';
+import { SCENARIO_PALETTE_OPTIONS, type ScenarioColourPalette } from '../../contexts/scenarioPalette';
+import Tooltip from '../Tooltip';
+import GlossaryTooltip from '../GlossaryTooltip';
 
 export interface ScenarioLayerListProps {
   items: ScenarioLayerItem[];
@@ -273,9 +274,9 @@ export function ScenarioLayerList({
       >
         {item.name}
         {item.isLive && (
-          <span title="Live scenario">
+          <GlossaryTooltip term="live-scenario">
             <Zap size={11} style={{ color: '#374151', marginLeft: '4px', verticalAlign: 'middle', flexShrink: 0 }} />
-          </span>
+          </GlossaryTooltip>
         )}
       </div>
     );
@@ -360,29 +361,59 @@ export function ScenarioLayerList({
         ) : (
           <>
             {onRefresh && refreshVisible && (
-              <button className="scenario-action-btn" onClick={() => onRefresh(item.id)} title="Refresh from source">
-                <RefreshCw size={14} />
-              </button>
+              <Tooltip content="Refresh from source">
+                <button
+                  className="scenario-action-btn"
+                  onClick={() => onRefresh(item.id)}
+                  aria-label="Refresh from source"
+                >
+                  <RefreshCw size={14} />
+                </button>
+              </Tooltip>
             )}
             {onDelete && isUser && (
-              <button className="scenario-action-btn danger" onClick={() => onDelete(item.id)} title="Delete scenario">
-                <Trash2 size={14} />
-              </button>
+              <Tooltip content="Delete scenario">
+                <button
+                  className="scenario-action-btn danger"
+                  onClick={() => onDelete(item.id)}
+                  aria-label="Delete scenario"
+                >
+                  <Trash2 size={14} />
+                </button>
+              </Tooltip>
             )}
             {onEdit && item.kind !== 'base' && (
-              <button className="scenario-action-btn" onClick={() => onEdit(item.id)} title={getEditTooltip?.(item.id) || 'Edit'}>
-                <Edit2 size={14} />
-              </button>
+              <Tooltip content={getEditTooltip?.(item.id) || 'Edit'}>
+                <button
+                  className="scenario-action-btn"
+                  onClick={() => onEdit(item.id)}
+                  aria-label={getEditTooltip?.(item.id) || 'Edit'}
+                >
+                  <Edit2 size={14} />
+                </button>
+              </Tooltip>
             )}
             {onCycleMode && (
-              <button className="scenario-action-btn" onClick={() => onCycleMode(item.id)} title={modeTooltip(item.id)}>
-                {modeIcon(item.id)}
-              </button>
+              <GlossaryTooltip term="visibility-mode" description={modeTooltip(item.id)}>
+                <button
+                  className="scenario-action-btn"
+                  onClick={() => onCycleMode(item.id)}
+                  aria-label={modeTooltip(item.id)}
+                >
+                  {modeIcon(item.id)}
+                </button>
+              </GlossaryTooltip>
             )}
             {onToggleVisibility && (
-              <button className="scenario-action-btn" onClick={() => onToggleVisibility(item.id)} title={item.visible ? 'Hide' : 'Show'}>
-                {renderVisibilityIcon(item.visible)}
-              </button>
+              <Tooltip content={item.visible ? 'Hide' : 'Show'}>
+                <button
+                  className="scenario-action-btn"
+                  onClick={() => onToggleVisibility(item.id)}
+                  aria-label={item.visible ? 'Hide' : 'Show'}
+                >
+                  {renderVisibilityIcon(item.visible)}
+                </button>
+              </Tooltip>
             )}
           </>
         )}

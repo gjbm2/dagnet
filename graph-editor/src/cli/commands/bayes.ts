@@ -234,13 +234,15 @@ async function runBayes() {
   // -----------------------------------------------------------------------
   let candidateRegimesByEdge: Record<string, Array<{ core_hash: string; equivalent_hashes: string[] }>> = {};
   let meceDimensions: string[] = [];
+  let independentDimensions: string[] = [];
   try {
-    const { buildCandidateRegimesByEdge, computeMeceDimensions } = await import('../../services/candidateRegimeService');
-    [candidateRegimesByEdge, meceDimensions] = await Promise.all([
+    const { buildCandidateRegimesByEdge, computeMeceDimensions, computeIndependentDimensions } = await import('../../services/candidateRegimeService');
+    [candidateRegimesByEdge, meceDimensions, independentDimensions] = await Promise.all([
       buildCandidateRegimesByEdge(graphData, workspace, parameterFiles),
       computeMeceDimensions(graphData, workspace),
+      computeIndependentDimensions(graphData, workspace),
     ]);
-    log.info(`Candidate regimes: ${Object.keys(candidateRegimesByEdge).length} edges, ${meceDimensions.length} MECE dims`);
+    log.info(`Candidate regimes: ${Object.keys(candidateRegimesByEdge).length} edges, ${meceDimensions.length} MECE dims, ${independentDimensions.length} independent dims`);
 
     // 6b. Add supplementary snapshot subjects for hash families discovered
     // from stored param file slices (Step 5 of buildCandidateRegimesByEdge).
@@ -317,6 +319,9 @@ async function runBayes() {
   }
   if (meceDimensions.length > 0) {
     payload.mece_dimensions = meceDimensions;
+  }
+  if (independentDimensions.length > 0) {
+    payload.independent_dimensions = independentDimensions;
   }
 
   // Diagnostic: payload summary

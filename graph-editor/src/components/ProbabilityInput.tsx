@@ -3,6 +3,7 @@ import { Scale } from 'lucide-react';
 import { useSnapToSlider } from '@/hooks/useSnapToSlider';
 import { useTheme } from '@/contexts/ThemeContext';
 import { roundTo4DP } from '@/utils/rounding';
+import GlossaryTooltip from './GlossaryTooltip';
 
 interface ProbabilityInputProps {
   value: number;
@@ -277,36 +278,40 @@ export default function ProbabilityInput({
       </span>
       
       {showBalanceButton && onRebalance && (
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            // Call rebalance without value - handler should use current graph value
-            onRebalance(value);
-          }}
-          style={{
-            padding: '6px',
-            fontSize: '11px',
-            background: isUnbalanced ? (dark ? '#3b2f0e' : '#FEF3C7') : (dark ? '#2d2d2d' : '#f8f9fa'),
-            border: isUnbalanced ? `1px solid ${dark ? '#D97706' : '#F59E0B'}` : `1px solid ${dark ? '#555' : '#E5E7EB'}`,
-            borderRadius: '4px',
-            cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            transition: 'all 0.2s ease',
-            color: isUnbalanced ? (dark ? '#fbbf24' : '#D97706') : (dark ? '#aaa' : '#6B7280'),
-            ...balanceButtonStyle
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.background = isUnbalanced ? (dark ? '#4a3a12' : '#FDE68A') : (dark ? '#3d3d3d' : '#E5E7EB');
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.background = isUnbalanced ? (dark ? '#3b2f0e' : '#FEF3C7') : (dark ? '#2d2d2d' : '#f8f9fa');
-          }}
-          title={isUnbalanced ? "Weights don't sum to 100% - Click to rebalance" : "Rebalance siblings proportionally"}
+        <GlossaryTooltip
+          term="rebalance-siblings"
+          description={isUnbalanced ? "Weights don't sum to 100%. Click to rebalance siblings proportionally so that they add up to 1." : undefined}
         >
-          <Scale size={14} strokeWidth={2} />
-        </button>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              // Call rebalance without value - handler should use current graph value
+              onRebalance(value);
+            }}
+            style={{
+              padding: '6px',
+              fontSize: '11px',
+              background: isUnbalanced ? (dark ? '#3b2f0e' : '#FEF3C7') : (dark ? '#2d2d2d' : '#f8f9fa'),
+              border: isUnbalanced ? `1px solid ${dark ? '#D97706' : '#F59E0B'}` : `1px solid ${dark ? '#555' : '#E5E7EB'}`,
+              borderRadius: '4px',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              transition: 'all 0.2s ease',
+              color: isUnbalanced ? (dark ? '#fbbf24' : '#D97706') : (dark ? '#aaa' : '#6B7280'),
+              ...balanceButtonStyle
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = isUnbalanced ? (dark ? '#4a3a12' : '#FDE68A') : (dark ? '#3d3d3d' : '#E5E7EB');
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = isUnbalanced ? (dark ? '#3b2f0e' : '#FEF3C7') : (dark ? '#2d2d2d' : '#f8f9fa');
+            }}
+          >
+            <Scale size={14} strokeWidth={2} />
+          </button>
+        </GlossaryTooltip>
       )}
     </div>
   );

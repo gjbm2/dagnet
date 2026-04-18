@@ -255,6 +255,7 @@ class SliceGroup:
     dimension_key: str              # e.g. "channel" or "channel×device"
     is_mece: bool = True            # context() = MECE, visited() = non-MECE
     is_exhaustive: bool = False     # True if Σ n_slice ≈ n_aggregate
+    independent: bool = False       # True → no pooling (doc 14 §15A.5)
     slices: dict[str, SliceObservations] = field(default_factory=dict)
     residual: SliceObservations | None = None   # non-None for partial MECE
 
@@ -597,10 +598,9 @@ class PosteriorSummary:
     provenance: str = "bayesian"
     prior_tier: str = "uninformative"
 
-    # Per-observation-type posteriors (doc 21) — separate from p_base.
-    # These are moment-matched from p_window / p_cohort MCMC samples.
-    # p_base alpha/beta (above) is the hierarchy anchor; these are the
-    # observation-type-specific posteriors used for slice entries.
+    # Per-observation-type posteriors (doc 21, doc 49) — separate from p_base.
+    # Epistemic: moment-matched from raw p_window / p_cohort MCMC trace samples.
+    # These represent uncertainty about the true population rate parameter.
     window_alpha: float | None = None
     window_beta: float | None = None
     window_hdi_lower: float | None = None
@@ -610,8 +610,21 @@ class PosteriorSummary:
     cohort_hdi_lower: float | None = None
     cohort_hdi_upper: float | None = None
 
-    # Phase C: per-context-slice posteriors (doc 14 §5.2)
-    # context_key → {mean, stdev, alpha, beta, hdi_lower, hdi_upper}
+    # Predictive: kappa-inflated (doc 49 §A.6.1). Represent expected range
+    # of observed rates across future cohort days. None when kappa absent
+    # (in which case epistemic and predictive are identical).
+    window_alpha_pred: float | None = None
+    window_beta_pred: float | None = None
+    window_hdi_lower_pred: float | None = None
+    window_hdi_upper_pred: float | None = None
+    cohort_alpha_pred: float | None = None
+    cohort_beta_pred: float | None = None
+    cohort_hdi_lower_pred: float | None = None
+    cohort_hdi_upper_pred: float | None = None
+
+    # Phase C: per-context-slice posteriors (doc 14 §5.2, doc 49 §A.6.1)
+    # context_key → {mean, stdev, alpha, beta, hdi_lower, hdi_upper,
+    #                 alpha_pred, beta_pred, hdi_lower_pred, hdi_upper_pred}
     slice_posteriors: dict[str, dict[str, float]] = field(default_factory=dict)
     # Phase 2 per-slice cohort posteriors (context_key → {alpha, beta, p_mean, p_sd})
     cohort_slice_posteriors: dict[str, dict[str, float]] = field(default_factory=dict)
@@ -676,9 +689,9 @@ class LatencyPosteriorSummary:
     becomes the posterior mean; the HDI and SD give uncertainty.
     """
     mu_mean: float
-    mu_sd: float
+    mu_sd: float                      # predictive when kappa_lat exists (doc 49 §A.6.2)
     sigma_mean: float
-    sigma_sd: float
+    sigma_sd: float                   # epistemic (posterior SD, no predictive mechanism)
     onset_delta_days: float
     hdi_t95_lower: float
     hdi_t95_upper: float
@@ -687,9 +700,13 @@ class LatencyPosteriorSummary:
     rhat: float = 0.0
     provenance: str = "point-estimate"
 
+    # Epistemic mu_sd — always np.std(mu_samples) from the MCMC trace,
+    # before any kappa_lat predictive overwrite. See doc 49 §A.6.2.
+    mu_sd_epist: float | None = None
+
     # Edge-level onset posterior (Phase D.O) — None when onset is fixed
     onset_mean: float | None = None
-    onset_sd: float | None = None
+    onset_sd: float | None = None     # epistemic (posterior SD)
     onset_hdi_lower: float | None = None
     onset_hdi_upper: float | None = None
     onset_mu_corr: float | None = None    # posterior correlation onset↔mu
@@ -701,6 +718,7 @@ class LatencyPosteriorSummary:
     path_onset_hdi_upper: float | None = None
     path_mu_mean: float | None = None
     path_mu_sd: float | None = None
+    path_mu_sd_epist: float | None = None   # epistemic path mu_sd (doc 49)
     path_sigma_mean: float | None = None
     path_sigma_sd: float | None = None
     path_hdi_t95_lower: float | None = None
@@ -731,7 +749,8 @@ class LatencyPosteriorSummary:
         """
         result = {
             "mu_mean": round(self.mu_mean, 4),
-            "mu_sd": round(self.mu_sd, 4),
+            "mu_sd": round(self.mu_sd, 4),                # predictive when kappa_lat
+            "mu_sd_epist": round(self.mu_sd_epist, 4) if self.mu_sd_epist is not None else None,
             "sigma_mean": round(self.sigma_mean, 4),
             "sigma_sd": round(self.sigma_sd, 4),
             "onset_delta_days": round(self.onset_delta_days, 2),
@@ -758,6 +777,7 @@ class LatencyPosteriorSummary:
             result["path_onset_hdi_upper"] = round(self.path_onset_hdi_upper, 2) if self.path_onset_hdi_upper is not None else None
             result["path_mu_mean"] = round(self.path_mu_mean, 4)
             result["path_mu_sd"] = round(self.path_mu_sd, 4) if self.path_mu_sd is not None else None
+            result["path_mu_sd_epist"] = round(self.path_mu_sd_epist, 4) if self.path_mu_sd_epist is not None else None
             result["path_sigma_mean"] = round(self.path_sigma_mean, 4) if self.path_sigma_mean is not None else None
             result["path_sigma_sd"] = round(self.path_sigma_sd, 4) if self.path_sigma_sd is not None else None
             result["path_hdi_t95_lower"] = round(self.path_hdi_t95_lower, 1) if self.path_hdi_t95_lower is not None else None

@@ -23,7 +23,6 @@ import {
   type PreparedAnalysisComputeReady,
 } from '../../services/analysisComputePreparationService';
 import type { ScenarioVisibilityMode } from '../../types';
-import { runCliTopoPass } from '../topoPass';
 
 const USAGE = `
 dagnet-cli analyse
@@ -183,18 +182,20 @@ async function runAnalyse() {
 
   log.info(`${scenarioEntries.length} scenario(s) prepared`);
 
-  // ── Optional BE topo pass ─────────────────────────────────────
-  // Populates promoted latency stats (mu_sd, sigma_sd, path_mu, etc.)
-  // on the base graph. Required for cohort_maturity_v2 fan charts when
-  // the graph hasn't been opened in the FE (which runs the topo pass
-  // automatically on graph open).
+  // ── Deprecated: --topo-pass flag ──────────────────────────────
+  // Previously this flag triggered a bespoke CLI BE topo call that
+  // wrote directly to edge.p.latency.*, bypassing the promotion
+  // cascade. Doc 45 requires a single pipeline; aggregate /
+  // fetchItems / Stage-2 now runs FE topo + BE topo + CF + promotion
+  // unconditionally, with awaitBackgroundPromises so all results are
+  // landed before returning. The bespoke CLI BE-topo path is retired.
+  // The flag is accepted silently for backward compatibility with any
+  // scripts that still pass it, but is now a no-op.
   if (extraArgs['topo-pass']) {
-    log.info('Running BE topo pass...');
-    const ok = await runCliTopoPass(baseGraph, bundle.parameters, queryDsl);
-    if (!ok) {
-      log.error('BE topo pass failed — cannot proceed');
-      process.exit(1);
-    }
+    log.warn(
+      '--topo-pass is deprecated and now a no-op. BE topo runs '
+      + 'automatically inside the shared Stage-2 pipeline (doc 45).'
+    );
   }
 
   // ── Split combined DSL into subject + temporal ──────────────────
@@ -348,7 +349,7 @@ async function runAnalyse() {
   }
 
   if (!result.success) {
-    log.fatal('Analysis failed');
+    log.fatal(`Analysis failed: ${(result as any).error || 'unknown error'}`);
   }
 
   log.info(`Analysis complete (type: ${result.result?.analysis_type || analysisType})`);

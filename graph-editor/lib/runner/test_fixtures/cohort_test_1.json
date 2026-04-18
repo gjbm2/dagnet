@@ -233,8 +233,8 @@
           "posterior": {
             "alpha": 21.0,
             "beta": 9.000000000000002,
-            "path_alpha": 21.0,
-            "path_beta": 9.000000000000002
+            "cohort_alpha": 21.0,
+            "cohort_beta": 9.000000000000002
           }
         }
       },
@@ -264,8 +264,8 @@
           "posterior": {
             "alpha": 24.0,
             "beta": 5.999999999999998,
-            "path_alpha": 24.0,
-            "path_beta": 5.999999999999998
+            "cohort_alpha": 24.0,
+            "cohort_beta": 5.999999999999998
           }
         }
       }
@@ -285,8 +285,8 @@
     "path_mu": 1.8,
     "path_sigma": 0.7,
     "path_onset_delta_days": 3.0,
-    "posterior_path_alpha": 24.0,
-    "posterior_path_beta": 5.999999999999998,
+    "posterior_cohort_alpha": 24.0,
+    "posterior_cohort_beta": 5.999999999999998,
     "evidence_retrieved_at": "2026-03-15"
   },
   "anchor_from": "2026-03-01",

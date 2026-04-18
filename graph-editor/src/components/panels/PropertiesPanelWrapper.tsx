@@ -1,6 +1,6 @@
 import React from 'react';
 import PropertiesPanel from '../PropertiesPanel';
-import { useSelectionContext } from '../editors/GraphEditor';
+import { useSelectionContext } from '../editors/SelectionContext';
 import { Camera, FileText, Plug, ZapOff } from 'lucide-react';
 import { useGraphStore } from '../../contexts/GraphStoreContext';
 import { useTabContext } from '../../contexts/TabContext';

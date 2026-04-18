@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
 import { ArrayFieldTemplateProps } from '@rjsf/utils';
-import { Box, Tabs, Tab, IconButton, Tooltip } from '@mui/material';
+import { Box, Tabs, Tab, IconButton } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
+import Tooltip from '../Tooltip';
 
 /**
  * TabbedArrayWidget for React JSON Schema Form
@@ -65,7 +66,7 @@ export function TabbedArrayWidget(props: ArrayFieldTemplateProps) {
             </Box>
             {item.hasRemove && !disabled && !readonly && (
               <Box sx={{ flexShrink: 0 }}>
-                <Tooltip title="Delete this item">
+                <Tooltip content="Delete this item">
                   <IconButton onClick={item.onDropIndexClick(item.index)} size="small" color="error">
                     <DeleteIcon />
                   </IconButton>
@@ -75,14 +76,14 @@ export function TabbedArrayWidget(props: ArrayFieldTemplateProps) {
           </Box>
         ))}
         {canAdd && !disabled && !readonly && (
-          <Box sx={{ 
+          <Box sx={{
             display: 'grid',
             gridTemplateColumns: '10% 50% 40%',
             columnGap: '16px',
             marginTop: '8px'
           }}>
             <Box sx={{ gridColumn: 2 }}>
-              <Tooltip title="Add new item">
+              <Tooltip content="Add new item">
                 <IconButton onClick={onAddClick as any} size="small" color="primary">
                   <AddIcon />
                 </IconButton>
@@ -170,8 +171,8 @@ export function TabbedArrayWidget(props: ArrayFieldTemplateProps) {
         
         {/* Add Button */}
         {canAdd && !disabled && !readonly && (
-          <Tooltip title="Add new item">
-            <IconButton 
+          <Tooltip content="Add new item">
+            <IconButton
               onClick={handleAddClick}
               size="small"
               sx={{ ml: 1, mr: 1 }}
@@ -217,7 +218,7 @@ export function TabbedArrayWidget(props: ArrayFieldTemplateProps) {
                 {/* Delete Button */}
                 {item.hasRemove && !disabled && !readonly && (
                   <Box sx={{ display: 'flex', justifyContent: 'flex-end', mt: 2 }}>
-                    <Tooltip title="Delete this item">
+                    <Tooltip content="Delete this item">
                       <IconButton
                         onClick={item.onDropIndexClick(item.index)}
                         color="error"

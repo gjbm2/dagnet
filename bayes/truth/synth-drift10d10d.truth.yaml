@@ -1,0 +1,41 @@
+graph:
+  name: synth-drift10d10d
+  anchor: drift10d10d-a
+  raw_ids: true
+nodes:
+  drift10d10d-a:
+    label: A
+    event_id: synth-drift10d10d-a-event
+    is_start: true
+  drift10d10d-b:
+    label: B
+    event_id: synth-drift10d10d-b-event
+  drift10d10d-c:
+    label: C
+    event_id: synth-drift10d10d-c-event
+    absorbing: true
+    outcome_type: success
+edges:
+  drift10d10d-a-to-b:
+    from: drift10d10d-a
+    to: drift10d10d-b
+    p: 0.5
+    onset: 1.0
+    mu: 2.303
+    sigma: 0.5
+  drift10d10d-b-to-c:
+    from: drift10d10d-b
+    to: drift10d10d-c
+    p: 0.5
+    onset: 2.0
+    mu: 2.303
+    sigma: 0.5
+simulation:
+  mean_daily_traffic: 5000
+  n_days: 100
+  user_kappa: 100
+  failure_rate: 0.05
+  drift_sigma: 0.0
+  growth_rate_mom: 0.0
+  seed: 42
+  expected_sample_seconds: 900

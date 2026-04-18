@@ -1,0 +1,212 @@
+# Ground truth for synth-3way-join-context
+#
+# Anchor → {A, B, C} → Join → Outcome
+# 3-way branch then join, with MECE context dimension.
+# Tests per-slice Dirichlet on a 3-way branch group merging at a join.
+#
+# Branch group at Anchor: a (0.40) + b (0.25) + c (0.15) = 0.80
+# Google p_mult 1.15: 0.46 + 0.29 + 0.17 = 0.92 (simplex safe)
+
+simulation:
+  mean_daily_traffic: 500
+  n_days: 100
+  user_kappa: 100
+  failure_rate: 0.05
+  drift_sigma: 0.0
+  seed: 42
+  expected_sample_seconds: 1800
+
+emit_context_slices: true
+
+context_dimensions:
+  - id: synth-channel
+    mece: true
+    values:
+      - id: google
+        label: Google
+        weight: 0.60
+        sources:
+          amplitude:
+            field: utm_medium
+            filter: utm_medium == 'google'
+        edges:
+          synth-3j-anchor-to-a:
+            p_mult: 1.15
+            mu_offset: -0.1
+            onset_offset: 0.0
+          synth-3j-anchor-to-b:
+            p_mult: 1.15
+            mu_offset: -0.2
+            onset_offset: -0.1
+          synth-3j-anchor-to-c:
+            p_mult: 1.15
+            mu_offset: -0.2
+            onset_offset: -0.2
+          synth-3j-a-to-join:
+            p_mult: 1.10
+            mu_offset: -0.1
+            onset_offset: -0.1
+          synth-3j-b-to-join:
+            p_mult: 1.15
+            mu_offset: -0.2
+            onset_offset: -0.1
+          synth-3j-c-to-join:
+            p_mult: 1.20
+            mu_offset: -0.2
+            onset_offset: -0.2
+          synth-3j-join-to-outcome:
+            p_mult: 1.15
+            mu_offset: -0.2
+            onset_offset: -0.1
+      - id: direct
+        label: Direct
+        weight: 0.30
+        sources:
+          amplitude:
+            field: utm_medium
+            filter: utm_medium == 'direct'
+        edges:
+          synth-3j-anchor-to-a:
+            p_mult: 1.0
+          synth-3j-anchor-to-b:
+            p_mult: 1.0
+          synth-3j-anchor-to-c:
+            p_mult: 1.0
+          synth-3j-a-to-join:
+            p_mult: 1.0
+          synth-3j-b-to-join:
+            p_mult: 1.0
+          synth-3j-c-to-join:
+            p_mult: 1.0
+          synth-3j-join-to-outcome:
+            p_mult: 1.0
+      - id: email
+        label: Email
+        weight: 0.10
+        sources:
+          amplitude:
+            field: utm_medium
+            filter: utm_medium == 'email'
+        edges:
+          synth-3j-anchor-to-a:
+            p_mult: 0.75
+            mu_offset: 0.2
+            onset_offset: 0.0
+          synth-3j-anchor-to-b:
+            p_mult: 0.75
+            mu_offset: 0.3
+            onset_offset: 0.2
+          synth-3j-anchor-to-c:
+            p_mult: 0.75
+            mu_offset: 0.3
+            onset_offset: 0.3
+          synth-3j-a-to-join:
+            p_mult: 0.80
+            mu_offset: 0.2
+            onset_offset: 0.2
+          synth-3j-b-to-join:
+            p_mult: 0.70
+            mu_offset: 0.3
+            onset_offset: 0.2
+          synth-3j-c-to-join:
+            p_mult: 0.65
+            mu_offset: 0.3
+            onset_offset: 0.3
+          synth-3j-join-to-outcome:
+            p_mult: 0.70
+            mu_offset: 0.3
+            onset_offset: 0.2
+
+edges:
+  synth-3j-anchor-to-a:
+    from: anchor
+    to: a
+    p: 0.40
+    onset: 0.0
+    mu: 0.6
+    sigma: 0.3
+  synth-3j-anchor-to-b:
+    from: anchor
+    to: b
+    p: 0.25
+    onset: 0.5
+    mu: 1.0
+    sigma: 0.4
+  synth-3j-anchor-to-c:
+    from: anchor
+    to: c
+    p: 0.15
+    onset: 1.0
+    mu: 1.3
+    sigma: 0.5
+  synth-3j-a-to-join:
+    from: a
+    to: join
+    p: 0.70
+    onset: 0.5
+    mu: 0.7
+    sigma: 0.3
+  synth-3j-b-to-join:
+    from: b
+    to: join
+    p: 0.60
+    onset: 0.5
+    mu: 0.9
+    sigma: 0.4
+  synth-3j-c-to-join:
+    from: c
+    to: join
+    p: 0.50
+    onset: 1.0
+    mu: 1.0
+    sigma: 0.4
+  synth-3j-join-to-outcome:
+    from: join
+    to: outcome
+    p: 0.65
+    onset: 0.5
+    mu: 0.8
+    sigma: 0.3
+
+nodes:
+  anchor:
+    start: true
+    type: entry
+    label: Anchor
+    event_id: synth-3j-anchor
+  a:
+    type: event
+    label: A
+    event_id: synth-3j-a
+  b:
+    type: event
+    label: B
+    event_id: synth-3j-b
+  c:
+    type: event
+    label: C
+    event_id: synth-3j-c
+  join:
+    type: event
+    label: Join
+    event_id: synth-3j-join
+  outcome:
+    absorbing: true
+    type: event
+    label: Outcome
+    event_id: synth-3j-outcome
+    outcome_type: success
+
+graph:
+  name: synth-3way-join-context
+  description: "3-way branch+join with MECE context. Per-slice Dirichlet on 3-way branch."
+
+testing:
+  thresholds:
+    p_z: 2.5
+    mu_z: 2.5
+    sigma_z: 3.0
+    onset_z: 3.0
+  per_slice_thresholds:
+    p_slice_z: 3.0
+    weight_z: 3.0

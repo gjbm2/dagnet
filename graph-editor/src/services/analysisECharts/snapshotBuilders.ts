@@ -925,3 +925,390 @@ export function buildDailyConversionsEChartsOption(
   };
 }
 
+/**
+ * Build ECharts option for conversion rate analysis (doc 49 Part B).
+ *
+ * Per scenario, per time bin:
+ *   1. Scatter circle at observed k/n — circle area scales with n.
+ *   2. Dashed line connecting epistemic posterior means (as-at fit_history).
+ *   3. Non-striated filled band showing epistemic 90% HDI.
+ *
+ * Reverse trumpet: bands narrow as successive fit_history entries produce
+ * progressively more confident posteriors. See doc 49 §B.4.
+ *
+ * Non-latency edges only (doc 49 §B.2) — BE handler suppresses latency
+ * edges and surfaces an error message.
+ */
+export function buildConversionRateEChartsOption(
+  result: any,
+  settings: Record<string, any> = {},
+  extra?: { visibleScenarioIds?: string[]; subjectId?: string },
+): any | null {
+  const rows: any[] = Array.isArray(result?.data) ? result.data : [];
+  if (rows.length === 0) return null;
+
+  const c = echartsThemeColours();
+  const visibleScenarioIds = extra?.visibleScenarioIds || ['current'];
+  const scenarioMeta: any = result?.dimension_values?.scenario_id || {};
+  const subjectIds = [...new Set(rows.map((r: any) => String(r?.subject_id)).filter(Boolean))];
+  const effectiveSubjectId = extra?.subjectId || subjectIds[0] || 'subject';
+
+  // Always key series by scenario_id (matches daily_conversions pattern).
+  // Subject filtering happens up front when there are multiple subjects.
+  let filteredRows = rows.filter((r: any) => visibleScenarioIds.includes(String(r?.scenario_id)));
+  if (subjectIds.length > 1) {
+    filteredRows = filteredRows.filter((r: any) => String(r?.subject_id) === effectiveSubjectId);
+  }
+
+  const visibleScenarios = [...new Set(filteredRows.map((r: any) => String(r?.scenario_id)).filter(Boolean))];
+  const isSingleScenario = visibleScenarios.length <= 1;
+  const seriesKey = 'scenario_id';
+  const meta = scenarioMeta;
+
+  // Hex → rgba for band fills
+  const hexToRgba = (hex: string, alpha: number): string => {
+    const num = parseInt(hex.replace('#', ''), 16);
+    const r = (num >> 16) & 0xff;
+    const g = (num >> 8) & 0xff;
+    const b = num & 0xff;
+    return `rgba(${r},${g},${b},${alpha})`;
+  };
+
+  type Point = {
+    bin_start: string;
+    x: number;
+    y: number;
+    rate: number | null;
+    hdi_lower: number | null;
+    hdi_upper: number | null;
+    posterior_mean: number | null;
+    evidence_grade: number;
+    fitted_at: string | null;
+  };
+
+  const byKey = new Map<string, Point[]>();
+  for (const r of filteredRows) {
+    const key = String(r?.[seriesKey] ?? '');
+    const bin = String(r?.bin_start ?? r?.date ?? '');
+    if (!key || !bin) continue;
+    const x = Number(r?.x ?? 0);
+    const y = Number(r?.y ?? 0);
+    const rate = r?.rate != null ? Number(r.rate) : null;
+    const epist = r?.epistemic || null;
+    if (!byKey.has(key)) byKey.set(key, []);
+    byKey.get(key)!.push({
+      bin_start: bin,
+      x: Number.isFinite(x) ? x : 0,
+      y: Number.isFinite(y) ? y : 0,
+      rate,
+      hdi_lower: epist?.hdi_lower != null ? Number(epist.hdi_lower) : null,
+      hdi_upper: epist?.hdi_upper != null ? Number(epist.hdi_upper) : null,
+      posterior_mean: epist?.posterior_mean != null ? Number(epist.posterior_mean) : null,
+      evidence_grade: epist?.evidence_grade != null ? Number(epist.evidence_grade) : 0,
+      fitted_at: epist?.fitted_at ?? null,
+    });
+  }
+
+  // Compute n-scaling for scatter circle sizes (area ∝ n).
+  let maxX = 0;
+  for (const pts of byKey.values()) for (const p of pts) if (p.x > maxX) maxX = p.x;
+  const MIN_PX = 4;
+  const MAX_PX = 14;
+  const sizeFor = (x: number): number => {
+    if (!Number.isFinite(x) || x <= 0 || maxX <= 0) return MIN_PX;
+    const frac = Math.sqrt(x / maxX);
+    return MIN_PX + frac * (MAX_PX - MIN_PX);
+  };
+
+  const showBands = settings.show_epistemic_bands !== false;
+  const showModelLine = settings.show_model_midpoint !== false;
+
+  const allSeries: any[] = [];
+  const keys = Array.from(byKey.keys()).sort();
+
+  // Fill a value array by forward-then-backward propagation of non-nulls.
+  const fillArray = (vals: (number | null)[]): (number | null)[] => {
+    const out = vals.slice();
+    let last: number | null = null;
+    for (let i = 0; i < out.length; i++) {
+      if (out[i] != null) last = out[i];
+      else if (last != null) out[i] = last;
+    }
+    last = null;
+    for (let i = out.length - 1; i >= 0; i--) {
+      if (out[i] != null) last = out[i];
+      else if (last != null) out[i] = last;
+    }
+    return out;
+  };
+
+  // Consistent naming: series always named "{scenario} · {concept}". The legend
+  // filter below strips "{firstScenario} · " for concept entries and the trailing
+  // "· {concept}" for swatch entries — same pattern as daily_conversions.
+  for (const key of keys) {
+    const pts = byKey.get(key)!.sort((a, b) => a.bin_start.localeCompare(b.bin_start));
+    const scenarioName = scenarioMeta?.[key]?.name || key;
+    // Current scenario defaults to #3B82F6 (the canvas "Current" scenario blue).
+    const colour = scenarioMeta?.[key]?.colour || (key === 'current' ? '#3B82F6' : '#808080');
+
+    // HDI band: fill-forward/backward bounds so the band spans every bin once
+    // any fit_history entry exists. Stacked invisible lower + height with areaStyle.
+    if (showBands) {
+      const filledLo = fillArray(pts.map(p => p.hdi_lower));
+      const filledHi = fillArray(pts.map(p => p.hdi_upper));
+      const bandLo: Array<[string, number | null]> = pts.map((p, i) => [p.bin_start, filledLo[i]]);
+      const bandHi: Array<[string, number | null]> = pts.map((p, i) => [
+        p.bin_start,
+        (filledHi[i] != null && filledLo[i] != null) ? (filledHi[i]! - filledLo[i]!) : null,
+      ]);
+      if (bandLo.some(d => d[1] != null)) {
+        allSeries.push({
+          id: `${key}::hdi_lower`,
+          name: `__${key}_hdi_lower`,
+          type: 'line',
+          data: bandLo,
+          lineStyle: { opacity: 0 },
+          symbol: 'none',
+          stack: `${key}::hdi`,
+          silent: true,
+          color: colour,
+          z: 1,
+        });
+        allSeries.push({
+          id: `${key}::hdi_band`,
+          name: `${scenarioName} · HDI 90%`,
+          type: 'line',
+          data: bandHi,
+          lineStyle: { opacity: 0 },
+          symbol: 'none',
+          stack: `${key}::hdi`,
+          areaStyle: { color: hexToRgba(colour, 0.18) },
+          itemStyle: { color: colour },
+          color: colour,
+          z: 1,
+        });
+      }
+    }
+
+    // Model midpoint line (fill-forward/backward so one current fit renders across all bins)
+    if (showModelLine) {
+      const filled = fillArray(pts.map(p => p.posterior_mean));
+      const midpoint = pts.map((p, i) => [p.bin_start, filled[i]]);
+      if (midpoint.some(d => d[1] != null)) {
+        allSeries.push({
+          id: `${key}::model_midpoint`,
+          name: `${scenarioName} · Model rate`,
+          type: 'line',
+          data: midpoint,
+          lineStyle: { color: colour, type: 'dashed', width: 1.5, opacity: 0.85 },
+          itemStyle: { color: colour },
+          color: colour,
+          symbol: 'none',
+          connectNulls: true,
+          z: 2,
+        });
+      }
+    }
+
+    // Observed scatter (circle area ∝ n)
+    const scatter = pts.map((p) => ({
+      value: [p.bin_start, p.rate],
+      symbolSize: sizeFor(p.x),
+      _x: p.x,
+      _y: p.y,
+      _fitted_at: p.fitted_at,
+      _hdi_lower: p.hdi_lower,
+      _hdi_upper: p.hdi_upper,
+      _posterior_mean: p.posterior_mean,
+    }));
+    allSeries.push({
+      id: `${key}::observed`,
+      name: `${scenarioName} · Observed`,
+      type: 'scatter',
+      data: scatter,
+      color: colour,
+      itemStyle: {
+        color: hexToRgba(colour, 0.35),
+        borderColor: colour,
+        borderWidth: 1,
+      },
+      emphasis: { itemStyle: { color: hexToRgba(colour, 0.7) } },
+      z: 3,
+    });
+  }
+
+  // Size legend: compact horizontal row top-right of chart area.
+  // Format: "Cohort size:  ·  ●  ●●  ●●●"  with value labels under each bubble.
+  const sizeLegendGraphics: any[] = [];
+  if (maxX > 0) {
+    const fmtN = (n: number): string => {
+      if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+      if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+      return String(n);
+    };
+    const smallN = Math.max(1, Math.round(maxX * 0.1));
+    const medN = Math.max(2, Math.round(maxX * 0.4));
+    const largeN = maxX;
+    // Place top-right in grid, left of the right-edge. top=14 aligns with legend.
+    const baseTop = 14;
+    const baseRight = 16;
+    const gap = 34;                 // horizontal spacing between bubbles
+    const labelOffsetY = 12;        // value label below bubble
+    const itemsDesc = [
+      { n: largeN, px: sizeFor(largeN) },
+      { n: medN,   px: sizeFor(medN) },
+      { n: smallN, px: sizeFor(smallN) },
+    ];
+    // Rightmost first so labels align cleanly
+    let rightCursor = baseRight;
+    for (const it of itemsDesc) {
+      sizeLegendGraphics.push({
+        type: 'circle',
+        right: rightCursor + (MAX_PX / 2) - (it.px / 2),
+        top: baseTop + (MAX_PX / 2) - (it.px / 2),
+        shape: { r: it.px / 2 },
+        style: { fill: 'rgba(128,128,128,0.25)', stroke: c.textSecondary, lineWidth: 1 },
+        silent: true,
+      });
+      sizeLegendGraphics.push({
+        type: 'text',
+        right: rightCursor - 4,
+        top: baseTop + MAX_PX + labelOffsetY - 10,
+        style: { text: fmtN(it.n), fontSize: 9, fill: c.textSecondary, align: 'right' },
+        silent: true,
+      });
+      rightCursor += gap;
+    }
+    // Caption to the left of the bubbles
+    sizeLegendGraphics.push({
+      type: 'text',
+      right: rightCursor - 4,
+      top: baseTop + (MAX_PX / 2) - 5,
+      style: { text: 'Cohort n', fontSize: 9, fill: c.textSecondary, align: 'right' },
+      silent: true,
+    });
+  }
+
+  // Legend: concepts (HDI band / Model rate / Observed) once with neutral
+  // styling via first-scenario series references; one swatch per additional
+  // scenario. Same pattern as daily_conversions.
+  const firstScenarioName = keys.length ? (scenarioMeta?.[keys[0]]?.name || keys[0]) : '';
+  const showLegend = settings.show_legend ?? true;
+
+  return {
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: {
+        type: 'cross',
+        lineStyle: { color: c.textMuted, width: 1, type: 'dashed', opacity: 0.6 },
+      },
+      ...echartsTooltipStyle(),
+      formatter: (params: any) => {
+        const items = Array.isArray(params) ? params : [params];
+        if (items.length === 0) return '';
+        const raw = items[0]?.axisValue ?? items[0]?.value?.[0];
+        const d = typeof raw === 'number' ? new Date(raw) : new Date(String(raw));
+        const title = Number.isNaN(d.getTime())
+          ? String(raw)
+          : `${d.getUTCDate()}-${d.toLocaleDateString('en-GB', { month: 'short', timeZone: 'UTC' })}-${d.toLocaleDateString('en-GB', { year: '2-digit', timeZone: 'UTC' })}`;
+        const fmtPct = (v: any): string =>
+          (v === null || v === undefined || !Number.isFinite(Number(v))) ? '—' : `${(Number(v) * 100).toFixed(1)}%`;
+        const lines = items
+          .filter((it: any) => it?.seriesName && !String(it.seriesName).startsWith('__'))
+          .map((it: any) => `${it?.seriesName || 'Series'}: <strong>${fmtPct(it?.value?.[1])}</strong>`);
+        return `<strong>${title}</strong><br/>${lines.join('<br/>')}`;
+      },
+    },
+    legend: showLegend ? {
+      top: 14, left: 12,
+      textStyle: { fontSize: 8, color: c.text },
+      itemGap: 6, itemWidth: 36, itemHeight: 8,
+      data: allSeries
+        .filter(s => {
+          if (!s.name || s.name.startsWith('__')) return false;
+          if (isSingleScenario) return true;
+          // Multi: all concepts for first scenario, Observed swatch only for others.
+          if (s.name.startsWith(`${firstScenarioName} · `)) return true;
+          if (s.name.endsWith(' · Observed') && s.type === 'scatter') return true;
+          return false;
+        })
+        .map(s => ({
+          name: s.name,
+          icon: s.type === 'scatter' ? 'circle' : (s.type === 'line' && s.areaStyle ? 'roundRect' : undefined),
+        })),
+      formatter: isSingleScenario ? (name: string) => {
+        const dot = name.indexOf(' · ');
+        return dot < 0 ? name : name.slice(dot + 3);
+      } : (name: string) => {
+        const dot = name.indexOf(' · ');
+        if (dot < 0) return name;
+        const prefix = name.slice(0, dot);
+        const suffix = name.slice(dot + 3);
+        if (prefix === firstScenarioName) return suffix;
+        return prefix;
+      },
+    } : { show: false },
+    grid: { left: 52, right: 16, bottom: 60, top: 32, containLabel: false },
+    xAxis: {
+      type: 'time',
+      name: 'Cohort date',
+      nameLocation: 'middle',
+      nameGap: 30,
+      nameTextStyle: { fontSize: 8, color: c.text },
+      minInterval: 86400000,
+      axisLabel: {
+        fontSize: 9,
+        rotate: 30,
+        color: c.text,
+        formatter: (value: number) => {
+          const d = new Date(value);
+          if (Number.isNaN(d.getTime())) return '';
+          return `${d.getUTCDate()}-${d.toLocaleDateString('en-GB', { month: 'short', timeZone: 'UTC' })}`;
+        },
+      },
+      axisLine: { lineStyle: { color: c.border } },
+      axisPointer: {
+        snap: true,
+        label: {
+          formatter: (p: any) => {
+            const d = new Date(Number(p.value));
+            if (Number.isNaN(d.getTime())) return String(p.value);
+            return `${d.getUTCDate()}-${d.toLocaleDateString('en-GB', { month: 'short', timeZone: 'UTC' })}-${d.toLocaleDateString('en-GB', { year: '2-digit', timeZone: 'UTC' })}`;
+          },
+          fontSize: 9, color: c.tooltipText,
+          backgroundColor: c.tooltipBg, borderColor: c.tooltipBorder, borderWidth: 1,
+          padding: [2, 6],
+        },
+      },
+    },
+    yAxis: {
+      type: 'value',
+      name: 'Conversion rate',
+      nameLocation: 'middle',
+      nameGap: 40,
+      nameTextStyle: { fontSize: 8, color: c.text },
+      min: settings.y_axis_min ?? 0,
+      max: settings.y_axis_max ?? undefined,
+      axisLabel: {
+        fontSize: 9,
+        color: c.text,
+        formatter: (v: number) => `${(v * 100).toFixed(0)}%`,
+      },
+      axisLine: { lineStyle: { color: c.border } },
+      splitLine: { lineStyle: { color: c.gridLine, opacity: 0.5 } },
+      axisPointer: {
+        snap: true,
+        label: {
+          formatter: (p: any) => `${(Number(p.value) * 100).toFixed(1)}%`,
+          fontSize: 9, color: c.tooltipText,
+          backgroundColor: c.tooltipBg, borderColor: c.tooltipBorder, borderWidth: 1,
+          padding: [2, 6],
+        },
+      },
+    },
+    graphic: sizeLegendGraphics.length > 0 ? sizeLegendGraphics : undefined,
+    series: allSeries,
+    ...(settings.animate === false ? { animation: false } : {}),
+  };
+}
+

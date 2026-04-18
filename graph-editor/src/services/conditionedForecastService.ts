@@ -15,13 +15,19 @@
 import { PYTHON_API_BASE } from '../lib/pythonApiBase';
 import { UpdateManager } from './UpdateManager';
 
-/** Per-edge result from the conditioned forecast endpoint. */
+/** Per-edge result from the conditioned forecast endpoint.
+ *  Doc 45 §Endpoint contract (lines 181-190):
+ *    { edge_uuid, p_mean, p_sd, completeness, completeness_sd }
+ *  CF owns completeness + completeness_sd — they replace FE topo's
+ *  CDF-derived values on the edge when CF lands. */
 export interface ConditionedForecastEdgeResult {
   edge_uuid: string;
   from_node?: string;
   to_node?: string;
   p_mean: number | null;
   p_sd: number | null;
+  completeness?: number | null;
+  completeness_sd?: number | null;
   tau_max?: number | null;
   n_rows?: number;
   n_cohorts?: number;
@@ -155,7 +161,12 @@ export function applyConditionedForecastToGraph(
 
   const edgeUpdates: Array<{
     edgeId: string;
-    latency: { t95: number; completeness: number; path_t95: number };
+    latency: {
+      t95: number;
+      completeness: number;
+      completeness_stdev?: number;
+      path_t95: number;
+    };
     blendedMean?: number;
     forecast?: { mean?: number };
   }> = [];
@@ -164,25 +175,45 @@ export function applyConditionedForecastToGraph(
     for (const edge of scenario.edges) {
       if (edge.p_mean == null) continue;
 
-      // Find existing edge to preserve its latency values
+      // Find existing edge to preserve its non-CF-owned latency values
       const graphEdge = (graph.edges ?? []).find(
         (e: any) => (e.uuid || e.id) === edge.edge_uuid
       );
       if (!graphEdge?.p) continue;
 
       const lat = graphEdge.p.latency ?? {};
+      // Doc 45: CF owns completeness + completeness_sd. They are the
+      // authoritative values — overwrite the existing (FE-topo-derived)
+      // scalars. Fall back to existing only when CF did not return a
+      // value (e.g. sweep could not populate completeness_mean).
+      const completenessFromCf =
+        edge.completeness != null && Number.isFinite(edge.completeness)
+          ? edge.completeness as number
+          : (lat.completeness ?? 0);
+      const completenessSdFromCf =
+        edge.completeness_sd != null && Number.isFinite(edge.completeness_sd)
+          ? edge.completeness_sd as number
+          : lat.completeness_stdev;
+
       edgeUpdates.push({
         edgeId: edge.edge_uuid,
         latency: {
+          // t95 + path_t95 remain FE-topo's (latency fit, not CF output)
           t95: lat.t95 ?? 0,
-          completeness: lat.completeness ?? 0,
           path_t95: lat.path_t95 ?? 0,
+          // completeness is CF-authored
+          completeness: completenessFromCf,
+          ...(completenessSdFromCf != null ? { completeness_stdev: completenessSdFromCf } : {}),
         },
         blendedMean: edge.p_mean,
         forecast: { mean: edge.p_mean },
       });
 
-      console.log(`[conditionedForecast] ${edge.edge_uuid.slice(0, 12)}: p.mean=${edge.p_mean.toFixed(4)}`);
+      console.log(
+        `[conditionedForecast] ${edge.edge_uuid.slice(0, 12)}: `
+        + `p.mean=${edge.p_mean.toFixed(4)} `
+        + `completeness=${completenessFromCf != null ? completenessFromCf.toFixed(4) : '—'}`
+      );
     }
   }
 

@@ -1025,6 +1025,175 @@ def build_contexted_solo_edge_with_snapshot_slices(
     )
 
 
+def build_independent_solo_edge(
+    slice_ps: dict[str, float] | None = None,
+    n_per_day: int = 80,
+    n_days: int = 45,
+    *,
+    onset: float = 2.0,
+    mu: float = 2.1,
+    sigma: float = 0.55,
+    seed: int = 70,
+) -> tuple[
+    dict,
+    dict[str, dict],
+    dict[str, list[dict]],
+    dict[str, set[str]],
+    list[str],
+    list[str],
+    dict[str, float],
+]:
+    """Snapshot-backed solo edge with an independent (non-pooled) dimension.
+
+    Same structure as build_contexted_solo_edge_with_snapshot_slices but
+    the dimension is marked independent — slices should receive direct
+    Beta priors with no hierarchical shrinkage (doc 14 §15A.5).
+
+    Default slice rates are deliberately wide-apart to test that the
+    model does NOT pull small slices toward the mean.
+
+    Returns:
+      graph_snapshot,
+      param_files,
+      snapshot_rows,
+      commissioned_slices,
+      mece_dimensions,
+      independent_dimensions,
+      slice_truth   # context_key -> true p
+    """
+    if slice_ps is None:
+        slice_ps = {
+            "flow_a": 0.35,
+            "flow_b": 0.08,
+            "flow_c": 0.55,
+        }
+
+    rng = np.random.default_rng(seed)
+    today_str = "2025-03-01"
+
+    from datetime import datetime, timedelta
+
+    today = datetime.strptime(today_str, "%Y-%m-%d")
+    cohort_start = today - timedelta(days=n_days)
+
+    retrieval_dates = []
+    ret = cohort_start + timedelta(days=20)
+    while ret <= today:
+        retrieval_dates.append(ret.strftime("%Y-%m-%d"))
+        ret += timedelta(days=10)
+
+    latency_block = {
+        "latency_parameter": True,
+        "onset_delta_days": onset,
+        "mu": mu,
+        "sigma": sigma,
+        "median_lag_days": onset + float(np.exp(mu)),
+        "mean_lag_days": onset + float(np.exp(mu + sigma**2 / 2)),
+    }
+
+    mean_p = float(np.mean(list(slice_ps.values())))
+
+    graph_snapshot = {
+        "nodes": [
+            _node("node-anchor", is_start=True),
+            _node("node-a"),
+            _node("node-b", absorbing=True),
+        ],
+        "edges": [
+            _edge("edge-anchor-a", "node-anchor", "node-a", "param-anchor-a", p_mean=0.9),
+            _edge(
+                "edge-a-b",
+                "node-a",
+                "node-b",
+                "param-a-b",
+                p_mean=mean_p,
+                latency=latency_block,
+            ),
+        ],
+    }
+
+    param_files = {
+        "param-anchor-a": _window_param_file(
+            n_per_day * n_days * 2,
+            int(n_per_day * n_days * 2 * 0.9),
+            param_id="param-anchor-a",
+        ),
+        "param-a-b": {
+            "id": "param-a-b",
+            "values": [
+                {
+                    "sliceDSL": "window(1-Jan-25:1-Mar-25)",
+                    "n": 100,
+                    "k": int(100 * mean_p),
+                    "mean": mean_p,
+                    "stdev": 0.05,
+                }
+            ],
+        },
+    }
+
+    dim_name = "onboarding-variant"
+    shared_hash = "ctx-indep-hash"
+    rows: list[dict] = []
+    commissioned = {
+        "edge-a-b": {
+            f"context({dim_name}:{ctx_name})"
+            for ctx_name in slice_ps
+        }
+    }
+    mece_dimensions = [dim_name]
+    independent_dimensions = [dim_name]
+    slice_truth = {
+        f"context({dim_name}:{ctx_name})": p_true
+        for ctx_name, p_true in slice_ps.items()
+    }
+
+    for ctx_name, p_true in slice_ps.items():
+        ctx_key = f"context({dim_name}:{ctx_name})"
+        rows.extend(
+            generate_snapshot_rows(
+                rng,
+                p_true,
+                n_per_day,
+                n_days,
+                retrieval_dates,
+                onset=onset,
+                mu=mu,
+                sigma=sigma,
+                slice_key=f"{ctx_key}.window(1-Jan-25:1-Mar-25)",
+                param_id="repo-branch-param-a-b",
+                core_hash=shared_hash,
+                today_str=today_str,
+            )
+        )
+        rows.extend(
+            generate_snapshot_rows(
+                rng,
+                p_true,
+                n_per_day,
+                n_days,
+                retrieval_dates,
+                onset=onset,
+                mu=mu,
+                sigma=sigma,
+                slice_key=f"{ctx_key}.cohort(node-anchor,2024-10-01:2025-01-01)",
+                param_id="repo-branch-param-a-b",
+                core_hash=shared_hash,
+                today_str=today_str,
+            )
+        )
+
+    return (
+        graph_snapshot,
+        param_files,
+        {"edge-a-b": rows},
+        commissioned,
+        mece_dimensions,
+        independent_dimensions,
+        slice_truth,
+    )
+
+
 def build_two_dimension_solo_edge(
     dim1_ps: dict[str, float] | None = None,
     dim2_ps: dict[str, float] | None = None,

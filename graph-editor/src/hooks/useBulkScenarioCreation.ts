@@ -16,7 +16,8 @@
 
 import { useState, useCallback } from 'react';
 import toast from 'react-hot-toast';
-import { useScenariosContextOptional, SCENARIO_PALETTE } from '../contexts/ScenariosContext';
+import { useScenariosContextOptional } from '../contexts/ScenariosContext';
+import { SCENARIO_PALETTE } from '../contexts/scenarioPalette';
 import { operationRegistryService } from '../services/operationRegistryService';
 import { Scenario } from '../types/scenarios';
 import { useTabContext } from '../contexts/TabContext';

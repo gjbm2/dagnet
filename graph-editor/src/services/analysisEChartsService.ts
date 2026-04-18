@@ -11,7 +11,7 @@
 import { applyCommonSettings, echartsThemeColours } from './analysisECharts/echartsCommon';
 import { buildFunnelBarEChartsOption } from './analysisECharts/funnelBuilders';
 import { buildBridgeEChartsOption } from './analysisECharts/bridgeBuilders';
-import { buildHistogramEChartsOption, buildDailyConversionsEChartsOption } from './analysisECharts/snapshotBuilders';
+import { buildHistogramEChartsOption, buildDailyConversionsEChartsOption, buildConversionRateEChartsOption } from './analysisECharts/snapshotBuilders';
 import {
   buildCohortMaturityEChartsOption,
   buildLagFitEChartsOption,
@@ -47,6 +47,7 @@ export type {
 export {
   buildHistogramEChartsOption,
   buildDailyConversionsEChartsOption,
+  buildConversionRateEChartsOption,
 } from './analysisECharts/snapshotBuilders';
 
 export {
@@ -137,6 +138,13 @@ export function buildChartOption(
       opt = buildDailyConversionsEChartsOption(result, resolvedSettings, {
         visibleScenarioIds: extra?.visibleScenarioIds,
         scenarioVisibilityModes: extra?.scenarioVisibilityModes,
+        subjectId: extra?.subjectId,
+      });
+      break;
+
+    case 'conversion_rate':
+      opt = buildConversionRateEChartsOption(result, resolvedSettings, {
+        visibleScenarioIds: extra?.visibleScenarioIds,
         subjectId: extra?.subjectId,
       });
       break;

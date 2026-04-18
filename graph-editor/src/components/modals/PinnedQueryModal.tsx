@@ -12,6 +12,7 @@ import { explodeDSL } from '../../lib/dslExplosion';
 import { validatePinnedDataInterestsDSL } from '../../services/slicePlanValidationService';
 import { QueryExpressionEditor } from '../QueryExpressionEditor';
 import { QUERY_FUNCTIONS } from '../../lib/queryDSL';
+import GlossaryTooltip from '../GlossaryTooltip';
 import './Modal.css';
 
 interface PinnedQueryModalProps {
@@ -102,7 +103,7 @@ export function PinnedQueryModal({ isOpen, currentDSL, dailyFetch, onSave, onClo
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-container" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '700px' }}>
         <div className="modal-header">
-          <h2 className="modal-title">Pinned Data Interests</h2>
+          <GlossaryTooltip term="pinned-query"><h2 className="modal-title">Pinned Data Interests</h2></GlossaryTooltip>
           <button onClick={onClose} className="modal-close-btn">
             <X size={20} />
           </button>
@@ -154,9 +155,11 @@ export function PinnedQueryModal({ isOpen, currentDSL, dailyFetch, onSave, onClo
           </div>
           
           <div>
-            <strong style={{ display: 'block', marginBottom: '8px', fontSize: '13px', color: '#374151' }}>
-              Implied slices: {sliceCount}
-            </strong>
+            <GlossaryTooltip term="implied-slices">
+              <strong style={{ display: 'block', marginBottom: '8px', fontSize: '13px', color: '#374151' }}>
+                Implied slices: {sliceCount}
+              </strong>
+            </GlossaryTooltip>
             {sliceCount > 500 && (
               <div style={{ padding: '8px 12px', marginBottom: '8px', background: '#FEE2E2', border: '1px solid #FCA5A5', borderRadius: '4px', fontSize: '12px', color: '#991B1B' }}>
                 ⚠️ Warning: {sliceCount} slices exceeds recommended limit (500)
@@ -182,9 +185,9 @@ export function PinnedQueryModal({ isOpen, currentDSL, dailyFetch, onSave, onClo
                 onChange={(e) => setDraftDailyFetch(e.target.checked)}
                 style={{ width: '16px', height: '16px' }}
               />
-              <span style={{ fontSize: '13px', color: '#374151', fontWeight: 500 }}>
+              <GlossaryTooltip term="daily-automation"><span style={{ fontSize: '13px', color: '#374151', fontWeight: 500 }}>
                 Fetch daily
-              </span>
+              </span></GlossaryTooltip>
             </label>
             <p style={{ fontSize: '11px', color: '#6B7280', marginTop: '4px', marginLeft: '24px' }}>
               Include this graph in unattended nightly automation runs (when using <code style={{ background: '#F3F4F6', padding: '1px 4px', borderRadius: '2px' }}>?retrieveall</code> without specifying graph names)

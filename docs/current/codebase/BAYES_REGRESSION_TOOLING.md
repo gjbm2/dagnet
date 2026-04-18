@@ -1,30 +1,48 @@
 # Bayes Regression Tooling
 
-**Last updated**: 14-Apr-26 (sparsity sweep added)
+**Last updated**: 18-Apr-26 (config-driven plans, structured JSON, truth file migration, sparsity lifecycles)
 
 How the parameter recovery regression pipeline works: discovery,
-bootstrap, parallel execution, multi-layered audit, and known
-pitfalls.
+bootstrap, parallel execution, multi-layered audit, structured
+results, and known pitfalls.
+
+---
+
+## Truth files
+
+Canonical source: `bayes/truth/` in the dagnet repo. Every
+`synth-*.truth.yaml` fully specifies a synthetic graph. Everything
+else (graph JSON, DB rows, param files) is derived by `synth_gen.py`.
+
+Discovery (`discover_synth_graphs`) scans `bayes/truth/` first, then
+falls back to `DATA_REPO_DIR/graphs/` for any not yet migrated.
+Generated artefacts are written to the data repo path.
+
+A fresh deployment needs only: clone dagnet, configure
+`.private-repos.conf` + DB connection, run a plan. Bootstrap handles
+graph generation and DB population.
+
+See doc 44 for the full graph inventory (53 truth files).
 
 ---
 
 ## Tool chain
 
 ```
-run_regression.py
-  → discover_and_preflight()     # find synth graphs, check DB rows
-  → bootstrap_graph()            # synth_gen.py --write-files (if needed)
-  → _run_one_graph()             # parallel pool, one per graph
-    → param_recovery.py --graph X --job-label X-{run_id}
-      → test_harness.py --graph X --fe-payload --job-label X-{run_id}
-        → fit_graph()            # in-process MCMC
-        → writes /tmp/bayes_harness-{job_label}.log
-      → reads harness log for inference diagnostics
-      → prints recovery comparison to stdout
-    → captured by run_regression.py
-  → _audit_harness_log()         # multi-layered audit from log
-  → assert_recovery()            # z-score + threshold checks
-  → verbose report (layers 0-8 per graph)
+regression_plans.py --plan <name>              # config-driven entry point
+  → load_plan() + filter_graphs()              # JSON plan → graph selection
+  → run_regression.py (per variant if A/B)
+    → discover_and_preflight()                 # scan bayes/truth/, check DB
+    → bootstrap_graph()                        # synth_gen.py --write-files
+    → _run_one_graph()                         # parallel pool
+      → param_recovery.py --graph X
+        → test_harness.py --graph X --fe-payload
+          → fit_graph()                        # in-process MCMC
+          → writes /tmp/bayes_harness-{job_label}.log
+    → _audit_harness_log()                     # parse harness log
+    → assert_recovery()                        # structured failures
+    → _write_structured_results()              # JSON via results_schema.py
+  → write_results_json()                       # plan-level JSON envelope
 ```
 
 ---
@@ -77,6 +95,57 @@ timeout for that graph. Values were updated for 2000/2000 runs:
 | Heavy contexted | 2700s (45 min) | diamond-context, lattice-context, join-branch-context |
 | Medium contexted | 1800s (30 min) | 3way-join-context, fanout-context, skip-context, mirror-4step-context, simple-abc-context, context-solo, context-solo-mixed |
 | Uncontexted | 900s (15 min) | all `-test` graphs, mirror-4step, drift*, simple-abc, forecast-test |
+
+---
+
+## Config-driven plans
+
+`regression_plans.py` wraps `run_regression.py` with JSON plan files
+in `bayes/plans/`. Plans define graph selection (glob patterns),
+sampling, feature flags, worker settings, and optional variants for
+A/B model comparison.
+
+```bash
+python bayes/regression_plans.py --list              # show available plans
+python bayes/regression_plans.py --plan smoke         # quick sanity (3 graphs)
+python bayes/regression_plans.py --plan overnight-full --max-parallel 2
+python bayes/regression_plans.py --plan overnight-full --dry-run
+python bayes/regression_plans.py --plan model-ab-latdisp  # A/B with variants
+```
+
+CLI flags (`--chains`, `--draws`, `--max-parallel`, etc.) override
+plan values. `--dry-run` shows what would run without MCMC.
+
+Variants run the same graphs multiple times with different features
+or settings, producing a cross-variant comparison table.
+
+Plan discovery scans `bayes/plans/` (built-in) plus any directory
+passed via `--plan-dir`. See doc 44 for the full plan inventory.
+
+---
+
+## Structured JSON results
+
+Every run produces machine-readable JSON. `run_regression.py` writes
+`/tmp/bayes_regression-{run_id}.json`. `regression_plans.py` writes
+`/tmp/bayes_results-plan-{name}-{timestamp}.json` (wrapped in a
+plan/variant envelope).
+
+Per graph, the JSON includes structured failures (typed, queryable),
+rounded floats, per-parameter bias profiles, audit data (binding,
+LOO, model flags), and experimental design metadata (topology,
+sparsity parameters, context dimensions with lifecycle windows).
+
+Schema is defined in `bayes/results_schema.py`:
+`serialise_result()` for per-graph data, `serialise_design()` for
+experimental design extraction from truth config, `make_failure()`
+for structured failure construction.
+
+Example query:
+```bash
+jq '.variants.default.graphs[].failures[] | select(.param == "onset")'
+jq '[.graphs[] | {topo: .design.topology, rhat: .quality.rhat, passed}]'
+```
 
 ---
 
@@ -563,17 +632,12 @@ reading the harness log or worker output.
 
 ---
 
-## Sparsity sweep (doc 40, 14-Apr-26)
+## Sparsity and lifecycle calibration (doc 40, doc 44)
 
-`scripts/sparsity-sweep.py` wraps the existing regression toolchain
-to compare centred vs non-centred parameterisation under varying
-snapshot DB sparsity.
-
-### Sparsity layer in synth_gen.py
+### Random sparsity layer in synth_gen.py
 
 Three simulation parameters gate snapshot row emission without
-affecting the underlying population simulation or param file data
-(`edge_daily`):
+affecting the underlying population simulation or param file data:
 
 | Parameter | What it does |
 |-----------|-------------|
@@ -584,41 +648,58 @@ affecting the underlying population simulation or param file data
 All three default to 0.0 (no sparsity). Set in the `simulation`
 block of truth YAML files, same level as `failure_rate`.
 
-**Key invariant**: param file data (`edge_daily`) is always
-complete — sparsity only affects snapshot DB rows. Users always
-have at least one full view available via the param file.
+### Structured lifecycle (18-Apr-26)
 
-### Sweep script
+Per-value `active_from_day` / `active_to_day` in truth YAML context
+dimension values control deterministic temporal coverage. This models
+treatment switching: treatment A active throughout, treatment B
+withdrawn at day 65, treatment C introduced at day 33.
 
-```bash
-. graph-editor/venv/bin/activate
-python3 -u scripts/sparsity-sweep.py \
-  --draws 20 --base-graph synth-skip-context-sparse \
-  --tune 1000 --mcmc-draws 1000 --chains 2 --timeout 0
+```yaml
+context_dimensions:
+  - id: treatment
+    mece: true
+    values:
+      - id: baseline
+        weight: 0.50
+      - id: treatment-b
+        weight: 0.30
+        active_to_day: 65
+      - id: treatment-c
+        weight: 0.20
+        active_from_day: 33
 ```
 
-The script:
-1. Samples sparsity parameters from distributions per draw
-2. Writes temporary truth YAML variants in the data repo
-3. Calls `param_recovery.py` twice per variant (centred via defaults,
-   non-centred via `--feature centred_p_slices=false
-   --feature centred_latency_slices=false`)
-4. Uses `--rebuild` per variant (sparsity changes the DB contents)
-5. Collates nine-layer audit output to incremental CSV
-6. Cleans up variant truth files after each draw
+The population simulation zeros out weights for inactive values per
+day and renormalises — inactive treatments receive no new entrants.
+Row emission is also gated per value per day. Both effects compose
+with random sparsity.
 
-Output CSV: `/tmp/sparsity-sweep-{timestamp}.csv` with per-draw
-sparsity params, ESS, divergences, convergence %, recovery counts.
+### Sparsity sweep infrastructure
 
-### Sparse truth YAML variants
+`bayes/plans/generate_sparsity_sweep.py` generates truth YAMLs for
+the cartesian product of 3 topologies (solo/chain/diamond) × 6
+sparsity configs (4 random levels + lifecycle + lifecycle-sparse) =
+18 graphs. Output goes directly to `bayes/truth/`.
 
-Two base variants exist for manual testing outside the sweep:
+Three regression plans target this matrix:
 
-- `synth-skip-context-sparse` — skip topology, 15%/0.02/25% sparsity
+- `sparsity-sweep-quick` — solo topology only (6 graphs)
+- `sparsity-sweep-full` — all 18 graphs, deep sampling
+- `sparsity-lifecycle` — lifecycle configs only, all topologies
+
+The structured JSON output includes `design.sparsity` and
+`design.context_dimensions[].lifecycles`, enabling cartesian analysis
+of recovery degradation without parsing graph names.
+
+### Existing sparse truth files
+
+- `synth-skip-context-sparse` — skip topology, 15%/0.02/25%
 - `synth-diamond-context-sparse` — diamond topology, same defaults
+- 18 sweep graphs (solo/abc/diamond × sparse-1 through sparse-4 + lifecycle variants)
 
-Both auto-discovered by `discover_synth_graphs()`. Wider z-score
-thresholds (3.5–4.0) to account for reduced data.
+All auto-discovered. Wider z-score thresholds (3.0–4.5) for sparser
+graphs.
 
 ### Test coverage
 

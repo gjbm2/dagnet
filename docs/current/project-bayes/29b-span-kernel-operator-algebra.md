@@ -770,7 +770,7 @@ Today we effectively have:
 Those cohort-mode fitted objects are very useful "duplo" blocks for
 success mass, because the Bayes pipeline does run a second pass on
 `cohort()` observations and runtime consumers prefer the cohort fields
-(`path_alpha/path_beta`) over the window ones in cohort mode.
+(`cohort_alpha/cohort_beta`) over the window ones in cohort mode.
 
 However, the current block inventory is not yet the clean abstract
 library assumed earlier in this note:

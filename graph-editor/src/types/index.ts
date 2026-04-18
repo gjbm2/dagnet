@@ -688,18 +688,24 @@ export interface ModelVarsEntry {
  *  Keyed by slice DSL string (e.g. "window()", "cohort()", "window().context(channel:google)").
  */
 export interface SlicePosteriorEntry {
-  // Probability
+  // Probability — epistemic (posterior on the true rate, doc 49 §A.6)
   alpha: number;
   beta: number;
   p_hdi_lower: number;
   p_hdi_upper: number;
+  // Probability — predictive (kappa-inflated, doc 49 §A.6). Absent when kappa is absent.
+  alpha_pred?: number;
+  beta_pred?: number;
+  hdi_lower_pred?: number;
+  hdi_upper_pred?: number;
   // Latency (present when edge has latency fitted for this slice)
   mu_mean?: number;
-  mu_sd?: number;
+  mu_sd?: number;                   // predictive when kappa_lat exists (doc 49 §A.6.2)
+  mu_sd_epist?: number;             // always epistemic posterior SD of mu
   sigma_mean?: number;
-  sigma_sd?: number;
+  sigma_sd?: number;                // epistemic (no predictive mechanism)
   onset_mean?: number;
-  onset_sd?: number;
+  onset_sd?: number;                // epistemic (no predictive mechanism)
   hdi_t95_lower?: number;
   hdi_t95_upper?: number;
   onset_mu_corr?: number;           // Posterior correlation onset↔μ (identifiability)
@@ -763,11 +769,18 @@ export interface Posterior {
  */
 export interface ProbabilityPosterior {
   distribution: string;
+  // Epistemic — posterior on the true rate (doc 49 §A.6)
   alpha: number;
   beta: number;
   hdi_lower: number;
   hdi_upper: number;
   hdi_level: number;
+  // Predictive — kappa-inflated (doc 49). Absent when kappa is absent.
+  alpha_pred?: number;
+  beta_pred?: number;
+  hdi_lower_pred?: number;
+  hdi_upper_pred?: number;
+  // Quality / provenance
   ess: number;
   rhat: number;
   evidence_grade: number;
@@ -777,12 +790,17 @@ export interface ProbabilityPosterior {
   divergences: number;
   prior_tier: 'direct_history' | 'trajectory_calibrated' | 'inherited' | 'sibling_pooled' | 'uninformative';
   surprise_z?: number | null;
-  // Path-level (cohort) probability — from cohort() slice
-  path_alpha?: number;
-  path_beta?: number;
-  path_hdi_lower?: number;
-  path_hdi_upper?: number;
-  path_provenance?: 'bayesian' | 'pooled-fallback' | 'point-estimate';
+  // Cohort-mode probability posterior — from cohort() slice (epistemic)
+  cohort_alpha?: number;
+  cohort_beta?: number;
+  cohort_hdi_lower?: number;
+  cohort_hdi_upper?: number;
+  // Cohort-mode predictive (doc 49)
+  cohort_alpha_pred?: number;
+  cohort_beta_pred?: number;
+  cohort_hdi_lower_pred?: number;
+  cohort_hdi_upper_pred?: number;
+  cohort_provenance?: 'bayesian' | 'pooled-fallback' | 'point-estimate';
   // LOO-ELPD model adequacy scoring (doc 32)
   delta_elpd?: number | null;
   pareto_k_max?: number | null;
@@ -803,9 +821,10 @@ export interface LatencyPosterior {
   distribution: string;
   onset_delta_days: number;
   mu_mean: number;
-  mu_sd: number;
+  mu_sd: number;                    // predictive when kappa_lat exists (doc 49 §A.6.2)
+  mu_sd_epist?: number;             // always epistemic posterior SD of mu
   sigma_mean: number;
-  sigma_sd: number;
+  sigma_sd: number;                 // epistemic (no predictive mechanism)
   hdi_t95_lower: number;
   hdi_t95_upper: number;
   hdi_level: number;
@@ -829,6 +848,7 @@ export interface LatencyPosterior {
   path_onset_hdi_upper?: number;
   path_mu_mean?: number;
   path_mu_sd?: number;
+  path_mu_sd_epist?: number;        // epistemic path mu_sd (doc 49)
   path_sigma_mean?: number;
   path_sigma_sd?: number;
   path_hdi_t95_lower?: number;

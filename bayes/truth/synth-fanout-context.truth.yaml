@@ -1,0 +1,131 @@
+# Ground truth for synth-fanout-context (S2 — branch group with MECE context)
+#
+# Anchor → Gate → {Fast, Slow, Dropout}
+# Same topology as synth-fanout-test, but with a context dimension.
+#
+# Google:  high traffic (60%), favours Fast (0.55), disfavours Slow (0.25)
+# Direct:  medium traffic (30%), balanced (0.45 fast, 0.35 slow — baseline)
+# Email:   low traffic (10%), favours Slow (0.50), disfavours Fast (0.30)
+#
+# The per-slice simplex must be maintained: p_fast + p_slow ≤ 1.
+# This tests the per-slice Dirichlet (R2c) — independent logit offsets
+# would violate the simplex constraint.
+#
+# Recovery targets:
+#   - Per-slice weight vectors recovered within threshold
+#   - Parent weights HDI contains true base weights
+#   - Simplex constraint maintained per slice
+#
+# See doc 14 §5.3, §12.2 "Graph S2"
+
+simulation:
+  mean_daily_traffic: 500
+  n_days: 90
+  user_kappa: 100
+  failure_rate: 0.05
+  drift_sigma: 0.0
+  seed: 43
+  expected_sample_seconds: 1800
+
+emit_context_slices: true
+
+context_dimensions:
+  - id: synth-channel
+    mece: true
+    values:
+      - id: google
+        label: Google
+        weight: 0.60
+        sources:
+          amplitude:
+            field: utm_medium
+            filter: utm_medium == 'google'
+        edges:
+          synth-foc-gate-to-fast:
+            p_mult: 1.22    # 0.45 * 1.22 ≈ 0.55
+          synth-foc-gate-to-slow:
+            p_mult: 0.71    # 0.35 * 0.71 ≈ 0.25
+      - id: direct
+        label: Direct
+        weight: 0.30
+        sources:
+          amplitude:
+            field: utm_medium
+            filter: utm_medium == 'direct'
+        edges:
+          synth-foc-gate-to-fast:
+            p_mult: 1.0     # baseline
+          synth-foc-gate-to-slow:
+            p_mult: 1.0     # baseline
+      - id: email
+        label: Email
+        weight: 0.10
+        sources:
+          amplitude:
+            field: utm_medium
+            filter: utm_medium == 'email'
+        edges:
+          synth-foc-gate-to-fast:
+            p_mult: 0.67    # 0.45 * 0.67 ≈ 0.30
+          synth-foc-gate-to-slow:
+            p_mult: 1.43    # 0.35 * 1.43 ≈ 0.50
+
+edges:
+  synth-foc-anchor-to-gate:
+    from: anchor
+    to: gate
+    p: 0.80
+    onset: 0.0
+    mu: 0.0
+    sigma: 0.0
+  synth-foc-gate-to-fast:
+    from: gate
+    to: fast
+    p: 0.45
+    onset: 0.0
+    mu: 0.5
+    sigma: 0.3
+  synth-foc-gate-to-slow:
+    from: gate
+    to: slow
+    p: 0.35
+    onset: 5.0
+    mu: 2.0
+    sigma: 0.6
+
+nodes:
+  anchor:
+    start: true
+    type: entry
+    label: Anchor
+    event_id: synth-foc-anchor
+  gate:
+    type: event
+    label: Gate
+    event_id: synth-foc-gate
+  fast:
+    absorbing: true
+    type: event
+    label: Fast
+    event_id: synth-foc-fast
+    outcome_type: success
+  slow:
+    absorbing: true
+    type: event
+    label: Slow
+    event_id: synth-foc-slow
+    outcome_type: success
+
+graph:
+  name: synth-fanout-context
+  description: "S2: branch group with MECE context dimension. Per-slice Dirichlet test."
+
+testing:
+  thresholds:
+    p_z: 2.5
+    mu_z: 2.5
+    sigma_z: 3.0
+    onset_z: 3.0
+  per_slice_thresholds:
+    p_slice_z: 3.0
+    weight_z: 3.0

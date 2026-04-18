@@ -17,6 +17,7 @@ import { ShareLinkModal } from '../modals/ShareLinkModal';
 import { APP_VERSION } from '../../version';
 import { useHealthStatus } from '../../hooks/useHealthStatus';
 import { GitHubOAuthChip } from '../../hooks/useGitHubOAuthChip';
+import Tooltip from '../Tooltip';
 import './MenuBar.css';
 
 /**
@@ -51,29 +52,37 @@ export function MenuBarComponent() {
         <DevConsoleMirrorControls />
         <GitHubOAuthChip />
         {!isDashboardMode && (
-          <button
-            className="share-link-button"
-            onClick={() => setShareModalOpen(true)}
-            title="Share link..."
-          >
-            <Share2 size={18} />
-          </button>
+          <Tooltip content="Share link..." position="bottom">
+            <button
+              className="share-link-button"
+              onClick={() => setShareModalOpen(true)}
+              aria-label="Share link..."
+            >
+              <Share2 size={18} />
+            </button>
+          </Tooltip>
         )}
-        <button
-          className="theme-toggle-button"
-          onClick={toggleTheme}
-          title={theme === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
+        <Tooltip
+          content={theme === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
+          position="bottom"
         >
-          {theme === 'light' ? <Moon size={18} /> : <Sun size={18} />}
-        </button>
-        <div
-          className={`dagnet-brand dagnet-brand--health-${healthMode}`}
-          onClick={handleBrandClick}
-          title={`Dagnet v${APP_VERSION}\n\n${healthTooltip}`}
-        >
-          <img src="/dagnet-icon.png" alt="" className="dagnet-logo" />
-          <span>Dagnet</span>
-        </div>
+          <button
+            className="theme-toggle-button"
+            onClick={toggleTheme}
+            aria-label={theme === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
+          >
+            {theme === 'light' ? <Moon size={18} /> : <Sun size={18} />}
+          </button>
+        </Tooltip>
+        <Tooltip content={`Dagnet v${APP_VERSION}\n\n${healthTooltip}`} position="bottom" maxWidth={360}>
+          <div
+            className={`dagnet-brand dagnet-brand--health-${healthMode}`}
+            onClick={handleBrandClick}
+          >
+            <img src="/dagnet-icon.png" alt="" className="dagnet-logo" />
+            <span>Dagnet</span>
+          </div>
+        </Tooltip>
       </div>
       <ShareLinkModal isOpen={shareModalOpen} onClose={() => setShareModalOpen(false)} />
     </div>

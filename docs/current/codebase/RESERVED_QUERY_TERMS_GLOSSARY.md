@@ -82,19 +82,22 @@ The accumulated time-to-conversion from anchor A through all upstream edges to Y
 
 Fields: `path_t95`, `path_mu`, `path_sigma`, `path_onset_delta_days`
 
-**`path_alpha` / `path_beta`**
+**`cohort_alpha` / `cohort_beta`**
 
 The Bayesian posterior on this edge's conversion rate (y/x), estimated
 from **cohort-mode** evidence (anchor-anchored data, path-level latency).
-Despite the `path_` prefix, these encode the **edge rate**, not a compound
-path product. The prefix refers to the latency model used during
-fitting (path CDF), not to the probability being estimated.
+These encode the **edge rate**, not a compound path product — the same
+quantity as `alpha`/`beta`, but fitted from different evidence.
 
 - `posterior.alpha` / `posterior.beta` → window-mode posterior on p_edge
-- `posterior.path_alpha` / `posterior.path_beta` → cohort-mode posterior on p_edge (same rate, different evidence set)
+- `posterior.cohort_alpha` / `posterior.cohort_beta` → cohort-mode posterior on p_edge (same rate, different evidence set)
 
 The model resolver (`runner/model_resolver.py`) selects the appropriate
-pair based on `temporal_mode`: window → `alpha/beta`, cohort → `path_alpha/path_beta`.
+pair based on `temporal_mode`: window → `alpha/beta`, cohort → `cohort_alpha/cohort_beta`.
+
+Previously named `path_alpha`/`path_beta` — renamed because the `path_`
+prefix was misread as "compound path probability" when it actually
+referred to the latency model used during fitting.
 
 **`anchor_median_lag_days`**
 

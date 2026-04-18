@@ -11,7 +11,6 @@ import { extractParamsFromGraph } from '../../services/GraphParamExtractor';
 import { flattenParams, toYAML, toJSON, toCSV } from '../../services/ParamPackDSLService';
 import { computePlausibleSignaturesForEdge } from '../../services/snapshotRetrievalsService';
 import { aggregateAndPopulateGraph } from '../aggregate';
-import { runCliTopoPass } from '../topoPass';
 
 const USAGE = `
 dagnet-cli param-pack
@@ -26,6 +25,9 @@ dagnet-cli param-pack
     --get <key>              Extract a single value (bare scalar to stdout)
     --format, -f             Output format: yaml (default), json, csv
     --show-signatures        Show computed signatures per edge (diagnostic)
+    --diag-model-vars        Emit per-edge model_vars blocks (analytic + analytic_be) as JSON on
+                             stdout, for blind FE↔BE topo parity diffing (doc 45). Suppresses
+                             the normal param-pack output.
     --diagnostic, --diag     Show detailed pipeline trace (per-edge state at each stage)
     --verbose, -v            Show all console.log/warn output (LAG debug, etc.)
     --session-log            Show session log output
@@ -90,11 +92,39 @@ async function runParamPack() {
     log.warn(w);
   }
 
-  // BE topo pass — engine-computed completeness, blended rate, dispersions.
-  // Overwrites FE-only values with engine values. Falls back gracefully
-  // if the BE is unreachable.
-  log.info('Running BE topo pass...');
-  await runCliTopoPass(populatedGraph, bundle.parameters, queryDsl);
+  // NOTE: FE topo, BE topo, conditioned forecast, promotion cascade, and
+  // UpdateManager all ran inside `aggregateAndPopulateGraph` via
+  // `fetchItems → runStage2EnhancementsAndInboundN`. This is the same
+  // code path the browser uses — the CLI simulates exactly what the app
+  // would produce. Doc 45 §Delivery model requires a single pipeline.
+  //
+  // A previous bespoke `runCliTopoPass` call here invoked BE topo a
+  // second time and bypassed the promotion cascade by writing directly
+  // to `edge.p.latency.*`. It was redundant and inconsistent with the
+  // browser, and is now removed.
+
+  // --diag-model-vars: emit per-edge model_vars blocks as JSON, then exit.
+  // This is a blind FE↔BE topo parity diagnostic: both `analytic` (FE) and
+  // `analytic_be` (BE) entries are emitted per edge so an external diff
+  // can assert parity without having to re-run the pipeline. Doc 45 §Model
+  // var selection: the two sources must be interchangeable modulo tolerance
+  // on numeric fields.
+  if (flags.diagModelVars) {
+    const perEdge: Record<string, {
+      analytic: unknown | null;
+      analytic_be: unknown | null;
+    }> = {};
+    for (const edge of populatedGraph.edges || []) {
+      const key = (edge as any).uuid || (edge as any).id;
+      if (!key) continue;
+      const modelVars = (edge as any).p?.model_vars ?? [];
+      const analytic = modelVars.find((v: any) => v?.source === 'analytic') ?? null;
+      const analyticBe = modelVars.find((v: any) => v?.source === 'analytic_be') ?? null;
+      perEdge[key] = { analytic, analytic_be: analyticBe };
+    }
+    process.stdout.write(JSON.stringify({ model_vars_by_edge: perEdge }, null, 2) + '\n');
+    return;
+  }
 
   // Extract + serialise
   const params = extractParamsFromGraph(populatedGraph);

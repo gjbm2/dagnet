@@ -64,7 +64,11 @@ export async function aggregateAndPopulateGraph(
 
   const mode = options?.mode ?? 'from-file';
 
-  // Run the exact same fetch pipeline the browser uses
+  // Run the exact same fetch pipeline the browser uses.
+  // awaitBackgroundPromises: true — the CLI wants deterministic final
+  // state before returning so param pack / --diag-model-vars see the
+  // final result of BE topo + CF (including the CF slow-path overwrite
+  // of p.mean). The browser leaves this false for fast first render.
   try {
     const results = await fetchItems(
       items,
@@ -72,6 +76,7 @@ export async function aggregateAndPopulateGraph(
         mode,
         suppressMissingDataToast: true,
         suppressBatchToast: true,
+        awaitBackgroundPromises: true,
       },
       currentGraph,
       setGraph,

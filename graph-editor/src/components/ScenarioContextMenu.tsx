@@ -12,8 +12,8 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu';
-import { useScenariosContextOptional, SCENARIO_PALETTE_OPTIONS } from '../contexts/ScenariosContext';
-import type { ScenarioColourPalette } from '../contexts/ScenariosContext';
+import { useScenariosContextOptional } from '../contexts/ScenariosContext';
+import { SCENARIO_PALETTE_OPTIONS, type ScenarioColourPalette } from '../contexts/scenarioPalette';
 import { useTabContext } from '../contexts/TabContext';
 import { useScenarioShareLink } from '../hooks/useScenarioShareLink';
 import toast from 'react-hot-toast';

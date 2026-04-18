@@ -76,7 +76,7 @@ evidence that the findings below are false.
 |---|---|---|---|---|
 | Endpoint double-counting between trajectory and endpoint likelihoods | High | Fitted-model bias | Edges with window trajectories and emitted `endpoint_bb_*` terms | `p`, `kappa`, latency posteriors, downstream warm-started Phase 2 priors |
 | Order-dependent Phase 2 non-exhaustive branch-group prior | Medium-high, conditional | Fitted-model bias | Multi-sibling non-exhaustive cohort branch groups, especially sparse data | sibling `p_cohort`, branch uncertainty, downstream path probabilities |
-| `cohort()` alpha/beta exported from empirical `_estimate_cohort_kappa()` | Medium | Reporting and contract drift | Any edge with `p_cohort_*` export and sufficient mature cohort data | `cohort()` probability bands, `path_alpha/path_beta`, posterior detail views |
+| `cohort()` alpha/beta exported from empirical `_estimate_cohort_kappa()` | Medium | Reporting and contract drift | Any edge with `p_cohort_*` export and sufficient mature cohort data | `cohort()` probability bands, `cohort_alpha/cohort_beta`, posterior detail views |
 | LOO null does not mirror fitted likelihood | Medium | Diagnostic and quality-gating defect | Branch groups, cohort endpoint likelihoods, any edge surfacing `delta_elpd` | `delta_elpd`, quality warnings, posterior detail panels |
 | Predictive summaries are non-deterministic | Low-medium | Reproducibility defect | Any export path that re-simulates predictive Beta draws | jitter in alpha/beta, HDI, and derived stdev |
 | Path provenance always reports `"bayesian"` | Low | Metadata defect | Any exported path latency posterior | provenance display and human interpretation of quality |
@@ -156,7 +156,7 @@ alpha/beta by combining those samples with a fresh scalar estimate from
 `_estimate_cohort_kappa()`. Those cohort alpha/beta values are then
 merged in `bayes/worker.py` and projected onto the graph in
 `graph-editor/src/services/bayesPatchService.ts` as the `cohort()`
-probability slice and `path_alpha/path_beta`.
+probability slice and `cohort_alpha/cohort_beta`.
 
 This means the displayed cohort uncertainty band is not currently a
 direct export of sampled posterior dispersion. It is an empirical
@@ -300,7 +300,7 @@ Recommended validation work:
   export
 - a LOO fixture covering non-exhaustive branch groups and Phase 2 cohort
   endpoint likelihoods
-- frontend verification that `cohort()` bands, `path_alpha/path_beta`,
+- frontend verification that `cohort()` bands, `cohort_alpha/cohort_beta`,
   provenance, and quality warnings reflect the intended corrected
   semantics
 

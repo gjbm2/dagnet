@@ -121,7 +121,7 @@ describe('PropertiesPanel hooks safety', () => {
 // PropertiesPanelWrapper snapshots badge
 // -----------------------------------------------------------------------------
 
-vi.mock('../editors/GraphEditor', () => ({
+vi.mock('../editors/SelectionContext', () => ({
   useSelectionContext: () => ({
     selectedNodeId: null,
     selectedEdgeId: 'e-1',

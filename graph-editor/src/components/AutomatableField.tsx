@@ -16,7 +16,7 @@ interface AutomatableFieldProps {
   justUpdated?: boolean;  // Triggers expand/shrink animation
   
   // Display
-  label: string;
+  label: React.ReactNode;
   children: React.ReactNode;  // The actual input component
   tooltip?: string;  // Optional tooltip to display on hover
   

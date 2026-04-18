@@ -663,3 +663,68 @@ class TestWriteResultsJson:
 
         assert data["variants"]["default"]["xfailed"] == 1
         assert data["variants"]["default"]["failed"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Traceback extraction (run_regression._extract_traceback)
+# ---------------------------------------------------------------------------
+
+from run_regression import _extract_traceback
+
+
+class TestExtractTraceback:
+    """Tracebacks from subprocess stdout must surface in the plan output,
+    not be buried in per-graph harness logs."""
+
+    def test_empty_input_returns_empty(self):
+        block, summary = _extract_traceback("")
+        assert block == ""
+        assert summary == ""
+
+    def test_no_traceback_returns_empty(self):
+        out = "some normal output\nno crash here\ndone\n"
+        block, summary = _extract_traceback(out)
+        assert block == ""
+        assert summary == ""
+
+    def test_extracts_valueerror(self):
+        out = (
+            "running graph...\n"
+            "Traceback (most recent call last):\n"
+            '  File "a.py", line 10, in foo\n'
+            "    x, y = something()\n"
+            "ValueError: too many values to unpack (expected 2)\n"
+            "exit 1\n"
+        )
+        block, summary = _extract_traceback(out)
+        assert "Traceback" in block
+        assert "ValueError" in block
+        assert summary == "ValueError: too many values to unpack (expected 2)"
+
+    def test_extracts_last_traceback_when_multiple(self):
+        out = (
+            "Traceback (most recent call last):\n"
+            '  File "a.py", line 1, in foo\n'
+            "RuntimeError: first error\n"
+            "recovering...\n"
+            "Traceback (most recent call last):\n"
+            '  File "b.py", line 2, in bar\n'
+            "TypeError: second error\n"
+        )
+        block, summary = _extract_traceback(out)
+        assert "TypeError: second error" in block
+        assert summary == "TypeError: second error"
+
+    def test_summary_is_exception_line_only(self):
+        """Summary should be a single line suitable for inclusion in
+        a plan headline, not the full traceback."""
+        out = (
+            "Traceback (most recent call last):\n"
+            '  File "compiler.py", line 2733, in _emit_cohort_likelihoods\n'
+            "    mu_var, sigma_var = latency_vars[ev.edge_id]\n"
+            "    ^^^^^^^^^^^^^^^^^\n"
+            "ValueError: too many values to unpack (expected 2)\n"
+        )
+        _, summary = _extract_traceback(out)
+        assert "\n" not in summary
+        assert summary.startswith("ValueError")

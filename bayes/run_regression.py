@@ -250,6 +250,54 @@ def _run_one_graph(
 # Result parsing + assertions
 # ---------------------------------------------------------------------------
 
+def _extract_traceback(output: str) -> tuple[str, str]:
+    """Extract a Python traceback block (if any) from subprocess output.
+
+    Returns (block, summary):
+      block: the full traceback text starting at "Traceback (most recent call last):"
+             through the final exception line, or "" if none found.
+      summary: a one-line summary like "ValueError: too many values to unpack"
+               suitable for the plan output headline, or "" if none found.
+
+    When multiple tracebacks exist, the LAST one is returned (usually the
+    outermost/final failure).
+    """
+    if not output:
+        return "", ""
+    lines = output.splitlines()
+    # Find the last "Traceback (most recent call last):" marker
+    start_idx = -1
+    for i in range(len(lines) - 1, -1, -1):
+        if lines[i].lstrip().startswith("Traceback (most recent call last):"):
+            start_idx = i
+            break
+    if start_idx < 0:
+        return "", ""
+    # Walk forward until we find a non-indented line that looks like an
+    # exception class (e.g. "ValueError: ..."). Subprocess stderr and
+    # indented traceback frames continue until that line.
+    end_idx = start_idx
+    import re as _re
+    exc_re = _re.compile(r"^[A-Z][A-Za-z0-9_.]*(Error|Exception|Exit|Warning)[^:]*:")
+    for j in range(start_idx + 1, len(lines)):
+        if lines[j] and not lines[j].startswith(" ") and exc_re.match(lines[j]):
+            end_idx = j
+            break
+        end_idx = j
+    # Trim trailing blank lines
+    block_lines = lines[start_idx : end_idx + 1]
+    while block_lines and not block_lines[-1].strip():
+        block_lines.pop()
+    block = "\n".join(block_lines)
+    # Summary: the last line is usually "ExceptionClass: message".
+    summary = ""
+    for line in reversed(block_lines):
+        if exc_re.match(line.strip()):
+            summary = line.strip()
+            break
+    return block, summary
+
+
 def _parse_recovery_output(output: str) -> dict:
     """Parse param_recovery.py output into structured results.
 
@@ -949,25 +997,49 @@ def run_regression(args) -> list[dict]:
             parsed = _parse_recovery_output(run_result["output"])
 
             if run_result["exit_code"] != 0 and not parsed.get("edges"):
-                print(f"  {name}: HARNESS FAIL (exit {run_result['exit_code']}) [{elapsed:.0f}s]")
+                # Extract Python traceback from stdout/stderr if present so
+                # the root cause surfaces in the plan summary instead of
+                # being buried in 40KB per-graph harness logs.
+                out = run_result.get("output", "")
+                tb_block, tb_summary = _extract_traceback(out)
+
+                headline = (
+                    f"HARNESS FAIL (exit {run_result['exit_code']})"
+                    + (f": {tb_summary}" if tb_summary else "")
+                )
+                print(f"  {name}: {headline} [{elapsed:.0f}s]")
                 with open(summary_path, "a") as _sf:
                     _sf.write(f"{name:<45s} FAIL   {elapsed:6.0f}s  "
-                              f"harness exit {run_result['exit_code']}\n")
-                # Dump captured output so failures are diagnosable
-                out = run_result.get("output", "").strip()
-                if out:
-                    for line in out.split("\n")[-20:]:
+                              f"{headline}\n")
+                # Print the traceback block directly (root cause is surfaced,
+                # not buried). Fall back to last 20 lines if none.
+                if tb_block:
+                    for line in tb_block.splitlines():
                         print(f"    | {line}")
-                # Also write to recovery log
+                elif out.strip():
+                    for line in out.strip().split("\n")[-20:]:
+                        print(f"    | {line}")
+                # Also write full output to recovery log
                 recovery_log = f"/tmp/bayes_recovery-{name}-{run_id}.log"
                 with open(recovery_log, "w") as f:
-                    f.write(run_result.get("output", ""))
+                    f.write(out)
+
+                from results_schema import make_failure as _mf
+                _fail = _mf(
+                    "harness",
+                    tb_summary or f"Harness exit {run_result['exit_code']}",
+                )
+                if tb_block:
+                    _fail["traceback"] = tb_block
+                _fail["exit_code"] = run_result["exit_code"]
+                _fail["harness_log"] = recovery_log
+
                 results.append({
                     "graph_name": name,
                     "passed": False,
                     "xfail": bool(g["truth"].get("testing", {}).get("xfail_reason")),
                     "xfail_reason": g["truth"].get("testing", {}).get("xfail_reason", ""),
-                    "failures": [f"Harness exit {run_result['exit_code']}"],
+                    "failures": [_fail],
                     "warnings": [],
                     "quality": {},
                 })
@@ -980,6 +1052,7 @@ def run_regression(args) -> list[dict]:
             assertion["audit"] = audit
             assertion["edges"] = parsed.get("edges", {})
             assertion["slices"] = parsed.get("slices", {})
+            assertion["truth_config"] = g["truth"]
 
             from results_schema import make_failure as _mf
 

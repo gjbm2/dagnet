@@ -14,6 +14,7 @@ import { createPortal } from 'react-dom';
 import { X, ChevronRight, ChevronLeft } from 'lucide-react';
 import { useTheme } from '../../contexts/ThemeContext';
 import { dailyFetchService, type GraphListItem, type DailyFetchChange } from '../../services/dailyFetchService';
+import GlossaryTooltip from '../GlossaryTooltip';
 import './Modal.css';
 
 export interface DailyFetchSaveResult {
@@ -189,7 +190,7 @@ export function DailyFetchManagerModal({ isOpen, onClose, workspace, onSaved }: 
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-container" onClick={e => e.stopPropagation()} style={{ maxWidth: '750px' }}>
         <div className="modal-header">
-          <h2 className="modal-title">Automation Manager</h2>
+          <GlossaryTooltip term="automation-manager"><h2 className="modal-title">Automation Manager</h2></GlossaryTooltip>
           <button onClick={onClose} className="modal-close-btn"><X size={20} /></button>
         </div>
 
@@ -334,19 +335,20 @@ export function DailyFetchManagerModal({ isOpen, onClose, workspace, onSaved }: 
                           {!g.hasPinnedQuery && (
                             <span title="No pinned query set" style={{ color: '#F59E0B', fontSize: '12px' }}>⚠️</span>
                           )}
-                          <label
-                            style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: dark ? '#9CA3AF' : '#6B7280', cursor: 'pointer' }}
-                            title="Commission a Bayes fit after each daily retrieval"
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            <input
-                              type="checkbox"
-                              checked={getEffectiveRunBayes(g)}
-                              onChange={() => toggleBayes(g.fileId)}
-                              style={{ width: '12px', height: '12px' }}
-                            />
-                            Bayes
-                          </label>
+                          <GlossaryTooltip term="bayes-fit-checkbox">
+                            <label
+                              style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: dark ? '#9CA3AF' : '#6B7280', cursor: 'pointer' }}
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={getEffectiveRunBayes(g)}
+                                onChange={() => toggleBayes(g.fileId)}
+                                style={{ width: '12px', height: '12px' }}
+                              />
+                              Bayes
+                            </label>
+                          </GlossaryTooltip>
                         </div>
                       ))
                     )}

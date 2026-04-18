@@ -43,21 +43,21 @@ describe('ScenarioLayerList', () => {
   it('should render edit buttons only when onEdit is provided', () => {
     const { container, rerender } = render(<ScenarioLayerList items={baseItems} />);
     // Count edit icons — Edit2 renders as an SVG, check by title
-    const editButtons = container.querySelectorAll('[title="Edit"]');
+    const editButtons = container.querySelectorAll('[aria-label="Edit"]');
     expect(editButtons.length).toBe(0);
 
     rerender(<ScenarioLayerList items={baseItems} onEdit={vi.fn()} />);
-    const editButtonsAfter = container.querySelectorAll('[title="Edit"]');
+    const editButtonsAfter = container.querySelectorAll('[aria-label="Edit"]');
     expect(editButtonsAfter.length).toBe(3); // current + 2 user (base excluded — editing base DSL is meaningless)
   });
 
   it('should render visibility toggle only when onToggleVisibility is provided', () => {
     const { container, rerender } = render(<ScenarioLayerList items={baseItems} />);
-    const visButtons = container.querySelectorAll('[title="Hide"], [title="Show"]');
+    const visButtons = container.querySelectorAll('[aria-label="Hide"], [aria-label="Show"]');
     expect(visButtons.length).toBe(0);
 
     rerender(<ScenarioLayerList items={baseItems} onToggleVisibility={vi.fn()} />);
-    const visButtonsAfter = container.querySelectorAll('[title="Hide"], [title="Show"]');
+    const visButtonsAfter = container.querySelectorAll('[aria-label="Hide"], [aria-label="Show"]');
     expect(visButtonsAfter.length).toBe(4);
   });
 
@@ -75,7 +75,7 @@ describe('ScenarioLayerList', () => {
     const onToggle = vi.fn();
     render(<ScenarioLayerList items={baseItems} onToggleVisibility={onToggle} />);
 
-    const showButton = screen.getByTitle('Show');
+    const showButton = screen.getByLabelText('Show');
     fireEvent.click(showButton);
 
     expect(onToggle).toHaveBeenCalledWith('sc-2');
@@ -88,7 +88,7 @@ describe('ScenarioLayerList', () => {
     ];
 
     const { container } = render(<ScenarioLayerList items={items} onRefresh={onRefresh} />);
-    const refreshButtons = container.querySelectorAll('[title="Refresh from source"]');
+    const refreshButtons = container.querySelectorAll('[aria-label="Refresh from source"]');
     expect(refreshButtons.length).toBe(0);
   });
 
@@ -96,7 +96,7 @@ describe('ScenarioLayerList', () => {
     const onRefresh = vi.fn();
     const { container } = render(<ScenarioLayerList items={baseItems} onRefresh={onRefresh} />);
 
-    const refreshButtons = container.querySelectorAll('[title="Refresh from source"]');
+    const refreshButtons = container.querySelectorAll('[aria-label="Refresh from source"]');
     expect(refreshButtons.length).toBe(1); // sc-1 is live
   });
 
@@ -195,7 +195,7 @@ describe('ScenarioLayerList', () => {
       />
     );
 
-    const customTooltipButtons = container.querySelectorAll('[title="Edit query DSL"]');
+    const customTooltipButtons = container.querySelectorAll('[aria-label="Edit query DSL"]');
     expect(customTooltipButtons.length).toBe(1);
   });
 
@@ -209,7 +209,7 @@ describe('ScenarioLayerList', () => {
       />
     );
 
-    const refreshButtons = container.querySelectorAll('[title="Refresh from source"]');
+    const refreshButtons = container.querySelectorAll('[aria-label="Refresh from source"]');
     expect(refreshButtons.length).toBe(1);
   });
 

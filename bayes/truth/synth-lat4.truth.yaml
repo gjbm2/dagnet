@@ -1,0 +1,72 @@
+# Ground truth for synth-lat4
+#
+# A → B → C → D (3 edges, 4-node linear chain)
+# ALL edges have latency — this is the critical property.
+#
+# With upstream latency on a→b and b→c, the population arriving at c
+# is spread in time. This makes window(from(b).to(d)) differ from
+# cohort(from(b).to(d)) because:
+#   - window(b) captures everyone at b on a calendar day (mix of cohorts)
+#   - cohort(a) tracks a single day's cohort — they arrive at b
+#     spread by the a→b latency, and at c spread by the convolution
+#     of a→b and b→c latencies
+#
+# Per-edge t95 estimates (shifted lognormal):
+#   a→b: onset=2 + exp(2.0 + 1.645×0.50) ≈ 2 + 17 ≈ 19d
+#   b→c: onset=1.5 + exp(2.2 + 1.645×0.45) ≈ 1.5 + 19 ≈ 21d
+#   c→d: onset=2.5 + exp(1.8 + 1.645×0.50) ≈ 2.5 + 14 ≈ 16d
+#   Path t95 ≈ 56d
+#
+# Test: multi-hop composition parity on from(b).to(d), and
+# window/cohort shape divergence due to upstream spreading from a→b.
+
+graph:
+  name: synth-lat4
+  description: 4-node linear chain with all-latency edges for upstream spreading test
+
+simulation:
+  mean_daily_traffic: 2000
+  n_days: 150
+  kappa_sim_default: 50.0
+  failure_rate: 0.05
+  drift_sigma: 0.0
+  growth_rate_mom: 0.0
+  seed: 42
+  snapshot_start_offset: 60
+  traffic_cv: 1.0
+  expected_sample_seconds: 900
+
+nodes:
+  a:
+    start: true
+    label: A
+  b:
+    label: B
+  c:
+    label: C
+  d:
+    absorbing: true
+    label: D
+
+edges:
+  a-to-b:
+    from: a
+    to: b
+    p: 0.60
+    onset: 2.0
+    mu: 2.0
+    sigma: 0.50
+  b-to-c:
+    from: b
+    to: c
+    p: 0.50
+    onset: 1.5
+    mu: 2.2
+    sigma: 0.45
+  c-to-d:
+    from: c
+    to: d
+    p: 0.65
+    onset: 2.5
+    mu: 1.8
+    sigma: 0.50

@@ -1,0 +1,19 @@
+{
+    "name": "sparsity-lifecycle",
+    "description": "Structured lifecycle sweep only: treatment start/stop scenarios across all topologies. Tests A-throughout, B-stops-2/3, C-starts-1/3 pattern.",
+    "graphs": {
+        "include": [
+            "synth-*-lifecycle",
+            "synth-*-lifecycle-sparse"
+        ]
+    },
+    "sampling": {
+        "chains": 3,
+        "draws": 1500,
+        "tune": 750,
+        "no_timeout": true
+    },
+    "features": [],
+    "settings": {},
+    "tags": ["lifecycle", "structured-sparsity", "treatment-switching"]
+}

@@ -48,9 +48,12 @@ import { getDisplaySettingsForSurface } from '../lib/analysisDisplaySettingsRegi
 import { getScenarioVisibilityOverlayStyle } from '../lib/scenarioVisibilityModeStyles';
 import { mutateCanvasAnalysisGraph, deleteCanvasAnalysisFromGraph, advanceMode, setContentItemAnalysisType } from '../services/canvasAnalysisMutationService';
 import { ModeTrack } from './ModeTrack';
+import GlossaryTooltip from './GlossaryTooltip';
+import Tooltip from './Tooltip';
 import { ScenarioLayerList } from './panels/ScenarioLayerList';
 import type { ScenarioLayerItem } from '../types/scenarioLayerList';
-import { useScenariosContextOptional, SCENARIO_PALETTE } from '../contexts/ScenariosContext';
+import { useScenariosContextOptional } from '../contexts/ScenariosContext';
+import { SCENARIO_PALETTE } from '../contexts/scenarioPalette';
 import { ScenarioQueryEditModal } from './modals/ScenarioQueryEditModal';
 import { captureTabScenariosToRecipe } from '../services/captureTabScenariosService';
 import './panels/AnalyticsPanel.css';
@@ -1899,7 +1902,7 @@ export default function PropertiesPanel({
 
             <CollapsibleSection title="Data Source" defaultOpen={false} icon={Zap}>
               <div className="property-section">
-                <label className="property-label">Default Connection</label>
+                <GlossaryTooltip term="default-connection"><label className="property-label">Default Connection</label></GlossaryTooltip>
                 <ConnectionSelector
                   value={graph?.defaultConnection}
                   onChange={async (conn) => {
@@ -1922,7 +1925,7 @@ export default function PropertiesPanel({
 
             <CollapsibleSection title="Model Source" defaultOpen={false} icon={Settings}>
               <div className="property-section">
-                <label className="property-label">Default Source</label>
+                <GlossaryTooltip term="model-source"><label className="property-label">Default Source</label></GlossaryTooltip>
                 <select
                   className="property-input"
                   value={graph?.model_source_preference || 'best_available'}
@@ -2041,7 +2044,7 @@ export default function PropertiesPanel({
 
             <CollapsibleSection title="Query" defaultOpen={false} icon={Sliders}>
               <div className="property-section">
-                <label className="property-label">Base DSL</label>
+                <GlossaryTooltip term="base-dsl"><label className="property-label">Base DSL</label></GlossaryTooltip>
                 <QueryExpressionEditor
                   value={localBaseDSL}
                   onChange={(value) => setLocalBaseDSL(value)}
@@ -2057,7 +2060,7 @@ export default function PropertiesPanel({
               </div>
 
               <div className="property-section">
-                <label className="property-label">Data Interests DSL</label>
+                <GlossaryTooltip term="data-interests-dsl"><label className="property-label">Data Interests DSL</label></GlossaryTooltip>
                 <QueryExpressionEditor
                   value={localDataInterestsDSL}
                   onChange={(value) => setLocalDataInterestsDSL(value)}
@@ -2088,9 +2091,11 @@ export default function PropertiesPanel({
                   id="dailyFetch"
                   style={{ margin: 0 }}
                 />
-                <label htmlFor="dailyFetch" className="property-label" style={{ marginBottom: 0, cursor: 'pointer' }}>
-                  Include in daily automation
-                </label>
+                <GlossaryTooltip term="daily-automation">
+                  <label htmlFor="dailyFetch" className="property-label" style={{ marginBottom: 0, cursor: 'pointer' }}>
+                    Include in daily automation
+                  </label>
+                </GlossaryTooltip>
               </div>
               <div style={{ fontSize: '11px', color: '#6B7280', marginTop: '4px', paddingLeft: '4px' }}>
                 When enabled, this graph is included in unattended daily runs via <code>?retrieveall</code>.
@@ -2107,14 +2112,15 @@ export default function PropertiesPanel({
                   disabled={!graph?.dailyFetch}
                   style={{ margin: 0 }}
                 />
-                <label
-                  htmlFor="runBayes"
-                  className="property-label"
-                  style={{ marginBottom: 0, cursor: graph?.dailyFetch ? 'pointer' : 'default', opacity: graph?.dailyFetch ? 1 : 0.5 }}
-                  title={!graph?.dailyFetch ? 'Enable daily fetch first' : undefined}
-                >
-                  Run Bayes fit
-                </label>
+                <GlossaryTooltip term="run-bayes-fit">
+                  <label
+                    htmlFor="runBayes"
+                    className="property-label"
+                    style={{ marginBottom: 0, cursor: graph?.dailyFetch ? 'pointer' : 'default', opacity: graph?.dailyFetch ? 1 : 0.5 }}
+                  >
+                    Run Bayes fit
+                  </label>
+                </GlossaryTooltip>
               </div>
               {!graph?.dailyFetch && (
                 <div style={{ fontSize: '11px', color: '#9CA3AF', marginTop: '2px', paddingLeft: '24px' }}>
@@ -2633,7 +2639,7 @@ export default function PropertiesPanel({
                         }
                       }}
                     />
-                    <span>Start Node</span>
+                    <GlossaryTooltip term="start-node"><span>Start Node</span></GlossaryTooltip>
                   </label>
 
                   <label className="property-checkbox-label">
@@ -2646,12 +2652,12 @@ export default function PropertiesPanel({
                         updateNode('absorbing', newValue);
                       }}
                     />
-                    <span>Terminal Node</span>
+                    <GlossaryTooltip term="terminal-node"><span>Terminal Node</span></GlossaryTooltip>
                   </label>
 
                   <div className="property-section">
                   <AutomatableField
-                    label="Outcome Type"
+                    label={<GlossaryTooltip term="outcome-type"><span>Outcome Type</span></GlossaryTooltip>}
                     value={localNodeData.outcome_type || ''}
                     overridden={selectedNode?.outcome_type_overridden || false}
                     onClearOverride={() => {
@@ -2691,7 +2697,7 @@ export default function PropertiesPanel({
                   </div>
 
                   <div className="property-section">
-                    <label className="property-label">Entry Weight</label>
+                    <GlossaryTooltip term="entry-weight"><label className="property-label">Entry Weight</label></GlossaryTooltip>
                     <input
                       className="property-input"
                       type="number"
@@ -2915,7 +2921,7 @@ export default function PropertiesPanel({
                       }}
                     >
                       <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <label style={{ fontSize: '12px', color: '#6B7280', minWidth: 'auto', whiteSpace: 'nowrap' }}>Status</label>
+                      <GlossaryTooltip term="case-status"><label style={{ fontSize: '12px', color: '#6B7280', minWidth: 'auto', whiteSpace: 'nowrap' }}>Status</label></GlossaryTooltip>
                       <select
                         value={caseData.status}
                         onChange={(e) => {
@@ -2979,7 +2985,7 @@ export default function PropertiesPanel({
 
                     {/* Variants Section */}
                     <div style={{ marginBottom: '20px' }}>
-                      <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Variants</label>
+                      <GlossaryTooltip term="variants"><label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Variants</label></GlossaryTooltip>
                       {caseData.variants.map((variant, index) => {
                         const isCollapsed = collapsedVariants.has(index);
                         const isEditing = editingVariantIndex === index;
@@ -3326,15 +3332,15 @@ export default function PropertiesPanel({
 
                   {/* Weight Default - now shown for ALL edges */}
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px', color: '#6B7280', minWidth: 'auto', whiteSpace: 'nowrap' }}>
-                      Weight Default
-                      <span title="Used to distribute residual probability among unspecified edges from the same source">
-                        <Info 
-                          size={14} 
+                    <GlossaryTooltip term="weight-default">
+                      <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px', color: '#6B7280', minWidth: 'auto', whiteSpace: 'nowrap' }}>
+                        Weight Default
+                        <Info
+                          size={14}
                           style={{ color: '#9CA3AF', cursor: 'help' }}
                         />
-                      </span>
-                    </label>
+                      </label>
+                    </GlossaryTooltip>
                     <input
                       type="number"
                       min="0"
@@ -3381,7 +3387,7 @@ export default function PropertiesPanel({
                     <CollapsibleSection title="Case" icon={Box} defaultOpen={!!currentVariant}>
                       {/* Variant Selector */}
                       <div style={{ marginBottom: '16px' }}>
-                        <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Variant</label>
+                        <GlossaryTooltip term="variants"><label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Variant</label></GlossaryTooltip>
                         <select
                           value={currentVariant}
                           onChange={async (e) => {
@@ -3581,7 +3587,7 @@ export default function PropertiesPanel({
                   {/* Edge-Level Query (applies to all parameters above) */}
                   <div style={{ marginTop: '24px', paddingTop: '20px', borderTop: '1px solid #E5E7EB' }}>
                     <AutomatableField
-                      label="Data Retrieval Query"
+                      label={<GlossaryTooltip term="data-retrieval-query"><span>Data Retrieval Query</span></GlossaryTooltip>}
                       labelExtra={
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                           <span title="Query expression used when retrieving data for any parameter on this edge. Usually auto-generated by MSMDC algorithm from graph topology.">
@@ -3660,7 +3666,7 @@ export default function PropertiesPanel({
                     {/* Optional N Query (for denominator when it differs from k query) */}
                     <div style={{ marginTop: '16px' }}>
                     <AutomatableField
-                      label="N Query (optional)"
+                      label={<GlossaryTooltip term="n-query"><span>N Query (optional)</span></GlossaryTooltip>}
                       labelExtra={
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                         <span title="Explicit query for n (denominator) when it differs from the main query. Use when the 'from' node shares an event with other nodes and n can't be derived by stripping conditions.">

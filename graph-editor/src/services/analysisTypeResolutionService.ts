@@ -47,6 +47,7 @@ const CHART_KINDS_BY_ANALYSIS_TYPE: Record<string, string[]> = {
   cohort_maturity_v1:       ['cohort_maturity', 'table'],
   cohort_maturity_v2:       ['cohort_maturity', 'table'],
   daily_conversions:        ['daily_conversions', 'table'],
+  conversion_rate:          ['conversion_rate', 'table'],
   lag_histogram:            ['histogram', 'table'],
   lag_fit:                  ['lag_fit', 'table'],
   surprise_gauge:           ['surprise_gauge', 'table'],

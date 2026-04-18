@@ -905,8 +905,26 @@ def enhance_graph_latencies(
 
             # Aggregate lag stats
             agg_median, agg_mean, total_k_weighted = _aggregate_lag_stats(cohorts_for_fit, s.recency_half_life_days)
+            # If the cohort input has no usable median (e.g. no conversions,
+            # or an upstream aggregator dropped the field), fall back to
+            # effective_horizon / 2 for internal fitting so downstream maths
+            # remain defined — but flag the condition so the output does NOT
+            # silently emit the fallback as if it were a real observation.
+            # Without this flag an FE↔BE parity check would see BE emit
+            # `horizon/2` while FE correctly emits the true median; doc 45
+            # explicitly requires BE output to be verifiably parity-clean.
+            agg_median_from_fallback = False
             if agg_median is None:
+                agg_median_from_fallback = True
                 agg_median = effective_horizon / 2.0
+                total_k_for_warn = sum(c.k for c in cohorts_for_fit if c.k > 0)
+                print(
+                    f"[topo-pass] WARNING: edge {edge_id} cohort median unavailable "
+                    f"(cohorts_for_fit={len(cohorts_for_fit)}, total_k={total_k_for_warn}); "
+                    f"using effective_horizon/2 = {agg_median:.4f} for internal fit only. "
+                    f"Output median_lag_days will be None — this signals an upstream "
+                    f"aggregation gap, not a real observation."
+                )
 
             # D2 FIX: Onset — prefer window-slice-derived onset over graph-stored value
             if ctx and ctx.onset_from_window_slices is not None and math.isfinite(ctx.onset_from_window_slices):
@@ -1253,8 +1271,14 @@ def enhance_graph_latencies(
                 mu=round(latency_stats.completeness_cdf.mu, 4),
                 sigma=round(latency_stats.completeness_cdf.sigma, 4),
                 onset_delta_days=round(onset, 2),
-                median_lag_days=round(agg_median, 4) if agg_median else None,
-                mean_lag_days=round(agg_mean, 4) if agg_mean else None,
+                # When agg_median was sourced from the horizon/2 fallback
+                # (no real cohort input), emit None so the output does not
+                # masquerade as a genuine observation and FE↔BE parity
+                # checks can flag the upstream aggregation gap.
+                median_lag_days=(None if agg_median_from_fallback
+                                 else (round(agg_median, 4) if agg_median else None)),
+                mean_lag_days=(None if agg_median_from_fallback
+                               else (round(agg_mean, 4) if agg_mean else None)),
                 path_mu=round(path_mu, 4) if path_mu is not None else None,
                 path_sigma=round(path_sigma, 4) if path_sigma is not None else None,
                 path_onset_delta_days=round(path_onset, 2),
@@ -1293,8 +1317,18 @@ def enhance_graph_latencies(
 
                 # Aggregate lag stats (from all cohorts, like FE cpCohortsAll)
                 cp_agg_median, cp_agg_mean, _ = _aggregate_lag_stats(cp_cohorts, s.recency_half_life_days)
+                cp_agg_median_from_fallback = False
                 if cp_agg_median is None:
+                    cp_agg_median_from_fallback = True
                     cp_agg_median = effective_horizon / 2.0
+                    cp_total_k_for_warn = sum(c.k for c in cp_cohorts if c.k > 0)
+                    print(
+                        f"[topo-pass] WARNING: conditional {cp_key} cohort median "
+                        f"unavailable (cp_cohorts={len(cp_cohorts)}, "
+                        f"total_k={cp_total_k_for_warn}); using effective_horizon/2 "
+                        f"= {cp_agg_median:.4f} for internal fit only. Output "
+                        f"median_lag_days will be None."
+                    )
 
                 # Onset from context or graph
                 cp_onset = 0.0
@@ -1334,8 +1368,12 @@ def enhance_graph_latencies(
                     mu=round(cp_stats.completeness_cdf.mu, 4),
                     sigma=round(cp_stats.completeness_cdf.sigma, 4),
                     onset_delta_days=round(cp_onset, 2),
-                    median_lag_days=round(cp_agg_median, 4) if cp_agg_median else None,
-                    mean_lag_days=round(cp_agg_mean, 4) if cp_agg_mean else None,
+                    # As with the base edge: None on fallback so output is
+                    # honest about the missing upstream median.
+                    median_lag_days=(None if cp_agg_median_from_fallback
+                                     else (round(cp_agg_median, 4) if cp_agg_median else None)),
+                    mean_lag_days=(None if cp_agg_median_from_fallback
+                                   else (round(cp_agg_mean, 4) if cp_agg_mean else None)),
                     path_onset_delta_days=round(path_onset, 2),  # shared with base edge
                     p_infinity=round(cp_stats.p_infinity, 6) if cp_stats.forecast_available else None,
                     p_evidence=round(cp_stats.p_evidence, 6),

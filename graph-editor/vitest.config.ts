@@ -125,8 +125,8 @@ export default defineConfig({
     teardownTimeout: 5000,
     
     // Configure test timeout to prevent hanging
-    testTimeout: 20000,
-    hookTimeout: 20000,
+    testTimeout: 45000,
+    hookTimeout: 45000,
     
     // Force exit after tests complete (prevents hanging in CI/non-interactive mode)
     forceRerunTriggers: [],

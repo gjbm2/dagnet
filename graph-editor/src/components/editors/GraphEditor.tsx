@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, createContext, useContext } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, useContext } from 'react';
 import { EditorProps, GraphData } from '../../types';
 import { useFileState, useTabContext, fileRegistry } from '../../contexts/TabContext';
 import { GraphStoreProvider, useGraphStore, GraphStoreContext } from '../../contexts/GraphStoreContext';
@@ -21,7 +21,14 @@ import { useTheme } from '../../contexts/ThemeContext';
 import { getGraphEditorLayout, getGraphEditorLayoutMinimized, PANEL_TO_TAB_ID } from '../../layouts/graphSidebarLayout';
 import { dockGroups } from '../../layouts/defaultLayout';
 import { ViewPreferencesProvider, useViewPreferencesContext } from '../../contexts/ViewPreferencesContext';
-import { ScenariosProvider, useScenariosContextOptional, SCENARIO_PALETTE } from '../../contexts/ScenariosContext';
+import { ScenariosProvider, useScenariosContextOptional } from '../../contexts/ScenariosContext';
+import { SCENARIO_PALETTE } from '../../contexts/scenarioPalette';
+import {
+  SelectionContext,
+  type SelectionContextType,
+  type CanvasAnnotationType,
+  type SelectorModalConfig,
+} from './SelectionContext';
 import { ScenarioHighlightProvider } from '../../contexts/ScenarioHighlightContext';
 import { useURLScenarios } from '../../hooks/useURLScenarios';
 import { useDashboardMode } from '../../hooks/useDashboardMode';
@@ -30,7 +37,6 @@ import { usePutToBaseRequestListener } from '../../hooks/usePutToBaseRequestList
 import { Layers, FileText, Wrench, BarChart3, X, Activity, GitBranch, LayoutDashboard, Database, Hash, Route } from 'lucide-react';
 import { DEFAULT_SIDEBAR_WIDTH, MIN_SIDEBAR_WIDTH } from '../../lib/uiConstants';
 import { SelectorModal } from '../SelectorModal';
-import { ItemBase } from '../../hooks/useItemFiltering';
 import { WindowSelector } from '../WindowSelector';
 import { ScenarioLegend } from '../ScenarioLegend';
 import { ScenarioContextMenu } from '../ScenarioContextMenu';
@@ -41,51 +47,6 @@ import { useActiveGraphTracking } from '../../hooks/useActiveGraphTracking';
 import { ElementToolProvider, type ElementToolContextType, type ElementToolType } from '../../contexts/ElementToolContext';
 import { logSnapshotBoot, summariseSnapshotCharts } from '../../lib/snapshotBootTrace';
 import { GraphTabBootProvider } from '../../contexts/AnalysisBootContext';
-
-// Canvas object type for generalised annotation selection
-export type CanvasAnnotationType = 'postit' | 'container' | 'canvasAnalysis';
-
-// Context to share selection state with sidebar panels
-interface SelectionContextType {
-  selectedNodeId: string | null;
-  selectedEdgeId: string | null;
-  selectedAnnotationId: string | null;
-  selectedAnnotationType: CanvasAnnotationType | null;
-  onSelectedNodeChange: (id: string | null) => void;
-  onSelectedEdgeChange: (id: string | null) => void;
-  onSelectedAnnotationChange: (id: string | null, type: CanvasAnnotationType | null) => void;
-  openSelectorModal: (config: SelectorModalConfig) => void;
-}
-
-interface SelectorModalConfig {
-  type: 'parameter' | 'context' | 'case' | 'node' | 'event';
-  items: ItemBase[];
-  currentValue: string;
-  onSelect: (value: string) => void;
-  onOpenItem?: (itemId: string) => void;
-}
-
-const SelectionContext = createContext<SelectionContextType | null>(null);
-
-export function useSelectionContext() {
-  const context = useContext(SelectionContext);
-  if (!context) {
-    // Return a no-op context instead of throwing
-    // This can happen during Error Boundary recovery or when component tree is being rebuilt
-    console.warn('[useSelectionContext] Context not available - returning no-op defaults');
-    return {
-      selectedNodeId: null,
-      selectedEdgeId: null,
-      selectedAnnotationId: null,
-      selectedAnnotationType: null,
-      onSelectedNodeChange: () => {},
-      onSelectedEdgeChange: () => {},
-      onSelectedAnnotationChange: () => {},
-      openSelectorModal: () => {},
-    } as SelectionContextType;
-  }
-  return context;
-}
 
 /**
  * URLScenariosProcessor - processes URL scenario parameters after graph loads

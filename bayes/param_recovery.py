@@ -121,16 +121,22 @@ def main():
 
     data_repo = os.path.join(REPO_ROOT, data_repo_dir)
     graph_path = os.path.join(data_repo, "graphs", f"{args.graph}.json")
-    truth_path = graph_path.replace(".json", ".truth.yaml")
 
-    if not os.path.isfile(graph_path):
-        print(f"ERROR: Graph not found: {graph_path}")
-        sys.exit(1)
-    if not os.path.isfile(truth_path):
-        print(f"ERROR: Truth file not found: {truth_path}")
+    # Truth file: check bayes/truth/ first (canonical), then data repo
+    _canonical_truth = os.path.join(REPO_ROOT, "bayes", "truth", f"{args.graph}.truth.yaml")
+    _datarepo_truth = os.path.join(data_repo, "graphs", f"{args.graph}.truth.yaml")
+    if os.path.isfile(_canonical_truth):
+        truth_path = _canonical_truth
+    elif os.path.isfile(_datarepo_truth):
+        truth_path = _datarepo_truth
+    else:
+        print(f"ERROR: Truth file not found in bayes/truth/ or data repo")
         print("  Parameter recovery requires a .truth.yaml sidecar.")
         print("  For production data, use test_harness.py directly.")
         sys.exit(1)
+
+    if not os.path.isfile(graph_path):
+        print(f"ERROR: Graph not found: {graph_path}")
 
     # --- Persistent recovery log ---
     # Every run writes its full output to a persistent log file so results

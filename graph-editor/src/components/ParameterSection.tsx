@@ -20,6 +20,7 @@ import { resetPriorsForParam, deleteHistoryForParam } from '../services/bayesPri
 import { fetchItems as fetchItemsBatch, createFetchItem } from '../services/fetchDataService';
 import toast from 'react-hot-toast';
 import { useTheme } from '../contexts/ThemeContext';
+import GlossaryTooltip from './GlossaryTooltip';
 import './ParameterSection.css';
 
 interface ParameterSectionProps {
@@ -384,12 +385,14 @@ export function ParameterSection({
                   disabled={disabled}
                   style={{ width: '14px', height: '14px', cursor: 'pointer', flexShrink: 0 }}
                 />
-                <label
-                  htmlFor={`latency-track-${objectId}-${paramSlot}`}
-                  style={{ cursor: 'pointer', fontSize: '12px', fontWeight: 600, color: '#333', whiteSpace: 'nowrap' }}
-                >
-                  Latency Tracking
-                </label>
+                <GlossaryTooltip term="latency">
+                  <label
+                    htmlFor={`latency-track-${objectId}-${paramSlot}`}
+                    style={{ cursor: 'pointer', fontSize: '12px', fontWeight: 600, color: '#333', whiteSpace: 'nowrap' }}
+                  >
+                    Latency Tracking
+                  </label>
+                </GlossaryTooltip>
                 <span title="Enable latency tracking to forecast conversions for immature cohorts. When enabled, uses cohort-based queries to measure conversion lag.">
                   <Info size={14} style={{ color: '#9CA3AF', cursor: 'help' }} />
                 </span>
@@ -426,7 +429,7 @@ export function ParameterSection({
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
               <label className="parameter-section-label" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <span>Cohort anchor</span>
+                <GlossaryTooltip term="cohort-anchor"><span>Cohort anchor</span></GlossaryTooltip>
                 <button
                   type="button"
                   onClick={handleRefreshCohortAnchor}
@@ -504,7 +507,9 @@ export function ParameterSection({
                 }}
               >
                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <label className="parameter-section-label" style={{ minWidth: '65px' }}>Onset</label>
+                  <GlossaryTooltip term="onset">
+                    <label className="parameter-section-label" style={{ minWidth: '65px' }}>Onset</label>
+                  </GlossaryTooltip>
                   <input
                     type="number"
                     value={localOnsetDeltaDays}
@@ -564,7 +569,9 @@ export function ParameterSection({
                 }}
               >
                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <label className="parameter-section-label" style={{ minWidth: '65px' }}>Edge t95</label>
+                  <GlossaryTooltip term="t95">
+                    <label className="parameter-section-label" style={{ minWidth: '65px' }}>Edge t95</label>
+                  </GlossaryTooltip>
                   <input
                     type="number"
                     value={localT95}
@@ -612,7 +619,9 @@ export function ParameterSection({
                 }}
               >
                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <label className="parameter-section-label" style={{ minWidth: '65px' }}>Path t95</label>
+                  <GlossaryTooltip term="path-t95">
+                    <label className="parameter-section-label" style={{ minWidth: '65px' }}>Path t95</label>
+                  </GlossaryTooltip>
                   <input
                     type="number"
                     value={localPathT95}
@@ -708,9 +717,11 @@ export function ParameterSection({
                 />
               ) : (
                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <label className="parameter-section-label">
-                    {paramSlot === 'cost_gbp' ? '£ cost' : 'Time cost'}
-                  </label>
+                  <GlossaryTooltip term={paramSlot === 'cost_gbp' ? 'cost-gbp' : 'cost-time'}>
+                    <label className="parameter-section-label">
+                      {paramSlot === 'cost_gbp' ? '£ cost' : 'Time cost'}
+                    </label>
+                  </GlossaryTooltip>
                   <input
                     type="number"
                     min="0"
@@ -756,7 +767,9 @@ export function ParameterSection({
                 }}
               >
                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <label className="parameter-section-label">Std Dev</label>
+                  <GlossaryTooltip term="stdev">
+                    <label className="parameter-section-label">Std Dev</label>
+                  </GlossaryTooltip>
                   <input
                     type="number"
                     min="0"
@@ -798,14 +811,14 @@ export function ParameterSection({
       {showQueryEditor && (
         <div style={{ marginTop: '20px', marginBottom: '0px' }}>
           <AutomatableField
-            label="Data Retrieval Query"
+            label={<GlossaryTooltip term="data-retrieval-query"><span>Data Retrieval Query</span></GlossaryTooltip>}
             labelExtra={
-              <span title="Query expression for retrieving data from external sources. Usually auto-generated by MSMDC algorithm from graph topology. Can be manually edited if needed.">
-                <Info 
-                  size={14} 
+              <GlossaryTooltip term="data-retrieval-query">
+                <Info
+                  size={14}
                   style={{ color: '#9CA3AF', cursor: 'help' }}
                 />
-              </span>
+              </GlossaryTooltip>
             }
             layout="label-above"
             value={param?.query || ''}

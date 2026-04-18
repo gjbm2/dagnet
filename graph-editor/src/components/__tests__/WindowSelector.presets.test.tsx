@@ -269,7 +269,7 @@ describe('WindowSelector presets — authoritative DSL invariant', () => {
     const { unmount } = renderWithStore(store);
 
     // Switch to window mode (toggle defaults to cohort → becomes window)
-    const modeToggle = screen.getByTitle(/Cohort mode/);
+    const modeToggle = screen.getByLabelText(/Cohort mode/);
     fireEvent.click(modeToggle);
 
     // The toggle click updates currentDSL to window(3-Feb-26:9-Feb-26) and

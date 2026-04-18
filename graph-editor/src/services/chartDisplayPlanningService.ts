@@ -35,7 +35,7 @@ export function augmentChartKindOptionsForAnalysisType(
   return out;
 }
 
-const TIME_SERIES_KINDS = new Set(['daily_conversions', 'cohort_maturity', 'lag_fit', 'time_series']);
+const TIME_SERIES_KINDS = new Set(['daily_conversions', 'conversion_rate', 'cohort_maturity', 'lag_fit', 'time_series']);
 const PIE_KINDS = new Set(['pie']);
 
 function metricIds(result: AnalysisResult | null | undefined): Set<string> {
@@ -70,7 +70,7 @@ export function planChartDisplay(args: PlanChartDisplayArgs): ChartDisplayPlan {
   // Cohort maturity supports multi-scenario overlay natively (per-scenario series
   // with distinct colours). Other time-series charts (daily_conversions, lag_fit)
   // only render one scenario at a time.
-  const multiScenarioTimeSeriesKinds = new Set(['cohort_maturity', 'daily_conversions']);
+  const multiScenarioTimeSeriesKinds = new Set(['cohort_maturity', 'daily_conversions', 'conversion_rate']);
   if (xAxisMode === 'time' && scenarioIdsToRender.length > 1
       && !multiScenarioTimeSeriesKinds.has(requestedChartKind || '')) {
     const lastScenarioId = scenarioIdsToRender[scenarioIdsToRender.length - 1];

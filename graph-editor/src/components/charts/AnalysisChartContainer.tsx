@@ -24,7 +24,7 @@ import { AnalysisInfoCard } from '../analytics/AnalysisInfoCard';
 import { ExpressionToolbarTray } from './ExpressionToolbarTray';
 import { CfpPopover } from './CfpPopover';
 
-type ChartKind = 'funnel' | 'bridge' | 'histogram' | 'daily_conversions' | 'cohort_maturity' | 'lag_fit' | 'bar_grouped' | 'pie' | 'time_series' | 'info' | 'surprise_gauge';
+type ChartKind = 'funnel' | 'bridge' | 'histogram' | 'daily_conversions' | 'conversion_rate' | 'cohort_maturity' | 'lag_fit' | 'bar_grouped' | 'pie' | 'time_series' | 'info' | 'surprise_gauge';
 
 /** Stable ref so ReactECharts doesn't dispose/reinit on every render. */
 const ECHARTS_OPTS = { renderer: 'svg' as const };
@@ -36,6 +36,7 @@ export function normaliseChartKind(kind: string | undefined | null): ChartKind |
   if (kind === 'bridge' || kind === 'bridge_horizontal') return 'bridge';
   if (kind === 'histogram' || kind === 'lag_histogram') return 'histogram';
   if (kind === 'daily_conversions') return 'daily_conversions';
+  if (kind === 'conversion_rate') return 'conversion_rate';
   if (kind === 'cohort_maturity') return 'cohort_maturity';
   if (kind === 'lag_fit') return 'lag_fit';
   if (kind === 'surprise_gauge') return 'surprise_gauge';
@@ -51,6 +52,7 @@ function labelForChartKind(kind: ChartKind): string {
   if (kind === 'bridge') return 'Bridge';
   if (kind === 'histogram') return 'Lag Histogram';
   if (kind === 'daily_conversions') return 'Daily Conversions';
+  if (kind === 'conversion_rate') return 'Conversion Rate';
   if (kind === 'cohort_maturity') return 'Cohort Maturity';
   if (kind === 'lag_fit') return 'Lag Fit';
   if (kind === 'bar_grouped') return 'Comparison';
@@ -247,6 +249,7 @@ export function AnalysisChartContainer(props: {
     if (t === 'conversion_funnel') return 'funnel';
     if (t === 'lag_histogram') return 'histogram';
     if (t === 'daily_conversions') return 'daily_conversions';
+    if (t === 'conversion_rate') return 'conversion_rate';
     if (t === 'cohort_maturity') return 'cohort_maturity';
     if (t === 'cohort_maturity_v1') return 'cohort_maturity';
     if (t === 'cohort_maturity_v2') return 'cohort_maturity';
@@ -307,7 +310,7 @@ export function AnalysisChartContainer(props: {
   const effectiveSubjectId = (selectedSubjectId && subjectIds.includes(selectedSubjectId))
     ? selectedSubjectId
     : (subjectIds[0] || undefined);
-  const showSubjectSelector = (effectiveKind === 'daily_conversions' || effectiveKind === 'cohort_maturity') && subjectIds.length > 1;
+  const showSubjectSelector = (effectiveKind === 'daily_conversions' || effectiveKind === 'conversion_rate' || effectiveKind === 'cohort_maturity') && subjectIds.length > 1;
   const { ref: chartViewportRef, width: chartWidthPx, height: chartHeightPx } = useElementSize<HTMLDivElement>();
 
   // Layout ref — read at useMemo computation time but NOT a dependency.

@@ -2065,6 +2065,7 @@ export class UpdateManager {
         mean_lag_days?: number;
         t95: number;
         completeness: number;
+        completeness_stdev?: number;
         path_t95: number;
         onset_delta_days?: number;
       };
@@ -2158,6 +2159,13 @@ export class UpdateManager {
         }
       }
       targetP.latency.completeness = update.latency.completeness;
+      // Doc 45: CF owns completeness_stdev alongside completeness. The
+      // conditioned forecast returns both; the stats topo pass returns
+      // both (FE and BE variants). Whichever source lands last wins
+      // per the normal promotion cascade.
+      if ((update.latency as any).completeness_stdev !== undefined) {
+        (targetP.latency as any).completeness_stdev = (update.latency as any).completeness_stdev;
+      }
       if (writeHorizonsToGraph) {
         if (targetP.latency.path_t95_overridden !== true) {
           targetP.latency.path_t95 = this.roundHorizonDays(update.latency.path_t95);

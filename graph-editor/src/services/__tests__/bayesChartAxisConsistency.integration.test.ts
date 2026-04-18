@@ -98,7 +98,7 @@ function makeGraph() {
         posterior: {
           distribution: 'beta',
           alpha: WINDOW_ALPHA, beta: WINDOW_BETA,
-          path_alpha: COHORT_ALPHA, path_beta: COHORT_BETA,
+          cohort_alpha: COHORT_ALPHA, cohort_beta: COHORT_BETA,
         },
       },
     }],

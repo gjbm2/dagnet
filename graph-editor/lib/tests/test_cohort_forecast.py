@@ -72,8 +72,8 @@ class TestReadEdgeCohortParams:
                     },
                 },
                 'posterior': {
-                    'path_alpha': 10.0,
-                    'path_beta': 2.0,
+                    'cohort_alpha': 10.0,
+                    'cohort_beta': 2.0,
                 },
             },
         }
@@ -115,7 +115,7 @@ class TestReadEdgeCohortParams:
                 'latency': {'posterior': {'mu_mean': 2.0, 'sigma_mean': 0.5}},
                 'posterior': {
                     'alpha': 5.0, 'beta': 5.0,           # window: 0.5
-                    'path_alpha': 8.0, 'path_beta': 2.0,  # cohort: 0.8
+                    'cohort_alpha': 8.0, 'cohort_beta': 2.0,  # cohort: 0.8
                 },
             },
         }

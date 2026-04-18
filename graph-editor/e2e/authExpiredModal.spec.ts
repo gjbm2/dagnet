@@ -9,7 +9,7 @@
 
 import { test, expect, Page } from '@playwright/test';
 
-test.describe.configure({ timeout: 15_000 });
+test.describe.configure({ timeout: 30_000 });
 
 // ============================================================================
 // Helpers

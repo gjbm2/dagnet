@@ -2061,6 +2061,18 @@ or slower than predicted). This provides a feedback loop: default
 conservative → run → check PPC → upgrade to `true` if residuals
 indicate timing heterogeneity.
 
+**Schema and hashing constraint**: `per_slice_latency` is an optional
+boolean on the `ContextDefinition` interface (default `false`, omission
+= current behaviour). It MUST be excluded from
+`normalizeContextDefinition()` in `querySignature.ts` — it is a
+modelling directive, not a data-identity field. Adding it to the hash
+would invalidate all existing `core_hash` values for every context
+that adopts the flag, forcing re-fetch of unchanged data. The flag
+affects model structure, not what data to query. It would legitimately
+participate in model variable signing (not yet implemented) — same
+data modelled with different flags produces structurally different
+posteriors.
+
 **Interaction with Gap 1**: the per-dimension τ fix (Gap 1) is a
 prerequisite for this flag. Without per-dimension τ, there's no
 mechanism to apply different shrinkage to different dimensions. With
@@ -2100,6 +2112,185 @@ performance is now adequate.
    use conditionals.
 6. **Gap 5 (subsumption hierarchy)** — not needed until production
    DSLs use nested dimensions.
+7. **`independent` flag** — disables pooling for context dimensions
+   that encode structurally separate journeys. See §15A.5.
+
+---
+
+### 15A.5 Proposed addition: `independent` context flag
+
+**Date**: 18-Apr-26.
+**Status**: Proposed. Not yet implemented.
+
+**Problem**: the hierarchical pooling model (§5.2, §5.3) assumes
+context slices are exchangeable — drawn from a common distribution
+centred on the edge-level base rate, with shrinkage controlled by a
+learned τ (solo edges) or κ (branch groups). This assumption is
+appropriate when slices represent variations of the same underlying
+process (e.g. different acquisition channels arriving at the same
+funnel step).
+
+However, some context dimensions encode **structurally separate
+journeys** — e.g. different onboarding flows where the funnel steps
+have entirely different mechanics, conversion dynamics, and user
+populations. In these cases:
+
+1. **Exchangeability is violated.** The slices are not draws from a
+   common distribution — they are genuinely different processes that
+   happen to share a graph topology.
+
+2. **Over-shrinkage of small slices.** With few slices (2–3), there
+   is little information to estimate τ, so the HalfNormal(0.5) prior
+   dominates. A small slice with genuinely different behaviour gets
+   pulled toward `p_base`, which is dominated by the larger slice.
+   The posterior will be overconfident and wrong — the worst kind of
+   error.
+
+3. **τ estimation is fragile with few groups.** Hierarchical models
+   estimate the group-level variance (τ) from the between-group
+   spread. With 2–3 groups this estimate is noisy and prior-dominated.
+   The model cannot reliably learn "these groups are very different"
+   from 2 data points.
+
+**Observation**: whether a context dimension represents exchangeable
+variations or independent journeys is domain knowledge the user can
+provide. This parallels `per_slice_latency` (§15A.3) — structural
+prior knowledge that the model cannot reliably discover.
+
+**Proposal**: add an `independent` boolean to the context definition.
+Default `false` (pooled — current behaviour).
+
+- **`independent: false`** (default): slices are hierarchically
+  pooled toward the edge-level base rate via τ/κ. Current behaviour.
+
+- **`independent: true`**: slices receive independent priors with
+  no shared τ or κ. Each slice's probability is estimated solely
+  from its own data. No shrinkage toward `p_base` or toward other
+  slices.
+
+**Where the flag lives**: on the context definition, parallel to
+`per_slice_latency`:
+
+```yaml
+contexts:
+  channel:
+    slices: [google, direct, email]
+    independent: false           # exchangeable variations → pool
+    per_slice_latency: false
+  onboarding-variant:
+    slices: [flow_a, flow_b]
+    independent: true            # separate journeys → don't pool
+    per_slice_latency: true
+```
+
+**Model emission changes (solo edges)**:
+
+When `independent: true`, the hierarchy for this dimension changes
+from:
+
+```
+p_base ~ Beta(α, β)
+τ_slice ~ HalfNormal(σ_τ)
+p_slice_i = logistic(logit(p_base) + ε_i * τ_slice)
+```
+
+to:
+
+```
+p_base ~ Beta(α, β)
+p_slice_i ~ Beta(α_i, β_i)          # independent prior per slice
+```
+
+where `α_i`, `β_i` come from the same prior source as `p_base`
+(warm-start or default). Each slice is effectively its own edge-level
+variable.
+
+**Model emission changes (branch groups)**:
+
+When `independent: true`, the Dirichlet hierarchy for this dimension
+changes from:
+
+```
+base_weights ~ Dirichlet(α_hyper)
+κ ~ Gamma(α_κ, β_κ)
+weights_slice_i ~ Dirichlet(κ * base_weights)
+```
+
+to:
+
+```
+base_weights ~ Dirichlet(α_hyper)
+weights_slice_i ~ Dirichlet(α_hyper)     # independent, same prior
+```
+
+No κ is emitted for this dimension. Each slice's branch weights
+are unconstrained by other slices.
+
+**Critical implication — base variables are always emitted.**
+
+Even when there is only one context dimension and it is
+`independent: true`, the model MUST still emit `p_base` (and
+latency base variables). Reasons:
+
+1. **Mixed-epoch data.** Some `retrieved_at` dates may have regime
+   `uncontexted` (pre-context era). These aggregate observations
+   need a target variable. `p_base` receives their likelihood terms
+   (§5.7).
+
+2. **Aggregate posterior.** Users expect an edge-level posterior
+   regardless of context structure. With pooled slices, this falls
+   out of the hierarchy naturally. With independent slices, `p_base`
+   is still emitted but informed differently — either from aggregate
+   data (if any exists) or from a broad prior alone.
+
+3. **Structural consistency.** Downstream consumers (charting,
+   forecasting, regression reporting) expect `p_base` to exist for
+   every edge. Making its presence conditional on context
+   configuration would create fragile special cases throughout the
+   pipeline.
+
+When no aggregate data exists and the dimension is independent,
+`p_base` will have a wide, prior-dominated posterior. This is
+correct — it reflects genuine uncertainty about the aggregate rate
+when slices are not exchangeable and no direct aggregate observation
+constrains it.
+
+**Schema and hashing constraint**: same rules as `per_slice_latency`
+(§15A.3). `independent` is an optional boolean on `ContextDefinition`
+(default `false`, omission = current behaviour). It MUST be excluded
+from `normalizeContextDefinition()` — it is a modelling directive,
+not a data-identity field. Including it in the hash would invalidate
+existing `core_hash` values. Would participate in model variable
+signing when implemented.
+
+**Interaction with `per_slice_latency`**: orthogonal. A dimension
+can be `independent: true` with either `per_slice_latency` setting.
+When both are true, each slice gets fully independent probability
+AND latency parameters — the maximum-freedom configuration. When
+`independent: true` but `per_slice_latency: false`, probabilities
+are independent but latency is shared at the edge level.
+
+**Interaction with multi-dimension graphs**: each dimension's
+`independent` flag is evaluated separately. A graph can have one
+pooled dimension and one independent dimension. The independent
+dimension contributes no τ/κ — its slices constrain `p_base` only
+through their likelihood terms (not through a hierarchical link).
+
+**PPC validation**: if `independent: true` is set unnecessarily
+(slices actually are exchangeable), the model will still work — it
+just loses the regularisation benefit of pooling. Posteriors will be
+wider than they need to be for small slices. This is the conservative
+error (under-confidence rather than over-confidence). Conversely, if
+`independent: false` is set incorrectly for genuinely different
+journeys, PPC residuals will show systematic slice-level bias — the
+same diagnostic signal as for `per_slice_latency`.
+
+**Parameter count impact**: independent slices add one full set of
+base-level parameters per slice but remove 1 τ (solo) or 1 κ
+(branch group). The net cost is marginal — the saving from removing
+τ/κ is small, and each independent slice already had its own
+deviation variable under pooling. The real difference is inferential,
+not computational.
 
 ---
 

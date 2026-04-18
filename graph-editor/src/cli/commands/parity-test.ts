@@ -27,6 +27,7 @@ import type { ScenarioVisibilityMode } from '../../types';
 
 const SNAPSHOT_ANALYSIS_TYPES = [
   'daily_conversions',
+  'conversion_rate',
   'lag_histogram',
   'cohort_maturity',
   'cohort_maturity_v2',

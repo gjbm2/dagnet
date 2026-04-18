@@ -7,6 +7,7 @@ import { AutomatableField } from './AutomatableField';
 import { ParameterSection } from './ParameterSection';
 import { ColourSelector } from './ColourSelector';
 import { CONDITIONAL_COLOUR_PALETTE, getConditionalColour } from '@/lib/conditionalColours';
+import GlossaryTooltip from './GlossaryTooltip';
 import './ConditionalProbabilityEditor.css';
 
 // Match the updated graph schema structure
@@ -190,14 +191,16 @@ export function ConditionalProbabilityEditor({
               <span className="conditional-probability-condition-icon">
                 {isExpanded ? '▼' : '▶'}
               </span>
-              <span className="conditional-probability-condition-label">
-                Condition {index + 1}
-                {conditionDisplay && (
-                  <span className="conditional-probability-condition-summary">
-                    {' '}— {conditionDisplay}
-                  </span>
-                )}
-              </span>
+              <GlossaryTooltip term="conditional-probability">
+                <span className="conditional-probability-condition-label">
+                  Condition {index + 1}
+                  {conditionDisplay && (
+                    <span className="conditional-probability-condition-summary">
+                      {' '}— {conditionDisplay}
+                    </span>
+                  )}
+                </span>
+              </GlossaryTooltip>
               <button
                 type="button"
                 className="conditional-probability-remove-btn"
@@ -217,11 +220,11 @@ export function ConditionalProbabilityEditor({
                 {/* Condition Editor (Semantic: WHEN this applies) */}
                 <div className="conditional-probability-field" style={{ marginBottom: '20px' }}>
                   <AutomatableField
-                    label="Condition (when this applies)"
+                    label={<GlossaryTooltip term="condition"><span>Condition (when this applies)</span></GlossaryTooltip>}
                     labelExtra={
-                      <span title="Semantic constraint that determines when this conditional probability applies. Examples: visited(promo), context(device:mobile), case(test:treatment)">
+                      <GlossaryTooltip term="condition">
                         <Info size={14} style={{ color: '#9CA3AF', cursor: 'help' }} />
-                      </span>
+                      </GlossaryTooltip>
                     }
                     layout="label-above"
                     value={localConditions[index]?.condition !== undefined ? localConditions[index].condition : (typeof condition.condition === 'string' ? condition.condition : '')}
@@ -281,12 +284,12 @@ export function ConditionalProbabilityEditor({
                 {/* Query Editor (Full: HOW to retrieve data) */}
                 <div className="conditional-probability-field" style={{ marginTop: '24px', paddingTop: '20px', borderTop: '1px solid #E5E7EB' }}>
                   <AutomatableField
-                    label="Data Retrieval Query (full path)"
+                    label={<GlossaryTooltip term="data-retrieval-query"><span>Data Retrieval Query (full path)</span></GlossaryTooltip>}
                     labelExtra={
                       <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <span title="Full query expression for retrieving data from external sources. Usually auto-generated from condition + edge topology via MSMDC algorithm.">
+                        <GlossaryTooltip term="data-retrieval-query">
                           <Info size={14} style={{ color: '#9CA3AF', cursor: 'help' }} />
-                        </span>
+                        </GlossaryTooltip>
                         <button
                           type="button"
                           onClick={() => regenerateConditionalQuery(index)}

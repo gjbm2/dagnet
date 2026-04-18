@@ -1,0 +1,86 @@
+/*
+ * Shared tooltip styling.
+ *
+ * Applied by <Tooltip> and <GlossaryTooltip>. Dark-background in both themes
+ * by design — tooltips are short-lived overlays where high contrast beats
+ * theme conformity.
+ *
+ * Classes:
+ *   .dagnet-tooltip          — fixed-position wrapper (handles placement)
+ *   .dagnet-tooltip-body     — the rendered bubble
+ *   .dagnet-tooltip-title    — optional bold term header (glossary)
+ *   .dagnet-tooltip-more     — optional "Learn more" link (glossary)
+ *   .dagnet-tooltip-trigger  — default wrapper around the trigger element
+ */
+
+.dagnet-tooltip {
+  position: fixed;
+  z-index: 9990;
+  pointer-events: none;
+  max-width: 300px;
+}
+
+.dagnet-tooltip-body {
+  background: #1a1a1a;
+  color: #ffffff;
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.4;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  border: 1px solid #333;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.dagnet-tooltip-title {
+  font-weight: 600;
+  margin-bottom: 4px;
+  color: #ffffff;
+}
+
+.dagnet-tooltip-description {
+  color: #e0e0e0;
+}
+
+.dagnet-tooltip-more {
+  display: inline-block;
+  margin-top: 6px;
+  font-size: 11px;
+  color: #7dd3fc;
+  text-decoration: underline;
+  pointer-events: auto;
+}
+
+.dagnet-tooltip-more:hover {
+  color: #bae6fd;
+}
+
+.dagnet-tooltip-trigger {
+  display: inline-block;
+}
+
+.dagnet-tooltip-trigger--contents {
+  display: contents;
+}
+
+/*
+ * Hinted trigger — visual cue that hover-help is available.
+ * Applied by <GlossaryTooltip> so every glossary-backed label looks
+ * the same: dotted underline + help cursor. Colour shifts on hover.
+ */
+.dagnet-tooltip-trigger--hinted,
+.dagnet-tooltip-trigger--hinted * {
+  cursor: help;
+}
+
+.dagnet-tooltip-trigger--hinted {
+  text-decoration: underline dotted var(--text-muted, #999);
+  text-underline-offset: 3px;
+  text-decoration-thickness: 1px;
+  transition: text-decoration-color 0.15s ease;
+}
+
+.dagnet-tooltip-trigger--hinted:hover {
+  text-decoration-color: var(--accent-primary, #0066cc);
+}

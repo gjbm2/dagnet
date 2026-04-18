@@ -368,6 +368,70 @@ export async function computeMeceDimensions(
 }
 
 /**
+ * Return context dimension IDs that are marked `independent: true`.
+ *
+ * Independent dimensions receive no hierarchical pooling in the Bayes
+ * model — each slice gets its own prior with no shrinkage toward the
+ * edge-level base rate (doc 14 §15A.5).
+ *
+ * Only dimensions actually in the registry (and with `independent: true`)
+ * are returned. Unknown dimensions default to pooled (independent = false).
+ */
+export async function computeIndependentDimensions(
+  graph: Graph,
+  workspace?: { repository: string; branch: string },
+): Promise<string[]> {
+  const { contextRegistry } = await import('./contextRegistry');
+
+  // Collect context keys from the same two sources as computeMeceDimensions
+  const allKeys = new Set<string>();
+
+  const pinnedDsl = graph.dataInterestsDSL;
+  if (pinnedDsl && typeof pinnedDsl === 'string' && pinnedDsl.trim()) {
+    try {
+      const { parseConstraints } = await import('../lib/queryDSL');
+      const { extractContextKeysFromConstraints } = await import('./dataOperations/querySignature');
+      const { explodeDSL } = await import('../lib/dslExplosion');
+      const slices = await explodeDSL(pinnedDsl);
+      for (const slice of slices) {
+        try {
+          const parsed = parseConstraints(slice);
+          for (const key of extractContextKeysFromConstraints(parsed)) {
+            allKeys.add(key);
+          }
+        } catch { /* ignore */ }
+      }
+    } catch { /* ignore */ }
+  }
+
+  for (const key of contextRegistry.getCachedIds(workspace ? { workspace } : undefined)) {
+    allKeys.add(key);
+  }
+
+  if (allKeys.size === 0) return [];
+
+  try {
+    await contextRegistry.ensureContextsCached(
+      Array.from(allKeys),
+      workspace ? { workspace } : undefined,
+    );
+  } catch {
+    // best-effort
+  }
+
+  const independentDims: string[] = [];
+  for (const key of Array.from(allKeys).sort()) {
+    const ctx = await contextRegistry.getContext(key, workspace ? { workspace } : undefined);
+    if (!ctx) continue;
+    if (ctx.independent === true) {
+      independentDims.push(key);
+    }
+  }
+
+  return independentDims;
+}
+
+/**
  * Filter candidate regimes per edge to match a scenario's context dimensions.
  *
  * Per doc 30 §4.1: "For a query targeting a specific dimension, the FE

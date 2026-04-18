@@ -185,7 +185,7 @@ class TestLatencyWebhookDict:
         d = s.to_webhook_dict()
         expected_keys = {
             # Base
-            "mu_mean", "mu_sd", "sigma_mean", "sigma_sd",
+            "mu_mean", "mu_sd", "mu_sd_epist", "sigma_mean", "sigma_sd",
             "onset_delta_days", "hdi_t95_lower", "hdi_t95_upper",
             "hdi_level", "ess", "rhat", "provenance",
             # Phase D.O onset
@@ -194,7 +194,7 @@ class TestLatencyWebhookDict:
             # Path-level
             "path_onset_delta_days", "path_onset_sd",
             "path_onset_hdi_lower", "path_onset_hdi_upper",
-            "path_mu_mean", "path_mu_sd",
+            "path_mu_mean", "path_mu_sd", "path_mu_sd_epist",
             "path_sigma_mean", "path_sigma_sd",
             "path_hdi_t95_lower", "path_hdi_t95_upper",
             "path_provenance",

@@ -1,0 +1,107 @@
+# Ground truth for synth-context-independent (I1 — single independent dimension, solo edge)
+#
+# Anchor → Target
+# One edge, one context dimension (onboarding-variant) marked independent: true.
+# Slices represent structurally different journeys with deliberately
+# wide-apart conversion rates that would be over-shrunk under pooling.
+#
+# flow_a: high traffic (50%), high p (0.35)
+# flow_b: medium traffic (35%), low p (0.08)
+# flow_c: low traffic (15%), very high p (0.55)
+#
+# The key test: flow_c (small n, high p) must NOT shrink toward the
+# weighted mean (~0.24). Under pooling with HalfNormal(0.5) prior on
+# tau, flow_c would be pulled toward p_base. Under independent priors,
+# its posterior should sit near 0.55 with wider uncertainty reflecting
+# its small sample size — but not biased toward the mean.
+#
+# Recovery targets:
+#   - Per-slice posterior HDI contains true p for all slices
+#   - flow_c posterior mean within ±0.08 of 0.55 (not dragged to ~0.3)
+#   - p_base HDI contains weighted aggregate (~0.24)
+#   - p_base posterior is prior-dominated (wide) since no aggregate
+#     data constrains it directly and slices are not hierarchically linked
+#   - No tau_slice emitted for this dimension
+#
+# See doc 14 §15A.5 "independent context flag"
+
+simulation:
+  mean_daily_traffic: 500
+  n_days: 90
+  user_kappa: 100
+  failure_rate: 0.05
+  drift_sigma: 0.0
+  seed: 50
+  expected_sample_seconds: 1800
+
+emit_context_slices: true
+
+context_dimensions:
+  - id: synth-onboarding-variant
+    mece: true
+    independent: true
+    values:
+      - id: flow_a
+        label: Flow A
+        weight: 0.50
+        sources:
+          amplitude:
+            field: onboarding_flow
+            filter: onboarding_flow == 'flow_a'
+        edges:
+          synth-ind1-anchor-to-target:
+            p_mult: 1.46    # 0.24 * 1.46 ≈ 0.35
+      - id: flow_b
+        label: Flow B
+        weight: 0.35
+        sources:
+          amplitude:
+            field: onboarding_flow
+            filter: onboarding_flow == 'flow_b'
+        edges:
+          synth-ind1-anchor-to-target:
+            p_mult: 0.33    # 0.24 * 0.33 ≈ 0.08
+      - id: flow_c
+        label: Flow C
+        weight: 0.15
+        sources:
+          amplitude:
+            field: onboarding_flow
+            filter: onboarding_flow == 'flow_c'
+        edges:
+          synth-ind1-anchor-to-target:
+            p_mult: 2.29    # 0.24 * 2.29 ≈ 0.55
+
+edges:
+  synth-ind1-anchor-to-target:
+    from: anchor
+    to: target
+    p: 0.24
+    onset: 1.0
+    mu: 1.5
+    sigma: 0.5
+
+nodes:
+  anchor:
+    start: true
+    type: entry
+    label: Anchor
+    event_id: synth-ind1-anchor
+  target:
+    type: event
+    label: Target
+    event_id: synth-ind1-target
+
+graph:
+  name: synth-context-independent
+  description: "I1: single independent dimension (onboarding-variant), solo edge. Tests no-pooling with wide-apart slice rates."
+
+testing:
+  thresholds:
+    p_z: 2.5
+    mu_z: 2.5
+    sigma_z: 3.0
+    onset_z: 3.0
+  per_slice_thresholds:
+    p_slice_z: 3.5
+    weight_z: 3.0

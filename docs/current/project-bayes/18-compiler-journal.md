@@ -8,6 +8,96 @@ Entries are reverse-chronological (newest first).
 
 ---
 
+## 18-Apr-26 (update 13): Full regression results, onset bias, and regression tooling overhaul
+
+### Regression infrastructure (doc 44)
+
+Built config-driven regression plan runner (`regression_plans.py`)
+with JSON plan files, variant support for A/B model comparison,
+and structured JSON output (`results_schema.py`). Results include
+per-parameter bias profiles, typed/queryable failure dicts, audit
+data, and experimental design metadata (topology, sparsity, context
+lifecycle) for cartesian analysis.
+
+Truth files migrated to `bayes/truth/` as canonical source in the
+dagnet repo. Discovery scans there first, falls back to data repo.
+A fresh deployment can run regressions from truth files alone.
+
+Added `active_from_day` / `active_to_day` on context dimension
+values in truth YAMLs for structured treatment lifecycle scenarios
+(treatment A throughout, B withdrawn at day 65, C introduced at
+day 33). Population simulation adjusts weights dynamically;
+row emission gated per value per day.
+
+### Defects found and fixed
+
+Seven compiler defects identified and fixed during this session:
+
+1. Per-slice onset=0 suppression in `param_recovery.py` — reporting bug.
+2. Multi-dimension regime selection in `snapshot_regime_selection.py` —
+   orthogonal context dimensions treated as competing regimes.
+   Extracted `select_regime_rows_multidim` which groups by
+   `context_keys` and runs selection per dimension independently.
+3. Per-slice `kappa_lat` missing in batched trajectory path —
+   `_emit_batched_window_trajectories` now creates
+   `kappa_lat_slice_vec` with BetaBinomial intervals.
+4. `is_exhaustive` coverage heuristic in `evidence.py` — changed
+   from `coverage > 0.85` to strict emptiness check.
+5. Upstream `latency_vars` dropped in per-slice emissions — now
+   copies `latency_vars` and overrides only the current edge.
+6. Phase 2 Case A overwriting per-slice `p_override` — guarded
+   with `p_override is None`.
+7. Branch group Section 6 first-sibling template — now iterates
+   union of all siblings' slice keys.
+
+### Full regression results (18-Apr-26, 28 graphs, 3×1000)
+
+13 passed (46%), 15 failed. Three distinct failure categories:
+
+**Onset positive bias** — the primary model quality concern. 14 of
+19 z-score failures are onset. Mean bias +0.09 days, 19/20 graphs
+positive. Worse on edges with large true onset (>2 days). Edges with
+onset < 1.0 generally pass. The bias is systematic, not stochastic —
+well-converged models (rhat < 1.01, ESS > 2000) still show it.
+
+Hypothesis: the softplus approximation `effective_age = softplus(k *
+(age - onset)) / k` introduces a positive bias when onset is large
+relative to observation ages. The softplus smooths the onset
+threshold, but the asymmetry (positive mass below onset, no negative
+mass above) means the MLE onset is systematically higher than truth.
+Alternatively, the onset prior (Normal with 30% relative uncertainty)
+may be too tight for edges where the onset-mu-sigma ridge is steep.
+
+**ACTION REQUIRED**: investigate onset bias on long-latency edges.
+Candidate diagnostics: (a) plot onset posterior vs truth for all
+edges, coloured by true onset value; (b) compare softplus sharpness
+`k` sensitivity; (c) try wider onset prior (50% relative uncertainty).
+
+**Convergence on contexted graphs** — pass rate: bare 77%, contexted
+20%. Large contexted graphs (lattice-context: 9 edges × 3 slices,
+rhat=1.15, ESS=14) need either more draws or model simplification.
+
+**synth-mirror-4step-slow** — structural identifiability failure on
+a deep chain with large latency. mu underestimated by 1.3-1.9 days
+with good convergence (rhat=1.004, ESS=3059). The model converges
+to the wrong answer. Likely a likelihood surface issue where latency
+parameters on sequential edges are weakly identified when observation
+windows are short relative to cumulative path latency.
+
+**Sigma universal positive bias** — +0.052 mean, 24/25 graphs
+positive, max z=16.0. Known property of finite-interval CDF
+approximation. Not actionable without changing the interval
+decomposition.
+
+### Sparsity sweep infrastructure
+
+Generated 18 truth YAMLs via `generate_sparsity_sweep.py`: 3
+topologies × (4 random degradation levels + 2 lifecycle configs).
+Three plan files target the matrix. Ready to run but blocked on
+truth file activation (copy to data repo + bootstrap).
+
+---
+
 ## 16-Apr-26 (update 12): Orthogonal context hierarchies — forensic trace and aggregate fix
 
 ### Context
@@ -2213,7 +2303,7 @@ effects handled by non-centred parameterisation.
 
 Cohort slice posteriors:
 - reg-to-success cohort: α=34.8, β=1.9 (honest width)
-- Honest alpha/beta flow through to path_alpha/path_beta → surprise
+- Honest alpha/beta flow through to cohort_alpha/cohort_beta → surprise
   gauge and confidence bands
 
 **2×2 grid status (final)**:

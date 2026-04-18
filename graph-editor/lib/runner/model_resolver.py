@@ -40,12 +40,15 @@ class ResolvedModelParams:
     This is the output of the promoted model resolver. Consumers read
     from this rather than fishing through raw edge.p fields.
     """
-    # Probability
+    # Probability — epistemic (posterior on the true rate, doc 49)
     p_mean: float = 0.0
     p_sd: float = 0.0
-    # Posterior alpha/beta (for MC consumers)
     alpha: float = 0.0
     beta: float = 0.0
+    # Probability — predictive (kappa-inflated, doc 49). Falls back to
+    # epistemic when kappa absent (identical in that case).
+    alpha_pred: float = 0.0
+    beta_pred: float = 0.0
 
     # Latency — edge-level (always populated)
     edge_latency: ResolvedLatency = field(default_factory=ResolvedLatency)
@@ -149,7 +152,7 @@ def resolve_model_params(
         scope: 'edge' (window-mode, edge-level latency) or
                'path' (cohort-mode, prefer path-level latency).
         temporal_mode: 'window' or 'cohort'. Affects probability
-            resolution (prefer path_alpha/path_beta in cohort mode).
+            resolution (prefer cohort_alpha/cohort_beta in cohort mode).
         graph_preference: graph-level model_source_preference (overrides
             edge-level when set). Matches TS applyPromotion behaviour.
 
@@ -286,7 +289,7 @@ def resolve_model_params(
             )
 
     # ── Probability ────────────────────────────────────────────────
-    # In cohort mode, prefer path_alpha/path_beta — these are the
+    # In cohort mode, prefer cohort_alpha/cohort_beta — these are the
     # posterior on this edge's rate estimated from cohort-mode evidence
     # (anchor-anchored, path latency). In window mode, use alpha/beta
     # (fitted from window-mode evidence). Both target the same rate
@@ -297,11 +300,11 @@ def resolve_model_params(
 
     # Cohort mode: prefer cohort-mode posterior when available
     if temporal_mode == 'cohort':
-        path_alpha = posterior_block.get('path_alpha', 0) or 0
-        path_beta = posterior_block.get('path_beta', 0) or 0
-        if path_alpha > 0 and path_beta > 0:
-            alpha = float(path_alpha)
-            beta = float(path_beta)
+        cohort_alpha = posterior_block.get('cohort_alpha', 0) or 0
+        cohort_beta = posterior_block.get('cohort_beta', 0) or 0
+        if cohort_alpha > 0 and cohort_beta > 0:
+            alpha = float(cohort_alpha)
+            beta = float(cohort_beta)
             p_mean = alpha / (alpha + beta)
 
     # Fall back to edge-level posterior
@@ -348,6 +351,24 @@ def resolve_model_params(
             alpha = _p * _KAPPA_FALLBACK
             beta = (1.0 - _p) * _KAPPA_FALLBACK
 
+    # Predictive alpha/beta (doc 49): prefer *_pred fields from posterior,
+    # fall back to epistemic (when kappa absent, they are identical).
+    alpha_pred = alpha
+    beta_pred = beta
+    if temporal_mode == 'cohort':
+        _cp_a = posterior_block.get('cohort_alpha_pred', 0) or 0
+        _cp_b = posterior_block.get('cohort_beta_pred', 0) or 0
+        if _cp_a > 0 and _cp_b > 0:
+            alpha_pred = float(_cp_a)
+            beta_pred = float(_cp_b)
+    if alpha_pred == alpha and beta_pred == beta:
+        # No cohort predictive or window mode — try edge-level predictive
+        _wp_a = posterior_block.get('alpha_pred', 0) or 0
+        _wp_b = posterior_block.get('beta_pred', 0) or 0
+        if _wp_a > 0 and _wp_b > 0:
+            alpha_pred = float(_wp_a)
+            beta_pred = float(_wp_b)
+
     # p_sd from alpha/beta or from model_vars
     p_sd = 0.0
     if alpha > 0 and beta > 0:
@@ -374,6 +395,8 @@ def resolve_model_params(
         p_sd=p_sd,
         alpha=alpha,
         beta=beta,
+        alpha_pred=alpha_pred,
+        beta_pred=beta_pred,
         edge_latency=edge_latency,
         path_latency=path_latency,
         source=promoted_source or '',

@@ -1,10 +1,16 @@
 # Project Bayes — Document Index
 
 **Last updated**: 18-Apr-26
-**Verified against codebase**: 16-Apr-26
+**Verified against codebase**: 18-Apr-26
 
 For sequencing, priorities, and current status snapshot, see
 [programme.md](programme.md).
+
+**Single curated list of open work**: [programme.md §Open items (curated)](programme.md#open-items-curated).
+Every doc below may contain stale claims; the curated list in programme.md
+is the source of truth for what is actually open, verified against live
+code on 18-Apr-26. Individual doc status columns are kept for navigation,
+not for sequencing.
 
 ---
 
@@ -73,6 +79,7 @@ For sequencing, priorities, and current status snapshot, see
 | 18J | [18-compiler-journal.md](18-compiler-journal.md) | **Active** | ~4400 lines, last entry 6-Apr-26. Ongoing chronological record |
 | 19S | [19-synthetic-data-playbook.md](19-synthetic-data-playbook.md) | **Reference** | Step-by-step operational guide for synth data |
 | 22 | [22-sampling-performance.md](22-sampling-performance.md) | **Research only** | No experiments run. Stack unchanged (PyTensor/nutpie) |
+| 44 | [44-synth-model-test-plan.md](44-synth-model-test-plan.md) | **Active** (18-Apr-26) | Cartesian test plan: 53 synth graphs, config-driven plans, structured JSON results, sparsity calibration. Canonical truth files in `bayes/truth/` |
 | — | [statistical-domain-summary.md](statistical-domain-summary.md) | **Reference** | Statistical foundations and domain concepts |
 
 ## Cohort maturity (subdirectory)

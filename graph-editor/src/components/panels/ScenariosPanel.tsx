@@ -44,6 +44,8 @@ import {
   ClipboardCopy
 } from 'lucide-react';
 import type { ScenarioVisibilityMode } from '../../types';
+import Tooltip from '../Tooltip';
+import GlossaryTooltip from '../GlossaryTooltip';
 import toast from 'react-hot-toast';
 import './ScenariosPanel.css';
 
@@ -924,27 +926,29 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
       {!hideHeader && (
         <div className="scenarios-header">
           <Layers size={14} strokeWidth={2} style={{ flexShrink: 0 }} />
-          <h3 className="scenarios-title">Scenarios</h3>
+          <GlossaryTooltip term="scenarios-panel"><h3 className="scenarios-title">Scenarios</h3></GlossaryTooltip>
           <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '6px' }}>
             {scenariosContext?.recolourAllScenarios && scenarios.length > 0 && (
               <RecolourTrigger onRecolourAll={(p) => scenariosContext.recolourAllScenarios(p, visibleScenarioIds)} />
             )}
-            <button
-              className="scenarios-header-btn"
-              onClick={handleCopyAllScenarioParamPacks}
-              title="Copy ALL scenario param packs as JSON to clipboard"
-            >
-              <ClipboardCopy size={14} style={copiedPulse ? { color: '#10B981' } : undefined} />
-            </button>
-            {/* Refresh All button - only shown if there are live scenarios */}
-            {hasLiveScenarios && (
+            <Tooltip content="Copy ALL scenario param packs as JSON to clipboard">
               <button
                 className="scenarios-header-btn"
-                onClick={handleRefreshAllLive}
-                title="Refresh all live scenarios"
+                onClick={handleCopyAllScenarioParamPacks}
               >
-                <RefreshCw size={14} />
+                <ClipboardCopy size={14} style={copiedPulse ? { color: '#10B981' } : undefined} />
               </button>
+            </Tooltip>
+            {/* Refresh All button - only shown if there are live scenarios */}
+            {hasLiveScenarios && (
+              <GlossaryTooltip term="refresh-live-scenario">
+                <button
+                  className="scenarios-header-btn"
+                  onClick={handleRefreshAllLive}
+                >
+                  <RefreshCw size={14} />
+                </button>
+              </GlossaryTooltip>
             )}
           </div>
         </div>
@@ -1023,16 +1027,17 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
             className="current-whatif-button chip"
             style={{ fontWeight: whatIfConditionCount > 0 ? '600' : 'normal', display: 'inline-flex', alignItems: 'center', gap: '6px' }}
           >
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                handleOpenWhatIfPanel();
-              }}
-              title="Open What-If panel"
-              style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', display: 'flex', alignItems: 'center' }}
-            >
-              + What if{whatIfConditionCount > 0 && ` (${whatIfConditionCount})`}
-            </button>
+            <GlossaryTooltip term="what-if">
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleOpenWhatIfPanel();
+                }}
+                style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', display: 'flex', alignItems: 'center' }}
+              >
+                + What if{whatIfConditionCount > 0 && ` (${whatIfConditionCount})`}
+              </button>
+            </GlossaryTooltip>
             {whatIfConditionCount > 0 && (
               <button
                 className="tab-close-btn"
@@ -1084,28 +1089,30 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
                 </button>
               </div>
 
-              <button
-                className="scenarios-control-btn scenarios-control-btn-flatten"
-                onClick={handleFlatten}
-                title="Copy Current to Base and remove all scenario overlays"
-                disabled={scenarios.length === 0}
-                style={{ opacity: scenarios.length === 0 ? 0.5 : 1 }}
-              >
-                <ArrowDownToLine size={14} />
-                <span>Flatten</span>
-              </button>
+              <GlossaryTooltip term="flatten">
+                <button
+                  className="scenarios-control-btn scenarios-control-btn-flatten"
+                  onClick={handleFlatten}
+                  disabled={scenarios.length === 0}
+                  style={{ opacity: scenarios.length === 0 ? 0.5 : 1 }}
+                >
+                  <ArrowDownToLine size={14} />
+                  <span>Flatten</span>
+                </button>
+              </GlossaryTooltip>
 
               {/* To Base button - pushes current DSL to base and regenerates all live scenarios */}
-              <button
-                className="scenarios-control-btn scenarios-control-btn-flatten"
-                onClick={handlePutToBase}
-                title="Push current query DSL to Base and regenerate all live scenarios"
-                disabled={!canPutToBase}
-                style={{ opacity: canPutToBase ? 1 : 0.5 }}
-              >
-                <ArrowDownFromLine size={14} />
-                <span>To Base</span>
-              </button>
+              <GlossaryTooltip term="to-base">
+                <button
+                  className="scenarios-control-btn scenarios-control-btn-flatten"
+                  onClick={handlePutToBase}
+                  disabled={!canPutToBase}
+                  style={{ opacity: canPutToBase ? 1 : 0.5 }}
+                >
+                  <ArrowDownFromLine size={14} />
+                  <span>To Base</span>
+                </button>
+              </GlossaryTooltip>
             </div>
           </>
         )}

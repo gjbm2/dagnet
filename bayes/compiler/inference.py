@@ -1023,9 +1023,12 @@ def summarise_posteriors(
                 f"WARN {edge_id[:8]}…: rhat={edge_rhat:.3f} ess={edge_ess:.0f}"
             )
 
-        # Doc 21: extract p_window and p_cohort separately for per-slice posteriors.
-        # When kappa exists, use posterior predictive samples so alpha/beta
-        # reflect between-day variation, not just estimation precision.
+        # Doc 21 + doc 49: extract p_window and p_cohort per-slice posteriors.
+        # Produce BOTH epistemic (raw trace moment-match) and predictive
+        # (kappa-inflated) alpha/beta. Epistemic = uncertainty about the
+        # true rate. Predictive = expected observation range.
+
+        # Epistemic (bare fields):
         window_alpha_val = None
         window_beta_val = None
         window_hdi_lo = None
@@ -1034,6 +1037,15 @@ def summarise_posteriors(
         cohort_beta_val = None
         cohort_hdi_lo = None
         cohort_hdi_hi = None
+        # Predictive (*_pred fields, None when kappa absent):
+        window_alpha_pred = None
+        window_beta_pred = None
+        window_hdi_lo_pred = None
+        window_hdi_hi_pred = None
+        cohort_alpha_pred = None
+        cohort_beta_pred = None
+        cohort_hdi_lo_pred = None
+        cohort_hdi_hi_pred = None
 
         safe_eid = _safe_var_name(edge_id)
         p_window_name = f"p_window_{safe_eid}"
@@ -1042,22 +1054,23 @@ def summarise_posteriors(
         kappa_name_local = f"kappa_{safe_eid}"
         has_kappa = kappa_name_local in trace.posterior
 
-        def _predictive_alpha_beta(p_samples, kappa_samples=None):
-            """Generate predictive samples using kappa if available; else moment-match."""
-            if kappa_samples is not None:
-                n_use = min(len(p_samples), len(kappa_samples))
-                a_s = np.maximum(p_samples[:n_use] * kappa_samples[:n_use], 0.01)
-                b_s = np.maximum((1.0 - p_samples[:n_use]) * kappa_samples[:n_use], 0.01)
-                pred = np.random.beta(a_s, b_s)
-                ab = _fit_beta_to_samples(pred)
-                hdi_vals = az.hdi(pred, hdi_prob=HDI_PROB)
-                return ab[0], ab[1], float(hdi_vals[0]), float(hdi_vals[1])
-            else:
-                ab = _fit_beta_to_samples(p_samples)
-                hdi_vals = az.hdi(p_samples, hdi_prob=HDI_PROB)
-                return ab[0], ab[1], float(hdi_vals[0]), float(hdi_vals[1])
+        def _epistemic_alpha_beta(p_samples):
+            """Moment-match raw trace samples — epistemic posterior."""
+            ab = _fit_beta_to_samples(p_samples)
+            hdi_vals = az.hdi(p_samples, hdi_prob=HDI_PROB)
+            return ab[0], ab[1], float(hdi_vals[0]), float(hdi_vals[1])
 
-        # Resolve kappa samples for window predictive.
+        def _predictive_alpha_beta(p_samples, kappa_samples):
+            """Generate predictive samples via kappa inflation."""
+            n_use = min(len(p_samples), len(kappa_samples))
+            a_s = np.maximum(p_samples[:n_use] * kappa_samples[:n_use], 0.01)
+            b_s = np.maximum((1.0 - p_samples[:n_use]) * kappa_samples[:n_use], 0.01)
+            pred = np.random.beta(a_s, b_s)
+            ab = _fit_beta_to_samples(pred)
+            hdi_vals = az.hdi(pred, hdi_prob=HDI_PROB)
+            return ab[0], ab[1], float(hdi_vals[0]), float(hdi_vals[1])
+
+        # Resolve kappa samples for predictive.
         kp_samples = None
         if has_kappa:
             kp_samples = trace.posterior[kappa_name_local].values.flatten()
@@ -1071,14 +1084,19 @@ def summarise_posteriors(
 
         if w_name in trace.posterior:
             w_samples = trace.posterior[w_name].values.flatten()
-            window_alpha_val, window_beta_val, window_hdi_lo, window_hdi_hi = _predictive_alpha_beta(
-                w_samples, kappa_samples=kp_samples)
+            # Epistemic: always produced from raw trace
+            window_alpha_val, window_beta_val, window_hdi_lo, window_hdi_hi = _epistemic_alpha_beta(w_samples)
+            # Predictive: only when kappa exists
+            if kp_samples is not None:
+                window_alpha_pred, window_beta_pred, window_hdi_lo_pred, window_hdi_hi_pred = _predictive_alpha_beta(
+                    w_samples, kappa_samples=kp_samples)
 
         if p_cohort_name in trace.posterior:
             c_samples = trace.posterior[p_cohort_name].values.flatten()
-            # Empirical kappa from Williams method on cohort trajectory
-            # residuals. Measures actual between-cohort variation from
-            # data, not proxied from window kappa. See journal 28-Mar-26.
+            # Epistemic: always produced from raw trace
+            cohort_alpha_val, cohort_beta_val, cohort_hdi_lo, cohort_hdi_hi = _epistemic_alpha_beta(c_samples)
+            # Predictive: empirical kappa from Williams method on cohort
+            # trajectory residuals. See journal 28-Mar-26.
             cohort_kappa_empirical = _estimate_cohort_kappa(
                 ev, et, topology, float(np.mean(c_samples)), diagnostics,
                 phase2_frozen=_all_post_latency,
@@ -1086,14 +1104,9 @@ def summarise_posteriors(
                 today_date=_today,
             )
             if cohort_kappa_empirical is not None:
-                # Convert scalar kappa to array matching p_cohort samples
                 kappa_arr = np.full_like(c_samples, cohort_kappa_empirical)
-                cohort_alpha_val, cohort_beta_val, cohort_hdi_lo, cohort_hdi_hi = _predictive_alpha_beta(
+                cohort_alpha_pred, cohort_beta_pred, cohort_hdi_lo_pred, cohort_hdi_hi_pred = _predictive_alpha_beta(
                     c_samples, kappa_samples=kappa_arr)
-            else:
-                # Insufficient cohort data — fall back to moment-matching
-                cohort_alpha_val, cohort_beta_val, cohort_hdi_lo, cohort_hdi_hi = _predictive_alpha_beta(
-                    c_samples)
 
         # Derive mean/stdev from alpha/beta for consistency.
         # When predictive (hierarchical Beta), alpha/beta encode the
@@ -1120,10 +1133,18 @@ def summarise_posteriors(
             window_beta=window_beta_val,
             window_hdi_lower=window_hdi_lo,
             window_hdi_upper=window_hdi_hi,
+            window_alpha_pred=window_alpha_pred,
+            window_beta_pred=window_beta_pred,
+            window_hdi_lower_pred=window_hdi_lo_pred,
+            window_hdi_upper_pred=window_hdi_hi_pred,
             cohort_alpha=cohort_alpha_val,
             cohort_beta=cohort_beta_val,
             cohort_hdi_lower=cohort_hdi_lo,
             cohort_hdi_upper=cohort_hdi_hi,
+            cohort_alpha_pred=cohort_alpha_pred,
+            cohort_beta_pred=cohort_beta_pred,
+            cohort_hdi_lower_pred=cohort_hdi_lo_pred,
+            cohort_hdi_upper_pred=cohort_hdi_hi_pred,
         ))
 
         # Phase C: extract per-slice posteriors from trace (doc 14 §5.2)
@@ -1157,10 +1178,20 @@ def summarise_posteriors(
                             continue
                         _ps_samples = trace.posterior[_ps_scalar].values.flatten()
 
+                    # Epistemic: always from raw trace (doc 49 §A.6.1)
                     _ps_mean = float(np.mean(_ps_samples))
                     _ps_std = float(np.std(_ps_samples))
                     _ps_hdi = az.hdi(_ps_samples, hdi_prob=HDI_PROB)
                     _ps_ab = _fit_beta_to_samples(_ps_samples)
+
+                    _slice_entry = {
+                        "mean": _ps_mean,
+                        "stdev": _ps_std,
+                        "alpha": _ps_ab[0],
+                        "beta": _ps_ab[1],
+                        "hdi_lower": float(_ps_hdi[0]),
+                        "hdi_upper": float(_ps_hdi[1]),
+                    }
 
                     # --- kappa samples: vector path or scalar fallback ---
                     _ks_samples = None
@@ -1171,30 +1202,15 @@ def summarise_posteriors(
                         if _ks_scalar in trace.posterior:
                             _ks_samples = trace.posterior[_ks_scalar].values.flatten()
 
+                    # Predictive: kappa-inflated (doc 49 §A.6.1)
                     if _ks_samples is not None:
-                        # Predictive distribution: Beta(p*kappa, (1-p)*kappa)
                         _n_use = min(len(_ps_samples), len(_ks_samples))
-                        _pred_alpha, _pred_beta, _pred_hdi_lo, _pred_hdi_hi = _predictive_alpha_beta(
+                        _pred_a, _pred_b, _pred_hdi_lo, _pred_hdi_hi = _predictive_alpha_beta(
                             _ps_samples[:_n_use], kappa_samples=_ks_samples[:_n_use])
-                        _pred_mean = float(_pred_alpha / (_pred_alpha + _pred_beta))
-                        _pred_std = float(np.sqrt(
-                            _pred_alpha * _pred_beta /
-                            ((_pred_alpha + _pred_beta) ** 2 * (_pred_alpha + _pred_beta + 1))
-                        ))
-                    else:
-                        _pred_alpha, _pred_beta = _ps_ab
-                        _pred_hdi_lo, _pred_hdi_hi = float(_ps_hdi[0]), float(_ps_hdi[1])
-                        _pred_mean, _pred_std = _ps_mean, _ps_std
-
-                    _slice_entry = {
-                        "mean": _pred_mean,
-                        "stdev": _pred_std,
-                        "alpha": _pred_alpha,
-                        "beta": _pred_beta,
-                        "hdi_lower": _pred_hdi_lo,
-                        "hdi_upper": _pred_hdi_hi,
-                    }
-                    if _ks_samples is not None:
+                        _slice_entry["alpha_pred"] = _pred_a
+                        _slice_entry["beta_pred"] = _pred_b
+                        _slice_entry["hdi_lower_pred"] = _pred_hdi_lo
+                        _slice_entry["hdi_upper_pred"] = _pred_hdi_hi
                         _slice_entry["kappa_mean"] = float(np.mean(_ks_samples))
                         _slice_entry["kappa_sd"] = float(np.std(_ks_samples))
 
@@ -1264,8 +1280,8 @@ def summarise_posteriors(
                             _lat_str += f" onset={_slice_entry['onset_mean']:.2f}±{_slice_entry['onset_sd']:.2f}"
                     diagnostics.append(
                         f"  p_slice {edge_id[:8]}… {_ctx_key}: "
-                        f"{_pred_mean:.4f}±{_pred_std:.4f} "
-                        f"HDI=[{_pred_hdi_lo:.4f}, {_pred_hdi_hi:.4f}]"
+                        f"{_slice_entry['mean']:.4f}±{_slice_entry['stdev']:.4f} "
+                        f"HDI=[{_slice_entry['hdi_lower']:.4f}, {_slice_entry['hdi_upper']:.4f}]"
                         f"{_kappa_str}{_lat_str}"
                     )
 
@@ -1306,6 +1322,7 @@ def summarise_posteriors(
 
                 mu_mean = float(np.mean(mu_samples))
                 mu_sd = float(np.std(mu_samples))
+                mu_sd_epist_val = mu_sd  # save epistemic value before possible kappa_lat overwrite (doc 49)
                 sigma_mean = float(np.mean(sigma_samples))
                 sigma_sd = float(np.std(sigma_samples))
 
@@ -1427,7 +1444,8 @@ def summarise_posteriors(
 
                 latency_posteriors[edge_id] = LatencyPosteriorSummary(
                     mu_mean=mu_mean,
-                    mu_sd=mu_sd,
+                    mu_sd=mu_sd,                    # predictive when kappa_lat, else epistemic
+                    mu_sd_epist=mu_sd_epist_val,    # always epistemic (doc 49 §A.6.2)
                     sigma_mean=sigma_mean,
                     sigma_sd=sigma_sd,
                     onset_delta_days=canonical_onset,
@@ -1539,9 +1557,11 @@ def summarise_posteriors(
                 t95_lower = math.exp(mu + 1.28 * sigma) + onset
                 t95_upper = math.exp(mu + 2.0 * sigma) + onset
 
+                _heuristic_mu_sd = abs(mu) * 0.03
                 latency_posteriors[edge_id] = LatencyPosteriorSummary(
                     mu_mean=mu,
-                    mu_sd=abs(mu) * 0.03,
+                    mu_sd=_heuristic_mu_sd,
+                    mu_sd_epist=_heuristic_mu_sd,  # no MCMC, both are heuristic
                     sigma_mean=sigma,
                     sigma_sd=sigma * 0.05,
                     onset_delta_days=onset,
@@ -1598,6 +1618,7 @@ def summarise_posteriors(
                     lat.path_onset_hdi_upper = path_onset_hdi_upper
                     lat.path_mu_mean = path_mu
                     lat.path_mu_sd = path_mu_sd
+                    lat.path_mu_sd_epist = path_mu_sd  # always epistemic (doc 49)
                     lat.path_sigma_mean = path_sigma
                     lat.path_sigma_sd = path_sigma_sd
                     lat.path_hdi_t95_lower = path_hdi_t95_lower

@@ -73,8 +73,8 @@ def build_span_params(
     alpha_0 = 0.0
     beta_0 = 0.0
     if not is_window:
-        _raw_a = edge_params.get('posterior_path_alpha', 0.0) or 0.0
-        _raw_b = edge_params.get('posterior_path_beta', 0.0) or 0.0
+        _raw_a = edge_params.get('posterior_cohort_alpha', 0.0) or 0.0
+        _raw_b = edge_params.get('posterior_cohort_beta', 0.0) or 0.0
     else:
         _raw_a = edge_params.get('posterior_alpha', 0.0) or 0.0
         _raw_b = edge_params.get('posterior_beta', 0.0) or 0.0

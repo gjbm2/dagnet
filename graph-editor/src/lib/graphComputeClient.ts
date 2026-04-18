@@ -932,6 +932,155 @@ export class GraphComputeClient {
   }
 
   /**
+   * Normalise conversion_rate snapshot response (doc 49 Part B).
+   *
+   * Backend returns per-scenario/per-subject blocks with:
+   *   { analysis_type: 'conversion_rate', bin_size, slice_key,
+   *     data: [{bin_start, bin_end, x, y, rate, epistemic?}], ... }
+   *
+   * Flattens into rows with scenario_id/subject_id added.
+   */
+  private normaliseSnapshotConversionRateResponse(
+    raw: any,
+    request: AnalysisRequest,
+  ): AnalysisResponse | null {
+    try {
+      if (request?.analysis_type !== 'conversion_rate') return null;
+
+      const scenarioDimensionValues: Record<string, DimensionValueMeta> = {};
+      for (const s of request.scenarios || []) {
+        if (!s?.scenario_id) continue;
+        scenarioDimensionValues[s.scenario_id] = {
+          name: s.name || s.scenario_id,
+          colour: s.colour,
+          visibility_mode: s.visibility_mode,
+        };
+      }
+
+      if (this.isSnapshotNoDataEnvelope(raw)) {
+        const emptyResult: AnalysisResult = {
+          analysis_type: 'conversion_rate',
+          analysis_name: 'Conversion Rate',
+          analysis_description: 'No snapshot data found for this query and date range',
+          metadata: { source: 'snapshot_db', empty: true },
+          semantics: {
+            dimensions: [],
+            metrics: [],
+            chart: { recommended: 'conversion_rate', alternatives: [] },
+          },
+          dimension_values: { scenario_id: scenarioDimensionValues },
+          data: [],
+        };
+        return { success: true, result: emptyResult, query_dsl: request.query_dsl };
+      }
+
+      const isConversionRateResult = (r: any): boolean =>
+        r && typeof r === 'object' && r.analysis_type === 'conversion_rate';
+
+      type Block = { scenario_id: string; subject_id: string; result: any };
+      const blocks: Block[] = [];
+
+      if (raw && Array.isArray(raw.scenarios)) {
+        for (const sc of raw.scenarios) {
+          const scenarioId = sc?.scenario_id;
+          if (!scenarioId || !Array.isArray(sc?.subjects)) continue;
+          for (const sub of sc.subjects) {
+            if (sub?.success !== true) continue;
+            blocks.push({ scenario_id: scenarioId, subject_id: sub?.subject_id || 'subject', result: sub?.result });
+          }
+        }
+      } else if (raw && Array.isArray(raw.subjects)) {
+        const scenarioId = raw.scenario_id || request?.scenarios?.[0]?.scenario_id || 'base';
+        for (const sub of raw.subjects) {
+          if (sub?.success !== true) continue;
+          blocks.push({ scenario_id: scenarioId, subject_id: sub?.subject_id || 'subject', result: sub?.result });
+        }
+      } else if (raw?.success === true && isConversionRateResult(raw?.result)) {
+        const scenarioId = raw.scenario_id || request?.scenarios?.[0]?.scenario_id || 'base';
+        const subjectId = raw.subject_id || 'subject';
+        blocks.push({ scenario_id: scenarioId, subject_id: subjectId, result: raw.result });
+      }
+
+      if (blocks.length === 0) return null;
+      if (!blocks.some(b => isConversionRateResult(b.result))) return null;
+
+      const data: Array<Record<string, any>> = [];
+      let globalDateFrom: string | null = null;
+      let globalDateTo: string | null = null;
+      let binSize: string | null = null;
+      let sliceKey: string | null = null;
+
+      for (const b of blocks) {
+        const r = b.result;
+        if (!isConversionRateResult(r)) continue;
+        if (binSize == null && r.bin_size) binSize = r.bin_size;
+        if (sliceKey == null && r.slice_key) sliceKey = r.slice_key;
+        const dateRange = r.date_range;
+        if (dateRange?.from && (!globalDateFrom || dateRange.from < globalDateFrom)) {
+          globalDateFrom = dateRange.from;
+        }
+        if (dateRange?.to && (!globalDateTo || dateRange.to > globalDateTo)) {
+          globalDateTo = dateRange.to;
+        }
+        for (const row of (r.data || [])) {
+          data.push({
+            scenario_id: b.scenario_id,
+            subject_id: b.subject_id,
+            bin_start: row.bin_start,
+            bin_end: row.bin_end,
+            x: Number(row.x ?? 0),
+            y: Number(row.y ?? 0),
+            rate: row.rate != null && Number.isFinite(Number(row.rate)) ? Number(row.rate) : null,
+            epistemic: row.epistemic ?? null,
+          });
+        }
+      }
+
+      const subjectDimValues = Object.fromEntries(
+        Array.from(new Set(data.map(d => String(d.subject_id)))).map((id, i) => [
+          id,
+          { name: humaniseSubjectId(id), order: i },
+        ])
+      );
+
+      const result: AnalysisResult = {
+        analysis_type: 'conversion_rate',
+        analysis_name: 'Conversion Rate',
+        analysis_description: 'Per-bin observed rate with Bayesian epistemic uncertainty',
+        metadata: {
+          source: 'snapshot_db',
+          date_range: { from: globalDateFrom, to: globalDateTo },
+          bin_size: binSize,
+          slice_key: sliceKey,
+        },
+        semantics: {
+          dimensions: [
+            { id: 'bin_start', name: 'Bin', type: 'time', role: 'primary' },
+            { id: 'scenario_id', name: 'Scenario', type: 'scenario', role: 'secondary' },
+            { id: 'subject_id', name: 'Subject', type: 'categorical', role: 'filter' },
+          ],
+          metrics: [
+            { id: 'rate', name: 'Conversion rate', type: 'ratio', format: 'percent', role: 'primary' },
+            { id: 'x', name: 'Cohort size', type: 'count', format: 'number', role: 'secondary' },
+            { id: 'y', name: 'Conversions', type: 'count', format: 'number', role: 'secondary' },
+          ],
+          chart: { recommended: 'conversion_rate', alternatives: ['table'] },
+        },
+        dimension_values: {
+          scenario_id: scenarioDimensionValues,
+          subject_id: subjectDimValues,
+        },
+        data,
+      };
+
+      return { success: true, result, query_dsl: request.query_dsl };
+    } catch (err) {
+      console.error('[GraphComputeClient] Conversion rate normalisation CRASHED:', err);
+      return null;
+    }
+  }
+
+  /**
    * Normalise branch_comparison snapshot response into a time-series branch split result.
    *
    * Backend shape is the same snapshot envelope as daily_conversions, but each subject
@@ -1577,6 +1726,7 @@ export class GraphComputeClient {
     const normalised =
       this.normaliseSnapshotCohortMaturityResponse(raw, request)
       ?? this.normaliseSnapshotDailyConversionsResponse(raw, request)
+      ?? this.normaliseSnapshotConversionRateResponse(raw, request)
       ?? this.normaliseSnapshotBranchComparisonResponse(raw, request)
       ?? this.normaliseSnapshotLagFitResponse(raw, request);
 
@@ -1762,6 +1912,7 @@ export class GraphComputeClient {
     const normalised =
       this.normaliseSnapshotCohortMaturityResponse(raw, request)
       ?? this.normaliseSnapshotDailyConversionsResponse(raw, request)
+      ?? this.normaliseSnapshotConversionRateResponse(raw, request)
       ?? this.normaliseSnapshotBranchComparisonResponse(raw, request)
       ?? this.normaliseSnapshotLagFitResponse(raw, request);
     const result = normalised ?? raw;
@@ -2093,7 +2244,7 @@ export interface SnapshotAnalysisRequest {
     anchor_to: string;    // ISO date
     slice_keys?: string[];
   };
-  analysis_type: 'lag_histogram' | 'daily_conversions';
+  analysis_type: 'lag_histogram' | 'daily_conversions' | 'conversion_rate';
 }
 
 export interface LagHistogramResult {

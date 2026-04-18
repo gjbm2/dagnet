@@ -30,6 +30,7 @@ from bayes.tests.synthetic import (
     build_solo_edge_with_snapshots,
     build_snapshot_with_fallback,
     build_contexted_solo_edge_with_snapshot_slices,
+    build_independent_solo_edge,
     build_two_dimension_solo_edge,
     build_staggered_two_dimension_solo_edge,
     build_conditional_p_solo_edge,
@@ -915,3 +916,103 @@ class TestConditionalPModel:
         assert "edge-a-b" in cond_vars, (
             f"edge-a-b should have conditional vars: {cond_vars}")
         assert "visited(treatment-node)" in cond_vars["edge-a-b"]
+
+
+# ---------------------------------------------------------------------------
+# Independent dimension tests (doc 14 §15A.5)
+# ---------------------------------------------------------------------------
+
+class TestIndependentDimensionBinding:
+    """Evidence binding with independent dimensions sets the flag on SliceGroup."""
+
+    def test_independent_dimension_flag_set_on_slice_group(self):
+        graph, params, snap_rows, commissioned, mece_dims, indep_dims, _ = (
+            build_independent_solo_edge(seed=70)
+        )
+        topology = analyse_topology(graph)
+        evidence = bind_snapshot_evidence(
+            topology,
+            snap_rows,
+            params,
+            today="1-Mar-25",
+            commissioned_slices=commissioned,
+            mece_dimensions=mece_dims,
+            independent_dimensions=indep_dims,
+        )
+
+        ev = evidence.edges["edge-a-b"]
+        assert ev.has_slices is True
+        sg = ev.slice_groups["onboarding-variant"]
+        assert sg.independent is True
+        assert sg.is_mece is True
+
+    def test_non_independent_dimension_defaults_to_false(self):
+        graph, params, snap_rows, commissioned, mece_dims, _ = (
+            build_contexted_solo_edge_with_snapshot_slices(seed=63)
+        )
+        topology = analyse_topology(graph)
+        evidence = bind_snapshot_evidence(
+            topology,
+            snap_rows,
+            params,
+            today="1-Mar-25",
+            commissioned_slices=commissioned,
+            mece_dimensions=mece_dims,
+        )
+
+        ev = evidence.edges["edge-a-b"]
+        sg = ev.slice_groups["channel"]
+        assert sg.independent is False
+
+
+class TestIndependentDimensionModel:
+    """Model emission with independent dimensions: no tau, direct Beta priors."""
+
+    def _build_independent_model(self):
+        graph, params, snap_rows, commissioned, mece_dims, indep_dims, _ = (
+            build_independent_solo_edge(seed=70)
+        )
+        topology = analyse_topology(graph)
+        evidence = bind_snapshot_evidence(
+            topology,
+            snap_rows,
+            params,
+            today="1-Mar-25",
+            commissioned_slices=commissioned,
+            mece_dimensions=mece_dims,
+            independent_dimensions=indep_dims,
+        )
+        model, metadata = build_model(topology, evidence)
+        return model, metadata, topology, evidence
+
+    def test_independent_model_compiles(self):
+        """Model with independent dimension should compile without error."""
+        model, _, _, _ = self._build_independent_model()
+        assert len(model.named_vars) > 0
+
+    def test_no_tau_slice_for_independent_dimension(self):
+        """Independent dimensions should NOT emit tau_slice variables."""
+        model, _, _, _ = self._build_independent_model()
+        names = set(model.named_vars.keys())
+        tau_vars = [n for n in names if "tau_slice" in n]
+        assert len(tau_vars) == 0, (
+            f"Independent dimension should have no tau_slice. "
+            f"Found: {tau_vars}")
+
+    def test_per_slice_beta_variables_exist(self):
+        """Independent slices should have per-slice p_slice Beta variables."""
+        model, _, _, _ = self._build_independent_model()
+        names = set(model.named_vars.keys())
+        p_slice_vars = [n for n in names if "p_slice_" in n]
+        assert len(p_slice_vars) >= 3, (
+            f"Expected at least 3 per-slice p variables (flow_a/b/c). "
+            f"Found: {sorted(p_slice_vars)}")
+
+    def test_p_base_still_emitted(self):
+        """p_base must be emitted even when all slices are independent."""
+        model, _, _, _ = self._build_independent_model()
+        names = set(model.named_vars.keys())
+        p_base_vars = [n for n in names if n.startswith("p_") and "slice" not in n]
+        assert len(p_base_vars) >= 1, (
+            f"p_base should still exist. "
+            f"All p vars: {sorted(n for n in names if 'p_' in n)}")

@@ -155,11 +155,20 @@ export function projectProbabilityPosterior(
 
   return {
     distribution: 'beta',
+    // Epistemic (doc 49)
     alpha: edgeSlice.alpha,
     beta: edgeSlice.beta,
     hdi_lower: edgeSlice.p_hdi_lower,
     hdi_upper: edgeSlice.p_hdi_upper,
     hdi_level: posterior.hdi_level ?? 0.9,
+    // Predictive (doc 49) — absent when kappa absent
+    ...(edgeSlice.alpha_pred != null ? {
+      alpha_pred: edgeSlice.alpha_pred,
+      beta_pred: edgeSlice.beta_pred,
+      hdi_lower_pred: edgeSlice.hdi_lower_pred,
+      hdi_upper_pred: edgeSlice.hdi_upper_pred,
+    } : {}),
+    // Quality / provenance
     ess: activeSlice.ess,
     rhat: activeSlice.rhat,
     evidence_grade: activeSlice.evidence_grade ?? 0,
@@ -169,13 +178,20 @@ export function projectProbabilityPosterior(
     divergences: activeSlice.divergences ?? 0,
     prior_tier: posterior.prior_tier ?? 'uninformative',
     surprise_z: posterior.surprise_z,
-    // Path-level from cohort() slice
+    // Cohort-mode epistemic from cohort() slice
     ...(cohortSlice?.alpha != null ? {
-      path_alpha: cohortSlice.alpha,
-      path_beta: cohortSlice.beta,
-      path_hdi_lower: cohortSlice.p_hdi_lower,
-      path_hdi_upper: cohortSlice.p_hdi_upper,
-      path_provenance: cohortSlice.provenance ?? 'bayesian',
+      cohort_alpha: cohortSlice.alpha,
+      cohort_beta: cohortSlice.beta,
+      cohort_hdi_lower: cohortSlice.p_hdi_lower,
+      cohort_hdi_upper: cohortSlice.p_hdi_upper,
+      cohort_provenance: cohortSlice.provenance ?? 'bayesian',
+    } : {}),
+    // Cohort-mode predictive (doc 49)
+    ...(cohortSlice?.alpha_pred != null ? {
+      cohort_alpha_pred: cohortSlice.alpha_pred,
+      cohort_beta_pred: cohortSlice.beta_pred,
+      cohort_hdi_lower_pred: cohortSlice.hdi_lower_pred,
+      cohort_hdi_upper_pred: cohortSlice.hdi_upper_pred,
     } : {}),
   };
 }
@@ -213,6 +229,7 @@ export function projectLatencyPosterior(
     onset_delta_days: edgeSlice.onset_mean ?? 0,
     mu_mean: edgeSlice.mu_mean,
     mu_sd: edgeSlice.mu_sd,
+    ...(edgeSlice.mu_sd_epist != null ? { mu_sd_epist: edgeSlice.mu_sd_epist } : {}),
     sigma_mean: edgeSlice.sigma_mean,
     sigma_sd: edgeSlice.sigma_sd,
     hdi_t95_lower: edgeSlice.hdi_t95_lower,
@@ -231,6 +248,7 @@ export function projectLatencyPosterior(
       path_onset_sd: cohortSlice.onset_sd,
       path_mu_mean: cohortSlice.mu_mean,
       path_mu_sd: cohortSlice.mu_sd,
+      ...(cohortSlice.mu_sd_epist != null ? { path_mu_sd_epist: cohortSlice.mu_sd_epist } : {}),
       path_sigma_mean: cohortSlice.sigma_mean,
       path_sigma_sd: cohortSlice.sigma_sd,
       ...(cohortSlice.hdi_t95_lower != null ? { path_hdi_t95_lower: cohortSlice.hdi_t95_lower, path_hdi_t95_upper: cohortSlice.hdi_t95_upper } : {}),

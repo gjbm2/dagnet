@@ -236,19 +236,22 @@ class TestChainSurvival:
         """The observed data arrays in the model must reflect the volume
         of data we generated (30 days × 2 edges). If data was silently
         dropped, the arrays are smaller than expected.
+
+        No-latency window data is emitted as recency-weighted pm.Potential
+        terms (one per edge), with the k_arr embedded as a TensorConstant
+        in the Potential's expression graph rather than exposed via
+        observed_RVs. We count both observed-RV data and Potential-embedded
+        constants so a future silent drop would still shrink the count.
         """
         from bayes.compiler.model import build_model
-        import numpy as np
+        from pytensor.graph.traversal import ancestors
+        from pytensor.tensor.variable import TensorConstant
         t, r, p = setup
         ev = bind_snapshot_evidence(t, r, p, today="1-Mar-25")
         m, _ = build_model(t, ev)
 
-        # Collect all observed data arrays from the model
-        import numpy as np
         total_observed_points = 0
         for rv in m.observed_RVs:
-            # PyMC stores observed data in the model's observed_RVs.
-            # Extract the constant data via eval or rvs_to_values.
             try:
                 obs_val = m.rvs_to_values[rv].data
                 if hasattr(obs_val, 'shape'):
@@ -259,6 +262,18 @@ class TestChainSurvival:
                     total_observed_points += 1
             except (KeyError, AttributeError):
                 total_observed_points += 1
+
+        # Each obs_* Potential embeds several aligned 1D constants
+        # (n_arr, k_arr, weights_arr, compl_arr). They share length, so
+        # take the max once per Potential to avoid quadruple-counting.
+        for pot in m.potentials:
+            if not pot.name or not pot.name.startswith("obs_"):
+                continue
+            max_len = 0
+            for node in ancestors([pot]):
+                if isinstance(node, TensorConstant) and node.ndim >= 1:
+                    max_len = max(max_len, int(node.data.size))
+            total_observed_points += max_len
 
         # We generated 30 anchor days per edge, 2 edges. After dedup and
         # trajectory-to-daily conversion, each edge should have ~30 daily

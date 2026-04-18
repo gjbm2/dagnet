@@ -129,9 +129,9 @@ class TestResolverParity:
             assert result.latency is result.edge_latency
 
     def test_cohort_mode_uses_cohort_posterior(self):
-        """Cohort-mode resolver uses cohort-mode posterior (path_alpha/path_beta).
+        """Cohort-mode resolver uses cohort-mode posterior (cohort_alpha/cohort_beta).
 
-        path_alpha/path_beta is the posterior on this edge's rate (y/x)
+        cohort_alpha/cohort_beta is the posterior on this edge's rate (y/x)
         estimated from anchor-anchored evidence with path latency. The
         name is confusing — "path" refers to the latency model used
         during fitting, not to a compound path probability.
@@ -141,18 +141,18 @@ class TestResolverParity:
         from runner.model_resolver import resolve_model_params
 
         post = edge.get('p', {}).get('posterior', {})
-        path_alpha = post.get('path_alpha', 0) or 0
-        path_beta = post.get('path_beta', 0) or 0
+        cohort_alpha = post.get('cohort_alpha', 0) or 0
+        cohort_beta = post.get('cohort_beta', 0) or 0
 
         result = resolve_model_params(edge, scope='path', temporal_mode='cohort')
         assert result is not None
 
-        if path_alpha > 0 and path_beta > 0:
-            expected_p = path_alpha / (path_alpha + path_beta)
+        if cohort_alpha > 0 and cohort_beta > 0:
+            expected_p = cohort_alpha / (cohort_alpha + cohort_beta)
             assert abs(result.p_mean - expected_p) < 1e-6, \
                 f"Cohort p_mean should use cohort posterior: {result.p_mean} vs {expected_p}"
-            assert abs(result.alpha - path_alpha) < 1e-6
-            assert abs(result.beta - path_beta) < 1e-6
+            assert abs(result.alpha - cohort_alpha) < 1e-6
+            assert abs(result.beta - cohort_beta) < 1e-6
         else:
             # No cohort posterior — falls back to edge-level
             edge_alpha = post.get('alpha', 0) or 0
@@ -372,7 +372,7 @@ class TestResolverNonBayes:
                 },
                 'posterior': {
                     'alpha': 10, 'beta': 20,
-                    'path_alpha': 8, 'path_beta': 25,
+                    'cohort_alpha': 8, 'cohort_beta': 25,
                 },
                 'model_vars': [{
                     'source': 'analytic',
@@ -389,7 +389,7 @@ class TestResolverNonBayes:
         assert abs(result.path_latency.mu - 3.2) < 1e-6
         assert abs(result.path_latency.sigma - 0.7) < 1e-6
         assert result.latency is result.path_latency
-        # Cohort mode uses cohort-mode posterior (path_alpha/path_beta):
+        # Cohort mode uses cohort-mode posterior (cohort_alpha/cohort_beta):
         # same edge rate (y/x), but estimated from anchor-anchored
         # evidence with path latency. "path" in the name refers to the
         # latency model used during fitting, not a compound path product.

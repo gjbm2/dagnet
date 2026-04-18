@@ -230,7 +230,7 @@ def read_edge_cohort_params(
     lacks required parameters.
 
     Prefers posterior values over flat fields.  For probability, prefers
-    path_alpha/path_beta (cohort-level) over alpha/beta (window-level).
+    cohort_alpha/cohort_beta (cohort-level) over alpha/beta (window-level).
     """
     p_obj = edge.get('p') or {}
     latency = p_obj.get('latency') or {}
@@ -270,16 +270,16 @@ def read_edge_cohort_params(
         return None
 
     # Probability: prefer cohort posterior, then window posterior, then forecast.
-    path_alpha = prob_post.get('path_alpha')
-    path_beta = prob_post.get('path_beta')
+    cohort_alpha = prob_post.get('cohort_alpha')
+    cohort_beta = prob_post.get('cohort_beta')
     post_alpha = prob_post.get('alpha')
     post_beta = prob_post.get('beta')
     forecast = (p_obj.get('forecast') or {}).get('mean')
 
     prob: Optional[float] = None
-    if (isinstance(path_alpha, (int, float)) and isinstance(path_beta, (int, float))
-            and path_alpha > 0 and path_beta > 0):
-        prob = float(path_alpha) / (float(path_alpha) + float(path_beta))
+    if (isinstance(cohort_alpha, (int, float)) and isinstance(cohort_beta, (int, float))
+            and cohort_alpha > 0 and cohort_beta > 0):
+        prob = float(cohort_alpha) / (float(cohort_alpha) + float(cohort_beta))
     elif (isinstance(post_alpha, (int, float)) and isinstance(post_beta, (int, float))
             and post_alpha > 0 and post_beta > 0):
         prob = float(post_alpha) / (float(post_alpha) + float(post_beta))
@@ -293,10 +293,10 @@ def read_edge_cohort_params(
     # Prefer path-level (cohort) over window-level.
     _alpha: Optional[float] = None
     _beta: Optional[float] = None
-    if (isinstance(path_alpha, (int, float)) and isinstance(path_beta, (int, float))
-            and path_alpha > 0 and path_beta > 0):
-        _alpha = float(path_alpha)
-        _beta = float(path_beta)
+    if (isinstance(cohort_alpha, (int, float)) and isinstance(cohort_beta, (int, float))
+            and cohort_alpha > 0 and cohort_beta > 0):
+        _alpha = float(cohort_alpha)
+        _beta = float(cohort_beta)
     elif (isinstance(post_alpha, (int, float)) and isinstance(post_beta, (int, float))
             and post_alpha > 0 and post_beta > 0):
         _alpha = float(post_alpha)
@@ -613,8 +613,8 @@ def compute_cohort_maturity_rows(
     alpha_0: float = 0.0
     beta_0: float = 0.0
     if not is_window:
-        _raw_a = edge_params.get('posterior_path_alpha', 0.0) or 0.0
-        _raw_b = edge_params.get('posterior_path_beta', 0.0) or 0.0
+        _raw_a = edge_params.get('posterior_cohort_alpha', 0.0) or 0.0
+        _raw_b = edge_params.get('posterior_cohort_beta', 0.0) or 0.0
     else:
         _raw_a = edge_params.get('posterior_alpha', 0.0) or 0.0
         _raw_b = edge_params.get('posterior_beta', 0.0) or 0.0

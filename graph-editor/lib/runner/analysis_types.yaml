@@ -156,6 +156,17 @@ analyses:
       has_to: true
     runner: path_runner
 
+  # from(A).to(B) - conversion rate with epistemic uncertainty bands (doc 49)
+  # Non-latency edges only — see doc 49 §B.2 for latency limitation.
+  - id: conversion_rate
+    name: "Conversion Rate"
+    description: "Per-bin observed rate with Bayesian epistemic uncertainty bands"
+    when:
+      node_count: 2
+      has_from: true
+      has_to: true
+    runner: path_runner
+
   # visitedAny(A,B) non-sibling - outcome comparison
   # NOTE: Must come before branch_comparison; siblings match branch_comparison instead
   - id: outcome_comparison

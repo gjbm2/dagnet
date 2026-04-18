@@ -541,8 +541,8 @@ def _compute_surprise_gauge(
     b_alpha_raw = None
     b_beta_raw = None
     if is_cohort:
-        b_alpha_raw = prob_posterior.get('path_alpha')
-        b_beta_raw = prob_posterior.get('path_beta')
+        b_alpha_raw = prob_posterior.get('cohort_alpha')
+        b_beta_raw = prob_posterior.get('cohort_beta')
     if b_alpha_raw is None or b_beta_raw is None:
         b_alpha_raw = prob_posterior.get('alpha')
         b_beta_raw = prob_posterior.get('beta')
@@ -2424,9 +2424,9 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
                             s_mu_sd = lat_post.get('mu_sd')
                             s_sigma_sd = lat_post.get('sigma_sd')
                             s_onset_sd = lat_post.get('onset_sd')
-                        if not is_window and post_block.get('path_alpha'):
-                            _pa = post_block['path_alpha']
-                            _pb = post_block['path_beta']
+                        if not is_window and post_block.get('cohort_alpha'):
+                            _pa = post_block['cohort_alpha']
+                            _pb = post_block['cohort_beta']
                             s_fm = _pa / (_pa + _pb) if (_pa + _pb) > 0 else forecast_mean
                         elif post_block.get('alpha'):
                             _pa = post_block['alpha']
@@ -2446,9 +2446,9 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
                         if s_onset_sd is not None:
                             bayes_entry['onset_sd'] = s_onset_sd
                         # p_stdev from posterior alpha/beta (for confidence bands)
-                        if not is_window and post_block.get('path_alpha'):
-                            _pa = float(post_block['path_alpha'])
-                            _pb = float(post_block['path_beta'])
+                        if not is_window and post_block.get('cohort_alpha'):
+                            _pa = float(post_block['cohort_alpha'])
+                            _pb = float(post_block['cohort_beta'])
                             _s = _pa + _pb
                             if _s > 0:
                                 bayes_entry['p_stdev'] = math.sqrt(_pa * _pb / (_s * _s * (_s + 1)))
@@ -2975,12 +2975,29 @@ def handle_conditioned_forecast(data: Dict[str, Any]) -> Dict[str, Any]:
 
                 if maturity_rows:
                     last_row = maturity_rows[-1]
-                    p_mean = last_row.get('midpoint')
-                    fan_upper = last_row.get('fan_upper')
-                    fan_lower = last_row.get('fan_lower')
-                    p_sd = None
-                    if fan_upper is not None and fan_lower is not None and p_mean is not None:
-                        p_sd = (fan_upper - fan_lower) / (2 * 1.645)
+                    # p@∞: evaluated by the engine at saturation_tau
+                    # (2·t95 window / 2·path_t95 cohort) off the same
+                    # IS-conditioned rate_draws the chart uses. Falls
+                    # back to last_row.midpoint for pre-fix callers /
+                    # older snapshots that didn't surface p_infinity.
+                    p_mean = last_row.get('p_infinity_mean')
+                    p_sd = last_row.get('p_infinity_sd')
+                    if p_mean is None:
+                        p_mean = last_row.get('midpoint')
+                        fan_upper = last_row.get('fan_upper')
+                        fan_lower = last_row.get('fan_lower')
+                        if p_sd is None and fan_upper is not None and fan_lower is not None and p_mean is not None:
+                            p_sd = (fan_upper - fan_lower) / (2 * 1.645)
+
+                    # Doc 45 §Response contract: per-edge output MUST
+                    # include `completeness` and `completeness_sd`. The
+                    # engine (compute_forecast_sweep) computes these
+                    # once and cohort_forecast_v3 threads them onto
+                    # every maturity row, so both the CF endpoint and
+                    # the cohort maturity chart read the same scalar
+                    # ("one computation, two reads").
+                    completeness = last_row.get('completeness')
+                    completeness_sd = last_row.get('completeness_sd')
 
                     from runner.forecast_state import _last_forensic
                     edge_results.append({
@@ -2989,6 +3006,8 @@ def handle_conditioned_forecast(data: Dict[str, Any]) -> Dict[str, Any]:
                         'to_node': query_to_node,
                         'p_mean': p_mean,
                         'p_sd': p_sd,
+                        'completeness': completeness,
+                        'completeness_sd': completeness_sd,
                         'tau_max': last_row.get('tau'),
                         'n_rows': len(maturity_rows),
                         'n_cohorts': composed.get('cohorts_analysed', 0),
@@ -3314,7 +3333,7 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
             result['forecast_mean'] = float(forecast_mean)
         # Doc 25 §3.3: posterior p from the re-projected slice.
         # After the posteriorSliceResolution fix, alpha/beta always carry
-        # window (edge-level) values and path_alpha/path_beta carry cohort
+        # window (edge-level) values and cohort_alpha/cohort_beta carry cohort
         # (path-level) values. Extract both so the caller can pick the
         # correct one based on query mode.
         post_alpha = prob_posterior.get('alpha')
@@ -3324,13 +3343,13 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
             result['posterior_p'] = float(post_alpha) / (float(post_alpha) + float(post_beta))
             result['posterior_alpha'] = float(post_alpha)
             result['posterior_beta'] = float(post_beta)
-        path_alpha = prob_posterior.get('path_alpha')
-        path_beta = prob_posterior.get('path_beta')
-        if (isinstance(path_alpha, (int, float)) and isinstance(path_beta, (int, float))
-                and path_alpha > 0 and path_beta > 0):
-            result['posterior_p_cohort'] = float(path_alpha) / (float(path_alpha) + float(path_beta))
-            result['posterior_path_alpha'] = float(path_alpha)
-            result['posterior_path_beta'] = float(path_beta)
+        cohort_alpha = prob_posterior.get('cohort_alpha')
+        cohort_beta = prob_posterior.get('cohort_beta')
+        if (isinstance(cohort_alpha, (int, float)) and isinstance(cohort_beta, (int, float))
+                and cohort_alpha > 0 and cohort_beta > 0):
+            result['posterior_p_cohort'] = float(cohort_alpha) / (float(cohort_alpha) + float(cohort_beta))
+            result['posterior_cohort_alpha'] = float(cohort_alpha)
+            result['posterior_cohort_beta'] = float(cohort_beta)
         # Probability posterior uncertainty (for confidence bands).
         # Prefer posterior-derived SD (from alpha/beta) over the flat p.stdev
         # which is the blended analytic estimate, not the MCMC posterior width.
@@ -3340,10 +3359,10 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
             _s = post_alpha + post_beta
             _post_p_sd = math.sqrt(post_alpha * post_beta / (_s * _s * (_s + 1)))
         _post_p_cohort_sd = None
-        if (isinstance(path_alpha, (int, float)) and isinstance(path_beta, (int, float))
-                and path_alpha > 0 and path_beta > 0):
-            _s = path_alpha + path_beta
-            _post_p_cohort_sd = math.sqrt(path_alpha * path_beta / (_s * _s * (_s + 1)))
+        if (isinstance(cohort_alpha, (int, float)) and isinstance(cohort_beta, (int, float))
+                and cohort_alpha > 0 and cohort_beta > 0):
+            _s = cohort_alpha + cohort_beta
+            _post_p_cohort_sd = math.sqrt(cohort_alpha * cohort_beta / (_s * _s * (_s + 1)))
         p_stdev = _post_p_sd or p.get('stdev')
         if isinstance(p_stdev, (int, float)) and math.isfinite(p_stdev) and p_stdev > 0:
             result['p_stdev'] = float(p_stdev)
@@ -3768,6 +3787,59 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                     result = derive_daily_conversions(rows)
                 elif analysis_type == 'branch_comparison':
                     result = derive_daily_conversions(rows)
+                elif analysis_type == 'conversion_rate':
+                    # Doc 49 Part B — non-latency edges only.
+                    from runner.conversion_rate_derivation import derive_conversion_rate
+                    _cr_graph = scenario.get('graph') or {}
+                    _cr_target = (subj.get('target') or {}).get('targetId')
+                    _cr_edge = next(
+                        (e for e in _cr_graph.get('edges', [])
+                         if e.get('uuid') == _cr_target),
+                        None,
+                    )
+                    print(f"[conversion_rate] target_id={_cr_target} edge_found={_cr_edge is not None} rows={len(rows)}", flush=True)
+                    # Gate: suppress for edges DECLARED as latency edges (doc 49 §B.2).
+                    # The authoritative signal is `latency.latency_parameter`, not a
+                    # sigma value — non-latency edges can carry promoted sigma/mu from
+                    # Bayes fits on sibling latency stats without being latency edges
+                    # themselves.
+                    _cr_p = (_cr_edge or {}).get('p') or {}
+                    _cr_lat = _cr_p.get('latency') or {}
+                    _cr_is_latency_edge = bool(_cr_lat.get('latency_parameter'))
+                    _cr_has_latency = _cr_is_latency_edge
+                    if _cr_has_latency:
+                        # Per-subject failure — other subjects in this scenario
+                        # may be non-latency and should still compute.
+                        per_subject_results.append({
+                            "subject_id": subj.get('subject_id'),
+                            "success": False,
+                            "error": (
+                                "conversion_rate analysis is not yet supported for "
+                                "edges with latency dispersion (doc 49 Phase 3 — "
+                                "separate design)."
+                            ),
+                        })
+                        continue
+                    # Determine bin_size from display_settings (default 'day')
+                    _cr_bin = (
+                        (data.get('display_settings') or {}).get('bin_size')
+                        or 'day'
+                    )
+                    # Determine temporal_mode from subject resolution
+                    _cr_tmode = 'window' if _subj_is_window else 'cohort'
+                    print(f"[conversion_rate] bin={_cr_bin} temporal_mode={_cr_tmode} edge_found={_cr_edge is not None} has_latency={_cr_has_latency}", flush=True)
+                    try:
+                        result = derive_conversion_rate(
+                            rows,
+                            bin_size=_cr_bin,
+                            edge=_cr_edge,
+                            temporal_mode=_cr_tmode,
+                        )
+                        print(f"[conversion_rate] derive OK, bins={len(result.get('data', []))}", flush=True)
+                    except Exception as _cr_err:
+                        import traceback as _tb
+                        print(f"[conversion_rate] derive FAILED: {_cr_err}\n{_tb.format_exc()}", flush=True)
+                        raise
                 elif _is_cohort_maturity:
                     # Fallback: cohort_maturity without cohort_maturity read_mode
                     result = derive_cohort_maturity(rows)
@@ -4668,9 +4740,12 @@ def _handle_snapshot_analyze_legacy(data: Dict[str, Any]) -> Dict[str, Any]:
         result = derive_lag_histogram(rows)
     elif analysis_type == 'daily_conversions':
         result = derive_daily_conversions(rows)
+    elif analysis_type == 'conversion_rate':
+        from runner.conversion_rate_derivation import derive_conversion_rate
+        result = derive_conversion_rate(rows, bin_size='day')
     else:
         raise ValueError(f"Unknown analysis_type for snapshot: {analysis_type}")
-    
+
     return {
         "success": True,
         "result": result,

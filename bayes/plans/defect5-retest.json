@@ -1,0 +1,23 @@
+{
+    "name": "defect5-retest",
+    "description": "Retest the 5 graphs that hit the Phase 2 per-slice cohort latency_vars unpack crash (model.py:1484). Lightweight sampling — verifies compile+run, not convergence quality.",
+    "graphs": {
+        "include": [
+            "synth-abc-sparse-3",
+            "synth-abc-sparse-4",
+            "synth-diamond-sparse-2",
+            "synth-diamond-sparse-3",
+            "synth-diamond-sparse-4"
+        ]
+    },
+    "sampling": {
+        "chains": 2,
+        "draws": 400,
+        "tune": 300,
+        "max_parallel": 2,
+        "no_timeout": true
+    },
+    "features": [],
+    "settings": {},
+    "tags": ["defect", "compiler", "retest"]
+}

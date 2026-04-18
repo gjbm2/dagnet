@@ -17,6 +17,7 @@ sys.path.insert(0, os.path.join(REPO_ROOT, "bayes"))
 from results_schema import (
     round_val,
     make_failure,
+    serialise_design,
     compute_bias_profile,
     serialise_audit,
     serialise_result,
@@ -492,3 +493,149 @@ class TestSerialiseResult:
         assert "kappa" in s["edges"]["e1"]
         assert s["edges"]["e1"]["kappa"]["truth"] is None
         assert s["edges"]["e1"]["kappa"]["posterior_mean"] == 50.0
+
+
+# ---------------------------------------------------------------------------
+# serialise_design
+# ---------------------------------------------------------------------------
+
+class TestSerialiseDesign:
+    def test_solo_bare(self):
+        truth = {
+            "simulation": {"n_days": 100, "mean_daily_traffic": 500},
+            "edges": {"e1": {"from": "a", "to": "b", "p": 0.5}},
+            "nodes": {"a": {"start": True}, "b": {"absorbing": True}},
+        }
+        d = serialise_design(truth)
+        assert d["topology"] == "solo"
+        assert d["n_edges"] == 1
+        assert d["n_days"] == 100
+        assert "sparsity" not in d
+        assert "context_dimensions" not in d
+        assert "epochs" not in d
+
+    def test_chain_topology(self):
+        truth = {
+            "simulation": {},
+            "edges": {
+                "e1": {"from": "a", "to": "b", "p": 0.7},
+                "e2": {"from": "b", "to": "c", "p": 0.6},
+            },
+            "nodes": {"a": {}, "b": {}, "c": {}},
+        }
+        d = serialise_design(truth)
+        assert d["topology"] == "chain"
+        assert d["n_edges"] == 2
+
+    def test_diamond_topology(self):
+        truth = {
+            "simulation": {},
+            "edges": {
+                "e1": {"from": "a", "to": "b", "p": 0.4},
+                "e2": {"from": "a", "to": "c", "p": 0.3},
+                "e3": {"from": "b", "to": "d", "p": 0.7},
+                "e4": {"from": "c", "to": "d", "p": 0.6},
+            },
+            "nodes": {"a": {}, "b": {}, "c": {}, "d": {}},
+        }
+        d = serialise_design(truth)
+        assert d["topology"] == "diamond"
+
+    def test_sparsity_included(self):
+        truth = {
+            "simulation": {
+                "frame_drop_rate": 0.2,
+                "toggle_rate": 0.03,
+                "initial_absent_pct": 0.25,
+            },
+            "edges": {"e1": {"from": "a", "to": "b", "p": 0.5}},
+            "nodes": {"a": {}, "b": {}},
+        }
+        d = serialise_design(truth)
+        assert "sparsity" in d
+        assert d["sparsity"]["frame_drop_rate"] == 0.2
+        assert d["sparsity"]["toggle_rate"] == 0.03
+
+    def test_no_sparsity_when_zero(self):
+        truth = {
+            "simulation": {"frame_drop_rate": 0, "toggle_rate": 0},
+            "edges": {"e1": {"from": "a", "to": "b", "p": 0.5}},
+            "nodes": {"a": {}, "b": {}},
+        }
+        d = serialise_design(truth)
+        assert "sparsity" not in d
+
+    def test_context_dimensions(self):
+        truth = {
+            "simulation": {},
+            "edges": {"e1": {"from": "a", "to": "b", "p": 0.5}},
+            "nodes": {"a": {}, "b": {}},
+            "context_dimensions": [
+                {"id": "channel", "mece": True,
+                 "values": [{"id": "g"}, {"id": "d"}, {"id": "e"}]},
+            ],
+        }
+        d = serialise_design(truth)
+        assert len(d["context_dimensions"]) == 1
+        assert d["context_dimensions"][0]["id"] == "channel"
+        assert d["context_dimensions"][0]["n_values"] == 3
+        assert d["context_dimensions"][0]["mece"] is True
+
+    def test_lifecycle_values(self):
+        truth = {
+            "simulation": {},
+            "edges": {"e1": {"from": "a", "to": "b", "p": 0.5}},
+            "nodes": {"a": {}, "b": {}},
+            "context_dimensions": [
+                {"id": "treatment", "mece": True, "values": [
+                    {"id": "baseline", "weight": 0.5},
+                    {"id": "b", "weight": 0.3, "active_to_day": 65},
+                    {"id": "c", "weight": 0.2, "active_from_day": 33},
+                ]},
+            ],
+        }
+        d = serialise_design(truth)
+        lc = d["context_dimensions"][0]["lifecycles"]
+        assert len(lc) == 2
+        assert lc[0]["value"] == "b"
+        assert lc[0]["active_to_day"] == 65
+        assert lc[1]["value"] == "c"
+        assert lc[1]["active_from_day"] == 33
+
+    def test_epochs(self):
+        truth = {
+            "simulation": {},
+            "edges": {"e1": {"from": "a", "to": "b", "p": 0.5}},
+            "nodes": {"a": {}, "b": {}},
+            "epochs": [
+                {"label": "bare", "from_day": 0, "to_day": 44},
+                {"label": "contexted", "from_day": 45, "to_day": 89},
+            ],
+        }
+        d = serialise_design(truth)
+        assert len(d["epochs"]) == 2
+        assert d["epochs"][0]["label"] == "bare"
+
+    def test_design_in_serialise_result(self):
+        """design block appears when truth_config is present."""
+        r = {
+            "graph_name": "g",
+            "passed": True,
+            "parsed_edges": {},
+            "parsed_slices": {},
+            "truth_config": {
+                "simulation": {"n_days": 90, "mean_daily_traffic": 300,
+                                "frame_drop_rate": 0.15},
+                "edges": {"e1": {"from": "a", "to": "b", "p": 0.5}},
+                "nodes": {"a": {}, "b": {}},
+                "context_dimensions": [
+                    {"id": "ch", "mece": True, "values": [
+                        {"id": "g"}, {"id": "d", "active_to_day": 60}]},
+                ],
+            },
+        }
+        s = serialise_result(r)
+        assert "design" in s
+        assert s["design"]["topology"] == "solo"
+        assert s["design"]["sparsity"]["frame_drop_rate"] == 0.15
+        assert s["design"]["context_dimensions"][0]["lifecycles"][0]["active_to_day"] == 60

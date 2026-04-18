@@ -491,11 +491,16 @@ def compute_conditioned_forecast(
     total_n = sum(n for _, n in cohort_ages_and_weights if n > 0)
 
     # ── Draw p from Beta posterior ───────────────────────────────
-    # D20: the resolver now always provides alpha/beta (from Bayesian
-    # posterior, evidence n/k, or kappa=200 fallback). The sweep
-    # should not need its own fallback. Safety net only.
-    alpha = resolved.alpha if resolved.alpha and resolved.alpha > 0 else 0.0
-    beta_ = resolved.beta if resolved.beta and resolved.beta > 0 else 0.0
+    # Doc 49: use predictive alpha/beta (kappa-inflated) for MC draws.
+    # These include between-day observation noise — correct for
+    # forecasting future observations. Falls back to epistemic when
+    # kappa absent (identical in that case).
+    alpha = resolved.alpha_pred if resolved.alpha_pred and resolved.alpha_pred > 0 else 0.0
+    beta_ = resolved.beta_pred if resolved.beta_pred and resolved.beta_pred > 0 else 0.0
+    if alpha <= 0 or beta_ <= 0:
+        # Fallback to epistemic, then safety net
+        alpha = resolved.alpha if resolved.alpha and resolved.alpha > 0 else 0.0
+        beta_ = resolved.beta if resolved.beta and resolved.beta > 0 else 0.0
     if alpha <= 0 or beta_ <= 0:
         _p = max(min(p_mean or 0.5, 0.99), 0.01)
         alpha = _p * 200.0
@@ -1108,9 +1113,12 @@ def compute_forecast_sweep(
     # rng.normal() call. Numpy generates different sequences for one
     # (S,1,4) call vs four (S,) calls, so the interleaving matters for
     # RNG-stream parity.
-    # D20: resolver now provides alpha/beta. Safety net with kappa=200.
-    alpha = resolved.alpha if resolved.alpha and resolved.alpha > 0 else 0.0
-    beta_ = resolved.beta if resolved.beta and resolved.beta > 0 else 0.0
+    # Doc 49: use predictive alpha/beta for forecast MC draws.
+    alpha = resolved.alpha_pred if resolved.alpha_pred and resolved.alpha_pred > 0 else 0.0
+    beta_ = resolved.beta_pred if resolved.beta_pred and resolved.beta_pred > 0 else 0.0
+    if alpha <= 0 or beta_ <= 0:
+        alpha = resolved.alpha if resolved.alpha and resolved.alpha > 0 else 0.0
+        beta_ = resolved.beta if resolved.beta and resolved.beta > 0 else 0.0
     if alpha <= 0 or beta_ <= 0:
         _p_fb = max(min(resolved.p_mean or 0.5, 0.99), 0.01)
         alpha = _p_fb * 200.0

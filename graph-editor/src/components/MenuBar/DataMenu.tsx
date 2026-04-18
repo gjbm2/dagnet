@@ -3,6 +3,7 @@ import * as Menubar from '@radix-ui/react-menubar';
 import { useTabContext, fileRegistry } from '../../contexts/TabContext';
 import { useNavigatorContext } from '../../contexts/NavigatorContext';
 import { getGraphStore } from '../../contexts/GraphStoreContext';
+import GlossaryTooltip from '../GlossaryTooltip';
 import { dataOperationsService } from '../../services/dataOperationsService';
 import { BatchOperationsModal, type SingleOperationTarget } from '../modals/BatchOperationsModal';
 import { AllSlicesModal } from '../modals/AllSlicesModal';
@@ -780,12 +781,12 @@ export function DataMenu() {
         <Menubar.Portal>
           <Menubar.Content className="menubar-content" align="start">
           {/* Retrieve All Slices - at top */}
-          <Menubar.Item 
-            className="menubar-item" 
+          <Menubar.Item
+            className="menubar-item"
             onSelect={initiateRetrieveAllSlices}
             disabled={!isGraphTab}
           >
-            Retrieve All Slices...
+            <GlossaryTooltip term="retrieve-all-slices" position="right">Retrieve All Slices...</GlossaryTooltip>
           </Menubar.Item>
           
           <Menubar.Separator className="menubar-separator" />
@@ -874,7 +875,7 @@ export function DataMenu() {
                         gap: '16px'
                       }}
                     >
-                      <span>Get from Source (direct)</span>
+                      <GlossaryTooltip term="get-from-source-direct" position="right"><span>Get from Source (direct)</span></GlossaryTooltip>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#666', flexShrink: 0 }}>
                         <Database size={12} />
                         <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>→</span>
@@ -893,7 +894,7 @@ export function DataMenu() {
                         gap: '16px'
                       }}
           >
-                      <span>Get from Source</span>
+                      <GlossaryTooltip term="get-from-source" position="right"><span>Get from Source</span></GlossaryTooltip>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#666', flexShrink: 0 }}>
                         <DatabaseZap size={12} />
                         <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>→</span>
@@ -914,7 +915,7 @@ export function DataMenu() {
                         gap: '16px'
                       }}
           >
-                      <span>Get from File</span>
+                      <GlossaryTooltip term="get-from-file" position="right"><span>Get from File</span></GlossaryTooltip>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#666', flexShrink: 0 }}>
                         <Folders size={12} />
                         <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>→</span>
@@ -933,7 +934,7 @@ export function DataMenu() {
                         gap: '16px'
                       }}
           >
-                      <span>Put to File</span>
+                      <GlossaryTooltip term="put-to-file" position="right"><span>Put to File</span></GlossaryTooltip>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#666', flexShrink: 0 }}>
                         <TrendingUpDown size={12} />
                         <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>→</span>
@@ -954,7 +955,7 @@ export function DataMenu() {
                           gap: '16px'
                         }}
                       >
-                        <span>Unsign file cache</span>
+                        <GlossaryTooltip term="unsign-cache" position="right"><span>Unsign file cache</span></GlossaryTooltip>
                       </Menubar.Item>
                     </>
                   )}
@@ -1048,17 +1049,17 @@ export function DataMenu() {
             <Menubar.Portal>
               <Menubar.SubContent className="menubar-content" alignOffset={-4}>
                 <Menubar.Item className="menubar-item" disabled={!graphStore} onSelect={() => void lagHorizons.recomputeGlobal()}>
-                  Recompute globally (uncontexted)
+                  <GlossaryTooltip term="latency-horizon-recompute-global" position="right">Recompute globally (uncontexted)</GlossaryTooltip>
                 </Menubar.Item>
                 <Menubar.Item className="menubar-item" disabled={!graphStore} onSelect={() => void lagHorizons.recomputeCurrent()}>
-                  Recompute based on current
+                  <GlossaryTooltip term="latency-horizon-recompute-current" position="right">Recompute based on current</GlossaryTooltip>
                 </Menubar.Item>
                 <Menubar.Separator className="menubar-separator" />
                 <Menubar.Item className="menubar-item" disabled={!graphStore} onSelect={() => void lagHorizons.setAllOverrides()}>
-                  Set all horizons overrides
+                  <GlossaryTooltip term="latency-horizon-set-all" position="right">Set all horizons overrides</GlossaryTooltip>
                 </Menubar.Item>
                 <Menubar.Item className="menubar-item" disabled={!graphStore} onSelect={() => void lagHorizons.removeAllOverrides()}>
-                  Remove all horizons overrides
+                  <GlossaryTooltip term="latency-horizon-remove-all" position="right">Remove all horizons overrides</GlossaryTooltip>
                 </Menubar.Item>
               </Menubar.SubContent>
             </Menubar.Portal>
@@ -1070,23 +1071,25 @@ export function DataMenu() {
             onSelect={() => void bayesTrigger()}
             disabled={!isGraphTab || bayesIsActive}
           >
-            {bayesIsActive
-              ? (bayesStatus === 'submitting' ? 'Submitting Bayesian fit…' : 'Bayesian fit running…')
-              : 'Run Bayesian Fit…'}
+            <GlossaryTooltip term="run-bayesian-fit" position="right">
+              {bayesIsActive
+                ? (bayesStatus === 'submitting' ? 'Submitting Bayesian fit…' : 'Bayesian fit running…')
+                : 'Run Bayesian Fit…'}
+            </GlossaryTooltip>
           </Menubar.Item>
           <Menubar.Item
             className="menubar-item"
             onSelect={() => void handleResetAllPriors()}
             disabled={!graphStore}
           >
-            Reset Bayesian Priors…
+            <GlossaryTooltip term="reset-bayesian-priors" position="right">Reset Bayesian Priors…</GlossaryTooltip>
           </Menubar.Item>
           <Menubar.Item
             className="menubar-item"
             onSelect={() => void handleDeleteAllHistory()}
             disabled={!graphStore}
           >
-            Delete Bayesian History…
+            <GlossaryTooltip term="delete-bayesian-history" position="right">Delete Bayesian History…</GlossaryTooltip>
           </Menubar.Item>
 
           <Menubar.Separator className="menubar-separator" />
@@ -1112,7 +1115,7 @@ export function DataMenu() {
             className="menubar-item"
             onSelect={handleForecastingSettings}
           >
-            Forecasting settings...
+            <GlossaryTooltip term="forecasting-settings" position="right">Forecasting settings...</GlossaryTooltip>
           </Menubar.Item>
 
           {/* Automated Daily Fetches - workspace-level automation config */}
@@ -1139,11 +1142,13 @@ export function DataMenu() {
           <AutoUpdateChartsMenubarItem />
 
           {/* Exclude test accounts toggle (temporary hack) */}
-          <Menubar.Item 
-            className="menubar-item" 
+          <Menubar.Item
+            className="menubar-item"
             onSelect={handleToggleExcludeTestAccounts}
           >
-            {excludeTestAccounts ? '✓ ' : ''}Exclude test accounts
+            <GlossaryTooltip term="exclude-test-accounts" position="right">
+              <span>{excludeTestAccounts ? '✓ ' : ''}Exclude test accounts</span>
+            </GlossaryTooltip>
           </Menubar.Item>
         </Menubar.Content>
       </Menubar.Portal>

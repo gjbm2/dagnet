@@ -405,19 +405,19 @@ Three specific failure modes:
 
 **How to spot**: `verify_synth_data(graph_name, data_repo)` returns `"stale"` with reason mentioning "Connection string changed". Or DB query `SELECT COUNT(*) FROM snapshots WHERE core_hash = '' AND param_id LIKE '%synth%'` returns non-zero.
 
-## Anti-pattern 47: `path_alpha`/`path_beta` terminology confusion
+## Anti-pattern 47: `cohort_alpha`/`cohort_beta` vs `alpha`/`beta` confusion
 
 **Signature**: model resolver returns wrong alpha/beta in cohort mode, causing IS conditioning to target the wrong rate. Tests assert against edge-level alpha/beta when the resolver correctly returns cohort-mode posterior.
 
-**Root cause**: `posterior.path_alpha` / `posterior.path_beta` is confusingly named. "path" does NOT mean "compound product of upstream probabilities". It means "the edge's own rate (y/x), posterior-estimated from cohort-mode evidence (anchor-anchored data with path-level latency)". The name refers to the latency model used during fitting, not to the probability being estimated.
-
-In both window and cohort modes, the displayed rate is y/x at this edge. The difference is:
+**Root cause**: both `alpha`/`beta` and `cohort_alpha`/`cohort_beta` encode the posterior on the same quantity — the edge's own conversion rate (y/x). The difference is the evidence set and latency model used during fitting:
 - **Window mode**: `alpha`/`beta` — fitted from window evidence (edge-local latency)
-- **Cohort mode**: `path_alpha`/`path_beta` — fitted from cohort evidence (anchor-anchored, path latency)
+- **Cohort mode**: `cohort_alpha`/`cohort_beta` — fitted from cohort evidence (anchor-anchored, path latency)
 
-Both encode the posterior on the same quantity (p_edge). The `model_resolver.py` correctly prefers `path_alpha`/`path_beta` when `temporal_mode == 'cohort'`.
+The `model_resolver.py` correctly prefers `cohort_alpha`/`cohort_beta` when `temporal_mode == 'cohort'`.
 
-**Fix**: when writing tests or assertions about cohort-mode alpha/beta, use `posterior.path_alpha`/`path_beta`, not `posterior.alpha`/`beta`. When the resolver returns a p_mean that doesn't match `alpha/(alpha+beta)` from the edge-level posterior, check whether cohort mode is active — the resolver may be correctly using the cohort-mode posterior.
+**Fix**: when writing tests or assertions about cohort-mode alpha/beta, use `posterior.cohort_alpha`/`cohort_beta`, not `posterior.alpha`/`beta`. When the resolver returns a p_mean that doesn't match `alpha/(alpha+beta)` from the edge-level posterior, check whether cohort mode is active — the resolver may be correctly using the cohort-mode posterior.
+
+**History**: these fields were previously named `path_alpha`/`path_beta`, which was misread as "compound path probability". Renamed to `cohort_*` to make the query-mode distinction clear.
 
 ## When to add to this document
 

@@ -292,7 +292,9 @@ for edge in g['edges']:
     wg_edge = wg_by_uuid.get(uuid)
     wg_pmean = wg_edge.get('p_mean') if wg_edge else None
 
-    # V3 chart reference: midpoint at max tau
+    # V3 chart reference: p@∞ from the last row (engine-evaluated at
+    # saturation_tau, same quantity CF writes to the graph). Falls
+    # back to last-row midpoint for older server builds.
     v3_file = f'$TMPDIR_CF/v3_{from_name}_{to_name}.json'
     v3_mid = None
     v3_tau = None
@@ -300,11 +302,18 @@ for edge in g['edges']:
         try:
             v3 = json.load(open(v3_file))
             rows = v3.get('result',{}).get('data',[]) or v3.get('result',{}).get('maturity_rows',[])
-            for r in reversed(rows):
-                if r.get('midpoint') is not None:
-                    v3_mid = float(r['midpoint'])
-                    v3_tau = r.get('tau_days')
-                    break
+            if rows:
+                last = rows[-1]
+                v3_tau = last.get('tau_days')
+                p_inf = last.get('p_infinity_mean')
+                if p_inf is not None:
+                    v3_mid = float(p_inf)
+                else:
+                    for r in reversed(rows):
+                        if r.get('midpoint') is not None:
+                            v3_mid = float(r['midpoint'])
+                            v3_tau = r.get('tau_days')
+                            break
         except:
             pass
 

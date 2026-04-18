@@ -1,0 +1,98 @@
+# synth-lattice-test — generated from this truth file
+#
+# Lattice: A → {B, C} → {D, E} → F
+# B connects to both D and E. C connects to both D and E.
+# D and E both connect to F.
+# This creates 4 paths to F (B→D, B→E, C→D, C→E) and multiple
+# nested joins (D has 2 inbound, E has 2 inbound, F has 2 inbound
+# each carrying 2 alternatives = 4 total paths to F).
+#
+# Tests combinatorial path propagation through nested joins.
+
+graph:
+  name: synth-lattice-test
+  description: Lattice topology with cross-connections and nested joins
+
+nodes:
+  anchor: { label: Anchor, start: true }
+  top: { label: Top }
+  bottom: { label: Bottom }
+  left: { label: Left }
+  right: { label: Right }
+  target: { label: Target }
+  outcome: { label: Outcome, absorbing: true }
+
+edges:
+  anchor-to-top:
+    from: anchor
+    to: top
+    p: 0.45
+    onset: 0.0
+    mu: 0.6
+    sigma: 0.3
+  anchor-to-bottom:
+    from: anchor
+    to: bottom
+    p: 0.35
+    onset: 0.5
+    mu: 0.9
+    sigma: 0.4
+  top-to-left:
+    from: top
+    to: left
+    p: 0.50
+    onset: 0.5
+    mu: 0.8
+    sigma: 0.3
+  top-to-right:
+    from: top
+    to: right
+    p: 0.30
+    onset: 0.0
+    mu: 0.7
+    sigma: 0.4
+  bottom-to-left:
+    from: bottom
+    to: left
+    p: 0.40
+    onset: 0.5
+    mu: 1.0
+    sigma: 0.4
+  bottom-to-right:
+    from: bottom
+    to: right
+    p: 0.35
+    onset: 1.0
+    mu: 1.1
+    sigma: 0.5
+  left-to-target:
+    from: left
+    to: target
+    p: 0.60
+    onset: 0.5
+    mu: 0.8
+    sigma: 0.3
+  right-to-target:
+    from: right
+    to: target
+    p: 0.55
+    onset: 0.5
+    mu: 0.9
+    sigma: 0.4
+  target-to-outcome:
+    from: target
+    to: outcome
+    p: 0.70
+    onset: 0.0
+    mu: 0.5
+    sigma: 0.3
+
+simulation:
+  mean_daily_traffic: 500
+  n_days: 100
+  user_kappa: 100
+  failure_rate: 0.05
+  drift_sigma: 0.0
+  seed: 42
+  base_date: "2025-12-12"
+  expected_sample_seconds: 900

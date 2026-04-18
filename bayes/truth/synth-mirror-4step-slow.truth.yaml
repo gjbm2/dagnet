@@ -1,0 +1,63 @@
+graph:
+  name: synth-mirror-4step-slow
+  anchor: m4-landing
+  raw_ids: true
+nodes:
+  m4-landing:
+    label: Landing
+    event_id: m4-landing-event
+    is_start: true
+  m4-created:
+    label: Created
+    event_id: m4-created-event
+  m4-delegated:
+    label: Delegated
+    event_id: m4-delegated-event
+  m4-registered:
+    label: Registered
+    event_id: m4-registered-event
+  m4-success:
+    label: Success
+    event_id: m4-success-event
+    absorbing: true
+    outcome_type: success
+edges:
+  m4-landing-to-created:
+    from: m4-landing
+    to: m4-created
+    p: 0.18
+    onset: 0.0
+    mu: 0.0
+    sigma: 0.0
+  m4-created-to-delegated:
+    from: m4-created
+    to: m4-delegated
+    p: 0.55
+    onset: 0.0
+    mu: 0.0
+    sigma: 0.0
+  m4-delegated-to-registered:
+    from: m4-delegated
+    to: m4-registered
+    p: 0.11
+    onset: 8.0
+    mu: 3.5
+    sigma: 0.45
+  m4-registered-to-success:
+    from: m4-registered
+    to: m4-success
+    p: 0.7
+    onset: 3.2
+    mu: 2.5
+    sigma: 0.35
+simulation:
+  mean_daily_traffic: 1600
+  n_days: 150
+  kappa_sim_default: 50.0
+  failure_rate: 0.05
+  drift_sigma: 0.0
+  growth_rate_mom: 0.0
+  seed: 42
+  snapshot_start_offset: 50
+  traffic_cv: 1.0
+  expected_sample_seconds: 900

@@ -77,7 +77,7 @@ For each immature Cohort *i* at its observation age τ_max_i:
 | Symbol | Meaning | Source |
 |--------|---------|--------|
 | `r` | True conversion rate at this edge | To be estimated |
-| `α₀, β₀` | Prior Beta parameters | Edge posterior (`alpha`/`beta` or `path_alpha`/`path_beta`) |
+| `α₀, β₀` | Prior Beta parameters | Edge posterior (`alpha`/`beta` or `cohort_alpha`/`cohort_beta`) |
 | `k_i` | Observed conversions | `y_frozen` from frames |
 | `x_i` | Observed from-node arrivals | `x_frozen` from frames |
 | `c_i` | Completeness at τ_max_i | `CDF(τ_max_i; onset, mu, sigma)` |
@@ -297,7 +297,7 @@ No epoch distinction — the curve covers the full τ range.
 The Bayesian inference engine already produces:
 
 - `p.posterior.alpha` / `p.posterior.beta` — window-level
-- `p.posterior.path_alpha` / `p.posterior.path_beta` — cohort-level
+- `p.posterior.cohort_alpha` / `p.posterior.cohort_beta` — cohort-level
 
 These are read by `read_edge_cohort_params()` at
 cohort_forecast.py:95–107.  The cohort-level values are preferred in

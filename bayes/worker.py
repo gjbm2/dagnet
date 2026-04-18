@@ -737,6 +737,10 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
         if mece_dimensions:
             _log(log, f"  MECE dimensions: {mece_dimensions}")
 
+        independent_dimensions: list[str] = payload.get("independent_dimensions") or []
+        if independent_dimensions:
+            _log(log, f"  Independent dimensions: {independent_dimensions}")
+
         if snapshot_rows:
             from compiler import bind_snapshot_evidence
             evidence = bind_snapshot_evidence(
@@ -745,11 +749,13 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
                 commissioned_slices=commissioned_slices or None,
                 mece_dimensions=mece_dimensions or None,
                 regime_selections=regime_selections or None,
+                independent_dimensions=independent_dimensions or None,
             )
         elif is_engorged:
             from compiler import bind_evidence_from_graph
             evidence = bind_evidence_from_graph(
                 topology, graph_snapshot, settings,
+                independent_dimensions=independent_dimensions or None,
             )
         else:
             evidence = bind_evidence(
@@ -2120,6 +2126,7 @@ def _build_unified_slices(
       "cohort()" — probability + path-level latency (only if path fields exist)
     """
     # Window slice: probability (from p_window if available, else p_base) + edge-level latency
+    # Epistemic (bare fields):
     w_alpha = prob.window_alpha if prob.window_alpha is not None else prob.alpha
     w_beta = prob.window_beta if prob.window_beta is not None else prob.beta
     w_hdi_lo = prob.window_hdi_lower if prob.window_hdi_lower is not None else prob.hdi_lower
@@ -2137,9 +2144,18 @@ def _build_unified_slices(
         "provenance": prob.provenance,
     }
 
+    # Predictive probability fields (doc 49 §A.6.3) — None when kappa absent
+    if prob.window_alpha_pred is not None:
+        window["alpha_pred"] = round(prob.window_alpha_pred, 4)
+        window["beta_pred"] = round(prob.window_beta_pred, 4)
+        window["hdi_lower_pred"] = round(prob.window_hdi_lower_pred, 6)
+        window["hdi_upper_pred"] = round(prob.window_hdi_upper_pred, 6)
+
     if lat:
         window["mu_mean"] = round(lat.mu_mean, 4)
         window["mu_sd"] = round(lat.mu_sd, 4)
+        if lat.mu_sd_epist is not None:
+            window["mu_sd_epist"] = round(lat.mu_sd_epist, 4)
         window["sigma_mean"] = round(lat.sigma_mean, 4)
         window["sigma_sd"] = round(lat.sigma_sd, 4)
         window["onset_mean"] = round(lat.onset_delta_days, 2)
@@ -2192,11 +2208,19 @@ def _build_unified_slices(
             "provenance": lat.path_provenance or lat.provenance,
             "mu_mean": round(lat.path_mu_mean, 4),
             "mu_sd": round(lat.path_mu_sd, 4) if lat.path_mu_sd is not None else None,
+            **({"mu_sd_epist": round(lat.path_mu_sd_epist, 4)} if lat.path_mu_sd_epist is not None else {}),
             "sigma_mean": round(lat.path_sigma_mean, 4) if lat.path_sigma_mean is not None else None,
             "sigma_sd": round(lat.path_sigma_sd, 4) if lat.path_sigma_sd is not None else None,
             **({"hdi_t95_lower": round(lat.path_hdi_t95_lower, 1), "hdi_t95_upper": round(lat.path_hdi_t95_upper, 1)}
                if lat.path_hdi_t95_lower is not None else {}),
         }
+        # Predictive probability fields (doc 49) — None when kappa absent
+        if prob.cohort_alpha_pred is not None:
+            cohort["alpha_pred"] = round(prob.cohort_alpha_pred, 4)
+            cohort["beta_pred"] = round(prob.cohort_beta_pred, 4)
+            cohort["hdi_lower_pred"] = round(prob.cohort_hdi_lower_pred, 6)
+            cohort["hdi_upper_pred"] = round(prob.cohort_hdi_upper_pred, 6)
+
         if lat.path_onset_delta_days is not None:
             cohort["onset_mean"] = round(lat.path_onset_delta_days, 2)
         if lat.path_onset_sd is not None:
@@ -2225,7 +2249,7 @@ def _build_unified_slices(
     for ctx_key, sp in prob.slice_posteriors.items():
         ctx_part = f"context({ctx_key})" if not ctx_key.startswith("context(") else ctx_key
 
-        # Build the per-slice entry with full vars
+        # Build the per-slice entry with full vars (epistemic bare, predictive *_pred)
         entry: dict = {
             "alpha": round(sp["alpha"], 4),
             "beta": round(sp["beta"], 4),
@@ -2235,6 +2259,12 @@ def _build_unified_slices(
             "rhat": round(prob.rhat, 4) if prob.rhat else None,
             "provenance": "bayesian",
         }
+        # Predictive fields (doc 49) — present when kappa exists for this slice
+        if "alpha_pred" in sp:
+            entry["alpha_pred"] = round(sp["alpha_pred"], 4)
+            entry["beta_pred"] = round(sp["beta_pred"], 4)
+            entry["hdi_lower_pred"] = round(sp["hdi_lower_pred"], 6)
+            entry["hdi_upper_pred"] = round(sp["hdi_upper_pred"], 6)
         if "kappa_mean" in sp:
             entry["kappa_mean"] = round(sp["kappa_mean"], 2)
             entry["kappa_sd"] = round(sp["kappa_sd"], 2)

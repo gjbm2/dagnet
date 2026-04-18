@@ -157,16 +157,22 @@ class SlicePosteriorEntry(BaseModel):
     """Per-slice posterior entry — unified probability + latency (doc 21 §3.2).
     Keyed by slice DSL string (e.g. "window()", "cohort()").
     """
-    # Probability
+    # Probability — epistemic (doc 49 §A.6)
     alpha: float
     beta_param: float = Field(..., alias='beta')
     p_hdi_lower: float
     p_hdi_upper: float
+    # Probability — predictive (doc 49, absent when kappa absent)
+    alpha_pred: Optional[float] = None
+    beta_pred: Optional[float] = None
+    hdi_lower_pred: Optional[float] = None
+    hdi_upper_pred: Optional[float] = None
     # Latency (present when edge has latency fitted for this slice)
     mu_mean: Optional[float] = None
-    mu_sd: Optional[float] = None
+    mu_sd: Optional[float] = None           # predictive when kappa_lat (doc 49)
+    mu_sd_epist: Optional[float] = None     # always epistemic posterior SD
     sigma_mean: Optional[float] = None
-    sigma_sd: Optional[float] = None
+    sigma_sd: Optional[float] = None        # epistemic (no predictive mechanism)
     onset_mean: Optional[float] = None
     onset_sd: Optional[float] = None
     hdi_t95_lower: Optional[float] = None
@@ -187,14 +193,20 @@ class FitHistorySlice(BaseModel):
     Same fields as SlicePosteriorEntry but all optional except alpha/beta,
     for backward compatibility with legacy entries that only stored slim data.
     """
-    # Probability (always present)
+    # Probability — epistemic (always present)
     alpha: float
     beta_param: float = Field(..., alias='beta')
     p_hdi_lower: Optional[float] = None
     p_hdi_upper: Optional[float] = None
+    # Probability — predictive (doc 49, absent when kappa absent or pre-separation)
+    alpha_pred: Optional[float] = None
+    beta_pred: Optional[float] = None
+    hdi_lower_pred: Optional[float] = None
+    hdi_upper_pred: Optional[float] = None
     # Latency
     mu_mean: Optional[float] = None
     mu_sd: Optional[float] = None
+    mu_sd_epist: Optional[float] = None
     sigma_mean: Optional[float] = None
     sigma_sd: Optional[float] = None
     onset_mean: Optional[float] = None

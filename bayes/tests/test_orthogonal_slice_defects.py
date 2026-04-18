@@ -206,3 +206,113 @@ class TestDefect4BranchGroupUnion:
         # Model should compile without error
         assert model is not None
         assert len(model.named_vars) > 0
+
+
+# ---------------------------------------------------------------------------
+# Defect 5: Phase 2 per-slice cohort emission passes 3-tuple cohort_latency_vars
+# into the 2-tuple latency_vars slot (model.py:1484)
+# ---------------------------------------------------------------------------
+
+class TestDefect5CohortLatencyVarsSlot:
+    """Phase 2 per-slice cohort emission must NOT pass cohort_latency_vars
+    (3-tuple dict) in the latency_vars slot (2-tuple dict) of the emission
+    tuple. Downstream `_emit_cohort_likelihoods` unpacks `latency_vars[edge_id]`
+    as a 2-tuple for window-obs trajectories and crashes with
+    `ValueError: too many values to unpack (expected 2)` when a 3-tuple is
+    received.
+
+    Trigger conditions:
+      - Contexted slices (phase2_has_slices=True)
+      - Path length >= 2 latency edges (cohort_latency_vars populated)
+      - At least one window-obs trajectory in per-slice evidence
+    """
+
+    def test_two_hop_latency_contexted_phase2_compiles(self):
+        """Phase 2 per-slice emission with 2+ latency edges on path.
+
+        Before the fix: raises ValueError (too many values to unpack).
+        After the fix: compiles cleanly.
+
+        Trigger: `cohort_latency_vars` is populated when `path_latency_count >= 2`
+        (model.py ~line 1110). The buggy code at line 1484 then injects that
+        3-tuple dict into the 2-tuple `latency_vars` slot of the per-slice
+        emission tuple, causing downstream unpack to fail.
+        """
+        graph, params, snap_rows, commissioned, mece_dims, _ = (
+            build_contexted_solo_edge_with_snapshot_slices(seed=75)
+        )
+
+        # Add latency to edge-anchor-a so path_latency_count >= 2 for edge-a-b.
+        upstream_latency = {
+            "latency_parameter": True,
+            "onset_delta_days": 1.5,
+            "mu": 1.8,
+            "sigma": 0.4,
+            "median_lag_days": 1.5 + float(np.exp(1.8)),
+            "mean_lag_days": 1.5 + float(np.exp(1.8 + 0.4**2 / 2)),
+        }
+        for edge in graph["edges"]:
+            if edge["uuid"] == "edge-anchor-a":
+                edge["p"]["latency"] = upstream_latency
+                break
+
+        topology = analyse_topology(graph)
+        evidence = bind_snapshot_evidence(
+            topology, snap_rows, params,
+            today="1-Mar-25",
+            commissioned_slices=commissioned,
+            mece_dimensions=mece_dims,
+        )
+
+        ev_ab = evidence.edges["edge-a-b"]
+        assert ev_ab.has_slices, "downstream edge should have slices"
+        et_ab = topology.edges["edge-a-b"]
+        path_latency_count = sum(
+            1 for eid in et_ab.path_edge_ids
+            if topology.edges.get(eid) is not None
+            and topology.edges[eid].has_latency
+        )
+        assert path_latency_count >= 2, (
+            f"expected >=2 latency edges on path, got {path_latency_count}"
+        )
+
+        # Synthetic phase2_frozen: forces build_model into Phase 2 without
+        # running Phase 1 inference. Values derived from priors — the test
+        # exercises the compilation path, not inference quality.
+        phase2_frozen = {}
+        for edge_id in topology.topo_order:
+            ev = evidence.edges.get(edge_id)
+            if ev is None:
+                continue
+            frozen = {
+                "p": 0.5, "p_sd": 0.05,
+                "p_alpha": 10.0, "p_beta": 10.0,
+            }
+            et = topology.edges[edge_id]
+            if et.has_latency:
+                frozen["mu"] = 2.0
+                frozen["mu_sd"] = 0.1
+                frozen["sigma"] = 0.5
+                frozen["sigma_sd"] = 0.05
+                frozen["onset"] = 1.0
+                frozen["onset_sd"] = 0.3
+            if ev.has_slices:
+                slices = {}
+                for _dk, _sg in ev.slice_groups.items():
+                    for ctx_key in _sg.slices:
+                        slices[ctx_key] = {
+                            "p": 0.5, "p_sd": 0.05,
+                            "p_alpha": 10.0, "p_beta": 10.0,
+                            "mu": 2.0, "mu_sd": 0.1,
+                            "kappa": 50.0,
+                        }
+                frozen["slices"] = slices
+            phase2_frozen[edge_id] = frozen
+
+        # Before fix: ValueError raised inside build_model (Phase 2).
+        # After fix: compiles cleanly.
+        model, meta = build_model(
+            topology, evidence, phase2_frozen=phase2_frozen,
+        )
+        assert model is not None
+        assert len(model.named_vars) > 0

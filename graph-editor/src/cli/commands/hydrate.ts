@@ -17,7 +17,6 @@
 import { log } from '../logger';
 import { bootstrap } from '../bootstrap';
 import { aggregateAndPopulateGraph } from '../aggregate';
-import { runCliTopoPass } from '../topoPass';
 import { writeFileSync } from 'fs';
 import { join } from 'path';
 
@@ -56,17 +55,21 @@ export async function runHydrate(): Promise<void> {
     process.exit(1);
   }
 
-  // Aggregate + FE LAG pass (same as param-pack)
+  // Aggregate → FE topo + BE topo + CF + promotion + UpdateManager.
+  // aggregateAndPopulateGraph delegates to fetchItems which runs the
+  // exact same Stage-2 pipeline the browser uses, with
+  // awaitBackgroundPromises so BE topo's model_vars[analytic_be]
+  // upsert and the CF subsequent-overwrite .then() finish before
+  // returning. No bespoke CLI BE-topo call is needed — the previous
+  // `runCliTopoPass` here was a redundant second BE round-trip that
+  // bypassed the promotion cascade; retired per doc 45 ("one
+  // codepath, no parallel CLI path").
   const fetchMode = flags.allowExternalFetch ? 'versioned' as const : 'from-file' as const;
   log.info(`Hydrating graph (mode: ${fetchMode}, query: ${queryDsl})...`);
   const { graph: populatedGraph, warnings } = await aggregateAndPopulateGraph(bundle, queryDsl, { mode: fetchMode });
   for (const w of warnings) {
     log.warn(w);
   }
-
-  // BE topo pass — engine-computed completeness, blended rate, dispersions
-  log.info('Running BE topo pass...');
-  await runCliTopoPass(populatedGraph, bundle.parameters, queryDsl);
 
   // Write back to disk
   const graphPath = join(bundle.graphDir, 'graphs', `${bundle.graphName}.json`);

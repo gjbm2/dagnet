@@ -20,6 +20,8 @@ import { toYAML, toJSON, toCSV, fromYAML, fromJSON } from '../../services/ParamP
 import { X, FileText, Download, AlertCircle, CheckCircle2, Save } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useGraphStore } from '../../contexts/GraphStoreContext';
+import Tooltip from '../Tooltip';
+import GlossaryTooltip from '../GlossaryTooltip';
 import { QueryExpressionEditor } from '../QueryExpressionEditor';
 import './Modal.css';
 import './ScenarioEditorModal.css';
@@ -346,7 +348,7 @@ export function ScenarioEditorModal({ isOpen, scenarioId, tabId, onClose, onSave
             {/* Base DSL Editor - only for Base */}
             {scenario.id === 'base' && (
               <div className="metadata-row metadata-dsl-row">
-                <strong>Base DSL:</strong>
+                <GlossaryTooltip term="base-dsl"><strong>Base DSL:</strong></GlossaryTooltip>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <QueryExpressionEditor
                     value={editableBaseDSL}
@@ -395,27 +397,27 @@ export function ScenarioEditorModal({ isOpen, scenarioId, tabId, onClose, onSave
             )}
             {scenario.meta?.source && (
               <div className="metadata-row">
-                <strong>Source:</strong>
+                <GlossaryTooltip term="scenario-source"><strong>Source:</strong></GlossaryTooltip>
                 <span>{scenario.meta.source} ({scenario.meta.sourceDetail || 'unknown'})</span>
               </div>
             )}
             {scenario.meta?.window && (
               <div className="metadata-row">
-                <strong>Window:</strong>
+                <GlossaryTooltip term="window"><strong>Window:</strong></GlossaryTooltip>
                 <span>{scenario.meta.window.start} to {scenario.meta.window.end}</span>
               </div>
             )}
             {scenario.meta?.whatIfDSL && (
               <div className="metadata-row">
-                <strong>What-If:</strong>
+                <GlossaryTooltip term="what-if"><strong>What-If:</strong></GlossaryTooltip>
                 <span>{scenario.meta.whatIfDSL}</span>
               </div>
             )}
-            
+
             {/* Editable Note */}
             <div className="metadata-note">
               <label>
-                <strong>Note:</strong>
+                <GlossaryTooltip term="scenario-note"><strong>Note:</strong></GlossaryTooltip>
               </label>
               <textarea
                 value={editableNote}
@@ -429,7 +431,7 @@ export function ScenarioEditorModal({ isOpen, scenarioId, tabId, onClose, onSave
           {/* Format Controls */}
           <div className="editor-controls">
             <div className="control-group">
-              <label>Syntax:</label>
+              <GlossaryTooltip term="scenario-syntax"><label>Syntax:</label></GlossaryTooltip>
               <button
                 className={`control-btn ${format.syntax === 'yaml' ? 'active' : ''}`}
                 onClick={() => setFormat({ ...format, syntax: 'yaml' })}
@@ -445,7 +447,7 @@ export function ScenarioEditorModal({ isOpen, scenarioId, tabId, onClose, onSave
             </div>
             
             <div className="control-group">
-              <label>Structure:</label>
+              <GlossaryTooltip term="scenario-structure"><label>Structure:</label></GlossaryTooltip>
               <button
                 className={`control-btn ${format.structure === 'flat' ? 'active' : ''}`}
                 onClick={() => setFormat({ ...format, structure: 'flat' })}

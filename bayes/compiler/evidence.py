@@ -40,6 +40,7 @@ def bind_evidence(
     params_index: dict | None = None,
     settings: dict | None = None,
     today: str | None = None,
+    independent_dimensions: list[str] | None = None,
 ) -> BoundEvidence:
     """Bind evidence from parameter files to the topology.
 
@@ -166,7 +167,9 @@ def bind_evidence(
                     ev.total_n += n
 
         # --- Phase C: route sliced observations to SliceGroups ---
-        _route_slices(ev, settings, diagnostics)
+        _indep_set = set(independent_dimensions) if independent_dimensions else None
+        _route_slices(ev, settings, diagnostics,
+                      independent_dimensions=_indep_set)
 
         # --- Recompute total_n to reflect actual modelled data ---
         _pf_slice_n = sum(
@@ -219,6 +222,7 @@ def bind_snapshot_evidence(
     commissioned_slices: dict[str, set[str]] | None = None,
     mece_dimensions: list[str] | None = None,
     regime_selections: dict | None = None,
+    independent_dimensions: list[str] | None = None,
 ) -> BoundEvidence:
     """Bind evidence from snapshot DB rows, falling back to parameter files.
 
@@ -370,6 +374,7 @@ def bind_snapshot_evidence(
                 commissioned=edge_commissioned,
                 mece_dimensions=mece_dimensions,
                 regime_per_date=edge_regime_per_date,
+                independent_dimensions=independent_dimensions,
             )
             if edge_regime_per_date:
                 ev.regime_per_date = edge_regime_per_date
@@ -414,7 +419,9 @@ def bind_snapshot_evidence(
             diagnostics.append(f"SKIP edge {edge_id[:8]}…: no snapshot data and no param file")
 
         # --- Phase C: route sliced observations to SliceGroups ---
-        _route_slices(ev, settings, diagnostics, commissioned=edge_commissioned)
+        _indep_set = set(independent_dimensions) if independent_dimensions else None
+        _route_slices(ev, settings, diagnostics, commissioned=edge_commissioned,
+                      independent_dimensions=_indep_set)
 
         # --- Apply pending per-slice onset observations (doc 41a) ---
         _pending = getattr(ev, '_pending_slice_onset', None)
@@ -531,6 +538,7 @@ def _bind_from_snapshot_rows(
     commissioned: set[str] | None = None,
     mece_dimensions: list[str] | None = None,
     regime_per_date: dict[str, str] | None = None,
+    independent_dimensions: list[str] | None = None,
 ) -> set[str]:
     """Convert snapshot DB rows to Cohort-first trajectory objects.
 
@@ -1723,6 +1731,7 @@ def _route_slices(
     settings: dict,
     diagnostics: list[str],
     commissioned: set[str] | None = None,
+    independent_dimensions: set[str] | None = None,
 ) -> None:
     """Route sliced observations from aggregate lists into SliceGroups.
 
@@ -1795,9 +1804,11 @@ def _route_slices(
     # Build SliceGroups
     for dim_key_str, ctx_keys in dim_map.items():
         mece = is_mece_dimension(dim_key_str)
+        _indep = bool(independent_dimensions and dim_key_str in independent_dimensions)
         group = SliceGroup(
             dimension_key=dim_key_str,
             is_mece=mece,
+            independent=_indep,
         )
 
         total_slice_n = 0
@@ -2090,6 +2101,7 @@ def bind_evidence_from_graph(
     graph_snapshot: dict,
     settings: dict | None = None,
     today: str | None = None,
+    independent_dimensions: list[str] | None = None,
 ) -> BoundEvidence:
     """Bind evidence from an engorged graph snapshot.
 
@@ -2286,7 +2298,9 @@ def bind_evidence_from_graph(
                         ev.total_n += n
 
         # --- Phase C: route sliced observations to SliceGroups ---
-        _route_slices(ev, settings, diagnostics)
+        _indep_set = set(independent_dimensions) if independent_dimensions else None
+        _route_slices(ev, settings, diagnostics,
+                      independent_dimensions=_indep_set)
 
         # --- Recompute total_n to reflect actual modelled data ---
         _ep_slice_n = sum(

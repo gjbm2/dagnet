@@ -1,0 +1,58 @@
+graph:
+  name: synth-skip-test
+  description: 'Skip edge: A->B->C->D + A->C->D. Tests join with different path lengths.'
+  anchor: synth-sk-anchor
+  raw_ids: true
+nodes:
+  synth-sk-anchor:
+    label: Anchor
+    event_id: synth-sk-anchor-event
+    is_start: true
+  synth-sk-middle:
+    label: Middle
+    event_id: synth-sk-middle-event
+  synth-sk-target:
+    label: Target
+    event_id: synth-sk-target-event
+  synth-sk-outcome:
+    label: Outcome
+    event_id: synth-sk-outcome-event
+    absorbing: true
+    outcome_type: success
+edges:
+  synth-sk-anchor-to-middle:
+    from: synth-sk-anchor
+    to: synth-sk-middle
+    p: 0.5
+    onset: 0.0
+    mu: 0.8
+    sigma: 0.4
+  synth-sk-anchor-to-target:
+    from: synth-sk-anchor
+    to: synth-sk-target
+    p: 0.15
+    onset: 0.5
+    mu: 1.2
+    sigma: 0.5
+  synth-sk-middle-to-target:
+    from: synth-sk-middle
+    to: synth-sk-target
+    p: 0.6
+    onset: 1.0
+    mu: 1.0
+    sigma: 0.4
+  synth-sk-target-to-outcome:
+    from: synth-sk-target
+    to: synth-sk-outcome
+    p: 0.7
+    onset: 0.5
+    mu: 0.8
+    sigma: 0.3
+simulation:
+  mean_daily_traffic: 500
+  n_days: 100
+  user_kappa: 100
+  failure_rate: 0.05
+  drift_sigma: 0.0
+  seed: 42
+  expected_sample_seconds: 900

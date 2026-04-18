@@ -3,6 +3,7 @@ import * as Menubar from '@radix-ui/react-menubar';
 import { useTabContext, fileRegistry } from '../../contexts/TabContext';
 import { useNavigatorContext } from '../../contexts/NavigatorContext';
 import EdgeScalingControl from '../EdgeScalingControl';
+import GlossaryTooltip from '../GlossaryTooltip';
 import { useViewPreferencesContext } from '../../contexts/ViewPreferencesContext';
 import { useSankeyView } from '../../hooks/useSankeyView';
 import { useBeadDisplayMode } from '../../hooks/useDataValuesView';
@@ -202,7 +203,7 @@ export function ViewMenu() {
                 onCheckedChange={handleToggleSnapToGuides}
               >
                 <Menubar.ItemIndicator className="menubar-item-indicator">✓</Menubar.ItemIndicator>
-                Snap to Guides
+                <GlossaryTooltip term="snap-to-guides" position="right">Snap to Guides</GlossaryTooltip>
               </Menubar.CheckboxItem>
 
               <Menubar.CheckboxItem
@@ -211,7 +212,7 @@ export function ViewMenu() {
                 onCheckedChange={toggleSankeyView}
               >
                 <Menubar.ItemIndicator className="menubar-item-indicator">✓</Menubar.ItemIndicator>
-                Sankey View
+                <GlossaryTooltip term="sankey-view" position="right">Sankey View</GlossaryTooltip>
               </Menubar.CheckboxItem>
 
               <Menubar.CheckboxItem
@@ -220,7 +221,7 @@ export function ViewMenu() {
                 onCheckedChange={() => setBeadDisplayMode(beadDisplayMode === 'data-values' ? 'edge-rate' : 'data-values')}
               >
                 <Menubar.ItemIndicator className="menubar-item-indicator">✓</Menubar.ItemIndicator>
-                Data Values
+                <GlossaryTooltip term="data-values-overlay" position="right">Data Values</GlossaryTooltip>
               </Menubar.CheckboxItem>
 
               <Menubar.CheckboxItem
@@ -229,7 +230,7 @@ export function ViewMenu() {
                 onCheckedChange={() => setBeadDisplayMode(beadDisplayMode === 'path-rate' ? 'edge-rate' : 'path-rate')}
               >
                 <Menubar.ItemIndicator className="menubar-item-indicator">✓</Menubar.ItemIndicator>
-                Path View
+                <GlossaryTooltip term="path-view" position="right">Path View</GlossaryTooltip>
               </Menubar.CheckboxItem>
 
               <Menubar.CheckboxItem
@@ -238,7 +239,7 @@ export function ViewMenu() {
                 onCheckedChange={handleToggleAnimateFlow}
               >
                 <Menubar.ItemIndicator className="menubar-item-indicator">✓</Menubar.ItemIndicator>
-                Animate Flow
+                <GlossaryTooltip term="animate-flow" position="right">Animate Flow</GlossaryTooltip>
               </Menubar.CheckboxItem>
 
               <Menubar.CheckboxItem
@@ -254,7 +255,7 @@ export function ViewMenu() {
 
               <Menubar.Sub>
                 <Menubar.SubTrigger className="menubar-item">
-                  Confidence Intervals
+                  <GlossaryTooltip term="confidence-intervals" position="right">Confidence Intervals</GlossaryTooltip>
                   <div className="menubar-right-slot">›</div>
                 </Menubar.SubTrigger>
                 <Menubar.Portal>
@@ -293,7 +294,7 @@ export function ViewMenu() {
                 onCheckedChange={toggleForecastQuality}
               >
                 <Menubar.ItemIndicator className="menubar-item-indicator">✓</Menubar.ItemIndicator>
-                Forecast Quality
+                <GlossaryTooltip term="forecast-quality-overlay" position="right">Forecast Quality</GlossaryTooltip>
               </Menubar.CheckboxItem>
 
               <Menubar.CheckboxItem
@@ -302,7 +303,7 @@ export function ViewMenu() {
                 onCheckedChange={toggleDataDepth}
               >
                 <Menubar.ItemIndicator className="menubar-item-indicator">✓</Menubar.ItemIndicator>
-                Data Depth
+                <GlossaryTooltip term="data-depth-overlay" position="right">Data Depth</GlossaryTooltip>
               </Menubar.CheckboxItem>
 
               {/* Sankey Layout option - only show when Sankey view is active */}
@@ -404,7 +405,7 @@ export function ViewMenu() {
             onCheckedChange={() => toggleProjectionMode({ updateUrl: true })}
           >
             <Menubar.ItemIndicator className="menubar-item-indicator">✓</Menubar.ItemIndicator>
-            Projection view
+            <GlossaryTooltip term="projection-view" position="right">Projection view</GlossaryTooltip>
           </Menubar.CheckboxItem>
 
           <Menubar.CheckboxItem

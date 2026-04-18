@@ -193,43 +193,85 @@ GRAPH_CONFIGS: dict[str, dict[str, Any]] = {
 # Importable API: discovery, verification, meta sidecar
 # ---------------------------------------------------------------------------
 
+def _resolve_truth_dir() -> str:
+    """Resolve the canonical truth directory: bayes/truth/ in the dagnet repo."""
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "truth")
+
+
 def discover_synth_graphs(data_repo: str | None = None) -> list[dict]:
-    """Discover synth graphs from truth files in the data repo.
+    """Discover synth graphs from truth files.
+
+    Primary source: bayes/truth/ in the dagnet repo (canonical).
+    Fallback: data_repo/graphs/ for any truth files not yet migrated.
+
+    Graph JSONs (generated artefacts) live in data_repo/graphs/.
 
     Returns list of dicts with keys:
         graph_name, truth_path, graph_path (may not exist yet),
-        has_graph_json, has_new_format
+        has_graph_json, has_new_format, truth
     """
     if data_repo is None:
         data_repo = _resolve_data_repo()
-    graphs_dir = os.path.join(data_repo, "graphs")
-    if not os.path.isdir(graphs_dir):
-        return []
+    graphs_dir = os.path.join(data_repo, "graphs") if data_repo else ""
 
     from graph_from_truth import truth_has_graph_structure
 
+    seen: set[str] = set()
     results = []
-    for fname in sorted(os.listdir(graphs_dir)):
-        if not fname.startswith("synth-") or not fname.endswith(".truth.yaml"):
-            continue
-        if ".truth.hard." in fname:
-            continue
 
-        graph_name = fname.replace(".truth.yaml", "")
-        truth_path = os.path.join(graphs_dir, fname)
-        graph_path = os.path.join(graphs_dir, f"{graph_name}.json")
+    # Primary: bayes/truth/
+    truth_dir = _resolve_truth_dir()
+    if os.path.isdir(truth_dir):
+        for fname in sorted(os.listdir(truth_dir)):
+            if not fname.startswith("synth-") or not fname.endswith(".truth.yaml"):
+                continue
+            if ".truth.hard." in fname:
+                continue
 
-        with open(truth_path) as f:
-            truth = yaml.safe_load(f) or {}
+            graph_name = fname.replace(".truth.yaml", "")
+            truth_path = os.path.join(truth_dir, fname)
+            graph_path = os.path.join(graphs_dir, f"{graph_name}.json") if graphs_dir else ""
 
-        results.append({
-            "graph_name": graph_name,
-            "truth_path": truth_path,
-            "graph_path": graph_path,
-            "has_graph_json": os.path.isfile(graph_path),
-            "has_new_format": truth_has_graph_structure(truth),
-            "truth": truth,
-        })
+            with open(truth_path) as f:
+                truth = yaml.safe_load(f) or {}
+
+            results.append({
+                "graph_name": graph_name,
+                "truth_path": truth_path,
+                "graph_path": graph_path,
+                "has_graph_json": bool(graph_path) and os.path.isfile(graph_path),
+                "has_new_format": truth_has_graph_structure(truth),
+                "truth": truth,
+            })
+            seen.add(graph_name)
+
+    # Fallback: data_repo/graphs/ for any not in bayes/truth/
+    if graphs_dir and os.path.isdir(graphs_dir):
+        for fname in sorted(os.listdir(graphs_dir)):
+            if not fname.startswith("synth-") or not fname.endswith(".truth.yaml"):
+                continue
+            if ".truth.hard." in fname:
+                continue
+
+            graph_name = fname.replace(".truth.yaml", "")
+            if graph_name in seen:
+                continue  # already found in bayes/truth/
+
+            truth_path = os.path.join(graphs_dir, fname)
+            graph_path = os.path.join(graphs_dir, f"{graph_name}.json")
+
+            with open(truth_path) as f:
+                truth = yaml.safe_load(f) or {}
+
+            results.append({
+                "graph_name": graph_name,
+                "truth_path": truth_path,
+                "graph_path": graph_path,
+                "has_graph_json": os.path.isfile(graph_path),
+                "has_new_format": truth_has_graph_structure(truth),
+                "truth": truth,
+            })
+
     return results
 
 
@@ -275,9 +317,15 @@ def verify_synth_data(
             "meta": meta or {},
         }
 
-    truth_path = os.path.join(graphs_dir, f"{graph_name}.truth.yaml")
-    if not os.path.isfile(truth_path):
-        return _result("no_truth", f"No truth file: {truth_path}")
+    # Truth file: check bayes/truth/ first (canonical), then data repo
+    _canonical_truth = os.path.join(_resolve_truth_dir(), f"{graph_name}.truth.yaml")
+    _datarepo_truth = os.path.join(graphs_dir, f"{graph_name}.truth.yaml")
+    if os.path.isfile(_canonical_truth):
+        truth_path = _canonical_truth
+    elif os.path.isfile(_datarepo_truth):
+        truth_path = _datarepo_truth
+    else:
+        return _result("no_truth", f"No truth file in bayes/truth/ or data repo")
 
     # Current truth file fingerprint
     with open(truth_path, "rb") as f:
@@ -861,6 +909,7 @@ def simulate_graph(
         ctx_lookup.append({
             "id": dim["id"],
             "mece": dim.get("mece", True),
+            "independent": dim.get("independent", False),
             "values": dim_values,
             "weights": np.array(weights),
         })
@@ -868,8 +917,15 @@ def simulate_graph(
         dim_names = [d["id"] for d in ctx_lookup]
         print(f"  Contexts: {len(ctx_lookup)} dimensions ({', '.join(dim_names)})", flush=True)
         for cl in ctx_lookup:
-            vals = [f"{v['id']}={w:.0%}" for v, w in zip(cl["values"], cl["weights"])]
-            print(f"    {cl['id']}: {', '.join(vals)}", flush=True)
+            parts = []
+            for v, w in zip(cl["values"], cl["weights"]):
+                label = f"{v['id']}={w:.0%}"
+                _af = v.get("active_from_day")
+                _at = v.get("active_to_day")
+                if _af is not None or _at is not None:
+                    label += f" [day {_af or 0}-{_at or '∞'}]"
+                parts.append(label)
+            print(f"    {cl['id']}: {', '.join(parts)}", flush=True)
 
     def _compute_user_params(
         user_contexts: dict[str, str],
@@ -1038,12 +1094,25 @@ def simulate_graph(
         # Simulate each person
         day_arrivals: list[dict] = []
         for _ in range(n_people):
-            # Assign context values (one per MECE dimension)
+            # Assign context values (one per MECE dimension).
+            # When values have active_from_day / active_to_day, zero out
+            # inactive values and renormalize weights for this day.
             user_contexts: dict[str, str] = {}
             for cl in ctx_lookup:
                 if cl["mece"]:
-                    choice = rng.choice(len(cl["values"]), p=cl["weights"])
-                    user_contexts[cl["id"]] = cl["values"][choice]["id"]
+                    _day_weights = cl["weights"].copy()
+                    for _vi, _vdef in enumerate(cl["values"]):
+                        _afrom = _vdef.get("active_from_day", 0)
+                        _ato = _vdef.get("active_to_day", 999999)
+                        _obs_day = max(0, day_idx - burn_in_days)
+                        if not (_afrom <= _obs_day <= _ato):
+                            _day_weights[_vi] = 0.0
+                    _wsum = _day_weights.sum()
+                    if _wsum > 0:
+                        _day_weights /= _wsum
+                        choice = rng.choice(len(cl["values"]), p=_day_weights)
+                        user_contexts[cl["id"]] = cl["values"][choice]["id"]
+                    # else: no active values on this day — user has no context
                 # TODO: non-MECE dimensions (user can belong to multiple values)
 
             # Use day-level p (shared by all users in this context on this day)
@@ -1524,6 +1593,13 @@ def _generate_observations_nightly(
     #   emit_dimensions: ["channel", "device"]  — per-dimension control
     _all_dim_ids = {d["id"] for d in (context_dims or [])}
 
+    def _ctx_value_active(ctx_key: str, day_offset: int) -> bool:
+        """Check if a context value is active on a given day."""
+        window = _ctx_active_windows.get(ctx_key)
+        if window is None:
+            return True
+        return window[0] <= day_offset <= window[1]
+
     def _emit_dims_for_day(day_offset: int) -> set[str]:
         if not epochs:
             return _all_dim_ids if emit_context_slices else set()
@@ -1644,9 +1720,20 @@ def _generate_observations_nightly(
     # ── Build per-context sorted lists ──────────────────────────────────
     context_dims = context_dims or []
     ctx_keys: list[str] = []
+    # Per-value active windows: ctx_key → (from_day, to_day).
+    # When active_from_day / active_to_day are set on a context value,
+    # rows for that value are only emitted on days within the window.
+    # This models structured temporal coverage (e.g. treatments that
+    # start/stop at known dates).
+    _ctx_active_windows: dict[str, tuple[int, int]] = {}
     for dim in context_dims:
         for v in dim.get("values", []):
-            ctx_keys.append(f"context({dim['id']}:{v['id']})")
+            ck = f"context({dim['id']}:{v['id']})"
+            ctx_keys.append(ck)
+            _from = v.get("active_from_day", 0)
+            _to = v.get("active_to_day", 999999)
+            if _from > 0 or _to < 999999:
+                _ctx_active_windows[ck] = (_from, _to)
 
     ctx_sorted_times: dict[str, list[dict[str, list[float]]]] = {k: [] for k in ctx_keys}
     ctx_sorted_edge_times: dict[str, list[dict[str, list[float]]]] = {k: [] for k in ctx_keys}
@@ -1943,9 +2030,11 @@ def _generate_observations_nightly(
                 lstats = edge_latency_stats.get(edge_id, {})
                 _emit_dims_this_day = _emit_dims_for_day(obs_day_offset)
                 # Filter ctx_keys to only dimensions emitted on this day
+                # AND values active on this day (per-value active windows)
                 _active_ctx_keys = [
                     ck for ck in ctx_keys
                     if _extract_dimension_from_slice_key(ck) in _emit_dims_this_day
+                    and _ctx_value_active(ck, obs_day_offset)
                 ] if _emit_dims_this_day else []
                 if not _active_ctx_keys:
                     # Bare aggregate cohort row (no context dims active)
@@ -2046,6 +2135,7 @@ def _generate_observations_nightly(
                     _active_ctx_keys_w = [
                         ck for ck in ctx_keys
                         if _extract_dimension_from_slice_key(ck) in _emit_dims_this_day_w
+                        and _ctx_value_active(ck, abs_from_day)
                     ] if _emit_dims_this_day_w else []
                     if not _active_ctx_keys_w:
                         # Bare aggregate window row
@@ -2537,6 +2627,8 @@ def write_context_files(truth: dict, data_repo: str) -> list[str]:
                 entry["sources"] = v["sources"]
             values.append(entry)
 
+        is_independent = dim.get("independent", False)
+
         ctx_def: dict = {
             "id": dim_id,
             "name": dim.get("label", dim_id),
@@ -2545,12 +2637,17 @@ def write_context_files(truth: dict, data_repo: str) -> list[str]:
             "values": values,
             "metadata": {"status": "active", "author": "synth_gen", "version": "1.0.0"},
         }
+        if is_independent:
+            ctx_def["independent"] = True
 
         ctx_path = os.path.join(contexts_dir, f"{dim_id}.yaml")
         with open(ctx_path, "w") as f:
             yaml.dump(ctx_def, f, default_flow_style=False, sort_keys=False)
         written.append(dim_id)
-        print(f"  {dim_id}: {len(values)} values, mece={is_mece} → {ctx_path}")
+        _flags = f"mece={is_mece}"
+        if is_independent:
+            _flags += ", independent=true"
+        print(f"  {dim_id}: {len(values)} values, {_flags} → {ctx_path}")
 
     return written
 
@@ -3240,7 +3337,15 @@ Examples:
     from graph_from_truth import generate_graph_artefacts, truth_has_graph_structure
     graph_name = GRAPH_SHORTCUTS.get(args.graph, args.graph) if hasattr(sys.modules[__name__], 'GRAPH_SHORTCUTS') else args.graph
 
+    _truth_dir = _resolve_truth_dir()
     truth_candidates = [
+        # Canonical: bayes/truth/
+        os.path.join(_truth_dir, f"{graph_name}.truth.yaml"),
+        os.path.join(_truth_dir, f"synth-{graph_name}.truth.yaml"),
+        os.path.join(_truth_dir, f"synth-{graph_name}-test.truth.yaml"),
+        os.path.join(_truth_dir, f"{args.graph}.truth.yaml"),
+        os.path.join(_truth_dir, f"synth-{args.graph}.truth.yaml"),
+        # Fallback: data repo
         os.path.join(data_repo, "graphs", f"{graph_name}.truth.yaml"),
         os.path.join(data_repo, "graphs", f"synth-{graph_name}.truth.yaml"),
         os.path.join(data_repo, "graphs", f"synth-{graph_name}-test.truth.yaml"),

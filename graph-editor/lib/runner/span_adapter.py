@@ -97,13 +97,13 @@ def span_kernel_to_edge_params(
         # centred on the span rate, not the last edge's rate.
         post_alpha = prob_posterior.get('alpha')
         post_beta = prob_posterior.get('beta')
-        path_alpha = prob_posterior.get('path_alpha')
-        path_beta = prob_posterior.get('path_beta')
+        cohort_alpha = prob_posterior.get('cohort_alpha')
+        cohort_beta = prob_posterior.get('cohort_beta')
 
         # Derive kappa from last edge's posterior (how much data it saw)
-        if (isinstance(path_alpha, (int, float)) and isinstance(path_beta, (int, float))
-                and path_alpha > 0 and path_beta > 0):
-            kappa = float(path_alpha) + float(path_beta)
+        if (isinstance(cohort_alpha, (int, float)) and isinstance(cohort_beta, (int, float))
+                and cohort_alpha > 0 and cohort_beta > 0):
+            kappa = float(cohort_alpha) + float(cohort_beta)
         elif (isinstance(post_alpha, (int, float)) and isinstance(post_beta, (int, float))
                 and post_alpha > 0 and post_beta > 0):
             kappa = float(post_alpha) + float(post_beta)
@@ -113,8 +113,8 @@ def span_kernel_to_edge_params(
         # Re-derive alpha/beta from span_p + kappa
         params['posterior_alpha'] = span_p * kappa
         params['posterior_beta'] = (1.0 - span_p) * kappa
-        params['posterior_path_alpha'] = span_p * kappa
-        params['posterior_path_beta'] = (1.0 - span_p) * kappa
+        params['posterior_cohort_alpha'] = span_p * kappa
+        params['posterior_cohort_beta'] = (1.0 - span_p) * kappa
 
         # p_stdev — derived from span_p + kappa
         span_alpha = span_p * kappa

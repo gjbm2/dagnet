@@ -286,8 +286,8 @@ describe('bayesPatchService — graph edge projection (doc 21 §4.4)', () => {
     expect(edge.p.posterior.fitted_at).toBe('15-Mar-26');
 
     // Path-level from cohort()
-    expect(edge.p.posterior.path_alpha).toBe(38);
-    expect(edge.p.posterior.path_beta).toBe(112);
+    expect(edge.p.posterior.cohort_alpha).toBe(38);
+    expect(edge.p.posterior.cohort_beta).toBe(112);
 
     // No file-level internals on graph edge (doc 21 invariant 4/6)
     expect(edge.p.posterior.slices).toBeUndefined();

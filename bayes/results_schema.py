@@ -231,6 +231,21 @@ def serialise_audit(audit: dict | None) -> dict | None:
             "worst_pareto_k": round_val(loo.get("worst_pareto_k", 0), "pareto_k"),
         }
 
+    # Binding details — per-edge row counts (data volume)
+    binding_details = db.get("binding_details", [])
+    if binding_details:
+        result["binding"]["edges"] = [
+            {
+                "edge": bd["uuid"],
+                "source": bd["source"],
+                "verdict": bd["verdict"],
+                "rows_raw": bd["rows_raw"],
+                "rows_post_regime": bd["rows_post_regime"],
+                "rows_final": bd["rows_final"],
+            }
+            for bd in binding_details
+        ]
+
     # Binding slice details — compact per-edge-per-slice data counts
     slice_details = db.get("slice_details", [])
     if slice_details:
@@ -325,4 +340,108 @@ def serialise_result(r: dict) -> dict:
     if audit:
         result["audit"] = audit
 
+    # Experimental design metadata — extracted from truth config so
+    # downstream analysis can group/slice results by sparsity level,
+    # topology, lifecycle config, etc. without parsing graph names.
+    truth_config = r.get("truth_config")
+    if truth_config:
+        result["design"] = serialise_design(truth_config)
+
     return result
+
+
+def serialise_design(truth: dict) -> dict:
+    """Extract experimental design metadata from a truth config.
+
+    Produces a flat, jq-friendly dict describing the graph's position
+    in the cartesian test space: topology shape, sparsity parameters,
+    context dimensions, epoch structure, and data volume settings.
+    """
+    sim = truth.get("simulation", {})
+    edges = truth.get("edges", {})
+    nodes = truth.get("nodes", {})
+    ctx_dims = truth.get("context_dimensions", [])
+    epochs = truth.get("epochs", [])
+
+    # Topology classification
+    n_edges = len([e for e in edges.values()
+                   if isinstance(e, dict) and e.get("p") is not None])
+    n_nodes = len(nodes)
+    has_join = any(
+        sum(1 for e in edges.values()
+            if isinstance(e, dict) and e.get("to") == nid) > 1
+        for nid in nodes
+    )
+    has_branch = any(
+        sum(1 for e in edges.values()
+            if isinstance(e, dict) and e.get("from") == nid) > 1
+        for nid in nodes
+    )
+    if n_edges == 1:
+        topo = "solo"
+    elif has_join and has_branch:
+        topo = "diamond"
+    elif has_join:
+        topo = "join"
+    elif has_branch:
+        topo = "branch"
+    else:
+        topo = "chain"
+
+    design: dict[str, Any] = {
+        "topology": topo,
+        "n_edges": n_edges,
+        "n_nodes": n_nodes,
+        "n_days": sim.get("n_days", 0),
+        "mean_daily_traffic": sim.get("mean_daily_traffic", 0),
+    }
+
+    # Sparsity parameters
+    _fd = sim.get("frame_drop_rate", 0)
+    _tr = sim.get("toggle_rate", 0)
+    _ia = sim.get("initial_absent_pct", 0)
+    if _fd > 0 or _tr > 0 or _ia > 0:
+        design["sparsity"] = {
+            "frame_drop_rate": _fd,
+            "toggle_rate": _tr,
+            "initial_absent_pct": _ia,
+        }
+
+    # Context dimensions
+    if ctx_dims:
+        dim_summaries = []
+        for dim in ctx_dims:
+            values = dim.get("values", [])
+            dim_summary: dict[str, Any] = {
+                "id": dim.get("id", ""),
+                "n_values": len(values),
+                "mece": dim.get("mece", False),
+            }
+            # Lifecycle: any values with active windows?
+            lifecycles = []
+            for v in values:
+                _af = v.get("active_from_day")
+                _at = v.get("active_to_day")
+                if _af is not None or _at is not None:
+                    lifecycles.append({
+                        "value": v.get("id", ""),
+                        "active_from_day": _af or 0,
+                        "active_to_day": _at or 999999,
+                    })
+            if lifecycles:
+                dim_summary["lifecycles"] = lifecycles
+            dim_summaries.append(dim_summary)
+        design["context_dimensions"] = dim_summaries
+
+    # Epoch structure
+    if epochs:
+        design["epochs"] = [
+            {
+                "label": ep.get("label", ""),
+                "from_day": ep.get("from_day", 0),
+                "to_day": ep.get("to_day", 0),
+            }
+            for ep in epochs
+        ]
+
+    return design

@@ -1036,6 +1036,56 @@ export const CHART_DISPLAY_SETTINGS: Record<string, DisplaySettingDef[]> = {
     },
   ],
 
+  // Conversion Rate — doc 49 Part B. Non-latency edges only.
+  // Three controls: bin size, show bands, show midpoint.
+  conversion_rate: [
+    ...COMMON_FONT_SIZE_SETTINGS,
+    ...COMMON_AXIS_SETTINGS,
+    ...COMMON_LEGEND_SETTINGS,
+    ...COMMON_LABEL_SETTINGS,
+    ...COMMON_TOOLTIP_SETTINGS,
+    ...COMMON_ANIMATION_SETTINGS,
+    ...COMMON_REFERENCE_LINE_SETTINGS,
+    {
+      key: 'bin_size',
+      label: 'Bin size',
+      shortLabel: 'Bin',
+      type: 'radio',
+      options: [
+        { value: 'day', label: 'Day' },
+        { value: 'week', label: 'Week' },
+        { value: 'month', label: 'Month' },
+      ],
+      defaultValue: 'day',
+      propsPanel: true,
+      inline: 'brief',
+      contextMenu: false,
+      computeAffecting: true,
+    },
+    {
+      key: 'show_epistemic_bands',
+      label: 'Epistemic bands',
+      shortLabel: 'Bands',
+      type: 'checkbox',
+      defaultValue: true,
+      propsPanel: true,
+      inline: 'brief',
+      contextMenu: false,
+      computeAffecting: false,
+    },
+    {
+      key: 'show_model_midpoint',
+      label: 'Model midpoint',
+      shortLabel: 'Midpoint',
+      type: 'checkbox',
+      defaultValue: true,
+      propsPanel: true,
+      inline: 'brief',
+      contextMenu: false,
+      computeAffecting: false,
+    },
+  ],
+
   cohort_maturity: [
     ...COMMON_FONT_SIZE_SETTINGS,
     ...COMMON_AXIS_SETTINGS,

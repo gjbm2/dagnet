@@ -13,6 +13,7 @@
 import React from 'react';
 import type { ProbabilityPosterior, LatencyPosterior, ModelVarsEntry } from '../../types';
 import { BayesPosteriorCard, ModelRateChart } from './BayesPosteriorCard';
+import GlossaryTooltip from '../GlossaryTooltip';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -50,15 +51,16 @@ interface ModelCardProps {
 
 // ── Shared sub-components (inline for now — extract to own files when stable) ─
 
-const Label = ({ children }: { children: string }) => (
+const Label = ({ children }: { children: React.ReactNode }) => (
   <span style={{ color: 'var(--text-muted, #999)', fontSize: 10 }}>{children}</span>
 );
 const Value = ({ children, muted }: { children: string; muted?: boolean }) => (
   <span style={{ fontSize: 11, fontVariantNumeric: 'tabular-nums', ...(muted ? { color: 'var(--text-muted, #999)' } : {}) }}>{children}</span>
 );
-const Row = ({ label, value, muted }: { label: string; value: string; muted?: boolean }) => (
+const Row = ({ label, value, muted, term }: { label: string; value: string; muted?: boolean; term?: string }) => (
   <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, lineHeight: '17px' }}>
-    <Label>{label}</Label><Value muted={muted}>{value}</Value>
+    <Label>{term ? <GlossaryTooltip term={term}>{label}</GlossaryTooltip> : label}</Label>
+    <Value muted={muted}>{value}</Value>
   </div>
 );
 const SectionLabel = ({ children }: { children: string }) => (
@@ -99,9 +101,9 @@ export function ModelCard({
     return (
       <>
         <SectionLabel>Probability</SectionLabel>
-        <Row label="p" value={fmtPct(entry.probability.mean)} />
+        <Row label="p" term="probability" value={fmtPct(entry.probability.mean)} />
         {entry.probability.stdev > 0 && (
-          <Row label="stdev" value={fmt(entry.probability.stdev)} muted />
+          <Row label="stdev" term="stdev" value={fmt(entry.probability.stdev)} muted />
         )}
         {timestampLabel && entry.source_at && <Row label={timestampLabel} value={entry.source_at} />}
       </>
@@ -116,15 +118,15 @@ export function ModelCard({
   // Build edge latency rows
   const edgeLatRows = (
     <>
-      <Row label="onset" value={`${fmt(lat.onset_delta_days, 1)}d${lat.onset_sd != null && lat.onset_sd > 0 ? ` ± ${fmt(lat.onset_sd, 1)}d` : ''}`}
+      <Row label="onset" term="onset" value={`${fmt(lat.onset_delta_days, 1)}d${lat.onset_sd != null && lat.onset_sd > 0 ? ` ± ${fmt(lat.onset_sd, 1)}d` : ''}`}
            muted={!!lat.onset_sd} />
-      <Row label="μ" value={`${fmt(lat.mu, 3)}${lat.mu_sd != null && lat.mu_sd > 0 ? ` ± ${fmt(lat.mu_sd, 3)}` : ''}`}
+      <Row label="μ" term="mu" value={`${fmt(lat.mu, 3)}${lat.mu_sd != null && lat.mu_sd > 0 ? ` ± ${fmt(lat.mu_sd, 3)}` : ''}`}
            muted={!!lat.mu_sd} />
-      <Row label="σ" value={`${fmt(lat.sigma, 3)}${lat.sigma_sd != null && lat.sigma_sd > 0 ? ` ± ${fmt(lat.sigma_sd, 3)}` : ''}`}
+      <Row label="σ" term="sigma" value={`${fmt(lat.sigma, 3)}${lat.sigma_sd != null && lat.sigma_sd > 0 ? ` ± ${fmt(lat.sigma_sd, 3)}` : ''}`}
            muted={!!lat.sigma_sd} />
-      <Row label="t95" value={`${fmt(lat.t95, 1)}d`} />
+      <Row label="t95" term="t95" value={`${fmt(lat.t95, 1)}d`} />
       {lat.onset_mu_corr != null && lat.onset_mu_corr !== 0 && (
-        <Row label="onset↔μ" value={fmt(lat.onset_mu_corr, 3)} muted />
+        <Row label="onset↔μ" term="onset-mu-corr" value={fmt(lat.onset_mu_corr, 3)} muted />
       )}
     </>
   );
@@ -132,13 +134,13 @@ export function ModelCard({
   // Build path latency rows
   const pathLatRows = hasPath ? (
     <>
-      <Row label="onset" value={`${fmt(lat.path_onset_delta_days, 1)}d${lat.path_onset_sd != null && lat.path_onset_sd > 0 ? ` ± ${fmt(lat.path_onset_sd, 1)}d` : ''}`}
+      <Row label="onset" term="onset" value={`${fmt(lat.path_onset_delta_days, 1)}d${lat.path_onset_sd != null && lat.path_onset_sd > 0 ? ` ± ${fmt(lat.path_onset_sd, 1)}d` : ''}`}
            muted={!!lat.path_onset_sd} />
-      <Row label="μ" value={`${fmt(lat.path_mu, 3)}${lat.path_mu_sd != null && lat.path_mu_sd > 0 ? ` ± ${fmt(lat.path_mu_sd, 3)}` : ''}`}
+      <Row label="μ" term="mu" value={`${fmt(lat.path_mu, 3)}${lat.path_mu_sd != null && lat.path_mu_sd > 0 ? ` ± ${fmt(lat.path_mu_sd, 3)}` : ''}`}
            muted={!!lat.path_mu_sd} />
-      <Row label="σ" value={`${fmt(lat.path_sigma, 3)}${lat.path_sigma_sd != null && lat.path_sigma_sd > 0 ? ` ± ${fmt(lat.path_sigma_sd, 3)}` : ''}`}
+      <Row label="σ" term="sigma" value={`${fmt(lat.path_sigma, 3)}${lat.path_sigma_sd != null && lat.path_sigma_sd > 0 ? ` ± ${fmt(lat.path_sigma_sd, 3)}` : ''}`}
            muted={!!lat.path_sigma_sd} />
-      {lat.path_t95 != null && <Row label="t95" value={`${fmt(lat.path_t95, 1)}d`} />}
+      {lat.path_t95 != null && <Row label="t95" term="path-t95" value={`${fmt(lat.path_t95, 1)}d`} />}
     </>
   ) : null;
 
@@ -151,7 +153,7 @@ export function ModelCard({
             Edge (window)
           </div>
           <SectionLabel>Probability</SectionLabel>
-          <Row label="p" value={`${fmtPct(entry.probability.mean)}${entry.probability.stdev > 0 ? ` ± ${fmtPct(entry.probability.stdev)}` : ''}`} />
+          <Row label="p" term="probability" value={`${fmtPct(entry.probability.mean)}${entry.probability.stdev > 0 ? ` ± ${fmtPct(entry.probability.stdev)}` : ''}`} />
           <SectionLabel>Latency</SectionLabel>
           {edgeLatRows}
         </div>

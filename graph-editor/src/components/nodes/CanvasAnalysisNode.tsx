@@ -31,7 +31,7 @@ import { getAnalysisTypeMeta, getKindsForView } from '../panels/analysisTypes';
 import { AnalysisTypeCardList } from '../panels/AnalysisTypeCardList';
 import type { ScenarioLayerItem } from '@/types/scenarioLayerList';
 import { getScenarioVisibilityOverlayStyle } from '@/lib/scenarioVisibilityModeStyles';
-import { SCENARIO_PALETTE } from '@/contexts/ScenariosContext';
+import { SCENARIO_PALETTE } from '@/contexts/scenarioPalette';
 import { ChartFloatingIcon } from '../charts/ChartInlineSettingsFloating';
 import { ExpressionToolbarTray } from '../charts/ExpressionToolbarTray';
 import type { ViewMode } from '@/types/chartRecipe';

@@ -15,6 +15,7 @@ import ReactECharts from 'echarts-for-react';
 import { computeQualityTier, qualityTierToColour, qualityTierLabel } from '../../utils/bayesQualityTier';
 import { formatRelativeTime, getFreshnessLevel, freshnessColour, type FreshnessLevel } from '../../utils/freshnessDisplay';
 import type { ProbabilityPosterior, LatencyPosterior, ModelSource } from '../../types';
+import GlossaryTooltip from '../GlossaryTooltip';
 import './posterior-indicator.css';
 
 type Posterior = ProbabilityPosterior | LatencyPosterior;
@@ -148,21 +149,21 @@ function ProbabilityPosteriorDetails({ posterior, tier, colour, retrievedAt, the
         {/* ── Estimate ── */}
         <SectionHeader label="Probability" theme={theme} />
         <tr>
-          <td className="posterior-details-label">p</td>
+          <td className="posterior-details-label"><GlossaryTooltip term="probability">p</GlossaryTooltip></td>
           <td className="posterior-details-value">
             {fmtPct(pMean)} ± {fmtPct(pSd)}
           </td>
         </tr>
         {posterior.hdi_lower != null && (
           <tr>
-            <td className="posterior-details-label">HDI {fmtPct(posterior.hdi_level)}</td>
+            <td className="posterior-details-label"><GlossaryTooltip term="hdi">HDI {fmtPct(posterior.hdi_level)}</GlossaryTooltip></td>
             <td className="posterior-details-value">
               {fmtPct(posterior.hdi_lower)} — {fmtPct(posterior.hdi_upper)}
             </td>
           </tr>
         )}
         <tr>
-          <td className="posterior-details-label">Beta</td>
+          <td className="posterior-details-label"><GlossaryTooltip term="alpha-beta">Beta</GlossaryTooltip></td>
           <td className="posterior-details-value">α={a.toFixed(2)}  β={b.toFixed(2)}</td>
         </tr>
 
@@ -170,7 +171,7 @@ function ProbabilityPosteriorDetails({ posterior, tier, colour, retrievedAt, the
         <SectionHeader label="Convergence" theme={theme} />
         {posterior.rhat != null && (
           <tr>
-            <td className="posterior-details-label">rhat</td>
+            <td className="posterior-details-label"><GlossaryTooltip term="r-hat">rhat</GlossaryTooltip></td>
             <td className="posterior-details-value" style={posterior.rhat > 1.1 ? { color: qualityTierToColour('failed', theme) } : undefined}>
               {posterior.rhat.toFixed(4)}
             </td>
@@ -178,19 +179,19 @@ function ProbabilityPosteriorDetails({ posterior, tier, colour, retrievedAt, the
         )}
         {posterior.ess != null && (
           <tr>
-            <td className="posterior-details-label">ESS</td>
+            <td className="posterior-details-label"><GlossaryTooltip term="ess">ESS</GlossaryTooltip></td>
             <td className="posterior-details-value">{Math.round(posterior.ess)}</td>
           </tr>
         )}
         <tr>
-          <td className="posterior-details-label">Quality</td>
+          <td className="posterior-details-label"><GlossaryTooltip term="quality-tier">Quality</GlossaryTooltip></td>
           <td className="posterior-details-value" style={{ color: colour }}>
             {qualityTierLabel(tier.tier)}
           </td>
         </tr>
         {posterior.delta_elpd != null && (
           <tr>
-            <td className="posterior-details-label">ΔELPD</td>
+            <td className="posterior-details-label"><GlossaryTooltip term="delta-elpd">ΔELPD</GlossaryTooltip></td>
             <td className="posterior-details-value" style={posterior.delta_elpd < 0 ? { color: qualityTierToColour('warning', theme) } : undefined}>
               {posterior.delta_elpd > 0 ? '+' : ''}{posterior.delta_elpd.toFixed(2)}
             </td>
@@ -198,7 +199,7 @@ function ProbabilityPosteriorDetails({ posterior, tier, colour, retrievedAt, the
         )}
         {posterior.pareto_k_max != null && (
           <tr>
-            <td className="posterior-details-label">Pareto k</td>
+            <td className="posterior-details-label"><GlossaryTooltip term="pareto-k">Pareto k</GlossaryTooltip></td>
             <td className="posterior-details-value" style={posterior.pareto_k_max > 0.7 ? { color: qualityTierToColour('warning', theme) } : undefined}>
               {posterior.pareto_k_max.toFixed(3)}
             </td>
@@ -206,7 +207,7 @@ function ProbabilityPosteriorDetails({ posterior, tier, colour, retrievedAt, the
         )}
         {'ppc_coverage_90' in posterior && (posterior as any).ppc_coverage_90 != null && (
           <tr>
-            <td className="posterior-details-label">PPC cov@90%</td>
+            <td className="posterior-details-label"><GlossaryTooltip term="ppc-coverage">PPC cov@90%</GlossaryTooltip></td>
             <td className="posterior-details-value" style={(posterior as any).ppc_coverage_90 < 0.82 || (posterior as any).ppc_coverage_90 > 0.97 ? { color: qualityTierToColour('warning', theme) } : undefined}>
               {((posterior as any).ppc_coverage_90 * 100).toFixed(0)}% <span style={{ opacity: 0.5 }}>({(posterior as any).ppc_n_obs} obs)</span>
             </td>
@@ -214,7 +215,7 @@ function ProbabilityPosteriorDetails({ posterior, tier, colour, retrievedAt, the
         )}
         {posterior.ppc_traj_coverage_90 != null && (
           <tr>
-            <td className="posterior-details-label">PPC traj@90%</td>
+            <td className="posterior-details-label"><GlossaryTooltip term="ppc-coverage">PPC traj@90%</GlossaryTooltip></td>
             <td className="posterior-details-value" style={posterior.ppc_traj_coverage_90 < 0.82 || posterior.ppc_traj_coverage_90 > 0.97 ? { color: qualityTierToColour('warning', theme) } : undefined}>
               {(posterior.ppc_traj_coverage_90 * 100).toFixed(0)}% <span style={{ opacity: 0.5 }}>({posterior.ppc_traj_n_obs} obs)</span>
             </td>
@@ -225,29 +226,29 @@ function ProbabilityPosteriorDetails({ posterior, tier, colour, retrievedAt, the
         <SectionHeader label="Metadata" theme={theme} />
         {activeSource && (
           <tr>
-            <td className="posterior-details-label">Active source</td>
+            <td className="posterior-details-label"><GlossaryTooltip term="active-source">Active source</GlossaryTooltip></td>
             <td className="posterior-details-value" style={{ textTransform: 'capitalize' }}>{activeSource}</td>
           </tr>
         )}
         <tr>
-          <td className="posterior-details-label">Provenance</td>
+          <td className="posterior-details-label"><GlossaryTooltip term="provenance">Provenance</GlossaryTooltip></td>
           <td className="posterior-details-value">{posterior.provenance}</td>
         </tr>
         {posterior.evidence_grade != null && (
           <tr>
-            <td className="posterior-details-label">Evidence</td>
+            <td className="posterior-details-label"><GlossaryTooltip term="evidence-grade">Evidence</GlossaryTooltip></td>
             <td className="posterior-details-value">{posterior.evidence_grade}/3</td>
           </tr>
         )}
         {posterior.prior_tier && (
           <tr>
-            <td className="posterior-details-label">Prior</td>
+            <td className="posterior-details-label"><GlossaryTooltip term="prior-tier">Prior</GlossaryTooltip></td>
             <td className="posterior-details-value">{posterior.prior_tier.replace(/_/g, ' ')}</td>
           </tr>
         )}
         {posterior.fitted_at && (
           <tr>
-            <td className="posterior-details-label">Fitted</td>
+            <td className="posterior-details-label"><GlossaryTooltip term="fitted-at">Fitted</GlossaryTooltip></td>
             <td className="posterior-details-value" style={{ color: freshnessColour(getFreshnessLevel(posterior.fitted_at), theme) }}>
               {formatRelativeTime(posterior.fitted_at) ?? posterior.fitted_at}
             </td>
@@ -255,7 +256,7 @@ function ProbabilityPosteriorDetails({ posterior, tier, colour, retrievedAt, the
         )}
         {retrievedAt && (
           <tr>
-            <td className="posterior-details-label">Data fetched</td>
+            <td className="posterior-details-label"><GlossaryTooltip term="data-fetched">Data fetched</GlossaryTooltip></td>
             <td className="posterior-details-value" style={{ color: freshnessColour(getFreshnessLevel(retrievedAt), theme) }}>
               {formatRelativeTime(retrievedAt) ?? String(retrievedAt)}
             </td>
@@ -263,9 +264,9 @@ function ProbabilityPosteriorDetails({ posterior, tier, colour, retrievedAt, the
         )}
 
         {/* ── Path-level (cohort) probability ── */}
-        {(posterior as any).path_alpha != null && (() => {
-          const pa = (posterior as any).path_alpha;
-          const pb = (posterior as any).path_beta;
+        {(posterior as any).cohort_alpha != null && (() => {
+          const pa = (posterior as any).cohort_alpha;
+          const pb = (posterior as any).cohort_beta;
           const pathMean = pa / (pa + pb);
           const pathSd = Math.sqrt(pa * pb / ((pa + pb) ** 2 * (pa + pb + 1)));
           return (
@@ -316,7 +317,7 @@ function LatencyPosteriorDetails({ posterior, tier, colour, retrievedAt, theme, 
         {/* ── Edge-level (window) ── */}
         <SectionHeader label="Edge latency (window)" theme={theme} />
         <tr>
-          <td className="posterior-details-label">onset δ</td>
+          <td className="posterior-details-label"><GlossaryTooltip term="onset">onset δ</GlossaryTooltip></td>
           <td className="posterior-details-value">
             {fmtDays(posterior.onset_mean ?? posterior.onset_delta_days)}
             {posterior.onset_sd != null && <span className="posterior-details-dim"> ± {fmtDays(posterior.onset_sd)}</span>}
@@ -324,21 +325,21 @@ function LatencyPosteriorDetails({ posterior, tier, colour, retrievedAt, theme, 
         </tr>
         {posterior.onset_hdi_lower != null && (
           <tr>
-            <td className="posterior-details-label">onset HDI {fmtPct(posterior.hdi_level)}</td>
+            <td className="posterior-details-label"><GlossaryTooltip term="hdi">onset HDI {fmtPct(posterior.hdi_level)}</GlossaryTooltip></td>
             <td className="posterior-details-value">{fmtDays(posterior.onset_hdi_lower)} — {fmtDays(posterior.onset_hdi_upper)}</td>
           </tr>
         )}
         <tr>
-          <td className="posterior-details-label">μ</td>
+          <td className="posterior-details-label"><GlossaryTooltip term="mu">μ</GlossaryTooltip></td>
           <td className="posterior-details-value">{fmtNum(posterior.mu_mean)} ± {fmtNum(posterior.mu_sd)}</td>
         </tr>
         <tr>
-          <td className="posterior-details-label">σ</td>
+          <td className="posterior-details-label"><GlossaryTooltip term="sigma">σ</GlossaryTooltip></td>
           <td className="posterior-details-value">{fmtNum(posterior.sigma_mean)} ± {fmtNum(posterior.sigma_sd)}</td>
         </tr>
         {posterior.onset_mu_corr != null && (
           <tr>
-            <td className="posterior-details-label">onset↔μ corr</td>
+            <td className="posterior-details-label"><GlossaryTooltip term="onset-mu-corr">onset↔μ corr</GlossaryTooltip></td>
             <td className="posterior-details-value" style={Math.abs(posterior.onset_mu_corr) > 0.8 ? { color: qualityTierToColour('warning', theme) } : undefined}>
               {posterior.onset_mu_corr.toFixed(3)}
             </td>
@@ -350,7 +351,7 @@ function LatencyPosteriorDetails({ posterior, tier, colour, retrievedAt, theme, 
           <>
             <SectionHeader label="Path latency (cohort)" theme={theme} />
             <tr>
-              <td className="posterior-details-label">onset δ</td>
+              <td className="posterior-details-label"><GlossaryTooltip term="onset">onset δ</GlossaryTooltip></td>
               <td className="posterior-details-value">
                 {fmtDays(posterior.path_onset_delta_days)}
                 {posterior.path_onset_sd != null && <span className="posterior-details-dim"> ± {fmtDays(posterior.path_onset_sd)}</span>}
@@ -358,21 +359,21 @@ function LatencyPosteriorDetails({ posterior, tier, colour, retrievedAt, theme, 
             </tr>
             {posterior.path_onset_hdi_lower != null && (
               <tr>
-                <td className="posterior-details-label">onset HDI {fmtPct(posterior.hdi_level)}</td>
+                <td className="posterior-details-label"><GlossaryTooltip term="hdi">onset HDI {fmtPct(posterior.hdi_level)}</GlossaryTooltip></td>
                 <td className="posterior-details-value">{fmtDays(posterior.path_onset_hdi_lower)} — {fmtDays(posterior.path_onset_hdi_upper)}</td>
               </tr>
             )}
             <tr>
-              <td className="posterior-details-label">μ</td>
+              <td className="posterior-details-label"><GlossaryTooltip term="mu">μ</GlossaryTooltip></td>
               <td className="posterior-details-value">{fmtNum(posterior.path_mu_mean)} ± {fmtNum(posterior.path_mu_sd)}</td>
             </tr>
             <tr>
-              <td className="posterior-details-label">σ</td>
+              <td className="posterior-details-label"><GlossaryTooltip term="sigma">σ</GlossaryTooltip></td>
               <td className="posterior-details-value">{fmtNum(posterior.path_sigma_mean)} ± {fmtNum(posterior.path_sigma_sd)}</td>
             </tr>
             {posterior.path_provenance && (
               <tr>
-                <td className="posterior-details-label">provenance</td>
+                <td className="posterior-details-label"><GlossaryTooltip term="provenance">provenance</GlossaryTooltip></td>
                 <td className="posterior-details-value">{posterior.path_provenance}</td>
               </tr>
             )}
@@ -382,7 +383,7 @@ function LatencyPosteriorDetails({ posterior, tier, colour, retrievedAt, theme, 
         {/* ── t95 HDI ── */}
         {posterior.hdi_t95_lower != null && (
           <tr>
-            <td className="posterior-details-label">t95 HDI {fmtPct(posterior.hdi_level)}</td>
+            <td className="posterior-details-label"><GlossaryTooltip term="t95-hdi">t95 HDI {fmtPct(posterior.hdi_level)}</GlossaryTooltip></td>
             <td className="posterior-details-value">
               {posterior.hdi_t95_lower.toFixed(1)}d — {posterior.hdi_t95_upper.toFixed(1)}d
             </td>

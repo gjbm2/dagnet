@@ -1,6 +1,8 @@
 import React, { useCallback } from 'react';
 import { MousePointer2, Hand, SquareIcon, StickyNote, BoxSelect, BarChart3 } from 'lucide-react';
 import { useElementTool, type ElementToolType } from '../contexts/ElementToolContext';
+import Tooltip from './Tooltip';
+import GlossaryTooltip from './GlossaryTooltip';
 import './ElementPalette.css';
 
 export type { ElementToolType };
@@ -10,15 +12,15 @@ interface ElementPaletteProps {
 }
 
 const TOOLS = [
-  { id: 'select' as const, label: 'Select', icon: MousePointer2, isCreation: false },
-  { id: 'pan' as const, label: 'Pan', icon: Hand, isCreation: false },
+  { id: 'select' as const, label: 'Select', icon: MousePointer2, isCreation: false, glossaryTerm: undefined },
+  { id: 'pan' as const, label: 'Pan', icon: Hand, isCreation: false, glossaryTerm: undefined },
 ];
 
 const CREATION_ELEMENTS = [
-  { id: 'new-node' as const, label: 'Conversion Node', icon: SquareIcon },
-  { id: 'new-postit' as const, label: 'Post-It Note', icon: StickyNote },
-  { id: 'new-container' as const, label: 'Container', icon: BoxSelect },
-  { id: 'new-analysis' as const, label: 'Canvas Analysis', icon: BarChart3 },
+  { id: 'new-node' as const, label: 'Conversion Node', icon: SquareIcon, glossaryTerm: 'conversion-node' as const },
+  { id: 'new-postit' as const, label: 'Post-It Note', icon: StickyNote, glossaryTerm: undefined },
+  { id: 'new-container' as const, label: 'Container', icon: BoxSelect, glossaryTerm: 'container-element' as const },
+  { id: 'new-analysis' as const, label: 'Canvas Analysis', icon: BarChart3, glossaryTerm: 'canvas-analysis' as const },
 ];
 
 export function ElementPalette({ layout }: ElementPaletteProps) {
@@ -63,12 +65,14 @@ export function ElementPalette({ layout }: ElementPaletteProps) {
       draggable?: boolean;
       onDragStart?: (e: React.DragEvent) => void;
       kind?: 'tool' | 'object';
+      glossaryTerm?: string;
     }
   ) => {
     const draggable = opts?.draggable ?? false;
     const kind = opts?.kind ?? 'tool';
+    const glossaryTerm = opts?.glossaryTerm;
 
-    return (
+    const button = (
       <button
         key={id}
         type="button"
@@ -94,6 +98,20 @@ export function ElementPalette({ layout }: ElementPaletteProps) {
         />
       </button>
     );
+
+    if (glossaryTerm) {
+      return (
+        <GlossaryTooltip key={id} term={glossaryTerm} position={isHorizontal ? 'bottom' : 'right'}>
+          {button}
+        </GlossaryTooltip>
+      );
+    }
+
+    return (
+      <Tooltip key={id} content={label} position={isHorizontal ? 'bottom' : 'right'}>
+        {button}
+      </Tooltip>
+    );
   };
 
   return (
@@ -110,7 +128,7 @@ export function ElementPalette({ layout }: ElementPaletteProps) {
           t.icon,
           currentTool === t.id,
           () => handleToolClick(t.id),
-          { kind: 'tool' }
+          { kind: 'tool', glossaryTerm: t.glossaryTerm }
         )
       )}
 
@@ -123,7 +141,12 @@ export function ElementPalette({ layout }: ElementPaletteProps) {
           el.icon,
           currentTool === el.id,
           () => handleCreationClick(el.id),
-          { draggable: true, onDragStart: (e) => handleDragStart(e, el.id), kind: 'object' }
+          {
+            draggable: true,
+            onDragStart: (e) => handleDragStart(e, el.id),
+            kind: 'object',
+            glossaryTerm: el.glossaryTerm,
+          }
         )
       )}
     </div>

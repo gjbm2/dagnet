@@ -23,13 +23,16 @@ vi.mock('../../contexts/TabContext', () => ({
 
 // Minimal ScenariosContext mock (optional hook may return null in some surfaces; here we provide it)
 vi.mock('../../contexts/ScenariosContext', () => ({
-  SCENARIO_PALETTE: ['#000000'],
   useScenariosContextOptional: () => ({
     scenarios: [],
     setBaseDSL: vi.fn(),
     createLiveScenario: vi.fn(async (dsl: string) => ({ id: `s-${dsl}`, colour: '#000000' })),
     regenerateScenario: vi.fn(async () => {}),
   }),
+}));
+
+vi.mock('../../contexts/scenarioPalette', () => ({
+  SCENARIO_PALETTE: ['#000000'],
 }));
 
 // Keep this test focused: we don't care about actual context registry lookups here.

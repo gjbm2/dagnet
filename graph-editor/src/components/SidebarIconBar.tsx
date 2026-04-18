@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { SidebarState } from '../hooks/useSidebarState';
 import { Layers, FileText, Wrench, BarChart3 } from 'lucide-react';
 import { ElementPalette } from './ElementPalette';
+import Tooltip from './Tooltip';
 import './SidebarIconBar.css';
 
 interface SidebarIconBarProps {
@@ -68,64 +69,68 @@ export default function SidebarIconBar({ state, onIconClick, onIconHover }: Side
       <div style={{ height: '1px', background: 'rgba(0,0,0,0.1)', margin: '4px 8px' }} />
 
       {/* Scenarios Icon */}
-      <button
-        className={getIconState('what-if').className}
-        onClick={() => handleClick('what-if')}
-        onMouseEnter={() => handleMouseEnter('what-if')}
-        onMouseLeave={handleMouseLeave}
-        title="Scenarios (Ctrl/Cmd + Shift + W)"
-        aria-label="Open Scenarios Panel"
-      >
-        <Layers className="icon" size={20} strokeWidth={2} />
-        {state.floatingPanels.includes('what-if') && (
-          <span className="floating-indicator">↗</span>
-        )}
-      </button>
-      
+      <Tooltip content="Scenarios (Ctrl/Cmd + Shift + W)" position="left">
+        <button
+          className={getIconState('what-if').className}
+          onClick={() => handleClick('what-if')}
+          onMouseEnter={() => handleMouseEnter('what-if')}
+          onMouseLeave={handleMouseLeave}
+          aria-label="Open Scenarios Panel"
+        >
+          <Layers className="icon" size={20} strokeWidth={2} />
+          {state.floatingPanels.includes('what-if') && (
+            <span className="floating-indicator">↗</span>
+          )}
+        </button>
+      </Tooltip>
+
       {/* Properties Icon */}
-      <button
-        className={getIconState('properties').className}
-        onClick={() => handleClick('properties')}
-        onMouseEnter={() => handleMouseEnter('properties')}
-        onMouseLeave={handleMouseLeave}
-        title="Props (Ctrl/Cmd + Shift + P)"
-        aria-label="Open Properties Panel"
-      >
-        <FileText className="icon" size={20} strokeWidth={2} />
-        {state.floatingPanels.includes('properties') && (
-          <span className="floating-indicator">↗</span>
-        )}
-      </button>
-      
+      <Tooltip content="Props (Ctrl/Cmd + Shift + P)" position="left">
+        <button
+          className={getIconState('properties').className}
+          onClick={() => handleClick('properties')}
+          onMouseEnter={() => handleMouseEnter('properties')}
+          onMouseLeave={handleMouseLeave}
+          aria-label="Open Properties Panel"
+        >
+          <FileText className="icon" size={20} strokeWidth={2} />
+          {state.floatingPanels.includes('properties') && (
+            <span className="floating-indicator">↗</span>
+          )}
+        </button>
+      </Tooltip>
+
       {/* Tools Icon */}
-      <button
-        className={getIconState('tools').className}
-        onClick={() => handleClick('tools')}
-        onMouseEnter={() => handleMouseEnter('tools')}
-        onMouseLeave={handleMouseLeave}
-        title="Tools (Ctrl/Cmd + Shift + T)"
-        aria-label="Open Tools Panel"
-      >
-        <Wrench className="icon" size={20} strokeWidth={2} />
-        {state.floatingPanels.includes('tools') && (
-          <span className="floating-indicator">↗</span>
-        )}
-      </button>
-      
+      <Tooltip content="Tools (Ctrl/Cmd + Shift + T)" position="left">
+        <button
+          className={getIconState('tools').className}
+          onClick={() => handleClick('tools')}
+          onMouseEnter={() => handleMouseEnter('tools')}
+          onMouseLeave={handleMouseLeave}
+          aria-label="Open Tools Panel"
+        >
+          <Wrench className="icon" size={20} strokeWidth={2} />
+          {state.floatingPanels.includes('tools') && (
+            <span className="floating-indicator">↗</span>
+          )}
+        </button>
+      </Tooltip>
+
       {/* Analytics Icon */}
-      <button
-        className={getIconState('analytics').className}
-        onClick={() => handleClick('analytics')}
-        onMouseEnter={() => handleMouseEnter('analytics')}
-        onMouseLeave={handleMouseLeave}
-        title="Analytics (Ctrl/Cmd + Shift + A)"
-        aria-label="Open Analytics Panel"
-      >
-        <BarChart3 className="icon" size={20} strokeWidth={2} />
-        {state.floatingPanels.includes('analytics') && (
-          <span className="floating-indicator">↗</span>
-        )}
-      </button>
+      <Tooltip content="Analytics (Ctrl/Cmd + Shift + A)" position="left">
+        <button
+          className={getIconState('analytics').className}
+          onClick={() => handleClick('analytics')}
+          onMouseEnter={() => handleMouseEnter('analytics')}
+          onMouseLeave={handleMouseLeave}
+          aria-label="Open Analytics Panel"
+        >
+          <BarChart3 className="icon" size={20} strokeWidth={2} />
+          {state.floatingPanels.includes('analytics') && (
+            <span className="floating-indicator">↗</span>
+          )}
+        </button>
+      </Tooltip>
     </div>
   );
 }

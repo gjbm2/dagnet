@@ -27,6 +27,7 @@ import {
   Cable,
   FlaskConical,
   Gauge,
+  Percent,
   type LucideIcon,
 } from 'lucide-react';
 import { MinimisedSurpriseGauge } from '../charts/MinimisedSurpriseGauge';
@@ -311,6 +312,20 @@ export const ANALYSIS_TYPES: AnalysisTypeMeta[] = [
     shortDescription: 'Conversion counts by calendar date',
     selectionHint: 'Use from(a).to(b) with a window() or cohort() range',
     icon: Calendar,
+    snapshotContract: {
+      scopeRule: 'funnel_path',
+      readMode: 'raw_snapshots',
+      slicePolicy: 'mece_fulfilment_allowed',
+      timeBoundsSource: 'query_dsl_window',
+      perScenario: false,
+    },
+  },
+  {
+    id: 'conversion_rate',
+    name: 'Conversion Rate',
+    shortDescription: 'Per-bin observed rate with Bayesian epistemic uncertainty',
+    selectionHint: 'Use from(a).to(b). Non-latency edges only (doc 49).',
+    icon: Percent,
     snapshotContract: {
       scopeRule: 'funnel_path',
       readMode: 'raw_snapshots',

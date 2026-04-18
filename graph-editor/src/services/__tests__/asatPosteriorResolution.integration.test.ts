@@ -551,10 +551,10 @@ describe('projectProbabilityPosterior — path-level cohort fields', () => {
     expect(prob!.hdi_lower).toBe(0.22);
 
     // Path-level from cohort()
-    expect(prob!.path_alpha).toBe(38);
-    expect(prob!.path_beta).toBe(112);
-    expect(prob!.path_hdi_lower).toBe(0.20);
-    expect(prob!.path_hdi_upper).toBe(0.35);
+    expect(prob!.cohort_alpha).toBe(38);
+    expect(prob!.cohort_beta).toBe(112);
+    expect(prob!.cohort_hdi_lower).toBe(0.20);
+    expect(prob!.cohort_hdi_upper).toBe(0.35);
   });
 
   it('H5: should omit path-level fields when no cohort() slice', () => {
@@ -571,6 +571,6 @@ describe('projectProbabilityPosterior — path-level cohort fields', () => {
     const prob = projectProbabilityPosterior(posterior, '');
     expect(prob).toBeDefined();
     expect(prob!.alpha).toBe(43);
-    expect(prob!.path_alpha).toBeUndefined();
+    expect(prob!.cohort_alpha).toBeUndefined();
   });
 });
