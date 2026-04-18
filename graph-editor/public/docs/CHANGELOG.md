@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 2.0.3b
+**Released:** 18-Apr-26
+
+Further generalisation fixes. New chart type.
+
+---
+
 ## Version 2.0.2b
 **Released:** 18-Apr-26
 
