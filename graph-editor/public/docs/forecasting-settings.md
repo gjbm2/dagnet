@@ -9,19 +9,25 @@ They materially change computed probabilities (and anything derived from them), 
 
 This page explains what each knob does, how to think about indicative values, and the failure modes each knob is trying to manage.
 
-## Mental model (what DagNet is trying to do)
+## Mental model
 
-For an edge \(X \rightarrow Y\) we care about:
+DagNet forecasts using one of several model sources per edge. The default (`best_available`) prefers **Bayesian posteriors** when available — the conditioned forecast model writes `p.mean` directly from the MC population model. When no Bayesian posterior exists (new edges, first setup, Bayes not yet run), the **analytic pipeline** provides instant estimates.
+
+**The knobs on this page govern the analytic pipeline.** When a Bayesian posterior is the active source for an edge, these settings do not apply — the posterior drives probability directly. See [Model Source Preference](#model-source-preference--model_source_preference) for how the active source is determined.
+
+For edges using the analytic source, we care about:
 - **Evidence**: what we’ve actually observed in the query window (\(k/n\)).
 - **Forecast**: what we believe the long-run conversion rate should be for *mature* cohorts, usually estimated from historical mature days.
 - **Maturity / completeness**: how much of the query window is likely “fully observed” given conversion latency.
 
-When the newest cohorts are immature, raw evidence (\(k/n\)) is biased downward (late converters haven’t arrived yet). DagNet therefore:
+When the newest cohorts are immature, raw evidence (\(k/n\)) is biased downward (late converters haven’t arrived yet). The analytic pipeline therefore:
 - Estimates a **baseline forecast** from mature data.
 - Estimates **completeness** using a latency model.
 - **Blends** forecast and evidence based on completeness and sample size.
 
 ## Knobs
+
+> **Applicability:** The following settings control the **analytic fallback pipeline**. They affect edges whose active model source is `analytic` (FE) or `analytic_be` (BE). Edges with an active Bayesian posterior are not affected — their probability comes from the conditioned forecast model. See [Which settings matter when?](#which-settings-matter-when) below.
 
 ## Recency Half-Life (days) — `RECENCY_HALF_LIFE_DAYS`
 
@@ -229,6 +235,16 @@ Can be set per-edge (with `model_source_preference_overridden` flag) or as a gra
 - **Graph-level**: Graph metadata (edit via Properties panel or YAML)
 
 See [LAG Statistics Reference §12](lag-statistics-reference.md) for the full promotion waterfall.
+
+**Effect on analytic knobs:** When an edge is promoted to `bayesian`, the backend conditioned forecast drives its probability directly — the analytic knobs above (RECENCY_HALF_LIFE, BLEND_LAMBDA, COMPLETENESS_POWER, etc.) are not used for that edge. They remain relevant for edges where no Bayesian posterior exists or where the source is forced to `analytic`.
+
+## Which settings matter when?
+
+| Active source | Which settings apply |
+|---|---|
+| `analytic` / `analytic_be` | All knobs on this page |
+| `bayesian` | MODEL_SOURCE_PREFERENCE, quality tiers, bayes_band_level only |
+| `manual` | MODEL_SOURCE_PREFERENCE only |
 
 ## Quality Tiers (Bayesian fit results)
 

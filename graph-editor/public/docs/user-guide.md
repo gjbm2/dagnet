@@ -110,7 +110,102 @@ If snapshot history is available for the edge parameter, the tooltip also shows:
 - **Set Conditions**: Define when different probabilities apply
 - **Test Scenarios**: Use What-If to test different conditional states
 
-## Latency-Aware Graphs (LAG) — New in 1.0
+## How Forecasting Works
+
+DagNet uses a **two-tier forecasting architecture**:
+
+1. **Bayesian (primary)**: A nightly MCMC engine fits statistical models to your conversion data, producing posterior probability, latency parameters, and calibrated uncertainty bands. When a good-quality posterior exists and the Python backend is reachable, the **conditioned forecast** — a Monte Carlo population model conditioned on snapshot evidence — drives `p.mean` directly for each edge.
+
+2. **Analytic (fallback)**: An instant browser-side statistics pass computes estimates from the same underlying data. Always available, even offline. This is what you see when a graph is first opened, when no Bayesian fit has run yet, or when the backend is unreachable.
+
+The transition is seamless: the FE analytic estimate appears immediately, and the BE conditioned forecast replaces it within seconds when available. Each edge shows a **model source indicator** (analytic / bayesian / manual) so you always know which source is driving the numbers.
+
+The [forecasting settings](forecasting-settings.md) knobs (recency half-life, blend lambda, completeness power, etc.) govern the **analytic pipeline only**. When the Bayesian conditioned forecast is active for an edge, those knobs do not apply — the posterior drives `p.mean` directly.
+
+The sections below describe [Bayesian Model Fitting](#bayesian-model-fitting) (the primary pipeline) and [Latency-Aware Graphs](#latency-aware-graphs-lag) (the analytic pipeline and the underlying latency concepts that both pipelines share).
+
+---
+
+## Bayesian Model Fitting
+
+DagNet includes a Bayesian inference engine that automatically fits statistical models to your conversion data. When enabled, this produces posterior distributions with calibrated uncertainty — replacing point estimates with honest forecasts.
+
+### How It Works
+
+The Bayesian compiler fits models in **two phases**:
+
+1. **Phase 1 (window mode)**: Fits per-edge conversion rates and latency using Beta/Binomial likelihoods at step-day granularity
+2. **Phase 2 (cohort mode)**: Reuses Phase 1 posteriors as priors and fits cohort-level rates with Dirichlet/Binomial likelihoods at branch groups
+
+When context-segmented data is available, **Phase C** (slice pooling) fits hierarchical Dirichlet priors that produce per-context posterior distributions while sharing strength across slices.
+
+### Triggering a Bayes Run
+
+- **Manual**: Right-click a graph → **Run Bayes** to submit a fit for the current graph
+- **Automatic**: Enable the `runBayes` flag on a graph to include it in nightly automation. After the daily data fetch completes, Bayes fits are submitted automatically
+
+### Quality Tiers
+
+After a Bayes run completes, each edge receives a **quality tier** based on MCMC diagnostics:
+
+| Tier | Meaning |
+|------|---------|
+| **Good** | Converged, adequate effective sample size |
+| **Fair** | Minor convergence warnings |
+| **Poor** | Convergence issues — use with caution |
+| **Very poor** | Failed convergence — results unreliable |
+
+Quality tiers are shown in the Bayesian Posterior Card (click the Bayes indicator on an edge), in the operations toast when a fit completes, and in the session log. Poor/very poor results show an amber warning that persists until dismissed.
+
+### Model Source Preference
+
+Each edge can have multiple candidate model sources in its `model_vars` array:
+
+- **Analytic**: From the FE statistics pass (instant, always available)
+- **Bayesian**: From MCMC posterior fitting (higher quality, requires a completed run)
+- **Manual**: From user override
+
+The `model_source_preference` setting (per-edge or graph-level) controls which source is promoted to the active `p.mean`/`p.stdev`. Options: `best_available` (default — prefers Bayesian if available), `bayesian`, `analytic`, `manual`.
+
+### When Does Bayes Replace the Analytic Estimate?
+
+When `model_source_preference` is `best_available` (the default) and a Good or Fair Bayesian posterior exists for an edge, the backend **conditioned forecast** takes over:
+
+- The MC population model reads full maturity trajectories from the snapshot database
+- It produces `p.mean` directly — the analytic blend formula is not used
+- Latency parameters (mu, sigma, t95) come from the posterior's fit, not from moment-matching
+- The [forecasting settings](forecasting-settings.md) knobs (RECENCY_HALF_LIFE, BLEND_LAMBDA, COMPLETENESS_POWER) do not participate for that edge
+
+If the backend is unreachable, or during the brief interval before the BE responds, the FE uses the promoted Bayesian model_vars entry in the analytic blend — the posterior's parameters feed the blend formula, giving a close approximation until the conditioned forecast arrives.
+
+### Two-Tier Forecasting
+
+DagNet uses a **two-tier architecture** for forecasting:
+
+1. **FE quick pass** (instant): The frontend analytics pass runs in the browser the moment you open a graph or change a query. It uses the promoted model source's parameters (Bayesian if available, analytic otherwise) and the blend formula to produce immediate results. Always available, even offline.
+
+2. **BE conditioned forecast** (seconds): When the Python backend is reachable and Bayesian posteriors exist, the backend runs a full MC population model conditioned on snapshot evidence. This produces higher-quality `p.mean` values that replace the FE estimates. The replacement happens automatically and seamlessly.
+
+The UI indicates which tier you're seeing via a quality indicator on each edge and analysis result. When the BE result arrives, the graph updates in place — no manual refresh needed.
+
+### Model Adequacy (LOO-ELPD)
+
+After fitting, DagNet computes **LOO-ELPD** (Leave-One-Out Expected Log Predictive Density) per edge. This measures whether the Bayesian model actually improves on analytic point estimates:
+
+- **Positive ΔELPD**: The Bayesian model adds value
+- **Negative ΔELPD**: The analytic estimate is better — the model may be overfitting or misspecified
+
+LOO-ELPD results appear in the **Forecast Quality overlay**, the **Edge Info Model tab**, and the **PosteriorIndicator** popover.
+
+### Confidence Bands
+
+On cohort maturity charts, Bayesian posteriors produce **confidence bands** — shaded regions showing the credible interval around the model curve. Configurable via the `bayes_band_level` display setting: off, 80%, 90%, 95%, or 99%.
+
+---
+
+## Latency-Aware Graphs (LAG)
+
+> The following describes the **analytic pipeline** — the instant browser-side statistics pass. The concepts of latency, completeness, and maturity apply to both the analytic and Bayesian pipelines, but the blend formula described here is specific to the analytic source. When Bayesian posteriors are active, the conditioned forecast replaces the analytic blend — see [Bayesian Model Fitting](#bayesian-model-fitting) above.
 
 ### Understanding Latency
 
@@ -122,14 +217,16 @@ Traditional conversion funnels treat edges as instantaneous: users either conver
 
 ### Evidence vs Forecast
 
-With LAG enabled, edge probabilities split into two components:
+In the analytic pipeline, edge probabilities split into two components:
 
 | Metric | Meaning |
 |--------|---------|
 | **Evidence** | What we've *observed* — users who have already converted |
 | **Forecast** | What we *expect* — projected conversions based on the lag model |
 
-When a cohort is immature (recent entry date, not enough time has passed), the evidence is incomplete. LAG uses the historical lag distribution to forecast how many more will convert.
+When a cohort is immature (recent entry date, not enough time has passed), the evidence is incomplete. The analytic pipeline uses the historical lag distribution to forecast how many more will convert, then blends evidence and forecast based on completeness and sample size.
+
+When a Bayesian posterior is active for an edge, `p.mean` comes from the conditioned forecast model rather than this blend. The evidence/forecast split is still visible in the UI for transparency.
 
 ### Reading Edge Display
 
@@ -322,7 +419,7 @@ The Analytics panel respects scenario visibility:
 
 | Mode | Description | Use Case |
 |------|-------------|----------|
-| **F+E** | Evidence + Forecast blended | Best overall estimate |
+| **F+E** | Blended probability from the active model source (Bayesian posterior when available, analytic blend otherwise) | Best overall estimate |
 | **F only** | Forecast probabilities | Long-term baseline |
 | **E only** | Evidence probabilities | What's actually happened |
 | **Hidden** | Excluded from analysis | Temporarily hide a scenario |
@@ -409,71 +506,6 @@ You can open any file (graph, parameter, case, event, node, or context) as it wa
 **From the Snapshot Manager:**
 - The "View graph at DATE" button opens the historical version of the graph closest to a signature's creation date
 - It also injects an `asat(DATE)` clause into the graph's DSL query, so you see historical data with the historical graph structure
-
-## Bayesian Model Fitting
-
-DagNet includes a Bayesian inference engine that automatically fits statistical models to your conversion data. When enabled, this produces posterior distributions with calibrated uncertainty — replacing point estimates with honest forecasts.
-
-### How It Works
-
-The Bayesian compiler fits models in **two phases**:
-
-1. **Phase 1 (window mode)**: Fits per-edge conversion rates and latency using Beta/Binomial likelihoods at step-day granularity
-2. **Phase 2 (cohort mode)**: Reuses Phase 1 posteriors as priors and fits cohort-level rates with Dirichlet/Binomial likelihoods at branch groups
-
-When context-segmented data is available, **Phase C** (slice pooling) fits hierarchical Dirichlet priors that produce per-context posterior distributions while sharing strength across slices.
-
-### Triggering a Bayes Run
-
-- **Manual**: Right-click a graph → **Run Bayes** to submit a fit for the current graph
-- **Automatic**: Enable the `runBayes` flag on a graph to include it in nightly automation. After the daily data fetch completes, Bayes fits are submitted automatically
-
-### Quality Tiers
-
-After a Bayes run completes, each edge receives a **quality tier** based on MCMC diagnostics:
-
-| Tier | Meaning |
-|------|---------|
-| **Good** | Converged, adequate effective sample size |
-| **Fair** | Minor convergence warnings |
-| **Poor** | Convergence issues — use with caution |
-| **Very poor** | Failed convergence — results unreliable |
-
-Quality tiers are shown in the Bayesian Posterior Card (click the Bayes indicator on an edge), in the operations toast when a fit completes, and in the session log. Poor/very poor results show an amber warning that persists until dismissed.
-
-### Model Source Preference
-
-Each edge can have multiple candidate model sources in its `model_vars` array:
-
-- **Analytic**: From the FE statistics pass (instant, always available)
-- **Bayesian**: From MCMC posterior fitting (higher quality, requires a completed run)
-- **Manual**: From user override
-
-The `model_source_preference` setting (per-edge or graph-level) controls which source is promoted to the active `p.mean`/`p.stdev`. Options: `best_available` (default — prefers Bayesian if available), `bayesian`, `analytic`, `manual`.
-
-### Two-Tier Forecasting
-
-DagNet uses a **two-tier architecture** for forecasting:
-
-1. **FE quick pass**: The frontend analytics pass provides instant results using analytic estimates. Always available, even offline
-2. **BE follow-up**: When the Python backend is reachable and Bayesian posteriors exist, a higher-quality MC-based forecast replaces the FE estimate, conditioned on snapshot evidence
-
-The UI indicates which tier you're seeing via a quality indicator on each edge and analysis result.
-
-### Model Adequacy (LOO-ELPD)
-
-After fitting, DagNet computes **LOO-ELPD** (Leave-One-Out Expected Log Predictive Density) per edge. This measures whether the Bayesian model actually improves on analytic point estimates:
-
-- **Positive ΔELPD**: The Bayesian model adds value
-- **Negative ΔELPD**: The analytic estimate is better — the model may be overfitting or misspecified
-
-LOO-ELPD results appear in the **Forecast Quality overlay**, the **Edge Info Model tab**, and the **PosteriorIndicator** popover.
-
-### Confidence Bands
-
-On cohort maturity charts, Bayesian posteriors produce **confidence bands** — shaded regions showing the credible interval around the model curve. Configurable via the `bayes_band_level` display setting: off, 80%, 90%, 95%, or 99%.
-
----
 
 ## Canvas Workspace
 

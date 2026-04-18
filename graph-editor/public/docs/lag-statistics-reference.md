@@ -8,6 +8,8 @@ This document is the canonical reference for LAG statistics and convolution logi
 - The mathematical foundations for completeness, forecasting, and blending
 - How scenarios and what-if analysis interact with LAG calculations
 
+> **Scope note:** Sections 1–11 describe the **analytic pipeline** — the FE/BE statistics pass that produces instant probability estimates from raw cohort data. This pipeline is the active source for edges that do not have a Bayesian posterior. When a Bayesian posterior is active for an edge, the conditioned forecast model replaces the analytic blend and drives `p.mean` directly — see §12 for source resolution and §12.5 for what changes under Bayesian promotion. Section 14 covers Bayesian quality diagnostics.
+
 ---
 
 ## 1. Graph Structure (Example: Mixed Latency/Non-Latency Path)
@@ -796,6 +798,8 @@ When deriving `p.forecast.mean`, **recent mature days are weighted more heavily*
 
 ## 8. End-to-End Flow Summary
 
+> **Note:** The flow below describes the **analytic pipeline**. When the Bayesian conditioned forecast is the active source for an edge, the blend steps (fit → completeness → forecast → blend) are replaced by the posterior's parameters — see §12.5.
+
 ```
 ┌─────────────────────────────────────────────────────────────────────────────────────┐
 │                                                                                     │
@@ -1349,6 +1353,19 @@ When the user switches source, all three derived quantities are recomputed from 
 | `p.mean` | Model-derived | Yes (blend depends on completeness + forecast) |
 | `p.latency.mu`, `.sigma`, `.t95` | Model parameter | Yes (promoted from active source) |
 
+### 12.5 What Changes When Bayesian Is the Active Source
+
+When a Bayesian posterior is promoted via the waterfall in §12.2, and the Python backend is reachable, the **conditioned forecast** (a full MC population model reading snapshot DB trajectories) takes over probability computation for that edge. The key differences from the analytic pipeline:
+
+- **`p.mean` is written directly** by the conditioned forecast model — the blend formula (§7) is not used. The MC population model produces a probability conditioned on real snapshot evidence, and this value is applied to the edge as-is.
+- **`p.forecast.mean`** is set to the posterior's p-infinity (the asymptotic conversion rate from the MCMC fit), not the recency-weighted analytic estimate from §7.1.
+- **Latency parameters** (`mu`, `sigma`, `t95`, `onset_delta_days`) come from the posterior's latency fit, not from moment-matched lognormal fitting (§3).
+- **Completeness** is recomputed using the posterior's latency parameters (same CDF formula as §5, different inputs).
+- **Analytic knobs do not participate**: RECENCY_HALF_LIFE_DAYS, FORECAST_BLEND_LAMBDA, LATENCY_BLEND_COMPLETENESS_POWER, and ANCHOR_DELAY_BLEND_K_CONVERSIONS are not used for edges with an active Bayesian source. See [forecasting-settings.md](forecasting-settings.md) for which settings apply to which source.
+- **`p.evidence.mean` remains the raw observed k/n** regardless of source — it is data, not model-dependent (reinforcing §12.4).
+
+If the backend is unreachable, the FE promotes the Bayesian `model_vars` entry into the analytic blend as a close approximation: the posterior's latency and p-infinity feed the blend formula (§7), giving results that are posterior-derived but still use the blend weighting. This is a temporary state — the conditioned forecast replaces it as soon as the backend responds.
+
 ---
 
 ## 13. Constants Reference
@@ -1376,6 +1393,8 @@ Key defaults used in LAG calculations:
 ---
 
 ## 14. Bayesian Quality Tiers and Model Adequacy
+
+Quality tiers and LOO-ELPD determine whether a Bayesian posterior is trustworthy enough to be promoted as the active source (§12.2). Only posteriors that pass the quality gate are eligible for `best_available` promotion.
 
 ### 14.1 Quality Tiers
 
