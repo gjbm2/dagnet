@@ -13,8 +13,8 @@
     },
     "sampling": {
         "chains": 3,
-        "draws": 1500,
-        "tune": 750,
+        "draws": 2000,
+        "tune": 1000,
         "no_timeout": true
     },
     "features": [],

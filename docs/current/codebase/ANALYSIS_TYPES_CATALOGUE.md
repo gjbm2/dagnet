@@ -270,6 +270,22 @@ These require snapshot data and route to the Python backend via
 | **Snapshot** | readMode: sweep_simple |
 | **Output** | Also returns fitted_params: mu, sigma, onset_delta_days |
 
+### conversion_rate
+
+| | |
+|---|---|
+| **Selection** | Path via `from(A).to(B)` — non-latency edges only (see gate below) |
+| **Computes** | Per-bin observed conversion rate (k/n per day/week/month) with a model-rate band derived from the edge's promoted source (doc 49 Part B). |
+| **Dimensions** | bin_start, scenario_id, subject_id |
+| **Metrics** | rate, x (cohort size), y (conversions), plus per-bin epistemic block (hdi_lower/upper, posterior_mean, evidence_grade, fitted_at, source_slice, source_model) |
+| **Chart kinds** | conversion_rate, table |
+| **Snapshot** | readMode: raw_snapshots, scopeRule: funnel_path |
+| **Band resolution** | Per bin: if promoted source is `bayesian` AND `fit_history` has an entry on-or-before the bin date, use that entry's alpha/beta (with sibling-slice fallback — see gotchas). Otherwise use the edge's current promoted alpha/beta from `resolve_model_params`. Fall back chain inside the resolver: cohort_alpha/beta → alpha/beta → evidence k/n → p.mean with kappa_fallback. Never null when the edge has any probability parameter. |
+| **Gate** | Latency edges (those with `latency.latency_parameter: true`) are rejected per-subject with a "not yet supported" error. Doc 49 Phase 3 addresses latency edges separately. Gate checks the authoritative flag, not `sigma > 0` — promoted sigma/mu appears on non-latency edges too (see [KNOWN_ANTI_PATTERNS.md](./KNOWN_ANTI_PATTERNS.md)). |
+| **Display settings** | `bin_size`, `show_epistemic_bands`, `show_model_midpoint` + common font/axis/legend/label/tooltip/animation/reference_line |
+| **Chart features** | Sized scatter (circle area ∝ cohort n), dashed model-rate line (filled forward/backward across sparse fit_history), non-striated HDI band, size legend via graphic in top-right. Multi-scenario supported via the standard concept+swatch legend pattern. |
+| **Blind test** | [graph-ops/scripts/conversion-rate-blind-test.sh](../../../graph-ops/scripts/conversion-rate-blind-test.sh) — 8 invariants on `synth-mirror-4step`. |
+
 ### bayes_fit (Internal Only)
 
 | | |

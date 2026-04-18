@@ -28,46 +28,76 @@ Per edge, given raw cohort evidence:
 - **Blocks UI**: yes — runs synchronously in the fetch pipeline
 - **Source of truth**: currently authoritative (UI displays these results)
 
-### BE topo pass (non-blocking, race-based)
+### BE topo pass (fire-and-forget)
 
 - **Service**: `beTopoPassService.ts` → `runBeTopoPass()`
 - **Endpoint**: `POST /api/lag/topo-pass` → `lib/runner/stats_engine.py` (Python port of the FE logic)
-- **Triggered by**: `fetchDataService.ts` Stage 2, fired concurrently with FE result hold, raced against 500ms deadline
-- **Writes to**: `analytic_be` model_vars entry on each edge; BE scalars merged into `EdgeLAGValues` before `applyBatchLAGValues`
-- **Blocks UI**: partially — waits up to 500ms (fast path avoids double render), then proceeds with FE
-- **Source of truth**: preferred when available (merged over FE values)
+- **Triggered by**: `fetchDataService.ts` Stage 2, fired concurrently with the FE topo pass
+- **Writes to**: `analytic_be` model_vars entry on each edge; also triggers `applyPromotion` so the selected source (per `model_source_preference`) is re-promoted into the flat `p.mean`/latency fields
+- **Blocks UI**: no — a `.then()` handler applies results whenever the promise resolves. Stale responses are discarded via a generation counter (`_beTopoPassGeneration`).
+- **Source of truth**: preferred when available (promotion hierarchy prefers `analytic_be` over `analytic`)
 
 **Note**: the BE topo pass (`/api/lag/topo-pass` via `stats_engine.py`) is distinct from the generic `/api/stats-enhance` endpoint (`stats_enhancement.py`), which handles raw-aggregation enhancement (trends, MCMC-style summaries, robust stats).
 
+### Conditioned forecast pass (CF, race-based)
+
+- **Service**: `conditionedForecastService.ts` → `runConditionedForecast()`
+- **Endpoint**: `POST /api/forecast/conditioned` → `handle_conditioned_forecast` (doc 45)
+- **Triggered by**: `fetchDataService.ts` Stage 2, fired alongside BE topo pass
+- **Writes to**: per-edge `p.mean`, `p.sd`, `latency.completeness`, `latency.completeness_stdev` (CF owns these scalars per doc 45)
+- **Blocks UI**: partially — raced against a **500ms** deadline (`CF_FAST_DEADLINE_MS`). Fast path merges CF scalars into the same FE apply (single render); slow path renders FE fallback and overwrites on arrival.
+- **Source of truth**: CF `p.mean` / completeness supersede FE's blended equivalents when CF returns non-empty results.
+
 ## Orchestration in the fetch pipeline
 
-The FE and BE topo passes are coordinated via a **race-based flow** in `fetchDataService.ts` Stage 2. The design ensures sibling rebalancing always runs through `UpdateManager.applyBatchLAGValues` regardless of which source provides `p.mean`.
+Three passes run per fetch, coordinated in `fetchDataService.ts` Stage 2. The sibling rebalancing path (`UpdateManager.applyBatchLAGValues`) runs exactly once with whichever scalars are available at render time, regardless of which pass produced them.
 
 **Flow**:
 
-1. FE topo pass runs synchronously (`enhanceGraphLatencies`), producing `EdgeLAGValues[]`. Results are **held, not applied**.
-2. BE topo pass fires immediately (`runBeTopoPass`), returning a promise.
-3. `Promise.race` waits up to **500ms** for the BE response.
+1. FE topo pass runs synchronously (`enhanceGraphLatencies`), producing `EdgeLAGValues[]`. Results are **held, not applied yet**.
+2. BE topo pass (`runBeTopoPass`) fires and returns a promise — fire-and-forget. When it resolves, its scalars are upserted onto `analytic_be` model_vars and promotion re-runs on the freshest graph.
+3. Conditioned forecast (`runConditionedForecast`) fires and returns a promise. `Promise.race` waits up to **500ms** for it.
 
-Three outcomes:
+### CF fast path vs slow path
 
-| Scenario | Renders | What happens |
+The naming **fast path** / **slow path** refers to whether CF returns within the 500ms deadline. It is one call — the path just reflects how quickly it responds.
+
+| CF outcome | Renders | What happens |
 |----------|---------|--------------|
-| BE responds < 500ms | 1 | BE scalars merged into FE `EdgeLAGValues` → single `applyBatchLAGValues` call |
-| BE responds 500ms–3s | 2 | FE applied first via `applyBatchLAGValues` → BE arrives → merged results re-applied (second render) |
-| BE exceeds 3s or fails | 1 | FE only. Warning logged to session log (`BE_TOPO_PASS` at warning level). |
+| CF responds < 500ms with usable `p_mean` | 1 | CF scalars (p_mean, p_sd, completeness, completeness_sd) merged into FE `EdgeLAGValues`; `applyBatchLAGValues` runs once with the merged values — no FE-fallback flash. |
+| CF responds < 500ms with empty/failed | 1 | FE fallback applied. Warning logged. |
+| CF exceeds 500ms | 2 | FE fallback applied immediately; a `.then()` handler overwrites `p.mean` (and completeness) on CF's eventual arrival, triggering a second render. |
+| CF fails after 500ms | 1 | FE fallback stays. Error logged. |
 
-**Merge semantics**: when BE results are available, BE scalars (blended_mean, mu, sigma, t95, completeness, dispersion SDs, etc.) overwrite the corresponding FE fields in each `EdgeLAGValues` entry. Evidence (n, k, evidence.mean) stays from FE — it is authoritative from actual data. The merged values then flow through `applyBatchLAGValues`, which handles `p.mean` writes **and** sibling probability rebalancing in a single atomic operation.
+Stale CF responses (from a previous fetch cycle, identified by `_conditionedForecastGeneration`) are discarded.
 
-**Why the race**: the BE topo pass typically returns in 100–300ms for normal-sized graphs. Waiting 500ms avoids a double-render in the common case. The 3s hard cap prevents unbounded waits when the Python server is slow or unhealthy. Results arriving after 3s are discarded — if the BE is that slow, something is wrong and the session log warning surfaces it.
+BE topo pass is **independent** of the CF race. It applies on its own schedule whenever it arrives; its scalars land on `analytic_be` and promotion re-runs on top of whatever CF/FE state exists at that moment.
 
-**Session log entries** (operation type `BE_TOPO_PASS`):
-- `info` — BE topo pass started (edge count)
-- `info` — BE returned within 500ms (fast path, single render)
-- `info` — FE results applied (BE still pending)
-- `info` — BE completed at Nms (late merge, second render)
-- `warning` — BE exceeded 3s, results discarded
-- `error` — BE network/parse failure
+**Merge semantics for CF fast path**: `mergeCfIntoFe` overwrites `blendedMean`, `forecast.mean`, `latency.completeness`, `latency.completeness_stdev` on each `EdgeLAGValues` entry where CF returned a finite `p_mean`. FE's latency fit fields (mu, sigma, t95, path_t95, median_lag_days, etc.) are preserved — those are FE topo's responsibility. Evidence (n, k, evidence.mean) also stays from FE — authoritative from actual data.
+
+**CLI determinism**: CLI callers set `awaitBackgroundPromises=true` on `runStage2EnhancementsAndInboundN`, which awaits all fire-and-forget handlers (CF slow-path overwrite, BE topo apply) before returning. Browser callers don't set this — they render fast and let handlers catch up.
+
+### Session log entries
+
+Payload shape: all three pass-completion entries include a per-edge sample `{ uuid, p_mean, p_sd, completeness, completeness_sd|completeness_stdev }` so forensic runs can reconstruct the values each pass applied. BE uses `completeness_stdev` (field name from `beScalars`); CF uses `completeness_sd` (its response field).
+
+`BE_TOPO_PASS`:
+- `info` — BE topo pass started for N edges (gen G)
+- `info` — BE topo pass model vars applied in Nms, with per-edge payload
+- `warning` — BE topo pass result discarded (stale gen)
+- `warning` — BE topo pass returned null/empty after Nms
+- `error` — BE topo pass failed / apply failed
+
+`CONDITIONED_FORECAST`:
+- `info` — Conditioned forecast started (gen G, DSL)
+- `info` — Conditioned forecast applied in Nms (fast path, single render), with per-edge payload
+- `info` — Conditioned forecast pending after 500ms — FE fallback applied
+- `info` — Conditioned forecast subsequent overwrite applied in Nms, with per-edge payload (slow path)
+- `warning` — Conditioned forecast returned empty/no usable p.mean after Nms
+- `warning` — Conditioned forecast result discarded (stale gen)
+- `error` — Conditioned forecast failed / apply failed
+
+`FE_BE_PARITY` (one child per edge, emitted after BE topo applies, see `logParity`): FE→BE side-by-side for completeness, completeness_stdev, p_mean, p_sd.
 
 ## What FE sends to BE
 
@@ -260,13 +290,15 @@ contains DSL-windowed cohorts (for IS conditioning). Supports absolute
 and relative date expressions.
 
 The BE pass is a **full upgrade** of the FE pass — every field the FE
-writes, the BE also writes with improved values. Both FE and BE results
-flow through the same `applyBatchLAGValues` path, which handles
-`p.mean` writes and sibling probability rebalancing atomically. When
-BE responds within 500ms, only one render occurs with BE values. When
-BE is slow, FE renders first, then BE merges trigger a second render.
-Session log shows FE→BE parity per edge (`FE_BE_PARITY` entries at
-info level, with before/after values).
+writes, the BE also writes with improved values. FE results flow through
+`applyBatchLAGValues`, which handles `p.mean` writes and sibling
+probability rebalancing atomically. BE scalars arrive asynchronously
+(fire-and-forget), upsert onto `analytic_be` model_vars, and promotion
+re-runs — so the flat `p.mean`/latency fields switch to BE values
+whenever the BE response arrives. Session log shows FE→BE parity per
+edge (`FE_BE_PARITY` entries at info level, with before/after values).
+The 500ms fast/slow-path race described earlier belongs to the
+conditioned forecast pass, not BE topo.
 
 `cohort_maturity` analysis type now routes to v3 (engine consumer,
 185 lines). v1 and v2 are gated to dev only (`devOnly: true`).

@@ -499,27 +499,90 @@ compute from Beta(α, β) at the configured `hdi_level`.
 
 #### B.6.1 Shared function: `runner/epistemic_bands.py`
 
-A pure function that resolves epistemic bounds from fit_history for a
-list of dates. Reusable by any analysis type.
+A pure function that resolves rate bands per bin date. Reusable by any
+analysis type that needs per-date uncertainty on an edge's conversion
+rate. **Revised 18-Apr-26** (see B.6.5 revision note below): the
+resolver now walks the promoted-model fallback chain rather than
+strict-matching Bayes slice keys. The bands are always populated
+whenever the edge has any probability parameter.
 
 Inputs:
-- `posterior`: full `Posterior` dict from the parameter file (carries
-  `fit_history`)
-- `dates`: sorted list of bin dates
-- `slice_key`: target slice (e.g. `window()`,
-  `window().context(variant:control)`)
+- `edge`: full graph edge dict (the `{uuid, from, to, p: {...}}` block).
+  The resolver pulls posterior, fit_history, and promoted model params
+  from the edge; the raw `posterior.slices` dict is accessed through
+  `p._posteriorSlices` when present.
+- `dates`: list of bin dates (iso or UK format)
+- `temporal_mode`: `window` or `cohort` — selects which slice is preferred
+  when fit_history entries are available.
 - `hdi_level`: default from posterior or 0.90
 
-Output per date (or None):
-- `hdi_lower`, `hdi_upper` (from epistemic alpha/beta)
-- `posterior_mean` (alpha / (alpha + beta))
+Output per date:
+- `hdi_lower`, `hdi_upper`
+- `posterior_mean`
 - `evidence_grade`
 - `hdi_level`
 - `fitted_at` (provenance)
-- `source_slice` (which slice key matched)
+- `source_slice` (which slice key matched — empty when resolved from the
+  current promoted alpha/beta rather than a fit_history entry)
+- `source_model` (`bayesian` / `analytic_be` / `analytic` / `unknown`)
 
-Walk strategy: sort both fit_history and dates ascending, merge-join
-in O(n + m).
+Resolution hierarchy per bin:
+1. If the edge's promoted source is `bayesian` AND `fit_history` has an
+   entry on-or-before the bin date, use that entry's alpha/beta. Within
+   each entry, if the target slice (`cohort()` / `window()`) is absent,
+   fall back to the sibling slice — justified because absence of a
+   distinct slice means the compiler's evidence layer never
+   distinguished cohort from window for this edge (top-of-graph case,
+   or any edge with no latency ancestor). See B.6.4.
+2. Otherwise fall back to the edge's current promoted alpha/beta via
+   `resolve_model_params(edge, scope='edge', temporal_mode)`. This
+   walks bayesian → analytic_be → analytic → evidence k/n →
+   p.mean-with-kappa_fallback, so a band exists whenever the edge has
+   any probability parameter at all.
+
+Walk strategy: sort fit_history timeline ascending, sort input dates
+ascending, merge-join walk O(n + m). For bins with no on-or-before
+entry, fall back to step 2.
+
+#### B.6.4 Cohort / window equivalence for non-latency edges
+
+The Bayes compiler (see `bayes/compiler/model.py`, `_emit_edge_likelihoods`)
+creates a separate `p_cohort_{eid}` latent only in Case A, when the edge
+has BOTH window and cohort evidence. For non-latency edges at the top of
+the graph (or anywhere without a latency ancestor), cohort framing does
+not differ from window framing — upstream anchoring is a no-op. The
+worker therefore emits `slices["cohort()"]` only when a distinct cohort
+fit exists.
+
+The absence of a `cohort()` slice on the edge is the compiler's
+structural signal that cohort equals window for that edge. The resolver
+treats that signal as authoritative: if the target slice key is missing
+from either the current posterior or a fit_history entry, the sibling
+slice is used. No topology lookup at query time — the compiler already
+encoded the answer. The fallback is NOT applied blindly across all
+edges; it is only applied per-entry based on what is actually missing.
+
+#### B.6.5 Revision note (18-Apr-26)
+
+The original B.6.1 described a strict slice-key matcher that returned
+`None` for any bin without an exact fit_history entry match. This
+produced empty bands in common scenarios (no fit_history, or the
+chart's temporal_mode didn't align with the fit's slice key). The
+revised resolver:
+
+- Uses `resolve_model_params` to get the current promoted alpha/beta
+  whenever fit_history lookup misses, so bands always populate.
+- Accepts sibling-slice fallback within each fit_history entry for
+  non-latency-ancestor edges, using compiler-emitted slice presence as
+  the topology signal.
+- Does not require the edge to have run Bayes at all — analytic_be and
+  analytic promoted models also yield a band via the resolver's
+  fallback chain.
+
+Original functionality (strict match, single-source) is preserved as
+the degenerate case of the new logic. Back-compat aliases
+(`resolve_epistemic_bands`, `epistemic_band_to_dict`) still work; new
+callers should use `resolve_rate_bands` / `rate_band_to_dict`.
 
 #### B.6.2 Transport
 

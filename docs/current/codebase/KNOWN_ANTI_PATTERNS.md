@@ -419,6 +419,35 @@ The `model_resolver.py` correctly prefers `cohort_alpha`/`cohort_beta` when `tem
 
 **History**: these fields were previously named `path_alpha`/`path_beta`, which was misread as "compound path probability". Renamed to `cohort_*` to make the query-mode distinction clear.
 
+## Anti-pattern 48: Per-subject failure aborting the whole scenario response
+
+**Signature**: a BE snapshot-analysis request with multiple subjects (or multiple scenarios × subjects) returns a 400 or a `success: false` response, even though most subjects would have computed fine. One failing gate or derivation raises an exception, and the entire scenario's result is lost — including sibling subjects that had already completed. From the FE side the chart shows "No result returned from compute" or a gate error that's not actually about the edge in view.
+
+**Root cause**: the snapshot handler in [api_handlers.py](../../graph-editor/lib/api_handlers.py) iterates `for subj in subjects:` inside a scenario loop. If the derivation or a pre-flight gate raises, the exception propagates up through the scenario loop, out of `_handle_snapshot_analysis`, and becomes a 400 via FastAPI's ValueError handling. `per_subject_results` for that scenario — including any successful entries already appended — is discarded. If the same request covers a non-latency subject (success) and a latency subject (gate rejects), the latency failure kills the non-latency result too.
+
+**Fix**: per-subject validation and gating must append a failure entry to `per_subject_results` and `continue`, never raise:
+
+- Build the failure entry with `{subject_id, success: False, error: <message>}`.
+- `continue` to the next subject.
+- The scenario's overall `success` is computed as `any(s.get('success') for s in per_subject_results)`, so sibling successes survive.
+- The FE surfaces `response.error` via [useCanvasAnalysisCompute.ts](../../graph-editor/src/hooks/useCanvasAnalysisCompute.ts) when `response.result` is absent, so the user still sees why the failing subject failed.
+
+**Broader principle**: in any loop that collects per-item results for a batched response, item failures must become item-level failure entries, not exceptions. Reserve exceptions for conditions that genuinely invalidate the whole request (missing auth, malformed input, BE infrastructure failure).
+
+**Example**: the conversion_rate gate for latency edges originally `raise ValueError(...)` on latency edges. Non-latency charts in the same scenario returned 400 despite their own subject succeeding. Fixed by appending per-subject failure and `continue`.
+
+## Anti-pattern 49: ECharts legend icon using default palette when series `color` is omitted
+
+**Signature**: legend icons in an ECharts chart show colours that don't match the data (e.g. a blue scenario's HDI band swatch renders as green, the next series as yellow). Scatter points and lines in the plot body are correctly coloured, but the legend is wrong. Theme overrides and `itemStyle.color` don't fix it.
+
+**Root cause**: ECharts derives legend-icon colour from the series' top-level `color` field, not from `itemStyle.color` or `areaStyle.color`. When top-level `color` is absent, ECharts assigns colours from its default palette sequentially by series index: `#5470c6` (blue), `#91cc75` (green), `#fac858` (yellow), `#ee6666` (red), etc. A line series with `areaStyle.color: 'rgba(59,130,246,0.18)'` renders the band in blue but picks up `#91cc75` (green) in the legend.
+
+**Fix**: set `color: <scenarioColour>` at the series top level on every series the legend displays. Invisible helper series (stack anchors, etc.) can be filtered from the legend via name prefix (`__`-prefix convention) but should still carry `color` for consistency.
+
+**Broader principle**: when ECharts has three places to specify colour (`color`, `itemStyle.color`, `areaStyle.color`/`lineStyle.color`), they have different consumers. `color` feeds legend icons and emphasis defaults; `itemStyle.color` feeds data-point fill; `areaStyle.color` feeds band fill only. Setting one does not set the others. Setting all three explicitly is the safe default.
+
+**Example**: the conversion_rate HDI band legend swatch rendered green on a blue scenario because the band series set `areaStyle.color` only. Fixed by adding `color: colour` at series top level on the band, model-line, and scatter series.
+
 ## When to add to this document
 
 After completing a multi-attempt fix, check: does my bug match a generalisable pattern? If so, add it here following the format: Signature (how to recognise it), Root cause (why it happens), Fix (what to do), Example (optional, specific instance).

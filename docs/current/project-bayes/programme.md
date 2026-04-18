@@ -215,6 +215,11 @@ Ordered as the owner groups them (three tiers separated by `---`).
 - **Golden fixtures for forecasting; then retire v1/v2** — P2.10 (new).
 - **Validate surprise gauge** (recent window/cohort on `gm-rebuild` is
   poor; "why not more surprising?") — P1.9 (new).
+- **General-purpose conditioned forecast (lagless edges + topology
+  coverage)** — P2.12 (new, doc 50). CF silently drops edges without
+  a promoted latency distribution; coverage on mixed laggy/lagless
+  topologies is untested; synth-mirror-4step demonstrates the silent
+  drop today.
 
 **Tier 2 — model-quality / infrastructure**
 - **Orthogonal testing v2** — umbrella over P1.6, P1.7, P1.8 below.
@@ -268,6 +273,7 @@ endpoint shows. Verified against live code, not doc claims.
 | P2.9 | **Cohort-completeness parity question**: Bayes uses model-derived FW composition; FE stats engine uses observed `anchor_median_lag_days`. Snapshot DB stores both; `evidence.py` reads neither. | [programme §Other open](programme.md) discussion note; [snapshot_service.py:566](graph-editor/lib/runner/snapshot_service.py) | Decide whether Bayes should incorporate observed anchor lags as an alternative / additional signal. Not a bug — just a parity discussion |
 | P2.10 | **Golden fixtures for forecasting, then retire v1 and v2** (owner Tier-1 priority). Today three forecast pipelines coexist: `cohort_forecast.py` (v1), `cohort_forecast_v2.py` (v2, span-kernel), `cohort_forecast_v3.py` (v3, engine-via-sweep). Parity is enforced by `test_doc31_parity.py` and `test_v2_v3_parity.py` with relaxed tolerances and skip-lists. Retiring v1/v2 is risky without frozen golden outputs | Direct `ls graph-editor/lib/runner/cohort_forecast*.py`. Current parity tests verify algorithmic equivalence within tolerance but don't freeze numeric output | Build a golden-fixture suite: a fixed graph + evidence + query, exact expected per-τ row values, committed to the repo. Run against v3 on every change. Then delete v1 + v2 code paths and their handler branches once v3 has burned in for N runs without fixture drift |
 | P2.11 | **BE forecasting & topo performance** (owner Tier-1 priority). User-visible latency on topo pass and chart requests. No current measurement baseline in programme docs. | Topo pass wired through `api_handlers.py::handle_stats_topo_pass` (:5716); cohort maturity v3 through `_handle_cohort_maturity_v3` (:2018); conditioned forecast through `handle_conditioned_forecast`. Hot path likely dominated by per-subject snapshot queries (`query_snapshots_for_sweep_batch`), MC sweep (`compute_forecast_sweep` 2000+ draws) and span-kernel composition. Sampling-side perf separately tracked as P3.21 | Measure first. Add timing spans around: snapshot query, frame composition, sweep, row assembly, carrier build. Publish a baseline per analysis type. Then pick the dominant cost and optimise. Likely candidates: vectorise MC sweep across cohorts, cache span CDFs across repeated queries, reduce 2000-draw default when band-width doesn't require it |
+| P2.12 | **Conditioned forecast is not general-purpose**. CF's per-edge path short-circuits when `resolved.latency.sigma <= 0` ([cohort_forecast_v3.py:307](graph-editor/lib/runner/cohort_forecast_v3.py#L307)) and silently omits the edge from the response. Works accidentally on `bayes-test-gm-rebuild` because BE topo wrote a synthetic near-zero lag into `analytic_be` (μ≈-6.5, σ≈2.8, t95≈0.15); fails silently on `synth-mirror-4step` where that synthetic isn't present. For lagless edges CF should still emit a Beta-Binomial posterior on `p`. Topology coverage is thin: only two linear synth chains exercise CF end-to-end; no mixed-class (laggy + lagless) or branching / join fixtures. | Direct comparison of mv[analytic_be] across graphs (inspected 18-Apr-26). `synth-mirror-4step` entry-hop edges: `wg_pmean=None` in the parity script. `handle_conditioned_forecast` appends neither to `edge_results` nor to `skipped_edges` when `maturity_rows` is empty — silent drop. See [doc 50](50-cf-generality-gap.md) for full problem statement, proposal (Class A lag-sweep / Class B Beta-Binomial / Class C–D skipped with reason), and topology test matrix (T1–T7) | (1) Build topology fixtures T1–T7 and CLI harness `cf-topology-suite.sh`. (2) Implement lagless Class B path + structured `skipped_edges`. (3) Enforce "no silent drops" invariant in CI. Fuller sequencing and design questions (prior choice, completeness semantics, sibling PMF consistency) in doc 50 §4 and §6 |
 
 ### P3 — Tooling, tests, infrastructure
 
@@ -338,6 +344,12 @@ dependencies. Read together with **In flight** above.
    cleanly deleting code without introducing silent regressions.
    Write the fixture suite now; the in-flight cohort_forecast diff
    makes the retirement safer when it settles.
+4. **P2.12 — general-purpose CF (lagless + topology)**. Today CF
+   silently drops edges whose promoted latency has `sigma ≤ 0`;
+   coverage on mixed and branching topologies is untested. Doc 50
+   captures the problem, proposed Class-A / Class-B split, and the
+   T1–T7 topology test matrix. Natural companion to P2.10: both
+   require whole-graph CF contract stability before retiring v1/v2.
 
 **Tier 2 — model quality / infrastructure**
 4. **P1.1 — onset bias diagnostics** (pure investigation). Natural
