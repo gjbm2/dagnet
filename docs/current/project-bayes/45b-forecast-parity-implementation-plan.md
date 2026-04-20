@@ -164,7 +164,7 @@ data pipeline (snapshot subjects, scenarios, regime selection).
 5. Span kernel + carrier: same construction as v3 handler (lines
    2002-2180 of current api_handlers.py). Extract into a shared
    preparation function that both v3 and conditioned_forecast call.
-6. Engine call: `compute_forecast_sweep` with full arguments (same
+6. Engine call: `compute_forecast_trajectory` with full arguments (same
    14 parameters as v3)
 7. Read per-edge scalars from sweep: p.mean = median(rate_draws[:,
    -1]), p_sd = std(rate_draws[:, -1]), completeness, completeness_sd.
@@ -208,7 +208,7 @@ Once Step 3 is live and verified:
 - The topo pass returns stats engine output only: mu, sigma, t95,
   completeness (CDF-based), blended_mean (stats engine's own blend),
   p_infinity, p_evidence, dispersions
-- Remove `compute_forecast_sweep` / `CohortEvidence` /
+- Remove `compute_forecast_trajectory` / `CohortEvidence` /
   `NodeArrivalState` / `build_node_arrival_cache` imports from the
   topo pass handler
 - FE-displayed p.mean comes from the `graph_forecast` result

@@ -113,7 +113,7 @@ across edge classes is **how the conditioning works**.
 
 ### Class A — lag-equipped edge with snapshot evidence
 
-Current implementation. Run `compute_forecast_sweep` with
+Current implementation. Run `compute_forecast_trajectory` with
 IS-conditioning on the cohort trajectories, read `p_infinity_mean`
 (post-p@∞-fix) at `saturation_tau`, derive `completeness` from the
 CDF saturation. No change proposed.
@@ -122,45 +122,84 @@ CDF saturation. No change proposed.
 
 No lag distribution means all cohorts are mature immediately by
 assumption: `completeness(τ) = 1.0` for all τ ≥ 0. There is no IS
-conditioning on trajectory shape — the cohort contributes a
-Binomial likelihood `y ~ Bin(n=x, p)`. The posterior on `p` is the
-Beta-Binomial update:
+conditioning on trajectory shape. How we produce the conditioned
+rate depends on which source the promotion hierarchy has picked for
+this edge, because the sources differ in whether their `α, β` is
+already query-scoped — see
+[FE_BE_STATS_PARALLELISM.md §"Dual-evidence treatment"](../codebase/FE_BE_STATS_PARALLELISM.md)
+and
+[STATS_SUBSYSTEMS.md §5 Confusion 8](../codebase/STATS_SUBSYSTEMS.md).
+
+**Class B1 — `bayesian` promoted**. The Bayes `α, β` is aggregate
+(trained on the full corpus, not query-scoped), so it is a
+legitimate prior. The cohort contributes a Binomial likelihood
+`y ~ Bin(n=x, p)`. The posterior is a conjugate Beta-Binomial update:
 
 ```
-α' = α_prior + Σ y_i
-β' = β_prior + Σ (x_i - y_i)
+α' = α_bayes + Σ y_i
+β' = β_bayes + Σ (x_i - y_i)
 p_mean = α' / (α' + β')
 p_sd   = √(α'·β' / ((α'+β')²·(α'+β'+1)))
 completeness = 1.0
 completeness_sd = 0.0
 ```
 
-where the prior `(α, β)` comes from the promoted `model_vars` source
-(Bayesian posterior if available, else analytic point estimate
-centred at the source's `p_mean`).
+**Class B2 — `analytic` or `analytic_be` promoted**. The source's
+`α, β` is already a query-scoped Jeffreys posterior built from the
+window's `total_k, total_n`. It IS the conditioned answer. Read
+directly:
 
-Today CF returns None. Proposed: CF returns the Beta-Binomial
-posterior scalars above.
+```
+p_mean = α / (α + β)
+p_sd   = √(α·β / ((α+β)²·(α+β+1)))
+completeness = 1.0
+completeness_sd = 0.0
+```
 
-### Class C — edge with no evidence (lag-equipped or not)
+No update — doing one would count the window's evidence twice.
 
-No snapshot rows in the query window. Two reasonable behaviours:
+Today CF returns nothing for either sub-case. Proposed: CF routes
+lagless edges through one of B1 or B2 depending on the promoted
+source.
 
-1. Return `p_mean` verbatim from the promoted model_var (prior-only —
-   "no update from this query").
-2. Return an explicit `skipped_edges` entry with `reason='no evidence
-   in window'` and NO result. FE keeps the existing scalar unchanged.
+### Class C — edge with prior but no query-scoped snapshot evidence
 
-Today the handler's `skipped_edges` channel exists but is under-used:
-missing-evidence and missing-latency cases both silently drop. Proposed:
-always route such edges through `skipped_edges` with a structured
-`reason` field, never via a silent omit.
+No snapshot rows matched the user's DSL window for this edge. This
+does *not* mean "no evidence" in any broad sense: the resolver's
+α/β already folds in parameter-file observations and the Bayesian
+aggregate fit (via the D20 fallback chain in
+[model_resolver.py:328-352](graph-editor/lib/runner/model_resolver.py#L328-L352)).
+What's missing is the query-window-specific snapshot evidence that
+would refine that prior further.
 
-### Class D — probability-only edges (`p.id` set, no latency, prior absent)
+Mathematically, the posterior given zero new snapshot evidence IS
+the existing prior. The correct answer is therefore a normal
+`edge_results` entry populated from the promoted source:
 
-Rare but valid. If the edge has neither evidence nor a prior, CF cannot
-compute anything — `skipped_edges` with
-`reason='no prior and no evidence'`.
+- `p_mean` = source's `α / (α + β)` (or equivalent prior mean)
+- `p_sd` = source's prior SD (Beta closed form or heuristic)
+- `completeness` = `1.0` for lagless edges, CDF-at-query-date for
+  laggy edges (i.e. the same completeness the topo pass computes —
+  CF does not add information about maturity when it has no new
+  evidence)
+
+This is NOT a skip. The user gets a real number (the best available
+estimate given the absence of window evidence), downstream consumers
+see that CF processed the edge, and the readiness store (doc 54)
+marks it as applied. Earlier versions of this doc listed "no
+evidence in window" as a `skipped_edges` reason — that was wrong
+by the unified-design-principle: returning the prior is the honest
+answer, skipping is silence.
+
+### Class D — no prior AND no evidence
+
+This is the only genuine skip case. The edge has neither a
+promoted source (no `model_vars`, no posterior, no promoted scalars)
+nor any snapshot rows. CF has literally nothing to report.
+Structured `skipped_edges` entry with
+`reason = 'no prior and no evidence'`. In practice these are
+structural-only edges or misconfigured parameterisations — rare in
+normal graphs.
 
 ## 3. Proposal
 
@@ -183,18 +222,41 @@ else:
 `_lagless_rows` builds a row set over the display range (`max_tau`
 = `axis_tau_max` if set, else the query's `tau_future_max`) with the
 same schema current rows use. Every row carries the same
-`p_infinity_mean` / `p_infinity_sd` scalar (computed once, closed-form).
-`midpoint` / `fan_*` are either populated with the same scalar (trivial
-since there is no τ dependence) or marked None — decision per §4 below.
+`p_infinity_mean` / `p_infinity_sd` scalar (computed once,
+closed-form), and τ-dependent fields (`midpoint`, `fan_*`) are
+populated with that same scalar. This makes Class B the natural
+σ→0 limit of Class A — the chart renders a flat line with a flat
+band as a degenerate case of the existing fan, with no chart-layer
+branch. See §4 Q1 resolution.
+
+Class C (no evidence in window) falls out of the same row builder
+in either branch — if the evidence `Σn = 0`, the "update" step is a
+no-op (B) or the IS likelihood collapses to the proposal (A), and
+the result is the prior. No separate code path needed at the row
+level; the response-assembly layer labels the result prior-only
+for provenance.
 
 ### 3.2 Structured `skipped_edges` channel
 
-The CF response already has a `skipped_edges` array. Enforce that every
-parameterised edge in the input graph appears either in `edges` (with a
-result) OR in `skipped_edges` (with a `reason`). No silent drops.
-Reasons: `'no latency and no evidence'`, `'no snapshot rows after
-regime selection'`, `'DSL matched no subjects on this edge'`,
-`'resolver returned no promoted source'`.
+The CF response already has a `skipped_edges` array. Enforce that
+every parameterised edge in the input graph appears either in
+`edges` (with a result) OR in `skipped_edges` (with a `reason`).
+No silent drops. Under the unified design of §2, there is exactly
+one skip reason:
+
+- `'no prior and no evidence'` — Class D. The edge has no promoted
+  source and no snapshot rows. CF cannot compute anything.
+
+Every other state has a real answer:
+- Evidence present, lag present → Class A (IS-conditioned MC).
+- Evidence present, no lag → Class B (Beta-Binomial direct).
+- No evidence, prior present → Class C (return the prior).
+
+The richer reason vocabulary in earlier versions of this doc
+(`'no snapshot rows after regime selection'`, `'DSL matched no
+subjects on this edge'`, `'resolver returned no promoted source'`,
+etc.) was a symptom of conflating "CF did not update" with "CF
+cannot compute". Only the latter warrants a skip.
 
 This structured channel is the contract [doc 54 (CF readiness
 protocol)](54-cf-readiness-protocol.md) consumes to distinguish "CF
@@ -225,40 +287,54 @@ response dict — would:
 This is not a blocker for the current fix (Class B handling), but it is
 the natural shape once the Class B path exists.
 
-## 4. Design questions to resolve
+## 4. Design questions — resolved (20-Apr-26)
 
-Listed so a follow-up design doc can close them before implementation.
+1. ~~**Chart display for lagless edges**~~. **Resolved**: no special
+   handling. Class B is the σ→0 limit of Class A — `_lagless_rows`
+   emits the same row schema as `_lag_sweep_rows`, with the
+   time-independent scalars populated across all τ. The chart
+   renders a flat line with a flat band naturally, as a degenerate
+   case of the existing fan chart. No marker, no chart-layer branch.
+   (See §5.3 acceptance invariant 3 — "Class A ↔ Class B continuity".)
 
-1. **Chart display for lagless edges**. The v3 chart today returns
-   empty rows for lagless edges, so the chart is blank. With Class B
-   implemented the chart could either stay blank (trivial — no time
-   evolution to plot) or render a flat line at `p_infinity_mean`.
-   Recommendation: stay blank for now; surface the scalar via the edge
-   badge / hover instead.
+2. ~~**`completeness` semantics for lagless edges**~~. **Resolved**:
+   `completeness = 1.0`, `completeness_sd = 0.0`. No new field or
+   provenance flag — consumers that need to distinguish can read
+   `resolved.latency.sigma` directly.
 
-2. **`completeness` semantics for lagless edges**. Proposed `= 1.0`
-   since no residual maturation is expected. An argument for `None` is
-   that "completeness" is an untagged-population-vs-arrived ratio that
-   isn't well-defined without a lag CDF. Decision: `1.0` with a
-   provenance flag (`completeness_source: 'lagless'`) on the row so
-   consumers can distinguish.
+3. ~~**Prior choice**~~. **Resolved** via the promotion hierarchy.
+   There is no new prior-choice decision to make; the promoted
+   source determines which sub-path Class B takes (see §2 Class B):
+   - **B1 (`bayesian` promoted)**: Bayes `α, β` is aggregate and
+     safe as a prior → conjugate Beta-Binomial update with
+     query-scoped `Σk, Σn`.
+   - **B2 (`analytic` / `analytic_be` promoted)**: source's `α, β`
+     is already a query-scoped Jeffreys posterior → read directly,
+     no update (double-counting avoidance).
+   Grounded in
+   [FE_BE_STATS_PARALLELISM.md §"Dual-evidence treatment"](../codebase/FE_BE_STATS_PARALLELISM.md)
+   and
+   [STATS_SUBSYSTEMS.md §5 Confusion 8](../codebase/STATS_SUBSYSTEMS.md).
 
-3. **Prior choice when no Bayesian posterior is promoted**. If the
-   edge has only `analytic` (flat point estimate), the Beta prior's
-   concentration is undefined. Options: (a) use a weakly-informative
-   prior (`α=β=1`) that doesn't meaningfully shift the rate; (b) use
-   the analytic point as a Dirac, in which case CF output ≡ evidence
-   rate; (c) use the κ from the promoted source's confidence band,
-   mapped to α/β. Recommendation: (a) when no `α`, `β`, or `κ`
-   available; otherwise use the promoted source's `α_pred`, `β_pred`.
-
-4. **Sibling PMF consistency**. CF currently writes per-edge
-   `p_mean` and expects `UpdateManager.applyBatchLAGValues` to
-   rebalance siblings. With Class B edges now producing numbers, the
-   sibling group containing a lagless edge + laggy siblings must
-   still sum to ≤ 1. Need to verify `UpdateManager` is indifferent to
-   the source (lagless Beta posterior vs lag-sweep p@∞) and handles
-   both consistently.
+4. ~~**Sibling PMF consistency**~~. **Verified not a risk** (20-Apr-26).
+   The apply path goes
+   `applyConditionedForecastToGraph` ([conditionedForecastService.ts:156](graph-editor/src/services/conditionedForecastService.ts#L156))
+   → `updateManager.applyBatchLAGValues`
+   ([:222](graph-editor/src/services/conditionedForecastService.ts#L222)).
+   The rebalancer's sibling selector
+   ([`findSiblingsForRebalance` :271–280](graph-editor/src/services/conditionedForecastService.ts#L271-L280))
+   filters on `source node + case_variant + has p.mean` only — it
+   does not inspect `completeness`, `sigma`, or any lag field.
+   `distributeWithExactSum`
+   ([:311–374](graph-editor/src/services/conditionedForecastService.ts#L311-L374))
+   redistributes weight using only the siblings' `p.mean` values;
+   `completeness` is metadata, not an arithmetic input. The Class B
+   path changes a lagless sibling from "no `p.mean`, excluded from
+   rebalance" to "has `p.mean` with `completeness=1.0`, included in
+   rebalance" — structurally identical to any other sibling with
+   CF-written `p.mean`. No new branch, no new invariant. This
+   question is closed; left in place as a record so the concern is
+   not re-opened by future readers.
 
 ## 5. Test matrix (minimum)
 
@@ -308,12 +384,48 @@ For each applicable fixture, cover:
 
 ### 5.4 Wiring
 
-A new CLI harness `graph-ops/scripts/cf-topology-suite.sh` drives
-the topology fixtures through the CLI and asserts the above
-invariants. The existing `conditioned-forecast-parity-test.sh` covers
-only "per-edge CF ↔ v3 chart parity for the terminal edge"; it stays
-as a smoke test and the topology suite becomes the whole-graph
-contract test. Neither runs against production graphs.
+Two CLI harnesses back the test matrix:
+
+- [`graph-ops/scripts/cf-topology-suite.sh`](../../../graph-ops/scripts/cf-topology-suite.sh) —
+  drives each topology fixture through
+  `conditioned-forecast-parity-test.sh` and asserts the **structural**
+  invariants (no silent drops, chart↔CF parity, sibling PMF ≤ 1.0).
+  6/6 fixtures green as of 20-Apr-26.
+
+- [`graph-ops/scripts/cf-truth-parity.sh`](../../../graph-ops/scripts/cf-truth-parity.sh) —
+  compares per-edge CF `p_mean` against `truth.yaml` ground truth.
+  **Asserts on lagless (Class B) edges** at tolerance `|Δ| < 0.05`;
+  reports laggy (Class A) deltas informationally. All 10 Class B
+  edges across the fixture suite pass on 20-Apr-26, including the
+  `laggy → lagless → laggy` configuration (cf-fix-deep-mixed
+  edges b→c→d→e).
+
+Chart↔CF parity is a tautology of construction (both paths route
+through `compute_cohort_maturity_rows_v3`) — it catches handler
+drift but not arithmetic errors in the shared row builder. Truth
+parity is the stronger check and must remain green for Class B.
+
+### 5.5 Pre-existing laggy-edge bias (out of scope for this doc)
+
+`cf-truth-parity.sh` reveals a systematic undershoot on Class A
+edges even in all-laggy fixtures (`synth-simple-abc`: truth 0.70 vs
+CF 0.60; truth 0.60 vs CF 0.50). The bias:
+
+- Is present in fixtures that pre-date doc 50 and is observable on
+  code paths this doc does not touch.
+- Shrinks as the query window widens relative to path `t95` (cohort
+  maturity effect), but does not vanish.
+- Can exceed 0.5 on cohort-mode terminal edges when query-window
+  cohorts are very immature (e.g. `synth-mirror-4step`
+  `m4-registered → m4-success` with truth 0.70 vs CF 0.018 under
+  `cohort(7-Mar-26:21-Mar-26)`).
+- Does NOT worsen when a lagless edge sits upstream of a laggy
+  edge (cf-fix-deep-mixed delta magnitudes are consistent with the
+  same-signed bias seen on all-laggy fixtures).
+
+This is a distinct CF accuracy investigation. Not a doc-50 issue.
+The truth-parity test reports it informationally so it's surfaced,
+not hidden.
 
 ## 6. Scope and sequencing
 

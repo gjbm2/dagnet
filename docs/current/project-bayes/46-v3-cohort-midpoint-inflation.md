@@ -190,7 +190,7 @@ for t in [5, 6, 7, 8, 10, 15, 20, 30]:
   mc_span_cdfs call (line 1704)
 - `runner/cohort_forecast_v3.py`: `build_cohort_evidence_from_frames`
   (shared function), `compute_cohort_maturity_rows_v3`
-- `runner/forecast_state.py`: `compute_forecast_sweep` (line 1031+),
+- `runner/forecast_state.py`: `compute_forecast_trajectory` (line 1031+),
   `_evaluate_cohort` (line 860+)
 - `runner/span_kernel.py`: `mc_span_cdfs` (line 483+),
   normalisation at line 601-606

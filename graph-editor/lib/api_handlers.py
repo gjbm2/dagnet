@@ -103,285 +103,6 @@ def handle_generate_all_parameters(data: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _surprise_gauge_engine_p(
-    edge: Dict[str, Any],
-    graph_data: Dict[str, Any],
-    subj: Dict[str, Any],
-    is_cohort: bool,
-) -> Optional[Dict[str, Any]]:
-    """Compute p variable z-score using the forecast engine's MC draws.
-
-    Queries snapshots for per-cohort evidence, calls compute_forecast_sweep
-    (same engine as cohort maturity chart), and derives the posterior-predictive
-    z-score from unconditioned draws.
-
-    Returns a surprise variable dict for 'p', or None if the engine path
-    is not available (missing data, no snapshots, etc.).
-    """
-    import numpy as np
-    from datetime import date as date_type
-
-    def norm_cdf(z: float) -> float:
-        return 0.5 * math.erfc(-z / math.sqrt(2.0))
-
-    def classify_zone(q: float) -> str:
-        tail = abs(q - 0.5) * 2
-        if tail < 0.60:   return 'expected'
-        if tail < 0.80:   return 'noteworthy'
-        if tail < 0.90:   return 'unusual'
-        if tail < 0.98:   return 'surprising'
-        return 'alarming'
-
-    try:
-        from runner.model_resolver import resolve_model_params
-        from runner.forecast_state import (
-            compute_forecast_sweep,
-            CohortEvidence,
-            build_node_arrival_cache,
-            _compute_completeness_at_age,
-            NodeArrivalState,
-        )
-        from runner.cohort_maturity_derivation import derive_cohort_maturity
-        from snapshot_service import query_snapshots_for_sweep
-    except ImportError as e:
-        print(f"[surprise_gauge] engine import failed: {e}")
-        return None
-
-    # Resolve model params
-    scope = 'path' if is_cohort else 'edge'
-    temporal = 'cohort' if is_cohort else 'window'
-    _graph_pref = graph_data.get('model_source_preference') if isinstance(graph_data, dict) else None
-    resolved = resolve_model_params(edge, scope=scope, temporal_mode=temporal,
-                                    graph_preference=_graph_pref)
-    if not resolved or resolved.latency.sigma <= 0:
-        print("[surprise_gauge] engine: no resolved params or sigma=0")
-        return None
-    print(f"[surprise_gauge] engine: resolved source={resolved.source} "
-          f"alpha={resolved.alpha:.1f} beta={resolved.beta:.1f} "
-          f"p_mean={resolved.p_mean:.4f} mu={resolved.latency.mu:.3f}")
-
-
-    # Query snapshots for per-cohort evidence
-    param_id = subj.get('param_id')
-    core_hash = subj.get('core_hash')
-    anchor_from_str = subj.get('anchor_from')
-    anchor_to_str = subj.get('anchor_to')
-    if not param_id or not core_hash or not anchor_from_str or not anchor_to_str:
-        print("[surprise_gauge] engine: missing subject fields for snapshot query")
-        return None
-
-    try:
-        anchor_from = date_type.fromisoformat(str(anchor_from_str)[:10])
-        anchor_to = date_type.fromisoformat(str(anchor_to_str)[:10])
-        rows = query_snapshots_for_sweep(
-            param_id=param_id,
-            core_hash=core_hash,
-            slice_keys=subj.get('slice_keys', ['']),
-            anchor_from=anchor_from,
-            anchor_to=anchor_to,
-            equivalent_hashes=subj.get('equivalent_hashes'),
-        )
-    except Exception as e:
-        print(f"[surprise_gauge] engine: snapshot query failed: {e}")
-        return None
-
-    if not rows:
-        print("[surprise_gauge] engine: no snapshot rows")
-        return None
-
-    # Derive cohort maturity frames
-    derivation = derive_cohort_maturity(rows)
-    frames = derivation.get('frames', [])
-    if not frames:
-        print("[surprise_gauge] engine: no frames from derivation")
-        return None
-
-    # Extract per-cohort (age, n, k) from last frame
-    last_frame = frames[-1]
-    data_points = last_frame.get('data_points', [])
-    if not data_points:
-        print("[surprise_gauge] engine: last frame has no data_points")
-        return None
-
-    last_frame_date = None
-    sd_str = str(last_frame.get('snapshot_date', ''))[:10]
-    if sd_str:
-        try:
-            last_frame_date = date_type.fromisoformat(sd_str)
-        except (ValueError, TypeError):
-            pass
-
-    cohort_ages_and_weights = []
-    evidence = []
-    total_k = 0.0
-    total_n = 0.0
-    for dp in data_points:
-        ad_str = str(dp.get('anchor_day', ''))[:10]
-        try:
-            ad = date_type.fromisoformat(ad_str)
-        except (ValueError, TypeError):
-            continue
-        if ad < anchor_from or ad > anchor_to:
-            continue
-        x_val = dp.get('x', 0)
-        y_val = dp.get('y', 0)
-        if not isinstance(x_val, (int, float)) or x_val <= 0:
-            continue
-        if not isinstance(y_val, (int, float)):
-            y_val = 0
-        age = (last_frame_date - ad).days if last_frame_date else 0
-        if age < 0:
-            continue
-        cohort_ages_and_weights.append((age, float(x_val)))
-        evidence.append((age, float(x_val), float(y_val)))
-        total_k += float(y_val)
-        total_n += float(x_val)
-
-    if not cohort_ages_and_weights or total_n <= 0:
-        print("[surprise_gauge] engine: no valid cohorts extracted")
-        return None
-
-    # Use edge-level evidence k/n for observed rate (not snapshot x/y which
-    # is a-denominated). Snapshot x = upstream population, y = edge converters,
-    # so y/x is the path-level rate. The gauge compares against edge-level
-    # expected = p × completeness, so observed must also be edge-level.
-    p_block = edge.get('p') or {}
-    ev_block = p_block.get('evidence') or {}
-    edge_k = ev_block.get('k')
-    edge_n = ev_block.get('n')
-    if not (isinstance(edge_k, (int, float)) and isinstance(edge_n, (int, float)) and edge_n > 0):
-        print("[surprise_gauge] engine: no edge-level evidence k/n")
-        return None
-    obs_rate = float(edge_k) / float(edge_n)
-
-    # Build node arrival cache for cohort mode
-    from_node_arrival = None
-    if is_cohort:
-        try:
-            _anchor_id = None
-            for n in graph_data.get('nodes', []):
-                if (n.get('entry') or {}).get('is_start'):
-                    _anchor_id = n.get('uuid') or n.get('id')
-                    break
-            if _anchor_id is None and graph_data.get('nodes'):
-                _anchor_id = graph_data['nodes'][0].get('uuid') or graph_data['nodes'][0].get('id', '')
-            if _anchor_id:
-                cache = build_node_arrival_cache(graph_data, anchor_id=_anchor_id, max_tau=400)
-                from_id = edge.get('from', '')
-                from_node_arrival = cache.get(from_id)
-        except Exception as e:
-            print(f"[surprise_gauge] engine: node arrival cache failed: {e}")
-
-    # Call the engine via compute_forecast_sweep — same codepath as
-    # the cohort maturity chart and topo pass (doc 29f §Phase G).
-    # Build CohortEvidence with eval_age for coordinate B output.
-    engine_cohorts = []
-    max_age = 0
-    for age, n_i, k_i in evidence:
-        age_i = int(round(age))
-        if age_i > max_age:
-            max_age = age_i
-        engine_cohorts.append(CohortEvidence(
-            obs_x=[float(n_i)],
-            obs_y=[float(k_i)],
-            x_frozen=float(n_i),
-            y_frozen=float(k_i),
-            frontier_age=age_i,
-            a_pop=float(n_i),
-            eval_age=age_i,
-        ))
-
-    if not engine_cohorts or max_age <= 0:
-        print("[surprise_gauge] engine: no valid cohorts for sweep")
-        return None
-
-    try:
-        sweep = compute_forecast_sweep(
-            resolved=resolved,
-            cohorts=engine_cohorts,
-            max_tau=max_age,
-            from_node_arrival=from_node_arrival if is_cohort else None,
-        )
-    except Exception as e:
-        print(f"[surprise_gauge] engine: compute_forecast_sweep failed: {e}")
-        return None
-
-    # Posterior-predictive z-score from unconditioned draws.
-    # For each draw s: expected_rate_s = p_s × C(ages; mu_s, sigma_s, onset_s)
-    # n-weighted across cohorts.
-    p_unc = sweep.p_draws
-    mu_unc = sweep.mu_draws
-    sigma_unc = sweep.sigma_draws
-    onset_unc = sweep.onset_draws
-    if p_unc is None or len(p_unc) == 0:
-        return None
-    S = len(p_unc)
-
-    expected_rates = np.zeros(S)
-    for s in range(S):
-        wc = 0.0
-        for age, n_i in cohort_ages_and_weights:
-            c_s = _compute_completeness_at_age(
-                float(age), float(mu_unc[s]), float(sigma_unc[s]), float(onset_unc[s]),
-            )
-            wc += n_i * c_s
-        completeness_s = wc / total_n if total_n > 0 else 0.0
-        expected_rates[s] = float(p_unc[s]) * completeness_s
-
-    mean_expected = float(np.mean(expected_rates))
-    sd_expected = float(np.std(expected_rates))
-
-    if sd_expected < 1e-12:
-        print("[surprise_gauge] engine: posterior-predictive SD ~ 0")
-        return None
-
-    z = (obs_rate - mean_expected) / sd_expected
-    quantile = float(norm_cdf(z))
-
-    # Completeness point estimate (mean across draws)
-    c_mean = mean_expected / max(float(np.mean(p_unc)), 1e-12) if float(np.mean(p_unc)) > 1e-12 else 0.0
-    c_mean = min(c_mean, 1.0)
-
-    # Evidence date for display — use the latest snapshot date from the
-    # actual data, not the FE's retrieved_at which may be stale.
-    evidence_retrieved_at = last_frame_date.isoformat() if last_frame_date else None
-    if not evidence_retrieved_at:
-        # Fallback to FE-written fields if no snapshot date available
-        p_block_ev = edge.get('p') or {}
-        ev_block_ev = p_block_ev.get('evidence') or {}
-        data_source_ev = p_block_ev.get('data_source') or {}
-        evidence_retrieved_at = (
-            data_source_ev.get('source_retrieved_at')
-            or data_source_ev.get('retrieved_at')
-            or ev_block_ev.get('retrieved_at')
-        )
-
-    print(f"[surprise_gauge] engine p: obs={obs_rate:.4f} expected={mean_expected:.4f} "
-          f"sd={sd_expected:.4f} z={z:.3f} q={quantile:.4f} "
-          f"completeness={c_mean:.3f} cohorts={len(cohort_ages_and_weights)} "
-          f"is_ess={sweep.is_ess:.1f}")
-
-    return {
-        'name': 'p',
-        'label': 'Conversion rate',
-        'quantile': round(quantile, 6),
-        'sigma': round(z, 3),
-        'observed': round(obs_rate, 6),
-        'expected': round(mean_expected, 6),
-        'expected_longrun': round(float(np.mean(p_unc)), 6),
-        'posterior_sd': round(sd_expected, 6),
-        'combined_sd': round(sd_expected, 6),
-        'completeness': round(c_mean, 4),
-        'evidence_n': int(edge_n),
-        'evidence_k': int(edge_k),
-        'evidence_retrieved_at': _format_retrieved_at_for_display(evidence_retrieved_at),
-        'zone': classify_zone(quantile),
-        'available': True,
-        'engine': True,
-        'is_ess': round(sweep.is_ess, 1),
-    }
-
-
 def _format_retrieved_at_for_display(retrieved_at) -> Optional[str]:
     """Format a retrieved_at value for gauge display (d-MMM-yy)."""
     if not retrieved_at:
@@ -410,70 +131,60 @@ def _compute_surprise_gauge(
     subj: Dict[str, Any],
     data: Dict[str, Any],
 ) -> Dict[str, Any]:
+    """Surprise gauge: thin projection of compute_forecast_summary (doc 55).
+
+    Two variables:
+      - p: observed Σk/Σn vs unconditioned posterior-predictive rate
+           (pp_rate_unconditioned moments from the summary).
+      - completeness: unconditioned vs IS-conditioned posterior completeness.
+                      Dial = unconditioned (model baseline); needle =
+                      conditioned (evidence-informed).
+
+    Both variables are single-number z-score projections of fields
+    returned by compute_forecast_summary. No analytic fallback, no
+    bespoke maths, no model_vars branching. If the summary cannot be
+    computed (no resolved params, no snapshot rows, no valid cohorts,
+    engine error, degenerate posterior), the variable reports
+    available: false with a reason. Low IS ESS is not a failure —
+    it displays with a warning icon (doc 55 §3.3).
     """
-    Compute surprise gauge: compare current evidence against model predictions.
+    from runner.model_resolver import resolve_model_params
+    from runner.forecast_state import (
+        compute_forecast_summary,
+        build_node_arrival_cache,
+    )
+    from runner.cohort_maturity_derivation import derive_cohort_maturity
+    from snapshot_service import query_snapshots_for_sweep
+    from datetime import date as date_type
 
-    Source-agnostic — works with any model source (bayesian, analytic_be,
-    analytic, manual). Bayesian gives better SDs from MCMC posterior; analytic
-    edges use promoted_mu_sd/promoted_sigma_sd from the topo pass. When no
-    SDs are available, latency variables report available=False.
-
-    Uses the forecast engine (compute_forecast_sweep) for the p variable
-    when snapshot data is available, falling back to the analytic formula.
-    mu/sigma use resolve_model_params for canonical SDs.
-
-    Returns:
-        { analysis_type, variables: [{ name, quantile, observed, expected,
-          posterior_sd, zone, label, available }] }
-    """
-    # Pure-math normal CDF/PPF — avoids scipy on Vercel (Lambda size limit).
     def norm_cdf(z: float) -> float:
         return 0.5 * math.erfc(-z / math.sqrt(2.0))
 
-    def norm_ppf(q: float) -> float:
-        """Inverse normal CDF (Acklam approximation, max |error| < 1.15e-9)."""
-        if q <= 0:
-            return float('-inf')
-        if q >= 1:
-            return float('inf')
-        # Coefficients
-        a = (-3.969683028665376e+01, 2.209460984245205e+02,
-             -2.759285104469687e+02, 1.383577518672690e+02,
-             -3.066479806614716e+01, 2.506628277459239e+00)
-        b = (-5.447609879822406e+01, 1.615858368580409e+02,
-             -1.556989798598866e+02, 6.680131188771972e+01,
-             -1.328068155288572e+01)
-        c = (-7.784894002430293e-03, -3.223964580411365e-01,
-             -2.400758277161838e+00, -2.549732539343734e+00,
-             4.374664141464968e+00, 2.938163982698783e+00)
-        d = (7.784695709041462e-03, 3.224671290700398e-01,
-             2.445134137142996e+00, 3.754408661907416e+00)
-        p_low = 0.02425
-        p_high = 1 - p_low
-        if q < p_low:
-            r = math.sqrt(-2.0 * math.log(q))
-            return (((((c[0]*r+c[1])*r+c[2])*r+c[3])*r+c[4])*r+c[5]) / \
-                   ((((d[0]*r+d[1])*r+d[2])*r+d[3])*r+1)
-        elif q <= p_high:
-            r = q - 0.5
-            r2 = r * r
-            return (((((a[0]*r2+a[1])*r2+a[2])*r2+a[3])*r2+a[4])*r2+a[5])*r / \
-                   (((((b[0]*r2+b[1])*r2+b[2])*r2+b[3])*r2+b[4])*r2+1)
-        else:
-            r = math.sqrt(-2.0 * math.log(1 - q))
-            return -(((((c[0]*r+c[1])*r+c[2])*r+c[3])*r+c[4])*r+c[5]) / \
-                    ((((d[0]*r+d[1])*r+d[2])*r+d[3])*r+1)
+    def classify_zone(q: float) -> str:
+        tail = abs(q - 0.5) * 2
+        if tail < 0.60:   return 'expected'
+        if tail < 0.80:   return 'noteworthy'
+        if tail < 0.90:   return 'unusual'
+        if tail < 0.98:   return 'surprising'
+        return 'alarming'
 
-    result: Dict[str, Any] = {
-        'analysis_type': 'surprise_gauge',
-        'analysis_name': 'Expectation Gauge',
-        'variables': [],
-    }
+    def _unavailable(reason: str) -> Dict[str, Any]:
+        return {
+            'analysis_type': 'surprise_gauge',
+            'analysis_name': 'Expectation Gauge',
+            'variables': [
+                {'name': 'p', 'label': 'Conversion rate',
+                 'available': False, 'reason': reason},
+                {'name': 'completeness', 'label': 'Completeness',
+                 'available': False, 'reason': reason},
+            ],
+            'error': reason,
+        }
 
     if not graph_data or not target_id:
-        return result
+        return _unavailable('No graph data or target_id')
 
-    # Find the edge
+    # ── Find the edge ───────────────────────────────────────────
     edges = graph_data.get('edges', []) if isinstance(graph_data, dict) else []
     edge = next(
         (e for e in edges
@@ -481,394 +192,228 @@ def _compute_surprise_gauge(
         None,
     )
     if not edge:
-        return result
+        return _unavailable('Edge not found')
 
-    p = edge.get('p') or {}
-    model_vars = p.get('model_vars') or []
-
-    # Find Bayesian model vars entry
-    bayes_entry = next(
-        (mv for mv in model_vars if isinstance(mv, dict) and mv.get('source') == 'bayesian'),
-        None,
-    )
-    # Determine the reference model entry: prefer Bayesian, fall back to any with stdev
-    reference_entry = bayes_entry
-    reference_source = 'bayesian'
-    if not reference_entry:
-        # Fall back to analytic_be, then analytic
-        for fallback_src in ('analytic_be', 'analytic'):
-            reference_entry = next(
-                (mv for mv in model_vars if isinstance(mv, dict) and mv.get('source') == fallback_src
-                 and isinstance((mv.get('probability') or {}).get('stdev'), (int, float))
-                 and (mv.get('probability') or {}).get('stdev', 0) > 0),
-                None,
-            )
-            if reference_entry:
-                reference_source = fallback_src
-                break
-    if not reference_entry:
-        result['error'] = 'No model vars with uncertainty available for this edge'
-        print(f"[surprise_gauge] No reference entry. model_vars sources: {[mv.get('source') for mv in model_vars if isinstance(mv, dict)]}")
-        return result
-
-    result['reference_source'] = reference_source
-    if reference_source != 'bayesian':
-        result['hint'] = 'Run Bayes model for better indicators'
-    print(f"[surprise_gauge] Using {reference_source} entry.")
-
-    ref_quality = reference_entry.get('quality') or {}
-    ref_prob = reference_entry.get('probability') or {}
-    ref_lat = reference_entry.get('latency') or {}
-
-    latency = p.get('latency') or {}
-    lat_posterior = latency.get('posterior') or {}
-    prob_posterior = p.get('posterior') or {}
-
-    # --- Determine query mode for window/cohort selection ---
+    # ── Scope / temporal mode from DSL ──────────────────────────
     query_dsl = data.get('query_dsl') or ''
     subj_slice_keys = subj.get('slice_keys') or []
     has_cohort_slice = any('cohort(' in str(sk) for sk in subj_slice_keys)
     is_cohort = has_cohort_slice or ('cohort(' in query_dsl)
+    scope = 'path' if is_cohort else 'edge'
+    temporal = 'cohort' if is_cohort else 'window'
 
-    # --- Build reference distribution params ---
-    # For Bayesian: read directly from p.posterior (probability) and
-    # p.latency.posterior (latency). These are the authoritative MCMC
-    # output. In cohort mode, use path-level fields.
-    # For analytic: reconstruct from model_vars mean/stdev.
-
-    # Probability: alpha/beta from p.posterior — source-agnostic.
-    # The topo pass writes alpha/beta for any source, not just Bayesian.
-    b_alpha_raw = None
-    b_beta_raw = None
-    if is_cohort:
-        b_alpha_raw = prob_posterior.get('cohort_alpha')
-        b_beta_raw = prob_posterior.get('cohort_beta')
-    if b_alpha_raw is None or b_beta_raw is None:
-        b_alpha_raw = prob_posterior.get('alpha')
-        b_beta_raw = prob_posterior.get('beta')
-    if b_alpha_raw is None or b_beta_raw is None:
-        # Reconstruct from mean/stdev using method of moments
-        b_mean = ref_prob.get('mean')
-        b_std = ref_prob.get('stdev')
-        if (isinstance(b_mean, (int, float)) and isinstance(b_std, (int, float))
-                and b_mean > 0 and b_mean < 1 and b_std > 0):
-            v = float(b_std) ** 2
-            m = float(b_mean)
-            if v < m * (1 - m):  # valid Beta
-                common = m * (1 - m) / v - 1
-                b_alpha_raw = m * common
-                b_beta_raw = (1 - m) * common
-
-    # Latency: mu_mean/mu_sd, sigma_mean/sigma_sd, onset
-    # Source-agnostic: read from promoted/posterior/flat fields via the
-    # same cascade the resolver uses. Bayes gives better SDs (from MCMC
-    # posterior), but analytic edges get SDs from topo-pass promoted_*
-    # fields or lat_posterior when available.
-    ref_lat_params = {
-        'mu_mean': (lat_posterior.get('mu_mean')
-                    or ref_lat.get('mu')),
-        'mu_sd': (latency.get('promoted_mu_sd')
-                  or lat_posterior.get('mu_sd')
-                  or ref_lat.get('mu_sd')),
-        'sigma_mean': (lat_posterior.get('sigma_mean')
-                       or ref_lat.get('sigma')),
-        'sigma_sd': (latency.get('promoted_sigma_sd')
-                     or lat_posterior.get('sigma_sd')
-                     or ref_lat.get('sigma_sd')),
-        'onset_mean': (lat_posterior.get('onset_delta_days')
-                       or latency.get('promoted_onset_delta_days')
-                       or ref_lat.get('onset_delta_days')),
-        'onset_sd': (latency.get('promoted_onset_sd')
-                     or lat_posterior.get('onset_sd')
-                     or ref_lat.get('onset_sd')),
-        'onset_delta_days': (lat_posterior.get('onset_delta_days')
-                             or latency.get('promoted_onset_delta_days')
-                             or ref_lat.get('onset_delta_days') or 0),
-    }
-    # Cohort mode: prefer path-level params when available (any source).
-    if is_cohort:
-        _path_mu = lat_posterior.get('path_mu_mean') or latency.get('path_mu')
-        _path_sigma = lat_posterior.get('path_sigma_mean') or latency.get('path_sigma')
-        if _path_mu is not None and _path_sigma is not None:
-            ref_lat_params['mu_mean'] = _path_mu
-            ref_lat_params['sigma_mean'] = _path_sigma
-            ref_lat_params['mu_sd'] = (
-                latency.get('promoted_path_mu_sd')
-                or lat_posterior.get('path_mu_sd')
-                or ref_lat_params['mu_sd'])
-            ref_lat_params['sigma_sd'] = (
-                latency.get('promoted_path_sigma_sd')
-                or lat_posterior.get('path_sigma_sd')
-                or ref_lat_params['sigma_sd'])
-            ref_lat_params['onset_mean'] = (
-                lat_posterior.get('path_onset_delta_days')
-                or latency.get('path_onset_delta_days')
-                or ref_lat_params['onset_mean'])
-            ref_lat_params['onset_sd'] = (
-                latency.get('promoted_path_onset_sd')
-                or lat_posterior.get('path_onset_sd')
-                or ref_lat_params['onset_sd'])
-            ref_lat_params['onset_delta_days'] = (
-                ref_lat_params['onset_mean'] or 0)
-
-    # --- Evidence (pure observation — never the blended f+e value) ---
-    # See surprise-gauge-design.md §5.0: gauge always compares pure evidence
-    # against the model posterior to avoid circular comparison.
-    evidence = p.get('evidence') or {}
-    evidence_k = evidence.get('k')
-    evidence_n = evidence.get('n')
-
-    # Completeness from the topo pass. Use the stored value directly — it's the
-    # same n-weighted average the graph display uses. No local recomputation.
-    c_w = latency.get('completeness')
-    if not isinstance(c_w, (int, float)) or c_w <= 0:
-        c_w = 1.0
-
-    # --- Observed latency params (from analytic evidence, not promoted/blended) ---
-    analytic_entry = next(
-        (mv for mv in model_vars if isinstance(mv, dict) and mv.get('source') == 'analytic_be'),
-        next(
-            (mv for mv in model_vars if isinstance(mv, dict) and mv.get('source') == 'analytic'),
-            None,
-        ),
+    # ── Resolve model params ────────────────────────────────────
+    graph_pref = (graph_data.get('model_source_preference')
+                  if isinstance(graph_data, dict) else None)
+    resolved = resolve_model_params(
+        edge, scope=scope, temporal_mode=temporal, graph_preference=graph_pref,
     )
-    obs_lat_mu = None
-    obs_lat_sigma = None
-    if analytic_entry:
-        a_lat = analytic_entry.get('latency') or {}
-        obs_lat_mu = a_lat.get('mu')
-        obs_lat_sigma = a_lat.get('sigma')
-    # Fallback to promoted latency only for mu/sigma (not for p)
-    promoted_lat = p.get('latency') or {}
-    if obs_lat_mu is None:
-        obs_lat_mu = promoted_lat.get('mu')
-    if obs_lat_sigma is None:
-        obs_lat_sigma = promoted_lat.get('sigma')
+    if not resolved or resolved.latency.sigma <= 0:
+        print("[surprise_gauge] no resolved params or σ≤0")
+        return _unavailable('No resolved model params (σ must be > 0)')
 
-    # n_dates for mu/sigma sampling SE
+    # ── Subject must carry snapshot-query fields ────────────────
+    param_id = subj.get('param_id')
+    core_hash = subj.get('core_hash')
     anchor_from_str = subj.get('anchor_from')
     anchor_to_str = subj.get('anchor_to')
-    n_dates = 1
-    if anchor_from_str and anchor_to_str:
+    if not (param_id and core_hash and anchor_from_str and anchor_to_str):
+        print("[surprise_gauge] missing subject fields for snapshot query")
+        return _unavailable('Missing subject fields for snapshot query')
+
+    # ── Query snapshots ─────────────────────────────────────────
+    try:
+        anchor_from = date_type.fromisoformat(str(anchor_from_str)[:10])
+        anchor_to = date_type.fromisoformat(str(anchor_to_str)[:10])
+        rows = query_snapshots_for_sweep(
+            param_id=param_id,
+            core_hash=core_hash,
+            slice_keys=subj.get('slice_keys', ['']),
+            anchor_from=anchor_from,
+            anchor_to=anchor_to,
+            equivalent_hashes=subj.get('equivalent_hashes'),
+        )
+    except Exception as e:
+        print(f"[surprise_gauge] snapshot query failed: {e}")
+        return _unavailable('Snapshot query failed')
+
+    if not rows:
+        print("[surprise_gauge] no snapshot rows")
+        return _unavailable('No snapshot data in window')
+
+    # ── Derive cohort frames ────────────────────────────────────
+    derivation = derive_cohort_maturity(rows)
+    frames = derivation.get('frames', [])
+    if not frames:
+        return _unavailable('Could not derive cohort frames')
+
+    last_frame = frames[-1]
+    data_points = last_frame.get('data_points', [])
+    if not data_points:
+        return _unavailable('No cohort data points in last frame')
+
+    last_frame_date = None
+    sd_str = str(last_frame.get('snapshot_date', ''))[:10]
+    if sd_str:
         try:
-            from datetime import date as date_type
-            af = date_type.fromisoformat(str(anchor_from_str)[:10])
-            at = date_type.fromisoformat(str(anchor_to_str)[:10])
-            n_dates = max(1, (at - af).days + 1)
+            last_frame_date = date_type.fromisoformat(sd_str)
         except (ValueError, TypeError):
             pass
 
-    # Zone classification from quantile
-    def classify_zone(q: float) -> str:
-        """Map a CDF quantile (0-1) to a surprise zone."""
-        tail = abs(q - 0.5) * 2  # 0 = centre, 1 = extreme
-        if tail < 0.60:   return 'expected'      # 20th–80th percentile
-        if tail < 0.80:   return 'noteworthy'     # 10th–20th or 80th–90th
-        if tail < 0.90:   return 'unusual'        # 5th–10th or 90th–95th
-        if tail < 0.98:   return 'surprising'     # 1st–5th or 95th–99th
-        return 'alarming'                         # beyond 1st/99th
+    # ── Extract cohort ages/weights and (τ, n, k) evidence ──────
+    # Observed Σk, Σn come from these same rows — observed and
+    # expected share a single source of truth (doc 55 §4.4).
+    cohort_ages_and_weights: List[tuple] = []
+    evidence: List[tuple] = []
+    total_k = 0.0
+    total_n = 0.0
+    for dp in data_points:
+        ad_str = str(dp.get('anchor_day', ''))[:10]
+        try:
+            ad = date_type.fromisoformat(ad_str)
+        except (ValueError, TypeError):
+            continue
+        if ad < anchor_from or ad > anchor_to:
+            continue
+        x_val = dp.get('x', 0)
+        y_val = dp.get('y', 0)
+        if not isinstance(x_val, (int, float)) or x_val <= 0:
+            continue
+        if not isinstance(y_val, (int, float)):
+            y_val = 0
+        age = (last_frame_date - ad).days if last_frame_date else 0
+        if age < 0:
+            continue
+        age_i = int(round(age))
+        cohort_ages_and_weights.append((age_i, float(x_val)))
+        evidence.append((age_i, float(x_val), float(y_val)))
+        total_k += float(y_val)
+        total_n += float(x_val)
 
-    def sigma_from_quantile(q: float) -> float:
-        """Convert quantile to signed σ distance from centre."""
-        q_clamped = max(1e-6, min(1 - 1e-6, q))
-        return norm_ppf(q_clamped)
+    if not cohort_ages_and_weights or total_n <= 0:
+        return _unavailable('No valid cohorts in window')
 
-    variables = []
+    # ── Upstream carrier (cohort mode) ──────────────────────────
+    from_node_arrival = None
+    if is_cohort:
+        try:
+            anchor_id = None
+            for n in graph_data.get('nodes', []):
+                if (n.get('entry') or {}).get('is_start'):
+                    anchor_id = n.get('uuid') or n.get('id')
+                    break
+            if anchor_id is None and graph_data.get('nodes'):
+                anchor_id = (graph_data['nodes'][0].get('uuid')
+                             or graph_data['nodes'][0].get('id', ''))
+            if anchor_id:
+                cache = build_node_arrival_cache(
+                    graph_data, anchor_id=anchor_id, max_tau=400,
+                )
+                from_id = edge.get('from', '')
+                from_node_arrival = cache.get(from_id)
+        except Exception as e:
+            print(f"[surprise_gauge] node arrival cache failed: {e}")
 
-    # --- p (conversion rate) ---
-    # Primary: use forecast engine MC draws for posterior-predictive z-score.
-    # Fallback: analytic formula with scalar completeness.
-    engine_p = _surprise_gauge_engine_p(edge, graph_data, subj, is_cohort)
-    if engine_p is not None:
-        variables.append(engine_p)
-        # Engine ran successfully — suppress the "Run Bayes" hint.
-        # The engine uses resolve_model_params which picks the best
-        # available source. Its MC draws already incorporate whatever
-        # posterior is available.
-        if 'hint' in result:
-            del result['hint']
-        print(f"[surprise_gauge] p: engine path succeeded")
-    else:
-        # Fallback: analytic scalar approach (Phase 1 formula)
-        print(f"[surprise_gauge] p: falling back to analytic formula")
-        b_alpha = b_alpha_raw
-        b_beta_param = b_beta_raw
-
-        if (isinstance(b_alpha, (int, float)) and isinstance(b_beta_param, (int, float))
-                and b_alpha > 0 and b_beta_param > 0
-                and isinstance(evidence_k, (int, float)) and isinstance(evidence_n, (int, float))
-                and evidence_n > 0):
-            mu_p = b_alpha / (b_alpha + b_beta_param)
-            sigma2_p = (b_alpha * b_beta_param) / ((b_alpha + b_beta_param) ** 2 * (b_alpha + b_beta_param + 1))
-            obs_rate = float(evidence_k) / float(evidence_n)
-
-            # Completeness-adjusted expected rate and variance (§5.1)
-            expected = mu_p * c_w
-            var_post = sigma2_p * (c_w ** 2)
-            # Sampling variance at the expected rate
-            var_samp = expected * (1.0 - expected) / float(evidence_n)
-            combined_sd = math.sqrt(max(1e-20, var_post + var_samp))
-
-            z = (obs_rate - expected) / combined_sd
-            quantile = float(norm_cdf(z))
-            variables.append({
-                'name': 'p',
-                'label': 'Conversion rate',
-                'quantile': round(quantile, 6),
-                'sigma': round(z, 3),
-                'observed': round(obs_rate, 6),
-                'expected': round(expected, 6),
-                'expected_longrun': round(mu_p, 6),
-                'posterior_sd': round(math.sqrt(sigma2_p), 6),
-                'combined_sd': round(combined_sd, 6),
-                'completeness': round(c_w, 4),
-                'zone': classify_zone(quantile),
-                'available': True,
-            })
-        else:
-            reason = 'No evidence (k/n)' if not (isinstance(evidence_n, (int, float)) and evidence_n > 0) else 'Missing posterior (alpha/beta)'
-            variables.append({
-                'name': 'p',
-                'label': 'Conversion rate',
-                'available': False,
-                'reason': reason,
-            })
-
-    # --- mu (latency location) ---
-    # Combined-SD normal approximation: posterior SD + sampling SE. See §5.2.
-    # Prefer resolve_model_params for canonical SDs when available.
-    _resolved = None
+    # ── Call CF engine ──────────────────────────────────────────
+    edge_id = str(edge.get('uuid') or edge.get('id') or '')
     try:
-        from runner.model_resolver import resolve_model_params as _rmp
-        _scope = 'path' if is_cohort else 'edge'
-        _temporal = 'cohort' if is_cohort else 'window'
-        _graph_pref = graph_data.get('model_source_preference') if isinstance(graph_data, dict) else None
-        _resolved = _rmp(edge, scope=_scope, temporal_mode=_temporal, graph_preference=_graph_pref)
-    except Exception:
-        pass
+        summary = compute_forecast_summary(
+            edge_id=edge_id,
+            resolved=resolved,
+            cohort_ages_and_weights=cohort_ages_and_weights,
+            evidence=evidence,
+            from_node_arrival=from_node_arrival,
+        )
+    except Exception as e:
+        print(f"[surprise_gauge] compute_forecast_summary failed: {e}")
+        return _unavailable('Forecast engine failed')
 
-    # Prefer resolver (source-agnostic, handles full cascade).
-    # Fall back to ref_lat_params only if resolver failed.
-    if _resolved and _resolved.latency.sigma > 0:
-        b_mu_mean = _resolved.latency.mu
-        b_mu_sd = _resolved.latency.mu_sd or ref_lat_params.get('mu_sd')
-        b_onset_mean = _resolved.latency.onset_delta_days
-        sigma_lag = _resolved.latency.sigma
-    else:
-        b_mu_mean = ref_lat_params.get('mu_mean')
-        b_mu_sd = ref_lat_params.get('mu_sd')
-        b_onset_mean = ref_lat_params.get('onset_mean') or ref_lat_params.get('onset_delta_days') or 0
-        sigma_lag = ref_lat_params.get('sigma_mean') or latency.get('sigma')
+    # ── Project summary → gauge variables ───────────────────────
+    obs_rate = total_k / total_n if total_n > 0 else 0.0
+    retrieved_at = last_frame_date.isoformat() if last_frame_date else None
 
-    if (isinstance(b_mu_mean, (int, float)) and isinstance(b_mu_sd, (int, float))
-            and b_mu_sd > 0
-            and isinstance(obs_lat_mu, (int, float))):
-        # obs_se = sqrt(π/2) × σ_lag / sqrt(n_dates)
-        obs_se = 0.0
-        if isinstance(sigma_lag, (int, float)) and sigma_lag > 0 and n_dates > 0:
-            obs_se = math.sqrt(math.pi / 2) * float(sigma_lag) / math.sqrt(n_dates)
-        combined_sd = math.sqrt(float(b_mu_sd) ** 2 + obs_se ** 2)
-        z = (float(obs_lat_mu) - float(b_mu_mean)) / combined_sd
-        quantile = float(norm_cdf(z))
-        variables.append({
-            'name': 'mu',
-            'label': 'Latency location (μ)',
-            'quantile': round(quantile, 6),
-            'sigma': round(z, 3),
-            'observed': round(float(obs_lat_mu), 4),
-            'observed_days': round(math.exp(float(obs_lat_mu)) + float(b_onset_mean), 1),
-            'expected': round(float(b_mu_mean), 4),
-            'expected_days': round(math.exp(float(b_mu_mean)) + float(b_onset_mean), 1),
-            'posterior_sd': round(float(b_mu_sd), 4),
-            'combined_sd': round(combined_sd, 4),
-            'n_dates': n_dates,
-            'zone': classify_zone(quantile),
+    variables: List[Dict[str, Any]] = []
+
+    # p variable
+    if summary.pp_rate_unconditioned_sd > 1e-12:
+        z_p = ((obs_rate - summary.pp_rate_unconditioned)
+               / summary.pp_rate_unconditioned_sd)
+        q_p = float(norm_cdf(z_p))
+        p_var: Dict[str, Any] = {
+            'name': 'p',
+            'label': 'Conversion rate',
+            'quantile': round(q_p, 6),
+            'sigma': round(z_p, 3),
+            'observed': round(obs_rate, 6),
+            'expected': round(summary.pp_rate_unconditioned, 6),
+            'posterior_sd': round(summary.pp_rate_unconditioned_sd, 6),
+            'combined_sd': round(summary.pp_rate_unconditioned_sd, 6),
+            'completeness': round(summary.completeness_unconditioned, 4),
+            'evidence_n': int(round(total_n)),
+            'evidence_k': int(round(total_k)),
+            'evidence_retrieved_at': _format_retrieved_at_for_display(retrieved_at),
+            'zone': classify_zone(q_p),
             'available': True,
-        })
+        }
+        variables.append(p_var)
     else:
         variables.append({
-            'name': 'mu',
-            'label': 'Latency location (μ)',
+            'name': 'p',
+            'label': 'Conversion rate',
             'available': False,
-            'reason': 'No latency mu or mu_sd available from any model source',
+            'reason': 'Posterior-predictive SD effectively zero',
         })
 
-    # --- sigma (latency spread) ---
-    # Combined-SD normal approximation with n_dates guard. See §5.2.
-    if _resolved and _resolved.latency.sigma > 0:
-        b_sigma_mean_val = _resolved.latency.sigma
-        b_sigma_sd = _resolved.latency.sigma_sd or ref_lat_params.get('sigma_sd')
-    else:
-        b_sigma_mean_val = ref_lat_params.get('sigma_mean')
-        b_sigma_sd = ref_lat_params.get('sigma_sd')
-
-    if (isinstance(b_sigma_mean_val, (int, float)) and isinstance(b_sigma_sd, (int, float))
-            and b_sigma_sd > 0
-            and isinstance(obs_lat_sigma, (int, float))
-            and n_dates >= 30):
-        # sigma_se = σ_lag / sqrt(2 × n_dates)
-        obs_se = 0.0
-        if isinstance(sigma_lag, (int, float)) and sigma_lag > 0 and n_dates > 0:
-            obs_se = float(sigma_lag) / math.sqrt(2 * n_dates)
-        combined_sd = math.sqrt(float(b_sigma_sd) ** 2 + obs_se ** 2)
-        z = (float(obs_lat_sigma) - float(b_sigma_mean_val)) / combined_sd
-        quantile = float(norm_cdf(z))
-        variables.append({
-            'name': 'sigma',
-            'label': 'Latency spread (σ)',
-            'quantile': round(quantile, 6),
-            'sigma': round(z, 3),
-            'observed': round(float(obs_lat_sigma), 4),
-            'expected': round(float(b_sigma_mean_val), 4),
-            'posterior_sd': round(float(b_sigma_sd), 4),
-            'combined_sd': round(combined_sd, 4),
-            'n_dates': n_dates,
-            'zone': classify_zone(quantile),
+    # completeness variable — dial centred on unconditioned mean,
+    # needle at conditioned mean. Surprise = how much the evidence
+    # shifted the model's view of maturity.
+    if summary.completeness_unconditioned_sd > 1e-12:
+        z_c = ((summary.completeness - summary.completeness_unconditioned)
+               / summary.completeness_unconditioned_sd)
+        q_c = float(norm_cdf(z_c))
+        c_var: Dict[str, Any] = {
+            'name': 'completeness',
+            'label': 'Completeness',
+            'quantile': round(q_c, 6),
+            'sigma': round(z_c, 3),
+            # Dial shows expected (unconditioned); needle shows
+            # observed (conditioned). Same convention as p.
+            'observed': round(summary.completeness, 6),
+            'expected': round(summary.completeness_unconditioned, 6),
+            'posterior_sd': round(summary.completeness_unconditioned_sd, 6),
+            'combined_sd': round(summary.completeness_unconditioned_sd, 6),
+            # Raw pair — convenient for detail rendering.
+            'unconditioned': round(summary.completeness_unconditioned, 6),
+            'unconditioned_sd': round(summary.completeness_unconditioned_sd, 6),
+            'conditioned': round(summary.completeness, 6),
+            'conditioned_sd': round(summary.completeness_sd, 6),
+            'evidence_retrieved_at': _format_retrieved_at_for_display(retrieved_at),
+            'zone': classify_zone(q_c),
             'available': True,
-        })
-    elif n_dates < 30 and isinstance(b_sigma_mean_val, (int, float)) and isinstance(obs_lat_sigma, (int, float)):
-        variables.append({
-            'name': 'sigma',
-            'label': 'Latency spread (σ)',
-            'available': False,
-            'reason': f'Insufficient dates ({n_dates} < 30) for reliable sigma estimate',
-        })
+        }
+        variables.append(c_var)
     else:
         variables.append({
-            'name': 'sigma',
-            'label': 'Latency spread (σ)',
+            'name': 'completeness',
+            'label': 'Completeness',
             'available': False,
-            'reason': 'No latency sigma or sigma_sd available from any model source',
+            'reason': 'Unconditioned completeness SD effectively zero',
         })
 
-    # --- onset (Phase 2 — placeholder) ---
-    b_onset_mean_val = ref_lat_params.get('onset_mean')
-    b_onset_sd = ref_lat_params.get('onset_sd')
-    if isinstance(b_onset_mean_val, (int, float)) and isinstance(b_onset_sd, (int, float)) and b_onset_sd > 0:
-        variables.append({
-            'name': 'onset',
-            'label': 'Onset (dead time)',
-            'available': False,
-            'reason': 'Phase 2: requires snapshot DB query for observed onset',
-            'expected': round(float(b_onset_mean_val), 2),
-            'posterior_sd': round(float(b_onset_sd), 2),
-        })
-    else:
-        variables.append({
-            'name': 'onset',
-            'label': 'Onset (dead time)',
-            'available': False,
-            'reason': 'No latent onset posterior available',
-        })
-
-    # Quality metadata
-    result['variables'] = variables
-    result['quality'] = {
-        'rhat': ref_quality.get('rhat'),
-        'ess': ref_quality.get('ess'),
-        'gate_passed': ref_quality.get('gate_passed'),
+    result: Dict[str, Any] = {
+        'analysis_type': 'surprise_gauge',
+        'analysis_name': 'Expectation Gauge',
+        'variables': variables,
+        'reference_source': resolved.source,
+        'is_ess': round(summary.is_ess, 1),
     }
-    result['promoted_source'] = p.get('model_source_preference', 'best_available')
+
+    print(f"[surprise_gauge] source={resolved.source} is_ess={summary.is_ess:.1f} "
+          f"p: obs={obs_rate:.4f} exp={summary.pp_rate_unconditioned:.4f} "
+          f"sd={summary.pp_rate_unconditioned_sd:.4f} "
+          f"c: unc={summary.completeness_unconditioned:.4f} "
+          f"cond={summary.completeness:.4f} "
+          f"unc_sd={summary.completeness_unconditioned_sd:.4f}")
 
     return result
 
@@ -2514,8 +2059,8 @@ def handle_conditioned_forecast(data: Dict[str, Any]) -> Dict[str, Any]:
         optionally scoped by `analytics_dsl` to a specific path/span.
       - The fetch pipeline calls this as Stage 2 whole-graph enrichment.
     When NOT to call:
-      - Do NOT reach into compute_forecast_sweep or
-        compute_conditioned_forecast directly — they are inner kernels
+      - Do NOT reach into compute_forecast_trajectory or
+        compute_forecast_summary directly — they are inner kernels
         and bypass the topo-sequencing + upstream-carrier coordination
         this handler performs (doc 47). Calling inner kernels per-edge
         from an analysis runner loses that coordination and produces
@@ -2701,13 +2246,13 @@ def handle_conditioned_forecast(data: Dict[str, Any]) -> Dict[str, Any]:
             # Cache derivation results for downstream carrier building
             all_per_edge_results.extend(per_edge_results)
 
-            if total_rows == 0:
-                edge_uuid = subj_group[0].get('target', {}).get('targetId', '')
-                skipped_edges.append({
-                    'edge_uuid': edge_uuid,
-                    'reason': 'no snapshot rows after regime selection',
-                })
-                continue
+            # No early-exit on total_rows == 0. Let the row builder
+            # handle the natural degeneration: zero evidence → prior.
+            # The row builder falls back to _lagless_rows(fe=None, ...)
+            # which produces a prior-only row set when cohort evidence
+            # cannot be built. Class D (no α/β either) is then a genuine
+            # empty return, caught by the `if maturity_rows:` check
+            # below and routed to skipped_edges there.
 
             # ── Compose span-level evidence (same as v3) ────────────
             composed = compose_path_maturity_frames(
@@ -2861,7 +2406,12 @@ def handle_conditioned_forecast(data: Dict[str, Any]) -> Dict[str, Any]:
                 )
 
             # ── Call v3 row builder and read scalars ────────────────
-            if composed_frames and last_edge_id:
+            # Call unconditionally when we have an edge id — the row
+            # builder handles empty frames via the _lagless_rows
+            # fallback (prior-only rows). Class D (no α/β) produces
+            # an empty maturity_rows and routes to skipped_edges
+            # below. See doc 50 §§2-3.
+            if last_edge_id:
                 anchor_to_str = subj_group[0].get('anchor_to', '')
                 maturity_rows = compute_cohort_maturity_rows_v3(
                     frames=composed_frames,
@@ -2906,7 +2456,7 @@ def handle_conditioned_forecast(data: Dict[str, Any]) -> Dict[str, Any]:
 
                     # Doc 45 §Response contract: per-edge output MUST
                     # include `completeness` and `completeness_sd`. The
-                    # engine (compute_forecast_sweep) computes these
+                    # engine (compute_forecast_trajectory) computes these
                     # once and cohort_forecast_v3 threads them onto
                     # every maturity row, so both the CF endpoint and
                     # the cohort maturity chart read the same scalar
@@ -2932,6 +2482,28 @@ def handle_conditioned_forecast(data: Dict[str, Any]) -> Dict[str, Any]:
                           f"p={p_mean:.4f} tau_max={last_row.get('tau')} "
                           f"cohorts={composed.get('cohorts_analysed', 0)} "
                           f"rows={total_rows}")
+                else:
+                    # Class D — row builder returned []. This means the
+                    # resolver had no usable α/β (no Bayes fit, no
+                    # parameter-file evidence, no promoted source)
+                    # AND no query-scoped snapshot rows. CF has
+                    # literally nothing to report for this edge.
+                    # See doc 50 §2 Class D + §3.2.
+                    skipped_edges.append({
+                        'edge_uuid': last_edge_id,
+                        'reason': 'no prior and no evidence',
+                    })
+            else:
+                # No last_edge_id resolvable from subject group —
+                # malformed subject. Treat as Class D.
+                _maybe_uuid = ''
+                if subj_group:
+                    _maybe_uuid = (subj_group[0].get('target') or {}).get('targetId', '')
+                if _maybe_uuid:
+                    skipped_edges.append({
+                        'edge_uuid': _maybe_uuid,
+                        'reason': 'no prior and no evidence',
+                    })
 
         per_scenario_results.append({
             "scenario_id": scenario_id,
@@ -3888,7 +3460,7 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                     # instead of annotate_rows. Same codepath as topo pass.
                     _dc_annotated = False
                     try:
-                        from runner.forecast_state import compute_forecast_sweep, CohortEvidence
+                        from runner.forecast_state import compute_forecast_trajectory, CohortEvidence
                         from runner.model_resolver import resolve_model_params as _rmp
                         from runner.forecast_application import compute_completeness as _cc
 
@@ -3970,7 +3542,7 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                                 _cohort_real_ages.append(_real_age)
 
                             if _engine_cohorts:
-                                _sweep = compute_forecast_sweep(
+                                _sweep = compute_forecast_trajectory(
                                     resolved=_resolved,
                                     cohorts=_engine_cohorts,
                                     max_tau=_maturity_tau,
@@ -4061,7 +3633,7 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                                             if not _band_cohorts:
                                                 continue
 
-                                            _band_sweep = compute_forecast_sweep(
+                                            _band_sweep = compute_forecast_trajectory(
                                                 resolved=_resolved,
                                                 cohorts=_band_cohorts,
                                                 max_tau=_bt,
@@ -5767,7 +5339,7 @@ def handle_stats_topo_pass(data: Dict[str, Any]) -> Dict[str, Any]:
     _fs_t0 = _time.monotonic()
     from runner.model_resolver import resolve_model_params
     from runner.forecast_state import (
-        compute_forecast_sweep,
+        compute_forecast_trajectory,
         CohortEvidence,
         NodeArrivalState,
         build_node_arrival_cache,
@@ -5846,7 +5418,7 @@ def handle_stats_topo_pass(data: Dict[str, Any]) -> Dict[str, Any]:
                         if _node_arrival_cache else None
                     )
                     try:
-                        sweep = compute_forecast_sweep(
+                        sweep = compute_forecast_trajectory(
                             resolved=resolved,
                             cohorts=engine_cohorts,
                             max_tau=max_age,

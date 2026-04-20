@@ -182,16 +182,10 @@ A solution to this problem should, at minimum:
   names alone, without requiring the reader to inspect the
   signature.
 - Make the two return types distinguishable from their names
-  alone.
-- Remove the field-name collision on `completeness`, so that no
-  identifier in the module can refer to two different semantic
-  quantities.
-- Expose the currently-internal unconditioned-completeness and
-  unconditioned-posterior-predictive-rate quantities as named
-  fields, with names that make their "unconditioned" character
-  unambiguous. (This is also prerequisite for doc 55 and doc 54
-  §8.1, so the naming work and those consumers are mutually
-  supportive.)
+  alone. (Renaming the functions without renaming their return
+  types would just recreate the confusion one layer down — the
+  reader would see `new_function_name(...) -> OldReturnTypeName`
+  and wonder which name is canonical.)
 - Keep the identifier style consistent with the surrounding
   `forecast_state.py` / `runner/` conventions; this is a rename,
   not a stylistic overhaul.
@@ -205,6 +199,12 @@ The solution should not:
 
 - Alter either function's semantics, IS strategy, or return
   shape.
+- Rename fields on either return type. Field-level naming
+  problems (e.g. the `completeness` clash described in §3) are
+  real but are separate workstreams — they belong to whichever
+  consumer doc actually needs the fields (docs 52, 54 §8.1, 55).
+- Add new fields to either return type. That work also belongs
+  to the consumer docs.
 - Merge the two functions. Phase G's primitive unification is the
   right place for any merging; that work is separate.
 - Touch consumers beyond updating their identifiers.
@@ -231,8 +231,10 @@ naming ambiguous indefinitely as the consumer set grows.
 
 ## 9. Naming proposal
 
-The rename should make each identifier answer, on its own, the
-question a reader most needs answered when they encounter it.
+The rename touches four identifiers: two top-level functions and
+their two return types. Nothing else. No field renames, no added
+fields, no consumer-side changes beyond identifier substitution.
+
 Callers of these functions pick between them primarily on output
 shape — "do I want scalars to persist / project, or do I want a
 trajectory to plot?" That is the axis that should dominate the
@@ -240,7 +242,7 @@ names. The IS-strategy difference (aggregate vs sequential) is an
 implementation detail of *how each function achieves its output
 shape*, not something callers select on.
 
-### 9.1 Top-level functions and return types
+### 9.1 The renames
 
 - `compute_conditioned_forecast` → **`compute_forecast_summary`**
 - `compute_forecast_sweep` → **`compute_forecast_trajectory`**
@@ -264,6 +266,11 @@ Rationale:
 - Both names keep the `compute_forecast_` prefix so the two
   functions remain visually paired in any import list or file
   navigator.
+- The return types rename in lockstep with their functions.
+  Leaving `compute_forecast_trajectory(...) -> ForecastSweepResult`
+  would recreate the original confusion in the type signature:
+  the reader would still not know which name was canonical. The
+  rename only works if both layers move together.
 
 The IS strategy does not appear in the names. A reader investigating
 internals will see the strategy difference inside the function body
@@ -271,91 +278,48 @@ and in the module-level docstring (which the rename also updates).
 Encoding it in the identifier would make the name longer without
 helping callers — callers don't pick on IS strategy.
 
-### 9.2 Field renames to eliminate collisions
+### 9.2 What stays unchanged
 
-On the new `ForecastSummary` (formerly `ConditionedForecast`):
+Everything except the four identifiers. Specifically:
 
-- `completeness` → **`completeness_conditioned`**
-- `completeness_sd` → **`completeness_conditioned_sd`**
-
-On the new `ForecastTrajectory` (formerly `ForecastSweepResult`):
-
-- `completeness_mean` → **`completeness_unconditioned`**
-- `completeness_sd` → **`completeness_unconditioned_sd`**
-
-After the rename, no identifier in the module refers to two
-different semantic quantities. A reader seeing
-`result.completeness_conditioned` or `result.completeness_unconditioned`
-knows unambiguously what they have.
-
-### 9.3 Fields to add (aligned with doc 55)
-
-On `ForecastSummary`, add four fields populated from locals already
-computed inside the function:
-
-- **`completeness_unconditioned`**, **`completeness_unconditioned_sd`**
-  — the moments of `mc_completeness_unconditioned` (currently a
-  local that is discarded before return).
-- **`pp_rate_unconditioned`**, **`pp_rate_unconditioned_sd`** — the
-  moments of `p_draws_unconditioned * mc_completeness_unconditioned`
-  (element-wise). Both arrays are already in scope; the product
-  and its moments are not computed today.
-
-These are the four scalars doc 55 needs. After the rename, both
-`ForecastSummary` and `ForecastTrajectory` expose an
-`unconditioned` completeness field with the same semantics — one
-function exposes it as a scalar summary, the other has always
-exposed the same quantity with a less helpful name. Consumers can
-read either shape and get a consistent identifier.
-
-### 9.4 What stays unchanged
-
-The following are deliberately out of scope for this rename:
-
+- **All field names on both return types.** The `completeness`
+  clash described in §3, the `p_draws` / `mu_draws` / `sigma_draws`
+  / `onset_draws` clash (bare-names-mean-conditioned on one type,
+  bare-names-mean-unconditioned on the other), and any asymmetries
+  in which scalars are exposed vs. computed-and-discarded — all
+  remain. They are real problems but they are not the problem this
+  workstream addresses. They belong to whichever consumer doc
+  needs the field (doc 55 for the unconditioned scalars, doc 54
+  §8.1 for the CF readiness scalars, doc 52 for the funnel bars).
+- **No new fields.** Any addition to either return type ships with
+  the consumer doc that motivates it, not here.
 - **Internal helper names.** `_run_cohort_loop`, `_evaluate_cohort`,
   `_weighted_completeness_draws`, `_normalise_log_weights`,
   `_weights_and_ess`, `_cdf_at_age_for_draw`,
   `_edge_cdf_at_age_for_draw`, `_convolve_completeness_at_age`,
   `_compute_completeness_at_age`, and any other private helper in
-  `forecast_state.py`. These are module-internal, not referenced
-  from outside, and their names are already specific enough.
+  `forecast_state.py`.
 - **Consumer-side handler names.** `_surprise_gauge_engine_p` in
-  `api_handlers.py` uses "engine" in its identifier. The whole
-  function is being rewritten as part of doc 55; its rename (if
-  any) belongs to that work, not here.
-- **Test identifiers.** `test_conditioned_forecast_response_contract.py`
-  and any similarly named tests describe the *behaviour they test*.
-  When their test subject is renamed, the test file does not need
-  to be renamed — its subject is the contract, not the function
-  name. Individual test-function names that embed the old names
-  are updated in-place, but file names stay.
+  `api_handlers.py`. Being rewritten as part of doc 55; any rename
+  belongs there.
+- **Test identifiers.** Test filenames describe the *behaviour they
+  test*, not the function. `test_conditioned_forecast_response_contract.py`
+  and `conditionedForecastCompleteness.red.test.ts` stay.
+  Individual test-function names that embed the old identifiers
+  are updated in-place (they *are* the identifiers).
+- **Service filenames.** `conditionedForecastService.ts` stays.
+  The file is a service module; its filename is a module handle,
+  not a semantic anchor. The identifiers it exports / imports are
+  updated; the filename is not. A follow-up can harmonise the
+  filename if ever needed — not part of this commit.
 - **`CohortEvidence`, `CohortForecastAtEval`**, and other shared
-  input structures. They aren't ambiguous today; leave them.
-- **`ResolvedModelParams` and `resolve_model_params`.** Not
-  affected.
+  input structures.
+- **`ResolvedModelParams` and `resolve_model_params`.**
 - **The lower-level primitives that doc 29f Phase G is unifying.**
-  That work has its own naming considerations and should land
-  separately.
 
-### 9.5 Fields left alone for now
-
-The CF return's `rate_conditioned` / `rate_conditioned_sd` and
-`rate_unconditioned` / `rate_unconditioned_sd` are already
-disambiguated and stay. The CF return's `p_draws`, `mu_draws`,
-`sigma_draws`, `onset_draws` are technically the conditioned draws
-(the `*_unconditioned` siblings hold the pre-IS versions). Renaming
-these to `p_draws_conditioned` etc. would be more consistent, but it
-expands the rename scope significantly (every downstream caller that
-reads draws). The minimum-viable rename leaves these alone and
-documents the `*_draws` convention — "bare means conditioned;
-`_unconditioned` suffix means pre-IS" — in the module docstring.
-A follow-up commit can harmonise these if desired.
-
-### 9.6 Migration strategy
+### 9.3 Migration strategy
 
 **Hard cut, single commit.** No aliases, no deprecation period.
-
-Reasons:
 
 - This is an identifier substitution with zero semantic change.
   Aliases would introduce a second way to refer to the same thing,
@@ -363,74 +327,58 @@ Reasons:
 - Python import failures are immediate and total; callers that
   miss an update will not run. Review is simple: if CI passes and
   imports resolve, the rename is complete.
-- The rename is confined to `graph-editor/lib/runner/forecast_state.py`
-  at the definition site and ~30 call sites elsewhere. The blast
-  radius is small enough to handle in one commit without
-  coordination overhead.
+- The rename is confined to `forecast_state.py` at the definition
+  site and the call sites elsewhere. The blast radius is small
+  enough to handle in one commit.
 - A multi-week alias window would itself create review confusion
   (reviewers wonder which name is canonical during that window).
 
-The rename commit makes no behavioural changes. The diff is purely
-identifier substitution plus the two new fields added to
-`ForecastSummary`. Tests pass before and after with equivalent
-semantics.
+The commit makes no behavioural changes. The diff is purely
+identifier substitution. Tests pass before and after with
+equivalent semantics.
 
-### 9.7 Sequencing
+### 9.4 Sequencing
 
-**Before** doc 52 (funnel v2) implementation starts. Funnel v2 will
-acquire references to the CF function and its return fields; doing
-the rename first means funnel v2 ships with the new names and the
-new fields from the start, rather than being retrofitted later.
-
-**Before** doc 55 (surprise gauge rework) implementation starts,
-for the same reason. Doc 55 will add four new fields to
-`ForecastSummary`; bundling those additions into the rename commit
-means the gauge handler can be written once against the final
-identifiers.
-
-**Before** doc 47 (whole-graph CF pass) extends what CF writes per
-edge. That work will reference field names on the return type; it
-should reference the renamed fields from the start.
+**Before** doc 52 (funnel v2), doc 55 (surprise gauge rework),
+doc 54 §8.1 (CF readiness scalars), and doc 47 (whole-graph CF
+pass) implementation work begins. Each of those workstreams will
+acquire references to the functions and return types; doing the
+rename first means they reference the final identifiers from the
+start rather than being retrofitted later.
 
 Practically, this is one commit, landed as soon as possible, with
-doc 52 / 55 / 47 implementation following on clean ground.
+the consumer docs following on clean ground.
 
-### 9.8 What lands in the rename commit
+### 9.5 What lands in the rename commit
 
-1. `graph-editor/lib/runner/forecast_state.py`:
-   - Rename `compute_conditioned_forecast` →
-     `compute_forecast_summary`. Function body unchanged.
-   - Rename `compute_forecast_sweep` →
-     `compute_forecast_trajectory`. Function body unchanged.
-   - Rename `ConditionedForecast` → `ForecastSummary`. Fields
-     renamed per §9.2. Four new fields added per §9.3. Populate
-     them from already-computed locals.
-   - Rename `ForecastSweepResult` → `ForecastTrajectory`. Fields
-     renamed per §9.2.
-   - Update the module-level docstring and any inline comments
-     that name these functions or their return types. Clarify
-     the "bare-draws = conditioned, `_unconditioned` = pre-IS"
-     convention (§9.5).
-2. All call sites across the repo (~31 files; scope verified by
-   grep in the problem statement above): identifier substitution
-   only. No semantic changes. Touch the minimum number of lines
-   necessary to compile and pass tests.
-3. Test files: rename `test_conditioned_forecast_response_contract`
-   test-function identifiers that embed the old names; leave
-   filenames alone.
-4. Docs that reference these identifiers (docs 29, 29e, 29f, 45,
-   47, 50, 52, 54, 55, and others catalogued by grep in §5):
-   update the identifier references. No meaning changes.
+1. `graph-editor/lib/runner/forecast_state.py`: four identifier
+   substitutions (two function names, two class names). No body
+   changes, no field changes, no new fields. Update the module
+   docstring and any inline comments that name these functions or
+   return types.
+2. All call sites across the repo, enumerated by
+   `grep -l 'compute_conditioned_forecast\|compute_forecast_sweep\|ConditionedForecast\|ForecastSweepResult'`:
+   identifier substitution only. No semantic changes.
+3. Test-function names that embed the old identifiers: updated
+   in-place. Test filenames unchanged.
+4. Every doc returned by the same grep against `docs/current/`:
+   identifier references updated. No meaning changes. Enumerating
+   by grep (not a hand-maintained list) prevents the commit from
+   shipping with a stale doc.
 
-### 9.9 What does NOT land in this commit
+### 9.6 What does NOT land in this commit
 
-- No changes to the gauge handler itself (doc 55's work).
+- No field renames on either return type (including the
+  `completeness` and `p_draws` clashes — they remain until their
+  owning consumer doc addresses them).
+- No new fields on either return type.
+- No changes to the gauge handler (doc 55's work).
 - No changes to CF's on-edge write set (doc 54 §8.1's work).
 - No changes to whole-graph CF (doc 47's work).
 - No changes to the funnel runner (doc 52's work).
 - No primitive-level unification (doc 29f Phase G's work).
 - No aliases, deprecation markers, or shim layers.
 
-A reviewer reading the commit sees: identifiers rename, four new
-fields added to one struct with their populating lines. That is
-all. The review is about nomenclature, not logic.
+A reviewer reading the commit sees: four identifiers rename
+everywhere they appear. That is all. The review is about
+nomenclature, not logic.

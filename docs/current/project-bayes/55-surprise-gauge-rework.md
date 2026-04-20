@@ -96,17 +96,17 @@ report itself unavailable rather than fabricate something.
 
 ### 2.3 What the CF function already gives us
 
-The CF engine function of record is `compute_conditioned_forecast`
+The CF engine function of record is `compute_forecast_summary`
 (`graph-editor/lib/runner/forecast_state.py`). A sibling function
-`compute_forecast_sweep` exists in the same module — it produces a
+`compute_forecast_trajectory` exists in the same module — it produces a
 full per-τ trajectory (S × T matrix) for the cohort-maturity chart,
 using a different (sequential per-cohort) IS strategy. The gauge is
 interested in scalar summaries, not trajectories, and therefore uses
-`compute_conditioned_forecast` — which also uses the correct aggregate
+`compute_forecast_summary` — which also uses the correct aggregate
 IS strategy for a window-level "how surprising is the whole window"
 question.
 
-`compute_conditioned_forecast` is invoked with resolved model params,
+`compute_forecast_summary` is invoked with resolved model params,
 the subject's cohort ages and weights, a separate list of cohort
 evidence `[(τ_i, n_i, k_i), ...]` for IS conditioning, and optionally
 a carrier arrival cache. It draws S samples of `(p, μ, σ, onset)` from
@@ -141,7 +141,7 @@ What the CF function **already returns** and the gauge needs:
 What the CF function **computes internally but does not return**:
 
 - **Unconditioned completeness** moments — the local variable
-  `mc_completeness_unconditioned` in `compute_conditioned_forecast`
+  `mc_completeness_unconditioned` in `compute_forecast_summary`
   (the same `_weighted_completeness_draws` helper is called on the
   unconditioned draws). Not currently in the return struct.
 - **Posterior-predictive expected rate (unconditioned)** — the mean
@@ -149,7 +149,7 @@ What the CF function **computes internally but does not return**:
   and `mc_completeness_unconditioned` are both present internally; the
   element-wise product and its moments are not computed or returned.
 
-Two small scalar-field additions to `ConditionedForecast` close the
+Two small scalar-field additions to `ForecastSummary` close the
 gap:
 
 - `completeness_unconditioned, completeness_unconditioned_sd` — mean
@@ -159,11 +159,11 @@ gap:
 
 Both additions reuse existing locals; the implementation is on the
 order of half a dozen lines, adjacent to the existing unconditioned
-computation block inside `compute_conditioned_forecast`.
+computation block inside `compute_forecast_summary`.
 
 Aggregate observed `(Σk, Σn)` for the gauge's `p` comparison comes
 from the same cohort evidence list the gauge passes into
-`compute_conditioned_forecast`; the handler sums it alongside the call.
+`compute_forecast_summary`; the handler sums it alongside the call.
 
 After those additions, the gauge is a pure projection: zero maths in
 the gauge handler, no IS, no cohort loops, no CDF evaluations. It
@@ -202,7 +202,7 @@ The observed counterpart is the aggregate conversion rate over the
 same cohorts the CF call was passed: total observed conversions
 divided by total cohort population in scope (`Σk / Σn`). The gauge
 handler sums these from the same evidence list it hands to
-`compute_conditioned_forecast`; it does not read `edge.p.evidence.k/n`.
+`compute_forecast_summary`; it does not read `edge.p.evidence.k/n`.
 
 The z-score is the signed distance of the observed aggregate from
 `pp_rate_unconditioned`, measured in `pp_rate_unconditioned_sd`. The
@@ -211,8 +211,8 @@ quantile using the existing symmetric or directional colour schemes
 (unchanged).
 
 This matches the intent of the current backend engine path; the
-changes are (a) it calls `compute_conditioned_forecast` rather than
-`compute_forecast_sweep` (which is the chart function), (b) it reads
+changes are (a) it calls `compute_forecast_summary` rather than
+`compute_forecast_trajectory` (which is the chart function), (b) it reads
 the two `pp_rate_unconditioned*` scalars instead of recomputing
 `p_s × c̄_s` inline, and (c) its result is delivered to the frontend
 without being overwritten by a parallel computation.
@@ -229,10 +229,10 @@ exists: **unconditioned vs conditioned**.
   across raw posterior draws. It answers: "before looking at this
   window's observed conversions, what does the model think maturity
   is here?" Supplied by the proposed `completeness_unconditioned` /
-  `completeness_unconditioned_sd` fields added to `ConditionedForecast`.
+  `completeness_unconditioned_sd` fields added to `ForecastSummary`.
 - **Conditioned completeness** is the same n-weighted mean, taken
   across the tempered-IS-reindexed draws that
-  `compute_conditioned_forecast` already produces internally.
+  `compute_forecast_summary` already produces internally.
   Supplied by the existing `completeness` / `completeness_sd` fields
   (the same values CF writes to `edge.p.latency.completeness`).
 
@@ -272,16 +272,20 @@ following hold:
 - The snapshot query returns no rows for the subject's anchor range.
 - The cohort evidence derived from the snapshot rows contains no valid
   cohorts (no positive population after filtering).
-- `compute_conditioned_forecast` raises or returns empty draws.
+- `compute_forecast_summary` raises or returns empty draws.
 - The unconditioned posterior-predictive SD is effectively zero (the
   model has degenerated to a point mass; nothing is surprising by
   construction).
 
-Low IS ESS is **not** a failure mode; it is a graceful-degradation
-case. The conditioned `completeness` moments are still reported,
-with a warning icon + tooltip ("limited evidence"), via the same
-warning mechanism the gauge already uses for non-Bayesian model
-sources. The gauge degrades gracefully; it does not suppress display.
+Low IS ESS is **not** a failure mode and **not** surfaced to the
+user as a warning either. With `_IS_TARGET_ESS = 20` enforced inside
+`compute_forecast_summary`, the post-tempering ESS is bounded in
+`[20, S]` whenever conditioning fires; a value near the floor signals
+strong prior–evidence divergence, which is the gauge's whole point —
+not a weak-evidence diagnostic. An earlier `'limited_evidence'`
+warning was removed (20-Apr-26) because the metric was a
+sampling-quality diagnostic, not an evidence-quantity one, and so
+fired precisely when the surprise signal was strongest.
 
 There is no analytic fallback, no method-of-moments reconstruction, no
 "best effort" number for the failure modes above. Unavailable means
@@ -335,7 +339,7 @@ symptoms of the gauge pretending to a source of truth it never owned.
 
 The gauge also stops reading `edge.p.evidence.k/n`. The observed
 aggregate is computed inside the gauge handler from the same cohort
-evidence list it hands to `compute_conditioned_forecast`. Observed
+evidence list it hands to `compute_forecast_summary`. Observed
 and expected therefore come from a single shared source, not two
 decoupled ones.
 
@@ -365,7 +369,7 @@ A performance cut-over is planned as a subsequent workstream, not
 part of this rework. Doc 54 §8.1 specifies the CF scalar output
 contract extension required to support it. Note the alignment: the
 two scalar-field additions this rework makes to the *return struct*
-of `compute_conditioned_forecast` (`completeness_unconditioned` /
+of `compute_forecast_summary` (`completeness_unconditioned` /
 `_sd` and `pp_rate_unconditioned` / `_sd`) are exactly the quantities
 doc 54 §8.1 plans to persist onto the edge under the Tier-2 cut-over.
 The in-memory extension in this rework is a strict subset of the
@@ -374,7 +378,7 @@ on-edge persistence later. No duplicated compute, no design drift.
 Once that contract extension lands on-edge — alongside the
 whole-graph CF pass (doc 47) and the readiness protocol's M1-M5
 milestones — the gauge retrofits to `cf_dependency: required`, drops
-its own inline `compute_conditioned_forecast` call, and reads the
+its own inline `compute_forecast_summary` call, and reads the
 four scalars from the edge directly. This is a strict performance
 optimisation. It does not change the projection or the failure
 semantics defined in §3, and it is out of scope for this rework.
@@ -410,47 +414,26 @@ has one code path with one failure mode per variable.
 - **Caching and the CF-ready signal.** The 500ms race and the lack of
   a "CF output now available" subscription are real but independent
   concerns. This rework makes the gauge correct without solving them,
-  by having the gauge call `compute_conditioned_forecast` itself. A
+  by having the gauge call `compute_forecast_summary` itself. A
   later iteration (doc 54 Tier-2 cut-over) moves to on-edge reads.
 - **The subset-conditioning correction (doc 51).** Once the shared
   pro-rata shrinkage helper lands, the gauge's posteriors will
-  inherit it for free via `compute_conditioned_forecast`. No
+  inherit it for free via `compute_forecast_summary`. No
   gauge-specific work is required.
 - **Doc 50 edge classification (Class A/B/C/D).** Lagless edges and
   the `sigma ≤ 0` short-circuit are doc 50's territory. The gauge
-  respects whatever `compute_conditioned_forecast` does; if it
+  respects whatever `compute_forecast_summary` does; if it
   returns empty for lagless edges, the gauge is unavailable for them
   until doc 50 is implemented.
 - **Epistemic/predictive separation (doc 49).** The gauge consumes
-  the predictive alpha/beta that `compute_conditioned_forecast`
+  the predictive alpha/beta that `compute_forecast_summary`
   already uses internally for its draws; this is correct per the
   surprise framing (§2.3). Any future change to CF's alpha/beta
   selection is inherited without a code edit.
 
 ---
 
-## 7. Open questions
-
-1. **ESS threshold for the "limited evidence" warning.** The
-   tempered-IS ESS ceiling already exists inside
-   `compute_conditioned_forecast` (`_IS_TARGET_ESS = 20.0`). The
-   gauge displays unconditionally but flags a warning when IS ESS
-   is low. A specific trigger — absolute ESS threshold, ratio to
-   draws, or both — needs to be chosen. The warning uses the
-   existing gauge warning mechanism; display is never suppressed.
-   (Per user direction: graceful degradation is the design rule.)
-
-2. **Minimum gauge UI when only one variable is available.** The
-   existing builder handles the single-variable dial and the
-   multi-variable band stack. With only two variables in scope and
-   either potentially unavailable, the common cases are: both
-   available (dial or bands), p-only available (dial), completeness-
-   only available (dial or a compact band). The builder should
-   degrade gracefully; the specifics are a separate UI polish.
-
----
-
-## 8. Implementation phasing
+## 7. Implementation phasing
 
 1. **Delete the frontend local path and its tests.** One commit. Drops
    `surprise_gauge` from `LOCAL_COMPUTE_TYPES`, removes
@@ -466,22 +449,22 @@ has one code path with one failure mode per variable.
    existing synth / production graphs: specifically edges where the
    Phase-1 branch was quietly standing in for the engine.
 
-3. **Switch the gauge handler onto `compute_conditioned_forecast`.**
+3. **Switch the gauge handler onto `compute_forecast_summary`.**
    One commit. The current `_surprise_gauge_engine_p` calls
-   `compute_forecast_sweep` (the chart function) and does its own
+   `compute_forecast_trajectory` (the chart function) and does its own
    per-draw `p_s × c̄_s` loop. Replace with a direct call to
-   `compute_conditioned_forecast`, passing the same cohort ages,
+   `compute_forecast_summary`, passing the same cohort ages,
    weights, and evidence. Read `pp_rate_unconditioned*` from its
    return (after the field addition in step 4) for the `p` variable.
    Aggregate observed `(Σk, Σn)` from the same evidence list.
 
-4. **Extend `ConditionedForecast` with four gauge-relevant scalars.**
-   One commit. Adds to `ForecastState.ConditionedForecast`:
+4. **Extend `ForecastSummary` with four gauge-relevant scalars.**
+   One commit. Adds to `ForecastState.ForecastSummary`:
    `completeness_unconditioned, completeness_unconditioned_sd,
    pp_rate_unconditioned, pp_rate_unconditioned_sd`. Populates them
    from the already-computed `mc_completeness_unconditioned` and
    `p_draws_unconditioned` locals inside
-   `compute_conditioned_forecast`. Tests: synthetic graphs exercising
+   `compute_forecast_summary`. Tests: synthetic graphs exercising
    conditioned/unconditioned drift (high-evidence vs low-evidence
    windows), plus a parity check that the new scalars match a simple
    recomputation from the returned draws.
@@ -502,7 +485,7 @@ has one code path with one failure mode per variable.
 7. **Later (not in scope)**: once the whole-graph CF pass and a
    shared "CF output available for subject" signal exist, persist
    the four additional scalars on-edge (doc 54 §8.1) and replace the
-   gauge's inline `compute_conditioned_forecast` call with an
+   gauge's inline `compute_forecast_summary` call with an
    on-edge read. A separate doc when that work is ready.
 
 ---
@@ -512,7 +495,7 @@ has one code path with one failure mode per variable.
 - The gauge renders only what the backend returned for the current
   subject. There is no second computation anywhere in the stack.
 - Changing `window()` to `cohort()` in the query DSL produces a
-  different subject, a different `compute_conditioned_forecast`
+  different subject, a different `compute_forecast_summary`
   call, different draws, a different projection, and therefore a
   different gauge. There is no code path that can short-circuit
   this.
@@ -520,7 +503,7 @@ has one code path with one failure mode per variable.
   substitute an approximation. Low IS ESS is not a failure — it
   renders the conditioned view with a warning icon.
 - The gauge owns no maths. The four scalars it uses are returned
-  by `compute_conditioned_forecast`; the handler reads them,
+  by `compute_forecast_summary`; the handler reads them,
   computes `Σk/Σn` from the same evidence list, emits two
   `{observed, expected, sigma, quantile}` tuples.
 - `analytic_be` is no longer privileged. `edge.p.latency.completeness`

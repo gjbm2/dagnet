@@ -137,7 +137,7 @@ class TestConditionedForecastResponseContract:
             assert "completeness" in keys, (
                 "handle_conditioned_forecast must emit 'completeness' per "
                 f"doc 45 lines 181-190. Current per-edge keys: {sorted(keys)}. "
-                "Fix: compute completeness_mean via compute_forecast_sweep "
+                "Fix: compute completeness_mean via compute_forecast_trajectory "
                 "(as the topo pass handler does at api_handlers.py:5927) "
                 "and include it in the edge_results dict."
             )
@@ -152,7 +152,7 @@ class TestConditionedForecastResponseContract:
             assert "completeness_sd" in keys, (
                 "handle_conditioned_forecast must emit 'completeness_sd' per "
                 f"doc 45 lines 181-190. Current per-edge keys: {sorted(keys)}. "
-                "Fix: read sweep.completeness_sd from compute_forecast_sweep "
+                "Fix: read sweep.completeness_sd from compute_forecast_trajectory "
                 "and include it in the edge_results dict."
             )
 

@@ -510,6 +510,25 @@ def verify_synth_data(
                 if stored_evt_sha and current_evt_sha != stored_evt_sha:
                     reasons.append(f"Event definition changed: {evt_id}")
 
+    # Context definition file hashes. Every context dim referenced by the
+    # truth writes its definition to contexts/<id>.yaml. Shared dim ids
+    # across multiple truths can silently overwrite each other — meta
+    # pins the bytes we bootstrapped against so drift is caught here.
+    if meta and meta.get("context_file_hashes"):
+        contexts_dir = os.path.join(data_repo, "contexts")
+        for ctx_id, stored_sha in meta["context_file_hashes"].items():
+            ctx_path = os.path.join(contexts_dir, f"{ctx_id}.yaml")
+            if not os.path.isfile(ctx_path):
+                reasons.append(f"Context definition missing: {ctx_id}")
+                continue
+            with open(ctx_path, "rb") as f:
+                current_ctx_sha = hashlib.sha256(f.read()).hexdigest()
+            if current_ctx_sha != stored_sha:
+                reasons.append(
+                    f"Context definition changed: {ctx_id} — "
+                    f"likely another truth file overwrote the shared context"
+                )
+
     # Parameter file checks (optional)
     if check_param_files and meta and meta.get("edge_hashes"):
         params_dir = os.path.join(data_repo, "parameters")
@@ -701,6 +720,54 @@ def _build_meta_hashes(hash_lookup: dict[str, dict[str, str]]) -> dict[str, dict
     return meta
 
 
+def _derive_empty_slices(
+    topology,
+    truth: dict,
+    snapshot_rows: dict[str, list[dict]],
+) -> list[dict]:
+    """Compute declared (edge_id, slice_key) combos with zero emitted rows.
+
+    Zero-row declared slices are a legitimate sparsity outcome (real-world
+    slices can contain no data). Downstream recovery must skip them rather
+    than flagging as missing_slice defects.
+
+    Returns list of {"edge_id", "param_id", "slice_key"} dicts suitable
+    for persisting in meta.json.
+    """
+    context_dims = truth.get("context_dimensions", []) or []
+    if not context_dims:
+        return []
+
+    # Build declared (edge, slice_key) set
+    ctx_keys = []
+    for dim in context_dims:
+        for v in dim.get("values", []):
+            ctx_keys.append(f"context({dim['id']}:{v['id']})")
+
+    declared: set[tuple[str, str, str]] = set()  # (edge_id, param_id, slice_key)
+    for edge_id, et in topology.edges.items():
+        if not et.param_id:
+            continue
+        for ck in ctx_keys:
+            declared.add((edge_id, et.param_id, f"{ck}.window()"))
+            declared.add((edge_id, et.param_id, f"{ck}.cohort()"))
+
+    # Emitted (edge, slice_key) — anything with at least one row
+    emitted: set[tuple[str, str]] = set()
+    for edge_id, rows in snapshot_rows.items():
+        for r in rows:
+            sk = r.get("slice_key", "")
+            if "context(" in sk:
+                emitted.add((edge_id, sk))
+
+    empty = [
+        {"edge_id": eid, "param_id": pid, "slice_key": sk}
+        for eid, pid, sk in sorted(declared)
+        if (eid, sk) not in emitted
+    ]
+    return empty
+
+
 def save_synth_meta(
     graph_name: str,
     truth_path: str,
@@ -710,12 +777,16 @@ def save_synth_meta(
     *,
     graph_path: str | None = None,
     event_hashes: dict[str, str] | None = None,
+    context_file_hashes: dict[str, str] | None = None,
+    empty_slices: list[dict] | None = None,
     default_connection: str | None = None,
     enriched: bool = False,
 ) -> None:
     """Write .synth-meta.json sidecar after successful generation.
 
     v2 schema: records graph JSON hash, event definition hashes,
+    context definition file hashes, empty-slices list (declared slices
+    the sparsity model left at zero rows, legitimate no-data outcomes),
     connection string, and enrichment state alongside the existing
     truth hash, row count, and edge hashes.
     """
@@ -736,6 +807,8 @@ def save_synth_meta(
         "truth_sha256": truth_sha,
         "graph_sha256": graph_sha,
         "event_hashes": event_hashes or {},
+        "context_file_hashes": context_file_hashes or {},
+        "empty_slices": empty_slices or [],
         "default_connection": default_connection or "",
         "enriched": enriched,
         "enriched_at": datetime.now().strftime("%-d-%b-%y %H:%M:%S") if enriched else None,
@@ -2026,15 +2099,21 @@ def _generate_observations_nightly(
             print(f"  Sparsity: {n_absent}/{n_total} edge×slice combos start absent "
                   f"(frame_drop={frame_drop_rate:.2f}, toggle={toggle_rate:.3f})", flush=True)
 
+    # Per-slice emission counter: lets us detect declared slices the
+    # sparsity model left empty (see post-simulation log below).
+    _sparsity_emitted_counts: dict[tuple[str, str], int] = {}
+
     def _sparsity_gate(edge_id: str, slice_key: str) -> bool:
         """Return True if this row should be emitted (not dropped by sparsity)."""
         if not _sparsity_active:
             return True
         key = (edge_id, slice_key)
+        _sparsity_emitted_counts.setdefault(key, 0)
         if not _sparsity_emitting.get(key, True):
             return False
         if frame_drop_rate > 0 and rng.random() < frame_drop_rate:
             return False
+        _sparsity_emitted_counts[key] += 1
         return True
 
     def _sparsity_toggle_day() -> None:
@@ -2335,6 +2414,17 @@ def _generate_observations_nightly(
     if n_sparsity_dropped > 0:
         print(f"  Sparsity: {n_sparsity_dropped} rows dropped (frame_drop={frame_drop_rate:.2f}, "
               f"toggle={toggle_rate:.3f}, initial_absent={initial_absent_pct:.2f})", flush=True)
+
+    # Log slices the sparsity model left empty. Declared slices with zero
+    # emitted rows are a legitimate outcome (real-world slices can have
+    # no data) — the downstream recovery check computes them from
+    # snapshot_rows and threads them through meta so assert_recovery
+    # doesn't misclassify them as missing_slice defects.
+    if _sparsity_active:
+        zero_count = sum(1 for n in _sparsity_emitted_counts.values() if n == 0)
+        if zero_count:
+            print(f"  Sparsity: {zero_count} declared slice(s) emitted zero rows "
+                  f"(legitimate — will be marked empty in meta)", flush=True)
     print(f"  Total: {sum(len(v) for v in result.values())} rows ({n_cohort_rows} cohort + {n_window_rows} window)", flush=True)
     return dict(result)
 
@@ -2748,8 +2838,44 @@ def _format_date_dmy(dt: datetime) -> str:
     return dt.strftime("%-d-%b-%y")
 
 
+def _find_graphs_using_context_hash(data_repo: str, dim_id: str, ctx_sha: str) -> list[str]:
+    """Scan meta sidecars for graphs whose recorded context_file_hashes
+    pin this dim to ctx_sha. Those graphs' DB rows will become stale
+    (relative to the dim's definition) if the file is overwritten.
+    """
+    graphs_dir = os.path.join(data_repo, "graphs")
+    if not os.path.isdir(graphs_dir):
+        return []
+    affected = []
+    for fn in os.listdir(graphs_dir):
+        if not fn.endswith(".synth-meta.json"):
+            continue
+        try:
+            with open(os.path.join(graphs_dir, fn)) as f:
+                meta = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            continue
+        pinned = meta.get("context_file_hashes", {}).get(dim_id)
+        if pinned == ctx_sha:
+            affected.append(fn.replace(".synth-meta.json", ""))
+    return sorted(affected)
+
+
 def write_context_files(truth: dict, data_repo: str) -> list[str]:
     """Write context definition YAML files from truth file context_dimensions.
+
+    Context files in contexts/<dim_id>.yaml are SHARED across all truths
+    using the same dim id. Overwriting a shared file is legitimate — e.g.
+    a sibling truth with the same content is a no-op, and a sibling truth
+    with different content is a deliberate redefinition. The assurance
+    chain (context_file_hashes in meta + verify_synth_data) marks any
+    previously-bootstrapped graph whose pinned ctx hash no longer matches
+    as stale, so drift is loud.
+
+    On a content-changing overwrite we print a prominent warning listing
+    the graphs whose DB rows are now decoupled from the on-disk dim
+    definition — those graphs need re-bootstrap before the next
+    regression run.
 
     Returns list of written context IDs.
     """
@@ -2785,8 +2911,28 @@ def write_context_files(truth: dict, data_repo: str) -> list[str]:
             ctx_def["independent"] = True
 
         ctx_path = os.path.join(contexts_dir, f"{dim_id}.yaml")
-        with open(ctx_path, "w") as f:
-            yaml.dump(ctx_def, f, default_flow_style=False, sort_keys=False)
+        new_bytes = yaml.dump(ctx_def, default_flow_style=False, sort_keys=False).encode()
+        if os.path.isfile(ctx_path):
+            with open(ctx_path, "rb") as f:
+                existing_bytes = f.read()
+            if existing_bytes != new_bytes:
+                old_sha = hashlib.sha256(existing_bytes).hexdigest()
+                affected = _find_graphs_using_context_hash(data_repo, dim_id, old_sha)
+                print(
+                    f"\n  WARNING: contexts/{dim_id}.yaml content is changing "
+                    f"(shared with other truths using the same dim id)."
+                )
+                if affected:
+                    print(f"  {len(affected)} graph(s) now decoupled from on-disk "
+                          f"definition — re-bootstrap before next regression run:")
+                    for g in affected:
+                        print(f"    - {g}")
+                    print(f"  verify_synth_data will report these as 'stale'.")
+                else:
+                    print("  No graphs have pinned this dim hash yet — no stale graphs.")
+                print()
+        with open(ctx_path, "wb") as f:
+            f.write(new_bytes)
         written.append(dim_id)
         _flags = f"mece={is_mece}"
         if is_independent:
@@ -3571,6 +3717,8 @@ Examples:
                     freshness["row_count"], data_repo,
                     graph_path=graph_path,
                     event_hashes=_event_hashes,
+                    context_file_hashes=freshness["meta"].get("context_file_hashes", {}),
+                    empty_slices=freshness["meta"].get("empty_slices", []),
                     default_connection=_graph.get("defaultConnection", ""),
                     enriched=True,
                 )
@@ -3993,14 +4141,36 @@ Examples:
                     with open(evt_path, "rb") as _ef:
                         _event_hashes[evt_id] = hashlib.sha256(_ef.read()).hexdigest()
 
+        # Hash context definition files this truth depends on
+        _ctx_file_hashes: dict[str, str] = {}
+        contexts_dir = os.path.join(data_repo, "contexts")
+        for dim in truth.get("context_dimensions", []):
+            ctx_id = dim.get("id", "")
+            if not ctx_id:
+                continue
+            ctx_path = os.path.join(contexts_dir, f"{ctx_id}.yaml")
+            if os.path.isfile(ctx_path):
+                with open(ctx_path, "rb") as _cf:
+                    _ctx_file_hashes[ctx_id] = hashlib.sha256(_cf.read()).hexdigest()
+
+        # Derive empty-slice list from snapshot_rows. A declared (edge,
+        # slice_key) combination that the sparsity model left at zero rows
+        # is a legitimate no-data outcome; the recovery check must skip
+        # it (no data → no posterior → not a pipeline defect).
+        _empty_slices = _derive_empty_slices(topology, truth, snapshot_rows)
+
         save_synth_meta(
             graph_name_for_meta, truth_path, meta_hashes, total_rows, data_repo,
             graph_path=graph_path,
             event_hashes=_event_hashes,
+            context_file_hashes=_ctx_file_hashes,
+            empty_slices=_empty_slices,
             default_connection=graph.get("defaultConnection", ""),
             enriched=False,
         )
-        print(f"Wrote .synth-meta.json v2 (truth_sha256, {total_rows} rows, {len(meta_hashes)} edges)")
+        print(f"Wrote .synth-meta.json v2 (truth_sha256, {total_rows} rows, "
+              f"{len(meta_hashes)} edges, {len(_ctx_file_hashes)} contexts, "
+              f"{len(_empty_slices)} empty slices)")
 
     # ── Enrichment (optional) ──────────────────────────────────────────
     if args.enrich:
@@ -4013,6 +4183,8 @@ Examples:
                     graph_name_for_meta, truth_path, meta_hashes, total_rows, data_repo,
                     graph_path=graph_path,
                     event_hashes=_event_hashes,
+                    context_file_hashes=_ctx_file_hashes,
+                    empty_slices=_empty_slices,
                     default_connection=graph.get("defaultConnection", ""),
                     enriched=True,
                 )

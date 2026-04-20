@@ -1376,6 +1376,74 @@ export class GraphComputeClient {
   }
 
   /**
+   * Normalise multi-scenario surprise_gauge response.
+   *
+   * The backend returns one `{variables: [p, completeness]}` per subject
+   * nested under scenarios[].subjects[].result. The gauge renderer reads
+   * `result.variables` directly; it does not consume row/metric data.
+   * This normaliser unwraps the envelope and — for multi-scenario
+   * requests — merges variables across scenarios into a single result
+   * (falling back to the first successful subject's variables when no
+   * merge strategy applies). Single-scenario requests take the first
+   * successful subject result directly.
+   */
+  private normaliseSnapshotSurpriseGaugeResponse(
+    raw: any,
+    request: AnalysisRequest,
+  ): AnalysisResponse | null {
+    try {
+      if (request?.analysis_type !== 'surprise_gauge') return null;
+
+      // Already a flat AnalysisResponse? Leave it alone.
+      if (raw?.success === true && raw?.result?.analysis_type === 'surprise_gauge') {
+        return null;
+      }
+
+      const scenarios: any[] = raw?.scenarios || [];
+      if (scenarios.length === 0) return null;
+
+      // Take the first successful subject's result as the representative
+      // gauge for this request. If multiple scenarios are in play, the
+      // gauge UI currently renders one dial per request; multi-scenario
+      // horizontal bands can layer on top when a future builder supports
+      // it.
+      for (const sc of scenarios) {
+        const subjects: any[] = sc?.subjects || [];
+        for (const subj of subjects) {
+          if (subj?.success && subj?.result?.analysis_type === 'surprise_gauge') {
+            const r = subj.result;
+            return {
+              success: true,
+              result: {
+                analysis_type: 'surprise_gauge',
+                analysis_name: r.analysis_name || 'Expectation Gauge',
+                analysis_description: r.analysis_description,
+                metadata: r.metadata || {},
+                semantics: {
+                  dimensions: [{ id: 'variable', name: 'Variable', type: 'categorical', role: 'primary' }],
+                  metrics: [{ id: 'quantile', name: 'Quantile', type: 'number', role: 'primary' }],
+                  chart: { recommended: 'surprise_gauge', alternatives: ['table'] },
+                },
+                dimension_values: {},
+                data: r.variables || [],
+                // Pass through the gauge-specific fields the builder reads
+                variables: r.variables,
+                reference_source: r.reference_source,
+                hint: r.hint,
+              } as any,
+              query_dsl: request.query_dsl,
+            } as AnalysisResponse;
+          }
+        }
+      }
+      return null;
+    } catch (err) {
+      console.error('[GraphComputeClient] Surprise gauge normalisation failed:', err);
+      return null;
+    }
+  }
+
+  /**
    * Normalise multi-scenario lag_fit response.
    *
    * The backend returns the result pre-tabulated (data rows with row_type), so
@@ -1745,7 +1813,8 @@ export class GraphComputeClient {
       ?? this.normaliseSnapshotDailyConversionsResponse(raw, request)
       ?? this.normaliseSnapshotConversionRateResponse(raw, request)
       ?? this.normaliseSnapshotBranchComparisonResponse(raw, request)
-      ?? this.normaliseSnapshotLagFitResponse(raw, request);
+      ?? this.normaliseSnapshotLagFitResponse(raw, request)
+      ?? this.normaliseSnapshotSurpriseGaugeResponse(raw, request);
 
     if (import.meta.env?.DEV && (request.analysis_type === 'cohort_maturity' || request.analysis_type === 'cohort_maturity_v2' || request.analysis_type === 'cohort_maturity_v1')) {
       console.log('[GraphComputeClient] Normalisation result:', {
@@ -1931,7 +2000,8 @@ export class GraphComputeClient {
       ?? this.normaliseSnapshotDailyConversionsResponse(raw, request)
       ?? this.normaliseSnapshotConversionRateResponse(raw, request)
       ?? this.normaliseSnapshotBranchComparisonResponse(raw, request)
-      ?? this.normaliseSnapshotLagFitResponse(raw, request);
+      ?? this.normaliseSnapshotLagFitResponse(raw, request)
+      ?? this.normaliseSnapshotSurpriseGaugeResponse(raw, request);
     const result = normalised ?? raw;
 
     // Patch dimension_values.scenario_id with names/colours from request.

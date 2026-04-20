@@ -6,8 +6,8 @@
 **Severity**: High for per-cohort consumers (daily conversions).
 Lower for aggregate consumers (cohort maturity chart, topo pass)
 where many cohorts stabilise the IS.
-**Affects**: `compute_forecast_sweep` (line 1041) and
-`compute_conditioned_forecast` (line 497) in `forecast_state.py`.
+**Affects**: `compute_forecast_trajectory` (line 1041) and
+`compute_forecast_summary` (line 497) in `forecast_state.py`.
 
 ---
 
@@ -18,9 +18,9 @@ common case for `analytic_be` model source, which provides p_mean
 but no posterior concentration), the engine constructs a fallback
 prior for the MC p draws:
 
-- `compute_forecast_sweep`: `Beta(1, 1)` — flat, uninformative.
+- `compute_forecast_trajectory`: `Beta(1, 1)` — flat, uninformative.
   Equivalent to 2 trials of information.
-- `compute_conditioned_forecast`: `Beta(p×20, (1-p)×20)` — weak
+- `compute_forecast_summary`: `Beta(p×20, (1-p)×20)` — weak
   informative. Equivalent to 20 trials.
 
 IS conditioning then resamples these draws against per-cohort
@@ -99,7 +99,7 @@ automatically via `resolved.alpha` / `resolved.beta`.
    `kappa = 100`) as a safety net, not as the normal path.
 
 3. `forecast_state.py` lines 497–504 — same fix for
-   `compute_conditioned_forecast` (surprise gauge path). Remove
+   `compute_forecast_summary` (surprise gauge path). Remove
    `_KAPPA_DEFAULT = 20` and use resolver-provided alpha/beta.
 
 ## Files touched

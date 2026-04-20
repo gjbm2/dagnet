@@ -9,7 +9,7 @@
 #
 # A. p.mean ≈ model_midpoint at max_tau
 #    Both are the (roughly) unconditioned asymptotic rate.
-#    p.mean comes from compute_conditioned_forecast (topo pass);
+#    p.mean comes from compute_forecast_summary (topo pass);
 #    model_midpoint comes from p_draws × CDF (chart prior).
 #    These use different codepaths but answer a similar question.
 #    Expected: GREEN today (both near the prior rate).

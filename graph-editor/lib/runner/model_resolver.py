@@ -67,6 +67,21 @@ class ResolvedModelParams:
     fitted_at: Optional[str] = None
     gate_passed: Optional[bool] = None  # Bayesian quality gate
 
+    # Semantic property: does `alpha, beta` already incorporate the
+    # user's query-window evidence? See STATS_SUBSYSTEMS.md §5
+    # Confusion 8. Consumers doing prior+evidence conjugate updates
+    # (e.g. doc 50 Class B Beta-Binomial) must branch on this, not on
+    # `source`, so the conjugate-update logic remains correct if new
+    # sources are introduced.
+    #
+    #   False → aggregate prior (bayesian fit / manual override).
+    #           Safe to update with query-scoped Σk, Σn.
+    #   True  → already a query-scoped posterior (analytic / analytic_be
+    #           Jeffreys). Read directly; updating again double-counts.
+    @property
+    def alpha_beta_query_scoped(self) -> bool:
+        return self.source in ('analytic', 'analytic_be')
+
     # Evidence
     evidence_retrieved_at: Optional[str] = None
 

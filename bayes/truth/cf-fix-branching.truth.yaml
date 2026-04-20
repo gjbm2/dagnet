@@ -1,0 +1,44 @@
+graph:
+  name: cf-fix-branching
+  description: "CF topology fixture T4 (doc 50 §5.1): branching with one laggy + one lagless sibling. Exercises sibling PMF consistency under mixed classes."
+  anchor: cf-fix-branch-a
+  raw_ids: true
+nodes:
+  cf-fix-branch-a:
+    label: A
+    event_id: cf-fix-branch-a-event
+    is_start: true
+  cf-fix-branch-b:
+    label: B (via laggy)
+    event_id: cf-fix-branch-b-event
+    absorbing: true
+    outcome_type: success
+  cf-fix-branch-c:
+    label: C (via lagless)
+    event_id: cf-fix-branch-c-event
+    absorbing: true
+    outcome_type: success
+edges:
+  cf-fix-branch-a-to-b:
+    from: cf-fix-branch-a
+    to: cf-fix-branch-b
+    p: 0.5
+    onset: 1.0
+    mu: 2.0
+    sigma: 0.5
+  cf-fix-branch-a-to-c:
+    from: cf-fix-branch-a
+    to: cf-fix-branch-c
+    p: 0.3
+    onset: 0.0
+    mu: 0.0
+    sigma: 0.0
+simulation:
+  mean_daily_traffic: 2000
+  n_days: 80
+  kappa_sim_default: 50.0
+  failure_rate: 0.05
+  drift_sigma: 0.0
+  growth_rate_mom: 0.0
+  seed: 42
+  expected_sample_seconds: 900

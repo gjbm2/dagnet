@@ -690,29 +690,29 @@ class TestClassifyStatus:
         assert classify_status(False, failures, q) == "completed"
 
     def test_binding_failure_is_fail(self):
-        """Zero edges bound → posteriors from priors only, not the data.
-        Must not be confused with a clean completion."""
+        """Binding failures are pipeline defects — the whole point of
+        the synth/regression chain is to produce posteriors bound to
+        the truth data. Zero bound edges → not completed.
+        """
         failures = [{"type": "binding", "message": "0 bound"}]
         q = {"rhat": 1.001, "ess": 5000, "converged_pct": 100}
         assert classify_status(False, failures, q) == "fail"
 
     def test_missing_edge_is_fail(self):
-        """Truth edge has no posterior — model didn't emit variables
-        for the edges the truth expected. This is an infrastructure
-        problem, not a quality issue."""
+        """Truth edge with no posterior means the model didn't emit
+        variables for it — a pipeline defect, not a quality issue."""
         failures = [{"type": "missing_edge", "edge": "e1", "message": "gone"}]
         q = {"rhat": 1.001, "ess": 5000, "converged_pct": 100}
         assert classify_status(False, failures, q) == "fail"
 
     def test_missing_slice_is_fail(self):
+        """Missing slice in posteriors means the pipeline didn't bind
+        that slice's data — a defect, not a warning."""
         failures = [{"type": "missing_slice", "slice": "ctx-a", "message": "gone"}]
         q = {"rhat": 1.001, "ess": 5000, "converged_pct": 100}
         assert classify_status(False, failures, q) == "fail"
 
     def test_audit_alone_is_completed(self):
-        """Audit-layer warnings are soft signals — the run produced
-        posteriors, so the status stays completed. The verdict is
-        downgraded in classify_quality."""
         failures = [{"type": "audit", "message": "kappa_lat mismatch"}]
         q = {"rhat": 1.001, "ess": 5000, "converged_pct": 100}
         assert classify_status(False, failures, q) == "completed"
@@ -866,3 +866,4 @@ class TestClassifyQuality:
         result = classify_quality(q, {}, failures)
         assert result["verdict"] == "data_integrity_warning"
         assert len(result["data_integrity_points"]) == 1
+

@@ -1,0 +1,82 @@
+graph:
+  name: cf-fix-deep-mixed
+  description: "CF topology fixture T7 (doc 50 §5.1): 6-hop chain alternating lagless and laggy. Depth stress + cumulative path latency + repeated class transitions."
+  anchor: cf-fix-deep-a
+  raw_ids: true
+nodes:
+  cf-fix-deep-a:
+    label: A
+    event_id: cf-fix-deep-a-event
+    is_start: true
+  cf-fix-deep-b:
+    label: B
+    event_id: cf-fix-deep-b-event
+  cf-fix-deep-c:
+    label: C
+    event_id: cf-fix-deep-c-event
+  cf-fix-deep-d:
+    label: D
+    event_id: cf-fix-deep-d-event
+  cf-fix-deep-e:
+    label: E
+    event_id: cf-fix-deep-e-event
+  cf-fix-deep-f:
+    label: F
+    event_id: cf-fix-deep-f-event
+  cf-fix-deep-g:
+    label: G
+    event_id: cf-fix-deep-g-event
+    absorbing: true
+    outcome_type: success
+edges:
+  cf-fix-deep-a-to-b:
+    from: cf-fix-deep-a
+    to: cf-fix-deep-b
+    p: 0.7
+    onset: 0.0
+    mu: 0.0
+    sigma: 0.0
+  cf-fix-deep-b-to-c:
+    from: cf-fix-deep-b
+    to: cf-fix-deep-c
+    p: 0.6
+    onset: 1.0
+    mu: 2.0
+    sigma: 0.5
+  cf-fix-deep-c-to-d:
+    from: cf-fix-deep-c
+    to: cf-fix-deep-d
+    p: 0.55
+    onset: 0.0
+    mu: 0.0
+    sigma: 0.0
+  cf-fix-deep-d-to-e:
+    from: cf-fix-deep-d
+    to: cf-fix-deep-e
+    p: 0.5
+    onset: 2.0
+    mu: 2.3
+    sigma: 0.6
+  cf-fix-deep-e-to-f:
+    from: cf-fix-deep-e
+    to: cf-fix-deep-f
+    p: 0.45
+    onset: 0.0
+    mu: 0.0
+    sigma: 0.0
+  cf-fix-deep-f-to-g:
+    from: cf-fix-deep-f
+    to: cf-fix-deep-g
+    p: 0.4
+    onset: 1.5
+    mu: 2.1
+    sigma: 0.5
+simulation:
+  mean_daily_traffic: 2500
+  n_days: 120
+  kappa_sim_default: 50.0
+  failure_rate: 0.05
+  drift_sigma: 0.0
+  growth_rate_mom: 0.0
+  seed: 42
+  expected_sample_seconds: 1500

@@ -426,7 +426,7 @@ export function smoothRates(
     let ewma: number | null = null;
     return data.map(([d, v]) => {
       if (v === null || !Number.isFinite(v)) {
-        return [d, ewma] as [string, number | null];
+        return [d, null] as [string, number | null];
       }
       if (ewma === null) {
         ewma = v;

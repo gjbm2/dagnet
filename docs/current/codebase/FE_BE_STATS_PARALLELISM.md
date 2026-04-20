@@ -2,7 +2,7 @@
 
 Why both frontend and backend run the same statistical topo pass, how they're coordinated, and the transition plan.
 
-**See also**: `STATS_SUBSYSTEMS.md` (**start here if you don't already know how the five statistical subsystems differ** — this doc covers only FE topo / BE topo / CF orchestration), `LAG_ANALYSIS_SUBSYSTEM.md` (what the topo pass actually computes — t95, mu/sigma, lag fit detail), `STATISTICAL_DOMAIN_SUMMARY.md` (broader statistical architecture), `PROBABILITY_BLENDING.md` (how computed values feed into blended probabilities)
+**See also**: `STATS_SUBSYSTEMS.md` (**start here if you don't already know how the five statistical subsystems differ** — this doc covers only FE topo / BE topo / CF orchestration; `STATS_SUBSYSTEMS.md` §7 has the canonical "which Python entry point do I call" table), `LAG_ANALYSIS_SUBSYSTEM.md` (what the topo pass actually computes — t95, mu/sigma, lag fit detail), `STATISTICAL_DOMAIN_SUMMARY.md` (broader statistical architecture), `PROBABILITY_BLENDING.md` (how computed values feed into blended probabilities)
 
 ## Context
 
@@ -17,6 +17,31 @@ Per edge, given raw cohort evidence:
 - **completeness**: fraction of conversions completed by the query date
 - **blended_mean**: forecast-weighted conversion rate = `w_evidence * evidence.mean + (1 - w_evidence) * forecast.mean`
 - **p_infinity (forecast)**: mature window baseline conversion rate
+
+### Dual-evidence treatment: what's query-scoped and what isn't
+
+Both FE and BE topo passes deliberately split the cohort evidence they
+consume into two sets. The split is load-bearing — mixing them
+produces survivor bias on one side and stale evidence on the other.
+
+| Derivation | Evidence used | Why |
+|---|---|---|
+| Lag fit (`mu`, `sigma`, `t95`) | **Full unscoped cohorts** — all history | The lag shape is a property of the edge, not of the user's current query. Scoping would bias the fit toward newer cohorts that haven't finished maturing ("survivor bias") |
+| `p_infinity` (asymptote from mature cohorts) | **Full unscoped cohorts**, filtered to `age ≥ t95` with recency weighting | Needs fully-matured cohorts to estimate the true endpoint rate. Query-window cohorts are typically not yet mature |
+| `evidence.{n, k, mean}` | **Query-scoped cohorts** (the DSL window) | This is the user's "what actually happened in the window I'm looking at". Must match the DSL |
+| `completeness`, `completeness_stdev` | **Query-scoped cohorts** | "How mature is the evidence we just aggregated" — must match the evidence set |
+| `alpha`, `beta` on `model_vars[analytic/analytic_be]` | Derived from **query-scoped** `total_k, total_n` (Jeffreys-style: `α = k+1, β = n-k+1`) | These are a query-scoped Jeffreys posterior, not an aggregate prior |
+
+**Implication for downstream consumers**: the `α, β` on `analytic` /
+`analytic_be` is **already a query-scoped posterior**. It is not a
+prior that should be updated with query-scoped evidence again —
+doing so double-counts. This is the key difference from
+`model_vars[bayesian].probability.{alpha, beta}`, which is aggregate
+(not query-scoped) and is a legitimate prior for conjugate updates
+or as an IS proposal.
+
+See [STATS_SUBSYSTEMS.md §5 Confusion 8](STATS_SUBSYSTEMS.md) for the
+full scoping table across all three sources.
 
 ## The two implementations
 
@@ -232,7 +257,7 @@ transport layer differs.
 | `src/services/modelVarsResolution.ts` | Preference hierarchy for model_vars |
 | `lib/runner/stats_engine.py` | BE topo pass implementation (Python port of FE) |
 | `lib/api_handlers.py` | `/api/lag/topo-pass` endpoint handler |
-| `lib/runner/forecast_state.py` | Forecast engine: `_evaluate_cohort` (shared primitive), `compute_forecast_sweep`, `build_node_arrival_cache`, `compute_conditioned_forecast` (surprise gauge only) |
+| `lib/runner/forecast_state.py` | Forecast engine: `_evaluate_cohort` (shared primitive), `compute_forecast_trajectory`, `build_node_arrival_cache`, `compute_forecast_summary` (surprise gauge only) |
 | `lib/runner/model_resolver.py` | Promoted model resolver: `resolve_model_params(edge, scope, temporal_mode)` — also derives alpha/beta from evidence n/k when no Bayesian posterior (D20) |
 | `src/cli/topoPass.ts` | CLI topo pass: builds cohort_data + scoped edge_contexts from DSL (D18), calls BE endpoint |
 | `src/cli/commands/analyse.ts` | CLI `--topo-pass` flag |
@@ -241,14 +266,14 @@ transport layer differs.
 
 The BE topo pass runs a **forecast engine** after the stats engine,
 using the same `_evaluate_cohort` primitive as the cohort maturity
-chart (`compute_forecast_sweep` in `forecast_state.py`). Per edge:
+chart (`compute_forecast_trajectory` in `forecast_state.py`). Per edge:
 
 1. Resolves best-available model params from `model_vars[]` entries
    (reads from selected source, not flat promoted fields). Derives
    alpha/beta from evidence n/k when no Bayesian posterior (D20).
 2. Builds `CohortEvidence` objects with `eval_age` set to each
    cohort's current age (for completeness computation)
-3. Calls `compute_forecast_sweep` → `_evaluate_cohort` per cohort
+3. Calls `compute_forecast_trajectory` → `_evaluate_cohort` per cohort
 4. Reads `blended_mean` from coordinate A at the horizon τ (the
    IS-conditioned projected rate after all conversions complete);
    reads `completeness` from coordinate B (n-weighted CDF at each

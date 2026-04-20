@@ -1472,6 +1472,48 @@ def run_path(
     }
 
 
+def _scoped_conditioned_forecast(
+    scenarios_payload: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Invoke handle_conditioned_forecast scoped to the funnel path.
+
+    Direct Python call (same process, no HTTP). Each scenario in the
+    payload carries its own graph dict, analytics_dsl (path subject),
+    and effective_query_dsl (temporal clause). See doc 52 §4.2.
+
+    Returns the CF response dict with per-scenario edge scalars.
+    """
+    from api_handlers import handle_conditioned_forecast
+    return handle_conditioned_forecast({'scenarios': scenarios_payload})
+
+
+def _find_raw_edge_in_scenario_graph(
+    scenario_graph: dict[str, Any],
+    from_key: str,
+    to_key: str,
+) -> Optional[dict[str, Any]]:
+    """Find the raw edge dict for the given (from, to) in the scenario's raw graph.
+
+    `from_key` and `to_key` may be UUIDs or human IDs. The scenario graph
+    stores edges with `from` / `to` as UUIDs typically. Matches on either
+    field.
+    """
+    for e in scenario_graph.get('edges', []) or []:
+        ef = e.get('from') or e.get('from_node')
+        et = e.get('to') or e.get('to_node')
+        if (ef == from_key or ef == to_key) and (et == to_key or et == from_key):
+            # Belt-and-braces: match either direction
+            if ef == from_key and et == to_key:
+                return e
+    # Second pass: strict direction match (some graphs use different key conventions)
+    for e in scenario_graph.get('edges', []) or []:
+        ef = e.get('from') or e.get('from_node')
+        et = e.get('to') or e.get('to_node')
+        if ef == from_key and et == to_key:
+            return e
+    return None
+
+
 def run_conversion_funnel(
     G: nx.DiGraph,
     start_id: str,
@@ -1479,23 +1521,269 @@ def run_conversion_funnel(
     intermediate_nodes: list[str] = None,
     all_scenarios: Optional[list] = None,
     visited_any_groups: Optional[list[list[str]]] = None,
+    from_node: Optional[str] = None,
+    to_node: Optional[str] = None,
 ) -> dict[str, Any]:
+    """Conversion funnel — Level 2 per doc 52.
+
+    Bar heights and uncertainty bands are computed by `runner/funnel_engine.py`
+    per regime (e / f / e+f). Run_path supplies the surrounding row schema
+    (cost, lag, completeness, dropoff). The runner overrides `probability`
+    with the engine's bar value and adds `probability_lo`/`probability_hi`
+    plus striation fields.
+
+    Doc 52 §8.4: non-linear topologies and visitedAny groups are rejected
+    (returns `error`). CF failures in e+f mode propagate as hard errors —
+    no silent fallback.
+
+    Args:
+        G: NetworkX graph.
+        start_id, end_id: resolved UUIDs for S_0 and S_N.
+        intermediate_nodes: resolved UUIDs for intermediate stages.
+        all_scenarios: list of ScenarioData objects.
+        visited_any_groups: grouped stages (visitedAny). Rejected.
+        from_node, to_node: human-readable node IDs (from DSL) used to
+            construct `analytics_dsl` for the scoped CF call.
     """
-    Conversion funnel analysis - shows probability at each stage WITHOUT pruning.
-    
-    Unlike constrained_path (which prunes to paths through waypoints), this shows
-    the actual probability of reaching each stage from the start, regardless of path.
-    
-    This is the natural "funnel" view: what % of traffic reaches each stage?
-    """
-    # Just call run_path with pruning=None
-    result = run_path(G, start_id, end_id, intermediate_nodes, pruning=None,
-                      all_scenarios=all_scenarios, visited_any_groups=visited_any_groups)
-    
-    # Update metadata to clarify this is a funnel (not constrained)
-    result['metadata']['is_conversion_funnel'] = True
-    result['metadata']['description'] = 'Probability at each stage (all paths)'
-    
+    from .funnel_engine import (
+        compute_bars_e,
+        compute_bars_ef,
+        compute_bars_f,
+    )
+
+    intermediate_nodes = intermediate_nodes or []
+
+    # ── Always emit baseline (run_path) so the chart never goes blank ──
+    # Bands and striation are added on top when topology supports it.
+    result = run_path(
+        G, start_id, end_id, intermediate_nodes, pruning=None,
+        all_scenarios=all_scenarios, visited_any_groups=visited_any_groups,
+    )
+    if isinstance(result, dict) and result.get('error'):
+        return result
+
+    md = result.setdefault('metadata', {})
+    md['is_conversion_funnel'] = True
+    md['description'] = 'Conversion funnel with hi/lo bars (doc 52 Level 2)'
+
+    # ── Topology gate for Level 2 augmentation (doc 52 §8.2) ──────
+    # Non-linear funnels and visitedAny grouped stages are deferred per
+    # §8.2 — emit the baseline rows without bands rather than failing.
+    band_skip_reason: Optional[str] = None
+    if visited_any_groups and any(len(g) > 1 for g in visited_any_groups):
+        band_skip_reason = 'visitedAny grouped stages not yet supported (doc 52 §8.2)'
+
+    sorted_intermediates = _sort_nodes_topologically(G, start_id, intermediate_nodes)
+    stage_ids: list[str] = [start_id] + sorted_intermediates + [end_id]
+
+    path_edge_uvs: list[tuple[str, str]] = []
+    if band_skip_reason is None:
+        for i in range(len(stage_ids) - 1):
+            u, v = stage_ids[i], stage_ids[i + 1]
+            if not G.has_edge(u, v):
+                band_skip_reason = (
+                    f'non-linear topology between consecutive funnel stages '
+                    f'(no direct edge {u}→{v})'
+                )
+                path_edge_uvs = []
+                break
+            path_edge_uvs.append((u, v))
+
+    if band_skip_reason is not None:
+        md['hi_lo_bands_skipped'] = band_skip_reason
+        return result
+
+    # Labels for DSL construction (CF call)
+    # Resolve human IDs for each stage node (used to pair CF response edges
+    # to the funnel path's edge sequence). CF returns edges keyed by
+    # (from_node, to_node) human IDs, not UUIDs.
+    def _stage_label(node_id: str) -> str:
+        if node_id in G:
+            return str(G.nodes[node_id].get('id') or G.nodes[node_id].get('label') or node_id)
+        return str(node_id)
+    stage_labels = [_stage_label(s) for s in stage_ids]
+    path_edge_labels: list[tuple[str, str]] = list(zip(stage_labels[:-1], stage_labels[1:]))
+
+    # ── Pre-fetch whole-graph CF response for any e+f scenarios ────
+    # We use whole-graph mode (no analytics_dsl) so CF enriches every
+    # parameterised edge; we then pick out the funnel-path edges in
+    # order. Calling with .visited()-decorated DSL only enriches the
+    # end-to-end subject (1 edge), which doesn't match a multi-hop funnel.
+    cf_responses_by_scenario: dict[str, list[dict[str, Any]]] = {}
+    ef_scenarios_payload: list[dict[str, Any]] = []
+    scenario_raw_graph_by_id: dict[str, dict[str, Any]] = {}
+
+    if all_scenarios:
+        for sc in all_scenarios:
+            scenario_raw_graph_by_id[sc.scenario_id] = sc.graph
+            effective_dsl = getattr(sc, 'effective_query_dsl', '') or ''
+            visibility = getattr(sc, 'visibility_mode', 'f+e') or 'f+e'
+            if visibility == 'f+e':
+                ef_scenarios_payload.append({
+                    'scenario_id': sc.scenario_id,
+                    'graph': sc.graph,
+                    # No analytics_dsl → whole-graph enrichment (mode b).
+                    # CF needs candidate_regimes_by_edge to resolve subjects
+                    # in mode b (all_graph_parameters).
+                    'effective_query_dsl': effective_dsl,
+                    'candidate_regimes_by_edge': getattr(sc, 'candidate_regimes_by_edge', None) or {},
+                })
+
+    cf_skip_reason: Optional[str] = None
+    if ef_scenarios_payload:
+        print(f'[funnel-L2] CF call: {len(ef_scenarios_payload)} f+e scenarios, '
+              f'expecting {len(path_edge_labels)} edges per scenario for path '
+              f'{path_edge_labels}')
+        try:
+            cf_response = _scoped_conditioned_forecast(ef_scenarios_payload)
+        except Exception as exc:
+            cf_skip_reason = f'Scoped CF call failed: {exc}'
+            cf_response = None
+            print(f'[funnel-L2] CF FAILED: {exc}')
+        if cf_response is not None:
+            # CF returns ALL graph edges in arbitrary order. Pair each
+            # funnel-path edge (from_label, to_label) with its CF entry.
+            for sc_result in cf_response.get('scenarios', []) or []:
+                sid = sc_result.get('scenario_id', '')
+                all_cf_edges = sc_result.get('edges', []) or []
+                cf_by_pair = {
+                    (e.get('from_node'), e.get('to_node')): e for e in all_cf_edges
+                }
+                print(f'[funnel-L2] scenario={sid} CF returned {len(all_cf_edges)} edges; '
+                      f'keys sample: {list(cf_by_pair.keys())[:5]}')
+                ordered: list[dict[str, Any]] = []
+                missing: list[tuple[str, str]] = []
+                for (fl, tl) in path_edge_labels:
+                    e = cf_by_pair.get((fl, tl))
+                    if e is None:
+                        missing.append((fl, tl))
+                    else:
+                        ordered.append(e)
+                if missing:
+                    md.setdefault('hi_lo_bands_skipped_per_scenario', {})[sid] = (
+                        f'CF response missing {len(missing)} funnel-path edge(s): '
+                        f'{[f"{f}->{t}" for f, t in missing]}'
+                    )
+                    print(f'[funnel-L2] scenario={sid} MISSING {len(missing)} edges: {missing}')
+                else:
+                    cf_responses_by_scenario[sid] = ordered
+                    print(f'[funnel-L2] scenario={sid} aligned {len(ordered)} edges OK; '
+                          f'p_means={[e.get("p_mean") for e in ordered]}')
+    if cf_skip_reason is not None:
+        md['cf_skip_reason'] = cf_skip_reason
+
+    # ── Compute bars per scenario and merge over existing rows ─────
+    rows_by_key: dict[tuple, dict[str, Any]] = {}
+    for row in result.get('data') or []:
+        key = (row.get('stage'), row.get('scenario_id'))
+        rows_by_key[key] = row
+
+    prepared = _prepare_scenarios(G, all_scenarios)
+    for s in prepared:
+        scenario_id = s['scenario_id']
+        visibility_mode = s['visibility_mode']
+
+        raw_graph = scenario_raw_graph_by_id.get(scenario_id)
+        path_edges_raw: list[dict[str, Any]] = []
+        for (u, v) in path_edge_uvs:
+            if raw_graph is not None:
+                raw_edge = _find_raw_edge_in_scenario_graph(raw_graph, u, v) or {'p': {}}
+            else:
+                attrs = G.edges[u, v]
+                raw_edge = {'p': {
+                    'evidence': attrs.get('evidence') or {},
+                    'forecast': attrs.get('forecast') or {},
+                    'latency': attrs.get('latency') or {},
+                }}
+            path_edges_raw.append(raw_edge)
+
+        try:
+            bars_e_data = compute_bars_e(path_edges_raw)
+            if visibility_mode == 'e':
+                bars = bars_e_data
+            elif visibility_mode == 'f':
+                bars = compute_bars_f(path_edges_raw, temporal_mode='window')
+            elif visibility_mode == 'f+e':
+                cf_edges = cf_responses_by_scenario.get(scenario_id)
+                if not cf_edges or len(cf_edges) != len(path_edge_uvs):
+                    # No valid CF for this scenario — leave baseline rows untouched
+                    continue
+                bars = compute_bars_ef(cf_edges, bars_e_data.bar)
+            else:
+                continue
+        except Exception as exc:
+            md.setdefault('hi_lo_bands_skipped_per_scenario', {})[scenario_id] = (
+                f'Engine error: {exc}'
+            )
+            continue
+
+        # Override probability/p_mean/evidence_mean with engine values so
+        # the FE chart driver consumes Level 2 numbers. Set striation
+        # fields too so consumers (current `evidence_mean`/`p_mean`-based
+        # stack and future `bar_height_*`-based stack) both work.
+        for i, stage_id in enumerate(stage_ids):
+            row = rows_by_key.get((stage_id, scenario_id))
+            if row is None:
+                continue
+
+            row['probability'] = bars.bar[i]
+
+            if bars.lo[i] is not None:
+                row['probability_lo'] = bars.lo[i]
+            if bars.hi[i] is not None:
+                row['probability_hi'] = bars.hi[i]
+
+            if visibility_mode == 'e':
+                row['evidence_mean'] = bars.bar[i]
+            elif visibility_mode == 'f':
+                row['forecast_mean'] = bars.bar[i]
+            elif visibility_mode == 'f+e':
+                # p_mean drives the FE stacked-bar total; evidence_mean
+                # drives the solid e portion.
+                row['p_mean'] = bars.bar[i]
+                if bars.bar_e is not None:
+                    row['evidence_mean'] = bars.bar_e[i]
+                    row['bar_height_e'] = bars.bar_e[i]
+                if bars.bar_f_residual is not None:
+                    row['bar_height_f_residual'] = bars.bar_f_residual[i]
+
+        # Re-derive step_probability/dropoff from the engine bars so they
+        # stay consistent with the new probability values.
+        prev = None
+        for i, stage_id in enumerate(stage_ids):
+            row = rows_by_key.get((stage_id, scenario_id))
+            if row is None:
+                prev = None
+                continue
+            if i == 0:
+                prev = bars.bar[i]
+                row.pop('step_probability', None)
+                row.pop('dropoff', None)
+                continue
+            if prev is not None and prev > 0:
+                row['step_probability'] = bars.bar[i] / prev
+                row['dropoff'] = max(0.0, prev - bars.bar[i])
+            prev = bars.bar[i]
+
+    # Advertise the new metrics in semantics so chart builders can discover them
+    sem = result.setdefault('semantics', {})
+    metrics = sem.setdefault('metrics', [])
+    existing_ids = {m.get('id') for m in metrics}
+    new_metrics = [
+        {'id': 'probability_lo', 'name': '5% band', 'type': 'probability', 'format': 'percent'},
+        {'id': 'probability_hi', 'name': '95% band', 'type': 'probability', 'format': 'percent'},
+        {'id': 'bar_height_e', 'name': 'Observed portion', 'type': 'probability', 'format': 'percent'},
+        {'id': 'bar_height_f_residual', 'name': 'Forecast portion', 'type': 'probability', 'format': 'percent'},
+    ]
+    for m in new_metrics:
+        if m['id'] not in existing_ids:
+            metrics.append(m)
+    # Chart hints
+    chart = sem.setdefault('chart', {})
+    hints = chart.setdefault('hints', {})
+    hints['show_hi_lo'] = True
+    hints['stacked_striation'] = True
+
     return result
 
 

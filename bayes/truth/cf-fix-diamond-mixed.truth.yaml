@@ -1,0 +1,59 @@
+graph:
+  name: cf-fix-diamond-mixed
+  description: "CF topology fixture T6 (doc 50 §5.1): diamond with mixed laggy/lagless arms. Fanout + rejoin under Class A ↔ B interleaving."
+  anchor: cf-fix-diamond-a
+  raw_ids: true
+nodes:
+  cf-fix-diamond-a:
+    label: A
+    event_id: cf-fix-diamond-a-event
+    is_start: true
+  cf-fix-diamond-b:
+    label: B (laggy arm)
+    event_id: cf-fix-diamond-b-event
+  cf-fix-diamond-c:
+    label: C (lagless arm)
+    event_id: cf-fix-diamond-c-event
+  cf-fix-diamond-d:
+    label: D
+    event_id: cf-fix-diamond-d-event
+    absorbing: true
+    outcome_type: success
+edges:
+  cf-fix-diamond-a-to-b:
+    from: cf-fix-diamond-a
+    to: cf-fix-diamond-b
+    p: 0.5
+    onset: 1.0
+    mu: 2.2
+    sigma: 0.5
+  cf-fix-diamond-a-to-c:
+    from: cf-fix-diamond-a
+    to: cf-fix-diamond-c
+    p: 0.4
+    onset: 0.0
+    mu: 0.0
+    sigma: 0.0
+  cf-fix-diamond-b-to-d:
+    from: cf-fix-diamond-b
+    to: cf-fix-diamond-d
+    p: 0.6
+    onset: 0.0
+    mu: 0.0
+    sigma: 0.0
+  cf-fix-diamond-c-to-d:
+    from: cf-fix-diamond-c
+    to: cf-fix-diamond-d
+    p: 0.5
+    onset: 2.0
+    mu: 2.4
+    sigma: 0.6
+simulation:
+  mean_daily_traffic: 2000
+  n_days: 100
+  kappa_sim_default: 50.0
+  failure_rate: 0.05
+  drift_sigma: 0.0
+  growth_rate_mom: 0.0
+  seed: 42
+  expected_sample_seconds: 1200

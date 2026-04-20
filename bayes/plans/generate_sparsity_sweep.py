@@ -189,10 +189,15 @@ def generate_graph(topo_name: str, topo: dict, sparsity: dict, seed: int) -> dic
     prefix = f"synth-{topo_name}-{level}"
     n_days = 100
 
-    # Build context dim (may have lifecycle overrides)
+    # Build context dim (may have lifecycle overrides). Lifecycle variants
+    # use a distinct dim id because their labels ("Baseline (A)" etc.)
+    # differ from the random-sparsity variants ("Google" etc.) — sharing
+    # the same id would make whichever truth bootstrapped last invalidate
+    # the other's DB rows.
     import copy
     ctx_dim = copy.deepcopy(CONTEXT_DIM_BASE)
     if "values_override" in sparsity:
+        ctx_dim["id"] = "synth-channel-lifecycle"
         for i, vo in enumerate(sparsity["values_override"]):
             for k, v in vo.items():
                 ctx_dim["values"][i][k] = v

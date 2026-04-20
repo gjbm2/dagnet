@@ -197,11 +197,11 @@ class TestDailyConversionsDerivation:
 
 
 class TestDailyConversionsEngineAnnotation:
-    """G.1b: forecast engine annotation via compute_forecast_sweep coordinate B."""
+    """G.1b: forecast engine annotation via compute_forecast_trajectory coordinate B."""
 
     def test_engine_annotates_immature_cohorts(self):
         """Immature Cohorts (young age) should get projected_y > evidence_y."""
-        from runner.forecast_state import compute_forecast_sweep, CohortEvidence
+        from runner.forecast_state import compute_forecast_trajectory, CohortEvidence
         from runner.model_resolver import ResolvedModelParams, ResolvedLatency
         from runner.forecast_application import compute_completeness
         import numpy as np
@@ -239,7 +239,7 @@ class TestDailyConversionsEngineAnnotation:
             ),
         ]
 
-        sweep = compute_forecast_sweep(
+        sweep = compute_forecast_trajectory(
             resolved=resolved,
             cohorts=cohorts,
             max_tau=maturity_tau,

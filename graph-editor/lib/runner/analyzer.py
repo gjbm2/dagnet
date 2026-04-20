@@ -298,7 +298,9 @@ def dispatch_runner(
             intermediates = [n for n in resolved_nodes if n != resolved_from and n != resolved_to]
             return run_conversion_funnel(G, resolved_from, resolved_to, intermediates,
                                          all_scenarios=all_scenarios,
-                                         visited_any_groups=visited_any_groups)
+                                         visited_any_groups=visited_any_groups,
+                                         from_node=from_node,
+                                         to_node=to_node)
         return {'error': 'Conversion funnel requires from() and to() nodes'}
 
     elif runner_name == 'constrained_path_runner':

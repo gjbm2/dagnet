@@ -1259,8 +1259,7 @@ export const CHART_DISPLAY_SETTINGS: Record<string, DisplaySettingDef[]> = {
       type: 'radio',
       options: [
         { value: 'p', label: 'p (rate)' },
-        { value: 'mu', label: 'μ (latency)' },
-        { value: 'sigma', label: 'σ (spread)' },
+        { value: 'completeness', label: 'Completeness' },
         { value: 'all', label: 'All' },
       ],
       defaultValue: 'p',

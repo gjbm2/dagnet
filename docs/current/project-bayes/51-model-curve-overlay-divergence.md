@@ -102,14 +102,14 @@ Phase 2 emits two distinct cohort-level posteriors that need to be tracked separ
 
 **(a) Cohort-level probability posterior (`cohort_alpha`, `cohort_beta`)** — partially consumed.
 
-- `resolve_model_params` at [model_resolver.py:302-308](../../../graph-editor/lib/runner/model_resolver.py#L302-L308) reads `cohort_alpha`/`cohort_beta` when called with `temporal_mode='cohort'` and populates `resolved.alpha`, `resolved.alpha_pred`, `resolved.p_mean`. These flow into `compute_forecast_sweep` as `_p_mean`, `_p_sd`, and the `_drift_alpha`/`_drift_beta` used for IS conditioning drift priors — so the cohort-mode p posterior does influence the conditioning machinery.
+- `resolve_model_params` at [model_resolver.py:302-308](../../../graph-editor/lib/runner/model_resolver.py#L302-L308) reads `cohort_alpha`/`cohort_beta` when called with `temporal_mode='cohort'` and populates `resolved.alpha`, `resolved.alpha_pred`, `resolved.p_mean`. These flow into `compute_forecast_trajectory` as `_p_mean`, `_p_sd`, and the `_drift_alpha`/`_drift_beta` used for IS conditioning drift priors — so the cohort-mode p posterior does influence the conditioning machinery.
 - **However**, in the hot forecast path where `mc_cdf_arr` is provided, the actual MC draws of p used for `rate_model` (and therefore for the midline at asymptote) come from `mc_p_s`, which is emitted by `mc_span_cdfs`. `mc_span_cdfs` reads **window-mode** `alpha`/`beta` via `_extract_edge_params` ([span_kernel.py:142-148](../../../graph-editor/lib/runner/span_kernel.py#L142-L148)); it does not look at `cohort_alpha`/`cohort_beta`. So the MC midline at saturation reflects the window-mode Beta posterior, not the cohort-mode one.
 - Net effect: `cohort_alpha`/`cohort_beta` are partially plumbed through — they alter IS conditioning priors and scalar summaries like `edge_results.p_mean`, but they don't drive the MC draws that produce the chart's visible midline or fan.
 
 **(b) Cohort-level path latency posterior (`path_mu_mean`, `path_sigma_mean`, `path_onset_delta_days` + SDs)** — completely unused by the forecast stack.
 
 - `cohort_forecast_v3.py:340` calls `resolve_model_params(..., scope='edge')` — scope=`edge` means `path_latency` is never populated on the resolved object.
-- `compute_forecast_sweep` consumes `mc_cdf_arr` from `mc_span_cdfs`, which does FW composition of per-edge posteriors. `mc_span_cdfs` doesn't look at `path_mu_mean` either.
+- `compute_forecast_trajectory` consumes `mc_cdf_arr` from `mc_span_cdfs`, which does FW composition of per-edge posteriors. `mc_span_cdfs` doesn't look at `path_mu_mean` either.
 - `handle_conditioned_forecast` ([api_handlers.py:2609](../../../graph-editor/lib/api_handlers.py#L2609)) uses the same v3 pipeline and reads `p_infinity_mean` from the last row. It never touches `path_mu_mean`.
 
 The only place `path_mu_mean` is read for a user-visible purpose is [api_handlers.py:2413](../../../graph-editor/lib/api_handlers.py#L2413), in the cohort-overlay branch. Eliminating that branch (the natural conclusion of §3's overlay-main parity fix) would complete the disconnection: Phase 2's fitted **path latency** posterior would be emitted, stored, and ignored.
@@ -253,7 +253,7 @@ Fall back to the more modest plan. Less architecturally clean but deliverable.
 
 **P2B.1**. PPC gating: compute a per-edge diagnostic on cohort-level fit quality (`pareto_k_max < 0.7`, `delta_elpd > 0`, PPC PIT uniformity). Flag per-edge in posterior whether cohort fit is "trusted" for forecast consumption.
 
-**P2B.2**. Extend `compute_forecast_sweep` to accept a cohort-level CDF source. When bayesian source is promoted, cohort widened/multi-hop mode, and edge is flagged "trusted", draw `(path_μ, path_σ, path_onset)` from cohort posterior and use analytic CDF per draw. Otherwise fall back to `mc_span_cdfs` (current behaviour).
+**P2B.2**. Extend `compute_forecast_trajectory` to accept a cohort-level CDF source. When bayesian source is promoted, cohort widened/multi-hop mode, and edge is flagged "trusted", draw `(path_μ, path_σ, path_onset)` from cohort posterior and use analytic CDF per draw. Otherwise fall back to `mc_span_cdfs` (current behaviour).
 
 **P2B.3**. Overlay construction follows the same logic as the sweep: use cohort fit where it's trusted and available, FW composition otherwise. Main chart and overlay coincide by using the same source selection rule.
 

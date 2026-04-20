@@ -95,21 +95,21 @@ Add IS conditioning to the engine and expose conditioned draws.
 ### New engine function signature
 
 ```python
-def compute_conditioned_forecast(
+def compute_forecast_summary(
     edge_id: str,
     resolved: ResolvedModelParams,
     cohort_ages_and_weights: List[Tuple[float, int]],
     evidence: List[Tuple[float, int, int]],  # (τ_i, n_i, k_i)
     from_node_arrival: Optional[NodeArrivalState] = None,
     num_draws: int = 2000,
-) -> ConditionedForecast:
+) -> ForecastSummary:
 ```
 
-Where `ConditionedForecast` contains:
+Where `ForecastSummary` contains:
 
 ```python
 @dataclass
-class ConditionedForecast:
+class ForecastSummary:
     # Point estimates (same as today's ForecastState)
     completeness: float
     completeness_sd: float
@@ -140,7 +140,7 @@ class ConditionedForecast:
 ### How consumers use it
 
 **Topo pass** (per-edge, every fetch):
-- Calls `compute_conditioned_forecast` with observed cohorts as both
+- Calls `compute_forecast_summary` with observed cohorts as both
   `cohort_ages_and_weights` and `evidence`
 - Reads `completeness`, `completeness_sd`, `rate_conditioned` —
   writes to existing graph fields
@@ -149,7 +149,7 @@ class ConditionedForecast:
   weighting which is O(S × n_cohorts) arithmetic — negligible)
 
 **Cohort maturity chart v3** (per-edge, on demand):
-- Calls `compute_conditioned_forecast` with observed cohorts
+- Calls `compute_forecast_summary` with observed cohorts
 - Gets back conditioned draws `(p_s, mu_s, sigma_s, onset_s)`
 - Evaluates CDF at each display τ using the conditioned draws:
   `rate_s(τ) = p_s × CDF(τ, mu_s, sigma_s, onset_s)`
@@ -157,7 +157,7 @@ class ConditionedForecast:
 - No MC loop in v3 — just CDF evaluation on pre-conditioned draws
 
 **Surprise gauge**:
-- Calls `compute_conditioned_forecast`
+- Calls `compute_forecast_summary`
 - Reads `rate_unconditioned ± rate_unconditioned_sd` as the baseline
 - Compares against observed rate
 - Ignores draw arrays
@@ -187,7 +187,7 @@ With this engine function, `cohort_forecast_v3.py` does:
 
 1. Resolve subjects and compose evidence frames (reused from handler)
 2. Extract per-cohort evidence: `[(τ_i, n_i, k_i)]` from frames
-3. Call `compute_conditioned_forecast(edge, resolved, cohorts, evidence, carrier)`
+3. Call `compute_forecast_summary(edge, resolved, cohorts, evidence, carrier)`
 4. Sweep: for each display τ in 0..max_tau:
    `rate_draws[s] = forecast.p_draws[s] × CDF(τ, forecast.mu_draws[s], ...)`
 5. Quantiles per τ → fan_bands, midpoint, fan_upper, fan_lower
@@ -203,8 +203,8 @@ resolution, or IS conditioning.
 
 | File | Change |
 |------|--------|
-| `lib/runner/forecast_state.py` | New `compute_conditioned_forecast` function. Refactor existing MC loop to include IS conditioning and return draws. |
-| `lib/runner/cohort_forecast_v3.py` | Rewrite to call `compute_conditioned_forecast` + sweep evaluation. |
+| `lib/runner/forecast_state.py` | New `compute_forecast_summary` function. Refactor existing MC loop to include IS conditioning and return draws. |
+| `lib/runner/cohort_forecast_v3.py` | Rewrite to call `compute_forecast_summary` + sweep evaluation. |
 | `lib/api_handlers.py` | `handle_stats_topo_pass`: optionally pass evidence to engine for IS-conditioned topo pass values. |
 | `lib/tests/test_forecast_state_cohort.py` | Tests for IS conditioning: conditioned completeness < unconditioned when evidence says p < prior. |
 | `lib/tests/test_v2_v3_parity.py` | Midpoint parity should tighten from 37% to <5% (MC variance). |

@@ -488,7 +488,7 @@ class TestResolverNonBayes:
 
 
 class TestForecastEngineNonBayes:
-    """Integration: compute_forecast_sweep produces valid output when
+    """Integration: compute_forecast_trajectory produces valid output when
     fed resolved params from non-Bayes edges.
 
     Confirms the engine doesn't crash, produces non-trivial draws,
@@ -549,12 +549,12 @@ class TestForecastEngineNonBayes:
         The no-dispersion branch uses fixed mu/sigma/onset with only
         p varying. Should produce a valid rate forecast.
         """
-        from runner.forecast_state import compute_forecast_sweep
+        from runner.forecast_state import compute_forecast_trajectory
         import numpy as np
 
         resolved = self._make_analytic_resolved(with_dispersions=False)
         cohorts = self._make_cohorts(n_cohorts=3, max_tau=50)
-        result = compute_forecast_sweep(
+        result = compute_forecast_trajectory(
             resolved=resolved, cohorts=cohorts, max_tau=50,
             num_draws=500,
         )
@@ -575,18 +575,18 @@ class TestForecastEngineNonBayes:
         """Engine runs with analytic params that have SDs (e.g. from
         promoted_mu_sd fields). Fan should be wider than zero-SD case.
         """
-        from runner.forecast_state import compute_forecast_sweep
+        from runner.forecast_state import compute_forecast_trajectory
         import numpy as np
 
         resolved_no_sd = self._make_analytic_resolved(with_dispersions=False)
         resolved_with_sd = self._make_analytic_resolved(with_dispersions=True)
         cohorts = self._make_cohorts(n_cohorts=3, max_tau=50)
 
-        result_no_sd = compute_forecast_sweep(
+        result_no_sd = compute_forecast_trajectory(
             resolved=resolved_no_sd, cohorts=cohorts, max_tau=50,
             num_draws=500,
         )
-        result_with_sd = compute_forecast_sweep(
+        result_with_sd = compute_forecast_trajectory(
             resolved=resolved_with_sd, cohorts=cohorts, max_tau=50,
             num_draws=500,
         )
@@ -611,7 +611,7 @@ class TestForecastEngineNonBayes:
         valid draws using p_mean directly.
         """
         from runner.model_resolver import ResolvedModelParams, ResolvedLatency
-        from runner.forecast_state import compute_forecast_sweep
+        from runner.forecast_state import compute_forecast_trajectory
         import numpy as np
 
         lat = ResolvedLatency(mu=3.0, sigma=0.6)
@@ -622,7 +622,7 @@ class TestForecastEngineNonBayes:
             source='',
         )
         cohorts = self._make_cohorts(n_cohorts=2, max_tau=40)
-        result = compute_forecast_sweep(
+        result = compute_forecast_trajectory(
             resolved=resolved, cohorts=cohorts, max_tau=40,
             num_draws=500,
         )
@@ -643,7 +643,7 @@ class TestForecastEngineNonBayes:
         Uses large N_i to minimise binomial sampling noise.
         """
         from runner.model_resolver import ResolvedModelParams, ResolvedLatency
-        from runner.forecast_state import compute_forecast_sweep, CohortEvidence
+        from runner.forecast_state import compute_forecast_trajectory, CohortEvidence
         import numpy as np
 
         lat = ResolvedLatency(mu=3.0, sigma=0.6, onset_delta_days=0.0, t95=12.0)
@@ -668,7 +668,7 @@ class TestForecastEngineNonBayes:
                 a_pop=N_i,
             ))
 
-        result = compute_forecast_sweep(
+        result = compute_forecast_trajectory(
             resolved=resolved, cohorts=cohorts, max_tau=max_tau,
             num_draws=2000,
         )
@@ -701,7 +701,7 @@ class TestForecastEngineNonBayes:
     def test_sweep_zero_sigma_returns_empty(self):
         """Edge with sigma=0 — engine returns zeros (no valid CDF)."""
         from runner.model_resolver import ResolvedModelParams, ResolvedLatency
-        from runner.forecast_state import compute_forecast_sweep
+        from runner.forecast_state import compute_forecast_trajectory
         import numpy as np
 
         lat = ResolvedLatency(mu=3.0, sigma=0.0)
@@ -712,7 +712,7 @@ class TestForecastEngineNonBayes:
             source='',
         )
         cohorts = self._make_cohorts(n_cohorts=1, max_tau=20)
-        result = compute_forecast_sweep(
+        result = compute_forecast_trajectory(
             resolved=resolved, cohorts=cohorts, max_tau=20,
             num_draws=100,
         )
@@ -720,106 +720,3 @@ class TestForecastEngineNonBayes:
         # sigma=0 → early return with zeros
         assert np.all(result.rate_draws == 0.0)
 
-
-class TestSurpriseGaugeNonBayes:
-    """Surprise gauge works for non-Bayes edges when SDs are available.
-
-    The topo pass writes promoted_mu_sd/promoted_sigma_sd for any source.
-    The gauge should use these for the surprise quantile computation,
-    not gate on Bayesian source.
-    """
-
-    def _make_graph_with_edge(self, edge):
-        return {'edges': [edge]}
-
-    def _make_analytic_edge(self, with_promoted_sds=True):
-        """Edge with analytic model_vars and topo-pass promoted SDs."""
-        edge = {
-            'uuid': 'test-edge-1',
-            'p': {
-                'forecast': {'mean': 0.4},
-                'latency': {
-                    'mu': 3.0, 'sigma': 0.6,
-                    'onset_delta_days': 0.5,
-                    'completeness': 0.85,
-                },
-                'posterior': {'alpha': 12, 'beta': 18},
-                'evidence': {'k': 35, 'n': 100},
-                'model_vars': [{
-                    'source': 'analytic',
-                    'latency': {'mu': 3.0, 'sigma': 0.6, 'onset_delta_days': 0.5},
-                    'probability': {'mean': 0.4, 'stdev': 0.05},
-                }],
-            }
-        }
-        if with_promoted_sds:
-            edge['p']['latency']['promoted_mu_sd'] = 0.15
-            edge['p']['latency']['promoted_sigma_sd'] = 0.08
-        return edge
-
-    def _call_gauge(self, edge, n_dates=30):
-        import sys, os
-        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-        from api_handlers import _compute_surprise_gauge
-
-        graph = self._make_graph_with_edge(edge)
-        subj = {
-            'anchor_from': '2026-03-01',
-            'anchor_to': '2026-03-30',
-            'slice_keys': [],
-        }
-        data = {'query_dsl': 'from(A).to(B)'}
-        return _compute_surprise_gauge(graph, 'test-edge-1', subj, data)
-
-    def test_analytic_with_promoted_sds_mu_available(self):
-        """Analytic edge with promoted_mu_sd from topo pass: mu gauge
-        should be available.
-        """
-        edge = self._make_analytic_edge(with_promoted_sds=True)
-        result = self._call_gauge(edge)
-
-        mu_var = next(v for v in result['variables'] if v['name'] == 'mu')
-        assert mu_var['available'] is True, \
-            f"mu gauge should be available with promoted_mu_sd, got: {mu_var}"
-        assert 'quantile' in mu_var
-        assert 0.0 <= mu_var['quantile'] <= 1.0
-
-    def test_analytic_with_promoted_sds_sigma_available(self):
-        """Analytic edge with promoted_sigma_sd from topo pass: sigma
-        gauge should be available (with sufficient n_dates).
-        """
-        edge = self._make_analytic_edge(with_promoted_sds=True)
-        result = self._call_gauge(edge, n_dates=30)
-
-        sigma_var = next(v for v in result['variables'] if v['name'] == 'sigma')
-        assert sigma_var['available'] is True, \
-            f"sigma gauge should be available with promoted_sigma_sd, got: {sigma_var}"
-
-    def test_analytic_without_sds_mu_unavailable(self):
-        """Analytic edge without promoted SDs: mu gauge correctly reports
-        unavailable (no dispersion estimate).
-        """
-        edge = self._make_analytic_edge(with_promoted_sds=False)
-        result = self._call_gauge(edge)
-
-        mu_var = next(v for v in result['variables'] if v['name'] == 'mu')
-        assert mu_var['available'] is False
-
-    def test_analytic_p_variable_available(self):
-        """p (conversion rate) gauge works for analytic edges —
-        uses alpha/beta from posterior (source-agnostic).
-        """
-        edge = self._make_analytic_edge(with_promoted_sds=True)
-        result = self._call_gauge(edge)
-
-        p_var = next(v for v in result['variables'] if v['name'] == 'p')
-        assert p_var['available'] is True, \
-            f"p gauge should be available with posterior alpha/beta, got: {p_var}"
-
-    def test_reference_source_is_analytic(self):
-        """Gauge correctly identifies analytic as the reference source."""
-        edge = self._make_analytic_edge(with_promoted_sds=True)
-        result = self._call_gauge(edge)
-
-        assert result.get('reference_source') == 'analytic'
-        assert result.get('hint') == 'Run Bayes model for better indicators'

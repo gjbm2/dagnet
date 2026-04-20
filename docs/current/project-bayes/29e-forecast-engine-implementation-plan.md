@@ -706,7 +706,7 @@ Phase 5 (cohort_maturity_v3)        ✅ in progress — parity green 17/17
 Phase G (codepath generalisation)   ← NEXT after Phase 5
   │  Unifies topo pass and chart onto shared engine primitives.
   │  v3 is the invariant reference; topo pass must call the same
-  │  compute_forecast_sweep function. See doc 29f §Phase G.
+  │  compute_forecast_trajectory function. See doc 29f §Phase G.
   │
   ▼
 Phase 6 (contract tests)            Updated to assert same-function guarantee
@@ -717,10 +717,10 @@ Phase 7.1–7.4 (enhancements) — independent, any time after Phase G
 **Key insight (16-Apr-26)**: Phases 2–3 built `compute_forecast_state_window`
 and `compute_forecast_state_cohort` as standalone functions, but neither
 is called by any production codepath. The topo pass calls
-`compute_conditioned_forecast` instead — a structurally different
+`compute_forecast_summary` instead — a structurally different
 function with different IS conditioning, different carrier fidelity,
 and different rate semantics. Phase G replaces these with calls to the
-same `compute_forecast_sweep` that v3 uses, ensuring the graph display
+same `compute_forecast_trajectory` that v3 uses, ensuring the graph display
 and the chart cannot diverge.
 
 ---

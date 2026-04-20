@@ -307,6 +307,117 @@ class TestFreshnessNoDb:
                                        check_enrichment=True)
         assert result.get("enriched") is False
 
+    def test_stale_when_context_definition_changes(self, tmp_path):
+        """Detects the synth-channel overwrite failure: a sibling truth
+        rewrote contexts/<id>.yaml with different labels, silently
+        invalidating every DB row registered under the old dim hash.
+        """
+        graphs_dir, _, _, meta = _build_fresh_layout(tmp_path, "g12")
+        contexts_dir = tmp_path / "contexts"
+        contexts_dir.mkdir()
+        ctx_path = contexts_dir / "my-dim.yaml"
+        ctx_path.write_text(yaml.dump({"id": "my-dim", "values": [{"id": "a"}]}))
+        # Pin the original ctx file hash into meta
+        meta["context_file_hashes"] = {"my-dim": _sha256(ctx_path.read_bytes())}
+        _write_meta(graphs_dir, "g12", meta)
+        # Simulate a sibling truth overwriting the same dim file
+        ctx_path.write_text(yaml.dump({"id": "my-dim", "values": [{"id": "b"}]}))
+
+        from bayes.synth_gen import verify_synth_data
+        with pytest.MonkeyPatch.context() as mp:
+            mp.delenv("DB_CONNECTION", raising=False)
+            result = verify_synth_data("g12", str(tmp_path))
+        assert result["status"] == "stale"
+        assert any("Context definition changed" in r for r in result["reasons"])
+
+
+class TestContextSharingModel:
+    """Context files in contexts/<dim_id>.yaml are shared across truths
+    using the same dim id. Overwrite is legitimate; the assurance chain
+    (context_file_hashes in meta + verify_synth_data) marks previously-
+    bootstrapped graphs as stale when their pinned ctx hash drifts.
+
+    These tests pin the contract: write_context_files never aborts on
+    overwrite — it warns and records who just became stale.
+    """
+
+    def _dim(self, dim_id: str, labels: list[str]) -> dict:
+        return {
+            "id": dim_id,
+            "mece": True,
+            "values": [
+                {"id": f"v{i}", "label": lbl,
+                 "sources": {"amplitude": {"field": "utm_medium",
+                                            "filter": f"utm_medium == 'v{i}'"}}}
+                for i, lbl in enumerate(labels)
+            ],
+        }
+
+    def test_allows_write_when_file_absent(self, tmp_path):
+        from bayes.synth_gen import write_context_files
+        truth = {"context_dimensions": [self._dim("dim-x", ["A", "B"])]}
+        written = write_context_files(truth, str(tmp_path))
+        assert written == ["dim-x"]
+        assert (tmp_path / "contexts" / "dim-x.yaml").exists()
+
+    def test_allows_write_when_content_matches(self, tmp_path):
+        """Idempotent re-write is fine — same truth, same bytes."""
+        from bayes.synth_gen import write_context_files
+        truth = {"context_dimensions": [self._dim("dim-x", ["A", "B"])]}
+        write_context_files(truth, str(tmp_path))
+        written2 = write_context_files(truth, str(tmp_path))
+        assert written2 == ["dim-x"]
+
+    def test_overwrites_and_warns_on_content_change(self, tmp_path, capsys):
+        """When a sibling truth changes the shared dim's content,
+        write_context_files must proceed (not abort) so the workflow
+        can continue — but surface a clear warning.
+        """
+        from bayes.synth_gen import write_context_files
+        truth_a = {"context_dimensions": [self._dim("dim-x", ["Google", "Direct"])]}
+        write_context_files(truth_a, str(tmp_path))
+        truth_b = {"context_dimensions": [self._dim("dim-x", ["Baseline (A)", "Treatment B"])]}
+
+        # Must NOT raise
+        written = write_context_files(truth_b, str(tmp_path))
+        assert written == ["dim-x"]
+
+        # File now contains truth_b's content
+        ctx_bytes = (tmp_path / "contexts" / "dim-x.yaml").read_bytes()
+        assert b"Baseline (A)" in ctx_bytes
+        assert b"Google" not in ctx_bytes
+
+        # Warning was emitted
+        out = capsys.readouterr().out
+        assert "WARNING" in out
+        assert "content is changing" in out
+
+    def test_warning_lists_affected_graphs(self, tmp_path, capsys):
+        """The warning must name every graph that had pinned the prior
+        ctx hash via its synth-meta sidecar, so the user knows exactly
+        which graphs need re-bootstrap.
+        """
+        from bayes.synth_gen import write_context_files
+        truth_a = {"context_dimensions": [self._dim("dim-x", ["Google"])]}
+        write_context_files(truth_a, str(tmp_path))
+
+        # Simulate a graph that bootstrapped against truth_a (pinned old sha)
+        graphs_dir = tmp_path / "graphs"
+        graphs_dir.mkdir()
+        old_sha = _sha256((tmp_path / "contexts" / "dim-x.yaml").read_bytes())
+        meta = {"schema_version": 2, "context_file_hashes": {"dim-x": old_sha}}
+        (graphs_dir / "graph-alpha.synth-meta.json").write_text(json.dumps(meta))
+        (graphs_dir / "graph-beta.synth-meta.json").write_text(json.dumps(meta))
+
+        # Sibling truth with different content
+        truth_b = {"context_dimensions": [self._dim("dim-x", ["Changed"])]}
+        write_context_files(truth_b, str(tmp_path))
+
+        out = capsys.readouterr().out
+        assert "graph-alpha" in out
+        assert "graph-beta" in out
+        assert "re-bootstrap" in out.lower()
+
     @requires_db
     def test_needs_enrichment_status(self):
         """Status is 'needs_enrichment' for a real synth graph with DB rows

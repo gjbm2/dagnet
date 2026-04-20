@@ -7,6 +7,12 @@
 # Branch group at Gate: path-a (0.4) + path-b (0.35) = 0.75
 # Google p_mult 1.15: 0.46 + 0.40 = 0.86 (simplex safe)
 
+# SHARED-CONTEXT:
+#   dim 'synth-channel' renders to contexts/synth-channel.yaml
+#     shared with: synth-3way-join-context, synth-abc-context-mixed, synth-abc-context-two-dim, synth-abc-sparse-1, synth-abc-sparse-2, synth-abc-sparse-3, synth-abc-sparse-4, synth-context-independent-pooled, synth-context-solo, synth-context-solo-mixed, synth-context-staggered, synth-context-two-dim, synth-context-two-dim-sparse, synth-diamond-context-mixed, synth-diamond-context-sparse, synth-diamond-context-two-dim, synth-diamond-sparse-1, synth-diamond-sparse-2, synth-diamond-sparse-3, synth-diamond-sparse-4, synth-fanout-context, synth-fanout-context-mixed, synth-join-branch-context, synth-lattice-context, synth-mirror-4step-context, synth-simple-abc-context, synth-skip-context, synth-skip-context-sparse, synth-solo-sparse-1, synth-solo-sparse-2, synth-solo-sparse-3, synth-solo-sparse-4
+# Overwrite model: any of these truths can rewrite the file on bootstrap.
+# Affected graphs are flagged stale and must re-bootstrap before regression.
+# See docs/current/codebase/SYNTH_CONTEXT_SHARING.md for the full contract.
 simulation:
   mean_daily_traffic: 500
   n_days: 100

@@ -30,7 +30,7 @@ Three visibility modes yield different per-edge scalars:
 Key properties of the current funnel:
 - **Scalar, not posterior**: no MC, no draws, no uncertainty anywhere in the chain
 - **Multiplicative per-edge blending**: in f+e mode, each edge is blended independently before the path product. The cumulative product of independent per-edge blends is not a coherent joint estimator of anything — it's a useful summary but carries no valid uncertainty interpretation
-- **Disconnected from the forecast engine**: `compute_forecast_sweep`, `mc_span_cdfs`, IS conditioning — none of these are invoked
+- **Disconnected from the forecast engine**: `compute_forecast_trajectory`, `mc_span_cdfs`, IS conditioning — none of these are invoked
 
 The funnel thus gives a fast point-estimate visualisation, but the numbers do not live in the same coherent statistical framework as the cohort-maturity chart or the conditioned-forecast endpoint. This is the gap Level 2 closes.
 
@@ -46,7 +46,7 @@ Not y/x (edge rate) at each stage. Not y/a (anchor rate). Specifically **y_i / n
 
 This matches user expectation for a funnel chart ("what fraction made it through to stage i?") and gives the conventional monotonically-non-increasing bar sequence (100% → X% → Y% → Z%).
 
-For cohort() mode the anchor is implicitly S₀ (the funnel's start). For window() mode the cohort for stage-0 arrivals is window-anchored at S₀.
+For `cohort()` mode the anchor is implicitly S₀ (the funnel's start). For `window()` mode the Cohort for stage-0 arrivals is window-anchored at S₀.
 
 ### 3.2 Temporal horizon
 
@@ -54,28 +54,33 @@ The default horizon is **asymptotic (τ → ∞)** — "what fraction of funnel 
 
 A finite-horizon extension ("funnel at τ = 7 days") remains possible and is discussed in §8, but the primary design targets τ = ∞.
 
-At τ = ∞, each edge's lognormal CDF saturates to its asymptotic rate `p_edge` (the probability an arriving user eventually converts). The latency/completeness machinery that matters for cohort maturity collapses here: only the per-edge rate posterior drives the stage probability.
+At τ = ∞, each edge's lognormal CDF saturates to its asymptotic rate `p_edge` (the probability an arriving user eventually converts). The latency/completeness machinery that matters for Cohort maturity (the concept, and the `cohort_maturity` analysis type) collapses here: only the per-edge rate posterior drives the stage probability.
 
 ### 3.3 Three regimes
 
 The user-facing visibility mode selects the semantic. Each regime has a precise mathematical definition.
 
-**Important: all three regimes read from fields the BE CF pass has already written to the graph.** See [STATS_SUBSYSTEMS.md](../codebase/STATS_SUBSYSTEMS.md) for a full map of who writes what. The funnel engine does not invoke `compute_forecast_sweep`, `mc_span_cdfs`, or any MC machinery at render time — that work has already been done by the BE CF pass during graph enrichment.
+**All three regimes source their inputs from the BE CF pass's machinery**, but at different integration points in interim vs target state (see §4.5):
+- **e mode**: reads `edge.p.evidence.{n, k}` on the graph (populated by the standard topo-pass evidence pipeline — not CF-specific).
+- **f mode**: reads α/β from the **promoted** `model_vars` source per `resolve_model_params` / `resolveActiveModelVars` — bayesian when its quality gates pass, else analytic_be, else analytic. The funnel does not hardcode a source; it uses whatever the standard promotion hierarchy has selected for the edge.
+- **e+f mode**: needs per-edge query-scoped CF-conditioned `(p_mean, p_sd)`. In the **interim**, the funnel runner makes its own scoped call to `/api/forecast/conditioned`. In the **target** (post doc 54 M1-M6), it reads `edge.p.mean / edge.p.sd` off the graph written by the fetch-pipeline's whole-graph CF pass. Outputs are numerically identical within MC tolerance.
+
+Either way, the funnel engine itself performs no MC beyond numpy Beta sampling + cumprod + quantiles. `compute_forecast_trajectory`, `mc_span_cdfs`, and other forecast-engine internals are NOT invoked by the funnel runner — they live inside `handle_conditioned_forecast` (see [STATS_SUBSYSTEMS.md](../codebase/STATS_SUBSYSTEMS.md) §7 for the entry-point disambiguation).
 
 #### e (evidence only)
 
-**Definition**: for each stage i, aggregate raw observed counts across all cohorts in the query window:
+**Definition**: for each stage i, aggregate raw observed counts across all Cohorts in the query's selected `anchor_day` range:
 ```
 stage_prob_i^e = Σ_c k_{i,c} / Σ_c n_{0,c}
 ```
-where `k_{i,c}` = number of users observed at stage i from cohort c, `n_{0,c}` = number of entrants at S₀ from cohort c, summed over cohorts in the query range.
+where `c` indexes Cohorts (one per `anchor_day`), `k_{i,c}` = number of users observed at stage i from Cohort c, `n_{0,c}` = number of entrants at S₀ from Cohort c, summed over selected Cohorts.
 
 **Properties**:
 - Purely observational. No model. No completeness correction. No lognormal.
-- **Immature cohorts understate `k_i`** (users are still on their journey) — exactly what Amplitude shows. A user in evidence-only mode chose this view deliberately.
-- Accord with Amplitude: a user running the same funnel in Amplitude over the same date range sees the same number, modulo cohort definition differences.
+- **Immature Cohorts understate `k_i`** (users are still on their journey) — exactly what Amplitude shows. A user in evidence-only mode chose this view deliberately.
+- Accord with Amplitude: a user running the same funnel in Amplitude over the same date range sees the same number, modulo Cohort-definition differences.
 
-**Source of values**: `edge.p.evidence.n` and `edge.p.evidence.k` per edge on the graph, aggregated over the query-scoped cohort window. These are populated by the same FE/BE topo pass pipelines that feed the cohort-maturity chart; the query DSL defines the cohort scope.
+**Source of values**: `edge.p.evidence.n` and `edge.p.evidence.k` per edge on the graph, aggregated over the query's selected Cohorts. These are populated by the same FE/BE topo pass pipelines that feed the cohort_maturity chart; the query DSL's `cohort()` or `window()` clause defines which Cohorts are in scope.
 
 **Uncertainty**: binomial confidence interval around the observed ratio. Wilson (or Agresti-Coull) is preferable to Normal-approximation (safe for small counts and rates near 0/1). Numpy-only: the closed-form Wilson formula is pure arithmetic. No MC required.
 
@@ -90,14 +95,15 @@ For draw s ∈ 1..S:
 ```
 
 **Properties**:
-- Per-edge α/β is read from `edge.p.model_vars[source='bayesian']` — the aggregate offline Bayes compiler fit, **not** query-scoped. "Unconditioned" means not conditioned on the current query's specific cohort slice; it is the model's view formed from whatever training corpus the Bayes compiler saw at fit time
-- The path product is the natural asymptotic cumulative reach probability. At τ = ∞ the path CDF is 1 for every edge; only the edge rate matters
-- Bayes per-edge posteriors are fitted independently in Phase 1 (no cross-edge joint structure), so drawing Beta independently per edge reproduces the correct joint distribution over the path
-- MC median across draws → bar height. MC quantiles (5%, 95%) → bands
+- Per-edge α/β is resolved via the standard promotion hierarchy: bayesian when its quality gates pass (ESS, rhat, converged_pct), else analytic_be, else analytic. The funnel reads whichever source is promoted for the edge; it does not hardcode `bayesian`.
+- "Unconditioned" means not conditioned on the current query's specific selected Cohorts via query-time IS. The promoted source itself may or may not be query-scoped: bayesian is aggregate (training corpus), analytic_be / analytic are query-scoped Jeffreys-style posteriors. Either way, no query-time IS is applied in f mode — that's what e+f adds.
+- The path product is the natural asymptotic cumulative reach probability. At τ = ∞ the path CDF is 1 for every edge; only the edge rate matters.
+- Per-edge posteriors are fitted independently (Phase 1 for bayesian; evidence-aggregation-per-edge for analytic), so drawing Beta independently per edge reproduces the correct joint distribution over the path.
+- MC median across draws → bar height. MC quantiles (5%, 95%) → bands.
 
-**Source of values**: `edge.p.model_vars[source='bayesian'].probability.{alpha, beta}` (or `alpha_pred, beta_pred` predictive variants per doc 49). Written offline by the Bayes compiler; not refreshed per query.
+**Source of values**: call `resolve_model_params(edge, temporal_mode)` per edge (existing model_resolver API); use `.alpha_pred / .beta_pred` when present (doc 49 predictive variants) else `.alpha / .beta`.
 
-**Why unconditioned**: the user picked "f" to see what the model predicts on its own, independent of the specific query slice. Useful for what-if reasoning, scenario comparison, and checking whether the current query's cohort behaviour matches the aggregate model.
+**Why unconditioned**: the user picked "f" to see what the promoted model predicts on its own, independent of query-time IS conditioning on selected Cohorts. Useful for what-if reasoning, scenario comparison, and checking whether the current query's Cohort behaviour matches the model.
 
 #### e+f (model conditioned on e)
 
@@ -126,11 +132,11 @@ hi/lo_i = quantile(reach_i^(s), 5% / 95%)
 **Properties**:
 - Conditioning is baked into `edge.p.mean` by the BE CF pass; the funnel reads the scalar and multiplies
 - Per-edge conditioned posteriors remain independent across edges (Phase 1 fit independence carries through the BE CF pass's per-edge IS step)
-- ESS diagnostics from the CF pass are already available on the graph as part of the CF response — the funnel can surface them without re-running IS
+- ESS diagnostics from the CF pass (per-edge effective sample size after IS) are returned in the scoped CF response the runner receives; surface in tooltip for low-ESS warnings
 
 **Why this works without runtime MC**: the BE CF pass is precisely the mechanism that takes the aggregate bayesian prior × query-DSL-scoped evidence and produces per-edge conditioned scalars (via IS on MC draws per edge, topologically sequenced). The funnel is a downstream consumer of those enriched fields. Running MC again inside the funnel engine would duplicate work the BE CF pass has already done.
 
-**Why conditioned**: when a user wants "what does the model think, combined with what this specific cohort did", this is the right quantity. It honours both the graph's Bayesian structure and the cohort-specific observed counts.
+**Why conditioned**: when a user wants "what does the model think, combined with what these specific Cohorts did", this is the right quantity. It honours both the graph's Bayesian structure and the Cohort-specific observed counts.
 
 ### 3.4 Decomposition and the "f as residual" pattern
 
@@ -141,7 +147,7 @@ For e+f mode, the bar is visually **stacked** with two components:
 This matches the cohort-maturity chart's "evidence line + forecast crown" pattern. The user sees solid = "observed fraction" and striated = "forecast addition". Striation signals "this height represents model-predicted users who haven't been observed to reach stage i yet".
 
 Invariants:
-- `e ≤ e+f` ALWAYS. If cohorts are mature enough that `e ≈ e+f`, the striation is invisible — correct (nothing to forecast). If cohorts are immature, striation is visible — correct (model predicts more users will arrive).
+- `e ≤ e+f` ALWAYS. If Cohorts are mature enough that `e ≈ e+f`, the striation is invisible — correct (nothing to forecast). If Cohorts are immature, striation is visible — correct (model predicts more users will arrive).
 - The decomposition is **residual**, not additive: `e+f` is the path product of CF-conditioned per-edge means, `e` is the observed `k/n`; `f = (e+f) − e` is the display residual, not a separately-computed quantity.
 - This means `f` displayed in `e+f` view ≠ `f` displayed in `f` view:
   - `f` view (striated-only bar): the raw unconditioned model's stage probability
@@ -175,16 +181,18 @@ The BE CF pass (`/api/forecast/conditioned` → `handle_conditioned_forecast`; s
 | `edge.p.model_vars[source='bayesian'].probability.{alpha, beta, alpha_pred, beta_pred}` | Aggregate Bayes posterior (offline) | Bayes compiler |
 | `edge.p.model_vars[source='analytic_be'].*` | Query-scoped analytic scalars | BE topo pass |
 
-The funnel engine is a consumer. It does not call `compute_forecast_sweep`, `mc_span_cdfs`, or any span-kernel machinery. At τ = ∞, latency CDFs saturate to 1 — only per-edge rate matters. The rate has already been produced by an upstream pass and persisted on the graph.
+The funnel engine is a consumer. It does not call `compute_forecast_trajectory`, `mc_span_cdfs`, or any span-kernel machinery. At τ = ∞, latency CDFs saturate to 1 — only per-edge rate matters.
+
+In the **interim** implementation (§4.5), the funnel receives these CF-produced values via its own scoped CF response rather than reading them off the graph, but the values themselves are identical to what the fetch-pipeline CF pass writes to the graph. Post doc 54 cut-over the funnel reads the same values directly from the enriched graph.
 
 ### 4.2 Procedure
 
-The funnel v2 runner makes **one scoped call to the existing BE CF pass** (`handle_conditioned_forecast` / `/api/forecast/conditioned`), asking it to process the funnel path's edges. The BE CF pass is already topologically-sequenced, already handles upstream-carrier caching, already runs `compute_forecast_sweep` per edge with proper span-kernel coordination. The funnel does not reinvent any of that — it requests the scoped enrichment, then assembles bars from the response.
+The upgraded funnel runner makes **one scoped call to the existing BE CF pass** (`handle_conditioned_forecast` / `/api/forecast/conditioned`), asking it to process the funnel path's edges. The BE CF pass is already topologically-sequenced, already handles upstream-carrier caching, already runs `compute_forecast_trajectory` per edge with proper span-kernel coordination. The funnel does not reinvent any of that — it requests the scoped enrichment, then assembles bars from the response.
 
 ```
 INPUT:
   graph, funnel path S_0 → S_1 → ... → S_N,
-  cohort_window (from query DSL),
+  selected_anchor_day_range (from query DSL's cohort() or window() clause),
   visibility_mode ∈ {e, f, e+f}
 
 STEP 1 — Scoped BE CF call (only if mode = 'e+f'):
@@ -193,7 +201,7 @@ STEP 1 — Scoped BE CF call (only if mode = 'e+f'):
       scenarios: [{
           scenario_id, graph,
           analytics_dsl: "from(S_0).to(S_N)",         # funnel path, single-path mode
-          effective_query_dsl: "<cohort window>",
+          effective_query_dsl: "<temporal clause from query DSL>",
       }],
   }
 
@@ -208,19 +216,22 @@ STEP 2 — Assemble bar heights per regime (numpy only):
 
   e mode:
     # Reads edge.p.evidence counts already on the graph
-    n_0 = Σ_cohort edges[0].evidence.n_cohort
+    # Σ_c denotes sum over selected Cohorts c (one per anchor_day in range)
+    n_0 = Σ_c edges[0].evidence.n_c
     for i in 1..N:
-        k_i  = Σ_cohort edges[i-1].evidence.k_cohort
+        k_i  = Σ_c edges[i-1].evidence.k_c
         bar_e[i] = k_i / n_0
         lo_e[i], hi_e[i] = wilson_ci(k_i, n_0, alpha=0.10)
     bar_e[0] = 1.0  # convention
 
-  f mode (unconditioned Bayes posterior):
-    # Reads bayesian model_vars already on the graph
+  f mode (unconditioned promoted-model posterior):
+    # Reads per-edge α/β via resolve_model_params — promoted source
+    # (bayesian / analytic_be / analytic depending on promotion)
     p_draws = (N, S) matrix
     for j in 0..N-1:
-        α_j = edges[j].model_vars['bayesian'].probability.alpha_pred
-        β_j = edges[j].model_vars['bayesian'].probability.beta_pred
+        resolved_j = resolve_model_params(edges[j], temporal_mode)
+        α_j = resolved_j.alpha_pred or resolved_j.alpha
+        β_j = resolved_j.beta_pred  or resolved_j.beta
         p_draws[j, :] = rng.beta(α_j, β_j, size=S)
     reach = np.cumprod(p_draws, axis=0)
     reach = prepend stage 0 = 1.0
@@ -261,9 +272,9 @@ The funnel engine is ~60-80 lines of numpy plus one HTTP call to `/api/forecast/
 - `/api/forecast/conditioned` → `handle_conditioned_forecast` ([api_handlers.py:2506](../../graph-editor/lib/api_handlers.py#L2506)) — scoped to the funnel path via `analytics_dsl`. This is the CORRECT entry point for analysis runners needing query-scoped, evidence-conditioned per-edge scalars.
 
 **What the funnel MUST NOT call directly**:
-- `compute_forecast_sweep` ([forecast_state.py:1040](../../graph-editor/lib/runner/forecast_state.py#L1040)) — inner population-model kernel. Called by `handle_conditioned_forecast`. Calling it directly from an analysis runner bypasses the topo sequencing, upstream carrier caching, and span kernel composition that the BE CF pass coordinates.
-- `compute_conditioned_forecast` ([forecast_state.py:458](../../graph-editor/lib/runner/forecast_state.py#L458)) — narrow per-edge IS helper, used by surprise gauge only. Not the right entry point for new analyses.
-- `mc_span_cdfs` / `mc_span_cdfs_for_source` ([span_kernel.py](../../graph-editor/lib/runner/span_kernel.py)) — span-kernel primitives consumed by `compute_forecast_sweep`. Not analysis-facing.
+- `compute_forecast_trajectory` ([forecast_state.py:1040](../../graph-editor/lib/runner/forecast_state.py#L1040)) — inner population-model kernel. Called by `handle_conditioned_forecast`. Calling it directly from an analysis runner bypasses the topo sequencing, upstream carrier caching, and span kernel composition that the BE CF pass coordinates.
+- `compute_forecast_summary` ([forecast_state.py:458](../../graph-editor/lib/runner/forecast_state.py#L458)) — narrow per-edge IS helper, used by surprise gauge only. Not the right entry point for new analyses.
+- `mc_span_cdfs` / `mc_span_cdfs_for_source` ([span_kernel.py](../../graph-editor/lib/runner/span_kernel.py)) — span-kernel primitives consumed by `compute_forecast_trajectory`. Not analysis-facing.
 
 **Numpy primitives used**:
 - Beta sampling: `rng.beta(alpha, beta, size=S)`
@@ -273,19 +284,19 @@ The funnel engine is ~60-80 lines of numpy plus one HTTP call to `/api/forecast/
 
 ### 4.4 Evidence aggregation
 
-Raw counts for the e regime are already on the graph per edge (`edge.p.evidence.{n, k}`), aggregated over the query-scoped cohort window by the same pipeline that feeds cohort_maturity. The funnel sums over edges in the path. No new aggregation.
+Raw counts for the e regime are already on the graph per edge (`edge.p.evidence.{n, k}`), aggregated over the query's selected Cohorts by the same pipeline that feeds cohort_maturity. The funnel sums over edges in the path. No new aggregation.
 
 ### 4.5 Dependency on the BE CF pass — interim vs target
 
 The e+f mode requires per-edge CF-conditioned scalars. Two ways to source them:
 
-**Interim pattern (this design's M1 implementation)**: funnel v2 runner makes a scoped CF call to `/api/forecast/conditioned` with `analytics_dsl: "from(S_0).to(S_N)"`. Self-contained — correct regardless of the fetch-pipeline CF race (which runs its own CF pass over the whole graph). The scoped call may run in parallel with the whole-graph pass, but the funnel does not wait for or consume the whole-graph pass's output.
+**Interim pattern (this design's M1 implementation)**: the funnel runner makes a scoped CF call to `/api/forecast/conditioned` with `analytics_dsl: "from(S_0).to(S_N)"`. Self-contained — correct regardless of the fetch-pipeline CF race (which runs its own CF pass over the whole graph). The scoped call may run in parallel with the whole-graph pass, but the funnel does not wait for or consume the whole-graph pass's output.
 
 Pays a compute cost — the scoped CF call duplicates work the fetch-pipeline CF pass does on the same edges. Not wasteful in absolute terms: the funnel's scoped call is cheaper than the whole-graph pass it duplicates (N edges vs all edges). Wasteful only *relative to* reading the whole-graph pass's cached results.
 
-**Target state (doc 54 M1-M6 complete)**: funnel v2 reads CF-written fields directly from the enriched graph (`edge.p.mean, edge.p.sd`) and subscribes to the `enrichmentStatusStore` for readiness signalling. The scoped CF call is retired. Output numerically identical within MC tolerance; contract test at cut-over gate verifies this.
+**Target state (doc 54 M1-M6 complete)**: the funnel runner reads CF-written fields directly from the enriched graph (`edge.p.mean, edge.p.sd`) and subscribes to the `enrichmentStatusStore` for readiness signalling. The scoped CF call is retired. Output numerically identical within MC tolerance; contract test at cut-over gate verifies this.
 
-**Why this phasing**: doc 54 (CF readiness protocol) is the right long-term architecture but requires FE-wide plumbing. Shipping funnel v2 correctness first, then retrofitting to the shared protocol, is cleaner than holding the funnel back. Doc 52 and doc 54 together spell out the two-step path.
+**Why this phasing**: doc 54 (CF readiness protocol) is the right long-term architecture but requires FE-wide plumbing. Shipping the funnel upgrade's correctness first, then retrofitting to the shared protocol, is cleaner than holding the funnel back. Doc 52 and doc 54 together spell out the two-step path.
 
 ## 5. Visual design
 
@@ -343,39 +354,41 @@ Hover tooltips per bar should show:
 
 ### 5.4 Interaction with existing chart types
 
-- `funnel` chart type (`run_path` output) continues to exist with current behaviour for backward compatibility, but its analysis output gains hi/lo fields
-- A new analysis type (or an extension of the existing one) drives the Level 2 computation
-- FE chart renderer reads hi/lo fields when present, falls back to plain bars when absent
+- Existing `conversion_funnel` analysis type is upgraded in place. `run_conversion_funnel` is replaced with the Level 2 implementation — the output schema gains hi/lo, striation-component, and per-regime fields
+- Other path-family runners (`run_path`, `run_path_to_end`, `run_path_through`, `run_end_comparison`, `run_branch_comparison`) are unchanged; they continue to emit scalar path products and remain outside this design's scope
+- FE chart renderer for the funnel is extended to consume the new fields; renderers for the other path-family charts are untouched
 
 ## 6. Cohort aggregation across query range
 
 ### 6.1 Scope of evidence
 
-The funnel query defines a cohort window (either `cohort(-90d:)` anchored at S_0, or `window(-30d:)` edge-local). Evidence aggregation follows the same pattern as cohort_maturity:
+The funnel query defines the Cohort selection via either `cohort(-90d:)` anchored at S_0 or `window(-30d:)` edge-local. Evidence aggregation follows the same pattern as cohort_maturity:
 
-- **Cohort mode** (query uses `cohort()`): cohort = anchor-day entrants at S_0. Aggregate `k_{j,c}` at each edge j across cohort-days c in the query range.
-- **Window mode** (query uses `window()`): cohort = from-node-arrival-day. Each edge aggregates its own window-anchored cohort.
+- **Cohort mode** (query uses `cohort()`): the Cohort at each edge is the set of users who entered S_0 on the given `anchor_day`. Aggregate `k_{j,c}` at each edge j across Cohorts c (indexed by `anchor_day`) in the selected range.
+- **Window mode** (query uses `window()`): the Cohort at each edge is the set of users who arrived at that edge's `from_node` on the given `anchor_day`. Each edge aggregates its own window-anchored Cohorts.
 
-For funnels specifically, cohort mode is the natural default (funnel = cohort-aware by definition). Window mode remains supported for consistency.
+For funnels specifically, Cohort mode is the natural default (funnel = anchor-anchored by definition). Window mode remains supported for consistency.
 
 ### 6.2 Maturity handling
 
-Per-edge per-cohort observations are collected at the latest `retrieved_at` in the query range, giving each cohort its most up-to-date known counts. **Maturity is not corrected for in e mode** — this is the point (e mode shows raw, possibly immature counts).
+Per-edge per-Cohort observations are collected at the latest `retrieved_at` in the selected `anchor_day` range, giving each Cohort its most up-to-date known counts. **Maturity is not corrected for in e mode** — this is the point (e mode shows raw, possibly immature counts).
 
-In e+f mode, IS conditioning on these counts automatically handles maturity: immature cohorts contribute less information (their Binomial likelihoods are dominated by high-uncertainty tails). The model effectively weights them less in the posterior update.
+In e+f mode, maturity is handled inside the BE CF pass, not by the funnel. The CF pass's per-edge IS conditioning weights draws by each Cohort's Binomial likelihood given its observed counts at its observed age; immature Cohorts contribute less information because their likelihoods are dominated by high-uncertainty tails. The funnel consumes the resulting conditioned `(p_mean, p_sd)` scalars; it does no maturity logic of its own.
 
-No explicit "mature vs immature" cohort flagging needed — IS does it implicitly via the likelihood structure.
+No explicit "mature vs immature" Cohort flagging needed in the funnel — the upstream CF pass's IS does it implicitly via the likelihood structure.
 
 ## 7. Multi-scenario
 
 Scenarios compose independently. Each scenario has:
-- Its own overridden graph (what-if applied)
+- Its own overridden graph (what-if applied) — passed into the analysis per-scenario
 - Its own per-edge posterior (same underlying Bayes fit; what-if overrides modify means/SDs)
 - Its own MC draws (same RNG seed across scenarios for consistent comparison, or different seeds for independence — design choice)
 
 Produce one bar set per scenario per stage. Side-by-side grouped bars in the chart (scenarios grouped within each stage cluster).
 
-Bridge decomposition between scenarios (for bridge charts) uses the delta between scenario bars plus the joint MC decomposition of contributing factors. That's the separate bridge chart's territory; not in scope for funnel design but the engine output should carry enough information for a bridge chart to consume it.
+**Interim pattern compute cost**: one scoped CF call per scenario (or a single `/api/forecast/conditioned` request carrying all scenarios — the endpoint already supports `scenarios[]` in its request payload, see [api_handlers.py:2529](../../graph-editor/lib/api_handlers.py#L2529)). For K scenarios × N-edge paths the inner engine runs K·N edge sweeps. Mitigated fully at doc 54 cut-over: each scenario's enriched graph is already passed into the analysis, and post-cut-over the fetch pipeline's whole-graph CF pass per scenario has already populated `edge.p.mean` on each scenario graph — the funnel reads the right scalar off each scenario's graph, no CF calls.
+
+Bridge decomposition between scenarios (for bridge charts) uses the delta between scenario bars plus the joint MC decomposition of contributing factors. Deferred — we're doing funnels first; the engine output carries enough information for a bridge chart to consume when we design it.
 
 ## 8. Open questions
 
@@ -383,7 +396,7 @@ Bridge decomposition between scenarios (for bridge charts) uses the delta betwee
 
 **Question**: what does a "7-day funnel" look like in Level 2?
 
-**Natural answer**: can't stay in the simple per-edge-read-from-graph pipeline. At finite τ each stage's cumulative reach becomes `Π_{j ≤ i} p_j × CDF_j(τ_j)`, which requires the full latency composition. That's exactly what `compute_forecast_sweep` / `mc_span_cdfs` do. A finite-horizon funnel would need the BE CF pass (or a specialised variant) to produce per-edge `p × CDF(τ)` scalars at the target τ, rather than just the saturated `p`.
+**Natural answer**: can't stay in the simple per-edge-read-from-graph pipeline. At finite τ each stage's cumulative reach becomes `Π_{j ≤ i} p_j × CDF_j(τ_j)`, which requires the full latency composition. That's exactly what `compute_forecast_trajectory` / `mc_span_cdfs` do. A finite-horizon funnel would need the BE CF pass (or a specialised variant) to produce per-edge `p × CDF(τ)` scalars at the target τ, rather than just the saturated `p`.
 
 Defer this until the asymptotic funnel is built; it's a different computation path, not a simple extension.
 
@@ -401,13 +414,15 @@ Defer this until the asymptotic funnel is built; it's a different computation pa
 
 **Answer for now**: No. Amplitude parity in e mode suffices (same raw counts over the same date range). If a user specifically wants "only count conversions within 7 days", they query `cohort(-90d:).asat(window+7d)` or similar — the query DSL already supports time-window constraints.
 
-### 8.4 What to do when the BE CF pass fails or hasn't run
+### 8.4 What happens while the scoped CF call is in flight or fails
 
-**Question**: e+f depends on the BE CF pass having populated `edge.p.mean` and `edge.p.sd` on each edge. If CF is still pending (slow path past the 500ms deadline) or has failed, what does the user see?
+**Question**: the funnel's scoped CF call for e+f mode can itself take 500ms–2s. What does the user see during that time? What if it fails?
 
-**Answer**: §4.5 promotion fallback. The funnel reads `edge.p.mean` as promoted by `modelVarsResolution.ts` — if CF hasn't landed, promotion falls back to analytic_be (query-scoped but analytic only, not IS-updated) or analytic (FE topo pass). The funnel engine is unaware of the source; it just reads the promoted scalar. This matches the existing funnel pipeline's behaviour (today's scalar funnel also reads `edge.p.mean`, getting whichever source promotion has selected).
+**Answer (interim pattern)**: the analysis follows the existing standard loading contract — the `useCanvasAnalysisCompute` hook's `{loading, waitingForDeps, result, error}` state, same as every other analysis type. Chart renders its spinner/pending state while the runner's scoped CF call is in flight. On success, the analysis result populates normally. On CF failure, the analysis reports error state like any other failed analysis — no silent fallback to approximate values.
 
-Optional: surface a diagnostic badge when the promoted source is not `bayesian-conditioned` (i.e. CF hasn't run or is pending), indicating the e+f bar is an approximation rather than the full conditioned posterior.
+e and f mode are unaffected: they read graph fields that are already populated by the standard fetch pipeline's topo passes, so they resolve without the scoped CF round-trip.
+
+**Answer (target, post doc 54 cut-over)**: the funnel reads CF-written fields directly from the enriched graph and subscribes to `enrichmentStatusStore`. If CF is pending (fetch-pipeline slow path), the analysis declares `cf_dependency: preferred` and renders approximate-then-upgrades per doc 54's protocol — promotion fallback to analytic_be is the approximation, with a badge, and re-renders definitively when CF lands. This is doc 54's job, not the funnel's; the funnel just declares its dependency and reads whatever `edge.p.mean` promotion returns.
 
 ### 8.5 Correlation between stages
 
@@ -421,9 +436,9 @@ Optional: surface a diagnostic badge when the promoted source is not `bayesian-c
 
 1. **Monotonicity**: `bar_i+1 ≤ bar_i` for every stage and every regime (stages can only lose users). For e mode this is observational; for f/e+f it requires `p_edge ≤ 1` (true by construction for Beta draws clipped to (0, 1)).
 
-2. **e ≤ e+f at every stage**: the observed fraction can't exceed the conditioned model's prediction. If cohorts are fully mature, `e = e+f` to within MC noise. If immature, `e < e+f`.
+2. **e ≤ e+f at every stage**: the observed fraction can't exceed the conditioned model's prediction. If Cohorts are fully mature, `e = e+f` to within MC noise. If immature, `e < e+f`.
 
-3. **e+f band width ≤ f band width (at same percentile) in most cases**: the BE CF pass's IS conditioning narrows the per-edge posterior by reweighting toward draws consistent with scoped evidence, so per-edge `p.sd` is typically smaller than the aggregate bayesian posterior SD. This propagates through to tighter bands at each stage. Edge cases exist when evidence is very informative in one direction (e.g. a "surprising" cohort); worth checking empirically.
+3. **e+f band width ≤ f band width (at same percentile) in most cases**: the BE CF pass's IS conditioning narrows the per-edge posterior by reweighting toward draws consistent with scoped evidence, so per-edge `p.sd` is typically smaller than the aggregate bayesian posterior SD. This propagates through to tighter bands at each stage. Edge cases exist when evidence is very informative in one direction (e.g. a "surprising" Cohort); worth checking empirically.
 
 4. **f bar at stage 0 = 1.0**: path from S_0 to S_0 is trivially 100%.
 
@@ -448,10 +463,11 @@ Add a funnel-equivalent of `cohort-maturity-model-parity-test.sh`:
 - Run funnel on S_0 → S_1, get stage_1 bar height
 - Assert match within 0.5% (MC noise acceptable)
 
-**Test F4**: unconditioned f matches path product of bayesian posterior means
+**Test F4**: unconditioned f matches path product of promoted-source posterior means
 - Run f regime, get each stage's median
-- Compute `Π (α_j / (α_j + β_j))` from `model_vars[source='bayesian']` per edge
+- Compute `Π (α_j / (α_j + β_j))` from `resolve_model_params(edges[j])` per edge
 - Assert median ≈ path product within 1% (MC noise from Beta draws)
+- Test should cover both bayesian-promoted and analytic_be-promoted graphs (e.g. synth-mirror-4step with Bayes gates passing and failing)
 
 **Test F5**: e+f bar matches path product of CF-written conditioned means
 - Run e+f regime, get each stage's bar height
@@ -459,7 +475,7 @@ Add a funnel-equivalent of `cohort-maturity-model-parity-test.sh`:
 - Assert match to float precision (no sampling — bar is deterministic path product)
 
 **Test F6**: e bar uses raw counts
-- Create synth cohort with known k_i, n_0
+- Create a synth Cohort with known k_i, n_0
 - Assert e regime's stage_i bar = k_i / n_0 to float precision
 - Assert Wilson CI matches a hand-computed reference (known closed-form values for small k, n)
 
@@ -469,9 +485,9 @@ Proposed milestones, each independently testable:
 
 **M1 — Engine core (interim pattern)**
 - For e+f mode: runner invokes `/api/forecast/conditioned` scoped to the funnel path, gets per-edge `{p_mean, p_sd}`, moment-matches Beta, draws S samples, cumprod, quantiles
-- For f mode: runner reads `model_vars[source='bayesian'].probability.{alpha_pred, beta_pred}` per edge, draws Beta, cumprod, quantiles
-- For e mode: runner reads `edge.p.evidence.{n, k}` per edge, sums across cohorts, Wilson CI
-- Analysis type `conversion_funnel_v2` added to `analysis_types.yaml`
+- For f mode: runner calls `resolve_model_params(edge, temporal_mode)` per edge to get the promoted source's α/β (prefers `alpha_pred, beta_pred`), draws Beta, cumprod, quantiles
+- For e mode: runner reads `edge.p.evidence.{n, k}` per edge, sums across selected Cohorts, Wilson CI
+- Existing `conversion_funnel` analysis type upgraded — `run_conversion_funnel` in `runners.py` replaced with the new implementation. No new analysis type; no side-by-side legacy runner. Project rule (CLAUDE.md §"Code Surface Area"): no backward-compat shims.
 - Unit tests: verify `reach_i = Π_{j≤i} p_j` per draw; verify stage 0 = 1.0; verify Wilson CI closed form; verify bar_ef = deterministic path product of p_mean
 
 **M2 — Contract tests**
@@ -492,9 +508,8 @@ Proposed milestones, each independently testable:
 
 **M5 — Documentation and handover**
 - User-facing doc update (`graph-editor/public/docs/` funnel explanation)
-- Codebase doc update (`ANALYSIS_TYPES_CATALOGUE.md` entry for `conversion_funnel_v2`)
-- CHANGELOG entry
-- Retire or archive the scalar-blend f+e path? Depends on migration appetite — can leave side-by-side initially
+- Codebase doc update (`ANALYSIS_TYPES_CATALOGUE.md` entry for upgraded `conversion_funnel`)
+- CHANGELOG entry noting the behavioural change (scalar output → bars with hi/lo)
 
 **M6 (deferred to doc 54 cut-over) — Retrofit to shared enrichment store**
 - Replace scoped CF call with read-from-graph + `enrichmentStatusStore` subscription
@@ -506,10 +521,10 @@ Dependencies outside this plan: none that block M1-M5. Interacts lightly with B3
 
 Flagged for discussion before implementation starts:
 
-- **"Amplitude parity" vs "always correct for maturity"**: the e regime deliberately does NOT correct for cohort maturity (to match Amplitude), but this means a user reading the e bar may mistake an under-mature cohort's low value for genuinely low conversion. Should we add a subtle "cohort maturity indicator" to the e view? Or leave it purely raw and trust the user to switch to e+f for mature predictions?
+- **"Amplitude parity" vs "always correct for maturity"**: the e regime deliberately does NOT correct for Cohort maturity (to match Amplitude), but this means a user reading the e bar may mistake an under-mature Cohort's low value for genuinely low conversion. Options: add a subtle "Cohort maturity indicator" to the e view; or leave it purely raw and trust the user to switch to e+f for mature predictions.
 
-- **Bridge charts as a derived view**: the engine output is rich enough to drive bridge decomposition (per-stage contribution to scenario deltas). Should we spec the bridge design alongside, or defer entirely? Arguably the semantic clarity from doing funnel properly should let bridges fall out naturally.
+- **Overlap with cohort_maturity analysis type**: for a single-edge funnel (one stage), funnel and cohort_maturity are essentially the same analysis at different visualisations. Keep distinct (cohort_maturity = temporal view of one edge; funnel = stage view of a path), sharing the CF pass as the underlying data source.
 
-- **Overlap with cohort-maturity**: for a single-edge funnel (one stage), funnel and cohort-maturity are essentially the same analysis at different visualisations. Should we unify? Or keep the distinction (cohort-maturity = temporal view of one edge; funnel = stage view of a path)? I lean toward keeping distinct but sharing engine.
+- **Visual smoothness of striation when Cohorts are uneven**: where some funnel edges have much tighter CF posteriors than others (more mature Cohorts, more evidence), the striation residual per stage may visibly jitter. Worth empirical testing on real graphs.
 
-- **What the "f" residual looks like when IS weights are extreme**: if IS down-weights most draws heavily, the weighted median can jump discontinuously near stage boundaries, producing visually jagged striation. Worth empirical testing on noisy graphs.
+Bridge charts are deferred — funnels first. The engine output carries enough information for a bridge chart to consume when we get to it.

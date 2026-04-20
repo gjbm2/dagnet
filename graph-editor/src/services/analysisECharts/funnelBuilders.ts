@@ -84,6 +84,20 @@ export type FunnelSeriesPoint = {
   forecastMean: number | null;
   pMean: number | null;
   completeness: number | null;
+  /**
+   * doc 52 Level 2 hi/lo bands: 5%/95% MC quantiles (or Wilson CI in e mode).
+   * Stage 0 is null by convention.
+   */
+  probabilityLo: number | null;
+  probabilityHi: number | null;
+  /**
+   * doc 52 Level 2 e+f striation components (stage-by-stage):
+   * - barHeightE: solid evidence portion
+   * - barHeightFResidual: striated forecast residual = (e+f) − e
+   * Null in non-e+f modes.
+   */
+  barHeightE: number | null;
+  barHeightFResidual: number | null;
 };
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -114,6 +128,10 @@ export function extractFunnelSeriesPoints(result: AnalysisResult, args: FunnelCh
       forecastMean: typeof row?.forecast_mean === 'number' ? row.forecast_mean : null,
       pMean: typeof row?.p_mean === 'number' ? row.p_mean : null,
       completeness: typeof row?.completeness === 'number' ? row.completeness : null,
+      probabilityLo: typeof row?.probability_lo === 'number' ? row.probability_lo : null,
+      probabilityHi: typeof row?.probability_hi === 'number' ? row.probability_hi : null,
+      barHeightE: typeof row?.bar_height_e === 'number' ? row.bar_height_e : null,
+      barHeightFResidual: typeof row?.bar_height_f_residual === 'number' ? row.bar_height_f_residual : null,
     });
   }
 
@@ -284,6 +302,10 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
           forecastMean: null,
           pMean: null,
           completeness: null,
+          probabilityLo: null,
+          probabilityHi: null,
+          barHeightE: null,
+          barHeightFResidual: null,
         },
       };
     });
@@ -314,6 +336,10 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
           forecastMean: null,
           pMean: null,
           completeness: null,
+          probabilityLo: null,
+          probabilityHi: null,
+          barHeightE: null,
+          barHeightFResidual: null,
         },
         __fe: {
           total: total01,
@@ -351,6 +377,10 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
           forecastMean: null,
           pMean: null,
           completeness: null,
+          probabilityLo: null,
+          probabilityHi: null,
+          barHeightE: null,
+          barHeightFResidual: null,
         },
       };
     });
@@ -431,6 +461,37 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
     ) || null;
   };
 
+  // doc 52 §5.1 — hi/lo whiskers. Build a markLine config from the
+  // probability_lo / probability_hi fields when present. We anchor on the
+  // category x-position; for grouped multi-scenario bars the line falls on
+  // the category centre rather than per-scenario sub-bar centre, which is
+  // an acceptable v1 (multi-scenario whisker positioning is a follow-up).
+  const buildWhiskerMarkLine = (points: FunnelSeriesPoint[]) => {
+    const segments: any[] = [];
+    points.forEach((pt, idx) => {
+      if (typeof pt.probabilityLo !== 'number' || typeof pt.probabilityHi !== 'number') return;
+      if (!Number.isFinite(pt.probabilityLo) || !Number.isFinite(pt.probabilityHi)) return;
+      // Vertical line from lo → hi at category idx
+      segments.push([
+        { coord: [idx, pt.probabilityLo], symbol: 'none' },
+        { coord: [idx, pt.probabilityHi], symbol: 'none' },
+      ]);
+    });
+    if (segments.length === 0) return undefined;
+    return {
+      silent: true,
+      symbol: ['none', 'none'],
+      label: { show: false },
+      lineStyle: {
+        color: echartsThemeColours().textSecondary,
+        width: 1.2,
+        opacity: 0.85,
+        type: 'solid',
+      },
+      data: segments,
+    };
+  };
+
   const series: any[] = [];
   for (const scenarioId of scenarioIds) {
     const baseSeriesName = getScenarioTitleWithBasis(result, scenarioId);
@@ -447,6 +508,8 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
 
     if (shouldShowFEStack) {
       const fePoints = makeStackedFEData(scenarioId);
+      const stagePoints = extractFunnelSeriesPoints(result, { scenarioId }) || [];
+      const whisker = buildWhiskerMarkLine(stagePoints);
 
       // Evidence segment (lower stack).
       series.push({
@@ -479,6 +542,7 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
           fontSize: 7,
           color: echartsThemeColours().text,
         },
+        markLine: whisker,
         data: fePoints.map(p => ({
           value: p.__fe?.forecastMinusEvidence ?? 0,
           __raw: p.__raw,
@@ -594,6 +658,8 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
     }
 
     // Default: a single bar series per scenario (no groups, no F+E stacking).
+    const stagePointsDefault = extractFunnelSeriesPoints(result, { scenarioId }) || [];
+    const whiskerDefault = !useStepChange ? buildWhiskerMarkLine(stagePointsDefault) : undefined;
     series.push({
       name: baseSeriesName,
       ...baseSeriesConfig,
@@ -614,6 +680,7 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
         fontSize: 7,
         color: '#374151',
       },
+      markLine: whiskerDefault,
       data: useStepChange ? makeSeriesDataWithStepChange(scenarioId) : makeSeriesData(scenarioId),
     });
   }
@@ -776,6 +843,9 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
           if (raw?.dropoff !== null && raw?.dropoff !== undefined) lines.push(`<div><span style="opacity:0.75">Dropoff:</span> ${fmtPct(raw.dropoff)}</div>`);
           if (raw?.n !== null && raw?.n !== undefined) lines.push(`<div><span style="opacity:0.75">n:</span> ${fmtNum(raw.n)}</div>`);
           if (raw?.completeness !== null && raw?.completeness !== undefined) lines.push(`<div><span style="opacity:0.75">Completeness:</span> ${fmtPct(raw.completeness)}</div>`);
+          if (typeof raw?.probabilityLo === 'number' && typeof raw?.probabilityHi === 'number') {
+            lines.push(`<div><span style="opacity:0.75">90% band:</span> ${fmtPct(raw.probabilityLo)} – ${fmtPct(raw.probabilityHi)}</div>`);
+          }
         }
         lines.push(`</div>`);
         return lines.join('');

@@ -411,10 +411,18 @@ export function buildDailyConversionsEChartsOption(
           const d = sortedDates[di];
           const p = pointsByDate.get(d);
           const rate = alignedERate[di]?.[1] ?? null;
-          // Use raw row completeness to determine epoch
+          // Use raw row completeness to determine epoch. If no raw row exists
+          // for this date (i.e. date is outside the scenario's data range),
+          // drop the point from both epochs so smoothing tails don't leak
+          // past the scenario's scope as phantom Epoch A markers.
           const rawRow = filteredRows.find((r: any) =>
             String(r?.date) === d && String(r?.[seriesKey]) === key);
-          const c = rawRow?.completeness ?? 1;
+          if (!rawRow) {
+            epochARate.push([d, null]);
+            epochBRate.push([d, null]);
+            continue;
+          }
+          const c = rawRow.completeness ?? 1;
           if (c >= 0.95) {
             epochARate.push([d, rate]);
             epochBRate.push([d, null]);

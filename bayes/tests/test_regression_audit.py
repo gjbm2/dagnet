@@ -377,6 +377,69 @@ class TestAssertRecoveryContracts:
             for m in msgs
         )
 
+    def test_empty_slice_skipped_not_flagged_missing(self):
+        """Declared slices that the sparsity model left at zero rows are
+        a legitimate no-data outcome — real-world slices can have no
+        observations. Recovery must skip them rather than raise
+        missing_slice (the posterior is absent because the data is
+        absent, not because the pipeline broke).
+        """
+        parsed = _base_parsed()
+        parsed["edges"]["simple-a-to-b"] = {
+            "p": _recovered_param(0.55),
+            "mu": _recovered_param(2.2),
+            "sigma": _recovered_param(0.45),
+            "onset": _recovered_param(1.5),
+        }
+        # Only google slice recovered; email expected but empty (no data)
+        parsed["slices"]["context(channel:google) :: simple-a-to-b"] = {
+            "p": _recovered_param(0.61),
+            "mu": _recovered_param(2.3),
+            "sigma": _recovered_param(0.50),
+            "onset": _recovered_param(1.6),
+        }
+        truth = {
+            "edges": {"simple-a-to-b": _truth_edge()},
+            "context_dimensions": [
+                {
+                    "id": "channel",
+                    "values": [
+                        {"id": "google", "edges": {"simple-a-to-b": {"p_mult": 1.1}}},
+                        {"id": "email",  "edges": {"simple-a-to-b": {"p_mult": 0.9}}},
+                    ],
+                }
+            ],
+        }
+
+        # Meta declares email slices as empty — legitimate zero-row outcome
+        empty_slices = [
+            {"edge_id": "uuid-simple",
+             "param_id": "simple-a-to-b",
+             "slice_key": "context(channel:email).window()"},
+            {"edge_id": "uuid-simple",
+             "param_id": "simple-a-to-b",
+             "slice_key": "context(channel:email).cohort()"},
+        ]
+
+        result = assert_recovery("synth-test", parsed, truth,
+                                 empty_slices=empty_slices)
+
+        # Must NOT flag email slice as missing
+        msgs = [f.get("message", "") if isinstance(f, dict) else f
+                for f in result["failures"]]
+        assert not any(
+            "context(channel:email)" in m and "missing" in m.lower()
+            for m in msgs
+        ), f"Should not flag empty slice as missing: {msgs}"
+
+        # But SHOULD surface the empty slice as an audit warning
+        warn_msgs = [w.get("message", "") if isinstance(w, dict) else w
+                     for w in result.get("warnings", [])]
+        assert any(
+            "zero emitted rows" in m and "context(channel:email)" in m
+            for m in warn_msgs
+        ), f"Expected audit warning listing empty slice: {warn_msgs}"
+
     def test_missing_slice_params_fail(self):
         parsed = _base_parsed()
         parsed["edges"]["simple-a-to-b"] = {

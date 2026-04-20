@@ -501,7 +501,7 @@ def mc_span_cdfs(
     SUBSYSTEM GUIDE — When to call this (see docs/current/codebase/
     STATS_SUBSYSTEMS.md §3.4):
       - Span-kernel primitive. Intended callers are
-        `compute_forecast_sweep` (inner kernel for BE CF pass and
+        `compute_forecast_trajectory` (inner kernel for BE CF pass and
         cohort_maturity v3) and the model-overlay builder in
         `api_handlers.py`. Returns span-level (cdf_arr, p_s); per-edge
         draws exist only as a local variable inside this function

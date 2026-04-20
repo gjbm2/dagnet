@@ -1,7 +1,7 @@
 """
 cohort_forecast_v3 — thin consumer of the generalised forecast engine.
 
-Doc 29 Phase 5: calls compute_forecast_sweep for the per-cohort
+Doc 29 Phase 5: calls compute_forecast_trajectory for the per-cohort
 population model (IS-conditioned, evidence-spliced), then takes
 quantiles for chart rows. No reimplementation of CDF, carrier,
 model resolution, IS conditioning, or population model.
@@ -20,6 +20,155 @@ from typing import Any, Dict, List, Optional
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# Class B — lagless edge (Beta-Binomial closed form)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def _lagless_rows(
+    fe: Optional['FrameEvidence'],
+    resolved: Any,
+    sweep_to: str,
+    axis_tau_max: Optional[int] = None,
+    band_level: float = 0.90,
+) -> List[Dict[str, Any]]:
+    """Row builder for lagless edges (σ ≤ 0) — doc 50 Class B.
+
+    Branches on the resolver's semantic property
+    `alpha_beta_query_scoped`, not on source name, to decide whether
+    the resolver's α, β already incorporates query-window evidence:
+
+    - **Already query-scoped** (analytic / analytic_be Jeffreys
+      posteriors via D20 fallback): read α, β directly. Updating again
+      would double-count. See STATS_SUBSYSTEMS.md §5 Confusion 8.
+    - **Aggregate prior** (bayesian fit / manual override): conjugate
+      Beta-Binomial update with query-scoped evidence: α' = α + Σk,
+      β' = β + Σ(n − k).
+
+    Class C (no evidence in the window) falls out naturally: Σn = 0 →
+    aggregate-prior update by zero = prior; query-scoped path returns
+    the already-scoped prior unchanged.
+
+    Returns [] only for Class D (no usable α, β at all — the resolver
+    failed to populate a prior and there's no evidence either).
+    """
+    from scipy.stats import beta as _beta_dist
+
+    # ── Aggregate query-scoped evidence across cohorts ──────────────
+    if fe is not None:
+        sum_y = float(sum(c.get('y_frozen', 0.0) for c in fe.cohort_list))
+        sum_x = float(sum(c.get('x_frozen', 0.0) for c in fe.cohort_list))
+        sum_n_cohorts = len(fe.cohort_list)
+        max_tau = fe.max_tau
+        tau_solid_max = fe.tau_solid_max
+        tau_future_max = fe.tau_future_max
+    else:
+        sum_y = 0.0
+        sum_x = 0.0
+        sum_n_cohorts = 0
+        max_tau = axis_tau_max if axis_tau_max else 30
+        tau_solid_max = 0
+        tau_future_max = 0
+
+    # ── Sub-path selection by prior-vs-posterior semantics ─────────
+    # Branch on the resolver's semantic property, NOT on source name.
+    # The question is whether the resolver's α/β already includes the
+    # query window's evidence (→ read directly) or is an aggregate
+    # prior (→ conjugate update with query Σk, Σn). See
+    # STATS_SUBSYSTEMS.md §5 Confusion 8 and ResolvedModelParams.alpha_beta_query_scoped.
+    alpha_prior = max(float(getattr(resolved, 'alpha', 0.0) or 0.0), 0.0)
+    beta_prior = max(float(getattr(resolved, 'beta', 0.0) or 0.0), 0.0)
+    already_query_scoped = bool(getattr(resolved, 'alpha_beta_query_scoped', False))
+
+    if already_query_scoped:
+        # Resolver's α, β already incorporates query-window evidence
+        # (analytic / analytic_be Jeffreys posterior). Read directly —
+        # updating again double-counts.
+        alpha_post = alpha_prior
+        beta_post = beta_prior
+    else:
+        # Resolver's α, β is an aggregate prior (bayesian / manual).
+        # Conjugate update with query-scoped Σk, Σn.
+        alpha_post = alpha_prior + sum_y
+        beta_post = beta_prior + (sum_x - sum_y)
+
+    # Class D guard: no usable prior and no evidence.
+    if alpha_post <= 0 or beta_post <= 0:
+        return []
+
+    # ── Posterior scalars (Beta closed form) ────────────────────────
+    s = alpha_post + beta_post
+    p_mean = alpha_post / s
+    p_sd = math.sqrt(alpha_post * beta_post / (s * s * (s + 1)))
+
+    # ── Quantile bands from Beta closed form ────────────────────────
+    # Match the v3 chart's default band set: [band_level, 0.5].
+    band_levels = [band_level, 0.5]
+    fan_lower_val = float(_beta_dist.ppf((1 - band_level) / 2, alpha_post, beta_post))
+    fan_upper_val = float(_beta_dist.ppf((1 + band_level) / 2, alpha_post, beta_post))
+    fan_bands: Optional[Dict] = {
+        str(int(bl * 100)): [
+            float(_beta_dist.ppf((1 - bl) / 2, alpha_post, beta_post)),
+            float(_beta_dist.ppf((1 + bl) / 2, alpha_post, beta_post)),
+        ] for bl in band_levels
+    }
+
+    # ── Prior (unconditioned) bands for model_* fields ──────────────
+    # When the resolver's α, β was updated (aggregate-prior case), the
+    # model_* bands show the pre-update prior distribution. When the
+    # resolver's α, β was already query-scoped (no update performed),
+    # model_* coincides with the posterior.
+    if (not already_query_scoped) and alpha_prior > 0 and beta_prior > 0:
+        _sp = alpha_prior + beta_prior
+        model_midpoint = alpha_prior / _sp
+        model_fan_lower = float(_beta_dist.ppf((1 - band_level) / 2, alpha_prior, beta_prior))
+        model_fan_upper = float(_beta_dist.ppf((1 + band_level) / 2, alpha_prior, beta_prior))
+        model_bands: Optional[Dict] = {
+            str(int(bl * 100)): [
+                float(_beta_dist.ppf((1 - bl) / 2, alpha_prior, beta_prior)),
+                float(_beta_dist.ppf((1 + bl) / 2, alpha_prior, beta_prior)),
+            ] for bl in band_levels
+        }
+    else:
+        model_midpoint = p_mean
+        model_fan_lower = fan_lower_val
+        model_fan_upper = fan_upper_val
+        model_bands = fan_bands
+
+    # ── Build rows (same schema as Class A, flat in τ) ──────────────
+    rows: List[Dict[str, Any]] = []
+    for tau in range(max_tau + 1):
+        rows.append({
+            'tau_days': tau,
+            'rate': p_mean,
+            'rate_pure': p_mean,
+            'evidence_y': sum_y if fe is not None else None,
+            'evidence_x': sum_x if fe is not None else None,
+            'projected_rate': p_mean,
+            'forecast_y': None,
+            'forecast_x': None,
+            'midpoint': p_mean,
+            'fan_upper': fan_upper_val,
+            'fan_lower': fan_lower_val,
+            'fan_bands': fan_bands,
+            'model_midpoint': model_midpoint,
+            'model_fan_upper': model_fan_upper,
+            'model_fan_lower': model_fan_lower,
+            'model_bands': model_bands,
+            'tau_solid_max': tau_solid_max,
+            'tau_future_max': tau_future_max,
+            'boundary_date': str(sweep_to)[:10],
+            'cohorts_covered_base': sum_n_cohorts,
+            'cohorts_covered_projected': sum_n_cohorts,
+            'completeness': 1.0,
+            'completeness_sd': 0.0,
+            'p_infinity_mean': p_mean,
+            'p_infinity_sd': p_sd,
+        })
+
+    return rows
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # Shared evidence builder — used by both v3 chart and topo pass p.mean
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -31,7 +180,7 @@ class FrameEvidence:
     both the v3 chart builder (compute_cohort_maturity_rows_v3) and
     the topo pass forecast sweep (handle_stats_topo_pass Phase 2).
 
-    Design invariant: both consumers call compute_forecast_sweep with
+    Design invariant: both consumers call compute_forecast_trajectory with
     the SAME engine_cohorts built from the SAME snapshot DB evidence,
     so p@∞ from v3 == p.mean from the topo pass.
     """
@@ -256,7 +405,7 @@ def build_cohort_evidence_from_frames(
             a_pop=a_pop,
             # Doc 45 §Response contract: the CF endpoint and the
             # cohort maturity chart share this engine. Setting
-            # eval_age = frontier_age tells compute_forecast_sweep to
+            # eval_age = frontier_age tells compute_forecast_trajectory to
             # populate `sweep.completeness_mean` / `completeness_sd`
             # (n-weighted CDF across cohorts at their own frontiers).
             # Without this, the sweep leaves those fields None and
@@ -315,10 +464,10 @@ def compute_cohort_maturity_rows_v3(
 
     Same row schema as v2 so the FE chart builder works unchanged.
     Delegates the per-cohort population model to the engine via
-    compute_forecast_sweep.
+    compute_forecast_trajectory.
     """
     from .forecast_state import (
-        compute_forecast_sweep,
+        compute_forecast_trajectory,
         CohortEvidence,
         NodeArrivalState,
     )
@@ -338,8 +487,31 @@ def compute_cohort_maturity_rows_v3(
     else:
         temporal = 'window' if is_window else 'cohort'
         resolved = resolve_model_params(target_edge, scope='edge', temporal_mode=temporal)
-    if not resolved or resolved.latency.sigma <= 0:
+    if not resolved:
         return []
+
+    # ── Class B — lagless edge (doc 50) ─────────────────────────────
+    # σ ≤ 0 means no lag distribution. Skip the MC sweep; use the
+    # Beta-Binomial closed form via _lagless_rows. Sub-path selection
+    # (B1 vs B2) happens inside _lagless_rows based on promoted source.
+    if resolved.latency.sigma <= 0:
+        fe_lagless = build_cohort_evidence_from_frames(
+            frames=frames,
+            target_edge=target_edge,
+            anchor_from=anchor_from,
+            anchor_to=anchor_to,
+            sweep_to=sweep_to,
+            is_window=is_window,
+            resolved=resolved,
+            axis_tau_max=axis_tau_max,
+        )
+        return _lagless_rows(
+            fe=fe_lagless,
+            resolved=resolved,
+            sweep_to=sweep_to,
+            axis_tau_max=axis_tau_max,
+            band_level=band_level,
+        )
 
     lat = resolved.latency
 
@@ -367,7 +539,20 @@ def compute_cohort_maturity_rows_v3(
         axis_tau_max=axis_tau_max,
     )
     if fe is None:
-        return []
+        # No cohort evidence to condition on. Zero-evidence
+        # Beta-Binomial update degenerates to the prior — use the
+        # closed-form lagless path with fe=None to produce prior-only
+        # rows. Works for any σ because the prior is just a Beta
+        # distribution regardless of latency. If the resolver also has
+        # no usable α/β (Class D), _lagless_rows returns [] and the
+        # caller routes the edge to skipped_edges.
+        return _lagless_rows(
+            fe=None,
+            resolved=resolved,
+            sweep_to=sweep_to,
+            axis_tau_max=axis_tau_max,
+            band_level=band_level,
+        )
 
     engine_cohorts = fe.engine_cohorts
     cohort_list = fe.cohort_list
@@ -433,7 +618,7 @@ def compute_cohort_maturity_rows_v3(
     #   doesn't match anchor-relative ages. Use path params from resolver.
     _sweep_cdf = mc_cdf_arr
     _sweep_p = mc_p_s
-    sweep = compute_forecast_sweep(
+    sweep = compute_forecast_trajectory(
         resolved=resolved,
         cohorts=engine_cohorts,
         max_tau=saturation_tau,

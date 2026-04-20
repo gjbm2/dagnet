@@ -14,7 +14,7 @@ The daily conversions handler in `api_handlers.py` (lines ~3198-3450) wires thro
 
 1. Parses `asat()` from DSL via `_resolve_date`
 2. Builds one `CohortEvidence` per `rate_by_cohort` row with `anchor_day`, `eval_date`, `eval_age = maturity_tau`, `frontier_age = real_age`
-3. Calls `compute_forecast_sweep` once per edge
+3. Calls `compute_forecast_trajectory` once per edge
 4. Reads `cohort_evals` for `projected_y` (mean of `y_draws`), completeness from CDF
 5. Computes per-cohort `forecast_bands` from `y_draws / x` percentiles (80/90/95/99)
 6. For latency edges: computes tau values from inverse CDF at 25/50/75 percentile, runs sweep per tau for latency band data

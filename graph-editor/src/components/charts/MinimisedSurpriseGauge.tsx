@@ -32,12 +32,13 @@ export function MinimisedSurpriseGauge({ result, settings }: MinimisedSurpriseGa
   const isNonBayes = !!result.hint;
 
   // Build detail tooltip matching the gauge face text
-  const fmtObs = variable.name === 'p'
+  const asPct = variable.name === 'p' || variable.name === 'completeness';
+  const fmtObs = asPct
     ? `${(variable.observed * 100).toFixed(1)}%`
     : variable.observed_days != null
       ? `${variable.observed_days}d`
       : variable.observed.toFixed(3);
-  const fmtExp = variable.name === 'p'
+  const fmtExp = asPct
     ? `${(variable.expected * 100).toFixed(1)}%`
     : variable.expected_days != null
       ? `${variable.expected_days}d`

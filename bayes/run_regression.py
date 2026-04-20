@@ -487,13 +487,24 @@ def _audit_harness_log(graph_name: str, job_label: str | None = None) -> dict:
     return audit_log(log_content)
 
 
-def assert_recovery(graph_name: str, parsed: dict, truth: dict) -> dict:
+def assert_recovery(
+    graph_name: str,
+    parsed: dict,
+    truth: dict,
+    empty_slices: list[dict] | None = None,
+) -> dict:
     """Apply tiered assertions. Returns dict with pass/fail and details.
 
     Failures and warnings are structured dicts (see results_schema.make_failure).
     Each has a `message` field for human-readable display.
+
+    empty_slices: declared (edge_id, slice_key) combos that bootstrap
+    recorded as zero-row (legitimate sparsity outcome). Recovery must
+    skip them — absence of a posterior for a slice with no data is
+    expected, not a missing_slice defect.
     """
     from results_schema import make_failure
+    empty_slices = empty_slices or []
 
     testing = truth.get("testing", {})
     thresholds = {**DEFAULT_THRESHOLDS}
@@ -640,13 +651,49 @@ def assert_recovery(graph_name: str, parsed: dict, truth: dict) -> dict:
         for spec in iter_expected_single_slice_specs(truth)
     }
 
-    if expected_slice_labels and not parsed_slices:
+    # Drop declared slices the sparsity model left at zero rows — a
+    # legitimate no-data outcome where the model has nothing to fit.
+    # Absence of a posterior for a zero-row slice is expected, not a
+    # pipeline defect.
+    #
+    # empty_slices entries: {edge_id, param_id, slice_key}.
+    # expected_slice_labels keys: "{ctx_key} :: {edge_key}".
+    # Convert by stripping .window()/.cohort() from slice_key and
+    # pairing with param_id (which matches edge_key in the truth).
+    empty_slice_labels: set[str] = set()
+    for es in empty_slices:
+        sk = es.get("slice_key", "")
+        pid = es.get("param_id", "")
+        # slice_key is "context(dim:val).window()" or ...cohort()
+        ctx_key = sk.rsplit(".", 1)[0] if "." in sk else sk
+        # edge_key in truth strips any "parameter-" prefix on param_id
+        edge_key = pid[len("parameter-"):] if pid.startswith("parameter-") else pid
+        from recovery_slices import make_slice_label
+        empty_slice_labels.add(make_slice_label(ctx_key, edge_key))
+
+    if empty_slice_labels:
+        warnings.append(make_failure(
+            "audit",
+            f"{len(empty_slice_labels)} declared slice(s) had zero emitted rows "
+            f"(sparsity outcome; recovery skipped): "
+            + ", ".join(sorted(empty_slice_labels)),
+            count=len(empty_slice_labels), items=sorted(empty_slice_labels),
+        ))
+
+    # Remove empty slices from the expected set so they don't register
+    # as missing.
+    effective_expected = {
+        label: t for label, t in expected_slice_labels.items()
+        if label not in empty_slice_labels
+    }
+
+    if effective_expected and not parsed_slices:
         failures.append(make_failure(
             "missing_slice",
             "missing per-slice recovery rows for contexted truth",
         ))
 
-    missing_slice_labels = sorted(set(expected_slice_labels) - set(parsed_slices))
+    missing_slice_labels = sorted(set(effective_expected) - set(parsed_slices))
     if missing_slice_labels:
         failures.append(make_failure(
             "missing_slice",
@@ -1085,7 +1132,21 @@ def run_regression(args) -> list[dict]:
             # Multi-layered audit from harness log (doc 34 §9.6)
             _job_label = f"{name}-{run_id}"
             audit = _audit_harness_log(name, job_label=_job_label)
-            assertion = assert_recovery(name, parsed, g["truth"])
+            # Load empty_slices from meta so assert_recovery can skip
+            # declared slices the sparsity model left at zero rows
+            # (legitimate no-data outcome, not a pipeline defect).
+            _empty_slices = []
+            try:
+                _meta_path = os.path.join(
+                    data_repo, "graphs", f"{name}.synth-meta.json"
+                )
+                if os.path.isfile(_meta_path):
+                    with open(_meta_path) as _mf:
+                        _empty_slices = json.load(_mf).get("empty_slices", [])
+            except (OSError, json.JSONDecodeError):
+                pass
+            assertion = assert_recovery(name, parsed, g["truth"],
+                                        empty_slices=_empty_slices)
             assertion["audit"] = audit
             assertion["edges"] = parsed.get("edges", {})
             assertion["slices"] = parsed.get("slices", {})

@@ -195,7 +195,7 @@ the same quality of from-node arrival state that the current v3 path
 uses for that edge class. The whole-graph cache is the shared source of
 truth; per-edge weak-prior rebuilds are not the target design.
 
-**5f. Engine call.** `compute_forecast_sweep(resolved, cohorts,
+**5f. Engine call.** `compute_forecast_trajectory(resolved, cohorts,
 max_tau, from_node_arrival, mc_cdf_arr, mc_p_s, span_alpha,
 span_beta, span_mu_sd, ...)` — same 14 parameters as v3.
 
@@ -342,7 +342,7 @@ No analytics DSL needed. Works for all eligible edges.
 
 ### What is NOT changed
 
-- `compute_forecast_sweep` engine
+- `compute_forecast_trajectory` engine
 - `build_cohort_evidence_from_frames` shared function
 - `compose_span_kernel`, `mc_span_cdfs`
 - `resolve_model_params`

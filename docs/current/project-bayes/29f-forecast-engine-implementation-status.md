@@ -14,10 +14,10 @@ divergence analysis added (§Codepath Divergence Analysis).
 |-------|--------|------------|
 | 0 | Done | v1/v2 single-hop parity. Tests in `test_doc31_parity.py`. |
 | 1 | Done | `resolve_model_params` — unified resolver with preference cascade. 8 tests. |
-| 2 | **Superseded by G.1** | `compute_forecast_state_window` removed (G.3). The topo pass now calls `compute_forecast_sweep` via `_evaluate_cohort` (G.1). |
-| 3 | **Superseded by G.1** | `compute_forecast_state_cohort` removed (G.3). Carrier convolution retained in `_convolve_completeness_at_age` for `compute_conditioned_forecast` (surprise gauge). |
+| 2 | **Superseded by G.1** | `compute_forecast_state_window` removed (G.3). The topo pass now calls `compute_forecast_trajectory` via `_evaluate_cohort` (G.1). |
+| 3 | **Superseded by G.1** | `compute_forecast_state_cohort` removed (G.3). Carrier convolution retained in `_convolve_completeness_at_age` for `compute_forecast_summary` (surprise gauge). |
 | 4 | Eliminated | Engine writes to existing fields per doc 29 §Schema Change — consumers already read them. BE is a full upgrade of FE values. Session log shows FE→BE parity per edge. |
-| 5 | **In progress** | v3 row builder uses `compute_forecast_sweep` for MC population model. Parity test (`v2-v3-parity-test.sh`) green on synth-mirror-4step (17/17). Two critical fixes landed 16-Apr-26: span widening for single-hop cohort, upstream evidence fetch for empirical carrier. |
+| 5 | **In progress** | v3 row builder uses `compute_forecast_trajectory` for MC population model. Parity test (`v2-v3-parity-test.sh`) green on synth-mirror-4step (17/17). Two critical fixes landed 16-Apr-26: span widening for single-hop cohort, upstream evidence fetch for empirical carrier. |
 | 6 | Done | CLI-based parity test (`v2-v3-parity-test.sh`) with data health checks, non-vacuousness gates, and 20% fan tolerance. 44 Python tests + 15 TS tests. |
 | 7 | Not started | Future enhancements (posterior covariance, asat projection). |
 | **G** | **In progress** | **Codepath generalisation** — unify topo pass and chart onto shared engine primitives. G.0 done, G.1 done, G.1b done (daily conversions), G.3 done, D20 fixed. See §Codepath Divergence Analysis and §Generalisation Plan. |
@@ -99,7 +99,7 @@ This workstream took far longer than it should have. The root causes:
 | File | Purpose |
 |------|---------|
 | `lib/runner/cohort_forecast_v3.py` | v3 row builder — thin consumer of engine |
-| `lib/runner/forecast_state.py` | `compute_forecast_sweep` (population model), `compute_conditioned_forecast` (IS) |
+| `lib/runner/forecast_state.py` | `compute_forecast_trajectory` (population model), `compute_forecast_summary` (IS) |
 | `lib/api_handlers.py` | `_handle_cohort_maturity_v3` handler, `_fetch_upstream_observations` shared function |
 | `graph-ops/scripts/v2-v3-parity-test.sh` | CLI-based parity test (17 checks) |
 | `graph-ops/scripts/analyse.sh` | CLI analyse tool (same pipeline as browser) |
@@ -148,7 +148,7 @@ This workstream took far longer than it should have. The root causes:
 
 4. **Legacy resolver call site migration.** v2-only call sites. Retire with v2.
 
-5. **v3 engine generalisation.** v3 currently delegates to `compute_forecast_sweep` which reimplements v2's loop. The long-term goal (doc 29) is a single engine that naturally degenerates across all cases. The span-widening approach shows the path: one loop, different CDF/carrier inputs.
+5. **v3 engine generalisation.** v3 currently delegates to `compute_forecast_trajectory` which reimplements v2's loop. The long-term goal (doc 29) is a single engine that naturally degenerates across all cases. The span-widening approach shows the path: one loop, different CDF/carrier inputs.
 
 ---
 
@@ -168,13 +168,13 @@ Today there are **two parallel forecast pipelines** in
 `forecast_state.py`, sharing some primitives but structurally
 independent:
 
-### Pipeline A: `compute_conditioned_forecast` (topo pass)
+### Pipeline A: `compute_forecast_summary` (topo pass)
 
 Called by `handle_stats_topo_pass` (api_handlers.py:4867). Produces
 scalar forecasts written to graph fields (completeness,
 completeness_stdev, blended_mean, p_sd).
 
-### Pipeline B: `compute_forecast_sweep` (chart)
+### Pipeline B: `compute_forecast_trajectory` (chart)
 
 Called by `compute_cohort_maturity_rows_v3` (cohort_forecast_v3.py:331).
 Produces per-τ MC rate draws for chart fan bands.
@@ -439,7 +439,7 @@ output. The v2-v3 parity test gates this: if the refactoring changes
 the chart output, the parity test fails. The general forecast mode
 (`tau_eval=τᵢ`) runs the same arithmetic on a single column.
 
-`compute_forecast_sweep` becomes a thin orchestrator that:
+`compute_forecast_trajectory` becomes a thin orchestrator that:
 1. Draws params (unchanged)
 2. Builds CDF array, det_cdf, drift, theta (unchanged)
 3. Calls `_evaluate_cohort` per cohort (extracted)
@@ -463,7 +463,7 @@ the extraction was wrong.
 
 #### G.1: Wire the topo pass to call `compute_forecast_general`
 
-Replace the current `compute_conditioned_forecast` call in
+Replace the current `compute_forecast_summary` call in
 `handle_stats_topo_pass` (api_handlers.py:4867) with
 `compute_forecast_general`.
 
@@ -550,7 +550,7 @@ Removed:
   test classes (~300 lines)
 
 Retained:
-- `compute_conditioned_forecast` — still used by surprise gauge
+- `compute_forecast_summary` — still used by surprise gauge
 - `_convolve_completeness_at_age` — used by the above
 - `_compose_rate_sd` — utility, may be needed later
 
@@ -661,7 +661,7 @@ These are ordered by rigour. Each gate must pass before proceeding.
    the extraction is wrong — not the test.
 
 2. **Same-primitive guarantee**: a code audit confirms that both
-   `compute_forecast_sweep` (chart) and `compute_forecast_general`
+   `compute_forecast_trajectory` (chart) and `compute_forecast_general`
    (topo pass) call the same `_evaluate_cohort` function — not
    parallel implementations. The two differ only in τ evaluation
    mode (all-τ vs per-cohort-τ).

@@ -1,7 +1,7 @@
 # Daily Conversions: Engine Integration Guidance
 
 **Date**: 16-Apr-26
-**Implemented**: 16-Apr-26 — G.1b landed. Daily conversions handler in `api_handlers.py` (lines ~3198-3450) calls `compute_forecast_sweep` per edge, reads `cohort_evals` for per-cohort projected_y/completeness. Fallback to legacy `annotate_rows` if engine fails.
+**Implemented**: 16-Apr-26 — G.1b landed. Daily conversions handler in `api_handlers.py` (lines ~3198-3450) calls `compute_forecast_trajectory` per edge, reads `cohort_evals` for per-cohort projected_y/completeness. Fallback to legacy `annotate_rows` if engine fails.
 **Context**: doc 29f §Phase G, G.1b
 **Audience**: maintainers of the daily conversions forecast integration
 
@@ -19,12 +19,12 @@ function the same way.
 ### `CohortEvidence.eval_age`
 
 `forecast_state.py`, `CohortEvidence` dataclass. When `eval_age` is
-set on a cohort, `compute_forecast_sweep` retains the per-cohort
+set on a cohort, `compute_forecast_trajectory` retains the per-cohort
 `(S,)` Y/X draws at that τ column.
 
-### `ForecastSweepResult.cohort_evals`
+### `ForecastTrajectory.cohort_evals`
 
-`forecast_state.py`, `ForecastSweepResult` dataclass. A list of
+`forecast_state.py`, `ForecastTrajectory` dataclass. A list of
 `CohortForecastAtEval` objects — one per cohort that had `eval_age`
 set. Each contains:
 
@@ -46,7 +46,7 @@ Pop D, Pop C, evidence splice. Do not reimplement any of this.
 Shows exactly how to:
 
 1. Build `CohortEvidence` from `(date, age, n, k)` with `eval_age`
-2. Call `compute_forecast_sweep`
+2. Call `compute_forecast_trajectory`
 3. Read `sweep.cohort_evals`
 4. Aggregate per-cohort draws into scalars
 
@@ -77,10 +77,10 @@ For each row (anchor_day):
    coordinates (cohort maturity chart) set `eval_age` directly
    instead.
 
-3. Collect all cohorts into a list and call `compute_forecast_sweep`
+3. Collect all cohorts into a list and call `compute_forecast_trajectory`
    once per edge (not once per cohort):
    ```python
-   sweep = compute_forecast_sweep(
+   sweep = compute_forecast_trajectory(
        resolved=resolved,
        cohorts=engine_cohorts,
        max_tau=max(c.eval_age for c in engine_cohorts),
@@ -110,7 +110,7 @@ For each row (anchor_day):
   that diverges from the engine. They are scheduled for retirement
   (doc 29f §G.4).
 
-- **Do not call `compute_conditioned_forecast`.** That function
+- **Do not call `compute_forecast_summary`.** That function
   uses aggregate tempered IS (different from the sweep's per-cohort
   sequential IS). It's only retained for the surprise gauge until
   that too is migrated.
@@ -127,7 +127,7 @@ For each row (anchor_day):
 
 | File | What to look at |
 |------|----------------|
-| `lib/runner/forecast_state.py` | `CohortEvidence`, `CohortForecastAtEval`, `ForecastSweepResult`, `_evaluate_cohort`, `compute_forecast_sweep` |
+| `lib/runner/forecast_state.py` | `CohortEvidence`, `CohortForecastAtEval`, `ForecastTrajectory`, `_evaluate_cohort`, `compute_forecast_trajectory` |
 | `lib/api_handlers.py` | `handle_stats_topo_pass` lines ~4860–4910 — working coordinate B consumer |
 | `docs/current/project-bayes/29f-forecast-engine-implementation-status.md` | §Phase G, §High-dimensional data and lossy collapse, §G.4 |
 

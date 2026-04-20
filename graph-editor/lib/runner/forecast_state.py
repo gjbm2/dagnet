@@ -419,13 +419,16 @@ _IS_DRAWS = 2000
 
 
 @dataclass
-class ConditionedForecast:
+class ForecastSummary:
     """Engine output with IS-conditioned draws.
 
     Point estimates are computed from the conditioned draws.
     The draw arrays are exposed for consumers that need quantiles
     (e.g. cohort maturity chart fan bands).
     """
+    # Conditioned (evidence-informed) completeness — n-weighted
+    # CDF mean across IS-reindexed draws. Same value CF writes to
+    # edge.p.latency.completeness.
     completeness: float = 0.0
     completeness_sd: float = 0.0
     rate_conditioned: float = 0.0      # p × C(age) — maturity-adjusted rate
@@ -434,6 +437,20 @@ class ConditionedForecast:
     p_conditioned_sd: float = 0.0
     rate_unconditioned: float = 0.0
     rate_unconditioned_sd: float = 0.0
+    # Unconditioned (pre-evidence) completeness — n-weighted CDF
+    # mean across raw posterior draws. Parallel to `completeness`
+    # above which is conditioned on evidence via IS. Used by the
+    # surprise gauge as the "prior maturity" baseline for the
+    # conditioned-vs-unconditioned completeness surprise framing
+    # (doc 55).
+    completeness_unconditioned: float = 0.0
+    completeness_unconditioned_sd: float = 0.0
+    # Posterior-predictive unconditioned rate — mean and SD of
+    # p_s × c̄_s across unconditioned draws. Used by the surprise
+    # gauge as the "expected rate at current window maturity"
+    # reference for the p variable (doc 55).
+    pp_rate_unconditioned: float = 0.0
+    pp_rate_unconditioned_sd: float = 0.0
 
     # Conditioned draws — consumers evaluate CDF at display τ values
     # using these pre-conditioned params to get fan bands.
@@ -455,14 +472,14 @@ class ConditionedForecast:
     is_tempering_lambda: float = 1.0  # aggregate likelihood tempering strength
 
 
-def compute_conditioned_forecast(
+def compute_forecast_summary(
     edge_id: str,
     resolved: ResolvedModelParams,
     cohort_ages_and_weights: List[tuple],
     evidence: List[tuple],               # [(τ_i, n_i, k_i), ...]
     from_node_arrival: Optional['NodeArrivalState'] = None,
     num_draws: int = _IS_DRAWS,
-) -> ConditionedForecast:
+) -> ForecastSummary:
     """Compute ESS-regularised aggregate IS-conditioned forecast.
 
     SUBSYSTEM GUIDE — When to call this (see docs/current/codebase/
@@ -477,7 +494,7 @@ def compute_conditioned_forecast(
         BE CF pass endpoint) scoped to your analysis path — it
         delegates the right inner kernel per scope and coordinates
         multi-edge state. For full cohort-population semantics the
-        correct inner kernel is `compute_forecast_sweep` above, not
+        correct inner kernel is `compute_forecast_trajectory` above, not
         this one.
 
     Draws (p, mu, sigma, onset) from the joint posterior, evaluates
@@ -497,7 +514,7 @@ def compute_conditioned_forecast(
         num_draws: MC draw count (default 2000 for IS).
 
     Returns:
-        ConditionedForecast with point estimates and draw arrays.
+        ForecastSummary with point estimates and draw arrays.
     """
     lat = resolved.latency
     p_mean = resolved.p_mean
@@ -734,6 +751,26 @@ def compute_conditioned_forecast(
     completeness = float(np.mean(mc_completeness)) if mc_completeness.size else 0.0
     completeness_sd = float(np.std(mc_completeness)) if mc_completeness.size else 0.0
 
+    # ── Unconditioned scalars for surprise gauge (doc 55) ────────
+    # completeness_unconditioned: n-weighted CDF mean across the
+    # raw (pre-IS) draws. Same computation as `completeness` above
+    # but on unreindexed draws.
+    if mc_completeness_unconditioned.size:
+        completeness_unconditioned = float(np.mean(mc_completeness_unconditioned))
+        completeness_unconditioned_sd = float(np.std(mc_completeness_unconditioned))
+        # pp_rate_unconditioned: mean/SD of p_s × c̄_s across
+        # unconditioned draws. This is the posterior-predictive
+        # expected rate at current window maturity — the
+        # comparator the gauge's p variable uses for observed Σk/Σn.
+        pp_unc_products = p_draws_unconditioned * mc_completeness_unconditioned
+        pp_rate_unconditioned = float(np.mean(pp_unc_products))
+        pp_rate_unconditioned_sd = float(np.std(pp_unc_products))
+    else:
+        completeness_unconditioned = 0.0
+        completeness_unconditioned_sd = 0.0
+        pp_rate_unconditioned = 0.0
+        pp_rate_unconditioned_sd = 0.0
+
     # rate_unconditioned: the prior asymptotic edge probability
     # (before IS conditioning). Used by surprise gauge as baseline.
     rate_unconditioned = (
@@ -756,7 +793,7 @@ def compute_conditioned_forecast(
     p_conditioned = rate_conditioned
     p_conditioned_sd = rate_conditioned_sd
 
-    return ConditionedForecast(
+    return ForecastSummary(
         completeness=completeness,
         completeness_sd=completeness_sd,
         rate_conditioned=rate_conditioned,
@@ -765,6 +802,10 @@ def compute_conditioned_forecast(
         p_conditioned_sd=p_conditioned_sd,
         rate_unconditioned=rate_unconditioned,
         rate_unconditioned_sd=rate_unconditioned_sd,
+        completeness_unconditioned=completeness_unconditioned,
+        completeness_unconditioned_sd=completeness_unconditioned_sd,
+        pp_rate_unconditioned=pp_rate_unconditioned,
+        pp_rate_unconditioned_sd=pp_rate_unconditioned_sd,
         p_draws=p_draws,
         mu_draws=mu_draws,
         sigma_draws=sigma_draws,
@@ -838,7 +879,7 @@ class CohortForecastAtEval:
 
 
 @dataclass
-class ForecastSweepResult:
+class ForecastTrajectory:
     """Output of the per-cohort population model sweep.
 
     Coordinate A: rate_draws (S, T) is the per-draw aggregate rate
@@ -1052,7 +1093,7 @@ def _evaluate_cohort(
     return (Y_cohort, X_cohort, is_ess, conditioned)
 
 
-def compute_forecast_sweep(
+def compute_forecast_trajectory(
     resolved: ResolvedModelParams,
     cohorts: List[CohortEvidence],
     max_tau: int,
@@ -1068,7 +1109,7 @@ def compute_forecast_sweep(
     span_onset_mu_corr: Optional[float] = None,
     det_norm_cdf: Optional[list] = None,
     edge_cdf_arr: Optional[np.ndarray] = None,
-) -> ForecastSweepResult:
+) -> ForecastTrajectory:
     """Per-cohort population model sweep — generalised from v2.
 
     SUBSYSTEM GUIDE — When to call this (see docs/current/codebase/
@@ -1085,7 +1126,7 @@ def compute_forecast_sweep(
         require for correctness (doc 47). Calling this function
         directly per-edge from an analysis runner bypasses all of
         that coordination and produces subtly wrong numbers.
-      - Surprise gauge historically called `compute_conditioned_forecast`
+      - Surprise gauge historically called `compute_forecast_summary`
         (below) for its simpler per-edge IS semantics; new consumers
         of a full cohort-population forecast should go through the
         handler instead.
@@ -1139,7 +1180,7 @@ def compute_forecast_sweep(
 
     if lat.sigma <= 0:
         empty = np.zeros((S, T))
-        return ForecastSweepResult(rate_draws=empty, model_rate_draws=empty)
+        return ForecastTrajectory(rate_draws=empty, model_rate_draws=empty)
 
     # ── Draw from posterior ───────────────────────────────────────
     # Draw all params in one interleaved call, matching v2's mc_span_cdfs
@@ -1441,7 +1482,7 @@ def compute_forecast_sweep(
     except Exception:
         pass
 
-    return ForecastSweepResult(
+    return ForecastTrajectory(
         rate_draws=rate_conditioned,
         model_rate_draws=rate_model,
         det_y_total=_det_y,

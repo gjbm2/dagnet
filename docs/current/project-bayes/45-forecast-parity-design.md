@@ -40,7 +40,7 @@ same IS conditioning. The only difference is the coordinate system
 
 The topo pass Phase 2 (forecast sweep, added later) was built as a
 shortcut: read cohort arrays from parameter files, build single-point
-CohortEvidence, call `compute_forecast_sweep` with minimal arguments
+CohortEvidence, call `compute_forecast_trajectory` with minimal arguments
 (no span kernel, no MC CDF, no carrier). This produced a degraded
 forecast that differed from v3 by 10-50% depending on the edge.
 
@@ -62,7 +62,7 @@ distribution parameters.
   mu_sd, sigma_sd, onset, completeness (CDF-based), p_infinity
   (mature cohort filter), p_evidence (raw k/n)
 - Output: per-edge promoted fields written to the graph
-- **No snapshot DB access.** No `compute_forecast_sweep`. No span kernel.
+- **No snapshot DB access.** No `compute_forecast_trajectory`. No span kernel.
   No MC draws. These belong to Job B.
 
 The topo pass produces the model vars that the forecast engine
@@ -83,7 +83,7 @@ an analysis of type `forecast` (or a generalisation of
 4. Derives frames (same as v3)
 5. Builds CohortEvidence from frames (same as v3)
 6. Constructs span kernel + carrier (same as v3)
-7. Runs `compute_forecast_sweep` with full arguments (same as v3)
+7. Runs `compute_forecast_trajectory` with full arguments (same as v3)
 8. Reads the result under coordinate B (per-cohort at tau_i) for
    scalar p.mean, or coordinate A (all tau) for the chart
 
@@ -201,7 +201,7 @@ new function at a new endpoint. Per scenario, the handler:
 2. Queries snapshot DB, applies regime selection (same as v3)
 3. Derives frames, builds CohortEvidence (shared function)
 4. Builds span kernel + carrier (same as v3)
-5. Runs `compute_forecast_sweep` (same as v3)
+5. Runs `compute_forecast_trajectory` (same as v3)
 6. Reads per-edge scalars from the sweep result
 
 Steps 1-5 are the v3 handler code. Step 6 reads coordinate A at

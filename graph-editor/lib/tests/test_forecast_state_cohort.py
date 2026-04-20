@@ -4,7 +4,7 @@ Tests for forecast engine components (doc 29 Phase 3 + G.3).
 Verifies:
 - NodeArrivalState is built correctly for synth graphs
 - Carrier convolution properties (_convolve_completeness_at_age)
-- compute_conditioned_forecast graceful degradation (used by surprise gauge)
+- compute_forecast_summary graceful degradation (used by surprise gauge)
 
 G.3 cleanup: removed TestCohortModeForecastState and
 TestPhase3ParityEnrichedSynth — these tested compute_forecast_state_cohort
@@ -178,7 +178,7 @@ class TestScopeAndCarrierConsistency:
         """
         from runner.forecast_state import (
             build_node_arrival_cache,
-            compute_conditioned_forecast,
+            compute_forecast_summary,
         )
         from runner.model_resolver import resolve_model_params
 
@@ -196,12 +196,12 @@ class TestScopeAndCarrierConsistency:
 
         cohorts = [(20.0, 100), (30.0, 100)]
 
-        cf_edge = compute_conditioned_forecast(
+        cf_edge = compute_forecast_summary(
             edge_id='bc', resolved=resolved_edge,
             cohort_ages_and_weights=cohorts, evidence=[],
             from_node_arrival=from_node,
         )
-        cf_path = compute_conditioned_forecast(
+        cf_path = compute_forecast_summary(
             edge_id='bc', resolved=resolved_path,
             cohort_ages_and_weights=cohorts, evidence=[],
             from_node_arrival=from_node,
@@ -217,7 +217,7 @@ class TestScopeAndCarrierConsistency:
                 "Path+carrier gives lower completeness (double upstream lag)"
 
 
-class TestConditionedForecastGracefulDegradation:
+class TestForecastSummaryGracefulDegradation:
     """Engine degrades gracefully with little or no evidence."""
 
     def _make_edge_and_resolve(self):
@@ -238,11 +238,11 @@ class TestConditionedForecastGracefulDegradation:
 
     def test_no_evidence_returns_unconditioned(self):
         """Empty evidence list → unconditioned draws, IS skipped."""
-        from runner.forecast_state import compute_conditioned_forecast
+        from runner.forecast_state import compute_forecast_summary
         _, resolved = self._make_edge_and_resolve()
         cohorts = [(10.0, 100), (20.0, 100), (30.0, 100)]
 
-        cf = compute_conditioned_forecast(
+        cf = compute_forecast_summary(
             edge_id='e1', resolved=resolved,
             cohort_ages_and_weights=cohorts,
             evidence=[],
@@ -258,12 +258,12 @@ class TestConditionedForecastGracefulDegradation:
 
     def test_all_zero_k_skips_conditioning(self):
         """All cohorts have k=0 → IS skipped (no conversions observed)."""
-        from runner.forecast_state import compute_conditioned_forecast
+        from runner.forecast_state import compute_forecast_summary
         _, resolved = self._make_edge_and_resolve()
         cohorts = [(10.0, 100), (20.0, 100)]
         evidence = [(10.0, 100, 0), (20.0, 100, 0)]
 
-        cf = compute_conditioned_forecast(
+        cf = compute_forecast_summary(
             edge_id='e1', resolved=resolved,
             cohort_ages_and_weights=cohorts,
             evidence=evidence,
@@ -276,12 +276,12 @@ class TestConditionedForecastGracefulDegradation:
 
     def test_very_young_cohorts_skip_conditioning(self):
         """Cohorts with age < onset → CDF≈0, E≈0 → IS skipped."""
-        from runner.forecast_state import compute_conditioned_forecast
+        from runner.forecast_state import compute_forecast_summary
         _, resolved = self._make_edge_and_resolve()
         cohorts = [(0.5, 50)]
         evidence = [(0.5, 50, 2)]
 
-        cf = compute_conditioned_forecast(
+        cf = compute_forecast_summary(
             edge_id='e1', resolved=resolved,
             cohort_ages_and_weights=cohorts,
             evidence=evidence,
@@ -293,12 +293,12 @@ class TestConditionedForecastGracefulDegradation:
 
     def test_single_cohort_moderate_evidence(self):
         """One cohort with moderate evidence → mild conditioning, healthy ESS."""
-        from runner.forecast_state import compute_conditioned_forecast
+        from runner.forecast_state import compute_forecast_summary
         _, resolved = self._make_edge_and_resolve()
         cohorts = [(20.0, 50)]
         evidence = [(20.0, 50, 20)]
 
-        cf = compute_conditioned_forecast(
+        cf = compute_forecast_summary(
             edge_id='e1', resolved=resolved,
             cohort_ages_and_weights=cohorts,
             evidence=evidence,
@@ -311,17 +311,17 @@ class TestConditionedForecastGracefulDegradation:
     def test_strong_evidence_conditions_p_toward_observed(self):
         """Strong evidence (high n, mature cohorts) should pull p toward
         observed rate, not leave it at prior."""
-        from runner.forecast_state import compute_conditioned_forecast
+        from runner.forecast_state import compute_forecast_summary
         _, resolved = self._make_edge_and_resolve()
         cohorts = [(50.0, 500)]
         evidence = [(50.0, 500, 200)]
 
-        cf_uncond = compute_conditioned_forecast(
+        cf_uncond = compute_forecast_summary(
             edge_id='e1', resolved=resolved,
             cohort_ages_and_weights=cohorts,
             evidence=[],
         )
-        cf_cond = compute_conditioned_forecast(
+        cf_cond = compute_forecast_summary(
             edge_id='e1', resolved=resolved,
             cohort_ages_and_weights=cohorts,
             evidence=evidence,
@@ -347,13 +347,13 @@ class TestConditionedForecastGracefulDegradation:
         """Extreme aggregate evidence should temper the likelihood rather
         than collapsing to ESS≈1, while still moving toward the evidence.
         """
-        from runner.forecast_state import compute_conditioned_forecast
+        from runner.forecast_state import compute_forecast_summary
 
         _, resolved = self._make_edge_and_resolve()
         cohorts = [(80.0, 1000)] * 18
         evidence = [(80.0, 1000, 400)] * 18
 
-        cf = compute_conditioned_forecast(
+        cf = compute_forecast_summary(
             edge_id='e1', resolved=resolved,
             cohort_ages_and_weights=cohorts,
             evidence=evidence,
@@ -382,13 +382,13 @@ class TestConditionedForecastGracefulDegradation:
 
     def test_draws_valid_after_conditioning(self):
         """Conditioned draws should be finite and in valid ranges."""
-        from runner.forecast_state import compute_conditioned_forecast
+        from runner.forecast_state import compute_forecast_summary
         import numpy as np
         _, resolved = self._make_edge_and_resolve()
         cohorts = [(15.0, 100), (25.0, 80)]
         evidence = [(15.0, 100, 35), (25.0, 80, 30)]
 
-        cf = compute_conditioned_forecast(
+        cf = compute_forecast_summary(
             edge_id='e1', resolved=resolved,
             cohort_ages_and_weights=cohorts,
             evidence=evidence,
@@ -404,3 +404,79 @@ class TestConditionedForecastGracefulDegradation:
         print(f"Draws valid: p=[{cf.p_draws.min():.3f}, {cf.p_draws.max():.3f}] "
               f"mu=[{cf.mu_draws.min():.3f}, {cf.mu_draws.max():.3f}] "
               f"ESS={cf.is_ess:.0f}")
+
+    def test_surprise_gauge_scalars_populated(self):
+        """Doc 55: ForecastSummary exposes unconditioned completeness moments
+        and the unconditioned posterior-predictive rate for the surprise gauge.
+        Verifies the four scalars are present, finite, and internally
+        consistent with the draw arrays they summarise."""
+        from runner.forecast_state import compute_forecast_summary
+        _, resolved = self._make_edge_and_resolve()
+        cohorts = [(20.0, 100), (40.0, 100), (60.0, 100)]
+        evidence = [(20.0, 100, 30), (40.0, 100, 50), (60.0, 100, 60)]
+
+        cf = compute_forecast_summary(
+            edge_id='e1', resolved=resolved,
+            cohort_ages_and_weights=cohorts,
+            evidence=evidence,
+        )
+
+        # All four new scalars are finite and in valid ranges
+        assert math.isfinite(cf.completeness_unconditioned)
+        assert math.isfinite(cf.completeness_unconditioned_sd)
+        assert math.isfinite(cf.pp_rate_unconditioned)
+        assert math.isfinite(cf.pp_rate_unconditioned_sd)
+        assert 0.0 <= cf.completeness_unconditioned <= 1.0
+        assert cf.completeness_unconditioned_sd >= 0.0
+        assert 0.0 <= cf.pp_rate_unconditioned <= 1.0
+        assert cf.pp_rate_unconditioned_sd >= 0.0
+
+        # pp_rate_unconditioned is NOT the same as rate_unconditioned:
+        # rate_unconditioned = mean(p_draws_unc)              (long-run p)
+        # pp_rate_unconditioned = mean(p_draws_unc × c_unc)   (rate at maturity)
+        # Since 0 < completeness < 1 for non-mature cohorts, pp < rate.
+        assert cf.pp_rate_unconditioned < cf.rate_unconditioned, (
+            f"pp_rate_unconditioned ({cf.pp_rate_unconditioned:.4f}) must be < "
+            f"rate_unconditioned ({cf.rate_unconditioned:.4f}) when completeness < 1"
+        )
+
+        # Unconditioned completeness should match the point-estimate
+        # interpretation of the unconditioned posterior
+        # (approximately; we only check order of magnitude sensibility)
+        assert 0.1 < cf.completeness_unconditioned < 0.99, (
+            f"completeness_unconditioned={cf.completeness_unconditioned:.4f} "
+            f"outside plausible range for these cohort ages"
+        )
+
+        # Conditioned completeness usually differs from unconditioned when
+        # evidence is present (the surprise signal the gauge reports)
+        print(
+            f"Gauge scalars: pp_unc={cf.pp_rate_unconditioned:.4f}±"
+            f"{cf.pp_rate_unconditioned_sd:.4f} "
+            f"c_unc={cf.completeness_unconditioned:.4f}±"
+            f"{cf.completeness_unconditioned_sd:.4f} "
+            f"c_cond={cf.completeness:.4f}±{cf.completeness_sd:.4f}"
+        )
+
+    def test_surprise_gauge_scalars_no_evidence(self):
+        """With no evidence, conditioned == unconditioned for all four
+        surprise-gauge scalars. IS is skipped; resampled and raw draws
+        coincide."""
+        from runner.forecast_state import compute_forecast_summary
+        _, resolved = self._make_edge_and_resolve()
+        cohorts = [(20.0, 100), (40.0, 100)]
+
+        cf = compute_forecast_summary(
+            edge_id='e1', resolved=resolved,
+            cohort_ages_and_weights=cohorts,
+            evidence=[],
+        )
+
+        assert cf.completeness == pytest.approx(cf.completeness_unconditioned)
+        assert cf.completeness_sd == pytest.approx(cf.completeness_unconditioned_sd)
+        # rate_unconditioned is just p; pp_rate_unconditioned is p × c.
+        assert cf.pp_rate_unconditioned < cf.rate_unconditioned
+        print(
+            f"No-evidence gauge scalars: c_cond={cf.completeness:.4f} "
+            f"c_unc={cf.completeness_unconditioned:.4f} (should match)"
+        )

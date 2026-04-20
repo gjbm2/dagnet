@@ -57,6 +57,7 @@ export interface SurpriseVariable {
   observed: number;
   expected: number;
   posterior_sd: number;
+  combined_sd?: number;
   zone: string;
   available: boolean;
   reason?: string;
@@ -65,6 +66,18 @@ export interface SurpriseVariable {
   evidence_retrieved_at?: string;
   observed_days?: number;
   expected_days?: number;
+  // p-variable only
+  completeness?: number;
+  // completeness-variable only (raw pair for detail rendering)
+  unconditioned?: number;
+  unconditioned_sd?: number;
+  conditioned?: number;
+  conditioned_sd?: number;
+}
+
+// Variables whose domain is [0, 1] and render as percentages
+function isPercentageVariable(name: string): boolean {
+  return name === 'p' || name === 'completeness';
 }
 
 /**
@@ -157,29 +170,39 @@ function buildGaugeDial(
   const needleSigma = Math.max(-maxSigma, Math.min(maxSigma, variable.sigma));
 
   // Format values for display
-  const fmtObs = variable.name === 'p'
+  const asPct = isPercentageVariable(variable.name);
+  const fmtObs = asPct
     ? `${(variable.observed * 100).toFixed(1)}%`
     : variable.observed_days != null
       ? `${variable.observed_days}d`
       : variable.observed.toFixed(3);
-  const fmtExp = variable.name === 'p'
+  const fmtExp = asPct
     ? `${(variable.expected * 100).toFixed(1)}%`
     : variable.expected_days != null
       ? `${variable.expected_days}d`
       : variable.expected.toFixed(3);
-  const fmtSd = variable.name === 'p'
-    ? `${((variable as any).combined_sd != null ? (variable as any).combined_sd * 100 : variable.posterior_sd * 100).toFixed(2)}%`
-    : ((variable as any).combined_sd ?? variable.posterior_sd).toFixed(4);
+  const sdValue = variable.combined_sd ?? variable.posterior_sd;
+  const fmtSd = asPct
+    ? `${(sdValue * 100).toFixed(2)}%`
+    : sdValue.toFixed(4);
 
-  // Evidence line: "Evidence (9/156): 5.8%"  — value bold, label normal
-  // Expected line: "Expected (23% complete): 6.4% ± 4.30%"
-  const nkSuffix = variable.name === 'p' && variable.evidence_k != null && variable.evidence_n != null
-    ? ` (${variable.evidence_k}/${variable.evidence_n})`
-    : '';
-  const completenessNote = variable.name === 'p' && (variable as any).completeness != null
-    ? ` (${Math.round((variable as any).completeness * 100)}% complete)`
-    : '';
-  const detailLabel = `{lbl|Evidence${nkSuffix}:} {val|${fmtObs}}\n{lbl|Expected${completenessNote}:} {val|${fmtExp}} {lbl|\u00b1 ${fmtSd}}`;
+  // Detail label differs by variable type:
+  //   p           — "Evidence (k/n): x%" then "Expected (c% complete): y% ± sd%"
+  //   completeness — "Evidence: x%" then "Expected: y% ± sd%"
+  //                  (Here "Evidence" = conditioned [evidence-informed],
+  //                   "Expected" = unconditioned [model baseline].)
+  let detailLabel: string;
+  if (variable.name === 'p') {
+    const nkSuffix = variable.evidence_k != null && variable.evidence_n != null
+      ? ` (${variable.evidence_k}/${variable.evidence_n})`
+      : '';
+    const completenessNote = variable.completeness != null
+      ? ` (${Math.round(variable.completeness * 100)}% complete)`
+      : '';
+    detailLabel = `{lbl|Evidence${nkSuffix}:} {val|${fmtObs}}\n{lbl|Expected${completenessNote}:} {val|${fmtExp}} {lbl|\u00b1 ${fmtSd}}`;
+  } else {
+    detailLabel = `{lbl|Evidence:} {val|${fmtObs}}\n{lbl|Expected:} {val|${fmtExp}} {lbl|\u00b1 ${fmtSd}}`;
+  }
 
   // Gauge title: "Conversion rate\n@ 10-Mar-26" (data date as smaller subtitle)
   const retrievedAtStr = variable.evidence_retrieved_at;
@@ -275,7 +298,13 @@ function buildGaugeDial(
     }],
   };
 
-  return {
+  // Pre-compute a completeness-annotation string for the tooltip
+  // (p-variable only — shows the maturity fraction next to "Model:").
+  const tooltipCompletenessNote = variable.name === 'p' && variable.completeness != null
+    ? ` (${Math.round(variable.completeness * 100)}% complete)`
+    : '';
+
+  const opt: any = {
     tooltip: {
       ...echartsTooltipStyle(),
       formatter: () => {
@@ -283,7 +312,7 @@ function buildGaugeDial(
         const dateLine = retrievedAtStr ? `<br/><span style="color:#9ca3af">Data as-at ${retrievedAtStr}</span>` : '';
         return `<strong>${variable.label}</strong>${dateLine}<br/>` +
           `Observed: ${fmtObs}<br/>` +
-          `Model: ${fmtExp} ± ${fmtSd}${completenessNote ? ` ${completenessNote}` : ''}<br/>` +
+          `Model: ${fmtExp} ± ${fmtSd}${tooltipCompletenessNote}<br/>` +
           `Position: ${pctLabel} (${variable.sigma > 0 ? '+' : ''}${variable.sigma.toFixed(2)}σ)<br/>` +
           `Verdict: ${variable.zone}`;
       },
@@ -292,6 +321,8 @@ function buildGaugeDial(
     animationEasing: 'cubicOut',
     series: [gaugeSeriesBase],
   };
+
+  return opt;
 }
 
 /**
@@ -458,25 +489,32 @@ export function buildSurpriseGaugeEChartsOption(
 
   let opt: any;
   if (selectedVar === 'all') {
-    // Show all available variables as horizontal bands
-    opt = buildBandChart(available, settings);
+    // Multi-variable mode — bands if 2+ available, otherwise dial of the one.
+    opt = available.length === 1
+      ? buildGaugeDial(available[0], settings)
+      : buildBandChart(available, settings);
   } else {
-    // Single variable selected — show semicircular dial
+    // Single variable selected — show semicircular dial.
+    // If the requested var is unavailable, fall back to the dial of whatever
+    // is available (single var) or to bands (multiple).
     const v = available.find(a => a.name === selectedVar);
-    if (!v) {
-      // Requested var not available — fall back to bands with whatever is available
-      opt = buildBandChart(available, settings);
-    } else {
+    if (v) {
       opt = buildGaugeDial(v, settings);
+    } else if (available.length === 1) {
+      opt = buildGaugeDial(available[0], settings);
+    } else {
+      opt = buildBandChart(available, settings);
     }
   }
 
-  // Add warning indicator + hint label when not using Bayesian posteriors
+  // Add warning indicator + hint label when not using Bayesian posteriors.
+  // Append to any existing graphic entries (e.g. the dial's
+  // limited-evidence warning icon) so both can coexist.
   const hint = result?.hint;
   if (opt && hint) {
     const c = echartsThemeColours();
     const hintColour = c.text === '#e0e0e0' ? '#6b7280' : '#9ca3af';
-    opt.graphic = [
+    const hintGraphics = [
       // ⚠ warning icon (top-right)
       {
         type: 'text',
@@ -504,6 +542,9 @@ export function buildSurpriseGaugeEChartsOption(
         silent: true,
       },
     ];
+    opt.graphic = Array.isArray(opt.graphic)
+      ? [...opt.graphic, ...hintGraphics]
+      : hintGraphics;
   }
 
   return opt;

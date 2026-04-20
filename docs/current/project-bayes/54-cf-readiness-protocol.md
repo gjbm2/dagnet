@@ -235,12 +235,12 @@ If CF endpoint is unreachable, all `cf_dependency: preferred` analyses stay on a
 M1-M6 provide the shared readiness + enrichment-reuse platform. Until they land, CF-dependent analyses can make **their own per-query CF calls**, paying duplicate compute for correctness.
 
 **Interim approach**:
-- Funnel v2 (doc 52) e+f and surprise gauge (doc 55 rework) each invoke `compute_forecast_sweep` — or `handle_conditioned_forecast` scoped to the analysis's edge set — as part of their own runner, rather than reading CF-written fields from the graph.
+- Funnel v2 (doc 52) e+f and surprise gauge (doc 55 rework) each invoke `compute_forecast_trajectory` — or `handle_conditioned_forecast` scoped to the analysis's edge set — as part of their own runner, rather than reading CF-written fields from the graph.
 - The analysis is self-contained and correct regardless of the fetch-pipeline CF race, at the cost of recomputing what the fetch-pipeline CF pass would have already computed.
 
 **What's duplicated (temporarily)**:
 - Per-query CF computation done by the fetch pipeline is repeated by each CF-dependent analysis for its own edge set.
-- For a single funnel on a 5-edge path, that's five extra `compute_forecast_sweep` calls per analysis request.
+- For a single funnel on a 5-edge path, that's five extra `compute_forecast_trajectory` calls per analysis request.
 - Latency cost is linear in path length per analysis, not aggregated across analyses on the same render.
 
 **When to cut over to the shared protocol**:
@@ -280,4 +280,4 @@ All four unc/cond completeness scalars are already computed inside every CF swee
 
 **Disambiguation**: the existing `completeness` / `completeness_stdev` pair currently serves a specific consumer path (doc 45, forecast parity). Leave it in place with its current semantics but document which flavour (conditioned, unconditioned, or blended) it represents, and alias or name it consistently with the new fields so that readers cannot mistake one for another.
 
-Cut-over M8 (surprise gauge, post-extension): once the above scalars are reliably written on each edge by the whole-graph CF pass (doc 47) and M1-M5 of this protocol have shipped, the gauge handler drops its inline `compute_forecast_sweep` call and becomes a short dict-read-and-z-score projection. This is the performance upgrade called out in doc 55 §4.6 and in the cost discussion that led to §8.
+Cut-over M8 (surprise gauge, post-extension): once the above scalars are reliably written on each edge by the whole-graph CF pass (doc 47) and M1-M5 of this protocol have shipped, the gauge handler drops its inline `compute_forecast_trajectory` call and becomes a short dict-read-and-z-score projection. This is the performance upgrade called out in doc 55 §4.6 and in the cost discussion that led to §8.

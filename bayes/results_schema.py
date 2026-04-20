@@ -351,16 +351,14 @@ def classify_quality(
         f for f in (failures or [])
         if isinstance(f, dict) and f.get("type") == "z_score"
     ]
-    # Data-integrity issues: audit-layer flags (e.g. kappa_lat flag set
-    # but zero variables, harness log missing, mu_prior lines absent).
-    # Soft signal — the run still produced posteriors, but the model
-    # state or audit trail shows inconsistency.
+    # Audit-layer flags: model-state warnings (kappa_lat set but zero
+    # variables, mu_prior missing, etc.). These are soft signals — the
+    # run completed, the data bound — but worth surfacing.
     data_integrity_points = [
         f for f in (failures or [])
         if isinstance(f, dict) and f.get("type") == "audit"
     ]
 
-    # One-line verdict combining the axes.
     conv_v = convergence.get("verdict", "unknown")
     biased_params = [p for p, rec in bias.items() if rec.get("verdict") == "biased"]
     has_bias_issue = bool(biased_params) or bool(bias_points)
@@ -403,31 +401,28 @@ def classify_status(
 ) -> str:
     """Classify top-level outcome as `fail` or `completed`.
 
-    `fail` — infrastructure / data-integrity failure: the run did not
-    produce usable posteriors. Either the subprocess crashed, the
-    sampler produced no output, or the data pipeline failed so the
-    posteriors bear no relationship to the data (binding failure).
+    `fail` — the infrastructure chain did not deliver a trustworthy
+    run. Either the subprocess crashed, the sampler produced nothing,
+    OR the data pipeline itself broke (binding failure, missing edge,
+    missing slice, missing param). Any of those mean the posteriors
+    don't correspond to the truth the regression is supposed to
+    recover against. Re-labelling as "completed with a warning" is
+    dressing up a pipeline defect.
 
-    `completed` — ran to end, produced posteriors, evidence bound.
-    Recovery quality (bias, convergence) is a separate concern —
-    see `classify_quality`.
-
-    Binding is treated as infrastructure because a "clean" convergence
-    verdict on a run where zero edges bound is a silent void: the
-    sampler drew from priors only, so there is nothing to compare
-    against truth. Such a result must not be confused with a genuine
-    clean completion.
+    `completed` — MCMC ran to end, posteriors are bound to the full
+    expected edge/slice/param structure. Recovery-level issues
+    (convergence, bias) are quality verdicts — see `classify_quality`.
     """
     infra_types = {
         "harness",            # subprocess crash / non-zero exit
         "timeout",            # subprocess timed out
-        "bootstrap",          # bootstrap failed
-        "error",              # any other exception
+        "bootstrap",          # bootstrap failed — no data to fit
+        "error",              # any other exception mid-run
         "empty_posterior",    # sampler ran but produced no posterior
         "binding",            # data binding failed — posteriors detached from data
-        "missing_edge",       # truth edge has no posterior — model didn't emit it
-        "missing_param",      # expected parameter missing from edge posteriors
-        "missing_slice",      # truth slice has no posterior
+        "missing_edge",       # truth edge has no posterior — pipeline defect
+        "missing_param",      # expected parameter missing — pipeline defect
+        "missing_slice",      # expected slice has no posterior — pipeline defect
     }
     for f in failures or []:
         if isinstance(f, dict) and f.get("type") in infra_types:

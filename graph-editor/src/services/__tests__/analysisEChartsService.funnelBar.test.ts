@@ -196,6 +196,105 @@ describe('analysisEChartsService (funnel bar)', () => {
     expect(s2Series).toHaveLength(3);
   });
 
+  it('emits hi/lo whisker markLine when probability_lo/hi are present (doc 52 Level 2)', () => {
+    const result: AnalysisResult = {
+      analysis_type: 'conversion_funnel',
+      analysis_name: 'Conversion Funnel',
+      analysis_description: 'Probability at each stage',
+      semantics: {
+        dimensions: [
+          { id: 'stage', name: 'Stage', type: 'stage', role: 'primary' },
+          { id: 'scenario_id', name: 'Scenario', type: 'scenario', role: 'secondary' },
+        ],
+        metrics: [
+          { id: 'probability', name: 'Cum. probability', type: 'probability', format: 'percent', role: 'primary' },
+        ],
+        chart: { recommended: 'funnel', hints: { show_hi_lo: true, stacked_striation: true } },
+      },
+      dimension_values: {
+        stage: {
+          start: { name: 'Start', order: 0 },
+          mid: { name: 'Mid', order: 1 },
+          end: { name: 'End', order: 2 },
+        },
+        scenario_id: {
+          current: { name: 'Current', colour: '#3b82f6', visibility_mode: 'f', probability_label: 'Forecast probability' },
+        },
+      },
+      data: [
+        { stage: 'start', scenario_id: 'current', probability: 1.0 },
+        { stage: 'mid', scenario_id: 'current', probability: 0.55, probability_lo: 0.40, probability_hi: 0.70 },
+        { stage: 'end', scenario_id: 'current', probability: 0.30, probability_lo: 0.18, probability_hi: 0.45 },
+      ],
+    };
+
+    const option = buildFunnelBarEChartsOption(result, {
+      scenarioIds: ['current'],
+      metric: 'cumulative_probability',
+    });
+
+    expect(option).toBeTruthy();
+    expect(option.series).toHaveLength(1);
+    const ml = option.series[0].markLine;
+    expect(ml).toBeTruthy();
+    expect(Array.isArray(ml.data)).toBe(true);
+    // Two segments (mid + end); start has no bands so it's skipped
+    expect(ml.data).toHaveLength(2);
+    // First segment: idx 1 (mid), lo→hi 0.40 → 0.70
+    expect(ml.data[0][0].coord).toEqual([1, 0.40]);
+    expect(ml.data[0][1].coord).toEqual([1, 0.70]);
+    expect(ml.data[1][0].coord).toEqual([2, 0.18]);
+    expect(ml.data[1][1].coord).toEqual([2, 0.45]);
+  });
+
+  it('emits hi/lo whisker markLine on the f−e segment for f+e stacked bars', () => {
+    const result: AnalysisResult = {
+      analysis_type: 'conversion_funnel',
+      analysis_name: 'Conversion Funnel',
+      analysis_description: 'Probability at each stage',
+      semantics: {
+        dimensions: [
+          { id: 'stage', name: 'Stage', type: 'stage', role: 'primary' },
+          { id: 'scenario_id', name: 'Scenario', type: 'scenario', role: 'secondary' },
+        ],
+        metrics: [
+          { id: 'probability', name: 'Cum. probability', type: 'probability', format: 'percent', role: 'primary' },
+        ],
+        chart: { recommended: 'funnel' },
+      },
+      dimension_values: {
+        stage: {
+          start: { name: 'Start', order: 0 },
+          mid: { name: 'Mid', order: 1 },
+          end: { name: 'End', order: 2 },
+        },
+        scenario_id: {
+          current: { name: 'Current', colour: '#3b82f6', visibility_mode: 'f+e', probability_label: 'Probability' },
+        },
+      },
+      data: [
+        { stage: 'start', scenario_id: 'current', probability: 1.0, evidence_mean: 1.0, p_mean: 1.0 },
+        { stage: 'mid', scenario_id: 'current', probability: 0.5, evidence_mean: 0.3, p_mean: 0.5, probability_lo: 0.42, probability_hi: 0.58 },
+        { stage: 'end', scenario_id: 'current', probability: 0.2, evidence_mean: 0.1, p_mean: 0.2, probability_lo: 0.14, probability_hi: 0.27 },
+      ],
+    };
+
+    const option = buildFunnelBarEChartsOption(result, {
+      scenarioIds: ['current'],
+      metric: 'cumulative_probability',
+    });
+    expect(option).toBeTruthy();
+    // Two stacked series: e (lower) + f−e (upper)
+    expect(option.series).toHaveLength(2);
+    // Whisker is attached to the upper segment so it sits on top of the bar
+    expect(option.series[0].markLine).toBeUndefined();
+    const ml = option.series[1].markLine;
+    expect(ml).toBeTruthy();
+    expect(ml.data).toHaveLength(2);
+    expect(ml.data[0][0].coord).toEqual([1, 0.42]);
+    expect(ml.data[0][1].coord).toEqual([1, 0.58]);
+  });
+
   it('disables F+E stacking when grouped stages are present', () => {
     const result: AnalysisResult = {
       analysis_type: 'conversion_funnel',
