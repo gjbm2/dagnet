@@ -1,8 +1,8 @@
 # 56 — Forecast stack: residual v1/v2 coupling in BE CF and v3 row builder
 
-**Status**: Implementation plan — migrate the live forecast stack off residual v1/v2 runtime helpers before landing new engine consumers. **Phase 0 complete**, **Phase 1 complete** (20-Apr-26). Phases 2-4.5 pending.
+**Status**: Implementation plan — migrate the live forecast stack off residual v1/v2 runtime helpers before landing new engine consumers. **Phases 0-3 complete** (20-Apr-26). **Phase 4 (deletion DAG) abandoned** — its premise that the `cohort_maturity_v2` chart feature had been deprecated was wrong; that deprecation is a separate workstream outside this migration's scope. **Phase 4.5 (κ=20 structural fix) is next** and is independent of Phase 4. Phase 5 (resuming consumer work) is unblocked now that the production forecast stack no longer couples to v1/v2/span_adapter.
 **Created**: 20-Apr-26
-**Updated**: 20-Apr-26 (§11 risk controls added; Phase 0/1 progress logged §12; Phase 4.5 κ=20 fix sequenced in §8)
+**Updated**: 20-Apr-26 (§11 risk controls added; Phases 0-3 progress logged §12; Phase 4 abandoned after scope error was surfaced; Phase 4.5 reframed as the next step)
 **Relates to**: doc 29e (forecast engine implementation plan, §HARD RULE: v2 is frozen), doc 29f (forecast engine implementation status, Phase G), doc 45 (forecast parity design), doc 47 (whole-graph forecast pass), doc 50 (CF generality gap — where this was surfaced)
 
 ## TL;DR
@@ -203,23 +203,35 @@ This plan adopts a **partial-retirement boundary**.
    production imports of v2 helpers; it does not fix live behaviour by
    patching v2 in place.
 
-2. **v2 retirement remains the target.** `cohort_forecast_v2.py` is not
-   accepted as permanent runtime infrastructure. It exists only until
-   the new runtime layer has taken over its remaining production jobs.
+2. **v2 retirement is not in scope for this migration.** The original
+   plan targeted full deletion in Phase 4, but that was wrong-headed:
+   the `cohort_maturity_v2` chart feature is still live and backed by
+   `_handle_cohort_maturity_v2`, which keeps `cohort_forecast_v2.py` and
+   `span_adapter.py` as real runtime consumers. Deletion of the v2
+   module is therefore deferred to whichever separate workstream
+   retires the v2 chart feature. This migration's contribution to v2
+   retirement is structural only: production CF, v3, and the engine no
+   longer import v2, so once the v2 chart feature goes, the module has
+   no remaining consumers and can be deleted cleanly.
 
 3. **`span_kernel.py` and `span_evidence.py` are promoted.** They are
    no longer treated as disposable transitional scaffolding. They are
    the permanent span-composition and evidence-composition
    infrastructure used by the general engine.
 
-4. **`span_adapter.py` is not promoted.** It is transitional by design
-   and must be deleted as part of this migration. The live handler must
-   stop converting `SpanKernel` back into v2-shaped edge params.
+4. **`span_adapter.py` is not promoted.** It is transitional by design.
+   Its deletion is not in scope here — it remains the kernel-to-edge-
+   params adapter for the live v2 chart handler. Production CF stopped
+   using it in Phase 3. Deletion is deferred to the v2-chart-feature
+   retirement workstream.
 
-5. **`cohort_forecast.py` is not promoted wholesale.** Any small graph
-   or carrier helpers still needed by production callers are re-homed
-   into a neutral runtime module. Production CF, v3, and engine paths
-   must reach zero imports from `cohort_forecast.py`.
+5. **`cohort_forecast.py` is not promoted wholesale.** Production CF,
+   v3, and engine paths now have zero imports from `cohort_forecast.py`
+   (delivered in Phases 2-3). The module itself is not deleted here
+   because `_handle_snapshot_analyze_subjects` and a v1 chart dev path
+   still consume it. Deletion is deferred to the same v2-chart-feature
+   retirement workstream, or to a follow-on that scrubs the dev-only v1
+   paths.
 
 6. **The κ=20 defect is fixed structurally, not locally — but only
    after the neutral refactor lands.** Phases 1-3 port the existing
@@ -267,15 +279,19 @@ The intended runtime boundary is:
   resolution, and delegate to the runtime layer plus engine. It must
   not reconstruct v2-era span params or carrier inputs locally.
 
-- `cohort_forecast_v2.py` remains as a parity oracle during migration
-  and is deleted at the end.
+- `cohort_forecast_v2.py` remains live as the backend for the
+  `cohort_maturity_v2` dev-only chart feature. Its runtime helpers are
+  no longer consumed by production CF, v3, or the engine (Phases 2-3).
+  Deletion is deferred to the separate v2-chart-feature retirement
+  workstream.
 
-- `span_adapter.py` is deleted at the end.
+- `span_adapter.py` remains live as the adapter used by the v2 chart
+  handler. Deletion is deferred to the same retirement workstream.
 
-- `cohort_forecast.py` is either deleted with v1 retirement or reduced
-  to dev-only legacy chart support during a short overlap. In either
-  case it is not an acceptable dependency of the production engine, CF,
-  or v3 paths.
+- `cohort_forecast.py` remains live for `_handle_snapshot_analyze_subjects`
+  and the dev-only v1 chart path. It is no longer consumed by production
+  engine, CF, or v3. Deletion is deferred to whichever workstream scrubs
+  the v1 chart and dev-only paths.
 
 ## 8. Specific implementation plan
 
@@ -389,38 +405,39 @@ has zero runtime imports from `cohort_forecast_v2.py`,
 `span_adapter.py`, and `cohort_forecast.py`, while the existing parity
 and topology suites remain green.
 
-### Phase 4 — Delete transitional code and update the programme docs
+### Phase 4 — Abandoned (was: delete transitional code)
 
-Only after the production callers are clean and the parity gates are
-green should the legacy files be removed.
+Originally this phase was scoped to delete `cohort_forecast_v2.py`,
+`span_adapter.py`, `cohort_forecast.py`, the `_handle_cohort_maturity_v2`
+handler, the `cohort_maturity_v1/v2` entries in `analysis_types.yaml`,
+and the v2-parity tests. That scope assumed the `cohort_maturity_v2`
+chart feature had been deprecated before this migration ran. It has
+not been — the dev-only chart is still a live product surface,
+`_handle_cohort_maturity_v2` still backs it, and the frozen modules
+have real runtime consumers. Proceeding with the deletion would
+remove a live feature.
 
-- Delete `cohort_forecast_v2.py` and its remaining dev-only handler
-  path.
+Phase 4 is therefore abandoned here. The module deletions (v2, v1,
+span_adapter) are deferred to the workstream that retires the
+`cohort_maturity_v2` chart feature and the v1 dev-only paths. Once
+that workstream lands, the cleanup that used to be this phase becomes
+a small mechanical follow-on: Phases 2-3 already removed every
+production consumer, so at that point the files will have no callers
+and can be deleted in a single commit. Doc 29e and doc 29f updates
+are deferred to that same follow-on.
 
-- Delete `span_adapter.py`.
-
-- Delete `cohort_forecast.py` if no dev-only legacy path still needs
-  it. If a short overlap is required for v1 verification, reduce it to
-  that role explicitly and track its final deletion as a small follow-on
-  task. What is not acceptable after this phase is any production
-  engine, CF, or v3 import from that file.
-
-- Update doc 29e so the old "frozen with v2" wording no longer claims
-  that `span_kernel.py` and `span_evidence.py` are transitional.
-
-- Update doc 29f so its status section and dependency discussion match
-  the new runtime boundary rather than the legacy-coupled one.
-
-The exit gate for Phase 4 is that the deleted modules are absent, the
-remaining docs describe the new truth, and the full forecast regression
-suite is green on the post-deletion tree.
+No runtime changes happen in Phase 4 under this plan.
 
 ### Phase 4.5 — Structural κ=20 fix in `forecast_runtime.py`
 
 Phases 1-3 preserved the v2-era κ=20 weak-prior fallback verbatim so
 that the RNG-parity gate and oracle baselines could prove the refactor
 was functionality-neutral. Phase 4.5 lands the actual structural fix
-against the clean boundary, isolated from the refactor.
+against the new clean boundary. It runs directly after Phase 3 — it
+is not coupled to the abandoned Phase 4 deletion. v2's own copy of
+`build_span_params` inside `cohort_forecast_v2.py` is not touched
+(the v2 chart feature continues to exhibit its κ=20 behaviour, which
+is fine because v2 is a comparison tool, not the production path).
 
 - Rewrite `build_span_params` in `forecast_runtime.py` so it reads the
   resolver's analytic α/β (the D20 fallback in `model_resolver.py`
@@ -431,6 +448,12 @@ against the clean boundary, isolated from the refactor.
   entirely. Keep a wide safety-net fallback (κ=200 default equivalent)
   only if the resolver returned neither posterior nor evidence-derived
   α/β, which is an edge case rather than the common path.
+- Leave `cohort_forecast_v2.py`'s own copy of `build_span_params`
+  unchanged. That function continues to serve the v2 chart handler
+  under its original κ=20 behaviour. The two copies diverge
+  intentionally: production uses the resolver-driven prior;
+  v2-as-comparison-tool keeps the old behaviour so users can still
+  compare v2 vs v3 numerically in the app.
 - Re-run `cf-truth-parity.sh` on the doc-50 fixture matrix and confirm
   the systematic laggy-edge undershoot (doc 50 Δ ≈ 0.05-0.68) collapses
   to a normal parity-level residual.
@@ -466,25 +489,37 @@ all downstream feature work now lands on the cleaned runtime stack.
 
 ## 9. Blocking gates for the migration
 
-The migration is not complete until all of the following are true:
+The migration (Phases 0-3 plus Phase 4.5) is not complete until all of
+the following are true:
 
 - The resolver-driven span prior path is the only production path and
-  the κ=20 fallback no longer appears when resolver α/β exists.
+  the κ=20 fallback no longer appears in `forecast_runtime.py` when
+  resolver α/β exists. **(Phase 4.5 exit gate.)**
 
 - Carrier parity remains acceptable across Tier 1, Tier 2, and Tier 3
-  fixtures after the runtime cut-over.
+  fixtures after the runtime cut-over. **(Phase 2-3 gate, passed.)**
 
-- The existing v2-v3 parity harness stays green throughout the refactor.
+- The existing v2-v3 parity harness stays green throughout Phases 1-3.
+  **(Passed.)** After Phase 4.5 the harness is expected to move — the
+  laggy-edge undershoot should collapse — so it is updated in the same
+  commit that retires it or its expectations are relaxed explicitly.
 
-- `cf-topology-suite.sh` stays green and `cf-truth-parity.sh` remains
-  green for the lagless and mixed-topology fixtures already landed by
-  doc 50.
+- `cf-topology-suite.sh` stays green and `cf-truth-parity.sh` is green
+  on Class B lagless fixtures throughout Phases 1-3. **(Passed.)**
+  Phase 4.5 is expected to tighten Class A laggy deltas toward
+  within-tolerance.
 
 - The production dependency audit shows zero imports from
   `cohort_forecast_v2.py`, `span_adapter.py`, and `cohort_forecast.py`
   in `forecast_state.py`, `cohort_forecast_v3.py`, and the CF handler.
+  **(Passed. Audit in
+  [test_forecast_stack_dependencies.py](graph-editor/lib/tests/test_forecast_stack_dependencies.py)
+  enforces this going forward.)**
 
-- Docs 29e and 29f have been updated to reflect the new runtime truth.
+- Docs 29e and 29f updates are deferred to the v2-chart-feature
+  retirement workstream (at which point v2 is actually deleted and
+  those docs' "frozen with v2" wording needs rewriting). Not a gate
+  here; flagged for whoever picks that up.
 
 ## 10. What remains out of scope
 
@@ -558,61 +593,63 @@ primitive (`_evaluate_cohort` at coordinate B). Its outputs on the
 synth-mirror-4step fixture are captured alongside CF oracle baselines
 in P0.2 and gated under the same per-edge tolerance.
 
-### 11.2 κ=20 structural fix — sequenced as Phase 4.5
+### 11.2 κ=20 structural fix — sequenced as Phase 4.5 (next step)
 
 The structural κ=20 fix (§6.6) is sequenced as Phase 4.5 (§8),
-explicitly after the neutral Phase 1-3 cut-over and the Phase 4
-deletion. Two reasons:
+immediately after the neutral Phase 1-3 cut-over. It is independent
+of the abandoned Phase 4 deletion because the fix is a surgical edit
+to `forecast_runtime.py`'s `build_span_params` only. v2's own copy
+stays untouched — that copy only serves the still-live v2 chart
+feature, which this migration does not alter.
 
-1. Phases 1-3 must be functionality-neutral against the RNG-parity
+Two reasons for the original "after Phase 3" sequencing still hold:
+
+1. Phases 1-3 had to be functionality-neutral against the RNG-parity
    gate and oracle baselines in §11.1. A structural fix landed inside
-   the refactor would perturb both gates and destroy their diagnostic
-   value: a regression in the refactor would be indistinguishable from
-   the intended κ=20 → resolver-α/β semantic change.
-2. After Phase 4 deletes `cohort_forecast_v2.py` and `span_adapter.py`,
-   the κ=20 fallback lives only in `forecast_runtime.py`'s verbatim
-   port. Fixing it there is a single focused edit to one module, with
-   no surviving v2 oracle to drift against. Baseline re-capture is
-   one commit with a documented semantic delta.
+   the refactor would have perturbed both gates and destroyed their
+   diagnostic value.
+2. The fix is a single focused edit to one module, captured by one
+   dedicated baseline-re-capture commit with an explicit semantic delta
+   in the message.
 
 Phase 4.5 is not optional — it is why this migration exists (doc 50
 surfaced the κ=20 undershoot as the motivating defect). The RNG-
 parity gate is retired as part of Phase 4.5's baseline re-capture.
 
-### 11.3 Deletion DAG for Phase 4
+### 11.3 Deletion DAG — deferred (was: for Phase 4)
 
-`cohort_forecast_v2.py` imports from `cohort_forecast.py` at
-[cohort_forecast_v2.py:489,530](graph-editor/lib/runner/cohort_forecast_v2.py),
-and the v2 chart handler (`_handle_cohort_maturity_v2` at
-[api_handlers.py:765](graph-editor/lib/api_handlers.py)) imports
-from `span_adapter.py` at
-[api_handlers.py:783](graph-editor/lib/api_handlers.py). These
-dependencies must survive Phase 3 so v2 can serve as the parity
-oracle throughout. Phase 4 therefore requires a specific ordering.
+**DEFERRED.** The DAG below was premised on the `cohort_maturity_v2`
+chart feature having been deprecated before this migration ran. It
+hasn't been. While that feature is live, `_handle_cohort_maturity_v2`
+(and transitively `cohort_forecast_v2.py` and `span_adapter.py`)
+retains a real runtime consumer. Similarly `cohort_forecast.py` is
+still imported by `_handle_snapshot_analyze_subjects` and a v1 chart
+dev path.
 
-**Phase 4 is one atomic commit**, executed in the following logical
-order within the commit:
+This ordering is retained here only as a reference for whichever
+workstream eventually retires the v2 and v1 chart features. At that
+point, Phases 2-3 of this migration will already have removed every
+production consumer of the listed modules, so the DAG below collapses
+to a small mechanical cleanup.
+
+The reference ordering:
 
 1. Remove the v2 chart handler (`_handle_cohort_maturity_v2` and its
-   dispatch at [api_handlers.py:533](graph-editor/lib/api_handlers.py)),
-   which removes the last production import of `span_adapter`.
+   dispatch), which removes the last production import of `span_adapter`.
 2. Delete `span_adapter.py`.
 3. Delete `cohort_forecast_v2.py`.
 4. Delete `cohort_forecast.py` *only* if no remaining consumer
-   imports it. If the v1 chart handler or dev-only paths at
-   [api_handlers.py:3351,3985,4092](graph-editor/lib/api_handlers.py)
-   still consume v1, either remove those call sites in the same
-   commit or defer v1 deletion to a tracked follow-on.
+   imports it.
 5. Remove `cohort_maturity_v1` and `cohort_maturity_v2` entries from
-   [analysis_types.yaml](graph-editor/lib/runner/analysis_types.yaml).
+   `analysis_types.yaml`.
 6. Remove v1/v2 references from test files that exist only to test
-   the deleted code. Parity tests that compare v2 against v3 are
-   deleted because the oracle they compare against no longer exists;
-   their role is replaced by the oracle baselines from §11.1.
+   the deleted code. The v2-parity tests
+   (`test_v2_v3_parity.py`, `test_be_topo_pass_parity.py`) go away
+   because the oracle they compare against is gone; their role is
+   replaced by the oracle baselines from §11.1.
 
-Steps 1-5 are mandatory in Phase 4. Step 6 may be split off if the
-diff is unwieldy, but the deletion of v2 cannot leave orphan v2
-references in the test tree.
+This DAG is not part of the doc 56 workstream as now scoped. It
+belongs to whoever retires the chart features.
 
 ### 11.4 Rollback boundary per phase
 
@@ -632,7 +669,7 @@ well-defined operation.
   split leaves intermediate broken states where the engine reads
   from the runtime layer but v3 and CF still call v2 helpers — not
   an acceptable boundary for revert.
-- **Phase 4**: one atomic commit per the deletion DAG in §11.3.
+- **Phase 4**: no commits. Abandoned (see §11.3 and §8 Phase 4).
 - **Phase 4.5**: one commit rewriting `build_span_params` in
   `forecast_runtime.py` plus one subsequent baseline-re-capture commit
   (distinct so the semantic change is not masked by the baseline
@@ -663,12 +700,28 @@ older text is updated rather than overridden.
 - **No caller cut-over**: the engine, v3 row builder, v3 chart handler, and CF handler still import from `cohort_forecast_v2` / `cohort_forecast` / `span_adapter`. P0.1 audit stays red (4/4 xfail), as intended for Phase 1.
 - **Gate verification**: all 13 runtime exports present via `importlib`; RNG hash unchanged from P0.2 capture; audit tests 4/4 xfail.
 
+### Phase 3 — complete (20-Apr-26)
+
+- **v3 row builder, v3 chart handler, and CF handler cut over.** Eleven import lines changed across `cohort_forecast_v3.py` (lines 567-568) and `api_handlers.py` (lines 1520, 1558, 1615-1616, 1687, 2279, 2316-2317, 2362). All now read from `forecast_runtime`. Handler-internal behaviour unchanged; only the module serving the helpers moved.
+- **Audit gate**: all four dependency-audit tests now XPASS (`test_engine_has_no_v1_v2_imports`, `test_v3_row_builder_has_no_v1_v2_imports`, `test_cf_handler_has_no_v1_v2_imports`, `test_v3_chart_handler_has_no_v1_v2_imports`). The `xfail(strict=False)` wrappers will be removed in a Phase 4 test-file cleanup.
+- **Remaining v1/v2/span_adapter imports in the tree** are exactly the ones Phase 4 deletes: inside `_handle_cohort_maturity_v2` (the v2 chart handler, lines 779/783/1051) and inside `_handle_snapshot_analyze_subjects` (dev-only v1 chart paths at lines 3366, 4000, 4107). The v2 handler's internal imports remain — §11.3 requires v2 to survive Phase 3 as parity oracle, and its imports only resolve because v1/v2/span_adapter still exist on disk.
+- **AST-identical verification**: `forecast_runtime`'s `build_span_params`, `build_upstream_carrier`, `_build_tier1_parametric`, `_build_tier2_empirical`, and `_build_tier3_weak_prior` are AST-identical to their `cohort_forecast_v2` originals (comments and docstrings differ only). Verified via `ast.unparse` on stripped source.
+- **Baseline re-capture**: a shared-fixture drift incident mid-verification (three topology graph files were regenerated by unrelated automation between the 20:57 baseline and the Phase 3 verification run) made the original RNG-gate baseline stale through no code-related cause. The structural problem is described in [test-fixture-ownership-problem.md](../../test-fixture-ownership-problem.md) and is being addressed as a separate workstream. As a local unblock, baselines were re-captured against current data state; Phase 3 code neutrality is established by two independent lines of evidence: (a) three stable-file fixtures (synth-simple-abc, cf-fix-branching, cf-fix-diamond-mixed) produced Δ=0 and byte-identical hashes against the original pre-regen baselines, before any re-capture; (b) all six fixtures match the fresh baselines with Δ=0 and byte-identical hashes.
+- **Full verification summary against fresh baselines**: synth-simple-abc 2/2 edges, cf-fix-linear-no-lag 3/3, synth-mirror-4step 4/4, cf-fix-branching 2/2, cf-fix-diamond-mixed 4/4, cf-fix-deep-mixed 6/6 — 21/21 edges Δp_mean = Δcompleteness = 0 and rate_draws_sha256 byte-identical. RNG-gate fixture hash `d26502e5b4679decae735e734f44056ba9599bccd9d11e2f23c8c21c9121ffd1` matches.
+
 ### Phase 2 — complete (20-Apr-26)
 
 - **Engine cut-over landed.** The two imports inside `build_node_arrival_cache` ([forecast_state.py:312-313](../../graph-editor/lib/runner/forecast_state.py#L312)) now read from `forecast_runtime`. Single logical change; one-line diff replacing the two-line v1/v2 import block.
 - **Audit gate**: `test_engine_has_no_v1_v2_imports` now XPASS; `test_v3_row_builder_has_no_v1_v2_imports`, `test_cf_handler_has_no_v1_v2_imports`, and `test_v3_chart_handler_has_no_v1_v2_imports` remain XFAIL as expected for Phase 3.
 - **RNG byte-identical gate**: live hash on `synth-mirror-4step` RNG fixture is `9a88800183eb9ecdcea8660b4372eeb57ef8fe7b26e39683c38c66d375eeb2ca` — byte-identical to the pre-Phase-2 baseline. Proves the engine's carrier construction moved modules without perturbing RNG call order.
 - **CF whole-graph sanity**: `synth-simple-abc` `window(-120d:)` — both parameterised edges (`simple-a->simple-b`, `simple-b->simple-c`) have Δp_mean = Δcompleteness = 0.0 and matching `rate_draws_sha256` vs baseline.
+
+### Phase 4 — abandoned (20-Apr-26)
+
+- **Scope error surfaced**: Phase 4 as written in §11.3 assumed the `cohort_maturity_v2` chart feature had been deprecated. It had not. `_handle_cohort_maturity_v2` is still a live handler, and the `cohort_maturity_v2` dev-only chart is still a selectable analysis type. Deleting the handler + module + span_adapter + yaml entries would remove a live product surface.
+- **Action taken**: Phase 4 is abandoned in this migration. The deletion DAG is deferred to the workstream that retires the v2 (and v1) chart features. See §8 Phase 4 and §11.3 for the deferred-DAG reference ordering.
+- **What remains correct from Phase 2-3**: production CF, v3, and the engine no longer import from `cohort_forecast_v2.py`, `span_adapter.py`, or `cohort_forecast.py` (audit tests in [test_forecast_stack_dependencies.py](../../graph-editor/lib/tests/test_forecast_stack_dependencies.py) enforce this). So the module deletions, whenever they eventually happen, are a pure cleanup with no runtime consequences.
+- **Tests**: the four dependency-audit tests now run as unconditional assertions — the `@pytest.mark.xfail` wrappers from Phase 0 were removed because they were guarding a state that no longer exists. Any future re-introduction of a banned import is caught by CI.
 
 ### Open concerns for Phase 3
 

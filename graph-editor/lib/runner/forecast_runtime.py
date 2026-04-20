@@ -321,7 +321,7 @@ def build_x_provider_from_graph(
 
 
 def span_kernel_to_edge_params(
-    kernel,  # SpanKernel (avoid top-level import; kept lazy like span_adapter)
+    kernel,  # SpanKernel (avoid top-level import; resolved lazily by callers)
     graph: Dict[str, Any],
     target_edge_id: str,
     is_window: bool,

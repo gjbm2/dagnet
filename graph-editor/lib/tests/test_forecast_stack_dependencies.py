@@ -119,10 +119,9 @@ def _handle_cohort_maturity_v3_imports() -> list[tuple[str, int]]:
     return _function_body_imports("_handle_cohort_maturity_v3")
 
 
-# ── Assertions (RED until Phase 3 cut-over) ─────────────────────────
+# ── Assertions ──────────────────────────────────────────────────────
 
 
-@pytest.mark.xfail(reason="Doc 56 Phase 2 — engine cut-over pending", strict=False)
 def test_engine_has_no_v1_v2_imports():
     hits = _banned_hits_in_file(_FORECAST_STATE)
     assert hits == [], (
@@ -131,7 +130,6 @@ def test_engine_has_no_v1_v2_imports():
     )
 
 
-@pytest.mark.xfail(reason="Doc 56 Phase 3 — v3 cut-over pending", strict=False)
 def test_v3_row_builder_has_no_v1_v2_imports():
     hits = _banned_hits_in_file(_V3)
     assert hits == [], (
@@ -140,7 +138,6 @@ def test_v3_row_builder_has_no_v1_v2_imports():
     )
 
 
-@pytest.mark.xfail(reason="Doc 56 Phase 3 — CF handler cut-over pending", strict=False)
 def test_cf_handler_has_no_v1_v2_imports():
     hits = _handle_conditioned_forecast_imports()
     assert hits == [], (
@@ -149,7 +146,6 @@ def test_cf_handler_has_no_v1_v2_imports():
     )
 
 
-@pytest.mark.xfail(reason="Doc 56 Phase 3 — v3 chart handler cut-over pending", strict=False)
 def test_v3_chart_handler_has_no_v1_v2_imports():
     hits = _handle_cohort_maturity_v3_imports()
     assert hits == [], (

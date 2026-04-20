@@ -4,6 +4,6 @@
   "description": "Byte-identical RNG gate (doc 56 \u00a711.1). Single-edge cohort mode exercising span kernel + build_span_params + XProvider + build_upstream_carrier Tier 2 + compute_forecast_trajectory with full 14-param signature.",
   "n_hashes": 1,
   "rate_draws_sha256": [
-    "9a88800183eb9ecdcea8660b4372eeb57ef8fe7b26e39683c38c66d375eeb2ca"
+    "d26502e5b4679decae735e734f44056ba9599bccd9d11e2f23c8c21c9121ffd1"
   ]
 }

@@ -564,8 +564,12 @@ def compute_cohort_maturity_rows_v3(
         NodeArrivalState,
     )
     from .model_resolver import resolve_model_params
-    from .cohort_forecast import find_edge_by_id, XProvider, build_x_provider_from_graph
-    from .cohort_forecast_v2 import build_upstream_carrier
+    from .forecast_runtime import (
+        find_edge_by_id,
+        XProvider,
+        build_x_provider_from_graph,
+        build_upstream_carrier,
+    )
 
     target_edge = find_edge_by_id(graph, target_edge_id)
     if target_edge is None:

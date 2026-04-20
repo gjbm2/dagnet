@@ -10,7 +10,7 @@
         "from_node": "simple-a",
         "to_node": "simple-b",
         "p_mean": 0.604646260594616,
-        "p_sd": 4.206159491523695e-05,
+        "p_sd": 0.0006809067344865701,
         "completeness": 0.9988377041278398,
         "completeness_sd": 0.00036011881233697507,
         "rate_draws_sha256": "61a01705cd3fa67d61550066ed4515e547d2453cf47259e6cb5797b14f5af1f0"
@@ -19,7 +19,7 @@
         "from_node": "simple-b",
         "to_node": "simple-c",
         "p_mean": 0.4959884032395298,
-        "p_sd": 0.00012499220943678753,
+        "p_sd": 0.0008679083312455627,
         "completeness": 0.9908833326957087,
         "completeness_sd": 0.001525144499659708,
         "rate_draws_sha256": "ddc6216a2792a9d3c341cfe482d83e052812fc064fee8ff74ac99c1893407f2e"
@@ -37,8 +37,8 @@
       "cf-fix-no-lag-a->cf-fix-no-lag-b": {
         "from_node": "cf-fix-no-lag-a",
         "to_node": "cf-fix-no-lag-b",
-        "p_mean": 0.5444894973203791,
-        "p_sd": 0.0032968282319031927,
+        "p_mean": 0.5627066443226595,
+        "p_sd": 0.0033383197085284167,
         "completeness": 1,
         "completeness_sd": 0,
         "rate_draws_sha256": "ddc6216a2792a9d3c341cfe482d83e052812fc064fee8ff74ac99c1893407f2e"
@@ -46,8 +46,8 @@
       "cf-fix-no-lag-b->cf-fix-no-lag-c": {
         "from_node": "cf-fix-no-lag-b",
         "to_node": "cf-fix-no-lag-c",
-        "p_mean": 0.431662825986221,
-        "p_sd": 0.00425865057868781,
+        "p_mean": 0.45191146881287725,
+        "p_sd": 0.004464639160135574,
         "completeness": 1,
         "completeness_sd": 0,
         "rate_draws_sha256": "ddc6216a2792a9d3c341cfe482d83e052812fc064fee8ff74ac99c1893407f2e"
@@ -55,8 +55,8 @@
       "cf-fix-no-lag-c->cf-fix-no-lag-d": {
         "from_node": "cf-fix-no-lag-c",
         "to_node": "cf-fix-no-lag-d",
-        "p_mean": 0.28026630967075966,
-        "p_sd": 0.005591374533267142,
+        "p_mean": 0.29825498575498577,
+        "p_sd": 0.00610423594708185,
         "completeness": 1,
         "completeness_sd": 0,
         "rate_draws_sha256": "ddc6216a2792a9d3c341cfe482d83e052812fc064fee8ff74ac99c1893407f2e"
@@ -74,37 +74,37 @@
       "m4-landing->m4-created": {
         "from_node": "m4-landing",
         "to_node": "m4-created",
-        "p_mean": 0.1735740410834024,
-        "p_sd": 0.0028313493438329013,
+        "p_mean": 0.1735688247876591,
+        "p_sd": 0.07622701153660033,
         "completeness": 1,
         "completeness_sd": 0,
-        "rate_draws_sha256": "43c5a38fb9aa0c381b31b08ea2f00dac94426c6c5078412d83280e65c264489a"
+        "rate_draws_sha256": "2a4b1a7a693f7da91ca5afe5dda4e2c781527e0d3fc182b9c454f4103fab89a3"
       },
       "m4-created->m4-delegated": {
         "from_node": "m4-created",
         "to_node": "m4-delegated",
-        "p_mean": 0.48585613922682347,
-        "p_sd": 0.007807157768637935,
+        "p_mean": 0.48596002504253166,
+        "p_sd": 0.0920154911361774,
         "completeness": 1,
         "completeness_sd": 0,
-        "rate_draws_sha256": "43c5a38fb9aa0c381b31b08ea2f00dac94426c6c5078412d83280e65c264489a"
+        "rate_draws_sha256": "2a4b1a7a693f7da91ca5afe5dda4e2c781527e0d3fc182b9c454f4103fab89a3"
       },
       "m4-delegated->m4-registered": {
         "from_node": "m4-delegated",
         "to_node": "m4-registered",
         "p_mean": 0.042105263157894736,
-        "p_sd": 0.0008677717847613804,
-        "completeness": 0.989898320127006,
-        "completeness_sd": 0.01725231931056999,
-        "rate_draws_sha256": "41c8ad9da301b3624269cd21dbbe8010ea34fa24521003b27c54e4536587cd83"
+        "p_sd": 0.06487453371023547,
+        "completeness": 0.9897493978861793,
+        "completeness_sd": 0.017458213022975774,
+        "rate_draws_sha256": "c69dcc172abb95c72ae2cd1e00ea80cacf07e89f62aa3c78760e7dde0641311d"
       },
       "m4-registered->m4-success": {
         "from_node": "m4-registered",
         "to_node": "m4-success",
         "p_mean": 0.01818181818181818,
-        "p_sd": 3.469446951953614e-18,
+        "p_sd": 0.10531093066674328,
         "completeness": 1,
-        "completeness_sd": 9.700007828608789e-16,
+        "completeness_sd": 7.088754450718297e-16,
         "rate_draws_sha256": "d35dc795344b7a4fdf91739cad37429be4a773529b477dd94b140bf37812877a"
       }
     },
@@ -121,7 +121,7 @@
         "from_node": "cf-fix-branch-a",
         "to_node": "cf-fix-branch-b",
         "p_mean": 0.12060884028022781,
-        "p_sd": 1.9162271674631468e-05,
+        "p_sd": 0.003376597502820046,
         "completeness": 0.9999716129899202,
         "completeness_sd": 2.0997931802351938e-05,
         "rate_draws_sha256": "08643f6cde3da678dfaebdb7027f6c6fa8fe6a48bbc0c5b6d211b0ce31050995"
@@ -149,7 +149,7 @@
         "from_node": "cf-fix-diamond-a",
         "to_node": "cf-fix-diamond-b",
         "p_mean": 0.42240027294588955,
-        "p_sd": 3.739424149473932e-05,
+        "p_sd": 0.0011719022616940254,
         "completeness": 0.9993544966373775,
         "completeness_sd": 0.00022494495905546255,
         "rate_draws_sha256": "982c0b85f64bb857419b24f2375bcd39e111aff2d29569b9b1b312a3ae54047a"
@@ -176,7 +176,7 @@
         "from_node": "cf-fix-diamond-c",
         "to_node": "cf-fix-diamond-d",
         "p_mean": 0.4162914277723395,
-        "p_sd": 0.0001843274158355584,
+        "p_sd": 0.001870911440993354,
         "completeness": 0.9938718483019541,
         "completeness_sd": 0.0011344020955552424,
         "rate_draws_sha256": "d8f93e1e44a22a6834ae1fbb4ecac61a7654488b8b6efa1684195f011a7b1840"
@@ -198,16 +198,16 @@
         "p_sd": 0.0008324048846245513,
         "completeness": 1,
         "completeness_sd": 0,
-        "rate_draws_sha256": "75fb50b330c69e10dea3164c21e45ffdc9e9fe2a4174c13ca8ef4f260f56ecda"
+        "rate_draws_sha256": "dc0b3ca8cc6d93a9708d2dd90b9692ada32f1880ed71902a6378fc177e3764fc"
       },
       "cf-fix-deep-b->cf-fix-deep-c": {
         "from_node": "cf-fix-deep-b",
         "to_node": "cf-fix-deep-c",
-        "p_mean": 0.5908424527320363,
+        "p_mean": 0.551225813778516,
         "p_sd": 0.001069232497760867,
-        "completeness": 1,
-        "completeness_sd": 0,
-        "rate_draws_sha256": "75fb50b330c69e10dea3164c21e45ffdc9e9fe2a4174c13ca8ef4f260f56ecda"
+        "completeness": 0.987662319879264,
+        "completeness_sd": 0.0013985319554980088,
+        "rate_draws_sha256": "7f722946512526c3244ded4fbb3d68cddc9d8749509155c93bd33821b02b4442"
       },
       "cf-fix-deep-c->cf-fix-deep-d": {
         "from_node": "cf-fix-deep-c",
@@ -216,16 +216,16 @@
         "p_sd": 0.0014049297694085272,
         "completeness": 1,
         "completeness_sd": 0,
-        "rate_draws_sha256": "75fb50b330c69e10dea3164c21e45ffdc9e9fe2a4174c13ca8ef4f260f56ecda"
+        "rate_draws_sha256": "7f722946512526c3244ded4fbb3d68cddc9d8749509155c93bd33821b02b4442"
       },
       "cf-fix-deep-d->cf-fix-deep-e": {
         "from_node": "cf-fix-deep-d",
         "to_node": "cf-fix-deep-e",
-        "p_mean": 0.48781327063141594,
+        "p_mean": 0.4518801691934241,
         "p_sd": 0.0018926572538891769,
-        "completeness": 1,
-        "completeness_sd": 0,
-        "rate_draws_sha256": "75fb50b330c69e10dea3164c21e45ffdc9e9fe2a4174c13ca8ef4f260f56ecda"
+        "completeness": 0.9577570194362746,
+        "completeness_sd": 0.002555727533070419,
+        "rate_draws_sha256": "3d663bf4c87a37c88f33286166ef99fe404e51cbc3d09496dc57e40c816b278c"
       },
       "cf-fix-deep-e->cf-fix-deep-f": {
         "from_node": "cf-fix-deep-e",
@@ -234,16 +234,16 @@
         "p_sd": 0.0027032971804015165,
         "completeness": 1,
         "completeness_sd": 0,
-        "rate_draws_sha256": "75fb50b330c69e10dea3164c21e45ffdc9e9fe2a4174c13ca8ef4f260f56ecda"
+        "rate_draws_sha256": "3d663bf4c87a37c88f33286166ef99fe404e51cbc3d09496dc57e40c816b278c"
       },
       "cf-fix-deep-f->cf-fix-deep-g": {
         "from_node": "cf-fix-deep-f",
         "to_node": "cf-fix-deep-g",
-        "p_mean": 0.39750095141443614,
+        "p_mean": 0.36122634171635987,
         "p_sd": 0.0038973798471932963,
-        "completeness": 1,
-        "completeness_sd": 0,
-        "rate_draws_sha256": "75fb50b330c69e10dea3164c21e45ffdc9e9fe2a4174c13ca8ef4f260f56ecda"
+        "completeness": 0.9811921221609897,
+        "completeness_sd": 0.001818749130825412,
+        "rate_draws_sha256": "aeae7544f4d10447a118d3a534ce3cf06a0278f5a5d2f5438cbec7807a3e6234"
       }
     },
     "skipped_edges": {}

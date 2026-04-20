@@ -1517,7 +1517,7 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
         _edge_t95 = None
         _path_t95 = None
         if last_edge_id:
-            from runner.cohort_forecast import find_edge_by_id
+            from runner.forecast_runtime import find_edge_by_id
             _t95_edge = find_edge_by_id(graph_data, last_edge_id)
             if _t95_edge:
                 _t95_lat = _t95_edge.get('p', {}).get('latency', {})
@@ -1555,7 +1555,7 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
         # Frame annotation was only needed for projected_y aggregation
         # which is superseded by the engine.
         from runner.model_resolver import resolve_model_params
-        from runner.cohort_forecast import find_edge_by_id
+        from runner.forecast_runtime import find_edge_by_id
 
         # ── Build span kernel + MC draws (shared with v2 for parity) ──
         _mc_cdf_v3 = None
@@ -1612,8 +1612,7 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
                     for t in range(401)
                 ]
                 # Span-adapted params from edge kernel
-                from runner.span_adapter import span_kernel_to_edge_params
-                from runner.cohort_forecast_v2 import build_span_params
+                from runner.forecast_runtime import span_kernel_to_edge_params, build_span_params
                 _ek = _edge_kernel_v3 or _kernel_v3
                 _span_edge_params = span_kernel_to_edge_params(
                     _ek, graph_data, last_edge_id, is_window=is_window)
@@ -1684,7 +1683,7 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
         # arrivals). These are orthogonal, not double-counting.
         _v3_x_provider = None
         if not is_window and query_from_node and anchor_node:
-            from runner.cohort_forecast import XProvider, get_incoming_edges, read_edge_cohort_params
+            from runner.forecast_runtime import XProvider, get_incoming_edges, read_edge_cohort_params
             _v3_ingress = []
             for inc_edge in get_incoming_edges(graph_data, query_from_node):
                 _params = read_edge_cohort_params(inc_edge)
@@ -2276,7 +2275,7 @@ def handle_conditioned_forecast(data: Dict[str, Any]) -> Dict[str, Any]:
 
             # ── Build span kernel + carrier + x_provider (same as v3)
             from runner.model_resolver import resolve_model_params
-            from runner.cohort_forecast import find_edge_by_id
+            from runner.forecast_runtime import find_edge_by_id
 
             _mc_cdf = None
             _mc_p = None
@@ -2313,8 +2312,7 @@ def handle_conditioned_forecast(data: Dict[str, Any]) -> Dict[str, Any]:
                         min(max(_det_cdf_kernel.cdf_at(t) / _det_cdf_kernel.span_p, 0.0), 1.0)
                         for t in range(401)
                     ]
-                    from runner.span_adapter import span_kernel_to_edge_params
-                    from runner.cohort_forecast_v2 import build_span_params
+                    from runner.forecast_runtime import span_kernel_to_edge_params, build_span_params
                     _ek = _edge_kernel or _kernel
                     _span_edge_params = span_kernel_to_edge_params(
                         _ek, graph_data, last_edge_id, is_window=is_window)
@@ -2359,7 +2357,7 @@ def handle_conditioned_forecast(data: Dict[str, Any]) -> Dict[str, Any]:
             # x_provider (same as v3)
             _x_provider = None
             if not is_window and query_from_node and anchor_node:
-                from runner.cohort_forecast import XProvider, get_incoming_edges, read_edge_cohort_params
+                from runner.forecast_runtime import XProvider, get_incoming_edges, read_edge_cohort_params
                 _ingress = []
                 for inc_edge in get_incoming_edges(graph_data, query_from_node):
                     _params = read_edge_cohort_params(inc_edge)

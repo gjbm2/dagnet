@@ -1,6 +1,6 @@
 {
-  "captured_at": "2026-04-20T19:52:28.174644Z",
-  "dagnet_git_sha": "44e1f5c9111a836d67492ce69aa669ebcf055957",
+  "captured_at": "2026-04-20T21:32:23.563314Z",
+  "dagnet_git_sha": "b6228a027e7212b525d45378b63c98d3e8c89a7b",
   "data_repo_git_sha": "1ce814f644897326c451493c493ce24b19fcac57",
   "tolerances": {
     "deterministic_fields": "|\u0394| \u2264 1e-10",
