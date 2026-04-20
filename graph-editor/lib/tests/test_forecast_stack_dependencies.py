@@ -81,18 +81,17 @@ def _banned_hits_in_file(path: Path) -> list[tuple[str, int]]:
     return hits
 
 
-def _handle_conditioned_forecast_imports() -> list[tuple[str, int]]:
-    """Return only the imports that live inside handle_conditioned_forecast.
+def _function_body_imports(func_name: str) -> list[tuple[str, int]]:
+    """Return banned imports that live inside a named top-level function.
 
-    The rest of api_handlers.py contains many legitimate v2/v1 call sites
-    (the frozen v2 chart handler, parity comparators, etc.). We only guard
-    the CF handler function body.
+    The rest of api_handlers.py contains legitimate v2/v1 call sites
+    (the frozen v2 chart handler, parity comparators, etc.). We guard
+    only the named function body.
     """
     source = _API_HANDLERS.read_text()
     tree = ast.parse(source)
     for node in tree.body:
-        if isinstance(node, ast.FunctionDef) and node.name == "handle_conditioned_forecast":
-            # Walk only within this function
+        if isinstance(node, ast.FunctionDef) and node.name == func_name:
             hits: list[tuple[str, int]] = []
             for sub in ast.walk(node):
                 if isinstance(sub, ast.ImportFrom):
@@ -109,7 +108,15 @@ def _handle_conditioned_forecast_imports() -> list[tuple[str, int]]:
                         if alias.name in BANNED_FROM_TARGETS:
                             hits.append((alias.name, sub.lineno))
             return hits
-    raise AssertionError("handle_conditioned_forecast not found in api_handlers.py")
+    raise AssertionError(f"{func_name} not found in api_handlers.py")
+
+
+def _handle_conditioned_forecast_imports() -> list[tuple[str, int]]:
+    return _function_body_imports("handle_conditioned_forecast")
+
+
+def _handle_cohort_maturity_v3_imports() -> list[tuple[str, int]]:
+    return _function_body_imports("_handle_cohort_maturity_v3")
 
 
 # ── Assertions (RED until Phase 3 cut-over) ─────────────────────────
@@ -138,5 +145,14 @@ def test_cf_handler_has_no_v1_v2_imports():
     hits = _handle_conditioned_forecast_imports()
     assert hits == [], (
         f"handle_conditioned_forecast must not import from {BANNED_MODULES}. "
+        f"Found: {hits}"
+    )
+
+
+@pytest.mark.xfail(reason="Doc 56 Phase 3 — v3 chart handler cut-over pending", strict=False)
+def test_v3_chart_handler_has_no_v1_v2_imports():
+    hits = _handle_cohort_maturity_v3_imports()
+    assert hits == [], (
+        f"_handle_cohort_maturity_v3 must not import from {BANNED_MODULES}. "
         f"Found: {hits}"
     )

@@ -2447,12 +2447,19 @@ def handle_conditioned_forecast(data: Dict[str, Any]) -> Dict[str, Any]:
                     # older snapshots that didn't surface p_infinity.
                     p_mean = last_row.get('p_infinity_mean')
                     p_sd = last_row.get('p_infinity_sd')
+                    # Doc 49: epistemic SD (rate-only) alongside the
+                    # default predictive SD (kappa-inflated). Funnel
+                    # runner combines them via completeness weighting
+                    # per doc 52 §3.5. Falls back to p_sd if absent.
+                    p_sd_epistemic = last_row.get('p_infinity_sd_epistemic')
                     if p_mean is None:
                         p_mean = last_row.get('midpoint')
                         fan_upper = last_row.get('fan_upper')
                         fan_lower = last_row.get('fan_lower')
                         if p_sd is None and fan_upper is not None and fan_lower is not None and p_mean is not None:
                             p_sd = (fan_upper - fan_lower) / (2 * 1.645)
+                    if p_sd_epistemic is None:
+                        p_sd_epistemic = p_sd
 
                     # Doc 45 §Response contract: per-edge output MUST
                     # include `completeness` and `completeness_sd`. The
@@ -2465,18 +2472,26 @@ def handle_conditioned_forecast(data: Dict[str, Any]) -> Dict[str, Any]:
                     completeness_sd = last_row.get('completeness_sd')
 
                     from runner.forecast_state import _last_forensic
+                    # Doc 52 §14.6: subset-conditioning provenance,
+                    # stashed on the first row by v3 as a sentinel.
+                    # Extract into a dedicated response block and remove
+                    # from the row to keep the row schema clean.
+                    first_row = maturity_rows[0] if maturity_rows else {}
+                    _cond = first_row.pop('_conditioning', None) if isinstance(first_row, dict) else None
                     edge_results.append({
                         'edge_uuid': last_edge_id,
                         'from_node': query_from_node,
                         'to_node': query_to_node,
                         'p_mean': p_mean,
                         'p_sd': p_sd,
+                        'p_sd_epistemic': p_sd_epistemic,
                         'completeness': completeness,
                         'completeness_sd': completeness_sd,
                         'tau_max': last_row.get('tau'),
                         'n_rows': len(maturity_rows),
                         'n_cohorts': composed.get('cohorts_analysed', 0),
                         '_forensic': _last_forensic,
+                        **({'conditioning': _cond} if _cond else {}),
                     })
                     print(f"[forecast] {scenario_id}: {query_from_node}→{query_to_node} "
                           f"p={p_mean:.4f} tau_max={last_row.get('tau')} "

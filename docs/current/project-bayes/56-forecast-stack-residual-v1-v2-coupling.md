@@ -1,8 +1,8 @@
 # 56 — Forecast stack: residual v1/v2 coupling in BE CF and v3 row builder
 
-**Status**: Implementation plan — migrate the live forecast stack off residual v1/v2 runtime helpers before landing new engine consumers.
+**Status**: Implementation plan — migrate the live forecast stack off residual v1/v2 runtime helpers before landing new engine consumers. **Phase 0 complete**, **Phase 1 complete** (20-Apr-26). Phases 2-4.5 pending.
 **Created**: 20-Apr-26
-**Updated**: 20-Apr-26
+**Updated**: 20-Apr-26 (§11 risk controls added; Phase 0/1 progress logged §12; Phase 4.5 κ=20 fix sequenced in §8)
 **Relates to**: doc 29e (forecast engine implementation plan, §HARD RULE: v2 is frozen), doc 29f (forecast engine implementation status, Phase G), doc 45 (forecast parity design), doc 47 (whole-graph forecast pass), doc 50 (CF generality gap — where this was surfaced)
 
 ## TL;DR
@@ -221,11 +221,17 @@ This plan adopts a **partial-retirement boundary**.
    into a neutral runtime module. Production CF, v3, and engine paths
    must reach zero imports from `cohort_forecast.py`.
 
-6. **The κ=20 defect is fixed structurally, not locally.** The live
-   span-prior path is rebuilt on top of `ResolvedModelParams`, so the
-   resolver's D20 fallback for analytic α/β becomes the canonical prior
-   source. No production path should continue to derive a span prior
-   from v2's weak default when resolver evidence exists.
+6. **The κ=20 defect is fixed structurally, not locally — but only
+   after the neutral refactor lands.** Phases 1-3 port the existing
+   span-prior path verbatim (κ=20 fallback preserved) so the RNG-
+   parity gate and oracle baselines have zero behavioural noise to
+   confound them. The structural fix is Phase 4.5 (§8): once the live
+   path has been cut over to `forecast_runtime.py` and the v2 oracle
+   deleted, the runtime module's `build_span_params` is rewritten to
+   read the resolver's analytic α/β directly and the κ=20 fallback is
+   removed from the live path. No production path then continues to
+   derive a span prior from v2's weak default when resolver evidence
+   exists.
 
 7. **No new engine consumers land before the cut-over gates pass.**
    Docs 52 and 55 remain blocked on this migration. Doc 47 may proceed
@@ -409,6 +415,37 @@ The exit gate for Phase 4 is that the deleted modules are absent, the
 remaining docs describe the new truth, and the full forecast regression
 suite is green on the post-deletion tree.
 
+### Phase 4.5 — Structural κ=20 fix in `forecast_runtime.py`
+
+Phases 1-3 preserved the v2-era κ=20 weak-prior fallback verbatim so
+that the RNG-parity gate and oracle baselines could prove the refactor
+was functionality-neutral. Phase 4.5 lands the actual structural fix
+against the clean boundary, isolated from the refactor.
+
+- Rewrite `build_span_params` in `forecast_runtime.py` so it reads the
+  resolver's analytic α/β (the D20 fallback in `model_resolver.py`
+  already supplies these from evidence.n/k with κ=200 fallback) instead
+  of preferring v2's κ=20 centred on `span_p` when no MCMC posterior
+  exists.
+- Remove the κ=20 centring fallback from the live span-prior path
+  entirely. Keep a wide safety-net fallback (κ=200 default equivalent)
+  only if the resolver returned neither posterior nor evidence-derived
+  α/β, which is an edge case rather than the common path.
+- Re-run `cf-truth-parity.sh` on the doc-50 fixture matrix and confirm
+  the systematic laggy-edge undershoot (doc 50 Δ ≈ 0.05-0.68) collapses
+  to a normal parity-level residual.
+- Update the oracle baselines from §11.1 in a dedicated baseline-
+  re-capture commit with explicit before/after delta in the message.
+  The RNG-parity gate loses its role after Phase 4.5 because the sweep's
+  prior-draw distribution changes — it stays green until the rewrite
+  commit, which documents the expected change and retires the gate.
+
+The exit gate for Phase 4.5 is that the doc-50 truth-parity laggy-edge
+Δ collapses to the within-tolerance Class A bounds, the oracle
+baselines have been re-captured in a standalone commit, and no
+production path references a κ=20 fallback on the live span-prior
+construction.
+
 ### Phase 5 — Resume blocked consumer work on the new boundary
 
 After Phase 4, the forecast stack is clean enough for new consumers.
@@ -460,3 +497,180 @@ The migration is not complete until all of the following are true:
 - A separate arithmetic investigation beyond the structural κ=20 fix.
   If laggy-edge bias remains after the runtime cut-over, it is a new
   engine-accuracy issue, not a reason to reintroduce legacy helpers.
+
+## 11. Risk controls and cut-over gates (added 20-Apr-26)
+
+§§1-10 name the migration outcome and phase sequence. This section
+pins the risk controls — tolerance stack, RNG-parity gate, κ=20 fix
+sequencing, deletion DAG, and rollback boundaries — so the migration
+cannot silently absorb a behavioural change or break the v2 oracle
+mid-transition. These controls supplement §9's blocking gates; they
+do not replace them.
+
+### 11.1 Tolerance stack
+
+The migration uses a layered tolerance stack. Each layer has a
+specific job; none is meant to cover the others.
+
+**Byte-identical RNG regression gate** (narrow, one fixture). A
+single seed-locked fixture exists solely to prove Phase 1-3 did not
+perturb RNG call order when code moved between modules. The fixture
+is `synth-mirror-4step` under
+`from(m4-delegated).to(m4-success).cohort(7-Mar-26:21-Mar-26)` —
+the multi-hop-cohort-wide case from `v2-v3-parity-test.sh`. It was
+chosen because it exercises every frozen-import call site in one
+run: span kernel composition, span-prior construction, XProvider
+assembly, Tier 2 empirical carrier, and the engine's full
+fourteen-parameter sweep with upstream carrier MC. Under seed 42,
+the engine's `rate_draws` must match pre-refactor output to
+floating-point noise (≤ 1e-12 per element). This gate is deliberately
+narrow: one fixture, one deterministic assertion, one job. Broader
+suites keep their normal tolerances.
+
+**Oracle baselines (P0.2)** on the same head-of-branch code, captured
+before Phase 1 begins. Per parameterised edge on the doc-50 topology
+matrix and the doc-45 parity fixtures, freeze the CF response
+`(p_mean, p_sd, completeness, completeness_sd, fan_bands)` and the
+v3 chart `last_row` equivalent. Tolerance for the cut-over comparison:
+deterministic fields within 1e-10, MC quantiles within 2%. The
+baselines are committed artefacts, not regenerated on the fly — any
+intentional baseline re-capture is its own commit with an explicit
+before/after delta in the message.
+
+**Existing harnesses keep their published tolerances unchanged.**
+`cf-topology-suite.sh` enforces structural invariants (no silent
+drops, sibling PMF ≤ 1.0, chart↔CF parity). `cf-truth-parity.sh`
+asserts Class B lagless edges at `|Δ| < 0.05` (default `LAGLESS_TOL`)
+and Class A laggy edges at the catastrophic bound `|Δ| < 0.20`
+(default `LAGGY_BOUND`); the bound is wide enough to tolerate the
+known κ=20 undershoot until Phase 4.5 lands and is the regression
+gate that catches a NEW Class A defect distinct from the κ=20
+issue. `v2-v3-parity-test.sh` uses 0.06 absolute on midpoint and
+20% on fan width. `conditioned-forecast-parity-test.sh` enforces
+per-edge chart↔CF agreement. The runtime cut-over must not regress
+any of these. Phase 4.5 is expected to tighten `LAGGY_BOUND` once
+the κ=20 fallback is removed.
+
+**Daily conversions is part of the gate set.** Per doc 29f §D20 the
+κ=20 bias is severe for per-cohort consumers, not just CF. The
+existing `test_daily_conversions.py` runs on the same engine
+primitive (`_evaluate_cohort` at coordinate B). Its outputs on the
+synth-mirror-4step fixture are captured alongside CF oracle baselines
+in P0.2 and gated under the same per-edge tolerance.
+
+### 11.2 κ=20 structural fix — sequenced as Phase 4.5
+
+The structural κ=20 fix (§6.6) is sequenced as Phase 4.5 (§8),
+explicitly after the neutral Phase 1-3 cut-over and the Phase 4
+deletion. Two reasons:
+
+1. Phases 1-3 must be functionality-neutral against the RNG-parity
+   gate and oracle baselines in §11.1. A structural fix landed inside
+   the refactor would perturb both gates and destroy their diagnostic
+   value: a regression in the refactor would be indistinguishable from
+   the intended κ=20 → resolver-α/β semantic change.
+2. After Phase 4 deletes `cohort_forecast_v2.py` and `span_adapter.py`,
+   the κ=20 fallback lives only in `forecast_runtime.py`'s verbatim
+   port. Fixing it there is a single focused edit to one module, with
+   no surviving v2 oracle to drift against. Baseline re-capture is
+   one commit with a documented semantic delta.
+
+Phase 4.5 is not optional — it is why this migration exists (doc 50
+surfaced the κ=20 undershoot as the motivating defect). The RNG-
+parity gate is retired as part of Phase 4.5's baseline re-capture.
+
+### 11.3 Deletion DAG for Phase 4
+
+`cohort_forecast_v2.py` imports from `cohort_forecast.py` at
+[cohort_forecast_v2.py:489,530](graph-editor/lib/runner/cohort_forecast_v2.py),
+and the v2 chart handler (`_handle_cohort_maturity_v2` at
+[api_handlers.py:765](graph-editor/lib/api_handlers.py)) imports
+from `span_adapter.py` at
+[api_handlers.py:783](graph-editor/lib/api_handlers.py). These
+dependencies must survive Phase 3 so v2 can serve as the parity
+oracle throughout. Phase 4 therefore requires a specific ordering.
+
+**Phase 4 is one atomic commit**, executed in the following logical
+order within the commit:
+
+1. Remove the v2 chart handler (`_handle_cohort_maturity_v2` and its
+   dispatch at [api_handlers.py:533](graph-editor/lib/api_handlers.py)),
+   which removes the last production import of `span_adapter`.
+2. Delete `span_adapter.py`.
+3. Delete `cohort_forecast_v2.py`.
+4. Delete `cohort_forecast.py` *only* if no remaining consumer
+   imports it. If the v1 chart handler or dev-only paths at
+   [api_handlers.py:3351,3985,4092](graph-editor/lib/api_handlers.py)
+   still consume v1, either remove those call sites in the same
+   commit or defer v1 deletion to a tracked follow-on.
+5. Remove `cohort_maturity_v1` and `cohort_maturity_v2` entries from
+   [analysis_types.yaml](graph-editor/lib/runner/analysis_types.yaml).
+6. Remove v1/v2 references from test files that exist only to test
+   the deleted code. Parity tests that compare v2 against v3 are
+   deleted because the oracle they compare against no longer exists;
+   their role is replaced by the oracle baselines from §11.1.
+
+Steps 1-5 are mandatory in Phase 4. Step 6 may be split off if the
+diff is unwieldy, but the deletion of v2 cannot leave orphan v2
+references in the test tree.
+
+### 11.4 Rollback boundary per phase
+
+Each phase lands as a single atomic commit so revert is a
+well-defined operation.
+
+- **Phase 0**: multiple commits (P0.1 audit script, P0.2 baselines,
+  P0.3 tests) — each revertable individually. Purely additive; no
+  live code touched.
+- **Phase 1**: one commit introducing `forecast_runtime.py` with no
+  caller cut-over. Trivial revert.
+- **Phase 2**: one commit cutting the engine (`forecast_state.py`)
+  over to the runtime layer. Revertable as a unit.
+- **Phase 3**: one atomic commit covering the v3 row builder, the v3
+  chart handler (`_handle_cohort_maturity_v3`), and the CF handler
+  (`handle_conditioned_forecast`). Large but atomic. A three-commit
+  split leaves intermediate broken states where the engine reads
+  from the runtime layer but v3 and CF still call v2 helpers — not
+  an acceptable boundary for revert.
+- **Phase 4**: one atomic commit per the deletion DAG in §11.3.
+- **Phase 4.5**: one commit rewriting `build_span_params` in
+  `forecast_runtime.py` plus one subsequent baseline-re-capture commit
+  (distinct so the semantic change is not masked by the baseline
+  update).
+- **Phase 5**: consumer work resumes; each consumer PR is its own
+  commit unrelated to this migration's revert boundaries.
+
+### 11.5 What this addendum does not change
+
+§§1-10 remain the migration's binding plan. §11 pins the tolerance,
+sequencing, deletion, and rollback details that §§6-9 implied but
+did not specify precisely enough to prevent silent drift. If a
+conflict between §11 and §§1-10 arises, §11 is the refinement; the
+older text is updated rather than overridden.
+
+## 12. Progress log
+
+### Phase 0 — complete (20-Apr-26)
+
+- **P0.1 dependency audit**: extended `graph-editor/lib/tests/test_forecast_stack_dependencies.py` with AST-based import-scan tests covering `compute_forecast_trajectory` (engine), `compute_cohort_maturity_rows_v3` (v3 row builder), `handle_conditioned_forecast` (CF handler), and `_handle_cohort_maturity_v3` (v3 chart handler). All four tests use `xfail(strict=False)` so they flip to `XPASS` the moment each caller's cut-over lands, without blocking CI on the baseline state.
+- **P0.2 oracle baselines**: new directory `bayes/baselines/doc56/` holds five committed artefacts — `capture-metadata.json`, `cf-whole-graph.json`, `v3-chart.json`, `daily-conversions.json`, `rng-gate.json`. CF and v3 edges are keyed by `from_id->to_id` (node IDs) rather than UUID, because `synth_gen` regenerates UUIDs on every run (doc 17 §2.3; integrity check #9). Topology fixture matrix: `synth-simple-abc`, `cf-fix-linear-no-lag`, `synth-mirror-4step`, `cf-fix-branching`, `cf-fix-diamond-mixed`, `cf-fix-deep-mixed`. RNG gate fixture: `synth-mirror-4step` / `from(m4-delegated).to(m4-success).cohort(7-Mar-26:21-Mar-26)`, seed=42, hash `9a88800183eb9ecdcea8660b4372eeb57ef8fe7b26e39683c38c66d375eeb2ca`. Capture script `graph-ops/scripts/capture-doc56-baselines.sh`.
+- **P0.3 behaviour tests**: new `graph-editor/lib/tests/test_doc56_phase0_behaviours.py` covers three Phase 0 gates — resolver-concentration vs CF span prior (RED on baseline, proving the κ=20 defect is observable), carrier-tier agreement between CF and v3 chart (GREEN vacuous; forensic lacks a `carrier_tier` field — noted for possible §11.1 extension), and chart↔CF parity on `p_mean` vs `p_infinity` at 5e-3 (GREEN).
+- **RNG-parity hash injection**: `forecast_state.py::compute_forecast_trajectory` writes `rate_draws_sha256` into `_forensic` per edge. Four-line additive change, no behavioural effect.
+
+### Phase 1 — complete (20-Apr-26)
+
+- **`forecast_runtime.py` introduced** (~650 lines). Verbatim port of 13 exports: graph helpers (`get_edge_from_node`, `find_edge_by_id`, `get_incoming_edges`, `read_edge_cohort_params`, `XProvider`, `build_x_provider_from_graph`) from v1; `span_kernel_to_edge_params` from `span_adapter`; span-prior (`SpanParams`, `build_span_params`) and carrier hierarchy (`build_upstream_carrier`, `_build_tier1_parametric`, `_build_tier2_empirical`, `_build_tier3_weak_prior`) from v2. Verbatim means byte-identical arithmetic, preserved `[v2]` print tags, and the κ=20 fallback intact — structural fix deferred to Phase 4.5.
+- **No caller cut-over**: the engine, v3 row builder, v3 chart handler, and CF handler still import from `cohort_forecast_v2` / `cohort_forecast` / `span_adapter`. P0.1 audit stays red (4/4 xfail), as intended for Phase 1.
+- **Gate verification**: all 13 runtime exports present via `importlib`; RNG hash unchanged from P0.2 capture; audit tests 4/4 xfail.
+
+### Phase 2 — complete (20-Apr-26)
+
+- **Engine cut-over landed.** The two imports inside `build_node_arrival_cache` ([forecast_state.py:312-313](../../graph-editor/lib/runner/forecast_state.py#L312)) now read from `forecast_runtime`. Single logical change; one-line diff replacing the two-line v1/v2 import block.
+- **Audit gate**: `test_engine_has_no_v1_v2_imports` now XPASS; `test_v3_row_builder_has_no_v1_v2_imports`, `test_cf_handler_has_no_v1_v2_imports`, and `test_v3_chart_handler_has_no_v1_v2_imports` remain XFAIL as expected for Phase 3.
+- **RNG byte-identical gate**: live hash on `synth-mirror-4step` RNG fixture is `9a88800183eb9ecdcea8660b4372eeb57ef8fe7b26e39683c38c66d375eeb2ca` — byte-identical to the pre-Phase-2 baseline. Proves the engine's carrier construction moved modules without perturbing RNG call order.
+- **CF whole-graph sanity**: `synth-simple-abc` `window(-120d:)` — both parameterised edges (`simple-a->simple-b`, `simple-b->simple-c`) have Δp_mean = Δcompleteness = 0.0 and matching `rate_draws_sha256` vs baseline.
+
+### Open concerns for Phase 3
+
+- **Data-repo mutation during migration**: the synth-mirror-4step graph was regenerated mid-session by background synth/bayes automation, which briefly invalidated an earlier UUID-keyed baseline. ID-keyed baselines are robust to this. Before Phase 2 cut-over we should pin the data-repo SHA at verify time (assert current nmap against baseline-capture nmap) so a silent regen cannot leak into the parity comparison.
+- **`carrier_tier` not in `_forensic`**: P0.3 test 2 is green vacuously. Either extend the engine's forensic payload to include `carrier_tier` (small addition, useful for §11.1) or accept that carrier-tier parity is covered indirectly by the deterministic-field baselines in `cf-whole-graph.json`.

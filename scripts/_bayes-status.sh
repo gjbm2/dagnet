@@ -231,6 +231,7 @@ echo $$ > /tmp/_bayes_monitor_status_pid
 
 # ── Main loop ──
 _prev_tails=""
+_start_epoch=$(date +%s)
 
 while true; do
 
@@ -286,15 +287,15 @@ while true; do
         else
             marker=" "
             if [[ $SHOW_ALL -eq 0 ]]; then
-                # In default mode, only show running graphs in the table
-                # (finished ones are hidden unless --all)
-                if [[ ! -s "$f" ]]; then
+                # Default mode: skip finished graphs from before monitor started
+                local mtime
+                mtime=$(stat -c '%Y' "$f" 2>/dev/null) || mtime=0
+                if [[ $mtime -lt $_start_epoch ]]; then
                     continue
                 fi
-                # Check if it's actually finished (has result markers)
+                # Still need PASS/FAIL marker to count as finished
                 if ! grep -q "^PASS$\|^FAIL$\|=== FINISHED" "$f" 2>/dev/null; then
-                    # No result and not running — stale/empty, skip
-                    [[ ! -s "$f" ]] && continue
+                    continue
                 fi
             else
                 [[ ! -s "$f" ]] && continue

@@ -49,6 +49,12 @@ class ResolvedModelParams:
     # epistemic when kappa absent (identical in that case).
     alpha_pred: float = 0.0
     beta_pred: float = 0.0
+    # Subset-conditioning mass (doc 52) — total raw observation count
+    # used to fit the promoted source's posterior for the resolved
+    # temporal_mode. Consumers compute r = m_S / m_G when blending
+    # aggregate against query-conditioned output. None when not known
+    # (engine skips the blend — see doc 52 §14.5).
+    n_effective: Optional[float] = None
 
     # Latency — edge-level (always populated)
     edge_latency: ResolvedLatency = field(default_factory=ResolvedLatency)
@@ -366,6 +372,29 @@ def resolve_model_params(
             alpha = _p * _KAPPA_FALLBACK
             beta = (1.0 - _p) * _KAPPA_FALLBACK
 
+    # Subset-conditioning mass (doc 52 §14.3). Pick the mode-appropriate
+    # n_effective from the posterior projection; fall back to ev_n when
+    # D20 synthesised α, β directly from evidence counts (in which case
+    # m_G = ev_n by construction).
+    n_effective: Optional[float] = None
+    if promoted_source == 'bayesian':
+        if temporal_mode == 'cohort':
+            n_effective = posterior_block.get('cohort_n_effective')
+            if n_effective is None:
+                n_effective = posterior_block.get('window_n_effective')
+        else:
+            n_effective = posterior_block.get('window_n_effective')
+        if n_effective is not None:
+            n_effective = float(n_effective)
+    # D20-synthesised α, β (posterior α, β missing but evidence n, k present):
+    # the evidence n IS the training mass by construction, so export it.
+    if n_effective is None:
+        _ev_n = evidence_block.get('n')
+        if isinstance(_ev_n, (int, float)) and _ev_n > 0 and alpha > 0 and beta > 0:
+            # Only when we actually used D20 — heuristic check: α+β ≈ ev_n+2.
+            if abs((alpha + beta) - (float(_ev_n) + 2.0)) < 0.1:
+                n_effective = float(_ev_n)
+
     # Predictive alpha/beta (doc 49): prefer *_pred fields from posterior,
     # fall back to epistemic (when kappa absent, they are identical).
     alpha_pred = alpha
@@ -412,6 +441,7 @@ def resolve_model_params(
         beta=beta,
         alpha_pred=alpha_pred,
         beta_pred=beta_pred,
+        n_effective=n_effective,
         edge_latency=edge_latency,
         path_latency=path_latency,
         source=promoted_source or '',

@@ -72,30 +72,40 @@ def _mock_cf(runners_module, p_means: list[float], p_sds: list[float]):
     n = len(p_means)
     assert len(p_sds) == n
 
+    # Build an index from edge label pair → (p_mean, p_sd) so the per-edge
+    # CF mock returns the correct value for whichever analytics_dsl was sent.
+    pair_to_idx = {(PATH_NODE_IDS[i], PATH_NODE_IDS[i + 1]): i for i in range(n)}
+
+    def _parse_dsl_pair(dsl: str) -> Optional[tuple[str, str]]:
+        import re
+        fm = re.search(r'from\(([^)]+)\)', dsl or '')
+        tm = re.search(r'to\(([^)]+)\)', dsl or '')
+        if not fm or not tm:
+            return None
+        return (fm.group(1), tm.group(1))
+
     def _fake(scenarios_payload):
-        return {
-            'success': True,
-            'scenarios': [
-                {
-                    'scenario_id': sc['scenario_id'],
-                    'success': True,
-                    'edges': [
-                        {
-                            'edge_uuid': f'edge_{i}',
-                            'from_node': PATH_NODE_IDS[i],
-                            'to_node': PATH_NODE_IDS[i + 1],
-                            'p_mean': p_means[i],
-                            'p_sd': p_sds[i],
-                            'completeness': 0.95,
-                            'completeness_sd': 0.01,
-                        }
-                        for i in range(n)
-                    ],
-                    'skipped_edges': [],
-                }
-                for sc in scenarios_payload
-            ],
-        }
+        scenarios_out = []
+        for sc in scenarios_payload:
+            pair = _parse_dsl_pair(sc.get('analytics_dsl', ''))
+            if pair and pair in pair_to_idx:
+                i = pair_to_idx[pair]
+                edges = [{
+                    'edge_uuid': f'edge_{i}',
+                    'from_node': pair[0],
+                    'to_node': pair[1],
+                    'p_mean': p_means[i],
+                    'p_sd': p_sds[i],
+                    'completeness': 0.95,
+                    'completeness_sd': 0.01,
+                }]
+            else:
+                edges = []
+            scenarios_out.append({
+                'scenario_id': sc['scenario_id'], 'success': True,
+                'edges': edges, 'skipped_edges': [],
+            })
+        return {'success': True, 'scenarios': scenarios_out}
 
     original = runners_module._scoped_conditioned_forecast
     runners_module._scoped_conditioned_forecast = _fake
@@ -231,10 +241,17 @@ class TestF2ELessThanOrEqualEF:
 
 @requires_data_repo
 class TestF4FModeMatchesPathProductOfPromotedMeans:
-    """F4: f median ≈ Π (α/(α+β)) from promoted source, MC tolerance.
+    """F4: f-mode bar = Π (α/(α+β)) from promoted source, deterministic.
 
     Synth-mirror-4step has analytic-promoted source; resolve_model_params
     falls back to D20 (Beta prior from evidence n/k).
+
+    `compute_bars_f` computes the bar as the deterministic cumprod of
+    per-edge **epistemic** posterior means `α/(α+β)` — unaffected by
+    the predictive kappa-inflation that drives band quantiles. The
+    assertion mirrors that: use epistemic α, β, not α_pred, β_pred.
+    Historical versions of f-mode took the median of the MC cumprod,
+    which is why the old assertion permitted 5 % MC tolerance.
     """
 
     def test_f_median_matches_path_product_of_evidence_means(self):
@@ -243,9 +260,10 @@ class TestF4FModeMatchesPathProductOfPromotedMeans:
         graph_data = _load_synth_4step()
         path_uuids = _resolve_path_uuids(graph_data)
 
-        # Compute expected path product using resolve_model_params per edge
-        # (matches what the runner does internally). The result reflects
-        # whatever the promotion hierarchy selects.
+        # Compute expected path product using resolve_model_params per
+        # edge. `compute_bars_f` now uses epistemic α/β for the bar
+        # (see funnel_engine.py:compute_bars_f), so the product here
+        # must match that choice — not α_pred/β_pred.
         edge_by_uuids = {(e['from'], e['to']): e for e in graph_data['edges']}
         expected_product = 1.0
         for i in range(len(path_uuids) - 1):
@@ -253,8 +271,8 @@ class TestF4FModeMatchesPathProductOfPromotedMeans:
             resolved = resolve_model_params(edge, scope='edge', temporal_mode='window')
             if resolved is None:
                 continue
-            a = resolved.alpha_pred or resolved.alpha
-            b = resolved.beta_pred or resolved.beta
+            a = resolved.alpha
+            b = resolved.beta
             if a > 0 and b > 0:
                 expected_product *= a / (a + b)
 
@@ -262,9 +280,11 @@ class TestF4FModeMatchesPathProductOfPromotedMeans:
         result = _run_funnel(graph_data, visibility_mode='f')
         assert 'error' not in result
 
+        # Bar is deterministic (cumprod of means), so the assertion is
+        # tight — float tolerance only, not MC tolerance.
         actual_final = _bar_by_stage(result, path_uuids[-1])['probability']
-        assert actual_final == pytest.approx(expected_product, rel=0.05), (
-            f'f-mode stage-N bar ({actual_final}) != Π promoted-source means ({expected_product})'
+        assert actual_final == pytest.approx(expected_product, rel=1e-9), (
+            f'f-mode stage-N bar ({actual_final}) != Π epistemic means ({expected_product})'
         )
 
 

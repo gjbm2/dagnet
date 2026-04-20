@@ -658,11 +658,13 @@ export interface ModelVarsEntry {
     path_t95?: number;
     path_onset_delta_days?: number;
     // Dispersion (heuristic or Bayesian — see heuristic-dispersion-design.md)
-    mu_sd?: number;
+    mu_sd?: number;               // predictive when kappa_lat present (doc 49 §A.6.2)
+    mu_sd_epist?: number;         // always epistemic posterior SD (doc 49)
     sigma_sd?: number;
     onset_sd?: number;
     onset_mu_corr?: number;
     path_mu_sd?: number;
+    path_mu_sd_epist?: number;    // epistemic path mu_sd (doc 49)
     path_sigma_sd?: number;
     path_onset_sd?: number;
   };
@@ -698,6 +700,9 @@ export interface SlicePosteriorEntry {
   beta_pred?: number;
   hdi_lower_pred?: number;
   hdi_upper_pred?: number;
+  // Subset-conditioning mass (doc 52 §14.3) — raw observation count
+  // used to fit this slice's posterior. Engine blends with m_S / m_G.
+  n_effective?: number;
   // Latency (present when edge has latency fitted for this slice)
   mu_mean?: number;
   mu_sd?: number;                   // predictive when kappa_lat exists (doc 49 §A.6.2)
@@ -801,6 +806,11 @@ export interface ProbabilityPosterior {
   cohort_hdi_lower_pred?: number;
   cohort_hdi_upper_pred?: number;
   cohort_provenance?: 'bayesian' | 'pooled-fallback' | 'point-estimate';
+  // Subset-conditioning mass (doc 52 §14.3) — raw observation count
+  // used to fit each mode's posterior. Engine blends aggregate against
+  // conditioned output using r = m_S / m_G.
+  window_n_effective?: number;
+  cohort_n_effective?: number;
   // LOO-ELPD model adequacy scoring (doc 32)
   delta_elpd?: number | null;
   pareto_k_max?: number | null;

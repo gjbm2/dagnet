@@ -384,7 +384,14 @@ For each applicable fixture, cover:
 
 ### 5.4 Wiring
 
-Two CLI harnesses back the test matrix:
+Two CLI harnesses back the test matrix. Both assume each fixture has
+been generated AND enriched with `model_vars`
+(`synth_gen.py --write-files --enrich`). Without enrichment the
+resolver falls back to a bare-evidence path that introduces a
+visible shrinkage bias on Class B (Δ in the 0.05–0.10 range on the
+linear-no-lag fixture) — the truth-parity test will then fail for
+reasons unrelated to the CF code path. Treat enrichment as a
+hard prerequisite for the suite, not an optimisation.
 
 - [`graph-ops/scripts/cf-topology-suite.sh`](../../../graph-ops/scripts/cf-topology-suite.sh) —
   drives each topology fixture through
@@ -394,38 +401,66 @@ Two CLI harnesses back the test matrix:
 
 - [`graph-ops/scripts/cf-truth-parity.sh`](../../../graph-ops/scripts/cf-truth-parity.sh) —
   compares per-edge CF `p_mean` against `truth.yaml` ground truth.
-  **Asserts on lagless (Class B) edges** at tolerance `|Δ| < 0.05`;
-  reports laggy (Class A) deltas informationally. All 10 Class B
-  edges across the fixture suite pass on 20-Apr-26, including the
-  `laggy → lagless → laggy` configuration (cf-fix-deep-mixed
-  edges b→c→d→e).
+  Asserts on **both** edge classes:
+  - **Class B (lagless)** at `LAGLESS_TOL` (default `|Δ| < 0.05`).
+    Beta-Binomial closed form should be near-exact given the
+    resolver's α/β; deviation indicates a real Class B defect.
+  - **Class A (laggy)** at `LAGGY_BOUND` (default `|Δ| < 0.20`).
+    A *catastrophic* bound — wide enough to tolerate the known
+    κ=20 weak-prior bias in the legacy span_kernel/v2 path
+    (doc 56 §4.2 — being addressed in the engine refactor),
+    tight enough to catch a regression that breaks Class A
+    entirely. Per-edge `|Δ|` is printed at every run so the
+    bias size is visible.
+
+  The script runs every fixture even when individual edges fail
+  and prints a per-fixture summary plus aggregate Class B / Class A
+  fail counts. Tighten either tolerance via env var when chasing
+  a specific regression.
 
 Chart↔CF parity is a tautology of construction (both paths route
 through `compute_cohort_maturity_rows_v3`) — it catches handler
 drift but not arithmetic errors in the shared row builder. Truth
-parity is the stronger check and must remain green for Class B.
+parity is the stronger check and must remain green for Class B
+and within the catastrophic bound for Class A.
 
-### 5.5 Pre-existing laggy-edge bias (out of scope for this doc)
+### 5.5 Pre-existing laggy-edge bias (root cause: doc 56 κ=20)
 
 `cf-truth-parity.sh` reveals a systematic undershoot on Class A
-edges even in all-laggy fixtures (`synth-simple-abc`: truth 0.70 vs
-CF 0.60; truth 0.60 vs CF 0.50). The bias:
+edges. Cause: `build_span_params` (doc 56 §4.2) discards the
+resolver's analytic α/β and re-derives a κ=20 weak prior, which
+shrinks the IS-conditioned posterior toward 0.5. Documented
+behaviourally by
+[`test_cf_span_prior_matches_resolver_concentration`](../../../graph-editor/lib/tests/test_doc56_phase0_behaviours.py)
+which compares CF concentration (20.0) against resolver
+concentration (320 299, 224 803 on synth-simple-abc) and fails
+by design until the engine refactor lands.
 
-- Is present in fixtures that pre-date doc 50 and is observable on
-  code paths this doc does not touch.
-- Shrinks as the query window widens relative to path `t95` (cohort
-  maturity effect), but does not vanish.
-- Can exceed 0.5 on cohort-mode terminal edges when query-window
-  cohorts are very immature (e.g. `synth-mirror-4step`
-  `m4-registered → m4-success` with truth 0.70 vs CF 0.018 under
-  `cohort(7-Mar-26:21-Mar-26)`).
-- Does NOT worsen when a lagless edge sits upstream of a laggy
-  edge (cf-fix-deep-mixed delta magnitudes are consistent with the
-  same-signed bias seen on all-laggy fixtures).
+Observed magnitude across the topology suite (post-enrichment,
+20-Apr-26):
 
-This is a distinct CF accuracy investigation. Not a doc-50 issue.
-The truth-parity test reports it informationally so it's surfaced,
-not hidden.
+| Fixture | Worst Class A `|Δ|` | Notes |
+|---|---|---|
+| `synth-simple-abc` (T1 all-laggy) | 0.10 | Both edges show ~0.10 shrinkage toward 0.5 |
+| `cf-fix-diamond-mixed` (T6) | 0.08 | Mid-data-volume |
+| `cf-fix-deep-mixed` (T7) | 0.05 | High data volume — bias bounded |
+| `cf-fix-branching` (T4) | 0.38 | Sparse upstream — bias amplified |
+| `synth-mirror-4step` (T3 cohort-mode) | 0.68 | `m4-registered → m4-success` cohort window 14d, terminal edge has near-zero matured evidence |
+
+Magnitude correlates with evidence sparsity: more cohort data per
+edge → less shrinkage. cohort-mode + immature + terminal is the
+worst case (the `0.68` blow-out).
+
+Bias is **same-signed** when a lagless edge sits upstream of a laggy
+edge (cf-fix-deep-mixed Class A deltas are consistent with the
+all-laggy fixture deltas at comparable evidence density), so the
+Class B path does not amplify Class A bias.
+
+Scope: addressed by the doc 56 forecast-stack refactor (Phase 1-4),
+which routes Class A through the resolver-supplied α/β. Until that
+lands, the catastrophic bound (`LAGGY_BOUND=0.20`) in §5.4 is the
+regression gate — anything past 0.20 indicates a NEW Class A defect
+distinct from the κ=20 issue.
 
 ## 6. Scope and sequencing
 

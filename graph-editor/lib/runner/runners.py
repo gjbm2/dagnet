@@ -1594,9 +1594,9 @@ def run_conversion_funnel(
         return result
 
     # Labels for DSL construction (CF call)
-    # Resolve human IDs for each stage node (used to pair CF response edges
-    # to the funnel path's edge sequence). CF returns edges keyed by
-    # (from_node, to_node) human IDs, not UUIDs.
+    # Resolve human IDs for each stage node (used to construct per-edge
+    # analytics_dsl for the CF call and to pair the response back to the
+    # funnel path's edge sequence).
     def _stage_label(node_id: str) -> str:
         if node_id in G:
             return str(G.nodes[node_id].get('id') or G.nodes[node_id].get('label') or node_id)
@@ -1604,71 +1604,60 @@ def run_conversion_funnel(
     stage_labels = [_stage_label(s) for s in stage_ids]
     path_edge_labels: list[tuple[str, str]] = list(zip(stage_labels[:-1], stage_labels[1:]))
 
-    # ── Pre-fetch whole-graph CF response for any e+f scenarios ────
-    # We use whole-graph mode (no analytics_dsl) so CF enriches every
-    # parameterised edge; we then pick out the funnel-path edges in
-    # order. Calling with .visited()-decorated DSL only enriches the
-    # end-to-end subject (1 edge), which doesn't match a multi-hop funnel.
+    # ── Pre-fetch CF response per funnel edge for f+e scenarios ────
+    # CF only resolves a single subject per analytics_dsl. For a
+    # multi-hop funnel we issue ONE call per edge with
+    # `analytics_dsl: from(X).to(Y)` and stitch responses together.
     cf_responses_by_scenario: dict[str, list[dict[str, Any]]] = {}
-    ef_scenarios_payload: list[dict[str, Any]] = []
+    ef_scenarios: list[Any] = []
     scenario_raw_graph_by_id: dict[str, dict[str, Any]] = {}
 
     if all_scenarios:
         for sc in all_scenarios:
             scenario_raw_graph_by_id[sc.scenario_id] = sc.graph
-            effective_dsl = getattr(sc, 'effective_query_dsl', '') or ''
             visibility = getattr(sc, 'visibility_mode', 'f+e') or 'f+e'
             if visibility == 'f+e':
-                ef_scenarios_payload.append({
-                    'scenario_id': sc.scenario_id,
-                    'graph': sc.graph,
-                    # No analytics_dsl → whole-graph enrichment (mode b).
-                    # CF needs candidate_regimes_by_edge to resolve subjects
-                    # in mode b (all_graph_parameters).
-                    'effective_query_dsl': effective_dsl,
-                    'candidate_regimes_by_edge': getattr(sc, 'candidate_regimes_by_edge', None) or {},
-                })
+                ef_scenarios.append(sc)
 
     cf_skip_reason: Optional[str] = None
-    if ef_scenarios_payload:
-        print(f'[funnel-L2] CF call: {len(ef_scenarios_payload)} f+e scenarios, '
-              f'expecting {len(path_edge_labels)} edges per scenario for path '
-              f'{path_edge_labels}')
-        try:
-            cf_response = _scoped_conditioned_forecast(ef_scenarios_payload)
-        except Exception as exc:
-            cf_skip_reason = f'Scoped CF call failed: {exc}'
-            cf_response = None
-            print(f'[funnel-L2] CF FAILED: {exc}')
-        if cf_response is not None:
-            # CF returns ALL graph edges in arbitrary order. Pair each
-            # funnel-path edge (from_label, to_label) with its CF entry.
-            for sc_result in cf_response.get('scenarios', []) or []:
-                sid = sc_result.get('scenario_id', '')
-                all_cf_edges = sc_result.get('edges', []) or []
-                cf_by_pair = {
-                    (e.get('from_node'), e.get('to_node')): e for e in all_cf_edges
-                }
-                print(f'[funnel-L2] scenario={sid} CF returned {len(all_cf_edges)} edges; '
-                      f'keys sample: {list(cf_by_pair.keys())[:5]}')
-                ordered: list[dict[str, Any]] = []
-                missing: list[tuple[str, str]] = []
-                for (fl, tl) in path_edge_labels:
-                    e = cf_by_pair.get((fl, tl))
-                    if e is None:
-                        missing.append((fl, tl))
-                    else:
-                        ordered.append(e)
-                if missing:
-                    md.setdefault('hi_lo_bands_skipped_per_scenario', {})[sid] = (
-                        f'CF response missing {len(missing)} funnel-path edge(s): '
-                        f'{[f"{f}->{t}" for f, t in missing]}'
-                    )
-                    print(f'[funnel-L2] scenario={sid} MISSING {len(missing)} edges: {missing}')
-                else:
-                    cf_responses_by_scenario[sid] = ordered
-                    print(f'[funnel-L2] scenario={sid} aligned {len(ordered)} edges OK; '
-                          f'p_means={[e.get("p_mean") for e in ordered]}')
+    for sc in ef_scenarios:
+        sid = sc.scenario_id
+        effective_dsl = getattr(sc, 'effective_query_dsl', '') or ''
+        per_edge: list[dict[str, Any]] = []
+        edge_call_failed = False
+        for (fl, tl) in path_edge_labels:
+            payload = [{
+                'scenario_id': sid,
+                'graph': sc.graph,
+                'analytics_dsl': f'from({fl}).to({tl})',
+                'effective_query_dsl': effective_dsl,
+                'candidate_regimes_by_edge': getattr(sc, 'candidate_regimes_by_edge', None) or {},
+            }]
+            print(f'[funnel-L2] CF per-edge: scenario={sid} edge={fl}->{tl}')
+            try:
+                cf_resp = _scoped_conditioned_forecast(payload)
+            except Exception as exc:
+                cf_skip_reason = f'Scoped CF call failed: {exc}'
+                print(f'[funnel-L2]   FAILED: {exc}')
+                edge_call_failed = True
+                break
+            edges = (cf_resp.get('scenarios') or [{}])[0].get('edges') or []
+            print(f'[funnel-L2]   returned {len(edges)} edges; '
+                  f'p_mean={edges[0].get("p_mean") if edges else None}')
+            if not edges:
+                md.setdefault('hi_lo_bands_skipped_per_scenario', {})[sid] = (
+                    f'CF returned 0 edges for {fl}->{tl}'
+                )
+                edge_call_failed = True
+                break
+            per_edge.append(edges[0])
+        if not edge_call_failed and len(per_edge) == len(path_edge_labels):
+            cf_responses_by_scenario[sid] = per_edge
+            print(f'[funnel-L2] scenario={sid} aligned {len(per_edge)} edges OK; '
+                  f'p_means={[e.get("p_mean") for e in per_edge]} '
+                  f'p_sds_pred={[e.get("p_sd") for e in per_edge]} '
+                  f'p_sds_epi={[e.get("p_sd_epistemic") for e in per_edge]} '
+                  f'completeness={[e.get("completeness") for e in per_edge]}')
     if cf_skip_reason is not None:
         md['cf_skip_reason'] = cf_skip_reason
 
@@ -1708,6 +1697,22 @@ def run_conversion_funnel(
                 if not cf_edges or len(cf_edges) != len(path_edge_uvs):
                     # No valid CF for this scenario — leave baseline rows untouched
                     continue
+                # Completeness from per-edge CF calls is edge-local (and
+                # 1.0 when n_cohorts=0), not path-cumulative. The scenario
+                # graph's latency.completeness was written by the fetch
+                # pipeline's whole-graph CF pass for this exact query, so
+                # it reflects path-cumulative maturity per edge. Overlay
+                # it onto cf_edges before the band composition.
+                if raw_graph is not None:
+                    cf_edges = [dict(ce) for ce in cf_edges]
+                    for j, (u, v) in enumerate(path_edge_uvs):
+                        raw_edge = _find_raw_edge_in_scenario_graph(raw_graph, u, v)
+                        if not raw_edge:
+                            continue
+                        lat = (raw_edge.get('p') or {}).get('latency') or {}
+                        graph_c = lat.get('completeness')
+                        if graph_c is not None:
+                            cf_edges[j]['completeness'] = graph_c
                 bars = compute_bars_ef(cf_edges, bars_e_data.bar)
             else:
                 continue
@@ -1764,6 +1769,17 @@ def run_conversion_funnel(
                 row['step_probability'] = bars.bar[i] / prev
                 row['dropoff'] = max(0.0, prev - bars.bar[i])
             prev = bars.bar[i]
+
+        # Diagnostic: dump the actual fields written for this scenario
+        for i, stage_id in enumerate(stage_ids):
+            row = rows_by_key.get((stage_id, scenario_id))
+            if row is None:
+                continue
+            print(f'[funnel-L2] OUTPUT scenario={scenario_id} stage={i} '
+                  f'p={row.get("probability")} lo={row.get("probability_lo")} '
+                  f'hi={row.get("probability_hi")} e_mean={row.get("evidence_mean")} '
+                  f'p_mean={row.get("p_mean")} bar_e={row.get("bar_height_e")} '
+                  f'bar_f={row.get("bar_height_f_residual")}')
 
     # Advertise the new metrics in semantics so chart builders can discover them
     sem = result.setdefault('semantics', {})

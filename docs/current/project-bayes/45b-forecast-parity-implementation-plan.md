@@ -167,7 +167,14 @@ data pipeline (snapshot subjects, scenarios, regime selection).
 6. Engine call: `compute_forecast_trajectory` with full arguments (same
    14 parameters as v3)
 7. Read per-edge scalars from sweep: p.mean = median(rate_draws[:,
-   -1]), p_sd = std(rate_draws[:, -1]), completeness, completeness_sd.
+   -1]), completeness, completeness_sd. Compute p_sd and
+   p_sd_epistemic closed form from the resolved model rather than
+   from MC draws: p_sd_epistemic = σ of Beta(α, β); p_sd = σ of
+   Beta(α_pred, β_pred) — see doc 49 for the distinction. MC std
+   over IS-conditioned draws is *not* the predictive dispersion;
+   IS-conditioning on O(n) evidence collapses it to the epistemic
+   posterior width. Use the closed form so σ_pred actually reflects
+   kappa-inflated between-cohort variability.
 
 Steps 1-6 are the v3 handler code. Step 7 reads scalars instead of
 building chart rows — the only new logic.

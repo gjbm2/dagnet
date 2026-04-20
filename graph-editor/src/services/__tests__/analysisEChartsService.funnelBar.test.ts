@@ -196,7 +196,7 @@ describe('analysisEChartsService (funnel bar)', () => {
     expect(s2Series).toHaveLength(3);
   });
 
-  it('emits hi/lo whisker markLine when probability_lo/hi are present (doc 52 Level 2)', () => {
+  it('emits hi/lo whisker custom series when probability_lo/hi are present (doc 52 Level 2)', () => {
     const result: AnalysisResult = {
       analysis_type: 'conversion_funnel',
       analysis_name: 'Conversion Funnel',
@@ -234,20 +234,18 @@ describe('analysisEChartsService (funnel bar)', () => {
     });
 
     expect(option).toBeTruthy();
-    expect(option.series).toHaveLength(1);
-    const ml = option.series[0].markLine;
-    expect(ml).toBeTruthy();
-    expect(Array.isArray(ml.data)).toBe(true);
-    // Two segments (mid + end); start has no bands so it's skipped
-    expect(ml.data).toHaveLength(2);
-    // First segment: idx 1 (mid), lo→hi 0.40 → 0.70
-    expect(ml.data[0][0].coord).toEqual([1, 0.40]);
-    expect(ml.data[0][1].coord).toEqual([1, 0.70]);
-    expect(ml.data[1][0].coord).toEqual([2, 0.18]);
-    expect(ml.data[1][1].coord).toEqual([2, 0.45]);
+    // Bar series + whisker custom series
+    expect(option.series).toHaveLength(2);
+    const whisker = option.series.find((s: any) => s.type === 'custom');
+    expect(whisker).toBeTruthy();
+    // 2 stages with bands (start skipped because lo/hi are absent)
+    expect(whisker.data).toHaveLength(2);
+    // [stageIdx, lo, hi]
+    expect(whisker.data[0]).toEqual([1, 0.40, 0.70]);
+    expect(whisker.data[1]).toEqual([2, 0.18, 0.45]);
   });
 
-  it('emits hi/lo whisker markLine on the f−e segment for f+e stacked bars', () => {
+  it('emits hi/lo whisker custom series alongside f+e stacked bars', () => {
     const result: AnalysisResult = {
       analysis_type: 'conversion_funnel',
       analysis_name: 'Conversion Funnel',
@@ -284,15 +282,13 @@ describe('analysisEChartsService (funnel bar)', () => {
       metric: 'cumulative_probability',
     });
     expect(option).toBeTruthy();
-    // Two stacked series: e (lower) + f−e (upper)
-    expect(option.series).toHaveLength(2);
-    // Whisker is attached to the upper segment so it sits on top of the bar
-    expect(option.series[0].markLine).toBeUndefined();
-    const ml = option.series[1].markLine;
-    expect(ml).toBeTruthy();
-    expect(ml.data).toHaveLength(2);
-    expect(ml.data[0][0].coord).toEqual([1, 0.42]);
-    expect(ml.data[0][1].coord).toEqual([1, 0.58]);
+    // e + f−e stacked + whisker custom = 3 series
+    expect(option.series).toHaveLength(3);
+    const whisker = option.series.find((s: any) => s.type === 'custom');
+    expect(whisker).toBeTruthy();
+    expect(whisker.data).toHaveLength(2);
+    expect(whisker.data[0]).toEqual([1, 0.42, 0.58]);
+    expect(whisker.data[1]).toEqual([2, 0.14, 0.27]);
   });
 
   it('disables F+E stacking when grouped stages are present', () => {

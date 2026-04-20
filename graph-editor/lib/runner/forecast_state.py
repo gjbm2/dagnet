@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -309,8 +309,7 @@ def build_node_arrival_cache(
 
     This is the per-node cache described in doc 29 §3.1.
     """
-    from .cohort_forecast_v2 import build_upstream_carrier
-    from .cohort_forecast import read_edge_cohort_params
+    from .forecast_runtime import build_upstream_carrier, read_edge_cohort_params
 
     nodes = graph.get('nodes', [])
     edges = graph.get('edges', [])
@@ -470,6 +469,19 @@ class ForecastSummary:
     mode: str = 'window'
     is_ess: float = 0.0  # effective sample size after IS
     is_tempering_lambda: float = 1.0  # aggregate likelihood tempering strength
+
+    # Subset-conditioning blend provenance (doc 52 §14.6). When
+    # blend_applied=True, the conditioned scalars (`completeness`,
+    # `rate_conditioned`, `p_conditioned` and their _sd siblings) and
+    # the conditioned draw arrays (`p_draws` etc.) are computed from
+    # the (1 − r):r mix of conditioned and unconditioned draw rows.
+    # The `*_unconditioned` siblings are untouched so surprise-gauge
+    # framing (doc 55) can still compute the shift between the two.
+    r: Optional[float] = None
+    m_S: Optional[float] = None
+    m_G: Optional[float] = None
+    blend_applied: bool = False
+    blend_skip_reason: Optional[str] = None
 
 
 def compute_forecast_summary(
@@ -742,6 +754,30 @@ def compute_forecast_summary(
                 is_ess = best_ess
                 is_tempering_lambda = best_lam
 
+    # ── Doc 52 §14.4.2: subset-conditioning blend ────────────────
+    # Mix the conditioned and unconditioned draw sets row-wise, using
+    # the same permutation across (p, mu, sigma, onset) so per-draw
+    # coupling is preserved. Recompute conditioned scalars from the
+    # blended set; leave *_unconditioned fields untouched so the
+    # surprise gauge's shift comparison remains meaningful.
+    _m_S_sum = float(sum(n for _, n, _ in evidence if n and n > 0))
+    _summary_blend_info = _compute_blend_params(resolved, _m_S_sum)
+    if _summary_blend_info['applied'] and p_draws.size == S and p_draws_unconditioned.size == S:
+        _n_cond_s, _perm_s = _make_blend_permutation(S, _summary_blend_info['r'])
+        _cond_idx_s = _perm_s[:_n_cond_s]
+        _unc_idx_s = _perm_s[_n_cond_s:]
+
+        def _mix(cond: np.ndarray, unc: np.ndarray) -> np.ndarray:
+            out = np.empty(S)
+            out[:_n_cond_s] = cond[_cond_idx_s]
+            out[_n_cond_s:] = unc[_unc_idx_s]
+            return out
+
+        p_draws = _mix(p_draws, p_draws_unconditioned)
+        mu_draws = _mix(mu_draws, mu_draws_unconditioned)
+        sigma_draws = _mix(sigma_draws, sigma_draws_unconditioned)
+        onset_draws = _mix(onset_draws, onset_draws_unconditioned)
+
     # ── Compute point estimates from conditioned draws ───────────
     mc_completeness = _weighted_completeness_draws(
         mu_draws,
@@ -818,6 +854,11 @@ def compute_forecast_summary(
         mode='cohort' if from_node_arrival else 'window',
         is_ess=is_ess,
         is_tempering_lambda=is_tempering_lambda,
+        r=_summary_blend_info.get('r'),
+        m_S=_summary_blend_info.get('m_S'),
+        m_G=_summary_blend_info.get('m_G'),
+        blend_applied=bool(_summary_blend_info.get('applied')),
+        blend_skip_reason=_summary_blend_info.get('skip_reason'),
     )
 
 
@@ -913,6 +954,15 @@ class ForecastTrajectory:
     onset_draws: Optional[np.ndarray] = None      # (S,)
     # Forensic diagnostic (temporary)
     _forensic: Optional[Dict[str, Any]] = None
+    # Subset-conditioning blend provenance (doc 52 §14.6). When
+    # blend_applied=True, rate_draws / Y_total / X_total / cohort_evals
+    # all reflect the (1 − r):r mix of conditioned and unconditioned
+    # draws computed at engine return time.
+    r: Optional[float] = None
+    m_S: Optional[float] = None
+    m_G: Optional[float] = None
+    blend_applied: bool = False
+    blend_skip_reason: Optional[str] = None
 
 
 # Default draw count for the sweep — same as v2's MC_SAMPLES.
@@ -920,6 +970,60 @@ _SWEEP_DRAWS = 2000
 # Temporary forensic stash — last sweep's forensic data.
 _last_forensic: Optional[Dict[str, Any]] = None
 _SWEEP_DRIFT_FRACTION = 0.20
+
+# Subset-conditioning blend (doc 52) — seeded independently of the
+# existing seed=42 streams used for MC/IS so the permutation is
+# reproducible without perturbing anything else.
+_BLEND_SEED = 43
+
+
+def _compute_blend_params(
+    resolved,
+    m_S: float,
+) -> Dict[str, Any]:
+    """Determine subset-conditioning blend parameters per doc 52 §14.5.
+
+    Returns a dict with keys: applied (bool), r (float|None), m_S,
+    m_G (float|None), skip_reason (str|None). Callers use this before
+    mixing conditioned with unconditioned draw sets.
+    """
+    n_eff = getattr(resolved, 'n_effective', None) if resolved is not None else None
+    if resolved is not None and getattr(resolved, 'alpha_beta_query_scoped', False):
+        return {'applied': False, 'r': None, 'm_S': float(m_S),
+                'm_G': float(n_eff) if n_eff is not None else None,
+                'skip_reason': 'source_query_scoped'}
+    if n_eff is None:
+        return {'applied': False, 'r': None, 'm_S': float(m_S),
+                'm_G': None, 'skip_reason': 'n_effective_missing'}
+    if n_eff <= 0:
+        return {'applied': False, 'r': None, 'm_S': float(m_S),
+                'm_G': float(n_eff), 'skip_reason': 'n_effective_zero'}
+    if m_S <= 0:
+        return {'applied': False, 'r': None, 'm_S': float(m_S),
+                'm_G': float(n_eff), 'skip_reason': 'no_cohorts'}
+    r = min(float(m_S) / float(n_eff), 1.0)
+    return {'applied': True, 'r': r, 'm_S': float(m_S),
+            'm_G': float(n_eff), 'skip_reason': None}
+
+
+def _mass_from_cohorts(cohorts) -> float:
+    """m_S — total raw observation count across selected Cohorts
+    (doc 52 §14.7). Uses x_frozen (N_i at frontier)."""
+    return float(sum(float(c.x_frozen) for c in cohorts
+                     if c.x_frozen and c.x_frozen > 0))
+
+
+def _make_blend_permutation(S: int, r: float) -> Tuple[int, np.ndarray]:
+    """Return (n_cond, permutation) for the (1 − r):r row-wise mix.
+
+    The permutation is reproducible (seed=43) so the mix is
+    deterministic for tests. First `n_cond` entries index the
+    conditioned arrays; the remainder index the unconditioned arrays.
+    """
+    n_cond = int(round((1.0 - r) * S))
+    n_cond = max(0, min(S, n_cond))
+    blend_rng = np.random.default_rng(seed=_BLEND_SEED)
+    return n_cond, blend_rng.permutation(S)
 
 
 def _evaluate_cohort(
@@ -1351,8 +1455,15 @@ def compute_forecast_trajectory(
                 _is_ess_last = c_ess
                 _n_conditioned += 1
 
-            # Coordinate B: stash per-cohort draws at eval_age
-            if cohort.eval_age is not None and apply_is:
+            # Coordinate B: stash per-cohort draws at eval_age.
+            # Populated on BOTH the conditioned and unconditioned passes
+            # so the doc 52 blend can mix them row-wise; dropping the
+            # `and apply_is` guard also means the unconditioned pass
+            # returns a parallel `cohort_evals` list in identical order.
+            # Consumers that only want the conditioned draws (pre-doc-52
+            # behaviour) read the blended output, where draws from the
+            # unconditioned side appear at ratio r.
+            if cohort.eval_age is not None:
                 t_i = min(cohort.eval_age, T - 1)
                 _cohort_evals.append(CohortForecastAtEval(
                     y_draws=Y_c[:, t_i].copy(),
@@ -1380,14 +1491,65 @@ def compute_forecast_trajectory(
 
         return rate, _is_ess_last, _n_conditioned, Y_total, X_total, _cohort_evals
 
-    rate_conditioned, is_ess, n_conditioned, Y_cond, X_cond, cohort_evals = _run_cohort_loop(apply_is=True)
+    rate_conditioned, is_ess, n_conditioned, Y_cond, X_cond, cohort_evals_cond = _run_cohort_loop(apply_is=True)
     # Model rate: pure p × CDF, no evidence splice or population model.
     # Matches v2's rate_model = p_s × cdf_arr (span_kernel.py:951).
     rate_model = p_draws[:S, None] * cdf_arr[:S]
 
-    # Deterministic totals: median across conditioned draws
-    _det_y = np.median(Y_cond, axis=0)
-    _det_x = np.median(X_cond, axis=0)
+    # Doc 52 §14.4.1: run the population model a second time without IS
+    # so we have specific-Cohort unconditioned outputs to blend against
+    # the conditioned ones. This is distinct from rate_model above:
+    # rate_model is the generic-Cohort p×CDF predictive; the
+    # unconditioned cohort-loop output is the specific-Cohort projection
+    # from the prior, splicing observed τ ≤ frontier but without IS
+    # reweight.
+    blend_info = _compute_blend_params(resolved, _mass_from_cohorts(cohorts))
+    if blend_info['applied']:
+        rate_unc, _unc_ess, _unc_n, Y_unc, X_unc, cohort_evals_unc = _run_cohort_loop(apply_is=False)
+        n_cond, perm = _make_blend_permutation(S, blend_info['r'])
+        cond_idx = perm[:n_cond]
+        unc_idx = perm[n_cond:]
+        # Row-wise blend rate_draws, Y_total, X_total with the same
+        # permutation so per-draw rate/(Y,X) coupling is preserved.
+        rate_draws_out = np.empty_like(rate_conditioned)
+        rate_draws_out[:n_cond, :] = rate_conditioned[cond_idx, :]
+        rate_draws_out[n_cond:, :] = rate_unc[unc_idx, :]
+        Y_final = np.empty_like(Y_cond)
+        X_final = np.empty_like(X_cond)
+        Y_final[:n_cond, :] = Y_cond[cond_idx, :]
+        Y_final[n_cond:, :] = Y_unc[unc_idx, :]
+        X_final[:n_cond, :] = X_cond[cond_idx, :]
+        X_final[n_cond:, :] = X_unc[unc_idx, :]
+        # Per-Cohort y/x draws — same permutation per entry; assume
+        # both lists have the same Cohort ordering because
+        # _run_cohort_loop iterates `cohorts` in order.
+        cohort_evals: List[CohortForecastAtEval] = []
+        if len(cohort_evals_cond) == len(cohort_evals_unc):
+            for ce_c, ce_u in zip(cohort_evals_cond, cohort_evals_unc):
+                y_blend = np.empty(S)
+                x_blend = np.empty(S)
+                y_blend[:n_cond] = ce_c.y_draws[cond_idx]
+                y_blend[n_cond:] = ce_u.y_draws[unc_idx]
+                x_blend[:n_cond] = ce_c.x_draws[cond_idx]
+                x_blend[n_cond:] = ce_u.x_draws[unc_idx]
+                cohort_evals.append(CohortForecastAtEval(
+                    y_draws=y_blend,
+                    x_draws=x_blend,
+                    eval_age=ce_c.eval_age,
+                    conditioned=ce_c.conditioned,
+                ))
+        else:
+            # Mismatch should not occur; fall back to conditioned only.
+            cohort_evals = cohort_evals_cond
+    else:
+        rate_draws_out = rate_conditioned
+        Y_final = Y_cond
+        X_final = X_cond
+        cohort_evals = cohort_evals_cond
+
+    # Deterministic totals: median across blended draws
+    _det_y = np.median(Y_final, axis=0)
+    _det_x = np.median(X_final, axis=0)
 
     # Blended completeness: n-weighted CDF at each cohort's eval_age.
     # cdf_arr[s, t] = CDF(t, mu_s, sigma_s, onset_s) per draw — this
@@ -1423,8 +1585,8 @@ def compute_forecast_trajectory(
                 'a_pop': round(c.a_pop, 1),
             })
         # Y/X contributions at tau=10
-        _y10 = float(np.median(Y_cond[:, 10]))
-        _x10 = float(np.median(X_cond[:, 10]))
+        _y10 = float(np.median(Y_final[:, 10]))
+        _x10 = float(np.median(X_final[:, 10]))
     _forensic = {}
     for _ft in _forensic_taus:
         if _ft < T:
@@ -1474,6 +1636,11 @@ def compute_forecast_trajectory(
             _forensic['cohorts'].append({'...': f'{len(cohorts) - 30} more'})
             break
 
+    import hashlib as _hl
+    _rd_hash = _hl.sha256(rate_conditioned.tobytes()).hexdigest()
+    _forensic['rate_draws_sha256'] = _rd_hash
+    print(f"[rate_draws_sha256] {_rd_hash}")
+
     _last_forensic = _forensic
     try:
         import json as _jf
@@ -1483,7 +1650,7 @@ def compute_forecast_trajectory(
         pass
 
     return ForecastTrajectory(
-        rate_draws=rate_conditioned,
+        rate_draws=rate_draws_out,
         model_rate_draws=rate_model,
         det_y_total=_det_y,
         det_x_total=_det_x,
@@ -1497,4 +1664,9 @@ def compute_forecast_trajectory(
         sigma_draws=sigma_draws,
         onset_draws=onset_draws,
         _forensic=_forensic,
+        r=blend_info.get('r'),
+        m_S=blend_info.get('m_S'),
+        m_G=blend_info.get('m_G'),
+        blend_applied=bool(blend_info.get('applied')),
+        blend_skip_reason=blend_info.get('skip_reason'),
     )

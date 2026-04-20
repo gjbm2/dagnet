@@ -95,21 +95,32 @@ class _FakeScenario:
 def _fake_cf_response(n_edges: int, p_mean: float = 0.55, p_sd: float = 0.05):
     """Build a mocked replacement for runners._scoped_conditioned_forecast.
 
-    Mocks whole-graph CF mode: returns one entry per edge in the linear
-    A→B→C chain (or first n_edges of it). The funnel runner's edge
-    alignment (by from_node/to_node human IDs) needs these populated.
+    Mocks per-edge CF: each call carries `analytics_dsl: from(X).to(Y)`;
+    the mock returns 1 edge per call iff (X, Y) is among the first
+    `n_edges` of the linear chain A→B→C→D→E. Mismatching DSLs return [].
     """
     chain_labels = ['A', 'B', 'C', 'D', 'E']
+    valid_pairs = {(chain_labels[i], chain_labels[i + 1]): i for i in range(n_edges)}
+
+    def _parse(dsl: str):
+        import re
+        fm = re.search(r'from\(([^)]+)\)', dsl or '')
+        tm = re.search(r'to\(([^)]+)\)', dsl or '')
+        if not fm or not tm:
+            return None
+        return (fm.group(1), tm.group(1))
 
     def _responder(scenarios_payload):
         scenarios_out = []
         for sc in scenarios_payload:
-            edges = []
-            for i in range(n_edges):
+            pair = _parse(sc.get('analytics_dsl', ''))
+            edges: list[dict] = []
+            if pair and pair in valid_pairs:
+                i = valid_pairs[pair]
                 edges.append({
                     'edge_uuid': f'edge_{i}',
-                    'from_node': chain_labels[i],
-                    'to_node': chain_labels[i + 1],
+                    'from_node': pair[0],
+                    'to_node': pair[1],
                     'p_mean': p_mean,
                     'p_sd': p_sd,
                     'completeness': 0.9,
@@ -262,7 +273,7 @@ class TestLinearFunnelEFMode:
         # Per-scenario band skip noted in metadata
         skips = result['metadata'].get('hi_lo_bands_skipped_per_scenario') or {}
         assert 'current' in skips
-        assert 'missing' in skips['current']
+        assert 'returned 0 edges' in skips['current']
         # No band fields on the rows for this scenario
         for row in result['data']:
             assert 'probability_lo' not in row

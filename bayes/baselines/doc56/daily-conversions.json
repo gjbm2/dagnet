@@ -1,0 +1,317 @@
+{
+  "fixture": "synth-mirror-4step",
+  "dsl": "from(m4-registered).to(m4-success).cohort(7-Mar-26:21-Mar-26)",
+  "n_rows": 15,
+  "rows": [
+    {
+      "scenario_id": "current",
+      "subject_id": "resolved:110235e8-2e64-5f0c-9c4d-aac4310981dd:0",
+      "date": "2026-03-07",
+      "x": 39,
+      "y": 1,
+      "rate": 0.02564102564102564,
+      "completeness": 0.986635591382114,
+      "layer": "mature",
+      "evidence_y": 1,
+      "forecast_y": 0,
+      "projected_y": 1,
+      "forecast_bands": {
+        "80": [
+          0.02564102564102564,
+          0.02564102564102564
+        ],
+        "90": [
+          0.02564102564102564,
+          0.02564102564102564
+        ],
+        "95": [
+          0.02564102564102564,
+          0.02564102564102564
+        ],
+        "99": [
+          0.02564102564102564,
+          0.02564102564102564
+        ]
+      },
+      "latency_bands": null
+    },
+    {
+      "scenario_id": "current",
+      "subject_id": "resolved:110235e8-2e64-5f0c-9c4d-aac4310981dd:0",
+      "date": "2026-03-08",
+      "x": 8,
+      "y": 0,
+      "rate": 0,
+      "completeness": 0.9843423699889935,
+      "layer": "mature",
+      "evidence_y": 0,
+      "forecast_y": 0,
+      "projected_y": 0,
+      "forecast_bands": {
+        "80": [
+          0,
+          0
+        ],
+        "90": [
+          0,
+          0
+        ],
+        "95": [
+          0,
+          0
+        ],
+        "99": [
+          0,
+          0
+        ]
+      },
+      "latency_bands": null
+    },
+    {
+      "scenario_id": "current",
+      "subject_id": "resolved:110235e8-2e64-5f0c-9c4d-aac4310981dd:0",
+      "date": "2026-03-09",
+      "x": 2,
+      "y": 0,
+      "rate": 0,
+      "completeness": 0.9816302269943609,
+      "layer": "mature",
+      "evidence_y": 0,
+      "forecast_y": 0,
+      "projected_y": 0,
+      "forecast_bands": {
+        "80": [
+          0,
+          0
+        ],
+        "90": [
+          0,
+          0
+        ],
+        "95": [
+          0,
+          0
+        ],
+        "99": [
+          0,
+          0
+        ]
+      },
+      "latency_bands": null
+    },
+    {
+      "scenario_id": "current",
+      "subject_id": "resolved:110235e8-2e64-5f0c-9c4d-aac4310981dd:0",
+      "date": "2026-03-10",
+      "x": 4,
+      "y": 0,
+      "rate": 0,
+      "completeness": 0.9784187667071587,
+      "layer": "mature",
+      "evidence_y": 0,
+      "forecast_y": 0,
+      "projected_y": 0,
+      "forecast_bands": {
+        "80": [
+          0,
+          0
+        ],
+        "90": [
+          0,
+          0
+        ],
+        "95": [
+          0,
+          0
+        ],
+        "99": [
+          0,
+          0
+        ]
+      },
+      "latency_bands": null
+    },
+    {
+      "scenario_id": "current",
+      "subject_id": "resolved:110235e8-2e64-5f0c-9c4d-aac4310981dd:0",
+      "date": "2026-03-11",
+      "x": 2,
+      "y": 0,
+      "rate": 0,
+      "completeness": 0.9746117168594679,
+      "layer": "mature",
+      "evidence_y": 0,
+      "forecast_y": 0,
+      "projected_y": 0,
+      "forecast_bands": {
+        "80": [
+          0,
+          0
+        ],
+        "90": [
+          0,
+          0
+        ],
+        "95": [
+          0,
+          0
+        ],
+        "99": [
+          0,
+          0
+        ]
+      },
+      "latency_bands": null
+    },
+    {
+      "scenario_id": "current",
+      "subject_id": "resolved:110235e8-2e64-5f0c-9c4d-aac4310981dd:0",
+      "date": "2026-03-12",
+      "x": 0,
+      "y": 0,
+      "rate": null,
+      "completeness": null,
+      "layer": null,
+      "evidence_y": null,
+      "forecast_y": null,
+      "projected_y": null,
+      "forecast_bands": null,
+      "latency_bands": null
+    },
+    {
+      "scenario_id": "current",
+      "subject_id": "resolved:110235e8-2e64-5f0c-9c4d-aac4310981dd:0",
+      "date": "2026-03-13",
+      "x": 0,
+      "y": 0,
+      "rate": null,
+      "completeness": null,
+      "layer": null,
+      "evidence_y": null,
+      "forecast_y": null,
+      "projected_y": null,
+      "forecast_bands": null,
+      "latency_bands": null
+    },
+    {
+      "scenario_id": "current",
+      "subject_id": "resolved:110235e8-2e64-5f0c-9c4d-aac4310981dd:0",
+      "date": "2026-03-14",
+      "x": 0,
+      "y": 0,
+      "rate": null,
+      "completeness": null,
+      "layer": null,
+      "evidence_y": null,
+      "forecast_y": null,
+      "projected_y": null,
+      "forecast_bands": null,
+      "latency_bands": null
+    },
+    {
+      "scenario_id": "current",
+      "subject_id": "resolved:110235e8-2e64-5f0c-9c4d-aac4310981dd:0",
+      "date": "2026-03-15",
+      "x": 0,
+      "y": 0,
+      "rate": null,
+      "completeness": null,
+      "layer": null,
+      "evidence_y": null,
+      "forecast_y": null,
+      "projected_y": null,
+      "forecast_bands": null,
+      "latency_bands": null
+    },
+    {
+      "scenario_id": "current",
+      "subject_id": "resolved:110235e8-2e64-5f0c-9c4d-aac4310981dd:0",
+      "date": "2026-03-16",
+      "x": 0,
+      "y": 0,
+      "rate": null,
+      "completeness": null,
+      "layer": null,
+      "evidence_y": null,
+      "forecast_y": null,
+      "projected_y": null,
+      "forecast_bands": null,
+      "latency_bands": null
+    },
+    {
+      "scenario_id": "current",
+      "subject_id": "resolved:110235e8-2e64-5f0c-9c4d-aac4310981dd:0",
+      "date": "2026-03-17",
+      "x": 0,
+      "y": 0,
+      "rate": null,
+      "completeness": null,
+      "layer": null,
+      "evidence_y": null,
+      "forecast_y": null,
+      "projected_y": null,
+      "forecast_bands": null,
+      "latency_bands": null
+    },
+    {
+      "scenario_id": "current",
+      "subject_id": "resolved:110235e8-2e64-5f0c-9c4d-aac4310981dd:0",
+      "date": "2026-03-18",
+      "x": 0,
+      "y": 0,
+      "rate": null,
+      "completeness": null,
+      "layer": null,
+      "evidence_y": null,
+      "forecast_y": null,
+      "projected_y": null,
+      "forecast_bands": null,
+      "latency_bands": null
+    },
+    {
+      "scenario_id": "current",
+      "subject_id": "resolved:110235e8-2e64-5f0c-9c4d-aac4310981dd:0",
+      "date": "2026-03-19",
+      "x": 0,
+      "y": 0,
+      "rate": null,
+      "completeness": null,
+      "layer": null,
+      "evidence_y": null,
+      "forecast_y": null,
+      "projected_y": null,
+      "forecast_bands": null,
+      "latency_bands": null
+    },
+    {
+      "scenario_id": "current",
+      "subject_id": "resolved:110235e8-2e64-5f0c-9c4d-aac4310981dd:0",
+      "date": "2026-03-20",
+      "x": 0,
+      "y": 0,
+      "rate": null,
+      "completeness": null,
+      "layer": null,
+      "evidence_y": null,
+      "forecast_y": null,
+      "projected_y": null,
+      "forecast_bands": null,
+      "latency_bands": null
+    },
+    {
+      "scenario_id": "current",
+      "subject_id": "resolved:110235e8-2e64-5f0c-9c4d-aac4310981dd:0",
+      "date": "2026-03-21",
+      "x": 0,
+      "y": 0,
+      "rate": null,
+      "completeness": null,
+      "layer": null,
+      "evidence_y": null,
+      "forecast_y": null,
+      "projected_y": null,
+      "forecast_bands": null,
+      "latency_bands": null
+    }
+  ]
+}

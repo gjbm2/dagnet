@@ -53,7 +53,7 @@ When testing synth graphs outside the full regression pipeline, three rules appl
 
 1. **Always use `param_recovery.py`, not `test_harness.py` directly.** Synth graphs have `.truth.yaml` sidecars containing ground-truth parameters. `param_recovery.py` wraps the harness and compares posteriors against truth — it produces recovery z-scores, absolute errors, and per-edge comparison tables. Running `test_harness.py` directly discards the ground-truth comparison, which is the entire point of using synth graphs.
 
-2. **Run one graph at a time.** JAX parallelises gradient evaluations across all available CPU cores internally (see §JAX backend below). Running multiple graphs concurrently causes them to contend for cores, slowing both down. Use `--timeout 0` for exploratory runs on heavy contexted graphs where sampling time is unpredictable.
+2. **Concurrency cap is 2.** JAX parallelises gradient evaluations across all available CPU cores internally (see §JAX backend below). One graph already saturates the box; **two concurrent fits is the safe ceiling** — `bayes/run_regression.py` hard-caps `--max-parallel` at 2 for this reason. Going higher causes scheduler thrash and OOM. Use `--timeout 0` for exploratory runs on heavy contexted graphs where sampling time is unpredictable.
 
 3. **Use `python3 -u` for background runs.** Python buffers stdout when piped to a file. Without `-u`, no output appears until the process exits — making long-running background runs appear frozen. Always use unbuffered mode.
 
@@ -74,11 +74,11 @@ The winning formula flags (`latency_reparam`, `centred_latency_slices`,
 
 ```bash
 . graph-editor/venv/bin/activate
-python3 -u bayes/run_regression.py --max-parallel 1 --tune 2000 --draws 2000
+python3 -u bayes/run_regression.py --max-parallel 2 --tune 2000 --draws 2000
 ```
 
 Key points:
-- **`--max-parallel 1`** is required — JAX fans out across all CPU cores per graph.
+- **`--max-parallel 2`** is the ceiling (hard-capped in `run_regression.py`). JAX fans out across CPU cores per graph, so two concurrent fits already saturate the box; `--max-parallel 1` is safer for heavy contexted graphs.
 - **`python3 -u`** for unbuffered output (see rule 3 above).
 - **Do not use `--no-timeout`** — truth files have per-graph timeouts (updated 14-Apr-26). The stall detector catches stuck chains before timeout.
 - **Incremental summary**: written to `/tmp/bayes_regression-{run_id}.summary` after each graph. Monitor with `tail -f`.

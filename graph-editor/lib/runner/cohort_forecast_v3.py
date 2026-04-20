@@ -24,14 +24,30 @@ from typing import Any, Dict, List, Optional
 # ═══════════════════════════════════════════════════════════════════════
 
 
+@dataclass
+class LaglessResult:
+    """Return carrier for `_lagless_rows` with doc 52 provenance.
+
+    `rows` has the same shape as before. The remaining fields are the
+    engine-level subset-conditioning blend provenance (doc 52 §14.6)
+    — a parallel to `ForecastTrajectory`'s fields.
+    """
+    rows: List[Dict[str, Any]] = field(default_factory=list)
+    r: Optional[float] = None
+    m_S: Optional[float] = None
+    m_G: Optional[float] = None
+    blend_applied: bool = False
+    blend_skip_reason: Optional[str] = None
+
+
 def _lagless_rows(
     fe: Optional['FrameEvidence'],
     resolved: Any,
     sweep_to: str,
     axis_tau_max: Optional[int] = None,
     band_level: float = 0.90,
-) -> List[Dict[str, Any]]:
-    """Row builder for lagless edges (σ ≤ 0) — doc 50 Class B.
+) -> LaglessResult:
+    """Row builder for lagless edges (σ ≤ 0) — doc 50 Class B, doc 52 blend.
 
     Branches on the resolver's semantic property
     `alpha_beta_query_scoped`, not on source name, to decide whether
@@ -39,19 +55,26 @@ def _lagless_rows(
 
     - **Already query-scoped** (analytic / analytic_be Jeffreys
       posteriors via D20 fallback): read α, β directly. Updating again
-      would double-count. See STATS_SUBSYSTEMS.md §5 Confusion 8.
+      would double-count. Blend is skipped with reason
+      ``source_query_scoped``.
     - **Aggregate prior** (bayesian fit / manual override): conjugate
-      Beta-Binomial update with query-scoped evidence: α' = α + Σk,
-      β' = β + Σ(n − k).
+      Beta-Binomial update α' = α + Σk, β' = β + Σ(n − k); doc 52
+      engine-level blend then mixes the updated (α', β') with the
+      unupdated aggregate (α, β) at ratio (1 − r) : r, where
+      r = m_S / m_G.
 
     Class C (no evidence in the window) falls out naturally: Σn = 0 →
     aggregate-prior update by zero = prior; query-scoped path returns
-    the already-scoped prior unchanged.
+    the already-scoped prior unchanged; blend trivially returns the
+    aggregate in either case.
 
-    Returns [] only for Class D (no usable α, β at all — the resolver
-    failed to populate a prior and there's no evidence either).
+    Returns a LaglessResult with ``rows=[]`` only for Class D (no
+    usable α, β at all — the resolver failed to populate a prior and
+    there's no evidence either).
     """
     from scipy.stats import beta as _beta_dist
+    # Import the shared blend helper from the engine module.
+    from runner.forecast_state import _compute_blend_params
 
     # ── Aggregate query-scoped evidence across cohorts ──────────────
     if fe is not None:
@@ -79,6 +102,10 @@ def _lagless_rows(
     beta_prior = max(float(getattr(resolved, 'beta', 0.0) or 0.0), 0.0)
     already_query_scoped = bool(getattr(resolved, 'alpha_beta_query_scoped', False))
 
+    # Doc 52 §14.5: determine blend applicability. `m_S = sum_x` mirrors
+    # the IS-path convention (sum of per-Cohort x_frozen).
+    _blend_info = _compute_blend_params(resolved, sum_x)
+
     if already_query_scoped:
         # Resolver's α, β already incorporates query-window evidence
         # (analytic / analytic_be Jeffreys posterior). Read directly —
@@ -88,17 +115,74 @@ def _lagless_rows(
     else:
         # Resolver's α, β is an aggregate prior (bayesian / manual).
         # Conjugate update with query-scoped Σk, Σn.
-        alpha_post = alpha_prior + sum_y
-        beta_post = beta_prior + (sum_x - sum_y)
+        alpha_post_conditioned = alpha_prior + sum_y
+        beta_post_conditioned = beta_prior + (sum_x - sum_y)
+
+        if _blend_info['applied']:
+            # Doc 52 §14.4.3: closed-form Beta blend at moment level.
+            r_val = float(_blend_info['r'])
+            s_cond = alpha_post_conditioned + beta_post_conditioned
+            s_prior = alpha_prior + beta_prior
+            if s_cond > 0 and s_prior > 0:
+                mu_cond = alpha_post_conditioned / s_cond
+                mu_prior = alpha_prior / s_prior
+                var_cond = (alpha_post_conditioned * beta_post_conditioned
+                            / (s_cond * s_cond * (s_cond + 1)))
+                var_prior = (alpha_prior * beta_prior
+                             / (s_prior * s_prior * (s_prior + 1)))
+                mu_b = (1.0 - r_val) * mu_cond + r_val * mu_prior
+                var_b = ((1.0 - r_val) * var_cond + r_val * var_prior
+                         + (1.0 - r_val) * r_val * (mu_cond - mu_prior) ** 2)
+                # Moment-match back to a display Beta.
+                if 0.0 < mu_b < 1.0 and var_b > 0:
+                    common = mu_b * (1.0 - mu_b) / var_b - 1.0
+                    if common > 0:
+                        alpha_post = mu_b * common
+                        beta_post = (1.0 - mu_b) * common
+                    else:
+                        # Variance too large to form a proper Beta — fall
+                        # back to the conditioned update.
+                        alpha_post = alpha_post_conditioned
+                        beta_post = beta_post_conditioned
+                else:
+                    alpha_post = alpha_post_conditioned
+                    beta_post = beta_post_conditioned
+            else:
+                alpha_post = alpha_post_conditioned
+                beta_post = beta_post_conditioned
+        else:
+            alpha_post = alpha_post_conditioned
+            beta_post = beta_post_conditioned
 
     # Class D guard: no usable prior and no evidence.
     if alpha_post <= 0 or beta_post <= 0:
-        return []
+        return LaglessResult(
+            rows=[],
+            r=_blend_info.get('r'),
+            m_S=_blend_info.get('m_S'),
+            m_G=_blend_info.get('m_G'),
+            blend_applied=bool(_blend_info.get('applied')),
+            blend_skip_reason=_blend_info.get('skip_reason'),
+        )
 
     # ── Posterior scalars (Beta closed form) ────────────────────────
     s = alpha_post + beta_post
     p_mean = alpha_post / s
-    p_sd = math.sqrt(alpha_post * beta_post / (s * s * (s + 1)))
+    # Epistemic σ — Beta posterior after conjugate update with query
+    # evidence. Tight when evidence is abundant.
+    p_sd_epistemic = math.sqrt(alpha_post * beta_post / (s * s * (s + 1)))
+    # Predictive σ — resolved.alpha_pred/beta_pred from doc 49 carry
+    # kappa-inflated between-cohort dispersion. We do NOT conjugate-
+    # update these with query Σk, Σn (that would collapse the kappa
+    # spread to the epistemic width). Fall back to epistemic when the
+    # resolver did not supply predictive params (e.g. kappa absent).
+    _alpha_p = getattr(resolved, 'alpha_pred', 0.0) or 0.0
+    _beta_p = getattr(resolved, 'beta_pred', 0.0) or 0.0
+    if _alpha_p > 0 and _beta_p > 0 and (_alpha_p, _beta_p) != (alpha_prior, beta_prior):
+        _sp = _alpha_p + _beta_p
+        p_sd = math.sqrt(_alpha_p * _beta_p / (_sp * _sp * (_sp + 1)))
+    else:
+        p_sd = p_sd_epistemic
 
     # ── Quantile bands from Beta closed form ────────────────────────
     # Match the v3 chart's default band set: [band_level, 0.5].
@@ -163,9 +247,17 @@ def _lagless_rows(
             'completeness_sd': 0.0,
             'p_infinity_mean': p_mean,
             'p_infinity_sd': p_sd,
+            'p_infinity_sd_epistemic': p_sd_epistemic,
         })
 
-    return rows
+    return LaglessResult(
+        rows=rows,
+        r=_blend_info.get('r'),
+        m_S=_blend_info.get('m_S'),
+        m_G=_blend_info.get('m_G'),
+        blend_applied=bool(_blend_info.get('applied')),
+        blend_skip_reason=_blend_info.get('skip_reason'),
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -505,13 +597,25 @@ def compute_cohort_maturity_rows_v3(
             resolved=resolved,
             axis_tau_max=axis_tau_max,
         )
-        return _lagless_rows(
+        _lagless_res = _lagless_rows(
             fe=fe_lagless,
             resolved=resolved,
             sweep_to=sweep_to,
             axis_tau_max=axis_tau_max,
             band_level=band_level,
         )
+        _lagless_rows_out = _lagless_res.rows
+        if _lagless_rows_out:
+            # Doc 52 §14.6: stash conditioning block on first row as a
+            # sentinel; CF handler extracts and removes before rendering.
+            _lagless_rows_out[0]['_conditioning'] = {
+                'r': _lagless_res.r,
+                'm_S': _lagless_res.m_S,
+                'm_G': _lagless_res.m_G,
+                'applied': _lagless_res.blend_applied,
+                'skip_reason': _lagless_res.blend_skip_reason,
+            }
+        return _lagless_rows_out
 
     lat = resolved.latency
 
@@ -546,13 +650,23 @@ def compute_cohort_maturity_rows_v3(
         # distribution regardless of latency. If the resolver also has
         # no usable α/β (Class D), _lagless_rows returns [] and the
         # caller routes the edge to skipped_edges.
-        return _lagless_rows(
+        _lagless_res = _lagless_rows(
             fe=None,
             resolved=resolved,
             sweep_to=sweep_to,
             axis_tau_max=axis_tau_max,
             band_level=band_level,
         )
+        _lagless_rows_out = _lagless_res.rows
+        if _lagless_rows_out:
+            _lagless_rows_out[0]['_conditioning'] = {
+                'r': _lagless_res.r,
+                'm_S': _lagless_res.m_S,
+                'm_G': _lagless_res.m_G,
+                'applied': _lagless_res.blend_applied,
+                'skip_reason': _lagless_res.blend_skip_reason,
+            }
+        return _lagless_rows_out
 
     engine_cohorts = fe.engine_cohorts
     cohort_list = fe.cohort_list
@@ -708,7 +822,33 @@ def compute_cohort_maturity_rows_v3(
     _sat_tau = min(saturation_tau, T - 1)
     _asymp_draws = sweep.rate_draws[:, _sat_tau]
     _p_infinity_mean = float(np.median(_asymp_draws))
-    _p_infinity_sd = float(np.std(_asymp_draws))
+    # Per doc 49: two dispersion regimes.
+    #   _p_infinity_sd_epistemic — closed-form σ from Beta(α, β): how
+    #     confident we are about the rate parameter after all observed
+    #     evidence.
+    #   _p_infinity_sd (predictive, kappa-inflated) — closed-form σ from
+    #     Beta(α_pred, β_pred): dispersion of a fresh-cohort rate draw
+    #     accounting for between-cohort variability (kappa).
+    # Both are closed form. Historically _p_infinity_sd used
+    # np.std(IS-conditioned draws), but IS-conditioning on O(n) evidence
+    # collapses the MC spread back to σ_epi regardless of how diffuse
+    # the predictive prior was, so the two quantities came out equal.
+    # Contract corrected: docs 45b §Phase C and 47 §3 updated alongside.
+    def _beta_sd(a: float, b: float) -> float:
+        s = a + b
+        return math.sqrt(a * b / (s * s * (s + 1.0)))
+    _alpha_e = resolved.alpha if (resolved.alpha and resolved.alpha > 0) else None
+    _beta_e = resolved.beta if (resolved.beta and resolved.beta > 0) else None
+    if _alpha_e is not None and _beta_e is not None:
+        _p_infinity_sd_epistemic = _beta_sd(_alpha_e, _beta_e)
+    else:
+        _p_infinity_sd_epistemic = float(np.std(_asymp_draws))
+    _alpha_p = resolved.alpha_pred if (resolved.alpha_pred and resolved.alpha_pred > 0) else None
+    _beta_p = resolved.beta_pred if (resolved.beta_pred and resolved.beta_pred > 0) else None
+    if _alpha_p is not None and _beta_p is not None:
+        _p_infinity_sd = _beta_sd(_alpha_p, _beta_p)
+    else:
+        _p_infinity_sd = _p_infinity_sd_epistemic
 
     for tau in range(max_tau + 1):
         ev = _compute_evidence_at_tau(tau)
@@ -788,6 +928,19 @@ def compute_cohort_maturity_rows_v3(
             'completeness_sd': sweep.completeness_sd,
             'p_infinity_mean': _p_infinity_mean,
             'p_infinity_sd': _p_infinity_sd,
+            'p_infinity_sd_epistemic': _p_infinity_sd_epistemic,
         })
+
+    # Doc 52 §14.6: stash subset-conditioning provenance on the first
+    # row as a sentinel (r is per-call, not per-τ). CF handler extracts
+    # and moves it into the per-edge `conditioning` response block.
+    if rows:
+        rows[0]['_conditioning'] = {
+            'r': sweep.r,
+            'm_S': sweep.m_S,
+            'm_G': sweep.m_G,
+            'applied': sweep.blend_applied,
+            'skip_reason': sweep.blend_skip_reason,
+        }
 
     return rows

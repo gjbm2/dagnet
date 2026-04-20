@@ -58,7 +58,7 @@ python bayes/param_recovery.py --graph synth-diamond-context \
 python bayes/run_regression.py                                   # full suite, all discovered graphs
 python bayes/run_regression.py --graph synth-fanout-test         # single graph
 python bayes/run_regression.py --preflight-only                  # check data integrity only
-python bayes/run_regression.py --chains 2 --max-parallel 4       # override core budget
+python bayes/run_regression.py --chains 2 --max-parallel 2       # ceiling — JAX fans across cores
 python bayes/run_regression.py --include context --max-parallel 1 --no-timeout
 # Auto-discovers synth-*.truth.yaml, bootstraps missing data, manages
 # parallel execution with core awareness, asserts z-score recovery.
@@ -395,8 +395,8 @@ python bayes/run_regression.py --graph synth-fanout-test
 # Preflight only (check data integrity, no MCMC):
 python bayes/run_regression.py --preflight-only
 
-# Override core budget:
-python bayes/run_regression.py --chains 2 --max-parallel 4
+# Override core budget (max-parallel hard-capped at 2 — JAX fans across CPU cores):
+python bayes/run_regression.py --chains 2 --max-parallel 2
 
 # Via pytest (sequential, same pipeline):
 pytest bayes/tests/test_param_recovery.py -v -s --timeout=600

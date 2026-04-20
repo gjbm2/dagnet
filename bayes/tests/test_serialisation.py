@@ -404,3 +404,442 @@ class TestBuildUnifiedSlices:
         assert c["beta"] == 120.0
         assert c["p_hdi_lower"] == 0.22
         assert c["p_hdi_upper"] == 0.33
+
+
+# ---------------------------------------------------------------------------
+# Dispersion completeness — predictive + epistemic fields on the unified
+# slices dict. These tests lock in the contract that every dispersion the
+# Bayes model computes is actually emitted in the payload the FE consumes.
+# See doc 49 §A.6 (predictive vs epistemic split) and doc 52 §14.
+# ---------------------------------------------------------------------------
+
+# Fields that MUST appear on the window() slice when the corresponding
+# source fields on the dataclasses are populated. Frozen as a contract —
+# adding a dispersion to PosteriorSummary/LatencyPosteriorSummary without
+# plumbing it here will fail `test_window_full_dispersion_surface`.
+WINDOW_PREDICTIVE_PROB_FIELDS = {
+    "alpha_pred", "beta_pred", "hdi_lower_pred", "hdi_upper_pred",
+}
+WINDOW_EPISTEMIC_PROB_FIELDS = {"alpha", "beta", "p_hdi_lower", "p_hdi_upper"}
+WINDOW_LATENCY_DISPERSION_FIELDS = {
+    "mu_sd", "mu_sd_epist", "sigma_sd", "onset_sd",
+}
+WINDOW_LATENCY_OVERDISPERSION_FIELDS = {"kappa_lat_mean", "kappa_lat_sd"}
+WINDOW_SUBSET_MASS_FIELDS = {"n_effective"}
+
+COHORT_PREDICTIVE_PROB_FIELDS = WINDOW_PREDICTIVE_PROB_FIELDS
+COHORT_LATENCY_DISPERSION_FIELDS = WINDOW_LATENCY_DISPERSION_FIELDS
+COHORT_LATENCY_OVERDISPERSION_FIELDS = WINDOW_LATENCY_OVERDISPERSION_FIELDS
+COHORT_SUBSET_MASS_FIELDS = WINDOW_SUBSET_MASS_FIELDS
+
+
+class TestUnifiedSlicesDispersionCompleteness:
+    """Contract: every dispersion/predictive field that the Bayes model
+    computes must flow through `_build_unified_slices` into the payload.
+
+    These tests exist because silent drops at this boundary (model emits X,
+    payload omits X) broke predictive/epistemic propagation into the graph
+    upsert, and no prior test asserted surface completeness.
+    """
+
+    def _fully_populated_prob(self) -> PosteriorSummary:
+        """PosteriorSummary with every optional predictive/mass field set."""
+        return PosteriorSummary(
+            edge_id="e-1", param_id="p-1",
+            alpha=43.0, beta=119.5,
+            mean=0.265, stdev=0.034,
+            hdi_lower=0.22, hdi_upper=0.33,
+            ess=1100, rhat=1.002,
+            divergences=0, provenance="bayesian",
+            prior_tier="direct_history",
+            # Epistemic per-mode (doc 49 §A.6.1)
+            window_alpha=44.0, window_beta=118.0,
+            window_hdi_lower=0.225, window_hdi_upper=0.335,
+            cohort_alpha=40.0, cohort_beta=115.0,
+            cohort_hdi_lower=0.21, cohort_hdi_upper=0.34,
+            # Predictive (kappa-inflated)
+            window_alpha_pred=30.0, window_beta_pred=80.0,
+            window_hdi_lower_pred=0.18, window_hdi_upper_pred=0.38,
+            cohort_alpha_pred=25.0, cohort_beta_pred=70.0,
+            cohort_hdi_lower_pred=0.16, cohort_hdi_upper_pred=0.42,
+            # Subset-conditioning mass (doc 52 §14.2)
+            window_n_effective=4500.0, cohort_n_effective=3200.0,
+        )
+
+    def _fully_populated_lat(self) -> LatencyPosteriorSummary:
+        """LatencyPosteriorSummary with every optional dispersion field set."""
+        return LatencyPosteriorSummary(
+            # Edge-level
+            mu_mean=2.35, mu_sd=0.12,           # predictive when kappa present
+            sigma_mean=0.72, sigma_sd=0.04,
+            onset_delta_days=1.5,
+            hdi_t95_lower=18.5, hdi_t95_upper=32.1,
+            ess=950, rhat=1.006,
+            provenance="bayesian",
+            mu_sd_epist=0.08,                    # always epistemic (doc 49 §A.6.2)
+            onset_mean=1.5, onset_sd=0.3,
+            onset_hdi_lower=0.9, onset_hdi_upper=2.1,
+            onset_mu_corr=-0.423,
+            # Path-level (cohort)
+            path_onset_delta_days=3.2, path_onset_sd=0.5,
+            path_onset_hdi_lower=2.4, path_onset_hdi_upper=4.0,
+            path_mu_mean=2.81, path_mu_sd=0.18,
+            path_mu_sd_epist=0.12,
+            path_sigma_mean=0.58, path_sigma_sd=0.06,
+            path_hdi_t95_lower=28.4, path_hdi_t95_upper=58.7,
+            path_provenance="bayesian",
+            # Latency overdispersion (doc 34)
+            kappa_lat_mean=25.3, kappa_lat_sd=4.7,
+        )
+
+    # -- Window predictive probability (doc 49 §A.6.1) --
+
+    def test_window_predictive_probability_fields_present(self):
+        """alpha_pred/beta_pred/hdi_*_pred appear on window() when kappa present.
+
+        Without these the FE's funnel runner and cohort_forecast_v3 default
+        alpha_pred = alpha and predictive dispersion collapses to epistemic
+        — the bug this test class exists to prevent.
+        """
+        slices = _build_unified_slices(self._fully_populated_prob(), None)
+        w = slices["window()"]
+        assert w["alpha_pred"] == 30.0
+        assert w["beta_pred"] == 80.0
+        assert w["hdi_lower_pred"] == 0.18
+        assert w["hdi_upper_pred"] == 0.38
+        assert WINDOW_PREDICTIVE_PROB_FIELDS.issubset(w.keys()), (
+            f"window() missing predictive probability fields: "
+            f"{WINDOW_PREDICTIVE_PROB_FIELDS - w.keys()}"
+        )
+
+    def test_window_predictive_fields_omitted_when_kappa_absent(self):
+        """alpha_pred keys NOT emitted when PosteriorSummary has no
+        predictive fields — omission, not alpha_pred=alpha duplication."""
+        prob = PosteriorSummary(
+            edge_id="e-1", param_id="p-1",
+            alpha=43.0, beta=119.5,
+            mean=0.265, stdev=0.034,
+            hdi_lower=0.22, hdi_upper=0.33,
+            ess=1100, rhat=1.002,
+            divergences=0, provenance="bayesian",
+        )
+        slices = _build_unified_slices(prob, None)
+        w = slices["window()"]
+        for k in WINDOW_PREDICTIVE_PROB_FIELDS:
+            assert k not in w, f"{k} should not be emitted when kappa absent"
+
+    # -- Window n_effective (doc 52 §14.3) --
+
+    def test_window_n_effective_present(self):
+        """window.n_effective emitted when PosteriorSummary.window_n_effective set.
+
+        Consumer: resolve_model_params → ResolvedModelParams.n_effective
+        for the subset-conditioning blend ratio. Silent drop means the
+        engine falls back to treating the window posterior as unconditional.
+        """
+        slices = _build_unified_slices(self._fully_populated_prob(), None)
+        w = slices["window()"]
+        assert w["n_effective"] == 4500.0
+
+    def test_window_n_effective_omitted_when_none(self):
+        prob = self._fully_populated_prob()
+        prob.window_n_effective = None
+        slices = _build_unified_slices(prob, None)
+        assert "n_effective" not in slices["window()"]
+
+    # -- Window latency dispersions (epistemic + predictive + overdisp) --
+
+    def test_window_latency_dispersions_complete(self):
+        """All latency dispersion fields present when lat fully populated."""
+        slices = _build_unified_slices(
+            self._fully_populated_prob(), self._fully_populated_lat(),
+        )
+        w = slices["window()"]
+        expected = (
+            WINDOW_LATENCY_DISPERSION_FIELDS
+            | WINDOW_LATENCY_OVERDISPERSION_FIELDS
+        )
+        missing = expected - w.keys()
+        assert not missing, f"window() missing latency dispersions: {missing}"
+        assert w["mu_sd"] == 0.12           # predictive (doc 49 §A.6.2)
+        assert w["mu_sd_epist"] == 0.08     # epistemic anchor
+        assert w["sigma_sd"] == 0.04        # always epistemic
+        assert w["onset_sd"] == 0.3
+        assert w["kappa_lat_mean"] == 25.3
+        assert w["kappa_lat_sd"] == 4.7
+
+    def test_window_mu_sd_epist_omitted_when_none(self):
+        """mu_sd_epist omitted when None (legacy path without epistemic split)."""
+        lat = self._fully_populated_lat()
+        lat.mu_sd_epist = None
+        slices = _build_unified_slices(self._fully_populated_prob(), lat)
+        assert "mu_sd_epist" not in slices["window()"]
+
+    def test_window_kappa_lat_omitted_when_absent(self):
+        """kappa_lat_mean/sd omitted when latency dispersion disabled."""
+        lat = self._fully_populated_lat()
+        lat.kappa_lat_mean = None
+        lat.kappa_lat_sd = None
+        slices = _build_unified_slices(self._fully_populated_prob(), lat)
+        w = slices["window()"]
+        assert "kappa_lat_mean" not in w
+        assert "kappa_lat_sd" not in w
+
+    # -- Cohort predictive probability + mass --
+
+    def test_cohort_predictive_probability_fields_present(self):
+        """alpha_pred/beta_pred/hdi_*_pred appear on cohort() when populated."""
+        slices = _build_unified_slices(
+            self._fully_populated_prob(), self._fully_populated_lat(),
+        )
+        c = slices["cohort()"]
+        assert c["alpha_pred"] == 25.0
+        assert c["beta_pred"] == 70.0
+        assert c["hdi_lower_pred"] == 0.16
+        assert c["hdi_upper_pred"] == 0.42
+        assert COHORT_PREDICTIVE_PROB_FIELDS.issubset(c.keys()), (
+            f"cohort() missing predictive: "
+            f"{COHORT_PREDICTIVE_PROB_FIELDS - c.keys()}"
+        )
+
+    def test_cohort_n_effective_present(self):
+        slices = _build_unified_slices(
+            self._fully_populated_prob(), self._fully_populated_lat(),
+        )
+        assert slices["cohort()"]["n_effective"] == 3200.0
+
+    # -- Cohort latency dispersions (path_* stripped to bare names) --
+
+    def test_cohort_latency_dispersions_complete(self):
+        """Path-level latency dispersions flow to cohort() under stripped names."""
+        slices = _build_unified_slices(
+            self._fully_populated_prob(), self._fully_populated_lat(),
+        )
+        c = slices["cohort()"]
+        assert c["mu_sd"] == 0.18            # from path_mu_sd (predictive)
+        assert c["mu_sd_epist"] == 0.12      # from path_mu_sd_epist
+        assert c["sigma_sd"] == 0.06         # from path_sigma_sd
+        assert c["onset_sd"] == 0.5          # from path_onset_sd
+        assert c["kappa_lat_mean"] == 25.3   # shared with window
+        assert c["kappa_lat_sd"] == 4.7
+
+    # -- Meta-tests: frozen contract --
+
+    def test_window_full_dispersion_surface(self):
+        """Meta-contract: fully-populated input emits every expected field.
+
+        This test enumerates the complete predictive+epistemic surface on
+        the window() slice. If a new dispersion is added to
+        PosteriorSummary or LatencyPosteriorSummary, update this set AND
+        `_build_unified_slices` — failing here is the assurance that the
+        serialiser isn't silently dropping new fields.
+        """
+        slices = _build_unified_slices(
+            self._fully_populated_prob(), self._fully_populated_lat(),
+        )
+        w = slices["window()"]
+        required = (
+            WINDOW_EPISTEMIC_PROB_FIELDS
+            | WINDOW_PREDICTIVE_PROB_FIELDS
+            | WINDOW_LATENCY_DISPERSION_FIELDS
+            | WINDOW_LATENCY_OVERDISPERSION_FIELDS
+            | WINDOW_SUBSET_MASS_FIELDS
+        )
+        missing = required - w.keys()
+        assert not missing, (
+            f"window() slice missing required dispersion/predictive "
+            f"fields: {missing}. Either _build_unified_slices stopped "
+            f"emitting them, or this contract drifted from the dataclass."
+        )
+
+    def test_cohort_full_dispersion_surface(self):
+        """Meta-contract: cohort() slice must carry the same dispersion
+        surface as window(), sourced from path_* dataclass fields.
+        """
+        slices = _build_unified_slices(
+            self._fully_populated_prob(), self._fully_populated_lat(),
+        )
+        c = slices["cohort()"]
+        required = (
+            WINDOW_EPISTEMIC_PROB_FIELDS
+            | COHORT_PREDICTIVE_PROB_FIELDS
+            | COHORT_LATENCY_DISPERSION_FIELDS
+            | COHORT_LATENCY_OVERDISPERSION_FIELDS
+            | COHORT_SUBSET_MASS_FIELDS
+        )
+        missing = required - c.keys()
+        assert not missing, (
+            f"cohort() slice missing required dispersion/predictive "
+            f"fields: {missing}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Dataclass introspection meta-tests — auto-detect new fields
+#
+# These tests walk `dataclasses.fields()` and verify that every data-bearing
+# field on PosteriorSummary / LatencyPosteriorSummary either flows into the
+# unified slices output or is explicitly listed as intentionally excluded.
+#
+# Purpose: if a future change adds a new field to either dataclass and
+# forgets to plumb it through `_build_unified_slices`, this test fails
+# automatically — without anyone having to remember to update an enumerated
+# list. The cost of the safety net is the exclusion registry below: every
+# non-data-bearing field must be explicitly listed with a reason.
+# ---------------------------------------------------------------------------
+
+import dataclasses
+
+# LatencyPosteriorSummary: edge-level fields flow verbatim to window();
+# path_* fields flow to cohort() under stripped names (path_mu_sd → mu_sd).
+# Exceptions:
+#   - Metadata / provenance / quality fields: written but not "data".
+#   - Internal fields: not in payload by design.
+#
+# Format: field_name → expected_key_in_window OR expected_key_in_cohort
+# Use None to mark "intentionally not serialised" (with a reason in comment).
+
+_LAT_EXCLUDED_REASON = {
+    # Quality / metadata — present as ess/rhat on slices but not as
+    # data-flow dispersion fields (combined across prob + lat).
+    "hdi_level": "constant metadata, not slice-level",
+    "ess": "combined min across prob+lat, tested separately",
+    "rhat": "combined max across prob+lat, tested separately",
+    "provenance": "metadata, tested separately",
+    "path_provenance": "metadata, tested separately",
+    # LOO-ELPD internals — raw `elpd`, `elpd_se`, `elpd_null` stay inside
+    # the dataclass; only `delta_elpd` is emitted.
+    "elpd": "internal; only delta_elpd is serialised",
+    "elpd_se": "internal; only delta_elpd is serialised",
+    "elpd_null": "internal; only delta_elpd is serialised",
+    # LOO emitted-fields are owned by PosteriorSummary (worker.py emits
+    # prob.delta_elpd etc. into window/cohort slices). LatencyPosteriorSummary
+    # has these too for dataclass symmetry but they are not emitted from the
+    # latency side — the prob side is authoritative.
+    "delta_elpd": "emitted from prob, not from lat (single-source)",
+    "pareto_k_max": "emitted from prob, not from lat (single-source)",
+    "n_loo_obs": "emitted from prob, not from lat (single-source)",
+    # onset_delta_days is the POINT value (becomes onset_mean in slices
+    # when onset is latent; otherwise conveyed via `onset_mean`).
+    "onset_delta_days": "becomes slice onset_mean; tested via onset_mean",
+    "path_onset_delta_days": "becomes cohort onset_mean; tested separately",
+    # onset_hdi bounds — currently not emitted in slices (HDI is on t95).
+    # If that changes, add to RENAMES_TO_WINDOW/COHORT.
+    "onset_hdi_lower": "not in slice payload; only onset_sd is used",
+    "onset_hdi_upper": "not in slice payload; only onset_sd is used",
+    "path_onset_hdi_lower": "not in slice payload",
+    "path_onset_hdi_upper": "not in slice payload",
+    # path_provenance / ppc_traj — conditional, tested by dedicated cases.
+    "ppc_traj_coverage_90": "conditional field, tested separately",
+    "ppc_traj_n_obs": "conditional field, tested separately",
+    # mu_mean is edge-level primary; handled as window[mu_mean].
+}
+
+# Fields that rename when projecting path_ fields onto cohort() slice
+_LAT_PATH_TO_COHORT_RENAME = {
+    "path_mu_mean": "mu_mean",
+    "path_mu_sd": "mu_sd",
+    "path_mu_sd_epist": "mu_sd_epist",
+    "path_sigma_mean": "sigma_mean",
+    "path_sigma_sd": "sigma_sd",
+    "path_onset_sd": "onset_sd",
+    "path_hdi_t95_lower": "hdi_t95_lower",
+    "path_hdi_t95_upper": "hdi_t95_upper",
+}
+
+
+class TestDataclassIntrospectionCoverage:
+    """Auto-detect new dispersion fields on dataclasses.
+
+    These meta-tests use `dataclasses.fields()` to ensure that a future
+    change adding a new field to LatencyPosteriorSummary or PosteriorSummary
+    is either (a) plumbed through `_build_unified_slices`, or (b) explicitly
+    added to the excluded-reason registry above with a documented reason.
+    Silent omission is not possible.
+    """
+
+    def _fully_populated_prob(self) -> PosteriorSummary:
+        # Re-use fixture from the enumerated test class
+        return TestUnifiedSlicesDispersionCompleteness()._fully_populated_prob()
+
+    def _fully_populated_lat(self) -> LatencyPosteriorSummary:
+        return TestUnifiedSlicesDispersionCompleteness()._fully_populated_lat()
+
+    def test_every_latency_field_flows_through_or_is_excluded(self):
+        """Every field on LatencyPosteriorSummary must either appear in
+        the unified slices output or be listed in _LAT_EXCLUDED_REASON.
+        """
+        slices = _build_unified_slices(
+            self._fully_populated_prob(), self._fully_populated_lat(),
+        )
+        window = slices["window()"]
+        cohort = slices.get("cohort()", {})
+
+        unaccounted: list[str] = []
+        for f in dataclasses.fields(LatencyPosteriorSummary):
+            name = f.name
+
+            if name in _LAT_EXCLUDED_REASON:
+                continue
+
+            if name.startswith("path_"):
+                # Path-level → cohort() slice. Apply rename if any.
+                expected_key = _LAT_PATH_TO_COHORT_RENAME.get(name, name)
+                if expected_key not in cohort:
+                    unaccounted.append(f"{name} (expected cohort.{expected_key})")
+            else:
+                # Edge-level → window() slice, verbatim name.
+                if name not in window:
+                    unaccounted.append(f"{name} (expected window.{name})")
+
+        assert not unaccounted, (
+            "New LatencyPosteriorSummary fields not plumbed through to "
+            "`_build_unified_slices`. Either wire them into the slices "
+            "output OR add to `_LAT_EXCLUDED_REASON` with a documented "
+            f"reason.\n\nUnaccounted: {unaccounted}"
+        )
+
+    def test_every_probability_predictive_field_flows_through(self):
+        """Every predictive / subset-mass field on PosteriorSummary must
+        appear in window() or cohort() output. Scoped to the fields this
+        test class is designed to protect (predictive + mass); epistemic
+        base fields are covered by enumerated tests above.
+        """
+        slices = _build_unified_slices(
+            self._fully_populated_prob(), self._fully_populated_lat(),
+        )
+        window = slices["window()"]
+        cohort = slices["cohort()"]
+
+        prob_field_to_slice = {
+            # Window predictive
+            "window_alpha_pred": ("window", "alpha_pred"),
+            "window_beta_pred": ("window", "beta_pred"),
+            "window_hdi_lower_pred": ("window", "hdi_lower_pred"),
+            "window_hdi_upper_pred": ("window", "hdi_upper_pred"),
+            # Cohort predictive
+            "cohort_alpha_pred": ("cohort", "alpha_pred"),
+            "cohort_beta_pred": ("cohort", "beta_pred"),
+            "cohort_hdi_lower_pred": ("cohort", "hdi_lower_pred"),
+            "cohort_hdi_upper_pred": ("cohort", "hdi_upper_pred"),
+            # Subset-conditioning mass (doc 52 §14.3)
+            "window_n_effective": ("window", "n_effective"),
+            "cohort_n_effective": ("cohort", "n_effective"),
+        }
+        target = {"window": window, "cohort": cohort}
+        unaccounted: list[str] = []
+        for source_field, (slice_name, out_key) in prob_field_to_slice.items():
+            # Verify the source field actually exists on the dataclass —
+            # catches typos / removals at test authoring time.
+            assert any(
+                f.name == source_field
+                for f in dataclasses.fields(PosteriorSummary)
+            ), f"stale test reference: {source_field} not on PosteriorSummary"
+            if out_key not in target[slice_name]:
+                unaccounted.append(
+                    f"{source_field} → {slice_name}().{out_key}"
+                )
+        assert not unaccounted, (
+            f"PosteriorSummary predictive/mass fields missing from "
+            f"unified slices: {unaccounted}"
+        )

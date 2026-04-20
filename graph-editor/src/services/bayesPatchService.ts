@@ -144,6 +144,7 @@ export interface BayesPatchEdge {
     hdi_upper_pred?: number;
     mu_mean?: number;
     mu_sd?: number;
+    mu_sd_epist?: number;  // always-epistemic posterior SD (doc 49 §A.6.2)
     sigma_mean?: number;
     sigma_sd?: number;
     onset_mean?: number;
@@ -280,6 +281,18 @@ export async function applyPatch(patch: BayesPatchFile): Promise<number> {
           provenance: windowSlice.provenance,
           divergences: windowSlice.divergences,
           prior_tier: patchEdge.prior_tier || 'uninformative',
+          // Predictive (kappa-inflated) α/β from window() slice — required by
+          // the funnel runner's combined-SD formula (doc 52 §3.5) and by
+          // cohort_forecast_v3's p_infinity_sd vs p_infinity_sd_epistemic
+          // split (doc 49). Without these, resolve_model_params defaults
+          // alpha_pred = alpha and predictive dispersion collapses to
+          // epistemic.
+          ...(windowSlice.alpha_pred != null ? {
+            alpha_pred: windowSlice.alpha_pred,
+            beta_pred: windowSlice.beta_pred,
+            hdi_lower_pred: windowSlice.hdi_lower_pred,
+            hdi_upper_pred: windowSlice.hdi_upper_pred,
+          } : {}),
           // Cohort-mode probability from cohort() slice
           ...(cohortSlice?.alpha != null ? {
             cohort_alpha: cohortSlice.alpha,
@@ -287,6 +300,20 @@ export async function applyPatch(patch: BayesPatchFile): Promise<number> {
             cohort_hdi_lower: cohortSlice.p_hdi_lower,
             cohort_hdi_upper: cohortSlice.p_hdi_upper,
             cohort_provenance: cohortSlice.provenance,
+            ...(cohortSlice.alpha_pred != null ? {
+              cohort_alpha_pred: cohortSlice.alpha_pred,
+              cohort_beta_pred: cohortSlice.beta_pred,
+              cohort_hdi_lower_pred: cohortSlice.hdi_lower_pred,
+              cohort_hdi_upper_pred: cohortSlice.hdi_upper_pred,
+            } : {}),
+          } : {}),
+          // Subset-conditioning mass (doc 52 §14.3). Engine consumes
+          // via resolve_model_params → ResolvedModelParams.n_effective.
+          ...(windowSlice.n_effective != null ? {
+            window_n_effective: windowSlice.n_effective,
+          } : {}),
+          ...(cohortSlice?.n_effective != null ? {
+            cohort_n_effective: cohortSlice.n_effective,
           } : {}),
           // LOO-ELPD model adequacy (doc 32)
           ...(windowSlice.delta_elpd != null ? {
@@ -323,6 +350,11 @@ export async function applyPatch(patch: BayesPatchFile): Promise<number> {
           fitted_at: patch.fitted_at,
           fingerprint: patch.fingerprint,
           provenance: windowSlice.provenance,
+          // Always-epistemic posterior SD (doc 49 §A.6.2). span_kernel.py
+          // prefers this over mu_sd for epistemic fan bands when kappa is
+          // active — without it, runners fall back to the kappa-inflated
+          // predictive mu_sd and over-widen the epistemic interval.
+          ...(windowSlice.mu_sd_epist != null ? { mu_sd_epist: windowSlice.mu_sd_epist } : {}),
           ...(windowSlice.onset_mean != null ? {
             onset_mean: windowSlice.onset_mean,
             onset_sd: windowSlice.onset_sd,
@@ -334,6 +366,7 @@ export async function applyPatch(patch: BayesPatchFile): Promise<number> {
             path_onset_sd: cohortSlice.onset_sd,
             path_mu_mean: cohortSlice.mu_mean,
             path_mu_sd: cohortSlice.mu_sd,
+            ...(cohortSlice.mu_sd_epist != null ? { path_mu_sd_epist: cohortSlice.mu_sd_epist } : {}),
             path_sigma_mean: cohortSlice.sigma_mean,
             path_sigma_sd: cohortSlice.sigma_sd,
             ...(cohortSlice.hdi_t95_lower != null ? { path_hdi_t95_lower: cohortSlice.hdi_t95_lower, path_hdi_t95_upper: cohortSlice.hdi_t95_upper } : {}),
@@ -387,6 +420,10 @@ export async function applyPatch(patch: BayesPatchFile): Promise<number> {
               onset_delta_days: windowSlice.onset_mean ?? graphEdge.p.latency?.onset_delta_days ?? 0,
               // Dispersions from posterior (required for MC fan bands and completeness_sd)
               ...(windowSlice.mu_sd != null ? { mu_sd: windowSlice.mu_sd } : {}),
+              // Always-epistemic mu_sd (doc 49 §A.6.2). span_kernel.py reads
+              // model_vars.latency.mu_sd_epist to build epistemic fan bands
+              // that are NOT widened by kappa_lat.
+              ...(windowSlice.mu_sd_epist != null ? { mu_sd_epist: windowSlice.mu_sd_epist } : {}),
               ...(windowSlice.sigma_sd != null ? { sigma_sd: windowSlice.sigma_sd } : {}),
               ...(windowSlice.onset_sd != null ? { onset_sd: windowSlice.onset_sd } : {}),
               ...(windowSlice.onset_mu_corr != null ? { onset_mu_corr: windowSlice.onset_mu_corr } : {}),
@@ -396,6 +433,7 @@ export async function applyPatch(patch: BayesPatchFile): Promise<number> {
                 path_t95: Math.exp(cohortSlice.mu_mean + 1.645 * (cohortSlice.sigma_mean ?? 0)) + (cohortSlice.onset_mean ?? 0),
                 path_onset_delta_days: cohortSlice.onset_mean ?? 0,
                 ...(cohortSlice.mu_sd != null ? { path_mu_sd: cohortSlice.mu_sd } : {}),
+                ...(cohortSlice.mu_sd_epist != null ? { path_mu_sd_epist: cohortSlice.mu_sd_epist } : {}),
                 ...(cohortSlice.sigma_sd != null ? { path_sigma_sd: cohortSlice.sigma_sd } : {}),
                 ...(cohortSlice.onset_sd != null ? { path_onset_sd: cohortSlice.onset_sd } : {}),
               } : {}),

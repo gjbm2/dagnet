@@ -4,7 +4,7 @@ YOU ARE OFTEN INCOMPETENT AND OFTEN OVER-CONFIDENT. YOU OFTEN FAIL TO STUDY CONT
 
 ## Pre-flight Checks (MANDATORY before every Bash command)
 
-A `PreToolUse` hook fires on every Bash tool call. It injects a system reminder into the conversation asking you to check these gates. When you see this reminder, **scan all four gates before executing**. If any gate fails, STOP and use the listed alternative. Do not rationalise around them.
+A `PreToolUse` hook fires on every Bash tool call. It injects a system reminder into the conversation asking you to check these gates. When you see this reminder, **scan all five gates before executing**. If any gate fails, STOP and use the listed alternative. Do not rationalise around them.
 
 **How it works**: the hook runs automatically — you don't invoke it. If your command matches a gate pattern and you don't have explicit permission, the correct response is to use a non-destructive alternative (Read, Edit, Glob, Grep) or ask the user. The hook cannot block your command, so the discipline is on you.
 
@@ -48,6 +48,14 @@ IndexedDB `.clear()` / `.delete()` / `deleteDatabase()`.
 `~/.claude/projects/*/memory/`, `MEMORY.md`, or any memory files.
 
 - **Always fails.** The memory system is not used in this project. All shared context belongs in the repo (CLAUDE.md, docs/, code comments).
+
+### Gate 5: Bayes regression runs
+
+`bayes/run_regression.py`, `bayes/param_recovery.py`, `bayes/test_harness.py --graph ...`, `bayes/stress_*.py`. These hog CPU for minutes to hours.
+
+- **Pass condition**: explicit per-job instruction in the current message. Prior "yes" does not carry over.
+- **If no permission**: state script + args + duration. Ask. Do not launch.
+- **Wakeups never auto-launch these** — observe and report only.
 
 ### Why these gates exist
 

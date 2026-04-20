@@ -461,39 +461,80 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
     ) || null;
   };
 
-  // doc 52 §5.1 — hi/lo whiskers. Build a markLine config from the
-  // probability_lo / probability_hi fields when present. We anchor on the
-  // category x-position; for grouped multi-scenario bars the line falls on
-  // the category centre rather than per-scenario sub-bar centre, which is
-  // an acceptable v1 (multi-scenario whisker positioning is a follow-up).
-  const buildWhiskerMarkLine = (points: FunnelSeriesPoint[]) => {
-    const segments: any[] = [];
+  // doc 52 §5.1 — hi/lo whiskers as a custom series. The custom series's
+  // renderItem callback receives `api.size([1, 0])[0]`, which is the
+  // pixel width of one category band. Combined with the bar geometry
+  // (barCategoryGap / barGap / scenarioCount / scenarioIndex) we can
+  // place the whisker on the *exact* bar centre and size the caps as a
+  // fixed fraction of the actual bar width — no estimation required.
+  const _parsePct = (v: string | number | undefined, fallback = 0): number => {
+    if (typeof v === 'number') return v;
+    if (typeof v !== 'string') return fallback;
+    const m = v.match(/^([\d.]+)%?$/);
+    return m ? parseFloat(m[1]) / 100 : fallback;
+  };
+  const _barCategoryGapFrac = _parsePct(scenarioCount > 4 ? '15%' : '25%', 0.25);
+  const _barGapFrac = _parsePct(scenarioCount > 4 ? '0%' : scenarioCount > 2 ? '10%' : '20%', 0.2);
+  const CAP_BAR_FRACTION = 0.66;
+
+  const buildWhiskerCustomSeries = (
+    points: FunnelSeriesPoint[],
+    scenarioIndex: number,
+    name: string,
+  ) => {
+    const data: any[] = [];
     points.forEach((pt, idx) => {
       if (typeof pt.probabilityLo !== 'number' || typeof pt.probabilityHi !== 'number') return;
       if (!Number.isFinite(pt.probabilityLo) || !Number.isFinite(pt.probabilityHi)) return;
-      // Vertical line from lo → hi at category idx
-      segments.push([
-        { coord: [idx, pt.probabilityLo], symbol: 'none' },
-        { coord: [idx, pt.probabilityHi], symbol: 'none' },
-      ]);
+      data.push([idx, pt.probabilityLo, pt.probabilityHi]);
     });
-    if (segments.length === 0) return undefined;
+    if (data.length === 0) return undefined;
+    const stroke = echartsThemeColours().text;
     return {
+      name: `__whisker_${name}`,
+      type: 'custom',
       silent: true,
-      symbol: ['none', 'none'],
-      label: { show: false },
-      lineStyle: {
-        color: echartsThemeColours().textSecondary,
-        width: 1.2,
-        opacity: 0.85,
-        type: 'solid',
+      z: 100,
+      data,
+      renderItem: (params: any, api: any) => {
+        const idx = api.value(0);
+        const lo = api.value(1);
+        const hi = api.value(2);
+        const loPt = api.coord([idx, lo]);
+        const hiPt = api.coord([idx, hi]);
+        // Category band width (px) for this category.
+        const categoryBand = api.size([1, 0])[0];
+        const groupWidth = categoryBand * (1 - _barCategoryGapFrac);
+        const denom = scenarioCount + Math.max(0, scenarioCount - 1) * _barGapFrac;
+        const barWidth = groupWidth / Math.max(1, denom);
+        const capWidth = Math.max(2, barWidth * CAP_BAR_FRACTION);
+        // Per-scenario x offset: bars sit side-by-side inside the group.
+        // Centre of bar i = group_left + i*(barWidth + gap_px) + barWidth/2.
+        const gapPx = barWidth * _barGapFrac;
+        const groupLeft = -groupWidth / 2;
+        const centerOffset = groupLeft + scenarioIndex * (barWidth + gapPx) + barWidth / 2;
+        const cx = loPt[0] + centerOffset;
+        const halfCap = capWidth / 2;
+        const lineStyle = { stroke, lineWidth: 1, opacity: 0.9 };
+        return {
+          type: 'group',
+          children: [
+            // Vertical stem
+            { type: 'line', shape: { x1: cx, y1: loPt[1], x2: cx, y2: hiPt[1] }, style: lineStyle },
+            // Top cap
+            { type: 'line', shape: { x1: cx - halfCap, y1: hiPt[1], x2: cx + halfCap, y2: hiPt[1] }, style: lineStyle },
+            // Bottom cap
+            { type: 'line', shape: { x1: cx - halfCap, y1: loPt[1], x2: cx + halfCap, y2: loPt[1] }, style: lineStyle },
+          ],
+        };
       },
-      data: segments,
     };
   };
 
   const series: any[] = [];
-  for (const scenarioId of scenarioIds) {
+  for (let _scenarioIdx = 0; _scenarioIdx < scenarioIds.length; _scenarioIdx++) {
+    const scenarioId = scenarioIds[_scenarioIdx];
+    const scenarioIndex = _scenarioIdx;
     const baseSeriesName = getScenarioTitleWithBasis(result, scenarioId);
     const colour = result.dimension_values?.scenario_id?.[scenarioId]?.colour;
     const visibilityMode = result.dimension_values?.scenario_id?.[scenarioId]?.visibility_mode ?? 'f+e';
@@ -509,7 +550,6 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
     if (shouldShowFEStack) {
       const fePoints = makeStackedFEData(scenarioId);
       const stagePoints = extractFunnelSeriesPoints(result, { scenarioId }) || [];
-      const whisker = buildWhiskerMarkLine(stagePoints);
 
       // Evidence segment (lower stack).
       series.push({
@@ -526,12 +566,20 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
         })),
       });
 
-      // Forecast minus evidence segment (upper stack). We render the total label here.
+      // Forecast minus evidence segment (upper stack). Standard app
+      // forecast-striation pattern: same colour, opacity 0.4, diagonal
+      // decal. Matches snapshotBuilders.ts and cohortComparisonBuilders.ts.
+      const forecastDecal = {
+        symbol: 'rect',
+        dashArrayX: [1, 0],
+        dashArrayY: [3, 3],
+        rotation: -Math.PI / 4,
+      } as any;
       series.push({
         name: `${baseSeriesName} — f−e`,
         ...baseSeriesConfig,
         stack: scenarioId,
-        itemStyle: colour ? { color: hexToRgba(colour, 0.35) } : undefined,
+        itemStyle: colour ? { color: colour, opacity: 0.4, decal: forecastDecal } : undefined,
         label: {
           show: showValueLabels,
           position: 'top',
@@ -542,7 +590,6 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
           fontSize: 7,
           color: echartsThemeColours().text,
         },
-        markLine: whisker,
         data: fePoints.map(p => ({
           value: p.__fe?.forecastMinusEvidence ?? 0,
           __raw: p.__raw,
@@ -550,6 +597,9 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
           __component: 'f_minus_e',
         })),
       });
+
+      const whiskerSeries = buildWhiskerCustomSeries(stagePoints, scenarioIndex, scenarioId);
+      if (whiskerSeries) series.push(whiskerSeries);
       continue;
     }
 
@@ -659,7 +709,6 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
 
     // Default: a single bar series per scenario (no groups, no F+E stacking).
     const stagePointsDefault = extractFunnelSeriesPoints(result, { scenarioId }) || [];
-    const whiskerDefault = !useStepChange ? buildWhiskerMarkLine(stagePointsDefault) : undefined;
     series.push({
       name: baseSeriesName,
       ...baseSeriesConfig,
@@ -680,9 +729,13 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
         fontSize: 7,
         color: '#374151',
       },
-      markLine: whiskerDefault,
       data: useStepChange ? makeSeriesDataWithStepChange(scenarioId) : makeSeriesData(scenarioId),
     });
+
+    if (!useStepChange) {
+      const whiskerSeries = buildWhiskerCustomSeries(stagePointsDefault, scenarioIndex, scenarioId);
+      if (whiskerSeries) series.push(whiskerSeries);
+    }
   }
 
   const paddedMin = 0;

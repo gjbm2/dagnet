@@ -19,7 +19,7 @@ Usage:
     python bayes/run_regression.py --preflight-only
 
     # Override core budget
-    python bayes/run_regression.py --chains 2 --max-parallel 4
+    python bayes/run_regression.py --chains 2 --max-parallel 2
 
 Monitor progress:
     scripts/bayes-monitor.sh
@@ -199,17 +199,30 @@ def _run_one_graph(
     if dsl_override:
         cmd.extend(["--dsl-override", dsl_override])
     _jax = any(f.startswith("jax_backend=t") for f in (feature_flags or []))
+    # Per-graph faulthandler log path — when the subprocess segfaults inside
+    # a native kernel (pymc/pytensor/numpy), test_harness's faulthandler
+    # writes a Python stack trace here before the process dies. Without
+    # this, signal-11 crashes emit exit code 1 with no traceback (exactly
+    # how the diamond HARNESS FAILs were presenting).
+    _fault_log = f"/tmp/bayes-fault-{job_label}.log"
+    try:
+        if os.path.isfile(_fault_log):
+            os.remove(_fault_log)
+    except OSError:
+        pass
     if _jax:
         _ncpu = str(os.cpu_count() or 16)
         env = {**os.environ,
                "PYTHONDONTWRITEBYTECODE": "1",
+               "BAYES_FAULT_LOG": _fault_log,
                "XLA_FLAGS": "--xla_cpu_multi_thread_eigen=true",
                "OMP_NUM_THREADS": _ncpu,
                "MKL_NUM_THREADS": _ncpu,
                "OPENBLAS_NUM_THREADS": _ncpu,
                }
     else:
-        env = {**os.environ, **_THREAD_PIN_ENV}
+        env = {**os.environ, **_THREAD_PIN_ENV,
+               "BAYES_FAULT_LOG": _fault_log}
 
     t0 = time.time()
     try:
@@ -220,7 +233,23 @@ def _run_one_graph(
             env=env, cwd=REPO_ROOT,
         )
         elapsed = time.time() - t0
+        # If the subprocess segfaulted, surface the faulthandler trace
+        # (native stack from inside pymc/pytensor/numpy) at the END of
+        # output so it lands adjacent to the exit code in the log.
+        fault_trace = ""
+        if result.returncode != 0 and os.path.isfile(_fault_log):
+            try:
+                with open(_fault_log) as _ff:
+                    fault_trace = _ff.read()
+            except OSError:
+                pass
         output = result.stdout + result.stderr
+        if fault_trace:
+            output += (
+                "\n── FAULTHANDLER TRACE "
+                "(native crash captured by test_harness) ──\n"
+                + fault_trace
+            )
         return {
             "graph_name": graph_name,
             "exit_code": result.returncode,
@@ -993,7 +1022,10 @@ def run_regression(args) -> list[dict]:
     chains = args.chains
     cores_per_run = chains
     max_parallel = args.max_parallel or (available_cores // cores_per_run)
-    max_parallel = max(1, max_parallel)
+    # HARD CAP at 2: each fit uses JAX/PyMC, which fans out across CPU cores
+    # internally. Two concurrent fits already saturate the box; >2 causes
+    # scheduler thrash and OOM. Do not raise this without measuring.
+    max_parallel = max(1, min(2, max_parallel))
 
     runnable = [g for g in graphs if not g.get("_bootstrap_failed")]
     # Sort largest graphs first so they start immediately and don't
@@ -1664,7 +1696,7 @@ Examples:
     parser.add_argument("--tune", type=int, default=500,
                         help="MCMC warmup per chain (default: 500)")
     parser.add_argument("--max-parallel", type=int, default=None,
-                        help="Max parallel runs (default: auto from core count)")
+                        help="Max parallel runs (default: auto, hard-capped at 2)")
     parser.add_argument("--feature", action="append", default=[],
                         help="Model feature flag KEY=VALUE, forwarded to param_recovery.py "
                              "(e.g. --feature latency_dispersion=true)")

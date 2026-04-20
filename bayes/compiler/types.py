@@ -622,6 +622,13 @@ class PosteriorSummary:
     cohort_hdi_lower_pred: float | None = None
     cohort_hdi_upper_pred: float | None = None
 
+    # Subset-conditioning mass (doc 52) — total raw observation count
+    # used to fit each mode's posterior. Consumers use these to compute
+    # the engine-level blend ratio r = m_S / m_G when re-conditioning
+    # the aggregate on a query-scoped Cohort set. See doc 52 §14.2.
+    window_n_effective: float | None = None
+    cohort_n_effective: float | None = None
+
     # Phase C: per-context-slice posteriors (doc 14 §5.2, doc 49 §A.6.1)
     # context_key → {mean, stdev, alpha, beta, hdi_lower, hdi_upper,
     #                 alpha_pred, beta_pred, hdi_lower_pred, hdi_upper_pred}

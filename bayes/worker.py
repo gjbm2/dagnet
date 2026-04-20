@@ -2170,6 +2170,11 @@ def _build_unified_slices(
         window["hdi_lower_pred"] = round(prob.window_hdi_lower_pred, 6)
         window["hdi_upper_pred"] = round(prob.window_hdi_upper_pred, 6)
 
+    # Subset-conditioning mass (doc 52 §14.3) — None when compiler did
+    # not fit window-mode evidence on this edge
+    if prob.window_n_effective is not None:
+        window["n_effective"] = round(prob.window_n_effective, 2)
+
     if lat:
         window["mu_mean"] = round(lat.mu_mean, 4)
         window["mu_sd"] = round(lat.mu_sd, 4)
@@ -2239,6 +2244,10 @@ def _build_unified_slices(
             cohort["beta_pred"] = round(prob.cohort_beta_pred, 4)
             cohort["hdi_lower_pred"] = round(prob.cohort_hdi_lower_pred, 6)
             cohort["hdi_upper_pred"] = round(prob.cohort_hdi_upper_pred, 6)
+
+        # Subset-conditioning mass (doc 52 §14.3)
+        if prob.cohort_n_effective is not None:
+            cohort["n_effective"] = round(prob.cohort_n_effective, 2)
 
         if lat.path_onset_delta_days is not None:
             cohort["onset_mean"] = round(lat.path_onset_delta_days, 2)

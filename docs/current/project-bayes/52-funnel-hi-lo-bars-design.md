@@ -118,8 +118,11 @@ stage_prob_i^(e+f) = Π_{j ≤ i} p_j^(cond)
 
 For bands (numpy-only, no forecast-engine calls):
 ```
-Moment-match each edge's (p.mean, p.sd) to a Beta posterior:
-    κ_j = p_j·(1 − p_j)/σ_j² − 1
+σ²_total_j = c_j · σ²_epistemic_j + (1 − c_j) · σ²_predictive_j
+           (c_j = completeness_j; σ²_pred clamped ≥ σ²_epi for robustness)
+
+Moment-match each edge's (p.mean, σ_total_j) to a Beta posterior:
+    κ_j = p_j·(1 − p_j)/σ_total_j² − 1
     α_j = p_j · κ_j
     β_j = (1 − p_j) · κ_j
 Draw p_j^(s) ~ Beta(α_j, β_j),  s = 1..S
@@ -127,7 +130,19 @@ reach_i^(s) = Π_{j ≤ i} p_j^(s)
 hi/lo_i = quantile(reach_i^(s), 5% / 95%)
 ```
 
-`p.sd` is written by the BE CF pass alongside `p.mean` ([FE_BE_STATS_PARALLELISM.md](../codebase/FE_BE_STATS_PARALLELISM.md) §"Conditioned forecast pass"). Delta-method propagation of per-edge `p.sd` through the path product is an analytically equivalent alternative for the 90% interval.
+The CF pass writes both:
+- `p.sd` — predictive SD (kappa-inflated per doc 49); reflects "what's the spread of future cohort outcomes given that rate"
+- `p.sd_epistemic` — epistemic SD (closed-form Beta(α,β) on the rate); reflects "how confident am I about the asymptotic rate itself"
+- `completeness` — observed fraction of cohort, in [0, 1]
+
+**Derivation.** The per-edge rate estimate is a mixture of two dispersion regimes whose means are both `p_j` by construction: an "observed" regime governed by the epistemic posterior, and an "unobserved" regime governed by the predictive distribution (kappa-inflated). Mixture variance when means align is the linear combination `c·σ²_epi + (1−c)·σ²_pred`. Endpoints:
+- Mature edge (`c → 1`): bands collapse to the epistemic posterior. Correct — no unobserved future cohort to forecast.
+- Immature edge (`c → 0`): bands recover `σ_predictive`. The forecast residual carries the predictive risk it implies.
+- Between: linear interpolation, so at `c = 0.5` each regime contributes half. Two scenarios with the same posterior but different completenesses get visibly different band widths across the full range of `c`, not only near `c → 0`.
+
+A prior version of this doc used `σ²_total = σ²_epi + (1−c)² · max(0, σ²_pred − σ²_epi)` — quadratic weighting. That is the variance-of-weighted-average formula (appropriate when combining two independent estimators with weights `c` and `1−c`), not the mixture-variance formula that applies here. The quadratic term squashed the predictive contribution below visibility for any `c ≳ 0.5`, so in practice bands stayed at `σ_epi` regardless of maturity — the opposite of the intent.
+
+Delta-method propagation of `σ_total_j` through the path product is an analytically equivalent alternative for the 90% interval.
 
 **Properties**:
 - Conditioning is baked into `edge.p.mean` by the BE CF pass; the funnel reads the scalar and multiplies

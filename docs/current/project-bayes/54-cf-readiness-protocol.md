@@ -281,3 +281,14 @@ All four unc/cond completeness scalars are already computed inside every CF swee
 **Disambiguation**: the existing `completeness` / `completeness_stdev` pair currently serves a specific consumer path (doc 45, forecast parity). Leave it in place with its current semantics but document which flavour (conditioned, unconditioned, or blended) it represents, and alias or name it consistently with the new fields so that readers cannot mistake one for another.
 
 Cut-over M8 (surprise gauge, post-extension): once the above scalars are reliably written on each edge by the whole-graph CF pass (doc 47) and M1-M5 of this protocol have shipped, the gauge handler drops its inline `compute_forecast_trajectory` call and becomes a short dict-read-and-z-score projection. This is the performance upgrade called out in doc 55 §4.6 and in the cost discussion that led to §8.
+
+### 8.2 Predictive vs epistemic dispersion — split now surfaced, persistence deferred
+
+Per [doc 49](49-dispersion-semantics.md) the CF response now carries two dispersion scalars per edge, both closed form on the resolved posterior:
+
+- `p_sd_epistemic` — σ of Beta(α, β). Posterior uncertainty about the rate parameter given all observed evidence. Narrow when evidence is abundant.
+- `p_sd` — σ of Beta(α_pred, β_pred). Predictive dispersion of a fresh-cohort rate draw, accounting for kappa-inflated between-cohort variability. Wider than `p_sd_epistemic` whenever kappa is finite.
+
+Historically `p_sd` was `np.std(rate_draws[:, -1])` — the MC std of IS-conditioned draws. Because IS-conditioning on O(n) observed evidence collapses the MC spread back to the epistemic posterior width, the old `p_sd` was indistinguishable from `p_sd_epistemic` in practice. Doc 45b §Phase C step 7 and doc 47 §5g now define both as closed-form Beta σ from the resolved α/β pair.
+
+**Persistence status**: neither `p_sd` nor `p_sd_epistemic` is written onto graph edges by `conditionedForecastService.projectOntoGraph`; that projector currently writes only `p_mean`, `forecast.mean`, `latency.completeness`, and `latency.completeness_stdev`. Both dispersion scalars are supplied on every CF response and read directly by consumers that call CF per-edge (today: the funnel runner). Whole-graph persistence is deferred until a consumer needs to read these off the graph rather than from a fresh CF call — at which point extend `projectOntoGraph` alongside the §8.1 scalar contract work, and add corresponding fields to `ProbabilityPosterior` or a sibling `ProbabilityForecast` block.

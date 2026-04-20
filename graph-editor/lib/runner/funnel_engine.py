@@ -140,19 +140,21 @@ def compute_bars_f(
     rng: Optional[np.random.Generator] = None,
     graph_preference: Optional[str] = None,
 ) -> FunnelStageBars:
-    """f mode: Beta draws from promoted-source α/β per edge, cumprod, quantiles.
+    """f mode: per-edge forecast means, cumprod for bar; predictive Beta
+    draws for band quantiles.
 
     Per-edge α/β resolved via `resolve_model_params` — honours the
-    promotion hierarchy (bayesian → analytic_be → analytic). Prefers
-    `alpha_pred`/`beta_pred` (doc 49 predictive) when present, else
-    falls back to epistemic `alpha`/`beta`.
-
-    Bar = median across draws; lo/hi = 5 %/95 % quantiles.
+    promotion hierarchy (bayesian → analytic_be → analytic). Predictive
+    α_pred/β_pred (doc 49) drive the band width; the bar is the
+    deterministic path product of per-edge posterior means so that the
+    reported path probability matches Π(α/(α+β)) regardless of how
+    skewed the predictive Beta is.
     """
     if rng is None:
         rng = np.random.default_rng(seed=42)
 
     N = len(path_edges)
+    p_means = np.zeros(N)
     p_draws = np.zeros((N, num_draws))
     for j, edge in enumerate(path_edges):
         resolved = resolve_model_params(
@@ -160,24 +162,36 @@ def compute_bars_f(
             graph_preference=graph_preference,
         )
         if resolved is None:
+            p_means[j] = 0.0
             p_draws[j, :] = 0.0
             continue
+        # Bar uses epistemic α/β mean — the deterministic path product
+        # of per-edge posterior means; unaffected by predictive skew.
+        if resolved.alpha and resolved.beta and resolved.alpha > 0 and resolved.beta > 0:
+            p_means[j] = resolved.alpha / (resolved.alpha + resolved.beta)
+        elif resolved.p_mean:
+            p_means[j] = resolved.p_mean
+        else:
+            p_means[j] = 0.0
+        # Band uses predictive Beta for kappa-inflated quantiles.
         alpha = resolved.alpha_pred if (resolved.alpha_pred and resolved.alpha_pred > 0) else resolved.alpha
         beta = resolved.beta_pred if (resolved.beta_pred and resolved.beta_pred > 0) else resolved.beta
-        if alpha > 0 and beta > 0:
+        if alpha and beta and alpha > 0 and beta > 0:
             p_draws[j, :] = rng.beta(alpha, beta, size=num_draws)
         else:
-            p_draws[j, :] = resolved.p_mean if resolved.p_mean else 0.0
+            p_draws[j, :] = p_means[j]
 
+    # Bar: deterministic cumprod of means.
+    bar_arr = np.concatenate([[1.0], np.cumprod(p_means)])
+    # Bands: quantiles of MC path draws.
     reach = np.cumprod(p_draws, axis=0)
-    # Prepend stage 0 = 1.0
     reach = np.vstack([np.ones((1, num_draws)), reach])
 
-    bar: list[float] = [1.0]
+    bar: list[float] = [float(bar_arr[0])]
     lo: list[Optional[float]] = [None]
     hi: list[Optional[float]] = [None]
     for i in range(1, N + 1):
-        bar.append(float(np.median(reach[i])))
+        bar.append(float(bar_arr[i]))
         lo.append(float(np.quantile(reach[i], 0.05)))
         hi.append(float(np.quantile(reach[i], 0.95)))
 
@@ -194,9 +208,22 @@ def compute_bars_ef(
     Beta draws for bands; striation decomposition (e, (e+f) − e).
 
     `cf_per_edge` is the per-edge output from the scoped CF response, in
-    path order, with `p_mean` and `p_sd` per edge. `bar_e` is the
-    pre-computed e-mode bars used for the solid component of the
-    stacked bar.
+    path order. Each entry carries:
+      - p_mean         — IS-conditioned posterior mean (rate)
+      - p_sd           — predictive SD (kappa-inflated, doc 49)
+      - p_sd_epistemic — epistemic SD (rate-only, no kappa, doc 49)
+      - completeness   — observed fraction of cohort, in [0, 1]
+
+    Per doc 52 §3.5, the per-edge band variance is the mixture
+    variance of two dispersion regimes weighted by observed and
+    unobserved fractions of the cohort:
+        σ²_total = completeness · σ²_epi + (1 − completeness) · σ²_pred
+    Endpoints: c=1 collapses to the epistemic posterior; c=0 recovers
+    the full predictive dispersion. Linear (not quadratic) because
+    the two regimes are mixed, not averaged — mixture variance with
+    aligned means is the principled derivation (see doc 52 §3.5).
+    Historical (1−c)² weighting crushed predictive contribution to
+    invisibility for any c > ~0.5.
     """
     if rng is None:
         rng = np.random.default_rng(seed=42)
@@ -210,8 +237,25 @@ def compute_bars_ef(
     p_draws = np.zeros((N, num_draws))
     for j, cf_edge in enumerate(cf_per_edge):
         p_mean = float(cf_edge.get('p_mean') or 0.0)
-        p_sd = float(cf_edge.get('p_sd') or 0.0)
-        ab = moment_match_beta(p_mean, p_sd)
+        p_sd_pred = float(cf_edge.get('p_sd') or 0.0)
+        p_sd_epi_raw = cf_edge.get('p_sd_epistemic')
+        p_sd_epi = float(p_sd_epi_raw) if p_sd_epi_raw is not None else p_sd_pred
+        comp_raw = cf_edge.get('completeness')
+        # Fully observed if completeness missing — predictive excess collapses
+        completeness = float(comp_raw) if comp_raw is not None else 1.0
+        completeness = max(0.0, min(1.0, completeness))
+
+        var_epi = p_sd_epi * p_sd_epi
+        var_pred = p_sd_pred * p_sd_pred
+        # Mixture variance with aligned means (doc 52 §3.5). Linear
+        # weighting: observed fraction contributes epistemic; unobserved
+        # fraction contributes predictive. Guard against σ_pred < σ_epi
+        # (shouldn't happen for kappa ≥ 0, but stays robust).
+        var_pred_clamped = max(var_pred, var_epi)
+        var_total = completeness * var_epi + (1.0 - completeness) * var_pred_clamped
+        p_sd_total = math.sqrt(var_total)
+
+        ab = moment_match_beta(p_mean, p_sd_total)
         if ab is None:
             # Degenerate posterior: deterministic draw at p_mean
             p_draws[j, :] = p_mean

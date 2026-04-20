@@ -203,7 +203,19 @@ span_beta, span_mu_sd, ...)` — same 14 parameters as v3.
 
     # p.mean — IS-conditioned asymptotic rate
     p_mean = float(np.median(sweep.rate_draws[:, -1]))
-    p_sd = float(np.std(sweep.rate_draws[:, -1]))
+
+    # Dispersions — closed form from the resolved Betas, per doc 49.
+    # p_sd_epistemic is σ of Beta(α, β): posterior uncertainty about
+    # the rate given all observed evidence. p_sd is σ of
+    # Beta(α_pred, β_pred): predictive dispersion of a fresh-cohort
+    # rate draw accounting for kappa-inflated between-cohort variability.
+    # MC std over IS-conditioned draws is NOT the predictive dispersion:
+    # IS-conditioning on O(n) observed evidence collapses the MC spread
+    # back to the epistemic posterior width regardless of how diffuse
+    # the sampling prior was. Closed form is the only way to surface
+    # σ_pred distinctly from σ_epi.
+    p_sd_epistemic = beta_sd(resolved.alpha, resolved.beta)
+    p_sd = beta_sd(resolved.alpha_pred, resolved.beta_pred)
 
     # Completeness — n-weighted blended CDF at cohort eval ages
     completeness = sweep.completeness_mean

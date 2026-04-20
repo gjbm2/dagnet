@@ -21,15 +21,38 @@ Only one instance at a time — the harness enforces this via a lock file.
 
 import sys
 import os
+import signal
 
 # Prevent stale .pyc from masking source edits during development.
 sys.dont_write_bytecode = True
+
+# ── NATIVE-CRASH INSTRUMENTATION ───────────────────────────────────────
+# Arm faulthandler before importing pymc/pytensor/numpy so any SIGSEGV
+# inside compiled kernels prints a Python traceback to stderr instead
+# of being silently killed. This is the only way to get a stack trace
+# out of a native crash inside the sampler — without it the subprocess
+# dies with exit code 1 and no diagnostic, which is exactly how the
+# diamond HARNESS FAILs were surfacing.
+import faulthandler
+_FAULT_PATH = os.environ.get(
+    "BAYES_FAULT_LOG",
+    f"/tmp/bayes-fault-{os.getpid()}.log",
+)
+_fault_file = open(_FAULT_PATH, "w")
+faulthandler.enable(file=_fault_file, all_threads=True)
+# Register SIGSEGV (11), SIGABRT (6), SIGFPE (8), SIGBUS (7) — any of
+# these from a native kernel gets dumped before the process dies.
+if os.name == "posix":
+    for _sig in (signal.SIGSEGV, signal.SIGABRT, signal.SIGFPE, signal.SIGBUS):
+        try:
+            faulthandler.register(_sig, file=_fault_file, chain=True)
+        except (RuntimeError, ValueError):
+            pass
 
 import json
 import time
 import argparse
 import atexit
-import signal
 import copy
 import subprocess
 import re

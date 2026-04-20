@@ -326,3 +326,398 @@ describe('bayesPatchService — graph edge projection (doc 21 §4.4)', () => {
     expect(lat.path_hdi_t95_lower).toBe(28.4);
   });
 });
+
+// ─── Dispersion cascade tests (doc 49 §A.6, doc 52 §14.3) ──────────────────
+//
+// Lock in the contract that every predictive/epistemic dispersion emitted by
+// the Bayes worker flows through the three upsert surfaces:
+//
+//   1. Param file   — paramDoc.posterior.slices[...]  (verbatim)
+//   2. Graph edge   — graphEdge.p.posterior           (probability)
+//                   — graphEdge.p.latency.posterior   (latency)
+//   3. Model vars   — graphEdge.p.model_vars[bayesian entry]
+//
+// A silent drop at any layer means downstream runners (funnel_engine,
+// cohort_forecast_v3) fall back to defaults — alpha_pred collapses to
+// alpha, predictive dispersion collapses to epistemic, subset-conditioning
+// blend ratio is lost. This is the bug class these tests exist to prevent.
+
+/** Builds a fully-populated patch: every predictive + epistemic dispersion
+ * field set on both window() and cohort() slices. Used as the reference
+ * input for cascade completeness tests. */
+function makeFullDispersionPatch(): BayesPatchFile {
+  return {
+    job_id: 'test-job-full',
+    graph_id: 'graph-test',
+    graph_file_path: 'graphs/test.json',
+    fitted_at: '15-Mar-26',
+    fingerprint: 'fp-full-abc',
+    model_version: 1,
+    quality: { max_rhat: 1.002, min_ess: 1100, converged_pct: 100 },
+    edges: [{
+      param_id: 'param-edge-1',
+      file_path: 'parameters/edge-1.yaml',
+      slices: {
+        'window()': {
+          // Epistemic probability
+          alpha: 43, beta: 119.5,
+          p_hdi_lower: 0.22, p_hdi_upper: 0.33,
+          // Predictive probability (kappa-inflated)
+          alpha_pred: 30, beta_pred: 80,
+          hdi_lower_pred: 0.18, hdi_upper_pred: 0.38,
+          // Latency dispersions — mu_sd is predictive (kappa-inflated);
+          // mu_sd_epist is the always-epistemic anchor (doc 49 §A.6.2).
+          mu_mean: 2.35, mu_sd: 0.12, mu_sd_epist: 0.08,
+          sigma_mean: 0.72, sigma_sd: 0.04,
+          onset_mean: 1.5, onset_sd: 0.3,
+          hdi_t95_lower: 18.5, hdi_t95_upper: 32.1,
+          onset_mu_corr: -0.42,
+          // Subset-conditioning mass (worker emits as `n_effective` inside
+          // the slice; graph-edge upsert namespaces to window_n_effective)
+          n_effective: 4500,
+          ess: 1100, rhat: 1.002, divergences: 0,
+          evidence_grade: 3, provenance: 'bayesian',
+        } as any,
+        'cohort()': {
+          // Epistemic probability (cohort mode)
+          alpha: 38, beta: 112,
+          p_hdi_lower: 0.20, p_hdi_upper: 0.35,
+          // Predictive probability
+          alpha_pred: 25, beta_pred: 70,
+          hdi_lower_pred: 0.16, hdi_upper_pred: 0.42,
+          // Path-level latency dispersions
+          mu_mean: 2.81, mu_sd: 0.18, mu_sd_epist: 0.12,
+          sigma_mean: 0.58, sigma_sd: 0.06,
+          onset_mean: 3.2, onset_sd: 0.5,
+          hdi_t95_lower: 28.4, hdi_t95_upper: 58.7,
+          n_effective: 3200,
+          ess: 800, rhat: 1.01, divergences: 0,
+          evidence_grade: 3, provenance: 'bayesian',
+        } as any,
+      },
+      prior_tier: 'direct_history',
+    }],
+    skipped: [],
+  };
+}
+
+async function seedGraphAndParam() {
+  const paramDoc = {
+    id: 'param-edge-1',
+    values: [{ sliceDSL: 'window(1-Jan:1-Mar)', n: 500, k: 175, mean: 0.35 }],
+    latency: { latency_parameter: true, mu: 2.0, sigma: 0.4, t95: 30 },
+  };
+  const graphDoc: any = {
+    edges: [{
+      uuid: 'e1', from: 'a', to: 'b',
+      p: { id: 'param-edge-1', latency: { latency_parameter: true, mu: 2.0, sigma: 0.4 } },
+    }],
+  };
+  await registerParam('param-edge-1', paramDoc);
+  await registerGraph('graph-test', graphDoc);
+}
+
+describe('bayesPatchService — predictive probability cascade (doc 49 §A.6)', () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  it('should write predictive α/β + HDI from window() to graphEdge.p.posterior', async () => {
+    await seedGraphAndParam();
+    await applyPatch(makeFullDispersionPatch());
+
+    const post = getDoc('graph-test').edges[0].p.posterior;
+    expect(post.alpha_pred).toBe(30);
+    expect(post.beta_pred).toBe(80);
+    expect(post.hdi_lower_pred).toBe(0.18);
+    expect(post.hdi_upper_pred).toBe(0.38);
+  });
+
+  it('should write cohort predictive α/β + HDI from cohort() slice', async () => {
+    await seedGraphAndParam();
+    await applyPatch(makeFullDispersionPatch());
+
+    const post = getDoc('graph-test').edges[0].p.posterior;
+    expect(post.cohort_alpha_pred).toBe(25);
+    expect(post.cohort_beta_pred).toBe(70);
+    expect(post.cohort_hdi_lower_pred).toBe(0.16);
+    expect(post.cohort_hdi_upper_pred).toBe(0.42);
+  });
+
+  it('should omit predictive fields when patch slice has no alpha_pred', async () => {
+    // Patch without predictive fields — kappa-absent case
+    await seedGraphAndParam();
+    await applyPatch(makePatch());
+
+    const post = getDoc('graph-test').edges[0].p.posterior;
+    expect(post.alpha_pred).toBeUndefined();
+    expect(post.beta_pred).toBeUndefined();
+    expect(post.hdi_lower_pred).toBeUndefined();
+    expect(post.cohort_alpha_pred).toBeUndefined();
+  });
+
+  it('should preserve epistemic α/β alongside predictive (not overwrite)', async () => {
+    await seedGraphAndParam();
+    await applyPatch(makeFullDispersionPatch());
+
+    const post = getDoc('graph-test').edges[0].p.posterior;
+    expect(post.alpha).toBe(43);         // epistemic
+    expect(post.beta).toBe(119.5);
+    expect(post.alpha_pred).toBe(30);    // predictive, distinct
+    expect(post.beta_pred).toBe(80);
+    expect(post.cohort_alpha).toBe(38);
+    expect(post.cohort_beta).toBe(112);
+  });
+});
+
+describe('bayesPatchService — subset-conditioning mass cascade (doc 52 §14.3)', () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  it('should write window_n_effective + cohort_n_effective to graphEdge.p.posterior', async () => {
+    await seedGraphAndParam();
+    await applyPatch(makeFullDispersionPatch());
+
+    const post = getDoc('graph-test').edges[0].p.posterior;
+    expect(post.window_n_effective).toBe(4500);
+    expect(post.cohort_n_effective).toBe(3200);
+  });
+
+  it('should omit n_effective fields when patch slice has no n_effective', async () => {
+    await seedGraphAndParam();
+    await applyPatch(makePatch());
+
+    const post = getDoc('graph-test').edges[0].p.posterior;
+    expect(post.window_n_effective).toBeUndefined();
+    expect(post.cohort_n_effective).toBeUndefined();
+  });
+});
+
+describe('bayesPatchService — latency dispersion cascade', () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  it('should write window mu_sd / sigma_sd / onset_sd to graphEdge.p.latency.posterior', async () => {
+    await seedGraphAndParam();
+    await applyPatch(makeFullDispersionPatch());
+
+    const lat = getDoc('graph-test').edges[0].p.latency.posterior;
+    expect(lat.mu_sd).toBe(0.12);
+    expect(lat.sigma_sd).toBe(0.04);
+    expect(lat.onset_sd).toBe(0.3);
+  });
+
+  it('should write path_* dispersions from cohort() to graphEdge.p.latency.posterior', async () => {
+    await seedGraphAndParam();
+    await applyPatch(makeFullDispersionPatch());
+
+    const lat = getDoc('graph-test').edges[0].p.latency.posterior;
+    expect(lat.path_mu_sd).toBe(0.18);
+    expect(lat.path_sigma_sd).toBe(0.06);
+    expect(lat.path_onset_sd).toBe(0.5);
+  });
+
+  it('should write mu_sd_epist and path_mu_sd_epist to graphEdge.p.latency.posterior (doc 49 §A.6.2)', async () => {
+    // The always-epistemic mu SD — distinct from mu_sd which is
+    // kappa-inflated predictive when kappa_lat is present. span_kernel.py
+    // reads these for epistemic fan bands; silent drop collapses
+    // epistemic into predictive.
+    await seedGraphAndParam();
+    await applyPatch(makeFullDispersionPatch());
+
+    const lat = getDoc('graph-test').edges[0].p.latency.posterior;
+    expect(lat.mu_sd_epist).toBe(0.08);
+    expect(lat.path_mu_sd_epist).toBe(0.12);
+    expect(lat.mu_sd).toBe(0.12);              // predictive, distinct
+    expect(lat.path_mu_sd).toBe(0.18);
+  });
+
+  it('should omit mu_sd_epist / path_mu_sd_epist when patch lacks them', async () => {
+    await seedGraphAndParam();
+    await applyPatch(makePatch());  // base patch has no mu_sd_epist
+
+    const lat = getDoc('graph-test').edges[0].p.latency.posterior;
+    expect(lat.mu_sd_epist).toBeUndefined();
+    expect(lat.path_mu_sd_epist).toBeUndefined();
+  });
+});
+
+describe('bayesPatchService — model_vars cascade', () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  function getBayesModelVars(): any {
+    const edge = getDoc('graph-test').edges[0];
+    const entries = edge?.p?.model_vars ?? [];
+    return entries.find((e: any) => e.source === 'bayesian');
+  }
+
+  it('should append a bayesian model_vars entry after applyPatch', async () => {
+    await seedGraphAndParam();
+    await applyPatch(makeFullDispersionPatch());
+
+    const entry = getBayesModelVars();
+    expect(entry).toBeDefined();
+    expect(entry.source).toBe('bayesian');
+    expect(entry.source_at).toBe('15-Mar-26');
+  });
+
+  it('should compute probability.stdev from predictive α/β when available (doc 49 §A.9)', async () => {
+    await seedGraphAndParam();
+    await applyPatch(makeFullDispersionPatch());
+
+    const entry = getBayesModelVars();
+    // displayAlpha=30, displayBeta=80, sum=110
+    // stdev = sqrt(30*80 / (110^2 * 111)) = sqrt(2400 / 1343100) ≈ 0.04229
+    const expectedPredStdev = Math.sqrt((30 * 80) / (110 ** 2 * 111));
+    expect(entry.probability.stdev).toBeCloseTo(expectedPredStdev, 6);
+    // Mean uses epistemic α/β (not predictive)
+    expect(entry.probability.mean).toBeCloseTo(43 / (43 + 119.5), 6);
+  });
+
+  it('should fall back to epistemic α/β for probability.stdev when predictive absent', async () => {
+    await seedGraphAndParam();
+    await applyPatch(makePatch());  // no predictive fields
+
+    const entry = getBayesModelVars();
+    // displayAlpha=43, displayBeta=119.5, sum=162.5
+    const expectedEpistStdev = Math.sqrt((43 * 119.5) / (162.5 ** 2 * 163.5));
+    expect(entry.probability.stdev).toBeCloseTo(expectedEpistStdev, 6);
+  });
+
+  it('should populate model_vars.latency with mu_sd / sigma_sd / onset_sd', async () => {
+    await seedGraphAndParam();
+    await applyPatch(makeFullDispersionPatch());
+
+    const entry = getBayesModelVars();
+    expect(entry.latency.mu_sd).toBe(0.12);
+    expect(entry.latency.sigma_sd).toBe(0.04);
+    expect(entry.latency.onset_sd).toBe(0.3);
+    expect(entry.latency.onset_mu_corr).toBe(-0.42);
+  });
+
+  it('should populate model_vars.latency with mu_sd_epist / path_mu_sd_epist (doc 49 §A.6.2)', async () => {
+    // span_kernel.py reads model_vars.latency.mu_sd_epist first, then
+    // falls back to posterior.mu_sd_epist, then to mu_sd. Locking in
+    // the model_vars write here ensures the preferred path is populated.
+    await seedGraphAndParam();
+    await applyPatch(makeFullDispersionPatch());
+
+    const entry = getBayesModelVars();
+    expect(entry.latency.mu_sd_epist).toBe(0.08);
+    expect(entry.latency.path_mu_sd_epist).toBe(0.12);
+  });
+
+  it('should populate model_vars.latency with path_mu_sd / path_sigma_sd / path_onset_sd', async () => {
+    await seedGraphAndParam();
+    await applyPatch(makeFullDispersionPatch());
+
+    const entry = getBayesModelVars();
+    expect(entry.latency.path_mu_sd).toBe(0.18);
+    expect(entry.latency.path_sigma_sd).toBe(0.06);
+    expect(entry.latency.path_onset_sd).toBe(0.5);
+  });
+
+  it('should omit latency dispersions when patch slice lacks them', async () => {
+    // makePatch() window has mu_sd/sigma_sd/onset_sd but no path_* dispersions
+    // beyond what's already in base makePatch — verify the conditional
+    // spread operators in bayesPatchService correctly omit when absent.
+    await seedGraphAndParam();
+    const patch = makePatch();
+    // Strip dispersions from window slice
+    const edge = patch.edges[0];
+    const slices = edge.slices as any;
+    delete slices['window()'].mu_sd;
+    delete slices['window()'].sigma_sd;
+    delete slices['window()'].onset_sd;
+    await applyPatch(patch);
+
+    const entry = getBayesModelVars();
+    expect(entry.latency.mu_sd).toBeUndefined();
+    expect(entry.latency.sigma_sd).toBeUndefined();
+    expect(entry.latency.onset_sd).toBeUndefined();
+  });
+});
+
+describe('bayesPatchService — cascade completeness meta-contract', () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  it('graphEdge.p.posterior must carry every expected predictive + mass field', async () => {
+    await seedGraphAndParam();
+    await applyPatch(makeFullDispersionPatch());
+
+    const post = getDoc('graph-test').edges[0].p.posterior;
+    const required = [
+      // Epistemic probability
+      'alpha', 'beta', 'hdi_lower', 'hdi_upper',
+      // Predictive probability (doc 49 §A.6)
+      'alpha_pred', 'beta_pred', 'hdi_lower_pred', 'hdi_upper_pred',
+      // Cohort epistemic
+      'cohort_alpha', 'cohort_beta', 'cohort_hdi_lower', 'cohort_hdi_upper',
+      // Cohort predictive
+      'cohort_alpha_pred', 'cohort_beta_pred',
+      'cohort_hdi_lower_pred', 'cohort_hdi_upper_pred',
+      // Subset-conditioning mass (doc 52 §14.3)
+      'window_n_effective', 'cohort_n_effective',
+    ];
+    const missing = required.filter(k => post[k] === undefined);
+    expect(missing).toEqual([]);
+  });
+
+  it('graphEdge.p.latency.posterior must carry every expected dispersion field', async () => {
+    await seedGraphAndParam();
+    await applyPatch(makeFullDispersionPatch());
+
+    const lat = getDoc('graph-test').edges[0].p.latency.posterior;
+    const required = [
+      // Edge-level
+      'mu_mean', 'mu_sd', 'mu_sd_epist', 'sigma_mean', 'sigma_sd',
+      'onset_mean', 'onset_sd', 'onset_mu_corr',
+      'hdi_t95_lower', 'hdi_t95_upper',
+      // Path-level
+      'path_mu_mean', 'path_mu_sd', 'path_mu_sd_epist',
+      'path_sigma_mean', 'path_sigma_sd',
+      'path_onset_delta_days', 'path_onset_sd',
+      'path_hdi_t95_lower', 'path_hdi_t95_upper',
+    ];
+    const missing = required.filter(k => lat[k] === undefined);
+    expect(missing).toEqual([]);
+  });
+
+  it('model_vars bayesian entry must carry every expected latency dispersion', async () => {
+    await seedGraphAndParam();
+    await applyPatch(makeFullDispersionPatch());
+
+    const edge = getDoc('graph-test').edges[0];
+    const entry = edge.p.model_vars.find((e: any) => e.source === 'bayesian');
+    const required = [
+      'mu', 'sigma', 't95', 'onset_delta_days',
+      'mu_sd', 'mu_sd_epist', 'sigma_sd', 'onset_sd', 'onset_mu_corr',
+      'path_mu', 'path_sigma', 'path_t95', 'path_onset_delta_days',
+      'path_mu_sd', 'path_mu_sd_epist', 'path_sigma_sd', 'path_onset_sd',
+    ];
+    const missing = required.filter(k => entry.latency[k] === undefined);
+    expect(missing).toEqual([]);
+  });
+
+  it('paramDoc.posterior.slices must carry every dispersion field verbatim', async () => {
+    await seedGraphAndParam();
+    await applyPatch(makeFullDispersionPatch());
+
+    const param = getDoc('parameter-param-edge-1');
+    const w = param.posterior.slices['window()'];
+    const c = param.posterior.slices['cohort()'];
+
+    // Window: every dispersion/predictive field survives verbatim
+    expect(w.alpha_pred).toBe(30);
+    expect(w.beta_pred).toBe(80);
+    expect(w.n_effective).toBe(4500);
+    expect(w.mu_sd).toBe(0.12);
+    expect(w.mu_sd_epist).toBe(0.08);
+    expect(w.sigma_sd).toBe(0.04);
+    expect(w.onset_sd).toBe(0.3);
+    // Cohort likewise
+    expect(c.alpha_pred).toBe(25);
+    expect(c.beta_pred).toBe(70);
+    expect(c.n_effective).toBe(3200);
+    expect(c.mu_sd).toBe(0.18);
+    expect(c.mu_sd_epist).toBe(0.12);
+    expect(c.sigma_sd).toBe(0.06);
+    expect(c.onset_sd).toBe(0.5);
+  });
+});

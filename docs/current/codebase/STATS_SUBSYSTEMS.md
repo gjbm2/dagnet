@@ -134,9 +134,13 @@ Key invariants:
 7. `compute_cohort_maturity_rows_v3` → `compute_forecast_trajectory` → full v3 MC with IS
 8. Extract scalar `p@∞` and `completeness` from last row
 
-**Per-draw mechanics**: `compute_forecast_trajectory` uses `resolved.alpha_pred, beta_pred` from the promoted source (typically bayesian) as the proposal distribution; draws `p_draws ~ Beta(α_pred, β_pred)`; applies IS weights `w_s = Π_c Binomial.pmf(k_c | n_c, p_s · CDF_s(τ_c))` using query-scoped cohort evidence. The conditioned posterior is the IS-reweighted draw set.
+**Per-draw mechanics**: `compute_forecast_trajectory` uses `resolved.alpha_pred, beta_pred` from the promoted source (typically bayesian) as the proposal distribution; draws `p_draws ~ Beta(α_pred, β_pred)`; applies IS weights `w_s = Π_c Binomial.pmf(k_c | n_c, p_s · CDF_s(τ_c))` using query-scoped cohort evidence. The conditioned posterior is the IS-reweighted draw set. `p_mean` is the median of the conditioned draw set at saturation τ.
 
-**Outputs**: per-edge per-scenario `{p_mean, p_sd, completeness, completeness_sd, tau_max, n_rows, n_cohorts}` returned via API response. Applied to graph via `conditionedForecastService.applyConditionedForecastToGraph` — writes `edge.p.blendedMean`, `edge.p.latency.completeness`, `edge.p.latency.completeness_stdev`, `edge.p.forecast.mean`, `edge.p.sd`. CF owns these fields per doc 45; earlier FE/BE topo values are overwritten on arrival.
+**Dispersion contract (doc 49)**: `p_sd` and `p_sd_epistemic` are both closed-form Beta σ, derived from the resolved α/β pair — **not MC stds of the conditioned draws**. Historically `p_sd` was `np.std(rate_draws[:, -1])` on the IS-conditioned set, which collapses to the epistemic posterior width regardless of how diffuse the sampling prior was (IS-conditioning on O(n) observed evidence dominates the prior). Closed form is the only way to expose predictive dispersion (Beta(α_pred, β_pred)) distinctly from epistemic (Beta(α, β)). The lagless fallback (`_lagless_rows` in cohort_forecast_v3.py) derives `p_sd_epistemic` from the conjugate-updated posterior and `p_sd` from the unupdated predictive α_pred/β_pred so that kappa-inflated width is not collapsed by query-window evidence. See docs 45b §Phase C, 47 §5g.
+
+**Outputs**: per-edge per-scenario `{p_mean, p_sd, p_sd_epistemic, completeness, completeness_sd, tau_max, n_rows, n_cohorts}` returned via API response. Applied to graph via `conditionedForecastService.applyConditionedForecastToGraph` — writes `edge.p.blendedMean`, `edge.p.latency.completeness`, `edge.p.latency.completeness_stdev`, `edge.p.forecast.mean`. `p_sd` and `p_sd_epistemic` are returned on the response but **not persisted to graph edges** by the current projector. Consumers that need them (today: the funnel runner's per-edge CF call) read directly from the CF response. Whole-graph persistence of the dispersion scalars is deferred; see doc 54 §8.2.
+
+**Per-edge vs path-cumulative completeness (gotcha)**: when a caller invokes CF with a single-edge `analytics_dsl: from(X).to(Y)` plus a path-level cohort window, the returned `completeness` is **edge-local** (has this edge's source cohort had time to traverse this single edge?), not path-cumulative (has the original cohort at S₀ had time to reach this stage along the full path?). Edge-local completeness is 1.0 for lagless edges and ≈1.0 for short-lag edges on historic data. Multi-hop consumers that need path-cumulative completeness should read `latency.completeness` from the scenario graph edge (populated by the fetch pipeline's whole-graph CF pass with the full path DSL in scope), not from per-edge CF responses. The conversion_funnel runner applies this overlay before calling `compute_bars_ef`.
 
 **Query-scoping**: this is the *most thorough* query-scoping of any subsystem. IS conditioning updates the aggregate bayesian posterior specifically to the user's query-DSL-scoped snapshot evidence, per edge.
 
@@ -237,7 +241,7 @@ They don't. Analysis runners consume whatever enrichment Stage 2 has already pro
 Today's funnel (`run_conversion_funnel` → `run_path`) uses **pre-baked scalars** via `apply_visibility_mode`. It doesn't call `compute_forecast_trajectory` at all. The sophisticated machinery is upstream in the BE CF pass, which has already computed per-edge conditioned means. The funnel is a pure consumer.
 
 **Confusion 6: "Bayes compiler's α/β gets re-conditioned at query time"**
-No. Bayes produces an **aggregate** posterior from the training corpus; that's durable. The BE CF pass does query-time IS conditioning of **draws** from that posterior, producing a conditioned posterior-representation (mean, SD) written to `p.mean, p.sd`. The bayesian α/β themselves don't change.
+No. Bayes produces an **aggregate** posterior from the training corpus; that's durable. The BE CF pass does query-time IS conditioning of **draws** from that posterior, producing a conditioned posterior-representation (mean, SD) written to `p.mean, p.sd`. The bayesian α/β themselves don't change. The engine additionally applies a mass-weighted blend (doc 52) before return, mixing the IS-conditioned draws with the unconditioned draws at ratio `(1 − r) : r` where `r = m_S / m_G` (selected Cohort mass over compiler training mass on the matching temporal axis). This corrects the systematic over-concentration that arises when the query's selected Cohorts overlap the compiler's training set. See [project-bayes/52-subset-conditioning-double-count-correction.md](../project-bayes/52-subset-conditioning-double-count-correction.md).
 
 **Confusion 7: "FE topo pass and BE topo pass compete"**
 They're intentionally parallel during the transition (doc 45). FE writes `analytic`; BE writes `analytic_be`; promotion picks one per preference. Parity is enforced by `forecastingParityService.ts`. Target state is BE-authoritative; FE will eventually be retired.
@@ -266,6 +270,19 @@ should read it directly, not update it further. See
 [FE_BE_STATS_PARALLELISM.md §"Dual-evidence treatment"](FE_BE_STATS_PARALLELISM.md)
 for the full per-field scoping table.
 
+The `ResolvedModelParams.alpha_beta_query_scoped` property is the
+canonical switch: `True` for `analytic` / `analytic_be`, `False` for
+`bayesian` / `manual`. Consumers doing conjugate updates — and the
+engine-level blend (doc 52) — branch on this rather than on source
+name, so the rule stays correct if new source types are introduced.
+For the bayesian-source case, the engine's blend additionally prevents
+the subtler overlap-induced over-concentration (doc 52 §3): even when
+the aggregate is legitimately a prior, re-applying a Cohort set that
+was already in the training set double-counts its evidence. The
+correction mixes conditioned and unconditioned outputs pro-rata to
+`m_S / m_G`, with `n_effective` (training mass) exported per
+temporal mode alongside the posterior.
+
 ---
 
 ## 6. Field authority cheat sheet
@@ -292,8 +309,8 @@ Analysis authors and new consumers repeatedly pick the wrong Python entry point 
 | I want to… | Correct entry point | Do NOT use |
 |---|---|---|
 | Get query-scoped, evidence-conditioned per-edge `p_mean, p_sd, completeness, completeness_sd` for a specific path/span or the whole graph, for use inside an analysis runner or chart builder | `handle_conditioned_forecast` ([api_handlers.py:2506](../../graph-editor/lib/api_handlers.py#L2506)) — a.k.a. `/api/forecast/conditioned`. Pass `analytics_dsl` to scope to a path; omit to run whole-graph. | `compute_forecast_trajectory`, `compute_forecast_summary`, `mc_span_cdfs` — these are inner kernels and bypass the topo-sequencing, upstream-carrier caching, and span-kernel composition that the handler performs |
-| Run the full cohort-population MC sweep for ONE target edge/span internally (e.g. inside the CF handler or cohort_maturity v3 row builder) | `compute_forecast_trajectory` ([forecast_state.py:1040](../../graph-editor/lib/runner/forecast_state.py#L1040)) | Anything inside an analysis runner — go via `handle_conditioned_forecast` instead |
-| Compute a per-edge ESS-regularised IS-conditioned summary (legacy surprise-gauge path) | `compute_forecast_summary` ([forecast_state.py:458](../../graph-editor/lib/runner/forecast_state.py#L458)) — surprise gauge only, superseded on implementation by doc 55 | New analyses — use `handle_conditioned_forecast` instead |
+| Run the full cohort-population MC sweep for ONE target edge/span internally (e.g. inside the CF handler or cohort_maturity v3 row builder) | `compute_forecast_trajectory` ([forecast_state.py:1096](../../graph-editor/lib/runner/forecast_state.py#L1096)) | Anything inside an analysis runner — go via `handle_conditioned_forecast` instead |
+| Compute a per-edge ESS-regularised IS-conditioned summary (legacy surprise-gauge path) | `compute_forecast_summary` ([forecast_state.py:475](../../graph-editor/lib/runner/forecast_state.py#L475)) — surprise gauge only, superseded on implementation by doc 55 | New analyses — use `handle_conditioned_forecast` instead |
 | Produce per-draw span CDFs by reconvolving drawn per-edge params | `mc_span_cdfs` / `mc_span_cdfs_for_source` ([span_kernel.py:491, :699](../../graph-editor/lib/runner/span_kernel.py#L491)) — called by `compute_forecast_trajectory` and the model-overlay builder | Anything outside the forecast engine — these are span-kernel primitives |
 | Compute per-edge analytic latency scalars (mu, sigma, t95, path_t95, completeness, p_infinity) from cohort evidence | `handle_stats_topo_pass` ([api_handlers.py:5620](../../graph-editor/lib/api_handlers.py#L5620)) — a.k.a. `/api/lag/topo-pass`. Produces `analytic_be` model_vars, fired fire-and-forget by the fetch pipeline | `handle_conditioned_forecast` — that's the sophisticated CF pass, a DIFFERENT subsystem |
 | Read a per-edge scalar inside an analysis runner (e.g. funnel, path) | `edge.p.mean, edge.p.latency.*` directly, via `apply_visibility_mode` ([graph_builder.py:564](../../graph-editor/lib/runner/graph_builder.py#L564)) — values are already populated by Stage 2 enrichment | Any forecast-engine function — the enrichment has already happened upstream |

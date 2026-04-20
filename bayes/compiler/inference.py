@@ -1023,6 +1023,26 @@ def summarise_posteriors(
                 f"WARN {edge_id[:8]}…: rhat={edge_rhat:.3f} ess={edge_ess:.0f}"
             )
 
+        # Doc 52 §14.2: total raw observation count per evidence axis.
+        # Sums the `n` used by the per-Cohort Binomial likelihoods that
+        # produced this edge's posterior. One scalar per (edge, temporal_mode).
+        # Consumers use m_S / m_G to compute the runtime blend ratio.
+        window_n_effective_val = 0.0
+        cohort_n_effective_val = 0.0
+        for _wo in ev.window_obs:
+            window_n_effective_val += float(_wo.n)
+        for _co in ev.cohort_obs:
+            for _tr in _co.trajectories:
+                if _tr.obs_type == "window":
+                    window_n_effective_val += float(_tr.n)
+                else:
+                    cohort_n_effective_val += float(_tr.n)
+            for _dobs in _co.daily:
+                if "window" in _co.slice_dsl:
+                    window_n_effective_val += float(_dobs.n)
+                elif "cohort" in _co.slice_dsl:
+                    cohort_n_effective_val += float(_dobs.n)
+
         # Doc 21 + doc 49: extract p_window and p_cohort per-slice posteriors.
         # Produce BOTH epistemic (raw trace moment-match) and predictive
         # (kappa-inflated) alpha/beta. Epistemic = uncertainty about the
@@ -1145,6 +1165,8 @@ def summarise_posteriors(
             cohort_beta_pred=cohort_beta_pred,
             cohort_hdi_lower_pred=cohort_hdi_lo_pred,
             cohort_hdi_upper_pred=cohort_hdi_hi_pred,
+            window_n_effective=window_n_effective_val if window_n_effective_val > 0 else None,
+            cohort_n_effective=cohort_n_effective_val if cohort_n_effective_val > 0 else None,
         ))
 
         # Phase C: extract per-slice posteriors from trace (doc 14 §5.2)

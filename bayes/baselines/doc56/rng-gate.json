@@ -1,0 +1,9 @@
+{
+  "fixture": "synth-mirror-4step",
+  "dsl": "from(m4-delegated).to(m4-success).cohort(7-Mar-26:21-Mar-26)",
+  "description": "Byte-identical RNG gate (doc 56 \u00a711.1). Single-edge cohort mode exercising span kernel + build_span_params + XProvider + build_upstream_carrier Tier 2 + compute_forecast_trajectory with full 14-param signature.",
+  "n_hashes": 1,
+  "rate_draws_sha256": [
+    "9a88800183eb9ecdcea8660b4372eeb57ef8fe7b26e39683c38c66d375eeb2ca"
+  ]
+}

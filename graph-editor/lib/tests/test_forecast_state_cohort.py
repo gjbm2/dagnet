@@ -480,3 +480,204 @@ class TestForecastSummaryGracefulDegradation:
             f"No-evidence gauge scalars: c_cond={cf.completeness:.4f} "
             f"c_unc={cf.completeness_unconditioned:.4f} (should match)"
         )
+
+
+class TestSubsetConditioningBlend:
+    """Doc 52 §14 — engine-level subset-conditioning blend.
+
+    Covers:
+    - `compute_forecast_summary` provenance + blended conditioned scalars.
+    - Blend skip on analytic_be source (`source_query_scoped`).
+    - Blend skip when n_effective is absent (`n_effective_missing`).
+    - Boundary behaviour: r→0 ≈ fully conditioned; r=1 ≈ aggregate.
+    """
+
+    def _make_edge_and_resolve(self, n_effective=None):
+        """Baseline: α=70, β=30, n_effective configurable, source='bayesian'."""
+        from runner.model_resolver import resolve_model_params
+        graph = _make_synth_graph([
+            ('e1', 'n1', 'n2', 'A', 'B', 0.7, 2.3, 0.5, 1.0),
+        ])
+        edge = graph['edges'][0]
+        resolved = resolve_model_params(edge, scope='edge', temporal_mode='window')
+        resolved.alpha = 70.0
+        resolved.beta = 30.0
+        resolved.alpha_pred = 70.0
+        resolved.beta_pred = 30.0
+        resolved.n_effective = n_effective
+        resolved.source = 'bayesian'
+        resolved.p_mean = resolved.alpha / (resolved.alpha + resolved.beta)
+        resolved.p_sd = math.sqrt(
+            resolved.alpha * resolved.beta
+            / (((resolved.alpha + resolved.beta) ** 2) * (resolved.alpha + resolved.beta + 1))
+        )
+        return edge, resolved
+
+    def test_summary_blend_provenance_r06(self):
+        """m_S=60, m_G=100 → r=0.6. Summary carries blend provenance."""
+        from runner.forecast_state import compute_forecast_summary
+        _, resolved = self._make_edge_and_resolve(n_effective=100.0)
+        cohorts = [(30.0, 10)] * 6  # weights used for completeness only
+        evidence = [(30.0, 10, 4)] * 6  # m_S = sum(n) = 60
+
+        cf = compute_forecast_summary(
+            edge_id='e1', resolved=resolved,
+            cohort_ages_and_weights=cohorts,
+            evidence=evidence,
+        )
+
+        assert cf.blend_applied is True
+        assert cf.r == pytest.approx(0.6)
+        assert cf.m_S == pytest.approx(60.0)
+        assert cf.m_G == pytest.approx(100.0)
+        assert cf.blend_skip_reason is None
+
+    def test_summary_blend_skip_query_scoped(self):
+        """analytic_be source → blend skipped with source_query_scoped."""
+        from runner.forecast_state import compute_forecast_summary
+        _, resolved = self._make_edge_and_resolve(n_effective=100.0)
+        resolved.source = 'analytic_be'  # toggles alpha_beta_query_scoped=True
+        cohorts = [(20.0, 50)]
+        evidence = [(20.0, 50, 15)]
+
+        cf = compute_forecast_summary(
+            edge_id='e1', resolved=resolved,
+            cohort_ages_and_weights=cohorts,
+            evidence=evidence,
+        )
+
+        assert cf.blend_applied is False
+        assert cf.blend_skip_reason == 'source_query_scoped'
+
+    def test_summary_blend_skip_missing_n_effective(self):
+        """n_effective=None → blend skipped with n_effective_missing."""
+        from runner.forecast_state import compute_forecast_summary
+        _, resolved = self._make_edge_and_resolve(n_effective=None)
+        cohorts = [(20.0, 50)]
+        evidence = [(20.0, 50, 15)]
+
+        cf = compute_forecast_summary(
+            edge_id='e1', resolved=resolved,
+            cohort_ages_and_weights=cohorts,
+            evidence=evidence,
+        )
+
+        assert cf.blend_applied is False
+        assert cf.blend_skip_reason == 'n_effective_missing'
+
+    def test_summary_blend_full_r_collapses_to_unconditioned(self):
+        """r=1 → blended completeness == completeness_unconditioned (±tol).
+
+        At r=1 the blended draws are entirely from the unconditioned
+        set, so the "conditioned" scalar collapses to the unconditioned
+        one and the surprise-gauge shift goes to zero.
+        """
+        from runner.forecast_state import compute_forecast_summary
+        _, resolved = self._make_edge_and_resolve(n_effective=60.0)
+        cohorts = [(30.0, 10)] * 6
+        evidence = [(30.0, 10, 9)] * 6  # m_S = 60 = m_G
+
+        cf = compute_forecast_summary(
+            edge_id='e1', resolved=resolved,
+            cohort_ages_and_weights=cohorts,
+            evidence=evidence,
+        )
+
+        assert cf.blend_applied is True
+        assert cf.r == pytest.approx(1.0)
+        # At r=1 the mix is entirely the unconditioned draws, so
+        # completeness equals completeness_unconditioned exactly.
+        assert cf.completeness == pytest.approx(cf.completeness_unconditioned, abs=1e-10)
+        assert cf.rate_conditioned == pytest.approx(cf.rate_unconditioned, abs=1e-10)
+
+    def test_summary_blend_small_r_near_fully_conditioned(self):
+        """r≈0.05 → blended output ≈ fully-conditioned."""
+        from runner.forecast_state import compute_forecast_summary
+        _, resolved = self._make_edge_and_resolve(n_effective=1000.0)
+        cohorts = [(30.0, 10)] * 5
+        evidence = [(30.0, 10, 7)] * 5  # m_S = 50, r = 0.05
+
+        # Compute blend-off reference by passing n_effective=None
+        _, resolved_ref = self._make_edge_and_resolve(n_effective=None)
+        cf_ref = compute_forecast_summary(
+            edge_id='e1', resolved=resolved_ref,
+            cohort_ages_and_weights=cohorts,
+            evidence=evidence,
+        )
+        # Now blend with r≈0.05
+        cf = compute_forecast_summary(
+            edge_id='e1', resolved=resolved,
+            cohort_ages_and_weights=cohorts,
+            evidence=evidence,
+        )
+
+        assert cf.blend_applied is True
+        assert cf.r == pytest.approx(0.05, abs=1e-3)
+        # 5% of the mix is unconditioned; rate should stay close to
+        # the fully-conditioned reference (within a few percent).
+        assert abs(cf.rate_conditioned - cf_ref.rate_conditioned) < 0.05, (
+            f"r=0.05 blend diverged too much: "
+            f"blended={cf.rate_conditioned:.4f} ref={cf_ref.rate_conditioned:.4f}"
+        )
+
+    def test_trajectory_blend_cohort_evals_populated_unconditioned(self):
+        """Regression for doc 52 §14.4.1: the unconditioned cohort-loop
+        pass must populate `cohort_evals` for the row-wise blend to work.
+
+        Without this, `cohort_evals_unc` is empty, the length-mismatch
+        branch takes over, and `sweep.cohort_evals` reverts to the
+        conditioned-only draws — which means the BE topo pass, daily-
+        conversions annotation, and latency band sweep (all of which
+        read `cohort_evals[i].y_draws/x_draws`) remain uncorrected.
+        """
+        from runner.forecast_state import (
+            compute_forecast_trajectory, CohortEvidence,
+        )
+        from runner.model_resolver import ResolvedModelParams, ResolvedLatency
+        import numpy as np
+
+        resolved = ResolvedModelParams(
+            p_mean=0.3, p_sd=0.05,
+            alpha=30.0, beta=70.0,
+            alpha_pred=30.0, beta_pred=70.0,
+            n_effective=100.0,
+            edge_latency=ResolvedLatency(
+                mu=2.0, sigma=0.5, onset_delta_days=0.0,
+                mu_sd=0.1, sigma_sd=0.05,
+            ),
+            source='bayesian',
+        )
+        cohorts = [
+            CohortEvidence(
+                obs_x=[10.0] * 30,
+                obs_y=[3.0] * 30,
+                x_frozen=10.0,
+                y_frozen=3.0,
+                frontier_age=20,
+                a_pop=10.0,
+                eval_age=20,
+            )
+            for _ in range(6)
+        ]
+
+        sweep = compute_forecast_trajectory(
+            resolved=resolved,
+            cohorts=cohorts,
+            max_tau=30,
+        )
+
+        # Provenance: r = 60/100 = 0.6, blend applied.
+        assert sweep.blend_applied is True
+        assert sweep.r == pytest.approx(0.6)
+        # cohort_evals must be populated with one entry per cohort
+        # (not empty — which is the failure mode we're guarding).
+        assert sweep.cohort_evals is not None
+        assert len(sweep.cohort_evals) == 6
+        # Each entry's draws are the blended row-mix across the
+        # conditioned and unconditioned passes. Draws array length = S.
+        for ce in sweep.cohort_evals:
+            assert ce.y_draws.shape == (sweep.rate_draws.shape[0],)
+            assert ce.x_draws.shape == (sweep.rate_draws.shape[0],)
+            assert np.all(np.isfinite(ce.y_draws))
+            assert np.all(np.isfinite(ce.x_draws))
+            assert np.all(ce.x_draws > 0)

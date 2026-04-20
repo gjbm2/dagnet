@@ -1,0 +1,115 @@
+# STRESS CELL: one_abs (auto-generated, safe to delete)
+simulation:
+  mean_daily_traffic: 500
+  n_days: 50
+  user_kappa: 50
+  failure_rate: 0.05
+  drift_sigma: 0.0
+  seed: 103
+  expected_sample_seconds: 600
+  initial_absent_pct: 0.5
+  toggle_rate: 0.0
+emit_context_slices: true
+context_dimensions:
+- id: stress-bg-one_abs-s103-ctx
+  mece: true
+  values:
+  - id: v0
+    label: V0
+    weight: 0.3333333333333333
+    sources:
+      amplitude:
+        field: utm_medium
+        filter: utm_medium == 'v0'
+    edges:
+      stress-bg-one_abs-s103-gate-to-path-a:
+        p_mult: 1.2
+        mu_offset: -0.1
+      stress-bg-one_abs-s103-gate-to-path-b:
+        p_mult: 0.9
+        mu_offset: 0.1
+  - id: v1
+    label: V1
+    weight: 0.3333333333333333
+    sources:
+      amplitude:
+        field: utm_medium
+        filter: utm_medium == 'v1'
+  - id: v2
+    label: V2
+    weight: 0.3333333333333333
+    sources:
+      amplitude:
+        field: utm_medium
+        filter: utm_medium == 'v2'
+edges:
+  stress-bg-one_abs-s103-anchor-to-gate:
+    from: anchor
+    to: gate
+    p: 0.9
+    onset: 1.0
+    mu: 2.0
+    sigma: 0.4
+  stress-bg-one_abs-s103-gate-to-path-a:
+    from: gate
+    to: path-a
+    p: 0.5
+    onset: 1.0
+    mu: 2.0
+    sigma: 0.4
+  stress-bg-one_abs-s103-gate-to-path-b:
+    from: gate
+    to: path-b
+    p: 0.4
+    onset: 1.0
+    mu: 2.0
+    sigma: 0.4
+  stress-bg-one_abs-s103-path-a-to-outcome:
+    from: path-a
+    to: outcome
+    p: 0.8
+    onset: 1.0
+    mu: 2.0
+    sigma: 0.4
+  stress-bg-one_abs-s103-path-b-to-outcome:
+    from: path-b
+    to: outcome
+    p: 0.7
+    onset: 1.0
+    mu: 2.0
+    sigma: 0.4
+nodes:
+  anchor:
+    start: true
+    type: entry
+    label: Anchor
+    event_id: stress-bg-one_abs-s103-anchor
+  gate:
+    type: event
+    label: Gate
+    event_id: stress-bg-one_abs-s103-gate
+  path-a:
+    type: event
+    label: Path A
+    event_id: stress-bg-one_abs-s103-path-a
+  path-b:
+    type: event
+    label: Path B
+    event_id: stress-bg-one_abs-s103-path-b
+  outcome:
+    absorbing: true
+    type: event
+    outcome_type: success
+    label: Outcome
+    event_id: stress-bg-one_abs-s103-outcome
+graph:
+  name: stress-bg-one_abs-s103
+  description: Stress harness for branch-group segfault
+testing:
+  thresholds:
+    p_z: 4.0
+    mu_z: 4.0
+    sigma_z: 5.0
+    onset_z: 5.0
+  per_slice_thresholds:
+    p_slice_z: 5.0

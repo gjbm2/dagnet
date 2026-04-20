@@ -1,0 +1,44 @@
+{
+  "captured_at": "2026-04-20T19:52:28.174644Z",
+  "dagnet_git_sha": "44e1f5c9111a836d67492ce69aa669ebcf055957",
+  "data_repo_git_sha": "1ce814f644897326c451493c493ce24b19fcac57",
+  "tolerances": {
+    "deterministic_fields": "|\u0394| \u2264 1e-10",
+    "mc_quantiles": "|\u0394| / value \u2264 2%",
+    "rng_hash": "byte-identical sha256"
+  },
+  "fixtures": [
+    {
+      "graph": "synth-simple-abc",
+      "dsl": "window(-120d:)"
+    },
+    {
+      "graph": "cf-fix-linear-no-lag",
+      "dsl": "window(-60d:)"
+    },
+    {
+      "graph": "synth-mirror-4step",
+      "dsl": "cohort(7-Mar-26:21-Mar-26)"
+    },
+    {
+      "graph": "cf-fix-branching",
+      "dsl": "window(-60d:)"
+    },
+    {
+      "graph": "cf-fix-diamond-mixed",
+      "dsl": "window(-120d:)"
+    },
+    {
+      "graph": "cf-fix-deep-mixed",
+      "dsl": "window(-180d:)"
+    }
+  ],
+  "rng_gate": {
+    "graph": "synth-mirror-4step",
+    "dsl": "from(m4-delegated).to(m4-success).cohort(7-Mar-26:21-Mar-26)"
+  },
+  "daily_conversions": {
+    "graph": "synth-mirror-4step",
+    "dsl": "from(m4-registered).to(m4-success).cohort(7-Mar-26:21-Mar-26)"
+  }
+}
