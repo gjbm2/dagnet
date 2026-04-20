@@ -1,0 +1,23 @@
+{
+    "name": "verdict-showcase",
+    "description": "Diverse graph set to showcase the full verdict vocabulary under the new status/classification schema. Lightweight sampling for speed.",
+    "graphs": {
+        "include": [
+            "synth-solo-sparse-2",
+            "synth-solo-sparse-3",
+            "synth-solo-lifecycle",
+            "synth-abc-sparse-1",
+            "synth-diamond-sparse-1"
+        ]
+    },
+    "sampling": {
+        "chains": 2,
+        "draws": 600,
+        "tune": 400,
+        "max_parallel": 2,
+        "no_timeout": true
+    },
+    "features": [],
+    "settings": {},
+    "tags": ["demo", "classification"]
+}

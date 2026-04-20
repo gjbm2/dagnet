@@ -39,6 +39,7 @@ import re
 import sys
 import json
 import math
+import subprocess
 import yaml
 import argparse
 import numpy as np
@@ -275,6 +276,112 @@ def discover_synth_graphs(data_repo: str | None = None) -> list[dict]:
     return results
 
 
+def _probe_fe_hash_alignment(
+    graph_name: str,
+    data_repo: str,
+    db_conn: str,
+    timeout: int = 60,
+) -> tuple[bool, list[str], list[str]]:
+    """Actively verify that hashes the FE CLI would compute from the
+    CURRENT graph/event/context/param files still retrieve rows in the DB.
+
+    This is the only check that catches FE-interpretation drift (new
+    recognised fields, canonicalisation-logic changes, dependency-file
+    regeneration). File-content hashes in the meta sidecar miss these
+    cases because the FE's canonical_signature is a function of
+    (file content + FE code version + recognised schema), not just
+    file content.
+
+    Returns (aligned, divergences, probed_hashes):
+      aligned: True if every FE-computed hash has at least one DB row
+      divergences: list of human-readable reasons when misaligned
+      probed_hashes: list of (hash, slice_key, row_count) tuples for
+        diagnostic display
+    """
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    nvm_prefix = (
+        f'export NVM_DIR="$HOME/.nvm" && '
+        f'. "$NVM_DIR/nvm.sh" 2>/dev/null && '
+        f'cd {os.path.join(repo_root, "graph-editor")} && '
+        f'nvm use "$(cat .nvmrc)" 2>/dev/null && '
+    )
+    cmd = (
+        f'{nvm_prefix}'
+        f'npx tsx src/cli/bayes.ts '
+        f'--graph {data_repo} --name {graph_name} --format json --no-cache'
+    )
+    try:
+        r = subprocess.run(
+            cmd, shell=True, capture_output=True, text=True,
+            timeout=timeout, cwd=repo_root,
+        )
+    except subprocess.TimeoutExpired:
+        return False, [f"FE CLI timed out after {timeout}s"], []
+
+    if r.returncode != 0:
+        err = (r.stderr or "")[-300:].strip()
+        return False, [f"FE CLI failed (exit {r.returncode}): {err}"], []
+
+    try:
+        idx = r.stdout.index("{")
+        payload = json.loads(r.stdout[idx:])
+    except (ValueError, json.JSONDecodeError) as e:
+        return False, [f"FE CLI output not parseable as JSON: {e}"], []
+
+    subjects = payload.get("snapshot_subjects", []) or []
+
+    # Dedupe by (hash, representative slice key) so each unique hash is
+    # probed once. Skip "supp_" subjects — those are supplementary
+    # hashes injected by candidateRegimeService from param-file hash
+    # families, not the primary hashes the graph expects.
+    seen: dict[str, str] = {}
+    for s in subjects:
+        subj_id = s.get("subject_id", "")
+        if subj_id.startswith("supp_"):
+            continue
+        h = s.get("core_hash")
+        if not h:
+            continue
+        sk_list = s.get("slice_keys") or []
+        sk_repr = sk_list[0] if sk_list else "(bare)"
+        if h not in seen:
+            seen[h] = sk_repr
+
+    if not seen:
+        return True, [], []
+
+    try:
+        import psycopg2
+        conn = psycopg2.connect(db_conn)
+        cur = conn.cursor()
+    except Exception as e:
+        return False, [f"DB connection failed: {e}"], []
+
+    probed: list[tuple[str, str, int]] = []
+    try:
+        for h, sk in seen.items():
+            cur.execute(
+                "SELECT COUNT(*) FROM snapshots WHERE core_hash = %s", (h,),
+            )
+            count = int(cur.fetchone()[0])
+            probed.append((h, sk, count))
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    divergences: list[str] = []
+    for h, sk, count in probed:
+        if count == 0:
+            divergences.append(
+                f"FE-computed hash {h[:12]}… (slice={sk}) has 0 DB rows "
+                f"— file content unchanged but FE canonicalisation drifted"
+            )
+    aligned = not divergences
+    return aligned, divergences, probed
+
+
 def verify_synth_data(
     graph_name: str,
     data_repo: str | None = None,
@@ -282,13 +389,23 @@ def verify_synth_data(
     check_enrichment: bool = False,
     check_param_files: bool = False,
     check_event_hashes: bool = False,
+    check_fe_parity: bool = True,
 ) -> dict:
     """Check whether synth data for a graph is present and fresh.
 
     Performs a comprehensive freshness check across all dimensions:
-    truth file hash, graph JSON hash, DB row integrity, and optionally
-    event definition hashes, parameter file consistency, and enrichment
-    state.
+    truth file hash, graph JSON hash, DB row integrity, optional event
+    definition hashes + parameter file consistency + enrichment state,
+    and — crucially — an FE-parity probe that catches schema/code drift
+    invisible to file-hash checks.
+
+    Args:
+        check_fe_parity: when True (default), actively invoke the FE CLI
+            with the current graph state and verify every computed
+            core_hash still retrieves DB rows. This is the only check
+            that detects FE-interpretation drift (e.g. new recognised
+            fields, canonicalisation-rule changes). Skip only for
+            offline or fast-path checks where FE CLI is unavailable.
 
     Returns dict with:
         status: "fresh" | "stale" | "missing" | "no_truth" | "needs_enrichment"
@@ -519,6 +636,33 @@ def verify_synth_data(
         return _result("missing", "0 DB rows found",
                        truth_sha256=truth_sha, graph_sha256=graph_sha,
                        enriched=enriched, meta=meta)
+
+    # ── FE-parity hash-alignment probe ──
+    #
+    # File-content hashes above confirm the source files haven't changed.
+    # But the FE's canonical_signature is a function of (file content +
+    # FE code version + recognised schema). If FE code evolves while
+    # file content is stable — e.g. a canonicalisation rule changes, a
+    # new field is recognised, a dependency file is regenerated — the
+    # computed hash drifts and DB rows become orphaned.
+    #
+    # The only robust check is to actively invoke the FE CLI with the
+    # current graph state and confirm each computed hash retrieves rows.
+    # This catches every FE-interpretation drift without needing to
+    # predict what might change.
+    if check_fe_parity:
+        aligned, fe_divergences, probed = _probe_fe_hash_alignment(
+            graph_name, data_repo, db_conn,
+        )
+        if not aligned:
+            return _result(
+                "stale",
+                fe_divergences[0],
+                reasons=fe_divergences,
+                row_count=total,
+                truth_sha256=truth_sha, graph_sha256=graph_sha,
+                enriched=enriched, meta=meta,
+            )
 
     # Enrichment-only gap
     if check_enrichment and not enriched:

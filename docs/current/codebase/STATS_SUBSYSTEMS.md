@@ -1,0 +1,272 @@
+# Statistical Processing Subsystems
+
+**Purpose**: disambiguation map for the five distinct processing subsystems that produce, enrich, or consume the graph's statistical fields. These look similar — they all touch `edge.p.*` fields, they all feed chart rendering, they all involve some form of "topological" or "pass-over-the-graph" concept — but they are architecturally distinct. Conflating them has repeatedly caused design mistakes and agent confusion.
+
+**See also**: [FE_BE_STATS_PARALLELISM.md](FE_BE_STATS_PARALLELISM.md) (FE↔BE topo orchestration detail + CF race mechanics), [STATISTICAL_DOMAIN_SUMMARY.md](STATISTICAL_DOMAIN_SUMMARY.md) (underlying statistical models — shifted lognormal, Beta/Binomial, completeness, partial pooling), [LAG_ANALYSIS_SUBSYSTEM.md](LAG_ANALYSIS_SUBSYSTEM.md) (what latency fitting computes in detail), [PARAMETER_SYSTEM.md](PARAMETER_SYSTEM.md) (model_vars data model), [ANALYSIS_TYPES_CATALOGUE.md](ANALYSIS_TYPES_CATALOGUE.md) (analysis runner inventory), [project-bayes/INDEX.md](../project-bayes/INDEX.md) (Bayes compiler programme).
+
+---
+
+## 1. Why this doc exists
+
+A recurring failure mode when reasoning about DagNet statistics is to treat "the BE stats pipeline" as a single monolithic thing. It is not. There are **five separate subsystems**, each with its own trigger, inputs, outputs, persistence semantics, and relationship to the query DSL. They run in a specific sequence during query execution (and some run offline, outside query execution entirely).
+
+The subsystems are:
+
+| # | Subsystem | Nature | Trigger | Scope |
+|---|---|---|---|---|
+| 1 | **Bayes compiler** | Offline MCMC inference | Manual / CLI | Whole graph, batch |
+| 2 | **FE topo pass** | In-browser analytic enrichment | Per fetch (synchronous) | Whole graph |
+| 3 | **BE topo pass** | Python analytic + minimal forecast tail | Per fetch (fire-and-forget) | Whole graph |
+| 4 | **BE CF pass** | Python topologically-sequenced MC + IS | Per fetch (race, 500ms) | Whole graph |
+| 5 | **BE analysis runners** | Per-query chart/result production | Per analysis request | Subjects in DSL |
+
+Subsystems 2, 3, and 4 all run during the standard Stage 2 fetch pipeline; subsystem 1 runs separately and writes durable fit results into edge files; subsystem 5 consumes the enriched graph to produce analyses. Each writes to different fields, on different cadences, with different authority levels.
+
+The rest of this doc details each subsystem, the pipeline sequence, the fields each writes/reads, and the common confusions.
+
+---
+
+## 2. Quick reference: what writes what
+
+| Field | Written by | Nature |
+|---|---|---|
+| `edge.p.model_vars[source='bayesian']` | Bayes compiler (offline) | Aggregate posterior from training corpus. Includes `probability.{alpha, beta, alpha_pred, beta_pred}` + latency block |
+| `edge.p.model_vars[source='analytic']` | FE topo pass | Query-scoped analytic fit (moments-based) |
+| `edge.p.model_vars[source='analytic_be']` | BE topo pass | Query-scoped analytic fit (Python, parity target with FE `analytic`) |
+| `edge.p.latency.{mu, sigma, t95, path_t95, path_mu, path_sigma, ...}` | Promoted from whichever model_vars source won `applyPromotion` | Latency fit scalars |
+| `edge.p.mean`, `edge.p.sd` | BE CF pass (when landed) / else topo-pass blend fallback | Conditioned asymptotic rate + SD |
+| `edge.p.latency.completeness`, `completeness_stdev` | BE CF pass (authoritative per doc 45) / else topo-pass CDF eval fallback | Cohort maturity at query ages |
+| `edge.p.evidence.{mean, n, k}` | Topo-pass evidence aggregation (from query-scoped snapshot counts) | Raw observed conversion data |
+| `edge.p.forecast.mean` | BE CF pass (same value as `p.mean` when CF landed) | Forecast asymptote (legacy field retained) |
+
+Key invariants:
+- A single field can be written by multiple subsystems — the authoritative writer depends on which pass has landed most recently and what promotion selects.
+- Promotion hierarchy (`modelVarsResolution.ts`): `analytic_be` preferred over `analytic` after parity validation; `bayesian` reserved for specific consumers via resolve_model_params.
+- The CF pass owns `p.mean`, `p.sd`, `completeness`, `completeness_stdev` — these overwrite whatever the FE/BE topo passes produced once CF arrives.
+
+---
+
+## 3. Subsystem details
+
+### 3.1 Bayes compiler (offline fit)
+
+**What it is**: the MCMC inference system that fits per-edge Bayesian posteriors from a fixed training corpus. Lives in `/bayes/` (compiler/, worker.py, run_regression.py, synth_gen.py). Produces rich posteriors serialised into edge parameter files.
+
+**Trigger**: manual invocation — FE "Fit Posteriors" button, CLI `bayes.sh`, or the run-regression harness. Not triggered by queries.
+
+**Scope**: whole graph, one fit per compiler run. Training corpus is whatever evidence (snapshot subjects + parameter files) the compiler was invoked with.
+
+**Two phases** (see `bayes/compiler/model.py` top comment):
+- **Phase 1 (window mode)**: fits per-edge posteriors independently on `window()` slices. Outputs α, β (epistemic), α_pred, β_pred (κ-inflated predictive per doc 49), mu_mean, sigma_mean, onset_delta_days + SDs per edge.
+- **Phase 2 (cohort mode)**: uses Phase 1 posteriors as priors (posterior-as-prior), fits path-level lognormal (path_mu, path_sigma, path_onset_delta_days) via Fenton-Wilkinson composition. Per-slice cohort α/β for contexted slices.
+
+**What it writes**: serialised results land (via webhook → API handler) as a `model_vars[source='bayesian']` entry on each edge. One write per compiler run; not refreshed per query.
+
+**Query-scoping**: **none**. Bayes fits are aggregate — they reflect whatever training data the compiler saw, not the user's current query window. "Aggregate bayesian prior" is the correct framing.
+
+**Consumption**: readers go through `model_resolver.resolve_model_params()` which applies quality gates (ESS ≥ 400, rhat < 1.05, converged_pct thresholds) before promoting the bayesian source. If gates fail, falls back to analytic/analytic_be.
+
+**Key files**: `bayes/compiler/model.py`, `bayes/compiler/inference.py`, `bayes/compiler/evidence.py`, `bayes/worker.py`, `bayes/results_schema.py`. Downstream consumption: `graph-editor/lib/runner/model_resolver.py:117-277`.
+
+**Design docs**: `docs/current/project-bayes/INDEX.md` is the canonical index (80+ docs). Key references: doc 8 (phases), doc 21 (unified posterior schema), doc 24 (Phase 2 posterior-as-prior), doc 32 (LOO-ELPD), doc 34 (latency dispersion κ), doc 38 (PPC calibration), doc 49 (epistemic vs predictive SDs), doc 45 (forecast parity).
+
+### 3.2 FE topo pass (in-browser analytic enrichment)
+
+**What it is**: the TypeScript analytic statistics pass that runs synchronously during Stage 2 of every graph fetch. Fits per-edge latency (mu, sigma, t95) from cohort evidence, composes path-level parameters via Fenton-Wilkinson, computes completeness scalars.
+
+**Trigger**: `fetchDataService.ts` Stage 2, after per-item fetches complete. Blocks the UI pipeline.
+
+**Entry point**: `statisticalEnhancementService.ts` → `enhanceGraphLatencies()`.
+
+**Scope**: whole graph, every edge with `latency_parameter: true`.
+
+**Inputs**: parameter lookups (window/cohort slices per edge), cohort aggregates from `windowAggregationService.ts`, graph topology, forecasting settings.
+
+**Outputs**: `edge.p.model_vars[source='analytic']` entries plus direct writes to `edge.p.latency.*` scalars (mu, sigma, t95, path_t95, path_mu, path_sigma, completeness, heuristic dispersion SDs). Produces `blendedMean = w_evidence · evidence.mean + (1-w_evidence) · forecast.mean` — the scalar pre-CF consumers (including today's scalar funnel) read as `p.mean`.
+
+**Query-scoping**: yes — consumes the query DSL's cohort window via `cohortWindow` parameter; per-edge fits respect the scoped evidence.
+
+**Relation to BE topo pass**: FE and BE run the same algorithm, intended to produce identical outputs on the same inputs. Parity enforced by `forecastingParityService.ts` + `statsParity.contract.test.ts` (unit vectors with 1e-10 / 1e-6 tolerances depending on primitive).
+
+**Key files**: `src/services/statisticalEnhancementService.ts`, `src/services/windowAggregationService.ts`, `src/services/lagHorizonsService.ts`, `src/services/forecastingParityService.ts`.
+
+### 3.3 BE topo pass (Python analytic + minimal forecast tail)
+
+**What it is**: the Python equivalent of the FE topo pass. Runs fire-and-forget in parallel to the FE topo pass, producing `analytic_be` model_vars. Additionally runs a **minimal forecast-engine tail** (per-edge `compute_forecast_sweep` with single-point cohort evidence) to populate `p.mean`, `p.sd`, `completeness_stdev` when CF hasn't landed.
+
+**Trigger**: `fetchDataService.ts` Stage 2, fires alongside FE topo pass. Fire-and-forget promise; stale results discarded via `_beTopoPassGeneration`.
+
+**Endpoint**: `POST /api/lag/topo-pass` → `handle_stats_topo_pass` ([api_handlers.py:5620](../../graph-editor/lib/api_handlers.py#L5620)) → `enhance_graph_latencies` ([stats_engine.py](../../graph-editor/lib/runner/stats_engine.py)).
+
+**Scope**: whole graph. Single topological forward pass (Kahn's algorithm, deterministic) propagating path-level parameters via Fenton-Wilkinson composition ([stats_engine.py:433-471](../../graph-editor/lib/runner/stats_engine.py#L433-L471)).
+
+**Two-stage internal structure** (per [FE_BE_STATS_PARALLELISM.md](FE_BE_STATS_PARALLELISM.md) §"Forecast engine"):
+1. **Stats engine**: analytic FW composition producing mu, sigma, t95, path_t95, completeness, p_infinity, blended_mean, heuristic SDs per edge ([stats_engine.py:608-650](../../graph-editor/lib/runner/stats_engine.py#L608-L650)).
+2. **Forecast engine tail**: `compute_forecast_sweep` called per edge with minimal single-point cohort evidence; reads the IS-conditioned projected rate at the horizon as `blended_mean` and n-weighted CDF at cohort ages as `completeness`.
+
+**Query-scoping**: yes — same DSL cohort window as FE topo pass. `scoped_cohorts` (cohort-window-filtered) used for evidence/completeness; full cohorts used for fitting to avoid survivor bias.
+
+**Outputs**: per-edge `analytic_be` model_vars entry upserted to graph via `beTopoPassService.ts` → `applyBeTopoResult` → `upsertModelVars` + `applyPromotion`. Once BE topo result arrives, promotion re-runs and (if preference allows) analytic_be's scalars become the promoted `p.latency.*` values.
+
+**Distinction from BE CF pass**: BE topo pass uses single-point cohort evidence per edge (minimal forecast-engine call); BE CF pass uses full snapshot DB with multi-cohort framing and per-edge IS conditioning on query-scoped evidence. BE topo is analytic with a forecast tail; BE CF is fully MC with proper IS across the topologically-ordered graph.
+
+**Key files**: `lib/runner/stats_engine.py`, `lib/api_handlers.py:5620-5770` (handler), `lib/runner/forecast_state.py` (shared `compute_forecast_sweep` primitive), `src/services/beTopoPassService.ts` (client).
+
+### 3.4 BE CF pass (conditioned forecast — sophisticated MC enrichment)
+
+**What it is**: the sophisticated topologically-sequenced MC enrichment that runs the full cohort_maturity v3 pipeline per edge, across the whole graph, using snapshot DB evidence and per-edge IS conditioning on query-DSL-scoped evidence. Writes per-edge conditioned scalars back to the graph. **This is a graph enrichment endpoint, not an analysis type** — the docstring at [api_handlers.py:2513](../../graph-editor/lib/api_handlers.py#L2513) is explicit.
+
+**Trigger**: `fetchDataService.ts` Stage 2, fires alongside BE topo pass. Raced against a 500ms fast-path deadline (`CF_FAST_DEADLINE_MS`). Fast path merges into single render; slow path renders FE fallback and overwrites on arrival.
+
+**Endpoint**: `POST /api/forecast/conditioned` → `handle_conditioned_forecast` ([api_handlers.py:2506](../../graph-editor/lib/api_handlers.py#L2506)).
+
+**Scope**: two modes:
+- **Single-edge/path** (`analytics_dsl` provided): scoped to one edge or path span via query DSL.
+- **Whole-graph** (`all_graph_parameters`, doc 47): resolves all parameterised edges, processes in **topological order** (START nodes first, then downstream) with cached upstream frames feeding downstream Tier 2 empirical carriers.
+
+**Inner pipeline per edge** ([api_handlers.py:2625-2911](../../graph-editor/lib/api_handlers.py#L2625-L2911)):
+1. Snapshot DB query → raw rows within sweep range
+2. Regime selection per doc 30
+3. `derive_cohort_maturity` → virtual per-day frames
+4. `compose_path_maturity_frames` → span-level evidence composition (x-incident vs y-incident edges per doc 29c)
+5. `compose_span_kernel` → encodes graph topology as convolution kernel
+6. Upstream carrier (cohort mode): `_fetch_upstream_observations` pulls from whole-graph topo cache, builds `XProvider` for IS conditioning
+7. `compute_cohort_maturity_rows_v3` → `compute_forecast_sweep` → full v3 MC with IS
+8. Extract scalar `p@∞` and `completeness` from last row
+
+**Per-draw mechanics**: `compute_forecast_sweep` uses `resolved.alpha_pred, beta_pred` from the promoted source (typically bayesian) as the proposal distribution; draws `p_draws ~ Beta(α_pred, β_pred)`; applies IS weights `w_s = Π_c Binomial.pmf(k_c | n_c, p_s · CDF_s(τ_c))` using query-scoped cohort evidence. The conditioned posterior is the IS-reweighted draw set.
+
+**Outputs**: per-edge per-scenario `{p_mean, p_sd, completeness, completeness_sd, tau_max, n_rows, n_cohorts}` returned via API response. Applied to graph via `conditionedForecastService.applyConditionedForecastToGraph` — writes `edge.p.blendedMean`, `edge.p.latency.completeness`, `edge.p.latency.completeness_stdev`, `edge.p.forecast.mean`, `edge.p.sd`. CF owns these fields per doc 45; earlier FE/BE topo values are overwritten on arrival.
+
+**Query-scoping**: this is the *most thorough* query-scoping of any subsystem. IS conditioning updates the aggregate bayesian posterior specifically to the user's query-DSL-scoped snapshot evidence, per edge.
+
+**Distinction from BE topo pass**: BE topo is analytic + minimal per-edge forecast tail; BE CF is full MC with proper IS on per-edge snapshot evidence, topologically sequenced with upstream carrier propagation. CF supersedes topo's `p.mean`/`completeness` when it lands.
+
+**Distinction from cohort_maturity analysis runner**: they share the v3 pipeline (derive → compose → row builder). The cohort_maturity runner returns chart-ready rows for one target edge/span; the CF pass runs the same pipeline across the whole graph and extracts scalar per-edge outputs. Shared code → guaranteed parity.
+
+**Key files**: `lib/api_handlers.py:2506-2925` (handler), `lib/runner/cohort_forecast_v3.py` (v3 row builder), `lib/runner/forecast_state.py:1040+` (`compute_forecast_sweep`), `lib/runner/cohort_maturity_derivation.py`, `lib/runner/span_evidence.py`, `lib/runner/span_kernel.py`, `src/services/conditionedForecastService.ts` (client).
+
+**Design docs**: doc 45 (forecast parity), doc 47 (whole-graph pass), doc 29 (generalised forecast engine), doc 29c (evidence composition), doc 29g (IS conditioning + sweep), doc 30 (regime selection), doc 31 (subject resolution), doc 50 (CF generality gap — known limitation around lagless edges).
+
+### 3.5 BE analysis runners (per-query chart/result production)
+
+**What they are**: the runners that respond to user query requests for specific analysis types (path, funnel, cohort_maturity, path_to_end, branch_comparison, etc.). Each consumes the enriched graph and produces chart rows or scalar results.
+
+**Trigger**: `POST /api/runner/analyze` → `handle_runner_analyze` ([api_handlers.py:949](../../graph-editor/lib/api_handlers.py#L949)). Dispatched via `analysis_types.yaml` rules.
+
+**Scope**: subjects resolved from the query DSL — typically a single edge, path, or span, not the whole graph.
+
+**Two categories**:
+- **Graph-consumer runners** (path, funnel, path_to_end, path_through, branch_comparison, end_comparison): read `edge.p.mean` (as set by prior passes, selected by `apply_visibility_mode` for e/f/e+f), walk the DAG via DFS+memoisation, multiply scalars. Assume the graph has been enriched by FE/BE topo + CF passes. Scalar output, no MC, no uncertainty.
+- **In-band MC runners** (cohort_maturity, surprise_gauge): don't rely on pre-baked scalars. Fetch their own snapshot DB evidence per request and invoke `compute_forecast_sweep` directly. Produce per-τ rows with MC quantiles, fan bands, completeness.
+
+**Do analysis runners trigger the CF pass?**: **no**. They consume whatever state the graph is in. The CF pass runs during Stage 2 of the fetch pipeline (before analyses execute), so the graph is typically already enriched when analyses run. If CF hasn't landed, runners read the FE/BE topo fallback scalars (via promotion). The funnel, path, etc. runners don't know or care which source produced the scalars they're reading — they just consume `edge.p.mean`.
+
+**apply_visibility_mode** ([graph_builder.py:564](../../graph-editor/lib/runner/graph_builder.py#L564)): mutates `edge['p']` in place per visibility mode:
+- `'e'`: `p = edge.evidence.mean` (raw k/n), complement-fill for failure edges
+- `'f'`: `p = edge.forecast.mean` (asymptote — same value as CF's `p.mean` when CF landed)
+- `'f+e'`: `p = edge.p.mean` as-is (the CF-conditioned or topo-pass-blended value)
+
+**Key files**: `lib/runner/runners.py` (all run_* functions), `lib/runner/graph_builder.py` (apply_visibility_mode), `lib/runner/analysis_types.yaml` (dispatch rules), `lib/runner/cohort_forecast_v3.py` (cohort_maturity pipeline — shared with CF pass).
+
+**Design docs**: `ANALYSIS_TYPES_CATALOGUE.md` (what each analysis computes), `adding-analysis-types.md` (developer guide), `CHART_PIPELINE_ARCHITECTURE.md` (chart rendering), doc 29 (forecast engine architecture).
+
+---
+
+## 4. Pipeline sequence — what happens per query
+
+Query execution flow through the subsystems. "Q" denotes a user-initiated query; numbered steps run in sequence (within each step, parallel fans indicated).
+
+```
+Bayes compiler (offline, separate) → writes model_vars[source='bayesian']
+                                                  |
+                                                  ↓
+                                     (durable, survives across queries)
+                                                  |
+Q. User issues query ─────────────────────────────┘
+│
+├─ Stage 1: Fetch snapshot DB / parameter files (cohortWindow respected)
+│
+├─ Stage 2: Enrichment (three subsystems in parallel)
+│   │
+│   ├─ FE topo pass (sync, blocks UI)
+│   │    Writes: model_vars[analytic], promoted p.latency.*, blendedMean
+│   │
+│   ├─ BE topo pass (async, fire-and-forget)
+│   │    Writes: model_vars[analytic_be], promoted p.latency.* (after promotion)
+│   │    Re-runs promotion → analytic_be or analytic becomes authoritative
+│   │
+│   └─ BE CF pass (async, races 500ms deadline)
+│        Writes: p.mean, p.sd, latency.completeness, completeness_stdev
+│        Overwrites FE blendedMean and topo-pass completeness on arrival
+│
+├─ Stage 3: Render
+│    (Charts/analyses consume the enriched graph's promoted fields)
+│
+└─ Stage 4: BE analysis runner (per user-requested chart/analysis)
+     Reads: edge.p.mean (via apply_visibility_mode), edge.p.latency.*
+     Exception: cohort_maturity runs its own MC via compute_forecast_sweep
+                with its own snapshot fetch (doesn't rely on prior enrichment)
+```
+
+**Timing reality**: Stage 2's three passes have different completion windows:
+- FE topo: immediate (milliseconds, synchronous)
+- BE topo: typically tens–hundreds of ms
+- CF pass fast path: under 500ms, merges into FE's single render
+- CF pass slow path: exceeds 500ms, renders FE fallback then overwrites
+
+The render at Stage 3 uses whatever state has landed. Late arrivals from Stage 2 trigger a second render if they changed promoted fields.
+
+---
+
+## 5. Common confusions and their corrections
+
+**Confusion 1: "the BE stats pass"**
+There is no single BE stats pass. There are three: BE topo pass (fast analytic), BE CF pass (sophisticated MC), and (separately) the offline Bayes compiler. When someone says "the BE stats pass", ask which one.
+
+**Confusion 2: "the topo pass does IS conditioning"**
+No — the **BE CF pass** does IS conditioning. The BE topo pass does analytic Fenton-Wilkinson composition plus a minimal forecast-engine call per edge with single-point evidence. The sophisticated topological IS work lives in the CF pass.
+
+**Confusion 3: "p.posterior.alpha is query-scoped"**
+The field lives under `model_vars[source='bayesian'].probability.alpha`. When that source is promoted, it's accessible via `p.posterior.alpha`. It is **not query-scoped** — it's from the offline Bayes compiler fit. Query-scoped α/β per edge is `analytic_be`'s output, which is a Jeffreys-style posterior from scoped `total_k, total_n` (separate from Bayes).
+
+**Confusion 4: "analysis runners trigger the BE CF pass"**
+They don't. Analysis runners consume whatever enrichment Stage 2 has already produced. The CF pass is independent — it runs for every fetch, not per analysis request.
+
+**Confusion 5: "the funnel uses compute_forecast_sweep"**
+Today's funnel (`run_conversion_funnel` → `run_path`) uses **pre-baked scalars** via `apply_visibility_mode`. It doesn't call `compute_forecast_sweep` at all. The sophisticated machinery is upstream in the BE CF pass, which has already computed per-edge conditioned means. The funnel is a pure consumer.
+
+**Confusion 6: "Bayes compiler's α/β gets re-conditioned at query time"**
+No. Bayes produces an **aggregate** posterior from the training corpus; that's durable. The BE CF pass does query-time IS conditioning of **draws** from that posterior, producing a conditioned posterior-representation (mean, SD) written to `p.mean, p.sd`. The bayesian α/β themselves don't change.
+
+**Confusion 7: "FE topo pass and BE topo pass compete"**
+They're intentionally parallel during the transition (doc 45). FE writes `analytic`; BE writes `analytic_be`; promotion picks one per preference. Parity is enforced by `forecastingParityService.ts`. Target state is BE-authoritative; FE will eventually be retired.
+
+---
+
+## 6. Field authority cheat sheet
+
+When you read a field, know who wrote it:
+
+- `edge.p.model_vars[source='bayesian'].*` → always and only the Bayes compiler (offline)
+- `edge.p.model_vars[source='analytic'].*` → FE topo pass (browser)
+- `edge.p.model_vars[source='analytic_be'].*` → BE topo pass
+- `edge.p.latency.mu, sigma, t95, ...` → promoted from whichever model_vars source is active (per `resolveActiveModelVars`)
+- `edge.p.evidence.{mean, n, k}` → topo-pass evidence aggregation (from scoped snapshot data)
+- `edge.p.mean, edge.p.sd` → BE CF pass when landed; else FE/BE topo pass's blended fallback
+- `edge.p.latency.completeness, completeness_stdev` → BE CF pass when landed; else topo pass's CDF eval
+- `edge.p.forecast.mean` → BE CF pass (same value as `p.mean` when CF landed); legacy field name retained
+
+If you need to know *which specific pass* wrote the current value of a flat field, trace through the promotion layer (`modelVarsResolution.ts`) and the session log entries for that fetch generation (`BE_TOPO_PASS`, `CONDITIONED_FORECAST`, `FE_BE_PARITY`).
+
+---
+
+## 7. When to read what — task-type guidance
+
+- **Touching Bayes compiler internals**: start with `docs/current/project-bayes/INDEX.md`; key docs are phase-specific.
+- **Modifying topo pass (FE or BE)**: start with `FE_BE_STATS_PARALLELISM.md`, then `LAG_ANALYSIS_SUBSYSTEM.md`. Parity tests are critical.
+- **Modifying BE CF pass**: start with `FE_BE_STATS_PARALLELISM.md` §"Conditioned forecast pass", then `project-bayes/45-forecast-parity-design.md`, `project-bayes/47-*.md` (whole-graph), `project-bayes/29g-*.md` (IS + sweep), `project-bayes/50-cf-generality-gap.md` (open issues).
+- **Modifying analysis runners**: start with `ANALYSIS_TYPES_CATALOGUE.md`, then the specific runner in `runners.py` and its design doc.
+- **Design work that consumes graph state**: read this doc + `STATISTICAL_DOMAIN_SUMMARY.md` before writing designs that assume any particular pass has run.
+
+Do not write designs that invent new "passes" without first locating the existing five subsystems and confirming your addition is genuinely new rather than a rename of existing work.

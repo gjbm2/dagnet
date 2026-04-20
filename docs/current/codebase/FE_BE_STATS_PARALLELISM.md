@@ -2,7 +2,7 @@
 
 Why both frontend and backend run the same statistical topo pass, how they're coordinated, and the transition plan.
 
-**See also**: `LAG_ANALYSIS_SUBSYSTEM.md` (what the topo pass actually computes — t95, mu/sigma, lag fit detail), `STATISTICAL_DOMAIN_SUMMARY.md` (broader statistical architecture), `PROBABILITY_BLENDING.md` (how computed values feed into blended probabilities)
+**See also**: `STATS_SUBSYSTEMS.md` (**start here if you don't already know how the five statistical subsystems differ** — this doc covers only FE topo / BE topo / CF orchestration), `LAG_ANALYSIS_SUBSYSTEM.md` (what the topo pass actually computes — t95, mu/sigma, lag fit detail), `STATISTICAL_DOMAIN_SUMMARY.md` (broader statistical architecture), `PROBABILITY_BLENDING.md` (how computed values feed into blended probabilities)
 
 ## Context
 

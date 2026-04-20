@@ -537,7 +537,8 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
                               f"mean={eps.mean():.3f} std={eps.std():.3f}")
 
             # Extract per-slice cohort posteriors from trace2
-            import numpy as _np2
+            import arviz as _az
+            from compiler.types import HDI_PROB as _HDI_PROB
             for post in inference_result.posteriors:
                 edge_id = post.edge_id
                 safe_eid = edge_id.replace("-", "_")
@@ -553,6 +554,7 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
                             _ps = trace2.posterior[p_name].values.flatten()
                             _p_mean = float(_ps.mean())
                             _p_std = float(_ps.std())
+                            _p_hdi = _az.hdi(_ps, hdi_prob=_HDI_PROB)
                             _alpha, _beta = _p_mean, 1.0 - _p_mean
                             if _p_std > 1e-6 and 0 < _p_mean < 1:
                                 _v = _p_std ** 2
@@ -565,6 +567,8 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
                                 "beta": _beta,
                                 "p_mean": _p_mean,
                                 "p_sd": _p_std,
+                                "hdi_lower": float(_p_hdi[0]),
+                                "hdi_upper": float(_p_hdi[1]),
                             }
                             _log(log, f"  Phase 2 slice {edge_id[:8]}… {ctx_key}: "
                                       f"p={_p_mean:.4f}±{_p_std:.4f}")
@@ -1422,6 +1426,8 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
             # Extract Phase 2 per-slice cohort posteriors from trace2.
             # These replace the window-copy fallback in _build_unified_slices.
             import numpy as _np2
+            import arviz as _az
+            from compiler.types import HDI_PROB as _HDI_PROB
             for post1 in inference_result.posteriors:
                 edge_id = post1.edge_id
                 safe_eid = edge_id.replace("-", "_")
@@ -1438,6 +1444,7 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
                             _ps = trace2.posterior[p_name].values.flatten()
                             _p_mean = float(_ps.mean())
                             _p_std = float(_ps.std())
+                            _p_hdi = _az.hdi(_ps, hdi_prob=_HDI_PROB)
                             _alpha, _beta = _p_mean, 1.0 - _p_mean  # fallback
                             if _p_std > 1e-6 and 0 < _p_mean < 1:
                                 _v = _p_std ** 2
@@ -1450,6 +1457,8 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
                                 "beta": _beta,
                                 "p_mean": _p_mean,
                                 "p_sd": _p_std,
+                                "hdi_lower": float(_p_hdi[0]),
+                                "hdi_upper": float(_p_hdi[1]),
                             }
                 if cohort_slice_posts:
                     post1.cohort_slice_posteriors = cohort_slice_posts
@@ -1915,16 +1924,26 @@ def _build_binding_receipt(
         er.divergences = divergences
 
         # Assign verdict
-        # All expected hashes empty is only a fail if data didn't arrive
-        # via equivalence (rows_raw == 0 or total_n == 0). If data was
-        # found via equivalent hashes, the primary hash being absent is
-        # a warn, not a fail.
+        # Fail scenarios:
+        #   A. DB empty AND no fallback data    — rows_raw=0, total_n=0
+        #   B. DB empty, engorged/param fallback used — rows_raw=0, total_n>0
+        #      (per-slice context data is lost by fallback — treat as FAIL
+        #       so the data-loss surfaces rather than masking it as a warn)
+        #   D. DB rows found but filtered out    — rows_raw>0, total_n=0
+        #
+        # Warn scenario:
+        #   C. Primary hash empty but equivalence found rows — rows_raw>0,
+        #      total_n>0. Data is bound legitimately; report divergence.
+        #
+        # Distinguishing B vs C: both have `all_hashes_empty=True`, but B
+        # has rows_raw==0 (DB returned nothing at all) and C has
+        # rows_raw>0 (DB returned rows under an equivalent hash).
         all_hashes_empty = er.expected_hashes and all(h in er.hashes_empty for h in er.expected_hashes)
-        all_hashes_empty_and_no_data = all_hashes_empty and (er.rows_raw == 0 or er.total_n == 0)
+        db_query_matched_nothing = all_hashes_empty and er.rows_raw == 0
         all_slices_missing = (er.expected_slices and er.missing_slices
                               and set(er.missing_slices) == set(er.expected_slices))
         has_fail = (
-            all_hashes_empty_and_no_data or
+            db_query_matched_nothing or
             (er.rows_raw > 0 and er.total_n == 0) or
             all_slices_missing
         )
@@ -2289,8 +2308,8 @@ def _build_unified_slices(
                 cohort_entry: dict = {
                     "alpha": round(_csp["alpha"], 4),
                     "beta": round(_csp["beta"], 4),
-                    "p_hdi_lower": entry["p_hdi_lower"],  # TODO: compute from cohort posterior
-                    "p_hdi_upper": entry["p_hdi_upper"],
+                    "p_hdi_lower": round(_csp["hdi_lower"], 6),
+                    "p_hdi_upper": round(_csp["hdi_upper"], 6),
                     "ess": entry["ess"],
                     "rhat": entry["rhat"],
                     "provenance": "bayesian",

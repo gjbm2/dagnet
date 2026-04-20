@@ -465,6 +465,21 @@ def compute_conditioned_forecast(
 ) -> ConditionedForecast:
     """Compute ESS-regularised aggregate IS-conditioned forecast.
 
+    SUBSYSTEM GUIDE — When to call this (see docs/current/codebase/
+    STATS_SUBSYSTEMS.md §3.4):
+      - Narrow per-edge IS helper. Historical caller is the surprise
+        gauge (doc 55 rework will supersede its remaining use). Returns
+        a single edge's conditioned draws against a passed evidence
+        list — does NOT handle span topology, upstream carriers,
+        topological sequencing, or per-cohort population dynamics.
+      - New analysis runners needing conditioned forecast output
+        SHOULD NOT call this. Use `handle_conditioned_forecast` (the
+        BE CF pass endpoint) scoped to your analysis path — it
+        delegates the right inner kernel per scope and coordinates
+        multi-edge state. For full cohort-population semantics the
+        correct inner kernel is `compute_forecast_sweep` above, not
+        this one.
+
     Draws (p, mu, sigma, onset) from the joint posterior, evaluates
     completeness at each cohort age per draw, applies IS conditioning
     against observed evidence, and returns conditioned draws + point
@@ -1055,6 +1070,25 @@ def compute_forecast_sweep(
     edge_cdf_arr: Optional[np.ndarray] = None,
 ) -> ForecastSweepResult:
     """Per-cohort population model sweep — generalised from v2.
+
+    SUBSYSTEM GUIDE — When to call this (see docs/current/codebase/
+    STATS_SUBSYSTEMS.md §3.4):
+      - This is an INNER KERNEL. Intended callers are
+        `compute_cohort_maturity_rows_v3` (chart row builder) and
+        `handle_conditioned_forecast` (BE CF pass enrichment handler).
+      - New analysis runners SHOULD NOT call this directly. Instead
+        call `handle_conditioned_forecast` (or its /api/forecast/
+        conditioned endpoint) with an `analytics_dsl` scoped to your
+        analysis path. That handler wraps this function with the
+        topo-sequencing, upstream-carrier caching, span-kernel
+        composition, and subject resolution that multi-hop paths
+        require for correctness (doc 47). Calling this function
+        directly per-edge from an analysis runner bypasses all of
+        that coordination and produces subtly wrong numbers.
+      - Surprise gauge historically called `compute_conditioned_forecast`
+        (below) for its simpler per-edge IS semantics; new consumers
+        of a full cohort-population forecast should go through the
+        handler instead.
 
     Reproduces cohort_forecast_v2.py lines 796-912. For each draw,
     for each cohort, for each τ:

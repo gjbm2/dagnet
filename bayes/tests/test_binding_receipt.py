@@ -444,10 +444,71 @@ class TestFixture06SilentFallback:
         )
 
         er = receipt.edge_receipts[edge_id]
-        # All expected hashes empty → fail verdict
+        # All expected hashes empty → fail verdict. Param-file fallback
+        # provides aggregate-only data and loses per-slice context info;
+        # treating this as a warn hides real data loss, so keep it as a
+        # hard fail (see journal: hash-mismatch binding defect).
         assert er.verdict == "fail"
         assert er.hashes_empty == [core_hash]
         assert any("all expected hashes" in d for d in er.divergences)
+
+
+# ---------------------------------------------------------------------------
+# Fixture 6b: Engorged graph — DB empty, data on the graph edge
+# ---------------------------------------------------------------------------
+
+class TestFixture06bEngorgedGraph:
+    """Engorged graphs carry _bayes_evidence directly on graph edges,
+    so the snapshot DB query legitimately returns zero rows for every
+    expected hash. Evidence is bound from the engorged edge instead.
+
+    Before the fix at worker.py:1932 the verdict used OR logic:
+        all_hashes_empty AND (rows_raw == 0 OR total_n == 0)
+    which flagged these as fail even when total_n > 0. That produced
+    false-fail receipts and, after the devtooling update, mis-classified
+    solo-lifecycle as an infrastructure failure despite a successful run.
+
+    After the fix: hashes-empty + total_n > 0 is a warn, not a fail.
+    """
+
+    def test_engorged_graph_with_db_empty(self):
+        edge_id = "edge-1"
+        core_hash = "hash-engorged"
+
+        topo = _topo({edge_id: {"param_id": "param-1"}})
+
+        snapshot_subjects = [
+            {"edge_id": edge_id, "core_hash": core_hash,
+             "slice_keys": [], "anchor_from": "2025-01-01", "anchor_to": "2025-06-01"},
+        ]
+        candidate_regimes = {edge_id: [{"core_hash": core_hash}]}
+
+        # DB returned 0 rows for the expected hash — engorged evidence
+        # bound from the graph edge instead.
+        rows_raw = {edge_id: 0}
+        hashes_seen = {edge_id: set()}
+        regimes = {}
+
+        evidence = _evidence({edge_id: {
+            "param_id": "param-1",
+            "total_n": 200528,
+            "has_window": True,
+        }})
+
+        receipt = _build_binding_receipt(
+            topo, evidence, snapshot_subjects, candidate_regimes,
+            rows_raw, hashes_seen, regimes, mode="log",
+        )
+
+        er = receipt.edge_receipts[edge_id]
+        # Engorged data arrived, but all expected snapshot hashes
+        # returned empty. That is a fail — the engorged fallback loses
+        # per-slice context information and masks a real hash-mismatch
+        # defect if treated as a warn.
+        assert er.verdict == "fail"
+        assert er.total_n == 200528
+        assert er.rows_raw == 0
+        assert receipt.edges_failed == 1
 
 
 # ---------------------------------------------------------------------------

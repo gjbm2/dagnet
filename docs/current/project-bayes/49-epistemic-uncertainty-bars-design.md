@@ -697,8 +697,9 @@ The semantics of "epistemic uncertainty on a funnel stage" differ from
 "epistemic uncertainty on a daily rate" — funnel stages aggregate
 across time and cohorts, so the epistemic interval is not a simple
 per-bin HDI lookup. Bridge charts decompose differences between
-scenarios, adding further compositional complexity. Needs fresh
-reasoning.
+scenarios, adding further compositional complexity.
+
+**Update (20-Apr-26)**: funnel hi/lo bars reasoning resolved in [52-funnel-hi-lo-bars-design.md](52-funnel-hi-lo-bars-design.md) — Level 2 design routing funnel computation through the MC forecast engine with per-regime semantics (e / f / e+f), stacked-bar visualisation with striated residual, and IS conditioning for the e+f case. Implementation pending approval. Bridge charts are discussed there as a derived view, to be scoped separately.
 
 ---
 

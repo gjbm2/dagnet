@@ -2,7 +2,7 @@
 
 **Status**: Problem statement + proposal — not yet implemented
 **Created**: 18-Apr-26
-**Related**: doc 45 (forecast-parity-design), doc 47 (whole-graph-forecast-pass), doc 29g (engine IS + sweep design)
+**Related**: doc 45 (forecast-parity-design), doc 47 (whole-graph-forecast-pass), doc 29g (engine IS + sweep design), doc 54 (cf-readiness-protocol — downstream consumer of the per-edge CF contract)
 
 ## TL;DR
 
@@ -195,6 +195,16 @@ result) OR in `skipped_edges` (with a `reason`). No silent drops.
 Reasons: `'no latency and no evidence'`, `'no snapshot rows after
 regime selection'`, `'DSL matched no subjects on this edge'`,
 `'resolver returned no promoted source'`.
+
+This structured channel is the contract [doc 54 (CF readiness
+protocol)](54-cf-readiness-protocol.md) consumes to distinguish "CF
+still pending" from "CF ran and intentionally skipped this edge" from
+"CF failed". Class B edges (lagless with evidence) must mark as
+CF-applied in the readiness store — not forever-pending — so
+downstream analyses with `cf_dependency: preferred` can upgrade from
+approximate to definitive correctly. Reason strings here are part of
+the public contract; pick them with doc 54's consumer behaviour in
+mind.
 
 ### 3.3 Shared helper for the per-edge call
 

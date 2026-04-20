@@ -345,3 +345,62 @@ class TestBuildUnifiedSlices:
         w = slices["window()"]
         assert "mu_mean" not in w
         assert "sigma_mean" not in w
+
+    def _lat_with_cohort(self, **overrides) -> LatencyPosteriorSummary:
+        """Latency posterior with path-level fields so cohort() is emitted."""
+        return self._base_lat(
+            path_mu_mean=2.81, path_mu_sd=0.12,
+            path_sigma_mean=0.58, path_sigma_sd=0.06,
+            path_onset_delta_days=3.2,
+            path_provenance="bayesian",
+            **overrides,
+        )
+
+    def test_per_slice_cohort_uses_cohort_hdi_not_window(self):
+        """Per-slice context(...).cohort() must use cohort posterior HDI, not window's.
+
+        Regression: worker previously copied entry["p_hdi_lower/upper"] from the
+        window slice even when a per-slice cohort posterior existed. Result was
+        α/β from cohort but interval from window — silently wrong."""
+        prob = self._base_prob()
+        prob.slice_posteriors = {
+            "channel:direct": {
+                "alpha": 40.0, "beta": 120.0,
+                "hdi_lower": 0.22, "hdi_upper": 0.33,
+            },
+        }
+        prob.cohort_slice_posteriors = {
+            "channel:direct": {
+                "alpha": 55.0, "beta": 105.0,
+                "p_mean": 0.344, "p_sd": 0.037,
+                "hdi_lower": 0.275, "hdi_upper": 0.415,
+            },
+        }
+        slices = _build_unified_slices(prob, self._lat_with_cohort())
+        c = slices["context(channel:direct).cohort()"]
+        assert c["provenance"] == "bayesian"
+        assert c["alpha"] == 55.0
+        assert c["beta"] == 105.0
+        assert c["p_hdi_lower"] == 0.275
+        assert c["p_hdi_upper"] == 0.415
+        w = slices["context(channel:direct).window()"]
+        assert w["p_hdi_lower"] == 0.22
+        assert w["p_hdi_upper"] == 0.33
+
+    def test_per_slice_cohort_window_copy_fallback(self):
+        """When no per-slice cohort posterior exists, fall back to window-copy."""
+        prob = self._base_prob()
+        prob.slice_posteriors = {
+            "channel:direct": {
+                "alpha": 40.0, "beta": 120.0,
+                "hdi_lower": 0.22, "hdi_upper": 0.33,
+            },
+        }
+        # cohort_slice_posteriors left empty
+        slices = _build_unified_slices(prob, self._lat_with_cohort())
+        c = slices["context(channel:direct).cohort()"]
+        assert c["provenance"] == "window-copy"
+        assert c["alpha"] == 40.0
+        assert c["beta"] == 120.0
+        assert c["p_hdi_lower"] == 0.22
+        assert c["p_hdi_upper"] == 0.33

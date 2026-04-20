@@ -21,6 +21,10 @@ from results_schema import (
     compute_bias_profile,
     serialise_audit,
     serialise_result,
+    classify_status,
+    classify_convergence,
+    classify_bias,
+    classify_quality,
 )
 
 
@@ -639,3 +643,226 @@ class TestSerialiseDesign:
         assert s["design"]["topology"] == "solo"
         assert s["design"]["sparsity"]["frame_drop_rate"] == 0.15
         assert s["design"]["context_dimensions"][0]["lifecycles"][0]["active_to_day"] == 60
+
+
+# ---------------------------------------------------------------------------
+# classify_status — status = "fail" | "completed"
+# ---------------------------------------------------------------------------
+
+class TestClassifyStatus:
+    """Status classification separates infrastructure failures from
+    completed runs. Completed runs may still have quality issues, but
+    those are a separate concern — the binary PASS/FAIL construct is
+    retired."""
+
+    def test_harness_failure_is_fail(self):
+        failures = [{"type": "harness", "message": "crashed"}]
+        assert classify_status(False, failures, {"rhat": 1.0}) == "fail"
+
+    def test_timeout_is_fail(self):
+        failures = [{"type": "timeout", "message": "out of time"}]
+        assert classify_status(False, failures, {"rhat": 1.0}) == "fail"
+
+    def test_empty_quality_is_fail(self):
+        assert classify_status(True, [], {}) == "fail"
+        assert classify_status(True, [], None) == "fail"
+
+    def test_quality_with_none_metrics_is_fail(self):
+        q = {"rhat": None, "ess": None, "converged_pct": None}
+        assert classify_status(True, [], q) == "fail"
+
+    def test_quality_present_is_completed(self):
+        q = {"rhat": 1.001, "ess": 5000, "converged_pct": 100}
+        assert classify_status(True, [], q) == "completed"
+
+    def test_zscore_failure_still_completed(self):
+        """z-score misses are quality issues, not infrastructure failures —
+        the run produced a posterior."""
+        failures = [{"type": "z_score", "message": "big miss"}]
+        q = {"rhat": 1.001, "ess": 5000, "converged_pct": 100}
+        assert classify_status(False, failures, q) == "completed"
+
+    def test_convergence_failure_still_completed(self):
+        """Convergence thresholds missed does not mean no posterior —
+        graph completed but quality is poor."""
+        failures = [{"type": "convergence", "message": "rhat high"}]
+        q = {"rhat": 1.5, "ess": 10, "converged_pct": 0}
+        assert classify_status(False, failures, q) == "completed"
+
+    def test_binding_failure_is_fail(self):
+        """Zero edges bound → posteriors from priors only, not the data.
+        Must not be confused with a clean completion."""
+        failures = [{"type": "binding", "message": "0 bound"}]
+        q = {"rhat": 1.001, "ess": 5000, "converged_pct": 100}
+        assert classify_status(False, failures, q) == "fail"
+
+    def test_missing_edge_is_fail(self):
+        """Truth edge has no posterior — model didn't emit variables
+        for the edges the truth expected. This is an infrastructure
+        problem, not a quality issue."""
+        failures = [{"type": "missing_edge", "edge": "e1", "message": "gone"}]
+        q = {"rhat": 1.001, "ess": 5000, "converged_pct": 100}
+        assert classify_status(False, failures, q) == "fail"
+
+    def test_missing_slice_is_fail(self):
+        failures = [{"type": "missing_slice", "slice": "ctx-a", "message": "gone"}]
+        q = {"rhat": 1.001, "ess": 5000, "converged_pct": 100}
+        assert classify_status(False, failures, q) == "fail"
+
+    def test_audit_alone_is_completed(self):
+        """Audit-layer warnings are soft signals — the run produced
+        posteriors, so the status stays completed. The verdict is
+        downgraded in classify_quality."""
+        failures = [{"type": "audit", "message": "kappa_lat mismatch"}]
+        q = {"rhat": 1.001, "ess": 5000, "converged_pct": 100}
+        assert classify_status(False, failures, q) == "completed"
+
+
+# ---------------------------------------------------------------------------
+# classify_convergence
+# ---------------------------------------------------------------------------
+
+class TestClassifyConvergence:
+    def test_unknown_when_empty(self):
+        assert classify_convergence(None)["verdict"] == "unknown"
+        assert classify_convergence({})["verdict"] == "unknown"
+
+    def test_all_within_thresholds_is_ok(self):
+        q = {"rhat": 1.001, "ess": 5000, "converged_pct": 100}
+        c = classify_convergence(q)
+        assert c["verdict"] == "ok"
+        assert c["breaches"] == []
+
+    def test_marginal_rhat_is_degraded(self):
+        q = {"rhat": 1.08, "ess": 5000, "converged_pct": 100}
+        assert classify_convergence(q)["verdict"] == "degraded"
+
+    def test_severe_rhat_is_failed(self):
+        q = {"rhat": 1.5, "ess": 5000, "converged_pct": 100}
+        assert classify_convergence(q)["verdict"] == "failed"
+
+    def test_low_ess_is_degraded_or_failed(self):
+        q = {"rhat": 1.001, "ess": 100, "converged_pct": 100}
+        assert classify_convergence(q)["verdict"] == "degraded"
+        q = {"rhat": 1.001, "ess": 10, "converged_pct": 100}
+        assert classify_convergence(q)["verdict"] == "failed"
+
+    def test_multiple_breaches_reported(self):
+        q = {"rhat": 1.08, "ess": 100, "converged_pct": 80}
+        c = classify_convergence(q)
+        # degraded on all three axes
+        assert c["verdict"] == "degraded"
+        assert len(c["breaches"]) == 3
+
+
+# ---------------------------------------------------------------------------
+# classify_bias
+# ---------------------------------------------------------------------------
+
+class TestClassifyBias:
+    def test_empty_profile_returns_empty(self):
+        assert classify_bias(None) == {}
+        assert classify_bias({}) == {}
+
+    def test_small_bias_is_ok(self):
+        profile = {
+            "p": {
+                "n": 10, "mean_bias": 0.005, "direction": "+",
+                "consistency": "6/10", "max_z": 1.0,
+            },
+        }
+        assert classify_bias(profile)["p"]["verdict"] == "ok"
+
+    def test_large_consistent_bias_is_biased(self):
+        profile = {
+            "p": {
+                "n": 10, "mean_bias": 0.08, "direction": "+",
+                "consistency": "9/10", "max_z": 10.0,
+            },
+        }
+        assert classify_bias(profile)["p"]["verdict"] == "biased"
+
+    def test_large_inconsistent_bias_is_ok(self):
+        """Large mean bias but direction split ~50/50 → not systematic."""
+        profile = {
+            "p": {
+                "n": 10, "mean_bias": 0.08, "direction": "~",
+                "consistency": "5/10", "max_z": 10.0,
+            },
+        }
+        assert classify_bias(profile)["p"]["verdict"] == "ok"
+
+    def test_small_sample_never_biased(self):
+        """n=2 below min_n=3 — never flagged as systematic."""
+        profile = {
+            "p": {
+                "n": 2, "mean_bias": 0.5, "direction": "+",
+                "consistency": "2/2", "max_z": 20.0,
+            },
+        }
+        assert classify_bias(profile)["p"]["verdict"] == "ok"
+
+
+# ---------------------------------------------------------------------------
+# classify_quality — combined verdict
+# ---------------------------------------------------------------------------
+
+class TestClassifyQuality:
+    def test_clean_when_all_ok(self):
+        q = {"rhat": 1.001, "ess": 5000, "converged_pct": 100}
+        result = classify_quality(q, {}, [])
+        assert result["verdict"] == "clean"
+
+    def test_systematic_bias_verdict(self):
+        q = {"rhat": 1.001, "ess": 5000, "converged_pct": 100}
+        bias = {
+            "p": {
+                "n": 10, "mean_bias": 0.08, "direction": "+",
+                "consistency": "9/10", "max_z": 10.0,
+            },
+        }
+        result = classify_quality(q, bias, [])
+        assert result["verdict"] == "systematic_bias"
+        assert "p" in result["biased_params"]
+
+    def test_convergence_global_failure(self):
+        q = {"rhat": 1.5, "ess": 10, "converged_pct": 0}
+        result = classify_quality(q, {}, [])
+        assert result["verdict"] == "convergence_global_failure"
+
+    def test_bias_and_convergence_issues(self):
+        q = {"rhat": 1.5, "ess": 10, "converged_pct": 0}
+        bias = {
+            "p": {
+                "n": 10, "mean_bias": 0.08, "direction": "+",
+                "consistency": "9/10", "max_z": 10.0,
+            },
+        }
+        result = classify_quality(q, bias, [])
+        assert result["verdict"] == "bias_and_convergence_issues"
+
+    def test_point_convergence_failure(self):
+        """Global convergence ok but point-level convergence failure
+        flagged by the assertion layer."""
+        q = {"rhat": 1.001, "ess": 5000, "converged_pct": 100}
+        failures = [{"type": "convergence", "edge": "e1", "message": "point"}]
+        result = classify_quality(q, {}, failures)
+        assert result["verdict"] == "convergence_point_failure"
+
+    def test_z_score_miss_is_bias_issue(self):
+        q = {"rhat": 1.001, "ess": 5000, "converged_pct": 100}
+        failures = [{"type": "z_score", "edge": "e1", "param": "p",
+                     "message": "big z"}]
+        result = classify_quality(q, {}, failures)
+        # z-score points count as bias_points → systematic_bias verdict
+        assert result["verdict"] == "systematic_bias"
+        assert len(result["bias_points"]) == 1
+
+    def test_data_integrity_warning_verdict(self):
+        """An audit flag alone (e.g. kappa_lat mismatch) surfaces as a
+        softer verdict than a bias or convergence issue."""
+        q = {"rhat": 1.001, "ess": 5000, "converged_pct": 100}
+        failures = [{"type": "audit", "message": "KAPPA_LAT: 0 variables"}]
+        result = classify_quality(q, {}, failures)
+        assert result["verdict"] == "data_integrity_warning"
+        assert len(result["data_integrity_points"]) == 1

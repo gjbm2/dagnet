@@ -336,21 +336,29 @@ def _print_variant_comparison(all_results: dict[str, list[dict]]) -> None:
     print(header)
     print(f"  {'─' * 40}" + f"  {'─' * 20}" * len(variant_names))
 
+    from results_schema import (
+        classify_status as _cs,
+        classify_quality as _cq,
+        compute_bias_profile as _cbp,
+    )
+
     for graph in sorted(graph_names):
         row = f"  {graph:<40s}"
         for v in variant_names:
             r = lookup.get(v, {}).get(graph)
             if r is None:
                 row += f"  {'—':<20s}"
-            elif r["passed"]:
-                q = r.get("quality", {})
-                rhat = q.get("rhat", 0)
-                row += f"  {'PASS':>5s} rhat={rhat:.3f}  "
-            elif r.get("xfail"):
+                continue
+            if r.get("xfail"):
                 row += f"  {'XFAIL':<20s}"
+                continue
+            status = _cs(r.get("passed", False), r.get("failures", []), r.get("quality", {}))
+            if status == "fail":
+                row += f"  {'FAIL':<20s}"
             else:
-                n_fail = len(r.get("failures", []))
-                row += f"  {'FAIL':>5s} ({n_fail} issues) "
+                bias = _cbp(r.get("parsed_edges", {}), r.get("parsed_slices", {}))
+                verdict = _cq(r.get("quality", {}), bias, r.get("failures", [])).get("verdict", "?")
+                row += f"  {verdict:<20s}"
         print(row)
 
     print()
@@ -372,13 +380,21 @@ def write_results_json(
             "variants": {
                 "variant-name": {
                     "total": 10,
-                    "passed": 8,
-                    "failed": 1,
-                    "xfailed": 1,
+                    "completed": 9,        # ran to end with posteriors
+                    "failed": 1,           # infrastructure failure
+                    "xfailed": 0,          # expected-fail marker
+                    "completed_by_verdict": {
+                        "clean": 2,
+                        "systematic_bias": 5,
+                        "convergence_degraded": 2,
+                    },
                     "graphs": [ {serialised result per graph} ]
                 }
             }
         }
+
+    Per-graph `serialise_result` adds `status` ("fail" | "completed")
+    and, when completed, a `classification` block describing quality.
     """
     from results_schema import serialise_result as _serialise
 
@@ -392,16 +408,29 @@ def write_results_json(
     }
 
     for v_name, results in all_results.items():
-        passed = [r for r in results if r.get("passed") and not r.get("xfail")]
-        failed = [r for r in results if not r.get("passed") and not r.get("xfail")]
-        xfailed = [r for r in results if not r.get("passed") and r.get("xfail")]
+        serialised = [_serialise(r) for r in results]
+        failed_count = 0
+        completed_count = 0
+        xfailed_count = 0
+        verdict_counts: dict[str, int] = {}
+        for r, s in zip(results, serialised):
+            if r.get("xfail"):
+                xfailed_count += 1
+                continue
+            if s.get("status") == "fail":
+                failed_count += 1
+            else:
+                completed_count += 1
+                v = (s.get("classification") or {}).get("verdict", "unknown")
+                verdict_counts[v] = verdict_counts.get(v, 0) + 1
 
         envelope["variants"][v_name] = {
             "total": len(results),
-            "passed": len(passed),
-            "failed": len(failed),
-            "xfailed": len(xfailed),
-            "graphs": [_serialise(r) for r in results],
+            "completed": completed_count,
+            "failed": failed_count,
+            "xfailed": xfailed_count,
+            "completed_by_verdict": verdict_counts,
+            "graphs": serialised,
         }
 
     run_id = f"plan-{plan.get('name', 'unknown')}-{int(time.time())}"
@@ -544,13 +573,20 @@ Examples:
 
     all_results = run_plan(plan, overrides)
 
-    # Flatten all variant results for exit code
-    unexpected_failures = []
+    # Exit code: 0 if every graph at least ran to completion (or was
+    # xfail-marked). Only infrastructure failures (harness crash,
+    # timeout, empty posterior) drive non-zero exit. Quality issues
+    # are reported but do not fail the run.
+    from results_schema import classify_status as _cs
+    infra_failures = []
     for results in all_results.values():
-        unexpected_failures.extend(
-            r for r in results if not r["passed"] and not r.get("xfail")
-        )
-    sys.exit(1 if unexpected_failures else 0)
+        for r in results:
+            if r.get("xfail"):
+                continue
+            status = _cs(r.get("passed", False), r.get("failures", []), r.get("quality", {}))
+            if status == "fail":
+                infra_failures.append(r)
+    sys.exit(1 if infra_failures else 0)
 
 
 if __name__ == "__main__":

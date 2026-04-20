@@ -250,6 +250,43 @@ def _run_one_graph(
 # Result parsing + assertions
 # ---------------------------------------------------------------------------
 
+def _describe_outcome(r: dict) -> tuple[str, str]:
+    """Return (status, verdict) for stdout / summary display.
+
+    Replaces the legacy PASS/FAIL binary — regression runs are calibration
+    probes, not tests. See results_schema.classify_status and
+    classify_quality for field definitions.
+
+    Returns:
+        status:  "FAIL" | "COMPLETED" | "XFAIL"
+        verdict: quality verdict string when COMPLETED, empty when FAIL,
+                 xfail reason when XFAIL
+    """
+    from results_schema import (
+        classify_status,
+        classify_quality,
+        compute_bias_profile,
+    )
+    quality = r.get("quality", {}) or {}
+    failures = r.get("failures", []) or []
+    edges = r.get("parsed_edges", r.get("edges", {}))
+    slices = r.get("parsed_slices", r.get("slices", {}))
+    bias = compute_bias_profile(edges, slices)
+    status = classify_status(r.get("passed", False), failures, quality)
+
+    if status == "fail":
+        if r.get("xfail"):
+            return "XFAIL", r.get("xfail_reason", "")
+        return "FAIL", ""
+
+    # status == "completed"
+    cls = classify_quality(quality, bias, failures)
+    verdict = cls.get("verdict", "clean")
+    if r.get("xfail"):
+        return "XFAIL", f"expected — {r.get('xfail_reason', '')}"
+    return "COMPLETED", verdict
+
+
 def _extract_traceback(output: str) -> tuple[str, str]:
     """Extract a Python traceback block (if any) from subprocess output.
 
@@ -1123,12 +1160,9 @@ def run_regression(args) -> list[dict]:
 
             results.append(assertion)
 
-            status = "PASS" if assertion["passed"] else "FAIL"
-            if assertion["xfail"] and not assertion["passed"]:
-                status = "XFAIL"
-            elif assertion["xfail"] and assertion["passed"]:
-                status = "XPASS"
-            print(f"  {name}: {status} [{elapsed:.0f}s]")
+            _status, _verdict = _describe_outcome(assertion)
+            _headline = f"{_status}" + (f" — {_verdict}" if _verdict else "")
+            print(f"  {name}: {_headline} [{elapsed:.0f}s]")
             _bp = _bias_profile(
                 assertion.get("parsed_edges", {}),
                 assertion.get("parsed_slices", {}))
@@ -1138,10 +1172,13 @@ def run_regression(args) -> list[dict]:
             # Incremental summary — survives kill/crash
             _q = assertion.get("quality", {})
             with open(summary_path, "a") as _sf:
-                _sf.write(f"{name:<45s} {status:<6s} {elapsed:6.0f}s  "
+                _sf.write(f"{name:<45s} {_status:<10s} {elapsed:6.0f}s  "
                           f"rhat={str(_q.get('rhat', '?')):<8s} "
                           f"ess={str(_q.get('ess', '?')):<8s} "
-                          f"conv={str(_q.get('converged', '?'))}\n")
+                          f"conv={str(_q.get('converged', '?'))}")
+                if _verdict:
+                    _sf.write(f"  {_verdict}")
+                _sf.write("\n")
                 for _fail in assertion.get("failures", []):
                     _msg = _fail["message"] if isinstance(_fail, dict) else str(_fail)
                     _sf.write(f"  ** {_msg}\n")
@@ -1160,23 +1197,33 @@ def run_regression(args) -> list[dict]:
     print("  REGRESSION REPORT")
     print("=" * 60)
 
-    passed = [r for r in results if r["passed"] and not r["xfail"]]
-    failed = [r for r in results if not r["passed"] and not r["xfail"]]
-    xfailed = [r for r in results if not r["passed"] and r["xfail"]]
-    xpassed = [r for r in results if r["passed"] and r["xfail"]]
+    # Classify each result by (status, verdict) — see _describe_outcome.
+    # Lists for the totals banner:
+    #   failed    — infrastructure fail (FAIL, non-xfail)
+    #   completed — ran to end; may have quality issues
+    #   xfailed   — expected fail (xfail marker present)
+    from results_schema import classify_status as _cs
+    failed = [
+        r for r in results
+        if _cs(r.get("passed", False), r.get("failures", []), r.get("quality", {})) == "fail"
+        and not r.get("xfail")
+    ]
+    completed = [
+        r for r in results
+        if _cs(r.get("passed", False), r.get("failures", []), r.get("quality", {})) == "completed"
+        and not r.get("xfail")
+    ]
+    xfailed = [r for r in results if r.get("xfail")]
 
     for r in results:
-        status = "PASS" if r["passed"] else "FAIL"
-        if r["xfail"] and not r["passed"]:
-            status = "XFAIL"
-        elif r["xfail"] and r["passed"]:
-            status = "XPASS"
+        status, verdict = _describe_outcome(r)
 
         audit = r.get("audit", {})
         q = r.get("quality", {})
 
         print()
-        print(f"  ── {r['graph_name']} ── {status} ──")
+        _hdr = f"{status}" + (f" — {verdict}" if verdict else "")
+        print(f"  ── {r['graph_name']} ── {_hdr} ──")
 
         # Layer 0: DSL and subjects
         dsl = audit.get("dsl", "")
@@ -1443,13 +1490,23 @@ def run_regression(args) -> list[dict]:
             _msg = w["message"] if isinstance(w, dict) else str(w)
             print(f"    ** WARN: {_msg}")
 
-    # Totals
+    # Totals — completed runs broken down by quality verdict, infra
+    # failures counted separately.
     print()
     print("-" * 60)
     total = len(results)
-    print(f"  {len(passed)} passed, {len(failed)} failed, "
-          f"{len(xfailed)} expected failures, {len(xpassed)} unexpected passes "
-          f"(of {total} total)")
+    from results_schema import classify_quality as _cq, compute_bias_profile as _cbp
+    verdict_counts: dict[str, int] = {}
+    for r in completed:
+        _b = _cbp(r.get("parsed_edges", {}), r.get("parsed_slices", {}))
+        _v = _cq(r.get("quality", {}), _b, r.get("failures", [])).get("verdict", "clean")
+        verdict_counts[_v] = verdict_counts.get(_v, 0) + 1
+    breakdown = ", ".join(f"{v}={n}" for v, n in sorted(verdict_counts.items())) or "none"
+    print(
+        f"  completed={len(completed)} ({breakdown}); "
+        f"failed={len(failed)}; xfailed={len(xfailed)} "
+        f"(of {total} total)"
+    )
 
     # Aggregate bias profile across all graphs
     agg = _aggregate_bias_profile(results)
@@ -1465,12 +1522,13 @@ def run_regression(args) -> list[dict]:
     _write_structured_results(results, results_json_path, run_id)
     print(f"\n  Structured results: {results_json_path}")
 
+    # Exit-status intent: infrastructure failures are the only hard
+    # fail. Quality-issue completions are reported but not a hard fail.
     if failed:
-        print(f"\n  REGRESSION FAILED")
-        return results
+        print(f"\n  INFRASTRUCTURE FAILURE in {len(failed)} graph(s)")
     else:
-        print(f"\n  ALL PASSED")
-        return results
+        print(f"\n  ALL GRAPHS COMPLETED")
+    return results
 
 
 def _write_structured_results(
@@ -1479,20 +1537,39 @@ def _write_structured_results(
     run_id: str,
 ) -> None:
     """Write machine-readable JSON results for programmatic analysis."""
-    from results_schema import serialise_result
+    from results_schema import serialise_result, classify_status, classify_quality, compute_bias_profile
 
-    passed = [r for r in results if r.get("passed") and not r.get("xfail")]
-    failed = [r for r in results if not r.get("passed") and not r.get("xfail")]
-    xfailed = [r for r in results if not r.get("passed") and r.get("xfail")]
+    serialised = [serialise_result(r) for r in results]
+
+    # Envelope uses the new status taxonomy. Counters:
+    #   failed    — infrastructure fail (excluding xfail)
+    #   completed — ran to end (excluding xfail); further broken down
+    #               by classification.verdict
+    #   xfailed   — expected-fail (xfail marker set)
+    failed_count = 0
+    completed_count = 0
+    xfailed_count = 0
+    verdict_counts: dict[str, int] = {}
+    for r, s in zip(results, serialised):
+        if r.get("xfail"):
+            xfailed_count += 1
+            continue
+        if s.get("status") == "fail":
+            failed_count += 1
+        else:
+            completed_count += 1
+            v = (s.get("classification") or {}).get("verdict", "unknown")
+            verdict_counts[v] = verdict_counts.get(v, 0) + 1
 
     envelope = {
         "run_id": run_id,
         "timestamp": datetime.now().strftime("%d-%b-%y %H:%M"),
         "total": len(results),
-        "passed": len(passed),
-        "failed": len(failed),
-        "xfailed": len(xfailed),
-        "graphs": [serialise_result(r) for r in results],
+        "failed": failed_count,
+        "completed": completed_count,
+        "completed_by_verdict": verdict_counts,
+        "xfailed": xfailed_count,
+        "graphs": serialised,
     }
 
     with open(path, "w") as f:
@@ -1543,8 +1620,16 @@ Examples:
     results = run_regression(args)
 
     # Exit code: 0 if all passed (or xfail), 1 if any unexpected failures
-    unexpected_failures = [r for r in results if not r["passed"] and not r["xfail"]]
-    sys.exit(1 if unexpected_failures else 0)
+    # Exit code: 0 if all graphs completed (infrastructure-wise) or were
+    # xfail-marked. Quality issues (bias/convergence) do NOT cause non-zero
+    # exit — regression runs are calibration probes, not pass/fail tests.
+    from results_schema import classify_status as _cs
+    infra_failures = [
+        r for r in results
+        if _cs(r.get("passed", False), r.get("failures", []), r.get("quality", {})) == "fail"
+        and not r.get("xfail")
+    ]
+    sys.exit(1 if infra_failures else 0)
 
 
 if __name__ == "__main__":

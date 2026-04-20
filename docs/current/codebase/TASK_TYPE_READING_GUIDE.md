@@ -37,14 +37,20 @@ All docs are in `docs/current/codebase/` unless a full path is given.
 
 ## Modifying parameters, param packs, or model variables
 - PARAMETER_SYSTEM.md **(full)** — data model, extraction, model variable resolution
+- STATS_SUBSYSTEMS.md **(skim — §2 quick reference + §6 field authority)** — which pass writes which model_vars source
 - FE_BE_STATS_PARALLELISM.md **(skim)** — analytic vs analytic_be entries, transition plan
 
 ## Modifying statistical/Bayesian/forecasting logic
-- FE_BE_STATS_PARALLELISM.md **(full)** — why both FE and BE run the topo pass, parity comparison
-- STATISTICAL_DOMAIN_SUMMARY.md **(full)** — statistical architecture, data pipeline
+- **STATS_SUBSYSTEMS.md** **(full — read FIRST)** — disambiguates the five distinct processing subsystems (Bayes compiler / FE topo pass / BE topo pass / BE CF pass / BE analysis runners); field authority; pipeline sequence; common confusions. Designs that assume any particular pass has run, or propose new "passes", MUST start here.
+- FE_BE_STATS_PARALLELISM.md **(full)** — FE↔BE topo orchestration detail, CF race mechanics, parity comparison
+- STATISTICAL_DOMAIN_SUMMARY.md **(full)** — underlying statistical models (shifted lognormal, Beta/Binomial, completeness, partial pooling)
 - PROBABILITY_BLENDING.md **(skim)** — blending cohort-mode latency edge probabilities
+- `docs/current/project-bayes/INDEX.md` **(ref)** — canonical Bayes compiler doc index
 - `docs/current/project-bayes/32-posterior-predictive-scoring-design.md` **(ref if touching LOO/ELPD)** — per-edge model adequacy scoring, analytic null comparison
 - `docs/current/project-bayes/34-latency-dispersion-background.md` **(ref if touching latency dispersion / kappa_lat)** — per-interval BetaBinomial timing overdispersion
+- `docs/current/project-bayes/45-forecast-parity-design.md` **(full if touching BE CF pass)** — CF pass design, field ownership
+- `docs/current/project-bayes/47-*.md` **(full if touching BE CF pass whole-graph mode)** — topological sequencing, upstream carrier
+- `docs/current/project-bayes/50-cf-generality-gap.md` **(ref if touching BE CF pass)** — open issues with lagless edges
 - BAYES_REGRESSION_TOOLING.md **(ref if running regression / modifying devtools)** — multi-layered audit, `--clean`, `--feature`, parallel safety
 
 ## Modifying snapshot DB, signatures, or hash infrastructure

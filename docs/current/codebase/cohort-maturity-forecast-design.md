@@ -136,7 +136,7 @@ for all.
   with `y` = frozen evidence.
 - **Evidence line in epoch A**: monotonically rising, stable
   denominator while all cohorts contribute.
-- **Model CDF overlay curves**: rendering correctly (method A and B).
+- **Model CDF overlay curves**: render via span-kernel MC median, using the same MC draws the main chart uses for its midpoint. Unified single-hop and multi-hop construction in `api_handlers.py`. See [docs/current/project-bayes/51-model-curve-overlay-divergence.md](../project-bayes/51-model-curve-overlay-divergence.md) for the construction and the contract test (`graph-ops/scripts/cohort-maturity-model-parity-test.sh`) that enforces overlay-main parity.
 
 ### 4.2 What's broken / incomplete
 

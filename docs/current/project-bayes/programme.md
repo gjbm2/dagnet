@@ -233,6 +233,18 @@ Ordered as the owner groups them (three tiers separated by `---`).
 **Tier 3 — new capability**
 - **Non-default a-anchoring for cohorts** — P3.23 (new).
 
+**Added 20-Apr — architecture / forecast-path correctness / discussion**
+- **B3 spike: is Phase 2 structurally correcting composed edge
+  posteriors, and what is actually being used for forecasting
+  (convolved window())?** (doc 51-overlay, doc 52-b3) — P1.11.
+- **Subset-conditioning double-counting as subset → group** (doc 51) —
+  P1.12.
+- **Model-curve overlay divergence** (doc 51-overlay) — P2.13.
+- **Funnel hi/lo bars via BE CF machinery** (doc 52-funnel) — P2.14.
+- **Slice dispersion prior robustness** (doc 54) — P2.15.
+- **Explicit drift modelling for frontier forecasting** (doc 53) —
+  P3.24 (discussion / future).
+
 Detail below preserves the existing P1/P2/P3 numbering so code-review
 comments can reference specific rows. New items added by this owner
 list carry the lowest-unused number within their tier.
@@ -254,6 +266,8 @@ topo-pass scalars, and forecast sweeps. Highest priority.
 | P1.8 | **No per-slice t95 anchor**. `t95_obs` constrains edge-level only; slices with extreme onset via `delta_a` are unconstrained. May contribute to P1.6. Part of the "orthogonal testing v2" umbrella. | [journal 16-Apr-26 update 12](18-compiler-journal.md:169) Finding 4 | Assess impact: if removing per-slice onset (P1.10 research track) makes per-slice t95 moot, do nothing. Otherwise add the constraint |
 | P1.9 | **Surprise gauge under-reports on live graphs** (owner observation). Recent window / cohort surprise on `gm-rebuild` reads as "really poor" data fit but the gauge does not flag it. User question: "why not more surprising?" | No journal entry yet. Surprise gauge is computed in `graph-editor/lib/api_handlers.py::_compute_surprise_gauge` (line ~541) — reads `cohort_alpha/beta` (after the in-flight rename) or `alpha/beta`. Likely candidates: (a) gauge uses epistemic α/β not kappa-inflated predictive (so observation dispersion is under-counted), (b) posterior has already absorbed the poor fit into a wide band so surprise is small by construction, (c) denominator/numerator of the surprise statistic is wrong for cohort-mode. Unverified | Reproduce on `gm-rebuild` with a known-poor window. Trace the gauge's inputs at compute-time — log `alpha`, `beta`, observed k/n and surprise score. Compare against what a naive z-score would say. Decide whether to switch the gauge to predictive (`*_pred`) inputs once the in-flight diff commits. Owner Tier-1 priority |
 | P1.10 | **Latency post-re-param exploration** (owner research item). The onset-μ ridge blocks per-slice onset RVs today (ρ ≈ -0.99 on short-latency edges; anti-pattern 33); it may also drive P1.1 onset bias and P1.5 Phase 2 drift. Candidate re-parameterisations: multiplicative drift (`onset = composed × (1 + eps × small_sd)`), total-latency reparam (decouple onset and μ into sum / ratio), quintile reparam (naturally orthogonal). Explore once in-flight independent-dimensions work settles so a clean baseline exists | [journal 2-Apr-26 onset-μ ridge](18-compiler-journal.md) prior-sensitivity table; [journal 13-Apr-26 update 11](18-compiler-journal.md:208) reparam suggestions; anti-pattern 33 in codebase docs | Scope study: pick 1–2 reparameterisations, run the param-recovery regression, compare onset bias (P1.1) and Phase 2 drift (P1.5) against the current parameterisation. Write findings into a new doc and either adopt or record dead-end. Do NOT couple this with a production rollout — exploration only |
+| P1.11 | **B3 spike — is Phase 2 structurally correcting composed edge posteriors, and is forecasting using the right thing?** (owner 20-Apr addition). Doc 51-overlay investigation showed the cohort-level single-lognormal posterior from Phase 2 (`path_mu_mean`, `path_sigma_mean`, `path_onset_delta_days`) is not consumed anywhere in the forecast stack except the about-to-be-eliminated overlay branch. Entire daily cohort() fetch cost, entire Phase 2 fit cost, entire "a-anchored evidence" design intent: discarded by the forecast layer. Frontier forecasting is window-led today, which is correct under drift (doc 53), but structural composition over long/complex topologies may need a convolution-aware Phase 2 that re-uses mature cohort evidence. | [doc 51-overlay](51-model-curve-overlay-divergence.md) §2–§5 (three drift sources decomposed: Beta median/mean skew ~0.8% accepted; discrete CDF bias 12–77%; cohort evidence not flowing into forecast — the deeper gap). [doc 52-b3](52-b3-spike-workplan.md) proposes a decision-making spike with three synthetic regimes (null / drift / branch-topology) and four governing principles (keep structural correction separate from drift; frontier stays window-led; start aggregate + synthetic + latency-first; prefer strong shrinkage to Phase 1) | Run the spike per doc 52-b3: Phase 0 contract + evaluation setup; Phase 1 null regime; Phase 2 drift regime; Phase 3 branch regime. Decide YES (Phase 2 adds structural value and can be consumed coherently) / NO (dead end, rip out Phase 2 cohort-latency machinery) / CONDITIONAL (works only on a subset). This gates the forecast pipeline rewrite |
+| P1.12 | **Subset-conditioning double-counting as subset → full data** (owner 20-Apr addition). Every engine that takes the promoted posterior `Beta(α₀, β₀)` as a prior and multiplies by a subset likelihood `Beta(α₀ + k_i, β₀ + n_i - k_i)` is double-counting: the subset is already inside the aggregate fit. Overstatement is `n_S / (N + n_S)` — imperceptible at 5% subset (~5% overstatement); ~33% at half; 50% at full. HDIs narrower than justified by up to √2. | [doc 51](51-subset-conditioning-double-count-correction.md). Callsites: cohort-maturity v3 Beta update (immature-cohort midpoint + fan); CF Class B lagless-edge posterior update (once P2.12 is built); cohort-mode forecast conditioning (the 1-Apr-26 attempts that were reverted). Proposed fix: shared pro-rata shrinkage helper — discount aggregate prior's equivalent strength by `N_subset / N_total` before updating. Display-time approximation, not a hierarchical re-fit | Build one shared helper and thread it through each callsite with explicit `subset_share` input. Add unit tests for the limit cases (share → 0, share → 1). Publish an explanatory note in the response so FE consumers know uncertainty is pro-rata corrected, not a hierarchical Bayesian fit |
 
 ### P2 — Cohort-maturity chart + forecast-parity correctness
 
@@ -274,6 +288,9 @@ endpoint shows. Verified against live code, not doc claims.
 | P2.10 | **Golden fixtures for forecasting, then retire v1 and v2** (owner Tier-1 priority). Today three forecast pipelines coexist: `cohort_forecast.py` (v1), `cohort_forecast_v2.py` (v2, span-kernel), `cohort_forecast_v3.py` (v3, engine-via-sweep). Parity is enforced by `test_doc31_parity.py` and `test_v2_v3_parity.py` with relaxed tolerances and skip-lists. Retiring v1/v2 is risky without frozen golden outputs | Direct `ls graph-editor/lib/runner/cohort_forecast*.py`. Current parity tests verify algorithmic equivalence within tolerance but don't freeze numeric output | Build a golden-fixture suite: a fixed graph + evidence + query, exact expected per-τ row values, committed to the repo. Run against v3 on every change. Then delete v1 + v2 code paths and their handler branches once v3 has burned in for N runs without fixture drift |
 | P2.11 | **BE forecasting & topo performance** (owner Tier-1 priority). User-visible latency on topo pass and chart requests. No current measurement baseline in programme docs. | Topo pass wired through `api_handlers.py::handle_stats_topo_pass` (:5716); cohort maturity v3 through `_handle_cohort_maturity_v3` (:2018); conditioned forecast through `handle_conditioned_forecast`. Hot path likely dominated by per-subject snapshot queries (`query_snapshots_for_sweep_batch`), MC sweep (`compute_forecast_sweep` 2000+ draws) and span-kernel composition. Sampling-side perf separately tracked as P3.21 | Measure first. Add timing spans around: snapshot query, frame composition, sweep, row assembly, carrier build. Publish a baseline per analysis type. Then pick the dominant cost and optimise. Likely candidates: vectorise MC sweep across cohorts, cache span CDFs across repeated queries, reduce 2000-draw default when band-width doesn't require it |
 | P2.12 | **Conditioned forecast is not general-purpose**. CF's per-edge path short-circuits when `resolved.latency.sigma <= 0` ([cohort_forecast_v3.py:307](graph-editor/lib/runner/cohort_forecast_v3.py#L307)) and silently omits the edge from the response. Works accidentally on `bayes-test-gm-rebuild` because BE topo wrote a synthetic near-zero lag into `analytic_be` (μ≈-6.5, σ≈2.8, t95≈0.15); fails silently on `synth-mirror-4step` where that synthetic isn't present. For lagless edges CF should still emit a Beta-Binomial posterior on `p`. Topology coverage is thin: only two linear synth chains exercise CF end-to-end; no mixed-class (laggy + lagless) or branching / join fixtures. | Direct comparison of mv[analytic_be] across graphs (inspected 18-Apr-26). `synth-mirror-4step` entry-hop edges: `wg_pmean=None` in the parity script. `handle_conditioned_forecast` appends neither to `edge_results` nor to `skipped_edges` when `maturity_rows` is empty — silent drop. See [doc 50](50-cf-generality-gap.md) for full problem statement, proposal (Class A lag-sweep / Class B Beta-Binomial / Class C–D skipped with reason), and topology test matrix (T1–T7) | (1) Build topology fixtures T1–T7 and CLI harness `cf-topology-suite.sh`. (2) Implement lagless Class B path + structured `skipped_edges`. (3) Enforce "no silent drops" invariant in CI. Fuller sequencing and design questions (prior choice, completeness semantics, sibling PMF consistency) in doc 50 §4 and §6 |
+| P2.13 | **Model-curve overlay divergence** (owner 20-Apr addition). Cohort-maturity main-chart midline and the promoted model-curve overlay don't coincide when they should. Three stacked effects, each understood: (1) Beta median-vs-mean skew at asymptote — ~0.8% — accepted (align overlay and main on median); (2) discrete cumsum CDF vs analytic CDF mid-body — 12–13% window, **77% on cohort-widened at τ=10** — needs a fix; (3) discrete-vs-analytic onset/tail — ~0.8% — accepted. The 77% window case is actionable; the others are cosmetic or accepted | [doc 51-overlay](51-model-curve-overlay-divergence.md) §3.1–§3.3. Blind invariant test at [graph-ops/scripts/cohort-maturity-model-parity-test.sh](../../graph-ops/scripts/cohort-maturity-model-parity-test.sh). `_run_dp` at [span_kernel.py:290](graph-editor/lib/runner/span_kernel.py#L290); `compute_completeness` at [forecast_state.py:95](graph-editor/lib/runner/forecast_state.py#L95) | Accept §3.1 (align overlay on median). Fix §3.2: either make the overlay use the same discrete-grid CDF as the sweep, or switch the sweep to analytic CDF for the overlay check. Document §3.3 as accepted. Coordinate with P1.11 — if the B3 spike says Phase 2 should feed forecasts, the overlay contract changes |
+| P2.14 | **Funnel hi/lo bars via BE CF machinery (Level 2)** (owner 20-Apr addition). Today `run_conversion_funnel` / `calculate_path_probability` produces a scalar per-stage probability with no uncertainty. Doc 49 deferred hi/lo bars pending reasoning. Level 2 (decided): route funnel computation through the forecast engine so each stage's probability is a proper posterior random variable with bands as MC quantiles. Level 1 (patch scalar) would produce numerals but leave the underlying quantity incoherent. | [doc 52-funnel](52-funnel-hi-lo-bars-design.md). Current scalar path: `run_conversion_funnel` → `run_path` → `calculate_path_probability` ([runners.py:1475](graph-editor/lib/runner/runners.py#L1475)); per-edge `p` baked by `apply_visibility_mode` ([graph_builder.py:580](graph-editor/lib/runner/graph_builder.py#L580)). Three visibility modes (e / f / f+e) yield different scalars but the path product of per-edge blends is not a coherent joint estimator | Scope the integration: feed each stage through `compute_forecast_sweep` (or a path-level equivalent) with `y_i / n_0` denominator convention. Determine whether Bayesian concordance is required across stages (posterior samples drawn once per graph and re-used at every stage) or whether per-stage MC is acceptable. Depends on P2.2 (unified forecast-consumer contract) — pull after that lands |
+| P2.15 | **Slice dispersion prior robustness** (owner 20-Apr addition). Partial-pooling exchangeability failure: when τ ends up small because other slices agree or because the prior on τ is tight, every slice (including genuinely different ones) inherits a tight posterior. "Confidently wrong" on non-exchangeable slices. Current τ priors: `HalfNormal(0.5)` on logit for p; `HalfNormal(0.3)` for latency τ_m, τ_r (kept tighter for onset-μ identifiability). | [doc 54](54-slice-dispersion-priors-and-robustness.md). Current code: `bayes/compiler/model.py:1522` (p hierarchy), `:1565` (τ_m), `:1592` (τ_r). Doc 54 is discussion only — two alternatives proposed (heavier-tailed τ prior like Cauchy / Student-t; per-slice mixture with outlier component) but no implementation proposed yet | Decision first, code second. Currently no evidence the design is broken on typical graphs. Trigger criterion: find a real graph where one slice is genuinely different and the MCMC posterior width for that slice is visibly wrong (tight when it should be wide). Until then, track as research. Pairs naturally with P1.10 (latency re-param) |
 
 ### P3 — Tooling, tests, infrastructure
 
@@ -305,6 +322,7 @@ correctness today.
 | P3.21 | **Sampling performance research** — compile time 155s on branch graph, GPU experiments, dev-mode draws | [doc 22](22-sampling-performance.md) | Research only; not blocking |
 | P3.22 | **Dockerised Bayes** (owner Tier-2 item, marked with `?`). Today's Bayes worker runs on Modal in production and locally via `graph-editor/venv`. No container image. Impact: onboarding friction for new environments; cold-path reproducibility; and moving the worker off Modal requires a portable runtime | No existing doc or Dockerfile. `bayes/requirements.txt` pins JAX, PyMC, nutpie | Decide scope first: dev-loop container only, or production-candidate image? Dev-loop is cheap (pin Python, install requirements, mount code). Production replacement is a multi-week project (image build, GPU story, secrets, webhook surface). Write a short scope doc before starting |
 | P3.23 | **Non-default a-anchoring for cohorts** (owner Tier-3 new capability). Today cohort() queries anchor on the edge's from-node (or the query-path's anchor when multi-hop). "Non-default a-anchoring" would allow cohorts to be anchored on a different node, e.g. for path-relative or event-relative cohort definitions | No existing code path. Current anchor resolution is in `analysis_subject_resolution.py` (`resolve_analysis_subjects`) and `_apply_temporal_regime_selection`. The cohort evidence builder takes `anchor_from/to` as fixed date ranges, not as variable node selectors | Design first: what DSL syntax denotes "anchor on node X"? What evidence family does a non-default anchor read? How does regime selection interact? Likely new doc. Depends on producer (does the snapshot DB have a_pop for arbitrary anchor nodes?) and consumer (do any forecast paths assume anchor = path start?) |
+| P3.24 | **Explicit drift modelling for frontier forecasting** (owner 20-Apr addition, discussion). Mature `cohort()` evidence is lagging; recent `window()` evidence is the earliest noisy observation of the current edge regime. The ideal object for drift-sensitive forecasting is a time-indexed edge regime — each edge has a calendar-time state; latest window evidence updates it; anchor cohorts traverse the sequence of regimes in force at the times they arrive; mature cohort evidence becomes delayed supervision on earlier cohorts | [doc 53](53-explicit-drift-modelling-discussion.md). Existing infra: `_apply_recency_weights` in `evidence.py` (archived 12-drift-detection-notes). Current practical stance: **fast-path `window()` evidence must dominate frontier forecasting until explicit drift model exists** — mature cohort calibrates structural path behaviour, does not replace window-led signal for latest cohorts | No implementation proposal yet. Prerequisite: doc 52-b3 spike (P1.11) must decide whether Phase 2 convolution-aware composition actually adds value; if yes, drift becomes a separate axis of that model. Write a design doc once B3 concludes |
 
 ### Stale claims and doc drift — required doc updates
 
@@ -334,40 +352,61 @@ Not a strict order within a tier — the in-flight diff may change
 dependencies. Read together with **In flight** above.
 
 **Tier 1 — owner's top focus**
-1. **P1.9 — validate surprise gauge**. Reproducible on `gm-rebuild`;
+1. **P1.11 — B3 spike** (doc 52-b3). Pivotal architecture decision:
+   is Phase 2 structurally correcting composed edge posteriors, and
+   is forecasting using the right thing? Gates the forecast pipeline
+   rewrite. Depends on nothing; start now.
+2. **P1.12 — subset-conditioning double-counting** (doc 51). Shared
+   pro-rata correction across cohort-maturity v3, CF Class B, and
+   cohort-mode forecast conditioning. Small, centralised, high-trust
+   win.
+3. **P1.9 — validate surprise gauge**. Reproducible on `gm-rebuild`;
    measure first. Small investigation, likely feeds into whether the
    gauge switches to predictive (kappa-inflated) inputs once the
    in-flight `*_pred` work commits.
-2. **P2.11 — BE forecasting & topo performance**. Measure first. No
+4. **P2.11 — BE forecasting & topo performance**. Measure first. No
    optimisation without a baseline.
-3. **P2.10 — golden fixtures + retire v1/v2**. Prerequisite for
-   cleanly deleting code without introducing silent regressions.
-   Write the fixture suite now; the in-flight cohort_forecast diff
-   makes the retirement safer when it settles.
-4. **P2.12 — general-purpose CF (lagless + topology)**. Today CF
+5. **P2.12 — general-purpose CF (lagless + topology)**. Today CF
    silently drops edges whose promoted latency has `sigma ≤ 0`;
    coverage on mixed and branching topologies is untested. Doc 50
    captures the problem, proposed Class-A / Class-B split, and the
-   T1–T7 topology test matrix. Natural companion to P2.10: both
-   require whole-graph CF contract stability before retiring v1/v2.
+   T1–T7 topology test matrix. Natural companion to P2.10. Note:
+   Class B lagless path MUST use the P1.12 pro-rata correction.
+6. **P2.10 — golden fixtures + retire v1/v2**. Prerequisite for
+   cleanly deleting code without introducing silent regressions.
+   Write the fixture suite now; the in-flight cohort_forecast diff
+   makes the retirement safer when it settles. Depends on P2.12
+   contract stability.
+7. **P2.13 — model-curve overlay divergence**. Fix the 77% cohort-
+   widened case (§3.2 discrete-vs-analytic CDF). §3.1 and §3.3
+   accepted. Coordinate with P1.11 — if B3 says Phase 2 feeds
+   forecasts, the overlay contract changes anyway.
 
 **Tier 2 — model quality / infrastructure**
-4. **P1.1 — onset bias diagnostics** (pure investigation). Natural
+8. **P1.1 — onset bias diagnostics** (pure investigation). Natural
    precursor to P1.10 and to deciding the owner's "residual onset
    recovery in contexted graphs" strategy.
-5. **P1.6 / P1.7 / P1.8 — orthogonal testing v2 umbrella**. Re-run
+9. **P1.6 / P1.7 / P1.8 — orthogonal testing v2 umbrella**. Re-run
    after the in-flight independent-dimensions work settles; P1.6
    may resolve on its own. Then tackle P1.7 Phase 2 contract and
    P1.8 per-slice t95 only if P1.6 still fails.
-6. **P3.8 — sparsity sweep**. Infrastructure is ready; blocked on
-   truth-file activation in the data repo.
-7. **P1.10 — latency re-param exploration**. Research track; decide
-   after P1.1 diagnostics.
-8. **P3.22 — Dockerised Bayes**. Scope-decision first; pull into the
-   queue once scope is agreed.
+10. **P3.8 — sparsity sweep**. Infrastructure is ready; blocked on
+    truth-file activation in the data repo.
+11. **P1.10 — latency re-param exploration**. Research track; decide
+    after P1.1 diagnostics. Pairs with P2.15 (slice-dispersion prior
+    robustness) — both touch the hierarchical parameterisation.
+12. **P2.14 — funnel hi/lo bars via BE CF machinery**. Depends on
+    P2.2 (unified forecast-consumer contract) and P2.12 (CF
+    generality). Pull after both land.
+13. **P2.15 — slice dispersion prior robustness** (doc 54). Decision
+    first — no evidence of live problem yet. Pairs with P1.10.
+14. **P3.22 — Dockerised Bayes**. Scope-decision first; pull into
+    the queue once scope is agreed.
 
-**Tier 3 — new capability**
-9. **P3.23 — non-default a-anchoring for cohorts**. Design doc first.
+**Tier 3 — new capability / discussion**
+15. **P3.23 — non-default a-anchoring for cohorts**. Design doc first.
+16. **P3.24 — explicit drift modelling for frontier forecasting**
+    (doc 53). Discussion only; blocked on P1.11 B3 decision.
 
 **Do not start** until the in-flight diff commits:
 - P2.1, P2.2, P2.4, P2.5, P2.8 (all touch files heavily in flux)

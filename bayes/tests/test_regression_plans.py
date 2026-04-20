@@ -468,7 +468,8 @@ class TestPrintVariantComparison:
         assert "VARIANT COMPARISON" in output
         assert "g1" in output
         assert "g2" in output
-        assert "PASS" in output
+        # Completed runs now show a quality verdict (e.g. "clean"), not "PASS".
+        assert "clean" in output
         assert "XFAIL" in output
 
     def test_missing_graph_in_one_variant(self, capsys):
@@ -570,7 +571,8 @@ class TestSerialiseResult:
         s = serialise_result(r)
 
         assert s["graph_name"] == "synth-abc"
-        assert s["passed"] is True
+        assert s["status"] == "completed"
+        assert s["classification"]["verdict"] == "clean"
         assert s["edges"]["edge-a-b"]["p"]["truth"] == 0.7
 
     def test_missing_fields_default_gracefully(self):
@@ -578,7 +580,8 @@ class TestSerialiseResult:
         s = serialise_result(r)
 
         assert s["graph_name"] == "bare"
-        assert s["passed"] is False
+        # No quality metrics → classified as infrastructure fail.
+        assert s["status"] == "fail"
         assert s["edges"] == {}
         assert s["slices"] == {}
 
@@ -615,7 +618,9 @@ class TestWriteResultsJson:
         assert data["plan"] == "test"
         assert "timestamp" in data
         assert data["variants"]["default"]["total"] == 1
-        assert data["variants"]["default"]["passed"] == 1
+        # Completed (ran with posteriors) counted here; failed reserved
+        # for infrastructure failures.
+        assert data["variants"]["default"]["completed"] == 1
         assert data["variants"]["default"]["failed"] == 0
         assert len(data["variants"]["default"]["graphs"]) == 1
         assert data["variants"]["default"]["graphs"][0]["graph_name"] == "g1"
@@ -625,12 +630,13 @@ class TestWriteResultsJson:
         all_results = {
             "baseline": [
                 {"graph_name": "g1", "passed": True, "xfail": False,
-                 "failures": [], "warnings": [], "quality": {},
+                 "failures": [], "warnings": [],
+                 "quality": {"rhat": 1.001, "ess": 5000, "converged_pct": 100},
                  "thresholds": {}, "parsed_edges": {}, "parsed_slices": {}},
             ],
             "experimental": [
                 {"graph_name": "g1", "passed": False, "xfail": False,
-                 "failures": [{"type": "z_score", "message": "z too high"}],
+                 "failures": [{"type": "harness", "message": "crashed"}],
                  "warnings": [], "quality": {},
                  "thresholds": {}, "parsed_edges": {}, "parsed_slices": {}},
             ],
@@ -642,7 +648,9 @@ class TestWriteResultsJson:
 
         assert "baseline" in data["variants"]
         assert "experimental" in data["variants"]
-        assert data["variants"]["baseline"]["passed"] == 1
+        # baseline: happy path — counted as completed.
+        assert data["variants"]["baseline"]["completed"] == 1
+        # experimental: no quality metrics → infrastructure fail.
         assert data["variants"]["experimental"]["failed"] == 1
 
     def test_xfail_counted_separately(self, tmp_path):

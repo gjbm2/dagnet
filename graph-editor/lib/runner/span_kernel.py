@@ -93,6 +93,14 @@ def _edge_sub_probability_density(
     0 < sigma < 0.1: near-degenerate, delta at onset + exp(mu).
     sigma >= 0.1: full lognormal PDF.
     Normalises discrete PDF to sum to 1 before scaling by p.
+
+    Note on discretisation (doc 51 §3.2): this samples the continuous PDF
+    at integer grid points. cumsum(result) at integer τ approximates
+    CDF_continuous(τ + 0.5) — a constant half-bin lead regardless of
+    convolution depth, because integer rounding is unbiased. Attempts to
+    substitute a CDF-difference scheme (P0.1 spike) produced worse bias
+    at depth because ⌈X_A⌉ + ⌈X_B⌉ is on average 1 larger than X_A + X_B,
+    making the compound shift depth-linear instead of constant.
     """
     if p <= 0:
         return np.zeros_like(tau_grid, dtype=float)
@@ -490,6 +498,20 @@ def mc_span_cdfs(
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Generate per-MC-draw span CDFs by reconvolving with drawn per-edge params.
 
+    SUBSYSTEM GUIDE — When to call this (see docs/current/codebase/
+    STATS_SUBSYSTEMS.md §3.4):
+      - Span-kernel primitive. Intended callers are
+        `compute_forecast_sweep` (inner kernel for BE CF pass and
+        cohort_maturity v3) and the model-overlay builder in
+        `api_handlers.py`. Returns span-level (cdf_arr, p_s); per-edge
+        draws exist only as a local variable inside this function
+        and are deliberately not exposed — the DP collapse is the
+        point of this function.
+      - Analysis runners SHOULD NOT call this directly. Use
+        `handle_conditioned_forecast` scoped to your path; that's the
+        public entry point that wraps the sweep + span kernel +
+        upstream carrier coordination for multi-hop correctness.
+
     For each draw:
     1. Draw (p, mu, sigma, onset) per edge from each edge's posterior
     2. Run the forward DP with those params
@@ -543,6 +565,13 @@ def mc_span_cdfs(
             # Use promoted model SDs (written by FE applyPromotion),
             # falling back to posterior (Bayes), then to winning
             # model_var's latency block (BE-only execution path).
+            #
+            # NOTE (doc 49): this function feeds `mc_span_cdfs` which produces
+            # the FORECAST `fan_bands` and `model_bands` wrapping the blended
+            # e+f trace — those are predictive bands by design (next-observation
+            # uncertainty). Keep predictive `mu_sd` here. The per-source model
+            # overlay band uses `_extract_edge_sds_for_source` instead, which
+            # IS epistemic per doc 49 §A.6 (model overlay semantics).
             _mv_lat = {}
             for _mv in p_data.get('model_vars', []):
                 if _mv.get('source') == 'bayesian':
@@ -615,13 +644,23 @@ def _extract_edge_sds_for_source(
 ) -> Tuple[float, float, float, float]:
     """Extract (p_sd, mu_sd, sigma_sd, onset_sd) for a specific source.
 
-    Falls back to posterior/promoted SDs when the source's own SDs are
-    unavailable (same cascade as mc_span_cdfs but scoped to source).
+    Returns EPISTEMIC dispersions for use in model-overlay bands. The
+    model overlay represents the model's view of the rate trajectory
+    given evidence; epistemic uncertainty is the right band semantic
+    (parameter uncertainty, not next-observation noise — see doc 49 §A.6).
+
+    For the Bayesian source, prefers `mu_sd_epist` (bare epistemic posterior
+    SD on log-mu) over `mu_sd` (which is kappa_lat-inflated predictive when
+    kappa_lat exists). For analytic sources there is no predictive variant —
+    `mu_sd` is the only SD they produce. `sigma_sd` and `onset_sd` have no
+    predictive variant in the schema, so they are always epistemic.
+
+    `p_sd` comes from raw `alpha`/`beta` (epistemic posterior on the rate).
     """
     p_data = edge_data.get('p', {})
     prob_posterior = p_data.get('posterior', {})
 
-    # p SD from alpha/beta (shared across sources)
+    # p SD from EPISTEMIC alpha/beta (bare fields, not *_pred). Doc 49 §A.6.1.
     alpha = prob_posterior.get('alpha', 0)
     beta = prob_posterior.get('beta', 0)
     if isinstance(alpha, (int, float)) and isinstance(beta, (int, float)) and alpha > 0 and beta > 0:
@@ -641,11 +680,24 @@ def _extract_edge_sds_for_source(
             mv_lat = mv.get('latency', {}) or {}
             break
 
-    # Source-specific SDs, falling back to posterior, then promoted
     latency = p_data.get('latency', {})
     posterior = latency.get('posterior', {})
 
-    mu_sd = mv_lat.get('mu_sd') or posterior.get('mu_sd') or latency.get('promoted_mu_sd') or 0.0
+    # mu_sd: for bayesian source prefer the epistemic variant (posterior.mu_sd_epist
+    # or mv_lat.mu_sd_epist if upserted in future). The fallback to plain `mu_sd`
+    # is kappa_lat-inflated predictive — used only when no epistemic variant is
+    # exported (e.g. legacy posteriors fitted before doc 49). For analytic /
+    # analytic_be sources there is no kappa concept; their `mu_sd` is the only
+    # value and is treated as epistemic by construction.
+    if source_name == 'bayesian':
+        mu_sd = (mv_lat.get('mu_sd_epist')
+                 or posterior.get('mu_sd_epist')
+                 or mv_lat.get('mu_sd')
+                 or posterior.get('mu_sd')
+                 or latency.get('promoted_mu_sd')
+                 or 0.0)
+    else:
+        mu_sd = mv_lat.get('mu_sd') or posterior.get('mu_sd') or latency.get('promoted_mu_sd') or 0.0
     sigma_sd = mv_lat.get('sigma_sd') or posterior.get('sigma_sd') or latency.get('promoted_sigma_sd') or 0.0
     onset_sd = mv_lat.get('onset_sd') or posterior.get('onset_sd') or latency.get('promoted_onset_sd') or 0.0
     if not isinstance(mu_sd, (int, float)):
@@ -668,6 +720,17 @@ def mc_span_cdfs_for_source(
     rng: np.random.Generator,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Per-source MC reconvolution of the span kernel.
+
+    SUBSYSTEM GUIDE — When to call this (see docs/current/codebase/
+    STATS_SUBSYSTEMS.md §3.4):
+      - Same restriction as `mc_span_cdfs`: span-kernel primitive,
+        not an analysis-facing API. Called by the model-curve overlay
+        builder to render per-source (analytic / analytic_be / bayesian)
+        asymptotic curves for comparison. Differs from `mc_span_cdfs`
+        only in which `model_vars` source it reads means and SDs from.
+      - Analysis runners that want source-specific outputs should go
+        through `handle_conditioned_forecast` with appropriate
+        `candidate_regimes_by_edge` entries to select the source.
 
     Same algorithm as mc_span_cdfs but uses the named source's
     point-estimate params as means and that source's SDs for draws.

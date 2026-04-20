@@ -502,16 +502,30 @@ export class GraphComputeClient {
         }
       }
 
-      // Collect model CDF curves from backend results, keyed by subject_id.
-      // When multiple epochs collapse into one subject, keep the longest curve
-      // (the gap epoch typically has a short or empty curve).
-      const modelCurveBySubject = new Map<string, { curve: Array<{ tau_days: number; model_rate: number }>; params: Record<string, number>; bayesCurve?: Array<{ tau_days: number; model_rate: number }>; bayesParams?: Record<string, number>; sourceModelCurves?: Record<string, any>; promotedSource?: string }>();
+      // Collect model CDF curves from backend results, keyed by
+      // composite `${scenario_id}::${subject_id}`.
+      //
+      // Each scenario passes its own re-projected graph (via reprojectPosteriorForDsl)
+      // and the BE computes model curves from that scenario's edge — so different
+      // scenarios on the same edge legitimately produce different model curves
+      // (different posterior slices for different contexts, different alpha/beta
+      // for window vs cohort, etc.). Keying by subject_id alone collapses these
+      // distinct curves into one — wrong for multi-scenario charts.
+      //
+      // When multiple epochs collapse into one (scenario, subject) pair, keep the
+      // longest curve (the gap epoch typically has a short or empty curve).
+      const _modelCurveKey = (scenarioId: string, subjectId: string): string =>
+        `${scenarioId}::${subjectId}`;
+      const modelCurveByKey = new Map<string, { scenario_id: string; subject_id: string; curve: Array<{ tau_days: number; model_rate: number }>; params: Record<string, number>; bayesCurve?: Array<{ tau_days: number; model_rate: number }>; bayesParams?: Record<string, number>; sourceModelCurves?: Record<string, any>; promotedSource?: string }>();
       for (const b of blocks) {
         const r = b.result;
         if (r?.model_curve && Array.isArray(r.model_curve) && r.model_curve.length > 0) {
-          const existing = modelCurveBySubject.get(b.subject_id);
+          const key = _modelCurveKey(b.scenario_id, b.subject_id);
+          const existing = modelCurveByKey.get(key);
           if (!existing || r.model_curve.length > existing.curve.length) {
             const entry: any = {
+              scenario_id: b.scenario_id,
+              subject_id: b.subject_id,
               curve: r.model_curve,
               params: r.model_curve_params || {},
             };
@@ -535,7 +549,7 @@ export class GraphComputeClient {
               entry.sourceModelCurves = r.source_model_curves;
               entry.promotedSource = r.promoted_source || 'best_available';
             }
-            modelCurveBySubject.set(b.subject_id, entry);
+            modelCurveByKey.set(key, entry);
           }
         }
       }
@@ -663,13 +677,16 @@ export class GraphComputeClient {
           // Promoted model source — used by chart hint rendering.
           // Read from the first subject's model curve entry.
           promoted_source: (() => {
-            for (const [, entry] of modelCurveBySubject) {
+            for (const [, entry] of modelCurveByKey) {
               if (entry.promotedSource) return entry.promotedSource;
             }
             return undefined;
           })(),
-          // Model CDF curves per subject (for overlay on maturity chart).
-          model_curves: Object.fromEntries(modelCurveBySubject),
+          // Model CDF curves keyed by `${scenario_id}::${subject_id}` (for
+          // overlay on maturity chart). Per-scenario keys preserve the
+          // distinction when scenarios resolve to different posterior slices
+          // (different contexts, window vs cohort, etc.).
+          model_curves: Object.fromEntries(modelCurveByKey),
           // Export-only tables (avoid polluting the primary `data` rows used by charts).
           export_tables: {
             cohort_maturity_points: Array.from(cohortPointsByKey.values()).sort((a: any, b: any) => {
