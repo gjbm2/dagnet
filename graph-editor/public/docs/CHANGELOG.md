@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 2.0.4b
+**Released:** 22-Apr-26
+
+Various forecasting and stats fixes. Improved analysis types and funnel in particular
+
+---
+
 ## Version 2.0.3b
 **Released:** 18-Apr-26
 
