@@ -4,7 +4,7 @@
 **Status**: Active implementation plan  
 **Review status**: Ready for systematic peer review  
 **Review pack role**: 3 of 3 — delivery plan for the target contract  
-**Primary references**: `59-cohort-window-forecast-implementation-scheme.md`, `../codebase/COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md`, `../codebase/STATS_SUBSYSTEMS.md`, `../codebase/FE_BE_STATS_PARALLELISM.md`, `45-forecast-parity-design.md`, `47-multi-hop-cohort-window-divergence.md`, `52-subset-conditioning-double-count-correction.md`, `56-forecast-stack-residual-v1-v2-coupling.md`, `57-cf-eligibility-topological-degradation.md`, `../codebase/TESTING_STANDARDS.md`  
+**Primary references**: `59-cohort-window-forecast-implementation-scheme.md`, `42-asat-contract.md`, `../codebase/COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md`, `../codebase/STATS_SUBSYSTEMS.md`, `../codebase/FE_BE_STATS_PARALLELISM.md`, `45-forecast-parity-design.md`, `47-multi-hop-cohort-window-divergence.md`, `52-subset-conditioning-double-count-correction.md`, `56-forecast-stack-residual-v1-v2-coupling.md`, `57-cf-eligibility-topological-degradation.md`, `../codebase/TESTING_STANDARDS.md`  
 **Audience**: engineer delivering the forecast adaptation workstream and peers reviewing its delivery logic
 
 ---
@@ -78,26 +78,32 @@ should read the following references first, in this order:
 3. `../codebase/COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md` —
    the semantic contract for `window()` and `cohort()` including
    factorised versus gross-fitted numerator treatment.
-4. `59-cohort-window-forecast-implementation-scheme.md` — the target
+4. `42-asat-contract.md` — the binding `asat()` semantics: evidence
+   cutoff, posterior cutoff, evaluation date, read-only invariant, and
+   blind test contract.
+5. `59-cohort-window-forecast-implementation-scheme.md` — the target
    runtime contract for this workstream.
-5. `45-forecast-parity-design.md` — chart/graph parity invariant and the
+6. `45-forecast-parity-design.md` — chart/graph parity invariant and the
    required separation between analytic model-var generation and
    conditioned forecasting.
-6. `47-multi-hop-cohort-window-divergence.md` — the specific multi-hop
+7. `47-multi-hop-cohort-window-divergence.md` — the specific multi-hop
    subject-frame bug and its correct seam.
-7. `56-forecast-stack-residual-v1-v2-coupling.md` — the runtime-boundary
+8. `56-forecast-stack-residual-v1-v2-coupling.md` — the runtime-boundary
    precondition; this workstream must not reintroduce v1/v2 coupling.
-8. `52-subset-conditioning-double-count-correction.md` — blend
+9. `52-subset-conditioning-double-count-correction.md` — blend
    discipline for aggregate priors; required context for any rate-side
    conditioning change.
-9. `57-cf-eligibility-topological-degradation.md` — the already-agreed
+10. `57-cf-eligibility-topological-degradation.md` — the already-agreed
    degraded-output contract for query-scoped posteriors.
-10. `../codebase/TESTING_STANDARDS.md` — test design rules, parity-test
+11. `../codebase/TESTING_STANDARDS.md` — test design rules, parity-test
     rules, and the repo's TDD boundaries.
 
 If any of those references are still unclear, stop and read them before
-changing code. The workstream is not blocked on open architectural
-questions. The main job is to deliver an already-decided design cleanly.
+changing code. Through WP7, the workstream is not blocked on open
+architectural questions. The main job is to deliver the already-decided
+structural design cleanly. WP8 is different: doc 59 sketches a narrow,
+flagged recommended path, but that late behaviour change should be
+treated as separately ratified work rather than assumed pre-approved.
 
 ## 3. Workstream goal
 
@@ -105,8 +111,8 @@ This workstream adapts the live forecast stack behind the existing public
 surfaces. It is explicitly **not** a clean-slate rewrite.
 
 The goal is to make the live implementation satisfy the contract already
-set out in docs 59, 45, 47, 56, and 57 while preserving the main public
-surfaces that the product already depends on.
+set out in docs 42, 45, 47, 56, 57, and 59 while preserving the main
+public surfaces that the product already depends on.
 
 The required outcomes are:
 
@@ -142,16 +148,26 @@ The following are prerequisites for this workstream:
 - The doc 56 runtime-boundary work is either already green or is landed
   first. Production forecast callers must not import
   `cohort_forecast_v2.py`, `cohort_forecast.py`, or `span_adapter.py`.
-  If they still do, stop and resolve that boundary before starting the
-  semantic adaptation packages below.
+  These modules may still exist in the tree as parity-oracle or frozen-v2
+  infrastructure pending later cleanup; the precondition is about live
+  production imports, not file presence. If production callers still use
+  them, stop and resolve that boundary before starting the semantic
+  adaptation packages below.
 - The five-subsystem split in `STATS_SUBSYSTEMS.md` is treated as
   binding. BE topo pass and BE CF pass remain different subsystems with
   different responsibilities.
 - The target semantic contract is already settled in docs 59 and
-  `COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md`. This workstream
-  implements that contract; it does not reopen it.
+  `COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md` for the structural
+  work through WP7, and `42-asat-contract.md` is binding wherever shared
+  preparation, admissibility, evidence selection, or posterior
+  resolution touches `asat()`. This workstream implements that contract;
+  it does not reopen it.
 - The degraded-output contract for query-scoped posteriors in doc 57 is
   a binding input to this workstream, not an optional side experiment.
+- WP8 is a separately ratified late enhancement, not a prerequisite for
+  starting or completing the structural work packages below. Do not treat
+  doc 59's recommended direct-`cohort()`-for-`p` path as auto-approved
+  implementation scope.
 
 ### Non-goals
 
@@ -164,6 +180,9 @@ The following are explicitly out of scope:
   the existing consumer contracts listed above
 - retirement of the v1/v2 chart features, except where that retirement
   is already independently in flight
+- migration of `_handle_cohort_maturity_v2` onto the shared preparation
+  helper; the v2 parity-oracle / frozen-chart path stays on its own local
+  preparation until the separate retirement / cleanup work removes it
 - a clean-slate graph-schema redesign
 
 This workstream may add or adjust CF provenance fields already agreed in
@@ -221,6 +240,12 @@ The verified implementation problems are:
    writer, but it must not grow into a second conditioned-forecast
    implementation.
 
+9. **`asat()` is not yet explicit enough as a shared preparation seam.**  
+   Evidence cutoff, posterior cutoff, evaluation date, and admissibility
+   metadata must remain aligned across first-class consumers. If one
+   caller drifts on `asat()` handling, identical semantic questions can
+   diverge even when the rest of the runtime contract matches.
+
 ## 6. Resolved design decisions
 
 The following decisions are already made and should not be re-litigated
@@ -251,8 +276,13 @@ inside the implementation workstream:
     be moved onto inner kernels.
 11. The BE topo pass remains analytically bounded. It must not be used as
     a second path for solving semantic problems that belong in CF.
-12. Direct `cohort()` evidence for `p` is a late, flagged enhancement. It
-    is not part of the early structural refactor.
+12. `asat()` remains a first-class semantic input to preparation,
+    admissibility, evidence visibility, and posterior selection. Callers
+    must not improvise local `asat()` behaviour outside the shared seam.
+13. Direct `cohort()` evidence for `p` is a late, flagged enhancement. It
+    is not part of the settled structural contract through WP7. Doc 59
+    recommends a narrow path, but implementation still requires explicit
+    ratification before coding.
 
 ## 7. Final file ownership after this workstream
 
@@ -298,9 +328,9 @@ still-fragmented runtime boundary.
 
 **Objective**
 
-Before changing semantics, make sure the workstream has usable red/green
-feedback at the correct boundaries and verify that the doc 56 runtime
-boundary is not regressing.
+Before changing semantics, refresh the live harness status, make sure the
+workstream has usable red/green feedback at the correct boundaries, and
+verify that the doc 56 runtime boundary is not regressing.
 
 **Primary files**
 
@@ -324,6 +354,35 @@ boundary is not regressing.
 - Preserve or tighten chart-versus-CF parity checks for equivalent
   semantic questions.
 - Preserve the query-scoped degradation tests that already encode doc 57.
+- Refresh stale harness status notes before triaging gaps. As of
+  22-Apr-26, the focused suites
+  `test_conditioned_forecast_response_contract.py`,
+  `test_temporal_regime_separation.py`, and
+  `conditionedForecastCompleteness.red.test.ts` are green even though
+  some comments or filenames still describe them as RED / expected-fail
+  style guards.
+- Make the `asat()` seam explicit in the harness map so shared
+  preparation, evidence filtering, and posterior resolution do not drift
+  silently when historical basis changes.
+- Freeze a small outside-in CLI assurance layer around the public tooling,
+  not just in-process tests. At minimum, classify and retain the
+  `graph-ops` harnesses that cover `asat()` blind behaviour, whole-graph
+  CF versus chart parity, and multi-hop degeneracy in limit cases.
+- Freeze the designated synth-fixture set for that outside-in layer up
+  front. Do not opportunistically swap fixtures mid-series, and treat any
+  oracle-capturing harness as subject to the fixture-ownership problem
+  described in `../test-fixture-ownership-problem.md`.
+
+Before WP1 starts, record an explicit disposition for each overlapping
+pre-existing red in doc 58: fix now, `xfail(strict=True)` pending a later
+package, or rewrite against the live public contract. At minimum that
+disposition must cover
+`test_doc56_phase0_behaviours.py::test_cf_span_prior_matches_resolver_concentration`;
+if any `test_bayes_cohort_maturity_wiring.py` cases are being reused as
+overlay / parity guards, doc 58 Groups A/B/D are rewrite-or-quarantine
+candidates rather than silent blockers. A forward-looking contract canary
+(for example a scoped multi-hop CF case) is fine, but it must be labelled
+as such rather than inherited as an unexplained red.
 
 **Do not do**
 
@@ -336,6 +395,8 @@ boundary is not regressing.
 - the engineer has green or intentionally-red tests at the public
   contract, parity, authority, and subject-coverage seams
 - dependency audit is green
+- no overlapping harness red remains unexplained; anything intentionally
+  red is explicitly classified
 - the workstream can move internals without flying blind
 
 ### WP1 — Extract one shared preparation path for chart and CF
@@ -363,6 +424,9 @@ regime selection, and frame composition separately.
   - temporal-mode selection
   - candidate-regime handling
   - doc 47's multi-hop cohort subject-frame rule
+  - `asat()` propagation: evidence cutoff, evaluation date, posterior
+    cutoff, and continuity of `asat()` metadata into admissibility and
+    evidence selection
   - snapshot reads
   - frame derivation
   - span-evidence composition
@@ -378,12 +442,17 @@ regime selection, and frame composition separately.
   semantics can be expressed through the shared helper.
 - Do not leave a local `is_window` branch inside one caller that changes
   subject evidence family independently of the shared helper.
+- Do not let one caller treat `asat()` as only a snapshot-read filter
+  while another also changes posterior or admissibility basis. The
+  three-date contract must enter from one seam.
 
 **Done when**
 
 - chart and CF are demonstrably using the same preparation policy for the
   same semantic question
 - doc 47's rule applies in both callers from the same seam
+- `asat()` cases preserve one shared evidence / posterior / evaluation
+  basis rather than caller-local variants
 
 ### WP2 — Make the runtime bundle explicit
 
@@ -455,7 +524,10 @@ docs 59 and the semantics note.
   - `window()` remains identity-carrier / `X`-rooted
 - Keep whole-query numerator reuse behind explicit admission policy only.
 - Remove, replace, or neutralise `_widen_span` as a semantic decision
-  point. If a similarly named helper survives, it must represent a
+  point in `handle_conditioned_forecast` and
+  `_handle_cohort_maturity_v3`. Do not broaden this package into
+  `_handle_cohort_maturity_v2` or the frozen v2 chart / parity-oracle
+  path. If a similarly named helper survives, it must represent a
   derived collapse, not a policy switch.
 
 **Do not do**
@@ -608,10 +680,13 @@ Land doc 57 on the cleaned runtime boundary.
 - `graph-editor/lib/runner/forecast_runtime.py`
 - `graph-editor/lib/api_handlers.py::handle_conditioned_forecast`
 - `graph-editor/lib/api_handlers.py::_handle_cohort_maturity_v3`
+- `graph-editor/lib/api_handlers.py` daily-conversions forecast annotation
+  path, plus any helper it uses for `rate_by_cohort` projections
 - `graph-editor/lib/runner/cohort_forecast_v3.py`
 - `graph-editor/lib/api_handlers.py::_compute_surprise_gauge`
-- any other active caller of the same sweep predicate if it is touched in
-  this series
+- every other active caller of the same sweep predicate; the named list
+  above is illustrative, not a licence to defer a live consumer because
+  its file was not in the first batch
 
 **Required changes**
 
@@ -622,8 +697,11 @@ Land doc 57 on the cleaned runtime boundary.
   provenance and conditioning fields agreed in doc 57.
 - Reuse the existing Beta closed-form semantics for the degraded rate-side
   outputs. Do not invent separate degraded formulas per caller.
-- Apply the same predicate to chart or other rate-style callers that
-  share the same sweep semantics.
+- Apply the same predicate and caller-facing contract across CF, the v3
+  chart path, the daily-conversions forecast path, the surprise gauge's
+  unavailable branch, and any other live first-class consumer that
+  reaches the same decision. Do not defer a live caller merely because it
+  was not in the first file list.
 - Make the surprise gauge explicitly unavailable rather than emitting a
   degraded numeric substitute.
 - Keep the rule per-edge. Do not propagate ineligibility downstream
@@ -637,11 +715,13 @@ Land doc 57 on the cleaned runtime boundary.
   belong in the normal result set.
 - Do not create one degraded contract for CF, another for chart, and a
   third for the gauge.
+- Do not leave one live caller on legacy query-scoped sweep logic while
+  another has moved to the shared helper. The invariant is pack-wide.
 
 **Done when**
 
 - doc 57's degraded-output and unavailable contracts are implemented
-  consistently across in-scope callers
+  consistently across all active callers of the shared predicate
 - previously query-scoped sweep paths are explicit and honest rather than
   silently incoherent
 
@@ -650,7 +730,8 @@ Land doc 57 on the cleaned runtime boundary.
 **Objective**
 
 Add the late, narrow evidence enhancement from doc 59 only after the
-structural and degraded-path work is green.
+structural and degraded-path work is green, and only if the owner has
+explicitly ratified that behaviour change for this workstream.
 
 **Primary files**
 
@@ -661,6 +742,9 @@ structural and degraded-path work is green.
 
 **Required changes**
 
+- Confirm that WP8 itself is in scope before coding it. If the late
+  behaviour change has not been ratified, stop after WP7 and treat this
+  package as deferred follow-on work rather than implied scope.
 - Add an explicit flag controlling only `p_conditioning_evidence`.
 - First landing should be cohort mode only and limited to exact or
   low-ambiguity subject matches, preferably single-hop first.
@@ -670,6 +754,9 @@ structural and degraded-path work is green.
   aggregate priors may update; query-scoped posteriors still do not.
 - Preserve the existing aggregate-prior blend discipline from doc 52
   wherever the late flag changes the rate-conditioning seam.
+- Start WP8 with a short design note that fixes the exact rate-update
+  mechanism for this flag and how doc 52's aggregate-prior discipline is
+  preserved.
 
 **Do not do**
 
@@ -704,6 +791,9 @@ needed and bringing the docs back into sync with the code.
 - Delete or collapse obsolete semantic flags that no longer carry real
   policy.
 - Keep the dependency audit green; do not reintroduce legacy imports.
+- Update the docs to acknowledge any rare residual fallback that remains
+  after WP7 (for example the no-posterior / no-manual-override weak-prior
+  path) rather than implying that every such branch vanished entirely.
 - Update the docs so they describe the live boundary rather than both the
   old and new boundary side by side.
 
@@ -731,11 +821,90 @@ The tests below are the main guidance system for this workstream.
 | chart / CF parity at equivalent question | drift between whole-graph CF, scoped CF, and chart horizon reads | `graph-editor/lib/tests/test_doc56_phase0_behaviours.py` | WP0-WP3 |
 | subject coverage and `all_graph_parameters` scope | whole-graph CF touching the wrong edge set | `graph-editor/lib/tests/test_analysis_subject_resolution.py` | WP0, WP1, WP6 |
 | multi-hop regime separation and doc 47 rule | wrong evidence family during subject-frame construction | `graph-editor/lib/tests/test_temporal_regime_separation.py` | WP1, WP3 |
+| `asat()` evidence / posterior / evaluation-date contract | drift between shared preparation, evidence visibility, posterior selection, and historical-basis projections | `graph-editor/lib/tests/test_asat_contract.py` and `graph-editor/src/services/__tests__/asatPosteriorResolution.integration.test.ts` | WP0, WP1, WP5 |
 | runtime dependency audit | regression back onto legacy v1/v2 runtime helpers | `graph-editor/lib/tests/test_forecast_stack_dependencies.py` | WP0, WP9 |
 | query-scoped degraded contract | double-conditioning on already-query-scoped posteriors | `graph-editor/lib/tests/test_cf_query_scoped_degradation.py` and `graph-editor/lib/tests/test_forecast_state_cohort.py` | WP0, WP5, WP7 |
 | span-operator contract | subject-span layer still doing resolver work or raw-field selection | `graph-editor/lib/tests/test_span_kernel.py` | WP4 |
 | funnel boundary | direct CF consumer bypassing the public CF surface | `graph-editor/lib/tests/test_funnel_contract.py` | WP5 |
 | whole-graph order invariance | edge-list-order-dependent whole-graph CF outputs | extend `graph-editor/lib/tests/test_doc56_phase0_behaviours.py` or add a dedicated whole-graph CF topology contract test | WP6 |
+
+Status note for WP0 triage: some focused suites still carry historical
+"RED" wording in comments or filenames, but that wording is not the live
+status signal. As of 22-Apr-26, targeted runs of
+`test_conditioned_forecast_response_contract.py`,
+`test_temporal_regime_separation.py`, and
+`conditionedForecastCompleteness.red.test.ts` are green. WP0 should
+refresh stale status notes before using those files as evidence of an
+open gap.
+
+### Outside-in CLI / graph-ops harnesses
+
+The table above is not the whole assurance story. For this programme, a
+small set of outside-in CLI harnesses should also be treated as part of
+the guidance system because they exercise the public tooling on stable
+fixtures and catch semantic drift in degeneracy / limit cases that
+unit-level tests can miss.
+
+Fixture-selection rule for these harnesses:
+
+1. choose the smallest graph that makes the invariant non-vacuous
+2. use topology matrices only for topology / whole-graph claims
+3. use one-purpose fixtures for `asat()` and semantic degeneracies first
+4. keep sparse, high-cardinality, slow-path, and identifiability fixtures
+   out of the core gate set unless that exact property is under test
+
+| Outside-in harness | Preferred fixtures | Protects against | Main packages | Expectation in this workstream |
+|---|---|---|---|---|
+| `graph-ops/scripts/asat-blind-test.sh` | `synth-simple-abc` primary; `synth-context-solo-mixed` when context / epoch interaction is the point | `asat()` drift across `param-pack.sh` and `analyse.sh`; historical evidence / posterior / evaluation-date inconsistencies leaking through the public tooling | WP0, WP1, WP5 | Core outside-in gate |
+| `graph-ops/scripts/conditioned-forecast-parity-test.sh` plus `graph-ops/scripts/cf-topology-suite.sh` | `synth-simple-abc`, `cf-fix-linear-no-lag`, `synth-mirror-4step`, `cf-fix-branching`, `cf-fix-diamond-mixed`, `cf-fix-deep-mixed` | whole-graph CF drifting from the v3 chart reference; topology-specific regressions across the T1-T7 matrix; daily-conversions / asat visibility regressions already encoded in the harness | WP5-WP7 | Core outside-in gate |
+| `graph-ops/scripts/multihop-evidence-parity-test.sh` | `synth-mirror-4step` | failure of the doc 47 seam in the non-latent-upstream limit where `cohort()` and `window()` should degenerate to the same evidence basis | WP0-WP3 | Core outside-in canary; may begin life as intentional red and must then be classified explicitly |
+| `graph-ops/scripts/window-cohort-convergence-test.sh` | `synth-mirror-4step` primary; `synth-lat4` secondary when genuine upstream-latency divergence is the property under test | cohort multi-hop composition drift in approximate / limit-case behaviour | WP3, WP6 | Secondary sanity check, not the primary acceptance oracle |
+| `graph-ops/scripts/cohort-maturity-model-parity-test.sh` | `synth-mirror-4step` | chart main-midline versus promoted-overlay divergence on `cohort_maturity` surfaces | WP3-WP5 when overlay-bearing chart surfaces are touched | Targeted guard, not a universal gate |
+
+Rationale for the designated graphs:
+
+- `synth-simple-abc` is the primary outside-in history / tooling fixture
+  because it is a tiny linear graph, easy to reason about, already used
+  successfully by the `asat()` blind tests, and simple enough that
+  changes in evidence visibility, completeness, or daily-conversions
+  boundary behaviour remain interpretable.
+- `synth-mirror-4step` is the primary multi-hop / mixed-class fixture
+  because it combines non-latent upstream segments with a latency-bearing
+  subject span. That makes it the cleanest graph for doc 47's
+  non-latent-upstream degeneracy, multi-hop cohort/window comparisons,
+  overlay checks, and mixed latency / non-latency public-tooling checks.
+- The `cf-fix-*` fixtures belong in the whole-graph CF topology suite,
+  not as general-purpose fixtures for every harness. Their value is the
+  T1-T7 topology matrix: linear no-lag, branching, diamond, and deep
+  mixed-depth coverage.
+- `synth-context-solo-mixed` is a secondary `asat()` fixture rather than a
+  default one. Use it when the question is specifically about
+  context-qualified or mixed-epoch historical basis, not for every
+  outside-in run.
+- `synth-lat4` is a secondary divergence fixture. It is useful when the
+  engineer needs to prove that upstream latency should make `cohort()`
+  and `window()` differ, so the non-latent degeneracy rule from
+  `synth-mirror-4step` is not over-generalised.
+
+Do not promote `synth-slow-path`, `synth-mirror-4step-slow`, sparse
+high-cardinality fixtures, or two-dimension context graphs into the core
+gate set for this programme. Those are useful research or stress assets,
+but they introduce too much unrelated noise for the main structural
+refactor.
+
+For `param-pack.sh`, no separate graph matrix is required here: treat
+`graph-ops/scripts/asat-blind-test.sh` as the outside-in `param-pack`
+gate. For `analyse.sh --type cohort_maturity`, the primary outside-in
+graphs are `synth-simple-abc` for simple historical-basis checks and
+`synth-mirror-4step` for multi-hop / mixed-class checks. For
+daily-conversions outside-in assurance, keep the existing
+`synth-simple-abc` historical-boundary checks in the conditioned-forecast
+parity harness rather than inventing a second broad parity matrix.
+
+The intent is not to promote every existing CLI or shell harness into a
+mandatory pre-merge gate. The valuable addition here is a **small**
+outside-in layer that exercises the same public tooling users and agents
+actually call.
 
 ### Good TDD candidates
 
@@ -747,6 +916,8 @@ The best red-test candidates for this workstream are:
 - subject-coverage seams
 - query-scoped degraded/unavailable contracts
 - whole-graph ordering invariants
+- outside-in degeneracy checks through the CLI tooling on stable synth or
+  fixed fixtures
 
 ### Bad TDD candidates
 
@@ -778,6 +949,11 @@ The work packages above should land in this order:
 9. **Late flagged direct-`cohort()` `p` enhancement** — WP8
 10. **Cleanup and documentation alignment** — WP9
 
+WP0-WP7 are the implementation-ready structural programme. WP8 is a
+separate, ratified-only follow-on package. If that behaviour change is
+not ratified, stopping after WP7 is a coherent delivery point rather than
+an incomplete half-state.
+
 Recommended PR grouping:
 
 - PR 1: WP0 + the smallest substrate fixes needed to make the tests
@@ -787,8 +963,13 @@ Recommended PR grouping:
 - PR 4: WP4
 - PR 5: WP5 + WP6
 - PR 6: WP7
-- PR 7: WP8
+- PR 7: WP8, if ratified
 - PR 8: WP9
+
+If WP1 proves too large to review coherently as one PR, split it into an
+early subject / temporal-identity pass and a follow-on regime / frame-
+composition pass. Do not split the shared-preparation seam across
+unrelated packages.
 
 This grouping keeps each reviewable unit coherent:
 
@@ -818,10 +999,18 @@ The workstream is complete only when all of the following are true:
 8. direct consumers such as the funnel consume the public CF surface
 9. summary callers are either aligned with the shared runtime or
    explicitly degraded / unavailable
-10. query-scoped posterior edges do not run the sweep again
-11. the analytic topo pass remains bounded and cannot shadow CF
-12. the dependency audit stays green
-13. the docs describe the live boundary accurately
+10. query-scoped posterior edges do not run the sweep again, and the
+    degraded / unavailable contract is consistent across all active
+    callers of that predicate
+11. `asat()` evidence visibility, posterior selection, evaluation date,
+    and admissibility metadata remain aligned across shared preparation
+    and downstream projections
+12. the selected outside-in CLI harnesses for `asat()`, multi-hop
+    degeneracy, and whole-graph CF parity pass on their designated
+    fixtures, or are explicitly classified when still intentional red
+13. the analytic topo pass remains bounded and cannot shadow CF
+14. the dependency audit stays green
+15. the docs describe the live boundary accurately
 
 ## 13. Relationship to later work
 

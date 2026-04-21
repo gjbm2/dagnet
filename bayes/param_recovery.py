@@ -490,8 +490,11 @@ def main():
         # Extract parent p from posterior summary:
         #   synth-context-solo-synth-ctx1-anchor-to-target
         #     window(): p=0.3033 (α=3.9, β=9.0)  ess=602 rhat=1.007 [bayesian]
-        p_match = re.search(
-            r"window\(\):\s+p=([\d.]+)\s+\(α=([\d.]+),\s*β=([\d.]+)\)\s+ess=([\d.]+)\s+rhat=([\d.]+)",
+        # Anchor to line start (with leading whitespace) so per-slice lines
+        # like "    context(...).window(): p=..." are NOT matched here —
+        # those are parsed separately by _parse_slice_posteriors.
+        p_match = re.match(
+            r"^\s+window\(\):\s+p=([\d.]+)\s+\(α=([\d.]+),\s*β=([\d.]+)\)\s+ess=([\d.]+)\s+rhat=([\d.]+)",
             line
         )
         if p_match:
@@ -507,8 +510,9 @@ def main():
 
         # Phase 2 cohort p from posterior summary:
         #     cohort(): p=0.5175 (α=86.4, β=80.6)  ess=3 rhat=1.828 [bayesian]
-        cohort_p_match = re.search(
-            r"cohort\(\):\s+p=([\d.]+)\s+\(α=([\d.]+),\s*β=([\d.]+)\)\s+ess=([\d.]+)\s+rhat=([\d.]+)",
+        # Anchor to line start (same slice-line bug as window()).
+        cohort_p_match = re.match(
+            r"^\s+cohort\(\):\s+p=([\d.]+)\s+\(α=([\d.]+),\s*β=([\d.]+)\)\s+ess=([\d.]+)\s+rhat=([\d.]+)",
             line
         )
         if cohort_p_match:
@@ -572,8 +576,10 @@ def main():
         eid_line_match = re.search(r"^\s{2}([\w-]+)$", line.rstrip())
         if eid_line_match:
             _last_edge_name = eid_line_match.group(1)
-        p_match = re.search(
-            r"window\(\):\s+p=([\d.]+)\s+\(α=([\d.]+),\s*β=([\d.]+)\)",
+        # Anchor to line start so per-slice "context(...).window(): p=..."
+        # lines are not matched here (they go through slice parsing).
+        p_match = re.match(
+            r"^\s+window\(\):\s+p=([\d.]+)\s+\(α=([\d.]+),\s*β=([\d.]+)\)",
             line
         )
         if p_match and _last_edge_name:
@@ -587,9 +593,10 @@ def main():
                     posteriors.setdefault(_upfx, {}).update({
                         "p_mean": p_val, "p_sd": p_sd,
                     })
-        # Also parse cohort() p and store as cohort_p_mean
-        cohort_p_match2 = re.search(
-            r"cohort\(\):\s+p=([\d.]+)\s+\(α=([\d.]+),\s*β=([\d.]+)\)",
+        # Also parse cohort() p and store as cohort_p_mean.
+        # Anchor to line start (same slice-line bug as window()).
+        cohort_p_match2 = re.match(
+            r"^\s+cohort\(\):\s+p=([\d.]+)\s+\(α=([\d.]+),\s*β=([\d.]+)\)",
             line
         )
         if cohort_p_match2 and _last_edge_name:

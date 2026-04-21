@@ -166,6 +166,8 @@ export interface BayesPatchEdge {
     ppc_n_obs?: number | null;
     ppc_traj_coverage_90?: number | null;
     ppc_traj_n_obs?: number | null;
+    // Subset-conditioning mass (doc 52 §14.3)
+    n_effective?: number | null;
   }>;
   _model_state?: Record<string, number>;
   prior_tier?: string;
