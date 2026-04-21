@@ -166,21 +166,24 @@ environment variables.
   `fetchDataService.fetchItems({ mode: 'from-file' })` — the same
   function the browser's `useDSLReaggregation` hook calls
 - **`commands/analyse.ts`** — calls `prepareAnalysisComputeInputs` →
-  `runPreparedAnalysis` — the same functions the browser's
-  `useCanvasAnalysisCompute` hook calls
+  `runPreparedAnalysis` for standard analyses, and dispatches
+  `conditioned_forecast` to `/api/forecast/conditioned` using the same
+  preparation output the browser builds
 - **`bootstrap.ts`** — shared arg parsing, graph loading, registry
   seeding; new commands extend this rather than duplicating setup
 
-**Known limitation**: the `from-file` fetch path calls
-`getParameterFromFile` → `fileRegistry.restoreFile()` which hits IDB.
-In Node, IDB operations fail silently — parameter values are never
-written onto graph edges, and Stage 2 (FE topo pass) produces nothing.
-Parameter file data IS loaded into `bundle.parameters` by diskLoader,
-but it doesn't reach the graph edges via the normal fetch pipeline.
-The `--topo-pass` flag on `analyse.ts` works around this by reading
-cohort evidence directly from `bundle.parameters` and calling the BE
-`/api/lag/topo-pass` endpoint. See `FE_BE_STATS_PARALLELISM.md` §CLI
-topo pass.
+Runtime-boundary rule for shared TS code:
+
+- If a helper is used by both the browser and the CLI, keep it in an
+  isomorphic module (`src/lib/` or another runtime-neutral surface)
+- Browser orchestration services may wrap those helpers, but the CLI
+  should not depend on React contexts, dialog stacks, or IDB-specific
+  modules transitively
+
+`src/lib/conditionedForecastGraphSnapshot.ts` is the reference example:
+it builds the engorged graph payload for conditioned forecast using an
+explicit parameter-file resolver, so the browser can supply `fileRegistry`
+data while the CLI supplies the disk-loaded `bundle.parameters` map.
 
 E2E parity is verified by a Playwright test
 (`e2e/cliParityGraphOverview.spec.ts`) that loads the same graph in

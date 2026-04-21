@@ -151,7 +151,7 @@ def resolve_analysis_subjects(
         )
     elif scope_rule == 'all_graph_parameters':
         return _resolve_all_parameters(
-            graph, analysis_type, scope_rule,
+            graph, parsed, analysis_type, scope_rule,
             candidate_regimes_by_edge, temporal_mode, anchor_from, anchor_to,
         )
     else:
@@ -187,39 +187,13 @@ def _resolve_funnel_path(
         for edge in resolved_path.ordered_edges
     ]
 
-    # For cohort_maturity, sweep_from defaults to anchor_from,
-    # sweep_to defaults to asat date if present, else today (doc 42 §2).
-    sweep_from = None
-    sweep_to = None
-    if analysis_type in ('cohort_maturity', 'cohort_maturity_v1', 'cohort_maturity_v2'):
-        sweep_from = anchor_from
-        import datetime
-        if parsed.asat:
-            # Resolve relative dates (e.g. -7d) to absolute
-            try:
-                from dateutil.parser import parse as _dateutil_parse
-                # asat is UK format (d-MMM-yy) or relative — try parsing
-                _asat_str = parsed.asat.strip()
-                # Relative offsets (e.g. -7d) — resolve from today
-                if re.match(r'^-?\d+[dwmy]$', _asat_str):
-                    sweep_to = datetime.date.today().isoformat()
-                else:
-                    # UK date: parse d-MMM-yy
-                    _months = {'Jan':1,'Feb':2,'Mar':3,'Apr':4,'May':5,'Jun':6,
-                               'Jul':7,'Aug':8,'Sep':9,'Oct':10,'Nov':11,'Dec':12}
-                    _m = re.match(r'^(\d{1,2})-([A-Z][a-z]{2})-(\d{2})$', _asat_str)
-                    if _m:
-                        _y = 2000 + int(_m.group(3))
-                        _mo = _months.get(_m.group(2), 1)
-                        _d = int(_m.group(1))
-                        sweep_to = datetime.date(_y, _mo, _d).isoformat()
-                    else:
-                        # Try ISO fallback
-                        sweep_to = datetime.date.fromisoformat(_asat_str[:10]).isoformat()
-            except Exception:
-                sweep_to = datetime.date.today().isoformat()
-        else:
-            sweep_to = datetime.date.today().isoformat()
+    # Any read mode that reconstructs frames from the snapshot DB must
+    # honour asat() by capping sweep_to at the asat date instead of today.
+    sweep_from, sweep_to = _resolve_sweep_bounds(
+        read_mode=ANALYSIS_TYPE_READ_MODES.get(analysis_type, ''),
+        anchor_from=anchor_from,
+        asat=parsed.asat,
+    )
 
     return ResolvedAnalysisResult(
         from_node=resolved_path.from_node,
@@ -284,6 +258,7 @@ def _resolve_children(
 
 def _resolve_all_parameters(
     graph: Union[Dict[str, Any], Any],
+    parsed: ParsedQuery,
     analysis_type: str,
     scope_rule: str,
     candidate_regimes_by_edge: Dict[str, List[Dict[str, Any]]],
@@ -305,16 +280,13 @@ def _resolve_all_parameters(
         for edge in edges
     ]
 
-    # Sweep date defaults: same logic as _resolve_funnel_path.
-    # conditioned_forecast uses cohort_maturity read mode, so it needs
-    # sweep_from=anchor_from and sweep_to=today (unless asat overrides).
-    sweep_from = None
-    sweep_to = None
-    read_mode = ANALYSIS_TYPE_READ_MODES.get(analysis_type, '')
-    if read_mode in ('cohort_maturity', 'sweep_simple'):
-        sweep_from = anchor_from
-        import datetime
-        sweep_to = datetime.date.today().isoformat()
+    # Whole-graph conditioned_forecast uses the same sweep semantics as the
+    # path-scoped cohort_maturity handler: asat() caps evidence visibility.
+    sweep_from, sweep_to = _resolve_sweep_bounds(
+        read_mode=ANALYSIS_TYPE_READ_MODES.get(analysis_type, ''),
+        anchor_from=anchor_from,
+        asat=parsed.asat,
+    )
 
     return ResolvedAnalysisResult(
         from_node=None,
@@ -481,6 +453,22 @@ def _resolve_date(raw: str | None) -> str:
         pass
 
     return today.isoformat()
+
+
+def _resolve_sweep_bounds(
+    read_mode: str,
+    anchor_from: Optional[str],
+    asat: Optional[str],
+) -> tuple[Optional[str], Optional[str]]:
+    """Resolve sweep bounds for snapshot-backed read modes.
+
+    Doc 42 / DATE_MODEL_COHORT_MATURITY: sweep_from starts at the earliest
+    anchor day, and sweep_to is capped by asat() when present, otherwise
+    defaults to today.
+    """
+    if read_mode not in ('cohort_maturity', 'sweep_simple'):
+        return (None, None)
+    return (anchor_from, _resolve_date(asat))
 
 
 def _extract_time_bounds(query_dsl: str) -> tuple:

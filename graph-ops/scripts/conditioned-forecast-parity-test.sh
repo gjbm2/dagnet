@@ -16,6 +16,10 @@
 #   - Compare against whole-graph conditioned forecast p_mean
 #   - Diagnostic table with per-edge pass/fail
 #
+# Phase 4: Historical asat visibility
+#   - daily_conversions shows the maturity/forecast boundary move
+#   - whole-graph conditioned_forecast reduces visible evidence under asat
+#
 # Usage:
 #   bash graph-ops/scripts/conditioned-forecast-parity-test.sh [graph-name] [options]
 #
@@ -455,6 +459,198 @@ print(f'PMF_SUMMARY:{n_pass}:{n_fail}')
   echo "$PMF_RESULT" | grep -v "^PMF_SUMMARY:" | sed 's/^/  /'
 fi
 
+# ── Phase 4: Historical asat visibility ───────────────────────────
+echo ""
+echo "Phase 4: Historical asat visibility"
+
+if [ "$GRAPH_NAME" != "synth-simple-abc" ]; then
+  echo "  SKIPPED — historical asat fixture is defined only for synth-simple-abc"
+else
+  ASAT_DATE="15-Jan-26"
+  ASAT_TEMPORAL_DSL="window(12-Dec-25:20-Mar-26)"
+  ASAT_EDGE_DSL="from(simple-a).to(simple-b).${ASAT_TEMPORAL_DSL}"
+
+  DC_LIVE_FILE="$TMPDIR_CF/daily_live.json"
+  DC_ASAT_FILE="$TMPDIR_CF/daily_asat.json"
+  WG_ASAT_LIVE_FILE="$TMPDIR_CF/wg_asat_live.json"
+  WG_ASAT_FILE="$TMPDIR_CF/wg_asat.json"
+
+  bash "$_DAGNET_ROOT/graph-ops/scripts/analyse.sh" "$GRAPH_NAME" \
+    "$ASAT_EDGE_DSL" \
+    --type daily_conversions --no-snapshot-cache --format json \
+    2>/dev/null | sed '1{/^Now using/d}' \
+    > "$DC_LIVE_FILE" || true
+
+  bash "$_DAGNET_ROOT/graph-ops/scripts/analyse.sh" "$GRAPH_NAME" \
+    "${ASAT_EDGE_DSL}.asat(${ASAT_DATE})" \
+    --type daily_conversions --no-snapshot-cache --format json \
+    2>/dev/null | sed '1{/^Now using/d}' \
+    > "$DC_ASAT_FILE" || true
+
+  bash "$_DAGNET_ROOT/graph-ops/scripts/analyse.sh" "$GRAPH_NAME" \
+    "$ASAT_TEMPORAL_DSL" \
+    --type conditioned_forecast --topo-pass --no-snapshot-cache --format json \
+    2>/dev/null | sed '1{/^Now using/d}' \
+    > "$WG_ASAT_LIVE_FILE" || true
+
+  bash "$_DAGNET_ROOT/graph-ops/scripts/analyse.sh" "$GRAPH_NAME" \
+    "${ASAT_TEMPORAL_DSL}.asat(${ASAT_DATE})" \
+    --type conditioned_forecast --topo-pass --no-snapshot-cache --format json \
+    2>/dev/null | sed '1{/^Now using/d}' \
+    > "$WG_ASAT_FILE" || true
+
+  DAILY_ASAT_RESULT=$(python3 <<PY
+import json
+
+def load(path):
+    try:
+        return json.load(open(path))
+    except Exception as exc:
+        return {"__error__": str(exc)}
+
+def rows(payload):
+    if "__error__" in payload:
+        return []
+    result = payload.get("result", {})
+    return result.get("data", []) or result.get("rows", []) or []
+
+def summarise(payload):
+    rs = rows(payload)
+    mature = [r for r in rs if r.get("layer") == "mature"]
+    forecast = [r for r in rs if r.get("layer") == "forecast"]
+    null_comp = [r for r in rs if r.get("completeness") is None]
+    return {
+        "mature_rows": len(mature),
+        "forecast_rows": len(forecast),
+        "null_completeness_rows": len(null_comp),
+        "last_mature_date": mature[-1]["date"] if mature else None,
+        "first_forecast_date": forecast[0]["date"] if forecast else None,
+        "first_null_completeness_date": null_comp[0]["date"] if null_comp else None,
+    }
+
+live = load("$DC_LIVE_FILE")
+asat = load("$DC_ASAT_FILE")
+live_summary = summarise(live)
+asat_summary = summarise(asat)
+
+ok = (
+    "__error__" not in live and
+    "__error__" not in asat and
+    live_summary["forecast_rows"] == 0 and
+    live_summary["null_completeness_rows"] == 0 and
+    asat_summary["mature_rows"] < live_summary["mature_rows"] and
+    asat_summary["forecast_rows"] > 0 and
+    asat_summary["null_completeness_rows"] > 0
+)
+
+print("  Daily conversions boundary diagnostic:")
+print(json.dumps({"live": live_summary, "asat": asat_summary}, indent=2))
+print(f"DAILY_ASAT_SUMMARY:{1 if ok else 0}")
+PY
+)
+
+  TOTAL=$((TOTAL + 1))
+  DAILY_ASAT_LINE=$(echo "$DAILY_ASAT_RESULT" | grep "^DAILY_ASAT_SUMMARY:" | head -1)
+  if [ -n "$DAILY_ASAT_LINE" ] && [ "${DAILY_ASAT_LINE##*:}" = "1" ]; then
+    PASS=$((PASS + 1))
+    echo "  ✓ daily_conversions shifts the maturity boundary under asat"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  ✗ daily_conversions did not expose the expected asat boundary shift"
+  fi
+  echo "$DAILY_ASAT_RESULT" | grep -v "^DAILY_ASAT_SUMMARY:" | sed 's/^/    /'
+
+  CF_ASAT_RESULT=$(python3 <<PY
+import json
+
+def load(path):
+    try:
+        return json.load(open(path))
+    except Exception as exc:
+        return {"__error__": str(exc)}
+
+live = load("$WG_ASAT_LIVE_FILE")
+asat = load("$WG_ASAT_FILE")
+graph = load("$GRAPH_FILE")
+
+if "__error__" in live or "__error__" in asat or "__error__" in graph:
+    print("CF_ASAT_SUMMARY:0:1:0")
+else:
+    nmap = {n["uuid"]: n.get("id", "") for n in graph.get("nodes", [])}
+    live_edges = {
+        e.get("edge_uuid"): e
+        for e in live.get("scenarios", [{}])[0].get("edges", [])
+    }
+    asat_edges = {
+        e.get("edge_uuid"): e
+        for e in asat.get("scenarios", [{}])[0].get("edges", [])
+    }
+
+    print(f'{"edge":30s} | {"live n":>10s} | {"asat n":>10s} | {"live k":>10s} | {"asat k":>10s} | {"live comp":>10s} | {"asat comp":>10s} | result')
+    print("-" * 118)
+
+    n_pass = 0
+    n_fail = 0
+    for edge in graph.get("edges", []):
+        p_id = edge.get("p", {}).get("id", "")
+        to_name = nmap.get(edge.get("to", ""), "")
+        from_name = nmap.get(edge.get("from", ""), "")
+        if not p_id or "dropout" in to_name:
+            continue
+
+        label = f"{from_name} -> {to_name}"
+        live_edge = live_edges.get(edge["uuid"])
+        asat_edge = asat_edges.get(edge["uuid"])
+        live_n = live_edge.get("evidence_n") if live_edge else None
+        asat_n = asat_edge.get("evidence_n") if asat_edge else None
+        live_k = live_edge.get("evidence_k") if live_edge else None
+        asat_k = asat_edge.get("evidence_k") if asat_edge else None
+        live_c = live_edge.get("completeness") if live_edge else None
+        asat_c = asat_edge.get("completeness") if asat_edge else None
+
+        ok = (
+            live_n is not None and asat_n is not None and asat_n < live_n and
+            live_k is not None and asat_k is not None and asat_k < live_k and
+            live_c is not None and asat_c is not None and asat_c < live_c
+        )
+        status = "PASS" if ok else "FAIL"
+        if ok:
+            n_pass += 1
+        else:
+            n_fail += 1
+
+        def fmt(value, spec):
+            return format(value, spec) if value is not None else "      None"
+
+        print(
+            f"{label:30s} | "
+            f"{fmt(live_n, '10.0f')} | {fmt(asat_n, '10.0f')} | "
+            f"{fmt(live_k, '10.0f')} | {fmt(asat_k, '10.0f')} | "
+            f"{fmt(live_c, '10.4f')} | {fmt(asat_c, '10.4f')} | {status}"
+        )
+
+    print(f"CF_ASAT_SUMMARY:{n_pass}:{n_fail}:0")
+PY
+)
+
+  TOTAL=$((TOTAL + 1))
+  CF_ASAT_LINE=$(echo "$CF_ASAT_RESULT" | grep "^CF_ASAT_SUMMARY:" | head -1)
+  if [ -n "$CF_ASAT_LINE" ]; then
+    IFS=: read -r _ p f s <<< "$CF_ASAT_LINE"
+    if [ "$f" = "0" ] && [ "$p" -gt "0" ] 2>/dev/null; then
+      PASS=$((PASS + 1))
+      echo "  ✓ whole-graph CF reduces visible evidence under asat for $p edges"
+    else
+      FAIL=$((FAIL + 1))
+      echo "  ✗ whole-graph CF asat visibility failed ($p pass, $f fail)"
+    fi
+  else
+    FAIL=$((FAIL + 1))
+    echo "  ✗ whole-graph CF asat visibility did not produce a summary"
+  fi
+  echo "$CF_ASAT_RESULT" | grep -v "^CF_ASAT_SUMMARY:" | sed 's/^/    /'
+fi
+
 # ── Summary ───────────────────────────────────────────────────────
 echo ""
 echo "══════════════════════════════════════════════════════"
@@ -463,6 +659,7 @@ echo ""
 echo "  Phase 1: temporal-only request returns non-empty edges"
 echo "  Phase 2: whole-graph p_mean matches v3 chart midpoint"
 echo "  Phase 3: sibling PMF consistency (sum ≤ 1.0)"
+echo "  Phase 4: historical asat lowers visible evidence"
 echo "══════════════════════════════════════════════════════"
 
 exit $FAIL

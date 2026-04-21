@@ -95,6 +95,7 @@ export function ScenarioContextMenu({ tabId }: ScenarioContextMenuProps) {
   }, [tabId, operations, scenariosContext]);
 
   const handleOpenEditor = useCallback((scenarioId: string) => {
+    console.log('[ScenarioContextMenu] handleOpenEditor called', { scenarioId, hasContext: !!scenariosContext, hasOpenInEditor: !!scenariosContext?.openInEditor });
     scenariosContext?.openInEditor(scenarioId);
   }, [scenariosContext]);
 

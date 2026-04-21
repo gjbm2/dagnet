@@ -97,6 +97,7 @@ import {
   type ConditionedForecastEdgeResult,
   type ConditionedForecastScenarioResult,
 } from '../conditionedForecastService';
+import { buildConditionedForecastGraphSnapshot } from '../../lib/conditionedForecastGraphSnapshot';
 import { runStage2EnhancementsAndInboundN, type FetchItem } from '../fetchDataService';
 import { fileRegistry } from '../../contexts/TabContext';
 import { parseConstraints } from '../../lib/queryDSL';
@@ -156,6 +157,12 @@ function registerParamFile(): void {
               median_lag_days: [5, 5, 5],
               mean_lag_days: [6, 6, 6],
               latency: { onset_delta_days: 1 },
+            },
+            {
+              sliceDSL: 'cohort(1-Nov-25:7-Nov-25)',
+              dates: ['2025-11-01', '2025-11-02', '2025-11-03'],
+              n_daily: [100, 100, 100],
+              k_daily: [40, 40, 40],
             },
           ],
         },
@@ -271,6 +278,44 @@ describe('CF owns completeness (doc 45) — RED', () => {
     expect(edge.p.latency.completeness_stdev).not.toBeCloseTo(0.05, 5);
   });
 
+  it('applyConditionedForecastToGraph writes CF evidence onto edge.p.evidence', () => {
+    const graph = latencyGraph();
+    const results: ConditionedForecastScenarioResult[] = [
+      {
+        scenario_id: 'current',
+        success: true,
+        edges: [
+          {
+            edge_uuid: EDGE_ID,
+            p_mean: 0.6,
+            p_sd: 0.04,
+            evidence_n: 120,
+            evidence_k: 48,
+          },
+        ],
+      },
+    ];
+
+    const updated = applyConditionedForecastToGraph(graph, results);
+    const edge = updated.edges.find((e: any) => (e.uuid || e.id) === EDGE_ID);
+    expect(edge.p.evidence.n).toBe(120);
+    expect(edge.p.evidence.k).toBe(48);
+    expect(edge.p.evidence.mean).toBeCloseTo(0.4, 5);
+  });
+
+  it('buildConditionedForecastGraphSnapshot engorges a clone without dirtying the live graph', () => {
+    const graph = latencyGraph();
+
+    const snapshot = buildConditionedForecastGraphSnapshot(
+      graph,
+      (paramId) => fileRegistry.getFile(`parameter-${paramId}`)?.data,
+    );
+
+    expect((graph.edges[0] as any)._bayes_evidence).toBeUndefined();
+    expect((snapshot.edges[0] as any)._bayes_evidence).toBeDefined();
+    expect((snapshot.edges[0] as any)._bayes_evidence.cohort[0].n_daily).toEqual([100, 100, 100]);
+  });
+
   // ── 3. End-to-end: CF completeness lands via the Stage-2 pipeline ───
 
   it('CF fast path: edge completeness is CF value (not FE topo CDF value)', async () => {
@@ -285,6 +330,8 @@ describe('CF owns completeness (doc 45) — RED', () => {
             p_sd: 0.04,
             completeness: 0.88,
             completeness_sd: 0.06,
+            evidence_n: 120,
+            evidence_k: 48,
           },
         ],
       },
@@ -302,6 +349,9 @@ describe('CF owns completeness (doc 45) — RED', () => {
     // CF's completeness (0.88) must win — FE's CDF-based value would
     // be whatever enhanceGraphLatencies computed, NOT 0.88.
     expect(edge.p.latency.completeness).toBeCloseTo(0.88, 5);
+    expect(edge.p.evidence.n).toBe(120);
+    expect(edge.p.evidence.k).toBe(48);
+    expect(edge.p.evidence.mean).toBeCloseTo(0.4, 5);
   });
 
   it('CF slow path: edge completeness becomes CF value after subsequent-overwrite .then() fires', async () => {

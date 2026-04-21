@@ -142,7 +142,7 @@ def test_cf_span_prior_matches_resolver_concentration():
     concentration. Today: CF=20, resolver=thousands → fails.
     Post-fix: CF reads resolved.alpha+beta directly → passes.
 
-    Fixture: synth-simple-abc (all-lagless, analytic_be-promoted,
+    Fixture: synth-simple-abc (all non-latency, analytic_be-promoted,
     non-trivial evidence). window(-120d:) picks up every cohort.
     """
     import sys

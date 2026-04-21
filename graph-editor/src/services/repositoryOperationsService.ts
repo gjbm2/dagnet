@@ -15,6 +15,7 @@ import { sessionLogService } from './sessionLogService';
 import { conflictResolutionService } from './conflictResolutionService';
 import { merge3Way, mergeJson3Way } from './mergeService';
 import type { ConflictFile } from '../components/modals/MergeConflictModal';
+import { cloneGraphWithoutBayesRuntimeFields } from '../lib/bayesGraphRuntime';
 
 export interface RepositoryStatus {
   repository: string;
@@ -884,7 +885,7 @@ class RepositoryOperationsService {
    */
   private async serializeFileData(file: FileState): Promise<string> {
     if (file.type === 'graph') {
-      return JSON.stringify(file.data, null, 2);
+      return JSON.stringify(cloneGraphWithoutBayesRuntimeFields(file.data), null, 2);
     } else {
       const YAML = await import('yaml');
       return YAML.stringify(file.data);
@@ -1171,17 +1172,22 @@ class RepositoryOperationsService {
       // Only update metadata timestamps for graphs (they have a standard metadata structure)
       // Don't mutate fileState.data directly - create a copy for serialization
       if (fileState?.data) {
-        if (fileState.type === 'graph' && fileState.data.metadata) {
-          // Create a shallow copy with updated timestamp for commit
-          const dataForCommit = {
-            ...fileState.data,
-            metadata: {
-              ...fileState.data.metadata,
-              updated_at: nowISO,
-              ...(gitCreds?.userName && !fileState.data.metadata.author ? { author: gitCreds.userName } : {})
-            }
-          };
-          content = JSON.stringify(dataForCommit, null, 2);
+        if (fileState.type === 'graph') {
+          const sanitisedGraph = cloneGraphWithoutBayesRuntimeFields(fileState.data);
+          if (sanitisedGraph.metadata) {
+            // Create a shallow copy with updated timestamp for commit
+            const dataForCommit = {
+              ...sanitisedGraph,
+              metadata: {
+                ...sanitisedGraph.metadata,
+                updated_at: nowISO,
+                ...(gitCreds?.userName && !sanitisedGraph.metadata.author ? { author: gitCreds.userName } : {})
+              }
+            };
+            content = JSON.stringify(dataForCommit, null, 2);
+          } else {
+            content = JSON.stringify(sanitisedGraph, null, 2);
+          }
         } else {
           // For non-graph files (YAML), just serialize as-is without modifying
           content = YAML.stringify(fileState.data);

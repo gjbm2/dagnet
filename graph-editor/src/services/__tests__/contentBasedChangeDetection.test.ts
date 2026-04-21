@@ -173,6 +173,47 @@ describe('SHA-Based Change Detection', () => {
       expect(committableFiles).toHaveLength(0);
     });
 
+    it('should treat contaminated graph files as committable cleanup even when local data matches the old polluted payload', async () => {
+      const contaminatedGraph = {
+        nodes: [{ uuid: 'n1', id: 'node-1', label: 'Node 1' }],
+        edges: [{
+          uuid: 'edge-1',
+          from: 'node-1',
+          to: 'node-2',
+          _bayes_evidence: { stale: true },
+          _bayes_priors: { stale: true },
+          p: {
+            id: 'checkout-to-payment',
+            latency: {
+              __parityEvidence: [{ date: '1-Jan-26', n: 5, k: 2 }],
+              __parityComputedT95Days: 11,
+            },
+          },
+        }],
+        metadata: {
+          version: '1.0.0',
+          created_at: '2026-01-01T00:00:00.000Z',
+          updated_at: '2026-01-01T00:00:00.000Z',
+        },
+      };
+      const remoteSha = await computeGitBlobSha(JSON.stringify(contaminatedGraph, null, 2));
+
+      mockFiles.push({
+        fileId: 'graph-contaminated',
+        type: 'graph',
+        data: contaminatedGraph,
+        sha: remoteSha,
+        isDirty: false,
+        source: { repository: 'test-repo', branch: 'main', path: 'graphs/contaminated.json' },
+        viewTabs: [],
+      });
+
+      const committableFiles = await repositoryOperationsService.getCommittableFiles();
+
+      expect(committableFiles).toHaveLength(1);
+      expect(committableFiles[0].fileId).toBe('graph-contaminated');
+    });
+
     it('should exclude credentials files', async () => {
       mockFiles.push({
         fileId: 'credentials-credentials',

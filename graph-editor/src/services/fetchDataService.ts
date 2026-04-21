@@ -122,6 +122,22 @@ export interface FetchOptions {
   suppressBatchToast?: boolean;
 
   /**
+   * When true, suppress the 5-step fetch-compute pipeline op (plan → fetch → FE → BE → CF).
+   * Intended for batch callers (e.g. regenerateAllLive looping visible scenarios) that
+   * register their own wrapping op and don't want N per-scenario pipeline indicators
+   * stacking up in the operation registry. When set alongside `scenarioLabel`, Stage 2
+   * emits one compact per-scenario terminal op at CF resolution carrying the CF verdict
+   * (ran/ms/conditioned count) prefixed with the scenario name.
+   */
+  suppressPipelineToast?: boolean;
+
+  /**
+   * Human-readable scenario name used to prefix the per-scenario CF terminal op
+   * when `suppressPipelineToast` is set. Ignored when the pipeline op is shown.
+   */
+  scenarioLabel?: string;
+
+  /**
    * When true, skip Stage-2 graph-level enhancements (LAG topo pass + inbound-n).
    *
    * Intended for ephemeral/analysis-only fetches (e.g. share-link scenario regeneration) where we
@@ -168,6 +184,15 @@ export interface FetchOptions {
    * module boundaries in vitest's worker pool.
    */
   queryDate?: Date;
+
+  /**
+   * Explicit workspace identity for non-browser callers.
+   *
+   * The browser-conditioned forecast path can resolve this from IDB app state.
+   * CLI callers cannot, so they must thread the workspace through here for
+   * candidate-regime discovery.
+   */
+  workspace?: { repository: string; branch: string };
 
   /**
    * Pre-computed query signatures from the fetch planner, keyed by FetchPlan itemKey.
@@ -1111,6 +1136,91 @@ export function computeAndApplyInboundN(
  * @param getUpdatedGraph - Optional getter for fresh graph after each fetch
  * @returns Array of FetchResult objects
  */
+// ────────────────────────────────────────────────────────────────────────
+// Fetch-compute pipeline indicator
+//
+// Every fetch cycle (cache hit included) registers a single parent op with
+// five sub-steps that step through as the pipeline progresses, so the user
+// always has visibility into what's happening. The final label reflects
+// the conditioned-forecast verdict ("conditioned" vs "priors only") plus
+// total elapsed ms.
+//
+// Stages are derived from STATS_SUBSYSTEMS.md §4:
+//   plan   — planner has built the item list (marked complete at entry).
+//   fetch  — per-item fetch loop (detail shows "n/total" during the loop).
+//   fe     — FE topo pass (enhanceGraphLatencies) synchronous.
+//   be     — BE topo pass (runBeTopoPass + apply) fire-and-forget.
+//   cf     — Conditioned forecast (runConditionedForecast + apply) —
+//            races 500ms, final label reports "conditioned" / "priors only".
+// ────────────────────────────────────────────────────────────────────────
+
+export type PipelineStepId = 'plan' | 'fetch' | 'fe' | 'be' | 'cf';
+export type PipelineStepStatus = 'pending' | 'running' | 'complete' | 'error';
+
+export const PIPELINE_STEP_ORDER: PipelineStepId[] = ['plan', 'fetch', 'fe', 'be', 'cf'];
+export const PIPELINE_STEP_LABELS: Record<PipelineStepId, string> = {
+  plan: 'Fetch plan built',
+  fetch: 'Fetching data',
+  fe: 'FE analytics',
+  be: 'BE analytics',
+  cf: 'Producing forecast',
+};
+
+interface PipelineSubStep {
+  label: string;
+  status: PipelineStepStatus;
+  detail?: string;
+}
+
+const _pipelineStates = new Map<string, PipelineSubStep[]>();
+
+export function initPipelineOp(opId: string): void {
+  _pipelineStates.set(
+    opId,
+    PIPELINE_STEP_ORDER.map((id) => ({
+      label: PIPELINE_STEP_LABELS[id],
+      status: 'pending' as PipelineStepStatus,
+    })),
+  );
+  operationRegistryService.register({
+    id: opId,
+    kind: 'fetch-compute',
+    label: 'Recomputing…',
+    status: 'running',
+    progress: { current: 0, total: PIPELINE_STEP_ORDER.length },
+  });
+}
+
+export function setPipelineStep(
+  opId: string,
+  stepId: PipelineStepId,
+  status: PipelineStepStatus,
+  detail?: string,
+): void {
+  const state = _pipelineStates.get(opId);
+  if (!state) return;
+  const i = PIPELINE_STEP_ORDER.indexOf(stepId);
+  if (i < 0) return;
+  state[i] = { label: PIPELINE_STEP_LABELS[stepId], status, detail };
+  operationRegistryService.setSubSteps(opId, state.map((s) => ({ ...s })));
+  const completeCount = state.filter((s) => s.status === 'complete').length;
+  operationRegistryService.setProgress(opId, {
+    current: completeCount,
+    total: state.length,
+  });
+}
+
+export function completePipelineOp(
+  opId: string,
+  outcome: 'complete' | 'warning' | 'error' | 'cancelled',
+  finalLabel?: string,
+  action?: { label: string; onClick: () => void },
+): void {
+  if (finalLabel) operationRegistryService.setLabel(opId, finalLabel);
+  operationRegistryService.complete(opId, outcome, undefined, action);
+  _pipelineStates.delete(opId);
+}
+
 // Generation counter: each fetchItems call increments this. The conditioned
 // forecast closure captures the current generation and discards its result
 // if a newer fetch cycle has started (prevents stale p.mean clobbering).
@@ -1202,6 +1312,28 @@ export async function fetchItems(
     // Caller owns progress UI but we still need batch mode to suppress per-item toasts.
     setBatchMode(true);
   }
+
+  // ── Fetch-compute pipeline op (separate from the heavy-fetch batch-fetch op) ──
+  // Registered on every fetch cycle (including cache hits). The heavy-fetch
+  // `progressToastId` op above keeps its existing behaviour — per-item
+  // progress bar during Amplitude fetches. This pipeline op is additive:
+  // it shows the macro pipeline stages (plan → fetch → FE → BE → CF) so
+  // the user always has visibility into what's happening, including for
+  // cached fetches where the batch-fetch op doesn't register.
+  // Pipeline indicator: batch callers (regenerateAllLive) set
+  // suppressPipelineToast to avoid stacking N per-scenario pipelines.
+  // When suppressed, Stage 2's finaliseCfToast emits a single compact
+  // per-scenario CF terminal op instead (requires scenarioLabel).
+  const pipelineEnabled = !itemOptions?.suppressPipelineToast;
+  const pipelineOpId = pipelineEnabled
+    ? `fetch-pipeline-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    : '';
+  const pipelineStartMs = Date.now();
+  if (pipelineEnabled) {
+    initPipelineOp(pipelineOpId);
+    setPipelineStep(pipelineOpId, 'plan', 'complete', `${effectiveItems.length} item${effectiveItems.length !== 1 ? 's' : ''}`);
+    setPipelineStep(pipelineOpId, 'fetch', 'running', `0/${effectiveItems.length}`);
+  }
   
   let successCount = 0;
   let errorCount = 0;
@@ -1215,6 +1347,7 @@ export async function fetchItems(
       if (shouldShowBatchProgress) {
         operationRegistryService.setProgress(progressToastId, { current: i, total: effectiveItems.length });
       }
+      setPipelineStep(pipelineOpId, 'fetch', 'running', `${i}/${effectiveItems.length}`);
 
       // CRITICAL: Use getUpdatedGraph() to get fresh graph for each item
       // This ensures rebalancing from previous items is preserved
@@ -1357,6 +1490,7 @@ export async function fetchItems(
       }
     }
     
+    // Finalise the heavy-fetch batch-fetch op (existing behaviour).
     if (shouldShowBatchProgress) {
       operationRegistryService.setProgress(progressToastId, { current: effectiveItems.length, total: effectiveItems.length });
       if (rateLimitAborted) {
@@ -1368,6 +1502,23 @@ export async function fetchItems(
         operationRegistryService.setLabel(progressToastId, `Fetched ${successCount} item${successCount !== 1 ? 's' : ''}`);
         operationRegistryService.complete(progressToastId, 'complete');
       }
+    }
+
+    // Finalise the "Fetching data" sub-step of the pipeline op. Stage 2
+    // will pick up from here (FE analytics → BE analytics → CF).
+    if (rateLimitAborted) {
+      setPipelineStep(pipelineOpId, 'fetch', 'error',
+        `${successCount}/${effectiveItems.length} (rate limit — ${rateLimitSkipped} skipped)`);
+      completePipelineOp(pipelineOpId, 'error',
+        `Fetch aborted — rate limit (${successCount}/${effectiveItems.length})`);
+    } else if (errorCount > 0) {
+      setPipelineStep(pipelineOpId, 'fetch', 'error',
+        `${successCount}/${effectiveItems.length} (${errorCount} failed)`);
+      // Don't complete the parent yet — Stage 2 still runs for successful
+      // items. Stage 2 will complete the parent op at CF resolution.
+    } else {
+      setPipelineStep(pipelineOpId, 'fetch', 'complete',
+        `${successCount} item${successCount !== 1 ? 's' : ''}`);
     }
     
     if (successCount > 0 && !itemOptions?.skipStage2) {
@@ -1383,8 +1534,26 @@ export async function fetchItems(
           batchLogId,
           getUpdatedGraph,
           itemOptions?.awaitBackgroundPromises,
+          pipelineEnabled ? pipelineOpId : undefined,
+          pipelineStartMs,
         );
+      } else {
+        // No graph to enrich — pipeline ends here.
+        setPipelineStep(pipelineOpId, 'fe', 'error', 'no graph');
+        completePipelineOp(pipelineOpId, errorCount > 0 ? 'error' : 'warning',
+          `Recomputed (no graph, ${(Date.now() - pipelineStartMs).toLocaleString()}ms)`);
       }
+    } else if (!itemOptions?.skipStage2) {
+      // No items succeeded → Stage 2 won't run. Close out the pipeline
+      // op here so the indicator doesn't sit on 'fetch' forever.
+      completePipelineOp(pipelineOpId, errorCount > 0 ? 'error' : 'warning',
+        errorCount > 0
+          ? `Fetch failed (${(Date.now() - pipelineStartMs).toLocaleString()}ms)`
+          : `Nothing to fetch (${(Date.now() - pipelineStartMs).toLocaleString()}ms)`);
+    } else {
+      // Caller skipped Stage 2 — complete the pipeline op at the fetch stage.
+      completePipelineOp(pipelineOpId, errorCount > 0 ? 'error' : 'complete',
+        `Fetched ${successCount}/${effectiveItems.length} (${(Date.now() - pipelineStartMs).toLocaleString()}ms)`);
     }
   } finally {
     // Always reset batch mode
@@ -1495,7 +1664,23 @@ export async function runStage2EnhancementsAndInboundN(
   // The browser wants fire-and-forget (fast first render, async catch-up).
   // The CLI wants deterministic final output, so it sets this to true.
   awaitBackgroundPromises?: boolean,
+  // Optional: id of the fetch-compute pipeline op registered by fetchItems.
+  // When provided, this function updates the FE / BE / CF sub-steps as
+  // each pass fires/completes, and completes the parent op at CF
+  // resolution. When undefined (direct callers like retrieveAllSlices
+  // that don't use fetchItems), sub-step updates are no-ops.
+  pipelineOpId?: string,
+  pipelineStartMs?: number,
 ): Promise<void> {
+  // Local shorthand: guard sub-step updates on pipelineOpId presence
+  // so direct callers without a pipeline op don't fire no-op lookups.
+  const updatePipelineStep = (
+    stepId: PipelineStepId,
+    status: PipelineStepStatus,
+    detail?: string,
+  ) => {
+    if (pipelineOpId) setPipelineStep(pipelineOpId, stepId, status, detail);
+  };
     // ═══════════════════════════════════════════════════════════════════════
     // GRAPH-LEVEL LATENCY ENHANCEMENT (Topological Pass)
     // 
@@ -1742,11 +1927,19 @@ export async function runStage2EnhancementsAndInboundN(
             aggregateLatencyStats,
           };
           
-          // Use the *analysis date* (now) for age calculations.
-          // Cohort dates come from Amplitude; as time passes, cohorts age and
-          // completeness should converge towards 1 for long-ago cohorts,
-          // independent of the cohort() window bounds.
-          const queryDateForLAG = itemOptions?.queryDate ?? new Date();
+          let implicitQueryDateFromDsl: Date | null = null;
+          if (parsedDSL.asat) {
+            try {
+              implicitQueryDateFromDsl = parseDate(resolveRelativeDate(parsedDSL.asat));
+            } catch (err) {
+              console.warn('[fetchDataService] Failed to resolve asat() analysis date:', err);
+            }
+          }
+
+          // Use the caller override when present. Otherwise, asat() defines the
+          // point-in-time evaluation date for historical queries; only fall back
+          // to "now" when the DSL is not historical.
+          const queryDateForLAG = itemOptions?.queryDate ?? implicitQueryDateFromDsl ?? new Date();
           
           // Pass LAG slice window so completeness is computed from cohorts in the
           // same date range as the evidence (whether from cohort() or window() DSL).
@@ -1893,6 +2086,8 @@ export async function runStage2EnhancementsAndInboundN(
             forecasting.DEFAULT_T95_DAYS
           );
           
+          updatePipelineStep('fe', 'running');
+          const feStartMs = Date.now();
           const lagResult = enhanceGraphLatencies(
             finalGraph as GraphForPath,
             paramLookup,
@@ -1904,7 +2099,9 @@ export async function runStage2EnhancementsAndInboundN(
             lagSliceSource,
             forecasting
           );
-          
+          updatePipelineStep('fe', 'complete',
+            `${lagResult.edgesWithLAG} edge${lagResult.edgesWithLAG !== 1 ? 's' : ''}, ${(Date.now() - feStartMs).toLocaleString()}ms`);
+
           console.log('[fetchDataService] LAG enhancement result:', {
             edgesProcessed: lagResult.edgesProcessed,
             edgesWithLAG: lagResult.edgesWithLAG,
@@ -1937,85 +2134,232 @@ export async function runStage2EnhancementsAndInboundN(
           }
           
           // ════════════════════════════════════════════════════════════════
-          // FE + BE TOPO PASS APPLICATION (doc 45 §Delivery model)
+          // FE + BE TOPO PASS + CONDITIONED FORECAST APPLICATION
+          // (doc 45 §Delivery model, doc 50 §3.2, STATS_SUBSYSTEMS.md,
+          //  FE_BE_STATS_PARALLELISM.md)
           //
-          // FE topo pass is authoritative for `p.latency.*` on the graph:
-          // it populates `model_vars[analytic]` and writes direct latency
-          // display fields via `applyBatchLAGValues`.
+          // Three independent subsystems write to the graph:
           //
-          // BE topo pass fires alongside FE (same triggering event, no
-          // delay, no race). Its output is a model-var generator only —
-          // it populates `model_vars[analytic_be]`; promotion then decides
-          // which source's latency params land on the edge based on
-          // `model_source_preference`. BE topo pass MUST NOT overwrite
-          // `p.latency.*` directly: doing so bypasses promotion and
-          // couples BE's timing to the edge display.
+          //  - FE topo pass (synchronous, already run above via
+          //    enhanceGraphLatencies). Authoritative for `p.latency.*`;
+          //    populates `model_vars[analytic]`. Its apply path requires
+          //    `lagResult.edgeValues` to be non-empty — if the query-scoped
+          //    YAML evidence is absent, FE has nothing to apply.
           //
-          // A generation counter guards against a stale BE response from
-          // a previous fetch cycle clobbering the current graph.
+          //  - BE topo pass (fire-and-forget). A model-var generator that
+          //    populates `model_vars[analytic_be]`; promotion decides which
+          //    source's latency params land on the edge. MUST NOT overwrite
+          //    `p.latency.*` directly. Consults the snapshot DB server-side,
+          //    so it does NOT depend on YAML-aggregated evidence being
+          //    present. Fires on every query.
+          //
+          //  - Conditioned forecast (races a 500ms fast deadline). The
+          //    authoritative writer of `p.mean` / `p.sd` /
+          //    `latency.completeness*`. Reads the snapshot DB directly per
+          //    doc 50, so it too is independent of YAML evidence. Doc 50
+          //    §3.2 binds it to a per-edge contract: a real estimate for
+          //    every edge with a prior or snapshot evidence, otherwise a
+          //    structured `skipped_edges` entry. No silent drops.
+          //
+          // The BE topo pass and CF both fire on every query. Earlier code
+          // gated them behind `lagResult.edgeValues.length > 0`, which
+          // meant a narrow cohort (or any query that turned up no YAML
+          // evidence) silently disabled the two subsystems that would have
+          // answered it correctly from the snapshot DB. That gating was
+          // pathological and contradicted doc 50's "no silent drops"
+          // invariant; it is removed here.
+          //
+          // Generation counters (_beTopoPassGeneration,
+          // _conditionedForecastGeneration) guard against a stale response
+          // from a previous fetch cycle clobbering the current graph.
           // ════════════════════════════════════════════════════════════════
-          if (lagResult.edgeValues.length > 0 && finalGraph?.edges) {
-            const updateManager = new UpdateManager();
-            const preserveLatencySummaryFromFile = itemOptions?.mode === 'from-file';
-            const feEdgeValues = lagResult.edgeValues;
-            // Collect fire-and-forget background handler chains so
-            // callers that need deterministic final state (CLI) can
-            // await them via the awaitBackgroundPromises option.
-            const backgroundPromises: Promise<unknown>[] = [];
+          const updateManager = new UpdateManager();
+          const preserveLatencySummaryFromFile = itemOptions?.mode === 'from-file';
+          const feEdgeValues = lagResult.edgeValues;
+          let appliedEdgeValuesForFinalGraph = feEdgeValues;
+          // Collect fire-and-forget background handler chains so
+          // callers that need deterministic final state (CLI) can
+          // await them via the awaitBackgroundPromises option.
+          const backgroundPromises: Promise<unknown>[] = [];
 
-            // ── Fire BE topo pass alongside FE (model var generator, fire-and-forget) ──
-            const { runBeTopoPass } = await import('./beTopoPassService');
-            const beGen = ++_beTopoPassGeneration;
-            const beStartTime = Date.now();
+          // ── Fire BE topo pass (model var generator, fire-and-forget) ──
+          // Fires on every query. Independent of FE LAG output — consults
+          // the snapshot DB server-side.
+          updatePipelineStep('be', 'running');
+          const { runBeTopoPass } = await import('./beTopoPassService');
+          const beGen = ++_beTopoPassGeneration;
+          const beStartTime = Date.now();
+          if (batchLogId) {
+            sessionLogService.addChild(batchLogId, 'info', 'BE_TOPO_PASS',
+              `BE topo pass started for ${feEdgeValues.length} edges (gen ${beGen})`,
+            );
+          }
+          const bePromise = runBeTopoPass(
+            finalGraph, paramLookup, queryDateForLAG, lagHelpers, lagCohortWindow,
+            lagSliceSource, activeEdgesForLAG,
+          ).catch(e => {
+            console.warn('[fetchDataService] BE topo pass failed:', e);
             if (batchLogId) {
-              sessionLogService.addChild(batchLogId, 'info', 'BE_TOPO_PASS',
-                `BE topo pass started for ${feEdgeValues.length} edges (gen ${beGen})`,
+              sessionLogService.addChild(batchLogId, 'error', 'BE_TOPO_PASS',
+                `BE topo pass failed: ${e?.message || e}`,
               );
             }
-            const bePromise = runBeTopoPass(
-              finalGraph, paramLookup, queryDateForLAG, lagHelpers, lagCohortWindow,
-              lagSliceSource, activeEdgesForLAG,
-            ).catch(e => {
-              console.warn('[fetchDataService] BE topo pass failed:', e);
-              if (batchLogId) {
-                sessionLogService.addChild(batchLogId, 'error', 'BE_TOPO_PASS',
-                  `BE topo pass failed: ${e?.message || e}`,
-                );
-              }
-              return null;
-            });
+            return null;
+          });
 
-            // ── Fire conditioned forecast (doc 45 step 3, races 500ms below) ──
-            // Doc 45 §Delivery model step 3: the conditioned forecast is
-            // the thing that carries the 500ms fast-deadline / subsequent-
-            // overwrite pattern. If it resolves within 500ms we fold its
-            // p.mean into the FE apply (single render, no FE-flash). If it
-            // misses the deadline we render FE fallback now and overwrite
-            // p.mean on its arrival (second render).
-            const { runConditionedForecast, applyConditionedForecastToGraph } =
-              await import('./conditionedForecastService');
-            const cfGen = ++_conditionedForecastGeneration;
-            const cfStartTime = Date.now();
+          // ── Fire conditioned forecast ──
+          // Fires on every query per doc 50 §3.2 "no silent drops".
+          // When the FE LAG apply runs, CF is raced against a 500ms deadline
+          // so its p.mean can be folded into the FE apply (single render).
+          // When FE has no values to apply, CF is the sole writer of p.mean
+          // and applies its own results on arrival via
+          // applyConditionedForecastToGraph.
+          updatePipelineStep('cf', 'running');
+          const { runConditionedForecast, applyConditionedForecastToGraph } =
+            await import('./conditionedForecastService');
+          const cfGen = ++_conditionedForecastGeneration;
+          const cfStartTime = Date.now();
+          if (batchLogId) {
+            sessionLogService.addChild(batchLogId, 'info', 'CONDITIONED_FORECAST',
+              `Conditioned forecast started (gen ${cfGen}, dsl=${(dsl || '').slice(0, 80)})`);
+          }
+          const cfPromise = runConditionedForecast(
+            finalGraph,
+            dsl,
+            undefined,
+            itemOptions?.workspace,
+          ).catch(e => {
+            console.warn('[fetchDataService] Conditioned forecast failed:', e);
             if (batchLogId) {
-              sessionLogService.addChild(batchLogId, 'info', 'CONDITIONED_FORECAST',
-                `Conditioned forecast started (gen ${cfGen}, dsl=${(dsl || '').slice(0, 80)})`);
+              sessionLogService.addChild(batchLogId, 'error', 'CONDITIONED_FORECAST',
+                `Conditioned forecast failed: ${e?.message || e}`);
             }
-            const cfPromise = runConditionedForecast(finalGraph, dsl).catch(e => {
-              console.warn('[fetchDataService] Conditioned forecast failed:', e);
-              if (batchLogId) {
-                sessionLogService.addChild(batchLogId, 'error', 'CONDITIONED_FORECAST',
-                  `Conditioned forecast failed: ${e?.message || e}`);
-              }
-              return [] as Awaited<ReturnType<typeof runConditionedForecast>>;
-            });
+            return [] as Awaited<ReturnType<typeof runConditionedForecast>>;
+          });
 
-            // ── Helper: apply FE edge values through UpdateManager + analytic model_vars ──
-            // Accepts the edge values to apply so the CF fast path can pass a
-            // copy with p.mean already merged (single render, no FE flash).
-            const applyFeEdgeValues = async (
-              graph: any,
-              edgeValues: typeof feEdgeValues,
-            ): Promise<any> => {
+          // Finalise the CF sub-step of the fetch-compute pipeline op
+          // (and complete the parent op). Called exactly once per cfGen
+          // from whichever branch resolves CF (fast, fast-empty, slow,
+          // slow-empty, error, stale). Sub-step detail reports whether
+          // any edge had observed evidence applied ("conditioned") or
+          // all edges fell back to the prior ("priors only"). Includes
+          // elapsed ms. Parent op's final label mirrors that summary
+          // so the collapsed toast shows the verdict.
+          let cfToastFinalised = false;
+          const finaliseCfToast = (
+            results: Awaited<ReturnType<typeof runConditionedForecast>> | null,
+            outcome: 'resolved' | 'empty' | 'error' | 'stale',
+          ) => {
+            if (cfToastFinalised) return;
+            cfToastFinalised = true;
+            const elapsedMs = Date.now() - cfStartTime;
+            const ms = elapsedMs.toLocaleString();
+            const totalMs = pipelineStartMs != null
+              ? (Date.now() - pipelineStartMs).toLocaleString()
+              : ms;
+
+            // Compute the CF verdict once (status + detail + labels).
+            // Dispatched to two sinks:
+            //   - Pipeline op path: updatePipelineStep + completePipelineOp
+            //     with the full "Recomputed — …" label (classic single-graph
+            //     fetch indicator).
+            //   - Per-scenario terminal op path (when pipeline is suppressed
+            //     and itemOptions.scenarioLabel is provided): emits one
+            //     compact op carrying just the scenario name + CF verdict,
+            //     so bulk regen over N scenarios produces N legible recent
+            //     entries instead of N full 5-step pipelines.
+            type Verdict = 'complete' | 'warning' | 'error' | 'cancelled';
+            let verdict: Verdict;
+            let cfStepStatus: PipelineStepStatus;
+            let cfStepDetail: string;
+            let parentLabel: string;
+            let scenarioSuffix: string;
+
+            if (outcome === 'stale') {
+              verdict = 'cancelled';
+              cfStepStatus = 'error';
+              cfStepDetail = `discarded (${ms}ms)`;
+              parentLabel = `Recomputed — CF superseded (${totalMs}ms)`;
+              scenarioSuffix = `CF superseded (${ms}ms)`;
+            } else if (outcome === 'error') {
+              verdict = 'error';
+              cfStepStatus = 'error';
+              cfStepDetail = `failed (${ms}ms)`;
+              parentLabel = `Recomputed — CF failed (${totalMs}ms)`;
+              scenarioSuffix = `CF failed (${ms}ms)`;
+            } else {
+              const edges = (results && results.length > 0 && results[0]?.edges) || [];
+              const withP = edges.filter(e => e.p_mean != null && Number.isFinite(e.p_mean as number));
+              if (outcome === 'empty' || edges.length === 0 || withP.length === 0) {
+                verdict = 'warning';
+                cfStepStatus = 'error';
+                cfStepDetail = `no result (${ms}ms)`;
+                parentLabel = `Recomputed — CF returned no result (${totalMs}ms)`;
+                scenarioSuffix = `CF: no result (${ms}ms)`;
+              } else {
+                const conditionedCount = withP.filter(e => e.conditioned === true).length;
+                const total = withP.length;
+                if (conditionedCount > 0) {
+                  verdict = 'complete';
+                  cfStepStatus = 'complete';
+                  cfStepDetail = `${conditionedCount}/${total} conditioned, ${ms}ms`;
+                  parentLabel = `Conditioned forecast returned in ${ms}ms (${conditionedCount}/${total} conditioned)`;
+                  scenarioSuffix = `CF ${ms}ms (${conditionedCount}/${total} conditioned)`;
+                } else {
+                  verdict = 'complete';
+                  cfStepStatus = 'complete';
+                  cfStepDetail = `priors only, ${total} edges, ${ms}ms`;
+                  parentLabel = `Conditioned forecast: priors only, ${ms}ms (${total} edges)`;
+                  scenarioSuffix = `CF: priors only, ${ms}ms`;
+                }
+              }
+            }
+
+            updatePipelineStep('cf', cfStepStatus, cfStepDetail);
+
+            if (pipelineOpId) {
+              completePipelineOp(pipelineOpId, verdict, parentLabel);
+              return;
+            }
+
+            const scenarioLabel = itemOptions?.scenarioLabel;
+            if (scenarioLabel) {
+              const opId = `scenario-cf-${scenarioLabel.replace(/\s+/g, '-')}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+              operationRegistryService.register({
+                id: opId,
+                kind: 'scenario-cf',
+                label: `${scenarioLabel} · ${scenarioSuffix}`,
+                status: 'running',
+              });
+              operationRegistryService.complete(opId, verdict);
+            }
+          };
+
+          const applyQueryOwnedCompleteness = (
+            graph: any,
+            edgeValues: typeof feEdgeValues,
+          ): void => {
+            for (const ev of edgeValues) {
+              const edge = graph?.edges?.find((e: any) => e.uuid === ev.edgeUuid || e.id === ev.edgeUuid);
+              const targetP = typeof ev.conditionalIndex === 'number'
+                ? edge?.conditional_p?.[ev.conditionalIndex]?.p
+                : edge?.p;
+              if (!targetP?.latency) continue;
+              targetP.latency.completeness = ev.latency.completeness;
+              const completenessStdev = (ev.latency as any).completeness_stdev;
+              if (completenessStdev != null && Number.isFinite(completenessStdev)) {
+                targetP.latency.completeness_stdev = completenessStdev;
+              }
+            }
+          };
+
+          // ── Helper: apply FE edge values through UpdateManager + analytic model_vars ──
+          // Accepts the edge values to apply so the CF fast path can pass a
+          // copy with p.mean already merged (single render, no FE flash).
+          const applyFeEdgeValues = async (
+            graph: any,
+            edgeValues: typeof feEdgeValues,
+          ): Promise<any> => {
               const nextGraph = updateManager.applyBatchLAGValues(
                 graph,
                 edgeValues.map(ev => ({
@@ -2040,7 +2384,7 @@ export async function runStage2EnhancementsAndInboundN(
               const { applyPromotion } = await import('./modelVarsResolution');
 
               // Update analytic model_vars entries with topo pass results
-              for (const ev of feEdgeValues) {
+              for (const ev of edgeValues) {
                 const edge = nextGraph.edges?.find((e: any) => e.uuid === ev.edgeUuid || e.id === ev.edgeUuid);
                 if (!edge?.p?.model_vars) continue;
                 const existing = edge.p.model_vars.find((v: any) => v.source === 'analytic');
@@ -2080,6 +2424,11 @@ export async function runStage2EnhancementsAndInboundN(
                 }
               }
 
+              // Completeness is query-authored display state, not a promoted model
+              // parameter. Reassert the freshly computed / CF-merged value after the
+              // promotion cascade so stale file-saved completeness cannot leak back in.
+              applyQueryOwnedCompleteness(nextGraph, edgeValues);
+
               setGraph(nextGraph);
               console.log(`[fetchDataService] FE topo pass: applied ${feEdgeValues.length} edges via UpdateManager`);
 
@@ -2090,140 +2439,217 @@ export async function runStage2EnhancementsAndInboundN(
               return nextGraph;
             };
 
-            // ── Helper: apply BE topo result into model_vars[analytic_be] + rerun promotion ──
-            // BE topo does NOT write p.latency.* directly — only model_vars[analytic_be].
-            // Promotion decides which source wins based on model_source_preference.
-            const applyBeTopoResult = async (
-              graph: any,
-              beResults: NonNullable<Awaited<ReturnType<typeof runBeTopoPass>>>,
-            ): Promise<any> => {
-              const nextGraph = structuredClone(graph);
-              const { upsertModelVars, applyPromotion } = await import('./modelVarsResolution');
+          // ── Helper: apply BE topo result into model_vars[analytic_be] + rerun promotion ──
+          // BE topo does NOT write p.latency.* directly — only model_vars[analytic_be].
+          // Promotion decides which source wins based on model_source_preference.
+          const applyBeTopoResult = async (
+            graph: any,
+            beResults: NonNullable<Awaited<ReturnType<typeof runBeTopoPass>>>,
+          ): Promise<any> => {
+            const nextGraph = structuredClone(graph);
+            const { upsertModelVars, applyPromotion } = await import('./modelVarsResolution');
 
-              for (const beEntry of beResults) {
-                const edge = nextGraph.edges?.find((e: any) => e.uuid === beEntry.edgeUuid || e.id === beEntry.edgeUuid);
-                if (!edge) continue;
-                if (beEntry.conditionalIndex != null) {
-                  const cp = edge.conditional_p?.[beEntry.conditionalIndex];
-                  if (cp?.p) upsertModelVars(cp.p, beEntry.entry);
-                } else if (edge.p) {
-                  upsertModelVars(edge.p, beEntry.entry);
-                }
+            for (const beEntry of beResults) {
+              const edge = nextGraph.edges?.find((e: any) => e.uuid === beEntry.edgeUuid || e.id === beEntry.edgeUuid);
+              if (!edge) continue;
+              if (beEntry.conditionalIndex != null) {
+                const cp = edge.conditional_p?.[beEntry.conditionalIndex];
+                if (cp?.p) upsertModelVars(cp.p, beEntry.entry);
+              } else if (edge.p) {
+                upsertModelVars(edge.p, beEntry.entry);
               }
+            }
 
-              for (const edge of (nextGraph.edges ?? []) as any[]) {
-                if (edge.p?.model_vars?.length) {
-                  applyPromotion(edge.p, (nextGraph as any).model_source_preference);
-                }
+            for (const edge of (nextGraph.edges ?? []) as any[]) {
+              if (edge.p?.model_vars?.length) {
+                applyPromotion(edge.p, (nextGraph as any).model_source_preference);
               }
+            }
 
-              if (FORECASTING_PARALLEL_RUN) {
-                compareModelVarsSources(nextGraph);
-              }
+            if (FORECASTING_PARALLEL_RUN) {
+              compareModelVarsSources(nextGraph);
+            }
 
-              return nextGraph;
-            };
+            return nextGraph;
+          };
 
-            // ── Helper: log FE→BE parity (observational only) ──
-            const logParity = (
-              graph: any,
-              feValues: typeof feEdgeValues,
-              beResults: NonNullable<Awaited<ReturnType<typeof runBeTopoPass>>>,
-            ) => {
-              if (!batchLogId) return;
-              const fmt = (v: number | null | undefined, pct = true) =>
-                v != null ? (pct ? `${(v * 100).toFixed(1)}%` : v.toFixed(3)) : '—';
+          // ── Helper: log FE→BE parity (observational only) ──
+          const logParity = (
+            graph: any,
+            feValues: typeof feEdgeValues,
+            beResults: NonNullable<Awaited<ReturnType<typeof runBeTopoPass>>>,
+          ) => {
+            if (!batchLogId) return;
+            const fmt = (v: number | null | undefined, pct = true) =>
+              v != null ? (pct ? `${(v * 100).toFixed(1)}%` : v.toFixed(3)) : '—';
 
-              for (const be of beResults) {
-                if (!be.beScalars) continue;
-                const feVal = feValues.find(f =>
-                  f.edgeUuid === be.edgeUuid &&
-                  f.conditionalIndex === (be.conditionalIndex ?? undefined)
-                );
-                if (!feVal) continue;
+            for (const be of beResults) {
+              if (!be.beScalars) continue;
+              const feVal = feValues.find(f =>
+                f.edgeUuid === be.edgeUuid &&
+                f.conditionalIndex === (be.conditionalIndex ?? undefined)
+              );
+              if (!feVal) continue;
 
-                const edge = graph.edges?.find((e: any) => e.uuid === be.edgeUuid || e.id === be.edgeUuid);
-                const edgeId = edge?.p?.id || be.edgeUuid.substring(0, 12);
-                const bs = be.beScalars;
+              const edge = graph.edges?.find((e: any) => e.uuid === be.edgeUuid || e.id === be.edgeUuid);
+              const edgeId = edge?.p?.id || be.edgeUuid.substring(0, 12);
+              const bs = be.beScalars;
 
-                sessionLogService.addChild(batchLogId, 'info', 'FE_BE_PARITY',
-                  `${edgeId}: completeness FE=${fmt(feVal.latency.completeness)} → BE=${fmt(bs.completeness)}` +
-                  (bs.completeness_stdev != null ? ` ±${fmt(bs.completeness_stdev)}` : '') +
-                  ` | p.mean FE=${fmt(feVal.blendedMean)} → BE=${fmt(bs.blended_mean)}` +
-                  ` | p.sd FE=${fmt(feVal.latency.p_sd)} → BE=${fmt(bs.p_sd)}`,
-                  undefined,
-                  {
-                    edge_id: edgeId,
-                    fe: { completeness: feVal.latency.completeness, p_mean: feVal.blendedMean, p_sd: feVal.latency.p_sd },
-                    be: {
-                      completeness: bs.completeness, completeness_stdev: bs.completeness_stdev,
-                      p_mean: bs.blended_mean, p_sd: bs.p_sd,
-                    },
+              sessionLogService.addChild(batchLogId, 'info', 'FE_BE_PARITY',
+                `${edgeId}: completeness FE=${fmt(feVal.latency.completeness)} → BE=${fmt(bs.completeness)}` +
+                (bs.completeness_stdev != null ? ` ±${fmt(bs.completeness_stdev)}` : '') +
+                ` | p.mean FE=${fmt(feVal.blendedMean)} → BE=${fmt(bs.blended_mean)}` +
+                ` | p.sd FE=${fmt(feVal.latency.p_sd)} → BE=${fmt(bs.p_sd)}`,
+                undefined,
+                {
+                  edge_id: edgeId,
+                  fe: { completeness: feVal.latency.completeness, p_mean: feVal.blendedMean, p_sd: feVal.latency.p_sd },
+                  be: {
+                    completeness: bs.completeness, completeness_stdev: bs.completeness_stdev,
+                    p_mean: bs.blended_mean, p_sd: bs.p_sd,
                   },
-                );
-              }
-            };
+                },
+              );
+            }
+          };
 
-            // ── Helper: merge conditioned forecast p.mean into FE edge values ──
-            // When the conditioned forecast wins the 500ms race, its p.mean
-            // replaces FE's blended p.mean in the same render. FE latency
-            // fields are preserved — CF only sets p.mean / forecast.mean.
-            // Merge every scalar CF is authoritative for (doc 45):
-            // p_mean/p_sd AND completeness/completeness_sd. FE's latency
-            // fit fields (mu, sigma, t95, path_t95, median_lag_days,
-            // mean_lag_days, etc.) are left untouched — those are
-            // FE topo's responsibility.
-            const mergeCfIntoFe = (
-              feValues: typeof feEdgeValues,
-              cfResults: Awaited<ReturnType<typeof runConditionedForecast>>,
-            ): typeof feEdgeValues => {
-              if (!cfResults || cfResults.length === 0 || !cfResults[0]?.edges?.length) return feValues;
-              type CfScalars = {
-                p_mean: number;
-                completeness?: number;
-                completeness_sd?: number;
+          // ── Helper: merge conditioned forecast p.mean into FE edge values ──
+          // When the conditioned forecast wins the 500ms race, its p.mean
+          // replaces FE's blended p.mean in the same render. FE latency
+          // fields are preserved — CF only sets p.mean / forecast.mean.
+          // Merge every scalar CF is authoritative for (doc 45):
+          // p_mean/p_sd AND completeness/completeness_sd. FE's latency
+          // fit fields (mu, sigma, t95, path_t95, median_lag_days,
+          // mean_lag_days, etc.) are left untouched — those are
+          // FE topo's responsibility.
+          const mergeCfIntoFe = (
+            feValues: typeof feEdgeValues,
+            cfResults: Awaited<ReturnType<typeof runConditionedForecast>>,
+          ): typeof feEdgeValues => {
+            if (!cfResults || cfResults.length === 0 || !cfResults[0]?.edges?.length) return feValues;
+            type CfScalars = {
+              p_mean: number;
+              completeness?: number;
+              completeness_sd?: number;
+              evidence_n?: number;
+              evidence_k?: number;
+            };
+            const byEdge = new Map<string, CfScalars>();
+            for (const e of cfResults[0].edges) {
+              if (e.p_mean != null && Number.isFinite(e.p_mean)) {
+                byEdge.set(e.edge_uuid, {
+                  p_mean: e.p_mean as number,
+                  completeness:
+                    e.completeness != null && Number.isFinite(e.completeness)
+                      ? (e.completeness as number)
+                      : undefined,
+                  completeness_sd:
+                    e.completeness_sd != null && Number.isFinite(e.completeness_sd)
+                      ? (e.completeness_sd as number)
+                      : undefined,
+                  evidence_n:
+                    e.evidence_n != null && Number.isFinite(Number(e.evidence_n))
+                      ? Number(e.evidence_n)
+                      : undefined,
+                  evidence_k:
+                    e.evidence_k != null && Number.isFinite(Number(e.evidence_k))
+                      ? Number(e.evidence_k)
+                      : undefined,
+                });
+              }
+            }
+            if (byEdge.size === 0) return feValues;
+            return feValues.map(fe => {
+              const cf = byEdge.get(fe.edgeUuid);
+              if (cf == null) return fe;
+              const evidenceMean =
+                cf.evidence_n != null && cf.evidence_n > 0 && cf.evidence_k != null
+                  ? cf.evidence_k / cf.evidence_n
+                  : undefined;
+              const mergedEvidence = {
+                ...(fe.evidence || {}),
+                ...(evidenceMean != null ? { mean: evidenceMean } : {}),
+                ...(cf.evidence_n != null ? { n: cf.evidence_n } : {}),
+                ...(cf.evidence_k != null ? { k: cf.evidence_k } : {}),
               };
-              const byEdge = new Map<string, CfScalars>();
-              for (const e of cfResults[0].edges) {
-                if (e.p_mean != null && Number.isFinite(e.p_mean)) {
-                  byEdge.set(e.edge_uuid, {
-                    p_mean: e.p_mean as number,
-                    completeness:
-                      e.completeness != null && Number.isFinite(e.completeness)
-                        ? (e.completeness as number)
-                        : undefined,
-                    completeness_sd:
-                      e.completeness_sd != null && Number.isFinite(e.completeness_sd)
-                        ? (e.completeness_sd as number)
-                        : undefined,
-                  });
-                }
-              }
-              if (byEdge.size === 0) return feValues;
-              return feValues.map(fe => {
-                const cf = byEdge.get(fe.edgeUuid);
-                if (cf == null) return fe;
-                return {
-                  ...fe,
-                  blendedMean: cf.p_mean,
-                  forecast: { ...(fe.forecast || {}), mean: cf.p_mean },
-                  latency: {
-                    ...fe.latency,
-                    ...(cf.completeness != null
-                      ? { completeness: cf.completeness }
-                      : {}),
-                    ...(cf.completeness_sd != null
-                      ? { completeness_stdev: cf.completeness_sd }
-                      : {}),
-                  },
-                };
-              });
-            };
+              return {
+                ...fe,
+                blendedMean: cf.p_mean,
+                forecast: { ...(fe.forecast || {}), mean: cf.p_mean },
+                ...(Object.keys(mergedEvidence).length > 0 ? { evidence: mergedEvidence } : {}),
+                latency: {
+                  ...fe.latency,
+                  ...(cf.completeness != null
+                    ? { completeness: cf.completeness }
+                    : {}),
+                  ...(cf.completeness_sd != null
+                    ? { completeness_stdev: cf.completeness_sd }
+                    : {}),
+                },
+              };
+            });
+          };
 
-            // ── Race conditioned forecast against 500ms (doc 45 step 3) ──
-            // Fast (<500ms, has results):  merge CF p.mean into FE apply → single render
-            // Slow (>500ms) or fast-empty: apply FE fallback now; CF overwrites p.mean
-            //                              asynchronously on arrival (second render).
+          // ── Helper: attach CF slow-path apply handler ──
+          // Shared between the FE-has-values slow path (CF missed the 500ms
+          // race) and the FE-no-values branch (CF is the sole writer of
+          // p.mean). In both cases, CF applies its own results via
+          // applyConditionedForecastToGraph on the freshest graph the
+          // caller can see.
+          const attachCfSlowPathHandler = () => {
+            backgroundPromises.push(
+              cfPromise.then(async results => {
+                if (cfGen !== _conditionedForecastGeneration) {
+                  if (batchLogId) {
+                    sessionLogService.addChild(batchLogId, 'warning', 'CONDITIONED_FORECAST',
+                      `Conditioned forecast result discarded (stale gen ${cfGen} < ${_conditionedForecastGeneration})`);
+                  }
+                  finaliseCfToast(null, 'stale');
+                  return;
+                }
+                const cfElapsed = Date.now() - cfStartTime;
+                if (!results || results.length === 0 || !results[0]?.edges?.length) {
+                  if (batchLogId) {
+                    sessionLogService.addChild(batchLogId, 'warning', 'CONDITIONED_FORECAST',
+                      `Conditioned forecast returned empty after ${cfElapsed}ms`);
+                  }
+                  finaliseCfToast(results, 'empty');
+                  return;
+                }
+                // Apply on top of the freshest graph so BE topo's model_vars
+                // upsert (if it arrived meanwhile) is preserved.
+                const latestGraph = getUpdatedGraph?.() ?? finalGraph;
+                if (!latestGraph) {
+                  finaliseCfToast(results, 'empty');
+                  return;
+                }
+                const updatedGraph = applyConditionedForecastToGraph(latestGraph, results);
+                setGraph(updatedGraph);
+                if (batchLogId) {
+                  sessionLogService.addChild(batchLogId, 'info', 'CONDITIONED_FORECAST',
+                    `Conditioned forecast subsequent overwrite applied in ${cfElapsed}ms`,
+                    undefined,
+                    { edges: results[0].edges.map(e => ({ uuid: e.edge_uuid?.slice(0, 12), p_mean: e.p_mean, p_sd: e.p_sd, completeness: e.completeness, completeness_sd: e.completeness_sd })) });
+                }
+                finaliseCfToast(results, 'resolved');
+              }).catch(e => {
+                console.warn('[fetchDataService] Conditioned forecast apply failed:', e);
+                if (batchLogId) {
+                  sessionLogService.addChild(batchLogId, 'error', 'CONDITIONED_FORECAST',
+                    `Conditioned forecast apply failed: ${e?.message || e}`);
+                }
+                finaliseCfToast(null, 'error');
+              })
+            );
+          };
+
+          // ── FE apply gate + CF race ──
+          // Only enter when FE LAG produced edge values to apply. The 500ms
+          // race exists to let CF's p.mean be merged into the FE apply in a
+          // single render (no FE-fallback flash). When FE has nothing to
+          // apply, racing CF is meaningless — CF just applies its own
+          // results on arrival via the slow-path handler below.
+          if (feEdgeValues.length > 0 && finalGraph?.edges) {
             const CF_FAST_DEADLINE_MS = 500;
             const cfTimeoutSentinel = Symbol('cf-timeout');
             const cfRaceResult = await Promise.race([
@@ -2246,15 +2672,18 @@ export async function runStage2EnhancementsAndInboundN(
               // FAST PATH: CF responded within 500ms with non-empty p.mean.
               // Fold it into FE apply so the user never sees an FE-fallback flash.
               const cfElapsed = Date.now() - cfStartTime;
-              finalGraph = await applyFeEdgeValues(finalGraph, mergeCfIntoFe(feEdgeValues, cfFastResults));
+              appliedEdgeValuesForFinalGraph = mergeCfIntoFe(feEdgeValues, cfFastResults);
+              finalGraph = await applyFeEdgeValues(finalGraph, appliedEdgeValuesForFinalGraph);
               if (batchLogId) {
                 sessionLogService.addChild(batchLogId, 'info', 'CONDITIONED_FORECAST',
                   `Conditioned forecast applied in ${cfElapsed}ms (fast path, single render)`,
                   undefined,
                   { edges: cfFastResults[0].edges.map(e => ({ uuid: e.edge_uuid?.slice(0, 12), p_mean: e.p_mean, p_sd: e.p_sd, completeness: e.completeness, completeness_sd: e.completeness_sd })) });
               }
+              finaliseCfToast(cfFastResults, 'resolved');
             } else {
               // SLOW PATH (or fast-empty): apply FE fallback immediately.
+              appliedEdgeValuesForFinalGraph = feEdgeValues;
               finalGraph = await applyFeEdgeValues(finalGraph, feEdgeValues);
 
               if (cfResolvedFast) {
@@ -2265,102 +2694,88 @@ export async function runStage2EnhancementsAndInboundN(
                       ? 'empty array'
                       : 'no usable p.mean'} after ${Date.now() - cfStartTime}ms`);
                 }
+                finaliseCfToast(cfFastResults, 'empty');
               } else {
                 // CF still pending — attach a .then() for subsequent overwrite.
                 if (batchLogId) {
                   sessionLogService.addChild(batchLogId, 'info', 'CONDITIONED_FORECAST',
                     `Conditioned forecast pending after ${CF_FAST_DEADLINE_MS}ms — FE fallback applied`);
                 }
-                backgroundPromises.push(
-                  cfPromise.then(async results => {
-                    if (cfGen !== _conditionedForecastGeneration) {
-                      if (batchLogId) {
-                        sessionLogService.addChild(batchLogId, 'warning', 'CONDITIONED_FORECAST',
-                          `Conditioned forecast result discarded (stale gen ${cfGen} < ${_conditionedForecastGeneration})`);
-                      }
-                      return;
-                    }
-                    const cfElapsed = Date.now() - cfStartTime;
-                    if (!results || results.length === 0 || !results[0]?.edges?.length) {
-                      if (batchLogId) {
-                        sessionLogService.addChild(batchLogId, 'warning', 'CONDITIONED_FORECAST',
-                          `Conditioned forecast returned empty after ${cfElapsed}ms`);
-                      }
-                      return;
-                    }
-                    // Apply on top of the freshest graph so BE topo's model_vars
-                    // upsert (if it arrived meanwhile) is preserved.
-                    const latestGraph = getUpdatedGraph?.() ?? finalGraph;
-                    if (!latestGraph) return;
-                    const updatedGraph = applyConditionedForecastToGraph(latestGraph, results);
-                    setGraph(updatedGraph);
-                    if (batchLogId) {
-                      sessionLogService.addChild(batchLogId, 'info', 'CONDITIONED_FORECAST',
-                        `Conditioned forecast subsequent overwrite applied in ${cfElapsed}ms`,
-                        undefined,
-                        { edges: results[0].edges.map(e => ({ uuid: e.edge_uuid?.slice(0, 12), p_mean: e.p_mean, p_sd: e.p_sd, completeness: e.completeness, completeness_sd: e.completeness_sd })) });
-                    }
-                  }).catch(e => {
-                    console.warn('[fetchDataService] Conditioned forecast apply failed:', e);
-                    if (batchLogId) {
-                      sessionLogService.addChild(batchLogId, 'error', 'CONDITIONED_FORECAST',
-                        `Conditioned forecast apply failed: ${e?.message || e}`);
-                    }
-                  })
-                );
+                attachCfSlowPathHandler();
               }
             }
-
-            // ── BE topo pass result (independent of CF race) ──
-            // When BE topo resolves, upsert analytic_be entries and rerun
-            // promotion. Fire-and-forget: a stale response from a previous
-            // fetch cycle is discarded via the generation counter. We read
-            // the latest graph so the upsert lands on top of anything
-            // applied meanwhile (e.g. the conditioned forecast's p.mean).
-            backgroundPromises.push(
-              bePromise.then(async beResults => {
-                if (beGen !== _beTopoPassGeneration) {
-                  if (batchLogId) {
-                    sessionLogService.addChild(batchLogId, 'warning', 'BE_TOPO_PASS',
-                      `BE topo pass result discarded (stale gen ${beGen} < ${_beTopoPassGeneration})`);
-                  }
-                  return;
-                }
-                const beElapsed = Date.now() - beStartTime;
-                if (!beResults || beResults.length === 0) {
-                  if (batchLogId) {
-                    sessionLogService.addChild(batchLogId, 'warning', 'BE_TOPO_PASS',
-                      `BE topo pass returned ${beResults === null ? 'null (failed)' : 'empty'} after ${beElapsed}ms`);
-                  }
-                  return;
-                }
-                const latestGraph = getUpdatedGraph?.() ?? finalGraph;
-                if (!latestGraph) return;
-                const updated = await applyBeTopoResult(latestGraph, beResults);
-                setGraph(updated);
-                logParity(updated, feEdgeValues, beResults);
-                if (batchLogId) {
-                  sessionLogService.addChild(batchLogId, 'info', 'BE_TOPO_PASS',
-                    `BE topo pass model vars applied in ${beElapsed}ms`,
-                    undefined,
-                    { edges: beResults.map(be => ({ uuid: be.edgeUuid?.slice(0, 12), p_mean: be.beScalars?.blended_mean, p_sd: be.beScalars?.p_sd, completeness: be.beScalars?.completeness, completeness_stdev: be.beScalars?.completeness_stdev })) });
-                }
-              }).catch(e => {
-                // bePromise's .catch converts rejections to null; this guards the handler itself.
-                console.warn('[fetchDataService] BE topo pass apply failed:', e);
-                if (batchLogId) {
-                  sessionLogService.addChild(batchLogId, 'error', 'BE_TOPO_PASS',
-                    `BE topo pass apply failed: ${e?.message || e}`);
-                }
-              })
-            );
-
-            // If the caller (CLI) wants deterministic final state, wait
-            // for the fire-and-forget background handlers to settle.
-            if (awaitBackgroundPromises && backgroundPromises.length > 0) {
-              await Promise.allSettled(backgroundPromises);
+          } else {
+            // FE LAG produced no values (e.g. narrow cohort with no YAML
+            // evidence in window). CF is the sole writer of p.mean — it
+            // reads the snapshot DB server-side and applies its own
+            // results on arrival. No FE apply, no race.
+            if (batchLogId) {
+              sessionLogService.addChild(batchLogId, 'info', 'CONDITIONED_FORECAST',
+                `No FE LAG values to apply — CF is sole writer of p.mean (awaiting)`);
             }
+            attachCfSlowPathHandler();
           }
+
+          // ── BE topo pass result (always, independent of FE and CF) ──
+          // When BE topo resolves, upsert analytic_be entries and rerun
+          // promotion. Fire-and-forget: a stale response from a previous
+          // fetch cycle is discarded via the generation counter. We read
+          // the latest graph so the upsert lands on top of anything
+          // applied meanwhile (e.g. the conditioned forecast's p.mean).
+          backgroundPromises.push(
+            bePromise.then(async beResults => {
+              if (beGen !== _beTopoPassGeneration) {
+                if (batchLogId) {
+                  sessionLogService.addChild(batchLogId, 'warning', 'BE_TOPO_PASS',
+                    `BE topo pass result discarded (stale gen ${beGen} < ${_beTopoPassGeneration})`);
+                }
+                updatePipelineStep('be', 'error', `discarded (stale)`);
+                return;
+              }
+              const beElapsed = Date.now() - beStartTime;
+              if (!beResults || beResults.length === 0) {
+                if (batchLogId) {
+                  sessionLogService.addChild(batchLogId, 'warning', 'BE_TOPO_PASS',
+                    `BE topo pass returned ${beResults === null ? 'null (failed)' : 'empty'} after ${beElapsed}ms`);
+                }
+                updatePipelineStep('be', 'error',
+                  `${beResults === null ? 'failed' : 'empty'}, ${beElapsed.toLocaleString()}ms`);
+                return;
+              }
+              const latestGraph = getUpdatedGraph?.() ?? finalGraph;
+              if (!latestGraph) {
+                updatePipelineStep('be', 'error', 'no graph');
+                return;
+              }
+              const updated = await applyBeTopoResult(latestGraph, beResults);
+              setGraph(updated);
+              logParity(updated, feEdgeValues, beResults);
+              if (batchLogId) {
+                sessionLogService.addChild(batchLogId, 'info', 'BE_TOPO_PASS',
+                  `BE topo pass model vars applied in ${beElapsed}ms`,
+                  undefined,
+                  { edges: beResults.map(be => ({ uuid: be.edgeUuid?.slice(0, 12), p_mean: be.beScalars?.blended_mean, p_sd: be.beScalars?.p_sd, completeness: be.beScalars?.completeness, completeness_stdev: be.beScalars?.completeness_stdev })) });
+              }
+              updatePipelineStep('be', 'complete',
+                `${beResults.length} edge${beResults.length !== 1 ? 's' : ''}, ${beElapsed.toLocaleString()}ms`);
+            }).catch(e => {
+              // bePromise's .catch converts rejections to null; this guards the handler itself.
+              console.warn('[fetchDataService] BE topo pass apply failed:', e);
+              if (batchLogId) {
+                sessionLogService.addChild(batchLogId, 'error', 'BE_TOPO_PASS',
+                  `BE topo pass apply failed: ${e?.message || e}`);
+              }
+              updatePipelineStep('be', 'error', `apply failed`);
+            })
+          );
+
+          // If the caller (CLI) wants deterministic final state, wait
+          // for the fire-and-forget background handlers to settle.
+          if (awaitBackgroundPromises && backgroundPromises.length > 0) {
+            await Promise.allSettled(backgroundPromises);
+          }
+
+          applyQueryOwnedCompleteness(finalGraph, appliedEdgeValuesForFinalGraph);
 
           if (batchLogId) {
             sessionLogService.addChild(batchLogId, 'debug', 'LAG_ENHANCED',
@@ -2469,8 +2884,13 @@ export async function runStage2EnhancementsAndInboundN(
         // p.n is transient (not persisted) - it's recomputed whenever
         // the scenario, DSL, or graph changes.
         // 
-        // IMPORTANT: Use finalGraph directly (not getUpdatedGraph) since we just
-        // modified it and haven't called setGraph yet. This avoids race conditions.
+        // IMPORTANT: Refresh from the published graph pointer when available.
+        // applyFeEdgeValues / CF writes land through setGraph(), and the CLI's
+        // deterministic path wants the freshest committed graph state here.
+        finalGraph = getUpdatedGraph?.() ?? finalGraph;
+        // NOTE: applyQueryOwnedCompleteness is called inside the hasLatencyItems
+        // block above (where appliedEdgeValuesForFinalGraph is in scope) — no
+        // duplicate call here.
         // ═══════════════════════════════════════════════════════════════════
         // Debug: Check if LAG values actually landed on latency-labelled edges
         const latencyEdges = (finalGraph?.edges || []).filter(
@@ -2501,6 +2921,30 @@ export async function runStage2EnhancementsAndInboundN(
           computeAndApplyInboundN(finalGraph, setGraph, dsl, batchLogId);
         } else {
           console.log('[fetchDataService] No graph for inbound-n computation');
+        }
+
+        // If the pipeline op is still active (e.g. hasLatencyItems was false,
+        // so no FE/BE/CF passes fired), complete it here so the indicator
+        // doesn't sit on pending forever. When hasLatencyItems was true,
+        // the CF finaliser completes the parent op via finishParent.
+        if (pipelineOpId && _pipelineStates.has(pipelineOpId)) {
+          const state = _pipelineStates.get(pipelineOpId)!;
+          const feDone = state[PIPELINE_STEP_ORDER.indexOf('fe')].status !== 'pending';
+          if (!feDone) {
+            // No latency items → FE/BE/CF were no-ops for this cycle.
+            setPipelineStep(pipelineOpId, 'fe', 'complete', 'n/a');
+            setPipelineStep(pipelineOpId, 'be', 'complete', 'n/a');
+            setPipelineStep(pipelineOpId, 'cf', 'complete', 'n/a');
+            const totalMs = pipelineStartMs != null
+              ? (Date.now() - pipelineStartMs).toLocaleString()
+              : '?';
+            completePipelineOp(pipelineOpId, 'complete',
+              `Recomputed — no latency edges (${totalMs}ms)`);
+          }
+          // Otherwise: parent op completes via the CF finaliser when CF
+          // resolves. For browser (awaitBackgroundPromises=false) the
+          // fetch returns before CF arrives; the op stays 'running' and
+          // flips to 'complete' when CF's .then() handler fires.
         }
 }
 

@@ -954,6 +954,29 @@ def _aggregate_bias_profile(all_results: list[dict]) -> str:
 # Main orchestrator
 # ---------------------------------------------------------------------------
 
+def _prime_arviz_daily_warning() -> None:
+    """Write today's date to arviz's daily-warning stamp file so concurrent
+    workers skip the write path.
+
+    arviz/__init__.py::_warn_once_per_day() calls _atomic_write_text which
+    does tmp.write_text() + tmp.replace(path). With max_parallel>1 both
+    workers write the same tmp file; the first rename moves it, the second
+    rename hits FileNotFoundError and the worker crashes at import time —
+    taking the graph down with it. Priming the stamp file makes
+    last_date == today, skipping the write entirely.
+    """
+    import datetime
+    from pathlib import Path
+    try:
+        from platformdirs import user_cache_dir
+    except ImportError:
+        return
+    warning_dir = Path(user_cache_dir("arviz", "arviz"))
+    warning_dir.mkdir(exist_ok=True, parents=True)
+    stamp_file = warning_dir / "daily_warning"
+    stamp_file.write_text(datetime.date.today().isoformat())
+
+
 def run_regression(args) -> list[dict]:
     """Main orchestration: discover → bootstrap → execute → assert."""
     from synth_gen import _resolve_data_repo
@@ -1057,6 +1080,12 @@ def run_regression(args) -> list[dict]:
         for g in runnable:
             f.write(g["graph_name"] + "\n")
 
+    # Prime arviz's daily-warning stamp file so parallel workers don't race
+    # on arviz/__init__.py::_warn_once_per_day() (which does a non-atomic
+    # temp-file rename and crashes one worker with FileNotFoundError when
+    # both workers import arviz simultaneously).
+    _prime_arviz_daily_warning()
+
     # 4. Execute via process pool
     results = []
     with ProcessPoolExecutor(max_workers=max_parallel) as pool:
@@ -1119,14 +1148,22 @@ def run_regression(args) -> list[dict]:
                 out = run_result.get("output", "")
                 tb_block, tb_summary = _extract_traceback(out)
 
+                # Exit 124 = harness timeout (not a harness CRASH — it
+                # means the sampler didn't finish within the truth file's
+                # time budget). Classify separately so pattern analysis
+                # distinguishes slow-sampling graphs from genuine crashes.
+                is_timeout = run_result["exit_code"] == 124
+
                 headline = (
-                    f"HARNESS FAIL (exit {run_result['exit_code']})"
-                    + (f": {tb_summary}" if tb_summary else "")
+                    (f"TIMEOUT (exit 124)" if is_timeout
+                     else f"HARNESS FAIL (exit {run_result['exit_code']})")
+                    + (f": {tb_summary}" if tb_summary and not is_timeout else "")
                 )
                 print(f"  {name}: {headline} [{elapsed:.0f}s]")
                 with open(summary_path, "a") as _sf:
-                    _sf.write(f"{name:<45s} FAIL   {elapsed:6.0f}s  "
-                              f"{headline}\n")
+                    _sf.write(f"{name:<45s} "
+                              f"{'TIMEOUT' if is_timeout else 'FAIL':<7} "
+                              f"{elapsed:6.0f}s  {headline}\n")
                 # Print the traceback block directly (root cause is surfaced,
                 # not buried). Fall back to last 20 lines if none.
                 if tb_block:
@@ -1142,8 +1179,10 @@ def run_regression(args) -> list[dict]:
 
                 from results_schema import make_failure as _mf
                 _fail = _mf(
-                    "harness",
-                    tb_summary or f"Harness exit {run_result['exit_code']}",
+                    "timeout" if is_timeout else "harness",
+                    (f"Sampler exceeded {elapsed:.0f}s budget"
+                     if is_timeout else
+                     (tb_summary or f"Harness exit {run_result['exit_code']}")),
                 )
                 if tb_block:
                     _fail["traceback"] = tb_block

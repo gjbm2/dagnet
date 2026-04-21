@@ -185,9 +185,13 @@ describe('Analysis Request Contract', () => {
     }
 
     it('graph-only types should NOT have snapshotContract', () => {
+      // conversion_funnel has a snapshotContract even though it is NOT in
+      // BE_SCOPE_RULES — the FE contract drives regime population in the
+      // request (candidate_regimes_by_edge), but BE routes funnel to the
+      // standard runner, not the snapshot-subjects handler.
       const graphOnlyTypes = [
         'graph_overview', 'from_node_outcomes', 'to_node_reach', 'bridge_view',
-        'path_through', 'path_between', 'conversion_funnel', 'constrained_path',
+        'path_through', 'path_between', 'constrained_path',
         'branches_from_start', 'multi_waypoint', 'multi_outcome_comparison',
         'multi_branch_comparison', 'general_selection',
       ];

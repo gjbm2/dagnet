@@ -17,7 +17,7 @@ import { log, isDiagnostic } from '../logger';
 import { bootstrap } from '../bootstrap';
 import { fileRegistry } from '../../contexts/TabContext';
 import { PYTHON_API_BASE } from '../../lib/pythonApiBase';
-import { engorgeGraphEdges } from '../../lib/bayesEngorge';
+import { buildEngorgedBayesGraphSnapshot } from '../../lib/bayesEngorge';
 
 const LOCAL_SUBMIT_URL = `${PYTHON_API_BASE}/api/bayes/submit`;
 const LOCAL_STATUS_URL = `${PYTHON_API_BASE}/api/bayes/status`;
@@ -129,13 +129,10 @@ async function runBayes() {
   log.info(`Matched ${Object.keys(parameterFiles).length} parameter files`);
 
   // -----------------------------------------------------------------------
-  // 2b. Engorge graph edges — inject observations and priors from param
-  //     files onto graph edges (doc 14 §9A). During the parity phase we
-  //     still send param files alongside the engorged graph so the BE can
-  //     compare both paths.
+  // 2b. Build a submission-only engorged graph snapshot.
   // -----------------------------------------------------------------------
-  engorgeGraphEdges(graphData, parameterFiles);
-  log.info('Engorged graph edges with observations and priors');
+  const graphSnapshot = buildEngorgedBayesGraphSnapshot(graphData, parameterFiles);
+  log.info('Built engorged Bayes graph snapshot');
 
   // -----------------------------------------------------------------------
   // 3. Load parameters-index from disk (best-effort)
@@ -302,7 +299,7 @@ async function runBayes() {
     repo: workspace.repository,
     branch: workspace.branch,
     graph_file_path: `${graphId}.yaml`,
-    graph_snapshot: graphData,
+    graph_snapshot: graphSnapshot,
     parameters_index: parametersIndex,
     parameter_files: parameterFiles,
     settings: forecastingSettings,

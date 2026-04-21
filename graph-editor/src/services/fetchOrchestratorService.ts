@@ -239,6 +239,10 @@ class FetchOrchestratorService {
     attempts?: number;
     delayMs?: number;
     querySignatures?: Record<string, string>;
+    /** Suppress the 5-step pipeline indicator (for batch callers that own their own parent op). */
+    suppressPipelineToast?: boolean;
+    /** Scenario display name used to prefix the per-scenario CF terminal op when pipeline is suppressed. */
+    scenarioLabel?: string;
   }): Promise<{ attempts: number; failures: number }> {
     const {
       graphGetter,
@@ -249,6 +253,8 @@ class FetchOrchestratorService {
       attempts = 6,
       delayMs = 75,
       querySignatures,
+      suppressPipelineToast,
+      scenarioLabel,
     } = input;
 
     let lastFailures = 0;
@@ -260,7 +266,7 @@ class FetchOrchestratorService {
 
       const results = await fetchDataService.fetchItems(
         items,
-        { mode: 'from-file', skipStage2, parentLogId, suppressBatchToast: true, querySignatures } as any,
+        { mode: 'from-file', skipStage2, parentLogId, suppressBatchToast: true, querySignatures, suppressPipelineToast, scenarioLabel } as any,
         g,
         setGraph,
         dsl,

@@ -31,17 +31,22 @@ bash graph-ops/scripts/analyse.sh <graph> "window(-30d:)" --type graph_overview
 bash graph-ops/scripts/analyse.sh <graph> \
   "from(x).to(y).window(-30d:)" --type cohort_maturity
 
+# Run conditioned forecast scalars for an edge/path
+bash graph-ops/scripts/analyse.sh <graph> \
+  "from(x).to(y).window(-30d:)" --type conditioned_forecast
+
 # Run analysis on synth graph (after synth_gen.py)
 bash graph-ops/scripts/analyse.sh <graph> "<dsl>" \
-  --type cohort_maturity_v2 --topo-pass --no-snapshot-cache
+  --type cohort_maturity_v2 --no-snapshot-cache
 
 # List available graphs
 bash graph-ops/scripts/list-graph.sh
 ```
 
 **Key flags**: `--verbose` (debug output), `--format json` (pipe to jq),
-`--no-cache` (bypass disk bundle cache), `--topo-pass` (populate promoted
-stats via BE), `--no-snapshot-cache` (bypass BE cache after DB changes).
+`--no-cache` (bypass disk bundle cache), `--no-snapshot-cache` (bypass
+BE cache after DB changes). `--topo-pass` is retained as a deprecated
+no-op for older scripts.
 
 **Diagnostics go to stderr, data to stdout.** Use `2>/dev/null` when piping.
 
@@ -188,6 +193,10 @@ bash graph-ops/scripts/analyse.sh <graph-name> \
   --scenario "window(1-Dec-25:31-Dec-25)" \
   --type bridge --subject "from(x).to(y)"
 
+# Conditioned forecast (graph enrichment endpoint, not chart rows)
+bash graph-ops/scripts/analyse.sh <graph-name> \
+  "from(x).to(y).window(-30d:)" --type conditioned_forecast
+
 # Extract specific data
 bash graph-ops/scripts/analyse.sh <graph-name> \
   "from(x).to(y).window(-30d:)" --type graph_overview \
@@ -221,10 +230,10 @@ the first scenario's DSL for the BE `query_dsl`.
 
 | Flag | Purpose |
 |------|---------|
-| `--type <type>` | Analysis type (graph_overview, cohort_maturity, cohort_maturity_v2, daily_conversions, lag_histogram, surprise, bridge) |
+| `--type <type>` | Analysis type (graph_overview, cohort_maturity, cohort_maturity_v2, daily_conversions, lag_histogram, surprise, bridge, conditioned_forecast) |
 | `--scenario <spec>` | Scenario specification (repeatable) |
 | `--subject <dsl>` | Analysis subject DSL (e.g. `from(x).to(y)`) — shared across scenarios |
-| `--topo-pass` | Run BE topo pass before analysis — populates promoted latency stats from parameter file evidence |
+| `--topo-pass` | Deprecated no-op retained for backwards compatibility |
 | `--no-snapshot-cache` | Bypass BE snapshot service cache (essential after `synth_gen.py` or DB repopulation) |
 | `--get <key>` | Extract a value via dot-path (e.g. `result.data.0.probability`) |
 | `--format json\|yaml` | Output format (default: json) |
@@ -311,6 +320,12 @@ at module scope or in function bodies. These throw in Node because
 - Entry points: `cliEntry.ts` polyfills `import.meta.env = { DEV: false }`
   before any imports
 
+If a helper is shared by browser + CLI, keep it in an isomorphic module
+(`src/lib/` or another runtime-neutral surface) and pass runtime-specific
+state in explicitly. `src/lib/conditionedForecastGraphSnapshot.ts` is the
+reference example: it accepts a parameter-file resolver so the browser can
+use `fileRegistry` while the CLI uses the disk-loaded bundle directly.
+
 ### hydrate
 
 **Script**: `graph-ops/scripts/hydrate.sh`
@@ -330,10 +345,9 @@ path-level latency params. The FE populates these during aggregation
 and the topo pass. Hydration runs this offline so the graph on disk
 matches what the FE would produce.
 
-**Note**: `analyse.sh --topo-pass` achieves the same effect per
-analysis run without persisting to disk. Hydrate is useful when you
-want the graph JSON itself to be in the hydrated state (e.g. for
-loading into other tools).
+**Note**: `analyse.sh` now runs the shared Stage 2 enrichment pipeline
+directly, so Hydrate is mainly for persisting the enriched graph JSON
+back to disk rather than for unlocking a separate topo-only codepath.
 
 ### v2-v3-parity-test
 

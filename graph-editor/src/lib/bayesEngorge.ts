@@ -10,6 +10,8 @@
  * the Node CLI — no browser APIs allowed.
  */
 
+import { cloneGraphWithoutBayesRuntimeFields } from './bayesGraphRuntime';
+
 // ---------------------------------------------------------------------------
 // Constants — must match the Python BE (compiler/types.py, evidence.py)
 // ---------------------------------------------------------------------------
@@ -405,4 +407,20 @@ export function engorgeGraphEdges(
       onset_observations: null,
     } satisfies BayesPriors;
   }
+}
+
+/**
+ * Build a Bayes submission snapshot from a working graph.
+ *
+ * The returned graph is a deep clone with any leaked runtime-only Bayes
+ * fields stripped before engorging. Callers must send this snapshot to the
+ * backend instead of mutating the live editor graph.
+ */
+export function buildEngorgedBayesGraphSnapshot(
+  graphData: any,
+  parameterFiles: Record<string, any>,
+): any {
+  const graphSnapshot = cloneGraphWithoutBayesRuntimeFields(graphData);
+  engorgeGraphEdges(graphSnapshot, parameterFiles);
+  return graphSnapshot;
 }

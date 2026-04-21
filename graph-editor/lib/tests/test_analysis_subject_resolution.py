@@ -12,8 +12,9 @@ Covers:
 See: docs/current/project-bayes/31-be-analysis-subject-resolution.md §8
 """
 
-import sys
 import os
+import sys
+from datetime import date, timedelta
 
 # Ensure lib/ is on the path for imports.
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
@@ -371,6 +372,20 @@ class TestFunnelPathScopeRule:
         assert result.sweep_from is None
         assert result.sweep_to is None
 
+    def test_cohort_maturity_asat_caps_sweep_to(self):
+        graph = _make_graph(['A', 'B'], [('A', 'B', 'e1')])
+        regimes_map = _make_regimes_map(['e1'])
+
+        result = resolve_analysis_subjects(
+            graph,
+            'from(A).to(B).cohort(1-Oct-25:31-Oct-25).asat(15-Dec-25)',
+            'cohort_maturity',
+            regimes_map,
+        )
+
+        assert result.sweep_from == '2025-10-01'
+        assert result.sweep_to == '2025-12-15'
+
 
 class TestChildrenScopeRule:
     """Verify children_of_selected_node scope."""
@@ -412,6 +427,42 @@ class TestAllParametersScopeRule:
         assert result.from_node is None
         assert result.to_node is None
         assert len(result.subjects) == 2
+
+    def test_conditioned_forecast_asat_caps_sweep_to(self):
+        graph = _make_graph(
+            ['A', 'B', 'C'],
+            [('A', 'B', 'e1'), ('B', 'C', 'e2')],
+        )
+        regimes_map = _make_regimes_map(['e1', 'e2'])
+
+        result = resolve_analysis_subjects(
+            graph,
+            'window(1-Oct-25:31-Oct-25).asat(15-Dec-25)',
+            'conditioned_forecast',
+            regimes_map,
+        )
+
+        assert result.scope_rule == 'all_graph_parameters'
+        assert result.sweep_from == '2025-10-01'
+        assert result.sweep_to == '2025-12-15'
+        assert len(result.subjects) == 2
+
+    def test_conditioned_forecast_relative_asat_resolves_from_today(self):
+        graph = _make_graph(
+            ['A', 'B', 'C'],
+            [('A', 'B', 'e1'), ('B', 'C', 'e2')],
+        )
+        regimes_map = _make_regimes_map(['e1', 'e2'])
+
+        result = resolve_analysis_subjects(
+            graph,
+            'window(1-Oct-25:31-Oct-25).asat(-7d)',
+            'conditioned_forecast',
+            regimes_map,
+        )
+
+        assert result.sweep_from == '2025-10-01'
+        assert result.sweep_to == (date.today() - timedelta(days=7)).isoformat()
 
 
 class TestMissingEdgeInRegimeMap:

@@ -60,7 +60,7 @@ async function runParamPack() {
     process.exit(1);
   }
 
-  const { bundle, queryDsl, getKey, format, flags } = ctx;
+  const { bundle, queryDsl, getKey, format, flags, workspace } = ctx;
 
   // Signatures diagnostic
   if (flags.showSignatures) {
@@ -87,7 +87,10 @@ async function runParamPack() {
   // 'from-file' = cache only; 'versioned' = cache first, API if stale/missing
   const fetchMode = flags.allowExternalFetch ? 'versioned' as const : 'from-file' as const;
   log.info(`Aggregating parameter data for requested window (mode: ${fetchMode})...`);
-  const { graph: populatedGraph, warnings } = await aggregateAndPopulateGraph(bundle, queryDsl, { mode: fetchMode });
+  const { graph: populatedGraph, warnings } = await aggregateAndPopulateGraph(bundle, queryDsl, {
+    mode: fetchMode,
+    workspace,
+  });
   for (const w of warnings) {
     log.warn(w);
   }

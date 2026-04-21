@@ -26,7 +26,7 @@ export type BayesTriggerStatus = 'idle' | 'submitting' | 'running' | 'complete' 
 export type BayesComputeMode = 'local' | 'modal';
 
 import { PYTHON_API_BASE } from '../lib/pythonApiBase';
-import { engorgeGraphEdges } from '../lib/bayesEngorge';
+import { buildEngorgedBayesGraphSnapshot } from '../lib/bayesEngorge';
 import { useViewOverlayMode } from './useViewOverlayMode';
 
 /** URLs for local dev mode (Python server, webhook on Vite dev server). */
@@ -428,11 +428,9 @@ export function useBayesTrigger(computeMode: BayesComputeMode = 'local') {
           `${Object.keys(parameterFiles).length} param files inspected`);
       }
 
-      // 7c. Engorge graph edges — inject observations and priors from
-      //     param files onto graph edges (doc 14 §9A). During the parity
-      //     phase we still send param files alongside the engorged graph
-      //     so the BE can compare both paths.
-      engorgeGraphEdges(graphData, parameterFiles);
+      // 7c. Build a submission-only engorged graph snapshot. The live editor
+      //     graph must stay clean; `_bayes_*` belongs only on the Bayes payload.
+      const graphSnapshot = buildEngorgedBayesGraphSnapshot(graphData, parameterFiles);
 
       // 7d. Build candidate regimes + MECE dimensions (doc 30 §4.1)
       let candidateRegimesByEdge: Record<string, Array<{ core_hash: string; equivalent_hashes: string[] }>> = {};
@@ -487,7 +485,7 @@ export function useBayesTrigger(computeMode: BayesComputeMode = 'local') {
         repo: `${gitCred.owner}/${gitCred.name}`,
         branch: navState.selectedBranch || 'main',
         graph_file_path: `${activeTab.fileId}.yaml`,
-        graph_snapshot: graphFile.data,
+        graph_snapshot: graphSnapshot,
         parameters_index: parametersIndex?.data ?? {},
         parameter_files: parameterFiles,
         settings: {

@@ -12,6 +12,8 @@
  * same race/timeout pattern as the BE topo pass.
  */
 
+import { fileRegistry } from '../contexts/TabContext';
+import { buildConditionedForecastGraphSnapshot } from '../lib/conditionedForecastGraphSnapshot';
 import { PYTHON_API_BASE } from '../lib/pythonApiBase';
 import { UpdateManager } from './UpdateManager';
 
@@ -28,9 +30,16 @@ export interface ConditionedForecastEdgeResult {
   p_sd: number | null;
   completeness?: number | null;
   completeness_sd?: number | null;
+  evidence_k?: number | null;
+  evidence_n?: number | null;
   tau_max?: number | null;
   n_rows?: number;
   n_cohorts?: number;
+  /** BE-supplied flag: true if observed evidence was applied to this edge's
+   *  result; false if the result is the untouched prior (Class C / prior
+   *  fallback per doc 50). Set by api_handlers.py:handle_conditioned_forecast
+   *  from `_conditioned` on the first maturity row. */
+  conditioned?: boolean;
 }
 
 /** Per-scenario result. */
@@ -80,6 +89,14 @@ export async function runConditionedForecast(
 ): Promise<ConditionedForecastScenarioResult[]> {
   if (!queryDsl) return [];
 
+  const graphSnapshot = buildConditionedForecastGraphSnapshot(
+    graph,
+    (paramId) => {
+      if (typeof fileRegistry.getFile !== 'function') return undefined;
+      return fileRegistry.getFile(`parameter-${paramId}`)?.data;
+    },
+  );
+
   // Resolve workspace: explicit param → IDB state → undefined (no regimes)
   const ws = workspace || await resolveWorkspace();
 
@@ -102,7 +119,7 @@ export async function runConditionedForecast(
     analytics_dsl: analyticsDsl || '',
     scenarios: [{
       scenario_id: scenarioId,
-      graph,
+      graph: graphSnapshot,
       effective_query_dsl: queryDsl,
       candidate_regimes_by_edge: candidateRegimesByEdge,
     }],
@@ -169,6 +186,11 @@ export function applyConditionedForecastToGraph(
     };
     blendedMean?: number;
     forecast?: { mean?: number };
+    evidence?: {
+      mean?: number;
+      n?: number;
+      k?: number;
+    };
   }> = [];
 
   for (const scenario of results) {
@@ -194,6 +216,18 @@ export function applyConditionedForecastToGraph(
         edge.completeness_sd != null && Number.isFinite(edge.completeness_sd)
           ? edge.completeness_sd as number
           : lat.completeness_stdev;
+      const evidenceN =
+        edge.evidence_n != null && Number.isFinite(Number(edge.evidence_n))
+          ? Number(edge.evidence_n)
+          : undefined;
+      const evidenceK =
+        edge.evidence_k != null && Number.isFinite(Number(edge.evidence_k))
+          ? Number(edge.evidence_k)
+          : undefined;
+      const evidenceMean =
+        evidenceN != null && evidenceN > 0 && evidenceK != null
+          ? evidenceK / evidenceN
+          : undefined;
 
       edgeUpdates.push({
         edgeId: edge.edge_uuid,
@@ -207,12 +241,24 @@ export function applyConditionedForecastToGraph(
         },
         blendedMean: edge.p_mean,
         forecast: { mean: edge.p_mean },
+        ...(
+          evidenceN != null || evidenceK != null || evidenceMean != null
+            ? {
+                evidence: {
+                  ...(evidenceMean != null ? { mean: evidenceMean } : {}),
+                  ...(evidenceN != null ? { n: evidenceN } : {}),
+                  ...(evidenceK != null ? { k: evidenceK } : {}),
+                },
+              }
+            : {}
+        ),
       });
 
       console.log(
         `[conditionedForecast] ${edge.edge_uuid.slice(0, 12)}: `
         + `p.mean=${edge.p_mean.toFixed(4)} `
-        + `completeness=${completenessFromCf != null ? completenessFromCf.toFixed(4) : '—'}`
+        + `completeness=${completenessFromCf != null ? completenessFromCf.toFixed(4) : '—'} `
+        + `evidence=${evidenceK ?? '—'}/${evidenceN ?? '—'}`
       );
     }
   }

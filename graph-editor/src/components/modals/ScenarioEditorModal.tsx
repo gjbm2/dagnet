@@ -10,14 +10,15 @@
  * - Validation with inline error display
  */
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import Editor from '@monaco-editor/react';
 import * as yaml from 'js-yaml';
 import { useScenariosContext } from '../../contexts/ScenariosContext';
 import { useTabContext } from '../../contexts/TabContext';
 import { Scenario, ScenarioContentFormat } from '../../types/scenarios';
 import { toYAML, toJSON, toCSV, fromYAML, fromJSON } from '../../services/ParamPackDSLService';
-import { X, FileText, Download, AlertCircle, CheckCircle2, Save } from 'lucide-react';
+import { computeInheritedDSL, computeEffectiveFetchDSL, LIVE_EMPTY_DIFF_DSL } from '../../services/scenarioRegenerationService';
+import { X, FileText, Download, AlertCircle, CheckCircle2, Save, Radio, Pin } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useGraphStore } from '../../contexts/GraphStoreContext';
 import Tooltip from '../Tooltip';
@@ -35,15 +36,17 @@ interface ScenarioEditorModalProps {
 }
 
 export function ScenarioEditorModal({ isOpen, scenarioId, tabId, onClose, onSave }: ScenarioEditorModalProps) {
-  const { scenarios, getScenario, applyContent, validateContent, baseParams, currentParams, setBaseParams, captureScenario, createBlank, renameScenario, baseDSL, setBaseDSL } = useScenariosContext();
+  const { scenarios, getScenario, applyContent, validateContent, baseParams, currentParams, setBaseParams, captureScenario, createBlank, renameScenario, baseDSL, setBaseDSL, updateScenarioQueryDSL } = useScenariosContext();
   const { operations } = useTabContext();
   const graphStore = useGraphStore();
   const graph = graphStore?.getState().graph || null;
-  
+
   const [scenario, setScenario] = useState<Scenario | null>(null);
   const [editorValue, setEditorValue] = useState('');
   const [format, setFormat] = useState<ScenarioContentFormat>({ syntax: 'yaml', structure: 'flat' });
   const [isDirty, setIsDirty] = useState(false);
+  const [yamlModified, setYamlModified] = useState(false);
+  const [dslModified, setDslModified] = useState(false);
   const [isValidating, setIsValidating] = useState(false);
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
   const [validationWarnings, setValidationWarnings] = useState<string[]>([]);
@@ -51,8 +54,25 @@ export function ScenarioEditorModal({ isOpen, scenarioId, tabId, onClose, onSave
   const [editableNote, setEditableNote] = useState('');
   const [editableName, setEditableName] = useState('');
   const [editableBaseDSL, setEditableBaseDSL] = useState('');
-  
+  const [editableQueryDSL, setEditableQueryDSL] = useState('');
+  const [dslInitial, setDslInitial] = useState('');
+
   const editorRef = useRef<any>(null);
+
+  const isUserScenario = scenario !== null && scenario.id !== 'base' && scenario.id !== 'current';
+  // Inherited DSL for the scenario in its current stack position — used for effective-DSL preview.
+  const inheritedDSL = useMemo(() => {
+    if (!isUserScenario || !scenario) return '';
+    const idx = scenarios.findIndex(s => s.id === scenario.id);
+    if (idx < 0) return '';
+    return computeInheritedDSL(idx, scenarios, baseDSL);
+  }, [isUserScenario, scenario, scenarios, baseDSL]);
+  const effectiveQueryDSL = useMemo(() => {
+    if (!isUserScenario) return '';
+    if (!editableQueryDSL) return inheritedDSL || '';
+    return computeEffectiveFetchDSL(inheritedDSL, editableQueryDSL);
+  }, [isUserScenario, editableQueryDSL, inheritedDSL]);
+  const currentModeIsLive = isUserScenario && editableQueryDSL.trim().length > 0;
   
   // Load scenario when modal opens
   useEffect(() => {
@@ -114,12 +134,20 @@ export function ScenarioEditorModal({ isOpen, scenarioId, tabId, onClose, onSave
           setScenario(loadedScenario);
           setEditableName(loadedScenario.name);
           setEditableNote(loadedScenario.meta?.note || '');
-          
+
+          // Initialise query DSL — hide the sentinel used for "live with no overrides"
+          const rawDSL = loadedScenario.meta?.queryDSL;
+          const initialDSL = (rawDSL === LIVE_EMPTY_DIFF_DSL) ? '' : (rawDSL || '');
+          setEditableQueryDSL(initialDSL);
+          setDslInitial(initialDSL);
+          setYamlModified(false);
+          setDslModified(false);
+
           // Convert params to editor format
           const content = format.syntax === 'yaml'
             ? toYAML(loadedScenario.params, format.structure)
             : toJSON(loadedScenario.params, format.structure);
-          
+
           setEditorValue(content);
           setIsDirty(false);
           setValidationErrors([]);
@@ -136,9 +164,10 @@ export function ScenarioEditorModal({ isOpen, scenarioId, tabId, onClose, onSave
         const content = format.syntax === 'yaml'
           ? toYAML(scenario.params, format.structure)
           : toJSON(scenario.params, format.structure);
-        
+
         setEditorValue(content);
         setIsDirty(false);
+        setYamlModified(false);
       } catch (error) {
         console.error('Failed to convert format:', error);
         toast.error('Failed to convert format');
@@ -153,6 +182,7 @@ export function ScenarioEditorModal({ isOpen, scenarioId, tabId, onClose, onSave
     if (value !== undefined) {
       setEditorValue(value);
       setIsDirty(true);
+      setYamlModified(true);
       setValidationErrors([]);
       setValidationWarnings([]);
     }
@@ -163,34 +193,39 @@ export function ScenarioEditorModal({ isOpen, scenarioId, tabId, onClose, onSave
    */
   const handleApply = useCallback(async () => {
     if (!scenario) return;
-    
+
     setIsSaving(true);
     setValidationErrors([]);
     setValidationWarnings([]);
-    
+
+    // Only validate YAML when it's actually going to be applied (YAML modified, or Base/Current
+    // where the content is always applied). A DSL-only edit on a live scenario regenerates
+    // params from source, so validating the editor contents would be both pointless and
+    // potentially spurious.
+    const yamlWillBeApplied = (scenario.id === 'base' || scenario.id === 'current' || yamlModified);
+
     try {
-      // Validate first
-      setIsValidating(true);
-      const validation = await validateContent(editorValue, {
-        format: format.syntax,
-        structure: format.structure
-      });
-      
-      setIsValidating(false);
-      
-      if (!validation.valid) {
-        setValidationErrors(validation.errors.map(e => `${e.path}: ${e.message}`));
-        setValidationWarnings(validation.warnings.map(w => `${w.path}: ${w.message}`));
-        toast.error('Validation failed');
-        setIsSaving(false);
-        return;
+      if (yamlWillBeApplied) {
+        setIsValidating(true);
+        const validation = await validateContent(editorValue, {
+          format: format.syntax,
+          structure: format.structure
+        });
+        setIsValidating(false);
+
+        if (!validation.valid) {
+          setValidationErrors(validation.errors.map(e => `${e.path}: ${e.message}`));
+          setValidationWarnings(validation.warnings.map(w => `${w.path}: ${w.message}`));
+          toast.error('Validation failed');
+          setIsSaving(false);
+          return;
+        }
+
+        if (validation.warnings.length > 0) {
+          setValidationWarnings(validation.warnings.map(w => `${w.path}: ${w.message}`));
+        }
       }
-      
-      // Show warnings but allow apply
-      if (validation.warnings.length > 0) {
-        setValidationWarnings(validation.warnings.map(w => `${w.path}: ${w.message}`));
-      }
-      
+
       // Special handling for Base and Current
       if (scenario.id === 'base') {
         // Apply edits to Base: mutate Base directly
@@ -198,12 +233,12 @@ export function ScenarioEditorModal({ isOpen, scenarioId, tabId, onClose, onSave
           ? fromYAML(editorValue, format.structure, graph)
           : fromJSON(editorValue, format.structure, graph);
         setBaseParams(parsed);
-        
+
         // Also update base DSL if changed
         if (editableBaseDSL !== baseDSL) {
           setBaseDSL(editableBaseDSL);
         }
-        
+
         toast.success('Base updated');
         setIsDirty(false);
         onClose();
@@ -213,46 +248,76 @@ export function ScenarioEditorModal({ isOpen, scenarioId, tabId, onClose, onSave
         const now = new Date();
         const timestamp = now.toISOString().replace('T', ' ').substring(0, 16);
         const name = `Edited ${timestamp}`;
-        
+
         // Create blank scenario
         if (!tabId) {
           toast.error('Cannot create scenario: tab ID is missing');
           return;
         }
         const newScenario = await createBlank(name, tabId);
-        
+
         // Apply the edited content to it
         await applyContent(newScenario.id, editorValue, {
           format: format.syntax,
           structure: format.structure,
           validate: false // Already validated above
         });
-        
+
         // Make the new scenario visible by default
         if (tabId) {
           await operations.toggleScenarioVisibility(tabId, newScenario.id);
         }
-        
+
         toast.success(`Created new scenario: ${name}`);
         setIsDirty(false);
         onSave?.(); // Notify parent that save was successful
         onClose();
       } else {
-        // Normal scenario: apply edits
-        await applyContent(scenario.id, editorValue, {
-          format: format.syntax,
-          structure: format.structure,
-          validate: false // Already validated above
-        });
-        
+        // User scenario: route based on which field(s) the user touched.
+        // Rule (matches the pill's visual mode): editing YAML pins the scenario static;
+        // editing DSL makes it live and regenerates. If both were touched, YAML wins —
+        // DSL is cleared so the user's hand-edited params are not immediately overwritten.
+        const wasLive = dslInitial.trim().length > 0;
+        const dslWantsClear = yamlModified; // YAML wins over DSL
+        const dslWantsUpdate = dslModified && !yamlModified;
+
+        if (dslWantsClear && wasLive) {
+          // Detach from DSL first so the subsequent applyContent isn't racing a regeneration.
+          // updateScenarioQueryDSL with an empty string sets isLive=false and skips regen.
+          await updateScenarioQueryDSL(scenario.id, '');
+        } else if (dslWantsUpdate) {
+          // Live path: DSL update triggers regeneration, which overwrites params.
+          // No applyContent call — any YAML the user typed would be stomped by regen anyway,
+          // and since YAML wasn't modified we have nothing worth preserving.
+          await updateScenarioQueryDSL(scenario.id, editableQueryDSL);
+        }
+
+        if (yamlModified) {
+          await applyContent(scenario.id, editorValue, {
+            format: format.syntax,
+            structure: format.structure,
+            validate: false
+          });
+        }
+
         // Rename if name has changed
         if (editableName && editableName !== scenario.name) {
           await renameScenario(scenario.id, editableName);
         }
-        
-        toast.success('Scenario updated');
+
+        // Pick a toast that reflects the mode transition, if any
+        if (dslWantsClear && wasLive) {
+          toast.success('Scenario pinned to static params');
+        } else if (dslWantsUpdate && !wasLive) {
+          toast.success('Scenario is now live');
+        } else if (dslWantsUpdate) {
+          toast.success('Live DSL updated');
+        } else {
+          toast.success('Scenario updated');
+        }
+
         setIsDirty(false);
-        onSave?.(); // Notify parent that save was successful
+        onSave?.();
         onClose();
       }
     } catch (error: any) {
@@ -263,7 +328,7 @@ export function ScenarioEditorModal({ isOpen, scenarioId, tabId, onClose, onSave
       setIsSaving(false);
       setIsValidating(false);
     }
-  }, [scenario, editorValue, format, validateContent, applyContent, fromYAML, fromJSON, setBaseParams, createBlank, tabId, operations, onClose, onSave, renameScenario, editableName, graph]);
+  }, [scenario, editorValue, format, validateContent, applyContent, fromYAML, fromJSON, setBaseParams, setBaseDSL, baseDSL, editableBaseDSL, createBlank, tabId, operations, onClose, onSave, renameScenario, editableName, graph, yamlModified, dslModified, dslInitial, editableQueryDSL, updateScenarioQueryDSL]);
   
   /**
    * Handle Cancel button
@@ -332,9 +397,32 @@ export function ScenarioEditorModal({ isOpen, scenarioId, tabId, onClose, onSave
       <div className="modal-container scenario-editor-modal">
         {/* Header */}
         <div className="modal-header">
-          <h2 className="modal-title">
-            <FileText size={20} style={{ marginRight: 8 }} />
-            Edit Scenario: {editableName || scenario.name}
+          <h2 className="modal-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <FileText size={20} />
+            <span>Edit Scenario: {editableName || scenario.name}</span>
+            {isUserScenario && (
+              <span
+                title={currentModeIsLive
+                  ? 'Live: params are regenerated from the query DSL on refresh. Edit the YAML to pin static params.'
+                  : 'Static: params are fixed. Add a query DSL fragment to make it live.'}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 4,
+                  padding: '2px 8px',
+                  marginLeft: 4,
+                  borderRadius: 10,
+                  fontSize: 11,
+                  fontWeight: 500,
+                  background: currentModeIsLive ? '#DCFCE7' : '#F3F4F6',
+                  color: currentModeIsLive ? '#166534' : '#4B5563',
+                  border: `1px solid ${currentModeIsLive ? '#86EFAC' : '#E5E7EB'}`,
+                }}
+              >
+                {currentModeIsLive ? <Radio size={12} /> : <Pin size={12} />}
+                {currentModeIsLive ? 'Live' : 'Static'}
+              </span>
+            )}
           </h2>
           <button className="modal-close-btn" onClick={handleCancel}>
             <X size={20} />
@@ -370,7 +458,7 @@ export function ScenarioEditorModal({ isOpen, scenarioId, tabId, onClose, onSave
             )}
             
             {/* Editable Name - only for non-Base/Current scenarios */}
-            {scenario.id !== 'base' && scenario.id !== 'current' && (
+            {isUserScenario && (
               <div className="metadata-row metadata-name-row">
                 <strong>Name:</strong>
                 <input
@@ -383,6 +471,62 @@ export function ScenarioEditorModal({ isOpen, scenarioId, tabId, onClose, onSave
                   className="metadata-name-input"
                   placeholder="Scenario name..."
                 />
+              </div>
+            )}
+
+            {/* Query DSL editor — user scenarios only.
+                Non-empty DSL = live (regenerated from source).
+                Empty DSL    = static (params below are authoritative). */}
+            {isUserScenario && (
+              <div className="metadata-row metadata-dsl-row">
+                <GlossaryTooltip term="scenario-query-dsl"><strong>Query DSL:</strong></GlossaryTooltip>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <QueryExpressionEditor
+                    value={editableQueryDSL}
+                    onChange={(value) => {
+                      setEditableQueryDSL(value);
+                      setIsDirty(true);
+                      setDslModified(true);
+                    }}
+                    graph={graph}
+                    allowedFunctions={['context', 'contextAny', 'window', 'cohort', 'asat', 'at']}
+                    height="60px"
+                    placeholder="Leave empty for a static scenario, or e.g. window(-7d:-1d).context(channel:google)"
+                    readonly={false}
+                  />
+                  <div style={{ fontSize: '11px', color: '#6B7280', marginTop: '4px', lineHeight: 1.5 }}>
+                    {currentModeIsLive ? (
+                      <>
+                        Effective DSL:{' '}
+                        <code style={{ background: '#F3F4F6', padding: '1px 4px', borderRadius: 2 }}>
+                          {effectiveQueryDSL || <span style={{ fontStyle: 'italic' }}>—</span>}
+                        </code>
+                        {inheritedDSL && (
+                          <>
+                            {' · Inherited: '}
+                            <code style={{ background: '#F3F4F6', padding: '1px 4px', borderRadius: 2 }}>
+                              {inheritedDSL}
+                            </code>
+                          </>
+                        )}
+                        {yamlModified && (
+                          <div style={{ color: '#B45309', marginTop: 2 }}>
+                            You edited the YAML — applying will drop the DSL and pin the scenario to those static params.
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      <>
+                        Empty = static. Add a fragment to make this scenario live; it will regenerate from source on apply.
+                        {dslInitial.trim().length > 0 && dslModified && (
+                          <div style={{ color: '#B45309', marginTop: 2 }}>
+                            Clearing the DSL will pin the scenario to its current static params.
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+                </div>
               </div>
             )}
             <div className="metadata-row">

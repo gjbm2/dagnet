@@ -50,7 +50,7 @@ All docs are in `docs/current/codebase/` unless a full path is given.
 - `docs/current/project-bayes/34-latency-dispersion-background.md` **(ref if touching latency dispersion / kappa_lat)** — per-interval BetaBinomial timing overdispersion
 - `docs/current/project-bayes/45-forecast-parity-design.md` **(full if touching BE CF pass)** — CF pass design, field ownership
 - `docs/current/project-bayes/47-*.md` **(full if touching BE CF pass whole-graph mode)** — topological sequencing, upstream carrier
-- `docs/current/project-bayes/50-cf-generality-gap.md` **(ref if touching BE CF pass)** — open issues with lagless edges
+- `docs/current/project-bayes/50-cf-generality-gap.md` **(ref if touching BE CF pass)** — open issues with non-latency edges
 - BAYES_REGRESSION_TOOLING.md **(ref if running regression / modifying devtools)** — multi-layered audit, `--clean`, `--feature`, parallel safety
 
 ## Modifying snapshot DB, signatures, or hash infrastructure

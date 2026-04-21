@@ -18,7 +18,6 @@ import { useScenariosContextOptional } from '../../contexts/ScenariosContext';
 import { useTabContext } from '../../contexts/TabContext';
 import { useGraphStore } from '../../contexts/GraphStoreContext';
 import { Scenario } from '../../types/scenarios';
-import { ScenarioEditorModal } from '../modals/ScenarioEditorModal';
 import { ScenarioQueryEditModal } from '../modals/ScenarioQueryEditModal';
 import { ToBaseConfirmModal } from '../modals/ToBaseConfirmModal';
 import { ScenarioLayerList, RecolourTrigger } from './ScenarioLayerList';
@@ -104,15 +103,12 @@ function getScenarioTooltip(scenario: Scenario): string {
   return parts.join('\n');
 }
 
+// Outer wrapper — ONLY place that conditionally returns. This keeps the
+// hook count stable in the inner body component. Early-returning in a
+// component that has many state hooks below the return violates the Rules
+// of Hooks under HMR when the context flips null↔non-null.
 export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosPanelProps) {
   const scenariosContext = useScenariosContextOptional();
-  const { operations, tabs } = useTabContext();
-  const graphStore = useGraphStore();
-  const graph = graphStore?.getState().graph || null;
-  const { copyAllScenarioParamPacks } = useCopyAllScenarioParamPacks(tabId);
-  const [copiedPulse, setCopiedPulse] = useState(false);
-  
-  // Early return if context not available yet
   if (!scenariosContext) {
     return (
       <div className="scenarios-panel">
@@ -128,7 +124,20 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
       </div>
     );
   }
-  
+  return <ScenariosPanelBody tabId={tabId} hideHeader={hideHeader} scenariosContext={scenariosContext} />;
+}
+
+type ScenariosPanelBodyProps = ScenariosPanelProps & {
+  scenariosContext: NonNullable<ReturnType<typeof useScenariosContextOptional>>;
+};
+
+function ScenariosPanelBody({ tabId, hideHeader = false, scenariosContext }: ScenariosPanelBodyProps) {
+  const { operations, tabs } = useTabContext();
+  const graphStore = useGraphStore();
+  const graph = graphStore?.getState().graph || null;
+  const { copyAllScenarioParamPacks } = useCopyAllScenarioParamPacks(tabId);
+  const [copiedPulse, setCopiedPulse] = useState(false);
+
   const { scenarios, listScenarios, renameScenario, updateScenarioColour, deleteScenario, captureScenario, createBlank, openInEditor, closeEditor, editorOpenScenarioId, flatten, setCurrentParams, baseParams, currentParams, composeVisibleParams, currentColour, baseColour, setCurrentColour, setBaseColour, createLiveScenario, createLiveScenarioFromCurrentDelta, regenerateScenario, regenerateAllLive, putToBase, baseDSL } = scenariosContext;
   
   const [showCreateMenu, setShowCreateMenu] = useState(false);
@@ -567,26 +576,21 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
   }, [tabId, createBlank, operations]);
   
   /**
-   * Handle modal close
-   * If closing a pending blank scenario, delete it
+   * Pending-blank cleanup: the modal is rendered at canvas scope now, so we can
+   * no longer piggy-back on its onClose/onSave callbacks. Instead, watch for the
+   * editor closing (editorOpenScenarioId → null) and decide based on whether the
+   * pending blank scenario was ever modified (version > 1 = applyContent ran).
    */
-  const handleCloseEditor = useCallback(() => {
-    // If we're closing a pending blank scenario, delete it
-    if (pendingBlankScenarioId && editorOpenScenarioId === pendingBlankScenarioId) {
+  useEffect(() => {
+    if (!pendingBlankScenarioId) return;
+    if (editorOpenScenarioId !== null) return; // still open
+    const pending = scenarios.find(s => s.id === pendingBlankScenarioId);
+    if (pending && pending.version <= 1) {
+      // Never saved — user cancelled. Drop the empty scenario.
       handleDelete(pendingBlankScenarioId);
-      setPendingBlankScenarioId(null);
     }
-    closeEditor();
-  }, [pendingBlankScenarioId, editorOpenScenarioId, handleDelete, closeEditor]);
-  
-  /**
-   * Clear pending blank scenario flag when user saves
-   */
-  const handleModalSave = useCallback(() => {
-    if (pendingBlankScenarioId) {
-      setPendingBlankScenarioId(null);
-    }
-  }, [pendingBlankScenarioId]);
+    setPendingBlankScenarioId(null);
+  }, [editorOpenScenarioId, pendingBlankScenarioId, scenarios, handleDelete]);
   
   /**
    * Flatten all overlays into Base (no confirmation needed - it's reversible via graph history)
@@ -1120,15 +1124,9 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
       </div>
     
     
-    {/* Editor Modal */}
-    <ScenarioEditorModal
-      isOpen={editorOpenScenarioId !== null}
-      scenarioId={editorOpenScenarioId}
-      tabId={tabId ?? null}
-      onClose={handleCloseEditor}
-      onSave={handleModalSave}
-    />
-    
+    {/* Editor Modal is now rendered by <ScenarioEditorModalHost> at canvas scope
+        so right-click Edit works even when this panel's dock tab is collapsed. */}
+
     {/* Query Edit Modal for Live Scenarios */}
     {queryEditModalScenarioId && (() => {
       const scenario = scenarios.find(s => s.id === queryEditModalScenarioId);

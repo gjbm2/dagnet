@@ -2,7 +2,7 @@
 
 **Status**: In progress — Phase 2 complete (full pipeline working)
 **Created**: 8-Apr-26
-**Updated**: 8-Apr-26
+**Updated**: 21-Apr-26
 **Purpose**: Enable headless (Node.js) execution of DagNet query DSL
 evaluation and stats computation — no browser required.
 
@@ -681,6 +681,30 @@ correctly.
   context).
 - Snapshot DB retrieval path (for when param files on disk are stale
   and fresh data is needed from the PostgreSQL cache).
+
+### 21-Apr-26: Conditioned forecast payload parity + runtime-boundary cleanup
+
+**Done**:
+- `analyse --type conditioned_forecast` now sends an engorged graph
+  snapshot to `/api/forecast/conditioned`, using the same parameter-file
+  evidence contract as the browser-conditioned forecast caller.
+- The payload builder was extracted to
+  `src/lib/conditionedForecastGraphSnapshot.ts` so the CLI can reuse it
+  without importing `conditionedForecastService.ts` and its
+  `TabContext`/browser wiring.
+- The shared helper accepts an explicit parameter-file resolver:
+  browser callers use `fileRegistry`, CLI callers use the disk-loaded
+  `bundle.parameters` map directly.
+- Stage 2 CLI output remains deterministic because the CLI awaits the
+  shared background handlers before returning, while the browser keeps
+  its fast-render / late-overwrite behaviour.
+
+**Why this matters**:
+- The conditioned-forecast request payload is now built from a
+  runtime-neutral helper instead of a browser service module.
+- Shared browser + CLI helpers have a concrete placement rule: keep the
+  pure logic in `src/lib/` (or another isomorphic surface), and inject
+  runtime-specific state at the call site.
 
 ## Dependencies
 

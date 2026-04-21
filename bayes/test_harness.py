@@ -1006,11 +1006,22 @@ def main():
                     sys.exit(1)
                 if timeout_s > 0 and elapsed > timeout_s:
                     _print(f"\n  TIMEOUT after {elapsed:.0f}s (last stage: {last_stage[0]})")
+                    # SIGTERM workers, wait briefly, then SIGKILL stragglers.
+                    # Without the grace period, native sampler threads die
+                    # mid-matrix-op and produce a collateral SIGSEGV that
+                    # faulthandler captures — which misleadingly looks like
+                    # a compiler crash in downstream classification.
                     subprocess.run(["pkill", "-P", str(os.getpid())], capture_output=True)
+                    time.sleep(1.0)
+                    subprocess.run(["pkill", "-9", "-P", str(os.getpid())], capture_output=True)
                     _restore_stdout()
                     log_file.close()
                     archive_file.close()
-                    sys.exit(1)
+                    # Exit 124 = standard timeout. run_regression.py maps
+                    # this to a "timed_out" completion verdict, not HARNESS
+                    # FAIL. The graph has a completion outcome (albeit a
+                    # pessimistic one) and feeds into quality analysis.
+                    sys.exit(124)
                 # Only print heartbeat if no progress callback is firing
                 # (i.e. during compilation or pre-sampling setup).
                 # Once nutpie's template_callback is active, it provides

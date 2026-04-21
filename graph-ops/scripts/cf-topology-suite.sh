@@ -20,7 +20,7 @@
 # Acceptance invariants (doc 50 §5.3):
 #   1. No silent drops: every parameterised edge appears in
 #      `edges` or `skipped_edges`.
-#   2. Class A ↔ Class B continuity: lagless edges converge to the
+#   2. Class A ↔ Class B continuity: non-latency edges converge to the
 #      σ→0 limit of laggy edges (implicit in parity test Phase 2).
 #   3. Chart parity: whole-graph CF p_mean equals v3 chart midpoint
 #      to 4dp (enforced by conditioned-forecast-parity-test.sh Phase 2).

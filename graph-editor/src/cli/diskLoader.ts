@@ -17,6 +17,7 @@ import { CACHE_HASH_LENGTH, FINGERPRINT_HASH_LENGTH } from './constants';
 import { fileRegistry } from '../contexts/TabContext';
 import { contextRegistry } from '../services/contextRegistry';
 import type { ContextDefinition } from '../services/contextRegistry';
+import { cloneGraphWithoutBayesRuntimeFields } from '../lib/bayesGraphRuntime';
 
 export interface GraphBundle {
   graphDir: string;
@@ -357,7 +358,11 @@ export async function writeBackToDisk(bundle: GraphBundle): Promise<{ graph: boo
   const graphFile = fileRegistry.getFile(`graph-${bundle.graphName}`);
   if (graphFile?.data) {
     const graphPath = join(bundle.graphDir, 'graphs', `${bundle.graphName}.json`);
-    await writeFile(graphPath, JSON.stringify(graphFile.data, null, 2) + '\n', 'utf-8');
+    await writeFile(
+      graphPath,
+      JSON.stringify(cloneGraphWithoutBayesRuntimeFields(graphFile.data), null, 2) + '\n',
+      'utf-8',
+    );
     written.graph = true;
     log.info(`Wrote enriched graph: ${graphPath}`);
   }

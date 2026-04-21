@@ -1,15 +1,15 @@
-"""Integration tests for the Level 2 conversion_funnel runner (doc 52).
+"""Integration tests for the conversion_funnel runner (doc 52).
 
-Exercises the new run_conversion_funnel end-to-end on a synthetic linear
+Exercises run_conversion_funnel end-to-end on a synthetic linear
 3-stage graph. Covers:
 
-- e mode (raw evidence, Wilson CI)
-- f mode (Beta draws from promoted-source posteriors)
-- e+f mode (with mocked scoped CF response)
+- e mode (raw evidence from CF response, Wilson CI)
+- f mode (Beta draws from promoted-source posteriors — no CF needed)
+- e+f mode (CF response drives both the e and e+f bars)
 - Topology rejection (non-linear, visitedAny)
 - Output schema (rows, metrics, hi/lo fields)
 
-The CF handler is mocked by monkey-patching `_scoped_conditioned_forecast`
+The CF handler is mocked by monkey-patching `_whole_graph_cf`
 so these tests don't depend on snapshot DB or a running BE.
 """
 
@@ -92,42 +92,54 @@ class _FakeScenario:
     candidate_regimes_by_edge: Optional[dict] = None
 
 
-def _fake_cf_response(n_edges: int, p_mean: float = 0.55, p_sd: float = 0.05):
-    """Build a mocked replacement for runners._scoped_conditioned_forecast.
+def _fake_whole_graph_cf(
+    n_edges: int,
+    p_mean: float = 0.55,
+    p_sd: float = 0.05,
+    evidence_from_graph: bool = True,
+):
+    """Build a mocked replacement for runners._whole_graph_cf.
 
-    Mocks per-edge CF: each call carries `analytics_dsl: from(X).to(Y)`;
-    the mock returns 1 edge per call iff (X, Y) is among the first
-    `n_edges` of the linear chain A→B→C→D→E. Mismatching DSLs return [].
+    The runner issues ONE whole-graph CF call per scenario (no
+    analytics_dsl) and extracts its funnel path by (from_node, to_node).
+    This mock returns a whole-graph-shape response: one edge entry per
+    (X_i → X_{i+1}) pair in the first `n_edges` of chain A→B→C→D→E.
+
+    When `evidence_from_graph` is True (the default), evidence_k/n are
+    read from the scenario graph's edge.p.evidence so tests that assert
+    "bar = k/n from graph" pass identically through the new path.
     """
     chain_labels = ['A', 'B', 'C', 'D', 'E']
-    valid_pairs = {(chain_labels[i], chain_labels[i + 1]): i for i in range(n_edges)}
-
-    def _parse(dsl: str):
-        import re
-        fm = re.search(r'from\(([^)]+)\)', dsl or '')
-        tm = re.search(r'to\(([^)]+)\)', dsl or '')
-        if not fm or not tm:
-            return None
-        return (fm.group(1), tm.group(1))
 
     def _responder(scenarios_payload):
         scenarios_out = []
         for sc in scenarios_payload:
-            pair = _parse(sc.get('analytics_dsl', ''))
+            graph_edges = (sc.get('graph') or {}).get('edges') or []
+            edge_by_pair = {
+                (e.get('from'), e.get('to')): e for e in graph_edges
+            }
             edges: list[dict] = []
-            if pair and pair in valid_pairs:
-                i = valid_pairs[pair]
+            for i in range(n_edges):
+                fl, tl = chain_labels[i], chain_labels[i + 1]
+                ev = {}
+                if evidence_from_graph:
+                    ge = edge_by_pair.get((fl, tl))
+                    if ge is not None:
+                        evg = (ge.get('p') or {}).get('evidence') or {}
+                        ev = {'evidence_k': evg.get('k'), 'evidence_n': evg.get('n')}
                 edges.append({
                     'edge_uuid': f'edge_{i}',
-                    'from_node': pair[0],
-                    'to_node': pair[1],
+                    'from_node': fl,
+                    'to_node': tl,
                     'p_mean': p_mean,
                     'p_sd': p_sd,
+                    'p_sd_epistemic': p_sd,
                     'completeness': 0.9,
                     'completeness_sd': 0.02,
                     'tau_max': 100,
                     'n_rows': 30,
                     'n_cohorts': 15,
+                    **ev,
                 })
             scenarios_out.append({
                 'scenario_id': sc['scenario_id'],
@@ -142,8 +154,19 @@ def _fake_cf_response(n_edges: int, p_mean: float = 0.55, p_sd: float = 0.05):
 # ── Tests ────────────────────────────────────────────────────────────
 
 
+@pytest.fixture
+def cf_from_graph(monkeypatch):
+    """Default-install a whole-graph CF mock that sources evidence from
+    the scenario graph's edge.p.evidence. Tests that need different
+    p_mean/p_sd values can call this fixture and then re-monkeypatch."""
+    monkeypatch.setattr(
+        runners, '_whole_graph_cf',
+        _fake_whole_graph_cf(n_edges=4, p_mean=0.55, p_sd=0.05, evidence_from_graph=True),
+    )
+
+
 class TestLinearFunnelEMode:
-    def test_e_mode_bars_match_evidence_ratios(self):
+    def test_e_mode_bars_match_evidence_ratios(self, cf_from_graph):
         graph_data = _make_linear_graph(3)
         G = build_networkx_graph(graph_data)
         scenario = _FakeScenario(
@@ -171,7 +194,7 @@ class TestLinearFunnelEMode:
             assert 'probability_hi' in r
             assert r['probability_lo'] < r['probability'] < r['probability_hi']
 
-    def test_e_mode_metadata(self):
+    def test_e_mode_metadata(self, cf_from_graph):
         graph_data = _make_linear_graph(3)
         G = build_networkx_graph(graph_data)
         scenario = _FakeScenario(
@@ -234,8 +257,8 @@ class TestLinearFunnelEFMode:
         )
 
         # Mock the scoped CF call
-        responder = _fake_cf_response(n_edges=2, p_mean=0.7, p_sd=0.05)
-        monkeypatch.setattr(runners, '_scoped_conditioned_forecast', responder)
+        responder = _fake_whole_graph_cf(n_edges=2, p_mean=0.7, p_sd=0.05)
+        monkeypatch.setattr(runners, '_whole_graph_cf', responder)
 
         result = runners.run_conversion_funnel(
             G, 'A', 'C', intermediate_nodes=['B'],
@@ -261,8 +284,8 @@ class TestLinearFunnelEFMode:
             visibility_mode='f+e', graph=graph_data,
         )
         # CF returns only 1 edge but path has 2
-        responder = _fake_cf_response(n_edges=1)
-        monkeypatch.setattr(runners, '_scoped_conditioned_forecast', responder)
+        responder = _fake_whole_graph_cf(n_edges=1)
+        monkeypatch.setattr(runners, '_whole_graph_cf', responder)
         result = runners.run_conversion_funnel(
             G, 'A', 'C', intermediate_nodes=['B'],
             all_scenarios=[scenario], from_node='A', to_node='C',
@@ -273,7 +296,7 @@ class TestLinearFunnelEFMode:
         # Per-scenario band skip noted in metadata
         skips = result['metadata'].get('hi_lo_bands_skipped_per_scenario') or {}
         assert 'current' in skips
-        assert 'returned 0 edges' in skips['current']
+        assert 'returned no edge' in skips['current']
         # No band fields on the rows for this scenario
         for row in result['data']:
             assert 'probability_lo' not in row
@@ -291,7 +314,7 @@ class TestLinearFunnelEFMode:
         def _failing(payload):
             raise RuntimeError('CF down')
 
-        monkeypatch.setattr(runners, '_scoped_conditioned_forecast', _failing)
+        monkeypatch.setattr(runners, '_whole_graph_cf', _failing)
         result = runners.run_conversion_funnel(
             G, 'A', 'C', intermediate_nodes=['B'],
             all_scenarios=[scenario], from_node='A', to_node='C',
@@ -351,8 +374,94 @@ class TestTopologyFallback:
         assert 'visitedAny' in skip
 
 
+class TestNarrowCohortRegression:
+    """Regression for cohort(20-Apr-26:20-Apr-26) — narrow cohort with no
+    matured observations.
+
+    Expected behaviour (doc 52 §3.5 endpoints):
+      - evidence_k = 0, evidence_n = 0 (or tiny, zero maturity)
+      - e bars → 0 (no conversions observed yet)
+      - f+e bars → small but non-zero (forecast dominates; completeness≈0)
+      - hi/lo bands wide for f+e (predictive dispersion)
+    """
+
+    def test_empty_scope_produces_zero_e_bars_and_wide_ef_bands(self, monkeypatch):
+        graph_data = _make_linear_graph(3)
+        G = build_networkx_graph(graph_data)
+
+        # Mock the whole-graph CF to simulate a narrow cohort: evidence
+        # counts are zero, completeness is zero, forecast p_mean small.
+        def _narrow_cf(scenarios_payload):
+            scenarios_out = []
+            for sc in scenarios_payload:
+                edges = [
+                    {
+                        'edge_uuid': f'edge_{i}',
+                        'from_node': from_lbl,
+                        'to_node': to_lbl,
+                        'p_mean': 0.5,
+                        'p_sd': 0.15,
+                        'p_sd_epistemic': 0.02,
+                        'completeness': 0.0,
+                        'completeness_sd': 0.01,
+                        'evidence_k': 0,
+                        'evidence_n': 0,
+                    }
+                    for i, (from_lbl, to_lbl) in enumerate([('A', 'B'), ('B', 'C')])
+                ]
+                scenarios_out.append({
+                    'scenario_id': sc['scenario_id'], 'success': True,
+                    'edges': edges, 'skipped_edges': [],
+                })
+            return {'success': True, 'scenarios': scenarios_out}
+
+        monkeypatch.setattr(runners, '_whole_graph_cf', _narrow_cf)
+
+        scenario_ef = _FakeScenario(
+            scenario_id='current', name='Current',
+            visibility_mode='f+e', graph=graph_data,
+            effective_query_dsl='cohort(20-Apr-26:20-Apr-26)',
+        )
+        result = runners.run_conversion_funnel(
+            G, 'A', 'C', intermediate_nodes=['B'],
+            all_scenarios=[scenario_ef], from_node='A', to_node='C',
+        )
+        assert 'error' not in result
+        rows = result['data']
+
+        # e portion must be zero at every stage past stage 0 — no conversions
+        # observed. Stage 0 is 1.0 by convention (funnel start).
+        assert rows[0].get('bar_height_e') == pytest.approx(1.0, abs=1e-12)
+        for r in rows[1:]:
+            assert r.get('bar_height_e') == pytest.approx(0.0, abs=1e-12), (
+                f'bar_height_e should be 0 for narrow cohort (stage={r.get("stage")}): {r}'
+            )
+
+        # Bars (total f+e): stage 0 = 1.0; stage 1 = 0.5; stage 2 = 0.25.
+        assert rows[0]['probability'] == pytest.approx(1.0, abs=1e-12)
+        assert rows[1]['probability'] == pytest.approx(0.5, abs=1e-9)
+        assert rows[2]['probability'] == pytest.approx(0.25, abs=1e-9)
+
+        # Bands must widen at completeness=0: width driven by predictive
+        # dispersion (p_sd=0.15). Check that the final-stage band width is
+        # meaningfully greater than the epistemic-only width (p_sd_epi=0.02
+        # would give < 5% band; predictive should give > 10%).
+        s2 = rows[2]
+        assert 'probability_lo' in s2 and 'probability_hi' in s2
+        band_width = s2['probability_hi'] - s2['probability_lo']
+        assert band_width > 0.05, (
+            f'Expected wide predictive band at c=0, got width={band_width}'
+        )
+
+        # n at stage 0 = CF evidence_n of first edge = 0 (scope-correct).
+        assert rows[0].get('n') == 0
+        # Completeness at every stage should reflect CF value (0 for narrow cohort).
+        for r in rows[1:]:
+            assert r.get('completeness') == pytest.approx(0.0, abs=1e-12)
+
+
 class TestOutputSchema:
-    def test_semantics_advertises_hi_lo_metrics(self):
+    def test_semantics_advertises_hi_lo_metrics(self, cf_from_graph):
         graph_data = _make_linear_graph(3)
         G = build_networkx_graph(graph_data)
         scenario = _FakeScenario(
@@ -373,7 +482,7 @@ class TestOutputSchema:
         assert hints.get('show_hi_lo') is True
         assert hints.get('stacked_striation') is True
 
-    def test_dimension_values_stage_and_scenario(self):
+    def test_dimension_values_stage_and_scenario(self, cf_from_graph):
         graph_data = _make_linear_graph(3)
         G = build_networkx_graph(graph_data)
         scenario = _FakeScenario(

@@ -49,13 +49,13 @@ describe('analysisEChartsService (funnel bar)', () => {
     expect(option.xAxis.data).toEqual(['Start', 'Mid', 'End']);
     expect(option.series[0].data).toHaveLength(3); // stages
     expect(option.series[1].data).toHaveLength(3);
-    // First scenario series is "Base — e"
+    // First scenario series is "Base · Evidence"
     expect(option.series[0].name).toContain('Base');
-    expect(option.series[0].name).toContain('— e');
+    expect(option.series[0].name).toContain('· Evidence');
     expect(option.series[0].data[0].value).toBe(1.0);
-    // Second series is "Base — f−e": mid residual = 0.6 - 0.25 = 0.35
+    // Second series is "Base · Forecast": mid residual = 0.6 - 0.25 = 0.35
     expect(option.series[1].name).toContain('Base');
-    expect(option.series[1].name).toContain('f−e');
+    expect(option.series[1].name).toContain('· Forecast');
     expect(option.series[1].data[1].value).toBeCloseTo(0.35);
   });
 
@@ -334,10 +334,10 @@ describe('analysisEChartsService (funnel bar)', () => {
       metric: 'cumulative_probability',
     });
 
-    // Should NOT have F+E stacked series (no "— e" or "— f−e" series names)
+    // Should NOT have F+E stacked series (no "· Evidence" or "· Forecast" series names)
     const seriesNames = option.series.map((s: any) => s.name);
-    expect(seriesNames.some((n: string) => n.includes('— e'))).toBe(false);
-    expect(seriesNames.some((n: string) => n.includes('f−e'))).toBe(false);
+    expect(seriesNames.some((n: string) => n.includes('· Evidence'))).toBe(false);
+    expect(seriesNames.some((n: string) => n.includes('· Forecast'))).toBe(false);
 
     // Should have member series instead
     expect(seriesNames.some((n: string) => n.includes('— B'))).toBe(true);

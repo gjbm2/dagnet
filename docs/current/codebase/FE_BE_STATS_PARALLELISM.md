@@ -226,25 +226,30 @@ Defined in `graph_types.py:72-74`. FE consumers use fallback chains
 
 ## CLI topo pass
 
-The CLI (`src/cli/commands/analyse.ts`) has a `--topo-pass` flag that
-calls the same BE `/api/lag/topo-pass` endpoint. This is necessary
-because the FE topo pass (Stage 2 of the fetch pipeline) does not run
-in Node — `getParameterFromFile` calls `fileRegistry.restoreFile()`
-which hits IDB, and IDB is unavailable in the CLI's Node environment.
-The fetch pipeline fails silently, leaving `model_vars` and
-`promoted_*` fields unpopulated.
+The CLI now uses the same Stage 2 orchestration as the browser via
+`fetchDataService.fetchItems({ mode: 'from-file' })`. The important
+difference is **timing**, not a separate topo implementation:
 
-The CLI workaround builds `cohort_data` directly from
-`bundle.parameters` (parameter YAML files loaded from disk by
-`diskLoader.ts`), converts per-day parallel arrays into per-date
-`CohortData` records, and sends them alongside the graph to the BE
-topo pass endpoint. The returned per-edge stats are written as
-`promoted_*` fields onto the base graph before analysis dispatch.
+- **Browser**: renders as soon as the synchronous FE topo pass lands,
+  then lets BE topo / CF overwrite later if they resolve after the
+  render deadline
+- **CLI**: sets `awaitBackgroundPromises=true` on
+  `runStage2EnhancementsAndInboundN`, so FE topo, BE topo, and CF
+  background handlers all settle before the command returns
 
-This is functionally equivalent to the browser path (FE topo pass →
-`applyPromotion`) but bypasses IDB entirely. The stats engine
-receives the same inputs and produces the same outputs — only the
-transport layer differs.
+This gives deterministic headless output without creating a parallel
+CLI-only topo pass.
+
+For `analyse --type conditioned_forecast`, the CLI still dispatches
+directly to `/api/forecast/conditioned` after the shared analysis
+preparation step. The request payload is built by
+`src/lib/conditionedForecastGraphSnapshot.ts`, which engorges the
+scenario graph using the disk-loaded parameter YAML map. That helper
+must stay runtime-neutral; the CLI should not import the browser
+`conditionedForecastService.ts` module just to build the payload.
+
+The legacy `--topo-pass` flag is retained only as a deprecated no-op
+for backwards compatibility with older scripts.
 
 ## Key files
 

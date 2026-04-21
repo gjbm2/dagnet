@@ -162,7 +162,10 @@ async function runAnalyse() {
   for (let i = 0; i < scenarios.length; i++) {
     const spec = scenarios[i];
     log.info(`Aggregating scenario '${spec.name}' (${spec.queryDsl}, mode: ${fetchMode})...`);
-    const { graph: populatedGraph, warnings } = await aggregateAndPopulateGraph(bundle, spec.queryDsl, { mode: fetchMode });
+    const { graph: populatedGraph, warnings } = await aggregateAndPopulateGraph(bundle, spec.queryDsl, {
+      mode: fetchMode,
+      workspace,
+    });
     for (const w of warnings) {
       log.warn(`[${spec.name}]: ${w}`);
     }
@@ -321,14 +324,21 @@ async function runAnalyse() {
   if (analysisType === 'conditioned_forecast') {
     // Conditioned forecast: same preparation, different endpoint (doc 45).
     // Sends to /api/forecast/conditioned which returns per-edge scalars.
+    // The engorged snapshot helper stays in src/lib so the CLI does not
+    // import the browser-conditioned forecast service (which depends on
+    // TabContext and other browser runtime wiring).
     const { PYTHON_API_BASE } = await import('../../lib/pythonApiBase');
+    const { buildConditionedForecastGraphSnapshot } = await import('../../lib/conditionedForecastGraphSnapshot');
     const forecastUrl = `${PYTHON_API_BASE}/api/forecast/conditioned`;
     // Build the payload from the prepared scenarios
     const forecastPayload = {
       analytics_dsl: prepared.analyticsDsl,
       scenarios: prepared.scenarios.map((sc: any) => ({
         scenario_id: sc.scenario_id,
-        graph: sc.graph,
+        graph: buildConditionedForecastGraphSnapshot(
+          sc.graph,
+          (paramId) => bundle.parameters.get(paramId),
+        ),
         effective_query_dsl: sc.effective_query_dsl,
         candidate_regimes_by_edge: sc.candidate_regimes_by_edge || {},
         analytics_dsl: sc.analytics_dsl,

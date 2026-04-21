@@ -219,12 +219,13 @@ The sibling sum assertion is the key discriminator.
 
 `graph-ops/scripts/conditioned-forecast-parity-test.sh`:
 
-    Phase 0: Data health checks
+    Phase 0: Optional regeneration
+      - Re-run synth generation when the caller passes --generate
+      - Re-hydrate the fixture before the parity phases
+
+    Phase 1: Data health checks + contract test
       - Graph JSON exists with expected edges
       - Snapshot DB has rows for each edge (reuse existing helpers)
-      - Hydrate graph if not already enriched
-
-    Phase 1: Contract test (Test 1)
       - analyse.sh --type conditioned_forecast, temporal only
       - Assert edges returned > 0
 
@@ -233,6 +234,17 @@ The sibling sum assertion is the key discriminator.
       - Run whole-graph conditioned forecast, extract per-edge p_mean
       - Compare field by field, produce diagnostic table
       - Report PASS/FAIL per edge and overall
+
+    Phase 3: Sibling PMF consistency
+      - Verify whole-graph CF output can be applied through the FE batch path
+      - Assert sibling groups still sum to ≤ 1.0 after overwrite
+
+    Phase 4: Historical asat visibility
+      - On synth-simple-abc, run daily_conversions with and without asat
+      - Assert the maturity/forecast boundary moves earlier under asat
+      - Run whole-graph conditioned_forecast with and without asat
+      - Assert evidence_n, evidence_k, and completeness all drop for the
+        parameterised edges in the historical view
 
     Summary: N tests, M passed, K failed
 

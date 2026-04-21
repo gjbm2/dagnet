@@ -91,10 +91,12 @@ These compute entirely from in-memory graph data.
 | | |
 |---|---|
 | **Selection** | 3+ nodes via `from(A).to(B).visited(C,D,...)` |
-| **Computes** | Probability at each stage (funnel drop-off). Does NOT enforce waypoint ordering — all paths counted. |
+| **Computes** | Per-stage probability plus hi/lo bands. Calls the conditioned-forecast (CF) machinery once per scenario with the whole graph, then extracts the subgraph for the selected path. Per-edge epistemic and predictive σ are blended by the completeness-weighted variance mixture (σ²_total = c·σ²_epi + (1−c)·σ²_pred), so bands widen naturally at low completeness and tighten as evidence matures — no special-case branching is required in the funnel itself. Does NOT enforce waypoint ordering — all paths counted. |
 | **Dimensions** | scenario_id, stage |
-| **Metrics** | probability, conversion_rate (δ between stages), cost |
+| **Metrics** | probability (stage value), probability_lo / probability_hi (band), conversion_rate (δ between stages), cost |
 | **Chart kinds** | funnel, bridge, bar_grouped, table |
+| **Runner** | `run_conversion_funnel` in `lib/runner/runners.py` |
+| **Snapshot linkage** | FE `snapshotContract` declared (scopeRule=`funnel_path`, readMode=`cohort_maturity`) so the request carries `candidate_regimes_by_edge` — CF needs regime identity to read snapshot evidence. Deliberately **NOT** in BE `ANALYSIS_TYPE_SCOPE_RULES`, so the dispatcher routes to the standard runner rather than the snapshot-subject handler. See §"Compute-stage asymmetry" below. |
 
 ### constrained_path
 
@@ -312,3 +314,55 @@ scenario and merge with `scenario_id` dimension.
 **Two-phase computation**: Phase 1 (local) runs immediately on DSL change.
 Phase 2+ (snapshot) supplements with DB queries triggered via chart
 computation hooks.
+
+---
+
+## Compute-stage asymmetry (conversion_funnel)
+
+`conversion_funnel` is the only analysis type that declares an FE
+`snapshotContract` but is **intentionally absent** from the BE's
+`ANALYSIS_TYPE_SCOPE_RULES` / `ANALYSIS_TYPE_READ_MODES` tables in
+`lib/analysis_subject_resolution.py`. This cross-layer asymmetry is
+load-bearing — neither side can be "aligned" with the other without
+breaking the analysis.
+
+**Why the FE side carries a contract**: the runner calls the CF
+machinery, which reads snapshot evidence internally. CF needs regime
+identity per edge to select the right snapshot rows. The FE populates
+`candidate_regimes_by_edge` in `analysisComputePreparationService.ts`
+inside `if (params.needsSnapshots)` — and `needsSnapshots` is derived
+from `!!snapshotContract`. Without the contract, regimes are absent
+from the request and CF falls back to the unconditioned prior
+(`conditioned: false`, no evidence applied).
+
+**Why the BE side must omit it**: the dispatcher in
+`lib/api_handlers.py:521` checks `analysis_type in
+ANALYSIS_TYPE_SCOPE_RULES`. If present, the request is routed to
+`_handle_snapshot_analyze_subjects`, which validates
+`snapshot_subjects[].core_hash`. The funnel's request payload is
+compute-shaped, not snapshot-envelope-shaped, so that validator
+rejects with `"snapshot_subjects[].core_hash required
+(scenario=current, subject_id=...)"`. Omitting the type from the
+table routes the request to the standard runner, which forwards
+`candidate_regimes_by_edge` to `run_conversion_funnel` and lets CF
+handle the snapshot read.
+
+**Three signals `snapshotContract` implicitly conflates**:
+
+1. **Request-build populates `candidate_regimes_by_edge`** — FE-side,
+   gated on `!!snapshotContract`.
+2. **BE dispatches via the snapshot-subject handler** — BE-side, gated
+   on `ANALYSIS_TYPE_SCOPE_RULES` membership.
+3. **Response is normalised as a snapshot envelope** — follows
+   mechanically from (2), because the FE retry/normalisation logic
+   keys on `result.metadata.source === 'snapshot_db'`, which is
+   stamped only by the snapshot handler.
+
+For every existing snapshot-envelope type (daily_conversions,
+cohort_maturity, etc.) all three co-occur. For `conversion_funnel`
+only (1) is true; (2) is false, so (3) falls away. If more
+compute-stage types emerge that need this asymmetric treatment,
+consider splitting `snapshotContract` into two explicit signals
+(`populatesRegimes` vs `snapshotResponseShape`) rather than relying on
+the cross-layer asymmetry. The current shape is the minimum-viable fix
+and costs ~15 lines; a flag split would touch ~8 FE files.

@@ -17,7 +17,15 @@
 
 import React, { useEffect, useRef, useState, useCallback, useContext, createContext } from 'react';
 import { windowFetchPlannerService, type PlannerResult } from '../services/windowFetchPlannerService';
-import { fetchDataService, createFetchItem, type FetchItem } from '../services/fetchDataService';
+import {
+  fetchDataService,
+  createFetchItem,
+  type FetchItem,
+  initPipelineOp,
+  setPipelineStep,
+  completePipelineOp,
+} from '../services/fetchDataService';
+import { operationRegistryService } from '../services/operationRegistryService';
 import { useFetchData } from './useFetchData';
 import type { Graph } from '../types';
 import toast from 'react-hot-toast';
@@ -101,7 +109,39 @@ export function useDSLReaggregation({
 
         if (result.summaries.showToast && result.summaries.toastMessage
             && result.analysisContext?.trigger !== 'initial_load') {
-          toast(result.summaries.toastMessage, { icon: '⚠️', duration: 4000 });
+          // Route the "needs fetch" prompt through the operation registry
+          // as a terminal pipeline op with a Fetch action button, rather
+          // than a plain react-hot-toast. This keeps the indicator
+          // machinery consistent (single column of ops at the bottom of
+          // the viewport) and gives the user a one-click path to execute
+          // the fetch without hunting for the WindowSelector button.
+          const needsFetchOpId = 'dsl-planner-needs-fetch';
+          // Remove any prior instance so a re-fired planner (e.g. the
+          // user changed DSL again) doesn't stack up identical prompts.
+          operationRegistryService.remove(needsFetchOpId);
+          initPipelineOp(needsFetchOpId);
+          setPipelineStep(needsFetchOpId, 'plan', 'complete',
+            result.summaries.toastMessage);
+          completePipelineOp(needsFetchOpId, 'warning',
+            result.summaries.toastMessage,
+            {
+              label: 'Fetch',
+              onClick: async () => {
+                // Clear the prompt so the incoming fetch-pipeline op is
+                // the only visible indicator.
+                operationRegistryService.remove(needsFetchOpId);
+                try {
+                  await windowFetchPlannerService.executeFetchPlan(
+                    graphRef.current as Graph,
+                    (g) => { if (g) setGraph(g); },
+                    graphStoreApi.getState().currentDSL || '',
+                  );
+                } catch (err: any) {
+                  console.error('[useDSLReaggregation] Fetch action failed:', err);
+                  toast.error(`Fetch failed: ${err?.message || err}`);
+                }
+              },
+            });
         }
       })
       .catch(err => {

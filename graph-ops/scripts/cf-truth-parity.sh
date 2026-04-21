@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 #
-# CF truth-parity test — Class B (lagless) assertion, Class A (laggy)
+# CF truth-parity test — Class B (non-latency) assertion, Class A (laggy)
 # informational + catastrophic-bound assertion. Scope: doc 50.
 #
 # Asserts:
-#   - Lagless edges (σ=0): |cf_p - truth_p| < LAGLESS_TOL (default 0.05).
+#   - Non-latency edges (σ=0): |cf_p - truth_p| < NON_LATENCY_TOL (default 0.05).
 #     Class B's Beta-Binomial closed form should be exact given the
 #     resolver's α/β; deviation beyond MC noise indicates a real defect.
 #   - Laggy edges (σ>0): |cf_p - truth_p| < LAGGY_BOUND (default 0.20).
@@ -19,7 +19,7 @@
 #
 # Usage:
 #   bash graph-ops/scripts/cf-truth-parity.sh [graph-name]
-#   LAGLESS_TOL=0.03 bash graph-ops/scripts/cf-truth-parity.sh
+#   NON_LATENCY_TOL=0.03 bash graph-ops/scripts/cf-truth-parity.sh
 #   LAGGY_BOUND=0.10 bash graph-ops/scripts/cf-truth-parity.sh
 #
 # Runs the suite across all T1-T7 fixtures when no graph specified.
@@ -28,7 +28,7 @@ set -uo pipefail
 
 . "$(dirname "$0")/_load-conf.sh"
 
-LAGLESS_TOL="${LAGLESS_TOL:-0.05}"
+NON_LATENCY_TOL="${NON_LATENCY_TOL:-0.05}"
 LAGGY_BOUND="${LAGGY_BOUND:-0.20}"
 
 FIXTURES_DEFAULT=(
@@ -48,7 +48,7 @@ fi
 
 echo "══════════════════════════════════════════════════════════════"
 echo "  CF truth-parity"
-echo "    Class B (lagless) tol = $LAGLESS_TOL  (asserted)"
+echo "    Class B (non-latency) tol = $NON_LATENCY_TOL  (asserted)"
 echo "    Class A (laggy) bound = $LAGGY_BOUND  (asserted, catastrophic only)"
 echo "══════════════════════════════════════════════════════════════"
 
@@ -56,7 +56,7 @@ cd "$_DAGNET_ROOT/graph-editor"
 . venv/bin/activate 2>/dev/null || true
 cd "$_DAGNET_ROOT"
 
-FAIL_LAGLESS=0
+FAIL_NON_LATENCY=0
 FAIL_LAGGY=0
 declare -a FIXTURE_RESULTS=()
 
@@ -75,7 +75,7 @@ import json, yaml, sys
 from pathlib import Path
 
 graph = "$graph"
-lagless_tol = $LAGLESS_TOL
+non_latency_tol = $NON_LATENCY_TOL
 laggy_bound = $LAGGY_BOUND
 cf = json.loads('''$CF_JSON''')
 truth = yaml.safe_load(open(f"/home/reg/dev/dagnet/bayes/truth/{graph}.truth.yaml"))
@@ -88,7 +88,7 @@ for ek, ev in (truth.get("edges") or {}).items():
     }
 
 cf_edges = (cf.get("scenarios") or [{}])[0].get("edges", [])
-fail_lagless = 0
+fail_non_latency = 0
 fail_laggy = 0
 for e in cf_edges:
     fn, tn = e["from_node"], e["to_node"]
@@ -100,24 +100,24 @@ for e in cf_edges:
     truth_p = truth_info["p"]
     delta = abs(truth_p - cf_p)
     if sigma == 0:
-        ok = delta < lagless_tol
+        ok = delta < non_latency_tol
         mark = "  ✓" if ok else "  ✗"
-        print(f"{mark} {fn+' -> '+tn:<52}  B (lagless)  truth={truth_p:.4f}  cf={cf_p:.4f}  |Δ|={delta:.4f}  tol={lagless_tol}")
-        if not ok: fail_lagless += 1
+        print(f"{mark} {fn+' -> '+tn:<52}  B (non-latency)  truth={truth_p:.4f}  cf={cf_p:.4f}  |Δ|={delta:.4f}  tol={non_latency_tol}")
+        if not ok: fail_non_latency += 1
     else:
         ok = delta < laggy_bound
         mark = "  ✓" if ok else "  ✗"
         print(f"{mark} {fn+' -> '+tn:<52}  A (laggy)    truth={truth_p:.4f}  cf={cf_p:.4f}  |Δ|={delta:.4f}  bound={laggy_bound}")
         if not ok: fail_laggy += 1
-# Encode counts in exit code: high byte = laggy fails, low byte = lagless fails
-sys.exit((fail_laggy << 4) | (fail_lagless & 0x0F))
+# Encode counts in exit code: high byte = laggy fails, low byte = non-latency fails
+sys.exit((fail_laggy << 4) | (fail_non_latency & 0x0F))
 PY
   rc=$RC
-  this_lagless=$(( rc & 0x0F ))
+  this_non_latency=$(( rc & 0x0F ))
   this_laggy=$(( (rc >> 4) & 0x0F ))
-  FAIL_LAGLESS=$(( FAIL_LAGLESS + this_lagless ))
+  FAIL_NON_LATENCY=$(( FAIL_NON_LATENCY + this_non_latency ))
   FAIL_LAGGY=$(( FAIL_LAGGY + this_laggy ))
-  FIXTURE_RESULTS+=("$graph: lagless_fail=$this_lagless, laggy_fail=$this_laggy")
+  FIXTURE_RESULTS+=("$graph: non_latency_fail=$this_non_latency, laggy_fail=$this_laggy")
 done
 
 echo ""
@@ -127,14 +127,14 @@ for r in "${FIXTURE_RESULTS[@]}"; do
   echo "    $r"
 done
 echo ""
-echo "  Total Class B failures (lagless > tol): $FAIL_LAGLESS"
+echo "  Total Class B failures (non-latency > tol): $FAIL_NON_LATENCY"
 echo "  Total Class A failures (laggy > bound): $FAIL_LAGGY"
 
-if [ $FAIL_LAGLESS -eq 0 ] && [ $FAIL_LAGGY -eq 0 ]; then
+if [ $FAIL_NON_LATENCY -eq 0 ] && [ $FAIL_LAGGY -eq 0 ]; then
   echo "  ✓ All edges within tolerance"
   echo "══════════════════════════════════════════════════════════════"
   exit 0
 fi
 
 echo "══════════════════════════════════════════════════════════════"
-exit $(( FAIL_LAGLESS + FAIL_LAGGY ))
+exit $(( FAIL_NON_LATENCY + FAIL_LAGGY ))

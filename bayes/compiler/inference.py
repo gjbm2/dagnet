@@ -38,13 +38,29 @@ class ChainStallDetector:
        the chain's established peak rate.
 
     2. **Sustained**: the chain remains in the crawl state for a full
-       `grace_s` consecutive seconds.  If the rate rises above the
-       crawl thresholds at ANY point, the timer resets.
+       `grace_s` consecutive seconds. The state uses **hysteresis**: once
+       crawling, the chain stays in the crawl state until its rate rises
+       above `recover_ratio * peak` (strictly higher than the entry
+       threshold). This prevents noise-bounce, where a chain crawling at
+       15% of peak briefly upticks above a single threshold and resets
+       the timer indefinitely.
 
     This avoids false positives on:
     - Brief hard regions (high tree depth → slow for a few seconds, then recovers)
     - End-of-run slowdown (2 chains finish, last chain has CPU but is still progressing)
     - Genuinely slow models (peak is 4 draws/s, so 3 draws/s is normal)
+
+    Tuning history (21-Apr-26):
+        crawl_ratio  0.10 → 0.25  — 10% was too tolerant; chains trapped at
+                                    15-20% of peak (sustained for minutes)
+                                    were not flagged. abc-sparse-1 regression.
+        rate_window_s 5 → 15s     — 5s window was too noisy; a bursty chain
+                                    progressing ~1 draw every 2s oscillated
+                                    across the threshold per-update.
+        recover_ratio (new)       — Previous detector used the same threshold
+                                    for entry and exit. Added hysteresis so
+                                    once crawling, chain must hit 50% of peak
+                                    (or rise above crawl_floor) to recover.
 
     Usage:
         detector = ChainStallDetector()
@@ -57,13 +73,15 @@ class ChainStallDetector:
         self,
         grace_s: float = 30.0,
         crawl_floor: float = 3.0,
-        crawl_ratio: float = 0.10,
-        rate_window_s: float = 5.0,
+        crawl_ratio: float = 0.25,
+        recover_ratio: float = 0.50,
+        rate_window_s: float = 15.0,
         warmup_s: float = 60.0,
     ):
         self.grace_s = grace_s
         self.crawl_floor = crawl_floor      # absolute: below this AND below ratio = crawling
-        self.crawl_ratio = crawl_ratio      # relative: below this fraction of peak = crawling
+        self.crawl_ratio = crawl_ratio      # relative entry: below this fraction of peak = crawling
+        self.recover_ratio = recover_ratio  # relative exit: at/above this fraction of peak = recovered
         self.rate_window_s = rate_window_s  # seconds over which to compute current rate
         self.warmup_s = warmup_s            # ignore all chains for this long after first update
 
@@ -103,20 +121,23 @@ class ChainStallDetector:
             self._trim(chain, now)
             return None
 
-        # Is the chain crawling?
-        # Two conditions (both must hold):
-        #   1. Rate below absolute floor (crawl_floor)
-        #   2. Rate below ratio of peak (crawl_ratio * peak),
-        #      OR chain never established a peak (peak < crawl_floor)
         peak = self._peak_rate[chain]
-        is_crawling = (rate < self.crawl_floor
-                       and (peak < self.crawl_floor
-                            or rate < self.crawl_ratio * peak))
+        currently_crawling = self._crawl_since[chain] is not None
 
-        if is_crawling:
-            if self._crawl_since[chain] is None:
-                self._crawl_since[chain] = now
-            elif now - self._crawl_since[chain] >= self.grace_s:
+        if currently_crawling:
+            # Exit condition (hysteresis): rate must rise above
+            # recover_ratio * peak OR above the absolute floor to leave
+            # the crawl state. Using a strictly higher threshold than
+            # entry prevents oscillation when the chain sits just around
+            # the entry boundary (e.g. 15-20% of peak).
+            recovered = (rate >= self.crawl_floor
+                         or (peak > 0 and rate >= self.recover_ratio * peak))
+            if recovered:
+                self._crawl_since[chain] = None
+                self._trim(chain, now)
+                return None
+            # Still crawling — check grace timer
+            if now - self._crawl_since[chain] >= self.grace_s:
                 self._trim(chain, now)
                 return {
                     "chain": chain,
@@ -126,8 +147,13 @@ class ChainStallDetector:
                     "stalled_for": now - self._crawl_since[chain],
                 }
         else:
-            # Not crawling — reset timer
-            self._crawl_since[chain] = None
+            # Entry condition: rate below absolute floor AND below
+            # crawl_ratio of peak (or never reached the floor).
+            entered = (rate < self.crawl_floor
+                       and (peak < self.crawl_floor
+                            or rate < self.crawl_ratio * peak))
+            if entered:
+                self._crawl_since[chain] = now
 
         self._trim(chain, now)
         return None

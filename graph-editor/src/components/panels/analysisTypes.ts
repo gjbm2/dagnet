@@ -220,6 +220,19 @@ export const ANALYSIS_TYPES: AnalysisTypeMeta[] = [
     shortDescription: 'Probability at each stage of journey',
     selectionHint: 'Select from(), to(), and visited() nodes',
     icon: ArrowDown,
+    // Funnel depends on CF machinery, which needs regime identity per edge
+    // to read snapshot evidence. snapshotContract drives regime population
+    // in the request. The BE dispatcher routes funnel to the standard runner
+    // (not the snapshot handler) because conversion_funnel is intentionally
+    // absent from ANALYSIS_TYPE_SCOPE_RULES — the runner reads
+    // candidate_regimes_by_edge and hands it to run_conversion_funnel.
+    snapshotContract: {
+      scopeRule: 'funnel_path',
+      readMode: 'cohort_maturity',
+      slicePolicy: 'mece_fulfilment_allowed',
+      timeBoundsSource: 'query_dsl_window',
+      perScenario: false,
+    },
   },
   {
     id: 'constrained_path',

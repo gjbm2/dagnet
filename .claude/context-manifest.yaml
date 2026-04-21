@@ -1,0 +1,77 @@
+# Context enforcement manifest.
+#
+# Defines warm-start docs (required for every scoped edit) and path-glob
+# entries (additional docs required for specific surfaces). Consumed by
+# .claude/hooks/context-gate.sh.
+#
+# Design rationale: docs/current/agent-context-enforcement-design.md
+#
+# Adding an entry: name it, list the glob(s), list the docs that an agent
+# must Read before editing the glob, and assign an owner. Owners are the
+# anti-rot mechanism — entries without an owner are assumed stale.
+
+version: 1
+
+# Warm-start docs are required context for ANY edit to a scoped path.
+# They are named in CLAUDE.md's MANDATORY warm-start section.
+warm_start:
+  - docs/current/codebase/SYNC_SYSTEM_OVERVIEW.md
+  - docs/current/codebase/RESERVED_QUERY_TERMS_GLOSSARY.md
+  - docs/current/codebase/DEV_ENVIRONMENT_AND_HMR.md
+
+# Path-glob entries. An edit to a file matching any glob requires the
+# warm_start docs plus that entry's required_reads to appear in the
+# briefing receipt.
+entries:
+  - name: bayes-core
+    owner: greg
+    paths:
+      - "bayes/**"
+    required_reads:
+      - docs/current/codebase/BAYESIAN_ENGINE_RESEARCH.md
+    description: >
+      Bayesian compiler and inference. Non-obvious invariants around
+      re-parameterisation, priors, topo passes, and synthetic builders.
+
+  - name: statistical-enhancement
+    owner: greg
+    paths:
+      - "graph-editor/src/services/statisticalEnhancementService.ts"
+      - "graph-editor/src/services/analysisECharts/**"
+    required_reads:
+      - docs/current/codebase/CHART_PIPELINE_ARCHITECTURE.md
+      - docs/current/codebase/FE_BE_STATS_PARALLELISM.md
+    description: >
+      Frontend statistical enhancement and chart builders. Mirrors the
+      backend stats pipeline; parallelism constraints are load-bearing.
+
+  - name: analysis-subject-resolution
+    owner: greg
+    paths:
+      - "graph-editor/lib/analysis_subject_resolution.py"
+    required_reads:
+      - docs/current/codebase/DATA_RETRIEVAL_QUERIES.md
+    description: >
+      Analysis subject resolution. Reserved-term definitions drive the
+      whole pipeline; the warm-start glossary is the primary reference.
+
+  - name: sync-and-repo-ops
+    owner: greg
+    paths:
+      - "graph-editor/src/services/repositoryOperationsService.ts"
+      - "graph-editor/src/services/dataOperationsService.ts"
+      - "graph-editor/src/services/workspaceService.ts"
+    required_reads:
+      - docs/current/graph-write-sync-architecture.md
+    description: >
+      Sync and repository operations. Known race conditions; IDB is
+      source of truth, FileRegistry is an in-memory cache.
+
+  - name: index-rebuild
+    owner: greg
+    paths:
+      - "graph-editor/src/services/indexRebuildService.ts"
+    required_reads: []
+    description: >
+      Index rebuild. Workspace-prefixed IDs and index invariants —
+      warm-start sync overview is sufficient.

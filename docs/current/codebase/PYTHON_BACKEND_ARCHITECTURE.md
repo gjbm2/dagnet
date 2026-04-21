@@ -11,6 +11,38 @@ How the Python compute server works: API endpoints, MSMDC query generation, Baye
 
 All endpoints route through handler functions in `lib/api_handlers.py`, reusable across dev server and Vercel.
 
+## Deployment Targets and Shared-Library Boundary
+
+DagNet ships Python code to **three runtime targets**:
+
+- **Vercel API** — entry point `graph-editor/api/python-api.py`
+- **Local dev API** — entry point `graph-editor/dev-server.py`
+- **Modal Bayes worker** — entry points `bayes/app.py` and `bayes/worker.py`
+
+The boundary rule is:
+
+- If Python logic is consumed by both the API layer and the Bayes worker,
+  it belongs in **`graph-editor/lib/`**
+- If logic is Bayes-only (compiler, model construction, inference, worker
+  orchestration), it belongs in **`bayes/`**
+- Entry points may do runtime-specific import wiring (`PYTHONPATH`,
+  `sys.path`) but the shared modules themselves should stay runtime-agnostic
+
+This is why modules such as `snapshot_service.py`, `query_dsl.py`,
+`graph_types.py`, `snapshot_regime_selection.py`, and
+`file_evidence_supplement.py` live in `graph-editor/lib/`: they are shared
+between the short-lived API deployments and the long-running Bayes worker.
+
+The Modal image copies `graph-editor/lib/` into the worker image and adds it
+to `PYTHONPATH`; Vercel and the dev server prepend the same directory before
+importing handlers. That packaging detail is an entry-point concern, not a
+reason to duplicate shared code under `bayes/` or `api/`.
+
+One intentional exception exists in the opposite direction:
+`graph-editor/lib/bayes_local.py` is a local-dev adapter that shells into the
+Bayes worker codepath. Treat it as an entry-point bridge, not as precedent
+for putting shared business logic in the wrong tree.
+
 ## Frontend-Backend Communication
 
 **Client**: `src/lib/graphComputeClient.ts` (singleton)
@@ -310,6 +342,7 @@ SlicePosteriorEntry: alpha, beta_param, p_hdi_lower/upper, mu/sigma mean/sd, ons
 | File | Role |
 |------|------|
 | `lib/api_handlers.py` | All endpoint handler functions |
+| `lib/file_evidence_supplement.py` | Shared uncovered-day evidence supplement used by API + Bayes |
 | `lib/graph_types.py` | Pydantic models (Evidence, Latency, Posteriors) |
 | `lib/msmdc.py` | MSMDC query generation algorithm |
 | `lib/query_dsl.py` | DSL parsing and compilation |
@@ -322,6 +355,8 @@ SlicePosteriorEntry: alpha, beta_param, p_hdi_lower/upper, mu/sigma mean/sd, ons
 | `src/lib/graphComputeClient.ts` | Frontend client (caching, mock mode) |
 | `src/lib/pythonApiBase.ts` | Base URL resolution |
 | `graph-editor/dev-server.py` | Dev server startup |
+| `bayes/app.py` | Modal image + worker deployment wiring |
+| `bayes/worker.py` | Bayes worker entry point |
 
 ## Related Docs
 

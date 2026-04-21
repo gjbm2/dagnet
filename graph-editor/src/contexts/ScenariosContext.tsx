@@ -47,6 +47,7 @@ import {
   type FetchItem 
 } from '../services/fetchDataService';
 import { fetchOrchestratorService } from '../services/fetchOrchestratorService';
+import { operationRegistryService } from '../services/operationRegistryService';
 import { sessionLogService } from '../services/sessionLogService';
 import { recomputeOpenChartsForGraph } from '../services/chartRecomputeService';
 import { autoUpdatePolicyService } from '../services/autoUpdatePolicyService';
@@ -122,7 +123,7 @@ export interface ScenariosContextValue {
     baseDSLOverride?: string,
     allScenariosOverride?: Scenario[],
     visibleOrder?: string[],
-    options?: { skipStage2?: boolean; allowFetchFromSource?: boolean }
+    options?: { skipStage2?: boolean; allowFetchFromSource?: boolean; suppressPipelineToast?: boolean }
   ) => Promise<void>;
   regenerateAllLive: (baseDSLOverride?: string, visibleOrder?: string[]) => Promise<void>;
   updateScenarioQueryDSL: (id: string, queryDSL: string) => Promise<void>;
@@ -807,7 +808,7 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
     baseDSLOverride?: string,
     allScenariosOverride?: Scenario[],
     visibleOrder?: string[],
-    options?: { skipStage2?: boolean; allowFetchFromSource?: boolean }
+    options?: { skipStage2?: boolean; allowFetchFromSource?: boolean; suppressPipelineToast?: boolean }
   ): Promise<void> => {
     // Use provided scenario or look up from state
     const scenario = scenarioOverride || scenarios.find(s => s.id === id);
@@ -969,6 +970,12 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
           attempts: 6,
           delayMs: 75,
           querySignatures: Object.keys(plannerSignatures).length > 0 ? plannerSignatures : undefined,
+          // Batch callers (regenerateAllLive) suppress the per-scenario
+          // 5-step pipeline op and rely on a compact per-scenario CF
+          // terminal op for verdict visibility. scenario.name flows into
+          // fetchDataService as the label prefix for that op.
+          suppressPipelineToast: options?.suppressPipelineToast,
+          scenarioLabel: options?.suppressPipelineToast ? scenario.name : undefined,
         });
         if (refreshRes.failures > 0) {
           // Mirror existing semantics: surface as explicit "failed to load from file cache".
@@ -1277,52 +1284,90 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
     }
     
     console.log(`Regenerating ${scenariosToProcess.length} visible live scenarios sequentially with baseDSL="${effectiveBase}"...`);
-    
+
     // Create a working copy of scenarios to track DSL updates as we go
     const workingScenarios = JSON.parse(JSON.stringify(scenarios));
-    
+
+    // Wrapping parent op for the batch. Suppresses the per-scenario
+    // 5-step fetch-compute pipeline (which would otherwise stack up as
+    // N separate indicators for N visible scenarios). Each scenario
+    // still emits one compact terminal op carrying the CF verdict via
+    // fetchDataService's finaliseCfToast — so the user can confirm CF
+    // actually ran for each scenario and see its elapsed ms, without
+    // the full 5-step pipeline repeated N times.
+    const batchOpId = `scenario-regen-all-${Date.now()}`;
+    const totalScenarios = scenariosToProcess.length;
+    operationRegistryService.register({
+      id: batchOpId,
+      kind: 'bulk-scenario',
+      label: `Refreshing scenarios (0/${totalScenarios})…`,
+      status: 'running',
+      progress: { current: 0, total: totalScenarios },
+    });
+
     let successCount = 0;
-    
+    let failureCount = 0;
+    const batchStartMs = Date.now();
+
     // Process in order (bottom to top in visible stack)
-    for (const scenario of scenariosToProcess) {
+    for (let i = 0; i < scenariosToProcess.length; i++) {
+      const scenario = scenariosToProcess[i];
       if (!scenario.meta?.isLive) continue;
-      
+
+      operationRegistryService.setLabel(batchOpId,
+        `Refreshing scenarios (${i + 1}/${totalScenarios}) — ${scenario.name}…`);
+      operationRegistryService.setProgress(batchOpId, { current: i, total: totalScenarios });
+
       try {
         // Find this scenario in working copy
         const workingScenario = workingScenarios.find((s: Scenario) => s.id === scenario.id);
         if (!workingScenario) continue;
-        
+
         // 1. Pre-calculate the new effective DSL for this scenario
         // Use visibleOrder for inheritance calculation
-        const visibleWorkingScenarios = visibleOrder 
+        const visibleWorkingScenarios = visibleOrder
           ? visibleOrder
               .filter(id => id !== 'base' && id !== 'current')
               .map(id => workingScenarios.find((s: Scenario) => s.id === id))
               .filter((s: Scenario | undefined): s is Scenario => s !== undefined)
           : workingScenarios;
-        
+
         const scenarioIndex = visibleWorkingScenarios.findIndex((s: Scenario) => s.id === scenario.id);
         const inherited = computeInheritedDSL(scenarioIndex >= 0 ? scenarioIndex : 0, visibleWorkingScenarios, effectiveBase);
         const effective = computeEffectiveFetchDSL(inherited, scenario.meta.queryDSL);
-        
+
         // 2. Update the working copy immediately
         if (!workingScenario.meta) workingScenario.meta = {};
         workingScenario.meta.lastEffectiveDSL = effective;
-        
+
         // 3. Trigger actual regeneration with visibleOrder.
         // CRITICAL: Never allow source fetches from regenerateAllLive — this is called
         // from workspace-files-changed (pull) and topology-change handlers where automatic
         // Amplitude fetches would be unexpected and unauthorised.
         await regenerateScenario(scenario.id, undefined, effectiveBase, workingScenarios, visibleOrder, {
           allowFetchFromSource: false,
+          suppressPipelineToast: true,
         });
         successCount++;
-        
+
       } catch (err) {
+        failureCount++;
         console.error(`Failed to regenerate scenario ${scenario.id} in batch:`, err);
       }
     }
-    
+
+    const batchElapsedMs = (Date.now() - batchStartMs).toLocaleString();
+    const batchOutcome = failureCount > 0
+      ? (successCount > 0 ? 'warning' as const : 'error' as const)
+      : 'complete' as const;
+    const batchLabel = failureCount > 0
+      ? `Refreshed ${successCount}/${totalScenarios} scenarios in ${batchElapsedMs}ms (${failureCount} failed)`
+      : `Refreshed ${totalScenarios} scenario${totalScenarios !== 1 ? 's' : ''} in ${batchElapsedMs}ms`;
+    operationRegistryService.setLabel(batchOpId, batchLabel);
+    operationRegistryService.setProgress(batchOpId, { current: totalScenarios, total: totalScenarios });
+    operationRegistryService.complete(batchOpId, batchOutcome);
+
+
     console.log(`Regenerated ${successCount}/${scenariosToProcess.length} scenarios`);
   }, [scenarios, baseDSL, graphStore, regenerateScenario]);
 

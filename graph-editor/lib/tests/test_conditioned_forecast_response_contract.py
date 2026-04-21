@@ -41,6 +41,8 @@ from pathlib import Path
 
 import pytest
 
+from api_handlers import _cf_supplement_evidence_counts_from_file
+
 
 HANDLER_PATH = (
     Path(__file__).resolve().parent.parent / "api_handlers.py"
@@ -220,6 +222,61 @@ class TestDesignSpecKnown:
         )
 
 
+class TestConditionedForecastFileEvidenceSupplement:
+    """Bayes-style uncovered-day supplement for CF evidence counts."""
+
+    def test_supplements_only_uncovered_days_from_bare_cohort_daily_arrays(self):
+        graph = {
+            "edges": [
+                {
+                    "uuid": "edge-1",
+                    "_bayes_evidence": {
+                        "cohort": [
+                            {
+                                "sliceDSL": "cohort(1-Apr-26:4-Apr-26)",
+                                "dates": [
+                                    "2026-04-01",
+                                    "2026-04-02",
+                                    "2026-04-03",
+                                    "2026-04-04",
+                                ],
+                                "n_daily": [10, 20, 30, 40],
+                                "k_daily": [1, 2, 3, 4],
+                            },
+                            {
+                                "sliceDSL": "cohort(1-Apr-26:4-Apr-26).context(channel:paid)",
+                                "dates": ["2026-04-01", "2026-04-03"],
+                                "n_daily": [999, 999],
+                                "k_daily": [999, 999],
+                            },
+                        ]
+                    },
+                }
+            ]
+        }
+
+        result = _cf_supplement_evidence_counts_from_file(
+            graph_data=graph,
+            edge_uuid="edge-1",
+            anchor_from="2026-04-01",
+            anchor_to="2026-04-04",
+            snapshot_covered_days={"2026-04-02", "2026-04-04"},
+        )
+
+        assert result == {"n": 40, "k": 4, "supplemented_days": 2}
+
+    def test_returns_zero_without_engorged_file_evidence(self):
+        result = _cf_supplement_evidence_counts_from_file(
+            graph_data={"edges": [{"uuid": "edge-1"}]},
+            edge_uuid="edge-1",
+            anchor_from="2026-04-01",
+            anchor_to="2026-04-04",
+            snapshot_covered_days={"2026-04-02"},
+        )
+
+        assert result == {"n": 0, "k": 0, "supplemented_days": 0}
+
+
 # ─── CF endpoint ↔ cohort maturity v3 parity ────────────────────────────
 #
 # Doc 45 §Relationship to doc 29f Phase G: "one computation, two reads."
@@ -275,7 +332,15 @@ if _CONFTEST_AVAILABLE:
         @staticmethod
         def _get_candidate_regimes(graph):
             """Mirror of test_v2_v3_parity._get_candidate_regimes."""
+            import os
+            from conftest import _resolve_db_url
             from snapshot_service import _pooled_conn  # type: ignore
+
+            if not os.environ.get("DB_CONNECTION"):
+                db_url = _resolve_db_url()
+                if db_url:
+                    os.environ["DB_CONNECTION"] = db_url
+
             regimes: dict = {}
             with _pooled_conn() as conn:
                 cur = conn.cursor()
@@ -310,12 +375,6 @@ if _CONFTEST_AVAILABLE:
             (same engine — no sampling drift on completeness because
             completeness is an integral of the same CDF on both paths).
             """
-            import os
-            if not os.environ.get("DB_CONNECTION"):
-                pytest.skip(
-                    "DB_CONNECTION env var required for cross-handler "
-                    "parity test. Set it to run this RED check."
-                )
             from api_handlers import (
                 _handle_cohort_maturity_v3,
                 handle_conditioned_forecast,
@@ -413,3 +472,4 @@ if _CONFTEST_AVAILABLE:
                 f"completeness parity failed: cohort_maturity last row="
                 f"{cm_completeness:.4f} CF endpoint={cf_completeness:.4f}"
             )
+

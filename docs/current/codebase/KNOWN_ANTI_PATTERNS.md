@@ -448,6 +448,18 @@ The `model_resolver.py` correctly prefers `cohort_alpha`/`cohort_beta` when `tem
 
 **Example**: the conversion_rate HDI band legend swatch rendered green on a blue scenario because the band series set `areaStyle.color` only. Fixed by adding `color: colour` at series top level on the band, model-line, and scatter series.
 
+## Anti-pattern 50: Routing non-latency edges by `sigma <= 0` heuristic
+
+**Signature**: a forecast row builder or CF gate branches on `resolved.latency.sigma <= 0` to decide whether an edge is a non-latency edge (closed-form Beta-Binomial) or a latency edge (MC sweep). The gate fires correctly for truly non-latency edges but also fires on latency edges that happen to have σ=0 transiently (e.g. the resolver could not fit σ and fell back to zero), sending latency edges through the non-latency path and losing their latency semantics. Or: a latency edge with evidence in scope is mis-routed to the non-latency branch because σ appears on the promoted source but the edge is not actually a latency edge.
+
+**Root cause**: `sigma` is a *fitted output*, not a *feature flag*. Promoted sigma can appear on non-latency edges (inherited from a sibling slice's fit, default fallback, or a legacy value) and can be zero on latency edges (fit failure, insufficient evidence). The only authoritative signal for "does this edge track latency?" is the edge's own `latency.latency_parameter: true` flag on the param.
+
+**Fix**: route by the authoritative flag: `(target_edge.get('p') or {}).get('latency', {}).get('latency_parameter') is True`. The CF row-builder in `cohort_forecast_v3.py` does this (historically `if resolved.latency.sigma <= 0`, now `_is_latency_edge = _lat_meta.get('latency_parameter') is True; if not _is_latency_edge: ...`). A parallel precedent is Anti-pattern 36 (latency bead gate): gate UI and compute branches on feature enablement flags, not on data presence.
+
+**Broader principle**: "is this feature enabled for this object?" is a configuration question; "what value did the fit produce?" is a data question. Never substitute one for the other. When you see a routing branch keying on a fitted scalar being zero/missing/extreme, look for the corresponding enablement flag on the param.
+
+**Example**: `_non_latency_rows` in `cohort_forecast_v3.py` (previously `_lagless_rows`) was named and routed on the `sigma <= 0` proxy. The name conflated two distinct populations — truly non-latency edges (the correct audience) and latency edges with no evidence in scope (which historically fell through the same branch because the resolver returned σ=0 when fits failed). Routing by `latency_parameter` makes the function's scope precise; renaming the function to `_non_latency_rows` removes the semantic ambiguity.
+
 ## When to add to this document
 
 After completing a multi-attempt fix, check: does my bug match a generalisable pattern? If so, add it here following the format: Signature (how to recognise it), Root cause (why it happens), Fix (what to do), Example (optional, specific instance).

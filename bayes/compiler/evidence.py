@@ -13,7 +13,19 @@ Responsibilities:
 from __future__ import annotations
 
 import re
+import os
+import sys
 from datetime import datetime, timedelta
+
+try:
+    from file_evidence_supplement import iter_uncovered_bare_cohort_daily_points
+except ImportError:
+    _SHARED_LIB = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "..", "graph-editor", "lib")
+    )
+    if _SHARED_LIB not in sys.path:
+        sys.path.insert(0, _SHARED_LIB)
+    from file_evidence_supplement import iter_uncovered_bare_cohort_daily_points
 
 from .types import (
     TopologyAnalysis,
@@ -1336,76 +1348,40 @@ def _supplement_from_param_file(
 
     Returns the number of supplemented daily observations.
     """
-    # Normalise the snapshot-covered set to ISO keys for cross-format matching.
-    covered_iso = {_normalise_date_key(d) for d in snapshot_covered_days}
-
     values = pf_data.get("values") or []
     n_supplemented = 0
 
-    for v in values:
-        if not isinstance(v, dict):
-            continue
-        slice_dsl = v.get("sliceDSL", "") or ""
+    supplemented_by_slice: dict[str, list[CohortDailyObs]] = {}
+    for entry, date_str, n, k in iter_uncovered_bare_cohort_daily_points(
+        values,
+        snapshot_covered_days,
+    ):
+        ref_date = _resolve_value_retrieved_at(dict(entry), today)
+        age = _date_age(date_str, ref_date)
+        compl = _compute_cohort_completeness(
+            age,
+            et.path_latency.path_delta,
+            et.path_latency.path_mu,
+            et.path_latency.path_sigma,
+            et.has_latency,
+        )
+        slice_dsl = str(entry.get("sliceDSL", "") or "")
+        supplemented_by_slice.setdefault(slice_dsl, []).append(CohortDailyObs(
+            date=date_str,
+            n=n,
+            k=k,
+            age_days=age,
+            completeness=compl,
+        ))
 
-        # Only supplement BARE cohort daily arrays — these have per-anchor_day
-        # granularity that can be precisely deduplicated against snapshot
-        # trajectories.  Window aggregates (sum across window period) and
-        # cohort aggregates cannot be deduplicated at the anchor_day level.
-        # Context-qualified entries (from bayesEngorge) carry aggregate n/k
-        # values, not per-context — supplementing with them would inject
-        # aggregate denominators into per-slice evidence.  The snapshot
-        # path already provides correct per-context data.
-        if not _is_cohort(slice_dsl):
-            continue
-        if "context(" in slice_dsl:
-            continue
-
-        n_daily = v.get("n_daily") or []
-        k_daily = v.get("k_daily") or []
-        dates = v.get("dates") or []
-
-        if not (n_daily and k_daily and dates
-                and len(n_daily) == len(k_daily) == len(dates)):
-            continue
-
-        ref_date = _resolve_value_retrieved_at(v, today)
-
-        # Filter to anchor_days not already covered by snapshot data.
-        supplemented_obs: list[CohortDailyObs] = []
-        for i in range(len(n_daily)):
-            date_str = str(dates[i]) if i < len(dates) else ""
-            if _normalise_date_key(date_str) in covered_iso:
-                continue  # snapshot trajectory exists for this day
-
-            n = _safe_int(n_daily[i])
-            k = _safe_int(k_daily[i])
-            if n is None or n <= 0:
-                continue
-
-            age = _date_age(date_str, ref_date)
-            compl = _compute_cohort_completeness(
-                age,
-                et.path_latency.path_delta,
-                et.path_latency.path_mu,
-                et.path_latency.path_sigma,
-                et.has_latency,
-            )
-            supplemented_obs.append(CohortDailyObs(
-                date=date_str,
-                n=n,
-                k=k if k is not None else 0,
-                age_days=age,
-                completeness=compl,
-            ))
-
-        if supplemented_obs:
-            ev.cohort_obs.append(CohortObservation(
-                slice_dsl=slice_dsl,
-                daily=supplemented_obs,
-            ))
-            ev.has_cohort = True
-            ev.total_n += sum(d.n for d in supplemented_obs)
-            n_supplemented += len(supplemented_obs)
+    for slice_dsl, supplemented_obs in supplemented_by_slice.items():
+        ev.cohort_obs.append(CohortObservation(
+            slice_dsl=slice_dsl,
+            daily=supplemented_obs,
+        ))
+        ev.has_cohort = True
+        ev.total_n += sum(d.n for d in supplemented_obs)
+        n_supplemented += len(supplemented_obs)
 
     return n_supplemented
 

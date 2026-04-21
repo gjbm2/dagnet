@@ -1472,16 +1472,18 @@ def run_path(
     }
 
 
-def _scoped_conditioned_forecast(
+def _whole_graph_cf(
     scenarios_payload: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Invoke handle_conditioned_forecast scoped to the funnel path.
+    """Invoke the whole-graph conditioned-forecast pass.
 
-    Direct Python call (same process, no HTTP). Each scenario in the
-    payload carries its own graph dict, analytics_dsl (path subject),
-    and effective_query_dsl (temporal clause). See doc 52 §4.2.
+    Single Python call per scenario. `scenarios_payload` entries MUST NOT
+    carry `analytics_dsl` — that selects mode (a) single-subject. Leaving
+    it absent selects mode (b) whole-graph, which returns per-edge scope-
+    correct scalars for every parameterised edge in the graph (doc 47).
 
-    Returns the CF response dict with per-scenario edge scalars.
+    The funnel runner filters the returned `edges` by (from_node, to_node)
+    label pair to extract the subgraph it needs.
     """
     from api_handlers import handle_conditioned_forecast
     return handle_conditioned_forecast({'scenarios': scenarios_payload})
@@ -1524,26 +1526,34 @@ def run_conversion_funnel(
     from_node: Optional[str] = None,
     to_node: Optional[str] = None,
 ) -> dict[str, Any]:
-    """Conversion funnel — Level 2 per doc 52.
+    """Conversion funnel — doc 52.
 
-    Bar heights and uncertainty bands are computed by `runner/funnel_engine.py`
-    per regime (e / f / e+f). Run_path supplies the surrounding row schema
-    (cost, lag, completeness, dropoff). The runner overrides `probability`
-    with the engine's bar value and adds `probability_lo`/`probability_hi`
-    plus striation fields.
+    Follows the same pattern as every other snapshot-based analysis type
+    (daily_conversions, cohort_maturity): one whole-graph conditioned-
+    forecast call per scenario, returning per-edge scope-correct scalars,
+    then a pure in-process derivation of funnel bars.
 
-    Doc 52 §8.4: non-linear topologies and visitedAny groups are rejected
-    (returns `error`). CF failures in e+f mode propagate as hard errors —
-    no silent fallback.
+    Data flow:
 
-    Args:
-        G: NetworkX graph.
-        start_id, end_id: resolved UUIDs for S_0 and S_N.
-        intermediate_nodes: resolved UUIDs for intermediate stages.
-        all_scenarios: list of ScenarioData objects.
-        visited_any_groups: grouped stages (visitedAny). Rejected.
-        from_node, to_node: human-readable node IDs (from DSL) used to
-            construct `analytics_dsl` for the scoped CF call.
+        for each scenario with visibility ∈ {e, f+e}:
+            cf_resp = _whole_graph_cf({graph, effective_query_dsl})
+            path_cf = extract_subgraph(cf_resp.edges, path_edge_labels)
+
+        for each scenario:
+            build bars via funnel_engine:
+              e   → compute_bars_e (evidence from CF; never from graph)
+              f   → compute_bars_f (model α/β from graph; no evidence)
+              f+e → compute_bars_ef (CF p_mean/p_sd/completeness; striation)
+            write probability / bands / evidence_k / evidence_n /
+                  completeness / bar_height_e / bar_height_f_residual
+                  over the baseline rows.
+
+    run_path supplies the stage×scenario row skeleton plus cost/lag fields
+    only; its probability/evidence/completeness values are overwritten.
+    No reads from FE-supplied scenario-graph evidence or completeness.
+
+    Topology gate: linear paths only. visitedAny grouped stages and
+    non-linear topologies fall back to baseline rows without bands.
     """
     from .funnel_engine import (
         compute_bars_e,
@@ -1553,8 +1563,6 @@ def run_conversion_funnel(
 
     intermediate_nodes = intermediate_nodes or []
 
-    # ── Always emit baseline (run_path) so the chart never goes blank ──
-    # Bands and striation are added on top when topology supports it.
     result = run_path(
         G, start_id, end_id, intermediate_nodes, pruning=None,
         all_scenarios=all_scenarios, visited_any_groups=visited_any_groups,
@@ -1564,11 +1572,8 @@ def run_conversion_funnel(
 
     md = result.setdefault('metadata', {})
     md['is_conversion_funnel'] = True
-    md['description'] = 'Conversion funnel with hi/lo bars (doc 52 Level 2)'
+    md['description'] = 'Conversion funnel with hi/lo bars (doc 52)'
 
-    # ── Topology gate for Level 2 augmentation (doc 52 §8.2) ──────
-    # Non-linear funnels and visitedAny grouped stages are deferred per
-    # §8.2 — emit the baseline rows without bands rather than failing.
     band_skip_reason: Optional[str] = None
     if visited_any_groups and any(len(g) > 1 for g in visited_any_groups):
         band_skip_reason = 'visitedAny grouped stages not yet supported (doc 52 §8.2)'
@@ -1593,10 +1598,6 @@ def run_conversion_funnel(
         md['hi_lo_bands_skipped'] = band_skip_reason
         return result
 
-    # Labels for DSL construction (CF call)
-    # Resolve human IDs for each stage node (used to construct per-edge
-    # analytics_dsl for the CF call and to pair the response back to the
-    # funnel path's edge sequence).
     def _stage_label(node_id: str) -> str:
         if node_id in G:
             return str(G.nodes[node_id].get('id') or G.nodes[node_id].get('label') or node_id)
@@ -1604,62 +1605,65 @@ def run_conversion_funnel(
     stage_labels = [_stage_label(s) for s in stage_ids]
     path_edge_labels: list[tuple[str, str]] = list(zip(stage_labels[:-1], stage_labels[1:]))
 
-    # ── Pre-fetch CF response per funnel edge for f+e scenarios ────
-    # CF only resolves a single subject per analytics_dsl. For a
-    # multi-hop funnel we issue ONE call per edge with
-    # `analytics_dsl: from(X).to(Y)` and stitch responses together.
-    cf_responses_by_scenario: dict[str, list[dict[str, Any]]] = {}
-    ef_scenarios: list[Any] = []
+    # ── Whole-graph CF pass per scenario ───────────────────────────
+    # One call per scenario needing evidence (modes e and f+e). Extract
+    # the funnel path edges from the response by (from_node, to_node)
+    # label pair. Pure-f scenarios skip the call — they use only model
+    # parameters from the graph.
+    cf_edges_by_scenario: dict[str, list[dict[str, Any]]] = {}
     scenario_raw_graph_by_id: dict[str, dict[str, Any]] = {}
 
     if all_scenarios:
         for sc in all_scenarios:
             scenario_raw_graph_by_id[sc.scenario_id] = sc.graph
             visibility = getattr(sc, 'visibility_mode', 'f+e') or 'f+e'
-            if visibility == 'f+e':
-                ef_scenarios.append(sc)
-
-    cf_skip_reason: Optional[str] = None
-    for sc in ef_scenarios:
-        sid = sc.scenario_id
-        effective_dsl = getattr(sc, 'effective_query_dsl', '') or ''
-        per_edge: list[dict[str, Any]] = []
-        edge_call_failed = False
-        for (fl, tl) in path_edge_labels:
+            if visibility not in ('e', 'f+e'):
+                continue
+            effective_dsl = getattr(sc, 'effective_query_dsl', '') or ''
             payload = [{
-                'scenario_id': sid,
+                'scenario_id': sc.scenario_id,
                 'graph': sc.graph,
-                'analytics_dsl': f'from({fl}).to({tl})',
+                # No analytics_dsl → mode (b) whole-graph pass.
                 'effective_query_dsl': effective_dsl,
                 'candidate_regimes_by_edge': getattr(sc, 'candidate_regimes_by_edge', None) or {},
             }]
-            print(f'[funnel-L2] CF per-edge: scenario={sid} edge={fl}->{tl}')
+            print(f'[funnel] whole-graph CF: scenario={sc.scenario_id} dsl={effective_dsl!r}')
             try:
-                cf_resp = _scoped_conditioned_forecast(payload)
+                cf_resp = _whole_graph_cf(payload)
             except Exception as exc:
-                cf_skip_reason = f'Scoped CF call failed: {exc}'
-                print(f'[funnel-L2]   FAILED: {exc}')
-                edge_call_failed = True
-                break
-            edges = (cf_resp.get('scenarios') or [{}])[0].get('edges') or []
-            print(f'[funnel-L2]   returned {len(edges)} edges; '
-                  f'p_mean={edges[0].get("p_mean") if edges else None}')
-            if not edges:
-                md.setdefault('hi_lo_bands_skipped_per_scenario', {})[sid] = (
-                    f'CF returned 0 edges for {fl}->{tl}'
+                md.setdefault('hi_lo_bands_skipped_per_scenario', {})[sc.scenario_id] = (
+                    f'whole-graph CF failed: {exc}'
                 )
-                edge_call_failed = True
-                break
-            per_edge.append(edges[0])
-        if not edge_call_failed and len(per_edge) == len(path_edge_labels):
-            cf_responses_by_scenario[sid] = per_edge
-            print(f'[funnel-L2] scenario={sid} aligned {len(per_edge)} edges OK; '
-                  f'p_means={[e.get("p_mean") for e in per_edge]} '
-                  f'p_sds_pred={[e.get("p_sd") for e in per_edge]} '
-                  f'p_sds_epi={[e.get("p_sd_epistemic") for e in per_edge]} '
-                  f'completeness={[e.get("completeness") for e in per_edge]}')
-    if cf_skip_reason is not None:
-        md['cf_skip_reason'] = cf_skip_reason
+                md['cf_skip_reason'] = f'whole-graph CF failed: {exc}'
+                print(f'[funnel]   FAILED: {exc}')
+                continue
+
+            all_edges = (cf_resp.get('scenarios') or [{}])[0].get('edges') or []
+            by_key: dict[tuple[str, str], dict[str, Any]] = {}
+            for e in all_edges:
+                by_key[(e.get('from_node'), e.get('to_node'))] = e
+
+            path_cf: list[dict[str, Any]] = []
+            ok = True
+            for (fl, tl) in path_edge_labels:
+                ce = by_key.get((fl, tl))
+                if ce is None:
+                    msg = (f'whole-graph CF returned no edge for {fl}→{tl}; '
+                           f'available={list(by_key.keys())}')
+                    md.setdefault('hi_lo_bands_skipped_per_scenario', {})[sc.scenario_id] = msg
+                    print(f'[funnel] skip sc={sc.scenario_id}: {msg}')
+                    ok = False
+                    break
+                path_cf.append(ce)
+
+            if ok:
+                cf_edges_by_scenario[sc.scenario_id] = path_cf
+                print(f'[funnel] sc={sc.scenario_id} path_edges={len(path_cf)} '
+                      f'p_means={[e.get("p_mean") for e in path_cf]} '
+                      f'conditioned={[e.get("conditioned") for e in path_cf]} '
+                      f'evidence_k={[e.get("evidence_k") for e in path_cf]} '
+                      f'evidence_n={[e.get("evidence_n") for e in path_cf]} '
+                      f'completeness={[e.get("completeness") for e in path_cf]}')
 
     # ── Compute bars per scenario and merge over existing rows ─────
     rows_by_key: dict[tuple, dict[str, Any]] = {}
@@ -1673,57 +1677,46 @@ def run_conversion_funnel(
         visibility_mode = s['visibility_mode']
 
         raw_graph = scenario_raw_graph_by_id.get(scenario_id)
-        path_edges_raw: list[dict[str, Any]] = []
+        # Model-only path edges for compute_bars_f (reads α/β via
+        # resolve_model_params — scenario model params, not evidence).
+        path_edges_model: list[dict[str, Any]] = []
         for (u, v) in path_edge_uvs:
             if raw_graph is not None:
                 raw_edge = _find_raw_edge_in_scenario_graph(raw_graph, u, v) or {'p': {}}
             else:
                 attrs = G.edges[u, v]
                 raw_edge = {'p': {
-                    'evidence': attrs.get('evidence') or {},
                     'forecast': attrs.get('forecast') or {},
                     'latency': attrs.get('latency') or {},
                 }}
-            path_edges_raw.append(raw_edge)
+            path_edges_model.append(raw_edge)
 
-        # Override edge.evidence.k/n with the scope-correct counts that
-        # CF already computed from the cohort-scoped sweep. The scenario
-        # graph's edge.evidence reflects the FE's scenario-fetch DSL,
-        # not the analysis DSL — never use it for the e component when
-        # we have CF's scope-correct values. evidence_k/evidence_n are
-        # the same source as the [sweep_diag] Y/X lines.
-        cf_edges_for_scope = cf_responses_by_scenario.get(scenario_id)
-        if cf_edges_for_scope and len(cf_edges_for_scope) == len(path_edges_raw):
-            path_edges_raw = [dict(pe) for pe in path_edges_raw]
-            for j, ce in enumerate(cf_edges_for_scope):
-                k_scope = ce.get('evidence_k')
-                n_scope = ce.get('evidence_n')
-                if k_scope is None or n_scope is None:
-                    continue
-                pe = path_edges_raw[j]
-                p = dict(pe.get('p') or {})
-                ev = dict(p.get('evidence') or {})
-                ev['k'] = k_scope
-                ev['n'] = n_scope
-                p['evidence'] = ev
-                pe['p'] = p
+        cf_edges = cf_edges_by_scenario.get(scenario_id)
+
+        # Synthetic path_edges for compute_bars_e — evidence sources EXCLUSIVELY
+        # from CF (analysis-DSL scope). Never reads edge.p.evidence from the
+        # scenario graph (which carries scenario-fetch-DSL scope values).
+        path_edges_evidence: Optional[list[dict[str, Any]]] = None
+        if cf_edges is not None:
+            path_edges_evidence = [
+                {'p': {'evidence': {
+                    'k': ce.get('evidence_k'),
+                    'n': ce.get('evidence_n'),
+                }}}
+                for ce in cf_edges
+            ]
 
         try:
-            bars_e_data = compute_bars_e(path_edges_raw)
             if visibility_mode == 'e':
-                bars = bars_e_data
-            elif visibility_mode == 'f':
-                bars = compute_bars_f(path_edges_raw, temporal_mode='window')
-            elif visibility_mode == 'f+e':
-                cf_edges = cf_responses_by_scenario.get(scenario_id)
-                if not cf_edges or len(cf_edges) != len(path_edge_uvs):
-                    # No valid CF for this scenario — leave baseline rows untouched
+                if path_edges_evidence is None:
                     continue
-                # Use CF response directly. No graph overlay. Same pattern
-                # as every other analysis type: one source of truth (the
-                # scope-aware CF call), no reads from the FE-supplied
-                # scenario graph payload (which carries scenario-fetch
-                # data, not analysis-DSL data).
+                bars = compute_bars_e(path_edges_evidence)
+            elif visibility_mode == 'f':
+                bars = compute_bars_f(path_edges_model, temporal_mode='window')
+            elif visibility_mode == 'f+e':
+                if cf_edges is None or path_edges_evidence is None:
+                    continue
+                bars_e_data = compute_bars_e(path_edges_evidence)
                 bars = compute_bars_ef(cf_edges, bars_e_data.bar)
             else:
                 continue
@@ -1733,10 +1726,6 @@ def run_conversion_funnel(
             )
             continue
 
-        # Override probability/p_mean/evidence_mean with engine values so
-        # the FE chart driver consumes Level 2 numbers. Set striation
-        # fields too so consumers (current `evidence_mean`/`p_mean`-based
-        # stack and future `bar_height_*`-based stack) both work.
         for i, stage_id in enumerate(stage_ids):
             row = rows_by_key.get((stage_id, scenario_id))
             if row is None:
@@ -1754,8 +1743,6 @@ def run_conversion_funnel(
             elif visibility_mode == 'f':
                 row['forecast_mean'] = bars.bar[i]
             elif visibility_mode == 'f+e':
-                # p_mean drives the FE stacked-bar total; evidence_mean
-                # drives the solid e portion.
                 row['p_mean'] = bars.bar[i]
                 if bars.bar_e is not None:
                     row['evidence_mean'] = bars.bar_e[i]
@@ -1763,9 +1750,30 @@ def run_conversion_funnel(
                 if bars.bar_f_residual is not None:
                     row['bar_height_f_residual'] = bars.bar_f_residual[i]
 
-        # Re-derive step_probability/dropoff from the engine bars so they
-        # stay consistent with the new probability values.
-        prev = None
+            # Override scope-sensitive fields from CF (the scenario-graph
+            # values came from the scenario fetch DSL, not the analysis
+            # DSL scope, and are therefore not authoritative here).
+            if cf_edges is not None and visibility_mode in ('e', 'f+e'):
+                if i == 0:
+                    n0 = cf_edges[0].get('evidence_n') if cf_edges else None
+                    if n0 is not None:
+                        row['n'] = n0
+                    row['completeness'] = 1.0
+                else:
+                    ce = cf_edges[i - 1] if (i - 1) < len(cf_edges) else None
+                    if ce is not None:
+                        ek = ce.get('evidence_k')
+                        en = ce.get('evidence_n')
+                        if ek is not None:
+                            row['n'] = ek
+                            row['evidence_k'] = ek
+                        if en is not None:
+                            row['evidence_n'] = en
+                        comp = ce.get('completeness')
+                        if comp is not None:
+                            row['completeness'] = comp
+
+        prev: Optional[float] = None
         for i, stage_id in enumerate(stage_ids):
             row = rows_by_key.get((stage_id, scenario_id))
             if row is None:
@@ -1781,18 +1789,17 @@ def run_conversion_funnel(
                 row['dropoff'] = max(0.0, prev - bars.bar[i])
             prev = bars.bar[i]
 
-        # Diagnostic: dump the actual fields written for this scenario
         for i, stage_id in enumerate(stage_ids):
             row = rows_by_key.get((stage_id, scenario_id))
             if row is None:
                 continue
-            print(f'[funnel-L2] OUTPUT scenario={scenario_id} stage={i} '
+            print(f'[funnel] OUTPUT scenario={scenario_id} stage={i} '
                   f'p={row.get("probability")} lo={row.get("probability_lo")} '
                   f'hi={row.get("probability_hi")} e_mean={row.get("evidence_mean")} '
                   f'p_mean={row.get("p_mean")} bar_e={row.get("bar_height_e")} '
-                  f'bar_f={row.get("bar_height_f_residual")}')
+                  f'bar_f={row.get("bar_height_f_residual")} '
+                  f'comp={row.get("completeness")} n={row.get("n")}')
 
-    # Advertise the new metrics in semantics so chart builders can discover them
     sem = result.setdefault('semantics', {})
     metrics = sem.setdefault('metrics', [])
     existing_ids = {m.get('id') for m in metrics}
@@ -1805,7 +1812,6 @@ def run_conversion_funnel(
     for m in new_metrics:
         if m['id'] not in existing_ids:
             metrics.append(m)
-    # Chart hints
     chart = sem.setdefault('chart', {})
     hints = chart.setdefault('hints', {})
     hints['show_hi_lo'] = True

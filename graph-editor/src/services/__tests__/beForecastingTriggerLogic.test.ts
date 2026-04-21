@@ -144,8 +144,21 @@ function windowDsl(): void {
   (parseConstraints as ReturnType<typeof vi.fn>).mockReturnValue({
     cohort: null,
     window: { start: '1-Nov-25', end: '7-Nov-25' },
+    asat: null,
     visited: [], exclude: [], context: [], cases: [],
     visitedAny: [], contextAny: [],
+    asatClausePresent: false,
+  });
+}
+
+function windowDslWithAsat(asat: string): void {
+  (parseConstraints as ReturnType<typeof vi.fn>).mockReturnValue({
+    cohort: null,
+    window: { start: '1-Nov-25', end: '7-Nov-25' },
+    asat,
+    visited: [], exclude: [], context: [], cases: [],
+    visitedAny: [], contextAny: [],
+    asatClausePresent: true,
   });
 }
 
@@ -193,13 +206,18 @@ function fakeBeEntry(over: Record<string, number> = {}): any {
 }
 
 /** A CF scenario result with a single edge's p.mean populated. */
-function fakeCfResult(pMean: number): any[] {
+function fakeCfResult(pMean: number, completeness?: number): any[] {
   return [
     {
       scenario_id: 'current',
       success: true,
       edges: [
-        { edge_uuid: EDGE_ID, p_mean: pMean, p_sd: 0.04 },
+        {
+          edge_uuid: EDGE_ID,
+          p_mean: pMean,
+          p_sd: 0.04,
+          ...(completeness != null ? { completeness } : {}),
+        },
       ],
     },
   ];
@@ -330,6 +348,30 @@ describe('BE forecasting trigger logic (doc 45)', () => {
     expect(edge.p.mean).toBeCloseTo(0.77, 5);
   });
 
+  it('CF fast path also overwrites stale completeness on from-file graphs', async () => {
+    cfImpl = async () => fakeCfResult(0.77, 0);
+
+    const graph = latencyGraph();
+    graph.edges[0].p.latency = {
+      ...graph.edges[0].p.latency,
+      completeness: 0.81,
+      completeness_stdev: 0.02,
+      median_lag_days: 5,
+      mean_lag_days: 6,
+    };
+    const { setGraph, calls } = captureSetGraph();
+
+    await runStage2EnhancementsAndInboundN(
+      [fetchItem()], [fetchItem()], { mode: 'from-file' } as any,
+      graph, setGraph, 'window(1-Nov-25:7-Nov-25)',
+    );
+
+    const lastGraph = calls[calls.length - 1].graph;
+    const edge = lastGraph.edges.find((e: any) => (e.uuid || e.id) === EDGE_ID);
+    expect(edge.p.mean).toBeCloseTo(0.77, 5);
+    expect(edge.p.latency.completeness).toBe(0);
+  });
+
   it('CF slow path (>500ms): FE fallback applied first, CF overwrites p.mean on arrival', async () => {
     // CF takes long enough to miss the 500ms fast deadline.
     cfImpl = async () => {
@@ -388,6 +430,48 @@ describe('BE forecasting trigger logic (doc 45)', () => {
     const edge = lastGraph.edges.find((e: any) => (e.uuid || e.id) === EDGE_ID);
     // p.mean should be FE blended (any real finite number), not null.
     expect(typeof edge.p.mean).toBe('number');
+  });
+
+  it('asat() becomes the implicit FE analysis date when no queryDate override is supplied', async () => {
+    windowDslWithAsat('15-Nov-25');
+
+    let beQueryDate: Date | undefined;
+    beTopoImpl = async (...args: any[]) => {
+      beQueryDate = args[2];
+      return [];
+    };
+    cfImpl = async () => [];
+
+    const graph = latencyGraph();
+    const { setGraph } = captureSetGraph();
+
+    await runStage2EnhancementsAndInboundN(
+      [fetchItem()], [fetchItem()], { mode: 'from-file' } as any,
+      graph, setGraph, 'window(1-Nov-25:7-Nov-25).asat(15-Nov-25)',
+    );
+
+    expect(beQueryDate).toBeInstanceOf(Date);
+    expect(beQueryDate!.toISOString().split('T')[0]).toBe('2025-11-15');
+  });
+
+  it('passes explicit non-browser workspace through to conditioned forecast', async () => {
+    const workspace = { repository: 'repo-name', branch: 'feature/asat' };
+    let cfWorkspace: { repository: string; branch: string } | undefined;
+
+    cfImpl = async (...args: any[]) => {
+      cfWorkspace = args[3];
+      return [];
+    };
+
+    const graph = latencyGraph();
+    const { setGraph } = captureSetGraph();
+
+    await runStage2EnhancementsAndInboundN(
+      [fetchItem()], [fetchItem()], { mode: 'from-file', workspace } as any,
+      graph, setGraph, 'window(1-Nov-25:7-Nov-25)',
+    );
+
+    expect(cfWorkspace).toEqual(workspace);
   });
 
   it('CF stale response (older generation) is discarded', async () => {

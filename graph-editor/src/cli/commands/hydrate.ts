@@ -48,7 +48,7 @@ export async function runHydrate(): Promise<void> {
     console.error(USAGE);
     process.exit(1);
   }
-  const { bundle, queryDsl, flags } = ctx;
+  const { bundle, queryDsl, flags, workspace } = ctx;
 
   if (!queryDsl) {
     console.error(USAGE);
@@ -66,7 +66,10 @@ export async function runHydrate(): Promise<void> {
   // codepath, no parallel CLI path").
   const fetchMode = flags.allowExternalFetch ? 'versioned' as const : 'from-file' as const;
   log.info(`Hydrating graph (mode: ${fetchMode}, query: ${queryDsl})...`);
-  const { graph: populatedGraph, warnings } = await aggregateAndPopulateGraph(bundle, queryDsl, { mode: fetchMode });
+  const { graph: populatedGraph, warnings } = await aggregateAndPopulateGraph(bundle, queryDsl, {
+    mode: fetchMode,
+    workspace,
+  });
   for (const w of warnings) {
     log.warn(w);
   }

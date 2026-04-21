@@ -63,7 +63,7 @@ These commands **destroy user work that cannot be recovered**. The cost of askin
 
 ---
 
-## Agent Warm Start (MANDATORY at session start)
+## Agent Warm Start (ENFORCED by hook — see below)
 
 **Before doing ANY work**, read these foundational docs in full:
 1. `docs/current/codebase/SYNC_SYSTEM_OVERVIEW.md` — 4-layer data model, sync flows, known races
@@ -71,6 +71,35 @@ These commands **destroy user work that cannot be recovered**. The cost of askin
 3. `docs/current/codebase/DEV_ENVIRONMENT_AND_HMR.md` — staleness diagnostic checklist only
 
 Then identify your task type and read the relevant docs from `docs/current/codebase/TASK_TYPE_READING_GUIDE.md`.
+
+### Context-enforcement gate
+
+A PreToolUse hook (`.claude/hooks/context-gate.py`) validates a **briefing receipt** before the first Edit or Write on a scoped code path. The warm-start docs above are required for every scoped edit; additional docs are required per path (see `.claude/context-manifest.yaml`).
+
+**Receipt format** — emit this block in the assistant message before your first Edit/Write on a scoped path:
+
+```
+<briefing-receipt>
+read:
+  - docs/current/codebase/SYNC_SYSTEM_OVERVIEW.md
+  - docs/current/codebase/RESERVED_QUERY_TERMS_GLOSSARY.md
+  - docs/current/codebase/DEV_ENVIRONMENT_AND_HMR.md
+  - (any additional required_reads from the manifest)
+invariants:
+  - (3–7 bullets describing non-obvious rules you extracted)
+call-sites:
+  - symbol@path/to/file.ts:123
+  - (at least one, or the literal word `none` if isolated)
+</briefing-receipt>
+```
+
+Validation is deterministic: every cited `read:` path must appear in a prior Read tool call in this session's transcript. Fabricated reads are caught.
+
+**Override** — if the gate misfires on a legitimate edit, the USER (not the agent) types a line beginning with `briefing-override:` followed by a reason, on the user turn that precedes the edit. The agent cannot bypass the gate. Overrides are logged to `.claude/context-override.log`.
+
+**Scoped paths** (v1): see `.claude/context-manifest.yaml`. Edits outside scoped paths do not require a receipt.
+
+**Rationale and design decisions**: `docs/current/agent-context-enforcement-design.md`.
 
 ---
 

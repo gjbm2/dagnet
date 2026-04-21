@@ -20,17 +20,20 @@ from typing import Any, Dict, List, Optional
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# Class B — lagless edge (Beta-Binomial closed form)
+# Class B — non-latency edge (Beta-Binomial closed form)
 # ═══════════════════════════════════════════════════════════════════════
 
 
 @dataclass
-class LaglessResult:
-    """Return carrier for `_lagless_rows` with doc 52 provenance.
+class NonLatencyResult:
+    """Return carrier for `_non_latency_rows` with doc 52 provenance.
 
-    `rows` has the same shape as before. The remaining fields are the
-    engine-level subset-conditioning blend provenance (doc 52 §14.6)
-    — a parallel to `ForecastTrajectory`'s fields.
+    `rows` has the same shape as before. The blend fields carry
+    engine-level subset-conditioning provenance (doc 52 §14.6) — a
+    parallel to `ForecastTrajectory`'s fields. `conditioned` reports
+    whether observed evidence was actually applied to the prior (True)
+    or the result is just the prior unchanged because no evidence was
+    present in scope (False).
     """
     rows: List[Dict[str, Any]] = field(default_factory=list)
     r: Optional[float] = None
@@ -38,16 +41,20 @@ class LaglessResult:
     m_G: Optional[float] = None
     blend_applied: bool = False
     blend_skip_reason: Optional[str] = None
+    conditioned: bool = False
 
 
-def _lagless_rows(
+def _non_latency_rows(
     fe: Optional['FrameEvidence'],
     resolved: Any,
     sweep_to: str,
     axis_tau_max: Optional[int] = None,
     band_level: float = 0.90,
-) -> LaglessResult:
-    """Row builder for lagless edges (σ ≤ 0) — doc 50 Class B, doc 52 blend.
+) -> NonLatencyResult:
+    """Row builder for non-latency edges — doc 50 Class B, doc 52 blend.
+
+    Routed by the authoritative `latency_parameter` flag on the edge
+    (not by σ ≤ 0, which was an anti-pattern — see doc 49).
 
     Branches on the resolver's semantic property
     `alpha_beta_query_scoped`, not on source name, to decide whether
@@ -68,7 +75,7 @@ def _lagless_rows(
     the already-scoped prior unchanged; blend trivially returns the
     aggregate in either case.
 
-    Returns a LaglessResult with ``rows=[]`` only for Class D (no
+    Returns a NonLatencyResult with ``rows=[]`` only for Class D (no
     usable α, β at all — the resolver failed to populate a prior and
     there's no evidence either).
     """
@@ -156,14 +163,23 @@ def _lagless_rows(
 
     # Class D guard: no usable prior and no evidence.
     if alpha_post <= 0 or beta_post <= 0:
-        return LaglessResult(
+        return NonLatencyResult(
             rows=[],
             r=_blend_info.get('r'),
             m_S=_blend_info.get('m_S'),
             m_G=_blend_info.get('m_G'),
             blend_applied=bool(_blend_info.get('applied')),
             blend_skip_reason=_blend_info.get('skip_reason'),
+            conditioned=False,
         )
+
+    # Whether the returned posterior incorporates observed evidence.
+    # False when `fe` is empty or all cohorts have zero totals — the
+    # result then equals the prior (either α/β directly, or after a
+    # trivial no-op conjugate update α+0, β+0). Consumers that need
+    # to distinguish real conditioned output from untouched-prior
+    # output read this field from the edge response.
+    conditioned = (fe is not None and sum_x > 0)
 
     # ── Posterior scalars (Beta closed form) ────────────────────────
     s = alpha_post + beta_post
@@ -219,7 +235,7 @@ def _lagless_rows(
         model_bands = fan_bands
 
     # Completeness for this fallback row set:
-    #  - Genuine lagless edge (σ ≤ 0): everything materialises instantly
+    #  - Non-latency edge (latency_parameter=false): everything materialises instantly
     #    once arriver count is known → completeness = 1.0.
     #  - Lagful edge (σ > 0) routed here because fe is None (cohort frames
     #    didn't compose for the per-scenario effective DSL): nothing has
@@ -262,13 +278,14 @@ def _lagless_rows(
             'p_infinity_sd_epistemic': p_sd_epistemic,
         })
 
-    return LaglessResult(
+    return NonLatencyResult(
         rows=rows,
         r=_blend_info.get('r'),
         m_S=_blend_info.get('m_S'),
         m_G=_blend_info.get('m_G'),
         blend_applied=bool(_blend_info.get('applied')),
         blend_skip_reason=_blend_info.get('skip_reason'),
+        conditioned=conditioned,
     )
 
 
@@ -598,12 +615,16 @@ def compute_cohort_maturity_rows_v3(
     if not resolved:
         return []
 
-    # ── Class B — lagless edge (doc 50) ─────────────────────────────
-    # σ ≤ 0 means no lag distribution. Skip the MC sweep; use the
-    # Beta-Binomial closed form via _lagless_rows. Sub-path selection
-    # (B1 vs B2) happens inside _lagless_rows based on promoted source.
-    if resolved.latency.sigma <= 0:
-        fe_lagless = build_cohort_evidence_from_frames(
+    # ── Non-latency edge: closed-form shortcut ─────────────────────
+    # Authoritative signal is the edge's latency_parameter flag, not
+    # resolved.latency.sigma. See ANALYSIS_TYPES_CATALOGUE.md §284,
+    # adding-analysis-types.md §235, and KNOWN_ANTI_PATTERNS.md —
+    # promoted sigma/mu appears on non-latency edges too, so sigma
+    # is not a reliable signal.
+    _lat_meta = (target_edge.get('p') or {}).get('latency') or {}
+    _is_latency_edge = _lat_meta.get('latency_parameter') is True
+    if not _is_latency_edge:
+        fe_closed_form = build_cohort_evidence_from_frames(
             frames=frames,
             target_edge=target_edge,
             anchor_from=anchor_from,
@@ -613,25 +634,28 @@ def compute_cohort_maturity_rows_v3(
             resolved=resolved,
             axis_tau_max=axis_tau_max,
         )
-        _lagless_res = _lagless_rows(
-            fe=fe_lagless,
+        _res = _non_latency_rows(
+            fe=fe_closed_form,
             resolved=resolved,
             sweep_to=sweep_to,
             axis_tau_max=axis_tau_max,
             band_level=band_level,
         )
-        _lagless_rows_out = _lagless_res.rows
-        if _lagless_rows_out:
-            # Doc 52 §14.6: stash conditioning block on first row as a
-            # sentinel; CF handler extracts and removes before rendering.
-            _lagless_rows_out[0]['_conditioning'] = {
-                'r': _lagless_res.r,
-                'm_S': _lagless_res.m_S,
-                'm_G': _lagless_res.m_G,
-                'applied': _lagless_res.blend_applied,
-                'skip_reason': _lagless_res.blend_skip_reason,
+        _rows_out = _res.rows
+        if _rows_out:
+            # Doc 52 §14.6: stash blend provenance on first row.
+            _rows_out[0]['_conditioning'] = {
+                'r': _res.r,
+                'm_S': _res.m_S,
+                'm_G': _res.m_G,
+                'applied': _res.blend_applied,
+                'skip_reason': _res.blend_skip_reason,
             }
-        return _lagless_rows_out
+            # Whether observed evidence was applied to the prior.
+            # False for any edge (latency or not) where no cohort
+            # evidence was present in the query scope.
+            _rows_out[0]['_conditioned'] = _res.conditioned
+        return _rows_out
 
     lat = resolved.latency
 
@@ -661,28 +685,34 @@ def compute_cohort_maturity_rows_v3(
     if fe is None:
         # No cohort evidence to condition on. Zero-evidence
         # Beta-Binomial update degenerates to the prior — use the
-        # closed-form lagless path with fe=None to produce prior-only
-        # rows. Works for any σ because the prior is just a Beta
+        # closed-form path with fe=None to produce prior-only rows.
+        # Works for any σ because the prior is just a Beta
         # distribution regardless of latency. If the resolver also has
-        # no usable α/β (Class D), _lagless_rows returns [] and the
+        # no usable α/β (Class D), _non_latency_rows returns [] and the
         # caller routes the edge to skipped_edges.
-        _lagless_res = _lagless_rows(
+        #
+        # NB: a consumer that cares whether the output is the prior
+        # vs a posterior reads `_conditioned` from the first row
+        # (stashed below). Don't infer from latency flag — prior
+        # fallback can happen to latency and non-latency edges alike.
+        _res = _non_latency_rows(
             fe=None,
             resolved=resolved,
             sweep_to=sweep_to,
             axis_tau_max=axis_tau_max,
             band_level=band_level,
         )
-        _lagless_rows_out = _lagless_res.rows
-        if _lagless_rows_out:
-            _lagless_rows_out[0]['_conditioning'] = {
-                'r': _lagless_res.r,
-                'm_S': _lagless_res.m_S,
-                'm_G': _lagless_res.m_G,
-                'applied': _lagless_res.blend_applied,
-                'skip_reason': _lagless_res.blend_skip_reason,
+        _rows_out = _res.rows
+        if _rows_out:
+            _rows_out[0]['_conditioning'] = {
+                'r': _res.r,
+                'm_S': _res.m_S,
+                'm_G': _res.m_G,
+                'applied': _res.blend_applied,
+                'skip_reason': _res.blend_skip_reason,
             }
-        return _lagless_rows_out
+            _rows_out[0]['_conditioned'] = _res.conditioned
+        return _rows_out
 
     engine_cohorts = fe.engine_cohorts
     cohort_list = fe.cohort_list
@@ -958,5 +988,10 @@ def compute_cohort_maturity_rows_v3(
             'applied': sweep.blend_applied,
             'skip_reason': sweep.blend_skip_reason,
         }
+        # Whether observed evidence was actually applied to produce
+        # this result. True when at least one cohort had non-zero
+        # observations that moved the posterior. False → the rows
+        # are effectively the prior (no IS reweighting).
+        rows[0]['_conditioned'] = bool(sweep.n_cohorts_conditioned)
 
     return rows

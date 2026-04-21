@@ -20,6 +20,8 @@ export interface AggregateOptions {
    *  'versioned' tries cache first, fetches from external sources if stale/missing;
    *  'direct' always hits external sources (bypasses cache). */
   mode?: FetchMode;
+  /** Workspace identity for snapshot-backed CLI passes (CF regime discovery). */
+  workspace?: { repository: string; branch: string };
 }
 
 /**
@@ -77,6 +79,7 @@ export async function aggregateAndPopulateGraph(
         suppressMissingDataToast: true,
         suppressBatchToast: true,
         awaitBackgroundPromises: true,
+        workspace: options?.workspace,
       },
       currentGraph,
       setGraph,

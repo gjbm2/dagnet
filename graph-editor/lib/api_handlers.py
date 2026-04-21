@@ -11,6 +11,11 @@ import math
 import os
 from typing import Dict, Any, Optional, List
 
+from file_evidence_supplement import (
+    iter_uncovered_bare_cohort_daily_points,
+    normalise_supported_date,
+)
+
 _COHORT_DEBUG = bool(os.environ.get('DAGNET_COHORT_DEBUG'))
 
 
@@ -2047,6 +2052,62 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
     return {"success": True, "scenarios": per_scenario_results}
 
 
+def _cf_supplement_evidence_counts_from_file(
+    graph_data: Dict[str, Any],
+    edge_uuid: str,
+    anchor_from: str,
+    anchor_to: str,
+    snapshot_covered_days: set[str],
+) -> Dict[str, int]:
+    """Supplement CF evidence counts from engorged file data.
+
+    Mirrors the Bayes binder's uncovered-day rule:
+      - only bare cohort daily arrays are eligible
+      - context-qualified entries are skipped
+      - days already covered by snapshot rows are not counted again
+
+    Returns counts only; CF's p.mean remains snapshot-conditioned.
+    """
+    anchor_from_iso = normalise_supported_date(anchor_from)
+    anchor_to_iso = normalise_supported_date(anchor_to)
+    if not edge_uuid or not anchor_from_iso or not anchor_to_iso:
+        return {'n': 0, 'k': 0, 'supplemented_days': 0}
+
+    edge = next(
+        (
+            e for e in (graph_data.get('edges', []) or [])
+            if (e.get('uuid') or e.get('id')) == edge_uuid
+        ),
+        None,
+    )
+    if not isinstance(edge, dict):
+        return {'n': 0, 'k': 0, 'supplemented_days': 0}
+
+    bayes_evidence = edge.get('_bayes_evidence')
+    if not isinstance(bayes_evidence, dict):
+        return {'n': 0, 'k': 0, 'supplemented_days': 0}
+
+    cohort_entries = bayes_evidence.get('cohort') or []
+    if not isinstance(cohort_entries, list):
+        return {'n': 0, 'k': 0, 'supplemented_days': 0}
+
+    total_n = 0
+    total_k = 0
+    supplemented_days = 0
+
+    for _, _, n_val, k_val in iter_uncovered_bare_cohort_daily_points(
+        cohort_entries,
+        snapshot_covered_days,
+        anchor_from=anchor_from_iso,
+        anchor_to=anchor_to_iso,
+    ):
+        total_n += n_val
+        total_k += k_val
+        supplemented_days += 1
+
+    return {'n': total_n, 'k': total_k, 'supplemented_days': supplemented_days}
+
+
 def handle_conditioned_forecast(data: Dict[str, Any]) -> Dict[str, Any]:
     """Conditioned forecast — graph enrichment endpoint (doc 45).
 
@@ -2233,12 +2294,18 @@ def handle_conditioned_forecast(data: Dict[str, Any]) -> Dict[str, Any]:
                     rows = []
                 total_rows += len(rows)
                 rows = _apply_temporal_regime_selection(rows, subj, is_window)
+                snapshot_covered_days = {
+                    str(row.get('anchor_day'))
+                    for row in rows
+                    if row.get('anchor_day')
+                }
                 derivation = derive_cohort_maturity(rows, sweep_from=sweep_from, sweep_to=sweep_to_str)
                 per_edge_results.append({
                     'path_role': subj.get('path_role', 'only'),
                     'from_node': subj.get('from_node', ''),
                     'to_node': subj.get('to_node', ''),
                     'subject': subj,
+                    'snapshot_covered_days': snapshot_covered_days,
                     'derivation_result': derivation,
                 })
 
@@ -2247,7 +2314,7 @@ def handle_conditioned_forecast(data: Dict[str, Any]) -> Dict[str, Any]:
 
             # No early-exit on total_rows == 0. Let the row builder
             # handle the natural degeneration: zero evidence → prior.
-            # The row builder falls back to _lagless_rows(fe=None, ...)
+            # The row builder falls back to _non_latency_rows(fe=None, ...)
             # which produces a prior-only row set when cohort evidence
             # cannot be built. Class D (no α/β either) is then a genuine
             # empty return, caught by the `if maturity_rows:` check
@@ -2405,7 +2472,7 @@ def handle_conditioned_forecast(data: Dict[str, Any]) -> Dict[str, Any]:
 
             # ── Call v3 row builder and read scalars ────────────────
             # Call unconditionally when we have an edge id — the row
-            # builder handles empty frames via the _lagless_rows
+            # builder handles empty frames via the _non_latency_rows
             # fallback (prior-only rows). Class D (no α/β) produces
             # an empty maturity_rows and routes to skipped_edges
             # below. See doc 50 §§2-3.
@@ -2479,8 +2546,8 @@ def handle_conditioned_forecast(data: Dict[str, Any]) -> Dict[str, Any]:
                     # unscoped edge.evidence from the scenario graph.
                     evidence_k = last_row.get('evidence_y')
                     evidence_n = last_row.get('evidence_x')
-                    # Lagless / no-frame-evidence fallback: when the row
-                    # builder went through _lagless_rows with fe=None
+                    # Non-latency / no-frame-evidence fallback: when the row
+                    # builder went through _non_latency_rows with fe=None
                     # (narrow cohort, no usable frame composition),
                     # last_row.evidence_y/x are None. Fall back to summing
                     # across composed_frames — for each (anchor_day) take
@@ -2512,6 +2579,41 @@ def handle_conditioned_forecast(data: Dict[str, Any]) -> Dict[str, Any]:
                         if evidence_n is None:
                             evidence_n = sum_x
 
+                    last_entry = next(
+                        (
+                            entry for entry in per_edge_results
+                            if entry.get('path_role') in ('last', 'only')
+                        ),
+                        None,
+                    )
+                    if last_entry is not None:
+                        last_subject = last_entry.get('subject') or {}
+                        file_supplement = _cf_supplement_evidence_counts_from_file(
+                            graph_data=graph_data,
+                            edge_uuid=last_edge_id,
+                            anchor_from=last_subject.get('anchor_from', anchor_from_str),
+                            anchor_to=last_subject.get('anchor_to', anchor_to_str),
+                            snapshot_covered_days=last_entry.get('snapshot_covered_days') or set(),
+                        )
+                        if file_supplement.get('supplemented_days', 0) > 0:
+                            evidence_k = (float(evidence_k) if evidence_k is not None else 0.0) + float(file_supplement['k'])
+                            evidence_n = (float(evidence_n) if evidence_n is not None else 0.0) + float(file_supplement['n'])
+                            print(
+                                f"[forecast] supplemented {file_supplement['supplemented_days']} uncovered file days "
+                                f"for {last_edge_id[:12]}… (+k={file_supplement['k']} +n={file_supplement['n']})"
+                            )
+
+                    if evidence_k is not None:
+                        try:
+                            evidence_k = int(round(float(evidence_k)))
+                        except (TypeError, ValueError):
+                            evidence_k = None
+                    if evidence_n is not None:
+                        try:
+                            evidence_n = int(round(float(evidence_n)))
+                        except (TypeError, ValueError):
+                            evidence_n = None
+
                     from runner.forecast_state import _last_forensic
                     # Doc 52 §14.6: subset-conditioning provenance,
                     # stashed on the first row by v3 as a sentinel.
@@ -2519,6 +2621,14 @@ def handle_conditioned_forecast(data: Dict[str, Any]) -> Dict[str, Any]:
                     # from the row to keep the row schema clean.
                     first_row = maturity_rows[0] if maturity_rows else {}
                     _cond = first_row.pop('_conditioning', None) if isinstance(first_row, dict) else None
+                    # Whether observed evidence was actually applied to
+                    # this edge's result (True) or the result is the
+                    # untouched prior (False). Consumers that need to
+                    # distinguish real conditioned output from
+                    # prior-fallback output read this field directly;
+                    # they should NOT infer it from the latency flag
+                    # or from evidence_k/n.
+                    _conditioned = first_row.pop('_conditioned', False) if isinstance(first_row, dict) else False
                     edge_results.append({
                         'edge_uuid': last_edge_id,
                         'from_node': query_from_node,
@@ -2530,6 +2640,7 @@ def handle_conditioned_forecast(data: Dict[str, Any]) -> Dict[str, Any]:
                         'completeness_sd': completeness_sd,
                         'evidence_k': evidence_k,
                         'evidence_n': evidence_n,
+                        'conditioned': bool(_conditioned),
                         'tau_max': last_row.get('tau'),
                         'n_rows': len(maturity_rows),
                         'n_cohorts': composed.get('cohorts_analysed', 0),
@@ -2537,7 +2648,8 @@ def handle_conditioned_forecast(data: Dict[str, Any]) -> Dict[str, Any]:
                         **({'conditioning': _cond} if _cond else {}),
                     })
                     print(f"[forecast] {scenario_id}: {query_from_node}→{query_to_node} "
-                          f"p={p_mean:.4f} tau_max={last_row.get('tau')} "
+                          f"p={p_mean:.4f} conditioned={bool(_conditioned)} "
+                          f"tau_max={last_row.get('tau')} "
                           f"cohorts={composed.get('cohorts_analysed', 0)} "
                           f"rows={total_rows}")
                 else:

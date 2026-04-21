@@ -3402,8 +3402,14 @@ export function enhanceGraphLatencies(
         }
       }
 
-      // If blend cannot be computed (e.g., missing forecast baseline), fall back to evidence.
-      const blendedMean = blendedMeanFromBlend ?? evidenceMeanRaw;
+      // If blend cannot be computed (e.g., missing nBaseline), prefer the edge's
+      // forecast mean (Bayes/analytic prior) over raw evidence. Raw evidence is k/n;
+      // for a narrow cohort window where no conversions have completed yet (k=0),
+      // that is 0 despite a strong prior, and writing it onto p.mean would wipe the
+      // prior while the BE CF pass hasn't yet overwritten with its conditioned value.
+      // Fall through to evidenceMeanRaw only when no forecast mean exists either.
+      const forecastMeanIsFinite = typeof forecastMean === 'number' && Number.isFinite(forecastMean);
+      const blendedMean = blendedMeanFromBlend ?? (forecastMeanIsFinite ? forecastMean : evidenceMeanRaw);
 
       if (blendedMean !== undefined) {
         edgeLAGValues.blendedMean = blendedMean;

@@ -9,6 +9,7 @@ import {
 } from '../types';
 import { db } from '../db/appDatabase';
 import { useDialog } from './DialogContext';
+import { stripBayesRuntimeFieldsFromGraphInPlace } from '../lib/bayesGraphRuntime';
 
 /**
  * Serialize editorState for IndexedDB storage
@@ -79,6 +80,29 @@ class FileRegistry {
   private pendingUpdates = new Map<string, { data: any; opts?: { syncRevision?: number; syncOrigin?: 'store' | 'external' }; generation: number }>(); // Latest queued update per fileId (prevents lost updates)
   private fileGenerations = new Map<string, number>(); // Monotonic counter per fileId — prevents stale pending replays
 
+  private stripGraphRuntimeFields(type: RepositoryItem['type'] | string | undefined, data: any): boolean {
+    if (type !== 'graph') return false;
+    return stripBayesRuntimeFieldsFromGraphInPlace(data);
+  }
+
+  private sanitiseFileStateInPlace(file: FileState | undefined): boolean {
+    if (!file) return false;
+    const dataChanged = this.stripGraphRuntimeFields(file.type, file.data);
+    const originalChanged = this.stripGraphRuntimeFields(file.type, file.originalData);
+    return dataChanged || originalChanged;
+  }
+
+  private async persistFileCopies(file: FileState): Promise<void> {
+    this.sanitiseFileStateInPlace(file);
+    await db.files.put(file);
+
+    if (file.source?.repository && file.source?.branch) {
+      const prefixedId = `${file.source.repository}-${file.source.branch}-${file.fileId}`;
+      const prefixedFile = { ...file, fileId: prefixedId };
+      await db.files.put(prefixedFile);
+    }
+  }
+
   /**
    * Get or create a file state
    */
@@ -90,6 +114,7 @@ class FileRegistry {
   ): Promise<FileState> {
     let file = this.files.get(fileId);
     let shouldNotify = false;
+    this.stripGraphRuntimeFields(type, data);
     
     if (!file) {
       // Check if file exists in IndexedDB
@@ -116,6 +141,11 @@ class FileRegistry {
           this.completeInitialization(fileId);
         }, 500);
       } else {
+        const sanitised = this.sanitiseFileStateInPlace(file);
+        if (sanitised) {
+          await this.persistFileCopies(file);
+        }
+
         // File loaded from IndexedDB
         // If file is dirty, it must have already completed initialization
         // (can't be dirty without user changes, which only happen after init)
@@ -156,8 +186,9 @@ class FileRegistry {
    * Register a file directly (for testing)
    */
   async registerFile(fileId: string, file: FileState): Promise<void> {
+    this.sanitiseFileStateInPlace(file);
     this.files.set(fileId, file);
-    await db.files.put(file);
+    await this.persistFileCopies(file);
     this.notifyListeners(fileId, file);
   }
 
@@ -168,6 +199,7 @@ class FileRegistry {
    * and need to be queryable via getFile() without a full browser environment.
    */
   seedFileInMemory(fileId: string, type: string, data: any, source?: { repository: string; branch: string; path: string }): void {
+    this.stripGraphRuntimeFields(type, data);
     this.files.set(fileId, {
       fileId,
       type: type as any,
@@ -196,6 +228,7 @@ class FileRegistry {
     opts?: { sha?: string; lastSynced?: number }
   ): Promise<FileState> {
     const now = Date.now();
+    this.stripGraphRuntimeFields(type, data);
     const existingInMemory = this.files.get(fileId);
     const existingInDb = existingInMemory ? undefined : await db.files.get(fileId);
     const file = (existingInMemory || existingInDb) as FileState | undefined;
@@ -229,15 +262,7 @@ class FileRegistry {
           lastSynced: opts?.lastSynced ?? now,
         };
 
-    await db.files.put(next);
-
-    // Also update prefixed version if it exists (used by workspace loading/commit).
-    // In share DBs this is harmless but keeps behaviour consistent.
-    if (next.source?.repository && next.source?.branch) {
-      const prefixedId = `${next.source.repository}-${next.source.branch}-${fileId}`;
-      const prefixedFile = { ...next, fileId: prefixedId };
-      await db.files.put(prefixedFile);
-    }
+    await this.persistFileCopies(next);
 
     this.files.set(fileId, next);
     this.notifyListeners(fileId, next);
@@ -272,6 +297,7 @@ class FileRegistry {
       // deferred to the pending replay.
       const file = this.files.get(fileId);
       if (file) {
+        this.stripGraphRuntimeFields(file.type, newData);
         file.data = newData;
         file.lastModified = Date.now();
         if (opts?.syncRevision !== undefined) file.syncRevision = opts.syncRevision;
@@ -298,6 +324,7 @@ class FileRegistry {
       console.warn(`FileRegistry: File ${fileId} not found for update (may have been closed)`);
       return;
     }
+    this.stripGraphRuntimeFields(file.type, newData);
 
     this.updatingFiles.add(fileId);
     
@@ -370,15 +397,7 @@ class FileRegistry {
     }
 
     // Update in IndexedDB - need to update BOTH prefixed and unprefixed versions
-    // Unprefixed version (used by FileRegistry)
-    await db.files.put(file);
-    
-    // Also update prefixed version if it exists (used by workspace loading/commit)
-    if (file.source?.repository && file.source?.branch) {
-      const prefixedId = `${file.source.repository}-${file.source.branch}-${fileId}`;
-      const prefixedFile = { ...file, fileId: prefixedId };
-      await db.files.put(prefixedFile);
-    }
+    await this.persistFileCopies(file);
 
     // Notify all listeners
     this.notifyListeners(fileId, file);
@@ -422,16 +441,7 @@ class FileRegistry {
     console.log(`FileRegistry: Completing initialization for ${fileId}`);
     file.isInitializing = false;
     
-    // Update in IndexedDB - need to update BOTH prefixed and unprefixed versions
-    // Unprefixed version (used by FileRegistry)
-    await db.files.put(file);
-    
-    // Also update prefixed version if it exists (used by workspace loading/commit)
-    if (file.source?.repository && file.source?.branch) {
-      const prefixedId = `${file.source.repository}-${file.source.branch}-${fileId}`;
-      const prefixedFile = { ...file, fileId: prefixedId };
-      await db.files.put(prefixedFile);
-    }
+    await this.persistFileCopies(file);
     
     // Notify listeners of state change
     this.notifyListeners(fileId, file);
@@ -443,6 +453,7 @@ class FileRegistry {
   async markSaved(fileId: string): Promise<void> {
     const file = this.files.get(fileId);
     if (!file) return;
+    this.sanitiseFileStateInPlace(file);
 
     console.log(`FileRegistry.markSaved[${fileId}]: Marking as saved`, {
       wasDirty: file.isDirty,
@@ -468,17 +479,7 @@ class FileRegistry {
       lastModified: file.lastModified
     });
 
-    // Save to IDB - need to update BOTH prefixed and unprefixed versions
-    // Unprefixed version (used by FileRegistry)
-    await db.files.put(file);
-    
-    // Also update prefixed version if it exists (used by workspace loading)
-    if (file.source?.repository && file.source?.branch) {
-      const prefixedId = `${file.source.repository}-${file.source.branch}-${fileId}`;
-      const prefixedFile = { ...file, fileId: prefixedId };
-      await db.files.put(prefixedFile);
-      console.log(`FileRegistry.markSaved[${fileId}]: Updated prefixed version ${prefixedId}`);
-    }
+    await this.persistFileCopies(file);
     
     console.log(`FileRegistry.markSaved[${fileId}]: Saved to IDB with updated timestamp`);
     
@@ -856,6 +857,9 @@ class FileRegistry {
   ): Promise<FileState | null> {
     const fileInDb = await db.files.get(fileId);
     if (fileInDb) {
+      if (this.sanitiseFileStateInPlace(fileInDb)) {
+        await this.persistFileCopies(fileInDb);
+      }
       this.files.set(fileId, fileInDb);
       this.notifyListeners(fileId, fileInDb);
       return fileInDb;
@@ -865,6 +869,9 @@ class FileRegistry {
       const workspaceFile = await db.files.get(prefixedFileId);
       if (workspaceFile) {
         const restoredFile = { ...workspaceFile, fileId };
+        if (this.sanitiseFileStateInPlace(restoredFile)) {
+          await this.persistFileCopies(restoredFile);
+        }
         this.files.set(fileId, restoredFile);
         this.notifyListeners(fileId, restoredFile);
         return restoredFile;

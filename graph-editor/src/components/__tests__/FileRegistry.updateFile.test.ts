@@ -132,6 +132,68 @@ describe('FileRegistry.updateFile listener contract', () => {
     expect(restored.source.repository).toBe('repo-a');
     expect(fileRegistry.getFile('parameter-gm-delegated-to-registered')?.data?.id).toBe('gm-delegated-to-registered');
   });
+
+  it('registerFile should strip Bayes runtime-only fields from graph files', async () => {
+    const fileId = 'graph-contaminated-register';
+    const contaminated = makeContaminatedGraph('register');
+
+    await fileRegistry.registerFile(fileId, {
+      fileId,
+      type: 'graph',
+      data: contaminated,
+      originalData: structuredClone(contaminated),
+      isDirty: false,
+      isInitializing: false,
+      lastModified: Date.now(),
+      viewTabs: [],
+    });
+
+    const stored = fileRegistry.getFile(fileId);
+    expect(stored.data.edges[0]._bayes_evidence).toBeUndefined();
+    expect(stored.data.edges[0]._bayes_priors).toBeUndefined();
+    expect(stored.data.edges[0].p.latency.__parityEvidence).toBeUndefined();
+    expect(stored.data.edges[0].p.latency.__parityComputedT95Days).toBeUndefined();
+
+    const idbFile = await db.files.get(fileId);
+    expect(idbFile.data.edges[0]._bayes_evidence).toBeUndefined();
+    expect(idbFile.data.edges[0]._bayes_priors).toBeUndefined();
+  });
+
+  it('restoreFile should strip Bayes runtime-only fields from stored graph files', async () => {
+    const prefixedFileId = 'repo-a-main-graph-contaminated-restore';
+    const contaminated = makeContaminatedGraph('restore');
+
+    await db.files.add({
+      fileId: prefixedFileId,
+      type: 'graph',
+      data: contaminated,
+      originalData: structuredClone(contaminated),
+      isDirty: false,
+      isInitializing: false,
+      lastModified: Date.now(),
+      viewTabs: [],
+      source: {
+        repository: 'repo-a',
+        branch: 'main',
+        path: 'graphs/contaminated-restore.json',
+      },
+    });
+
+    const restored = await fileRegistry.restoreFile('graph-contaminated-restore', {
+      repository: 'repo-a',
+      branch: 'main',
+    });
+
+    expect(restored).not.toBeNull();
+    expect(restored.data.edges[0]._bayes_evidence).toBeUndefined();
+    expect(restored.data.edges[0]._bayes_priors).toBeUndefined();
+    expect(restored.data.edges[0].p.latency.__parityEvidence).toBeUndefined();
+    expect(restored.data.edges[0].p.latency.__parityComputedT95Days).toBeUndefined();
+
+    const idbFile = await db.files.get(prefixedFileId);
+    expect(idbFile.data.edges[0]._bayes_evidence).toBeUndefined();
+    expect(idbFile.data.edges[0]._bayes_priors).toBeUndefined();
+  });
 });
 
 // Helper: flush all pending microtasks (IDB writes via fake-indexeddb resolve as microtasks)
@@ -155,6 +217,27 @@ function makeGraphData(label: string) {
   return {
     nodes: [{ uuid: 'n1', id: 'node-1', label }],
     edges: [],
+    metadata: { updated_at: new Date().toISOString() },
+  };
+}
+
+function makeContaminatedGraph(label: string) {
+  return {
+    nodes: [{ uuid: 'n1', id: 'node-1', label }],
+    edges: [{
+      uuid: 'edge-1',
+      from: 'node-1',
+      to: 'node-2',
+      _bayes_evidence: { stale: true },
+      _bayes_priors: { stale: true },
+      p: {
+        id: 'checkout-to-payment',
+        latency: {
+          __parityEvidence: [{ date: '1-Jan-26', n: 5, k: 2 }],
+          __parityComputedT95Days: 11,
+        },
+      },
+    }],
     metadata: { updated_at: new Date().toISOString() },
   };
 }
@@ -254,6 +337,24 @@ describe('FileRegistry.updateFile pending replay', () => {
     expect(staleAfterC).toHaveLength(0);
 
     unsub();
+  });
+
+  it('should strip Bayes runtime-only fields before persisting graph updates', async () => {
+    const fileId = 'bayes-sanitise-update';
+    await registerTestFile(fileRegistry, fileId, makeGraphData('initial'));
+
+    const contaminated = makeContaminatedGraph('updated');
+    await fileRegistry.updateFile(fileId, contaminated);
+
+    const file = fileRegistry.getFile(fileId);
+    expect(file.data.edges[0]._bayes_evidence).toBeUndefined();
+    expect(file.data.edges[0]._bayes_priors).toBeUndefined();
+    expect(file.data.edges[0].p.latency.__parityEvidence).toBeUndefined();
+    expect(file.data.edges[0].p.latency.__parityComputedT95Days).toBeUndefined();
+
+    const idbFile = await db.files.get(fileId);
+    expect(idbFile.data.edges[0]._bayes_evidence).toBeUndefined();
+    expect(idbFile.data.edges[0]._bayes_priors).toBeUndefined();
   });
 
   it('should drop stale pending data from a previous generation', async () => {

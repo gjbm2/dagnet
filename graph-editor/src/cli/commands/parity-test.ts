@@ -104,13 +104,13 @@ export async function run() {
 
   // Aggregate graph for each scenario's DSL
   console.error(`[parity] Aggregating scenario 1 (${queryDsl})...`);
-  const { graph: graph1 } = await aggregateAndPopulateGraph(bundle, queryDsl);
+  const { graph: graph1 } = await aggregateAndPopulateGraph(bundle, queryDsl, { workspace });
   const params1 = extractParamsFromGraph(graph1);
 
   let params2: any = null;
   if (query2) {
     console.error(`[parity] Aggregating scenario 2 (${query2})...`);
-    const { graph: graph2 } = await aggregateAndPopulateGraph(bundle, query2);
+    const { graph: graph2 } = await aggregateAndPopulateGraph(bundle, query2, { workspace });
     params2 = extractParamsFromGraph(graph2);
   }
 

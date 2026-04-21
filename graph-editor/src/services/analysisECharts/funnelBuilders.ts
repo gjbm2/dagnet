@@ -64,6 +64,11 @@ export type FunnelBarChartOptionArgs = {
      */
     yAxisLabelFontSizePx?: number;
   };
+  /**
+   * Display settings (from analysisDisplaySettingsRegistry) — consumed for
+   * toggles that change chart shape, e.g. `funnel_y_mode` ('rate' | 'count').
+   */
+  settings?: Record<string, any>;
 };
 
 export type FunnelSeriesPoint = {
@@ -316,14 +321,31 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
     const byStage = new Map(points.map(p => [p.stageId, p]));
     return stageIds.map(stageId => {
       const pt = byStage.get(stageId) || null;
+      // Prefer BE-supplied bar_height_e / bar_height_f_residual (runner/
+      // funnel_engine computes these from the CF response). Fall back to
+      // reconstructing from pMean/evidenceMean only when the runner didn't
+      // populate them.
       const total = typeof pt?.pMean === 'number'
         ? pt.pMean
         : (typeof pt?.probability === 'number' ? pt.probability : null);
-      const e = typeof pt?.evidenceMean === 'number' ? pt.evidenceMean : null;
       const total01 = total === null ? null : clamp01(total);
-      const e01 = e === null ? null : clamp01(e);
-      const ev = typeof e01 === 'number' && typeof total01 === 'number' ? Math.min(total01, e01) : (typeof e01 === 'number' ? e01 : 0);
-      const residual = typeof total01 === 'number' ? Math.max(0, total01 - ev) : 0;
+      const barE = typeof pt?.barHeightE === 'number' ? clamp01(pt.barHeightE) : null;
+      const barFRes = typeof pt?.barHeightFResidual === 'number' ? Math.max(0, pt.barHeightFResidual) : null;
+
+      let ev: number;
+      let residual: number;
+      let eForDisplay: number | null;
+      if (barE !== null && barFRes !== null) {
+        ev = barE;
+        residual = barFRes;
+        eForDisplay = barE;
+      } else {
+        const e = typeof pt?.evidenceMean === 'number' ? pt.evidenceMean : null;
+        const e01 = e === null ? null : clamp01(e);
+        ev = typeof e01 === 'number' && typeof total01 === 'number' ? Math.min(total01, e01) : (typeof e01 === 'number' ? e01 : 0);
+        residual = typeof total01 === 'number' ? Math.max(0, total01 - ev) : 0;
+        eForDisplay = typeof e01 === 'number' ? e01 : null;
+      }
       return {
         __raw: pt || {
           stageId,
@@ -343,7 +365,7 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
         },
         __fe: {
           total: total01,
-          evidence: typeof e01 === 'number' ? e01 : null,
+          evidence: eForDisplay,
           evidenceClamped: ev,
           forecastMinusEvidence: residual,
         },
@@ -553,7 +575,7 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
 
       // Evidence segment (lower stack).
       series.push({
-        name: `${baseSeriesName} — e`,
+        name: `${baseSeriesName} · Evidence`,
         ...baseSeriesConfig,
         stack: scenarioId,
         itemStyle: colour ? { color: hexToRgba(colour, 0.85) } : undefined,
@@ -576,7 +598,7 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
         rotation: -Math.PI / 4,
       } as any;
       series.push({
-        name: `${baseSeriesName} — f−e`,
+        name: `${baseSeriesName} · Forecast`,
         ...baseSeriesConfig,
         stack: scenarioId,
         itemStyle: colour ? { color: colour, opacity: 0.4, decal: forecastDecal } : undefined,
@@ -751,16 +773,70 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
     const dsl = dslByScenarioId[sid];
     if (ln && typeof dsl === 'string' && dsl.trim()) {
       dslByLegendName.set(ln, dsl);
-      // If we render FE stacked sub-series, also attach the same DSL to those legend entries.
-      dslByLegendName.set(`${ln} — e`, dsl);
-      dslByLegendName.set(`${ln} — f−e`, dsl);
-      // If we render member sub-series, also attach the same DSL.
+      // F+E stacked sub-series (standard concept naming).
+      dslByLegendName.set(`${ln} · Evidence`, dsl);
+      dslByLegendName.set(`${ln} · Forecast`, dsl);
+      // Grouped-stage member sub-series.
       for (const memberId of allGroupMembers) {
         for (const gStageId of groupedStageIds) {
           const meta = stageDimValues[gStageId] as any;
           const memberLabel = meta?.member_labels?.[memberId] ?? memberId;
           dslByLegendName.set(`${ln} — ${memberLabel}`, dsl);
         }
+      }
+    }
+  }
+
+  // Multi-scenario legend: the first scenario's Evidence entry doubles as its
+  // colour swatch and is labelled "{scenario name} — Evidence"; the first
+  // scenario's other concepts (Forecast, etc.) are labelled by concept only.
+  // Additional scenarios get a single Evidence-bar colour swatch labelled with
+  // the scenario name. A whisker legend entry with an I-beam icon explains the
+  // hi/lo caps. Internal `__whisker_*` series are otherwise excluded.
+  // Concept pattern only applies when scenarios use the F+E stack naming;
+  // for grouped-stage or single-bar modes we fall back to showing every
+  // non-internal series.
+  const firstScenarioName = legendNameByScenarioId.get(scenarioIds[0]) ?? '';
+  const firstWhiskerName = `__whisker_${scenarioIds[0]}`;
+  const conceptPatternActive =
+    !hasGroupedStages &&
+    !useStepChange &&
+    args.metric === 'cumulative_probability' &&
+    scenarioIds.every(sid => {
+      const vm = result.dimension_values?.scenario_id?.[sid]?.visibility_mode ?? 'f+e';
+      return vm === 'f+e';
+    });
+  const whiskerIconPath = 'path://M0,0 L10,0 L10,2 L6,2 L6,8 L10,8 L10,10 L0,10 L0,8 L4,8 L4,2 L0,2 Z';
+
+  let legendData: any[];
+  if (scenarioIds.length === 1 || !conceptPatternActive) {
+    legendData = series
+      .filter(s => s.name && typeof s.name === 'string' && !s.name.startsWith('__'))
+      .map(s => ({ name: s.name, icon: 'roundRect' }));
+  } else {
+    legendData = [];
+    // First scenario's concept series (Evidence first by construction in the series loop above).
+    for (const s of series) {
+      if (!s.name || typeof s.name !== 'string') continue;
+      if (s.name.startsWith(`${firstScenarioName} · `)) {
+        legendData.push({ name: s.name, icon: 'roundRect' });
+      }
+    }
+    // Whisker explanation entry (single I-beam icon, theme-neutral).
+    if (series.some(s => s.name === firstWhiskerName)) {
+      legendData.push({
+        name: firstWhiskerName,
+        icon: whiskerIconPath,
+        itemStyle: { color: echartsThemeColours().text },
+      });
+    }
+    // Other scenarios' Evidence-bar colour swatches.
+    for (const s of series) {
+      if (!s.name || typeof s.name !== 'string') continue;
+      if (s.name.startsWith('__')) continue;
+      if (s.name.startsWith(`${firstScenarioName} · `)) continue;
+      if (s.name.endsWith(' · Evidence') && s.type === 'bar') {
+        legendData.push({ name: s.name, icon: 'roundRect' });
       }
     }
   }
@@ -812,20 +888,47 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
           itemWidth: 14,
           itemHeight: 10,
           itemGap: 12,
-          // Two-line legend entries: scenario name + (truncated) DSL beneath.
-          formatter: (name: string) => {
-            const dsl = dslByLegendName.get(name);
-            if (!dsl) return name;
+          data: legendData,
+          // Labels:
+          //   - whisker entry → "Hi/Lo band"
+          //   - first scenario's Evidence → "{scenario name} — Evidence"
+          //   - first scenario's other concepts (Forecast, etc.) → concept only
+          //   - other scenarios' Evidence swatches → scenario name only
+          // DSL subtitle is appended only to scenario-representative entries
+          // (first-scenario Evidence, other-scenario swatches), not to pure
+          // concept entries (Forecast, whisker).
+          formatter: (seriesName: string) => {
+            if (seriesName === firstWhiskerName) return 'Expected result';
+            const dotIdx = seriesName.indexOf(' · ');
+            if (dotIdx < 0) return seriesName;
+            const prefix = seriesName.slice(0, dotIdx);
+            const suffix = seriesName.slice(dotIdx + 3);
+            let display: string;
+            let isScenarioEntry = false;
+            if (prefix === firstScenarioName) {
+              if (suffix === 'Evidence') {
+                display = `${firstScenarioName} — Evidence`;
+                isScenarioEntry = true;
+              } else {
+                display = suffix;
+              }
+            } else if (suffix === 'Evidence') {
+              display = prefix;
+              isScenarioEntry = true;
+            } else {
+              display = seriesName;
+            }
+            if (!isScenarioEntry) return display;
+            const dsl = dslByLegendName.get(seriesName);
+            if (!dsl) return display;
             const shortDsl = shorten(dsl, 54).replace(/\n/g, ' ');
-            // Use rich text style "dsl" for second line.
-            return `${name}\n{dsl|${shortDsl}}`;
+            return `${display}\n{dsl|${shortDsl}}`;
           },
           textStyle: {
             rich: {
               dsl: {
                 fontSize: 9,
                 color: echartsThemeColours().textSecondary,
-                // DSL is often long; monospace is too wide here, so use a compact UI sans font.
                 fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif",
                 lineHeight: 14,
               },

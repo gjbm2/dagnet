@@ -797,6 +797,19 @@ const FUNNEL_SPECIFIC_SETTINGS: DisplaySettingDef[] = [
     inline: 'full',
     contextMenu: true,
   },
+  {
+    key: 'funnel_y_mode',
+    label: 'Y axis',
+    type: 'radio',
+    options: [
+      { value: 'rate', label: 'Rate' },
+      { value: 'count', label: 'Count (n/k)' },
+    ],
+    defaultValue: 'rate',
+    propsPanel: true,
+    inline: 'full',
+    contextMenu: true,
+  },
   // layout_mode (combined/separate) — hidden until multi-chart layout logic is implemented
   // {
   //   key: 'layout_mode',

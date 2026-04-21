@@ -64,54 +64,58 @@ class _Scenario:
 
 
 def _mock_cf(runners_module, p_means: list[float], p_sds: list[float]):
-    """Install a mocked scoped CF response on the runners module.
+    """Install a mocked whole-graph CF response on the runners module.
 
-    Returns a cleanup function. The mock responds to any scenarios in the
-    payload with the given per-edge (p_mean, p_sd) arrays.
+    Returns a cleanup function. The mock returns one edge per (from, to)
+    pair along the synth-mirror-4step path, with evidence_k/evidence_n
+    sourced from the scenario graph so e-mode assertions remain valid.
     """
     n = len(p_means)
     assert len(p_sds) == n
 
-    # Build an index from edge label pair → (p_mean, p_sd) so the per-edge
-    # CF mock returns the correct value for whichever analytics_dsl was sent.
-    pair_to_idx = {(PATH_NODE_IDS[i], PATH_NODE_IDS[i + 1]): i for i in range(n)}
-
-    def _parse_dsl_pair(dsl: str) -> Optional[tuple[str, str]]:
-        import re
-        fm = re.search(r'from\(([^)]+)\)', dsl or '')
-        tm = re.search(r'to\(([^)]+)\)', dsl or '')
-        if not fm or not tm:
-            return None
-        return (fm.group(1), tm.group(1))
-
     def _fake(scenarios_payload):
         scenarios_out = []
         for sc in scenarios_payload:
-            pair = _parse_dsl_pair(sc.get('analytics_dsl', ''))
-            if pair and pair in pair_to_idx:
-                i = pair_to_idx[pair]
-                edges = [{
-                    'edge_uuid': f'edge_{i}',
-                    'from_node': pair[0],
-                    'to_node': pair[1],
+            graph_edges = (sc.get('graph') or {}).get('edges') or []
+            # graph edges use UUIDs; build a lookup by resolved id pair
+            id_by_uuid = {
+                n.get('uuid'): n.get('id') for n in (sc.get('graph') or {}).get('nodes', [])
+            }
+            edge_by_pair = {}
+            for e in graph_edges:
+                fu, tu = e.get('from'), e.get('to')
+                fi = id_by_uuid.get(fu, fu)
+                ti = id_by_uuid.get(tu, tu)
+                edge_by_pair[(fi, ti)] = e
+            edges = []
+            for i in range(n):
+                fl = PATH_NODE_IDS[i]
+                tl = PATH_NODE_IDS[i + 1]
+                ge = edge_by_pair.get((fl, tl)) or {}
+                evg = (ge.get('p') or {}).get('evidence') or {}
+                edges.append({
+                    'edge_uuid': ge.get('uuid') or f'edge_{i}',
+                    'from_node': fl,
+                    'to_node': tl,
                     'p_mean': p_means[i],
                     'p_sd': p_sds[i],
+                    'p_sd_epistemic': p_sds[i],
                     'completeness': 0.95,
                     'completeness_sd': 0.01,
-                }]
-            else:
-                edges = []
+                    'evidence_k': evg.get('k'),
+                    'evidence_n': evg.get('n'),
+                })
             scenarios_out.append({
                 'scenario_id': sc['scenario_id'], 'success': True,
                 'edges': edges, 'skipped_edges': [],
             })
         return {'success': True, 'scenarios': scenarios_out}
 
-    original = runners_module._scoped_conditioned_forecast
-    runners_module._scoped_conditioned_forecast = _fake
+    original = runners_module._whole_graph_cf
+    runners_module._whole_graph_cf = _fake
 
     def _restore():
-        runners_module._scoped_conditioned_forecast = original
+        runners_module._whole_graph_cf = original
 
     return _restore
 
@@ -151,7 +155,11 @@ class TestF1Monotonicity:
 
     def test_e_mode_monotone(self):
         graph_data = _load_synth_4step()
-        result = _run_funnel(graph_data, visibility_mode='e')
+        restore = _mock_cf(runners, [0.5, 0.5, 0.5, 0.5], [0.03, 0.03, 0.03, 0.03])
+        try:
+            result = _run_funnel(graph_data, visibility_mode='e')
+        finally:
+            restore()
         assert 'error' not in result, result.get('error')
         path_uuids = _resolve_path_uuids(graph_data)
         probs = [_bar_by_stage(result, u)['probability'] for u in path_uuids]
@@ -329,7 +337,11 @@ class TestF6EModeUsesRawCounts:
         edge_0 = edge_by_uuids[(path_uuids[0], path_uuids[1])]
         n_0 = edge_0['p']['evidence']['n']
 
-        result = _run_funnel(graph_data, visibility_mode='e')
+        restore = _mock_cf(runners, [0.5, 0.5, 0.5, 0.5], [0.03, 0.03, 0.03, 0.03])
+        try:
+            result = _run_funnel(graph_data, visibility_mode='e')
+        finally:
+            restore()
         assert 'error' not in result
 
         # stage 0 = 1.0
@@ -353,7 +365,11 @@ class TestF6EModeUsesRawCounts:
         edge_0 = edge_by_uuids[(path_uuids[0], path_uuids[1])]
         n_0 = int(edge_0['p']['evidence']['n'])
 
-        result = _run_funnel(graph_data, visibility_mode='e')
+        restore = _mock_cf(runners, [0.5, 0.5, 0.5, 0.5], [0.03, 0.03, 0.03, 0.03])
+        try:
+            result = _run_funnel(graph_data, visibility_mode='e')
+        finally:
+            restore()
         edge_1 = edge_by_uuids[(path_uuids[0], path_uuids[1])]
         k_1 = int(edge_1['p']['evidence']['k'])
         expected_lo, expected_hi = wilson_ci(k_1, n_0, alpha=0.10)

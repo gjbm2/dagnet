@@ -134,6 +134,8 @@ entry point (`api/python-api.py`). Key shared modules:
 - `graph_types.py` — Pydantic models (Graph, Edge, Node, Evidence, etc.)
 - `query_dsl.py` — DSL parsing
 - `slice_key_normalisation.py` — canonical slice keys for DB matching
+- `file_evidence_supplement.py` — uncovered-day file-evidence supplement used
+  by both the API handlers and the Bayes compiler
 
 **Approach**: the MCMC worker is a new entry point that imports from the same
 `lib/`. The repo already has this pattern — `api/python-api.py` (Vercel) and
@@ -141,21 +143,26 @@ entry point (`api/python-api.py`). Key shared modules:
 
 ```
 graph-editor/
-  api/python-api.py          ← Vercel entry point (existing)
-  dev-server.py              ← Local dev entry point (existing)
-  bayes/worker.py            ← MCMC worker entry point (new)
+  api/python-api.py          ← Vercel entry point
+  dev-server.py              ← Local dev entry point
   lib/
     graph_types.py           ← shared
     snapshot_service.py      ← shared
     query_dsl.py             ← shared
-    runner/                  ← shared (analysis runner)
-    bayes/                   ← new: compiler, IR, model builder
+    file_evidence_supplement.py ← shared
+    runner/                  ← shared analysis runner code
+
+bayes/
+  app.py                     ← Modal image + deployment wiring
+  worker.py                  ← MCMC worker entry point
+  compiler/                  ← Bayes-only compiler, model builder, inference
 ```
 
-No package extraction needed initially. If the MCMC worker's deployment
-requires a separate build context (e.g. Modal's decorator-based deploy), the
-shared `lib/` can be pip-installed from a local path or published as an
-internal package later. Start simple.
+No package extraction needed initially. Modal copies `graph-editor/lib/` into
+the worker image and adds it to `PYTHONPATH`, so the worker imports the same
+shared modules directly. If a future deployment target requires a separate
+build context, the shared `lib/` can still be pip-installed from a local path
+or published as an internal package later. Start simple.
 
 ---
 

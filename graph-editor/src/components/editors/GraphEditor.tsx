@@ -40,6 +40,7 @@ import { SelectorModal } from '../SelectorModal';
 import { WindowSelector } from '../WindowSelector';
 import { ScenarioLegend } from '../ScenarioLegend';
 import { ScenarioContextMenu } from '../ScenarioContextMenu';
+import { ScenarioEditorModalHost } from '../ScenarioEditorModalHost';
 import { DataDepthLegend } from '../DataDepthLegend';
 import { DataDepthProvider } from '../../contexts/DataDepthContext';
 import { useDataDepthScores } from '../../hooks/useDataDepthScores';
@@ -1262,6 +1263,7 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
           {!isDashboardMode && !readonly && <WindowSelector tabId={tabId} />}
           {tabId && <ScenarioLegendWrapper tabId={tabId} />}
           {tabId && <ScenarioContextMenu tabId={tabId} />}
+          {tabId && <ScenarioEditorModalHost tabId={tabId} />}
         </div>
       </DataDepthOverlayProvider>
     );
