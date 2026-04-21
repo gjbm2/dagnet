@@ -118,6 +118,8 @@ Key invariants:
 
 **Trigger**: `fetchDataService.ts` Stage 2, fires alongside BE topo pass. Raced against a 500ms fast-path deadline (`CF_FAST_DEADLINE_MS`). Fast path merges into single render; slow path renders FE fallback and overwrites on arrival.
 
+**Scenario fan-out**: the BE endpoint accepts a `scenarios` array (see below) but the FE client `runConditionedForecast` always sends a single-element array built from the one graph and one DSL it was called with ([conditionedForecastService.ts](../../graph-editor/src/services/conditionedForecastService.ts)). Fan-out over visible scenarios therefore happens one layer up, at the `fetchItems` level: Current is fetched via `useDSLReaggregation` on DSL change, and visible live scenarios are each fetched via `regenerateScenario` — typically orchestrated by `regenerateAllLive`'s sequential loop. Each invocation fires its own Stage 2 and therefore its own CF pass. See `SCENARIO_SYSTEM_ARCHITECTURE.md` §"Auto-regeneration triggers" for the full list of fan-out paths and `FE_BE_STATS_PARALLELISM.md` for the race mechanics.
+
 **Endpoint**: `POST /api/forecast/conditioned` → `handle_conditioned_forecast` ([api_handlers.py:2506](../../graph-editor/lib/api_handlers.py#L2506)).
 
 **Scope**: two modes:

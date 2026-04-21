@@ -108,6 +108,7 @@ export function buildChartOption(
         metric: resolvedSettings.metric || 'cumulative_probability',
         legend: { scenarioDslSubtitleById: extra?.scenarioDslSubtitleById },
         ui: { showToolbox: false },
+        settings: resolvedSettings,
       });
       // funnel_direction: left_to_right swaps axes
       if (opt && resolvedSettings.funnel_direction === 'left_to_right') {

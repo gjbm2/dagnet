@@ -460,6 +460,20 @@ The `model_resolver.py` correctly prefers `cohort_alpha`/`cohort_beta` when `tem
 
 **Example**: `_non_latency_rows` in `cohort_forecast_v3.py` (previously `_lagless_rows`) was named and routed on the `sigma <= 0` proxy. The name conflated two distinct populations — truly non-latency edges (the correct audience) and latency edges with no evidence in scope (which historically fell through the same branch because the resolver returned σ=0 when fits failed). Routing by `latency_parameter` makes the function's scope precise; renaming the function to `_non_latency_rows` removes the semantic ambiguity.
 
+## Anti-pattern 51: React Fast Refresh failure on mixed-export context files
+
+**Signature**: after editing a React Context file (`XxxContext.tsx`), behaviour tied to that context silently stops working — effects don't fire, handlers feel stale, no user-visible progress indicators or regeneration for UI actions that used to produce them. TypeScript compiles cleanly, no runtime errors. The Vite dev-console shows `[vite] invalidate /src/contexts/XxxContext.tsx: Could not Fast Refresh ("useXxxContext" export is incompatible)` followed by `[vite] hot updated: /src/contexts/XxxContext.tsx`. The page does not auto-reload.
+
+**Root cause**: React Fast Refresh requires a module to export *either* only React components *or* only non-component values — not both. Context files that co-export the Context object, the Provider component, the `useXxxContext` hook, type interfaces, and helper functions violate this rule. When such a file is edited, Fast Refresh bails out ("incompatible") and falls back to plain HMR: Vite swaps the module in, but the React tree keeps references to the **old** provider and hooks. New effects are never re-subscribed, new closures are never bound. The app is in a mid-update limbo state where some code runs the new version and some runs the stale one.
+
+**Fix (for the immediate session)**: do a hard refresh (`Ctrl+Shift+R`). This flushes the stale module graph and rebuilds the React tree against the new code.
+
+**Durable fix (for the file)**: split the non-component exports out of the context file. Move the Context object, the `useXxxContext` hook, the `useXxxContextOptional` hook, and any type-only exports into a sibling file (e.g. `XxxContextHooks.ts` or `XxxContextValue.ts`). Leave only the `XxxProvider` React component in `XxxContext.tsx`. After the split, Fast Refresh treats the context file as a pure-component module and preserves state across edits. This is the standard Vite + `@vitejs/plugin-react` pattern — see the Fast Refresh rules linked from the warning message.
+
+**How to spot**: when you're about to edit a context file in a long-running session, note whether the dev console has shown a previous `Could not Fast Refresh` warning for that file. If it has, hard-refresh before testing your edit so you don't mistake the stale tree for a bug in your new code.
+
+**Example**: adding a wrapping `bulk-scenario` progress op to `regenerateAllLive` in `ScenariosContext.tsx` silently did nothing in the browser because Fast Refresh had bailed out on earlier edits. Three minutes after the last HMR update, a DSL change produced no `useDSLReaggregation`, `windowFetchPlannerService`, or `fetchItems` log entries at all — the running React tree had never re-subscribed after the context reload. Hard refresh restored correct behaviour.
+
 ## When to add to this document
 
 After completing a multi-attempt fix, check: does my bug match a generalisable pattern? If so, add it here following the format: Signature (how to recognise it), Root cause (why it happens), Fix (what to do), Example (optional, specific instance).

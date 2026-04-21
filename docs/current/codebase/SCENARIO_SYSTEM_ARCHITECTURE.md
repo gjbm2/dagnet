@@ -109,10 +109,23 @@ The effect calls `regenerateAllLive(undefined, visibleOrder)` followed by `sched
 | Workspace file change (git pull) | `ScenariosContext.tsx` `dagnet:workspaceFilesChanged` handler | Re-generates visible live scenarios, reconciles charts |
 | Graph topology change | `ScenariosContext.tsx` topology signature watcher | Debounced 300ms, re-generates visible live scenarios |
 | Scenario DSL edited | `updateScenarioQueryDSL` | Single-scenario regeneration |
+| `putToBase` (flatten) | `ScenariosContext.tsx` `putToBase` | Re-bases Base DSL, then `regenerateAllLive` |
 | Manual "Refresh all" button | `ScenariosPanel.tsx` | Calls `regenerateAllLive` with visible order |
 | Share link boot | `useShareBundleFromUrl` / `useShareChartFromUrl` | Per-scenario with `allowFetchFromSource: false` |
+| Bulk scenario creation | `useBulkScenarioCreation.ts` | Per-scenario loop wrapped in a `bulk-scenario` progress op |
+| Canvas "Apply view" | `GraphCanvas.tsx` — view restoration handler | Per-scenario loop (created + matched live scenarios) |
+| URL scenario boot | `useURLScenarios.ts` | Per-scenario for each URL scenario |
+| Dev refetch-from-files | `ScenariosContext.tsx` `DEV_REFETCH_FROM_FILES` handler | Refreshes Current, then `regenerateAllLive` |
 
-All paths use `regenerateAllLive` (which internally calls `regenerateScenario` per scenario with `allowFetchFromSource: false`) except share links (which call `regenerateScenario` directly).
+`regenerateAllLive` is the fan-out used by **events that invalidate the whole visible stack at once** — boot, pull, topology change, `putToBase`, manual "Refresh all". It loops the visible live scenarios **sequentially** (bottom-up in the visual stack) and calls `regenerateScenario` for each with `allowFetchFromSource: false`. The remaining triggers call `regenerateScenario` directly because they operate on a specific subset: share-link boot and canvas apply-view replay a recipe, bulk creation and URL boot work on just-created scenarios, `updateScenarioQueryDSL` targets one scenario by ID.
+
+### What each regeneration actually does
+
+`regenerateScenario` deep-copies the composed baseline graph, computes the scenario's `effectiveFetchDSL` (Base + lower live scenarios + scenario own DSL — see `scenarioRegenerationService.computeEffectiveFetchDSL`), builds a plan, optionally executes it against source, then calls `fetchOrchestratorService.refreshFromFilesWithRetries` with `skipStage2: false`. That drops into `fetchDataService.fetchItems` → Stage 2 → FE topo + BE topo + BE CF for that scenario's graph and DSL. **CF therefore runs once per scenario per regeneration** — visible live scenarios each receive their own CF pass conditioned on their own query window. Current is fetched independently by `useDSLReaggregation` when its DSL changes; scenarios don't re-fetch on Current-DSL change because their effective DSL inherits from Base, not Current, and their cached `meta.lastEffectiveDSL` remains valid. See `STATS_SUBSYSTEMS.md` §3.4 and `FE_BE_STATS_PARALLELISM.md` for the Stage 2 orchestration detail.
+
+### Progress indicator for bulk regeneration
+
+`regenerateAllLive` registers a single wrapping `bulk-scenario` operation in the operation registry — label `"Refreshing scenarios (i/N) — <ScenarioName>…"` updated per iteration — and passes `suppressPipelineToast: true` into each per-scenario regeneration. With that flag set, `fetchItems` skips the five-step `fetch-compute` pipeline indicator (plan → fetch → FE → BE → CF) that it normally shows for single-graph fetches, so N scenarios don't stack N full pipelines on screen. Instead, Stage 2's `finaliseCfToast` emits one compact `scenario-cf` terminal operation per scenario carrying the CF verdict and elapsed ms — `"<ScenarioName> · CF 1,320ms (3/8 conditioned)"`, or `"· CF: priors only, 820ms"`, or `"· CF failed"` / `"· CF superseded"` / `"· CF: no result"`. The parent op completes with an aggregate summary (`"Refreshed 6 scenarios in 8.4s"`). Single-scenario regeneration paths (`updateScenarioQueryDSL`, `ScenariosPanel` manual refresh, Current via `useDSLReaggregation`) leave `suppressPipelineToast` unset and show the full pipeline as before.
 
 ## Rehydration Service
 

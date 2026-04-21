@@ -1738,6 +1738,18 @@ def run_conversion_funnel(
             if bars.hi[i] is not None:
                 row['probability_hi'] = bars.hi[i]
 
+            # Compound-whisker bands: epistemic (inner) and predictive (outer).
+            # Only present in e+f mode — compute_bars_e and compute_bars_f leave
+            # these as None. See funnel_engine.FunnelStageBars.
+            if bars.lo_epi is not None and bars.lo_epi[i] is not None:
+                row['probability_lo_epi'] = bars.lo_epi[i]
+            if bars.hi_epi is not None and bars.hi_epi[i] is not None:
+                row['probability_hi_epi'] = bars.hi_epi[i]
+            if bars.lo_pred is not None and bars.lo_pred[i] is not None:
+                row['probability_lo_pred'] = bars.lo_pred[i]
+            if bars.hi_pred is not None and bars.hi_pred[i] is not None:
+                row['probability_hi_pred'] = bars.hi_pred[i]
+
             if visibility_mode == 'e':
                 row['evidence_mean'] = bars.bar[i]
             elif visibility_mode == 'f':
@@ -1806,6 +1818,10 @@ def run_conversion_funnel(
     new_metrics = [
         {'id': 'probability_lo', 'name': '5% band', 'type': 'probability', 'format': 'percent'},
         {'id': 'probability_hi', 'name': '95% band', 'type': 'probability', 'format': 'percent'},
+        {'id': 'probability_lo_epi', 'name': '5% band (epistemic)', 'type': 'probability', 'format': 'percent'},
+        {'id': 'probability_hi_epi', 'name': '95% band (epistemic)', 'type': 'probability', 'format': 'percent'},
+        {'id': 'probability_lo_pred', 'name': '5% band (predictive)', 'type': 'probability', 'format': 'percent'},
+        {'id': 'probability_hi_pred', 'name': '95% band (predictive)', 'type': 'probability', 'format': 'percent'},
         {'id': 'bar_height_e', 'name': 'Observed portion', 'type': 'probability', 'format': 'percent'},
         {'id': 'bar_height_f_residual', 'name': 'Forecast portion', 'type': 'probability', 'format': 'percent'},
     ]

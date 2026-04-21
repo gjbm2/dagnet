@@ -807,7 +807,17 @@ const FUNNEL_SPECIFIC_SETTINGS: DisplaySettingDef[] = [
     ],
     defaultValue: 'rate',
     propsPanel: true,
-    inline: 'full',
+    inline: 'brief',
+    contextMenu: true,
+  },
+  {
+    key: 'funnel_show_hilo',
+    label: 'Hi/Lo bands',
+    shortLabel: 'Hi/Lo',
+    type: 'checkbox',
+    defaultValue: true,
+    propsPanel: true,
+    inline: 'brief',
     contextMenu: true,
   },
   // layout_mode (combined/separate) — hidden until multi-chart layout logic is implemented

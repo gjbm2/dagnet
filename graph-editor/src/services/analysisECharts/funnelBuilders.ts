@@ -8,6 +8,7 @@
  */
 
 import type { AnalysisResult } from '../../lib/graphComputeClient';
+import { chartFontScale } from '../../lib/analysisDisplaySettingsRegistry';
 import {
   echartsThemeColours,
   echartsTooltipStyle,
@@ -96,6 +97,17 @@ export type FunnelSeriesPoint = {
   probabilityLo: number | null;
   probabilityHi: number | null;
   /**
+   * Compound-whisker bands (e+f mode only):
+   * - epi: epistemic-only band (posterior width ignoring completeness). Tight.
+   * - pred: predictive-only band (kappa-inflated, ignoring completeness). Wide.
+   * The blended `probabilityLo/Hi` is the completeness-weighted mixture of
+   * the two. Null outside e+f mode.
+   */
+  probabilityLoEpi: number | null;
+  probabilityHiEpi: number | null;
+  probabilityLoPred: number | null;
+  probabilityHiPred: number | null;
+  /**
    * doc 52 Level 2 e+f striation components (stage-by-stage):
    * - barHeightE: solid evidence portion
    * - barHeightFResidual: striated forecast residual = (e+f) − e
@@ -135,6 +147,10 @@ export function extractFunnelSeriesPoints(result: AnalysisResult, args: FunnelCh
       completeness: typeof row?.completeness === 'number' ? row.completeness : null,
       probabilityLo: typeof row?.probability_lo === 'number' ? row.probability_lo : null,
       probabilityHi: typeof row?.probability_hi === 'number' ? row.probability_hi : null,
+      probabilityLoEpi: typeof row?.probability_lo_epi === 'number' ? row.probability_lo_epi : null,
+      probabilityHiEpi: typeof row?.probability_hi_epi === 'number' ? row.probability_hi_epi : null,
+      probabilityLoPred: typeof row?.probability_lo_pred === 'number' ? row.probability_lo_pred : null,
+      probabilityHiPred: typeof row?.probability_hi_pred === 'number' ? row.probability_hi_pred : null,
       barHeightE: typeof row?.bar_height_e === 'number' ? row.bar_height_e : null,
       barHeightFResidual: typeof row?.bar_height_f_residual === 'number' ? row.bar_height_f_residual : null,
     });
@@ -264,7 +280,13 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
   const stageLabels = stageIds.map(id => getDimLabel(result.dimension_values, 'stage', id));
 
   const fmtPct = (v: number | null) => (typeof v === 'number' ? `${(v * 100).toFixed(1)}%` : '—');
-  const fmtNum = (v: number | null) => (typeof v === 'number' ? v.toLocaleString() : '—');
+  // Count-mode values are integer populations (n / k). Round to 0dp and emit
+  // with locale grouping (e.g. "20,074"). Falls through to a dash for nulls.
+  const fmtNum = (v: number | null) => (
+    typeof v === 'number' && Number.isFinite(v)
+      ? Math.round(v).toLocaleString(undefined, { maximumFractionDigits: 0 })
+      : '—'
+  );
 
   // Conversion Funnel special-case:
   // The runner's `step_probability` is a conditional probability (prob_i / prob_{i-1}).
@@ -285,15 +307,38 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
     return `rgba(${r}, ${g}, ${b}, ${Math.max(0, Math.min(1, alpha))})`;
   };
 
+  // Count-mode scaling. n₀ is stage 0's `n` (the start population). In rate
+  // mode the scale is identity; in count mode probability-space values
+  // (bar tops, F+E stack components, hi/lo bands) are multiplied by n₀ to
+  // produce absolute counts. `__raw` / `__fe` stay as probabilities so the
+  // tooltip percentage formatters continue to work.
+  const countScaleForPoints = (points: FunnelSeriesPoint[]): number => {
+    if (yMode !== 'count') return 1;
+    const n0 = typeof points[0]?.n === 'number' && Number.isFinite(points[0].n) && points[0].n > 0
+      ? points[0].n : null;
+    return n0 ?? 1;
+  };
+
   const makeSeriesData = (scenarioId: string) => {
     const points = extractFunnelSeriesPoints(result, { scenarioId }) || [];
     const byStage = new Map(points.map(p => [p.stageId, p]));
+    const scale = countScaleForPoints(points);
     return stageIds.map(stageId => {
       const pt = byStage.get(stageId);
-      const metricValue =
-        args.metric === 'step_probability'
-          ? (pt?.stepProbability ?? null)
-          : (pt?.probability ?? null);
+      let metricValue: number | null;
+      if (yMode === 'count') {
+        // Prefer pMean (blended total in e+f) over probability so f-only
+        // and f+e both render a projected count. Falls back to raw `n` when
+        // no probability is available (e.g. start stage with no model run).
+        const base = typeof pt?.pMean === 'number' && Number.isFinite(pt.pMean)
+          ? pt.pMean
+          : (typeof pt?.probability === 'number' && Number.isFinite(pt.probability) ? pt.probability : null);
+        metricValue = typeof base === 'number'
+          ? base * scale
+          : (typeof pt?.n === 'number' ? pt.n : null);
+      } else {
+        metricValue = args.metric === 'step_probability' ? (pt?.stepProbability ?? null) : (pt?.probability ?? null);
+      }
       return {
         value: metricValue ?? 0,
         __raw: pt || {
@@ -319,6 +364,7 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
   const makeStackedFEData = (scenarioId: string) => {
     const points = extractFunnelSeriesPoints(result, { scenarioId }) || [];
     const byStage = new Map(points.map(p => [p.stageId, p]));
+    const scale = countScaleForPoints(points);
     return stageIds.map(stageId => {
       const pt = byStage.get(stageId) || null;
       // Prefer BE-supplied bar_height_e / bar_height_f_residual (runner/
@@ -363,11 +409,21 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
           barHeightE: null,
           barHeightFResidual: null,
         },
+        // __fe keeps probability-space values so existing tooltip formatters
+        // (fmtPct) render correctly regardless of yMode.
         __fe: {
           total: total01,
           evidence: eForDisplay,
           evidenceClamped: ev,
           forecastMinusEvidence: residual,
+        },
+        // Pre-scaled bar heights for count mode (rate mode: scale=1, so
+        // these equal the __fe values). Consumed by the bar `value:` in
+        // the F+E stack path.
+        __feScaled: {
+          evidenceBar: ev * scale,
+          forecastResidualBar: residual * scale,
+          totalBar: total01 === null ? null : total01 * scale,
         },
       };
     });
@@ -415,6 +471,14 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
   const dslByScenarioId = args.legend?.scenarioDslSubtitleById || {};
   const showToolbox = args.ui?.showToolbox ?? true;
   const yAxisLabelFontSizePx = args.ui?.yAxisLabelFontSizePx ?? 9;
+  // Count mode: bars show absolute `n` per stage; Y axis is unscaled integer.
+  // Skips F+E stacking, whiskers, and percentage labels. Rate mode (default)
+  // keeps the existing blended-probability view.
+  const yMode: 'rate' | 'count' = args.settings?.funnel_y_mode === 'count' ? 'count' : 'rate';
+  // Hi/Lo bands toggle — when false, the whisker custom series is suppressed
+  // entirely (labels still render via the bar-series label on the bar top).
+  // Default true; explicit `false` is the only value that hides the band.
+  const showHiLo: boolean = args.settings?.funnel_show_hilo !== false;
 
   const shorten = (s: string, max: number) => {
     const t = (s || '').trim();
@@ -499,16 +563,82 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
   const _barGapFrac = _parsePct(scenarioCount > 4 ? '0%' : scenarioCount > 2 ? '10%' : '20%', 0.2);
   const CAP_BAR_FRACTION = 0.66;
 
+  // Darker label fill for on-chart value labels. `echartsThemeColours().text`
+  // (#374151 light / #e0e0e0 dark) reads as grey at the tiny font sizes used
+  // for data labels; bump to near-black / near-white for legibility.
+  const _themeText = echartsThemeColours().text;
+  const labelFill = _themeText === '#e0e0e0' ? '#f5f5f5' : '#111827';
+  // Custom-series text children bypass applyCommonSettings' series-label
+  // font scaling, so resolve the scaled data-label size up front and pass it
+  // into the whisker builder.
+  const _fontSizeSetting = (args.settings?.font_size ?? args.settings?.chart_font_size) as number | string | undefined;
+  const dataLabelFontSize = chartFontScale(_fontSizeSetting ?? null).dataLabelPx;
+
+  // Predicted-band half-width suffix appended to data labels. Rate mode:
+  // " ±3.2%". Count mode: " ±412" (half-width × n₀, rounded). Uses the pred
+  // band when populated (compound e+f), falling back to blended
+  // probabilityLo/Hi otherwise. Empty when no bands are available.
+  const fmtPredDispersion = (pt: FunnelSeriesPoint, mode: 'rate' | 'count' = 'rate', scale: number = 1): string => {
+    const lo = typeof pt.probabilityLoPred === 'number' && Number.isFinite(pt.probabilityLoPred)
+      ? pt.probabilityLoPred
+      : (typeof pt.probabilityLo === 'number' && Number.isFinite(pt.probabilityLo) ? pt.probabilityLo : null);
+    const hi = typeof pt.probabilityHiPred === 'number' && Number.isFinite(pt.probabilityHiPred)
+      ? pt.probabilityHiPred
+      : (typeof pt.probabilityHi === 'number' && Number.isFinite(pt.probabilityHi) ? pt.probabilityHi : null);
+    if (lo === null || hi === null) return '';
+    const half = (hi - lo) / 2;
+    if (!Number.isFinite(half) || half <= 0) return '';
+    if (mode === 'count') {
+      const s = Number.isFinite(scale) && scale > 0 ? scale : 1;
+      return ` ±${fmtNum(Math.round(half * s))}`;
+    }
+    return ` ±${(half * 100).toFixed(1)}%`;
+  };
+
   const buildWhiskerCustomSeries = (
     points: FunnelSeriesPoint[],
     scenarioIndex: number,
     name: string,
+    formatLabelForPoint: (pt: FunnelSeriesPoint) => string,
+    labelFontSize: number,
+    valueScale: number = 1,
   ) => {
     const data: any[] = [];
+    const s = Number.isFinite(valueScale) && valueScale > 0 ? valueScale : 1;
     points.forEach((pt, idx) => {
-      if (typeof pt.probabilityLo !== 'number' || typeof pt.probabilityHi !== 'number') return;
-      if (!Number.isFinite(pt.probabilityLo) || !Number.isFinite(pt.probabilityHi)) return;
-      data.push([idx, pt.probabilityLo, pt.probabilityHi]);
+      const hasBands =
+        typeof pt.probabilityLo === 'number' && Number.isFinite(pt.probabilityLo) &&
+        typeof pt.probabilityHi === 'number' && Number.isFinite(pt.probabilityHi);
+      // data tuple: [idx, loOuter, hiOuter, loInner, hiInner, topForLabel, labelText, hasBands].
+      // Band/top values are pre-scaled by `valueScale` (n₀ in count mode, 1
+      // in rate mode) so the custom series renders in the same y-axis value
+      // space the bar series uses.
+      //
+      // Semantics of the compound whisker (unchanged):
+      //   - outer (thin line + caps) = total reported band (probabilityLo/Hi) —
+      //     completeness-weighted mixture of epistemic and predictive variance.
+      //   - inner (thick block) = epistemic-only band (probabilityLoEpi/HiEpi).
+      //   Do NOT source outer from probabilityLo/Hi_pred — those are predictive
+      //   only (c-independent) and never collapse at c=1.
+      //
+      //   topForLabel anchors the label at the top whisker cap when bands
+      //   exist, else at the bar top (scaled). hasBands=0 hides geometry.
+      const loOuter = hasBands ? (pt.probabilityLo as number) * s : NaN;
+      const hiOuter = hasBands ? (pt.probabilityHi as number) * s : NaN;
+      const loEpi = hasBands && typeof pt.probabilityLoEpi === 'number' && Number.isFinite(pt.probabilityLoEpi)
+        ? pt.probabilityLoEpi * s : NaN;
+      const hiEpi = hasBands && typeof pt.probabilityHiEpi === 'number' && Number.isFinite(pt.probabilityHiEpi)
+        ? pt.probabilityHiEpi * s : NaN;
+      // Bar top in scaled space. Prefer pMean (blended total in e+f) so the
+      // label in count mode sits above the projected total, not the raw
+      // evidence bar height. Falls back to `probability` when pMean absent.
+      const barTopRaw = typeof pt.pMean === 'number' && Number.isFinite(pt.pMean)
+        ? pt.pMean
+        : (typeof pt.probability === 'number' && Number.isFinite(pt.probability) ? pt.probability : 0);
+      const barTop = barTopRaw * s;
+      const topForLabel = hasBands && Number.isFinite(hiOuter) ? (hiOuter as number) : barTop;
+      const labelText = formatLabelForPoint(pt);
+      data.push([idx, loOuter, hiOuter, loEpi, hiEpi, topForLabel, labelText, hasBands ? 1 : 0]);
     });
     if (data.length === 0) return undefined;
     const stroke = echartsThemeColours().text;
@@ -520,35 +650,74 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
       data,
       renderItem: (params: any, api: any) => {
         const idx = api.value(0);
-        const lo = api.value(1);
-        const hi = api.value(2);
-        const loPt = api.coord([idx, lo]);
-        const hiPt = api.coord([idx, hi]);
+        const loOuter = api.value(1);
+        const hiOuter = api.value(2);
+        const loInner = api.value(3);
+        const hiInner = api.value(4);
+        const topForLabel = api.value(5);
+        const labelText = api.value(6) as unknown as string;
+        const hasBands = api.value(7) === 1;
         // Category band width (px) for this category.
         const categoryBand = api.size([1, 0])[0];
         const groupWidth = categoryBand * (1 - _barCategoryGapFrac);
         const denom = scenarioCount + Math.max(0, scenarioCount - 1) * _barGapFrac;
         const barWidth = groupWidth / Math.max(1, denom);
         const capWidth = Math.max(2, barWidth * CAP_BAR_FRACTION);
+        const innerBlockWidth = Math.max(2, barWidth * CAP_BAR_FRACTION * 0.25);
         // Per-scenario x offset: bars sit side-by-side inside the group.
         // Centre of bar i = group_left + i*(barWidth + gap_px) + barWidth/2.
         const gapPx = barWidth * _barGapFrac;
         const groupLeft = -groupWidth / 2;
+        const labelAnchorPt = api.coord([idx, topForLabel]);
         const centerOffset = groupLeft + scenarioIndex * (barWidth + gapPx) + barWidth / 2;
-        const cx = loPt[0] + centerOffset;
+        const cx = labelAnchorPt[0] + centerOffset;
         const halfCap = capWidth / 2;
+        const halfInner = innerBlockWidth / 2;
         const lineStyle = { stroke, lineWidth: 1, opacity: 0.9 };
-        return {
-          type: 'group',
-          children: [
-            // Vertical stem
-            { type: 'line', shape: { x1: cx, y1: loPt[1], x2: cx, y2: hiPt[1] }, style: lineStyle },
-            // Top cap
-            { type: 'line', shape: { x1: cx - halfCap, y1: hiPt[1], x2: cx + halfCap, y2: hiPt[1] }, style: lineStyle },
-            // Bottom cap
-            { type: 'line', shape: { x1: cx - halfCap, y1: loPt[1], x2: cx + halfCap, y2: loPt[1] }, style: lineStyle },
-          ],
-        };
+        const children: any[] = [];
+        if (hasBands) {
+          const loOuterPt = api.coord([idx, loOuter]);
+          const hiOuterPt = api.coord([idx, hiOuter]);
+          children.push(
+            // Outer: thin vertical stem (total/blended band extent — shrinks to epi at c=1)
+            { type: 'line', shape: { x1: cx, y1: loOuterPt[1], x2: cx, y2: hiOuterPt[1] }, style: lineStyle },
+            // Outer: top cap
+            { type: 'line', shape: { x1: cx - halfCap, y1: hiOuterPt[1], x2: cx + halfCap, y2: hiOuterPt[1] }, style: lineStyle },
+            // Outer: bottom cap
+            { type: 'line', shape: { x1: cx - halfCap, y1: loOuterPt[1], x2: cx + halfCap, y2: loOuterPt[1] }, style: lineStyle },
+          );
+          // Inner thick block for the epistemic band (only when present).
+          if (Number.isFinite(loInner) && Number.isFinite(hiInner)) {
+            const loInnerPt = api.coord([idx, loInner]);
+            const hiInnerPt = api.coord([idx, hiInner]);
+            children.push({
+              type: 'rect',
+              shape: {
+                x: cx - halfInner,
+                y: hiInnerPt[1],
+                width: innerBlockWidth,
+                height: Math.max(1, loInnerPt[1] - hiInnerPt[1]),
+              },
+              style: { fill: stroke, opacity: 0.55, stroke: 'none' },
+            });
+          }
+        }
+        // Value label, anchored above the top whisker cap (or bar top if no bands).
+        if (typeof labelText === 'string' && labelText.length > 0) {
+          children.push({
+            type: 'text',
+            style: {
+              text: labelText,
+              x: cx,
+              y: labelAnchorPt[1] - 4,
+              textAlign: 'center',
+              textVerticalAlign: 'bottom',
+              fill: labelFill,
+              font: `${labelFontSize}px sans-serif`,
+            },
+          });
+        }
+        return { type: 'group', children };
       },
     };
   };
@@ -560,7 +729,10 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
     const baseSeriesName = getScenarioTitleWithBasis(result, scenarioId);
     const colour = result.dimension_values?.scenario_id?.[scenarioId]?.colour;
     const visibilityMode = result.dimension_values?.scenario_id?.[scenarioId]?.visibility_mode ?? 'f+e';
-    // Disable F+E stacking when grouped stages exist (member stacking takes precedence)
+    // Disable F+E stacking when grouped stages exist (member stacking takes
+    // precedence). In count mode we still stack: each segment's bar height
+    // is the probability-space segment × n₀, so the stacked total equals the
+    // projected count (pMean · n₀).
     const shouldShowFEStack = !hasGroupedStages && !useStepChange && args.metric === 'cumulative_probability' && visibilityMode === 'f+e';
 
     const baseSeriesConfig = {
@@ -581,7 +753,8 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
         itemStyle: colour ? { color: hexToRgba(colour, 0.85) } : undefined,
         label: { show: false },
         data: fePoints.map(p => ({
-          value: p.__fe?.evidenceClamped ?? 0,
+          // value is the scaled bar height (n₀-weighted in count mode).
+          value: p.__feScaled?.evidenceBar ?? 0,
           __raw: p.__raw,
           __fe: p.__fe,
           __component: 'e',
@@ -602,26 +775,70 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
         ...baseSeriesConfig,
         stack: scenarioId,
         itemStyle: colour ? { color: colour, opacity: 0.4, decal: forecastDecal } : undefined,
-        label: {
-          show: showValueLabels,
-          position: 'top',
-          formatter: (p: any) => {
-            const total = typeof p?.data?.__fe?.total === 'number' ? p.data.__fe.total : null;
-            return typeof total === 'number' && Number.isFinite(total) ? fmtPct(total) : '';
-          },
-          fontSize: 7,
-          color: echartsThemeColours().text,
-        },
+        // When hi/lo bands are shown, the whisker custom series owns the label
+        // (above the top cap). When bands are off, fall back to ECharts-native
+        // top-of-stack placement on this upper segment; `__fe.total` carries
+        // the cumulative blended value (not the f−e residual that is this
+        // segment's `value`), so read from there.
+        label: showHiLo
+          ? { show: false }
+          : {
+              show: showValueLabels,
+              position: 'top',
+              formatter: (p: any) => {
+                const total = typeof p?.data?.__fe?.total === 'number' ? p.data.__fe.total : null;
+                if (typeof total !== 'number' || !Number.isFinite(total)) return '';
+                // Count mode renders the projected total count; rate mode
+                // keeps the percentage. Scale comes from the surrounding
+                // scenario via __feScaled when present.
+                const totalScaled = typeof p?.data?.__feScaled?.totalBar === 'number'
+                  ? p.data.__feScaled.totalBar
+                  : null;
+                return yMode === 'count' && typeof totalScaled === 'number'
+                  ? fmtNum(totalScaled)
+                  : fmtPct(total);
+              },
+              // Explicit `opacity: 1` stops the bar's itemStyle opacity (0.4 on
+              // the striated forecast segment) from bleeding into the label
+              // text — which would otherwise render as light grey. Size +
+              // colour match the whisker-owned data label for consistency.
+              fontSize: dataLabelFontSize,
+              color: labelFill,
+              opacity: 1,
+            },
         data: fePoints.map(p => ({
-          value: p.__fe?.forecastMinusEvidence ?? 0,
+          value: p.__feScaled?.forecastResidualBar ?? 0,
           __raw: p.__raw,
           __fe: p.__fe,
+          __feScaled: p.__feScaled,
           __component: 'f_minus_e',
         })),
       });
 
-      const whiskerSeries = buildWhiskerCustomSeries(stagePoints, scenarioIndex, scenarioId);
-      if (whiskerSeries) series.push(whiskerSeries);
+      if (showHiLo) {
+        const whiskerSeries = buildWhiskerCustomSeries(
+          stagePoints,
+          scenarioIndex,
+          scenarioId,
+          (pt) => {
+            const total = typeof pt.pMean === 'number' && Number.isFinite(pt.pMean)
+              ? pt.pMean
+              : (typeof pt.probability === 'number' && Number.isFinite(pt.probability) ? pt.probability : null);
+            if (total === null) return '';
+            // Count mode: label text is the projected count (total · n₀) plus
+            // the predicted-band half-width suffix scaled to counts.
+            // Rate mode: percentage plus percent-scaled half-width suffix.
+            if (yMode === 'count') {
+              const scale = countScaleForPoints(stagePoints);
+              return `${fmtNum(total * scale)}${fmtPredDispersion(pt, 'count', scale)}`;
+            }
+            return `${fmtPct(total)}${fmtPredDispersion(pt)}`;
+          },
+          dataLabelFontSize,
+          countScaleForPoints(stagePoints),
+        );
+        if (whiskerSeries) series.push(whiskerSeries);
+      }
       continue;
     }
 
@@ -646,7 +863,7 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
             return typeof v === 'number' && Number.isFinite(v) ? fmtPct(v) : '';
           },
           fontSize: 7,
-          color: echartsThemeColours().text,
+          color: labelFill,
         },
         data: stageIds.map(stageId => {
           if (groupedStageIds.has(stageId)) {
@@ -695,7 +912,7 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
               return typeof groupTotal === 'number' && Number.isFinite(groupTotal) ? fmtPct(groupTotal) : '';
             },
             fontSize: 7,
-            color: echartsThemeColours().text,
+            color: labelFill,
           },
           data: stageIds.map(stageId => {
             if (!memberStageIds.has(stageId)) {
@@ -731,37 +948,112 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
 
     // Default: a single bar series per scenario (no groups, no F+E stacking).
     const stagePointsDefault = extractFunnelSeriesPoints(result, { scenarioId }) || [];
+    // Whisker series owns labels when active (non-step-change, bands
+    // enabled — rate or count mode). When bands are suppressed via
+    // `funnel_show_hilo`, labels revert to the bar-series native top-of-bar
+    // position. Count mode participates in the whisker series (bands scale
+    // by n₀), so it no longer disqualifies whisker ownership.
+    const whiskerOwnsLabel = !useStepChange && showHiLo;
+    // Forecast-striation decal: in f-only mode the whole bar IS forecast, so
+    // it must striate (same colour, opacity 0.4, diagonal pattern) per the
+    // app-wide forecast convention — matches snapshotBuilders.ts and
+    // cohortComparisonBuilders.ts, and the f+e upper segment above. In e-only
+    // mode the single bar stays solid (evidence-only).
+    const defaultBarIsForecast = visibilityMode === 'f';
+    const defaultBarDecal = defaultBarIsForecast ? {
+      symbol: 'rect',
+      dashArrayX: [1, 0],
+      dashArrayY: [3, 3],
+      rotation: -Math.PI / 4,
+    } as any : undefined;
     series.push({
       name: baseSeriesName,
       ...baseSeriesConfig,
-      itemStyle: colour ? { color: colour } : undefined,
-      label: {
-        show: showValueLabels,
-        position: 'top',
-        formatter: (p: any) => {
-          const metricInfo = p?.data?.__metric;
-          if (useStepChange && metricInfo?.kind === 'step_change') {
-            if (!metricInfo?.hasValue) return '';
-            const v = typeof metricInfo?.value === 'number' ? metricInfo.value : null;
-            return typeof v === 'number' && Number.isFinite(v) ? fmtPct(v) : '';
-          }
-          const v = typeof p?.value === 'number' ? p.value : null;
-          return typeof v === 'number' && Number.isFinite(v) ? fmtPct(v) : '';
-        },
-        fontSize: 7,
-        color: '#374151',
-      },
+      itemStyle: colour
+        ? (defaultBarIsForecast
+            ? { color: colour, opacity: 0.4, decal: defaultBarDecal }
+            : { color: colour })
+        : undefined,
+      label: whiskerOwnsLabel
+        ? { show: false }
+        : {
+            show: showValueLabels,
+            position: 'top',
+            formatter: (p: any) => {
+              const metricInfo = p?.data?.__metric;
+              if (useStepChange && metricInfo?.kind === 'step_change') {
+                if (!metricInfo?.hasValue) return '';
+                const v = typeof metricInfo?.value === 'number' ? metricInfo.value : null;
+                return typeof v === 'number' && Number.isFinite(v) ? fmtPct(v) : '';
+              }
+              const v = typeof p?.value === 'number' ? p.value : null;
+              if (typeof v !== 'number' || !Number.isFinite(v)) return '';
+              return yMode === 'count' ? fmtNum(v) : fmtPct(v);
+            },
+            // Explicit `opacity: 1` prevents the bar's itemStyle opacity (0.4
+            // in f-only striated mode) from dimming the label text.
+            fontSize: dataLabelFontSize,
+            color: labelFill,
+            opacity: 1,
+          },
       data: useStepChange ? makeSeriesDataWithStepChange(scenarioId) : makeSeriesData(scenarioId),
     });
 
-    if (!useStepChange) {
-      const whiskerSeries = buildWhiskerCustomSeries(stagePointsDefault, scenarioIndex, scenarioId);
+    if (whiskerOwnsLabel) {
+      const whiskerSeries = buildWhiskerCustomSeries(
+        stagePointsDefault,
+        scenarioIndex,
+        scenarioId,
+        (pt) => {
+          const v = args.metric === 'step_probability'
+            ? (typeof pt.stepProbability === 'number' && Number.isFinite(pt.stepProbability) ? pt.stepProbability : null)
+            : (typeof pt.probability === 'number' && Number.isFinite(pt.probability) ? pt.probability : null);
+          if (typeof v !== 'number') return '';
+          // Dispersion only applies to the cumulative probability metric; the
+          // compound whisker bands are computed on cumulative, not step.
+          const isCum = args.metric !== 'step_probability';
+          if (yMode === 'count') {
+            const scale = countScaleForPoints(stagePointsDefault);
+            const suffix = isCum ? fmtPredDispersion(pt, 'count', scale) : '';
+            return `${fmtNum(v * scale)}${suffix}`;
+          }
+          const suffix = isCum ? fmtPredDispersion(pt) : '';
+          return `${fmtPct(v)}${suffix}`;
+        },
+        dataLabelFontSize,
+        countScaleForPoints(stagePointsDefault),
+      );
       if (whiskerSeries) series.push(whiskerSeries);
     }
   }
 
   const paddedMin = 0;
   const paddedMax = 1;
+
+  // Count-mode y-axis max: ECharts' auto-fit is driven by bar-series values
+  // and ignores the whisker custom series, which in count mode can extend
+  // above the bar top (scaled hi band). Compute an explicit max from the
+  // worst-case scaled hi across scenarios so top caps are never clipped. In
+  // rate mode we keep paddedMax=1 (set above).
+  let countYMax = 0;
+  if (yMode === 'count') {
+    for (const sid of scenarioIds) {
+      const pts = extractFunnelSeriesPoints(result, { scenarioId: sid }) || [];
+      const scale = countScaleForPoints(pts);
+      for (const pt of pts) {
+        const hi = typeof pt.probabilityHi === 'number' && Number.isFinite(pt.probabilityHi)
+          ? pt.probabilityHi
+          : typeof pt.pMean === 'number' && Number.isFinite(pt.pMean)
+            ? pt.pMean
+            : typeof pt.probability === 'number' && Number.isFinite(pt.probability)
+              ? pt.probability : 0;
+        const v = hi * scale;
+        if (v > countYMax) countYMax = v;
+      }
+    }
+    // 8% headroom so the label above the top cap has room to render.
+    countYMax = countYMax > 0 ? countYMax * 1.08 : 0;
+  }
 
   const legendNameByScenarioId = new Map<string, string>();
   for (const sid of scenarioIds) {
@@ -798,6 +1090,7 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
   // non-internal series.
   const firstScenarioName = legendNameByScenarioId.get(scenarioIds[0]) ?? '';
   const firstWhiskerName = `__whisker_${scenarioIds[0]}`;
+  const epiLegendName = '__legend_believed_actual';
   const conceptPatternActive =
     !hasGroupedStages &&
     !useStepChange &&
@@ -808,11 +1101,48 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
     });
   const whiskerIconPath = 'path://M0,0 L10,0 L10,2 L6,2 L6,8 L10,8 L10,10 L0,10 L0,8 L4,8 L4,2 L0,2 Z';
 
+  const hasWhiskerSeries = series.some(s => typeof s.name === 'string' && s.name.startsWith('__whisker_'));
+  const hasInnerEpi = series.some(s => {
+    if (typeof s.name !== 'string' || !s.name.startsWith('__whisker_')) return false;
+    if (!Array.isArray(s.data)) return false;
+    return s.data.some((d: any) => Array.isArray(d) && Number.isFinite(d[3]) && Number.isFinite(d[4]));
+  });
+
+  // Phantom series so the "Believed actual" legend entry has a matching series
+  // name — ECharts silently drops legend entries whose name doesn't map to a
+  // series. Renders nothing.
+  if (hasInnerEpi) {
+    series.push({
+      name: epiLegendName,
+      type: 'custom',
+      silent: true,
+      data: [],
+      renderItem: () => ({ type: 'group', children: [] }),
+    });
+  }
+
+  const pushWhiskerKeyEntries = (target: any[]) => {
+    if (!hasWhiskerSeries) return;
+    target.push({
+      name: firstWhiskerName,
+      icon: whiskerIconPath,
+      itemStyle: { color: echartsThemeColours().text },
+    });
+    if (hasInnerEpi) {
+      target.push({
+        name: epiLegendName,
+        icon: 'rect',
+        itemStyle: { color: echartsThemeColours().text, opacity: 0.55 },
+      });
+    }
+  };
+
   let legendData: any[];
   if (scenarioIds.length === 1 || !conceptPatternActive) {
     legendData = series
       .filter(s => s.name && typeof s.name === 'string' && !s.name.startsWith('__'))
       .map(s => ({ name: s.name, icon: 'roundRect' }));
+    pushWhiskerKeyEntries(legendData);
   } else {
     legendData = [];
     // First scenario's concept series (Evidence first by construction in the series loop above).
@@ -822,14 +1152,7 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
         legendData.push({ name: s.name, icon: 'roundRect' });
       }
     }
-    // Whisker explanation entry (single I-beam icon, theme-neutral).
-    if (series.some(s => s.name === firstWhiskerName)) {
-      legendData.push({
-        name: firstWhiskerName,
-        icon: whiskerIconPath,
-        itemStyle: { color: echartsThemeColours().text },
-      });
-    }
+    pushWhiskerKeyEntries(legendData);
     // Other scenarios' Evidence-bar colour swatches.
     for (const s of series) {
       if (!s.name || typeof s.name !== 'string') continue;
@@ -840,6 +1163,8 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
       }
     }
   }
+  const showSingleScenarioLegend = scenarioIds.length === 1 && hasWhiskerSeries;
+  const showLegend = scenarioIds.length > 1 || showSingleScenarioLegend;
 
   return {
     animation: false,
@@ -850,7 +1175,7 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
       right: 8,
       // Keep toolbox out of the legend area (legend lives at the very top).
       // Two-line legend entries make the top band taller, so shift toolbox down.
-      top: scenarioIds.length > 1 ? 34 : 0,
+      top: scenarioIds.length > 1 ? 34 : showSingleScenarioLegend ? 26 : 0,
       feature: {
         // Switch chart type / stacking, like the official ECharts examples.
         // Ref: https://echarts.apache.org/examples/en/editor.html?c=bar-label-rotation
@@ -875,11 +1200,15 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
       // Reserve enough space for:
       // - legend (2 lines per entry)
       // - toolbox row (below legend)
-      top: scenarioIds.length > 1 ? (showToolbox ? 96 : 72) : (showToolbox ? 34 : 22),
+      top: scenarioIds.length > 1
+        ? (showToolbox ? 96 : 72)
+        : showSingleScenarioLegend
+          ? (showToolbox ? 56 : 30)
+          : (showToolbox ? 34 : 22),
       bottom: rotate ? 58 : 42,
       containLabel: true,
     },
-    legend: scenarioIds.length > 1
+    legend: showLegend
       ? {
           top: 0,
           left: 8,
@@ -898,7 +1227,8 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
           // (first-scenario Evidence, other-scenario swatches), not to pure
           // concept entries (Forecast, whisker).
           formatter: (seriesName: string) => {
-            if (seriesName === firstWhiskerName) return 'Expected result';
+            if (seriesName === firstWhiskerName) return 'Predicted';
+            if (seriesName === epiLegendName) return 'Believed actual';
             const dotIdx = seriesName.indexOf(' · ');
             if (dotIdx < 0) return seriesName;
             const prefix = seriesName.slice(0, dotIdx);
@@ -1023,9 +1353,11 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
     yAxis: {
       type: 'value',
       min: paddedMin,
-      max: paddedMax,
+      ...(yMode === 'count'
+        ? (countYMax > 0 ? { max: countYMax } : {})
+        : { max: paddedMax }),
       axisLabel: {
-        formatter: (v: number) => `${Math.round(v * 100)}%`,
+        formatter: (v: number) => yMode === 'count' ? fmtNum(v) : `${Math.round(v * 100)}%`,
         fontSize: yAxisLabelFontSizePx,
         color: echartsThemeColours().text,
       },

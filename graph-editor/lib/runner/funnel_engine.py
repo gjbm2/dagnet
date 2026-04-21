@@ -32,6 +32,12 @@ class FunnelStageBars:
 
     All list fields are length N+1 (one per stage including stage 0).
     Stage 0 is by convention bar=1.0; lo/hi are None for stage 0.
+
+    In e+f mode the blended band `lo`/`hi` is the completeness-weighted
+    variance mixture (doc 52 §3.5). `lo_epi`/`hi_epi` and `lo_pred`/`hi_pred`
+    expose the two dispersion regimes separately so that the FE can render
+    a compound whisker (outer thin line = predictive, inner thick block =
+    epistemic). They are None outside e+f mode.
     """
     bar: list[float]
     lo: list[Optional[float]]
@@ -39,6 +45,11 @@ class FunnelStageBars:
     # Striation (e+f mode only)
     bar_e: Optional[list[float]] = None
     bar_f_residual: Optional[list[float]] = None
+    # Compound-whisker bands (e+f mode only)
+    lo_epi: Optional[list[Optional[float]]] = None
+    hi_epi: Optional[list[Optional[float]]] = None
+    lo_pred: Optional[list[Optional[float]]] = None
+    hi_pred: Optional[list[Optional[float]]] = None
 
 
 # ── Closed-form stats helpers ─────────────────────────────────────────
@@ -233,8 +244,12 @@ def compute_bars_ef(
     # Bars are deterministic path product
     bar_ef = np.concatenate([[1.0], np.cumprod(p_means)])
 
-    # Bands via moment-matched Beta
-    p_draws = np.zeros((N, num_draws))
+    # Three parallel draw sets: blended (completeness-weighted mixture),
+    # epistemic-only (var = var_epi), predictive-only (var = var_pred).
+    p_draws_blend = np.zeros((N, num_draws))
+    p_draws_epi = np.zeros((N, num_draws))
+    p_draws_pred = np.zeros((N, num_draws))
+
     for j, cf_edge in enumerate(cf_per_edge):
         p_mean = float(cf_edge.get('p_mean') or 0.0)
         p_sd_pred = float(cf_edge.get('p_sd') or 0.0)
@@ -254,25 +269,34 @@ def compute_bars_ef(
         var_pred_clamped = max(var_pred, var_epi)
         var_total = completeness * var_epi + (1.0 - completeness) * var_pred_clamped
         p_sd_total = math.sqrt(var_total)
+        p_sd_epi_only = math.sqrt(var_epi)
+        p_sd_pred_only = math.sqrt(var_pred_clamped)
 
-        ab = moment_match_beta(p_mean, p_sd_total)
-        if ab is None:
-            # Degenerate posterior: deterministic draw at p_mean
-            p_draws[j, :] = p_mean
-        else:
-            alpha, beta = ab
-            p_draws[j, :] = rng.beta(alpha, beta, size=num_draws)
+        def _draw_beta(sd: float) -> np.ndarray:
+            ab = moment_match_beta(p_mean, sd)
+            if ab is None:
+                return np.full(num_draws, p_mean)
+            return rng.beta(ab[0], ab[1], size=num_draws)
 
-    reach = np.cumprod(p_draws, axis=0)
-    reach = np.vstack([np.ones((1, num_draws)), reach])
+        p_draws_blend[j, :] = _draw_beta(p_sd_total)
+        p_draws_epi[j, :] = _draw_beta(p_sd_epi_only)
+        p_draws_pred[j, :] = _draw_beta(p_sd_pred_only)
 
-    bar: list[float] = [float(bar_ef[0])]
-    lo: list[Optional[float]] = [None]
-    hi: list[Optional[float]] = [None]
-    for i in range(1, N + 1):
-        bar.append(float(bar_ef[i]))
-        lo.append(float(np.quantile(reach[i], 0.05)))
-        hi.append(float(np.quantile(reach[i], 0.95)))
+    def _reach_quantiles(draws: np.ndarray) -> tuple[list[Optional[float]], list[Optional[float]]]:
+        reach = np.cumprod(draws, axis=0)
+        reach = np.vstack([np.ones((1, num_draws)), reach])
+        lo_list: list[Optional[float]] = [None]
+        hi_list: list[Optional[float]] = [None]
+        for i in range(1, N + 1):
+            lo_list.append(float(np.quantile(reach[i], 0.05)))
+            hi_list.append(float(np.quantile(reach[i], 0.95)))
+        return lo_list, hi_list
+
+    lo, hi = _reach_quantiles(p_draws_blend)
+    lo_epi, hi_epi = _reach_quantiles(p_draws_epi)
+    lo_pred, hi_pred = _reach_quantiles(p_draws_pred)
+
+    bar: list[float] = [float(bar_ef[i]) for i in range(N + 1)]
 
     # Striation decomposition
     e_vals: list[float] = []
@@ -289,4 +313,8 @@ def compute_bars_ef(
         hi=hi,
         bar_e=e_vals,
         bar_f_residual=f_residuals,
+        lo_epi=lo_epi,
+        hi_epi=hi_epi,
+        lo_pred=lo_pred,
+        hi_pred=hi_pred,
     )
