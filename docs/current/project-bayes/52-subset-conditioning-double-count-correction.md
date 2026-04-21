@@ -3,9 +3,17 @@
 **Status**: Implemented 20-Apr-26 on branch `feature/snapshot-db-phase0`.
 Design in §§1–13; implementation recommendations in §14.
 **Created**: 20-Apr-26
-**Supersedes**: previous draft of this doc (earlier "Generalised Pro-Rata
-Correction" content; replaced after terminology and consumer-inventory
-corrections)
+**Supersedes**: the earlier "Generalised Pro-Rata Correction" version of
+this file. That earlier design shrank the aggregate prior's equivalent
+strength by `N_subset / N_total` before conjugate update. It was
+abandoned after terminology and consumer-inventory corrections. The
+current doc's sample-level `(1 − r):r` blend between conditioned and
+unconditioned draw sets is a different correction mechanism, not a
+refinement of the pro-rata shrinkage. The rewritten content was first
+drafted as sidecar `52-subset-conditioning-claude-rewrite-20Apr26.md`
+(commit `44e1f5c9`) and then replaced this file's content in commit
+`b6228a02`. Anyone reading a cached copy from before that commit is
+reading the abandoned design.
 **Related**: doc 49 (epistemic/predictive separation), doc 50 (CF
 generality gap), cohort-maturity-full-bayes, RESERVED_QUERY_TERMS_GLOSSARY
 

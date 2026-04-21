@@ -1686,6 +1686,28 @@ def run_conversion_funnel(
                 }}
             path_edges_raw.append(raw_edge)
 
+        # Override edge.evidence.k/n with the scope-correct counts that
+        # CF already computed from the cohort-scoped sweep. The scenario
+        # graph's edge.evidence reflects the FE's scenario-fetch DSL,
+        # not the analysis DSL — never use it for the e component when
+        # we have CF's scope-correct values. evidence_k/evidence_n are
+        # the same source as the [sweep_diag] Y/X lines.
+        cf_edges_for_scope = cf_responses_by_scenario.get(scenario_id)
+        if cf_edges_for_scope and len(cf_edges_for_scope) == len(path_edges_raw):
+            path_edges_raw = [dict(pe) for pe in path_edges_raw]
+            for j, ce in enumerate(cf_edges_for_scope):
+                k_scope = ce.get('evidence_k')
+                n_scope = ce.get('evidence_n')
+                if k_scope is None or n_scope is None:
+                    continue
+                pe = path_edges_raw[j]
+                p = dict(pe.get('p') or {})
+                ev = dict(p.get('evidence') or {})
+                ev['k'] = k_scope
+                ev['n'] = n_scope
+                p['evidence'] = ev
+                pe['p'] = p
+
         try:
             bars_e_data = compute_bars_e(path_edges_raw)
             if visibility_mode == 'e':
@@ -1697,22 +1719,11 @@ def run_conversion_funnel(
                 if not cf_edges or len(cf_edges) != len(path_edge_uvs):
                     # No valid CF for this scenario — leave baseline rows untouched
                     continue
-                # Completeness from per-edge CF calls is edge-local (and
-                # 1.0 when n_cohorts=0), not path-cumulative. The scenario
-                # graph's latency.completeness was written by the fetch
-                # pipeline's whole-graph CF pass for this exact query, so
-                # it reflects path-cumulative maturity per edge. Overlay
-                # it onto cf_edges before the band composition.
-                if raw_graph is not None:
-                    cf_edges = [dict(ce) for ce in cf_edges]
-                    for j, (u, v) in enumerate(path_edge_uvs):
-                        raw_edge = _find_raw_edge_in_scenario_graph(raw_graph, u, v)
-                        if not raw_edge:
-                            continue
-                        lat = (raw_edge.get('p') or {}).get('latency') or {}
-                        graph_c = lat.get('completeness')
-                        if graph_c is not None:
-                            cf_edges[j]['completeness'] = graph_c
+                # Use CF response directly. No graph overlay. Same pattern
+                # as every other analysis type: one source of truth (the
+                # scope-aware CF call), no reads from the FE-supplied
+                # scenario graph payload (which carries scenario-fetch
+                # data, not analysis-DSL data).
                 bars = compute_bars_ef(cf_edges, bars_e_data.bar)
             else:
                 continue

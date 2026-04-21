@@ -1,6 +1,6 @@
 # Test fixture ownership — shared synth graphs silently invalidate everyone's oracles
 
-**Status**: Problem statement + survey findings + design proposal (no implementation yet)
+**Status**: Problem statement + survey findings + implementation plan
 **Created**: 20-Apr-26
 **Updated**: 20-Apr-26 (added survey findings and design proposal)
 **Blocking**: doc 56 (Phase 4+), doc 50 truth-parity, bayes regression, daily-conversions baselines, v2-v3 parity. Any new oracle-based devtool.
@@ -79,53 +79,215 @@ A useful negative finding: graph JSON is the *only* shared mutable surface. Coho
 
 The oracles currently at risk from any of the five writers above are: the doc 56 RNG-parity baselines, the cohort-forecast truth-parity script, the doc 56 baseline-capture harness covering six fixtures, the v2-v3 parity pytest, and any future oracle-based devtool that consumes a shared fixture. The doc 56 RNG-parity failure on 20-Apr-26 was the first observed instance; the same failure mode is latent across every other reader on the list.
 
+## Exhaustive current consumer inventory (20-Apr-26)
+
+This inventory is based on code, not docstrings alone. It includes current tests, test helpers, parity scripts, harnesses, and Bayes tooling that either load synth graphs directly, discover them via `discover_synth_graphs`, or materialise them via `synth_gen`. Pure documentation references and tests that only use in-memory synthetic dicts are intentionally excluded from the migration surface.
+
+### Shared named fixtures currently relied on
+
+| Fixture / selection mechanism | Current consumers | Enriched requirement | Current mutation path |
+|---|---|---|---|
+| `synth-simple-abc` | `graph-editor/lib/tests/test_be_topo_pass_parity.py`, `test_temporal_regime_separation.py`, `test_conditioned_forecast_response_contract.py`, `test_v2_v3_parity.py`, `test_doc56_phase0_behaviours.py`, `test_doc31_parity.py` (preferred candidate), `test_forecast_state_cohort.py`, `bayes/tests/test_data_binding_adversarial.py`, `graph-ops/scripts/conditioned-forecast-parity-test.sh`, `asat-blind-test.sh`, `cf-topology-suite.sh`, `cf-truth-parity.sh`, `capture-doc56-baselines.sh` | Mixed, but many callers need enriched state | `graph-editor/lib/tests/conftest.py`, `bayes/test_harness.py`, `bayes/run_regression.py`, parity scripts with generate flags |
+| `synth-mirror-4step` | `graph-editor/lib/tests/test_v2_v3_parity.py`, `test_doc56_phase0_behaviours.py`, `test_funnel_contract.py`, `graph-ops/scripts/v2-v3-parity-test.sh`, `multihop-evidence-parity-test.sh`, `window-cohort-convergence-test.sh`, `chart-graph-agreement-test.sh`, `conversion-rate-blind-test.sh`, `cohort-maturity-model-parity-test.sh`, `cf-topology-suite.sh`, `cf-truth-parity.sh`, `capture-doc56-baselines.sh` | Mixed, with several parity paths expecting enriched state | Same shared writer set as above, plus `--generate` asymmetry between enriched and unenriched scripts |
+| `synth-diamond-test` | `graph-editor/src/services/__tests__/synthHashParity.test.ts`, special-case branches in `graph-ops/scripts/v2-v3-parity-test.sh` | Usually unenriched | Manual or script-driven `synth_gen`; no standard fixture resolver today |
+| `synth-diamond-context` | `bayes/tests/test_data_binding_adversarial.py`, `bayes/tests/test_worker_phase2_dump.py` | Usually unenriched | Manual `synth_gen` or indirect harness bootstrap |
+| `synth-context-solo-mixed` | `graph-ops/scripts/asat-blind-test.sh` | Unenriched | Manual pre-generation |
+| `cf-fix-linear-no-lag`, `cf-fix-branching`, `cf-fix-diamond-mixed`, `cf-fix-deep-mixed` | `graph-editor/lib/tests/test_doc56_phase0_behaviours.py`, `graph-ops/scripts/cf-truth-parity.sh`, `capture-doc56-baselines.sh`, `cf-topology-suite.sh` | Unenriched for current usage | Manual or script-driven `synth_gen` materialisation |
+| `discover_synth_graphs(data_repo)` full truth inventory | `bayes/run_regression.py`, `bayes/regression_plans.py`, `bayes/tests/test_param_recovery.py` | Varies by downstream consumer | `run_regression.py` bootstraps stale/missing entries via `synth_gen --write-files` |
+
+### Test helpers and direct test consumers
+
+| File | Current role | Fixture selection | Enriched? | Auto-bootstrap today? | Notes for migration |
+|---|---|---|---|---|---|
+| `graph-editor/lib/tests/conftest.py` | `@requires_synth` decorator and bootstrap helper | Explicit graph name passed by test | Optional | Yes, via `verify_synth_data` then `python -m bayes.synth_gen --write-files [--enrich]` | Must become a thin wrapper over fixture resolution; this is the current Python mutation hot path |
+| `graph-editor/lib/tests/test_be_topo_pass_parity.py` | Oracle parity | Hard-coded `synth-simple-abc` | Yes | Yes, via decorator | Good candidate for first migrated pytest caller |
+| `graph-editor/lib/tests/test_temporal_regime_separation.py` | Oracle parity | Hard-coded `synth-simple-abc` | Yes | Yes | Same migration path as above |
+| `graph-editor/lib/tests/test_conditioned_forecast_response_contract.py` | Oracle parity | Hard-coded `synth-simple-abc` | Yes | Yes | Same migration path as above |
+| `graph-editor/lib/tests/test_v2_v3_parity.py` | Oracle parity | `synth-simple-abc` via decorator; later reads `synth-mirror-4step` directly | Yes in practice | Partial | Important mismatch: one test file touches more than one synth fixture under one decorator |
+| `graph-editor/lib/tests/test_doc31_parity.py` | Discovery-based oracle parity | `_discover_graph_with_data()` prefers `synth-*` graphs with data | Usually yes | No | Must stop discovering mutable shared graphs ad hoc and pin explicit digests |
+| `graph-editor/lib/tests/test_doc56_phase0_behaviours.py` | Doc 56 oracle checks | Direct loads of `synth-simple-abc`, `synth-mirror-4step`, and `cf-fix-*` | Mixed | No | Reads fixed names from the data repo and drives CLI analysis; high-priority migration target |
+| `graph-editor/lib/tests/test_funnel_contract.py` | Direct fixture consumer | `synth-mirror-4step.json` | No | No | Pure file read today; should resolve a materialised root |
+| `graph-editor/lib/tests/test_forecast_state_cohort.py` | Direct enriched fixture consumer | `synth-simple-abc.json` | Yes | No | Currently expects enriched graph state without any fixture resolver |
+| `graph-editor/src/services/__tests__/synthHashParity.test.ts` | TS parity test | `synth-diamond-test.json` | No | No | TS side needs the same fixture tool contract as Python |
+| `bayes/tests/test_param_recovery.py` | Discovery-based regression test | `discover_synth_graphs(data_repo)` | No explicit enrichment | Indirect, via `run_regression.py` | Represents the "full truth inventory" consumer rather than a named single fixture |
+| `bayes/tests/test_synth_freshness.py` | Freshness/integration tests | Temp fixtures plus real `synth-simple-abc` integration checks | Mixed | No | Must be adapted to the new validator/store contract |
+| `bayes/tests/test_data_binding_adversarial.py` | Real pipeline consumer | Direct loads of `synth-simple-abc` and `synth-diamond-context` | No | No | Read-side integration coverage for FE CLI and binder |
+| `bayes/tests/test_worker_phase2_dump.py` | Real graph consumer | Direct load of `synth-diamond-context` | No | No | Another direct reader of the shared graph root |
+
+### Bayes tooling stack and oracle scripts
+
+| File | Current role | Selection mechanism | Read-only or mutating today | Shared state touched |
+|---|---|---|---|---|
+| `bayes/synth_gen.py` | Canonical materialiser today | `--graph` or discovery via truth files | Mutating | Graph files, parameter/event/context files, DB rows, `.synth-meta.json` |
+| `bayes/test_harness.py` | Harness preflight and optional bootstrap | `graph_name.startswith("synth-")` | Mutating when stale/missing | Shared graph files, DB rows, `.synth-meta.json` |
+| `bayes/run_regression.py` | Discovery + bootstrap for regression | `discover_synth_graphs(data_repo)` | Mutating when stale/missing | Shared graph files, DB rows, `.synth-meta.json` |
+| `bayes/regression_plans.py` | Discovery-based plan selection | `discover_synth_graphs(data_repo)` | Read-heavy; delegates to mutating runner | Discovery surface over full synth truth inventory |
+| `bayes/param_recovery.py` | Single-graph recovery entrypoint | `--graph synth-*` | Indirectly mutating through harness/rebuild paths | Harness logs and, via harness, shared fixture state |
+| `bayes/stress_bg_degradation.py` | Stress-only synth materialiser | Dynamic `stress-bg-*` naming | Mutating | Own truth files, graph artefacts, DB rows, meta sidecars |
+| `graph-ops/scripts/conditioned-forecast-parity-test.sh` | Oracle verification script | Default `synth-simple-abc` | Mutating when `--generate` used | Shared graph files, DB rows, meta sidecars |
+| `graph-ops/scripts/v2-v3-parity-test.sh` | Oracle verification script | Default `synth-mirror-4step` | Mutating when `--generate` used | Shared graph files, DB rows, meta sidecars |
+| `graph-ops/scripts/multihop-evidence-parity-test.sh` | Oracle verification script | Default `synth-mirror-4step` | Mutating; self-ensures enriched synth | Shared graph files, DB rows, meta sidecars |
+| `graph-ops/scripts/window-cohort-convergence-test.sh` | Oracle verification script | Default `synth-mirror-4step` plus other synth fixtures | Mutating; self-ensures enriched synth | Shared graph files, DB rows, meta sidecars |
+| `graph-ops/scripts/chart-graph-agreement-test.sh` | Oracle verification script | Default `synth-mirror-4step` | Read-only if prerequisites already satisfied | Reads shared graph root and snapshot DB |
+| `graph-ops/scripts/cohort-maturity-model-parity-test.sh` | Oracle verification script | `synth-mirror-4step` | Read-only if prerequisites already satisfied | Reads shared graph root and snapshot DB |
+| `graph-ops/scripts/conversion-rate-blind-test.sh` | Oracle verification script | `synth-mirror-4step` | Read-only if prerequisites already satisfied | Reads shared graph root and snapshot DB |
+| `graph-ops/scripts/asat-blind-test.sh` | Oracle verification script | `synth-simple-abc`, `synth-context-solo-mixed` | Read-only if prerequisites already satisfied | Reads shared graph root and snapshot DB |
+| `graph-ops/scripts/capture-doc56-baselines.sh` | Oracle baseline capture | Hard-coded synth/cf-fix fixture matrix | Mutating | Writes committed baseline artefacts under `bayes/baselines/doc56/` |
+| `graph-ops/scripts/cf-truth-parity.sh` | Oracle verification | Hard-coded synth/cf-fix fixture matrix | Read-only | Reads shared graph root and snapshot DB |
+| `graph-ops/scripts/cf-topology-suite.sh` | Wrapper over parity matrix | Hard-coded synth/cf-fix matrix | Delegating | Inherits child-script behaviour |
+| `graph-ops/scripts/hydrate.sh` | Enrichment wrapper | Graph name argument | Mutating | Rewrites graph JSON with hydrated/enriched state |
+| `scripts/run-param-recovery.sh` | Batch helper | Discovers `synth-*.truth.yaml` | Indirectly mutating via recovery/harness stack | Logs and downstream shared fixture state |
+| `scripts/hunt-phase2-pathology.sh` | Repeated harness runner | Default `synth-skip-context` | Indirectly mutating via harness stack | Harness logs and downstream shared fixture state |
+
+### Mutation hotspots that must be eliminated first
+
+The immediate shared-state writers that currently sit on verification or preflight paths are:
+
+- `graph-editor/lib/tests/conftest.py`
+- `bayes/test_harness.py`
+- `bayes/run_regression.py`
+- `graph-ops/scripts/conditioned-forecast-parity-test.sh`
+- `graph-ops/scripts/v2-v3-parity-test.sh`
+- `graph-ops/scripts/multihop-evidence-parity-test.sh`
+- `graph-ops/scripts/window-cohort-convergence-test.sh`
+
+These are the first callers that must be re-pointed at the fixture tool, because they are the places where "prepare to verify" currently means "rewrite the shared canonical fixture".
+
 ## Design proposal
 
-The principle the user stated — *each test fixture must own its own whole truth* — points unambiguously at one structural change: invert the ownership relation between fixtures and suites. Today, fixtures are canonical objects in a shared namespace and suites are second-class consumers. The proposal is to make suites the owners and fixtures their private property.
+The principle the user stated — *each test fixture must own its own whole truth* — still points at an ownership inversion, but the efficient form of that inversion is not "every suite gets a private copy of every fixture". That would indeed create a wasteful explosion of nearly-identical data. The correct move is: suites own references to immutable fixture materialisations, not private byte-for-byte copies.
 
-### Inversion of ownership
+Today the system has only one concept of identity: a mutable shared graph name such as `synth-mirror-4step`. That name is doing too much work. It is standing in for the template, the generated graph root, the DB rows, and the enrichment state. The proposal is to split those apart.
 
-Each oracle suite gets its own directory containing the entire input closure that determines its baseline: the graph JSON, the truth file used to generate it, any sidecar event YAMLs, the parameter pack reference, the snapshot parameters, and any other artefact the read path consumes before producing the number that the baseline captures. No other suite reads from this directory. No automation outside the owning suite writes to it. The fixture filenames inside an owned directory may collide with those in other owned directories — that is fine; they are no longer canonical, they are local.
+### Three-layer model
 
-The shared `synth-*` and `cf-fix-*` files in the data repo's `graphs/` directory are demoted from canonical test inputs to *templates*. They exist to seed a new suite's inputs when one is first created. After seeding, the suite owns its copy and the template's subsequent state is irrelevant to the suite.
+There are three distinct layers:
 
-### Generators must accept an output target
+1. **Template layer**. `bayes/truth/` remains the shared, mutable authoring surface. It is where developers define topologies and variants. Templates are not oracle inputs.
+2. **Materialisation layer**. A shared store holds immutable fixture materialisations keyed by digest. Each materialisation contains the whole input closure that the read path consumes: the repo-shaped graph root, the sidecar metadata, and the DB namespace containing the matching snapshot rows.
+3. **Suite manifest layer**. Each oracle suite pins the digest it expects. The suite owns that reference. Changing the pinned digest is the re-bless operation.
 
-`synth_gen` and any sibling generator must take an explicit output location from the caller. The current behaviour of always writing to a hardcoded path under the data repo's `graphs/` directory is the proximate enabler of the entire problem. Once generators write where they are told and only where they are told, suite-owned regeneration becomes a routine operation and accidental cross-suite invalidation becomes impossible by construction.
+This avoids the feared blow-up in data volume. If two suites need the same materialisation, they point at the same digest and share the same bytes and DB rows safely. New storage appears only when the actual fixture inputs differ. `enrich=true` versus `enrich=false` is one such difference, so it yields two materialisations rather than N private copies.
 
-A generator invoked without an explicit target should refuse to run, or should write to a clearly-marked scratch area that no oracle reads from. The current default — silently rewriting the canonical shared file — should be removed.
+### Ownership means owning the reference, not the bytes
+
+Under this model, "each suite owns its whole truth" means: each suite owns the right to say which immutable materialisation is its truth. It does **not** mean that each suite must duplicate all underlying files. The thing that must be private is the suite's pin, not the underlying artefacts.
+
+Two suites may safely share a fixture if and only if they share the exact same immutable digest. The unsafe case is not sharing per se; it is sharing a mutable alias.
+
+### Materialiser contract
+
+`synth_gen` and any sibling writer must stop treating the shared data repo as the implied destination. A writer must either:
+
+- accept an explicit target root and explicit DB namespace from the caller, or
+- accept a higher-level "materialise this digest" request and resolve the destination from the store.
+
+A writer invoked without an explicit target should refuse to bless anything, or write only to an unmistakable scratch location. The current default — silently rewriting the canonical shared file under the data repo — is the proximate enabler of the whole problem.
+
+The materialiser should be idempotent in the strong sense: if the requested digest already exists and validates, it returns the existing root and namespace without rewriting them.
+
+### Minimal store shape
+
+Each materialisation entry needs to record enough information to make its identity explicit and auditable. At minimum the store metadata should capture:
+
+- the fixture digest itself;
+- the source truth digest and truth name;
+- the declared variant fields, including enrichment state and any generator-affecting options that change the emitted artefacts;
+- the digests of any context or supporting files whose bytes affect FE interpretation;
+- the materialised root location;
+- the DB namespace derived for that materialisation;
+- the resulting file digests and row-count metadata needed for validation.
+
+The digest recipe must be based on the full set of inputs that determine the materialised bytes and rows, not just the truth YAML. If FE canonicalisation rules, context-definition bytes, or enrichment state can change oracle behaviour, they are part of fixture identity.
+
+### Minimal suite manifest shape
+
+Each oracle suite then needs only a small manifest that records:
+
+- the logical fixture role within the suite;
+- the required materialisation digest;
+- the expected variant label, where a human-readable name is useful;
+- the baseline artefacts captured against that digest;
+- any audit metadata needed for re-bless history.
 
 ### Defence in depth via the existing content hashes
 
-The `.synth-meta.json` sidecar already records the hashes that drift detection needs. The proposal is to make every baseline record, at capture time, the hashes of every input file in the suite's owned directory; and to make every verification run re-hash the current input files and compare them to the recorded values before running the oracle. A mismatch becomes a hard, distinct failure with a message that names the input that changed and explicitly says the failure is *not* a code regression. This eliminates the diagnostic ambiguity that costs an hour per incident today.
+The `.synth-meta.json` sidecar already contains much of the raw information needed for drift detection. Under the store model it becomes part of the materialisation metadata rather than an advisory note attached to a mutable shared file. A baseline no longer says "I expect the shared graph named X to still look roughly like it did before". It says "I expect digest Y". Verification first resolves the pinned digest, re-checks the materialised bytes and namespace against that digest, and only then runs the oracle.
 
-This check has value even after ownership is inverted. Ownership is the structural fix; hash verification is the alarm that goes off if some future automation (or operator error) violates the structural rule. The two layers protect different failure modes.
+A mismatch becomes a hard, distinct failure saying that the fixture drifted or the materialisation is incomplete, not that the code under test regressed. Ownership is the structural fix; digest verification is the alarm that fires when the structure is violated.
 
-### Retire the redundant regenerate-before-test pattern
+### Retire regenerate-the-shared-canonical-root
 
-The four parity scripts that currently call `synth_gen` as part of their own setup must stop doing so. They consume the suite-owned fixture directly, exactly as captured. Regeneration becomes a deliberate, infrequent operator action — a re-blessing of the suite — performed by a single command that updates both the suite's inputs and its baselines atomically. There should be no everyday code path that touches both at once.
+The four parity scripts that currently call `synth_gen` as part of their own setup must stop rewriting the shared canonical filenames. A verification run should ask for the exact pinned digest and either:
 
-This change has a useful side effect: the `--enrich` asymmetry resolves itself. Each suite's truth file pins whether its fixture is enriched or not, and the persisted artefact reflects that pinning. No other writer is in a position to disagree.
+- resolve the already-existing materialisation from the store, or
+- materialise that digest into the store if it is genuinely missing.
+
+What it must not do is silently overwrite the asset whose behaviour it is claiming to verify. Re-materialising the exact same digest is fine. Mutating a blessed digest in place is not.
+
+This also resolves the `--enrich` asymmetry cleanly. `enrich=true` and `enrich=false` are not temporary moods of one graph. They are distinct fixture variants with distinct digests. Suites that need one variant share that variant; suites that need the other share the other one.
 
 ### Drop the inert git-SHA freshness gate
 
-Baselines that record the data repo's git SHA as a freshness signal should stop doing so. The signal is provably useless against the failure mode it was meant to catch. The per-input content hashes from the previous section are the correct replacement and they detect exactly what the SHA was supposed to detect.
+Baselines that record the data repo's git SHA as a freshness signal should stop doing so. The signal is provably useless against the failure mode it was meant to catch. The fixture digest and its validated materialisation metadata are the correct replacements.
 
 ### The stress harness needs no changes
 
-`stress_bg_degradation.py` already writes to its own namespace and currently has no readers consuming its outputs as oracle inputs. It should continue to be allowed to use a generator with an explicit output target (per the rule above), but no structural change to its behaviour is required. If a future suite ever decides to baseline a stress-fixture output, it would adopt the ownership-inverted pattern from day one.
+`stress_bg_degradation.py` already writes to its own namespace and currently has no readers consuming its outputs as oracle inputs. It can continue unchanged for exploratory work. If a future suite wants to baseline one of its outputs, that output should be promoted into the same immutable-store model and pinned by digest from day one.
 
-### Open design questions
+### Implementation plan
 
-A handful of decisions remain open and should be settled before implementation:
+The implementation will be delivered as one canonical fixture tool and one canonical fixture store. Every oracle caller will resolve fixtures through that tool. No verification path will call `synth_gen` directly and no verification path will write to the shared canonical graph names in the data repo.
 
-The first is *where owned fixture directories live*. The natural candidates are: alongside each suite's baseline directory under `bayes/baselines/<suite>/inputs/`; alongside each script under `graph-ops/scripts/<suite>/inputs/`; or in a new top-level fixtures tree organised by suite. The choice affects discoverability and the ergonomics of the re-bless workflow but not the correctness of the fix.
+#### Phase 1 — establish fixture identity and storage
 
-The second is *how to migrate existing baselines*. Some current baselines are tied to specific past fixture content whose generation is not reproducible byte-for-byte from the current `synth_gen`. A naive migration that simply copies today's fixture into each suite's directory would silently re-bless every baseline against current content, defeating the point. The migration plan needs to distinguish suites where today's content is the intended truth (re-bless openly) from suites where the previous content was load-bearing (capture from a known-good prior state, or accept that the baseline must be regenerated and re-validated from first principles).
+Create a new fixture package under `bayes/fixtures/` and make it the single source of truth for fixture identity, materialisation, validation, and suite-manifest loading. Add a committed manifest tree at `bayes/fixtures/manifests/`. Each manifest identifies a suite, the fixture roles it depends on, the pinned digest for each role, and the baseline artefacts that were captured against those digests.
 
-The third is *the operator workflow for re-blessing*. When a suite owner deliberately changes their fixture — to expand coverage, add a new topology variant, or absorb an upstream behavioural change — the re-bless command must update inputs and baselines as a single atomic operation, fail loudly if either half does not succeed, and produce an audit record that names the operator and the reason. Re-blessing is the correct response to intentional change and the wrong response to mystery drift, so the workflow should make it slightly inconvenient by design.
+Add a local, git-ignored materialisation store at `debug/fixture-store/`. Each materialisation lives under its digest and contains three things: a repo-shaped `root/` that the FE CLI can load directly; a validation metadata file that records the full input closure and the validated output closure; and a readiness marker that distinguishes complete materialisations from interrupted builds. The store is shared across suites on one machine, but the entries are immutable once marked ready.
 
-The fourth is *whether the canonical templates stay alive at all*. If every suite owns a copy and the templates are only ever read at suite-creation time, the templates may not earn their keep. Retiring them removes one persistent source of confusion (the question "is this template the same as the suite's copy?") at the cost of a less obvious starting point for new suites. The decision can wait until the inversion is done; either answer is workable.
+Make the fixture digest versioned and deterministic. It will be computed from the truth bytes, the declared variant fields, the enrichment state, the relevant generated-supporting-definition bytes that affect FE interpretation, and an explicit materialiser-version string. Volatile timestamps and other non-semantic bookkeeping fields must be stripped or canonicalised before validation so that semantically identical fixtures do not churn just because a run happened later in the day. This is a load-bearing requirement; without it, the store cannot be reliable.
+
+Derive the snapshot DB namespace directly from the fixture digest rather than from repo and branch identity. The namespace is part of the materialisation contract. Equal digests mean equal namespace, equal rows, and safe reuse. Different digests mean distinct namespaces, even when the underlying truth files share most of their structure.
+
+Materialisation must be concurrency-safe and crash-safe. Each digest gets a lock. Builds happen in a temporary location. Validation runs before the entry is marked ready. Incomplete or failed builds are never treated as reusable fixtures. This makes the green path reliable and the failure path diagnosable.
+
+#### Phase 2 — make writers target an explicit root and namespace
+
+Teach `bayes/synth_gen.py` to write to an explicit target root and explicit DB namespace supplied by the fixture tool. The current behaviour of implicitly resolving the shared data repo remains acceptable only as a temporary manual mode; oracle tooling must stop using it entirely. `synth_gen` becomes a low-level engine, not the caller-facing orchestration surface.
+
+Move enrichment onto the same contract. The current `hydrate.sh` path hardcodes the data repo and is therefore not acceptable as the programmatic fixture interface. Add an explicit-root enrichment entrypoint and route both the fixture tool and any retained shell wrappers through it. The fixture tool must be able to materialise both unenriched and enriched variants into the store without touching the shared canonical filenames.
+
+Refactor freshness validation around materialised fixtures rather than shared graph names. `verify_synth_data` should evolve into a validator that accepts a concrete root and a concrete namespace and answers a binary question: is this materialisation complete and trustworthy for its pinned digest? It should stop trying to infer correctness from the state of a mutable shared graph in the data repo.
+
+#### Phase 3 — add one read path for callers and remove shared-root mutation from verification
+
+Add one caller-facing command for ensuring fixtures and one caller-facing command for re-blessing suites. The ensure command resolves a suite manifest, validates the pinned digests, materialises anything missing into the local store, and returns concrete root and namespace locations for the caller. The re-bless command is the only workflow allowed to replace a pinned digest or recapture baselines.
+
+Update `graph-editor/lib/tests/conftest.py`, `bayes/test_harness.py`, and every oracle shell script in `graph-ops/scripts/` to use the fixture tool rather than calling `synth_gen` directly. `requires_synth` becomes a thin adapter over fixture resolution. The harness freshness gate stops repairing shared canonical graphs and instead resolves the declared fixture variant it needs. The parity scripts stop accepting "regenerate the shared graph" as part of normal verification. Verification becomes read-only with respect to blessed fixtures and baseline metadata.
+
+The concrete first-wave callers for this phase are the current mutation hotspots: `graph-editor/lib/tests/conftest.py`, `bayes/test_harness.py`, `bayes/run_regression.py`, `graph-ops/scripts/conditioned-forecast-parity-test.sh`, `graph-ops/scripts/v2-v3-parity-test.sh`, `graph-ops/scripts/multihop-evidence-parity-test.sh`, and `graph-ops/scripts/window-cohort-convergence-test.sh`. Until these are migrated, the old failure mode remains live.
+
+The concrete second-wave callers are the direct-read oracle and parity consumers that currently assume the shared data repo is already in the right state: `graph-editor/lib/tests/test_doc31_parity.py`, `test_doc56_phase0_behaviours.py`, `test_funnel_contract.py`, `test_forecast_state_cohort.py`, `graph-editor/src/services/__tests__/synthHashParity.test.ts`, `graph-ops/scripts/chart-graph-agreement-test.sh`, `cohort-maturity-model-parity-test.sh`, `conversion-rate-blind-test.sh`, `asat-blind-test.sh`, `cf-truth-parity.sh`, and `capture-doc56-baselines.sh`.
+
+Exploratory tools and regression plans may continue to materialise fixtures on demand, but they must do so through the same store and namespace logic. This gives them the same reliability properties without requiring them to maintain suite manifests unless they also own frozen baselines.
+
+#### Phase 4 — migrate existing suites without accidental re-blessing
+
+Migrate the current oracle suites in a fixed order: doc 56 baselines first, then doc 50 truth-parity, then the v2-v3 parity harnesses, then conditioned-forecast, multihop-evidence, window-cohort-convergence, and daily-conversions. Each migration creates a committed suite manifest, imports or materialises the suite's currently blessed fixture state into the store, records the resulting digest, and rewires the suite to resolve that digest rather than a shared graph name.
+
+In file terms, the doc 56 tranche covers `graph-ops/scripts/capture-doc56-baselines.sh`, `graph-ops/scripts/cf-truth-parity.sh`, and `graph-editor/lib/tests/test_doc56_phase0_behaviours.py`. The parity tranche covers `graph-ops/scripts/v2-v3-parity-test.sh`, `graph-editor/lib/tests/test_v2_v3_parity.py`, `graph-editor/lib/tests/test_be_topo_pass_parity.py`, `graph-editor/lib/tests/test_temporal_regime_separation.py`, and `graph-editor/lib/tests/test_conditioned_forecast_response_contract.py`. The blind/analysis tranche covers `graph-ops/scripts/chart-graph-agreement-test.sh`, `cohort-maturity-model-parity-test.sh`, `conversion-rate-blind-test.sh`, `asat-blind-test.sh`, and `graph-editor/lib/tests/test_doc31_parity.py`. The regression tranche covers `bayes/run_regression.py`, `bayes/regression_plans.py`, `bayes/param_recovery.py`, and `bayes/tests/test_param_recovery.py`.
+
+Migration follows one of two explicit paths. If a suite is currently green on trusted inputs, freeze that current fixture state into the store and pin it without regenerating from truth. If a suite is already suspect or red because its shared fixture has drifted, do a deliberate full re-bless from truth and capture the new digest openly. There is no third path. What must never happen is an implicit "just regenerate today's truth and hope it is equivalent" migration.
+
+Once a suite is migrated, remove any flag or code path that rewrites the shared canonical graph during routine verification. In particular, current `--generate` style behaviour in parity scripts is retired. The only mutation path after migration is an explicit re-bless command.
+
+#### Phase 5 — harden the devtooling and lock in the invariant
+
+Add focused tests for the fixture tool itself. The critical cases are digest stability, canonicalisation of volatile fields, explicit-root materialisation, enriched-versus-unenriched variant separation, concurrent requests for the same digest, interrupted build recovery, and validation failures when a materialised root or namespace is corrupted. These tests belong with the fixture tooling, not spread indirectly across downstream suites.
+
+Add operator-visible progress output to every long-running path. The materialiser, enricher, and validator must report what digest they are working on, what stage they are in, and whether they are reusing an existing ready entry or building a new one. The output must make it obvious whether a verification run stayed read-only, reused cache, or performed a local materialisation.
+
+Finally, make the invariant enforceable in code review and CI: no oracle verifier may invoke `synth_gen` against the shared data repo, no verifier may modify a suite manifest, and every baseline metadata file must record the fixture digest it was captured against. At that point the old failure mode is structurally closed rather than socially discouraged.
 
 ## First-principles refinement (20-Apr-26)
 
@@ -151,7 +313,7 @@ Put differently: the bug is not merely "sharing". The bug is "sharing a mutable 
 
 ### Reader code must stop healing shared state
 
-A verification run should never rewrite the asset it is claiming to verify. Auto-bootstrap on read is acceptable only when it materialises into a private scratch root or an owned fixture root. Auto-bootstrap that rewrites the shared canonical root destroys oracle meaning, because the act of verification changes the subject being verified.
+A verification run should never rewrite the asset it is claiming to verify. Auto-bootstrap on read is acceptable only when it resolves the exact pinned digest from the immutable store, or materialises a missing digest into a store or scratch location without changing any already-blessed digest. Auto-bootstrap that rewrites the shared canonical root destroys oracle meaning, because the act of verification changes the subject being verified.
 
 This changes how to think about helpers like `requires_synth` and the harness freshness gate. Their job is not "make the canonical graph look right". Their job is "resolve or materialise the exact fixture variant this reader declared".
 
@@ -163,9 +325,9 @@ Private copies without private namespace would still leave one class of shared m
 
 ### Recommended model
 
-Keep `bayes/truth/` as shared templates only. Introduce a separate concept of a materialised fixture root, produced from a template plus a variant spec. That variant spec includes at minimum the enrichment state, the exact context-definition bytes, any other generator-affecting options, and the snapshot namespace to write under. Baselines then pin the digest of that full materialisation rather than the moving name of a canonical graph.
+Keep `bayes/truth/` as shared templates only. Introduce a content-addressed store of immutable fixture materialisations, each produced from a template plus a variant spec. That variant spec includes at minimum the enrichment state, the exact context-definition bytes, any other generator-affecting options, and the snapshot namespace to write under. Baselines pin the digest of that full materialisation rather than the moving name of a canonical graph.
 
-There are two workable physical implementations of this rule. The simpler one is suite-owned fixture roots. The stronger one is a content-addressed immutable store of fixture materialisations, with suites pointing at digests. Either satisfies the invariant. The important part is that fixture identity becomes explicit and immutable.
+Suite-owned private copies remain a possible fallback or migration step, but they are not the preferred end-state because they pay the full storage cost even when the materialisations are identical. The preferred end-state is shared immutable materialisations with suite-owned pins.
 
 ### Practical implication
 
@@ -175,8 +337,20 @@ That is a much narrower implementation problem than the original incident sugges
 
 ### Minimal safe rules
 
-Truth files are templates, not fixtures. A fixture is the whole materialised root plus its DB namespace. `enrich=true` and `enrich=false` are distinct variants. Readers do not mutate blessed fixtures in place. Baselines record and verify fixture digests before asserting behaviour. Re-bless is the only operation allowed to replace a fixture reference.
+Truth files are templates, not fixtures. A fixture is the whole materialised root plus its DB namespace. `enrich=true` and `enrich=false` are distinct variants. Suites own pinned fixture digests, not private copies of bytes. Readers do not mutate blessed fixtures in place. Baselines record and verify fixture digests before asserting behaviour. Re-bless is the only operation allowed to replace a fixture reference.
 
-### Refined open questions
+### Definition of done
 
-Where fixture roots live is now a secondary ergonomics decision. The primary open questions are how fixture namespaces are encoded, whether materialisations are suite-owned copies or entries in an immutable store, and how to migrate today's baselines without accidentally re-blessing them against whatever happens to be in the shared root at migration time.
+This work is done when the following statements are all true.
+
+Every oracle suite resolves fixtures through a committed suite manifest and a pinned fixture digest. No oracle suite names `synth-*` or `cf-fix-*` as mutable shared inputs.
+
+Every blessed fixture lives in the immutable local store, with a validated root and a digest-derived DB namespace. Enriched and unenriched variants are represented as distinct digests.
+
+No verification script rewrites the shared data repo as a side effect of preparing to run. Verification may populate the local store for a pinned digest, but it may not modify shared canonical graphs, suite manifests, or baseline artefacts.
+
+Every baseline metadata record stores the fixture digest it was captured against, and verification fails distinctly when the fixture digest or its validated materialisation no longer matches.
+
+Running two suites in any order on the same machine cannot invalidate one another's baselines. If both need the same fixture digest they share it safely. If they need different variants they resolve different digests and different namespaces.
+
+Re-blessing is a single explicit workflow that materialises the new digest, validates it, recaptures baselines, and updates the suite manifest atomically with an audit trail. There is no casual "generate on the side" path that can silently move a suite's truth.

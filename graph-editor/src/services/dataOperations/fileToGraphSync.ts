@@ -1383,9 +1383,43 @@ export async function getParameterFromFile(options: {
             const rangeLabel = `${filterRange?.start} to ${filterRange?.end}`;
             const paramLabel = edgeId ? `${paramId} (edge ${edgeId})` : paramId;
             aggregationFallbackError = `no data for ${isCohortQuery ? 'cohort' : 'window'} (${rangeLabel})`;
-            console.warn(`[DataOperationsService] ${paramLabel}: ${aggregationFallbackError} — falling back to raw file values`);
+            console.warn(`[DataOperationsService] ${paramLabel}: ${aggregationFallbackError} — emitting empty-evidence value (no fall-through to raw file totals)`);
             sessionLogService.addChild(logOpId, 'warning', 'AGGREGATION_NO_DATA',
-              `${paramLabel}: ${aggregationFallbackError}, using raw file values`);
+              `${paramLabel}: ${aggregationFallbackError}, emitting empty-evidence value`);
+            // Replace values[] with a single empty-evidence stub so the
+            // graph edge's evidence reflects "no observations in this
+            // scope" rather than the parameter file's full-history
+            // totals (which would be wildly out of scope and break
+            // analyses — e.g. funnel bar_e — that read edge.evidence
+            // assuming it matches the analysis DSL).
+            // Non-evidence fields (posteriors, latency, model_vars,
+            // _asat) on paramFile.data outside `values` are preserved
+            // by spreading paramFile.data and only replacing `values`.
+            const latestExisting = (paramFile.data?.values && paramFile.data.values.length > 0)
+              ? (paramFile.data.values[paramFile.data.values.length - 1] as ParameterValue)
+              : undefined;
+            const emptyValue = {
+              ...(latestExisting || {}),
+              mean: 0,
+              stdev: 0,
+              n: 0,
+              k: 0,
+              evidence: { mean: 0, stdev: 0 },
+              ...(isCohortQuery && cohortWindow ? {
+                cohort_from: normalizeToUK(cohortWindow.start),
+                cohort_to: normalizeToUK(cohortWindow.end),
+              } : {}),
+              ...(window ? {
+                window_from: normalizeToUK(window.start),
+                window_to: normalizeToUK(window.end),
+              } : {}),
+              n_daily: [],
+              k_daily: [],
+            } as ParameterValue;
+            aggregatedData = {
+              ...paramFile.data,
+              values: [emptyValue],
+            };
           } else {
             batchableToastError(`${paramId}: window aggregation failed — ${errorMsg}`);
             aggregationFallbackError = errorMsg;

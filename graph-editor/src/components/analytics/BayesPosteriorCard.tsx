@@ -51,10 +51,23 @@ export function BayesPosteriorCard({ probability, latency, t95, pathT95, theme =
     return <div style={{ padding: 10, color: 'var(--text-muted)', fontStyle: 'italic', fontSize: 12 }}>No posterior available</div>;
   }
 
+  // Doc 49 §A.9: displayed ± and HDI use PREDICTIVE (α_pred/β_pred, kappa-inflated)
+  // when available; fall back to epistemic (α/β) when kappa is absent. Mean is
+  // the same in both (the Beta ratio α/(α+β) is preserved when κ scales α and β).
+  const edgeAlphaD = hasEdgeP ? (post!.alpha_pred ?? post!.alpha) : null;
+  const edgeBetaD = hasEdgeP ? (post!.beta_pred ?? post!.beta) : null;
   const edgePMean = hasEdgeP ? post!.alpha / (post!.alpha + post!.beta) : null;
-  const edgePSd = hasEdgeP ? Math.sqrt(post!.alpha * post!.beta / ((post!.alpha + post!.beta) ** 2 * (post!.alpha + post!.beta + 1))) : null;
+  const edgePSd = (edgeAlphaD != null && edgeBetaD != null)
+    ? Math.sqrt(edgeAlphaD * edgeBetaD / ((edgeAlphaD + edgeBetaD) ** 2 * (edgeAlphaD + edgeBetaD + 1)))
+    : null;
+  const paPred = (post as any)?.cohort_alpha_pred;
+  const pbPred = (post as any)?.cohort_beta_pred;
+  const pathAlphaD = hasPathP ? (paPred ?? pa) : null;
+  const pathBetaD = hasPathP ? (pbPred ?? pb) : null;
   const pathPMean = hasPathP ? pa / (pa + pb) : null;
-  const pathPSd = hasPathP ? Math.sqrt(pa * pb / ((pa + pb) ** 2 * (pa + pb + 1))) : null;
+  const pathPSd = (pathAlphaD != null && pathBetaD != null)
+    ? Math.sqrt(pathAlphaD * pathBetaD / ((pathAlphaD + pathBetaD) ** 2 * (pathAlphaD + pathBetaD + 1)))
+    : null;
 
   // ── Convergence footer ──
   const tier = post ? computeQualityTier(post) : null;
@@ -94,17 +107,23 @@ export function BayesPosteriorCard({ probability, latency, t95, pathT95, theme =
   );
 
   // ── Build column content ──
+  // HDI matches σ: prefer predictive HDI (hdi_*_pred) when kappa is present.
+  const edgeHdiLo = post?.hdi_lower_pred ?? post?.hdi_lower;
+  const edgeHdiHi = post?.hdi_upper_pred ?? post?.hdi_upper;
+  const pathHdiLo = (post as any)?.cohort_hdi_lower_pred ?? (post as any)?.cohort_hdi_lower;
+  const pathHdiHi = (post as any)?.cohort_hdi_upper_pred ?? (post as any)?.cohort_hdi_upper;
+
   const edgeProbRows = hasEdgeP ? (
     <>
       <Row label="p" term="probability" value={`${fmtPct(edgePMean)} ± ${fmtPct(edgePSd)}`} />
-      {post!.hdi_lower != null && <Row label="HDI" term="hdi" value={`${fmtPct(post!.hdi_lower)} — ${fmtPct(post!.hdi_upper)}`} />}
+      {edgeHdiLo != null && <Row label="HDI" term="hdi" value={`${fmtPct(edgeHdiLo)} — ${fmtPct(edgeHdiHi)}`} />}
     </>
   ) : null;
 
   const pathProbRows = hasPathP ? (
     <>
       <Row label="p" term="probability" value={`${fmtPct(pathPMean)} ± ${fmtPct(pathPSd)}`} />
-      {(post as any)?.path_hdi_lower != null && <Row label="HDI" term="hdi" value={`${fmtPct((post as any).path_hdi_lower)} — ${fmtPct((post as any).path_hdi_upper)}`} />}
+      {pathHdiLo != null && <Row label="HDI" term="hdi" value={`${fmtPct(pathHdiLo)} — ${fmtPct(pathHdiHi)}`} />}
     </>
   ) : null;
 

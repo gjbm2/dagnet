@@ -1259,18 +1259,15 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
         .map(id => scenarios.find(s => s.id === id))
         .filter((s): s is Scenario => s !== undefined && s.meta?.isLive === true);
 
-      // SAFETY: If a non-empty visibleOrder yields zero live scenarios, fall back to regenerating
-      // all live scenarios rather than silently doing nothing. This can happen if the caller's
-      // visibleOrder is stale (e.g. closure captured before scenario visibility state loaded).
-      if (scenariosToProcess.length === 0) {
-        console.warn('[ScenariosContext] regenerateAllLive: visibleOrder provided but no live scenarios matched; falling back to all live scenarios', {
-          visibleOrder,
-          totalScenarios: scenarios.length,
-        });
-        scenariosToProcess = scenarios.filter(s => s.meta?.isLive);
-      }
+      // visibleOrder was provided and is non-empty. Empty result after
+      // filtering out base/current is a legitimate "user has hidden every
+      // non-current scenario" — do NOT fall back to regenerating all live
+      // scenarios. The previous fallback caused phantom regens for hidden
+      // scenarios at their stale DSLs, polluting parameter-file evidence
+      // with the wrong scope.
     } else {
-      // Fallback: all live scenarios in array order
+      // visibleOrder absent/empty as input — likely a stale closure or
+      // pre-load call. Fall back to all live scenarios.
       scenariosToProcess = scenarios.filter(s => s.meta?.isLive);
     }
     

@@ -218,6 +218,18 @@ def _lagless_rows(
         model_fan_upper = fan_upper_val
         model_bands = fan_bands
 
+    # Completeness for this fallback row set:
+    #  - Genuine lagless edge (σ ≤ 0): everything materialises instantly
+    #    once arriver count is known → completeness = 1.0.
+    #  - Lagful edge (σ > 0) routed here because fe is None (cohort frames
+    #    didn't compose for the per-scenario effective DSL): nothing has
+    #    matured for this scope yet → completeness = 0.0. Drives the
+    #    band-mixture variance to the predictive σ regime, which is the
+    #    correct treatment for "no observed maturity yet".
+    _lat_sigma = getattr(getattr(resolved, 'latency', None), 'sigma', 0.0) or 0.0
+    _is_lagful_fallback = (fe is None and _lat_sigma > 0)
+    _completeness_for_rows = 0.0 if _is_lagful_fallback else 1.0
+
     # ── Build rows (same schema as Class A, flat in τ) ──────────────
     rows: List[Dict[str, Any]] = []
     for tau in range(max_tau + 1):
@@ -243,7 +255,7 @@ def _lagless_rows(
             'boundary_date': str(sweep_to)[:10],
             'cohorts_covered_base': sum_n_cohorts,
             'cohorts_covered_projected': sum_n_cohorts,
-            'completeness': 1.0,
+            'completeness': _completeness_for_rows,
             'completeness_sd': 0.0,
             'p_infinity_mean': p_mean,
             'p_infinity_sd': p_sd,

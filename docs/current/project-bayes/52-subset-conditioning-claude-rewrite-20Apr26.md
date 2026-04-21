@@ -1,9 +1,18 @@
 # 52 — Subset Conditioning Double-Counting: First-Principles Correction
 
-**Status**: Problem statement + proposal — not yet implemented
+**Status**: **Superseded 21-Apr-26 — redundant sidecar.** This file's
+content (§§1–12) was folded into the canonical
+[52-subset-conditioning-double-count-correction.md](52-subset-conditioning-double-count-correction.md)
+in commit `b6228a02`, replacing the earlier "Generalised Pro-Rata
+Correction" design that lived there. The canonical doc adds §§13–14
+(implementation recommendations) and is marked "Implemented 20-Apr-26".
+All shipped code references `doc 52 §14.x`, which only exists in the
+canonical. This file is retained read-only for audit trail; do not edit.
+Safe to delete once the history trail is no longer needed.
 **Created**: 20-Apr-26
-**Supersedes**: previous draft of this doc (earlier content replaced after
-terminology and consumer-inventory corrections)
+**Supersedes**: the pro-rata shrinkage design in the canonical file's
+earlier content (the sample-level `(1 − r):r` blend in this doc was
+used instead).
 **Related**: doc 49 (epistemic/predictive separation), doc 50 (CF generality
 gap), cohort-maturity-full-bayes, RESERVED_QUERY_TERMS_GLOSSARY
 

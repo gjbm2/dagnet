@@ -2469,6 +2469,49 @@ def handle_conditioned_forecast(data: Dict[str, Any]) -> Dict[str, Any]:
                     completeness = last_row.get('completeness')
                     completeness_sd = last_row.get('completeness_sd')
 
+                    # Scope-observed counts at horizon. v3 sets evidence_y
+                    # (cumulative conversions, k) and evidence_x (cumulative
+                    # arrivals, n) per maturity row from the cohort-scoped
+                    # sweep — same source as the [sweep_diag] Y/X lines.
+                    # Surface as evidence_k/evidence_n so callers (e.g. the
+                    # funnel runner's compute_bars_e) can render the e
+                    # component at the user's DSL scope rather than reading
+                    # unscoped edge.evidence from the scenario graph.
+                    evidence_k = last_row.get('evidence_y')
+                    evidence_n = last_row.get('evidence_x')
+                    # Lagless / no-frame-evidence fallback: when the row
+                    # builder went through _lagless_rows with fe=None
+                    # (narrow cohort, no usable frame composition),
+                    # last_row.evidence_y/x are None. Fall back to summing
+                    # across composed_frames — for each (anchor_day) take
+                    # the latest snapshot's y/x and accumulate. Same scope,
+                    # just re-derived without the frame composition step.
+                    if (evidence_k is None or evidence_n is None) and composed_frames:
+                        latest_yx_per_anchor: Dict[Any, Dict[str, Any]] = {}
+                        for frame in composed_frames:
+                            sd = frame.get('snapshot_date', '') or frame.get('as_at_date', '')
+                            for dp in frame.get('data_points', []) or []:
+                                ad = dp.get('anchor_day')
+                                prev = latest_yx_per_anchor.get(ad)
+                                if prev is None or sd > prev.get('_sd', ''):
+                                    latest_yx_per_anchor[ad] = {
+                                        'y': dp.get('y'),
+                                        'x': dp.get('x'),
+                                        '_sd': sd,
+                                    }
+                        sum_y = 0
+                        sum_x = 0
+                        for entry in latest_yx_per_anchor.values():
+                            try:
+                                sum_y += int(entry.get('y') or 0)
+                                sum_x += int(entry.get('x') or 0)
+                            except (TypeError, ValueError):
+                                pass
+                        if evidence_k is None:
+                            evidence_k = sum_y
+                        if evidence_n is None:
+                            evidence_n = sum_x
+
                     from runner.forecast_state import _last_forensic
                     # Doc 52 §14.6: subset-conditioning provenance,
                     # stashed on the first row by v3 as a sentinel.
@@ -2485,6 +2528,8 @@ def handle_conditioned_forecast(data: Dict[str, Any]) -> Dict[str, Any]:
                         'p_sd_epistemic': p_sd_epistemic,
                         'completeness': completeness,
                         'completeness_sd': completeness_sd,
+                        'evidence_k': evidence_k,
+                        'evidence_n': evidence_n,
                         'tau_max': last_row.get('tau'),
                         'n_rows': len(maturity_rows),
                         'n_cohorts': composed.get('cohorts_analysed', 0),
