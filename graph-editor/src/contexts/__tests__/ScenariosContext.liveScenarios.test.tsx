@@ -917,7 +917,7 @@ describe('ScenariosContext - Live Scenarios', () => {
       expect((fetchOrchestratorService as any).buildPlan).toHaveBeenCalledTimes(1);
     });
 
-    it('should fall back to regenerating all live scenarios when visibleOrder yields no live matches', async () => {
+    it('should NOT regenerate any scenario when visibleOrder contains only base/current (user has hidden all user scenarios)', async () => {
       const { result } = renderHook(() => useScenariosContext(), {
         wrapper: createWrapper(),
       });
@@ -937,15 +937,16 @@ describe('ScenariosContext - Live Scenarios', () => {
 
       vi.clearAllMocks();
 
-      // Intentionally pass a non-empty visibleOrder that contains no scenario IDs.
-      // This simulates stale tab visibility state (e.g. only special layer IDs),
-      // which previously caused regenerateAllLive to do nothing.
+      // visibleOrder = ['base', 'current'] is a legitimate UI state: the user has
+      // hidden every user scenario but at least one of base/current remains visible
+      // (UI invariant — it is not possible to hide everything). regenerateAllLive
+      // must do nothing in this case, otherwise hidden scenarios would be regenerated
+      // at their stale DSLs and pollute parameter-file evidence with the wrong scope.
       await act(async () => {
         await result.current.putToBase(['base', 'current']);
       });
 
-      // Live scenario should still be regenerated via fallback.
-      expect((fetchOrchestratorService as any).buildPlan).toHaveBeenCalledTimes(1);
+      expect((fetchOrchestratorService as any).buildPlan).not.toHaveBeenCalled();
     });
   });
 

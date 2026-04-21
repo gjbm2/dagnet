@@ -833,11 +833,16 @@ def _handle_cohort_maturity_v2(data: Dict[str, Any]) -> Dict[str, Any]:
             continue
 
         # ── Determine query start/end nodes and anchor ────────────────
+        # Default path_role to 'only' to match the per_edge_results
+        # construction below (line ~908). Subjects built directly (e.g.
+        # test fixtures, legacy callers) may omit path_role when the
+        # subject is single-edge; the canonical DSL-resolved subjects
+        # always include it.
         query_from_node = None
         query_to_node = None
         anchor_node = None
         for subj in subjects:
-            role = subj.get('path_role', '')
+            role = subj.get('path_role') or 'only'
             if role in ('first', 'only'):
                 query_from_node = subj.get('from_node')
             if role in ('last', 'only'):
@@ -1396,9 +1401,12 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
             continue
 
         # ── Determine query nodes and anchor ─────────────────────────
+        # Default path_role to 'only' to match the per_edge_results
+        # construction below. See _handle_snapshot_analyze_subjects for
+        # the same pattern.
         query_from_node = query_to_node = anchor_node = None
         for subj in subjects:
-            role = subj.get('path_role', '')
+            role = subj.get('path_role') or 'only'
             if role in ('first', 'only'):
                 query_from_node = subj.get('from_node')
             if role in ('last', 'only'):
@@ -2247,9 +2255,11 @@ def handle_conditioned_forecast(data: Dict[str, Any]) -> Dict[str, Any]:
 
         for subj_group in subject_groups:
             # ── Determine query nodes and anchor ────────────────────
+            # Default path_role to 'only' to match the per_edge_results
+            # construction below.
             query_from_node = query_to_node = anchor_node = None
             for subj in subj_group:
-                role = subj.get('path_role', '')
+                role = subj.get('path_role') or 'only'
                 if role in ('first', 'only'):
                     query_from_node = subj.get('from_node')
                 if role in ('last', 'only'):

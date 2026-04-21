@@ -24,6 +24,7 @@ vi.mock('../operationRegistryService', () => ({
     register: vi.fn(),
     setLabel: vi.fn(),
     setProgress: vi.fn(),
+    setSubSteps: vi.fn(),
     complete: vi.fn(),
   },
 }));

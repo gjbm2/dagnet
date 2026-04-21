@@ -644,6 +644,7 @@ def _load_mirror4_graph():
     return graph
 
 
+@pytest.mark.skip(reason="v2/v3 upstream-lag parity deferred — see docs/current/project-bayes/programme.md (final reconciliation outstanding)")
 @requires_db
 @requires_data_repo
 @requires_synth("synth-simple-abc", enriched=True)

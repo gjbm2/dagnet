@@ -2,10 +2,10 @@
 set -euo pipefail
 
 # Only actual source code extensions (no json, html, css, md)
-EXTS=(js jsx ts tsx)
+EXTS=(js jsx ts tsx py)
 
 # Directories (by name) to exclude everywhere
-EXCL_DIRS=(node_modules dist build .git coverage .next out .turbo .cache)
+EXCL_DIRS=(node_modules dist build .git .claude coverage .next out .turbo .cache venv .venv __pycache__ .pytest_cache)
 
 # Exclude private repo dirs — unless we're running from inside one of them
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -58,9 +58,14 @@ find . \( "${exclude_dirs_expr[@]}" \) -o \( "${name_expr[@]}" \) | while IFS= r
   fi
   seen_files[$normalized]=1
   
-  # Count lines that are not blank and not comment-only
-  # This excludes: empty lines, lines with only whitespace, lines that are only // or /* */ comments
-  count=$(grep -vE '^\s*$|^\s*(//|/\*|\*|//)' "$file" | wc -l)
+  # Count lines that are not blank and not comment-only.
+  # Pick a language-appropriate comment pattern so Python `#` lines aren't
+  # counted as code.
+  case "${file,,}" in
+    *.py) comment_re='^\s*$|^\s*#' ;;
+    *)    comment_re='^\s*$|^\s*(//|/\*|\*)' ;;
+  esac
+  count=$(grep -vE "$comment_re" "$file" | wc -l)
   
   # Output: count and file path
   echo "$count $file"

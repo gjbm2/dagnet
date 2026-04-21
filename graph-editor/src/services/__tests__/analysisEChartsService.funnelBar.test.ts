@@ -246,20 +246,20 @@ describe('analysisEChartsService (funnel bar)', () => {
     // the value label above the top cap (or bar top when no bands), so every
     // stage must be in the dataset. Banded stages set hasBands=1.
     expect(whisker.data).toHaveLength(3);
-    // Data tuple: [idx, loOuter, hiOuter, loInner, hiInner, topForLabel, label, hasBands].
+    // Data tuple: [idx, loOuter, hiOuter, loInner, hiInner, topForLabel, hasBands].
     // Start stage has no bands → hasBands=0, outer is NaN.
     expect(whisker.data[0][0]).toBe(0);
-    expect(whisker.data[0][7]).toBe(0);
+    expect(whisker.data[0][6]).toBe(0);
     // Mid stage (idx=1) has bands.
     expect(whisker.data[1][0]).toBe(1);
     expect(whisker.data[1][1]).toBeCloseTo(0.40);
     expect(whisker.data[1][2]).toBeCloseTo(0.70);
-    expect(whisker.data[1][7]).toBe(1);
+    expect(whisker.data[1][6]).toBe(1);
     // End stage (idx=2) has bands.
     expect(whisker.data[2][0]).toBe(2);
     expect(whisker.data[2][1]).toBeCloseTo(0.18);
     expect(whisker.data[2][2]).toBeCloseTo(0.45);
-    expect(whisker.data[2][7]).toBe(1);
+    expect(whisker.data[2][6]).toBe(1);
   });
 
   it('emits hi/lo whisker custom series alongside f+e stacked bars', () => {
@@ -308,7 +308,7 @@ describe('analysisEChartsService (funnel bar)', () => {
     // Tuple: [idx, loOuter, hiOuter, loInner, hiInner, topForLabel, label, hasBands].
     // Start stage: no bands, hasBands=0.
     expect(whisker.data[0][0]).toBe(0);
-    expect(whisker.data[0][7]).toBe(0);
+    expect(whisker.data[0][6]).toBe(0);
     // Mid/end have bands; no epi/pred scalars, so outer falls back to blended
     // and inner is NaN (plain I-beam rendering).
     expect(whisker.data[1][0]).toBe(1);
@@ -316,11 +316,11 @@ describe('analysisEChartsService (funnel bar)', () => {
     expect(whisker.data[1][2]).toBeCloseTo(0.58);
     expect(Number.isNaN(whisker.data[1][3])).toBe(true);
     expect(Number.isNaN(whisker.data[1][4])).toBe(true);
-    expect(whisker.data[1][7]).toBe(1);
+    expect(whisker.data[1][6]).toBe(1);
     expect(whisker.data[2][0]).toBe(2);
     expect(whisker.data[2][1]).toBeCloseTo(0.14);
     expect(whisker.data[2][2]).toBeCloseTo(0.27);
-    expect(whisker.data[2][7]).toBe(1);
+    expect(whisker.data[2][6]).toBe(1);
   });
 
   it('scales F+E stack and hi/lo whiskers by n₀ in count mode', () => {
@@ -392,7 +392,7 @@ describe('analysisEChartsService (funnel bar)', () => {
     expect(whisker.data[1][0]).toBe(1);
     expect(whisker.data[1][1]).toBeCloseTo(420);
     expect(whisker.data[1][2]).toBeCloseTo(580);
-    expect(whisker.data[1][7]).toBe(1);
+    expect(whisker.data[1][6]).toBe(1);
     // End (idx=2): lo=0.14·1000=140, hi=0.27·1000=270.
     expect(whisker.data[2][0]).toBe(2);
     expect(whisker.data[2][1]).toBeCloseTo(140);
