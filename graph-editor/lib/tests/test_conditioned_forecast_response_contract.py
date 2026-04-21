@@ -158,6 +158,26 @@ class TestConditionedForecastResponseContract:
                 "and include it in the edge_results dict."
             )
 
+    def test_handler_emits_cf_mode(self):
+        """Doc 57: per-edge output carries CF provenance mode."""
+        tree = ast.parse(_load_handler_source())
+        func = _find_cf_handler(tree)
+        for d in _iter_edge_result_appends(func):
+            keys = _literal_keys(d)
+            assert "cf_mode" in keys, (
+                f"Per-edge response dict missing 'cf_mode'; keys={sorted(keys)}"
+            )
+
+    def test_handler_emits_cf_reason(self):
+        """Doc 57: per-edge output carries CF degradation reason."""
+        tree = ast.parse(_load_handler_source())
+        func = _find_cf_handler(tree)
+        for d in _iter_edge_result_appends(func):
+            keys = _literal_keys(d)
+            assert "cf_reason" in keys, (
+                f"Per-edge response dict missing 'cf_reason'; keys={sorted(keys)}"
+            )
+
 
 class TestForecastConditionedRouteRegistered:
     """The endpoint URL must exist — prior failure caught only this."""
@@ -296,7 +316,13 @@ class TestConditionedForecastFileEvidenceSupplement:
 # the evaluation horizon (sourced from the shared sweep/forecast engine).
 
 try:
-    from conftest import requires_db, requires_data_repo, requires_synth
+    from conftest import (
+        load_candidate_regimes_by_mode,
+        load_graph_json,
+        requires_db,
+        requires_data_repo,
+        requires_synth,
+    )
     _CONFTEST_AVAILABLE = True
 except ImportError:  # conftest not on sys.path when running in isolation
     _CONFTEST_AVAILABLE = False
@@ -318,55 +344,11 @@ if _CONFTEST_AVAILABLE:
 
         @staticmethod
         def _load_synth_graph():
-            """Mirror of test_v2_v3_parity._load_synth_graph to avoid
-            pulling it into a shared helper while the test tree is
-            still red."""
-            import json
-            from conftest import _resolve_data_repo_dir
-            data_repo = _resolve_data_repo_dir()
-            path = data_repo / "graphs" / "synth-simple-abc.json"
-            if not path.exists():
-                pytest.skip(f"Graph not found at {path}")
-            return json.loads(path.read_text())
+            return load_graph_json("synth-simple-abc")
 
         @staticmethod
         def _get_candidate_regimes(graph):
-            """Mirror of test_v2_v3_parity._get_candidate_regimes."""
-            import os
-            from conftest import _resolve_db_url
-            from snapshot_service import _pooled_conn  # type: ignore
-
-            if not os.environ.get("DB_CONNECTION"):
-                db_url = _resolve_db_url()
-                if db_url:
-                    os.environ["DB_CONNECTION"] = db_url
-
-            regimes: dict = {}
-            with _pooled_conn() as conn:
-                cur = conn.cursor()
-                for edge in graph.get("edges", []):
-                    p_id = edge.get("p", {}).get("id", "")
-                    if not p_id:
-                        continue
-                    cur.execute(
-                        "SELECT DISTINCT core_hash, slice_key FROM snapshots "
-                        "WHERE param_id LIKE %s AND core_hash != '' "
-                        "AND core_hash NOT LIKE 'PLACEHOLDER%%' "
-                        "AND slice_key NOT LIKE 'context%%' "
-                        "ORDER BY core_hash",
-                        (f"%{p_id}",),
-                    )
-                    rows = cur.fetchall()
-                    if rows:
-                        all_hashes = [r[0] for r in rows]
-                        primary = all_hashes[0]
-                        regimes[edge["uuid"]] = [
-                            {
-                                "core_hash": primary,
-                                "equivalent_hashes": all_hashes[1:],
-                            }
-                        ]
-            return regimes
+            return load_candidate_regimes_by_mode("synth-simple-abc")
 
         def test_p_mean_and_completeness_agree_at_horizon(self):
             """

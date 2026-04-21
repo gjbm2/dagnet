@@ -213,18 +213,30 @@ describe('CF owns completeness (doc 45) — RED', () => {
 
   // ── 1. Type-level: ConditionedForecastEdgeResult declares the fields ─
 
-  it('ConditionedForecastEdgeResult type permits completeness and completeness_sd (doc 45 §Response contract)', () => {
+  it('ConditionedForecastEdgeResult type permits CF completeness and provenance fields', () => {
     // This test compiles only if the type declares these fields
     // (even as optional). If the type is missing them, tsc fails here.
     const example: ConditionedForecastEdgeResult = {
       edge_uuid: EDGE_ID,
       p_mean: 0.6,
       p_sd: 0.04,
+      p_sd_epistemic: 0.04,
       completeness: 0.75,
       completeness_sd: 0.08,
+      conditioning: {
+        r: null,
+        m_S: null,
+        m_G: null,
+        applied: false,
+        skip_reason: 'source_query_scoped',
+      },
+      cf_mode: 'analytic_degraded',
+      cf_reason: 'query_scoped_posterior',
     };
     expect(example.completeness).toBe(0.75);
     expect(example.completeness_sd).toBe(0.08);
+    expect(example.cf_mode).toBe('analytic_degraded');
+    expect(example.cf_reason).toBe('query_scoped_posterior');
   });
 
   // ── 2. applyConditionedForecastToGraph OVERWRITES completeness ──────

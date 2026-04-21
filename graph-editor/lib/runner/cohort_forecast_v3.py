@@ -44,6 +44,28 @@ class NonLatencyResult:
     conditioned: bool = False
 
 
+def _beta_sd(alpha: float, beta: float) -> float:
+    s = alpha + beta
+    return math.sqrt(alpha * beta / (s * s * (s + 1.0)))
+
+
+def _attach_cf_row_metadata(
+    rows: List[Dict[str, Any]],
+    *,
+    conditioning: Dict[str, Any],
+    conditioned: bool,
+    cf_mode: str,
+    cf_reason: Optional[str],
+) -> List[Dict[str, Any]]:
+    """Stash per-call CF metadata on the first row sentinel."""
+    if rows:
+        rows[0]['_conditioning'] = conditioning
+        rows[0]['_conditioned'] = conditioned
+        rows[0]['_cf_mode'] = cf_mode
+        rows[0]['_cf_reason'] = cf_reason
+    return rows
+
+
 def _non_latency_rows(
     fe: Optional['FrameEvidence'],
     resolved: Any,
@@ -112,6 +134,14 @@ def _non_latency_rows(
     # Doc 52 §14.5: determine blend applicability. `m_S = sum_x` mirrors
     # the IS-path convention (sum of per-Cohort x_frozen).
     _blend_info = _compute_blend_params(resolved, sum_x)
+    if already_query_scoped:
+        _blend_info = {
+            'r': None,
+            'm_S': None,
+            'm_G': None,
+            'applied': False,
+            'skip_reason': 'source_query_scoped',
+        }
 
     if already_query_scoped:
         # Resolver's α, β already incorporates query-window evidence
@@ -192,13 +222,16 @@ def _non_latency_rows(
     # update these with query Σk, Σn (that would collapse the kappa
     # spread to the epistemic width). Fall back to epistemic when the
     # resolver did not supply predictive params (e.g. kappa absent).
-    _alpha_p = getattr(resolved, 'alpha_pred', 0.0) or 0.0
-    _beta_p = getattr(resolved, 'beta_pred', 0.0) or 0.0
-    if _alpha_p > 0 and _beta_p > 0 and (_alpha_p, _beta_p) != (alpha_prior, beta_prior):
-        _sp = _alpha_p + _beta_p
-        p_sd = math.sqrt(_alpha_p * _beta_p / (_sp * _sp * (_sp + 1)))
-    else:
+    if already_query_scoped:
         p_sd = p_sd_epistemic
+    else:
+        _alpha_p = getattr(resolved, 'alpha_pred', 0.0) or 0.0
+        _beta_p = getattr(resolved, 'beta_pred', 0.0) or 0.0
+        if _alpha_p > 0 and _beta_p > 0 and (_alpha_p, _beta_p) != (alpha_prior, beta_prior):
+            _sp = _alpha_p + _beta_p
+            p_sd = math.sqrt(_alpha_p * _beta_p / (_sp * _sp * (_sp + 1)))
+        else:
+            p_sd = p_sd_epistemic
 
     # ── Quantile bands from Beta closed form ────────────────────────
     # Match the v3 chart's default band set: [band_level, 0.5].
@@ -285,6 +318,160 @@ def _non_latency_rows(
         m_G=_blend_info.get('m_G'),
         blend_applied=bool(_blend_info.get('applied')),
         blend_skip_reason=_blend_info.get('skip_reason'),
+        conditioned=conditioned,
+    )
+
+
+def _query_scoped_latency_rows(
+    fe: Optional['FrameEvidence'],
+    resolved: Any,
+    sweep_to: str,
+    axis_tau_max: Optional[int] = None,
+    band_level: float = 0.90,
+) -> NonLatencyResult:
+    """Deterministic degraded rows for query-scoped latency edges.
+
+    The rate-side uncertainty is the closed-form Beta posterior already
+    resolved on the edge; the timing side is the deterministic latency
+    CDF from the resolved latency block. No sweep, no IS, no MC drift.
+    """
+    from scipy.stats import beta as _beta_dist
+    from .forecast_application import compute_completeness
+
+    alpha_post = max(float(getattr(resolved, 'alpha', 0.0) or 0.0), 0.0)
+    beta_post = max(float(getattr(resolved, 'beta', 0.0) or 0.0), 0.0)
+    if alpha_post <= 0 or beta_post <= 0:
+        return NonLatencyResult(
+            rows=[],
+            r=None,
+            m_S=None,
+            m_G=None,
+            blend_applied=False,
+            blend_skip_reason='source_query_scoped',
+            conditioned=False,
+        )
+
+    if fe is not None:
+        sum_y = float(sum(c.get('y_frozen', 0.0) for c in fe.cohort_list))
+        sum_x = float(sum(c.get('x_frozen', 0.0) for c in fe.cohort_list))
+        max_tau = fe.max_tau
+        tau_solid_max = fe.tau_solid_max
+        tau_future_max = fe.tau_future_max
+        evidence_by_tau = fe.evidence_by_tau
+        sum_n_cohorts = len(fe.cohort_list)
+    else:
+        sum_y = 0.0
+        sum_x = 0.0
+        max_tau = axis_tau_max if axis_tau_max else 30
+        tau_solid_max = 0
+        tau_future_max = 0
+        evidence_by_tau = {}
+        sum_n_cohorts = 0
+
+    conditioned = (fe is not None and sum_x > 0)
+    p_mean = alpha_post / (alpha_post + beta_post)
+    p_sd_epistemic = _beta_sd(alpha_post, beta_post)
+    p_sd = p_sd_epistemic
+
+    lat = resolved.latency
+    if fe is not None and sum_x > 0:
+        det_complete_num = 0.0
+        det_complete_den = 0.0
+        for cohort in fe.cohort_list:
+            weight = float(cohort.get('x_frozen', 0.0) or 0.0)
+            if weight <= 0:
+                continue
+            frontier_age = float(
+                cohort.get('tau_observed', cohort.get('tau_max', 0)) or 0.0
+            )
+            det_complete_num += weight * compute_completeness(
+                frontier_age, lat.mu, lat.sigma, lat.onset_delta_days,
+            )
+            det_complete_den += weight
+        completeness = (
+            max(0.0, min(1.0, det_complete_num / det_complete_den))
+            if det_complete_den > 0
+            else 0.0
+        )
+    else:
+        completeness = 0.0
+
+    band_levels = [0.80, 0.90, 0.95, 0.99]
+    p_band_lookup = {
+        str(int(bl * 100)): [
+            float(_beta_dist.ppf((1 - bl) / 2, alpha_post, beta_post)),
+            float(_beta_dist.ppf((1 + bl) / 2, alpha_post, beta_post)),
+        ]
+        for bl in band_levels
+    }
+    p_fan_lower = float(_beta_dist.ppf((1 - band_level) / 2, alpha_post, beta_post))
+    p_fan_upper = float(_beta_dist.ppf((1 + band_level) / 2, alpha_post, beta_post))
+
+    rows: List[Dict[str, Any]] = []
+    total_projection_x = round(sum_x, 1) if sum_x > 0 else None
+    for tau in range(max_tau + 1):
+        det_cdf_tau = max(
+            0.0,
+            min(1.0, compute_completeness(tau, lat.mu, lat.sigma, lat.onset_delta_days)),
+        )
+        projected_rate = p_mean * det_cdf_tau
+        model_bands = {
+            level: [bounds[0] * det_cdf_tau, bounds[1] * det_cdf_tau]
+            for level, bounds in p_band_lookup.items()
+        }
+        midpoint: Optional[float] = projected_rate
+        fan_lower_val: Optional[float] = p_fan_lower * det_cdf_tau
+        fan_upper_val: Optional[float] = p_fan_upper * det_cdf_tau
+        fan_bands: Optional[Dict[str, List[float]]] = model_bands
+        if tau < tau_solid_max:
+            midpoint = None
+            fan_lower_val = None
+            fan_upper_val = None
+            fan_bands = None
+
+        ev = evidence_by_tau.get(tau) if tau <= tau_future_max else None
+        ev_x = ev.get('sum_x') if ev else None
+        ev_y = ev.get('sum_y') if ev else None
+        rate = (ev_y / ev_x) if ev and ev_x else None
+        cohorts_covered = int(ev.get('n_cohorts', 0)) if ev else 0
+
+        rows.append({
+            'tau_days': tau,
+            'rate': rate,
+            'rate_pure': rate,
+            'evidence_y': ev_y,
+            'evidence_x': ev_x,
+            'projected_rate': projected_rate,
+            'forecast_y': (round(sum_x * projected_rate, 1)
+                           if midpoint is not None and sum_x > 0 else None),
+            'forecast_x': total_projection_x if midpoint is not None else None,
+            'midpoint': midpoint,
+            'fan_upper': fan_upper_val,
+            'fan_lower': fan_lower_val,
+            'fan_bands': fan_bands,
+            'model_midpoint': projected_rate,
+            'model_fan_upper': p_fan_upper * det_cdf_tau,
+            'model_fan_lower': p_fan_lower * det_cdf_tau,
+            'model_bands': model_bands,
+            'tau_solid_max': tau_solid_max,
+            'tau_future_max': tau_future_max,
+            'boundary_date': str(sweep_to)[:10],
+            'cohorts_covered_base': cohorts_covered,
+            'cohorts_covered_projected': cohorts_covered,
+            'completeness': completeness,
+            'completeness_sd': 0.0,
+            'p_infinity_mean': p_mean,
+            'p_infinity_sd': p_sd,
+            'p_infinity_sd_epistemic': p_sd_epistemic,
+        })
+
+    return NonLatencyResult(
+        rows=rows,
+        r=None,
+        m_S=None,
+        m_G=None,
+        blend_applied=False,
+        blend_skip_reason='source_query_scoped',
         conditioned=conditioned,
     )
 
@@ -598,6 +785,8 @@ def compute_cohort_maturity_rows_v3(
         XProvider,
         build_x_provider_from_graph,
         build_upstream_carrier,
+        get_cf_mode_and_reason,
+        is_cf_sweep_eligible,
     )
 
     target_edge = find_edge_by_id(graph, target_edge_id)
@@ -614,6 +803,8 @@ def compute_cohort_maturity_rows_v3(
         resolved = resolve_model_params(target_edge, scope='edge', temporal_mode=temporal)
     if not resolved:
         return []
+    _sweep_eligible = is_cf_sweep_eligible(resolved)
+    _cf_mode, _cf_reason = get_cf_mode_and_reason(resolved)
 
     # ── Non-latency edge: closed-form shortcut ─────────────────────
     # Authoritative signal is the edge's latency_parameter flag, not
@@ -641,23 +832,65 @@ def compute_cohort_maturity_rows_v3(
             axis_tau_max=axis_tau_max,
             band_level=band_level,
         )
-        _rows_out = _res.rows
-        if _rows_out:
-            # Doc 52 §14.6: stash blend provenance on first row.
-            _rows_out[0]['_conditioning'] = {
+        return _attach_cf_row_metadata(
+            _res.rows,
+            conditioning={
                 'r': _res.r,
                 'm_S': _res.m_S,
                 'm_G': _res.m_G,
                 'applied': _res.blend_applied,
                 'skip_reason': _res.blend_skip_reason,
-            }
-            # Whether observed evidence was applied to the prior.
-            # False for any edge (latency or not) where no cohort
-            # evidence was present in the query scope.
-            _rows_out[0]['_conditioned'] = _res.conditioned
-        return _rows_out
+            },
+            conditioned=_res.conditioned,
+            cf_mode=_cf_mode,
+            cf_reason=_cf_reason,
+        )
 
     lat = resolved.latency
+
+    # ── Build evidence from frames (shared with topo pass) ─────────
+    fe = build_cohort_evidence_from_frames(
+        frames=frames,
+        target_edge=target_edge,
+        anchor_from=anchor_from,
+        anchor_to=anchor_to,
+        sweep_to=sweep_to,
+        is_window=is_window,
+        resolved=resolved,
+        axis_tau_max=axis_tau_max,
+    )
+    if not _sweep_eligible:
+        resolved_degraded = resolved
+        if not is_window:
+            try:
+                _path_resolved = resolve_model_params(
+                    target_edge, scope='path', temporal_mode='cohort',
+                )
+                if _path_resolved is not None:
+                    resolved_degraded = _path_resolved
+            except Exception as e:
+                print(f"[v3] WARNING: degraded path resolve failed: {e}")
+        _cf_mode, _cf_reason = get_cf_mode_and_reason(resolved_degraded)
+        _res = _query_scoped_latency_rows(
+            fe=fe,
+            resolved=resolved_degraded,
+            sweep_to=sweep_to,
+            axis_tau_max=axis_tau_max,
+            band_level=band_level,
+        )
+        return _attach_cf_row_metadata(
+            _res.rows,
+            conditioning={
+                'r': _res.r,
+                'm_S': _res.m_S,
+                'm_G': _res.m_G,
+                'applied': _res.blend_applied,
+                'skip_reason': _res.blend_skip_reason,
+            },
+            conditioned=_res.conditioned,
+            cf_mode=_cf_mode,
+            cf_reason=_cf_reason,
+        )
 
     # ── Build x_provider for upstream params (cohort mode) ──────────
     # Prefer handler-constructed override (v2 parity), fall back to
@@ -671,17 +904,6 @@ def compute_cohort_maturity_rows_v3(
         except Exception as e:
             print(f"[v3] WARNING: x_provider build failed: {e}")
 
-    # ── Build evidence from frames (shared with topo pass) ─────────
-    fe = build_cohort_evidence_from_frames(
-        frames=frames,
-        target_edge=target_edge,
-        anchor_from=anchor_from,
-        anchor_to=anchor_to,
-        sweep_to=sweep_to,
-        is_window=is_window,
-        resolved=resolved,
-        axis_tau_max=axis_tau_max,
-    )
     if fe is None:
         # No cohort evidence to condition on. Zero-evidence
         # Beta-Binomial update degenerates to the prior — use the
@@ -702,17 +924,19 @@ def compute_cohort_maturity_rows_v3(
             axis_tau_max=axis_tau_max,
             band_level=band_level,
         )
-        _rows_out = _res.rows
-        if _rows_out:
-            _rows_out[0]['_conditioning'] = {
+        return _attach_cf_row_metadata(
+            _res.rows,
+            conditioning={
                 'r': _res.r,
                 'm_S': _res.m_S,
                 'm_G': _res.m_G,
                 'applied': _res.blend_applied,
                 'skip_reason': _res.blend_skip_reason,
-            }
-            _rows_out[0]['_conditioned'] = _res.conditioned
-        return _rows_out
+            },
+            conditioned=_res.conditioned,
+            cf_mode=_cf_mode,
+            cf_reason=_cf_reason,
+        )
 
     engine_cohorts = fe.engine_cohorts
     cohort_list = fe.cohort_list
@@ -977,21 +1201,16 @@ def compute_cohort_maturity_rows_v3(
             'p_infinity_sd_epistemic': _p_infinity_sd_epistemic,
         })
 
-    # Doc 52 §14.6: stash subset-conditioning provenance on the first
-    # row as a sentinel (r is per-call, not per-τ). CF handler extracts
-    # and moves it into the per-edge `conditioning` response block.
-    if rows:
-        rows[0]['_conditioning'] = {
+    return _attach_cf_row_metadata(
+        rows,
+        conditioning={
             'r': sweep.r,
             'm_S': sweep.m_S,
             'm_G': sweep.m_G,
             'applied': sweep.blend_applied,
             'skip_reason': sweep.blend_skip_reason,
-        }
-        # Whether observed evidence was actually applied to produce
-        # this result. True when at least one cohort had non-zero
-        # observations that moved the posterior. False → the rows
-        # are effectively the prior (no IS reweighting).
-        rows[0]['_conditioned'] = bool(sweep.n_cohorts_conditioned)
-
-    return rows
+        },
+        conditioned=bool(sweep.n_cohorts_conditioned),
+        cf_mode=_cf_mode,
+        cf_reason=_cf_reason,
+    )

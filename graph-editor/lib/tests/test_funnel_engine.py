@@ -207,13 +207,29 @@ class TestComputeBarsF:
         for i in range(1, 3):
             assert bars.lo[i] <= bars.bar[i] <= bars.hi[i]
 
-    def test_uses_alpha_pred_when_present(self):
-        """Predictive α/β should be preferred over epistemic (doc 49)."""
-        # Epistemic sharp (α=100, β=0) would give bar≈1.0; predictive wide (α=5, β=5)
-        # gives ≈0.5. If predictive is preferred, median should be near 0.5.
-        edges = [_make_edge(alpha=100, beta=0.01, alpha_pred=5, beta_pred=5)]
+    def test_bands_use_alpha_pred_when_present(self):
+        """Predictive α/β drive the bands; bar stays on the epistemic mean.
+
+        Contract (funnel_engine.py:179-193): the f-mode bar is the
+        deterministic cumprod of per-edge epistemic means (α/(α+β)),
+        unaffected by predictive skew. The lo/hi bands are quantiles of
+        MC path draws that prefer α_pred/β_pred when present (doc 49).
+
+        Fixture: epistemic Beta(80, 20) is tight around 0.8 (sd ≈ 0.04);
+        predictive Beta(5, 5) is wide around 0.5 (sd ≈ 0.15). If bands
+        were erroneously drawn from the epistemic Beta, they would sit
+        inside [0.73, 0.87]; if bar were erroneously built from predictive,
+        it would sit near 0.5.
+        """
+        edges = [_make_edge(alpha=80, beta=20, alpha_pred=5, beta_pred=5)]
         bars = compute_bars_f(edges, num_draws=5000)
-        assert bars.bar[1] == pytest.approx(0.5, abs=0.05)
+        # Bar uses epistemic α/β mean.
+        assert bars.bar[1] == pytest.approx(0.8, abs=0.02)
+        # Bands use predictive α/β: centred near 0.5, wide enough to span
+        # well beyond the epistemic Beta's [0.73, 0.87] 90 % CI.
+        assert bars.lo[1] < 0.4
+        assert bars.hi[1] > 0.6
+        assert (bars.hi[1] - bars.lo[1]) > 0.3
 
 
 class TestComputeBarsEF:

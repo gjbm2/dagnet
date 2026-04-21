@@ -44,6 +44,7 @@ All docs are in `docs/current/codebase/` unless a full path is given.
 - **STATS_SUBSYSTEMS.md** **(full — read FIRST)** — disambiguates the five distinct processing subsystems (Bayes compiler / FE topo pass / BE topo pass / BE CF pass / BE analysis runners); field authority; pipeline sequence; common confusions. Designs that assume any particular pass has run, or propose new "passes", MUST start here.
 - FE_BE_STATS_PARALLELISM.md **(full)** — FE↔BE topo orchestration detail, CF race mechanics, parity comparison
 - STATISTICAL_DOMAIN_SUMMARY.md **(full)** — underlying statistical models (shifted lognormal, Beta/Binomial, completeness, partial pooling)
+- COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md **(full if touching `cohort()` or multi-hop `window()` analysis semantics)** — fixed-`x` versus anchor-to-`x` denominator behaviour; `x->end` subject progression; single-hop versus multi-hop meaning; gross-fitted evidence/model-var admission rules
 - PROBABILITY_BLENDING.md **(skim)** — blending cohort-mode latency edge probabilities
 - `docs/current/project-bayes/INDEX.md` **(ref)** — canonical Bayes compiler doc index
 - `docs/current/project-bayes/32-posterior-predictive-scoring-design.md` **(ref if touching LOO/ELPD)** — per-edge model adequacy scoring, analytic null comparison

@@ -10,6 +10,8 @@ because both use the same evidence pipeline. MC-derived fields
 (midpoint, fan_bands) have tolerance for sampling variance.
 """
 
+import copy
+import functools
 import json
 import os
 import sys
@@ -24,16 +26,16 @@ load_dotenv(os.path.join(os.path.dirname(__file__), '../../.env.local'))
 import pytest
 
 # Shared fixtures from conftest
-from conftest import requires_db, requires_data_repo, requires_synth, _resolve_data_repo_dir
+from conftest import (
+    load_graph_json,
+    requires_db,
+    requires_data_repo,
+    requires_synth,
+)
 
-_DATA_REPO_DIR = _resolve_data_repo_dir()
 
-
-def _load_synth_graph():
-    path = _DATA_REPO_DIR / 'graphs' / 'synth-simple-abc.json'
-    if not path.exists():
-        pytest.skip(f'Graph not found at {path}')
-    return json.loads(path.read_text())
+def _load_graph(graph_name: str):
+    return load_graph_json(graph_name)
 
 
 def _run_handler(handler_func, graph, analytics_dsl, effective_query_dsl, candidate_regimes):
@@ -60,7 +62,8 @@ def _run_handler(handler_func, graph, analytics_dsl, effective_query_dsl, candid
     return []
 
 
-def _get_candidate_regimes(graph):
+@functools.lru_cache(maxsize=None)
+def _get_candidate_regimes_cached(graph_name: str):
     """Build candidate regimes from DB for each edge.
 
     Finds the bare (uncontexted) window and cohort core_hashes for
@@ -73,6 +76,8 @@ def _get_candidate_regimes(graph):
     alphabetically as primary — which may be the wrong temporal mode
     (e.g. window hash for a cohort query), causing 0 rows returned.
     """
+    graph = _load_graph(graph_name)
+
     from snapshot_service import _pooled_conn
     regimes = {}
     with _pooled_conn() as conn:
@@ -104,24 +109,60 @@ def _get_candidate_regimes(graph):
     return regimes
 
 
+def _get_candidate_regimes(graph_name: str):
+    return copy.deepcopy(_get_candidate_regimes_cached(graph_name))
+
+
+@functools.lru_cache(maxsize=None)
+def _run_handler_cached(handler_name, graph_name, analytics_dsl, effective_query_dsl):
+    from api_handlers import _handle_cohort_maturity_v2, _handle_cohort_maturity_v3
+
+    handlers = {
+        'v2': _handle_cohort_maturity_v2,
+        'v3': _handle_cohort_maturity_v3,
+    }
+    return _run_handler(
+        handlers[handler_name],
+        _load_graph(graph_name),
+        analytics_dsl,
+        effective_query_dsl,
+        _get_candidate_regimes(graph_name),
+    )
+
+
+def _run_pair(graph_name: str, analytics_dsl: str, effective_query_dsl: str):
+    return (
+        copy.deepcopy(
+            _run_handler_cached('v2', graph_name, analytics_dsl, effective_query_dsl)
+        ),
+        copy.deepcopy(
+            _run_handler_cached('v3', graph_name, analytics_dsl, effective_query_dsl)
+        ),
+    )
+
+
 @requires_db
 @requires_data_repo
-@requires_synth("synth-simple-abc", enriched=True)
+@requires_synth("synth-simple-abc", bayesian=True)
 class TestV2V3Parity:
-    """v3 maturity rows match v2 for single-edge on enriched synth graph."""
+    """v3 maturity rows match v2 for single-edge on bayesian-enriched synth graph.
+
+    `bayesian=True` is required: without MCMC-fitted posteriors the edges
+    resolve as `analytic` (query-scoped), which under doc 57 (P2.19)
+    routes v3 through the degraded analytic path and diverges from v2's
+    full-sweep output by design. Bayesian sources carry an aggregate
+    prior (`alpha_beta_query_scoped=False`) so both paths run the CF
+    sweep and parity is apples-to-apples.
+    """
+
+    GRAPH_NAME = 'synth-simple-abc'
 
     def test_window_mode_parity(self):
         """Window-mode v3 rows match v2 for A→B edge."""
-        from api_handlers import _handle_cohort_maturity_v2, _handle_cohort_maturity_v3
-
-        graph = _load_synth_graph()
-        regimes = _get_candidate_regimes(graph)
-
         dsl = 'from(simple-a).to(simple-b)'
         query_dsl = 'window(-90d:)'
 
-        v2_rows = _run_handler(_handle_cohort_maturity_v2, graph, dsl, query_dsl, regimes)
-        v3_rows = _run_handler(_handle_cohort_maturity_v3, graph, dsl, query_dsl, regimes)
+        v2_rows, v3_rows = _run_pair(self.GRAPH_NAME, dsl, query_dsl)
 
         assert len(v2_rows) > 0, 'v2 returned no rows'
         assert len(v3_rows) > 0, 'v3 returned no rows'
@@ -176,16 +217,10 @@ class TestV2V3Parity:
 
     def test_cohort_mode_parity(self):
         """Cohort-mode v3 rows match v2 for B→C edge (upstream-aware)."""
-        from api_handlers import _handle_cohort_maturity_v2, _handle_cohort_maturity_v3
-
-        graph = _load_synth_graph()
-        regimes = _get_candidate_regimes(graph)
-
         dsl = 'from(simple-b).to(simple-c)'
         query_dsl = 'cohort(-90d:)'
 
-        v2_rows = _run_handler(_handle_cohort_maturity_v2, graph, dsl, query_dsl, regimes)
-        v3_rows = _run_handler(_handle_cohort_maturity_v3, graph, dsl, query_dsl, regimes)
+        v2_rows, v3_rows = _run_pair(self.GRAPH_NAME, dsl, query_dsl)
 
         assert len(v2_rows) > 0, 'v2 returned no rows'
         assert len(v3_rows) > 0, 'v3 returned no rows'
@@ -220,17 +255,11 @@ class TestV2V3Parity:
 
     def test_multi_hop_acceptance(self):
         """v3 produces valid rows for multi-hop A→C (via B) span."""
-        from api_handlers import _handle_cohort_maturity_v2, _handle_cohort_maturity_v3
-
-        graph = _load_synth_graph()
-        regimes = _get_candidate_regimes(graph)
-
         # Multi-hop: from anchor to final node, spanning two edges
         dsl = 'from(simple-a).to(simple-c)'
         query_dsl = 'cohort(-90d:)'
 
-        v2_rows = _run_handler(_handle_cohort_maturity_v2, graph, dsl, query_dsl, regimes)
-        v3_rows = _run_handler(_handle_cohort_maturity_v3, graph, dsl, query_dsl, regimes)
+        v2_rows, v3_rows = _run_pair(self.GRAPH_NAME, dsl, query_dsl)
 
         print(f"\nMulti-hop A→C: v2={len(v2_rows)} rows, v3={len(v3_rows)} rows")
 
@@ -256,9 +285,13 @@ class TestV2V3Parity:
 
         # Multi-hop midpoints should be lower than single-edge
         # (path probability = p_AB × p_BC < min(p_AB, p_BC))
-        single_v3 = _run_handler(
-            _handle_cohort_maturity_v3, graph,
-            'from(simple-a).to(simple-b)', query_dsl, regimes,
+        single_v3 = copy.deepcopy(
+            _run_handler_cached(
+                'v3',
+                self.GRAPH_NAME,
+                'from(simple-a).to(simple-b)',
+                query_dsl,
+            )
         )
         if single_v3:
             single_forecast = [r for r in single_v3 if r.get('midpoint') is not None]
@@ -291,14 +324,10 @@ class TestV2V3Parity:
 
     def test_v3_row_schema_complete(self):
         """v3 rows have all fields the FE chart builder needs."""
-        from api_handlers import _handle_cohort_maturity_v3
-
-        graph = _load_synth_graph()
-        regimes = _get_candidate_regimes(graph)
-
-        rows = _run_handler(
-            _handle_cohort_maturity_v3, graph,
-            'from(simple-a).to(simple-b)', 'window(-90d:)', regimes,
+        _, rows = _run_pair(
+            self.GRAPH_NAME,
+            'from(simple-a).to(simple-b)',
+            'window(-90d:)',
         )
         assert len(rows) > 0
 
@@ -340,16 +369,10 @@ class TestV2V3Parity:
         The test prints a full comparison table so the IS conditioning
         gap is immediately visible.
         """
-        from api_handlers import _handle_cohort_maturity_v2, _handle_cohort_maturity_v3
-
-        graph = _load_synth_graph()
-        regimes = _get_candidate_regimes(graph)
-
         dsl = 'from(simple-a).to(simple-b)'
         query_dsl = 'window(-90d:)'
 
-        v2_rows = _run_handler(_handle_cohort_maturity_v2, graph, dsl, query_dsl, regimes)
-        v3_rows = _run_handler(_handle_cohort_maturity_v3, graph, dsl, query_dsl, regimes)
+        v2_rows, v3_rows = _run_pair(self.GRAPH_NAME, dsl, query_dsl)
 
         assert len(v2_rows) > 0, 'v2 returned no rows'
         assert len(v3_rows) > 0, 'v3 returned no rows'
@@ -391,7 +414,7 @@ class TestV2V3Parity:
 
 @requires_db
 @requires_data_repo
-@requires_synth("synth-simple-abc", enriched=True)
+@requires_synth("synth-simple-abc", bayesian=True)
 class TestRowLevelParity:
     """v3 rows must match v2 field-by-field on every τ.
 
@@ -402,14 +425,10 @@ class TestRowLevelParity:
     If this test is red, the chart looks wrong. Period.
     """
 
+    GRAPH_NAME = 'synth-simple-abc'
+
     def _run_both(self, dsl, query_dsl):
-        from api_handlers import _handle_cohort_maturity_v2, _handle_cohort_maturity_v3
-
-        graph = _load_synth_graph()
-        regimes = _get_candidate_regimes(graph)
-
-        v2_rows = _run_handler(_handle_cohort_maturity_v2, graph, dsl, query_dsl, regimes)
-        v3_rows = _run_handler(_handle_cohort_maturity_v3, graph, dsl, query_dsl, regimes)
+        v2_rows, v3_rows = _run_pair(self.GRAPH_NAME, dsl, query_dsl)
 
         assert len(v2_rows) > 0, 'v2 returned no rows'
         assert len(v3_rows) > 0, 'v3 returned no rows'
@@ -631,10 +650,7 @@ class TestRowLevelParity:
 
 def _load_mirror4_graph():
     """Load the enriched synth-mirror-4step graph (A→B→C→D chain)."""
-    path = _DATA_REPO_DIR / 'graphs' / 'synth-mirror-4step.json'
-    if not path.exists():
-        pytest.skip(f'Graph not found at {path}')
-    graph = json.loads(path.read_text())
+    graph = _load_graph('synth-mirror-4step')
     has_bayes = any(
         any(m.get('source') == 'bayesian' for m in (e.get('p', {}).get('model_vars', [])))
         for e in graph.get('edges', [])
@@ -661,13 +677,7 @@ class TestUpstreamLagParity:
     """
 
     def _run_both_m4(self, dsl, query_dsl):
-        from api_handlers import _handle_cohort_maturity_v2, _handle_cohort_maturity_v3
-
-        graph = _load_mirror4_graph()
-        regimes = _get_candidate_regimes(graph)
-
-        v2_rows = _run_handler(_handle_cohort_maturity_v2, graph, dsl, query_dsl, regimes)
-        v3_rows = _run_handler(_handle_cohort_maturity_v3, graph, dsl, query_dsl, regimes)
+        v2_rows, v3_rows = _run_pair('synth-mirror-4step', dsl, query_dsl)
 
         assert len(v2_rows) > 0, 'v2 returned no rows'
         assert len(v3_rows) > 0, 'v3 returned no rows'
@@ -780,10 +790,7 @@ class TestUpstreamLagParity:
 
 
 def _load_prod_graph():
-    path = _DATA_REPO_DIR / 'graphs' / 'bayes-test-gm-rebuild.json'
-    if not path.exists():
-        pytest.skip(f'Prod graph not found at {path}')
-    return json.loads(path.read_text())
+    return _load_graph('bayes-test-gm-rebuild')
 
 
 @requires_db
@@ -799,13 +806,7 @@ class TestProdGraphCohortParity:
     """
 
     def _run_both_prod(self, dsl, query_dsl):
-        from api_handlers import _handle_cohort_maturity_v2, _handle_cohort_maturity_v3
-
-        graph = _load_prod_graph()
-        regimes = _get_candidate_regimes(graph)
-
-        v2_rows = _run_handler(_handle_cohort_maturity_v2, graph, dsl, query_dsl, regimes)
-        v3_rows = _run_handler(_handle_cohort_maturity_v3, graph, dsl, query_dsl, regimes)
+        v2_rows, v3_rows = _run_pair('bayes-test-gm-rebuild', dsl, query_dsl)
 
         assert len(v2_rows) > 0, 'v2 returned no rows'
         assert len(v3_rows) > 0, 'v3 returned no rows'

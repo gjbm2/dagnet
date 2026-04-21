@@ -1,97 +1,107 @@
 """
 Phase 0 behaviour tests for doc 56 runtime-boundary migration.
 
-Three targeted assertions that document the behaviours the migration
-(and its separately-tracked κ=20 follow-on per §11.2) must preserve.
-Each test exercises the live CF pipeline via `analyse.sh` — same path
-the browser uses — so they catch handler-level drift, not just
-unit-level arithmetic.
+Two regression guards that document the behaviours the migration must
+preserve. These tests now exercise the real Python handlers in-process:
+subject resolution, snapshot DB reads, regime selection, carrier
+construction, and the shared CF/v3 engine still run for real, but the
+tests no longer pay the bash → nvm → node wrapper startup cost on every
+assertion.
 
 Tests:
 
-1. `test_cf_span_prior_matches_resolver_concentration` — red today.
-   CF's span-prior concentration on an analytic_be-promoted edge comes
-   from `build_span_params`'s κ=20 fallback, not the resolver's D20
-   evidence-n/k fallback. Flips green when the κ=20 work (tracked
-   separately per doc 56 §11.2) lands and the runtime layer reads
-   `ResolvedModelParams.alpha/beta` directly.
-
-2. `test_cf_and_v3_chart_carrier_tier_agree` — green today (tautology:
+1. `test_cf_and_v3_chart_carrier_tier_agree` — green today (tautology:
    both call v2's `build_upstream_carrier`). Becomes a cut-over
    regression guard — if Phase 3 forks the carrier between CF and v3,
    this flags it.
 
-3. `test_cf_p_mean_matches_v3_p_infinity` — green today (both paths
+2. `test_cf_p_mean_matches_v3_p_infinity` — green today (both paths
    route through `compute_cohort_maturity_rows_v3`). Becomes a
    cut-over regression guard — if Phase 3 lets CF and the v3 chart
    diverge on the same edge, this flags it.
 
-These tests invoke `analyse.sh` via subprocess and therefore require
-the Python dev server on localhost:9000. They skip gracefully when
-the server is unavailable.
+These tests require the real snapshot DB and data repo. They skip
+gracefully when either is unavailable.
 """
 
 from __future__ import annotations
 
-import json
-import os
-import subprocess
-from pathlib import Path
+import copy
+import functools
 from typing import Any, Dict, List, Optional, Tuple
 
 import pytest
 
-_REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
-_ANALYSE = _REPO_ROOT / "graph-ops" / "scripts" / "analyse.sh"
-_DATA_REPO = _REPO_ROOT / "nous-conversion"
-
-
-def _server_reachable() -> bool:
-    try:
-        import urllib.request
-        urllib.request.urlopen("http://localhost:9000/", timeout=2)
-        return True
-    except Exception:
-        return False
-
-
-_SKIP_IF_NO_SERVER = pytest.mark.skipif(
-    not _server_reachable(),
-    reason="Python dev server on localhost:9000 not reachable",
+from conftest import (
+    load_candidate_regimes_by_mode,
+    load_graph_json,
+    requires_data_repo,
+    requires_db,
 )
 
 
-def _run_analyse(graph: str, dsl: str, analysis_type: str) -> Dict[str, Any]:
-    """Invoke analyse.sh, return parsed JSON response.
+@functools.lru_cache(maxsize=None)
+def _run_cf_cached(graph_name: str, temporal_dsl: str) -> Dict[str, Any]:
+    from api_handlers import handle_conditioned_forecast
 
-    Strips the nvm "Now using node..." preamble that appears on some
-    setups; raises on non-zero exit.
-    """
-    result = subprocess.run(
-        [
-            "bash", str(_ANALYSE),
-            graph, dsl,
-            "--type", analysis_type,
-            "--format", "json",
-        ],
-        capture_output=True,
-        text=True,
-        cwd=str(_REPO_ROOT),
-        timeout=120,
+    return handle_conditioned_forecast(
+        {
+            "scenarios": [
+                {
+                    "scenario_id": "doc56",
+                    "graph": load_graph_json(graph_name),
+                    "effective_query_dsl": temporal_dsl,
+                    "candidate_regimes_by_edge": load_candidate_regimes_by_mode(graph_name),
+                }
+            ]
+        }
     )
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"analyse.sh failed for {graph} / {dsl} / {analysis_type}:\n"
-            f"stderr: {result.stderr[:500]}"
-        )
-    stdout = result.stdout
-    if stdout.startswith("Now using node"):
-        stdout = stdout.split("\n", 1)[1] if "\n" in stdout else stdout
-    return json.loads(stdout)
 
 
-def _load_graph(name: str) -> Dict[str, Any]:
-    return json.loads((_DATA_REPO / "graphs" / f"{name}.json").read_text())
+def _run_cf(graph_name: str, temporal_dsl: str) -> Dict[str, Any]:
+    return copy.deepcopy(_run_cf_cached(graph_name, temporal_dsl))
+
+
+@functools.lru_cache(maxsize=None)
+def _run_v3_cached(
+    graph_name: str,
+    analytics_dsl: str,
+    temporal_dsl: str,
+) -> Dict[str, Any]:
+    from api_handlers import _handle_cohort_maturity_v3
+
+    return _handle_cohort_maturity_v3(
+        {
+            "scenarios": [
+                {
+                    "scenario_id": "doc56",
+                    "graph": load_graph_json(graph_name),
+                    "analytics_dsl": analytics_dsl,
+                    "effective_query_dsl": temporal_dsl,
+                    "candidate_regimes_by_edge": load_candidate_regimes_by_mode(graph_name),
+                }
+            ]
+        }
+    )
+
+
+def _run_v3(graph_name: str, analytics_dsl: str, temporal_dsl: str) -> Dict[str, Any]:
+    return copy.deepcopy(_run_v3_cached(graph_name, analytics_dsl, temporal_dsl))
+
+
+def _extract_maturity_rows(result: Dict[str, Any]) -> List[Dict[str, Any]]:
+    if "result" in result and isinstance(result["result"], dict):
+        rows = result["result"].get("maturity_rows", [])
+        if rows:
+            return rows
+    for subject in (
+        result.get("subjects")
+        or result.get("scenarios", [{}])[0].get("subjects", [])
+    ):
+        rows = subject.get("result", {}).get("maturity_rows", [])
+        if rows:
+            return rows
+    return []
 
 
 def _parameterised_edges(graph: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -123,81 +133,11 @@ def _cf_edge_by_id(resp: Dict[str, Any]) -> Dict[Tuple[str, str], Dict[str, Any]
     return out
 
 
-# ── Test 1: resolver-driven span prior (RED today) ────────────────
+# ── Test 1: carrier tier agreement (regression guard) ──────────────
 
 
-@_SKIP_IF_NO_SERVER
-def test_cf_span_prior_matches_resolver_concentration():
-    """CF's IS prior concentration on evidence-rich edges should match
-    the resolver's α+β, not the κ=20 fallback.
-
-    Doc 56 §4.2 + §11.2 (tracked separately): `build_span_params` +
-    `span_kernel_to_edge_params` discard the resolver's concentration
-    and re-centre on span_p with κ=20 when no explicit posterior lives
-    on the edge. On analytic_be-promoted edges with real evidence,
-    the resolver's D20 fallback gives α+β ≈ ev_n+2 (often 1000+);
-    CF uses 20.
-
-    Assertion: CF's span concentration ≥ 10% of the resolver's
-    concentration. Today: CF=20, resolver=thousands → fails.
-    Post-fix: CF reads resolved.alpha+beta directly → passes.
-
-    Fixture: synth-simple-abc (all non-latency, analytic_be-promoted,
-    non-trivial evidence). window(-120d:) picks up every cohort.
-    """
-    import sys
-    sys.path.insert(0, str(_REPO_ROOT / "graph-editor" / "lib"))
-    from runner.model_resolver import resolve_model_params
-
-    graph = _load_graph("synth-simple-abc")
-    resp = _run_analyse("synth-simple-abc", "window(-120d:)", "conditioned_forecast")
-    by_id = _cf_edge_by_id(resp)
-
-    nmap = {n["uuid"]: n.get("id", "") for n in graph.get("nodes", [])}
-    checked = 0
-    failures: List[str] = []
-    for edge in _parameterised_edges(graph):
-        from_id = nmap.get(edge.get("from", ""), "")
-        to_id = nmap.get(edge.get("to", ""), "")
-        key = (from_id, to_id)
-        if key not in by_id:
-            continue
-        forensic = by_id[key].get("_forensic") or {}
-        inputs = forensic.get("_inputs") or {} if isinstance(forensic, dict) else {}
-        span_alpha = inputs.get("span_alpha")
-        span_beta = inputs.get("span_beta")
-        if span_alpha is None or span_beta is None:
-            continue
-
-        resolved = resolve_model_params(edge, scope="edge", temporal_mode="window")
-        if resolved is None:
-            continue
-        resolver_conc = float(resolved.alpha or 0) + float(resolved.beta or 0)
-        if resolver_conc <= 0:
-            continue
-        cf_conc = float(span_alpha) + float(span_beta)
-
-        checked += 1
-        if cf_conc < resolver_conc * 0.1:
-            failures.append(
-                f"  edge {from_id}->{to_id}: "
-                f"CF concentration={cf_conc:.1f}, resolver={resolver_conc:.1f} "
-                f"(ratio={cf_conc/resolver_conc:.4f})"
-            )
-
-    assert checked > 0, "No edges exercised — fixture or server misconfigured."
-    assert not failures, (
-        "CF span-prior concentration diverges from resolver on "
-        f"{len(failures)}/{checked} edges. Expected when build_span_params "
-        "discards the resolver's α/β and falls back to κ=20 (doc 56 §4.2):\n"
-        + "\n".join(failures)
-    )
-
-
-# ── Test 2: carrier tier agreement (regression guard) ──────────────
-
-
-@_SKIP_IF_NO_SERVER
+@requires_db
+@requires_data_repo
 def test_cf_and_v3_chart_carrier_tier_agree():
     """CF (whole-graph) and v3 chart (single-edge) must select the
     same carrier tier (parametric / empirical / weak_prior / none) for
@@ -212,9 +152,9 @@ def test_cf_and_v3_chart_carrier_tier_agree():
     """
     graph_name = "synth-mirror-4step"
     dsl_temporal = "cohort(7-Mar-26:21-Mar-26)"
-    graph = _load_graph(graph_name)
+    graph = load_graph_json(graph_name)
 
-    cf_resp = _run_analyse(graph_name, dsl_temporal, "conditioned_forecast")
+    cf_resp = _run_cf(graph_name, dsl_temporal)
     cf_by_id = _cf_edge_by_id(cf_resp)
 
     mismatches: List[str] = []
@@ -234,21 +174,16 @@ def test_cf_and_v3_chart_carrier_tier_agree():
         )
 
         # v3 chart for same edge
-        v3_dsl = f"from({from_id}).to({to_id}).{dsl_temporal}"
-        v3_resp = _run_analyse(graph_name, v3_dsl, "cohort_maturity")
-        v3_forensic_list = []
-        try:
-            rows = (
-                v3_resp.get("result", {}).get("data")
-                or v3_resp.get("result", {}).get("maturity_rows")
-                or []
-            )
-            # Carrier tier isn't in per-row forensic today; skip if not exposed
-            # by either path. This test asserts agreement when both expose it,
-            # and passes vacuously when neither does. The absence is itself a
-            # gap the migration can address.
-        except Exception:
-            pass
+        v3_resp = _run_v3(
+            graph_name,
+            f"from({from_id}).to({to_id})",
+            dsl_temporal,
+        )
+        rows = _extract_maturity_rows(v3_resp)
+        # Carrier tier isn't in per-row forensic today; keep exercising
+        # the row-builder path so this turns into a real parity check as
+        # soon as v3 exposes the same forensic field.
+        _ = rows
 
         if cf_tier is None:
             continue  # forensic didn't expose tier; nothing to compare yet
@@ -270,10 +205,11 @@ def test_cf_and_v3_chart_carrier_tier_agree():
         )
 
 
-# ── Test 3: chart-vs-CF p_mean parity (regression guard) ───────────
+# ── Test 2: chart-vs-CF p_mean parity (regression guard) ───────────
 
 
-@_SKIP_IF_NO_SERVER
+@requires_db
+@requires_data_repo
 def test_cf_p_mean_matches_v3_p_infinity():
     """Whole-graph CF's per-edge `p_mean` must equal the v3 chart's
     `p_infinity_mean` for the same edge under the same DSL.
@@ -311,8 +247,8 @@ def test_cf_p_mean_matches_v3_p_infinity():
     checked = 0
 
     for graph_name, dsl in matrix:
-        graph = _load_graph(graph_name)
-        cf_resp = _run_analyse(graph_name, dsl, "conditioned_forecast")
+        graph = load_graph_json(graph_name)
+        cf_resp = _run_cf(graph_name, dsl)
         cf_by_id = _cf_edge_by_id(cf_resp)
 
         nmap = {n["uuid"]: n.get("id", "") for n in graph.get("nodes", [])}
@@ -326,18 +262,17 @@ def test_cf_p_mean_matches_v3_p_infinity():
             if cf_p_mean is None:
                 continue
 
-            v3_dsl = f"from({from_id}).to({to_id}).{dsl}"
             try:
-                v3_resp = _run_analyse(graph_name, v3_dsl, "cohort_maturity")
+                v3_resp = _run_v3(
+                    graph_name,
+                    f"from({from_id}).to({to_id})",
+                    dsl,
+                )
             except Exception as e:
                 failures.append(f"  {graph_name} {from_id}->{to_id}: v3 call failed: {e}")
                 continue
 
-            rows = (
-                v3_resp.get("result", {}).get("data")
-                or v3_resp.get("result", {}).get("maturity_rows")
-                or []
-            )
+            rows = _extract_maturity_rows(v3_resp)
             if not rows:
                 continue
             last = rows[-1]

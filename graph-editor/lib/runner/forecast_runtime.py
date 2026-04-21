@@ -43,6 +43,30 @@ _COHORT_DEBUG = bool(os.environ.get('DAGNET_COHORT_DEBUG'))
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# Conditioned-forecast sweep eligibility / provenance
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def is_cf_sweep_eligible(resolved: Optional[Any]) -> bool:
+    """Return whether the CF path may run the sweep for this edge.
+
+    Query-scoped analytic posteriors already include the user's window
+    evidence, so running the CF sweep would double-count. Aggregate
+    priors remain sweep-eligible.
+    """
+    return not bool(getattr(resolved, 'alpha_beta_query_scoped', False))
+
+
+def get_cf_mode_and_reason(
+    resolved: Optional[Any],
+) -> Tuple[str, Optional[str]]:
+    """Return caller-facing CF provenance for the resolved edge."""
+    if is_cf_sweep_eligible(resolved):
+        return ('sweep', None)
+    return ('analytic_degraded', 'query_scoped_posterior')
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # Graph helpers (ex v1 — cohort_forecast.py)
 # ═══════════════════════════════════════════════════════════════════════
 

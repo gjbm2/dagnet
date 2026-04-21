@@ -154,6 +154,10 @@ def _compute_surprise_gauge(
     it displays with a warning icon (doc 55 §3.3).
     """
     from runner.model_resolver import resolve_model_params
+    from runner.forecast_runtime import (
+        get_cf_mode_and_reason,
+        is_cf_sweep_eligible,
+    )
     from runner.forecast_state import (
         compute_forecast_summary,
         build_node_arrival_cache,
@@ -173,8 +177,14 @@ def _compute_surprise_gauge(
         if tail < 0.98:   return 'surprising'
         return 'alarming'
 
-    def _unavailable(reason: str) -> Dict[str, Any]:
-        return {
+    def _unavailable(
+        reason: str,
+        *,
+        cf_mode: Optional[str] = None,
+        cf_reason: Optional[str] = None,
+        reference_source: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        result = {
             'analysis_type': 'surprise_gauge',
             'analysis_name': 'Expectation Gauge',
             'variables': [
@@ -185,6 +195,13 @@ def _compute_surprise_gauge(
             ],
             'error': reason,
         }
+        if cf_mode is not None:
+            result['cf_mode'] = cf_mode
+        if cf_reason is not None:
+            result['cf_reason'] = cf_reason
+        if reference_source is not None:
+            result['reference_source'] = reference_source
+        return result
 
     if not graph_data or not target_id:
         return _unavailable('No graph data or target_id')
@@ -213,7 +230,18 @@ def _compute_surprise_gauge(
     resolved = resolve_model_params(
         edge, scope=scope, temporal_mode=temporal, graph_preference=graph_pref,
     )
-    if not resolved or resolved.latency.sigma <= 0:
+    if not resolved:
+        print("[surprise_gauge] no resolved params or σ≤0")
+        return _unavailable('No resolved model params (σ must be > 0)')
+    cf_mode, cf_reason = get_cf_mode_and_reason(resolved)
+    if not is_cf_sweep_eligible(resolved):
+        return _unavailable(
+            cf_reason or 'query_scoped_posterior',
+            cf_mode=cf_mode,
+            cf_reason=cf_reason,
+            reference_source=resolved.source,
+        )
+    if resolved.latency.sigma <= 0:
         print("[surprise_gauge] no resolved params or σ≤0")
         return _unavailable('No resolved model params (σ must be > 0)')
 
@@ -410,8 +438,11 @@ def _compute_surprise_gauge(
         'analysis_name': 'Expectation Gauge',
         'variables': variables,
         'reference_source': resolved.source,
+        'cf_mode': cf_mode,
         'is_ess': round(summary.is_ess, 1),
     }
+    if cf_reason is not None:
+        result['cf_reason'] = cf_reason
 
     print(f"[surprise_gauge] source={resolved.source} is_ess={summary.is_ess:.1f} "
           f"p: obs={obs_rate:.4f} exp={summary.pp_rate_unconditioned:.4f} "
@@ -1803,6 +1834,13 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
             'frames': composed_frames,
             'span_kernel': None,
         }
+        if maturity_rows:
+            _row_cf_mode = maturity_rows[0].get('_cf_mode')
+            _row_cf_reason = maturity_rows[0].get('_cf_reason')
+            if _row_cf_mode is not None:
+                subject_result['cf_mode'] = _row_cf_mode
+            if _row_cf_reason is not None:
+                subject_result['cf_reason'] = _row_cf_reason
 
         if composed_frames and last_edge_id:
             from runner.forecast_application import compute_completeness
@@ -2631,6 +2669,14 @@ def handle_conditioned_forecast(data: Dict[str, Any]) -> Dict[str, Any]:
                     # from the row to keep the row schema clean.
                     first_row = maturity_rows[0] if maturity_rows else {}
                     _cond = first_row.pop('_conditioning', None) if isinstance(first_row, dict) else None
+                    _cf_mode = (
+                        first_row.pop('_cf_mode', 'sweep')
+                        if isinstance(first_row, dict) else 'sweep'
+                    )
+                    _cf_reason = (
+                        first_row.pop('_cf_reason', None)
+                        if isinstance(first_row, dict) else None
+                    )
                     # Whether observed evidence was actually applied to
                     # this edge's result (True) or the result is the
                     # untouched prior (False). Consumers that need to
@@ -2639,6 +2685,11 @@ def handle_conditioned_forecast(data: Dict[str, Any]) -> Dict[str, Any]:
                     # they should NOT infer it from the latency flag
                     # or from evidence_k/n.
                     _conditioned = first_row.pop('_conditioned', False) if isinstance(first_row, dict) else False
+                    _forensic = (
+                        {'cf_mode': _cf_mode, 'cf_reason': _cf_reason}
+                        if _cf_mode == 'analytic_degraded'
+                        else _last_forensic
+                    )
                     edge_results.append({
                         'edge_uuid': last_edge_id,
                         'from_node': query_from_node,
@@ -2651,10 +2702,12 @@ def handle_conditioned_forecast(data: Dict[str, Any]) -> Dict[str, Any]:
                         'evidence_k': evidence_k,
                         'evidence_n': evidence_n,
                         'conditioned': bool(_conditioned),
+                        'cf_mode': _cf_mode,
+                        'cf_reason': _cf_reason,
                         'tau_max': last_row.get('tau'),
                         'n_rows': len(maturity_rows),
                         'n_cohorts': composed.get('cohorts_analysed', 0),
-                        '_forensic': _last_forensic,
+                        '_forensic': _forensic,
                         **({'conditioning': _cond} if _cond else {}),
                     })
                     print(f"[forecast] {scenario_id}: {query_from_node}→{query_to_node} "
@@ -3643,6 +3696,10 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                         from runner.forecast_state import compute_forecast_trajectory, CohortEvidence
                         from runner.model_resolver import resolve_model_params as _rmp
                         from runner.forecast_application import compute_completeness as _cc
+                        from runner.forecast_runtime import (
+                            get_cf_mode_and_reason,
+                            is_cf_sweep_eligible,
+                        )
 
                         _edge_dict = next(
                             (e for e in graph.get('edges', [])
@@ -3658,6 +3715,10 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                                      if _edge_dict else None)
 
                         if _resolved and _resolved.latency.sigma > 0:
+                            _cf_mode, _cf_reason = get_cf_mode_and_reason(_resolved)
+                            result['cf_mode'] = _cf_mode
+                            if _cf_reason is not None:
+                                result['cf_reason'] = _cf_reason
                             # Parse asat date from DSL; default to today.
                             # DSL dates are d-MMM-yy (e.g. 16-Apr-26) or
                             # relative (e.g. -30d). Use the same parser as
@@ -3686,6 +3747,7 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                             _t95 = int(math.ceil(_lat.t95)) if _lat.t95 > 0 else 60
                             _maturity_tau = max(_t95, 30)  # at least 30 days
 
+                            _sweep_eligible = is_cf_sweep_eligible(_resolved)
                             _engine_cohorts = []
                             _row_map = []  # parallel index: row reference
                             _cohort_real_ages = []  # actual age per Cohort (for completeness)
@@ -3704,24 +3766,129 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                                     continue
                                 if _real_age < 0:
                                     continue
-                                _engine_cohorts.append(CohortEvidence(
-                                    obs_x=[_x],
-                                    obs_y=[_y],
-                                    x_frozen=_x,
-                                    y_frozen=_y,
-                                    # frontier = real age: the engine must know
-                                    # where the evidence ends so IS conditioning
-                                    # can fire (E_i = N_i × CDF(frontier_age)).
-                                    # With frontier=0, CDF(0)≈0, E_i≈0, IS never
-                                    # fires → unconditioned prior p → wildly wrong.
-                                    frontier_age=_real_age,
-                                    a_pop=_x,
-                                    eval_age=_maturity_tau,  # read draws at maturity
-                                ))
+                                if _sweep_eligible:
+                                    _engine_cohorts.append(CohortEvidence(
+                                        obs_x=[_x],
+                                        obs_y=[_y],
+                                        x_frozen=_x,
+                                        y_frozen=_y,
+                                        # frontier = real age: the engine must know
+                                        # where the evidence ends so IS conditioning
+                                        # can fire (E_i = N_i × CDF(frontier_age)).
+                                        # With frontier=0, CDF(0)≈0, E_i≈0, IS never
+                                        # fires → unconditioned prior p → wildly wrong.
+                                        frontier_age=_real_age,
+                                        a_pop=_x,
+                                        eval_age=_maturity_tau,  # read draws at maturity
+                                    ))
                                 _row_map.append(_row)
                                 _cohort_real_ages.append(_real_age)
 
-                            if _engine_cohorts:
+                            if not _sweep_eligible:
+                                from scipy.stats import beta as _beta_dist
+
+                                _alpha = max(float(_resolved.alpha or 0.0), 0.0)
+                                _beta = max(float(_resolved.beta or 0.0), 0.0)
+                                if _row_map and _alpha > 0 and _beta > 0:
+                                    _p_mean = _alpha / (_alpha + _beta)
+                                    _forecast_band_levels = [0.80, 0.90, 0.95, 0.99]
+                                    _forecast_bands = {
+                                        str(int(_bl * 100)): [
+                                            float(_beta_dist.ppf((1 - _bl) / 2, _alpha, _beta)),
+                                            float(_beta_dist.ppf((1 + _bl) / 2, _alpha, _beta)),
+                                        ]
+                                        for _bl in _forecast_band_levels
+                                    }
+
+                                    for _row, _real_age in zip(_row_map, _cohort_real_ages):
+                                        _ev_y = float(_row.get('y', 0) or 0)
+                                        _x = float(_row.get('x', 0) or 0)
+                                        _c = _cc(_real_age, _lat.mu, _lat.sigma, _lat.onset_delta_days)
+                                        _c = max(0.0, min(1.0, _c))
+                                        _proj_y = _x * _p_mean
+                                        _row['completeness'] = _c
+                                        _row['evidence_y'] = _ev_y
+                                        _row['projected_y'] = _proj_y
+                                        _row['forecast_y'] = max(0.0, _proj_y - _ev_y)
+                                        _row['layer'] = 'mature' if _c >= 0.95 else ('forecast' if _c > 1e-9 else 'evidence')
+                                        if _x > 0:
+                                            _row['forecast_bands'] = {
+                                                _level: [float(_bounds[0]), float(_bounds[1])]
+                                                for _level, _bounds in _forecast_bands.items()
+                                            }
+                                    _dc_annotated = True
+                                    result['promoted_source'] = _resolved.source or 'best_available'
+                                    print(f"[daily_conv] Degraded annotation: {len(_row_map)} cohorts, "
+                                          f"conditioned={any((_r.get('completeness') or 0) > 0 for _r in _row_map)}, "
+                                          f"maturity_tau={_maturity_tau}, "
+                                          f"p_mean={_p_mean:.4f}, "
+                                          f"alpha={_alpha:.2f}, beta={_beta:.2f}, "
+                                          f"mu={_lat.mu:.3f}, sigma={_lat.sigma:.3f}, "
+                                          f"source={_resolved.source}")
+
+                                    # ── Latency bands (deterministic degraded path) ──
+                                    _ds = data.get('display_settings') or {}
+                                    if _ds.get('show_latency_bands') and _lat.sigma > 0:
+                                        from runner.lag_distribution_utils import log_normal_inverse_cdf as _inv_cdf
+
+                                        _band_taus = []
+                                        for _q in [0.25, 0.50, 0.75]:
+                                            _raw = _inv_cdf(_q, _lat.mu, _lat.sigma) + _lat.onset_delta_days
+                                            _tau_d = max(1, round(_raw))
+                                            if _tau_d not in [t for t, _ in _band_taus]:
+                                                _band_taus.append((_tau_d, f'{_tau_d}d'))
+                                        if not _band_taus:
+                                            _band_taus = [(1, '1d')]
+
+                                        _cohort_y_at_age_raw = result.get('cohort_y_at_age') or {}
+                                        _obs_by_cohort_age: dict = {}
+                                        for _ad_str, _ages in _cohort_y_at_age_raw.items():
+                                            for _age_str, _y_val in _ages.items():
+                                                _obs_by_cohort_age[(_ad_str, int(_age_str))] = float(_y_val)
+
+                                        _latency_band_levels = [0.80, 0.90]
+                                        _latency_band_lookup = {
+                                            str(int(_bl * 100)): [
+                                                float(_beta_dist.ppf((1 - _bl) / 2, _alpha, _beta)),
+                                                float(_beta_dist.ppf((1 + _bl) / 2, _alpha, _beta)),
+                                            ]
+                                            for _bl in _latency_band_levels
+                                        }
+
+                                        for _row, _real_age in zip(_row_map, _cohort_real_ages):
+                                            _x = float(_row.get('x', 0) or 0)
+                                            _ad_str = str(_row.get('date', ''))[:10]
+                                            if _x <= 0 or not _ad_str:
+                                                continue
+                                            for _bt, _bt_label in _band_taus:
+                                                if _real_age >= _bt:
+                                                    _obs_rate = None
+                                                    for _look_age in range(_bt, -1, -1):
+                                                        _obs_y = _obs_by_cohort_age.get((_ad_str, _look_age))
+                                                        if _obs_y is not None:
+                                                            _obs_rate = _obs_y / _x
+                                                            break
+                                                    if _obs_rate is not None:
+                                                        if 'latency_bands' not in _row:
+                                                            _row['latency_bands'] = {}
+                                                        _row['latency_bands'][_bt_label] = {
+                                                            'rate': _obs_rate,
+                                                            'source': 'evidence',
+                                                        }
+                                                else:
+                                                    _c_bt = _cc(_bt, _lat.mu, _lat.sigma, _lat.onset_delta_days)
+                                                    _c_bt = max(0.0, min(1.0, _c_bt))
+                                                    if 'latency_bands' not in _row:
+                                                        _row['latency_bands'] = {}
+                                                    _row['latency_bands'][_bt_label] = {
+                                                        'rate': _p_mean * _c_bt,
+                                                        'source': 'forecast',
+                                                        'bands': {
+                                                            _level: [float(_bounds[0] * _c_bt), float(_bounds[1] * _c_bt)]
+                                                            for _level, _bounds in _latency_band_lookup.items()
+                                                        },
+                                                    }
+                            elif _engine_cohorts:
                                 _sweep = compute_forecast_trajectory(
                                     resolved=_resolved,
                                     cohorts=_engine_cohorts,

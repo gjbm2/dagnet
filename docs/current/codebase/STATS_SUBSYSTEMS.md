@@ -158,17 +158,44 @@ Key invariants:
 
 ### 3.5 BE analysis runners (per-query chart/result production)
 
-**What they are**: the runners that respond to user query requests for specific analysis types (path, funnel, cohort_maturity, path_to_end, branch_comparison, etc.). Each consumes the enriched graph and produces chart rows or scalar results.
+**What they are**: the runners that respond to user query requests for
+specific analysis types (path, funnel, cohort_maturity, path_to_end,
+branch_comparison, etc.). They do not all consume forecast state in the
+same way: some read the enriched graph, some call the public CF surface
+directly, and some run dedicated in-band forecast kernels.
 
 **Trigger**: `POST /api/runner/analyze` → `handle_runner_analyze` ([api_handlers.py:949](../../graph-editor/lib/api_handlers.py#L949)). Dispatched via `analysis_types.yaml` rules.
 
 **Scope**: subjects resolved from the query DSL — typically a single edge, path, or span, not the whole graph.
 
-**Two categories**:
-- **Graph-consumer runners** (path, funnel, path_to_end, path_through, branch_comparison, end_comparison): read `edge.p.mean` (as set by prior passes, selected by `apply_visibility_mode` for e/f/e+f), walk the DAG via DFS+memoisation, multiply scalars. Assume the graph has been enriched by FE/BE topo + CF passes. Scalar output, no MC, no uncertainty.
-- **In-band MC runners** (cohort_maturity, surprise_gauge): don't rely on pre-baked scalars. Fetch their own snapshot DB evidence per request and invoke `compute_forecast_trajectory` directly. Produce per-τ rows with MC quantiles, fan bands, completeness.
+**Three categories**:
+- **Graph-consumer runners** (path, path_to_end, path_through,
+  branch_comparison, end_comparison): read `edge.p.mean` (as set by prior
+  passes, selected by `apply_visibility_mode` for e/f/e+f), walk the DAG
+  via DFS+memoisation, and multiply scalars. Assume the graph has already
+  been enriched by FE/BE topo + CF passes. Scalar output, no MC, no
+  uncertainty.
+- **Direct CF consumers** (`run_conversion_funnel` today): call
+  `handle_conditioned_forecast` and consume its per-edge conditioned
+  response directly, then project the needed subgraph or path view. They
+  use the public CF surface, not the inner kernels.
+- **In-band forecast-engine consumers**: `cohort_maturity` fetches its own
+  snapshot evidence and invokes `compute_forecast_trajectory` to produce
+  per-`tau` rows; `surprise_gauge` uses `compute_forecast_summary` for a
+  scalar-only summary path.
 
-**Do analysis runners trigger the CF pass?**: **no**. They consume whatever state the graph is in. The CF pass runs during Stage 2 of the fetch pipeline (before analyses execute), so the graph is typically already enriched when analyses run. If CF hasn't landed, runners read the FE/BE topo fallback scalars (via promotion). The funnel, path, etc. runners don't know or care which source produced the scalars they're reading — they just consume `edge.p.mean`.
+**Do analysis runners trigger the CF pass?**: they do **not** trigger the
+fetch pipeline's Stage 2 graph-enrichment CF pass. That pass is
+independent and runs for every fetch. Analysis runners then do one of
+three things:
+
+- read whatever graph state Stage 2 has already produced
+- make an explicit direct call to the public CF endpoint
+- use an in-band summary or trajectory kernel for their own subject
+
+If Stage 2 CF has not landed yet, graph-consumer runners read the FE/BE
+topo fallback scalars (via promotion). Direct CF consumers and in-band
+forecast-engine consumers are separate from that graph-state path.
 
 **apply_visibility_mode** ([graph_builder.py:564](../../graph-editor/lib/runner/graph_builder.py#L564)): mutates `edge['p']` in place per visibility mode:
 - `'e'`: `p = edge.evidence.mean` (raw k/n), complement-fill for failure edges
@@ -212,9 +239,15 @@ Q. User issues query ───────────────────�
 │    (Charts/analyses consume the enriched graph's promoted fields)
 │
 └─ Stage 4: BE analysis runner (per user-requested chart/analysis)
-     Reads: edge.p.mean (via apply_visibility_mode), edge.p.latency.*
-     Exception: cohort_maturity runs its own MC via compute_forecast_trajectory
-                with its own snapshot fetch (doesn't rely on prior enrichment)
+     Reads one of:
+       - persisted graph fields such as edge.p.mean / edge.p.latency.*
+       - direct CF response from handle_conditioned_forecast
+       - in-band summary or trajectory solve for the requested subject
+     Examples:
+       - graph-state runners → apply_visibility_mode
+       - conversion_funnel → direct CF response
+       - cohort_maturity → compute_forecast_trajectory
+       - surprise_gauge → compute_forecast_summary
 ```
 
 **Timing reality**: Stage 2's three passes have different completion windows:
@@ -239,7 +272,11 @@ No — the **BE CF pass** does IS conditioning. The BE topo pass does analytic F
 The field lives under `model_vars[source='bayesian'].probability.alpha`. When that source is promoted, it's accessible via `p.posterior.alpha`. It is **not query-scoped** — it's from the offline Bayes compiler fit. Query-scoped α/β per edge is `analytic_be`'s output, which is a Jeffreys-style posterior from scoped `total_k, total_n` (separate from Bayes).
 
 **Confusion 4: "analysis runners trigger the BE CF pass"**
-They don't. Analysis runners consume whatever enrichment Stage 2 has already produced. The CF pass is independent — it runs for every fetch, not per analysis request.
+They do not trigger the Stage 2 graph-enrichment CF pass. That pass is
+independent and runs for every fetch. Some specialised runners do make
+their own direct call to `handle_conditioned_forecast`, but that is
+consumption of the public CF surface, not the fetch-pipeline enrichment
+pass being triggered again.
 
 **Confusion 5: "the funnel reads pre-baked CF scalars off the graph"**
 Not any more. `run_conversion_funnel` calls the CF machinery directly — **one whole-graph CF pass per scenario**, then subgraph extraction for the selected path. The whole-graph shape is necessary because CF needs the full topological context to propagate upstream carriers; a per-edge scoped CF call would be semantically wrong. The funnel consumes CF output per edge (p_mean, p_sd, p_sd_epistemic, completeness, conditioned) to build stage bars with hi/lo bands via the completeness-weighted variance mixture. It does not call `compute_forecast_trajectory` directly — that's an inner kernel; it calls CF via `handle_conditioned_forecast` and extracts the subgraph result.

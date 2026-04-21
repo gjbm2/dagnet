@@ -28,38 +28,26 @@ load_dotenv(os.path.join(os.path.dirname(__file__), '../../.env.local'))
 import pytest
 
 # Shared fixtures from conftest
-from conftest import requires_db, requires_data_repo, requires_synth, _resolve_data_repo_dir
-
-_DATA_REPO_DIR = _resolve_data_repo_dir()
+from conftest import (
+    load_candidate_regimes_by_mode,
+    load_graph_json,
+    requires_db,
+    requires_data_repo,
+    requires_synth,
+)
 
 
 def _load_graph():
-    path = _DATA_REPO_DIR / 'graphs' / 'synth-simple-abc.json'
-    if not path.exists():
-        pytest.skip(f'Graph not found at {path}')
-    graph = json.loads(path.read_text())
-    return graph
+    return load_graph_json('synth-simple-abc')
 
 
 def _get_all_core_hashes(graph):
     """Get core_hash for every edge with snapshot data."""
-    from snapshot_service import _pooled_conn
-    hashes = {}
-    with _pooled_conn() as conn:
-        cur = conn.cursor()
-        for edge in graph.get('edges', []):
-            p_id = edge.get('p', {}).get('id', '')
-            if not p_id:
-                continue
-            cur.execute(
-                'SELECT DISTINCT core_hash FROM snapshots '
-                'WHERE param_id LIKE %s LIMIT 1',
-                (f'%{p_id}',),
-            )
-            rows = cur.fetchall()
-            if rows:
-                hashes[edge['uuid']] = rows[0][0]
-    return hashes
+    return {
+        edge_uuid: candidates[0]['core_hash']
+        for edge_uuid, candidates in load_candidate_regimes_by_mode('synth-simple-abc').items()
+        if candidates
+    }
 
 
 @requires_db

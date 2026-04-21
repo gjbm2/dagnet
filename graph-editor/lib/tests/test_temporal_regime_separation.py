@@ -19,6 +19,8 @@ Run with: pytest lib/tests/test_temporal_regime_separation.py -v
 
 import os
 import sys
+import copy
+import functools
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
@@ -27,11 +29,15 @@ load_dotenv(os.path.join(os.path.dirname(__file__), '../../.env.local'))
 
 import json
 import pytest
-from pathlib import Path
 
-from conftest import requires_db, requires_data_repo, requires_synth, _resolve_data_repo_dir
-
-_DATA_REPO_DIR = _resolve_data_repo_dir()
+from conftest import (
+    load_candidate_regimes_by_mode,
+    load_db_hashes_by_mode,
+    load_graph_json,
+    requires_db,
+    requires_data_repo,
+    requires_synth,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -39,96 +45,27 @@ _DATA_REPO_DIR = _resolve_data_repo_dir()
 # ---------------------------------------------------------------------------
 
 def _load_synth_graph():
-    path = _DATA_REPO_DIR / 'graphs' / 'synth-simple-abc.json'
-    if not path.exists():
-        pytest.skip(f'Graph not found at {path}')
-    return json.loads(path.read_text())
+    return load_graph_json('synth-simple-abc')
 
 
 def _get_db_hashes_by_mode(graph):
-    """Query the DB to find which core_hashes correspond to which
-    temporal mode for each edge. Returns {edge_uuid: {mode: [hashes]}}."""
-    from snapshot_service import _pooled_conn
-    result = {}
-    with _pooled_conn() as conn:
-        cur = conn.cursor()
-        for edge in graph.get('edges', []):
-            p_id = edge.get('p', {}).get('id', '')
-            if not p_id:
-                continue
-            cur.execute(
-                "SELECT DISTINCT core_hash, slice_key FROM snapshots "
-                "WHERE param_id LIKE %s AND core_hash != '' "
-                "AND core_hash NOT LIKE 'PLACEHOLDER%%' "
-                "AND slice_key NOT LIKE 'context%%' "
-                "ORDER BY core_hash",
-                (f'%{p_id}',),
-            )
-            rows = cur.fetchall()
-            if not rows:
-                continue
-            by_mode = {'window': [], 'cohort': []}
-            for h, sk in rows:
-                if 'window' in sk:
-                    by_mode['window'].append(h)
-                elif 'cohort' in sk:
-                    by_mode['cohort'].append(h)
-            result[edge['uuid']] = by_mode
-    return result
+    return load_db_hashes_by_mode('synth-simple-abc')
 
 
 def _get_current_candidate_regimes(graph):
-    """Build candidate regimes with window and cohort as SEPARATE
-    candidates — mirrors the corrected FE design. Each edge gets
-    one candidate per temporal mode, with temporal_mode tagged."""
-    from snapshot_service import _pooled_conn
-    regimes = {}
-    with _pooled_conn() as conn:
-        cur = conn.cursor()
-        for edge in graph.get('edges', []):
-            p_id = edge.get('p', {}).get('id', '')
-            if not p_id:
-                continue
-            cur.execute(
-                "SELECT DISTINCT core_hash, slice_key FROM snapshots "
-                "WHERE param_id LIKE %s AND core_hash != '' "
-                "AND core_hash NOT LIKE 'PLACEHOLDER%%' "
-                "AND slice_key NOT LIKE 'context%%' "
-                "ORDER BY slice_key, core_hash",
-                (f'%{p_id}',),
-            )
-            rows = cur.fetchall()
-            if not rows:
-                continue
-            edge_regimes = []
-            window_hashes = [h for h, sk in rows if 'window' in sk]
-            cohort_hashes = [h for h, sk in rows if 'cohort' in sk]
-            if window_hashes:
-                edge_regimes.append({
-                    'core_hash': window_hashes[0],
-                    'equivalent_hashes': window_hashes[1:],
-                    'temporal_mode': 'window',
-                })
-            if cohort_hashes:
-                edge_regimes.append({
-                    'core_hash': cohort_hashes[0],
-                    'equivalent_hashes': cohort_hashes[1:],
-                    'temporal_mode': 'cohort',
-                })
-            if edge_regimes:
-                regimes[edge['uuid']] = edge_regimes
-    return regimes
+    return load_candidate_regimes_by_mode('synth-simple-abc')
 
 
-def _run_v3(graph, regimes, dsl, query_dsl):
+@functools.lru_cache(maxsize=None)
+def _run_v3_cached(dsl, query_dsl):
     from api_handlers import _handle_cohort_maturity_v3
     result = _handle_cohort_maturity_v3({
         'scenarios': [{
             'scenario_id': 'test',
-            'graph': graph,
+            'graph': _load_synth_graph(),
             'analytics_dsl': dsl,
             'effective_query_dsl': query_dsl,
-            'candidate_regimes_by_edge': regimes,
+            'candidate_regimes_by_edge': _get_current_candidate_regimes(None),
         }],
     })
     for s in (result.get('subjects') or
@@ -139,6 +76,10 @@ def _run_v3(graph, regimes, dsl, query_dsl):
     if 'result' in result and isinstance(result['result'], dict):
         return result['result'].get('maturity_rows', [])
     return []
+
+
+def _run_v3(graph, regimes, dsl, query_dsl):
+    return copy.deepcopy(_run_v3_cached(dsl, query_dsl))
 
 
 # ---------------------------------------------------------------------------

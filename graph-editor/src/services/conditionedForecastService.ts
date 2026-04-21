@@ -28,10 +28,20 @@ export interface ConditionedForecastEdgeResult {
   to_node?: string;
   p_mean: number | null;
   p_sd: number | null;
+  p_sd_epistemic?: number | null;
   completeness?: number | null;
   completeness_sd?: number | null;
   evidence_k?: number | null;
   evidence_n?: number | null;
+  conditioning?: {
+    r: number | null;
+    m_S: number | null;
+    m_G: number | null;
+    applied: boolean;
+    skip_reason?: string | null;
+  };
+  cf_mode?: 'sweep' | 'analytic_degraded';
+  cf_reason?: 'query_scoped_posterior' | null;
   tau_max?: number | null;
   n_rows?: number;
   n_cohorts?: number;

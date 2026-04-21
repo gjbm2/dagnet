@@ -17,6 +17,7 @@ Run with:
 import json
 import os
 import sys
+import functools
 from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
@@ -24,18 +25,26 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import pytest
 
 # Shared fixtures from conftest: requires_db, requires_data_repo, _resolve_data_repo_dir
-from conftest import requires_db, requires_data_repo, _resolve_data_repo_dir
+from conftest import (
+    load_graph_json,
+    requires_db,
+    requires_data_repo,
+    _resolve_data_repo_dir,
+)
 
 _DATA_REPO_DIR = _resolve_data_repo_dir()
 
 
 def _load_graph(name: str) -> dict:
     """Load a real graph JSON from the data repo."""
-    path = _DATA_REPO_DIR / 'graphs' / f'{name}.json'
-    if not path.exists():
-        pytest.skip(f'Graph {name} not found at {path}')
-    with open(path) as f:
-        return json.load(f)
+    return load_graph_json(name)
+
+
+def _find_edge_by_uuid(graph: dict, edge_uuid: str) -> dict:
+    for edge in graph.get('edges', []):
+        if edge.get('uuid') == edge_uuid:
+            return edge
+    raise AssertionError(f'Edge {edge_uuid} not found in graph')
 
 
 def _find_adjacent_edge(graph: dict) -> tuple:
@@ -52,6 +61,7 @@ def _find_adjacent_edge(graph: dict) -> tuple:
     pytest.skip('No edge with parameter ID found in graph')
 
 
+@functools.lru_cache(maxsize=1)
 def _discover_graph_with_data() -> str:
     """Find a graph in the data repo that has snapshot data in the DB.
 
@@ -68,8 +78,6 @@ def _discover_graph_with_data() -> str:
     graphs_dir = _DATA_REPO_DIR / 'graphs'
     if not graphs_dir.is_dir():
         pytest.skip(f'Graphs directory not found at {graphs_dir}')
-
-    from snapshot_service import _pooled_conn
 
     # Prefer synth graphs (smaller, faster) then fall back to real graphs
     candidates = sorted(graphs_dir.glob('*.json'))
@@ -109,6 +117,60 @@ def _discover_graph_with_data() -> str:
     pytest.skip('No graph with snapshot data and model params found in data repo')
 
 
+@functools.lru_cache(maxsize=1)
+def _shared_case() -> tuple[str, str, str, str]:
+    graph_name = _discover_graph_with_data()
+    graph = _load_graph(graph_name)
+    from_id, to_id, edge = _find_adjacent_edge(graph)
+    return graph_name, from_id, to_id, edge['uuid']
+
+
+@functools.lru_cache(maxsize=None)
+def _snapshot_identifier_for_param(object_id: str) -> tuple[str, str]:
+    from snapshot_service import _pooled_conn
+
+    with _pooled_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT DISTINCT core_hash, param_id
+            FROM snapshots
+            WHERE param_id LIKE %s
+            LIMIT 5
+            """,
+            (f'%{object_id}',),
+        )
+        rows = cur.fetchall()
+
+    if not rows:
+        pytest.skip(f'No snapshot data found for parameter {object_id}')
+    return rows[0][0], rows[0][1]
+
+
+@functools.lru_cache(maxsize=None)
+def _candidate_regimes_for_graph(graph_name: str) -> dict:
+    from snapshot_service import _pooled_conn
+
+    graph = _load_graph(graph_name)
+    regimes = {}
+    with _pooled_conn() as conn:
+        cur = conn.cursor()
+        for edge in graph.get('edges', []):
+            p_id = edge.get('p', {}).get('id', '')
+            if not p_id:
+                continue
+            cur.execute(
+                'SELECT DISTINCT core_hash FROM snapshots WHERE param_id LIKE %s LIMIT 1',
+                (f'%{p_id}',),
+            )
+            rows = cur.fetchall()
+            if rows:
+                regimes[edge['uuid']] = [
+                    {'core_hash': rows[0][0], 'equivalent_hashes': []},
+                ]
+    return regimes
+
+
 def _build_old_path_request(graph: dict, from_id: str, to_id: str, edge: dict,
                              analysis_type: str, query_dsl: str) -> dict:
     """Build a request using the old path (pre-resolved snapshot_subjects).
@@ -119,24 +181,8 @@ def _build_old_path_request(graph: dict, from_id: str, to_id: str, edge: dict,
     p_id = edge['p']['id']
     edge_uuid = edge['uuid']
 
-    # Query the DB directly for rows matching this parameter's object ID.
     # The real param_id format is "${owner}/${repo}-${branch}-${objectId}".
-    from snapshot_service import _pooled_conn
-    with _pooled_conn() as conn:
-        cur = conn.cursor()
-        cur.execute("""
-            SELECT DISTINCT core_hash, param_id
-            FROM snapshots
-            WHERE param_id LIKE %s
-            LIMIT 5
-        """, (f'%{p_id}',))
-        rows = cur.fetchall()
-
-    if not rows:
-        pytest.skip(f'No snapshot data found for parameter {p_id}')
-
-    real_core_hash = rows[0][0]
-    real_param_id = rows[0][1]
+    real_core_hash, real_param_id = _snapshot_identifier_for_param(p_id)
 
     # Determine read_mode and time bounds from analysis type
     read_mode_map = {
@@ -190,7 +236,7 @@ def _build_old_path_request(graph: dict, from_id: str, to_id: str, edge: dict,
 
 def _build_new_path_request(graph: dict, from_id: str, to_id: str, edge: dict,
                              analysis_type: str, query_dsl: str,
-                             old_request: dict) -> dict:
+                             old_request: dict, graph_name: str) -> dict:
     """Build a request using the new path (analytics_dsl + candidate_regimes_by_edge).
 
     Uses the same core_hash from the old request's snapshot_subjects to build
@@ -203,33 +249,15 @@ def _build_new_path_request(graph: dict, from_id: str, to_id: str, edge: dict,
     old_subj = old_request['scenarios'][0]['snapshot_subjects'][0]
     real_core_hash = old_subj['core_hash']
 
-    # Build candidate_regimes_by_edge for the target edge
-    candidate_regimes_by_edge = {
-        edge['uuid']: [
-            {'core_hash': real_core_hash, 'equivalent_hashes': []},
-        ],
-    }
-
     # Also populate regimes for all other edges that have snapshot data.
     # This allows v2's upstream carrier to fetch evidence properly.
-    from snapshot_service import _pooled_conn
-    with _pooled_conn() as conn:
-        cur = conn.cursor()
-        for e in graph.get('edges', []):
-            if e['uuid'] == edge['uuid']:
-                continue  # already added
-            p_id = e.get('p', {}).get('id', '')
-            if not p_id:
-                continue
-            cur.execute(
-                'SELECT DISTINCT core_hash FROM snapshots WHERE param_id LIKE %s LIMIT 1',
-                (f'%{p_id}',),
-            )
-            rows = cur.fetchall()
-            if rows:
-                candidate_regimes_by_edge[e['uuid']] = [
-                    {'core_hash': rows[0][0], 'equivalent_hashes': []},
-                ]
+    candidate_regimes_by_edge = {
+        edge_uuid: [dict(candidate) for candidate in candidates]
+        for edge_uuid, candidates in _candidate_regimes_for_graph(graph_name).items()
+    }
+    candidate_regimes_by_edge[edge['uuid']] = [
+        {'core_hash': real_core_hash, 'equivalent_hashes': []},
+    ]
 
     analytics_dsl = f'from({from_id}).to({to_id})'
 
@@ -359,9 +387,9 @@ class TestCohortMaturityParity:
     """Old path and new path produce identical cohort maturity output."""
 
     def test_single_edge_cohort_maturity(self):
-        graph_name = _discover_graph_with_data()
+        graph_name, from_id, to_id, edge_uuid = _shared_case()
         graph = _load_graph(graph_name)
-        from_id, to_id, edge = _find_adjacent_edge(graph)
+        edge = _find_edge_by_uuid(graph, edge_uuid)
         query_dsl = f'from({from_id}).to({to_id}).cohort(-90d:)'
 
         from api_handlers import _handle_snapshot_analyze_subjects
@@ -369,7 +397,16 @@ class TestCohortMaturityParity:
         old_req = _build_old_path_request(graph, from_id, to_id, edge, 'cohort_maturity', query_dsl)
         old_result = _handle_snapshot_analyze_subjects(old_req)
 
-        new_req = _build_new_path_request(graph, from_id, to_id, edge, 'cohort_maturity', query_dsl, old_req)
+        new_req = _build_new_path_request(
+            graph,
+            from_id,
+            to_id,
+            edge,
+            'cohort_maturity',
+            query_dsl,
+            old_req,
+            graph_name,
+        )
         new_result = _handle_snapshot_analyze_subjects(new_req)
 
         # Assert maturity_rows present in BOTH paths
@@ -408,14 +445,23 @@ class TestCohortMaturityV1V2Parity:
     parametric case, so output must be identical within float tolerance.
     """
 
-    def _run_analysis(self, graph, from_id, to_id, edge, analysis_type, query_dsl):
+    def _run_analysis(self, graph_name, graph, from_id, to_id, edge, analysis_type, query_dsl):
         """Build a new-path request and run it through the top-level dispatcher."""
         from api_handlers import handle_runner_analyze
 
         # Build the new-path request (analytics_dsl + candidate_regimes_by_edge)
         # so both v1 and v2 take the same code path for subject resolution.
         old_req = _build_old_path_request(graph, from_id, to_id, edge, analysis_type, query_dsl)
-        req = _build_new_path_request(graph, from_id, to_id, edge, analysis_type, query_dsl, old_req)
+        req = _build_new_path_request(
+            graph,
+            from_id,
+            to_id,
+            edge,
+            analysis_type,
+            query_dsl,
+            old_req,
+            graph_name,
+        )
         return handle_runner_analyze(req)
 
     def _extract_maturity_rows(self, result, label):
@@ -450,13 +496,13 @@ class TestCohortMaturityV1V2Parity:
     @pytest.mark.skip(reason="Known v1/v2 boundary-condition parity gap at oldest-cohort edge (tau=37): v1 requires explicit frame evidence, v2 extrapolates via MC model")
     def test_single_edge_cohort_mode_parity(self):
         """Cohort mode: v1 and v2 produce identical maturity_rows."""
-        graph_name = _discover_graph_with_data()
+        graph_name, from_id, to_id, edge_uuid = _shared_case()
         graph = _load_graph(graph_name)
-        from_id, to_id, edge = _find_adjacent_edge(graph)
+        edge = _find_edge_by_uuid(graph, edge_uuid)
         query_dsl = f'from({from_id}).to({to_id}).cohort(-90d:)'
 
-        v1_result = self._run_analysis(graph, from_id, to_id, edge, 'cohort_maturity_v1', query_dsl)
-        v2_result = self._run_analysis(graph, from_id, to_id, edge, 'cohort_maturity_v2', query_dsl)
+        v1_result = self._run_analysis(graph_name, graph, from_id, to_id, edge, 'cohort_maturity_v1', query_dsl)
+        v2_result = self._run_analysis(graph_name, graph, from_id, to_id, edge, 'cohort_maturity_v2', query_dsl)
 
         v1_rows = self._extract_maturity_rows(v1_result, 'v1')
         v2_rows = self._extract_maturity_rows(v2_result, 'v2')
@@ -512,13 +558,13 @@ class TestCohortMaturityV1V2Parity:
     @pytest.mark.skip(reason="Known v1/v2 boundary-condition parity gap at oldest-cohort edge (tau=37): v1 requires explicit frame evidence, v2 extrapolates via MC model")
     def test_single_edge_window_mode_parity(self):
         """Window mode: v1 and v2 produce identical maturity_rows."""
-        graph_name = _discover_graph_with_data()
+        graph_name, from_id, to_id, edge_uuid = _shared_case()
         graph = _load_graph(graph_name)
-        from_id, to_id, edge = _find_adjacent_edge(graph)
+        edge = _find_edge_by_uuid(graph, edge_uuid)
         query_dsl = f'from({from_id}).to({to_id}).window(-90d:)'
 
-        v1_result = self._run_analysis(graph, from_id, to_id, edge, 'cohort_maturity_v1', query_dsl)
-        v2_result = self._run_analysis(graph, from_id, to_id, edge, 'cohort_maturity_v2', query_dsl)
+        v1_result = self._run_analysis(graph_name, graph, from_id, to_id, edge, 'cohort_maturity_v1', query_dsl)
+        v2_result = self._run_analysis(graph_name, graph, from_id, to_id, edge, 'cohort_maturity_v2', query_dsl)
 
         v1_rows = self._extract_maturity_rows(v1_result, 'v1')
         v2_rows = self._extract_maturity_rows(v2_result, 'v2')
@@ -578,9 +624,9 @@ class TestDailyConversionsParity:
     """Old path and new path produce identical daily conversions output."""
 
     def test_single_edge_daily_conversions(self):
-        graph_name = _discover_graph_with_data()
+        graph_name, from_id, to_id, edge_uuid = _shared_case()
         graph = _load_graph(graph_name)
-        from_id, to_id, edge = _find_adjacent_edge(graph)
+        edge = _find_edge_by_uuid(graph, edge_uuid)
         query_dsl = f'from({from_id}).to({to_id}).window(-90d:)'
 
         from api_handlers import _handle_snapshot_analyze_subjects
@@ -588,7 +634,16 @@ class TestDailyConversionsParity:
         old_req = _build_old_path_request(graph, from_id, to_id, edge, 'daily_conversions', query_dsl)
         old_result = _handle_snapshot_analyze_subjects(old_req)
 
-        new_req = _build_new_path_request(graph, from_id, to_id, edge, 'daily_conversions', query_dsl, old_req)
+        new_req = _build_new_path_request(
+            graph,
+            from_id,
+            to_id,
+            edge,
+            'daily_conversions',
+            query_dsl,
+            old_req,
+            graph_name,
+        )
         new_result = _handle_snapshot_analyze_subjects(new_req)
 
         _compare_results(old_result, new_result, 'daily_conversions')
@@ -600,9 +655,9 @@ class TestLagHistogramParity:
     """Old path and new path produce identical lag histogram output."""
 
     def test_single_edge_lag_histogram(self):
-        graph_name = _discover_graph_with_data()
+        graph_name, from_id, to_id, edge_uuid = _shared_case()
         graph = _load_graph(graph_name)
-        from_id, to_id, edge = _find_adjacent_edge(graph)
+        edge = _find_edge_by_uuid(graph, edge_uuid)
         query_dsl = f'from({from_id}).to({to_id}).window(-90d:)'
 
         from api_handlers import _handle_snapshot_analyze_subjects
@@ -610,7 +665,16 @@ class TestLagHistogramParity:
         old_req = _build_old_path_request(graph, from_id, to_id, edge, 'lag_histogram', query_dsl)
         old_result = _handle_snapshot_analyze_subjects(old_req)
 
-        new_req = _build_new_path_request(graph, from_id, to_id, edge, 'lag_histogram', query_dsl, old_req)
+        new_req = _build_new_path_request(
+            graph,
+            from_id,
+            to_id,
+            edge,
+            'lag_histogram',
+            query_dsl,
+            old_req,
+            graph_name,
+        )
         new_result = _handle_snapshot_analyze_subjects(new_req)
 
         _compare_results(old_result, new_result, 'lag_histogram')

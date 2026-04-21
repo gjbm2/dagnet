@@ -102,6 +102,13 @@ Latency is **path-level** (A to Y). The relevant distribution is the A-to-Y
 path model, which is the convolution of all upstream edge latencies along the
 path.
 
+Implementation note: this is an intentionally compressed summary. The
+canonical reference for implementation semantics is
+`COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md`, which separates the
+denominator-side `A -> X` carrier from the subject-side `X -> end`
+progression and defines the admissibility rules for reusable fitted
+objects. Where this summary is less precise, follow that note.
+
 The relationship between the two modes is not merely structural — it is
 **informational and temporally distinct**. Two effects drive the
 distinction:

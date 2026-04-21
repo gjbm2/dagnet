@@ -387,6 +387,7 @@ def verify_synth_data(
     data_repo: str | None = None,
     *,
     check_enrichment: bool = False,
+    check_bayesian: bool = False,
     check_param_files: bool = False,
     check_event_hashes: bool = False,
     check_fe_parity: bool = True,
@@ -408,13 +409,14 @@ def verify_synth_data(
             offline or fast-path checks where FE CLI is unavailable.
 
     Returns dict with:
-        status: "fresh" | "stale" | "missing" | "no_truth" | "needs_enrichment"
+        status: "fresh" | "stale" | "missing" | "no_truth" | "needs_enrichment" | "needs_bayesian_enrichment"
         reason: human-readable summary (worst issue)
         reasons: list[str] — all issues found
         row_count: total DB rows (0 if not checked)
         truth_sha256: current truth file hash
         graph_sha256: current graph JSON hash
-        enriched: bool — whether bayesian model_vars are present
+        enriched: bool — whether any model_vars (analytic or bayesian) are present
+        bayesian_enriched: bool — whether any model_vars with source='bayesian' exist
         meta: loaded .synth-meta.json (empty dict if absent)
     """
     if data_repo is None:
@@ -422,7 +424,8 @@ def verify_synth_data(
     graphs_dir = os.path.join(data_repo, "graphs")
 
     def _result(status, reason, *, reasons=None, row_count=0,
-                truth_sha256="", graph_sha256="", enriched=False, meta=None):
+                truth_sha256="", graph_sha256="", enriched=False,
+                bayesian_enriched=False, meta=None):
         return {
             "status": status,
             "reason": reason,
@@ -431,6 +434,7 @@ def verify_synth_data(
             "truth_sha256": truth_sha256,
             "graph_sha256": graph_sha256,
             "enriched": enriched,
+            "bayesian_enriched": bayesian_enriched,
             "meta": meta or {},
         }
 
@@ -555,15 +559,23 @@ def verify_synth_data(
     # "Enriched" means model_vars are present from any source (analytic
     # from hydrate/topo-pass, or bayesian from MCMC). Hydrate is the
     # standard enrichment path; bayesian is an additional expensive step.
+    # Two flags: `enriched` = any model_vars present (hydrate is enough);
+    # `bayesian_enriched` = at least one edge carries a model_var with
+    # source='bayesian' (MCMC has been run and posteriors applied).
     enriched = False
+    bayesian_enriched = False
     if graph_data:
         for edge in graph_data.get("edges", []):
             model_vars = edge.get("p", {}).get("model_vars", [])
             if model_vars:
                 enriched = True
+                if any(m.get("source") == "bayesian" for m in model_vars):
+                    bayesian_enriched = True
+            if enriched and bayesian_enriched:
                 break
-    # Enrichment is NOT added to reasons — it's a separate status
-    # ("needs_enrichment") that triggers --enrich, not a full regen.
+    # Enrichment gaps are NOT added to reasons — they are separate statuses
+    # ("needs_enrichment" / "needs_bayesian_enrichment") that trigger
+    # their respective enrichment steps, not a full regen.
 
     # ── DB checks ───────────────────────────────────────────────────
     db_conn = _load_db_connection()
@@ -573,31 +585,38 @@ def verify_synth_data(
         if not meta:
             return _result("missing", "No .synth-meta.json and no DB available",
                            truth_sha256=truth_sha, graph_sha256=graph_sha,
-                           enriched=enriched, meta=meta)
+                           enriched=enriched, bayesian_enriched=bayesian_enriched, meta=meta)
         if reasons:
             return _result("stale", reasons[0], reasons=reasons,
                            truth_sha256=truth_sha, graph_sha256=graph_sha,
-                           enriched=enriched, meta=meta)
+                           enriched=enriched, bayesian_enriched=bayesian_enriched, meta=meta)
         stored_count = meta.get("row_count", 0)
         if stored_count > 0:
-            # Enrichment-only gap: data is fresh but not enriched
+            # Enrichment gaps: hydrate first, then bayesian. See comment
+            # above the matching block in the DB-available branch.
             if check_enrichment and not enriched:
                 return _result("needs_enrichment", "Graph not enriched",
                                reasons=reasons, row_count=stored_count,
                                truth_sha256=truth_sha, graph_sha256=graph_sha,
-                               enriched=False, meta=meta)
+                               enriched=False, bayesian_enriched=False, meta=meta)
+            if check_bayesian and not bayesian_enriched:
+                return _result("needs_bayesian_enrichment",
+                               "Graph has no bayesian model_vars",
+                               reasons=reasons, row_count=stored_count,
+                               truth_sha256=truth_sha, graph_sha256=graph_sha,
+                               enriched=enriched, bayesian_enriched=False, meta=meta)
             return _result("fresh", f"Meta says {stored_count} rows (DB not checked)",
                            row_count=stored_count, truth_sha256=truth_sha,
-                           graph_sha256=graph_sha, enriched=enriched, meta=meta)
+                           graph_sha256=graph_sha, enriched=enriched, bayesian_enriched=bayesian_enriched, meta=meta)
         return _result("missing", "Meta shows 0 rows and DB not available",
                        truth_sha256=truth_sha, graph_sha256=graph_sha,
-                       enriched=enriched, meta=meta)
+                       enriched=enriched, bayesian_enriched=bayesian_enriched, meta=meta)
 
     # No meta and no graph JSON → definitely missing
     if not meta and not os.path.isfile(graph_path):
         return _result("missing", "No meta sidecar and no graph JSON",
                        truth_sha256=truth_sha, graph_sha256=graph_sha,
-                       enriched=enriched, meta=meta)
+                       enriched=enriched, bayesian_enriched=bayesian_enriched, meta=meta)
 
     # DB is available — verify row counts
     try:
@@ -624,7 +643,7 @@ def verify_synth_data(
             conn.close()
             return _result("missing", "No .synth-meta.json — run synth_gen to generate",
                            truth_sha256=truth_sha, graph_sha256=graph_sha,
-                           enriched=enriched, meta=meta)
+                           enriched=enriched, bayesian_enriched=bayesian_enriched, meta=meta)
 
         # Check for empty core_hash rows (corruption indicator)
         if meta and meta.get("edge_hashes"):
@@ -641,20 +660,20 @@ def verify_synth_data(
     except Exception as e:
         return _result("missing", f"DB check failed: {e}",
                        truth_sha256=truth_sha, graph_sha256=graph_sha,
-                       enriched=enriched, meta=meta)
+                       enriched=enriched, bayesian_enriched=bayesian_enriched, meta=meta)
 
     # Staleness reasons take priority — if the truth/graph/events changed,
     # the data is stale regardless of DB row count.
     if reasons:
         return _result("stale", reasons[0], reasons=reasons, row_count=total,
                        truth_sha256=truth_sha, graph_sha256=graph_sha,
-                       enriched=enriched, meta=meta)
+                       enriched=enriched, bayesian_enriched=bayesian_enriched, meta=meta)
 
     # No rows and no staleness reasons → data genuinely missing
     if total == 0:
         return _result("missing", "0 DB rows found",
                        truth_sha256=truth_sha, graph_sha256=graph_sha,
-                       enriched=enriched, meta=meta)
+                       enriched=enriched, bayesian_enriched=bayesian_enriched, meta=meta)
 
     # ── FE-parity hash-alignment probe ──
     #
@@ -680,20 +699,29 @@ def verify_synth_data(
                 reasons=fe_divergences,
                 row_count=total,
                 truth_sha256=truth_sha, graph_sha256=graph_sha,
-                enriched=enriched, meta=meta,
+                enriched=enriched, bayesian_enriched=bayesian_enriched, meta=meta,
             )
 
-    # Enrichment-only gap
+    # Enrichment gaps: hydrate first, then bayesian. Both are separate
+    # statuses the caller can act on without a full regen.
     if check_enrichment and not enriched:
         return _result("needs_enrichment", "Graph not enriched",
-                       reasons=["Graph not enriched (no bayesian model_vars)"],
+                       reasons=["Graph not enriched (no model_vars)"],
                        row_count=total,
                        truth_sha256=truth_sha, graph_sha256=graph_sha,
-                       enriched=False, meta=meta)
+                       enriched=False, bayesian_enriched=False, meta=meta)
+
+    if check_bayesian and not bayesian_enriched:
+        return _result("needs_bayesian_enrichment",
+                       "Graph has no bayesian model_vars",
+                       reasons=["Graph not bayesian-enriched (no MCMC posteriors)"],
+                       row_count=total,
+                       truth_sha256=truth_sha, graph_sha256=graph_sha,
+                       enriched=enriched, bayesian_enriched=False, meta=meta)
 
     return _result("fresh", f"{total} DB rows verified", row_count=total,
                    truth_sha256=truth_sha, graph_sha256=graph_sha,
-                   enriched=enriched, meta=meta)
+                   enriched=enriched, bayesian_enriched=bayesian_enriched, meta=meta)
 
 
 def _build_meta_hashes(hash_lookup: dict[str, dict[str, str]]) -> dict[str, dict[str, str]]:
