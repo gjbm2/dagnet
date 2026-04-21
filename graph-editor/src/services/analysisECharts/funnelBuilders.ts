@@ -604,6 +604,11 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
     valueScale: number = 1,
   ) => {
     const data: any[] = [];
+    // Label strings are looked up by dataIndex from a closure array rather
+    // than packed into the data tuple — ECharts' numeric-leaning handling of
+    // custom-series data can drop string dimensions, which broke count-mode
+    // labels on stages with no evidence.
+    const labelTexts: string[] = [];
     const s = Number.isFinite(valueScale) && valueScale > 0 ? valueScale : 1;
     points.forEach((pt, idx) => {
       const hasBands =
@@ -637,8 +642,8 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
         : (typeof pt.probability === 'number' && Number.isFinite(pt.probability) ? pt.probability : 0);
       const barTop = barTopRaw * s;
       const topForLabel = hasBands && Number.isFinite(hiOuter) ? (hiOuter as number) : barTop;
-      const labelText = formatLabelForPoint(pt);
-      data.push([idx, loOuter, hiOuter, loEpi, hiEpi, topForLabel, labelText, hasBands ? 1 : 0]);
+      labelTexts.push(formatLabelForPoint(pt));
+      data.push([idx, loOuter, hiOuter, loEpi, hiEpi, topForLabel, hasBands ? 1 : 0]);
     });
     if (data.length === 0) return undefined;
     const stroke = echartsThemeColours().text;
@@ -655,8 +660,8 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
         const loInner = api.value(3);
         const hiInner = api.value(4);
         const topForLabel = api.value(5);
-        const labelText = api.value(6) as unknown as string;
-        const hasBands = api.value(7) === 1;
+        const hasBands = api.value(6) === 1;
+        const labelText = labelTexts[params.dataIndex] ?? '';
         // Category band width (px) for this category.
         const categoryBand = api.size([1, 0])[0];
         const groupWidth = categoryBand * (1 - _barCategoryGapFrac);
