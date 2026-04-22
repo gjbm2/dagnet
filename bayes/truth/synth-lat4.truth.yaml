@@ -36,6 +36,14 @@ simulation:
   traffic_cv: 1.0
   expected_sample_seconds: 900
 
+# Extra synthetic cohort families for admission-rule tests.
+# `cohort(c,c-d)` collapses to `window(c-d)`, so the useful distinct family
+# here is the upstream anchor `b` on the downstream edge `c→d`.
+alternate_cohort_anchors:
+  - anchor: b
+    edges:
+      - c-to-d
+
 nodes:
   a:
     start: true

@@ -29,7 +29,8 @@ Before your first Edit or Write tool call on a scoped code path, you MUST:
   2. Read any additional docs required by the path-glob manifest at
      .claude/context-manifest.yaml for the file you are about to edit.
 
-  3. Emit a briefing receipt as normal message output in this exact form:
+  3. Emit a briefing receipt as a STANDALONE assistant message in this
+     exact form:
 
      <briefing-receipt>
      read:
@@ -43,6 +44,20 @@ Before your first Edit or Write tool call on a scoped code path, you MUST:
        - symbol@path/to/file.ts:123
        - symbol@path/to/other.py:45
      </briefing-receipt>
+
+The Stop hook records that receipt for this conversation when the
+message completes. PreToolUse cannot inspect a receipt that appears for
+the first time in the same response as the Edit/Write call.
+
+Workflow rules:
+  - Do NOT combine the first receipt for a scope with the edit it is
+    meant to unlock. The edit will be blocked.
+  - Let the receipt response complete, then continue with the edit.
+    Some runtimes auto-follow up; others require the next turn to do it.
+  - Once recorded, a receipt remains reusable for later edits in this
+    conversation even if the user sends another message.
+  - Do NOT ask the user for a "proceed" message just to preserve the
+    receipt.
 
 A PreToolUse hook validates the receipt deterministically:
   - Every path under `read:` must have been opened via the Read tool

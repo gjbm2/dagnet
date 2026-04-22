@@ -1,8 +1,8 @@
 # 57 — CF sweep eligibility: degraded output for query-scoped posteriors
 
-**Status**: Design — per-edge rule plus concrete degraded-output contract. Supersedes the abandoned Phase 4.5 κ=20 band-aid in doc 56. Revised 21-Apr-26 after review: the rule stays per-edge, the degraded path now reuses the existing closed-form Beta semantics, and the caller-facing provenance contract is explicit.
+**Status**: Implemented reference — per-edge rule plus concrete degraded-output contract. Supersedes the abandoned Phase 4.5 κ=20 band-aid in doc 56. The rule is now live across CF, v3, daily conversions, and the surprise-gauge unavailable path.
 **Created**: 21-Apr-26
-**Updated**: 21-Apr-26 (third revision — degraded contract fixed to Beta closed form; provenance renamed to `cf_mode` / `cf_reason`; `conditioning` / `conditioned` / `skipped_edges` invariants made explicit).
+**Updated**: 22-Apr-26 (implemented-state revision — status, caller coverage, and remaining follow-ons aligned to the live code).
 **Relates to**: doc 50 (CF generality gap — laggy-edge undershoot symptom), doc 52 (subset-conditioning double-counting — same underlying incoherence; conditioning block exposed on CF responses), doc 55 (`55-surprise-gauge-rework.md`; uses the same predicate but emits "unavailable" rather than degrading), doc 56 (`56-forecast-stack-residual-v1-v2-coupling.md`; runtime-boundary refactor that this rule sits on), doc 29f D20 (weak-prior IS collapse — prior fix on a different code path).
 
 ## TL;DR
@@ -38,7 +38,7 @@ None of those carrier tiers requires an upstream Bayesian posterior on p. They g
 
 Carrier quality is still a separate axis. Tier-3-only carriers may warrant a second degradation flag later, but that is orthogonal to the present rule.
 
-## The proposed rule
+## The live rule
 
 For each edge in the CF path, compute a boolean `sweep_eligible`:
 
@@ -146,20 +146,25 @@ This design does not require Bayes to have run everywhere. Degraded analytic out
 1. **Tier-3-only carrier as a second degradation axis**: today an edge can still be `sweep_eligible` while running on a weak-prior carrier. That is a different degradation from "query-scoped posterior" but may deserve a second provenance state later.
 2. **Surprise-gauge reason-code vocabulary**: doc 55 should remain the owner of the unavailable reason-code registry. This doc contributes `"query_scoped_posterior"` but should not become the global vocabulary source.
 
-## Sequencing
+## Implementation status
 
-Before implementation, this doc needs sign-off on the per-edge predicate, the degraded response contract (`cf_mode`, `cf_reason`, `conditioning`, `conditioned`, `_forensic`), and the inclusion of the surprise-gauge caller alongside the rate-style callers. After sign-off:
+This contract is now live.
 
-1. Implement the `sweep_eligible` helper in `forecast_runtime.py`
-2. Factor a shared degraded-result builder that reuses the existing Beta closed-form semantics from `_non_latency_rows()` for the rate-side outputs; do **not** introduce a separate binomial-SE path
-3. Add the short-circuit path to `handle_conditioned_forecast`, `_handle_cohort_maturity_v3`, the daily-conversions handler, and `_compute_surprise_gauge`
-4. Extend the response schema with `cf_mode` and `cf_reason`, while keeping `conditioning` and `conditioned` defined on degraded edges and keeping degraded edges in `edges[]`, not `skipped_edges[]`
-5. Re-run `cf-truth-parity.sh` on the doc 50 fixtures
-   - `sweep_eligible` edges should remain unchanged
-   - previously red analytic / analytic_be edges should now be compared against the degraded closed-form contract rather than against the sweep
-6. Re-capture the doc 56 oracle baselines in a dedicated commit with explicit before/after deltas
-   - degraded edges will no longer surface `rate_draws_sha256`
-   - any RNG-parity gate must therefore move to an all-eligible fixture or be retired explicitly
-7. Update doc 52 to mention this doc as the coarse-grained complement to its finer-grained correction, update doc 55 to note that `"query_scoped_posterior"` is now one of its unavailable reasons, and update doc 56 Phase 4.5 / §11.2 to point here
+1. `forecast_runtime.py` owns the shared per-edge predicate via
+   `is_cf_sweep_eligible()` and `get_cf_mode_and_reason()`.
+2. Rate-style degraded outputs reuse the existing closed-form Beta
+   semantics rather than introducing a second ad hoc uncertainty model.
+3. Active callers share the same per-edge rule:
+   - `handle_conditioned_forecast`
+   - `_handle_cohort_maturity_v3`
+   - the daily-conversions CF-backed branch
+   - `_compute_surprise_gauge` (unavailable rather than degraded numeric output)
+4. Caller-facing provenance is explicit on live CF-style responses via
+   `cf_mode`, `cf_reason`, `conditioning`, and `conditioned`.
 
-Completion of these steps closes out the doc 56 migration on the CF side and the matching surprise-gauge alignment. Other consumers of the same predicate follow the same pattern.
+Residual follow-ons are now narrower than the original rollout list:
+
+- wider outside-in parity/oracle refresh where still useful
+- any later second degradation axis for Tier-3-only carriers
+- doc-level cross-references where the broader workstream still points at
+  the pre-implementation wording

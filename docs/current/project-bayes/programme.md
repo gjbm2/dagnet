@@ -241,6 +241,18 @@ Ordered as the owner groups them (three tiers separated by `---`).
 - ~~**Funnel hi/lo bars via BE CF machinery** (doc 52-funnel)~~ —
   P2.14, **DONE 21-Apr-26**.
 - **Slice dispersion prior robustness** (doc 54) — P2.15.
+- ~~**Forecast adaptation — target runtime contract + WP0-WP9
+  delivery** (docs 59 + 60)~~ — **DONE 22-Apr-26**. Runtime objects
+  (`population_root`, `carrier_to_x`, `subject_span`,
+  `numerator_representation`, `admission_policy`,
+  `p_conditioning_evidence`) live in
+  [forecast_runtime.py:84-281](graph-editor/lib/runner/forecast_runtime.py#L84),
+  consumed by the engine at
+  [forecast_state.py:537,1274](graph-editor/lib/runner/forecast_state.py#L537).
+  Narrow direct-`cohort()` `p` conditioning flag landed. Supersedes
+  the "root-cause confirmed" state of doc 47 multi-hop
+  cohort/window divergence. Remaining: broader outside-in harnesses
+  + later B3 / gross-numerator work.
 - ~~**Forecast-stack residual v1/v2 coupling — migrate live callers
   off legacy helpers** (doc 56)~~ — P2.16, **DONE 21-Apr-26**.
   Engine, v3, and CF handler all on the clean `forecast_runtime`

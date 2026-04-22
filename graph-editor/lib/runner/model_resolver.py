@@ -21,16 +21,35 @@ from typing import Any, Dict, List, Optional
 
 @dataclass
 class ResolvedLatency:
-    """Resolved latency parameters for one scope (edge or path)."""
+    """Resolved latency parameters for one scope (edge or path).
+
+    Naming (doc 61): bare `mu_sd` is epistemic (posterior SD of μ);
+    `mu_sd_pred` is predictive (kappa_lat-inflated). When `mu_sd_pred`
+    is not available (no kappa_lat, or pre-migration data) it falls
+    back to the epistemic value via the `mu_sd_predictive` property
+    so forecasting callers can read one field without special-casing.
+    σ and onset dispersions have no predictive mechanism in the current
+    model and are always epistemic.
+    """
     mu: float = 0.0
     sigma: float = 0.0
     onset_delta_days: float = 0.0
     t95: float = 0.0
     # Dispersions (from posterior SDs or heuristic)
-    mu_sd: float = 0.0
+    mu_sd: float = 0.0                     # epistemic (doc 61)
+    mu_sd_pred: Optional[float] = None     # predictive (kappa_lat); None when absent
     sigma_sd: float = 0.0
     onset_sd: float = 0.0
     onset_mu_corr: float = 0.0
+
+    @property
+    def mu_sd_predictive(self) -> float:
+        """Predictive μ-SD with safe fallback: bare mu_sd when no kappa_lat.
+
+        Correct by construction — without kappa_lat the predictive and
+        epistemic dispersions coincide, so reading bare mu_sd is exact.
+        """
+        return self.mu_sd_pred if self.mu_sd_pred is not None else self.mu_sd
 
 
 @dataclass
@@ -117,10 +136,12 @@ def _extract_source_curves(model_vars: List[Dict[str, Any]]) -> Dict[str, Dict[s
             'path_onset_delta_days': mv_lat.get('path_onset_delta_days'),
             'forecast_mean': mv_prob.get('mean'),
             'p_stdev': mv_prob.get('stdev'),
-            'mu_sd': mv_lat.get('mu_sd'),
+            'mu_sd': mv_lat.get('mu_sd'),                 # epistemic (doc 61)
+            'mu_sd_pred': mv_lat.get('mu_sd_pred'),       # predictive (kappa_lat)
             'sigma_sd': mv_lat.get('sigma_sd'),
             'onset_sd': mv_lat.get('onset_sd'),
             'path_mu_sd': mv_lat.get('path_mu_sd'),
+            'path_mu_sd_pred': mv_lat.get('path_mu_sd_pred'),
             'path_sigma_sd': mv_lat.get('path_sigma_sd'),
             'path_onset_sd': mv_lat.get('path_onset_sd'),
         }
@@ -213,7 +234,9 @@ def resolve_model_params(
         edge_sigma = float(_src_sigma)
         edge_onset = float(_src.get('onset_delta_days') or latency_block.get('onset_delta_days') or 0.0)
         edge_t95 = float(_src.get('t95') or latency_block.get('promoted_t95') or latency_block.get('t95') or 0.0)
-        edge_mu_sd = float(_src.get('mu_sd') or 0.0)
+        edge_mu_sd = float(_src.get('mu_sd') or 0.0)                          # epistemic (doc 61)
+        _src_mu_sd_pred = _src.get('mu_sd_pred')
+        edge_mu_sd_pred = float(_src_mu_sd_pred) if _src_mu_sd_pred else None
         edge_sigma_sd = float(_src.get('sigma_sd') or 0.0)
         edge_onset_sd = float(_src.get('onset_sd') or 0.0)
         edge_onset_mu_corr = float(_src.get('onset_mu_corr') or 0.0)
@@ -228,11 +251,16 @@ def resolve_model_params(
             or 0.0
         )
         edge_t95 = latency_block.get('promoted_t95') or latency_block.get('t95') or 0.0
-        edge_mu_sd = (
+        edge_mu_sd = (                                                        # epistemic (doc 61)
             latency_block.get('promoted_mu_sd')
             or lat_posterior.get('mu_sd')
             or 0.0
         )
+        _lat_pred = (
+            latency_block.get('promoted_mu_sd_pred')
+            or lat_posterior.get('mu_sd_pred')
+        )
+        edge_mu_sd_pred = float(_lat_pred) if _lat_pred else None
         edge_sigma_sd = (
             latency_block.get('promoted_sigma_sd')
             or lat_posterior.get('sigma_sd')
@@ -255,6 +283,7 @@ def resolve_model_params(
         onset_delta_days=float(edge_onset),
         t95=float(edge_t95),
         mu_sd=float(edge_mu_sd),
+        mu_sd_pred=edge_mu_sd_pred,
         sigma_sd=float(edge_sigma_sd),
         onset_sd=float(edge_onset_sd),
         onset_mu_corr=float(edge_onset_mu_corr),
@@ -278,11 +307,16 @@ def resolve_model_params(
                 or edge_onset
             )
             path_t95 = latency_block.get('promoted_path_t95') or latency_block.get('path_t95') or 0.0
-            path_mu_sd = (
+            path_mu_sd = (                                                    # epistemic (doc 61)
                 latency_block.get('promoted_path_mu_sd')
                 or lat_posterior.get('path_mu_sd')
                 or 0.0
             )
+            _path_pred = (
+                latency_block.get('promoted_path_mu_sd_pred')
+                or lat_posterior.get('path_mu_sd_pred')
+            )
+            path_mu_sd_pred = float(_path_pred) if _path_pred else None
             path_sigma_sd = (
                 latency_block.get('promoted_path_sigma_sd')
                 or lat_posterior.get('path_sigma_sd')
@@ -304,6 +338,7 @@ def resolve_model_params(
                 onset_delta_days=float(path_onset),
                 t95=float(path_t95),
                 mu_sd=float(path_mu_sd),
+                mu_sd_pred=path_mu_sd_pred,
                 sigma_sd=float(path_sigma_sd),
                 onset_sd=float(path_onset_sd),
                 onset_mu_corr=float(path_onset_mu_corr),

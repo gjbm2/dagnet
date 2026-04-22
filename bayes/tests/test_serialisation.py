@@ -185,16 +185,16 @@ class TestLatencyWebhookDict:
         d = s.to_webhook_dict()
         expected_keys = {
             # Base
-            "mu_mean", "mu_sd", "mu_sd_epist", "sigma_mean", "sigma_sd",
+            "mu_mean", "mu_sd", "mu_sd_pred", "sigma_mean", "sigma_sd",
             "onset_delta_days", "hdi_t95_lower", "hdi_t95_upper",
             "hdi_level", "ess", "rhat", "provenance",
             # Phase D.O onset
             "onset_mean", "onset_sd", "onset_hdi_lower",
             "onset_hdi_upper", "onset_mu_corr",
-            # Path-level
+            # Path-level (doc 61: bare = epistemic, _pred = predictive)
             "path_onset_delta_days", "path_onset_sd",
             "path_onset_hdi_lower", "path_onset_hdi_upper",
-            "path_mu_mean", "path_mu_sd", "path_mu_sd_epist",
+            "path_mu_mean", "path_mu_sd", "path_mu_sd_pred",
             "path_sigma_mean", "path_sigma_sd",
             "path_hdi_t95_lower", "path_hdi_t95_upper",
             "path_provenance",
@@ -422,13 +422,17 @@ WINDOW_PREDICTIVE_PROB_FIELDS = {
 }
 WINDOW_EPISTEMIC_PROB_FIELDS = {"alpha", "beta", "p_hdi_lower", "p_hdi_upper"}
 WINDOW_LATENCY_DISPERSION_FIELDS = {
-    "mu_sd", "mu_sd_epist", "sigma_sd", "onset_sd",
+    "mu_sd", "mu_sd_pred", "sigma_sd", "onset_sd",
 }
 WINDOW_LATENCY_OVERDISPERSION_FIELDS = {"kappa_lat_mean", "kappa_lat_sd"}
 WINDOW_SUBSET_MASS_FIELDS = {"n_effective"}
 
 COHORT_PREDICTIVE_PROB_FIELDS = WINDOW_PREDICTIVE_PROB_FIELDS
-COHORT_LATENCY_DISPERSION_FIELDS = WINDOW_LATENCY_DISPERSION_FIELDS
+# Doc 61: current model has no path-level predictive mechanism, so the
+# cohort() slice carries only the bare (epistemic) mu_sd — no mu_sd_pred.
+COHORT_LATENCY_DISPERSION_FIELDS = {
+    "mu_sd", "sigma_sd", "onset_sd",
+}
 COHORT_LATENCY_OVERDISPERSION_FIELDS = WINDOW_LATENCY_OVERDISPERSION_FIELDS
 COHORT_SUBSET_MASS_FIELDS = WINDOW_SUBSET_MASS_FIELDS
 
@@ -469,22 +473,21 @@ class TestUnifiedSlicesDispersionCompleteness:
     def _fully_populated_lat(self) -> LatencyPosteriorSummary:
         """LatencyPosteriorSummary with every optional dispersion field set."""
         return LatencyPosteriorSummary(
-            # Edge-level
-            mu_mean=2.35, mu_sd=0.12,           # predictive when kappa present
+            # Edge-level (doc 61: bare mu_sd is epistemic, mu_sd_pred is predictive)
+            mu_mean=2.35, mu_sd=0.08,           # epistemic anchor
             sigma_mean=0.72, sigma_sd=0.04,
             onset_delta_days=1.5,
             hdi_t95_lower=18.5, hdi_t95_upper=32.1,
             ess=950, rhat=1.006,
             provenance="bayesian",
-            mu_sd_epist=0.08,                    # always epistemic (doc 49 §A.6.2)
+            mu_sd_pred=0.12,                    # predictive (kappa_lat-inflated)
             onset_mean=1.5, onset_sd=0.3,
             onset_hdi_lower=0.9, onset_hdi_upper=2.1,
             onset_mu_corr=-0.423,
-            # Path-level (cohort)
+            # Path-level (cohort) — no predictive mechanism today
             path_onset_delta_days=3.2, path_onset_sd=0.5,
             path_onset_hdi_lower=2.4, path_onset_hdi_upper=4.0,
-            path_mu_mean=2.81, path_mu_sd=0.18,
-            path_mu_sd_epist=0.12,
+            path_mu_mean=2.81, path_mu_sd=0.12,  # epistemic
             path_sigma_mean=0.58, path_sigma_sd=0.06,
             path_hdi_t95_lower=28.4, path_hdi_t95_upper=58.7,
             path_provenance="bayesian",
@@ -561,19 +564,19 @@ class TestUnifiedSlicesDispersionCompleteness:
         )
         missing = expected - w.keys()
         assert not missing, f"window() missing latency dispersions: {missing}"
-        assert w["mu_sd"] == 0.12           # predictive (doc 49 §A.6.2)
-        assert w["mu_sd_epist"] == 0.08     # epistemic anchor
+        assert w["mu_sd"] == 0.08           # epistemic (doc 61)
+        assert w["mu_sd_pred"] == 0.12      # predictive (kappa_lat-inflated)
         assert w["sigma_sd"] == 0.04        # always epistemic
         assert w["onset_sd"] == 0.3
         assert w["kappa_lat_mean"] == 25.3
         assert w["kappa_lat_sd"] == 4.7
 
-    def test_window_mu_sd_epist_omitted_when_none(self):
-        """mu_sd_epist omitted when None (legacy path without epistemic split)."""
+    def test_window_mu_sd_pred_omitted_when_none(self):
+        """mu_sd_pred omitted when None (no kappa_lat fitted — doc 61)."""
         lat = self._fully_populated_lat()
-        lat.mu_sd_epist = None
+        lat.mu_sd_pred = None
         slices = _build_unified_slices(self._fully_populated_prob(), lat)
-        assert "mu_sd_epist" not in slices["window()"]
+        assert "mu_sd_pred" not in slices["window()"]
 
     def test_window_kappa_lat_omitted_when_absent(self):
         """kappa_lat_mean/sd omitted when latency dispersion disabled."""
@@ -616,12 +619,14 @@ class TestUnifiedSlicesDispersionCompleteness:
             self._fully_populated_prob(), self._fully_populated_lat(),
         )
         c = slices["cohort()"]
-        assert c["mu_sd"] == 0.18            # from path_mu_sd (predictive)
-        assert c["mu_sd_epist"] == 0.12      # from path_mu_sd_epist
+        assert c["mu_sd"] == 0.12            # from path_mu_sd (epistemic — doc 61)
         assert c["sigma_sd"] == 0.06         # from path_sigma_sd
         assert c["onset_sd"] == 0.5          # from path_onset_sd
         assert c["kappa_lat_mean"] == 25.3   # shared with window
         assert c["kappa_lat_sd"] == 4.7
+        # No path-level predictive mechanism in current model (doc 61) —
+        # path cohort slice carries only bare mu_sd.
+        assert "mu_sd_pred" not in c
 
     # -- Meta-tests: frozen contract --
 
@@ -733,13 +738,16 @@ _LAT_EXCLUDED_REASON = {
     "ppc_traj_coverage_90": "conditional field, tested separately",
     "ppc_traj_n_obs": "conditional field, tested separately",
     # mu_mean is edge-level primary; handled as window[mu_mean].
+    # Doc 61: path-level has no predictive mechanism in the current
+    # model, so path_mu_sd_pred is never populated and is intentionally
+    # not plumbed onto the cohort() slice.
+    "path_mu_sd_pred": "no path-level predictive mechanism today (doc 61)",
 }
 
 # Fields that rename when projecting path_ fields onto cohort() slice
 _LAT_PATH_TO_COHORT_RENAME = {
     "path_mu_mean": "mu_mean",
     "path_mu_sd": "mu_sd",
-    "path_mu_sd_epist": "mu_sd_epist",
     "path_sigma_mean": "sigma_mean",
     "path_sigma_sd": "sigma_sd",
     "path_onset_sd": "onset_sd",

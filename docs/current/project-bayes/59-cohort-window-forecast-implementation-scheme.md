@@ -1,8 +1,9 @@
 # 59 — Cohort/Window Forecast Implementation Scheme
 
-**Status**: Proposed  
+**Status**: Active reference  
 **Date**: 21-Apr-26  
-**Review status**: Ready for systematic peer review  
+**Updated**: 22-Apr-26  
+**Review status**: Core runtime scheme now live; retained as the target/reference note for residual follow-on work  
 **Review pack role**: 2 of 3 — target runtime and consumer contract  
 **Relates to**: `docs/current/codebase/COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md`, `29-generalised-forecast-engine-design.md`, `29b-span-kernel-operator-algebra.md`, `29c-phase-a-design.md`, `45-forecast-parity-design.md`, `47-multi-hop-cohort-window-divergence.md`, `52-subset-conditioning-double-count-correction.md`, `52-b3-spike-workplan.md`, `53-explicit-drift-modelling-discussion.md`, `60-forecast-adaptation-programme.md`
 
@@ -30,6 +31,14 @@ It is intended to do two jobs:
 - define the target contract the live implementation should satisfy
 - provide the frame for the immediate delta analysis against the live
   forecast consumers
+
+As of 22-Apr-26, the core runtime objects in this note are now present in
+the live code (`population_root`, `carrier_to_x`, `subject_span`,
+`numerator_representation`, `admission_policy`, and
+`p_conditioning_evidence`). The narrow direct-`cohort()` `p`
+conditioning flag has also landed. The remaining open material in this note
+is mainly the outer delta-analysis frame and the later B3 / gross-numerator
+questions, not the basic runtime seam itself.
 
 A scheme that only works for the `cohort_maturity` chart path is not
 enough. The whole-graph, topo-sequenced BE conditioned-forecast pass that
@@ -313,9 +322,9 @@ a trade-off.
 At the same time, this evidence should not be allowed to rewrite the whole
 runtime template by stealth.
 
-### 10.1 Recommended scope
+### 10.1 Current live scope
 
-The recommended first implementation is:
+The current first implementation is:
 
 - **flagged**
 - **cohort mode only**
@@ -323,7 +332,7 @@ The recommended first implementation is:
 - **single-hop first**, or more generally only where the subject match is
   exact and admitted with low semantic ambiguity
 
-The flag should control only the choice of `p_conditioning_evidence`.
+The live flag controls only the choice of `p_conditioning_evidence`.
 
 It should not:
 
@@ -333,7 +342,7 @@ It should not:
 - alter the rule that frontier forecasting remains window-led for
   current-regime estimation
 
-### 10.2 What the flag should do
+### 10.2 What the flag does
 
 When the flag is enabled and the subject match is admitted:
 
@@ -348,7 +357,7 @@ This produces a hybrid path:
 - rate update may use direct `cohort()` evidence for `p`
 - latency and carrier semantics remain factorised and role-correct
 
-### 10.3 How rate priors should behave under the flag
+### 10.3 How rate priors behave under the flag
 
 The update rule must still respect the existing scoping semantics of the
 resolved prior source.
@@ -358,12 +367,12 @@ resolved prior source.
 - If the resolved rate prior is already query-scoped, it must be read
   directly rather than updated again.
 
-This means the implementation should continue to branch on the semantic
+The implementation continues to branch on the semantic
 property currently expressed in `ResolvedModelParams.alpha_beta_query_scoped`
 in `graph-editor/lib/runner/model_resolver.py`, not on source-name
 heuristics scattered through consumers.
 
-### 10.4 Why the scope is narrow
+### 10.4 Why the scope remains narrow
 
 This design is intentionally narrower than "use `cohort(a,x-y)` directly
 for everything".

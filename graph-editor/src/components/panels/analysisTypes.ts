@@ -420,8 +420,9 @@ export const ANALYSIS_TYPES: AnalysisTypeMeta[] = [
     },
     renderMinimised: (props) => React.createElement(MinimisedSurpriseGauge, props),
     minimisedLabel: ({ result, settings, label }) => {
+      const scenarioScope = settings?.surprise_scenario_scope || 'focused';
       const selectedVar = settings?.surprise_var || 'p';
-      if (selectedVar === 'all' || !result?.variables) return null;
+      if (scenarioScope === 'all_visible' || selectedVar === 'all' || !result?.variables) return null;
       const v = result.variables.find((x: any) => x.available && x.name === selectedVar);
       if (!v) return null;
       const subject = label ? ` — ${label}` : '';

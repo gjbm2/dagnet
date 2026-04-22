@@ -1399,44 +1399,126 @@ export class GraphComputeClient {
         return null;
       }
 
-      const scenarios: any[] = raw?.scenarios || [];
+      const scenarios: any[] = Array.isArray(raw?.scenarios) && raw.scenarios.length > 0
+        ? raw.scenarios
+        : (Array.isArray(raw?.subjects)
+          ? [{
+              scenario_id: raw?.scenario_id || request?.scenarios?.[0]?.scenario_id || 'current',
+              subjects: raw.subjects,
+            }]
+          : []);
       if (scenarios.length === 0) return null;
 
-      // Take the first successful subject's result as the representative
-      // gauge for this request. If multiple scenarios are in play, the
-      // gauge UI currently renders one dial per request; multi-scenario
-      // horizontal bands can layer on top when a future builder supports
-      // it.
+      const scenarioDimensionValues: Record<string, any> = {};
+      for (const s of request?.scenarios || []) {
+        if (!s?.scenario_id) continue;
+        scenarioDimensionValues[s.scenario_id] = {
+          name: s.name || s.scenario_id,
+          colour: s.colour,
+          visibility_mode: s.visibility_mode,
+        };
+      }
+
+      const variableDimensionValues = {
+        p: { name: 'Conversion rate', order: 0 },
+        completeness: { name: 'Completeness', order: 1 },
+      };
+
+      const scenarioResults: any[] = [];
       for (const sc of scenarios) {
+        const scenarioId = sc?.scenario_id || request?.scenarios?.[scenarioResults.length]?.scenario_id || 'current';
         const subjects: any[] = sc?.subjects || [];
         for (const subj of subjects) {
           if (subj?.success && subj?.result?.analysis_type === 'surprise_gauge') {
             const r = subj.result;
-            return {
-              success: true,
-              result: {
-                analysis_type: 'surprise_gauge',
-                analysis_name: r.analysis_name || 'Expectation Gauge',
-                analysis_description: r.analysis_description,
-                metadata: r.metadata || {},
-                semantics: {
-                  dimensions: [{ id: 'variable', name: 'Variable', type: 'categorical', role: 'primary' }],
-                  metrics: [{ id: 'quantile', name: 'Quantile', type: 'number', role: 'primary' }],
-                  chart: { recommended: 'surprise_gauge', alternatives: ['table'] },
-                },
-                dimension_values: {},
-                data: r.variables || [],
-                // Pass through the gauge-specific fields the builder reads
-                variables: r.variables,
-                reference_source: r.reference_source,
-                hint: r.hint,
-              } as any,
-              query_dsl: request.query_dsl,
-            } as AnalysisResponse;
+            scenarioResults.push({
+              scenario_id: scenarioId,
+              subject_id: subj?.subject_id || 'subject',
+              analysis_name: r.analysis_name || 'Expectation Gauge',
+              analysis_description: r.analysis_description,
+              variables: Array.isArray(r.variables) ? r.variables : [],
+              reference_source: r.reference_source,
+              hint: r.hint,
+              cf_mode: r.cf_mode,
+              cf_reason: r.cf_reason,
+              error: r.error,
+              is_ess: r.is_ess,
+              metadata: r.metadata || {},
+            });
+            break;
           }
         }
       }
-      return null;
+      if (scenarioResults.length === 0) return null;
+
+      const focusedScenario = scenarioResults[scenarioResults.length - 1];
+      const rows = scenarioResults.flatMap((scenarioResult) => {
+        const scenarioMeta = scenarioDimensionValues[scenarioResult.scenario_id] || {};
+        const scenarioName = scenarioMeta.name || scenarioResult.scenario_id;
+        return (scenarioResult.variables || []).map((variable: any) => ({
+          scenario_id: scenarioResult.scenario_id,
+          scenario_name: scenarioName,
+          variable: variable.name,
+          variable_label: variable.label,
+          available: Boolean(variable.available),
+          observed: variable.observed ?? null,
+          expected: variable.expected ?? null,
+          sigma: variable.sigma ?? null,
+          quantile: variable.quantile ?? null,
+          posterior_sd: variable.posterior_sd ?? null,
+          combined_sd: variable.combined_sd ?? null,
+          evidence_n: variable.evidence_n ?? null,
+          evidence_k: variable.evidence_k ?? null,
+          zone: variable.zone ?? '',
+          reason: variable.reason ?? '',
+        }));
+      });
+
+      return {
+        success: true,
+        result: {
+          analysis_type: 'surprise_gauge',
+          analysis_name: focusedScenario.analysis_name || 'Expectation Gauge',
+          analysis_description: focusedScenario.analysis_description,
+          metadata: {
+            ...focusedScenario.metadata,
+            scenario_count: scenarioResults.length,
+          },
+          semantics: {
+            dimensions: [
+              { id: 'variable', name: 'Variable', type: 'categorical', role: 'primary' },
+              { id: 'scenario_id', name: 'Scenario', type: 'scenario', role: 'secondary' },
+            ],
+            metrics: [
+              { id: 'observed', name: 'Observed', type: 'ratio', format: 'percent', role: 'primary' },
+              { id: 'expected', name: 'Expected', type: 'ratio', format: 'percent' },
+              { id: 'sigma', name: 'Sigma', type: 'number' },
+              { id: 'quantile', name: 'Quantile', type: 'ratio', format: 'percent' },
+              { id: 'evidence_n', name: 'Evidence n', type: 'count' },
+              { id: 'evidence_k', name: 'Evidence k', type: 'count' },
+            ],
+            chart: { recommended: 'surprise_gauge', alternatives: ['table'] },
+          },
+          dimension_values: {
+            variable: variableDimensionValues,
+            scenario_id: scenarioDimensionValues,
+          },
+          data: rows,
+          // Top-level variables stay focused on the default "latest visible"
+          // scenario so existing single-scenario consumers (for example the
+          // minimised canvas badge) keep a coherent default.
+          variables: focusedScenario.variables,
+          focused_scenario_id: focusedScenario.scenario_id,
+          scenario_results: scenarioResults,
+          reference_source: focusedScenario.reference_source,
+          hint: focusedScenario.hint,
+          cf_mode: focusedScenario.cf_mode,
+          cf_reason: focusedScenario.cf_reason,
+          error: focusedScenario.error,
+          is_ess: focusedScenario.is_ess,
+        } as any,
+        query_dsl: request.query_dsl,
+      } as AnalysisResponse;
     } catch (err) {
       console.error('[GraphComputeClient] Surprise gauge normalisation failed:', err);
       return null;

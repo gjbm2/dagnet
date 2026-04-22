@@ -6,6 +6,7 @@ import YAML from 'yaml';
 import { merge3Way, mergeJson3Way } from './mergeService';
 import { sessionLogService } from './sessionLogService';
 import { operationRegistryService } from './operationRegistryService';
+import { normaliseSliceShape } from './posteriorSliceResolution';
 
 /**
  * Parse YAML leniently — tolerates duplicate map keys.
@@ -23,6 +24,112 @@ function parseYamlLenient(src: string): any {
   );
   if (realErrors.length > 0) throw realErrors[0];
   return doc.toJSON();
+}
+
+/**
+ * Doc 61 dispersion-field migration hook.
+ *
+ * Loaded graphs and parameter files may carry the old dispersion field
+ * naming (bare `mu_sd` meaning "predictive-when-kappa-fitted" plus a
+ * separate `mu_sd_epist` always-epistemic companion) produced by pre-rename
+ * Bayes patches. The new contract: bare `mu_sd` is epistemic, `mu_sd_pred`
+ * is predictive.
+ *
+ * This normaliser rewrites old-shape fields to new-shape in place on the
+ * parsed JSON/YAML data returned from git or IDB. It runs at load time,
+ * inside the initialisation phase where `isInitializing: true` keeps the
+ * FileRegistry dirty-detection absorbed (see SYNC_SYSTEM_OVERVIEW.md
+ * §Initialisation lifecycle), so the migration does not mark files dirty.
+ *
+ * Cases handled:
+ *   1. Parameter-file posterior.slices entries with `mu_sd_epist` →
+ *      normalise each slice via the shared shim.
+ *   2. Parameter-file posterior.fit_history[*].slices entries → same.
+ *   3. Graph-edge `p.latency.posterior` direct fields (the projected
+ *      LatencyPosterior shape) with `mu_sd_epist` or `path_mu_sd_epist`
+ *      → rename to new contract.
+ *   4. Graph-edge `p.model_vars[bayesian].latency` with `mu_sd_epist` /
+ *      `path_mu_sd_epist` → rename to new contract.
+ *
+ * Pre-doc-49 graphs carrying only bare `mu_sd` and no `mu_sd_epist`
+ * require no rewrite — bare `mu_sd` stays as-is and `mu_sd_pred` remains
+ * absent. Band consumers reading the predictive slot fall back to bare
+ * `mu_sd` (see ResolvedLatency.mu_sd_predictive).
+ *
+ * Idempotent: running twice on the same data is a no-op.
+ */
+function _migrateDispersionShapeInPlace(data: any, filePath: string): boolean {
+  if (!data || typeof data !== 'object') return false;
+  let touched = false;
+
+  // Case 1 + 2: parameter-file posterior.slices (+ fit_history)
+  const posterior = data.posterior;
+  if (posterior && typeof posterior === 'object') {
+    if (posterior.slices && typeof posterior.slices === 'object') {
+      for (const key of Object.keys(posterior.slices)) {
+        const entry = posterior.slices[key];
+        const normalised = normaliseSliceShape(entry);
+        if (normalised !== entry) {
+          posterior.slices[key] = normalised;
+          touched = true;
+        }
+      }
+    }
+    if (Array.isArray(posterior.fit_history)) {
+      for (const fh of posterior.fit_history) {
+        if (fh && typeof fh === 'object' && fh.slices && typeof fh.slices === 'object') {
+          for (const key of Object.keys(fh.slices)) {
+            const entry = fh.slices[key];
+            const normalised = normaliseSliceShape(entry);
+            if (normalised !== entry) {
+              fh.slices[key] = normalised;
+              touched = true;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // Case 3 + 4: graph-edge shapes
+  const edges = Array.isArray(data.edges) ? data.edges : null;
+  if (edges) {
+    for (const edge of edges) {
+      const p = edge?.p;
+      if (!p || typeof p !== 'object') continue;
+      // Case 3: projected LatencyPosterior on graph edge
+      const latPosterior = p.latency?.posterior;
+      if (latPosterior && typeof latPosterior === 'object') {
+        const rewritten = normaliseSliceShape(latPosterior);
+        if (rewritten !== latPosterior) {
+          p.latency.posterior = rewritten;
+          touched = true;
+        }
+      }
+      // Case 4: model_vars[bayesian].latency
+      const modelVars = Array.isArray(p.model_vars) ? p.model_vars : null;
+      if (modelVars) {
+        for (const mv of modelVars) {
+          if (mv?.source !== 'bayesian') continue;
+          const mvLat = mv.latency;
+          if (!mvLat || typeof mvLat !== 'object') continue;
+          const rewritten = normaliseSliceShape(mvLat);
+          if (rewritten !== mvLat) {
+            mv.latency = rewritten;
+            touched = true;
+          }
+        }
+      }
+    }
+  }
+
+  if (touched) {
+    sessionLogService.info(
+      'workspace', 'DISPERSION_MIGRATION',
+      `Migrated old-shape mu_sd_epist → new mu_sd/mu_sd_pred on ${filePath}`,
+    );
+  }
+  return touched;
 }
 
 export interface RemoteStatus {
@@ -473,6 +580,13 @@ class WorkspaceService {
             } else {
               data = parseYamlLenient(contentStr);
             }
+
+            // Doc 61 dispersion-field migration: rewrite old-shape mu_sd_epist
+            // to new-shape mu_sd/mu_sd_pred in place on the parsed data.
+            // Runs inside the initialisation phase (isInitializing=true) so
+            // the migration is absorbed into originalData without marking
+            // the file dirty.
+            _migrateDispersionShapeInPlace(data, treeItem.path);
 
             // Create FileState
           const fileName = treeItem.path.split('/').pop() || ''; // Get filename from path

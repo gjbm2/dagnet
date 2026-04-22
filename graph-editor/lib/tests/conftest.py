@@ -10,16 +10,20 @@ Provides:
 
 from __future__ import annotations
 
+import base64
 import copy
 import functools
+import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
 
 
 # ── sys.path setup ────���─────────────────────────────────────────────────────
@@ -82,12 +86,29 @@ def _load_graph_text(graph_name: str) -> str:
     return path.read_text()
 
 
-def load_graph_json(graph_name: str) -> dict[str, Any]:
-    """Load a graph JSON as a fresh mutable dict."""
+def load_graph_json(graph_name: str, *, bayesian: bool = False) -> dict[str, Any]:
+    """Load a graph JSON as a fresh mutable dict.
+
+    When `bayesian=True`, also ensure a fresh bayesian sidecar exists
+    (building it via MCMC if missing or stale) and inject its
+    model_vars into the returned graph. The on-disk graph file is not
+    mutated — bayesian state lives purely in the sidecar and is
+    re-injected at each load.
+    """
     try:
-        return json.loads(_load_graph_text(graph_name))
+        graph = json.loads(_load_graph_text(graph_name))
     except FileNotFoundError as exc:
         pytest.skip(str(exc))
+    if bayesian:
+        sidecar_edges = _ensure_bayes_sidecar(graph_name)
+        if sidecar_edges is None:
+            pytest.skip(
+                f"Bayesian sidecar unavailable for {graph_name} "
+                f"(MCMC subprocess failed or bayes worker not reachable)"
+            )
+        from bayes.sidecar import inject_bayesian as _inject
+        _inject(graph, sidecar_edges)
+    return graph
 
 
 @functools.lru_cache(maxsize=None)
@@ -138,6 +159,58 @@ def _load_candidate_regimes_by_mode_cached(
 ) -> dict[str, list[dict[str, Any]]]:
     """Build FE-style candidate regimes with temporal_mode tags."""
     by_mode = _load_db_hashes_by_mode_cached(graph_name)
+    graph = json.loads(_load_graph_text(graph_name))
+    repo = _resolve_data_repo_dir()
+
+    def _short_core_hash(signature: str) -> str:
+        digest = hashlib.sha256(signature.encode("utf-8")).digest()[:16]
+        return base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
+
+    def _extract_cohort_anchor(slice_dsl: str) -> str | None:
+        match = re.search(r"cohort\(([^)]*)\)", str(slice_dsl or ""))
+        if not match:
+            return None
+        args = match.group(1)
+        comma_idx = args.find(",")
+        if comma_idx <= 0:
+            return None
+        head = args[:comma_idx].strip()
+        return None if ":" in head else head
+
+    hash_meta: dict[str, dict[str, dict[str, Any]]] = {}
+    if repo is not None:
+        for edge in graph.get("edges", []):
+            edge_uuid = edge.get("uuid")
+            param_id = edge.get("p", {}).get("id", "")
+            if not edge_uuid or not param_id:
+                continue
+            file_id = param_id.replace("parameter-", "") if param_id.startswith("parameter-") else param_id
+            param_path = repo / "parameters" / f"{file_id}.yaml"
+            if not param_path.exists():
+                continue
+            try:
+                payload = yaml.safe_load(param_path.read_text()) or {}
+            except Exception:
+                continue
+            values = payload.get("values") or []
+            if not isinstance(values, list):
+                continue
+            edge_meta = hash_meta.setdefault(edge_uuid, {})
+            for value in values:
+                if not isinstance(value, dict):
+                    continue
+                signature = value.get("query_signature")
+                slice_dsl = value.get("sliceDSL", "")
+                if not signature or not slice_dsl:
+                    continue
+                mode = "cohort" if "cohort" in slice_dsl else "window" if "window" in slice_dsl else None
+                if mode is None:
+                    continue
+                edge_meta[_short_core_hash(signature)] = {
+                    "temporal_mode": mode,
+                    "cohort_anchor": _extract_cohort_anchor(slice_dsl),
+                }
+
     regimes: dict[str, list[dict[str, Any]]] = {}
     for edge_uuid, mode_hashes in by_mode.items():
         edge_regimes: list[dict[str, Any]] = []
@@ -152,13 +225,26 @@ def _load_candidate_regimes_by_mode_cached(
                 }
             )
         if cohort_hashes:
-            edge_regimes.append(
-                {
-                    "core_hash": cohort_hashes[0],
-                    "equivalent_hashes": cohort_hashes[1:],
-                    "temporal_mode": "cohort",
-                }
-            )
+            cohort_groups: dict[str, list[str]] = {}
+            cohort_anchors: dict[str, str | None] = {}
+            edge_meta = hash_meta.get(edge_uuid, {})
+            for core_hash in cohort_hashes:
+                meta = edge_meta.get(core_hash, {})
+                anchor = meta.get("cohort_anchor")
+                group_key = str(anchor or "")
+                cohort_groups.setdefault(group_key, []).append(core_hash)
+                cohort_anchors[group_key] = anchor
+            for group_key, grouped_hashes in cohort_groups.items():
+                if not grouped_hashes:
+                    continue
+                edge_regimes.append(
+                    {
+                        "core_hash": grouped_hashes[0],
+                        "equivalent_hashes": grouped_hashes[1:],
+                        "temporal_mode": "cohort",
+                        "cohort_anchor": cohort_anchors.get(group_key),
+                    }
+                )
         if edge_regimes:
             regimes[edge_uuid] = edge_regimes
     return regimes
@@ -194,16 +280,137 @@ requires_data_repo = pytest.mark.skipif(
 )
 
 
-# ── Declarative synth fixture ──���───────────────────────────────────────────
+# ── Declarative synth fixture ─────────────────────────────────────────────
 
 # Session-scoped cache: graph_name → status after verification/bootstrap.
 # Prevents redundant regen within a single pytest session.
 _SYNTH_CACHE: dict[str, str] = {}
 
+# Session-scoped cache of loaded bayesian sidecars (graph_name → edges dict).
+# Prevents MCMC from running more than once per (graph, fingerprint) per
+# pytest process. Entries are stored as deep copies and returned fresh via
+# copy.deepcopy so test-time injection mutations cannot bleed across tests.
+_SIDECAR_CACHE: dict[str, dict[str, Any]] = {}
+
 
 def _synth_cache_clear():
     """Clear the session cache (for testing the fixture itself)."""
     _SYNTH_CACHE.clear()
+    _SIDECAR_CACHE.clear()
+
+
+# ── Bayesian sidecar resolution ──────────────────────────────────────────
+
+def _resolve_bayes_fixtures_dir() -> Path:
+    """Where committed bayesian sidecars live."""
+    return DAGNET_ROOT / "bayes" / "fixtures"
+
+
+def _resolve_truth_path(graph_name: str) -> Path | None:
+    """Return the truth YAML for this graph, preferring the canonical
+    location (bayes/truth/) over the data repo's graphs/ dir.
+
+    Matches verify_synth_data's lookup order."""
+    canonical = DAGNET_ROOT / "bayes" / "truth" / f"{graph_name}.truth.yaml"
+    if canonical.is_file():
+        return canonical
+    repo = _resolve_data_repo_dir()
+    if repo is not None:
+        candidate = repo / "graphs" / f"{graph_name}.truth.yaml"
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _resolve_param_paths(graph_name: str) -> list[Path]:
+    """Resolve per-edge param YAML files for the fingerprint. Inspects
+    the graph's edges for `p.id`, then looks each up in the data repo's
+    parameters/ dir. Missing files are silently dropped — fingerprint
+    still catches meaningful changes via truth + the params that exist.
+    """
+    repo = _resolve_data_repo_dir()
+    if repo is None:
+        return []
+    try:
+        graph = json.loads(_load_graph_text(graph_name))
+    except FileNotFoundError:
+        return []
+    param_ids: list[str] = []
+    for edge in graph.get("edges", []):
+        pid = (edge.get("p") or {}).get("id") or edge.get("id")
+        if pid and pid not in param_ids:
+            param_ids.append(pid)
+    paths = [repo / "parameters" / f"{pid}.yaml" for pid in param_ids]
+    return [p for p in paths if p.is_file()]
+
+
+def _compute_bayes_fingerprint(graph_name: str):
+    """Return the fingerprint for a graph's bayesian sidecar, or None
+    if the truth file is missing (fingerprint cannot be computed)."""
+    truth_path = _resolve_truth_path(graph_name)
+    if truth_path is None:
+        return None
+    root = str(DAGNET_ROOT)
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    from bayes.sidecar import compute_fingerprint
+    param_paths = _resolve_param_paths(graph_name)
+    return compute_fingerprint(str(truth_path), [str(p) for p in param_paths])
+
+
+def _ensure_bayes_sidecar(graph_name: str):
+    """Return the bayesian-edges dict for `graph_name`, running MCMC
+    via `bayes.test_harness --sidecar-out` to produce it if missing or
+    stale. Session-cached — at most one MCMC run per process.
+
+    Returns None when the subprocess fails — caller is expected to
+    pytest.skip. Never writes to the graph file.
+    """
+    if graph_name in _SIDECAR_CACHE:
+        return copy.deepcopy(_SIDECAR_CACHE[graph_name])
+
+    root = str(DAGNET_ROOT)
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    from bayes.sidecar import load_sidecar
+
+    fingerprint = _compute_bayes_fingerprint(graph_name)
+    if fingerprint is None:
+        return None
+    sidecar_path = _resolve_bayes_fixtures_dir() / f"{graph_name}.bayes-vars.json"
+    edges = load_sidecar(str(sidecar_path), expected_fingerprint=fingerprint)
+    if edges is not None:
+        _SIDECAR_CACHE[graph_name] = copy.deepcopy(edges)
+        return edges
+
+    # Missing or stale — rebuild via test_harness --enrich --sidecar-out.
+    print(f"[requires_synth] {graph_name}: bayesian sidecar absent or stale — "
+          f"running MCMC (this may take minutes)...")
+    sidecar_path.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        sys.executable, "-m", "bayes.test_harness",
+        "--graph", graph_name,
+        "--enrich",
+        "--no-webhook",
+        "--sidecar-out", str(sidecar_path),
+    ]
+    result = subprocess.run(
+        cmd, capture_output=True, text=True, timeout=900,
+        cwd=str(DAGNET_ROOT),
+        env={**os.environ, "DB_CONNECTION": _resolve_db_url()},
+    )
+    if result.returncode != 0:
+        print(f"[requires_synth] sidecar MCMC failed for {graph_name}:\n"
+              f"{result.stderr[-2000:]}")
+        return None
+
+    edges = load_sidecar(str(sidecar_path), expected_fingerprint=fingerprint)
+    if edges is None:
+        print(f"[requires_synth] MCMC completed but sidecar missing or "
+              f"fingerprint mismatched for {graph_name}")
+        return None
+    _SIDECAR_CACHE[graph_name] = copy.deepcopy(edges)
+    return edges
 
 
 def _call_verify_synth_data(graph_name: str, data_repo: str, **kwargs) -> dict:
@@ -243,45 +450,14 @@ def _bootstrap_synth_graph(graph_name: str, *, enrich: bool = False,
     return True
 
 
-def _bayesian_enrich_synth_graph(graph_name: str) -> bool:
-    """Run `bayes/test_harness.py --graph X --enrich` to write MCMC posteriors
-    back to the on-disk graph via the FE CLI apply-patch path.
-
-    Requires the bayes worker (MCMC backend) AND node/nvm/FE CLI to be
-    reachable. Returns False on any subprocess failure; caller is
-    expected to skip the test gracefully.
-
-    Timeout is generous (15 min) — MCMC on a four-edge synth graph is
-    typically a minute or two, but cold caches, worker warm-up, and
-    chain retries can extend this. Cached in `_SYNTH_CACHE` after
-    success so subsequent tests in the session don't re-invoke.
-    """
-    cmd = [
-        sys.executable, "-m", "bayes.test_harness",
-        "--graph", graph_name,
-        "--enrich",
-        "--no-webhook",
-    ]
-    result = subprocess.run(
-        cmd, capture_output=True, text=True, timeout=900,
-        cwd=str(DAGNET_ROOT),
-        env={**os.environ, "DB_CONNECTION": _resolve_db_url()},
-    )
-    if result.returncode != 0:
-        print(f"[requires_synth] Bayesian enrichment failed for {graph_name}:\n"
-              f"{result.stderr[-2000:]}")
-        return False
-    return True
-
-
 def _ensure_synth_ready(graph_name: str, enriched: bool,
                         bayesian: bool = False) -> None:
     """Check freshness and bootstrap if needed. Calls pytest.skip on failure.
 
-    `bayesian=True` implies `enriched=True`: you cannot have a bayesian
-    model_var without the model_vars structure. When set, triggers
-    `bayes/test_harness.py --enrich` after hydrate to apply real MCMC
-    posteriors to the graph.
+    `bayesian=True` triggers the bayesian-sidecar path (MCMC runs once
+    per fingerprint into bayes/fixtures/). The on-disk graph file is
+    never mutated for bayesian state — injection happens at
+    load_graph_json(bayesian=True) call time.
     """
     repo = _resolve_data_repo_dir()
     if repo is None:
@@ -294,13 +470,17 @@ def _ensure_synth_ready(graph_name: str, enriched: bool,
     if cache_key in _SYNTH_CACHE:
         return
 
-    # Bayesian implies hydrate enrichment.
+    # Structural freshness: truth + params + DB rows. Bayesian state is
+    # NOT checked here — it lives in the sidecar and is resolved at
+    # load_graph_json(bayesian=True) time. This split prevents a bayesian
+    # mutation (which the sidecar handles) from invalidating structural
+    # freshness and triggering an expensive DB regen.
     need_enrich = enriched or bayesian
 
     result = _call_verify_synth_data(
         graph_name, str(repo),
         check_enrichment=need_enrich,
-        check_bayesian=bayesian,
+        check_bayesian=False,
         check_param_files=True,
         check_event_hashes=True,
     )
@@ -311,9 +491,6 @@ def _ensure_synth_ready(graph_name: str, enriched: bool,
         ok = _bootstrap_synth_graph(graph_name)
         if not ok:
             pytest.skip(f"Synth bootstrap failed for {graph_name}")
-        # Bootstrap without --enrich clears model_vars. Advance the
-        # state machine to the earliest outstanding step so the
-        # following if-blocks pick it up.
         if need_enrich:
             status = "needs_enrichment"
         else:
@@ -324,21 +501,20 @@ def _ensure_synth_ready(graph_name: str, enriched: bool,
         ok = _bootstrap_synth_graph(graph_name, enrich=True)
         if not ok:
             pytest.skip(f"Synth enrichment failed for {graph_name}")
-        status = "needs_bayesian_enrichment" if bayesian else "fresh"
-
-    if status == "needs_bayesian_enrichment" and bayesian:
-        print(f"[requires_synth] {graph_name}: bayesian-enriching (MCMC) — "
-              f"this may take minutes...")
-        ok = _bayesian_enrich_synth_graph(graph_name)
-        if not ok:
-            pytest.skip(
-                f"Bayesian enrichment failed for {graph_name} "
-                f"(bayes worker and/or FE CLI unavailable?)"
-            )
         status = "fresh"
 
     if status == "no_truth":
         pytest.skip(f"No truth file for {graph_name}")
+
+    # Bayesian sidecar: ensured separately so graph-file clobber can no
+    # longer destroy MCMC work. Runs at most once per session per graph.
+    if bayesian:
+        edges = _ensure_bayes_sidecar(graph_name)
+        if edges is None:
+            pytest.skip(
+                f"Bayesian sidecar unavailable for {graph_name} "
+                f"(MCMC subprocess failed or bayes worker not reachable)"
+            )
 
     _SYNTH_CACHE[cache_key] = status
 

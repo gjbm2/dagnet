@@ -2177,9 +2177,9 @@ def _build_unified_slices(
 
     if lat:
         window["mu_mean"] = round(lat.mu_mean, 4)
-        window["mu_sd"] = round(lat.mu_sd, 4)
-        if lat.mu_sd_epist is not None:
-            window["mu_sd_epist"] = round(lat.mu_sd_epist, 4)
+        window["mu_sd"] = round(lat.mu_sd, 4)  # epistemic (doc 61)
+        if lat.mu_sd_pred is not None:
+            window["mu_sd_pred"] = round(lat.mu_sd_pred, 4)
         window["sigma_mean"] = round(lat.sigma_mean, 4)
         window["sigma_sd"] = round(lat.sigma_sd, 4)
         window["onset_mean"] = round(lat.onset_delta_days, 2)
@@ -2231,8 +2231,8 @@ def _build_unified_slices(
             "evidence_grade": 3 if prob.ess >= 400 and (not prob.rhat or prob.rhat < 1.05) else 0,
             "provenance": lat.path_provenance or lat.provenance,
             "mu_mean": round(lat.path_mu_mean, 4),
-            "mu_sd": round(lat.path_mu_sd, 4) if lat.path_mu_sd is not None else None,
-            **({"mu_sd_epist": round(lat.path_mu_sd_epist, 4)} if lat.path_mu_sd_epist is not None else {}),
+            "mu_sd": round(lat.path_mu_sd, 4) if lat.path_mu_sd is not None else None,  # epistemic (doc 61)
+            **({"mu_sd_pred": round(lat.path_mu_sd_pred, 4)} if lat.path_mu_sd_pred is not None else {}),
             "sigma_mean": round(lat.path_sigma_mean, 4) if lat.path_sigma_mean is not None else None,
             "sigma_sd": round(lat.path_sigma_sd, 4) if lat.path_sigma_sd is not None else None,
             **({"hdi_t95_lower": round(lat.path_hdi_t95_lower, 1), "hdi_t95_upper": round(lat.path_hdi_t95_upper, 1)}

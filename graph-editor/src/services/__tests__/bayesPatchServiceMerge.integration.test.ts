@@ -365,9 +365,9 @@ function makeFullDispersionPatch(): BayesPatchFile {
           // Predictive probability (kappa-inflated)
           alpha_pred: 30, beta_pred: 80,
           hdi_lower_pred: 0.18, hdi_upper_pred: 0.38,
-          // Latency dispersions — mu_sd is predictive (kappa-inflated);
-          // mu_sd_epist is the always-epistemic anchor (doc 49 §A.6.2).
-          mu_mean: 2.35, mu_sd: 0.12, mu_sd_epist: 0.08,
+          // Latency dispersions (doc 61): bare mu_sd is epistemic;
+          // mu_sd_pred is predictive (kappa_lat-inflated).
+          mu_mean: 2.35, mu_sd: 0.08, mu_sd_pred: 0.12,
           sigma_mean: 0.72, sigma_sd: 0.04,
           onset_mean: 1.5, onset_sd: 0.3,
           hdi_t95_lower: 18.5, hdi_t95_upper: 32.1,
@@ -385,8 +385,9 @@ function makeFullDispersionPatch(): BayesPatchFile {
           // Predictive probability
           alpha_pred: 25, beta_pred: 70,
           hdi_lower_pred: 0.16, hdi_upper_pred: 0.42,
-          // Path-level latency dispersions
-          mu_mean: 2.81, mu_sd: 0.18, mu_sd_epist: 0.12,
+          // Path-level latency dispersions (doc 61): bare mu_sd is epistemic;
+          // no path-level predictive mechanism in the current model.
+          mu_mean: 2.81, mu_sd: 0.12,
           sigma_mean: 0.58, sigma_sd: 0.06,
           onset_mean: 3.2, onset_sd: 0.5,
           hdi_t95_lower: 28.4, hdi_t95_upper: 58.7,
@@ -498,7 +499,7 @@ describe('bayesPatchService — latency dispersion cascade', () => {
     await applyPatch(makeFullDispersionPatch());
 
     const lat = getDoc('graph-test').edges[0].p.latency.posterior;
-    expect(lat.mu_sd).toBe(0.12);
+    expect(lat.mu_sd).toBe(0.08);              // epistemic (doc 61)
     expect(lat.sigma_sd).toBe(0.04);
     expect(lat.onset_sd).toBe(0.3);
   });
@@ -508,33 +509,33 @@ describe('bayesPatchService — latency dispersion cascade', () => {
     await applyPatch(makeFullDispersionPatch());
 
     const lat = getDoc('graph-test').edges[0].p.latency.posterior;
-    expect(lat.path_mu_sd).toBe(0.18);
+    expect(lat.path_mu_sd).toBe(0.12);          // epistemic (doc 61)
     expect(lat.path_sigma_sd).toBe(0.06);
     expect(lat.path_onset_sd).toBe(0.5);
   });
 
-  it('should write mu_sd_epist and path_mu_sd_epist to graphEdge.p.latency.posterior (doc 49 §A.6.2)', async () => {
-    // The always-epistemic mu SD — distinct from mu_sd which is
-    // kappa-inflated predictive when kappa_lat is present. span_kernel.py
-    // reads these for epistemic fan bands; silent drop collapses
-    // epistemic into predictive.
+  it('should write mu_sd_pred alongside bare (epistemic) mu_sd (doc 61)', async () => {
+    // Doc 61: bare mu_sd carries the epistemic posterior SD; mu_sd_pred
+    // carries the kappa_lat-inflated predictive variant. The projection
+    // must preserve both flavours so reporting and forecasting consumers
+    // each read the appropriate slot.
     await seedGraphAndParam();
     await applyPatch(makeFullDispersionPatch());
 
     const lat = getDoc('graph-test').edges[0].p.latency.posterior;
-    expect(lat.mu_sd_epist).toBe(0.08);
-    expect(lat.path_mu_sd_epist).toBe(0.12);
-    expect(lat.mu_sd).toBe(0.12);              // predictive, distinct
-    expect(lat.path_mu_sd).toBe(0.18);
+    expect(lat.mu_sd).toBe(0.08);               // epistemic
+    expect(lat.mu_sd_pred).toBe(0.12);          // predictive, distinct
+    expect(lat.path_mu_sd).toBe(0.12);          // path epistemic
+    // path_mu_sd_pred not populated: no path-level kappa_lat in the model.
   });
 
-  it('should omit mu_sd_epist / path_mu_sd_epist when patch lacks them', async () => {
+  it('should omit mu_sd_pred when patch lacks it (no kappa_lat fitted)', async () => {
     await seedGraphAndParam();
-    await applyPatch(makePatch());  // base patch has no mu_sd_epist
+    await applyPatch(makePatch());  // base patch has no mu_sd_pred
 
     const lat = getDoc('graph-test').edges[0].p.latency.posterior;
-    expect(lat.mu_sd_epist).toBeUndefined();
-    expect(lat.path_mu_sd_epist).toBeUndefined();
+    expect(lat.mu_sd_pred).toBeUndefined();
+    expect(lat.path_mu_sd_pred).toBeUndefined();
   });
 });
 
@@ -557,20 +558,21 @@ describe('bayesPatchService — model_vars cascade', () => {
     expect(entry.source_at).toBe('15-Mar-26');
   });
 
-  it('should compute probability.stdev from predictive α/β when available (doc 49 §A.9)', async () => {
+  it('should compute probability.stdev from epistemic α/β (doc 61 supersedes 49 §A.9)', async () => {
+    // Doc 61: reporting surfaces display the epistemic posterior SD
+    // (what the model believes about the rate), not the kappa-inflated
+    // predictive SD. Forecast consumers read alpha_pred/beta_pred directly.
     await seedGraphAndParam();
     await applyPatch(makeFullDispersionPatch());
 
     const entry = getBayesModelVars();
-    // displayAlpha=30, displayBeta=80, sum=110
-    // stdev = sqrt(30*80 / (110^2 * 111)) = sqrt(2400 / 1343100) ≈ 0.04229
-    const expectedPredStdev = Math.sqrt((30 * 80) / (110 ** 2 * 111));
-    expect(entry.probability.stdev).toBeCloseTo(expectedPredStdev, 6);
-    // Mean uses epistemic α/β (not predictive)
+    // displayAlpha=43 (epistemic), displayBeta=119.5, sum=162.5
+    const expectedEpistStdev = Math.sqrt((43 * 119.5) / (162.5 ** 2 * 163.5));
+    expect(entry.probability.stdev).toBeCloseTo(expectedEpistStdev, 6);
     expect(entry.probability.mean).toBeCloseTo(43 / (43 + 119.5), 6);
   });
 
-  it('should fall back to epistemic α/β for probability.stdev when predictive absent', async () => {
+  it('should use epistemic α/β even when predictive is present (doc 61)', async () => {
     await seedGraphAndParam();
     await applyPatch(makePatch());  // no predictive fields
 
@@ -580,27 +582,28 @@ describe('bayesPatchService — model_vars cascade', () => {
     expect(entry.probability.stdev).toBeCloseTo(expectedEpistStdev, 6);
   });
 
-  it('should populate model_vars.latency with mu_sd / sigma_sd / onset_sd', async () => {
+  it('should populate model_vars.latency with mu_sd / sigma_sd / onset_sd (doc 61: all epistemic)', async () => {
     await seedGraphAndParam();
     await applyPatch(makeFullDispersionPatch());
 
     const entry = getBayesModelVars();
-    expect(entry.latency.mu_sd).toBe(0.12);
+    expect(entry.latency.mu_sd).toBe(0.08);        // epistemic (doc 61)
     expect(entry.latency.sigma_sd).toBe(0.04);
     expect(entry.latency.onset_sd).toBe(0.3);
     expect(entry.latency.onset_mu_corr).toBe(-0.42);
   });
 
-  it('should populate model_vars.latency with mu_sd_epist / path_mu_sd_epist (doc 49 §A.6.2)', async () => {
-    // span_kernel.py reads model_vars.latency.mu_sd_epist first, then
-    // falls back to posterior.mu_sd_epist, then to mu_sd. Locking in
-    // the model_vars write here ensures the preferred path is populated.
+  it('should populate model_vars.latency with mu_sd_pred when kappa_lat fitted (doc 61)', async () => {
+    // Doc 61: forecast consumers (span_kernel, build_span_params) read
+    // mu_sd_pred; reporting consumers read bare mu_sd. The projection
+    // writes both flavours onto model_vars.latency so downstream can pick.
     await seedGraphAndParam();
     await applyPatch(makeFullDispersionPatch());
 
     const entry = getBayesModelVars();
-    expect(entry.latency.mu_sd_epist).toBe(0.08);
-    expect(entry.latency.path_mu_sd_epist).toBe(0.12);
+    expect(entry.latency.mu_sd_pred).toBe(0.12);
+    // No path-level predictive mechanism — path_mu_sd_pred absent.
+    expect(entry.latency.path_mu_sd_pred).toBeUndefined();
   });
 
   it('should populate model_vars.latency with path_mu_sd / path_sigma_sd / path_onset_sd', async () => {
@@ -608,7 +611,7 @@ describe('bayesPatchService — model_vars cascade', () => {
     await applyPatch(makeFullDispersionPatch());
 
     const entry = getBayesModelVars();
-    expect(entry.latency.path_mu_sd).toBe(0.18);
+    expect(entry.latency.path_mu_sd).toBe(0.12);   // epistemic (doc 61)
     expect(entry.latency.path_sigma_sd).toBe(0.06);
     expect(entry.latency.path_onset_sd).toBe(0.5);
   });
@@ -665,12 +668,12 @@ describe('bayesPatchService — cascade completeness meta-contract', () => {
 
     const lat = getDoc('graph-test').edges[0].p.latency.posterior;
     const required = [
-      // Edge-level
-      'mu_mean', 'mu_sd', 'mu_sd_epist', 'sigma_mean', 'sigma_sd',
+      // Edge-level (doc 61: bare = epistemic, _pred = predictive)
+      'mu_mean', 'mu_sd', 'mu_sd_pred', 'sigma_mean', 'sigma_sd',
       'onset_mean', 'onset_sd', 'onset_mu_corr',
       'hdi_t95_lower', 'hdi_t95_upper',
-      // Path-level
-      'path_mu_mean', 'path_mu_sd', 'path_mu_sd_epist',
+      // Path-level (no path-level predictive mechanism today)
+      'path_mu_mean', 'path_mu_sd',
       'path_sigma_mean', 'path_sigma_sd',
       'path_onset_delta_days', 'path_onset_sd',
       'path_hdi_t95_lower', 'path_hdi_t95_upper',
@@ -687,9 +690,10 @@ describe('bayesPatchService — cascade completeness meta-contract', () => {
     const entry = edge.p.model_vars.find((e: any) => e.source === 'bayesian');
     const required = [
       'mu', 'sigma', 't95', 'onset_delta_days',
-      'mu_sd', 'mu_sd_epist', 'sigma_sd', 'onset_sd', 'onset_mu_corr',
+      // doc 61: mu_sd epistemic, mu_sd_pred predictive; no path-level pred
+      'mu_sd', 'mu_sd_pred', 'sigma_sd', 'onset_sd', 'onset_mu_corr',
       'path_mu', 'path_sigma', 'path_t95', 'path_onset_delta_days',
-      'path_mu_sd', 'path_mu_sd_epist', 'path_sigma_sd', 'path_onset_sd',
+      'path_mu_sd', 'path_sigma_sd', 'path_onset_sd',
     ];
     const missing = required.filter(k => entry.latency[k] === undefined);
     expect(missing).toEqual([]);
@@ -703,20 +707,20 @@ describe('bayesPatchService — cascade completeness meta-contract', () => {
     const w = param.posterior.slices['window()'];
     const c = param.posterior.slices['cohort()'];
 
-    // Window: every dispersion/predictive field survives verbatim
+    // Window: every dispersion/predictive field survives verbatim (doc 61)
     expect(w.alpha_pred).toBe(30);
     expect(w.beta_pred).toBe(80);
     expect(w.n_effective).toBe(4500);
-    expect(w.mu_sd).toBe(0.12);
-    expect(w.mu_sd_epist).toBe(0.08);
+    expect(w.mu_sd).toBe(0.08);        // epistemic
+    expect(w.mu_sd_pred).toBe(0.12);   // predictive
     expect(w.sigma_sd).toBe(0.04);
     expect(w.onset_sd).toBe(0.3);
-    // Cohort likewise
+    // Cohort likewise (no path-level predictive in current model)
     expect(c.alpha_pred).toBe(25);
     expect(c.beta_pred).toBe(70);
     expect(c.n_effective).toBe(3200);
-    expect(c.mu_sd).toBe(0.18);
-    expect(c.mu_sd_epist).toBe(0.12);
+    expect(c.mu_sd).toBe(0.12);        // epistemic
+    expect(c.mu_sd_pred).toBeUndefined();
     expect(c.sigma_sd).toBe(0.06);
     expect(c.onset_sd).toBe(0.5);
   });

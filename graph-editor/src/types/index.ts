@@ -657,14 +657,15 @@ export interface ModelVarsEntry {
     path_sigma?: number;
     path_t95?: number;
     path_onset_delta_days?: number;
-    // Dispersion (heuristic or Bayesian — see heuristic-dispersion-design.md)
-    mu_sd?: number;               // predictive when kappa_lat present (doc 49 §A.6.2)
-    mu_sd_epist?: number;         // always epistemic posterior SD (doc 49)
+    // Dispersion (heuristic or Bayesian — see heuristic-dispersion-design.md).
+    // Naming (doc 61): bare name = epistemic, `_pred` suffix = predictive.
+    mu_sd?: number;               // epistemic (posterior SD of μ)
+    mu_sd_pred?: number;          // predictive (kappa_lat-inflated); absent when no kappa_lat
     sigma_sd?: number;
     onset_sd?: number;
     onset_mu_corr?: number;
-    path_mu_sd?: number;
-    path_mu_sd_epist?: number;    // epistemic path mu_sd (doc 49)
+    path_mu_sd?: number;          // epistemic
+    path_mu_sd_pred?: number;     // predictive; absent in current model
     path_sigma_sd?: number;
     path_onset_sd?: number;
   };
@@ -703,10 +704,11 @@ export interface SlicePosteriorEntry {
   // Subset-conditioning mass (doc 52 §14.3) — raw observation count
   // used to fit this slice's posterior. Engine blends with m_S / m_G.
   n_effective?: number;
-  // Latency (present when edge has latency fitted for this slice)
+  // Latency (present when edge has latency fitted for this slice).
+  // Naming (doc 61): bare name = epistemic, `_pred` suffix = predictive.
   mu_mean?: number;
-  mu_sd?: number;                   // predictive when kappa_lat exists (doc 49 §A.6.2)
-  mu_sd_epist?: number;             // always epistemic posterior SD of mu
+  mu_sd?: number;                   // epistemic (posterior SD of μ)
+  mu_sd_pred?: number;              // predictive (kappa_lat-inflated); absent when no kappa_lat
   sigma_mean?: number;
   sigma_sd?: number;                // epistemic (no predictive mechanism)
   onset_mean?: number;
@@ -831,8 +833,8 @@ export interface LatencyPosterior {
   distribution: string;
   onset_delta_days: number;
   mu_mean: number;
-  mu_sd: number;                    // predictive when kappa_lat exists (doc 49 §A.6.2)
-  mu_sd_epist?: number;             // always epistemic posterior SD of mu
+  mu_sd: number;                    // epistemic (posterior SD of μ) — doc 61
+  mu_sd_pred?: number;              // predictive (kappa_lat-inflated); absent when no kappa_lat
   sigma_mean: number;
   sigma_sd: number;                 // epistemic (no predictive mechanism)
   hdi_t95_lower: number;
@@ -857,8 +859,8 @@ export interface LatencyPosterior {
   path_onset_hdi_lower?: number;
   path_onset_hdi_upper?: number;
   path_mu_mean?: number;
-  path_mu_sd?: number;
-  path_mu_sd_epist?: number;        // epistemic path mu_sd (doc 49)
+  path_mu_sd?: number;              // epistemic (doc 61)
+  path_mu_sd_pred?: number;         // predictive; absent in current model (no path-level kappa_lat)
   path_sigma_mean?: number;
   path_sigma_sd?: number;
   path_hdi_t95_lower?: number;

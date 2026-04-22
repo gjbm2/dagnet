@@ -37,6 +37,7 @@ from conftest import (
     load_graph_json,
     requires_data_repo,
     requires_db,
+    requires_synth,
 )
 
 
@@ -60,6 +61,27 @@ def _run_cf_cached(graph_name: str, temporal_dsl: str) -> Dict[str, Any]:
 
 def _run_cf(graph_name: str, temporal_dsl: str) -> Dict[str, Any]:
     return copy.deepcopy(_run_cf_cached(graph_name, temporal_dsl))
+
+
+def _run_cf_on_graph(
+    graph: Dict[str, Any],
+    temporal_dsl: str,
+    candidate_regimes_by_edge: Dict[str, List[Dict[str, Any]]],
+) -> Dict[str, Any]:
+    from api_handlers import handle_conditioned_forecast
+
+    return handle_conditioned_forecast(
+        {
+            "scenarios": [
+                {
+                    "scenario_id": "doc56",
+                    "graph": graph,
+                    "effective_query_dsl": temporal_dsl,
+                    "candidate_regimes_by_edge": candidate_regimes_by_edge,
+                }
+            ]
+        }
+    )
 
 
 @functools.lru_cache(maxsize=None)
@@ -89,6 +111,19 @@ def _run_v3(graph_name: str, analytics_dsl: str, temporal_dsl: str) -> Dict[str,
     return copy.deepcopy(_run_v3_cached(graph_name, analytics_dsl, temporal_dsl))
 
 
+def _extract_result(result: Dict[str, Any]) -> Dict[str, Any]:
+    if "result" in result and isinstance(result["result"], dict):
+        return result["result"]
+    for subject in (
+        result.get("subjects")
+        or result.get("scenarios", [{}])[0].get("subjects", [])
+    ):
+        subject_result = subject.get("result")
+        if isinstance(subject_result, dict):
+            return subject_result
+    return {}
+
+
 def _extract_maturity_rows(result: Dict[str, Any]) -> List[Dict[str, Any]]:
     if "result" in result and isinstance(result["result"], dict):
         rows = result["result"].get("maturity_rows", [])
@@ -115,6 +150,40 @@ def _parameterised_edges(graph: Dict[str, Any]) -> List[Dict[str, Any]]:
             continue
         out.append(e)
     return out
+
+
+def _run_runner_analysis(
+    graph_name: str,
+    analysis_type: str,
+    analytics_dsl: str,
+    temporal_dsl: str,
+    *,
+    bayesian: bool = False,
+) -> Dict[str, Any]:
+    from api_handlers import handle_runner_analyze
+
+    graph = load_graph_json(graph_name, bayesian=bayesian)
+    if bayesian:
+        graph["model_source_preference"] = "bayesian"
+    result = handle_runner_analyze(
+        {
+            "analysis_type": analysis_type,
+            "analytics_dsl": analytics_dsl,
+            "scenarios": [
+                {
+                    "scenario_id": "doc56",
+                    "name": "Doc56",
+                    "visibility_mode": "f+e",
+                    "graph": graph,
+                    "effective_query_dsl": temporal_dsl,
+                    "candidate_regimes_by_edge": load_candidate_regimes_by_mode(
+                        graph_name,
+                    ),
+                }
+            ],
+        }
+    )
+    return _extract_result(result)
 
 
 def _cf_edge_by_id(resp: Dict[str, Any]) -> Dict[Tuple[str, str], Dict[str, Any]]:
@@ -231,7 +300,8 @@ def test_cf_p_mean_matches_v3_p_infinity():
     shared all_per_edge_results cache).
 
     Fixture matrix: the doc-50 topology set (same as
-    cf-topology-suite.sh).
+    cf-topology-suite.sh), plus a deep cohort chain that exercises
+    donor-of-donor propagation in the whole-graph carrier path.
     """
     matrix: List[Tuple[str, str]] = [
         ("synth-simple-abc", "window(-120d:)"),
@@ -240,6 +310,7 @@ def test_cf_p_mean_matches_v3_p_infinity():
         ("cf-fix-branching", "window(-60d:)"),
         ("cf-fix-diamond-mixed", "window(-120d:)"),
         ("cf-fix-deep-mixed", "window(-180d:)"),
+        ("cf-fix-deep-mixed", "cohort(-180d:)"),
     ]
 
     TOL = 5e-3
@@ -299,3 +370,392 @@ def test_cf_p_mean_matches_v3_p_infinity():
         f"CF p_mean diverged from v3 p_infinity on {len(failures)}/{checked} edges:\n"
         + "\n".join(failures)
     )
+
+
+@requires_db
+@requires_data_repo
+def test_single_edge_cohort_uses_factorised_subject_span():
+    """Single-hop cohort mode must keep the live subject operator rooted at X.
+
+    WP3 replaces the old anchor-rooted widening on `cohort(A, X-Y)` with the
+    factorised default: carrier on `A -> X`, subject span on `X -> Y`.
+    Exercise the classic upstream-lag case on `synth-mirror-4step` where the
+    anchor is upstream of the scoped edge, require shared preparation to
+    recover that anchor from the raw graph payload, and require the v3 chart's
+    surfaced model curve to sit closer to the edge-rooted subject span than to
+    the anchor-rooted whole-query span. Also keep the external chart-vs-CF
+    horizon scalar in sync for the same edge.
+    """
+
+    from api_handlers import handle_conditioned_forecast
+    from runner.forecast_preparation import (
+        prepare_forecast_subject_group,
+        resolve_forecast_subjects,
+    )
+    from runner.forecast_runtime import build_prepared_span_execution
+    from runner.span_kernel import compose_span_kernel
+
+    graph_name = "synth-mirror-4step"
+    analytics_dsl = "from(m4-registered).to(m4-success)"
+    temporal_dsl = "cohort(-14d:)"
+
+    graph = load_graph_json(graph_name)
+    candidate_regimes = load_candidate_regimes_by_mode(graph_name)
+    scenario = {
+        "scenario_id": "doc56",
+        "graph": graph,
+        "analytics_dsl": analytics_dsl,
+        "effective_query_dsl": temporal_dsl,
+        "candidate_regimes_by_edge": candidate_regimes,
+    }
+
+    subjects = resolve_forecast_subjects(
+        graph_data=graph,
+        scenario=scenario,
+        top_analytics_dsl=analytics_dsl,
+        path_analysis_type="cohort_maturity",
+        whole_graph_analysis_type="conditioned_forecast",
+        log_prefix="[doc56-test]",
+    )
+    preparation = prepare_forecast_subject_group(
+        graph_data=graph,
+        subjects=subjects,
+        is_window=False,
+        log_prefix="[doc56-test]",
+    )
+
+    assert preparation.anchor_node == "m4-landing"
+    assert preparation.query_from_node == "m4-registered"
+    assert preparation.query_to_node == "m4-success"
+
+    edge_execution = build_prepared_span_execution(
+        graph,
+        "m4-registered",
+        "m4-success",
+        temporal_mode="window",
+        graph_preference=graph.get("model_source_preference"),
+    )
+    anchor_execution = build_prepared_span_execution(
+        graph,
+        "m4-landing",
+        "m4-success",
+        temporal_mode="window",
+        graph_preference=graph.get("model_source_preference"),
+    )
+    edge_kernel = (
+        compose_span_kernel(
+            topo=edge_execution.topo,
+            edge_params=edge_execution.edge_params,
+            max_tau=400,
+        )
+        if edge_execution is not None
+        else None
+    )
+    anchor_kernel = (
+        compose_span_kernel(
+            topo=anchor_execution.topo,
+            edge_params=anchor_execution.edge_params,
+            max_tau=400,
+        )
+        if anchor_execution is not None
+        else None
+    )
+    assert edge_kernel is not None and edge_kernel.span_p > 0
+    assert anchor_kernel is not None and anchor_kernel.span_p > 0
+
+    def _norm(kernel: Any, tau: int) -> float:
+        return round(
+            min(max(kernel.cdf_at(tau) / kernel.span_p, 0.0), 1.0),
+            6,
+        )
+
+    divergent_taus: List[Tuple[int, float, float]] = []
+    for tau in (5, 10, 15, 20):
+        edge_expected = _norm(edge_kernel, tau)
+        anchor_expected = _norm(anchor_kernel, tau)
+        if abs(edge_expected - anchor_expected) > 0.02:
+            divergent_taus.append((tau, edge_expected, anchor_expected))
+
+    assert divergent_taus, (
+        "Fixture no longer shows an upstream-lag difference between the "
+        "edge-rooted and anchor-rooted cohort spans."
+    )
+
+    v3_result = _run_v3(graph_name, analytics_dsl, temporal_dsl)
+    subject_result: Optional[Dict[str, Any]] = None
+    if "result" in v3_result and isinstance(v3_result["result"], dict):
+        subject_result = v3_result["result"]
+    else:
+        for subject in (
+            v3_result.get("subjects")
+            or v3_result.get("scenarios", [{}])[0].get("subjects", [])
+        ):
+            result = subject.get("result")
+            if isinstance(result, dict):
+                subject_result = result
+                break
+
+    assert subject_result is not None, "v3 chart returned no subject result"
+    curve_by_tau = {
+        point["tau_days"]: float(point["model_rate"])
+        for point in (subject_result.get("model_curve") or [])
+        if "tau_days" in point and "model_rate" in point
+    }
+    rate_scale = (subject_result.get("model_curve_params") or {}).get("forecast_mean")
+    assert curve_by_tau, "v3 chart missing model_curve for single-edge cohort test"
+    assert rate_scale is not None, "v3 chart missing model_curve forecast_mean"
+
+    comparisons: List[Tuple[int, float, float, float]] = []
+    for tau, edge_expected, anchor_expected in divergent_taus:
+        model_rate = curve_by_tau.get(tau)
+        if model_rate is None:
+            continue
+        edge_rate = float(rate_scale) * edge_expected
+        anchor_rate = float(rate_scale) * anchor_expected
+        comparisons.append((tau, model_rate, edge_rate, anchor_rate))
+
+    assert comparisons, "No overlapping divergent taus between the direct kernels and the v3 model curve"
+    tau, model_rate, edge_rate, anchor_rate = max(
+        comparisons,
+        key=lambda item: abs(item[2] - item[3]),
+    )
+    assert abs(model_rate - edge_rate) < abs(model_rate - anchor_rate), (
+        f"v3 model curve still looks anchor-rooted at tau={tau}: "
+        f"model={model_rate:.6f} edge={edge_rate:.6f} anchor={anchor_rate:.6f}"
+    )
+
+    cf_resp = handle_conditioned_forecast(
+        {
+            "scenarios": [scenario],
+            "analytics_dsl": analytics_dsl,
+        }
+    )
+    cf_edge = _cf_edge_by_id(cf_resp).get(("m4-registered", "m4-success"))
+    assert cf_edge is not None, "CF response missing m4-registered->m4-success"
+
+    rows = _extract_maturity_rows(v3_result)
+    assert rows, "v3 chart returned no rows for m4-registered->m4-success cohort test"
+
+    v3_p_inf = rows[-1].get("p_infinity_mean")
+    if v3_p_inf is None:
+        for row in reversed(rows):
+            if row.get("midpoint") is not None:
+                v3_p_inf = row["midpoint"]
+                break
+
+    cf_p_mean = cf_edge.get("p_mean")
+    assert cf_p_mean is not None and v3_p_inf is not None
+    assert abs(float(cf_p_mean) - float(v3_p_inf)) < 5e-3, (
+        f"CF and v3 diverged after the factorised single-edge cohort fix: "
+        f"CF={float(cf_p_mean):.6f} v3={float(v3_p_inf):.6f}"
+    )
+
+
+@requires_db
+@requires_data_repo
+@pytest.mark.parametrize(
+    ("graph_name", "temporal_dsl"),
+    [
+        ("synth-mirror-4step", "cohort(7-Mar-26:21-Mar-26)"),
+        ("cf-fix-deep-mixed", "cohort(-180d:)"),
+    ],
+)
+def test_whole_graph_cf_is_invariant_under_edge_reorder(
+    graph_name: str,
+    temporal_dsl: str,
+):
+    """Whole-graph CF must not depend on graph edge-list order.
+
+    Doc 60 WP6 requires a real topological execution order plus semantic
+    donor caching. Reverse the edge list on cohort fixtures that exercise
+    both classic upstream lag and deeper donor-of-donor propagation, then
+    require the same conditioned edge projection back out.
+    """
+    candidate_regimes = load_candidate_regimes_by_mode(graph_name)
+
+    graph = load_graph_json(graph_name)
+    reversed_graph = copy.deepcopy(graph)
+    reversed_graph["edges"] = list(reversed(reversed_graph.get("edges", [])))
+
+    baseline = _run_cf_on_graph(
+        copy.deepcopy(graph),
+        temporal_dsl,
+        copy.deepcopy(candidate_regimes),
+    )
+    reordered = _run_cf_on_graph(
+        reversed_graph,
+        temporal_dsl,
+        copy.deepcopy(candidate_regimes),
+    )
+
+    def _project(resp: Dict[str, Any]) -> Dict[Tuple[str, str], Dict[str, Any]]:
+        out: Dict[Tuple[str, str], Dict[str, Any]] = {}
+        for edge in resp.get("scenarios", [{}])[0].get("edges", []) or []:
+            key = (edge.get("from_node"), edge.get("to_node"))
+            out[key] = {
+                "p_mean": edge.get("p_mean"),
+                "p_sd": edge.get("p_sd"),
+                "completeness": edge.get("completeness"),
+                "completeness_sd": edge.get("completeness_sd"),
+                "cf_mode": edge.get("cf_mode"),
+                "cf_reason": edge.get("cf_reason"),
+                "conditioned": edge.get("conditioned"),
+                "evidence_k": edge.get("evidence_k"),
+                "evidence_n": edge.get("evidence_n"),
+            }
+        return out
+
+    def _edge_order(resp: Dict[str, Any]) -> List[Tuple[str, str]]:
+        return [
+            (edge.get("from_node"), edge.get("to_node"))
+            for edge in resp.get("scenarios", [{}])[0].get("edges", []) or []
+        ]
+
+    assert _project(baseline) == _project(reordered), (
+        "Whole-graph conditioned forecast changed when only the graph edge "
+        "list order changed."
+    )
+    assert _edge_order(baseline) == _edge_order(reordered), (
+        "Whole-graph conditioned forecast changed its response edge order "
+        "when only the graph edge list order changed."
+    )
+
+
+@requires_db
+@requires_data_repo
+@requires_synth("synth-simple-abc", enriched=True, bayesian=True)
+def test_lag_fit_and_surprise_gauge_share_downstream_temporal_mode_split():
+    """Lag-fit and surprise-gauge must honour the same window/cohort split.
+
+    This uses a bayesian-preferred downstream edge so the surprise gauge runs
+    the live sweep path instead of the intentional doc-57 degraded-unavailable
+    branch. Both consumers should see the same temporal-family change:
+    lag-shape params stay fixed, while cohort-mode observed performance drops
+    below the window-mode read because the selected population is re-rooted at
+    the upstream anchor.
+    """
+
+    graph_name = "synth-simple-abc"
+    analytics_dsl = "from(simple-b).to(simple-c)"
+
+    window_lag = _run_runner_analysis(
+        graph_name,
+        "lag_fit",
+        analytics_dsl,
+        "window(-90d:)",
+        bayesian=True,
+    )
+    cohort_lag = _run_runner_analysis(
+        graph_name,
+        "lag_fit",
+        analytics_dsl,
+        "cohort(-90d:)",
+        bayesian=True,
+    )
+
+    window_meta = window_lag["metadata"]
+    cohort_meta = cohort_lag["metadata"]
+    assert window_meta["mu"] == pytest.approx(cohort_meta["mu"], abs=1e-9)
+    assert window_meta["sigma"] == pytest.approx(cohort_meta["sigma"], abs=1e-9)
+    assert window_meta["median"] == pytest.approx(cohort_meta["median"], abs=1e-9)
+    assert window_meta["p_infinity"] > cohort_meta["p_infinity"] + 0.05, (
+        "lag_fit collapsed window/cohort semantics on a downstream edge: "
+        f"window={window_meta['p_infinity']:.6f} "
+        f"cohort={cohort_meta['p_infinity']:.6f}"
+    )
+
+    window_sg = _run_runner_analysis(
+        graph_name,
+        "surprise_gauge",
+        analytics_dsl,
+        "window(-90d:)",
+        bayesian=True,
+    )
+    cohort_sg = _run_runner_analysis(
+        graph_name,
+        "surprise_gauge",
+        analytics_dsl,
+        "cohort(-90d:)",
+        bayesian=True,
+    )
+
+    assert window_sg["reference_source"] == "bayesian"
+    assert cohort_sg["reference_source"] == "bayesian"
+    assert window_sg["cf_mode"] == "sweep"
+    assert cohort_sg["cf_mode"] == "sweep"
+
+    def _var(result: Dict[str, Any], name: str) -> Dict[str, Any]:
+        return next(v for v in result["variables"] if v["name"] == name)
+
+    window_p = _var(window_sg, "p")
+    cohort_p = _var(cohort_sg, "p")
+    window_c = _var(window_sg, "completeness")
+    cohort_c = _var(cohort_sg, "completeness")
+
+    assert window_p["available"] is True
+    assert cohort_p["available"] is True
+    assert window_c["available"] is True
+    assert cohort_c["available"] is True
+    assert window_p["observed"] > cohort_p["observed"], (
+        "surprise_gauge lost the downstream window/cohort split on the p "
+        "surface."
+    )
+    assert window_c["observed"] > cohort_c["observed"], (
+        "surprise_gauge lost the downstream window/cohort split on the "
+        "completeness surface."
+    )
+
+
+@requires_db
+@requires_data_repo
+@requires_synth("synth-simple-abc", enriched=True)
+def test_chart_and_daily_conversions_do_not_collapse_window_and_cohort():
+    """Chart rows and daily-conversion projections must both stay separated.
+
+    The downstream edge `simple-b -> simple-c` is the canary from the doc-47
+    class of failures: window mode counts everyone already at X, while cohort
+    mode counts only anchor-rooted cohorts that have reached X by age tau.
+    Both the v3 chart rows and the daily-conversions projection should expose
+    that split rather than reading the same broad family twice.
+    """
+
+    graph_name = "synth-simple-abc"
+    analytics_dsl = "from(simple-b).to(simple-c)"
+
+    window_rows = _extract_maturity_rows(
+        _run_v3(graph_name, analytics_dsl, "window(-90d:)"),
+    )
+    cohort_rows = _extract_maturity_rows(
+        _run_v3(graph_name, analytics_dsl, "cohort(-90d:)"),
+    )
+
+    window_tau5 = next(row for row in window_rows if row.get("tau_days") == 5)
+    cohort_tau5 = next(row for row in cohort_rows if row.get("tau_days") == 5)
+    assert window_tau5["evidence_x"] > cohort_tau5["evidence_x"]
+    assert window_tau5["evidence_y"] > cohort_tau5["evidence_y"]
+
+    window_daily = _run_runner_analysis(
+        graph_name,
+        "daily_conversions",
+        analytics_dsl,
+        "window(-90d:)",
+    )
+    cohort_daily = _run_runner_analysis(
+        graph_name,
+        "daily_conversions",
+        analytics_dsl,
+        "cohort(-90d:)",
+    )
+
+    assert window_daily["cf_mode"] == "analytic_degraded"
+    assert cohort_daily["cf_mode"] == "analytic_degraded"
+    assert window_daily["total_conversions"] != cohort_daily["total_conversions"]
+
+    window_by_date = {row["date"]: row for row in window_daily["rate_by_cohort"]}
+    cohort_by_date = {row["date"]: row for row in cohort_daily["rate_by_cohort"]}
+    common_dates = sorted(set(window_by_date) & set(cohort_by_date))
+    assert common_dates, "No overlapping per-day cohort rows to compare."
+
+    sample_date = common_dates[0]
+    assert window_by_date[sample_date]["x"] != cohort_by_date[sample_date]["x"]
+    assert window_by_date[sample_date]["y"] != cohort_by_date[sample_date]["y"]

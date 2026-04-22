@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
+from .forecast_runtime import PreparedForecastRuntimeBundle, serialise_runtime_bundle
 from .model_resolver import ResolvedLatency, ResolvedModelParams
 
 
@@ -482,6 +483,7 @@ class ForecastSummary:
     m_G: Optional[float] = None
     blend_applied: bool = False
     blend_skip_reason: Optional[str] = None
+    runtime_bundle_diag: Optional[Dict[str, Any]] = None
 
 
 def compute_forecast_summary(
@@ -491,6 +493,7 @@ def compute_forecast_summary(
     evidence: List[tuple],               # [(τ_i, n_i, k_i), ...]
     from_node_arrival: Optional['NodeArrivalState'] = None,
     num_draws: int = _IS_DRAWS,
+    runtime_bundle: Optional[PreparedForecastRuntimeBundle] = None,
 ) -> ForecastSummary:
     """Compute ESS-regularised aggregate IS-conditioned forecast.
 
@@ -528,6 +531,11 @@ def compute_forecast_summary(
     Returns:
         ForecastSummary with point estimates and draw arrays.
     """
+    if runtime_bundle is not None:
+        resolved = runtime_bundle.resolved_params or resolved
+        if from_node_arrival is None:
+            from_node_arrival = runtime_bundle.carrier_to_x.from_node_arrival
+
     lat = resolved.latency
     p_mean = resolved.p_mean
     S = num_draws
@@ -859,6 +867,7 @@ def compute_forecast_summary(
         m_G=_summary_blend_info.get('m_G'),
         blend_applied=bool(_summary_blend_info.get('applied')),
         blend_skip_reason=_summary_blend_info.get('skip_reason'),
+        runtime_bundle_diag=serialise_runtime_bundle(runtime_bundle),
     )
 
 
@@ -963,6 +972,7 @@ class ForecastTrajectory:
     m_G: Optional[float] = None
     blend_applied: bool = False
     blend_skip_reason: Optional[str] = None
+    runtime_bundle_diag: Optional[Dict[str, Any]] = None
 
 
 # Default draw count for the sweep — same as v2's MC_SAMPLES.
@@ -1213,6 +1223,7 @@ def compute_forecast_trajectory(
     span_onset_mu_corr: Optional[float] = None,
     det_norm_cdf: Optional[list] = None,
     edge_cdf_arr: Optional[np.ndarray] = None,
+    runtime_bundle: Optional[PreparedForecastRuntimeBundle] = None,
 ) -> ForecastTrajectory:
     """Per-cohort population model sweep — generalised from v2.
 
@@ -1256,6 +1267,32 @@ def compute_forecast_trajectory(
         num_draws: MC draw count.
     """
     from scipy.special import logit as _logit, expit as _expit
+
+    if runtime_bundle is not None:
+        resolved = runtime_bundle.resolved_params or resolved
+        if from_node_arrival is None:
+            from_node_arrival = runtime_bundle.carrier_to_x.from_node_arrival
+        op_inputs = runtime_bundle.operator_inputs
+        if mc_cdf_arr is None:
+            mc_cdf_arr = op_inputs.mc_cdf_arr
+        if mc_p_s is None:
+            mc_p_s = op_inputs.mc_p_s
+        if span_alpha is None:
+            span_alpha = op_inputs.span_alpha
+        if span_beta is None:
+            span_beta = op_inputs.span_beta
+        if span_mu_sd is None:
+            span_mu_sd = op_inputs.span_mu_sd
+        if span_sigma_sd is None:
+            span_sigma_sd = op_inputs.span_sigma_sd
+        if span_onset_sd is None:
+            span_onset_sd = op_inputs.span_onset_sd
+        if span_onset_mu_corr is None:
+            span_onset_mu_corr = op_inputs.span_onset_mu_corr
+        if det_norm_cdf is None:
+            det_norm_cdf = op_inputs.det_norm_cdf
+        if edge_cdf_arr is None:
+            edge_cdf_arr = op_inputs.edge_cdf_arr
 
     lat = resolved.latency
     S = num_draws
@@ -1618,6 +1655,7 @@ def compute_forecast_trajectory(
         'p_draws_std': round(float(np.std(p_draws)), 6),
         'det_cdf_at_taus': {t: round(det_cdf[t], 6) for t in [5, 10, 15, 20, 30] if t < len(det_cdf)},
     }
+    _forensic['runtime_bundle'] = serialise_runtime_bundle(runtime_bundle)
     if T > 10:
         _forensic['per_cohort_at_10'] = _per_cohort_at_10
         _forensic['Y10_total'] = round(_y10, 2)
@@ -1669,4 +1707,5 @@ def compute_forecast_trajectory(
         m_G=blend_info.get('m_G'),
         blend_applied=bool(blend_info.get('applied')),
         blend_skip_reason=blend_info.get('skip_reason'),
+        runtime_bundle_diag=serialise_runtime_bundle(runtime_bundle),
     )

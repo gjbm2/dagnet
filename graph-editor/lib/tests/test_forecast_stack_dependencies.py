@@ -1,8 +1,9 @@
 """
-Dependency-audit test for the production forecast stack (doc 56).
+Dependency-audit test for the live production forecast stack (doc 56).
 
-After Phase 3 cut-over, these assertions must hold. They are RED
-before the migration and turn GREEN as each phase lands.
+These assertions now guard the post-cut-over boundary. They should stay
+GREEN and catch any future regression that reintroduces v1/v2 runtime
+imports into the active forecast stack.
 
 The production forecast stack comprises three modules:
   - graph-editor/lib/runner/forecast_state.py    (engine)

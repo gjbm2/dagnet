@@ -1,13 +1,27 @@
 # 60 — Forecast Adaptation Implementation Plan
 
 **Date**: 21-Apr-26  
-**Status**: Active implementation plan  
-**Review status**: Ready for systematic peer review  
+**Status**: Active implementation record  
+**Updated**: 22-Apr-26  
+**Review status**: Work packages WP0-WP9 have now landed in code; this document remains the execution record and acceptance checklist  
 **Review pack role**: 3 of 3 — delivery plan for the target contract  
 **Primary references**: `59-cohort-window-forecast-implementation-scheme.md`, `42-asat-contract.md`, `../codebase/COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md`, `../codebase/STATS_SUBSYSTEMS.md`, `../codebase/FE_BE_STATS_PARALLELISM.md`, `45-forecast-parity-design.md`, `47-multi-hop-cohort-window-divergence.md`, `52-subset-conditioning-double-count-correction.md`, `56-forecast-stack-residual-v1-v2-coupling.md`, `57-cf-eligibility-topological-degradation.md`, `../codebase/TESTING_STANDARDS.md`  
 **Audience**: engineer delivering the forecast adaptation workstream and peers reviewing its delivery logic
 
 ---
+
+**Status note (22-Apr-26)**: the work packages in this programme have now
+been implemented through WP9. This note therefore serves two live roles:
+
+- the historical execution record for how the forecast-adaptation workstream
+  was sequenced
+- the acceptance checklist for broader outside-in confirmation that still
+  sits above the focused package-level tests
+
+The main remaining validation work is no longer "what should we implement
+next?" but "which broader harnesses do we still want to run before calling
+the workstream fully closed?" Later B3 and chart-retirement workstreams
+remain separate.
 
 ## 1. Peer Review Frame
 

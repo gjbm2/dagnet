@@ -17,6 +17,7 @@ import os
 import sys
 from datetime import date
 from pathlib import Path
+from types import SimpleNamespace
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
@@ -24,14 +25,6 @@ from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(__file__), '../../.env.local'))
 
 import pytest
-
-# TEMPORARILY SKIPPED to unblock release — v2/v3 parity fails under full pytest
-# suite due to in-process test pollution (passes in isolation). Investigation
-# in progress; see release.sh conversation on 22-Apr-26. Un-skip by removing
-# this `pytestmark` line when the polluter is identified and fixed.
-pytestmark = pytest.mark.skip(
-    reason="test pollution in full suite — under investigation; passes in isolation"
-)
 
 # Shared fixtures from conftest
 from conftest import (
@@ -43,7 +36,16 @@ from conftest import (
 
 
 def _load_graph(graph_name: str):
-    return load_graph_json(graph_name)
+    # Always request bayesian injection: every class in this file runs
+    # the v2/v3 handlers which need posterior SDs to condition the MC
+    # sweep. After doc 57, merely injecting the bayesian sidecar is not
+    # enough: if the graph keeps best_available preference, v3 can
+    # legitimately resolve to an analytic query-scoped posterior and
+    # degrade instead of sweeping. Force the aggregate-prior source so
+    # the parity gate stays apples-to-apples.
+    graph = load_graph_json(graph_name, bayesian=True)
+    graph['model_source_preference'] = 'bayesian'
+    return graph
 
 
 def _run_handler(handler_func, graph, analytics_dsl, effective_query_dsl, candidate_regimes):
@@ -854,6 +856,323 @@ class TestProdGraphCohortParity:
 
         assert len(failures) == 0, \
             f"Midpoint diverges >10% at {len(failures)} τ:\n" + "\n".join(failures[:10])
+
+
+@requires_db
+@requires_data_repo
+def test_prod_graph_v3_window_vs_cohort_do_not_collapse_for_downstream_edge():
+    """Downstream prod edge must keep window/cohort semantics distinct in v3.
+
+    This is the exact regression the CLI surfaced on bayes-test-gm-rebuild:
+    for from(switch-registered).to(switch-success), `window(-1d:)` and
+    `cohort(-1d:)` must not collapse to near-identical midpoint curves.
+    """
+    dsl = 'from(switch-registered).to(switch-success)'
+    window_rows = copy.deepcopy(
+        _run_handler_cached('v3', 'bayes-test-gm-rebuild', dsl, 'window(-1d:)')
+    )
+    cohort_rows = copy.deepcopy(
+        _run_handler_cached('v3', 'bayes-test-gm-rebuild', dsl, 'cohort(-1d:)')
+    )
+
+    assert window_rows, 'v3 window(-1d:) returned no rows'
+    assert cohort_rows, 'v3 cohort(-1d:) returned no rows'
+
+    window_by_tau = {r['tau_days']: r for r in window_rows}
+    cohort_by_tau = {r['tau_days']: r for r in cohort_rows}
+    shared = sorted(set(window_by_tau) & set(cohort_by_tau))
+    assert shared, 'window/cohort share no τ values'
+
+    midpoint_diffs = []
+    for tau in shared:
+        w_mid = window_by_tau[tau].get('midpoint')
+        c_mid = cohort_by_tau[tau].get('midpoint')
+        if w_mid is None or c_mid is None:
+            continue
+        midpoint_diffs.append((tau, abs(w_mid - c_mid), w_mid, c_mid))
+
+    assert midpoint_diffs, 'No shared forecast-zone midpoints to compare'
+
+    max_tau, max_diff, window_mid, cohort_mid = max(
+        midpoint_diffs, key=lambda item: item[1]
+    )
+    mean_diff = sum(item[1] for item in midpoint_diffs) / len(midpoint_diffs)
+
+    print(
+        "\nProd v3 window/cohort downstream divergence:",
+        f"max Δ={max_diff:.4f} at τ={max_tau}",
+        f"mean Δ={mean_diff:.4f}",
+        f"window={window_mid:.4f}",
+        f"cohort={cohort_mid:.4f}",
+    )
+
+    assert max_diff > 0.10, (
+        "v3 window(-1d:) and cohort(-1d:) collapsed on the downstream prod edge: "
+        f"max midpoint diff={max_diff:.4f}, mean diff={mean_diff:.4f}. "
+        "This edge should preserve distinct downstream cohort timing."
+    )
+
+
+def test_v3_handler_widens_single_edge_downstream_cohort_span(monkeypatch):
+    """v3 handler must widen downstream single-edge cohort spans.
+
+    For cohort(A, X-Y) with A != X, the population-model CDF must be
+    prepared on anchor->Y while the p draws stay edge-level X->Y.
+    """
+    import api_handlers
+    import runner.cohort_forecast_v3 as cohort_forecast_v3
+    import runner.forecast_preparation as forecast_preparation
+    import runner.forecast_runtime as forecast_runtime
+    import runner.graph_builder as graph_builder
+    import runner.model_resolver as model_resolver
+    import runner.path_runner as path_runner
+    import runner.span_kernel as span_kernel
+
+    graph = {
+        'nodes': [
+            {'uuid': 'na', 'id': 'a'},
+            {'uuid': 'nx', 'id': 'x'},
+            {'uuid': 'ny', 'id': 'y'},
+        ],
+        'edges': [
+            {'uuid': 'e-ax', 'from': 'na', 'to': 'nx', 'p': {'id': 'a-to-x'}},
+            {'uuid': 'e1', 'from': 'nx', 'to': 'ny', 'p': {'id': 'x-to-y'}},
+        ],
+        'model_source_preference': 'bayesian',
+    }
+    subjects = [{
+        'anchor_from': '2026-01-01',
+        'anchor_to': '2026-01-01',
+        'sweep_to': '2026-01-02',
+    }]
+    preparation = SimpleNamespace(
+        query_from_node='x',
+        query_to_node='y',
+        anchor_node='a',
+        per_edge_results=[{
+            'path_role': 'only',
+            'from_node': 'x',
+            'to_node': 'y',
+            'subject': {'target': {'targetId': 'e1'}},
+        }],
+        total_rows=1,
+        composed_frames=[{
+            'snapshot_date': '2026-01-01',
+            'data_points': [{'anchor_day': '2026-01-01', 'x': 1, 'y': 0, 'a': 2}],
+        }],
+        last_edge_id='e1',
+        anchor_from='2026-01-01',
+        anchor_to='2026-01-01',
+        sweep_to='2026-01-02',
+        regime_diagnostics=[],
+        cohorts_analysed=1,
+        is_multi_hop=False,
+        subject_is_window=False,
+    )
+
+    resolved = SimpleNamespace(
+        source='bayesian',
+        p_mean=0.5,
+        p_sd=0.1,
+        alpha=5.0,
+        beta=5.0,
+        alpha_pred=5.0,
+        beta_pred=5.0,
+        alpha_beta_query_scoped=False,
+        latency=SimpleNamespace(
+            mu=1.0,
+            sigma=0.0,
+            onset_delta_days=0.0,
+            mu_sd=0.0,
+            sigma_sd=0.0,
+            onset_sd=0.0,
+            onset_mu_corr=0.0,
+        ),
+        edge_latency=SimpleNamespace(
+            mu=1.0,
+            sigma=0.0,
+            onset_delta_days=0.0,
+            mu_sd=0.0,
+            sigma_sd=0.0,
+            onset_sd=0.0,
+            onset_mu_corr=0.0,
+        ),
+    )
+
+    captured = {}
+
+    class _FakeKernel:
+        span_p = 1.0
+        max_tau = 10
+
+        @staticmethod
+        def cdf_at(_tau):
+            return 0.5
+
+    def _fake_build_prepared_span_execution(graph_data, x_node_id, y_node_id, *, graph_preference=None, **_kwargs):
+        assert graph_data is graph
+        return SimpleNamespace(
+            topo=(x_node_id, y_node_id, graph_preference),
+            edge_params={},
+            edge_sds={},        # doc 61: epistemic
+            edge_sds_pred={},   # doc 61: predictive
+        )
+
+    def _fake_mc_span_cdfs(*, topo, **_kwargs):
+        x_node_id, y_node_id, graph_preference = topo
+        return (
+            f"cdf:{x_node_id}->{y_node_id}:{graph_preference}",
+            f"p:{x_node_id}->{y_node_id}:{graph_preference}",
+        )
+
+    def _fake_compute_cohort_maturity_rows_v3(**kwargs):
+        captured['mc_cdf_arr'] = kwargs['mc_cdf_arr']
+        captured['mc_p_s'] = kwargs['mc_p_s']
+        captured['det_norm_cdf'] = kwargs['det_norm_cdf']
+        captured['query_from_node'] = kwargs['query_from_node']
+        captured['query_to_node'] = kwargs['query_to_node']
+        captured['anchor_node_id'] = kwargs['anchor_node_id']
+        return [{
+            'tau_days': 0,
+            'tau': 0,
+            'midpoint': 0.5,
+            'p_infinity_mean': 0.5,
+            'p_infinity_sd': 0.1,
+            'p_infinity_sd_epistemic': 0.08,
+            'completeness': 0.6,
+            'completeness_sd': 0.02,
+            'evidence_x': 100.0,
+            'evidence_y': 50.0,
+            '_conditioning': {'applied': True},
+            '_conditioned': True,
+            '_cf_mode': 'sweep',
+            '_cf_reason': None,
+        }]
+
+    monkeypatch.setattr(
+        forecast_preparation,
+        'resolve_forecast_subjects',
+        lambda **_kwargs: subjects,
+    )
+    monkeypatch.setattr(
+        forecast_preparation,
+        'prepare_forecast_subject_group',
+        lambda **_kwargs: preparation,
+    )
+    monkeypatch.setattr(api_handlers, '_compute_axis_tau_max', lambda **_kwargs: 0)
+    monkeypatch.setattr(
+        api_handlers,
+        '_cf_supplement_evidence_counts_from_file',
+        lambda **_kwargs: {'supplemented_days': 0, 'k': 0, 'n': 0},
+    )
+    monkeypatch.setattr(model_resolver, 'resolve_model_params', lambda *_args, **_kwargs: resolved)
+    monkeypatch.setattr(
+        forecast_runtime,
+        'find_edge_by_id',
+        lambda graph_data, edge_id: graph_data['edges'][1] if edge_id == 'e1' else None,
+    )
+    monkeypatch.setattr(
+        forecast_runtime,
+        'build_prepared_runtime_bundle',
+        lambda **kwargs: captured.update({
+            'p_conditioning_source': kwargs.get('p_conditioning_source'),
+            'p_conditioning_direct_cohort': kwargs.get('p_conditioning_direct_cohort'),
+        }) or SimpleNamespace(resolved_params=kwargs.get('resolved_params')),
+    )
+    monkeypatch.setattr(
+        forecast_runtime,
+        'build_prepared_span_execution',
+        _fake_build_prepared_span_execution,
+    )
+    monkeypatch.setattr(forecast_runtime, 'get_incoming_edges', lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(forecast_runtime, 'read_edge_cohort_params', lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(graph_builder, 'build_networkx_graph', lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(path_runner, 'calculate_path_probability', lambda *_args, **_kwargs: SimpleNamespace(probability=0.0))
+    monkeypatch.setattr(span_kernel, 'compose_span_kernel', lambda **_kwargs: _FakeKernel())
+    monkeypatch.setattr(span_kernel, 'mc_span_cdfs', _fake_mc_span_cdfs)
+    monkeypatch.setattr(
+        forecast_runtime,
+        'span_kernel_to_edge_params',
+        lambda *_args, **_kwargs: {'forecast_mean': 0.5},
+    )
+    monkeypatch.setattr(
+        forecast_runtime,
+        'build_span_params',
+        lambda *_args, **_kwargs: SimpleNamespace(
+            alpha_0=5.0,
+            beta_0=5.0,
+            mu_sd=0.0,
+            sigma_sd=0.0,
+            onset_sd=0.0,
+            onset_mu_corr=0.0,
+        ),
+    )
+    monkeypatch.setattr(
+        cohort_forecast_v3,
+        'compute_cohort_maturity_rows_v3',
+        _fake_compute_cohort_maturity_rows_v3,
+    )
+
+    result = api_handlers._handle_cohort_maturity_v3({
+        'scenarios': [{
+            'scenario_id': 'test',
+            'graph': graph,
+            'analytics_dsl': 'from(x).to(y)',
+            'effective_query_dsl': 'cohort(-1d:)',
+            'candidate_regimes_by_edge': {},
+        }],
+        'display_settings': {
+            'show_model_promoted': False,
+            'show_model_sources': False,
+            'tau_extent': '0',
+        },
+    })
+
+    assert captured['query_from_node'] == 'x'
+    assert captured['query_to_node'] == 'y'
+    assert captured['anchor_node_id'] == 'a'
+    assert captured['mc_cdf_arr'] == 'cdf:a->y:bayesian'
+    assert captured['mc_p_s'] == 'p:x->y:bayesian'
+    assert captured['det_norm_cdf'] is not None
+    assert captured['p_conditioning_source'] == 'direct_cohort_exact_subject'
+    assert captured['p_conditioning_direct_cohort'] is True
+
+    result_rows = result.get('result', {}).get('maturity_rows')
+    if result_rows is None:
+        subjects_out = result.get('subjects') or result.get('scenarios', [{}])[0].get('subjects', [])
+        result_rows = subjects_out[0]['result']['maturity_rows'] if subjects_out else None
+    assert result_rows == [{
+        'tau_days': 0,
+        'tau': 0,
+        'midpoint': 0.5,
+        'p_infinity_mean': 0.5,
+        'p_infinity_sd': 0.1,
+        'p_infinity_sd_epistemic': 0.08,
+        'completeness': 0.6,
+        'completeness_sd': 0.02,
+        'evidence_x': 100.0,
+        'evidence_y': 50.0,
+        '_conditioning': {'applied': True},
+        '_conditioned': True,
+        '_cf_mode': 'sweep',
+        '_cf_reason': None,
+    }]
+
+    captured.clear()
+    cf_result = api_handlers.handle_conditioned_forecast({
+        'scenarios': [{
+            'scenario_id': 'test',
+            'graph': graph,
+            'analytics_dsl': 'from(x).to(y)',
+            'effective_query_dsl': 'cohort(-1d:)',
+            'candidate_regimes_by_edge': {},
+        }],
+        'analytics_dsl': 'from(x).to(y)',
+    })
+
+    assert captured['p_conditioning_source'] == 'direct_cohort_exact_subject'
+    assert captured['p_conditioning_direct_cohort'] is True
+    assert cf_result.get('scenarios', [{}])[0].get('edges')
 
 
 class _TestUpstreamLagParityInline:

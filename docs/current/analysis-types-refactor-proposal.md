@@ -1,357 +1,591 @@
 # Analysis-Types Refactor Proposal
 
-**Author**: 18-Apr-26
-**Status**: Draft, not yet scheduled
-**Related**: [docs/current/codebase/adding-analysis-types.md](./codebase/adding-analysis-types.md)
+**Author**: 18-Apr-26  
+**Updated**: 22-Apr-26  
+**Status**: Final draft, ready to schedule  
+**Primary references**: [docs/current/codebase/adding-analysis-types.md](./codebase/adding-analysis-types.md), [docs/current/project-bayes/55-surprise-gauge-rework.md](./project-bayes/55-surprise-gauge-rework.md), [docs/current/project-bayes/59-cohort-window-forecast-implementation-scheme.md](./project-bayes/59-cohort-window-forecast-implementation-scheme.md), [docs/current/project-bayes/60-forecast-adaptation-programme.md](./project-bayes/60-forecast-adaptation-programme.md), [docs/current/codebase/ANALYSIS_TYPES_CATALOGUE.md](./codebase/ANALYSIS_TYPES_CATALOGUE.md)
 
 ---
 
-## Context
+## Summary
 
-Adding a snapshot-based analysis type currently touches ~15 files
-(see the playbook file-touch list). About 3 of those files contain
-genuinely bespoke logic — the derivation, the builder, and the CLI
-blind test. The remaining ~12 are boilerplate: each holds a
-hardcoded list, switch, or type union that must be kept in sync
-across files nobody thinks to look at. This produces the classic
-"shotgun surgery" failure mode — adding one type mutates a dozen
-modules, any of which can silently drop the change on the floor.
+This proposal is the plumbing follow-on to the forecast-adaptation work,
+not a competing semantic design. Docs 59 and 60 now define and implement
+the shared forecast-consumer contract. What remains here is the
+analysis-type registration and response-plumbing debt: too many
+hardcoded lists, too many partially-overlapping registries, and too many
+places where an analysis type can be silently dropped or mis-routed even
+when the underlying computation is correct.
 
-The conversion_rate onboarding exposed the problem most clearly.
-Beyond the file count, the scattered registration caused downstream
-failures: charts hung on missing boot-trace entries; normalisers
-dropped fields silently; chart kinds were invisible because one of
-three lookup tables missed them. These aren't bugs in any one file;
-they're structural — the per-type record lives in many places
-instead of one.
+The target is simple:
 
-The refactor target is stated simply: **adding a new analysis type
-should touch one declarative registry entry plus a small number of
-genuinely-bespoke logic files** (derivation, builder, test).
-Everything else should fall out from the registry automatically.
+- one canonical FE registry for analysis-type metadata
+- one canonical BE registry for snapshot-envelope dispatch metadata
+- one standard FE normaliser factory for snapshot-envelope responses
+- no hidden lookup tables for chart kinds, snapshot boot, or
+  analysis-type-specific routing
+
+The refactor should reduce file-touch count, but the real goal is
+stronger invariants. Adding a new analysis type should stop being a
+search exercise across unrelated files.
 
 ---
 
-## Target outcome
+## Why this note still matters
 
-After the refactor, adding a time-series snapshot analysis type
-should require:
+When this note was first drafted, the analysis-types problem and the
+forecast-consumer problem were still intertwined. That is no longer the
+right framing.
 
-- **One FE registry entry** — declarative record with id, name,
-  icon, selection predicate, chart-kind list, snapshot-contract
-  shape, display-settings composition, and a pointer to the builder
-  function. This single entry replaces writes to eight files today.
+The forecast-consumer seam has now moved:
 
-- **One BE registry entry** — declarative record with id, runner,
-  subject-resolution scope, snapshot read mode, and a pointer to
-  the derivation function. Replaces writes to two files today.
+- doc 59 is the active target contract for shared runtime objects,
+  projection surfaces, and first-class forecast consumers
+- doc 60 is the active implementation record and acceptance checklist for
+  that workstream
 
-- **One derivation function (BE Python)** — pure function over
-  input rows, the edge, and the subject. Returns the response dict.
+This proposal therefore no longer designs forecast semantics. It assumes
+those semantics are binding and already live. Its job is narrower:
 
-- **One builder function (FE TypeScript)** — takes canonical
-  per-scenario / per-subject data and returns the series list.
-  Axis, tooltip, legend, and theming come from a shared chart
-  helper; the builder plugs in series generation and nothing else.
+- finish the catalogue/registry consolidation on the FE
+- consolidate BE snapshot-envelope dispatch metadata
+- standardise the FE-side snapshot normalisation contract
+- preserve the load-bearing asymmetries that the current system depends on
 
-- **One blind test (CLI shell)** — asserts invariants over the
-  BE response on a synth graph.
+The surprise-gauge work remains highly relevant, but as evidence about
+response shape and projection boundaries, not as permission to reopen the
+forecast runtime design.
 
-Total: four files, of which two are declarative and three are
-genuinely analysis-specific. For local-compute types, the
-snapshot-boot files and the BE registry entry go away entirely.
+---
 
-The existing analysis types (conversion_rate, daily_conversions,
-cohort_maturity, bridge, surprise_gauge, branch_comparison,
-graph_overview, etc.) migrate into registry entries with no
-semantic change; consumers read from the registry instead of
-their own hardcoded tables.
+## Current live state
+
+The codebase is not starting from zero. The important current shape is:
+
+- `graph-editor/src/components/panels/analysisTypes.ts` is already a real
+  FE metadata source for identity, labels, icons, snapshot contracts,
+  dev/internal flags, some view-kind declarations, and minimised
+  renderers
+- `graph-editor/src/lib/analysisDisplaySettingsRegistry.ts` is already a
+  real registry for chart-kind display settings and compute-affecting
+  flags
+- many UI surfaces already read `analysisTypes.ts` directly for names,
+  icons, kind pickers, and snapshot-capability checks
+- the surprise-gauge multi-scenario normalisation path has already
+  established a useful seed contract for preserved scenario structure via
+  `scenario_results` and `focused_scenario_id`
+
+The remaining drift is concentrated in a smaller, but still important,
+set of seams:
+
+- chart-kind availability and FE augmentation in
+  `analysisTypeResolutionService.ts`
+- chart-kind aliases, labels, inference, and subject-selector policy in
+  `AnalysisChartContainer.tsx`
+- snapshot-needed and snapshot-boot decisions in
+  `useCanvasAnalysisCompute.ts`, `analysisBootCoordinatorService.ts`, and
+  `snapshotBootTrace.ts`
+- hardcoded snapshot normaliser waterfalls in
+  `graphComputeClient.ts`
+- BE scope/read-mode tables in `analysis_subject_resolution.py`
+- BE snapshot derivation dispatch branches in `api_handlers.py`
+- small CLI mirrors such as `src/cli/analysisTypeRegistry.ts` and
+  `src/cli/commands/parity-test.ts`
+
+The right mental model is therefore not "invent a registry". It is
+"finish consolidating the registry surfaces that already exist, and stop
+creating new side tables".
+
+---
+
+## Problem statement
+
+The current debt has three distinct parts.
+
+### 1. Catalogue metadata is split across unrelated consumers
+
+The same analysis-type facts are still reconstructed in multiple places:
+name and icon in one file, chart kinds in another, snapshot boot in a
+third, subject-selection behaviour in a fourth, and snapshot dispatch
+metadata on the Python side in two more. This is classic catalogue drift.
+
+### 2. Analysis type, chart kind, and consumer family are being conflated
+
+They are different axes:
+
+- **analysis type** answers "what question are we asking?"
+- **chart kind** answers "how are we rendering the result?"
+- **consumer family** answers "which semantic runtime/projection family
+  does this surface belong to?"
+
+The refactor must not collapse these into one concept. In particular:
+
+- chart builders are chart-kind concerns, not analysis-type concerns
+- snapshot-backed compute is sometimes analysis-type-specific, but in
+  some cases it is analysis-type × chart-kind specific
+- forecast-consumer semantics are a separate, already-designed layer from
+  docs 59 and 60
+
+### 3. Response normalisation is still analysis-type-by-analysis-type
+
+The snapshot normalisers in `graphComputeClient.ts` are now one of the
+largest remaining boilerplate clusters. The problem is not merely
+duplication. It is that projection decisions such as:
+
+- what becomes a flat `data` row
+- what remains preserved per scenario
+- what counts as display-only projection
+- which fields belong in `dimension_values`
+
+are currently re-specified by hand. The surprise-gauge work showed that a
+flat row set alone is not enough for all consumers.
+
+---
+
+## Load-bearing constraints
+
+The refactor must preserve the following constraints.
+
+### Forecast semantics are an input, not design scope
+
+This work must consume the contracts in docs 59 and 60. It must not
+re-litigate shared preparation, runtime-object roles, regime selection,
+or multi-hop `window()` / `cohort()` semantics.
+
+### FE snapshot planning, BE snapshot dispatch, and FE snapshot normalisation are three different signals
+
+The current system only works because these signals are not identical.
+The refactor must model them explicitly rather than accidentally merging
+them.
+
+The key counterexample is `conversion_funnel`:
+
+- on the FE, it needs snapshot-adjacent preparation because the request
+  must carry `candidate_regimes_by_edge`
+- on the BE, it must **not** route through the snapshot-subject handler
+- on the FE response side, it does **not** use the snapshot-envelope
+  normaliser path
+
+Any registry design that cannot represent that asymmetry is wrong.
+
+### Snapshot need is sometimes analysis-type × chart-kind, not analysis-type alone
+
+`branch_comparison` and `outcome_comparison` only need snapshot-backed
+compute when the selected chart kind is `time_series`. Their bar/pie
+variants should continue to use the standard path-runner pipeline.
+
+This means the registry must be able to answer both:
+
+- "is this analysis type snapshot-capable?"
+- "does this particular analysis-type × kind combination require the
+  snapshot-backed path?"
+
+### Chart-kind settings remain chart-kind concerns
+
+`analysisDisplaySettingsRegistry.ts` is already the right abstraction for
+chart-kind-level controls and compute-affecting flags. This proposal
+should not fold that file into the FE analysis-type registry. The FE
+registry should reference chart-kind capabilities, not replace the
+chart-kind settings registry.
+
+### Pixel output and response semantics must remain stable
+
+This is a refactor. Existing charts and responses should not change their
+meaning or visual output during the migration. Regressions are bugs, not
+acceptable churn.
+
+---
+
+## Resolved design decisions
+
+The following decisions are now settled for this proposal.
+
+### 1. FE registry source: evolve the existing `analysisTypes.ts`
+
+The canonical FE registry should be the existing
+`graph-editor/src/components/panels/analysisTypes.ts`, or a new module
+extracted from it with compatibility re-exports. Do not create a second
+source of truth and migrate toward it slowly. The current file is already
+widely imported and is the natural seed.
+
+### 2. BE registry source: extend `analysis_types.yaml` with an optional snapshot stanza
+
+The BE already has one declarative registry in
+`graph-editor/lib/runner/analysis_types.yaml`. That file should remain the
+canonical BE home for analysis IDs and runner selection. Snapshot-envelope
+types should add an explicit optional snapshot stanza carrying:
+
+- subject scope
+- read mode
+- derivation identifier
+- dispatch mode
+
+Non-snapshot or asymmetric types such as `conversion_funnel` simply omit
+that stanza and keep their standard runner path.
+
+### 3. Phase 3 stays FE-side
+
+For this programme, flattening remains an FE normalisation concern.
+Pushing flattening into Python would broaden scope, increase migration
+risk, and couple this refactor to a public BE response-shape change. The
+correct Phase 3 move is an FE normaliser factory plus a clearer preserved
+scenario contract.
+
+### 4. Canonical preserved scenario block
+
+The standard preserved scenario block should be `scenario_results`, with
+`focused_scenario_id` identifying the default focused scenario when a
+surface needs one. This names the thing the FE actually needs and matches
+the live surprise-gauge shape. If a later family needs something broader,
+that should be a separate change with a concrete second use case.
+
+### 5. Builder dispatch remains chart-kind keyed
+
+The FE analysis-type registry should not point directly at ECharts
+builders. Builders are chart-kind infrastructure and should remain owned
+by `analysisEChartsService.ts` plus the builder modules. The registry
+should instead own:
+
+- valid view/kind combinations
+- chart-kind aliases and defaulting rules
+- chart-planning hints
+- whether a given kind requires snapshots
+
+### 6. Display settings remain a companion registry
+
+`analysisDisplaySettingsRegistry.ts` stays separate. The FE
+analysis-type registry should consume it, not absorb it.
+
+---
+
+## Target architecture
+
+### FE target shape
+
+The FE should have one canonical analysis-type registry answering all
+analysis-type questions that are not inherently chart-kind-specific.
+
+| Concern | Current owner | Final owner |
+|---|---|---|
+| id, name, icon, selection hint, dev/internal flags | `analysisTypes.ts` | FE registry |
+| minimised renderers and labels | `analysisTypes.ts` | FE registry |
+| view_type → valid kind matrix | partly `analysisTypes.ts`, partly scattered | FE registry |
+| snapshot planning contract | `analysisTypes.ts` | FE registry |
+| chart-kind options and defaulting rules | `analysisTypeResolutionService.ts`, `chartDisplayPlanningService.ts`, `AnalysisChartContainer.tsx` | FE registry helpers |
+| chart-kind aliases, labels, inference rules | `AnalysisChartContainer.tsx` | FE registry helpers |
+| snapshot-required kind policy | `useCanvasAnalysisCompute.ts`, `analysisBootCoordinatorService.ts`, `snapshotBootTrace.ts` | FE registry helpers |
+| subject-selector policy | `AnalysisChartContainer.tsx` | FE registry |
+| display settings definitions | `analysisDisplaySettingsRegistry.ts` | stays in companion registry |
+| chart builders | `analysisEChartsService.ts` | stays chart-kind keyed |
+
+The FE registry should become the one place a caller asks:
+
+- which kinds exist for this analysis and view
+- which of those kinds require snapshot-backed compute
+- how a chart kind should be labelled or normalised
+- whether this type has a minimised renderer
+- whether a type uses subject selection
+
+### BE target shape
+
+The BE should answer snapshot-envelope dispatch questions from one
+declarative place instead of split tables and `elif` chains.
+
+| Concern | Current owner | Final owner |
+|---|---|---|
+| analysis ID, name, `when`, runner | `analysis_types.yaml` | `analysis_types.yaml` |
+| snapshot subject scope | `analysis_subject_resolution.py` | optional snapshot stanza in `analysis_types.yaml` |
+| snapshot read mode | `analysis_subject_resolution.py` | optional snapshot stanza in `analysis_types.yaml` |
+| derivation target | `api_handlers.py` branch chain | registry-backed dispatch map |
+| asymmetric standard-runner types | implicit exclusions | explicit omission of snapshot stanza |
+
+The important point is that the BE registry is not a mirror of the FE
+registry. It answers BE dispatch questions, not FE planning questions.
+
+### Normalisation target shape
+
+The FE normalisation contract should have two layers:
+
+- **flat rows** for tables, generic chart containers, CSV export, and
+  common dimension/metric infrastructure
+- **optional preserved scenario structure** for surfaces whose display is
+  not reconstructible from rows alone
+
+The standard output contract for snapshot-envelope normalisers should be:
+
+- canonical `AnalysisResult`
+- flat `data`
+- `dimension_values`
+- optional `scenario_results`
+- optional `focused_scenario_id`
+
+No analysis should need to invent an entirely bespoke top-level side
+channel once this contract exists.
+
+---
+
+## What stays bespoke
+
+Some variation is real and should remain real.
+
+- **Derivation logic** stays bespoke per analysis type. That is the point
+  of the analysis.
+- **Eligibility predicates** such as "this is a direct edge" or "this
+  edge has usable model vars" stay as real code, even if the registry
+  points to them.
+- **Series-generation logic** stays chart-kind or analysis-specific where
+  the visual specification is genuinely different.
+- **Blind assertions** stay per analysis type even if the harness
+  machinery becomes more reusable.
+
+The refactor is about centralising metadata and routing, not flattening
+real domain differences.
 
 ---
 
 ## Phases
 
-Each phase is independently shippable and adds new abstractions
-additively before removing the old scattered tables. This avoids
-flag-days and lets the migration proceed one analysis type at a time.
+### Phase 0 — Freeze the seam tests and current-state inventory
 
-### Phase 1 — Unified FE registry (highest ROI)
-
-Introduce an `AnalysisTypeRegistry` module that exports one canonical
-record per analysis type. The record contains every per-type fact
-currently scattered across [analysisTypes.ts](../../graph-editor/src/components/panels/analysisTypes.ts),
-[analysisTypeResolutionService.ts](../../graph-editor/src/services/analysisTypeResolutionService.ts),
-[AnalysisChartContainer.tsx](../../graph-editor/src/components/charts/AnalysisChartContainer.tsx),
-[chartDisplayPlanningService.ts](../../graph-editor/src/services/chartDisplayPlanningService.ts),
-[snapshotBootTrace.ts](../../graph-editor/src/lib/snapshotBootTrace.ts),
-[analysisDisplaySettingsRegistry.ts](../../graph-editor/src/lib/analysisDisplaySettingsRegistry.ts),
-[analysisEChartsService.ts](../../graph-editor/src/services/analysisEChartsService.ts),
-and the analysis_type union in [graphComputeClient.ts](../../graph-editor/src/lib/graphComputeClient.ts).
-
-Fields on the record: identity and display (id, name, short
-description, icon, selection hint); predicate (the `when` rule for
-when this type appears in the dropdown); chart-kind list; snapshot
-contract (if snapshot-based); subject-selector flag; time-series
-flag and multi-scenario flag; display-settings composition; builder
-function reference; the normaliser-row-shape descriptor if snapshot-based.
-
-Migration pattern: for each consumer (the eight files above),
-replace its hardcoded table or switch with a derivation from the
-registry. Do this one consumer at a time. When all consumers are
-migrated, delete the old tables. No semantic changes; pure
+Before moving more metadata, lock down the current seam coverage that
+already exists and add the missing contract tests needed for the
 refactor.
 
-This phase alone collapses ~70% of the boilerplate. ETA: 2-3 days
-for the registry shape plus consumer migration plus tests.
+The important current FE suites are:
 
-Risk: low. Each consumer migration is independently testable.
-The registry is additive; old tables stay until their consumers
-are all migrated.
+- `graph-editor/src/services/__tests__/analysisRequestContract.test.ts`
+- `graph-editor/src/services/__tests__/contentItemSpec.test.ts`
+- `graph-editor/src/services/__tests__/HoverAnalysisPreview.test.ts`
+- `graph-editor/src/lib/__tests__/analysisDisplaySettingsRegistry.test.ts`
+- `graph-editor/src/lib/__tests__/graphComputeClient.test.ts`
 
-### Phase 2 — BE dispatch and subject resolution consolidation
+The important outside-in harnesses are:
 
-The BE has three scattered locations for per-type knowledge:
-[analysis_types.yaml](../../graph-editor/lib/runner/analysis_types.yaml)
-(the only one that's already declarative),
-[analysis_subject_resolution.py](../../graph-editor/lib/analysis_subject_resolution.py),
-and the chain of `elif analysis_type == 'X':` branches in
-[api_handlers.py](../../graph-editor/lib/api_handlers.py)'s snapshot
-handler.
+- `graph-editor/src/cli/commands/parity-test.ts`
+- the existing `graph-ops` blind/parity scripts already used for snapshot
+  analyses
 
-The refactor folds subject scope and read-mode into the yaml
-schema — they are already per-type facts with no runtime logic.
-The derivation dispatch becomes a dict lookup: each registered
-analysis type maps to a derivation callable with a standard
-signature. The chain of ifs disappears in favour of a one-line
-dispatch.
+Phase 0 is done when the refactor has a green or intentionally-red test
+story at the metadata, dispatch, and normalisation seams.
 
-ETA: 1-2 days. Risk: low to medium — touching the snapshot handler
-requires careful test coverage, but the parity harness
-([v2-v3-parity-test.sh](../../graph-ops/scripts/v2-v3-parity-test.sh),
-[conversion-rate-blind-test.sh](../../graph-ops/scripts/conversion-rate-blind-test.sh),
-and friends) catches regressions.
+### Phase 1 — Complete the FE registry
 
-### Phase 3 — Response normaliser factory (or move to BE)
+This is the highest-value phase and should ship first.
 
-The snapshot response normalisers in
-[graphComputeClient.ts](../../graph-editor/src/lib/graphComputeClient.ts)
-are each around 80 lines and 90% identical: they flatten
-per-scenario / per-subject blocks into flat data rows, collect
-scenario metadata, and wrap the result in a canonical
-`AnalysisResult` shape. The per-type variation is just the row
-shape and the semantics block.
+Scope:
 
-Two options, to decide during implementation:
+- expand the existing FE registry schema to cover all analysis types, not
+  just identity and snapshotContract
+- move chart-kind availability and augmentation out of
+  `analysisTypeResolutionService.ts`
+- move chart-kind labels, aliases, inference rules, and subject-selector
+  policy out of `AnalysisChartContainer.tsx`
+- move snapshot-required-kind logic out of `useCanvasAnalysisCompute.ts`,
+  `analysisBootCoordinatorService.ts`, and `snapshotBootTrace.ts`
+- remove CLI mirror lists that can be derived from the registry
 
-First option: factor out a normaliser factory on the FE that takes
-a row-shape descriptor and a semantics record from the registry,
-returns a normaliser. This matches the current architecture.
+Constraints:
 
-Second option (preferred, stretch): push the flattening into the BE.
-Each derivation returns pre-flattened rows with scenario_id and
-subject_id already attached; the FE normaliser becomes a trivial
-pass-through. This is the correct semantic home — the BE already
-iterates over scenarios and subjects, so flattening there is one
-line per derivation rather than a factory abstraction on the FE.
+- keep `analysisDisplaySettingsRegistry.ts` as a companion registry
+- keep builder dispatch chart-kind keyed
+- preserve asymmetric cases such as `conversion_funnel`
+- preserve analysis-type × chart-kind cases such as comparison
+  `time_series`
 
-If the second option is chosen, the normaliser waterfall in
-`graphComputeClient.ts` collapses to a single generic handler.
+This phase should be a pure FE plumbing refactor with no semantic change.
 
-ETA: 1-2 days depending on option chosen. Risk: medium. The
-existing shape is tested via several integration tests; any
-change must preserve field-by-field parity.
+### Phase 2 — Consolidate BE snapshot-envelope dispatch
 
-### Phase 4 — Time-series ECharts builder factory
+Scope:
 
-The remaining bespoke territory is the ECharts builders
-themselves. [daily_conversions](../../graph-editor/src/services/analysisECharts/snapshotBuilders.ts),
-[conversion_rate](../../graph-editor/src/services/analysisECharts/snapshotBuilders.ts)
-(same file), and the time-series variant of
-[cohort_maturity](../../graph-editor/src/services/analysisECharts/cohortComparisonBuilders.ts)
-all share: time-axis configuration, crosshair styling, legend
-concept+swatch pattern, theme colour resolution, size-scaling
-for scatter, common grid layout, and tooltip formatter shape.
+- extend `analysis_types.yaml` with an optional snapshot stanza
+- replace `ANALYSIS_TYPE_SCOPE_RULES` and `ANALYSIS_TYPE_READ_MODES` with
+  registry-derived data
+- replace the per-type snapshot derivation branch chain in
+  `api_handlers.py` with a registry-backed dispatch map
 
-A `buildTimeSeriesChart` helper would take a descriptor of series
-factories (how to build bars, lines, scatter from the data), axis
-configuration (time vs categorical, formatter preferences), and
-a legend-concept list; return the full ECharts option. Builders
-shrink to series-generation logic plus a small config block.
+Constraints:
 
-This phase is deliberately last. Builder factories are where
-premature abstraction causes the most pain — patterns that look
-shared often diverge when a fourth or fifth type arrives. Wait
-until at least one more time-series type exists before committing
-to the shared helper shape. The three existing types are enough
-to extract common patterns, but the fourth validates the abstraction.
+- do not route `conversion_funnel` through the snapshot-subject handler
+- do not infer asymmetry from omission by accident; model it explicitly
+- preserve existing runner selection and `when` ordering
 
-ETA: 2-3 days after the trigger. Risk: medium to high — builders
-carry the visual specification, so a bad abstraction makes visual
-regressions hard to catch without thorough screenshot tests.
+This phase brings the BE into the same declarative posture as the FE
+without pretending the two sides answer identical questions.
+
+### Phase 3 — Introduce the FE snapshot normaliser factory
+
+Scope:
+
+- replace the snapshot normaliser waterfall in `graphComputeClient.ts`
+  with a descriptor-driven factory
+- standardise the preserved scenario contract around `scenario_results`
+  and `focused_scenario_id`
+- make display-only projections explicit and testable
+
+Constraints:
+
+- no public BE response-shape redesign
+- preserve field-by-field result parity
+- do not collapse display-only projection into backend recompute
+
+The first goal is not maximum abstraction. It is to remove duplicated
+shape handling while keeping the result contract stable.
+
+### Phase 4 — Optional chart-builder helper
+
+This is deliberately last and explicitly optional.
+
+If, after Phases 1-3, the time-series builders still show stable common
+scaffolding across enough kinds, extract a shared chart-kind helper.
+Until then, leave builders alone. Premature abstraction here is more
+dangerous than the remaining duplication.
 
 ---
 
-## What stays bespoke (the 10% that can't be generalised)
+## Assurance package
 
-Some facts are genuinely per-type and should remain so:
+The proposal needs two kinds of assurance: preserve what already works,
+and add the tests that make registry drift impossible to miss.
 
-- **The derivation function.** The core domain logic — how raw rows
-  become the analysis result — is the whole point of the analysis
-  type. No abstraction should touch this.
+### Existing suites to preserve and extend
 
-- **The builder's series generation.** Mapping data to chart
-  series is where the visual specification lives. The shared
-  helper gives the builder the common scaffolding; the builder
-  decides what series to render.
+| Suite | What it already protects |
+|---|---|
+| `analysisRequestContract.test.ts` | request-shape and snapshotContract invariants |
+| `contentItemSpec.test.ts` | registry-driven view/kind behaviour in the FE UI |
+| `HoverAnalysisPreview.test.ts` | chart-kind completeness, pipeline uniformity, snapshot-kind coverage |
+| `analysisDisplaySettingsRegistry.test.ts` | chart-kind settings integrity and capability-group consistency |
+| `graphComputeClient.test.ts` | snapshot normaliser output shape |
+| CLI parity/blind harnesses | outside-in parity over real preparation and normalisation |
 
-- **The subject predicate.** The `when` rule (one node, two
-  nodes, sibling, etc.) is a type-defining property.
+### New tests required by this refactor
 
-- **The blind test.** Each type has its own invariants to assert.
-  A generic harness could help (Phase 5, stretch), but the
-  assertions themselves stay type-specific.
+| Exposure | Required test | Boundary |
+|---|---|---|
+| FE catalogue drift | FE registry completeness contract test | TypeScript |
+| FE/BE snapshot metadata drift | FE/BE snapshot-envelope parity test | TS + Python contract |
+| Load-bearing asymmetry loss | explicit `conversion_funnel` asymmetry test | TS integration |
+| analysis-type × kind drift | comparison `time_series` snapshot-needed test | TS integration |
+| normaliser drift | parity tests between legacy normalisers and factory output | TS integration |
+| display-vs-compute drift | request/cache invariance tests for display-only settings | TS integration |
+| BE dispatch drift | snapshot dispatch parity tests before removing branch chains | Python integration |
+
+The testing standards remain those in
+[docs/current/codebase/TESTING_STANDARDS.md](./codebase/TESTING_STANDARDS.md):
+real boundaries by default, parity tests when replacing code paths, and
+blind contract assertions instead of implementation-shaped mocks.
+
+This proposal does **not** duplicate the broader forecast-consumer
+semantic harnesses from docs 59 and 60. Those remain dependencies and
+must stay green, but they are not the primary assurance deliverable of
+this registry/normalisation programme.
+
+---
+
+## Migration sequence
+
+The right migration order is by **consumer seam**, not by analysis type.
+
+1. Freeze and extend the seam tests.
+2. Expand the FE registry schema while keeping existing helpers and
+   behaviour intact.
+3. Migrate chart-kind availability and augmentation helpers.
+4. Migrate chart-kind labels, aliases, inference, and subject-selector
+   policy.
+5. Migrate snapshot-needed and snapshot-boot decisions.
+6. Remove FE mirror lists and helper tables that the registry now answers.
+7. Consolidate the BE snapshot-envelope registry and dispatch.
+8. Replace FE snapshot normalisers with the factory.
+9. Only after the previous phases are stable, consider any optional
+   builder-helper extraction.
+
+This order keeps the risk low:
+
+- Phase 1 is mostly FE-local and heavily testable
+- Phase 2 changes BE dispatch only after the FE contracts are explicit
+- Phase 3 changes normalisation only after the metadata and routing are
+  already centralised
 
 ---
 
 ## Non-goals
 
-- **No changes to the data model.** Posterior schema, model_vars
-  shape, slice keys, completeness semantics — all untouched.
-
-- **No changes to the Bayes compiler, worker, or webhook.** This
-  refactor is pure plumbing on the analysis-type consumption side.
-
-- **No change to existing chart output.** Pixel-for-pixel parity
-  during migration; visual regressions are bugs, not acceptable
-  churn.
-
-- **No new analysis types during the refactor.** Freeze the
-  catalogue while migrating; add new types on the new scaffolding
-  after Phase 1 ships.
+- no reopening of docs 59 or 60
+- no Bayes compiler, worker, or webhook changes
+- no change to existing chart semantics or visual output
+- no BE-side flattening of snapshot-envelope responses in this programme
+- no attempt to unify FE and BE into one generated cross-language registry
+- no immediate time-series builder abstraction unless Phases 1-3 leave a
+  clearly stable target
+- no new analysis types until Phase 1 lands
 
 ---
 
-## Sequencing and dependencies
+## Done criteria
 
-Phase 1 unblocks everything else — the registry is the spine that
-phases 2, 3, and 4 reference. Phase 1 can ship before anything
-else starts.
+This proposal is successful when the following are true.
 
-Phases 2 and 3 are independent of each other. Either can follow
-Phase 1 in any order.
+### Structural criteria
 
-Phase 4 depends on Phase 1 (registry) and benefits from Phase 3
-(normalisers) but does not require it. Phase 4 should only start
-once the existing time-series builder set has stabilised for
-several weeks post-Phase-1, to let common patterns settle.
+- there is one canonical FE registry for analysis-type metadata
+- there is one canonical BE declaration for snapshot-envelope dispatch
+  metadata
+- there is one standard FE normaliser factory for snapshot-envelope
+  analysis results
+- no remaining hidden tables own chart-kind availability, snapshot boot,
+  or snapshot-needed routing
 
----
+### Behavioural criteria
 
-## Migration strategy
+- asymmetric cases such as `conversion_funnel` still work exactly as they
+  do today
+- comparison `time_series` still uses snapshot-backed compute while the
+  other comparison kinds do not
+- existing chart output and result semantics are unchanged
 
-Per-type incremental migration. For each analysis type:
+### Authoring criteria
 
-1. Add its registry entry in Phase 1. Keep old tables populated.
-2. Migrate consumers one at a time to read from the registry for
-   this type. When a consumer migrates all types, the old table
-   deletes.
-3. If BE-dispatch or normaliser changes apply, migrate those for
-   this type too, in the same PR if scope allows.
+After Phases 1-3:
 
-Parity enforcement: each migration must leave the existing
-test suite green, including
-[chart-graph-agreement-test.sh](../../graph-ops/scripts/chart-graph-agreement-test.sh),
-[v2-v3-parity-test.sh](../../graph-ops/scripts/v2-v3-parity-test.sh),
-[conversion-rate-blind-test.sh](../../graph-ops/scripts/conversion-rate-blind-test.sh),
-and any other blind tests currently passing.
+- adding a new snapshot-envelope analysis that reuses an existing chart
+  kind should normally require:
+  - one FE registry entry
+  - one BE snapshot stanza
+  - one BE derivation
+  - one FE normaliser descriptor
+  - one focused test or blind harness update
+- adding a new analysis that also introduces a new chart kind will still
+  need the chart-kind work:
+  - builder implementation
+  - chart-kind display settings entry
+  - any chart-kind-specific tests
 
-Order within Phase 1: start with simpler types (surprise_gauge,
-graph_overview, node_info, edge_info) to shake out the registry
-shape. Then medium (daily_conversions, conversion_rate,
-lag_histogram). Finally the complex ones (cohort_maturity,
-cohort_maturity_v2, bridge, branch_comparison). By the time the
-complex types migrate, the registry shape is proven.
-
----
-
-## Rollout summary
-
-Phase 1 ships a mechanical refactor with no semantic change,
-collapsing ~70% of the touch count for new types. This is the
-bulk of the value.
-
-Phase 2 closes the BE-side gap and makes the BE dispatch match
-the FE's declarative shape.
-
-Phase 3 (or a BE-side normalisation shift) removes the last large
-chunk of boilerplate from the FE data path.
-
-Phase 4 is a deferred quality-of-life improvement for builder
-authors. Don't rush it.
-
-At the end of Phases 1-3, adding a new snapshot-based time-series
-analysis type should touch: one registry entry (declarative), one
-BE registry entry (declarative), one derivation function (BE), one
-builder function (FE), one blind test (shell). Five files total,
-of which two are declarative — down from fifteen.
+That is the correct target. The analysis-type registry should remove the
+hidden boilerplate, not pretend that new chart kinds are free.
 
 ---
 
-## Open questions
+## Expected impact
 
-- **Registry source format**: is the FE registry a single
-  TypeScript module, a generated artifact from a yaml descriptor,
-  or a hybrid (declarative fields in yaml, function references in
-  code)? The hybrid route keeps the declarative parts language-agnostic
-  and shareable with the BE registry, but introduces a generation
-  step. Tentative preference: single TypeScript module, mirror of
-  the BE yaml, with a small contract test that the two agree.
+Today, adding a snapshot-envelope analysis type still tends to touch a
+mix of:
 
-- **Normaliser home (FE vs BE)**: leaning toward BE-side
-  flattening, but needs a survey of what the current FE
-  normalisers actually do — if several rename or derive fields
-  on the FE, that logic has to migrate somewhere. Decide in
-  Phase 3 based on the field-by-field survey.
+- one real derivation
+- one real test
+- several hidden FE lookup tables
+- several hidden BE dispatch tables
+- one bespoke normaliser branch
 
-- **Registry and the canvas chart containers**: the chart
-  container [AnalysisChartContainer.tsx](../../graph-editor/src/components/charts/AnalysisChartContainer.tsx)
-  currently encodes per-type labels, kind inference, subject-selector
-  policy, etc. These should all become registry lookups. Confirm
-  no other canvas node components hold similar per-type
-  knowledge.
+After Phases 1-3, the hidden-table part should disappear. The remaining
+work should be the work that actually belongs to a new analysis:
 
-- **Display settings composition**: the current registry in
-  [analysisDisplaySettingsRegistry.ts](../../graph-editor/src/lib/analysisDisplaySettingsRegistry.ts)
-  is already partly declarative. Decide whether to fold it into
-  the unified registry or leave it as a companion module cross-referenced
-  by id. Tentative: keep it separate (it's the one registry that's
-  already working) but link by id.
+- define the analysis in the FE registry
+- define the snapshot-envelope dispatch in the BE registry if needed
+- implement the derivation
+- describe the normalised row shape
+- prove it with a focused test
 
----
-
-## Expected impact metrics
-
-Files touched per new snapshot time-series analysis type:
-
-| | Before | After P1 | After P3 |
-|---|---|---|---|
-| Declarative entries | 0 | 1 | 2 |
-| Bespoke logic files | 3 | 3 | 3 |
-| Scattered boilerplate | 12 | 4 | 0 |
-| **Total** | **15** | **8** | **5** |
-
-Developer time to add a simple new analysis type (estimated):
-
-| | Before | After P3 |
-|---|---|---|
-| Discovery / reading | 2h | 30m |
-| Implementation | 6h | 3h |
-| Testing | 2h | 1h |
-| Debugging "why isn't it rendering" | 4h | 30m |
-| **Total** | **~14h** | **~5h** |
-
-Impact on incident rate (qualitative): the "silent drop" failures
-(missed boot-trace, missed chart kind, missed normaliser union)
-are structurally impossible after the registry is the single
-source of truth. These were the most demoralising failures during
-the conversion_rate session; they don't recur once Phase 1 ships.
+That will not only reduce touch count. It will also make future failures
+legible. When a new analysis does not render, there should be one or two
+obvious seams to inspect, not a dozen places to grep.

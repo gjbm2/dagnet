@@ -288,7 +288,6 @@ while true; do
             marker=" "
             if [[ $SHOW_ALL -eq 0 ]]; then
                 # Default mode: skip finished graphs from before monitor started
-                local mtime
                 mtime=$(stat -c '%Y' "$f" 2>/dev/null) || mtime=0
                 if [[ $mtime -lt $_start_epoch ]]; then
                     continue

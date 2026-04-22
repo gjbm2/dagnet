@@ -1,11 +1,33 @@
 # Doc 49 — Epistemic/Predictive Separation and Conversion Rate Analysis
 
-**Status**: Design — implementation-ready
+**Status**: Design — partially superseded by doc 61 (22-Apr-26)
 **Date**: 18-Apr-26
 **Purpose**: (1) Separate epistemic and predictive uncertainty exports
 throughout the compiler, worker, and FE projection pipeline. (2) Define
 a new "Conversion Rate" analysis type that consumes the epistemic export
 to show population-rate uncertainty bands.
+
+---
+
+**Supersession note (22-Apr-26)**: [doc 61](61-dispersion-naming-symmetry.md)
+supersedes two decisions in this document:
+
+1. **§A.6 Invariant 9** — the asymmetric naming convention ("bare name is
+   epistemic for probability, predictive for latency `mu_sd`") is retired.
+   Under doc 61 the bare field name is epistemic everywhere and the
+   `_pred` suffix denotes the predictive variant. `mu_sd_epist` is
+   renamed to `mu_sd_pred` with its value flipping from "always-epistemic
+   copy" to "predictive when kappa_lat fitted".
+
+2. **§A.9 Invariant 5** — the model card displaying predictive ± values
+   with an epistemic footnote for σ/onset is retired. Reporting surfaces
+   (posterior card, ModelRateChart, cohort_maturity_v3 overlap curves)
+   now display epistemic bands uniformly. Forecast surfaces continue to
+   use predictive bands.
+
+The underlying Bayesian separation and all other invariants in this doc
+remain in force. The changes above are naming and consumer-wiring only;
+the MCMC model is unchanged.
 
 **Related**: Doc 27 (fit_history fidelity and as-at posterior), doc 48
 (Bayes remediation — esp. Fix 3), doc 21 (unified posterior schema),

@@ -18,6 +18,7 @@ import { upsertModelVars, ukDateNow, applyPromotion } from './modelVarsResolutio
 import { parseUKDate } from '../lib/dateFormat';
 import { BAYES_FIT_HISTORY_MAX_DAYS, BAYES_FIT_HISTORY_INTERVAL_DAYS } from '../constants/latency';
 import type { FitHistorySlice } from '../types';
+import { normaliseSliceShape } from './posteriorSliceResolution';
 
 console.log('[bayesPatchService] Module loaded');
 
@@ -143,8 +144,9 @@ export interface BayesPatchEdge {
     hdi_lower_pred?: number;
     hdi_upper_pred?: number;
     mu_mean?: number;
+    // Latency dispersion (doc 61): bare = epistemic, `_pred` = predictive.
     mu_sd?: number;
-    mu_sd_epist?: number;  // always-epistemic posterior SD (doc 49 §A.6.2)
+    mu_sd_pred?: number;   // predictive (kappa_lat-inflated); absent when no kappa_lat
     sigma_mean?: number;
     sigma_sd?: number;
     onset_mean?: number;
@@ -262,9 +264,13 @@ export async function applyPatch(patch: BayesPatchFile): Promise<number> {
       );
       if (!graphEdge?.p) continue;
 
-      const slices = patchEdge.slices || {};
-      const windowSlice = slices['window()'];
-      const cohortSlice = slices['cohort()'];
+      const slicesRaw = patchEdge.slices || {};
+      // Doc 61 migration shim: rewrite old-shape slices (mu_sd_epist) to new
+      // shape (bare mu_sd = epistemic, mu_sd_pred = predictive) before projection.
+      const windowRaw = slicesRaw['window()'];
+      const cohortRaw = slicesRaw['cohort()'];
+      const windowSlice = windowRaw ? normaliseSliceShape(windowRaw) : undefined;
+      const cohortSlice = cohortRaw ? normaliseSliceShape(cohortRaw) : undefined;
 
       // Project probability posterior summary onto graph edge (ProbabilityPosterior shape)
       if (windowSlice) {
@@ -352,11 +358,10 @@ export async function applyPatch(patch: BayesPatchFile): Promise<number> {
           fitted_at: patch.fitted_at,
           fingerprint: patch.fingerprint,
           provenance: windowSlice.provenance,
-          // Always-epistemic posterior SD (doc 49 §A.6.2). span_kernel.py
-          // prefers this over mu_sd for epistemic fan bands when kappa is
-          // active — without it, runners fall back to the kappa-inflated
-          // predictive mu_sd and over-widen the epistemic interval.
-          ...(windowSlice.mu_sd_epist != null ? { mu_sd_epist: windowSlice.mu_sd_epist } : {}),
+          // Predictive mu_sd (doc 61) — kappa_lat-inflated. Forecast
+          // consumers (span_kernel, cohort_forecast_v3) read this for fan
+          // bands; reporting surfaces read the bare mu_sd (epistemic).
+          ...(windowSlice.mu_sd_pred != null ? { mu_sd_pred: windowSlice.mu_sd_pred } : {}),
           ...(windowSlice.onset_mean != null ? {
             onset_mean: windowSlice.onset_mean,
             onset_sd: windowSlice.onset_sd,
@@ -367,8 +372,8 @@ export async function applyPatch(patch: BayesPatchFile): Promise<number> {
             path_onset_delta_days: cohortSlice.onset_mean,
             path_onset_sd: cohortSlice.onset_sd,
             path_mu_mean: cohortSlice.mu_mean,
-            path_mu_sd: cohortSlice.mu_sd,
-            ...(cohortSlice.mu_sd_epist != null ? { path_mu_sd_epist: cohortSlice.mu_sd_epist } : {}),
+            path_mu_sd: cohortSlice.mu_sd,       // epistemic (doc 61)
+            ...(cohortSlice.mu_sd_pred != null ? { path_mu_sd_pred: cohortSlice.mu_sd_pred } : {}),
             path_sigma_mean: cohortSlice.sigma_mean,
             path_sigma_sd: cohortSlice.sigma_sd,
             ...(cohortSlice.hdi_t95_lower != null ? { path_hdi_t95_lower: cohortSlice.hdi_t95_lower, path_hdi_t95_upper: cohortSlice.hdi_t95_upper } : {}),
@@ -398,11 +403,13 @@ export async function applyPatch(patch: BayesPatchFile): Promise<number> {
           windowSlice.mu_mean != null ? { ess: windowSlice.ess, rhat: windowSlice.rhat } : undefined,
         );
 
-        // For model_vars display: use predictive alpha/beta when available
-        // (gives the "how noisy are daily observations" stdev), fall back to
-        // epistemic when kappa absent (doc 49 §A.9).
-        const displayAlpha = windowSlice.alpha_pred ?? windowSlice.alpha;
-        const displayBeta = windowSlice.beta_pred ?? windowSlice.beta;
+        // Doc 61 supersedes doc 49 §A.9 Invariant 5: the model_vars stdev
+        // shown on reporting surfaces uses the EPISTEMIC posterior (bare
+        // alpha/beta) — "how precisely does the model know the rate" — not
+        // the kappa-inflated predictive posterior. Forecast consumers read
+        // the predictive pair (alpha_pred/beta_pred) separately.
+        const displayAlpha = windowSlice.alpha;
+        const displayBeta = windowSlice.beta;
         const displaySum = displayAlpha + displayBeta;
 
         const bayesEntry: ModelVarsEntry = {
@@ -421,11 +428,12 @@ export async function applyPatch(patch: BayesPatchFile): Promise<number> {
               t95: Math.exp(windowSlice.mu_mean + 1.645 * windowSlice.sigma_mean!) + (windowSlice.onset_mean ?? graphEdge.p.latency?.onset_delta_days ?? 0),
               onset_delta_days: windowSlice.onset_mean ?? graphEdge.p.latency?.onset_delta_days ?? 0,
               // Dispersions from posterior (required for MC fan bands and completeness_sd)
+              // Doc 61 naming: bare mu_sd is epistemic, mu_sd_pred is predictive.
+              // Reporting surfaces (BayesPosteriorCard, ModelRateChart, overlay
+              // bands) read the bare mu_sd; forecast surfaces (fan chart,
+              // compute_forecast_trajectory) read mu_sd_pred.
               ...(windowSlice.mu_sd != null ? { mu_sd: windowSlice.mu_sd } : {}),
-              // Always-epistemic mu_sd (doc 49 §A.6.2). span_kernel.py reads
-              // model_vars.latency.mu_sd_epist to build epistemic fan bands
-              // that are NOT widened by kappa_lat.
-              ...(windowSlice.mu_sd_epist != null ? { mu_sd_epist: windowSlice.mu_sd_epist } : {}),
+              ...(windowSlice.mu_sd_pred != null ? { mu_sd_pred: windowSlice.mu_sd_pred } : {}),
               ...(windowSlice.sigma_sd != null ? { sigma_sd: windowSlice.sigma_sd } : {}),
               ...(windowSlice.onset_sd != null ? { onset_sd: windowSlice.onset_sd } : {}),
               ...(windowSlice.onset_mu_corr != null ? { onset_mu_corr: windowSlice.onset_mu_corr } : {}),
@@ -435,7 +443,7 @@ export async function applyPatch(patch: BayesPatchFile): Promise<number> {
                 path_t95: Math.exp(cohortSlice.mu_mean + 1.645 * (cohortSlice.sigma_mean ?? 0)) + (cohortSlice.onset_mean ?? 0),
                 path_onset_delta_days: cohortSlice.onset_mean ?? 0,
                 ...(cohortSlice.mu_sd != null ? { path_mu_sd: cohortSlice.mu_sd } : {}),
-                ...(cohortSlice.mu_sd_epist != null ? { path_mu_sd_epist: cohortSlice.mu_sd_epist } : {}),
+                ...(cohortSlice.mu_sd_pred != null ? { path_mu_sd_pred: cohortSlice.mu_sd_pred } : {}),
                 ...(cohortSlice.sigma_sd != null ? { path_sigma_sd: cohortSlice.sigma_sd } : {}),
                 ...(cohortSlice.onset_sd != null ? { path_onset_sd: cohortSlice.onset_sd } : {}),
               } : {}),

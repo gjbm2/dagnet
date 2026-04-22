@@ -58,7 +58,7 @@ full scoping table across all three sources.
 - **Service**: `beTopoPassService.ts` → `runBeTopoPass()`
 - **Endpoint**: `POST /api/lag/topo-pass` → `lib/runner/stats_engine.py` (Python port of the FE logic)
 - **Triggered by**: `fetchDataService.ts` Stage 2, fired concurrently with the FE topo pass
-- **Writes to**: `analytic_be` model_vars entry on each edge; also triggers `applyPromotion` so the selected source (per `model_source_preference`) is re-promoted into the flat `p.mean`/latency fields
+- **Writes to**: `analytic_be` model_vars entry on each edge; also triggers `applyPromotion` so the selected source (per `model_source_preference`) is re-promoted into the flat latency fields
 - **Blocks UI**: no — a `.then()` handler applies results whenever the promise resolves. Stale responses are discarded via a generation counter (`_beTopoPassGeneration`).
 - **Source of truth**: preferred when available (promotion hierarchy prefers `analytic_be` over `analytic`)
 
@@ -96,7 +96,7 @@ The naming **fast path** / **slow path** refers to whether CF returns within the
 
 Stale CF responses (from a previous fetch cycle, identified by `_conditionedForecastGeneration`) are discarded.
 
-BE topo pass is **independent** of the CF race. It applies on its own schedule whenever it arrives; its scalars land on `analytic_be` and promotion re-runs on top of whatever CF/FE state exists at that moment.
+BE topo pass is **independent** of the CF race. It applies on its own schedule whenever it arrives; its model vars land on `analytic_be` and promotion re-runs on top of whatever CF/FE state exists at that moment.
 
 **Merge semantics for CF fast path**: `mergeCfIntoFe` overwrites `blendedMean`, `forecast.mean`, `latency.completeness`, `latency.completeness_stdev` on each `EdgeLAGValues` entry where CF returned a finite `p_mean`. FE's latency fit fields (mu, sigma, t95, path_t95, median_lag_days, etc.) are preserved — those are FE topo's responsibility. Evidence (n, k, evidence.mean) also stays from FE — authoritative from actual data.
 
@@ -104,7 +104,7 @@ BE topo pass is **independent** of the CF race. It applies on its own schedule w
 
 ### Session log entries
 
-Payload shape: all three pass-completion entries include a per-edge sample `{ uuid, p_mean, p_sd, completeness, completeness_sd|completeness_stdev }` so forensic runs can reconstruct the values each pass applied. BE uses `completeness_stdev` (field name from `beScalars`); CF uses `completeness_sd` (its response field).
+Payload shape: all three pass-completion entries include a per-edge sample `{ uuid, p_mean, p_sd, completeness, completeness_sd|completeness_stdev }` so forensic runs can reconstruct the values each pass applied. CF uses `completeness_sd` on its response; bounded BE-topo samples may omit `completeness_stdev` entirely because the analytic topo pass no longer computes conditioned completeness uncertainty.
 
 `BE_TOPO_PASS`:
 - `info` — BE topo pass started for N edges (gen G)
@@ -262,73 +262,39 @@ for backwards compatibility with older scripts.
 | `src/services/modelVarsResolution.ts` | Preference hierarchy for model_vars |
 | `lib/runner/stats_engine.py` | BE topo pass implementation (Python port of FE) |
 | `lib/api_handlers.py` | `/api/lag/topo-pass` endpoint handler |
-| `lib/runner/forecast_state.py` | Forecast engine: `_evaluate_cohort` (shared primitive), `compute_forecast_trajectory`, `build_node_arrival_cache`, `compute_forecast_summary` (surprise gauge only) |
+| `lib/runner/forecast_state.py` | Forecast engine: `_evaluate_cohort` (shared primitive), `compute_forecast_trajectory`, `build_node_arrival_cache`, `compute_forecast_summary` (CF / surprise-gauge surfaces, not BE topo) |
 | `lib/runner/model_resolver.py` | Promoted model resolver: `resolve_model_params(edge, scope, temporal_mode)` — also derives alpha/beta from evidence n/k when no Bayesian posterior (D20) |
 | `src/cli/topoPass.ts` | CLI topo pass: builds cohort_data + scoped edge_contexts from DSL (D18), calls BE endpoint |
 | `src/cli/commands/analyse.ts` | CLI `--topo-pass` flag |
 
-## Forecast engine (doc 29, Phase G complete 16-Apr-26)
+## Bounded analytic topo surface
 
-The BE topo pass runs a **forecast engine** after the stats engine,
-using the same `_evaluate_cohort` primitive as the cohort maturity
-chart (`compute_forecast_trajectory` in `forecast_state.py`). Per edge:
+The BE topo pass now stops at `stats_engine.py` output. It does **not**
+call `compute_forecast_trajectory`, does not build a secondary
+conditioned scalar surface, and does not compete with CF for ownership
+of `p.mean` or `latency.completeness_stdev`.
 
-1. Resolves best-available model params from `model_vars[]` entries
-   (reads from selected source, not flat promoted fields). Derives
-   alpha/beta from evidence n/k when no Bayesian posterior (D20).
-2. Builds `CohortEvidence` objects with `eval_age` set to each
-   cohort's current age (for completeness computation)
-3. Calls `compute_forecast_trajectory` → `_evaluate_cohort` per cohort
-4. Reads `blended_mean` from coordinate A at the horizon τ (the
-   IS-conditioned projected rate after all conversions complete);
-   reads `completeness` from coordinate B (n-weighted CDF at each
-   cohort's current age)
-5. Aggregates into scalar blended_mean, completeness, p_sd
+What still flows through `/api/lag/topo-pass`:
 
-Two coordinate systems read from the same MC draws (doc 29f §Phase
-G):
-- **Coordinate A (τ-rebased)**: cohort maturity chart sweeps all τ.
-  `midpoint`, `fan_bands`. The topo pass reads the rate at the last
-  τ (horizon) as `blended_mean` — this is the IS-conditioned
-  projected rate after the population model has projected all cohorts
-  to completion.
-- **Coordinate B (date)**: completeness at each cohort's current age.
-  Each `CohortEvidence` has `eval_age` set, and the sweep computes
-  `completeness_mean` as the n-weighted CDF at those ages.
+1. Query-scoped analytic cohort inputs (`cohort_data`,
+   `edge_contexts.scoped_cohorts`, window-derived onset / baseline
+   helpers)
+2. Fenton-Wilkinson latency composition and the analytic fallback
+   scalars from `stats_engine.py` (`completeness`, `p_infinity`,
+   `blended_mean`, heuristic `p_sd`)
+3. Upsert of `analytic_be` model vars and re-promotion of latency
+   fields on arrival
 
-**Coordinate A vs B for rate**: The topo pass must read the rate from
-coordinate A at the horizon (large τ), NOT from coordinate B at each
-cohort's frontier age. The population model's evidence splice
-(`_evaluate_cohort` line 1021) returns observed k/n at τ ≤
-frontier_age. Reading Y/X at the frontier gives the raw evidence
-mean, not the projected rate. The population model only adds value
-(Pop D survivors, Pop C upstream arrivals) at τ > frontier_age. The
-`max_tau` for the sweep must extend beyond t95 for the rate to
-converge (`api_handlers.py` line 5311).
+What does **not** flow through `/api/lag/topo-pass`:
 
-Both coordinate outputs are lossy collapses of the per-cohort `(S, T)`
-draw arrays. Neither can be reconstructed from the other. Both must be
-read from the pre-collapsed arrays within the same sweep call.
+- `compute_forecast_trajectory`
+- conditioned completeness uncertainty
+- topo-sequenced upstream-carrier propagation
+- any second write path that tries to shadow CF semantics
 
-The engine writes to the **same existing fields** as the FE topo pass
-(`latency.completeness`, `p.mean`, `p.stdev`, etc.). It does not add
-a new schema object. One new field: `latency.completeness_stdev`.
-
-The CLI topo pass (D18) scopes cohorts to the query DSL: `cohort_data`
-contains all cohorts (for model fitting), `edge_contexts.scoped_cohorts`
-contains DSL-windowed cohorts (for IS conditioning). Supports absolute
-and relative date expressions.
-
-The BE pass is a **full upgrade** of the FE pass — every field the FE
-writes, the BE also writes with improved values. FE results flow through
-`applyBatchLAGValues`, which handles `p.mean` writes and sibling
-probability rebalancing atomically. BE scalars arrive asynchronously
-(fire-and-forget), upsert onto `analytic_be` model_vars, and promotion
-re-runs — so the flat `p.mean`/latency fields switch to BE values
-whenever the BE response arrives. Session log shows FE→BE parity per
-edge (`FE_BE_PARITY` entries at info level, with before/after values).
-The 500ms fast/slow-path race described earlier belongs to the
-conditioned forecast pass, not BE topo.
+This keeps the BE topo pass as the analytic fallback / model-var
+generator, while the 500ms fast/slow-path race remains solely a CF
+concern.
 
 `cohort_maturity` analysis type now routes to v3 (engine consumer,
 185 lines). v1 and v2 are gated to dev only (`devOnly: true`).

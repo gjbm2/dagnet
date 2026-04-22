@@ -314,15 +314,20 @@ def read_edge_cohort_params(
 
     # Posterior uncertainty (SDs) for stochastic upstream x (Phase 4).
     # Prefer path-level SDs, then edge-level, from the posterior block.
-    for _src_key, _dst_key in [
-        ('path_mu_sd', 'mu_sd'), ('mu_sd', 'mu_sd'),
-        ('path_sigma_sd', 'sigma_sd'), ('sigma_sd', 'sigma_sd'),
-        ('path_onset_sd', 'onset_sd'), ('onset_sd', 'onset_sd'),
+    # Doc 61: feeds forecasting machinery — read predictive mu_sd first
+    # with epistemic fallback. Kept in lockstep with the v3 copy in
+    # forecast_runtime.py until doc 56's retirement workstream deletes v1.
+    for _src_keys, _dst_key in [
+        (('path_mu_sd_pred', 'mu_sd_pred', 'path_mu_sd', 'mu_sd'), 'mu_sd'),
+        (('path_sigma_sd', 'sigma_sd'), 'sigma_sd'),
+        (('path_onset_sd', 'onset_sd'), 'onset_sd'),
     ]:
         if _dst_key not in result:
-            _v = lat_post.get(_src_key)
-            if isinstance(_v, (int, float)) and math.isfinite(_v) and _v > 0:
-                result[_dst_key] = float(_v)
+            for _src_key in _src_keys:
+                _v = lat_post.get(_src_key)
+                if isinstance(_v, (int, float)) and math.isfinite(_v) and _v > 0:
+                    result[_dst_key] = float(_v)
+                    break
 
     # p uncertainty from alpha/beta (Beta posterior SD)
     if 'p_sd' not in result and _alpha is not None and _beta is not None:
@@ -586,7 +591,12 @@ def compute_cohort_maturity_rows(
                   or edge_params.get('posterior_p')
                   or 0.0)
         edge_p_sd = edge_params.get('p_stdev_cohort', edge_params.get('p_stdev', 0.0)) or 0.0
-        edge_mu_sd = edge_params.get('bayes_path_mu_sd', edge_params.get('bayes_mu_sd', 0.0)) or 0.0
+        # Doc 61 (forecasting consumer): predictive first, epistemic fallback.
+        edge_mu_sd = (edge_params.get('bayes_path_mu_sd_pred')
+                      or edge_params.get('bayes_mu_sd_pred')
+                      or edge_params.get('bayes_path_mu_sd')
+                      or edge_params.get('bayes_mu_sd')
+                      or 0.0)
         edge_sigma_sd = edge_params.get('bayes_path_sigma_sd', edge_params.get('bayes_sigma_sd', 0.0)) or 0.0
         edge_onset_sd = edge_params.get('bayes_path_onset_sd', edge_params.get('bayes_onset_sd', 0.0)) or 0.0
         edge_onset_mu_corr = edge_params.get('bayes_path_onset_mu_corr', edge_params.get('bayes_onset_mu_corr', 0.0)) or 0.0
@@ -599,7 +609,12 @@ def compute_cohort_maturity_rows(
                   or edge_params.get('posterior_p')
                   or 0.0)
         edge_p_sd = edge_params.get('p_stdev', edge_params.get('p_stdev_cohort', 0.0)) or 0.0
-        edge_mu_sd = edge_params.get('bayes_mu_sd', edge_params.get('bayes_path_mu_sd', 0.0)) or 0.0
+        # Doc 61 (forecasting consumer): predictive first, epistemic fallback.
+        edge_mu_sd = (edge_params.get('bayes_mu_sd_pred')
+                      or edge_params.get('bayes_path_mu_sd_pred')
+                      or edge_params.get('bayes_mu_sd')
+                      or edge_params.get('bayes_path_mu_sd')
+                      or 0.0)
         edge_sigma_sd = edge_params.get('bayes_sigma_sd', edge_params.get('bayes_path_sigma_sd', 0.0)) or 0.0
         edge_onset_sd = edge_params.get('bayes_onset_sd', edge_params.get('bayes_path_onset_sd', 0.0)) or 0.0
         edge_onset_mu_corr = edge_params.get('bayes_onset_mu_corr', edge_params.get('bayes_path_onset_mu_corr', 0.0)) or 0.0

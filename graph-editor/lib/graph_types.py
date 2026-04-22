@@ -167,10 +167,11 @@ class SlicePosteriorEntry(BaseModel):
     beta_pred: Optional[float] = None
     hdi_lower_pred: Optional[float] = None
     hdi_upper_pred: Optional[float] = None
-    # Latency (present when edge has latency fitted for this slice)
+    # Latency (present when edge has latency fitted for this slice).
+    # Naming (doc 61): bare mu_sd is epistemic; mu_sd_pred is predictive.
     mu_mean: Optional[float] = None
-    mu_sd: Optional[float] = None           # predictive when kappa_lat (doc 49)
-    mu_sd_epist: Optional[float] = None     # always epistemic posterior SD
+    mu_sd: Optional[float] = None           # epistemic (posterior SD of μ) — doc 61
+    mu_sd_pred: Optional[float] = None      # predictive (kappa_lat-inflated)
     sigma_mean: Optional[float] = None
     sigma_sd: Optional[float] = None        # epistemic (no predictive mechanism)
     onset_mean: Optional[float] = None
@@ -203,10 +204,10 @@ class FitHistorySlice(BaseModel):
     beta_pred: Optional[float] = None
     hdi_lower_pred: Optional[float] = None
     hdi_upper_pred: Optional[float] = None
-    # Latency
+    # Latency — doc 61 naming: bare mu_sd is epistemic, mu_sd_pred is predictive.
     mu_mean: Optional[float] = None
     mu_sd: Optional[float] = None
-    mu_sd_epist: Optional[float] = None
+    mu_sd_pred: Optional[float] = None
     sigma_mean: Optional[float] = None
     sigma_sd: Optional[float] = None
     onset_mean: Optional[float] = None

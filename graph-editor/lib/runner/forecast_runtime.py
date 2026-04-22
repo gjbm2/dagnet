@@ -1,33 +1,28 @@
 """
-Forecast runtime layer — neutral home for the live-stack helpers that
-previously lived under v1 (`cohort_forecast.py`), v2 (`cohort_forecast_v2.py`),
-and the transitional `span_adapter.py`.
+Forecast runtime layer for the live forecast stack.
 
-Created by doc 56 Phase 1 (§8 + §11). This module is the runtime-owned
-assembly layer around the general engine (`forecast_state.py`). It contains:
+This module started as the neutral home for helpers previously scattered
+across v1 (`cohort_forecast.py`), v2 (`cohort_forecast_v2.py`), and the
+transitional `span_adapter.py`). It is now the runtime-owned assembly
+layer used by the production forecast engine, the v3 row builder, and the
+active conditioned-forecast handlers.
 
-  - Graph helpers used by production CF / v3 / engine callers
-    (previously on v1): find_edge_by_id, get_incoming_edges,
-    get_edge_from_node, XProvider, build_x_provider_from_graph,
-    read_edge_cohort_params.
+It contains:
 
-  - Span-prior construction (previously on v2 + span_adapter):
+  - Graph helpers used by production CF / v3 / engine callers:
+    find_edge_by_id, get_incoming_edges, get_edge_from_node, XProvider,
+    build_x_provider_from_graph, read_edge_cohort_params.
+
+  - Span-prior construction migrated from the legacy stack:
     SpanParams, build_span_params, span_kernel_to_edge_params.
 
-  - Upstream carrier hierarchy (previously on v2): three tiers
-    (parametric / empirical / weak-prior) + the dispatcher
-    build_upstream_carrier.
+  - Upstream carrier hierarchy migrated from v2:
+    three tiers (parametric / empirical / weak-prior) plus the
+    build_upstream_carrier dispatcher.
 
-Phase 1 exit gate: this module reproduces the legacy behaviour
-byte-identically (RNG hash gate in doc 56 §11.1 proves it). No
-callers are cut over in Phase 1 — the engine, v3 row builder, and
-CF handler still import from the legacy modules. Phase 2 cuts the
-engine over; Phase 3 cuts v3 + CF. Phase 4 deletes the legacy files.
-
-Structural κ=20 defect (doc 56 §4.2 / §6.6) is preserved here as
-part of the functionality-neutral port; the fix is tracked
-separately (§11.2) and lands as a standalone commit on this module
-after Phase 3.
+Legacy modules remain in the repo for frozen v2 / parity-oracle paths, but
+the production forecast stack should keep converging on this module rather
+than reintroducing v1/v2 imports.
 """
 
 from __future__ import annotations
@@ -40,6 +35,421 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 
 _COHORT_DEBUG = bool(os.environ.get('DAGNET_COHORT_DEBUG'))
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Prepared runtime bundle (doc 60 WP2 / doc 59 runtime roles)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@dataclass
+class PreparedOperatorInputs:
+    """Prepared subject-side operator inputs for the engine."""
+    mc_cdf_arr: Optional[Any] = None
+    mc_p_s: Optional[Any] = None
+    det_norm_cdf: Optional[List[float]] = None
+    edge_cdf_arr: Optional[Any] = None
+    span_alpha: Optional[float] = None
+    span_beta: Optional[float] = None
+    span_mu_sd: Optional[float] = None
+    span_sigma_sd: Optional[float] = None
+    span_onset_sd: Optional[float] = None
+    span_onset_mu_corr: Optional[float] = None
+
+
+@dataclass
+class PreparedSpanExecutionInputs:
+    """Prepared per-edge inputs for subject-span execution.
+
+    Dispersions are carried in two dicts per doc 61:
+      * `edge_sds` holds EPISTEMIC SDs (mu_sd) — used by reporting
+        consumers such as cohort_maturity_v3 "model belief" overlap bands.
+      * `edge_sds_pred` holds PREDICTIVE SDs (mu_sd_pred, kappa_lat-inflated)
+        — used by forecasting consumers such as the main fan chart and the
+        conditioned-forecast MC sweep.
+    σ and onset SDs appear identically in both dicts (no predictive variant
+    exists in the current model). When the resolver has no `mu_sd_pred`
+    value (pre-doc-61 data, kappa_lat not fitted), `edge_sds_pred` carries
+    the bare mu_sd as a safe fallback — correct when predictive == epistemic.
+    """
+    topo: Any
+    edge_params: Dict[Tuple[str, str], Tuple[float, float, float, float]]
+    edge_sds: Dict[Tuple[str, str], Tuple[float, float, float, float]]
+    edge_sds_pred: Dict[Tuple[str, str], Tuple[float, float, float, float]]
+
+
+@dataclass
+class PreparedCarrierToX:
+    """Explicit denominator-side carrier object."""
+    population_root: str = ''
+    anchor_node_id: Optional[str] = None
+    x_node_id: str = ''
+    mode: str = 'identity'  # 'identity' | 'upstream'
+    reach: float = 0.0
+    x_provider: Optional['XProvider'] = None
+    from_node_arrival: Optional[Any] = None
+
+
+@dataclass
+class PreparedSubjectSpan:
+    """Explicit numerator-side X→end question."""
+    start_node_id: str = ''
+    end_node_id: str = ''
+    is_multi_hop: bool = False
+    operator_source: str = 'prepared_subject_span'
+
+
+@dataclass
+class PreparedConditioningEvidence:
+    """Explicit evidence base used to move the rate side."""
+    temporal_family: str = 'window'
+    source: str = 'none'
+    direct_cohort_enabled: bool = False
+    evidence_points: int = 0
+    total_x: Optional[float] = None
+    total_y: Optional[float] = None
+
+
+@dataclass
+class PreparedAdmissionPolicy:
+    """Current admission outputs for the live runtime."""
+    numerator_representation: str = 'factorised'
+    whole_query_numerator_admitted: bool = False
+    subject_helper_admitted: bool = True
+    helper_reason: str = 'prepared_subject_span'
+
+
+@dataclass
+class PreparedForecastRuntimeBundle:
+    """Internal semantic bundle carried across preparation and solve."""
+    mode: str = 'window'
+    population_root: str = ''
+    carrier_to_x: PreparedCarrierToX = field(default_factory=PreparedCarrierToX)
+    subject_span: PreparedSubjectSpan = field(default_factory=PreparedSubjectSpan)
+    numerator_representation: str = 'factorised'
+    p_conditioning_evidence: PreparedConditioningEvidence = field(
+        default_factory=PreparedConditioningEvidence
+    )
+    admission_policy: PreparedAdmissionPolicy = field(
+        default_factory=PreparedAdmissionPolicy
+    )
+    operator_inputs: PreparedOperatorInputs = field(default_factory=PreparedOperatorInputs)
+    resolved_params: Optional[Any] = None
+    sweep_eligible: Optional[bool] = None
+    cf_mode: Optional[str] = None
+    cf_reason: Optional[str] = None
+
+
+def should_enable_direct_cohort_p_conditioning(
+    *,
+    is_window: bool,
+    is_multi_hop: bool,
+) -> bool:
+    """WP8's first landing: exact single-hop cohort subjects only."""
+    return (not is_window) and (not is_multi_hop)
+
+
+def should_use_anchor_relative_subject_cdf(
+    *,
+    is_window: bool,
+    is_multi_hop: bool,
+    anchor_node_id: Optional[str],
+    query_from_node: Optional[str],
+) -> bool:
+    """Return whether the subject CDF should start at the anchor.
+
+    The live WP3/WP8 contract keeps the subject operator rooted at `X -> end`
+    even for exact single-hop `cohort(A, X-Y)` subjects. The anchor-relative
+    `A -> Y` timing effect now lives only on `carrier_to_x`; the subject span
+    itself must not be retargeted. We keep this helper so older call sites can
+    collapse onto the new contract without reshaping their plumbing.
+    """
+    return False
+
+
+def resolve_subject_cdf_start_node(
+    *,
+    is_window: bool,
+    is_multi_hop: bool,
+    anchor_node_id: Optional[str],
+    query_from_node: str,
+) -> str:
+    """Return the start node for the prepared subject CDF execution.
+
+    Under the factorised runtime this is always the query's `from_node`; any
+    upstream anchor effect is represented on the carrier instead.
+    """
+    return query_from_node
+
+
+@dataclass(frozen=True)
+class ClosedFormBetaRateSurface:
+    """Closed-form Beta posterior surface for degraded/query-scoped outputs."""
+    p_mean: float
+    p_sd_epistemic: float
+    p_sd: float
+    fan_lower: float
+    fan_upper: float
+    band_lookup: Dict[str, List[float]] = field(default_factory=dict)
+
+
+def build_prepared_runtime_bundle(
+    *,
+    mode: str,
+    query_from_node: str,
+    query_to_node: str,
+    anchor_node_id: Optional[str] = None,
+    is_multi_hop: bool = False,
+    x_provider: Optional['XProvider'] = None,
+    from_node_arrival: Optional[Any] = None,
+    numerator_representation: str = 'factorised',
+    p_conditioning_temporal_family: Optional[str] = None,
+    p_conditioning_source: str = 'snapshot_frames',
+    p_conditioning_direct_cohort: bool = False,
+    p_conditioning_evidence_points: int = 0,
+    p_conditioning_total_x: Optional[float] = None,
+    p_conditioning_total_y: Optional[float] = None,
+    resolved_params: Optional[Any] = None,
+    sweep_eligible: Optional[bool] = None,
+    cf_mode: Optional[str] = None,
+    cf_reason: Optional[str] = None,
+    mc_cdf_arr: Optional[Any] = None,
+    mc_p_s: Optional[Any] = None,
+    det_norm_cdf: Optional[List[float]] = None,
+    edge_cdf_arr: Optional[Any] = None,
+    span_alpha: Optional[float] = None,
+    span_beta: Optional[float] = None,
+    span_mu_sd: Optional[float] = None,
+    span_sigma_sd: Optional[float] = None,
+    span_onset_sd: Optional[float] = None,
+    span_onset_mu_corr: Optional[float] = None,
+) -> PreparedForecastRuntimeBundle:
+    """Build the explicit internal runtime bundle for forecast consumers."""
+    population_root = query_from_node
+    carrier_mode = 'identity'
+    if mode == 'cohort' and anchor_node_id and anchor_node_id != query_from_node:
+        population_root = anchor_node_id
+        carrier_mode = 'upstream'
+
+    if x_provider is not None:
+        reach = float(getattr(x_provider, 'reach', 0.0) or 0.0)
+    elif from_node_arrival is not None:
+        reach = float(getattr(from_node_arrival, 'reach', 0.0) or 0.0)
+    else:
+        reach = 1.0 if carrier_mode == 'identity' else 0.0
+
+    return PreparedForecastRuntimeBundle(
+        mode=mode,
+        population_root=population_root,
+        carrier_to_x=PreparedCarrierToX(
+            population_root=population_root,
+            anchor_node_id=anchor_node_id,
+            x_node_id=query_from_node,
+            mode=carrier_mode,
+            reach=reach,
+            x_provider=x_provider,
+            from_node_arrival=from_node_arrival,
+        ),
+        subject_span=PreparedSubjectSpan(
+            start_node_id=query_from_node,
+            end_node_id=query_to_node,
+            is_multi_hop=is_multi_hop,
+        ),
+        numerator_representation=numerator_representation,
+        p_conditioning_evidence=PreparedConditioningEvidence(
+            temporal_family=(
+                p_conditioning_temporal_family
+                or ('window' if mode == 'window' else 'cohort')
+            ),
+            source=p_conditioning_source,
+            direct_cohort_enabled=p_conditioning_direct_cohort,
+            evidence_points=p_conditioning_evidence_points,
+            total_x=p_conditioning_total_x,
+            total_y=p_conditioning_total_y,
+        ),
+        admission_policy=PreparedAdmissionPolicy(
+            numerator_representation=numerator_representation,
+            whole_query_numerator_admitted=False,
+            subject_helper_admitted=(numerator_representation == 'factorised'),
+            helper_reason='prepared_subject_span',
+        ),
+        operator_inputs=PreparedOperatorInputs(
+            mc_cdf_arr=mc_cdf_arr,
+            mc_p_s=mc_p_s,
+            det_norm_cdf=det_norm_cdf,
+            edge_cdf_arr=edge_cdf_arr,
+            span_alpha=span_alpha,
+            span_beta=span_beta,
+            span_mu_sd=span_mu_sd,
+            span_sigma_sd=span_sigma_sd,
+            span_onset_sd=span_onset_sd,
+            span_onset_mu_corr=span_onset_mu_corr,
+        ),
+        resolved_params=resolved_params,
+        sweep_eligible=sweep_eligible,
+        cf_mode=cf_mode,
+        cf_reason=cf_reason,
+    )
+
+
+def build_prepared_span_execution_from_topology(
+    topo,
+    *,
+    temporal_mode: str = 'window',
+    graph_preference: Optional[str] = None,
+) -> PreparedSpanExecutionInputs:
+    """Resolve per-edge span execution inputs from the runtime layer.
+
+    The span kernel consumes only prepared per-edge parameters; all source
+    selection lives here via `resolve_model_params`.
+    """
+    from runner.model_resolver import resolve_model_params
+
+    edge_params: Dict[Tuple[str, str], Tuple[float, float, float, float]] = {}
+    edge_sds: Dict[Tuple[str, str], Tuple[float, float, float, float]] = {}
+    edge_sds_pred: Dict[Tuple[str, str], Tuple[float, float, float, float]] = {}
+
+    for from_id, to_id, edge in getattr(topo, 'edge_list', []):
+        resolved = resolve_model_params(
+            edge,
+            scope='edge',
+            temporal_mode=temporal_mode,
+            graph_preference=graph_preference,
+        )
+        lat = resolved.edge_latency if resolved is not None else None
+        p_mean = float(min(max(getattr(resolved, 'p_mean', 0.0) or 0.0, 0.0), 1.0))
+        p_sd = float(getattr(resolved, 'p_sd', 0.0) or 0.0)
+        mu = float(getattr(lat, 'mu', 0.0) or 0.0)
+        sigma = float(getattr(lat, 'sigma', 0.0) or 0.0)
+        onset = float(getattr(lat, 'onset_delta_days', 0.0) or 0.0)
+        # Doc 61: bare mu_sd is epistemic; mu_sd_pred is kappa_lat-inflated
+        # predictive. When the resolver has no pred value (no kappa_lat, or
+        # pre-migration data), fall back to the bare mu_sd — correct when
+        # predictive and epistemic coincide.
+        mu_sd_epist = float(getattr(lat, 'mu_sd', 0.0) or 0.0)
+        mu_sd_pred_raw = getattr(lat, 'mu_sd_pred', None)
+        mu_sd_pred = float(mu_sd_pred_raw) if mu_sd_pred_raw else mu_sd_epist
+        sigma_sd = float(getattr(lat, 'sigma_sd', 0.0) or 0.0)
+        onset_sd = float(getattr(lat, 'onset_sd', 0.0) or 0.0)
+
+        edge_params[(from_id, to_id)] = (p_mean, mu, sigma, onset)
+        edge_sds[(from_id, to_id)] = (
+            p_sd if p_sd > 0 else 0.05,
+            mu_sd_epist,
+            sigma_sd,
+            onset_sd,
+        )
+        edge_sds_pred[(from_id, to_id)] = (
+            p_sd if p_sd > 0 else 0.05,
+            mu_sd_pred,
+            sigma_sd,
+            onset_sd,
+        )
+
+    return PreparedSpanExecutionInputs(
+        topo=topo,
+        edge_params=edge_params,
+        edge_sds=edge_sds,
+        edge_sds_pred=edge_sds_pred,
+    )
+
+
+def build_prepared_span_execution(
+    graph: Dict[str, Any],
+    x_node_id: str,
+    y_node_id: str,
+    *,
+    temporal_mode: str = 'window',
+    graph_preference: Optional[str] = None,
+) -> Optional[PreparedSpanExecutionInputs]:
+    """Build prepared span execution inputs for an x→y subject span."""
+    from runner.span_kernel import _build_span_topology
+
+    topo = _build_span_topology(graph, x_node_id, y_node_id)
+    if topo is None:
+        return None
+    return build_prepared_span_execution_from_topology(
+        topo,
+        temporal_mode=temporal_mode,
+        graph_preference=graph_preference,
+    )
+
+
+def serialise_runtime_bundle(
+    bundle: Optional[PreparedForecastRuntimeBundle],
+) -> Optional[Dict[str, Any]]:
+    """Return a stable diagnostic projection of a runtime bundle."""
+    if bundle is None:
+        return None
+
+    def _shape(value: Any) -> Optional[List[int]]:
+        shape = getattr(value, 'shape', None)
+        if shape is not None:
+            return [int(v) for v in shape]
+        if isinstance(value, list):
+            return [len(value)]
+        return None
+
+    return {
+        'mode': bundle.mode,
+        'population_root': bundle.population_root,
+        'carrier_to_x': {
+            'population_root': bundle.carrier_to_x.population_root,
+            'anchor_node_id': bundle.carrier_to_x.anchor_node_id,
+            'x_node_id': bundle.carrier_to_x.x_node_id,
+            'mode': bundle.carrier_to_x.mode,
+            'reach': round(bundle.carrier_to_x.reach, 6),
+            'has_x_provider': bundle.carrier_to_x.x_provider is not None,
+            'has_from_node_arrival': bundle.carrier_to_x.from_node_arrival is not None,
+        },
+        'subject_span': {
+            'start_node_id': bundle.subject_span.start_node_id,
+            'end_node_id': bundle.subject_span.end_node_id,
+            'is_multi_hop': bundle.subject_span.is_multi_hop,
+            'operator_source': bundle.subject_span.operator_source,
+        },
+        'numerator_representation': bundle.numerator_representation,
+        'p_conditioning_evidence': {
+            'temporal_family': bundle.p_conditioning_evidence.temporal_family,
+            'source': bundle.p_conditioning_evidence.source,
+            'direct_cohort_enabled': (
+                bundle.p_conditioning_evidence.direct_cohort_enabled
+            ),
+            'evidence_points': bundle.p_conditioning_evidence.evidence_points,
+            'total_x': bundle.p_conditioning_evidence.total_x,
+            'total_y': bundle.p_conditioning_evidence.total_y,
+        },
+        'admission_policy': {
+            'numerator_representation': (
+                bundle.admission_policy.numerator_representation
+            ),
+            'whole_query_numerator_admitted': (
+                bundle.admission_policy.whole_query_numerator_admitted
+            ),
+            'subject_helper_admitted': bundle.admission_policy.subject_helper_admitted,
+            'helper_reason': bundle.admission_policy.helper_reason,
+        },
+        'operator_inputs': {
+            'mc_cdf_shape': _shape(bundle.operator_inputs.mc_cdf_arr),
+            'mc_p_s_shape': _shape(bundle.operator_inputs.mc_p_s),
+            'det_norm_cdf_len': (
+                len(bundle.operator_inputs.det_norm_cdf)
+                if bundle.operator_inputs.det_norm_cdf is not None
+                else None
+            ),
+            'edge_cdf_shape': _shape(bundle.operator_inputs.edge_cdf_arr),
+            'span_alpha': bundle.operator_inputs.span_alpha,
+            'span_beta': bundle.operator_inputs.span_beta,
+            'span_mu_sd': bundle.operator_inputs.span_mu_sd,
+            'span_sigma_sd': bundle.operator_inputs.span_sigma_sd,
+            'span_onset_sd': bundle.operator_inputs.span_onset_sd,
+            'span_onset_mu_corr': bundle.operator_inputs.span_onset_mu_corr,
+        },
+        'resolved_source': getattr(bundle.resolved_params, 'source', None),
+        'sweep_eligible': bundle.sweep_eligible,
+        'cf_mode': bundle.cf_mode,
+        'cf_reason': bundle.cf_reason,
+    }
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -66,6 +476,53 @@ def get_cf_mode_and_reason(
     return ('analytic_degraded', 'query_scoped_posterior')
 
 
+def build_closed_form_beta_rate_surface(
+    *,
+    alpha: float,
+    beta: float,
+    band_level: float = 0.90,
+    band_levels: Optional[List[float]] = None,
+) -> Optional[ClosedFormBetaRateSurface]:
+    """Return the shared doc-57 Beta surface for degraded rate outputs."""
+    from scipy.stats import beta as _beta_dist
+
+    alpha_val = max(float(alpha or 0.0), 0.0)
+    beta_val = max(float(beta or 0.0), 0.0)
+    if alpha_val <= 0.0 or beta_val <= 0.0:
+        return None
+
+    requested_levels: List[float] = []
+    for level in list(band_levels or []):
+        level_f = float(level)
+        if level_f not in requested_levels:
+            requested_levels.append(level_f)
+    if float(band_level) not in requested_levels:
+        requested_levels.append(float(band_level))
+
+    total = alpha_val + beta_val
+    p_mean = alpha_val / total
+    p_sd_epistemic = math.sqrt(
+        alpha_val * beta_val / (total * total * (total + 1.0))
+    )
+    band_lookup = {
+        str(int(level * 100)): [
+            float(_beta_dist.ppf((1.0 - level) / 2.0, alpha_val, beta_val)),
+            float(_beta_dist.ppf((1.0 + level) / 2.0, alpha_val, beta_val)),
+        ]
+        for level in requested_levels
+    }
+    fan_key = str(int(float(band_level) * 100))
+    fan_lower, fan_upper = band_lookup[fan_key]
+    return ClosedFormBetaRateSurface(
+        p_mean=p_mean,
+        p_sd_epistemic=p_sd_epistemic,
+        p_sd=p_sd_epistemic,
+        fan_lower=float(fan_lower),
+        fan_upper=float(fan_upper),
+        band_lookup=band_lookup,
+    )
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # Graph helpers (ex v1 — cohort_forecast.py)
 # ═══════════════════════════════════════════════════════════════════════
@@ -86,6 +543,15 @@ def find_edge_by_id(
         (e for e in edges
          if str(e.get('uuid') or e.get('id') or '') == str(edge_id)),
         None,
+    )
+
+
+def _stable_edge_sort_key(edge: Dict[str, Any]) -> Tuple[str, str, str]:
+    """Deterministic edge ordering independent of graph edge-list order."""
+    return (
+        str(edge.get('from') or edge.get('from_node') or ''),
+        str(edge.get('to') or edge.get('to_node') or ''),
+        str(edge.get('uuid') or edge.get('id') or ''),
     )
 
 
@@ -117,7 +583,93 @@ def get_incoming_edges(
     if node_id in uuid_to_id:
         target_ids.add(uuid_to_id[node_id])
 
-    return [e for e in edges if str(e.get('to', '')) in target_ids]
+    return sorted(
+        [e for e in edges if str(e.get('to', '')) in target_ids],
+        key=_stable_edge_sort_key,
+    )
+
+
+def order_subjects_topologically(
+    graph: Dict[str, Any],
+    subjects: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Return forecast subjects in deterministic topological order.
+
+    Whole-graph CF must prepare upstream donor edges before downstream
+    consumers regardless of incidental edge-list order in the graph JSON.
+    Subjects are therefore ordered by node topology first, then by stable
+    semantic identifiers for same-layer ties.
+    """
+    if not subjects:
+        return []
+
+    nodes = graph.get('nodes', []) if isinstance(graph, dict) else []
+    edges = graph.get('edges', []) if isinstance(graph, dict) else []
+
+    uuid_to_id: Dict[str, str] = {}
+    node_ids: set[str] = set()
+    for node in nodes:
+        node_id = str(node.get('id', '') or '')
+        node_uuid = str(node.get('uuid', '') or node_id)
+        canonical = node_id or node_uuid
+        if not canonical:
+            continue
+        uuid_to_id[node_uuid] = canonical
+        uuid_to_id[canonical] = canonical
+        node_ids.add(canonical)
+
+    outgoing: Dict[str, List[str]] = {}
+    indegree: Dict[str, int] = {node_id: 0 for node_id in node_ids}
+    for edge in edges:
+        src = uuid_to_id.get(str(edge.get('from', '') or ''), str(edge.get('from', '') or ''))
+        dst = uuid_to_id.get(str(edge.get('to', '') or ''), str(edge.get('to', '') or ''))
+        if not src or not dst:
+            continue
+        indegree.setdefault(src, 0)
+        indegree.setdefault(dst, 0)
+        outgoing.setdefault(src, []).append(dst)
+        indegree[dst] = indegree.get(dst, 0) + 1
+
+    queue = sorted(node_id for node_id, degree in indegree.items() if degree <= 0)
+    ordered_nodes: List[str] = []
+    visited: set[str] = set()
+    while queue:
+        node_id = queue.pop(0)
+        if node_id in visited:
+            continue
+        visited.add(node_id)
+        ordered_nodes.append(node_id)
+        for next_node in sorted(outgoing.get(node_id, [])):
+            indegree[next_node] = indegree.get(next_node, 0) - 1
+            if indegree[next_node] <= 0 and next_node not in visited and next_node not in queue:
+                queue.append(next_node)
+        queue.sort()
+
+    # Degrade deterministically if the graph contains a cycle or partial
+    # node metadata. CF expects DAGs, but we still make the tie-break stable.
+    ordered_nodes.extend(sorted(node_id for node_id in indegree if node_id not in visited))
+    rank = {node_id: index for index, node_id in enumerate(ordered_nodes)}
+    fallback_rank = len(rank) + 1
+
+    def _subject_key(subject: Dict[str, Any]) -> Tuple[int, int, str, str, str]:
+        from_id = str(subject.get('from_node', '') or '')
+        to_id = str(subject.get('to_node', '') or '')
+        target = subject.get('target') or {}
+        edge_id = str(
+            target.get('targetId')
+            or subject.get('edge_uuid')
+            or subject.get('subject_id')
+            or ''
+        )
+        return (
+            rank.get(from_id, fallback_rank),
+            rank.get(to_id, fallback_rank),
+            from_id,
+            to_id,
+            edge_id,
+        )
+
+    return sorted(subjects, key=_subject_key)
 
 
 def read_edge_cohort_params(
@@ -206,15 +758,22 @@ def read_edge_cohort_params(
         result['alpha'] = _alpha
         result['beta'] = _beta
 
-    for _src_key, _dst_key in [
-        ('path_mu_sd', 'mu_sd'), ('mu_sd', 'mu_sd'),
-        ('path_sigma_sd', 'sigma_sd'), ('sigma_sd', 'sigma_sd'),
-        ('path_onset_sd', 'onset_sd'), ('onset_sd', 'onset_sd'),
+    # Doc 61: this function feeds the upstream-carrier + span-prior
+    # machinery, which is a forecasting consumer. μ SDs are therefore
+    # read from the predictive slots first (path_mu_sd_pred / mu_sd_pred),
+    # falling back to the bare (epistemic) slot when no predictive value
+    # exists — the correct behaviour when kappa_lat is absent.
+    for _src_keys, _dst_key in [
+        (('path_mu_sd_pred', 'mu_sd_pred', 'path_mu_sd', 'mu_sd'), 'mu_sd'),
+        (('path_sigma_sd', 'sigma_sd'), 'sigma_sd'),
+        (('path_onset_sd', 'onset_sd'), 'onset_sd'),
     ]:
         if _dst_key not in result:
-            _v = lat_post.get(_src_key)
-            if isinstance(_v, (int, float)) and math.isfinite(_v) and _v > 0:
-                result[_dst_key] = float(_v)
+            for _src_key in _src_keys:
+                _v = lat_post.get(_src_key)
+                if isinstance(_v, (int, float)) and math.isfinite(_v) and _v > 0:
+                    result[_dst_key] = float(_v)
+                    break
 
     if 'p_sd' not in result and _alpha is not None and _beta is not None:
         _s = _alpha + _beta
@@ -251,10 +810,10 @@ def build_x_provider_from_graph(
     anchor_node_id: Optional[str],
     is_window: bool,
 ) -> XProvider:
-    """Build the legacy x_provider from graph data.
+    """Build the runtime-owned x_provider from graph data.
 
-    Wraps the existing upstream logic that reads from the target edge's
-    from-node.  For single-edge spans, from_node = x, so this is correct.
+    Reads the target edge's from-node as `X` and assembles the upstream
+    carrier inputs needed by the live forecast runtime.
     """
     if is_window or target_edge is None:
         return XProvider(reach=0.0, upstream_params_list=[], enabled=False)
@@ -267,7 +826,7 @@ def build_x_provider_from_graph(
     try:
         from .forecast_state import _resolve_edge_p
 
-        edges = graph.get('edges', [])
+        edges = sorted(graph.get('edges', []), key=_stable_edge_sort_key)
         id_to_uuid: Dict[str, str] = {}
         node_ids = []
         for n in graph.get('nodes', []):
@@ -295,6 +854,7 @@ def build_x_provider_from_graph(
         queue = sorted([nid for nid in node_ids if in_degree.get(nid, 0) == 0])
         if anchor and anchor not in queue:
             queue.append(anchor)
+            queue.sort()
         visited: set = set()
         while queue:
             nid = queue.pop(0)
@@ -315,6 +875,7 @@ def build_x_provider_from_graph(
                     in_degree[to_id] = in_degree.get(to_id, 0) - 1
                     if in_degree[to_id] <= 0 and to_id not in visited:
                         queue.append(to_id)
+            queue.sort()
 
         reach = node_reach.get(from_node_id, 0.0)
         if _COHORT_DEBUG:
@@ -433,12 +994,17 @@ def span_kernel_to_edge_params(
             if _mv.get('source') == 'bayesian':
                 _winning_mv_lat = _mv.get('latency', {})
                 break
+        # Doc 61: bare mu_sd is epistemic; bayes_mu_sd_pred is predictive.
+        # Forecast consumers read the _pred variant; reporting/overlay
+        # consumers read the bare variant.
         _sd_map = {
-            'bayes_mu_sd':              ('promoted_mu_sd',              'mu_sd'),
+            'bayes_mu_sd':              ('promoted_mu_sd',              'mu_sd'),           # epistemic
+            'bayes_mu_sd_pred':         ('promoted_mu_sd_pred',         'mu_sd_pred'),      # predictive (kappa_lat)
             'bayes_sigma_sd':           ('promoted_sigma_sd',           'sigma_sd'),
             'bayes_onset_sd':           ('promoted_onset_sd',           'onset_sd'),
             'bayes_onset_mu_corr':      ('promoted_onset_mu_corr',      'onset_mu_corr'),
-            'bayes_path_mu_sd':         ('promoted_path_mu_sd',         'path_mu_sd'),
+            'bayes_path_mu_sd':         ('promoted_path_mu_sd',         'path_mu_sd'),      # epistemic
+            'bayes_path_mu_sd_pred':    ('promoted_path_mu_sd_pred',    'path_mu_sd_pred'),
             'bayes_path_sigma_sd':      ('promoted_path_sigma_sd',      'path_sigma_sd'),
             'bayes_path_onset_sd':      ('promoted_path_onset_sd',      'path_onset_sd'),
             'bayes_path_onset_mu_corr': ('promoted_path_onset_mu_corr', 'path_onset_mu_corr'),
@@ -526,7 +1092,15 @@ def build_span_params(
         alpha_0 = span_p * _KAPPA_DEFAULT
         beta_0 = (1.0 - span_p) * _KAPPA_DEFAULT
 
-    mu_sd = edge_params.get('bayes_mu_sd', edge_params.get('bayes_path_mu_sd', 0.0)) or 0.0
+    # Doc 61: this is a forecasting consumer (span prior + carrier MC),
+    # so it reads the predictive mu_sd. Fallback to the bare (epistemic)
+    # name when `_pred` is absent — covers pre-migration graphs where
+    # kappa_lat was not fitted (epistemic == predictive in that case).
+    mu_sd = (edge_params.get('bayes_mu_sd_pred')
+             or edge_params.get('bayes_path_mu_sd_pred')
+             or edge_params.get('bayes_mu_sd')
+             or edge_params.get('bayes_path_mu_sd')
+             or 0.0)
     sigma_sd = edge_params.get('bayes_sigma_sd', edge_params.get('bayes_path_sigma_sd', 0.0)) or 0.0
     onset_sd = edge_params.get('bayes_onset_sd', edge_params.get('bayes_path_onset_sd', 0.0)) or 0.0
     onset_mu_corr = edge_params.get('bayes_onset_mu_corr', edge_params.get('bayes_path_onset_mu_corr', 0.0)) or 0.0

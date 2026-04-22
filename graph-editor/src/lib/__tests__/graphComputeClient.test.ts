@@ -612,6 +612,122 @@ describe('GraphComputeClient - Cohort Maturity Normalisation', () => {
   });
 });
 
+describe('GraphComputeClient - Surprise Gauge Normalisation', () => {
+  const client = new GraphComputeClient('http://localhost:9000', true);
+
+  it('preserves per-scenario gauge payloads and focuses the last scenario by default', () => {
+    const request: any = {
+      analysis_type: 'surprise_gauge',
+      scenarios: [
+        {
+          scenario_id: 'scenario-1',
+          name: 'Scenario 1',
+          colour: '#ec4899',
+          visibility_mode: 'f+e',
+          graph: {},
+        },
+        {
+          scenario_id: 'current',
+          name: 'Current',
+          colour: '#3b82f6',
+          visibility_mode: 'f+e',
+          graph: {},
+        },
+      ],
+    };
+
+    const raw: any = {
+      success: true,
+      scenarios: [
+        {
+          scenario_id: 'scenario-1',
+          subjects: [
+            {
+              subject_id: 's-scenario-1',
+              success: true,
+              result: {
+                analysis_type: 'surprise_gauge',
+                analysis_name: 'Expectation Gauge',
+                variables: [
+                  {
+                    name: 'p',
+                    label: 'Conversion rate',
+                    available: true,
+                    observed: 0.2,
+                    expected: 0.25,
+                    sigma: -1,
+                    quantile: 0.16,
+                    posterior_sd: 0.05,
+                    zone: 'noteworthy',
+                    evidence_n: 100,
+                    evidence_k: 20,
+                  },
+                ],
+                hint: 'Run Bayes model for better forecasts',
+              },
+            },
+          ],
+        },
+        {
+          scenario_id: 'current',
+          subjects: [
+            {
+              subject_id: 's-current',
+              success: true,
+              result: {
+                analysis_type: 'surprise_gauge',
+                analysis_name: 'Expectation Gauge',
+                variables: [
+                  {
+                    name: 'p',
+                    label: 'Conversion rate',
+                    available: true,
+                    observed: 0.4,
+                    expected: 0.3,
+                    sigma: 1.5,
+                    quantile: 0.93,
+                    posterior_sd: 0.04,
+                    zone: 'surprising',
+                    evidence_n: 120,
+                    evidence_k: 48,
+                  },
+                  {
+                    name: 'completeness',
+                    label: 'Completeness',
+                    available: true,
+                    observed: 0.72,
+                    expected: 0.61,
+                    sigma: 1.2,
+                    quantile: 0.88,
+                    posterior_sd: 0.03,
+                    zone: 'noteworthy',
+                    evidence_n: 120,
+                    evidence_k: 48,
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    };
+
+    const result = (client as any).normaliseSnapshotSurpriseGaugeResponse(raw, request);
+
+    expect(result).not.toBeNull();
+    expect(result!.success).toBe(true);
+    expect((result!.result as any).focused_scenario_id).toBe('current');
+    expect((result!.result as any).scenario_results).toHaveLength(2);
+    expect((result!.result as any).variables).toHaveLength(2);
+    expect((result!.result as any).variables[0].observed).toBe(0.4);
+    expect(result!.result!.data).toEqual(expect.arrayContaining([
+      expect.objectContaining({ scenario_id: 'scenario-1', variable: 'p', observed: 0.2 }),
+      expect.objectContaining({ scenario_id: 'current', variable: 'completeness', observed: 0.72 }),
+    ]));
+    expect((result!.result as any).dimension_values.scenario_id.current.name).toBe('Current');
+  });
+});
+
 describe('GraphComputeClient - Performance', () => {
   const client = new GraphComputeClient('http://localhost:9000', true);
 

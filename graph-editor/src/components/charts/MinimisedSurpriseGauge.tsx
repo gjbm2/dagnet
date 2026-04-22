@@ -20,8 +20,9 @@ interface MinimisedSurpriseGaugeProps {
 export function MinimisedSurpriseGauge({ result, settings }: MinimisedSurpriseGaugeProps): React.ReactElement | null {
   if (!result?.variables) return null;
 
+  const scenarioScope = settings.surprise_scenario_scope || 'focused';
   const selectedVar = settings.surprise_var || 'p';
-  if (selectedVar === 'all') return null;
+  if (scenarioScope === 'all_visible' || selectedVar === 'all') return null;
 
   const variables: SurpriseVariable[] = result.variables;
   const variable = variables.find(v => v.available && v.name === selectedVar);

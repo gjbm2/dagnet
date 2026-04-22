@@ -17,6 +17,61 @@ import { canonicaliseSliceKeyForMatching } from '../lib/sliceKeyNormalisation';
 import { parseUKDate } from '../lib/dateFormat';
 
 /**
+ * Normalise an old-shape slice entry (doc 49 naming) to the new shape (doc 61).
+ *
+ * Old shape: bare `mu_sd` was predictive-when-kappa-fitted else epistemic-fallback;
+ *            `mu_sd_epist` was always epistemic.
+ * New shape: bare `mu_sd` is always epistemic;
+ *            `mu_sd_pred` is always predictive (kappa_lat-inflated) or absent.
+ *
+ * Detection: presence of `mu_sd_epist` with no `mu_sd_pred` identifies an
+ * old-shape entry produced by a pre-rename Bayes compiler or stored in an
+ * unmigrated parameter file. Pure function, idempotent: new-shape inputs
+ * pass through unchanged. See doc 61.
+ */
+export function normaliseSliceShape(slice: any): any {
+  if (!slice || typeof slice !== 'object') return slice;
+  const hasEpist = slice.mu_sd_epist != null || slice.path_mu_sd_epist != null;
+  const hasPred = slice.mu_sd_pred != null || slice.path_mu_sd_pred != null;
+  if (!hasEpist || hasPred) return slice;
+
+  const out: any = { ...slice };
+  if (slice.mu_sd_epist != null) {
+    // Old mu_sd (predictive-or-epistemic) → new mu_sd_pred
+    if (slice.mu_sd != null) out.mu_sd_pred = slice.mu_sd;
+    // Old mu_sd_epist (always epistemic) → new bare mu_sd
+    out.mu_sd = slice.mu_sd_epist;
+    delete out.mu_sd_epist;
+  }
+  if (slice.path_mu_sd_epist != null) {
+    if (slice.path_mu_sd != null) out.path_mu_sd_pred = slice.path_mu_sd;
+    out.path_mu_sd = slice.path_mu_sd_epist;
+    delete out.path_mu_sd_epist;
+  }
+  return out;
+}
+
+/**
+ * Normalise every slice in a posterior.slices dict in-place-returning-new.
+ * Caller responsibility: do not mutate the input; the FE store expects
+ * immutable updates via setGraph to trigger React re-renders.
+ */
+export function normalisePosteriorSlices(posterior: any): any {
+  if (!posterior || typeof posterior !== 'object') return posterior;
+  const slices = posterior.slices;
+  if (!slices || typeof slices !== 'object') return posterior;
+  const out: Record<string, any> = {};
+  let changed = false;
+  for (const [key, entry] of Object.entries(slices)) {
+    const normalised = normaliseSliceShape(entry);
+    out[key] = normalised;
+    if (normalised !== entry) changed = true;
+  }
+  if (!changed) return posterior;
+  return { ...posterior, slices: out };
+}
+
+/**
  * Parse a date string that may be UK format (d-MMM-yy) or ISO
  * (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SSZ). Returns UTC midnight for the
  * calendar day so that date-only comparisons work correctly (a fit
@@ -214,8 +269,12 @@ export function projectLatencyPosterior(
   if (!posterior?.slices) return undefined;
 
   const dims = extractSliceDimensions(effectiveDsl || '');
-  const windowSlice = _findSliceByMode(posterior.slices, 'window', dims);
-  const cohortSlice = _findSliceByMode(posterior.slices, 'cohort', dims);
+  // Normalise old-shape slice entries (doc 61 migration shim) so downstream
+  // projection logic can assume the new naming: bare = epistemic, _pred = predictive.
+  const rawWindow = _findSliceByMode(posterior.slices, 'window', dims);
+  const rawCohort = _findSliceByMode(posterior.slices, 'cohort', dims);
+  const windowSlice = rawWindow ? (normaliseSliceShape(rawWindow) as SlicePosteriorEntry) : undefined;
+  const cohortSlice = rawCohort ? (normaliseSliceShape(rawCohort) as SlicePosteriorEntry) : undefined;
 
   // Edge-level latency from window() slice
   const edgeSlice = windowSlice;
@@ -228,8 +287,8 @@ export function projectLatencyPosterior(
     distribution: 'lognormal',
     onset_delta_days: edgeSlice.onset_mean ?? 0,
     mu_mean: edgeSlice.mu_mean,
-    mu_sd: edgeSlice.mu_sd,
-    ...(edgeSlice.mu_sd_epist != null ? { mu_sd_epist: edgeSlice.mu_sd_epist } : {}),
+    mu_sd: edgeSlice.mu_sd,                   // epistemic (doc 61)
+    ...(edgeSlice.mu_sd_pred != null ? { mu_sd_pred: edgeSlice.mu_sd_pred } : {}),
     sigma_mean: edgeSlice.sigma_mean,
     sigma_sd: edgeSlice.sigma_sd,
     hdi_t95_lower: edgeSlice.hdi_t95_lower,
@@ -248,7 +307,7 @@ export function projectLatencyPosterior(
       path_onset_sd: cohortSlice.onset_sd,
       path_mu_mean: cohortSlice.mu_mean,
       path_mu_sd: cohortSlice.mu_sd,
-      ...(cohortSlice.mu_sd_epist != null ? { path_mu_sd_epist: cohortSlice.mu_sd_epist } : {}),
+      ...(cohortSlice.mu_sd_pred != null ? { path_mu_sd_pred: cohortSlice.mu_sd_pred } : {}),
       path_sigma_mean: cohortSlice.sigma_mean,
       path_sigma_sd: cohortSlice.sigma_sd,
       ...(cohortSlice.hdi_t95_lower != null ? { path_hdi_t95_lower: cohortSlice.hdi_t95_lower, path_hdi_t95_upper: cohortSlice.hdi_t95_upper } : {}),

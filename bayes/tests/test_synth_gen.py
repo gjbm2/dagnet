@@ -17,6 +17,7 @@ from __future__ import annotations
 import math
 import numpy as np
 import pytest
+import yaml
 
 from bayes.compiler import analyse_topology, bind_snapshot_evidence
 from bayes.compiler.types import CohortDailyTrajectory
@@ -29,6 +30,7 @@ from bayes.synth_gen import (
     _extract_dimension_from_slice_key,
     _rehash_snapshot_rows,
     save_synth_meta,
+    write_parameter_files,
     verify_synth_data,
     set_simulation_guard,
     GRAPH_CONFIGS,
@@ -1012,6 +1014,99 @@ class TestRehashSnapshotRows:
                 f"Row {r['slice_key']} still has placeholder hash"
             )
 
+    def test_alternate_cohort_row_uses_anchor_specific_hash_family(self):
+        rows, topo, lookup, eid = self._make_rows_and_lookup()
+        pid = list(lookup.keys())[0]
+        rows[eid].append({
+            "param_id": pid,
+            "core_hash": "PLACEHOLDER",
+            "slice_key": "cohort()",
+            "_hash_lookup_key": "cohort_hash_anchor_node-a",
+            "cohort_anchor_node_id": "node-a",
+        })
+        lookup[pid]["cohort_hash_anchor_node-a"] = "AUTH-C-ALT-A"
+
+        _rehash_snapshot_rows(rows, topo, lookup)
+
+        alt_row = [r for r in rows[eid] if r.get("cohort_anchor_node_id") == "node-a"][0]
+        assert alt_row["core_hash"] == "AUTH-C-ALT-A"
+
+
+class TestAlternateCohortAnchors:
+    """Alternate upstream cohort anchors should create distinct synth families."""
+
+    def _run_with_alt_anchor(self):
+        graph = _make_simple_graph()
+        topology = analyse_topology(graph)
+        truth = _make_truth(topology, graph)
+        truth["alternate_cohort_anchors"] = [
+            {"anchor": "node-a", "edges": ["param-b-c"]},
+        ]
+        hash_lookup = _make_hash_lookup(topology)
+        hash_lookup["param-b-c"]["cohort_hash_anchor_node-a"] = "TEST-C-ALT-param-b-c-node-a"
+        hash_lookup["param-b-c"]["cohort_sig_anchor_node-a"] = "SIG-C-ALT-param-b-c-node-a"
+        sim_config = {
+            "n_days": 40,
+            "mean_daily_traffic": 200,
+            "kappa_sim_default": 50.0,
+            "drift_sigma": 0.0,
+            "failure_rate": 0.0,
+            "seed": 42,
+            "base_date": "2025-11-01",
+        }
+        rows, stats = simulate_graph(graph, topology, truth, sim_config, hash_lookup)
+        return graph, topology, truth, hash_lookup, rows, stats
+
+    def test_simulate_graph_emits_distinct_alternate_anchor_cohort_rows(self):
+        graph, topology, truth, hash_lookup, rows, _stats = self._run_with_alt_anchor()
+        edge_rows = rows["edge-b-c"]
+        default_rows = [
+            r for r in edge_rows
+            if r["slice_key"] == "cohort()" and not r.get("cohort_anchor_node_id")
+        ]
+        alt_rows = [
+            r for r in edge_rows
+            if r["slice_key"] == "cohort()" and r.get("cohort_anchor_node_id") == "node-a"
+        ]
+
+        assert default_rows, "expected default anchor-rooted cohort rows"
+        assert alt_rows, "expected alternate upstream-anchor cohort rows"
+        assert all(r["core_hash"] == "TEST-C-ALT-param-b-c-node-a" for r in alt_rows)
+
+        overlapping = [
+            (d, a)
+            for d in default_rows
+            for a in alt_rows
+            if d["anchor_day"] == a["anchor_day"] and d["retrieved_at"] == a["retrieved_at"]
+        ]
+        assert overlapping, "expected overlapping observations to compare anchor semantics"
+        assert any(
+            (d["a"], d["x"], d["y"]) != (a["a"], a["x"], a["y"])
+            for d, a in overlapping
+        ), "alternate upstream anchor should change the cohort counts"
+
+    def test_write_parameter_files_emits_alternate_anchor_slice(self, tmp_path):
+        graph, topology, truth, hash_lookup, _rows, stats = self._run_with_alt_anchor()
+        (tmp_path / "parameters").mkdir()
+
+        written = write_parameter_files(
+            topology,
+            truth,
+            stats,
+            str(tmp_path),
+            graph,
+            hash_lookup,
+        )
+
+        assert "param-b-c" in written
+        payload = yaml.safe_load((tmp_path / "parameters" / "param-b-c.yaml").read_text())
+        alt_entries = [
+            value for value in payload["values"]
+            if value.get("sliceDSL", "").startswith("cohort(node-a,")
+        ]
+        assert alt_entries, "expected alternate cohort entry in parameter file"
+        assert alt_entries[0]["query_signature"] == "SIG-C-ALT-param-b-c-node-a"
+
 
 # ---------------------------------------------------------------------------
 # Tests: mixed-epoch observation generation
@@ -1254,6 +1349,17 @@ class TestBuildMetaHashes:
         assert meta["my-edge"]["cohort_hash"] == "C456"
         # ctx keys should be empty string, not missing
         assert meta["my-edge"].get("ctx_window_hash", "") == ""
+
+    def test_includes_alternate_cohort_anchor_hashes(self):
+        hash_lookup = {
+            "my-edge": {
+                "window_hash": "W123",
+                "cohort_hash": "C456",
+                "cohort_hash_anchor_node-b": "CAB789",
+            },
+        }
+        meta = _build_meta_hashes(hash_lookup)
+        assert meta["my-edge"]["cohort_hash_anchor_node-b"] == "CAB789"
 
 
 class TestSaveSynthMeta:

@@ -85,6 +85,24 @@ def _iter_edge_result_appends(func: ast.FunctionDef) -> list[ast.Dict]:
     return dicts
 
 
+def _iter_calls(func: ast.FunctionDef, name: str) -> list[ast.Call]:
+    """Return every call to `name(...)` inside `func`."""
+    calls: list[ast.Call] = []
+    for node in ast.walk(func):
+        if not isinstance(node, ast.Call):
+            continue
+        if isinstance(node.func, ast.Name) and node.func.id == name:
+            calls.append(node)
+    return calls
+
+
+def _find_function(tree: ast.AST, name: str) -> ast.FunctionDef:
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == name:
+            return node
+    raise AssertionError(f"{name} not found in api_handlers.py")
+
+
 def _literal_keys(d: ast.Dict) -> set[str]:
     out: set[str] = set()
     for k in d.keys:
@@ -177,6 +195,39 @@ class TestConditionedForecastResponseContract:
             assert "cf_reason" in keys, (
                 f"Per-edge response dict missing 'cf_reason'; keys={sorted(keys)}"
             )
+
+    def test_handler_passes_axis_tau_max_to_upstream_fetch(self):
+        """WP6: whole-graph CF must carry the same donor-lookback bound that v3
+        uses when calling `_fetch_upstream_observations`.
+        """
+        tree = ast.parse(_load_handler_source())
+        func = _find_cf_handler(tree)
+        calls = _iter_calls(func, "_fetch_upstream_observations")
+        assert calls, (
+            "handle_conditioned_forecast no longer calls "
+            "_fetch_upstream_observations; update this contract test."
+        )
+        assert any(
+            any(keyword.arg == "axis_tau_max" for keyword in call.keywords)
+            for call in calls
+        ), (
+            "handle_conditioned_forecast must pass axis_tau_max into "
+            "_fetch_upstream_observations so whole-graph donor lookback uses "
+            "the same horizon bound as the v3 path."
+        )
+
+    def test_upstream_fetch_uses_shared_forecast_preparation_helper(self):
+        """WP6: donor-routing must reuse the shared forecast preparation path,
+        not keep an ad hoc query/regime/derive branch inside the upstream fetch.
+        """
+        tree = ast.parse(_load_handler_source())
+        func = _find_function(tree, "_fetch_upstream_observations")
+        shared_helper_calls = _iter_calls(func, "prepare_forecast_subject_entry")
+        assert shared_helper_calls, (
+            "_fetch_upstream_observations must prepare missing donor edges via "
+            "the shared forecast-preparation helper so donor routing obeys the "
+            "same regime/evidence policy as the main subject path."
+        )
 
 
 class TestForecastConditionedRouteRegistered:
@@ -453,5 +504,111 @@ if _CONFTEST_AVAILABLE:
             assert abs(cm_completeness - cf_completeness) < 0.02, (
                 f"completeness parity failed: cohort_maturity last row="
                 f"{cm_completeness:.4f} CF endpoint={cf_completeness:.4f}"
+            )
+
+
+    @requires_db
+    @requires_data_repo
+    @requires_synth("synth-mirror-4step", enriched=True)
+    class TestConditionedForecastMultiHopCohortParity:
+        """
+        Doc 47 / doc 60 WP1 regression guard for scoped multi-hop cohort
+        queries.
+
+        The v3 chart and scoped conditioned-forecast endpoint must prepare
+        the same subject frames before calling the shared engine. If the CF
+        path drifts back to cohort-family subject reads here, its horizon
+        scalar diverges from the chart on this fixture.
+        """
+
+        @staticmethod
+        def _load_synth_graph():
+            return load_graph_json("synth-mirror-4step")
+
+        @staticmethod
+        def _get_candidate_regimes(graph):
+            return load_candidate_regimes_by_mode("synth-mirror-4step")
+
+        def test_scoped_multi_hop_cohort_matches_v3_horizon(self):
+            from api_handlers import (
+                _handle_cohort_maturity_v3,
+                handle_conditioned_forecast,
+            )
+
+            graph = self._load_synth_graph()
+            regimes = self._get_candidate_regimes(graph)
+            analytics_dsl = "from(m4-delegated).to(m4-success)"
+            query_dsl = "cohort(-14d:)"
+
+            cm_result = _handle_cohort_maturity_v3(
+                {
+                    "scenarios": [
+                        {
+                            "scenario_id": "parity",
+                            "graph": graph,
+                            "analytics_dsl": analytics_dsl,
+                            "effective_query_dsl": query_dsl,
+                            "candidate_regimes_by_edge": regimes,
+                        }
+                    ]
+                }
+            )
+            cm_rows = []
+            if "result" in cm_result and isinstance(cm_result["result"], dict):
+                cm_rows = cm_result["result"].get("maturity_rows", []) or []
+            else:
+                for subject in (
+                    cm_result.get("subjects")
+                    or cm_result.get("scenarios", [{}])[0].get("subjects", [])
+                ):
+                    rows = subject.get("result", {}).get("maturity_rows", [])
+                    if rows:
+                        cm_rows = rows
+                        break
+            assert cm_rows, "cohort_maturity_v3 returned no rows for multi-hop cohort parity"
+            cm_last = cm_rows[-1]
+
+            cf_result = handle_conditioned_forecast(
+                {
+                    "scenarios": [
+                        {
+                            "scenario_id": "parity",
+                            "graph": graph,
+                            "analytics_dsl": analytics_dsl,
+                            "effective_query_dsl": query_dsl,
+                            "candidate_regimes_by_edge": regimes,
+                        }
+                    ],
+                    "analytics_dsl": analytics_dsl,
+                }
+            )
+            cf_edges = cf_result.get("scenarios", [{}])[0].get("edges", []) or []
+            assert cf_edges, "CF endpoint returned no edges for multi-hop cohort parity"
+            cf_edge = next(
+                (edge for edge in cf_edges if edge.get("to_node") == "m4-success"),
+                cf_edges[0],
+            )
+
+            cm_p_mean = cm_last.get("p_infinity_mean")
+            if cm_p_mean is None:
+                cm_p_mean = cm_last.get("midpoint")
+            cf_p_mean = cf_edge.get("p_mean")
+            assert cm_p_mean is not None and cf_p_mean is not None, (
+                f"Missing p_mean scalars — cm_p_mean={cm_p_mean} cf_p_mean={cf_p_mean}"
+            )
+            assert abs(cm_p_mean - cf_p_mean) < 5e-3, (
+                "Scoped multi-hop cohort p_mean parity failed: "
+                f"cohort_maturity={cm_p_mean:.4f} CF={cf_p_mean:.4f}"
+            )
+
+            cm_completeness = cm_last.get("completeness")
+            cf_completeness = cf_edge.get("completeness")
+            assert cm_completeness is not None and cf_completeness is not None, (
+                "Missing completeness scalars for scoped multi-hop cohort parity"
+            )
+            assert abs(cm_completeness - cf_completeness) < 5e-3, (
+                "Scoped multi-hop cohort completeness parity failed: "
+                f"cohort_maturity={cm_completeness:.4f} "
+                f"CF={cf_completeness:.4f}"
             )
 

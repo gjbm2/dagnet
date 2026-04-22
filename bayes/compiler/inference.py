@@ -62,6 +62,16 @@ class ChainStallDetector:
                                     once crawling, chain must hit 50% of peak
                                     (or rise above crawl_floor) to recover.
 
+    Tuning history (22-Apr-26):
+        Removed `peak < crawl_floor` entry escape — its interaction with
+        the new hysteresis exit produced enter/exit oscillation on slow-
+        but-healthy models (peak 2.9, rate 2.4 → cycled indefinitely).
+        Entry now requires peak ≥ crawl_floor (chain has proven it CAN
+        sample above floor); warmup_s is the sole guard for "chain never
+        sped up". Diamond-*-2dim graphs that appeared to hard-fail in
+        r1776814894 were slow models misdetected by the oscillation, not
+        pathological posteriors.
+
     Usage:
         detector = ChainStallDetector()
         stall = detector.update(chain_index, draws, timestamp)
@@ -147,11 +157,19 @@ class ChainStallDetector:
                     "stalled_for": now - self._crawl_since[chain],
                 }
         else:
-            # Entry condition: rate below absolute floor AND below
-            # crawl_ratio of peak (or never reached the floor).
-            entered = (rate < self.crawl_floor
-                       and (peak < self.crawl_floor
-                            or rate < self.crawl_ratio * peak))
+            # Entry condition: chain must have an ESTABLISHED peak (≥ floor)
+            # AND be currently running below ratio × peak.
+            #
+            # The earlier "peak < crawl_floor" escape clause is removed — it
+            # caused enter/exit oscillation on slow-but-healthy models: with
+            # peak = 2.9 and rate = 2.4, entry fires via "peak < floor" but
+            # exit fires immediately via "rate ≥ recover_ratio × peak"
+            # (0.5 × 2.9 = 1.45), cycling endlessly and never confirming
+            # a real stall via grace_s. warmup_s is the correct guard for
+            # "chain never sped up past tiny rate".
+            entered = (peak >= self.crawl_floor
+                       and rate < self.crawl_floor
+                       and rate < self.crawl_ratio * peak)
             if entered:
                 self._crawl_since[chain] = now
 
@@ -1369,8 +1387,8 @@ def summarise_posteriors(
                 sigma_samples = trace.posterior[sigma_var_name].values.flatten()
 
                 mu_mean = float(np.mean(mu_samples))
-                mu_sd = float(np.std(mu_samples))
-                mu_sd_epist_val = mu_sd  # save epistemic value before possible kappa_lat overwrite (doc 49)
+                mu_sd_epistemic = float(np.std(mu_samples))
+                mu_sd_predictive: float | None = None  # populated below when kappa_lat present (doc 61)
                 sigma_mean = float(np.mean(sigma_samples))
                 sigma_sd = float(np.std(sigma_samples))
 
@@ -1488,12 +1506,12 @@ def summarise_posteriors(
                         diagnostics, edge_id,
                     )
                     if _pred_mu_sd is not None:
-                        mu_sd = _pred_mu_sd
+                        mu_sd_predictive = _pred_mu_sd  # doc 61: predictive slot, never clobber epistemic
 
                 latency_posteriors[edge_id] = LatencyPosteriorSummary(
                     mu_mean=mu_mean,
-                    mu_sd=mu_sd,                    # predictive when kappa_lat, else epistemic
-                    mu_sd_epist=mu_sd_epist_val,    # always epistemic (doc 49 §A.6.2)
+                    mu_sd=mu_sd_epistemic,          # always epistemic (doc 61)
+                    mu_sd_pred=mu_sd_predictive,    # predictive when kappa_lat, else None
                     sigma_mean=sigma_mean,
                     sigma_sd=sigma_sd,
                     onset_delta_days=canonical_onset,
@@ -1511,10 +1529,11 @@ def summarise_posteriors(
                     kappa_lat_sd=kappa_lat_sd_val,
                 )
                 diagnostics.append(
-                    f"  latency {edge_id[:8]}…: mu={mu_mean:.3f}±{mu_sd:.3f} "
+                    f"  latency {edge_id[:8]}…: mu={mu_mean:.3f}±{mu_sd_epistemic:.3f} "
                     f"(prior={lp.mu:.3f}), sigma={sigma_mean:.3f}±{sigma_sd:.3f} "
                     f"(prior={lp.sigma:.3f}), rhat={lat_rhat:.3f}, ess={lat_ess:.0f}"
                     + (f", kappa_lat={kappa_lat_mean_val:.1f}±{kappa_lat_sd_val:.1f}"
+                       + (f" mu_sd_pred={mu_sd_predictive:.3f}" if mu_sd_predictive is not None else "")
                        if kappa_lat_mean_val is not None else "")
                 )
                 if has_latent_onset:
@@ -1608,8 +1627,7 @@ def summarise_posteriors(
                 _heuristic_mu_sd = abs(mu) * 0.03
                 latency_posteriors[edge_id] = LatencyPosteriorSummary(
                     mu_mean=mu,
-                    mu_sd=_heuristic_mu_sd,
-                    mu_sd_epist=_heuristic_mu_sd,  # no MCMC, both are heuristic
+                    mu_sd=_heuristic_mu_sd,        # heuristic epistemic (doc 61); no predictive mechanism without MCMC
                     sigma_mean=sigma,
                     sigma_sd=sigma * 0.05,
                     onset_delta_days=onset,
@@ -1665,8 +1683,7 @@ def summarise_posteriors(
                     lat.path_onset_hdi_lower = path_onset_hdi_lower
                     lat.path_onset_hdi_upper = path_onset_hdi_upper
                     lat.path_mu_mean = path_mu
-                    lat.path_mu_sd = path_mu_sd
-                    lat.path_mu_sd_epist = path_mu_sd  # always epistemic (doc 49)
+                    lat.path_mu_sd = path_mu_sd  # epistemic (doc 61); no path-level predictive mechanism
                     lat.path_sigma_mean = path_sigma
                     lat.path_sigma_sd = path_sigma_sd
                     lat.path_hdi_t95_lower = path_hdi_t95_lower

@@ -35,7 +35,8 @@ The rest of this doc details each subsystem, the pipeline sequence, the fields e
 | `edge.p.model_vars[source='analytic_be']` | BE topo pass | Query-scoped analytic fit (Python, parity target with FE `analytic`) |
 | `edge.p.latency.{mu, sigma, t95, path_t95, path_mu, path_sigma, ...}` | Promoted from whichever model_vars source won `applyPromotion` | Latency fit scalars |
 | `edge.p.mean`, `edge.p.sd` | BE CF pass (when landed) / else topo-pass blend fallback | Conditioned asymptotic rate + SD |
-| `edge.p.latency.completeness`, `completeness_stdev` | BE CF pass (authoritative per doc 45) / else topo-pass CDF eval fallback | Cohort maturity at query ages |
+| `edge.p.latency.completeness` | BE CF pass (authoritative per doc 45) / else topo-pass CDF eval fallback | Cohort maturity at query ages |
+| `edge.p.latency.completeness_stdev` | BE CF pass | Conditioned uncertainty on completeness |
 | `edge.p.evidence.{mean, n, k}` | Topo-pass evidence aggregation (from query-scoped snapshot counts) | Raw observed conversion data |
 | `edge.p.forecast.mean` | BE CF pass (same value as `p.mean` when CF landed) | Forecast asymptote (legacy field retained) |
 
@@ -90,9 +91,9 @@ Key invariants:
 
 **Key files**: `src/services/statisticalEnhancementService.ts`, `src/services/windowAggregationService.ts`, `src/services/lagHorizonsService.ts`, `src/services/forecastingParityService.ts`.
 
-### 3.3 BE topo pass (Python analytic + minimal forecast tail)
+### 3.3 BE topo pass (Python analytic fallback)
 
-**What it is**: the Python equivalent of the FE topo pass. Runs fire-and-forget in parallel to the FE topo pass, producing `analytic_be` model_vars. Additionally runs a **minimal forecast-engine tail** (per-edge `compute_forecast_trajectory` with single-point cohort evidence) to populate `p.mean`, `p.sd`, `completeness_stdev` when CF hasn't landed.
+**What it is**: the Python equivalent of the FE topo pass. Runs fire-and-forget in parallel to the FE topo pass, producing `analytic_be` model_vars plus the same bounded analytic fallback scalars exposed by `stats_engine.py` (`completeness`, `p_infinity`, `blended_mean`, heuristic `p_sd`). It does **not** run `compute_forecast_trajectory` or build a second conditioned scalar surface.
 
 **Trigger**: `fetchDataService.ts` Stage 2, fires alongside FE topo pass. Fire-and-forget promise; stale results discarded via `_beTopoPassGeneration`.
 
@@ -100,17 +101,15 @@ Key invariants:
 
 **Scope**: whole graph. Single topological forward pass (Kahn's algorithm, deterministic) propagating path-level parameters via Fenton-Wilkinson composition ([stats_engine.py:433-471](../../graph-editor/lib/runner/stats_engine.py#L433-L471)).
 
-**Two-stage internal structure** (per [FE_BE_STATS_PARALLELISM.md](FE_BE_STATS_PARALLELISM.md) §"Forecast engine"):
-1. **Stats engine**: analytic FW composition producing mu, sigma, t95, path_t95, completeness, p_infinity, blended_mean, heuristic SDs per edge ([stats_engine.py:608-650](../../graph-editor/lib/runner/stats_engine.py#L608-L650)).
-2. **Forecast engine tail**: `compute_forecast_trajectory` called per edge with minimal single-point cohort evidence; reads the IS-conditioned projected rate at the horizon as `blended_mean` and n-weighted CDF at cohort ages as `completeness`.
+**Internal structure**: `enhance_graph_latencies()` only. The handler reads the resulting `EdgeLAGValues` and returns them as analytic fallback outputs; there is no extra forecast-engine phase behind `/api/lag/topo-pass`.
 
 **Query-scoping**: yes — same DSL cohort window as FE topo pass. `scoped_cohorts` (cohort-window-filtered) used for evidence/completeness; full cohorts used for fitting to avoid survivor bias.
 
-**Outputs**: per-edge `analytic_be` model_vars entry upserted to graph via `beTopoPassService.ts` → `applyBeTopoResult` → `upsertModelVars` + `applyPromotion`. Once BE topo result arrives, promotion re-runs and (if preference allows) analytic_be's scalars become the promoted `p.latency.*` values.
+**Outputs**: per-edge `analytic_be` model_vars entry upserted to graph via `beTopoPassService.ts` → `applyBeTopoResult` → `upsertModelVars` + `applyPromotion`. Once BE topo result arrives, promotion re-runs and (if preference allows) analytic_be's latency scalars become the promoted `p.latency.*` values. The flat `blended_mean` / `completeness` / `p_sd` values on the endpoint remain explicitly analytic fallback numbers for diagnostics and FE parity logging; they are not a second conditioned writer.
 
-**Distinction from BE CF pass**: BE topo pass uses single-point cohort evidence per edge (minimal forecast-engine call); BE CF pass uses full snapshot DB with multi-cohort framing and per-edge IS conditioning on query-scoped evidence. BE topo is analytic with a forecast tail; BE CF is fully MC with proper IS across the topologically-ordered graph.
+**Distinction from BE CF pass**: BE topo pass is analytic only. BE CF pass uses full snapshot DB with multi-cohort framing and per-edge IS conditioning on query-scoped evidence. BE topo remains the fallback / model-var generator; BE CF is the first-class conditioned writer.
 
-**Key files**: `lib/runner/stats_engine.py`, `lib/api_handlers.py:5620-5770` (handler), `lib/runner/forecast_state.py` (shared `compute_forecast_trajectory` primitive), `src/services/beTopoPassService.ts` (client).
+**Key files**: `lib/runner/stats_engine.py`, `lib/api_handlers.py:5409-5560` (handler), `src/services/beTopoPassService.ts` (client).
 
 ### 3.4 BE CF pass (conditioned forecast — sophisticated MC enrichment)
 
@@ -138,6 +137,29 @@ Key invariants:
 
 **Per-draw mechanics**: `compute_forecast_trajectory` uses `resolved.alpha_pred, beta_pred` from the promoted source (typically bayesian) as the proposal distribution; draws `p_draws ~ Beta(α_pred, β_pred)`; applies IS weights `w_s = Π_c Binomial.pmf(k_c | n_c, p_s · CDF_s(τ_c))` using query-scoped cohort evidence. The conditioned posterior is the IS-reweighted draw set. `p_mean` is the median of the conditioned draw set at saturation τ.
 
+**Runtime-bundle conditioning seam (current live behaviour)**: before the
+row-builder or summary solve runs, the live callers assemble
+`PreparedForecastRuntimeBundle.p_conditioning_evidence` in
+`graph-editor/lib/runner/forecast_runtime.py`. This object is an internal
+statement of which evidence family is allowed to move the rate side; it is
+not a second carrier selector and it does not rewrite the subject span. The
+current WP8 landing is intentionally narrow:
+
+- exact single-hop `cohort()` subjects enable
+  `direct_cohort_enabled = true` and tag the seam as
+  `direct_cohort_exact_subject`
+- `window()` and multi-hop `cohort()` queries keep the pre-existing
+  `snapshot_frames` / `frame_evidence` / `aggregate_evidence` seam depending
+  on the caller
+- the same helper is used by `handle_conditioned_forecast`,
+  `_handle_cohort_maturity_v3`, `compute_cohort_maturity_rows_v3` when it
+  synthesises its own bundle, and `_compute_surprise_gauge`, so the live
+  callers stay aligned
+
+This is only rate-conditioning metadata. Carrier semantics, latency
+semantics, and numerator representation stay on the factorised rules
+established by the earlier work packages.
+
 **Dispersion contract (doc 49)**: `p_sd` and `p_sd_epistemic` are both closed-form Beta σ, derived from the resolved α/β pair — **not MC stds of the conditioned draws**. Historically `p_sd` was `np.std(rate_draws[:, -1])` on the IS-conditioned set, which collapses to the epistemic posterior width regardless of how diffuse the sampling prior was (IS-conditioning on O(n) observed evidence dominates the prior). Closed form is the only way to expose predictive dispersion (Beta(α_pred, β_pred)) distinctly from epistemic (Beta(α, β)). The non-latency fallback (`_non_latency_rows` in cohort_forecast_v3.py) derives `p_sd_epistemic` from the conjugate-updated posterior and `p_sd` from the unupdated predictive α_pred/β_pred so that kappa-inflated width is not collapsed by query-window evidence. See docs 45b §Phase C, 47 §5g.
 
 **Outputs**: per-edge per-scenario `{p_mean, p_sd, p_sd_epistemic, completeness, completeness_sd, tau_max, n_rows, n_cohorts, conditioned}` returned via API response. Applied to graph via `conditionedForecastService.applyConditionedForecastToGraph` — writes `edge.p.blendedMean`, `edge.p.latency.completeness`, `edge.p.latency.completeness_stdev`, `edge.p.forecast.mean`. `p_sd` and `p_sd_epistemic` are returned on the response but **not persisted to graph edges** by the current projector. Consumers that need them (today: the funnel runner's whole-graph CF call) read directly from the CF response. Whole-graph persistence of the dispersion scalars is deferred; see doc 54 §8.2.
@@ -146,7 +168,14 @@ Key invariants:
 
 **Per-edge vs path-cumulative completeness (gotcha)**: when a caller invokes CF with a single-edge `analytics_dsl: from(X).to(Y)` plus a path-level cohort window, the returned `completeness` is **edge-local** (has this edge's source cohort had time to traverse this single edge?), not path-cumulative (has the original cohort at S₀ had time to reach this stage along the full path?). Edge-local completeness is 1.0 for non-latency edges and ≈1.0 for short-lag edges on historic data. Multi-hop consumers that need path-cumulative completeness should read `latency.completeness` from the scenario graph edge (populated by the fetch pipeline's whole-graph CF pass with the full path DSL in scope), not from per-edge CF responses. The conversion_funnel runner applies this overlay before calling `compute_bars_ef`.
 
-**Query-scoping**: this is the *most thorough* query-scoping of any subsystem. IS conditioning updates the aggregate bayesian posterior specifically to the user's query-DSL-scoped snapshot evidence, per edge.
+**Query-scoping**: this is the *most thorough* query-scoping of any
+subsystem. IS conditioning updates the aggregate bayesian posterior
+specifically to the user's query-DSL-scoped snapshot evidence, per edge.
+That still obeys the `alpha_beta_query_scoped` rule from
+`graph-editor/lib/runner/model_resolver.py`: aggregate priors may update,
+but `analytic` / `analytic_be` query-scoped posteriors are already scoped
+and therefore route to degraded or read-directly behaviour instead of being
+updated again.
 
 **Distinction from BE topo pass**: BE topo is analytic + minimal per-edge forecast tail; BE CF is full MC with proper IS on per-edge snapshot evidence, topologically sequenced with upstream carrier propagation. CF supersedes topo's `p.mean`/`completeness` when it lands.
 
@@ -336,7 +365,8 @@ When you read a field, know who wrote it:
 - `edge.p.latency.mu, sigma, t95, ...` → promoted from whichever model_vars source is active (per `resolveActiveModelVars`)
 - `edge.p.evidence.{mean, n, k}` → topo-pass evidence aggregation (from scoped snapshot data)
 - `edge.p.mean, edge.p.sd` → BE CF pass when landed; else FE/BE topo pass's blended fallback
-- `edge.p.latency.completeness, completeness_stdev` → BE CF pass when landed; else topo pass's CDF eval
+- `edge.p.latency.completeness` → BE CF pass when landed; else topo pass's CDF eval
+- `edge.p.latency.completeness_stdev` → BE CF pass
 - `edge.p.forecast.mean` → BE CF pass (same value as `p.mean` when CF landed); legacy field name retained
 
 If you need to know *which specific pass* wrote the current value of a flat field, trace through the promotion layer (`modelVarsResolution.ts`) and the session log entries for that fetch generation (`BE_TOPO_PASS`, `CONDITIONED_FORECAST`, `FE_BE_PARITY`).

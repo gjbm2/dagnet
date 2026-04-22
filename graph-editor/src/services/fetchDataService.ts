@@ -2531,8 +2531,6 @@ export async function runStage2EnhancementsAndInboundN(
               p_mean: number;
               completeness?: number;
               completeness_sd?: number;
-              evidence_n?: number;
-              evidence_k?: number;
             };
             const byEdge = new Map<string, CfScalars>();
             for (const e of cfResults[0].edges) {
@@ -2547,14 +2545,6 @@ export async function runStage2EnhancementsAndInboundN(
                     e.completeness_sd != null && Number.isFinite(e.completeness_sd)
                       ? (e.completeness_sd as number)
                       : undefined,
-                  evidence_n:
-                    e.evidence_n != null && Number.isFinite(Number(e.evidence_n))
-                      ? Number(e.evidence_n)
-                      : undefined,
-                  evidence_k:
-                    e.evidence_k != null && Number.isFinite(Number(e.evidence_k))
-                      ? Number(e.evidence_k)
-                      : undefined,
                 });
               }
             }
@@ -2562,21 +2552,10 @@ export async function runStage2EnhancementsAndInboundN(
             return feValues.map(fe => {
               const cf = byEdge.get(fe.edgeUuid);
               if (cf == null) return fe;
-              const evidenceMean =
-                cf.evidence_n != null && cf.evidence_n > 0 && cf.evidence_k != null
-                  ? cf.evidence_k / cf.evidence_n
-                  : undefined;
-              const mergedEvidence = {
-                ...(fe.evidence || {}),
-                ...(evidenceMean != null ? { mean: evidenceMean } : {}),
-                ...(cf.evidence_n != null ? { n: cf.evidence_n } : {}),
-                ...(cf.evidence_k != null ? { k: cf.evidence_k } : {}),
-              };
               return {
                 ...fe,
                 blendedMean: cf.p_mean,
                 forecast: { ...(fe.forecast || {}), mean: cf.p_mean },
-                ...(Object.keys(mergedEvidence).length > 0 ? { evidence: mergedEvidence } : {}),
                 latency: {
                   ...fe.latency,
                   ...(cf.completeness != null

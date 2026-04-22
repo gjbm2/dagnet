@@ -51,22 +51,18 @@ export function BayesPosteriorCard({ probability, latency, t95, pathT95, theme =
     return <div style={{ padding: 10, color: 'var(--text-muted)', fontStyle: 'italic', fontSize: 12 }}>No posterior available</div>;
   }
 
-  // Doc 49 §A.9: displayed ± and HDI use PREDICTIVE (α_pred/β_pred, kappa-inflated)
-  // when available; fall back to epistemic (α/β) when kappa is absent. Mean is
-  // the same in both (the Beta ratio α/(α+β) is preserved when κ scales α and β).
-  const edgeAlphaD = hasEdgeP ? (post!.alpha_pred ?? post!.alpha) : null;
-  const edgeBetaD = hasEdgeP ? (post!.beta_pred ?? post!.beta) : null;
+  // Doc 61 supersedes doc 49 §A.9 Invariant 5: reporting surfaces display
+  // EPISTEMIC bands (bare α/β, posterior SD of the rate parameter) because
+  // the posterior card answers "what does the model believe about this
+  // parameter?", not "what observations might I see next?". Forecast
+  // consumers read the predictive pair separately.
   const edgePMean = hasEdgeP ? post!.alpha / (post!.alpha + post!.beta) : null;
-  const edgePSd = (edgeAlphaD != null && edgeBetaD != null)
-    ? Math.sqrt(edgeAlphaD * edgeBetaD / ((edgeAlphaD + edgeBetaD) ** 2 * (edgeAlphaD + edgeBetaD + 1)))
+  const edgePSd = hasEdgeP
+    ? Math.sqrt(post!.alpha * post!.beta / ((post!.alpha + post!.beta) ** 2 * (post!.alpha + post!.beta + 1)))
     : null;
-  const paPred = (post as any)?.cohort_alpha_pred;
-  const pbPred = (post as any)?.cohort_beta_pred;
-  const pathAlphaD = hasPathP ? (paPred ?? pa) : null;
-  const pathBetaD = hasPathP ? (pbPred ?? pb) : null;
   const pathPMean = hasPathP ? pa / (pa + pb) : null;
-  const pathPSd = (pathAlphaD != null && pathBetaD != null)
-    ? Math.sqrt(pathAlphaD * pathBetaD / ((pathAlphaD + pathBetaD) ** 2 * (pathAlphaD + pathBetaD + 1)))
+  const pathPSd = hasPathP
+    ? Math.sqrt(pa * pb / ((pa + pb) ** 2 * (pa + pb + 1)))
     : null;
 
   // ── Convergence footer ──
@@ -107,11 +103,12 @@ export function BayesPosteriorCard({ probability, latency, t95, pathT95, theme =
   );
 
   // ── Build column content ──
-  // HDI matches σ: prefer predictive HDI (hdi_*_pred) when kappa is present.
-  const edgeHdiLo = post?.hdi_lower_pred ?? post?.hdi_lower;
-  const edgeHdiHi = post?.hdi_upper_pred ?? post?.hdi_upper;
-  const pathHdiLo = (post as any)?.cohort_hdi_lower_pred ?? (post as any)?.cohort_hdi_lower;
-  const pathHdiHi = (post as any)?.cohort_hdi_upper_pred ?? (post as any)?.cohort_hdi_upper;
+  // Doc 61: reporting surfaces use bare (epistemic) HDI, not the predictive
+  // variant. The card shows the model's belief about the rate parameter.
+  const edgeHdiLo = post?.hdi_lower;
+  const edgeHdiHi = post?.hdi_upper;
+  const pathHdiLo = (post as any)?.cohort_hdi_lower;
+  const pathHdiHi = (post as any)?.cohort_hdi_upper;
 
   const edgeProbRows = hasEdgeP ? (
     <>
@@ -127,17 +124,14 @@ export function BayesPosteriorCard({ probability, latency, t95, pathT95, theme =
     </>
   ) : null;
 
-  // Doc 49 §A.9: sigma_sd and onset_sd are epistemic (no predictive mechanism),
-  // while mu_sd and p.stdev are predictive. Mark epistemic ± with *.
-  const _epist = '*';
-  const _hasEpistFootnote = hasEdgeLat || hasPathLat;
-
+  // Doc 61: all reporting ± are epistemic (bare names) so there is no
+  // mixed-flavour surface to annotate. Footnote retired.
   const edgeLatRows = hasEdgeLat ? (
     <>
-      <Row label="onset" term="onset" value={`${fmt(lat!.onset_delta_days ?? lat!.onset_mean, 1)}d${lat!.onset_sd != null ? ` ± ${fmt(lat!.onset_sd, 1)}d${_epist}` : ''}`} />
+      <Row label="onset" term="onset" value={`${fmt(lat!.onset_delta_days ?? lat!.onset_mean, 1)}d${lat!.onset_sd != null ? ` ± ${fmt(lat!.onset_sd, 1)}d` : ''}`} />
       {lat!.onset_hdi_lower != null && <Row label="onset HDI" term="hdi" value={`${fmt(lat!.onset_hdi_lower, 1)}d — ${fmt(lat!.onset_hdi_upper, 1)}d`} />}
       <Row label="μ" term="mu" value={`${fmt(lat!.mu_mean, 3)} ± ${fmt(lat!.mu_sd, 3)}`} />
-      <Row label="σ" term="sigma" value={`${fmt(lat!.sigma_mean, 3)} ± ${fmt(lat!.sigma_sd, 3)}${_epist}`} />
+      <Row label="σ" term="sigma" value={`${fmt(lat!.sigma_mean, 3)} ± ${fmt(lat!.sigma_sd, 3)}`} />
       {lat!.hdi_t95_lower != null && <Row label="t95 HDI" term="t95-hdi" value={`${fmt(lat!.hdi_t95_lower, 1)}d — ${fmt(lat!.hdi_t95_upper, 1)}d`} />}
       {lat!.onset_mu_corr != null && <Row label="onset↔μ" term="onset-mu-corr" value={fmt(lat!.onset_mu_corr, 3)} />}
     </>
@@ -145,10 +139,10 @@ export function BayesPosteriorCard({ probability, latency, t95, pathT95, theme =
 
   const pathLatRows = hasPathLat ? (
     <>
-      <Row label="onset" term="onset" value={`${fmt(lat!.path_onset_delta_days, 1)}d${lat!.path_onset_sd != null ? ` ± ${fmt(lat!.path_onset_sd, 1)}d${_epist}` : ''}`} />
+      <Row label="onset" term="onset" value={`${fmt(lat!.path_onset_delta_days, 1)}d${lat!.path_onset_sd != null ? ` ± ${fmt(lat!.path_onset_sd, 1)}d` : ''}`} />
       {lat!.path_onset_hdi_lower != null && <Row label="onset HDI" term="hdi" value={`${fmt(lat!.path_onset_hdi_lower, 1)}d — ${fmt(lat!.path_onset_hdi_upper, 1)}d`} />}
       <Row label="μ" term="mu" value={`${fmt(lat!.path_mu_mean, 3)} ± ${fmt(lat!.path_mu_sd, 3)}`} />
-      <Row label="σ" term="sigma" value={`${fmt(lat!.path_sigma_mean, 3)} ± ${fmt(lat!.path_sigma_sd, 3)}${_epist}`} />
+      <Row label="σ" term="sigma" value={`${fmt(lat!.path_sigma_mean, 3)} ± ${fmt(lat!.path_sigma_sd, 3)}`} />
       {(lat as any)?.path_hdi_t95_lower != null && <Row label="t95 HDI" term="t95-hdi" value={`${fmt((lat as any).path_hdi_t95_lower, 1)}d — ${fmt((lat as any).path_hdi_t95_upper, 1)}d`} />}
       {(lat as any)?.path_onset_mu_corr != null && <Row label="onset↔μ" term="onset-mu-corr" value={fmt((lat as any).path_onset_mu_corr, 3)} />}
     </>
@@ -190,16 +184,6 @@ export function BayesPosteriorCard({ probability, latency, t95, pathT95, theme =
         )}
       </div>
       {footer}
-      {_hasEpistFootnote && (
-        <div style={{
-          fontSize: 9, lineHeight: '13px', color: 'var(--text-muted, #888)',
-          padding: '2px 0', fontStyle: 'italic',
-        }}
-        title="This &#177; reflects how precisely the model knows this parameter given the data it has seen. It does not include day-to-day variation (overdispersion). The probability and &#956; lines include observation-level variation."
-        >
-          * Epistemic — precision of the model&apos;s estimate
-        </div>
-      )}
       {(onResetPriors || onDeleteHistory) && (
         <div style={{
           display: 'flex', gap: 12, padding: '4px 0 2px',

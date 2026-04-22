@@ -24,12 +24,16 @@
  *
  *   2. `applyConditionedForecastToGraph` OVERWRITES
  *      `edge.p.latency.completeness` and `edge.p.latency.completeness_stdev`
- *      with CF's values — NOT "preserves existing" (which is the
- *      current behaviour and is wrong).
+ *      with CF's values.
  *
- *   3. End-to-end via `runStage2EnhancementsAndInboundN`:
+ *   3. The graph projection boundary remains explicit:
+ *      CF response evidence is available to direct-response consumers,
+ *      but `edge.p.evidence.*` stays on the topo-pass graph path.
+ *
+ *   4. End-to-end via `runStage2EnhancementsAndInboundN`:
  *      a. CF fast path: `completeness` on the edge is CF's value (not
- *         FE topo's CDF-derived value).
+ *         FE topo's CDF-derived value), while graph evidence stays on
+ *         the FE/topo writer path.
  *      b. CF slow path: after the subsequent-overwrite .then() fires,
  *         completeness reflects CF's value.
  *
@@ -37,8 +41,11 @@
  *   - `ConditionedForecastEdgeResult` gets `completeness?` and
  *     `completeness_sd?`.
  *   - `applyConditionedForecastToGraph` writes completeness authoritatively.
+ *   - `applyConditionedForecastToGraph` does NOT project CF evidence onto
+ *     the graph.
  *   - `mergeCfIntoFe` (inside `runStage2EnhancementsAndInboundN`) merges
- *     CF's completeness into the FE fast-path apply.
+ *     CF's completeness into the FE fast-path apply without turning CF
+ *     into the graph evidence writer.
  *
  * @vitest-environment node
  */
@@ -119,6 +126,11 @@ function latencyGraph(): any {
         p: {
           id: PARAM_ID,
           mean: 0.5,
+          evidence: {
+            n: 300,
+            k: 150,
+            mean: 0.5,
+          },
           latency: {
             latency_parameter: true,
             anchor_node_id: 'start',
@@ -290,7 +302,7 @@ describe('CF owns completeness (doc 45) — RED', () => {
     expect(edge.p.latency.completeness_stdev).not.toBeCloseTo(0.05, 5);
   });
 
-  it('applyConditionedForecastToGraph writes CF evidence onto edge.p.evidence', () => {
+  it('applyConditionedForecastToGraph preserves existing graph evidence instead of projecting CF evidence', () => {
     const graph = latencyGraph();
     const results: ConditionedForecastScenarioResult[] = [
       {
@@ -310,9 +322,9 @@ describe('CF owns completeness (doc 45) — RED', () => {
 
     const updated = applyConditionedForecastToGraph(graph, results);
     const edge = updated.edges.find((e: any) => (e.uuid || e.id) === EDGE_ID);
-    expect(edge.p.evidence.n).toBe(120);
-    expect(edge.p.evidence.k).toBe(48);
-    expect(edge.p.evidence.mean).toBeCloseTo(0.4, 5);
+    expect(edge.p.evidence.n).toBe(300);
+    expect(edge.p.evidence.k).toBe(150);
+    expect(edge.p.evidence.mean).toBeCloseTo(0.5, 5);
   });
 
   it('buildConditionedForecastGraphSnapshot engorges a clone without dirtying the live graph', () => {
@@ -361,9 +373,10 @@ describe('CF owns completeness (doc 45) — RED', () => {
     // CF's completeness (0.88) must win — FE's CDF-based value would
     // be whatever enhanceGraphLatencies computed, NOT 0.88.
     expect(edge.p.latency.completeness).toBeCloseTo(0.88, 5);
-    expect(edge.p.evidence.n).toBe(120);
-    expect(edge.p.evidence.k).toBe(48);
-    expect(edge.p.evidence.mean).toBeCloseTo(0.4, 5);
+    // Evidence stays on the topo/FE authority path; CF must not replace it.
+    expect(edge.p.evidence.n).toBe(300);
+    expect(edge.p.evidence.k).toBe(150);
+    expect(edge.p.evidence.mean).toBeCloseTo(0.5, 5);
   });
 
   it('CF slow path: edge completeness becomes CF value after subsequent-overwrite .then() fires', async () => {

@@ -54,6 +54,88 @@ export {
   buildCohortMaturityEChartsOption,
 } from './analysisECharts/cohortComparisonBuilders';
 
+function projectSurpriseGaugeResultForDisplay(
+  result: any,
+  settings: Record<string, any>,
+  visibleScenarioIds?: string[],
+): any {
+  const scenarioResults: any[] = Array.isArray(result?.scenario_results) && result.scenario_results.length > 0
+    ? result.scenario_results
+    : (Array.isArray(result?.variables) && result.variables.length > 0
+      ? [{
+          scenario_id: result?.focused_scenario_id || 'current',
+          variables: result.variables,
+          hint: result?.hint,
+        }]
+      : []);
+  if (scenarioResults.length === 0) return result;
+
+  const orderedScenarioResults = (() => {
+    if (!visibleScenarioIds || visibleScenarioIds.length === 0) return scenarioResults;
+    const byId = new Map(
+      scenarioResults.map((scenarioResult) => [String(scenarioResult.scenario_id), scenarioResult]),
+    );
+    const ordered = visibleScenarioIds
+      .map((scenarioId) => byId.get(String(scenarioId)))
+      .filter(Boolean) as any[];
+    const seen = new Set(ordered.map((scenarioResult) => String(scenarioResult.scenario_id)));
+    for (const scenarioResult of scenarioResults) {
+      const scenarioId = String(scenarioResult.scenario_id);
+      if (!seen.has(scenarioId)) ordered.push(scenarioResult);
+    }
+    return ordered;
+  })();
+
+  const selectedVar = settings.surprise_var || 'p';
+  const scenarioScope = settings.surprise_scenario_scope || 'focused';
+  const selectedScenarioResults = scenarioScope === 'all_visible'
+    ? orderedScenarioResults
+    : [orderedScenarioResults[orderedScenarioResults.length - 1]];
+  const selectedHints = Array.from(new Set(
+    selectedScenarioResults
+      .map((scenarioResult) => scenarioResult?.hint)
+      .filter((hint): hint is string => typeof hint === 'string' && hint.length > 0),
+  ));
+
+  const variables = selectedVar === 'all'
+    ? selectedScenarioResults.flatMap((scenarioResult) => {
+        const scenarioName = result?.dimension_values?.scenario_id?.[String(scenarioResult.scenario_id)]?.name
+          || scenarioResult.scenario_id;
+        return (scenarioResult.variables || [])
+          .filter((variable: any) => variable.available)
+          .map((variable: any) => ({
+            ...variable,
+            label: scenarioScope === 'all_visible'
+              ? `${scenarioName} — ${variable.label}`
+              : variable.label,
+          }));
+      })
+    : selectedScenarioResults.flatMap((scenarioResult) => {
+        const scenarioName = result?.dimension_values?.scenario_id?.[String(scenarioResult.scenario_id)]?.name
+          || scenarioResult.scenario_id;
+        const variable = (scenarioResult.variables || []).find((candidate: any) => (
+          candidate.available && candidate.name === selectedVar
+        ));
+        if (variable) {
+          return [{
+            ...variable,
+            label: scenarioScope === 'all_visible' ? scenarioName : variable.label,
+          }];
+        }
+        if (scenarioScope !== 'all_visible') {
+          return (scenarioResult.variables || []).filter((candidate: any) => candidate.available);
+        }
+        return [];
+      });
+
+  return {
+    ...result,
+    focused_scenario_id: selectedScenarioResults[selectedScenarioResults.length - 1]?.scenario_id || result?.focused_scenario_id,
+    variables,
+    hint: selectedHints.length === 1 ? selectedHints[0] : undefined,
+  };
+}
+
 // ─── Dispatcher ─────────────────────────────────────────────────────────────
 
 export function buildChartOption(
@@ -163,7 +245,18 @@ export function buildChartOption(
       break;
 
     case 'surprise_gauge':
-      opt = buildSurpriseGaugeEChartsOption(result, resolvedSettings);
+      {
+        const projectedResult = projectSurpriseGaugeResultForDisplay(
+          result,
+          resolvedSettings,
+          extra?.visibleScenarioIds,
+        );
+        const projectedSettings = resolvedSettings.surprise_scenario_scope === 'all_visible'
+          && (resolvedSettings.surprise_var || 'p') !== 'all'
+          ? { ...resolvedSettings, surprise_var: 'all' }
+          : resolvedSettings;
+        opt = buildSurpriseGaugeEChartsOption(projectedResult, projectedSettings);
+      }
       break;
 
     default:

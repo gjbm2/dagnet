@@ -12,13 +12,17 @@ Verifies:
 import pytest
 import sys
 import os
-import math
 
 import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from runner.span_kernel import compose_span_kernel, _shifted_lognormal_pdf, _edge_sub_probability_density
+from runner.span_kernel import (
+    _build_span_topology,
+    compose_span_kernel,
+    _shifted_lognormal_pdf,
+    _edge_sub_probability_density,
+)
 from runner.confidence_bands import _shifted_lognormal_cdf
 
 
@@ -58,6 +62,41 @@ def _make_graph(nodes: list[str], edges: list[dict]) -> dict:
     }
 
 
+def _build_prepared_edge_params(graph: dict) -> dict[tuple[str, str], tuple[float, float, float, float]]:
+    params: dict[tuple[str, str], tuple[float, float, float, float]] = {}
+    for edge in graph.get('edges', []):
+        from_id = edge.get('from_node', edge.get('from', ''))
+        to_id = edge.get('to', edge.get('to_node', ''))
+        p_data = edge.get('p', {})
+        latency = p_data.get('latency', {})
+        posterior = latency.get('posterior', {})
+        params[(from_id, to_id)] = (
+            float(p_data.get('forecast', {}).get('mean', p_data.get('value', 0.0)) or 0.0),
+            float(posterior.get('mu_mean', latency.get('mu', 0.0)) or 0.0),
+            float(posterior.get('sigma_mean', latency.get('sigma', 0.0)) or 0.0),
+            float(posterior.get('onset_delta_days', latency.get('onset_delta_days', 0.0)) or 0.0),
+        )
+    return params
+
+
+def _compose(
+    graph: dict,
+    x_node_id: str,
+    y_node_id: str,
+    *,
+    max_tau: int,
+    edge_params: dict[tuple[str, str], tuple[float, float, float, float]] | None = None,
+):
+    topo = _build_span_topology(graph, x_node_id, y_node_id)
+    if topo is None:
+        return None
+    return compose_span_kernel(
+        topo=topo,
+        edge_params=edge_params or _build_prepared_edge_params(graph),
+        max_tau=max_tau,
+    )
+
+
 class TestSingleEdge:
     """Single edge x→y must degenerate to p · CDF(τ)."""
 
@@ -65,7 +104,7 @@ class TestSingleEdge:
         p, mu, sigma, onset = 0.6, 2.0, 0.8, 3.0
         graph = _make_graph(['x', 'y'], [_make_edge('x', 'y', p, mu, sigma, onset)])
 
-        kernel = compose_span_kernel(graph, 'x', 'y', is_window=True, max_tau=200)
+        kernel = _compose(graph, 'x', 'y', max_tau=200)
 
         assert kernel is not None
         assert kernel.max_tau == 200
@@ -87,7 +126,7 @@ class TestSingleEdge:
         p, mu, sigma = 0.75, 1.5, 0.5
         graph = _make_graph(['x', 'y'], [_make_edge('x', 'y', p, mu, sigma)])
 
-        kernel = compose_span_kernel(graph, 'x', 'y', is_window=True, max_tau=300)
+        kernel = _compose(graph, 'x', 'y', max_tau=300)
 
         assert kernel is not None
         assert abs(kernel.span_p - p) < 0.02, f"span_p={kernel.span_p}, expected ~{p}"
@@ -106,7 +145,7 @@ class TestTwoEdgeChain:
             ],
         )
 
-        kernel = compose_span_kernel(graph, 'x', 'y', is_window=True, max_tau=400)
+        kernel = _compose(graph, 'x', 'y', max_tau=400)
 
         assert kernel is not None
         expected_p = p1 * p2
@@ -123,7 +162,7 @@ class TestTwoEdgeChain:
             ],
         )
 
-        kernel = compose_span_kernel(graph, 'x', 'y', is_window=True, max_tau=200)
+        kernel = _compose(graph, 'x', 'y', max_tau=200)
 
         assert kernel is not None
         assert kernel.cdf_at(0) == 0.0
@@ -144,8 +183,8 @@ class TestTwoEdgeChain:
             ],
         )
 
-        k_single = compose_span_kernel(single, 'x', 'y', is_window=True, max_tau=200)
-        k_chain = compose_span_kernel(chain, 'x', 'y', is_window=True, max_tau=200)
+        k_single = _compose(single, 'x', 'y', max_tau=200)
+        k_chain = _compose(chain, 'x', 'y', max_tau=200)
 
         # At early tau, chain should be below single (more latency)
         mid_tau = 20
@@ -168,7 +207,7 @@ class TestDiamond:
             ],
         )
 
-        kernel = compose_span_kernel(graph, 'x', 'y', is_window=True, max_tau=400)
+        kernel = _compose(graph, 'x', 'y', max_tau=400)
 
         assert kernel is not None
         expected_p = p_xb * p_by + p_xc * p_cy
@@ -188,7 +227,7 @@ class TestDiamond:
             ],
         )
 
-        kernel = compose_span_kernel(graph, 'x', 'y', is_window=True, max_tau=300)
+        kernel = _compose(graph, 'x', 'y', max_tau=300)
         route1_p = 0.5 * 0.6
         route2_p = 0.4 * 0.7
 
@@ -214,7 +253,7 @@ class TestDiamondPlusTail:
             ],
         )
 
-        kernel = compose_span_kernel(graph, 'x', 'y', is_window=True, max_tau=400)
+        kernel = _compose(graph, 'x', 'y', max_tau=400)
 
         expected_p = (p_xb * p_bd + p_xc * p_cd) * p_dy
         assert abs(kernel.span_p - expected_p) < 0.03, (
@@ -236,7 +275,7 @@ class TestLeakage:
             ],
         )
 
-        kernel = compose_span_kernel(graph, 'x', 'y', is_window=True, max_tau=300)
+        kernel = _compose(graph, 'x', 'y', max_tau=300)
 
         # b→z is not on x→y path, but b→y's p=0.6 absorbs leakage
         expected_p = 0.9 * 0.6
@@ -252,13 +291,57 @@ class TestNoPath:
             [_make_edge('x', 'z', 0.8, 1.0, 0.3)],
         )
 
-        kernel = compose_span_kernel(graph, 'x', 'y', is_window=True, max_tau=100)
+        kernel = _compose(graph, 'x', 'y', max_tau=100)
         assert kernel is None
 
     def test_same_node_returns_none(self):
         graph = _make_graph(['x'], [])
-        kernel = compose_span_kernel(graph, 'x', 'x', is_window=True, max_tau=100)
+        kernel = _compose(graph, 'x', 'x', max_tau=100)
         assert kernel is None
+
+
+class TestPreparedInputs:
+    """Kernel execution must follow prepared inputs, not raw edge fields."""
+
+    def test_kernel_uses_prepared_edge_params_only(self):
+        graph = _make_graph(['x', 'y'], [_make_edge('x', 'y', 0.85, 2.0, 0.6)])
+        override_params = {('x', 'y'): (0.2, 1.0, 0.3, 0.0)}
+
+        kernel = _compose(
+            graph,
+            'x',
+            'y',
+            max_tau=200,
+            edge_params=override_params,
+        )
+
+        assert kernel is not None
+        assert kernel.span_p == pytest.approx(0.2, abs=0.02)
+
+    def test_runtime_preparation_selects_temporal_family_before_kernel(self):
+        from runner.forecast_runtime import build_prepared_span_execution
+
+        graph = _make_graph(['x', 'y'], [_make_edge('x', 'y', 0.4, 2.0, 0.6)])
+        graph['edges'][0]['p']['posterior']['cohort_alpha'] = 80.0
+        graph['edges'][0]['p']['posterior']['cohort_beta'] = 20.0
+
+        window_execution = build_prepared_span_execution(
+            graph,
+            'x',
+            'y',
+            temporal_mode='window',
+        )
+        cohort_execution = build_prepared_span_execution(
+            graph,
+            'x',
+            'y',
+            temporal_mode='cohort',
+        )
+
+        assert window_execution is not None
+        assert cohort_execution is not None
+        assert window_execution.edge_params[('x', 'y')][0] == pytest.approx(0.4)
+        assert cohort_execution.edge_params[('x', 'y')][0] == pytest.approx(0.8)
 
 
 class TestPdfConsistency:

@@ -332,7 +332,309 @@ def _run_preflight(payload: dict) -> dict:
 # Main
 # ---------------------------------------------------------------------------
 
-def main():
+def _resolve_sidecar_fingerprint_inputs(graph_name, graph_path, data_repo_path, graph_data):
+    """Resolve the truth file and per-edge param files for a synth graph.
+
+    Truth: prefer bayes/truth/<graph>.truth.yaml (canonical), fall back
+    to the data repo's graphs/ dir. Param files: one per edge with a
+    param id, under <data_repo>/parameters/.
+
+    Returns (truth_path, [param_paths]). Raises FileNotFoundError if the
+    truth file cannot be located — sidecar fingerprinting requires it.
+    """
+    canonical = os.path.join(REPO_ROOT, "bayes", "truth", f"{graph_name}.truth.yaml")
+    datarepo_truth = os.path.join(data_repo_path, "graphs", f"{graph_name}.truth.yaml")
+    if os.path.isfile(canonical):
+        truth_path = canonical
+    elif os.path.isfile(datarepo_truth):
+        truth_path = datarepo_truth
+    else:
+        raise FileNotFoundError(
+            f"No truth file for {graph_name} (looked at {canonical} and {datarepo_truth})"
+        )
+
+    param_ids = []
+    for e in (graph_data or {}).get("edges", []):
+        pid = (e.get("p") or {}).get("id") or e.get("id")
+        if pid and pid not in param_ids:
+            param_ids.append(pid)
+    param_paths = [
+        os.path.join(data_repo_path, "parameters", f"{pid}.yaml")
+        for pid in param_ids
+    ]
+    # Silently drop missing files — fingerprint will still catch
+    # meaningful changes via truth + remaining params.
+    param_paths = [p for p in param_paths if os.path.isfile(p)]
+    return truth_path, param_paths
+
+
+def _beta_stdev(alpha, beta):
+    """Return stdev of Beta(alpha, beta), or None when invalid."""
+    try:
+        a = float(alpha)
+        b = float(beta)
+    except (TypeError, ValueError):
+        return None
+    if a <= 0 or b <= 0:
+        return None
+    total = a + b
+    return ((a * b) / ((total * total) * (total + 1.0))) ** 0.5
+
+
+def _lognormal_t95(mu, sigma, onset):
+    """Return the 95th percentile of a shifted lognormal latency:
+    exp(mu + 1.645*sigma) + onset. Matches bayesPatchService.ts t95
+    formula exactly so sidecar output is byte-equivalent to the
+    apply-patch graph writer."""
+    import math
+    if mu is None or sigma is None:
+        return None
+    try:
+        m = float(mu)
+        s = float(sigma)
+        o = float(onset) if onset is not None else 0.0
+    except (TypeError, ValueError):
+        return None
+    return math.exp(m + 1.645 * s) + o
+
+
+def _webhook_entry_to_bayes_entry(webhook_edge, fitted_at):
+    """Translate a single webhook_payload_edges entry into the sidecar's
+    bayesian model_var shape: {source, source_at, probability, latency,
+    quality?}.
+
+    Python equivalent of the TypeScript block in
+    graph-editor/src/services/bayesPatchService.ts applyPatch() that
+    builds `bayesEntry`. Keeping them aligned is critical — the sidecar
+    pipeline and the FE CLI apply-patch pipeline must produce
+    byte-equivalent model_vars so v2/v3 handlers see the same numbers
+    regardless of which writer ran.
+    """
+    slices = webhook_edge.get("slices") or {}
+    window = slices.get("window()") or {} if isinstance(slices, dict) else {}
+    cohort = slices.get("cohort()") or {} if isinstance(slices, dict) else {}
+
+    probability = {}
+    if window and "alpha" in window and "beta" in window:
+        alpha = float(window["alpha"])
+        beta = float(window["beta"])
+        if alpha > 0 and beta > 0:
+            probability["mean"] = alpha / (alpha + beta)
+            disp_alpha = window.get("alpha_pred", alpha)
+            disp_beta = window.get("beta_pred", beta)
+            stdev = _beta_stdev(disp_alpha, disp_beta)
+            probability["stdev"] = stdev if stdev is not None else 0.0
+
+    latency = {}
+    if window and window.get("mu_mean") is not None:
+        mu_mean = window["mu_mean"]
+        sigma_mean = window.get("sigma_mean")
+        onset_mean = window.get("onset_mean")
+        latency["mu"] = mu_mean
+        if sigma_mean is not None:
+            latency["sigma"] = sigma_mean
+        t95 = _lognormal_t95(mu_mean, sigma_mean, onset_mean)
+        if t95 is not None:
+            latency["t95"] = t95
+        latency["onset_delta_days"] = onset_mean if onset_mean is not None else 0.0
+        for k in ("mu_sd", "mu_sd_pred", "sigma_sd",
+                  "onset_sd", "onset_mu_corr"):
+            if k in window and window[k] is not None:
+                latency[k] = window[k]
+
+        if cohort and cohort.get("mu_mean") is not None:
+            c_mu = cohort["mu_mean"]
+            c_sigma = cohort.get("sigma_mean")
+            c_onset = cohort.get("onset_mean", 0.0) or 0.0
+            latency["path_mu"] = c_mu
+            if c_sigma is not None:
+                latency["path_sigma"] = c_sigma
+            path_t95 = _lognormal_t95(c_mu, c_sigma, c_onset)
+            if path_t95 is not None:
+                latency["path_t95"] = path_t95
+            latency["path_onset_delta_days"] = c_onset
+            for src, dst in (("mu_sd", "path_mu_sd"),
+                             ("mu_sd_pred", "path_mu_sd_pred"),
+                             ("sigma_sd", "path_sigma_sd"),
+                             ("onset_sd", "path_onset_sd")):
+                if src in cohort and cohort[src] is not None:
+                    latency[dst] = cohort[src]
+
+    # Explicit blocks on the webhook entry (legacy / unit-test shapes)
+    # override slice-derived values.
+    if "latency" in webhook_edge and webhook_edge["latency"]:
+        latency = dict(webhook_edge["latency"])
+    if "probability" in webhook_edge and webhook_edge["probability"]:
+        probability = dict(webhook_edge["probability"])
+
+    entry = {
+        "source": "bayesian",
+        "source_at": fitted_at or "",
+        "probability": probability,
+        "latency": latency,
+    }
+    if "quality" in webhook_edge:
+        entry["quality"] = webhook_edge["quality"]
+    if "param_id" in webhook_edge:
+        entry["param_id"] = webhook_edge["param_id"]
+    return entry
+
+
+def _map_webhook_to_edge_uuids(webhook_edges, graph_data):
+    """Return {edge_uuid: webhook_edge} by matching `param_id` in each
+    webhook entry to `edge.p.id` (or `edge.id`) in the graph.
+
+    Worker output is keyed by param_id since parameters can be reused
+    across edges; the sidecar is keyed by edge UUID so injection into a
+    loaded graph can look up by `edge.uuid` without a second pass.
+    """
+    param_to_uuids: dict[str, list[str]] = {}
+    for e in (graph_data or {}).get("edges", []):
+        uid = e.get("uuid")
+        pid = (e.get("p") or {}).get("id") or e.get("id")
+        if uid and pid:
+            param_to_uuids.setdefault(pid, []).append(uid)
+
+    out = {}
+    for we in webhook_edges:
+        pid = we.get("param_id")
+        if not pid:
+            continue
+        for uid in param_to_uuids.get(pid, []):
+            out[uid] = we
+    return out
+
+
+def _write_bayes_sidecar_from_result(result, sidecar_path, fingerprint,
+                                     graph_data=None):
+    """Transform the harness's webhook_payload_edges into a bayesian
+    sidecar file at `sidecar_path`, stamped with `fingerprint`.
+
+    Raises when the result has no posteriors, or when none of them can
+    be mapped onto the graph's edges — callers must detect MCMC failure
+    rather than cache an empty sidecar as 'fresh'.
+
+    graph_data: the graph dict, used to map webhook_edges[].param_id →
+    edge.uuid. Can be omitted only when the webhook edges already carry
+    an explicit `edge_uuid` field (legacy / unit-test shape).
+    """
+    from bayes.sidecar import save_sidecar
+
+    webhook_edges = (result or {}).get("webhook_payload_edges") or []
+    if not webhook_edges:
+        raise ValueError("MCMC result has no webhook_payload_edges — refusing "
+                         "to write an empty bayesian sidecar")
+
+    fitted_at = result.get("fitted_at", "")
+    edges: dict = {}
+
+    if graph_data is not None:
+        uid_to_webhook = _map_webhook_to_edge_uuids(webhook_edges, graph_data)
+        for uid, we in uid_to_webhook.items():
+            edges[uid] = _webhook_entry_to_bayes_entry(we, fitted_at)
+
+    # Fallback: webhook entry already carries edge_uuid (tests, older shapes).
+    for we in webhook_edges:
+        eid = we.get("edge_uuid")
+        if eid and eid not in edges:
+            edges[eid] = _webhook_entry_to_bayes_entry(we, fitted_at)
+
+    if not edges:
+        raise RuntimeError(
+            "No webhook_payload_edges could be mapped to graph edges — "
+            "cannot write sidecar (param_id ↔ edge.p.id mismatch?)"
+        )
+
+    save_sidecar(sidecar_path, fingerprint, edges)
+
+
+def _apply_patch_to_graph(result, graph_path, graph_name):
+    """Invoke the FE CLI --apply-patch to write bayesian posteriors into
+    the on-disk graph JSON. Mirrors the legacy behaviour of --enrich
+    when --sidecar-out is not supplied.
+    """
+    import tempfile
+
+    webhook_edges = (result or {}).get("webhook_payload_edges") or []
+    patch_file_data = {
+        "webhook_payload_edges": webhook_edges,
+        "job_id": result.get("job_id", f"harness-enrich-{int(time.time())}"),
+        "fitted_at": result.get("fitted_at", ""),
+        "fingerprint": result.get("fingerprint", ""),
+        "model_version": result.get("model_version", 1),
+        "quality": result.get("quality", {}),
+        "skipped": result.get("skipped", []),
+    }
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+        json.dump(patch_file_data, f)
+        enrich_patch_path = f.name
+
+    enrich_graph_dir = os.path.dirname(os.path.dirname(graph_path))
+    nvm_prefix = (
+        f'export NVM_DIR="${{NVM_DIR:-$HOME/.nvm}}" && '
+        f'. "$NVM_DIR/nvm.sh" 2>/dev/null; '
+        f'cd {os.path.join(REPO_ROOT, "graph-editor")} && '
+        f'nvm use "$(cat .nvmrc)" 2>/dev/null; '
+    )
+    tsx_cmd = (
+        f'{nvm_prefix}'
+        f'npx tsx src/cli/bayes.ts '
+        f'--graph {enrich_graph_dir} --name {graph_name} '
+        f'--apply-patch {enrich_patch_path} --no-cache'
+    )
+    try:
+        enrich_result = subprocess.run(
+            ["bash", "-c", tsx_cmd],
+            capture_output=True, text=True, timeout=60,
+            cwd=REPO_ROOT,
+        )
+        if enrich_result.returncode == 0:
+            stdout = enrich_result.stdout
+            json_start = stdout.find('{')
+            if json_start >= 0:
+                summary = json.loads(stdout[json_start:])
+                print(f"  --enrich: {summary.get('edges_updated', '?')} edges enriched on disk")
+                for e in summary.get("edges", []):
+                    print(f"    {e['param_id']}: mu={e.get('promoted_mu')}, "
+                          f"sigma={e.get('promoted_sigma')}, t95={e.get('promoted_t95')}")
+            else:
+                print("  --enrich: CLI completed (no JSON summary)")
+        else:
+            print(f"  --enrich: CLI failed (exit {enrich_result.returncode})")
+            if enrich_result.stderr:
+                print(f"  stderr: {enrich_result.stderr[-1000:]}")
+    except subprocess.TimeoutExpired:
+        print("  --enrich: CLI timed out (60s)")
+    finally:
+        os.unlink(enrich_patch_path)
+
+
+def _dispatch_enrichment_write(args, result, graph_path, graph_name,
+                               fingerprint, graph_data=None):
+    """Route the post-MCMC write. When --sidecar-out is supplied, write
+    the bayesian sidecar (test-fixture path, no graph mutation). Otherwise
+    apply-patch to the graph file (production path).
+
+    Failures from the sidecar writer propagate — a silent success with an
+    empty sidecar would let callers cache a 'fresh' verdict for a broken
+    run and downstream tests would execute against the wrong graph.
+
+    graph_data: optional — used to map webhook param_id → edge UUID when
+    writing the sidecar. Omit only for test paths that supply webhook
+    entries with explicit edge_uuid.
+    """
+    sidecar_out = getattr(args, "sidecar_out", None)
+    if sidecar_out:
+        _write_bayes_sidecar_from_result(
+            result, sidecar_out, fingerprint, graph_data=graph_data
+        )
+        return
+    _apply_patch_to_graph(result, graph_path, graph_name)
+
+
+def _build_arg_parser():
+    """Construct the argparse parser. Extracted from main() so tests can
+    exercise flag parsing without side effects."""
     parser = argparse.ArgumentParser(description="Bayes test harness")
     parser.add_argument("--placeholder", action="store_true", help="Use placeholder mode (skip MCMC)")
     parser.add_argument("--no-webhook", action="store_true", help="Skip webhook call")
@@ -420,6 +722,15 @@ def main():
                              "derived priors instead of warm-starting from previous fit.")
     # Keep --clean-pyc as hidden alias for backwards compat
     parser.add_argument("--clean-pyc", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--sidecar-out", type=str, default=None, metavar="PATH",
+                        help="When set with --enrich, write bayesian model_vars to this "
+                             "JSON sidecar file instead of patching the graph. Used by "
+                             "the test-fixture cache to avoid graph-file clobber.")
+    return parser
+
+
+def main():
+    parser = _build_arg_parser()
     args = parser.parse_args()
     if args.clean_pyc:
         args.clean = True
@@ -1111,69 +1422,29 @@ def main():
                     "_job_id": f"harness-warmstart-{int(time.time())}"}
         result = _run_once(payload2, label="pass 2 (warm-started)")
 
-    # --- Enrich graph on disk (--enrich) ---
+    # --- Enrich graph on disk OR write sidecar (--enrich) ---
     if args.enrich:
         webhook_edges = result.get("webhook_payload_edges", [])
         if not webhook_edges:
             _print("\n  --enrich: no webhook_payload_edges in result — skipping")
         else:
-            _print(f"\n  --enrich: applying {len(webhook_edges)} edge posteriors to graph on disk...")
-            import tempfile
-            patch_file_data = {
-                "webhook_payload_edges": webhook_edges,
-                "job_id": result.get("job_id", f"harness-enrich-{int(time.time())}"),
-                "fitted_at": result.get("fitted_at", ""),
-                "fingerprint": result.get("fingerprint", ""),
-                "model_version": result.get("model_version", 1),
-                "quality": result.get("quality", {}),
-                "skipped": result.get("skipped", []),
-            }
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
-                json.dump(patch_file_data, f)
-                enrich_patch_path = f.name
-
-            # Derive graph_dir from graph_path: parent of "graphs/"
-            enrich_graph_dir = os.path.dirname(os.path.dirname(graph_path))
-
-            # Shell out to FE CLI --apply-patch
-            nvm_prefix = (
-                f'export NVM_DIR="${{NVM_DIR:-$HOME/.nvm}}" && '
-                f'. "$NVM_DIR/nvm.sh" 2>/dev/null; '
-                f'cd {os.path.join(REPO_ROOT, "graph-editor")} && '
-                f'nvm use "$(cat .nvmrc)" 2>/dev/null; '
-            )
-            tsx_cmd = (
-                f'{nvm_prefix}'
-                f'npx tsx src/cli/bayes.ts '
-                f'--graph {enrich_graph_dir} --name {graph_name} '
-                f'--apply-patch {enrich_patch_path} --no-cache'
-            )
-            try:
-                enrich_result = subprocess.run(
-                    ["bash", "-c", tsx_cmd],
-                    capture_output=True, text=True, timeout=60,
-                    cwd=REPO_ROOT,
+            fingerprint = None
+            if args.sidecar_out:
+                truth_path, param_paths = _resolve_sidecar_fingerprint_inputs(
+                    graph_name, graph_path, data_repo_path, graph,
                 )
-                if enrich_result.returncode == 0:
-                    # Parse summary from stdout
-                    stdout = enrich_result.stdout
-                    json_start = stdout.find('{')
-                    if json_start >= 0:
-                        summary = json.loads(stdout[json_start:])
-                        _print(f"  --enrich: {summary.get('edges_updated', '?')} edges enriched on disk")
-                        for e in summary.get("edges", []):
-                            _print(f"    {e['param_id']}: mu={e.get('promoted_mu')}, "
-                                   f"sigma={e.get('promoted_sigma')}, t95={e.get('promoted_t95')}")
-                    else:
-                        _print(f"  --enrich: CLI completed (no JSON summary)")
-                else:
-                    _print(f"  --enrich: CLI failed (exit {enrich_result.returncode})")
-                    if enrich_result.stderr:
-                        _print(f"  stderr: {enrich_result.stderr[-1000:]}")
-            except subprocess.TimeoutExpired:
-                _print("  --enrich: CLI timed out (60s)")
-            finally:
-                os.unlink(enrich_patch_path)
+                from bayes.sidecar import compute_fingerprint
+                fingerprint = compute_fingerprint(truth_path, param_paths)
+                _print(f"\n  --enrich: writing bayesian sidecar → {args.sidecar_out} "
+                       f"({len(webhook_edges)} edges)")
+            else:
+                _print(f"\n  --enrich: applying {len(webhook_edges)} edge posteriors to graph on disk...")
+            _dispatch_enrichment_write(
+                args=args, result=result,
+                graph_path=graph_path, graph_name=graph_name,
+                fingerprint=fingerprint,
+                graph_data=graph,
+            )
 
     # --- Print results ---
     _print(f"\n{'=' * 60}")

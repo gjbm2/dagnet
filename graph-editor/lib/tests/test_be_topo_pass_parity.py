@@ -1,5 +1,5 @@
 """
-Phase 2/3 parity gate: BE topo pass completeness vs v2 annotate_rows.
+BE topo pass bounded-analytic contract.
 
 Uses the enriched synth graph (synth-simple-abc) with Bayesian
 model_vars, not the prod graph. Requires DB_CONNECTION (synth data
@@ -7,10 +7,10 @@ in the snapshot DB from synth_gen.py).
 
 Tests:
 1. Window-mode: topo pass completeness matches v2 annotation
-2. Cohort-mode: topo pass ForecastState matches v2 annotation
-3. ForecastState fields present
-4. completeness_stdev non-zero for edges with dispersions
-5. Response summary includes timing
+2. Response exposes analytic fallback fields without a forecast_state payload
+3. Response does not expose conditioned-only completeness uncertainty
+4. Summary stays on analytic counters only
+5. Scoped cohorts still control query-authored completeness
 """
 
 import json
@@ -168,58 +168,9 @@ class TestTopoPassVsV2Completeness:
             f"Completeness parity failed: topo={tp_completeness:.4f} " \
             f"v2={v2_completeness:.4f} delta={abs(tp_completeness - v2_completeness):.4f} (>0.5%)"
 
-    def test_completeness_stdev_present(self):
-        """Edges with latency dispersions have non-zero stdev."""
-        graph = _load_graph()
-        all_hashes = _get_all_core_hashes(graph)
-
-        target = None
-        for edge in graph['edges']:
-            lat = edge.get('p', {}).get('latency', {})
-            if lat.get('mu') and edge['uuid'] in all_hashes:
-                target = edge
-                break
-        assert target is not None
-
-        from api_handlers import handle_stats_topo_pass
-
-        tp_result = handle_stats_topo_pass({
-            'graph': graph,
-            'cohort_data': {target['uuid']: [
-                {'date': '2026-03-01', 'age': 42, 'n': 100, 'k': 50},
-            ]},
-            'edge_contexts': {},
-            'forecasting_settings': None,
-            'query_mode': 'none',
-        })
-
-        for er in tp_result['edges']:
-            if er['edge_uuid'] == target['uuid']:
-                assert er.get('completeness_stdev') is not None, \
-                    'completeness_stdev missing'
-                assert er['completeness_stdev'] >= 0, \
-                    f"completeness_stdev negative: {er['completeness_stdev']}"
-                # Edge has Bayesian posteriors with SDs, so stdev
-                # should be non-zero
-                lat = target.get('p', {}).get('latency', {})
-                has_sds = (
-                    lat.get('promoted_mu_sd')
-                    or lat.get('posterior', {}).get('mu_sd')
-                )
-                if has_sds:
-                    assert er['completeness_stdev'] > 0, \
-                        'Edge has dispersions but completeness_stdev=0'
-                break
-
-    # NOTE: cohort-mode handler-level parity test removed.
-    # The Phase 3 cohort parity is now covered by
-    # TestPhase3ParityEnrichedSynth in test_forecast_state_cohort.py
-    # (5 tests, exercises engine functions directly on enriched
-    # synth-simple-abc, no handler/DB dependency).
-
-    def test_engine_fields_in_topo_pass_response(self):
-        """Topo pass response writes engine values to existing fields
-        (doc 29 §Schema Change). No separate forecast_state object.
+    def test_bounded_response_omits_completeness_stdev(self):
+        """Bounded analytic topo pass does not emit CF-style completeness
+        uncertainty. That scalar belongs to the conditioned forecast pass.
         """
         graph = _load_graph()
         all_hashes = _get_all_core_hashes(graph)
@@ -233,6 +184,7 @@ class TestTopoPassVsV2Completeness:
         assert target is not None
 
         from api_handlers import handle_stats_topo_pass
+
         tp_result = handle_stats_topo_pass({
             'graph': graph,
             'cohort_data': {target['uuid']: [
@@ -245,22 +197,59 @@ class TestTopoPassVsV2Completeness:
 
         for er in tp_result['edges']:
             if er['edge_uuid'] == target['uuid']:
-                # Engine values written to existing flat fields
+                assert 'completeness_stdev' not in er, (
+                    'Bounded topo pass should not emit completeness_stdev; '
+                    'that conditioned uncertainty belongs to CF.'
+                )
+                break
+
+    # NOTE: cohort-mode handler-level parity test removed.
+    # The Phase 3 cohort parity is now covered by
+    # TestPhase3ParityEnrichedSynth in test_forecast_state_cohort.py
+    # (5 tests, exercises engine functions directly on enriched
+    # synth-simple-abc, no handler/DB dependency).
+
+    def test_analytic_fields_in_topo_pass_response(self):
+        """Topo pass response writes analytic fallback fields only."""
+        graph = _load_graph()
+        all_hashes = _get_all_core_hashes(graph)
+
+        target = None
+        for edge in graph['edges']:
+            lat = edge.get('p', {}).get('latency', {})
+            if lat.get('mu') and edge['uuid'] in all_hashes:
+                target = edge
+                break
+        assert target is not None
+
+        from api_handlers import handle_stats_topo_pass
+        tp_result = handle_stats_topo_pass({
+            'graph': graph,
+            'cohort_data': {target['uuid']: [
+                {'date': '2026-03-01', 'age': 42, 'n': 100, 'k': 50},
+            ]},
+            'edge_contexts': {},
+            'forecasting_settings': None,
+            'query_mode': 'none',
+        })
+
+        for er in tp_result['edges']:
+            if er['edge_uuid'] == target['uuid']:
+                # Analytic fallback values written to existing flat fields
                 assert 'completeness' in er
                 assert er['completeness'] is not None
-                assert 'completeness_stdev' in er
                 assert 'blended_mean' in er
                 assert 'p_sd' in er
-                # No separate forecast_state object (doc 29)
+                assert 'completeness_stdev' not in er
+                # No separate forecast_state object or tail metadata.
                 assert 'forecast_state' not in er, \
                     'forecast_state should not be in response — engine writes to existing fields'
-                print(f"\nEngine fields: completeness={er['completeness']:.4f}, "
-                      f"stdev={er['completeness_stdev']}, "
+                print(f"\nAnalytic fields: completeness={er['completeness']:.4f}, "
                       f"blended={er['blended_mean']}, p_sd={er['p_sd']}")
                 break
 
-    def test_summary_timing(self):
-        """Response summary includes timing."""
+    def test_summary_exposes_only_analytic_counters(self):
+        """Response summary stays on analytic topo counters only."""
         graph = _load_graph()
 
         from api_handlers import handle_stats_topo_pass
@@ -273,17 +262,18 @@ class TestTopoPassVsV2Completeness:
             'query_mode': 'none',
         })
 
-        assert 'forecast_state_count' in result['summary']
-        assert 'forecast_state_ms' in result['summary']
+        assert 'edges_processed' in result['summary']
+        assert 'edges_with_lag' in result['summary']
+        assert 'forecast_state_count' not in result['summary']
+        assert 'forecast_state_ms' not in result['summary']
 
-    def test_engine_uses_scoped_cohorts_over_raw(self):
-        """When edge_contexts provides scoped_cohorts, the engine uses
-        them instead of raw cohort_data for IS conditioning. Review
-        finding #7.
+    def test_analytic_path_uses_scoped_cohorts_over_raw(self):
+        """When edge_contexts provides scoped_cohorts, the analytic path uses
+        them instead of raw cohort_data for query-authored completeness.
 
         Scenario: raw cohort_data has a young cohort (age=5, low
         completeness) and a mature cohort (age=200, high completeness).
-        scoped_cohorts has only the mature cohort. If the engine uses
+        scoped_cohorts has only the mature cohort. If the analytic path uses
         scoped_cohorts, the n-weighted completeness will be high
         (mature only). If it uses raw, the young cohort drags it down.
 
@@ -363,4 +353,4 @@ class TestTopoPassVsV2Completeness:
         print(f"  completeness (raw, young+mature):   {c_raw:.4f}")
         assert c_scoped > c_raw, \
             f"Scoped completeness ({c_scoped:.4f}) should be > raw ({c_raw:.4f}). " \
-            f"Engine may not be using scoped_cohorts."
+            f"Analytic path may not be using scoped_cohorts."

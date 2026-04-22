@@ -340,11 +340,19 @@ hold a hardcoded list, switch, or union. A follow-up proposal covers:
 - **BE dispatch table** — replace the chain of `elif analysis_type == 'X':`
   in `api_handlers.py` with a dict `{analysis_type: derivation_fn}` and a
   standard signature.
+- **Shared forecast-consumer family layer** — registry dedup alone is not
+  enough for forecast-backed analyses. `cohort_maturity_v3`,
+  `daily_conversions`, `surprise_gauge`, and similar consumers should
+  share subject preparation, temporal-mode semantics, regime selection,
+  and display-projection rules rather than rebuilding those concerns per
+  chart.
 - **Time-series ECharts builder factory** — share time axis + crosshair
   + legend + theming + size-scaling across time-series builders; each
   builder only plugs in its series-generation logic.
 
-These are described in [refactor proposal, TBD filename]. The refactor
-is bounded — no semantic changes, just collapsing boilerplate. ETA
-estimate: 2-3 days for the registry + normaliser factory, which
-addresses ~70% of the pain.
+These are described in
+[analysis-types-refactor-proposal.md](../analysis-types-refactor-proposal.md).
+The registry + normaliser work remains the fastest path to removing
+most of the boilerplate, but the proposal now also covers the deeper
+forecast-consumer generalisation work that the surprise-gauge rework
+surfaced.

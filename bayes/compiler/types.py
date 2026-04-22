@@ -697,7 +697,7 @@ class LatencyPosteriorSummary:
     becomes the posterior mean; the HDI and SD give uncertainty.
     """
     mu_mean: float
-    mu_sd: float                      # predictive when kappa_lat exists (doc 49 §A.6.2)
+    mu_sd: float                      # epistemic (posterior SD of μ from MCMC trace) — doc 61
     sigma_mean: float
     sigma_sd: float                   # epistemic (posterior SD, no predictive mechanism)
     onset_delta_days: float
@@ -708,9 +708,11 @@ class LatencyPosteriorSummary:
     rhat: float = 0.0
     provenance: str = "point-estimate"
 
-    # Epistemic mu_sd — always np.std(mu_samples) from the MCMC trace,
-    # before any kappa_lat predictive overwrite. See doc 49 §A.6.2.
-    mu_sd_epist: float | None = None
+    # Predictive mu_sd — kappa_lat-inflated via _predictive_mu_sd() when
+    # kappa_lat is fitted. None when kappa_lat is absent (consumers fall
+    # back to bare mu_sd, which equals the predictive dispersion in that
+    # case). See doc 61 for the naming convention.
+    mu_sd_pred: float | None = None
 
     # Edge-level onset posterior (Phase D.O) — None when onset is fixed
     onset_mean: float | None = None
@@ -725,8 +727,8 @@ class LatencyPosteriorSummary:
     path_onset_hdi_lower: float | None = None
     path_onset_hdi_upper: float | None = None
     path_mu_mean: float | None = None
-    path_mu_sd: float | None = None
-    path_mu_sd_epist: float | None = None   # epistemic path mu_sd (doc 49)
+    path_mu_sd: float | None = None           # epistemic (posterior SD) — doc 61
+    path_mu_sd_pred: float | None = None      # predictive; None in current model (no path-level kappa_lat)
     path_sigma_mean: float | None = None
     path_sigma_sd: float | None = None
     path_hdi_t95_lower: float | None = None
@@ -757,8 +759,8 @@ class LatencyPosteriorSummary:
         """
         result = {
             "mu_mean": round(self.mu_mean, 4),
-            "mu_sd": round(self.mu_sd, 4),                # predictive when kappa_lat
-            "mu_sd_epist": round(self.mu_sd_epist, 4) if self.mu_sd_epist is not None else None,
+            "mu_sd": round(self.mu_sd, 4),                # epistemic (doc 61)
+            "mu_sd_pred": round(self.mu_sd_pred, 4) if self.mu_sd_pred is not None else None,
             "sigma_mean": round(self.sigma_mean, 4),
             "sigma_sd": round(self.sigma_sd, 4),
             "onset_delta_days": round(self.onset_delta_days, 2),
@@ -785,7 +787,7 @@ class LatencyPosteriorSummary:
             result["path_onset_hdi_upper"] = round(self.path_onset_hdi_upper, 2) if self.path_onset_hdi_upper is not None else None
             result["path_mu_mean"] = round(self.path_mu_mean, 4)
             result["path_mu_sd"] = round(self.path_mu_sd, 4) if self.path_mu_sd is not None else None
-            result["path_mu_sd_epist"] = round(self.path_mu_sd_epist, 4) if self.path_mu_sd_epist is not None else None
+            result["path_mu_sd_pred"] = round(self.path_mu_sd_pred, 4) if self.path_mu_sd_pred is not None else None
             result["path_sigma_mean"] = round(self.path_sigma_mean, 4) if self.path_sigma_mean is not None else None
             result["path_sigma_sd"] = round(self.path_sigma_sd, 4) if self.path_sigma_sd is not None else None
             result["path_hdi_t95_lower"] = round(self.path_hdi_t95_lower, 1) if self.path_hdi_t95_lower is not None else None

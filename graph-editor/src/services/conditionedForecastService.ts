@@ -31,6 +31,9 @@ export interface ConditionedForecastEdgeResult {
   p_sd_epistemic?: number | null;
   completeness?: number | null;
   completeness_sd?: number | null;
+  // Direct-response consumers (for example the funnel runner) may use
+  // these counts from the CF payload, but the graph projection keeps
+  // `edge.p.evidence.*` under the topo-pass evidence authority.
   evidence_k?: number | null;
   evidence_n?: number | null;
   conditioning?: {
@@ -196,11 +199,6 @@ export function applyConditionedForecastToGraph(
     };
     blendedMean?: number;
     forecast?: { mean?: number };
-    evidence?: {
-      mean?: number;
-      n?: number;
-      k?: number;
-    };
   }> = [];
 
   for (const scenario of results) {
@@ -226,19 +224,6 @@ export function applyConditionedForecastToGraph(
         edge.completeness_sd != null && Number.isFinite(edge.completeness_sd)
           ? edge.completeness_sd as number
           : lat.completeness_stdev;
-      const evidenceN =
-        edge.evidence_n != null && Number.isFinite(Number(edge.evidence_n))
-          ? Number(edge.evidence_n)
-          : undefined;
-      const evidenceK =
-        edge.evidence_k != null && Number.isFinite(Number(edge.evidence_k))
-          ? Number(edge.evidence_k)
-          : undefined;
-      const evidenceMean =
-        evidenceN != null && evidenceN > 0 && evidenceK != null
-          ? evidenceK / evidenceN
-          : undefined;
-
       edgeUpdates.push({
         edgeId: edge.edge_uuid,
         latency: {
@@ -251,24 +236,13 @@ export function applyConditionedForecastToGraph(
         },
         blendedMean: edge.p_mean,
         forecast: { mean: edge.p_mean },
-        ...(
-          evidenceN != null || evidenceK != null || evidenceMean != null
-            ? {
-                evidence: {
-                  ...(evidenceMean != null ? { mean: evidenceMean } : {}),
-                  ...(evidenceN != null ? { n: evidenceN } : {}),
-                  ...(evidenceK != null ? { k: evidenceK } : {}),
-                },
-              }
-            : {}
-        ),
       });
 
       console.log(
         `[conditionedForecast] ${edge.edge_uuid.slice(0, 12)}: `
         + `p.mean=${edge.p_mean.toFixed(4)} `
         + `completeness=${completenessFromCf != null ? completenessFromCf.toFixed(4) : '—'} `
-        + `evidence=${evidenceK ?? '—'}/${evidenceN ?? '—'}`
+        + `response_evidence=${edge.evidence_k ?? '—'}/${edge.evidence_n ?? '—'}`
       );
     }
   }

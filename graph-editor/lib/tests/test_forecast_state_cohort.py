@@ -12,6 +12,7 @@ and compute_forecast_state_window which are retired. Parity is now
 tested via v2-v3-parity-test.sh (CLI) and test_v2_v3_parity.py.
 """
 
+import copy
 import math
 import os
 import sys
@@ -73,6 +74,65 @@ def _make_synth_graph(edges):
         'nodes': list(node_set.values()),
         'edges': edge_list,
     }
+
+
+class TestForecastRuntimeIngressOrdering:
+    """WP6 guard: ingress preparation must ignore incidental edge order."""
+
+    @staticmethod
+    def _make_fan_in_graph():
+        return _make_synth_graph([
+            ('e-a-c', 'u-a', 'u-c', 'A', 'C', 0.35, 1.1, 0.25, 0.0),
+            ('e-b-c', 'u-b', 'u-c', 'B', 'C', 0.65, 1.6, 0.35, 0.0),
+            ('e-c-d', 'u-c', 'u-d', 'C', 'D', 0.5, 2.0, 0.45, 0.0),
+        ])
+
+    def test_get_incoming_edges_is_stable_under_edge_reorder(self):
+        from runner.forecast_runtime import get_incoming_edges
+
+        graph = self._make_fan_in_graph()
+        reordered = copy.deepcopy(graph)
+        reordered['edges'] = list(reversed(reordered['edges']))
+
+        baseline = [edge['uuid'] for edge in get_incoming_edges(graph, 'C')]
+        reversed_order = [edge['uuid'] for edge in get_incoming_edges(reordered, 'C')]
+
+        assert baseline == ['e-a-c', 'e-b-c']
+        assert reversed_order == baseline
+
+    def test_x_provider_upstream_params_are_stable_under_edge_reorder(self):
+        from runner.forecast_runtime import (
+            build_x_provider_from_graph,
+            find_edge_by_id,
+        )
+
+        graph = self._make_fan_in_graph()
+        reordered = copy.deepcopy(graph)
+        reordered['edges'] = list(reversed(reordered['edges']))
+
+        baseline = build_x_provider_from_graph(
+            graph,
+            find_edge_by_id(graph, 'e-c-d'),
+            anchor_node_id='A',
+            is_window=False,
+        )
+        reversed_order = build_x_provider_from_graph(
+            reordered,
+            find_edge_by_id(reordered, 'e-c-d'),
+            anchor_node_id='A',
+            is_window=False,
+        )
+
+        def _project(provider):
+            return [
+                (params['p'], params['mu'], params['sigma'], params['onset'])
+                for params in provider.upstream_params_list
+            ]
+
+        assert baseline.enabled is True
+        assert reversed_order.enabled is True
+        assert baseline.reach == pytest.approx(reversed_order.reach)
+        assert _project(reversed_order) == _project(baseline)
 
 
 class TestNodeArrivalCache:
@@ -681,3 +741,210 @@ class TestSubsetConditioningBlend:
             assert np.all(np.isfinite(ce.y_draws))
             assert np.all(np.isfinite(ce.x_draws))
             assert np.all(ce.x_draws > 0)
+
+
+class TestPreparedRuntimeBundle:
+    """WP2 runtime-bundle plumbing for summary and trajectory kernels."""
+
+    def test_runtime_bundle_serialises_direct_cohort_conditioning_flag(self):
+        from runner.forecast_runtime import (
+            build_prepared_runtime_bundle,
+            resolve_subject_cdf_start_node,
+            serialise_runtime_bundle,
+            should_use_anchor_relative_subject_cdf,
+            should_enable_direct_cohort_p_conditioning,
+        )
+
+        assert should_enable_direct_cohort_p_conditioning(
+            is_window=False,
+            is_multi_hop=False,
+        ) is True
+        assert should_enable_direct_cohort_p_conditioning(
+            is_window=True,
+            is_multi_hop=False,
+        ) is False
+        assert should_enable_direct_cohort_p_conditioning(
+            is_window=False,
+            is_multi_hop=True,
+        ) is False
+        assert should_use_anchor_relative_subject_cdf(
+            is_window=False,
+            is_multi_hop=False,
+            anchor_node_id='A',
+            query_from_node='X',
+        ) is False
+        assert should_use_anchor_relative_subject_cdf(
+            is_window=False,
+            is_multi_hop=True,
+            anchor_node_id='A',
+            query_from_node='X',
+        ) is False
+        assert should_use_anchor_relative_subject_cdf(
+            is_window=True,
+            is_multi_hop=False,
+            anchor_node_id='A',
+            query_from_node='X',
+        ) is False
+        assert resolve_subject_cdf_start_node(
+            is_window=False,
+            is_multi_hop=False,
+            anchor_node_id='A',
+            query_from_node='X',
+        ) == 'X'
+        assert resolve_subject_cdf_start_node(
+            is_window=False,
+            is_multi_hop=True,
+            anchor_node_id='A',
+            query_from_node='X',
+        ) == 'X'
+
+        bundle = build_prepared_runtime_bundle(
+            mode='cohort',
+            query_from_node='X',
+            query_to_node='Y',
+            anchor_node_id='A',
+            is_multi_hop=False,
+            numerator_representation='factorised',
+            p_conditioning_temporal_family='cohort',
+            p_conditioning_source='direct_cohort_exact_subject',
+            p_conditioning_direct_cohort=True,
+            p_conditioning_evidence_points=3,
+            p_conditioning_total_x=120.0,
+            p_conditioning_total_y=36.0,
+        )
+        diag = serialise_runtime_bundle(bundle)
+
+        assert diag is not None
+        assert diag['p_conditioning_evidence']['temporal_family'] == 'cohort'
+        assert diag['p_conditioning_evidence']['source'] == 'direct_cohort_exact_subject'
+        assert diag['p_conditioning_evidence']['direct_cohort_enabled'] is True
+
+    def test_summary_reads_carrier_from_runtime_bundle(self):
+        from runner.forecast_runtime import build_prepared_runtime_bundle
+        from runner.forecast_state import (
+            NodeArrivalState,
+            compute_forecast_summary,
+        )
+        from runner.model_resolver import ResolvedLatency, ResolvedModelParams
+
+        resolved = ResolvedModelParams(
+            p_mean=0.4,
+            p_sd=0.05,
+            alpha=12.0,
+            beta=18.0,
+            alpha_pred=12.0,
+            beta_pred=18.0,
+            edge_latency=ResolvedLatency(mu=2.5, sigma=0.5, onset_delta_days=0.0),
+            source='bayesian',
+        )
+        from_node_arrival = NodeArrivalState(
+            deterministic_cdf=[0.0, 0.2, 0.5, 0.8, 1.0] + [1.0] * 40,
+            reach=0.8,
+            tier='parametric',
+        )
+        cohorts = [(10.0, 100.0), (20.0, 100.0)]
+        evidence = [(10.0, 100.0, 30.0)]
+
+        explicit = compute_forecast_summary(
+            edge_id='bc',
+            resolved=resolved,
+            cohort_ages_and_weights=cohorts,
+            evidence=evidence,
+            from_node_arrival=from_node_arrival,
+        )
+        runtime_bundle = build_prepared_runtime_bundle(
+            mode='cohort',
+            query_from_node='B',
+            query_to_node='C',
+            anchor_node_id='A',
+            from_node_arrival=from_node_arrival,
+            resolved_params=resolved,
+            p_conditioning_temporal_family='cohort',
+            p_conditioning_source='aggregate_evidence',
+            p_conditioning_evidence_points=len(evidence),
+            p_conditioning_total_x=100.0,
+            p_conditioning_total_y=30.0,
+        )
+        bundled = compute_forecast_summary(
+            edge_id='bc',
+            resolved=resolved,
+            cohort_ages_and_weights=cohorts,
+            evidence=evidence,
+            runtime_bundle=runtime_bundle,
+        )
+
+        assert bundled.completeness == pytest.approx(explicit.completeness)
+        assert bundled.rate_conditioned == pytest.approx(explicit.rate_conditioned)
+        assert bundled.runtime_bundle_diag is not None
+        assert bundled.runtime_bundle_diag['population_root'] == 'A'
+        assert bundled.runtime_bundle_diag['carrier_to_x']['mode'] == 'upstream'
+        assert bundled.runtime_bundle_diag['subject_span']['start_node_id'] == 'B'
+
+    def test_trajectory_reads_operator_inputs_from_runtime_bundle(self):
+        from runner.forecast_runtime import build_prepared_runtime_bundle
+        from runner.forecast_state import CohortEvidence, compute_forecast_trajectory
+        from runner.model_resolver import ResolvedLatency, ResolvedModelParams
+
+        resolved = ResolvedModelParams(
+            p_mean=0.4,
+            p_sd=0.05,
+            alpha=40.0,
+            beta=60.0,
+            alpha_pred=40.0,
+            beta_pred=60.0,
+            edge_latency=ResolvedLatency(mu=3.0, sigma=0.6, onset_delta_days=0.0),
+            source='bayesian',
+        )
+        cohorts = [
+            CohortEvidence(
+                obs_x=[100.0] * 41,
+                obs_y=[40.0] * 41,
+                x_frozen=100.0,
+                y_frozen=40.0,
+                frontier_age=20,
+                a_pop=100.0,
+            ),
+            CohortEvidence(
+                obs_x=[80.0] * 41,
+                obs_y=[28.0] * 41,
+                x_frozen=80.0,
+                y_frozen=28.0,
+                frontier_age=15,
+                a_pop=80.0,
+            ),
+        ]
+        det_norm_cdf = [min(t / 20.0, 1.0) for t in range(41)]
+
+        explicit = compute_forecast_trajectory(
+            resolved=resolved,
+            cohorts=cohorts,
+            max_tau=40,
+            num_draws=256,
+            span_alpha=55.0,
+            span_beta=45.0,
+            det_norm_cdf=det_norm_cdf,
+        )
+        runtime_bundle = build_prepared_runtime_bundle(
+            mode='window',
+            query_from_node='A',
+            query_to_node='B',
+            resolved_params=resolved,
+            p_conditioning_temporal_family='window',
+            p_conditioning_source='frame_evidence',
+            p_conditioning_evidence_points=len(cohorts),
+            span_alpha=55.0,
+            span_beta=45.0,
+            det_norm_cdf=det_norm_cdf,
+        )
+        bundled = compute_forecast_trajectory(
+            resolved=resolved,
+            cohorts=cohorts,
+            max_tau=40,
+            num_draws=256,
+            runtime_bundle=runtime_bundle,
+        )
+
+        assert np.allclose(bundled.rate_draws, explicit.rate_draws)
+        assert bundled.runtime_bundle_diag is not None
+        assert bundled.runtime_bundle_diag['operator_inputs']['span_alpha'] == 55.0
+        assert bundled.runtime_bundle_diag['subject_span']['end_node_id'] == 'B'

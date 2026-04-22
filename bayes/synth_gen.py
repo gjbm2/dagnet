@@ -281,6 +281,7 @@ def _probe_fe_hash_alignment(
     data_repo: str,
     db_conn: str,
     timeout: int = 60,
+    empty_slice_keys: set[tuple[str, str]] | None = None,
 ) -> tuple[bool, list[str], list[str]]:
     """Actively verify that hashes the FE CLI would compute from the
     CURRENT graph/event/context/param files still retrieve rows in the DB.
@@ -291,6 +292,13 @@ def _probe_fe_hash_alignment(
     cases because the FE's canonical_signature is a function of
     (file content + FE code version + recognised schema), not just
     file content.
+
+    `empty_slice_keys` is the set of (edge_id, slice_key) pairs that the
+    sparsity simulation deliberately left empty (sourced from
+    `meta["empty_slices"]`). Zero-row hashes for these pairs are not
+    drift — they are expected sparsity. Omitted pairs still fire
+    divergences as before, so genuine drift on other edges that happen
+    to share a slice_key is still caught.
 
     Returns (aligned, divergences, probed_hashes):
       aligned: True if every FE-computed hash has at least one DB row
@@ -334,7 +342,7 @@ def _probe_fe_hash_alignment(
     # probed once. Skip "supp_" subjects — those are supplementary
     # hashes injected by candidateRegimeService from param-file hash
     # families, not the primary hashes the graph expects.
-    seen: dict[str, str] = {}
+    seen: dict[str, tuple[str, str]] = {}
     for s in subjects:
         subj_id = s.get("subject_id", "")
         if subj_id.startswith("supp_"):
@@ -344,8 +352,9 @@ def _probe_fe_hash_alignment(
             continue
         sk_list = s.get("slice_keys") or []
         sk_repr = sk_list[0] if sk_list else "(bare)"
+        eid = s.get("edge_id", "") or (s.get("target") or {}).get("targetId", "")
         if h not in seen:
-            seen[h] = sk_repr
+            seen[h] = (sk_repr, eid)
 
     if not seen:
         return True, [], []
@@ -357,27 +366,27 @@ def _probe_fe_hash_alignment(
     except Exception as e:
         return False, [f"DB connection failed: {e}"], []
 
+    allow = empty_slice_keys or set()
     probed: list[tuple[str, str, int]] = []
+    divergences: list[str] = []
     try:
-        for h, sk in seen.items():
+        for h, (sk, eid) in seen.items():
             cur.execute(
                 "SELECT COUNT(*) FROM snapshots WHERE core_hash = %s", (h,),
             )
             count = int(cur.fetchone()[0])
             probed.append((h, sk, count))
+            if count == 0 and (eid, sk) not in allow:
+                divergences.append(
+                    f"FE-computed hash {h[:12]}… (slice={sk}) has 0 DB rows "
+                    f"— file content unchanged but FE canonicalisation drifted"
+                )
     finally:
         try:
             conn.close()
         except Exception:
             pass
 
-    divergences: list[str] = []
-    for h, sk, count in probed:
-        if count == 0:
-            divergences.append(
-                f"FE-computed hash {h[:12]}… (slice={sk}) has 0 DB rows "
-                f"— file content unchanged but FE canonicalisation drifted"
-            )
     aligned = not divergences
     return aligned, divergences, probed
 
@@ -387,10 +396,15 @@ def verify_synth_data(
     data_repo: str | None = None,
     *,
     check_enrichment: bool = False,
-    check_bayesian: bool = False,
     check_param_files: bool = False,
     check_event_hashes: bool = False,
     check_fe_parity: bool = True,
+    # Deprecated no-op kept for backward compatibility with external
+    # callers. Bayesian freshness now lives in bayes/fixtures/<graph>.
+    # bayes-vars.json sidecars with their own fingerprint — see
+    # bayes/sidecar.py and the test fixture in graph-editor/lib/tests/
+    # conftest.py::_ensure_bayes_sidecar.
+    check_bayesian: bool = False,
 ) -> dict:
     """Check whether synth data for a graph is present and fresh.
 
@@ -409,7 +423,7 @@ def verify_synth_data(
             offline or fast-path checks where FE CLI is unavailable.
 
     Returns dict with:
-        status: "fresh" | "stale" | "missing" | "no_truth" | "needs_enrichment" | "needs_bayesian_enrichment"
+        status: "fresh" | "stale" | "missing" | "no_truth" | "needs_enrichment"
         reason: human-readable summary (worst issue)
         reasons: list[str] — all issues found
         row_count: total DB rows (0 if not checked)
@@ -533,15 +547,26 @@ def verify_synth_data(
                     f"likely another truth file overwrote the shared context"
                 )
 
-    # Parameter file checks (optional)
+    # Parameter file checks (optional).
+    # values[].query_signature is the full canonical_signature JSON string;
+    # meta.edge_hashes[pid].window_hash is the short 22-char core_hash derived
+    # from it. Hash each sig to short form before comparing — prior impl
+    # compared the short hash to the raw sig string (apples to oranges) and
+    # always mismatched, making check_param_files=True a permanent false
+    # positive that tripped the synth fixture into a full regen + re-MCMC
+    # cascade on every pytest session.
     if check_param_files and meta and meta.get("edge_hashes"):
+        import base64 as _b64
+        def _short_hash(sig: str) -> str:
+            digest = hashlib.sha256(sig.strip().encode("utf-8")).digest()[:16]
+            return _b64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+
         params_dir = os.path.join(data_repo, "parameters")
         for pid, hashes in meta["edge_hashes"].items():
             param_path = os.path.join(params_dir, f"{pid}.yaml")
             if not os.path.isfile(param_path):
                 reasons.append(f"Parameter file missing: {pid}")
                 continue
-            # Check query_signature matches stored window hash
             try:
                 import yaml as _yaml
                 with open(param_path) as f:
@@ -549,8 +574,11 @@ def verify_synth_data(
                 values = param_data.get("values", []) if param_data else []
                 stored_window_hash = hashes.get("window_hash", "")
                 if stored_window_hash and values:
-                    sigs = [v.get("query_signature", "") for v in values if v.get("query_signature")]
-                    if sigs and stored_window_hash not in sigs:
+                    sig_hashes = {
+                        _short_hash(v["query_signature"])
+                        for v in values if v.get("query_signature")
+                    }
+                    if sig_hashes and stored_window_hash not in sig_hashes:
                         reasons.append(f"Param file query_signature mismatch: {pid}")
             except Exception:
                 reasons.append(f"Param file unreadable: {pid}")
@@ -573,9 +601,9 @@ def verify_synth_data(
                     bayesian_enriched = True
             if enriched and bayesian_enriched:
                 break
-    # Enrichment gaps are NOT added to reasons — they are separate statuses
-    # ("needs_enrichment" / "needs_bayesian_enrichment") that trigger
-    # their respective enrichment steps, not a full regen.
+    # Enrichment gap is NOT added to reasons — it's a separate status
+    # ("needs_enrichment") that triggers hydrate rather than a full regen.
+    # Bayesian freshness lives in the sidecar, not in this check.
 
     # ── DB checks ───────────────────────────────────────────────────
     db_conn = _load_db_connection()
@@ -592,19 +620,13 @@ def verify_synth_data(
                            enriched=enriched, bayesian_enriched=bayesian_enriched, meta=meta)
         stored_count = meta.get("row_count", 0)
         if stored_count > 0:
-            # Enrichment gaps: hydrate first, then bayesian. See comment
-            # above the matching block in the DB-available branch.
+            # Enrichment gap: hydrate. Bayesian freshness is no longer
+            # checked here — it lives in the sidecar (bayes/sidecar.py).
             if check_enrichment and not enriched:
                 return _result("needs_enrichment", "Graph not enriched",
                                reasons=reasons, row_count=stored_count,
                                truth_sha256=truth_sha, graph_sha256=graph_sha,
                                enriched=False, bayesian_enriched=False, meta=meta)
-            if check_bayesian and not bayesian_enriched:
-                return _result("needs_bayesian_enrichment",
-                               "Graph has no bayesian model_vars",
-                               reasons=reasons, row_count=stored_count,
-                               truth_sha256=truth_sha, graph_sha256=graph_sha,
-                               enriched=enriched, bayesian_enriched=False, meta=meta)
             return _result("fresh", f"Meta says {stored_count} rows (DB not checked)",
                            row_count=stored_count, truth_sha256=truth_sha,
                            graph_sha256=graph_sha, enriched=enriched, bayesian_enriched=bayesian_enriched, meta=meta)
@@ -689,8 +711,16 @@ def verify_synth_data(
     # This catches every FE-interpretation drift without needing to
     # predict what might change.
     if check_fe_parity:
+        # Legitimate zero-row slices (from sparsity simulation) recorded in
+        # meta — passed through so the probe does not misreport them as drift.
+        _empty_allow: set[tuple[str, str]] = {
+            (es.get("edge_id", ""), es.get("slice_key", ""))
+            for es in (meta.get("empty_slices", []) or [])
+            if es.get("edge_id") and es.get("slice_key")
+        }
         aligned, fe_divergences, probed = _probe_fe_hash_alignment(
             graph_name, data_repo, db_conn,
+            empty_slice_keys=_empty_allow,
         )
         if not aligned:
             return _result(
@@ -702,22 +732,15 @@ def verify_synth_data(
                 enriched=enriched, bayesian_enriched=bayesian_enriched, meta=meta,
             )
 
-    # Enrichment gaps: hydrate first, then bayesian. Both are separate
-    # statuses the caller can act on without a full regen.
+    # Enrichment gap: hydrate. Bayesian freshness is handled by the
+    # bayes/fixtures/<graph>.bayes-vars.json sidecar (see bayes/sidecar.py),
+    # so this check no longer fires "needs_bayesian_enrichment".
     if check_enrichment and not enriched:
         return _result("needs_enrichment", "Graph not enriched",
                        reasons=["Graph not enriched (no model_vars)"],
                        row_count=total,
                        truth_sha256=truth_sha, graph_sha256=graph_sha,
                        enriched=False, bayesian_enriched=False, meta=meta)
-
-    if check_bayesian and not bayesian_enriched:
-        return _result("needs_bayesian_enrichment",
-                       "Graph has no bayesian model_vars",
-                       reasons=["Graph not bayesian-enriched (no MCMC posteriors)"],
-                       row_count=total,
-                       truth_sha256=truth_sha, graph_sha256=graph_sha,
-                       enriched=enriched, bayesian_enriched=False, meta=meta)
 
     return _result("fresh", f"{total} DB rows verified", row_count=total,
                    truth_sha256=truth_sha, graph_sha256=graph_sha,
@@ -742,7 +765,11 @@ def _build_meta_hashes(hash_lookup: dict[str, dict[str, str]]) -> dict[str, dict
             }
             # Include per-dimension hashes
             for key, val in h.items():
-                if key.startswith("ctx_window_hash_") or key.startswith("ctx_cohort_hash_"):
+                if (
+                    key.startswith("ctx_window_hash_")
+                    or key.startswith("ctx_cohort_hash_")
+                    or key.startswith("cohort_hash_anchor_")
+                ):
                     entry[key] = val
             meta[pid] = entry
     return meta
@@ -942,6 +969,167 @@ def _resolve_truth_edge(truth: dict, pid: str) -> dict:
                 return result
 
     return {}
+
+
+def _extract_cohort_anchor_from_slice_dsl(slice_dsl: str) -> str:
+    """Return the explicit cohort anchor token from a slice DSL, if present."""
+    m = re.search(r"cohort\(([^)]*)\)", str(slice_dsl or ""))
+    if not m:
+        return ""
+    args = m.group(1)
+    comma_idx = args.find(",")
+    if comma_idx <= 0:
+        return ""
+    head = args[:comma_idx].strip()
+    if ":" in head:
+        return ""
+    return head
+
+
+def _resolve_graph_node(
+    truth: dict,
+    graph_snapshot: dict,
+    node_ref: str,
+) -> dict[str, Any] | None:
+    """Resolve a truth-file node reference to a graph node dict.
+
+    Supports direct graph IDs / UUIDs plus short new-format truth IDs
+    like ``b`` for a generated graph node ID like ``synth-lat4-b``.
+    """
+    if not node_ref:
+        return None
+    nodes = graph_snapshot.get("nodes", []) or []
+    graph_name = str((truth.get("graph") or {}).get("name") or "").strip()
+    prefixed = f"{graph_name}-{node_ref}" if graph_name else ""
+
+    direct_matches = [
+        n for n in nodes
+        if node_ref in {n.get("id", ""), n.get("uuid", "")}
+    ]
+    if len(direct_matches) == 1:
+        return direct_matches[0]
+
+    if prefixed:
+        prefixed_matches = [
+            n for n in nodes
+            if prefixed in {n.get("id", ""), n.get("uuid", "")}
+        ]
+        if len(prefixed_matches) == 1:
+            return prefixed_matches[0]
+
+    suffix_matches = [
+        n for n in nodes
+        if str(n.get("id", "")).endswith(f"-{node_ref}")
+    ]
+    if len(suffix_matches) == 1:
+        return suffix_matches[0]
+
+    return None
+
+
+def _resolve_graph_edge_uuid(
+    truth: dict,
+    graph_snapshot: dict,
+    edge_ref: str,
+) -> str:
+    """Resolve a truth-file edge reference to a graph edge UUID."""
+    if not edge_ref:
+        return ""
+    edges = graph_snapshot.get("edges", []) or []
+    graph_name = str((truth.get("graph") or {}).get("name") or "").strip()
+    prefixed = f"{graph_name}-{edge_ref}" if graph_name else ""
+
+    for edge in edges:
+        pid = str((edge.get("p") or {}).get("id", "") or "")
+        eid = str(edge.get("id", "") or "")
+        uuid = str(edge.get("uuid", "") or "")
+        bare_pid = pid.replace("parameter-", "") if pid.startswith("parameter-") else pid
+        refs = {edge_ref, prefixed}
+        if any(ref and ref in {pid, bare_pid, eid, uuid} for ref in refs):
+            return uuid
+        if edge_ref and (
+            bare_pid.endswith(f"-{edge_ref}")
+            or eid.endswith(f"-{edge_ref}")
+        ):
+            return uuid
+    return ""
+
+
+def _resolve_alt_cohort_families(
+    truth: dict,
+    graph_snapshot: dict,
+    topology,
+) -> list[dict[str, str]]:
+    """Resolve truth-file alternate cohort anchor specs to concrete families.
+
+    Schema:
+
+    alternate_cohort_anchors:
+      - anchor: b
+        edges: [c-to-d]
+
+    Each resolved family is one ``(edge_uuid, anchor_uuid, anchor_id)`` tuple.
+    Identity cases where the alternate anchor equals the edge's from-node are
+    skipped because ``cohort(X, X-Y)`` collapses to ``window(X-Y)``.
+    """
+    raw_specs = truth.get("alternate_cohort_anchors") or []
+    if not raw_specs:
+        return []
+
+    families: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    node_uuid_to_id = {
+        str(n.get("uuid", "")): str(n.get("id", "") or n.get("uuid", ""))
+        for n in (graph_snapshot.get("nodes", []) or [])
+    }
+
+    for spec in raw_specs:
+        if not isinstance(spec, dict):
+            continue
+        anchor_ref = str(spec.get("anchor", "") or "").strip()
+        edge_refs = spec.get("edges") or []
+        if not anchor_ref or not isinstance(edge_refs, list):
+            continue
+
+        anchor_node = _resolve_graph_node(truth, graph_snapshot, anchor_ref)
+        if anchor_node is None:
+            print(f"  Alternate cohort anchor not found: {anchor_ref}", flush=True)
+            continue
+        anchor_uuid = str(anchor_node.get("uuid", "") or "")
+        anchor_id = str(anchor_node.get("id", "") or anchor_uuid)
+        if not anchor_uuid:
+            continue
+
+        for edge_ref in edge_refs:
+            edge_uuid = _resolve_graph_edge_uuid(truth, graph_snapshot, str(edge_ref or "").strip())
+            if not edge_uuid:
+                print(
+                    f"  Alternate cohort edge not found for anchor {anchor_id}: {edge_ref}",
+                    flush=True,
+                )
+                continue
+            et = topology.edges.get(edge_uuid)
+            if et is None or not et.param_id:
+                continue
+            from_id = node_uuid_to_id.get(str(et.from_node), str(et.from_node))
+            if anchor_id == from_id:
+                print(
+                    f"  Alternate cohort anchor {anchor_id} on {et.param_id} "
+                    f"collapses to window() — skipping identity case",
+                    flush=True,
+                )
+                continue
+            key = (edge_uuid, anchor_id)
+            if key in seen:
+                continue
+            seen.add(key)
+            families.append({
+                "edge_uuid": edge_uuid,
+                "anchor_uuid": anchor_uuid,
+                "anchor_id": anchor_id,
+            })
+
+    return families
 
 
 def derive_truth_from_graph(graph_snapshot: dict, topology) -> dict:
@@ -1589,6 +1777,22 @@ def simulate_graph(
     # When 'epochs' is defined, context emission varies by day.
     emit_context_slices = truth.get("emit_context_slices", False)
     epochs = truth.get("epochs")
+    alt_cohort_daily = _build_alt_cohort_daily(
+        topology=topology,
+        graph_snapshot=graph_snapshot,
+        truth=truth,
+        arrivals_by_day=arrivals_by_day,
+        base_date=base_date,
+        burn_in_days=burn_in_days,
+        total_sim_days=total_sim_days,
+        n_days=n_days,
+    )
+    if alt_cohort_daily:
+        print(
+            f"  Alternate cohort families: {len(alt_cohort_daily)} "
+            f"(distinct upstream anchors for selected edges)",
+            flush=True,
+        )
 
     snapshot_rows = _generate_observations_nightly(
         topology, sorted_times, sorted_edge_times, actual_traffic,
@@ -1601,6 +1805,7 @@ def simulate_graph(
         frame_drop_rate=frame_drop_rate,
         toggle_rate=toggle_rate,
         initial_absent_pct=initial_absent_pct,
+        alt_cohort_daily=alt_cohort_daily,
     )
 
     # Free the raw person data now
@@ -1622,6 +1827,7 @@ def simulate_graph(
         "base_date": base_date_str,
         "edge_daily": edge_daily,
         "ctx_edge_daily": ctx_edge_daily,
+        "alt_cohort_daily": alt_cohort_daily,
         "frame_drop_rate": frame_drop_rate,
         "toggle_rate": toggle_rate,
         "initial_absent_pct": initial_absent_pct,
@@ -1774,6 +1980,134 @@ def _count_by_age(sorted_arrivals: list[float], age: float) -> int:
     return bisect.bisect_right(sorted_arrivals, age)
 
 
+def _build_alt_cohort_daily(
+    topology,
+    graph_snapshot: dict,
+    truth: dict,
+    arrivals_by_day: list[list[dict]],
+    base_date: datetime,
+    burn_in_days: int,
+    total_sim_days: int,
+    n_days: int,
+) -> dict[tuple[str, str], dict[str, Any]]:
+    """Build daily aggregates for alternate cohort anchors.
+
+    For each configured ``cohort(B, X-Y)`` family, group people by the day
+    they reached ``B`` (not the graph's global start anchor).  This yields a
+    genuinely different raw cohort family from ``cohort(A, X-Y)`` whenever
+    ``B`` is upstream of ``X`` and ``B != X``.
+    """
+    families = _resolve_alt_cohort_families(truth, graph_snapshot, topology)
+    if not families:
+        return {}
+
+    unique_anchors = {
+        fam["anchor_uuid"]: fam["anchor_id"]
+        for fam in families
+    }
+    anchor_day_people: dict[str, dict[int, list[dict]]] = {
+        anchor_uuid: defaultdict(list) for anchor_uuid in unique_anchors
+    }
+
+    for day_idx in range(total_sim_days):
+        for person in arrivals_by_day[day_idx]:
+            for anchor_uuid in unique_anchors:
+                if anchor_uuid not in person:
+                    continue
+                abs_anchor_day = (day_idx - burn_in_days) + int(person[anchor_uuid])
+                if 0 <= abs_anchor_day < n_days:
+                    anchor_day_people[anchor_uuid][abs_anchor_day].append(person)
+
+    alt_daily: dict[tuple[str, str], dict[str, Any]] = {}
+    for fam in families:
+        edge_uuid = fam["edge_uuid"]
+        anchor_uuid = fam["anchor_uuid"]
+        anchor_id = fam["anchor_id"]
+        et = topology.edges.get(edge_uuid)
+        if et is None or not et.param_id:
+            continue
+
+        edge_key = f"edge:{edge_uuid}"
+        dates: list[str] = []
+        n_daily: list[int] = []
+        k_daily: list[int] = []
+        median_lag_daily: list[float] = []
+        mean_lag_daily: list[float] = []
+        anchor_median_lag_daily: list[float] = []
+        anchor_mean_lag_daily: list[float] = []
+        anchor_n_daily: list[int] = []
+        x_offsets_daily: list[list[float]] = []
+        y_offsets_daily: list[list[float]] = []
+
+        day_people = anchor_day_people.get(anchor_uuid, {})
+        for obs_day in range(n_days):
+            day_date = base_date + timedelta(days=obs_day)
+            dates.append(day_date.strftime("%-d-%b-%y"))
+
+            people = day_people.get(obs_day, [])
+            anchor_n_daily.append(len(people))
+
+            x_offsets: list[float] = []
+            y_offsets: list[float] = []
+            edge_lags: list[float] = []
+            anchor_lags: list[float] = []
+
+            for person in people:
+                anchor_arrival = person.get(anchor_uuid)
+                if anchor_arrival is None:
+                    continue
+                from_arrival = person.get(et.from_node)
+                if from_arrival is not None:
+                    x_offsets.append(from_arrival - anchor_arrival)
+                to_arrival = person.get(edge_key)
+                if from_arrival is not None and to_arrival is not None:
+                    y_offsets.append(to_arrival - anchor_arrival)
+                    edge_lags.append(to_arrival - from_arrival)
+                    anchor_lags.append(from_arrival - anchor_arrival)
+
+            x_offsets.sort()
+            y_offsets.sort()
+            x_offsets_daily.append(x_offsets)
+            y_offsets_daily.append(y_offsets)
+            n_daily.append(len(x_offsets))
+            k_daily.append(len(y_offsets))
+
+            if edge_lags:
+                mid = len(edge_lags) // 2
+                edge_lags_sorted = sorted(edge_lags)
+                median_lag_daily.append(round(edge_lags_sorted[mid], 2))
+                mean_lag_daily.append(round(sum(edge_lags) / len(edge_lags), 2))
+            else:
+                median_lag_daily.append(0)
+                mean_lag_daily.append(0)
+
+            if anchor_lags:
+                mid = len(anchor_lags) // 2
+                anchor_lags_sorted = sorted(anchor_lags)
+                anchor_median_lag_daily.append(round(anchor_lags_sorted[mid], 2))
+                anchor_mean_lag_daily.append(round(sum(anchor_lags) / len(anchor_lags), 2))
+            else:
+                anchor_median_lag_daily.append(0)
+                anchor_mean_lag_daily.append(0)
+
+        alt_daily[(edge_uuid, anchor_id)] = {
+            "anchor_id": anchor_id,
+            "anchor_uuid": anchor_uuid,
+            "n_daily": n_daily,
+            "k_daily": k_daily,
+            "dates": dates,
+            "median_lag_daily": median_lag_daily,
+            "mean_lag_daily": mean_lag_daily,
+            "anchor_median_lag_daily": anchor_median_lag_daily,
+            "anchor_mean_lag_daily": anchor_mean_lag_daily,
+            "anchor_n_daily": anchor_n_daily,
+            "x_offsets_daily": x_offsets_daily,
+            "y_offsets_daily": y_offsets_daily,
+        }
+
+    return alt_daily
+
+
 def _generate_observations_nightly(
     topology,
     sorted_times: list[dict[str, list[float]]],
@@ -1795,6 +2129,7 @@ def _generate_observations_nightly(
     frame_drop_rate: float = 0.0,
     toggle_rate: float = 0.0,
     initial_absent_pct: float = 0.0,
+    alt_cohort_daily: dict[tuple[str, str], dict[str, Any]] | None = None,
 ) -> dict[str, list[dict]]:
     """Generate snapshot rows using nightly fetch simulation.
 
@@ -2338,6 +2673,62 @@ def _generate_observations_nightly(
                         elif ctx_a > 0:
                             n_sparsity_dropped += 1
 
+        # Alternate cohort anchors for selected edges. These are distinct
+        # raw cohort families (different time origin / denominator) from the
+        # graph's default anchor-rooted cohort rows above.
+        if alt_cohort_daily:
+            for (edge_id, anchor_id), daily in alt_cohort_daily.items():
+                et = topology.edges.get(edge_id)
+                if et is None or not et.param_id:
+                    continue
+                pid = et.param_id
+                hashes = hash_lookup.get(pid) or hash_lookup.get(
+                    pid.replace("parameter-", "") if pid.startswith("parameter-") else pid
+                ) or {}
+                hash_key = f"cohort_hash_anchor_{anchor_id}"
+                core_hash = hashes.get(hash_key, f"SYNTH-{pid}-c-{anchor_id}")
+                anchor_day_offset_max = min(fetch_night, n_days)
+                for obs_day_offset in range(anchor_day_offset_max):
+                    if obs_day_offset < snapshot_anchor_cutoff:
+                        continue
+                    age = fetch_night - obs_day_offset
+                    if age < 1:
+                        continue
+                    anchor_n = daily["anchor_n_daily"][obs_day_offset]
+                    if anchor_n <= 0:
+                        continue
+                    x_offsets = daily["x_offsets_daily"][obs_day_offset]
+                    y_offsets = daily["y_offsets_daily"][obs_day_offset]
+                    x_cohort = _count_by_age(x_offsets, age)
+                    y_cohort = _count_by_age(y_offsets, age)
+                    anchor_day_str = (
+                        base_date + timedelta(days=obs_day_offset)
+                    ).strftime("%Y-%m-%d")
+                    if not _sparsity_gate(edge_id, "cohort()"):
+                        n_sparsity_dropped += 1
+                        continue
+                    result[edge_id].append({
+                        "param_id": pid,
+                        "core_hash": core_hash,
+                        "slice_key": "cohort()",
+                        "anchor_day": anchor_day_str,
+                        "retrieved_at": retrieved_at,
+                        "a": anchor_n,
+                        "x": x_cohort,
+                        "y": y_cohort,
+                        "median_lag_days": daily["median_lag_daily"][obs_day_offset],
+                        "mean_lag_days": daily["mean_lag_daily"][obs_day_offset],
+                        "anchor_median_lag_days": daily["anchor_median_lag_daily"][obs_day_offset],
+                        "anchor_mean_lag_days": daily["anchor_mean_lag_daily"][obs_day_offset],
+                        "onset_delta_days": onset_obs_by_edge.get(edge_id, {}).get(
+                            fetch_night,
+                            edge_latency_stats.get(edge_id, {}).get("onset"),
+                        ),
+                        "cohort_anchor_node_id": anchor_id,
+                        "_hash_lookup_key": hash_key,
+                    })
+                    n_cohort_rows += 1
+
     print(f"  Cohort: {len(fetch_nights)} nights, {n_cohort_rows} rows", flush=True)
 
     # ── Generate window rows ────────────────────────────────────────────
@@ -2503,6 +2894,16 @@ def _rehash_snapshot_rows(
         c_hash = hashes["cohort_hash"]
 
         for r in rows:
+            custom_hash_key = str(r.get("_hash_lookup_key", "") or "")
+            if custom_hash_key:
+                custom_hash = hashes.get(custom_hash_key)
+                if not custom_hash:
+                    raise ValueError(
+                        f"Row requested custom hash family {custom_hash_key} "
+                        f"but {pid} has no such authoritative hash"
+                    )
+                r["core_hash"] = custom_hash
+                continue
             sk = r.get("slice_key", "")
             is_ctx = "context(" in sk
             is_cohort = "cohort" in sk
@@ -2623,6 +3024,12 @@ def _build_verify_checks(hashes: dict[str, str]) -> list[tuple[str, str, bool]]:
         expect_rows = (not is_bare) or (is_bare and not has_ctx)
         checks.append((mode, h, expect_rows))
 
+    for key, h in hashes.items():
+        if not key.startswith("cohort_hash_anchor_") or not h:
+            continue
+        anchor_id = key.replace("cohort_hash_anchor_", "", 1)
+        checks.append((f"cohort[{anchor_id}]", h, True))
+
     for label, h in ctx_checks:
         checks.append((label, h, True))
 
@@ -2723,7 +3130,10 @@ def write_to_snapshot_db(
                 bare_pid = r["param_id"]
                 is_ctx = "context(" in slice_key
                 is_window = "window" in slice_key
-                if is_ctx:
+                custom_hash_key = str(r.get("_hash_lookup_key", "") or "")
+                if custom_hash_key:
+                    sig_key = custom_hash_key.replace("_hash", "_sig", 1)
+                elif is_ctx:
                     sig_key = "ctx_window_sig" if is_window else "ctx_cohort_sig"
                 else:
                     sig_key = "window_sig" if is_window else "cohort_sig"
@@ -2990,6 +3400,7 @@ def write_parameter_files(
     Returns list of param_ids that were written.
     """
     edge_daily = sim_stats.get("edge_daily", {})
+    alt_cohort_daily = sim_stats.get("alt_cohort_daily", {})
     base_date = datetime.strptime(sim_stats["base_date"], "%Y-%m-%d")
     n_days = sim_stats["n_days"]
     end_date = base_date + timedelta(days=n_days - 1)
@@ -3099,6 +3510,49 @@ def write_parameter_files(
         if hash_lookup and pid in hash_lookup and hash_lookup[pid].get("cohort_sig"):
             cohort_entry["query_signature"] = hash_lookup[pid]["cohort_sig"]
 
+        alt_cohort_entries: list[dict[str, Any]] = []
+        for (alt_edge_id, alt_anchor_id), alt_daily in alt_cohort_daily.items():
+            if alt_edge_id != edge_id:
+                continue
+            alt_cohort: dict[str, Any] = {
+                "mean": round(
+                    (sum(alt_daily["k_daily"]) / sum(alt_daily["n_daily"]))
+                    if sum(alt_daily["n_daily"]) > 0 else 0.0,
+                    6,
+                ),
+                "n": sum(alt_daily["n_daily"]),
+                "k": sum(alt_daily["k_daily"]),
+                "n_daily": alt_daily["n_daily"],
+                "k_daily": alt_daily["k_daily"],
+                "dates": alt_daily["dates"],
+                "anchor_n_daily": alt_daily["anchor_n_daily"],
+                "cohort_from": _format_date_dmy(base_date),
+                "cohort_to": _format_date_dmy(end_date),
+                "sliceDSL": (
+                    f"cohort({alt_anchor_id},"
+                    f"{_format_date_dmy(base_date)}:{_format_date_dmy(end_date)})"
+                ),
+                "median_lag_days": alt_daily["median_lag_daily"],
+                "mean_lag_days": alt_daily["mean_lag_daily"],
+                "anchor_median_lag_days": alt_daily["anchor_median_lag_daily"],
+                "anchor_mean_lag_days": alt_daily["anchor_mean_lag_daily"],
+                "latency": {"onset_delta_days": onset},
+                "data_source": {
+                    "type": "synthetic",
+                    "retrieved_at": now_str,
+                    "full_query": query,
+                },
+                "forecast": round(
+                    (sum(alt_daily["k_daily"]) / sum(alt_daily["n_daily"]))
+                    if sum(alt_daily["n_daily"]) > 0 else 0.0,
+                    6,
+                ),
+            }
+            alt_sig_key = f"cohort_sig_anchor_{alt_anchor_id}"
+            if hash_lookup and pid in hash_lookup and hash_lookup[pid].get(alt_sig_key):
+                alt_cohort["query_signature"] = hash_lookup[pid][alt_sig_key]
+            alt_cohort_entries.append(alt_cohort)
+
         # Context-qualified values[] entries (one per context value per obs type).
         # Only emitted when emit_context_slices is True in the truth file.
         # D4 fix: use per-context daily aggregates and per-slice onset.
@@ -3187,7 +3641,7 @@ def write_parameter_files(
             "query": query,
             "query_overridden": False,
             "n_query_overridden": False,
-            "values": [window_entry, cohort_entry] + context_entries,
+            "values": [window_entry, cohort_entry] + alt_cohort_entries + context_entries,
             "latency": {
                 "latency_parameter": bool(
                     t.get("onset", 0) > 0.01 or t.get("mu", 0) > 0.01
@@ -3950,7 +4404,40 @@ Examples:
     cohort_sigs: dict[str, str] = {}
     ctx_window_sigs: dict[str, dict[str, str]] = {}
     ctx_cohort_sigs: dict[str, dict[str, str]] = {}
+    alt_cohort_hashes: dict[str, dict[str, str]] = {}
+    alt_cohort_sigs: dict[str, dict[str, str]] = {}
     _cr: dict = {}  # candidate regimes (from first call)
+
+    with open(graph_path) as f:
+        _g = json.load(f)
+    uuid_to_pid: dict[str, str] = {}
+    uuid_to_default_anchor: dict[str, str] = {}
+    for e in _g.get("edges", []):
+        pid = e.get("p", {}).get("id", "") if isinstance(e.get("p"), dict) else ""
+        if not pid or not e.get("uuid"):
+            continue
+        uuid = e["uuid"]
+        uuid_to_pid[uuid] = pid
+        latency = (e.get("p") or {}).get("latency", {}) if isinstance(e.get("p"), dict) else {}
+        default_anchor = (
+            latency.get("anchor_node_id")
+            or e.get("cohort_anchor_event_id")
+            or ""
+        )
+        uuid_to_default_anchor[uuid] = str(default_anchor or "")
+    alt_cohort_families = _resolve_alt_cohort_families(truth, _g, topology)
+    alt_cohort_targets = {
+        (fam["edge_uuid"], fam["anchor_id"])
+        for fam in alt_cohort_families
+    }
+    _alt_dates = []
+    if alt_cohort_families:
+        _base_date = datetime.strptime(sim_stats["base_date"], "%Y-%m-%d")
+        _end_date = _base_date + timedelta(days=sim_stats["n_days"] - 1)
+        for anchor_id in sorted({fam["anchor_id"] for fam in alt_cohort_families}):
+            _alt_dates.append(
+                f"cohort({anchor_id},{_format_date_dmy(_base_date)}:{_format_date_dmy(_end_date)})"
+            )
 
     # Explode compound DSL into atomic clauses using proper recursive
     # descent (fixes doc-43: naive semicolon split broke compound forms
@@ -3963,7 +4450,7 @@ Examples:
     _bare_clauses = explode_dsl(bare_dsl)
     _seen_clauses: set[str] = set()
     dsl_clauses: list[str] = []
-    for c in _ctx_clauses + _bare_clauses:
+    for c in _ctx_clauses + _bare_clauses + _alt_dates:
         if c not in _seen_clauses:
             _seen_clauses.add(c)
             dsl_clauses.append(c)
@@ -3988,6 +4475,7 @@ Examples:
             _m = re.search(r"context\(([^)]+)\)", clause)
             if _m:
                 _ctx_dim_id = _m.group(1)
+        _cohort_anchor = _extract_cohort_anchor_from_slice_dsl(clause) if is_cohort_clause else ""
 
         for subj in _clause_subj:
             eid = subj.get("edge_id", "")
@@ -4032,22 +4520,22 @@ Examples:
                         ctx_window_sigs.setdefault(eid, {})[_ctx_dim_id] = sig
             else:
                 if is_cohort_clause:
-                    cohort_hashes[eid] = ch
-                    if sig:
-                        cohort_sigs[eid] = sig
+                    if (
+                        _cohort_anchor
+                        and _cohort_anchor != uuid_to_default_anchor.get(eid, "")
+                        and (eid, _cohort_anchor) in alt_cohort_targets
+                    ):
+                        alt_cohort_hashes.setdefault(eid, {})[_cohort_anchor] = ch
+                        if sig:
+                            alt_cohort_sigs.setdefault(eid, {})[_cohort_anchor] = sig
+                    else:
+                        cohort_hashes[eid] = ch
+                        if sig:
+                            cohort_sigs[eid] = sig
                 else:
                     window_hashes[eid] = ch
                     if sig:
                         window_sigs[eid] = sig
-
-    # Build uuid → param_id mapping from graph
-    with open(graph_path) as f:
-        _g = json.load(f)
-    uuid_to_pid: dict[str, str] = {}
-    for e in _g.get("edges", []):
-        pid = e.get("p", {}).get("id", "") if isinstance(e.get("p"), dict) else ""
-        if pid and e.get("uuid"):
-            uuid_to_pid[e["uuid"]] = pid
 
     hash_lookup: dict[str, dict[str, str]] = {}
     for uuid, pid in uuid_to_pid.items():
@@ -4060,7 +4548,9 @@ Examples:
         cs = cohort_sigs.get(uuid, "")
         ctx_ws_map = ctx_window_sigs.get(uuid, {})
         ctx_cs_map = ctx_cohort_sigs.get(uuid, {})
-        if wh or ch or ctx_wh_map or ctx_ch_map:
+        alt_ch_map = alt_cohort_hashes.get(uuid, {})
+        alt_cs_map = alt_cohort_sigs.get(uuid, {})
+        if wh or ch or ctx_wh_map or ctx_ch_map or alt_ch_map:
             entry: dict[str, str] = {
                 "window_hash": wh, "cohort_hash": ch,
                 "window_sig": ws, "cohort_sig": cs,
@@ -4074,6 +4564,10 @@ Examples:
                 entry[f"ctx_window_sig_{dim_id}"] = dim_sig
             for dim_id, dim_sig in ctx_cs_map.items():
                 entry[f"ctx_cohort_sig_{dim_id}"] = dim_sig
+            for anchor_id, anchor_hash in alt_ch_map.items():
+                entry[f"cohort_hash_anchor_{anchor_id}"] = anchor_hash
+            for anchor_id, anchor_sig in alt_cs_map.items():
+                entry[f"cohort_sig_anchor_{anchor_id}"] = anchor_sig
             # Backward compat: ctx_window_hash / ctx_cohort_hash point to
             # the first dimension (single-dimension graphs unchanged).
             _first_dim_w = next(iter(ctx_wh_map.values()), "")

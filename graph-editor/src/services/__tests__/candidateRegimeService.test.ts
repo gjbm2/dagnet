@@ -14,6 +14,25 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { buildCandidateRegimesByEdge, computeMeceDimensions } from '../candidateRegimeService';
 import { contextRegistry } from '../contextRegistry';
 
+vi.mock('../fetchPlanBuilderService', () => ({
+  buildFetchPlanProduction: vi.fn(async (graph: any, slice: string) => ({
+    plan: {
+      items: (graph.edges ?? []).map((edge: any) => ({
+        querySignature: `sig:${slice}:${edge.uuid}`,
+        targetId: edge.uuid,
+      })),
+    },
+  })),
+}));
+
+vi.mock('../coreHashService', () => ({
+  computeShortCoreHash: vi.fn(async (signature: string) => `hash:${signature}`),
+}));
+
+vi.mock('../hashMappingsService', () => ({
+  getClosureSet: vi.fn(() => []),
+}));
+
 // ---------------------------------------------------------------------------
 // Mock context registry
 // ---------------------------------------------------------------------------
@@ -134,5 +153,32 @@ describe('buildCandidateRegimesByEdge', () => {
     const graph = makeGraph({ pinnedDsl: '   ' });
     const result = await buildCandidateRegimesByEdge(graph, WORKSPACE);
     expect(result).toEqual({});
+  });
+
+  it('keeps cohort candidates separated by explicit cohort anchor', async () => {
+    const graph = makeGraph({
+      pinnedDsl: 'window(-90d:);cohort(signup,-90d:)',
+    });
+    const parameterFiles = {
+      'signup-to-purchase': {
+        values: [
+          {
+            sliceDSL: 'cohort(signup,-90d:)',
+            query_signature: 'sig:cohort(signup,-90d:):edge-uuid-1',
+          },
+          {
+            sliceDSL: 'cohort(landing,-90d:)',
+            query_signature: 'sig:cohort(landing,-90d:):edge-uuid-1',
+          },
+        ],
+      },
+    };
+
+    const result = await buildCandidateRegimesByEdge(graph, WORKSPACE, parameterFiles);
+    const cohorts = (result['edge-uuid-1'] ?? []).filter(r => r.temporal_mode === 'cohort');
+
+    expect(cohorts).toHaveLength(2);
+    expect(cohorts.map(r => r.cohort_anchor).sort()).toEqual(['landing', 'signup']);
+    expect(new Set(cohorts.map(r => r.core_hash)).size).toBe(2);
   });
 });

@@ -570,11 +570,23 @@ degenerate naturally across:
   cohort and Pop C should vanish
 - `x_provider` and `from_node_arrival` are denominator-side objects
 - `span_kernel` is the subject-side progression object
+- `PreparedForecastRuntimeBundle.p_conditioning_evidence` is the explicit
+  internal name for the rate-conditioning seam; it should describe which
+  evidence family is allowed to move `p`, not silently retarget the carrier
+  or the subject span
+- the current live WP8 landing marks that seam with
+  `direct_cohort_enabled` only for exact single-hop `cohort(A, X-Y)`
+  subjects; `window()` and multi-hop `cohort(A, X-Z)` leave the flag off
 - the `Pop C / Pop D` split in `forecast_state.py` only makes semantic
   sense if the future numerator is still factorised
 - if a future implementation promotes a gross fitted subject numerator,
   that implementation must stop adding separate Pop C and Pop D
   numerator terms
+
+That current flagging rule is intentionally narrow. It names the direct
+single-hop `cohort()` rate-conditioning seam, but it does **not** by itself
+authorise a gross fitted numerator, rewrite `carrier_to_x`, or replace the
+full `X -> end` subject-span semantics for multi-hop queries.
 
 ### What this means for multi-hop correctness
 
