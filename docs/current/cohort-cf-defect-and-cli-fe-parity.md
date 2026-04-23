@@ -752,31 +752,26 @@ defect is deeper in the sweep itself.
 
 ## Recommended sequencing
 
-**First, fix Defect A.** Nothing else can be trusted until it is fixed.
-The concrete work is: converge CLI `analyse` and CLI CF dispatch onto the
-FE's `analysisPipelineService` / `conditionedForecastService` entrypoints;
-run the whole-graph CF pre-pass from the CLI when the FE would have run
-it; respect `scenariosContext` in CLI mode so multi-scenario fan-out is
-the same on both sides; stop hand-rolling payloads for conditioned forecast
-in `analyse.ts`. Success criterion: for a given graph snapshot and DSL,
-CLI and FE produce byte-identical BE request payloads and byte-identical
-BE responses.
+The live execution plan for this defect cluster now lives in
+`docs/current/project-bayes/72-fe-cli-conditioned-forecast-parity-fix-plan.md`.
 
-**Second, reproduce Defect B via CLI.** Once CLI and FE agree, repeat
-the bayes-test-gm-rebuild cohort()/window() comparison and expect them
-to diverge in the same way FE does. If they do not diverge, the defect
-is in some FE-only state the CLI does not see — which would mean Defect A
-is still incomplete and we go back to step one.
+The current view is that the work must be staged as three coupled fixes,
+not as a single "find the wrong alpha/beta" investigation.
 
-**Third, once reproducible, bisect `compute_cohort_maturity_rows_v3`.**
-Specifically identify why resolved `alpha`/`beta` for the subject edge in
-cohort-mode emerges as the mark-session numbers (239.72/43.30) rather
-than the disk numbers (70.51/11.88). That's where the systematic low
-asymptote most likely originates. Secondary suspects in order are the
-`read_edge_cohort_params` window-fallback cascade on upstream edges
-without cohort slices, the `calculate_path_probability` reach helper that
-reads only `p.mean`, and the funnel/whole-graph composer that reads
-`p_infinity_mean` from v3 rows.
+First, restore the FE model-versus-conditioning split so that the FE's
+fallback estimate is built from full `window()` data and published as
+model-bearing state, rather than written back as a query-owned `p.mean`
+answer.
+
+Second, make the shared Python runtime consume one probability-source
+contract across both the target edge and the upstream carrier, so that
+carrier latency cannot be perturbed by an FE display scalar when a higher-
+quality promoted model exists.
+
+Third, make graph-surface conditioned forecast scenario-owned end to end,
+so each visible scenario gets its own CF pass and its own enriched graph
+state in both FE and CLI. The parity gate remains byte-identical request
+and response bodies for the same scenario graph and DSL.
 
 ## Files referenced
 
