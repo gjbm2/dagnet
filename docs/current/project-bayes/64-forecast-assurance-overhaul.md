@@ -129,6 +129,56 @@ differently from the in-process tests. The long-term suite therefore
 must include a small, stable outside-in layer using `analyse.sh`,
 `param-pack.sh`, and the same synth graphs users and agents can inspect.
 
+### 3.6 Every new forecast test needs an authoring receipt
+
+Before writing or rewriting any forecast test, the engineer should write
+a short prose receipt covering all of the following.
+
+1. **Family** — which permanent family from section 5 this test belongs
+   to.
+2. **Bug or invariant** — the exact failure mode the test would catch.
+3. **Oracle type** — blind semantic relation, cross-consumer agreement,
+   temporary cut-over parity, public contract, invariance, or static
+   branch-death check.
+4. **Primary apparatus** — static inspection, Python integration,
+   TypeScript integration, or CLI canary, with one sentence on why a
+   lower-cost apparatus would be insufficient.
+5. **Fixture class** — which semantic atom, topology matrix, projection
+   fixture, or public-tooling fixture is appropriate, and why it is the
+   smallest non-vacuous choice.
+6. **Reality boundary** — what is real, what if anything is stubbed, and
+   why that stub does not hide the class of bug under test.
+7. **False-pass analysis** — how the test could still pass while the
+   system is broken, and what closes that gap.
+8. **Retirement linkage** — if this test exists to replace a parity-era
+   asset, name the old asset and the condition under which it can be
+   deleted.
+
+This is how the note should be used alongside
+`../codebase/TESTING_STANDARDS.md`. The receipt is not bureaucracy. It is
+the mechanism that stops a developer from reaching for the wrong oracle,
+the wrong fixture, or the wrong harness out of convenience.
+
+### 3.7 Temporary cut-over parity is still mandatory
+
+This note does **not** overrule the repo-wide rule in
+`../codebase/TESTING_STANDARDS.md` that a working path being replaced
+must receive a real-boundary parity test before cut-over.
+
+The correct discipline is:
+
+- **during replacement** — write the temporary parity test and make the
+  new path match the old one closely enough to switch safely
+- **before deleting the old path** — also land a permanent semantic test
+  from the appropriate family in section 5
+- **after the permanent semantic replacement is green** — delete the
+  parity-era harness rather than accidentally promoting it into the
+  long-term oracle
+
+Parity is therefore still mandatory at the cut-over seam, but it is not
+the permanent acceptance oracle for the live system after the cut-over
+is complete.
+
 ---
 
 ## 4. Review of the current assurance surface
@@ -181,7 +231,7 @@ legacy code, stale framing, or an over-narrow implementation detail.
 | `graph-editor/lib/tests/test_conditioned_forecast_response_contract.py` | Replace stale AST/red framing with live handler-boundary contract checks and a small runtime-backed slice where possible. |
 | `graph-editor/lib/tests/test_be_topo_pass_parity.py` | Stop treating v2 as the completeness oracle; rewrite as a bounded-analytic contract for the topo pass itself. |
 | `graph-editor/lib/tests/test_model_resolver.py` | Remove v1/v2 parity expectations and re-anchor on the canonical resolver contract and real graph fields. |
-| `graph-editor/src/services/__tests__/conditionedForecastCompleteness.red.test.ts` | Keep the FE authority assertions, but rename and restate it as a live contract once the stale RED framing is removed. |
+| `graph-editor/src/services/__tests__/conditionedForecastCompleteness.test.ts` | Keep the FE authority assertions, but rename and restate it as a live contract once the stale RED framing is removed. |
 | `graph-ops/scripts/multihop-evidence-parity-test.sh` | Keep the v3 multi-hop collapse/diverge claims, delete the v2 duplication, and separate data-health from semantic assertions. |
 | `graph-ops/scripts/chart-graph-agreement-test.sh` | Either split the still-useful bounded claim from the known-red branch, or demote it to a targeted diagnostic harness rather than a general gate. |
 | `graph-ops/scripts/golden-regression.sh` | Keep only as a public-contract smoke tool, not as a semantic oracle. |
@@ -218,6 +268,42 @@ the main semantic gate set.
 
 The permanent forecast suite should be organised into seven families.
 Each family answers a different question and uses a different oracle.
+
+Before choosing a file or fixture, the engineer should choose the test
+apparatus from the matrix below.
+
+For this note, the apparatus names mean:
+
+- **static test** — AST, import, schema, or response-shape inspection
+  without executing forecasting logic
+- **Python integration** — in-process calls through real handlers or the
+  shared runtime seam on real fixtures, without mocking forecast logic
+- **TypeScript integration** — real FE projection / state code over real
+  graph objects; only acceptable stubs are the opposite-side boundary
+  when the claim is explicitly FE-local rather than BE-semantic
+- **CLI canary** — `graph-ops` shell tooling driving `analyse.sh` or
+  `param-pack.sh` against the live Python BE and stable fixtures
+
+Pure helper or unit-style tests are acceptable only when the question is
+strictly local algebra or static structure, such as `span_kernel` or a
+dependency audit. They are not an acceptable primary apparatus for
+runtime semantics, cross-consumer agreement, or public-tooling
+behaviour.
+
+| Family | Primary oracle | Default apparatus | Secondary apparatus | Approach | Mock stance |
+|---|---|---|---|---|---|
+| A. stack hygiene | dead-branch / import prohibition | static test | none | not blind; direct structural inspection | no mocks |
+| B. runtime semantic contracts | semantic relation from docs 57/59 and the cohort/window semantics note | Python integration | targeted CLI canary only if the same seam has escaped through tooling before | blind / contract-first | no mocks of forecast logic or snapshot-selection logic |
+| C. cross-consumer agreement | agreement between live first-class consumers for the same semantic question | Python integration | one small CLI canary where the user-facing tooling depends on that relation | not legacy parity; live-system agreement | no mocks of the compared consumers |
+| D. metamorphic semantics | must collapse / must diverge under a controlled transformation | Python integration | CLI blind canary on designated graphs | blind | no mocks |
+| E. invariance | same answer under incidental representation change | Python or TypeScript integration depending where the representation lives | CLI only if the representation issue can escape through public tooling | blind with respect to representation | default no mocks; FE-local request/cache tests may stub only the far boundary and must not claim BE semantic coverage |
+| F. projection and authority | field ownership, overwrite, projection, request/response contract | TypeScript integration for FE authority; small Python contract tests for handler shape | CLI only as a smoke check, not the primary oracle | contract-based, not blind | may isolate the opposite side of the boundary only when the test is explicitly layer-local |
+| G. outside-in CLI canaries | end-to-end public-tooling invariant | CLI canary | none | blind or live cross-consumer agreement, depending the claim | zero mocks |
+
+If a bug report already exists, the first new test should normally be a
+failing blind or contract test at the lowest real boundary that would
+have caught it. A CLI canary is then added only if the defect class can
+escape through public tooling or has already done so.
 
 ### 5.1 Family A — Stack hygiene and branch-death guards
 
@@ -369,7 +455,7 @@ Typical home:
 
 Current anchors:
 
-- `conditionedForecastCompleteness.red.test.ts`
+- `conditionedForecastCompleteness.test.ts`
 - `beForecastingTriggerLogic.test.ts`
 - parts of `test_conditioned_forecast_response_contract.py`
 
@@ -450,6 +536,23 @@ Required atoms:
    `id`/`uuid` drift.
 
 These atoms should become the default source of truth for semantic tests.
+
+#### 6.1.1 Atom fixture and test map (Pass 2 output)
+
+Each atom's concrete (graph, DSL, test location) mapping. Red states
+are blind contract tests correctly flagging live CF defects, not
+regressions introduced by the test itself.
+
+| Atom | Graph | Query | Python test | CLI canary | State |
+|---|---|---|---|---|---|
+| 1. Leading-edge A=X collapse | `synth-simple-abc` | `from(simple-a).to(simple-b)` window vs cohort | `test_doc56_phase0_behaviours.py::test_leading_edge_collapse_single_hop_window_vs_cohort` | — | red (CF defect) |
+| 2. Single-hop downstream factorisation diverge | `synth-simple-abc`, `synth-mirror-4step` | `from(simple-b).to(simple-c)` / `from(m4-registered).to(m4-success)` window vs cohort | `test_doc56_phase0_behaviours.py::test_lag_fit_and_surprise_gauge_share_downstream_temporal_mode_split`, `::test_chart_and_daily_conversions_do_not_collapse_window_and_cohort` | `multihop-evidence-parity-test.sh` Claim 2 | green |
+| 3. Multi-hop non-latent upstream collapse | `synth-mirror-4step` | `from(m4-delegated).to(m4-success)` window vs cohort | `test_doc56_phase0_behaviours.py::test_multi_hop_non_latent_upstream_collapse_window_vs_cohort` | `multihop-evidence-parity-test.sh` Claim 1 | red (CF defect) |
+| 4. Multi-hop latent upstream diverge | `cf-fix-deep-mixed` | `from(cf-fix-deep-e).to(cf-fix-deep-g)` window vs cohort | `test_doc56_phase0_behaviours.py::test_multi_hop_latent_upstream_diverges_window_vs_cohort` | — | green |
+| 5. Query-scoped posterior degrades | inline synthetic in test | `window(-30d:)` with `analytic_be` source | `test_cf_query_scoped_degradation.py::test_query_scoped_latency_rows_use_degraded_contract`, `::test_query_scoped_latency_rows_keep_window_denominator_fixed`, `::test_surprise_gauge_unavailable_for_query_scoped_posterior`, `::test_daily_conversions_degraded_branch_reuses_closed_form_beta_surface` | — | green |
+| 6. Weak-prior / no-posterior bounded | inline synthetic in test | Class-C fallback on empty evidence | `test_non_latency_rows.py::test_class_c_aggregate_prior_no_evidence_returns_prior`, `::test_class_c_query_scoped_no_evidence_returns_prior`, `::test_class_c_fe_is_none_returns_prior`, `::test_class_d_returns_empty`, `::test_aggregate_prior_model_bands_reflect_prior` | — | green |
+| 7. `asat()` historical basis | `synth-simple-abc` | `window(...)`+`asat(...)` vs bare `window(...)` | — | `asat-blind-test.sh` | green |
+| 8. Mixed identity (`id`≠`uuid`) | inline synthetic in test | direct call to `compute_cohort_maturity_rows_v3` with two identifier variants | `test_cf_query_scoped_degradation.py::test_surprise_gauge_mixed_ids_match_same_semantic_graph`, `::test_cohort_maturity_rows_v3_identity_drift` | — | green |
 
 ### 6.2 Topology matrix fixtures
 
@@ -552,7 +655,7 @@ be rewritten to reflect the steady-state contract:
 
 - `test_doc56_phase0_behaviours.py`
 - `test_conditioned_forecast_response_contract.py`
-- `conditionedForecastCompleteness.red.test.ts`
+- `conditionedForecastCompleteness.test.ts`
 - `multihop-evidence-parity-test.sh`
 
 The key change here is rhetorical as well as technical: the new files
@@ -590,6 +693,25 @@ These should not remain as ambiguous half-live assets:
 - expected-red branches embedded in core scripts
 - migration capture tooling treated as if it were a semantic gate
 
+### 8.6 Replacement matrix
+
+The table below is the concrete replacement plan. A junior developer
+should use it to decide what to build first, what file to touch, and
+what old asset is allowed to die afterward.
+
+| Current asset | Action | Replacement asset or family | Apparatus and oracle | Pass | Retirement gate |
+|---|---|---|---|---|---|
+| `graph-editor/lib/tests/test_v2_v3_parity.py` and `graph-ops/scripts/v2-v3-parity-test.sh` | retire | Family B in `test_forecast_state_cohort.py`, Family C in a rewritten `test_doc56_phase0_behaviours.py`, and Family D/G in a rewritten `multihop-evidence-parity-test.sh` | Python blind contracts plus one CLI collapse/diverge canary | 2-4 | all replacement tests green and no live caller depends on v2 |
+| `graph-editor/lib/tests/test_cohort_forecast.py`, `test_cohort_fan_controlled.py`, and `test_cohort_fan_harness.py` | retire | `test_forecast_state_cohort.py`, `test_non_latency_rows.py`, and `cohort-maturity-model-parity-test.sh` | runtime semantic contract plus targeted live-system parity where appropriate | 2-4 | replacement tests green and no v1 helper remains in live stack |
+| `graph-editor/lib/tests/test_be_topo_pass_parity.py` | rewrite in place | same file, re-anchored as a bounded-analytic topo-pass contract | Python integration; contract, not v2 parity | 3 | no assertion in the file refers to v2 as oracle |
+| `graph-editor/lib/tests/test_model_resolver.py` | rewrite in place | same file, re-anchored on the canonical resolver contract over real graph fields | Python integration; contract, not legacy reader parity | 3 | no v1/v2 reader remains as the expected answer |
+| `graph-editor/lib/tests/test_conditioned_forecast_response_contract.py` | rewrite and possibly rename | same seam, but framed as the live CF handler contract with runtime-backed slices where feasible | static plus small runtime contract | 3 | no stale RED/migration wording; live contract only |
+| `graph-editor/src/services/__tests__/conditionedForecastCompleteness.test.ts` | rewrite and rename | FE authority suite for CF-owned fields | TypeScript integration; FE-local authority contract | 3 | no RED wording; authority contract stated in live terms |
+| `graph-ops/scripts/multihop-evidence-parity-test.sh` | rewrite | v3-only collapse/diverge CLI canary | CLI blind metamorphic test | 3 | no v2 branch and no mixed data-health / semantic logic in one phase |
+| `graph-ops/scripts/chart-graph-agreement-test.sh` | split, demote, or rewrite | either a narrow diagnostic harness or an explicit bounded contract with a clear oracle | CLI diagnostic, not a core semantic oracle unless re-anchored | 4 | either reclassified out of the core gate set or rewritten with a stable oracle |
+| `graph-ops/scripts/cf-truth-parity.sh` | rewrite | a clearly-scoped truth or catastrophe-bound canary | CLI blind truth check with portable paths | 4 | oracle and tolerance policy explicitly stated in the file header |
+| `graph-ops/scripts/golden-regression.sh` and `graph-ops/scripts/capture-doc56-baselines.sh` | demote | public-contract smoke and maintenance tooling only | frozen baseline for shape drift, never primary semantics | 4 | not counted as semantic evidence for v1/v2 retirement |
+
 ---
 
 ## 9. What we should stop doing
@@ -614,14 +736,22 @@ These patterns create noise, false confidence, or both.
 
 ## 10. Rollout sequence
 
-The assurance overhaul should land in five passes.
+The assurance overhaul should land in four passes.
 
 ### Pass 1 — Freeze the target matrix
 
 Write down the permanent test families and map each current asset to
 keep, rewrite, retire, or quarantine. This note is that freeze point.
 
-### Pass 2 — Build the semantic-atom fixtures
+Output of the pass:
+
+- the family taxonomy is fixed
+- the apparatus/oracle matrix is fixed
+- every parity-era asset has a named replacement path
+- no engineer is allowed to invent a new "temporary" oracle without
+  classifying it against this note
+
+### Pass 2 — Build the semantic-atom fixtures and reframe surviving suites
 
 Before deleting more legacy scaffolding, ensure the minimal fixture set
 exists for:
@@ -638,38 +768,213 @@ This is the most important pass. Without these atoms, the new suite will
 still be organised around historical codepaths rather than around
 meaning.
 
-### Pass 3 — Rewrite the surviving migration tests
+Migration-era tests are reframed in this same pass: rename them, restate
+their assertions against the final oracle semantics, and strip stale
+RED / phase / doc-56 framing so they stand as permanent family-C
+contract suites rather than rename scaffolding.
 
-Turn migration-labelled tests into permanent contract suites. Rename
-them, restate their assertions, and remove stale RED / phase framing.
+Output of the pass:
 
-### Pass 4 — Replace the parity tail
+- the semantic-atom fixtures in section 6.1 exist and are documented
+- each atom has at least one Python integration test using a blind or
+  contract oracle
+- atoms that represent user-facing tooling risks have one designated CLI
+  canary and no more
+- `test_doc56_phase0_behaviours.py`,
+  `test_conditioned_forecast_response_contract.py`,
+  `conditionedForecastCompleteness.test.ts`,
+  `test_be_topo_pass_parity.py`, `test_model_resolver.py`, and
+  `multihop-evidence-parity-test.sh` are re-anchored on final-oracle
+  semantics with no migration-era framing left
+- no parity-era harness is retired yet
+
+### Pass 3 — Replace the parity tail
 
 For every v1/v2 parity harness we retire, ensure there is a replacement
 in one of the permanent families above. Deletion is only safe when the
 semantic claim survives somewhere else in better form.
 
-### Pass 5 — Delete the old engines and prune the suite
+The prospective retirement audit for this pass is complete — see
+[64-retirement-audit.md](64-retirement-audit.md). Replacement tests
+R1, R1b, R2, R3, R4, R7, R10, R11 (in
+`test_cohort_maturity_v3_contract.py`) and R12 (in
+`test_doc56_phase0_behaviours.py`) are green on main. Four v1
+assertions (R5, R6, R8, R9) are design divergences rather than
+coverage gaps and are not replaced.
 
-Once the replacement layers are green, delete the v1/v2 tests and any
-now-pointless helpers. The resulting suite should be smaller, more
-interpretable, and more directly tied to the live product semantics.
+Output of the pass:
+
+- every row in section 8.6 marked "retire" either has a green
+  successor or is documented in the audit as a v1-specific design
+  rule that dies with v1
+- any remaining goldens or diagnostics are explicitly demoted out of
+  the core semantic gate set
+- no expected-red harness remains mixed into the main merge gate by
+  accident
+
+### Pass 4 — Delete the old engines and prune the suite
+
+Deletion runs in two phases, gated separately. See §10.1 item 7 for
+the action list and §11 for the gate conditions.
+
+- **Phase A — v2-oracle files:** imminent. Gated on (a) two test
+  relocations (R13 and R14) and (b) fixing the
+  `cohort-maturity-model-parity-test.sh` product defect so that
+  canary goes green.
+- **Phase B — v1-oracle files:** blocked on product-code work.
+  Cannot begin until `api_handlers.py` stops calling v1's
+  `compute_cohort_maturity_rows` at its six remaining call sites.
+  Two utility-test classes must be relocated before this phase runs
+  so they outlive v1.
+
+Output of the pass:
+
+- v1/v2 parity harnesses are gone (both phases complete)
+- legacy forecast-helper tests that survived only as oracles are gone
+- shared utility tests have been relocated into files that outlive v1
+- the remaining suite reads as a permanent architecture document
+  rather than as a migration diary
+
+### 10.1 First-tranche backlog that can be assigned now
+
+The first implementation tranche should be assigned in the following
+order.
+
+1. **Rewrite `graph-editor/lib/tests/test_doc56_phase0_behaviours.py`
+   into a permanent Family C suite.**  
+   Keep the downstream temporal-split canaries, remove the phase/migration
+   framing, and make the file explicitly about cross-consumer agreement
+   across at least `conditioned_forecast`, `cohort_maturity_v3`,
+   `daily_conversions`, and `surprise_gauge`, with `lag_fit` included
+   where it shares the same temporal-selection seam.
+
+2. **Rewrite `graph-editor/lib/tests/test_conditioned_forecast_response_contract.py`
+   into the live CF handler contract.**  
+   Remove stale RED framing, preserve the handler-boundary assertions that
+   still matter, and add a small runtime-backed slice where the current
+   test is relying on stale static-only assumptions.
+
+3. **Rewrite `graph-editor/lib/tests/test_be_topo_pass_parity.py`
+   into a bounded-analytic topo-pass contract.**  
+   The file should prove what the topo pass is allowed to do and not do.
+   It should stop proving that the topo pass matches v2.
+
+4. **Rewrite `graph-editor/lib/tests/test_model_resolver.py` into the
+   canonical resolver contract.**  
+   Keep real graph inputs, but make the expected answer come from the
+   ratified resolver contract and field semantics rather than from legacy
+   reader functions.
+
+5. **Rewrite and rename
+   `graph-editor/src/services/__tests__/conditionedForecastCompleteness.test.ts`.**  
+   Keep the FE authority claim, but restate it as a live Family F suite
+   with clear boundaries: FE projection and overwrite behaviour only, not
+   BE semantic correctness.
+
+6. **Rewrite `graph-ops/scripts/multihop-evidence-parity-test.sh` into a
+   v3-only CLI metamorphic canary.**  
+   Separate freshness or setup concerns from the semantic claim, and make
+   the script explicitly about collapse/diverge behaviour rather than
+   historical RED status.
+
+7. **Delete the parity tail in two phases.**  
+   The prospective coverage audit required by this step is complete —
+   see [64-retirement-audit.md](64-retirement-audit.md). It split the
+   deletion targets into two groups by live-code dependency, and found
+   that some v1 row-shape rules are design divergences rather than
+   coverage gaps. What follows is the resulting action plan, not a
+   second audit.
+
+   **Phase A — v2-oracle retirement (unblocked, two relocations away):**
+   - Deletion targets: `test_v2_v3_parity.py`, `v2-v3-parity-test.sh`.
+   - Replacement-test status: R1, R1b, R2, R3, R4, R7, R10, R11 green in
+     `graph-editor/lib/tests/test_cohort_maturity_v3_contract.py`;
+     R12 green in `test_doc56_phase0_behaviours.py`.
+   - CLI canary status: all four Family-G anchors are GREEN
+     (`asat-blind`, `conversion-rate-blind`,
+     `cohort-maturity-model-parity`, `multihop-evidence-parity`).
+     The live CF defects that made them red have been fixed.
+   - Remaining preconditions:
+     1. Relocate `test_strong_evidence_midpoint_near_observed_rate`
+        from `test_v2_v3_parity.py` to
+        `test_cohort_maturity_v3_contract.py` (R13 — already green,
+        just needs a new home before its current file dies).
+     2. Relocate `test_v3_handler_widens_single_edge_downstream_cohort_span`
+        from `test_v2_v3_parity.py` to
+        `test_conditioned_forecast_response_contract.py` (R14 — same).
+   - After those two land, both files can be deleted with no
+     coverage loss.
+
+   **Phase B — v1-oracle retirement (blocked on product-code work):**
+   - Deletion targets: `test_cohort_forecast.py`,
+     `test_cohort_fan_controlled.py`, `test_cohort_fan_harness.py`.
+   - Blocker: `api_handlers.py` still calls v1's
+     `compute_cohort_maturity_rows` at six call sites (lines 4476,
+     4516, 4551, 4583, 4606, and the supporting import at 4476).
+     Until those call sites are removed or switched to v3, these test
+     files are covering live production code, not dead scaffolding.
+   - This is a product-code clean-up, not an assurance clean-up.
+     Scheduling it is out of scope for this note; the gate for Phase B
+     is simply "v1 has zero call sites in production code".
+   - Before deletion:
+     - Move `TestCDFRatioCalibration` and `TestMCBand` out of
+       `test_cohort_fan_controlled.py` into a new
+       `test_confidence_bands.py` file. They test
+       `runner.confidence_bands` utilities which are shared between
+       v1 and v3 via `forecast_runtime.py` and outlive v1.
+     - `TestForecastRate`, `TestReadEdgeCohortParams`,
+       `TestGetIncomingEdges`, and `TestFindEdgeById` in
+       `test_cohort_forecast.py` are v1-internal — they die with v1.
+
+   **Design divergences confirmed by the audit (not gaps):**
+   Four v1 row-shape rules do not apply to v3 and are not replaced:
+   midpoint-null in epoch A, rate-null past `tau_future_max`, fan
+   zero-width at the solid boundary, and fan opens through the
+   forecast zone. v3 returns prior-mean midpoint in epoch A, fills
+   `rate` in all branches (distinguishing observed from projected via
+   separate fields), carries full posterior width at the boundary,
+   and emits flat fans when the posterior applies uniformly across τ.
+   These are deliberate v3 design choices — see audit §R5, §R6, §R8, §R9.
+
+   **Standing rule**: a v2-oracle test that is the only numerical
+   check on a surface stays until a v2-free numerical check replaces
+   it. A docstring reframe is not a replacement.
+
+8. **Finish by reclassifying goldens and diagnostics.**  
+   `chart-graph-agreement-test.sh`, `cf-truth-parity.sh`,
+   `golden-regression.sh`, and `capture-doc56-baselines.sh` should end
+   this tranche either rewritten with explicit limited roles or
+   reclassified out of the core semantic gate set.
+
+For a junior developer, the rule is simple: do not delete anything
+until you have personally verified, for each assertion in the file to
+be deleted, that a green replacement exists elsewhere. Reframes are
+not replacements.
 
 ---
 
 ## 11. Minimum gate before deleting v1/v2
 
-We should not delete `cohort_maturity` v1/v2 until all of the following
-are true.
+Deletion runs in two phases — see §10.1 item 7. Each phase has its
+own gate.
 
-1. There is no remaining core test whose primary oracle is "matches v1"
-   or "matches v2".
+### Phase A gate — v2-oracle files (`test_v2_v3_parity.py`, `v2-v3-parity-test.sh`)
+
+All of the following must be true:
+
+1. No remaining core test has "matches v1" or "matches v2" as its
+   primary oracle. Every assertion that was previously covered by a
+   v1/v2 oracle has either a green v2-free replacement, or has been
+   confirmed by the retirement audit to be a v1-specific design rule
+   that v3 deliberately does not uphold (see 64-retirement-audit.md
+   §R5, §R6, §R8, §R9). Numerical claims need numerical replacements;
+   structural claims need structural replacements.
 2. Runtime semantic contract tests are green for the factorised cohort
    model, multi-hop semantics, and query-scoped degradation.
 3. Cross-consumer agreement tests are green across at least
-   `cohort_maturity_v3`, `conditioned_forecast`, `daily_conversions`, and
-   `surprise_gauge`, with `lag_fit` included where it shares the same
-   temporal-selection seam.
+   `cohort_maturity_v3`, `conditioned_forecast`, `daily_conversions`,
+   and `surprise_gauge`, with `lag_fit` included where it shares the
+   same temporal-selection seam.
 4. Metamorphic tests prove the required collapse/diverge relations for
    leading-edge, downstream single-hop, multi-hop non-latent upstream,
    and multi-hop latent-upstream cases.
@@ -677,12 +982,60 @@ are true.
    stability.
 6. FE authority tests are green for CF-owned graph fields.
 7. The core outside-in CLI canaries are green on their designated
-   fixtures.
+   fixtures. All four (`asat-blind`, `conversion-rate-blind`,
+   `cohort-maturity-model-parity`, `multihop-evidence-parity`) are
+   green today.
 8. Any remaining expected-red or diagnostic-only forecast harness is
    explicitly quarantined and not mistaken for a production gate.
+9. R13 and R14 have been relocated out of `test_v2_v3_parity.py` into
+   their target files (see §10.1 item 7 Phase A).
 
-If those conditions are not met, deleting v1/v2 will remove the wrong
-tests before we have built the right ones.
+Gates 1–8 are met today. Gate 9 (two test relocations) is the only
+remaining work before Phase A can execute.
+
+One Family-B/D Python test is currently red
+(`test_bayesian_sidecar_preserves_downstream_window_cohort_chart_split`).
+This is a blind contract catching a real CF defect — it does not block
+Phase A, but it is an unfixed product bug listed in §11.1 below.
+
+### Phase B gate — v1-oracle files (`test_cohort_forecast.py`, `test_cohort_fan_*.py`)
+
+Phase A must have completed, PLUS:
+
+10. **v1 has zero call sites in production code.** Today,
+    `api_handlers.py` calls `compute_cohort_maturity_rows` (v1) at six
+    call sites (lines 4476, 4516, 4551, 4583, 4606, plus the module
+    import). Until those are removed or switched to v3, the v1 test
+    files are covering live production code.
+11. `runner.confidence_bands` utility tests (`TestCDFRatioCalibration`,
+    `TestMCBand`) have been moved to a dedicated file that outlives v1.
+
+Gate 10 is a product-code clean-up, not an assurance clean-up, and is
+out of scope for this note.
+
+If the applicable gate is not met, deleting v1/v2 will remove the
+wrong tests before we have built the right ones.
+
+### 11.1 Currently-red blind-contract tests (product defects, not test issues)
+
+The new test regime catches two real CF defects. These do not block
+Phase A or Phase B deletion — they are product bugs that exist today
+regardless of the assurance overhaul. Listed here so they are not
+mistaken for regressions introduced by the new test suite.
+
+1. `test_bayesian_sidecar_preserves_downstream_window_cohort_chart_split`
+   — window and cohort model curves collapse onto each other on a
+   bayesian-enriched synth fixture where they should diverge.
+   Symptom: switching between window and cohort on a downstream edge
+   with bayesian-enriched parameters shows the same chart.
+2. `test_v3_handler_widens_single_edge_downstream_cohort_span` —
+   handler passes edge-scoped CDF array (`cdf:x->y`) instead of
+   anchor-to-target (`cdf:a->y`) for single-edge cohort spans with
+   anchor ≠ from-node. This is the R14
+   relocation target — the defect must be fixed before the test is
+   moved into `test_conditioned_forecast_response_contract.py`, or
+   the move has to take the assertion as-is (red) and treat it as an
+   expected-red blind contract there.
 
 ---
 

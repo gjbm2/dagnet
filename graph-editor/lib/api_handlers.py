@@ -404,7 +404,9 @@ def _compute_surprise_gauge(
         is_multi_hop=False,
         from_node_arrival=from_node_arrival,
         numerator_representation='factorised',
-        p_conditioning_temporal_family='window' if is_window else 'cohort',
+        p_conditioning_temporal_family=(
+            'cohort' if _direct_cohort_p_conditioning else 'window'
+        ),
         p_conditioning_source=(
             'direct_cohort_exact_subject'
             if _direct_cohort_p_conditioning
@@ -438,71 +440,63 @@ def _compute_surprise_gauge(
 
     variables: List[Dict[str, Any]] = []
 
+    # Degenerate-SD handling: a zero unconditioned SD is a respectable
+    # edge condition (tight prior — e.g. cohort too young for onset to
+    # have fired, so the model predicts zero conversions with zero
+    # spread), not a failure. The gauge renders "expected == observed
+    # → no surprise" (z = 0, quantile = 0.5) or "expected ≠ observed
+    # → extreme tail" (|z| very large, quantile → 0 or 1). Doc 55 §3.3.
+    def _sd_z(obs: float, exp: float, sd: float) -> float:
+        sd_denom = sd if sd > 1e-12 else 1e-12
+        return (obs - exp) / sd_denom
+
     # p variable
-    if summary.pp_rate_unconditioned_sd > 1e-12:
-        z_p = ((obs_rate - summary.pp_rate_unconditioned)
-               / summary.pp_rate_unconditioned_sd)
-        q_p = float(norm_cdf(z_p))
-        p_var: Dict[str, Any] = {
-            'name': 'p',
-            'label': 'Conversion rate',
-            'quantile': round(q_p, 6),
-            'sigma': round(z_p, 3),
-            'observed': round(obs_rate, 6),
-            'expected': round(summary.pp_rate_unconditioned, 6),
-            'posterior_sd': round(summary.pp_rate_unconditioned_sd, 6),
-            'combined_sd': round(summary.pp_rate_unconditioned_sd, 6),
-            'completeness': round(summary.completeness_unconditioned, 4),
-            'evidence_n': int(round(total_n)),
-            'evidence_k': int(round(total_k)),
-            'evidence_retrieved_at': _format_retrieved_at_for_display(retrieved_at),
-            'zone': classify_zone(q_p),
-            'available': True,
-        }
-        variables.append(p_var)
-    else:
-        variables.append({
-            'name': 'p',
-            'label': 'Conversion rate',
-            'available': False,
-            'reason': 'Posterior-predictive SD effectively zero',
-        })
+    z_p = _sd_z(obs_rate, summary.pp_rate_unconditioned,
+                summary.pp_rate_unconditioned_sd)
+    q_p = float(norm_cdf(z_p))
+    variables.append({
+        'name': 'p',
+        'label': 'Conversion rate',
+        'quantile': round(q_p, 6),
+        'sigma': round(z_p, 3),
+        'observed': round(obs_rate, 6),
+        'expected': round(summary.pp_rate_unconditioned, 6),
+        'posterior_sd': round(summary.pp_rate_unconditioned_sd, 6),
+        'combined_sd': round(summary.pp_rate_unconditioned_sd, 6),
+        'completeness': round(summary.completeness_unconditioned, 4),
+        'evidence_n': int(round(total_n)),
+        'evidence_k': int(round(total_k)),
+        'evidence_retrieved_at': _format_retrieved_at_for_display(retrieved_at),
+        'zone': classify_zone(q_p),
+        'available': True,
+    })
 
     # completeness variable — dial centred on unconditioned mean,
     # needle at conditioned mean. Surprise = how much the evidence
     # shifted the model's view of maturity.
-    if summary.completeness_unconditioned_sd > 1e-12:
-        z_c = ((summary.completeness - summary.completeness_unconditioned)
-               / summary.completeness_unconditioned_sd)
-        q_c = float(norm_cdf(z_c))
-        c_var: Dict[str, Any] = {
-            'name': 'completeness',
-            'label': 'Completeness',
-            'quantile': round(q_c, 6),
-            'sigma': round(z_c, 3),
-            # Dial shows expected (unconditioned); needle shows
-            # observed (conditioned). Same convention as p.
-            'observed': round(summary.completeness, 6),
-            'expected': round(summary.completeness_unconditioned, 6),
-            'posterior_sd': round(summary.completeness_unconditioned_sd, 6),
-            'combined_sd': round(summary.completeness_unconditioned_sd, 6),
-            # Raw pair — convenient for detail rendering.
-            'unconditioned': round(summary.completeness_unconditioned, 6),
-            'unconditioned_sd': round(summary.completeness_unconditioned_sd, 6),
-            'conditioned': round(summary.completeness, 6),
-            'conditioned_sd': round(summary.completeness_sd, 6),
-            'evidence_retrieved_at': _format_retrieved_at_for_display(retrieved_at),
-            'zone': classify_zone(q_c),
-            'available': True,
-        }
-        variables.append(c_var)
-    else:
-        variables.append({
-            'name': 'completeness',
-            'label': 'Completeness',
-            'available': False,
-            'reason': 'Unconditioned completeness SD effectively zero',
-        })
+    z_c = _sd_z(summary.completeness, summary.completeness_unconditioned,
+                summary.completeness_unconditioned_sd)
+    q_c = float(norm_cdf(z_c))
+    variables.append({
+        'name': 'completeness',
+        'label': 'Completeness',
+        'quantile': round(q_c, 6),
+        'sigma': round(z_c, 3),
+        # Dial shows expected (unconditioned); needle shows
+        # observed (conditioned). Same convention as p.
+        'observed': round(summary.completeness, 6),
+        'expected': round(summary.completeness_unconditioned, 6),
+        'posterior_sd': round(summary.completeness_unconditioned_sd, 6),
+        'combined_sd': round(summary.completeness_unconditioned_sd, 6),
+        # Raw pair — convenient for detail rendering.
+        'unconditioned': round(summary.completeness_unconditioned, 6),
+        'unconditioned_sd': round(summary.completeness_unconditioned_sd, 6),
+        'conditioned': round(summary.completeness, 6),
+        'conditioned_sd': round(summary.completeness_sd, 6),
+        'evidence_retrieved_at': _format_retrieved_at_for_display(retrieved_at),
+        'zone': classify_zone(q_c),
+        'available': True,
+    })
 
     result: Dict[str, Any] = {
         'analysis_type': 'surprise_gauge',
@@ -1618,6 +1612,8 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
         # ── Build span kernel + MC draws (shared with v2 for parity) ──
         _mc_cdf_v3 = None
         _mc_p_v3 = None
+        _mc_cdf_v3_epi = None
+        _mc_p_v3_epi = None
         _is_multi_hop_v3 = False
         _edge_mc_cdf_v3 = None  # Edge-level CDF for Pop C (multi-hop only)
         _det_norm_cdf = None
@@ -1625,13 +1621,25 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
         _span_alpha_v3 = None
         _span_beta_v3 = None
         _span_params_v3 = None
+        _span_params_v3_epi = None
         _edge_kernel_v3 = None
         _anchor_relative_subject_cdf_v3 = False
         _span_x_v3 = None
+        _v3_x_provider_overlay = None
+        # The subject helper family is always X-rooted window semantics,
+        # even for exact single-hop cohort solves. Initialising it here
+        # keeps fallback / degraded paths from crashing when they can build
+        # rows from frames + target edge but do not have explicit X/Y nodes.
+        _subject_temporal_mode = 'window'
         if composed_frames and last_edge_id and query_from_node and query_to_node:
             from runner.span_kernel import compose_span_kernel, mc_span_cdfs
             _is_multi_hop_v3 = preparation.is_multi_hop
             _graph_pref = graph_data.get('model_source_preference')
+            # The factorised subject helper always answers the X→end
+            # progression question on an X-rooted helper family. Exact
+            # single-hop cohort evidence may still move the rate side via
+            # p_conditioning_evidence, but it must not retarget the subject
+            # operator itself.
 
             # WP3: factorised cohort mode keeps the subject operator rooted
             # at X→end; the anchor→X solve stays on the separate carrier.
@@ -1663,7 +1671,7 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
                 graph_data,
                 query_from_node,
                 query_to_node,
-                temporal_mode='window',
+                temporal_mode=_subject_temporal_mode,
                 graph_preference=_graph_pref,
             )
             if _edge_execution_v3 is not None:
@@ -1696,6 +1704,18 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
                 _span_params_v3 = build_span_params(
                     _norm_cdf_v3, _ek.span_p, 400,
                     _span_edge_params, is_window=is_window)
+                _span_params_v3_epi = _span_params_v3
+                _span_mu_sd_epi = (
+                    _span_edge_params.get('bayes_mu_sd')
+                    or _span_edge_params.get('bayes_path_mu_sd')
+                    or 0.0
+                )
+                if _span_params_v3 is not None and _span_mu_sd_epi:
+                    from dataclasses import replace as _dc_replace
+                    _span_params_v3_epi = _dc_replace(
+                        _span_params_v3,
+                        mu_sd=float(_span_mu_sd_epi),
+                    )
                 _span_alpha_v3 = _span_params_v3.alpha_0
                 _span_beta_v3 = _span_params_v3.beta_0
 
@@ -1704,7 +1724,7 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
                 graph_data,
                 _span_x_v3,
                 query_to_node,
-                temporal_mode='window',
+                temporal_mode=_subject_temporal_mode,
                 graph_preference=_graph_pref,
             )
             if _span_execution_v3 is not None:
@@ -1718,12 +1738,21 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
                     num_draws=2000,
                     rng=_rng_v3,
                 )
+                _rng_v3_epi = _np.random.default_rng(42)
+                _mc_cdf_v3_epi, _mc_p_v3_epi = mc_span_cdfs(
+                    topo=_span_execution_v3.topo,
+                    edge_params=_span_execution_v3.edge_params,
+                    edge_sds=_span_execution_v3.edge_sds,  # doc 61: reporting overlay uses epistemic
+                    max_tau=400,
+                    num_draws=2000,
+                    rng=_rng_v3_epi,
+                )
                 if _anchor_relative_subject_cdf_v3:
                     _edge_execution_p = build_prepared_span_execution(
                         graph_data,
                         query_from_node,
                         query_to_node,
-                        temporal_mode='window',
+                        temporal_mode=_subject_temporal_mode,
                         graph_preference=_graph_pref,
                     )
                     if _edge_execution_p is not None:
@@ -1735,6 +1764,15 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
                             max_tau=400,
                             num_draws=2000,
                             rng=_rng_edge_v3,
+                        )
+                        _rng_edge_v3_epi = _np.random.default_rng(42)
+                        _, _mc_p_v3_epi = mc_span_cdfs(
+                            topo=_edge_execution_p.topo,
+                            edge_params=_edge_execution_p.edge_params,
+                            edge_sds=_edge_execution_p.edge_sds,  # doc 61: reporting overlay uses epistemic
+                            max_tau=400,
+                            num_draws=2000,
+                            rng=_rng_edge_v3_epi,
                         )
 
         # ── Edge-level MC CDF for Pop C (multi-hop only) ─────────────
@@ -1779,12 +1817,26 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
             and anchor_node
             and query_from_node != anchor_node
         ):
-            from runner.forecast_runtime import XProvider, get_incoming_edges, read_edge_cohort_params
+            from runner.forecast_runtime import (
+                XProvider,
+                get_incoming_edges,
+                has_semantic_upstream_latency,
+                read_edge_cohort_params,
+            )
             _v3_ingress = []
+            _v3_ingress_epi = []
             for inc_edge in get_incoming_edges(graph_data, query_from_node):
                 _params = read_edge_cohort_params(inc_edge)
                 if _params:
                     _v3_ingress.append(_params)
+                    _lat_post = (((inc_edge.get('p') or {}).get('latency') or {}).get('posterior') or {})
+                    _params_epi = dict(_params)
+                    for _mu_sd_key in ('path_mu_sd', 'mu_sd'):
+                        _mu_sd_epi = _lat_post.get(_mu_sd_key)
+                        if isinstance(_mu_sd_epi, (int, float)) and math.isfinite(_mu_sd_epi) and _mu_sd_epi > 0:
+                            _params_epi['mu_sd'] = float(_mu_sd_epi)
+                            break
+                    _v3_ingress_epi.append(_params_epi)
             # Compute reach from anchor to x.
             # build_networkx_graph uses UUIDs; anchor_node and
             # query_from_node are human IDs — must convert.
@@ -1801,7 +1853,14 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
                 _v3_reach = path_result.probability
             except Exception:
                 pass
-            _v3_upstream_enabled = _v3_reach > 0
+            _v3_upstream_enabled = (
+                _v3_reach > 0
+                and has_semantic_upstream_latency(
+                    graph_data,
+                    anchor_node,
+                    query_from_node,
+                )
+            )
             print(f"[v3] upstream: ingress={len(_v3_ingress)} reach={_v3_reach:.6f} "
                   f"x={query_from_node} a={anchor_node} enabled={_v3_upstream_enabled}")
             # Fetch upstream evidence for empirical carrier (Tier 2)
@@ -1832,6 +1891,13 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
                 ingress_carrier=_v3_ingress if _v3_ingress else None,
                 upstream_obs=_v3_upstream_obs,
             )
+            _v3_x_provider_overlay = XProvider(
+                reach=_v3_reach,
+                upstream_params_list=_v3_ingress_epi,
+                enabled=_v3_upstream_enabled,
+                ingress_carrier=_v3_ingress_epi if _v3_ingress_epi else None,
+                upstream_obs=_v3_upstream_obs,
+            )
 
         _v3_resolved_override = None
 
@@ -1846,7 +1912,7 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
                 _v3_resolved_override = resolve_model_params(
                     _target_edge_v3,
                     scope='edge',
-                    temporal_mode='window' if is_window else 'cohort',
+                    temporal_mode=_subject_temporal_mode,
                     graph_preference=_graph_pref,
                 )
             _direct_cohort_p_conditioning = should_enable_direct_cohort_p_conditioning(
@@ -1862,7 +1928,7 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
                 x_provider=_v3_x_provider,
                 numerator_representation='factorised',
                 p_conditioning_temporal_family=(
-                    'window' if preparation.subject_is_window else 'cohort'
+                    'cohort' if _direct_cohort_p_conditioning else 'window'
                 ),
                 p_conditioning_source=(
                     'direct_cohort_exact_subject'
@@ -2005,12 +2071,26 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
                     # spans.
                     _overlay_span_x = _span_x_v3
 
-                    # Promoted curve: MC median from the already-computed
-                    # `_mc_cdf_v3` and `_mc_p_v3`. These arrays were built
-                    # by mc_span_cdfs with the same topology the main
-                    # chart uses, so the overlay midline is the same
-                    # quantity as the main chart's model_midpoint.
-                    if _mc_cdf_v3 is not None and _mc_p_v3 is not None:
+                    # Promoted overlay midpoint must follow the exact
+                    # row-model family the chart renders (`model_midpoint`).
+                    # The promoted band is built separately from an
+                    # epistemic-only replay of that same cohort/path
+                    # construction, so the line stays parity-locked to
+                    # the chart while the filled band remains a reporting
+                    # surface (doc 61), not a predictive forecast fan.
+                    curve = []
+                    if maturity_rows:
+                        curve = [
+                            {
+                                'tau_days': int(r['tau_days']),
+                                'model_rate': round(float(r['model_midpoint']), 8),
+                            }
+                            for r in maturity_rows
+                            if r.get('tau_days') is not None
+                            and r.get('model_midpoint') is not None
+                            and int(r['tau_days']) <= _curve_tau_max
+                        ]
+                    elif _mc_cdf_v3 is not None and _mc_p_v3 is not None:
                         T_mc = min(_mc_cdf_v3.shape[1], _curve_tau_max + 1)
                         _abs = _mc_cdf_v3[:, :T_mc] * _mc_p_v3[:, None]
                         _mid = _np_bands.median(_abs, axis=0)
@@ -2018,6 +2098,8 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
                             {'tau_days': t, 'model_rate': round(float(_mid[t]), 8)}
                             for t in range(T_mc)
                         ]
+
+                    if curve and _mc_p_v3 is not None:
                         _fm_promoted = float(_np_bands.median(_mc_p_v3))
                         subject_result['model_curve'] = curve
                         subject_result['model_curve_params'] = {
@@ -2027,18 +2109,113 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
                         }
                         subject_result['promoted_source'] = mc_resolved.source if mc_resolved else 'best_available'
 
+                    if (
+                        _curve_tau_max > 0
+                        and composed_frames
+                        and last_edge_id
+                        and _mc_cdf_v3_epi is not None
+                        and _mc_p_v3_epi is not None
+                    ):
+                        _overlay_band_rows = compute_cohort_maturity_rows_v3(
+                            frames=composed_frames,
+                            graph=graph_data,
+                            target_edge_id=last_edge_id,
+                            query_from_node=query_from_node or '',
+                            query_to_node=query_to_node or '',
+                            anchor_from=anchor_from_str,
+                            anchor_to=anchor_to_str,
+                            sweep_to=sweep_to_final,
+                            is_window=is_window,
+                            axis_tau_max=_curve_tau_max,
+                            band_level=0.90,
+                            anchor_node_id=anchor_node,
+                            display_settings=display_settings,
+                            mc_cdf_arr=_mc_cdf_v3_epi,
+                            mc_p_s=_mc_p_v3_epi,
+                            det_norm_cdf=_det_norm_cdf,
+                            det_span_p=_det_span_p,
+                            x_provider_override=(
+                                _v3_x_provider_overlay
+                                if _v3_x_provider_overlay is not None
+                                else _v3_x_provider
+                            ),
+                            span_alpha=_span_alpha_v3,
+                            span_beta=_span_beta_v3,
+                            span_mu_sd=_span_params_v3_epi.mu_sd if _span_params_v3_epi else None,
+                            span_sigma_sd=_span_params_v3_epi.sigma_sd if _span_params_v3_epi else None,
+                            span_onset_sd=_span_params_v3_epi.onset_sd if _span_params_v3_epi else None,
+                            span_onset_mu_corr=_span_params_v3_epi.onset_mu_corr if _span_params_v3_epi else None,
+                            is_multi_hop=_is_multi_hop,
+                            resolved_override=_v3_resolved_override,
+                            edge_cdf_arr=None,
+                            runtime_bundle=None,
+                        )
+                        _overlay_upper = [
+                            {
+                                'tau_days': int(r['tau_days']),
+                                'model_rate': round(float(r['model_fan_upper']), 8),
+                            }
+                            for r in _overlay_band_rows
+                            if r.get('tau_days') is not None
+                            and r.get('model_fan_upper') is not None
+                            and int(r['tau_days']) <= _curve_tau_max
+                        ]
+                        _overlay_lower = [
+                            {
+                                'tau_days': int(r['tau_days']),
+                                'model_rate': round(float(r['model_fan_lower']), 8),
+                            }
+                            for r in _overlay_band_rows
+                            if r.get('tau_days') is not None
+                            and r.get('model_fan_lower') is not None
+                            and int(r['tau_days']) <= _curve_tau_max
+                        ]
+                        if _overlay_upper and _overlay_lower:
+                            subject_result['model_curve_bayes_band_upper'] = _overlay_upper
+                            subject_result['model_curve_bayes_band_lower'] = _overlay_lower
+
                     # Per-source curves via runtime-prepared span inputs.
                     #
                     # Rate scaling follows the same prepared subject span
                     # the main chart now uses, so no anchor-rooted
                     # widening remains in the per-source curves either.
                     source_curve_results: Dict[str, Any] = {}
-                    for src_name in ('analytic', 'analytic_be', 'bayesian'):
+                    _show_promoted = (
+                        str(scenario.get('visibility_mode') or 'f+e') == 'f'
+                        or display_settings.get('show_model_promoted') is not False
+                    )
+                    _source_setting_map = {
+                        'analytic': 'show_model_analytic',
+                        'analytic_be': 'show_model_analytic_be',
+                        'bayesian': 'show_model_bayesian',
+                    }
+                    _requested_source_names: Optional[List[str]] = None
+                    if display_settings:
+                        _requested_source_names = [
+                            src_name
+                            for src_name, setting_key in _source_setting_map.items()
+                            if bool(display_settings.get(setting_key))
+                        ]
+                        _promoted_source_name = (
+                            mc_resolved.source if mc_resolved is not None else None
+                        )
+                        if _show_promoted and _promoted_source_name in _requested_source_names:
+                            _requested_source_names = [
+                                src_name
+                                for src_name in _requested_source_names
+                                if src_name != _promoted_source_name
+                            ]
+                    _source_names_to_build = (
+                        _requested_source_names
+                        if _requested_source_names is not None
+                        else ['analytic', 'analytic_be', 'bayesian']
+                    )
+                    for src_name in _source_names_to_build:
                         _src_execution = build_prepared_span_execution(
                             graph_data,
                             _overlay_span_x,
                             query_to_node,
-                            temporal_mode='window',
+                            temporal_mode=_subject_temporal_mode,
                             graph_preference=src_name,
                         )
                         if _src_execution is None:
@@ -2058,7 +2235,7 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
                                 graph_data,
                                 query_from_node,
                                 query_to_node,
-                                temporal_mode='window',
+                                temporal_mode=_subject_temporal_mode,
                                 graph_preference=src_name,
                             )
                             if _src_edge_execution is not None:
@@ -2530,6 +2707,7 @@ def handle_conditioned_forecast(data: Dict[str, Any]) -> Dict[str, Any]:
                 from runner.forecast_runtime import (
                     XProvider,
                     get_incoming_edges,
+                    has_semantic_upstream_latency,
                     read_edge_cohort_params,
                 )
 
@@ -2554,7 +2732,14 @@ def handle_conditioned_forecast(data: Dict[str, Any]) -> Dict[str, Any]:
                     _reach = path_result.probability
                 except Exception:
                     pass
-                _upstream_enabled = _reach > 0
+                _upstream_enabled = (
+                    _reach > 0
+                    and has_semantic_upstream_latency(
+                        graph_data,
+                        anchor_node,
+                        query_from_node,
+                    )
+                )
                 _upstream_obs = None
                 if _upstream_enabled and query_from_node != anchor_node:
                     _af = subj_group[0].get('anchor_from', '')
@@ -2619,7 +2804,7 @@ def handle_conditioned_forecast(data: Dict[str, Any]) -> Dict[str, Any]:
                     x_provider=_x_provider,
                     numerator_representation='factorised',
                     p_conditioning_temporal_family=(
-                        'window' if preparation.subject_is_window else 'cohort'
+                        'cohort' if _direct_cohort_p_conditioning else 'window'
                     ),
                     p_conditioning_source=(
                         'direct_cohort_exact_subject'

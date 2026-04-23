@@ -200,7 +200,18 @@
       "Bash(bash scripts/hunt-phase2-pathology.sh synth-mirror-4step-context)",
       "Bash(bash scripts/hunt-phase2-pathology.sh synth-skip-context)",
       "Bash(pkill -f \"hunt-phase2-pathology\")",
-      "Bash(pkill -f \"test_harness.*synth-skip\")"
+      "Bash(pkill -f \"test_harness.*synth-skip\")",
+      "Bash(. graph-editor/venv/bin/activate)",
+      "Bash(. /home/reg/dev/dagnet/graph-editor/venv/bin/activate)",
+      "Bash(. venv/bin/activate)",
+      "Bash(. /home/reg/.nvm/nvm.sh)",
+      "Bash(bash graph-ops/scripts/analyse.sh *)",
+      "Bash(bash /home/reg/dev/dagnet/graph-ops/scripts/analyse.sh *)",
+      "Bash(bash /home/reg/dev/dagnet/graph-ops/scripts/conversion-rate-blind-test.sh *)",
+      "Bash(bash graph-ops/scripts/cohort-maturity-model-parity-test.sh *)",
+      "Bash(bash /home/reg/dev/dagnet/scripts/dev-server-check.sh *)",
+      "Bash(bash scripts/dev-server-check.sh *)",
+      "Bash(bash scripts/extract-mark-logs.sh *)"
     ],
     "additionalDirectories": [
       "/home/reg/dev/dagnet/.claude",

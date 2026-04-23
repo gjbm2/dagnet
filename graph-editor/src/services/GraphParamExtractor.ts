@@ -146,18 +146,82 @@ export function extractParamsFromGraph(graph: Graph | null): ScenarioParams {
 /**
  * Extract parameters from a single edge
  * Only include defined (non-undefined) values
- * 
- * PARAM PACK FIELDS (scenario-visible, user-overridable):
+ *
+ * PARAM PACK FIELDS (scenario-visible, user-overridable + Bayes-facing):
  * - p.mean, p.stdev
+ * - p.posterior.* — probability posterior (alpha, beta, HDI, ess, rhat, fitted_at,
+ *     fingerprint, provenance, cohort_*)
  * - p.forecast.mean, p.forecast.stdev
  * - p.evidence.mean, p.evidence.stdev, p.evidence.n, p.evidence.k
- * - p.latency.completeness, p.latency.completeness_stdev, p.latency.t95, p.latency.median_lag_days
- * 
+ * - p.latency.completeness, p.latency.completeness_stdev,
+ *     p.latency.t95, p.latency.path_t95, p.latency.median_lag_days
+ * - p.latency Bayesian scalars (populated by the promotion cascade):
+ *     mu, sigma, onset_delta_days,
+ *     promoted_t95, promoted_onset_delta_days,
+ *     promoted_mu_sd, promoted_sigma_sd, promoted_onset_sd, promoted_onset_mu_corr,
+ *     path_mu, path_sigma, path_onset_delta_days,
+ *     promoted_path_t95, promoted_path_mu_sd, promoted_path_sigma_sd,
+ *     promoted_path_onset_sd
+ * - p.latency.posterior.* — full latency posterior block
+ *
  * NOT IN PARAM PACK (internal/config):
- * - distribution, min, max, alpha, beta
+ * - p.distribution, p.min, p.max, p.alpha, p.beta (raw dist knobs)
  * - evidence.scope_from/to, evidence.retrieved_at, evidence.source
- * - latency.latency_parameter, latency.anchor_node_id, latency.mean_lag_days
+ * - latency.latency_parameter, latency.anchor_node_id, latency.mean_lag_days,
+ *     latency.*_overridden flags
  */
+
+// Whitelist of scalar latency fields on edge.p.latency that belong in the pack.
+// Every other nested object on latency is handled explicitly (posterior below).
+const LATENCY_FIELD_WHITELIST = [
+  'completeness', 'completeness_stdev',
+  't95', 'path_t95', 'median_lag_days',
+  // Bayesian promoted scalars
+  'mu', 'sigma', 'onset_delta_days',
+  'promoted_t95', 'promoted_onset_delta_days',
+  'promoted_mu_sd', 'promoted_sigma_sd', 'promoted_onset_sd', 'promoted_onset_mu_corr',
+  'path_mu', 'path_sigma', 'path_onset_delta_days',
+  'promoted_path_t95', 'promoted_path_mu_sd', 'promoted_path_sigma_sd',
+  'promoted_path_onset_sd',
+];
+
+// Whitelist of probability posterior fields (edge.p.posterior) that belong in the pack.
+// Keeps posterior metadata (alpha/beta/HDI/ess/rhat/etc.) but drops raw sample arrays
+// and any future internal fields by not copying the object wholesale.
+const PROBABILITY_POSTERIOR_FIELD_WHITELIST = [
+  'distribution',
+  'alpha', 'beta',
+  'hdi_lower', 'hdi_upper', 'hdi_level',
+  'ess', 'rhat',
+  'fitted_at', 'fingerprint', 'provenance',
+  'cohort_alpha', 'cohort_beta',
+  'cohort_hdi_lower', 'cohort_hdi_upper',
+];
+
+// Whitelist of latency posterior fields (edge.p.latency.posterior).
+const LATENCY_POSTERIOR_FIELD_WHITELIST = [
+  'distribution',
+  'mu_mean', 'mu_sd', 'sigma_mean', 'sigma_sd',
+  'onset_mean', 'onset_sd', 'onset_delta_days', 'onset_mu_corr',
+  'hdi_t95_lower', 'hdi_t95_upper', 'hdi_level',
+  'ess', 'rhat',
+  'fitted_at', 'fingerprint', 'provenance',
+  // Path-level (cohort-slice) latency
+  'path_mu_mean', 'path_mu_sd', 'path_sigma_mean', 'path_sigma_sd',
+  'path_onset_mean', 'path_onset_sd', 'path_onset_delta_days',
+  'path_hdi_t95_lower', 'path_hdi_t95_upper',
+  'path_provenance',
+];
+
+function pickWhitelisted(src: any, whitelist: string[]): Record<string, any> {
+  const out: Record<string, any> = {};
+  if (!src || typeof src !== 'object') return out;
+  for (const k of whitelist) {
+    if (src[k] !== undefined) out[k] = src[k];
+  }
+  return out;
+}
+
 function extractEdgeParams(edge: GraphEdge): EdgeParamDiff | null {
   const params: EdgeParamDiff = {};
 
@@ -168,7 +232,13 @@ function extractEdgeParams(edge: GraphEdge): EdgeParamDiff | null {
     if (pAny.mean !== undefined) p.mean = pAny.mean;
     if (pAny.stdev !== undefined) p.stdev = pAny.stdev;
     // NOTE: distribution, min, max, alpha, beta are NOT in param packs
-    
+
+    // === POSTERIOR: Probability posterior (Bayesian alpha/beta/HDI/quality) ===
+    if (pAny.posterior) {
+      const posterior = pickWhitelisted(pAny.posterior, PROBABILITY_POSTERIOR_FIELD_WHITELIST);
+      if (Object.keys(posterior).length > 0) p.posterior = posterior;
+    }
+
     // === EVIDENCE: Only mean and stdev (scenario-overridable) ===
     // NOTE: window_from/to, retrieved_at, source are NOT in param packs
     if (pAny.evidence) {
@@ -179,7 +249,7 @@ function extractEdgeParams(edge: GraphEdge): EdgeParamDiff | null {
       if (pAny.evidence.k !== undefined) evidence.k = pAny.evidence.k;
       if (Object.keys(evidence).length > 0) p.evidence = evidence;
     }
-    
+
     // === FORECAST: Projected final conversion (p_∞) ===
     if (pAny.forecast) {
       const forecast: any = {};
@@ -187,16 +257,15 @@ function extractEdgeParams(edge: GraphEdge): EdgeParamDiff | null {
       if (pAny.forecast.stdev !== undefined) forecast.stdev = pAny.forecast.stdev;
       if (Object.keys(forecast).length > 0) p.forecast = forecast;
     }
-    
-    // === LATENCY: Only computed stats (completeness, t95, path_t95, median_lag_days) ===
+
+    // === LATENCY: computed stats + Bayesian promoted scalars + posterior ===
     // NOTE: latency_parameter, anchor_node_id, mean_lag_days, *_overridden are NOT in param packs
     if (pAny.latency) {
-      const latency: any = {};
-      if (pAny.latency.completeness !== undefined) latency.completeness = pAny.latency.completeness;
-      if (pAny.latency.completeness_stdev !== undefined) latency.completeness_stdev = pAny.latency.completeness_stdev;
-      if (pAny.latency.t95 !== undefined) latency.t95 = pAny.latency.t95;
-      if (pAny.latency.path_t95 !== undefined) latency.path_t95 = pAny.latency.path_t95;
-      if (pAny.latency.median_lag_days !== undefined) latency.median_lag_days = pAny.latency.median_lag_days;
+      const latency: any = pickWhitelisted(pAny.latency, LATENCY_FIELD_WHITELIST);
+      if (pAny.latency.posterior) {
+        const latPosterior = pickWhitelisted(pAny.latency.posterior, LATENCY_POSTERIOR_FIELD_WHITELIST);
+        if (Object.keys(latPosterior).length > 0) latency.posterior = latPosterior;
+      }
       if (Object.keys(latency).length > 0) p.latency = latency;
     }
 
@@ -233,14 +302,19 @@ function extractEdgeParams(edge: GraphEdge): EdgeParamDiff | null {
         if (Object.keys(forecast).length > 0) condP.forecast = forecast;
       }
       
-      // === LATENCY: Only computed stats (completeness, t95, path_t95, median_lag_days) ===
+      // === POSTERIOR: probability posterior on conditional ===
+      if (condPAny?.posterior) {
+        const posterior = pickWhitelisted(condPAny.posterior, PROBABILITY_POSTERIOR_FIELD_WHITELIST);
+        if (Object.keys(posterior).length > 0) condP.posterior = posterior;
+      }
+
+      // === LATENCY: computed stats + Bayesian promoted scalars + posterior ===
       if (condPAny?.latency) {
-        const latency: any = {};
-        if (condPAny.latency.completeness !== undefined) latency.completeness = condPAny.latency.completeness;
-        if (condPAny.latency.completeness_stdev !== undefined) latency.completeness_stdev = condPAny.latency.completeness_stdev;
-        if (condPAny.latency.t95 !== undefined) latency.t95 = condPAny.latency.t95;
-        if (condPAny.latency.path_t95 !== undefined) latency.path_t95 = condPAny.latency.path_t95;
-        if (condPAny.latency.median_lag_days !== undefined) latency.median_lag_days = condPAny.latency.median_lag_days;
+        const latency: any = pickWhitelisted(condPAny.latency, LATENCY_FIELD_WHITELIST);
+        if (condPAny.latency.posterior) {
+          const latPosterior = pickWhitelisted(condPAny.latency.posterior, LATENCY_POSTERIOR_FIELD_WHITELIST);
+          if (Object.keys(latPosterior).length > 0) latency.posterior = latPosterior;
+        }
         if (Object.keys(latency).length > 0) condP.latency = latency;
       }
       

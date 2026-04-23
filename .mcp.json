@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "bayes-tracker": {
+      "command": "graph-editor/venv/bin/python",
+      "args": ["-m", "bayes.tracker.mcp_server"],
+      "env": {
+        "PYTHONPATH": "."
+      }
+    }
+  }
+}

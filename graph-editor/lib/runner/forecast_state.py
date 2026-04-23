@@ -1162,23 +1162,36 @@ def _evaluate_cohort(
     # v2 default is binomial sampling (display_settings.continuous_forecast)
     Y_D = loop_rng.binomial(int(remaining), q_late)
 
-    # Pop C: post-frontier upstream arrivals (v2 lines 888-898)
-    # Pop C arrivals have already traversed upstream edges — they arrive
-    # at the from-node and only need the EDGE-level CDF for conversion
-    # timing. Using the path CDF (cdf_i) underestimates their conversion
-    # rate because the path CDF includes upstream latency they've already
-    # completed. When edge_cdf_arr is provided (multi-hop), use it;
-    # otherwise fall back to cdf_i (single-hop, where path = edge).
+    # Pop C: post-frontier upstream arrivals.
+    #
+    # The general factorised solve is carrier-to-X followed by the
+    # subject-side X→end progression. That means Pop C's numerator is a
+    # convolution over the incremental post-frontier arrivals, not
+    # `future_arrivals(t) * CDF_edge(t)`. The latter only happens to look
+    # reasonable when the frontier already carries most of the mass; it
+    # breaks the zero-evidence limit by collapsing the carrier effect.
+    #
+    # When edge_cdf_arr is provided (multi-hop), use it; otherwise fall back
+    # to cdf_i (single-hop, where path = edge).
     X_C = np.zeros((S, T), dtype=np.float64)
     Y_C = np.zeros((S, T), dtype=np.float64)
     if upstream_cdf_mc is not None and reach > 0:
         _up_scaled = a_pop * reach * upstream_cdf_mc
-        _up_at_frontier = _up_scaled[:, a_idx:a_idx + 1]
-        X_C = np.maximum(_up_scaled - _up_at_frontier, 0.0)
+        _arrival_increments = np.diff(
+            np.concatenate([np.zeros((S, 1), dtype=np.float64), _up_scaled], axis=1),
+            axis=1,
+        )
+        _arrival_increments = np.maximum(_arrival_increments, 0.0)
+        _arrival_increments[:, :a_idx + 1] = 0.0
+        X_C = np.cumsum(_arrival_increments, axis=1)
         _pop_c_cdf = edge_cdf_arr[:S, :T] if edge_cdf_arr is not None else cdf_i
-        model_rate = p_i[:, None] * _pop_c_cdf
-        model_rate = np.clip(model_rate, 0.0, 1.0)
-        Y_C = X_C * model_rate
+        for s in range(S):
+            _conv = np.convolve(
+                _arrival_increments[s],
+                _pop_c_cdf[s],
+                mode='full',
+            )[:T]
+            Y_C[s, :] = p_i[s] * _conv
 
     # Combine (v2 lines 900-903)
     X_forecast = float(N_i) + X_C
@@ -1521,28 +1534,30 @@ def compute_forecast_trajectory(
             _diag = " ".join(f"t{t}:Y={_ym[t]:.1f}/X={_xm[t]:.1f}" for t in _taus)
             print(f"[sweep_diag] apply_is={apply_is} {_diag}")
 
-        # Fallback when no evidence (v2 line 920)
+        # Collapse to the generic p×CDF family only when the population model
+        # produced no denominator mass at any τ. Unit-normalised zero-evidence
+        # cohorts can have X_total < 1 while still carrying a real carrier
+        # shape, so `>= 1` is too strong a gate here.
         _x_median = np.median(X_total, axis=0)
-        if not np.any(_x_median >= 1.0):
+        if not np.any(_x_median > 1e-9):
             rate = p_draws[:S, None] * cdf_arr[:S]
 
         return rate, _is_ess_last, _n_conditioned, Y_total, X_total, _cohort_evals
 
     rate_conditioned, is_ess, n_conditioned, Y_cond, X_cond, cohort_evals_cond = _run_cohort_loop(apply_is=True)
-    # Model rate: pure p × CDF, no evidence splice or population model.
-    # Matches v2's rate_model = p_s × cdf_arr (span_kernel.py:951).
-    rate_model = p_draws[:S, None] * cdf_arr[:S]
+    # Model-only draw family: same specific-Cohort population model as
+    # `rate_draws`, but without IS conditioning. This keeps the public
+    # `model_midpoint` carrier-aware in cohort mode instead of collapsing
+    # onto the generic p×CDF shortcut.
+    rate_unc, _unc_ess, _unc_n, Y_unc, X_unc, cohort_evals_unc = _run_cohort_loop(apply_is=False)
+    rate_model = rate_unc
 
-    # Doc 52 §14.4.1: run the population model a second time without IS
-    # so we have specific-Cohort unconditioned outputs to blend against
-    # the conditioned ones. This is distinct from rate_model above:
-    # rate_model is the generic-Cohort p×CDF predictive; the
-    # unconditioned cohort-loop output is the specific-Cohort projection
-    # from the prior, splicing observed τ ≤ frontier but without IS
-    # reweight.
+    # Doc 52 §14.4.1: blend conditioned and unconditioned draw rows when
+    # the evidence-mass heuristic says the fully conditioned sweep is too
+    # brittle. Reuse the same unconditioned cohort-loop output that backs
+    # `model_rate_draws`.
     blend_info = _compute_blend_params(resolved, _mass_from_cohorts(cohorts))
     if blend_info['applied']:
-        rate_unc, _unc_ess, _unc_n, Y_unc, X_unc, cohort_evals_unc = _run_cohort_loop(apply_is=False)
         n_cond, perm = _make_blend_permutation(S, blend_info['r'])
         cond_idx = perm[:n_cond]
         unc_idx = perm[n_cond:]

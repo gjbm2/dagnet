@@ -5,9 +5,11 @@ Covers:
   - `load_graph_json(name, bayesian=False)` default keeps current
     behaviour (no injection).
   - `load_graph_json(name, bayesian=True)` triggers
-    `_ensure_bayes_sidecar` and injects.
+    `_ensure_bayes_sidecar` and replays the cached sidecar through the
+    canonical TS apply-patch path.
   - `_ensure_bayes_sidecar` calls the MCMC subprocess only when the
-    sidecar is missing or stale; session-cached within a pytest process.
+    sidecar is missing or stale by default, and uses the FE payload path
+    when it does shell out; session-cached within a pytest process.
   - Subprocess failures propagate cleanly (tests can skip, don't hang).
   - The old `_bayesian_enrich_synth_graph` (graph-write path) is no
     longer invoked from the bayesian-ready path.
@@ -140,19 +142,86 @@ def fake_repo(tmp_path, monkeypatch):
     return ns
 
 
-def _bayes_entry():
+def _bayes_patch_payload():
     return {
-        "source": "bayesian",
-        "source_at": "22-Apr-26 14:30:00",
-        "probability": {"mean": 0.70, "stdev": 0.08},
-        "latency": {
-            "mu": 2.3, "sigma": 0.52, "t95": 24.5,
-            "onset_delta_days": 1.03,
-            "mu_sd": 0.08, "sigma_sd": 0.01,
-            "onset_sd": 0.07, "onset_mu_corr": -0.8,
-        },
-        "quality": {"rhat": 1.001, "gate_passed": True},
+        "job_id": "sidecar-test-job",
+        "fitted_at": "22-Apr-26 14:30:00",
+        "fingerprint": "worker-fp-123",
+        "model_version": 1,
+        "quality": {"max_rhat": 1.001, "min_ess": 1200, "converged_pct": 100},
+        "skipped": [],
+        "webhook_payload_edges": [
+            {
+                "param_id": "simple-a-to-b",
+                "file_path": "parameters/simple-a-to-b.yaml",
+                "slices": {
+                    "window()": {
+                        "alpha": 45.2,
+                        "beta": 5.1,
+                        "mu_mean": 2.3,
+                        "mu_sd": 0.08,
+                        "sigma_mean": 0.52,
+                        "sigma_sd": 0.01,
+                        "onset_mean": 1.03,
+                        "onset_sd": 0.07,
+                        "onset_mu_corr": -0.8,
+                        "ess": 1200,
+                        "rhat": 1.001,
+                    },
+                    "cohort()": {
+                        "alpha": 44.8,
+                        "beta": 5.3,
+                        "mu_mean": 2.8,
+                        "sigma_mean": 0.6,
+                        "onset_mean": 1.20,
+                        "ess": 1100,
+                        "rhat": 1.002,
+                    },
+                },
+                "prior_tier": "uninformative",
+                "evidence_grade": 3,
+                "divergences": 0,
+            }
+        ],
     }
+
+
+def _projected_graph(graph):
+    projected = json.loads(json.dumps(graph))
+    edge = projected["edges"][0]
+    edge["p"]["model_vars"].append(
+        {
+            "source": "bayesian",
+            "source_at": "22-Apr-26 14:30:00",
+            "probability": {"mean": 0.70, "stdev": 0.08},
+            "latency": {
+                "mu": 2.3,
+                "sigma": 0.52,
+                "t95": 24.5,
+                "onset_delta_days": 1.03,
+                "mu_sd": 0.08,
+                "sigma_sd": 0.01,
+                "onset_sd": 0.07,
+                "onset_mu_corr": -0.8,
+                "path_mu": 2.8,
+                "path_sigma": 0.6,
+                "path_t95": 31.0,
+                "path_onset_delta_days": 1.2,
+            },
+            "quality": {"rhat": 1.001, "gate_passed": True},
+        }
+    )
+    edge["p"]["posterior"] = {"alpha": 45.2, "beta": 5.1}
+    edge["p"]["latency"]["posterior"] = {
+        "mu_mean": 2.3,
+        "sigma_mean": 0.52,
+        "onset_mean": 1.03,
+        "path_mu_mean": 2.8,
+        "path_sigma_mean": 0.6,
+        "path_onset_delta_days": 1.2,
+    }
+    edge["p"]["latency"]["promoted_mu_sd"] = 0.08
+    return projected
 
 
 # ─── load_graph_json(bayesian=...) contract ───────────────────────────
@@ -175,7 +244,8 @@ class TestLoadGraphJsonBayesianFalse:
 
 
 class TestLoadGraphJsonBayesianTrue:
-    """bayesian=True: ensures sidecar, injects, returns merged dict."""
+    """bayesian=True: ensures sidecar, replays it through TS apply-patch,
+    and returns the enriched in-memory graph."""
 
     def _write_fresh_sidecar(self, fake_repo):
         """Helper — write a valid sidecar with current fingerprint."""
@@ -184,96 +254,162 @@ class TestLoadGraphJsonBayesianTrue:
             str(fake_repo.truth_path),
             [str(p) for p in fake_repo.param_paths],
         )
-        save_sidecar(str(fake_repo.sidecar_path), fp,
-                     {"edge-1": _bayes_entry()})
+        save_sidecar(str(fake_repo.sidecar_path), fp, _bayes_patch_payload())
+        return fp
 
-    def test_returns_graph_with_bayesian_injected(self, fake_repo):
+    def _cli_success(self, fake_repo, prefix: str = ""):
+        return MagicMock(
+            returncode=0,
+            stdout=prefix + json.dumps(_projected_graph(fake_repo.graph)),
+            stderr="",
+        )
+
+    def _fake_run(
+        self,
+        fake_repo,
+        *,
+        mcmc_count=None,
+        fail_mcmc: bool = False,
+        fail_cli: bool = False,
+        cli_stdout_prefix: str = "",
+    ):
+        def fake_run(cmd, *a, **kw):
+            if (
+                isinstance(cmd, list)
+                and len(cmd) >= 3
+                and cmd[0] == sys.executable
+                and cmd[1] == "-m"
+                and cmd[2] == "bayes.test_harness"
+            ):
+                if mcmc_count is not None:
+                    mcmc_count["n"] += 1
+                if fail_mcmc:
+                    return MagicMock(returncode=2, stdout="", stderr="mcmc boom")
+                self._write_fresh_sidecar(fake_repo)
+                return MagicMock(returncode=0, stdout="", stderr="")
+
+            if isinstance(cmd, list) and len(cmd) >= 3 and cmd[0] == "bash" and cmd[1] == "-lc":
+                assert "--print-enriched-graph" in cmd[2]
+                assert "--apply-patch" in cmd[2]
+                if fail_cli:
+                    return MagicMock(returncode=2, stdout="", stderr="cli boom")
+                return self._cli_success(fake_repo, prefix=cli_stdout_prefix)
+
+            raise AssertionError(f"Unexpected subprocess invocation: {cmd!r}")
+
+        return fake_run
+
+    def test_returns_graph_with_bayesian_projection(self, fake_repo):
         self._write_fresh_sidecar(fake_repo)
-        from conftest import load_graph_json
-        g = load_graph_json("synth-simple-abc", bayesian=True)
-        sources = [m.get("source")
-                   for m in g["edges"][0]["p"]["model_vars"]]
-        assert "bayesian" in sources
+        with patch("conftest.subprocess.run", side_effect=self._fake_run(fake_repo)):
+            from conftest import load_graph_json
+            g = load_graph_json("synth-simple-abc", bayesian=True)
+            sources = [m.get("source")
+                       for m in g["edges"][0]["p"]["model_vars"]]
+            assert "bayesian" in sources
+            assert g["edges"][0]["p"]["posterior"]["alpha"] == pytest.approx(45.2)
 
     def test_promoted_fields_set_on_latency(self, fake_repo):
         self._write_fresh_sidecar(fake_repo)
-        from conftest import load_graph_json
-        g = load_graph_json("synth-simple-abc", bayesian=True)
-        lat = g["edges"][0]["p"]["latency"]
-        assert lat.get("promoted_mu_sd") == pytest.approx(0.08)
+        with patch("conftest.subprocess.run", side_effect=self._fake_run(fake_repo)):
+            from conftest import load_graph_json
+            g = load_graph_json("synth-simple-abc", bayesian=True)
+            lat = g["edges"][0]["p"]["latency"]
+            assert lat.get("promoted_mu_sd") == pytest.approx(0.08)
 
-    def test_does_not_call_mcmc_when_sidecar_is_fresh(self, fake_repo):
+    def test_cli_stdout_prefix_before_json_is_tolerated(self, fake_repo):
         self._write_fresh_sidecar(fake_repo)
-        with patch("conftest.subprocess.run") as mock_run:
+        with patch(
+            "conftest.subprocess.run",
+            side_effect=self._fake_run(
+                fake_repo,
+                cli_stdout_prefix="Now using node v22.22.0 (npm v10.9.4)\n",
+            ),
+        ):
+            from conftest import load_graph_json
+            g = load_graph_json("synth-simple-abc", bayesian=True)
+            assert g["edges"][0]["p"]["posterior"]["alpha"] == pytest.approx(45.2)
+
+    def test_fresh_sidecar_skips_mcmc_but_replays_cli(self, fake_repo):
+        self._write_fresh_sidecar(fake_repo)
+        mcmc_count = {"n": 0}
+        with patch(
+            "conftest.subprocess.run",
+            side_effect=self._fake_run(fake_repo, mcmc_count=mcmc_count),
+        ) as mock_run:
             from conftest import load_graph_json
             load_graph_json("synth-simple-abc", bayesian=True)
-            assert not mock_run.called, \
-                "MCMC subprocess must not run when sidecar is fresh"
+            assert mcmc_count["n"] == 0
+            assert len(mock_run.call_args_list) == 1
+            assert mock_run.call_args_list[0][0][0][:2] == ["bash", "-lc"]
 
     def test_calls_mcmc_subprocess_when_sidecar_missing(self, fake_repo):
         """Absent sidecar → test_harness --enrich --sidecar-out <path>
-        must be invoked once."""
-        def fake_run(cmd, *a, **kw):
-            # Simulate the subprocess writing the sidecar before exit.
-            self._write_fresh_sidecar(fake_repo)
-            return MagicMock(returncode=0, stdout="", stderr="")
-
-        with patch("conftest.subprocess.run", side_effect=fake_run) as mock_run:
+        must be invoked once, then the sidecar is replayed through the TS CLI."""
+        mcmc_count = {"n": 0}
+        with patch(
+            "conftest.subprocess.run",
+            side_effect=self._fake_run(fake_repo, mcmc_count=mcmc_count),
+        ) as mock_run:
             from conftest import load_graph_json
             load_graph_json("synth-simple-abc", bayesian=True)
-            assert mock_run.called
-            # The invocation must pass --enrich --sidecar-out
-            invocation_cmd = mock_run.call_args[0][0]
-            assert "--enrich" in invocation_cmd
-            assert "--sidecar-out" in invocation_cmd
+            assert mcmc_count["n"] == 1
+            invocations = [call[0][0] for call in mock_run.call_args_list]
+            mcmc_cmd = next(cmd for cmd in invocations if cmd[:3] == [sys.executable, "-m", "bayes.test_harness"])
+            cli_cmd = next(cmd for cmd in invocations if cmd[:2] == ["bash", "-lc"])
+            assert "--fe-payload" in mcmc_cmd
+            assert "--enrich" in mcmc_cmd
+            assert "--sidecar-out" in mcmc_cmd
+            assert "--print-enriched-graph" in cli_cmd[2]
 
     def test_calls_mcmc_when_fingerprint_is_stale(self, fake_repo):
         """Sidecar exists but fingerprint is old (truth/params changed)
         → MCMC must re-run."""
         from bayes.sidecar import save_sidecar
         stale_fp = {"truth_sha256": "stale", "param_file_hashes": {}}
-        save_sidecar(str(fake_repo.sidecar_path), stale_fp,
-                     {"edge-1": _bayes_entry()})
+        save_sidecar(str(fake_repo.sidecar_path), stale_fp, _bayes_patch_payload())
 
-        def fake_run(cmd, *a, **kw):
-            # Overwrite with a fresh sidecar.
-            from bayes.sidecar import compute_fingerprint
-            fp = compute_fingerprint(
-                str(fake_repo.truth_path),
-                [str(p) for p in fake_repo.param_paths],
-            )
-            save_sidecar(str(fake_repo.sidecar_path), fp,
-                         {"edge-1": _bayes_entry()})
-            return MagicMock(returncode=0, stdout="", stderr="")
-
-        with patch("conftest.subprocess.run", side_effect=fake_run) as mock_run:
+        mcmc_count = {"n": 0}
+        with patch(
+            "conftest.subprocess.run",
+            side_effect=self._fake_run(fake_repo, mcmc_count=mcmc_count),
+        ) as mock_run:
             from conftest import load_graph_json
             load_graph_json("synth-simple-abc", bayesian=True)
-            assert mock_run.called
+            assert mcmc_count["n"] == 1
+            assert len(mock_run.call_args_list) == 2
 
     def test_session_cached_mcmc_called_at_most_once(self, fake_repo):
         """Two consecutive load_graph_json(bayesian=True) in the same
         session must invoke MCMC once at most — the sidecar build is
         session-cached."""
-        call_count = {"n": 0}
+        mcmc_count = {"n": 0}
 
-        def fake_run(cmd, *a, **kw):
-            call_count["n"] += 1
-            self._write_fresh_sidecar(fake_repo)
-            return MagicMock(returncode=0, stdout="", stderr="")
-
-        with patch("conftest.subprocess.run", side_effect=fake_run):
+        with patch(
+            "conftest.subprocess.run",
+            side_effect=self._fake_run(fake_repo, mcmc_count=mcmc_count),
+        ):
             from conftest import load_graph_json
             load_graph_json("synth-simple-abc", bayesian=True)
             load_graph_json("synth-simple-abc", bayesian=True)
-            assert call_count["n"] <= 1
+            assert mcmc_count["n"] <= 1
 
     def test_mcmc_failure_triggers_skip(self, fake_repo):
         """Subprocess non-zero exit → pytest.skip (not silent success)."""
-        def fake_run(cmd, *a, **kw):
-            return MagicMock(returncode=2, stdout="", stderr="mcmc boom")
+        with patch(
+            "conftest.subprocess.run",
+            side_effect=self._fake_run(fake_repo, fail_mcmc=True),
+        ):
+            from conftest import load_graph_json
+            with pytest.raises((pytest.skip.Exception, RuntimeError)):
+                load_graph_json("synth-simple-abc", bayesian=True)
 
-        with patch("conftest.subprocess.run", side_effect=fake_run):
+    def test_cli_failure_triggers_skip(self, fake_repo):
+        self._write_fresh_sidecar(fake_repo)
+        with patch(
+            "conftest.subprocess.run",
+            side_effect=self._fake_run(fake_repo, fail_cli=True),
+        ):
             from conftest import load_graph_json
             with pytest.raises((pytest.skip.Exception, RuntimeError)):
                 load_graph_json("synth-simple-abc", bayesian=True)
@@ -283,8 +419,9 @@ class TestLoadGraphJsonBayesianTrue:
         was the original bug."""
         self._write_fresh_sidecar(fake_repo)
         before = fake_repo.graph_path.read_bytes()
-        from conftest import load_graph_json
-        load_graph_json("synth-simple-abc", bayesian=True)
+        with patch("conftest.subprocess.run", side_effect=self._fake_run(fake_repo)):
+            from conftest import load_graph_json
+            load_graph_json("synth-simple-abc", bayesian=True)
         after = fake_repo.graph_path.read_bytes()
         assert before == after
 
@@ -330,7 +467,7 @@ class TestEnsureSynthReadyBayesian:
         # Stub the sidecar helper to avoid real MCMC.
         if hasattr(cf, "_ensure_bayes_sidecar"):
             monkeypatch.setattr(cf, "_ensure_bayes_sidecar",
-                                lambda name: {"edge-1": _bayes_entry()},
+                                lambda name: str(fake_repo.sidecar_path),
                                 raising=True)
 
         cf._ensure_synth_ready("synth-simple-abc", enriched=True,
@@ -346,7 +483,7 @@ class TestEnsureSynthReadyBayesian:
         monkeypatch.setattr(
             cf, "_ensure_bayes_sidecar",
             lambda name: called.__setitem__("sidecar", True)
-                         or {"edge-1": _bayes_entry()},
+                         or str(fake_repo.sidecar_path),
             raising=True,
         )
         monkeypatch.setattr(
@@ -375,7 +512,7 @@ class TestEnsureSynthReadyBayesian:
             monkeypatch.setattr(
                 cf, "_ensure_bayes_sidecar",
                 lambda name: called.__setitem__("sidecar", True)
-                             or {"edge-1": _bayes_entry()},
+                             or str(fake_repo.sidecar_path),
                 raising=True,
             )
         monkeypatch.setattr(

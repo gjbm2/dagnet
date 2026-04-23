@@ -24,6 +24,8 @@ if [ $# -lt 2 ]; then
   echo "  --type <type>            Analysis type (graph_overview, cohort_maturity, etc.)"
   echo "  --get <key>              Extract a value via dot-path from the result"
   echo "  --format json|yaml       Output format (default: json)"
+  echo "  --bayes-vars <path>      Inject Bayesian posteriors from a .bayes-vars.json sidecar"
+  echo "  --force-vars             With --bayes-vars, bypass rhat/ess quality gates"
   echo "  --no-cache               Bypass disk bundle cache"
   echo "  --verbose, -v            Show all internal debug logging"
   echo ""

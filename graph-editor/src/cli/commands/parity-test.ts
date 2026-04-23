@@ -46,6 +46,10 @@ dagnet-cli parity-test
     --query, -q    Temporal DSL for scenario 1 (e.g. window(-90d:))
     --query2       Temporal DSL for scenario 2 (omit for single-scenario)
     --type         Single analysis type (default: all snapshot types)
+    --bayes-vars <path>   Inject Bayesian posteriors from a .bayes-vars.json
+                          sidecar into the graph before the parity test runs.
+                          No disk writes.
+    --force-vars   With --bayes-vars, bypass the rhat/ess quality gates.
     --diagnostic, --diag  Show detailed pipeline trace (per-edge state at each stage)
     --verbose, -v  Show detailed output
     --help, -h     Show this help

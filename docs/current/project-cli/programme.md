@@ -706,6 +706,54 @@ correctly.
   pure logic in `src/lib/` (or another isomorphic surface), and inject
   runtime-specific state at the call site.
 
+### 23-Apr-26: Bayesian sidebar vars injection — one shared flag
+
+**Done**:
+- `--bayes-vars <path>` and `--force-vars` added as **shared CLI flags**
+  in `bootstrap.ts`, so every command (param-pack, analyse, bayes,
+  hydrate, parity-test) inherits them through a single codepath. When
+  set, bootstrap replays the sidecar via `bayesPatchService.applyPatch`
+  in memory, then re-binds `bundle.graph` and every `bundle.parameters`
+  entry from the registry so downstream consumers see the enriched
+  graph. No disk writes. `--force-vars` bypasses the rhat/ess quality
+  gate for experimentation.
+- `bayesPatchService.ts` grew two exports: `setQualityGateOverride()`
+  (module-level flag consulted by `meetsQualityGate`) and
+  `wrapPatchIfRaw(patchData, graphId)` (normalises both full
+  `BayesPatchFile` and raw worker `webhook_payload_edges` shapes).
+  `commands/bayes.ts` now reuses the same helper for its disk-writing
+  `--apply-patch` mode.
+- `GraphParamExtractor.ts` was widened to emit the injected Bayesian
+  fields: `p.posterior.*`, `p.latency.{mu,sigma,t95,onset,path_*,...}`,
+  `p.latency.posterior.*`. Mirrored on `conditional_p`. `ProbabilityParam`
+  in `types/scenarios.ts` extended to match. See
+  `docs/current/project-assure/PROPOSAL.md` → "Interim state (23-Apr-26)"
+  for why this is a stopgap and why the real fix is the schema-driven
+  `x-param-pack` contract.
+- Wrapper scripts (`analyse.sh`, `param-pack.sh`, `bayes.sh`, `hydrate.sh`,
+  `parity-test.sh`) document the flag; no structural changes — `"$@"`
+  already forwards arbitrary options.
+- Tests: 8 new in `cliApplyPatch.test.ts` covering the two primitives
+  and three end-to-end assertions through `bootstrap()` (injected,
+  not injected, `--force-vars`). The blind in-situ check asserts
+  flat-HRN keys users see on stdout (`e.<id>.p.latency.mu`,
+  `e.<id>.p.posterior.alpha`, etc.). 275 tests across 13 files pass
+  with zero regressions.
+
+**Why this matters**:
+- The Bayesian sidebar vars feature already exists in the browser via
+  `applyPatch`; the CLI now exposes it through a flag that every
+  command honours automatically. Users can now run
+  `bash graph-ops/scripts/param-pack.sh my-graph "window(-30d:)"
+  --bayes-vars bayes/fixtures/my-graph.bayes-vars.json` to analyse a
+  graph "as if" particular posteriors were committed, without
+  touching parameter files on disk.
+- The widening exposed that the param pack extractor has a
+  hand-maintained whitelist that silently drops most latency and
+  posterior fields. Project Assure (`project-assure/PROPOSAL.md`)
+  is the canonical home for fixing that properly via schema-driven
+  contract testing and flat-pack-shape standardisation.
+
 ## Dependencies
 
 - Python BE must be running (locally or remote) — the CLI is a

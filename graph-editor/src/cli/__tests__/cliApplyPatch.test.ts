@@ -22,7 +22,12 @@ import 'fake-indexeddb/auto';
 import { describe, it, expect, beforeAll } from 'vitest';
 import { join } from 'path';
 import { loadGraphFromDisk, seedFileRegistry, type GraphBundle } from '../diskLoader';
-import { applyPatch, type BayesPatchFile } from '../../services/bayesPatchService';
+import {
+  applyPatch,
+  wrapPatchIfRaw,
+  setQualityGateOverride,
+  type BayesPatchFile,
+} from '../../services/bayesPatchService';
 import { fileRegistry } from '../../contexts/TabContext';
 
 const FIXTURES_DIR = join(__dirname, 'fixtures');
@@ -344,5 +349,243 @@ describe('CLI --apply-patch (bayesPatchService via diskLoader)', () => {
     const mv = otherEdge?.p?.model_vars;
     // Should be undefined or empty — patch only touched param-start-middle
     expect(mv?.find((m: any) => m.source === 'bayesian')).toBeUndefined();
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// wrapPatchIfRaw: accepts both full BayesPatchFile and raw worker shape
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('wrapPatchIfRaw', () => {
+  it('passes through a full BayesPatchFile unchanged except graph_id', () => {
+    const full = buildTestPatch();
+    const wrapped = wrapPatchIfRaw(full, 'graph-other');
+    expect(wrapped.graph_id).toBe('graph-other');
+    expect(wrapped.job_id).toBe(full.job_id);
+    expect(wrapped.edges).toBe(full.edges);
+    expect(wrapped.fitted_at).toBe(full.fitted_at);
+  });
+
+  it('wraps a raw worker result (webhook_payload_edges) into BayesPatchFile shape', () => {
+    const raw = {
+      job_id: 'raw-job-1',
+      fitted_at: '2026-04-22T10:00:00Z',
+      fingerprint: 'raw-fp',
+      quality: { max_rhat: 1.01, min_ess: 800, converged_pct: 100 },
+      webhook_payload_edges: [{ param_id: 'p1', slices: {} }],
+      skipped: [],
+    };
+    const wrapped = wrapPatchIfRaw(raw, 'graph-test-fixture');
+    expect(wrapped.graph_id).toBe('graph-test-fixture');
+    expect(wrapped.edges).toBe(raw.webhook_payload_edges);
+    expect(wrapped.job_id).toBe('raw-job-1');
+    expect(wrapped.graph_file_path).toBe('graph-test-fixture.yaml');
+  });
+
+  it('supplies defaults when raw result is missing optional fields', () => {
+    const raw = { webhook_payload_edges: [] };
+    const wrapped = wrapPatchIfRaw(raw, 'graph-x');
+    expect(wrapped.job_id).toBe('cli-enrich');
+    expect(wrapped.model_version).toBe(1);
+    expect(wrapped.quality).toEqual({ max_rhat: null, min_ess: null, converged_pct: 0 });
+    expect(wrapped.skipped).toEqual([]);
+    expect(wrapped.fitted_at).toBeTruthy();
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// setQualityGateOverride: --force-vars bypass for the CLI
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('setQualityGateOverride (--force-vars)', () => {
+  it('forces gate_passed=true on a patch that would normally fail rhat', async () => {
+    const freshBundle = await loadGraphFromDisk(FIXTURES_DIR, 'test-fixture');
+    seedFileRegistry(freshBundle);
+
+    const badPatch = buildTestPatch();
+    badPatch.edges[0].slices!['window()'].rhat = 1.5; // well above 1.1 gate
+
+    setQualityGateOverride(true);
+    try {
+      await applyPatch(badPatch);
+    } finally {
+      setQualityGateOverride(false);
+    }
+
+    const graphFile = fileRegistry.getFile('graph-test-fixture');
+    const edge = (graphFile!.data as any).edges.find((e: any) => e.p?.id === PARAM_ID);
+    const q = edge.p.model_vars?.find((m: any) => m.source === 'bayesian')?.quality;
+    expect(q.gate_passed).toBe(true);
+  });
+
+  it('reverts to normal gating after the override is cleared', async () => {
+    const freshBundle = await loadGraphFromDisk(FIXTURES_DIR, 'test-fixture');
+    seedFileRegistry(freshBundle);
+
+    // Override is off (previous test cleared it). A bad patch must fail.
+    const badPatch = buildTestPatch();
+    badPatch.edges[0].slices!['window()'].rhat = 1.5;
+    await applyPatch(badPatch);
+
+    const graphFile = fileRegistry.getFile('graph-test-fixture');
+    const edge = (graphFile!.data as any).edges.find((e: any) => e.p?.id === PARAM_ID);
+    const q = edge.p.model_vars?.find((m: any) => m.source === 'bayesian')?.quality;
+    expect(q.gate_passed).toBe(false);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// End-to-end: --bayes-vars wiring through bootstrap()
+//
+// Proves the CLI flag actually reaches the injection block, applies the
+// patch, and reassigns bundle.graph + bundle.parameters so downstream
+// code (param-pack, analyse, hydrate, parity-test) sees the enriched
+// graph as its base. Writes a sidecar JSON to a temp path and invokes
+// bootstrap() with a doctored process.argv.
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('bootstrap() --bayes-vars end-to-end', () => {
+  it('param-pack flow: injected posteriors appear on edge.p.model_vars[bayesian]', async () => {
+    const { writeFile, mkdtemp } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { bootstrap } = await import('../bootstrap');
+    const { extractParamsFromGraph } = await import('../../services/GraphParamExtractor');
+    const { flattenParams } = await import('../../services/ParamPackDSLService');
+
+    // 1. Write a sidecar JSON that targets the fixture's param-start-middle edge.
+    //    Use the raw worker shape (webhook_payload_edges) to exercise
+    //    wrapPatchIfRaw at the same time.
+    const rawSidecar = {
+      job_id: 'e2e-bootstrap-test',
+      fitted_at: '2026-04-22T09:00:00Z',
+      fingerprint: 'e2e-fp',
+      model_version: 1,
+      quality: { max_rhat: RHAT, min_ess: ESS, converged_pct: 100 },
+      skipped: [],
+      webhook_payload_edges: [buildTestPatch().edges[0]],
+    };
+    const tmpDir = await mkdtemp(join(tmpdir(), 'bayes-vars-e2e-'));
+    const sidecarPath = join(tmpDir, 'synth.bayes-vars.json');
+    await writeFile(sidecarPath, JSON.stringify(rawSidecar), 'utf-8');
+
+    // 2. Run bootstrap() with --bayes-vars pointing at the sidecar. Pre-reset
+    //    fileRegistry so we see a pristine state in the returned bundle.
+    //    (fake-indexeddb/auto gives us a fresh IDB per test file.)
+    const savedArgv = process.argv;
+    process.argv = [
+      'node', 'cli',
+      '--graph', FIXTURES_DIR,
+      '--name', 'test-fixture',
+      '--query', 'window(1-Jan-26:10-Jan-26)',
+      '--bayes-vars', sidecarPath,
+      '--no-cache',
+    ];
+
+    try {
+      const ctx = await bootstrap();
+      expect(ctx).not.toBeNull();
+
+      // 3. bundle.graph must reflect the injection — the edge for
+      //    param-start-middle should carry a bayesian model_vars entry.
+      const edge = (ctx!.bundle.graph.edges || []).find(
+        (e: any) => e.p?.id === PARAM_ID,
+      );
+      expect(edge).toBeDefined();
+      const mv = edge.p.model_vars?.find((m: any) => m.source === 'bayesian');
+      expect(mv).toBeDefined();
+      expect(mv.probability.mean).toBeCloseTo(EXPECTED_P_MEAN, 10);
+      expect(mv.latency.mu).toBe(MU_MEAN);
+      expect(mv.quality.gate_passed).toBe(true);
+
+      // 4. bundle.parameters must also be re-synced — the parameter file
+      //    for the injected edge should have the new posterior block.
+      const param = ctx!.bundle.parameters.get(PARAM_ID);
+      expect(param).toBeDefined();
+      expect(param.posterior).toBeDefined();
+      expect(param.posterior.fingerprint).toBe('e2e-fp');
+      expect(param.posterior.slices['window()'].alpha).toBe(WINDOW_ALPHA);
+
+      // 5. Blind proof of situ: run the real param-pack extraction on the
+      //    returned bundle and confirm the injected Bayesian fields
+      //    surface on the named flat-HRN keys users see on stdout.
+      const params = extractParamsFromGraph(ctx!.bundle.graph);
+      const flat = flattenParams(params);
+      const edgeKey = edge.id || edge.uuid;
+      expect(flat[`e.${edgeKey}.p.latency.mu`]).toBe(MU_MEAN);
+      expect(flat[`e.${edgeKey}.p.latency.sigma`]).toBe(SIGMA_MEAN);
+      expect(flat[`e.${edgeKey}.p.latency.promoted_t95`]).toBeCloseTo(EXPECTED_T95, 10);
+      expect(flat[`e.${edgeKey}.p.latency.path_mu`]).toBe(COHORT_MU_MEAN);
+      expect(flat[`e.${edgeKey}.p.latency.posterior.mu_mean`]).toBe(MU_MEAN);
+      expect(flat[`e.${edgeKey}.p.latency.posterior.sigma_mean`]).toBe(SIGMA_MEAN);
+      expect(flat[`e.${edgeKey}.p.posterior.alpha`]).toBe(WINDOW_ALPHA);
+      expect(flat[`e.${edgeKey}.p.posterior.beta`]).toBe(WINDOW_BETA);
+      expect(flat[`e.${edgeKey}.p.posterior.fingerprint`]).toBe('e2e-fp');
+    } finally {
+      process.argv = savedArgv;
+    }
+  });
+
+  it('without --bayes-vars, the same flow produces NO bayesian model_vars', async () => {
+    const { bootstrap } = await import('../bootstrap');
+
+    const savedArgv = process.argv;
+    process.argv = [
+      'node', 'cli',
+      '--graph', FIXTURES_DIR,
+      '--name', 'test-fixture',
+      '--query', 'window(1-Jan-26:10-Jan-26)',
+      '--no-cache',
+    ];
+
+    try {
+      const ctx = await bootstrap();
+      expect(ctx).not.toBeNull();
+
+      const edge = (ctx!.bundle.graph.edges || []).find(
+        (e: any) => e.p?.id === PARAM_ID,
+      );
+      const mv = edge?.p?.model_vars?.find((m: any) => m.source === 'bayesian');
+      expect(mv).toBeUndefined();
+    } finally {
+      process.argv = savedArgv;
+    }
+  });
+
+  it('--force-vars end-to-end: low-rhat sidecar still applies with gate_passed=true', async () => {
+    const { writeFile, mkdtemp } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { bootstrap } = await import('../bootstrap');
+
+    const badPatch = buildTestPatch();
+    badPatch.edges[0].slices!['window()'].rhat = 1.8; // would fail normally
+
+    const tmpDir = await mkdtemp(join(tmpdir(), 'bayes-vars-e2e-force-'));
+    const sidecarPath = join(tmpDir, 'bad.bayes-vars.json');
+    await writeFile(sidecarPath, JSON.stringify(badPatch), 'utf-8');
+
+    const savedArgv = process.argv;
+    process.argv = [
+      'node', 'cli',
+      '--graph', FIXTURES_DIR,
+      '--name', 'test-fixture',
+      '--query', 'window(1-Jan-26:10-Jan-26)',
+      '--bayes-vars', sidecarPath,
+      '--force-vars',
+      '--no-cache',
+    ];
+
+    try {
+      const ctx = await bootstrap();
+      expect(ctx).not.toBeNull();
+
+      const edge = (ctx!.bundle.graph.edges || []).find(
+        (e: any) => e.p?.id === PARAM_ID,
+      );
+      const mv = edge.p.model_vars?.find((m: any) => m.source === 'bayesian');
+      expect(mv).toBeDefined();
+      expect(mv.quality.gate_passed).toBe(true);
+    } finally {
+      process.argv = savedArgv;
+    }
   });
 });

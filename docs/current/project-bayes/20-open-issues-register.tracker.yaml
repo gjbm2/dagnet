@@ -1,0 +1,207 @@
+current_line:
+  label: sparse-graph completion and defect isolation
+  priority: get the blocked sparse graphs to complete
+  blocker_focus: '`diamond-*-2dim` under contention'
+  next_run_goal: verify that the second `I-010` stall-detector fix
+issues:
+- id: I-001
+  title: Anchor→first-hop p biased toward 1.0 (parser artifact)
+  state: verified
+  severity: quality
+  summary: '- Regression run r1776733951: six outlier edges with |z|>50, all on   anchor→first-hop
+    edges, all biased toward 1.0:   - diamond-lifecycle-sparse anchor-to-gate: truth=0.85
+    post=0.982 z=132   - diamond-sparse-2-hicard anchor-to-gate: truth=0.85 post=0.984
+    z=134   - fanout-sparse-4 anchor-to-gate: truth=0.80 post=0.966 z=55   - abc-lifecycle-sparse
+    a-to-b: truth=0.70 post=0.856 z=52 - Cross-graph pattern check: in every affected
+    graph, `edge.p.posterior_mean`   exactly matched one specific slice''s posterior_mean,
+    and that slice was   always the alphabetically last slice with data.'
+  next_action: None — closed.
+  related_run_ids:
+  - R-002
+  updated: '2026-04-22'
+  owner: unclaimed
+  evidence: []
+  hypotheses: []
+- id: I-002
+  title: '`onset` parameter +0.65d bias across all edges'
+  state: observed
+  severity: quality
+  summary: 'Run r1776733951, across 106 edge-level onset failures: - Mean bias +0.654
+    days (absolute) - 103 of 106 (97%) are positive — near-universal upward - Max
+    |z|=7.5; not the most-extreme parameter but by far the most consistent'
+  next_action: Investigate.
+  related_run_ids: []
+  updated: '2026-04-22'
+  owner: unclaimed
+  evidence: []
+  hypotheses: []
+- id: I-003
+  title: '`sigma` 100% positive bias'
+  state: observed
+  severity: paper-cut
+  summary: 6 of 6 sigma failures in r1776733951 are positive, mean +0.285. Small n
+    relative to onset, but the direction is perfectly one-sided.
+  next_action: Investigate.
+  related_run_ids: []
+  updated: '2026-04-22'
+  owner: unclaimed
+  evidence: []
+  hypotheses: []
+- id: I-004
+  title: Only 10 of 41 graphs have clean convergence
+  state: observed
+  severity: quality
+  summary: 'In r1776733951: 31 of 41 graphs had at least one of rhat / ESS / converged_pct
+    failures. Breakdown: - 16 × ESS+converged_pct only - 8 × rhat+ESS+converged_pct
+    - 5 × ESS only - 2 × converged_pct only - 10 clean'
+  next_action: Investigate.
+  related_run_ids: []
+  updated: '2026-04-22'
+  owner: unclaimed
+  evidence: []
+  hypotheses: []
+- id: I-005
+  title: 'Orth 2-dim graphs: clean point estimates, weak convergence'
+  state: observed
+  severity: quality
+  summary: 'Tier T1 (8 `*-2dim` graphs) in r1776733951: median max |z| = 9.3 (best
+    of all tiers), but max rhat = 1.463 (worst of all tiers).'
+  next_action: Investigate.
+  related_run_ids: []
+  updated: '2026-04-22'
+  owner: unclaimed
+  evidence: []
+  hypotheses: []
+- id: I-006
+  title: Single-dim lifecycle has worst single outlier (z=132)
+  state: observed
+  severity: quality
+  summary: 'diamond-lifecycle-sparse max |z| = 132 in r1776733951. Same graph''s Tier-4
+    orth-context variant (abc-lifecycle-sparse-2dim) max |z| = 8.8. Counter-intuitive:
+    orth + lifecycle *cleaner* than lifecycle alone.'
+  next_action: Investigate.
+  related_run_ids: []
+  updated: '2026-04-22'
+  owner: unclaimed
+  evidence: []
+  hypotheses: []
+- id: I-007
+  title: Missing slice recovery rows on 3 legacy context graphs
+  state: observed
+  severity: quality
+  summary: '13 declared slice entries had no posterior rows in r1776733951: - diamond-context-sparse:
+    6 missing - skip-context-sparse: 4 missing - context-two-dim-sparse: 3 missing'
+  next_action: Investigate.
+  related_run_ids: []
+  updated: '2026-04-22'
+  owner: unclaimed
+  evidence: []
+  hypotheses: []
+- id: I-008
+  title: arviz daily-warning race on max_parallel ≥ 2
+  state: verified
+  severity: blocker
+  summary: '`diamond-lifecycle-sparse-2dim` in r1776733951: harness exit 1 at 369ms,
+    before any MCMC. Trace: ``` FileNotFoundError: ''/home/reg/.cache/arviz/daily_warning.tmp''   ->
+    ''/home/reg/.cache/arviz/daily_warning'' ``` Root-caused: `arviz/__init__.py::_warn_once_per_day`
+    does a non-atomic tmp→final rename; two parallel workers both create the same
+    tmp file, one renames it first, the other errors.'
+  next_action: None — closed.
+  related_run_ids: []
+  updated: '2026-04-22'
+  owner: unclaimed
+  evidence: []
+  hypotheses: []
+- id: I-009
+  title: Timeout→SIGSEGV (ungraceful SIGTERM of nutpie native threads)
+  state: verified
+  severity: quality
+  summary: '`synth-abc-sparse-1` in r1776733951: TIMEOUT at 1505s, harness exit 1,
+    faulthandler log captured 10 KB SIGSEGV trace with `<no Python frame>`. Chain
+    1 was CRAWLing at 0.4 draws/s at the time of timeout; SIGTERM landed mid-matrix-op
+    in native code, producing the collateral SIGSEGV.'
+  next_action: None — closed.
+  related_run_ids: []
+  updated: '2026-04-22'
+  owner: unclaimed
+  evidence: []
+  hypotheses: []
+- id: I-010
+  title: Stall detector cycles on chain at 15–20% of peak
+  state: regressed
+  severity: quality
+  summary: 'abc-sparse-1 chain 1 log (r1776733951): CRAWL ENTERED ↔ CRAWL RECOVERED
+    cycled every ~2 seconds for minutes without ever firing STALL CONFIRMED. Chain
+    actual throughput ~0.5 draws/s (11 % of peak 4.4). Entry threshold was 0.10 ×
+    peak = 0.44 draws/s; short bursts to 1.0 draws/s crossed the threshold and reset
+    the 30 s grace timer.'
+  next_action: Investigate regression.
+  related_run_ids:
+  - R-002
+  - R-003
+  updated: '2026-04-22'
+  owner: unclaimed
+  evidence: []
+  hypotheses: []
+- id: I-011
+  title: Diamond orth-context graphs have pathologically slow posterior
+  state: diagnosed
+  severity: blocker
+  summary: 'Run r1776814894 (post-fix): all five `synth-diamond-*-2dim` graphs fail
+    with `RuntimeError: Chain stall persisted after 20 retries`. Stall rates: 0.13–0.79
+    draws/s; chain alternates between chain 0 and chain 1 across the 20 retries. Affected:
+    - diamond-lifecycle-sparse-2dim - diamond-sparse-1-2dim - diamond-sparse-2-2dim
+    - diamond-sparse-3-2dim - diamond-sparse-4-2dim'
+  next_action: Design a fix.
+  related_run_ids:
+  - R-002
+  - R-003
+  updated: '2026-04-22'
+  owner: unclaimed
+  evidence: []
+  hypotheses: []
+runs:
+- id: R-001
+  title: Initial sparse regression (`r1776733951`)
+  status: answered
+  date: '2026-04-22'
+  command_or_plan: broad sparse regression across 41 graphs
+  related_issue_ids: []
+  why_this_run_exists: first broad pass to surface the major defect
+  intended_to_prove: which severe defect families exist and therefore
+  does_not_prove: any specific root cause, or that the observed bias
+  blocker_check_first: parser integrity, harness completion, timeout
+  outcome_summary: surfaced the parser artifact (`I-001`), the arviz race
+  next_action: fix the clear blockers and artifacts, then rerun before
+  harness_log_paths: []
+- id: R-002
+  title: Post-parser / infra rerun (`r1776814894`)
+  status: answered
+  date: '2026-04-22'
+  command_or_plan: same sparse scope after the parser and infrastructure
+  related_issue_ids:
+  - I-001
+  - I-010
+  - I-011
+  why_this_run_exists: separate real sparse/model defects from the
+  intended_to_prove: which serious defects survive once the obvious
+  does_not_prove: that the sparse matrix is now completion-stable;
+  blocker_check_first: completion and stall behaviour on the
+  outcome_summary: '`I-001` verified fixed; `I-010` regressed into a narrower'
+  next_action: rerun the blocked `diamond-*-2dim` set after the second
+  harness_log_paths: []
+- id: R-003
+  title: Pending blocker retest for `diamond-*-2dim`
+  status: planned
+  date: '2026-04-22'
+  command_or_plan: targeted rerun of the previously failing
+  related_issue_ids:
+  - I-010
+  - I-011
+  why_this_run_exists: determine whether the second `I-010`
+  intended_to_prove: whether the remaining failure mode is still
+  does_not_prove: anything about onset bias (`I-002`), sigma bias
+  blocker_check_first: does the graph now complete honestly, or at
+  outcome_summary: pending
+  next_action: if clean, return to the broader sparse systematic issues;
+  harness_log_paths: []

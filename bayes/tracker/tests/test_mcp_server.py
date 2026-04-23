@@ -34,9 +34,10 @@ def _point_at_tmp(monkeypatch, tmp_path, sample_state):
 
 
 def _call(tool, **kwargs):
-    """Invoke a FastMCP-decorated tool's underlying function."""
-    # FastMCP wraps the function; the original is exposed via .fn.
-    return tool.fn(**kwargs)
+    """Invoke a FastMCP-registered tool. The `@mcp.tool()` decorator
+    registers the tool and returns the original function unchanged, so
+    the module attribute IS callable directly."""
+    return tool(**kwargs)
 
 
 def test_get_overview_returns_current_line_and_next_planned():

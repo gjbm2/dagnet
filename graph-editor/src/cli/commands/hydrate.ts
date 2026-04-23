@@ -30,6 +30,11 @@ dagnet-cli hydrate
     --name,  -n              Graph name (filename without .json in graphs/)
     --query, -q              Query DSL expression (e.g. "window(-90d:)")
     --allow-external-fetch   Allow fetching from external sources
+    --bayes-vars <path>      Inject Bayesian posteriors from a .bayes-vars.json
+                             sidecar before hydration. The hydrated graph
+                             written to disk will carry the injected posteriors.
+    --force-vars             With --bayes-vars, bypass the rhat/ess quality
+                             gates so low-quality posteriors still apply.
     --diagnostic, --diag     Show detailed pipeline trace (per-edge state at each stage)
     --verbose, -v            Show all console.log/warn output
     --help, -h               Show this help

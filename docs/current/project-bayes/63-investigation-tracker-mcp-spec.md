@@ -1,7 +1,7 @@
 # 63 — Investigation Tracker MCP Spec
 
 **Date**: 22-Apr-26  
-**Status**: Proposed  
+**Status**: Implemented (Phases 0–1, 22-Apr-26); Phase 2 deferred  
 **Audience**: engineers implementing Bayes diagnostic tooling and agents
 running regression / defect-isolation work  
 **Primary references**: `20-open-issues-register.md`,

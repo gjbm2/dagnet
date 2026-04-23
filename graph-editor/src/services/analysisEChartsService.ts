@@ -70,21 +70,21 @@ function projectSurpriseGaugeResultForDisplay(
       : []);
   if (scenarioResults.length === 0) return result;
 
-  const orderedScenarioResults = (() => {
+  // Compositing convention: visibleScenarioIds is bottom→top; topmost = last.
+  // Projection must operate on visible scenarios only (unseen scenarios never
+  // overlay in `all_visible` mode, never receive focus in `focused` mode).
+  const visibleScenarioResults = (() => {
     if (!visibleScenarioIds || visibleScenarioIds.length === 0) return scenarioResults;
     const byId = new Map(
       scenarioResults.map((scenarioResult) => [String(scenarioResult.scenario_id), scenarioResult]),
     );
-    const ordered = visibleScenarioIds
+    return visibleScenarioIds
       .map((scenarioId) => byId.get(String(scenarioId)))
       .filter(Boolean) as any[];
-    const seen = new Set(ordered.map((scenarioResult) => String(scenarioResult.scenario_id)));
-    for (const scenarioResult of scenarioResults) {
-      const scenarioId = String(scenarioResult.scenario_id);
-      if (!seen.has(scenarioId)) ordered.push(scenarioResult);
-    }
-    return ordered;
   })();
+  const orderedScenarioResults = visibleScenarioResults.length > 0
+    ? visibleScenarioResults
+    : scenarioResults; // safety fallback: nothing visible → render whatever we have
 
   const selectedVar = settings.surprise_var || 'p';
   const scenarioScope = settings.surprise_scenario_scope || 'focused';
@@ -97,6 +97,12 @@ function projectSurpriseGaugeResultForDisplay(
       .filter((hint): hint is string => typeof hint === 'string' && hint.length > 0),
   ));
 
+  // Preserve unavailable variables so the builder can render doc 55's
+  // "explanatory placeholder" face rather than returning null (which
+  // trips AnalysisChartContainer's auto-fallback and flips the view to
+  // cards, suppressing display). In 'all_visible' mode we still drop
+  // unavailable variables — a multi-scenario band chart has no
+  // placeholder shape and the available subset is the meaningful view.
   const variables = selectedVar === 'all'
     ? selectedScenarioResults.flatMap((scenarioResult) => {
         const scenarioName = result?.dimension_values?.scenario_id?.[String(scenarioResult.scenario_id)]?.name
@@ -113,17 +119,30 @@ function projectSurpriseGaugeResultForDisplay(
     : selectedScenarioResults.flatMap((scenarioResult) => {
         const scenarioName = result?.dimension_values?.scenario_id?.[String(scenarioResult.scenario_id)]?.name
           || scenarioResult.scenario_id;
-        const variable = (scenarioResult.variables || []).find((candidate: any) => (
+        const scenarioVariables = scenarioResult.variables || [];
+        // Prefer an available match for the selected variable.
+        const availableMatch = scenarioVariables.find((candidate: any) => (
           candidate.available && candidate.name === selectedVar
         ));
-        if (variable) {
+        if (availableMatch) {
           return [{
-            ...variable,
-            label: scenarioScope === 'all_visible' ? scenarioName : variable.label,
+            ...availableMatch,
+            label: scenarioScope === 'all_visible' ? scenarioName : availableMatch.label,
           }];
         }
         if (scenarioScope !== 'all_visible') {
-          return (scenarioResult.variables || []).filter((candidate: any) => candidate.available);
+          // Fall back to any available variable for focused mode …
+          const anyAvailable = scenarioVariables.filter((candidate: any) => candidate.available);
+          if (anyAvailable.length > 0) return anyAvailable;
+          // … otherwise pass through the selected (unavailable) variable so
+          // the builder can render a placeholder with its reason.
+          const unavailableMatch = scenarioVariables.find((candidate: any) => candidate.name === selectedVar);
+          if (unavailableMatch) {
+            return [{
+              ...unavailableMatch,
+              label: scenarioScope === 'all_visible' ? scenarioName : unavailableMatch.label,
+            }];
+          }
         }
         return [];
       });

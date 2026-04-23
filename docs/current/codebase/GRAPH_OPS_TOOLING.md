@@ -45,7 +45,10 @@ bash graph-ops/scripts/list-graph.sh
 
 **Key flags**: `--verbose` (debug output), `--format json` (pipe to jq),
 `--no-cache` (bypass disk bundle cache), `--no-snapshot-cache` (bypass
-BE cache after DB changes). `--topo-pass` is retained as a deprecated
+BE cache after DB changes), `--bayes-vars <path>` (inject a Bayesian
+posterior sidecar into the graph before the command runs; every
+command honours it), `--force-vars` (with `--bayes-vars`, bypass
+rhat/ess quality gates). `--topo-pass` is retained as a deprecated
 no-op for older scripts.
 
 **Diagnostics go to stderr, data to stdout.** Use `2>/dev/null` when piping.
@@ -252,9 +255,56 @@ All CLI commands support:
 | `--no-cache` | Bypass disk bundle cache (re-parse all YAML) |
 | `--verbose` / `-v` | Show all internal debug logging |
 | `--session-log` | Show session log output |
+| `--bayes-vars <path>` | Inject a Bayesian posterior sidecar into the graph in-memory before the command runs (see below) |
+| `--force-vars` | With `--bayes-vars`, bypass the rhat/ess quality gates |
 
 Diagnostics go to stderr, data goes to stdout. Use `2>/dev/null` to
 suppress diagnostics when piping.
+
+### Bayesian sidebar vars injection (`--bayes-vars`)
+
+Every CLI command accepts `--bayes-vars <path-to-bayes-vars.json>`.
+When supplied, `bootstrap.ts` loads the sidecar, applies it in memory
+via the production `bayesPatchService.applyPatch` codepath (the same
+one the browser uses when a webhook patch lands), and re-binds
+`bundle.graph` + every `bundle.parameters` entry from `fileRegistry`
+so downstream aggregation, analysis, param-pack extraction, and
+hydrate all see the enriched graph. No disk writes.
+
+Accepts both sidecar shapes:
+
+- Full `BayesPatchFile` (as committed by the webhook).
+- Raw worker result containing `webhook_payload_edges` (as cached in
+  `bayes/fixtures/*.bayes-vars.json`).
+
+`wrapPatchIfRaw()` in `bayesPatchService.ts` normalises both into the
+canonical `BayesPatchFile` shape.
+
+`--force-vars` flips the module-level `qualityGateOverride` flag in
+`bayesPatchService.ts` so `meetsQualityGate()` returns `true`
+unconditionally — use when you deliberately want to inject a
+low-convergence posterior for experimentation. Bootstrap always
+resets the flag after injection so the bypass does not leak across
+runs in long-lived processes (tests, REPL).
+
+Typical use: analyse or param-pack a graph "as if" particular
+posteriors were committed, without actually touching parameter files.
+
+```bash
+# Param pack with injected posteriors
+bash graph-ops/scripts/param-pack.sh my-graph "window(-30d:)" \
+  --bayes-vars bayes/fixtures/my-graph.bayes-vars.json
+
+# Analyse with injected posteriors, quality gate bypassed
+bash graph-ops/scripts/analyse.sh my-graph "window(-30d:)" \
+  --type graph_overview \
+  --bayes-vars bayes/fixtures/experimental.bayes-vars.json \
+  --force-vars
+```
+
+Design rationale: the feature was added so one codepath — inside
+`bootstrap()` — makes every CLI command bayes-vars-aware, rather
+than wiring the flag into five command bodies separately.
 
 ### Disk bundle cache
 

@@ -612,6 +612,207 @@ describe('GraphComputeClient - Cohort Maturity Normalisation', () => {
   });
 });
 
+// ============================================================================
+// Family F — chart payload normaliser preserves canonical semantics block.
+//
+// §3.6 receipt:
+//   Family:    F (projection / authority)
+//   Invariant: The snapshot-response normaliser emits a canonical `semantics`
+//              block — fixed dimension IDs, fixed metric IDs, `chart.recommended`
+//              matching `analysis_type` — on both the populated and empty paths.
+//              The normaliser must NOT invent new computed metrics or promote
+//              BE-raw fields into the metrics list.
+//   Oracle:    static canonical spec (no reference implementation)
+//   Apparatus: TS unit test against `normaliseSnapshotCohortMaturityResponse`
+//   Fixtures:  minimal cohort_maturity raw response (populated + empty)
+//   Reality:   catches regressions where the normaliser invents metric IDs or
+//              sets `chart.recommended` to a non-canonical string; catches the
+//              empty-path forgetting to emit semantics at all.
+//   False-pass: a fixture that hand-constructs the semantics block and the
+//              normaliser trusts it through (covered: semantics is authored
+//              by the normaliser from the analysis_type, not copied from BE).
+//   Retires:   ad-hoc assertions scattered across the populated-path tests
+//              that checked `analysis_type` and `chart.recommended` piecemeal.
+// ============================================================================
+
+describe('GraphComputeClient - Chart payload semantics contract (Family F)', () => {
+  const client = new GraphComputeClient('http://localhost:9000', true);
+
+  const COHORT_MATURITY_CANONICAL_DIMENSION_IDS = new Set([
+    'tau_days',
+    'scenario_id',
+    'subject_id',
+  ]);
+  const COHORT_MATURITY_CANONICAL_METRIC_IDS = new Set([
+    'rate',
+    'projected_rate',
+    'x_covered',
+    'y_base',
+    'y_projected',
+  ]);
+
+  function buildRawResponse(frames: any[], scenarioId = 'sc1', subjectId = 'subj1') {
+    return {
+      success: true,
+      scenarios: [
+        {
+          scenario_id: scenarioId,
+          subjects: [
+            {
+              subject_id: subjectId,
+              success: true,
+              result: {
+                analysis_type: 'cohort_maturity',
+                frames,
+                anchor_range: { from: '2025-10-01', to: '2025-10-01' },
+                sweep_range: { from: '2025-10-01', to: '2025-11-01' },
+                cohorts_analysed: 1,
+              },
+            },
+          ],
+        },
+      ],
+    };
+  }
+
+  function buildRequest(queryDsl = 'from(a).to(b).cohort(1-Oct-25,31-Oct-25)') {
+    return {
+      analysis_type: 'cohort_maturity',
+      query_dsl: queryDsl,
+      scenarios: [
+        {
+          scenario_id: 'sc1',
+          scenario_name: 'Baseline',
+          snapshot_subjects: [{
+            subject_id: 'subj1',
+            subject_label: 'a → b',
+            param_id: 'repo-branch-param-1',
+            canonical_signature: 'sig',
+            core_hash: 'hash',
+            read_mode: 'cohort_maturity',
+            anchor_from: '2025-10-01',
+            anchor_to: '2025-10-01',
+            sweep_from: '2025-10-01',
+            sweep_to: '2025-11-01',
+            slice_keys: ['cohort()'],
+            target: { targetId: 'edge-1', slot: 'p' },
+          }],
+        },
+      ],
+    };
+  }
+
+  it('populated path: emits canonical semantics with analysis-type-matching chart.recommended', () => {
+    const frames = [
+      { snapshot_date: '2025-10-04',
+        data_points: [{ anchor_day: '2025-10-01', y: 42, x: 100, a: 1000, rate: 0.42 }],
+        total_y: 42 },
+    ];
+    const raw = buildRawResponse(frames);
+    raw.scenarios[0].subjects[0].result.maturity_rows = [
+      { tau_days: 3, rate: 0.42 },
+    ];
+
+    const response = (client as any).normaliseSnapshotCohortMaturityResponse(raw, buildRequest());
+    expect(response).not.toBeNull();
+
+    const result = response.result;
+    expect(result.analysis_type).toBe('cohort_maturity');
+
+    const semantics = result.semantics;
+    expect(semantics).toBeDefined();
+    expect(semantics.dimensions).toBeDefined();
+    expect(semantics.metrics).toBeDefined();
+    expect(semantics.chart).toBeDefined();
+
+    expect(semantics.chart.recommended).toBe(result.analysis_type);
+  });
+
+  it('populated path: dimension IDs are drawn only from the canonical set', () => {
+    const frames = [
+      { snapshot_date: '2025-10-04',
+        data_points: [{ anchor_day: '2025-10-01', y: 42, x: 100, a: 1000, rate: 0.42 }],
+        total_y: 42 },
+    ];
+    const raw = buildRawResponse(frames);
+    raw.scenarios[0].subjects[0].result.maturity_rows = [{ tau_days: 3, rate: 0.42 }];
+
+    const response = (client as any).normaliseSnapshotCohortMaturityResponse(raw, buildRequest());
+    const semantics = response.result.semantics;
+    const seenDimensionIds = (semantics.dimensions as any[]).map(d => d.id);
+
+    for (const id of seenDimensionIds) {
+      expect(COHORT_MATURITY_CANONICAL_DIMENSION_IDS.has(id)).toBe(true);
+    }
+    expect(seenDimensionIds).toContain('tau_days');
+  });
+
+  it('populated path: metric IDs are drawn only from the canonical set and are not derived from BE raw keys', () => {
+    const frames = [
+      { snapshot_date: '2025-10-04',
+        data_points: [{ anchor_day: '2025-10-01', y: 42, x: 100, a: 1000, rate: 0.42 }],
+        total_y: 42 },
+    ];
+    const raw = buildRawResponse(frames);
+    raw.scenarios[0].subjects[0].result.maturity_rows = [
+      { tau_days: 3, rate: 0.42, some_new_be_metric: 0.99, another_fabricated_field: 'x' },
+    ];
+
+    const response = (client as any).normaliseSnapshotCohortMaturityResponse(raw, buildRequest());
+    const semantics = response.result.semantics;
+    const seenMetricIds = (semantics.metrics as any[]).map(m => m.id);
+
+    for (const id of seenMetricIds) {
+      expect(COHORT_MATURITY_CANONICAL_METRIC_IDS.has(id)).toBe(true);
+    }
+    expect(seenMetricIds).toContain('rate');
+    expect(seenMetricIds).not.toContain('some_new_be_metric');
+    expect(seenMetricIds).not.toContain('another_fabricated_field');
+  });
+
+  it('empty path: still emits canonical semantics block with analysis-type-matching chart.recommended', () => {
+    const frames = [
+      { snapshot_date: '2025-10-01', data_points: [], total_y: 0 },
+    ];
+    const raw = buildRawResponse(frames);
+
+    const response = (client as any).normaliseSnapshotCohortMaturityResponse(raw, buildRequest());
+    expect(response).not.toBeNull();
+
+    const result = response.result;
+    expect(result.analysis_type).toBe('cohort_maturity');
+    expect(result.semantics).toBeDefined();
+    expect(result.semantics.chart).toBeDefined();
+    expect(result.semantics.chart.recommended).toBe(result.analysis_type);
+    expect(Array.isArray(result.semantics.dimensions)).toBe(true);
+    expect(Array.isArray(result.semantics.metrics)).toBe(true);
+  });
+
+  it('semantics block is authored by the normaliser and is independent of BE-supplied semantics', () => {
+    const frames = [
+      { snapshot_date: '2025-10-04',
+        data_points: [{ anchor_day: '2025-10-01', y: 42, x: 100, a: 1000, rate: 0.42 }],
+        total_y: 42 },
+    ];
+    const raw = buildRawResponse(frames);
+    raw.scenarios[0].subjects[0].result.maturity_rows = [{ tau_days: 3, rate: 0.42 }];
+    raw.scenarios[0].subjects[0].result.semantics = {
+      dimensions: [{ id: 'bogus_dim', name: 'Bogus', type: 'number', role: 'primary' }],
+      metrics: [{ id: 'bogus_metric', name: 'Bogus', type: 'number', role: 'primary' }],
+      chart: { recommended: 'bogus_chart', alternatives: [] },
+    };
+
+    const response = (client as any).normaliseSnapshotCohortMaturityResponse(raw, buildRequest());
+    const semantics = response.result.semantics;
+
+    expect(semantics.chart.recommended).toBe('cohort_maturity');
+    const dimIds = (semantics.dimensions as any[]).map(d => d.id);
+    const metIds = (semantics.metrics as any[]).map(m => m.id);
+    expect(dimIds).not.toContain('bogus_dim');
+    expect(metIds).not.toContain('bogus_metric');
+  });
+});
+
 describe('GraphComputeClient - Surprise Gauge Normalisation', () => {
   const client = new GraphComputeClient('http://localhost:9000', true);
 

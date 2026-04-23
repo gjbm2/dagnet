@@ -1,27 +1,64 @@
 """
-Phase 0 behaviour tests for doc 56 runtime-boundary migration.
+Forecast cross-consumer agreement (doc 64 Family C).
 
-Two regression guards that document the behaviours the migration must
-preserve. These tests now exercise the real Python handlers in-process:
-subject resolution, snapshot DB reads, regime selection, carrier
-construction, and the shared CF/v3 engine still run for real, but the
-tests no longer pay the bash → nvm → node wrapper startup cost on every
-assertion.
+First-class forecast consumers must agree on the same semantic question
+because they are projections of one solve, not bespoke mini-engines. A
+divergence between two consumers on the same edge under the same DSL
+means a forked mini-engine has been introduced.
 
-Tests:
+Consumers covered:
+- `conditioned_forecast` (whole-graph CF handler)
+- `cohort_maturity_v3` (single-edge chart)
+- `daily_conversions` (per-day projection)
+- `surprise_gauge` (p and completeness surfaces)
+- `lag_fit` (shares the temporal-selection seam)
 
-1. `test_cf_and_v3_chart_carrier_tier_agree` — green today (tautology:
-   both call v2's `build_upstream_carrier`). Becomes a cut-over
-   regression guard — if Phase 3 forks the carrier between CF and v3,
-   this flags it.
+Agreement claims asserted here:
 
-2. `test_cf_p_mean_matches_v3_p_infinity` — green today (both paths
-   route through `compute_cohort_maturity_rows_v3`). Becomes a
-   cut-over regression guard — if Phase 3 lets CF and the v3 chart
-   diverge on the same edge, this flags it.
+1. CF and v3 chart select the same carrier tier for the same edge.
+2. CF `p_mean` equals v3 `p_infinity_mean` (tol 5e-3) across a topology
+   matrix including linear, branching, diamond, and deep-mixed graphs.
+3. `lag_fit` and `surprise_gauge` observe the same downstream
+   window/cohort split on a shared selection seam.
+4. The v3 chart and `daily_conversions` both preserve the window/cohort
+   split rather than collapsing to one broad family.
 
-These tests require the real snapshot DB and data repo. They skip
-gracefully when either is unavailable.
+Dedicated overlay/main-chart consistency claims now live in the
+specialised `cohort_maturity` contract canaries rather than in this
+cross-consumer Family C suite.
+
+Also hosts an edge-order invariance assertion on whole-graph CF
+(Family E) until a dedicated Family E home exists.
+
+── Authoring receipt (doc 64 §3.6) ─────────────────────────────────
+
+Family         C. Cross-consumer agreement.
+Invariant      First-class forecast consumers must return the same
+               semantic answer for the same question; a divergence
+               indicates that a forked mini-engine has been introduced.
+Oracle type    Live cross-consumer agreement. Not legacy parity.
+Apparatus      Python integration through real `api_handlers`. A
+               lower-cost apparatus would not exercise the handler +
+               runtime + chart projection path where divergence has
+               historically escaped.
+Fixtures       Named synth graphs — `synth-mirror-4step` for factorised
+               multi-hop; the `cf-fix-*` set for the topology matrix;
+               `synth-simple-abc` for downstream temporal-split canaries.
+               Each is the smallest named graph that makes the claim
+               non-vacuous on its semantic atom.
+Reality        Real snapshot DB and real data repo. No mocks of forecast
+               logic, snapshot selection, or chart projection. Tests
+               skip gracefully when DB or data repo is unavailable.
+False-pass     Both consumers could still agree while sharing a bug.
+               Mitigation: the same claim is checked across seven
+               fixture/DSL combinations spanning topology, temporal
+               split, and consumer shape; overlay/main-chart internal
+               consistency is guarded separately by dedicated
+               `cohort_maturity` contract canaries.
+Retires        Supersedes the doc-56 phase-0 "cut-over regression guard"
+               framing in this file. Eligible for further family split
+               once a dedicated Family E home exists for the edge-order
+               invariance test.
 """
 
 from __future__ import annotations
@@ -89,15 +126,20 @@ def _run_v3_cached(
     graph_name: str,
     analytics_dsl: str,
     temporal_dsl: str,
+    bayesian: bool = False,
 ) -> Dict[str, Any]:
     from api_handlers import _handle_cohort_maturity_v3
+
+    graph = load_graph_json(graph_name, bayesian=bayesian)
+    if bayesian:
+        graph["model_source_preference"] = "bayesian"
 
     return _handle_cohort_maturity_v3(
         {
             "scenarios": [
                 {
                     "scenario_id": "doc56",
-                    "graph": load_graph_json(graph_name),
+                    "graph": graph,
                     "analytics_dsl": analytics_dsl,
                     "effective_query_dsl": temporal_dsl,
                     "candidate_regimes_by_edge": load_candidate_regimes_by_mode(graph_name),
@@ -107,8 +149,16 @@ def _run_v3_cached(
     )
 
 
-def _run_v3(graph_name: str, analytics_dsl: str, temporal_dsl: str) -> Dict[str, Any]:
-    return copy.deepcopy(_run_v3_cached(graph_name, analytics_dsl, temporal_dsl))
+def _run_v3(
+    graph_name: str,
+    analytics_dsl: str,
+    temporal_dsl: str,
+    *,
+    bayesian: bool = False,
+) -> Dict[str, Any]:
+    return copy.deepcopy(
+        _run_v3_cached(graph_name, analytics_dsl, temporal_dsl, bayesian),
+    )
 
 
 def _extract_result(result: Dict[str, Any]) -> Dict[str, Any]:
@@ -212,11 +262,12 @@ def test_cf_and_v3_chart_carrier_tier_agree():
     same carrier tier (parametric / empirical / weak_prior / none) for
     the same edge under the same DSL.
 
-    Green today — both paths call v2's `build_upstream_carrier` with
-    the same upstream params list, reach, and observations. Becomes a
-    drift guard when Phase 3 puts CF and v3 on different carrier code.
+    Agreement claim: both consumers call the same `build_upstream_carrier`
+    with the same upstream params list, reach, and observations. If
+    either consumer forks onto its own carrier code, the tier will
+    diverge on the same edge.
 
-    Fixture: synth-mirror-4step cohort mode — multi-hop exercises
+    Fixture: `synth-mirror-4step` cohort mode — multi-hop exercises
     Tier 2 empirical carrier on downstream edges.
     """
     graph_name = "synth-mirror-4step"
@@ -283,24 +334,20 @@ def test_cf_p_mean_matches_v3_p_infinity():
     """Whole-graph CF's per-edge `p_mean` must equal the v3 chart's
     `p_infinity_mean` for the same edge under the same DSL.
 
-    Green today — both paths route through
-    `compute_cohort_maturity_rows_v3` and read the same
-    IS-conditioned `rate_draws[:, saturation_tau]` median (doc 45
-    §Response contract: "one computation, two reads").
+    Agreement claim: both consumers read the same IS-conditioned
+    `rate_draws[:, saturation_tau]` median (doc 45 §Response contract:
+    "one computation, two reads"). If either consumer forks onto its
+    own computation path, `p_mean` and `p_infinity_mean` diverge on
+    the same edge.
 
-    Becomes a drift guard during Phase 3: if the cut-over forks the
-    p_mean computation between the CF handler and the v3 chart
-    handler, this test catches it.
-
-    Tolerance: 5e-3 absolute. Tighter than existing harnesses (which
-    accept 6e-2 on midpoint per v2-v3-parity) but loose enough to
-    permit the ~4e-4 gap on multi-hop fixtures from CF whole-graph's
-    upstream-observation caching (doc 47 §Phase 4 — single-edge v3
-    rebuilds the carrier fresh while whole-graph CF reads from the
-    shared all_per_edge_results cache).
+    Tolerance: 5e-3 absolute — loose enough to permit the ~4e-4 gap on
+    multi-hop fixtures from CF whole-graph's upstream-observation
+    caching (doc 47 §Phase 4 — single-edge v3 rebuilds the carrier
+    fresh while whole-graph CF reads from the shared
+    all_per_edge_results cache).
 
     Fixture matrix: the doc-50 topology set (same as
-    cf-topology-suite.sh), plus a deep cohort chain that exercises
+    `cf-topology-suite.sh`), plus a deep cohort chain that exercises
     donor-of-donor propagation in the whole-graph carrier path.
     """
     matrix: List[Tuple[str, str]] = [
@@ -372,183 +419,53 @@ def test_cf_p_mean_matches_v3_p_infinity():
     )
 
 
+# Claim retired (22-Apr-26):
+#
+# The old single-edge factorised model-curve assertion in this file
+# assumed the promoted `model_curve` remained an edge-rooted subject-span
+# helper. That is no longer the live contract: promoted `model_curve`
+# intentionally follows the row-model family exposed as
+# `model_midpoint`.
+#
+# Replacement coverage:
+# - `test_cf_p_mean_matches_v3_p_infinity` keeps the cross-consumer
+#   scalar-agreement claim in this Family C suite.
+# - `graph-ops/scripts/multihop-evidence-parity-test.sh` Claim 2 keeps
+#   the downstream single-hop cohort/window divergence claim.
+# - `graph-ops/scripts/cohort-maturity-model-parity-test.sh` and
+#   `graph-ops/scripts/cohort-maturity-no-evidence-test.sh` guard the
+#   live overlay/main-chart contract directly.
+
+
 @requires_db
-@requires_data_repo
-def test_single_edge_cohort_uses_factorised_subject_span():
-    """Single-hop cohort mode must keep the live subject operator rooted at X.
-
-    WP3 replaces the old anchor-rooted widening on `cohort(A, X-Y)` with the
-    factorised default: carrier on `A -> X`, subject span on `X -> Y`.
-    Exercise the classic upstream-lag case on `synth-mirror-4step` where the
-    anchor is upstream of the scoped edge, require shared preparation to
-    recover that anchor from the raw graph payload, and require the v3 chart's
-    surfaced model curve to sit closer to the edge-rooted subject span than to
-    the anchor-rooted whole-query span. Also keep the external chart-vs-CF
-    horizon scalar in sync for the same edge.
-    """
-
-    from api_handlers import handle_conditioned_forecast
-    from runner.forecast_preparation import (
-        prepare_forecast_subject_group,
-        resolve_forecast_subjects,
-    )
-    from runner.forecast_runtime import build_prepared_span_execution
-    from runner.span_kernel import compose_span_kernel
-
+@requires_synth("synth-mirror-4step", enriched=True)
+def test_query_scoped_identity_carrier_collapses_public_evidence_basis():
+    """Degraded cohort rows must collapse when the upstream carrier is identity."""
     graph_name = "synth-mirror-4step"
-    analytics_dsl = "from(m4-registered).to(m4-success)"
-    temporal_dsl = "cohort(-14d:)"
+    analytics_dsl = "from(m4-delegated).to(m4-success)"
+    date_window = "1-Feb-26:15-Mar-26"
 
-    graph = load_graph_json(graph_name)
-    candidate_regimes = load_candidate_regimes_by_mode(graph_name)
-    scenario = {
-        "scenario_id": "doc56",
-        "graph": graph,
-        "analytics_dsl": analytics_dsl,
-        "effective_query_dsl": temporal_dsl,
-        "candidate_regimes_by_edge": candidate_regimes,
-    }
+    window_result = _run_v3(graph_name, analytics_dsl, f"window({date_window})")
+    cohort_result = _run_v3(graph_name, analytics_dsl, f"cohort({date_window})")
 
-    subjects = resolve_forecast_subjects(
-        graph_data=graph,
-        scenario=scenario,
-        top_analytics_dsl=analytics_dsl,
-        path_analysis_type="cohort_maturity",
-        whole_graph_analysis_type="conditioned_forecast",
-        log_prefix="[doc56-test]",
-    )
-    preparation = prepare_forecast_subject_group(
-        graph_data=graph,
-        subjects=subjects,
-        is_window=False,
-        log_prefix="[doc56-test]",
-    )
+    cohort_subject = _extract_result(cohort_result)
+    cohort_rows = _extract_maturity_rows(cohort_result)
+    window_rows = _extract_maturity_rows(window_result)
 
-    assert preparation.anchor_node == "m4-landing"
-    assert preparation.query_from_node == "m4-registered"
-    assert preparation.query_to_node == "m4-success"
+    assert cohort_subject.get("cf_reason") == "query_scoped_posterior"
+    assert cohort_rows and window_rows
 
-    edge_execution = build_prepared_span_execution(
-        graph,
-        "m4-registered",
-        "m4-success",
-        temporal_mode="window",
-        graph_preference=graph.get("model_source_preference"),
-    )
-    anchor_execution = build_prepared_span_execution(
-        graph,
-        "m4-landing",
-        "m4-success",
-        temporal_mode="window",
-        graph_preference=graph.get("model_source_preference"),
-    )
-    edge_kernel = (
-        compose_span_kernel(
-            topo=edge_execution.topo,
-            edge_params=edge_execution.edge_params,
-            max_tau=400,
-        )
-        if edge_execution is not None
-        else None
-    )
-    anchor_kernel = (
-        compose_span_kernel(
-            topo=anchor_execution.topo,
-            edge_params=anchor_execution.edge_params,
-            max_tau=400,
-        )
-        if anchor_execution is not None
-        else None
-    )
-    assert edge_kernel is not None and edge_kernel.span_p > 0
-    assert anchor_kernel is not None and anchor_kernel.span_p > 0
+    window_by_tau = {row["tau_days"]: row for row in window_rows}
+    cohort_by_tau = {row["tau_days"]: row for row in cohort_rows}
 
-    def _norm(kernel: Any, tau: int) -> float:
-        return round(
-            min(max(kernel.cdf_at(tau) / kernel.span_p, 0.0), 1.0),
-            6,
-        )
-
-    divergent_taus: List[Tuple[int, float, float]] = []
-    for tau in (5, 10, 15, 20):
-        edge_expected = _norm(edge_kernel, tau)
-        anchor_expected = _norm(anchor_kernel, tau)
-        if abs(edge_expected - anchor_expected) > 0.02:
-            divergent_taus.append((tau, edge_expected, anchor_expected))
-
-    assert divergent_taus, (
-        "Fixture no longer shows an upstream-lag difference between the "
-        "edge-rooted and anchor-rooted cohort spans."
-    )
-
-    v3_result = _run_v3(graph_name, analytics_dsl, temporal_dsl)
-    subject_result: Optional[Dict[str, Any]] = None
-    if "result" in v3_result and isinstance(v3_result["result"], dict):
-        subject_result = v3_result["result"]
-    else:
-        for subject in (
-            v3_result.get("subjects")
-            or v3_result.get("scenarios", [{}])[0].get("subjects", [])
-        ):
-            result = subject.get("result")
-            if isinstance(result, dict):
-                subject_result = result
-                break
-
-    assert subject_result is not None, "v3 chart returned no subject result"
-    curve_by_tau = {
-        point["tau_days"]: float(point["model_rate"])
-        for point in (subject_result.get("model_curve") or [])
-        if "tau_days" in point and "model_rate" in point
-    }
-    rate_scale = (subject_result.get("model_curve_params") or {}).get("forecast_mean")
-    assert curve_by_tau, "v3 chart missing model_curve for single-edge cohort test"
-    assert rate_scale is not None, "v3 chart missing model_curve forecast_mean"
-
-    comparisons: List[Tuple[int, float, float, float]] = []
-    for tau, edge_expected, anchor_expected in divergent_taus:
-        model_rate = curve_by_tau.get(tau)
-        if model_rate is None:
-            continue
-        edge_rate = float(rate_scale) * edge_expected
-        anchor_rate = float(rate_scale) * anchor_expected
-        comparisons.append((tau, model_rate, edge_rate, anchor_rate))
-
-    assert comparisons, "No overlapping divergent taus between the direct kernels and the v3 model curve"
-    tau, model_rate, edge_rate, anchor_rate = max(
-        comparisons,
-        key=lambda item: abs(item[2] - item[3]),
-    )
-    assert abs(model_rate - edge_rate) < abs(model_rate - anchor_rate), (
-        f"v3 model curve still looks anchor-rooted at tau={tau}: "
-        f"model={model_rate:.6f} edge={edge_rate:.6f} anchor={anchor_rate:.6f}"
-    )
-
-    cf_resp = handle_conditioned_forecast(
-        {
-            "scenarios": [scenario],
-            "analytics_dsl": analytics_dsl,
-        }
-    )
-    cf_edge = _cf_edge_by_id(cf_resp).get(("m4-registered", "m4-success"))
-    assert cf_edge is not None, "CF response missing m4-registered->m4-success"
-
-    rows = _extract_maturity_rows(v3_result)
-    assert rows, "v3 chart returned no rows for m4-registered->m4-success cohort test"
-
-    v3_p_inf = rows[-1].get("p_infinity_mean")
-    if v3_p_inf is None:
-        for row in reversed(rows):
-            if row.get("midpoint") is not None:
-                v3_p_inf = row["midpoint"]
-                break
-
-    cf_p_mean = cf_edge.get("p_mean")
-    assert cf_p_mean is not None and v3_p_inf is not None
-    assert abs(float(cf_p_mean) - float(v3_p_inf)) < 5e-3, (
-        f"CF and v3 diverged after the factorised single-edge cohort fix: "
-        f"CF={float(cf_p_mean):.6f} v3={float(v3_p_inf):.6f}"
-    )
+    # These late taus exercise the degraded projection seam that used to
+    # shed younger cohorts even after the carrier had collapsed to identity.
+    for tau in (41, 44, 50, 65, 80):
+        window_row = window_by_tau.get(tau)
+        cohort_row = cohort_by_tau.get(tau)
+        assert window_row is not None and cohort_row is not None
+        assert cohort_row["evidence_x"] == pytest.approx(window_row["evidence_x"])
+        assert cohort_row["evidence_y"] == pytest.approx(window_row["evidence_y"])
 
 
 @requires_db
@@ -759,3 +676,401 @@ def test_chart_and_daily_conversions_do_not_collapse_window_and_cohort():
     sample_date = common_dates[0]
     assert window_by_date[sample_date]["x"] != cohort_by_date[sample_date]["x"]
     assert window_by_date[sample_date]["y"] != cohort_by_date[sample_date]["y"]
+
+
+@requires_db
+@requires_data_repo
+@requires_synth(
+    "synth-simple-abc",
+    enriched=True,
+    bayesian=True,
+)
+def test_bayesian_sidecar_preserves_downstream_window_cohort_chart_split():
+    """Bayesian sidecar path must preserve downstream split.
+
+    This is the synth witness for the known downstream convergence defect.
+    It must run through the normal sidecar-backed injection path so the
+    graph JSON stays clean and tests do not re-fit Bayes on every run.
+    """
+    graph_name = "synth-simple-abc"
+    analytics_dsl = "from(simple-b).to(simple-c)"
+
+    window_rows = _extract_maturity_rows(
+        _run_v3(graph_name, analytics_dsl, "window(-90d:)", bayesian=True),
+    )
+    cohort_rows = _extract_maturity_rows(
+        _run_v3(graph_name, analytics_dsl, "cohort(-90d:)", bayesian=True),
+    )
+
+    assert window_rows, "v3 returned no window rows on the bayesian synth path"
+    assert cohort_rows, "v3 returned no cohort rows on the bayesian synth path"
+    assert window_rows[0].get("_cf_mode") == "sweep"
+    assert cohort_rows[0].get("_cf_mode") == "sweep"
+
+    w_by_tau = {row["tau_days"]: row for row in window_rows}
+    c_by_tau = {row["tau_days"]: row for row in cohort_rows}
+    representative_tau = next(
+        (
+            tau
+            for tau in sorted(set(w_by_tau) & set(c_by_tau))
+            if tau >= 5
+            and w_by_tau[tau].get("model_midpoint") is not None
+            and c_by_tau[tau].get("model_midpoint") is not None
+            and w_by_tau[tau].get("evidence_x") is not None
+            and c_by_tau[tau].get("evidence_x") is not None
+            and float(w_by_tau[tau]["model_midpoint"]) >= 0.05
+        ),
+        None,
+    )
+    assert representative_tau is not None, (
+        "no shared downstream tau in the model-rise window on the bayesian "
+        "sweep path"
+    )
+
+    window_rep = w_by_tau[representative_tau]
+    cohort_rep = c_by_tau[representative_tau]
+    assert window_rep["evidence_x"] > cohort_rep["evidence_x"], (
+        "window/cohort population split disappeared on the bayesian synth "
+        f"chart at tau={representative_tau}: "
+        f"window_x={window_rep['evidence_x']} cohort_x={cohort_rep['evidence_x']}"
+    )
+    assert window_rep["model_midpoint"] > cohort_rep["model_midpoint"] + 0.05, (
+        "window/cohort model curves collapsed on the bayesian synth chart "
+        f"at tau={representative_tau}: "
+        f"window={window_rep['model_midpoint']:.6f} "
+        f"cohort={cohort_rep['model_midpoint']:.6f}"
+    )
+    # This chart-level canary only needs to prove that the asymptotes stay
+    # materially separated; the stronger 5-point asymptote split is already
+    # enforced on the same downstream semantic seam by the lag-fit /
+    # surprise-gauge cross-consumer test above.
+    assert window_rows[0]["p_infinity_mean"] > cohort_rows[0]["p_infinity_mean"] + 0.04, (
+        "window/cohort asymptotes collapsed on the bayesian synth chart: "
+        f"window={window_rows[0]['p_infinity_mean']:.6f} "
+        f"cohort={cohort_rows[0]['p_infinity_mean']:.6f}"
+    )
+
+
+# ── Family D — semantic atom 1: leading-edge A=X collapse ──────────
+#
+# When the query's 'from' node is the graph's start node, A = X. The
+# carrier is the identity, there is no upstream to observe, and
+# window() and cohort() must see the same population at the same
+# ages. The maturity rows must agree on evidence_x, evidence_y, and
+# midpoint at every shared tau within tolerance.
+#
+# Fixture: synth-simple-abc. Start node is simple-a; query edge is
+# simple-a -> simple-b.
+#
+# This is doc 64 §6.1 atom 1. Lives here (a Family C file) alongside
+# the Family E edge-order test while a dedicated Family D home does
+# not exist.
+
+
+@requires_db
+@requires_data_repo
+@requires_synth("synth-simple-abc", enriched=True)
+def test_leading_edge_collapse_single_hop_window_vs_cohort():
+    """Atom 1 — leading-edge A=X collapse on single-hop.
+
+    For `from(simple-a).to(simple-b)` on synth-simple-abc, simple-a
+    is the graph start, so A = X. Window and cohort queries must
+    produce matching evidence_x, evidence_y, and midpoint at every
+    shared tau.
+    """
+    graph_name = "synth-simple-abc"
+    analytics_dsl = "from(simple-a).to(simple-b)"
+
+    window_rows = _extract_maturity_rows(
+        _run_v3(graph_name, analytics_dsl, "window(-90d:)"),
+    )
+    cohort_rows = _extract_maturity_rows(
+        _run_v3(graph_name, analytics_dsl, "cohort(-90d:)"),
+    )
+
+    assert window_rows, "v3 returned no window rows for leading-edge fixture"
+    assert cohort_rows, "v3 returned no cohort rows for leading-edge fixture"
+
+    w_by_tau = {r["tau_days"]: r for r in window_rows}
+    c_by_tau = {r["tau_days"]: r for r in cohort_rows}
+    shared = sorted(set(w_by_tau) & set(c_by_tau))
+    assert shared, "no shared tau values between window and cohort rows"
+
+    # Skip tau < 3: sweep boundary artefact where youngest cohorts
+    # don't yet have a retrieval row.
+    MIN_TAU = 3
+    EVIDENCE_TOL = 0.05
+    MIDPOINT_TOL = 0.15
+
+    evidence_x_failures: List[Tuple[int, float, float]] = []
+    evidence_y_failures: List[Tuple[int, float, float]] = []
+    midpoint_failures: List[Tuple[int, float, float]] = []
+
+    for tau in shared:
+        if tau < MIN_TAU:
+            continue
+        w = w_by_tau[tau]
+        c = c_by_tau[tau]
+
+        w_x = w.get("evidence_x")
+        c_x = c.get("evidence_x")
+        if w_x is not None and c_x is not None and w_x > 0:
+            if abs(c_x / w_x - 1.0) >= EVIDENCE_TOL:
+                evidence_x_failures.append((tau, float(w_x), float(c_x)))
+
+        w_y = w.get("evidence_y")
+        c_y = c.get("evidence_y")
+        if w_y is not None and c_y is not None and w_y > 0:
+            if abs(c_y / w_y - 1.0) >= EVIDENCE_TOL:
+                evidence_y_failures.append((tau, float(w_y), float(c_y)))
+
+        w_m = w.get("midpoint")
+        c_m = c.get("midpoint")
+        if w_m is not None and c_m is not None and w_m > 0.001:
+            if abs(c_m / w_m - 1.0) >= MIDPOINT_TOL:
+                midpoint_failures.append((tau, float(w_m), float(c_m)))
+
+    assert not evidence_x_failures, (
+        f"Leading-edge collapse failed on evidence_x at "
+        f"{len(evidence_x_failures)} taus (tol={EVIDENCE_TOL:.0%}). "
+        f"Sample: {evidence_x_failures[:3]}"
+    )
+    assert not evidence_y_failures, (
+        f"Leading-edge collapse failed on evidence_y at "
+        f"{len(evidence_y_failures)} taus (tol={EVIDENCE_TOL:.0%}). "
+        f"Sample: {evidence_y_failures[:3]}"
+    )
+    assert not midpoint_failures, (
+        f"Leading-edge collapse failed on midpoint at "
+        f"{len(midpoint_failures)} taus (tol={MIDPOINT_TOL:.0%}). "
+        f"Sample: {midpoint_failures[:3]}"
+    )
+
+
+# ── Family D — semantic atom 4: multi-hop latent upstream diverge ──
+#
+# When the subject span is multi-hop AND the upstream path to X has
+# multiple latent hops, cohort() must diverge from window(). Cohort
+# sees fewer upstream arrivals at small tau (upstream latency has not
+# completed) and catches up as tau grows; window counts everyone who
+# is already at X regardless of when they got there. The evidence_x
+# trajectories must differ.
+#
+# Fixture: cf-fix-deep-mixed. Start cf-fix-deep-a. Query
+# from(cf-fix-deep-e).to(cf-fix-deep-g). Subject is 2 hops (e->f
+# non-latent, f->g latent). Upstream a->b->c->d->e has 2 latent
+# hops (b->c and d->e) interleaved with 2 instant hops (a->b, c->d).
+#
+# This is doc 64 §6.1 atom 4.
+
+
+@requires_db
+@requires_data_repo
+@requires_synth("cf-fix-deep-mixed")
+def test_multi_hop_latent_upstream_diverges_window_vs_cohort():
+    """Atom 4 — multi-hop subject with multi-hop latent upstream.
+
+    For `from(cf-fix-deep-e).to(cf-fix-deep-g)` on cf-fix-deep-mixed,
+    the upstream path a->b->c->d->e contains two latent edges
+    (b->c, d->e). Window and cohort evidence_x must diverge because
+    upstream arrival is no longer instant.
+    """
+    graph_name = "cf-fix-deep-mixed"
+    analytics_dsl = "from(cf-fix-deep-e).to(cf-fix-deep-g)"
+
+    window_rows = _extract_maturity_rows(
+        _run_v3(graph_name, analytics_dsl, "window(-180d:)"),
+    )
+    cohort_rows = _extract_maturity_rows(
+        _run_v3(graph_name, analytics_dsl, "cohort(-180d:)"),
+    )
+
+    assert window_rows, "v3 returned no window rows for deep-latent fixture"
+    assert cohort_rows, "v3 returned no cohort rows for deep-latent fixture"
+
+    w_by_tau = {r["tau_days"]: r for r in window_rows}
+    c_by_tau = {r["tau_days"]: r for r in cohort_rows}
+    shared = sorted(set(w_by_tau) & set(c_by_tau))
+    assert shared, "no shared tau values between window and cohort rows"
+
+    # Count how many shared taus have evidence_x diverging between
+    # modes. With latent upstream, we expect MANY divergences, not a
+    # handful of boundary artefacts.
+    divergent_taus: List[int] = []
+    for tau in shared:
+        w_x = w_by_tau[tau].get("evidence_x")
+        c_x = c_by_tau[tau].get("evidence_x")
+        if w_x is None or c_x is None or w_x <= 0:
+            continue
+        if abs(c_x / w_x - 1.0) > 0.05:
+            divergent_taus.append(tau)
+
+    assert len(divergent_taus) >= 5, (
+        "Multi-hop latent upstream did not produce evidence_x "
+        f"divergence between window and cohort. Only "
+        f"{len(divergent_taus)} taus diverged (>5%); expected many "
+        "given two latent hops upstream. If this suite now collapses, "
+        "either the fix for atom 1/3 was applied too broadly, or the "
+        "upstream latency is no longer being observed."
+    )
+
+
+# ── Family D — semantic atom 3: multi-hop non-latent collapse ──────
+#
+# When the subject span is multi-hop AND the upstream path to X has
+# no latency, cohort() and window() must collapse — upstream arrival
+# is instant so both modes observe the same population at the same
+# ages. This is the Python-integration counterpart to multihop
+# Claim 1; the CLI canary catches the tooling path, this catches the
+# handler seam.
+#
+# Fixture: synth-mirror-4step. Subject from(m4-delegated).to(m4-success)
+# is 2 hops. Upstream m4-landing -> m4-created -> m4-delegated is all
+# non-latent.
+#
+# This is doc 64 §6.1 atom 3. Expected RED while the defect in
+# _apply_temporal_regime_selection is live (same defect the CLI
+# canary catches).
+
+
+@requires_db
+@requires_data_repo
+def test_multi_hop_non_latent_upstream_collapse_window_vs_cohort():
+    """Atom 3 — multi-hop subject with non-latent upstream.
+
+    For `from(m4-delegated).to(m4-success)` on synth-mirror-4step,
+    the upstream path m4-landing -> m4-created -> m4-delegated is
+    all instant. Window and cohort must produce the same
+    evidence_x, evidence_y, and midpoint at every shared tau.
+    """
+    graph_name = "synth-mirror-4step"
+    analytics_dsl = "from(m4-delegated).to(m4-success)"
+
+    window_rows = _extract_maturity_rows(
+        _run_v3(graph_name, analytics_dsl, "window(-42d:)"),
+    )
+    cohort_rows = _extract_maturity_rows(
+        _run_v3(graph_name, analytics_dsl, "cohort(-42d:)"),
+    )
+
+    assert window_rows, "v3 returned no window rows for multi-hop non-latent fixture"
+    assert cohort_rows, "v3 returned no cohort rows for multi-hop non-latent fixture"
+
+    w_by_tau = {r["tau_days"]: r for r in window_rows}
+    c_by_tau = {r["tau_days"]: r for r in cohort_rows}
+    shared = sorted(set(w_by_tau) & set(c_by_tau))
+    assert shared, "no shared tau values between window and cohort rows"
+
+    MIN_TAU = 3
+    EVIDENCE_TOL = 0.05
+    MIDPOINT_TOL = 0.15
+
+    evidence_x_failures: List[Tuple[int, float, float]] = []
+    evidence_y_failures: List[Tuple[int, float, float]] = []
+    midpoint_failures: List[Tuple[int, float, float]] = []
+
+    for tau in shared:
+        if tau < MIN_TAU:
+            continue
+        w = w_by_tau[tau]
+        c = c_by_tau[tau]
+
+        w_x = w.get("evidence_x")
+        c_x = c.get("evidence_x")
+        if w_x is not None and c_x is not None and w_x > 0:
+            if abs(c_x / w_x - 1.0) >= EVIDENCE_TOL:
+                evidence_x_failures.append((tau, float(w_x), float(c_x)))
+
+        w_y = w.get("evidence_y")
+        c_y = c.get("evidence_y")
+        if w_y is not None and c_y is not None and w_y > 0:
+            if abs(c_y / w_y - 1.0) >= EVIDENCE_TOL:
+                evidence_y_failures.append((tau, float(w_y), float(c_y)))
+
+        w_m = w.get("midpoint")
+        c_m = c.get("midpoint")
+        if w_m is not None and c_m is not None and w_m > 0.001:
+            if abs(c_m / w_m - 1.0) >= MIDPOINT_TOL:
+                midpoint_failures.append((tau, float(w_m), float(c_m)))
+
+    assert not evidence_x_failures, (
+        f"Multi-hop non-latent collapse failed on evidence_x at "
+        f"{len(evidence_x_failures)} taus (tol={EVIDENCE_TOL:.0%}). "
+        f"Sample: {evidence_x_failures[:3]}"
+    )
+    assert not evidence_y_failures, (
+        f"Multi-hop non-latent collapse failed on evidence_y at "
+        f"{len(evidence_y_failures)} taus (tol={EVIDENCE_TOL:.0%}). "
+        f"Sample: {evidence_y_failures[:3]}"
+    )
+    assert not midpoint_failures, (
+        f"Multi-hop non-latent collapse failed on midpoint at "
+        f"{len(midpoint_failures)} taus (tol={MIDPOINT_TOL:.0%}). "
+        f"Sample: {midpoint_failures[:3]}"
+    )
+
+
+# ── R12 — multi-hop midpoint below single-edge midpoint (Family B) ────
+#
+# §3.6 receipt
+#   Family:    B (runtime semantic contract) + D (metamorphic relation)
+#   Invariant: for the same evidence window, a multi-hop span's
+#              midpoint at a shared τ must be ≤ the single-edge midpoint
+#              at that τ (within 5% tolerance for MC variance). Path
+#              probability p_AB × p_BC cannot exceed the weaker single
+#              edge probability.
+#   Oracle:    blind contract (multiplicative path-probability bound)
+#   Apparatus: Python DB-backed test via `_run_v3` on synth-simple-abc
+#   Fixtures:  synth-simple-abc; single-hop A→B and multi-hop A→C via B
+#   Reality:   catches regressions where multi-hop composition loses
+#              edge factors (e.g. path probability escapes the unit
+#              interval or equals single-edge probability).
+#   False-pass: mocking compute_cohort_maturity_rows_v3 itself — this
+#              test runs v3 end-to-end.
+#   Retires:   the multi-hop bound assertions in
+#              test_v2_v3_parity.py::TestV2V3Parity::test_multi_hop_acceptance.
+
+
+@requires_db
+@requires_data_repo
+@requires_synth("synth-simple-abc", bayesian=True)
+def test_multi_hop_midpoint_below_single_edge_midpoint_v3():
+    """Multi-hop midpoint at a shared τ must be ≤ single-edge × 1.05.
+
+    Path probability p_A→C = p_A→B × p_B→C ≤ min(p_A→B, p_B→C). At any
+    shared τ in the forecast zone, the multi-hop midpoint cannot exceed
+    the single-edge midpoint by more than MC tolerance.
+    """
+    graph_name = "synth-simple-abc"
+    query_dsl = "cohort(-90d:)"
+
+    single_result = _run_v3(graph_name, "from(simple-a).to(simple-b)", query_dsl, bayesian=True)
+    multi_result = _run_v3(graph_name, "from(simple-a).to(simple-c)", query_dsl, bayesian=True)
+
+    single_rows = _extract_maturity_rows(single_result)
+    multi_rows = _extract_maturity_rows(multi_result)
+
+    assert single_rows, "v3 returned no single-edge rows"
+    assert multi_rows, "v3 returned no multi-hop rows"
+
+    single_forecast = [r for r in single_rows if r.get("midpoint") is not None]
+    multi_forecast = [r for r in multi_rows if r.get("midpoint") is not None]
+    assert single_forecast, "no single-edge forecast rows"
+    assert multi_forecast, "no multi-hop forecast rows"
+
+    single_by_tau = {r["tau_days"]: r["midpoint"] for r in single_forecast}
+    multi_by_tau = {r["tau_days"]: r["midpoint"] for r in multi_forecast}
+    shared = sorted(set(single_by_tau) & set(multi_by_tau))
+    assert shared, "no shared forecast-zone taus between single-edge and multi-hop runs"
+
+    TOL = 1.05  # 5% slack for MC variance
+    violations: List[Tuple[int, float, float]] = []
+    for tau in shared:
+        if multi_by_tau[tau] > single_by_tau[tau] * TOL:
+            violations.append((tau, multi_by_tau[tau], single_by_tau[tau]))
+
+    assert not violations, (
+        f"Multi-hop midpoint exceeded single-edge × {TOL:.2f} at "
+        f"{len(violations)} taus. Sample: "
+        + "; ".join(f"tau={t}: multi={m:.4f} > single={s:.4f}" for t, m, s in violations[:5])
+    )

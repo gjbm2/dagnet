@@ -1,51 +1,79 @@
 /**
- * Conditioned forecast — completeness authority (RED tests).
+ * FE authority contract for CF-owned fields (doc 64 Family F).
  *
- * Doc 45 §Endpoint contract (lines 181-190) specifies the CF response
- * carries per-edge `completeness` and `completeness_sd`. Line 153-154:
- * "it produces per-edge scalars (p.mean, p_sd, completeness) that get
- * written back to the graph".
+ * Doc 45 §Endpoint contract (lines 181-190) specifies that the CF
+ * response carries per-edge `completeness` and `completeness_sd`,
+ * and line 153-154 states: "it produces per-edge scalars (p.mean,
+ * p_sd, completeness) that get written back to the graph". CF is
+ * the authoritative writer for these fields on the graph path; the
+ * FE topo pass must yield its own CDF-derived completeness on those
+ * edges, and CF must not project its evidence onto the FE-owned
+ * `p.evidence.*`.
  *
- * User direction (this session):
- *   "CF ABSOLUTELY 100% OWNS COMPLETENESS. If it isn't writing that then
- *    it's a first class failure and a total deviation from design. [...]
- *    BE CF [should] overwrite the things it produces. but those are NOT
- *    just p.mean. it's ALL the conditioned f, f+e values, AND
- *    completeness, and anything else that a sophisticated conditioned
- *    forecast would naturally be FAR FUCKING BETTER AT THAN THE QUICK
- *    AND DIRTY FE PASS."
+ * This file is the FE-local authority contract. It tests only how
+ * the FE projects CF's response into graph state. It does not test
+ * whether CF produced the right numbers — that is the BE's semantic
+ * responsibility and lives in the Python suite
+ * (`test_conditioned_forecast_response_contract.py`).
  *
- * These tests assert the FE-side contract that matches the design:
+ * Contract asserted here:
  *
- *   1. `ConditionedForecastEdgeResult` accepts `completeness` and
- *      `completeness_sd`. (Static: this file compiles only if the type
- *      permits these fields — so if they're missing from the type
- *      definition, the test file itself fails to typecheck.)
+ *   1. `ConditionedForecastEdgeResult` declares `completeness`,
+ *      `completeness_sd`, `cf_mode`, `cf_reason`. This file
+ *      compiles only if the type carries those fields; a missing
+ *      field fails the build before runtime.
  *
- *   2. `applyConditionedForecastToGraph` OVERWRITES
- *      `edge.p.latency.completeness` and `edge.p.latency.completeness_stdev`
- *      with CF's values.
+ *   2. `applyConditionedForecastToGraph` overwrites
+ *      `edge.p.latency.completeness` and
+ *      `edge.p.latency.completeness_stdev` with CF's values.
  *
- *   3. The graph projection boundary remains explicit:
- *      CF response evidence is available to direct-response consumers,
- *      but `edge.p.evidence.*` stays on the topo-pass graph path.
+ *   3. The graph projection boundary stays explicit: CF response
+ *      evidence is available to direct-response consumers, but
+ *      `edge.p.evidence.*` remains on the topo-pass / FE writer
+ *      path, and CF must not project its evidence onto it.
  *
- *   4. End-to-end via `runStage2EnhancementsAndInboundN`:
- *      a. CF fast path: `completeness` on the edge is CF's value (not
- *         FE topo's CDF-derived value), while graph evidence stays on
- *         the FE/topo writer path.
- *      b. CF slow path: after the subsequent-overwrite .then() fires,
- *         completeness reflects CF's value.
+ *   4. `buildConditionedForecastGraphSnapshot` engorges a clone,
+ *      never the live graph.
  *
- * These are RED today. They will pass once:
- *   - `ConditionedForecastEdgeResult` gets `completeness?` and
- *     `completeness_sd?`.
- *   - `applyConditionedForecastToGraph` writes completeness authoritatively.
- *   - `applyConditionedForecastToGraph` does NOT project CF evidence onto
- *     the graph.
- *   - `mergeCfIntoFe` (inside `runStage2EnhancementsAndInboundN`) merges
- *     CF's completeness into the FE fast-path apply without turning CF
- *     into the graph evidence writer.
+ *   5. End-to-end via `runStage2EnhancementsAndInboundN`:
+ *      a. CF fast path: `completeness` on the edge is CF's value
+ *         (not the FE topo CDF-derived value); evidence on the
+ *         graph path stays at the FE/topo value.
+ *      b. CF slow path: after the subsequent-overwrite `.then()`
+ *         fires, completeness reflects CF's value.
+ *
+ * ── Authoring receipt (doc 64 §3.6) ─────────────────────────────
+ *
+ * Family         F. Projection and authority — FE-local only.
+ * Invariant      CF authoritatively writes `completeness` /
+ *                `completeness_sd` / `cf_mode` / `cf_reason` on
+ *                the graph; the FE topo pass owns `p.evidence.*`.
+ *                Neither writer may overrun the other's fields.
+ * Oracle type    FE-local authority contract. Not BE semantic
+ *                correctness (that lives in the Python suite).
+ * Apparatus      TypeScript integration — real
+ *                `applyConditionedForecastToGraph`,
+ *                `buildConditionedForecastGraphSnapshot`, and
+ *                `runStage2EnhancementsAndInboundN` fast/slow
+ *                path. Mocks isolate the BE boundary
+ *                (`runConditionedForecast`, `runBeTopoPass`) and
+ *                infra services that are irrelevant to the
+ *                authority claim.
+ * Fixtures       `latencyGraph()` — minimal inline graph with one
+ *                latency edge carrying pre-existing completeness
+ *                and evidence so the overwrite/preserve claim is
+ *                non-vacuous.
+ * Reality        Real FE projection code. Only acceptable stubs
+ *                are the BE boundary and infra services unrelated
+ *                to the authority claim.
+ * False-pass     A test could pass if CF and the FE topo silently
+ *                produced the same values. Mitigated by seeding the
+ *                graph with distinctive pre-existing values (0.42,
+ *                0.05, n=300, k=150) that the CF response
+ *                deliberately does not match.
+ * Retires        Supersedes the `*.red.test.ts` framing from when
+ *                CF did not yet write completeness. CF now does;
+ *                this file is a live authority drift guard.
  *
  * @vitest-environment node
  */
@@ -210,7 +238,7 @@ async function yieldMs(ms: number): Promise<void> {
 
 // ── Tests ──────────────────────────────────────────────────────────────
 
-describe('CF owns completeness (doc 45) — RED', () => {
+describe('CF owns completeness on the graph path (FE authority contract)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     beTopoImpl = async () => [];

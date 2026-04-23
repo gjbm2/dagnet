@@ -332,6 +332,36 @@ def _run_preflight(payload: dict) -> dict:
 # Main
 # ---------------------------------------------------------------------------
 
+def _canonical_graph_name(graph_name_or_id):
+    """Return the repo graph stem for either `synth-x` or `graph-synth-x`.
+
+    The FE payload path carries `graph_id` values with a `graph-` prefix,
+    but truth files, graph JSONs in the data repo, and synth sidecars are
+    all keyed by the bare graph stem.
+    """
+    if isinstance(graph_name_or_id, str) and graph_name_or_id.startswith("graph-"):
+        return graph_name_or_id[len("graph-"):]
+    return graph_name_or_id
+
+
+def _resolve_payload_graph_paths(args, graph_name):
+    """Return `(graph_path, data_repo_path)` for FE-payload mode.
+
+    `--graph-path` points at `<repo>/graphs/<name>.json`; otherwise use
+    `DATA_REPO_DIR` from `.private-repos.conf`.
+    """
+    if args.graph_path:
+        graph_path = os.path.abspath(args.graph_path)
+        data_repo_path = os.path.dirname(os.path.dirname(graph_path))
+        return graph_path, data_repo_path
+
+    conf = _read_private_repos_conf()
+    data_repo_dir = conf.get("DATA_REPO_DIR", "")
+    data_repo_path = os.path.join(REPO_ROOT, data_repo_dir)
+    graph_path = os.path.join(data_repo_path, "graphs", f"{graph_name}.json")
+    return graph_path, data_repo_path
+
+
 def _resolve_sidecar_fingerprint_inputs(graph_name, graph_path, data_repo_path, graph_data):
     """Resolve the truth file and per-edge param files for a synth graph.
 
@@ -342,6 +372,7 @@ def _resolve_sidecar_fingerprint_inputs(graph_name, graph_path, data_repo_path, 
     Returns (truth_path, [param_paths]). Raises FileNotFoundError if the
     truth file cannot be located — sidecar fingerprinting requires it.
     """
+    graph_name = _canonical_graph_name(graph_name)
     canonical = os.path.join(REPO_ROOT, "bayes", "truth", f"{graph_name}.truth.yaml")
     datarepo_truth = os.path.join(data_repo_path, "graphs", f"{graph_name}.truth.yaml")
     if os.path.isfile(canonical):
@@ -368,184 +399,74 @@ def _resolve_sidecar_fingerprint_inputs(graph_name, graph_path, data_repo_path, 
     return truth_path, param_paths
 
 
-def _beta_stdev(alpha, beta):
-    """Return stdev of Beta(alpha, beta), or None when invalid."""
-    try:
-        a = float(alpha)
-        b = float(beta)
-    except (TypeError, ValueError):
-        return None
-    if a <= 0 or b <= 0:
-        return None
-    total = a + b
-    return ((a * b) / ((total * total) * (total + 1.0))) ** 0.5
+def _build_bayes_patch_payload(result):
+    """Return the raw worker payload shape replayed by the TS CLI.
 
-
-def _lognormal_t95(mu, sigma, onset):
-    """Return the 95th percentile of a shifted lognormal latency:
-    exp(mu + 1.645*sigma) + onset. Matches bayesPatchService.ts t95
-    formula exactly so sidecar output is byte-equivalent to the
-    apply-patch graph writer."""
-    import math
-    if mu is None or sigma is None:
-        return None
-    try:
-        m = float(mu)
-        s = float(sigma)
-        o = float(onset) if onset is not None else 0.0
-    except (TypeError, ValueError):
-        return None
-    return math.exp(m + 1.645 * s) + o
-
-
-def _webhook_entry_to_bayes_entry(webhook_edge, fitted_at):
-    """Translate a single webhook_payload_edges entry into the sidecar's
-    bayesian model_var shape: {source, source_at, probability, latency,
-    quality?}.
-
-    Python equivalent of the TypeScript block in
-    graph-editor/src/services/bayesPatchService.ts applyPatch() that
-    builds `bayesEntry`. Keeping them aligned is critical — the sidecar
-    pipeline and the FE CLI apply-patch pipeline must produce
-    byte-equivalent model_vars so v2/v3 handlers see the same numbers
-    regardless of which writer ran.
+    The sidecar intentionally stores this unprojected payload rather
+    than Python-derived graph fields. Tests then reapply it in memory
+    via the FE CLI, keeping graph-edge posteriors, parameter-file
+    `posterior.slices`, `model_vars`, and promoted latency fields on one
+    canonical code path.
     """
-    slices = webhook_edge.get("slices") or {}
-    window = slices.get("window()") or {} if isinstance(slices, dict) else {}
-    cohort = slices.get("cohort()") or {} if isinstance(slices, dict) else {}
-
-    probability = {}
-    if window and "alpha" in window and "beta" in window:
-        alpha = float(window["alpha"])
-        beta = float(window["beta"])
-        if alpha > 0 and beta > 0:
-            probability["mean"] = alpha / (alpha + beta)
-            disp_alpha = window.get("alpha_pred", alpha)
-            disp_beta = window.get("beta_pred", beta)
-            stdev = _beta_stdev(disp_alpha, disp_beta)
-            probability["stdev"] = stdev if stdev is not None else 0.0
-
-    latency = {}
-    if window and window.get("mu_mean") is not None:
-        mu_mean = window["mu_mean"]
-        sigma_mean = window.get("sigma_mean")
-        onset_mean = window.get("onset_mean")
-        latency["mu"] = mu_mean
-        if sigma_mean is not None:
-            latency["sigma"] = sigma_mean
-        t95 = _lognormal_t95(mu_mean, sigma_mean, onset_mean)
-        if t95 is not None:
-            latency["t95"] = t95
-        latency["onset_delta_days"] = onset_mean if onset_mean is not None else 0.0
-        for k in ("mu_sd", "mu_sd_pred", "sigma_sd",
-                  "onset_sd", "onset_mu_corr"):
-            if k in window and window[k] is not None:
-                latency[k] = window[k]
-
-        if cohort and cohort.get("mu_mean") is not None:
-            c_mu = cohort["mu_mean"]
-            c_sigma = cohort.get("sigma_mean")
-            c_onset = cohort.get("onset_mean", 0.0) or 0.0
-            latency["path_mu"] = c_mu
-            if c_sigma is not None:
-                latency["path_sigma"] = c_sigma
-            path_t95 = _lognormal_t95(c_mu, c_sigma, c_onset)
-            if path_t95 is not None:
-                latency["path_t95"] = path_t95
-            latency["path_onset_delta_days"] = c_onset
-            for src, dst in (("mu_sd", "path_mu_sd"),
-                             ("mu_sd_pred", "path_mu_sd_pred"),
-                             ("sigma_sd", "path_sigma_sd"),
-                             ("onset_sd", "path_onset_sd")):
-                if src in cohort and cohort[src] is not None:
-                    latency[dst] = cohort[src]
-
-    # Explicit blocks on the webhook entry (legacy / unit-test shapes)
-    # override slice-derived values.
-    if "latency" in webhook_edge and webhook_edge["latency"]:
-        latency = dict(webhook_edge["latency"])
-    if "probability" in webhook_edge and webhook_edge["probability"]:
-        probability = dict(webhook_edge["probability"])
-
-    entry = {
-        "source": "bayesian",
-        "source_at": fitted_at or "",
-        "probability": probability,
-        "latency": latency,
+    webhook_edges = (result or {}).get("webhook_payload_edges") or []
+    if not webhook_edges:
+        raise ValueError(
+            "MCMC result has no webhook_payload_edges — refusing to cache "
+            "or apply an empty Bayes payload"
+        )
+    return {
+        "job_id": (
+            result.get("job_id")
+            or result.get("_job_id")
+            or f"harness-enrich-{int(time.time())}"
+        ),
+        "fitted_at": result.get("fitted_at", ""),
+        "fingerprint": result.get("fingerprint", ""),
+        "model_version": result.get("model_version", 1),
+        "quality": result.get("quality", {}),
+        "skipped": result.get("skipped", []),
+        "webhook_payload_edges": webhook_edges,
     }
-    if "quality" in webhook_edge:
-        entry["quality"] = webhook_edge["quality"]
-    if "param_id" in webhook_edge:
-        entry["param_id"] = webhook_edge["param_id"]
-    return entry
 
 
-def _map_webhook_to_edge_uuids(webhook_edges, graph_data):
-    """Return {edge_uuid: webhook_edge} by matching `param_id` in each
-    webhook entry to `edge.p.id` (or `edge.id`) in the graph.
+def _validate_bayes_payload_matches_graph(worker_payload, graph_data):
+    """Raise when a worker payload matches zero graph parameter IDs."""
+    if graph_data is None:
+        return
 
-    Worker output is keyed by param_id since parameters can be reused
-    across edges; the sidecar is keyed by edge UUID so injection into a
-    loaded graph can look up by `edge.uuid` without a second pass.
-    """
-    param_to_uuids: dict[str, list[str]] = {}
-    for e in (graph_data or {}).get("edges", []):
-        uid = e.get("uuid")
-        pid = (e.get("p") or {}).get("id") or e.get("id")
-        if uid and pid:
-            param_to_uuids.setdefault(pid, []).append(uid)
+    graph_param_ids = {
+        (edge.get("p") or {}).get("id") or edge.get("id")
+        for edge in (graph_data or {}).get("edges", [])
+    }
+    graph_param_ids.discard(None)
+    if not graph_param_ids:
+        raise RuntimeError("Graph has no parameter-backed edges to validate against")
 
-    out = {}
-    for we in webhook_edges:
-        pid = we.get("param_id")
-        if not pid:
-            continue
-        for uid in param_to_uuids.get(pid, []):
-            out[uid] = we
-    return out
+    matched = 0
+    for edge_payload in worker_payload.get("webhook_payload_edges") or []:
+        if edge_payload.get("param_id") in graph_param_ids:
+            matched += 1
+    if matched == 0:
+        raise RuntimeError(
+            "No webhook_payload_edges matched graph parameter IDs — "
+            "cannot write sidecar (param_id mismatch?)"
+        )
 
 
 def _write_bayes_sidecar_from_result(result, sidecar_path, fingerprint,
                                      graph_data=None):
-    """Transform the harness's webhook_payload_edges into a bayesian
-    sidecar file at `sidecar_path`, stamped with `fingerprint`.
+    """Persist a raw worker/result payload sidecar at `sidecar_path`.
 
-    Raises when the result has no posteriors, or when none of them can
-    be mapped onto the graph's edges — callers must detect MCMC failure
-    rather than cache an empty sidecar as 'fresh'.
-
-    graph_data: the graph dict, used to map webhook_edges[].param_id →
-    edge.uuid. Can be omitted only when the webhook edges already carry
-    an explicit `edge_uuid` field (legacy / unit-test shape).
+    The sidecar is later replayed through the TS `applyPatch` path in
+    memory, so no Python-side graph projection happens here. Raises when
+    the worker produced no patchable edges, or when none of those edges
+    match the graph's parameter IDs.
     """
     from bayes.sidecar import save_sidecar
 
-    webhook_edges = (result or {}).get("webhook_payload_edges") or []
-    if not webhook_edges:
-        raise ValueError("MCMC result has no webhook_payload_edges — refusing "
-                         "to write an empty bayesian sidecar")
-
-    fitted_at = result.get("fitted_at", "")
-    edges: dict = {}
-
-    if graph_data is not None:
-        uid_to_webhook = _map_webhook_to_edge_uuids(webhook_edges, graph_data)
-        for uid, we in uid_to_webhook.items():
-            edges[uid] = _webhook_entry_to_bayes_entry(we, fitted_at)
-
-    # Fallback: webhook entry already carries edge_uuid (tests, older shapes).
-    for we in webhook_edges:
-        eid = we.get("edge_uuid")
-        if eid and eid not in edges:
-            edges[eid] = _webhook_entry_to_bayes_entry(we, fitted_at)
-
-    if not edges:
-        raise RuntimeError(
-            "No webhook_payload_edges could be mapped to graph edges — "
-            "cannot write sidecar (param_id ↔ edge.p.id mismatch?)"
-        )
-
-    save_sidecar(sidecar_path, fingerprint, edges)
+    worker_payload = _build_bayes_patch_payload(result)
+    _validate_bayes_payload_matches_graph(worker_payload, graph_data)
+    save_sidecar(sidecar_path, fingerprint, worker_payload)
 
 
 def _apply_patch_to_graph(result, graph_path, graph_name):
@@ -555,16 +476,7 @@ def _apply_patch_to_graph(result, graph_path, graph_name):
     """
     import tempfile
 
-    webhook_edges = (result or {}).get("webhook_payload_edges") or []
-    patch_file_data = {
-        "webhook_payload_edges": webhook_edges,
-        "job_id": result.get("job_id", f"harness-enrich-{int(time.time())}"),
-        "fitted_at": result.get("fitted_at", ""),
-        "fingerprint": result.get("fingerprint", ""),
-        "model_version": result.get("model_version", 1),
-        "quality": result.get("quality", {}),
-        "skipped": result.get("skipped", []),
-    }
+    patch_file_data = _build_bayes_patch_payload(result)
     with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
         json.dump(patch_file_data, f)
         enrich_patch_path = f.name
@@ -574,7 +486,7 @@ def _apply_patch_to_graph(result, graph_path, graph_name):
         f'export NVM_DIR="${{NVM_DIR:-$HOME/.nvm}}" && '
         f'. "$NVM_DIR/nvm.sh" 2>/dev/null; '
         f'cd {os.path.join(REPO_ROOT, "graph-editor")} && '
-        f'nvm use "$(cat .nvmrc)" 2>/dev/null; '
+        f'nvm use "$(cat .nvmrc)" >/dev/null 2>&1; '
     )
     tsx_cmd = (
         f'{nvm_prefix}'
@@ -612,16 +524,15 @@ def _apply_patch_to_graph(result, graph_path, graph_name):
 def _dispatch_enrichment_write(args, result, graph_path, graph_name,
                                fingerprint, graph_data=None):
     """Route the post-MCMC write. When --sidecar-out is supplied, write
-    the bayesian sidecar (test-fixture path, no graph mutation). Otherwise
-    apply-patch to the graph file (production path).
+    the cached raw Bayes payload sidecar (test-fixture path, no graph
+    mutation). Otherwise apply-patch to the graph file (production path).
 
     Failures from the sidecar writer propagate — a silent success with an
     empty sidecar would let callers cache a 'fresh' verdict for a broken
     run and downstream tests would execute against the wrong graph.
 
-    graph_data: optional — used to map webhook param_id → edge UUID when
-    writing the sidecar. Omit only for test paths that supply webhook
-    entries with explicit edge_uuid.
+    graph_data: optional — used only to validate that the worker payload
+    still matches at least one graph param_id before caching the sidecar.
     """
     sidecar_out = getattr(args, "sidecar_out", None)
     if sidecar_out:
@@ -723,9 +634,10 @@ def _build_arg_parser():
     # Keep --clean-pyc as hidden alias for backwards compat
     parser.add_argument("--clean-pyc", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--sidecar-out", type=str, default=None, metavar="PATH",
-                        help="When set with --enrich, write bayesian model_vars to this "
-                             "JSON sidecar file instead of patching the graph. Used by "
-                             "the test-fixture cache to avoid graph-file clobber.")
+                        help="When set with --enrich, write the raw Bayes/apply-patch "
+                             "payload to this JSON sidecar file instead of patching the "
+                             "graph. Used by the test-fixture cache to replay the "
+                             "canonical TS apply-patch path in memory.")
     return parser
 
 
@@ -862,9 +774,10 @@ def main():
                         json.dump(_gj, _gf, indent=2)
                     print("DSL override restored")
 
-        graph_name = payload.get("graph_id", "unknown")
+        graph_id = payload.get("graph_id", "unknown")
+        graph_name = _canonical_graph_name(graph_id)
         graph = payload.get("graph_snapshot", {})
-        job_label = args.job_label or graph_name
+        job_label = args.job_label or graph_id
         _acquire_lock(job_label)
 
         # Merge CLI overrides into payload settings
@@ -908,13 +821,7 @@ def main():
         print(f"{'=' * 60}\n")
 
         # Resolve graph_path for truth file loading + param recovery
-        if args.graph_path:
-            graph_path = os.path.abspath(args.graph_path)
-        else:
-            # Derive from data repo
-            conf = _read_private_repos_conf()
-            data_repo_dir = conf.get("DATA_REPO_DIR", "")
-            graph_path = os.path.join(REPO_ROOT, data_repo_dir, "graphs", f"{graph_name}.json")
+        graph_path, data_repo_path = _resolve_payload_graph_paths(args, graph_name)
         truth = _load_truth_file(graph_path)
 
         if args.timeout is not None and args.timeout > 0:

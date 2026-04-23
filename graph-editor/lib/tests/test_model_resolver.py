@@ -1,13 +1,76 @@
 """
-Tests for the promoted model resolver (doc 29 Phase 1).
+Canonical model-resolver contract (doc 64 Family B).
 
-Verifies that resolve_model_params produces identical output to the
-existing scattered resolution logic:
-- _read_edge_model_params() in api_handlers.py
-- read_edge_cohort_params() in cohort_forecast.py
-- _resolve_completeness_params() in api_handlers.py
+`runner.model_resolver.resolve_model_params` is the single resolver
+for edge-level model parameters. Its output shape and field semantics
+are the contract; every consumer (CF, v3 chart, topo pass, forecast
+engine) reads through this resolver.
 
-Uses real graph data from the data repo (auto-discovered).
+This file is the resolver's acceptance test. The oracle is the
+ratified resolver contract and the raw-field semantics of the graph,
+not any historical reader function. Concretely the contract asserts:
+
+1. Window-mode scope resolves to edge-level latency; `path_latency`
+   stays None.
+2. Cohort-mode scope prefers path-level latency when the graph
+   supplies `path_mu` / `path_sigma` (or the posterior equivalent).
+3. Cohort-mode probability comes from the cohort-mode posterior
+   (`cohort_alpha` / `cohort_beta`), not the edge-level one.
+4. The `best_available` cascade over `model_vars` selects the
+   highest-ranked source; flat fields never override a matching
+   entry.
+5. A caller-supplied `graph_preference` overrides any edge-level
+   `model_source_preference`.
+6. Resolver returns sensible defaults for empty or malformed edges
+   rather than raising.
+7. Non-Bayes edges (analytic-only `model_vars`, flat fields only,
+   posterior-latency only) produce engine-consumable params.
+8. Fed back into `compute_forecast_trajectory`, resolved params
+   from non-Bayes edges produce valid output with correct
+   limiting behaviour at frontier=0 and sigma=0.
+9. In the zero-latency-dispersion limit, the unconditioned model band
+   recovers the fixed-CDF monotone-width rise; reintroducing latency
+   dispersions materially perturbs that width profile.
+
+Uses real graph data from the data repo where the claim is about
+real edges; uses synthetic edges where the claim is about specific
+resolver branches that need controlled inputs.
+
+── Authoring receipt (doc 64 §3.6) ─────────────────────────────────
+
+Family         B. Runtime semantic contracts — the resolver is the
+               canonical entry point; its contract is load-bearing
+               for every forecast consumer.
+Invariant      Resolver output is the ratified contract; consumers
+               must not read raw `p.*` fields directly. Flat fields
+               never override a matching `model_vars` entry. The
+               `best_available` cascade is stable across graph
+               variants.
+Oracle type    Public contract (resolver behaviour) plus live
+               field-semantic checks on real graph edges. Not legacy
+               reader parity.
+Apparatus      Python integration — direct calls to
+               `resolve_model_params` and `compute_forecast_trajectory`.
+               No lower-cost apparatus would catch drift between the
+               resolver's output shape and the engine's consumption.
+Fixtures       Auto-discovered real graphs from the data repo for
+               the real-edge claims; minimal synthetic edges
+               constructed inline for the controlled-branch claims
+               (stale-flat-vs-entry, manual-source, graph-preference
+               override, defaults). Smallest non-vacuous inputs for
+               each branch.
+Reality        Real data repo for real-edge claims; synthetic edges
+               for controlled branches. No mocks of the resolver or
+               the engine.
+False-pass     Real-edge claims could pass while the resolver silently
+               drifts toward flat fields when an entry is present.
+               Mitigation: `test_resolver_reads_model_vars_entry_not_flat_fields`
+               explicitly constructs flat-vs-entry disagreement.
+Retires        Supersedes the `_read_edge_model_params`,
+               `read_edge_cohort_params`, and
+               `_resolve_completeness_params` reader-parity framing
+               from doc 29 Phase 1. Those readers are scoped for
+               removal with v1/v2 (doc 64 §8.3).
 """
 
 import json
@@ -66,8 +129,8 @@ def _discover_graph_with_model_params() -> tuple:
 
 
 @requires_data_repo
-class TestResolverParity:
-    """Resolver produces params consistent with existing logic."""
+class TestResolverCanonicalContractOverRealGraphs:
+    """Resolver contract over real graph edges from the data repo."""
 
     def test_window_mode_resolves_from_real_edge(self):
         """Window-mode resolver extracts correct params from a real edge."""
@@ -543,6 +606,23 @@ class TestForecastEngineNonBayes:
             ))
         return cohorts
 
+    def _make_zero_frontier_cohorts(self, n_cohorts=3, max_tau=50, N_i=10000.0):
+        """Build no-evidence cohorts so the model band approximates the
+        fixed-CDF limit when latency dispersions collapse."""
+        from runner.forecast_state import CohortEvidence
+
+        return [
+            CohortEvidence(
+                obs_x=[N_i] * (max_tau + 1),
+                obs_y=[0.0] * (max_tau + 1),
+                x_frozen=N_i,
+                y_frozen=0.0,
+                frontier_age=0,
+                a_pop=N_i,
+            )
+            for _ in range(n_cohorts)
+        ]
+
     def test_sweep_analytic_no_dispersions(self):
         """Engine runs with analytic-only params (zero SDs).
 
@@ -572,37 +652,81 @@ class TestForecastEngineNonBayes:
         assert spread_at_40 > 0, 'Should have some spread from p variation'
 
     def test_sweep_analytic_with_dispersions(self):
-        """Engine runs with analytic params that have SDs (e.g. from
-        promoted_mu_sd fields). Fan should be wider than zero-SD case.
+        """At the zero-latency-dispersion limit, the unconditioned model
+        fan should recover the fixed-CDF monotone-width rise. Reintroducing
+        latency dispersions should materially perturb that width profile.
+
+        This is the controlled-limit replacement for the stale
+        "with-SD spread at tau=40 must exceed no-SD spread" contract,
+        which only held for the old pure p×CDF model curve.
         """
         from runner.forecast_state import compute_forecast_trajectory
         import numpy as np
 
         resolved_no_sd = self._make_analytic_resolved(with_dispersions=False)
         resolved_with_sd = self._make_analytic_resolved(with_dispersions=True)
-        cohorts = self._make_cohorts(n_cohorts=3, max_tau=50)
+        cohorts = self._make_zero_frontier_cohorts(
+            n_cohorts=3,
+            max_tau=50,
+            N_i=10000.0,
+        )
 
         result_no_sd = compute_forecast_trajectory(
             resolved=resolved_no_sd, cohorts=cohorts, max_tau=50,
-            num_draws=500,
+            num_draws=2000,
         )
         result_with_sd = compute_forecast_trajectory(
             resolved=resolved_with_sd, cohorts=cohorts, max_tau=50,
-            num_draws=500,
+            num_draws=2000,
         )
 
         # Both should produce valid output
-        assert result_no_sd.rate_draws.shape == (500, 51)
-        assert result_with_sd.rate_draws.shape == (500, 51)
+        assert result_no_sd.rate_draws.shape == (2000, 51)
+        assert result_with_sd.rate_draws.shape == (2000, 51)
 
-        # Fan with dispersions should be wider (more uncertainty).
-        # Use model_rate_draws (unconditioned) to avoid IS compression
-        # masking the dispersion effect.
-        spread_no_sd = float(np.std(result_no_sd.model_rate_draws[:, 40]))
-        spread_with_sd = float(np.std(result_with_sd.model_rate_draws[:, 40]))
-        assert spread_with_sd > spread_no_sd, \
-            f"With-SD model spread ({spread_with_sd:.4f}) should exceed " \
-            f"no-SD model spread ({spread_no_sd:.4f})"
+        width_no_sd = (
+            np.quantile(result_no_sd.model_rate_draws, 0.95, axis=0)
+            - np.quantile(result_no_sd.model_rate_draws, 0.05, axis=0)
+        )
+        width_with_sd = (
+            np.quantile(result_with_sd.model_rate_draws, 0.95, axis=0)
+            - np.quantile(result_with_sd.model_rate_draws, 0.05, axis=0)
+        )
+
+        # With fixed latency across draws, the no-evidence model band
+        # should widen monotonically through the live rise window.
+        sample_taus = [2, 5, 10, 15, 20, 25, 30, 35, 40]
+        monotone_failures = []
+        prev_width = None
+        for tau in sample_taus:
+            width = float(width_no_sd[tau])
+            if prev_width is not None and width < prev_width - 1e-9:
+                monotone_failures.append((tau, prev_width, width))
+            prev_width = width
+        assert not monotone_failures, (
+            "Zero-latency-dispersion model band should widen monotonically "
+            "through the fixed-CDF rise window:\n"
+            + "\n".join(
+                f"tau={tau}: prev={prev:.6f} next={nxt:.6f}"
+                for tau, prev, nxt in monotone_failures
+            )
+        )
+
+        # Turning latency dispersions back on should materially change the
+        # unconditioned model draw family, even though the resulting width
+        # profile is no longer required to widen pointwise at every tau.
+        band_l2_diff = float(np.linalg.norm(width_with_sd - width_no_sd))
+        max_draw_delta = float(np.max(np.abs(
+            result_with_sd.model_rate_draws - result_no_sd.model_rate_draws
+        )))
+        assert band_l2_diff > 0.05, (
+            "Latency dispersions did not materially perturb the model-band "
+            f"profile (L2 diff={band_l2_diff:.4f})"
+        )
+        assert max_draw_delta > 0.05, (
+            "Latency dispersions did not materially perturb the unconditioned "
+            f"draw family (max |Δ|={max_draw_delta:.4f})"
+        )
 
     def test_sweep_forecast_mean_only_no_alpha_beta(self):
         """Edge with only forecast.mean (no posterior alpha/beta).
@@ -657,16 +781,11 @@ class TestForecastEngineNonBayes:
         max_tau = 50
         # Large N_i so binomial noise is negligible
         N_i = 10000.0
-        cohorts = []
-        for _ in range(3):
-            cohorts.append(CohortEvidence(
-                obs_x=[N_i] * (max_tau + 1),
-                obs_y=[0.0] * (max_tau + 1),
-                x_frozen=N_i,
-                y_frozen=0.0,
-                frontier_age=0,
-                a_pop=N_i,
-            ))
+        cohorts = self._make_zero_frontier_cohorts(
+            n_cohorts=3,
+            max_tau=max_tau,
+            N_i=N_i,
+        )
 
         result = compute_forecast_trajectory(
             resolved=resolved, cohorts=cohorts, max_tau=max_tau,

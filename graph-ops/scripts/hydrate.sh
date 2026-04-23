@@ -8,10 +8,17 @@
 # for parity testing against synth graphs.
 #
 # Usage:
-#   bash graph-ops/scripts/hydrate.sh <graph-name> <query-dsl>
+#   bash graph-ops/scripts/hydrate.sh <graph-name> <query-dsl> [options]
 #
 # Example:
 #   bash graph-ops/scripts/hydrate.sh synth-mirror-4step "window(-90d:)"
+#   bash graph-ops/scripts/hydrate.sh synth-simple-abc "window(-90d:)" \
+#     --bayes-vars bayes/fixtures/synth-simple-abc.bayes-vars.json
+#
+# Options are forwarded to the CLI. See `npx tsx src/cli/hydrate.ts --help`.
+# Notable options:
+#   --bayes-vars <path>    Inject Bayesian posteriors before hydration
+#   --force-vars           With --bayes-vars, bypass rhat/ess quality gates
 #
 # Requires Python BE running on localhost:9000.
 

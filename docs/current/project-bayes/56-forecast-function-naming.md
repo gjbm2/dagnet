@@ -304,7 +304,7 @@ Everything except the four identifiers. Specifically:
   belongs there.
 - **Test identifiers.** Test filenames describe the *behaviour they
   test*, not the function. `test_conditioned_forecast_response_contract.py`
-  and `conditionedForecastCompleteness.red.test.ts` stay.
+  and `conditionedForecastCompleteness.test.ts` stay.
   Individual test-function names that embed the old identifiers
   are updated in-place (they *are* the identifiers).
 - **Service filenames.** `conditionedForecastService.ts` stays.

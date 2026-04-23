@@ -1,11 +1,8 @@
 """
-Conditioned forecast response contract — RED tests.
+Conditioned forecast response contract (doc 64 Family F).
 
-These tests enforce the response shape mandated by:
-
-  docs/current/project-bayes/45-forecast-parity-design.md
-
-Doc 45, lines 181-190 specify:
+The `/api/forecast/conditioned` endpoint must emit a per-edge response
+shape conforming to doc 45 lines 181-190:
 
     Response: {
       success: true,
@@ -13,24 +10,63 @@ Doc 45, lines 181-190 specify:
         scenario_id,
         edges: [{
           edge_uuid, p_mean, p_sd,
-          completeness, completeness_sd
+          completeness, completeness_sd,
+          cf_mode, cf_reason
         }]
       }]
     }
 
-And line 153-154:
-    "it produces per-edge scalars (p.mean, p_sd, completeness) that get
-     written back to the graph"
+Doc 45 line 153-154: "it produces per-edge scalars (p.mean, p_sd,
+completeness) that get written back to the graph".
 
-Today the Python handler in `handle_conditioned_forecast` emits only
-`p_mean` / `p_sd` (plus tau_max / n_rows / n_cohorts / _forensic), and
-omits `completeness` / `completeness_sd` entirely. The BE codepath it
-uses (`compute_cohort_maturity_rows_v3`) does not compute completeness.
+Two apparatuses enforce this contract on the live handler:
 
-These tests will FAIL until the Python handler is fixed to produce and
-return completeness and completeness_sd per doc 45. They are source-
-level contract tests because runtime testing requires a snapshot DB
-fixture that does not yet exist for CF.
+1. Static AST checks on `api_handlers.handle_conditioned_forecast` —
+   every per-edge response dict literal must carry the mandated keys.
+   These are cheap drift guards that catch handler-shape regressions
+   before a real call is issued.
+
+2. Runtime integration against the shared engine — the response must
+   actually contain live values for the mandated fields on real synth
+   graphs, and the CF endpoint must agree with `cohort_maturity_v3`
+   on `p_mean` and `completeness` at the evaluation horizon (doc 45
+   §"one computation, two reads").
+
+── Authoring receipt (doc 64 §3.6) ─────────────────────────────────
+
+Family         F. Projection and authority — the CF handler owns a
+               response shape with specific fields; a sibling Family C
+               runtime-backed slice asserts that CF and the v3 chart
+               agree on the shared scalars at the evaluation horizon.
+Invariant      The CF handler must emit the mandated per-edge fields
+               and the values must agree with `cohort_maturity_v3` at
+               the evaluation horizon because both are projections of
+               one solve.
+Oracle type    Public contract (static handler-shape assertions) plus
+               live cross-consumer agreement (runtime-backed slices on
+               synth-simple-abc and synth-mirror-4step).
+Apparatus      Static (AST) plus Python integration. Static alone is
+               insufficient — dict literals with the right keys can
+               still carry `None` or stale values. Runtime alone would
+               miss structural regressions where the handler is
+               rearranged in ways a single fixture does not cover.
+Fixtures       `synth-simple-abc` (single-hop window) and
+               `synth-mirror-4step` (multi-hop cohort). Smallest named
+               graphs that exercise the shared engine without extra
+               topology risk.
+Reality        Real snapshot DB and real data repo for runtime slices;
+               no mocks of forecast logic or handler shape. Static
+               checks operate directly on `api_handlers.py` source.
+False-pass     Static checks could pass while the runtime response
+               omits the fields (e.g., a conditional branch skips the
+               per-edge append). Runtime checks mitigate. Runtime
+               could pass while values drift in tandem on a shared
+               bug; the cross-consumer agreement claim at the
+               evaluation horizon mitigates this.
+Retires        Supersedes the "RED tests" framing from when
+               `completeness` / `completeness_sd` were missing from
+               the handler. The handler now emits the mandated fields;
+               these tests are live drift guards.
 """
 
 from __future__ import annotations
@@ -148,8 +184,10 @@ class TestConditionedForecastResponseContract:
     def test_handler_emits_completeness(self):
         """Doc 45 §Response contract: per-edge output MUST include
         `completeness`. Line 153: 'it produces per-edge scalars (p.mean,
-        p_sd, completeness) that get written back to the graph'. Today
-        the handler emits only p_mean/p_sd, so this RED test fails."""
+        p_sd, completeness) that get written back to the graph'. Drift
+        guard: if the CF handler's per-edge response dict drops
+        `completeness`, downstream consumers (graph projection, chart
+        normaliser) silently lose the field."""
         tree = ast.parse(_load_handler_source())
         func = _find_cf_handler(tree)
         for d in _iter_edge_result_appends(func):
@@ -348,23 +386,17 @@ class TestConditionedForecastFileEvidenceSupplement:
         assert result == {"n": 0, "k": 0, "supplemented_days": 0}
 
 
-# ─── CF endpoint ↔ cohort maturity v3 parity ────────────────────────────
+# ─── CF endpoint ↔ cohort_maturity_v3 runtime agreement ─────────────
 #
-# Doc 45 §Relationship to doc 29f Phase G: "one computation, two reads."
-# The conditioned forecast endpoint and the cohort maturity chart share
-# the underlying engine. For a given edge + DSL they must produce
-# identical scalars at the evaluation horizon — BOTH for `p_mean` AND
-# for `completeness`. Today `p_mean` parity is tested via v2/v3 parity
-# (test_v2_v3_parity.py) but there is NO cross-handler check that
-# completeness agrees. This test closes that gap.
+# Doc 45 §"one computation, two reads": the CF endpoint and the v3
+# chart share the underlying engine. For a given edge + DSL they must
+# produce identical scalars at the evaluation horizon — BOTH for
+# `p_mean` AND `completeness`. This is the runtime-backed slice of the
+# handler contract: the static AST checks above prove the fields are
+# emitted; these tests prove the values agree.
 #
-# Uses the same fixture scaffolding as test_v2_v3_parity.py. Skips when
-# the snapshot DB / data repo / synth graph are not available. Fails
-# today because:
-#   - handle_conditioned_forecast does not emit `completeness`
-#   - compute_cohort_maturity_rows_v3 maturity rows carry no `completeness`
-# Will pass once both handlers expose the same completeness scalar at
-# the evaluation horizon (sourced from the shared sweep/forecast engine).
+# Skips when the snapshot DB / data repo / synth graph are not
+# available.
 
 try:
     from conftest import (
@@ -488,16 +520,15 @@ if _CONFTEST_AVAILABLE:
             cm_completeness = cm_last.get("completeness")
             cf_completeness = cf_edge.get("completeness")
             assert cm_completeness is not None, (
-                "cohort_maturity_v3 last row missing 'completeness' — "
-                "the engine path used by _handle_cohort_maturity_v3 "
-                "(compute_cohort_maturity_rows_v3) does not compute "
-                "completeness today. Per doc 45 §'one computation, two "
-                "reads' both handlers must expose it."
+                "cohort_maturity_v3 last row missing 'completeness'. "
+                "Doc 45 §'one computation, two reads' mandates "
+                "completeness on both the CF and v3 paths at the "
+                "evaluation horizon."
             )
             assert cf_completeness is not None, (
-                "CF endpoint edge missing 'completeness' — "
-                "handle_conditioned_forecast emits only p_mean/p_sd "
-                "today. Doc 45 response contract mandates completeness."
+                "CF endpoint edge missing 'completeness'. "
+                "Doc 45 response contract mandates completeness on "
+                "the CF endpoint."
             )
             # Both come from the same CDF — no MC sampling variance on
             # this quantity. Tolerance kept tight.
@@ -611,4 +642,108 @@ if _CONFTEST_AVAILABLE:
                 f"cohort_maturity={cm_completeness:.4f} "
                 f"CF={cf_completeness:.4f}"
             )
+
+
+@requires_db
+@requires_data_repo
+@requires_synth("synth-simple-abc", enriched=True, bayesian=True)
+class TestConditionedForecastSingleHopCohortParity:
+    """
+    Doc 60 factorised single-hop guard for downstream cohort queries.
+
+    Exact single-hop cohort queries may keep cohort query frames, but the
+    chart and CF endpoint must still agree at the horizon because both now
+    ride the same X-rooted subject helper path.
+    """
+
+    @staticmethod
+    def _load_synth_graph():
+        return load_graph_json("synth-simple-abc", bayesian=True)
+
+    @staticmethod
+    def _get_candidate_regimes(graph):
+        return load_candidate_regimes_by_mode("synth-simple-abc")
+
+    def test_scoped_single_hop_cohort_matches_v3_horizon(self):
+        from api_handlers import (
+            _handle_cohort_maturity_v3,
+            handle_conditioned_forecast,
+        )
+
+        graph = self._load_synth_graph()
+        regimes = self._get_candidate_regimes(graph)
+        analytics_dsl = "from(simple-b).to(simple-c)"
+        query_dsl = "cohort(-90d:)"
+
+        cm_result = _handle_cohort_maturity_v3(
+            {
+                "scenarios": [
+                    {
+                        "scenario_id": "parity",
+                        "graph": graph,
+                        "analytics_dsl": analytics_dsl,
+                        "effective_query_dsl": query_dsl,
+                        "candidate_regimes_by_edge": regimes,
+                    }
+                ]
+            }
+        )
+        cm_rows = []
+        if "result" in cm_result and isinstance(cm_result["result"], dict):
+            cm_rows = cm_result["result"].get("maturity_rows", []) or []
+        else:
+            for subject in (
+                cm_result.get("subjects")
+                or cm_result.get("scenarios", [{}])[0].get("subjects", [])
+            ):
+                rows = subject.get("result", {}).get("maturity_rows", [])
+                if rows:
+                    cm_rows = rows
+                    break
+        assert cm_rows, "cohort_maturity_v3 returned no rows for single-hop cohort parity"
+        cm_last = cm_rows[-1]
+
+        cf_result = handle_conditioned_forecast(
+            {
+                "scenarios": [
+                    {
+                        "scenario_id": "parity",
+                        "graph": graph,
+                        "analytics_dsl": analytics_dsl,
+                        "effective_query_dsl": query_dsl,
+                        "candidate_regimes_by_edge": regimes,
+                    }
+                ],
+                "analytics_dsl": analytics_dsl,
+            }
+        )
+        cf_edges = cf_result.get("scenarios", [{}])[0].get("edges", []) or []
+        assert cf_edges, "CF endpoint returned no edges for single-hop cohort parity"
+        cf_edge = next(
+            (edge for edge in cf_edges if edge.get("to_node") == "simple-c"),
+            cf_edges[0],
+        )
+
+        cm_p_mean = cm_last.get("p_infinity_mean")
+        if cm_p_mean is None:
+            cm_p_mean = cm_last.get("midpoint")
+        cf_p_mean = cf_edge.get("p_mean")
+        assert cm_p_mean is not None and cf_p_mean is not None, (
+            f"Missing p_mean scalars — cm_p_mean={cm_p_mean} cf_p_mean={cf_p_mean}"
+        )
+        assert abs(cm_p_mean - cf_p_mean) < 5e-3, (
+            "Scoped single-hop cohort p_mean parity failed: "
+            f"cohort_maturity={cm_p_mean:.4f} CF={cf_p_mean:.4f}"
+        )
+
+        cm_completeness = cm_last.get("completeness")
+        cf_completeness = cf_edge.get("completeness")
+        assert cm_completeness is not None and cf_completeness is not None, (
+            "Missing completeness scalars for single-hop cohort parity"
+        )
+        assert abs(cm_completeness - cf_completeness) < 5e-3, (
+            "Scoped single-hop cohort completeness parity failed: "
+            f"cohort_maturity={cm_completeness:.4f} "
+            f"CF={cf_completeness:.4f}"
+        )
 

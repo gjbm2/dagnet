@@ -1,37 +1,99 @@
 #!/usr/bin/env bash
 #
-# Multi-hop cohort/window evidence parity test — RED TEST for doc #47.
+# Multi-hop cohort/window metamorphic canary (doc 64 Family D + G).
 #
-# Invariant: for a multi-hop from(x).to(y) query where the upstream
-# segment a→…→x has NO latency edges, cohort() and window() must
-# produce approximately equal evidence_x and evidence_y at each tau.
-# Without upstream latency, both modes observe the same population
-# at the same ages — the evidence basis is identical.
+# Two metamorphic claims, stated as collapse and divergence relations
+# that together pin down the subject-evidence selection rule:
 #
-# Graph: synth-mirror-4step
-#   Upstream (no latency): m4-landing → m4-created → m4-delegated
-#   Subject (has latency): m4-delegated → m4-registered → m4-success
+#   Claim 1 — COLLAPSE.  For a multi-hop from(X).to(Y) where the
+#   upstream A -> ... -> X segment has NO latency edges, cohort()
+#   and window() must produce approximately equal evidence_x,
+#   evidence_y, and midpoint at each tau. Both modes observe the
+#   same population at the same ages — the evidence basis is
+#   identical.
 #
-# This test is RED against the current code because
-# _apply_temporal_regime_selection (api_handlers.py:1890) selects
-# cohort evidence for every subject edge in a multi-hop cohort query,
-# producing suppressed evidence_x values.
+#   Fixture: synth-mirror-4step. Subject = m4-delegated -> m4-success.
+#   Upstream m4-landing -> m4-created -> m4-delegated is instant.
+#
+#   Claim 2 — DIVERGE.  For a single-hop from(X).to(Y) where the
+#   upstream A -> ... -> X segment HAS latency, cohort() evidence_x
+#   must grow with tau (upstream maturity) while window() evidence_x
+#   is flat. A pass proves the Claim-1 fix was not applied too
+#   broadly.
+#
+#   Fixture: synth-mirror-4step. Subject = m4-registered -> m4-success.
+#   Upstream m4-delegated -> m4-registered has latency.
+#
+# ── Authoring receipt (doc 64 §3.6) ─────────────────────────────────
+#
+# Family         D + G. Metamorphic semantics plus outside-in CLI
+#                canary — doc 64 §5.4 designates this seam for CLI
+#                coverage because the defect class has escaped
+#                through public tooling before.
+# Invariant      Collapse when upstream is non-latent; diverge when
+#                upstream is latent. The two claims form a
+#                positive/negative pair that prevents the fix for
+#                the collapse claim from silently stomping the
+#                divergence claim.
+# Oracle type    Blind metamorphic relation. Not legacy parity:
+#                the claim is about v3 behaviour under a controlled
+#                DSL transformation, not about matching v2.
+# Apparatus      CLI canary driving analyse.sh against the live
+#                Python BE on localhost:9000. A Python integration
+#                test would miss the tooling path where this defect
+#                has historically escaped.
+# Fixtures       synth-mirror-4step — the designated multi-hop
+#                collapse/diverge fixture (doc 64 §6.4). The
+#                non-latent upstream and latent-upstream edges are
+#                both present in the same graph so one fixture
+#                covers both claims.
+# Reality        Real Python BE + real snapshot DB. No mocks, no
+#                stubs. Data-freshness setup is in Phase A and is
+#                deliberately separate from Phase B (semantic
+#                claims); re-runs can skip setup with --no-setup.
+# False-pass     Either claim could pass vacuously — Claim 1 if
+#                both modes return zeros (mitigated by the printed
+#                ratio table and a non-zero check); Claim 2 if the
+#                fix is too broad (the claim IS the "not too broad"
+#                test). Claim 2 passing while Claim 1 fails would
+#                mean the broad evidence basis is correct but the
+#                collapse-on-non-latent-upstream rule is broken.
+# Retires        Supersedes only the "RED test for doc #47" framing.
+#                The v2 cross-version signal is retained below as a
+#                debugging aid — it distinguishes "v3 regressed" from
+#                "defect shared with v2" when Claim 1 fails. It will
+#                be removed alongside v2 (doc 64 §8.3, §11) once a
+#                v2-free replacement signal exists.
 #
 # Usage:
-#   bash graph-ops/scripts/multihop-evidence-parity-test.sh [graph-name]
+#   bash graph-ops/scripts/multihop-evidence-parity-test.sh [graph-name] [--no-setup]
 #
 # Prerequisites:
 #   - Python BE running on localhost:9000
-#   - Synth graph generated with snapshot data in DB
+#   - Synth graph present in the snapshot DB (run without --no-setup
+#     the first time, then --no-setup on re-runs to skip synth_gen)
 
 set -o pipefail
 
 . "$(dirname "$0")/_load-conf.sh"
 
+SKIP_SETUP=0
+_POSITIONAL=()
+for arg in "$@"; do
+  case "$arg" in
+    --no-setup) SKIP_SETUP=1 ;;
+    *) _POSITIONAL+=("$arg") ;;
+  esac
+done
+set -- "${_POSITIONAL[@]}"
+
 GRAPH_NAME="${1:-synth-mirror-4step}"
 shift || true
 
-# ── Ensure synth data is fresh and enriched ──────────────────────────
+# ═══════════════════════════════════════════════════════════════════
+# Phase A — Data freshness (setup, separate from semantic claims)
+# ═══════════════════════════════════════════════════════════════════
+
 _ensure_synth_data() {
   local graph_name="$1"
   echo "  Checking synth data freshness for $graph_name..."
@@ -44,7 +106,12 @@ _ensure_synth_data() {
   ) || { echo "ERROR: synth_gen failed for $graph_name"; exit 1; }
 }
 
-_ensure_synth_data "$GRAPH_NAME"
+if [ "$SKIP_SETUP" = "1" ]; then
+  echo "[Phase A] Skipping setup (--no-setup). Using existing snapshot DB state."
+else
+  echo "[Phase A] Refreshing synth data"
+  _ensure_synth_data "$GRAPH_NAME"
+fi
 
 PASS=0
 FAIL=0
@@ -79,23 +146,25 @@ _run_analyse() {
 TMPDIR=$(mktemp -d)
 trap "rm -rf $TMPDIR" EXIT
 
+echo ""
 echo "══════════════════════════════════════════════════════"
-echo "  Multi-hop evidence parity: $GRAPH_NAME"
-echo "  Date range: $DATE_RANGE"
+echo "[Phase B] Metamorphic claims on $GRAPH_NAME"
+echo "          Date range: $DATE_RANGE"
 echo "══════════════════════════════════════════════════════"
 
 # ══════════════════════════════════════════════════════════════════════
-# §1 — Multi-hop: cohort vs window evidence (non-latent upstream)
+# Claim 1 — Multi-hop COLLAPSE on non-latent upstream
 # ══════════════════════════════════════════════════════════════════════
 #
-# Subject: from(m4-delegated).to(m4-success) — 2-hop span
-# Upstream: m4-landing → m4-created → m4-delegated — all zero latency
+# Subject: from(m4-delegated).to(m4-success) — 2-hop span.
+# Upstream: m4-landing → m4-created → m4-delegated — all zero latency.
 #
 # Because upstream is instant, cohort and window observe the same
-# denominator and numerator. evidence_x and evidence_y must match.
+# denominator and numerator. evidence_x, evidence_y, and midpoint
+# must collapse within tolerance at every tau.
 
 echo ""
-echo "§1 — Multi-hop evidence parity (non-latent upstream)"
+echo "Claim 1 — Multi-hop COLLAPSE (non-latent upstream)"
 
 _define_cases_synth_mirror_4step() {
   # Multi-hop subject spanning two latency edges
@@ -324,11 +393,21 @@ else
 fi
 
 # ══════════════════════════════════════════════════════════════════════
-# §2 — V2 same defect (version-independence check)
+# Cross-version signal — v3 regression check against v2
 # ══════════════════════════════════════════════════════════════════════
+#
+# When Claim 1 above fails, it is useful to know whether the defect
+# is shared with v2 (broken everywhere) or specific to v3 (v3
+# regressed). Running the same multi-hop query under v2 and comparing
+# evidence_x under window and cohort modes tells us: v2 passes this
+# check while v3 fails, so the defect is v3-specific.
+#
+# Retained provisionally. Will be removed when v2 is deleted
+# (doc 64 §8.3, §11). A v2-free replacement would need a historical
+# baseline or an analytic oracle for the multi-hop collapse claim.
 
 echo ""
-echo "§2 — V2 evidence parity (same defect, version-independent)"
+echo "Cross-version signal — v3 regression check against v2"
 
 W_V2="$TMPDIR/v2_window_multihop.json"
 C_V2="$TMPDIR/v2_cohort_multihop.json"
@@ -387,34 +466,34 @@ for tau in shared:
         failures.append(tau)
 
 if failures:
-    print(f'FAIL:V2 evidence_x also diverges at {len(failures)} tau values — same defect')
+    print(f'FAIL:V2 evidence_x also diverges at {len(failures)} tau values — defect is shared, not v3-specific')
 else:
-    print(f'PASS:V2 evidence_x matches within 5%')
+    print(f'PASS:V2 evidence_x matches within 5% — if Claim 1 fails, the v3 path has regressed')
 " 2>&1)
 
 echo "$V2_RESULT"
 TOTAL=$((TOTAL + 1))
 if echo "$V2_RESULT" | grep -q '^PASS:'; then
   PASS=$((PASS + 1))
-  echo "  ✓ V2 evidence_x parity"
+  echo "  ✓ v2 multi-hop collapse holds (signal: v3-specific regression if Claim 1 red)"
 else
   FAIL=$((FAIL + 1))
-  echo "  ✗ V2 evidence_x parity"
+  echo "  ✗ v2 multi-hop collapse also fails (signal: defect shared with v2)"
 fi
 
 # ══════════════════════════════════════════════════════════════════════
-# §3 — Negative control: single-hop SHOULD diverge
+# Claim 2 — Single-hop DIVERGE on latent upstream
 # ══════════════════════════════════════════════════════════════════════
 #
-# For single-hop from(m4-registered).to(m4-success), the upstream
-# path to m4-registered traverses m4-delegated→m4-registered which
-# HAS latency. So cohort evidence_x should grow with tau (upstream
-# maturity) while window evidence_x is flat. They MUST differ.
+# Subject: from(m4-registered).to(m4-success) — single-hop. Upstream
+# traverses m4-delegated → m4-registered which HAS latency.
 #
-# If this passes after the fix, the fix was not applied too broadly.
+# Cohort evidence_x must grow with tau (upstream maturity) while
+# window evidence_x stays flat. They MUST differ. A pass here proves
+# the Claim-1 collapse fix was not applied too broadly.
 
 echo ""
-echo "§3 — Single-hop negative control (SHOULD diverge)"
+echo "Claim 2 — Single-hop DIVERGE (latent upstream)"
 
 SH_DSL="from(m4-registered).to(m4-success)"
 

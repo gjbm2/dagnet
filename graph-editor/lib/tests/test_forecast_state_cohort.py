@@ -22,6 +22,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import pytest
 import numpy as np
 
+from conftest import load_graph_json, requires_data_repo, requires_db, requires_synth
+
 
 def _make_synth_graph(edges):
     """Build minimal graph from edge specs.
@@ -74,6 +76,97 @@ def _make_synth_graph(edges):
         'nodes': list(node_set.values()),
         'edges': edge_list,
     }
+
+
+def _phase1_expected_carrier_mode(
+    *,
+    mode: str,
+    anchor_node_id: str | None,
+    query_from_node: str,
+    upstream_segment_is_latent: bool,
+) -> str:
+    """Disposable Phase-1 oracle for carrier identity classification.
+
+    This deliberately tiny oracle exists to drive doc 66's witness tests.
+    It answers only the Phase-1 question: should `carrier_to_x` be the
+    identity, or a real upstream carrier?
+    """
+    if mode == 'window':
+        return 'identity'
+    if not anchor_node_id or anchor_node_id == query_from_node:
+        return 'identity'
+    return 'upstream' if upstream_segment_is_latent else 'identity'
+
+
+def _node_id_map(graph):
+    return {
+        str(node.get('uuid') or node.get('id') or ''): str(node.get('id') or node.get('uuid') or '')
+        for node in graph.get('nodes', [])
+    }
+
+
+def _find_unique_outgoing_edge(graph, from_node_id: str):
+    nmap = _node_id_map(graph)
+    matches = [
+        edge
+        for edge in graph.get('edges', [])
+        if nmap.get(str(edge.get('from') or ''), str(edge.get('from') or '')) == from_node_id
+        and bool((edge.get('p') or {}).get('id'))
+    ]
+    assert len(matches) == 1, (
+        f"Expected exactly one outgoing edge from {from_node_id}, "
+        f"found {len(matches)}."
+    )
+    return matches[0]
+
+
+def _has_direct_edge(graph, from_node_id: str, to_node_id: str) -> bool:
+    nmap = _node_id_map(graph)
+    return any(
+        nmap.get(str(edge.get('from') or ''), str(edge.get('from') or '')) == from_node_id
+        and nmap.get(str(edge.get('to') or ''), str(edge.get('to') or '')) == to_node_id
+        for edge in graph.get('edges', [])
+    )
+
+
+def _build_phase1_runtime_bundle_for_graph(
+    *,
+    graph_name: str,
+    mode: str,
+    anchor_node_id: str,
+    query_from_node: str,
+    query_to_node: str,
+):
+    from runner.forecast_runtime import (
+        build_prepared_runtime_bundle,
+        build_x_provider_from_graph,
+        serialise_runtime_bundle,
+    )
+
+    graph = load_graph_json(graph_name)
+    is_window = mode == 'window'
+    x_provider = None
+    if not is_window and anchor_node_id != query_from_node:
+        carrier_edge = _find_unique_outgoing_edge(graph, query_from_node)
+        x_provider = build_x_provider_from_graph(
+            graph,
+            carrier_edge,
+            anchor_node_id,
+            is_window=False,
+        )
+
+    runtime_bundle = build_prepared_runtime_bundle(
+        mode=mode,
+        query_from_node=query_from_node,
+        query_to_node=query_to_node,
+        anchor_node_id=anchor_node_id,
+        is_multi_hop=not _has_direct_edge(graph, query_from_node, query_to_node),
+        x_provider=x_provider,
+        numerator_representation='factorised',
+        p_conditioning_temporal_family='window' if is_window else 'cohort',
+        p_conditioning_source='phase1_test',
+    )
+    return runtime_bundle, serialise_runtime_bundle(runtime_bundle), x_provider
 
 
 class TestForecastRuntimeIngressOrdering:
@@ -818,6 +911,103 @@ class TestPreparedRuntimeBundle:
         assert diag['p_conditioning_evidence']['temporal_family'] == 'cohort'
         assert diag['p_conditioning_evidence']['source'] == 'direct_cohort_exact_subject'
         assert diag['p_conditioning_evidence']['direct_cohort_enabled'] is True
+
+    @requires_db
+    @requires_data_repo
+    @requires_synth("synth-simple-abc", enriched=True)
+    def test_phase1_window_queries_use_identity_carrier(self):
+        """Phase 1 witness: `window()` is always the identity carrier."""
+        _, diag, x_provider = _build_phase1_runtime_bundle_for_graph(
+            graph_name='synth-simple-abc',
+            mode='window',
+            anchor_node_id='simple-a',
+            query_from_node='simple-a',
+            query_to_node='simple-b',
+        )
+
+        assert x_provider is None
+        assert diag['carrier_to_x']['mode'] == _phase1_expected_carrier_mode(
+            mode='window',
+            anchor_node_id='simple-a',
+            query_from_node='simple-a',
+            upstream_segment_is_latent=False,
+        )
+        assert diag['carrier_to_x']['has_x_provider'] is False
+        assert diag['carrier_to_x']['reach'] == pytest.approx(1.0)
+
+    @requires_db
+    @requires_data_repo
+    @requires_synth("synth-simple-abc", enriched=True)
+    def test_phase1_cohort_leading_edge_uses_identity_carrier(self):
+        """Phase 1 witness: `cohort()` with `A = X` must collapse."""
+        _, diag, x_provider = _build_phase1_runtime_bundle_for_graph(
+            graph_name='synth-simple-abc',
+            mode='cohort',
+            anchor_node_id='simple-a',
+            query_from_node='simple-a',
+            query_to_node='simple-b',
+        )
+
+        assert x_provider is None
+        assert diag['carrier_to_x']['mode'] == _phase1_expected_carrier_mode(
+            mode='cohort',
+            anchor_node_id='simple-a',
+            query_from_node='simple-a',
+            upstream_segment_is_latent=False,
+        )
+        assert diag['carrier_to_x']['has_x_provider'] is False
+        assert diag['carrier_to_x']['reach'] == pytest.approx(1.0)
+
+    @requires_db
+    @requires_data_repo
+    @requires_synth("synth-mirror-4step", enriched=True)
+    def test_phase1_non_latent_upstream_collapses_to_identity(self):
+        """Phase 1 witness: semantically instant upstream must collapse."""
+        _, diag, x_provider = _build_phase1_runtime_bundle_for_graph(
+            graph_name='synth-mirror-4step',
+            mode='cohort',
+            anchor_node_id='m4-landing',
+            query_from_node='m4-delegated',
+            query_to_node='m4-success',
+        )
+
+        assert x_provider is not None
+        assert x_provider.reach > 0
+        assert x_provider.enabled is False
+        assert x_provider.upstream_params_list == []
+        assert diag['population_root'] == 'm4-landing'
+        assert diag['carrier_to_x']['mode'] == _phase1_expected_carrier_mode(
+            mode='cohort',
+            anchor_node_id='m4-landing',
+            query_from_node='m4-delegated',
+            upstream_segment_is_latent=False,
+        )
+        assert diag['carrier_to_x']['has_x_provider'] is False
+
+    @requires_db
+    @requires_data_repo
+    @requires_synth("synth-mirror-4step", enriched=True)
+    def test_phase1_latent_upstream_retains_real_carrier(self):
+        """Phase 1 witness: genuine upstream latency must stay real."""
+        _, diag, x_provider = _build_phase1_runtime_bundle_for_graph(
+            graph_name='synth-mirror-4step',
+            mode='cohort',
+            anchor_node_id='m4-landing',
+            query_from_node='m4-registered',
+            query_to_node='m4-success',
+        )
+
+        assert x_provider is not None
+        assert x_provider.enabled is True
+        assert x_provider.upstream_params_list
+        assert diag['population_root'] == 'm4-landing'
+        assert diag['carrier_to_x']['mode'] == _phase1_expected_carrier_mode(
+            mode='cohort',
+            anchor_node_id='m4-landing',
+            query_from_node='m4-registered',
+            upstream_segment_is_latent=True,
+        )
+        assert diag['carrier_to_x']['has_x_provider'] is True
 
     def test_summary_reads_carrier_from_runtime_bundle(self):
         from runner.forecast_runtime import build_prepared_runtime_bundle

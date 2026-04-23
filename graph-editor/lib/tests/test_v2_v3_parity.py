@@ -13,6 +13,7 @@ because both use the same evidence pipeline. MC-derived fields
 import copy
 import functools
 import json
+import numpy as np
 import os
 import sys
 from datetime import date
@@ -914,10 +915,12 @@ def test_prod_graph_v3_window_vs_cohort_do_not_collapse_for_downstream_edge():
 
 
 def test_v3_handler_widens_single_edge_downstream_cohort_span(monkeypatch):
-    """v3 handler must widen downstream single-edge cohort spans.
+    """v3 handler keeps downstream single-edge cohort spans factorised.
 
-    For cohort(A, X-Y) with A != X, the population-model CDF must be
-    prepared on anchor->Y while the p draws stay edge-level X->Y.
+    For cohort(A, X-Y) with A != X, the subject operator now stays rooted
+    at X->Y and the anchor->X solve is carried separately in the carrier
+    path. The handler must therefore pass X->Y MC draws into the row
+    builder while still preserving the anchor node on the runtime bundle.
     """
     import api_handlers
     import runner.cohort_forecast_v3 as cohort_forecast_v3
@@ -1131,7 +1134,7 @@ def test_v3_handler_widens_single_edge_downstream_cohort_span(monkeypatch):
     assert captured['query_from_node'] == 'x'
     assert captured['query_to_node'] == 'y'
     assert captured['anchor_node_id'] == 'a'
-    assert captured['mc_cdf_arr'] == 'cdf:a->y:bayesian'
+    assert captured['mc_cdf_arr'] == 'cdf:x->y:bayesian'
     assert captured['mc_p_s'] == 'p:x->y:bayesian'
     assert captured['det_norm_cdf'] is not None
     assert captured['p_conditioning_source'] == 'direct_cohort_exact_subject'
@@ -1173,6 +1176,256 @@ def test_v3_handler_widens_single_edge_downstream_cohort_span(monkeypatch):
     assert captured['p_conditioning_source'] == 'direct_cohort_exact_subject'
     assert captured['p_conditioning_direct_cohort'] is True
     assert cf_result.get('scenarios', [{}])[0].get('edges')
+
+
+def test_v3_handler_samples_only_visible_source_curves(monkeypatch):
+    """Per-source overlay MC should be visibility-driven.
+
+    With explicit display settings from the FE, only toggled non-promoted
+    source curves should be sampled. Requests that omit display settings
+    keep the old eager fallback for compatibility with legacy callers/tests.
+    """
+    import api_handlers
+    import runner.cohort_forecast_v3 as cohort_forecast_v3
+    import runner.forecast_preparation as forecast_preparation
+    import runner.forecast_runtime as forecast_runtime
+    import runner.graph_builder as graph_builder
+    import runner.model_resolver as model_resolver
+    import runner.path_runner as path_runner
+    import runner.span_kernel as span_kernel
+
+    graph = {
+        'nodes': [
+            {'uuid': 'nx', 'id': 'x'},
+            {'uuid': 'ny', 'id': 'y'},
+        ],
+        'edges': [
+            {'uuid': 'e1', 'from': 'nx', 'to': 'ny', 'p': {'id': 'x-to-y'}},
+        ],
+        'model_source_preference': 'bayesian',
+    }
+    subjects = [{
+        'anchor_from': '2026-01-01',
+        'anchor_to': '2026-01-01',
+        'sweep_to': '2026-01-03',
+    }]
+    preparation = SimpleNamespace(
+        query_from_node='x',
+        query_to_node='y',
+        anchor_node='x',
+        composed_frames=[{
+            'snapshot_date': '2026-01-01',
+            'data_points': [{'anchor_day': '2026-01-01', 'x': 1, 'y': 0, 'a': 2}],
+        }],
+        last_edge_id='e1',
+        anchor_from='2026-01-01',
+        anchor_to='2026-01-01',
+        sweep_to='2026-01-03',
+        per_edge_results=[],
+        total_rows=1,
+        regime_diagnostics=[],
+        cohorts_analysed=1,
+        is_multi_hop=False,
+        subject_is_window=True,
+    )
+
+    resolved = SimpleNamespace(
+        source='bayesian',
+        p_mean=0.5,
+        p_sd=0.1,
+        alpha=5.0,
+        beta=5.0,
+        alpha_pred=5.0,
+        beta_pred=5.0,
+        alpha_beta_query_scoped=False,
+        latency=SimpleNamespace(
+            mu=1.0,
+            sigma=0.1,
+            onset_delta_days=0.0,
+            mu_sd=0.05,
+            sigma_sd=0.01,
+            onset_sd=0.01,
+            onset_mu_corr=0.0,
+        ),
+        edge_latency=SimpleNamespace(
+            mu=1.0,
+            sigma=0.1,
+            onset_delta_days=0.0,
+            mu_sd=0.05,
+            sigma_sd=0.01,
+            onset_sd=0.01,
+            onset_mu_corr=0.0,
+        ),
+    )
+
+    execution_prefs = []
+
+    class _FakeKernel:
+        span_p = 0.5
+        max_tau = 2
+
+        @staticmethod
+        def cdf_at(_tau):
+            return 0.5
+
+    def _fake_build_prepared_span_execution(graph_data, x_node_id, y_node_id, *, graph_preference=None, **_kwargs):
+        assert graph_data is graph
+        execution_prefs.append(graph_preference)
+        return SimpleNamespace(
+            topo=(x_node_id, y_node_id, graph_preference),
+            edge_params={},
+            edge_sds={},
+            edge_sds_pred={},
+        )
+
+    def _fake_mc_span_cdfs(*, topo, **_kwargs):
+        _x_node_id, _y_node_id, graph_preference = topo
+        scale = {
+            'analytic': 0.2,
+            'analytic_be': 0.3,
+            'bayesian': 0.4,
+            None: 0.5,
+        }.get(graph_preference, 0.1)
+        cdf = np.array([
+            [0.0, 0.5, 1.0],
+            [0.0, 0.5, 1.0],
+        ])
+        p = np.array([scale, scale])
+        return cdf, p
+
+    def _fake_compute_cohort_maturity_rows_v3(**_kwargs):
+        return [
+            {
+                'tau_days': 0,
+                'midpoint': 0.10,
+                'fan_upper': 0.11,
+                'fan_lower': 0.09,
+                'model_midpoint': 0.10,
+                'model_fan_upper': 0.11,
+                'model_fan_lower': 0.09,
+            },
+            {
+                'tau_days': 1,
+                'midpoint': 0.20,
+                'fan_upper': 0.21,
+                'fan_lower': 0.19,
+                'model_midpoint': 0.20,
+                'model_fan_upper': 0.21,
+                'model_fan_lower': 0.19,
+            },
+            {
+                'tau_days': 2,
+                'midpoint': 0.30,
+                'fan_upper': 0.31,
+                'fan_lower': 0.29,
+                'model_midpoint': 0.30,
+                'model_fan_upper': 0.31,
+                'model_fan_lower': 0.29,
+            },
+        ]
+
+    monkeypatch.setattr(
+        forecast_preparation,
+        'resolve_forecast_subjects',
+        lambda **_kwargs: subjects,
+    )
+    monkeypatch.setattr(
+        forecast_preparation,
+        'prepare_forecast_subject_group',
+        lambda **_kwargs: preparation,
+    )
+    monkeypatch.setattr(api_handlers, '_compute_axis_tau_max', lambda **_kwargs: 2)
+    monkeypatch.setattr(
+        api_handlers,
+        '_cf_supplement_evidence_counts_from_file',
+        lambda **_kwargs: {'supplemented_days': 0, 'k': 0, 'n': 0},
+    )
+    monkeypatch.setattr(model_resolver, 'resolve_model_params', lambda *_args, **_kwargs: resolved)
+    monkeypatch.setattr(
+        forecast_runtime,
+        'find_edge_by_id',
+        lambda graph_data, edge_id: graph_data['edges'][0] if edge_id == 'e1' else None,
+    )
+    monkeypatch.setattr(
+        forecast_runtime,
+        'build_prepared_runtime_bundle',
+        lambda **kwargs: SimpleNamespace(resolved_params=kwargs.get('resolved_params')),
+    )
+    monkeypatch.setattr(
+        forecast_runtime,
+        'build_prepared_span_execution',
+        _fake_build_prepared_span_execution,
+    )
+    monkeypatch.setattr(forecast_runtime, 'get_incoming_edges', lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(forecast_runtime, 'read_edge_cohort_params', lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(graph_builder, 'build_networkx_graph', lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(path_runner, 'calculate_path_probability', lambda *_args, **_kwargs: SimpleNamespace(probability=0.0))
+    monkeypatch.setattr(span_kernel, 'compose_span_kernel', lambda **_kwargs: _FakeKernel())
+    monkeypatch.setattr(span_kernel, 'mc_span_cdfs', _fake_mc_span_cdfs)
+    monkeypatch.setattr(
+        forecast_runtime,
+        'span_kernel_to_edge_params',
+        lambda *_args, **_kwargs: {'forecast_mean': 0.5},
+    )
+    monkeypatch.setattr(
+        forecast_runtime,
+        'build_span_params',
+        lambda *_args, **_kwargs: SimpleNamespace(
+            alpha_0=5.0,
+            beta_0=5.0,
+            mu_sd=0.05,
+            sigma_sd=0.01,
+            onset_sd=0.01,
+            onset_mu_corr=0.0,
+        ),
+    )
+    monkeypatch.setattr(
+        cohort_forecast_v3,
+        'compute_cohort_maturity_rows_v3',
+        _fake_compute_cohort_maturity_rows_v3,
+    )
+
+    result_visible = api_handlers._handle_cohort_maturity_v3({
+        'scenarios': [{
+            'scenario_id': 'test',
+            'graph': graph,
+            'analytics_dsl': 'from(x).to(y)',
+            'effective_query_dsl': 'window(-1d:)',
+            'visibility_mode': 'f+e',
+            'candidate_regimes_by_edge': {},
+        }],
+        'display_settings': {
+            'show_model_promoted': True,
+            'show_model_analytic': False,
+            'show_model_analytic_be': True,
+            'show_model_bayesian': True,
+            'tau_extent': '2',
+        },
+    })
+    visible_subject = result_visible.get('result') or result_visible
+    visible_sources = visible_subject.get('source_model_curves', {})
+    assert set(visible_sources.keys()) == {'analytic_be'}
+    assert 'analytic' not in execution_prefs
+    assert execution_prefs.count('analytic_be') == 1
+    assert execution_prefs.count('bayesian') >= 1
+
+    execution_prefs.clear()
+    result_legacy = api_handlers._handle_cohort_maturity_v3({
+        'scenarios': [{
+            'scenario_id': 'test',
+            'graph': graph,
+            'analytics_dsl': 'from(x).to(y)',
+            'effective_query_dsl': 'window(-1d:)',
+            'visibility_mode': 'f+e',
+            'candidate_regimes_by_edge': {},
+        }],
+    })
+    legacy_subject = result_legacy.get('result') or result_legacy
+    legacy_sources = legacy_subject.get('source_model_curves', {})
+    assert set(legacy_sources.keys()) == {'analytic', 'analytic_be', 'bayesian'}
+    assert 'analytic' in execution_prefs
+    assert 'analytic_be' in execution_prefs
+    assert execution_prefs.count('bayesian') >= 1
 
 
 class _TestUpstreamLagParityInline:

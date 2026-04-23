@@ -14,7 +14,7 @@ import tempfile
 import threading
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator
+from typing import IO, Iterator
 
 import yaml
 
@@ -25,27 +25,55 @@ class TrackerStorageError(RuntimeError):
     """Malformed, missing, or unreadable tracker file."""
 
 
-_process_lock = threading.RLock()
-
-
 def _lock_path(path: Path) -> Path:
     return Path(str(path) + ".lock")
+
+
+class _LockEntry:
+    __slots__ = ("rlock", "fh", "depth")
+
+    def __init__(self) -> None:
+        self.rlock = threading.RLock()
+        self.fh: IO[bytes] | None = None
+        self.depth = 0
+
+
+_registry_mutex = threading.Lock()
+_lock_registry: dict[str, _LockEntry] = {}
+
+
+def _entry_for(key: str) -> _LockEntry:
+    with _registry_mutex:
+        e = _lock_registry.get(key)
+        if e is None:
+            e = _LockEntry()
+            _lock_registry[key] = e
+        return e
 
 
 @contextmanager
 def exclusive_lock(path: Path) -> Iterator[None]:
     """Acquire a cross-process fcntl.flock on a sentinel file plus an
-    in-process reentrant lock. The sentinel is stable across atomic
-    replaces of the canonical YAML."""
+    in-process reentrant lock. Reentry from the same thread is safe —
+    only the outermost acquirer takes/releases the flock. Cross-process
+    safety comes from the flock itself."""
     lp = _lock_path(path)
     lp.parent.mkdir(parents=True, exist_ok=True)
-    with _process_lock:
-        with open(lp, "a+b") as fh:
-            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+    key = str(lp.absolute())
+    entry = _entry_for(key)
+    with entry.rlock:
+        if entry.depth == 0:
+            entry.fh = open(lp, "a+b")
+            fcntl.flock(entry.fh.fileno(), fcntl.LOCK_EX)
+        entry.depth += 1
+        try:
+            yield
+        finally:
+            entry.depth -= 1
+            if entry.depth == 0 and entry.fh is not None:
+                fcntl.flock(entry.fh.fileno(), fcntl.LOCK_UN)
+                entry.fh.close()
+                entry.fh = None
 
 
 def atomic_write(path: Path, text: str) -> None:

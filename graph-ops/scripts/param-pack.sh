@@ -23,6 +23,8 @@ if [ $# -lt 2 ]; then
   echo "Options:"
   echo "  --format yaml|json|csv   Output format (default: yaml)"
   echo "  --allow-external-fetch   Enable external source fetching (default: cache-only)"
+  echo "  --bayes-vars <path>      Inject Bayesian posteriors from a .bayes-vars.json sidecar"
+  echo "  --force-vars             With --bayes-vars, bypass rhat/ess quality gates"
   echo ""
   echo "Environment:"
   echo "  PYTHON_API_URL           Python BE URL (default: http://localhost:9000)"

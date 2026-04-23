@@ -126,11 +126,11 @@ All docs are in `docs/current/codebase/` unless a full path is given.
 ## Modifying devtools, monitors, regression scripts, or diagnostic infrastructure
 - DEV_ENVIRONMENT_AND_HMR.md **(full)** — server freshness endpoints, HMR behaviour, dev startup, `scripts/dev-server-check.sh`
 - DEVTOOL_ENGINEERING_PRINCIPLES.md **(full)** — data vs display separation, no silent deletion, output visibility, audit checklist
-- BAYES_REGRESSION_TOOLING.md **(full)** — regression pipeline, config-driven plans, structured JSON results, truth files, sparsity calibration
+- BAYES_REGRESSION_TOOLING.md **(full)** — regression pipeline, config-driven plans, structured JSON results, truth files, sparsity calibration, and the pytest Bayes sidecar contract (`bayesian=True` only; no fixture-level force-refit path)
 - KNOWN_ANTI_PATTERNS.md **(ref — anti-patterns 37-38)** — devtool data deletion incidents
 
 ## Creating, modifying, or activating synthetic test graphs
-- BAYES_REGRESSION_TOOLING.md **(full)** — truth file location (`bayes/truth/`), bootstrap, discovery
+- BAYES_REGRESSION_TOOLING.md **(full)** — truth file location (`bayes/truth/`), bootstrap, discovery, and the pytest sidecar workflow for bayesian synth fixtures
 - project-bayes/44-synth-model-test-plan.md **(full)** — graph inventory, coverage matrix, sparsity calibration design, known model limitations
 - project-bayes/17-synthetic-data-generator.md **(ref)** — synth_gen internals
 - project-bayes/19-synthetic-data-playbook.md **(ref)** — operational steps

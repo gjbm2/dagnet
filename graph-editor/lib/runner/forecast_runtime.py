@@ -225,10 +225,25 @@ def build_prepared_runtime_bundle(
     span_onset_mu_corr: Optional[float] = None,
 ) -> PreparedForecastRuntimeBundle:
     """Build the explicit internal runtime bundle for forecast consumers."""
+    def _has_semantic_upstream_carrier() -> bool:
+        if x_provider is not None:
+            return bool(getattr(x_provider, 'enabled', False))
+        if from_node_arrival is not None:
+            tier = str(getattr(from_node_arrival, 'tier', '') or '')
+            return tier not in {'', 'none', 'anchor'}
+        return False
+
     population_root = query_from_node
-    carrier_mode = 'identity'
-    if mode == 'cohort' and anchor_node_id and anchor_node_id != query_from_node:
+    if mode == 'cohort' and anchor_node_id:
         population_root = anchor_node_id
+
+    carrier_mode = 'identity'
+    if (
+        mode == 'cohort'
+        and anchor_node_id
+        and anchor_node_id != query_from_node
+        and _has_semantic_upstream_carrier()
+    ):
         carrier_mode = 'upstream'
 
     if x_provider is not None:
@@ -237,6 +252,11 @@ def build_prepared_runtime_bundle(
         reach = float(getattr(from_node_arrival, 'reach', 0.0) or 0.0)
     else:
         reach = 1.0 if carrier_mode == 'identity' else 0.0
+
+    carrier_x_provider = x_provider if carrier_mode == 'upstream' else None
+    carrier_from_node_arrival = (
+        from_node_arrival if carrier_mode == 'upstream' else None
+    )
 
     return PreparedForecastRuntimeBundle(
         mode=mode,
@@ -247,8 +267,8 @@ def build_prepared_runtime_bundle(
             x_node_id=query_from_node,
             mode=carrier_mode,
             reach=reach,
-            x_provider=x_provider,
-            from_node_arrival=from_node_arrival,
+            x_provider=carrier_x_provider,
+            from_node_arrival=carrier_from_node_arrival,
         ),
         subject_span=PreparedSubjectSpan(
             start_node_id=query_from_node,
@@ -782,6 +802,95 @@ def read_edge_cohort_params(
     return result
 
 
+def edge_has_semantic_latency(edge: Dict[str, Any]) -> bool:
+    """Return whether an edge contributes real timing structure."""
+    p_obj = edge.get('p') or {}
+    latency = p_obj.get('latency') or {}
+    posterior = latency.get('posterior') or {}
+
+    for value in (
+        latency.get('promoted_sigma'),
+        latency.get('sigma'),
+        latency.get('promoted_path_sigma'),
+        latency.get('path_sigma'),
+        posterior.get('sigma_mean'),
+        posterior.get('path_sigma_mean'),
+        latency.get('promoted_onset_delta_days'),
+        latency.get('onset_delta_days'),
+        latency.get('path_onset_delta_days'),
+        posterior.get('onset_delta_days'),
+        posterior.get('path_onset_delta_days'),
+    ):
+        if isinstance(value, (int, float)) and value > 0:
+            return True
+
+    params = read_edge_cohort_params(edge)
+    if params is None:
+        return False
+    return bool((params.get('sigma', 0.0) > 0) or (params.get('onset', 0.0) > 0))
+
+
+def has_semantic_upstream_latency(
+    graph: Dict[str, Any],
+    anchor_node_id: Optional[str],
+    query_from_node: Optional[str],
+) -> bool:
+    """Return whether the selected `A -> X` segment has timing structure."""
+    if not anchor_node_id or not query_from_node:
+        return False
+
+    ref_to_id: Dict[str, str] = {}
+    for node in graph.get('nodes', []):
+        node_id = str(node.get('id') or node.get('uuid') or '')
+        node_uuid = str(node.get('uuid') or node_id)
+        if not node_id and not node_uuid:
+            continue
+        canonical = node_id or node_uuid
+        ref_to_id[node_id] = canonical
+        ref_to_id[node_uuid] = canonical
+
+    anchor = ref_to_id.get(str(anchor_node_id), str(anchor_node_id))
+    target = ref_to_id.get(str(query_from_node), str(query_from_node))
+    if not anchor or not target or anchor == target:
+        return False
+
+    incoming_by_id: Dict[str, List[Tuple[str, Dict[str, Any]]]] = {}
+    for edge in graph.get('edges', []):
+        src = ref_to_id.get(
+            str(edge.get('from') or edge.get('from_node') or ''),
+            str(edge.get('from') or edge.get('from_node') or ''),
+        )
+        dst = ref_to_id.get(
+            str(edge.get('to') or edge.get('to_node') or ''),
+            str(edge.get('to') or edge.get('to_node') or ''),
+        )
+        incoming_by_id.setdefault(dst, []).append((src, edge))
+
+    cache: Dict[str, Tuple[bool, bool]] = {}
+
+    def _state(node_id: str) -> Tuple[bool, bool]:
+        if node_id in cache:
+            return cache[node_id]
+        if node_id == anchor:
+            cache[node_id] = (True, False)
+            return cache[node_id]
+
+        reachable = False
+        latent = False
+        for src, edge in incoming_by_id.get(node_id, []):
+            src_reachable, src_latent = _state(src)
+            if not src_reachable:
+                continue
+            reachable = True
+            if src_latent or edge_has_semantic_latency(edge):
+                latent = True
+        cache[node_id] = (reachable, latent)
+        return cache[node_id]
+
+    reachable, latent = _state(target)
+    return reachable and latent
+
+
 @dataclass
 class XProvider:
     """Upstream arrival state for the cohort maturity row builder.
@@ -892,7 +1001,11 @@ def build_x_provider_from_graph(
         if params:
             upstream_params_list.append(params)
 
-    enabled = reach > 0 and len(upstream_params_list) > 0
+    enabled = reach > 0 and has_semantic_upstream_latency(
+        graph,
+        anchor_node_id,
+        from_node_id,
+    )
     return XProvider(
         reach=reach,
         upstream_params_list=upstream_params_list,

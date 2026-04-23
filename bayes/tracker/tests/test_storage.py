@@ -41,9 +41,10 @@ def test_load_rejects_unknown_keys(tmp_yaml, sample_state):
 
 def test_load_rejects_missing_required_field(tmp_yaml, sample_state):
     save(tmp_yaml, sample_state)
-    # Corrupt the first run: drop its `why_this_run_exists`.
+    # Rename a required key so the YAML stays valid but the schema
+    # sees the field as missing (and an unknown key present).
     text = tmp_yaml.read_text(encoding="utf-8")
-    corrupted = text.replace("why_this_run_exists: First broad pass.\n", "")
+    corrupted = text.replace("why_this_run_exists:", "mystery_field:", 1)
     tmp_yaml.write_text(corrupted, encoding="utf-8")
     with pytest.raises(TrackerStorageError, match="schema validation"):
         load(tmp_yaml)

@@ -178,10 +178,31 @@ All CLI commands support:
 | `--no-cache` | Bypass disk bundle cache (re-parse all YAML from data repo) |
 | `--verbose` / `-v` | Show all internal debug logging |
 | `--session-log` | Show session log output |
+| `--bayes-vars <path>` | Inject a Bayesian posterior sidecar into the graph before the command runs — see below |
+| `--force-vars` | With `--bayes-vars`, bypass the rhat/ess quality gates so low-convergence posteriors still apply |
 
 **Environment**: `PYTHON_API_URL` overrides the Python backend URL (default: `http://localhost:9000`).
 
 **Output discipline**: Diagnostics go to stderr, data goes to stdout. Use `2>/dev/null` to suppress diagnostics when piping.
+
+### Bayesian sidebar vars injection
+
+`--bayes-vars <path>` lets you run any CLI command "as if" a particular set of Bayesian posteriors were committed to the graph — without actually touching parameter files on disk. The sidecar is loaded, the graph and parameter files are mutated in memory via the same `applyPatch` code path the browser uses when a webhook result lands, and the command runs against the enriched graph.
+
+Accepted sidecar shapes: a full `BayesPatchFile` (as committed by the Bayes webhook) or a raw worker result with `webhook_payload_edges` (as cached under `bayes/fixtures/*.bayes-vars.json`).
+
+```bash
+# Param pack with injected posteriors
+bash graph-ops/scripts/param-pack.sh my-graph "window(-30d:)" \
+  --bayes-vars bayes/fixtures/my-graph.bayes-vars.json
+
+# Analyse with a speculative posterior, gates bypassed
+bash graph-ops/scripts/analyse.sh my-graph "window(-30d:)" \
+  --type graph_overview \
+  --bayes-vars /tmp/experiment.bayes-vars.json --force-vars
+```
+
+When injected, the param pack emits the full Bayesian surface: `p.posterior.{alpha,beta,hdi_*,ess,rhat,fitted_at,fingerprint,provenance}`, `p.latency.{mu,sigma,promoted_t95,path_mu,…}`, and `p.latency.posterior.*`. Without `--bayes-vars`, the pack shows `p.mean` and the usual LAG display scalars only — the Bayesian enrichment blocks are absent.
 
 ---
 

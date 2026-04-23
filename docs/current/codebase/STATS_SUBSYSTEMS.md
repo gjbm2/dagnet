@@ -162,6 +162,8 @@ established by the earlier work packages.
 
 **Dispersion contract (doc 49)**: `p_sd` and `p_sd_epistemic` are both closed-form Beta σ, derived from the resolved α/β pair — **not MC stds of the conditioned draws**. Historically `p_sd` was `np.std(rate_draws[:, -1])` on the IS-conditioned set, which collapses to the epistemic posterior width regardless of how diffuse the sampling prior was (IS-conditioning on O(n) observed evidence dominates the prior). Closed form is the only way to expose predictive dispersion (Beta(α_pred, β_pred)) distinctly from epistemic (Beta(α, β)). The non-latency fallback (`_non_latency_rows` in cohort_forecast_v3.py) derives `p_sd_epistemic` from the conjugate-updated posterior and `p_sd` from the unupdated predictive α_pred/β_pred so that kappa-inflated width is not collapsed by query-window evidence. See docs 45b §Phase C, 47 §5g.
 
+**Naming note (doc 61)**: the `p_sd` / `p_sd_epistemic` pair on the CF response retains the doc 49 convention, which is **inverted** from the doc 61 convention used for latency dispersions (where bare name = epistemic, `_pred` suffix = predictive). On the CF response `p_sd` is predictive and `p_sd_epistemic` is epistemic; on the Bayes latency posterior and `model_vars.latency.mu_sd`, bare name is epistemic and `_pred` is predictive. The two conventions live at different architectural layers (CF inner kernel output vs Bayes-webhook posterior block) and have not been unified. Consumers reading `p_sd` from a CF response should treat it as predictive; consumers reading `mu_sd` from a posterior block should treat it as epistemic. A future extension of doc 61 to the CF-response layer would eliminate this asymmetry. See doc 61 §11 "Acceptance criteria" for the residual.
+
 **Outputs**: per-edge per-scenario `{p_mean, p_sd, p_sd_epistemic, completeness, completeness_sd, tau_max, n_rows, n_cohorts, conditioned}` returned via API response. Applied to graph via `conditionedForecastService.applyConditionedForecastToGraph` — writes `edge.p.blendedMean`, `edge.p.latency.completeness`, `edge.p.latency.completeness_stdev`, `edge.p.forecast.mean`. `p_sd` and `p_sd_epistemic` are returned on the response but **not persisted to graph edges** by the current projector. Consumers that need them (today: the funnel runner's whole-graph CF call) read directly from the CF response. Whole-graph persistence of the dispersion scalars is deferred; see doc 54 §8.2.
 
 **`conditioned` field**: boolean on every per-edge CF result. True when observed evidence was applied to the prior (the usual case when snapshot rows exist for the edge's regime in the query window); false when the result is the unconditioned prior unchanged (no rows found, or the resolver could not bind a regime). Set in both the closed-form path (`NonLatencyResult.conditioned` in `cohort_forecast_v3.py`, written as `(fe is not None and sum_x > 0)`) and the MC sweep path (`bool(sweep.n_cohorts_conditioned)`). Consumers use it diagnostically — it surfaces "no evidence applied" cases that would otherwise be invisible because the prior-mean and unconditioned-mean coincide when the prior is well-calibrated. The funnel runner consumes `conditioned` for logging but does not branch on it: the completeness-weighted variance mixture already widens bands correctly when completeness=0.
@@ -368,6 +370,28 @@ When you read a field, know who wrote it:
 - `edge.p.latency.completeness` → BE CF pass when landed; else topo pass's CDF eval
 - `edge.p.latency.completeness_stdev` → BE CF pass
 - `edge.p.forecast.mean` → BE CF pass (same value as `p.mean` when CF landed); legacy field name retained
+
+### Dispersion-field naming (doc 61)
+
+Dispersion fields on the Bayes posterior block and on `model_vars[bayesian].latency` follow the doc 61 convention: **bare field name is always epistemic; `_pred` suffix is always predictive**. The same rule applies on the patch-file slice entries emitted by the worker (`posterior.slices[<key>].mu_sd` / `mu_sd_pred`).
+
+| Field | Flavour | Populated when |
+|---|---|---|
+| `mu_sd` | Epistemic (posterior SD of μ from MCMC trace) | Always (Bayes or heuristic) |
+| `mu_sd_pred` | Predictive (kappa_lat-inflated via `_predictive_mu_sd`) | Only when `kappa_lat` is fitted; absent otherwise |
+| `sigma_sd`, `onset_sd` | Epistemic | Always — no predictive mechanism in the current model |
+| `path_mu_sd` | Epistemic (posterior SD of path μ) | When cohort-level latency is fitted |
+| `path_mu_sd_pred` | Predictive | Not populated in the current model (no path-level kappa_lat) |
+| `path_sigma_sd`, `path_onset_sd` | Epistemic | When cohort-level latency is fitted |
+
+**Consumer intent split**:
+- **Reporting surfaces** (BayesPosteriorCard text ±, ModelRateChart mini-chart, cohort_maturity_v3 "model belief" overlay curves) read the bare (epistemic) slot.
+- **Forecasting surfaces** (cohort_forecast_v3 fan chart, conditioned-forecast MC sweep via `build_span_params`, `compute_forecast_trajectory`) read the `_pred` slot.
+- Where `_pred` is absent (no kappa_lat fitted, or pre-migration data), forecast consumers fall back to the bare slot via `ResolvedLatency.mu_sd_predictive` — correct when predictive and epistemic coincide.
+
+**Residual asymmetry**: the CF response carries `p_sd` (predictive, closed-form Beta σ from α_pred/β_pred) and `p_sd_epistemic` (epistemic, from α/β). This retains the doc 49 convention — inverted relative to doc 61 — and has not been unified. See §3.4 dispersion-contract note.
+
+**Probability fields**: `alpha`, `beta`, `hdi_lower`, `hdi_upper` are epistemic; `alpha_pred`, `beta_pred`, `hdi_lower_pred`, `hdi_upper_pred` are predictive. This convention predates doc 61 (set by doc 49 §A.6) and is consistent with doc 61's rule.
 
 If you need to know *which specific pass* wrote the current value of a flat field, trace through the promotion layer (`modelVarsResolution.ts`) and the session log entries for that fetch generation (`BE_TOPO_PASS`, `CONDITIONED_FORECAST`, `FE_BE_PARITY`).
 

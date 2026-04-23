@@ -11,10 +11,11 @@ competing write to clobber it and re-trigger MCMC.
 Contract covered here:
   - Fingerprint semantics (invalidates when truth or any param file
     changes; stable otherwise).
-  - Sidecar save/load round-trip; load is fingerprint-guarded.
-  - Injection into a graph dict is idempotent (replaces, never
-    duplicates, existing bayesian entries) and re-promotes SDs into
-    the latency block for BE-only consumers that read promoted fields.
+  - Sidecar save/load round-trip for the raw worker payload; load is
+    schema- and fingerprint-guarded.
+  - The sidecar wrapper owns only sidecar metadata
+    (`schema_version`, `generated_at`, `sidecar_fingerprint`) and does
+    not rewrite the worker payload.
 
 Tests are written before `bayes/sidecar.py` exists; they must fail at
 import until the module is implemented. Do not mock the module under
@@ -113,9 +114,10 @@ class TestFingerprint:
 # ─── Sidecar save / load round-trip ────────────────────────────────────
 
 class TestSidecarIO:
-    """save_sidecar writes JSON with schema_version + fingerprint +
-    generated_at + edges. load_sidecar re-reads it but returns None
-    when the current fingerprint differs from the stored one."""
+    """save_sidecar writes JSON with schema_version +
+    sidecar_fingerprint + generated_at plus the raw worker payload.
+    load_sidecar re-reads it but returns None when the current
+    fingerprint differs from the stored one."""
 
     def _fp(self, truth_sha="abc123", params=None):
         return {
@@ -123,32 +125,56 @@ class TestSidecarIO:
             "param_file_hashes": params or {"simple-a-to-b": "p1hash"},
         }
 
-    def test_round_trip_preserves_edges(self, tmp_path):
+    def _payload(self):
+        return {
+            "job_id": "sidecar-test-job",
+            "fitted_at": "22-Apr-26 14:30:00",
+            "fingerprint": "worker-fingerprint-123",
+            "model_version": 1,
+            "quality": {"max_rhat": 1.001, "min_ess": 1200, "converged_pct": 100},
+            "skipped": [],
+            "webhook_payload_edges": [
+                {
+                    "param_id": "simple-a-to-b",
+                    "file_path": "parameters/simple-a-to-b.yaml",
+                    "slices": {
+                        "window()": {"alpha": 45.2, "beta": 5.1, "mu_mean": 2.3},
+                        "cohort()": {"alpha": 44.8, "beta": 5.3, "mu_mean": 2.8},
+                    },
+                }
+            ],
+        }
+
+    def test_round_trip_preserves_payload(self, tmp_path):
         from bayes.sidecar import save_sidecar, load_sidecar
         path = tmp_path / "s.json"
         fp = self._fp()
-        edges = {
-            "edge-1": {
-                "source": "bayesian",
-                "source_at": "22-Apr-26 14:30:00",
-                "probability": {"mean": 0.7, "stdev": 0.08},
-                "latency": {"mu": 2.3, "sigma": 0.52, "mu_sd": 0.08},
-                "quality": {"rhat": 1.001, "gate_passed": True},
-            }
-        }
-        save_sidecar(str(path), fp, edges)
+        payload = self._payload()
+        save_sidecar(str(path), fp, payload)
         loaded = load_sidecar(str(path), expected_fingerprint=fp)
-        assert loaded == edges
+        assert loaded is not None
+        assert loaded["job_id"] == payload["job_id"]
+        assert loaded["fingerprint"] == payload["fingerprint"]
+        assert loaded["webhook_payload_edges"] == payload["webhook_payload_edges"]
 
     def test_saved_file_is_valid_json_with_schema_fields(self, tmp_path):
         from bayes.sidecar import save_sidecar
         path = tmp_path / "s.json"
-        save_sidecar(str(path), self._fp(), {"edge-1": {"source": "bayesian"}})
+        save_sidecar(str(path), self._fp(), self._payload())
         data = json.loads(path.read_text())
-        assert data.get("schema_version", 0) >= 1
-        assert "fingerprint" in data
-        assert "edges" in data
+        assert data.get("schema_version", 0) >= 2
+        assert "sidecar_fingerprint" in data
         assert "generated_at" in data
+        assert "webhook_payload_edges" in data
+
+    def test_worker_fingerprint_is_not_overwritten_by_sidecar_fingerprint(self, tmp_path):
+        from bayes.sidecar import save_sidecar
+        path = tmp_path / "s.json"
+        payload = self._payload()
+        save_sidecar(str(path), self._fp(truth_sha="truth-hash"), payload)
+        data = json.loads(path.read_text())
+        assert data["sidecar_fingerprint"]["truth_sha256"] == "truth-hash"
+        assert data["fingerprint"] == "worker-fingerprint-123"
 
     def test_load_returns_none_when_file_missing(self, tmp_path):
         from bayes.sidecar import load_sidecar
@@ -161,7 +187,7 @@ class TestSidecarIO:
     def test_load_returns_none_when_fingerprint_mismatches(self, tmp_path):
         from bayes.sidecar import save_sidecar, load_sidecar
         path = tmp_path / "s.json"
-        save_sidecar(str(path), self._fp(truth_sha="old"), {"edge-1": {}})
+        save_sidecar(str(path), self._fp(truth_sha="old"), self._payload())
         result = load_sidecar(
             str(path),
             expected_fingerprint=self._fp(truth_sha="new"),
@@ -173,12 +199,23 @@ class TestSidecarIO:
         path = tmp_path / "s.json"
         save_sidecar(str(path),
                      self._fp(params={"simple-a-to-b": "old_hash"}),
-                     {"edge-1": {}})
+                     self._payload())
         result = load_sidecar(
             str(path),
             expected_fingerprint=self._fp(params={"simple-a-to-b": "new_hash"}),
         )
         assert result is None
+
+    def test_load_returns_none_when_schema_version_is_old(self, tmp_path):
+        from bayes.sidecar import load_sidecar
+        path = tmp_path / "old.json"
+        path.write_text(json.dumps({
+            "schema_version": 1,
+            "generated_at": "22-Apr-26 15:00:00",
+            "sidecar_fingerprint": self._fp(),
+            "webhook_payload_edges": [],
+        }))
+        assert load_sidecar(str(path), expected_fingerprint=self._fp()) is None
 
     def test_load_raises_on_malformed_json(self, tmp_path):
         from bayes.sidecar import load_sidecar
@@ -186,132 +223,3 @@ class TestSidecarIO:
         path.write_text("{ this is not json")
         with pytest.raises((ValueError, json.JSONDecodeError)):
             load_sidecar(str(path), expected_fingerprint=self._fp())
-
-
-# ─── Injection into graph dict ─────────────────────────────────────────
-
-class TestInjection:
-    """inject_bayesian(graph, edges) mutates graph in place. Appends the
-    sidecar's bayesian entry to each matching edge's model_vars array,
-    replacing any pre-existing bayesian entries; re-promotes SDs into
-    edge.p.latency.promoted_* fields (mirrors FE applyPromotion so BE-only
-    consumers — span_adapter, v2 handler — find the SDs they expect)."""
-
-    def _graph(self):
-        return {
-            "edges": [
-                {
-                    "uuid": "edge-1",
-                    "p": {
-                        "latency": {"mu": 2.3, "sigma": 0.5, "onset_delta_days": 1},
-                        "model_vars": [
-                            {"source": "analytic",
-                             "latency": {"mu": 2.3, "sigma": 0.5, "mu_sd": 0.02}}
-                        ],
-                    },
-                },
-                {
-                    "uuid": "edge-2",
-                    "p": {
-                        "latency": {"mu": 2.5, "sigma": 0.6, "onset_delta_days": 2},
-                        "model_vars": [],
-                    },
-                },
-            ],
-        }
-
-    def _bayes_entry(self, **over):
-        base = {
-            "source": "bayesian",
-            "source_at": "22-Apr-26 14:30:00",
-            "probability": {"mean": 0.70, "stdev": 0.08},
-            "latency": {
-                "mu": 2.3, "sigma": 0.52, "t95": 24.5, "onset_delta_days": 1.03,
-                "mu_sd": 0.08, "sigma_sd": 0.01, "onset_sd": 0.07,
-                "onset_mu_corr": -0.8,
-            },
-            "quality": {"rhat": 1.001, "gate_passed": True},
-        }
-        base.update(over)
-        return base
-
-    def test_appends_bayesian_entry_to_model_vars(self):
-        from bayes.sidecar import inject_bayesian
-        graph = self._graph()
-        inject_bayesian(graph, {"edge-1": self._bayes_entry()})
-        sources = [m.get("source") for m in graph["edges"][0]["p"]["model_vars"]]
-        assert sources.count("analytic") == 1
-        assert sources.count("bayesian") == 1
-
-    def test_replaces_preexisting_bayesian_entry(self):
-        from bayes.sidecar import inject_bayesian
-        graph = self._graph()
-        # Seed a stale bayesian entry directly on the graph.
-        graph["edges"][0]["p"]["model_vars"].append({
-            "source": "bayesian",
-            "latency": {"mu_sd": 0.99},  # distinctive stale value
-        })
-        inject_bayesian(graph, {"edge-1": self._bayes_entry()})
-        bayes = [m for m in graph["edges"][0]["p"]["model_vars"]
-                 if m.get("source") == "bayesian"]
-        assert len(bayes) == 1
-        assert bayes[0]["latency"]["mu_sd"] == 0.08
-
-    def test_promotes_sds_into_latency_block(self):
-        from bayes.sidecar import inject_bayesian
-        graph = self._graph()
-        inject_bayesian(graph, {"edge-1": self._bayes_entry()})
-        lat = graph["edges"][0]["p"]["latency"]
-        assert lat.get("promoted_mu_sd") == pytest.approx(0.08)
-        assert lat.get("promoted_sigma_sd") == pytest.approx(0.01)
-        assert lat.get("promoted_onset_sd") == pytest.approx(0.07)
-        assert lat.get("promoted_onset_mu_corr") == pytest.approx(-0.8)
-        assert lat.get("promoted_t95") == pytest.approx(24.5)
-
-    def test_promotes_path_sds_when_present(self):
-        from bayes.sidecar import inject_bayesian
-        graph = self._graph()
-        entry = self._bayes_entry()
-        entry["latency"].update({
-            "path_mu_sd": 0.09, "path_sigma_sd": 0.02,
-            "path_onset_sd": 0.10,
-        })
-        inject_bayesian(graph, {"edge-1": entry})
-        lat = graph["edges"][0]["p"]["latency"]
-        assert lat.get("promoted_path_mu_sd") == pytest.approx(0.09)
-        assert lat.get("promoted_path_sigma_sd") == pytest.approx(0.02)
-        assert lat.get("promoted_path_onset_sd") == pytest.approx(0.10)
-
-    def test_leaves_edges_not_in_sidecar_untouched(self):
-        from bayes.sidecar import inject_bayesian
-        graph = self._graph()
-        before = json.dumps(graph["edges"][1], sort_keys=True)
-        inject_bayesian(graph, {"edge-1": self._bayes_entry()})
-        after = json.dumps(graph["edges"][1], sort_keys=True)
-        assert before == after
-
-    def test_tolerates_sidecar_entries_for_missing_edges(self):
-        from bayes.sidecar import inject_bayesian
-        graph = self._graph()
-        # Should not raise when sidecar contains an edge not in graph.
-        inject_bayesian(graph, {"unknown-edge": self._bayes_entry()})
-
-    def test_tolerates_edges_without_model_vars_list(self):
-        """An edge that has `p` but no `model_vars` list should get one
-        initialised to `[bayesian_entry]`."""
-        from bayes.sidecar import inject_bayesian
-        graph = {"edges": [{"uuid": "edge-x", "p": {"latency": {"mu": 1}}}]}
-        inject_bayesian(graph, {"edge-x": self._bayes_entry()})
-        assert graph["edges"][0]["p"]["model_vars"][0]["source"] == "bayesian"
-
-    def test_multiple_edges_injected_independently(self):
-        from bayes.sidecar import inject_bayesian
-        graph = self._graph()
-        sidecar = {
-            "edge-1": self._bayes_entry(),
-            "edge-2": self._bayes_entry(),
-        }
-        inject_bayesian(graph, sidecar)
-        for e in graph["edges"]:
-            sources = [m.get("source") for m in e["p"]["model_vars"]]
-            assert "bayesian" in sources

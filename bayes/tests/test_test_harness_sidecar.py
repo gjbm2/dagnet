@@ -9,9 +9,9 @@ write entirely. This avoids the graph-file-clobber flip-flop that makes
 every pytest session re-run MCMC.
 
 Contract covered here:
-  - The writer helper `_write_bayes_sidecar_from_result` transforms the
-    webhook_payload_edges shape into the sidecar's edges dict and writes
-    it via `bayes.sidecar.save_sidecar` using the supplied fingerprint.
+  - The writer helper `_write_bayes_sidecar_from_result` preserves the
+    raw worker payload shape in the sidecar and writes it via
+    `bayes.sidecar.save_sidecar` using the supplied fingerprint.
   - CLI `--sidecar-out` parses cleanly.
   - When `--sidecar-out` is set, the FE CLI apply-patch subprocess is
     NOT invoked; graph file is NOT written.
@@ -30,6 +30,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -52,28 +53,57 @@ def _sample_webhook_result():
         "skipped": [],
         "webhook_payload_edges": [
             {
-                "edge_uuid": "edge-1",
                 "param_id": "simple-a-to-b",
-                "probability": {"mean": 0.70, "stdev": 0.08},
-                "latency": {
-                    "mu": 2.3, "sigma": 0.52, "t95": 24.5,
-                    "onset_delta_days": 1.03,
-                    "mu_sd": 0.08, "sigma_sd": 0.01,
-                    "onset_sd": 0.07, "onset_mu_corr": -0.8,
+                "file_path": "parameters/simple-a-to-b.yaml",
+                "slices": {
+                    "window()": {
+                        "alpha": 70.0,
+                        "beta": 30.0,
+                        "mu_mean": 2.3,
+                        "mu_sd": 0.08,
+                        "sigma_mean": 0.52,
+                        "sigma_sd": 0.01,
+                        "onset_mean": 1.03,
+                        "onset_sd": 0.07,
+                        "onset_mu_corr": -0.8,
+                        "ess": 15000,
+                        "rhat": 1.001,
+                    },
+                    "cohort()": {
+                        "alpha": 68.0,
+                        "beta": 32.0,
+                        "mu_mean": 2.7,
+                        "sigma_mean": 0.60,
+                        "onset_mean": 1.10,
+                        "ess": 12000,
+                        "rhat": 1.002,
+                    },
                 },
-                "quality": {"gate_passed": True, "rhat": 1.001},
+                "prior_tier": "uninformative",
+                "evidence_grade": 3,
+                "divergences": 0,
             },
             {
-                "edge_uuid": "edge-2",
                 "param_id": "simple-b-to-c",
-                "probability": {"mean": 0.60, "stdev": 0.09},
-                "latency": {
-                    "mu": 2.5, "sigma": 0.61, "t95": 28.0,
-                    "onset_delta_days": 1.97,
-                    "mu_sd": 0.09, "sigma_sd": 0.02,
-                    "onset_sd": 0.10, "onset_mu_corr": -0.7,
+                "file_path": "parameters/simple-b-to-c.yaml",
+                "slices": {
+                    "window()": {
+                        "alpha": 60.0,
+                        "beta": 40.0,
+                        "mu_mean": 2.5,
+                        "mu_sd": 0.09,
+                        "sigma_mean": 0.61,
+                        "sigma_sd": 0.02,
+                        "onset_mean": 1.97,
+                        "onset_sd": 0.10,
+                        "onset_mu_corr": -0.7,
+                        "ess": 14000,
+                        "rhat": 1.002,
+                    },
                 },
-                "quality": {"gate_passed": True, "rhat": 1.002},
+                "prior_tier": "uninformative",
+                "evidence_grade": 3,
+                "divergences": 0,
             },
         ],
     }
@@ -89,12 +119,85 @@ def _sample_fingerprint():
     }
 
 
+# ─── Graph-name normalisation / fingerprint inputs ────────────────────
+
+class TestFingerprintInputResolution:
+    """FE payloads use `graph_id` (`graph-synth-x`) while synth files on
+    disk use the bare graph stem (`synth-x`). The harness must normalise
+    before looking up truth files or graph JSON paths."""
+
+    def test_canonical_graph_name_strips_graph_prefix(self):
+        from bayes.test_harness import _canonical_graph_name
+        assert _canonical_graph_name("graph-synth-simple-abc") == "synth-simple-abc"
+        assert _canonical_graph_name("synth-simple-abc") == "synth-simple-abc"
+
+    def test_sidecar_fingerprint_resolution_accepts_graph_id_prefix(self, tmp_path):
+        from bayes.test_harness import _resolve_sidecar_fingerprint_inputs
+
+        graph_name = "synth-sidecar-prefix-unit"
+        repo = tmp_path / "fake-data-repo"
+        (repo / "graphs").mkdir(parents=True)
+        (repo / "parameters").mkdir()
+
+        truth = repo / "graphs" / f"{graph_name}.truth.yaml"
+        truth.write_text("simulation:\n  expected_sample_seconds: 60\n")
+        param = repo / "parameters" / "simple-a-to-b.yaml"
+        param.write_text("id: simple-a-to-b\nvalues: []\n")
+        graph_path = repo / "graphs" / f"{graph_name}.json"
+        graph_path.write_text("{}")
+
+        truth_path, param_paths = _resolve_sidecar_fingerprint_inputs(
+            f"graph-{graph_name}",
+            str(graph_path),
+            str(repo),
+            {"edges": [{"p": {"id": "simple-a-to-b"}}]},
+        )
+
+        assert truth_path == str(truth)
+        assert param_paths == [str(param)]
+
+    def test_payload_graph_paths_derive_repo_from_graph_path(self, tmp_path):
+        from bayes.test_harness import _resolve_payload_graph_paths
+
+        repo = tmp_path / "fake-data-repo"
+        graph_path = repo / "graphs" / "synth-simple-abc.json"
+        graph_path.parent.mkdir(parents=True)
+        graph_path.write_text("{}")
+
+        resolved_graph_path, data_repo_path = _resolve_payload_graph_paths(
+            SimpleNamespace(graph_path=str(graph_path)),
+            "synth-simple-abc",
+        )
+        assert resolved_graph_path == str(graph_path)
+        assert data_repo_path == str(repo)
+
+    def test_payload_graph_paths_strip_graph_prefix_for_repo_lookup(
+        self, tmp_path, monkeypatch
+    ):
+        from bayes import test_harness as th
+
+        repo = tmp_path / "fake-data-repo"
+        monkeypatch.setattr(
+            th,
+            "_read_private_repos_conf",
+            lambda: {"DATA_REPO_DIR": os.path.relpath(str(repo), th.REPO_ROOT)},
+            raising=True,
+        )
+
+        resolved_graph_path, data_repo_path = th._resolve_payload_graph_paths(
+            SimpleNamespace(graph_path=None),
+            th._canonical_graph_name("graph-synth-simple-abc"),
+        )
+        assert resolved_graph_path.endswith("/graphs/synth-simple-abc.json")
+        assert os.path.normpath(data_repo_path) == os.path.normpath(str(repo))
+
+
 # ─── Sidecar writer helper ────────────────────────────────────────────
 
 class TestSidecarWriter:
     """_write_bayes_sidecar_from_result(result, sidecar_path, fingerprint)
-    reshapes webhook_payload_edges into the sidecar's edges dict and
-    persists it. Unit-level — no MCMC, no subprocess."""
+    preserves the raw worker payload and persists it. Unit-level — no
+    MCMC, no subprocess."""
 
     def test_writes_file_at_target_path(self, tmp_path):
         from bayes.test_harness import _write_bayes_sidecar_from_result
@@ -104,36 +207,40 @@ class TestSidecarWriter:
         )
         assert out.exists()
 
-    def test_sidecar_keyed_by_edge_uuid(self, tmp_path):
+    def test_sidecar_preserves_webhook_payload_edges_list(self, tmp_path):
         from bayes.test_harness import _write_bayes_sidecar_from_result
         out = tmp_path / "s.json"
         _write_bayes_sidecar_from_result(
             _sample_webhook_result(), str(out), _sample_fingerprint()
         )
         data = json.loads(out.read_text())
-        assert set(data["edges"].keys()) == {"edge-1", "edge-2"}
+        assert [e["param_id"] for e in data["webhook_payload_edges"]] == [
+            "simple-a-to-b",
+            "simple-b-to-c",
+        ]
 
-    def test_each_edge_entry_has_bayesian_source(self, tmp_path):
+    def test_worker_metadata_copied_through(self, tmp_path):
         from bayes.test_harness import _write_bayes_sidecar_from_result
         out = tmp_path / "s.json"
         _write_bayes_sidecar_from_result(
             _sample_webhook_result(), str(out), _sample_fingerprint()
         )
         data = json.loads(out.read_text())
-        for entry in data["edges"].values():
-            assert entry["source"] == "bayesian"
+        assert data["job_id"] == "harness-enrich-test"
+        assert data["fitted_at"] == "22-Apr-26 14:30:00"
+        assert data["fingerprint"] == "abc123"
 
-    def test_latency_and_probability_copied_through(self, tmp_path):
+    def test_slice_payload_copied_through(self, tmp_path):
         from bayes.test_harness import _write_bayes_sidecar_from_result
         out = tmp_path / "s.json"
         _write_bayes_sidecar_from_result(
             _sample_webhook_result(), str(out), _sample_fingerprint()
         )
         data = json.loads(out.read_text())
-        e1 = data["edges"]["edge-1"]
-        assert e1["latency"]["mu"] == pytest.approx(2.3)
-        assert e1["latency"]["mu_sd"] == pytest.approx(0.08)
-        assert e1["probability"]["mean"] == pytest.approx(0.70)
+        e1 = data["webhook_payload_edges"][0]
+        assert e1["slices"]["window()"]["mu_mean"] == pytest.approx(2.3)
+        assert e1["slices"]["window()"]["mu_sd"] == pytest.approx(0.08)
+        assert e1["slices"]["cohort()"]["mu_mean"] == pytest.approx(2.7)
 
     def test_fingerprint_persisted(self, tmp_path):
         from bayes.test_harness import _write_bayes_sidecar_from_result
@@ -143,7 +250,7 @@ class TestSidecarWriter:
             _sample_webhook_result(), str(out), fp
         )
         data = json.loads(out.read_text())
-        assert data["fingerprint"] == fp
+        assert data["sidecar_fingerprint"] == fp
 
     def test_sidecar_round_trips_through_load(self, tmp_path):
         """Writer output must be loadable via bayes.sidecar.load_sidecar —
@@ -155,9 +262,20 @@ class TestSidecarWriter:
         _write_bayes_sidecar_from_result(
             _sample_webhook_result(), str(out), fp
         )
-        edges = load_sidecar(str(out), expected_fingerprint=fp)
-        assert edges is not None
-        assert "edge-1" in edges
+        payload = load_sidecar(str(out), expected_fingerprint=fp)
+        assert payload is not None
+        assert payload["webhook_payload_edges"][0]["param_id"] == "simple-a-to-b"
+
+    def test_raises_when_graph_param_ids_do_not_match_payload(self, tmp_path):
+        from bayes.test_harness import _write_bayes_sidecar_from_result
+        out = tmp_path / "s.json"
+        with pytest.raises(RuntimeError, match="param_id mismatch"):
+            _write_bayes_sidecar_from_result(
+                _sample_webhook_result(),
+                str(out),
+                _sample_fingerprint(),
+                graph_data={"edges": [{"p": {"id": "totally-different-param"}}]},
+            )
 
     def test_raises_when_webhook_payload_empty(self, tmp_path):
         """Empty webhook_payload_edges means MCMC produced no valid
@@ -207,7 +325,14 @@ class TestCliFlag:
             called["sidecar_write"] = True
             # Also create the file so downstream file-existence asserts pass.
             with open(path, "w") as f:
-                json.dump({"edges": {}}, f)
+                json.dump(
+                    {
+                        "schema_version": 2,
+                        "sidecar_fingerprint": fingerprint,
+                        "webhook_payload_edges": [],
+                    },
+                    f,
+                )
 
         # Invoke the dispatch helper directly with `sidecar_out` set.
         # Contract: a helper exists that, given `args` and `result`, picks

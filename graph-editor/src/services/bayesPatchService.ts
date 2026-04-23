@@ -27,11 +27,21 @@ console.log('[bayesPatchService] Module loaded');
 const RHAT_GATE = 1.1;
 const ESS_GATE = 100;
 
+// CLI-only override: when true, meetsQualityGate returns true unconditionally.
+// Used by `--force-vars` so the CLI can inject low-quality posteriors for
+// experimentation. Production (browser) callers never touch this.
+let qualityGateOverride = false;
+
+export function setQualityGateOverride(enabled: boolean): void {
+  qualityGateOverride = enabled;
+}
+
 function meetsQualityGate(
   prob: { ess: number; rhat: number | null; provenance: string },
   divergences: number,
   latency?: { ess?: number; rhat?: number | null } | null,
 ): boolean {
+  if (qualityGateOverride) return true;
   if (prob.rhat != null && prob.rhat > RHAT_GATE) return false;
   if (divergences > 0 && prob.ess < ESS_GATE) return false;
   // Latency posterior must also pass if present — a converged probability
@@ -41,6 +51,33 @@ function meetsQualityGate(
     if (latency.ess != null && latency.ess < ESS_GATE) return false;
   }
   return true;
+}
+
+/**
+ * Normalise a patch file into BayesPatchFile shape.
+ *
+ * The on-disk artefact may be either:
+ *   - A full `BayesPatchFile` (committed by the webhook)
+ *   - A raw worker result with `webhook_payload_edges` (sidecar / cached MCMC)
+ *
+ * This helper accepts either and returns a `BayesPatchFile`. The `graphId`
+ * is always overridden so the patch binds to the locally-loaded graph.
+ */
+export function wrapPatchIfRaw(patchData: any, graphId: string): BayesPatchFile {
+  if (patchData?.webhook_payload_edges) {
+    return {
+      job_id: patchData.job_id || patchData._job_id || 'cli-enrich',
+      graph_id: graphId,
+      graph_file_path: `${graphId}.yaml`,
+      fitted_at: patchData.fitted_at || new Date().toISOString(),
+      fingerprint: patchData.fingerprint || '',
+      model_version: patchData.model_version ?? 1,
+      quality: patchData.quality || { max_rhat: null, min_ess: null, converged_pct: 0 },
+      edges: patchData.webhook_payload_edges,
+      skipped: patchData.skipped || [],
+    };
+  }
+  return { ...patchData, graph_id: graphId };
 }
 
 // --- Direct fetch + apply + cascade (happy path: browser is open) ---

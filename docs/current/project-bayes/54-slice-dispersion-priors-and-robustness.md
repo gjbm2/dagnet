@@ -3,6 +3,51 @@
 **Date**: 20-Apr-26
 **Status**: Discussion only — no implementation proposed yet
 
+## Note — 22-Apr-26 (post-discussion findings)
+
+Three observations have been recorded since this discussion was
+written and should be considered before any of the §10 sequencing is
+acted on.
+
+The §10 step zero is stale. Independent dimensions are already wired
+end-to-end. The frontend computes the independent-dimension list from
+`ctx.independent` in
+[candidateRegimeService.ts:430-439](graph-editor/src/services/candidateRegimeService.ts#L430-L439),
+passes it as `independent_dimensions` in the Bayes payload from
+[useBayesTrigger.ts:498](graph-editor/src/hooks/useBayesTrigger.ts#L498),
+and the compiler already skips the shared τ and gives each such slice
+a direct prior in [model.py](bayes/compiler/model.py) — see the
+`ev.slice_groups[_dk].independent` branches around lines 1514, 1558,
+1585, 1617 and 1724, the explicit
+`_tau_slice_by_dim[_dk] = None  # no tau for independent dims` at
+line 1515, and the all-independent assembly path at lines 1746-1785.
+The remaining work is adoption and audit of production context
+definitions, not implementation.
+
+Per-slice PPC is useful but it is not the rollout gate for the
+problem this doc raises. The calibration path in
+[calibration.py](bayes/compiler/calibration.py),
+[worker.py](bayes/worker.py) and
+[inference.py](bayes/compiler/inference.py) measures predictive
+coverage — whether observations fall inside the predictive interval.
+The concern in §1 is parameter-interval calibration under
+exchangeability failure: whether the true `p_slice` lies inside the
+reported posterior interval. The two are related but not identical,
+and §11 already flags this distinction as the unresolved question.
+Step one as written extends the wrong metric for the question being
+asked.
+
+Most of the experiment harness named in §10 step two already exists.
+[param_recovery.py](bayes/param_recovery.py) reads a `.truth.yaml`
+sidecar, parses per-slice posteriors via `_parse_slice_posteriors`,
+and uses the `recovery_slices` module
+(`build_slice_truth_baselines`, `match_truth_edge_key`) to compare
+posteriors to ground truth on a per-slice basis.
+[worker.py](bayes/worker.py) already accepts `calibration_truth` and
+`slice_truth_baselines` from settings (see around lines 987-1004 and
+1031-1036). The right move is to extend the existing
+parameter-recovery sweep, not to build a new harness from scratch.
+
 ## 1. Problem Statement
 
 When we fit per-context slices under partial pooling, the reported

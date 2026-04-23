@@ -840,6 +840,110 @@ def test_surprise_gauge_mixed_ids_match_same_semantic_graph(
     assert same_c.get('reason') == mixed_c.get('reason')
 
 
+def test_cohort_maturity_rows_v3_identity_drift():
+    """Atom 8 — `id` vs `uuid` drift check on the v3 row builder.
+
+    Construct the same semantic graph twice. In variant A every
+    node's `id` field equals its `uuid`. In variant B the `id` is
+    human-readable and differs from the `uuid`. Run
+    `compute_cohort_maturity_rows_v3` on both without mocking
+    anything, and assert the maturity rows are identical.
+
+    No mocks of subject resolution, forecast logic, or snapshot
+    selection — this is the Family B identity-drift contract that
+    the existing surprise_gauge mixed-id test cannot assert because
+    it monkeypatches `resolve_model_params` and
+    `prepare_forecast_subject_group`.
+    """
+    frames = _frames()
+    resolved = _query_scoped_latency_resolved()
+
+    common_edge = {
+        'uuid': 'edge-1',
+        'from': 'uuid-a',
+        'to': 'uuid-b',
+        'p': {
+            'forecast': {'mean': 0.2},
+            'latency': {
+                'latency_parameter': True,
+                'mu': 2.3,
+                'sigma': 0.5,
+                'onset_delta_days': 0.0,
+                't95': 23.0,
+            },
+        },
+    }
+
+    graph_same_identity = {
+        'nodes': [
+            {'id': 'uuid-a', 'uuid': 'uuid-a', 'entry': {'is_start': True}},
+            {'id': 'uuid-b', 'uuid': 'uuid-b'},
+        ],
+        'edges': [dict(common_edge)],
+    }
+
+    graph_mixed_identity = {
+        'nodes': [
+            {'id': 'human-a', 'uuid': 'uuid-a', 'entry': {'is_start': True}},
+            {'id': 'human-b', 'uuid': 'uuid-b'},
+        ],
+        'edges': [dict(common_edge)],
+    }
+
+    rows_same = compute_cohort_maturity_rows_v3(
+        frames=frames,
+        graph=graph_same_identity,
+        target_edge_id='edge-1',
+        query_from_node='uuid-a',
+        query_to_node='uuid-b',
+        anchor_from='2026-03-25',
+        anchor_to='2026-03-25',
+        sweep_to='2026-04-05',
+        is_window=True,
+        resolved_override=resolved,
+    )
+
+    rows_mixed = compute_cohort_maturity_rows_v3(
+        frames=frames,
+        graph=graph_mixed_identity,
+        target_edge_id='edge-1',
+        query_from_node='human-a',
+        query_to_node='human-b',
+        anchor_from='2026-03-25',
+        anchor_to='2026-03-25',
+        sweep_to='2026-04-05',
+        is_window=True,
+        resolved_override=resolved,
+    )
+
+    assert len(rows_same) == len(rows_mixed), (
+        f"Row count differs between identifier variants: "
+        f"same={len(rows_same)} mixed={len(rows_mixed)}"
+    )
+    assert rows_same, "v3 returned no rows for same-identity variant"
+
+    compared_fields = (
+        'tau_days',
+        'evidence_x',
+        'evidence_y',
+        'midpoint',
+        'rate',
+        'p_infinity_mean',
+        'completeness',
+    )
+    for idx, (rs, rm) in enumerate(zip(rows_same, rows_mixed)):
+        for key in compared_fields:
+            vs = rs.get(key)
+            vm = rm.get(key)
+            if vs is None and vm is None:
+                continue
+            assert vs == pytest.approx(vm), (
+                f"Identity drift at row {idx} "
+                f"(tau={rs.get('tau_days')}), field '{key}': "
+                f"same-identity={vs} mixed-identity={vm}"
+            )
+
+
 def test_daily_conversions_degraded_branch_reuses_closed_form_beta_surface(
     monkeypatch: pytest.MonkeyPatch,
 ):

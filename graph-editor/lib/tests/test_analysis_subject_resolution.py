@@ -27,6 +27,7 @@ from analysis_subject_resolution import (
     ResolvedAnalysisSubject,
     ANALYSIS_TYPE_SCOPE_RULES,
 )
+from runner.forecast_preparation import resolve_forecast_subjects
 from snapshot_regime_selection import CandidateRegime
 
 
@@ -385,6 +386,31 @@ class TestFunnelPathScopeRule:
 
         assert result.sweep_from == '2025-10-01'
         assert result.sweep_to == '2025-12-15'
+
+    def test_explicit_cohort_anchor_survives_subject_synthesis(self):
+        graph = _make_graph(
+            ['A', 'B', 'C'],
+            [('A', 'B', 'e1'), ('B', 'C', 'e2')],
+        )
+        regimes_map = _make_regimes_map(['e2'])
+        scenario = {
+            'scenario_id': 'current',
+            'analytics_dsl': '',
+            'effective_query_dsl': 'cohort(B,1-Oct-25:31-Oct-25)',
+            'candidate_regimes_by_edge': regimes_map,
+        }
+
+        subjects = resolve_forecast_subjects(
+            graph_data=graph,
+            scenario=scenario,
+            top_analytics_dsl='from(B).to(C)',
+            path_analysis_type='cohort_maturity',
+            whole_graph_analysis_type=None,
+            log_prefix='[test]',
+        )
+
+        assert subjects
+        assert all(subj.get('anchor_node_id') == 'B' for subj in subjects)
 
 
 class TestChildrenScopeRule:

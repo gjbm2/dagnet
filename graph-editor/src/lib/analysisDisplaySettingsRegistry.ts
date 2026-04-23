@@ -1281,7 +1281,7 @@ export const CHART_DISPLAY_SETTINGS: Record<string, DisplaySettingDef[]> = {
       shortLabel: 'Scenarios',
       type: 'radio',
       options: [
-        { value: 'focused', label: 'Latest' },
+        { value: 'focused', label: 'Topmost' },
         { value: 'all_visible', label: 'Compare' },
       ],
       defaultValue: 'focused',

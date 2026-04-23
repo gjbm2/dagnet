@@ -5,7 +5,22 @@ Provides:
   - sys.path setup so `import lib.*` works
   - Shared fixtures: data_repo_dir, db_url
   - Shared markers: requires_db, requires_data_repo
-  - Declarative synth fixture: requires_synth(graph_name, enriched=bool)
+  - Declarative synth fixture: requires_synth(
+        graph_name,
+        enriched=bool,
+        bayesian=bool,
+    )
+
+Bayesian synth contract:
+  - `bayesian=True` uses a fingerprinted sidecar in `bayes/fixtures/`
+    and replays that cached Bayes payload through the canonical TS
+    `applyPatch` path in memory only.
+  - The synth graph JSON on disk is not the storage location for Bayes
+    vars/posteriors and must not be rewritten during routine pytest
+    loads.
+  - There is deliberately no fixture-level "force refit" switch here.
+    Fresh sidecars are commissioned manually outside the shared pytest
+    loader so normal tests do not rerun MCMC.
 """
 
 from __future__ import annotations
@@ -17,6 +32,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -86,28 +102,43 @@ def _load_graph_text(graph_name: str) -> str:
     return path.read_text()
 
 
-def load_graph_json(graph_name: str, *, bayesian: bool = False) -> dict[str, Any]:
+def load_graph_json(
+    graph_name: str,
+    *,
+    bayesian: bool = False,
+) -> dict[str, Any]:
     """Load a graph JSON as a fresh mutable dict.
 
-    When `bayesian=True`, also ensure a fresh bayesian sidecar exists
-    (building it via MCMC if missing or stale) and inject its
-    model_vars into the returned graph. The on-disk graph file is not
-    mutated — bayesian state lives purely in the sidecar and is
-    re-injected at each load.
+    When `bayesian=True`, ensure a usable bayesian sidecar exists
+    (building it via MCMC if missing or stale) and replay the cached raw
+    Bayes payload through the canonical TS `applyPatch` path in memory.
+
+    The on-disk graph file is not mutated — bayesian state lives purely
+    in the sidecar and is re-projected at each load.
+
+    Deliberately no "force refit" switch here: routine pytest surfaces
+    must reuse the fingerprinted sidecar rather than re-commissioning
+    Bayes on every run.
     """
-    try:
-        graph = json.loads(_load_graph_text(graph_name))
-    except FileNotFoundError as exc:
-        pytest.skip(str(exc))
     if bayesian:
-        sidecar_edges = _ensure_bayes_sidecar(graph_name)
-        if sidecar_edges is None:
+        sidecar_path = _ensure_bayes_sidecar(graph_name)
+        if sidecar_path is None:
             pytest.skip(
                 f"Bayesian sidecar unavailable for {graph_name} "
                 f"(MCMC subprocess failed or bayes worker not reachable)"
             )
-        from bayes.sidecar import inject_bayesian as _inject
-        _inject(graph, sidecar_edges)
+        graph = _apply_bayes_sidecar_in_memory(graph_name, sidecar_path)
+        if graph is None:
+            pytest.skip(
+                f"Bayesian sidecar could not be replayed through TS apply-patch "
+                f"for {graph_name}"
+            )
+        return graph
+
+    try:
+        graph = json.loads(_load_graph_text(graph_name))
+    except FileNotFoundError as exc:
+        pytest.skip(str(exc))
     return graph
 
 
@@ -286,11 +317,10 @@ requires_data_repo = pytest.mark.skipif(
 # Prevents redundant regen within a single pytest session.
 _SYNTH_CACHE: dict[str, str] = {}
 
-# Session-scoped cache of loaded bayesian sidecars (graph_name → edges dict).
-# Prevents MCMC from running more than once per (graph, fingerprint) per
-# pytest process. Entries are stored as deep copies and returned fresh via
-# copy.deepcopy so test-time injection mutations cannot bleed across tests.
-_SIDECAR_CACHE: dict[str, dict[str, Any]] = {}
+# Session-scoped cache of fresh sidecar file paths
+# (`graph_name:fingerprint-json` → absolute path). Prevents MCMC from
+# running more than once per fingerprint per pytest process.
+_SIDECAR_CACHE: dict[str, str] = {}
 
 
 def _synth_cache_clear():
@@ -358,17 +388,25 @@ def _compute_bayes_fingerprint(graph_name: str):
     return compute_fingerprint(str(truth_path), [str(p) for p in param_paths])
 
 
-def _ensure_bayes_sidecar(graph_name: str):
-    """Return the bayesian-edges dict for `graph_name`, running MCMC
-    via `bayes.test_harness --sidecar-out` to produce it if missing or
-    stale. Session-cached — at most one MCMC run per process.
+def _sidecar_cache_key(graph_name: str, fingerprint: dict[str, Any]) -> str:
+    return f"{graph_name}:{json.dumps(fingerprint, sort_keys=True)}"
+
+
+def _ensure_bayes_sidecar(
+    graph_name: str,
+):
+    """Return the fresh sidecar path for `graph_name`, running MCMC via
+    `bayes.test_harness --fe-payload --sidecar-out` when missing or stale.
+
+    Session-cached — at most one MCMC run per process for a given
+    fingerprint. Fresh sidecars are reused; only missing or stale
+    sidecars trigger the harness.
 
     Returns None when the subprocess fails — caller is expected to
-    pytest.skip. Never writes to the graph file.
+    pytest.skip. Never writes to the graph file. Contract coverage lives
+    in `graph-editor/lib/tests/test_bayes_sidecar_conftest.py` and
+    `bayes/tests/test_test_harness_sidecar.py`.
     """
-    if graph_name in _SIDECAR_CACHE:
-        return copy.deepcopy(_SIDECAR_CACHE[graph_name])
-
     root = str(DAGNET_ROOT)
     if root not in sys.path:
         sys.path.insert(0, root)
@@ -377,19 +415,24 @@ def _ensure_bayes_sidecar(graph_name: str):
     fingerprint = _compute_bayes_fingerprint(graph_name)
     if fingerprint is None:
         return None
+    cache_key = _sidecar_cache_key(graph_name, fingerprint)
+    if cache_key in _SIDECAR_CACHE:
+        return _SIDECAR_CACHE[cache_key]
     sidecar_path = _resolve_bayes_fixtures_dir() / f"{graph_name}.bayes-vars.json"
-    edges = load_sidecar(str(sidecar_path), expected_fingerprint=fingerprint)
-    if edges is not None:
-        _SIDECAR_CACHE[graph_name] = copy.deepcopy(edges)
-        return edges
+    sidecar_payload = load_sidecar(str(sidecar_path), expected_fingerprint=fingerprint)
+    if sidecar_payload is not None:
+        _SIDECAR_CACHE[cache_key] = str(sidecar_path)
+        return str(sidecar_path)
 
-    # Missing or stale — rebuild via test_harness --enrich --sidecar-out.
-    print(f"[requires_synth] {graph_name}: bayesian sidecar absent or stale — "
-          f"running MCMC (this may take minutes)...")
+    print(
+        f"[requires_synth] {graph_name}: bayesian sidecar absent or stale — "
+        f"running MCMC (this may take minutes)..."
+    )
     sidecar_path.parent.mkdir(parents=True, exist_ok=True)
     cmd = [
         sys.executable, "-m", "bayes.test_harness",
         "--graph", graph_name,
+        "--fe-payload",
         "--enrich",
         "--no-webhook",
         "--sidecar-out", str(sidecar_path),
@@ -404,13 +447,74 @@ def _ensure_bayes_sidecar(graph_name: str):
               f"{result.stderr[-2000:]}")
         return None
 
-    edges = load_sidecar(str(sidecar_path), expected_fingerprint=fingerprint)
-    if edges is None:
+    sidecar_payload = load_sidecar(str(sidecar_path), expected_fingerprint=fingerprint)
+    if sidecar_payload is None:
         print(f"[requires_synth] MCMC completed but sidecar missing or "
               f"fingerprint mismatched for {graph_name}")
         return None
-    _SIDECAR_CACHE[graph_name] = copy.deepcopy(edges)
-    return edges
+    _SIDECAR_CACHE[cache_key] = str(sidecar_path)
+    return str(sidecar_path)
+
+
+def _apply_bayes_sidecar_in_memory(
+    graph_name: str,
+    sidecar_path: str,
+) -> dict[str, Any] | None:
+    """Replay a cached Bayes sidecar through the TS CLI in memory.
+
+    The CLI uses the production `applyPatch` path but, with
+    `--print-enriched-graph`, skips all disk writeback and returns the
+    enriched graph JSON on stdout.
+    """
+    repo = _resolve_data_repo_dir()
+    if repo is None:
+        return None
+
+    graph_editor_dir = DAGNET_ROOT / "graph-editor"
+    nvm_prefix = (
+        'export NVM_DIR="${NVM_DIR:-$HOME/.nvm}" && '
+        '. "$NVM_DIR/nvm.sh" 2>/dev/null; '
+        f'cd {shlex.quote(str(graph_editor_dir))} && '
+        'nvm use "$(cat .nvmrc)" >/dev/null 2>&1; '
+    )
+    tsx_cmd = (
+        f"{nvm_prefix}"
+        "npx tsx src/cli/bayes.ts "
+        f"--graph {shlex.quote(str(repo))} "
+        f"--name {shlex.quote(graph_name)} "
+        f"--apply-patch {shlex.quote(sidecar_path)} "
+        "--print-enriched-graph --no-cache"
+    )
+    result = subprocess.run(
+        ["bash", "-lc", tsx_cmd],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        cwd=str(DAGNET_ROOT),
+        env=dict(os.environ),
+    )
+    if result.returncode != 0:
+        print(
+            f"[requires_synth] TS apply-patch replay failed for {graph_name}:\n"
+            f"{result.stderr[-2000:]}"
+        )
+        return None
+    stdout = result.stdout
+    json_start = stdout.find("{")
+    if json_start < 0:
+        print(
+            f"[requires_synth] TS apply-patch replay returned no JSON stdout "
+            f"for {graph_name}:\n{stdout[-2000:]}"
+        )
+        return None
+    try:
+        return json.loads(stdout[json_start:])
+    except json.JSONDecodeError:
+        print(
+            f"[requires_synth] TS apply-patch replay returned non-JSON stdout "
+            f"for {graph_name}:\n{stdout[-2000:]}"
+        )
+        return None
 
 
 def _call_verify_synth_data(graph_name: str, data_repo: str, **kwargs) -> dict:
@@ -450,14 +554,19 @@ def _bootstrap_synth_graph(graph_name: str, *, enrich: bool = False,
     return True
 
 
-def _ensure_synth_ready(graph_name: str, enriched: bool,
-                        bayesian: bool = False) -> None:
+def _ensure_synth_ready(
+    graph_name: str,
+    enriched: bool,
+    bayesian: bool = False,
+) -> None:
     """Check freshness and bootstrap if needed. Calls pytest.skip on failure.
 
-    `bayesian=True` triggers the bayesian-sidecar path (MCMC runs once
-    per fingerprint into bayes/fixtures/). The on-disk graph file is
-    never mutated for bayesian state — injection happens at
-    load_graph_json(bayesian=True) call time.
+    `bayesian=True` triggers the bayesian-sidecar path (usable sidecar
+    ensured in `bayes/fixtures/`).
+
+    The on-disk graph file is never mutated for bayesian state —
+    canonical TS apply-patch replay happens at
+    `load_graph_json(..., bayesian=True)` call time.
     """
     repo = _resolve_data_repo_dir()
     if repo is None:
@@ -466,7 +575,9 @@ def _ensure_synth_ready(graph_name: str, enriched: bool,
     if not db:
         pytest.skip("DB_CONNECTION not set")
 
-    cache_key = f"{graph_name}:enriched={enriched}:bayesian={bayesian}"
+    cache_key = (
+        f"{graph_name}:enriched={enriched}:bayesian={bayesian}"
+    )
     if cache_key in _SYNTH_CACHE:
         return
 
@@ -507,10 +618,11 @@ def _ensure_synth_ready(graph_name: str, enriched: bool,
         pytest.skip(f"No truth file for {graph_name}")
 
     # Bayesian sidecar: ensured separately so graph-file clobber can no
-    # longer destroy MCMC work. Runs at most once per session per graph.
+    # longer destroy MCMC work. The returned sidecar is replayed through
+    # the canonical TS apply-patch path at load time.
     if bayesian:
-        edges = _ensure_bayes_sidecar(graph_name)
-        if edges is None:
+        sidecar_path = _ensure_bayes_sidecar(graph_name)
+        if sidecar_path is None:
             pytest.skip(
                 f"Bayesian sidecar unavailable for {graph_name} "
                 f"(MCMC subprocess failed or bayes worker not reachable)"
@@ -519,8 +631,12 @@ def _ensure_synth_ready(graph_name: str, enriched: bool,
     _SYNTH_CACHE[cache_key] = status
 
 
-def requires_synth(graph_name: str, *, enriched: bool = False,
-                   bayesian: bool = False):
+def requires_synth(
+    graph_name: str,
+    *,
+    enriched: bool = False,
+    bayesian: bool = False,
+):
     """Decorator that ensures a synth graph is ready before the test runs.
 
     Works on both functions and classes. When applied to a class, wraps
@@ -529,9 +645,10 @@ def requires_synth(graph_name: str, *, enriched: bool = False,
     Checks freshness via verify_synth_data. If stale or missing, triggers
     bootstrap via synth_gen.py --write-files. If enriched=True (or
     bayesian=True, which implies it) and graph is not hydrate-enriched,
-    triggers synth_gen.py --enrich. If bayesian=True and graph lacks
-    bayesian model_vars, additionally triggers bayes/test_harness.py
-    --enrich (MCMC + apply-patch).
+    triggers synth_gen.py --enrich. If bayesian=True, additionally
+    ensures the fingerprinted sidecar in `bayes/fixtures/` exists before
+    the graph is loaded and replayed through the canonical TS
+    apply-patch path at runtime.
 
     Skips cleanly if infrastructure (data repo, DB, bayes worker) is
     unavailable. Session-scoped: regen/enrichment happens at most once
@@ -546,14 +663,22 @@ def requires_synth(graph_name: str, *, enriched: bool = False,
                     original = getattr(fn_or_cls, name)
                     @functools.wraps(original)
                     def wrapped(*args, _orig=original, **kwargs):
-                        _ensure_synth_ready(graph_name, enriched, bayesian)
+                        _ensure_synth_ready(
+                            graph_name,
+                            enriched,
+                            bayesian,
+                        )
                         return _orig(*args, **kwargs)
                     setattr(fn_or_cls, name, wrapped)
             return fn_or_cls
         else:
             @functools.wraps(fn_or_cls)
             def wrapper(*args, **kwargs):
-                _ensure_synth_ready(graph_name, enriched, bayesian)
+                _ensure_synth_ready(
+                    graph_name,
+                    enriched,
+                    bayesian,
+                )
                 return fn_or_cls(*args, **kwargs)
             return wrapper
     return decorator

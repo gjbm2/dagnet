@@ -23,3 +23,5 @@ pytest-watch>=4.2.0
 # Modal CLI (Bayes deploys; Modal worker image uses bayes/requirements.txt)
 modal>=1.0.0
 
+# MCP SDK (bayes/tracker/ investigation tracker server — dev-only)
+mcp>=1.2.0

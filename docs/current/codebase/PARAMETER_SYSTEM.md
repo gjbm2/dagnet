@@ -39,15 +39,28 @@ Parameters are timestamped, sourced numerical estimates (mean/stdev, counts, dai
 | `extractDiffParams(modified, base)` | Differential -- only changed probabilities (for live scenarios) |
 | `extractParamsFromSelection(graph, nodeUuids, edgeUuids)` | Selected subset only |
 
-### What's extracted (scenario-visible fields)
+### What's extracted (scenario-visible + Bayes-enrichment fields)
 
-From edges: `p.mean`, `p.stdev`, `p.evidence.*`, `p.forecast.*`, `p.latency.completeness/t95/path_t95/median_lag_days`, `conditional_p`, `cost_gbp.*`, `labour_cost.*`, `weight_default`
+From edges:
 
-From nodes: `entry.entry_weight`, `costs.monetary`, `costs.time`, `case.variants[].{name, weight}`
+- `p.mean`, `p.stdev`
+- `p.posterior.*` — Bayesian probability posterior (`alpha`, `beta`, HDI bounds, `ess`, `rhat`, `fitted_at`, `fingerprint`, `provenance`, cohort-slice variants). Populated by `bayesPatchService.applyPatch` when a `.bayes-vars.json` sidecar lands.
+- `p.evidence.*` (`mean`, `stdev`, `n`, `k`)
+- `p.forecast.*` (`mean`, `stdev`)
+- `p.latency.*` — LAG display fields (`completeness`, `completeness_stdev`, `t95`, `path_t95`, `median_lag_days`) plus Bayesian promoted scalars (`mu`, `sigma`, `onset_delta_days`, `promoted_t95`, `promoted_*_sd`, `path_mu`, `path_sigma`, `promoted_path_t95`, etc.) written by the promotion cascade.
+- `p.latency.posterior.*` — full latency posterior block (`mu_mean`, `mu_sd`, `sigma_mean`, `sigma_sd`, `onset_*`, `hdi_t95_*`, path-level equivalents).
+- `conditional_p` — same shape mirrored per condition.
+- `cost_gbp.*`, `labour_cost.*` (`mean`, `stdev`, `distribution`), `weight_default`.
+
+From nodes: `entry.entry_weight`, `costs.monetary`, `costs.time`, `case.variants[].{name, weight}`.
 
 ### What's NOT extracted (internal config)
 
-Distribution parameters, evidence retrieval metadata (window_from/to, source), latency config (latency_parameter, anchor_node_id), override flags.
+Raw distribution knobs on the base probability (`distribution`, `min`, `max`, `alpha`, `beta` on `p` itself — distinct from `p.posterior.alpha/beta`), evidence retrieval metadata (`window_from/to`, `retrieved_at`, `source`), latency config (`latency_parameter`, `anchor_node_id`, `mean_lag_days`), `*_overridden` flags, and the graph-root `_bayes` metadata block.
+
+### Whitelist discipline
+
+The extractor maintains explicit field whitelists — `LATENCY_FIELD_WHITELIST`, `PROBABILITY_POSTERIOR_FIELD_WHITELIST`, `LATENCY_POSTERIOR_FIELD_WHITELIST` at the top of `GraphParamExtractor.ts`. Fields are picked by name; nested objects are never copied wholesale. New fields require an explicit whitelist entry (or they are silently dropped). This is a known anti-pattern — see `docs/current/project-assure/PROPOSAL.md` for the schema-driven `x-param-pack` replacement design.
 
 ## Param Packs and DSL
 
@@ -69,10 +82,12 @@ n.<nodeId>.case(<nodeId>:<variant>).weight: 1.0
 |--------|--------|-------|
 | YAML (flat) | `toYAML(params, 'flat')` | Complete HRN paths, one per line |
 | YAML (nested) | `toYAML(params, 'nested')` | Grouped by edge ID to reduce repetition |
-| JSON | `toJSON(params)` | Flat HRN paths |
+| JSON | `toJSON(params)` | Flat HRN paths (the `structure` argument is accepted but both branches emit the same JSON) |
 | CSV | `toCSV(params)` | Two-column (key, value) |
 
 Round-trip parsing via `fromYAML()`, `fromJSON()`, `fromCSV()`. If a graph is provided, HRNs are resolved to canonical IDs/UUIDs.
+
+**Default divergence across call sites.** CLI commands serialise with `structure: 'flat'`; the browser `ScenariosContext` import/export uses `'nested'`. This is a known inconsistency — see `docs/current/project-assure/PROPOSAL.md` → "Pack shape standardisation" for the plan to make flat the canonical shape for every surface that crosses a process boundary and keep nested only as an in-memory display view in the Scenarios editor.
 
 ## Model Variable Resolution
 

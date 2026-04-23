@@ -5,6 +5,10 @@ maturity v3 chart to resolve subjects, pick temporal evidence families,
 query snapshots, and compose span evidence through one path. That keeps
 multi-hop cohort queries on doc 47's rule: subject-frame construction
 uses window evidence even when the user asked a cohort question.
+
+`subject_is_window` in this module refers only to the frame-evidence
+family used to fetch and compose observed rows. It must not be reused as
+the subject-helper family for downstream forecast execution.
 """
 
 from __future__ import annotations
@@ -12,6 +16,7 @@ from __future__ import annotations
 from collections import deque
 from dataclasses import dataclass
 from datetime import date
+import re
 from typing import Any, Dict, List, Optional
 
 
@@ -157,6 +162,9 @@ def resolve_forecast_subjects(
     scenario_id = scenario.get("scenario_id", "unknown")
     subject_dsl = top_analytics_dsl or scenario.get("analytics_dsl", "")
     temporal_dsl = scenario.get("effective_query_dsl", "")
+    explicit_cohort_anchor = _extract_cohort_anchor_node(
+        f"{subject_dsl}.{temporal_dsl}" if subject_dsl and temporal_dsl else (subject_dsl or temporal_dsl)
+    )
     subjects = None
 
     try:
@@ -173,6 +181,9 @@ def resolve_forecast_subjects(
                 candidate_regimes_by_edge=scenario.get("candidate_regimes_by_edge", {}),
             )
             subjects = synthesise_snapshot_subjects(resolved, path_analysis_type)
+            if explicit_cohort_anchor:
+                for subj in subjects:
+                    subj.setdefault("anchor_node_id", explicit_cohort_anchor)
             print(
                 f"{log_prefix} Resolved {len(subjects)} subjects from DSL "
                 f"'{full_dsl}' (scenario={scenario_id})"
@@ -188,6 +199,9 @@ def resolve_forecast_subjects(
                 resolved,
                 whole_graph_analysis_type,
             )
+            if explicit_cohort_anchor:
+                for subj in subjects:
+                    subj.setdefault("anchor_node_id", explicit_cohort_anchor)
             print(
                 f"{log_prefix} Resolved {len(subjects)} subjects from graph "
                 f"(all_graph_parameters, scenario={scenario_id})"
@@ -206,6 +220,21 @@ def resolve_forecast_subjects(
 
 def _parse_date(raw: Any) -> date:
     return date.fromisoformat(str(raw)[:10])
+
+
+def _extract_cohort_anchor_node(query_dsl: str) -> Optional[str]:
+    """Extract explicit cohort(anchor, ...) node from the raw DSL."""
+    match = re.search(r"cohort\(([^)]*)\)", str(query_dsl or ""))
+    if not match:
+        return None
+    args = match.group(1)
+    comma_idx = args.find(",")
+    if comma_idx <= 0:
+        return None
+    head = args[:comma_idx].strip()
+    if not head or ":" in head:
+        return None
+    return head
 
 
 def _parse_date_or_none(raw: Any) -> Optional[date]:
@@ -458,10 +487,20 @@ def prepare_forecast_subject_group(
             query_to_node = subj.get("to_node", "")
             last_edge_id = (subj.get("target") or {}).get("targetId") or last_edge_id
 
-    anchor_node = _resolve_anchor_node(graph_data, last_edge_id)
+    anchor_node = next(
+        (
+            str(subj.get("anchor_node_id") or "").strip()
+            for subj in subjects
+            if str(subj.get("anchor_node_id") or "").strip()
+        ),
+        None,
+    )
+    if not anchor_node:
+        anchor_node = _resolve_anchor_node(graph_data, last_edge_id)
     is_multi_hop = len(subjects) > 1
     # Doc 47: multi-hop cohort queries still build subject frames from the
-    # window evidence family; cohort semantics resume at span evaluation time.
+    # window evidence family; exact single-hop cohort queries keep cohort
+    # frames here. This flag is about observed-frame retrieval only.
     subject_is_window = is_window or is_multi_hop
 
     per_edge_results: List[Dict[str, Any]] = []

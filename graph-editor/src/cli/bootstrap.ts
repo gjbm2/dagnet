@@ -13,6 +13,7 @@
 
 import { execSync } from 'node:child_process';
 import { log, isDiagnostic } from './logger';
+import { fileRegistry } from '../contexts/TabContext';
 import type { GraphBundle } from './diskLoader';
 
 // ------------------------------------------------------------------
@@ -63,6 +64,8 @@ export const SHARED_OPTIONS = {
   'show-signatures': { type: 'boolean' as const, default: false },
   'diag-model-vars': { type: 'boolean' as const, default: false },
   'no-cache': { type: 'boolean' as const, default: false },
+  'bayes-vars': { type: 'string' as const },
+  'force-vars': { type: 'boolean' as const, default: false },
   verbose: { type: 'boolean' as const, short: 'v', default: false },
   diagnostic: { type: 'boolean' as const, default: false },
   diag: { type: 'boolean' as const, default: false },
@@ -148,6 +151,53 @@ export async function bootstrap(
       const nDates = v?.dates?.length ?? 0;
       const nDaily = v?.n_daily?.length ?? 0;
       log.diag(`    ${paramId}: ${vals.length} value set(s), ${nDates} dates, ${nDaily} daily obs`);
+    }
+  }
+
+  // ── Bayesian sidebar vars injection ──────────────────────────────────────
+  // When --bayes-vars <path> is supplied, replay the sidecar through the
+  // same applyPatch codepath the browser uses when a webhook patch lands.
+  // The mutation is in-memory only — no disk writes — and propagates to
+  // bundle.graph + bundle.parameters so every downstream command sees the
+  // enriched graph as its base. --force-vars bypasses the rhat/ess gates.
+  const bayesVarsPath = args['bayes-vars'] as string | undefined;
+  if (bayesVarsPath) {
+    const { readFile: readFileAsync } = await import('node:fs/promises');
+    const { applyPatch, wrapPatchIfRaw, setQualityGateOverride } =
+      await import('../services/bayesPatchService.js');
+
+    log.info(`Injecting Bayesian vars from ${bayesVarsPath}`);
+    const patchRaw = await readFileAsync(bayesVarsPath, 'utf-8');
+    const patchData = JSON.parse(patchRaw);
+    const graphId = `graph-${graphName}`;
+    const patch = wrapPatchIfRaw(patchData, graphId);
+
+    if (args['force-vars']) {
+      log.info('--force-vars set: bypassing rhat/ess quality gates');
+      setQualityGateOverride(true);
+    }
+    try {
+      const edgesUpdated = await applyPatch(patch);
+      log.info(`Bayes vars applied: ${edgesUpdated}/${patch.edges.length} edges updated`);
+    } finally {
+      // Always reset the override so a long-lived process (tests, REPL)
+      // does not leak the bypass state across runs.
+      if (args['force-vars']) setQualityGateOverride(false);
+    }
+
+    // applyPatch calls fileRegistry.updateFile(...), which replaces file.data
+    // with the new object reference. bundle.graph and bundle.parameters were
+    // pointing at the pre-injection objects, so re-bind them from the registry
+    // to keep downstream consumers aligned with the enriched state.
+    const enrichedGraph = fileRegistry.getFile(graphId)?.data;
+    if (enrichedGraph) {
+      bundle.graph = enrichedGraph;
+    }
+    for (const id of Array.from(bundle.parameters.keys())) {
+      const enrichedParam = fileRegistry.getFile(`parameter-${id}`)?.data;
+      if (enrichedParam) {
+        bundle.parameters.set(id, enrichedParam);
+      }
     }
   }
 

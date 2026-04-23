@@ -1,16 +1,59 @@
 """
-BE topo pass bounded-analytic contract.
+BE topo pass bounded-analytic contract (doc 64 Family F + B).
 
-Uses the enriched synth graph (synth-simple-abc) with Bayesian
-model_vars, not the prod graph. Requires DB_CONNECTION (synth data
-in the snapshot DB from synth_gen.py).
+The BE topo pass (`handle_stats_topo_pass`) is the analytic-fallback
+writer: it produces `completeness`, `blended_mean`, and `p_sd` per
+edge using a bounded analytic formula on cohort inputs. It must NOT
+shadow the conditioned forecast engine — specifically it must not
+emit conditioned uncertainty (`completeness_stdev`), own forecast
+state, or sweep like CF.
 
-Tests:
-1. Window-mode: topo pass completeness matches v2 annotation
-2. Response exposes analytic fallback fields without a forecast_state payload
-3. Response does not expose conditioned-only completeness uncertainty
-4. Summary stays on analytic counters only
-5. Scoped cohorts still control query-authored completeness
+This file is the ownership contract:
+
+1. Response shape — the topo pass writes analytic fallback fields and
+   deliberately omits CF-owned fields.
+2. Summary counters — analytic-only, no forecast_state metadata.
+3. Scoped-cohort precedence — when `edge_contexts` supplies
+   `scoped_cohorts`, the analytic path uses them in preference to raw
+   `cohort_data` (query-authored completeness).
+
+Uses the enriched synth graph (`synth-simple-abc`) with Bayesian
+model_vars. Requires `DB_CONNECTION` (synth data in the snapshot DB
+from `synth_gen.py`).
+
+── Authoring receipt (doc 64 §3.6) ─────────────────────────────────
+
+Family         F. Projection and authority (field ownership at the
+               CF/topo boundary). With a Family B element where the
+               topo pass applies its analytic algebra on scoped vs
+               raw cohorts.
+Invariant      The topo pass owns analytic-fallback fields and must
+               not emit CF-owned fields. Scoped cohorts take
+               precedence over raw cohorts when supplied.
+Oracle type    Bounded-analytic public contract. Not legacy parity:
+               the topo pass is the live analytic-fallback writer,
+               not a shadow CF engine.
+Apparatus      Python integration through `handle_stats_topo_pass`.
+               Lower-cost apparatus would miss the handler's field
+               ownership seam (which keys the response dict carries).
+Fixtures       `synth-simple-abc` enriched. Smallest named graph
+               that exercises the stats-engine lag resolution
+               required for the analytic path.
+Reality        Real snapshot DB and real data repo. No mocks of the
+               stats engine or handler. Skips gracefully when DB or
+               data repo is unavailable.
+False-pass     Field-presence checks could pass while values are
+               `None` or stale. The scoped-cohort precedence test
+               provides a numerical sanity check (mature cohorts
+               must produce higher completeness than mixed young +
+               mature) that the analytic CDF computation is sensitive
+               to age in the correct direction.
+Retires        None yet. `test_completeness_parity` retains a v2
+               oracle as the file's only numerical correctness check;
+               it will be retired when a direct analytic-CDF
+               replacement lands (lognormal CDF on resolved params,
+               compared to topo pass output within tolerance). See
+               doc 64 §8.3 for the broader v2-retirement gate.
 """
 
 import json
@@ -53,12 +96,19 @@ def _get_all_core_hashes(graph):
 @requires_db
 @requires_data_repo
 @requires_synth("synth-simple-abc", enriched=True)
-class TestTopoPassVsV2Completeness:
-    """Topo pass completeness matches v2 annotated completeness."""
+class TestTopoPassBoundedAnalyticContract:
+    """Field ownership and bounded-analytic behaviour of the BE topo pass."""
 
     def test_completeness_parity(self):
         """N-weighted completeness from topo pass matches n-weighted
         completeness from v2's annotated frames for the same edge.
+
+        This is the one NUMERICAL correctness check in this file — the
+        other tests are structural (field presence / absence) or
+        directional (mature > young). Retained provisionally while a
+        direct analytic-CDF replacement is written; see doc 64 §8.3
+        for the broader v2-retirement gate (this test survives until a
+        v2-free numerical check lands).
         """
         graph = _load_graph()
         all_hashes = _get_all_core_hashes(graph)
@@ -202,12 +252,6 @@ class TestTopoPassVsV2Completeness:
                     'that conditioned uncertainty belongs to CF.'
                 )
                 break
-
-    # NOTE: cohort-mode handler-level parity test removed.
-    # The Phase 3 cohort parity is now covered by
-    # TestPhase3ParityEnrichedSynth in test_forecast_state_cohort.py
-    # (5 tests, exercises engine functions directly on enriched
-    # synth-simple-abc, no handler/DB dependency).
 
     def test_analytic_fields_in_topo_pass_response(self):
         """Topo pass response writes analytic fallback fields only."""

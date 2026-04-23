@@ -1,4 +1,12 @@
 # DagNet Release Notes
+
+## Unreleased
+
+- **CLI Bayesian sidebar vars injection** — every CLI command (`param-pack`, `analyse`, `bayes`, `hydrate`, `parity-test`) now accepts `--bayes-vars <path>` to inject a `.bayes-vars.json` posterior sidecar into the graph in-memory before the command runs. `--force-vars` bypasses the rhat/ess quality gates. No disk writes; the graph is mutated via the same `applyPatch` code path the browser uses. Lets you analyse or pack a graph "as if" particular posteriors were committed, without touching parameter files on disk.
+- **Param-pack surfaces Bayesian enrichment** — when a Bayesian posterior is present on an edge, the param pack now emits `p.posterior.*` (alpha, beta, HDI, quality), `p.latency.mu/sigma/promoted_t95/path_mu/…`, and the full `p.latency.posterior.*` block. Previously these were silently dropped even though they were written onto the graph.
+
+---
+
 ## Version 2.0.4b
 **Released:** 22-Apr-26
 

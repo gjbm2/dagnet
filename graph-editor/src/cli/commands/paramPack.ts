@@ -28,6 +28,11 @@ dagnet-cli param-pack
     --diag-model-vars        Emit per-edge model_vars blocks (analytic + analytic_be) as JSON on
                              stdout, for blind FE↔BE topo parity diffing (doc 45). Suppresses
                              the normal param-pack output.
+    --bayes-vars <path>      Inject Bayesian posteriors from a .bayes-vars.json
+                             sidecar into the graph in-memory before aggregation.
+                             No disk writes.
+    --force-vars             With --bayes-vars, bypass the rhat/ess quality
+                             gates so low-quality posteriors still apply.
     --diagnostic, --diag     Show detailed pipeline trace (per-edge state at each stage)
     --verbose, -v            Show all console.log/warn output (LAG debug, etc.)
     --session-log            Show session log output

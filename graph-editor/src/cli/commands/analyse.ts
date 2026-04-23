@@ -54,6 +54,11 @@ dagnet-cli analyse
                              or any DB repopulation to avoid stale cached results.
     --allow-external-fetch   Fetch live from external sources (e.g. Amplitude)
     --display <json>          Display settings JSON (e.g. '{"show_latency_bands":true}')
+    --bayes-vars <path>      Inject Bayesian posteriors from a .bayes-vars.json
+                             sidecar into the graph in-memory before analysis.
+                             No disk writes.
+    --force-vars             With --bayes-vars, bypass the rhat/ess quality
+                             gates so low-quality posteriors still apply.
     --no-cache               Bypass disk bundle cache
     --diagnostic, --diag     Show detailed pipeline trace (per-edge state at each stage)
     --verbose, -v            Show all console.log/warn output

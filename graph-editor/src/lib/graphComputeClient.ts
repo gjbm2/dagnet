@@ -1394,19 +1394,42 @@ export class GraphComputeClient {
     try {
       if (request?.analysis_type !== 'surprise_gauge') return null;
 
-      // Already a flat AnalysisResponse? Leave it alone.
-      if (raw?.success === true && raw?.result?.analysis_type === 'surprise_gauge') {
+      // Already normalised (has flat rows + per-scenario structure)? Leave it alone.
+      // Checking analysis_type alone is not sufficient: the BE flattens the
+      // single-scenario-single-subject response to `{success, result, subject_id,
+      // scenario_id}` with `result.analysis_type === 'surprise_gauge'` but no
+      // `data` / `scenario_results`, and that shape DOES need normalisation.
+      if (
+        raw?.success === true
+        && raw?.result?.analysis_type === 'surprise_gauge'
+        && Array.isArray(raw.result.data)
+        && Array.isArray(raw.result.scenario_results)
+      ) {
         return null;
       }
 
-      const scenarios: any[] = Array.isArray(raw?.scenarios) && raw.scenarios.length > 0
-        ? raw.scenarios
-        : (Array.isArray(raw?.subjects)
-          ? [{
-              scenario_id: raw?.scenario_id || request?.scenarios?.[0]?.scenario_id || 'current',
-              subjects: raw.subjects,
-            }]
-          : []);
+      const scenarios: any[] = (() => {
+        if (Array.isArray(raw?.scenarios) && raw.scenarios.length > 0) return raw.scenarios;
+        // Single scenario, multiple subjects: BE wraps as {success, scenario_id, subjects, ...}.
+        if (Array.isArray(raw?.subjects)) {
+          return [{
+            scenario_id: raw?.scenario_id || request?.scenarios?.[0]?.scenario_id || 'current',
+            subjects: raw.subjects,
+          }];
+        }
+        // Single scenario, single subject: BE flattens to {success, result, subject_id, scenario_id}.
+        if (raw?.result?.analysis_type === 'surprise_gauge') {
+          return [{
+            scenario_id: raw?.scenario_id || request?.scenarios?.[0]?.scenario_id || 'current',
+            subjects: [{
+              subject_id: raw?.subject_id || 'subject',
+              success: raw?.success !== false,
+              result: raw.result,
+            }],
+          }];
+        }
+        return [];
+      })();
       if (scenarios.length === 0) return null;
 
       const scenarioDimensionValues: Record<string, any> = {};

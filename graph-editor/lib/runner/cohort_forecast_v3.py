@@ -15,7 +15,7 @@ import math
 import numpy as np
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import date as _date
+from datetime import date as _date, timedelta as _timedelta
 from typing import Any, Dict, List, Optional
 
 
@@ -329,8 +329,9 @@ def _query_scoped_latency_rows(
     axis_tau_max: Optional[int] = None,
     band_level: float = 0.90,
     is_window: bool = False,
+    runtime_bundle: Optional[Any] = None,
 ) -> NonLatencyResult:
-    """Deterministic degraded rows for query-scoped latency edges.
+    """Deterministic rows for degraded or zero-evidence latency edges.
 
     The rate-side uncertainty is the closed-form Beta posterior already
     resolved on the edge; the timing side is the deterministic latency
@@ -339,6 +340,7 @@ def _query_scoped_latency_rows(
     even when some cohorts are too young to have an explicit τ snapshot.
     """
     from .forecast_application import compute_completeness
+    from .forecast_state import _convolve_completeness_at_age
     from .forecast_runtime import build_closed_form_beta_rate_surface
 
     alpha_post = max(float(getattr(resolved, 'alpha', 0.0) or 0.0), 0.0)
@@ -383,6 +385,74 @@ def _query_scoped_latency_rows(
     p_sd = rate_surface.p_sd
 
     lat = resolved.latency
+    _subject_det_cdf: Optional[List[float]] = None
+    _from_node_arrival = None
+    if runtime_bundle is not None:
+        _op_inputs = getattr(runtime_bundle, 'operator_inputs', None)
+        _det_norm_cdf = (
+            getattr(_op_inputs, 'det_norm_cdf', None)
+            if _op_inputs is not None
+            else None
+        )
+        if _det_norm_cdf is not None:
+            _subject_det_cdf = [
+                max(0.0, min(1.0, float(val or 0.0)))
+                for val in list(_det_norm_cdf)
+            ]
+        _carrier = getattr(runtime_bundle, 'carrier_to_x', None)
+        if _carrier is not None:
+            _from_node_arrival = getattr(_carrier, 'from_node_arrival', None)
+
+    def _subject_completion_at_tau(tau: int) -> float:
+        if _subject_det_cdf:
+            idx = min(max(int(tau), 0), len(_subject_det_cdf) - 1)
+            return _subject_det_cdf[idx]
+        return max(
+            0.0,
+            min(
+                1.0,
+                compute_completeness(
+                    tau, lat.mu, lat.sigma, lat.onset_delta_days,
+                ),
+            ),
+        )
+
+    def _projection_completion_at_tau(tau: int) -> float:
+        if _from_node_arrival is not None:
+            _upstream_cdf = getattr(_from_node_arrival, 'deterministic_cdf', None)
+            _reach = float(getattr(_from_node_arrival, 'reach', 0.0) or 0.0)
+            if _upstream_cdf is not None and _reach > 0:
+                if _subject_det_cdf:
+                    max_idx = min(int(tau) + 1, len(_upstream_cdf))
+                    conv = 0.0
+                    for u in range(max_idx):
+                        if u == 0:
+                            f_up = float(_upstream_cdf[0] or 0.0)
+                        else:
+                            f_up = (
+                                float(_upstream_cdf[u] or 0.0)
+                                - float(_upstream_cdf[u - 1] or 0.0)
+                            )
+                        if f_up <= 0:
+                            continue
+                        conv += f_up * _subject_completion_at_tau(tau - u)
+                    return max(0.0, min(1.0, conv))
+                return max(
+                    0.0,
+                    min(
+                        1.0,
+                        _convolve_completeness_at_age(
+                            tau,
+                            _upstream_cdf,
+                            _reach,
+                            lat.mu,
+                            lat.sigma,
+                            lat.onset_delta_days,
+                        ),
+                    ),
+                )
+        return _subject_completion_at_tau(tau)
+
     if fe is not None and sum_x > 0:
         det_complete_num = 0.0
         det_complete_den = 0.0
@@ -393,8 +463,8 @@ def _query_scoped_latency_rows(
             frontier_age = float(
                 cohort.get('tau_observed', cohort.get('tau_max', 0)) or 0.0
             )
-            det_complete_num += weight * compute_completeness(
-                frontier_age, lat.mu, lat.sigma, lat.onset_delta_days,
+            det_complete_num += weight * _projection_completion_at_tau(
+                int(frontier_age)
             )
             det_complete_den += weight
         completeness = (
@@ -437,11 +507,50 @@ def _query_scoped_latency_rows(
                 ev_y_total += float(engine_cohort.y_frozen or 0.0)
         return (ev_x_total, ev_y_total, sum_n_cohorts)
 
-    for tau in range(max_tau + 1):
-        det_cdf_tau = max(
-            0.0,
-            min(1.0, compute_completeness(tau, lat.mu, lat.sigma, lat.onset_delta_days)),
+    def _collapsed_cohort_evidence_at_tau(
+        tau: int,
+    ) -> tuple[Optional[float], Optional[float], int]:
+        if fe is None or tau > tau_future_max:
+            return (None, None, 0)
+
+        has_real_obs = any(
+            tau in fe.cohort_at_tau.get(cohort['anchor_day'].isoformat(), {})
+            for cohort in fe.cohort_list
+            if tau <= int(cohort.get('tau_observed', cohort.get('tau_max', 0)) or 0)
         )
+        if not has_real_obs:
+            return (None, None, 0)
+
+        ev_x_total = 0.0
+        ev_y_total = 0.0
+        n_mature = 0
+        for cohort, engine_cohort in zip(fe.cohort_list, fe.engine_cohorts):
+            frontier_age = int(
+                cohort.get('tau_observed', cohort.get('tau_max', 0)) or 0
+            )
+            tau_max_c = int(cohort.get('tau_max', frontier_age) or 0)
+            ad_str = cohort['anchor_day'].isoformat()
+
+            if tau < len(engine_cohort.obs_x):
+                if tau <= frontier_age:
+                    ev_x_total += float(engine_cohort.obs_x[tau] or 0.0)
+                else:
+                    ev_x_total += float(engine_cohort.x_frozen or 0.0)
+            else:
+                ev_x_total += float(engine_cohort.x_frozen or 0.0)
+
+            if tau < len(engine_cohort.obs_y):
+                ev_y_total += float(engine_cohort.obs_y[tau] or 0.0)
+            else:
+                ev_y_total += float(engine_cohort.y_frozen or 0.0)
+
+            if tau <= tau_max_c and tau in fe.cohort_at_tau.get(ad_str, {}):
+                n_mature += 1
+
+        return (ev_x_total, ev_y_total, n_mature)
+
+    for tau in range(max_tau + 1):
+        det_cdf_tau = _projection_completion_at_tau(tau)
         projected_rate = p_mean * det_cdf_tau
         model_bands = {
             level: [bounds[0] * det_cdf_tau, bounds[1] * det_cdf_tau]
@@ -459,6 +568,11 @@ def _query_scoped_latency_rows(
 
         if is_window:
             ev_x, ev_y, cohorts_covered = _window_evidence_at_tau(tau)
+        elif (
+            runtime_bundle is not None
+            and getattr(runtime_bundle.carrier_to_x, 'mode', '') == 'identity'
+        ):
+            ev_x, ev_y, cohorts_covered = _collapsed_cohort_evidence_at_tau(tau)
         else:
             ev = evidence_by_tau.get(tau) if tau <= tau_future_max else None
             ev_x = ev.get('sum_x') if ev else None
@@ -555,7 +669,10 @@ def build_cohort_evidence_from_frames(
     observation building, tau range computation, and CohortEvidence
     construction.
 
-    Returns None if no usable evidence is found.
+    Returns None only when the request dates are malformed. If no
+    observations bind to the selected semantic question, the builder still
+    returns zero-observation cohorts so the general carrier/subject solve
+    owns the no-evidence limit.
     """
     from .forecast_state import CohortEvidence
 
@@ -608,7 +725,18 @@ def build_cohort_evidence_from_frames(
             }
 
     if not cohort_info:
-        return None
+        if anchor_from_d > anchor_to_d:
+            return None
+        ad = anchor_from_d
+        while ad <= anchor_to_d:
+            cohort_info[ad.isoformat()] = {
+                'x_frozen': 0.0,
+                'y_frozen': 0.0,
+                'a_frozen': 1.0,
+                'tau_max': 0,
+                'anchor_day': ad,
+            }
+            ad += _timedelta(days=1)
 
     # ── Build per-(cohort, τ) observations from all frames ─────────
     cohort_at_tau: Dict[str, Dict[int, tuple]] = defaultdict(dict)
@@ -874,7 +1002,7 @@ def compute_cohort_maturity_rows_v3(
                 from_node_arrival=from_node_arrival_local,
                 numerator_representation='factorised',
                 p_conditioning_temporal_family=(
-                    'window' if (is_window or is_multi_hop) else 'cohort'
+                    'cohort' if _direct_cohort_p_conditioning else 'window'
                 ),
                 p_conditioning_source=(
                     'direct_cohort_exact_subject'
@@ -902,8 +1030,12 @@ def compute_cohort_maturity_rows_v3(
             bundle.sweep_eligible = is_cf_sweep_eligible(resolved_local)
             bundle.cf_mode = cf_mode_local
             bundle.cf_reason = cf_reason_local
-            bundle.carrier_to_x.x_provider = x_provider_local
-            bundle.carrier_to_x.from_node_arrival = from_node_arrival_local
+            if bundle.carrier_to_x.mode == 'upstream':
+                bundle.carrier_to_x.x_provider = x_provider_local
+                bundle.carrier_to_x.from_node_arrival = from_node_arrival_local
+            else:
+                bundle.carrier_to_x.x_provider = None
+                bundle.carrier_to_x.from_node_arrival = None
             if x_provider_local is not None:
                 bundle.carrier_to_x.reach = float(
                     getattr(x_provider_local, 'reach', 0.0) or 0.0
@@ -947,6 +1079,75 @@ def compute_cohort_maturity_rows_v3(
             bundle.p_conditioning_evidence.total_x = None
             bundle.p_conditioning_evidence.total_y = None
         return bundle
+
+    def _resolve_carrier_state(fe_local):
+        x_provider_local = x_provider_override
+        from_node_arrival_local = None
+        upstream_path_cdf_arr_local = None
+        carrier_tier = 'none'
+
+        if (
+            x_provider_local is None
+            and not is_window
+            and anchor_node_id
+            and query_from_node
+            and query_from_node != anchor_node_id
+        ):
+            try:
+                x_provider_local = build_x_provider_from_graph(
+                    graph, target_edge, anchor_node_id, is_window,
+                )
+            except Exception as e:
+                print(f"[v3] WARNING: x_provider build failed: {e}")
+
+        if (
+            x_provider_local is not None
+            and bool(getattr(x_provider_local, 'enabled', False))
+            and x_provider_local.reach > 0
+        ):
+            upstream_params_list = (
+                x_provider_local.ingress_carrier
+                if x_provider_local.ingress_carrier
+                else x_provider_local.upstream_params_list
+            )
+            _carrier_rng = np.random.default_rng(43)
+            _carrier_max_tau = (
+                fe_local.saturation_tau
+                if fe_local is not None
+                else axis_tau_max
+            )
+            if _carrier_max_tau is None and det_norm_cdf is not None:
+                try:
+                    _carrier_max_tau = max(len(det_norm_cdf) - 1, 0)
+                except TypeError:
+                    _carrier_max_tau = None
+            if _carrier_max_tau is None:
+                _carrier_max_tau = 30
+            det_cdf, mc_cdf, carrier_tier = build_upstream_carrier(
+                upstream_params_list=upstream_params_list,
+                upstream_obs=x_provider_local.upstream_obs,
+                cohort_list=fe_local.cohort_list if fe_local is not None else [],
+                reach=x_provider_local.reach,
+                is_window=is_window,
+                max_tau=_carrier_max_tau,
+                num_draws=2000,
+                rng=_carrier_rng,
+            )
+            upstream_path_cdf_arr_local = det_cdf
+            if det_cdf is not None or mc_cdf is not None:
+                from_node_arrival_local = NodeArrivalState(
+                    deterministic_cdf=det_cdf,
+                    mc_cdf=mc_cdf,
+                    reach=x_provider_local.reach,
+                    tier=carrier_tier,
+                )
+
+        return (
+            x_provider_local,
+            from_node_arrival_local,
+            upstream_path_cdf_arr_local,
+            carrier_tier,
+        )
 
     # ── Non-latency edge: closed-form shortcut ─────────────────────
     # Authoritative signal is the edge's latency_parameter flag, not
@@ -1007,9 +1208,16 @@ def compute_cohort_maturity_rows_v3(
         resolved=resolved,
         axis_tau_max=axis_tau_max,
     )
+    (
+        x_provider,
+        from_node_arrival,
+        upstream_path_cdf_arr,
+        _carrier_tier,
+    ) = _resolve_carrier_state(fe)
+    print(f"[v3] carrier: tier={_carrier_tier}")
     if not _sweep_eligible:
         resolved_degraded = resolved
-        if not is_window:
+        if not is_window and from_node_arrival is not None:
             try:
                 _path_resolved = resolve_model_params(
                     target_edge, scope='path', temporal_mode='cohort',
@@ -1019,6 +1227,14 @@ def compute_cohort_maturity_rows_v3(
             except Exception as e:
                 print(f"[v3] WARNING: degraded path resolve failed: {e}")
         _cf_mode, _cf_reason = get_cf_mode_and_reason(resolved_degraded)
+        degraded_runtime_bundle = _prepare_runtime_bundle(
+            fe_local=fe,
+            resolved_local=resolved_degraded,
+            cf_mode_local=_cf_mode,
+            cf_reason_local=_cf_reason,
+            x_provider_local=x_provider,
+            from_node_arrival_local=from_node_arrival,
+        )
         _res = _query_scoped_latency_rows(
             fe=fe,
             resolved=resolved_degraded,
@@ -1026,12 +1242,7 @@ def compute_cohort_maturity_rows_v3(
             axis_tau_max=axis_tau_max,
             band_level=band_level,
             is_window=is_window,
-        )
-        _prepare_runtime_bundle(
-            fe_local=fe,
-            resolved_local=resolved_degraded,
-            cf_mode_local=_cf_mode,
-            cf_reason_local=_cf_reason,
+            runtime_bundle=degraded_runtime_bundle,
         )
         return _attach_cf_row_metadata(
             _res.rows,
@@ -1046,64 +1257,9 @@ def compute_cohort_maturity_rows_v3(
             cf_mode=_cf_mode,
             cf_reason=_cf_reason,
         )
-
-    # ── Build x_provider for upstream params (cohort mode) ──────────
-    # Prefer handler-constructed override (v2 parity), fall back to
-    # graph-derived provider.
-    x_provider = x_provider_override
-    if (
-        x_provider is None
-        and not is_window
-        and anchor_node_id
-        and query_from_node
-        and query_from_node != anchor_node_id
-    ):
-        try:
-            x_provider = build_x_provider_from_graph(
-                graph, target_edge, anchor_node_id, is_window,
-            )
-        except Exception as e:
-            print(f"[v3] WARNING: x_provider build failed: {e}")
 
     if fe is None:
-        # No cohort evidence to condition on. Zero-evidence
-        # Beta-Binomial update degenerates to the prior — use the
-        # closed-form path with fe=None to produce prior-only rows.
-        # Works for any σ because the prior is just a Beta
-        # distribution regardless of latency. If the resolver also has
-        # no usable α/β (Class D), _non_latency_rows returns [] and the
-        # caller routes the edge to skipped_edges.
-        #
-        # NB: a consumer that cares whether the output is the prior
-        # vs a posterior reads `_conditioned` from the first row
-        # (stashed below). Don't infer from latency flag — prior
-        # fallback can happen to latency and non-latency edges alike.
-        _res = _non_latency_rows(
-            fe=None,
-            resolved=resolved,
-            sweep_to=sweep_to,
-            axis_tau_max=axis_tau_max,
-            band_level=band_level,
-        )
-        _prepare_runtime_bundle(
-            fe_local=None,
-            resolved_local=resolved,
-            cf_mode_local=_cf_mode,
-            cf_reason_local=_cf_reason,
-        )
-        return _attach_cf_row_metadata(
-            _res.rows,
-            conditioning={
-                'r': _res.r,
-                'm_S': _res.m_S,
-                'm_G': _res.m_G,
-                'applied': _res.blend_applied,
-                'skip_reason': _res.blend_skip_reason,
-            },
-            conditioned=_res.conditioned,
-            cf_mode=_cf_mode,
-            cf_reason=_cf_reason,
-        )
+        return []
 
     engine_cohorts = fe.engine_cohorts
     cohort_list = fe.cohort_list
@@ -1114,42 +1270,6 @@ def compute_cohort_maturity_rows_v3(
     tau_solid_max = fe.tau_solid_max
     tau_future_max = fe.tau_future_max
     last_frame_date = fe.last_frame_date
-
-    # ── Build upstream carrier (deferred — v2 lines 656-669) ────────
-    # Now that cohort_list is populated, Tier 2 can classify donors.
-    from_node_arrival = None
-    upstream_path_cdf_arr = None
-    _carrier_tier = 'none'
-    if (
-        x_provider is not None
-        and bool(getattr(x_provider, 'enabled', False))
-        and x_provider.reach > 0
-    ):
-        upstream_params_list = (
-            x_provider.ingress_carrier
-            if x_provider.ingress_carrier
-            else x_provider.upstream_params_list
-        )
-        _carrier_rng = np.random.default_rng(43)
-        det_cdf, mc_cdf, _carrier_tier = build_upstream_carrier(
-            upstream_params_list=upstream_params_list,
-            upstream_obs=x_provider.upstream_obs,
-            cohort_list=cohort_list,
-            reach=x_provider.reach,
-            is_window=is_window,
-            max_tau=saturation_tau,
-            num_draws=2000,
-            rng=_carrier_rng,
-        )
-        upstream_path_cdf_arr = det_cdf
-        if det_cdf is not None or mc_cdf is not None:
-            from_node_arrival = NodeArrivalState(
-                deterministic_cdf=det_cdf,
-                mc_cdf=mc_cdf,
-                reach=x_provider.reach,
-                tier=_carrier_tier,
-            )
-    print(f"[v3] carrier: tier={_carrier_tier}")
 
     active_runtime_bundle = _prepare_runtime_bundle(
         fe_local=fe,
@@ -1174,15 +1294,16 @@ def compute_cohort_maturity_rows_v3(
         _cohort_x_at_tau.append(x_at_tau)
 
     # ── Engine call: per-cohort population model sweep ──────────────
-    # The handler prepares `mc_cdf_arr` on the semantically correct
-    # subject span before we get here:
+    # The handler prepares `mc_cdf_arr` on the factorised subject span
+    # before we get here:
     # - window(): edge/rooted X→end
+    # - cohort() single-hop: edge/rooted X→Y
     # - cohort() multi-hop: query path X→end
-    # - cohort() single-edge with anchor != from: widened anchor→end span
-    # - cohort() single-edge with anchor == from: edge-level (path = edge)
     #
-    # `det_norm_cdf` remains edge-level for E_i / IS conditioning, and
-    # `mc_p_s` is overridden to edge-level p draws when the span widens.
+    # Any anchor-relative behaviour belongs on `carrier_to_x` or the
+    # rate-conditioning evidence seam, not by retargeting the subject span.
+    # `det_norm_cdf` therefore remains the subject-side X→end kernel used for
+    # E_i / IS conditioning.
     _sweep_cdf = mc_cdf_arr
     _sweep_p = mc_p_s
     sweep = compute_forecast_trajectory(

@@ -125,6 +125,16 @@ curve = entry.get('curve') or []
 promoted = entry.get('promotedSource') or (d.get('metadata') or {}).get('promoted_source')
 overlay_by_tau = {int(c['tau_days']): float(c['model_rate']) for c in curve
                   if c.get('model_rate') is not None}
+band_upper = entry.get('bayesBandUpper') or []
+band_lower = entry.get('bayesBandLower') or []
+band_upper_by_tau = {
+    int(c['tau_days']): float(c['model_rate']) for c in band_upper
+    if c.get('tau_days') is not None and c.get('model_rate') is not None
+}
+band_lower_by_tau = {
+    int(c['tau_days']): float(c['model_rate']) for c in band_lower
+    if c.get('tau_days') is not None and c.get('model_rate') is not None
+}
 
 # Sanity gate: per-source curve asymptotes must approach their own
 # per-source forecast_mean (edge rate), not a path-cumulative probability.
@@ -164,6 +174,9 @@ if not overlay_by_tau:
 if not midline_by_tau:
     print(f"  FAIL: {case_name} — main chart has no model_midpoint rows")
     sys.exit(2)
+if not band_upper_by_tau or not band_lower_by_tau:
+    print(f"  FAIL: {case_name} — promoted overlay band missing")
+    sys.exit(2)
 
 # Evaluate at representative taus present in BOTH series
 common_taus = sorted(set(overlay_by_tau) & set(midline_by_tau))
@@ -182,6 +195,7 @@ if not sample_taus:
 worst_tau = None
 worst_rel = 0.0
 failures = []
+band_failures = []
 
 print(f"  Promoted source: {promoted}")
 print(f"  τ in [{min(common_taus)}, {tau_max}], sampling {len(sample_taus)} points")
@@ -203,12 +217,22 @@ for t in sample_taus:
     if rel_diff > worst_rel:
         worst_rel = rel_diff
         worst_tau = t
+    bu = band_upper_by_tau.get(t)
+    bl = band_lower_by_tau.get(t)
+    if bu is None or bl is None or not (bl <= o <= bu):
+        band_failures.append((t, bl, o, bu))
     print(f" {marker}{t:>4}  {o:>10.6f}  {m:>10.6f}  {abs_diff:>10.6f}  {rel_diff*100:>7.2f}%")
 
 if source_curve_issues:
     print(f"  FAIL: {case_name} — per-source scaling issues:")
     for issue in source_curve_issues:
         print(f"    {issue}")
+    sys.exit(1)
+
+if band_failures:
+    print(f"  FAIL: {case_name} — promoted overlay left its own band:")
+    for t, bl, o, bu in band_failures[:5]:
+        print(f"    tau={t}: band=[{bl}, {bu}] overlay={o}")
     sys.exit(1)
 
 if failures:

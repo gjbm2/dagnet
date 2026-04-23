@@ -1,6 +1,6 @@
 # Bayes Regression Tooling
 
-**Last updated**: 18-Apr-26 (config-driven plans, structured JSON, truth file migration, sparsity lifecycles)
+**Last updated**: 22-Apr-26 (fixture-side sidecar contract/signposting clarified; raw patch replay via TS apply-patch)
 
 How the parameter recovery regression pipeline works: discovery,
 bootstrap, parallel execution, multi-layered audit, structured
@@ -47,6 +47,47 @@ regression_plans.py --plan <name>              # config-driven entry point
 
 ---
 
+## Investigation tracker (`bayes-tracker`)
+
+Defect-isolation and diagnostic runs are tracked via the `bayes-tracker`
+MCP server in `bayes/tracker/` (registered in `.mcp.json` at repo root).
+It enforces the run-reason discipline — why this run exists, what it is
+meant to prove, what it is not meant to prove — that markdown-only run
+logs fail to enforce under agent impatience.
+
+Structured source of truth: `docs/current/project-bayes/20-open-issues-register.tracker.yaml`.
+Human-facing view: `docs/current/project-bayes/20-open-issues-register.md`
+(marker-fenced regions are rewritten by the server's `render_register`
+tool; narrative outside the markers is preserved).
+
+Twelve tools, stdio transport. Five reads (`get_overview`,
+`list_blockers`, `get_next_run`, `get_issue`, `get_run`) and seven writes
+(`set_current_line`, `create_run`, `start_run`, `complete_run`,
+`upsert_issue`, `link_run_and_issue`, `render_register`). The run
+state machine is `planned → running → {blocked | answered | abandoned}`;
+`complete_run` with `status="blocked"` requires a `blocker_category`
+(§14 of doc 63) — blocked runs are first-class evidence that completion
+work isn't done, not failures to hide.
+
+**Workflow**: `get_overview` first to orient; `create_run` with required
+reason fields before launch; `start_run` at launch; attach the returned
+`tracker_run_id` to the regression run; `complete_run` on return;
+`upsert_issue` + `render_register` to refresh the view.
+
+**Runner-side enforcement is not live yet** (Phase 2 of doc 63). Until
+then, the tracker is advisory: `run_regression.py` and
+`regression_plans.py` do not refuse without a tracker id, and the
+`tracker_run_id → result_json` link must be attached manually. When
+Phase 2 lands, `BAYES_REQUIRE_TRACKER=1` (default for interactive
+shells) will make the runners refuse without `--tracker-run-id`.
+
+Full spec: `docs/current/project-bayes/63-investigation-tracker-mcp-spec.md`.
+Agent-facing workflow and operations reference:
+`docs/current/project-bayes/20-open-issues-register.md` (top of doc,
+"How to use this register" + "Tracker operations reference").
+
+---
+
 ## Running synth graphs manually
 
 When testing synth graphs outside the full regression pipeline, three rules apply:
@@ -69,6 +110,57 @@ python3 bayes/param_recovery.py \
 The winning formula flags (`latency_reparam`, `centred_latency_slices`,
 `centred_p_slices`) are all `True` by default since 14-Apr-26. No
 `--feature` flags needed unless disabling them.
+
+### Pytest fixture-side Bayes commissioning
+
+The "always use `param_recovery.py`" rule above applies to **manual
+investigation and recovery analysis**. Pytest synth fixtures are a
+different case: they sometimes need a cached Bayes fit result so the
+test loader can materialise the same posterior-bearing graph shape that
+the FE would produce, without rewriting the shared synth graph on disk.
+The sanctioned fixture path is the cached sidecar flow in
+`graph-editor/lib/tests/conftest.py`.
+
+`bayesian=True` is the only sanctioned pytest mode. It computes the
+sidecar fingerprint from the synth truth YAML and the per-parameter YAML
+files, then loads `bayes/fixtures/<graph>.bayes-vars.json` when the
+stored fingerprint matches. If the sidecar is absent or stale, the
+fixture runs `bayes/test_harness.py` once via the FE payload path with
+`--sidecar-out` so the raw worker/apply-patch payload is written to the
+sidecar rather than patched into the graph file.
+
+The returned graph is then produced by replaying that cached payload
+through the existing TS CLI `--apply-patch` path with
+`--print-enriched-graph`, which applies the production
+`bayesPatchService.applyPatch()` logic in memory and prints the enriched
+graph JSON to stdout without writing any files back to disk. The synth
+graph JSON on disk is never used as the storage location for Bayes
+posteriors/model vars, and routine pytest loads must not rewrite it.
+
+Two caching layers make the steady-state path cheap:
+
+1. the sidecar file itself is keyed by the truth/parameter fingerprint,
+   so fresh sidecars are reused across sessions;
+2. `conftest.py` keeps a per-process `_SIDECAR_CACHE`, so repeated
+   `load_graph_json(..., bayesian=True)` calls in one pytest session do
+   not re-run MCMC for the same fingerprint.
+
+There is intentionally no fixture-level "force fresh Bayes commission"
+switch. If a human explicitly wants a new sidecar, do it as a separate
+manual step outside the shared pytest loader. Do not widen
+`load_graph_json()` or `requires_synth()` with a refit flag: that
+defeats the sidecar's purpose, dirties checked-in fixture sidecars, and
+makes routine synth tests pay the MCMC cost on every run.
+
+If you touch this path, the signposts are:
+
+- shared pytest entrypoint: `graph-editor/lib/tests/conftest.py`
+- harness sidecar writer path: `bayes/test_harness.py --sidecar-out`
+- contract tests: `graph-editor/lib/tests/test_bayes_sidecar_conftest.py`
+  and `bayes/tests/test_test_harness_sidecar.py`
+
+If you think you need a pytest-level "force refit" flag, stop. That is a
+manual commissioning workflow, not a widening of the shared fixture API.
 
 ### Running a full regression
 

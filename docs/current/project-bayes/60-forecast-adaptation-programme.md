@@ -350,7 +350,7 @@ verify that the doc 56 runtime boundary is not regressing.
 
 - `graph-editor/lib/tests/test_forecast_stack_dependencies.py`
 - `graph-editor/lib/tests/test_conditioned_forecast_response_contract.py`
-- `graph-editor/src/services/__tests__/conditionedForecastCompleteness.red.test.ts`
+- `graph-editor/src/services/__tests__/conditionedForecastCompleteness.test.ts`
 - `graph-editor/lib/tests/test_doc56_phase0_behaviours.py`
 - `graph-editor/lib/tests/test_cf_query_scoped_degradation.py`
 - `graph-editor/lib/tests/test_analysis_subject_resolution.py`
@@ -372,7 +372,7 @@ verify that the doc 56 runtime boundary is not regressing.
   22-Apr-26, the focused suites
   `test_conditioned_forecast_response_contract.py`,
   `test_temporal_regime_separation.py`, and
-  `conditionedForecastCompleteness.red.test.ts` are green even though
+  `conditionedForecastCompleteness.test.ts` are green even though
   some comments or filenames still describe them as RED / expected-fail
   style guards.
 - Make the `asat()` seam explicit in the harness map so shared
@@ -831,7 +831,7 @@ The tests below are the main guidance system for this workstream.
 | Test category | Protects against | Likely home | Main packages |
 |---|---|---|---|
 | CF response contract | response-shape drift, missing completeness / provenance fields | `graph-editor/lib/tests/test_conditioned_forecast_response_contract.py` | WP0, WP5, WP7 |
-| CF graph authority | FE/topo values surviving over CF-owned fields in fast or slow path | `graph-editor/src/services/__tests__/conditionedForecastCompleteness.red.test.ts` | WP0, WP5, WP7 |
+| CF graph authority | FE/topo values surviving over CF-owned fields in fast or slow path | `graph-editor/src/services/__tests__/conditionedForecastCompleteness.test.ts` | WP0, WP5, WP7 |
 | chart / CF parity at equivalent question | drift between whole-graph CF, scoped CF, and chart horizon reads | `graph-editor/lib/tests/test_doc56_phase0_behaviours.py` | WP0-WP3 |
 | subject coverage and `all_graph_parameters` scope | whole-graph CF touching the wrong edge set | `graph-editor/lib/tests/test_analysis_subject_resolution.py` | WP0, WP1, WP6 |
 | multi-hop regime separation and doc 47 rule | wrong evidence family during subject-frame construction | `graph-editor/lib/tests/test_temporal_regime_separation.py` | WP1, WP3 |
@@ -847,7 +847,7 @@ Status note for WP0 triage: some focused suites still carry historical
 status signal. As of 22-Apr-26, targeted runs of
 `test_conditioned_forecast_response_contract.py`,
 `test_temporal_regime_separation.py`, and
-`conditionedForecastCompleteness.red.test.ts` are green. WP0 should
+`conditionedForecastCompleteness.test.ts` are green. WP0 should
 refresh stale status notes before using those files as evidence of an
 open gap.
 
@@ -874,6 +874,7 @@ Fixture-selection rule for these harnesses:
 | `graph-ops/scripts/multihop-evidence-parity-test.sh` | `synth-mirror-4step` | failure of the doc 47 seam in the non-latent-upstream limit where `cohort()` and `window()` should degenerate to the same evidence basis | WP0-WP3 | Core outside-in canary; may begin life as intentional red and must then be classified explicitly |
 | `graph-ops/scripts/window-cohort-convergence-test.sh` | `synth-mirror-4step` primary; `synth-lat4` secondary when genuine upstream-latency divergence is the property under test | cohort multi-hop composition drift in approximate / limit-case behaviour | WP3, WP6 | Secondary sanity check, not the primary acceptance oracle |
 | `graph-ops/scripts/cohort-maturity-model-parity-test.sh` | `synth-mirror-4step` | chart main-midline versus promoted-overlay divergence on `cohort_maturity` surfaces | WP3-WP5 when overlay-bearing chart surfaces are touched | Targeted guard, not a universal gate |
+| `graph-editor/lib/tests/test_v3_degeneracy_invariants.py` (with shell companion `graph-ops/scripts/v3-degeneracy-invariants.sh`) | `synth-mirror-4step` primary; `synth-lat4` for all-latency divergence | v3 chart losing mode distinction on the zero-evidence path; window asymptote drift from `p.mean`; `A = X` cohort failing to collapse onto window; cohort overshooting window | WP3-WP6 and anything touching `cohort_forecast_v3.compute_cohort_maturity_rows_v3` | Core outside-in gate for v3-only semantic degeneracies; baseline reds on 23-Apr-26 recorded in doc 65 §14 |
 
 Rationale for the designated graphs:
 

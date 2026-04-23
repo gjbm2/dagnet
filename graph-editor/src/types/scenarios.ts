@@ -15,7 +15,27 @@
 export interface ProbabilityParam {
   mean?: number;
   stdev?: number;
-  
+
+  // === POSTERIOR: probability posterior (Bayesian enrichment) ===
+  /** Probability posterior (alpha/beta/HDI/quality) projected by applyPatch. */
+  posterior?: {
+    distribution?: string;
+    alpha?: number;
+    beta?: number;
+    hdi_lower?: number;
+    hdi_upper?: number;
+    hdi_level?: number;
+    ess?: number;
+    rhat?: number;
+    fitted_at?: string;
+    fingerprint?: string;
+    provenance?: string;
+    cohort_alpha?: number;
+    cohort_beta?: number;
+    cohort_hdi_lower?: number;
+    cohort_hdi_upper?: number;
+  };
+
   // === LAG fields for edge rendering (evidence vs forecast two-layer) ===
   /** Forecast from mature cohorts (p_∞) — DSL: e.X.p.forecast.mean */
   forecast?: {
@@ -33,14 +53,65 @@ export interface ProbabilityParam {
     /** Observed converters for evidence rate (binomial k). */
     k?: number;
   };
-  
-  // === LAG latency bead display fields (right-aligned bead) ===
-  /** Latency data — DSL: e.X.p.latency.median_lag_days, e.X.p.latency.completeness */
+
+  // === Latency: LAG display + Bayesian promoted scalars + posterior ===
+  /** Latency fields — promoted scalars and posterior (after applyPatch). */
   latency?: {
+    // LAG display
     median_lag_days?: number;
     completeness?: number;
+    completeness_stdev?: number;
+    t95?: number;
+    path_t95?: number;
+    // Bayesian promoted scalars
+    mu?: number;
+    sigma?: number;
+    onset_delta_days?: number;
+    promoted_t95?: number;
+    promoted_onset_delta_days?: number;
+    promoted_mu_sd?: number;
+    promoted_sigma_sd?: number;
+    promoted_onset_sd?: number;
+    promoted_onset_mu_corr?: number;
+    path_mu?: number;
+    path_sigma?: number;
+    path_onset_delta_days?: number;
+    promoted_path_t95?: number;
+    promoted_path_mu_sd?: number;
+    promoted_path_sigma_sd?: number;
+    promoted_path_onset_sd?: number;
+    // Latency posterior (lognormal)
+    posterior?: {
+      distribution?: string;
+      mu_mean?: number;
+      mu_sd?: number;
+      sigma_mean?: number;
+      sigma_sd?: number;
+      onset_mean?: number;
+      onset_sd?: number;
+      onset_delta_days?: number;
+      onset_mu_corr?: number;
+      hdi_t95_lower?: number;
+      hdi_t95_upper?: number;
+      hdi_level?: number;
+      ess?: number;
+      rhat?: number;
+      fitted_at?: string;
+      fingerprint?: string;
+      provenance?: string;
+      path_mu_mean?: number;
+      path_mu_sd?: number;
+      path_sigma_mean?: number;
+      path_sigma_sd?: number;
+      path_onset_mean?: number;
+      path_onset_sd?: number;
+      path_onset_delta_days?: number;
+      path_hdi_t95_lower?: number;
+      path_hdi_t95_upper?: number;
+      path_provenance?: string;
+    };
   };
-  
+
   // === Inbound-n: Forecast population (see inbound-n-fix.md) ===
   /** Forecast population for this edge under the current DSL — DSL: e.X.p.n */
   n?: number;

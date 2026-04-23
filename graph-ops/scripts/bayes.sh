@@ -27,6 +27,8 @@ if [ $# -lt 1 ]; then
   echo "  --submit                 Full submit + poll until done"
   echo "  --output <path>          Write payload JSON to file"
   echo "  --format json|yaml       Output format (default: json)"
+  echo "  --bayes-vars <path>      Inject Bayesian posteriors from a .bayes-vars.json sidecar"
+  echo "  --force-vars             With --bayes-vars, bypass rhat/ess quality gates"
   echo "  --no-cache               Bypass disk bundle cache"
   echo "  --verbose, -v            Show all internal debug logging"
   echo ""

@@ -1,53 +1,119 @@
 {
-  "schema_version": 1,
-  "generated_at": "22-Apr-26 11:54:04",
-  "fingerprint": {
+  "schema_version": 2,
+  "generated_at": "22-Apr-26 23:20:39",
+  "sidecar_fingerprint": {
     "truth_sha256": "b1302c20c828165760233653e656c57b78c231b11a062fc72d7e17bf06f45237",
     "param_file_hashes": {
       "simple-a-to-b": "ff8fa7a9f2064328b58debfb4037913dc1862832778c4fd3487459cd29474ca3",
       "simple-b-to-c": "201b6088bc81b29ed2cceef52064b929437520c66e165bc007692c6a96de4a3c"
     }
   },
-  "edges": {
-    "f255117c-4d21-5025-a63a-31f1d1cb2c61": {
-      "source": "bayesian",
-      "source_at": "",
-      "probability": {
-        "mean": 0.7036424248845773,
-        "stdev": 0.08000060047989879
+  "job_id": "harness-enrich-1776896439",
+  "fitted_at": "",
+  "fingerprint": "",
+  "model_version": 1,
+  "quality": {
+    "max_rhat": 1.0021,
+    "min_ess": 15259.6,
+    "converged_pct": 100.0
+  },
+  "skipped": [],
+  "webhook_payload_edges": [
+    {
+      "param_id": "simple-a-to-b",
+      "file_path": "parameters/simple-a-to-b.yaml",
+      "slices": {
+        "window()": {
+          "alpha": 8040.3283,
+          "beta": 3385.8977,
+          "p_hdi_lower": 0.69644,
+          "p_hdi_upper": 0.710483,
+          "ess": 17105.7,
+          "rhat": 1.0012,
+          "divergences": 0,
+          "evidence_grade": 3,
+          "provenance": "bayesian",
+          "alpha_pred": 21.3243,
+          "beta_pred": 8.934,
+          "hdi_lower_pred": 0.583673,
+          "hdi_upper_pred": 0.839941,
+          "n_effective": 500877.0,
+          "mu_mean": 2.2999,
+          "mu_sd": 0.01,
+          "mu_sd_pred": 0.0794,
+          "sigma_mean": 0.5192,
+          "sigma_sd": 0.006,
+          "onset_mean": 1.03,
+          "onset_sd": 0.07,
+          "hdi_t95_lower": 24.1,
+          "hdi_t95_upper": 24.8,
+          "onset_mu_corr": -0.794,
+          "kappa_lat_mean": 557.1,
+          "kappa_lat_sd": 47.3,
+          "delta_elpd": 612.191,
+          "pareto_k_max": 0.165,
+          "n_loo_obs": 3662
+        }
       },
-      "latency": {
-        "mu": 2.2998,
-        "sigma": 0.5192,
-        "t95": 24.456878101468366,
-        "onset_delta_days": 1.03,
-        "mu_sd": 0.01,
-        "mu_sd_pred": 0.0796,
-        "sigma_sd": 0.0061,
-        "onset_sd": 0.07,
-        "onset_mu_corr": -0.794
+      "_model_state": {
+        "p_base_alpha_f255117c_4d21_5025_a63a_31f1d1cb2c61": 8040.3283,
+        "p_base_beta_f255117c_4d21_5025_a63a_31f1d1cb2c61": 3385.8977,
+        "kappa_f255117c_4d21_5025_a63a_31f1d1cb2c61": 81.02,
+        "p_base_alpha_4605c03d_e73e_5c01_8052_4960f3860f2e": 7085.6239,
+        "p_base_beta_4605c03d_e73e_5c01_8052_4960f3860f2e": 4690.2915,
+        "kappa_4605c03d_e73e_5c01_8052_4960f3860f2e": 81.45
       },
-      "param_id": "simple-a-to-b"
+      "prior_tier": "kn_derived",
+      "evidence_grade": 3,
+      "divergences": 0
     },
-    "4605c03d-e73e-5c01-8052-4960f3860f2e": {
-      "source": "bayesian",
-      "source_at": "",
-      "probability": {
-        "mean": 0.6017307942414399,
-        "stdev": 0.0861540717245372
+    {
+      "param_id": "simple-b-to-c",
+      "file_path": "parameters/simple-b-to-c.yaml",
+      "slices": {
+        "window()": {
+          "alpha": 7085.6239,
+          "beta": 4690.2915,
+          "p_hdi_lower": 0.5945,
+          "p_hdi_upper": 0.609092,
+          "ess": 15488.1,
+          "rhat": 1.0021,
+          "divergences": 0,
+          "evidence_grade": 3,
+          "provenance": "bayesian",
+          "alpha_pred": 17.8545,
+          "beta_pred": 11.8264,
+          "hdi_lower_pred": 0.466537,
+          "hdi_upper_pred": 0.753164,
+          "n_effective": 349072.0,
+          "mu_mean": 2.5163,
+          "mu_sd": 0.0133,
+          "mu_sd_pred": 0.0835,
+          "sigma_mean": 0.6114,
+          "sigma_sd": 0.0098,
+          "onset_mean": 1.97,
+          "onset_sd": 0.12,
+          "hdi_t95_lower": 35.1,
+          "hdi_t95_upper": 36.6,
+          "onset_mu_corr": -0.833,
+          "kappa_lat_mean": 997.5,
+          "kappa_lat_sd": 98.5,
+          "delta_elpd": 244.147,
+          "pareto_k_max": 2.277,
+          "n_loo_obs": 4285
+        }
       },
-      "latency": {
-        "mu": 2.5163,
-        "sigma": 0.6114,
-        "t95": 35.82385914169024,
-        "onset_delta_days": 1.97,
-        "mu_sd": 0.0133,
-        "mu_sd_pred": 0.0836,
-        "sigma_sd": 0.0101,
-        "onset_sd": 0.12,
-        "onset_mu_corr": -0.823
+      "_model_state": {
+        "p_base_alpha_f255117c_4d21_5025_a63a_31f1d1cb2c61": 8040.3283,
+        "p_base_beta_f255117c_4d21_5025_a63a_31f1d1cb2c61": 3385.8977,
+        "kappa_f255117c_4d21_5025_a63a_31f1d1cb2c61": 81.02,
+        "p_base_alpha_4605c03d_e73e_5c01_8052_4960f3860f2e": 7085.6239,
+        "p_base_beta_4605c03d_e73e_5c01_8052_4960f3860f2e": 4690.2915,
+        "kappa_4605c03d_e73e_5c01_8052_4960f3860f2e": 81.45
       },
-      "param_id": "simple-b-to-c"
+      "prior_tier": "kn_derived",
+      "evidence_grade": 3,
+      "divergences": 0
     }
-  }
+  ]
 }

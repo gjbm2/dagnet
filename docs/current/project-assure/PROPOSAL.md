@@ -1,13 +1,29 @@
 # Project Assure: Schema-Driven Contract Testing for CLI Param Pack Output
 
-**Status**: Proposal (draft)
-**Date**: 17-Apr-26
+**Status**: Proposal (draft); interim extractor widening landed 23-Apr-26.
+**Date**: 17-Apr-26 (original); 23-Apr-26 (interim update for Bayes-vars injection)
 
 ## Problem
 
 The CLI param pack is the canonical output of the dagnet stats pipeline. Five CLI commands consume it (param-pack, analyse, parity-test, bayes, hydrate), the CSV batch runner drives regression testing from it, and the browser scenarios system composes and edits it. If the param pack silently drops a field or produces a wrong value, everything downstream is compromised.
 
 The current test regime cannot detect silent omissions. Every assertion checks a value the test author already knew to expect. No test asks "is this the complete output?" or "does this value satisfy a domain constraint?" As a result, 23 tests pass while `t95` has never appeared in the output, `p.mean` has never been verified, and `forecast.stdev` is extracted by dead code that nothing populates. These deficiencies were found during a 17-Apr-26 investigation but they are symptoms of the testing approach, not one-off bugs.
+
+## Interim state (23-Apr-26): Bayesian extractor widening
+
+The full `x-param-pack` schema-driven design below is still the target. In the meantime, the addition of `--bayes-vars <path>` to every CLI command (see `project-cli/programme.md`) exposed a concrete version of the same whitelist gap: a user injects a full Bayesian posterior into the graph via `applyPatch`, and the param pack emits `p.mean` only. The promoted `latency.mu`, `latency.sigma`, `latency.promoted_t95`, `latency.path_mu`, the `latency.posterior` block, and the probability `posterior` block are all written onto the graph but dropped by `extractParamsFromGraph`. So the CLI's "inject posteriors for testing" feature produced output that was indistinguishable from an un-injected run.
+
+To unblock that feature, `GraphParamExtractor.ts` was widened by extending its hard-coded whitelists (still hand-maintained, still the same anti-pattern this doc proposes to fix):
+
+- `p.posterior.*` — probability posterior (alpha, beta, hdi_lower/upper/level, ess, rhat, fitted_at, fingerprint, provenance, cohort_alpha/beta/hdi_*).
+- `p.latency.*` Bayesian promoted scalars — `mu`, `sigma`, `onset_delta_days`, `promoted_t95`, `promoted_onset_delta_days`, `promoted_mu_sd`, `promoted_sigma_sd`, `promoted_onset_sd`, `promoted_onset_mu_corr`, `path_mu`, `path_sigma`, `path_onset_delta_days`, `promoted_path_t95`, `promoted_path_mu_sd`, `promoted_path_sigma_sd`, `promoted_path_onset_sd`.
+- `p.latency.posterior.*` — full latency posterior (mu_mean, mu_sd, sigma_mean, sigma_sd, onset_*, onset_mu_corr, hdi_t95_lower/upper, ess, rhat, fitted_at, fingerprint, provenance, plus all path_* equivalents).
+
+Mirrored on `conditional_p`. `ProbabilityParam` in `types/scenarios.ts` was widened to match.
+
+This change does not violate the design below — it moves the whitelist in the direction the schema would eventually drive, but via the hand-maintained list the design is meant to retire. When `x-param-pack` lands, these field sets should be the first batch annotated on the schema, and the hand-maintained arrays in `GraphParamExtractor.ts` should be deleted in favour of a schema-driven walk. The interim widening is deliberately **conservative on naming** — it exposes the canonical `latency.mu` / `latency.posterior.mu_mean` paths users already see in the browser, not newly-invented CLI-only names. It does **not** resolve the `promoted_*` naming question (design decision §1 below says `promoted_t95` is an internal staging field; today's widening still emits some `promoted_*` fields because they are the only populated surface — another symptom this doc addresses).
+
+Interim coverage is an end-to-end blind test in `cliApplyPatch.test.ts` (`bootstrap() --bayes-vars end-to-end`) that asserts the injected fields appear on flat-HRN keys (`e.<id>.p.latency.mu`, `e.<id>.p.posterior.alpha`, etc.). It catches regressions of the Bayes-vars feature specifically. It does **not** replace the structural completeness test the design below requires.
 
 ## Design
 
@@ -76,12 +92,82 @@ The schema says WHAT fields are param-pack. The invariant registry says HOW to v
 
 **Which borderline fields are param-pack?** The clear yes/no cases are listed above. Fields needing a decision:
 
-- `completeness_stdev` — only populated by the BE topo pass, not the FE path. If it's param-pack, the FE path has a gap to close.
+- `completeness_stdev` — only populated by the BE topo pass, not the FE path. If it's param-pack, the FE path has a gap to close. (23-Apr-26: added to the interim extractor whitelist; still unresolved whether the FE path should populate it.)
 - `forecast.stdev` — extracted by `GraphParamExtractor` but never populated by any pipeline stage. Dead code, or a field awaiting a producer?
-- `latency.onset_delta_days` — used by downstream analysis types. Internal model parameter or user-visible?
+- `latency.onset_delta_days` — used by downstream analysis types. Internal model parameter or user-visible? (23-Apr-26: exposed by the interim widening because the Bayesian posterior populates it via the promotion cascade. If it's internal, it needs removing; if it's user-visible, the doc below should annotate it.)
 - `cost_gbp.distribution`, `labour_cost.distribution` — currently extracted. Are distribution names part of the param pack contract?
+- **New (23-Apr-26): Bayesian enrichment surfaces** — `p.posterior.*`, `p.latency.mu/sigma/t95/onset + path_*`, `p.latency.posterior.*`. Currently hand-whitelisted by the interim extractor change. The design below needs to say:
+  - which posterior fields are user-visible (alpha/beta/HDI/fingerprint? or also ess/rhat/provenance?),
+  - whether `promoted_*` scalars stay in the pack or get renamed (design §1 says no, but there's nothing else populated on some paths),
+  - whether `path_*` latency is a separate concern from the window-level posterior (they travel together today).
+- **New (23-Apr-26): `_bayes` metadata on the graph root** — `applyPatch` writes `graph._bayes = { fitted_at, fingerprint, model_version, quality }`. Not currently extracted into the param pack. Is the run-level fingerprint / quality summary part of the pack, or is it a graph-level sidecar?
 
 These don't block the structural/semantic testing work — they just determine which fields get the annotation.
+
+---
+
+## Pack shape standardisation: flat vs. hierarchy
+
+The param pack has two shape conventions — **flat** (one line per field, full HRN path) and **nested** (grouped by edge/node id) — and the codebase is inconsistent about which one is authoritative. Users, tests, and subsystems keep tripping over the mismatch. The structural contract described above is much harder to write cleanly on a moving target, so the cleanup belongs in this project.
+
+### The muddle today
+
+| Surface | Default shape | Set where |
+|---------|---------------|-----------|
+| `toYAML(params)` in `ParamPackDSLService.ts` | `'flat'` | Function default |
+| `toJSON(params)` in `ParamPackDSLService.ts` | `'flat'` | Function default; the `structure` param is inert — both branches produce the same JSON (see `ParamPackDSLService.ts:45-54`) |
+| `toCSV(params)` | Flat only | No nested mode possible |
+| CLI `param-pack.ts` | `'flat'` (hard-coded) | `commands/paramPack.ts:178, 185` |
+| Browser `ScenariosContext` import/export | `'nested'` | `contexts/ScenariosContext.tsx:1683, 1726` |
+| Param extractor internal representation | Nested `ScenarioParams` object | `types/scenarios.ts` |
+
+So the extractor produces nested in-memory, the CLI serialises flat, the browser serialises nested, and JSON's `structure` parameter lies. Users switching between CLI and browser — and the Bayes-vars CLI feature now forces that switch regularly — see two different shapes for the same data. Test fixtures written against one shape break silently when round-tripped through the other.
+
+HRN notation (`e.<id>`, `n.<id>`, `from(a).to(b)`, `case(<id>:<variant>)`) is a third, orthogonal concern: it's the **key syntax**, used identically in both flat and nested modes. HRN is not the muddle; flat-vs-nested is. The doc below uses "HRN flat" and "HRN nested" to keep them separate.
+
+### The target
+
+One canonical serialisation — **HRN flat** — for every surface that crosses a process boundary (CLI stdout, disk files, CSV batch runner input/output, scenarios import/export from the browser, any future MCP-style tool output). Rationale:
+
+- **Grep-able and diff-able.** One line per field means `grep mean pack.yaml` and `diff packA.yaml packB.yaml` work as expected. The nested shape fragments fields across indented blocks and makes diffs noisy.
+- **Losslessly ordered.** Flat HRN has a total order on keys (lex-sort); nested depends on whichever emitter arranged it. Determinism tests (design decision below on "identical inputs → identical outputs") are trivial in flat and fiddly in nested.
+- **CSV-compatible.** CSV is already flat-only. Picking flat for YAML/JSON too means one format family for all surfaces.
+- **What users actually produce.** CLI agents, Sheets adapters, and test fixtures all naturally write flat. The browser's preference for nested is a legacy of the Scenarios editor treating it as a display concern — which is fine *in the editor*, but wrong as a file format.
+
+The nested shape continues to exist, but only as an **in-memory display view** — computed by the Scenarios UI renderer from the canonical flat form, never written to disk or stdout. `formatNestedHRN` moves from `ParamPackDSLService` (a serialisation module) to a presentation helper in the Scenarios component tree.
+
+### Consequences
+
+1. **`ParamPackDSLService.toYAML` / `toJSON` lose the `structure` parameter.** They emit HRN flat. The nested-emit code path is deleted from the serialisation module. `toCSV` is unchanged.
+2. **`ScenariosContext` import/export switches to flat.** Existing nested exports are still accepted on the input side (the parser already round-trips both via `parseFlatHRNToParams` / `parseNestedHRN`), so no existing fixture breaks. New exports are flat.
+3. **CLI output is unchanged** (already flat).
+4. **`fromYAML` / `fromJSON` retain bidirectional parsing** — continuing to accept nested input for back-compat, always emitting flat. After a grace period, nested *input* can also be retired once we're sure no one still feeds it in.
+5. **Tests move to flat-only assertions.** `cliApplyPatch.test.ts` already asserts on flat HRN keys (`e.<id>.p.latency.mu`, etc.). `ParamPackDSLService.test.ts` currently exercises both; the nested-emit tests become nested-parse tests against flat-emit expected output.
+
+### How this interacts with the `x-param-pack` schema flag
+
+The schema-driven structural test walks schema `$defs` → collects annotated paths → emits the expected **flat HRN keys** → asserts presence in the pack. If there are two serialisation shapes, the test needs a shape-aware emitter and every downstream assertion has to know which one it's looking at. One shape collapses this into a single, obvious check.
+
+So the flat-vs-hierarchy cleanup is not a cosmetic tidy — it's a precondition for the structural contract test to have a single well-defined target. They should land together, and the test-code split in Layer 1 above assumes this.
+
+### What doesn't change
+
+- **HRN as a notation.** `e.<edgeId>.p.mean` stays. `n.<nodeId>.entry.entry_weight` stays. `case(<caseId>:<variant>).weight` stays. This is about the **layout of the file**, not the syntax of the keys within it.
+- **`ScenarioParams` as the in-memory shape.** The nested object model that `extractParamsFromGraph` produces and that `applyScopeToParams` narrows is unchanged. Flat-vs-nested is a serialisation concern; the in-memory form is always structured.
+- **The browser Scenarios editor UI.** Users still see the nested, grouped-by-edge view in the editor — it's a reasonable presentation. It's just computed on the fly from the canonical flat form.
+
+### Sequencing
+
+This work layers onto the structural-contract work already described. A reasonable order:
+
+1. Interim extractor widening (done 23-Apr-26, above).
+2. Pack shape standardisation (this section): remove the `structure` parameter from `toJSON`/`toYAML`, make flat the emit-only default, migrate `ScenariosContext` exports to flat, update tests.
+3. `x-param-pack` schema annotations on the ~20 fields originally listed plus the new posterior/latency fields (after resolving the open questions on which posterior sub-fields are user-facing).
+4. Schema-driven structural test replacing the hand-maintained whitelists in `GraphParamExtractor.ts`.
+5. Semantic invariant registry.
+6. Meta-test coupling schema annotations ↔ invariant registry.
+
+Steps 2 and 3 are independent from each other; either can land first. Step 4 requires both 2 and 3.
 
 ---
 
