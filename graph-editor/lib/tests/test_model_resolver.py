@@ -17,10 +17,11 @@ not any historical reader function. Concretely the contract asserts:
 3. Cohort-mode probability comes from the cohort-mode posterior
    (`cohort_alpha` / `cohort_beta`), not the edge-level one.
 4. The `best_available` cascade over `model_vars` selects the
-   highest-ranked source; flat fields never override a matching
-   entry.
-5. A caller-supplied `graph_preference` overrides any edge-level
-   `model_source_preference`.
+   highest-ranked source using the FE crossover order; flat fields
+   never override a matching entry.
+5. Edge-level `model_source_preference` overrides the caller-supplied
+   graph default; the graph preference applies only when the edge
+   does not set one.
 6. Resolver returns sensible defaults for empty or malformed edges
    rather than raising.
 7. Non-Bayes edges (analytic-only `model_vars`, flat fields only,
@@ -56,8 +57,8 @@ Apparatus      Python integration — direct calls to
 Fixtures       Auto-discovered real graphs from the data repo for
                the real-edge claims; minimal synthetic edges
                constructed inline for the controlled-branch claims
-               (stale-flat-vs-entry, manual-source, graph-preference
-               override, defaults). Smallest non-vacuous inputs for
+               (stale-flat-vs-entry, manual-source, edge-vs-graph
+               precedence, defaults). Smallest non-vacuous inputs for
                each branch.
 Reality        Real data repo for real-edge claims; synthetic edges
                for controlled branches. No mocks of the resolver or
@@ -304,17 +305,17 @@ class TestResolverCanonicalContractOverRealGraphs:
         """
         from runner.model_resolver import resolve_model_params
 
-        # Flat fields: mu=2.0, sigma=0.5 (from a stale analytic run)
-        # ModelVarsEntry (analytic_be): mu=3.5, sigma=0.8 (current best)
-        # The resolver should select analytic_be and return 3.5/0.8,
-        # NOT the flat 2.0/0.5.
+        # Flat fields: mu=3.5, sigma=0.8 (from a stale analytic_be
+        # promotion). FE crossover rules make analytic the trusted
+        # default during best_available, so the resolver must select the
+        # analytic entry and return 2.0/0.5 instead of the stale flats.
         edge = {
             'p': {
                 'forecast': {'mean': 0.6},
                 'latency': {
-                    'mu': 2.0,
-                    'sigma': 0.5,
-                    'onset_delta_days': 1.0,
+                    'mu': 3.5,
+                    'sigma': 0.8,
+                    'onset_delta_days': 2.0,
                 },
                 'model_vars': [
                     {
@@ -333,22 +334,21 @@ class TestResolverCanonicalContractOverRealGraphs:
         }
         result = resolve_model_params(edge, scope='edge', temporal_mode='window')
         assert result is not None
-        # analytic_be wins over analytic in best_available cascade
-        assert result.source == 'analytic_be'
-        # Values must come from the analytic_be entry, not flat fields
-        assert abs(result.edge_latency.mu - 3.5) < 1e-6, \
-            f"mu should be 3.5 (from analytic_be), got {result.edge_latency.mu}"
-        assert abs(result.edge_latency.sigma - 0.8) < 1e-6, \
-            f"sigma should be 0.8 (from analytic_be), got {result.edge_latency.sigma}"
-        assert abs(result.edge_latency.onset_delta_days - 2.0) < 1e-6, \
-            f"onset should be 2.0 (from analytic_be), got {result.edge_latency.onset_delta_days}"
-        # Dispersions from the entry
-        assert abs(result.edge_latency.mu_sd - 0.1) < 1e-6
-        assert abs(result.edge_latency.sigma_sd - 0.05) < 1e-6
+        # analytic wins over analytic_be in best_available cascade
+        assert result.source == 'analytic'
+        # Values must come from the analytic entry, not the stale flat fields
+        assert abs(result.edge_latency.mu - 2.0) < 1e-6, \
+            f"mu should be 2.0 (from analytic), got {result.edge_latency.mu}"
+        assert abs(result.edge_latency.sigma - 0.5) < 1e-6, \
+            f"sigma should be 0.5 (from analytic), got {result.edge_latency.sigma}"
+        assert abs(result.edge_latency.onset_delta_days - 1.0) < 1e-6, \
+            f"onset should be 1.0 (from analytic), got {result.edge_latency.onset_delta_days}"
+        # Dispersions are absent on the selected analytic entry
+        assert abs(result.edge_latency.mu_sd - 0.0) < 1e-6
+        assert abs(result.edge_latency.sigma_sd - 0.0) < 1e-6
 
-    def test_graph_preference_overrides_edge_preference(self):
-        """graph_preference parameter overrides edge-level
-        model_source_preference. Review finding #6.
+    def test_edge_preference_overrides_graph_preference(self):
+        """Edge preference wins over graph default, matching the FE.
         """
         from runner.model_resolver import resolve_model_params
 
@@ -376,7 +376,14 @@ class TestResolverCanonicalContractOverRealGraphs:
         assert result.source == 'analytic'
         assert abs(result.edge_latency.mu - 2.0) < 1e-6
 
-        # With graph_preference=manual: overrides edge-level
+        # With graph_preference=manual: edge preference still wins
+        result = resolve_model_params(edge, scope='edge', temporal_mode='window',
+                                       graph_preference='manual')
+        assert result.source == 'analytic'
+        assert abs(result.edge_latency.mu - 2.0) < 1e-6
+
+        # When the edge has no preference, the graph default is used
+        edge['p'].pop('model_source_preference', None)
         result = resolve_model_params(edge, scope='edge', temporal_mode='window',
                                        graph_preference='manual')
         assert result.source == 'manual'

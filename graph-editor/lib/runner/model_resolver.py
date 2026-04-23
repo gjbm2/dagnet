@@ -156,29 +156,38 @@ def _resolve_promoted_source(
 ) -> Optional[str]:
     """Determine which model source to use.
 
-    Priority: explicit preference → bayesian (if quality-gated) →
-    analytic_be → analytic.
+    Mirrors `src/services/modelVarsResolution.ts` exactly:
+    manual -> manual, else best_available
+    bayesian -> bayesian, else analyticBest
+    analytic_be -> analytic_be, else analytic
+    analytic -> analytic only
+    best_available -> gated bayesian, else analyticBest
     """
-    if preference and preference != 'best_available' and preference in source_curves:
-        return preference
+    def _find(source: str) -> Optional[str]:
+        return source if source in source_curves else None
 
-    # best_available cascade
-    # Check bayesian quality gate
-    for mv in model_vars:
-        if mv.get('source') == 'bayesian':
-            quality = mv.get('quality') or {}
-            if quality.get('gate_passed'):
-                return 'bayesian'
-            break  # bayesian exists but didn't pass gate
+    def _bayesian_if_gated() -> Optional[str]:
+        for mv in model_vars:
+            if mv.get('source') == 'bayesian':
+                quality = mv.get('quality') or {}
+                return 'bayesian' if quality.get('gate_passed') else None
+        return None
 
-    for candidate in ('analytic_be', 'analytic'):
-        if candidate in source_curves:
-            return candidate
+    def _analytic_best() -> Optional[str]:
+        return _find('analytic') or _find('analytic_be')
 
-    if 'manual' in source_curves:
-        return 'manual'
+    def _best_available() -> Optional[str]:
+        return _bayesian_if_gated() or _analytic_best()
 
-    return None
+    if preference == 'manual':
+        return _find('manual') or _best_available()
+    if preference == 'bayesian':
+        return _find('bayesian') or _analytic_best()
+    if preference == 'analytic_be':
+        return _find('analytic_be') or _find('analytic')
+    if preference == 'analytic':
+        return _find('analytic')
+    return _best_available()
 
 
 def resolve_model_params(
@@ -195,8 +204,9 @@ def resolve_model_params(
                'path' (cohort-mode, prefer path-level latency).
         temporal_mode: 'window' or 'cohort'. Affects probability
             resolution (prefer cohort_alpha/cohort_beta in cohort mode).
-        graph_preference: graph-level model_source_preference (overrides
-            edge-level when set). Matches TS applyPromotion behaviour.
+        graph_preference: graph-level default model_source_preference.
+            Edge-level preference wins when present, matching the FE's
+            effectivePreference() resolution.
 
     Returns:
         ResolvedModelParams with all fields populated from the
@@ -212,9 +222,9 @@ def resolve_model_params(
     forecast_block = p.get('forecast') or {}
     evidence_block = p.get('evidence') or {}
     model_vars = p.get('model_vars') or []
-    # Edge-level preference, overridden by graph-level (review finding #6)
+    # Match FE effectivePreference(): edge override, else graph default.
     edge_pref = p.get('model_source_preference', '') or ''
-    preference = graph_preference or edge_pref or 'best_available'
+    preference = edge_pref or graph_preference or 'best_available'
 
     # ── Per-source curves ──────────────────────────────────────────
     source_curves = _extract_source_curves(model_vars)

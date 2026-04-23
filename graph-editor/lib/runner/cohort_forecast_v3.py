@@ -347,6 +347,97 @@ class FrameEvidence:
     tau_solid_max: int
     tau_future_max: int
     last_frame_date: Optional[_date] = None
+    x_provider: Optional[Any] = None
+    from_node_arrival: Optional[Any] = None
+    upstream_path_cdf_arr: Optional[List[float]] = None
+    carrier_tier: str = 'none'
+
+
+def _resolve_frame_carrier_state(
+    *,
+    graph: Optional[Dict[str, Any]],
+    target_edge: Dict[str, Any],
+    anchor_node_id: Optional[str],
+    query_from_node: Optional[str],
+    is_window: bool,
+    x_provider_override,
+    cohort_list: List[Dict[str, Any]],
+    saturation_tau: int,
+    det_norm_cdf=None,
+):
+    from .forecast_state import NodeArrivalState
+    from .forecast_runtime import (
+        build_upstream_carrier,
+        build_x_provider_from_graph,
+    )
+
+    x_provider_local = x_provider_override
+    from_node_arrival_local = None
+    upstream_path_cdf_arr_local = None
+    carrier_tier = 'none'
+
+    if (
+        x_provider_local is None
+        and graph is not None
+        and not is_window
+        and anchor_node_id
+        and query_from_node
+        and query_from_node != anchor_node_id
+    ):
+        try:
+            x_provider_local = build_x_provider_from_graph(
+                graph,
+                target_edge,
+                anchor_node_id,
+                is_window,
+            )
+        except Exception as e:
+            print(f"[v3] WARNING: x_provider build failed: {e}")
+
+    if (
+        x_provider_local is not None
+        and bool(getattr(x_provider_local, 'enabled', False))
+        and float(getattr(x_provider_local, 'reach', 0.0) or 0.0) > 0
+    ):
+        upstream_params_list = (
+            x_provider_local.ingress_carrier
+            if x_provider_local.ingress_carrier
+            else x_provider_local.upstream_params_list
+        )
+        _carrier_rng = np.random.default_rng(43)
+        _carrier_max_tau = saturation_tau
+        if _carrier_max_tau is None and det_norm_cdf is not None:
+            try:
+                _carrier_max_tau = max(len(det_norm_cdf) - 1, 0)
+            except TypeError:
+                _carrier_max_tau = None
+        if _carrier_max_tau is None:
+            _carrier_max_tau = 30
+        det_cdf, mc_cdf, carrier_tier = build_upstream_carrier(
+            upstream_params_list=upstream_params_list,
+            upstream_obs=x_provider_local.upstream_obs,
+            cohort_list=cohort_list,
+            reach=x_provider_local.reach,
+            is_window=is_window,
+            max_tau=_carrier_max_tau,
+            num_draws=2000,
+            rng=_carrier_rng,
+        )
+        upstream_path_cdf_arr_local = det_cdf
+        if det_cdf is not None or mc_cdf is not None:
+            from_node_arrival_local = NodeArrivalState(
+                deterministic_cdf=det_cdf,
+                mc_cdf=mc_cdf,
+                reach=x_provider_local.reach,
+                tier=carrier_tier,
+            )
+
+    return (
+        x_provider_local,
+        from_node_arrival_local,
+        upstream_path_cdf_arr_local,
+        carrier_tier,
+    )
 
 def _query_scoped_latency_rows(
     fe: Optional['FrameEvidence'],
