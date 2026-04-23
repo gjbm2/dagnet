@@ -342,9 +342,24 @@ structural decision and the evidence-admission decision.
 - centralise subject resolution
 - centralise temporal evidence-family selection for preparation
 - centralise `ResolvedModelParams`
-- centralise `carrier_to_x` and `subject_span`
+- centralise prepared `subject_span` execution inputs, including the
+  deterministic-versus-MC span-kernel setup
+- centralise `carrier_to_x` and `x_provider`
+- centralise any multi-hop last-edge helper CDF still required by the
+  projection layer
 - centralise degrade-versus-sweep eligibility
 - centralise WP8 admission and evidence selection
+- assemble one authoritative `PreparedForecastRuntimeBundle`
+- extract the duplicated runtime-assembly block out of
+  `_handle_cohort_maturity_v3` and the scoped path inside
+  `handle_conditioned_forecast`
+
+The immediate next implementation cut for v3-versus-CF unification is
+that handler extraction. It is the narrowest change that removes the
+remaining chart-versus-CF structural drift without yet reopening
+whole-graph orchestration or Daily Conversions. The first cut should
+therefore target `_handle_cohort_maturity_v3` and the scoped
+`handle_conditioned_forecast` flow only.
 
 **Entry guard**
 
@@ -361,11 +376,19 @@ For the same semantic question, the chart path and the CF path receive
 the same prepared structural runtime and the same evidence-admission
 decision.
 
+In practical terms, both handlers should then do only four things:
+
+- perform shared subject and frame preparation
+- call the authoritative runtime builder
+- call `compute_cohort_maturity_rows_v3`
+- project the returned solve into consumer-specific outputs
+
 ### Stage 3 — Make the row builder projection-only
 
 **Objective**
 
-Reduce `cohort_forecast_v3` to projection logic over prepared inputs.
+Reduce `cohort_forecast_v3` to projection logic over the authoritative
+prepared inputs.
 
 **Primary files**
 
@@ -377,7 +400,14 @@ Reduce `cohort_forecast_v3` to projection logic over prepared inputs.
 - stop local re-resolution of priors inside the row builder
 - stop local re-creation of runtime policy inside the row builder
 - stop local caller-dependent WP8 logic inside the row builder
+- stop assembling span-kernel inputs, `carrier_to_x`, `x_provider`, or
+  helper CDFs inside the row builder
 - keep only the projection from prepared solve inputs to row outputs
+
+This stage should follow immediately after the Stage 2 extraction. Once
+the builder owns the structural solve, any remaining local reconstruction
+inside `cohort_forecast_v3` is still semantic drift rather than harmless
+cleanup.
 
 **Entry guard**
 

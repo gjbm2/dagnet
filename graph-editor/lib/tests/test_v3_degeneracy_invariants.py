@@ -15,7 +15,7 @@ Invariants:
   I2  Zero-evidence cohort with A != X and non-trivial upstream latency
       must rise materially more slowly than zero-evidence window.
   I2b Low-evidence cohort on a simple A→B→C chain should still
-      approximately follow the FW-composed A→C truth curve.
+      approximately follow the truth-backed factorised `y/x` oracle.
   I3  Zero-evidence cohort with A = X must equal window on the same edge.
   I4  Window asymptotic midpoint must equal the Bayesian posterior p.mean
       within tolerance when evidence is present and data has matured.
@@ -181,15 +181,14 @@ def _load_truth_edge_params(
     }
 
 
-def _fw_truth_curve_from_edges(
+def _factorised_truth_rate_curve_from_edges(
     *,
     graph_name: str,
     upstream_edge_name: str,
     target_edge_name: str,
     tau_max: int,
+    frontier_ages: tuple[int, ...] = (0,),
 ) -> dict[int, float]:
-    from runner.stats_engine import LagDistributionFit, fw_compose_pair
-
     upstream = _load_truth_edge_params(
         graph_name=graph_name,
         edge_name=upstream_edge_name,
@@ -198,35 +197,51 @@ def _fw_truth_curve_from_edges(
         graph_name=graph_name,
         edge_name=target_edge_name,
     )
-    fw = fw_compose_pair(
-        LagDistributionFit(
+    # Exact factorised cohort(a, x-y) truth oracle for a lightly conditioned
+    # frontier with no realised x/y prefix yet:
+    #   X(tau) = post-frontier arrivals to X
+    #   Y(tau) = those arrivals convolved with the X->Y subject progression
+    # The displayed quantity is Y/X, not the anchor-rooted path rate Y/A.
+    upstream_cdf = [
+        _shifted_lognormal_cdf(
+            tau,
+            onset=upstream["onset"],
             mu=upstream["mu"],
             sigma=upstream["sigma"],
-            empirical_quality_ok=True,
-            total_k=100,
-        ),
-        LagDistributionFit(
-            mu=target["mu"],
-            sigma=target["sigma"],
-            empirical_quality_ok=True,
-            total_k=100,
-        ),
-    )
-    assert fw is not None, (
-        f"FW composition failed for {graph_name} "
-        f"{upstream_edge_name}->{target_edge_name}"
-    )
-    mu_fw, sigma_fw = fw
-    path_onset = upstream["onset"] + target["onset"]
-    return {
-        tau: target["p"] * _shifted_lognormal_cdf(
-            tau,
-            onset=path_onset,
-            mu=mu_fw,
-            sigma=sigma_fw,
         )
         for tau in range(tau_max + 1)
-    }
+    ]
+    target_cdf = [
+        _shifted_lognormal_cdf(
+            tau,
+            onset=target["onset"],
+            mu=target["mu"],
+            sigma=target["sigma"],
+        )
+        for tau in range(tau_max + 1)
+    ]
+    upstream_pdf = [upstream_cdf[0]]
+    upstream_pdf.extend(
+        max(upstream_cdf[tau] - upstream_cdf[tau - 1], 0.0)
+        for tau in range(1, tau_max + 1)
+    )
+
+    curve: dict[int, float] = {}
+    ages = tuple(max(int(age), 0) for age in frontier_ages) or (0,)
+    for tau in range(tau_max + 1):
+        total_x = 0.0
+        total_y = 0.0
+        for a_i in ages:
+            if tau <= a_i:
+                continue
+            x_tail = max(upstream_cdf[tau] - upstream_cdf[a_i], 0.0)
+            y_tail = 0.0
+            for u in range(a_i + 1, tau + 1):
+                y_tail += upstream_pdf[u] * target_cdf[tau - u]
+            total_x += x_tail
+            total_y += target["p"] * y_tail
+        curve[tau] = total_y / total_x if total_x > 0 else 0.0
+    return curve
 
 
 # ═════════════════════════════════════════════════════════════════════
@@ -380,7 +395,7 @@ class TestI2ZeroEvidenceCohortLagsWindow:
 
 
 # ═════════════════════════════════════════════════════════════════════
-# I2b — Low-evidence cohort tracks the simple-chain FW oracle
+# I2b — Low-evidence cohort tracks the simple-chain factorised oracle
 # ═════════════════════════════════════════════════════════════════════
 
 
@@ -391,9 +406,10 @@ class TestI2bLowEvidenceCohortMatchesFwConvolution:
     """Public hard oracle for lightly conditioned `cohort(a, b-c)`.
 
     On the simple A→B→C synth, a short historical cohort slice gives a
-    low-evidence public query while preserving a clean truth-backed FW
-    oracle. The exposed midpoint should remain in the neighbourhood of
-    the A→C FW path curve rather than hugging zero for most of the plot.
+    low-evidence public query while preserving a clean truth-backed
+    factorised oracle. The exposed midpoint should remain in the
+    neighbourhood of the correct `y/x` tail-convolution curve rather
+    than hugging zero for most of the plot.
     """
 
     @requires_synth(_SIMPLE, enriched=True)
@@ -404,18 +420,19 @@ class TestI2bLowEvidenceCohortMatchesFwConvolution:
         )
         rows = _rows(payload)
         mids = _curve(payload, field="midpoint")
-        expected = _fw_truth_curve_from_edges(
+        expected = _factorised_truth_rate_curve_from_edges(
             graph_name=_SIMPLE,
             upstream_edge_name="simple-a-to-b",
             target_edge_name="simple-b-to-c",
             tau_max=max(mids) if mids else 0,
+            frontier_ages=(0, 1, 2),
         )
 
         assert rows, f"[{_SIMPLE}/{_SIMPLE_BC}] analyse returned no rows"
 
         taus = [tau for tau in range(15, 21) if tau in mids and tau in expected]
         assert len(taus) >= 5, (
-            f"[{_SIMPLE}/{_SIMPLE_BC}] insufficient overlap with FW oracle: "
+            f"[{_SIMPLE}/{_SIMPLE_BC}] insufficient overlap with factorised oracle: "
             f"{taus}"
         )
 
@@ -433,7 +450,7 @@ class TestI2bLowEvidenceCohortMatchesFwConvolution:
 
         assert not failures, (
             f"[{_SIMPLE}/{_SIMPLE_BC}] low-evidence cohort drifted from "
-            "truth-backed FW path oracle:\n" + "\n".join(failures[:6])
+            "truth-backed factorised y/x oracle:\n" + "\n".join(failures[:6])
         )
 
 

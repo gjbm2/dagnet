@@ -294,10 +294,10 @@ def _run_v3(
         anchor_to=anchor_to,
         sweep_to=sweep_to,
         is_window=is_window,
-        band_level=0.90,
         axis_tau_max=axis_tau_max,
         anchor_node_id=anchor_node_id,
         is_multi_hop=is_multi_hop,
+        band_level=0.90,
     )
 
 

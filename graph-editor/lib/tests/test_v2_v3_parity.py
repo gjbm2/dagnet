@@ -970,7 +970,7 @@ def test_v3_handler_widens_single_edge_downstream_cohort_span(monkeypatch):
         regime_diagnostics=[],
         cohorts_analysed=1,
         is_multi_hop=False,
-        subject_is_window=False,
+        subject_is_window=True,
     )
 
     resolved = SimpleNamespace(
@@ -1079,7 +1079,6 @@ def test_v3_handler_widens_single_edge_downstream_cohort_span(monkeypatch):
         'build_prepared_runtime_bundle',
         lambda **kwargs: captured.update({
             'p_conditioning_source': kwargs.get('p_conditioning_source'),
-            'p_conditioning_direct_cohort': kwargs.get('p_conditioning_direct_cohort'),
         }) or SimpleNamespace(resolved_params=kwargs.get('resolved_params')),
     )
     monkeypatch.setattr(
@@ -1137,8 +1136,7 @@ def test_v3_handler_widens_single_edge_downstream_cohort_span(monkeypatch):
     assert captured['mc_cdf_arr'] == 'cdf:x->y:bayesian'
     assert captured['mc_p_s'] == 'p:x->y:bayesian'
     assert captured['det_norm_cdf'] is not None
-    assert captured['p_conditioning_source'] == 'direct_cohort_exact_subject'
-    assert captured['p_conditioning_direct_cohort'] is True
+    assert captured['p_conditioning_source'] == 'snapshot_frames'
 
     result_rows = result.get('result', {}).get('maturity_rows')
     if result_rows is None:
@@ -1173,8 +1171,7 @@ def test_v3_handler_widens_single_edge_downstream_cohort_span(monkeypatch):
         'analytics_dsl': 'from(x).to(y)',
     })
 
-    assert captured['p_conditioning_source'] == 'direct_cohort_exact_subject'
-    assert captured['p_conditioning_direct_cohort'] is True
+    assert captured['p_conditioning_source'] == 'snapshot_frames'
     assert cf_result.get('scenarios', [{}])[0].get('edges')
 
 

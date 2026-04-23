@@ -2,9 +2,10 @@
 
 Doc 60 WP1 requires the conditioned-forecast endpoint and the cohort
 maturity v3 chart to resolve subjects, pick temporal evidence families,
-query snapshots, and compose span evidence through one path. That keeps
-multi-hop cohort queries on doc 47's rule: subject-frame construction
-uses window evidence even when the user asked a cohort question.
+query snapshots, and compose span evidence through one path. The live
+factorised subject path is window-led: subject-frame construction uses
+window evidence for the shared `X -> end` helper family, while any
+cohort-specific rate evidence must enter through a separate seam.
 
 `subject_is_window` in this module refers only to the frame-evidence
 family used to fetch and compose observed rows. It must not be reused as
@@ -27,7 +28,6 @@ class ForecastPreparation:
     anchor_node: Optional[str]
     last_edge_id: Optional[str]
     is_multi_hop: bool
-    subject_is_window: bool
     anchor_from: str
     anchor_to: str
     sweep_to: str
@@ -465,7 +465,6 @@ def prepare_forecast_subject_group(
             anchor_node=None,
             last_edge_id=None,
             is_multi_hop=False,
-            subject_is_window=is_window,
             anchor_from="",
             anchor_to="",
             sweep_to="",
@@ -498,11 +497,10 @@ def prepare_forecast_subject_group(
     if not anchor_node:
         anchor_node = _resolve_anchor_node(graph_data, last_edge_id)
     is_multi_hop = len(subjects) > 1
-    # Doc 47: multi-hop cohort queries still build subject frames from the
-    # window evidence family; exact single-hop cohort queries keep cohort
-    # frames here. This flag is about observed-frame retrieval only.
-    subject_is_window = is_window or is_multi_hop
-
+    # Stage 1: the shared factorised subject path is window-led for both
+    # single-hop and multi-hop cohort solves. Exact-match cohort evidence, if
+    # later admitted, must arrive on a separate evidence seam rather than by
+    # retargeting the shared frame-preparation path.
     per_edge_results: List[Dict[str, Any]] = []
     regime_diagnostics: List[Dict[str, Any]] = []
     total_rows = 0
@@ -510,7 +508,7 @@ def prepare_forecast_subject_group(
     for subj in subjects:
         prepared_entry = prepare_forecast_subject_entry(
             subj=subj,
-            subject_is_window=subject_is_window,
+            subject_is_window=True,
             log_prefix=log_prefix,
         )
         total_rows += prepared_entry["raw_row_count"]
@@ -564,7 +562,6 @@ def prepare_forecast_subject_group(
         anchor_node=anchor_node,
         last_edge_id=last_edge_id,
         is_multi_hop=is_multi_hop,
-        subject_is_window=subject_is_window,
         anchor_from=anchor_from,
         anchor_to=anchor_to,
         sweep_to=sweep_to,

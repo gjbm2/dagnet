@@ -635,6 +635,14 @@ def test_chart_and_daily_conversions_do_not_collapse_window_and_cohort():
     Both the v3 chart rows and the daily-conversions projection should expose
     that split rather than reading the same broad family twice.
     """
+    # NOTE:
+    # The denominator-side assertion (`evidence_x`) should remain a hard
+    # canary for the carrier split. The numerator-side `evidence_y` assertion
+    # is a live semantic question: after the factorised fix, `cohort()` keeps
+    # the carrier-owned denominator but the subject progression remains
+    # window-led (`X -> end`). If this test is red only on `evidence_y`, that
+    # may indicate either an outdated expectation or a still-live collapse on
+    # the y-side; it should not be "fixed" blindly.
 
     graph_name = "synth-simple-abc"
     analytics_dsl = "from(simple-b).to(simple-c)"
@@ -692,6 +700,12 @@ def test_bayesian_sidecar_preserves_downstream_window_cohort_chart_split():
     It must run through the normal sidecar-backed injection path so the
     graph JSON stays clean and tests do not re-fit Bayes on every run.
     """
+    # NOTE:
+    # A red here is not expected from the deleted analytic-degraded branch.
+    # This test is the older bayesian canary for downstream cohort/window
+    # model-curve collapse: x-side separation can survive while the y-side
+    # sweep/model projection still inflates or inverts, which shows up as
+    # `model_midpoint` / `p_infinity_mean` collapse.
     graph_name = "synth-simple-abc"
     analytics_dsl = "from(simple-b).to(simple-c)"
 

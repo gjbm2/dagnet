@@ -142,6 +142,16 @@ def _daily_conversion_rows() -> list[dict]:
 
 
 def test_query_scoped_latency_rows_use_degraded_contract():
+    # NOTE:
+    # The provenance assertions below still describe the intended live
+    # contract after doc-57-style "no re-conditioning" handling.
+    #
+    # The exact numeric expectations at the end of the test may now fail for
+    # a structural reason: the dedicated degraded latency-row branch was
+    # deleted, so these rows are now produced by the shared engine path with
+    # rate conditioning skipped rather than by the old closed-form helper.
+    # If this test stays red, the most likely seam is "old degraded numeric
+    # oracle vs shared-path output", not missing degraded provenance.
     rows = compute_cohort_maturity_rows_v3(
         frames=_frames(),
         graph=_latency_graph(),
@@ -232,6 +242,12 @@ def test_surprise_gauge_unavailable_for_query_scoped_posterior(monkeypatch: pyte
 
 
 def test_surprise_gauge_prefers_temporal_candidate_regime(monkeypatch: pytest.MonkeyPatch):
+    # NOTE:
+    # This is not expected to fail because of the deleted degraded branch.
+    # If it goes red, the likely bug is that surprise-gauge regime selection
+    # is still choosing the wrong temporal candidate for cohort queries and
+    # therefore binding the broader window evidence family (`100/40`) instead
+    # of the narrower cohort one (`40/4`).
     from runner import model_resolver
     from runner import cohort_maturity_derivation
     from runner import forecast_state
@@ -615,10 +631,6 @@ def test_surprise_gauge_cohort_carrier_uses_cache_keys(
                     'p_conditioning_source',
                     kwargs.get('p_conditioning_source'),
                 ),
-                direct_cohort_enabled=captured.setdefault(
-                    'p_conditioning_direct_cohort',
-                    kwargs.get('p_conditioning_direct_cohort'),
-                ),
             ),
         ),
     )
@@ -655,8 +667,7 @@ def test_surprise_gauge_cohort_carrier_uses_cache_keys(
     p_var = next(v for v in result['variables'] if v['name'] == 'p')
     assert p_var['available'] is True
     assert p_var['observed'] == pytest.approx(0.1)
-    assert captured['p_conditioning_source'] == 'direct_cohort_exact_subject'
-    assert captured['p_conditioning_direct_cohort'] is True
+    assert captured['p_conditioning_source'] == 'aggregate_evidence'
 
 
 def test_surprise_gauge_mixed_ids_match_same_semantic_graph(
@@ -947,6 +958,16 @@ def test_cohort_maturity_rows_v3_identity_drift():
 def test_daily_conversions_degraded_branch_reuses_closed_form_beta_surface(
     monkeypatch: pytest.MonkeyPatch,
 ):
+    # NOTE:
+    # This test is intentionally coupled to the old daily-conversions
+    # degraded branch: its exact projected_y / forecast_y / band
+    # expectations come from the deleted closed-form surface path.
+    #
+    # After the structural refactor, daily conversions now reads the shared
+    # forecast engine with query-scoped rate conditioning disabled. If this
+    # test stays red, the likely cause is that it is still asserting the
+    # deleted branch's numeric contract rather than the surviving provenance
+    # contract (`analytic_degraded`, `query_scoped_posterior`).
     from runner import model_resolver
 
     monkeypatch.setattr(

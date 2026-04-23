@@ -1534,17 +1534,47 @@ def compute_forecast_trajectory(
             _diag = " ".join(f"t{t}:Y={_ym[t]:.1f}/X={_xm[t]:.1f}" for t in _taus)
             print(f"[sweep_diag] apply_is={apply_is} {_diag}")
 
-        # Collapse to the generic p×CDF family only when the population model
-        # produced no denominator mass at any τ. Unit-normalised zero-evidence
-        # cohorts can have X_total < 1 while still carrying a real carrier
-        # shape, so `>= 1` is too strong a gate here.
+        # When the population model has no denominator mass anywhere, fall
+        # back to the unconditioned curve family instead of dividing 0/0.
+        #
+        # Window and the A=X identity case are just p × CDF(X→end). But when
+        # cohort mode has a real upstream carrier, the natural degeneracy is
+        # still factorised: carrier_to_x convolved with the subject-span
+        # progression. Dropping the carrier here collapses cohort onto window
+        # on the zero-evidence path.
         _x_median = np.median(X_total, axis=0)
-        if not np.any(_x_median > 1e-9):
-            rate = p_draws[:S, None] * cdf_arr[:S]
+        _needs_fallback = _x_median <= 1e-9
+        if np.any(_needs_fallback):
+            fallback_cdf = cdf_arr[:S].copy()
+            if upstream_cdf_mc is not None and reach > 0:
+                upstream_cdf_clip = np.clip(upstream_cdf_mc[:S, :T], 0.0, 1.0)
+                fallback_cdf = np.zeros_like(cdf_arr[:S, :T])
+                upstream_pdf = np.diff(
+                    np.concatenate(
+                        [np.zeros((S, 1), dtype=np.float64), upstream_cdf_clip],
+                        axis=1,
+                    ),
+                    axis=1,
+                )
+                upstream_pdf = np.maximum(upstream_pdf, 0.0)
+                for s in range(S):
+                    fallback_cdf[s, :] = np.clip(
+                        np.convolve(upstream_pdf[s], cdf_arr[s, :T], mode='full')[:T],
+                        0.0,
+                        1.0,
+                    )
+            rate[:, _needs_fallback] = (
+                p_draws[:S, None] * fallback_cdf[:, _needs_fallback]
+            )
 
         return rate, _is_ess_last, _n_conditioned, Y_total, X_total, _cohort_evals
 
-    rate_conditioned, is_ess, n_conditioned, Y_cond, X_cond, cohort_evals_cond = _run_cohort_loop(apply_is=True)
+    apply_rate_conditioning = not bool(
+        getattr(resolved, 'alpha_beta_query_scoped', False)
+    )
+    rate_conditioned, is_ess, n_conditioned, Y_cond, X_cond, cohort_evals_cond = _run_cohort_loop(
+        apply_is=apply_rate_conditioning,
+    )
     # Model-only draw family: same specific-Cohort population model as
     # `rate_draws`, but without IS conditioning. This keeps the public
     # `model_midpoint` carrier-aware in cohort mode instead of collapsing
@@ -1611,10 +1641,14 @@ def compute_forecast_trajectory(
     _comp_n = 0.0
     _comp_draws = np.zeros(S)
     for c in cohorts:
-        if c.eval_age is not None and c.x_frozen > 0:
-            t_i = min(c.eval_age, T - 1)
-            _comp_draws += c.x_frozen * cdf_arr[:S, t_i]
-            _comp_n += c.x_frozen
+        if c.eval_age is None:
+            continue
+        _comp_weight = float(c.x_frozen) if c.x_frozen > 0 else float(c.a_pop or 0.0)
+        if _comp_weight <= 0:
+            continue
+        t_i = min(c.eval_age, T - 1)
+        _comp_draws += _comp_weight * cdf_arr[:S, t_i]
+        _comp_n += _comp_weight
     if _comp_n > 0:
         _comp_draws /= _comp_n
         _comp_mean = float(np.mean(_comp_draws))

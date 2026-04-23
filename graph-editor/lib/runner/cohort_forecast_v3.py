@@ -322,6 +322,32 @@ def _non_latency_rows(
     )
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# Shared evidence builder — used by both v3 chart and conditioned forecast
+# ═══════════════════════════════════════════════════════════════════════
+
+@dataclass
+class FrameEvidence:
+    """Intermediate evidence extracted from derived maturity frames.
+
+    Produced by build_cohort_evidence_from_frames() and consumed by
+    both the v3 chart builder (compute_cohort_maturity_rows_v3) and
+    the conditioned forecast path.
+
+    Design invariant: both consumers call compute_forecast_trajectory with
+    the SAME engine_cohorts built from the SAME snapshot DB evidence,
+    so trajectory rows and conditioned scalar extraction stay aligned.
+    """
+    engine_cohorts: list           # List[CohortEvidence]
+    cohort_list: List[Dict]        # sorted cohort_info dicts
+    cohort_at_tau: Dict            # per-cohort tau observations
+    evidence_by_tau: Dict          # aggregate evidence at each tau
+    max_tau: int                   # display range (rows, chart x-axis)
+    saturation_tau: int            # sweep horizon (for p.infinity evaluation)
+    tau_solid_max: int
+    tau_future_max: int
+    last_frame_date: Optional[_date] = None
+
 def _query_scoped_latency_rows(
     fe: Optional['FrameEvidence'],
     resolved: Any,
@@ -337,7 +363,7 @@ def _query_scoped_latency_rows(
     resolved on the edge; the timing side is the deterministic latency
     CDF from the resolved latency block. No sweep, no IS, no MC drift.
     Window-mode rows must still preserve the fixed X-rooted denominator
-    even when some cohorts are too young to have an explicit τ snapshot.
+    even when some cohorts are too young to have an explicit tau snapshot.
     """
     from .forecast_application import compute_completeness
     from .forecast_state import _convolve_completeness_at_age
@@ -379,7 +405,7 @@ def _query_scoped_latency_rows(
         evidence_by_tau = {}
         sum_n_cohorts = 0
 
-    conditioned = (fe is not None and sum_x > 0)
+    conditioned = fe is not None and sum_x > 0
     p_mean = rate_surface.p_mean
     p_sd_epistemic = rate_surface.p_sd_epistemic
     p_sd = rate_surface.p_sd
@@ -412,7 +438,10 @@ def _query_scoped_latency_rows(
             min(
                 1.0,
                 compute_completeness(
-                    tau, lat.mu, lat.sigma, lat.onset_delta_days,
+                    tau,
+                    lat.mu,
+                    lat.sigma,
+                    lat.onset_delta_days,
                 ),
             ),
         )
@@ -482,7 +511,9 @@ def _query_scoped_latency_rows(
     rows: List[Dict[str, Any]] = []
     total_projection_x = round(sum_x, 1) if sum_x > 0 else None
 
-    def _window_evidence_at_tau(tau: int) -> tuple[Optional[float], Optional[float], int]:
+    def _window_evidence_at_tau(
+        tau: int,
+    ) -> tuple[Optional[float], Optional[float], int]:
         if fe is None or tau > tau_future_max:
             return (None, None, 0)
 
@@ -579,7 +610,7 @@ def _query_scoped_latency_rows(
             ev_y = ev.get('sum_y') if ev else None
             cohorts_covered = int(ev.get('n_cohorts', 0)) if ev else 0
         rate = (
-            (ev_y / ev_x)
+            ev_y / ev_x
             if ev_x is not None and ev_x > 0 and ev_y is not None
             else None
         )
@@ -591,8 +622,11 @@ def _query_scoped_latency_rows(
             'evidence_y': ev_y,
             'evidence_x': ev_x,
             'projected_rate': projected_rate,
-            'forecast_y': (round(sum_x * projected_rate, 1)
-                           if midpoint is not None and sum_x > 0 else None),
+            'forecast_y': (
+                round(sum_x * projected_rate, 1)
+                if midpoint is not None and sum_x > 0
+                else None
+            ),
             'forecast_x': total_projection_x if midpoint is not None else None,
             'midpoint': midpoint,
             'fan_upper': fan_upper_val,
@@ -623,33 +657,6 @@ def _query_scoped_latency_rows(
         blend_skip_reason='source_query_scoped',
         conditioned=conditioned,
     )
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# Shared evidence builder — used by both v3 chart and conditioned forecast
-# ═══════════════════════════════════════════════════════════════════════
-
-@dataclass
-class FrameEvidence:
-    """Intermediate evidence extracted from derived maturity frames.
-
-    Produced by build_cohort_evidence_from_frames() and consumed by
-    both the v3 chart builder (compute_cohort_maturity_rows_v3) and
-    the conditioned forecast path.
-
-    Design invariant: both consumers call compute_forecast_trajectory with
-    the SAME engine_cohorts built from the SAME snapshot DB evidence,
-    so trajectory rows and conditioned scalar extraction stay aligned.
-    """
-    engine_cohorts: list           # List[CohortEvidence]
-    cohort_list: List[Dict]        # sorted cohort_info dicts
-    cohort_at_tau: Dict            # per-cohort tau observations
-    evidence_by_tau: Dict          # aggregate evidence at each tau
-    max_tau: int                   # display range (rows, chart x-axis)
-    saturation_tau: int            # sweep horizon (for p.infinity evaluation)
-    tau_solid_max: int
-    tau_future_max: int
-    last_frame_date: Optional[_date] = None
 
 
 def build_cohort_evidence_from_frames(
@@ -769,7 +776,11 @@ def build_cohort_evidence_from_frames(
     for ad_str, tau_data in cohort_at_tau.items():
         for tau, (x, y) in tau_data.items():
             if tau not in evidence_by_tau:
-                evidence_by_tau[tau] = {'sum_y': 0.0, 'sum_x': 0.0, 'n_cohorts': 0}
+                evidence_by_tau[tau] = {
+                    'sum_y': 0.0,
+                    'sum_x': 0.0,
+                    'n_cohorts': 0,
+                }
             evidence_by_tau[tau]['sum_y'] += y
             evidence_by_tau[tau]['sum_x'] += x
             evidence_by_tau[tau]['n_cohorts'] += 1
@@ -807,7 +818,11 @@ def build_cohort_evidence_from_frames(
     if lat.sigma > 0:
         try:
             from .lag_distribution_utils import log_normal_inverse_cdf
-            t95 = log_normal_inverse_cdf(0.95, lat.mu, lat.sigma) + lat.onset_delta_days
+            t95 = log_normal_inverse_cdf(
+                0.95,
+                lat.mu,
+                lat.sigma,
+            ) + lat.onset_delta_days
             max_tau = max(max_tau, int(math.ceil(t95)))
         except Exception:
             pass
@@ -827,11 +842,21 @@ def build_cohort_evidence_from_frames(
                 from .model_resolver import resolve_model_params
                 try:
                     path_resolved = resolve_model_params(
-                        target_edge, scope='path', temporal_mode='cohort'
+                        target_edge,
+                        scope='path',
+                        temporal_mode='cohort',
                     )
-                    pl = getattr(path_resolved, 'path_latency', None) if path_resolved else None
+                    pl = (
+                        getattr(path_resolved, 'path_latency', None)
+                        if path_resolved
+                        else None
+                    )
                     if pl is not None and pl.sigma > 0:
-                        mu_s, sigma_s, onset_s = pl.mu, pl.sigma, pl.onset_delta_days
+                        mu_s, sigma_s, onset_s = (
+                            pl.mu,
+                            pl.sigma,
+                            pl.onset_delta_days,
+                        )
                 except Exception:
                     pass
             t95_sat = log_normal_inverse_cdf(0.95, mu_s, sigma_s) + onset_s
@@ -843,15 +868,15 @@ def build_cohort_evidence_from_frames(
     # ── Build CohortEvidence per cohort ────────────────────────────
     engine_cohorts: list = []
     for ci in cohort_list:
-        N_i = ci['x_frozen']
+        n_i = ci['x_frozen']
         a_i = ci.get('tau_observed', ci['tau_max'])
-        a_pop = ci.get('a_frozen', N_i) or N_i or 1.0
+        a_pop = ci.get('a_frozen', n_i) or n_i or 1.0
         ad_str = ci['anchor_day'].isoformat()
         tau_data = cohort_at_tau.get(ad_str, {})
 
         obs_x = [0.0] * (saturation_tau + 1)
         obs_y = [0.0] * (saturation_tau + 1)
-        last_x = float(N_i) if is_window else 0.0
+        last_x = float(n_i) if is_window else 0.0
         last_y = 0.0
         for t in range(saturation_tau + 1):
             if t <= a_i:
@@ -860,17 +885,17 @@ def build_cohort_evidence_from_frames(
                     last_x = obs[0]
                     last_y = obs[1]
                 elif is_window:
-                    last_x = float(N_i)
+                    last_x = float(n_i)
                 obs_x[t] = last_x
                 obs_y[t] = last_y
             else:
-                obs_x[t] = last_x if last_x > 0 else float(N_i)
+                obs_x[t] = last_x if last_x > 0 else float(n_i)
                 obs_y[t] = last_y
 
         engine_cohorts.append(CohortEvidence(
             obs_x=obs_x,
             obs_y=obs_y,
-            x_frozen=N_i,
+            x_frozen=n_i,
             y_frozen=ci['y_frozen'],
             frontier_age=a_i,
             a_pop=a_pop,
@@ -899,6 +924,143 @@ def build_cohort_evidence_from_frames(
         tau_solid_max=tau_solid_max,
         tau_future_max=tau_future_max,
         last_frame_date=last_frame_date,
+    )
+
+
+def _materialise_frame_evidence_for_runtime(
+    fe: Optional[FrameEvidence],
+    *,
+    is_window: bool,
+    upstream_path_cdf_arr: Optional[List[float]],
+    reach: float,
+) -> Optional[FrameEvidence]:
+    """Re-root cohort observed prefixes onto the runtime carrier.
+
+    Raw derived frames are still window-led on the shared subject question
+    (`X -> end`). For cohort mode with a real upstream carrier, the runtime
+    denominator must come from that carrier, while the observed-prefix
+    numerator stays driven by the subject progression curve implied by the
+    raw frame `y/x` trace.
+    """
+    from .forecast_state import CohortEvidence
+
+    if (
+        fe is None
+        or is_window
+        or upstream_path_cdf_arr is None
+        or reach <= 0
+    ):
+        return fe
+
+    sat_tau = int(fe.saturation_tau or 0)
+    if sat_tau < 0:
+        return fe
+
+    cdf_vals = [max(0.0, min(1.0, float(v or 0.0))) for v in upstream_path_cdf_arr]
+    if not cdf_vals:
+        return fe
+
+    def _cdf_at_tau(tau: int) -> float:
+        idx = min(max(int(tau), 0), len(cdf_vals) - 1)
+        return cdf_vals[idx]
+
+    new_cohort_list: List[Dict[str, Any]] = []
+    new_engine_cohorts = []
+    new_evidence_by_tau: Dict[int, Dict[str, Any]] = {}
+
+    for ci, engine_cohort in zip(fe.cohort_list, fe.engine_cohorts):
+        ci_new = dict(ci)
+        a_i = int(ci_new.get('tau_observed', ci_new.get('tau_max', 0)) or 0)
+        a_i = min(max(a_i, 0), sat_tau)
+        a_pop = float(
+            ci_new.get('a_frozen', ci_new.get('x_frozen', 0.0))
+            or ci_new.get('x_frozen', 0.0)
+            or 1.0
+        )
+
+        raw_obs_x = [float(v or 0.0) for v in list(engine_cohort.obs_x[:sat_tau + 1])]
+        raw_obs_y = [float(v or 0.0) for v in list(engine_cohort.obs_y[:sat_tau + 1])]
+        if len(raw_obs_x) < sat_tau + 1:
+            pad_x = raw_obs_x[-1] if raw_obs_x else 0.0
+            raw_obs_x.extend([pad_x] * (sat_tau + 1 - len(raw_obs_x)))
+        if len(raw_obs_y) < sat_tau + 1:
+            pad_y = raw_obs_y[-1] if raw_obs_y else 0.0
+            raw_obs_y.extend([pad_y] * (sat_tau + 1 - len(raw_obs_y)))
+
+        subject_curve: List[float] = []
+        last_ratio = 0.0
+        for t in range(sat_tau + 1):
+            fx = raw_obs_x[t]
+            fy = raw_obs_y[t]
+            if fx > 1e-9:
+                last_ratio = max(0.0, min(1.0, fy / fx))
+            subject_curve.append(last_ratio)
+
+        carrier_obs_x: List[float] = []
+        last_x = 0.0
+        for t in range(sat_tau + 1):
+            projected_x = a_pop * reach * _cdf_at_tau(t)
+            projected_x = max(projected_x, last_x)
+            carrier_obs_x.append(projected_x)
+            last_x = projected_x
+
+        obs_x = [0.0] * (sat_tau + 1)
+        obs_y = [0.0] * (sat_tau + 1)
+        prefix_x = carrier_obs_x[:a_i + 1]
+        arrival_increments = np.diff(
+            np.concatenate(([0.0], np.array(prefix_x, dtype=np.float64)))
+        )
+        arrival_increments = np.maximum(arrival_increments, 0.0)
+        for t in range(a_i + 1):
+            obs_x[t] = prefix_x[t]
+            y_t = 0.0
+            for u in range(t + 1):
+                y_t += float(arrival_increments[u]) * float(subject_curve[t - u])
+            obs_y[t] = max(0.0, min(float(obs_x[t]), y_t))
+
+        x_frontier = float(obs_x[a_i]) if a_i < len(obs_x) else 0.0
+        y_frontier = float(obs_y[a_i]) if a_i < len(obs_y) else 0.0
+        for t in range(a_i + 1, sat_tau + 1):
+            obs_x[t] = x_frontier
+            obs_y[t] = y_frontier
+
+        ci_new['x_frozen'] = x_frontier
+        ci_new['y_frozen'] = y_frontier
+        new_cohort_list.append(ci_new)
+        new_engine_cohorts.append(CohortEvidence(
+            obs_x=obs_x,
+            obs_y=obs_y,
+            x_frozen=x_frontier,
+            y_frozen=y_frontier,
+            frontier_age=engine_cohort.frontier_age,
+            a_pop=engine_cohort.a_pop,
+            eval_age=engine_cohort.eval_age,
+            anchor_day=engine_cohort.anchor_day,
+            eval_date=engine_cohort.eval_date,
+        ))
+
+        ad_str = ci_new['anchor_day'].isoformat()
+        for tau in fe.cohort_at_tau.get(ad_str, {}):
+            if tau > sat_tau:
+                continue
+            ev = new_evidence_by_tau.setdefault(
+                int(tau),
+                {'sum_y': 0.0, 'sum_x': 0.0, 'n_cohorts': 0},
+            )
+            ev['sum_x'] += float(obs_x[tau])
+            ev['sum_y'] += float(obs_y[tau])
+            ev['n_cohorts'] += 1
+
+    return FrameEvidence(
+        engine_cohorts=new_engine_cohorts,
+        cohort_list=new_cohort_list,
+        cohort_at_tau=fe.cohort_at_tau,
+        evidence_by_tau=new_evidence_by_tau,
+        max_tau=fe.max_tau,
+        saturation_tau=fe.saturation_tau,
+        tau_solid_max=fe.tau_solid_max,
+        tau_future_max=fe.tau_future_max,
+        last_frame_date=fe.last_frame_date,
     )
 
 
@@ -932,28 +1094,26 @@ def compute_cohort_maturity_rows_v3(
     edge_cdf_arr=None,
     runtime_bundle=None,
 ) -> List[Dict[str, Any]]:
-    """Compute per-τ rows for cohort maturity v3 chart.
+    """Compute per-tau rows for cohort maturity v3 chart.
 
     Same row schema as v2 so the FE chart builder works unchanged.
     Delegates the per-cohort population model to the engine via
     compute_forecast_trajectory.
     """
     from .forecast_state import (
-        compute_forecast_trajectory,
         CohortEvidence,
         NodeArrivalState,
+        compute_forecast_trajectory,
     )
     from .model_resolver import resolve_model_params
     from .forecast_runtime import (
         PreparedForecastRuntimeBundle,
         build_prepared_runtime_bundle,
-        find_edge_by_id,
-        XProvider,
-        build_x_provider_from_graph,
         build_upstream_carrier,
+        build_x_provider_from_graph,
+        find_edge_by_id,
         get_cf_mode_and_reason,
         is_cf_sweep_eligible,
-        should_enable_direct_cohort_p_conditioning,
     )
 
     target_edge = find_edge_by_id(graph, target_edge_id)
@@ -969,7 +1129,11 @@ def compute_cohort_maturity_rows_v3(
         resolved = runtime_bundle.resolved_params
     else:
         temporal = 'window' if is_window else 'cohort'
-        resolved = resolve_model_params(target_edge, scope='edge', temporal_mode=temporal)
+        resolved = resolve_model_params(
+            target_edge,
+            scope='edge',
+            temporal_mode=temporal,
+        )
     if not resolved:
         return []
     _sweep_eligible = is_cf_sweep_eligible(resolved)
@@ -986,12 +1150,7 @@ def compute_cohort_maturity_rows_v3(
     ) -> PreparedForecastRuntimeBundle:
         bundle = runtime_bundle
         if bundle is None:
-            _direct_cohort_p_conditioning = (
-                should_enable_direct_cohort_p_conditioning(
-                    is_window=is_window,
-                    is_multi_hop=is_multi_hop,
-                )
-            )
+            _direct_cohort_p_conditioning = False
             bundle = build_prepared_runtime_bundle(
                 mode='window' if is_window else 'cohort',
                 query_from_node=query_from_node,
@@ -1095,7 +1254,10 @@ def compute_cohort_maturity_rows_v3(
         ):
             try:
                 x_provider_local = build_x_provider_from_graph(
-                    graph, target_edge, anchor_node_id, is_window,
+                    graph,
+                    target_edge,
+                    anchor_node_id,
+                    is_window,
                 )
             except Exception as e:
                 print(f"[v3] WARNING: x_provider build failed: {e}")
@@ -1214,18 +1376,15 @@ def compute_cohort_maturity_rows_v3(
         upstream_path_cdf_arr,
         _carrier_tier,
     ) = _resolve_carrier_state(fe)
+    fe = _materialise_frame_evidence_for_runtime(
+        fe,
+        is_window=is_window,
+        upstream_path_cdf_arr=upstream_path_cdf_arr,
+        reach=(x_provider.reach if x_provider is not None else 0.0),
+    )
     print(f"[v3] carrier: tier={_carrier_tier}")
     if not _sweep_eligible:
         resolved_degraded = resolved
-        if not is_window and from_node_arrival is not None:
-            try:
-                _path_resolved = resolve_model_params(
-                    target_edge, scope='path', temporal_mode='cohort',
-                )
-                if _path_resolved is not None:
-                    resolved_degraded = _path_resolved
-            except Exception as e:
-                print(f"[v3] WARNING: degraded path resolve failed: {e}")
         _cf_mode, _cf_reason = get_cf_mode_and_reason(resolved_degraded)
         degraded_runtime_bundle = _prepare_runtime_bundle(
             fe_local=fe,
@@ -1265,8 +1424,8 @@ def compute_cohort_maturity_rows_v3(
     cohort_list = fe.cohort_list
     cohort_at_tau = fe.cohort_at_tau
     evidence_by_tau = fe.evidence_by_tau
-    max_tau = fe.max_tau                # display/rows (chart x-axis)
-    saturation_tau = fe.saturation_tau  # sweep horizon (p@∞ evaluation)
+    max_tau = fe.max_tau
+    saturation_tau = fe.saturation_tau
     tau_solid_max = fe.tau_solid_max
     tau_future_max = fe.tau_future_max
     last_frame_date = fe.last_frame_date
@@ -1284,25 +1443,27 @@ def compute_cohort_maturity_rows_v3(
     _cohort_x_at_tau: List[List[float]] = []
     reach = x_provider.reach if x_provider else 0.0
     for ci in cohort_list:
-        N_i = ci['x_frozen']
-        a_pop = ci.get('a_frozen', N_i) or N_i or 1.0
+        n_i = ci['x_frozen']
+        a_pop = ci.get('a_frozen', n_i) or n_i or 1.0
         if upstream_path_cdf_arr is None:
-            x_at_tau = [float(N_i)] * (saturation_tau + 1)
+            x_at_tau = [float(n_i)] * (saturation_tau + 1)
         else:
-            x_at_tau = [max(a_pop * reach * upstream_path_cdf_arr[t], float(N_i))
-                        for t in range(saturation_tau + 1)]
+            x_at_tau = [
+                max(a_pop * reach * upstream_path_cdf_arr[t], float(n_i))
+                for t in range(saturation_tau + 1)
+            ]
         _cohort_x_at_tau.append(x_at_tau)
 
     # ── Engine call: per-cohort population model sweep ──────────────
     # The handler prepares `mc_cdf_arr` on the factorised subject span
     # before we get here:
-    # - window(): edge/rooted X→end
-    # - cohort() single-hop: edge/rooted X→Y
-    # - cohort() multi-hop: query path X→end
+    # - window(): edge/rooted X->end
+    # - cohort() single-hop: edge/rooted X->Y
+    # - cohort() multi-hop: query path X->end
     #
     # Any anchor-relative behaviour belongs on `carrier_to_x` or the
     # rate-conditioning evidence seam, not by retargeting the subject span.
-    # `det_norm_cdf` therefore remains the subject-side X→end kernel used for
+    # `det_norm_cdf` therefore remains the subject-side X->end kernel used for
     # E_i / IS conditioning.
     _sweep_cdf = mc_cdf_arr
     _sweep_p = mc_p_s
@@ -1324,23 +1485,23 @@ def compute_cohort_maturity_rows_v3(
         runtime_bundle=active_runtime_bundle,
     )
 
-    print(f"[v3] Engine sweep: IS_ESS={sweep.is_ess:.0f} "
-          f"cohorts_conditioned={sweep.n_cohorts_conditioned} "
-          f"shape={sweep.rate_draws.shape}")
-
+    print(
+        f"[v3] Engine sweep: IS_ESS={sweep.is_ess:.0f} "
+        f"cohorts_conditioned={sweep.n_cohorts_conditioned} "
+        f"shape={sweep.rate_draws.shape}"
+    )
 
     # ── Compute evidence display from cohort data (v2 lines 990-1008) ─
-    # Evidence at each τ = aggregate obs across all cohorts, using the
+    # Evidence at each tau = aggregate obs across all cohorts, using the
     # same population model as the sweep: observed values for cohorts
-    # whose frontier is ≥ τ, frozen/projected values for younger cohorts.
+    # whose frontier is >= tau, frozen/projected values for younger cohorts.
     def _compute_evidence_at_tau(tau: int) -> Optional[Dict]:
-        # v2 line 986: evidence only within future max
         if tau > tau_future_max:
             return None
-        # v2 line 987-990: only mature cohorts can provide "real" observations
         has_real_obs = any(
             tau in cohort_at_tau.get(ci['anchor_day'].isoformat(), {})
-            for ci in cohort_list if tau <= ci.get('tau_observed', ci['tau_max'])
+            for ci in cohort_list
+            if tau <= ci.get('tau_observed', ci['tau_max'])
         )
         if not has_real_obs:
             return None
@@ -1354,17 +1515,13 @@ def compute_cohort_maturity_rows_v3(
             a_i = ci.get('tau_observed', ci['tau_max'])
             tau_max_c = ci['tau_max']
             if tau < len(ce.obs_x):
-                # v2 lines 997-1005: exclusive if/else on tau <= a_i
                 if tau <= a_i:
                     ev_x += ce.obs_x[tau]
                     ev_x_pure += ce.obs_x[tau]
                     ev_y_pure += ce.obs_y[tau]
                 else:
-                    # Unobserved: use carrier-projected x (v2 line 1004)
                     _xat = _cohort_x_at_tau[idx]
                     ev_x += _xat[tau] if tau < len(_xat) else ce.x_frozen
-                # v2 mature_count: cohort has a real observation at this τ
-                # AND τ ≤ tau_max (from bucket aggregation, line 622-630)
                 ad_str = ci['anchor_day'].isoformat()
                 if tau <= tau_max_c and tau in cohort_at_tau.get(ad_str, {}):
                     n_mature += 1
@@ -1373,8 +1530,10 @@ def compute_cohort_maturity_rows_v3(
         if ev_x <= 0:
             return None
         return {
-            'sum_y': ev_y, 'sum_x': ev_x,
-            'sum_y_pure': ev_y_pure, 'sum_x_pure': ev_x_pure,
+            'sum_y': ev_y,
+            'sum_x': ev_x,
+            'sum_y_pure': ev_y_pure,
+            'sum_x_pure': ev_x_pure,
             'n_cohorts': n_cohorts,
             'n_mature': n_mature,
         }
@@ -1384,80 +1543,95 @@ def compute_cohort_maturity_rows_v3(
     # / sweep.det_x_total (median IS-conditioned Y/X across draws).
     # This replaces _compute_det_totals which used unconditioned p and
     # edge-level CDF, diverging up to 50% on multi-hop narrow queries.
-    S = sweep.rate_draws.shape[0]
-    T = sweep.rate_draws.shape[1]
+    t = sweep.rate_draws.shape[1]
     band_levels = [0.80, 0.90, 0.95, 0.99]
     rows = []
 
-    # p@∞: median of IS-conditioned rate draws at saturation τ. Sweep
-    # ran out to saturation_tau (2·t95 window / 2·path_t95 cohort); rows
+    # p@∞: median of IS-conditioned rate draws at saturation tau. Sweep
+    # ran out to saturation_tau (2*t95 window / 2*path_t95 cohort); rows
     # stay clipped to max_tau so the chart axis is unchanged. Exposed on
     # every row so consumers (CF endpoint) read one scalar off last_row
     # without a separate channel — see handle_conditioned_forecast.
-    _sat_tau = min(saturation_tau, T - 1)
+    _sat_tau = min(saturation_tau, t - 1)
     _asymp_draws = sweep.rate_draws[:, _sat_tau]
     _p_infinity_mean = float(np.median(_asymp_draws))
     # Per doc 49: two dispersion regimes.
-    #   _p_infinity_sd_epistemic — closed-form σ from Beta(α, β): how
+    #   _p_infinity_sd_epistemic — closed-form sigma from Beta(alpha, beta): how
     #     confident we are about the rate parameter after all observed
     #     evidence.
-    #   _p_infinity_sd (predictive, kappa-inflated) — closed-form σ from
-    #     Beta(α_pred, β_pred): dispersion of a fresh-cohort rate draw
+    #   _p_infinity_sd (predictive, kappa-inflated) — closed-form sigma from
+    #     Beta(alpha_pred, beta_pred): dispersion of a fresh-cohort rate draw
     #     accounting for between-cohort variability (kappa).
     # Both are closed form. Historically _p_infinity_sd used
     # np.std(IS-conditioned draws), but IS-conditioning on O(n) evidence
-    # collapses the MC spread back to σ_epi regardless of how diffuse
+    # collapses the MC spread back to sigma_epi regardless of how diffuse
     # the predictive prior was, so the two quantities came out equal.
     # Contract corrected: docs 45b §Phase C and 47 §3 updated alongside.
-    def _beta_sd(a: float, b: float) -> float:
+    def _local_beta_sd(a: float, b: float) -> float:
         s = a + b
         return math.sqrt(a * b / (s * s * (s + 1.0)))
     _alpha_e = resolved.alpha if (resolved.alpha and resolved.alpha > 0) else None
     _beta_e = resolved.beta if (resolved.beta and resolved.beta > 0) else None
     if _alpha_e is not None and _beta_e is not None:
-        _p_infinity_sd_epistemic = _beta_sd(_alpha_e, _beta_e)
+        _p_infinity_sd_epistemic = _local_beta_sd(_alpha_e, _beta_e)
     else:
         _p_infinity_sd_epistemic = float(np.std(_asymp_draws))
-    _alpha_p = resolved.alpha_pred if (resolved.alpha_pred and resolved.alpha_pred > 0) else None
-    _beta_p = resolved.beta_pred if (resolved.beta_pred and resolved.beta_pred > 0) else None
+    _alpha_p = (
+        resolved.alpha_pred
+        if (resolved.alpha_pred and resolved.alpha_pred > 0)
+        else None
+    )
+    _beta_p = (
+        resolved.beta_pred
+        if (resolved.beta_pred and resolved.beta_pred > 0)
+        else None
+    )
     if _alpha_p is not None and _beta_p is not None:
-        _p_infinity_sd = _beta_sd(_alpha_p, _beta_p)
+        _p_infinity_sd = _local_beta_sd(_alpha_p, _beta_p)
     else:
         _p_infinity_sd = _p_infinity_sd_epistemic
 
     for tau in range(max_tau + 1):
         ev = _compute_evidence_at_tau(tau)
         rate = ev['sum_y'] / ev['sum_x'] if ev and ev['sum_x'] > 0 else None
-        # D19 fix: use MC median Y/X from sweep (IS-conditioned, same
-        # draws as midpoint). Replaces _compute_det_totals which used
-        # unconditioned p and edge-level CDF — diverging up to 50% on
-        # multi-hop narrow queries.
-        _det_y_tau = float(sweep.det_y_total[tau]) if sweep.det_y_total is not None and tau < len(sweep.det_y_total) else 0.0
-        _det_x_tau = float(sweep.det_x_total[tau]) if sweep.det_x_total is not None and tau < len(sweep.det_x_total) else 0.0
-        rate_pure = (ev['sum_y_pure'] / ev['sum_x_pure']
-                     if ev and ev.get('sum_x_pure', 0) > 0 else None)
+        _det_y_tau = (
+            float(sweep.det_y_total[tau])
+            if sweep.det_y_total is not None and tau < len(sweep.det_y_total)
+            else 0.0
+        )
+        _det_x_tau = (
+            float(sweep.det_x_total[tau])
+            if sweep.det_x_total is not None and tau < len(sweep.det_x_total)
+            else 0.0
+        )
+        rate_pure = (
+            ev['sum_y_pure'] / ev['sum_x_pure']
+            if ev and ev.get('sum_x_pure', 0) > 0
+            else None
+        )
 
-        # MC quantiles from conditioned sweep
         draws = sweep.rate_draws[:, tau]
         midpoint: Optional[float] = float(np.median(draws))
-        fan_upper_val: Optional[float] = float(np.quantile(draws, (1 + band_level) / 2))
-        fan_lower_val: Optional[float] = float(np.quantile(draws, (1 - band_level) / 2))
+        fan_upper_val: Optional[float] = float(
+            np.quantile(draws, (1 + band_level) / 2)
+        )
+        fan_lower_val: Optional[float] = float(
+            np.quantile(draws, (1 - band_level) / 2)
+        )
         fan_bands: Optional[Dict] = {
             str(int(bl * 100)): [
                 float(np.quantile(draws, (1 - bl) / 2)),
                 float(np.quantile(draws, (1 + bl) / 2)),
-            ] for bl in band_levels
+            ]
+            for bl in band_levels
         }
 
-        # Epoch A: suppress midpoint + fan where evidence is complete
-        # (v2 uses tau_solid_max = youngest cohort's tau_observed)
         if tau < tau_solid_max:
             midpoint = None
             fan_upper_val = None
             fan_lower_val = None
             fan_bands = None
 
-        # Model-only quantiles from unconditioned sweep
         model_draws = sweep.model_rate_draws[:, tau]
         model_midpoint = float(np.median(model_draws))
         model_fan_upper = float(np.quantile(model_draws, (1 + band_level) / 2))
@@ -1466,7 +1640,8 @@ def compute_cohort_maturity_rows_v3(
             str(int(bl * 100)): [
                 float(np.quantile(model_draws, (1 - bl) / 2)),
                 float(np.quantile(model_draws, (1 + bl) / 2)),
-            ] for bl in band_levels
+            ]
+            for bl in band_levels
         }
 
         rows.append({
@@ -1475,8 +1650,6 @@ def compute_cohort_maturity_rows_v3(
             'rate_pure': rate_pure,
             'evidence_y': ev['sum_y'] if ev else None,
             'evidence_x': ev['sum_x'] if ev else None,
-            # G.4: projected_rate from MC draws (replaces legacy
-            # annotate_rows projected_y aggregation).
             'projected_rate': float(np.mean(draws)),
             'forecast_y': round(_det_y_tau, 1) if midpoint is not None else None,
             'forecast_x': round(_det_x_tau, 1) if midpoint is not None else None,
@@ -1493,12 +1666,6 @@ def compute_cohort_maturity_rows_v3(
             'boundary_date': str(sweep_to)[:10],
             'cohorts_covered_base': ev['n_mature'] if ev else 0,
             'cohorts_covered_projected': ev['n_mature'] if ev else 0,
-            # Doc 45 §Response contract — scalar, same for all rows
-            # (horizon-evaluated; sweep computes it once). Exposed on
-            # every row so consumers (CF endpoint `last_row` read;
-            # cohort maturity chart display) can pick it up without a
-            # separate out-of-band channel. None if the sweep could
-            # not compute it (e.g. no cohorts with eval_age).
             'completeness': sweep.completeness_mean,
             'completeness_sd': sweep.completeness_sd,
             'p_infinity_mean': _p_infinity_mean,

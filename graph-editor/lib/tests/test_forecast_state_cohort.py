@@ -839,27 +839,14 @@ class TestSubsetConditioningBlend:
 class TestPreparedRuntimeBundle:
     """WP2 runtime-bundle plumbing for summary and trajectory kernels."""
 
-    def test_runtime_bundle_serialises_direct_cohort_conditioning_flag(self):
+    def test_runtime_bundle_serialises_general_conditioning_seam(self):
         from runner.forecast_runtime import (
             build_prepared_runtime_bundle,
             resolve_subject_cdf_start_node,
             serialise_runtime_bundle,
             should_use_anchor_relative_subject_cdf,
-            should_enable_direct_cohort_p_conditioning,
         )
 
-        assert should_enable_direct_cohort_p_conditioning(
-            is_window=False,
-            is_multi_hop=False,
-        ) is True
-        assert should_enable_direct_cohort_p_conditioning(
-            is_window=True,
-            is_multi_hop=False,
-        ) is False
-        assert should_enable_direct_cohort_p_conditioning(
-            is_window=False,
-            is_multi_hop=True,
-        ) is False
         assert should_use_anchor_relative_subject_cdf(
             is_window=False,
             is_multi_hop=False,
@@ -898,9 +885,7 @@ class TestPreparedRuntimeBundle:
             anchor_node_id='A',
             is_multi_hop=False,
             numerator_representation='factorised',
-            p_conditioning_temporal_family='cohort',
-            p_conditioning_source='direct_cohort_exact_subject',
-            p_conditioning_direct_cohort=True,
+            p_conditioning_source='frame_evidence',
             p_conditioning_evidence_points=3,
             p_conditioning_total_x=120.0,
             p_conditioning_total_y=36.0,
@@ -908,9 +893,9 @@ class TestPreparedRuntimeBundle:
         diag = serialise_runtime_bundle(bundle)
 
         assert diag is not None
-        assert diag['p_conditioning_evidence']['temporal_family'] == 'cohort'
-        assert diag['p_conditioning_evidence']['source'] == 'direct_cohort_exact_subject'
-        assert diag['p_conditioning_evidence']['direct_cohort_enabled'] is True
+        assert diag['p_conditioning_evidence']['temporal_family'] == 'window'
+        assert diag['p_conditioning_evidence']['source'] == 'frame_evidence'
+        assert 'direct_cohort_enabled' not in diag['p_conditioning_evidence']
 
     @requires_db
     @requires_data_repo

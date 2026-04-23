@@ -160,7 +160,6 @@ def _compute_surprise_gauge(
         build_prepared_runtime_bundle,
         get_cf_mode_and_reason,
         is_cf_sweep_eligible,
-        should_enable_direct_cohort_p_conditioning,
     )
     from runner.forecast_preparation import prepare_forecast_subject_group
     from runner.forecast_state import (
@@ -392,10 +391,6 @@ def _compute_surprise_gauge(
     edge_id = str(edge.get('uuid') or edge.get('id') or '')
     from_node_id = _node_ref_to_id.get(str(edge.get('from', '') or ''), str(edge.get('from', '') or ''))
     to_node_id = _node_ref_to_id.get(str(edge.get('to', '') or ''), str(edge.get('to', '') or ''))
-    _direct_cohort_p_conditioning = should_enable_direct_cohort_p_conditioning(
-        is_window=is_window,
-        is_multi_hop=False,
-    )
     runtime_bundle = build_prepared_runtime_bundle(
         mode='window' if is_window else 'cohort',
         query_from_node=from_node_id,
@@ -404,15 +399,7 @@ def _compute_surprise_gauge(
         is_multi_hop=False,
         from_node_arrival=from_node_arrival,
         numerator_representation='factorised',
-        p_conditioning_temporal_family=(
-            'cohort' if _direct_cohort_p_conditioning else 'window'
-        ),
-        p_conditioning_source=(
-            'direct_cohort_exact_subject'
-            if _direct_cohort_p_conditioning
-            else 'aggregate_evidence'
-        ),
-        p_conditioning_direct_cohort=_direct_cohort_p_conditioning,
+        p_conditioning_source='aggregate_evidence',
         p_conditioning_evidence_points=len(evidence),
         p_conditioning_total_x=total_n,
         p_conditioning_total_y=total_k,
@@ -682,7 +669,6 @@ def _fetch_upstream_observations(
     query_from_node: str,
     per_edge_results: List[Dict[str, Any]],
     candidate_regimes_by_edge: Dict[str, Any],
-    subject_is_window: bool,
     anchor_from: str,
     anchor_to: str,
     sweep_from: str,
@@ -777,7 +763,7 @@ def _fetch_upstream_observations(
             }
             prepared_upstream = prepare_forecast_subject_entry(
                 subj=donor_subject,
-                subject_is_window=subject_is_window,
+                subject_is_window=True,
                 log_prefix=log_prefix,
                 anchor_from_override=af_widened,
                 sweep_from_override=af_widened,
@@ -1602,354 +1588,67 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
         from runner.model_resolver import resolve_model_params
         from runner.forecast_runtime import (
             build_prepared_span_execution,
-            build_prepared_runtime_bundle,
             find_edge_by_id,
-            resolve_subject_cdf_start_node,
-            should_use_anchor_relative_subject_cdf,
-            should_enable_direct_cohort_p_conditioning,
+            prepare_forecast_runtime_inputs,
         )
 
-        # ── Build span kernel + MC draws (shared with v2 for parity) ──
-        _mc_cdf_v3 = None
-        _mc_p_v3 = None
-        _mc_cdf_v3_epi = None
-        _mc_p_v3_epi = None
-        _is_multi_hop_v3 = False
-        _edge_mc_cdf_v3 = None  # Edge-level CDF for Pop C (multi-hop only)
-        _det_norm_cdf = None
-        _det_span_p = None
-        _span_alpha_v3 = None
-        _span_beta_v3 = None
-        _span_params_v3 = None
-        _span_params_v3_epi = None
-        _edge_kernel_v3 = None
-        _anchor_relative_subject_cdf_v3 = False
-        _span_x_v3 = None
-        _v3_x_provider_overlay = None
-        # The subject helper family is always X-rooted window semantics,
-        # even for exact single-hop cohort solves. Initialising it here
-        # keeps fallback / degraded paths from crashing when they can build
-        # rows from frames + target edge but do not have explicit X/Y nodes.
-        _subject_temporal_mode = 'window'
-        if composed_frames and last_edge_id and query_from_node and query_to_node:
-            from runner.span_kernel import compose_span_kernel, mc_span_cdfs
-            _is_multi_hop_v3 = preparation.is_multi_hop
-            _graph_pref = graph_data.get('model_source_preference')
-            # The factorised subject helper always answers the X→end
-            # progression question on an X-rooted helper family. Exact
-            # single-hop cohort evidence may still move the rate side via
-            # p_conditioning_evidence, but it must not retarget the subject
-            # operator itself.
-
-            # WP3: factorised cohort mode keeps the subject operator rooted
-            # at X→end; the anchor→X solve stays on the separate carrier.
-            #
-            # WP4: the runtime owns helper-family selection. The factorised
-            # X→end operator is prepared on the X-rooted helper basis before
-            # the kernel executes, so the kernel no longer walks raw edge
-            # fields or source names itself.
-            _anchor_relative_subject_cdf_v3 = (
-                should_use_anchor_relative_subject_cdf(
-                    is_window=is_window,
-                    is_multi_hop=_is_multi_hop_v3,
-                    anchor_node_id=anchor_node,
-                    query_from_node=query_from_node,
-                )
-            )
-            _span_x_v3 = resolve_subject_cdf_start_node(
-                is_window=is_window,
-                is_multi_hop=_is_multi_hop_v3,
-                anchor_node_id=anchor_node,
-                query_from_node=query_from_node,
-            )
-            print(f"[v3] planner: factorised (multi_hop={_is_multi_hop_v3} "
-                  f"anchor_relative_subject_cdf={_anchor_relative_subject_cdf_v3} "
-                  f"span={_span_x_v3}→{query_to_node})")
-
-            # Edge kernel (span_p for rate asymptote, span_params for IS)
-            _edge_execution_v3 = build_prepared_span_execution(
-                graph_data,
-                query_from_node,
-                query_to_node,
-                temporal_mode=_subject_temporal_mode,
-                graph_preference=_graph_pref,
-            )
-            if _edge_execution_v3 is not None:
-                _edge_kernel_v3 = compose_span_kernel(
-                    topo=_edge_execution_v3.topo,
-                    edge_params=_edge_execution_v3.edge_params,
-                    max_tau=400,
-                )
-            # The subject operator always follows the prepared X→end span.
-            _kernel_v3 = _edge_kernel_v3
-
-            if _kernel_v3 is not None and _kernel_v3.span_p > 0:
-                _det_span_p = _edge_kernel_v3.span_p if _edge_kernel_v3 else _kernel_v3.span_p
-                # det_norm_cdf from edge kernel (for E_i), matching v2's
-                # sp.C which uses the edge kernel's CDF. Edge CDF gives
-                # larger E_i at young frontier ages → IS conditioning fires.
-                _det_cdf_kernel = _edge_kernel_v3 or _kernel_v3
-                _det_norm_cdf = [
-                    min(max(_det_cdf_kernel.cdf_at(t) / _det_cdf_kernel.span_p, 0.0), 1.0)
-                    for t in range(401)
-                ]
-                # Span-adapted params from edge kernel
-                from runner.forecast_runtime import span_kernel_to_edge_params, build_span_params
-                _ek = _edge_kernel_v3 or _kernel_v3
-                _span_edge_params = span_kernel_to_edge_params(
-                    _ek, graph_data, last_edge_id, is_window=is_window)
-                def _norm_cdf_v3(tau):
-                    raw = _ek.cdf_at(int(round(tau)))
-                    return raw / _ek.span_p
-                _span_params_v3 = build_span_params(
-                    _norm_cdf_v3, _ek.span_p, 400,
-                    _span_edge_params, is_window=is_window)
-                _span_params_v3_epi = _span_params_v3
-                _span_mu_sd_epi = (
-                    _span_edge_params.get('bayes_mu_sd')
-                    or _span_edge_params.get('bayes_path_mu_sd')
-                    or 0.0
-                )
-                if _span_params_v3 is not None and _span_mu_sd_epi:
-                    from dataclasses import replace as _dc_replace
-                    _span_params_v3_epi = _dc_replace(
-                        _span_params_v3,
-                        mu_sd=float(_span_mu_sd_epi),
-                    )
-                _span_alpha_v3 = _span_params_v3.alpha_0
-                _span_beta_v3 = _span_params_v3.beta_0
-
-            # MC draws from the prepared subject span X→end.
-            _span_execution_v3 = build_prepared_span_execution(
-                graph_data,
-                _span_x_v3,
-                query_to_node,
-                temporal_mode=_subject_temporal_mode,
-                graph_preference=_graph_pref,
-            )
-            if _span_execution_v3 is not None:
-                import numpy as _np
-                _rng_v3 = _np.random.default_rng(42)
-                _mc_cdf_v3, _mc_p_v3 = mc_span_cdfs(
-                    topo=_span_execution_v3.topo,
-                    edge_params=_span_execution_v3.edge_params,
-                    edge_sds=_span_execution_v3.edge_sds_pred,  # doc 61: forecast fan uses predictive
-                    max_tau=400,
-                    num_draws=2000,
-                    rng=_rng_v3,
-                )
-                _rng_v3_epi = _np.random.default_rng(42)
-                _mc_cdf_v3_epi, _mc_p_v3_epi = mc_span_cdfs(
-                    topo=_span_execution_v3.topo,
-                    edge_params=_span_execution_v3.edge_params,
-                    edge_sds=_span_execution_v3.edge_sds,  # doc 61: reporting overlay uses epistemic
-                    max_tau=400,
-                    num_draws=2000,
-                    rng=_rng_v3_epi,
-                )
-                if _anchor_relative_subject_cdf_v3:
-                    _edge_execution_p = build_prepared_span_execution(
-                        graph_data,
-                        query_from_node,
-                        query_to_node,
-                        temporal_mode=_subject_temporal_mode,
-                        graph_preference=_graph_pref,
-                    )
-                    if _edge_execution_p is not None:
-                        _rng_edge_v3 = _np.random.default_rng(42)
-                        _, _mc_p_v3 = mc_span_cdfs(
-                            topo=_edge_execution_p.topo,
-                            edge_params=_edge_execution_p.edge_params,
-                            edge_sds=_edge_execution_p.edge_sds_pred,  # doc 61: forecast predictive
-                            max_tau=400,
-                            num_draws=2000,
-                            rng=_rng_edge_v3,
-                        )
-                        _rng_edge_v3_epi = _np.random.default_rng(42)
-                        _, _mc_p_v3_epi = mc_span_cdfs(
-                            topo=_edge_execution_p.topo,
-                            edge_params=_edge_execution_p.edge_params,
-                            edge_sds=_edge_execution_p.edge_sds,  # doc 61: reporting overlay uses epistemic
-                            max_tau=400,
-                            num_draws=2000,
-                            rng=_rng_edge_v3_epi,
-                        )
-
-        # ── Edge-level MC CDF for Pop C (multi-hop only) ─────────────
-        # Pop C arrivals have traversed upstream edges and need the
-        # EDGE-level CDF for conversion timing, not the path CDF.
-        # Build from the last edge in the query path.
-        if _is_multi_hop_v3 and _edge_mc_cdf_v3 is None and _mc_cdf_v3 is not None:
-            _last_entry = next(
-                (e for e in per_edge_results if e['path_role'] in ('last', 'only')),
-                None,
-            )
-            if _last_entry:
-                _last_from = _last_entry['from_node']
-                _last_to = _last_entry['to_node']
-                _last_edge_execution = build_prepared_span_execution(
-                    graph_data,
-                    _last_from,
-                    _last_to,
-                    temporal_mode='window',
-                    graph_preference=_graph_pref,
-                )
-                if _last_edge_execution is not None:
-                    import numpy as _np
-                    _rng_last_edge = _np.random.default_rng(42)
-                    _edge_mc_cdf_v3, _ = mc_span_cdfs(
-                        topo=_last_edge_execution.topo,
-                        edge_params=_last_edge_execution.edge_params,
-                        edge_sds=_last_edge_execution.edge_sds_pred,  # doc 61: forecast predictive
-                        max_tau=400,
-                        num_draws=2000,
-                        rng=_rng_last_edge,
-                    )
-
-        # ── Build x_provider (matching v2 handler construction) ────────
-        # Carrier is needed even for collapsed shortcut: path CDF handles
-        # conversion timing, carrier handles x growth (Pop C upstream
-        # arrivals). These are orthogonal, not double-counting.
-        _v3_x_provider = None
-        if (
-            not is_window
-            and query_from_node
-            and anchor_node
-            and query_from_node != anchor_node
-        ):
-            from runner.forecast_runtime import (
-                XProvider,
-                get_incoming_edges,
-                has_semantic_upstream_latency,
-                read_edge_cohort_params,
-            )
-            _v3_ingress = []
-            _v3_ingress_epi = []
-            for inc_edge in get_incoming_edges(graph_data, query_from_node):
-                _params = read_edge_cohort_params(inc_edge)
-                if _params:
-                    _v3_ingress.append(_params)
-                    _lat_post = (((inc_edge.get('p') or {}).get('latency') or {}).get('posterior') or {})
-                    _params_epi = dict(_params)
-                    for _mu_sd_key in ('path_mu_sd', 'mu_sd'):
-                        _mu_sd_epi = _lat_post.get(_mu_sd_key)
-                        if isinstance(_mu_sd_epi, (int, float)) and math.isfinite(_mu_sd_epi) and _mu_sd_epi > 0:
-                            _params_epi['mu_sd'] = float(_mu_sd_epi)
-                            break
-                    _v3_ingress_epi.append(_params_epi)
-            # Compute reach from anchor to x.
-            # build_networkx_graph uses UUIDs; anchor_node and
-            # query_from_node are human IDs — must convert.
-            _v3_reach = 0.0
-            try:
-                from runner.graph_builder import build_networkx_graph
-                from runner.path_runner import calculate_path_probability
-                _id_to_uuid = {n.get('id', ''): n['uuid']
-                               for n in graph_data.get('nodes', [])}
-                _a_uuid = _id_to_uuid.get(anchor_node, anchor_node)
-                _x_uuid = _id_to_uuid.get(query_from_node, query_from_node)
-                G = build_networkx_graph(graph_data)
-                path_result = calculate_path_probability(G, _a_uuid, _x_uuid)
-                _v3_reach = path_result.probability
-            except Exception:
-                pass
-            _v3_upstream_enabled = (
-                _v3_reach > 0
-                and has_semantic_upstream_latency(
-                    graph_data,
-                    anchor_node,
-                    query_from_node,
-                )
-            )
-            print(f"[v3] upstream: ingress={len(_v3_ingress)} reach={_v3_reach:.6f} "
-                  f"x={query_from_node} a={anchor_node} enabled={_v3_upstream_enabled}")
-            # Fetch upstream evidence for empirical carrier (Tier 2)
-            _v3_upstream_obs = None
-            if _v3_upstream_enabled and query_from_node != anchor_node:
-                _v3_af = subjects[0].get('anchor_from', '')
-                _v3_at = subjects[0].get('anchor_to', '')
-                _v3_sf = subjects[0].get('sweep_from', _v3_af)
-                _v3_st = subjects[0].get('sweep_to', _v3_at)
-                _v3_upstream_obs = _fetch_upstream_observations(
-                    graph_data=graph_data,
-                    anchor_node=anchor_node,
-                    query_from_node=query_from_node,
-                    per_edge_results=per_edge_results,
-                    candidate_regimes_by_edge=scenario.get('candidate_regimes_by_edge', {}),
-                    subject_is_window=preparation.subject_is_window,
-                    anchor_from=_v3_af,
-                    anchor_to=_v3_at,
-                    sweep_from=_v3_sf,
-                    sweep_to=_v3_st,
-                    axis_tau_max=axis_tau_max,
-                    log_prefix='[v3] upstream:',
-                )
-            _v3_x_provider = XProvider(
-                reach=_v3_reach,
-                upstream_params_list=_v3_ingress,
-                enabled=_v3_upstream_enabled,
-                ingress_carrier=_v3_ingress if _v3_ingress else None,
-                upstream_obs=_v3_upstream_obs,
-            )
-            _v3_x_provider_overlay = XProvider(
-                reach=_v3_reach,
-                upstream_params_list=_v3_ingress_epi,
-                enabled=_v3_upstream_enabled,
-                ingress_carrier=_v3_ingress_epi if _v3_ingress_epi else None,
-                upstream_obs=_v3_upstream_obs,
-            )
-
-        _v3_resolved_override = None
+        _prepared_runtime_v3 = prepare_forecast_runtime_inputs(
+            graph_data=graph_data,
+            query_from_node=query_from_node,
+            query_to_node=query_to_node,
+            anchor_node_id=anchor_node,
+            last_edge_id=last_edge_id,
+            is_window=is_window,
+            is_multi_hop=preparation.is_multi_hop,
+            composed_frames=composed_frames,
+            path_per_edge_results=per_edge_results,
+            upstream_per_edge_results=per_edge_results,
+            axis_tau_max=axis_tau_max,
+            upstream_anchor_from=subjects[0].get('anchor_from', ''),
+            upstream_anchor_to=subjects[0].get('anchor_to', ''),
+            upstream_sweep_from=subjects[0].get(
+                'sweep_from',
+                subjects[0].get('anchor_from', ''),
+            ),
+            upstream_sweep_to=subjects[0].get(
+                'sweep_to',
+                subjects[0].get('anchor_to', ''),
+            ),
+            candidate_regimes_by_edge=scenario.get('candidate_regimes_by_edge', {}),
+            upstream_observation_fetcher=_fetch_upstream_observations,
+            upstream_log_prefix='[v3] upstream:',
+            p_conditioning_source='snapshot_frames',
+            p_conditioning_evidence_points=len(composed_frames),
+            include_epistemic_overlay=True,
+        )
+        _subject_temporal_mode = _prepared_runtime_v3.subject_temporal_mode
+        _mc_cdf_v3 = _prepared_runtime_v3.mc_cdf_arr
+        _mc_p_v3 = _prepared_runtime_v3.mc_p_s
+        _mc_cdf_v3_epi = _prepared_runtime_v3.mc_cdf_arr_epi
+        _mc_p_v3_epi = _prepared_runtime_v3.mc_p_s_epi
+        _is_multi_hop_v3 = _prepared_runtime_v3.is_multi_hop
+        _edge_mc_cdf_v3 = _prepared_runtime_v3.edge_cdf_arr
+        _det_norm_cdf = _prepared_runtime_v3.det_norm_cdf
+        _det_span_p = _prepared_runtime_v3.det_span_p
+        _span_alpha_v3 = _prepared_runtime_v3.span_alpha
+        _span_beta_v3 = _prepared_runtime_v3.span_beta
+        _span_params_v3 = _prepared_runtime_v3.span_params
+        _span_params_v3_epi = _prepared_runtime_v3.span_params_epi
+        _edge_kernel_v3 = _prepared_runtime_v3.edge_kernel
+        _anchor_relative_subject_cdf_v3 = (
+            _prepared_runtime_v3.anchor_relative_subject_cdf
+        )
+        _span_x_v3 = _prepared_runtime_v3.span_x_node_id
+        _v3_x_provider = _prepared_runtime_v3.x_provider
+        _v3_x_provider_overlay = _prepared_runtime_v3.x_provider_overlay
+        _v3_resolved_override = _prepared_runtime_v3.resolved_override
+        _v3_runtime_bundle = _prepared_runtime_v3.runtime_bundle
 
         # ── Call v3 row builder ───────────────────────────────────────
         _is_multi_hop = preparation.is_multi_hop
         maturity_rows = []
         if composed_frames and last_edge_id:
             anchor_to_str = preparation.anchor_to
-            _graph_pref = graph_data.get('model_source_preference')
-            _target_edge_v3 = find_edge_by_id(graph_data, last_edge_id)
-            if _target_edge_v3 is not None:
-                _v3_resolved_override = resolve_model_params(
-                    _target_edge_v3,
-                    scope='edge',
-                    temporal_mode=_subject_temporal_mode,
-                    graph_preference=_graph_pref,
-                )
-            _direct_cohort_p_conditioning = should_enable_direct_cohort_p_conditioning(
-                is_window=is_window,
-                is_multi_hop=_is_multi_hop,
-            )
-            _v3_runtime_bundle = build_prepared_runtime_bundle(
-                mode='window' if is_window else 'cohort',
-                query_from_node=query_from_node or '',
-                query_to_node=query_to_node or '',
-                anchor_node_id=anchor_node,
-                is_multi_hop=_is_multi_hop,
-                x_provider=_v3_x_provider,
-                numerator_representation='factorised',
-                p_conditioning_temporal_family=(
-                    'cohort' if _direct_cohort_p_conditioning else 'window'
-                ),
-                p_conditioning_source=(
-                    'direct_cohort_exact_subject'
-                    if _direct_cohort_p_conditioning
-                    else 'snapshot_frames'
-                ),
-                p_conditioning_direct_cohort=_direct_cohort_p_conditioning,
-                p_conditioning_evidence_points=len(composed_frames),
-                resolved_params=_v3_resolved_override,
-                mc_cdf_arr=_mc_cdf_v3,
-                mc_p_s=_mc_p_v3,
-                det_norm_cdf=_det_norm_cdf,
-                edge_cdf_arr=None,
-                span_alpha=_span_alpha_v3,
-                span_beta=_span_beta_v3,
-                span_mu_sd=_span_params_v3.mu_sd if _span_params_v3 else None,
-                span_sigma_sd=_span_params_v3.sigma_sd if _span_params_v3 else None,
-                span_onset_sd=_span_params_v3.onset_sd if _span_params_v3 else None,
-                span_onset_mu_corr=_span_params_v3.onset_mu_corr if _span_params_v3 else None,
-            )
-
             maturity_rows = compute_cohort_maturity_rows_v3(
                 frames=composed_frames,
                 graph=graph_data,
@@ -1963,11 +1662,9 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
                 axis_tau_max=axis_tau_max,
                 band_level=band_level,
                 anchor_node_id=anchor_node,
-                display_settings=display_settings,
                 mc_cdf_arr=_mc_cdf_v3,
                 mc_p_s=_mc_p_v3,
                 det_norm_cdf=_det_norm_cdf,
-                det_span_p=_det_span_p,
                 x_provider_override=_v3_x_provider,
                 span_alpha=_span_alpha_v3,
                 span_beta=_span_beta_v3,
@@ -1977,7 +1674,6 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
                 span_onset_mu_corr=_span_params_v3.onset_mu_corr if _span_params_v3 else None,
                 is_multi_hop=_is_multi_hop,
                 resolved_override=_v3_resolved_override,
-                edge_cdf_arr=_edge_mc_cdf_v3,
                 runtime_bundle=_v3_runtime_bundle,
             )
 
@@ -2129,11 +1825,9 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
                             axis_tau_max=_curve_tau_max,
                             band_level=0.90,
                             anchor_node_id=anchor_node,
-                            display_settings=display_settings,
                             mc_cdf_arr=_mc_cdf_v3_epi,
                             mc_p_s=_mc_p_v3_epi,
                             det_norm_cdf=_det_norm_cdf,
-                            det_span_p=_det_span_p,
                             x_provider_override=(
                                 _v3_x_provider_overlay
                                 if _v3_x_provider_overlay is not None
@@ -2147,7 +1841,6 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
                             span_onset_mu_corr=_span_params_v3_epi.onset_mu_corr if _span_params_v3_epi else None,
                             is_multi_hop=_is_multi_hop,
                             resolved_override=_v3_resolved_override,
-                            edge_cdf_arr=None,
                             runtime_bundle=None,
                         )
                         _overlay_upper = [
@@ -2566,220 +2259,54 @@ def handle_conditioned_forecast(data: Dict[str, Any]) -> Dict[str, Any]:
                 log_prefix='[forecast]',
             )
 
-            # ── Build span kernel + carrier + x_provider (same as v3)
-            from runner.model_resolver import resolve_model_params
-            from runner.forecast_runtime import (
-                build_prepared_span_execution,
-                build_prepared_runtime_bundle,
-                find_edge_by_id,
-                resolve_subject_cdf_start_node,
-                should_use_anchor_relative_subject_cdf,
-                should_enable_direct_cohort_p_conditioning,
+            from runner.forecast_runtime import prepare_forecast_runtime_inputs
+
+            _prepared_runtime = prepare_forecast_runtime_inputs(
+                graph_data=graph_data,
+                query_from_node=query_from_node,
+                query_to_node=query_to_node,
+                anchor_node_id=anchor_node,
+                last_edge_id=last_edge_id,
+                is_window=is_window,
+                is_multi_hop=preparation.is_multi_hop,
+                composed_frames=composed_frames,
+                path_per_edge_results=per_edge_results,
+                upstream_per_edge_results=(
+                    list(all_per_edge_results.values())
+                    if is_whole_graph
+                    else per_edge_results
+                ),
+                axis_tau_max=axis_tau_max,
+                upstream_anchor_from=subj_group[0].get('anchor_from', ''),
+                upstream_anchor_to=subj_group[0].get('anchor_to', ''),
+                upstream_sweep_from=subj_group[0].get(
+                    'sweep_from',
+                    subj_group[0].get('anchor_from', ''),
+                ),
+                upstream_sweep_to=subj_group[0].get(
+                    'sweep_to',
+                    subj_group[0].get('anchor_to', ''),
+                ),
+                candidate_regimes_by_edge=scenario.get(
+                    'candidate_regimes_by_edge',
+                    {},
+                ),
+                upstream_observation_fetcher=_fetch_upstream_observations,
+                upstream_log_prefix='[forecast] upstream:',
+                p_conditioning_source='snapshot_frames',
+                p_conditioning_evidence_points=len(composed_frames),
+                include_epistemic_overlay=False,
             )
-
-            _mc_cdf = None
-            _mc_p = None
-            _is_multi_hop = preparation.is_multi_hop
-            _edge_mc_cdf = None
-            _det_norm_cdf = None
-            _span_alpha = None
-            _span_beta = None
-            _span_params = None
-            _edge_kernel = None
-            if composed_frames and last_edge_id and query_from_node and query_to_node:
-                from runner.span_kernel import compose_span_kernel, mc_span_cdfs
-                _anchor_relative_subject_cdf = (
-                    should_use_anchor_relative_subject_cdf(
-                        is_window=is_window,
-                        is_multi_hop=_is_multi_hop,
-                        anchor_node_id=anchor_node,
-                        query_from_node=query_from_node,
-                    )
-                )
-                _span_x = resolve_subject_cdf_start_node(
-                    is_window=is_window,
-                    is_multi_hop=_is_multi_hop,
-                    anchor_node_id=anchor_node,
-                    query_from_node=query_from_node,
-                )
-                _graph_pref = graph_data.get('model_source_preference')
-
-                _edge_execution = build_prepared_span_execution(
-                    graph_data,
-                    query_from_node,
-                    query_to_node,
-                    temporal_mode='window',
-                    graph_preference=_graph_pref,
-                )
-                if _edge_execution is not None:
-                    _edge_kernel = compose_span_kernel(
-                        topo=_edge_execution.topo,
-                        edge_params=_edge_execution.edge_params,
-                        max_tau=400,
-                    )
-                _kernel = _edge_kernel
-
-                if _kernel is not None and _kernel.span_p > 0:
-                    _det_cdf_kernel = _edge_kernel or _kernel
-                    _det_norm_cdf = [
-                        min(max(_det_cdf_kernel.cdf_at(t) / _det_cdf_kernel.span_p, 0.0), 1.0)
-                        for t in range(401)
-                    ]
-                    from runner.forecast_runtime import span_kernel_to_edge_params, build_span_params
-                    _ek = _edge_kernel or _kernel
-                    _span_edge_params = span_kernel_to_edge_params(
-                        _ek, graph_data, last_edge_id, is_window=is_window)
-                    def _norm_cdf(tau):
-                        return _ek.cdf_at(int(round(tau))) / _ek.span_p
-                    _span_params = build_span_params(
-                        _norm_cdf, _ek.span_p, 400,
-                        _span_edge_params, is_window=is_window)
-                    _span_alpha = _span_params.alpha_0
-                    _span_beta = _span_params.beta_0
-
-                _span_execution = build_prepared_span_execution(
-                    graph_data,
-                    _span_x,
-                    query_to_node,
-                    temporal_mode='window',
-                    graph_preference=_graph_pref,
-                )
-                if _span_execution is not None:
-                    _rng = _np.random.default_rng(42)
-                    _mc_cdf, _mc_p = mc_span_cdfs(
-                        topo=_span_execution.topo,
-                        edge_params=_span_execution.edge_params,
-                        edge_sds=_span_execution.edge_sds_pred,  # doc 61: CF forecast uses predictive
-                        max_tau=400,
-                        num_draws=2000,
-                        rng=_rng,
-                    )
-                    if _anchor_relative_subject_cdf:
-                        _edge_execution_p = build_prepared_span_execution(
-                            graph_data,
-                            query_from_node,
-                            query_to_node,
-                            temporal_mode='window',
-                            graph_preference=_graph_pref,
-                        )
-                        if _edge_execution_p is not None:
-                            _rng_edge = _np.random.default_rng(42)
-                            _, _mc_p = mc_span_cdfs(
-                                topo=_edge_execution_p.topo,
-                                edge_params=_edge_execution_p.edge_params,
-                                edge_sds=_edge_execution_p.edge_sds_pred,  # doc 61: forecast predictive
-                                max_tau=400,
-                                num_draws=2000,
-                                rng=_rng_edge,
-                            )
-
-            # Multi-hop edge CDF (same as v3)
-            if _is_multi_hop and _edge_mc_cdf is None and _mc_cdf is not None:
-                _last_entry = next(
-                    (e for e in per_edge_results if e['path_role'] in ('last', 'only')), None)
-                if _last_entry:
-                    _last_execution = build_prepared_span_execution(
-                        graph_data,
-                        _last_entry['from_node'],
-                        _last_entry['to_node'],
-                        temporal_mode='window',
-                        graph_preference=_graph_pref,
-                    )
-                    if _last_execution is not None:
-                        _rng_last = _np.random.default_rng(42)
-                        _edge_mc_cdf, _ = mc_span_cdfs(
-                            topo=_last_execution.topo,
-                            edge_params=_last_execution.edge_params,
-                            edge_sds=_last_execution.edge_sds_pred,  # doc 61: forecast predictive
-                            max_tau=400,
-                            num_draws=2000,
-                            rng=_rng_last,
-                        )
-
-            # x_provider (same as v3)
-            _x_provider = None
-            if (
-                not is_window
-                and query_from_node
-                and anchor_node
-                and query_from_node != anchor_node
-            ):
-                from runner.forecast_runtime import (
-                    XProvider,
-                    get_incoming_edges,
-                    has_semantic_upstream_latency,
-                    read_edge_cohort_params,
-                )
-
-                _ingress = []
-                for inc_edge in get_incoming_edges(graph_data, query_from_node):
-                    _params = read_edge_cohort_params(inc_edge)
-                    if _params:
-                        _ingress.append(_params)
-                _reach = 0.0
-                try:
-                    from runner.graph_builder import build_networkx_graph
-                    from runner.path_runner import calculate_path_probability
-
-                    _id_to_uuid = {
-                        n.get('id', ''): n['uuid']
-                        for n in graph_data.get('nodes', [])
-                    }
-                    _a_uuid = _id_to_uuid.get(anchor_node, anchor_node)
-                    _x_uuid = _id_to_uuid.get(query_from_node, query_from_node)
-                    G = build_networkx_graph(graph_data)
-                    path_result = calculate_path_probability(G, _a_uuid, _x_uuid)
-                    _reach = path_result.probability
-                except Exception:
-                    pass
-                _upstream_enabled = (
-                    _reach > 0
-                    and has_semantic_upstream_latency(
-                        graph_data,
-                        anchor_node,
-                        query_from_node,
-                    )
-                )
-                _upstream_obs = None
-                if _upstream_enabled and query_from_node != anchor_node:
-                    _af = subj_group[0].get('anchor_from', '')
-                    _at = subj_group[0].get('anchor_to', '')
-                    _sf = subj_group[0].get('sweep_from', _af)
-                    _st = subj_group[0].get('sweep_to', _at)
-                    # In whole-graph mode, pass all_per_edge_results so
-                    # upstream edges' derivation frames are found in the
-                    # cache instead of re-querying the DB. This gives
-                    # downstream edges the same Tier 2 empirical carrier
-                    # that the single-edge v3 path computes (doc 47 §Phase 4).
-                    _upstream_cache = (
-                        list(all_per_edge_results.values())
-                        if is_whole_graph
-                        else per_edge_results
-                    )
-                    _upstream_obs = _fetch_upstream_observations(
-                        graph_data=graph_data,
-                        anchor_node=anchor_node,
-                        query_from_node=query_from_node,
-                        per_edge_results=_upstream_cache,
-                        candidate_regimes_by_edge=scenario.get(
-                            'candidate_regimes_by_edge',
-                            {},
-                        ),
-                        subject_is_window=preparation.subject_is_window,
-                        anchor_from=_af,
-                        anchor_to=_at,
-                        sweep_from=_sf,
-                        sweep_to=_st,
-                        axis_tau_max=axis_tau_max,
-                        log_prefix='[forecast] upstream:',
-                    )
-                _x_provider = XProvider(
-                    reach=_reach,
-                    upstream_params_list=_ingress,
-                    enabled=_upstream_enabled,
-                    ingress_carrier=_ingress if _ingress else None,
-                    upstream_obs=_upstream_obs,
-                )
+            _mc_cdf = _prepared_runtime.mc_cdf_arr
+            _mc_p = _prepared_runtime.mc_p_s
+            _is_multi_hop = _prepared_runtime.is_multi_hop
+            _edge_mc_cdf = _prepared_runtime.edge_cdf_arr
+            _det_norm_cdf = _prepared_runtime.det_norm_cdf
+            _span_alpha = _prepared_runtime.span_alpha
+            _span_beta = _prepared_runtime.span_beta
+            _span_params = _prepared_runtime.span_params
+            _x_provider = _prepared_runtime.x_provider
+            _runtime_bundle = _prepared_runtime.runtime_bundle
 
             # ── Call v3 row builder and read scalars ────────────────
             # Call unconditionally when we have an edge id — the row
@@ -2789,41 +2316,6 @@ def handle_conditioned_forecast(data: Dict[str, Any]) -> Dict[str, Any]:
             # below. See doc 50 §§2-3.
             if last_edge_id:
                 anchor_to_str = preparation.anchor_to
-                _direct_cohort_p_conditioning = (
-                    should_enable_direct_cohort_p_conditioning(
-                        is_window=is_window,
-                        is_multi_hop=_is_multi_hop,
-                    )
-                )
-                _runtime_bundle = build_prepared_runtime_bundle(
-                    mode='window' if is_window else 'cohort',
-                    query_from_node=query_from_node or '',
-                    query_to_node=query_to_node or '',
-                    anchor_node_id=anchor_node,
-                    is_multi_hop=_is_multi_hop,
-                    x_provider=_x_provider,
-                    numerator_representation='factorised',
-                    p_conditioning_temporal_family=(
-                        'cohort' if _direct_cohort_p_conditioning else 'window'
-                    ),
-                    p_conditioning_source=(
-                        'direct_cohort_exact_subject'
-                        if _direct_cohort_p_conditioning
-                        else 'snapshot_frames'
-                    ),
-                    p_conditioning_direct_cohort=_direct_cohort_p_conditioning,
-                    p_conditioning_evidence_points=len(composed_frames),
-                    mc_cdf_arr=_mc_cdf,
-                    mc_p_s=_mc_p,
-                    det_norm_cdf=_det_norm_cdf,
-                    edge_cdf_arr=None,
-                    span_alpha=_span_alpha,
-                    span_beta=_span_beta,
-                    span_mu_sd=_span_params.mu_sd if _span_params else None,
-                    span_sigma_sd=_span_params.sigma_sd if _span_params else None,
-                    span_onset_sd=_span_params.onset_sd if _span_params else None,
-                    span_onset_mu_corr=_span_params.onset_mu_corr if _span_params else None,
-                )
                 maturity_rows = compute_cohort_maturity_rows_v3(
                     frames=composed_frames,
                     graph=graph_data,
@@ -2846,7 +2338,6 @@ def handle_conditioned_forecast(data: Dict[str, Any]) -> Dict[str, Any]:
                     span_onset_sd=_span_params.onset_sd if _span_params else None,
                     span_onset_mu_corr=_span_params.onset_mu_corr if _span_params else None,
                     is_multi_hop=_is_multi_hop,
-                    edge_cdf_arr=_edge_mc_cdf,
                     runtime_bundle=_runtime_bundle,
                 )
 
@@ -4001,11 +3492,7 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                         from runner.forecast_state import compute_forecast_trajectory, CohortEvidence
                         from runner.model_resolver import resolve_model_params as _rmp
                         from runner.forecast_application import compute_completeness as _cc
-                        from runner.forecast_runtime import (
-                            build_closed_form_beta_rate_surface,
-                            get_cf_mode_and_reason,
-                            is_cf_sweep_eligible,
-                        )
+                        from runner.forecast_runtime import get_cf_mode_and_reason
 
                         _edge_dict = next(
                             (e for e in graph.get('edges', [])
@@ -4025,6 +3512,8 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                             result['cf_mode'] = _cf_mode
                             if _cf_reason is not None:
                                 result['cf_reason'] = _cf_reason
+                            else:
+                                result.pop('cf_reason', None)
                             # Parse asat date from DSL; default to today.
                             # DSL dates are d-MMM-yy (e.g. 16-Apr-26) or
                             # relative (e.g. -30d). Use the same parser as
@@ -4053,7 +3542,6 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                             _t95 = int(math.ceil(_lat.t95)) if _lat.t95 > 0 else 60
                             _maturity_tau = max(_t95, 30)  # at least 30 days
 
-                            _sweep_eligible = is_cf_sweep_eligible(_resolved)
                             _engine_cohorts = []
                             _row_map = []  # parallel index: row reference
                             _cohort_real_ages = []  # actual age per Cohort (for completeness)
@@ -4072,125 +3560,22 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                                     continue
                                 if _real_age < 0:
                                     continue
-                                if _sweep_eligible:
-                                    _engine_cohorts.append(CohortEvidence(
-                                        obs_x=[_x],
-                                        obs_y=[_y],
-                                        x_frozen=_x,
-                                        y_frozen=_y,
-                                        # frontier = real age: the engine must know
-                                        # where the evidence ends so IS conditioning
-                                        # can fire (E_i = N_i × CDF(frontier_age)).
-                                        # With frontier=0, CDF(0)≈0, E_i≈0, IS never
-                                        # fires → unconditioned prior p → wildly wrong.
-                                        frontier_age=_real_age,
-                                        a_pop=_x,
-                                        eval_age=_maturity_tau,  # read draws at maturity
-                                    ))
+                                _engine_cohorts.append(CohortEvidence(
+                                    obs_x=[_x],
+                                    obs_y=[_y],
+                                    x_frozen=_x,
+                                    y_frozen=_y,
+                                    # frontier = real age: the engine must know
+                                    # where the evidence ends so IS conditioning
+                                    # can fire when that semantic step is allowed.
+                                    frontier_age=_real_age,
+                                    a_pop=_x,
+                                    eval_age=_maturity_tau,  # read draws at maturity
+                                ))
                                 _row_map.append(_row)
                                 _cohort_real_ages.append(_real_age)
 
-                            if not _sweep_eligible:
-                                _beta_surface = build_closed_form_beta_rate_surface(
-                                    alpha=float(_resolved.alpha or 0.0),
-                                    beta=float(_resolved.beta or 0.0),
-                                    band_level=0.90,
-                                    band_levels=[0.80, 0.90, 0.95, 0.99],
-                                )
-                                if _row_map and _beta_surface is not None:
-                                    _p_mean = _beta_surface.p_mean
-                                    _forecast_bands = {
-                                        _level: [float(_bounds[0]), float(_bounds[1])]
-                                        for _level, _bounds in _beta_surface.band_lookup.items()
-                                    }
-
-                                    for _row, _real_age in zip(_row_map, _cohort_real_ages):
-                                        _ev_y = float(_row.get('y', 0) or 0)
-                                        _x = float(_row.get('x', 0) or 0)
-                                        _c = _cc(_real_age, _lat.mu, _lat.sigma, _lat.onset_delta_days)
-                                        _c = max(0.0, min(1.0, _c))
-                                        _proj_y = _x * _p_mean
-                                        _row['completeness'] = _c
-                                        _row['evidence_y'] = _ev_y
-                                        _row['projected_y'] = _proj_y
-                                        _row['forecast_y'] = max(0.0, _proj_y - _ev_y)
-                                        _row['layer'] = 'mature' if _c >= 0.95 else ('forecast' if _c > 1e-9 else 'evidence')
-                                        if _x > 0:
-                                            _row['forecast_bands'] = {
-                                                _level: [float(_bounds[0]), float(_bounds[1])]
-                                                for _level, _bounds in _forecast_bands.items()
-                                            }
-                                    _dc_annotated = True
-                                    result['promoted_source'] = _resolved.source or 'best_available'
-                                    print(f"[daily_conv] Degraded annotation: {len(_row_map)} cohorts, "
-                                          f"conditioned={any((_r.get('completeness') or 0) > 0 for _r in _row_map)}, "
-                                          f"maturity_tau={_maturity_tau}, "
-                                          f"p_mean={_p_mean:.4f}, "
-                                          f"alpha={float(_resolved.alpha or 0.0):.2f}, "
-                                          f"beta={float(_resolved.beta or 0.0):.2f}, "
-                                          f"mu={_lat.mu:.3f}, sigma={_lat.sigma:.3f}, "
-                                          f"source={_resolved.source}")
-
-                                    # ── Latency bands (deterministic degraded path) ──
-                                    _ds = data.get('display_settings') or {}
-                                    if _ds.get('show_latency_bands') and _lat.sigma > 0:
-                                        from runner.lag_distribution_utils import log_normal_inverse_cdf as _inv_cdf
-
-                                        _band_taus = []
-                                        for _q in [0.25, 0.50, 0.75]:
-                                            _raw = _inv_cdf(_q, _lat.mu, _lat.sigma) + _lat.onset_delta_days
-                                            _tau_d = max(1, round(_raw))
-                                            if _tau_d not in [t for t, _ in _band_taus]:
-                                                _band_taus.append((_tau_d, f'{_tau_d}d'))
-                                        if not _band_taus:
-                                            _band_taus = [(1, '1d')]
-
-                                        _cohort_y_at_age_raw = result.get('cohort_y_at_age') or {}
-                                        _obs_by_cohort_age: dict = {}
-                                        for _ad_str, _ages in _cohort_y_at_age_raw.items():
-                                            for _age_str, _y_val in _ages.items():
-                                                _obs_by_cohort_age[(_ad_str, int(_age_str))] = float(_y_val)
-
-                                        _latency_band_lookup = {
-                                            _level: [float(_bounds[0]), float(_bounds[1])]
-                                            for _level, _bounds in _forecast_bands.items()
-                                            if _level in {'80', '90'}
-                                        }
-
-                                        for _row, _real_age in zip(_row_map, _cohort_real_ages):
-                                            _x = float(_row.get('x', 0) or 0)
-                                            _ad_str = str(_row.get('date', ''))[:10]
-                                            if _x <= 0 or not _ad_str:
-                                                continue
-                                            for _bt, _bt_label in _band_taus:
-                                                if _real_age >= _bt:
-                                                    _obs_rate = None
-                                                    for _look_age in range(_bt, -1, -1):
-                                                        _obs_y = _obs_by_cohort_age.get((_ad_str, _look_age))
-                                                        if _obs_y is not None:
-                                                            _obs_rate = _obs_y / _x
-                                                            break
-                                                    if _obs_rate is not None:
-                                                        if 'latency_bands' not in _row:
-                                                            _row['latency_bands'] = {}
-                                                        _row['latency_bands'][_bt_label] = {
-                                                            'rate': _obs_rate,
-                                                            'source': 'evidence',
-                                                        }
-                                                else:
-                                                    _c_bt = _cc(_bt, _lat.mu, _lat.sigma, _lat.onset_delta_days)
-                                                    _c_bt = max(0.0, min(1.0, _c_bt))
-                                                    if 'latency_bands' not in _row:
-                                                        _row['latency_bands'] = {}
-                                                    _row['latency_bands'][_bt_label] = {
-                                                        'rate': _p_mean * _c_bt,
-                                                        'source': 'forecast',
-                                                        'bands': {
-                                                            _level: [float(_bounds[0] * _c_bt), float(_bounds[1] * _c_bt)]
-                                                            for _level, _bounds in _latency_band_lookup.items()
-                                                        },
-                                                    }
-                            elif _engine_cohorts:
+                            if _engine_cohorts:
                                 _sweep = compute_forecast_trajectory(
                                     resolved=_resolved,
                                     cohorts=_engine_cohorts,

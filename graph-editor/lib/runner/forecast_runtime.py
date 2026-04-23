@@ -104,7 +104,6 @@ class PreparedConditioningEvidence:
     """Explicit evidence base used to move the rate side."""
     temporal_family: str = 'window'
     source: str = 'none'
-    direct_cohort_enabled: bool = False
     evidence_points: int = 0
     total_x: Optional[float] = None
     total_y: Optional[float] = None
@@ -138,15 +137,6 @@ class PreparedForecastRuntimeBundle:
     sweep_eligible: Optional[bool] = None
     cf_mode: Optional[str] = None
     cf_reason: Optional[str] = None
-
-
-def should_enable_direct_cohort_p_conditioning(
-    *,
-    is_window: bool,
-    is_multi_hop: bool,
-) -> bool:
-    """WP8's first landing: exact single-hop cohort subjects only."""
-    return (not is_window) and (not is_multi_hop)
 
 
 def should_use_anchor_relative_subject_cdf(
@@ -225,6 +215,8 @@ def build_prepared_runtime_bundle(
     span_onset_mu_corr: Optional[float] = None,
 ) -> PreparedForecastRuntimeBundle:
     """Build the explicit internal runtime bundle for forecast consumers."""
+    del p_conditioning_direct_cohort
+
     def _has_semantic_upstream_carrier() -> bool:
         if x_provider is not None:
             return bool(getattr(x_provider, 'enabled', False))
@@ -277,12 +269,8 @@ def build_prepared_runtime_bundle(
         ),
         numerator_representation=numerator_representation,
         p_conditioning_evidence=PreparedConditioningEvidence(
-            temporal_family=(
-                p_conditioning_temporal_family
-                or ('window' if mode == 'window' else 'cohort')
-            ),
+            temporal_family=(p_conditioning_temporal_family or 'window'),
             source=p_conditioning_source,
-            direct_cohort_enabled=p_conditioning_direct_cohort,
             evidence_points=p_conditioning_evidence_points,
             total_x=p_conditioning_total_x,
             total_y=p_conditioning_total_y,
@@ -432,9 +420,6 @@ def serialise_runtime_bundle(
         'p_conditioning_evidence': {
             'temporal_family': bundle.p_conditioning_evidence.temporal_family,
             'source': bundle.p_conditioning_evidence.source,
-            'direct_cohort_enabled': (
-                bundle.p_conditioning_evidence.direct_cohort_enabled
-            ),
             'evidence_points': bundle.p_conditioning_evidence.evidence_points,
             'total_x': bundle.p_conditioning_evidence.total_x,
             'total_y': bundle.p_conditioning_evidence.total_y,
@@ -494,6 +479,22 @@ def get_cf_mode_and_reason(
     if is_cf_sweep_eligible(resolved):
         return ('sweep', None)
     return ('analytic_degraded', 'query_scoped_posterior')
+
+
+def should_enable_direct_cohort_p_conditioning(
+    *,
+    is_window: bool,
+    is_multi_hop: bool,
+) -> bool:
+    """WP8 admission hook.
+
+    The direct exact-subject cohort evidence overlay is intentionally
+    deferred for now. Keep the shared runtime on the general path and
+    admit no special Y-side overlay until the explicit WP8 admission
+    rules land.
+    """
+    del is_window, is_multi_hop
+    return False
 
 
 def build_closed_form_beta_rate_surface(
@@ -1523,3 +1524,387 @@ def build_upstream_carrier(
         reach, is_window, max_tau, num_draws, rng,
     )
     return (det_cdf, mc_cdf, 'weak_prior')
+
+
+@dataclass
+class PreparedForecastSolveInputs:
+    """Shared prepared solve inputs for chart and CF callers."""
+    subject_temporal_mode: str = 'window'
+    is_multi_hop: bool = False
+    anchor_relative_subject_cdf: bool = False
+    span_x_node_id: Optional[str] = None
+    edge_kernel: Optional[Any] = None
+    det_norm_cdf: Optional[List[float]] = None
+    det_span_p: Optional[float] = None
+    span_alpha: Optional[float] = None
+    span_beta: Optional[float] = None
+    span_params: Optional[SpanParams] = None
+    span_params_epi: Optional[SpanParams] = None
+    mc_cdf_arr: Optional[Any] = None
+    mc_p_s: Optional[Any] = None
+    mc_cdf_arr_epi: Optional[Any] = None
+    mc_p_s_epi: Optional[Any] = None
+    edge_cdf_arr: Optional[Any] = None
+    x_provider: Optional[XProvider] = None
+    x_provider_overlay: Optional[XProvider] = None
+    resolved_override: Optional[Any] = None
+    runtime_bundle: Optional[PreparedForecastRuntimeBundle] = None
+
+
+def _resolve_subject_temporal_mode(
+    *,
+    is_window: bool,
+    anchor_node_id: Optional[str],
+    query_from_node: Optional[str],
+) -> str:
+    """Choose the rate-family used by the prepared subject solve.
+
+    This does not retarget the subject span away from `X -> end`; it only
+    selects which posterior family resolves the edge/span probability inputs.
+    Cohort queries with `A != X` should read the cohort-family rate surface,
+    while `window()` and the `A = X` identity case remain window-rooted.
+    """
+    if is_window:
+        return 'window'
+    if anchor_node_id and query_from_node and anchor_node_id != query_from_node:
+        return 'cohort'
+    return 'window'
+
+
+def prepare_forecast_runtime_inputs(
+    *,
+    graph_data: Dict[str, Any],
+    query_from_node: Optional[str],
+    query_to_node: Optional[str],
+    anchor_node_id: Optional[str],
+    last_edge_id: Optional[str],
+    is_window: bool,
+    is_multi_hop: bool,
+    composed_frames: List[Dict[str, Any]],
+    path_per_edge_results: Optional[List[Dict[str, Any]]] = None,
+    upstream_per_edge_results: Optional[List[Dict[str, Any]]] = None,
+    axis_tau_max: Optional[int] = None,
+    upstream_anchor_from: Optional[str] = None,
+    upstream_anchor_to: Optional[str] = None,
+    upstream_sweep_from: Optional[str] = None,
+    upstream_sweep_to: Optional[str] = None,
+    candidate_regimes_by_edge: Optional[Dict[str, Any]] = None,
+    upstream_observation_fetcher: Optional[Callable[..., Any]] = None,
+    upstream_log_prefix: str = '[forecast] upstream:',
+    p_conditioning_source: str = 'snapshot_frames',
+    p_conditioning_evidence_points: Optional[int] = None,
+    include_epistemic_overlay: bool = False,
+) -> PreparedForecastSolveInputs:
+    """Build the shared prepared runtime inputs for one forecast subject."""
+    from runner.model_resolver import resolve_model_params
+    from runner.span_kernel import compose_span_kernel, mc_span_cdfs
+
+    result = PreparedForecastSolveInputs(
+        is_multi_hop=is_multi_hop,
+    )
+
+    if not (composed_frames and last_edge_id and query_from_node and query_to_node):
+        return result
+
+    graph_preference = graph_data.get('model_source_preference')
+    result.subject_temporal_mode = _resolve_subject_temporal_mode(
+        is_window=is_window,
+        anchor_node_id=anchor_node_id,
+        query_from_node=query_from_node,
+    )
+    result.anchor_relative_subject_cdf = should_use_anchor_relative_subject_cdf(
+        is_window=is_window,
+        is_multi_hop=is_multi_hop,
+        anchor_node_id=anchor_node_id,
+        query_from_node=query_from_node,
+    )
+    result.span_x_node_id = resolve_subject_cdf_start_node(
+        is_window=is_window,
+        is_multi_hop=is_multi_hop,
+        anchor_node_id=anchor_node_id,
+        query_from_node=query_from_node,
+    )
+
+    edge_execution = build_prepared_span_execution(
+        graph_data,
+        query_from_node,
+        query_to_node,
+        temporal_mode=result.subject_temporal_mode,
+        graph_preference=graph_preference,
+    )
+    if edge_execution is not None:
+        result.edge_kernel = compose_span_kernel(
+            topo=edge_execution.topo,
+            edge_params=edge_execution.edge_params,
+            max_tau=400,
+        )
+
+    kernel = result.edge_kernel
+    if kernel is not None and kernel.span_p > 0:
+        result.det_span_p = float(kernel.span_p)
+        result.det_norm_cdf = [
+            min(max(kernel.cdf_at(t) / kernel.span_p, 0.0), 1.0)
+            for t in range(401)
+        ]
+        span_edge_params = span_kernel_to_edge_params(
+            kernel,
+            graph_data,
+            last_edge_id,
+            is_window=is_window,
+        )
+
+        def _norm_cdf(tau: float) -> float:
+            return kernel.cdf_at(int(round(tau))) / kernel.span_p
+
+        result.span_params = build_span_params(
+            _norm_cdf,
+            kernel.span_p,
+            400,
+            span_edge_params,
+            is_window=is_window,
+        )
+        result.span_alpha = result.span_params.alpha_0
+        result.span_beta = result.span_params.beta_0
+
+        if include_epistemic_overlay:
+            result.span_params_epi = result.span_params
+            span_mu_sd_epi = (
+                span_edge_params.get('bayes_mu_sd')
+                or span_edge_params.get('bayes_path_mu_sd')
+                or 0.0
+            )
+            if result.span_params is not None and span_mu_sd_epi:
+                result.span_params_epi = SpanParams(
+                    span_p=result.span_params.span_p,
+                    C=list(result.span_params.C),
+                    max_tau=result.span_params.max_tau,
+                    alpha_0=result.span_params.alpha_0,
+                    beta_0=result.span_params.beta_0,
+                    mu_sd=float(span_mu_sd_epi),
+                    sigma_sd=result.span_params.sigma_sd,
+                    onset_sd=result.span_params.onset_sd,
+                    onset_mu_corr=result.span_params.onset_mu_corr,
+                    mu=result.span_params.mu,
+                    sigma=result.span_params.sigma,
+                    onset=result.span_params.onset,
+                )
+
+    span_execution = build_prepared_span_execution(
+        graph_data,
+        result.span_x_node_id,
+        query_to_node,
+        temporal_mode=result.subject_temporal_mode,
+        graph_preference=graph_preference,
+    )
+    if span_execution is not None:
+        import numpy as np
+
+        rng = np.random.default_rng(42)
+        result.mc_cdf_arr, result.mc_p_s = mc_span_cdfs(
+            topo=span_execution.topo,
+            edge_params=span_execution.edge_params,
+            edge_sds=span_execution.edge_sds_pred,
+            max_tau=400,
+            num_draws=2000,
+            rng=rng,
+        )
+        if include_epistemic_overlay:
+            rng_epi = np.random.default_rng(42)
+            result.mc_cdf_arr_epi, result.mc_p_s_epi = mc_span_cdfs(
+                topo=span_execution.topo,
+                edge_params=span_execution.edge_params,
+                edge_sds=span_execution.edge_sds,
+                max_tau=400,
+                num_draws=2000,
+                rng=rng_epi,
+            )
+        if result.anchor_relative_subject_cdf:
+            edge_execution_p = build_prepared_span_execution(
+                graph_data,
+                query_from_node,
+                query_to_node,
+                temporal_mode=result.subject_temporal_mode,
+                graph_preference=graph_preference,
+            )
+            if edge_execution_p is not None:
+                rng_edge = np.random.default_rng(42)
+                _, result.mc_p_s = mc_span_cdfs(
+                    topo=edge_execution_p.topo,
+                    edge_params=edge_execution_p.edge_params,
+                    edge_sds=edge_execution_p.edge_sds_pred,
+                    max_tau=400,
+                    num_draws=2000,
+                    rng=rng_edge,
+                )
+                if include_epistemic_overlay:
+                    rng_edge_epi = np.random.default_rng(42)
+                    _, result.mc_p_s_epi = mc_span_cdfs(
+                        topo=edge_execution_p.topo,
+                        edge_params=edge_execution_p.edge_params,
+                        edge_sds=edge_execution_p.edge_sds,
+                        max_tau=400,
+                        num_draws=2000,
+                        rng=rng_edge_epi,
+                    )
+
+    edge_results = path_per_edge_results or []
+    if (
+        is_multi_hop
+        and result.edge_cdf_arr is None
+        and result.mc_cdf_arr is not None
+    ):
+        last_entry = next(
+            (entry for entry in edge_results if entry.get('path_role') in ('last', 'only')),
+            None,
+        )
+        if last_entry is not None:
+            import numpy as np
+
+            last_execution = build_prepared_span_execution(
+                graph_data,
+                last_entry.get('from_node', ''),
+                last_entry.get('to_node', ''),
+                temporal_mode='window',
+                graph_preference=graph_preference,
+            )
+            if last_execution is not None:
+                rng_last = np.random.default_rng(42)
+                result.edge_cdf_arr, _ = mc_span_cdfs(
+                    topo=last_execution.topo,
+                    edge_params=last_execution.edge_params,
+                    edge_sds=last_execution.edge_sds_pred,
+                    max_tau=400,
+                    num_draws=2000,
+                    rng=rng_last,
+                )
+
+    def _build_runtime_x_provider(*, use_epistemic_mu_sd: bool) -> Optional[XProvider]:
+        if (
+            is_window
+            or not query_from_node
+            or not anchor_node_id
+            or query_from_node == anchor_node_id
+        ):
+            return None
+
+        ingress: List[Dict[str, float]] = []
+        for incoming_edge in get_incoming_edges(graph_data, query_from_node):
+            params = read_edge_cohort_params(incoming_edge)
+            if not params:
+                continue
+            params_local = dict(params)
+            if use_epistemic_mu_sd:
+                latency_posterior = (
+                    ((incoming_edge.get('p') or {}).get('latency') or {}).get('posterior')
+                    or {}
+                )
+                for mu_sd_key in ('path_mu_sd', 'mu_sd'):
+                    mu_sd_value = latency_posterior.get(mu_sd_key)
+                    if (
+                        isinstance(mu_sd_value, (int, float))
+                        and math.isfinite(mu_sd_value)
+                        and mu_sd_value > 0
+                    ):
+                        params_local['mu_sd'] = float(mu_sd_value)
+                        break
+            ingress.append(params_local)
+
+        reach = 0.0
+        try:
+            from runner.graph_builder import build_networkx_graph
+            from runner.path_runner import calculate_path_probability
+
+            id_to_uuid = {
+                node.get('id', ''): node['uuid']
+                for node in graph_data.get('nodes', [])
+            }
+            anchor_uuid = id_to_uuid.get(anchor_node_id, anchor_node_id)
+            x_uuid = id_to_uuid.get(query_from_node, query_from_node)
+            graph_nx = build_networkx_graph(graph_data)
+            path_result = calculate_path_probability(graph_nx, anchor_uuid, x_uuid)
+            reach = float(getattr(path_result, 'probability', 0.0) or 0.0)
+        except Exception:
+            pass
+
+        enabled = (
+            reach > 0
+            and has_semantic_upstream_latency(
+                graph_data,
+                anchor_node_id,
+                query_from_node,
+            )
+        )
+        upstream_obs = None
+        if (
+            enabled
+            and upstream_observation_fetcher is not None
+            and upstream_anchor_from
+            and upstream_anchor_to
+        ):
+            upstream_obs = upstream_observation_fetcher(
+                graph_data=graph_data,
+                anchor_node=anchor_node_id,
+                query_from_node=query_from_node,
+                per_edge_results=upstream_per_edge_results or edge_results,
+                candidate_regimes_by_edge=candidate_regimes_by_edge or {},
+                anchor_from=upstream_anchor_from,
+                anchor_to=upstream_anchor_to,
+                sweep_from=upstream_sweep_from or upstream_anchor_from,
+                sweep_to=upstream_sweep_to or upstream_anchor_to,
+                axis_tau_max=axis_tau_max,
+                log_prefix=upstream_log_prefix,
+            )
+
+        return XProvider(
+            reach=reach,
+            upstream_params_list=ingress,
+            enabled=enabled,
+            ingress_carrier=ingress if ingress else None,
+            upstream_obs=upstream_obs,
+        )
+
+    result.x_provider = _build_runtime_x_provider(use_epistemic_mu_sd=False)
+    if include_epistemic_overlay:
+        result.x_provider_overlay = _build_runtime_x_provider(
+            use_epistemic_mu_sd=True,
+        )
+
+    target_edge = find_edge_by_id(graph_data, last_edge_id)
+    if target_edge is not None:
+        result.resolved_override = resolve_model_params(
+            target_edge,
+            scope='edge',
+            temporal_mode=result.subject_temporal_mode,
+            graph_preference=graph_preference,
+        )
+
+    result.runtime_bundle = build_prepared_runtime_bundle(
+        mode='window' if is_window else 'cohort',
+        query_from_node=query_from_node,
+        query_to_node=query_to_node,
+        anchor_node_id=anchor_node_id,
+        is_multi_hop=is_multi_hop,
+        x_provider=result.x_provider,
+        numerator_representation='factorised',
+        p_conditioning_temporal_family=result.subject_temporal_mode,
+        p_conditioning_source=p_conditioning_source,
+        p_conditioning_evidence_points=(
+            len(composed_frames)
+            if p_conditioning_evidence_points is None
+            else p_conditioning_evidence_points
+        ),
+        resolved_params=result.resolved_override,
+        mc_cdf_arr=result.mc_cdf_arr,
+        mc_p_s=result.mc_p_s,
+        det_norm_cdf=result.det_norm_cdf,
+        edge_cdf_arr=None,
+        span_alpha=result.span_alpha,
+        span_beta=result.span_beta,
+        span_mu_sd=result.span_params.mu_sd if result.span_params else None,
+        span_sigma_sd=result.span_params.sigma_sd if result.span_params else None,
+        span_onset_sd=result.span_params.onset_sd if result.span_params else None,
+        span_onset_mu_corr=(
+            result.span_params.onset_mu_corr if result.span_params else None
+        ),
+    )
+    return result
