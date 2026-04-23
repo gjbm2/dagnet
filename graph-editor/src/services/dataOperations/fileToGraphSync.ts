@@ -1783,26 +1783,43 @@ export async function getParameterFromFile(options: {
         const existingAnalytic = nextGraph.edges[edgeIndex].p.model_vars?.find(
           (v: any) => v.source === 'analytic'
         );
-        if (existingAnalytic?.latency && analyticEntry.latency) {
+        if (existingAnalytic?.latency) {
           const prevLat = existingAnalytic.latency;
-          // Carry forward topo-pass-derived fields that the file doesn't contain
-          if (analyticEntry.latency.path_mu == null && prevLat.path_mu != null) {
-            analyticEntry.latency.path_mu = prevLat.path_mu;
-          }
-          if (analyticEntry.latency.path_sigma == null && prevLat.path_sigma != null) {
-            analyticEntry.latency.path_sigma = prevLat.path_sigma;
-          }
-          if (analyticEntry.latency.path_t95 == null && prevLat.path_t95 != null) {
-            analyticEntry.latency.path_t95 = prevLat.path_t95;
-          }
-          if (analyticEntry.latency.path_onset_delta_days == null && prevLat.path_onset_delta_days != null) {
-            analyticEntry.latency.path_onset_delta_days = prevLat.path_onset_delta_days;
-          }
-          // Also preserve dispersion SDs
-          for (const sdKey of ['mu_sd', 'sigma_sd', 'onset_sd', 'onset_mu_corr',
-                               'path_mu_sd', 'path_sigma_sd', 'path_onset_sd'] as const) {
-            if ((analyticEntry.latency as any)[sdKey] == null && (prevLat as any)[sdKey] != null) {
-              (analyticEntry.latency as any)[sdKey] = (prevLat as any)[sdKey];
+          if (!analyticEntry.latency) {
+            // File payloads often omit model latencies entirely. Preserve the
+            // canonical edge-local and topo-derived path model already on the graph
+            // instead of clobbering the analytic entry down to probability-only.
+            analyticEntry.latency = { ...prevLat };
+          } else {
+            // Carry forward canonical edge-local and topo-pass-derived fields that
+            // the file payload does not supply.
+            for (const latencyKey of [
+              'mu',
+              'sigma',
+              't95',
+              'onset_delta_days',
+              'path_mu',
+              'path_sigma',
+              'path_t95',
+              'path_onset_delta_days',
+            ] as const) {
+              if ((analyticEntry.latency as any)[latencyKey] == null && (prevLat as any)[latencyKey] != null) {
+                (analyticEntry.latency as any)[latencyKey] = (prevLat as any)[latencyKey];
+              }
+            }
+            // Also preserve dispersion SDs
+            for (const sdKey of [
+              'mu_sd',
+              'sigma_sd',
+              'onset_sd',
+              'onset_mu_corr',
+              'path_mu_sd',
+              'path_sigma_sd',
+              'path_onset_sd',
+            ] as const) {
+              if ((analyticEntry.latency as any)[sdKey] == null && (prevLat as any)[sdKey] != null) {
+                (analyticEntry.latency as any)[sdKey] = (prevLat as any)[sdKey];
+              }
             }
           }
         }

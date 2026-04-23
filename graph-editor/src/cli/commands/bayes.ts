@@ -366,12 +366,16 @@ async function runBayes() {
     const patchRaw = await readFile(applyPatchPath, 'utf-8');
     const patchData = JSON.parse(patchRaw);
 
-    const { applyPatch, wrapPatchIfRaw } = await import('../../services/bayesPatchService');
+    const { applyPatchAndCascade, wrapPatchIfRaw } = await import('../../services/bayesPatchService');
     const { writeBackToDisk } = await import('../diskLoader.js');
 
-    const patch = wrapPatchIfRaw(patchData, `graph-${bundle.graphName}`);
+    const graphId = `graph-${bundle.graphName}`;
+    const patch = wrapPatchIfRaw(patchData, graphId);
 
-    const edgesUpdated = await applyPatch(patch);
+    // Identical to FE's useBayesTrigger → fetchAndApplyPatch → applyPatchAndCascade.
+    // Tier 1 writes to fileRegistry (same code path the browser uses); Tier 2
+    // GraphStore cascade no-ops in CLI (no store mounted).
+    const { edgesUpdated } = await applyPatchAndCascade(patch, graphId);
     log.info(`Patch applied: ${edgesUpdated}/${patch.edges.length} edges updated`);
 
     if (printEnrichedGraph) {
@@ -466,6 +470,27 @@ async function runBayes() {
 
     if (finalStatus.status === 'complete') {
       log.info('Bayes fit complete');
+
+      // Parity with FE: useBayesTrigger on completion invokes
+      // fetchAndApplyPatch → applyPatchAndCascade. Replicate that exactly,
+      // using the same wrapPatchIfRaw + applyPatchAndCascade code path,
+      // then persist fileRegistry → disk. Any field dropped here is dropped
+      // in the FE too (same function). No CLI-specific projection exists.
+      const result = finalStatus.result as Record<string, unknown> | undefined;
+      if (result && Array.isArray((result as any).webhook_payload_edges)) {
+        const { applyPatchAndCascade, wrapPatchIfRaw } = await import('../../services/bayesPatchService');
+        const { writeBackToDisk } = await import('../diskLoader.js');
+
+        const graphId = `graph-${bundle.graphName}`;
+        const patch = wrapPatchIfRaw(result, graphId);
+        const { edgesUpdated } = await applyPatchAndCascade(patch, graphId);
+        log.info(`Patch applied: ${edgesUpdated}/${patch.edges.length} edges updated`);
+
+        const written = await writeBackToDisk(bundle);
+        log.info(`Written to disk: graph=${written.graph}, ${written.parameters.length} parameter files`);
+      } else {
+        log.warn('Bayes fit complete but result has no webhook_payload_edges — nothing applied');
+      }
     } else {
       log.error(`Bayes fit ${finalStatus.status}: ${finalStatus.error || 'unknown error'}`);
     }

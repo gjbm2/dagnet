@@ -715,6 +715,15 @@ def read_edge_cohort_params(
                 return v
         return None
 
+    # [v3-debug] dump what's actually available on this edge
+    _edge_id = p_obj.get('id', '?')
+    print(f"[v3-debug] read_edge_cohort_params edge={_edge_id}: "
+          f"lat_post.path_mu_mean={lat_post.get('path_mu_mean')} "
+          f"lat_post.mu_mean={lat_post.get('mu_mean')} "
+          f"lat.path_mu={latency.get('path_mu')} "
+          f"lat.mu={latency.get('mu')} "
+          f"lat_post.path_sigma_mean={lat_post.get('path_sigma_mean')} "
+          f"lat_post.sigma_mean={lat_post.get('sigma_mean')}")
     mu = _first_num(
         lat_post.get('path_mu_mean'),
         lat_post.get('mu_mean'),
@@ -725,6 +734,7 @@ def read_edge_cohort_params(
         lat_post.get('sigma_mean'),
         latency.get('path_sigma'),
         latency.get('sigma'))
+    print(f"[v3-debug] read_edge_cohort_params edge={_edge_id}: resolved mu={mu} sigma={sigma}")
     onset = _first_num(
         lat_post.get('path_onset_delta_days'),
         lat_post.get('onset_delta_days'),
@@ -919,6 +929,7 @@ def build_x_provider_from_graph(
     target_edge: Optional[Dict[str, Any]],
     anchor_node_id: Optional[str],
     is_window: bool,
+    use_epistemic_mu_sd: bool = False,
 ) -> XProvider:
     """Build the runtime-owned x_provider from graph data.
 
@@ -1000,7 +1011,22 @@ def build_x_provider_from_graph(
     for inc_edge in incoming:
         params = read_edge_cohort_params(inc_edge)
         if params:
-            upstream_params_list.append(params)
+            params_local = dict(params)
+            if use_epistemic_mu_sd:
+                latency_posterior = (
+                    ((inc_edge.get('p') or {}).get('latency') or {}).get('posterior')
+                    or {}
+                )
+                for mu_sd_key in ('path_mu_sd', 'mu_sd'):
+                    mu_sd_value = latency_posterior.get(mu_sd_key)
+                    if (
+                        isinstance(mu_sd_value, (int, float))
+                        and math.isfinite(mu_sd_value)
+                        and mu_sd_value > 0
+                    ):
+                        params_local['mu_sd'] = float(mu_sd_value)
+                        break
+            upstream_params_list.append(params_local)
 
     enabled = reach > 0 and has_semantic_upstream_latency(
         graph,
@@ -1011,6 +1037,7 @@ def build_x_provider_from_graph(
         reach=reach,
         upstream_params_list=upstream_params_list,
         enabled=enabled,
+        ingress_carrier=upstream_params_list if upstream_params_list else None,
     )
 
 
@@ -1787,56 +1814,20 @@ def prepare_forecast_runtime_inputs(
         ):
             return None
 
-        ingress: List[Dict[str, float]] = []
-        for incoming_edge in get_incoming_edges(graph_data, query_from_node):
-            params = read_edge_cohort_params(incoming_edge)
-            if not params:
-                continue
-            params_local = dict(params)
-            if use_epistemic_mu_sd:
-                latency_posterior = (
-                    ((incoming_edge.get('p') or {}).get('latency') or {}).get('posterior')
-                    or {}
-                )
-                for mu_sd_key in ('path_mu_sd', 'mu_sd'):
-                    mu_sd_value = latency_posterior.get(mu_sd_key)
-                    if (
-                        isinstance(mu_sd_value, (int, float))
-                        and math.isfinite(mu_sd_value)
-                        and mu_sd_value > 0
-                    ):
-                        params_local['mu_sd'] = float(mu_sd_value)
-                        break
-            ingress.append(params_local)
+        target_edge = find_edge_by_id(graph_data, last_edge_id)
+        if target_edge is None:
+            return None
 
-        reach = 0.0
-        try:
-            from runner.graph_builder import build_networkx_graph
-            from runner.path_runner import calculate_path_probability
-
-            id_to_uuid = {
-                node.get('id', ''): node['uuid']
-                for node in graph_data.get('nodes', [])
-            }
-            anchor_uuid = id_to_uuid.get(anchor_node_id, anchor_node_id)
-            x_uuid = id_to_uuid.get(query_from_node, query_from_node)
-            graph_nx = build_networkx_graph(graph_data)
-            path_result = calculate_path_probability(graph_nx, anchor_uuid, x_uuid)
-            reach = float(getattr(path_result, 'probability', 0.0) or 0.0)
-        except Exception:
-            pass
-
-        enabled = (
-            reach > 0
-            and has_semantic_upstream_latency(
-                graph_data,
-                anchor_node_id,
-                query_from_node,
-            )
+        provider = build_x_provider_from_graph(
+            graph_data,
+            target_edge,
+            anchor_node_id,
+            is_window,
+            use_epistemic_mu_sd=use_epistemic_mu_sd,
         )
         upstream_obs = None
         if (
-            enabled
+            provider.enabled
             and upstream_observation_fetcher is not None
             and upstream_anchor_from
             and upstream_anchor_to
@@ -1855,13 +1846,8 @@ def prepare_forecast_runtime_inputs(
                 log_prefix=upstream_log_prefix,
             )
 
-        return XProvider(
-            reach=reach,
-            upstream_params_list=ingress,
-            enabled=enabled,
-            ingress_carrier=ingress if ingress else None,
-            upstream_obs=upstream_obs,
-        )
+        provider.upstream_obs = upstream_obs
+        return provider
 
     result.x_provider = _build_runtime_x_provider(use_epistemic_mu_sd=False)
     if include_epistemic_overlay:

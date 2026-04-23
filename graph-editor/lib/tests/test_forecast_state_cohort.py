@@ -227,6 +227,35 @@ class TestForecastRuntimeIngressOrdering:
         assert baseline.reach == pytest.approx(reversed_order.reach)
         assert _project(reversed_order) == _project(baseline)
 
+    def test_prepare_runtime_inputs_uses_robust_x_provider_when_upstream_mean_is_zero(self):
+        from runner.forecast_runtime import prepare_forecast_runtime_inputs
+
+        graph = _make_synth_graph([
+            ('e-a-b', 'u-a', 'u-b', 'A', 'B', 0.0, 1.1, 0.25, 0.0),
+            ('e-b-c', 'u-b', 'u-c', 'B', 'C', 0.6, 2.0, 0.45, 0.0),
+        ])
+        graph['edges'][0]['p']['mean'] = 0.0
+        graph['edges'][0]['p']['model_vars'][0]['probability']['mean'] = 0.8
+        graph['model_source_preference'] = 'analytic'
+
+        prepared = prepare_forecast_runtime_inputs(
+            graph_data=graph,
+            query_from_node='B',
+            query_to_node='C',
+            anchor_node_id='A',
+            last_edge_id='e-b-c',
+            is_window=False,
+            is_multi_hop=False,
+            composed_frames=[{
+                'snapshot_date': '2026-01-01',
+                'data_points': [],
+            }],
+        )
+
+        assert prepared.x_provider is not None
+        assert prepared.x_provider.enabled is True
+        assert prepared.x_provider.reach == pytest.approx(0.8)
+
 
 class TestNodeArrivalCache:
     """Per-node arrival cache construction."""

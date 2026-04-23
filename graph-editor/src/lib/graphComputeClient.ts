@@ -224,7 +224,6 @@ export class GraphComputeClient {
    */
   private shouldBypassCache(): boolean {
     try {
-      if (typeof window === 'undefined') return false;
       const g: any = globalThis as any;
 
       // One-shot flag (set by clearCache or refresh button).
@@ -244,12 +243,27 @@ export class GraphComputeClient {
       // Permanent flag (DevTools: window.__dagnetComputeNoCache = true).
       if (g.__dagnetComputeNoCache === true) return true;
 
+      if (typeof window === 'undefined') return false;
+
       // URL params.
       const params = this.getUrlSearchParams();
       return params.get('nocache') === '1' || params.get('no-cache') === '1' || params.get('compute_nocache') === '1';
     } catch {
       return false;
     }
+  }
+
+  /**
+   * Single source of truth for /api/runner/analyze URL construction.
+   * Callers pass the same `bypassCache` they set on the request body's
+   * `no_cache` flag, so URL and body stay in lockstep. The query-param
+   * suffix is belt-and-braces for the dev middleware; the server's
+   * authoritative signal is the body field.
+   */
+  private buildAnalyzeUrl(bypassCache: boolean): string {
+    return bypassCache
+      ? `${this.baseUrl}/api/runner/analyze?no-cache=1`
+      : `${this.baseUrl}/api/runner/analyze`;
   }
 
   /**
@@ -1837,13 +1851,11 @@ export class GraphComputeClient {
       ...(displaySettings ? { display_settings: displaySettings } : {}),
       ...(testFixture ? { test_fixture: testFixture, ...tfOverrides } : {}),
       ...(diagnosticsRequested ? { _diagnostics: true } : {}),
+      ...(bypassCache ? { no_cache: true } : {}),
       forecasting_settings: buildForecastingSettings(),
     };
 
-    const analyzeUrl = bypassCache
-      ? `${this.baseUrl}/api/runner/analyze?no-cache=1`
-      : `${this.baseUrl}/api/runner/analyze`;
-    const response = await fetch(analyzeUrl, {
+    const response = await fetch(this.buildAnalyzeUrl(bypassCache), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(request),
@@ -2063,6 +2075,7 @@ export class GraphComputeClient {
       ...(meceDimensions?.length ? { mece_dimensions: meceDimensions } : {}),
       ...(displaySettings ? { display_settings: displaySettings } : {}),
       ...(multiTestFixture ? { test_fixture: multiTestFixture, ...multiTfOverrides } : {}),
+      ...(bypassCache ? { no_cache: true } : {}),
       forecasting_settings: buildForecastingSettings(),
     };
 
@@ -2085,10 +2098,7 @@ export class GraphComputeClient {
       console.log('[DagNet][Compute] /api/runner/analyze request payload (copy window.__dagnetLastAnalyzeRequest):', request);
     }
 
-    const multiAnalyzeUrl = bypassCache
-      ? `${this.baseUrl}/api/runner/analyze?no-cache=1`
-      : `${this.baseUrl}/api/runner/analyze`;
-    const response = await fetch(multiAnalyzeUrl, {
+    const response = await fetch(this.buildAnalyzeUrl(bypassCache), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(request),
@@ -2234,13 +2244,11 @@ export class GraphComputeClient {
 
     try {
       const snapBypass = this.shouldBypassCache();
-      const snapAnalyzeUrl = snapBypass
-        ? `${this.baseUrl}/api/runner/analyze?no-cache=1`
-        : `${this.baseUrl}/api/runner/analyze`;
-      const response = await fetch(snapAnalyzeUrl, {
+      const payload = snapBypass ? { ...request, no_cache: true } : request;
+      const response = await fetch(this.buildAnalyzeUrl(snapBypass), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(request),
+        body: JSON.stringify(payload),
       });
 
       if (!response.ok) {
@@ -2318,6 +2326,8 @@ export interface AnalysisRequest {
   display_settings?: Record<string, unknown>;
   /** Test fixture name — when set, BE loads synthetic data instead of snapshot DB. */
   test_fixture?: string;
+  /** When true, the backend bypasses its snapshot TTL cache for this request. */
+  no_cache?: boolean;
 }
 
 /**

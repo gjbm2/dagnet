@@ -297,24 +297,21 @@ def _compute_surprise_gauge(
         print(f"[surprise_gauge] forecast preparation failed: {e}")
         return _unavailable('Snapshot query failed')
 
-    if preparation.total_rows <= 0:
-        print("[surprise_gauge] no snapshot rows")
-        return _unavailable('No snapshot data in window')
-
     # ── Derive cohort frames ────────────────────────────────────
+    # No-data conditions (empty preparation, no frames, no data points,
+    # no cohorts in window) are NOT failures. They are legitimate
+    # degenerate states: observed=0 with no evidence is information,
+    # naturally compared to the unconditioned prior (pp_rate_unconditioned).
+    # compute_forecast_summary returns zeros for both observed and
+    # expected when inputs are empty → needle at centre, zone 'expected'.
     derivation = (
         preparation.per_edge_results[0].get('derivation_result', {})
         if preparation.per_edge_results
         else {}
     )
     frames = derivation.get('frames', [])
-    if not frames:
-        return _unavailable('Could not derive cohort frames')
-
-    last_frame = frames[-1]
+    last_frame = frames[-1] if frames else {}
     data_points = last_frame.get('data_points', [])
-    if not data_points:
-        return _unavailable('No cohort data points in last frame')
 
     last_frame_date = None
     sd_str = str(last_frame.get('snapshot_date', ''))[:10]
@@ -353,9 +350,6 @@ def _compute_surprise_gauge(
         evidence.append((age_i, float(x_val), float(y_val)))
         total_k += float(y_val)
         total_n += float(x_val)
-
-    if not cohort_ages_and_weights or total_n <= 0:
-        return _unavailable('No valid cohorts in window')
 
     # ── Upstream carrier (cohort mode) ──────────────────────────
     from_node_arrival = None
@@ -582,7 +576,7 @@ def handle_parse_query(data: Dict[str, Any]) -> Dict[str, Any]:
 def handle_runner_analyze(data: Dict[str, Any]) -> Dict[str, Any]:
     """
     Handle runner/analyze endpoint.
-    
+
     Args:
         data: Request body containing EITHER:
             Scenario-based analysis (with optional per-scenario snapshot_subjects):
@@ -590,14 +584,30 @@ def handle_runner_analyze(data: Dict[str, Any]) -> Dict[str, Any]:
                   Each scenario may carry snapshot_subjects[] (per-scenario DB coordinates)
                 - query_dsl: DSL query string (optional)
                 - analysis_type: Override analysis type (optional)
-            
+
             Legacy snapshot-based analysis:
                 - snapshot_query: {param_id, core_hash, anchor_from, anchor_to, slice_keys?}
                 - analysis_type: 'lag_histogram' | 'daily_conversions'
-    
+
+            Optional on any shape:
+                - no_cache: bool — when true, bypass the snapshot_service TTL cache
+                  for every DB read made by this request. Works identically on dev
+                  and Vercel (does not depend on URL parsing / middleware).
+
     Returns:
         Analysis results
     """
+    # Body-level cache bypass — works on every transport (dev FastAPI, Vercel
+    # BaseHTTPRequestHandler, direct Python callers). The dev middleware already
+    # handles ?no-cache=1 at the URL level; this covers the request body path.
+    if data.get('no_cache'):
+        from snapshot_service import cache_bypass_ctx
+        with cache_bypass_ctx():
+            return _handle_runner_analyze_impl(data)
+    return _handle_runner_analyze_impl(data)
+
+
+def _handle_runner_analyze_impl(data: Dict[str, Any]) -> Dict[str, Any]:
     # ── Read top-level fields ────────────────────────────────────────
     # analytics_dsl (new): the subject — from(x).to(y), constant across scenarios.
     # query_dsl (deprecated): falls back for old clients that haven't migrated.

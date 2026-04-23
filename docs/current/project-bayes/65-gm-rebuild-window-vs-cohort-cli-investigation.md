@@ -687,3 +687,215 @@ should keep looking for more, not close on the first plausible root.
   A shell-script companion (`graph-ops/scripts/v3-degeneracy-invariants.sh`)
   drives the same invariants outside pytest. The pytest suite is the
   authoritative one for CI; the shell script is a quick ad-hoc runner.
+
+## 15. Pick-up — 23-Apr-26 separation into two distinct defect classes
+
+### 15.1 Summary
+
+`TestI2bLowEvidenceCohortMatchesFwConvolution` now passes
+(§14 pick-up's other-agent fix). `TestI2ZeroEvidenceCohortLagsWindow::test_m4_terminal_edge`
+still fails. Today's pick-up separated the live v3 cohort
+misbehaviour into two independently-observable defect classes and
+established that one reproduces cleanly via CLI while the other
+appears only in the FE.
+
+Graph: `bayes-test-gm-rebuild`. Subject:
+`from(switch-registered).to(switch-success)`.
+
+### 15.2 Class A — cohort collapses to window when there is no post-frontier data
+
+**Reproduction (CLI)**:
+
+```bash
+bash graph-ops/scripts/analyse.sh bayes-test-gm-rebuild \
+  "from(switch-registered).to(switch-success).cohort(-1d:)" \
+  --type cohort_maturity --no-cache --no-snapshot-cache --format json
+```
+vs the `.window(-1d:)` equivalent.
+
+**Symptom**: max |Δ| ≤ 0.03 across τ=0..26; cohort curve tracks window
+curve to four decimal places at most τ. Window@τ=10 ≈ 0.5882,
+cohort@τ=10 ≈ 0.5882.
+
+**Mechanism pinned** (via a `[trace-carrier2]` diagnostic in
+`_resolve_frame_carrier_state`, now removed; receipts remain in
+`debug/tmp.python-server.jsonl`):
+
+- The row builder receives `x_provider_override` with
+  `reach=0, enabled=False, n_upstream=1` for this query.
+- The carrier gate at
+  `graph-editor/lib/runner/cohort_forecast_v3.py::_resolve_frame_carrier_state`
+  fails, emits `[v3] carrier: tier=none`, and the sweep runs with
+  `upstream_cdf_mc=None`.
+- `_build_runtime_x_provider` in
+  `graph-editor/lib/runner/forecast_runtime.py` computes reach via
+  `calculate_path_probability(graph_nx, anchor_uuid, x_uuid)`. The
+  underlying NetworkX graph builder in
+  `graph-editor/lib/runner/graph_builder.py::_extract_edge_probability`
+  reads only `p.mean`, with no fallback to `model_vars` or `posterior`.
+- For this scenario, at least one upstream edge along
+  `Landing-page → ... → switch-registered` arrives at Python BE with
+  `p.mean = 0` or `p.mean = None`, so the product collapses to 0. A
+  silent `except Exception: pass` immediately after the reach call
+  would also hide any downstream variant of the same problem.
+
+**Synth analogue**: `synth-mirror-4step`,
+`from(m4-registered).to(m4-success).cohort(-1d:)`, reproduces the same
+mechanism. A `[trace-reach-edges]` probe showed
+`m4-landing→m4-created` and `m4-created→m4-delegated` arriving at
+Python BE with `p.mean=0` — they hold analytic values (0.168, 0.5555)
+on disk. So the p.mean zeroing happens in the TS-side / CLI pipeline,
+not on the raw graph. It is also query-dependent: a later
+`cohort(22-Apr-26:22-Apr-26)` call on the same graph in the same
+session produces `reach=0.0247, enabled=True, tier=parametric`. The
+zeroing therefore depends on the specific query and/or scenario
+context.
+
+**Status**: reproducible on CLI and synth fixture; pinned mechanism;
+parked pending either a TS-side fix (stop clearing `p.mean` in the
+CLI's aggregation pipeline for non-latency upstream edges when no
+in-window evidence is present) or a Python-side fix (make
+`_build_runtime_x_provider` use a robust p reader equivalent to
+`graph-editor/lib/runner/forecast_state.py::_resolve_edge_p`, which
+falls back through `p.mean → model_vars[*].probability.mean →
+posterior α/β`). Fix not attempted in this pick-up to avoid stepping
+on the other agent's in-flight cohort refactor.
+
+### 15.3 Class B — cohort asymptotes far too low in FE, but not in CLI
+
+**FE observation** (captured by the user in
+`/home/reg/dev/dagnet/tmp4.log`, dumped from the cohort_maturity v3
+tile on `bayes-test-gm-rebuild`):
+
+- Scenario `current`, DSL `cohort(22-Apr-26:22-Apr-26)`:
+  τ=90 midpoint = **0.1912**, completeness = **0.0322**, still rising
+  slowly. Never gets above 20% across the plotted range.
+- Scenario `scenario-1776475304227-k1y6285` ("19-Mar – 16-Apr"), DSL
+  `window(-1d:)`: τ=90 midpoint = 0.8529, completeness = 0.0039.
+
+The FE user's "cohort is wrong" comparison is between these two
+scenarios; the `current` cohort asymptote of ~0.19 is the complaint.
+
+**CLI attempt to reproduce**:
+
+```bash
+bash graph-ops/scripts/analyse.sh bayes-test-gm-rebuild \
+  "from(switch-registered).to(switch-success).cohort(22-Apr-26:22-Apr-26)" \
+  --type cohort_maturity --no-cache --no-snapshot-cache --format json \
+  --display '{"tau_extent":90}'
+```
+
+- τ=90 midpoint = **0.8290**, completeness = **0.0000**, p_infinity =
+  0.8331.
+
+**Class B does not reproduce on CLI with the same DSL.** Two
+independent discrepancies in the row output:
+
+- `midpoint`: FE 0.1912 vs CLI 0.8290 at τ=90.
+- `completeness`: FE 0.0322 vs CLI 0.0000.
+
+The completeness value difference is a material signal: completeness
+is computed by `compute_forecast_trajectory` from cohort eval_age and
+path-level CDF, so a non-zero FE completeness against a zero CLI
+completeness means the two calls reach different cohort-evaluation
+state, not just different display.
+
+### 15.4 CLI should exercise the same path as FE; it currently does not
+
+Doc 60 §7 assigns `handle_conditioned_forecast` and
+`_handle_cohort_maturity_v3` as the two first-class consumers of the
+shared preparation and runtime bundle. The CLI `analyse.sh` shells
+through the TypeScript `prepareAnalysisComputeInputs` surface and
+then POSTs to the BE; the FE goes through the same TS surface from
+the browser. In principle the two paths should produce identical BE
+requests for identical inputs. They do not: scenario context, whole-
+graph CF pre-pass, completeness propagation, and possibly IDB-vs-disk
+graph state all diverge.
+
+This CLI/FE divergence is itself a first-class assurance problem. It
+means `graph-ops/scripts/analyse.sh` cannot be used as an outside-in
+oracle for the FE behaviour on any query where the two happen to
+disagree. Every regression gate using analyse.sh (including the
+§14.10 `test_v3_degeneracy_invariants.py` suite) is blind to FE-only
+failures while Class B is open.
+
+### 15.5 Candidate mechanisms for the FE-only divergence
+
+Ranked by what the evidence implies, not confirmed:
+
+1. **Scenario context difference.** FE runs with a live
+   `scenariosContext` carrying the named "19-Mar – 16-Apr" live
+   scenario plus `current`. The CLI in a single-DSL invocation does
+   not carry the same scenarios context. Scenario-level overrides on
+   edge `p` or `p.latency` could flow into the handler and perturb
+   the effective graph.
+2. **Whole-graph CF pre-pass.** FE always triggers
+   `handle_conditioned_forecast` with `all_graph_parameters` before
+   per-tile analyses; the server log for the user's marked session
+   shows multiple `[funnel] whole-graph CF` lines. That whole-graph
+   pass writes CF-owned fields (`edge.p.mean`,
+   `edge.p.forecast.mean`, `edge.p.latency.completeness`,
+   `edge.p.latency.completeness_stdev`) back onto the graph state.
+   A per-tile cohort_maturity request running after that pass sees a
+   different `p.mean` / `completeness_stdev` / posterior than a
+   first-request-only CLI invocation.
+3. **IDB graph vs on-disk graph.** The user acknowledged "the only
+   significant difference between what is on disk and what is in my
+   idb is possibly a bit of file data." This could perturb `p.mean`,
+   promotion state, or posterior fields on specific edges.
+4. **model_vars usage inside the FE preparation.** The user suggested
+   model_vars may be being consumed incorrectly in the FE side. Worth
+   checking whether the FE applies a model_vars promotion or blend
+   that the CLI does not (or vice versa) before the request is sent
+   to Python BE.
+5. **Axis / tau_extent handling.** The CLI passes `--display
+   '{"tau_extent":90}'`. The FE applies a `tau_extent=90` from the
+   analysis tile's display settings. Their serialisation paths might
+   differ.
+
+### 15.6 Next diagnostic step for Class B
+
+Capture the full BE request payload from both paths for the identical
+DSL and diff them. Concretely:
+
+- FE: at the user's mark, the FE's browser-side request to Python BE
+  for the cohort_maturity v3 analysis can be recovered from the
+  browser dev-tools network panel, or by instrumenting the TS side to
+  dump the serialised request body.
+- CLI: instrument the CLI's `prepareAnalysisComputeInputs` caller (or
+  POST hook) to dump the same serialised body.
+
+Any non-whitespace difference between the two payloads is a candidate
+for the Class B cause. Scenario-level overrides inside
+`scenariosContext.currentParams`, the presence/absence of `scenarios`
+entries, and the graph snapshot that enters the payload are the
+highest-priority fields to diff.
+
+Once the two payloads agree, the remaining divergence (if any) must
+be on the Python BE side — which means state mutation between the
+whole-graph CF pre-pass and the per-tile row builder on the same
+request cycle.
+
+### 15.7 Status ledger update
+
+Class A is an evolution of D1/D2 from §14.9, with a specific mechanism
+now localised to the p-reader mismatch between
+`_build_runtime_x_provider` and `_resolve_edge_p`.
+
+Class B is a newly-observed failure. It is not the same as D1/D2/D3 in
+§14.9. It presents in the FE, does not reproduce via the shared CLI
+tooling that the doc 65 programme relies on as its oracle, and
+therefore cannot be closed by §14.10's invariants suite as-is.
+
+**D1**: superseded by Class A. Pinned mechanism; fix parked.
+**D2**: unchanged; `fe is None` zero-evidence path still drops mode
+distinction (the m4 test failure listed above is evidence).
+**D3**: unchanged; synth plateau well below truth remains open.
+**Class A (new label)**: covers the production-shape collapse when
+post-frontier evidence is absent.
+**Class B (new label)**: FE-only asymptote collapse; CLI does not
+reproduce.
+**Devtooling gap (§14.8)**: expanded — not only does no synth fixture
+reproduce the production collapse, the CLI tooling itself fails to
+reproduce an FE-observable defect on the production graph. The
+outside-in assurance layer is two layers blind.

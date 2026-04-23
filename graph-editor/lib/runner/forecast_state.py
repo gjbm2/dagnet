@@ -1193,6 +1193,34 @@ def _evaluate_cohort(
             )[:T]
             Y_C[s, :] = p_i[s] * _conv
 
+    # [v3-debug] Per-cohort carrier internals — diff FE vs CLI arrival shape
+    if upstream_cdf_mc is not None and reach > 0:
+        _dbg_taus = [t for t in [5, 10, 20, 30, 40, 60, 90] if t < T]
+        _xc_med = np.median(X_C, axis=0)
+        _yc_med = np.median(Y_C, axis=0)
+        _pop_c_med = np.median(_pop_c_cdf, axis=0)
+        _inc_med = np.median(_arrival_increments, axis=0)
+        print(
+            f"[v3-debug] cohort a_i={a_i} N_i={N_i:.4f} k_i={k_i:.4f} a_pop={a_pop} "
+            f"reach={reach:.6f} p_i_med={float(np.median(p_i)):.4f}"
+        )
+        print(
+            f"[v3-debug]   X_C median:    " +
+            " ".join(f"t{t}:{_xc_med[t]:.4f}" for t in _dbg_taus)
+        )
+        print(
+            f"[v3-debug]   Y_C median:    " +
+            " ".join(f"t{t}:{_yc_med[t]:.4f}" for t in _dbg_taus)
+        )
+        print(
+            f"[v3-debug]   pop_c_cdf med: " +
+            " ".join(f"t{t}:{_pop_c_med[t]:.4f}" for t in _dbg_taus)
+        )
+        print(
+            f"[v3-debug]   arr_inc med:   " +
+            " ".join(f"t{t}:{_inc_med[t]:.4f}" for t in _dbg_taus)
+        )
+
     # Combine (v2 lines 900-903)
     X_forecast = float(N_i) + X_C
     Y_forecast = float(k_i) + Y_D.astype(np.float64) + Y_C
@@ -1458,6 +1486,37 @@ def compute_forecast_trajectory(
         upstream_cdf_mc = np.tile(_det, (S, 1))
 
     reach = from_node_arrival.reach if from_node_arrival else 0.0
+
+    # [v3-debug] resolver + carrier shape — used to diff FE vs CLI payloads
+    print(
+        f"[v3-debug] resolved: source={getattr(resolved, 'source', None)!r} "
+        f"p_mean={getattr(resolved, 'p_mean', None)} "
+        f"alpha={getattr(resolved, 'alpha', None)} "
+        f"beta={getattr(resolved, 'beta', None)} "
+        f"alpha_pred={getattr(resolved, 'alpha_pred', None)} "
+        f"beta_pred={getattr(resolved, 'beta_pred', None)} "
+        f"qscoped={getattr(resolved, 'alpha_beta_query_scoped', None)}"
+    )
+    print(
+        f"[v3-debug] from_node_arrival: reach={reach} tier={getattr(from_node_arrival, 'tier', None) if from_node_arrival else None} "
+        f"has_mc_cdf={from_node_arrival is not None and getattr(from_node_arrival, 'mc_cdf', None) is not None} "
+        f"has_det_cdf={from_node_arrival is not None and getattr(from_node_arrival, 'deterministic_cdf', None) is not None}"
+    )
+    if upstream_cdf_mc is not None:
+        _car_med = np.median(upstream_cdf_mc, axis=0)
+        _car_taus = [t for t in [0, 1, 2, 5, 10, 20, 30, 40, 60, 90] if t < T]
+        _car_str = " ".join(f"t{t}:{_car_med[t]:.4f}" for t in _car_taus)
+        print(f"[v3-debug] carrier_cdf median: {_car_str}")
+    print(f"[v3-debug] cohorts: n={len(cohorts)}")
+    for _ci, _c in enumerate(cohorts[:3]):
+        _obs_x_head = list(_c.obs_x[:6]) if _c.obs_x else []
+        _obs_y_head = list(_c.obs_y[:6]) if _c.obs_y else []
+        print(
+            f"[v3-debug] cohort[{_ci}]: N={_c.x_frozen:.4f} k={_c.y_frozen:.4f} "
+            f"a_i={_c.frontier_age} a_pop={_c.a_pop} eval_age={_c.eval_age} "
+            f"obs_x[:6]={[round(x, 4) for x in _obs_x_head]} "
+            f"obs_y[:6]={[round(y, 4) for y in _obs_y_head]}"
+        )
 
     # ── Per-cohort population model (v2 lines 800-912) ───────────
     def _run_cohort_loop(apply_is: bool) -> np.ndarray:

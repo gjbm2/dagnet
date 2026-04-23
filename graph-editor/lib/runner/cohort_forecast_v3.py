@@ -404,6 +404,9 @@ def _resolve_frame_carrier_state(
             if x_provider_local.ingress_carrier
             else x_provider_local.upstream_params_list
         )
+        # [v3-debug] dump the params used to build the parametric carrier
+        for _i, _up in enumerate(upstream_params_list or []):
+            print(f"[v3-debug] upstream_params[{_i}]: p={_up.get('p')} mu={_up.get('mu')} sigma={_up.get('sigma')} onset={_up.get('onset')} mu_sd={_up.get('mu_sd')} sigma_sd={_up.get('sigma_sd')}")
         _carrier_rng = np.random.default_rng(43)
         _carrier_max_tau = saturation_tau
         if _carrier_max_tau is None and det_norm_cdf is not None:
@@ -759,13 +762,29 @@ def build_cohort_evidence_from_frames(
     is_window: bool,
     resolved: Any,
     axis_tau_max: Optional[int] = None,
+    *,
+    graph: Optional[Dict[str, Any]] = None,
+    anchor_node_id: Optional[str] = None,
+    query_from_node: Optional[str] = None,
+    x_provider_override: Optional[Any] = None,
+    det_norm_cdf: Optional[List[float]] = None,
 ) -> Optional[FrameEvidence]:
     """Build CohortEvidence from derived maturity frames.
 
     Shared between the v3 chart builder and the topo pass forecast
     sweep. Encapsulates: last-frame extraction, cohort_info, per-tau
-    observation building, tau range computation, and CohortEvidence
-    construction.
+    observation building, tau range computation, carrier-to-X resolution,
+    and materialisation of the observed prefix consumed by the shared
+    sweep.
+
+    When cohort mode has a real A→X carrier (graph + anchor_node_id +
+    query_from_node supplied, anchor != X), the builder re-roots the
+    observed prefix onto that carrier: obs_x / x_frozen / evidence_by_tau.sum_x
+    come from the carrier-to-X arrival curve, while obs_y / y_frozen /
+    evidence_by_tau.sum_y are recovered by convolving those carrier arrivals
+    with the observed subject-side y/x progression implied by the raw
+    frames. Window mode and carrier-free solves keep the raw frame
+    observations unchanged.
 
     Returns None only when the request dates are malformed. If no
     observations bind to the selected semantic question, the builder still
@@ -862,19 +881,8 @@ def build_cohort_evidence_from_frames(
                 continue
             cohort_at_tau[ad_str][tau] = (float(x_val), float(y_val))
 
-    # Aggregate evidence_by_tau from cohort_at_tau (deduplicated)
-    evidence_by_tau: Dict[int, Dict] = {}
-    for ad_str, tau_data in cohort_at_tau.items():
-        for tau, (x, y) in tau_data.items():
-            if tau not in evidence_by_tau:
-                evidence_by_tau[tau] = {
-                    'sum_y': 0.0,
-                    'sum_x': 0.0,
-                    'n_cohorts': 0,
-                }
-            evidence_by_tau[tau]['sum_y'] += y
-            evidence_by_tau[tau]['sum_x'] += x
-            evidence_by_tau[tau]['n_cohorts'] += 1
+    # evidence_by_tau is built after engine_cohorts so sum_x can draw from
+    # the carrier-owned obs_x rather than the raw per-frame observations.
 
     # ── tau_observed per cohort ────────────────────────────────────
     for ad_str, ci in cohort_info.items():
@@ -956,38 +964,144 @@ def build_cohort_evidence_from_frames(
             pass
     saturation_tau = min(saturation_tau, 400)
 
+    # ── Resolve carrier-to-X (cohort mode with a real A→X carrier) ──
+    # Resolution happens here so one canonical builder both materialises the
+    # observed prefix and attaches the carrier state read later by the
+    # shared sweep. Window mode, missing graph, and A==X all produce
+    # x_provider=None here.
+    (
+        x_provider,
+        from_node_arrival,
+        upstream_path_cdf_arr,
+        carrier_tier,
+    ) = _resolve_frame_carrier_state(
+        graph=graph,
+        target_edge=target_edge,
+        anchor_node_id=anchor_node_id,
+        query_from_node=query_from_node,
+        is_window=is_window,
+        x_provider_override=x_provider_override,
+        cohort_list=cohort_list,
+        saturation_tau=saturation_tau,
+        det_norm_cdf=det_norm_cdf,
+    )
+
+    use_factorised_carrier = (
+        not is_window
+        and x_provider is not None
+        and bool(getattr(x_provider, 'enabled', False))
+        and float(getattr(x_provider, 'reach', 0.0) or 0.0) > 0.0
+        and upstream_path_cdf_arr is not None
+    )
+    carrier_reach = (
+        float(getattr(x_provider, 'reach', 0.0) or 0.0)
+        if x_provider is not None
+        else 0.0
+    )
+    carrier_cdf: Optional[List[float]] = None
+    if use_factorised_carrier:
+        carrier_cdf = [
+            max(0.0, min(1.0, float(v or 0.0)))
+            for v in list(upstream_path_cdf_arr or [])
+        ]
+        if not carrier_cdf:
+            use_factorised_carrier = False
+            carrier_cdf = None
+
+    def _carrier_cdf_at_tau(tau: int) -> float:
+        if not carrier_cdf:
+            return 0.0
+        idx = min(max(int(tau), 0), len(carrier_cdf) - 1)
+        return carrier_cdf[idx]
+
     # ── Build CohortEvidence per cohort ────────────────────────────
+    # Default path keeps the raw frame observations. When a real A→X
+    # carrier exists, materialise the observed prefix directly on that
+    # carrier and recover the numerator by convolving carrier arrivals
+    # against the raw subject-side progression curve.
     engine_cohorts: list = []
+    materialised_cohort_list: List[Dict[str, Any]] = []
     for ci in cohort_list:
-        n_i = ci['x_frozen']
-        a_i = ci.get('tau_observed', ci['tau_max'])
-        a_pop = ci.get('a_frozen', n_i) or n_i or 1.0
+        raw_n_i = float(ci.get('x_frozen', 0.0) or 0.0)
+        a_i = int(ci.get('tau_observed', ci['tau_max']) or 0)
+        a_i = min(max(a_i, 0), saturation_tau)
+        a_pop = float(ci.get('a_frozen', raw_n_i) or raw_n_i or 1.0)
         ad_str = ci['anchor_day'].isoformat()
         tau_data = cohort_at_tau.get(ad_str, {})
 
-        obs_x = [0.0] * (saturation_tau + 1)
-        obs_y = [0.0] * (saturation_tau + 1)
-        last_x = float(n_i) if is_window else 0.0
+        raw_obs_x = [0.0] * (saturation_tau + 1)
+        raw_obs_y = [0.0] * (saturation_tau + 1)
+        last_x = raw_n_i if is_window else 0.0
         last_y = 0.0
         for t in range(saturation_tau + 1):
             if t <= a_i:
                 obs = tau_data.get(t)
                 if obs:
-                    last_x = obs[0]
-                    last_y = obs[1]
+                    last_x = float(obs[0])
+                    last_y = float(obs[1])
                 elif is_window:
-                    last_x = float(n_i)
-                obs_x[t] = last_x
-                obs_y[t] = last_y
+                    last_x = raw_n_i
+                raw_obs_x[t] = last_x
+                raw_obs_y[t] = last_y
             else:
-                obs_x[t] = last_x if last_x > 0 else float(n_i)
-                obs_y[t] = last_y
+                raw_obs_x[t] = last_x if last_x > 0 else raw_n_i
+                raw_obs_y[t] = last_y
+
+        obs_x = raw_obs_x
+        obs_y = raw_obs_y
+        x_frozen = float(obs_x[a_i]) if a_i < len(obs_x) else raw_n_i
+        y_frozen = float(obs_y[a_i]) if a_i < len(obs_y) else float(ci.get('y_frozen', 0.0) or 0.0)
+
+        if use_factorised_carrier:
+            subject_curve: List[float] = []
+            last_ratio = 0.0
+            for t in range(saturation_tau + 1):
+                fx = float(raw_obs_x[t] or 0.0)
+                fy = float(raw_obs_y[t] or 0.0)
+                if fx > 1e-9:
+                    last_ratio = max(0.0, min(1.0, fy / fx))
+                subject_curve.append(last_ratio)
+
+            obs_x = [0.0] * (saturation_tau + 1)
+            obs_y = [0.0] * (saturation_tau + 1)
+            prefix_x: List[float] = []
+            last_projected_x = 0.0
+            for t in range(a_i + 1):
+                projected_x = a_pop * carrier_reach * _carrier_cdf_at_tau(t)
+                projected_x = max(0.0, max(projected_x, last_projected_x))
+                prefix_x.append(projected_x)
+                last_projected_x = projected_x
+
+            if prefix_x:
+                arrival_increments = np.diff(
+                    np.concatenate(([0.0], np.asarray(prefix_x, dtype=np.float64)))
+                )
+                arrival_increments = np.maximum(arrival_increments, 0.0)
+                for t in range(a_i + 1):
+                    obs_x[t] = float(prefix_x[t])
+                    y_t = 0.0
+                    for u in range(t + 1):
+                        y_t += float(arrival_increments[u]) * float(subject_curve[t - u])
+                    obs_y[t] = max(0.0, min(float(obs_x[t]), y_t))
+                x_frozen = float(obs_x[a_i])
+                y_frozen = float(obs_y[a_i])
+            else:
+                x_frozen = 0.0
+                y_frozen = 0.0
+            for t in range(a_i + 1, saturation_tau + 1):
+                obs_x[t] = x_frozen
+                obs_y[t] = y_frozen
+
+        ci_materialised = dict(ci)
+        ci_materialised['x_frozen'] = x_frozen
+        ci_materialised['y_frozen'] = y_frozen
+        materialised_cohort_list.append(ci_materialised)
 
         engine_cohorts.append(CohortEvidence(
             obs_x=obs_x,
             obs_y=obs_y,
-            x_frozen=n_i,
-            y_frozen=ci['y_frozen'],
+            x_frozen=x_frozen,
+            y_frozen=y_frozen,
             frontier_age=a_i,
             a_pop=a_pop,
             # Doc 45 §Response contract: the CF endpoint and the
@@ -1005,9 +1119,33 @@ def build_cohort_evidence_from_frames(
     if not engine_cohorts:
         return None
 
+    # ── Aggregate evidence_by_tau from engine_cohorts ──────────────
+    # Both sum_x and sum_y are observed values drawn from the engine
+    # cohorts' obs_x / frame y at each recorded tau. n_cohorts counts
+    # cohorts that reported a real observation at this tau.
+    evidence_by_tau: Dict[int, Dict] = {}
+    for ci, engine_cohort in zip(materialised_cohort_list, engine_cohorts):
+        ad_str = ci['anchor_day'].isoformat()
+        for tau in cohort_at_tau.get(ad_str, {}):
+            if tau < 0 or tau > saturation_tau:
+                continue
+            bucket = evidence_by_tau.setdefault(
+                int(tau),
+                {'sum_y': 0.0, 'sum_x': 0.0, 'n_cohorts': 0},
+            )
+            if tau < len(engine_cohort.obs_x):
+                bucket['sum_x'] += float(engine_cohort.obs_x[tau])
+            else:
+                bucket['sum_x'] += float(engine_cohort.x_frozen)
+            if tau < len(engine_cohort.obs_y):
+                bucket['sum_y'] += float(engine_cohort.obs_y[tau])
+            else:
+                bucket['sum_y'] += float(engine_cohort.y_frozen)
+            bucket['n_cohorts'] += 1
+
     return FrameEvidence(
         engine_cohorts=engine_cohorts,
-        cohort_list=cohort_list,
+        cohort_list=materialised_cohort_list,
         cohort_at_tau=dict(cohort_at_tau),
         evidence_by_tau=evidence_by_tau,
         max_tau=max_tau,
@@ -1015,143 +1153,10 @@ def build_cohort_evidence_from_frames(
         tau_solid_max=tau_solid_max,
         tau_future_max=tau_future_max,
         last_frame_date=last_frame_date,
-    )
-
-
-def _materialise_frame_evidence_for_runtime(
-    fe: Optional[FrameEvidence],
-    *,
-    is_window: bool,
-    upstream_path_cdf_arr: Optional[List[float]],
-    reach: float,
-) -> Optional[FrameEvidence]:
-    """Re-root cohort observed prefixes onto the runtime carrier.
-
-    Raw derived frames are still window-led on the shared subject question
-    (`X -> end`). For cohort mode with a real upstream carrier, the runtime
-    denominator must come from that carrier, while the observed-prefix
-    numerator stays driven by the subject progression curve implied by the
-    raw frame `y/x` trace.
-    """
-    from .forecast_state import CohortEvidence
-
-    if (
-        fe is None
-        or is_window
-        or upstream_path_cdf_arr is None
-        or reach <= 0
-    ):
-        return fe
-
-    sat_tau = int(fe.saturation_tau or 0)
-    if sat_tau < 0:
-        return fe
-
-    cdf_vals = [max(0.0, min(1.0, float(v or 0.0))) for v in upstream_path_cdf_arr]
-    if not cdf_vals:
-        return fe
-
-    def _cdf_at_tau(tau: int) -> float:
-        idx = min(max(int(tau), 0), len(cdf_vals) - 1)
-        return cdf_vals[idx]
-
-    new_cohort_list: List[Dict[str, Any]] = []
-    new_engine_cohorts = []
-    new_evidence_by_tau: Dict[int, Dict[str, Any]] = {}
-
-    for ci, engine_cohort in zip(fe.cohort_list, fe.engine_cohorts):
-        ci_new = dict(ci)
-        a_i = int(ci_new.get('tau_observed', ci_new.get('tau_max', 0)) or 0)
-        a_i = min(max(a_i, 0), sat_tau)
-        a_pop = float(
-            ci_new.get('a_frozen', ci_new.get('x_frozen', 0.0))
-            or ci_new.get('x_frozen', 0.0)
-            or 1.0
-        )
-
-        raw_obs_x = [float(v or 0.0) for v in list(engine_cohort.obs_x[:sat_tau + 1])]
-        raw_obs_y = [float(v or 0.0) for v in list(engine_cohort.obs_y[:sat_tau + 1])]
-        if len(raw_obs_x) < sat_tau + 1:
-            pad_x = raw_obs_x[-1] if raw_obs_x else 0.0
-            raw_obs_x.extend([pad_x] * (sat_tau + 1 - len(raw_obs_x)))
-        if len(raw_obs_y) < sat_tau + 1:
-            pad_y = raw_obs_y[-1] if raw_obs_y else 0.0
-            raw_obs_y.extend([pad_y] * (sat_tau + 1 - len(raw_obs_y)))
-
-        subject_curve: List[float] = []
-        last_ratio = 0.0
-        for t in range(sat_tau + 1):
-            fx = raw_obs_x[t]
-            fy = raw_obs_y[t]
-            if fx > 1e-9:
-                last_ratio = max(0.0, min(1.0, fy / fx))
-            subject_curve.append(last_ratio)
-
-        carrier_obs_x: List[float] = []
-        last_x = 0.0
-        for t in range(sat_tau + 1):
-            projected_x = a_pop * reach * _cdf_at_tau(t)
-            projected_x = max(projected_x, last_x)
-            carrier_obs_x.append(projected_x)
-            last_x = projected_x
-
-        obs_x = [0.0] * (sat_tau + 1)
-        obs_y = [0.0] * (sat_tau + 1)
-        prefix_x = carrier_obs_x[:a_i + 1]
-        arrival_increments = np.diff(
-            np.concatenate(([0.0], np.array(prefix_x, dtype=np.float64)))
-        )
-        arrival_increments = np.maximum(arrival_increments, 0.0)
-        for t in range(a_i + 1):
-            obs_x[t] = prefix_x[t]
-            y_t = 0.0
-            for u in range(t + 1):
-                y_t += float(arrival_increments[u]) * float(subject_curve[t - u])
-            obs_y[t] = max(0.0, min(float(obs_x[t]), y_t))
-
-        x_frontier = float(obs_x[a_i]) if a_i < len(obs_x) else 0.0
-        y_frontier = float(obs_y[a_i]) if a_i < len(obs_y) else 0.0
-        for t in range(a_i + 1, sat_tau + 1):
-            obs_x[t] = x_frontier
-            obs_y[t] = y_frontier
-
-        ci_new['x_frozen'] = x_frontier
-        ci_new['y_frozen'] = y_frontier
-        new_cohort_list.append(ci_new)
-        new_engine_cohorts.append(CohortEvidence(
-            obs_x=obs_x,
-            obs_y=obs_y,
-            x_frozen=x_frontier,
-            y_frozen=y_frontier,
-            frontier_age=engine_cohort.frontier_age,
-            a_pop=engine_cohort.a_pop,
-            eval_age=engine_cohort.eval_age,
-            anchor_day=engine_cohort.anchor_day,
-            eval_date=engine_cohort.eval_date,
-        ))
-
-        ad_str = ci_new['anchor_day'].isoformat()
-        for tau in fe.cohort_at_tau.get(ad_str, {}):
-            if tau > sat_tau:
-                continue
-            ev = new_evidence_by_tau.setdefault(
-                int(tau),
-                {'sum_y': 0.0, 'sum_x': 0.0, 'n_cohorts': 0},
-            )
-            ev['sum_x'] += float(obs_x[tau])
-            ev['sum_y'] += float(obs_y[tau])
-            ev['n_cohorts'] += 1
-
-    return FrameEvidence(
-        engine_cohorts=new_engine_cohorts,
-        cohort_list=new_cohort_list,
-        cohort_at_tau=fe.cohort_at_tau,
-        evidence_by_tau=new_evidence_by_tau,
-        max_tau=fe.max_tau,
-        saturation_tau=fe.saturation_tau,
-        tau_solid_max=fe.tau_solid_max,
-        tau_future_max=fe.tau_future_max,
-        last_frame_date=fe.last_frame_date,
+        x_provider=x_provider,
+        from_node_arrival=from_node_arrival,
+        upstream_path_cdf_arr=upstream_path_cdf_arr,
+        carrier_tier=carrier_tier,
     )
 
 
@@ -1191,17 +1196,11 @@ def compute_cohort_maturity_rows_v3(
     Delegates the per-cohort population model to the engine via
     compute_forecast_trajectory.
     """
-    from .forecast_state import (
-        CohortEvidence,
-        NodeArrivalState,
-        compute_forecast_trajectory,
-    )
+    from .forecast_state import compute_forecast_trajectory
     from .model_resolver import resolve_model_params
     from .forecast_runtime import (
         PreparedForecastRuntimeBundle,
         build_prepared_runtime_bundle,
-        build_upstream_carrier,
-        build_x_provider_from_graph,
         find_edge_by_id,
         get_cf_mode_and_reason,
         is_cf_sweep_eligible,
@@ -1330,78 +1329,6 @@ def compute_cohort_maturity_rows_v3(
             bundle.p_conditioning_evidence.total_y = None
         return bundle
 
-    def _resolve_carrier_state(fe_local):
-        x_provider_local = x_provider_override
-        from_node_arrival_local = None
-        upstream_path_cdf_arr_local = None
-        carrier_tier = 'none'
-
-        if (
-            x_provider_local is None
-            and not is_window
-            and anchor_node_id
-            and query_from_node
-            and query_from_node != anchor_node_id
-        ):
-            try:
-                x_provider_local = build_x_provider_from_graph(
-                    graph,
-                    target_edge,
-                    anchor_node_id,
-                    is_window,
-                )
-            except Exception as e:
-                print(f"[v3] WARNING: x_provider build failed: {e}")
-
-        if (
-            x_provider_local is not None
-            and bool(getattr(x_provider_local, 'enabled', False))
-            and x_provider_local.reach > 0
-        ):
-            upstream_params_list = (
-                x_provider_local.ingress_carrier
-                if x_provider_local.ingress_carrier
-                else x_provider_local.upstream_params_list
-            )
-            _carrier_rng = np.random.default_rng(43)
-            _carrier_max_tau = (
-                fe_local.saturation_tau
-                if fe_local is not None
-                else axis_tau_max
-            )
-            if _carrier_max_tau is None and det_norm_cdf is not None:
-                try:
-                    _carrier_max_tau = max(len(det_norm_cdf) - 1, 0)
-                except TypeError:
-                    _carrier_max_tau = None
-            if _carrier_max_tau is None:
-                _carrier_max_tau = 30
-            det_cdf, mc_cdf, carrier_tier = build_upstream_carrier(
-                upstream_params_list=upstream_params_list,
-                upstream_obs=x_provider_local.upstream_obs,
-                cohort_list=fe_local.cohort_list if fe_local is not None else [],
-                reach=x_provider_local.reach,
-                is_window=is_window,
-                max_tau=_carrier_max_tau,
-                num_draws=2000,
-                rng=_carrier_rng,
-            )
-            upstream_path_cdf_arr_local = det_cdf
-            if det_cdf is not None or mc_cdf is not None:
-                from_node_arrival_local = NodeArrivalState(
-                    deterministic_cdf=det_cdf,
-                    mc_cdf=mc_cdf,
-                    reach=x_provider_local.reach,
-                    tier=carrier_tier,
-                )
-
-        return (
-            x_provider_local,
-            from_node_arrival_local,
-            upstream_path_cdf_arr_local,
-            carrier_tier,
-        )
-
     # ── Non-latency edge: closed-form shortcut ─────────────────────
     # Authoritative signal is the edge's latency_parameter flag, not
     # resolved.latency.sigma. See ANALYSIS_TYPES_CATALOGUE.md §284,
@@ -1451,6 +1378,11 @@ def compute_cohort_maturity_rows_v3(
     lat = resolved.latency
 
     # ── Build evidence from frames (shared with topo pass) ─────────
+    # The builder owns carrier resolution and observed-prefix materialisation.
+    # When cohort mode has a real A→X carrier, both denominator and
+    # numerator prefixes are rebuilt there using the same raw subject-side
+    # progression curve the sweep later conditions against. No post-build
+    # rewrite.
     fe = build_cohort_evidence_from_frames(
         frames=frames,
         target_edge=target_edge,
@@ -1460,19 +1392,16 @@ def compute_cohort_maturity_rows_v3(
         is_window=is_window,
         resolved=resolved,
         axis_tau_max=axis_tau_max,
+        graph=graph,
+        anchor_node_id=anchor_node_id,
+        query_from_node=query_from_node,
+        x_provider_override=x_provider_override,
+        det_norm_cdf=det_norm_cdf,
     )
-    (
-        x_provider,
-        from_node_arrival,
-        upstream_path_cdf_arr,
-        _carrier_tier,
-    ) = _resolve_carrier_state(fe)
-    fe = _materialise_frame_evidence_for_runtime(
-        fe,
-        is_window=is_window,
-        upstream_path_cdf_arr=upstream_path_cdf_arr,
-        reach=(x_provider.reach if x_provider is not None else 0.0),
-    )
+    x_provider = fe.x_provider if fe is not None else None
+    from_node_arrival = fe.from_node_arrival if fe is not None else None
+    upstream_path_cdf_arr = fe.upstream_path_cdf_arr if fe is not None else None
+    _carrier_tier = fe.carrier_tier if fe is not None else 'none'
     print(f"[v3] carrier: tier={_carrier_tier}")
     if not _sweep_eligible:
         resolved_degraded = resolved

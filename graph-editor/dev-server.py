@@ -78,21 +78,23 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Snapshot cache bypass middleware — respects ?no-cache=1, ?nocache=1, or
-# {"no_cache": true} in request body.  Sets per-thread bypass flag so all
-# snapshot_service cache lookups in the request are skipped.
+# Snapshot cache bypass middleware — respects ?no-cache=1 / ?nocache=1 on any
+# request. Body-level {"no_cache": true} is honoured inside handle_runner_analyze
+# (see api_handlers.py) so it works identically on Vercel where this middleware
+# does not run. The flag is stored in a ContextVar, giving per-request isolation
+# even under concurrent async dispatch.
 from starlette.middleware.base import BaseHTTPMiddleware
 
 class _SnapshotCacheBypassMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        from snapshot_service import set_cache_bypass
+        from snapshot_service import set_cache_bypass, reset_cache_bypass
         bypass = request.query_params.get('no-cache') == '1' or \
                  request.query_params.get('nocache') == '1'
-        set_cache_bypass(bypass)
+        token = set_cache_bypass(bypass)
         try:
             return await call_next(request)
         finally:
-            set_cache_bypass(False)
+            reset_cache_bypass(token)
 
 app.add_middleware(_SnapshotCacheBypassMiddleware)
 

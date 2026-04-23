@@ -14,7 +14,7 @@
  * @vitest-environment node
  */
 
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterEach, vi } from 'vitest';
 import { GraphComputeClient } from '../graphComputeClient';
 
 // Check if Python server is available
@@ -36,6 +36,13 @@ beforeAll(async () => {
     clearTimeout(timeoutId);
   }
 }, 5000);
+
+afterEach(() => {
+  delete (globalThis as any).__dagnetComputeNoCache;
+  delete (globalThis as any).__dagnetComputeNoCacheOnce;
+  delete (globalThis as any).__dagnetCacheClearedAtMs;
+  vi.restoreAllMocks();
+});
 
 describe('GraphComputeClient - Mock Mode', () => {
   const mockClient = new GraphComputeClient('http://localhost:9000', true);
@@ -166,6 +173,57 @@ describe('GraphComputeClient - Error Handling', () => {
       expect(error.message).toBeDefined();
       expect(error.message.length).toBeGreaterThan(0);
     }
+  });
+});
+
+describe('GraphComputeClient - Node cache bypass flags', () => {
+  it('respects the CLI global no-cache flag in Node mode', async () => {
+    const client = new GraphComputeClient('http://localhost:9000', false);
+    (globalThis as any).__dagnetComputeNoCache = true;
+
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        success: true,
+        result: {
+          analysis_type: 'graph_overview',
+          analysis_name: 'Graph Overview',
+          analysis_description: 'Test result',
+          metadata: {},
+          dimension_values: {},
+          data: [],
+        },
+      }),
+    } as any);
+
+    await client.analyzeSelection(
+      { nodes: [], edges: [] },
+      'from(a).to(b)',
+      'window(-1d:)',
+      'current',
+      'Current',
+      '#3b82f6',
+      'graph_overview',
+    );
+
+    const analyzeCalls = fetchSpy.mock.calls.filter(
+      ([url]) => String(url).includes('/api/runner/analyze')
+    ) as Array<[string, RequestInit]>;
+    expect(analyzeCalls).toHaveLength(1);
+    const [url, init] = analyzeCalls[0];
+    expect(url).toContain('/api/runner/analyze?no-cache=1');
+    expect(init.body).toBeTruthy();
+    const body = JSON.parse(String(init.body));
+    expect(body.no_cache).toBe(true);
+  });
+
+  it('consumes the one-shot no-cache flag exactly once in Node mode', () => {
+    const client = new GraphComputeClient('http://localhost:9000', true);
+    (globalThis as any).__dagnetComputeNoCacheOnce = true;
+
+    expect((client as any).shouldBypassCache()).toBe(true);
+    expect((globalThis as any).__dagnetComputeNoCacheOnce).toBe(false);
+    expect((client as any).shouldBypassCache()).toBe(false);
   });
 });
 

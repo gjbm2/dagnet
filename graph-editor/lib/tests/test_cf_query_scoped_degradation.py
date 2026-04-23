@@ -1042,3 +1042,254 @@ def test_daily_conversions_degraded_branch_reuses_closed_form_beta_surface(
             assert payload['bands'][level][1] == pytest.approx(
                 surface.band_lookup[level][1] * c_tau
             )
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Surprise gauge: no-data is not a failure condition
+#
+# Empty cohorts/evidence is a legitimate degenerate state, not an
+# error. The gauge must render with `available: True`, observed=0,
+# evidence_n=0, evidence_k=0, against the unconditioned prior — needle
+# naturally lands in the `expected` zone. Regression guard: do not
+# reintroduce early-return `_unavailable` branches for no-data cases.
+# ─────────────────────────────────────────────────────────────────────
+
+
+def _ok_resolved() -> ResolvedModelParams:
+    return ResolvedModelParams(
+        p_mean=0.5,
+        p_sd=0.05,
+        alpha=50.0,
+        beta=50.0,
+        alpha_pred=50.0,
+        beta_pred=50.0,
+        edge_latency=ResolvedLatency(
+            mu=1.8,
+            sigma=0.4,
+            onset_delta_days=0.0,
+            t95=12.0,
+        ),
+        source='bayesian',
+    )
+
+
+def _empty_preparation(
+    *,
+    per_edge_results=None,
+    total_rows=0,
+):
+    from runner.forecast_preparation import ForecastPreparation
+
+    return ForecastPreparation(
+        query_from_node='uuid-a',
+        query_to_node='uuid-b',
+        anchor_node=None,
+        last_edge_id='edge-1',
+        is_multi_hop=False,
+        anchor_from='2026-04-01',
+        anchor_to='2026-04-01',
+        sweep_to='2026-04-05',
+        total_rows=total_rows,
+        cohorts_analysed=0,
+        per_edge_results=per_edge_results or [],
+        composed_frames=[],
+        regime_diagnostics=[],
+    )
+
+
+def _zero_unconditioned_summary(**_kwargs):
+    # Mirrors compute_forecast_summary's natural output for empty
+    # cohort_ages_and_weights + empty evidence: zeros all the way down.
+    return SimpleNamespace(
+        pp_rate_unconditioned=0.0,
+        pp_rate_unconditioned_sd=0.0,
+        completeness_unconditioned=0.0,
+        completeness_unconditioned_sd=0.0,
+        completeness=0.0,
+        completeness_sd=0.0,
+        is_ess=2000.0,
+    )
+
+
+def _assert_no_data_gauge_render(result: dict) -> None:
+    """All no-data conditions must render the gauge, not degrade to cards."""
+    assert 'error' not in result, (
+        f"no-data is not a failure — gauge must render. Got error: {result.get('error')!r}"
+    )
+    assert result['analysis_type'] == 'surprise_gauge'
+    for v in result['variables']:
+        assert v['available'] is True, (
+            f"{v['name']} must be available in no-data case — got "
+            f"available={v['available']!r}, reason={v.get('reason')!r}"
+        )
+        assert v['observed'] == 0
+        assert v['sigma'] == 0
+        assert v['quantile'] == pytest.approx(0.5)
+        assert v['zone'] == 'expected'
+    p = next(v for v in result['variables'] if v['name'] == 'p')
+    assert p['evidence_n'] == 0
+    assert p['evidence_k'] == 0
+
+
+def test_surprise_gauge_renders_when_preparation_has_no_rows(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """`total_rows == 0` must NOT early-return _unavailable."""
+    from runner import model_resolver
+    from runner import forecast_preparation
+    from runner import forecast_state
+
+    monkeypatch.setattr(
+        model_resolver, 'resolve_model_params',
+        lambda *a, **k: _ok_resolved(),
+    )
+    monkeypatch.setattr(
+        forecast_preparation, 'prepare_forecast_subject_group',
+        lambda **_: _empty_preparation(total_rows=0),
+    )
+    monkeypatch.setattr(
+        forecast_state, 'compute_forecast_summary',
+        _zero_unconditioned_summary,
+    )
+
+    result = _compute_surprise_gauge(
+        graph_data=_latency_graph(),
+        target_id='edge-1',
+        subj={
+            'param_id': 'p', 'core_hash': 'h',
+            'anchor_from': '2026-04-01', 'anchor_to': '2026-04-01',
+            'slice_keys': [''], 'target': {'targetId': 'edge-1'},
+        },
+        data={'analytics_dsl': 'from(a).to(b)'},
+        effective_query_dsl='window(-7d:)',
+    )
+
+    _assert_no_data_gauge_render(result)
+
+
+def test_surprise_gauge_renders_when_no_frames(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Derivation returning `{'frames': []}` must NOT early-return."""
+    from runner import model_resolver
+    from runner import forecast_preparation
+    from runner import forecast_state
+
+    monkeypatch.setattr(
+        model_resolver, 'resolve_model_params',
+        lambda *a, **k: _ok_resolved(),
+    )
+    monkeypatch.setattr(
+        forecast_preparation, 'prepare_forecast_subject_group',
+        lambda **_: _empty_preparation(
+            total_rows=3,
+            per_edge_results=[{'derivation_result': {'frames': []}}],
+        ),
+    )
+    monkeypatch.setattr(
+        forecast_state, 'compute_forecast_summary',
+        _zero_unconditioned_summary,
+    )
+
+    result = _compute_surprise_gauge(
+        graph_data=_latency_graph(),
+        target_id='edge-1',
+        subj={
+            'param_id': 'p', 'core_hash': 'h',
+            'anchor_from': '2026-04-01', 'anchor_to': '2026-04-01',
+            'slice_keys': [''], 'target': {'targetId': 'edge-1'},
+        },
+        data={'analytics_dsl': 'from(a).to(b)'},
+        effective_query_dsl='window(-7d:)',
+    )
+
+    _assert_no_data_gauge_render(result)
+
+
+def test_surprise_gauge_renders_when_last_frame_has_no_data_points(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Last frame with empty `data_points` must NOT early-return."""
+    from runner import model_resolver
+    from runner import forecast_preparation
+    from runner import forecast_state
+
+    monkeypatch.setattr(
+        model_resolver, 'resolve_model_params',
+        lambda *a, **k: _ok_resolved(),
+    )
+    monkeypatch.setattr(
+        forecast_preparation, 'prepare_forecast_subject_group',
+        lambda **_: _empty_preparation(
+            total_rows=1,
+            per_edge_results=[{'derivation_result': {'frames': [{
+                'snapshot_date': '2026-04-05',
+                'data_points': [],
+            }]}}],
+        ),
+    )
+    monkeypatch.setattr(
+        forecast_state, 'compute_forecast_summary',
+        _zero_unconditioned_summary,
+    )
+
+    result = _compute_surprise_gauge(
+        graph_data=_latency_graph(),
+        target_id='edge-1',
+        subj={
+            'param_id': 'p', 'core_hash': 'h',
+            'anchor_from': '2026-04-01', 'anchor_to': '2026-04-01',
+            'slice_keys': [''], 'target': {'targetId': 'edge-1'},
+        },
+        data={'analytics_dsl': 'from(a).to(b)'},
+        effective_query_dsl='window(-7d:)',
+    )
+
+    _assert_no_data_gauge_render(result)
+
+
+def test_surprise_gauge_renders_when_no_cohorts_match_anchor_window(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """data_points exist but anchor_from/to filter drops them all — this
+    is the scenario reported from the UI: cohort(23-Apr:23-Apr) against
+    a graph whose only anchor_days are elsewhere."""
+    from runner import model_resolver
+    from runner import forecast_preparation
+    from runner import forecast_state
+
+    monkeypatch.setattr(
+        model_resolver, 'resolve_model_params',
+        lambda *a, **k: _ok_resolved(),
+    )
+    monkeypatch.setattr(
+        forecast_preparation, 'prepare_forecast_subject_group',
+        lambda **_: _empty_preparation(
+            total_rows=1,
+            per_edge_results=[{'derivation_result': {'frames': [{
+                'snapshot_date': '2026-04-23',
+                'data_points': [
+                    # Cohort on 2026-03-20 — outside the 2026-04-23:23 window
+                    {'anchor_day': '2026-03-20', 'x': 100, 'y': 10, 'a': 100},
+                ],
+            }]}}],
+        ),
+    )
+    monkeypatch.setattr(
+        forecast_state, 'compute_forecast_summary',
+        _zero_unconditioned_summary,
+    )
+
+    result = _compute_surprise_gauge(
+        graph_data=_latency_graph(),
+        target_id='edge-1',
+        subj={
+            'param_id': 'p', 'core_hash': 'h',
+            'anchor_from': '2026-04-23', 'anchor_to': '2026-04-23',
+            'slice_keys': [''], 'target': {'targetId': 'edge-1'},
+        },
+        data={'analytics_dsl': 'from(a).to(b)'},
+        effective_query_dsl='cohort(23-Apr-26:23-Apr-26)',
+    )
+
+    _assert_no_data_gauge_render(result)

@@ -163,7 +163,7 @@ export async function bootstrap(
   const bayesVarsPath = args['bayes-vars'] as string | undefined;
   if (bayesVarsPath) {
     const { readFile: readFileAsync } = await import('node:fs/promises');
-    const { applyPatch, wrapPatchIfRaw, setQualityGateOverride } =
+    const { applyPatchAndCascade, wrapPatchIfRaw, setQualityGateOverride } =
       await import('../services/bayesPatchService.js');
 
     log.info(`Injecting Bayesian vars from ${bayesVarsPath}`);
@@ -177,7 +177,12 @@ export async function bootstrap(
       setQualityGateOverride(true);
     }
     try {
-      const edgesUpdated = await applyPatch(patch);
+      // Use the same applyPatchAndCascade entry point as the FE
+      // (useBayesTrigger → fetchAndApplyPatch → applyPatchAndCascade).
+      // Tier 2 (GraphStore cascade) no-ops in CLI because no store is
+      // mounted; Tier 1 writes posteriors + _bayes + model_vars to the
+      // in-memory fileRegistry identically to the browser.
+      const { edgesUpdated } = await applyPatchAndCascade(patch, graphId);
       log.info(`Bayes vars applied: ${edgesUpdated}/${patch.edges.length} edges updated`);
     } finally {
       // Always reset the override so a long-lived process (tests, REPL)

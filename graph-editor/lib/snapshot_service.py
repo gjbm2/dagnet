@@ -20,6 +20,7 @@ import os
 import json
 import hashlib
 import base64
+import contextvars
 import time as _time
 import threading
 import psycopg2
@@ -132,29 +133,52 @@ _cache: Dict[str, Tuple[float, Any]] = {}   # key -> (expiry_timestamp, result)
 _cache_lock = threading.Lock()
 _cache_stats = {"hits": 0, "misses": 0, "evictions": 0, "invalidations": 0, "bypasses": 0}
 
-# Thread-local bypass flag — set via set_cache_bypass() or cache_bypass_ctx().
-_tls = threading.local()
+# Request-scoped bypass flag. Backed by contextvars so that concurrent async
+# requests sharing an event-loop thread see their own value — threading.local
+# does not give per-request isolation on a single loop thread.
+_bypass_var: "contextvars.ContextVar[bool]" = contextvars.ContextVar(
+    'snapshot_cache_bypass', default=False
+)
 
 _CACHE_LOG = bool(os.environ.get('DAGNET_CACHE_LOG'))
 
 
-def set_cache_bypass(bypass: bool = True) -> None:
-    """Set the per-thread cache bypass flag (for no-cache requests)."""
-    _tls.bypass = bypass
+def set_cache_bypass(bypass: bool = True):
+    """Set the cache bypass flag for the current context.
+
+    Returns a token. Pass it to ``reset_cache_bypass()`` to restore the
+    previous value (typically in a ``finally:`` block).
+    """
+    return _bypass_var.set(bypass)
+
+
+def reset_cache_bypass(token) -> None:
+    """Restore the bypass flag to the value before the matching set_cache_bypass()."""
+    _bypass_var.reset(token)
 
 
 def _is_cache_bypassed() -> bool:
-    return getattr(_tls, 'bypass', False)
+    return _bypass_var.get()
 
 
 class cache_bypass_ctx:
-    """Context manager that sets cache bypass for the current thread."""
+    """Context manager that enables cache bypass for the current context.
+
+    Safe under asyncio: the flag lives in a ContextVar, so nested or
+    concurrent requests do not observe each other's state.
+    """
+    def __init__(self, bypass: bool = True):
+        self._bypass = bypass
+        self._token = None
+
     def __enter__(self):
-        self._prev = getattr(_tls, 'bypass', False)
-        _tls.bypass = True
+        self._token = _bypass_var.set(self._bypass)
         return self
+
     def __exit__(self, *exc):
-        _tls.bypass = self._prev
+        if self._token is not None:
+            _bypass_var.reset(self._token)
+            self._token = None
 
 
 def _cache_key(fn_name: str, *args, **kwargs) -> str:

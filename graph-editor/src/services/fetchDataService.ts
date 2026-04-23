@@ -2182,6 +2182,103 @@ export async function runStage2EnhancementsAndInboundN(
           // await them via the awaitBackgroundPromises option.
           const backgroundPromises: Promise<unknown>[] = [];
 
+          const applyQueryOwnedCompleteness = (
+            graph: any,
+            edgeValues: typeof feEdgeValues,
+          ): void => {
+            for (const ev of edgeValues) {
+              const edge = graph?.edges?.find((e: any) => e.uuid === ev.edgeUuid || e.id === ev.edgeUuid);
+              const targetP = typeof ev.conditionalIndex === 'number'
+                ? edge?.conditional_p?.[ev.conditionalIndex]?.p
+                : edge?.p;
+              if (!targetP?.latency) continue;
+              targetP.latency.completeness = ev.latency.completeness;
+              const completenessStdev = (ev.latency as any).completeness_stdev;
+              if (completenessStdev != null && Number.isFinite(completenessStdev)) {
+                targetP.latency.completeness_stdev = completenessStdev;
+              }
+            }
+          };
+
+          const materialiseFeEdgeValues = async (
+            graph: any,
+            edgeValues: typeof feEdgeValues,
+          ): Promise<any> => {
+              const nextGraph = updateManager.applyBatchLAGValues(
+                graph,
+                edgeValues.map(ev => ({
+                  edgeId: ev.edgeUuid,
+                  conditionalIndex: ev.conditionalIndex,
+                  latency: preserveLatencySummaryFromFile
+                    ? (() => {
+                        const edge = graph.edges?.find((e: any) => e.uuid === ev.edgeUuid || e.id === ev.edgeUuid);
+                        const existing = typeof ev.conditionalIndex === 'number'
+                          ? edge?.conditional_p?.[ev.conditionalIndex]?.p?.latency
+                          : edge?.p?.latency;
+                        return selectLatencyToApplyForTopoPass(ev.latency, existing, true);
+                      })()
+                    : ev.latency,
+                  blendedMean: ev.blendedMean,
+                  forecast: ev.forecast,
+                  evidence: ev.evidence,
+                })),
+                { writeHorizonsToGraph: itemOptions?.writeLagHorizonsToGraph === true }
+              );
+
+              const { applyPromotion } = await import('./modelVarsResolution');
+
+              // Update analytic model_vars entries with topo pass results
+              for (const ev of edgeValues) {
+                const edge = nextGraph.edges?.find((e: any) => e.uuid === ev.edgeUuid || e.id === ev.edgeUuid);
+                if (!edge?.p?.model_vars) continue;
+                const existing = edge.p.model_vars.find((v: any) => v.source === 'analytic');
+                if (!existing) continue;
+
+                // Doc 45: topo pass writes model vars only. p.mean is set
+                // by the conditioned forecast (Job B).
+                if (ev.latency?.mu != null) {
+                  const prev: Record<string, any> = existing.latency || {};
+                  existing.latency = mergeModelVarsLatencyPreservingCanonicalEdgeLatency(
+                    {
+                      mu: ev.latency.mu!,
+                      sigma: ev.latency.sigma!,
+                      t95: ev.latency.t95,
+                      onset_delta_days: ev.latency.promoted_onset_delta_days ?? 0,
+                      ...(ev.latency.path_mu != null ? { path_mu: ev.latency.path_mu } : {}),
+                      ...(ev.latency.path_sigma != null ? { path_sigma: ev.latency.path_sigma } : {}),
+                      ...(ev.latency.path_t95 != null ? { path_t95: ev.latency.path_t95 } : {}),
+                      ...(ev.latency.path_onset_delta_days != null ? { path_onset_delta_days: ev.latency.path_onset_delta_days } : {}),
+                      ...(ev.latency.mu_sd != null ? { mu_sd: ev.latency.mu_sd } : {}),
+                      ...(ev.latency.sigma_sd != null ? { sigma_sd: ev.latency.sigma_sd } : {}),
+                      ...(ev.latency.onset_sd != null ? { onset_sd: ev.latency.onset_sd } : {}),
+                      ...(ev.latency.onset_mu_corr != null ? { onset_mu_corr: ev.latency.onset_mu_corr } : {}),
+                      ...(ev.latency.path_mu_sd != null ? { path_mu_sd: ev.latency.path_mu_sd } : {}),
+                      ...(ev.latency.path_sigma_sd != null ? { path_sigma_sd: ev.latency.path_sigma_sd } : {}),
+                      ...(ev.latency.path_onset_sd != null ? { path_onset_sd: ev.latency.path_onset_sd } : {}),
+                    },
+                    prev,
+                  );
+                }
+                if (ev.latency?.p_sd != null && Number.isFinite(ev.latency.p_sd) && ev.latency.p_sd > 0) {
+                  existing.probability.stdev = ev.latency.p_sd;
+                }
+              }
+
+              // Re-run promotion so promoted_* scalars reflect analytic entries
+              for (const edge of (nextGraph.edges ?? []) as any[]) {
+                if (edge.p?.model_vars?.length) {
+                  applyPromotion(edge.p, (nextGraph as any).model_source_preference);
+                }
+              }
+
+              // Completeness is query-authored display state, not a promoted model
+              // parameter. Reassert the freshly computed / CF-merged value after the
+              // promotion cascade so stale file-saved completeness cannot leak back in.
+              applyQueryOwnedCompleteness(nextGraph, edgeValues);
+
+              return nextGraph;
+            };
+
           // ── Fire BE topo pass (model var generator, fire-and-forget) ──
           // Fires on every query. Independent of FE LAG output — consults
           // the snapshot DB server-side.
@@ -2207,6 +2304,13 @@ export async function runStage2EnhancementsAndInboundN(
             return null;
           });
 
+          // CF must consume the FE-authored graph state even while the UI apply
+          // is still held behind the 500ms race. Otherwise the request graph can
+          // still carry empty-evidence stub means that FE has already superseded.
+          const cfInputGraph = feEdgeValues.length > 0
+            ? await materialiseFeEdgeValues(finalGraph, feEdgeValues)
+            : finalGraph;
+
           // ── Fire conditioned forecast ──
           // Fires on every query per doc 50 §3.2 "no silent drops".
           // When the FE LAG apply runs, CF is raced against a 500ms deadline
@@ -2224,7 +2328,7 @@ export async function runStage2EnhancementsAndInboundN(
               `Conditioned forecast started (gen ${cfGen}, dsl=${(dsl || '').slice(0, 80)})`);
           }
           const cfPromise = runConditionedForecast(
-            finalGraph,
+            cfInputGraph,
             dsl,
             undefined,
             itemOptions?.workspace,
@@ -2335,24 +2439,6 @@ export async function runStage2EnhancementsAndInboundN(
             }
           };
 
-          const applyQueryOwnedCompleteness = (
-            graph: any,
-            edgeValues: typeof feEdgeValues,
-          ): void => {
-            for (const ev of edgeValues) {
-              const edge = graph?.edges?.find((e: any) => e.uuid === ev.edgeUuid || e.id === ev.edgeUuid);
-              const targetP = typeof ev.conditionalIndex === 'number'
-                ? edge?.conditional_p?.[ev.conditionalIndex]?.p
-                : edge?.p;
-              if (!targetP?.latency) continue;
-              targetP.latency.completeness = ev.latency.completeness;
-              const completenessStdev = (ev.latency as any).completeness_stdev;
-              if (completenessStdev != null && Number.isFinite(completenessStdev)) {
-                targetP.latency.completeness_stdev = completenessStdev;
-              }
-            }
-          };
-
           // ── Helper: apply FE edge values through UpdateManager + analytic model_vars ──
           // Accepts the edge values to apply so the CF fast path can pass a
           // copy with p.mean already merged (single render, no FE flash).
@@ -2360,77 +2446,9 @@ export async function runStage2EnhancementsAndInboundN(
             graph: any,
             edgeValues: typeof feEdgeValues,
           ): Promise<any> => {
-              const nextGraph = updateManager.applyBatchLAGValues(
-                graph,
-                edgeValues.map(ev => ({
-                  edgeId: ev.edgeUuid,
-                  conditionalIndex: ev.conditionalIndex,
-                  latency: preserveLatencySummaryFromFile
-                    ? (() => {
-                        const edge = graph.edges?.find((e: any) => e.uuid === ev.edgeUuid || e.id === ev.edgeUuid);
-                        const existing = typeof ev.conditionalIndex === 'number'
-                          ? edge?.conditional_p?.[ev.conditionalIndex]?.p?.latency
-                          : edge?.p?.latency;
-                        return selectLatencyToApplyForTopoPass(ev.latency, existing, true);
-                      })()
-                    : ev.latency,
-                  blendedMean: ev.blendedMean,
-                  forecast: ev.forecast,
-                  evidence: ev.evidence,
-                })),
-                { writeHorizonsToGraph: itemOptions?.writeLagHorizonsToGraph === true }
-              );
-
-              const { applyPromotion } = await import('./modelVarsResolution');
-
-              // Update analytic model_vars entries with topo pass results
-              for (const ev of edgeValues) {
-                const edge = nextGraph.edges?.find((e: any) => e.uuid === ev.edgeUuid || e.id === ev.edgeUuid);
-                if (!edge?.p?.model_vars) continue;
-                const existing = edge.p.model_vars.find((v: any) => v.source === 'analytic');
-                if (!existing) continue;
-
-                // Doc 45: topo pass writes model vars only. p.mean is set
-                // by the conditioned forecast (Job B).
-                if (ev.latency?.mu != null) {
-                  const prev: Record<string, any> = existing.latency || {};
-                  existing.latency = {
-                    mu: ev.latency.mu!,
-                    sigma: ev.latency.sigma!,
-                    t95: ev.latency.t95,
-                    onset_delta_days: ev.latency.promoted_onset_delta_days ?? 0,
-                    ...((ev.latency.path_mu ?? prev.path_mu) != null ? { path_mu: ev.latency.path_mu ?? prev.path_mu } : {}),
-                    ...((ev.latency.path_sigma ?? prev.path_sigma) != null ? { path_sigma: ev.latency.path_sigma ?? prev.path_sigma } : {}),
-                    ...((ev.latency.path_t95 ?? prev.path_t95) != null ? { path_t95: ev.latency.path_t95 ?? prev.path_t95 } : {}),
-                    ...((ev.latency.path_onset_delta_days ?? prev.path_onset_delta_days) != null ? { path_onset_delta_days: ev.latency.path_onset_delta_days ?? prev.path_onset_delta_days } : {}),
-                    ...(ev.latency.mu_sd != null ? { mu_sd: ev.latency.mu_sd } : {}),
-                    ...(ev.latency.sigma_sd != null ? { sigma_sd: ev.latency.sigma_sd } : {}),
-                    ...(ev.latency.onset_sd != null ? { onset_sd: ev.latency.onset_sd } : {}),
-                    ...(ev.latency.onset_mu_corr != null ? { onset_mu_corr: ev.latency.onset_mu_corr } : {}),
-                    ...(ev.latency.path_mu_sd != null ? { path_mu_sd: ev.latency.path_mu_sd } : {}),
-                    ...(ev.latency.path_sigma_sd != null ? { path_sigma_sd: ev.latency.path_sigma_sd } : {}),
-                    ...(ev.latency.path_onset_sd != null ? { path_onset_sd: ev.latency.path_onset_sd } : {}),
-                  };
-                }
-                if (ev.latency?.p_sd != null && Number.isFinite(ev.latency.p_sd) && ev.latency.p_sd > 0) {
-                  existing.probability.stdev = ev.latency.p_sd;
-                }
-              }
-
-              // Re-run promotion so promoted_* scalars reflect analytic entries
-              for (const edge of (nextGraph.edges ?? []) as any[]) {
-                if (edge.p?.model_vars?.length) {
-                  applyPromotion(edge.p, (nextGraph as any).model_source_preference);
-                }
-              }
-
-              // Completeness is query-authored display state, not a promoted model
-              // parameter. Reassert the freshly computed / CF-merged value after the
-              // promotion cascade so stale file-saved completeness cannot leak back in.
-              applyQueryOwnedCompleteness(nextGraph, edgeValues);
-
+              const nextGraph = await materialiseFeEdgeValues(graph, edgeValues);
               setGraph(nextGraph);
-              console.log(`[fetchDataService] FE topo pass: applied ${feEdgeValues.length} edges via UpdateManager`);
+              console.log(`[fetchDataService] FE topo pass: applied ${edgeValues.length} edges via UpdateManager`);
 
               if (FORECASTING_PARALLEL_RUN) {
                 compareModelVarsSources(nextGraph);
@@ -2452,6 +2470,24 @@ export async function runStage2EnhancementsAndInboundN(
             for (const beEntry of beResults) {
               const edge = nextGraph.edges?.find((e: any) => e.uuid === beEntry.edgeUuid || e.id === beEntry.edgeUuid);
               if (!edge) continue;
+              const currentP = beEntry.conditionalIndex != null
+                ? edge.conditional_p?.[beEntry.conditionalIndex]?.p
+                : edge.p;
+              if (!currentP) continue;
+
+              if (beEntry.entry.latency) {
+                const prevLatency =
+                  currentP.model_vars?.find((v: any) => v.source === 'analytic_be')?.latency ||
+                  currentP.model_vars?.find((v: any) => v.source === 'analytic')?.latency;
+                beEntry.entry = {
+                  ...beEntry.entry,
+                  latency: mergeModelVarsLatencyPreservingCanonicalEdgeLatency(
+                    beEntry.entry.latency as Record<string, any>,
+                    prevLatency as Record<string, any> | undefined,
+                  ),
+                };
+              }
+
               if (beEntry.conditionalIndex != null) {
                 const cp = edge.conditional_p?.[beEntry.conditionalIndex];
                 if (cp?.p) upsertModelVars(cp.p, beEntry.entry);
@@ -3065,35 +3101,95 @@ export function selectLatencyToApplyForTopoPass(
 
   const hasExistingSummary =
     existing?.median_lag_days !== undefined ||
-    existing?.mean_lag_days !== undefined;
+    existing?.mean_lag_days !== undefined ||
+    existing?.mu !== undefined ||
+    existing?.sigma !== undefined ||
+    existing?.t95 !== undefined;
 
   if (!hasExistingSummary) {
     return computed;
   }
 
+  const preserveEdgeModel =
+    existing?.mu != null &&
+    existing?.sigma != null &&
+    Number.isFinite(existing.mu) &&
+    Number.isFinite(existing.sigma) &&
+    existing.sigma > 0;
+
   return {
     // Preserve existing slice-level latency summary (from file)
     median_lag_days: existing?.median_lag_days,
     mean_lag_days: existing?.mean_lag_days,
-    // t95 is a derived horizon and should come from the topo/LAG pass.
-    // Override flags only gate whether we may overwrite the stored value (enforced in UpdateManager),
-    // they do not change semantic meaning or which value the stats engine computes.
-    t95: computed.t95,
+    // Preserve the canonical edge-local latency family when the graph already
+    // carries one; only the path-level A→Y projection is query-shaped.
+    t95: preserveEdgeModel ? (existing?.t95 ?? computed.t95) : computed.t95,
     // CRITICAL: completeness must always come from the topo pass (query-date dependent).
     completeness: computed.completeness,
     // Still apply computed path_t95 (UpdateManager will respect path_t95_overridden).
     path_t95: computed.path_t95,
-    // promoted_onset_delta_days is aggregated in the topo pass from window() slice histograms and should
-    // still be applied, even when we preserve median/mean from the file.
-    promoted_onset_delta_days: computed.promoted_onset_delta_days,
-    // mu/sigma: always from the topo pass (fitted model params for offline completeness).
-    mu: computed.mu,
-    sigma: computed.sigma,
+    promoted_onset_delta_days: preserveEdgeModel
+      ? (existing?.onset_delta_days ?? computed.promoted_onset_delta_days)
+      : computed.promoted_onset_delta_days,
+    mu: preserveEdgeModel ? existing?.mu : computed.mu,
+    sigma: preserveEdgeModel ? existing?.sigma : computed.sigma,
     // path_mu/path_sigma/path_onset_delta_days: path-level A→Y CDF params (Fenton–Wilkinson combined).
     path_mu: computed.path_mu,
     path_sigma: computed.path_sigma,
     path_onset_delta_days: computed.path_onset_delta_days,
   };
+}
+
+function mergeModelVarsLatencyPreservingCanonicalEdgeLatency(
+  incoming: Record<string, any> | undefined,
+  previous: Record<string, any> | undefined,
+): Record<string, any> {
+  const next = incoming || {};
+  const prev = previous || {};
+  const merged: Record<string, any> = {};
+
+  const setIfPresent = (key: string, value: unknown): void => {
+    if (value != null) {
+      merged[key] = value;
+    }
+  };
+
+  const preserveEdgeModel =
+    prev.mu != null &&
+    prev.sigma != null &&
+    Number.isFinite(prev.mu) &&
+    Number.isFinite(prev.sigma) &&
+    prev.sigma > 0;
+
+  if (preserveEdgeModel) {
+    setIfPresent('mu', prev.mu);
+    setIfPresent('sigma', prev.sigma);
+    setIfPresent('t95', prev.t95 ?? next.t95);
+    setIfPresent('onset_delta_days', prev.onset_delta_days ?? next.onset_delta_days);
+    setIfPresent('mu_sd', prev.mu_sd ?? next.mu_sd);
+    setIfPresent('sigma_sd', prev.sigma_sd ?? next.sigma_sd);
+    setIfPresent('onset_sd', prev.onset_sd ?? next.onset_sd);
+    setIfPresent('onset_mu_corr', prev.onset_mu_corr ?? next.onset_mu_corr);
+  } else {
+    setIfPresent('mu', next.mu);
+    setIfPresent('sigma', next.sigma);
+    setIfPresent('t95', next.t95);
+    setIfPresent('onset_delta_days', next.onset_delta_days);
+    setIfPresent('mu_sd', next.mu_sd);
+    setIfPresent('sigma_sd', next.sigma_sd);
+    setIfPresent('onset_sd', next.onset_sd);
+    setIfPresent('onset_mu_corr', next.onset_mu_corr);
+  }
+
+  setIfPresent('path_mu', next.path_mu ?? prev.path_mu);
+  setIfPresent('path_sigma', next.path_sigma ?? prev.path_sigma);
+  setIfPresent('path_t95', next.path_t95 ?? prev.path_t95);
+  setIfPresent('path_onset_delta_days', next.path_onset_delta_days ?? prev.path_onset_delta_days);
+  setIfPresent('path_mu_sd', next.path_mu_sd ?? prev.path_mu_sd);
+  setIfPresent('path_sigma_sd', next.path_sigma_sd ?? prev.path_sigma_sd);
+  setIfPresent('path_onset_sd', next.path_onset_sd ?? prev.path_onset_sd);
+
+  return merged;
 }
 
 // ============================================================================

@@ -348,6 +348,31 @@ describe('BE forecasting trigger logic (doc 45)', () => {
     expect(edge.p.mean).toBeCloseTo(0.77, 5);
   });
 
+  it('CF request graph carries the FE-authored fallback mean before CF runs', async () => {
+    let cfInputGraph: any;
+    cfImpl = async (...args: any[]) => {
+      cfInputGraph = structuredClone(args[0]);
+      return [];
+    };
+
+    const graph = latencyGraph();
+    graph.edges[0].p.mean = 0;
+    graph.edges[0].p.forecast = { mean: 0.5 };
+    const { setGraph, calls } = captureSetGraph();
+
+    await runStage2EnhancementsAndInboundN(
+      [fetchItem()], [fetchItem()], { mode: 'from-file' } as any,
+      graph, setGraph, 'window(1-Nov-25:7-Nov-25)',
+    );
+
+    expect(cfInputGraph).toBeTruthy();
+    const cfEdge = cfInputGraph.edges.find((e: any) => (e.uuid || e.id) === EDGE_ID);
+    const feEdge = calls[calls.length - 1].graph.edges.find((e: any) => (e.uuid || e.id) === EDGE_ID);
+
+    expect(cfEdge.p.mean).not.toBe(0);
+    expect(cfEdge.p.mean).toBeCloseTo(feEdge.p.mean, 6);
+  });
+
   it('CF fast path also overwrites stale completeness on from-file graphs', async () => {
     cfImpl = async () => fakeCfResult(0.77, 0);
 
