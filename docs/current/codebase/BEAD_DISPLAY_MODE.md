@@ -85,7 +85,7 @@ With an explicit anchor at a mid-funnel node:
 
 ## Latency Bead Gate
 
-The latency bead `checkExists` gate in `edgeBeadHelpers.tsx` requires **both** `latency_parameter === true` and `median_lag_days !== undefined`. Without the `latency_parameter` check, the BE topo pass can write `median_lag_days` to edges with `latency: { latency_parameter: false }`, causing non-latency edges to show latency beads (a regression discovered during this work).
+The latency bead `checkExists` gate in `edgeBeadHelpers.tsx` requires **both** `latency_parameter === true` and `median_lag_days !== undefined`. Without the `latency_parameter` check, any enrichment pass that writes `median_lag_days` to an edge with `latency: { latency_parameter: false }` causes non-latency edges to show latency beads. (Originally discovered against the now-retired BE topo pass, the rule is general — any future writer of `median_lag_days` must respect the `latency_parameter` flag.)
 
 ## Key Files
 

@@ -1168,18 +1168,6 @@ export const CHART_DISPLAY_SETTINGS: Record<string, DisplaySettingDef[]> = {
       group: 'Model',
     },
     {
-      key: 'show_model_analytic_be',
-      label: 'Model: analytic (BE)',
-      shortLabel: 'BE fit',
-      type: 'checkbox',
-      defaultValue: false,
-      propsPanel: true,
-      inline: 'brief',
-      contextMenu: false,
-      computeAffecting: false,
-      group: 'Model',
-    },
-    {
       key: 'show_model_bayesian',
       label: 'Model: Bayesian',
       shortLabel: 'Bayes',

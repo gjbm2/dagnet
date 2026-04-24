@@ -202,7 +202,7 @@ These compute entirely from in-memory graph data.
 | | |
 |---|---|
 | **Selection** | `from(A).to(B)` where direct edge exists, no visited nodes |
-| **Computes** | Edge summary: probability, latency distribution, evidence quality, model vars (analytic, analytic_be, bayesian), uncertainty, onset |
+| **Computes** | Edge summary: probability, latency distribution, evidence quality, model vars (analytic, bayesian), uncertainty, onset |
 | **View** | Cards only (overview, latency, evidence, forecast, depth, diagnostics) |
 | **Chart kinds** | info |
 

@@ -115,16 +115,17 @@ The CLI runs the same computation the browser runs:
    `dates`)
 2. Filters to the requested date range
 3. Computes evidence scalars (n, k, mean = k/n, stdev)
-4. Runs the FE LAG topological pass (evidence aggregation, lag fitting)
-5. Calls the **BE topo pass** (forecast engine — doc 29):
+4. Runs the FE topo pass (evidence aggregation, lag fitting, promoted
+   latency fields)
+5. Calls the **BE conditioned-forecast pass** (forecast engine — doc 29):
    - Engine-computed completeness with uncertainty (completeness_stdev)
    - Conditioned blended rate (p.mean) incorporating latency maturity
    - Composed rate uncertainty (p.stdev) from probability + completeness
-   - Promoted latency fields (mu, sigma, onset, dispersions)
 
-The BE topo pass overwrites FE-only values with engine-computed values.
-If the Python BE is unreachable, a warning is logged and FE-only values
-are used (degraded — no completeness uncertainty, no engine blending).
+CF overwrites the FE blended `p.mean` / completeness with its conditioned
+values when it lands. If the Python BE is unreachable, a warning is
+logged and FE topo values are used (degraded — no completeness
+uncertainty, no conditioned blending).
 
 **Requires the Python BE running** (`python dev-server.py` on
 localhost:9000, or set `PYTHON_API_URL`).

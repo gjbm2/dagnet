@@ -45,18 +45,18 @@ describe('gauge no-evidence repro', () => {
     expect(opt).not.toBeNull();
   });
 
-  it('renders with all variables available=false (placeholder case)', () => {
+  it('returns null when all variables are unavailable', () => {
     const result: any = {
       analysis_type: 'surprise_gauge',
       focused_scenario_id: 'current',
       variables: [
-        { name: 'p', label: 'Conversion rate', available: false, reason: 'No snapshot data in window' },
-        { name: 'completeness', label: 'Completeness', available: false, reason: 'No snapshot data in window' },
+        { name: 'p', label: 'Conversion rate', available: false, reason: 'Forecast engine failed' },
+        { name: 'completeness', label: 'Completeness', available: false, reason: 'Forecast engine failed' },
       ],
       scenario_results: [
         { scenario_id: 'current', variables: [
-          { name: 'p', label: 'Conversion rate', available: false, reason: 'No snapshot data in window' },
-          { name: 'completeness', label: 'Completeness', available: false, reason: 'No snapshot data in window' },
+          { name: 'p', label: 'Conversion rate', available: false, reason: 'Forecast engine failed' },
+          { name: 'completeness', label: 'Completeness', available: false, reason: 'Forecast engine failed' },
         ]},
       ],
     };
@@ -68,7 +68,6 @@ describe('gauge no-evidence repro', () => {
       { visibleScenarioIds: ['current'] },
     );
 
-    console.log('unavailable case: opt is null?', opt === null);
-    expect(opt).not.toBeNull();
+    expect(opt).toBeNull();
   });
 });

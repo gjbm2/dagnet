@@ -968,11 +968,11 @@ When deriving `p.forecast.mean`, **recent mature days are weighted more heavily*
 │  p.latency.path_onset_delta_days│ Path-level Σ onset_delta_days (DP sum along path)│
 │  p.latency.posterior        │  Bayesian posterior summary (from webhook)            │
 │  p.posterior                │  Edge probability posterior (from Bayes webhook)      │
-│  p.model_vars[]             │  Candidate model sets: analytic, analytic_be,        │
-│                             │  bayesian, manual. Each carries probability (p∞)     │
+│  p.model_vars[]             │  Candidate model sets: analytic, bayesian, manual.   │
+│                             │  Each carries probability (p∞)                        │
 │                             │  and latency params. See §12.                        │
 │  p.model_source_preference  │  Per-edge override: best_available/bayesian/          │
-│                             │  analytic_be/analytic/manual. Determines which        │
+│                             │  analytic/manual. Determines which                    │
 │                             │  entry promotes to p.forecast/p.latency. Falls back  │
 │                             │  to graph-level default.                             │
 └─────────────────────────────┴──────────────────────────────────────────────────────┘
@@ -1297,7 +1297,6 @@ Each edge carries an array of candidate model variable sets (`p.model_vars[]`), 
 | Source | How computed | When populated |
 |--------|-------------|----------------|
 | `analytic` | FE stats pass (lognormal moment-match from cohort lag data) | Every fetch |
-| `analytic_be` | BE stats engine (Python port of FE stats pass) | Every fetch (async) |
 | `bayesian` | MCMC posterior (from Bayes compiler) | On Bayes fit completion |
 | `manual` | User-edited values | On user edit in Output card |
 
@@ -1312,8 +1311,7 @@ Each entry contains:
 The active source is determined by `model_source_preference` (per-edge override or graph-level default). The resolution waterfall for `best_available` is:
 
 1. Bayesian (if present and quality gate passed)
-2. Analytic (FE)
-3. Analytic (BE)
+2. Analytic
 
 When the active source is selected, its latency parameters are **promoted** to `edge.p.latency.*` and its forecast p∞ is promoted to `edge.p.forecast.mean`.
 

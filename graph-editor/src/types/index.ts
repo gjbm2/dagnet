@@ -612,19 +612,18 @@ export interface LatencyConfig {
 
 /** Source of a model variable set.
  *  'analytic'    = FE stats pass (existing)
- *  'analytic_be' = BE stats pass (Python port — crossover testing)
  *  'bayesian'    = MCMC posterior
  *  'manual'      = user-edited
  */
-export type ModelSource = 'analytic' | 'analytic_be' | 'bayesian' | 'manual';
+export type ModelSource = 'analytic' | 'bayesian' | 'manual';
 
 /** Preference for which model var source to promote to scalars.
  *  'manual' is valid only at edge level (not graph level).
  */
-export type ModelSourcePreference = 'best_available' | 'bayesian' | 'analytic_be' | 'analytic' | 'manual';
+export type ModelSourcePreference = 'best_available' | 'bayesian' | 'analytic' | 'manual';
 
 /** Graph-level model source preference (no 'manual' option) */
-export type GraphModelSourcePreference = 'best_available' | 'bayesian' | 'analytic_be' | 'analytic';
+export type GraphModelSourcePreference = 'best_available' | 'bayesian' | 'analytic';
 
 /** Quality metrics from a Bayesian model_vars entry (evaluated once at write time) */
 export interface ModelVarsQuality {

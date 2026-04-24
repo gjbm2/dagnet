@@ -1,10 +1,9 @@
 /**
- * Stats engine parity contract — FE side.
+ * FE statistical-enhancement contract vectors.
  *
- * Canonical test vectors with hardcoded expected values that MUST match
- * the BE (Python) implementation. The same vectors appear in
- * lib/tests/test_stats_parity_contract.py. If either side drifts,
- * its test breaks.
+ * Canonical test vectors with hardcoded expected values for the FE
+ * topo-pass primitives (fitLagDistribution, logNormalCDF, etc.). Any
+ * drift in these primitives breaks this test.
  *
  * @vitest-environment node
  */

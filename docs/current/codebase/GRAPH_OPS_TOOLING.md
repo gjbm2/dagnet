@@ -48,8 +48,7 @@ bash graph-ops/scripts/list-graph.sh
 BE cache after DB changes), `--bayes-vars <path>` (inject a Bayesian
 posterior sidecar into the graph before the command runs; every
 command honours it), `--force-vars` (with `--bayes-vars`, bypass
-rhat/ess quality gates). `--topo-pass` is retained as a deprecated
-no-op for older scripts.
+rhat/ess quality gates).
 
 **Diagnostics go to stderr, data to stdout.** Use `2>/dev/null` when piping.
 
@@ -236,7 +235,6 @@ the first scenario's DSL for the BE `query_dsl`.
 | `--type <type>` | Analysis type (graph_overview, cohort_maturity, cohort_maturity_v2, daily_conversions, lag_histogram, surprise, bridge, conditioned_forecast) |
 | `--scenario <spec>` | Scenario specification (repeatable) |
 | `--subject <dsl>` | Analysis subject DSL (e.g. `from(x).to(y)`) — shared across scenarios |
-| `--topo-pass` | Deprecated no-op retained for backwards compatibility |
 | `--no-snapshot-cache` | Bypass BE snapshot service cache (essential after `synth_gen.py` or DB repopulation) |
 | `--get <key>` | Extract a value via dot-path (e.g. `result.data.0.probability`) |
 | `--format json\|yaml` | Output format (default: json) |
@@ -380,10 +378,11 @@ use `fileRegistry` while the CLI uses the disk-loaded bundle directly.
 
 **Script**: `graph-ops/scripts/hydrate.sh`
 
-Runs FE aggregation + promotion + BE topo pass on a graph, then writes
-the hydrated graph back to disk. Produces a graph JSON equivalent to
-what the FE would have after opening the graph and running the full
-Stage 2 topo pass.
+Runs the shared Stage 2 enrichment pipeline (FE aggregation, FE topo
+pass, promotion, and conditioned forecast) on a graph, then writes the
+hydrated graph back to disk. Produces a graph JSON equivalent to what
+the FE would have after opening the graph and running the full Stage 2
+pipeline.
 
 ```bash
 bash graph-ops/scripts/hydrate.sh <graph-name> "<query-dsl>"

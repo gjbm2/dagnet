@@ -96,7 +96,6 @@ bash graph-ops/scripts/analyse.sh <graph-name> \
 | `--type <type>` | Analysis type (required) |
 | `--scenario <spec>` | Scenario specification (repeatable for multi-scenario) |
 | `--subject <dsl>` | Analysis subject DSL (e.g. `from(x).to(y)`) — shared across scenarios |
-| `--topo-pass` | Run BE topo pass before analysis — populates promoted latency stats |
 | `--no-snapshot-cache` | Bypass BE snapshot cache (essential after DB changes) |
 | `--get <key>` | Extract a value via dot-path |
 | `--format json\|yaml` | Output format (default: json) |
@@ -111,7 +110,7 @@ Requires the Python backend.
 
 ### hydrate
 
-Runs FE aggregation + BE topo pass on a graph and writes the **hydrated graph JSON** back to disk. Produces a graph file equivalent to what the browser would have after opening the graph and running the full topo pass.
+Runs the shared Stage 2 enrichment pipeline (FE aggregation + FE topo pass + conditioned forecast) on a graph and writes the **hydrated graph JSON** back to disk. Produces a graph file equivalent to what the browser would have after opening the graph and running the enrichment pipeline end-to-end.
 
 **Script**: `graph-ops/scripts/hydrate.sh`
 

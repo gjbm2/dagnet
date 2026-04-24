@@ -9,7 +9,7 @@ sources are introduced (per STATS_SUBSYSTEMS.md §5 Confusion 8).
 - **alpha_beta_query_scoped=False** (aggregate prior, e.g. bayesian /
   manual): conjugate Beta-Binomial update with query-scoped Σk, Σn.
 - **alpha_beta_query_scoped=True** (already query-scoped posterior,
-  e.g. analytic / analytic_be): direct read, no update (double-counting
+  e.g. analytic): direct read, no update (double-counting
   avoidance).
 - Class C (no evidence in window): update degenerates to prior mean.
 - Class D (no usable prior and no evidence): returns [].
@@ -58,7 +58,7 @@ def _make_resolved(
     The `source` string drives `alpha_beta_query_scoped` via the
     resolver's property mapping:
       - 'bayesian', 'manual' → False (aggregate prior, needs update)
-      - 'analytic', 'analytic_be' → True (already query-scoped)
+      - 'analytic' → True (already query-scoped)
     Tests should cover both branches by picking an appropriate source.
 
     `n_effective` (doc 52 §14.3) drives the engine-level subset blend.
@@ -152,9 +152,9 @@ def test_aggregate_prior_aggregates_across_cohorts():
 # ── Query-scoped path — direct read, no update ────────────────────
 
 
-def test_query_scoped_direct_read_analytic_be():
-    """analytic_be α/β is already query-scoped. Read directly."""
-    resolved = _make_resolved(source='analytic_be', alpha=25.0, beta=75.0)
+def test_query_scoped_direct_read_analytic():
+    """analytic α/β is already query-scoped. Read directly."""
+    resolved = _make_resolved(source='analytic', alpha=25.0, beta=75.0)
     assert resolved.alpha_beta_query_scoped is True  # guard the property
     fe = _make_fe([{'x_frozen': 200.0, 'y_frozen': 40.0}])  # evidence present
 
@@ -167,8 +167,8 @@ def test_query_scoped_direct_read_analytic_be():
     assert rows[0]['p_infinity_sd'] == pytest.approx(expected_sd)
 
 
-def test_query_scoped_direct_read_analytic():
-    """analytic (FE topo) α/β is already query-scoped. Same rule."""
+def test_query_scoped_direct_read_analytic_again():
+    """Another analytic query-scoped case: same direct-read rule."""
     resolved = _make_resolved(source='analytic', alpha=15.0, beta=35.0)
     assert resolved.alpha_beta_query_scoped is True
     fe = _make_fe([{'x_frozen': 100.0, 'y_frozen': 20.0}])
@@ -195,7 +195,7 @@ def test_class_c_aggregate_prior_no_evidence_returns_prior():
 
 def test_class_c_query_scoped_no_evidence_returns_prior():
     """Class C via query-scoped branch: α/β is already the answer."""
-    resolved = _make_resolved(source='analytic_be', alpha=8.0, beta=12.0)
+    resolved = _make_resolved(source='analytic', alpha=8.0, beta=12.0)
     fe = _make_fe([])
 
     rows = _rows(fe=fe, resolved=resolved, sweep_to='2026-04-01')
@@ -247,7 +247,7 @@ def test_row_schema_matches_class_a():
 
 def test_rows_flat_in_tau():
     """τ-dependent fields must be identical across rows (σ→0 degeneration)."""
-    resolved = _make_resolved(source='analytic_be', alpha=20.0, beta=30.0)
+    resolved = _make_resolved(source='analytic', alpha=20.0, beta=30.0)
     fe = _make_fe([{'x_frozen': 50.0, 'y_frozen': 15.0}], max_tau=10)
     rows = _rows(fe=fe, resolved=resolved, sweep_to='2026-04-01')
 
@@ -275,7 +275,7 @@ def test_aggregate_prior_model_bands_reflect_prior():
 
 def test_query_scoped_model_bands_match_posterior():
     """Query-scoped branch: no update, so model_* == posterior fields."""
-    resolved = _make_resolved(source='analytic_be', alpha=20.0, beta=30.0)
+    resolved = _make_resolved(source='analytic', alpha=20.0, beta=30.0)
     fe = _make_fe([{'x_frozen': 100.0, 'y_frozen': 60.0}])  # evidence ignored
     rows = _rows(fe=fe, resolved=resolved, sweep_to='2026-04-01')
 
@@ -336,8 +336,8 @@ def test_blend_non_latency_full_r():
 
 
 def test_blend_non_latency_skip_query_scoped():
-    """analytic_be source skips blend via source_query_scoped."""
-    resolved = _make_resolved(source='analytic_be', alpha=20.0, beta=30.0, n_effective=50.0)
+    """analytic source skips blend via source_query_scoped."""
+    resolved = _make_resolved(source='analytic', alpha=20.0, beta=30.0, n_effective=50.0)
     fe = _make_fe([{'x_frozen': 10.0, 'y_frozen': 4.0}] * 3)
     res = _non_latency_rows(fe=fe, resolved=resolved, sweep_to='2026-04-01')
     assert res.blend_applied is False

@@ -13,7 +13,7 @@ model resolver:
      evidence layer never distinguished cohort vs window for this edge
      (top-of-graph case, or generally no latency ancestor).
   2. Current promoted alpha/beta — via resolve_model_params. This walks
-     bayesian → analytic_be → analytic and ultimately falls back to an
+     bayesian → analytic and ultimately falls back to an
      evidence-derived Beta if no fit exists. Always non-null for edges
      with any probability parameter.
 
@@ -40,7 +40,7 @@ class RateBand:
     evidence_grade: int
     fitted_at: str          # date string or empty
     source_slice: str       # 'window()' | 'cohort()' | '' (when from current resolver)
-    source_model: str       # 'bayesian' | 'analytic_be' | 'analytic' | 'evidence' | 'prior'
+    source_model: str       # 'bayesian' | 'analytic' | 'evidence' | 'prior'
 
 
 # ── Date parsing ─────────────────────────────────────────────────────────

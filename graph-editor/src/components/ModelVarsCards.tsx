@@ -101,20 +101,17 @@ export function ModelVarsCards({
   const activeSource = activeEntry?.source;
 
   const bayesian = findEntry(modelVars, 'bayesian');
-  const analyticBe = findEntry(modelVars, 'analytic_be');
   const analytic = findEntry(modelVars, 'analytic');
   const manual = findEntry(modelVars, 'manual');
 
   // Collapse state: active card open, others closed. User can manually toggle.
   // Auto-open the active card when activeSource changes.
   const [bayesOpen, setBayesOpen] = useState(activeSource === 'bayesian');
-  const [analyticBeOpen, setAnalyticBeOpen] = useState(activeSource === 'analytic_be');
   const [analyticOpen, setAnalyticOpen] = useState(activeSource === 'analytic');
   const prevSource = useRef(activeSource);
   useEffect(() => {
     if (activeSource !== prevSource.current) {
       setBayesOpen(activeSource === 'bayesian');
-      setAnalyticBeOpen(activeSource === 'analytic_be');
       setAnalyticOpen(activeSource === 'analytic');
       prevSource.current = activeSource;
     }
@@ -201,32 +198,6 @@ export function ModelVarsCards({
           ) : (
             <p style={{ color: 'var(--text-muted)', fontStyle: 'italic', fontSize: '12px', margin: 0 }}>
               No Bayesian model available.
-            </p>
-          )}
-        </CollapsibleSection>
-      </div>
-
-      {/* ── Analytic BE (crossover testing) — collapsible ── */}
-      <div className={`mv-card-wrap ${isPinned('analytic_be') ? 'mv-card-wrap--pinned' : isAutoOn('analytic_be') ? 'mv-card-wrap--active' : ''}`}>
-        <CollapsibleSection
-          title={<>Analytic (BE){isAutoOn('analytic_be') && <span className="collapsible-section-badge" style={{ marginLeft: '8px' }}>Auto</span>}</>}
-          isOpen={analyticBeOpen}
-          onToggle={() => setAnalyticBeOpen(!analyticBeOpen)}
-          headerRight={
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
-              {isPinned('analytic_be') && <SourceOverrideIcon onClear={() => handleToggle('analytic_be')} />}
-              <PinToggle active={isAutoOn('analytic_be')} pinned={isPinned('analytic_be')}
-                onClick={() => handleToggle('analytic_be')} disabled={disabled} />
-            </span>
-          }
-        >
-          {analyticBe ? (
-            <ModelCard entry={analyticBe} t95={promotedLatency?.promoted_t95 ?? promotedLatency?.t95}
-              pathT95={promotedLatency?.promoted_path_t95 ?? promotedLatency?.path_t95}
-              timestampLabel="Computed" />
-          ) : (
-            <p style={{ color: 'var(--text-muted)', fontStyle: 'italic', fontSize: '12px', margin: 0 }}>
-              No BE analytic data. Run the BE topo pass to populate.
             </p>
           )}
         </CollapsibleSection>

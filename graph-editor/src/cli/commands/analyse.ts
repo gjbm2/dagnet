@@ -47,9 +47,6 @@ dagnet-cli analyse
     --subject <dsl>          Analysis subject (e.g. from(x).to(y)), shared across scenarios
     --get <key>              Extract a single value from the result using dot-path
     --format, -f             Output format: json (default), yaml
-    --topo-pass              Run BE topo pass on each scenario graph before analysis.
-                             Populates promoted latency stats (mu_sd, sigma_sd, etc.)
-                             needed by cohort_maturity_v2 fan charts.
     --no-snapshot-cache      Bypass BE snapshot service cache. Use after synth_gen
                              or any DB repopulation to avoid stale cached results.
     --allow-external-fetch   Fetch live from external sources (e.g. Amplitude)
@@ -191,19 +188,12 @@ async function runAnalyse() {
   log.info(`${scenarioEntries.length} scenario(s) prepared`);
 
   // ── Deprecated: --topo-pass flag ──────────────────────────────
-  // Previously this flag triggered a bespoke CLI BE topo call that
-  // wrote directly to edge.p.latency.*, bypassing the promotion
-  // cascade. Doc 45 requires a single pipeline; aggregate /
-  // fetchItems / Stage-2 now runs FE topo + BE topo + CF + promotion
-  // unconditionally, with awaitBackgroundPromises so all results are
-  // landed before returning. The bespoke CLI BE-topo path is retired.
-  // The flag is accepted silently for backward compatibility with any
-  // scripts that still pass it, but is now a no-op.
+  // Accepted silently for backwards compatibility with existing
+  // graph-ops scripts. The quick BE topo pass was removed on
+  // `24-Apr-26` per project-bayes/73; Stage 2 now runs FE topo + CF
+  // unconditionally via aggregate / fetchItems.
   if (extraArgs['topo-pass']) {
-    log.warn(
-      '--topo-pass is deprecated and now a no-op. BE topo runs '
-      + 'automatically inside the shared Stage-2 pipeline (doc 45).'
-    );
+    log.warn('--topo-pass is deprecated and now a no-op.');
   }
 
   // ── Split combined DSL into subject + temporal ──────────────────

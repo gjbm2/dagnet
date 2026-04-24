@@ -1,7 +1,7 @@
 # BE Topo Pass — Known Issues
 
 **Date**: 17-Apr-26
-**Status**: Investigation complete, primary fix applied
+**Status**: Historical — superseded by BE topo removal (see [project-bayes/73](project-bayes/73-be-topo-removal-and-forecast-state-separation-plan.md)). The quick BE topo pass was retired on `24-Apr-26`; the defects below no longer apply to the live runtime. Retained for context on the decisions that led to the retirement.
 
 ## Fixed: Dead slow-path branching (P0)
 

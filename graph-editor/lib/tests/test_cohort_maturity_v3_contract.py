@@ -37,7 +37,7 @@ import os
 import sys
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import pytest
 import yaml
@@ -344,9 +344,48 @@ def _fw_truth_curve_from_edges(
     target: Dict[str, float],
     tau_max: int,
 ) -> Dict[int, float]:
-    from runner.stats_engine import LagDistributionFit, fw_compose_pair
+    import math
 
-    fw = fw_compose_pair(
+    from runner.lag_distribution_utils import LagDistributionFit
+
+    def _fw_compose_pair(
+        a: LagDistributionFit,
+        b: LagDistributionFit,
+    ) -> Optional[tuple[float, float]]:
+        if not a.empirical_quality_ok or not b.empirical_quality_ok:
+            return None
+        for x in (a.mu, a.sigma, b.mu, b.sigma):
+            if not math.isfinite(x):
+                return None
+        if a.sigma < 0 or b.sigma < 0:
+            return None
+
+        def mean_of(mu: float, sigma: float) -> float:
+            try:
+                return math.exp(mu + sigma * sigma / 2)
+            except OverflowError:
+                return float('inf')
+
+        def var_of(mu: float, sigma: float) -> float:
+            s2 = sigma * sigma
+            try:
+                return (math.exp(s2) - 1) * math.exp(2 * mu + s2)
+            except OverflowError:
+                return float('inf')
+
+        m = mean_of(a.mu, a.sigma) + mean_of(b.mu, b.sigma)
+        v = var_of(a.mu, a.sigma) + var_of(b.mu, b.sigma)
+        if not math.isfinite(m) or not math.isfinite(v) or m <= 0 or v < 0:
+            return None
+
+        sigma2 = math.log(1 + v / (m * m))
+        sigma = math.sqrt(sigma2)
+        mu = math.log(m) - sigma2 / 2
+        if not math.isfinite(mu) or not math.isfinite(sigma) or sigma < 0:
+            return None
+        return mu, sigma
+
+    fw = _fw_compose_pair(
         LagDistributionFit(
             mu=float(upstream['mu']),
             sigma=float(upstream['sigma']),

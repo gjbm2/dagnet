@@ -422,27 +422,6 @@ async def lag_recompute_models_alias(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/lag/topo-pass")
-async def lag_topo_pass(request: Request):
-    try:
-        data = await request.json()
-        from api_handlers import handle_stats_topo_pass
-        return handle_stats_topo_pass(data)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        import traceback
-        print(f"[lag/topo-pass] Error: {e}")
-        print(f"[lag/topo-pass] Traceback: {traceback.format_exc()}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# Back-compat alias: python-api.py dispatches via hyphenated endpoint name.
-@app.post("/api/lag-topo-pass")
-async def lag_topo_pass_alias(request: Request):
-    return await lag_topo_pass(request)
-
-
 # ── Conditioned forecast — graph enrichment endpoint (doc 45) ──────
 # Produces per-edge per-scenario scalars (p.mean, p_sd, completeness)
 # using the full MC population model with snapshot DB evidence.

@@ -306,7 +306,7 @@ ok a2bdb15c… PASS  source=snapshot  rows: raw=4752 regime=4752 final=4872
 ### LOO-ELPD null model
 
 The LOO null model comes from:
-1. **Production graphs**: `analytic` or `analytic_be` model_vars on graph edges
+1. **Production graphs**: `analytic` model_vars on graph edges
 2. **Synth graphs (fallback)**: evidence priors from param files (Beta prior mean for p, topology mu/sigma/onset)
 
 When no baseline is available for an edge, ΔELPD is set to 0 (no

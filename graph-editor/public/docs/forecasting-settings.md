@@ -27,7 +27,7 @@ When the newest cohorts are immature, raw evidence (\(k/n\)) is biased downward 
 
 ## Knobs
 
-> **Applicability:** The following settings control the **analytic fallback pipeline**. They affect edges whose active model source is `analytic` (FE) or `analytic_be` (BE). Edges with an active Bayesian posterior are not affected — their probability comes from the conditioned forecast model. See [Which settings matter when?](#which-settings-matter-when) below.
+> **Applicability:** The following settings control the **analytic fallback pipeline**. They affect edges whose active model source is `analytic`. Edges with an active Bayesian posterior are not affected — their probability comes from the conditioned forecast model. See [Which settings matter when?](#which-settings-matter-when) below.
 
 ## Recency Half-Life (days) — `RECENCY_HALF_LIFE_DAYS`
 
@@ -221,10 +221,9 @@ Which candidate model source is promoted to drive completeness, forecast, and bl
 
 | Value | Behaviour |
 |-------|-----------|
-| `best_available` | Default. Prefers Bayesian (if present and quality gate passed), then analytic (FE), then analytic (BE) |
+| `best_available` | Default. Prefers Bayesian (if present and quality gate passed), then analytic |
 | `bayesian` | Forces Bayesian source (falls back to analytic if no posterior exists) |
-| `analytic` | Forces FE analytic source |
-| `analytic_be` | Forces BE analytic source |
+| `analytic` | Forces analytic source |
 | `manual` | Forces user-edited values |
 
 **Scope**
@@ -242,7 +241,7 @@ See [LAG Statistics Reference §12](lag-statistics-reference.md) for the full pr
 
 | Active source | Which settings apply |
 |---|---|
-| `analytic` / `analytic_be` | All knobs on this page |
+| `analytic` | All knobs on this page |
 | `bayesian` | MODEL_SOURCE_PREFERENCE, quality tiers, bayes_band_level only |
 | `manual` | MODEL_SOURCE_PREFERENCE only |
 

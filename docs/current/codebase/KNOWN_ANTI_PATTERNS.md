@@ -262,9 +262,9 @@ See compiler journal 13-Apr-26 update 11.
 
 ## Anti-pattern 36: Latency bead gate checking data presence instead of feature enablement
 
-**Signature**: non-latency edges (with `latency_parameter: false` or undefined) show latency beads after a BE topo pass run.
+**Signature**: non-latency edges (with `latency_parameter: false` or undefined) show latency beads after an enrichment pass.
 
-**Root cause**: the `checkExists` gate for the latency bead checked `edge.p.latency.median_lag_days !== undefined` without also checking `latency_parameter === true`. The BE topo pass writes `median_lag_days` to any edge with a `latency` block, regardless of whether latency tracking is enabled. An edge can have `latency: { latency_parameter: false, median_lag_days: 5 }` — the block exists (from a prior edit or schema default) but the feature is disabled.
+**Root cause**: the `checkExists` gate for the latency bead checked `edge.p.latency.median_lag_days !== undefined` without also checking `latency_parameter === true`. Historically this surfaced when the now-retired BE topo pass wrote `median_lag_days` into edges with a `latency` block regardless of the enablement flag; the rule still applies because any enrichment writer can create the same `latency: { latency_parameter: false, median_lag_days: 5 }` shape.
 
 **Fix**: gate on `latency_parameter === true && median_lag_days !== undefined`. More generally: always gate feature-specific UI on the feature's enablement flag, not on the presence of data that the feature would consume.
 
@@ -316,13 +316,13 @@ Multiple code paths can regenerate the graph JSON: `graph_from_truth.py` (truth-
 
 **Broader principle**: a flag that prepares state for a later step is invisible when the later step is skipped. If `--rebuild` means "regenerate data", it should regenerate data — not set a flag that a different code path checks later. When combining flags, verify the end-to-end effect, not just that each flag does its documented thing.
 
-## Anti-pattern 41: BE results bypassing UpdateManager sibling rebalancing
+## Anti-pattern 41: Enrichment results bypassing UpdateManager sibling rebalancing
 
-**Signature**: after a fetch completes, one edge's `p.mean` is correct (reflecting BE topo pass blended_mean) but its sibling edges still show stale pre-fetch probabilities. Siblings don't sum to 1. Refreshing or fetching again appears to fix it (because the FE path runs first and rebalances).
+**Signature**: after a fetch completes, one edge's `p.mean` is correct (reflecting a late-arriving enrichment writer) but its sibling edges still show stale pre-fetch probabilities. Siblings don't sum to 1. Refreshing or fetching again appears to fix it (because the FE path runs first and rebalances).
 
-**Root cause**: the BE topo pass wrote `edge.p.mean = beScalars.blended_mean` directly on the graph object, then called `setGraph()`. This bypassed `UpdateManager.applyBatchLAGValues`, which is the single code path for sibling probability rebalancing. The FE path correctly used `applyBatchLAGValues` (which collects edges whose `p.mean` changed and runs `findSiblingsForRebalance` + `rebalanceSiblingEdges`), but the BE path skipped it entirely.
+**Root cause**: an enrichment pass wrote `edge.p.mean` directly on the graph object, then called `setGraph()`. This bypassed `UpdateManager.applyBatchLAGValues`, which is the single code path for sibling probability rebalancing. The FE topo path correctly used `applyBatchLAGValues` (which collects edges whose `p.mean` changed and runs `findSiblingsForRebalance` + `rebalanceSiblingEdges`), but the direct-mutation path skipped it entirely. Originally observed on the now-retired BE topo pass; the same risk applies to any late-arriving writer (including CF's slow-path overwrite handler).
 
-**Fix**: restructured the fetch pipeline so both FE and BE results flow through `applyBatchLAGValues`. BE scalars are merged into the FE `EdgeLAGValues` array before application, rather than applied as a separate direct-mutation pass. See `FE_BE_STATS_PARALLELISM.md` §Orchestration for the race-based flow.
+**Fix**: the fetch pipeline funnels every enrichment writer through `applyBatchLAGValues`. Late-arriving scalars are merged into the FE `EdgeLAGValues` array before application, rather than applied as a separate direct-mutation pass. See `FE_BE_STATS_PARALLELISM.md` §Orchestration for the live CF-race flow.
 
 **Broader principle**: when a subsystem has a single canonical mutation path (UpdateManager for graph state), every code path that writes the same fields must go through it. A "shortcut" that writes directly to the object and calls `setGraph` bypasses all the invariants the canonical path maintains — rebalancing, override flag checks, conditional probability propagation. The more code paths that write the same field, the more likely one of them forgets a side effect.
 

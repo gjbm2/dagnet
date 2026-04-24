@@ -234,7 +234,7 @@ class TestResolverCanonicalContractOverRealGraphs:
         result = resolve_model_params(edge, scope='edge', temporal_mode='window')
         assert result is not None
         # Source should be one of the valid values
-        assert result.source in ('analytic', 'analytic_be', 'bayesian', 'manual', ''), \
+        assert result.source in ('analytic', 'bayesian', 'manual', ''), \
             f"Unexpected source: {result.source}"
 
     def test_source_curves_populated(self):
@@ -252,7 +252,7 @@ class TestResolverCanonicalContractOverRealGraphs:
 
         # Every model_vars source should appear in source_curves
         for src in expected_sources:
-            if src in ('analytic', 'analytic_be', 'bayesian', 'manual'):
+            if src in ('analytic', 'bayesian', 'manual'):
                 assert src in actual_sources, \
                     f"Missing source curve: {src}"
 
@@ -305,10 +305,9 @@ class TestResolverCanonicalContractOverRealGraphs:
         """
         from runner.model_resolver import resolve_model_params
 
-        # Flat fields: mu=3.5, sigma=0.8 (from a stale analytic_be
-        # promotion). FE crossover rules make analytic the trusted
-        # default during best_available, so the resolver must select the
-        # analytic entry and return 2.0/0.5 instead of the stale flats.
+        # Flat fields: mu=3.5, sigma=0.8 (from a stale prior promotion).
+        # The resolver must select the analytic entry and return 2.0/0.5
+        # instead of the stale flats.
         edge = {
             'p': {
                 'forecast': {'mean': 0.6},
@@ -323,18 +322,11 @@ class TestResolverCanonicalContractOverRealGraphs:
                         'latency': {'mu': 2.0, 'sigma': 0.5, 'onset_delta_days': 1.0},
                         'probability': {'mean': 0.55},
                     },
-                    {
-                        'source': 'analytic_be',
-                        'latency': {'mu': 3.5, 'sigma': 0.8, 'onset_delta_days': 2.0,
-                                    'mu_sd': 0.1, 'sigma_sd': 0.05, 'onset_sd': 0.5},
-                        'probability': {'mean': 0.6},
-                    },
                 ],
             }
         }
         result = resolve_model_params(edge, scope='edge', temporal_mode='window')
         assert result is not None
-        # analytic wins over analytic_be in best_available cascade
         assert result.source == 'analytic'
         # Values must come from the analytic entry, not the stale flat fields
         assert abs(result.edge_latency.mu - 2.0) < 1e-6, \

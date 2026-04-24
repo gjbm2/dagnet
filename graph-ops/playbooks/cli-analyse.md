@@ -151,7 +151,6 @@ bash graph-ops/scripts/analyse.sh my-graph "window(-30d:)" \
 | `--type <type>` | Analysis type (graph_overview, cohort_maturity, cohort_maturity_v2, daily_conversions, lag_histogram, surprise, bridge, etc.) |
 | `--scenario <spec>` | Scenario specification (repeatable) |
 | `--subject <dsl>` | Analysis subject (`from(x).to(y)`) — shared across scenarios |
-| `--topo-pass` | Run BE topo pass before analysis. Populates promoted latency stats (`promoted_mu_sd`, `promoted_t95`, etc.) needed for v2 fan charts. Builds cohort data from parameter files on disk and sends it to `/api/lag/topo-pass`. |
 | `--no-snapshot-cache` | Bypass the BE snapshot service in-memory cache. Essential after `synth_gen.py` or any DB repopulation — without this, the BE may return stale cached empty results. |
 | `--get <key>` | Extract a value via dot-path |
 | `--format json\|yaml` | Output format (default: yaml) |
@@ -168,16 +167,16 @@ cd graph-editor && . venv/bin/activate
 DB_CONNECTION="$(grep DB_CONNECTION .env.local | cut -d= -f2-)" \
   python ../bayes/synth_gen.py --graph synth-simple-abc --write-files
 
-# 1b. Generate + enrich (adds model_vars via topo pass — needed for
-#     tests that check bayesian posteriors, e.g. test_be_topo_pass_parity)
+# 1b. Generate + enrich (adds model_vars via the Stage 2 enrichment
+#     pipeline — needed for tests that check bayesian posteriors).
 #     Requires Python BE running on localhost:9000.
 DB_CONNECTION="$(grep DB_CONNECTION .env.local | cut -d= -f2-)" \
   python ../bayes/synth_gen.py --graph synth-simple-abc --write-files --enrich
 
-# 2. Run v2 analysis with topo pass and cache bypass
+# 2. Run v2 analysis with cache bypass
 cd .. && bash graph-ops/scripts/analyse.sh synth-simple-abc \
   "from(simple-a).to(simple-c).cohort(simple-a,12-Dec-25:21-Mar-26)" \
-  --type cohort_maturity_v2 --topo-pass --no-snapshot-cache --format json
+  --type cohort_maturity_v2 --no-snapshot-cache --format json
 ```
 
 **Freshness checking**: `synth_gen.py` performs a comprehensive
@@ -190,15 +189,6 @@ state. Use `--bust-cache` to bypass the check and force regeneration.
 (from `graph-editor/lib/tests/conftest.py`) automatically trigger
 regen when the freshness check fails. See `bayes/TESTING_PLAYBOOK.md`
 for details.
-
-**Why `--topo-pass` is needed**: the CLI's aggregate step calls the
-same `fetchDataService.fetchItems` as the browser, but IDB is
-unavailable in Node — `getParameterFromFile` fails silently when
-`fileRegistry.restoreFile()` hits the missing IDB layer. The FE topo
-pass (Stage 2) never fires, so `model_vars` and `promoted_*` fields
-are never populated. The `--topo-pass` flag bypasses this by reading
-cohort evidence directly from the disk-loaded parameter files
-(`bundle.parameters`) and calling the BE `/api/lag/topo-pass` endpoint.
 
 **Why `--no-snapshot-cache` is needed**: the BE's snapshot service
 caches query results in memory. After `synth_gen.py` writes new rows

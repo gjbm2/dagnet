@@ -558,7 +558,7 @@ export class GraphComputeClient {
               entry.methodBCurve = r.model_curve_method_b;
               entry.methodBParams = r.model_curve_method_b_params || {};
             }
-            // Per-source model curves (analytic, analytic_be, bayesian)
+            // Per-source model curves (analytic, bayesian)
             if (r?.source_model_curves && typeof r.source_model_curves === 'object') {
               entry.sourceModelCurves = r.source_model_curves;
               entry.promotedSource = r.promoted_source || 'best_available';

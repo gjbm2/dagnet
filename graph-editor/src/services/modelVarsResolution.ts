@@ -54,10 +54,8 @@ export function resolveActiveModelVars(
     return b?.quality?.gate_passed ? b : undefined;
   };
 
-  // During crossover: FE analytic is the trusted default. BE is opt-in.
-  // Switch this to prefer analytic_be when parity is confirmed.
   const analyticBest = (): ModelVarsEntry | undefined =>
-    find('analytic') ?? find('analytic_be');
+    find('analytic');
 
   const bestAvailable = (): ModelVarsEntry | undefined =>
     bayesianIfGated() ?? analyticBest();
@@ -67,8 +65,6 @@ export function resolveActiveModelVars(
       return find('manual') ?? bestAvailable();
     case 'bayesian':
       return find('bayesian') ?? analyticBest();
-    case 'analytic_be':
-      return find('analytic_be') ?? find('analytic');
     case 'analytic':
       return find('analytic');
     case 'best_available':

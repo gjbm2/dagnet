@@ -484,10 +484,7 @@ function getProbabilityBeadValueForLayer(
     };
   }
 
-  // F+E (default): show blended p.mean
-  // p.stdev now incorporates completeness uncertainty when the BE topo
-  // pass has run (doc 29 Phase 2 — improved p_sd flows through
-  // model_vars[analytic_be] → applyPromotion → p.stdev).
+  // F+E (default): show blended p.mean.
   return { value: mean ?? 0, stdev, layerN, layerK };
 }
 

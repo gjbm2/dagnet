@@ -434,7 +434,7 @@ function buildEdgeInfoResult(graph: ConversionGraph, dsl: string): AnalysisResul
     const pref = effectivePreference(edge.p.model_source_preference, graph.model_source_preference);
     const active = resolveActiveModelVars(edge.p.model_vars, pref);
     if (active) {
-      const sourceLabel = active.source === 'analytic_be' ? 'Analytic (BE)' : active.source.charAt(0).toUpperCase() + active.source.slice(1);
+      const sourceLabel = active.source.charAt(0).toUpperCase() + active.source.slice(1);
       data.push({ tab: 'latency', section: 'Source', property: 'Active Source', value: sourceLabel });
       if (active.source_at) {
         data.push({ tab: 'latency', section: 'Source', property: 'Updated', value: active.source_at });

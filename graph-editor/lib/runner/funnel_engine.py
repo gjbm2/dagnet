@@ -155,7 +155,7 @@ def compute_bars_f(
     draws for band quantiles.
 
     Per-edge α/β resolved via `resolve_model_params` — honours the
-    promotion hierarchy (bayesian → analytic_be → analytic). Predictive
+    promotion hierarchy (bayesian → analytic). Predictive
     α_pred/β_pred (doc 49) drive the band width; the bar is the
     deterministic path product of per-edge posterior means so that the
     reported path probability matches Π(α/(α+β)) regardless of how

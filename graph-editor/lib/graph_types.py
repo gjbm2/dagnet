@@ -136,7 +136,7 @@ class ModelVarsEntry(BaseModel):
 
     Each entry is a complete snapshot — no sparse entries, no per-field mixing.
     """
-    source: Literal['analytic', 'analytic_be', 'bayesian', 'manual']
+    source: Literal['analytic', 'bayesian', 'manual']
     source_at: str = Field(..., description="UK date (d-MMM-yy) when this entry was last updated")
     probability: ModelVarsProbability
     latency: Optional[ModelVarsLatency] = None
@@ -312,7 +312,7 @@ class ProbabilityParam(BaseModel):
     posterior: Optional[Posterior] = Field(None, description="Unified Bayesian posterior (doc 21) — file-level; cascade projects onto graph edge")
     # Model variable provenance (doc 15)
     model_vars: Optional[List[ModelVarsEntry]] = Field(None, description="Candidate model variable sets from different sources")
-    model_source_preference: Optional[Literal['best_available', 'bayesian', 'analytic_be', 'analytic', 'manual']] = Field(None, description="Per-edge override of graph.model_source_preference")
+    model_source_preference: Optional[Literal['best_available', 'bayesian', 'analytic', 'manual']] = Field(None, description="Per-edge override of graph.model_source_preference")
     model_source_preference_overridden: bool = Field(False, description="True when model_source_preference was explicitly set by user")
     # LAG fields
     latency: Optional[LatencyConfig] = Field(None, description="Latency configuration for this probability")
@@ -761,7 +761,7 @@ class Graph(BaseModel):
     dailyFetch: Optional[bool] = Field(None, description="If true, this graph is included in unattended daily automation runs when ?retrieveall is used without an explicit graph list.")
     runBayes: Optional[bool] = Field(None, description="If true, a Bayesian fit is commissioned after each daily retrieval. Only meaningful when dailyFetch is also true.")
     defaultConnection: Optional[str] = Field(None, description="Default connection for all edges. Fallback when edge-level connection is not set (e.g. 'amplitude-prod').")
-    model_source_preference: Optional[Literal['best_available', 'bayesian', 'analytic_be', 'analytic']] = Field(None, description="Graph-level default for which model var source to promote to scalars (doc 15 §2.3)")
+    model_source_preference: Optional[Literal['best_available', 'bayesian', 'analytic']] = Field(None, description="Graph-level default for which model var source to promote to scalars (doc 15 §2.3)")
     bayes: Optional[BayesRunMetadata] = Field(None, alias='_bayes', description="Metadata from the most recent Bayesian fitting run")
     
     def get_node_by_id(self, node_id: str) -> Optional[Node]:

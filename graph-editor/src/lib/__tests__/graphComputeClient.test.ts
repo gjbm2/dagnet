@@ -181,7 +181,8 @@ describe('GraphComputeClient - Node cache bypass flags', () => {
     const client = new GraphComputeClient('http://localhost:9000', false);
     (globalThis as any).__dagnetComputeNoCache = true;
 
-    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+    const fetchMock = globalThis.fetch as any;
+    fetchMock.mockResolvedValueOnce({
       ok: true,
       json: async () => ({
         success: true,
@@ -206,7 +207,7 @@ describe('GraphComputeClient - Node cache bypass flags', () => {
       'graph_overview',
     );
 
-    const analyzeCalls = fetchSpy.mock.calls.filter(
+    const analyzeCalls = fetchMock.mock.calls.filter(
       ([url]) => String(url).includes('/api/runner/analyze')
     ) as Array<[string, RequestInit]>;
     expect(analyzeCalls).toHaveLength(1);

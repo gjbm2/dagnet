@@ -236,7 +236,7 @@ The 1,154-line file gets smaller, not duplicated.
 
 | # | Work | Est | Notes |
 |---|------|-----|-------|
-| 2.1 | **BE forecast endpoint** — edge/path + temporal mode → `ForecastState`. Uses promoted model resolver. Pattern established by `/api/lag/topo-pass` | M (2–3d) | New endpoint, well-understood shape |
+| 2.1 | **BE forecast endpoint** — edge/path + temporal mode → `ForecastState`. Uses promoted model resolver. Shape modelled on the existing `/api/forecast/conditioned` handler. | M (2–3d) | New endpoint, well-understood shape |
 | 2.2 | **Surprise gauge migration** — replace `_compute_surprise_gauge` (~110 lines in api_handlers.py) with forecast engine scalar layer call. Parity test against current output | S–M (1–2d) | First consumer migration, validates contract |
 | 2.3 | **Edge cards / completeness overlay** — replace ~500 lines of scattered completeness annotation in api_handlers.py with `evaluate_forecast_at_tau` calls. FE-only → BE-sourced when available | M (2–3d) | Surgery on 3,795-line monolith is the risk |
 
@@ -247,7 +247,7 @@ The 1,154-line file gets smaller, not duplicated.
 | # | Work | Est | Notes |
 |---|------|-----|-------|
 | 3.1 | FE quick pass preserved — existing analytics gives instant results | 0 | Already works. Verify only |
-| 3.2 | BE follow-up pattern — new TS service (~300 lines, modelled on `beTopoPassService.ts`). FE packages evidence, calls BE forecast endpoint, maps result to model_vars/display. Must replicate "awaited before inbound-n" sequencing. UI indicates FE-only vs BE-conditioned quality tier | M (2–3d) | Load-bearing sequencing from topo pass pattern |
+| 3.2 | BE follow-up pattern — new TS service (~300 lines, modelled on the existing `conditionedForecastService.ts` race-and-merge pattern). FE packages evidence, calls BE forecast endpoint, maps result to model_vars/display. Must replicate "awaited before inbound-n" sequencing. UI indicates FE-only vs BE-conditioned quality tier | M (2–3d) | Load-bearing sequencing from the CF race pattern |
 | 3.3 | Graceful degradation — if BE unavailable, FE estimates stand | S (0.5d) | Verify + add quality tier indicator |
 
 **Block total: 3–4d.**

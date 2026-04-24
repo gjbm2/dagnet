@@ -50,7 +50,7 @@ class ForecastState:
 
     # Identity
     edge_id: str = ''
-    source: str = ''              # 'analytic' | 'analytic_be' | 'bayesian' | 'manual'
+    source: str = ''              # 'analytic' | 'bayesian' | 'manual'
     fitted_at: Optional[str] = None
     tier: str = 'fe_instant'      # 'fe_instant' | 'be_forecast' | 'fe_only'
 

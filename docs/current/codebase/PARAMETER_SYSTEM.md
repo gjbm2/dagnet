@@ -27,6 +27,29 @@ Parameters are timestamped, sourced numerical estimates (mean/stdev, counts, dai
 - `data_source` (Amplitude, Sheets, manual, etc.)
 - `context_id`, `sliceDSL` (for context-dependent variants)
 
+## Projection surfaces
+
+The parameter system deliberately spans three different storage depths.
+
+Parameter files are the deep, authoritative store. They retain parameter
+history, retrieval metadata, commissioned Bayesian slice inventories, fit
+history, and any other material needed to rehydrate a later projection. They
+are the only surface meant to retain the full commissioned depth of a
+parameter.
+
+The graph carries structure plus the currently projected state for the active
+working view. On an edge this means the currently active posterior,
+forecast/evidence fields, promoted model state, and any current query-scoped
+display state the fetch pipeline has written. The graph is therefore a
+projection surface, not the full file-depth inventory.
+
+Scenario param packs are thinner again. They are not mini parameter files and
+they are not full graphs. They exist to express the scenario-specific
+projection delta that the compositor reapplies in order. A pack should
+therefore contain only the fields that are specifically true for that
+scenario's active projection and are later consumed by rendering or analysis.
+Deep file-backed inventory stays in the files.
+
 ## Extraction from Graphs
 
 **Location**: `GraphParamExtractor.ts`
@@ -54,9 +77,20 @@ From edges:
 
 From nodes: `entry.entry_weight`, `costs.monetary`, `costs.time`, `case.variants[].{name, weight}`.
 
+These extracted fields are projection fields. The extractor is intentionally
+copying the active graph view, not the full parameter-file inventory for an
+edge.
+
 ### What's NOT extracted (internal config)
 
-Raw distribution knobs on the base probability (`distribution`, `min`, `max`, `alpha`, `beta` on `p` itself — distinct from `p.posterior.alpha/beta`), evidence retrieval metadata (`window_from/to`, `retrieved_at`, `source`), latency config (`latency_parameter`, `anchor_node_id`, `mean_lag_days`), `*_overridden` flags, and the graph-root `_bayes` metadata block.
+Raw distribution knobs on the base probability (`distribution`, `min`, `max`,
+`alpha`, `beta` on `p` itself — distinct from `p.posterior.alpha/beta`),
+evidence retrieval metadata (`window_from/to`, `retrieved_at`, `source`),
+latency config (`latency_parameter`, `anchor_node_id`, `mean_lag_days`), the
+full Bayesian slice inventory (`posterior.slices` on the file object), the
+graph-side re-projection cache `p._posteriorSlices`, the full model-source
+ledger `p.model_vars`, model-source preference flags, `*_overridden` flags,
+and the graph-root `_bayes` metadata block.
 
 ### Whitelist discipline
 
@@ -89,6 +123,19 @@ Round-trip parsing via `fromYAML()`, `fromJSON()`, `fromCSV()`. If a graph is pr
 
 **Default divergence across call sites.** CLI commands serialise with `structure: 'flat'`; the browser `ScenariosContext` import/export uses `'nested'`. This is a known inconsistency — see `docs/current/project-assure/PROPOSAL.md` → "Pack shape standardisation" for the plan to make flat the canonical shape for every surface that crosses a process boundary and keep nested only as an in-memory display view in the Scenarios editor.
 
+### Thin-by-design scenario pack contract
+
+Scenario packs should stay as thin as possible. When a consumer needs richer
+scenario reconstruction, the intended fix is to add the specific active
+projection field that consumer reads, not to duplicate the full parameter-file
+depth, full slice inventories, or whole graphs inside the pack.
+
+In particular, the file-backed Bayesian slice inventory remains authoritative
+in parameter files even when the active scenario projection includes a
+projected `p.posterior` / `p.latency.posterior` view. The graph may currently
+carry `p._posteriorSlices` as a FE re-projection cache, but that cache is a
+graph convenience, not part of the scenario-pack contract.
+
 ## Model Variable Resolution
 
 **Location**: `modelVarsResolution.ts`
@@ -100,8 +147,7 @@ Model variables represent alternative probability estimates for a single edge. R
 1. `'manual'` -- user override (if present, wins)
 2. `'bayesian'` -- Bayesian posterior (if present AND gate_passed)
 3. `'analytic'` -- deterministic fitting (trusted default)
-4. `'analytic_be'` -- backend analytic variant (opt-in)
-5. `'best_available'` -- Bayesian if gated, else analytic (the default)
+4. `'best_available'` -- Bayesian if gated, else analytic (the default)
 
 ### Key functions
 

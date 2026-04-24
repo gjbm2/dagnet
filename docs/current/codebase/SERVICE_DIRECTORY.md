@@ -26,7 +26,7 @@ Quick-lookup table: what you need to do → which service owns it → where the 
 | Non-blocking pull | `nonBlockingPullService.ts` | `nonBlockingPullService.test.ts` |
 | Automation runs | `dailyRetrieveAllAutomationService.ts` | `dailyRetrieveAllAutomationService.test.ts` |
 | Integrity checks | `integrityCheckService.ts` | `integrityCheckService.*.test.ts` (7 files) |
-| FE/BE stats parity | `forecastingParityService.ts`, `beTopoPassService.ts` | `forecastingParity.*.test.ts` |
+| Stage-2 fetch enrichment | `fetchDataService.ts`, `lagHorizonsService.ts` | `conditionedForecastCompleteness.test.ts`, `windowCohortSemantics.paramPack.e2e.test.ts`, `headlessRetrieveAllParity.integration.test.ts` |
 | Bayes patch apply + cascade | `bayesPatchService.ts` | `bayesPatchServiceMerge.integration.test.ts`, `cliApplyPatch.test.ts` |
 | Bayes reconnect + automation submit | `bayesReconnectService.ts` | (no dedicated test yet) |
 | Daily fetch / runBayes flags | `dailyFetchService.ts` | `dailyFetchService.test.ts` |
@@ -39,7 +39,6 @@ Quick-lookup table: what you need to do → which service owns it → where the 
 | BE subject resolution (doc 31) | `analysis_subject_resolution.py`, `graph_select.py` | `test_analysis_subject_resolution.py`, `test_doc31_parity.py`, CLI `parity-test.sh` |
 | Forecast engine (doc 29) | `runner/forecast_state.py` (`_evaluate_cohort`, `compute_forecast_trajectory`), `runner/model_resolver.py` | `test_v2_v3_parity.py`, `test_forecast_state_cohort.py`, CLI `v2-v3-parity-test.sh`, `chart-graph-agreement-test.sh` |
 | Cohort maturity v3 | `runner/cohort_forecast_v3.py` | `test_v2_v3_parity.py`, CLI `v2-v3-parity-test.sh` |
-| BE topo pass (analytic fallback + model vars) | `runner/stats_engine.py`, `api_handlers.py:handle_stats_topo_pass` | `test_stats_engine_parity.py`, `test_be_topo_pass_parity.py` |
 | LOO-ELPD model adequacy | `bayes/compiler/loo.py`, FE: `bayesQualityTier.ts` | `test_loo.py` |
 | PPC calibration | `bayes/compiler/calibration.py` | (validated via `--diag` on synth graphs) |
 
@@ -50,4 +49,3 @@ Quick-lookup table: what you need to do → which service owns it → where the 
 | CLI disk loader | `src/cli/diskLoader.ts` | (smoke-tested manually) |
 | CLI aggregation + LAG | `src/cli/aggregate.ts` | (smoke-tested manually) |
 | CLI bootstrap (shared) | `src/cli/bootstrap.ts` | (smoke-tested manually) |
-| CLI topo pass (D18) | `src/cli/topoPass.ts` | (tested via CLI parity scripts) |

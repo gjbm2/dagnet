@@ -310,7 +310,7 @@ Based on codebase analysis:
    - ✅ MCMC support mentioned (`'mcmc'` method)
    - ✅ Bayesian complex support (`'bayesian-complex'` method)
    - ✅ Python backend integration for generic raw-aggregation enhancement (`lib/stats_enhancement.py`)
-   - ✅ Separate live analytic FE↔BE topo-pass path (`lib/runner/stats_engine.py` via `/api/lag/topo-pass`)
+   - ✅ Synchronous FE topo pass (`enhanceGraphLatencies`) as the analytic enrichment writer on every fetch
 
 2. **Hierarchical Bayesian Models** (Documented in `docs/current/project-lag/archive/`)
    - ✅ Hierarchical survival model design documented

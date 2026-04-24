@@ -25,9 +25,8 @@ dagnet-cli param-pack
     --get <key>              Extract a single value (bare scalar to stdout)
     --format, -f             Output format: yaml (default), json, csv
     --show-signatures        Show computed signatures per edge (diagnostic)
-    --diag-model-vars        Emit per-edge model_vars blocks (analytic + analytic_be) as JSON on
-                             stdout, for blind FE↔BE topo parity diffing (doc 45). Suppresses
-                             the normal param-pack output.
+    --diag-model-vars        Emit per-edge model_vars blocks as JSON on stdout.
+                             Suppresses the normal param-pack output.
     --bayes-vars <path>      Inject Bayesian posteriors from a .bayes-vars.json
                              sidecar into the graph in-memory before aggregation.
                              No disk writes.
@@ -112,23 +111,12 @@ async function runParamPack() {
   // browser, and is now removed.
 
   // --diag-model-vars: emit per-edge model_vars blocks as JSON, then exit.
-  // This is a blind FE↔BE topo parity diagnostic: both `analytic` (FE) and
-  // `analytic_be` (BE) entries are emitted per edge so an external diff
-  // can assert parity without having to re-run the pipeline. Doc 45 §Model
-  // var selection: the two sources must be interchangeable modulo tolerance
-  // on numeric fields.
   if (flags.diagModelVars) {
-    const perEdge: Record<string, {
-      analytic: unknown | null;
-      analytic_be: unknown | null;
-    }> = {};
+    const perEdge: Record<string, unknown[]> = {};
     for (const edge of populatedGraph.edges || []) {
       const key = (edge as any).uuid || (edge as any).id;
       if (!key) continue;
-      const modelVars = (edge as any).p?.model_vars ?? [];
-      const analytic = modelVars.find((v: any) => v?.source === 'analytic') ?? null;
-      const analyticBe = modelVars.find((v: any) => v?.source === 'analytic_be') ?? null;
-      perEdge[key] = { analytic, analytic_be: analyticBe };
+      perEdge[key] = (edge as any).p?.model_vars ?? [];
     }
     process.stdout.write(JSON.stringify({ model_vars_by_edge: perEdge }, null, 2) + '\n');
     return;

@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 #
-# Hydrate a graph: run FE aggregation + promotion + BE topo pass,
-# write the populated graph back to disk.
+# Hydrate a graph: run the shared Stage 2 enrichment pipeline
+# (FE aggregation + FE topo pass + promotion + CF), write the populated
+# graph back to disk.
 #
 # Produces a graph JSON equivalent to what the FE would have after
-# opening the graph and running the full Stage 2 topo pass. Required
+# opening the graph and running the full Stage 2 pipeline. Required
 # for parity testing against synth graphs.
 #
 # Usage:

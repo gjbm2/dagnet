@@ -90,7 +90,6 @@ const BAND_PATTERN_ICONS: Record<BandPattern, string> = {
 const SOURCE_BAND_PATTERNS: Record<string, BandPattern> = {
   bayesian: 'diagonal',
   analytic: 'stipple',
-  analytic_be: 'reverse_diagonal',
 };
 
 // ─── Builders ───────────────────────────────────────────────────────────────
@@ -650,12 +649,11 @@ export function buildCohortMaturityEChartsOption(
     // lines and bands. Source is distinguished by dash pattern within a
     // scenario's colour.
     const MODEL_DASH: Record<string, number[]> = {
-      bayesian:    [3, 3],
-      analytic:    [12, 5, 3, 5],
-      analytic_be: [12, 4, 3, 4, 3, 4],
+      bayesian: [3, 3],
+      analytic: [12, 5, 3, 5],
     };
     const MODEL_LABEL: Record<string, string> = {
-      bayesian: 'Bayesian', analytic: 'Analytic (FE)', analytic_be: 'Analytic (BE)',
+      bayesian: 'Bayesian', analytic: 'Analytic',
     };
     // In 'f' mode, always show the model curve — it IS the chart content.
     const hasForecastOnlyScenario = Array.from(byScenario.keys()).some(sid => {
@@ -801,9 +799,8 @@ export function buildCohortMaturityEChartsOption(
       const sourceModelCurves = entry?.sourceModelCurves;
       if (sourceModelCurves && typeof sourceModelCurves === 'object') {
         const sourceStyles: Record<string, { dash: number[]; name: string; settingKey: string; z: number }> = {
-          analytic:    { dash: MODEL_DASH.analytic,    name: 'Analytic (FE)', settingKey: 'show_model_analytic',    z: 10 },
-          analytic_be: { dash: MODEL_DASH.analytic_be, name: 'Analytic (BE)', settingKey: 'show_model_analytic_be', z: 10 },
-          bayesian:    { dash: MODEL_DASH.bayesian,    name: 'Bayesian',      settingKey: 'show_model_bayesian',    z: 11 },
+          analytic: { dash: MODEL_DASH.analytic, name: 'Analytic',  settingKey: 'show_model_analytic', z: 10 },
+          bayesian: { dash: MODEL_DASH.bayesian, name: 'Bayesian',  settingKey: 'show_model_bayesian', z: 11 },
         };
         for (const [srcName, srcData] of Object.entries(sourceModelCurves)) {
           const style = sourceStyles[srcName];

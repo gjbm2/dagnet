@@ -4,7 +4,6 @@ import { retrieveAllSlicesPlannerService } from './retrieveAllSlicesPlannerServi
 import { fetchDataService, type FetchItem, persistGraphMasteredLatencyToParameterFiles } from './fetchDataService';
 import { dataOperationsService } from './dataOperationsService';
 import { fileRegistry } from '../contexts/TabContext';
-import { compareModelVarsSources, FORECASTING_PARALLEL_RUN } from './forecastingParityService';
 
 export type LagHorizonsRecomputeMode = 'current' | 'global';
 
@@ -229,16 +228,6 @@ class LagHorizonsService {
         setGraph: args.setGraph,
         parentLogId: opId,
       });
-
-      // Parity comparison: compare analytic vs analytic_be model_vars entries.
-      if (FORECASTING_PARALLEL_RUN) {
-        try {
-          const g = args.getGraph();
-          if (g) compareModelVarsSources(g);
-        } catch (e: any) {
-          console.warn('[lagHorizonsService] Parity comparison failed (non-fatal):', e?.message || e);
-        }
-      }
 
       sessionLogService.endOperation(opId, 'success', 'Recomputed + persisted LAG horizons');
     } catch (e: any) {

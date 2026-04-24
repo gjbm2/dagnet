@@ -37,8 +37,7 @@ export interface CLIContext {
     sessionLog: boolean;
     showSignatures: boolean;
     allowExternalFetch: boolean;
-    /** Emit per-edge model_vars blocks (analytic + analytic_be) as JSON on stdout,
-     *  intended for blind FE↔BE topo parity diffing (doc 45). */
+    /** Emit per-edge model_vars blocks as JSON on stdout for diagnostics. */
     diagModelVars: boolean;
   };
 }

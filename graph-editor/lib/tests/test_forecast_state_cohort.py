@@ -669,7 +669,7 @@ class TestSubsetConditioningBlend:
 
     Covers:
     - `compute_forecast_summary` provenance + blended conditioned scalars.
-    - Blend skip on analytic_be source (`source_query_scoped`).
+    - Blend skip on analytic source (`source_query_scoped`).
     - Blend skip when n_effective is absent (`n_effective_missing`).
     - Boundary behaviour: r→0 ≈ fully conditioned; r=1 ≈ aggregate.
     """
@@ -715,10 +715,10 @@ class TestSubsetConditioningBlend:
         assert cf.blend_skip_reason is None
 
     def test_summary_blend_skip_query_scoped(self):
-        """analytic_be source → blend skipped with source_query_scoped."""
+        """analytic source → blend skipped with source_query_scoped."""
         from runner.forecast_state import compute_forecast_summary
         _, resolved = self._make_edge_and_resolve(n_effective=100.0)
-        resolved.source = 'analytic_be'  # toggles alpha_beta_query_scoped=True
+        resolved.source = 'analytic'  # toggles alpha_beta_query_scoped=True
         cohorts = [(20.0, 50)]
         evidence = [(20.0, 50, 15)]
 

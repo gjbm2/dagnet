@@ -26,7 +26,6 @@ import {
 import { isolateSlice, extractSliceDimensions } from './sliceIsolation';
 import { resolveMECEPartitionForImplicitUncontexted } from './meceSliceService';
 import { fileRegistry } from '../contexts/TabContext';
-import { compareModelVarsSources, FORECASTING_PARALLEL_RUN } from './forecastingParityService';
 import { parseConstraints } from '../lib/queryDSL';
 import { resolveRelativeDate } from '../lib/dateFormat';
 import type { Graph, DateRange } from '../types';
@@ -122,7 +121,7 @@ export interface FetchOptions {
   suppressBatchToast?: boolean;
 
   /**
-   * When true, suppress the 5-step fetch-compute pipeline op (plan → fetch → FE → BE → CF).
+   * When true, suppress the 4-step fetch-compute pipeline op (plan → fetch → FE → CF).
    * Intended for batch callers (e.g. regenerateAllLive looping visible scenarios) that
    * register their own wrapping op and don't want N per-scenario pipeline indicators
    * stacking up in the operation registry. When set alongside `scenarioLabel`, Stage 2
@@ -148,10 +147,10 @@ export interface FetchOptions {
 
   /**
    * When true, Stage-2 awaits its fire-and-forget background handlers
-   * (BE topo pass `.then()`, conditioned-forecast slow-path `.then()`)
-   * before resolving. The browser wants fast first render and async
-   * catch-up (leave this false). The CLI wants deterministic final
-   * state for param pack / parity diagnostics (set this true).
+   * (conditioned-forecast slow-path `.then()`) before resolving. The
+   * browser wants fast first render and async catch-up (leave this
+   * false). The CLI wants deterministic final state for param pack /
+   * diagnostics (set this true).
    */
   awaitBackgroundPromises?: boolean;
 
@@ -1140,7 +1139,7 @@ export function computeAndApplyInboundN(
 // Fetch-compute pipeline indicator
 //
 // Every fetch cycle (cache hit included) registers a single parent op with
-// five sub-steps that step through as the pipeline progresses, so the user
+// four sub-steps that step through as the pipeline progresses, so the user
 // always has visibility into what's happening. The final label reflects
 // the conditioned-forecast verdict ("conditioned" vs "priors only") plus
 // total elapsed ms.
@@ -1149,20 +1148,18 @@ export function computeAndApplyInboundN(
 //   plan   — planner has built the item list (marked complete at entry).
 //   fetch  — per-item fetch loop (detail shows "n/total" during the loop).
 //   fe     — FE topo pass (enhanceGraphLatencies) synchronous.
-//   be     — BE topo pass (runBeTopoPass + apply) fire-and-forget.
 //   cf     — Conditioned forecast (runConditionedForecast + apply) —
 //            races 500ms, final label reports "conditioned" / "priors only".
 // ────────────────────────────────────────────────────────────────────────
 
-export type PipelineStepId = 'plan' | 'fetch' | 'fe' | 'be' | 'cf';
+export type PipelineStepId = 'plan' | 'fetch' | 'fe' | 'cf';
 export type PipelineStepStatus = 'pending' | 'running' | 'complete' | 'error';
 
-export const PIPELINE_STEP_ORDER: PipelineStepId[] = ['plan', 'fetch', 'fe', 'be', 'cf'];
+export const PIPELINE_STEP_ORDER: PipelineStepId[] = ['plan', 'fetch', 'fe', 'cf'];
 export const PIPELINE_STEP_LABELS: Record<PipelineStepId, string> = {
   plan: 'Fetch plan built',
   fetch: 'Fetching data',
   fe: 'FE analytics',
-  be: 'BE analytics',
   cf: 'Producing forecast',
 };
 
@@ -1225,11 +1222,6 @@ export function completePipelineOp(
 // forecast closure captures the current generation and discards its result
 // if a newer fetch cycle has started (prevents stale p.mean clobbering).
 let _conditionedForecastGeneration = 0;
-
-// Generation counter for BE topo pass (doc 45 §Delivery model): BE topo fires
-// alongside FE as a model-var generator. Stale results are discarded so a
-// slow response from a previous fetch cycle cannot clobber the current graph.
-let _beTopoPassGeneration = 0;
 
 export async function fetchItems(
   items: FetchItem[],
@@ -1317,7 +1309,7 @@ export async function fetchItems(
   // Registered on every fetch cycle (including cache hits). The heavy-fetch
   // `progressToastId` op above keeps its existing behaviour — per-item
   // progress bar during Amplitude fetches. This pipeline op is additive:
-  // it shows the macro pipeline stages (plan → fetch → FE → BE → CF) so
+  // it shows the macro pipeline stages (plan → fetch → FE → CF) so
   // the user always has visibility into what's happening, including for
   // cached fetches where the batch-fetch op doesn't register.
   // Pipeline indicator: batch callers (regenerateAllLive) set
@@ -1656,16 +1648,16 @@ export async function runStage2EnhancementsAndInboundN(
   dsl: string,
   batchLogId?: string,
   // Optional getter for the freshest graph; used so fire-and-forget
-  // callbacks (BE topo pass) land on top of anything applied meanwhile
+  // callbacks land on top of anything applied meanwhile
   // (e.g. the conditioned forecast's p.mean).
   getUpdatedGraph?: () => Graph | null,
   // Optional: when true, await all fire-and-forget background handlers
-  // (BE topo pass .then(), CF slow-path .then()) before returning.
+  // (CF slow-path .then()) before returning.
   // The browser wants fire-and-forget (fast first render, async catch-up).
   // The CLI wants deterministic final output, so it sets this to true.
   awaitBackgroundPromises?: boolean,
   // Optional: id of the fetch-compute pipeline op registered by fetchItems.
-  // When provided, this function updates the FE / BE / CF sub-steps as
+  // When provided, this function updates the FE / CF sub-steps as
   // each pass fires/completes, and completes the parent op at CF
   // resolution. When undefined (direct callers like retrieveAllSlices
   // that don't use fetchItems), sub-step updates are no-ops.
@@ -2114,27 +2106,8 @@ export async function runStage2EnhancementsAndInboundN(
             })),
           });
 
-          // Stash FE topo pass outputs so the BE topo pass can log a complete
-          // parity fixture (BE inputs + FE outputs) via console mirroring.
-          if (import.meta.env?.DEV && typeof window !== 'undefined') {
-            (window as any).__feTopoFixtureOutputs = {
-              edges_processed: lagResult.edgesProcessed,
-              edges_with_lag: lagResult.edgesWithLAG,
-              edge_values: lagResult.edgeValues.map(v => ({
-                edge_uuid: v.edgeUuid, conditional_index: v.conditionalIndex ?? null,
-                t95: v.latency.t95, path_t95: v.latency.path_t95, completeness: v.latency.completeness,
-                mu: v.latency.mu, sigma: v.latency.sigma,
-                onset_delta_days: v.latency.promoted_onset_delta_days ?? null,
-                median_lag_days: v.latency.median_lag_days ?? null, mean_lag_days: v.latency.mean_lag_days ?? null,
-                path_mu: v.latency.path_mu ?? null, path_sigma: v.latency.path_sigma ?? null,
-                path_onset_delta_days: v.latency.path_onset_delta_days ?? null,
-                blended_mean: v.blendedMean ?? null,
-              })),
-            };
-          }
-          
           // ════════════════════════════════════════════════════════════════
-          // FE + BE TOPO PASS + CONDITIONED FORECAST APPLICATION
+          // FE TOPO PASS + CONDITIONED FORECAST APPLICATION
           // (doc 45 §Delivery model, doc 50 §3.2, STATS_SUBSYSTEMS.md,
           //  FE_BE_STATS_PARALLELISM.md)
           //
@@ -2146,13 +2119,6 @@ export async function runStage2EnhancementsAndInboundN(
           //    `lagResult.edgeValues` to be non-empty — if the query-scoped
           //    YAML evidence is absent, FE has nothing to apply.
           //
-          //  - BE topo pass (fire-and-forget). A model-var generator that
-          //    populates `model_vars[analytic_be]`; promotion decides which
-          //    source's latency params land on the edge. MUST NOT overwrite
-          //    `p.latency.*` directly. Consults the snapshot DB server-side,
-          //    so it does NOT depend on YAML-aggregated evidence being
-          //    present. Fires on every query.
-          //
           //  - Conditioned forecast (races a 500ms fast deadline). The
           //    authoritative writer of `p.mean` / `p.sd` /
           //    `latency.completeness*`. Reads the snapshot DB directly per
@@ -2161,16 +2127,14 @@ export async function runStage2EnhancementsAndInboundN(
           //    every edge with a prior or snapshot evidence, otherwise a
           //    structured `skipped_edges` entry. No silent drops.
           //
-          // The BE topo pass and CF both fire on every query. Earlier code
-          // gated them behind `lagResult.edgeValues.length > 0`, which
-          // meant a narrow cohort (or any query that turned up no YAML
-          // evidence) silently disabled the two subsystems that would have
-          // answered it correctly from the snapshot DB. That gating was
-          // pathological and contradicted doc 50's "no silent drops"
-          // invariant; it is removed here.
+          // Conditioned forecast fires on every query. Earlier code gated it
+          // behind `lagResult.edgeValues.length > 0`, which meant a narrow
+          // cohort (or any query that turned up no YAML evidence) silently
+          // disabled the subsystem that would have answered it correctly from
+          // the snapshot DB. That gating was pathological and contradicted
+          // doc 50's "no silent drops" invariant; it is removed here.
           //
-          // Generation counters (_beTopoPassGeneration,
-          // _conditionedForecastGeneration) guard against a stale response
+          // Generation counter (_conditionedForecastGeneration) guards against a stale response
           // from a previous fetch cycle clobbering the current graph.
           // ════════════════════════════════════════════════════════════════
           const updateManager = new UpdateManager();
@@ -2278,31 +2242,6 @@ export async function runStage2EnhancementsAndInboundN(
 
               return nextGraph;
             };
-
-          // ── Fire BE topo pass (model var generator, fire-and-forget) ──
-          // Fires on every query. Independent of FE LAG output — consults
-          // the snapshot DB server-side.
-          updatePipelineStep('be', 'running');
-          const { runBeTopoPass } = await import('./beTopoPassService');
-          const beGen = ++_beTopoPassGeneration;
-          const beStartTime = Date.now();
-          if (batchLogId) {
-            sessionLogService.addChild(batchLogId, 'info', 'BE_TOPO_PASS',
-              `BE topo pass started for ${feEdgeValues.length} edges (gen ${beGen})`,
-            );
-          }
-          const bePromise = runBeTopoPass(
-            finalGraph, paramLookup, queryDateForLAG, lagHelpers, lagCohortWindow,
-            lagSliceSource, activeEdgesForLAG,
-          ).catch(e => {
-            console.warn('[fetchDataService] BE topo pass failed:', e);
-            if (batchLogId) {
-              sessionLogService.addChild(batchLogId, 'error', 'BE_TOPO_PASS',
-                `BE topo pass failed: ${e?.message || e}`,
-              );
-            }
-            return null;
-          });
 
           // CF must consume the FE-authored graph state even while the UI apply
           // is still held behind the 500ms race. Otherwise the request graph can
@@ -2450,104 +2389,8 @@ export async function runStage2EnhancementsAndInboundN(
               setGraph(nextGraph);
               console.log(`[fetchDataService] FE topo pass: applied ${edgeValues.length} edges via UpdateManager`);
 
-              if (FORECASTING_PARALLEL_RUN) {
-                compareModelVarsSources(nextGraph);
-              }
-
               return nextGraph;
             };
-
-          // ── Helper: apply BE topo result into model_vars[analytic_be] + rerun promotion ──
-          // BE topo does NOT write p.latency.* directly — only model_vars[analytic_be].
-          // Promotion decides which source wins based on model_source_preference.
-          const applyBeTopoResult = async (
-            graph: any,
-            beResults: NonNullable<Awaited<ReturnType<typeof runBeTopoPass>>>,
-          ): Promise<any> => {
-            const nextGraph = structuredClone(graph);
-            const { upsertModelVars, applyPromotion } = await import('./modelVarsResolution');
-
-            for (const beEntry of beResults) {
-              const edge = nextGraph.edges?.find((e: any) => e.uuid === beEntry.edgeUuid || e.id === beEntry.edgeUuid);
-              if (!edge) continue;
-              const currentP = beEntry.conditionalIndex != null
-                ? edge.conditional_p?.[beEntry.conditionalIndex]?.p
-                : edge.p;
-              if (!currentP) continue;
-
-              if (beEntry.entry.latency) {
-                const prevLatency =
-                  currentP.model_vars?.find((v: any) => v.source === 'analytic_be')?.latency ||
-                  currentP.model_vars?.find((v: any) => v.source === 'analytic')?.latency;
-                beEntry.entry = {
-                  ...beEntry.entry,
-                  latency: mergeModelVarsLatencyPreservingCanonicalEdgeLatency(
-                    beEntry.entry.latency as Record<string, any>,
-                    prevLatency as Record<string, any> | undefined,
-                  ),
-                };
-              }
-
-              if (beEntry.conditionalIndex != null) {
-                const cp = edge.conditional_p?.[beEntry.conditionalIndex];
-                if (cp?.p) upsertModelVars(cp.p, beEntry.entry);
-              } else if (edge.p) {
-                upsertModelVars(edge.p, beEntry.entry);
-              }
-            }
-
-            for (const edge of (nextGraph.edges ?? []) as any[]) {
-              if (edge.p?.model_vars?.length) {
-                applyPromotion(edge.p, (nextGraph as any).model_source_preference);
-              }
-            }
-
-            if (FORECASTING_PARALLEL_RUN) {
-              compareModelVarsSources(nextGraph);
-            }
-
-            return nextGraph;
-          };
-
-          // ── Helper: log FE→BE parity (observational only) ──
-          const logParity = (
-            graph: any,
-            feValues: typeof feEdgeValues,
-            beResults: NonNullable<Awaited<ReturnType<typeof runBeTopoPass>>>,
-          ) => {
-            if (!batchLogId) return;
-            const fmt = (v: number | null | undefined, pct = true) =>
-              v != null ? (pct ? `${(v * 100).toFixed(1)}%` : v.toFixed(3)) : '—';
-
-            for (const be of beResults) {
-              if (!be.beScalars) continue;
-              const feVal = feValues.find(f =>
-                f.edgeUuid === be.edgeUuid &&
-                f.conditionalIndex === (be.conditionalIndex ?? undefined)
-              );
-              if (!feVal) continue;
-
-              const edge = graph.edges?.find((e: any) => e.uuid === be.edgeUuid || e.id === be.edgeUuid);
-              const edgeId = edge?.p?.id || be.edgeUuid.substring(0, 12);
-              const bs = be.beScalars;
-
-              sessionLogService.addChild(batchLogId, 'info', 'FE_BE_PARITY',
-                `${edgeId}: completeness FE=${fmt(feVal.latency.completeness)} → BE=${fmt(bs.completeness)}` +
-                (bs.completeness_stdev != null ? ` ±${fmt(bs.completeness_stdev)}` : '') +
-                ` | p.mean FE=${fmt(feVal.blendedMean)} → BE=${fmt(bs.blended_mean)}` +
-                ` | p.sd FE=${fmt(feVal.latency.p_sd)} → BE=${fmt(bs.p_sd)}`,
-                undefined,
-                {
-                  edge_id: edgeId,
-                  fe: { completeness: feVal.latency.completeness, p_mean: feVal.blendedMean, p_sd: feVal.latency.p_sd },
-                  be: {
-                    completeness: bs.completeness, completeness_stdev: bs.completeness_stdev,
-                    p_mean: bs.blended_mean, p_sd: bs.p_sd,
-                  },
-                },
-              );
-            }
-          };
 
           // ── Helper: merge conditioned forecast p.mean into FE edge values ──
           // When the conditioned forecast wins the 500ms race, its p.mean
@@ -2631,8 +2474,8 @@ export async function runStage2EnhancementsAndInboundN(
                   finaliseCfToast(results, 'empty');
                   return;
                 }
-                // Apply on top of the freshest graph so BE topo's model_vars
-                // upsert (if it arrived meanwhile) is preserved.
+                // Apply on top of the freshest graph so any mutations that
+                // landed meanwhile are preserved.
                 const latestGraph = getUpdatedGraph?.() ?? finalGraph;
                 if (!latestGraph) {
                   finaliseCfToast(results, 'empty');
@@ -2730,59 +2573,6 @@ export async function runStage2EnhancementsAndInboundN(
             }
             attachCfSlowPathHandler();
           }
-
-          // ── BE topo pass result (always, independent of FE and CF) ──
-          // When BE topo resolves, upsert analytic_be entries and rerun
-          // promotion. Fire-and-forget: a stale response from a previous
-          // fetch cycle is discarded via the generation counter. We read
-          // the latest graph so the upsert lands on top of anything
-          // applied meanwhile (e.g. the conditioned forecast's p.mean).
-          backgroundPromises.push(
-            bePromise.then(async beResults => {
-              if (beGen !== _beTopoPassGeneration) {
-                if (batchLogId) {
-                  sessionLogService.addChild(batchLogId, 'warning', 'BE_TOPO_PASS',
-                    `BE topo pass result discarded (stale gen ${beGen} < ${_beTopoPassGeneration})`);
-                }
-                updatePipelineStep('be', 'error', `discarded (stale)`);
-                return;
-              }
-              const beElapsed = Date.now() - beStartTime;
-              if (!beResults || beResults.length === 0) {
-                if (batchLogId) {
-                  sessionLogService.addChild(batchLogId, 'warning', 'BE_TOPO_PASS',
-                    `BE topo pass returned ${beResults === null ? 'null (failed)' : 'empty'} after ${beElapsed}ms`);
-                }
-                updatePipelineStep('be', 'error',
-                  `${beResults === null ? 'failed' : 'empty'}, ${beElapsed.toLocaleString()}ms`);
-                return;
-              }
-              const latestGraph = getUpdatedGraph?.() ?? finalGraph;
-              if (!latestGraph) {
-                updatePipelineStep('be', 'error', 'no graph');
-                return;
-              }
-              const updated = await applyBeTopoResult(latestGraph, beResults);
-              setGraph(updated);
-              logParity(updated, feEdgeValues, beResults);
-              if (batchLogId) {
-                sessionLogService.addChild(batchLogId, 'info', 'BE_TOPO_PASS',
-                  `BE topo pass model vars applied in ${beElapsed}ms`,
-                  undefined,
-                  { edges: beResults.map(be => ({ uuid: be.edgeUuid?.slice(0, 12), p_mean: be.beScalars?.blended_mean, p_sd: be.beScalars?.p_sd, completeness: be.beScalars?.completeness, completeness_stdev: be.beScalars?.completeness_stdev })) });
-              }
-              updatePipelineStep('be', 'complete',
-                `${beResults.length} edge${beResults.length !== 1 ? 's' : ''}, ${beElapsed.toLocaleString()}ms`);
-            }).catch(e => {
-              // bePromise's .catch converts rejections to null; this guards the handler itself.
-              console.warn('[fetchDataService] BE topo pass apply failed:', e);
-              if (batchLogId) {
-                sessionLogService.addChild(batchLogId, 'error', 'BE_TOPO_PASS',
-                  `BE topo pass apply failed: ${e?.message || e}`);
-              }
-              updatePipelineStep('be', 'error', `apply failed`);
-            })
-          );
 
           // If the caller (CLI) wants deterministic final state, wait
           // for the fire-and-forget background handlers to settle.
@@ -2884,10 +2674,9 @@ export async function runStage2EnhancementsAndInboundN(
             }
           }
 
-          // Conditioned forecast and BE topo pass are fired + handled
-          // inside the `if (lagResult.edgeValues.length > 0)` block above
-          // (doc 45 §Delivery model): conditioned forecast races 500ms,
-          // BE topo populates model_vars[analytic_be].
+          // Conditioned forecast is fired + handled inside the
+          // `if (lagResult.edgeValues.length > 0)` block above
+          // (doc 45 §Delivery model): conditioned forecast races 500ms.
         }
         
         // ═══════════════════════════════════════════════════════════════════
@@ -2946,9 +2735,8 @@ export async function runStage2EnhancementsAndInboundN(
           const state = _pipelineStates.get(pipelineOpId)!;
           const feDone = state[PIPELINE_STEP_ORDER.indexOf('fe')].status !== 'pending';
           if (!feDone) {
-            // No latency items → FE/BE/CF were no-ops for this cycle.
+            // No latency items → FE/CF were no-ops for this cycle.
             setPipelineStep(pipelineOpId, 'fe', 'complete', 'n/a');
-            setPipelineStep(pipelineOpId, 'be', 'complete', 'n/a');
             setPipelineStep(pipelineOpId, 'cf', 'complete', 'n/a');
             const totalMs = pipelineStartMs != null
               ? (Date.now() - pipelineStartMs).toLocaleString()
@@ -3079,6 +2867,8 @@ export function selectLatencyToApplyForTopoPass(
         t95?: number;
         completeness?: number;
         onset_delta_days?: number;
+        mu?: number;
+        sigma?: number;
       }
     | undefined,
   preserveLatencySummaryFromFile: boolean

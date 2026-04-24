@@ -1279,7 +1279,6 @@ def test_v3_handler_samples_only_visible_source_curves(monkeypatch):
         _x_node_id, _y_node_id, graph_preference = topo
         scale = {
             'analytic': 0.2,
-            'analytic_be': 0.3,
             'bayesian': 0.4,
             None: 0.5,
         }.get(graph_preference, 0.1)
@@ -1393,17 +1392,15 @@ def test_v3_handler_samples_only_visible_source_curves(monkeypatch):
         }],
         'display_settings': {
             'show_model_promoted': True,
-            'show_model_analytic': False,
-            'show_model_analytic_be': True,
+            'show_model_analytic': True,
             'show_model_bayesian': True,
             'tau_extent': '2',
         },
     })
     visible_subject = result_visible.get('result') or result_visible
     visible_sources = visible_subject.get('source_model_curves', {})
-    assert set(visible_sources.keys()) == {'analytic_be'}
-    assert 'analytic' not in execution_prefs
-    assert execution_prefs.count('analytic_be') == 1
+    assert set(visible_sources.keys()) == {'analytic'}
+    assert execution_prefs.count('analytic') == 1
     assert execution_prefs.count('bayesian') >= 1
 
     execution_prefs.clear()
@@ -1419,9 +1416,8 @@ def test_v3_handler_samples_only_visible_source_curves(monkeypatch):
     })
     legacy_subject = result_legacy.get('result') or result_legacy
     legacy_sources = legacy_subject.get('source_model_curves', {})
-    assert set(legacy_sources.keys()) == {'analytic', 'analytic_be', 'bayesian'}
+    assert set(legacy_sources.keys()) == {'analytic', 'bayesian'}
     assert 'analytic' in execution_prefs
-    assert 'analytic_be' in execution_prefs
     assert execution_prefs.count('bayesian') >= 1
 
 

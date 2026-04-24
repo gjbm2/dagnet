@@ -19,6 +19,10 @@ Stores only modified values, not the full graph:
 - `edges`: Map of edge ID --> `EdgeParamDiff` (probability, weights, costs)
 - `nodes`: Map of node ID --> `NodeParamDiff` (entry weights, case variants, costs)
 
+Scenario params are sparse by design. They are the compositor's ordered delta
+surface, not persisted full scenario graphs and not copies of the deeper
+file-backed parameter inventory.
+
 ### Scenario
 
 - `id`: unique identifier
@@ -32,6 +36,24 @@ Stores only modified values, not the full graph:
   - Provenance stamps (`deps_v1`, `deps_signature_v1`) for staleness detection
 
 **Storage**: IndexedDB (`db.scenarios`) indexed by `fileId`, keyed by `scenarioId`.
+
+### Projection boundary between files, graph, and scenarios
+
+The scenario system sits on top of a broader three-layer projection model.
+
+Parameter files retain depth: history, retrieval metadata, commissioned
+Bayesian slice inventories, fit history, and other rehydration material.
+Scenarios do not persist that full inventory.
+
+The graph JSON combines graph structure with the current projected state for
+`current`. That design is intentional: one JSON can describe the entire active
+working projection without requiring a second object for Current.
+
+User scenarios store ordered param-pack deltas only. The compositor reapplies
+those deltas in sequence, so application order is semantically load-bearing. A
+scenario object is therefore not a full graph snapshot; it is the smallest
+overlay needed to reconstruct that scenario's projected state on top of the
+composed baseline.
 
 ## Scenario Types
 
@@ -55,7 +77,9 @@ Stores only modified values, not the full graph:
 
 ### Layer stacking
 
-Scenarios compose additively via deep merge. Later overlays override earlier ones. Null values remove keys.
+Scenarios compose additively via deep merge. Later overlays override earlier
+ones. Null values remove keys. The order of application is semantically
+load-bearing because each scenario is a delta relative to the layers below it.
 
 `CompositionService.getComposedParamsForLayer()` is the single source of truth for "what are the params for layer X?":
 - Special layers: `'base'` returns baseParams, `'current'` returns currentParams
@@ -121,7 +145,14 @@ The effect calls `regenerateAllLive(undefined, visibleOrder)` followed by `sched
 
 ### What each regeneration actually does
 
-`regenerateScenario` deep-copies the composed baseline graph, computes the scenario's `effectiveFetchDSL` (Base + lower live scenarios + scenario own DSL — see `scenarioRegenerationService.computeEffectiveFetchDSL`), builds a plan, optionally executes it against source, then calls `fetchOrchestratorService.refreshFromFilesWithRetries` with `skipStage2: false`. That drops into `fetchDataService.fetchItems` → Stage 2 → FE topo + BE topo + BE CF for that scenario's graph and DSL. **CF therefore runs once per scenario per regeneration** — visible live scenarios each receive their own CF pass conditioned on their own query window. Current is fetched independently by `useDSLReaggregation` when its DSL changes; scenarios don't re-fetch on Current-DSL change because their effective DSL inherits from Base, not Current, and their cached `meta.lastEffectiveDSL` remains valid. See `STATS_SUBSYSTEMS.md` §3.4 and `FE_BE_STATS_PARALLELISM.md` for the Stage 2 orchestration detail.
+`regenerateScenario` deep-copies the composed baseline graph, computes the scenario's `effectiveFetchDSL` (Base + lower live scenarios + scenario own DSL — see `scenarioRegenerationService.computeEffectiveFetchDSL`), builds a plan, optionally executes it against source, then calls `fetchOrchestratorService.refreshFromFilesWithRetries` with `skipStage2: false`. That drops into `fetchDataService.fetchItems` → Stage 2 → FE topo + BE CF for that scenario's graph and DSL. **CF therefore runs once per scenario per regeneration** — visible live scenarios each receive their own CF pass conditioned on their own query window. Current is fetched independently by `useDSLReaggregation` when its DSL changes; scenarios don't re-fetch on Current-DSL change because their effective DSL inherits from Base, not Current, and their cached `meta.lastEffectiveDSL` remains valid. See `STATS_SUBSYSTEMS.md` §3.3 and `FE_BE_STATS_PARALLELISM.md` for the Stage 2 orchestration detail.
+
+After Stage 2 finishes for that temporary working graph, `ScenariosContext`
+extracts a fresh diff param pack against the composed baseline and persists
+that pack back onto the scenario. The temporary graph itself is not stored as
+scenario state. This means scenario packs must be sufficient to recreate the
+scenario's projected state later, while the deeper file-backed inventory
+continues to live in parameter files.
 
 ### Progress indicator for bulk regeneration
 
@@ -209,6 +240,9 @@ Central React context for all scenario operations:
 4. **Provenance tracking**: dependency signatures enable automatic staleness detection
 5. **HRN resolution**: user-friendly names resolve to UUIDs via graph context
 6. **Composition as deep merge**: later overlays override earlier ones; null removes keys
+7. **Graph = structure + current projection**: Current lives on the graph JSON rather than in a separate scenario object
+8. **Scenarios = ordered deltas**: user scenarios are replayable overlays, not stored graph snapshots
+9. **Depth stays in files**: scenario packs carry scenario-specific projection state, while deeper histories and slice inventories remain file-backed
 
 ## Key Files
 

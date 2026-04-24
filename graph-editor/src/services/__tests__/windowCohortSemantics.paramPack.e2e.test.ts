@@ -28,12 +28,6 @@ import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as yaml from 'js-yaml';
 
-// Stub the BE topo pass so tests exercise the FE-only blend path
-// regardless of whether a Python dev server is running.
-vi.mock('../beTopoPassService', () => ({
-  runBeTopoPass: async () => [],
-}));
-
 import { fetchItem, fetchDataService, createFetchItem, type FetchItem } from '../fetchDataService';
 import { extractParamsFromGraph } from '../GraphParamExtractor';
 import { flattenParams } from '../ParamPackDSLService';

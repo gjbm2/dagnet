@@ -68,9 +68,9 @@ export async function aggregateAndPopulateGraph(
 
   // Run the exact same fetch pipeline the browser uses.
   // awaitBackgroundPromises: true — the CLI wants deterministic final
-  // state before returning so param pack / --diag-model-vars see the
-  // final result of BE topo + CF (including the CF slow-path overwrite
-  // of p.mean). The browser leaves this false for fast first render.
+  // state before returning so param pack / diagnostics see the final
+  // result of CF (including the CF slow-path overwrite of p.mean).
+  // The browser leaves this false for fast first render.
   try {
     const results = await fetchItems(
       items,

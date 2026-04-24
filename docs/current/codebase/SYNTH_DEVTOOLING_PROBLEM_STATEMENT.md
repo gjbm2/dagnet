@@ -22,13 +22,13 @@ A synth graph goes through these stages to become a usable test fixture:
 | 2. Simulation | `synth_gen.py --write-files` | Monte Carlo simulation → snapshot rows with placeholder hashes | Yes |
 | 3. Hash computation | `synth_gen.py --write-files` | Calls FE CLI per DSL clause → authoritative `core_hash` values | Yes |
 | 4. DB write | `synth_gen.py --write-files` | Rehashes rows, writes to snapshot DB, writes param files | Yes |
-| 5. Enrichment (topo pass) | `hydrate.sh` | FE aggregation + promotion + BE topo pass → `model_vars`, posteriors, forecast mean | **Manual** |
+| 5. Enrichment (Stage 2) | `hydrate.sh` | FE aggregation + FE topo pass + promotion + CF → `model_vars`, posteriors, forecast mean | **Manual** |
 | 6. Index rebuild | `synth_gen.py` (partial) | Updates `parameters-index.yaml` | Partial (`nodes-index.yaml` not handled) |
 | 7. Verification | `synth_gen.py` | Checks truth hash + row count in DB | **Shallow** |
 
 ### What's missing
 
-**No enrichment automation.** `synth_gen.py` explicitly clears analytical params (`forecast`, `mean`, `evidence`, posteriors) from the graph JSON (line 2810-2815). These are populated by `hydrate.sh`, which must be run separately, requires the Python BE on localhost:9000, and is not called by any test setup. Tests that need `model_vars` (e.g. `test_be_topo_pass_parity.py`) simply skip with a message telling the developer to run a manual command.
+**No enrichment automation.** `synth_gen.py` explicitly clears analytical params (`forecast`, `mean`, `evidence`, posteriors) from the graph JSON (line 2810-2815). These are populated by `hydrate.sh`, which must be run separately, requires the Python BE on localhost:9000, and is not called by any test setup. Tests that need `model_vars` simply skip with a message telling the developer to run a manual command.
 
 **No declared fixture requirements.** Tests cannot express "I need synth-diamond-test with valid DB hashes and enriched model_vars." Each test independently discovers graphs, queries the DB, and hopes the data is in the right state. When it isn't, the failures are opaque (e.g. `core_hash required`, empty maturity rows, hash mismatches).
 

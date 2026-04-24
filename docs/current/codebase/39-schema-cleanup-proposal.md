@@ -2,6 +2,7 @@
 
 **Date**: 13-Apr-26
 **Status**: Proposal — for review before implementation
+**Historical note (`24-Apr-26`)**: this proposal pre-dates the removal of the quick BE topo pass. References below to `stats_engine.py`, `beTopoPassService.ts`, `forecastingParityService`, `test_stats_engine_parity.py`, and the FE↔BE parity constraint describe the system as it stood when the proposal was written. See [project-bayes/73](../project-bayes/73-be-topo-removal-and-forecast-state-separation-plan.md) for the current BE surface. The schema-cleanup design principles below are independent of that pipeline topology and remain applicable.
 **Motivation**: clean up the edge latency schema before v2.0 sets it
 in stone. Organic growth across ~5 months of LAG, Bayes, and forecast
 work has left 30+ flat fields mixing configuration, promoted values,

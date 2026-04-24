@@ -82,7 +82,7 @@ def _non_latency_rows(
     `alpha_beta_query_scoped`, not on source name, to decide whether
     the resolver's α, β already incorporates query-window evidence:
 
-    - **Already query-scoped** (analytic / analytic_be Jeffreys
+    - **Already query-scoped** (analytic Jeffreys
       posteriors via D20 fallback): read α, β directly. Updating again
       would double-count. Blend is skipped with reason
       ``source_query_scoped``.
@@ -145,7 +145,7 @@ def _non_latency_rows(
 
     if already_query_scoped:
         # Resolver's α, β already incorporates query-window evidence
-        # (analytic / analytic_be Jeffreys posterior). Read directly —
+        # (analytic Jeffreys posterior). Read directly —
         # updating again double-counts.
         alpha_post = alpha_prior
         beta_post = beta_prior

@@ -88,7 +88,7 @@ class ResolvedModelParams:
         return self.path_latency if self.path_latency is not None else self.edge_latency
 
     # Provenance
-    source: str = ''          # 'analytic' | 'analytic_be' | 'bayesian' | 'manual'
+    source: str = ''          # 'analytic' | 'bayesian' | 'manual'
     fitted_at: Optional[str] = None
     gate_passed: Optional[bool] = None  # Bayesian quality gate
 
@@ -101,11 +101,11 @@ class ResolvedModelParams:
     #
     #   False → aggregate prior (bayesian fit / manual override).
     #           Safe to update with query-scoped Σk, Σn.
-    #   True  → already a query-scoped posterior (analytic / analytic_be
+    #   True  → already a query-scoped posterior (analytic
     #           Jeffreys). Read directly; updating again double-counts.
     @property
     def alpha_beta_query_scoped(self) -> bool:
-        return self.source in ('analytic', 'analytic_be')
+        return self.source == 'analytic'
 
     # Evidence
     evidence_retrieved_at: Optional[str] = None
@@ -123,7 +123,7 @@ def _extract_source_curves(model_vars: List[Dict[str, Any]]) -> Dict[str, Dict[s
     curves: Dict[str, Dict[str, Any]] = {}
     for mv in model_vars:
         src = mv.get('source', '')
-        if src not in ('analytic', 'analytic_be', 'bayesian', 'manual'):
+        if src not in ('analytic', 'bayesian', 'manual'):
             continue
         mv_lat = mv.get('latency') or {}
         mv_prob = mv.get('probability') or {}
@@ -159,7 +159,6 @@ def _resolve_promoted_source(
     Mirrors `src/services/modelVarsResolution.ts` exactly:
     manual -> manual, else best_available
     bayesian -> bayesian, else analyticBest
-    analytic_be -> analytic_be, else analytic
     analytic -> analytic only
     best_available -> gated bayesian, else analyticBest
     """
@@ -174,7 +173,7 @@ def _resolve_promoted_source(
         return None
 
     def _analytic_best() -> Optional[str]:
-        return _find('analytic') or _find('analytic_be')
+        return _find('analytic')
 
     def _best_available() -> Optional[str]:
         return _bayesian_if_gated() or _analytic_best()
@@ -183,8 +182,6 @@ def _resolve_promoted_source(
         return _find('manual') or _best_available()
     if preference == 'bayesian':
         return _find('bayesian') or _analytic_best()
-    if preference == 'analytic_be':
-        return _find('analytic_be') or _find('analytic')
     if preference == 'analytic':
         return _find('analytic')
     return _best_available()

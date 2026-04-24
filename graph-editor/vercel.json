@@ -104,14 +104,6 @@
       "destination": "/api/python-api?endpoint=lag-recompute-models"
     },
     {
-      "source": "/api/lag/topo-pass",
-      "destination": "/api/python-api?endpoint=lag-topo-pass"
-    },
-    {
-      "source": "/api/lag-topo-pass",
-      "destination": "/api/python-api?endpoint=lag-topo-pass"
-    },
-    {
       "source": "/api/forecast/conditioned",
       "destination": "/api/python-api?endpoint=forecast-conditioned"
     },

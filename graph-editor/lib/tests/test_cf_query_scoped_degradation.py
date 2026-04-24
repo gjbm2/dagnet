@@ -33,7 +33,7 @@ def _query_scoped_latency_resolved() -> ResolvedModelParams:
             onset_delta_days=0.0,
             t95=23.0,
         ),
-        source='analytic_be',
+        source='analytic',
     )
 
 

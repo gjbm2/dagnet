@@ -56,7 +56,7 @@ def derive_conversion_rate(
         rows: snapshot rows with anchor_day, retrieved_at, X, Y, slice_key.
         bin_size: 'day' | 'week' | 'month'. Default 'day'.
         edge: full graph edge dict. Used to resolve the promoted model
-            (bayesian → analytic_be → analytic → evidence-derived Beta).
+            (bayesian → analytic → evidence-derived Beta).
             When None, bands are omitted.
         temporal_mode: 'window' | 'cohort'. Selects which Bayes slice is
             preferred when fit_history entries are available.

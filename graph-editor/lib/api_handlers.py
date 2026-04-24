@@ -1889,7 +1889,6 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
                     )
                     _source_setting_map = {
                         'analytic': 'show_model_analytic',
-                        'analytic_be': 'show_model_analytic_be',
                         'bayesian': 'show_model_bayesian',
                     }
                     _requested_source_names: Optional[List[str]] = None
@@ -1911,7 +1910,7 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
                     _source_names_to_build = (
                         _requested_source_names
                         if _requested_source_names is not None
-                        else ['analytic', 'analytic_be', 'bayesian']
+                        else ['analytic', 'bayesian']
                     )
                     for src_name in _source_names_to_build:
                         _src_execution = build_prepared_span_execution(
@@ -2132,9 +2131,9 @@ def handle_conditioned_forecast(data: Dict[str, Any]) -> Dict[str, Any]:
         this handler performs (doc 47). Calling inner kernels per-edge
         from an analysis runner loses that coordination and produces
         subtly different numbers on multi-hop paths.
-    Distinct from the BE topo pass (/api/lag/topo-pass →
-    handle_stats_topo_pass) which is an analytic pass producing
-    `analytic_be` model_vars, not this MC-with-IS enrichment.
+    This is the remaining BE enrichment surface: the old analytic topo
+    pass has been removed, so this handler owns the evidence-conditioned
+    MC-with-IS path.
 
     Produces per-edge per-scenario scalars (p_mean, p_sd, completeness)
     using the full MC population model with snapshot DB evidence. Same
@@ -2729,14 +2728,14 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
     def _resolve_promoted_source(model_params: Dict[str, Any], source_curves: Dict[str, Any]) -> Optional[str]:
         """Determine the actual promoted model source.
 
-        Priority: explicit preference > bayesian > analytic_be > analytic.
+        Priority: explicit preference > bayesian > analytic.
         Returns the source name string, or None if no source available.
         """
         msp = model_params.get('promoted_source', 'best_available')
         if msp and msp != 'best_available' and msp in source_curves:
             return msp
-        # best_available: prefer bayesian > analytic_be > analytic
-        for candidate in ('bayesian', 'analytic_be', 'analytic'):
+        # best_available: prefer bayesian > analytic
+        for candidate in ('bayesian', 'analytic'):
             if candidate in source_curves:
                 return candidate
         return None
@@ -2911,7 +2910,7 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
             if not isinstance(mv, dict):
                 continue
             src = mv.get('source', '')
-            if src not in ('analytic', 'analytic_be', 'bayesian'):
+            if src not in ('analytic', 'bayesian'):
                 continue
             mv_lat = mv.get('latency') or {}
             mv_mu = mv_lat.get('mu')
@@ -2941,8 +2940,8 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
             if isinstance(mv_pmean, (int, float)) and math.isfinite(mv_pmean) and mv_pmean > 0:
                 entry['forecast_mean'] = float(mv_pmean)
             # Uncertainty params (for confidence bands) — extract for all sources.
-            # Bayesian source may carry its own SDs in model_vars; analytic/analytic_be
-            # typically don't, so the band computation step falls back to edge-level
+            # Bayesian source may carry its own SDs in model_vars; analytic
+            # entries typically don't, so the band computation step falls back to edge-level
             # heuristic SDs from model_params.
             mv_q = mv.get('quality') or {}
             mv_prob_stdev = mv_prob.get('stdev')
@@ -3867,7 +3866,7 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
 
                         # --- Per-source model curves ---
                         # Each source gets its own CDF curve, enabling the
-                        # frontend to toggle analytic/analytic_be/bayesian overlays
+                        # frontend to toggle analytic/bayesian overlays
                         # independently via display settings.
                         #
                         # Bayesian source: reads directly from the posterior on
@@ -5251,169 +5250,3 @@ def handle_lag_recompute_models(data: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def handle_stats_topo_pass(data: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Run the BE analytic stats/topo pass on a graph.
-
-    SUBSYSTEM GUIDE — When to call this (see docs/current/codebase/
-    STATS_SUBSYSTEMS.md §3.3 "BE topo pass"):
-      - This is the ANALYTIC topo pass producing `analytic_be`
-        model_vars and explicit fallback scalars that come directly
-        from `enhance_graph_latencies` (mu, sigma, t95, path_t95,
-        completeness, p_infinity, blended_mean + heuristic dispersion
-        SDs) via Fenton-Wilkinson composition on query-scoped cohort
-        data. Python port of FE `enhanceGraphLatencies`.
-      - This is NOT the sophisticated BE CF pass. The CF pass lives
-        in `handle_conditioned_forecast` (/api/forecast/conditioned,
-        §3.4 in STATS_SUBSYSTEMS.md) and produces IS-conditioned
-        per-edge (p_mean, p_sd, completeness, completeness_sd) via
-        full MC with snapshot DB evidence and topo-sequenced upstream
-        carrier propagation.
-      - This handler is intentionally bounded: it does NOT run
-        `compute_forecast_trajectory`, does NOT build a secondary
-        conditioned scalar surface, and does NOT expose
-        forecast-engine timing/counter metadata.
-      - Analysis runners SHOULD NOT call this directly. The fetch
-        pipeline invokes it fire-and-forget alongside the FE topo
-        pass and CF pass. If an analysis needs evidence-conditioned
-        scalars, it wants `handle_conditioned_forecast`, not this.
-
-    Computes per-edge latency stats (mu, sigma, t95, path_t95, completeness,
-    p_infinity, blended_mean) and path-level lognormal params (path_mu,
-    path_sigma, path_onset_delta_days) via a topological traversal with
-    Fenton-Wilkinson composition.
-
-    This is the Python port of FE enhanceGraphLatencies().
-
-    Request shape:
-      - graph: full graph snapshot (nodes, edges)
-      - cohort_data: dict of edge_uuid → list of cohort data dicts
-            Each cohort dict: {date, age, n, k, median_lag_days?,
-            mean_lag_days?, anchor_median_lag_days?, anchor_mean_lag_days?}
-      - forecasting_settings: optional settings object
-
-    Returns:
-      - edges: list of per-edge results with latency scalars
-      - summary: {edges_processed, edges_with_lag}
-    """
-    from runner.stats_engine import (
-        CohortData,
-        EdgeContext,
-        enhance_graph_latencies,
-    )
-    from runner.forecasting_settings import settings_from_dict
-
-    graph = data.get('graph', {})
-    if not graph:
-        raise ValueError("Missing required 'graph' field")
-
-    settings_raw = data.get('forecasting_settings')
-    settings = settings_from_dict(settings_raw) if settings_raw else None
-
-    def _parse_cohorts(cohort_list: list) -> list:
-        parsed = []
-        for c in cohort_list:
-            parsed.append(CohortData(
-                date=c.get('date', ''),
-                age=float(c.get('age', 0)),
-                n=int(c.get('n', 0)),
-                k=int(c.get('k', 0)),
-                anchor_median_lag_days=c.get('anchor_median_lag_days'),
-                anchor_mean_lag_days=c.get('anchor_mean_lag_days'),
-                median_lag_days=c.get('median_lag_days'),
-                mean_lag_days=c.get('mean_lag_days'),
-            ))
-        return parsed
-
-    # Parse cohort data per edge
-    raw_cohorts = data.get('cohort_data', {})
-    param_lookup: Dict[str, list] = {}
-    for edge_id, cohort_list in raw_cohorts.items():
-        param_lookup[edge_id] = _parse_cohorts(cohort_list)
-
-    # Parse per-edge context (onset from window slices, window cohorts, nBaseline)
-    raw_contexts = data.get('edge_contexts', {})
-    edge_contexts: Dict[str, EdgeContext] = {}
-    for edge_id, ctx_dict in raw_contexts.items():
-        window_cohorts = None
-        if ctx_dict.get('window_cohorts'):
-            window_cohorts = _parse_cohorts(ctx_dict['window_cohorts'])
-        scoped_cohorts = None
-        if ctx_dict.get('scoped_cohorts'):
-            scoped_cohorts = _parse_cohorts(ctx_dict['scoped_cohorts'])
-        edge_contexts[edge_id] = EdgeContext(
-            onset_from_window_slices=ctx_dict.get('onset_from_window_slices'),
-            window_cohorts=window_cohorts,
-            n_baseline_from_window=ctx_dict.get('n_baseline_from_window'),
-            scoped_cohorts=scoped_cohorts,
-        )
-
-    # D1 FIX: parse query_mode so BE can match FE's cohort/window semantics
-    query_mode = data.get('query_mode', 'cohort')  # default cohort for backward compat
-
-    # D5 FIX: parse FE-computed active edge set
-    raw_active_edges = data.get('active_edges')
-    active_edges_set = set(raw_active_edges) if isinstance(raw_active_edges, list) else None
-
-    result = enhance_graph_latencies(
-        graph, param_lookup, settings, edge_contexts,
-        query_mode=query_mode, active_edges=active_edges_set,
-    )
-
-    # If FE outputs were sent alongside, write the golden fixture to debug/
-    fe_outputs = data.get('fe_outputs')
-    if fe_outputs:
-        import json as _json
-        import os as _os
-        debug_dir = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))), '..', 'debug')
-        _os.makedirs(debug_dir, exist_ok=True)
-        fixture_path = _os.path.join(debug_dir, 'tmp.topo-pass-golden.json')
-        with open(fixture_path, 'w') as _f:
-            _json.dump({
-                'inputs': {
-                    'graph': data.get('graph'),
-                    'cohort_data': data.get('cohort_data'),
-                    'edge_contexts': data.get('edge_contexts'),
-                    'forecasting_settings': data.get('forecasting_settings'),
-                },
-                'fe_outputs': fe_outputs,
-            }, _f, indent=2)
-        print(f'[lag/topo-pass] Golden fixture written to {fixture_path}')
-    edges_out = []
-    for ev in result.edge_values:
-        edges_out.append({
-            'edge_uuid': ev.edge_uuid,
-            'conditional_index': ev.conditional_index,
-            't95': ev.t95,
-            'path_t95': ev.path_t95,
-            'completeness': ev.completeness,
-            'mu': ev.mu,
-            'sigma': ev.sigma,
-            'onset_delta_days': ev.onset_delta_days,
-            'median_lag_days': ev.median_lag_days,
-            'mean_lag_days': ev.mean_lag_days,
-            'path_mu': ev.path_mu,
-            'path_sigma': ev.path_sigma,
-            'path_onset_delta_days': ev.path_onset_delta_days,
-            'p_infinity': ev.p_infinity,
-            'p_evidence': ev.p_evidence,
-            'forecast_available': ev.forecast_available,
-            'blended_mean': ev.blended_mean,
-            'p_sd': ev.p_sd,
-            'mu_sd': ev.mu_sd,
-            'sigma_sd': ev.sigma_sd,
-            'onset_sd': ev.onset_sd,
-            'onset_mu_corr': ev.onset_mu_corr,
-            'path_mu_sd': ev.path_mu_sd,
-            'path_sigma_sd': ev.path_sigma_sd,
-            'path_onset_sd': ev.path_onset_sd,
-        })
-
-    return {
-        'success': True,
-        'edges': edges_out,
-        'summary': {
-            'edges_processed': result.edges_processed,
-            'edges_with_lag': result.edges_with_lag,
-        },
-    }

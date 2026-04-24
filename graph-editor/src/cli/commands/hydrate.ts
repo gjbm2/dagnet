@@ -60,15 +60,13 @@ export async function runHydrate(): Promise<void> {
     process.exit(1);
   }
 
-  // Aggregate → FE topo + BE topo + CF + promotion + UpdateManager.
+  // Aggregate → FE topo + CF + promotion + UpdateManager.
   // aggregateAndPopulateGraph delegates to fetchItems which runs the
   // exact same Stage-2 pipeline the browser uses, with
-  // awaitBackgroundPromises so BE topo's model_vars[analytic_be]
-  // upsert and the CF subsequent-overwrite .then() finish before
-  // returning. No bespoke CLI BE-topo call is needed — the previous
-  // `runCliTopoPass` here was a redundant second BE round-trip that
-  // bypassed the promotion cascade; retired per doc 45 ("one
-  // codepath, no parallel CLI path").
+  // awaitBackgroundPromises so the CF subsequent-overwrite .then()
+  // finishes before returning. No bespoke CLI topo call is needed —
+  // the previous `runCliTopoPass` here was a redundant second round-trip
+  // that bypassed the shared pipeline.
   const fetchMode = flags.allowExternalFetch ? 'versioned' as const : 'from-file' as const;
   log.info(`Hydrating graph (mode: ${fetchMode}, query: ${queryDsl})...`);
   const { graph: populatedGraph, warnings } = await aggregateAndPopulateGraph(bundle, queryDsl, {

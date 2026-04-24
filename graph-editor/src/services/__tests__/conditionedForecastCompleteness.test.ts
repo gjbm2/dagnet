@@ -56,7 +56,7 @@
  *                `buildConditionedForecastGraphSnapshot`, and
  *                `runStage2EnhancementsAndInboundN` fast/slow
  *                path. Mocks isolate the BE boundary
- *                (`runConditionedForecast`, `runBeTopoPass`) and
+ *                (`runConditionedForecast`) and
  *                infra services that are irrelevant to the
  *                authority claim.
  * Fixtures       `latencyGraph()` — minimal inline graph with one
@@ -82,11 +82,6 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { Graph } from '../../types';
 
 // ── Mocks for end-to-end tests (3a, 3b) ────────────────────────────────
-
-let beTopoImpl: (...args: any[]) => Promise<any[]> = async () => [];
-vi.mock('../beTopoPassService', () => ({
-  runBeTopoPass: (...args: any[]) => beTopoImpl(...args),
-}));
 
 let cfImpl: (...args: any[]) => Promise<any[]> = async () => [];
 // We want to test the REAL applyConditionedForecastToGraph behaviour, so
@@ -241,7 +236,6 @@ async function yieldMs(ms: number): Promise<void> {
 describe('CF owns completeness on the graph path (FE authority contract)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    beTopoImpl = async () => [];
     cfImpl = async () => [];
     registerParamFile();
     windowDsl();
