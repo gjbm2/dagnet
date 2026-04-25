@@ -8,7 +8,7 @@ all other development on the app.
 
 **Pipeline-shape note (`24-Apr-26`)**: the pipeline descriptions below
 were written before the quick BE topo pass was removed (see
-[project-bayes/73](project-bayes/73-be-topo-removal-and-forecast-state-separation-plan.md)).
+[project-bayes/73b](project-bayes/73b-be-topo-removal-and-forecast-state-separation-plan.md)).
 Stage 2 now runs FE topo + CF only; references to `runBeTopoPass` and
 `model_vars[analytic_be]` in the investigation text below describe the
 pipeline as it stood at the time of filing. The divergence symptoms and

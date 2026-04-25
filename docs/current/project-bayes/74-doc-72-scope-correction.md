@@ -3,7 +3,7 @@
 **Date**: 24-Apr-26  
 **Status**: Companion scope note  
 **Audience**: engineers resuming FE/CLI conditioned-forecast parity work after the reversion  
-**Relates to**: `72-fe-cli-conditioned-forecast-parity-fix-plan.md`, `75-scenario-param-pack-and-cf-supersession-plan.md`, `../cohort-cf-defect-and-cli-fe-parity.md`, `../codebase/STATS_SUBSYSTEMS.md`, `../codebase/FE_BE_STATS_PARALLELISM.md`
+**Relates to**: `72-fe-cli-conditioned-forecast-parity-fix-plan.md`, `73a-scenario-param-pack-and-cf-supersession-plan.md`, `../cohort-cf-defect-and-cli-fe-parity.md`, `../codebase/STATS_SUBSYSTEMS.md`, `../codebase/FE_BE_STATS_PARALLELISM.md`
 
 ## 1. Purpose
 
@@ -11,7 +11,7 @@ This note does not replace doc 72. It records the narrower reading that
 should govern any next attempt after the reversion.
 
 Its job is purely scoping. The settled implementation shape now lives in
-doc 75. This note exists to preserve the valid architectural warning from
+doc 73a. This note exists to preserve the valid architectural warning from
 doc 72 while explicitly de-scoping the parts that would turn the parity
 repair into a broader forecast-state or source-taxonomy clean-up.
 
@@ -90,7 +90,7 @@ are promoted model state, and which fields are the current query's answer.
 
 ## 6. Where the implementation now lives
 
-Doc 75 is the active implementation note for this narrowed pass. It captures
+Doc 73a is the active implementation note for this narrowed pass. It captures
 the settled shape that follows from the app's data design:
 
 the FE provisional answer no longer serves as authoritative model input

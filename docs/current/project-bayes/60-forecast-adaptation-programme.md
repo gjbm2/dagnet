@@ -1,11 +1,12 @@
 # 60 — Forecast Adaptation Implementation Plan
 
 **Date**: 21-Apr-26  
-**Status**: Active implementation record  
-**Updated**: 22-Apr-26  
+**Status**: Active implementation record (BE-topo scope superseded)  
+**Updated**: 24-Apr-26  
 **Review status**: Work packages WP0-WP9 have now landed in code; this document remains the execution record and acceptance checklist  
 **Review pack role**: 3 of 3 — delivery plan for the target contract  
-**Primary references**: `59-cohort-window-forecast-implementation-scheme.md`, `42-asat-contract.md`, `../codebase/COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md`, `../codebase/STATS_SUBSYSTEMS.md`, `../codebase/FE_BE_STATS_PARALLELISM.md`, `45-forecast-parity-design.md`, `47-multi-hop-cohort-window-divergence.md`, `52-subset-conditioning-double-count-correction.md`, `56-forecast-stack-residual-v1-v2-coupling.md`, `57-cf-eligibility-topological-degradation.md`, `../codebase/TESTING_STANDARDS.md`  
+**Superseded-scope note (24-Apr-26)**: [doc 73b](73b-be-topo-removal-and-forecast-state-separation-plan.md) supersedes every rule in this document about the BE topo pass remaining a distinct analytic subsystem. The quick BE topo pass, `analytic_be` model-var source, `/api/lag/topo-pass` endpoint, `handle_stats_topo_pass` handler, `lib/runner/stats_engine.py`, `beTopoPassService.ts`, and `forecastingParityService.ts` have been removed. Sections of this doc that describe the BE topo pass as a live surface (§3 public-surfaces analytic-fallback row, §4 "non-goals" BE-topo clause, §11 "BE topo pass remains analytically bounded", and the BE-topo entries in the surface-preservation and contract-change tables) no longer reflect the live system; they remain as historical execution record.  
+**Primary references**: `59-cohort-window-forecast-implementation-scheme.md`, `42-asat-contract.md`, `../codebase/COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md`, `../codebase/STATS_SUBSYSTEMS.md`, `../codebase/FE_BE_STATS_PARALLELISM.md`, `45-forecast-parity-design.md`, `47-multi-hop-cohort-window-divergence.md`, `52-subset-conditioning-double-count-correction.md`, `56-forecast-stack-residual-v1-v2-coupling.md`, `57-cf-eligibility-topological-degradation.md`, `73b-be-topo-removal-and-forecast-state-separation-plan.md`, `../codebase/TESTING_STANDARDS.md`  
 **Audience**: engineer delivering the forecast adaptation workstream and peers reviewing its delivery logic
 
 ---

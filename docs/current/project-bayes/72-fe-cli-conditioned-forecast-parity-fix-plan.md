@@ -1,14 +1,14 @@
 # 72 — FE/CLI Conditioned Forecast Parity Fix Plan
 
 **Date**: 23-Apr-26  
-**Status**: Historical implementation note — superseded by doc 73 for active execution  
+**Status**: Historical implementation note — superseded by doc 73b for active execution  
 **Audience**: engineers working on the FE graph pipeline, conditioned forecast, `cohort_maturity`, and CLI parity  
 **Relates to**: `../cohort-cf-defect-and-cli-fe-parity.md`, `65-gm-rebuild-window-vs-cohort-cli-investigation.md`, `66-shared-cf-runtime-and-wp8-admission-plan.md`, `71-shared-cf-runtime-detailed-execution-plan.md`, `../codebase/COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md`, `54-cf-readiness-protocol.md`
 
 This note is retained as the narrower FE/CLI parity investigation record that
 fed the broader execution plan in
-`73-be-topo-removal-and-forecast-state-separation-plan.md`. New implementation
-work for graph-surface forecast state should start from doc 73.
+`73b-be-topo-removal-and-forecast-state-separation-plan.md`. New implementation
+work for graph-surface forecast state should start from doc 73b.
 
 ## 1. Purpose
 

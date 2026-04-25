@@ -2,7 +2,7 @@
 
 **Purpose**: disambiguation map for the four distinct processing subsystems that produce, enrich, or consume the graph's statistical fields. These look similar — they all touch `edge.p.*` fields, they all feed chart rendering, they all involve some form of "topological" or "pass-over-the-graph" concept — but they are architecturally distinct. Conflating them has repeatedly caused design mistakes and agent confusion.
 
-**See also**: [FE_BE_STATS_PARALLELISM.md](FE_BE_STATS_PARALLELISM.md) (FE topo + CF orchestration and the CF race), [STATISTICAL_DOMAIN_SUMMARY.md](STATISTICAL_DOMAIN_SUMMARY.md) (underlying statistical models — shifted lognormal, Beta/Binomial, completeness, partial pooling), [LAG_ANALYSIS_SUBSYSTEM.md](LAG_ANALYSIS_SUBSYSTEM.md) (what latency fitting computes in detail), [PARAMETER_SYSTEM.md](PARAMETER_SYSTEM.md) (model_vars data model), [ANALYSIS_TYPES_CATALOGUE.md](ANALYSIS_TYPES_CATALOGUE.md) (analysis runner inventory), [project-bayes/INDEX.md](../project-bayes/INDEX.md) (Bayes compiler programme), [project-bayes/73-be-topo-removal-and-forecast-state-separation-plan.md](../project-bayes/73-be-topo-removal-and-forecast-state-separation-plan.md) (why the quick BE topo pass was removed on `24-Apr-26`).
+**See also**: [FE_BE_STATS_PARALLELISM.md](FE_BE_STATS_PARALLELISM.md) (FE topo + CF orchestration and the CF race), [STATISTICAL_DOMAIN_SUMMARY.md](STATISTICAL_DOMAIN_SUMMARY.md) (underlying statistical models — shifted lognormal, Beta/Binomial, completeness, partial pooling), [LAG_ANALYSIS_SUBSYSTEM.md](LAG_ANALYSIS_SUBSYSTEM.md) (what latency fitting computes in detail), [PARAMETER_SYSTEM.md](PARAMETER_SYSTEM.md) (model_vars data model), [ANALYSIS_TYPES_CATALOGUE.md](ANALYSIS_TYPES_CATALOGUE.md) (analysis runner inventory), [project-bayes/INDEX.md](../project-bayes/INDEX.md) (Bayes compiler programme), [project-bayes/73b-be-topo-removal-and-forecast-state-separation-plan.md](../project-bayes/73b-be-topo-removal-and-forecast-state-separation-plan.md) (why the quick BE topo pass was removed on `24-Apr-26`).
 
 ---
 
@@ -19,7 +19,7 @@ The subsystems are:
 | 3 | **BE CF pass** | Python topologically-sequenced MC + IS | Per fetch (race, 500ms) | Whole graph |
 | 4 | **BE analysis runners** | Per-query chart/result production | Per analysis request | Subjects in DSL |
 
-Subsystems 2 and 3 run during the standard Stage 2 fetch pipeline; subsystem 1 runs separately and writes durable fit results into edge files; subsystem 4 consumes the enriched graph to produce analyses. A fifth subsystem, the **quick BE topo pass** (Python analytic mirror of FE topo), existed until `24-Apr-26` but was removed per [project-bayes/73](../project-bayes/73-be-topo-removal-and-forecast-state-separation-plan.md); older handover notes and design docs refer to it but the live runtime no longer runs it.
+Subsystems 2 and 3 run during the standard Stage 2 fetch pipeline; subsystem 1 runs separately and writes durable fit results into edge files; subsystem 4 consumes the enriched graph to produce analyses. A fifth subsystem, the **quick BE topo pass** (Python analytic mirror of FE topo), existed until `24-Apr-26` but was removed per [project-bayes/73b](../project-bayes/73b-be-topo-removal-and-forecast-state-separation-plan.md); older handover notes and design docs refer to it but the live runtime no longer runs it.
 
 The rest of this doc details each subsystem, the pipeline sequence, the fields each writes/reads, and the common confusions.
 

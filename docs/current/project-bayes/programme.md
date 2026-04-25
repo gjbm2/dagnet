@@ -1,11 +1,13 @@
 # Project Bayes: Programme
 
 **Status**: Active
-**Updated**: 18-Apr-26
+**Updated**: 24-Apr-26
 **Purpose**: Phased delivery plan for Project Bayes. This doc owns sequencing;
 design docs contain the detail. The **Open items (curated)** section below
 is the single source of truth for what is open — other docs may contain
 stale claims. See that section's verification notes.
+
+**BE topo removal (24-Apr-26)**: [doc 73b](73b-be-topo-removal-and-forecast-state-separation-plan.md) landed. The quick BE topo pass, `analytic_be` model-var source, `/api/lag/topo-pass` endpoint, `handle_stats_topo_pass` handler, `lib/runner/stats_engine.py`, `beTopoPassService.ts`, and `forecastingParityService.ts` have all been removed. Items referencing those surfaces as live — notably the `stats_engine.py` agg_median flag, the BE-topo-pass perf row of P2.11, the FE↔BE parity row under verified defects, and the Phase 6 BE-mirror / parity-test key-files entries — are now historical. The owner's priority queue still tracks BE forecasting & chart performance, but the topo-pass subcomponent has gone away; what remains is CF + cohort_maturity v3. Inline annotations below flag individual rows where the scope has narrowed.
 
 ### Current status snapshot (13-Apr-26)
 
@@ -200,10 +202,11 @@ the diff commits and settles.
    plans, structured JSON results, canonical truth files moved to
    `bayes/truth/`, sparsity-sweep plans generated (18 YAMLs, 3 plans)
    but not yet executed.
-8. **`stats_engine.py` agg_median fallback flag** — when cohort input
-   has no usable median, falls back to `effective_horizon/2` but
-   flags the fallback so BE/FE parity checks can verify nothing
-   silently emitted the synthetic value.
+8. ~~**`stats_engine.py` agg_median fallback flag**~~ — obsolete. The
+   BE topo pass and `stats_engine.py` were removed on `24-Apr-26`
+   (see doc 73b). The FE-side agg_median fallback in
+   `statisticalEnhancementService.ts` retains the parity-safe flag
+   used by the FE topo pass.
 
 ### Owner's priority queue (18-Apr-26)
 
@@ -323,7 +326,7 @@ endpoint shows. Verified against live code, not doc claims.
 | P2.8 | **Mixture-trajectory latency dispersion contract undefined**. Single-path trajectory now uses BetaBinomial + `kappa_lat_slice_vec` (landed 18-Apr-26, journal update 13 Fix 3). Mixture path has not been extended. | Direct read of `model.py:3521–3550` (single-path); no BetaBinomial in mixture emit path | Decide: extend BetaBinomial to mixture paths with a single edge-level `kappa_lat`, OR document mixture as Binomial-only. Either is defensible; don't leave it implicit |
 | P2.9 | **Cohort-completeness parity question**: Bayes uses model-derived FW composition; FE stats engine uses observed `anchor_median_lag_days`. Snapshot DB stores both; `evidence.py` reads neither. | [programme §Other open](programme.md) discussion note; [snapshot_service.py:566](graph-editor/lib/runner/snapshot_service.py) | Decide whether Bayes should incorporate observed anchor lags as an alternative / additional signal. Not a bug — just a parity discussion |
 | P2.10 | **Golden fixtures for forecasting, then retire v1 and v2** (owner Tier-1 priority). Partially absorbed by P2.16: v1/v2 retirement (deletion of `cohort_forecast_v2.py`, `span_adapter.py`, and likely `cohort_forecast.py`) is now doc 56 Phase 4. What remains as P2.10-proper: a frozen golden-fixture suite locking exact per-τ row values so v3 stays numerically stable across the P2.16 migration and beyond. | Current parity harnesses (`test_doc31_parity.py`, `test_v2_v3_parity.py`) verify algorithmic equivalence within tolerance but don't freeze numeric output. Doc 56 Phase 0 requires capturing v2-oracle outputs on existing parity fixtures before the refactor | Write the golden-fixture suite now (doubles as P2.16's Phase-0 oracle capture). Defer the actual deletion of v1/v2 to P2.16 Phase 4 so they share one contract |
-| P2.11 | **BE forecasting & topo performance** (owner Tier-1 priority). User-visible latency on topo pass and chart requests. No current measurement baseline in programme docs. | Topo pass wired through `api_handlers.py::handle_stats_topo_pass` (:5716); cohort maturity v3 through `_handle_cohort_maturity_v3` (:2018); conditioned forecast through `handle_conditioned_forecast`. Hot path likely dominated by per-subject snapshot queries (`query_snapshots_for_sweep_batch`), MC sweep (`compute_forecast_trajectory` 2000+ draws) and span-kernel composition. Sampling-side perf separately tracked as P3.21 | Measure first. Add timing spans around: snapshot query, frame composition, sweep, row assembly, carrier build. Publish a baseline per analysis type. Then pick the dominant cost and optimise. Likely candidates: vectorise MC sweep across cohorts, cache span CDFs across repeated queries, reduce 2000-draw default when band-width doesn't require it |
+| P2.11 | **BE forecasting & chart performance** (owner Tier-1 priority). User-visible latency on chart and forecast requests. No current measurement baseline in programme docs. (Scope narrowed 24-Apr-26 — the quick BE topo pass was removed per doc 73b, so `handle_stats_topo_pass` is no longer part of this perf budget.) | Cohort maturity v3 through `_handle_cohort_maturity_v3` (:2018); conditioned forecast through `handle_conditioned_forecast`. Hot path likely dominated by per-subject snapshot queries (`query_snapshots_for_sweep_batch`), MC sweep (`compute_forecast_trajectory` 2000+ draws) and span-kernel composition. Sampling-side perf separately tracked as P3.21 | Measure first. Add timing spans around: snapshot query, frame composition, sweep, row assembly, carrier build. Publish a baseline per analysis type. Then pick the dominant cost and optimise. Likely candidates: vectorise MC sweep across cohorts, cache span CDFs across repeated queries, reduce 2000-draw default when band-width doesn't require it |
 | ~~P2.12~~ | ~~**Conditioned forecast is not general-purpose** (doc 50 — lagless edges, topology coverage)~~ — **DONE 20-Apr-26**. | | |
 | P2.13 | **Model-curve overlay divergence** (owner 20-Apr addition). Cohort-maturity main-chart midline and the promoted model-curve overlay don't coincide when they should. Three stacked effects, each understood: (1) Beta median-vs-mean skew at asymptote — ~0.8% — accepted (align overlay and main on median); (2) discrete cumsum CDF vs analytic CDF mid-body — 12–13% window, **77% on cohort-widened at τ=10** — needs a fix; (3) discrete-vs-analytic onset/tail — ~0.8% — accepted. The 77% window case is actionable; the others are cosmetic or accepted | [doc 51-overlay](51-model-curve-overlay-divergence.md) §3.1–§3.3. Blind invariant test at [graph-ops/scripts/cohort-maturity-model-parity-test.sh](../../graph-ops/scripts/cohort-maturity-model-parity-test.sh). `_run_dp` at [span_kernel.py:290](graph-editor/lib/runner/span_kernel.py#L290); `compute_completeness` at [forecast_state.py:95](graph-editor/lib/runner/forecast_state.py#L95) | Accept §3.1 (align overlay on median). Fix §3.2: either make the overlay use the same discrete-grid CDF as the sweep, or switch the sweep to analytic CDF for the overlay check. Document §3.3 as accepted. Coordinate with P1.11 — if the B3 spike says Phase 2 should feed forecasts, the overlay contract changes |
 | ~~P2.14~~ | ~~**Funnel hi/lo bars via BE CF machinery (Level 2)** (doc 52-funnel)~~ — **DONE 21-Apr-26**. Funnel computation routed through the forecast engine; per-stage hi/lo bars land as MC quantiles. | | |
@@ -384,7 +387,7 @@ needs its originating doc updated in a follow-up.
 | "Fan chart MC zero-width bands from sparse `cohort_at_tau`" ([fan-chart-mc-bug.md](cohort-maturity/fan-chart-mc-bug.md); cohort-maturity INDEX "known open bug") | `cohort_forecast.py:201–215` — dense per-cohort carry-forward present (`last_x`, `last_y`). Also in `cohort_forecast_v3.py:199–215` | Mark fan-chart-mc-bug.md resolved |
 | "`_read_edge_model_params` only consumes Bayes posterior" ([cohort-maturity INDEX §6](cohort-maturity/INDEX.md)) | `api_handlers.py:3262–3310` — fallback chain present: Bayes posterior → stats-pass flat → defaults | Mark the INDEX prerequisite complete |
 | "JAX gradient backend is default" ([programme](programme.md); anti-pattern 36) | `inference.py:1802–1820` — gradient backend is ALWAYS pytensor (symbolic gradients). Compute backend (numba / JAX) is the configurable piece | Anti-pattern 36 + programme prose should say "symbolic gradients on pytensor; compile to JAX for compute" |
-| "`topo_pass` contains snapshot DB access for forecasting" ([doc 45](45-forecast-parity-design.md)) | `api_handlers.py::handle_stats_topo_pass` (:5716–5800) takes pre-computed `cohort_data`, calls `enhance_graph_latencies()` (analytic only). No snapshot DB access | Update doc 45 / 45b scope — the defect either was fixed or was never the right description |
+| ~~"`topo_pass` contains snapshot DB access for forecasting"~~ ([doc 45](45-forecast-parity-design.md)) | **Obsolete (24-Apr-26)**: the BE topo pass (`handle_stats_topo_pass`, `lib/runner/stats_engine.py`) was removed per doc 73b. CF is now the sole BE enrichment writer. | No action — claim no longer applies |
 | "Cohort `immature_fraction²` scaling at `cohort_forecast.py:548`" ([cohort-maturity overview §7.2](cohort-maturity/cohort-maturity-project-overview.md)) | No `immature_fraction` / `avg_hw` at that line. Line numbers drifted | Re-forensic before writing the fix — merged into P2.4 |
 | "Diamond-context Phase 2 JAX div-by-zero at init" (handover `12-Apr-26-jax-backend-contexted-compilation.md`) | Resolved by moving gradient backend to pytensor (symbolic first). Diamond-context now rhat=1.046, ESS=78 on that path | Handover superseded; anti-pattern 36 owns the cause |
 | "Aggregate double-counting across orthogonal context dimensions" (prior programme Open issues) | Fixed 16-Apr-26: row-level dedup + cross-dimension guard in `evidence.py`. Journal update 12 | Already removed from programme here |
@@ -660,7 +663,9 @@ use BE-published A→Y model with consistent semantics.
 
 **Design detail**: Model contract, sections 11, 14, 21–22.
 
-### FE stats deletion
+### FE stats deletion ~~(superseded)~~
+
+**Reversed 24-Apr-26 per [doc 73b](73b-be-topo-removal-and-forecast-state-separation-plan.md)**: the target of this block was to retire the FE topo pass and leave the BE topo pass as the sole analytic writer. Doc 73 reversed the direction — the quick BE topo pass has been removed; the FE topo pass is the surviving quick-pass writer. The deletion targets listed below (`statisticalEnhancementService.ts`, `lagDistributionUtils.ts`, `forecastingParityService.ts`, FE contract tests) are no longer on the roadmap. FE↔BE parity defects D11 / Pattern A / `cohortsForFit` / D12 are also moot because there is no BE parity target anymore. Retained as historical execution record.
 
 Delete ~4000+ lines of FE statistical fitting code. Python becomes the sole
 fitting owner.
@@ -1731,9 +1736,11 @@ current constants were guessed, producing confidence bands that span
 ### Files to change
 
 - `statisticalEnhancementService.ts` — FE onset_sd and sigma_sd formulas
-- `stats_engine.py` — BE mirror
 - `heuristic-dispersion-design.md` — §3.3, §3.4 with calibrated derivations
-- `test_stats_engine_parity.py` — update expected ranges after calibration
+
+(Historical entries for `stats_engine.py` BE mirror and
+`test_stats_engine_parity.py` removed on 24-Apr-26; both files are gone
+per doc 73b.)
 
 ### Risk if not completed
 
