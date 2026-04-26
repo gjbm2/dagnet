@@ -747,3 +747,125 @@ class TestConditionedForecastSingleHopCohortParity:
             f"CF={cf_completeness:.4f}"
         )
 
+@requires_db
+@requires_data_repo
+@requires_synth("synth-lat4", enriched=True)
+class TestRateEvidenceProvenanceDiagnostics:
+    """Diag-only public provenance for cohort/window rate binding."""
+
+    @staticmethod
+    def _load_synth_graph():
+        return load_graph_json("synth-lat4")
+
+    @staticmethod
+    def _get_candidate_regimes(_graph=None):
+        return load_candidate_regimes_by_mode("synth-lat4")
+
+    @staticmethod
+    def _cohort_maturity_diag(graph, regimes, temporal_dsl: str) -> dict:
+        from api_handlers import _handle_cohort_maturity_v3
+
+        result = _handle_cohort_maturity_v3(
+            {
+                "_diagnostics": True,
+                "scenarios": [
+                    {
+                        "scenario_id": "diag",
+                        "graph": graph,
+                        "analytics_dsl": "from(synth-lat4-c).to(synth-lat4-d)",
+                        "effective_query_dsl": temporal_dsl,
+                        "candidate_regimes_by_edge": regimes,
+                    }
+                ],
+            }
+        )
+        return (result.get("_diagnostics") or {}).get(
+            "rate_evidence_provenance", {}
+        )
+
+    @staticmethod
+    def _conditioned_forecast_diag(graph, regimes, temporal_dsl: str) -> dict:
+        from api_handlers import handle_conditioned_forecast
+
+        result = handle_conditioned_forecast(
+            {
+                "_diagnostics": True,
+                "analytics_dsl": "from(synth-lat4-c).to(synth-lat4-d)",
+                "scenarios": [
+                    {
+                        "scenario_id": "diag",
+                        "graph": graph,
+                        "analytics_dsl": "from(synth-lat4-c).to(synth-lat4-d)",
+                        "effective_query_dsl": temporal_dsl,
+                        "candidate_regimes_by_edge": regimes,
+                    }
+                ],
+            }
+        )
+        diag = (result.get("_diagnostics") or {}).get(
+            "rate_evidence_provenance_by_edge", []
+        )
+        assert len(diag) == 1, (
+            "Expected exactly one rate-evidence provenance entry for the "
+            f"single-edge conditioned_forecast request, got {diag!r}"
+        )
+        return diag[0]
+
+    def test_cohort_maturity_diag_exposes_identity_and_admitted_cases(self):
+        identity = self._cohort_maturity_diag(
+            self._load_synth_graph(),
+            self._get_candidate_regimes(None),
+            "cohort(synth-lat4-c,-90d:)",
+        )
+        admitted = self._cohort_maturity_diag(
+            self._load_synth_graph(),
+            self._get_candidate_regimes(None),
+            "cohort(synth-lat4-b,-90d:)",
+        )
+
+        assert identity == {
+            "selected_family": "window",
+            "selected_anchor_node": None,
+            "admission_decision": "identity_collapse",
+            "decision_reason": "anchor_equals_subject_start",
+        }
+        assert admitted == {
+            "selected_family": "cohort",
+            "selected_anchor_node": "synth-lat4-b",
+            "admission_decision": "admitted",
+            "decision_reason": "single_hop_anchor_override",
+        }
+
+    def test_conditioned_forecast_diag_exposes_per_edge_provenance(self):
+        identity = self._conditioned_forecast_diag(
+            self._load_synth_graph(),
+            self._get_candidate_regimes(None),
+            "cohort(synth-lat4-c,-90d:)",
+        )
+        admitted = self._conditioned_forecast_diag(
+            self._load_synth_graph(),
+            self._get_candidate_regimes(None),
+            "cohort(synth-lat4-b,-90d:)",
+        )
+
+        assert identity == {
+            "scenario_id": "diag",
+            "edge_uuid": identity["edge_uuid"],
+            "from_node": "synth-lat4-c",
+            "to_node": "synth-lat4-d",
+            "selected_family": "window",
+            "selected_anchor_node": None,
+            "admission_decision": "identity_collapse",
+            "decision_reason": "anchor_equals_subject_start",
+        }
+        assert admitted == {
+            "scenario_id": "diag",
+            "edge_uuid": admitted["edge_uuid"],
+            "from_node": "synth-lat4-c",
+            "to_node": "synth-lat4-d",
+            "selected_family": "cohort",
+            "selected_anchor_node": "synth-lat4-b",
+            "admission_decision": "admitted",
+            "decision_reason": "single_hop_anchor_override",
+        }
+

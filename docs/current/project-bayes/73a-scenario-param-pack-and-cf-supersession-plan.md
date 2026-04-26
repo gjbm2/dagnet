@@ -161,19 +161,13 @@ unrelated channels with two different scopes:
 The persistent `_posteriorSlices` stash on the graph is also
 file-depth data living on the wrong layer.
 
-The fix is fully owned by **doc 73b**. It bundles three pieces in
-one stage so each commit produces an observable behavioural diff:
-(a) per-scenario `model_vars[]` delivery — the FE derives each
-scenario's bayesian entry per edge from the parameter file's slice
-matching that scenario's effective DSL, covering probability AND
-latency; (b) the promotion writer extension that projects the
-delivered source onto the canonical `p.forecast.*` surface; and
-(c) the first BE consumer switch to read from that surface. The
-remaining consumer migrations and the cleanup of `_posteriorSlices`
-/ `reprojectPosteriorForDsl` follow in subsequent doc 73b stages.
-Doc 73a no longer carries any sub-stage of this work — earlier
-drafts split it into 73a "delivery" and 73a "cleanup" with 73b in
-the middle, but each end was inert in isolation.
+The fix is fully owned by **doc 73b** (Stage 4): the slice library
+moves from persistent stash to per-call engorgement on the request
+graph. The transient engorged shape preserves today's read paths so
+no BE consumer code changes; per-scenario contexting falls out from
+each scenario's effective DSL driving the slice selection. The
+persistent `_posteriorSlices` write on the live graph is then dead and
+removed. See doc 73b §3.2, §3.2a, §6.2a, and Stage 4.
 
 The target-edge posterior-mass witness from doc 72
 (`alpha=328.66`, `beta=57.38` appearing with no integer-count provenance)
@@ -211,6 +205,15 @@ these stages but must not silently drop it.
    a module-global counter.
 
 7. **`conditional_p` is part of the pack contract and must replay.**
+   Storage form differs by layer: on the graph it is an array of
+   `{condition: <DSL string>, p: {...}}` objects; in packs it is a
+   `Record<string, ProbabilityParam>` keyed by the **actual condition
+   string** (e.g. `conditional_p["visited(b)"]`), never by a numeric
+   position. The compositor is the only place this array↔Record
+   conversion happens. Each entry's `p` block is governed by the same
+   rules as the unconditional `p` (resolver, lock discipline, writer
+   set) — `conditional_p` is not a special case at the runtime layer,
+   only at the storage layer.
 
 8. **The Python runtime is stateless about workspace, parameter files,
    and FileRegistry.** It does not open parameter files by id, does not
@@ -288,26 +291,20 @@ these stages but must not silently drop it.
 - **Stages 1–4 are commit-bisectable in order.** Each one ends with a
   named test passing, and that test must remain green for every stage
   that follows.
-- **Stage 5 is a handoff to doc 73b.** Per-scenario `model_vars[]`
-  delivery, the promoted-probability writer extension, BE consumer
-  migration, and removal of the legacy `_posteriorSlices` /
-  `reprojectPosteriorForDsl` paths are all owned by doc 73b. Earlier
-  drafts of this plan held the delivery (5a) and the cleanup (5c)
-  inside doc 73a, but in isolation each was inert: 5a shipped data
-  no consumer read, and 5c could only run after doc 73b's consumer
-  migration. Bundling delivery + writer + the first consumer switch
-  inside doc 73b produces an observable behavioural diff at the
-  moment any of the work lands. See §11 for the handoff details.
+- **Stage 5 is a handoff to doc 73b.** Slice-material relocation
+  (persistent `_posteriorSlices` stash → per-call engorgement on the
+  request graph), the narrow promoted-probability writer, the
+  `*_overridden` lock-respecting writer discipline, and removal of
+  `reprojectPosteriorForDsl` are all owned by doc 73b. Doc 73a only
+  pins the §15A pre-handoff gates. See §11 for the handoff details.
 - **Stage 6 (CLI/FE alignment) lands last among behavioural stages
   in doc 73a** because it depends on the pack contract from Stage 2.
 - **Stage 7 is the cross-cutting verification rollup**, not new
   behavioural work.
 
-The original draft's interleaving of "FE split" and "Python unification"
-into doc 73a is removed. Both are doc 73b's job (see §3.10), and the
-per-scenario `model_vars[]` work that this plan briefly held has now
-joined them there for the same reason: a switchover that is split
-across plans cannot produce a bisectable observable diff.
+The original draft's interleaving of "FE split" and "Python
+unification" into doc 73a is removed. Both are doc 73b's job (see
+§3.10).
 
 ## 5. Stop rules (abort signals)
 
@@ -449,6 +446,68 @@ Live in `graph-editor/src/services/__tests__/__fixtures__/cf-baseline/`
 directory has a README naming the source graph, scenario set, capture
 date, and regeneration script.
 
+### 0D — Existing-suite regression baseline
+
+The named per-stage artefacts (built in Stages 1–7) and the Stage 0
+golden fixtures only cover what this plan adds or freezes. They do
+not catch breakage in tests that already exist and exercise the
+same surfaces. Stage 0D pins those existing suites as a regression
+net so an agent following this plan in isolation has a complete
+list of "must keep green" surfaces.
+
+The four existing surfaces this plan must keep green:
+
+1. **Python BE suite** — `pytest graph-editor/lib/tests/`. Includes
+   the recently centralised outside-in cohort suite
+   (`test_cohort_factorised_outside_in.py`, drives `analyse.sh` and
+   `param-pack.sh` end-to-end on synth fixtures), the new BE
+   diagnostics tests (`test_conditioned_forecast_response_contract.py
+   ::TestRateEvidenceProvenanceDiagnostics`,
+   `test_forecast_state_cohort.py::TestPreparedRuntimeBundle`), the
+   CF response contract suite, and the existing forecast-state /
+   model-resolver / cohort-maturity / temporal-regime tests. Many
+   require `requires_db`, `requires_data_repo`, `requires_synth`,
+   `requires_python_be` markers — capture the pass / skip set per
+   environment, not just pass count.
+
+2. **TS scenario / CF / composition / pack tests** — the relevant
+   slice of `npm test` (filter by file). Concretely the existing
+   `CompositionService.test.ts`, `windowCohortSemantics.paramPack.e2e.test.ts`,
+   `conditionedForecastCompleteness.test.ts`, and any other test
+   under `graph-editor/src/services/__tests__/` that mentions
+   scenarios, packs, CF, composition, or extraction. Do not run the
+   whole-repo `npm test` — too noisy, and this plan does not own
+   unrelated surfaces.
+
+3. **CLI tests** — `graph-editor/src/cli/__tests__/cliAnalyse.test.ts`
+   in full. Includes the new `--diag` test that asserts BE
+   diagnostics surface through the CLI; Stage 6 changes the prepared
+   scenario shape and synth-ID rebinding and could break this.
+
+4. **graph-ops parity scripts** — `graph-ops/scripts/conditioned-forecast-parity-test.sh`
+   and `graph-ops/scripts/cf-topology-suite.sh` if reachable in the
+   environment. These are end-to-end CLI regressions that bracket
+   Stages 4 and 6.
+
+**Capture rule**: at Stage 0 entry, run all four surfaces and
+record the pass / skip / fail set into
+`graph-editor/lib/tests/fixtures/cf-baseline/regression-baseline.txt`
+and `graph-editor/src/services/__tests__/__fixtures__/cf-baseline/regression-baseline.txt`
+(plain-text test-id lists). The same files are re-captured at the
+end of every stage; the per-stage gate compares deltas. New green
+tests added by the stage are expected; new fails or new skips that
+were not skips before require explicit attribution in the commit
+message.
+
+**A pre-Stage-0 capture must be taken with the plan's own work
+*not yet started*** — i.e. against the post-revert tree as it
+exists at plan-execution time. Without that, a stage cannot prove
+it preserved invariance. If the pre-Stage-0 capture shows existing
+failures, those are documented as "carried-in" and not gated against
+by later stages, but their disposition is recorded so an agent
+working through 73a does not assume every fail it sees is a
+regression it caused.
+
 ### Stage gate
 
 - The harness is in place and `cfTransactionHarness.test.ts` (a meta-
@@ -541,7 +600,7 @@ A degenerate instance documents the boundary in code.
   `_conditionedForecastGeneration` is not exported, not referenced in
   the supersession check).
 
-Stage 0 fixtures must remain green.
+Stage 0 fixtures (0A–0D) must remain green; the 0D regression baseline delta must be empty (or fully attributed in the commit message).
 
 ## 8. Stage 2 — Pack contract freeze + extractor/compositor fixes
 
@@ -560,13 +619,13 @@ in §2); this stage closes them.
 - `p.posterior.{alpha, beta, hdi_lower, hdi_upper, ess, rhat, fitted_at,
   fingerprint, provenance}` plus cohort-slice variants
 - `p.evidence.{mean, stdev, n, k}`
-- `p.forecast.{mean, stdev, alpha, beta, alpha_pred, beta_pred,
-  n_effective, source}` — the promoted-probability surface frozen by
-  doc 73b §3.2. Carrying these in the pack keeps per-scenario state
-  faithful through extract → diff → recompose; without them, scenarios
-  that differ in slice-resolved predictive state (which the Python
-  runtime reads via `resolved.alpha_pred` / `beta_pred` /
-  `n_effective`) would lose that state on rebuild.
+- `p.forecast.{mean, stdev, source}` — the narrow promoted-probability
+  surface per doc 73b §3.2. The Beta-shape and predictive fields
+  (`alpha`, `beta`, `alpha_pred`, `beta_pred`, `n_effective`) are NOT
+  in the pack; they reach the BE via per-call engorgement on the
+  request graph (doc 73b §3.2a). Display surfaces that read the
+  promoted layer (`'f'` mode, `ModelRateChart`, edge labels) need only
+  the three persisted fields.
 - `p.latency.{mu, sigma, t95, path_t95, promoted_*_sd, completeness,
   completeness_stdev, median_lag_days}` plus latency posterior
 - `p.n`
@@ -652,7 +711,7 @@ and
   or carries the value sourced from the parameter file at fetch time —
   not from the pack.
 
-Stage 0 fixtures must remain green.
+Stage 0 fixtures (0A–0D) must remain green; the 0D regression baseline delta must be empty (or fully attributed in the commit message).
 
 ## 9. Stage 3 — CF input/output observability
 
@@ -698,7 +757,7 @@ the expected child entries appear under the parent op, each with
 expected level + tag (`CONDITIONED_FORECAST`) and the supersession
 outcome present in the trace stream.
 
-Stage 0 fixtures must remain green.
+Stage 0 fixtures (0A–0D) must remain green; the 0D regression baseline delta must be empty (or fully attributed in the commit message).
 
 ## 10. Stage 4 — Post-CF param pack upsert correctness
 
@@ -772,9 +831,9 @@ The wider BE analysis contract sends a per-scenario request graph to
 each analysis endpoint, and engines (`cohort_maturity_v3`,
 `epistemic_bands.py`, `forecast_state.py`) derive scenario-specific
 dispersion at compute time from the per-scenario `model_vars[]`
-bayesian entry (derived per scenario from the parameter file by
-the FE in doc 73b's bundled switchover, Stage 4(a)) plus
-scenario-specific `p.evidence.*` plus the effective DSL. The per-scenario graph is the dispersion carrier;
+bayesian entry (engorged per scenario from the parameter file by
+the FE in doc 73b's Stage 4(a)) plus scenario-specific
+`p.evidence.*` plus the effective DSL. The per-scenario graph is the dispersion carrier;
 engines own the derivation.
 
 In that contract, CF's response scalars are **summary outputs** at
@@ -811,21 +870,18 @@ contract field (`p.mean`, `p.evidence.*`, `p.forecast.*`,
 the scenario from IDB and recomposing yields the same conditioned
 values.
 
-Stage 0 fixtures must remain green.
+Stage 0 fixtures (0A–0D) must remain green; the 0D regression baseline delta must be empty (or fully attributed in the commit message).
 
 ## 11. Stage 5 — Handoff to doc 73b
 
-The per-scenario `model_vars[]` switchover (delivery + promoted
-writer + consumer migration + legacy cleanup) lives entirely in
-doc 73b's bundled switchover and the cleanup stage that follows it.
-Earlier 5a/5b/5c sub-stages are retired — each was inert until the
-next landed; bundling them inside doc 73b makes each commit
-observable.
-
-73a's role at this boundary is to pin the §15A pre-handoff gates
-(per-scenario CF supersession, pack contract, request-graph shape).
-Doc 73b §3.2, §7 OP-resolutions, and §8 Stage 4(a)–(c) hold the
-substantive contract and failure-mode rules.
+Slice-material relocation (persistent `_posteriorSlices` stash → per-call
+engorgement on the request graph), the narrow promoted-probability
+writer, the lock-respecting writer discipline, and removal of
+`reprojectPosteriorForDsl` are all owned by doc 73b's Stage 4 and the
+cleanup stage that follows it. 73a's role at this boundary is to pin
+the §15A pre-handoff gates (per-scenario CF supersession, pack
+contract, request-graph shape). Doc 73b §3.2, §3.2a, §6.2a, and
+Stage 4 hold the substantive contract.
 
 ## 12. Stage 6 — CLI/FE alignment
 
@@ -836,9 +892,9 @@ FE and CLI diverge today because the CLI in
 populated scenario graph as the base graph for later analysis
 preparation, while the FE uses per-scenario graphs rebuilt from the
 baseline plus packs. With doc 73a Stage 2 + Stage 4 and doc 73b's
-bundled switchover (Stage 4) landed, both must consume the same
-contract — including the per-scenario `model_vars[]` derivation
-delivered by that switchover.
+Stage 4 (slice-material engorgement) landed, both must consume the
+same contract — including the per-scenario engorgement that 73b's
+Stage 4(a) runs at analysis-prep time on each per-scenario graph.
 
 ### Changes
 
@@ -875,7 +931,7 @@ same ordered scenario packs, and the same effective DSL, FE and CLI
 produce byte-identical scenario graphs on the contract fields, and
 byte-identical BE request payloads.
 
-Stage 0 fixtures must remain green.
+Stage 0 fixtures (0A–0D) must remain green; the 0D regression baseline delta must be empty (or fully attributed in the commit message).
 
 ## 13. Stage 7 — Verification rollup and Playwright e2e
 
@@ -920,8 +976,10 @@ silently regressed.
 
 Playwright spec passes against a clean dev server. The doc 73d
 surviving suite passes (run via the CI command, not as one omnibus
-test). Witness assertion captures the same value as Stage 0 or, if
-it changed, the change is captured in the commit message.
+test). The 0D regression baseline delta against the post-Stage-0
+capture is empty or fully attributed. Witness assertion captures
+the same value as Stage 0 or, if it changed, the change is captured
+in the commit message.
 
 ## 14. Commit groups
 
@@ -936,10 +994,11 @@ The work lands in seven separately bisectable commit groups:
    (TS only; debug-level logging only).
 5. Stage 4 — Post-CF upsert correctness + new field projections
    (`p.stdev`, `p.evidence.k/n`) + tests (TS only).
-6. **[Doc 73b switchover bundle runs here — per-scenario delivery,
-   promoted writer extension, and the first BE consumer migration.
-   Then the remaining consumer migrations and the legacy-path
-   cleanup. No doc 73a commits in this window.]**
+6. **[Doc 73b Stage 4 runs here — slice-material relocation
+   (persistent stash → per-call engorgement), narrow promoted
+   writer, CF de-collapse. Then doc 73b Stage 5 (lock-respecting
+   writer discipline) and Stage 6 (residual cleanup). No doc 73a
+   commits in this window.]**
 7. Stage 6 — CLI/FE alignment (TS only).
 8. Stage 7 — Playwright e2e + cross-cutting verification
    (test infra only).
@@ -951,12 +1010,13 @@ change to a Stage 0 fixture (with explicit witness).
 
 The list is split into **§15A pre-handoff gates** (must pass before
 doc 73b's Stage 3 begins) and **§15B final-cleanup gates** (depend on
-doc 73b's consumer migration completing). With the per-scenario
-delivery and the legacy-path cleanup both moved into doc 73b, the
-§15B set is small — it pins that doc 73b's switchover and cleanup
-have demonstrably landed and that doc 73a's verification rollup
-(Stage 7) still passes against the post-cleanup tree. Plans complete
-when all gates in both subsections hold.
+doc 73b's Stage 4 slice-material relocation completing). With the
+per-scenario delivery and the legacy-path cleanup both moved into
+doc 73b, the §15B set is small — it pins that doc 73b Stage 4 and
+the residual cleanup (Stage 6) have demonstrably landed and that doc
+73a's verification rollup (Stage 7) still passes against the
+post-cleanup tree. Plans complete when all gates in both subsections
+hold.
 
 ### §15A — pre-handoff gates (binding for 73b Stage 3 start)
 
@@ -1000,27 +1060,32 @@ A10. No file in the §3.10 doc-73-owned set has been modified
      change which fields the FE topo pass writes
      (`statisticalEnhancementService.ts`,
      `UpdateManager.ts::applyBatchLAGValues` write paths), must not
-     migrate BE consumer reads (`model_resolver.py`,
-     `forecast_state.py`, `epistemic_bands.py` read paths — these
-     move to the canonical promoted surface in doc 73b), must not
-     change `model_resolver.py`'s source taxonomy, must not extend
-     the promotion writer (`modelVarsResolution.ts::applyPromotion` —
-     doc 73b territory), and must not modify the legacy
-     `_posteriorSlices` / `reprojectPosteriorForDsl` paths
-     (removed in doc 73b after its consumer migration).
+     change BE consumer reads (`model_resolver.py`,
+     `forecast_state.py`, `epistemic_bands.py` — under doc 73b
+     slice-material readers keep their existing read paths and the
+     data reaches them via per-call request-graph engorgement
+     instead of the persistent stash; the carrier read in
+     `_resolve_edge_p` is the one consumer that does change, routed
+     in doc 73b Stage 4(d) through the shared `resolve_model_params`
+     resolver), must not change `model_resolver.py`'s source
+     taxonomy, must not extend the promotion writer
+     (`modelVarsResolution.ts::applyPromotion` — doc 73b territory),
+     and must not modify the legacy `_posteriorSlices` /
+     `reprojectPosteriorForDsl` paths (removed in doc 73b's Stage 6
+     cleanup, after Stage 4's slice-material relocation makes them
+     dead).
 
-### §15B — post-handoff gates (binding after the doc 73b switchover bundle has landed)
+### §15B — post-handoff gates (binding after doc 73b Stage 4 has landed)
 
-The §15B gates pass only after doc 73b's bundled switchover (Stage 4)
-acceptance gate has landed. They cover doc 73a work that depends on
-the per-scenario `model_vars[]` derivation that switchover delivers.
+The §15B gates pass only after doc 73b's Stage 4 (slice-material
+relocation) acceptance gate has landed. They cover doc 73a work that
+depends on the per-scenario engorgement Stage 4(a) introduces.
 
 B1. FE and CLI produce identical prepared scenario graphs and
     identical BE request payloads from the same base graph, scenario
-    packs, and effective DSL — including the per-scenario
-    `model_vars[]` derivation now produced by doc 73b's switchover.
-    Pinned by doc 73a Stage 6's named test
-    (`cliFeScenarioParity.test.ts`).
+    packs, and effective DSL — including the per-scenario engorgement
+    that doc 73b Stage 4(a) runs at analysis-prep time. Pinned by
+    doc 73a Stage 6's named test (`cliFeScenarioParity.test.ts`).
 B2. The Playwright roundtrip spec passes (Stage 7).
 B3. The Stage 0 baseline fixtures are still byte-equal at the end
     of Stage 6 and Stage 7, except for explicitly named expected
@@ -1059,7 +1124,7 @@ kept as the per-layer reasoning archive only.
 | 3 | `cfSessionLogShape.test.ts` | Vitest | Expected child entries, levels, tags |
 | 4 | `scenarioRegenerationCfUpsert.test.ts` | Vitest | Slow CF keeps regen unresolved; persisted params recompose to post-CF values |
 | 4 | `cfFieldMappingSentinel.test.ts` | Vitest | Sentinel CF response → §10 mapping table holds; `p_sd → p.stdev` is persisted; `p_sd_epistemic` is response-only and is NOT on the graph |
-| 5 | (handoff — see doc 73b) | n/a | Per-scenario `model_vars[]` derivation, promoted-writer extension, BE consumer migration, and `_posteriorSlices` / `reprojectPosteriorForDsl` removal are all owned by doc 73b's bundled switchover stage and the cleanup that follows it. Test artefacts live in doc 73b. |
+| 5 | (handoff — see doc 73b) | n/a | Slice-material relocation, narrow promoted writer, lock-respecting writer discipline, and `reprojectPosteriorForDsl` removal are all owned by doc 73b's Stages 4–6. Test artefacts live in doc 73b. |
 | 6 | `cliFeScenarioParity.test.ts` | Vitest | Same base + packs + DSL + resolver → byte-identical prepared graphs and CF payloads |
 | 7 | `liveScenarioConditionedForecastRoundtrip.spec.ts` | Playwright | Real-browser end-to-end |
 | 7 | (no separate cross-cutting bundle) | n/a | The doc 73d surviving suite, run as a CI sequence, is the regression barrier. No omnibus test file. |

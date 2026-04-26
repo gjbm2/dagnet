@@ -10,7 +10,7 @@
  */
 
 import 'fake-indexeddb/auto';
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { join } from 'path';
 import { loadGraphFromDisk, seedFileRegistry, type GraphBundle } from '../diskLoader';
 import { aggregateAndPopulateGraph } from '../aggregate';
@@ -407,5 +407,66 @@ describe('Snapshot-backed analysis (requires Python BE)', () => {
     const result = await response.json();
     expect(result.success).toBe(true);
     expect(result.result.analysis_type).toBe('daily_conversions');
+  });
+
+  it('should surface rate-evidence provenance when --diag is enabled for conditioned_forecast', async () => {
+    if (!beAvailable) return;
+
+    const { run } = await import('../commands/analyse');
+    const { setDiagnostic } = await import('../logger');
+
+    const savedArgv = process.argv;
+    const savedDiagGlobal = (globalThis as any).__dagnetDiagnostics;
+    const savedNoCacheGlobal = (globalThis as any).__dagnetComputeNoCache;
+    const stdoutChunks: string[] = [];
+    const stderrChunks: string[] = [];
+
+    const stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: any) => {
+      stdoutChunks.push(String(chunk));
+      return true;
+    }) as any);
+    const stderrSpy = vi.spyOn(console, 'error').mockImplementation((...args: any[]) => {
+      stderrChunks.push(args.map((arg) => String(arg)).join(' '));
+    });
+
+    process.argv = [
+      'node',
+      'cli',
+      '--graph',
+      FIXTURES_DIR,
+      '--name',
+      'test-fixture',
+      '--query',
+      'window(1-Jan-26:10-Jan-26)',
+      '--type',
+      'conditioned_forecast',
+      '--subject',
+      'from(start).to(middle)',
+      '--diag',
+      '--no-cache',
+    ];
+
+    setDiagnostic(true);
+    try {
+      await run();
+    } finally {
+      setDiagnostic(false);
+      process.argv = savedArgv;
+      (globalThis as any).__dagnetDiagnostics = savedDiagGlobal;
+      (globalThis as any).__dagnetComputeNoCache = savedNoCacheGlobal;
+      stdoutSpy.mockRestore();
+      stderrSpy.mockRestore();
+    }
+
+    const stdout = stdoutChunks.join('');
+    const stderr = stderrChunks.join('\n');
+    const result = JSON.parse(stdout);
+
+    expect(result._diagnostics).toBeDefined();
+    expect(Array.isArray(result._diagnostics.rate_evidence_provenance_by_edge)).toBe(true);
+    expect(result._diagnostics.rate_evidence_provenance_by_edge.length).toBeGreaterThan(0);
+    expect(result._diagnostics.rate_evidence_provenance_by_edge[0]).toHaveProperty('selected_family');
+    expect(stderr).toContain('── BE diagnostics ──');
+    expect(stderr).toContain('rate_evidence_provenance_by_edge');
   });
 });

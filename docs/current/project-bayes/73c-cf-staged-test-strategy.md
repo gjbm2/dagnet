@@ -65,23 +65,18 @@ Two discrete operations:
 
 1. The FE composes a per-scenario request graph from baseline +
    ordered packs (existing behaviour, owned by doc 73a).
-2. The FE derives a fresh per-scenario `model_vars[]` bayesian entry
-   per edge from the parameter-file slice that matches that
-   scenario's effective DSL (NEW in doc 73b's bundled switchover —
-   formerly held in doc 73a Stage 5a).
+2. At analysis-prep / CF request-build time, the FE engorges each
+   per-scenario request graph with the parameter-file slice that
+   matches that scenario's effective DSL (NEW in doc 73b Stage 4(a)).
+   The engorgement preserves today's read shape (`_posteriorSlices`-
+   like fields) so BE consumers do not need code changes; what changes
+   is that the slice library is no longer persistently stashed on the
+   live graph.
 
-The BE consumer-read migration (switching `model_resolver.py`,
-`forecast_state.py`, `epistemic_bands.py` from `posterior.*` /
-`latency.posterior.*` fallbacks to the canonical promoted surface
-`p.forecast.*`) is also doc 73b's responsibility. The first reader
-switches in the bundled switchover stage alongside (2); the rest
-follow in doc 73b's consumer-migration stage.
-
-This sidecar's Layer C failure modes apply to whichever doc actually
-implements operation (2). After the resequence, that is doc 73b. The
-test artefacts below are still useful as written — they are stage
-gates for the bundled switchover and should be cited from doc 73b's
-acceptance.
+This sidecar's Layer C failure modes apply to operation (2). After
+the resequence, that is doc 73b Stage 4(a). The test artefacts below
+are still useful as written — they are stage gates for that
+engorgement and should be cited from doc 73b's acceptance.
 
 ### C.2 Enumerate concrete failure modes
 
@@ -118,8 +113,12 @@ acceptance.
   more times than necessary (perf regression that doesn't affect
   correctness).
 
-Failure modes for the BE consumer-migration step (originally F7, F8,
-F9 in earlier drafts) are explicitly handed off to doc 73b.
+Failure modes F7, F8, F9 from earlier drafts (BE-side reads of the
+slice material) are explicitly handed off to doc 73b. Under doc 73b's
+simplified Stage 4, BE consumers do not migrate — engorgement
+preserves today's read shape — so what's tested in doc 73b is that
+the engorged material lands in the expected shape, not that consumers
+switched read paths.
 
 ### C.3 Test level for each
 
@@ -141,10 +140,12 @@ F9 in earlier drafts) are explicitly handed off to doc 73b.
   compare).
 - F5 is a separate integration test (exercises serialisation).
 
-Result: **three tests** for Layer C (now in doc 73b's bundled
-switchover scope). The fourth test in earlier drafts —
-`beReadFromModelVarsOnly.test.py` for F7/F8 — lives in doc 73b's
-consumer-migration test artefacts.
+Result: **three tests** for Layer C (owned by doc 73b Stage 4(a) —
+the analysis-prep engorgement step). The fourth test in earlier
+drafts — `beReadFromModelVarsOnly.test.py` for F7/F8 — is no longer
+required: under doc 73b's simplified Stage 4 the BE consumers keep
+their existing read paths; what changes is where the data comes
+from (per-call engorgement, not persistent stash).
 
 ### C.5 Concrete tests
 
@@ -221,20 +222,24 @@ produced standalone (per C-Test-1). (F5)
 
 **Does NOT catch**: anything else.
 
-#### C-Test-4 — moved to doc 73b
+#### C-Test-4 — dropped under simplified doc 73b
 
 The earlier `beReadFromModelVarsOnly.test.py` covering F7/F8 (BE
-consumer reads the right surface; behaves correctly when the source
-is absent) is doc 73b's responsibility. The equivalent test belongs
-in doc 73b's consumer-migration stage and asserts the canonical
-promoted surface (`p.forecast.*`) is the actual read target, not
-just `model_vars[]`. Doc 73c does not host that test.
+consumer reads the right surface) was premised on a consumer-migration
+stage that no longer exists. Doc 73b's simplified Stage 4 leaves BE
+read paths unchanged — they continue to read `model_vars[]`,
+`posterior.*`, and `latency.posterior.*` on the request graph,
+served by per-call engorgement instead of the persistent stash.
+The test artefact is therefore not required. C-Test-1 already
+asserts the engorged shape matches what consumers read today.
 
 ### C.6 Cross-check
 
-- **F7, F8, F9** (BE consumer migration) explicitly handed off to
-  doc 73b — including the test artefact previously planned as
-  C-Test-4.
+- **F7, F8, F9** (BE-side reads of slice material) handed off to
+  doc 73b. Under doc 73b's simplified Stage 4 the BE read paths do
+  not migrate — engorgement preserves today's shape — so the
+  C-Test-4 artefact previously planned for these is dropped, not
+  moved.
 - **F10** added during cross-check; folded into C-Test-2.
 - **F11** flagged as out of scope for correctness; left as a
   potential separate perf regression test if it becomes a concern.

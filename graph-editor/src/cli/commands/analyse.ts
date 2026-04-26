@@ -328,6 +328,7 @@ async function runAnalyse() {
     // Build the payload from the prepared scenarios
     const forecastPayload = {
       analytics_dsl: prepared.analyticsDsl,
+      ...(isDiagnostic() ? { _diagnostics: true } : {}),
       scenarios: prepared.scenarios.map((sc: any) => ({
         scenario_id: sc.scenario_id,
         graph: buildConditionedForecastGraphSnapshot(

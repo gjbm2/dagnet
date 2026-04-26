@@ -925,6 +925,64 @@ class TestPreparedRuntimeBundle:
         assert diag['p_conditioning_evidence']['temporal_family'] == 'window'
         assert diag['p_conditioning_evidence']['source'] == 'frame_evidence'
         assert 'direct_cohort_enabled' not in diag['p_conditioning_evidence']
+        assert diag['rate_evidence_provenance'] == {
+            'selected_family': 'window',
+            'selected_anchor_node': None,
+            'admission_decision': 'denied',
+            'decision_reason': 'cohort_rate_evidence_not_admitted',
+        }
+
+    def test_runtime_bundle_serialises_identity_collapse_provenance(self):
+        from runner.forecast_runtime import (
+            build_prepared_runtime_bundle,
+            serialise_runtime_bundle,
+        )
+
+        bundle = build_prepared_runtime_bundle(
+            mode='cohort',
+            query_from_node='X',
+            query_to_node='Y',
+            anchor_node_id='X',
+            is_multi_hop=False,
+            numerator_representation='factorised',
+            p_conditioning_temporal_family='window',
+            p_conditioning_source='frame_evidence',
+        )
+        diag = serialise_runtime_bundle(bundle)
+
+        assert diag is not None
+        assert diag['rate_evidence_provenance'] == {
+            'selected_family': 'window',
+            'selected_anchor_node': None,
+            'admission_decision': 'identity_collapse',
+            'decision_reason': 'anchor_equals_subject_start',
+        }
+
+    def test_runtime_bundle_serialises_admitted_single_hop_provenance(self):
+        from runner.forecast_runtime import (
+            build_prepared_runtime_bundle,
+            serialise_runtime_bundle,
+        )
+
+        bundle = build_prepared_runtime_bundle(
+            mode='cohort',
+            query_from_node='X',
+            query_to_node='Y',
+            anchor_node_id='A',
+            is_multi_hop=False,
+            numerator_representation='factorised',
+            p_conditioning_temporal_family='cohort',
+            p_conditioning_source='snapshot_frames',
+        )
+        diag = serialise_runtime_bundle(bundle)
+
+        assert diag is not None
+        assert diag['rate_evidence_provenance'] == {
+            'selected_family': 'cohort',
+            'selected_anchor_node': 'A',
+            'admission_decision': 'admitted',
+            'decision_reason': 'single_hop_anchor_override',
+        }
 
     @requires_db
     @requires_data_repo

@@ -931,6 +931,8 @@ def _handle_cohort_maturity_v2(data: Dict[str, Any]) -> Dict[str, Any]:
     analysis_type = 'cohort_maturity_v2'
     scenarios = data.get('scenarios', [])
     top_analytics_dsl = data.get('analytics_dsl', '')
+    _emit_diagnostics = bool(data.get('_diagnostics'))
+    _diag: Dict[str, Any] = {} if _emit_diagnostics else {}
     display_settings = data.get('display_settings') or {}
 
     per_scenario_results: List[Dict[str, Any]] = []
@@ -1600,6 +1602,7 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
             build_prepared_span_execution,
             find_edge_by_id,
             prepare_forecast_runtime_inputs,
+            serialise_rate_evidence_provenance,
         )
 
         _prepared_runtime_v3 = prepare_forecast_runtime_inputs(
@@ -1653,6 +1656,10 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
         _v3_x_provider_overlay = _prepared_runtime_v3.x_provider_overlay
         _v3_resolved_override = _prepared_runtime_v3.resolved_override
         _v3_runtime_bundle = _prepared_runtime_v3.runtime_bundle
+        if _emit_diagnostics and _v3_runtime_bundle is not None:
+            _diag['rate_evidence_provenance'] = serialise_rate_evidence_provenance(
+                _v3_runtime_bundle
+            )
 
         # ── Call v3 row builder ───────────────────────────────────────
         _is_multi_hop = preparation.is_multi_hop
@@ -2157,6 +2164,8 @@ def handle_conditioned_forecast(data: Dict[str, Any]) -> Dict[str, Any]:
 
     scenarios = data.get('scenarios', [])
     top_analytics_dsl = data.get('analytics_dsl', '')
+    _emit_diagnostics = bool(data.get('_diagnostics'))
+    _diag: Dict[str, Any] = {} if _emit_diagnostics else {}
 
     per_scenario_results: List[Dict[str, Any]] = []
 
@@ -2268,7 +2277,10 @@ def handle_conditioned_forecast(data: Dict[str, Any]) -> Dict[str, Any]:
                 log_prefix='[forecast]',
             )
 
-            from runner.forecast_runtime import prepare_forecast_runtime_inputs
+            from runner.forecast_runtime import (
+                prepare_forecast_runtime_inputs,
+                serialise_rate_evidence_provenance,
+            )
 
             _prepared_runtime = prepare_forecast_runtime_inputs(
                 graph_data=graph_data,
@@ -2316,6 +2328,14 @@ def handle_conditioned_forecast(data: Dict[str, Any]) -> Dict[str, Any]:
             _span_params = _prepared_runtime.span_params
             _x_provider = _prepared_runtime.x_provider
             _runtime_bundle = _prepared_runtime.runtime_bundle
+            if _emit_diagnostics and _runtime_bundle is not None and last_edge_id:
+                _diag.setdefault('rate_evidence_provenance_by_edge', []).append({
+                    'scenario_id': scenario_id,
+                    'edge_uuid': last_edge_id,
+                    'from_node': query_from_node,
+                    'to_node': query_to_node,
+                    **serialise_rate_evidence_provenance(_runtime_bundle),
+                })
 
             # ── Call v3 row builder and read scalars ────────────────
             # Call unconditionally when we have an edge id — the row
@@ -2544,7 +2564,10 @@ def handle_conditioned_forecast(data: Dict[str, Any]) -> Dict[str, Any]:
             "skipped_edges": skipped_edges,
         })
 
-    return {"success": True, "scenarios": per_scenario_results}
+    resp = {"success": True, "scenarios": per_scenario_results}
+    if _diag:
+        resp["_diagnostics"] = _diag
+    return resp
 
 
 def _append_synthetic_frames_impl(args: Dict[str, Any]) -> None:

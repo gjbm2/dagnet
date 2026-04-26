@@ -187,9 +187,9 @@ Real risk is narrow: pack extraction can run before slow CF applies.
 
 ### Layer F — cleanup integrity
 
-Cleanup matters during doc 73b's cleanup stage (Stage 6), only after the
-consumer migration (73b Stages 4 and 5) has made legacy surfaces
-non-load-bearing.
+Cleanup matters during doc 73b's cleanup stage (Stage 6), only after
+Stage 4's slice-material relocation has made the legacy persistent
+stash non-load-bearing.
 
 - **F-Test-1 `cleanupGrepGates.test.ts`** — Keep as static gate only.
   Absence checks for `_posteriorSlices`, `reprojectPosteriorForDsl`,
@@ -263,9 +263,10 @@ The suite below is the recommended replacement for `73c`.
 | 73a/2 | `extractDiffParamsContractCoverage.test.ts` | Keep | Contract fields are extracted even when `p.mean` is unchanged; excluded fields stay out. |
 | 73a/2 | `compositorReplayCoverage.test.ts` | Keep, trimmed | Contract fields, `conditional_p`, nested merges, and layer order replay. |
 | 73a/2 | `scenarioPackContractRoundtrip.test.ts` | Keep | Extract/recompose faithfully rebuilds working graph on contract fields. |
-| 73b/4 | `perScenarioModelVarsDerivation.test.ts` | Keep | Correct slice, full shape, analytic preservation, no cross-context bayesian fallback. (Owned by doc 73b's bundled switchover; was 73a Stage 5a.) |
-| 73b/4 | `cfAndAnalysisDerivationParity.test.ts` | Keep, trimmed | Analysis and CF request paths derive identical model vars. (Owned by doc 73b's bundled switchover; was 73a Stage 5a.) |
-| 73b/6 | cleanup grep/static gates | Keep as static gates | Removed legacy symbols do not return after consumer migration. (Owned by doc 73b's cleanup stage; was 73a Stage 5c.) |
+| 73b/4 | `perScenarioModelVarsDerivation.test.ts` | Keep | Correct slice, full shape, analytic preservation, no cross-context bayesian fallback. (Owned by doc 73b Stage 4(a) — engorgement step.) |
+| 73b/4 | `cfAndAnalysisDerivationParity.test.ts` | Keep, trimmed | Analysis and CF request paths derive identical model vars. (Owned by doc 73b Stage 4(a) — engorgement step.) |
+| 73b/4 | `carrierReadViaSharedResolver.test.py` | Keep | `_resolve_edge_p` (and any sibling reach/carrier site) routes its model-input read through `resolve_model_params`, not direct `p.mean`. Sentinel: a graph where `p.mean` and the promoted source disagree — carrier behaviour follows the promoted source, not `p.mean`. (Owned by doc 73b Stage 4(d) — carrier consumer read via shared resolver. Closes Defect 2 / Mismatch 4(i).) |
+| 73b/6 | cleanup grep/static gates | Keep as static gates | Removed legacy symbols do not return after Stage 4's slice-material relocation. (Owned by doc 73b's cleanup stage (Stage 6); was 73a Stage 5c.) |
 | 73b/6 | display-after-cleanup check | Trim | One or two high-risk display surfaces still render after legacy graph fields are removed. (Owned by doc 73b's cleanup stage; was 73a Stage 5c.) |
 | 73a/3 | `cfSessionLogShape.test.ts` | Keep, trimmed | CF lifecycle visible enough for users and debugging; no brittle wording snapshots. |
 | 73a/6 | `cliFeScenarioParity.test.ts` | Keep | FE and CLI build identical scenario graphs/payloads from same packs and DSL. **Phase note:** depends on doc 73b's switchover for the per-scenario `model_vars[]` derivation; cannot run pre-73b-switchover. |
@@ -301,15 +302,16 @@ Settled contract decisions affecting test pinning:
    updated in lockstep with the switchover commit.
 2. **`p_sd → p.stdev` persistence** — RESOLVED (73b OP9, decision
    B-narrow). CF writes `p_sd → p.stdev`; mapping test pins it.
-3. **Wrong-context fallback** — covered. Doc 73b's bundled-switchover
-   delivery sub-step removes `posteriorSliceResolution.ts`'s
+3. **Wrong-context fallback** — covered. Doc 73b Stage 4(a)
+   (engorgement at analysis-prep) removes `posteriorSliceResolution.ts`'s
    context-stripping fallback (or rejects mismatched returned slices
    at the seam). Derivation test keeps the no-cross-context case.
 4. **`analytics_dsl` in CF requests** — open. The envelope test
    should assert whichever request contract is actually live; doc 73c
    includes the field but whole-graph CF design has moved on.
-5. **Cleanup sequencing** — covered. Doc 73b's cleanup-stage tests
-   are gated on its own consumer migration (Stages 4 and 5).
+5. **Cleanup sequencing** — covered. Doc 73b's cleanup-stage (Stage 6)
+   tests are gated on Stage 4 (slice-material relocation), which
+   removes the persistent stash and its read-side projector.
 
 ## 8. Recommended replacement posture
 

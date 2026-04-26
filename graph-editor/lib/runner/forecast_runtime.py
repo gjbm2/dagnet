@@ -383,6 +383,53 @@ def build_prepared_span_execution(
     )
 
 
+def serialise_rate_evidence_provenance(
+    bundle: Optional[PreparedForecastRuntimeBundle],
+) -> Optional[Dict[str, Any]]:
+    """Return a public semantic summary of the rate-evidence choice."""
+    if bundle is None:
+        return None
+
+    anchor_node_id = bundle.carrier_to_x.anchor_node_id or None
+    x_node_id = bundle.carrier_to_x.x_node_id or None
+    selected_family = str(bundle.p_conditioning_evidence.temporal_family or 'window')
+
+    if bundle.mode == 'window':
+        return {
+            'selected_family': 'window',
+            'selected_anchor_node': None,
+            'admission_decision': 'denied',
+            'decision_reason': 'window_query_uses_window_rate_evidence',
+        }
+
+    if anchor_node_id and x_node_id and anchor_node_id == x_node_id:
+        return {
+            'selected_family': 'window',
+            'selected_anchor_node': None,
+            'admission_decision': 'identity_collapse',
+            'decision_reason': 'anchor_equals_subject_start',
+        }
+
+    if selected_family == 'cohort':
+        return {
+            'selected_family': 'cohort',
+            'selected_anchor_node': anchor_node_id,
+            'admission_decision': 'admitted',
+            'decision_reason': (
+                'single_hop_anchor_override'
+                if not bundle.subject_span.is_multi_hop
+                else 'anchor_differs_from_subject_start'
+            ),
+        }
+
+    return {
+        'selected_family': 'window',
+        'selected_anchor_node': None,
+        'admission_decision': 'denied',
+        'decision_reason': 'cohort_rate_evidence_not_admitted',
+    }
+
+
 def serialise_runtime_bundle(
     bundle: Optional[PreparedForecastRuntimeBundle],
 ) -> Optional[Dict[str, Any]]:
@@ -454,6 +501,7 @@ def serialise_runtime_bundle(
         'sweep_eligible': bundle.sweep_eligible,
         'cf_mode': bundle.cf_mode,
         'cf_reason': bundle.cf_reason,
+        'rate_evidence_provenance': serialise_rate_evidence_provenance(bundle),
     }
 
 
