@@ -34,6 +34,7 @@ import {
 import type { Graph, DateRange } from '../types';
 import toast from 'react-hot-toast';
 import { operationRegistryService } from '../services/operationRegistryService';
+import { useScenariosContextOptional } from '../contexts/ScenariosContext';
 
 // ============================================================================
 // Re-export types from service for backward compatibility
@@ -99,6 +100,7 @@ export interface UseFetchDataReturn {
 
 export function useFetchData(options: UseFetchDataOptions): UseFetchDataReturn {
   const { graph: graphOrGetter, setGraph, currentDSL: dslOrGetter } = options;
+  const scenariosContext = useScenariosContextOptional();
   
   // Helper to resolve graph (supports both value and getter for batch operations)
   const getGraph = useCallback((): Graph | null => {
@@ -118,6 +120,13 @@ export function useFetchData(options: UseFetchDataOptions): UseFetchDataReturn {
   // For render-time access (e.g., display in UI)
   const graph = getGraph();
   const effectiveDSL = useMemo(() => getDSL(), [getDSL]);
+  const scenarioFetchDefaults = useMemo(() => {
+    if (!scenariosContext) return undefined;
+    return {
+      scenarioId: 'current',
+      cfSupersessionState: scenariosContext.cfSupersessionState,
+    } satisfies Pick<FetchOptions, 'scenarioId' | 'cfSupersessionState'>;
+  }, [scenariosContext]);
   
   /**
    * Check if a specific item needs fetching for the given window.
@@ -154,15 +163,19 @@ export function useFetchData(options: UseFetchDataOptions): UseFetchDataReturn {
       return { success: false, item, error: new Error('No graph loaded') };
     }
     
+    const mergedFetchOptions = scenarioFetchDefaults
+      ? { ...scenarioFetchDefaults, ...fetchOptions }
+      : fetchOptions;
+
     return fetchDataService.fetchItem(
       item,
-      fetchOptions,
+      mergedFetchOptions,
       currentGraph,
       setGraph,
       currentDSL,
       getGraph // Pass getter for fresh graph after fetch
     );
-  }, [getGraph, getDSL, setGraph]);
+  }, [getGraph, getDSL, setGraph, scenarioFetchDefaults]);
   
   /**
    * Fetch multiple items with same mode.
@@ -176,15 +189,19 @@ export function useFetchData(options: UseFetchDataOptions): UseFetchDataReturn {
     
     if (!currentGraph || items.length === 0) return [];
     
+    const mergedFetchOptions = scenarioFetchDefaults
+      ? { ...scenarioFetchDefaults, ...fetchOptions }
+      : fetchOptions;
+
     return fetchDataService.fetchItems(
       items,
-      fetchOptions,
+      mergedFetchOptions,
       currentGraph,
       setGraph,
       currentDSL,
       getGraph // Pass getter for fresh graph after each fetch
     );
-  }, [getGraph, getDSL, setGraph]);
+  }, [getGraph, getDSL, setGraph, scenarioFetchDefaults]);
   
   return {
     fetchItem,

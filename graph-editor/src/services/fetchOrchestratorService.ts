@@ -7,6 +7,7 @@ import type { FetchPlan, FetchPlanItem } from './fetchPlanTypes';
 import { summarisePlan } from './fetchPlanTypes';
 import { dataOperationsService } from './dataOperationsService';
 import { fetchDataService } from './fetchDataService';
+import type { ConditionedForecastSupersessionState } from './conditionedForecastSupersessionState';
 
 export interface FetchOrchestratorBuildPlanResult {
   plan: FetchPlan;
@@ -209,16 +210,38 @@ class FetchOrchestratorService {
     setGraph: (g: Graph | null) => void;
     dsl: string;
     skipStage2?: boolean;
+    awaitBackgroundPromises?: boolean;
+    scenarioId?: string;
+    cfSupersessionState?: ConditionedForecastSupersessionState;
     parentLogId?: string;
     querySignatures?: Record<string, string>;
   }): Promise<void> {
-    const { graph, setGraph, dsl, skipStage2 = false, parentLogId, querySignatures } = input;
+    const {
+      graph,
+      setGraph,
+      dsl,
+      skipStage2 = false,
+      awaitBackgroundPromises,
+      scenarioId,
+      cfSupersessionState,
+      parentLogId,
+      querySignatures,
+    } = input;
     const items = fetchDataService.getItemsForFromFileLoad(graph);
     if (items.length === 0) return;
 
     await fetchDataService.fetchItems(
       items,
-      { mode: 'from-file', skipStage2, parentLogId, suppressBatchToast: true, querySignatures } as any,
+      {
+        mode: 'from-file',
+        skipStage2,
+        awaitBackgroundPromises,
+        scenarioId,
+        cfSupersessionState,
+        parentLogId,
+        suppressBatchToast: true,
+        querySignatures,
+      } as any,
       graph,
       setGraph,
       dsl,
@@ -235,6 +258,9 @@ class FetchOrchestratorService {
     setGraph: (g: Graph | null) => void;
     dsl: string;
     skipStage2?: boolean;
+    awaitBackgroundPromises?: boolean;
+    scenarioId?: string;
+    cfSupersessionState?: ConditionedForecastSupersessionState;
     parentLogId?: string;
     attempts?: number;
     delayMs?: number;
@@ -249,6 +275,9 @@ class FetchOrchestratorService {
       setGraph,
       dsl,
       skipStage2 = false,
+      awaitBackgroundPromises,
+      scenarioId,
+      cfSupersessionState,
       parentLogId,
       attempts = 6,
       delayMs = 75,
@@ -266,7 +295,18 @@ class FetchOrchestratorService {
 
       const results = await fetchDataService.fetchItems(
         items,
-        { mode: 'from-file', skipStage2, parentLogId, suppressBatchToast: true, querySignatures, suppressPipelineToast, scenarioLabel } as any,
+        {
+          mode: 'from-file',
+          skipStage2,
+          awaitBackgroundPromises,
+          scenarioId,
+          cfSupersessionState,
+          parentLogId,
+          suppressBatchToast: true,
+          querySignatures,
+          suppressPipelineToast,
+          scenarioLabel,
+        } as any,
         g,
         setGraph,
         dsl,

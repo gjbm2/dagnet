@@ -120,6 +120,76 @@ describe('CompositionService', () => {
       expect(result.edges?.['edge-1']?.conditional_p?.['visited(node-a)']?.mean).toBe(0.5);
       expect(result.edges?.['edge-1']?.conditional_p?.['visited(node-b)']?.mean).toBe(0.7);
     });
+
+    it('deep-merges nested probability fields on edge.p', () => {
+      const base: ScenarioParams = {
+        edges: {
+          'edge-1': {
+            p: {
+              mean: 0.4,
+              n: 100,
+              posterior: { alpha: 1, beta: 9 },
+              latency: { posterior: { mu_mean: 2, sigma_mean: 3 } },
+            },
+          },
+        },
+      };
+
+      const overlay: ScenarioParams = {
+        edges: {
+          'edge-1': {
+            p: {
+              n: 120,
+              posterior: { alpha: 5 },
+              latency: { posterior: { sigma_mean: 4 } },
+            },
+          },
+        },
+      };
+
+      const result = composeParams(base, [overlay]);
+      const p = result.edges?.['edge-1']?.p;
+      expect(p?.n).toBe(120);
+      expect(p?.posterior?.alpha).toBe(5);
+      expect(p?.posterior?.beta).toBe(9);
+      expect(p?.latency?.posterior?.mu_mean).toBe(2);
+      expect(p?.latency?.posterior?.sigma_mean).toBe(4);
+    });
+
+    it('deep-merges nested conditional_p probability fields', () => {
+      const base: ScenarioParams = {
+        edges: {
+          'edge-1': {
+            conditional_p: {
+              'visited(node-a)': {
+                mean: 0.3,
+                posterior: { alpha: 2, beta: 8 },
+              },
+            },
+          },
+        },
+      };
+
+      const overlay: ScenarioParams = {
+        edges: {
+          'edge-1': {
+            conditional_p: {
+              'visited(node-a)': {
+                n: 50,
+                posterior: { alpha: 6 },
+              },
+            },
+          },
+        },
+      };
+
+      const result = composeParams(base, [overlay]);
+      const cond = result.edges?.['edge-1']?.conditional_p?.['visited(node-a)'];
+      expect(cond?.mean).toBe(0.3);
+      expect(cond?.n).toBe(50);
+      expect(cond?.posterior?.alpha).toBe(6);
+      expect(cond?.posterior?.beta).toBe(8);
+    });
     
     it('merges node parameters', () => {
       const base: ScenarioParams = {
@@ -294,6 +364,63 @@ describe('CompositionService', () => {
       const result = applyComposedParamsToGraph(baseGraph, params);
       
       expect(result.edges[0].weight_default).toBe(100);
+    });
+
+    it('applies p.n/posterior and conditional_p record updates onto graph edges', () => {
+      const graphWithConditionals: Graph = {
+        nodes: [{ uuid: 'node-1', id: 'start', label: 'Start' }],
+        edges: [
+          {
+            uuid: 'edge-uuid-1',
+            id: 'edge-1',
+            from: 'node-1',
+            to: 'node-2',
+            p: { mean: 0.5, posterior: { alpha: 1, beta: 3 } as any } as any,
+            conditional_p: [
+              {
+                condition: 'visited(node-a)',
+                p: { mean: 0.2, posterior: { beta: 7 } as any } as any,
+              } as any,
+            ],
+          } as any,
+        ],
+        policies: { default_outcome: 'end' },
+        metadata: { version: '1.0.0', created_at: '2024-01-01' },
+      };
+
+      const params: ScenarioParams = {
+        edges: {
+          'edge-1': {
+            p: {
+              n: 250,
+              posterior: { alpha: 4 },
+            },
+            conditional_p: {
+              'visited(node-a)': {
+                n: 99,
+                posterior: { alpha: 5 },
+              },
+              'visited(node-b)': {
+                mean: 0.8,
+              },
+            },
+          },
+        },
+      };
+
+      const result = applyComposedParamsToGraph(graphWithConditionals, params);
+      const edge = result.edges[0] as any;
+      expect(edge.p.n).toBe(250);
+      expect(edge.p.posterior.alpha).toBe(4);
+      expect(edge.p.posterior.beta).toBe(3);
+
+      const condA = edge.conditional_p.find((c: any) => c.condition === 'visited(node-a)');
+      const condB = edge.conditional_p.find((c: any) => c.condition === 'visited(node-b)');
+      expect(condA.p.mean).toBe(0.2);
+      expect(condA.p.n).toBe(99);
+      expect(condA.p.posterior.alpha).toBe(5);
+      expect(condA.p.posterior.beta).toBe(7);
+      expect(condB.p.mean).toBe(0.8);
     });
   });
 

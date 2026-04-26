@@ -54,6 +54,10 @@ import { autoUpdatePolicyService } from '../services/autoUpdatePolicyService';
 import { graphTopologySignature } from '../services/graphTopologySignatureService';
 import { ukDayBoundarySchedulerService } from '../services/ukDayBoundarySchedulerService';
 import { computeScenarioDepsStampV1 } from '../services/scenarioProvenanceService';
+import {
+  createConditionedForecastSupersessionState,
+  type ConditionedForecastSupersessionState,
+} from '../services/conditionedForecastSupersessionState';
 
 import {
   SCENARIO_PALETTE,
@@ -85,6 +89,7 @@ export interface ScenariosContextValue {
   
   // Live scenarios state
   baseDSL: string;
+  cfSupersessionState: ConditionedForecastSupersessionState;
   
   // CRUD operations
   captureScenario: (
@@ -182,6 +187,9 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
   const [baseDSL, setBaseDSLState] = useState<string>('');
   const lastFileIdRef = useRef<string | null>(null);
   const [scenariosLoaded, setScenariosLoaded] = useState(false);
+  const cfSupersessionStateRef = useRef<ConditionedForecastSupersessionState>(
+    createConditionedForecastSupersessionState(),
+  );
 
   // Auto-update charts policy (defaults ON; forced ON in live share / dashboard).
   const [autoUpdateChartsEnabled, setAutoUpdateChartsEnabled] = useState<boolean>(true);
@@ -966,6 +974,10 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
           setGraph: setScenarioGraph as any,
           dsl: effectiveFetchDSL,
           skipStage2: options?.skipStage2 ?? false,
+          // Scenario packs must snapshot post-CF state; wait for async CF handlers.
+          awaitBackgroundPromises: true,
+          scenarioId: id,
+          cfSupersessionState: cfSupersessionStateRef.current,
           parentLogId: regenLogId,
           attempts: 6,
           delayMs: 75,
@@ -1831,6 +1843,7 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
     scenariosReady: scenariosLoaded,
     graph,
     baseDSL,
+    cfSupersessionState: cfSupersessionStateRef.current,
     captureScenario,
     createBlank,
     getScenario,

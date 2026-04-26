@@ -54,6 +54,11 @@ import { enumerateFetchTargets } from './fetchTargetEnumerationService';
 import { buildItemKey } from './fetchPlanTypes';
 import { rateLimiter, getEffectiveRateLimitCooloffMinutes } from './rateLimiter';
 import { startRateLimitCountdown } from './rateLimitCountdownService';
+import {
+  createConditionedForecastSupersessionState,
+  resolveConditionedForecastScenarioId,
+  type ConditionedForecastSupersessionState,
+} from './conditionedForecastSupersessionState';
 
 // ============================================================================
 // Types (re-exported for consumers)
@@ -192,6 +197,18 @@ export interface FetchOptions {
    * candidate-regime discovery.
    */
   workspace?: { repository: string; branch: string };
+
+  /**
+   * Logical scenario identity for conditioned forecast supersession.
+   * Defaults to "current" when omitted.
+   */
+  scenarioId?: string;
+
+  /**
+   * Supersession state used to discard stale conditioned forecast responses.
+   * Scenario-aware callers (tabs) should pass a stable per-tab instance.
+   */
+  cfSupersessionState?: ConditionedForecastSupersessionState;
 
   /**
    * Pre-computed query signatures from the fetch planner, keyed by FetchPlan itemKey.
@@ -1218,10 +1235,9 @@ export function completePipelineOp(
   _pipelineStates.delete(opId);
 }
 
-// Generation counter: each fetchItems call increments this. The conditioned
-// forecast closure captures the current generation and discards its result
-// if a newer fetch cycle has started (prevents stale p.mean clobbering).
-let _conditionedForecastGeneration = 0;
+// Backward-compatible fallback for callers that do not thread explicit
+// supersession state. Scenario-aware flows should pass a per-tab instance.
+const _defaultCfSupersessionState = createConditionedForecastSupersessionState();
 
 export async function fetchItems(
   items: FetchItem[],
@@ -2134,10 +2150,13 @@ export async function runStage2EnhancementsAndInboundN(
           // the snapshot DB. That gating was pathological and contradicted
           // doc 50's "no silent drops" invariant; it is removed here.
           //
-          // Generation counter (_conditionedForecastGeneration) guards against a stale response
-          // from a previous fetch cycle clobbering the current graph.
+          // Scenario-scoped generation guards against a stale response from a
+          // previous fetch cycle clobbering the current graph.
           // ════════════════════════════════════════════════════════════════
           const updateManager = new UpdateManager();
+          const cfScenarioId = resolveConditionedForecastScenarioId(itemOptions?.scenarioId);
+          const cfSupersessionState =
+            itemOptions?.cfSupersessionState ?? _defaultCfSupersessionState;
           const preserveLatencySummaryFromFile = itemOptions?.mode === 'from-file';
           const feEdgeValues = lagResult.edgeValues;
           let appliedEdgeValuesForFinalGraph = feEdgeValues;
@@ -2260,17 +2279,18 @@ export async function runStage2EnhancementsAndInboundN(
           updatePipelineStep('cf', 'running');
           const { runConditionedForecast, applyConditionedForecastToGraph } =
             await import('./conditionedForecastService');
-          const cfGen = ++_conditionedForecastGeneration;
+          const cfGen = cfSupersessionState.nextGeneration(cfScenarioId);
           const cfStartTime = Date.now();
           if (batchLogId) {
             sessionLogService.addChild(batchLogId, 'info', 'CONDITIONED_FORECAST',
-              `Conditioned forecast started (gen ${cfGen}, dsl=${(dsl || '').slice(0, 80)})`);
+              `Conditioned forecast started (scenario=${cfScenarioId}, gen ${cfGen}, dsl=${(dsl || '').slice(0, 80)})`);
           }
           const cfPromise = runConditionedForecast(
             cfInputGraph,
             dsl,
             undefined,
             itemOptions?.workspace,
+            cfScenarioId,
           ).catch(e => {
             console.warn('[fetchDataService] Conditioned forecast failed:', e);
             if (batchLogId) {
@@ -2457,10 +2477,11 @@ export async function runStage2EnhancementsAndInboundN(
           const attachCfSlowPathHandler = () => {
             backgroundPromises.push(
               cfPromise.then(async results => {
-                if (cfGen !== _conditionedForecastGeneration) {
+                const latestCfGen = cfSupersessionState.latestGeneration(cfScenarioId);
+                if (cfGen !== latestCfGen) {
                   if (batchLogId) {
                     sessionLogService.addChild(batchLogId, 'warning', 'CONDITIONED_FORECAST',
-                      `Conditioned forecast result discarded (stale gen ${cfGen} < ${_conditionedForecastGeneration})`);
+                      `Conditioned forecast result discarded (scenario=${cfScenarioId}, stale gen ${cfGen} < ${latestCfGen})`);
                   }
                   finaliseCfToast(null, 'stale');
                   return;

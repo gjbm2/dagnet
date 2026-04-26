@@ -129,6 +129,7 @@ import {
 } from '../conditionedForecastService';
 import { buildConditionedForecastGraphSnapshot } from '../../lib/conditionedForecastGraphSnapshot';
 import { runStage2EnhancementsAndInboundN, type FetchItem } from '../fetchDataService';
+import { createConditionedForecastSupersessionState } from '../conditionedForecastSupersessionState';
 import { fileRegistry } from '../../contexts/TabContext';
 import { parseConstraints } from '../../lib/queryDSL';
 
@@ -439,5 +440,53 @@ describe('CF owns completeness on the graph path (FE authority contract)', () =>
 
     const edge = lastGraph.edges.find((e: any) => (e.uuid || e.id) === EDGE_ID);
     expect(edge.p.latency.completeness).toBeCloseTo(0.93, 5);
+  });
+
+  it('passes scenarioId through to conditioned forecast and supports deterministic awaitBackgroundPromises', async () => {
+    let observedScenarioId: string | undefined;
+    cfImpl = async (...args: any[]) => {
+      observedScenarioId = args[4];
+      await yieldMs(700);
+      return [
+        {
+          scenario_id: observedScenarioId || 'current',
+          success: true,
+          edges: [
+            {
+              edge_uuid: EDGE_ID,
+              p_mean: 0.79,
+              p_sd: 0.04,
+              completeness: 0.91,
+              completeness_sd: 0.04,
+            },
+          ],
+        },
+      ];
+    };
+
+    const graph = latencyGraph();
+    let lastGraph: any = graph;
+    const setGraph = (g: any) => { lastGraph = g; };
+
+    await runStage2EnhancementsAndInboundN(
+      [fetchItem()],
+      [fetchItem()],
+      {
+        mode: 'from-file',
+        scenarioId: 'scenario-123',
+        awaitBackgroundPromises: true,
+        cfSupersessionState: createConditionedForecastSupersessionState(),
+      } as any,
+      graph,
+      setGraph,
+      'window(1-Nov-25:7-Nov-25)',
+      undefined,
+      () => lastGraph,
+      true,
+    );
+
+    expect(observedScenarioId).toBe('scenario-123');
+    const edge = lastGraph.edges.find((e: any) => (e.uuid || e.id) === EDGE_ID);
+    expect(edge.p.latency.completeness).toBeCloseTo(0.91, 5);
   });
 });

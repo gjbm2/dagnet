@@ -78,6 +78,37 @@ function getEdgeKey(edge: any): string | undefined {
   return edge?.id || edge?.uuid || (edge?.from && edge?.to ? `${edge.from}->${edge.to}` : undefined);
 }
 
+function isPlainObject(value: any): value is Record<string, any> {
+  return value != null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function mergeDefinedRecursive<T extends Record<string, any>>(
+  target: T | undefined,
+  source: Record<string, any> | undefined | null,
+): T {
+  const result: Record<string, any> = { ...(target || {}) };
+  if (!source) return result as T;
+
+  for (const [key, value] of Object.entries(source)) {
+    if (value === undefined) continue;
+    if (isPlainObject(value) && isPlainObject(result[key])) {
+      result[key] = mergeDefinedRecursive(result[key], value);
+      continue;
+    }
+    if (isPlainObject(value)) {
+      result[key] = mergeDefinedRecursive(undefined, value);
+      continue;
+    }
+    if (Array.isArray(value)) {
+      result[key] = value.map((item) => deepClone(item));
+      continue;
+    }
+    result[key] = value;
+  }
+
+  return result as T;
+}
+
 /**
  * Get composed parameters for a specific layer.
  * 
@@ -160,38 +191,8 @@ export function applyComposedParamsToGraph(
       
       if (edgeParams) {
         // Apply probability
-        // Note: ScenarioParams.ProbabilityParam has more distribution types than Graph.ProbabilityParam
-        // We spread the values, letting TypeScript handle the compatible subset
         if (edgeParams.p !== undefined) {
-          const existingP: any = edge.p || {};
-          const nextP: any = {
-            ...existingP,
-            mean: edgeParams.p.mean ?? existingP.mean,
-            stdev: edgeParams.p.stdev ?? existingP.stdev,
-          };
-
-          // Critical for runner parity: bake nested probability bases into edge.p
-          // so Python can extract p.evidence.mean / p.forecast.mean / p.latency.*.
-          if (edgeParams.p.evidence !== undefined) {
-            nextP.evidence = {
-              ...(existingP.evidence || {}),
-              ...edgeParams.p.evidence,
-            };
-          }
-          if (edgeParams.p.forecast !== undefined) {
-            nextP.forecast = {
-              ...(existingP.forecast || {}),
-              ...edgeParams.p.forecast,
-            };
-          }
-          if (edgeParams.p.latency !== undefined) {
-            nextP.latency = {
-              ...(existingP.latency || {}),
-              ...edgeParams.p.latency,
-            };
-          }
-
-          edge.p = nextP;
+          edge.p = mergeDefinedRecursive(edge.p || {}, edgeParams.p as any);
         }
         
         // Apply weight_default
@@ -207,12 +208,41 @@ export function applyComposedParamsToGraph(
           edge.labour_cost = { ...edge.labour_cost, ...edgeParams.labour_cost };
         }
         
-        // Apply conditional_p (convert from Record to array format if needed)
+        // Apply conditional probabilities from record form to graph array form.
         if (edgeParams.conditional_p !== undefined) {
-          // The graph uses array format, params use Record format
-          // For now, we'll keep the existing conditional_p structure
-          // and let the rendering/analysis code handle the lookup
-          // TODO: If needed, convert between formats
+          const nextConditionals = Array.isArray(edge.conditional_p)
+            ? edge.conditional_p.map((cond: any) => ({
+                ...cond,
+                p: cond?.p ? deepClone(cond.p) : cond?.p,
+              }))
+            : [];
+
+          const findConditionalIndex = (condition: string): number =>
+            nextConditionals.findIndex((cond: any) => cond?.condition === condition);
+
+          for (const [condition, prob] of Object.entries(edgeParams.conditional_p)) {
+            const idx = findConditionalIndex(condition);
+            if (prob === null) {
+              if (idx >= 0) nextConditionals.splice(idx, 1);
+              continue;
+            }
+
+            if (idx >= 0) {
+              nextConditionals[idx] = {
+                ...nextConditionals[idx],
+                condition,
+                p: mergeDefinedRecursive(nextConditionals[idx]?.p || {}, prob as any),
+              };
+              continue;
+            }
+
+            nextConditionals.push({
+              condition,
+              p: mergeDefinedRecursive({}, prob as any),
+            } as any);
+          }
+
+          edge.conditional_p = nextConditionals as any;
         }
       }
     }
@@ -477,7 +507,9 @@ function mergeEdgeParams(
   
   // Merge simple fields
   if (source.p !== undefined) {
-    result.p = source.p === null ? undefined : { ...target.p, ...source.p };
+    result.p = source.p === null
+      ? undefined
+      : mergeDefinedRecursive(target.p as any, source.p as any);
   }
   
   if (source.weight_default !== undefined) {
@@ -500,10 +532,10 @@ function mergeEdgeParams(
         // Null removes this condition
         delete result.conditional_p[condition];
       } else {
-        result.conditional_p[condition] = {
-          ...result.conditional_p[condition],
-          ...prob
-        };
+        result.conditional_p[condition] = mergeDefinedRecursive(
+          result.conditional_p[condition] as any,
+          prob as any,
+        );
       }
     }
   }

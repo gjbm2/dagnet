@@ -16,6 +16,7 @@ import { fileRegistry } from '../contexts/TabContext';
 import { buildConditionedForecastGraphSnapshot } from '../lib/conditionedForecastGraphSnapshot';
 import { PYTHON_API_BASE } from '../lib/pythonApiBase';
 import { UpdateManager } from './UpdateManager';
+import { resolveConditionedForecastScenarioId } from './conditionedForecastSupersessionState';
 
 /** Per-edge result from the conditioned forecast endpoint.
  *  Doc 45 §Endpoint contract (lines 181-190):
@@ -74,7 +75,7 @@ export interface ConditionedForecastScenarioResult {
  * @param analyticsDsl - Optional subject DSL (from/to). If absent,
  *   forecasts all edges that have snapshot subjects.
  * @param workspace - Repository/branch for candidate regime computation
- * @param scenarioId - Scenario identifier (default: 'current')
+ * @param scenarioId - Scenario identifier (defaults to "current" when empty)
  */
 /**
  * Resolve workspace from IDB app state (same source as TabContext).
@@ -98,9 +99,10 @@ export async function runConditionedForecast(
   queryDsl: string,
   analyticsDsl?: string,
   workspace?: { repository: string; branch: string },
-  scenarioId: string = 'current',
+  scenarioId?: string,
 ): Promise<ConditionedForecastScenarioResult[]> {
   if (!queryDsl) return [];
+  const resolvedScenarioId = resolveConditionedForecastScenarioId(scenarioId);
 
   const graphSnapshot = buildConditionedForecastGraphSnapshot(
     graph,
@@ -131,7 +133,7 @@ export async function runConditionedForecast(
   const payload = {
     analytics_dsl: analyticsDsl || '',
     scenarios: [{
-      scenario_id: scenarioId,
+      scenario_id: resolvedScenarioId,
       graph: graphSnapshot,
       effective_query_dsl: queryDsl,
       candidate_regimes_by_edge: candidateRegimesByEdge,

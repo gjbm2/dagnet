@@ -148,7 +148,7 @@ export function extractParamsFromGraph(graph: Graph | null): ScenarioParams {
  * Only include defined (non-undefined) values
  *
  * PARAM PACK FIELDS (scenario-visible, user-overridable + Bayes-facing):
- * - p.mean, p.stdev
+ * - p.mean, p.stdev, p.n
  * - p.posterior.* — probability posterior (alpha, beta, HDI, ess, rhat, fitted_at,
  *     fingerprint, provenance, cohort_*)
  * - p.forecast.mean, p.forecast.stdev
@@ -222,6 +222,69 @@ function pickWhitelisted(src: any, whitelist: string[]): Record<string, any> {
   return out;
 }
 
+const NUMERIC_DIFF_EPSILON = 1e-9;
+
+function cloneParamValue<T>(value: T): T {
+  if (value == null || typeof value !== 'object') return value;
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function valuesDiffer(lhs: any, rhs: any): boolean {
+  if (lhs === rhs) return false;
+
+  if (typeof lhs === 'number' && typeof rhs === 'number') {
+    if (!Number.isFinite(lhs) || !Number.isFinite(rhs)) return lhs !== rhs;
+    return Math.abs(lhs - rhs) > NUMERIC_DIFF_EPSILON;
+  }
+
+  if (lhs == null || rhs == null) return lhs !== rhs;
+
+  if (Array.isArray(lhs) || Array.isArray(rhs)) {
+    if (!Array.isArray(lhs) || !Array.isArray(rhs)) return true;
+    if (lhs.length !== rhs.length) return true;
+    for (let i = 0; i < lhs.length; i++) {
+      if (valuesDiffer(lhs[i], rhs[i])) return true;
+    }
+    return false;
+  }
+
+  if (typeof lhs === 'object' && typeof rhs === 'object') {
+    const keys = new Set([...Object.keys(lhs), ...Object.keys(rhs)]);
+    for (const key of keys) {
+      if (valuesDiffer(lhs[key], rhs[key])) return true;
+    }
+    return false;
+  }
+
+  return lhs !== rhs;
+}
+
+function diffParamValue(modifiedValue: any, baseValue: any): any {
+  if (modifiedValue === undefined) return undefined;
+
+  // Primitives and arrays are atomic at this layer.
+  if (
+    modifiedValue == null ||
+    typeof modifiedValue !== 'object' ||
+    Array.isArray(modifiedValue) ||
+    baseValue == null ||
+    typeof baseValue !== 'object' ||
+    Array.isArray(baseValue)
+  ) {
+    return valuesDiffer(modifiedValue, baseValue)
+      ? cloneParamValue(modifiedValue)
+      : undefined;
+  }
+
+  // Nested object: keep only changed leaves to preserve sparse overlays.
+  const diffObject: Record<string, any> = {};
+  for (const key of Object.keys(modifiedValue)) {
+    const childDiff = diffParamValue(modifiedValue[key], baseValue[key]);
+    if (childDiff !== undefined) diffObject[key] = childDiff;
+  }
+  return Object.keys(diffObject).length > 0 ? diffObject : undefined;
+}
+
 function extractEdgeParams(edge: GraphEdge): EdgeParamDiff | null {
   const params: EdgeParamDiff = {};
 
@@ -231,6 +294,7 @@ function extractEdgeParams(edge: GraphEdge): EdgeParamDiff | null {
     const pAny = edge.p as any;
     if (pAny.mean !== undefined) p.mean = pAny.mean;
     if (pAny.stdev !== undefined) p.stdev = pAny.stdev;
+    if (pAny.n !== undefined) p.n = pAny.n;
     // NOTE: distribution, min, max, alpha, beta are NOT in param packs
 
     // === POSTERIOR: Probability posterior (Bayesian alpha/beta/HDI/quality) ===
@@ -282,6 +346,7 @@ function extractEdgeParams(edge: GraphEdge): EdgeParamDiff | null {
       const condPAny = cond.p as any;
       if (condPAny?.mean !== undefined) condP.mean = condPAny.mean;
       if (condPAny?.stdev !== undefined) condP.stdev = condPAny.stdev;
+      if (condPAny?.n !== undefined) condP.n = condPAny.n;
       // NOTE: distribution, min, max, alpha, beta are NOT in param packs
       
       // === EVIDENCE: Only mean and stdev ===
@@ -441,32 +506,28 @@ export function extractDiffParams(
         continue;
       }
       
-      // Compare and only include differences
+      // Contract-aware diff: compare each extracted field (including nested
+      // p.posterior / p.n / conditional_p) against the same extracted view
+      // on the baseline edge. Do not gate the whole p-block on p.mean.
+      const baseParams = extractEdgeParams(baseEdge);
       const diffParams: EdgeParamDiff = {};
-      
-      // Check p.mean difference (most common case)
-      if (modifiedParams.p?.mean !== undefined) {
-        const baseMean = (baseEdge.p as any)?.mean;
-        if (baseMean === undefined || Math.abs(modifiedParams.p.mean - baseMean) > 1e-9) {
-          diffParams.p = { ...modifiedParams.p };
+      const edgeDiffKeys: Array<keyof EdgeParamDiff> = [
+        'p',
+        'conditional_p',
+        'weight_default',
+        'cost_gbp',
+        'labour_cost',
+      ];
+      for (const diffKey of edgeDiffKeys) {
+        const modifiedValue = modifiedParams[diffKey];
+        if (modifiedValue === undefined) continue;
+        const baseValue = baseParams?.[diffKey];
+        const diffValue = diffParamValue(modifiedValue, baseValue);
+        if (diffValue !== undefined) {
+          (diffParams as any)[diffKey] = diffValue;
         }
       }
-      
-      // Include other param differences as needed
-      if (modifiedParams.cost_gbp?.mean !== undefined) {
-        const baseCost = baseEdge.cost_gbp?.mean;
-        if (baseCost === undefined || Math.abs(modifiedParams.cost_gbp.mean - baseCost) > 1e-9) {
-          diffParams.cost_gbp = { ...modifiedParams.cost_gbp };
-        }
-      }
-      
-      if (modifiedParams.labour_cost?.mean !== undefined) {
-        const baseCost = baseEdge.labour_cost?.mean;
-        if (baseCost === undefined || Math.abs(modifiedParams.labour_cost.mean - baseCost) > 1e-9) {
-          diffParams.labour_cost = { ...modifiedParams.labour_cost };
-        }
-      }
-      
+
       if (Object.keys(diffParams).length > 0) {
         params.edges![key] = diffParams;
       }
@@ -487,15 +548,19 @@ export function extractDiffParams(
         continue;
       }
       
-      // Compare entry weights
+      const baseParams = extractNodeParams(baseNode);
       const diffParams: NodeParamDiff = {};
-      if (modifiedParams.entry?.entry_weight !== undefined) {
-        const baseWeight = baseNode.entry?.entry_weight;
-        if (baseWeight === undefined || Math.abs(modifiedParams.entry.entry_weight - baseWeight) > 1e-9) {
-          diffParams.entry = { ...modifiedParams.entry };
+      const nodeDiffKeys: Array<keyof NodeParamDiff> = ['entry', 'costs', 'case'];
+      for (const diffKey of nodeDiffKeys) {
+        const modifiedValue = modifiedParams[diffKey];
+        if (modifiedValue === undefined) continue;
+        const baseValue = baseParams?.[diffKey];
+        const diffValue = diffParamValue(modifiedValue, baseValue);
+        if (diffValue !== undefined) {
+          (diffParams as any)[diffKey] = diffValue;
         }
       }
-      
+
       if (Object.keys(diffParams).length > 0) {
         params.nodes![key] = diffParams;
       }
