@@ -15,25 +15,16 @@
 
 ## 0. History and posture of this plan
 
-Two prior attempts at this work were reverted. Both attempts widened scope
-into the model-vars vs. promoted-vars vs. query-scoped-answer separation —
-which is doc 73b's territory — and broke the live system in the process.
+Two prior attempts widened scope into doc 73b's territory (model-vars
+vs. promoted-vars vs. current-answer separation) and broke the live
+system. Posture for this revision: **do no harm**. Scope is narrow
+plumbing — per-scenario CF supersession, faithful pack rebuild, the
+existing CF request-graph engorgement, and CLI/FE alignment.
+Functionally invariant with respect to current `p.mean` /
+`model_vars[]` / `posterior.*` semantics; off-limits files in §3 rule 10.
 
-The governing posture for this revision is **do no harm**. Doc 73a's job is
-narrow plumbing: per-scenario CF supersession, faithful pack rebuild,
-the request-graph engorgement *pattern* (rule §3.9 — its existing use by
-the CF request snapshot stays here; new uses such as per-scenario
-`model_vars[]` derivation moved to doc 73b's bundled switchover), and
-CLI/FE alignment on the same contract. Doc 73a does not change which
-fields the runtime reads as model input, does not change which fields FE
-topo writes, does not extend the promotion writer, and does not change
-the Python resolver source order — those are doc 73b's job. Doc 73a is
-functionally invariant with respect to the current `p.mean` /
-`model_vars[]` / `posterior.*` semantics.
-
-Every stage in this plan has a baseline-capture step and a named regression
-gate. No stage commits without its gate passing. The gates are the single
-mechanism preventing a third disaster.
+Every stage has a baseline-capture step and a named regression gate.
+No stage commits without its gate passing.
 
 ## 1. Purpose
 
@@ -63,37 +54,18 @@ explicitly handed off to doc 73b and remain here only as context. Defects
 
 ### Defect 1 — FE writes a query-scoped scalar into the model-bearing slot (handed off to doc 73b)
 
-`edge.p.mean` is currently overloaded. The FE topo pass computes a
-query-scoped `blendedMean` and writes it into `edge.p.mean`. The Python
-runtime later reads that same field as model input (see Defect 2).
-
-**Doc 73a does not fix this.** Doc 73b Stage 3 owns the FE-side split
-(provisional display vs. model-bearing). Doc 73a work proceeds on the
-assumption that the current overload exists and must remain functionally
-unchanged until doc 73b lands. Any temptation to introduce a write gate on
-`p.mean` (the fix that broke both prior attempts) is explicitly rejected
-here — see §5 Stop rules.
-
-Files cited for context only:
-[statisticalEnhancementService.ts](graph-editor/src/services/statisticalEnhancementService.ts),
-[UpdateManager.ts](graph-editor/src/services/UpdateManager.ts),
-[fetchDataService.ts](graph-editor/src/services/fetchDataService.ts).
+`edge.p.mean` is overloaded: FE topo writes the query-scoped
+`blendedMean` there; the Python runtime reads it as model input.
+Doc 73b Stage 3 owns the FE-side split. Doc 73a does not gate `p.mean`
+writes (the fix that broke both prior attempts) — see §5 Stop rules.
 
 ### Defect 2 — Python uses two different probability-source rules (handed off to doc 73b)
 
-For the target edge, `resolve_model_params` in
-[model_resolver.py](graph-editor/lib/runner/model_resolver.py) follows
-posterior → forecast → fallback. For the upstream carrier,
-`_resolve_edge_p` in
-[forecast_state.py](graph-editor/lib/runner/forecast_state.py) reads
-`p.mean` first. The two callers can disagree on the same edge inside the
-same solve, and the carrier path is exactly the one Defect 1 poisons.
-
-**Doc 73a does not fix this.** Doc 73b Stage 4 owns the consumer-side
-unification ("BE runtime and graph consumers must read model inputs from
-model/promoted surfaces, not from current-answer fields"). Doc 73a
-proceeds on the assumption that `_resolve_edge_p` keeps reading `p.mean`
-first.
+`resolve_model_params` ([model_resolver.py](graph-editor/lib/runner/model_resolver.py))
+reads posterior → forecast → fallback for the target edge;
+`_resolve_edge_p` ([forecast_state.py](graph-editor/lib/runner/forecast_state.py))
+reads `p.mean` first for the upstream carrier — the path Defect 1
+poisons. Doc 73b Stage 4 owns the consumer-side unification.
 
 ### Defect 3a — CF supersession is global, not per-scenario
 
@@ -224,9 +196,8 @@ these stages but must not silently drop it.
 
 3. **The FE topo pass may compute a provisional display answer**, but
    that answer must not occupy the same slot that the runtime reads as
-   model input. **Doc 73b owns enforcement of this rule.** Doc 73a work
-   proceeds on the assumption that the current overload exists and must
-   not be changed by doc 73a work.
+   model input. Enforcement is doc 73b's territory; doc 73a leaves the
+   current overload alone (see rule 10 for the off-limits file list).
 
 4. **Scenarios stay as thin ordered param-pack deltas.** Layer order is
    semantically load-bearing — later deltas override earlier ones. No
@@ -260,31 +231,19 @@ these stages but must not silently drop it.
    [conditionedForecastGraphSnapshot.ts](graph-editor/src/lib/conditionedForecastGraphSnapshot.ts)
    (`buildConditionedForecastGraphSnapshot` + `ParameterFileResolver`).
 
-10. **Doc 73a does not change FE `p.mean` writers, BE consumer read
-    paths, or Python resolver source taxonomy.** Specifically out of scope:
-    [statisticalEnhancementService.ts](graph-editor/src/services/statisticalEnhancementService.ts),
-    [UpdateManager.ts::applyBatchLAGValues](graph-editor/src/services/UpdateManager.ts),
-    [fetchDataService.ts](graph-editor/src/services/fetchDataService.ts)
-    write paths that gate or remove `p.mean` writes (doc 73b);
-    [model_resolver.py](graph-editor/lib/runner/model_resolver.py)
-    and [forecast_state.py](graph-editor/lib/runner/forecast_state.py)
-    consumer read-path migration to the canonical promoted surface
-    `p.forecast.*` (doc 73b — see doc 73b §3.2 and Decision 7);
-    and `model_resolver.py`'s *source taxonomy* (which sources exist,
-    how `_resolve_promoted_source` selects between them — doc 73b
-    territory).
+10. **Off-limits files for doc 73a** (handed to doc 73b):
+    `statisticalEnhancementService.ts`,
+    `UpdateManager.ts::applyBatchLAGValues`, `fetchDataService.ts`
+    write paths that touch `p.mean`; `model_resolver.py` and
+    `forecast_state.py` consumer reads; `model_resolver.py`'s source
+    taxonomy; `modelVarsResolution.ts::applyPromotion`; and the
+    legacy `_posteriorSlices` / `reprojectPosteriorForDsl` paths.
 
-    Doc 73a no longer carries any consumer-read or per-scenario
-    `model_vars[]` delivery work. The previous Stage 5a/5b/5c split
-    has moved into doc 73b's bundled switchover stage and the
-    cleanup stage that follows it. Doc 73a's scope at this boundary
-    is now: pin the §15A pre-handoff gates that doc 73b's switchover
-    depends on (per-scenario CF supersession, pack contract,
-    request-graph shape), and stop.
-
-    If a doc 73a stage appears to require behavioural changes to BE
-    consumer read paths, the stage is mis-scoped — stop and re-read
-    this rule.
+    Doc 73a's scope at this boundary is to pin the §15A pre-handoff
+    gates that doc 73b's switchover depends on (per-scenario CF
+    supersession, pack contract, request-graph shape), and stop. If
+    a stage appears to require behavioural changes to any off-limits
+    file, the stage is mis-scoped.
 
 11. **The CF response → graph field mapping is explicit and pinned by
     sentinel-value tests.** Each CF response field has exactly one
@@ -297,12 +256,18 @@ these stages but must not silently drop it.
 
 12. **CF dispatch coverage**: each visible user live scenario receives
     exactly one CF commission per regeneration cycle. CURRENT receives
-    CF via its own path
-    ([useDSLReaggregation](graph-editor/src/hooks/useDSLReaggregation.ts))
-    when `currentDSL` changes. **BASE does not receive CF.** BASE is
-    frozen at file load and only changes via explicit user action —
-    commit + close + reopen (the new file becomes the new base) or
-    "put to base". Hidden scenarios receive no CF. The
+    CF via three paths, all outside `regenerateAllLive`: (i)
+    [useDSLReaggregation](graph-editor/src/hooks/useDSLReaggregation.ts)
+    when `currentDSL` changes; (ii)
+    [useFetchData.ts:179](graph-editor/src/hooks/useFetchData.ts) on
+    initial current-tab loads; (iii) the share-bundle / share-chart
+    boot restores
+    ([useShareBundleFromUrl.ts:320](graph-editor/src/hooks/useShareBundleFromUrl.ts),
+    [useShareChartFromUrl.ts:224](graph-editor/src/hooks/useShareChartFromUrl.ts))
+    on hydration. **BASE does not receive CF.** BASE is frozen at file
+    load and only changes via explicit user action — commit + close +
+    reopen (the new file becomes the new base) or "put to base".
+    Hidden scenarios receive no CF. The
     [`regenerateAllLive` filter at ScenariosContext.tsx:1178](graph-editor/src/contexts/ScenariosContext.tsx)
     that excludes `'base'` and `'current'` is correct as-is.
 
@@ -349,32 +314,11 @@ across plans cannot produce a bisectable observable diff.
 These rules trigger an immediate halt. They exist because every prior
 attempt failed by ignoring exactly these signals.
 
-- **If a stage's diff touches FE `p.mean` writers, BE consumer read
-  paths, BE source taxonomy, the promotion writer, or the legacy
-  `_posteriorSlices` / `reprojectPosteriorForDsl` paths**, stop.
-  Defer to doc 73b. Specific files that doc 73a must not modify
-  behaviourally: `statisticalEnhancementService.ts`,
-  `UpdateManager.ts::applyBatchLAGValues` (no new opts gate, no change
-  to existing argument shape — see phasing note below),
-  `fetchDataService.ts` (no `writeMeanToGraph` plumbing),
-  `model_resolver.py` and `forecast_state.py` consumer read paths
-  (these migrate to the canonical promoted surface in doc 73b),
-  `model_resolver.py::_resolve_promoted_source` (which sources exist
-  and how they are selected), `modelVarsResolution.ts::applyPromotion`
-  (the promotion writer — extended in doc 73b to populate the wider
-  `p.forecast.*` surface), `analysisComputePreparationService.ts`'s
-  `reprojectPosteriorForDsl` and the `_posteriorSlices` write in
-  `mappingConfigurations.ts` Flow G (both removed in doc 73b after its
-  consumer migration). Doc 73a no longer carries any consumer-side
-  work — it was previously held in §11 Stage 5c and is now in doc 73b.
-
-  Phasing note for `applyBatchLAGValues`: doc 73b Stage 5 takes ownership
-  of bringing this function into the `*_overridden` lock discipline,
-  which may extend its argument surface or wrap it. Doc 73a's "no new
-  opts gate" rule binds **only during doc 73a's own lifetime** (Stages
-  1–7); doc 73b is free to extend the surface in its Stage 5 once doc
-  73a's §15A pre-handoff gates have passed. The two plans do not
-  conflict — they sequence.
+- **If a stage touches an off-limits file** (see §3 rule 10), stop.
+  Defer to doc 73b. Phasing note: doc 73a's "no new opts gate" on
+  `applyBatchLAGValues` binds only through 73a's lifetime; doc 73b
+  Stage 5 may extend its argument surface to bring the function into
+  the `*_overridden` lock discipline.
 - **If a stage's diff causes the Stage 0 baseline to drift** without a
   named expected-delta in this plan, stop. Capture the witness, do not
   commit. The drift is either a regression or a planning miss.
@@ -847,11 +791,11 @@ response would create two sources for "the conditioned posterior"
 
 ### Implementation impact
 
-- Stage 2 contract: add `p.stdev` to the included list. (`p.evidence.k`
-  and `p.evidence.n` are already in the contract.)
-- Stage 2 extractor: add `p.stdev` to the extracted fields.
-- Stage 2 diff gate: covered by the contract-aware diff change.
-- Stage 2 compositor: add `p.stdev` to the replay path.
+- Stage 2 contract: `p.stdev`, `p.evidence.k`, and `p.evidence.n`
+  are already included (see §8). No further additions required at
+  Stage 2.
+- Stage 2 extractor / diff gate / compositor: covered by the
+  contract-aware diff change in Stage 2 itself; no Stage 4 work.
 - Stage 4 apply path
   ([conditionedForecastService.ts::applyConditionedForecastToGraph](graph-editor/src/services/conditionedForecastService.ts)):
   add the three new writes — `p_sd → p.stdev`, `evidence_k → p.evidence.k`,
@@ -871,63 +815,17 @@ Stage 0 fixtures must remain green.
 
 ## 11. Stage 5 — Handoff to doc 73b
 
-### Why
+The per-scenario `model_vars[]` switchover (delivery + promoted
+writer + consumer migration + legacy cleanup) lives entirely in
+doc 73b's bundled switchover and the cleanup stage that follows it.
+Earlier 5a/5b/5c sub-stages are retired — each was inert until the
+next landed; bundling them inside doc 73b makes each commit
+observable.
 
-Earlier drafts of this plan held two halves of the per-scenario
-`model_vars[]` work inside doc 73a: a "delivery" sub-stage (5a) that
-shipped per-scenario bayesian material onto each request graph, and a
-"cleanup" sub-stage (5c) that removed the legacy `_posteriorSlices` /
-`reprojectPosteriorForDsl` paths once doc 73b had migrated BE
-consumers off them. In isolation each end was inert. 5a shipped data
-no consumer read; 5c could only run after doc 73b finished. The first
-observable behavioural change happened inside doc 73b, three commits
-into the chain.
-
-That phasing has been retired. The whole switchover — delivery,
-promotion-writer extension, and the first BE consumer migration —
-now lives inside a single doc 73b stage so that the bundled commit
-moves a number on screen. The remaining consumer migrations and the
-legacy cleanup follow as further doc 73b stages, each one bisectable.
-
-### What doc 73b now owns
-
-- Per-scenario `model_vars[bayesian]` derivation from the parameter
-  file's matching slice, applied at both the analysis-prep entry
-  point and the CF request-build entry point. Same derivation
-  function on FE and CLI.
-- Extension of `applyPromotion` to project the derived bayesian (or
-  analytic) source onto the full `p.forecast.*` surface defined in
-  doc 73b §3.2.
-- BE consumer migration off `posterior.*` / `latency.posterior.*` /
-  `_posteriorSlices` and onto the canonical `p.forecast.*` surface.
-- Removal of `_posteriorSlices`, `reprojectPosteriorForDsl`,
-  `projectProbabilityPosterior`, `projectLatencyPosterior`,
-  `resolveAsatPosterior`, the `mappingConfigurations.ts` Flow G
-  stash, and the related cleanup paths in `bayesPriorService.ts`.
-- The no-cross-context-fallback rule on the slice resolver
-  (`resolvePosteriorSlice`'s context-stripping fallback at
-  [posteriorSliceResolution.ts:167-171](graph-editor/src/services/posteriorSliceResolution.ts#L167-L171)
-  must be removed at source or guarded against at the seam — see §5
-  stop rule).
-
-### What doc 73a still owns under §15A
-
-Doc 73a still owns the per-scenario CF supersession (Stage 1), the
-pack contract (Stage 2), CF observability (Stage 3), the CF response
-→ graph apply mechanics (Stage 4), CLI/FE prepared-graph alignment
-(Stage 6), and the verification rollup (Stage 7). The §15A
-pre-handoff gates are the binding precondition for doc 73b's bundled
-switchover stage; until they pass, the per-scenario request-graph
-shape that the switchover relies on is not stable.
-
-The previous 5a / 5b / 5c sub-stages are retired. The behavioural
-work has moved into doc 73b's bundled switchover stage; the contract
-for the derived bayesian `ModelVarsEntry` shape (probability fields
-widened to carry `alpha`, `beta`, `alpha_pred`, `beta_pred`,
-`n_effective`; the `derivation` provenance block; the
-no-exact-slice "omit, do not substitute" rule) is now stated inside
-doc 73b. Test artefacts previously listed at 5a / 5c are referenced
-in doc 73b's stage gates rather than in §16 of this plan.
+73a's role at this boundary is to pin the §15A pre-handoff gates
+(per-scenario CF supersession, pack contract, request-graph shape).
+Doc 73b §3.2, §7 OP-resolutions, and §8 Stage 4(a)–(c) hold the
+substantive contract and failure-mode rules.
 
 ## 12. Stage 6 — CLI/FE alignment
 
@@ -1003,21 +901,27 @@ silently regressed.
    - Trigger a regeneration; assert post-regeneration packs reload
      correctly after a page refresh.
 
-2. Cross-cutting assertion bundle: a single test file that re-runs
-   every prior stage gate in sequence and asserts the Stage 0 fixtures
-   are still byte-equal. This is the regression barrier for the next
-   refactor in the area.
+2. (Retired.) The earlier "cross-cutting assertion bundle" — a
+   single test file that re-ran every prior stage gate — has been
+   dropped per doc 73d's triage (a test that reruns all tests is a
+   CI command, not a test). The CI configuration runs the surviving
+   suite from doc 73d in sequence; that is the regression barrier
+   for the next refactor.
 
 3. Keep the target-edge posterior-mass witness from doc 72 alive: add
    a witness assertion that captures `alpha`, `beta` on the named edge
    in the fixture set and flags any change. The plan does not require
    the witness to resolve; it requires the witness to remain visible.
+   Doc 73d does not list the witness as a surviving suite artefact,
+   but doc 73a retains it because it is the one specific number from
+   the original parity defect that must not silently move.
 
 ### Stage gate
 
-Playwright spec passes against a clean dev server. Cross-cutting
-bundle passes. Witness assertion captures the same value as Stage 0
-or, if it changed, the change is captured in the commit message.
+Playwright spec passes against a clean dev server. The doc 73d
+surviving suite passes (run via the CI command, not as one omnibus
+test). Witness assertion captures the same value as Stage 0 or, if
+it changed, the change is captured in the commit message.
 
 ## 14. Commit groups
 
@@ -1061,51 +965,49 @@ depend on doc 73b's switchover (CLI/FE parity, the verification
 rollup) live in §15B because the CLI now consumes the per-scenario
 `model_vars[]` derivation that doc 73b owns.
 
-1. CF supersession is per-scenario. Current and live scenarios do not
-   cancel each other's CF responses. The module-global counter is
-   absent and a test pins this.
-1a. CF dispatch coverage matches §3.12: each visible user live
+A1. CF supersession is per-scenario. Current and live scenarios do not
+    cancel each other's CF responses. The module-global counter is
+    absent and a test pins this.
+A2. CF dispatch coverage matches §3.12: each visible user live
     scenario receives one CF commission per regen cycle, BASE
-    receives none (frozen at load), CURRENT receives CF via its own
-    DSL-change path, hidden scenarios receive none. CF response order
+    receives none (frozen at load), CURRENT receives CF via its
+    three documented paths (DSL-change re-aggregation, initial
+    current-tab load, share-bundle/share-chart boot restore) and
+    via no others, hidden scenarios receive none. CF response order
     is not assumed by any code path (§3.13).
-2. Scenario packs carry only the §8 contract fields. No pack contains
-   full graphs, `p.model_vars[]` inventory, raw `p.posterior.slices`,
-   or `p.fit_history`.
-3. A rebuilt scenario graph matches the working graph byte-for-byte on
-   the contract fields for every fixture scenario.
-4. CF requests carry the per-scenario composed graph and effective
-   DSL; CF responses apply only to their originating scenario's
-   graph. Both invariants are pinned by tests using the observability
-   added in Stage 3.
-5. After regeneration, the persisted pack contains all CF-derived
-   contract fields. Reload + recompose yields the same conditioned
-   values.
-7. (Retired.) Per-scenario `model_vars[]` delivery has moved to
-   doc 73b's bundled switchover stage. The acceptance gate that
-   pinned per-scenario divergence on the request graph is now stated
-   in doc 73b's stage 4 acceptance.
-8. The Python runtime gains no parameter-file loader and no
-   workspace awareness as a consequence of any stage.
-11a. The Stage 0 baseline fixtures are still byte-equal at the end
-    of Stage 4, except for explicitly named expected deltas captured
-    in stage commit messages.
-12. The target-edge posterior-mass witness is explicitly resolved
+A3. Scenario packs carry only the §8 contract fields. No pack contains
+    full graphs, `p.model_vars[]` inventory, raw `p.posterior.slices`,
+    or `p.fit_history`.
+A4. A rebuilt scenario graph matches the working graph byte-for-byte
+    on the contract fields for every fixture scenario.
+A5. CF requests carry the per-scenario composed graph and effective
+    DSL; CF responses apply only to their originating scenario's
+    graph. Both invariants are pinned by tests using the observability
+    added in Stage 3.
+A6. After regeneration, the persisted pack contains all CF-derived
+    contract fields. Reload + recompose yields the same conditioned
+    values.
+A7. The Python runtime gains no parameter-file loader and no
+    workspace awareness as a consequence of any stage.
+A8. The Stage 0 baseline fixtures are still byte-equal at the end of
+    Stage 4, except for explicitly named expected deltas captured in
+    stage commit messages.
+A9. The target-edge posterior-mass witness is explicitly resolved
     (with stage/commit attribution) or explicitly carried forward as
     separate work. It is not silently dropped.
-13a. No file in the §3.10 doc-73-owned set has been modified
-    behaviourally by doc 73a work. The boundary: doc 73a must not
-    change which fields the FE topo pass writes
-    (`statisticalEnhancementService.ts`,
-    `UpdateManager.ts::applyBatchLAGValues` write paths), must not
-    migrate BE consumer reads (`model_resolver.py`,
-    `forecast_state.py`, `epistemic_bands.py` read paths — these
-    move to the canonical promoted surface in doc 73b), must not
-    change `model_resolver.py`'s source taxonomy, must not extend
-    the promotion writer (`modelVarsResolution.ts::applyPromotion` —
-    doc 73b territory), and must not modify the legacy
-    `_posteriorSlices` / `reprojectPosteriorForDsl` paths
-    (removed in doc 73b after its consumer migration).
+A10. No file in the §3.10 doc-73-owned set has been modified
+     behaviourally by doc 73a work. The boundary: doc 73a must not
+     change which fields the FE topo pass writes
+     (`statisticalEnhancementService.ts`,
+     `UpdateManager.ts::applyBatchLAGValues` write paths), must not
+     migrate BE consumer reads (`model_resolver.py`,
+     `forecast_state.py`, `epistemic_bands.py` read paths — these
+     move to the canonical promoted surface in doc 73b), must not
+     change `model_resolver.py`'s source taxonomy, must not extend
+     the promotion writer (`modelVarsResolution.ts::applyPromotion` —
+     doc 73b territory), and must not modify the legacy
+     `_posteriorSlices` / `reprojectPosteriorForDsl` paths
+     (removed in doc 73b after its consumer migration).
 
 ### §15B — post-handoff gates (binding after the doc 73b switchover bundle has landed)
 
@@ -1113,14 +1015,14 @@ The §15B gates pass only after doc 73b's bundled switchover (Stage 4)
 acceptance gate has landed. They cover doc 73a work that depends on
 the per-scenario `model_vars[]` derivation that switchover delivers.
 
-9. FE and CLI produce identical prepared scenario graphs and
-   identical BE request payloads from the same base graph, scenario
-   packs, and effective DSL — including the per-scenario
-   `model_vars[]` derivation now produced by doc 73b's switchover.
-   Pinned by doc 73a Stage 6's named test
-   (`cliFeScenarioParity.test.ts`).
-10. The Playwright roundtrip spec passes (Stage 7).
-11b. The Stage 0 baseline fixtures are still byte-equal at the end
+B1. FE and CLI produce identical prepared scenario graphs and
+    identical BE request payloads from the same base graph, scenario
+    packs, and effective DSL — including the per-scenario
+    `model_vars[]` derivation now produced by doc 73b's switchover.
+    Pinned by doc 73a Stage 6's named test
+    (`cliFeScenarioParity.test.ts`).
+B2. The Playwright roundtrip spec passes (Stage 7).
+B3. The Stage 0 baseline fixtures are still byte-equal at the end
     of Stage 6 and Stage 7, except for explicitly named expected
     deltas captured in stage commit messages. Deltas attributable to
     doc 73b's switchover are listed in doc 73b's Stage 4 acceptance,
@@ -1128,23 +1030,16 @@ the per-scenario `model_vars[]` derivation that switchover delivers.
 
 ## 16. Testing regime — index of named artefacts
 
-The deferred-CF transaction harness from Stage 0A is the foundation
-of every CF test in stages 1–4 and 7. Tests assert the *transaction
-phase* that broke (request envelope, supersession check, response
-routing, apply, diff extraction), not just final values. Sentinel
-fixtures from Stage 0B are loaded into every per-stage test that
-touches contract-field routing.
+Tests assert the transaction *phase* that broke (request envelope,
+supersession check, response routing, apply, diff extraction), not
+just final values. The deferred-CF harness (Stage 0A) is the
+foundation; Stage 0B sentinel fixtures load into every contract-field
+test.
 
-**Per-layer reasoning**:
-[73c-cf-staged-test-strategy.md](73c-cf-staged-test-strategy.md) is
-the sidecar that reasons through each layer of the CF transaction
-from first principles — enumerating concrete failure modes, grouping
-them into the minimum diagnostic test set, and stating what each
-test does NOT catch. The index below names the test artefacts; the
-sidecar names the failure modes each artefact catches and why. A
-test in the table below without a corresponding entry in the
-sidecar is unaccounted-for coverage; a failure mode named in the
-sidecar without a test in this index is a coverage gap.
+**Source of truth**: the active surviving suite is
+[73d](73d-cf-test-strategy-triage.md) §5; doc 73d wins where it
+diverges from this index. [73c](73c-cf-staged-test-strategy.md) is
+kept as the per-layer reasoning archive only.
 
 | Stage | Artefact | Type | Notes |
 |---|---|---|---|
@@ -1160,12 +1055,12 @@ sidecar without a test in this index is a coverage gap.
 | 2 | tightened `CompositionService.test.ts` | Vitest | Posterior + n + conditional_p replay |
 | 2 | tightened `windowCohortSemantics.paramPack.e2e.test.ts` | Vitest | Diff-gate covers all contract fields |
 | 3 | `cfPerScenarioRouting.test.ts` | Vitest | Fingerprint-based routing: response A applied to graph A, never to base/current |
-| 3 | `cfDispatchCoverage.test.ts` | Vitest | Each visible user live scenario receives one CF commission per regen cycle; BASE receives none (frozen at load); CURRENT receives CF only via its own DSL-change path; hidden scenarios receive none. Asserts no dispatch-order assumption (responses can return in any order). |
+| 3 | `cfDispatchCoverage.test.ts` | Vitest | Each visible user live scenario receives one CF commission per regen cycle; BASE receives none (frozen at load); CURRENT receives CF via its three documented paths (DSL-change re-aggregation, initial current-tab load, share-bundle / share-chart boot restore) and via no others; hidden scenarios receive none. Asserts no dispatch-order assumption (responses can return in any order). |
 | 3 | `cfSessionLogShape.test.ts` | Vitest | Expected child entries, levels, tags |
 | 4 | `scenarioRegenerationCfUpsert.test.ts` | Vitest | Slow CF keeps regen unresolved; persisted params recompose to post-CF values |
 | 4 | `cfFieldMappingSentinel.test.ts` | Vitest | Sentinel CF response → §10 mapping table holds; `p_sd → p.stdev` is persisted; `p_sd_epistemic` is response-only and is NOT on the graph |
 | 5 | (handoff — see doc 73b) | n/a | Per-scenario `model_vars[]` derivation, promoted-writer extension, BE consumer migration, and `_posteriorSlices` / `reprojectPosteriorForDsl` removal are all owned by doc 73b's bundled switchover stage and the cleanup that follows it. Test artefacts live in doc 73b. |
 | 6 | `cliFeScenarioParity.test.ts` | Vitest | Same base + packs + DSL + resolver → byte-identical prepared graphs and CF payloads |
 | 7 | `liveScenarioConditionedForecastRoundtrip.spec.ts` | Playwright | Real-browser end-to-end |
-| 7 | cross-cutting verification bundle (file TBD) | Vitest | Re-runs every prior gate; goldens still byte-equal |
+| 7 | (no separate cross-cutting bundle) | n/a | The doc 73d surviving suite, run as a CI sequence, is the regression barrier. No omnibus test file. |
 

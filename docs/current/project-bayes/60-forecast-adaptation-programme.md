@@ -147,7 +147,7 @@ The required outcomes are:
 
 | Consumer or surface | Public contract that must remain coherent | Main entry point(s) |
 |---|---|---|
-| whole-graph conditioned graph enrichment | authoritative conditioned graph fields for `p.mean`, `p.forecast.mean`, and CF-owned completeness fields | `graph-editor/lib/api_handlers.py::handle_conditioned_forecast` plus `graph-editor/src/services/conditionedForecastService.ts` |
+| whole-graph conditioned graph enrichment | authoritative conditioned graph fields for `p.mean` and CF-owned completeness fields. **Note:** `p.forecast.mean` is no longer CF-owned — see §6 Decision 9 (retired 25-Apr-26). After doc 73b's bundled switchover, `p.forecast.*` is promoted-model-only and is written by `applyPromotion`. | `graph-editor/lib/api_handlers.py::handle_conditioned_forecast` plus `graph-editor/src/services/conditionedForecastService.ts` |
 | scoped conditioned-forecast response | per-edge conditioned response for a path or edge, consumed directly by higher-level callers | `graph-editor/lib/api_handlers.py::handle_conditioned_forecast` with `analytics_dsl` |
 | chart trajectory projection | per-`tau` rows for `cohort_maturity_v3` | `graph-editor/lib/api_handlers.py::_handle_cohort_maturity_v3` and `graph-editor/lib/runner/cohort_forecast_v3.py::compute_cohort_maturity_rows_v3` |
 | scalar summary projection | bounded summary output or explicit unavailable / degraded result | `graph-editor/lib/runner/forecast_state.py::compute_forecast_summary` and `_compute_surprise_gauge` |
@@ -283,10 +283,16 @@ inside the implementation workstream:
 8. `ResolvedModelParams.alpha_beta_query_scoped` is the canonical
    predicate for "already query-scoped posterior" behaviour. Do not
    replace it with source-name heuristics scattered through callers.
-9. CF owns the conditioned graph fields it is already meant to own:
-   `edge.p.mean`, `edge.p.forecast.mean`,
-   `edge.p.latency.completeness`, and
-   `edge.p.latency.completeness_stdev`.
+9. **RETIRED 25-Apr-26 by 73b §11.2 conflict 6 resolution (a).**
+   This decision originally listed `edge.p.forecast.mean` as a
+   CF-owned field. Under the three-layer split landed by doc 73b,
+   `p.forecast.*` is the promoted-model surface and is written only
+   by `applyPromotion`; CF stops writing `forecast.mean = p_mean`
+   in doc 73b's bundled switchover (Stage 4). CF retains ownership
+   of the conditioned current-answer fields:
+   `edge.p.mean`, `edge.p.latency.completeness`, and
+   `edge.p.latency.completeness_stdev`. See doc 73b §3.2 for the
+   eight-field promoted surface and §11.2 for the conflict-6 record.
 10. The funnel remains a consumer of the public CF response. It must not
     be moved onto inner kernels.
 11. The BE topo pass remains analytically bounded. It must not be used as
@@ -618,9 +624,12 @@ runtime, and keep the analytic fallback explicitly bounded.
   projection of CF-owned fields.
 - Preserve CF authority over:
   - `edge.p.mean`
-  - `edge.p.forecast.mean`
   - `edge.p.latency.completeness`
   - `edge.p.latency.completeness_stdev`
+  - (`edge.p.forecast.mean` was previously listed here. Removed
+    25-Apr-26 by §6 Decision 9 retirement. After doc 73b's bundled
+    switchover, `p.forecast.*` is promoted-model-only and is written
+    by `applyPromotion`, not CF.)
 - Keep `run_conversion_funnel` on the public CF response rather than on
   inner kernels.
 - Bring summary callers onto the shared runtime contract where coherent.

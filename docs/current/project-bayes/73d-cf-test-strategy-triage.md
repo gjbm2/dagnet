@@ -74,504 +74,174 @@ static gate, handed to `73b`, or dropped.
 
 ## 4. Section-by-section triage of `73c`
 
-### Lines 8-45 — Purpose and method
-
-**Verdict: Drop as replacement-doc framing.**
-
-The six-step method is internally disciplined, but it is the source of the
-over-testing. It makes "unmapped failure mode" look like a defect even when
-the failure mode is outside the implementation contract or better covered by
-one higher-level real-boundary test.
-
-**Keep only this principle:** each surviving test should state which
-implementation risk it removes and what it does not cover.
-
-### Lines 47-58 — Layer index
-
-**Verdict: Replace with stage-risk index.**
-
-The layer list is useful as analysis scaffolding but too broad as an
-execution table. The replacement should group by `73a` implementation stage:
-infrastructure, supersession, pack contract, CF routing/mapping, async upsert,
-model-vars derivation, cleanup, CLI parity, final smoke.
-
-### Lines 60-233 — Layer C, per-scenario graph composition and delivery
-
-**Verdict: Mostly keep, with one merge.**
-
-This is one of the strongest sections because it protects a real defect:
-per-scenario graphs currently inherit stale or wrong-context model material.
-The cohort/window semantics doc makes wrong-context substitution a semantic
-bug, not a harmless fallback.
-
-#### C-Test-1: `perScenarioModelVarsDerivation.test.ts`
-
-**Verdict: Keep.**
-
-Keep the subcases for:
-
-- exact DSL slice selection;
-- `asat()` fit-history selection;
-- full bayesian entry shape, especially probability plus latency/path fields;
-- no mutation of parameter-file source data or persistent graph;
-- analytic entry preserved;
-- no cross-context bayesian fallback.
-
-This removes real risk from doc 73b's bundled-switchover delivery
-sub-step (formerly doc 73a Stage 5a). It should be allowed to use
-sentinel parameter files because the bug is slice selection and
-materialisation, not Python forecast numerics.
-
-#### C-Test-2: `cfAndAnalysisDerivationParity.test.ts`
-
-**Verdict: Keep, trimmed.**
-
-Keep the parity assertion between analysis-prep and CF engorgement for the
-same `(edge, parameter id, effective DSL)`. Use at least three scenarios
-with distinct effective DSLs to catch stale-closure bugs. Do not add further
-pathology cases here; C-Test-1 owns derivation correctness.
-
-#### C-Test-3: `cfRequestPayloadModelVars.test.ts`
-
-**Verdict: Merge into `cfRequestEnvelope.test.ts`.**
-
-The assertion is useful: derived data must survive into the outgoing CF
-payload. But it is envelope content, not a separate conceptual test. Keeping
-it separate adds setup and maintenance cost without much diagnostic gain.
-
-#### C-Test-4 moved to `73b`
-
-**Verdict: Handoff.**
-
-Correct. BE consumer-read migration belongs to `73b`. `73a` should verify
-delivery only; `73b` should verify consumers read the canonical promoted
-surface.
-
-### Lines 235-493 — Layer A, CF dispatch
-
-**Verdict: Keep the core dispatch/supersession/envelope tests, trim lifecycle races.**
-
-Dispatch is load-bearing because `73a` explicitly changes supersession from
-module-global to per-scenario state and relies on per-scenario request graphs.
-
-#### A-Test-1: `cfDispatchCoverage.test.ts`
-
-**Verdict: Keep, trimmed.**
-
-Keep:
-
-- visible live scenarios each dispatch exactly once;
-- hidden scenarios do not dispatch;
-- BASE does not dispatch;
-- CURRENT is not dispatched by `regenerateAllLive`;
-- no duplicate dispatches within one cycle.
-
-Drop from the required suite:
-
-- mid-cycle scenario creation;
-- mid-cycle scenario deletion.
-
-Those are lifecycle race policy tests, not direct risk from the `73a`
-implementation. Add them only if the implementation explicitly changes
-scenario CRUD during regeneration.
-
-#### A-Test-2: `cfPerScenarioSupersession.test.ts`
-
-**Verdict: Keep.**
-
-Keep:
-
-- A and B overlap; B returning first does not cancel A;
-- A generation 1 is discarded after A generation 2 exists;
-- A response after only B was commissioned is still accepted;
-- no module-global `_conditionedForecastGeneration` reference remains;
-- state persists across unrelated fetches if the implementation's tracker is
-  tab-scoped rather than fetch-scoped.
-
-This is the primary regression guard for Defect 3a.
-
-#### A-Test-3: `cfRequestEnvelope.test.ts`
-
-**Verdict: Keep, trimmed and expanded with C-Test-3.**
-
-Keep:
-
-- real scenario id;
-- effective DSL;
-- per-scenario graph fingerprint not equal to BASE;
-- closure capture with at least three scenarios;
-- derived `model_vars[bayesian]` present and scenario-specific;
-- `candidate_regimes_by_edge` present where the fixture requires it;
-- `analytics_dsl` only if this field is still part of the live CF request
-  contract being tested.
-
-Trim:
-
-- live editor graph fingerprint unchanged before/after dispatch, unless the
-  request builder currently risks mutating the source graph. If mutation
-  risk is real, keep it as one assertion, not a broad identity audit.
-
-### Lines 495-710 — Layer B, CF response handling
-
-**Verdict: Keep mapping and basic routing; trim edge cases.**
-
-Response handling matters because `73a` adds or pins graph field writes.
-However, much of this section tests defensive behaviour unrelated to the
-planned changes.
-
-#### B-Test-1: `cfResponseRouting.test.ts`
-
-**Verdict: Merge into `cfPerScenarioRouting.test.ts`, trimmed.**
-
-Keep:
-
-- response A mutates only A's working graph;
-- BASE/current are not mutated;
-- reverse response order does not matter.
-
-Drop:
-
-- duplicate-delivery idempotency, unless the implementation introduces a
-  retry or duplicate delivery path;
-- orphan `scenarioId` warning as a hard test, unless this behaviour is
-  explicitly designed. A missing scenario should not mutate graphs, but the
-  precise log wording/level need not be pinned here.
-
-#### B-Test-2: `cfFieldMappingSentinel.test.ts`
-
-**Verdict: Keep.**
-
-This is high-value. It protects the exact response-to-graph contract and
-catches field-name slips cheaply.
-
-Keep:
-
-- `p_mean -> p.mean`;
-- `p_mean -> p.forecast.mean` only while `73a` explicitly preserves the
-  current double-write pending `73b`;
-- `p_sd -> p.stdev` if `73a` keeps the decision to persist it;
-- `p_sd_epistemic` response-only;
-- `completeness -> p.latency.completeness`;
-- `completeness_sd -> p.latency.completeness_stdev`;
-- `evidence_k/evidence_n -> p.evidence.k/n`;
-- non-owned latency fields such as `t95` unchanged.
-
-Note: this test must be updated when `73b` changes ownership of
-`p.forecast.*`. It should not make the legacy double-write look permanent.
-
-#### B-Test-3: `cfResponseEdgeCases.test.ts`
-
-**Verdict: Keep only as subcases where they affect upsert completion; otherwise drop.**
-
-Keep or merge into `scenarioRegenerationCfUpsert.test.ts`:
-
-- rejected CF does not leave partial writes and regeneration settles;
-- empty CF preserves FE fallback and regeneration settles.
-
-Drop from the required suite:
-
-- partial response coverage warning;
-- null per-edge value;
-- orphan `edge_uuid`.
-
-Those are defensive apply-path branches. They are worth testing only if the
-implementation changes them or if there is a known production failure.
-
-#### Extensions to A-Test-2
-
-**Verdict: Merge into `cfPerScenarioSupersession.test.ts`.**
-
-Keep check-before-apply for stale responses. It is directly tied to the
-supersession fix.
-
-### Lines 714-988 — Layer D, pack lifecycle
-
-**Verdict: Keep extract/replay/roundtrip; drop generic IDB persistence.**
-
-This is the other strongest section. Defect 3b is explicitly about extractor,
-diff, and compositor fidelity.
-
-#### D-Test-1: `extractDiffParamsContractCoverage.test.ts`
-
-**Verdict: Keep.**
-
-Keep:
-
-- one changed contract field at a time appears in the diff even when
-  `p.mean` does not change;
-- excluded deep fields do not appear;
-- epsilon boundary around `p.mean` or representative numeric fields;
-- node `entry.entry_weight` and `case.variants`;
-- null base means full working params if that remains a supported input.
-
-Trim:
-
-- do not require `Object.freeze` as a broad immutability proof unless the
-  extractor has previously mutated input graphs. A plain before/after
-  equality assertion is enough if mutation is the concern.
-
-#### D-Test-2: `compositorReplayCoverage.test.ts`
-
-**Verdict: Keep, trimmed.**
-
-Keep:
-
-- every contract field can replay to the right graph location;
-- `p.posterior`, `p.n`, `p.stdev`, and `conditional_p` specifically replay;
-- shallow merge for nested `p.evidence` / `p.latency` blocks;
-- layer order with three packs;
-- documented null semantics if null overlays are actually part of the pack
-  contract.
-
-Drop:
-
-- deep-clone `Date` / `Symbol` / `function` audit. Graph and pack contracts
-  should use serialisable data; this is not a `73a` risk.
-- "pack contains excluded field; compositor should error/warn" unless the
-  implementation adds pack validation. Exclusion is extractor/type contract;
-  compositor should not become a schema validator by accident.
-
-#### D-Test-3: `scenarioPackContractRoundtrip.test.ts`
-
-**Verdict: Keep.**
-
-This is the essential integration proof for Stage 2. It should assert
-`extract -> applyComposed -> rebuilt` equals the working graph on contract
-fields, and excluded fields come from lower layers or parameter files, not
-from the pack.
-
-Keep the two-scenario inheritance/override case. Keep idempotency only if it
-is cheap in the same setup.
-
-#### D-Test-4: `scenarioPackPersistence.test.ts`
-
-**Verdict: Drop / defer.**
-
-`73a` does not redesign IndexedDB persistence. Generic write/read fidelity,
-mutation-after-write, and IDB failure propagation belong to the IDB/scenario
-persistence suite, not this CF repair. Reintroduce only if the implementation
-touches the scenario persistence API.
-
-### Lines 992-1284 — Layer E, async lifecycle
-
-**Verdict: Keep slow-CF upsert and a reduced fast/slow check; drop broad promise-lifecycle tests.**
-
-The real `73a` async risk is narrow: pack extraction currently runs before
-slow CF can apply. The rest of Layer E expands into general async policy.
-
-#### E-Test-1: `cfFastSlowPathSentinel.test.ts`
-
-**Verdict: Keep, trimmed.**
-
-Keep:
-
-- fast CF resolves inside 500ms and does not cause a second slow-path apply;
-- slow CF resolves after 500ms and applies after FE fallback;
-- empty/failed slow CF does not overwrite FE fallback.
-
-Drop:
-
-- exact 500ms boundary unless the implementation changes deadline comparison;
-- response at 0ms before FE topo apply unless there is evidence the current
-  code can enter that order and mishandle it.
-
-#### E-Test-2: `scenarioRegenerationCfUpsert.test.ts`
-
-**Verdict: Keep.**
-
-This is essential. Keep:
-
-- slow CF keeps regeneration unresolved until the CF apply path has settled;
-- persisted pack contains CF-derived sentinel fields after slow CF;
-- if the implementation can register multiple awaitables, verify it waits for
-  the CF awaitable, not merely any promise;
-- failed or empty CF settles and extracts the documented fallback graph state;
-- superseded stale CF does not get packed.
-
-Drop:
-
-- mid-extract UI edit. That is an editing concurrency policy, not part of the
-  repair unless `73a` explicitly defines it.
-- artificial "promise handle not registered" injection unless the
-  implementation exposes a meaningful error path. The normal slow-CF upsert
-  test already fails if the handle is not registered.
-
-#### E-Test-3: `cfConcurrentRegenCycles.test.ts`
-
-**Verdict: Keep one subcase, defer the rest.**
-
-Keep:
-
-- two rapid `regenerateAllLive` cycles: older CF responses are discarded and
-  both await chains settle.
-
-Drop / defer:
-
-- scenario deleted between cycles;
-- simultaneous refresh-all plus single-scenario trigger.
-
-Those are broader lifecycle behaviours. They do not need to block the narrow
-CF parity repair.
-
-#### E-Test-4: `cfPromiseLifecycleEdgeCases.test.ts`
-
-**Verdict: Drop / defer.**
-
-Hanging promises, tab-close aborts, and throwing handlers are important app
-resilience concerns, but not the specific implementation risk unless `73a`
-adds timeout/abort infrastructure. Testing them here would turn the repair
-into an async platform project.
-
-### Lines 1288-1477 — Layer F, cleanup integrity
-
-**Verdict: Keep static gates; reduce UI/browser coverage.**
-
-Cleanup matters during doc 73b's cleanup stage (Stage 6), but only
-after doc 73b's consumer migration (Stages 4 and 5) has made the
-legacy surfaces non-load-bearing.
-
-#### F-Test-1: `cleanupGrepGates.test.ts`
-
-**Verdict: Keep as static gate only.**
-
-Keep absence checks for:
-
-- `_posteriorSlices`;
-- `reprojectPosteriorForDsl`;
-- removed projection helpers if they are actually removed;
-- BE consumer reads of legacy posterior fields once `73b` has migrated them.
-
-Use a repository search or AST helper inside the test. Do not run shell
-`grep` from the test if the project has a better Node-side file walker.
-
-#### F-Test-2: `feDisplayAfterPosteriorRemoval.spec.ts`
-
-**Verdict: Trim hard.**
-
-Keep one browser or integration smoke that exercises the highest-risk display
-surface that formerly depended on graph-side posterior fields. Do not walk
-every card, chart, overlay, and share-bundle path in Playwright.
-
-Recommended scope:
-
-- one edge properties / model-vars display surface for a known Bayesian edge;
-- one chart or analysis read that would go blank if the display still relied
-  on removed graph-side posterior fields.
-
-Share-bundle restore should be covered only if the cleanup actually changes
-share restore data paths.
-
-#### F-Test-3: `cleanupSchemaAudit.test.ts`
-
-**Verdict: Static gate only; IDB migration only if implemented.**
-
-Keep:
-
-- fixture audit for `_posteriorSlices`;
-- type/schema absence if the field is removed from public graph types.
-
-Drop / defer:
-
-- IDB persisted-state scrub unless the implementation includes a migration.
-  If old data is merely ignored, test the reader ignores it in the relevant
-  read-path suite, not as part of `73a`.
-
-### Lines 1481-1712 — Layer G, observability
-
-**Verdict: Merge and slim.**
-
-The app's session log is a user-facing trace, so CF lifecycle visibility
-matters. But `73c` over-specifies wording, hierarchy, and levels.
-
-#### G-Test-1: `cfSessionLogShape.test.ts`
-
-**Verdict: Keep, trimmed.**
-
-Keep structural assertions for:
-
-- commission entry includes scenario id and generation;
-- applied entry exists for fast/slow success;
-- superseded entry exists for stale discard;
-- empty result is visible as warning or documented degraded outcome;
-- failed CF is visible as error;
-- compact scenario verdict toast exists for batch regeneration if
-  `ScenariosContext` still uses that UX.
-
-Do not pin exact message templates beyond stable tags and required
-structured fields. Avoid asserting full parent/child hierarchy unless the
-operation hierarchy is the public contract under review.
-
-#### G-Test-2: `cfLogLevelInvariance.test.ts`
-
-**Verdict: Merge into `cfSessionLogShape.test.ts` or drop.**
-
-Separate log-level invariance is excitable. The important thing is that
-failures are not hidden and routine internals are not surfaced at user level.
-Fold those assertions into the shape test for the few lifecycle outcomes
-that matter.
-
-#### CF call-site `isLevelEnabled` audit
-
-**Verdict: Drop from this suite unless heavy trace allocation is added.**
-
-The session log architecture already owns `isLevelEnabled` discipline.
-Adding a CF-specific grep gate is only useful if this implementation adds
-heavy trace payloads.
-
-### Lines 1716-1963 — Layer H, end-to-end
-
-**Verdict: Keep one seam integration and one browser smoke, both reduced.**
-
-The testing standards favour real boundaries. One full-flow integration and
-one browser smoke are justified. The problem is the number of subcases.
-
-#### H-Test-1: `cfFullPipelineSentinel.integration.test.ts`
-
-**Verdict: Keep, trimmed.**
-
-Keep a deterministic in-process integration with real FE services and the
-deferred CF boundary. It should prove:
-
-- three scenarios produce three distinct request graphs;
-- derived per-scenario `model_vars[]` reaches CF payloads;
-- responses resolved out of order apply to the right scenario;
-- slow CF is awaited before pack extraction;
-- recomposed packs preserve final scenario-specific values.
-
-Drop:
-
-- real serialisation roundtrip unless the payload contains non-plain objects;
-- chart-layer display agreement if the Playwright smoke covers visible
-  display. If kept, make it one assertion, not a chart subsystem test.
-
-#### H-Test-2: `liveScenarioConditionedForecastRoundtrip.spec.ts`
-
-**Verdict: Keep as a small Playwright smoke.**
-
-Keep:
-
-- boot known graph;
-- create or load at least two live scenarios with distinct DSLs;
-- wait for CF/regeneration to settle;
-- assert visible per-scenario values differ as expected;
-- refresh/reload once and assert values survive recomposition.
-
-Drop:
-
-- navigate-away-and-back;
-- scenario reorder during in-flight CF;
-- mid-CF arbitrary UI interaction;
-- real-BE CI as mandatory. Prefer stable stubbed CF in CI and reserve real-BE
-  for manual/nightly if it is too slow or variable.
-
-### Lines 1967-2040 — Failure-mode mapping
-
-**Verdict: Do not carry forward.**
-
-The mapping is useful for auditing `73c`, but it bakes in the exhaustive
-frame. The replacement doc should contain a smaller "surviving suite" table
-with each test's implementation risk. It should not preserve every failure
-mode as an obligation.
+For each test the verdict (Keep / Keep, trimmed / Merge / Drop / Handoff)
+plus the load-bearing subcases. The §5 surviving-suite table is the
+authoritative list; this section gives the per-test rationale.
+
+**73c Purpose, method, layer index** — Drop as replacement-doc framing.
+The six-step method drives over-testing. Replacement principle: each
+surviving test states which implementation risk it removes.
+
+### Layer C — per-scenario graph composition and delivery
+
+Strongest section: per-scenario graphs currently inherit stale or
+wrong-context model material; the cohort/window semantics doc makes
+wrong-context substitution a semantic bug.
+
+- **C-Test-1 `perScenarioModelVarsDerivation.test.ts`** — Keep.
+  Subcases: exact DSL slice selection; `asat()` fit-history selection;
+  full bayesian entry shape (probability + latency/path); no mutation of
+  source data; analytic entry preserved; no cross-context fallback.
+  Sentinel parameter files are fine — bug is slice selection, not numerics.
+- **C-Test-2 `cfAndAnalysisDerivationParity.test.ts`** — Keep, trimmed.
+  Parity assertion between analysis-prep and CF engorgement for the same
+  `(edge, paramId, effective DSL)`. Use ≥3 scenarios with distinct DSLs
+  (catches stale-closure bugs). C-Test-1 owns derivation correctness.
+- **C-Test-3 `cfRequestPayloadModelVars.test.ts`** — Merge into
+  `cfRequestEnvelope.test.ts`. Envelope content, not a separate concept.
+- **C-Test-4** — Handoff to doc 73b (BE consumer-read migration).
+
+### Layer A — CF dispatch
+
+Load-bearing because doc 73a changes supersession from module-global to
+per-scenario state and relies on per-scenario request graphs.
+
+- **A-Test-1 `cfDispatchCoverage.test.ts`** — Keep, trimmed. Visible live
+  scenarios dispatch exactly once; hidden don't dispatch; BASE doesn't;
+  CURRENT not via `regenerateAllLive`; no duplicate dispatches.
+  Drop mid-cycle scenario create/delete (lifecycle policy, not 73a risk).
+- **A-Test-2 `cfPerScenarioSupersession.test.ts`** — Keep. A/B overlap
+  with B-first-doesn't-cancel-A; gen-1 discarded after gen-2 exists;
+  A-after-only-B-commissioned still accepted; no module-global
+  `_conditionedForecastGeneration` reference; tracker is tab-scoped.
+  Primary regression guard for Defect 3a.
+- **A-Test-3 `cfRequestEnvelope.test.ts`** — Keep, trimmed; absorbs
+  C-Test-3. Real scenarioId, effective DSL, per-scenario graph
+  fingerprint ≠ BASE, closure capture with ≥3 scenarios, derived
+  `model_vars[bayesian]` present and scenario-specific,
+  `candidate_regimes_by_edge` present, `analytics_dsl` only if still in
+  the live request contract. Drop the broad live-graph identity audit
+  unless mutation risk is real.
+
+### Layer B — CF response handling
+
+- **B-Test-1 `cfResponseRouting.test.ts`** — Merge into
+  `cfPerScenarioRouting.test.ts`, trimmed. A→A only, BASE/current
+  unmutated, reverse response order safe. Drop duplicate-delivery and
+  orphan-scenarioId-warning unless explicitly designed.
+- **B-Test-2 `cfFieldMappingSentinel.test.ts`** — Keep. Sentinel-value
+  mapping per §10 table. The `p_mean → p.forecast.mean` double-write
+  subcase asserts only during 73a's lifetime; updated in lockstep with
+  doc 73b's switchover. (See §7 contract check 1.)
+- **B-Test-3 `cfResponseEdgeCases.test.ts`** — Keep only failed/empty CF
+  subcases (merge into `scenarioRegenerationCfUpsert.test.ts`); drop
+  partial-response, null-per-edge, orphan-edge_uuid (defensive branches
+  with no implementation change).
+- **Extensions to A-Test-2** — Merge into
+  `cfPerScenarioSupersession.test.ts`. Keep check-before-apply.
+
+### Layer D — pack lifecycle
+
+Other strongest section: Defect 3b is exactly extract/diff/compositor fidelity.
+
+- **D-Test-1 `extractDiffParamsContractCoverage.test.ts`** — Keep.
+  One changed contract field at a time appears in diff even with `p.mean`
+  unchanged; excluded fields stay out; epsilon boundary; node
+  `entry.entry_weight` and `case.variants`; null base = full working
+  params. Trim the broad `Object.freeze` immutability proof.
+- **D-Test-2 `compositorReplayCoverage.test.ts`** — Keep, trimmed.
+  Every contract field replays to the right location; `p.posterior`,
+  `p.n`, `p.stdev`, `conditional_p` specifically replay (Defect 3b
+  regression); shallow merge for nested blocks; layer order with three
+  packs; documented null semantics. Drop deep-clone type audit and
+  excluded-field validation.
+- **D-Test-3 `scenarioPackContractRoundtrip.test.ts`** — Keep. The
+  essential integration proof for 73a Stage 2:
+  `extract → applyComposed → rebuilt` is byte-equal on contract fields;
+  excluded fields come from lower layers. Two-scenario
+  inheritance/override case included; idempotency only if cheap in the
+  same setup.
+- **D-Test-4 `scenarioPackPersistence.test.ts`** — Drop / defer.
+  Generic IDB persistence belongs to the IDB suite, not this repair.
+
+### Layer E — async lifecycle
+
+Real risk is narrow: pack extraction can run before slow CF applies.
+
+- **E-Test-1 `cfFastSlowPathSentinel.test.ts`** — Keep, trimmed. Fast CF
+  inside 500ms doesn't double-apply; slow CF after 500ms applies after
+  FE fallback; empty/failed slow CF preserves FE fallback. Drop the exact
+  500ms boundary subcase and the 0ms-before-FE-topo subcase (not real
+  risk in current code).
+- **E-Test-2 `scenarioRegenerationCfUpsert.test.ts`** — Keep. Slow CF
+  keeps regeneration unresolved until apply settles; persisted pack
+  contains CF-derived sentinels; awaits the CF awaitable specifically;
+  failed/empty settles cleanly; superseded stale CF doesn't get packed.
+  Drop mid-extract UI edit and artificial "handle not registered"
+  injection.
+- **E-Test-3 `cfConcurrentRegenCycles.test.ts`** — Keep only the rapid
+  double-`regenerateAllLive` subcase. Defer scenario-deleted-between-
+  cycles and trigger interleaving (broader lifecycle, not parity repair).
+- **E-Test-4 `cfPromiseLifecycleEdgeCases.test.ts`** — Drop / defer.
+  Async platform concerns, not 73a's specific risk.
+
+### Layer F — cleanup integrity
+
+Cleanup matters during doc 73b's cleanup stage (Stage 6), only after the
+consumer migration (73b Stages 4 and 5) has made legacy surfaces
+non-load-bearing.
+
+- **F-Test-1 `cleanupGrepGates.test.ts`** — Keep as static gate only.
+  Absence checks for `_posteriorSlices`, `reprojectPosteriorForDsl`,
+  removed projection helpers, BE consumer reads of legacy posterior
+  fields. Use a Node-side file walker, not shell grep.
+- **F-Test-2 `feDisplayAfterPosteriorRemoval.spec.ts`** — Trim hard.
+  One browser smoke covering the highest-risk display surface (one edge
+  properties / model-vars view + one chart that would go blank). No
+  Playwright walk of every card/overlay. Share-bundle restore only if
+  cleanup changes share-restore paths.
+- **F-Test-3 `cleanupSchemaAudit.test.ts`** — Static gate only. Fixture
+  audit for `_posteriorSlices`; type/schema absence. Drop the IDB
+  persisted-state scrub unless a migration is implemented.
+
+### Layer G — observability
+
+Session log is a user-facing trace, but 73c over-specifies wording.
+
+- **G-Test-1 `cfSessionLogShape.test.ts`** — Keep, trimmed. Structural
+  assertions for commission (with scenarioId + generation), apply (fast
+  and slow), superseded discard, empty result, failed CF, scenario
+  verdict toast. Don't pin exact message templates beyond stable tags
+  and required structured fields. Don't assert full parent/child
+  hierarchy unless that's the public contract.
+- **G-Test-2 `cfLogLevelInvariance.test.ts`** — Merge into G-Test-1 or
+  drop. Fold the few important level assertions into the shape test.
+- **CF call-site `isLevelEnabled` audit** — Drop unless heavy trace
+  payloads are added.
+
+### Layer H — end-to-end
+
+One full-flow integration and one browser smoke, both reduced.
+
+- **H-Test-1 `cfFullPipelineSentinel.integration.test.ts`** — Keep,
+  trimmed. Real FE services + deferred CF boundary. Three scenarios
+  produce three distinct request graphs; derived per-scenario
+  `model_vars[]` reaches CF payloads (post-73b-switchover assertion);
+  out-of-order responses apply to the right scenario; slow CF awaited
+  before pack extraction; recomposed packs preserve scenario values.
+  Drop the real-serialisation roundtrip and the chart-layer display
+  agreement (covered by Playwright).
+- **H-Test-2 `liveScenarioConditionedForecastRoundtrip.spec.ts`** — Keep
+  as small Playwright smoke. Boot, create/load ≥2 live scenarios with
+  distinct DSLs, wait for CF, assert visible per-scenario values differ,
+  refresh/reload, assert values survive recomposition. Drop
+  navigate-away-and-back, scenario reorder, mid-CF interaction, and
+  real-BE-as-mandatory (stubbed CF in CI; real-BE manual/nightly).
+
+### Failure-mode mapping (73c lines 1967-2040)
+
+Do not carry forward. Bakes in the exhaustive frame; the §5 surviving
+suite table is the replacement.
 
 ## 5. Recommended surviving suite
 
@@ -597,69 +267,55 @@ The suite below is the recommended replacement for `73c`.
 | 73b/4 | `cfAndAnalysisDerivationParity.test.ts` | Keep, trimmed | Analysis and CF request paths derive identical model vars. (Owned by doc 73b's bundled switchover; was 73a Stage 5a.) |
 | 73b/6 | cleanup grep/static gates | Keep as static gates | Removed legacy symbols do not return after consumer migration. (Owned by doc 73b's cleanup stage; was 73a Stage 5c.) |
 | 73b/6 | display-after-cleanup check | Trim | One or two high-risk display surfaces still render after legacy graph fields are removed. (Owned by doc 73b's cleanup stage; was 73a Stage 5c.) |
-| 73a/G | `cfSessionLogShape.test.ts` | Keep, trimmed | CF lifecycle visible enough for users and debugging; no brittle wording snapshots. |
+| 73a/3 | `cfSessionLogShape.test.ts` | Keep, trimmed | CF lifecycle visible enough for users and debugging; no brittle wording snapshots. |
 | 73a/6 | `cliFeScenarioParity.test.ts` | Keep | FE and CLI build identical scenario graphs/payloads from same packs and DSL. **Phase note:** depends on doc 73b's switchover for the per-scenario `model_vars[]` derivation; cannot run pre-73b-switchover. |
 | 73a/7 | `cfFullPipelineSentinel.integration.test.ts` | Keep, trimmed | Real FE seams work together across dispatch, apply, upsert, and recomposition. **Phase note:** the per-scenario derived-model-vars assertions assert only post-73b-switchover. |
 | 73a/7 | `liveScenarioConditionedForecastRoundtrip.spec.ts` | Keep as smoke | Browser scenario CF/regeneration/reload works at least once end to end. |
 
-## 6. Tests to remove from the required plan
+## 6. Tests removed from the required plan
 
-Remove these as named required artefacts:
+The §4 verdicts and the §5 surviving suite are the authoritative
+record of what stays and what doesn't. The list below is a
+rapid-reference summary; for rationale see §4.
 
-- `cfRequestPayloadModelVars.test.ts` — merge into `cfRequestEnvelope.test.ts`.
-- `cfResponseRouting.test.ts` — merge into `cfPerScenarioRouting.test.ts`.
-- `cfResponseEdgeCases.test.ts` — keep only failed/empty cases inside upsert or log tests.
-- `scenarioPackPersistence.test.ts` — generic IDB persistence, not a `73a`
-  implementation risk.
-- `cfConcurrentRegenCycles.test.ts` — keep only one rapid double-refresh
-  subcase if cheap; not a full required file.
-- `cfPromiseLifecycleEdgeCases.test.ts` — async platform behaviour, not this
-  repair.
-- `cfLogLevelInvariance.test.ts` — fold the few important level assertions
-  into `cfSessionLogShape.test.ts`.
-- `cleanupSchemaAudit.test.ts` as integration/IDB test — keep only static
-  pieces if doc 73b's cleanup stage removes schema/type fields.
-- cross-cutting verification bundle — a test that reruns all tests is a CI
-  command, not a test.
+Removed as named required artefacts:
+`cfRequestPayloadModelVars.test.ts` (→ envelope),
+`cfResponseRouting.test.ts` (→ per-scenario routing),
+`cfResponseEdgeCases.test.ts` (failed/empty kept inside upsert),
+`scenarioPackPersistence.test.ts` (generic IDB),
+`cfConcurrentRegenCycles.test.ts` (one subcase only if cheap),
+`cfPromiseLifecycleEdgeCases.test.ts` (async platform),
+`cfLogLevelInvariance.test.ts` (→ shape test),
+`cleanupSchemaAudit.test.ts` integration/IDB (static pieces only),
+cross-cutting verification bundle (CI sequence, not a test).
 
 ## 7. Open contract checks before implementation
 
-These are not test-count issues. They are contract decisions that must be
-settled so the surviving tests do not pin contradictory behaviour.
+Settled contract decisions affecting test pinning:
 
-1. **`p.forecast.mean` ownership**: while doc 73a preserves the current CF
-   double-write through its own lifetime, doc 73b's bundled switchover
-   (Stage 4) moves `p.forecast.*` to promotion-only and stops CF writing
-   it. `cfFieldMappingSentinel.test.ts` must name the current phase and
-   be updated when doc 73b's switchover lands.
-2. **`p_sd -> p.stdev` persistence**: `STATS_SUBSYSTEMS.md` still documents
-   `p_sd` as response-only in places, while doc 73a proposes persisting
-   `p.stdev`. The mapping test should pin only the chosen settled contract.
-3. **Wrong-context fallback**: if `posteriorSliceResolution.ts` still falls
-   back from contexted DSL to bare `window()`, doc 73b's bundled-switchover
-   delivery sub-step must either fix the resolver or explicitly reject
-   mismatched returned slices. The derivation test must keep the
-   no-cross-context case.
-4. **`analytics_dsl` in CF requests**: `73c` includes it in envelope tests,
-   while whole-graph CF design has evolved around temporal DSL plus graph-wide
-   edge resolution. The envelope test should assert whichever request contract
-   is live for this implementation, not both.
-5. **Cleanup sequencing**: doc 73b's cleanup-stage tests must not run until
-   doc 73b's consumer migration (Stages 4 and 5) has moved consumers off
-   legacy posterior reads. Before then, absence checks would delete
-   load-bearing behaviour.
+1. **`p.forecast.mean` ownership** — RESOLVED (73b §11.2 conflict 6,
+   option (a); doc 60 Decision 9 retired). 73a preserves the current
+   CF double-write through its own lifetime; doc 73b's switchover
+   makes `p.forecast.*` promotion-only.
+   `cfFieldMappingSentinel.test.ts` names the current phase and is
+   updated in lockstep with the switchover commit.
+2. **`p_sd → p.stdev` persistence** — RESOLVED (73b OP9, decision
+   B-narrow). CF writes `p_sd → p.stdev`; mapping test pins it.
+3. **Wrong-context fallback** — covered. Doc 73b's bundled-switchover
+   delivery sub-step removes `posteriorSliceResolution.ts`'s
+   context-stripping fallback (or rejects mismatched returned slices
+   at the seam). Derivation test keeps the no-cross-context case.
+4. **`analytics_dsl` in CF requests** — open. The envelope test
+   should assert whichever request contract is actually live; doc 73c
+   includes the field but whole-graph CF design has moved on.
+5. **Cleanup sequencing** — covered. Doc 73b's cleanup-stage tests
+   are gated on its own consumer migration (Stages 4 and 5).
 
 ## 8. Recommended replacement posture
 
-Replace `73c` with a shorter test strategy derived from this note. Do not edit
-`73c` in place into a smaller failure-mode matrix. The matrix framing is what
-made it overgrow.
-
-The replacement should say:
-
-- tests are stage gates, not a catalogue of every possible failure;
-- each required test protects a named implementation seam;
-- edge cases become tests only when the implementation changes that edge case
-  or production has already shown it fails;
-- `73a` tests delivery and pack/upsert mechanics;
-- `73b` tests consumer migration and long-term field ownership.
+Replace `73c` with this note. Tests are stage gates, not a catalogue
+of every possible failure; each required test protects a named
+implementation seam; edge cases become tests only when the
+implementation changes that branch or production has shown it fails;
+73a tests delivery and pack/upsert mechanics; 73b tests consumer
+migration and long-term field ownership.

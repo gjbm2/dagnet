@@ -541,69 +541,30 @@ reintroducing quick BE analytic path.
 
 ### 6.1 Redefine `analytic` as FE fallback model source
 
-FE quick system still produces fallback model, but output must become clean
-model source rather than query-owned posterior in disguise.
-
-`analytic` target meaning is FE fallback model built from full relevant
-`window()` family for probability and existing lag-fit inputs for latency.
-Current query scoped evidence remains in `p.evidence.*`. Current query
-provisional answer remains in current-answer fields.
-
-Baseline forecast estimate from
-`graph-editor/src/services/windowAggregationService.ts` lands in FE fallback
-model (`analytic`) and then promotion, not in CF-owned or current-answer fields.
-
-The promoted probability surface is the eight-field set fixed in §3.2:
-`p.forecast.{mean, stdev, alpha, beta, alpha_pred, beta_pred,
-n_effective, source}`. Mean plus stdev alone is insufficient because
-back-end consumers explicitly need the Beta-shape parameters and the
-predictive variants for conjugate updates and dispersion math.
-Source-specific distribution details may remain inside model-var source
-entries, but promotion must project the eight-field set onto the
-promoted surface.
+FE quick must produce `analytic` as a clean model source — full relevant
+`window()` family for probability, existing lag-fit inputs for latency —
+not a query-owned posterior in disguise. Current query-scoped evidence
+remains in `p.evidence.*`; current query provisional answer remains in
+current-answer fields. Baseline forecast estimate from
+`windowAggregationService.ts` lands in `analytic` and then promotion, not
+in CF-owned or current-answer fields.
 
 ### 6.2 Give probability a promoted model surface
 
-Promotion must become symmetric so probability has a clear promoted home, as
-latency already does.
+Promotion projects the winning probability source onto the eight-field
+`p.forecast.*` surface (§3.2). Owner: `applyPromotion` in
+`modelVarsResolution.ts`. Multi-surface migration:
 
-`graph-editor/src/services/modelVarsResolution.ts` owns projection of the
-winning probability source onto the eight-field `p.forecast.*` surface
-defined in §3.2. This makes the forecast-versus-current-answer distinction
-explicit and matches latency's existing promoted-fields pattern.
+- `modelVarsResolution.ts:156-158` — replace the latency-only avoidance
+  with positive promotion of all eight `p.forecast.*` fields.
+- `conditionedForecastService.ts:227-239` — stop writing
+  `forecast.mean = p_mean` (the `f` vs `f+e` collapse).
+- BE consumers in `graph-editor/lib/runner/` — review reads to ensure
+  promoted `p.forecast.*` for model-bearing, current-answer scalars
+  for query-result rendering.
 
-This is a multi-surface migration, not just an edit to
-`modelVarsResolution.ts`. Current state:
-
-- `graph-editor/src/services/modelVarsResolution.ts:156-158` explicitly
-  documents that the TS promoter only promotes latency parameters and avoids
-  writing `p.forecast.mean`. This avoidance must be replaced with positive
-  promotion of all eight `p.forecast.*` fields.
-- `graph-editor/src/services/conditionedForecastService.ts:227-239` writes
-  `forecast.mean = p_mean` per edge. This collapses `f` (promoted baseline)
-  and `f+e` (current-answer) into one slot and must stop.
-- BE consumers in `graph-editor/lib/runner/` that read forecast fields must
-  be reviewed to ensure they read promoted `p.forecast.*` for model-bearing
-  operations and current-answer scalars for query-result rendering.
-
-Stage sequencing for the migration follows the bundled switchover laid out
-in §8:
-
-1. **Stage 4 — bundled switchover.** Per-scenario `model_vars[]` delivery,
-   the promotion writer extension, and the first BE consumer migration land
-   together so the commit produces an observable behavioural diff. Promotion
-   writes the full eight-field `p.forecast.*` surface (per §3.2) from the
-   selected source. CF stops writing `forecast.mean = p_mean`. One back-end
-   reader (the bayesian probability-source path in `model_resolver.py`)
-   switches to the new surface in this same stage.
-2. **Stage 5 — remaining consumer migrations.** Every other consumer that
-   currently reads `p.mean` as model proxy or reads `posterior.*` /
-   `_posteriorSlices` is switched to the promoted surface, one consumer per
-   commit so the sequence is bisectable.
-
-This bundled sequencing replaces the earlier write-only Stage 4 / unified
-Stage 5 split, which left Stages 4 and (the early part of) 5 producing no
-observable diff and made bisection harder.
+Stage sequencing per §8: delivery + writer + first reader land in
+Stage 4 (bundled); remaining readers in Stage 5.
 
 ### 6.3 Keep FE quick pass as immediate query-owned projector
 
@@ -751,14 +712,8 @@ overtype no longer changes the source pin. Remove the
 'manual')` lookup at line 105 and any `'manual'` references in the card
 header rendering at lines 246-256.
 
-Action B7f. Cutover for in-the-wild graphs is per Open Point 1 (RESOLVED):
-graceful degrade in the loader. A `model_vars[].source === 'manual'` entry
-is silently treated as not-present; a `model_source_preference === 'manual'`
-edge is treated as unpinned. Each occurrence is logged via
-`sessionLogService` at info level with the edge id and which artefact was
-ignored. No special-case loader code path beyond the type narrowing; the
-log entry is the entire user-visible surface. Packs do not carry source
-ledger or selector state and are not in scope.
+Action B7f. Cutover for in-the-wild graphs per OP1 (graceful degrade
+in the loader). See §7 OP1 for the rule.
 
 Action B7g. Update consumers that read `'manual'` source params or check
 for `'manual'` selector pin: the badge counts at
@@ -777,63 +732,29 @@ The per-field `*_overridden` companion-flag pattern remains the canonical
 mechanism for user output authoring. This subsection codifies and confirms
 that pattern rather than introducing a new one.
 
-Action B8a. Confirm that every overtypable current-answer scalar carries a
-`*_overridden` companion flag. Scope includes probability `mean`/`stdev`,
-latency outputs (`t95`, `onset_delta_days`, completeness fields), and any
-other user-overtypable scalar identified during implementation.
+Action B8a. The lock-respecting flag set is `p.mean_overridden` and
+`p.stdev_overridden`, on every parameter including each
+`conditional_p[X].p` (per open point 7 resolution). Both already
+exist in the schema; no additions.
 
 Action B8b. The `AutomatableField` wrapper component remains the canonical UI
 for these locks. Lock-clear UX writes `*_overridden: false` only and leaves
 the previous value visible (sticky on unlock). Next legitimate automated
 write may overwrite that value.
 
-Action B8c. Define the lock-respecting writer set narrowly. The writers that
-must check the relevant `*_overridden` flag before touching a current-answer
-scalar are exactly the automated graph writers of current-answer fields:
-FE quick pass, CF, runtime cascades, and any batch-write helper that
-projects derived scalars onto the live edge (notably
-`graph-editor/src/services/.../applyBatchLAGValues`, which currently
-overwrites `p.mean` from `blendedMean` without checking `mean_overridden`
-and must be brought into the discipline). Locked ⇒ skip.
-
-Two writer roles are explicitly outside this discipline:
-
-- Promotion. Promotion only writes promoted-layer fields and never writes
-  current-answer scalars; it has nothing to check against current-answer
-  locks. (It still skips promoted-layer writes only when the user has
-  pinned the selector — the selector pin is the relevant gate at that
-  layer, not `*_overridden`.)
-- Scenario composition. Composition pastes pack state onto the graph; it
-  is not an automated derivation. Pasted values become the live edge state
-  for that scenario, including any pre-existing lock flag on the live edge.
-  Composition does not "write through" a lock.
+Action B8c. The lock-respecting writer set: FE quick pass, CF, runtime
+cascades, and `applyBatchLAGValues` (currently writes `p.mean` from
+`blendedMean` without checking `mean_overridden`; must be brought into
+the discipline). Locked ⇒ skip. Promotion and scenario composition are
+explicitly outside the discipline (per OP6 and §3.2 — promotion writes
+only promoted fields; composition pastes pack state without writing
+through locks).
 
 Action B8d. Selector pin and output lock are independent. Pinning a selector
 must not implicitly lock outputs. Locking an output must not implicitly pin
 the selector.
 
-Completion gate for Work package B:
-- `analytic` is model-bearing FE fallback source, not query-owned answer state.
-- `p.forecast.*` is promoted baseline model surface and remains distinct from
-  current query-owned answer fields.
-- FE quick pass consumes promoted model state plus scoped evidence and writes
-  query-owned fields without rewriting promoted baseline slots.
-- CF remains authoritative current-answer writer and does not overwrite
-  promoted baseline forecast slots.
-- Runtime carrier/reach consumers read model/promoted surfaces rather than
-  current query-owned fields.
-- FE and CLI both prepare analysis from scenario-owned enriched graph state per
-  scenario.
-- `manual` no longer appears as a `model_vars[]` source entry, in the
-  `model_source_preference` selector domain, or in any UI surface that exposes
-  source taxonomy.
-- Output overtype writes only the value plus its `*_overridden` flag; it does
-  not write the source ledger and does not pin the selector.
-- Selector pin and output lock are independent user affordances.
-- Param packs match the doc 73a contract: post-projection scalar state only,
-  no `*_overridden` flags, no source ledger, no selector.
-- Standard rendering and FE-quick / CF passes continue to function when no
-  bayesian source files are present.
+Completion gates for Work package B are listed in §9.
 
 ## 7. Open points to settle before implementation
 
@@ -841,112 +762,59 @@ These items are explicitly unresolved and must be settled before the
 corresponding stage lands. They are listed here so a reader can scan what is
 still in flight versus what is binding.
 
-Open point 1 — RESOLVED via cutover with graceful degrade. No migration
-is owned by this plan. Stage 3 removes `manual` from the source taxonomy:
-TypeScript types drop the variant, Python schemas drop the variant. The
-loader gracefully degrades when it encounters an in-the-wild graph that
-still carries `manual`: a `model_vars[].source === 'manual'` entry is
-treated as not-present, and a `model_source_preference === 'manual'`
-edge is treated as unpinned. The graph then behaves as if the manual
-entry had never existed.
+**Resolved**
 
-Each occurrence is logged via `sessionLogService` (per the codebase's
-session-logging pattern) so the cutover is observable: an info-level
-entry per affected edge, tagged so it's filterable, naming the edge id
-and which manual artefact was ignored (entry vs. selector pin). No
-user-facing error, no toast, no special UI path. Conversion of
-in-the-wild graphs is out of scope for this plan and is handled
-separately.
-
-Open point 2 — RESOLVED. The promoted surface includes `p.forecast.source`
-(and the equivalent latency provenance) by Decision 7 and section 3.2.
-Provenance is required, not optional, because consumers branch on it during
-the analytic semantic transition and use it for human readability
-thereafter.
-
-Open point 3 — Selector pin behaviour when the pinned source becomes
-unavailable. If a user has pinned `bayesian` for an edge and the bayesian
-source then becomes unavailable for the current query context, the candidate
-behaviour is silent fallback to `analytic` for that edge with the pin
-retained, plus a UI indicator that the pin is currently inactive. The
-alternative (auto-clear the pin) is simpler but loses authoring intent.
-Must be settled before Stage 4 (when promotion starts writing the promoted
-surface and selector behaviour becomes user-visible).
-
-Open point 4 — Quality-gate volatility. If a fit's `gate_passed` flag flips
-between promotion runs (for example because the underlying fit is updated),
-the selector default may flip with it. Whether such flips should be silent,
-surfaced as a UI notice, or temporarily damped is open. Default is silent;
-revisit only if instability becomes user-visible.
-
-Open point 5 — Refresh discipline for the per-edge `model_vars[]` ledger on
-query-context change. Section 3.1 commits to "current-context entry only"
-without committing to immediate refresh. The trigger set for refresh
-(promotion-run, explicit recompute, scenario switch, query-DSL edit) and the
-acceptable staleness window need spelling out. Must be settled before Stage 4.
-
-Open point 6 — Two-path manual edit interaction. Section 3.5 commits to two
-authoring entry points (edge props for the current scenario; pack edit for a
-specific scenario). Specifically open: (i) when a pack-pasted scalar lands on
-the live edge during composition, what governs whether the live edge's
-`*_overridden` flag is set, cleared, or left as-was; (ii) when both
-authoring paths have been used on the same edge across different scenarios,
-the precedence and reconciliation rules. These are doc 73b's questions to
-answer because lock semantics are doc 73b's territory; doc 73a (which owns
-the compositor) must respect doc 73b's chosen rule. Doc 73a §8 currently
-specifies compositor replay mechanics for the active-projection blocks but
-does not address `*_overridden` interaction — that gap is filled here.
-Candidate rule: composition pastes scalar values unconditionally; the live
-edge's `*_overridden` flag is preserved as-was (composition does not toggle
-it). **Sequencing:** must be settled before doc 73a Stage 2 (the
-extractor/compositor stage) lands, because doc 73a Stage 2 implements the
-compositor that has to obey the chosen rule. The rule must be communicated
-to doc 73a in time for its Stage 2 design, not deferred to this plan's
-Stage 5.
-
-Open point 7 — Coverage list for `*_overridden` flags. Action B8a says "every
-overtypable current-answer scalar". The exact list (probability `mean`,
-`stdev`; latency `t95`, `onset_delta_days`, completeness fields; anything
-else) needs enumerating before Stage 5 (consumer migration) and pinned into
-tests.
-
-Open point 8 — RESOLVED. The original framing (three structural options
-to "fix" analytic-as-query-scoped) was malformed. CF uses the analytic
-source for conditioning identically to how it uses the bayesian source —
-both are projected onto `p.forecast.alpha`/`p.forecast.beta` by promotion
-and used as priors. The double-counting risk that arises from analytic
-being an aggregate posterior over the slice's data is real and
-acknowledged; it is handled by the **subset blend adjustment** in CF,
-not by branching on source to skip conditioning. The
-`alpha_beta_query_scoped` flag at
-[model_resolver.py:107-108](graph-editor/lib/runner/model_resolver.py#L107-L108)
-is the regime selector for that adjustment; consumers at
-[cohort_forecast_v3.py:132](graph-editor/lib/runner/cohort_forecast_v3.py#L132),
-[forecast_runtime.py:472](graph-editor/lib/runner/forecast_runtime.py#L472),
-and
-[forecast_state.py:1001](graph-editor/lib/runner/forecast_state.py#L1001)
-read it to pick the correct subset-blend regime, NOT to skip analytic
-in conditioning.
-
-No structural change to FE topo, the analytic source, or promotion is
-required. Stage 2's substantive work is documentation cleanup:
-- Rewrite the
+- **OP1 — `manual` migration policy**. Cutover with graceful degrade.
+  Loader treats in-the-wild `model_vars[].source === 'manual'` as
+  not-present and `model_source_preference === 'manual'` as unpinned;
+  each occurrence logs an info entry via `sessionLogService`. No
+  user-facing error. In-the-wild conversion is out of scope.
+- **OP2 — `p.forecast.source` provenance**. Required (per Decision 7
+  and §3.2). Consumers branch on it during the analytic semantic
+  transition and read it for human readability thereafter.
+- **OP4 — Quality-gate volatility**. Default behaviour is silent
+  flip-with-gate; revisit only if instability becomes user-visible.
+- **OP6 — Two-path manual edit interaction**. (i) Composition pastes
+  scalars unconditionally; live-edge `*_overridden` is preserved
+  as-was — composition never toggles the flag. (ii) The lock blocks
+  subsequent automated rewrites (FE quick, CF, runtime cascades,
+  `applyBatchLAGValues`) but never blocks pack-paste (pack-paste is
+  composition, not automated rewrite). Both authoring affordances
+  remain effective; the lock affects automation only. Doc 73a Stage 2
+  must implement rule (i).
+- **OP7 — `*_overridden` coverage**. Only `p.mean` and `p.stdev` (on
+  every parameter, including each `conditional_p[X].p`). Both flags
+  already exist in the schema; no additions. Stage 5 wires the
+  writers.
+- **OP8 — Analytic semantic transition (Decision 13)**. No structural
+  change required. CF conditions on the analytic source the same way
+  it conditions on the bayesian source — both project onto
+  `p.forecast.{alpha, beta}` and are used as priors. The
+  double-counting risk for analytic-as-aggregate-posterior is handled
+  by CF's existing **subset blend adjustment**, regime-selected via
+  `alpha_beta_query_scoped` at
+  [model_resolver.py:107-108](graph-editor/lib/runner/model_resolver.py#L107-L108)
+  (read by consumers at
+  [cohort_forecast_v3.py:132](graph-editor/lib/runner/cohort_forecast_v3.py#L132),
+  [forecast_runtime.py:472](graph-editor/lib/runner/forecast_runtime.py#L472),
+  [forecast_state.py:1001](graph-editor/lib/runner/forecast_state.py#L1001)).
+  Stage 2's work reduces to a comment-block rewrite at
   [model_resolver.py:100-108](graph-editor/lib/runner/model_resolver.py#L100-L108)
-  comment block so a reader does not infer "analytic is unsafe to
-  condition on" from the current "Read directly; updating again
-  double-counts" wording.
-- Rename `alpha_beta_query_scoped` to a name that conveys "which
-  subset-blend regime applies to this resolved source" (e.g.
-  `evidence_already_aggregated`) — the rename is mechanical and
-  affects the named consumer files plus the property definition. No
-  semantic change.
-- Update §3.1 of this plan to describe analytic as "aggregate posterior
-  over the slice's data" rather than "query-scoped", with an explicit
-  note that CF conditions on it via the subset blend adjustment.
+  and the mechanical rename of `alpha_beta_query_scoped` to a name
+  that conveys "which subset-blend regime applies" (e.g.
+  `evidence_already_aggregated`).
+- **OP9 — `p_sd` projection**. CF writes `p_sd → p.stdev` (decision
+  B-narrow). See doc 73a §10.
 
-Stage 2's "shadow-land the analytic semantic transition" reduces to
-landing the documentation cleanup and the rename behind a green-test
-gate; no behavioural change ships in Stage 3 from this resolution.
+**Open** (must be settled before the named stage)
+
+- **OP3 — Selector pin when pinned source becomes unavailable**.
+  Candidate: silent fallback to `analytic`, pin retained, UI shows
+  pin currently inactive. Alternative: auto-clear the pin. Settle
+  before Stage 4.
+- **OP5 — Per-edge `model_vars[]` refresh on query-context change**.
+  §3.1 commits to "current-context entry only" without naming the
+  refresh trigger set or staleness window. Settle before Stage 4.
 
 **WP8 interaction (doc 60 open item — tracked here)**. Doc 60 WP8 is the
 live narrow direct-`cohort()`-for-`p` rate-conditioning path. Its dispatch
@@ -1003,14 +871,15 @@ surfaces, clean residue (fixtures, docs, CLI noise), and rewrite any FE-only
 contract tests that still describe the BE-topo era. Result is a known-clean
 baseline for Work package B.
 
-Stage 2. Resolve open point 8 and shadow-land the analytic semantic
-transition (Decision 13). This is a decision stage followed by a shadow
-implementation; it does not yet change source-ledger taxonomy or live
-consumer reads. By Stage 2 end the chosen resolution (split fields, change
-FE topo writes, or rewrite consumers) is documented in this plan and
-demonstrated to work in shadow form against tests, with old behaviour still
-live. This stage may run in parallel with doc 73a work but is a hard
-prerequisite for Stage 3.
+Stage 2. Land the analytic semantic transition (Decision 13). Open
+point 8 is RESOLVED — no behavioural change is required. The
+substantive work is documentation cleanup: rewrite the comment block
+in `model_resolver.py:100-108` so a reader does not infer "analytic
+is unsafe to condition on", and rename `alpha_beta_query_scoped` to
+a name that conveys "which subset-blend regime applies" (e.g.
+`evidence_already_aggregated`). The earlier "shadow implementation"
+framing is retired. This stage may run in parallel with doc 73a work
+but is a hard prerequisite for Stage 3.
 
 Stage 3. Remove `manual` from source taxonomy and decouple output overtype
 from source-ledger and selector writes (Actions B7a–B7g, B8c, B8d).
@@ -1026,6 +895,18 @@ each commit produces an observable behavioural diff. Earlier drafts
 doc 73a Stage 5a), "write" (a write-only Stage 4), and a later
 consumer migration. In isolation each was inert until the next
 landed; bundling them removes the dead window.
+
+**Stage 4 entry preconditions** — these open points must be settled
+before Stage 4 begins; they are not deferrable to Stage 5:
+
+- Open point 3 (selector pin behaviour when the pinned source becomes
+  unavailable). Stage 4's promotion writer needs the rule.
+- Open point 5 (per-edge `model_vars[]` refresh discipline on
+  query-context change). Stage 4(a) is the per-scenario engorgement
+  that operationalises whatever the rule decides.
+
+(§11.2 conflict 6 was previously listed here; resolved 25-Apr-26 with
+option (a) — doc 60 Decision 9 retired.)
 
 The three pieces:
 
@@ -1087,6 +968,18 @@ display surfaces that read posterior alpha/beta directly, the CLI,
 and `applyBatchLAGValues` (also brought into the `*_overridden` lock
 discipline at the same time). Each consumer is its own commit so the
 sequence is bisectable.
+
+**Stage 5 lock scope:** lock-respecting writers must check
+`p.mean_overridden` and `p.stdev_overridden` (and the
+`conditional_p[X].p` equivalents) before writing those two scalars.
+That is the entire flag set (open point 7).
+
+**Action B8c sequencing note:** Action B8c is *defined* in Stage 3
+(it names the lock-respecting writer set as the rule). The actual
+implementation of the lock check inside `applyBatchLAGValues` lives
+in Stage 5 because that is where the consumer migration touches the
+file. Stage 3's B8c is documentation of the rule; Stage 5 enforces
+it. No code change to `applyBatchLAGValues` lands in Stage 3.
 
 By stage end: mutating `p.mean` alone cannot alter model selection
 or carrier behaviour, overtype no longer touches the source ledger,
@@ -1225,140 +1118,68 @@ this plan; they must be reconciled before implementation begins.
   `reprojectPosteriorForDsl` legacy paths** (formerly held in doc 73a
   Stage 5c) — owned by this plan.
 
-**Conflicts to resolve before Stage 0**:
+**Conflicts**:
 
-1. **Stage references in doc 73a → doc 73b**. Doc 73a §3.3, Defect 1,
-   Defect 2, §3.10, and §10 cite this plan's stages for FE-side split,
-   consumer-side unification, and the CF `forecast.mean = p_mean`
-   change. Under the bundled-switchover restructure: per-scenario
-   delivery, the promoted-writer extension, and the first BE consumer
-   switch all land in **Stage 4** (the bundled switchover). Remaining
-   FE-side split and consumer-side unification land in **Stage 5**.
-   Legacy-path cleanup (formerly doc 73a Stage 5c) lands in **Stage 6**.
-   Doc 73a's text was updated when its Stage 5 was retired; if any
-   citation in 73a still names a sub-stage 5a/5b/5c, that is a
-   reconciliation defect and should be reported back here.
+1. **Stage references in doc 73a → this plan**. Mapping after the
+   bundled-switchover restructure: per-scenario delivery + promoted
+   writer + first consumer switch → Stage 4; remaining consumer
+   migration → Stage 5; legacy-path cleanup → Stage 6. Any surviving
+   `5a`/`5b`/`5c` citation in doc 73a is a reconciliation defect.
+2. **`p_sd → p.stdev` persistence** — RESOLVED (open point 9; CF
+   writes `p_sd → p.stdev`; doc 73a §10 reflects).
+3. **`applyBatchLAGValues` ownership** — RESOLVED. Doc 73a §5 phasing
+   note: "no new opts gate" binds only through 73a's lifetime; this
+   plan's Stage 5 may extend the argument surface.
+4. **Compositor lock-flag interaction** — RESOLVED. Open point 6:
+   composition pastes scalars unconditionally; live-edge
+   `*_overridden` preserved as-was. Doc 73a §8 must implement.
+5. **Doc 74 stale ownership labels**. Doc 74 §6 lists items as
+   "doc 73a owns" that 73a hands back to this plan (FE
+   provisional-vs-model split, Python source-order unification).
+   Doc 74 must be updated.
+6. **Doc 60 Decision 9 / STATS_SUBSYSTEMS §6 on `p.forecast.mean`
+   writer** — RESOLVED with option (a): doc 60 Decision 9 retired;
+   `p.forecast.*` is promoted-only and written by `applyPromotion`,
+   not CF. Doc 60 §3 and §9 WP5 list updated accordingly.
+   STATS_SUBSYSTEMS §6 on §11.1's documentation-update list and is
+   revised in lockstep with this plan's Stage 4.
 
-2. **`p_sd` projection decision** — RESOLVED. Open point 9 is closed:
-   CF writes `p_sd → p.stdev` (decision B-narrow). Doc 73a §3.10 and §10
-   both reflect this, and doc 73a's pack contract (§8) carries `p.stdev`
-   with CF as the named writer. No remaining contradiction.
+Stage 0 test-pinning depends on docs 74, 60, and 73a being
+reconciled. Reconciliation edits land in those docs; this plan only
+records the deltas.
 
-3. **`applyBatchLAGValues` ownership clarification** — RESOLVED. Doc 73a
-   §5 (Stop rules) now carries an explicit phasing note: the "no new
-   opts gate" rule binds only during doc 73a's lifetime; doc 73b Stage 5
-   takes ownership thereafter and may extend the argument surface to
-   bring the function into the `*_overridden` lock discipline. The two
-   plans sequence rather than conflict.
+## Appendix A — Layered contract sketch
 
-4. **Compositor lock-flag interaction**. Doc 73a §8 specifies replay
-   mechanics for active-projection blocks but does not address
-   `*_overridden` flag behaviour during composition. Open point 6 in
-   this plan owns the rule (candidate: composition pastes scalars
-   unconditionally; live-edge `*_overridden` is preserved as-was).
-   **Sequencing:** open point 6 must be settled and communicated to
-   doc 73a *before* doc 73a Stage 2 (the extractor/compositor stage)
-   lands — not deferred to this plan's Stage 5. Doc 73a Stage 2's
-   compositor implementation cannot land safely without the rule.
+**Status**: sketch. Promote into `docs/current/codebase/`
+(STATS_SUBSYSTEMS.md or a dedicated layer doc) only after the
+73a/73b project lands in the live system; thicken with field lists
+pulled from the implemented types at that point.
 
-5. **Doc 74 references**. Doc 74 §6 currently lists settled outcomes as
-   "doc 73a owns" — including items that doc 73a explicitly hands back to
-   doc 73b (FE provisional-vs-model split, Python source-order
-   unification). Doc 74 must be updated to match doc 73a's actual scope
-   handoffs.
-
-6. **Direct contradiction with doc 60 Decision 9 and STATS_SUBSYSTEMS §6
-   on the writer of `p.forecast.mean`.** Doc 60 §6 Decision 9 (marked
-   landed via WP0–WP9) declares CF the owner of `edge.p.mean`,
-   `edge.p.forecast.mean`, `edge.p.latency.completeness`, and
-   `edge.p.latency.completeness_stdev`. STATS_SUBSYSTEMS §6 documents
-   `p.forecast.mean → BE CF pass` (with the same value as `p.mean` once
-   CF lands). Doc 73b Decision 7 reverses this: it makes `p.forecast.*`
-   the promoted-layer surface, declares promotion the only writer, and
-   stops CF writing `p.forecast.mean` entirely. This is a settled-and-
-   tested invariant being silently overwritten.
-
-   Resolution requires explicit choice between:
-
-   (a) Retire doc 60 Decision 9 as part of doc 73b Stage 4 (the stage
-       that lands the change). This means amending doc 60 §6, updating
-       any tests that pin CF as the writer of `p.forecast.mean` /
-       `p.latency.completeness*`, and updating STATS_SUBSYSTEMS §6 to
-       describe the new ownership. Cleaner architecturally; matches
-       this plan's three-layer split.
-
-   (b) Back off doc 73b Decision 7 to "promotion writes
-       `p.forecast.*`; CF continues to write the same fields and the
-       two writers must agree numerically when CF lands". Preserves
-       doc 60's invariant but reintroduces the dual-writer pattern the
-       three-layer split exists to remove.
-
-   Default position of this plan is (a). Decision must be confirmed
-   and recorded before doc 73b Stage 4 begins. Until confirmed, doc 60
-   Decision 9 and doc 73b Decision 7 are in active conflict and any
-   test pinned against either is at risk.
-
-Reconciliation pass on docs 74, 60, and 73a is a hard prerequisite for
-Stage 0 test-pinning — tests cannot pin contracts that contradict each
-other across docs. Reconciliation edits land in the affected docs (60,
-73a, 74, STATS_SUBSYSTEMS); this plan only records what needs to
-change there.
-
-## Appendix A — Layered contract sketch (post-completion writeup TODO)
-
-**Status**: sketch only. Recorded here so the framing is not lost. Do
-NOT promote into `docs/current/codebase/` (e.g. STATS_SUBSYSTEMS.md or a
-new dedicated layer doc) until the 73a/73b project is complete and the
-contract has actually landed in the live system. After project
-completion, this sketch must be (a) thickened with the full per-layer
-field lists pulled from the implemented `ProbabilityParam` /
-`LatencyConfig` / `ModelVarsEntry` / `Evidence` types, and (b) written
-up properly as the canonical layered-contract reference, replacing the
-current-state field tables in STATS_SUBSYSTEMS.md §2 and §6.
-
----
-
-**Source ledger** — `p.model_vars[]`. Two entries only: `bayesian`,
-`analytic`. No `manual` — user authoring lives at promoted (selector
-pin) and current-answer (per-field locks). Bayesian is file-backed and
-per query context — has slices keyed by `window()`, `cohort()`,
-`context(channel:foo).window()`, etc. Each per-scenario request graph
-carries the slice for that scenario's effective DSL only, derived
-per-fetch by Stage 4(a) from the parameter file (request-graph
-engorgement, not persisted).
-
-**Promoted layer** — `p.forecast.{mean, stdev, alpha, beta, alpha_pred,
-beta_pred, n_effective, source}` plus the existing promoted latency
-block. Written only by `applyPromotion`. Quality-gated source selection
-(bayesian if gates pass, else analytic) respecting the user's selector
-pin. Per-scenario by construction, because the per-scenario source slice
-differs per effective DSL — same source family promoted on two scenarios
-still produces different α/β if the slices differ. (Earlier "only
-diverges if source changes" framing was wrong precisely here.)
-
-**Evidence layer** — `p.evidence.*`. Raw query-scoped k/n.
-
-**Current-answer layer** — `p.mean`, `p.stdev`, `p.latency.completeness`,
-`p.latency.completeness_stdev`. Query-conditioned. FE quick pass writes
-provisional values; CF overwrites authoritatively. Per-field
-`*_overridden` flags freeze a scalar from automated rewrite.
-
-**Display modes select layer:**
-
-- `'f'` → `p.forecast.mean` (promoted aggregate for the active context —
-  not IS-conditioned)
-- `'e'` → `p.evidence.mean` (raw query-scoped evidence)
-- `'f+e'` → `p.mean` (CF's IS-conditioned blend, or FE's pre-CF blend)
-
-**FE quick pass roles**: produces `model_vars[analytic]`; reads the
-promoted layer for forecast contributions; aggregates evidence into
-`p.evidence.*`; writes provisional current-answer scalars.
-
-**CF roles**: reads the promoted layer as proposal; IS-conditions on
-query-scoped evidence; writes only the current-answer scalars.
-
-**Pack contract**: promoted scalars + current-answer scalars +
-`p.evidence.*` + `p.posterior.*` (during phasing) + `conditional_p` +
-`p.n`. Not in pack: source ledger, selector, `*_overridden` flags. Pack
-values are unconditional pasted scalars; lock state is reconstituted at
-compose time on the live edge.
+- **Source ledger** (`p.model_vars[]`): two entries only — `bayesian`
+  (file-backed, per query context, slice keyed by DSL) and `analytic`
+  (FE-topo-derived). Per-scenario request graphs carry only the slice
+  for that scenario's effective DSL, engorged per-fetch by Stage 4(a)
+  from the parameter file. Not persisted.
+- **Promoted layer** (`p.forecast.{mean, stdev, alpha, beta,
+  alpha_pred, beta_pred, n_effective, source}` plus promoted latency
+  block): written only by `applyPromotion`. Quality-gated source
+  selection respecting the selector pin. Per-scenario by construction
+  — different DSLs select different bayesian slices, so the same
+  source family produces different `α/β` per scenario.
+- **Evidence layer** (`p.evidence.*`): raw query-scoped k/n.
+- **Current-answer layer** (`p.mean`, `p.stdev`,
+  `p.latency.completeness`, `p.latency.completeness_stdev`):
+  query-conditioned. FE quick pass writes provisional values; CF
+  overwrites authoritatively. Only `p.mean` / `p.stdev` carry
+  `*_overridden` locks (per OP7).
+- **Display modes**: `'f'` → `p.forecast.mean` (promoted aggregate);
+  `'e'` → `p.evidence.mean`; `'f+e'` → `p.mean` (blend).
+- **FE quick pass**: produces `model_vars[analytic]`, reads promoted
+  layer for forecast contributions, aggregates evidence, writes
+  provisional current-answer scalars.
+- **CF**: reads promoted layer as proposal, IS-conditions on
+  query-scoped evidence, writes current-answer scalars only.
+- **Pack contract**: promoted + current-answer + evidence +
+  `p.posterior.*` (during phasing) + `conditional_p` + `p.n`. Not in
+  pack: source ledger, selector, `*_overridden` flags. Lock state
+  reconstituted at compose time on the live edge.
