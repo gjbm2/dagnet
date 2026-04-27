@@ -211,7 +211,11 @@
       "Bash(bash graph-ops/scripts/cohort-maturity-model-parity-test.sh *)",
       "Bash(bash /home/reg/dev/dagnet/scripts/dev-server-check.sh *)",
       "Bash(bash scripts/dev-server-check.sh *)",
-      "Bash(bash scripts/extract-mark-logs.sh *)"
+      "Bash(bash scripts/extract-mark-logs.sh *)",
+      "Bash(scripts/dev-server-check.sh *)",
+      "Bash(bash /home/reg/dev/dagnet/scripts/extract-mark-logs.sh *)",
+      "Bash(bash graph-ops/scripts/v3-degeneracy-invariants.sh *)",
+      "Bash(bash graph-ops/scripts/multihop-evidence-parity-test.sh *)"
     ],
     "additionalDirectories": [
       "/home/reg/dev/dagnet/.claude",

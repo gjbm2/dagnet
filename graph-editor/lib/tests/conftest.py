@@ -392,6 +392,45 @@ def _sidecar_cache_key(graph_name: str, fingerprint: dict[str, Any]) -> str:
     return f"{graph_name}:{json.dumps(fingerprint, sort_keys=True)}"
 
 
+def _explain_sidecar_staleness(
+    sidecar_path: Path,
+    expected_fingerprint: dict[str, Any],
+) -> list[str]:
+    """Return human-readable reasons load_sidecar() rejected the file.
+
+    Mirrors the rejection contract in bayes.sidecar.load_sidecar — file
+    missing, schema drift, or fingerprint mismatch — but expanded into
+    a list of specific reasons so the operator can see exactly what
+    changed before MCMC is launched.
+    """
+    if not sidecar_path.is_file():
+        return [f"sidecar file missing: {sidecar_path}"]
+    try:
+        data = json.loads(sidecar_path.read_text())
+    except Exception as exc:
+        return [f"sidecar unreadable ({type(exc).__name__}): {exc}"]
+    from bayes.sidecar import SCHEMA_VERSION
+    if data.get("schema_version") != SCHEMA_VERSION:
+        return [
+            f"schema_version drift: expected={SCHEMA_VERSION!r} "
+            f"found={data.get('schema_version')!r}"
+        ]
+    saved = data.get("sidecar_fingerprint") or {}
+    if saved == expected_fingerprint:
+        # Defensive — if we got here, load_sidecar should have returned
+        # the data; report so the operator knows we got an unexpected path.
+        return ["fingerprints match but load_sidecar returned None (investigate)"]
+    diffs: list[str] = []
+    keys = set(saved) | set(expected_fingerprint)
+    for k in sorted(keys):
+        if saved.get(k) != expected_fingerprint.get(k):
+            diffs.append(
+                f"fingerprint[{k}] changed: saved={saved.get(k)!r} "
+                f"expected={expected_fingerprint.get(k)!r}"
+            )
+    return diffs or ["fingerprint mismatch (no field-level diff isolated)"]
+
+
 def _ensure_bayes_sidecar(
     graph_name: str,
 ):
@@ -424,10 +463,15 @@ def _ensure_bayes_sidecar(
         _SIDECAR_CACHE[cache_key] = str(sidecar_path)
         return str(sidecar_path)
 
+    # Audit trail: explain WHY the sidecar was rejected before kicking
+    # off a multi-minute MCMC. "Stale" with no reason is unacceptable.
+    reasons = _explain_sidecar_staleness(sidecar_path, fingerprint)
     print(
-        f"[requires_synth] {graph_name}: bayesian sidecar absent or stale — "
-        f"running MCMC (this may take minutes)..."
+        f"[requires_synth] {graph_name}: bayesian sidecar rejected — "
+        f"running MCMC (this may take minutes). Reasons:"
     )
+    for r in reasons:
+        print(f"[requires_synth]   • {r}")
     sidecar_path.parent.mkdir(parents=True, exist_ok=True)
     cmd = [
         sys.executable, "-m", "bayes.test_harness",
@@ -609,7 +653,13 @@ def _ensure_synth_ready(
     status = result["status"]
 
     if status in ("stale", "missing"):
-        print(f"[requires_synth] {graph_name}: {status} — bootstrapping...")
+        # Surface every reason the verifier flagged — operators must be
+        # able to see WHY a regen happened. "Just runs sometimes" is not
+        # acceptable for dev-tool reliability.
+        reasons = result.get("reasons") or [result.get("reason", "<no reason>")]
+        print(f"[requires_synth] {graph_name}: {status} — bootstrapping. Reasons:")
+        for r in reasons:
+            print(f"[requires_synth]   • {r}")
         ok = _bootstrap_synth_graph(graph_name)
         if not ok:
             pytest.skip(f"Synth bootstrap failed for {graph_name}")
@@ -619,7 +669,10 @@ def _ensure_synth_ready(
             status = "fresh"
 
     if status == "needs_enrichment" and need_enrich:
-        print(f"[requires_synth] {graph_name}: enriching (hydrate)...")
+        reasons = result.get("reasons") or [result.get("reason", "needs enrichment")]
+        print(f"[requires_synth] {graph_name}: enriching (hydrate). Reasons:")
+        for r in reasons:
+            print(f"[requires_synth]   • {r}")
         ok = _bootstrap_synth_graph(graph_name, enrich=True)
         if not ok:
             pytest.skip(f"Synth enrichment failed for {graph_name}")

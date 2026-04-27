@@ -23,7 +23,9 @@ import atexit
 import json
 import os
 import subprocess
+import sys
 import threading
+import time
 from pathlib import Path
 from typing import Any, Optional
 
@@ -34,6 +36,13 @@ _DAEMON_SH = _DAGNET_ROOT / "graph-ops" / "scripts" / "daemon.sh"
 # Set DAGNET_USE_DAEMON=0 to fall back to per-call subprocess invocations
 # (e.g. when bisecting a daemon-specific issue).
 _DAEMON_DISABLED = os.environ.get("DAGNET_USE_DAEMON", "1") == "0"
+
+# Slow-call diagnostic threshold (seconds). When a daemon request takes
+# longer than this, DaemonClient.call emits a self-diagnostic block so
+# operators can see WHY a call blew up rather than the catch-all
+# "sometimes it's slow". Override per-environment with
+# DAGNET_SLOW_CALL_THRESHOLD_S; set to 0 to disable.
+_SLOW_CALL_THRESHOLD_S = float(os.environ.get("DAGNET_SLOW_CALL_THRESHOLD_S", "10"))
 
 _default_client: Optional["DaemonClient"] = None
 _default_client_lock = threading.Lock()
@@ -57,6 +66,7 @@ class DaemonClient:
         self._lock = threading.Lock()
         self._counter = 0
         self._stderr_buf: list[str] = []
+        self._spawn_monotonic = time.monotonic()
         self._stderr_thread = threading.Thread(
             target=self._drain_stderr, daemon=True
         )
@@ -126,12 +136,20 @@ class DaemonClient:
         req = {"id": req_id, "command": command, "args": args}
         payload = json.dumps(req) + "\n"
 
+        t_start = time.monotonic()
+        stderr_mark = len(self._stderr_buf)
         with self._lock:
             assert self._proc.stdin is not None
             assert self._proc.stdout is not None
             self._proc.stdin.write(payload)
             self._proc.stdin.flush()
             line = self._proc.stdout.readline()
+        elapsed = time.monotonic() - t_start
+        if _SLOW_CALL_THRESHOLD_S > 0 and elapsed > _SLOW_CALL_THRESHOLD_S:
+            self._emit_slow_call_diagnostic(
+                command=command, args=args, elapsed=elapsed,
+                stderr_mark=stderr_mark,
+            )
 
         if not line:
             stderr = "".join(self._stderr_buf[-200:])
@@ -175,6 +193,68 @@ class DaemonClient:
                 stderr="",
             )
         return json.loads(stdout[idx:])
+
+    def _emit_slow_call_diagnostic(
+        self,
+        *,
+        command: str,
+        args: list[str],
+        elapsed: float,
+        stderr_mark: int,
+    ) -> None:
+        """Print an audit block when a single daemon request exceeds the
+        configured threshold. The block is intended to give the operator
+        enough state to triage WHY the call was slow rather than treating
+        the slowness as ambient noise.
+        """
+        # Reconstruct the user-visible CLI surface from the args list so
+        # the slow request is replayable from the log line alone.
+        graph_idx = args.index("--name") + 1 if "--name" in args else -1
+        graph = args[graph_idx] if 0 < graph_idx < len(args) else "<unknown>"
+        query_idx = args.index("--query") + 1 if "--query" in args else -1
+        query = args[query_idx] if 0 < query_idx < len(args) else "<no query>"
+        type_idx = args.index("--type") + 1 if "--type" in args else -1
+        atype = args[type_idx] if 0 < type_idx < len(args) else "(param-pack)"
+
+        # Daemon stderr emitted DURING this request only — anything before
+        # stderr_mark belongs to a previous request and is excluded.
+        new_stderr = "".join(self._stderr_buf[stderr_mark:]).strip()
+
+        # Daemon age — recorded at spawn, immune to /proc/stat parsing bugs.
+        proc_age_s = time.monotonic() - self._spawn_monotonic
+
+        rss_mb: float | None = None
+        try:
+            with open(f"/proc/{self._proc.pid}/status") as f:
+                for line in f:
+                    if line.startswith("VmRSS:"):
+                        rss_mb = float(line.split()[1]) / 1024
+                        break
+        except Exception:
+            pass
+
+        bar = "─" * 76
+        msg = [
+            "",
+            f"┌{bar}",
+            f"│ [daemon-slow-call] {elapsed:.2f}s exceeded threshold "
+            f"({_SLOW_CALL_THRESHOLD_S:.1f}s)",
+            f"│   command:   {command}",
+            f"│   type:      {atype}",
+            f"│   graph:     {graph}",
+            f"│   query:     {query}",
+            f"│   daemon pid={self._proc.pid} age={proc_age_s:.1f}s",
+            f"│   daemon RSS={rss_mb:.1f} MiB" if rss_mb is not None else
+            "│   daemon RSS=?",
+        ]
+        if new_stderr:
+            msg.append("│   daemon stderr during this request:")
+            for line in new_stderr.splitlines()[-30:]:
+                msg.append(f"│     {line}")
+        else:
+            msg.append("│   daemon stderr during this request: (empty)")
+        msg.append(f"└{bar}")
+        print("\n".join(msg), file=sys.stderr, flush=True)
 
     def quit(self) -> None:
         """Send a quit request and wait for the daemon to exit."""

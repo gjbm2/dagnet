@@ -1056,6 +1056,17 @@ if __name__ == "__main__":
         port=port,
         reload=True,
         reload_dirs=[".", "lib", "lib/runner"],
+        # Test-only files do not affect server behaviour. Without these
+        # excludes the watcher restarts the BE process every time a test
+        # file is edited, which kills in-flight test requests and produces
+        # huge unexplained latency spikes (200s+ outliers). See
+        # docs/current/codebase/DEV_ENVIRONMENT_AND_HMR.md.
+        reload_excludes=[
+            "lib/tests/*",
+            "lib/tests/**/*",
+            "**/__pycache__/*",
+            "**/*.pyc",
+        ],
         log_level="info",
     )
 
