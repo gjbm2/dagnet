@@ -2,7 +2,7 @@
 
 **Date**: 13-Apr-26
 **Status**: Proposal — for review before implementation
-**Historical note (`24-Apr-26`)**: this proposal pre-dates the removal of the quick BE topo pass. References below to `stats_engine.py`, `beTopoPassService.ts`, `forecastingParityService`, `test_stats_engine_parity.py`, and the FE↔BE parity constraint describe the system as it stood when the proposal was written. See [project-bayes/73b](../project-bayes/73b-be-topo-removal-and-forecast-state-separation-plan.md) for the current BE surface. The schema-cleanup design principles below are independent of that pipeline topology and remain applicable.
+**Historical note (`24-Apr-26`)**: this proposal pre-dates the removal of the quick BE topo pass. References below to `stats_engine.py`, `beTopoPassService.ts`, `forecastingParityService`, `test_stats_engine_parity.py`, and the FE↔BE parity constraint describe the system as it stood when the proposal was written. See [project-bayes/73b](../project-bayes/73b-be-topo-removal-and-forecast-state-separation-plan.md) for the current BE surface. The schema-cleanup design principles below are independent of that pipeline topology.
 **Motivation**: clean up the edge latency schema before v2.0 sets it
 in stone. Organic growth across ~5 months of LAG, Bayes, and forecast
 work has left 30+ flat fields mixing configuration, promoted values,
@@ -111,14 +111,14 @@ promoted_path_onset_sd?: number    ─┘  }
 ```
 
 The 10 flat `promoted_*` fields collapse into a `promoted` sub-object
-whose fields are themselves `QualifiedScalar`. The `_sd` is no longer
+whose fields are themselves `QualifiedScalar`. `_sd` is no longer
 a naming convention — it is a structural property of the value.
 
-**Fields that do NOT change** (they have no uncertainty to qualify):
+**Fields that do NOT change** (no uncertainty to qualify):
 - `latency_parameter`, `anchor_node_id` (configuration, non-numeric)
 - `*_overridden` flags (booleans)
 - `median_lag_days`, `mean_lag_days` (display-only, no sd computed)
-- `t95`, `path_t95` (user-editable input constraints — the promoted
+- `t95`, `path_t95` (user-editable input constraints — promoted
   versions carry sd, these do not)
 
 ### `onset_mu_corr` — the outlier
@@ -130,7 +130,7 @@ not an sd on a scalar. It does not fit `QualifiedScalar`. Options:
    `promoted.onset_mu_corr?: number`
 2. Place it on a diagnostics sub-object alongside quality metrics
 
-Recommendation: option 1 — it is already written/read alongside
+Recommendation: option 1 — already written/read alongside
 promoted values and consumed for identifiability diagnostics.
 
 ### `p_sd` — probability uncertainty
@@ -143,8 +143,8 @@ Under the new scheme it belongs on the probability side, not latency:
 edge.p.probability: number → edge.p.probability: QualifiedScalar
 ```
 
-or equivalently on `ProbabilityParam`. This is a separate, smaller
-migration — noted here for completeness but could be deferred.
+or equivalently on `ProbabilityParam`. Separate, smaller migration —
+noted here for completeness but could be deferred.
 
 ### Affected fields on `ModelVarsEntry.latency`
 
@@ -170,8 +170,8 @@ onset_mu_corr?: number           // correlation, not sd
 ```
 
 `ModelVarsProbability` already has `{ mean, stdev }` — rename to
-`{ value, sd }` for consistency with `QualifiedScalar`, or keep as-is
-if the churn is not justified (the shape is isomorphic).
+`{ value, sd }` for consistency, or keep as-is if the churn is not
+justified (the shape is isomorphic).
 
 ### Affected fields on `LatencyPosterior`
 
@@ -219,23 +219,23 @@ files, across TypeScript, Python, and YAML schemas.
 
 1. **Bayes compiler** (`bayes/compiler/`): `model.py`,
    `inference.py`, `evidence.py`, `types.py` all use bare `mu`,
-   `sigma`, `onset_delta_days` extensively. The compiler builds
-   PyMC models from these values — any breakage here is silent until
-   MCMC runs produce wrong posteriors.
+   `sigma`, `onset_delta_days` extensively. Compiler builds
+   PyMC models from these values — any breakage is silent until
+   MCMC produces wrong posteriors.
 
 2. **Stats engine** (`runner/stats_engine.py`): the FE/BE parity
    contract compares field-by-field. Both sides must migrate in
-   lockstep or parity tests will fail (which is actually a useful
+   lockstep or parity tests fail (which is actually a useful
    gate — see below).
 
 3. **Topo pass** (`statisticalEnhancementService.ts`,
    `beTopoPassService.ts`): writes all computed latency fields.
-   Currently writes undeclared bare `mu_sd` etc. — the migration
-   must both fix the type declarations and update write sites.
+   Currently writes undeclared bare `mu_sd` etc. — migration
+   must both fix type declarations and update write sites.
 
 4. **Cascade/projection** (`mappingConfigurations.ts`): maps
    file-level posteriors to graph-edge `LatencyPosterior`. Field
-   name changes here affect every UI consumer.
+   name changes affect every UI consumer.
 
 5. **YAML schemas** (`public/param-schemas/`): parameter file
    schemas must match the new shape or file validation breaks.
@@ -244,7 +244,7 @@ files, across TypeScript, Python, and YAML schemas.
 
 - **UI components** (`ModelCard`, `ParameterSection`,
   `BayesPosteriorCard`, `ConversionEdge`): mechanical `.value`
-  access changes. TypeScript will catch every missed site at
+  access changes. TypeScript catches every missed site at
   compile time.
 - **CLI** (`analyse.ts`): single file, straightforward.
 
@@ -335,15 +335,14 @@ reads model_vars correctly.
 
 A field that was `edge.p.latency.mu = 0.5` becoming
 `edge.p.latency.mu = { value: 0.5, sd: 0.1 }` will not throw at
-runtime in JavaScript — it will silently coerce to `NaN` in
+runtime in JavaScript — it silently coerces to `NaN` in
 arithmetic. TypeScript catches this at compile time, but Python
-`Optional[float]` fields receiving a dict will fail at Pydantic
-validation (which is good — it's a hard error, not a silent one).
+`Optional[float]` fields receiving a dict fail at Pydantic
+validation (good — hard error, not silent).
 
 **Mitigation**: TypeScript strict mode is the primary safety net.
 After each phase, compile the full project — every missed read site
-will be a type error. For Python, Pydantic validation serves the
-same role.
+is a type error. For Python, Pydantic validation serves the same role.
 
 ### Secondary risk: file format migration
 
@@ -354,12 +353,12 @@ against the new Pydantic model.
 **Mitigation**: Phase 3 must include a file migration step or a
 backward-compatible reader that accepts both shapes during
 transition. This is the only place where backward compatibility
-matters — it's a persistence boundary, not an in-memory convention.
+matters — a persistence boundary, not an in-memory convention.
 
 ### Tertiary risk: FE/BE parity drift
 
-The FE and BE topo passes must produce identical field shapes. If
-one side migrates before the other, parity tests will fail.
+FE and BE topo passes must produce identical field shapes. If
+one side migrates before the other, parity tests fail.
 
 **Mitigation**: this is a feature, not a bug. The parity tests
 (`statsParity.contract.test.ts`, `test_stats_parity_contract.py`)
@@ -384,7 +383,7 @@ the only gate for proceeding to the next phase.
   uncertainty on a scalar). Moves into `promoted` sub-object in
   Phase 1.
 - **HDI bounds**: remain as standalone fields on posterior types
-  (they are interval bounds, not point-estimate qualifications).
+  (interval bounds, not point-estimate qualifications).
 - **`median_lag_days`, `mean_lag_days`**: no sd computed for these
   currently; remain as bare numbers. Could be qualified later if
   uncertainty estimates are added.

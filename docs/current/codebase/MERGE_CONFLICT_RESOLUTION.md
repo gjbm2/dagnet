@@ -1,22 +1,22 @@
 # Merge and Conflict Resolution
 
-How DagNet performs 3-way merges during pull operations and how conflicts are detected, presented, and resolved.
+How DagNet performs 3-way merges during pull, and how conflicts are detected, presented, and resolved.
 
 ## Two Merge Strategies
 
-DagNet implements two complementary merge strategies, chosen by file type.
+Chosen by file type.
 
 ### Text-level line merge (`merge3Way`)
 
 **Used for**: YAML files (parameters, contexts, cases, nodes, events, index files)
 
 Algorithm:
-1. Split base, local, and remote content by newlines
-2. Compute diffs using simplified Myers algorithm (lookahead up to 10 lines for sync points)
-3. Iterate through base lines, applying changes in sorted order
-4. When both sides changed the same region:
-   - If changes are identical: apply once
-   - If changes differ: record conflict with markers
+1. Split base, local, remote content by newlines
+2. Compute diffs via simplified Myers algorithm (lookahead up to 10 lines for sync points)
+3. Iterate base lines, applying changes in sorted order
+4. Both sides changed the same region:
+   - Identical changes: apply once
+   - Different changes: record conflict with markers
 
 Conflict markers in merged output:
 ```
@@ -35,8 +35,8 @@ Algorithm (BitSquid-style):
 1. **Different keys**: auto-merge without conflict
 2. **Same key, same value**: auto-merge
 3. **Same key, different values**:
-   - Both are objects: recurse key-by-key
-   - Both are arrays with identity keys (`uuid`, `id`): merge element-by-element
+   - Both objects: recurse key-by-key
+   - Both arrays with identity keys (`uuid`, `id`): merge element-by-element
    - Otherwise: record conflict (default to local)
 4. **Key added by one side only**: kept
 5. **Key deleted by one side, unchanged by other**: deleted
@@ -52,13 +52,13 @@ Algorithm (BitSquid-style):
 
 ## When Merge Happens
 
-Merge occurs during `workspaceService.pullLatest()`:
+During `workspaceService.pullLatest()`:
 
-1. Compare local file with remote version
-2. If local has no changes (`data === originalData`): fast-forward, skip merge
-3. If local has changes: perform 3-way merge using `originalData` as base
-4. If merge succeeds (no conflicts): apply merged result, set `isDirty: false`
-5. If merge conflicts: return conflict object without modifying the file
+1. Compare local file with remote
+2. Local has no changes (`data === originalData`): fast-forward, skip merge
+3. Local has changes: 3-way merge using `originalData` as base
+4. Merge succeeds (no conflicts): apply merged result, set `isDirty: false`
+5. Merge conflicts: return conflict object without modifying the file
 
 ## Conflict Representation
 
@@ -101,9 +101,9 @@ interface JsonKeyConflict {
    - `base-remote`: original vs incoming changes
 3. **Monaco diff editor**: side-by-side read-only comparison with syntax highlighting
 4. **Per-file resolution options**:
-   - **Accept Merged**: use the auto-merged result
+   - **Accept Merged**: use auto-merged result
    - **Keep Local**: keep your version (marks dirty for commit)
-   - **Use Remote**: accept remote version (overwrites local)
+   - **Use Remote**: accept remote (overwrites local)
    - **Manual**: leave for user to edit directly
 5. **Batch actions**: accept merged/remote/local for all files
 
@@ -122,7 +122,7 @@ After resolution, `conflictResolutionService.applyResolutions()`:
 
 1. Applies chosen content to `fileState.data`
 2. Updates `originalData` (for merged/remote: set to resolved content)
-3. Sets `isDirty` according to resolution type
+3. Sets `isDirty` per resolution type
 4. Updates `lastModified` timestamp
 5. Writes to IDB (both prefixed and unprefixed records)
 6. Notifies FileRegistry listeners
@@ -148,17 +148,17 @@ DiffService is **scenario-specific**, not file-level merge. It computes diffs in
 - `diffNodeParams()`: entry weights, costs, case variants
 - Epsilon threshold for numeric comparisons (default 1e-6)
 
-This is used by the scenario system, not by the pull/merge flow.
+Used by the scenario system, not the pull/merge flow.
 
 ## Parse Validation
 
-After text-level merge, the merged content is parsed to verify it produces valid YAML/JSON. If parsing fails, the result is downgraded to a conflict even if the merge algorithm reported no conflicts. This is a safety net against structurally-valid but semantically-broken merges.
+After text-level merge, the merged content is parsed to verify it produces valid YAML/JSON. If parsing fails, the result is downgraded to a conflict even if the merge algorithm reported no conflicts. Safety net against structurally-valid but semantically-broken merges.
 
 ## Key Design Decisions
 
 1. **Dual strategy**: text for YAML (simple, safe), structural for JSON (understands semantics)
 2. **Conservative conflict reporting**: parse errors after merge are treated as conflicts
-3. **Base version stored**: `originalData` tracks the last pulled/committed state for accurate 3-way merge
+3. **Base version stored**: `originalData` tracks last pulled/committed state for accurate 3-way merge
 4. **Clean-update optimisation**: if local has no changes, skip merge entirely (fast-forward)
 5. **Dirty-state propagation**: only `'local'` and `'manual'` resolutions mark files dirty
 

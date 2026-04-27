@@ -19,24 +19,33 @@ import type {
 /**
  * Combine graph-level and edge-level preferences into a single effective value.
  * Doc 15 §3: edge override ?? graph default ?? 'best_available'.
+ *
+ * Doc 73b §6.7 / OP1 graceful-degrade: if a stale `'manual'` survives the
+ * load-time migration, treat it as unpinned at runtime so this function never
+ * returns a removed enum value.
  */
 export function effectivePreference(
   edgePref: ModelSourcePreference | undefined,
   graphPref: GraphModelSourcePreference | undefined,
 ): ModelSourcePreference {
-  return edgePref ?? graphPref ?? 'best_available';
+  const normalise = (v: ModelSourcePreference | string | undefined) =>
+    v === 'manual' ? undefined : (v as ModelSourcePreference | undefined);
+  return normalise(edgePref) ?? normalise(graphPref) ?? 'best_available';
 }
 
 // ── Resolution ──────────────────────────────────────────────────────────────
 
 /**
- * Select which ModelVarsEntry to promote to scalars.
+ * Select which ModelVarsEntry to promote to scalars (doc 15 §3, doc 73b §3.1 / OP3).
  *
- * Selection logic (doc 15 §3):
- *   manual     → manual entry if present, else fall through to best_available
- *   bayesian   → bayesian entry if present, else analytic
- *   analytic   → analytic entry
- *   best_available → bayesian (if present + gated), else analytic
+ *   bayesian        → bayesian entry if present, else analytic (per OP3 fallback)
+ *   analytic        → analytic entry
+ *   best_available  → bayesian (if present + gated), else analytic
+ *
+ * Per doc 73b §6.7 / OP1 graceful-degrade, in-the-wild `'manual'` selector
+ * preferences are treated as unpinned at load time (workspaceService
+ * `_migrateManualSourceInPlace`) and as `best_available` at runtime if any
+ * survive that migration.
  *
  * Returns undefined when modelVars is empty/absent or no entry matches.
  */
@@ -61,8 +70,6 @@ export function resolveActiveModelVars(
     bayesianIfGated() ?? analyticBest();
 
   switch (preference) {
-    case 'manual':
-      return find('manual') ?? bestAvailable();
     case 'bayesian':
       return find('bayesian') ?? analyticBest();
     case 'analytic':

@@ -158,7 +158,7 @@ class ModelVarsEntry(BaseModel):
 
     Each entry is a complete snapshot — no sparse entries, no per-field mixing.
     """
-    source: Literal['analytic', 'bayesian', 'manual']
+    source: Literal['analytic', 'bayesian']
     source_at: str = Field(..., description="UK date (d-MMM-yy) when this entry was last updated")
     probability: ModelVarsProbability
     latency: Optional[ModelVarsLatency] = None
@@ -334,7 +334,7 @@ class ProbabilityParam(BaseModel):
     posterior: Optional[Posterior] = Field(None, description="Unified Bayesian posterior (doc 21) — file-level; cascade projects onto graph edge")
     # Model variable provenance (doc 15)
     model_vars: Optional[List[ModelVarsEntry]] = Field(None, description="Candidate model variable sets from different sources")
-    model_source_preference: Optional[Literal['best_available', 'bayesian', 'analytic', 'manual']] = Field(None, description="Per-edge override of graph.model_source_preference")
+    model_source_preference: Optional[Literal['best_available', 'bayesian', 'analytic']] = Field(None, description="Per-edge override of graph.model_source_preference (doc 73b §3.5 — 'manual' removed; user authoring lives at the per-field locks)")
     model_source_preference_overridden: bool = Field(False, description="True when model_source_preference was explicitly set by user")
     # LAG fields
     latency: Optional[LatencyConfig] = Field(None, description="Latency configuration for this probability")

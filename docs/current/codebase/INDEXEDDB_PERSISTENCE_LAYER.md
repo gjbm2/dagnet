@@ -165,6 +165,24 @@ Scans in-memory Map. Returns **unprefixed** copies only. Used for UI indicators 
 
 7. **WorkspaceState.fileIds stores unprefixed IDs**: the workspace metadata file list uses unprefixed fileIds, not prefixed.
 
+## Pitfalls
+
+### Anti-pattern 12: Unprefixed IDB key in file lookups
+
+**Signature**: a function loads a file from `db.files.get(fileId)` using the FileRegistry-style unprefixed key (e.g. `event-myEvent`), but IDB stores files under workspace-prefixed keys (e.g. `nous-conversion-main-event-myEvent`). The lookup silently returns nothing.
+
+**Root cause**: FileRegistry uses unprefixed file IDs; IDB uses `${repository}-${branch}-${fileId}` as the primary key. A direct `db.files.get(unprefixedId)` will never find a workspace-loaded file.
+
+**Fix**: use `fileRegistry.restoreFile(fileId, workspaceScope)` which handles both unprefixed and prefixed key lookups.
+
+### Anti-pattern 16: E2E test seeding IDB but assuming FileRegistry is populated
+
+**Signature**: you seed data into IDB via `db.files.put()` in a Playwright test, but the from-file pipeline returns empty/stale results because it reads from FileRegistry (in-memory), not IDB.
+
+**Root cause**: `db.files.put()` writes to IndexedDB but does NOT notify FileRegistry. FileRegistry is populated lazily via `restoreFile()` or proactively via `getOrCreateFile()`.
+
+**Fix**: after seeding IDB and reloading, use `dagnetDebug.refetchFromFiles()` to trigger the full from-file pipeline.
+
 ## Key Files
 
 | File | Role |

@@ -67,7 +67,7 @@ templates = {
 }
 ```
 
-The `uiSchema` controls per-field rendering: widget selection, field ordering, grouping, and display options.
+The `uiSchema` controls per-field rendering: widget selection, field ordering, grouping, display options.
 
 ## Custom widgets (`src/components/widgets/`)
 

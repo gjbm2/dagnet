@@ -6,7 +6,7 @@ How DagNet content-addresses query semantics, tracks hash discontinuities, and p
 
 ## Overview
 
-The hash/signature system ensures that snapshot data keyed by query semantics remains discoverable even when event or context definitions change. It has five layers:
+The hash/signature system ensures that snapshot data keyed by query semantics remains discoverable even when event or context definitions change. Five layers:
 
 1. **Core hash**: deterministic content-addressing of query inputs
 2. **Structured signatures**: two-dimensional matching (core + context)
@@ -150,68 +150,35 @@ This solved the bug where uncontexted queries rejected contexted MECE cache slic
 
 ### What is and is not in the hash
 
-The `core_hash` stored in the snapshots table is
-`computeShortCoreHash(serialiseSignature({identityHash, contextDefHashes}))` —
-a hash of the full structured signature including both `c` and `x`.
+The `core_hash` stored in the snapshots table is `computeShortCoreHash(serialiseSignature({identityHash, contextDefHashes}))` — a hash of the full structured signature including both `c` and `x`.
 
-**Included in `c` (core)**: connection name, from/to event IDs, event
-definition hashes, event filters, case constraints, `cohort_mode`
-flag, cohort anchor event ID, latency config, normalised query
-string (with context and date clauses stripped).
+**Included in `c` (core)**: connection name, from/to event IDs, event definition hashes, event filters, case constraints, `cohort_mode` flag, cohort anchor event ID, latency config, normalised query string (with context and date clauses stripped).
 
-**Included in `x` (context definitions)**: a hash of each context
-**definition** YAML file, keyed by context key name. This is the
-hash of the MECE value list, not the specific value.
+**Included in `x` (context definitions)**: a hash of each context **definition** YAML file, keyed by context key name. This is the hash of the MECE value list, not the specific value.
 
-**NOT included**: context values (`channel:google` vs
-`channel:meta` produce the same hash), date bounds (`window(-90d:)`
-vs `window(-30d:)` produce the same hash). These are carried in
-the `slice_key` column, not in `core_hash`.
+**NOT included**: context values (`channel:google` vs `channel:meta` produce the same hash), date bounds (`window(-90d:)` vs `window(-30d:)` produce the same hash). These are carried in the `slice_key` column, not in `core_hash`.
 
 Consequences for snapshot reads:
-- All values within one MECE dimension share one `core_hash`.
-  Querying by `core_hash` returns rows for ALL values.
+- All values within one MECE dimension share one `core_hash`. Querying by `core_hash` returns rows for ALL values.
 - Different context dimensions produce different `core_hash` values.
 - Window and cohort mode produce different `core_hash` values.
-- Uncontexted (`x: {}`) is a different hash from any contexted
-  variant.
+- Uncontexted (`x: {}`) is a different hash from any contexted variant.
 
 ### Two-level filtering for context-specific views
 
-Any UI that needs to show snapshots for a specific context value
-(e.g. the evidence tab's context dropdown) must filter at **both**
-levels:
+Any UI that needs to show snapshots for a specific context value (e.g. the evidence tab's context dropdown) must filter at **both** levels:
 
-1. **Hash level** (dimension): select the correct `core_hash` family.
-   `computePlausibleSignaturesForEdge` enumerates key-sets from the
-   DSL's context clauses — passing `context(channel:paid-search)`
-   produces only the channel-contexted hash.
+1. **Hash level** (dimension): select the correct `core_hash` family. `computePlausibleSignaturesForEdge` enumerates key-sets from the DSL's context clauses — passing `context(channel:paid-search)` produces only the channel-contexted hash.
 
-2. **Slice level** (value): filter within the hash family by
-   `slice_key`. `buildSnapshotRetrievalsQueryForEdge` constructs a
-   `slice_keys` array by matching stored slices whose
-   `extractSliceDimensions` equals the DSL's context dimensions.
-   `querySnapshotRetrievals` passes this to the backend.
+2. **Slice level** (value): filter within the hash family by `slice_key`. `buildSnapshotRetrievalsQueryForEdge` constructs a `slice_keys` array by matching stored slices whose `extractSliceDimensions` equals the DSL's context dimensions. `querySnapshotRetrievals` passes this to the backend.
 
-Hash-only filtering returns all values within the dimension.
-Slice-only filtering without the correct hash might match rows
-from the wrong family. Both are needed. See anti-pattern 27 in
-`KNOWN_ANTI_PATTERNS.md`.
+Hash-only filtering returns all values within the dimension. Slice-only filtering without the correct hash might match rows from the wrong family. Both are needed. See anti-pattern 27 in `KNOWN_ANTI_PATTERNS.md`.
 
 ### Regime selection
 
-When a graph's pinned DSL has multiple independent MECE context
-dimensions (e.g. `context(channel);context(device)`), each
-dimension produces a different `core_hash`. Both dimensions' rows
-represent the same underlying conversions sliced differently.
-Summing across dimensions double-counts.
+When a graph's pinned DSL has multiple independent MECE context dimensions (e.g. `context(channel);context(device)`), each dimension produces a different `core_hash`. Both dimensions' rows represent the same underlying conversions sliced differently. Summing across dimensions double-counts.
 
-`snapshot_regime_selection.py` provides `select_regime_rows()` which
-picks one hash per `retrieved_at` date from an ordered candidate
-list. The BE applies this after querying the snapshot DB and before
-passing rows to derivation functions. See
-`docs/current/project-bayes/30-snapshot-regime-selection-contract.md`
-for the full design.
+`snapshot_regime_selection.py` provides `select_regime_rows()` which picks one hash per `retrieved_at` date from an ordered candidate list. The BE applies this after querying the snapshot DB and before passing rows to derivation functions. See `docs/current/project-bayes/30-snapshot-regime-selection-contract.md` for the full design.
 
 ## Hash Mappings
 
@@ -339,26 +306,13 @@ This phase only runs on manual "Check Integrity" (File Menu) or the Refresh butt
 
 ## CLI / Node.js context
 
-The CLI tools (`dagnet-cli bayes`, `dagnet-cli analyse`, `test_harness.py`
-via `compute_snapshot_subjects.mjs`) compute hashes in a Node.js process
-rather than the browser. The hash computation code is shared — the same
-`computeQuerySignature` and `computeShortCoreHash` functions run in both
-contexts. However, the **data loading path** differs:
+The CLI tools (`dagnet-cli bayes`, `dagnet-cli analyse`, `test_harness.py` via `compute_snapshot_subjects.mjs`) compute hashes in a Node.js process rather than the browser. The hash computation code is shared — the same `computeQuerySignature` and `computeShortCoreHash` functions run in both contexts. However, the **data loading path** differs:
 
-- **Browser**: YAML-sourced data enters via IDB, where values are stored
-  as serialised JSON. Date strings remain strings. Objects pass through
-  `structuredClone` on IDB write/read, which strips prototype chains.
+- **Browser**: YAML-sourced data enters via IDB, where values are stored as serialised JSON. Date strings remain strings. Objects pass through `structuredClone` on IDB write/read, which strips prototype chains.
 
-- **CLI**: YAML files are loaded from disk by `js-yaml`. By default,
-  js-yaml's `DEFAULT_SCHEMA` converts ISO date strings to native `Date`
-  objects. This breaks `normalizeObjectKeys` in `querySignature.ts`,
-  which treats `Date` as a plain object (empty keys), producing a
-  different canonical JSON and therefore a different hash.
+- **CLI**: YAML files are loaded from disk by `js-yaml`. By default, js-yaml's `DEFAULT_SCHEMA` converts ISO date strings to native `Date` objects. This breaks `normalizeObjectKeys` in `querySignature.ts`, which treats `Date` as a plain object (empty keys), producing a different canonical JSON and therefore a different hash.
 
-**Fix**: the CLI disk loader (`src/cli/diskLoader.ts`) uses
-`YAML.load(raw, { schema: YAML.JSON_SCHEMA })` to prevent type
-coercion. This keeps all scalars as strings, matching the browser's
-IDB-serialised representation.
+**Fix**: the CLI disk loader (`src/cli/diskLoader.ts`) uses `YAML.load(raw, { schema: YAML.JSON_SCHEMA })` to prevent type coercion. This keeps all scalars as strings, matching the browser's IDB-serialised representation.
 
 **See also**: anti-pattern 23 in `KNOWN_ANTI_PATTERNS.md`.
 
@@ -394,18 +348,45 @@ Exact fields that enter `coreCanonical` in `computeQuerySignature()` ([querySign
 
 ---
 
-## Common Hash Failures (Anti-Pattern Cross-Reference)
-
-When debugging hash mismatches, check these known failure patterns first:
-
-| Anti-pattern | One-line summary | Key symptom |
-|---|---|---|
-| **AP 11** — Signatures from graph config | Read path uses `dataInterestsDSL` instead of stored slice topology → wrong context keys → wrong hash | "No data" despite data existing in DB |
-| **AP 23** — js-yaml Date conversion | `js-yaml` default schema converts ISO dates to `Date` objects → different canonical JSON → different hash | CLI computes different `core_hash` from browser for same graph |
-| **AP 27** — Confusing hash vs value filtering | Context *dimension* changes the hash; context *value* is in `slice_key`. Both levels must be filtered. | Wrong context slices returned, or all values mixed together |
-| **AP 28** — Duplicate hash computation codepaths | Multiple independent hash implementations diverge over time → different hashes for same input | Freshly written snapshots not found on read |
+## Common hash failures (pitfalls)
 
 **The canonical hash computation path is**: `computeQuerySignature()` in `querySignature.ts` → `serialiseSignature()` → `computeShortCoreHash()`. All other paths (CLI, synth_gen, test harness) must call the CLI which uses this real FE code. Never hand-roll a parallel implementation.
+
+When debugging hash mismatches, check these known failures first.
+
+### Anti-pattern 23: js-yaml Date conversion corrupts context-definition hashes
+
+**Signature**: a CLI tool computes a different `core_hash` from the FE browser for the same graph on the same branch. The `x` (contextDefHashes) component of the structured signature differs.
+
+**Root cause**: `js-yaml`'s default schema converts ISO date strings in YAML to native JavaScript `Date` objects. `normalizeObjectKeys` checks `typeof v === 'object'` — a `Date` passes, but `Object.keys(new Date())` returns `[]`, so the normalised output is `{}` instead of the original date string. The canonical JSON changes, producing a different SHA-256 hash.
+
+**Fix**: use `YAML.load(raw, { schema: YAML.JSON_SCHEMA })` when loading YAML files in the CLI disk loader (`graph-editor/src/cli/diskLoader.ts`).
+
+**Broader principle**: YAML loaders that auto-convert types (dates, booleans, octals) are a hash-stability hazard. Any data entering a hashing pipeline must be loaded with type coercion disabled.
+
+### Anti-pattern 27: Confusing context-hash filtering with context-value filtering
+
+**Signature**: selecting a context value (e.g. `context(channel:paid-search)`) in a snapshot filter returns the same count as no filter.
+
+**Root cause**: context values within one MECE dimension share the same `core_hash` — the hash encodes the context **definition**, not the specific value. To filter by value, you need `slice_key` filtering, either via the `slice_keys` parameter on `querySnapshotRetrievals`, or client-side by matching `slice_key` strings.
+
+**Two-level model**:
+1. Context *dimension* changes the hash (channel-contexted ≠ device-contexted ≠ uncontexted).
+2. Context *value* is carried in `slice_key` within a hash family.
+
+Both levels must be filtered for context-specific snapshot views.
+
+### Anti-pattern 28: Duplicate hash-computation codepaths
+
+**Signature**: hashes computed by path A don't match hashes computed by path B for the same graph. Snapshot DB queries return 0 rows even though data was just written.
+
+**Root cause**: multiple independent implementations of hash/signature computation that diverge over time. Each path makes slightly different choices about what inputs to hash.
+
+**Fix**: ONE codepath. The FE service layer (`computeQuerySignature` via `buildFetchPlanProduction` → `mapFetchPlanToSnapshotSubjects`) is the single source of truth. All other hash computations (synth_gen, test harness, scripts) must call the CLI which uses this real FE code, not hand-rolled reimplementations.
+
+### See also
+
+- [AP 11](KNOWN_ANTI_PATTERNS.md) — read paths must derive context keys from stored slice topology, not from `dataInterestsDSL` or other graph-level config.
 
 ---
 

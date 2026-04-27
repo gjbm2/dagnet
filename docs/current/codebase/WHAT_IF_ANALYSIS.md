@@ -4,8 +4,6 @@ How DagNet applies hypothetical overrides to graph probabilities for scenario ex
 
 ## What-If Override Types
 
-Two types of what-if override:
-
 1. **Case variant overrides**: force a specific variant in a case node (e.g. `case(case_id:treatment)`)
 2. **Conditional probability overrides**: override an edge's conditional_p to activate a specific condition (e.g. `visited(node-a)`)
 
@@ -16,11 +14,11 @@ What-if conditions are expressed as a unified DSL string:
 case(case_id:treatment).visited(nodea).exclude(nodeb)
 ```
 
-The DSL is parsed to populate `caseOverrides` and `conditionalOverrides` for backward compatibility. Old format (separate objects) is auto-migrated to DSL on first render.
+Parsed to populate `caseOverrides` and `conditionalOverrides` for backward compatibility. Old format (separate objects) is auto-migrated to DSL on first render.
 
 ## Effective Edge Probability
 
-`computeEffectiveEdgeProbability()` is the single source of truth. It applies overrides in order:
+`computeEffectiveEdgeProbability()` is the single source of truth. Applies overrides in order:
 1. Explicit conditional override
 2. Implicit/context activation (from case what-ifs or path analysis)
 3. Case variant weighting

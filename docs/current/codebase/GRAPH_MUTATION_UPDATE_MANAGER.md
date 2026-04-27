@@ -2,7 +2,7 @@
 
 How graph edits propagate from UI through mutation services to persistence, and how UpdateManager manages all automated entity updates.
 
-**See also**: `GRAPH_WRITE_SYNC_ARCHITECTURE.md` (the broader sync pipeline this feeds into), `SYNC_SYSTEM_OVERVIEW.md` (integrative map of all data flows)
+**See also**: `GRAPH_WRITE_SYNC_ARCHITECTURE.md` (broader sync pipeline), `SYNC_SYSTEM_OVERVIEW.md` (integrative map of all data flows)
 
 ## Edit Propagation Pipeline
 
@@ -68,7 +68,7 @@ UpdateManager manages **all automated entity updates** across the system, operat
 
 ### Mapping configurations
 
-18 mapping configurations in `updateManager/mappingConfigurations.ts` define field-level mappings for each direction/operation/entity combination. These control which fields flow where, respecting override flags.
+18 mapping configurations in `updateManager/mappingConfigurations.ts` define field-level mappings for each direction/operation/entity combination, controlling which fields flow where, respecting override flags.
 
 ## Graph-to-Graph Mutation Methods
 
@@ -109,7 +109,7 @@ UpdateManager manages **all automated entity updates** across the system, operat
 
 ## Node ID Renaming
 
-`renameNodeId(graph, nodeKey, newId)` is one of the most complex mutations. It updates all references to a node across the entire graph.
+`renameNodeId(graph, nodeKey, newId)` is one of the most complex mutations: updates all references to a node across the entire graph.
 
 ### What gets updated
 
@@ -177,6 +177,18 @@ After any mutation:
 3. **UUID immutability**: `edge.from`/`edge.to` must never change
 4. **Word-boundary safety**: token replacement uses `\b` to prevent partial matches
 5. **Race condition prevention**: `dagnet:suppressFileToStoreSync` event during MSMDC apply
+
+## Pitfalls
+
+### Anti-pattern 35: Edge-ID key order mismatch (uuid-first vs id-first)
+
+**Signature**: `computeInboundN` returns different `n` values for sibling edges from the same node, or returns an empty/partial map despite the graph having data. The bug is silent — no errors, just wrong numbers.
+
+**Root cause**: `computeInboundN` uses `getEdgeId()` which returns `edge.uuid || edge.id` (uuid-first). If the caller builds the `activeEdges` set or `getEffectiveP` lookup using `edge.id || edge.uuid` (id-first), edges with both fields populated resolve to different keys. The edge is absent from `activeEdges`, so the topo walk skips it. Downstream nodes receive incomplete population, and siblings get different n values.
+
+**Fix**: all call sites that interact with `computeInboundN` must use `uuid || id` (uuid-first) consistently. Search for `edge.id || edge.uuid` near any `computeInboundN` usage and reverse the order.
+
+**Broader principle**: whenever a function uses an internal key derivation (like `getEdgeId`), all callers must match that derivation exactly. A mismatch is invisible at the type level (both are strings) and produces silently wrong results.
 
 ## Key Files
 

@@ -4,7 +4,7 @@ How canvas analyses, post-its, and containers handle minimise/maximise/collapse,
 
 ## Overview
 
-Canvas objects (analyses and post-its) support a **minimise/restore** toggle that collapses them to a small icon anchored at a chosen corner. This state is **persisted to the graph file** — it survives page reload, git push/pull, and share links.
+Canvas objects (analyses and post-its) support a **minimise/restore** toggle that collapses them to a small icon anchored at a chosen corner. State is **persisted to the graph file** — survives page reload, git push/pull, and share links.
 
 Containers do not minimise but have distinct visual states during drag and selection.
 
@@ -30,7 +30,7 @@ These fields are:
 
 ### Canvas View state (optional overlay)
 
-`graph.canvasViews[].states[]` stores per-view snapshots of object states. When a named view is active and `applyLayout: true`, the view's states override graph defaults on apply. This allows multiple named snapshots of the same graph with different minimise states.
+`graph.canvasViews[].states[]` stores per-view snapshots of object states. When a named view is active and `applyLayout: true`, the view's states override graph defaults on apply. Allows multiple named snapshots of the same graph with different minimise states.
 
 When the user toggles minimise/restore while a view is active and not locked, `canvasViewService.updateViewObjectState()` also updates the view's saved state.
 
@@ -38,7 +38,7 @@ When the user toggles minimise/restore while a view is active and not locked, `c
 
 ### Position offset
 
-When minimising, the node position is adjusted so the minimised icon appears at the chosen corner:
+When minimising, node position is adjusted so the minimised icon appears at the chosen corner:
 
 ```
 minimised_dims = { width: 32, height: 32 }  // (type-specific for analyses)
@@ -50,11 +50,11 @@ On minimise:  x += dx, y += dy
 On restore:   x -= dx, y -= dy
 ```
 
-This ensures the minimised icon anchors at the chosen corner of the original bounds. The offset is deterministic from the anchor, so restore is lossless.
+Ensures the minimised icon anchors at the chosen corner of the original bounds. The offset is deterministic from the anchor, so restore is lossless.
 
 ### Anchor persistence
 
-`minimised_anchor` is preserved even when the object is restored (not minimised). This remembers the user's preferred corner for the next minimise.
+`minimised_anchor` is preserved even when the object is restored (not minimised). Remembers the user's preferred corner for the next minimise.
 
 ### Restore animation
 

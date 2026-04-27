@@ -132,6 +132,48 @@ function _migrateDispersionShapeInPlace(data: any, filePath: string): boolean {
   return touched;
 }
 
+/**
+ * Doc 73b §6.7 / OP1 graceful-degrade for `manual` source removal.
+ *
+ * Stage 3 retired `manual` from the model-source taxonomy. In-the-wild
+ * graphs may still carry `model_vars[].source === 'manual'` entries and
+ * `model_source_preference === 'manual'` selector pins. Per OP1 the
+ * loader treats both as not-present: drops `model_vars[manual]` entries
+ * and unpins the selector; each occurrence logs an info entry via
+ * sessionLogService. Runs in the isInitializing phase so the migration
+ * is absorbed into originalData without marking the file dirty.
+ *
+ * Idempotent: running twice is a no-op.
+ */
+function _migrateManualSourceInPlace(data: any, filePath: string): boolean {
+  const edges = Array.isArray(data?.edges) ? data.edges : null;
+  if (!edges) return false;
+  let droppedEntries = 0;
+  let unpinnedSelectors = 0;
+  for (const edge of edges) {
+    const p = edge?.p;
+    if (!p || typeof p !== 'object') continue;
+    if (Array.isArray(p.model_vars)) {
+      const before = p.model_vars.length;
+      p.model_vars = p.model_vars.filter((mv: any) => mv?.source !== 'manual');
+      droppedEntries += before - p.model_vars.length;
+    }
+    if (p.model_source_preference === 'manual') {
+      delete p.model_source_preference;
+      delete p.model_source_preference_overridden;
+      unpinnedSelectors += 1;
+    }
+  }
+  const touched = droppedEntries > 0 || unpinnedSelectors > 0;
+  if (touched) {
+    sessionLogService.info(
+      'workspace', 'MANUAL_SOURCE_MIGRATION',
+      `Dropped ${droppedEntries} model_vars[manual] entr${droppedEntries === 1 ? 'y' : 'ies'} and unpinned ${unpinnedSelectors} 'manual' selector${unpinnedSelectors === 1 ? '' : 's'} on ${filePath}`,
+    );
+  }
+  return touched;
+}
+
 export interface RemoteStatus {
   isAhead: boolean;
   filesChanged: number;
@@ -587,6 +629,9 @@ class WorkspaceService {
             // the migration is absorbed into originalData without marking
             // the file dirty.
             _migrateDispersionShapeInPlace(data, treeItem.path);
+            // Doc 73b §6.7 / OP1 graceful-degrade: drop in-the-wild `manual`
+            // model_vars entries and unpin `manual` selector preferences.
+            _migrateManualSourceInPlace(data, treeItem.path);
 
             // Create FileState
           const fileName = treeItem.path.split('/').pop() || ''; // Get filename from path

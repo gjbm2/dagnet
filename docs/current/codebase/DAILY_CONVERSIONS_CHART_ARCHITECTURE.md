@@ -68,7 +68,7 @@ Per-cohort conversion rates evaluated at fixed maturity ages corresponding to 25
 - 50th percentile: `[2, 5]` (medium dots)
 - 75th percentile: `[2, 3]` (dense dots)
 
-Evidence segments at full scenario colour opacity; forecast segments at 30% opacity. Controlled by the `show_latency_bands` display setting. The legend shows the implied number of days for each percentile.
+Evidence segments at full scenario colour opacity; forecast segments at 30% opacity. Controlled by the `show_latency_bands` display setting. Legend shows the implied number of days for each percentile.
 
 ---
 
@@ -88,11 +88,11 @@ Registered in `analysisDisplaySettingsRegistry.ts` under `daily_conversions`:
 
 ### Smoothing
 
-EWMA smoothing is applied to the combined evidence+forecast data before splitting into segments, avoiding discontinuity at the evidence/forecast boundary. The bridge point ensures continuity. Smoothing also applies to dispersion bands, anchored to the actual smoothed forecast rate line.
+EWMA smoothing applied to combined evidence+forecast data before splitting into segments, avoiding discontinuity at the evidence/forecast boundary. The bridge point ensures continuity. Smoothing also applies to dispersion bands, anchored to the actual smoothed forecast rate line.
 
 ### Aggregation
 
-Weekly/monthly re-binning groups date bins and recomputes bar heights and rate values. Currently FE-only (the `computeAffecting` flag is false).
+Weekly/monthly re-binning groups date bins and recomputes bar heights and rate values. Currently FE-only (`computeAffecting` flag is false).
 
 ---
 
@@ -107,7 +107,7 @@ Both daily conversions and cohort maturity follow the same conventions:
 - **Colour darkening**: main lines use `darkenHex(colour, 0.3)` — 30% darker than the scenario colour
 - **Striated forecast fills**: same decal pattern across both chart types
 
-These conventions are implemented independently in `snapshotBuilders.ts` (daily conversions) and `cohortComparisonBuilders.ts` (cohort maturity). The `darkenHex` utility lives in `echartsCommon.ts`.
+Implemented independently in `snapshotBuilders.ts` (daily conversions) and `cohortComparisonBuilders.ts` (cohort maturity). The `darkenHex` utility lives in `echartsCommon.ts`.
 
 ---
 

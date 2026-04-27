@@ -40,7 +40,7 @@
 - Bare key expansion: `context(channel)` → all values (Cartesian product)
 - All equivalences: `(a;b).c = c.(a;b) = or(a,b).c = a.c;b.c`
 
-**Used By**: 
+**Used By**:
 - PinnedQueryModal (slice explosion preview)
 - Nightly runner (when implemented)
 
@@ -67,16 +67,16 @@
 
 1. **Single Parser for Constraints**: `parseConstraints()` is the ONLY place that parses context, window, visited, etc.
 
-2. **Composable**: 
+2. **Composable**:
    - dslExplosion calls parseConstraints on each atomic slice
    - compositeQueryParser focuses on minus/plus (doesn't duplicate constraint parsing)
 
 3. **Normalized Output**: All paths use `normalizeConstraintString()` for canonical form
 
-4. **No Duplication**: 
-   - ❌ Don't write regex for context() parsing outside queryDSL.ts
-   - ❌ Don't parse window() outside queryDSL.ts
-   - ✅ Call parseConstraints() if you need to extract constraints
+4. **No Duplication**:
+   - Don't write regex for context() parsing outside queryDSL.ts
+   - Don't parse window() outside queryDSL.ts
+   - Call parseConstraints() if you need to extract constraints
 
 ## Usage Examples
 
@@ -98,26 +98,33 @@ const composite = parseCompositeQuery('from(a).to(b).minus(c,d)');
 
 When adding new constraint types:
 
-1. ✅ Add to QUERY_FUNCTIONS constant in queryDSL.ts
-2. ✅ Add regex matcher in parseConstraints()
-3. ✅ Add to normalizeConstraintString() canonical order
-4. ✅ Update ParsedConstraints interface
-5. ✅ Add to Monaco autocomplete in QueryExpressionEditor.tsx
-6. ❌ Don't create separate parsing logic
+1. Add to QUERY_FUNCTIONS constant in queryDSL.ts
+2. Add regex matcher in parseConstraints()
+3. Add to normalizeConstraintString() canonical order
+4. Update ParsedConstraints interface
+5. Add to Monaco autocomplete in QueryExpressionEditor.tsx
+6. Don't create separate parsing logic
 
 ## Tests
 
 - `queryDSL.test.ts`: 67 tests for parseConstraints, normalization
 - `dslExplosion.test.ts`: 10 tests for compound explosion
-- Total: All parsing logic is tested
+- All parsing logic is tested
+
+## Pitfalls
+
+### Anti-pattern 31: Regex not handling optional prefixes in DSL clauses
+
+**Signature**: `_extract_time_bounds` (or similar DSL parsers) returns today's date instead of the dates in the DSL. Downstream filters silently exclude all historical data.
+
+**Root cause**: `cohort(anchor,start:end)` has an optional anchor-node prefix before the date range. A regex like `cohort\(([^:]*):([^)]*)\)` captures `anchor,start-date` as group 1. `_resolve_date('anchor,12-Dec-25')` fails all date-format checks and falls through to `today.isoformat()`.
+
+**Fix**: make the anchor prefix optional in the regex: `cohort\((?:[^,)]*,)?([^:,]*):([^)]*)\)`. Test with both `cohort(start:end)` and `cohort(anchor,start:end)` forms. Check the grammar in `DSL_SYNTAX_REFERENCE.md` before writing DSL regexes.
 
 ## Related Docs
 
-- **`DSL_SYNTAX_REFERENCE.md`** — Full grammar, all 14 functions, composition
-  rules, and examples (the "what" to this doc's "how")
-- **`DATA_RETRIEVAL_QUERIES.md`** — Three purposes of queries (topology,
-  conditional metadata, data retrieval)
+- **`DSL_SYNTAX_REFERENCE.md`** — Full grammar, all 14 functions, composition rules, examples (the "what" to this doc's "how")
+- **`DATA_RETRIEVAL_QUERIES.md`** — Three purposes of queries (topology, conditional metadata, data retrieval)
 - **`RESERVED_QUERY_TERMS_GLOSSARY.md`** — Semantic term definitions
 - **Canonical schemas**: `public/schemas/query-dsl-1.1.0.json`
 - **User-facing guide**: `public/docs/query-expressions.md`
-

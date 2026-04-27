@@ -11,10 +11,14 @@ Two adjacent bugs in `graph-editor/src/services/fetchDataService.ts` caused the 
 
 The fixes:
 
-1. `mergeModelVarsLatencyPreservingCanonicalEdgeLatency` (line ~3010): edge-local fields (`mu`, `sigma`, `t95`, `onset_delta_days`, dispersion SDs) now use the same `next ?? prev` precedence the path-level fields in the same function already used. The asymmetry between edge-local and path-level handling was the proximate cause of bug 1.
-2. `selectLatencyToApplyForTopoPass` (line ~2975): `median_lag_days` and `mean_lag_days` now have a `existing ?? computed` fallback, matching the surrounding fields in the same function. The omission was the proximate cause of bug 2.
+1. **`mergeModelVarsLatency`** (renamed from `mergeModelVarsLatencyPreservingCanonicalEdgeLatency`; see "Why the rename" below): edge-local fields (`mu`, `sigma`, `t95`, `onset_delta_days`, dispersion SDs) now use the same `next ?? prev` precedence the path-level fields in the same function already used. The asymmetry between edge-local and path-level handling was the proximate cause of bug 1.
+2. **`selectLatencyToApplyForTopoPass`** (line ~2975): `median_lag_days` and `mean_lag_days` now have a `existing ?? computed` fallback, matching the surrounding fields in the same function. The omission was the proximate cause of bug 2.
 
 Neither fix touches the documented contract of `persistGraphMasteredLatencyToParameterFiles` (which is a doc-19 commitment that promoted_t95 wins over the existing t95 when the override is off). Earlier attempts to patch at the persist boundary broke that contract; they have been reverted.
+
+### Why the rename
+
+The function name `mergeModelVarsLatencyPreservingCanonicalEdgeLatency` advertised a behaviour the post-fix function does not have. After the fix, edge-local fields no longer "preserve canonical" — they take the freshest writer's value, same as the path-level fields. A name that lies is a landmine for future readers, who would assume edge-local prev wins (because the name says so) and second-guess the implementation. The function has been renamed to `mergeModelVarsLatency`. The longer "freshest wins" qualifier was considered but rejected as editorialising — the function is just a merge, and `next ?? prev` is the standard merge semantics; no qualifier needed.
 
 ## What this document is
 
@@ -198,14 +202,29 @@ setIfPresent('onset_mu_corr', next.onset_mu_corr ?? prev.onset_mu_corr);
 
 The `preserveEdgeModel` branch is removed entirely; the function is now uniformly "freshest writer wins".
 
-### Why this is correct, not a band-aid
+### Why this is correct
 
-- The function's only caller is the Stage-2 LAG apply loop, where `next` is by construction the freshest fit available. There is no other call site to consider.
-- The path-level fields in the same function have always used this precedence and have not exhibited the staleness symptom; bringing edge-local handling into line removes an asymmetry, not introduces a new branch.
-- The "partial next" case (`next.X` is undefined) is covered by `?? prev.X`; the original `preserveEdgeModel` guard's fallback role is preserved.
-- For the **normal fetch** path the change is a no-op: previous fetches left `prev.t95 ≈ next.t95`, and picking the fresh-but-equal value is identical to picking the previous value.
-- For the **recompute** path the change does what the test expects: the fresh fit propagates through `model_vars[analytic].latency` → `applyPromotion` → `p.latency.promoted_t95` → `persistGraphMasteredLatencyToParameterFiles` → `lat.t95 = promoted_t95`, ending with the correct `22.76` on both the graph and the persisted file.
-- The persist function's doc-19 contract ("`promoted_t95` always replaces `lat.t95` when not locked") is unchanged. The downstream pinning tests in `fetchDataService.test.ts` and `persistGraphMasteredLatencyToParameterFiles.test.ts` continue to pass.
+The case rests on two pieces of evidence: the call-site history of the function, and what the new precedence actually produces in each fetch regime.
+
+**Call-site history.** The function was introduced in commit `0c0fb72a` ("Still generalisting forecasting IV — lots of data pipeline fixes to do", 23-Apr-26). At that point it had **two** callers in `fetchDataService.ts`:
+
+1. The Stage-2 LAG apply loop (`existing.latency = mergeModelVarsLatency...(stage2Output, existing.latency)`), where `next` was a fresh Stage-2 fit and `prev` was the existing `model_vars[analytic].latency`.
+2. A BE-topo write-back (`beEntry.entry.latency = mergeModelVarsLatency...(beEntry.entry.latency, prevLatency)`), where `next` was the BE-topo pass's output and `prev` was specifically `currentP.model_vars[analytic_be]?.latency || currentP.model_vars[analytic]?.latency` — i.e. the previously-fitted analytic / analytic_be entry.
+
+For the BE-topo caller, the `preserveEdgeModel` guard plausibly mattered: BE-topo's edge-local output could be partial or transient relative to the previous full fit on the analytic / analytic_be entry, so preserving prev's edge-local block on a per-edge basis (when it had a real fit) was a defensive choice. The `t95: prev.t95 ?? next.t95` line — keeping prev when set, falling back to next when prev was missing — is consistent with that role.
+
+The BE-topo caller was deleted in commit `b450dd4e` ("Bye bye BE topo (-4,500 loc); fixing forecasting scenarios handling", 24-Apr-26), one commit later. The function survived with a single remaining caller — the Stage-2 LAG apply loop. Nobody updated the merge semantics to reflect the lost caller. The `preserveEdgeModel` branch is therefore a leftover from the dual-caller era; it is dead-code legacy, not a guard with a still-active rationale on the surviving caller.
+
+This is verifiable: `git log -S 'function mergeModelVarsLatencyPreservingCanonicalEdgeLatency' --all -- graph-editor/src/services/fetchDataService.ts` gives the introducing commit; `git show b450dd4e -- graph-editor/src/services/fetchDataService.ts | grep mergeModelVars` shows the BE-topo call site removed; the current file has only the Stage-2 LAG call site.
+
+**What the new precedence produces.**
+
+- **Recompute path** (the failing tests): the fresh Stage-2 fit propagates through `model_vars[analytic].latency` → `applyPromotion` → `p.latency.promoted_t95` → `persistGraphMasteredLatencyToParameterFiles` → `lat.t95 = promoted_t95`, ending with the correct `22.76` on both the graph and the persisted file. This is the symptom the failing tests asserted.
+- **Normal fetch path** — *not* a no-op: this is a real behavioural change. In the steady state where data hasn't changed between fetches, `prev.t95 = next.t95` and the change is invisible. But as soon as data evolves (a new day's snapshot rows, recency-weighted aggregates shifting because dates drift, window-vs-cohort scoping differences), `prev.t95 ≠ next.t95`. The pre-fix behaviour was that the file's persisted fit "stuck" on `model_vars[analytic].latency` until an explicit re-persist; Stage-2 LAG's fresh fit landed on `graph.p.latency.t95` directly (via `applyBatchLAGValues`) but did not propagate to `model_vars[analytic].latency.t95` or to `promoted_t95`. The post-fix behaviour is that Stage-2 LAG's fresh fit immediately wins on `model_vars[analytic].latency`, propagates to `promoted_t95`, and is the value the persist function will write to the file when the override is off. **This is the contract the path-level fields in the same function have always had** (`next.path_t95 ?? prev.path_t95`); the fix brings edge-local handling into line.
+- **The "partial-`next`" case** (Stage-2 LAG transiently producing a degraded or absent fit, e.g. a fetch where the cohort window narrows enough that no fit is possible) is covered: `next.X ?? prev.X` falls back to `prev.X` when `next.X` is undefined, exactly as it does for path-level fields today. This is the only role the old `preserveEdgeModel` guard had a defensible reason to play; the new code preserves that role via the `??` chain.
+- **The persist function's doc-19 contract** ("`promoted_t95` always replaces `lat.t95` when not locked") is unchanged. The downstream pinning tests in `fetchDataService.test.ts` and `persistGraphMasteredLatencyToParameterFiles.test.ts` continue to pass.
+
+The honest framing of the behavioural change: the path-level fields have always had freshest-writer-wins semantics; the edge-local fields had a guard that was load-bearing for a caller that no longer exists; with that caller gone, the guard inverts the right answer for the surviving caller. The fix removes the dead-code asymmetry and unifies the function around one merge rule.
 
 ## Bug 2 — `selectLatencyToApplyForTopoPass` drops `median_lag_days` / `mean_lag_days`
 
@@ -340,7 +359,7 @@ The fix corrects the data flow through the merge function and through `selectLat
 
 2. **The pinning is defensive, not proactive.** Neither `lagHorizonsService.integration.test.ts` nor `batchFetchE2E.comprehensive.test.ts` has an assertion that says "promoted_t95 must equal t95 after recompute". The bug only manifested at the persist step because the persist contract (promoted-wins) made the inconsistency observable. A future regression that introduces a different kind of inconsistency (say, `promoted_t95` stays correct but `model_vars[analytic].latency.t95` stays stale, breaking some other consumer) would not be caught by the tests as written. A focused unit test on `mergeModelVarsLatencyPreservingCanonicalEdgeLatency` itself — asserting "next wins when both `prev` and `next` populate the same field" — would harden the fix. Recommended as a follow-up.
 
-3. **The merge function's name now slightly overshoots its behaviour.** It's called `…PreservingCanonicalEdgeLatency` but no longer preserves edge-local fields preferentially. A rename to something like `mergeStage2LatencyOverEntry` would be clearer; deferred to keep the diff focused on behaviour.
+3. **(Resolved in this change.)** The function was previously named `mergeModelVarsLatencyPreservingCanonicalEdgeLatency`, which advertised a behaviour the post-fix function does not have. It has been renamed to `mergeModelVarsLatency`. A name that lies is a landmine; the rename ensures future readers will not assume edge-local prev wins on the basis of the name.
 
 ## Summary for review
 

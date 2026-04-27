@@ -102,7 +102,7 @@ All changes are additive/relaxing — 1.0.0 files remain valid under 1.1.0.
 
 ## Known drift issues
 
-1. **TypeScript graph types are loose** — JSON Schema and Pydantic are comprehensive, but TS uses `any` in many graph property positions. The parity test catches field-level drift but not deep type safety.
+1. **TypeScript graph types are loose** — JSON Schema and Pydantic are comprehensive, but TS uses `any` in many graph property positions. Parity test catches field-level drift but not deep type safety.
 2. **Internal UI flags can leak to persistence** — e.g. `_noHistory` (slider drag flag) was persisting to `conditional_p` entries. Regression check in `schemaParityAutomated.test.ts`.
 3. **Parameter schema ↔ TypeScript alignment is manual** — no automated test for `parameter-schema.yaml` vs `parameterData.ts`.
 

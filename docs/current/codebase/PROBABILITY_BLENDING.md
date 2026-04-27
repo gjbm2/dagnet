@@ -21,7 +21,7 @@ For cohort-mode latency edges, DagNet computes a blended probability (`p.mean`) 
 - **Immature** (low completeness): `p.mean` leans towards forecast, avoids naive k/n÷completeness blow-up
 - **No evidence** (n ≈ 0): `p.mean` ≈ forecast
 
-The transition between regimes must be smooth.
+Transition between regimes must be smooth.
 
 ### Key Design Constraint
 

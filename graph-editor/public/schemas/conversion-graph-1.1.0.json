@@ -1212,7 +1212,8 @@
           "description": "Forecast population for this edge under the current DSL. NOT the same as evidence.n (observed). Derived via step-wise convolution of upstream p.mean values. For anchor edges: equals evidence.n. For downstream edges: sum of inbound forecast.k at the from-node. Query-time value, recomputed when DSL or scenario changes."
         },
         "model_source_preference": {
-          "type": "string"
+          "type": "string",
+          "enum": ["best_available", "bayesian", "analytic"]
         },
         "model_source_preference_overridden": {
           "type": "boolean"
@@ -1226,7 +1227,7 @@
             "properties": {
               "source": {
                 "type": "string",
-                "enum": ["analytic", "bayesian", "manual"]
+                "enum": ["analytic", "bayesian"]
               },
               "source_at": {
                 "type": "string",

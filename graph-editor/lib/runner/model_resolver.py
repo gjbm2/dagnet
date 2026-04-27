@@ -88,7 +88,7 @@ class ResolvedModelParams:
         return self.path_latency if self.path_latency is not None else self.edge_latency
 
     # Provenance
-    source: str = ''          # 'analytic' | 'bayesian' | 'manual'
+    source: str = ''          # 'analytic' | 'bayesian' (doc 73b §3.1 — 'manual' retired)
     fitted_at: Optional[str] = None
     gate_passed: Optional[bool] = None  # Bayesian quality gate
 
@@ -136,7 +136,7 @@ def _extract_source_curves(model_vars: List[Dict[str, Any]]) -> Dict[str, Dict[s
     curves: Dict[str, Dict[str, Any]] = {}
     for mv in model_vars:
         src = mv.get('source', '')
-        if src not in ('analytic', 'bayesian', 'manual'):
+        if src not in ('analytic', 'bayesian'):
             continue
         mv_lat = mv.get('latency') or {}
         mv_prob = mv.get('probability') or {}
@@ -178,11 +178,13 @@ def _resolve_promoted_source(
 ) -> Optional[str]:
     """Determine which model source to use.
 
-    Mirrors `src/services/modelVarsResolution.ts` exactly:
-    manual -> manual, else best_available
-    bayesian -> bayesian, else analyticBest
-    analytic -> analytic only
-    best_available -> gated bayesian, else analyticBest
+    Mirrors `src/services/modelVarsResolution.ts` exactly (doc 73b §3.1 / OP3):
+      bayesian       -> bayesian, else analyticBest
+      analytic       -> analytic only
+      best_available -> gated bayesian, else analyticBest
+
+    Doc 73b §6.7 / OP1 graceful-degrade: stale `'manual'` selector preferences
+    are normalised to the unpinned default (best_available).
     """
     def _find(source: str) -> Optional[str]:
         return source if source in source_curves else None
@@ -200,8 +202,6 @@ def _resolve_promoted_source(
     def _best_available() -> Optional[str]:
         return _bayesian_if_gated() or _analytic_best()
 
-    if preference == 'manual':
-        return _find('manual') or _best_available()
     if preference == 'bayesian':
         return _find('bayesian') or _analytic_best()
     if preference == 'analytic':

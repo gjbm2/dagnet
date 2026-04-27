@@ -45,7 +45,7 @@ It does **not** check:
 - Whether the workspace prefix (repo + branch) matches the current environment
 - Whether `nodes-index.yaml` is up to date
 
-**No idempotent regen.** There is no single call that says "ensure this synth graph is ready for testing." Instead there is `synth_gen.py --write-files` (stages 1-4), `hydrate.sh` (stage 5), and manual verification. `--bust-cache` bypasses the freshness check entirely; without it, stale-but-counted data passes.
+**No idempotent regen.** No single call says "ensure this synth graph is ready for testing." Instead there is `synth_gen.py --write-files` (stages 1-4), `hydrate.sh` (stage 5), and manual verification. `--bust-cache` bypasses the freshness check entirely; without it, stale-but-counted data passes.
 
 ---
 
@@ -65,7 +65,7 @@ After regenerating synth data, `synthHashParity.test.ts` failed because the FE r
 
 ### 3. Missing enrichment (recurring)
 
-`test_be_topo_pass_parity.py` skips when `model_vars` are absent, with a message directing the developer to run `test_harness.py --enrich`. This is a manual step with no automation, no freshness tracking, and no way for CI to handle it.
+`test_be_topo_pass_parity.py` skips when `model_vars` are absent, with a message directing the developer to run `test_harness.py --enrich`. Manual step with no automation, no freshness tracking, and no way for CI to handle it.
 
 **What should have caught it**: Tests declaring their enrichment requirements, with fixture setup that commissions enrichment if the graph isn't in the required state.
 
@@ -131,7 +131,7 @@ The fixture helper (`ensureSynthGraph` / `@requires_synth`) then:
 python -m bayes.synth_gen --graph synth-diamond-test --write-files --enrich
 ```
 
-This single command handles generation, hash computation, DB write, param files, enrichment, and verification. `--enrich` commissions the topo pass / hydrate step. Without `--enrich`, the graph is generated but not enriched (meta records `enriched: false`).
+Single command handles generation, hash computation, DB write, param files, enrichment, and verification. `--enrich` commissions the topo pass / hydrate step. Without `--enrich`, the graph is generated but not enriched (meta records `enriched: false`).
 
 ### Principle: disposable and adaptive
 
@@ -177,7 +177,7 @@ Three Python tests require enriched graphs: `test_doc31_parity.py`, `test_be_top
 
 Three shell scripts require enriched graphs: `v2-v3-parity-test.sh`, `window-cohort-convergence-test.sh`, `chart-graph-agreement-test.sh`. They hard-fail if the graph isn't enriched.
 
-`run_regression.py` is the only consumer with self-healing: it auto-bootstraps missing synth data via `verify_synth_data()` + `synth_gen.py`. But even it doesn't handle enrichment — it doesn't need to because the harness enriches as part of the MCMC pipeline.
+`run_regression.py` is the only consumer with self-healing: auto-bootstraps missing synth data via `verify_synth_data()` + `synth_gen.py`. But even it doesn't handle enrichment — it doesn't need to because the harness enriches as part of the MCMC pipeline.
 
 ---
 

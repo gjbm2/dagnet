@@ -206,34 +206,20 @@ describe('Stage 0 FE contract pinning — single-writer rule (§3.2 centralisati
 });
 
 describe('Stage 0 FE contract pinning — `manual` removal (§9 criterion 9, §12.2 S2/S3)', () => {
-  it.skip(
-    'ModelSource literal does not include `manual` (Stage 3 — schema row S2)',
-    () => {
-      const src = readSource(TYPES_PATH);
-      // After Stage 3 the literal is the two-source set.
-      expect(src).toMatch(
-        /export\s+type\s+ModelSource\s*=\s*['"]analytic['"]\s*\|\s*['"]bayesian['"]\s*;/,
-      );
-      expect(src).not.toMatch(/['"]manual['"]\s*[|;].*ModelSource/);
-    },
-  );
-
-  it.skip(
-    'ModelSourcePreference literal does not include `manual` (Stage 3 — schema row S3)',
-    () => {
-      const src = readSource(TYPES_PATH);
-      // After Stage 3 the literal is the three-value preference set.
-      expect(src).toMatch(
-        /ModelSourcePreference\s*=\s*['"]best_available['"]\s*\|\s*['"]bayesian['"]\s*\|\s*['"]analytic['"]\s*;/,
-      );
-    },
-  );
-
-  it('ModelSource and ModelSourcePreference still include `manual` today (baseline; removed in Stage 3)', () => {
+  it('ModelSource literal does not include `manual` (Stage 3 — schema row S2)', () => {
     const src = readSource(TYPES_PATH);
-    expect(src).toMatch(/ModelSource\s*=\s*['"]analytic['"]\s*\|\s*['"]bayesian['"]\s*\|\s*['"]manual['"]/);
+    // After Stage 3 the literal is the two-source set.
     expect(src).toMatch(
-      /ModelSourcePreference\s*=\s*['"]best_available['"]\s*\|\s*['"]bayesian['"]\s*\|\s*['"]analytic['"]\s*\|\s*['"]manual['"]/,
+      /export\s+type\s+ModelSource\s*=\s*['"]analytic['"]\s*\|\s*['"]bayesian['"]\s*;/,
+    );
+    expect(src).not.toMatch(/ModelSource\s*=[^;]*['"]manual['"]/);
+  });
+
+  it('ModelSourcePreference literal does not include `manual` (Stage 3 — schema row S3)', () => {
+    const src = readSource(TYPES_PATH);
+    // After Stage 3 the literal is the three-value preference set.
+    expect(src).toMatch(
+      /ModelSourcePreference\s*=\s*['"]best_available['"]\s*\|\s*['"]bayesian['"]\s*\|\s*['"]analytic['"]\s*;/,
     );
   });
 });

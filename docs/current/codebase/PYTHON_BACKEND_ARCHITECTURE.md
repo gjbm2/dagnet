@@ -19,29 +19,17 @@ DagNet ships Python code to **three runtime targets**:
 - **Local dev API** — entry point `graph-editor/dev-server.py`
 - **Modal Bayes worker** — entry points `bayes/app.py` and `bayes/worker.py`
 
-The boundary rule is:
+Boundary rule:
 
-- If Python logic is consumed by both the API layer and the Bayes worker,
-  it belongs in **`graph-editor/lib/`**
-- If logic is Bayes-only (compiler, model construction, inference, worker
-  orchestration), it belongs in **`bayes/`**
-- Entry points may do runtime-specific import wiring (`PYTHONPATH`,
-  `sys.path`) but the shared modules themselves should stay runtime-agnostic
+- If Python logic is consumed by both the API layer and the Bayes worker, it belongs in **`graph-editor/lib/`**
+- If logic is Bayes-only (compiler, model construction, inference, worker orchestration), it belongs in **`bayes/`**
+- Entry points may do runtime-specific import wiring (`PYTHONPATH`, `sys.path`) but the shared modules themselves should stay runtime-agnostic
 
-This is why modules such as `snapshot_service.py`, `query_dsl.py`,
-`graph_types.py`, `snapshot_regime_selection.py`, and
-`file_evidence_supplement.py` live in `graph-editor/lib/`: they are shared
-between the short-lived API deployments and the long-running Bayes worker.
+This is why modules such as `snapshot_service.py`, `query_dsl.py`, `graph_types.py`, `snapshot_regime_selection.py`, and `file_evidence_supplement.py` live in `graph-editor/lib/`: they are shared between short-lived API deployments and the long-running Bayes worker.
 
-The Modal image copies `graph-editor/lib/` into the worker image and adds it
-to `PYTHONPATH`; Vercel and the dev server prepend the same directory before
-importing handlers. That packaging detail is an entry-point concern, not a
-reason to duplicate shared code under `bayes/` or `api/`.
+The Modal image copies `graph-editor/lib/` into the worker image and adds it to `PYTHONPATH`; Vercel and the dev server prepend the same directory before importing handlers. That packaging detail is an entry-point concern, not a reason to duplicate shared code under `bayes/` or `api/`.
 
-One intentional exception exists in the opposite direction:
-`graph-editor/lib/bayes_local.py` is a local-dev adapter that shells into the
-Bayes worker codepath. Treat it as an entry-point bridge, not as precedent
-for putting shared business logic in the wrong tree.
+One intentional exception in the opposite direction: `graph-editor/lib/bayes_local.py` is a local-dev adapter that shells into the Bayes worker codepath. Treat it as an entry-point bridge, not as precedent for putting shared business logic in the wrong tree.
 
 ## Frontend-Backend Communication
 
@@ -50,7 +38,7 @@ for putting shared business logic in the wrong tree.
 - Auto-configures baseUrl from `PYTHON_API_BASE`:
   - Dev: `http://{hostname}:9000` (or `VITE_PYTHON_API_URL` override)
   - Prod: empty string (same origin, Vercel serverless)
-- Supports mock mode: `VITE_USE_MOCK_COMPUTE=true`
+- Mock mode: `VITE_USE_MOCK_COMPUTE=true`
 - 5-minute TTL cache (max 50 entries) for analysis results
 
 Key client methods: `health()`, `parseQuery()`, `generateAllParameters()`, `enhanceStats()`, `analyzeSelection()`, `analyzeMultipleScenarios()`, `getAvailableAnalyses()`, `analyzeSnapshots()`
@@ -124,11 +112,11 @@ Key client methods: `health()`, `parseQuery()`, `generateAllParameters()`, `enha
 
 Added 7-Apr-26. Module-level infrastructure in `lib/snapshot_service.py` that survives across warm Vercel invocations.
 
-### Vercel function lifecycle (context for design)
+### Vercel function lifecycle
 
 - Warm instances persist ~5–15 min of inactivity; module-level globals survive across requests within the same instance.
 - **No sticky routing**: sequential requests from the same browser can hit any available warm instance. Each instance has its own isolated pool and cache.
-- **Fluid Compute** (enabled by default on Pro): a single instance handles multiple concurrent requests, which maximises cache hit rate and connection reuse.
+- **Fluid Compute** (default on Pro): single instance handles multiple concurrent requests, maximising cache hit rate and connection reuse.
 - Cold start = fresh pool + empty cache. Instance death = everything gone.
 
 ### Connection pool
@@ -138,7 +126,7 @@ Added 7-Apr-26. Module-level infrastructure in `lib/snapshot_service.py` that su
 - `_PooledConnection` context manager borrows from pool, returns on exit.
 - Stale connection detection: executes `SELECT 1` on borrow; if it fails, discards and gets a fresh connection.
 - Thread-safe via `_pool_lock`.
-- Legacy `get_db_connection()` kept for backward compatibility but all production paths now use `_pooled_conn()`.
+- Legacy `get_db_connection()` kept for backward compatibility; all production paths use `_pooled_conn()`.
 
 ### TTL result cache
 
@@ -155,16 +143,16 @@ Module-level dict: `_cache[key] → (expiry_timestamp, result)`.
 
 ### Cache invalidation
 
-- **Write-path**: `append_snapshots` and `delete_snapshots` call `cache_clear()` after successful commit. This is a full cache nuke — simple and correct, since any write can change what any read returns.
-- **Explicit**: `cache_clear()` function exposed via `/api/cache/clear` endpoint. Useful for dev/testing after manual DB edits.
-- **TTL expiry**: entries older than 15 min are treated as misses.
+- **Write-path**: `append_snapshots` and `delete_snapshots` call `cache_clear()` after successful commit. Full cache nuke — any write can change what any read returns.
+- **Explicit**: `cache_clear()` function exposed via `/api/cache/clear` endpoint. For dev/testing after manual DB edits.
+- **TTL expiry**: entries older than 15 min are misses.
 - **Cold start**: empty cache on new instance.
 
 **FE does not need to trigger cache busting in normal workflows.** Write-path invalidation covers all standard flows (fetch-and-store, delete). The explicit endpoint is for dev/ops only.
 
 ### Observability
 
-- `health_check()` includes cache stats in its response (`hits`, `misses`, `evictions`, `entries`).
+- `health_check()` response includes cache stats (`hits`, `misses`, `evictions`, `entries`).
 - `/api/cache/stats` returns the same stats non-destructively.
 - `/api/cache/clear` returns stats before clearing, plus `entries_cleared` count.
 
@@ -200,32 +188,20 @@ Mirrors Modal API with threading-based job spawning. Same `submit/status/cancel`
 
 ### Async roundtrip (FE → Modal → webhook → git)
 
-The full cycle from user trigger to persisted posteriors:
+Full cycle from user trigger to persisted posteriors:
 
-1. **FE trigger**: `useBayesTrigger.ts` calls `/api/bayes/submit` with
-   graph topology, parameter files, and an encrypted callback token
-2. **Modal dispatch**: `bayes/app.py` `/submit` endpoint spawns a
-   worker via `modal.Function.spawn()`, returns `job_id`
-3. **FE polling**: `useBayesTrigger.ts` polls `/api/bayes/status`
-   every 5s until completion
-4. **Worker execution**: `bayes/worker.py:fit_graph()` runs the
-   compiler pipeline (see below), fires webhook on completion
-5. **Webhook → atomic git commit**: `api/bayes-webhook.ts` receives
-   posteriors, writes a patch file (`_bayes/patch-{job_id}.json`),
-   commits atomically via GitHub Git Data API (`atomicCommitFiles`).
-   Retry-with-rebase on 422 conflict.
-6. **FE pull + patch apply**: `useBayesTrigger.ts` detects completion,
-   pulls the commit, applies the patch locally via
-   `bayesPatchService.ts:applyPatchAndCascade()`
+1. **FE trigger**: `useBayesTrigger.ts` calls `/api/bayes/submit` with graph topology, parameter files, and an encrypted callback token
+2. **Modal dispatch**: `bayes/app.py` `/submit` endpoint spawns a worker via `modal.Function.spawn()`, returns `job_id`
+3. **FE polling**: `useBayesTrigger.ts` polls `/api/bayes/status` every 5s until completion
+4. **Worker execution**: `bayes/worker.py:fit_graph()` runs the compiler pipeline (see below), fires webhook on completion
+5. **Webhook → atomic git commit**: `api/bayes-webhook.ts` receives posteriors, writes a patch file (`_bayes/patch-{job_id}.json`), commits atomically via GitHub Git Data API (`atomicCommitFiles`). Retry-with-rebase on 422 conflict.
+6. **FE pull + patch apply**: `useBayesTrigger.ts` detects completion, pulls the commit, applies the patch locally via `bayesPatchService.ts:applyPatchAndCascade()`
 
-If the browser closes mid-run, the webhook still commits. On next
-boot, `bayesPatchService.ts:scanForPendingPatches()` detects
-unapplied patches in `_bayes/` and applies them.
+If the browser closes mid-run, the webhook still commits. On next boot, `bayesPatchService.ts:scanForPendingPatches()` detects unapplied patches in `_bayes/` and applies them.
 
 ### Compiler pipeline (`bayes/compiler/`)
 
-The compiler translates graph topology into a Bayesian model and runs
-MCMC inference. Five modules form a strict pipeline:
+The compiler translates graph topology into a Bayesian model and runs MCMC inference. Five modules form a strict pipeline:
 
 | Stage | Module | Input | Output |
 |-------|--------|-------|--------|
@@ -238,51 +214,20 @@ MCMC inference. Five modules form a strict pipeline:
 | 6. Summary | `inference.py` | Samples + LOO + PPC | `PosteriorSummary` per edge — HDI, ESS, rhat, LOO, PPC, evidence grade |
 
 The pipeline runs twice per fit (**two-phase model**):
-- **Phase 1 (window)**: fits window() observations only. Extracts
-  posterior point estimates (p_alpha/beta, mu/sigma/onset with SDs).
-- **Phase 2 (cohort)**: uses Phase 1 posteriors as priors (ESS-decayed
-  Beta/Dirichlet via `_ess_decay_scale()`), fits cohort() observations
-  with frozen Phase 1 latency. `worker.py:557-877` orchestrates.
+- **Phase 1 (window)**: fits window() observations only. Extracts posterior point estimates (p_alpha/beta, mu/sigma/onset with SDs).
+- **Phase 2 (cohort)**: uses Phase 1 posteriors as priors (ESS-decayed Beta/Dirichlet via `_ess_decay_scale()`), fits cohort() observations with frozen Phase 1 latency. `worker.py:557-877` orchestrates.
 
 Key implemented features:
-- **Latent onset**: per-edge learned onset (feature flag
-  `latent_onset=True`, default on). Onset estimated via MCMC, not
-  fixed from histogram.
-- **Recency weighting**: `_apply_recency_weights()` in evidence.py
-  applies `exp(-ln2 * age / half_life_days)` to each trajectory.
-- **Zero-count filter**: likelihood-lossless removal of bins where
-  neither y nor x changed (`zero_count_filter` flag, default True).
-- **Snapshot evidence**: `bind_snapshot_evidence()` queries snapshot DB
-  directly, falls back to param files per edge. Merges trajectories
-  with supplemental daily observations.
-- **Join-node mixture CDF**: `completeness.py:moment_matched_collapse()`
-  builds mixture CDF at join nodes with moment matching. Differentiable
-  PyTensor variant (`pt_moment_matched_collapse`) for MCMC gradients.
-- **Unified MCMC kappa**: single dispersion parameter per edge with
-  LogNormal prior. Prior centre: (1) warm-start from previous
-  posterior, (2) BetaBinomial MLE from endpoint data (empirical Bayes,
-  doc 38), (3) default log(30). The MLE prior adapts to the data
-  rather than imposing a fixed centre.
-- **PPC calibration** (`calibration.py`): posterior predictive
-  coverage check — are the model's 90% intervals honest? Two
-  categories: endpoint/daily (tests κ) and trajectory intervals
-  (tests κ_lat). Opt-in via `--diag` flag. On synth graphs, computes
-  true PIT from ground truth for machinery validation. See doc 38.
-- **Quality-gated warm-start**: previous posteriors used as priors only
-  if rhat < 1.10 and ESS >= 100.
-- **Phase C contexted models**: per-slice hierarchy with native vector
-  RVs (`eps_slice_vec`, `log_kappa_slice_vec`, `eps_mu_slice_vec` —
-  shape `[n_slices]`) replacing per-slice scalar nodes. sigma and onset
-  are edge-level (shared across slices). Phase 1 window trajectories
-  batched into one `pm.Potential` per edge via
-  `_emit_batched_window_trajectories()`. Slice-axis metadata in
-  `build_model` return dict maps `ctx_key → slice_idx` for posterior
-  extraction. See doc 38c.
-- **Low-rank mass matrix**: `inference.py` always uses
-  `PyNutsSettings.LowRank`. Captures parameter correlations (tau-eps
-  funnels in contexted models, onset-mu ridges in all latency models)
-  that diagonal mass matrices cannot, yielding ~50% larger step sizes
-  and ~70% fewer leapfrog steps per draw.
+- **Latent onset**: per-edge learned onset (feature flag `latent_onset=True`, default on). Onset estimated via MCMC, not fixed from histogram.
+- **Recency weighting**: `_apply_recency_weights()` in evidence.py applies `exp(-ln2 * age / half_life_days)` to each trajectory.
+- **Zero-count filter**: likelihood-lossless removal of bins where neither y nor x changed (`zero_count_filter` flag, default True).
+- **Snapshot evidence**: `bind_snapshot_evidence()` queries snapshot DB directly, falls back to param files per edge. Merges trajectories with supplemental daily observations.
+- **Join-node mixture CDF**: `completeness.py:moment_matched_collapse()` builds mixture CDF at join nodes with moment matching. Differentiable PyTensor variant (`pt_moment_matched_collapse`) for MCMC gradients.
+- **Unified MCMC kappa**: single dispersion parameter per edge with LogNormal prior. Prior centre: (1) warm-start from previous posterior, (2) BetaBinomial MLE from endpoint data (empirical Bayes, doc 38), (3) default log(30). The MLE prior adapts to the data rather than imposing a fixed centre.
+- **PPC calibration** (`calibration.py`): posterior predictive coverage check — are the model's 90% intervals honest? Two categories: endpoint/daily (tests κ) and trajectory intervals (tests κ_lat). Opt-in via `--diag` flag. On synth graphs, computes true PIT from ground truth for machinery validation. See doc 38.
+- **Quality-gated warm-start**: previous posteriors used as priors only if rhat < 1.10 and ESS >= 100.
+- **Phase C contexted models**: per-slice hierarchy with native vector RVs (`eps_slice_vec`, `log_kappa_slice_vec`, `eps_mu_slice_vec` — shape `[n_slices]`) replacing per-slice scalar nodes. sigma and onset are edge-level (shared across slices). Phase 1 window trajectories batched into one `pm.Potential` per edge via `_emit_batched_window_trajectories()`. Slice-axis metadata in `build_model` return dict maps `ctx_key → slice_idx` for posterior extraction. See doc 38c.
+- **Low-rank mass matrix**: `inference.py` always uses `PyNutsSettings.LowRank`. Captures parameter correlations (tau-eps funnels in contexted models, onset-mu ridges in all latency models) that diagonal mass matrices cannot, yielding ~50% larger step sizes and ~70% fewer leapfrog steps per draw.
 
 ### Quality gates
 
@@ -300,22 +245,17 @@ Key implemented features:
 | `bayesQualityTier` | `src/utils/bayesQualityTier.ts` | Computes quality tier: failed/warning/good-0..3/no-data with colour palette |
 | `useBayesTrigger` | `src/hooks/useBayesTrigger.ts` | Full roundtrip orchestration: submit, poll, webhook, patch apply |
 
-Quality tier overlay mode colour-codes edges in `ConversionEdge.tsx`
-and `EdgeBeads.tsx`. `AnalysisInfoCard` Forecast tab shows full
-posterior diagnostics per edge.
+Quality tier overlay mode colour-codes edges in `ConversionEdge.tsx` and `EdgeBeads.tsx`. `AnalysisInfoCard` Forecast tab shows full posterior diagnostics per edge.
 
 ### Automation (nightly Bayes fit)
 
-`bayesReconnectService.ts` (426 lines) and `bayesPatchService.ts`
-(721 lines) implement the 3-phase automation pipeline:
+`bayesReconnectService.ts` (426 lines) and `bayesPatchService.ts` (721 lines) implement the 3-phase automation pipeline:
 
 - **Phase 0**: apply any pending patches from previous runs
 - **Phase 1**: fetch new data + commission Bayes fit
 - **Phase 2**: drain — poll until completion, apply results
 
-Integrated into `dailyAutomationJob.ts`. `runBayes` graph-level flag
-controls opt-in. Scheduler persistence via `reconcileBayesFitJob`
-with probe grace periods and stale cutoff thresholds.
+Integrated into `dailyAutomationJob.ts`. `runBayes` graph-level flag controls opt-in. Scheduler persistence via `reconcileBayesFitJob` with probe grace periods and stale cutoff thresholds.
 
 ## Shared Data Types
 
@@ -358,8 +298,5 @@ SlicePosteriorEntry: alpha, beta_param, p_hdi_lower/upper, mu/sigma mean/sd, ons
 
 ## Related Docs
 
-- **`DATA_SOURCES_REFERENCE.md`** — All external data sources (Amplitude,
-  Google Sheets, Statsig, PostgreSQL), credential types, fetch modes, and
-  schema file catalogue
-- **`ANALYSIS_TYPES_CATALOGUE.md`** — What each analysis type computes,
-  including snapshot-based types routed through this backend
+- **`DATA_SOURCES_REFERENCE.md`** — All external data sources (Amplitude, Google Sheets, Statsig, PostgreSQL), credential types, fetch modes, and schema file catalogue
+- **`ANALYSIS_TYPES_CATALOGUE.md`** — What each analysis type computes, including snapshot-based types routed through this backend

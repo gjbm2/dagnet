@@ -102,7 +102,6 @@ export function ModelVarsCards({
 
   const bayesian = findEntry(modelVars, 'bayesian');
   const analytic = findEntry(modelVars, 'analytic');
-  const manual = findEntry(modelVars, 'manual');
 
   // Collapse state: active card open, others closed. User can manually toggle.
   // Auto-open the active card when activeSource changes.
@@ -123,8 +122,10 @@ export function ModelVarsCards({
       // Already pinned to this source → unpin (revert to auto)
       onUpdate({ model_source_preference: undefined, model_source_preference_overridden: false });
     } else if (activeSource === source && !edgePreferenceOverridden) {
-      // Auto-selected but user is turning it OFF → pin to manual (user decision)
-      onUpdate({ model_source_preference: 'manual', model_source_preference_overridden: true });
+      // Auto-selected but user is turning it OFF → unpin (return to quality-gated default).
+      // Doc 73b §6.7 Action B7e: there is no `manual` source to pin to; clearing the active
+      // card returns to the auto/quality-gated state.
+      onUpdate({ model_source_preference: undefined, model_source_preference_overridden: false });
     } else {
       // Not active or pinned elsewhere → pin to this source
       onUpdate({ model_source_preference: source, model_source_preference_overridden: true });
@@ -132,7 +133,9 @@ export function ModelVarsCards({
   }, [disabled, edgePreference, edgePreferenceOverridden, activeSource, onUpdate]);
 
   // Output field commit: just set the field + override flag.
-  // updateEdgeParam handles manual model_vars entry creation centrally (doc 15 §5.3).
+  // Per doc 73b §6.7 Action B7c (Stage 3), no `model_vars[manual]` entry is auto-created
+  // and no selector is auto-pinned; the per-field `*_overridden` lock is the sole author
+  // mechanism (Action B8a).
   const handleOutputCommit = useCallback((field: string, value: number) => {
     if (field === 'mean') {
       onUpdate({ mean: value, mean_overridden: true });
@@ -150,18 +153,6 @@ export function ModelVarsCards({
       });
     }
   }, [promotedLatency, onUpdate]);
-
-  // Immediately flip source to manual on first keystroke (§17.3.4).
-  // Uses _noHistory for synchronous setGraph.
-  const handleOutputStartEdit = useCallback(() => {
-    if (disabled) return;
-    if (edgePreferenceOverridden && edgePreference === 'manual') return;
-    onUpdate({
-      model_source_preference: 'manual',
-      model_source_preference_overridden: true,
-      _noHistory: true,
-    });
-  }, [disabled, edgePreference, edgePreferenceOverridden, onUpdate]);
 
   const isPinned = (s: ModelSourcePreference) => edgePreferenceOverridden === true && edgePreference === s;
   const anyPinned = edgePreferenceOverridden === true;
@@ -242,22 +233,16 @@ export function ModelVarsCards({
         </CollapsibleSection>
       </div>
 
-      {/* ── Output (§17.2.3) — collapsible, defaults open ── */}
-      <div className={`mv-card-wrap ${isPinned('manual') ? 'mv-card-wrap--pinned' : isAutoOn('manual') ? 'mv-card-wrap--active' : ''}`}>
+      {/* ── Output (§17.2.3) — current-answer display (doc 73b §3.5).
+          No PinToggle: Output is L5 current-answer state, not a source. User authoring
+          happens via per-field locks on `mean`/`stdev`, not via selector pinning. ── */}
+      <div className="mv-card-wrap">
         <CollapsibleSection
-          title={<>Output{isAutoOn('manual') && <span className="collapsible-section-badge" style={{ marginLeft: '8px' }}>Auto</span>}</>}
+          title="Output"
           defaultOpen={true}
-          headerRight={
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
-              {isPinned('manual') && <SourceOverrideIcon onClear={() => handleToggle('manual')} />}
-              <PinToggle active={isAutoOn('manual')} pinned={isPinned('manual')}
-                onClick={() => handleToggle('manual')} disabled={disabled} />
-            </span>
-          }
         >
           <OutputCardBody
             onCommit={handleOutputCommit}
-            onStartEdit={handleOutputStartEdit}
             onClearFieldOverride={(flag, isLatency) => {
               if (isLatency) {
                 onUpdate({ latency: { ...promotedLatency, [flag]: false } });
@@ -396,13 +381,12 @@ function LatencyZapOff({ field, label, unit, step, dp, latency, onUpdate, disabl
 }
 
 // ── Output card body (§17.2.3) ──────────────────────────────────────────────
-// Each field uses AutomatableField for the standard override indicator.
-// On blur, handleOutputCommit creates/updates the manual model_vars entry,
-// sets _overridden, and pins to manual — all in one onUpdate call.
+// L5 current-answer display (doc 73b §3.5). Each field uses AutomatableField for the
+// standard override indicator. On commit, handleOutputCommit writes the value and flips
+// the per-field `*_overridden` lock — that is the sole author mechanism (Action B8a).
 
-function OutputCardBody({ onCommit, onStartEdit, onClearFieldOverride, promotedMean, promotedStdev, meanOverridden, stdevOverridden, promotedLatency, latencyEnabled, disabled }: {
+function OutputCardBody({ onCommit, onClearFieldOverride, promotedMean, promotedStdev, meanOverridden, stdevOverridden, promotedLatency, latencyEnabled, disabled }: {
   onCommit: (field: string, value: number) => void;
-  onStartEdit: () => void;
   onClearFieldOverride: (flag: string, isLatency?: boolean) => void;
   meanOverridden?: boolean; stdevOverridden?: boolean;
   promotedMean?: number; promotedStdev?: number; promotedLatency?: LatencyConfig;
@@ -415,7 +399,7 @@ function OutputCardBody({ onCommit, onStartEdit, onClearFieldOverride, promotedM
           onClearOverride={() => onClearFieldOverride('mean_overridden')}>
           <ProbabilityInput
             value={promotedMean ?? 0}
-            onChange={(v) => { onStartEdit(); onCommit('mean', v); }}
+            onChange={(v) => { onCommit('mean', v); }}
             onCommit={(v) => onCommit('mean', v)}
             disabled={disabled}
             min={0} max={1} step={0.01}
@@ -423,7 +407,7 @@ function OutputCardBody({ onCommit, onStartEdit, onClearFieldOverride, promotedM
         </AutomatableField>
         <OutputInput label="stdev" field="stdev" value={promotedStdev} dp={4}
           overridden={stdevOverridden} onClearOverride={() => onClearFieldOverride('stdev_overridden')}
-          onCommit={onCommit} onStartEdit={onStartEdit} disabled={disabled} />
+          onCommit={onCommit} disabled={disabled} />
       </FieldGroup>
       {/* Edge-level latency — only when latency tracking enabled */}
       {latencyEnabled && promotedLatency?.mu != null && (
@@ -451,16 +435,14 @@ function OutputCardBody({ onCommit, onStartEdit, onClearFieldOverride, promotedM
 }
 
 /** Single output field: AutomatableField + input with blur-to-commit. */
-function OutputInput({ label, field, value, dp, pct, unit, overridden, onClearOverride, onCommit, onStartEdit, disabled }: {
+function OutputInput({ label, field, value, dp, pct, unit, overridden, onClearOverride, onCommit, disabled }: {
   label: string; field: string; value?: number; dp: number; pct?: boolean; unit?: string;
   overridden?: boolean; onClearOverride?: () => void;
   onCommit: (field: string, value: number) => void;
-  onStartEdit: () => void;
   disabled: boolean;
 }) {
   const display = value !== undefined ? (pct ? (value * 100).toFixed(dp) : value.toFixed(dp)) : '';
   const [local, setLocal] = useState(display);
-  const [dirty, setDirty] = useState(false);
   React.useEffect(() => { setLocal(display); }, [display]);
 
   return (
@@ -473,10 +455,6 @@ function OutputInput({ label, field, value, dp, pct, unit, overridden, onClearOv
           value={local}
           onChange={(e) => {
             setLocal(e.target.value);
-            if (!dirty) {
-              setDirty(true);
-              onStartEdit(); // Immediately flip source on first keystroke
-            }
           }}
           onBlur={() => {
             const raw = parseFloat(local);
@@ -487,7 +465,6 @@ function OutputInput({ label, field, value, dp, pct, unit, overridden, onClearOv
                 onCommit(field, v);
               }
             }
-            setDirty(false);
           }}
           disabled={disabled}
           style={{ width: '60px', padding: '2px 6px', fontSize: '11px' }}

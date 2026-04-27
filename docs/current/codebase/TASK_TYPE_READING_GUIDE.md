@@ -4,6 +4,18 @@ Identify your task type below, then read the listed docs **before writing any co
 
 All docs are in `docs/current/codebase/` unless a full path is given.
 
+## Cold start (new agent, no specific task yet)
+
+Read in order:
+
+1. **DOMAIN_PRIMER.md** **(full)** — what DagNet does + 3 load-bearing concepts (DSL window/cohort, 4-layer state, source vs query-scoped layers).
+2. **TOPOLOGY.md** **(full)** — system map, 14 subsystems in one paragraph each, where complexity actually lives.
+3. **GLOSSARY.md** **(skim)** — pin while reading; resolve acronyms as you encounter them.
+4. **TOUR_PROBABILITY_EDIT.md** **(full)** — concrete trace through every layer in 12 frames.
+5. **Warm-start required reads** — SYNC_SYSTEM_OVERVIEW.md, RESERVED_QUERY_TERMS_GLOSSARY.md, DEV_ENVIRONMENT_AND_HMR.md, KNOWN_ANTI_PATTERNS.md.
+6. **INVARIANTS.md** **(ref)** — flat list of must-be-true rules; consult while making changes.
+7. Then identify your specific task below.
+
 ## Fixing a state/sync/dirty-tracking bug
 - DEV_ENVIRONMENT_AND_HMR.md **(ref — "Server freshness verification" section)** — run `scripts/dev-server-check.sh` before blaming staleness
 - DIAGNOSTIC_PLAYBOOKS.md **(full — find matching symptom)** — structured checklists by symptom type

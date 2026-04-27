@@ -4,7 +4,7 @@ How visual analysis cards work on the graph canvas: creation, computation, scena
 
 ## What Canvas Analyses Are
 
-Canvas analyses are visual analysis cards positioned on the graph canvas. They display computed analytical insights (funnel metrics, cohort maturity, lag histograms, etc.) inline without leaving the canvas view.
+Visual analysis cards positioned on the graph canvas. They display computed analytical insights (funnel metrics, cohort maturity, lag histograms, etc.) inline without leaving the canvas view.
 
 ## Data Model: Container + Content Items
 
@@ -146,7 +146,7 @@ Tab labels map `kind` to display names: Overview, Structure, Evidence, Model, La
 
 ## Evidence Tab (Snapshot Calendar)
 
-The `edge_info` analysis type supports a `evidence` card kind which renders `SnapshotCalendarSection` — a dual-month calendar showing which days have snapshot data for that edge.
+The `edge_info` analysis type supports an `evidence` card kind which renders `SnapshotCalendarSection` — a dual-month calendar showing which days have snapshot data for that edge.
 
 ### Single codepath for hover and canvas
 
@@ -158,7 +158,7 @@ Both paths pass a `source` object `{ graph, edgeId, effectiveDSL, workspace }`. 
 
 ### Context filtering
 
-The evidence tab includes a context filter UI driven by `useContextDropdown` (shared hook, same as WindowSelector's "+ Context" button). The three-state UI pattern: button → `ContextValueSelector` dropdown → `QueryExpressionEditor` chips.
+The evidence tab includes a context filter UI driven by `useContextDropdown` (shared hook, same as WindowSelector's "+ Context" button). Three-state UI pattern: button → `ContextValueSelector` dropdown → `QueryExpressionEditor` chips.
 
 Context filtering uses two levels:
 1. **Hash level**: context *dimension* changes the `core_hash` (channel-contexted ≠ device-contexted ≠ uncontexted). Selecting a dimension causes a re-fetch with the dimension-specific hash.
@@ -168,7 +168,7 @@ Context filtering uses two levels:
 
 The evidence tab depends on `NavigatorContext` for workspace (`selectedRepo`, `selectedBranch`). Navigator loads asynchronously and can take several seconds after F5. The fetch effect guards on `sourceRepo && sourceBranch` being non-empty to avoid firing with `workspace: undefined`. The `evidenceTabExtra` memo in `CanvasAnalysisNode` also guards on `navState.selectedRepo && navState.selectedBranch`.
 
-Additionally, `edge_info` is a FE-only analysis type that bypasses the `scenariosReady` gate in `analysisComputePreparationService.ts` — it doesn't need scenario composition.
+`edge_info` is a FE-only analysis type that bypasses the `scenariosReady` gate in `analysisComputePreparationService.ts` — it doesn't need scenario composition.
 
 ## Key Design Principles
 

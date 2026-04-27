@@ -3,7 +3,7 @@
 **Source**: `docs/current/project-canvas/0-architecture.md` (sections 2-5)
 **Last reviewed**: 17-Mar-26
 
-This doc covers the rendering layer, z-index model, and transform pipeline for canvas objects (post-its, containers, canvas analyses).
+Rendering layer, z-index model, and transform pipeline for canvas objects (post-its, containers, canvas analyses).
 
 ---
 
@@ -50,7 +50,7 @@ ReactFlow renders nodes in the order they appear in the `nodes` array. Later ele
 
 ### Within-Type Z-Order
 
-Array position in the graph data: `graph.postits[0]` = back, `graph.postits[last]` = front. Z-order context menu operations reorder the graph array, then a `reorder*Nodes()` helper sorts the ReactFlow nodes array to match.
+Array position in graph data: `graph.postits[0]` = back, `graph.postits[last]` = front. Z-order context menu operations reorder the graph array, then a `reorder*Nodes()` helper sorts the ReactFlow nodes array to match.
 
 ---
 
@@ -73,7 +73,7 @@ Setting `nodesDraggable={false}` and `elementsSelectable={false}` on ReactFlow i
 
 ## 3. Tool Mode State — Context, Not Props
 
-`activeElementTool` state must reach `CanvasInner` reliably. It cannot be passed as a prop through `GraphCanvas` because `canvasComponent` is wrapped in `useMemo` that doesn't include it in deps.
+`activeElementTool` state must reach `CanvasInner` reliably. Cannot be passed as a prop through `GraphCanvas` because `canvasComponent` is wrapped in `useMemo` that doesn't include it in deps.
 
 **Solution**: `ElementToolContext` provides tool state per graph tab. `GraphEditorInner` provides it; `CanvasInner` and node components consume via `useElementTool()`.
 

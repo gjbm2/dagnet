@@ -2,9 +2,8 @@
 
 **Date**: 2-Apr-26
 **Purpose**: Complete grammar, operators, composition rules, and semantics for
-DagNet's query DSL. Companion to `DSL_PARSING_ARCHITECTURE.md` (which covers
-the code modules) and `DATA_RETRIEVAL_QUERIES.md` (which covers the three
-purposes of queries).
+DagNet's query DSL. Companion to `DSL_PARSING_ARCHITECTURE.md` (code modules)
+and `DATA_RETRIEVAL_QUERIES.md` (three purposes of queries).
 
 **Canonical schemas**: `public/schemas/query-dsl-1.0.0.json` (v1.0),
 `public/schemas/query-dsl-1.1.0.json` (v1.1, current).
@@ -22,14 +21,14 @@ All queries follow a dot-notation function-call syntax:
 function(arg1, arg2, ...).function(arg3).function(arg4:value)...
 ```
 
-Function order is normalised internally — the canonical ordering is:
+Function order is normalised internally — canonical ordering:
 
 ```
 visited → visitedAny → exclude → case → context → contextAny → window → cohort → asat
 ```
 
-This means `context(key:val).visited(a)` and `visited(a).context(key:val)` are
-equivalent after normalisation.
+`context(key:val).visited(a)` and `visited(a).context(key:val)` are equivalent
+after normalisation.
 
 ---
 
@@ -146,8 +145,8 @@ context(channel).context(browser) →
 ### Uncontexted Slice in Pinned DSL
 
 In a pinned DSL (graph `dataInterestsDSL`), an empty element in a
-semicolon or `or()` list means "also fetch the uncontexted
-aggregate". All of the following forms are equivalent:
+semicolon or `or()` list means "also fetch the uncontexted aggregate".
+Equivalent forms:
 
 ```
 (window(-90d:)).(context(channel);context())    → 3 channel + 1 bare
@@ -159,13 +158,11 @@ aggregate". All of the following forms are equivalent:
 
 `context()` in a semicolon/or position is treated as "include the
 uncontexted slice" — the temporal clause is emitted without any
-context qualifier. This is handled by `explodeDSL` in
-`dslExplosion.ts`.
+context qualifier. Handled by `explodeDSL` in `dslExplosion.ts`.
 
 Note: `context()` retains its "whole clear" meaning in scenario
-delta layering (`composeConstraints`). The disambiguation is by
-context — pinned DSL explosion vs scenario composition use
-different code paths.
+delta layering (`composeConstraints`). Disambiguation is by context —
+pinned DSL explosion vs scenario composition use different code paths.
 
 ### Context Merging in Scenario Layers
 
@@ -213,10 +210,9 @@ Always direct by node ID.
 Queries serve three distinct purposes (see `DATA_RETRIEVAL_QUERIES.md` for
 detail):
 
-1. **Topology filtering** — prune graph to subgraph matching path
-   constraints.
+1. **Topology filtering** — prune graph to subgraph matching path constraints.
 2. **Conditional metadata** — semantic constraint defining when an edge's
-   probability applies (the `condition` field on `conditional_p` entries).
+   probability applies (`condition` field on `conditional_p` entries).
 3. **Data retrieval** — construct queries for external data sources to fetch
    n/k counts. Critical for multi-parent edges where `exclude()` isolates
    the direct path.
@@ -231,7 +227,7 @@ distinct roles** on the request. Confusing them is a common source of bugs.
 ### 1. `analytics_dsl` (data subject — per scenario)
 
 The path being analysed: `from(x).to(y)`. Identifies *which edge(s)* to query
-in the snapshot DB. Constant across scenarios for a given chart — it describes
+in the snapshot DB. Constant across scenarios for a given chart — describes
 the data subject, not the temporal window.
 
 - **Set by**: `contentItem.analytics_dsl` (canvas analysis content item)
@@ -241,7 +237,7 @@ the data subject, not the temporal window.
 
 ### 2. `effective_query_dsl` (temporal/context clause — per scenario)
 
-The temporal window, context segmentation, and asat clause: e.g.
+Temporal window, context segmentation, and asat clause: e.g.
 `window(-90d:)`, `cohort(1-Jan-26:1-Apr-26).context(channel:google)`. Varies
 per scenario — each live scenario can have a different window or context.
 
@@ -257,14 +253,14 @@ per scenario — each live scenario can have a different window or context.
 There is no top-level `query_dsl` on the request. The subject
 (`analytics_dsl`) is top-level; the temporal (`effective_query_dsl`) is
 per-scenario. Both snapshot and non-snapshot analysis types use the same
-shape. The BE reads `analytics_dsl` for subject resolution (standard
-runner) and composes it with each scenario's `effective_query_dsl` for
-snapshot subject resolution (doc 31). The `query_dsl` field is deprecated
-and accepted only for backward compatibility with old clients (8-Apr-26).
+shape. The BE reads `analytics_dsl` for subject resolution (standard runner)
+and composes it with each scenario's `effective_query_dsl` for snapshot
+subject resolution (doc 31). The `query_dsl` field is deprecated and
+accepted only for backward compatibility with old clients (8-Apr-26).
 
 ### 3. `dataInterestsDSL` (pinned query — graph-level)
 
-The nightly retrieval template stored on the graph itself. Controls which
+Nightly retrieval template stored on the graph itself. Controls which
 slices the daily batch runner fetches and caches. Uses enumeration syntax
 (`context(channel)` without a value) to generate Cartesian products of slices.
 
@@ -277,12 +273,20 @@ slices the daily batch runner fetches and caches. Uses enumeration syntax
 
 ### Shorthand composition
 
-In the CLI or single-scenario cases, `analytics_dsl` and `query_dsl` are
-sometimes concatenated for convenience: `from(x).to(y).window(-90d:)`. This is
-a valid DSL string but masks the fact that the subject and temporal parts serve
-different purposes and vary independently. The BE must be able to handle them
-arriving separately (per-scenario `analytics_dsl` + top-level `query_dsl`) as
-the canonical form.
+In CLI or single-scenario cases, `analytics_dsl` and `query_dsl` are
+sometimes concatenated for convenience: `from(x).to(y).window(-90d:)`. Valid
+DSL string but masks the fact that subject and temporal parts serve
+different purposes and vary independently. The BE must handle them
+arriving separately (per-scenario `analytics_dsl` + top-level `query_dsl`)
+as the canonical form.
+
+### Anti-pattern 19: Conflating distinct DSL concepts in a single variable
+
+**Signature**: a variable called `queryDsl` sometimes holds the analytics DSL (`from(x).to(y)`) and sometimes the temporal DSL (`window(-90d:)`). Code downstream assumes one meaning but receives the other.
+
+**Root cause**: `analytics_dsl` (data subject, constant across scenarios) and `query_dsl` (temporal/context, varies per scenario) are fundamentally different concepts that happen to use the same DSL syntax. Combining them loses the distinction.
+
+**Fix**: keep them separate throughout the pipeline. The FE sends `analytics_dsl` at top level (constant — the subject) and `effective_query_dsl` per scenario (varies — the temporal). Use the role names defined above; never name a variable just `queryDsl` or `dsl` without indicating which role it carries.
 
 ---
 

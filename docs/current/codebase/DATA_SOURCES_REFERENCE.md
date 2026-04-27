@@ -1,18 +1,13 @@
 # Data Sources & Schema Reference
 
 **Date**: 2-Apr-26
-**Purpose**: Enumerates all external data sources DagNet can connect to, their
-contracts, and authentication. Also catalogues the canonical schema files and
-their relationships.
+**Purpose**: Enumerates all external data sources DagNet can connect to, their contracts, and authentication. Catalogues canonical schema files and their relationships.
 
 ---
 
 ## Part 1: External Data Sources
 
-DagNet connects to external sources via the **Data Adapter Service (DAS)**,
-a pluggable transformation pipeline defined in `connections.yaml`. Each adapter
-converts DagNet queries to provider-specific API requests and transforms
-responses back into parameter values.
+DagNet connects to external sources via the **Data Adapter Service (DAS)**, a pluggable transformation pipeline defined in `connections.yaml`. Each adapter converts DagNet queries to provider-specific API requests and transforms responses back into parameter values.
 
 ### Amplitude Analytics
 
@@ -26,16 +21,13 @@ responses back into parameter values.
 | **Rate limits** | ~360 requests/hour (standard tier) |
 
 **Query semantics**:
-- **Window mode**: X-anchored (event date window). Aggregated counts for users
-  encountering events within the date range.
-- **Cohort mode**: A-anchored (cohort entry window). Returns data for users
-  entering the funnel during the cohort window.
+- **Window mode**: X-anchored (event date window). Aggregated counts for users encountering events within the date range.
+- **Cohort mode**: A-anchored (cohort entry window). Returns data for users entering the funnel during the cohort window.
 - Supports native `exclude()` via inline behavioural cohorts (segment filters).
 - Supports `visited()` via ordered funnel steps.
 - Maximum funnel length: 10 steps.
 - Supports daily time-series breakdown (`i=1` parameter).
-- Composite queries (`minus()`/`plus()`) used as fallback when provider doesn't
-  support native exclusion.
+- Composite queries (`minus()`/`plus()`) used as fallback when provider doesn't support native exclusion.
 
 **Configuration** (in `connections.yaml`):
 ```yaml
@@ -105,15 +97,13 @@ connection_string_schema:
 
 **Query semantics**:
 - Adapter builds SQL queries from DagNet DSL.
-- Supports native `exclude()` (via WHERE), `visited()` (via JOIN/subqueries),
-  and ordered funnel logic.
+- Supports native `exclude()` (via WHERE), `visited()` (via JOIN/subqueries), and ordered funnel logic.
 
 ---
 
 ## Credential Types
 
-Credentials are stored in `credentials.yaml` and referenced by `credsRef`
-in connections.
+Stored in `credentials.yaml` and referenced by `credsRef` in connections.
 
 | Auth Type | Fields | Auto-Processing |
 |---|---|---|
@@ -135,17 +125,14 @@ in connections.
 
 ## Query Compilation (MSMDC)
 
-DagNet auto-generates optimal query strings via **Minimal Set of Maximally
-Discriminating Constraints** (see `PYTHON_BACKEND_ARCHITECTURE.md`):
+DagNet auto-generates optimal query strings via **Minimal Set of Maximally Discriminating Constraints** (see `PYTHON_BACKEND_ARCHITECTURE.md`):
 
 1. Anchor: `from(edge.from).to(edge.to)`
 2. Discriminate: find paths that don't use the direct edge
 3. Add constraints (`visited()`/`exclude()`) until unique
 4. Complexity management: avoids 2^k explosion via DAG reachability
 
-For edges requiring dual n/k queries (upstream-conditioned paths), MSMDC
-generates separate `query` (for k) and `n_query` (for n) strings. See
-`FETCH_PLANNING_PRINCIPLES.md` for the fill-missing + refresh-stale contract.
+For edges requiring dual n/k queries (upstream-conditioned paths), MSMDC generates separate `query` (for k) and `n_query` (for n) strings. See `FETCH_PLANNING_PRINCIPLES.md` for the fill-missing + refresh-stale contract.
 
 ---
 
@@ -192,5 +179,4 @@ conversion-graph-1.1.0.json  (canonical source of truth)
   Python backend types  (Evidence, Latency, SlicePosteriorEntry, QueryPayload, etc.)
 ```
 
-TypeScript types in `src/types/index.ts` are maintained manually but track
-the same shapes.
+TypeScript types in `src/types/index.ts` are maintained manually but track the same shapes.

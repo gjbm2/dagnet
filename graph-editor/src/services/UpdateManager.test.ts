@@ -1645,16 +1645,20 @@ describe('UpdateManager', () => {
   });
 });
 
-// ── updateEdgeProbability + model_vars auto-creation (doc 15 §5.3) ─────────
+// ── updateEdgeProbability override semantics (doc 73b §6.7 Actions B7c, B7d) ──
+// Stage 3: output overtype writes the field plus its `*_overridden` lock and
+// nothing else. It does NOT auto-create a `model_vars[manual]` entry and does
+// NOT pin the selector. The per-field lock alone is the canonical author
+// mechanism (Action B8a).
 
-describe('updateEdgeProbability: auto-creates manual model_vars entry', () => {
+describe('updateEdgeProbability: override does not touch model_vars or selector', () => {
   const um = new UpdateManager();
   const analyticMV = {
     source: 'analytic', source_at: '20-Mar-26',
     probability: { mean: 0.12, stdev: 0.03 },
   };
 
-  it('creates manual entry and pins to manual when setOverrideFlag + model_vars exists', () => {
+  it('sets mean_overridden = true without touching model_vars or selector', () => {
     const graph = {
       edges: [{
         uuid: 'e1', id: 'e1',
@@ -1667,15 +1671,16 @@ describe('updateEdgeProbability: auto-creates manual model_vars entry', () => {
     const result = um.updateEdgeProbability(graph, 'e1', { mean: 0.25 }, { setOverrideFlag: true });
 
     const p = result.edges[0].p;
+    expect(p.mean).toBeCloseTo(0.25, 2);
     expect(p.mean_overridden).toBe(true);
-    expect(p.model_source_preference).toBe('manual');
-    expect(p.model_source_preference_overridden).toBe(true);
-    const manual = p.model_vars.find((e: any) => e.source === 'manual');
-    expect(manual).toBeDefined();
-    expect(manual.probability.mean).toBeCloseTo(0.25, 2);
+    // model_vars and selector untouched by overtype.
+    expect(p.model_vars).toEqual([analyticMV]);
+    expect(p.model_source_preference).toBeUndefined();
+    expect(p.model_source_preference_overridden).toBeUndefined();
+    expect(p.model_vars.some((e: any) => e.source === 'manual')).toBe(false);
   });
 
-  it('does NOT create manual entry when model_vars is absent', () => {
+  it('with no model_vars on the edge, overtype still leaves selector unpinned', () => {
     const graph = {
       edges: [{ uuid: 'e1', id: 'e1', p: { mean: 0.12, stdev: 0.03 } }],
       metadata: { updated_at: '' },
@@ -1685,9 +1690,10 @@ describe('updateEdgeProbability: auto-creates manual model_vars entry', () => {
 
     expect(result.edges[0].p.model_vars).toBeUndefined();
     expect(result.edges[0].p.model_source_preference).toBeUndefined();
+    expect(result.edges[0].p.mean_overridden).toBe(true);
   });
 
-  it('does NOT create manual entry when setOverrideFlag is false (automated update)', () => {
+  it('automated update (setOverrideFlag=false) sets neither lock nor selector', () => {
     const graph = {
       edges: [{
         uuid: 'e1', id: 'e1',
@@ -1699,6 +1705,7 @@ describe('updateEdgeProbability: auto-creates manual model_vars entry', () => {
     const result = um.updateEdgeProbability(graph, 'e1', { mean: 0.25 }, { setOverrideFlag: false });
 
     expect(result.edges[0].p.model_source_preference).toBeUndefined();
+    expect(result.edges[0].p.mean_overridden).toBeFalsy();
   });
 });
 

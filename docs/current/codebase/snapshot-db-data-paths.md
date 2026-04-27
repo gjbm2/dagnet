@@ -17,7 +17,7 @@ Table `signature_registry` — maps structured signatures to core hashes.
 
 ## Hash Mappings (`hash-mappings.json` in data repo)
 
-When graph structure changes (event definition, filter, latency_parameter toggle), the core_hash changes. The hash-mappings file links old hashes to new ones via `equivalent_to` entries. The query functions accept `equivalent_hashes` to expand the hash family, so historical data under old hashes is still found.
+When graph structure changes (event definition, filter, latency_parameter toggle), the core_hash changes. The hash-mappings file links old hashes to new ones via `equivalent_to` entries. Query functions accept `equivalent_hashes` to expand the hash family, so historical data under old hashes is still found.
 
 ## Two Read Paths
 
@@ -25,24 +25,15 @@ When graph structure changes (event definition, filter, latency_parameter toggle
 
 **Used by**: FE analysis derivations (cohort maturity, daily conversions, etc.)
 
-Returns ONE row per `(anchor_day, slice_key)` — the **latest** row as-of a given `as_at` timestamp. "Latest wins" — older retrievals are superseded by newer ones. This gives a single cross-sectional picture: "what does the data look like right now?"
+Returns ONE row per `(anchor_day, slice_key)` — the **latest** row as-of a given `as_at` timestamp. "Latest wins" — older retrievals are superseded by newer ones. Single cross-sectional picture: "what does the data look like right now?"
 
-**asat() evidence reconstruction** (doc 42): when `asat(date)` is in
-the DSL, `getParameterFromFile` in `fileToGraphSync.ts` calls
-`querySnapshotsVirtual` with `as_at = asat_date` to reconstruct the
-daily arrays (n_daily, k_daily, dates) as they would have appeared at
-the asat date. The reconstructed arrays replace the file-cached arrays
-in memory, then flow through the normal aggregation pipeline (evidence
-scalars, topo pass, blended rate). If no snapshot rows exist for the
-asat date, falls back to truncating file-cached arrays by anchor date
-(approximation — cohorts appear too mature). The `getFromSourceDirect`
-path delegates to `getParameterFromFile` for asat queries.
+**asat() evidence reconstruction** (doc 42): when `asat(date)` is in the DSL, `getParameterFromFile` in `fileToGraphSync.ts` calls `querySnapshotsVirtual` with `as_at = asat_date` to reconstruct the daily arrays (n_daily, k_daily, dates) as they would have appeared at the asat date. The reconstructed arrays replace the file-cached arrays in memory, then flow through the normal aggregation pipeline (evidence scalars, topo pass, blended rate). If no snapshot rows exist for the asat date, falls back to truncating file-cached arrays by anchor date (approximation — cohorts appear too mature). The `getFromSourceDirect` path delegates to `getParameterFromFile` for asat queries.
 
 ### 2. Sweep Query (`query_snapshots_for_sweep`)
 
 **Used by**: Bayes compiler (via `worker._query_snapshot_subjects`)
 
-Returns ALL raw rows where `anchor_day` is in range AND `retrieved_at` is in the sweep window. No deduplication — every historical retrieval is returned. This gives the full maturation history: for each anchor_day, you see how y grew over successive retrieval dates.
+Returns ALL raw rows where `anchor_day` is in range AND `retrieved_at` is in the sweep window. No deduplication — every historical retrieval is returned. Full maturation history: for each anchor_day, you see how y grew over successive retrieval dates.
 
 ### Key Implication
 
@@ -67,7 +58,7 @@ Over time, each anchor_day accumulates one row per nightly fetch during the peri
 
 ## Synth Data Generator (`synth_gen.py`)
 
-Writes the **full triangular matrix**: every anchor_day × every fetch night. With 100 days and 95% fetch success rate, each anchor_day has ~94 rows. This is much denser than production data (5-27 rows per anchor_day) because:
+Writes the **full triangular matrix**: every anchor_day × every fetch night. With 100 days and 95% fetch success rate, each anchor_day has ~94 rows. Much denser than production data (5-27 rows per anchor_day) because:
 - Production windows are selective (only active maturation window)
 - Synth gen writes all anchor_days on every fetch night
 
@@ -101,15 +92,11 @@ Cohort obs: denominator = max(a) (fixed for anchor_day), y = cumulative conversi
 - CDF is path-level: P(reach to_node by age t | entered anchor)
 - x(t) directly observes the upstream CDF: x(t)/a ≈ p_upstream × CDF_upstream(t)
 
-For join nodes, x(t) is the TOTAL arrivals from ALL incoming edges
-to the from-node (sum across all paths into that node).
+For join nodes, x(t) is the TOTAL arrivals from ALL incoming edges to the from-node (sum across all paths into that node).
 
 ### Redundant-frame filtering
 
-Trajectory ages where NEITHER x nor y changed are dropped — they
-contribute zero information to the likelihood. This is critical for
-synth data (94 ages → 2-21 after filtering) and harmless for production
-data (5-27 ages, most have changes).
+Trajectory ages where NEITHER x nor y changed are dropped — they contribute zero information to the likelihood. Critical for synth data (94 ages → 2-21 after filtering) and harmless for production data (5-27 ages, most have changes).
 
 ## Model Builder (`compiler/model.py`)
 

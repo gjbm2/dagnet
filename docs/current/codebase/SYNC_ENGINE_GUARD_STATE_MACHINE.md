@@ -3,7 +3,7 @@
 **Source**: `docs/current/refactor/b1-sync-engine-design.md` (sections 2-3)
 **Last reviewed**: 17-Mar-26
 
-This doc encodes the implicit state machine that governs GraphCanvas's sync guard behaviour — the set of refs that control which sync direction fires and when.
+Encodes the implicit state machine governing GraphCanvas's sync guard behaviour — the set of refs controlling which sync direction fires and when.
 
 **See also**: `SYNC_SYSTEM_OVERVIEW.md` (integrative map), `GRAPH_WRITE_SYNC_ARCHITECTURE.md` (the edit propagation pipeline these guards protect)
 
@@ -11,7 +11,7 @@ This doc encodes the implicit state machine that governs GraphCanvas's sync guar
 
 ## 1. The Guard Refs
 
-The sync engine's behaviour is controlled by 9 refs that form an implicit mutual exclusion protocol: "don't run X while Y is in progress."
+The sync engine's behaviour is controlled by 9 refs forming an implicit mutual exclusion protocol: "don't run X while Y is in progress."
 
 ### Primary sync guards (control which sync direction fires)
 
@@ -41,7 +41,7 @@ The sync engine's behaviour is controlled by 9 refs that form an implicit mutual
 
 ## 2. Guard Check Sites
 
-Every location where a guard ref is read to make a control flow decision:
+Every location where a guard ref is read for control flow:
 
 | Guard | Check site | Decision |
 |---|---|---|
@@ -67,7 +67,7 @@ Every location where a guard ref is read to make a control flow decision:
 
 ## 3. Guard API (`syncGuards.ts`)
 
-The guards are now formalised in `canvas/syncGuards.ts` as a module-level singleton with named transition functions. External code calls named operations rather than directly mutating refs.
+Guards are formalised in `canvas/syncGuards.ts` as a module-level singleton with named transition functions. External code calls named operations rather than directly mutating refs.
 
 ### Transition functions (called by external code)
 
@@ -129,7 +129,17 @@ The 9 guards group into 3 logical domains:
 
 ---
 
-## 6. Key Source Locations
+## 6. Pitfalls
+
+### Anti-pattern 9: Suppression-window race during rapid mutations
+
+**Signature**: state appears correct immediately after a change but reverts to a previous value after ~500ms.
+
+**Root cause**: store→file sync sets a 500ms suppression window on file→store sync. If the suppression expires before all pending FileRegistry writes complete, a stale file notification can overwrite the store.
+
+**Fix**: check `suppressFileToStoreUntilRef` timing. Check `writtenStoreContentsRef` for stale-echo detection. See `SYNC_SYSTEM_OVERVIEW.md` for the full guard system.
+
+## 7. Key Source Locations
 
 - `canvas/syncGuards.ts` — guard API + module-level singleton
 - `canvas/useGraphSync.ts` — sync engine hook, guard binding

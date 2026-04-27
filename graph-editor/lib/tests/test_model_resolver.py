@@ -234,7 +234,8 @@ class TestResolverCanonicalContractOverRealGraphs:
         result = resolve_model_params(edge, scope='edge', temporal_mode='window')
         assert result is not None
         # Source should be one of the valid values
-        assert result.source in ('analytic', 'bayesian', 'manual', ''), \
+        # Doc 73b §3.1 / S2: 'manual' has been retired from the source ledger.
+        assert result.source in ('analytic', 'bayesian', ''), \
             f"Unexpected source: {result.source}"
 
     def test_source_curves_populated(self):
@@ -252,7 +253,7 @@ class TestResolverCanonicalContractOverRealGraphs:
 
         # Every model_vars source should appear in source_curves
         for src in expected_sources:
-            if src in ('analytic', 'bayesian', 'manual'):
+            if src in ('analytic', 'bayesian'):
                 assert src in actual_sources, \
                     f"Missing source curve: {src}"
 
@@ -275,8 +276,12 @@ class TestResolverCanonicalContractOverRealGraphs:
         assert result is not None
         assert result.p_mean == 0.0
 
-    def test_manual_source_has_no_fitted_at(self):
-        """Manual source edge doesn't require fitted_at."""
+    def test_stale_manual_source_is_treated_as_not_present(self):
+        """Doc 73b §6.7 / OP1: stale `'manual'` model_vars entries and selector
+        preferences are treated as not-present at runtime (graceful-degrade).
+        The resolver yields no promoted source — it does not error and does
+        not select the manual entry.
+        """
         from runner.model_resolver import resolve_model_params
 
         edge = {
@@ -294,8 +299,10 @@ class TestResolverCanonicalContractOverRealGraphs:
         }
         result = resolve_model_params(edge, scope='edge', temporal_mode='window')
         assert result is not None
-        assert result.source == 'manual'
-        # fitted_at may be source_at or None — both are acceptable
+        # 'manual' is filtered out of source_curves; no other source exists,
+        # so the resolver returns the empty default.
+        assert result.source == ''
+        assert 'manual' not in result.source_curves
 
     def test_resolver_reads_model_vars_entry_not_flat_fields(self):
         """When flat fields and ModelVarsEntry disagree, resolver picks
@@ -356,9 +363,10 @@ class TestResolverCanonicalContractOverRealGraphs:
                         'probability': {'mean': 0.5},
                     },
                     {
-                        'source': 'manual',
+                        'source': 'bayesian',
                         'latency': {'mu': 4.0, 'sigma': 1.0},
                         'probability': {'mean': 0.7},
+                        'quality': {'gate_passed': True},
                     },
                 ],
             }
@@ -368,17 +376,17 @@ class TestResolverCanonicalContractOverRealGraphs:
         assert result.source == 'analytic'
         assert abs(result.edge_latency.mu - 2.0) < 1e-6
 
-        # With graph_preference=manual: edge preference still wins
+        # With graph_preference=bayesian: edge preference still wins
         result = resolve_model_params(edge, scope='edge', temporal_mode='window',
-                                       graph_preference='manual')
+                                       graph_preference='bayesian')
         assert result.source == 'analytic'
         assert abs(result.edge_latency.mu - 2.0) < 1e-6
 
         # When the edge has no preference, the graph default is used
         edge['p'].pop('model_source_preference', None)
         result = resolve_model_params(edge, scope='edge', temporal_mode='window',
-                                       graph_preference='manual')
-        assert result.source == 'manual'
+                                       graph_preference='bayesian')
+        assert result.source == 'bayesian'
         assert abs(result.edge_latency.mu - 4.0) < 1e-6
 
 

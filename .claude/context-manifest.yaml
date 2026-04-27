@@ -15,9 +15,12 @@ version: 1
 # Warm-start docs are required context for ANY edit to a scoped path.
 # They are named in CLAUDE.md's MANDATORY warm-start section.
 warm_start:
+  - docs/current/codebase/TOPOLOGY.md
+  - docs/current/codebase/GLOSSARY.md
   - docs/current/codebase/SYNC_SYSTEM_OVERVIEW.md
   - docs/current/codebase/RESERVED_QUERY_TERMS_GLOSSARY.md
   - docs/current/codebase/DEV_ENVIRONMENT_AND_HMR.md
+  - docs/current/codebase/KNOWN_ANTI_PATTERNS.md
 
 # Path-glob entries. An edit to a file matching any glob requires the
 # warm_start docs plus that entry's required_reads to appear in the
@@ -62,7 +65,7 @@ entries:
       - "graph-editor/src/services/dataOperationsService.ts"
       - "graph-editor/src/services/workspaceService.ts"
     required_reads:
-      - docs/current/graph-write-sync-architecture.md
+      - docs/current/codebase/GRAPH_WRITE_SYNC_ARCHITECTURE.md
     description: >
       Sync and repository operations. Known race conditions; IDB is
       source of truth, FileRegistry is an in-memory cache.

@@ -2,7 +2,7 @@
 
 ## What was reverted
 
-Commits `2d8b735a` through `a34a1a79` on main (merged from `feature/scenario-seeding-from-graph-json`) introduced a feature that stored scenarios directly on graph JSON objects and round-tripped them through IndexedDB. This was fully reverted.
+Commits `2d8b735a` through `a34a1a79` on main (merged from `feature/scenario-seeding-from-graph-json`) introduced a feature that stored scenarios directly on graph JSON objects and round-tripped them through IndexedDB. Fully reverted.
 
 ### Code changes removed
 
@@ -14,7 +14,7 @@ Commits `2d8b735a` through `a34a1a79` on main (merged from `feature/scenario-see
 
 ### Infrastructure changes reverted
 
-6. **gate-check.sh** -- removed a blanket exemption that allowed agents to bypass the git-write gate when operating inside the data repo directory. The gate exists for safety; engineers who want local exemptions can configure their own environment.
+6. **gate-check.sh** -- removed a blanket exemption that allowed agents to bypass the git-write gate when operating inside the data repo directory. The gate exists for safety; engineers wanting local exemptions can configure their own environment.
 7. **setup-workspace.sh** -- restored the private repo name leak check from advisory back to **blocking**. The pre-commit hook is one line of defence; the setup check is a second. Downgrading it to advisory removed redundancy that exists for good reason.
 
 ### Infrastructure change (new, not a revert)
@@ -23,7 +23,7 @@ Commits `2d8b735a` through `a34a1a79` on main (merged from `feature/scenario-see
 
 ## Rationale
 
-Scenarios should not live on graph objects. Scenarios are workspace-level state that belongs in IndexedDB (and potentially in canvas view objects). Storing them on the graph JSON:
+Scenarios should not live on graph objects. They are workspace-level state that belongs in IndexedDB (and potentially in canvas view objects). Storing them on graph JSON:
 
 - Conflates graph structure (the conversion model) with workspace state (user-created what-if scenarios)
 - Creates a round-trip serialisation path that mutates the graph file on every commit, even when the graph itself hasn't changed
@@ -33,4 +33,4 @@ If scenarios need to be portable across machines, the correct approach is to att
 
 ## Version note
 
-The version was bumped from 1.10.3-beta to 1.10.6-beta as part of the scenario seeding work. This was left as-is -- the version number is harmless and avoids potential confusion from a version rollback.
+The version was bumped from 1.10.3-beta to 1.10.6-beta as part of the scenario seeding work. Left as-is -- the version number is harmless and avoids potential confusion from a version rollback.

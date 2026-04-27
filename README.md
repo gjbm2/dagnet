@@ -442,7 +442,13 @@ curl http://localhost:9000/api/snapshots/health
 
 **Location:** [`docs/`](docs/) — developer and architecture docs.
 
-- [`docs/current/codebase/APP_ARCHITECTURE.md`](docs/current/codebase/APP_ARCHITECTURE.md) — app-level architecture overview (data flow, state ownership, orchestration model)
+- [`docs/current/codebase/`](docs/current/codebase/) — **the core conceptual index for the app.** A curated, indexed library of how the app works (~90 docs covering subsystems, data flows, invariants, and known anti-patterns). Start here for any non-trivial codebase work.
+  - [`APP_ARCHITECTURE.md`](docs/current/codebase/APP_ARCHITECTURE.md) — app-level overview (data flow, state ownership, orchestration model)
+  - [`SYNC_SYSTEM_OVERVIEW.md`](docs/current/codebase/SYNC_SYSTEM_OVERVIEW.md) — 4-layer data model, sync flows, known races
+  - [`SERVICE_DIRECTORY.md`](docs/current/codebase/SERVICE_DIRECTORY.md) — lookup table for the service layer (single source of truth for business logic)
+  - [`TASK_TYPE_READING_GUIDE.md`](docs/current/codebase/TASK_TYPE_READING_GUIDE.md) — which docs to read for a given task type
+  - [`KNOWN_ANTI_PATTERNS.md`](docs/current/codebase/KNOWN_ANTI_PATTERNS.md) — recurring failure signatures
+  - [`GLOSSARY.md`](docs/current/codebase/GLOSSARY.md) and [`RESERVED_QUERY_TERMS_GLOSSARY.md`](docs/current/codebase/RESERVED_QUERY_TERMS_GLOSSARY.md) — terminology
 - `docs/current/` — active technical specs and architecture decisions
 - `docs/current/project-contexts/` — current project status and work plans
 - `docs/archive/` — historical documentation (useful for understanding past design decisions)

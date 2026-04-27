@@ -179,3 +179,13 @@ When working in this cluster:
 - **Touching the rate-conditioning seam** → read STATS_SUBSYSTEMS §3.3 first. The seam lives in `forecast_runtime.py:build_prepared_runtime_bundle`; current behaviour is intentionally narrow (WP8 lands `direct_cohort_enabled` for exact single-hop `cohort(A,X-Y)` only).
 - **Touching v3 row routing** → use `latency.latency_parameter`, not `sigma`. Anti-pattern 50.
 - **Adding a derivation** → keep it pure; consume engine output, don't fetch directly. Snapshot DB queries belong in `api_handlers.py` (which then calls the derivation).
+
+## 10. Pitfalls
+
+### Anti-pattern 14: Adding fields to Python types but not to `_build_unified_slices`
+
+**Signature**: you add new fields to `PosteriorSummary` or `LatencyPosteriorSummary` (including `to_webhook_dict()`), wire them through `summarise_posteriors`, and expect them to appear in the FE — but they never arrive. The values are always `undefined`.
+
+**Root cause**: Bayes posterior data flows through a **manually-assembled dict**, not through `to_webhook_dict()`. The path is: `summarise_posteriors()` populates `PosteriorSummary` fields → `_build_unified_slices()` in `worker.py` builds the per-slice dicts → FE reads those dicts. `_build_unified_slices` constructs every field by name — if you add a field to the dataclass but not to `_build_unified_slices`, it never reaches the FE.
+
+**Fix**: when adding a field to `PosteriorSummary` or `LatencyPosteriorSummary`, always also add it to `_build_unified_slices()` in `worker.py` (both the `window` dict and the `cohort` dict), and to `bayesPatchService.ts` projection. Documented in `CHANGE_CHECKLIST.md`.

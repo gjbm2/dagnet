@@ -1,8 +1,6 @@
 # Dev log streaming (local development)
 
-Three log streams are captured to JSONL files under `debug/` during local
-development so that agents (Claude, Cursor) can read them without inspecting
-terminal output.
+Three log streams are captured to JSONL files under `debug/` during local development so agents (Claude, Cursor) can read them without inspecting terminal output.
 
 | Stream | File | Content |
 |---|---|---|
@@ -26,20 +24,16 @@ Opt-in via any of:
 
 ### Python server log
 
-**Automatic** — no opt-in required. When the dev server runs via
-`python dev-server.py`, stdout and stderr are tee'd to the JSONL file.
-Terminal output is preserved (it is a tee, not a redirect).
+**Automatic** — no opt-in required. When the dev server runs via `python dev-server.py`, stdout and stderr are tee'd to the JSONL file. Terminal output is preserved (it is a tee, not a redirect).
 
 ## Marks (segmenting logs for analysis)
 
-Marks create named boundaries across **all three streams** simultaneously.
-Place them via:
+Marks create named boundaries across **all three streams** simultaneously. Place via:
 - UI: mark input + button in the top-right dev controls
 - DevTools console: `window.dagnetMark('my-label')`
 - With metadata: `window.dagnetMark('my-label', { tab: 'graph-name' })`
 
-When a mark is placed, the Vite middleware propagates it to the Python log
-file so that `extract-mark-logs.sh` can window all three streams identically.
+When a mark is placed, the Vite middleware propagates it to the Python log file so `extract-mark-logs.sh` can window all three streams identically.
 
 ## Reading logs: `extract-mark-logs.sh`
 
@@ -93,14 +87,8 @@ Python:  `{"kind":"mark","ts_ms":...,"label":"..."}`
 
 ## Architecture
 
-1. **Python LogTee** (`dev-server.py`): wraps `sys.stdout`/`sys.stderr` to
-   tee every line to the JSONL file. Installed before `uvicorn.run()`.
-2. **Browser consoleMirrorService** (`src/services/consoleMirrorService.ts`):
-   hooks `console.*` methods, batches entries, POSTs to Vite middleware.
-3. **Session log mirror** (`src/services/sessionLogMirrorService.ts`):
-   subscribes to `sessionLogService`, POSTs new entries to Vite middleware.
-4. **Vite middleware** (`vite.config.ts`, `dagnet-console-log-sink` plugin):
-   receives POSTed entries, appends to the correct JSONL file. When a mark
-   arrives, also writes it to the Python log file for cross-stream windowing.
-5. **extract-mark-logs.sh**: queries all three streams by mark label,
-   extracts the window from mark to next mark (or EOF).
+1. **Python LogTee** (`dev-server.py`): wraps `sys.stdout`/`sys.stderr` to tee every line to the JSONL file. Installed before `uvicorn.run()`.
+2. **Browser consoleMirrorService** (`src/services/consoleMirrorService.ts`): hooks `console.*` methods, batches entries, POSTs to Vite middleware.
+3. **Session log mirror** (`src/services/sessionLogMirrorService.ts`): subscribes to `sessionLogService`, POSTs new entries to Vite middleware.
+4. **Vite middleware** (`vite.config.ts`, `dagnet-console-log-sink` plugin): receives POSTed entries, appends to the correct JSONL file. When a mark arrives, also writes it to the Python log file for cross-stream windowing.
+5. **extract-mark-logs.sh**: queries all three streams by mark label, extracts the window from mark to next mark (or EOF).

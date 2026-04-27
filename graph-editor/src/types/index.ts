@@ -610,20 +610,22 @@ export interface LatencyConfig {
 
 // ── Model variable provenance (doc 15) ──────────────────────────────────────
 
-/** Source of a model variable set.
- *  'analytic'    = FE stats pass (existing)
+/** Source of a model variable set (doc 73b §3.1 — generator-owned only).
+ *  'analytic'    = FE topo Step 1 fallback source
  *  'bayesian'    = MCMC posterior
- *  'manual'      = user-edited
+ *  User authoring lives at the selector pin and per-field locks (doc 73b §3.5);
+ *  it does not write to the source ledger.
  */
-export type ModelSource = 'analytic' | 'bayesian' | 'manual';
+export type ModelSource = 'analytic' | 'bayesian';
 
-/** Preference for which model var source to promote to scalars.
- *  'manual' is valid only at edge level (not graph level).
+/** Preference for which model var source to promote to scalars (doc 73b §3.5).
+ *  Domain is the same at edge and graph level; user authoring lives at the
+ *  per-field locks, not at the source ledger.
  */
-export type ModelSourcePreference = 'best_available' | 'bayesian' | 'analytic' | 'manual';
+export type ModelSourcePreference = 'best_available' | 'bayesian' | 'analytic';
 
-/** Graph-level model source preference (no 'manual' option) */
-export type GraphModelSourcePreference = 'best_available' | 'bayesian' | 'analytic';
+/** Graph-level model source preference (alias retained for call-site clarity). */
+export type GraphModelSourcePreference = ModelSourcePreference;
 
 /** Quality metrics from a Bayesian model_vars entry (evaluated once at write time) */
 export interface ModelVarsQuality {
@@ -1033,9 +1035,8 @@ export interface ProbabilityParam {
   /** Candidate model variable sets from different sources */
   model_vars?: ModelVarsEntry[];
 
-  /** Per-edge override of graph.model_source_preference.
+  /** Per-edge override of graph.model_source_preference (doc 73b §3.5).
    *  If present, takes precedence over graph-level setting.
-   *  'manual' valid only here, not at graph level.
    */
   model_source_preference?: ModelSourcePreference;
 

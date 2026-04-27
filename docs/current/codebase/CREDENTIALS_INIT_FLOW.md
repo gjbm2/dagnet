@@ -1,13 +1,13 @@
 # Credentials Initialization Flow
 
-This document outlines how credentials are loaded and managed during app initialization.
+How credentials are loaded and managed during app initialization.
 
 ## Overview
 
-The credentials system supports three tiers of authentication:
-1. **Public** - No credentials, read-only access to public repositories
-2. **User** - Browser-stored credentials for interactive editing
-3. **System** - Environment variable credentials for API operations
+Three tiers of authentication:
+1. **Public** — no credentials, read-only access to public repositories
+2. **User** — browser-stored credentials for interactive editing
+3. **System** — environment variable credentials for API operations
 
 ## Initialization Sequence
 
@@ -38,7 +38,7 @@ if (userCredentials.length > 0) {
 }
 
 // 3. Load system credentials (server-side only)
-// This would be implemented in Vercel functions
+// Implemented in Vercel functions
 ```
 
 ### 3. Credential Sources
@@ -59,9 +59,9 @@ if (userCredentials.length > 0) {
 
 ### 4. Credential Loading Priority
 
-1. **User credentials** (if available) - for interactive operations
-2. **System credentials** (if available) - for API operations
-3. **Public access** (fallback) - read-only operations
+1. **User credentials** (if available) — interactive operations
+2. **System credentials** (if available) — API operations
+3. **Public access** (fallback) — read-only operations
 
 ## Implementation Details
 
@@ -83,14 +83,10 @@ interface CredentialsRecord {
 ### Service Layer
 ```typescript
 class CredentialsService {
-  // Singleton pattern
   private static instance: CredentialsService;
-  
-  // State
   private userCredentials: CredentialsData | null = null;
   private systemCredentials: SystemCredentials | null = null;
   
-  // Methods
   async initialize(): Promise<void>
   getCredentials(): CredentialsData | null
   getSystemCredentials(): SystemCredentials | null
@@ -119,20 +115,19 @@ const {
 ## Error Handling
 
 ### Initialization Failures
-- **User credentials load failure**: Continue with public access
-- **System credentials load failure**: Log warning, continue with user credentials
-- **Database initialization failure**: Show error, prevent app startup
+- **User credentials load failure**: continue with public access
+- **System credentials load failure**: log warning, continue with user credentials
+- **Database initialization failure**: show error, prevent app startup
 
 ### Validation Failures
-- **Invalid credential format**: Show validation error, prevent save
-- **Missing required fields**: Highlight missing fields in UI
-- **Duplicate repository names**: Prevent save, show conflict error
+- **Invalid credential format**: show validation error, prevent save
+- **Missing required fields**: highlight missing fields in UI
+- **Duplicate repository names**: prevent save, show conflict error
 
 ## Security Considerations
 
 ### Browser Storage
-- Credentials stored in IndexedDB (encrypted by browser)
-- No credentials in localStorage or sessionStorage
+- IndexedDB (encrypted by browser); no localStorage or sessionStorage
 - Clear credentials on "Clear Data and Settings"
 
 ### Environment Variables
@@ -166,18 +161,17 @@ const generateShareableURL = async (userCreds, days = 7) => {
 ```
 
 ### Multi-Repository Support
-- Support multiple Git repositories
-- Default repository selection
+- Multiple Git repositories with default selection
 - Repository-specific credential management
 
 ## Testing
 
 ### Local Development
-- Use `.env.local` for system credentials
+- `.env.local` for system credentials
 - Mock credentials service for unit tests
 - Test credential validation and error handling
 
 ### Production
 - Vercel environment variables for system credentials
-- User credentials stored in IndexedDB
+- User credentials in IndexedDB
 - API endpoints for credential management

@@ -39,7 +39,7 @@ The service maintains a `displayThreshold` (default: `info`). This controls:
 1. **Which children trigger viewer re-renders**: `addChild()` only calls `notifyListeners()` if the child's level meets the threshold. Debug/trace children accumulate silently.
 2. **Which children survive `endOperation()`**: when an operation ends, children below the threshold are stripped from `parent.children` and become eligible for GC.
 3. **Which entries the viewer renders**: both top-level entries and children are filtered by threshold during render.
-4. **Whether the diagnostic API flag is enabled**: `getDiagnosticLoggingEnabled()` returns `true` when the threshold is `trace`, `false` otherwise. This controls server-side diagnostic payloads (e.g. `batchAnchorCoverage` diagnostic flag).
+4. **Whether the diagnostic API flag is enabled**: `getDiagnosticLoggingEnabled()` returns `true` when the threshold is `trace`, `false` otherwise. Controls server-side diagnostic payloads (e.g. `batchAnchorCoverage` diagnostic flag).
 
 ### `isLevelEnabled(level)`
 
@@ -52,23 +52,23 @@ if (sessionLogService.isLevelEnabled('trace')) {
 }
 ```
 
-Without the gate, the `JSON.stringify` runs unconditionally even though the resulting entry would be stripped at `endOperation`. The gate prevents allocation when nobody will ever see the output.
+Without the gate, `JSON.stringify` runs unconditionally even though the resulting entry would be stripped at `endOperation`. The gate prevents allocation when nobody will ever see the output.
 
 ## Hierarchical Operations
 
 ### startOperation / addChild / endOperation
 
-Operations form a parent-child tree. The parent is created with `startOperation()`, children are added with `addChild()`, and `endOperation()` finalises the parent.
+Operations form a parent-child tree. Parent created with `startOperation()`, children added with `addChild()`, `endOperation()` finalises the parent.
 
 **During the operation**: all children (including debug/trace) are added to `parent.children`. Debug/trace children do NOT trigger `notifyListeners()` and are NOT registered in `entriesById`.
 
-**At `endOperation()`**: children below the display threshold are stripped from `parent.children`. This is the cleanup step that prevents memory leaks and keeps `getEntries()` lean for downstream consumers (automation log persistence, git commit).
+**At `endOperation()`**: children below the display threshold are stripped from `parent.children`. Cleanup step that prevents memory leaks and keeps `getEntries()` lean for downstream consumers (automation log persistence, git commit).
 
 **Auto-expand**: if any child is warning/error, `endOperation` sets `expanded = true` on the parent.
 
 ### Why endOperation cleanup matters
 
-Without cleanup, debug/trace children persist in `parent.children` forever — in memory, in `getEntries()`, and in `automationLogService.persistRunLog()` where they get serialised via `JSON.stringify`. For a 30-slice × 30-param retrieve-all, this could be 15-50 MB of debug/trace data. The `endOperation` strip is what prevents this.
+Without cleanup, debug/trace children persist in `parent.children` forever — in memory, in `getEntries()`, and in `automationLogService.persistRunLog()` where they get serialised via `JSON.stringify`. For a 30-slice × 30-param retrieve-all, this could be 15-50 MB of debug/trace data. The `endOperation` strip prevents this.
 
 If `endOperation` does not fire (e.g. due to an uncaught exception), children leak. All operation code paths must ensure `endOperation` is called in both success and error branches.
 
@@ -102,7 +102,7 @@ Top-level entries are filtered by threshold before rendering. Children of expand
 
 During a large retrieve-all (992 fetches), the session log can accumulate thousands of entries with ~5,000 `notifyListeners()` calls. Two mechanisms prevent this from killing the browser:
 
-**Throttled subscribe** — The viewer's subscribe callback uses a 200ms trailing-edge debounce. Rapid-fire notifications are coalesced into a single React `setState` per 200ms window, reducing re-renders from thousands to approximately 5 per second during bursts.
+**Throttled subscribe** — The viewer's subscribe callback uses a 200ms trailing-edge debounce. Rapid-fire notifications coalesce into a single React `setState` per 200ms window, reducing re-renders from thousands to approximately 5 per second during bursts.
 
 **Windowed rendering** — Only the last 500 top-level entries are mounted as DOM nodes. A sticky "N older entries not shown" indicator appears at the top when entries exceed this limit. All entries remain in memory — search, Copy All, and export see everything. No data is lost; only the DOM is bounded.
 
@@ -110,7 +110,7 @@ The tail-mode auto-scroll check uses top-level `entries.length` (O(1)) rather th
 
 ### Copy
 
-"Copy all" copies only entries at or above the current threshold — it copies what the user sees, not the raw internal data. It copies ALL entries, not just the windowed subset.
+"Copy all" copies only entries at or above the current threshold — it copies what the user sees, not the raw internal data. Copies ALL entries, not just the windowed subset.
 
 ## Downstream Consumers
 
@@ -126,7 +126,7 @@ Called by `dailyAutomationJob.ts` in the finally block after all operations end.
 
 The session log previously had a `{ diagnostic: true }` option on `startOperation` that buffered the entire operation in memory. If a warning/error child appeared, `promoteDiagnosticOperation()` flushed the entire buffer (parent + all children) into the log. This caused browser crashes on large runs (1500+ children materialised at once).
 
-This mechanism has been replaced by level-based filtering. The `DiagnosticOptions` interface is retained for API compatibility but the flags are no-ops — `startOperation` accepts them and ignores them.
+Replaced by level-based filtering. The `DiagnosticOptions` interface is retained for API compatibility but the flags are no-ops — `startOperation` accepts them and ignores them.
 
 The `getDiagnosticLoggingEnabled()` method is retained but now derives from the display threshold (`true` when threshold is `trace`). External callers that use it to gate server-side API diagnostic flags continue to work.
 

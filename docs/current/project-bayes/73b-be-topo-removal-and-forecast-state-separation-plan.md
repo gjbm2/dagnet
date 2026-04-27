@@ -13,8 +13,9 @@
 - [x] Stage 0 — completed 27-Apr-26
 - [x] Stage 1 — completed 27-Apr-26
 - [x] Stage 2 — completed 27-Apr-26
-- [ ] Stage 3
-- [ ] Stage 4
+- [x] Stage 3 — completed 27-Apr-26
+- [ ] Stage 4 part 1 — 4(a) request-graph contexting + 4(b) persistent-stash removal + 4(e) live-edge re-context on currentDSL
+- [ ] Stage 4 part 2 — 4(c) promoted writer + 4(d) carrier consumer audit + 4(f) L5 dispersion split (coordinated with 73a §8/§10)
 - [ ] Stage 5
 - [ ] Stage 6
 
@@ -1566,11 +1567,19 @@ and the parallel duplicate in
 [UpdateManager.ts:458-483](graph-editor/src/services/UpdateManager.ts#L458-L483).
 The override flag flip already happens upstream of these blocks (the field
 write + `*_overridden = true` are set by the commit handler), so the value
-and lock both survive their removal. The two other `source: 'manual'` writes
-in
+and lock both survive their removal.
+
+Note (clarification added during Stage 3 implementation): the two other
+`source: 'manual'` writes at
 [UpdateManager.ts:917](graph-editor/src/services/UpdateManager.ts#L917) and
 [UpdateManager.ts:1078](graph-editor/src/services/UpdateManager.ts#L1078)
-follow the same pattern and are deleted alongside.
+were previously listed here as following the same pattern. They are not.
+Those sites push a `FieldChange` audit-trail record whose `source` field is
+typed `'auto' | 'manual' | 'external'`
+([updateManager/types.ts:82](graph-editor/src/services/updateManager/types.ts#L82))
+and refers to *change-record origin* (user-triggered vs automated vs
+external), not to `ModelSource`. They are unrelated to the ledger removal
+and are not part of B7c.
 
 Action B7d. Remove the implicit selector pin to `'manual'` triggered by
 output overtype (the `p.model_source_preference = 'manual'` assignment at
@@ -1977,6 +1986,36 @@ library on the live graph — is closed in this stage, alongside the live-edge
 contexting refresh that keeps the canvas correct on currentDSL change and
 the `p.stdev` / `p.stdev_pred` split that makes current-answer dispersion
 flavour explicit.
+
+**Delivery split (added during Stage 3 review for weight management).** The
+six pieces (a)–(f) are split across two implementation parts; both parts
+together comprise Stage 4 and the §9 acceptance criteria for Stage 4 are
+evaluated only at the end of part 2:
+
+- **Part 1 — slice plumbing**: 4(a) request-graph contexting/engorgement
+  helper + CLI wiring, 4(b) persistent-stash write removal +
+  `reprojectPosteriorForDsl` rewire, 4(e) live-edge re-context on
+  `currentDSL` change. After part 1 the load-bearing `_posteriorSlices`
+  tumour is closed; canvas behaviour is unchanged because CF still writes
+  `forecast.mean = p_mean` (4(c)'s removal has not landed yet) and the
+  carrier still reads `p.mean` (4(d) has not landed yet).
+- **Part 2 — promoted surface, carriers, dispersion**: 4(c) narrow
+  promoted writer extension + CF de-collapse + `applyBatchLAGValues`
+  migration, 4(d) carrier consumer audit + reroute through
+  `resolve_model_params`, 4(f) L5 dispersion split with 73a §8/§10
+  coordinated edits. This is where the behavioural change lands.
+
+The split respects every internal-order constraint below: 4(b) still
+follows 4(a) (both in part 1); 4(e) still lands "with or before" 4(c)
+(part 1 lands first, so 4(e) is strictly before 4(c)); 4(c) and 4(d)
+still land as one bisectable group (both in part 2); 4(f) still follows
+4(c)/4(d) and coordinates with 73a §8/§10 (all in part 2).
+
+Splitting between 4(c) and 4(d) is **not** permitted by the bisectable-
+group rule: 4(c) creates the promoted probability surface and 4(d) makes
+model-input consumers honour it; landing 4(c) without 4(d) leaves the
+carrier reading `p.mean` while the promoted surface is fresh, exactly the
+staleness the constraint is there to prevent.
 
 **Stage 4 entry preconditions.** OP3 is resolved in §7: user choice wins
 over quality gates when the pinned source exists; source absence falls back

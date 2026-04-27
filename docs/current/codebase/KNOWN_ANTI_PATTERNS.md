@@ -1,495 +1,248 @@
 # Known Anti-Patterns
 
-Failure patterns that have occurred in this codebase. If your current bug matches one of these signatures, apply the known fix — don't re-derive it.
+Failure patterns that have occurred in this codebase and recur across surfaces. If your current bug matches a signature here, apply the known fix — don't re-derive it.
+
+This list is deliberately short. Subsystem-specific traps that only apply to one file or function live next to that code, in the relevant doc under `docs/current/codebase/`. See the **Moved entries** table at the end for redirects, and the **Removed entries** list for ones that are now duplicated by CLAUDE.md or other warm-start docs.
+
+Numbering is non-contiguous and stable: cited numbers (e.g. "see anti-pattern 23") keep working even after a move. New entries take the next free integer.
+
+## When to add an entry here
+
+Three tests an entry must pass:
+
+1. **Re-derivable?** If the trap can recur in a different part of the codebase, it belongs here. If the fix is in code and the architecture has been refactored so the trap can't recur, the commit message is the right home.
+2. **Symptom-first?** A useful signature lets an agent recognise the trap **before** knowing the diagnosis. If the signature only makes sense after you've solved it, rewrite it.
+3. **Pattern, not fact?** Single-subsystem traps belong in the subsystem doc next to the function they constrain — they'll actually be in scope when the agent is editing the relevant code. This doc is for cross-cutting patterns.
+
+After completing a multi-attempt fix, ask: would an agent in a different subsystem plausibly hit this same shape of bug? If no, it's a subsystem fact — write it up there.
+
+---
 
 ## Anti-pattern 1: Clearing state from one layer only
 
-**Signature**: you delete/clear a field, it appears to work, but the old value keeps coming back — or it works once but fails on the second run.
+**Signature**: you delete or clear a field, it appears to work, but the old value comes back — or it works once and fails on the second run.
 
-**Root cause**: data lives in 4 layers simultaneously:
-1. Parameter file (FileRegistry/IDB) — `file.data.posterior`
-2. Graph edge projected value — `edge.p.posterior` (probability) + `edge.p.latency.posterior` (latency)
-3. Stashed slices — `edge.p._posteriorSlices` (raw data for re-projection)
+**Root cause**: state lives in 4 layers simultaneously:
+
+1. Parameter file (FileRegistry / IDB) — `file.data.posterior`
+2. Graph edge projected value — `edge.p.posterior`, `edge.p.latency.posterior`
+3. Stashed slices on the edge — `edge.p._posteriorSlices` (raw data for re-projection)
 4. React render tree — whatever reference React last saw via `setGraph`
 
-Clearing layer 1 is useless unless you also handle layers 2-4. UpdateManager mapping configurations (`updateManager/mappingConfigurations.ts`) project param file fields onto graph edges — the file and the graph edge are separate copies, not references.
+UpdateManager mapping configurations (`updateManager/mappingConfigurations.ts`) project param-file fields onto graph edges. The file and the edge are separate copies, not references. Clearing layer 1 alone is useless.
 
-**Fix**: grep for ALL locations where the field is read or written. Clear all of them. Call `setGraph` with a new object reference to trigger re-render. Test the "already clean" case (field already absent).
-
-**Example**: the 6-attempt posterior deletion failure — each attempt cleared a different layer but missed the others.
-
-## Anti-pattern 2: Fixing one call site, missing others
-
-**Signature**: you fix a bug, it works in the context menu, but the same bug persists in the properties panel / toolbar / inline picker / keyboard shortcut.
-
-**Root cause**: the same operation is implemented in multiple places (context menu, toolbar, properties panel, inline picker, drag handler). Fixing one leaves the others broken.
-
-**Fix**: before writing any fix, grep for ALL call sites that perform the same mutation. List every code path. Consolidate into ONE canonical function. Fix the function, not the call sites.
-
-**Example**: changing analysis type was done in 4 places. Fix was `setContentItemAnalysisType()` — one function, all four call sites use it.
+**Fix**: grep for ALL read/write sites of the field. Clear all of them. Call `setGraph` with a new object reference. Test the already-clean case (field already absent on entry).
 
 ## Anti-pattern 3: In-place mutation without new reference
 
-**Signature**: you mutate the graph object, but the UI doesn't update. Adding `console.log` shows the data is correct in memory.
+**Signature**: you mutate the graph object, UI doesn't update, but `console.log` shows the data is correct in memory.
 
-**Root cause**: React's reconciliation requires a new object reference to trigger re-render. `graph.edges[0].p.mean = 0.5` mutates in place — React never sees the change. `setGraph(graph)` passes the same reference — React skips the update.
+**Root cause**: React reconciliation requires a new object reference. `graph.edges[0].p.mean = 0.5` mutates in place — React never sees the change. `setGraph(graph)` with the same reference — React skips the update.
 
-**Fix**: always return a new graph object. Use `structuredClone(graph)` or spread operators to create a new reference before calling `setGraph`. Better: use the UpdateManager methods which return new graph objects by design.
+**Fix**: return a new graph object. Use `structuredClone(graph)` or spread, or (preferably) the UpdateManager methods which return new objects by design.
 
-## Anti-pattern 4: Using FileRegistry for git operations
+## Anti-pattern 4: FileRegistry vs db for git operations
 
-**Signature**: commit doesn't include all dirty files, or includes wrong files, or shows zero dirty files when there are clearly dirty tabs.
+**Signature**: commit is missing dirty files, includes wrong files, or shows zero dirty files when tabs are clearly dirty.
 
 **Root cause**: `fileRegistry.getDirtyFiles()` queries the in-memory cache (unprefixed IDs, current session only). `db.getDirtyFiles()` queries IndexedDB (source of truth, prefixed + unprefixed, survives reload).
 
-**Fix**: always use `db.getDirtyFiles()` for git operations. Filter by workspace prefix. See INDEXEDDB_PERSISTENCE_LAYER.md.
+**Fix**: always use `db.getDirtyFiles()` for git operations. Filter by workspace prefix. See `INDEXEDDB_PERSISTENCE_LAYER.md`.
 
 ## Anti-pattern 5: Gating cleanup behind a count that can be zero
 
-**Signature**: fix works the first time but fails on subsequent runs. Or works when data is present but fails when data was already cleaned.
+**Signature**: fix works the first time, fails on subsequent runs. Or works when data is present, fails when data was already cleaned.
 
-**Root cause**: cleanup logic is inside `if (count > 0)` where `count` tracks how many items were found to clean. On second run, source is already clean → count=0 → derived state cleanup is skipped → derived copies persist.
+**Root cause**: cleanup is inside `if (count > 0)` where `count` tracks how many items were found to clean. On second run, source is clean → count=0 → derived state cleanup is skipped → derived copies persist.
 
-**Fix**: always clean derived state unconditionally. The cleanup must be idempotent — it must work whether the source data is present, absent, or partially cleaned.
+**Fix**: clean derived state unconditionally. Cleanup must be idempotent — work whether the source data is present, absent, or partially cleaned.
 
-## Anti-pattern 6: Blaming HMR / code staleness
+## Anti-pattern 6: Blaming HMR / code staleness without proof
 
 **Signature**: agent says "this might be a stale code issue" or "try refreshing the page" without evidence.
 
-**Root cause**: HMR failures are rare and have obvious symptoms (console errors, yellow toast). The actual cause is almost always state propagation, IDB prefix mismatch, or sync suppression.
+**Root cause**: HMR failures are rare and have visible symptoms (console errors, yellow toast). The actual cause is almost always state propagation, IDB prefix mismatch, or sync suppression.
 
-**Fix**: run the 5-step staleness diagnostic (DEV_ENVIRONMENT_AND_HMR.md) before blaming HMR. If all 5 pass, the issue is logic, not staleness.
+**Fix**: run `scripts/dev-server-check.sh <file-you-edited>` before blaming HMR. If FRESH, the problem is your code. If STALE, check the dev-server pane for syntax/import errors blocking the reload. See `DEV_ENVIRONMENT_AND_HMR.md`.
 
-## Anti-pattern 7: Patching the symptom, not tracing the root cause
+## Anti-pattern 11: Read paths computing signatures from graph config, not stored state
 
-**Signature**: fix addresses the visible symptom (e.g., "add a null check here") but the same class of bug keeps appearing in different forms.
+**Signature**: a read-path surface (@ menu, planner, coverage UI) computes a signature independently and gets a different hash from what the write path stored. The surface shows "no data" despite data existing in the DB.
 
-**Root cause**: agent didn't trace the full data path to understand WHY the value was null/wrong. The null check masks the real issue.
+**Root cause**: the read path derives context keys from graph-level config (e.g. `dataInterestsDSL`) rather than from what slices were actually stored in parameter files. Graph config may include all context dimensions (3 MECE keys) while each individual fetch used one key per slice. Different context keys → different context-definition hashes → different `core_hash` → no DB match.
 
-**Fix**: apply the root-cause gate. Can you name the root cause in one sentence with a "because"? If not, keep investigating. Read the architecture doc for the subsystem. Trace from user action to persistence.
+**Fix**: read paths must derive context keys from the **stored slice topology** (`parameterFile.data.values[].sliceDSL`), not from any graph-level config. Enumerate all plausible context key-sets from stored slices and query the DB with all of them. See `enumeratePlausibleContextKeySets` in `snapshotRetrievalsService.ts`.
 
-## Anti-pattern 8: Testing the mock, not the system
-
-**Signature**: all tests pass, but the real feature is broken. Tests assert values that the mock was configured to return.
-
-**Root cause**: test mocks IDB, mocks FileRegistry, mocks the service, then asserts against the mock's return value. The test is a closed loop — it proves the mock works, not the system.
-
-**Fix**: use real IDB (fake-indexeddb), real FileRegistry, real GraphStore. Mock only external APIs (GitHub, Amplitude). Assert state in all affected subsystems, not just the return value. See Testing Standards in CLAUDE.md.
-
-## Anti-pattern 9: Suppression window race during rapid mutations
-
-**Signature**: state appears correct immediately after a change but reverts to a previous value after ~500ms.
-
-**Root cause**: store→file sync sets a 500ms suppression window on file→store sync. If the suppression expires before all pending FileRegistry writes complete, a stale file notification can overwrite the store.
-
-**Fix**: check `suppressFileToStoreUntilRef` timing. Check `writtenStoreContentsRef` for stale echo detection. See SYNC_SYSTEM_OVERVIEW.md for the full guard system.
-
-## Anti-pattern 10: Assuming isInitializing is false
-
-**Signature**: dirty detection doesn't work for a newly-loaded file. File appears clean despite real edits.
-
-**Root cause**: `isInitializing` is true for 500ms after file load. During this phase, all edits are absorbed into `originalData` without marking dirty. If `completeInitialization()` doesn't fire (e.g., callback lost, file re-loaded), the phase never ends.
-
-**Fix**: check `file.isInitializing` in the debugger. Verify `completeInitialization(fileId)` is scheduled and fires. See FILE_REGISTRY_LIFECYCLE.md.
-
-## Anti-pattern 11: Computing signatures from graph config instead of stored state
-
-**Signature**: a read-path surface (@ menu, planner, coverage UI) computes a signature independently and gets a different hash from what the write path (data fetch) stored. The surface shows "no data" despite data existing in the DB.
-
-**Root cause**: the read path derives context keys from graph-level config (e.g., `dataInterestsDSL`) rather than examining what slices were actually stored in parameter files. The graph config may include ALL context dimensions (e.g., 3 MECE keys), while each individual fetch used just ONE context key per slice. Different context keys → different context definition hashes → different signature → different `core_hash` → no match in DB.
-
-**Fix**: read paths must derive context keys from the **stored slice topology** (`parameterFile.data.values[].sliceDSL`), not from `dataInterestsDSL` or any other graph-level config. Enumerate all plausible context key-sets from stored slices, compute a signature for each, and query the DB with all of them. See `enumeratePlausibleContextKeySets` in `snapshotRetrievalsService.ts`.
-
-**Related**: when multiple context dimensions produce multiple hashes for the same edge, the BE must select one hash per `retrieved_at` date to avoid double-counting. See `snapshot_regime_selection.py` and doc 30 (`30-snapshot-regime-selection-contract.md`).
-
-## Anti-pattern 12: Unprefixed IDB key in file lookups
-
-**Signature**: a function loads a file from `db.files.get(fileId)` using the FileRegistry-style unprefixed key (e.g., `event-myEvent`), but IDB stores files under workspace-prefixed keys (e.g., `nous-conversion-main-event-myEvent`). The lookup silently returns nothing.
-
-**Root cause**: the FileRegistry uses unprefixed file IDs, but IDB uses `${repository}-${branch}-${fileId}` as the primary key. A direct `db.files.get(unprefixedId)` will never find a workspace-loaded file.
-
-**Fix**: use `fileRegistry.restoreFile(fileId, workspaceScope)` which handles both unprefixed and prefixed key lookups. See INDEXEDDB_PERSISTENCE_LAYER.md for the prefix contract.
+When multiple context dimensions produce multiple hashes for the same edge, the BE selects one hash per `retrieved_at` date to avoid double-counting. See `snapshot_regime_selection.py`.
 
 ## Anti-pattern 13: Setup scripts that don't install all dependency sets
 
-**Signature**: tests pass locally for weeks, then fail after `./dev-start.sh --clean` or a fresh `./setup.sh` run. The error is a missing module (`ModuleNotFoundError: No module named 'pymc'`) in a subsystem that was previously working.
+**Signature**: tests pass for weeks, then fail after `./dev-start.sh --clean` or fresh `./setup.sh`. The error is `ModuleNotFoundError` for a module in a previously-working subsystem.
 
-**Root cause**: the repo has multiple `requirements*.txt` files for different subsystems. Setup and dev-start scripts only installed the primary requirements file, not all of them. The missing deps only existed because someone had manually installed them in a previous venv session — a `--clean` rebuild wiped that implicit state.
+**Root cause**: the repo has multiple `requirements*.txt` files for different subsystems. Setup installed only the primary one. The missing deps existed only because someone manually installed them in a previous venv — `--clean` wiped that implicit state.
 
-**Fix**: ensure `setup.sh` and `dev-start.sh` install ALL requirement files into the shared venv. When adding a new requirements file to the repo, add the install line to both scripts immediately.
+**Fix**: `setup.sh` and `dev-start.sh` install ALL requirement files into the shared venv. When adding a new requirements file, add the install line to both scripts immediately.
 
 **Broader principle**: any state that exists only because of manual one-off commands will eventually be lost. If the release script gates on it, the setup script must produce it.
 
-## Anti-pattern 14: Adding fields to Python types but not to `_build_unified_slices`
-
-**Signature**: you add new fields to `PosteriorSummary` or `LatencyPosteriorSummary` (including `to_webhook_dict()`), wire them through `summarise_posteriors`, and expect them to appear in the FE — but they never arrive. The values are always `undefined`.
-
-**Root cause**: Bayes posterior data flows through a **manually-assembled dict**, not through `to_webhook_dict()`. The path is: `summarise_posteriors()` populates `PosteriorSummary` fields → `_build_unified_slices()` in `worker.py` builds the per-slice dicts → FE reads those dicts. `_build_unified_slices` constructs every field by name — if you add a field to the dataclass but not to `_build_unified_slices`, it never reaches the FE.
-
-**Fix**: when adding a field to `PosteriorSummary` or `LatencyPosteriorSummary`, always also add it to `_build_unified_slices()` in `worker.py` (both the `window` dict and the `cohort` dict), and to `bayesPatchService.ts` projection.
-
 ## Anti-pattern 15: Reimplementing FE logic in CLI instead of calling the same function
 
-**Signature**: you need a FE function in Node but it imports `react-hot-toast` or `window.location`, so you rewrite it from scratch. The rewrite works initially but diverges over time — missing fields, different computation paths.
+**Signature**: you need an FE function in Node but it imports `react-hot-toast` or touches `window.location`, so you rewrite it from scratch. The rewrite works initially but diverges over time — missing fields, different computation paths.
 
-**Root cause**: the assumption that browser-only imports prevent running FE code in Node. In fact, browser dependencies are almost always shallower than expected — `react-hot-toast` is a no-op in Node, `window.location` can be guarded with `typeof window === 'undefined'`.
+**Root cause**: browser dependencies are almost always shallower than expected. `react-hot-toast` is a no-op in Node. `window.location` is guardable with `typeof window === 'undefined'`.
 
-**Fix**: call the real FE function. Guard browser-specific code at the boundary. Use `fake-indexeddb/auto` for IDB. If a function truly can't run in Node, fix *that function* with a guard — both browser and CLI benefit.
+**Fix**: call the real FE function. Guard browser-specific code at the boundary. Use `fake-indexeddb/auto` for IDB. If a function truly can't run in Node, fix *that function* with a guard — both browser and CLI benefit. CLI tooling exists (`graph-ops/scripts/analyse.sh`) to exercise the real production pipeline; use it.
 
-## Anti-pattern 16: E2E test seeding IDB but assuming FileRegistry is populated
+## Anti-pattern 17: Parity tests must include FE normalisation and multi-scenario
 
-**Signature**: you seed data into IDB via `db.files.put()` in a Playwright test, but the from-file pipeline returns empty/stale results because it reads from FileRegistry (in-memory), not IDB.
+**Signature**: parity test passes, you cut over, the app breaks. Variants: passes for a single scenario but multi-scenario fails; both branches return zero rows so the test is vacuous; raw-HTTP test passes but the FE chart breaks because normalisation transforms the response.
 
-**Root cause**: `db.files.put()` writes to IndexedDB but does NOT notify FileRegistry. FileRegistry is populated lazily via `restoreFile()` or proactively via `getOrCreateFile()`.
+**Root cause**: the rendering path is FE preparation → HTTP → BE → response → FE normalisation → chart. Tests that bypass FE prep, normalisation, or use a single scenario miss every defect that depends on per-scenario temporal DSL or shape transformation. Single-scenario tests use one top-level `query_dsl` which happens to be correct for the only scenario; multi-scenario requires per-scenario temporal DSLs. Vacuous tests exercise zero-cohort early-return paths and silently match because both versions short-circuit identically.
 
-**Fix**: after seeding IDB and reloading, use `dagnetDebug.refetchFromFiles()` to trigger the full from-file pipeline.
+**Fix**: parity tests must call `runPreparedAnalysis` (which goes through `graphComputeClient` including normalisation), or use the CLI tooling (`graph-ops/scripts/analyse.sh`) which calls the same FE functions the browser does. Include multi-scenario cases with different temporal DSLs.
 
-## Anti-pattern 17: Parity test that bypasses FE normalisation
+**Non-vacuousness gate**: assert `evidence_x > 0` for at least some rows. If every row has `evidence_x = 0`, the test is vacuous — it's testing the zero-cohort path, not the population model.
 
-**Signature**: parity test calls the BE via raw HTTP and compares responses. The test passes, you cut over, and the app breaks — the FE normalisation layer transforms the raw response, and that transformation fails with the new data shape.
+## Anti-pattern 18: Routing on data presence rather than feature enablement / semantic type
 
-**Root cause**: the rendering path is FE preparation → HTTP → BE → HTTP response → FE normalisation → chart. A raw HTTP test skips the last step.
+**Signature**: a handler branches on whether a field exists or its fitted value (`if scenario.get('analytics_dsl')`, `if resolved.latency.sigma <= 0`, `if median_lag_days !== undefined`) and gets it wrong when an unrelated request type or transient fit happens to set the field.
 
-**Fix**: parity tests must call `runPreparedAnalysis` (which goes through `graphComputeClient` including normalisation), not raw `fetch`.
+**Root cause**: field presence and fitted scalars are unreliable discriminators. Field presence tells you "data was provided"; type / enablement flag tells you "this object needs this handler". Promoted sigma can appear on non-latency edges (inherited from sibling slice fits, default fallbacks, legacy values). Latency edges can have σ=0 transiently (fit failure, insufficient evidence). `median_lag_days` can exist on `latency_parameter: false` edges from any enrichment writer.
 
-## Anti-pattern 18: Routing on field presence rather than semantic type
+**Fix**: route on the semantic type or enablement flag — `analysis_type in ANALYSIS_TYPE_SCOPE_RULES`, `(p or {}).get('latency', {}).get('latency_parameter') is True`, etc. Gate feature-specific UI on the feature's enablement flag, not on presence of data the feature would consume.
 
-**Signature**: a handler checks whether a field exists (e.g. `if scenario.get('analytics_dsl')`) to decide which code path to use. A later change attaches that field to ALL requests, and unrelated request types get misrouted.
+**Broader principle**: "is this feature enabled for this object?" is a configuration question; "what value did the fit produce?" is a data question. Never substitute one for the other. (Subsumes former AP36 and AP50.)
 
-**Root cause**: field presence is an unreliable discriminator. The field tells you "the FE provided this data"; the type tells you "this request needs this handler".
+## Anti-pattern 22: Classify errors by cause, not by location
 
-**Fix**: route on the semantic type (`analysis_type in ANALYSIS_TYPE_SCOPE_RULES`), not on field presence.
+**Signature**: an automated process runs hours longer than expected because it treats transient errors as permanent. Logs show repeated long cooldowns triggered by short timeouts rather than actual rate-limit responses.
 
-## Anti-pattern 19: Conflating distinct DSL concepts in a single variable
+**Root cause**: error classifier treats two distinct failure modes (e.g. 429 rate limit vs 30s network timeout) as the same category, triggering the same recovery for both.
 
-**Signature**: a variable called `queryDsl` sometimes holds the analytics DSL (`from(x).to(y)`) and sometimes the temporal DSL (`window(-90d:)`). Code downstream assumes one meaning, but receives the other.
+**Fix**: classify into tiers. Use explicit predicates per cause (`isExplicitRateLimitError`, `isTimeoutError`). Different causes get different recoveries — long cooldown for true rate limits, exponential backoff for transient timeouts (e.g. 30s → 60s → 120s → cap at 5 min). Only escalate from transient to persistent if a retry confirms.
 
-**Root cause**: `analytics_dsl` (data subject, constant across scenarios) and `query_dsl` (temporal/context, varies per scenario) are fundamentally different concepts that happen to use the same DSL syntax. Combining them loses the distinction.
-
-**Fix**: keep them separate throughout the pipeline. The FE sends `analytics_dsl` at top level (constant — the subject) and `effective_query_dsl` per scenario (varies — the temporal). See `DSL_SYNTAX_REFERENCE.md` § "DSL Roles in the Analysis Request Flow".
-
-## Anti-pattern 20: Single-scenario parity test missing multi-scenario defects
-
-**Signature**: parity test passes for a single scenario, you cut over, and multi-scenario charts break — each scenario gets the same temporal DSL instead of its own `effective_query_dsl`.
-
-**Root cause**: single-scenario tests use one top-level `query_dsl` which happens to be correct for the only scenario. Multi-scenario requires per-scenario temporal DSLs.
-
-**Fix**: parity tests must include multi-scenario cases with different temporal DSLs. The test must verify each scenario's data reflects its own time bounds, not the shared top-level DSL.
-
-## Anti-pattern 22: Treating transient errors as permanent rate limits
-
-**Signature**: automated retrieve-all run takes hours longer than expected. Logs show repeated 45-minute cooldowns triggered by 30-second timeouts rather than actual 429 responses.
-
-**Root cause**: the error classifier treated both explicit 429s and network timeouts as the same category, triggering a 45-minute cooldown for any transient timeout.
-
-**Fix**: classify errors into two tiers. Use `isExplicitRateLimitError()` for 429s only (triggers long cooldown) and `isTimeoutError()` for transient failures (retry with exponential backoff: 30s → 60s → 120s → cap at 5 min). Only escalate from timeout to cooldown if a retry receives an actual 429.
-
-**Broader principle**: not all errors in the same code path deserve the same recovery strategy. Classify by cause, not by location.
-
-## Anti-pattern 23: js-yaml Date conversion corrupts context definition hashes
-
-**Signature**: CLI tool computes a different `core_hash` from the FE browser for the same graph on the same branch. The `x` (context definition) component of the structured signature differs.
-
-**Root cause**: `js-yaml`'s default schema converts ISO date strings in YAML to native JavaScript `Date` objects. `normalizeObjectKeys` checks `typeof v === 'object'` — a `Date` passes this check, but `Object.keys(new Date())` returns `[]`, so the normalised output is `{}` instead of the original date string. The canonical JSON changes, producing a different SHA-256 hash.
-
-**Fix**: use `YAML.load(raw, { schema: YAML.JSON_SCHEMA })` when loading YAML files in the CLI disk loader (`graph-editor/src/cli/diskLoader.ts`).
-
-**Broader principle**: YAML loaders that auto-convert types (dates, booleans, octals) are a hash stability hazard. Any data that enters a hashing pipeline must be loaded with type coercion disabled.
+**Broader principle**: not all errors in the same code path deserve the same recovery strategy.
 
 ## Anti-pattern 24: Effect fires before async context is ready on boot
 
-**Signature**: after F5, a feature works only after user interaction (which triggers re-render after async context loads). Variants include: scenario overlays stale on boot, FE-only analyses blank, snapshot tabs empty.
+**Signature**: after F5, a feature works only after user interaction (which triggers re-render once async context loads). Variants: scenario overlays stale on boot, FE-only analyses blank, snapshot tabs empty.
 
-**Root cause**: async contexts (NavigatorContext, ScenariosContext, credentials) load from IDB and can take several seconds to populate. Effects that depend on these contexts fire immediately on mount — with undefined/empty values. Version-counter or dedup-key guards then prevent retry even after the context becomes available.
+**Root cause**: async contexts (NavigatorContext, ScenariosContext, credentials) load from IDB and can take seconds. Effects depending on them fire immediately on mount with undefined values. Version-counter or dedup-key guards then prevent retry even after the context becomes available.
 
-**Fix**: guard effects on the context being populated (`sourceRepo && sourceBranch`, `scenariosLoaded`, etc.). The effect re-fires when the deps transition from empty to populated. For FE-only computation types that don't need async context at all (e.g. `edge_info`, `node_info`), skip the readiness gate entirely.
-
-## Anti-pattern 27: Confusing context hash filtering with context value filtering
-
-**Signature**: selecting a context value (e.g. `context(channel:paid-search)`) in a snapshot filter returns the same count as no filter.
-
-**Root cause**: context values within one MECE dimension share the same `core_hash` (the hash encodes the context **definition**, not the specific value). To filter by value, you need `slice_key` filtering — either via the `slice_keys` parameter on `querySnapshotRetrievals`, or client-side by matching `slice_key` strings.
-
-**Two-level model**: (1) context *dimension* changes the hash (channel-contexted ≠ device-contexted ≠ uncontexted); (2) context *value* is carried in `slice_key` within a hash family. Both levels must be filtered for context-specific snapshot views.
-
-**Reference**: `HASH_SIGNATURE_INFRASTRUCTURE.md` §"What is and is not in the hash".
-
-## Anti-pattern 28: Duplicate hash computation codepaths
-
-**Signature**: hashes computed by path A don't match hashes computed by path B for the same graph. Snapshot DB queries return 0 rows even though data was just written.
-
-**Root cause**: multiple independent implementations of hash/signature computation that diverge over time. Each path makes slightly different choices about what inputs to hash.
-
-**Fix**: ONE codepath for hash computation. The FE service layer (`computeQuerySignature` via `buildFetchPlanProduction` → `mapFetchPlanToSnapshotSubjects`) is the single source of truth. All other hash computations (synth_gen, test harness, scripts) must call the CLI which uses this real FE code, not hand-rolled reimplementations.
-
-## Anti-pattern 31: Regex not handling optional prefixes in DSL clauses
-
-**Signature**: `_extract_time_bounds` (or similar DSL parsers) returns today's date instead of the dates in the DSL. Downstream filters silently exclude all historical data.
-
-**Root cause**: `cohort(anchor,start:end)` has an optional anchor node prefix before the date range. A regex like `cohort\(([^:]*):([^)]*)\)` captures `anchor,start-date` as group 1. `_resolve_date('anchor,12-Dec-25')` fails all date format checks and falls through to `today.isoformat()`.
-
-**Fix**: make the anchor prefix optional in the regex: `cohort\((?:[^,)]*,)?([^:,]*):([^)]*)\)`. Test with both `cohort(start:end)` and `cohort(anchor,start:end)` forms. Check the grammar in `DSL_SYNTAX_REFERENCE.md` before writing DSL regexes.
-
-## Anti-pattern 33: Per-subject random effects on hazard parameters
-
-**Signature**: adding per-cohort (or per-trajectory) latent offsets to a shared parameter (mu, sigma, onset) in the product-of-conditional-Binomials likelihood. ESS collapses to single digits, shared parameter drifts to its prior, onset-mu correlation approaches ±1.0.
-
-**Root cause**: with N trajectories and N per-cohort offsets, the model has as many parameters as data points. Each cohort's offset absorbs its own trajectory's signal, leaving the shared parameter unconstrained.
-
-**Fix**: use per-interval observation-level overdispersion instead. Replace `Binomial(n_j, q_j)` with `BetaBinomial(n_j, q_j * kappa_lat, (1 - q_j) * kappa_lat)`. This adds ONE scalar parameter per edge, not N. See doc 34 for the full design.
-
-**Broader principle**: the analogue of kappa for any distribution is a scalar that inflates variance at the observation level, not per-subject latent variables.
-
-## Anti-pattern 34: Phase 2 onset_cohort drift on deep join-node paths
-
-**Signature**: Phase 2 `onset_cohort` drifts 3-6 days above truth on edges with composed path onset > 3 days (diamond, 3-way-join, lattice topologies). `p_cohort` overestimates to compensate. rhat > 2.0 with 4 chains.
-
-**Root cause**: `onset_cohort = softplus(composed_onset + eps × path_onset_sd)` with `path_onset_sd ≈ 0.1` allows drift because the only constraint is `path_t95_obs` with wide sigma. The t95 constraint allows onset and mu to trade off freely: onset drifts up while mu drifts down (or vice versa), keeping t95 constant. This creates a ridge in the posterior.
-
-**Not yet fixed**. Potential approaches: (a) derive `path_onset_sd` from Phase 1 posterior SD; (b) add a per-edge onset observation; (c) reparameterise onset multiplicatively; (d) add a joint onset+mu constraint that penalises the ridge.
-
-See compiler journal 13-Apr-26 update 11.
-
-## Anti-pattern 35: Edge ID key order mismatch (uuid-first vs id-first)
-
-**Signature**: `computeInboundN` returns different n values for sibling edges from the same node, or returns an empty/partial map despite the graph having data. The bug is silent — no errors, just wrong numbers.
-
-**Root cause**: `computeInboundN` uses `getEdgeId()` which returns `edge.uuid || edge.id` (uuid-first). If the caller builds the `activeEdges` set or `getEffectiveP` lookup using `edge.id || edge.uuid` (id-first), edges with both fields populated resolve to different keys. The edge is absent from `activeEdges`, so the topo walk skips it. Downstream nodes receive incomplete population, and siblings get different n values.
-
-**Fix**: all call sites that interact with `computeInboundN` must use `uuid || id` (uuid-first) consistently. Search for `edge.id || edge.uuid` near any `computeInboundN` usage and reverse the order.
-
-**Broader principle**: whenever a function uses an internal key derivation (like `getEdgeId`), all callers must match that derivation exactly. A mismatch is invisible at the type level (both are strings) and produces silently wrong results.
-
-## Anti-pattern 36: Latency bead gate checking data presence instead of feature enablement
-
-**Signature**: non-latency edges (with `latency_parameter: false` or undefined) show latency beads after an enrichment pass.
-
-**Root cause**: the `checkExists` gate for the latency bead checked `edge.p.latency.median_lag_days !== undefined` without also checking `latency_parameter === true`. Historically this surfaced when the now-retired BE topo pass wrote `median_lag_days` into edges with a `latency` block regardless of the enablement flag; the rule still applies because any enrichment writer can create the same `latency: { latency_parameter: false, median_lag_days: 5 }` shape.
-
-**Fix**: gate on `latency_parameter === true && median_lag_days !== undefined`. More generally: always gate feature-specific UI on the feature's enablement flag, not on the presence of data that the feature would consume.
-
-## Anti-pattern 37: Devtool "clear" action that destroys diagnostic data
-
-**Signature**: a keybinding, script, or UI action labelled "clear" or "clean up" that silently deletes primary diagnostic output (log files, trace files, recovery results). The user invokes it expecting a display reset and loses irreplaceable run data.
-
-**Root cause**: the developer conflates "clear the display" with "delete the underlying data". A function intended to tidy the UI uses `rm -f` on the source files instead of hiding them from the display layer. There is no confirmation prompt and no warning that data will be destroyed.
-
-**Fix**: devtool "clear" actions must NEVER delete log files, trace outputs, or diagnostic data. They should operate on the display layer only (hide entries, reset scroll position, clear a UI list). If a genuinely destructive action is needed (e.g. freeing disk space), it must be a separate, explicitly-named command with a confirmation prompt. The naming must be unambiguous: "delete all finished logs" not "clear finished".
-
-**Broader principle**: devtool infrastructure handles two kinds of state: (1) ephemeral display state (which panes are visible, what's scrolled, what's highlighted) and (2) durable diagnostic data (log files, recovery results, trace dumps). These must be managed by completely separate code paths. A display operation must never call `rm` on a data file. A data cleanup operation must never be bound to a casual keybinding.
-
-**Example**: `bayes-monitor.sh` bound `^b e` ("clear finished") to a handler that `rm -f` all harness log files for finished graphs. The user pressed it after a 3-hour regression run, deleting all 21 graphs' diagnostic logs. The data could not be recovered. Fixed: `^b e` now writes hidden graph names to a display-only filter file; log files are untouched.
-
-## Anti-pattern 38: Devtool script with unvalidated side effects on shared state
-
-**Signature**: a helper script (monitor, status dashboard, cleanup tool) modifies shared state (`/tmp` files, lock files, process signals) as a side effect of a display or monitoring operation. The modification is not visible to the user and is not logged.
-
-**Root cause**: devtool scripts are often written quickly as "just a helper" without the same rigour applied to production code. Side effects are added for convenience ("clean up stale locks while we're at it") without considering that the script may be invoked in unexpected contexts or at unexpected times.
-
-**Fix**: devtool scripts must follow the same side-effect discipline as production code:
-- **Read-only by default**: monitoring and status scripts should only read state, never modify it.
-- **Explicit modification**: any script that modifies state (kills processes, removes files, writes config) must be named and documented to make the modification obvious.
-- **No bundled side effects**: a "status" script should not also "clean up". A "monitor" script should not also "delete". Each action gets its own script or explicit flag.
-- **Audit trail**: any state modification should be logged to stdout so the user sees what happened.
-
-**Example**: the bayes monitor status script removed stale lock files as a side effect of checking process status. This is low-risk in isolation but establishes a pattern where display scripts casually modify shared state — which led directly to anti-pattern 37.
-
-## Anti-pattern 39: Graph JSON regeneration strips critical metadata
-
-**Signature**: a synth graph that previously worked (data binding succeeded, MCMC ran with full evidence) suddenly produces zero snapshot rows. The harness reports `all expected hashes returned no data` for every edge. The DB has data (verified by querying with synth-meta hashes), but the FE CLI produces zero snapshot subjects.
-
-**Root cause**: the graph JSON was regenerated by a code path that doesn't set `pinnedDSL` / `dataInterestsDSL`. Without the DSL, the FE CLI cannot build snapshot subjects, cannot compute core_hashes, and falls back to param files only — losing all trajectory data, context slices, and kappa_lat evidence. The graph looks structurally valid (correct nodes, edges, UUIDs) but is functionally broken for Bayes.
-
-Multiple code paths can regenerate the graph JSON: `graph_from_truth.py` (truth-based generation), `synth_gen.py --write-files` (which calls `set_simulation_guard`), and `synth_gen.py --bust-cache` (which regenerates from truth but may skip the `--write-files` path). Only `set_simulation_guard` sets the DSL — if it's not called, the DSL is silently stripped.
-
-**Fix**: `graph_from_truth.py` now sets `pinnedDSL`, `dataInterestsDSL`, and `currentQueryDSL` directly during graph generation, using the simulation config and context dimensions from the truth file. The DSL is no longer dependent on a separate `set_simulation_guard` call. Every code path that generates a graph JSON now produces a complete, functional graph.
-
-**Broader principle**: when a file is regenerated, ALL required fields must be set by the generator — not split across multiple tools invoked in a specific order. If field X is required for the file to function, the generator must set field X unconditionally. Deferring to a separate step creates a fragile dependency chain where any code path that skips the step silently produces a broken artefact.
-
-## Anti-pattern 40: `--rebuild --no-mcmc` no-op for synth data
-
-**Signature**: agent runs `param_recovery.py --rebuild --no-mcmc` expecting synth data to be regenerated, but the DB rows remain unchanged. Subsequent MCMC runs produce identical results to pre-rebuild.
-
-**Root cause**: `--rebuild` deletes `.synth-meta.json`, which would trigger `verify_synth_data` to re-bootstrap on the next harness run. But `--no-mcmc` skips the harness subprocess entirely — `param_recovery.py` just prints the truth table and exits. The synth data gate in `test_harness.py` (line 769) only runs during payload construction, which `--no-mcmc` bypasses. The rebuild takes effect only on the NEXT run without `--no-mcmc`.
-
-**Fix**: to force immediate synth data regeneration, use `synth_gen.py --graph X --write-files --bust-cache` directly. This runs the full generation pipeline (simulate, hash, write to DB, write param files) without any harness or MCMC indirection.
-
-**Broader principle**: a flag that prepares state for a later step is invisible when the later step is skipped. If `--rebuild` means "regenerate data", it should regenerate data — not set a flag that a different code path checks later. When combining flags, verify the end-to-end effect, not just that each flag does its documented thing.
-
-## Anti-pattern 41: Enrichment results bypassing UpdateManager sibling rebalancing
-
-**Signature**: after a fetch completes, one edge's `p.mean` is correct (reflecting a late-arriving enrichment writer) but its sibling edges still show stale pre-fetch probabilities. Siblings don't sum to 1. Refreshing or fetching again appears to fix it (because the FE path runs first and rebalances).
-
-**Root cause**: an enrichment pass wrote `edge.p.mean` directly on the graph object, then called `setGraph()`. This bypassed `UpdateManager.applyBatchLAGValues`, which is the single code path for sibling probability rebalancing. The FE topo path correctly used `applyBatchLAGValues` (which collects edges whose `p.mean` changed and runs `findSiblingsForRebalance` + `rebalanceSiblingEdges`), but the direct-mutation path skipped it entirely. Originally observed on the now-retired BE topo pass; the same risk applies to any late-arriving writer (including CF's slow-path overwrite handler).
-
-**Fix**: the fetch pipeline funnels every enrichment writer through `applyBatchLAGValues`. Late-arriving scalars are merged into the FE `EdgeLAGValues` array before application, rather than applied as a separate direct-mutation pass. See `FE_BE_STATS_PARALLELISM.md` §Orchestration for the live CF-race flow.
-
-**Broader principle**: when a subsystem has a single canonical mutation path (UpdateManager for graph state), every code path that writes the same fields must go through it. A "shortcut" that writes directly to the object and calls `setGraph` bypasses all the invariants the canonical path maintains — rebalancing, override flag checks, conditional probability propagation. The more code paths that write the same field, the more likely one of them forgets a side effect.
-
-## Anti-pattern 39: Reimplementing the FE pipeline in test code
-
-**Signature**: a test for a BE handler builds its own hash lookup, candidate regime construction, or subject resolution — bypassing the FE's `prepareAnalysisComputeInputs` → `runPreparedAnalysis` path. The test passes but the production render shows completely different behaviour.
-
-**Root cause**: the FE pipeline does hash computation (`computeShortCoreHash`), temporal-mode-aware regime selection, snapshot contract resolution, and FE normalisation. Reimplementing any of this in Python test helpers creates a parallel path that silently diverges from production. The most common failure: the test's manual hash lookup returns the wrong temporal mode's hash (e.g. window hash for a cohort query), so the snapshot query returns 0 rows, the handler runs the zero-cohort code path, and the test "passes" because both v2 and v3 produce the same zero-cohort output — exercising a completely different code path from production.
-
-**Fix**: use the CLI tooling (`graph-ops/scripts/analyse.sh`) which calls the same FE functions the browser does. Run it twice with different `--type` values and compare the JSON output. See `graph-ops/scripts/v2-v3-parity-test.sh` for the working implementation.
-
-**Non-vacuousness gate**: any parity test MUST assert that `evidence_x > 0` for at least some rows. If every row has `evidence_x = 0` or `evidence_x = None`, the test is vacuous — it's testing the zero-cohort early-return path, not the population model with IS conditioning, carrier, and forecast_x growth.
-
-**Broader principle**: when CLI tooling exists that exercises the real production pipeline, always use it for testing. The cost of reimplementing is not just the initial effort — it's the silent divergence that makes every test pass while production is broken.
-
-## Anti-pattern 40: Vacuous synth graph tests (missing snapshot data linkage)
-
-**Signature**: a parity test on a synth graph shows `cohorts=0` or `rows=0`. The handler runs the zero-cohort model-only code path. The test passes but catches none of the real bugs (carrier scaling, IS conditioning, forecast_x growth).
-
-**Root cause**: the synth graph's core_hash (as computed by the FE's hash function) doesn't match what `synth_gen.py` wrote to the snapshot DB. This happens when: (a) the test helper computes hashes differently from the FE, (b) hydration changed edge fields that affect the hash, or (c) the query window's date range doesn't overlap the synth data's date range.
-
-**Fix**: use the current `analyse.sh` invocation that computes hashes identically to the FE (the historical recipe used the now-removed `--topo-pass` flag — see [project-bayes/73b](../project-bayes/73b-be-topo-removal-and-forecast-state-separation-plan.md)). For query windows, use absolute dates matching the synth data range (check `base_date` in the synth config and the `anchor_day` range in the DB). Relative dates like `-14d:` fail because they're relative to today, which may be months after the synth data.
-
-**Detection**: the `v2-v3-parity-test.sh` Phase 1 health checks assert `evidence_x > 0`. If this fails, the snapshot linkage is broken and the parity comparison would be vacuous.
+**Fix**: guard effects on the context being populated (`sourceRepo && sourceBranch`, `scenariosLoaded`, etc.). The effect re-fires when deps transition empty → populated. For FE-only computation types that don't need async context (e.g. `edge_info`, `node_info`), skip the readiness gate entirely so they aren't blocked.
 
 ## Anti-pattern 42: Silent `except Exception` hiding missing imports
 
-**Signature**: new code in a Python module runs correctly in direct testing (`PYTHONPATH=lib python3 -c "from module import func; func(...)"`) but has no effect when called via the running server. No error in logs. The feature silently falls back to default behaviour.
+**Signature**: new Python code runs correctly in direct testing (`PYTHONPATH=lib python3 -c "from module import func; func(...)"`) but has no effect via the running server. No log error. Feature silently falls back to default behaviour.
 
-**Root cause**: the new code uses a standard library module (e.g. `re`, `json`, `os`) inside a `try/except Exception` block, but the module isn't imported at the top of the file. The `NameError` is caught by the broad `except` and the fallback branch runs. No logging means no trace of the error.
+**Root cause**: code uses a stdlib module (`re`, `json`, `os`) inside a `try/except Exception` block, but the module isn't imported at the top of the file. The `NameError` is caught silently. Direct testing works because the REPL has the module in global namespace; the production import path doesn't.
 
-**Why direct testing works**: the REPL or test script imports the module at the top level or in a context where the global namespace already has it. The production code path doesn't.
+**Fix**:
+- Check imports when adding code to a file you didn't write — don't assume stdlib modules are imported.
+- Never use bare `except Exception` without logging: at minimum `except Exception as e: print(f"WARNING: {e}", flush=True)`.
+- After adding code, exercise it via the actual server path, not just a direct function call.
 
-**Fix**: (1) always check imports when adding code to a file you didn't write — don't assume standard library modules are available. (2) Never use bare `except Exception` without logging the error. At minimum: `except Exception as e: print(f"WARNING: {e}", flush=True)`. (3) After adding code, run it through the actual server code path, not just a direct function call.
+## Anti-pattern 48: Per-item failure aborting the whole batch response
 
-**Example**: `analysis_subject_resolution.py` used `re.match()` inside a `try/except Exception` to parse the asat date. `re` wasn't imported. The `NameError` was caught silently, and `sweep_to` fell back to today. The asat date was correctly parsed but never used.
+**Signature**: a BE request with multiple subjects (or multiple scenarios × subjects) returns 400 or `success: false` even though most subjects would compute fine. One failing gate raises, the entire scenario's result is lost — including sibling subjects already completed. The FE shows "No result returned from compute" or a gate error that's not actually about the edge in view.
 
-## Anti-pattern 43: CLI topo pass not scoping to query DSL — RESOLVED (historical)
+**Root cause**: a `for subj in subjects:` loop lets per-subject exceptions propagate. The exception leaves the scenario loop and `_handle_snapshot_analysis`, becoming a 400 via FastAPI's `ValueError` handling. `per_subject_results` is discarded — including any successes already appended.
 
-**Status (`27-Apr-26`)**: this anti-pattern is fully resolved. The CLI topo pass surface (`--topo-pass` flag, `runCliTopoPass`, `src/cli/topoPass.ts`, `handle_stats_topo_pass`) was removed by doc 73b. Retained as historical context for the underlying scoping discipline — query DSL date scoping must still be honoured by all evidence-binding paths.
+**Fix**: per-subject validation and gating must append a failure entry (`{subject_id, success: False, error: <message>}`) and `continue`, never raise. Scenario-level `success` becomes `any(s.get('success') for s in per_subject_results)`. The FE surfaces `response.error` when `response.result` is absent.
 
-**Signature** (historical): param-pack or `analyse --topo-pass` produced `p.mean` or `completeness` values that didn't match the cohort maturity chart on the same data. The discrepancy was large (e.g. 0.72 vs 0.40) and didn't shrink with wider date ranges.
-
-**Root cause** (historical): the CLI topo pass sent `cohort_data` from the full param file without filtering to the query DSL's date range. The BE used all cohorts for IS conditioning, not just the scoped ones. The FE browser path correctly sent `scoped_cohorts` in `edge_contexts`.
-
-**Fix** (historical, no longer applicable): `runCliTopoPass` was required to parse the query DSL, extract the date range, filter cohorts, and send `edge_contexts` with `scoped_cohorts` alongside `cohort_data`. See [project-bayes/73b](../project-bayes/73b-be-topo-removal-and-forecast-state-separation-plan.md) for the post-removal pipeline.
-
-**How to spot** (historical): compare param-pack output against chart output for a narrow cohort date range. If `p.mean` is close to the full-evidence-base rate rather than the scoped-cohort rate, scoping is broken.
-
-## Anti-pattern 44: Weak Beta prior overwhelmed by per-cohort IS conditioning
-
-**Signature**: per-cohort forecast values (daily conversions `forecast_y`, or per-cohort `projected_y`) swing wildly from the model rate. A single young cohort with moderate evidence produces a conditioned rate 3-5× the prior. Aggregate consumers (chart, topo pass) are stable because many cohorts average out the IS noise.
-
-**Root cause**: the MC sweep's p draws use a Beta prior with insufficient concentration. When `resolved.alpha/beta` are not available (analytic sources), the fallback prior is too weak — `Beta(1,1)` or `Beta(p×20, (1-p)×20)` gives only 2-20 effective trials. A single cohort with 1000+ trials overwhelms it completely.
-
-**Fix**: the model resolver should derive `alpha`/`beta` from the edge's `evidence.n`/`evidence.k` (actual observation counts) when no Bayesian posterior is available. This gives a prior whose concentration reflects the real evidence base. See D20 fix in `runner/model_resolver.py`.
-
-**How to spot**: check `resolved.alpha` and `resolved.beta`. If they sum to < 50 for an edge with hundreds of observations, the prior is too weak for per-cohort IS.
-
-## Anti-pattern 45: ECharts legend `data` array referencing empty-data series
-
-**Signature**: legend items render at coordinate (0, 0) — a cluster of icons piled in the top-left corner of the chart. Or the legend collapses to a single point when a second scenario is added.
-
-**Root cause**: ECharts' legend `data` array contains entries that reference series whose `data` array is empty (`[]`). ECharts renders the legend item but cannot resolve its position, falling back to (0, 0). This happens when building a multi-scenario legend with synthetic entries for concept labels (e.g. "Evidence %", "Forecast %") backed by series that have no data points in certain scenarios.
-
-**Fix**: only include entries in `legend.data` that reference series with actual data points. For multi-scenario legends, omit `data` entirely (let ECharts auto-discover from real series) or filter the data array to only include series names that have non-empty data. Do not create synthetic zero-data series just to drive legend rendering.
-
-**Example**: daily conversions multi-scenario legend created concept entries + colour swatch entries, where the concept entries had empty-data proxy series. Fix was to reference only real data-bearing series.
-
-## Anti-pattern 46: Synth graph hash divergence from connection string inconsistency
-
-**Signature**: synth graph tests return zero snapshot rows. `candidate_regimes_by_edge` is empty or `core_hash` is `''`. DB has rows but they're under a different hash than what the FE computes at runtime.
-
-**Root cause**: the connection name is part of the canonical signature used to compute `core_hash`. If the graph JSON says one connection name (e.g. `defaultConnection: "amplitude-prod"`) but the FE hash computation path uses a different name (e.g. hardcoded `'amplitude'` fallback), the hashes diverge. The CLI (called by `synth_gen.py` Step 2) and the FE runtime must resolve the same connection name for the same graph.
-
-Three specific failure modes:
-1. `graph_from_truth.py` writes a connection name that doesn't match what the FE expects
-2. FE call sites don't read `graph.defaultConnection` and fall back to a hardcoded default
-3. Synth graphs use a real connection name (`amplitude-prod`) instead of a fake one (`amplitude`), risking accidental live fetches
-
-**Fix**: ensure all FE connection resolution paths follow the `edge.p.connection → graph.defaultConnection → 'amplitude'` chain (`fetchPlanBuilderService.ts` is the reference implementation). Synth graphs must use a fake connection name that can't trigger real fetches. The v2 freshness checker (`verify_synth_data`) now validates connection string consistency between the graph JSON and the meta sidecar.
-
-**How to spot**: `verify_synth_data(graph_name, data_repo)` returns `"stale"` with reason mentioning "Connection string changed". Or DB query `SELECT COUNT(*) FROM snapshots WHERE core_hash = '' AND param_id LIKE '%synth%'` returns non-zero.
-
-## Anti-pattern 47: `cohort_alpha`/`cohort_beta` vs `alpha`/`beta` confusion
-
-**Signature**: model resolver returns wrong alpha/beta in cohort mode, causing IS conditioning to target the wrong rate. Tests assert against edge-level alpha/beta when the resolver correctly returns cohort-mode posterior.
-
-**Root cause**: both `alpha`/`beta` and `cohort_alpha`/`cohort_beta` encode the posterior on the same quantity — the edge's own conversion rate (y/x). The difference is the evidence set and latency model used during fitting:
-- **Window mode**: `alpha`/`beta` — fitted from window evidence (edge-local latency)
-- **Cohort mode**: `cohort_alpha`/`cohort_beta` — fitted from cohort evidence (anchor-anchored, path latency)
-
-The `model_resolver.py` correctly prefers `cohort_alpha`/`cohort_beta` when `temporal_mode == 'cohort'`.
-
-**Fix**: when writing tests or assertions about cohort-mode alpha/beta, use `posterior.cohort_alpha`/`cohort_beta`, not `posterior.alpha`/`beta`. When the resolver returns a p_mean that doesn't match `alpha/(alpha+beta)` from the edge-level posterior, check whether cohort mode is active — the resolver may be correctly using the cohort-mode posterior.
-
-**History**: these fields were previously named `path_alpha`/`path_beta`, which was misread as "compound path probability". Renamed to `cohort_*` to make the query-mode distinction clear.
-
-## Anti-pattern 48: Per-subject failure aborting the whole scenario response
-
-**Signature**: a BE snapshot-analysis request with multiple subjects (or multiple scenarios × subjects) returns a 400 or a `success: false` response, even though most subjects would have computed fine. One failing gate or derivation raises an exception, and the entire scenario's result is lost — including sibling subjects that had already completed. From the FE side the chart shows "No result returned from compute" or a gate error that's not actually about the edge in view.
-
-**Root cause**: the snapshot handler in [api_handlers.py](../../graph-editor/lib/api_handlers.py) iterates `for subj in subjects:` inside a scenario loop. If the derivation or a pre-flight gate raises, the exception propagates up through the scenario loop, out of `_handle_snapshot_analysis`, and becomes a 400 via FastAPI's ValueError handling. `per_subject_results` for that scenario — including any successful entries already appended — is discarded. If the same request covers a non-latency subject (success) and a latency subject (gate rejects), the latency failure kills the non-latency result too.
-
-**Fix**: per-subject validation and gating must append a failure entry to `per_subject_results` and `continue`, never raise:
-
-- Build the failure entry with `{subject_id, success: False, error: <message>}`.
-- `continue` to the next subject.
-- The scenario's overall `success` is computed as `any(s.get('success') for s in per_subject_results)`, so sibling successes survive.
-- The FE surfaces `response.error` via [useCanvasAnalysisCompute.ts](../../graph-editor/src/hooks/useCanvasAnalysisCompute.ts) when `response.result` is absent, so the user still sees why the failing subject failed.
-
-**Broader principle**: in any loop that collects per-item results for a batched response, item failures must become item-level failure entries, not exceptions. Reserve exceptions for conditions that genuinely invalidate the whole request (missing auth, malformed input, BE infrastructure failure).
-
-**Example**: the conversion_rate gate for latency edges originally `raise ValueError(...)` on latency edges. Non-latency charts in the same scenario returned 400 despite their own subject succeeding. Fixed by appending per-subject failure and `continue`.
-
-## Anti-pattern 49: ECharts legend icon using default palette when series `color` is omitted
-
-**Signature**: legend icons in an ECharts chart show colours that don't match the data (e.g. a blue scenario's HDI band swatch renders as green, the next series as yellow). Scatter points and lines in the plot body are correctly coloured, but the legend is wrong. Theme overrides and `itemStyle.color` don't fix it.
-
-**Root cause**: ECharts derives legend-icon colour from the series' top-level `color` field, not from `itemStyle.color` or `areaStyle.color`. When top-level `color` is absent, ECharts assigns colours from its default palette sequentially by series index: `#5470c6` (blue), `#91cc75` (green), `#fac858` (yellow), `#ee6666` (red), etc. A line series with `areaStyle.color: 'rgba(59,130,246,0.18)'` renders the band in blue but picks up `#91cc75` (green) in the legend.
-
-**Fix**: set `color: <scenarioColour>` at the series top level on every series the legend displays. Invisible helper series (stack anchors, etc.) can be filtered from the legend via name prefix (`__`-prefix convention) but should still carry `color` for consistency.
-
-**Broader principle**: when ECharts has three places to specify colour (`color`, `itemStyle.color`, `areaStyle.color`/`lineStyle.color`), they have different consumers. `color` feeds legend icons and emphasis defaults; `itemStyle.color` feeds data-point fill; `areaStyle.color` feeds band fill only. Setting one does not set the others. Setting all three explicitly is the safe default.
-
-**Example**: the conversion_rate HDI band legend swatch rendered green on a blue scenario because the band series set `areaStyle.color` only. Fixed by adding `color: colour` at series top level on the band, model-line, and scatter series.
-
-## Anti-pattern 50: Routing non-latency edges by `sigma <= 0` heuristic
-
-**Signature**: a forecast row builder or CF gate branches on `resolved.latency.sigma <= 0` to decide whether an edge is a non-latency edge (closed-form Beta-Binomial) or a latency edge (MC sweep). The gate fires correctly for truly non-latency edges but also fires on latency edges that happen to have σ=0 transiently (e.g. the resolver could not fit σ and fell back to zero), sending latency edges through the non-latency path and losing their latency semantics. Or: a latency edge with evidence in scope is mis-routed to the non-latency branch because σ appears on the promoted source but the edge is not actually a latency edge.
-
-**Root cause**: `sigma` is a *fitted output*, not a *feature flag*. Promoted sigma can appear on non-latency edges (inherited from a sibling slice's fit, default fallback, or a legacy value) and can be zero on latency edges (fit failure, insufficient evidence). The only authoritative signal for "does this edge track latency?" is the edge's own `latency.latency_parameter: true` flag on the param.
-
-**Fix**: route by the authoritative flag: `(target_edge.get('p') or {}).get('latency', {}).get('latency_parameter') is True`. The CF row-builder in `cohort_forecast_v3.py` does this (historically `if resolved.latency.sigma <= 0`, now `_is_latency_edge = _lat_meta.get('latency_parameter') is True; if not _is_latency_edge: ...`). A parallel precedent is Anti-pattern 36 (latency bead gate): gate UI and compute branches on feature enablement flags, not on data presence.
-
-**Broader principle**: "is this feature enabled for this object?" is a configuration question; "what value did the fit produce?" is a data question. Never substitute one for the other. When you see a routing branch keying on a fitted scalar being zero/missing/extreme, look for the corresponding enablement flag on the param.
-
-**Example**: `_non_latency_rows` in `cohort_forecast_v3.py` (previously `_lagless_rows`) was named and routed on the `sigma <= 0` proxy. The name conflated two distinct populations — truly non-latency edges (the correct audience) and latency edges with no evidence in scope (which historically fell through the same branch because the resolver returned σ=0 when fits failed). Routing by `latency_parameter` makes the function's scope precise; renaming the function to `_non_latency_rows` removes the semantic ambiguity.
+**Broader principle**: in any loop that collects per-item results for a batched response, item failures must become item-level failure entries, not exceptions. Reserve exceptions for whole-request invalidation (auth, malformed input, infra failure).
 
 ## Anti-pattern 51: React Fast Refresh failure on mixed-export context files
 
-**Signature**: after editing a React Context file (`XxxContext.tsx`), behaviour tied to that context silently stops working — effects don't fire, handlers feel stale, no user-visible progress indicators or regeneration for UI actions that used to produce them. TypeScript compiles cleanly, no runtime errors. The Vite dev-console shows `[vite] invalidate /src/contexts/XxxContext.tsx: Could not Fast Refresh ("useXxxContext" export is incompatible)` followed by `[vite] hot updated: /src/contexts/XxxContext.tsx`. The page does not auto-reload.
+**Signature**: after editing a Context file (`XxxContext.tsx`), behaviour tied to that context silently stops working — effects don't fire, handlers feel stale, no progress indicators or regeneration for actions that used to produce them. TypeScript compiles cleanly, no runtime errors. The Vite console shows:
 
-**Root cause**: React Fast Refresh requires a module to export *either* only React components *or* only non-component values — not both. Context files that co-export the Context object, the Provider component, the `useXxxContext` hook, type interfaces, and helper functions violate this rule. When such a file is edited, Fast Refresh bails out ("incompatible") and falls back to plain HMR: Vite swaps the module in, but the React tree keeps references to the **old** provider and hooks. New effects are never re-subscribed, new closures are never bound. The app is in a mid-update limbo state where some code runs the new version and some runs the stale one.
+```
+[vite] invalidate /src/contexts/XxxContext.tsx: Could not Fast Refresh ("useXxxContext" export is incompatible)
+[vite] hot updated: /src/contexts/XxxContext.tsx
+```
 
-**Fix (for the immediate session)**: do a hard refresh (`Ctrl+Shift+R`). This flushes the stale module graph and rebuilds the React tree against the new code.
+The page does **not** auto-reload.
 
-**Durable fix (for the file)**: split the non-component exports out of the context file. Move the Context object, the `useXxxContext` hook, the `useXxxContextOptional` hook, and any type-only exports into a sibling file (e.g. `XxxContextHooks.ts` or `XxxContextValue.ts`). Leave only the `XxxProvider` React component in `XxxContext.tsx`. After the split, Fast Refresh treats the context file as a pure-component module and preserves state across edits. This is the standard Vite + `@vitejs/plugin-react` pattern — see the Fast Refresh rules linked from the warning message.
+**Root cause**: React Fast Refresh requires a module to export *either* only React components *or* only non-component values — not both. Context files that co-export the Context object, the Provider component, the `useXxxContext` hook, type interfaces, and helper functions violate this rule. Fast Refresh bails out and falls back to plain HMR: Vite swaps the module in, but the React tree keeps references to the **old** provider and hooks. New effects never re-subscribe; new closures never bind.
 
-**How to spot**: when you're about to edit a context file in a long-running session, note whether the dev console has shown a previous `Could not Fast Refresh` warning for that file. If it has, hard-refresh before testing your edit so you don't mistake the stale tree for a bug in your new code.
+**Fix (immediate)**: hard refresh (`Ctrl+Shift+R`). This rebuilds the React tree against the new code.
 
-**Example**: adding a wrapping `bulk-scenario` progress op to `regenerateAllLive` in `ScenariosContext.tsx` silently did nothing in the browser because Fast Refresh had bailed out on earlier edits. Three minutes after the last HMR update, a DSL change produced no `useDSLReaggregation`, `windowFetchPlannerService`, or `fetchItems` log entries at all — the running React tree had never re-subscribed after the context reload. Hard refresh restored correct behaviour.
+**Fix (durable)**: split non-component exports out of the context file. Move the Context object, `useXxxContext`, `useXxxContextOptional`, and any type-only exports into a sibling file (`XxxContextHooks.ts`). Leave only `XxxProvider` in `XxxContext.tsx`. Fast Refresh then preserves state across edits.
 
-## Anti-pattern 52: Context-dependent field semantics (field meaning varies by state)
+**How to spot**: in long-running sessions, check whether the dev console has shown a previous `Could not Fast Refresh` warning for the file you're about to edit. If so, hard-refresh before testing your edit — otherwise you'll mistake the stale tree for a bug in your new code.
 
-**Signature**: a single field name carries different semantic meaning depending on upstream state, with no name-level signal that the meaning has changed. Reviewers reading a consumer call site cannot tell, from the field name alone, which semantic they are getting. Silent correctness bugs follow: code that was written assuming semantic A continues to compile and produce numerical output when the field actually carries semantic B, because the distinction lives in hidden model state rather than in the name.
+## Anti-pattern 52: Bare field name carrying multiple semantics
 
-**Root cause**: the emitting code path contains a conditional overwrite or alias. When a higher-level state flag (a fitted model parameter, a feature flag, a config option) is enabled, the field is populated with one quantity; when it is not, the same field carries a different quantity. The alternative-flavour value may exist under a suffixed name but that name is reserved for "audit" or "fallback" purposes rather than being the primary consumer-facing surface. The asymmetric naming ("bare name swaps meaning, _suffix names are stable") makes grep-based consumer audits produce wrong answers because every grep hit on the bare name represents an ambiguous semantic.
+**Signature**: a single field name carries different meaning depending on upstream state, with no name-level signal. Reviewers reading a consumer call site can't tell which semantic they're getting. Code written assuming semantic A continues to compile and produce numerical output when the field carries semantic B.
 
-**Fix**: rename so every field name has stable, context-independent semantics. Use explicit suffixes for every variant (including the one that was previously un-suffixed), so there is no bare name whose meaning depends on upstream state. When multiple flavours exist, pick one principle for which flavour gets the bare name (typically: the primary, most general quantity) and apply it uniformly across sibling fields. If sibling fields have the bare-name-means-X convention, do not invert it for cousin fields; inconsistency across sibling/cousin families is itself a footgun.
+**Root cause**: the emitting code path has a conditional overwrite or alias. When a higher-level state flag (a fitted parameter, a feature flag, a config option) is enabled, the field carries quantity X; otherwise Y. Alternative-flavour values may exist under suffixed names but those names are reserved for "audit" or "fallback" purposes rather than being the primary surface. Asymmetric naming ("bare name swaps meaning, _suffix names are stable") makes grep audits produce wrong answers.
 
-**How to spot**: scan for fields whose comment includes "when X" or "if Y" describing their semantic content. The comment is the red flag — if a reader needs the comment to know what the value means, the name is inadequate. Grep for conditional-assignment patterns that populate the same field in multiple branches. Any field whose value is set by a `*_pred_override = compute_predictive(...)` followed by `if _pred_override: field = _pred_override` is suspect.
+**Fix**: rename so every field has stable, context-independent semantics. Use explicit suffixes for every variant — including the previously-bare one. Apply the convention uniformly across sibling and cousin field families; inconsistency between families is itself a footgun.
 
-**Example**: prior to doc 61, `mu_sd` on the Bayes latency posterior meant "epistemic posterior SD of μ when kappa_lat is not fitted, predictive SD when kappa_lat is fitted". The epistemic value was preserved separately as `mu_sd_epist`. Probability posterior used the opposite convention (`alpha` always epistemic, `alpha_pred` predictive). This asymmetry silently fed predictive bands into reporting surfaces (cohort_maturity_v3 overlay curves, posterior card, edge mini-chart) whenever kappa_lat was active — the bug that triggered the doc 61 rename. Fix: `mu_sd` now always epistemic, `mu_sd_pred` always predictive, matching the `alpha`/`alpha_pred` convention. Every consumer call site is now grep-auditable by suffix.
+**How to spot**: scan for fields whose comment includes "when X" or "if Y" describing semantic content. The comment is the red flag — if a reader needs the comment to know what the value means, the name is inadequate. Grep for conditional-assignment patterns where the same field is populated in multiple branches with different quantities.
 
-## When to add to this document
+## Anti-pattern 53: Dead-caller residue in shared merge / dispatch helpers
 
-After completing a multi-attempt fix, check: does my bug match a generalisable pattern? If so, add it here following the format: Signature (how to recognise it), Root cause (why it happens), Fix (what to do), Example (optional, specific instance).
+**Signature**: a helper that combines, merges, or dispatches between multiple inputs has an asymmetric branch — one set of fields handled with one precedence rule, another set with a different rule. The asymmetry has no documented justification at the call site, and producing the symptom requires the function to be called in a regime the asymmetry was not designed for. The function may have a name advertising the now-bypassed behaviour ("…Preserving…", "…Canonical…", "…Authoritative…").
 
-Entries should be **generalisable patterns** that an agent could plausibly hit again in a different part of the codebase. One-off bugs with fixes already in git history do not belong here — the commit message has the context, the code has the fix. If the insight is subsystem-specific rather than pattern-generalisable, it belongs in the relevant codebase architecture doc instead.
+**Root cause**: the helper had multiple callers when written, and the branch was load-bearing for one of them — typically a defence against partial / transient / lower-trust output from one caller, where preserving an existing value made sense. A later refactor removed the demanding caller without revisiting the helper's contract. The branch survives and now applies to a sole remaining caller for which the original rationale doesn't hold.
+
+**Fix**: when removing a caller of a shared helper, re-read each branch with one question: "is this still earning its keep against the surviving callers?" If not, simplify. Asymmetries between sibling families of fields (edge-local vs path-level, primary vs derived, fitted vs preserved) where the only remaining caller treats them uniformly should be flattened. If the function name advertises removed behaviour, rename — names that lie are landmines.
+
+**How to spot**: investigating "stale value persists across what should be a re-fit" symptoms — look for shared merge functions in the data-flow path. `git log -S '<helper_name>' --all -- <file>` finds the introducing commit; if a multi-caller diff has since lost a caller, the surviving branches are suspect.
+
+---
+
+## Moved entries (subsystem-specific traps)
+
+These were moved to the doc that owns the relevant code. Cited references by number still work — Ctrl+F the destination doc.
+
+| # | Title (abbrev) | Moved to |
+|---|----------------|----------|
+| 9  | Suppression window race during rapid mutations | `SYNC_ENGINE_GUARD_STATE_MACHINE.md` |
+| 10 | Assuming `isInitializing` is false | `FILE_REGISTRY_LIFECYCLE.md` |
+| 12 | Unprefixed IDB key in file lookups | `INDEXEDDB_PERSISTENCE_LAYER.md` |
+| 14 | Adding fields to Python types but not to `_build_unified_slices` | `BE_RUNNER_CLUSTER.md` |
+| 16 | E2E test seeding IDB but assuming FileRegistry is populated | `INDEXEDDB_PERSISTENCE_LAYER.md` |
+| 19 | Conflating distinct DSL concepts in a single variable | `DSL_SYNTAX_REFERENCE.md` |
+| 23 | js-yaml Date conversion corrupts context-definition hashes | `HASH_SIGNATURE_INFRASTRUCTURE.md` |
+| 27 | Confusing context-hash filtering with context-value filtering | `HASH_SIGNATURE_INFRASTRUCTURE.md` |
+| 28 | Duplicate hash-computation codepaths | `HASH_SIGNATURE_INFRASTRUCTURE.md` |
+| 31 | Regex not handling optional prefixes in DSL clauses | `DSL_PARSING_ARCHITECTURE.md` |
+| 33 | Per-subject random effects on hazard parameters | `BAYESIAN_ENGINE_RESEARCH.md` |
+| 35 | Edge ID key order mismatch (uuid-first vs id-first) | `GRAPH_MUTATION_UPDATE_MANAGER.md` |
+| 37 | Devtool "clear" action that destroys diagnostic data | `DEVTOOL_ENGINEERING_PRINCIPLES.md` |
+| 38 | Devtool script with unvalidated side effects on shared state | `DEVTOOL_ENGINEERING_PRINCIPLES.md` |
+| 39 | Graph JSON regeneration strips critical metadata | `BAYES_REGRESSION_TOOLING.md` |
+| 40 | `--rebuild --no-mcmc` no-op for synth data | `BAYES_REGRESSION_TOOLING.md` |
+| 41 | Enrichment results bypassing UpdateManager sibling rebalancing | `FE_BE_STATS_PARALLELISM.md` |
+| 44 | Weak Beta prior overwhelmed by per-cohort IS conditioning | `BAYESIAN_ENGINE_RESEARCH.md` |
+| 45 | ECharts legend `data` referencing empty-data series | `ANALYSIS_ECHARTS_BUILDERS.md` |
+| 46 | Synth graph hash divergence from connection-string inconsistency | `BAYES_REGRESSION_TOOLING.md` |
+| 47 | `cohort_alpha`/`cohort_beta` vs `alpha`/`beta` confusion | `SNAPSHOT_FIELD_SEMANTICS.md` |
+| 49 | ECharts legend icon using default palette when series `color` is omitted | `ANALYSIS_ECHARTS_BUILDERS.md` |
+
+Merged into other anti-patterns:
+
+| # | Title | Merged into |
+|---|-------|-------------|
+| 20 | Single-scenario parity test missing multi-scenario defects | AP17 |
+| 36 | Latency bead gate checking data presence not enablement | AP18 |
+| 50 | Routing non-latency edges by `sigma <= 0` heuristic | AP18 |
+| (second) 39 / (second) 40 | Reimplementing FE pipeline / vacuous synth-graph tests | AP17 |
+
+## Removed entries
+
+Removed because they duplicate guidance already in CLAUDE.md or warm-start docs:
+
+- **AP2** (Fixing one call site, missing others) — duplicated by CLAUDE.md core principle 2.
+- **AP7** (Patching the symptom, not tracing the root cause) — duplicated by `DEBUGGING_DISCIPLINE.md` root-cause gate.
+- **AP8** (Testing the mock, not the system) — duplicated by `TESTING_STANDARDS.md`.
+
+Removed because they describe an open issue rather than a recurring pattern:
+
+- **AP34** (Phase 2 onset_cohort drift on deep join-node paths) — open research issue, lives in `project-bayes/programme.md` and `project-bayes/18-compiler-journal.md`.
+
+Removed because the surface no longer exists:
+
+- **AP43** (CLI topo pass not scoping to query DSL) — `--topo-pass` flag and supporting code removed by doc 73b.

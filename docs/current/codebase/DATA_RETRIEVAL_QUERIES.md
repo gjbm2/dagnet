@@ -80,12 +80,12 @@ Build queries for external data sources (Amplitude, etc.) to fetch n/k.
 
 **Logic**:
 - Direct edge A→C exists alongside indirect path A→B→C
-- To measure P(A→C direct), we must **exclude B** from the data query
+- To measure P(A→C direct), must **exclude B** from the data query
 - Send to Amplitude: `from(a).to(c).exclude(b)`
-- This counts users who went A→C **without** passing through B
+- Counts users who went A→C **without** passing through B
 - Return: n=1000, k=150 → P(C|A, direct) = 0.15
 
-**Key Insight**: `exclude()` in data retrieval is NOT about pruning graph structure - it's about filtering data to isolate specific paths when multiple routes exist.
+**Key Insight**: `exclude()` in data retrieval is NOT about pruning graph structure — it's about filtering data to isolate specific paths when multiple routes exist.
 
 ---
 
@@ -107,7 +107,7 @@ If A is a case node (A/B test), ALL downstream edges have implicit case context.
 **Logic**:
 - Even if edge C→D doesn't explicitly mention the case
 - If there's a case node upstream, the query must include case context
-- This ensures we're measuring P(D|C) for the specific variant
+- Ensures we're measuring P(D|C) for the specific variant
 
 **Key Insight**: Must walk upstream to detect implicit conditions (case, context, etc.) and include them in data retrieval queries.
 
@@ -124,7 +124,7 @@ If A is a case node (A/B test), ALL downstream edges have implicit case context.
    - `exclude(a).exclude(b)` = must NOT visit a AND must NOT visit b
 
 ### OR Semantics: `visitedAny`
-To express "at least one of" constraints, use `visitedAny`:
+For "at least one of" constraints, use `visitedAny`:
 - `visitedAny(a,b)` = must visit node a OR node b (at least one)
 - `visitedAny(a,b).visitedAny(c,d)` = (a OR b) AND (c OR d)
 
@@ -157,4 +157,3 @@ When generating data retrieval queries with `preserve_condition=false`, MSMDC ca
 - **DSL parser**: `lib/query_dsl.py`
 - **Schema types**: `lib/graph_types.py`
 - **Tests**: `tests/test_msmdc.py`
-

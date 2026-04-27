@@ -4,7 +4,7 @@ How charts are defined, computed, hydrated, and refreshed across chart files, ca
 
 ## Chart Recipe (Unified Data Model)
 
-A chart recipe defines **what to compute and how to render**. The same structure is used across chart files, canvas analyses, and share payloads.
+A chart recipe defines **what to compute and how to render**. Same structure used across chart files, canvas analyses, and share payloads.
 
 ### ChartRecipeCore
 
@@ -123,11 +123,11 @@ Analysis types determine what the compute backend calculates, the result schema,
 | `daily_conversions` | `analysis_daily_conversions` | Time-series by day |
 | `cohort_maturity` | `analysis_cohort_maturity` | Cohort progression over time |
 
-The `analysis_type` is permanently fixed once set on a chart.
+`analysis_type` is permanently fixed once set on a chart.
 
 ## Canvas Analyses vs Chart Files
 
-Both use the same recipe structure. The difference is lifecycle:
+Both use the same recipe structure. Difference is lifecycle:
 
 - **Chart files**: persistent derive-once artefacts (opened as tabs)
 - **Canvas analyses**: embedded in the graph, auto-recompute when graph changes (if `live: true`)

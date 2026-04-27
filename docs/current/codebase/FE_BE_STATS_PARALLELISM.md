@@ -4,21 +4,21 @@ How the live graph-enrichment pipeline coordinates its two statistical writers �
 
 Previously this note also covered a "quick BE topo pass" that ran in parallel and wrote an `analytic_be` source. That branch was removed on `24-Apr-26` per [project-bayes/73b](../project-bayes/73b-be-topo-removal-and-forecast-state-separation-plan.md); CF is now the sole BE writer on the Stage 2 path.
 
-**See also**: [STATS_SUBSYSTEMS.md](STATS_SUBSYSTEMS.md) (canonical four-subsystem map and "which Python entry point do I call" table), [LAG_ANALYSIS_SUBSYSTEM.md](LAG_ANALYSIS_SUBSYSTEM.md) (what FE topo actually computes — t95, mu/sigma, lag fit detail), [STATISTICAL_DOMAIN_SUMMARY.md](STATISTICAL_DOMAIN_SUMMARY.md) (broader statistical architecture), [PROBABILITY_BLENDING.md](PROBABILITY_BLENDING.md) (how computed values feed into blended probabilities).
+**See also**: [STATS_SUBSYSTEMS.md](STATS_SUBSYSTEMS.md) (canonical four-subsystem map and "which Python entry point do I call" table), [LAG_ANALYSIS_SUBSYSTEM.md](LAG_ANALYSIS_SUBSYSTEM.md) (what FE topo computes — t95, mu/sigma, lag fit detail), [STATISTICAL_DOMAIN_SUMMARY.md](STATISTICAL_DOMAIN_SUMMARY.md) (broader statistical architecture), [PROBABILITY_BLENDING.md](PROBABILITY_BLENDING.md) (how computed values feed into blended probabilities).
 
 ## Two logical steps in one pass (FE topo)
 
-The FE topo pass performs **two logically distinct steps in a single traversal**. The two steps are easily conflated because they share one walk and one service entry point, but they sit on different layers of the data model and have different scoping rules. Code and design discussions that elide them produce persistent confusion; this section names them so the rest of the document can refer to each unambiguously.
+The FE topo pass performs **two logically distinct steps in a single traversal**. They share one walk and one service entry point but sit on different layers of the data model and have different scoping rules. Code and design discussions that elide them produce persistent confusion; this section names them so the rest of the document can refer to each unambiguously.
 
 ### Step 1 — model var generation (aggregate, source-ledger layer)
 
-FE topo walks all `window()` data for the edge, recency-weights it, and produces aggregate model vars on the `model_vars[analytic]` block — the analytic source's Beta-shape parameters, latency `mu`/`sigma`/`onset`, path-level equivalents, etc. **This output is not query-scoped**: it summarises the edge's history, not the user's current query. It is the analytic-source equivalent of what an offline Bayesian fit produces and writes to `model_vars[bayesian]`. The output is graph-only and persists on the edge.
+FE topo walks all `window()` data for the edge, recency-weights it, and produces aggregate model vars on the `model_vars[analytic]` block — the analytic source's Beta-shape parameters, latency `mu`/`sigma`/`onset`, path-level equivalents, etc. **Not query-scoped**: summarises the edge's history, not the user's current query. It is the analytic-source equivalent of what an offline Bayesian fit produces and writes to `model_vars[bayesian]`. Output is graph-only and persists on the edge.
 
 Both source families therefore live on the same layer with the same shape: an aggregate fitted source the live graph carries.
 
 ### Step 2 — quick-and-dirty blend (scoped, current-answer layer)
 
-FE topo then combines the Step 1 model vars with the current query's scoped evidence (`p.evidence.{n, k}`) and the effective DSL to produce a scoped current-answer surface — `p.mean`, `p.stdev`, `latency.completeness`, `latency.completeness_stdev`. **This output is query-scoped**: switching DSL changes it, but does not change the Step 1 model vars. It is the analytic-source equivalent of what CF does carefully (importance-sampling conditioning on snapshot evidence plus engorged file evidence). When CF runs, it overwrites the same fields on the same query-scoped surface.
+FE topo then combines the Step 1 model vars with the current query's scoped evidence (`p.evidence.{n, k}`) and the effective DSL to produce a scoped current-answer surface — `p.mean`, `p.stdev`, `latency.completeness`, `latency.completeness_stdev`. **Query-scoped**: switching DSL changes it but does not change the Step 1 model vars. It is the analytic-source equivalent of what CF does carefully (importance-sampling conditioning on snapshot evidence plus engorged file evidence). When CF runs, it overwrites the same fields on the same query-scoped surface.
 
 `p.mean` is **always query-scoped**. There is no writer that produces a non-scoped `p.mean`.
 
@@ -33,7 +33,7 @@ FE topo then combines the Step 1 model vars with the current query's scoped evid
 
 ### The combination pass is uniform across source families (design intent)
 
-Step 2 (and CF, its careful equivalent) takes the same input contract for both source families: `(model_vars[source], scoped p.evidence.*, effective DSL) → scoped current-answer`. There is no source-conditional skip. CF runs uniformly for every promoted source. See `project-bayes/73b-be-topo-removal-and-forecast-state-separation-plan.md` Decision 13 for the full design statement.
+Step 2 (and CF, its careful equivalent) takes the same input contract for both source families: `(model_vars[source], scoped p.evidence.*, effective DSL) → scoped current-answer`. No source-conditional skip. CF runs uniformly for every promoted source. See `project-bayes/73b-be-topo-removal-and-forecast-state-separation-plan.md` Decision 13 for the full design statement.
 
 ### Defects against this framing — partially closed by doc 73b Stage 2
 
@@ -43,7 +43,7 @@ Three flags and code paths historically encoded an incorrect assumption that "an
 - `alpha_beta_query_scoped` at [`model_resolver.py:107-108`](../../graph-editor/lib/runner/model_resolver.py#L107-L108) **still returns True for analytic** — Stage 2's plan deferred the flip per §8 "Rename or remove only after the runtime no longer needs it". The consumer audit (forecast_state.py, forecast_runtime.py, cohort_forecast_v3.py) is owned by Stage 4(d), and the discriminator stays intact until that audit lands.
 - `is_cf_sweep_eligible` at [`forecast_runtime.py:514`](../../graph-editor/lib/runner/forecast_runtime.py#L514) and the `analytic_degraded` mode emitter at lines 524-528 still fire for analytic edges (consequence of the discriminator above). They retire alongside the discriminator in Stage 4(d).
 
-So the durable two-step framing is now reflected in the resolver, and the §6.1 binding gate (layer-isolation: scoped `p.evidence` cannot alter the resolved analytic prior when a valid source-layer shape exists) is met. The downstream consumer behaviour is unchanged from pre-Stage-2 pending Stage 4(d).
+The durable two-step framing is now reflected in the resolver, and the §6.1 binding gate (layer-isolation: scoped `p.evidence` cannot alter the resolved analytic prior when a valid source-layer shape exists) is met. Downstream consumer behaviour is unchanged from pre-Stage-2 pending Stage 4(d).
 
 ## What the Stage 2 passes compute
 
@@ -61,13 +61,13 @@ The FE topo pass deliberately splits the cohort evidence it consumes into two se
 
 | Derivation | Evidence used | Why |
 |---|---|---|
-| Lag fit (`mu`, `sigma`, `t95`) | **Full unscoped cohorts** — all history | The lag shape is a property of the edge, not of the user's current query. Scoping would bias the fit toward newer cohorts that haven't finished maturing ("survivor bias") |
+| Lag fit (`mu`, `sigma`, `t95`) | **Full unscoped cohorts** — all history | Lag shape is a property of the edge, not of the user's current query. Scoping would bias the fit toward newer cohorts that haven't finished maturing ("survivor bias") |
 | `p_infinity` (asymptote from mature cohorts) | **Full unscoped cohorts**, filtered to `age ≥ t95` with recency weighting | Needs fully-matured cohorts to estimate the true endpoint rate. Query-window cohorts are typically not yet mature |
-| `evidence.{n, k, mean}` | **Query-scoped cohorts** (the DSL window) | This is the user's "what actually happened in the window I'm looking at". Must match the DSL |
+| `evidence.{n, k, mean}` | **Query-scoped cohorts** (the DSL window) | The user's "what actually happened in the window I'm looking at". Must match the DSL |
 | `completeness`, `completeness_stdev` | **Query-scoped cohorts** | "How mature is the evidence we just aggregated" — must match the evidence set |
-| `alpha`, `beta`, `n_effective`, `provenance` on `model_vars[analytic].probability` *(post-doc-73b Stage 2)* | Aggregate Beta fit moment-matched from window-aggregate `(mean, stdev)` via `buildAnalyticProbabilityBlock` in `modelVarsResolution.ts` | Per §3.9 mirror contract: aggregate window-family Beta shape on the same footing as the bayesian equivalent. The Python resolver consumes these fields when present; consumers that branch on `alpha_beta_query_scoped` still see True for analytic edges (deferred to Stage 4(d)) so the downstream behaviour is unchanged from pre-Stage-2 until that audit lands. When the moment-match is infeasible (zero stdev, mean at boundary, variance ≥ mean·(1−mean)), the field is omitted and the resolver falls through to `analytic_point_estimate_degraded` (§3.8 register entry 2). |
+| `alpha`, `beta`, `n_effective`, `provenance` on `model_vars[analytic].probability` *(post-doc-73b Stage 2)* | Aggregate Beta fit moment-matched from window-aggregate `(mean, stdev)` via `buildAnalyticProbabilityBlock` in `modelVarsResolution.ts` | Per §3.9 mirror contract: aggregate window-family Beta shape on the same footing as the bayesian equivalent. The Python resolver consumes these fields when present; consumers that branch on `alpha_beta_query_scoped` still see True for analytic edges (deferred to Stage 4(d)) so downstream behaviour is unchanged from pre-Stage-2 until that audit lands. When the moment-match is infeasible (zero stdev, mean at boundary, variance ≥ mean·(1−mean)), the field is omitted and the resolver falls through to `analytic_point_estimate_degraded` (§3.8 register entry 2). |
 
-**Implication for downstream consumers (post-doc-73b Stage 2 partial)**: `model_vars[analytic].probability.{alpha, beta, n_effective}` is now an aggregate Beta on the same footing as `model_vars[bayesian].probability.{alpha, beta}` — a legitimate prior for conjugate updates and as an IS proposal. The D20 synthesis path is removed. **However** the discriminator and the consumer branches that key on it are deferred to Stage 4(d): `alpha_beta_query_scoped` still returns True for analytic, `is_cf_sweep_eligible == False` and `analytic_degraded` mode still fire for analytic edges, and the cohort-forecast-v3 direct-read branch still runs for analytic. CF runs uniformly only after Stage 4(d) lands.
+**Implication for downstream consumers (post-doc-73b Stage 2 partial)**: `model_vars[analytic].probability.{alpha, beta, n_effective}` is now an aggregate Beta on the same footing as `model_vars[bayesian].probability.{alpha, beta}` — a legitimate prior for conjugate updates and as an IS proposal. The D20 synthesis path is removed. **However** the discriminator and consumer branches that key on it are deferred to Stage 4(d): `alpha_beta_query_scoped` still returns True for analytic, `is_cf_sweep_eligible == False` and `analytic_degraded` mode still fire for analytic edges, and the cohort-forecast-v3 direct-read branch still runs for analytic. CF runs uniformly only after Stage 4(d) lands.
 
 See [STATS_SUBSYSTEMS.md §5 Confusion 7](STATS_SUBSYSTEMS.md) for the full scoping table.
 
@@ -184,6 +184,18 @@ The CLI uses the same Stage 2 orchestration as the browser via `fetchDataService
 This gives deterministic headless output without creating a parallel CLI-only topo implementation.
 
 For `analyse --type conditioned_forecast`, the CLI still dispatches directly to `/api/forecast/conditioned` after the shared analysis preparation step. The request payload is built by `src/lib/conditionedForecastGraphSnapshot.ts`, which engorges the scenario graph using the disk-loaded parameter YAML map. That helper must stay runtime-neutral; the CLI should not import the browser `conditionedForecastService.ts` module just to build the payload.
+
+## Pitfalls
+
+### Anti-pattern 41: Enrichment results bypassing UpdateManager sibling rebalancing
+
+**Signature**: after a fetch completes, one edge's `p.mean` is correct (reflecting a late-arriving enrichment writer) but its sibling edges still show stale pre-fetch probabilities. Siblings don't sum to 1. Refreshing or fetching again appears to fix it (because the FE path runs first and rebalances).
+
+**Root cause**: an enrichment pass wrote `edge.p.mean` directly on the graph object, then called `setGraph()`. This bypassed `UpdateManager.applyBatchLAGValues`, which is the single code path for sibling probability rebalancing. The FE topo path correctly used `applyBatchLAGValues` (which collects edges whose `p.mean` changed and runs `findSiblingsForRebalance` + `rebalanceSiblingEdges`), but the direct-mutation path skipped it entirely.
+
+**Fix**: the fetch pipeline funnels every enrichment writer through `applyBatchLAGValues`. Late-arriving scalars are merged into the FE `EdgeLAGValues` array before application, rather than applied as a separate direct-mutation pass. See §Orchestration above for the live CF-race flow.
+
+**Broader principle**: when a subsystem has a single canonical mutation path (UpdateManager for graph state), every code path that writes the same fields must go through it. A "shortcut" that writes directly to the object and calls `setGraph` bypasses all the invariants the canonical path maintains — rebalancing, override flag checks, conditional probability propagation.
 
 ## Key files
 

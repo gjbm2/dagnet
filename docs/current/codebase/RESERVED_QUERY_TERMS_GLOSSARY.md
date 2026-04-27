@@ -3,43 +3,30 @@
 **Status**: Living reference  
 **Date**: 1-Apr-26
 
-This note defines reserved terms that must be used consistently across
-the FE, BE, tests, and docs. Capitalisation is semantic here.
+Defines reserved terms that must be used consistently across FE, BE, tests, and docs. Capitalisation is semantic.
 
 ## Core terms
 
 **Cohort**
 
-A dated group of users defined by "did the relevant thing on this date".
-The defining thing depends on query mode:
+A dated group of users defined by "did the relevant thing on this date". The defining thing depends on query mode:
 
-- In `window()`, the Cohort is users who reached the edge's `from_node`
-  on that date.
-- In `cohort()`, the Cohort is users who entered the anchor node `a` on
-  that date.
+- In `window()`, the Cohort is users who reached the edge's `from_node` on that date.
+- In `cohort()`, the Cohort is users who entered the anchor node `a` on that date.
 
-Use **Cohort** when you mean the dated population itself, not the query
-clause.
+Use **Cohort** when you mean the dated population itself, not the query clause.
 
 **`cohort()`**
 
-A QueryDSL clause selecting `a-x-y` semantics for an edge. The group is
-anchor-anchored at `a`, `x` is a moving quantity because upstream
-arrivals are still maturing, and path-level latency from `a` into the
-edge matters. `cohort()` is a query mode, not the population name.
+A QueryDSL clause selecting `a-x-y` semantics for an edge. The group is anchor-anchored at `a`, `x` is a moving quantity because upstream arrivals are still maturing, and path-level latency from `a` into the edge matters. `cohort()` is a query mode, not the population name.
 
 **`window()`**
 
-A QueryDSL clause selecting edge-local semantics. The relevant Cohort is
-defined at the edge's `from_node`, `x` is fixed within that
-window-anchored subject, and edge-local latency is sufficient to define
-maturity for the edge.
+A QueryDSL clause selecting edge-local semantics. The relevant Cohort is defined at the edge's `from_node`, `x` is fixed within that window-anchored subject, and edge-local latency is sufficient to define maturity for the edge.
 
 **`asat()`**
 
-A QueryDSL clause asking a point-in-time question: "what would the user
-have seen on or before this date?" It is an evidence and posterior
-frontier, not just a chart label.
+A QueryDSL clause asking a point-in-time question: "what would the user have seen on or before this date?" It is an evidence and posterior frontier, not just a chart label.
 
 The system must therefore treat `asat()` as affecting:
 
@@ -47,8 +34,7 @@ The system must therefore treat `asat()` as affecting:
 - sweep upper bounds where a sweep is used
 - posterior selection or fit-history selection
 
-The system must not mix historical evidence with a posterior fitted
-after the requested `asat()` date.
+The system must not mix historical evidence with a posterior fitted after the requested `asat()` date.
 
 ## Query modes
 
@@ -84,20 +70,14 @@ Fields: `path_t95`, `path_mu`, `path_sigma`, `path_onset_delta_days`
 
 **`cohort_alpha` / `cohort_beta`**
 
-The Bayesian posterior on this edge's conversion rate (y/x), estimated
-from **cohort-mode** evidence (anchor-anchored data, path-level latency).
-These encode the **edge rate**, not a compound path product — the same
-quantity as `alpha`/`beta`, but fitted from different evidence.
+The Bayesian posterior on this edge's conversion rate (y/x), estimated from **cohort-mode** evidence (anchor-anchored data, path-level latency). These encode the **edge rate**, not a compound path product — the same quantity as `alpha`/`beta`, but fitted from different evidence.
 
 - `posterior.alpha` / `posterior.beta` → window-mode posterior on p_edge
 - `posterior.cohort_alpha` / `posterior.cohort_beta` → cohort-mode posterior on p_edge (same rate, different evidence set)
 
-The model resolver (`runner/model_resolver.py`) selects the appropriate
-pair based on `temporal_mode`: window → `alpha/beta`, cohort → `cohort_alpha/cohort_beta`.
+The model resolver (`runner/model_resolver.py`) selects the appropriate pair based on `temporal_mode`: window → `alpha/beta`, cohort → `cohort_alpha/cohort_beta`.
 
-Previously named `path_alpha`/`path_beta` — renamed because the `path_`
-prefix was misread as "compound path probability" when it actually
-referred to the latency model used during fitting.
+Previously named `path_alpha`/`path_beta` — renamed because the `path_` prefix was misread as "compound path probability" when it actually referred to the latency model used during fitting.
 
 **`anchor_median_lag_days`**
 
@@ -111,15 +91,11 @@ See SNAPSHOT_FIELD_SEMANTICS.md for full field-by-field semantics.
 
 **`anchor_day`**
 
-The date that defines the Cohort. In `window()` it is the date users
-reached the `from_node`. In `cohort()` it is the date users entered the
-anchor node `a`.
+The date that defines the Cohort. In `window()` it is the date users reached the `from_node`. In `cohort()` it is the date users entered the anchor node `a`.
 
 **`retrieved_at`**
 
-The observation timestamp in the snapshot DB. Multiple `retrieved_at`
-values for the same `anchor_day` show the same Cohort measured again at
-later ages.
+The observation timestamp in the snapshot DB. Multiple `retrieved_at` values for the same `anchor_day` show the same Cohort measured again at later ages.
 
 **`a`, `x`, `y`**
 
@@ -127,68 +103,40 @@ later ages.
 - `x`: arrivals at the current edge's `from_node`
 - `y`: conversions at the current edge's `to_node`
 
-For `cohort()` semantics, `a` is the anchor population, but the edge's
-displayed rate remains `y/x`, not `y/a`.
+For `cohort()` semantics, `a` is the anchor population, but the edge's displayed rate remains `y/x`, not `y/a`.
 
 ## Slice and binding terms
 
 **Contexted query**
 
-A query whose DSL includes `context(...)`, `contextAny(...)`, case
-constraints, or other slice-defining clauses. Context is part of the
-read identity. The BE must not widen, drop, or silently merge contexted
-slices beyond what the FE planner explicitly requested.
+A query whose DSL includes `context(...)`, `contextAny(...)`, case constraints, or other slice-defining clauses. Context is part of the read identity. The BE must not widen, drop, or silently merge contexted slices beyond what the FE planner explicitly requested.
 
 **`slice_keys`**
 
-The explicit slice families the FE planned for evidence binding. These
-are part of the snapshot read contract and must flow through unchanged.
+The explicit slice families the FE planned for evidence binding. Part of the snapshot read contract and must flow through unchanged.
 
 **`core_hash`**
 
-The FE-computed seed snapshot identity for a canonical query signature.
-The backend consumes it as an opaque key and must not derive a new one.
+The FE-computed seed snapshot identity for a canonical query signature. The backend consumes it as an opaque key and must not derive a new one.
 
 **`equivalent_hashes`**
 
-The FE-computed closure set of hashes linked through `hash-mappings`.
-These are part of the snapshot family for reads. If the FE provides
-them, the BE must use them for evidence binding rather than reading only
-the seed `core_hash`.
+The FE-computed closure set of hashes linked through `hash-mappings`. Part of the snapshot family for reads. If the FE provides them, the BE must use them for evidence binding rather than reading only the seed `core_hash`.
 
 ## Model quality and diagnostic terms
 
 **LOO-ELPD**
 
-Leave-one-out expected log pointwise predictive density. A proper
-scoring rule measuring how well the Bayesian model predicts each
-observation when that observation is held out. Computed via PSIS-LOO
-(Pareto-smoothed importance sampling). More negative = worse fit.
-See doc 32.
+Leave-one-out expected log pointwise predictive density. A proper scoring rule measuring how well the Bayesian model predicts each observation when that observation is held out. Computed via PSIS-LOO (Pareto-smoothed importance sampling). More negative = worse fit. See doc 32.
 
 **ΔELPD** / **`delta_elpd`**
 
-The difference between the Bayesian model's LOO-ELPD and the analytic
-stats pass's plug-in log-likelihood, for the same set of observations.
-Positive means the Bayesian model predicts better than the analytic
-point estimates; negative means worse. The primary per-edge model
-adequacy metric. Stored on `PosteriorSummary` (Python) and
-`ProbabilityPosterior` / `LatencyPosterior` (TypeScript).
+The difference between the Bayesian model's LOO-ELPD and the analytic stats pass's plug-in log-likelihood, for the same set of observations. Positive means the Bayesian model predicts better than the analytic point estimates; negative means worse. The primary per-edge model adequacy metric. Stored on `PosteriorSummary` (Python) and `ProbabilityPosterior` / `LatencyPosterior` (TypeScript).
 
 **Pareto k** / **`pareto_k_max`**
 
-The shape parameter from the generalised Pareto distribution fitted to
-the importance-sampling weights during PSIS-LOO. Indicates reliability
-of the LOO estimate for a given observation. k < 0.5 is reliable;
-0.5–0.7 acceptable; > 0.7 unreliable (the observation is highly
-influential — the posterior changes substantially when it is removed).
-`pareto_k_max` on a posterior is the worst k across all observations
-contributing to that edge.
+The shape parameter from the generalised Pareto distribution fitted to the importance-sampling weights during PSIS-LOO. Indicates reliability of the LOO estimate for a given observation. k < 0.5 is reliable; 0.5–0.7 acceptable; > 0.7 unreliable (the observation is highly influential — the posterior changes substantially when it is removed). `pareto_k_max` on a posterior is the worst k across all observations contributing to that edge.
 
 **`n_loo_obs`**
 
-The number of data points (observation-level, not node-level) that
-contributed to the LOO score for an edge. Observation nodes like
-`obs_daily_{edge}` are vectorised — one data point per anchor day in
-the array — so `n_loo_obs` can be much larger than the number of
-named PyMC distribution nodes.
+The number of data points (observation-level, not node-level) that contributed to the LOO score for an edge. Observation nodes like `obs_daily_{edge}` are vectorised — one data point per anchor day in the array — so `n_loo_obs` can be much larger than the number of named PyMC distribution nodes.

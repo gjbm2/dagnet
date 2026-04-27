@@ -101,7 +101,7 @@ Minimise/maximise logic: see CANVAS_OBJECT_DISPLAY_STATES.md.
 | Tab | `TabContextMenu.tsx` | Right-click tab |
 | Multi-select | `MultiSelectContextMenu.tsx` | Right-click with multiple selected |
 
-`CanvasContextMenus.tsx` is the dispatcher — it determines which specific menu to show based on what was right-clicked.
+`CanvasContextMenus.tsx` is the dispatcher — determines which specific menu to show based on what was right-clicked.
 
 ## Modals (~26)
 

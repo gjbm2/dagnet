@@ -69,6 +69,16 @@ These commands **destroy user work that cannot be recovered**. The cost of askin
 1. `docs/current/codebase/SYNC_SYSTEM_OVERVIEW.md` — 4-layer data model, sync flows, known races
 2. `docs/current/codebase/RESERVED_QUERY_TERMS_GLOSSARY.md` — term definitions that affect every subsystem
 3. `docs/current/codebase/DEV_ENVIRONMENT_AND_HMR.md` — staleness diagnostic checklist only
+4. `docs/current/codebase/KNOWN_ANTI_PATTERNS.md` — recurring failure patterns; check if your bug matches a signature before re-deriving
+
+**Cold-start agents (first session in this codebase) should also read first**:
+- `docs/current/codebase/DOMAIN_PRIMER.md` — what DagNet does + 3 load-bearing concepts
+- `docs/current/codebase/TOPOLOGY.md` — 60-second system map + 14 subsystems
+- `docs/current/codebase/GLOSSARY.md` — pin while reading; resolves acronyms
+- `docs/current/codebase/TOUR_PROBABILITY_EDIT.md` — concrete trace through every layer
+
+**Reference (consult while making changes)**:
+- `docs/current/codebase/INVARIANTS.md` — flat list of must-be-true rules
 
 Then identify your task type and read the relevant docs from `docs/current/codebase/TASK_TYPE_READING_GUIDE.md`.
 
@@ -84,6 +94,7 @@ read:
   - docs/current/codebase/SYNC_SYSTEM_OVERVIEW.md
   - docs/current/codebase/RESERVED_QUERY_TERMS_GLOSSARY.md
   - docs/current/codebase/DEV_ENVIRONMENT_AND_HMR.md
+  - docs/current/codebase/KNOWN_ANTI_PATTERNS.md
   - (any additional required_reads from the manifest)
 invariants:
   - (3–7 bullets describing non-obvious rules you extracted)

@@ -157,7 +157,7 @@ Fast path when: no edge count/ID/handle changes, no view mode changes, no image 
 - Updates canvas object nodes (postit/container/analysis) from graph data
 - **Resize guard** (`isResizingNodeRef.current`): if true, preserves RF node style (width/height) — prevents graph→RF sync from overwriting the in-progress resize visual
 - **Drag guard** (`isDraggingNodeRef.current`): if true, preserves RF node position — prevents graph→RF sync from overwriting the in-progress drag position
-- Always updates `data.container`/`data.postit`/`data.analysis` from graph — this pushes updated dimensions to the node component
+- Always updates `data.container`/`data.postit`/`data.analysis` from graph — pushes updated dimensions to the node component
 
 ### Slow path behaviour
 

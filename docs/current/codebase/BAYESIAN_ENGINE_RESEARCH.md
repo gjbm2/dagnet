@@ -467,3 +467,29 @@ Based on codebase analysis:
 4. Model fit evaluation and storage
 
 This would position DagNet as the **only tool** offering temporal probability modeling with automated Bayesian inference for conversion funnels.
+
+---
+
+## Modelling pitfalls
+
+Failure patterns from the Bayes compiler that are easy to repeat. See `project-bayes/programme.md` and `project-bayes/18-compiler-journal.md` for the full debugging history.
+
+### Anti-pattern 33: Per-subject random effects on hazard parameters
+
+**Signature**: adding per-cohort (or per-trajectory) latent offsets to a shared parameter (`mu`, `sigma`, `onset`) in the product-of-conditional-Binomials likelihood. ESS collapses to single digits, the shared parameter drifts to its prior, onset–mu correlation approaches ±1.0.
+
+**Root cause**: with N trajectories and N per-cohort offsets, the model has as many parameters as data points. Each cohort's offset absorbs its own trajectory's signal, leaving the shared parameter unconstrained.
+
+**Fix**: use per-interval observation-level overdispersion instead. Replace `Binomial(n_j, q_j)` with `BetaBinomial(n_j, q_j * kappa_lat, (1 - q_j) * kappa_lat)`. This adds ONE scalar parameter per edge, not N.
+
+**Broader principle**: the analogue of `kappa` for any distribution is a scalar that inflates variance at the observation level, not per-subject latent variables.
+
+### Anti-pattern 44: Weak Beta prior overwhelmed by per-cohort IS conditioning
+
+**Signature**: per-cohort forecast values (daily conversions `forecast_y`, or per-cohort `projected_y`) swing wildly from the model rate. A single young cohort with moderate evidence produces a conditioned rate 3–5× the prior. Aggregate consumers (chart, topo pass) are stable because many cohorts average out the IS noise.
+
+**Root cause**: the MC sweep's `p` draws use a Beta prior with insufficient concentration. When `resolved.alpha`/`beta` are unavailable (analytic sources), the fallback prior is too weak — `Beta(1,1)` or `Beta(p×20, (1-p)×20)` gives only 2–20 effective trials. A single cohort with 1000+ trials overwhelms it completely.
+
+**Fix**: the model resolver derives `alpha`/`beta` from the edge's `evidence.n` / `evidence.k` (actual observation counts) when no Bayesian posterior is available. This gives a prior whose concentration reflects the real evidence base. See D20 fix in `runner/model_resolver.py`.
+
+**How to spot**: check `resolved.alpha` and `resolved.beta`. If they sum to < 50 for an edge with hundreds of observations, the prior is too weak for per-cohort IS.

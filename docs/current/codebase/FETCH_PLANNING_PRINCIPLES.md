@@ -44,7 +44,7 @@ After planning, every anchor-day in the requested range must be either: (a) sche
 
 ### I-2: No redundant fetches
 
-The planner must not schedule a fetch for an anchor-day range that is already covered by non-stale cached data.
+The planner must not schedule a fetch for an anchor-day range already covered by non-stale cached data.
 
 ### I-3: Staleness is mode-aware
 
@@ -75,7 +75,7 @@ For window mode, the planner:
 
 A cached window value is stale if:
 - `days_since_retrieval > staleness_threshold`
-- Where threshold depends on recency: recent days (close to today) need more frequent refresh; old days are stable
+- Threshold depends on recency: recent days (close to today) need more frequent refresh; old days are stable
 
 ---
 

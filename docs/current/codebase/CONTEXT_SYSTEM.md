@@ -51,7 +51,7 @@ See `docs/current/project-contexts/mece-context-aggregation-design.md` for the c
 
 When the graph's `dataInterestsDSL` changes over time (e.g., from uncontexted to contexted fetching), snapshots are stored under different hashes for different time periods. The @ menu and snapshot retrieval system queries across ALL plausible hashes simultaneously to find snapshots from every epoch.
 
-This does NOT use `dataInterestsDSL` directly — it enumerates plausible context key-sets from the stored parameter file's `values[].sliceDSL` topology. See `docs/current/project-contexts/snapshot-epoch-resolution-design.md`.
+Does NOT use `dataInterestsDSL` directly — it enumerates plausible context key-sets from the stored parameter file's `values[].sliceDSL` topology. See `docs/current/project-contexts/snapshot-epoch-resolution-design.md`.
 
 ## Key Files
 

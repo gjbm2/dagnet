@@ -66,7 +66,7 @@ TIER 3: GitHub API (gitService.ts + Octokit)
 
 ### Credential hierarchy (exclusive, no blending)
 
-Precedence is strict -- only ONE source is used:
+Precedence is strict — only ONE source is used:
 
 1. **URL credentials** (temporary): `?credentials={base64-encoded-json}`, one-shot, cleared after use
 2. **System secret credentials** (CI/CD): opt-in via `DAGNET_LOCAL_E2E_CREDENTIALS=1`
@@ -125,7 +125,7 @@ Instead of sequential file updates (fragile, creates orphans), DagNet uses the G
 
 ### Design decisions
 
-- Uses `pullLatest()` (3-way merge), **not** `pullLatestRemoteWins()` -- preserves user's uncommitted changes
+- Uses `pullLatest()` (3-way merge), **not** `pullLatestRemoteWins()` — preserves user's uncommitted changes
 - No cascade on conflict: `onComplete()` only called on zero-conflict success
 - Pause/resume uses `timerActive` flag to prevent re-entry
 

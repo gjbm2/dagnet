@@ -57,25 +57,15 @@ const bayesianFailed: ModelVarsEntry = {
   },
 };
 
-const manualEntry: ModelVarsEntry = {
-  source: 'manual',
-  source_at: '21-Mar-26',
-  probability: { mean: 0.20, stdev: 0.05 },
-  latency: {
-    mu: 2.0,
-    sigma: 0.6,
-    t95: 35,
-    onset_delta_days: 2,
-  },
-};
-
-const allThree = [analyticEntry, bayesianGated, manualEntry];
+// Doc 73b §3.5 / S2 / S3: 'manual' is no longer a valid ModelSource or
+// ModelSourcePreference value; user authoring lives at the per-field locks.
+const allEntries = [analyticEntry, bayesianGated];
 
 // ── effectivePreference ─────────────────────────────────────────────────────
 
 describe('effectivePreference', () => {
   it('should use edge preference when present', () => {
-    expect(effectivePreference('manual', 'bayesian')).toBe('manual');
+    expect(effectivePreference('analytic', 'bayesian')).toBe('analytic');
   });
 
   it('should fall back to graph preference when edge is undefined', () => {
@@ -89,6 +79,18 @@ describe('effectivePreference', () => {
   it('should prefer edge over graph even when edge is best_available', () => {
     expect(effectivePreference('best_available', 'bayesian')).toBe('best_available');
   });
+
+  it('graceful-degrade: stale edge `manual` is treated as unpinned (doc 73b OP1)', () => {
+    // In-the-wild graphs may still carry 'manual' on read despite the
+    // load-time migration. Runtime treats it as undefined so we fall through
+    // to graph preference.
+    expect(effectivePreference('manual' as any, 'bayesian')).toBe('bayesian');
+    expect(effectivePreference('manual' as any, undefined)).toBe('best_available');
+  });
+
+  it('graceful-degrade: stale graph `manual` is also treated as unpinned', () => {
+    expect(effectivePreference(undefined, 'manual' as any)).toBe('best_available');
+  });
 });
 
 // ── resolveActiveModelVars ──────────────────────────────────────────────────
@@ -96,13 +98,13 @@ describe('effectivePreference', () => {
 describe('resolveActiveModelVars', () => {
   describe('best_available preference', () => {
     it('should select bayesian when gated and present', () => {
-      const result = resolveActiveModelVars(allThree, 'best_available');
+      const result = resolveActiveModelVars(allEntries, 'best_available');
       expect(result?.source).toBe('bayesian');
       expect(result?.probability.mean).toBe(0.15);
     });
 
     it('should fall back to analytic when bayesian gate fails under best_available', () => {
-      const entries = [analyticEntry, bayesianFailed, manualEntry];
+      const entries = [analyticEntry, bayesianFailed];
       const result = resolveActiveModelVars(entries, 'best_available');
       expect(result?.source).toBe('analytic');
     });
@@ -115,7 +117,7 @@ describe('resolveActiveModelVars', () => {
 
   describe('bayesian preference', () => {
     it('should select bayesian when gated', () => {
-      const result = resolveActiveModelVars(allThree, 'bayesian');
+      const result = resolveActiveModelVars(allEntries, 'bayesian');
       expect(result?.source).toBe('bayesian');
     });
 
@@ -134,40 +136,14 @@ describe('resolveActiveModelVars', () => {
 
   describe('analytic preference', () => {
     it('should select analytic even when gated bayesian is available', () => {
-      const result = resolveActiveModelVars(allThree, 'analytic');
+      const result = resolveActiveModelVars(allEntries, 'analytic');
       expect(result?.source).toBe('analytic');
       expect(result?.probability.mean).toBe(0.12);
     });
 
     it('should return undefined when no analytic entry exists', () => {
-      const result = resolveActiveModelVars([bayesianGated, manualEntry], 'analytic');
+      const result = resolveActiveModelVars([bayesianGated], 'analytic');
       expect(result).toBeUndefined();
-    });
-  });
-
-  describe('manual preference', () => {
-    it('should select manual entry when present', () => {
-      const result = resolveActiveModelVars(allThree, 'manual');
-      expect(result?.source).toBe('manual');
-      expect(result?.probability.mean).toBe(0.20);
-    });
-
-    it('should fall through to best_available when no manual entry exists', () => {
-      const entries = [analyticEntry, bayesianGated];
-      const result = resolveActiveModelVars(entries, 'manual');
-      expect(result?.source).toBe('bayesian');
-    });
-
-    it('should fall through to analytic when no manual and bayesian gate failed', () => {
-      const entries = [analyticEntry, bayesianFailed];
-      const result = resolveActiveModelVars(entries, 'manual');
-      expect(result?.source).toBe('analytic');
-    });
-
-    it('should fall through to bayesian when no manual and bayesian gate passed', () => {
-      const entries = [analyticEntry, bayesianGated];
-      const result = resolveActiveModelVars(entries, 'manual');
-      expect(result?.source).toBe('bayesian');
     });
   });
 
@@ -178,10 +154,6 @@ describe('resolveActiveModelVars', () => {
 
     it('should return undefined for empty model_vars array', () => {
       expect(resolveActiveModelVars([], 'best_available')).toBeUndefined();
-    });
-
-    it('should return undefined when only manual exists and preference is analytic', () => {
-      expect(resolveActiveModelVars([manualEntry], 'analytic')).toBeUndefined();
     });
 
     it('should fall back to analytic when bayesian has no quality data (best_available respects gate)', () => {
@@ -238,7 +210,13 @@ describe('promoteModelVars', () => {
   });
 
   it('should omit path-level fields when not present in entry', () => {
-    const result = promoteModelVars(manualEntry);
+    const edgeOnly: ModelVarsEntry = {
+      source: 'analytic',
+      source_at: '21-Mar-26',
+      probability: { mean: 0.20, stdev: 0.05 },
+      latency: { mu: 2.0, sigma: 0.6, t95: 35, onset_delta_days: 2 },
+    };
+    const result = promoteModelVars(edgeOnly);
     expect(result?.latency?.mu).toBe(2.0);
     expect(result?.latency?.path_mu).toBeUndefined();
     expect(result?.latency?.path_sigma).toBeUndefined();
@@ -407,7 +385,7 @@ describe('Toggle visual state derivation (§17.3)', () => {
       return { pinned, autoOn, off: !pinned && !autoOn };
     };
 
-    return { bayesian: result('bayesian'), analytic: result('analytic'), manual: result('manual') };
+    return { bayesian: result('bayesian'), analytic: result('analytic') };
   }
 
   const vars: ModelVarsEntry[] = [analyticEntry, bayesianGated];
@@ -417,21 +395,18 @@ describe('Toggle visual state derivation (§17.3)', () => {
     const s = deriveToggleStates(vars, undefined, false, undefined);
     expect(s.bayesian).toEqual({ pinned: false, autoOn: true, off: false });
     expect(s.analytic).toEqual({ pinned: false, autoOn: false, off: true });
-    expect(s.manual).toEqual({ pinned: false, autoOn: false, off: true });
   });
 
   it('pinned Bayesian: only Bayesian is pinned-on, others off', () => {
     const s = deriveToggleStates(vars, 'bayesian', true, undefined);
     expect(s.bayesian).toEqual({ pinned: true, autoOn: false, off: false });
     expect(s.analytic).toEqual({ pinned: false, autoOn: false, off: true });
-    expect(s.manual).toEqual({ pinned: false, autoOn: false, off: true });
   });
 
   it('pinned Analytic: only Analytic is pinned-on, others off', () => {
     const s = deriveToggleStates(vars, 'analytic', true, undefined);
     expect(s.bayesian).toEqual({ pinned: false, autoOn: false, off: true });
     expect(s.analytic).toEqual({ pinned: true, autoOn: false, off: false });
-    expect(s.manual).toEqual({ pinned: false, autoOn: false, off: true });
   });
 
   it('pinned Bayesian with gate fail: Bayesian pinned-on even though resolution falls back to analytic', () => {
@@ -449,52 +424,28 @@ describe('Toggle visual state derivation (§17.3)', () => {
   });
 
   it('unpin (clear override): reverts to auto mode', () => {
-    // Simulate: was pinned to manual, now cleared
-    const withManual: ModelVarsEntry[] = [...vars, { source: 'manual', source_at: '21-Mar-26', probability: { mean: 0.5, stdev: 0.1 } }];
-    const s = deriveToggleStates(withManual, undefined, false, undefined);
-    // best_available → Bayesian (gated), manual is off
+    // Simulate: was pinned, now cleared (edgePreferenceOverridden=false)
+    const s = deriveToggleStates(vars, undefined, false, undefined);
+    // best_available → Bayesian (gated)
     expect(s.bayesian).toEqual({ pinned: false, autoOn: true, off: false });
-    expect(s.manual).toEqual({ pinned: false, autoOn: false, off: true });
+    expect(s.analytic).toEqual({ pinned: false, autoOn: false, off: true });
   });
 });
 
 // ── Output card focus + edit flow (doc 15 §5.3, §17.3.4) ──────────────────
 // Tests the two-phase flow: focus (immediate pin) then blur (value commit).
 
-describe('Output card focus + edit flow (§5.3, §17.3.4)', () => {
-  // Replicate handleOutputFocus from ModelVarsCards
-  function simulateOutputFocus(
-    edgePreference: string | undefined,
-    edgePreferenceOverridden: boolean,
-  ): Record<string, any> | null {
-    if (edgePreferenceOverridden && edgePreference === 'manual') return null; // already pinned
-    return { model_source_preference: 'manual', model_source_preference_overridden: true };
-  }
-
-  // Replicate handleOutputEdit from ModelVarsCards
-  function simulateOutputEdit(
-    modelVars: ModelVarsEntry[],
-    promotedMean: number,
-    promotedStdev: number,
-    field: string,
-    value: number,
-  ): Record<string, any> {
-    const existing = modelVars.find(e => e.source === 'manual');
-    const base: ModelVarsEntry = existing ?? {
-      source: 'manual',
-      source_at: '22-Mar-26',
-      probability: { mean: promotedMean, stdev: promotedStdev },
-    };
-    const updated: ModelVarsEntry = { ...base, source_at: '22-Mar-26' };
-    if (field === 'mean' || field === 'stdev') {
-      updated.probability = { ...updated.probability, [field]: value };
-    } else {
-      updated.latency = { ...(updated.latency ?? { mu: 0, sigma: 0, t95: 0, onset_delta_days: 0 }), [field]: value };
-    }
-    const nextVars = [...modelVars];
-    const idx = nextVars.findIndex(e => e.source === 'manual');
-    if (idx >= 0) nextVars[idx] = updated; else nextVars.push(updated);
-    return { model_vars: nextVars, model_source_preference: 'manual', model_source_preference_overridden: true };
+// Output overtype semantics (doc 73b §6.7 Actions B7c, B7d, B7e — Stage 3) //
+// Output overtype writes the per-field value plus its `*_overridden` flag.
+// It does not auto-create a `model_vars[manual]` entry, does not pin the
+// selector, and leaves the source ledger and selector preference unchanged.
+describe('Output overtype semantics (doc 73b §6.7)', () => {
+  // Replicate handleOutputCommit from ModelVarsCards.
+  // The new contract: emit ONLY {field, field_overridden} — no model_vars
+  // mutation, no model_source_preference change.
+  function simulateOutputCommit(field: 'mean' | 'stdev', value: number): Record<string, any> {
+    if (field === 'mean') return { mean: value, mean_overridden: true };
+    return { stdev: value, stdev_overridden: true };
   }
 
   // Simulate what updateEdgeParam does: merge changes onto edge.p
@@ -505,86 +456,56 @@ describe('Output card focus + edit flow (§5.3, §17.3.4)', () => {
     return { ...edgeP, ...changes };
   }
 
-  it('focus immediately pins to manual before any value change', () => {
-    const focusChanges = simulateOutputFocus(undefined, false);
-    expect(focusChanges).not.toBeNull();
-    expect(focusChanges!.model_source_preference).toBe('manual');
-    expect(focusChanges!.model_source_preference_overridden).toBe(true);
+  it('overtype on `mean` writes value + mean_overridden only', () => {
+    const changes = simulateOutputCommit('mean', 0.20);
+    expect(changes).toEqual({ mean: 0.20, mean_overridden: true });
+    expect('model_vars' in changes).toBe(false);
+    expect('model_source_preference' in changes).toBe(false);
+    expect('model_source_preference_overridden' in changes).toBe(false);
   });
 
-  it('focus is idempotent — no-op if already pinned to manual', () => {
-    const focusChanges = simulateOutputFocus('manual', true);
-    expect(focusChanges).toBeNull();
+  it('overtype on `stdev` writes value + stdev_overridden only', () => {
+    const changes = simulateOutputCommit('stdev', 0.05);
+    expect(changes).toEqual({ stdev: 0.05, stdev_overridden: true });
+    expect('model_vars' in changes).toBe(false);
   });
 
-  it('after focus, toggles show manual pinned + others off', () => {
-    const focusChanges = simulateOutputFocus(undefined, false)!;
-    // Merge onto edge.p (simulating updateEdgeParam)
-    const edgeP = applyChangesToEdge(
-      { model_vars: [analyticEntry, bayesianGated], mean: 0.12, stdev: 0.03 },
-      focusChanges,
-    );
-
-    // Derive toggle states from the updated edge
-    const pref = effectivePreference(edgeP.model_source_preference, undefined);
-    const active = resolveActiveModelVars(edgeP.model_vars, pref);
-    // manual preference but no manual entry → falls back to bestAvailable
-    // That's fine — the TOGGLE state is what matters, not the active entry
-    const anyPinned = edgeP.model_source_preference_overridden;
-    expect(anyPinned).toBe(true);
-
-    // Manual is pinned (green toggle)
-    const manualPinned = anyPinned && edgeP.model_source_preference === 'manual';
-    expect(manualPinned).toBe(true);
-
-    // Others are OFF (not auto-on, because anyPinned is true)
-    const bayesAutoOn = active?.source === 'bayesian' && !anyPinned;
-    expect(bayesAutoOn).toBe(false);
-    const analyticAutoOn = active?.source === 'analytic' && !anyPinned;
-    expect(analyticAutoOn).toBe(false);
-  });
-
-  it('full flow: focus → type → blur creates manual entry + stays pinned', () => {
-    // Phase 1: focus
-    const focusChanges = simulateOutputFocus(undefined, false)!;
-    const afterFocus = applyChangesToEdge(
-      { model_vars: [analyticEntry], mean: 0.12, stdev: 0.03 },
-      focusChanges,
-    );
-    expect(afterFocus.model_source_preference_overridden).toBe(true);
-
-    // Phase 2: blur with new value
-    const editChanges = simulateOutputEdit(afterFocus.model_vars, 0.12, 0.03, 'mean', 0.20);
-    const afterEdit = applyChangesToEdge(afterFocus, editChanges);
-
-    // Manual entry exists with edited value
-    const manual = afterEdit.model_vars.find((e: any) => e.source === 'manual');
-    expect(manual).toBeDefined();
-    expect(manual.probability.mean).toBe(0.20);
-    expect(manual.probability.stdev).toBe(0.03); // snapshot
-
-    // Still pinned to manual
-    expect(afterEdit.model_source_preference).toBe('manual');
-    expect(afterEdit.model_source_preference_overridden).toBe(true);
-
-    // Resolution picks manual entry
-    const pref = effectivePreference(afterEdit.model_source_preference, undefined);
-    const active = resolveActiveModelVars(afterEdit.model_vars, pref);
-    expect(active?.source).toBe('manual');
-    expect(active?.probability.mean).toBe(0.20);
-  });
-
-  it('subsequent edit updates existing manual entry in place', () => {
-    const manualEntry: ModelVarsEntry = {
-      source: 'manual', source_at: '21-Mar-26',
-      probability: { mean: 0.15, stdev: 0.03 },
+  it('overtype does NOT auto-create a model_vars[manual] entry', () => {
+    const beforeP = {
+      model_vars: [analyticEntry, bayesianGated],
+      mean: 0.12, stdev: 0.03,
     };
-    const changes = simulateOutputEdit([analyticEntry, manualEntry], 0.15, 0.03, 'stdev', 0.05);
+    const afterP = applyChangesToEdge(beforeP, simulateOutputCommit('mean', 0.20));
+    // model_vars unchanged — no synthetic entry was added.
+    expect(afterP.model_vars).toEqual(beforeP.model_vars);
+    // No 'manual' source ever appears.
+    expect(afterP.model_vars.some((e: any) => e.source === 'manual')).toBe(false);
+  });
 
-    expect(changes.model_vars).toHaveLength(2);
-    const manual = changes.model_vars.find((e: any) => e.source === 'manual');
-    expect(manual.probability.mean).toBe(0.15);
-    expect(manual.probability.stdev).toBe(0.05);
-    expect(changes.model_source_preference_overridden).toBe(true);
+  it('overtype does NOT pin the selector', () => {
+    const beforeP = {
+      model_vars: [analyticEntry, bayesianGated],
+      mean: 0.12, stdev: 0.03,
+    };
+    const afterP = applyChangesToEdge(beforeP, simulateOutputCommit('mean', 0.20));
+    // Selector preference remains absent (auto/quality-gated).
+    expect(afterP.model_source_preference).toBeUndefined();
+    expect(afterP.model_source_preference_overridden).toBeUndefined();
+  });
+
+  it('locked overtype: mean stays sticky (the lock is the canonical authoring mechanism)', () => {
+    // After overtype, mean_overridden=true; the active source resolution is
+    // unchanged, but lock-respecting writers (Stage 5) will skip rewriting mean.
+    const beforeP = {
+      model_vars: [analyticEntry, bayesianGated],
+      mean: 0.12, stdev: 0.03,
+    };
+    const afterP = applyChangesToEdge(beforeP, simulateOutputCommit('mean', 0.20));
+    expect(afterP.mean_overridden).toBe(true);
+    expect(afterP.mean).toBe(0.20);
+    // Active source resolution untouched — best_available still picks gated bayesian.
+    const pref = effectivePreference(afterP.model_source_preference, undefined);
+    const active = resolveActiveModelVars(afterP.model_vars, pref);
+    expect(active?.source).toBe('bayesian');
   });
 });

@@ -20,7 +20,7 @@ DagNet is a graph-based data analysis platform. Its complexity stems from:
 9. **A statistical-enhancement subsystem** doing lag-distribution fitting, path-T95 computation, and recency weighting.
 10. **An analysis-ECharts pipeline** that hydrates, recomputes, and renders multiple chart families (cohort comparison, funnel, snapshots, surprise gauge, bridge).
 
-**Overall complexity**: 🔴 **Very High** — domain knowledge (graph theory, statistics, Bayesian inference, time-series merging) is required across most subsystems.
+**Overall complexity**: 🔴 **Very High** — domain knowledge (graph theory, statistics, Bayesian inference, time-series merging) required across most subsystems.
 
 ---
 
@@ -54,7 +54,7 @@ GraphEditor uses an `isSyncingRef` guard so FileState↔GraphStore updates do no
 
 #### B. Per-file stores shared across tabs
 
-Multiple tabs viewing the same file share one GraphStore instance. Undo/redo in one tab affects all tabs viewing the file. History stacks are per-tab; current state is shared. This requires careful coordination on commit/discard.
+Multiple tabs viewing the same file share one GraphStore instance. Undo/redo in one tab affects all tabs viewing the file. History stacks are per-tab; current state is shared. Requires careful coordination on commit/discard.
 
 #### C. Editor-type history independence
 
@@ -131,8 +131,8 @@ The old monolithic `dataOperationsService.ts` (~9k LOC) has been split into a cl
 ### Complex algorithms
 
 - **Incremental fetch planning** — calculate which days require fetch given existing cache coverage, latency-based maturity thresholds, and refetch policy (`stale-while-revalidate`, etc.).
-- **Time-series merge** — aggregate `n` and `k`, derive lag/latency statistics, compute onset delta from lag histograms, apply recency weighting, enforce completeness constraints, and reconcile window vs cohort semantics.
-- **Cache analysis** — identify gaps in cached time-series, group contiguous regions, and apply maturity thresholds.
+- **Time-series merge** — aggregate `n` and `k`, derive lag/latency statistics, compute onset delta from lag histograms, apply recency weighting, enforce completeness constraints, reconcile window vs cohort semantics.
+- **Cache analysis** — identify gaps in cached time-series, group contiguous regions, apply maturity thresholds.
 - **Query signature matching** — see §10.
 
 ### Provider abstraction
@@ -209,7 +209,7 @@ Parse and execute the **domain-specific query language**:
 
 ### Complex features
 
-- **Query explosion** — handles nested parentheses, prefix/suffix distribution (`(a;b).window(...)` → `[a.window(...), b.window(...)]`), and Cartesian product expansion of bare keys.
+- **Query explosion** — handles nested parentheses, prefix/suffix distribution (`(a;b).window(...)` → `[a.window(...), b.window(...)]`), Cartesian product expansion of bare keys.
 - **Composite query execution** — combines `base − minus₁ − minus₂ + plus₁` with weighted coefficients, including time-series combination and edge-case handling.
 - **Slice isolation** — keeps cohort/window slice keys distinct so signatures and caches do not collide.
 
@@ -370,7 +370,7 @@ Generate, link, and validate deterministic signatures across queries, plans, ret
 2. **Cross-service dependency** — every cache-touching subsystem must agree on signature semantics.
 3. **Migration** — when signature semantics change, every downstream artefact's link must be reconciled.
 
-This subsystem subsumes the original "query signature matching" complexity domain (it now spans many services rather than one helper).
+This subsystem subsumes the original "query signature matching" complexity domain (now spans many services rather than one helper).
 
 ---
 

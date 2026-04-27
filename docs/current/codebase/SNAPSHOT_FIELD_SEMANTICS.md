@@ -1,9 +1,9 @@
 # Snapshot Field Semantics: Window vs Cohort
 
 **Created**: 22-Mar-26
-**Context**: Hard-won during synthetic data generator development. Documents the exact
-meaning of each snapshot DB field depending on `slice_key` type, and how these fields
-flow through the analytics pipeline.
+**Context**: Hard-won during synthetic data generator development. Documents the
+exact meaning of each snapshot DB field depending on `slice_key` type, and how
+these fields flow through the analytics pipeline.
 
 ---
 
@@ -19,7 +19,7 @@ The "cohort" is **people who reached the from-node (X) on anchor_day**.
 
 | Field | Meaning |
 |-------|---------|
-| `anchor_day` | The calendar day people arrived at **X** (the from-node). Mixes people from different anchor-entry days — anyone who reached X on this date, regardless of when they entered at A. |
+| `anchor_day` | Calendar day people arrived at **X** (the from-node). Mixes people from different anchor-entry days — anyone who reached X on this date, regardless of when they entered at A. |
 | `X` | Count of people who arrived at X on this anchor_day |
 | `Y` | Count of those X-arrivals who also reached Y by `retrieved_at` |
 | `A` | NULL (not used in window mode) |
@@ -27,7 +27,7 @@ The "cohort" is **people who reached the from-node (X) on anchor_day**.
 | `mean_lag_days` | Mean of the same — **edge-level** lag |
 | `anchor_median_lag_days` | NULL (not applicable in window mode) |
 | `anchor_mean_lag_days` | NULL |
-| `onset_delta_days` | Alpha-quantile of the X→Y lag histogram. Represents earliest plausible conversion time for this edge. |
+| `onset_delta_days` | Alpha-quantile of the X→Y lag histogram. Earliest plausible conversion time for this edge. |
 
 **Rate**: `Y/X` → approaches `p_edge` at maturity.
 
@@ -39,7 +39,7 @@ The "cohort" is **people who entered at the anchor node (A) on anchor_day**.
 
 | Field | Meaning |
 |-------|---------|
-| `anchor_day` | The calendar day people entered at **A** (the anchor/start node). |
+| `anchor_day` | Calendar day people entered at **A** (the anchor/start node). |
 | `X` | Count of people from this anchor-day cohort who reached X (the from-node) by `retrieved_at`. Grows over time as upstream latency delivers people. |
 | `Y` | Count of people from this anchor-day cohort who reached Y by `retrieved_at` (via X→Y specifically). |
 | `A` | Total anchor entrants on this day — fixed cohort size. |
@@ -59,8 +59,7 @@ The "cohort" is **people who entered at the anchor node (A) on anchor_day**.
 
 ## 2. Critical: `anchor_median_lag_days` is A→X, NOT A→Y
 
-This is the single most important semantic distinction. Amplitude's 3-step funnel
-(A→X→Y) returns:
+Single most important semantic distinction. Amplitude's 3-step funnel (A→X→Y) returns:
 
 - **`median_lag_days`**: X→Y transition time (the edge being measured)
 - **`anchor_median_lag_days`**: A→X transition time (upstream path only)
@@ -73,8 +72,8 @@ the path-level lognormal CDF for cohort mode:
 3. Combines with this edge's lognormal via Fenton-Wilkinson
 4. Uses the composed (path_mu, path_sigma, path_onset) for the cohort model curve
 
-If `anchor_median_lag_days` measured A→Y instead of A→X, the edge's latency would
-be double-counted — once in the anchor lag, once added by FW composition.
+If `anchor_median_lag_days` measured A→Y instead of A→X, the edge's latency
+would be double-counted — once in the anchor lag, once added by FW composition.
 
 ---
 
@@ -113,23 +112,23 @@ Same as above, but as **per-day arrays** (one value per date in the window):
 ## 4. Burn-in Requirement
 
 Synthetic data simulation must start `max(path_t95)` days before the observable
-window so that from-node arrival counts on day 1 of the window are realistic.
+window so from-node arrival counts on day 1 of the window are realistic.
 Without burn-in, window rows for deep edges show near-zero `X` counts because
 the upstream pipeline hasn't delivered anyone yet.
 
-The burn-in period simulates person journeys but does NOT emit observation rows.
-People who enter during burn-in CAN appear in the observable window's window
-rows if their from-node arrival falls within the window dates.
+Burn-in simulates person journeys but does NOT emit observation rows. People
+who enter during burn-in CAN appear in the observable window's window rows if
+their from-node arrival falls within the window dates.
 
 ---
 
 ## 5. Window Observation Generation
 
-Window rows group by **from-node arrival day**, which mixes people from different
-simulation (anchor entry) days. This requires a two-phase approach:
+Window rows group by **from-node arrival day**, mixing people from different
+simulation (anchor entry) days. Two-phase approach:
 
-1. **Simulation phase**: Run all days (burn-in + observable). Record each person's
-   arrival time at every node.
+1. **Simulation phase**: Run all days (burn-in + observable). Record each
+   person's arrival time at every node.
 
 2. **Window index construction**: For each edge, iterate ALL simulated people
    across ALL days. Compute the absolute calendar day they arrived at the
@@ -140,5 +139,35 @@ simulation (anchor entry) days. This requires a two-phase approach:
    day in the observable window, count how many people's conversion offsets
    fall within the retrieval age.
 
-This is fundamentally different from cohort observation generation, which simply
+Fundamentally different from cohort observation generation, which simply
 iterates by simulation day (= anchor entry day).
+
+---
+
+## 6. Pitfalls
+
+### Anti-pattern 47: `cohort_alpha` / `cohort_beta` vs `alpha` / `beta` confusion
+
+**Signature**: model resolver returns wrong alpha/beta in cohort mode, causing
+IS conditioning to target the wrong rate. Tests assert against edge-level
+alpha/beta when the resolver correctly returns the cohort-mode posterior.
+
+**Root cause**: both `alpha`/`beta` and `cohort_alpha`/`cohort_beta` encode the
+posterior on the same quantity — the edge's own conversion rate (y/x). The
+difference is the evidence set and latency model used during fitting:
+
+- **Window mode**: `alpha`/`beta` — fitted from window evidence (edge-local latency)
+- **Cohort mode**: `cohort_alpha`/`cohort_beta` — fitted from cohort evidence (anchor-anchored, path latency)
+
+The `model_resolver.py` correctly prefers `cohort_alpha`/`cohort_beta` when
+`temporal_mode == 'cohort'`.
+
+**Fix**: when writing tests or assertions about cohort-mode alpha/beta, use
+`posterior.cohort_alpha` / `cohort_beta`, not `posterior.alpha` / `beta`. When
+the resolver returns a `p_mean` that doesn't match `alpha/(alpha+beta)` from
+the edge-level posterior, check whether cohort mode is active — the resolver
+may be correctly using the cohort-mode posterior.
+
+**History**: these fields were previously named `path_alpha` / `path_beta`,
+misread as "compound path probability". Renamed to `cohort_*` to make the
+query-mode distinction clear.

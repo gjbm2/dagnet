@@ -40,8 +40,8 @@ The application uses a **layered state architecture** with different scopes and 
 
 ### Layer 1: Non-Durable Client State (React State)
 
-**Location**: React component state, Zustand stores  
-**Lifetime**: Lost on page refresh  
+**Location**: React component state, Zustand stores
+**Lifetime**: Lost on page refresh
 **Purpose**: UI interactions, derived state, temporary values
 
 #### Examples:
@@ -49,7 +49,7 @@ The application uses a **layered state architecture** with different scopes and 
   - Transformed presentation state
   - Positions, visual styling, interaction state
   - Rebuilt from raw data on mount
-  
+
 - **UI Component State**
   - Modal open/closed state
   - Input field values during editing
@@ -63,8 +63,8 @@ The application uses a **layered state architecture** with different scopes and 
 
 ### Layer 2: Durable Client State (IndexedDB)
 
-**Location**: IndexedDB via Dexie (`db.files`, `db.tabs`, `db.appState`)  
-**Lifetime**: Persists across page refreshes, cleared on browser data clear  
+**Location**: IndexedDB via Dexie (`db.files`, `db.tabs`, `db.appState`)
+**Lifetime**: Persists across page refreshes, cleared on browser data clear
 **Purpose**: Working state, unsaved changes, UI layout
 
 #### Tables:
@@ -118,8 +118,8 @@ The application uses a **layered state architecture** with different scopes and 
 
 ### Layer 3: Durable Remote State (Git Repository)
 
-**Location**: GitHub repository via API  
-**Lifetime**: Permanent, versioned  
+**Location**: GitHub repository via API
+**Lifetime**: Permanent, versioned
 **Purpose**: Source of truth for saved state, collaboration, history
 
 #### Stored Files:
@@ -134,7 +134,7 @@ The application uses a **layered state architecture** with different scopes and 
 
 ### Global State (Application-Wide)
 
-**Storage**: `db.appState`, React Context  
+**Storage**: `db.appState`, React Context
 **Components**: `TabContext`, `DialogContext`
 
 #### Managed State:
@@ -146,7 +146,7 @@ The application uses a **layered state architecture** with different scopes and 
 
 ### Per-File State (Shared Across Tabs)
 
-**Storage**: `FileRegistry` (in-memory Map), `db.files` (durable), `GraphStore` (Zustand)  
+**Storage**: `FileRegistry` (in-memory Map), `db.files` (durable), `GraphStore` (Zustand)
 **Key Insight**: Multiple tabs viewing the same file share this state
 
 #### FileState (in FileRegistry):
@@ -168,7 +168,7 @@ FileState {
 GraphStore {
   graph: GraphData | null       // Raw graph data (NOT ReactFlow format)
   setGraph: (graph) => void
-  
+
   // History (undo/redo)
   history: GraphData[]          // Array of graph snapshots
   historyIndex: number          // Current position in history
@@ -195,7 +195,7 @@ GraphStoreProvider({ fileId: "graph-example" }) {
 
 ### Per-Tab State (Tab-Specific UI)
 
-**Storage**: `TabState.editorState` in `db.tabs`  
+**Storage**: `TabState.editorState` in `db.tabs`
 **Purpose**: Independent UI state for each tab view
 
 #### Tab-Specific State:
@@ -214,11 +214,11 @@ TabState.editorState {
   whatIfAnalysis: any         // What-if scenario state
   caseOverrides: Record<string, string>
   conditionalOverrides: Record<string, any>
-  
+
   // Raw View (Monaco editor)
   lineWrap: boolean
   showDiff: boolean
-  
+
   // Form Editor
   // (mostly uses FileState directly, minimal tab state)
 }
@@ -237,7 +237,7 @@ Graphs have **two representations** that must stay synchronized:
 
 #### Raw Graph Data (Canonical)
 
-**Location**: `FileState.data`, `GraphStore.graph`  
+**Location**: `FileState.data`, `GraphStore.graph`
 **Format**: Matches `schema/conversion-graph-1.0.0.json`
 
 ```typescript
@@ -256,7 +256,7 @@ GraphData {
     entry?: { ... };
     costs?: { ... };
   }>;
-  
+
   edges: Array<{
     id: string;
     id?: string;
@@ -270,7 +270,7 @@ GraphData {
     case_variant?: string;
     case_id?: string;
   }>;
-  
+
   policies?: { ... };
   metadata?: { ... };
 }
@@ -278,7 +278,7 @@ GraphData {
 
 #### ReactFlow Presentation Data (Derived)
 
-**Location**: `useNodesState`, `useEdgesState` in GraphCanvas  
+**Location**: `useNodesState`, `useEdgesState` in GraphCanvas
 **Format**: ReactFlow's internal format
 
 ```typescript
@@ -610,8 +610,8 @@ Different editors have different history mechanisms due to their distinct data f
 
 #### 1. Graph Editor (Interactive Graph View)
 
-**Storage**: `GraphStore.history[]`, `GraphStore.historyIndex`  
-**Scope**: Per-file (shared across tabs viewing same file)  
+**Storage**: `GraphStore.history[]`, `GraphStore.historyIndex`
+**Scope**: Per-file (shared across tabs viewing same file)
 **Granularity**: Full graph snapshots
 
 ```typescript
@@ -620,17 +620,17 @@ GraphStore {
   historyIndex: number           // Current position (-1 = no history)
   canUndo: boolean               // historyIndex > 0
   canRedo: boolean               // historyIndex < history.length - 1
-  
+
   saveHistoryState(): void {
     // Remove any redo states after current index
     const newHistory = history.slice(0, historyIndex + 1);
-    
+
     // Add current graph as new snapshot
     newHistory.push(JSON.parse(JSON.stringify(graph)));
-    
+
     // Limit to 20 snapshots
     if (newHistory.length > 20) newHistory.shift();
-    
+
     // Update state
     set({
       history: newHistory,
@@ -639,7 +639,7 @@ GraphStore {
       canRedo: false
     });
   }
-  
+
   undo(): void {
     if (historyIndex > 0) {
       const newIndex = historyIndex - 1;
@@ -647,7 +647,7 @@ GraphStore {
       set({ historyIndex: newIndex, canUndo: newIndex > 0, canRedo: true });
     }
   }
-  
+
   redo(): void {
     if (historyIndex < history.length - 1) {
       const newIndex = historyIndex + 1;
@@ -681,8 +681,8 @@ GraphStore {
 
 #### 2. Form Editor (Parameter, Context, Case Editors)
 
-**Storage**: `historyRef` (React ref), local to each FormEditor component  
-**Scope**: Per-component instance (per-tab)  
+**Storage**: `historyRef` (React ref), local to each FormEditor component
+**Scope**: Per-component instance (per-tab)
 **Granularity**: Full data snapshots
 
 ```typescript
@@ -691,50 +691,50 @@ FormEditor {
   const historyIndexRef = useRef<number>(-1);
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
-  
+
   const addToHistory = (data: any) => {
     // Remove any redo states
     const newHistory = historyRef.current.slice(0, historyIndexRef.current + 1);
-    
+
     // Add new snapshot
     newHistory.push(JSON.parse(JSON.stringify(data)));
-    
+
     // Limit to 50 snapshots
     const MAX_HISTORY = 50;
     if (newHistory.length > MAX_HISTORY) {
       newHistory.shift();
     }
-    
+
     historyRef.current = newHistory;
     historyIndexRef.current = newHistory.length - 1;
     setCanUndo(true);
     setCanRedo(false);
   };
-  
+
   const undo = () => {
     if (historyIndexRef.current > 0) {
       const newIndex = historyIndexRef.current - 1;
       const prevState = historyRef.current[newIndex];
-      
+
       // Update form without triggering onChange
       setFormData(prevState);
       updateData(prevState);  // Sync to FileState
-      
+
       historyIndexRef.current = newIndex;
       setCanUndo(newIndex > 0);
       setCanRedo(true);
     }
   };
-  
+
   const redo = () => {
     if (historyIndexRef.current < historyRef.current.length - 1) {
       const newIndex = historyIndexRef.current + 1;
       const nextState = historyRef.current[newIndex];
-      
+
       // Update form without triggering onChange
       setFormData(nextState);
       updateData(nextState);  // Sync to FileState
-      
+
       historyIndexRef.current = newIndex;
       setCanUndo(true);
       setCanRedo(newIndex < historyRef.current.length - 1);
@@ -761,15 +761,15 @@ FormEditor {
 
 #### 3. Monaco Editor (Raw JSON/YAML View)
 
-**Storage**: Monaco's internal undo stack  
-**Scope**: Per-editor instance (per-tab)  
+**Storage**: Monaco's internal undo stack
+**Scope**: Per-editor instance (per-tab)
 **Granularity**: Character-level edits
 
 ```typescript
 RawView {
   // Monaco Editor has built-in undo/redo
   // Keyboard shortcuts: Cmd+Z / Ctrl+Z (undo), Cmd+Shift+Z / Ctrl+Shift+Z (redo)
-  
+
   const handleEditorMount = (editor: any) => {
     // Monaco automatically manages undo stack for text edits
     // No custom history implementation needed
@@ -787,7 +787,7 @@ RawView {
 - After typing pause (300ms), parsed data syncs to FileState
 - If user undoes in Monaco before debounce fires, FileState never updates
 
-**Caveat**: Monaco's undo stack is cleared if external data changes arrive (e.g., from graph editor editing same file). This is by design to prevent conflicts.
+**Caveat**: Monaco's undo stack is cleared if external data changes arrive (e.g., from graph editor editing same file). By design to prevent conflicts.
 
 ---
 
@@ -856,7 +856,7 @@ const isEditorChangeRef = useRef(false);
 const handleEditorChange = (value: string) => {
   isEditorChangeRef.current = true;
   updateData(parsedData);
-  
+
   // Reset after round-trip
   setTimeout(() => {
     isEditorChangeRef.current = false;
@@ -883,7 +883,7 @@ useEffect(() => {
     // No change, skip rebuild
     return;
   }
-  
+
   lastSyncedGraphRef.current = graphJson;
   const { nodes, edges } = toFlow(graph, callbacks);
   setNodes(nodes);
@@ -922,11 +922,11 @@ Without this, React's `useEffect([data])` might not trigger if data is mutated i
 ```typescript
 const handleEditorChange = (value: string) => {
   setEditorValue(value);
-  
+
   if (parseDebounceRef.current !== null) {
     clearTimeout(parseDebounceRef.current);
   }
-  
+
   parseDebounceRef.current = window.setTimeout(() => {
     // Parse and update FileState
     const parsedData = JSON.parse(value);
@@ -1073,4 +1073,3 @@ Understanding these patterns is critical for maintaining consistency and avoidin
 ---
 
 **End of Reference Document**
-

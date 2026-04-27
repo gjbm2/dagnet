@@ -14,7 +14,7 @@
 
 ## Pre-Completion Verification (MANDATORY before saying "done" or "fixed")
 
-Do NOT claim a fix is complete until you have verified it. "I changed the code" is not "it works". The most expensive failure mode is premature "done" — it wastes a full round-trip when the user discovers it's still broken.
+Do NOT claim a fix is complete until verified. "I changed the code" is not "it works". The most expensive failure mode is premature "done" — wastes a full round-trip when the user discovers it's still broken.
 
 **Before reporting completion**:
 1. **Run the relevant test(s)** — not the full suite, but the specific test file(s) covering the changed behaviour. **If no test exists for the new code path, write one first — this is a hard block, not a suggestion.** See rule 4 in "ALWAYS UPDATE TESTS" in CLAUDE.md. A `NameError` or `UnboundLocalError` in untested code that could have been caught by a 10-second pytest is an unacceptable failure mode.

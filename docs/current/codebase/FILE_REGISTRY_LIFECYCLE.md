@@ -4,7 +4,7 @@ How the in-memory FileRegistry caches file state, syncs with IndexedDB, and mana
 
 ## What FileRegistry Is
 
-FileRegistry is an **in-memory cache** (a `Map<string, FileState>`) that holds all currently-loaded files for fast access by editors, panels, and UI components. It lives in `TabContext.tsx` and is **not** the source of truth -- IndexedDB is.
+FileRegistry is an **in-memory cache** (a `Map<string, FileState>`) holding all currently-loaded files for fast access by editors, panels, and UI components. It lives in `TabContext.tsx` and is **not** the source of truth — IndexedDB is.
 
 ### Key distinction
 
@@ -45,9 +45,9 @@ Listeners receive a **deep clone** to ensure React sees new references. Notifica
 
 ### Concurrency guards
 
-- `updatingFiles: Set<string>` -- prevents re-entrant updates to the same file
-- `pendingUpdates: Map<string, {...}>` -- queues updates that arrive during an in-flight update
-- `fileGenerations: Map<string, number>` -- monotonic counter to detect and reject stale updates
+- `updatingFiles: Set<string>` — prevents re-entrant updates to the same file
+- `pendingUpdates: Map<string, {...}>` — queues updates that arrive during an in-flight update
+- `fileGenerations: Map<string, number>` — monotonic counter to detect and reject stale updates
 
 ## File Lifecycle
 
@@ -143,13 +143,23 @@ Dirty state is:
 
 2. **Dual IDB records.** Every write updates both prefixed and unprefixed. Failure to do so causes zombie files or stale reads.
 
-3. **Initialisation phase absorbs normalisation.** During `isInitializing: true`, editors normalise content (sort keys, inject defaults) without triggering dirty. This prevents spurious 3-way merge on pull.
+3. **Initialisation phase absorbs normalisation.** During `isInitializing: true`, editors normalise content (sort keys, inject defaults) without triggering dirty. Prevents spurious 3-way merge on pull.
 
 4. **Files persist after tab close.** `removeViewTab()` removes the tab reference but keeps the file in IDB. Only explicit `deleteFile()` removes it.
 
 5. **Dirty state survives page reload.** If the user closes the browser mid-edit, the file remains dirty in IDB and is restored on next load.
 
 6. **Listener notifications use deep clones.** Prevents stale closure bugs in React subscribers.
+
+## Pitfalls
+
+### Anti-pattern 10: Assuming `isInitializing` is false
+
+**Signature**: dirty detection doesn't work for a newly-loaded file. File appears clean despite real edits.
+
+**Root cause**: `isInitializing` is true for 500ms after file load. During this phase, all edits are absorbed into `originalData` without marking dirty. If `completeInitialization()` doesn't fire (callback lost, file re-loaded), the phase never ends.
+
+**Fix**: check `file.isInitializing` in the debugger. Verify `completeInitialization(fileId)` is scheduled and fires.
 
 ## Key Files
 

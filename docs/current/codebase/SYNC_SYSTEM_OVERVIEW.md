@@ -2,7 +2,7 @@
 
 Unified view of how data flows between Git, IndexedDB, FileRegistry, GraphStore, and ReactFlow — the sync arrows, triggers, guards, suppression mechanisms, and known races.
 
-This is the integrative "map" that ties together the detailed docs:
+The integrative "map" tying together the detailed docs:
 
 - `STATE_MANAGEMENT_REFERENCE.md` — inventory of all state storage layers and scopes (overlaps on the layer model; this doc focuses on *flow between layers*, that doc on *what lives where*)
 - `GRAPH_WRITE_SYNC_ARCHITECTURE.md` — edit propagation pipeline detail (UI → UpdateManager → mutation → persistence)
@@ -64,7 +64,7 @@ ReactFlow State (nodes/edges arrays, selection, viewport — UI only)
 
 **Action** (if all guards pass): `setGraph(data)` — overwrites store with file data.
 
-**Stale echo defence**: the `writtenStoreContentsRef` map tracks all content this store has written (content → revision). On incoming file→store, if the exact JSON was previously written by the store at a now-superseded revision, it's stale. This is the **primary defence** against the pending-replay race (see below).
+**Stale echo defence**: `writtenStoreContentsRef` map tracks all content this store has written (content → revision). On incoming file→store, if the exact JSON was previously written by the store at a now-superseded revision, it's stale. **Primary defence** against the pending-replay race (see below).
 
 ### Flow 3: Graph → ReactFlow (GraphCanvas.tsx)
 
@@ -159,14 +159,14 @@ These stack: if MSMDC fires during a store→file sync, the suppression window i
 
 ## The posterior/state propagation lesson
 
-A common failure pattern: data exists in **four layers simultaneously** (param file → graph edge projected value → graph edge stashed slices → React render tree). Deleting from one layer is useless unless all four are handled. Before modifying any state:
+Common failure pattern: data exists in **four layers simultaneously** (param file → graph edge projected value → graph edge stashed slices → React render tree). Deleting from one layer is useless unless all four are handled. Before modifying any state:
 
 1. **Trace all locations** where the value lives — grep across param files, graph edges, stashed slices, and render props
 2. **Trace what triggers React re-render** — in-place mutation does nothing; `setGraph` with a new reference is required
 3. **Trace the cascade** — UpdateManager mapping configurations project param file fields onto graph edges; clearing the file doesn't clear the graph copy
 4. **Test idempotently** — "delete when already deleted" must still clean up all derived state
 
-This is the single most common cause of multi-attempt fixes. Read GRAPH_MUTATION_UPDATE_MANAGER.md for the mapping configurations.
+Single most common cause of multi-attempt fixes. Read GRAPH_MUTATION_UPDATE_MANAGER.md for the mapping configurations.
 
 ## Key files
 

@@ -39,7 +39,7 @@ import { buildAuditEntry } from './updateManager/auditLog';
 import { MAPPING_CONFIGURATIONS, getMappingKey } from './updateManager/mappingConfigurations';
 import { applyMappings } from './updateManager/mappingEngine';
 import type { ModelVarsEntry } from '../types';
-import { upsertModelVars, ukDateNow, applyPromotion, buildAnalyticProbabilityBlock } from './modelVarsResolution';
+import { ukDateNow, buildAnalyticProbabilityBlock } from './modelVarsResolution';
 
 // ─── Re-exports (public API — preserve existing import paths) ───────────────
 export type {
@@ -455,32 +455,11 @@ export class UpdateManager {
       nextGraph.metadata.updated_at = new Date().toISOString();
     }
 
-    // MODEL_VARS: auto-create manual entry when overriding a model var field (doc 15 §5.3).
-    // Centralised here so context menus, rebalance, and any other entry point all trigger it.
-    if (setOverrideFlag && changesApplied > 0 && edge.p.model_vars?.length) {
-      const existing = edge.p.model_vars.find((e: any) => e.source === 'manual');
-      const base = existing ?? {
-        source: 'manual' as const,
-        source_at: ukDateNow(),
-        probability: { mean: edge.p.mean ?? 0, stdev: edge.p.stdev ?? 0 },
-        ...(edge.p.latency?.mu != null ? {
-          latency: {
-            mu: edge.p.latency.mu, sigma: edge.p.latency.sigma ?? 0,
-            t95: edge.p.latency.t95 ?? 0, onset_delta_days: edge.p.latency.onset_delta_days ?? 0,
-            ...(edge.p.latency.path_mu != null ? { path_mu: edge.p.latency.path_mu } : {}),
-            ...(edge.p.latency.path_sigma != null ? { path_sigma: edge.p.latency.path_sigma } : {}),
-            ...(edge.p.latency.path_t95 != null ? { path_t95: edge.p.latency.path_t95 } : {}),
-          },
-        } : {}),
-      };
-      const updated = { ...base, source_at: ukDateNow() };
-      // Edge.p.mean/stdev already have the new values from above
-      updated.probability = { mean: edge.p.mean ?? 0, stdev: edge.p.stdev ?? 0 };
-      upsertModelVars(edge.p, updated);
-      edge.p.model_source_preference = 'manual';
-      edge.p.model_source_preference_overridden = true;
-      applyPromotion(edge.p, nextGraph.model_source_preference);
-    }
+    // Per doc 73b §6.7 Actions B7c+B7d (Stage 3): override of a model-var field no longer
+    // auto-creates a `model_vars[manual]` entry or pins the selector. The override flag
+    // flip already happened above; per-field locks are the canonical author mechanism
+    // (Action B8a). Promotion is re-run by the regular `model_vars`/`model_source_preference`
+    // change paths, not from output overtype.
 
     return nextGraph;
   }

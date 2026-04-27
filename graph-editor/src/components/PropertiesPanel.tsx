@@ -23,7 +23,7 @@ import { ConditionalProbabilityEditor } from './ConditionalProbabilityEditor';
 import { QueryExpressionEditor } from './QueryExpressionEditor';
 import { AutomatableField } from './AutomatableField';
 import { ParameterSection } from './ParameterSection';
-import { applyPromotion, upsertModelVars, ukDateNow } from '../services/modelVarsResolution';
+import { applyPromotion } from '../services/modelVarsResolution';
 import { ConnectionControl } from './ConnectionControl';
 import { ConnectionSelector } from './ConnectionSelector';
 import { ImageThumbnail } from './ImageThumbnail';
@@ -1324,53 +1324,14 @@ export default function PropertiesPanel({
         next.metadata.updated_at = new Date().toISOString();
       }
 
-      // MODEL_VARS: When a model var field is overridden and model_vars exists,
-      // auto-create/update the manual entry and pin to manual (doc 15 §5.3).
-      // This centralises the logic so it works from ANY entry point (Output card,
-      // context menu, slider, etc.) — not just ModelVarsCards.
-      const TOP_LEVEL_OVERRIDE_FIELDS = ['mean_overridden', 'stdev_overridden'];
-      // Doc 19: t95_overridden, path_t95_overridden, and onset_delta_days_overridden
-      // are input constraints for the analytic/Bayesian fit, NOT model-output overrides
-      // — they don't create manual model_vars entries or trigger recompute cascades.
-      const LATENCY_OVERRIDE_FIELDS: string[] = [];
-      const latencyChanges = (actualChanges as any).latency;
-      const hasModelVarOverride = paramSlot === 'p' &&
-        next.edges[edgeIndex].p?.model_vars?.length &&
-        !('model_vars' in actualChanges) && // skip if caller already built model_vars
-        (TOP_LEVEL_OVERRIDE_FIELDS.some(f => (actualChanges as any)[f] === true) ||
-         (latencyChanges && LATENCY_OVERRIDE_FIELDS.some(f => latencyChanges[f] === true)));
-
-      if (hasModelVarOverride) {
-        const p = next.edges[edgeIndex].p!;
-        const existing = p.model_vars!.find((e: any) => e.source === 'manual');
-        const base = existing ?? {
-          source: 'manual' as const,
-          source_at: ukDateNow(),
-          probability: { mean: p.mean ?? 0, stdev: p.stdev ?? 0 },
-          ...(p.latency?.mu != null ? {
-            latency: {
-              mu: p.latency.mu, sigma: p.latency.sigma ?? 0,
-              t95: p.latency.t95 ?? 0, onset_delta_days: p.latency.onset_delta_days ?? 0,
-              ...(p.latency.path_mu != null ? { path_mu: p.latency.path_mu } : {}),
-              ...(p.latency.path_sigma != null ? { path_sigma: p.latency.path_sigma } : {}),
-              ...(p.latency.path_t95 != null ? { path_t95: p.latency.path_t95 } : {}),
-            },
-          } : {}),
-        };
-        const updated = { ...base, source_at: ukDateNow() };
-        // Apply the changed field values to the manual entry
-        if ('mean' in actualChanges) updated.probability = { ...updated.probability, mean: (actualChanges as any).mean };
-        if ('stdev' in actualChanges) updated.probability = { ...updated.probability, stdev: (actualChanges as any).stdev };
-        upsertModelVars(p, updated);
-        p.model_source_preference = 'manual';
-        p.model_source_preference_overridden = true;
-      }
-
       // MODEL_VARS: Re-resolve promoted scalars when model_vars or preference changes (doc 15 §8).
+      // Per doc 73b §6.7 Actions B7c+B7d (Stage 3): output overtype no longer auto-creates a
+      // `model_vars[manual]` entry or pins the selector. The override flag flip
+      // (`mean_overridden`/`stdev_overridden = true`) is set above; the lock alone is the
+      // canonical author mechanism (Action B8a).
       const sourceChanged = paramSlot === 'p' && (
         'model_vars' in actualChanges ||
-        'model_source_preference' in actualChanges ||
-        hasModelVarOverride
+        'model_source_preference' in actualChanges
       );
       if (sourceChanged) {
         if (next.edges[edgeIndex].p) {
@@ -1989,7 +1950,9 @@ export default function PropertiesPanel({
                 const edges = graph?.edges ?? [];
                 const withVars = edges.filter((e: any) => e.p?.model_vars?.length);
                 if (withVars.length === 0) return null;
-                const counts = { bayesian: 0, analytic: 0, manual: 0, overridden: 0 };
+                // Doc 73b §3.5 / §6.7: 'manual' has been retired from the source ledger;
+                // user authoring lives at the per-field locks (counted as `locked`).
+                const counts = { bayesian: 0, analytic: 0, locked: 0, overridden: 0 };
                 let lastFit: string | undefined;
                 let gatedCount = 0;
                 let totalBayes = 0;
@@ -2007,11 +1970,9 @@ export default function PropertiesPanel({
                   // Count active sources (simplified: use the first matching)
                   const bayesEntry = p.model_vars?.find((v: any) => v.source === 'bayesian' && v.quality?.gate_passed);
                   const analyticEntry = p.model_vars?.find((v: any) => v.source === 'analytic');
-                  const manualEntry = p.model_vars?.find((v: any) => v.source === 'manual');
                   if (p.model_source_preference_overridden) {
                     counts.overridden++;
-                    if (p.model_source_preference === 'manual' && manualEntry) counts.manual++;
-                    else if (p.model_source_preference === 'analytic' && analyticEntry) counts.analytic++;
+                    if (p.model_source_preference === 'analytic' && analyticEntry) counts.analytic++;
                     else if (p.model_source_preference === 'bayesian' && bayesEntry) counts.bayesian++;
                     else if (bayesEntry) counts.bayesian++;
                     else if (analyticEntry) counts.analytic++;
@@ -2020,6 +1981,7 @@ export default function PropertiesPanel({
                     if (bayesEntry) counts.bayesian++;
                     else if (analyticEntry) counts.analytic++;
                   }
+                  if (p.mean_overridden || p.stdev_overridden) counts.locked++;
                 }
                 return (
                   <>
@@ -2027,9 +1989,9 @@ export default function PropertiesPanel({
                       <strong>Sources:</strong>{' '}
                       {counts.bayesian > 0 && <span>{counts.bayesian} Bayesian · </span>}
                       {counts.analytic > 0 && <span>{counts.analytic} Analytic · </span>}
-                      {counts.manual > 0 && <span>{counts.manual} Manual · </span>}
+                      {counts.locked > 0 && <span>{counts.locked} Locked · </span>}
                       {counts.overridden > 0 && <span>{counts.overridden} overridden</span>}
-                      {counts.bayesian === 0 && counts.analytic === 0 && counts.manual === 0 && <span>none</span>}
+                      {counts.bayesian === 0 && counts.analytic === 0 && counts.locked === 0 && <span>none</span>}
                     </div>
                     {totalBayes > 0 && (
                       <div style={{ fontSize: '11px', color: '#6B7280', marginTop: '4px' }}>
