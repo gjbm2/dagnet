@@ -6,6 +6,18 @@
 **Supersedes**: doc 72 as the active execution plan for graph-surface forecast state  
 **Relates to**: `../codebase/STATS_SUBSYSTEMS.md`, `../codebase/FE_BE_STATS_PARALLELISM.md`, `../codebase/PARAMETER_SYSTEM.md`, `../codebase/COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md`, `60-forecast-adaptation-programme.md`, `72-fe-cli-conditioned-forecast-parity-fix-plan.md`, `../cohort-cf-defect-and-cli-fe-parity.md`
 
+## Implementation progress
+
+<!-- managed by /implement-carefully — edit checkboxes manually only when the skill is not running -->
+
+- [ ] Stage 0
+- [ ] Stage 1
+- [ ] Stage 2
+- [ ] Stage 3
+- [ ] Stage 4
+- [ ] Stage 5
+- [ ] Stage 6
+
 ## 1. Objective and scope
 
 This plan defines one integrated workstream delivered as two named work
