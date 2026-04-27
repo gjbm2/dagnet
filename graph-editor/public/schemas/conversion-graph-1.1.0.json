@@ -1218,8 +1218,72 @@
           "type": "boolean"
         },
         "model_vars": {
-          "type": "object",
-          "additionalProperties": true
+          "type": "array",
+          "description": "Provenance-tagged model variable sets per source (doc 15 §2.1; doc 73b §3.9).",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "source": {
+                "type": "string",
+                "enum": ["analytic", "bayesian", "manual"]
+              },
+              "source_at": {
+                "type": "string",
+                "description": "UK date (d-MMM-yy) when this entry was last updated"
+              },
+              "probability": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "mean": {"type": "number", "minimum": 0, "maximum": 1},
+                  "stdev": {"type": "number", "minimum": 0},
+                  "alpha": {"type": "number", "minimum": 0, "description": "Window-family Beta α (aggregate, doc 73b §3.9)"},
+                  "beta": {"type": "number", "minimum": 0, "description": "Window-family Beta β (aggregate, doc 73b §3.9)"},
+                  "n_effective": {"type": "number", "minimum": 0, "description": "Source mass behind window-family Beta shape"},
+                  "provenance": {"type": "string", "description": "Source-basis label (e.g. analytic_window_baseline, analytic_point_estimate_degraded)"},
+                  "cohort_alpha": {"type": "number", "minimum": 0, "description": "Cohort-family Beta α (aggregate, optional)"},
+                  "cohort_beta": {"type": "number", "minimum": 0, "description": "Cohort-family Beta β (aggregate, optional)"},
+                  "cohort_n_effective": {"type": "number", "minimum": 0, "description": "Source mass behind cohort-family Beta shape"},
+                  "cohort_provenance": {"type": "string", "description": "Source-basis label for cohort-family shape"}
+                },
+                "required": ["mean", "stdev"]
+              },
+              "latency": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "mu": {"type": "number"},
+                  "sigma": {"type": "number", "minimum": 0},
+                  "t95": {"type": "number", "minimum": 0},
+                  "onset_delta_days": {"type": "number", "minimum": 0},
+                  "path_mu": {"type": "number"},
+                  "path_sigma": {"type": "number", "minimum": 0},
+                  "path_t95": {"type": "number", "minimum": 0},
+                  "path_onset_delta_days": {"type": "number", "minimum": 0},
+                  "mu_sd": {"type": "number", "minimum": 0},
+                  "sigma_sd": {"type": "number", "minimum": 0},
+                  "onset_sd": {"type": "number", "minimum": 0},
+                  "onset_mu_corr": {"type": "number"},
+                  "path_mu_sd": {"type": "number", "minimum": 0},
+                  "path_sigma_sd": {"type": "number", "minimum": 0},
+                  "path_onset_sd": {"type": "number", "minimum": 0}
+                }
+              },
+              "quality": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "rhat": {"type": "number"},
+                  "ess": {"type": "number"},
+                  "divergences": {"type": "integer", "minimum": 0},
+                  "evidence_grade": {"type": "integer", "minimum": 0, "maximum": 3, "description": "0=cold start, 1=weak, 2=mature, 3=full Bayesian"},
+                  "gate_passed": {"type": "boolean", "description": "meetsQualityGate() result at write time"}
+                }
+              }
+            },
+            "required": ["source", "source_at", "probability"]
+          }
         }
       }
     },

@@ -645,6 +645,19 @@ export interface ModelVarsEntry {
   probability: {
     mean: number;               // [0,1]
     stdev: number;              // >= 0
+    // Window-family aggregate Beta shape (doc 73b §3.9 analytic mirror contract).
+    alpha?: number;             // >= 0
+    beta?: number;              // >= 0
+    n_effective?: number;       // >= 0  source mass behind window-family Beta shape
+    provenance?: string;        // e.g. 'analytic_window_baseline', 'analytic_point_estimate_degraded'
+    // Cohort-family aggregate Beta shape (optional; present when cohort-family aggregate evidence available).
+    cohort_alpha?: number;      // >= 0
+    cohort_beta?: number;       // >= 0
+    cohort_n_effective?: number;
+    cohort_provenance?: string;
+    // NB: predictive fields (alpha_pred / beta_pred / cohort_alpha_pred / cohort_beta_pred)
+    // are intentionally NOT part of model_vars — analytic has no overdispersion model,
+    // and the bayesian predictive shape lives on p.posterior. See doc 73b §3.9.
   };
 
   latency?: {

@@ -12,7 +12,7 @@
 
 - [x] Stage 0 — completed 27-Apr-26
 - [x] Stage 1 — completed 27-Apr-26
-- [ ] Stage 2
+- [x] Stage 2 — completed 27-Apr-26
 - [ ] Stage 3
 - [ ] Stage 4
 - [ ] Stage 5

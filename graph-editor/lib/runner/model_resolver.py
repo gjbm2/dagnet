@@ -99,6 +99,19 @@ class ResolvedModelParams:
     # `source`, so the conjugate-update logic remains correct if new
     # sources are introduced.
     #
+    # **Doc 73b Stage 2 status**: the resolver now reads aggregate α/β
+    # from `model_vars[analytic].probability` (or the
+    # `analytic_point_estimate_degraded` kappa fallback), so the True
+    # branch's compensation (skip conjugate update because α, β are
+    # already query-scoped) is no longer logically required. **The
+    # discriminator retirement is deferred to Stage 4(d)** — per §8
+    # "Rename or remove only after the runtime no longer needs it" —
+    # because the consumer audit (forecast_state.py, forecast_runtime.py,
+    # cohort_forecast_v3.py) is owned by that stage. Until then the
+    # property still returns True for analytic so existing consumers
+    # continue to take their current branch; flipping it without the
+    # audit causes ~18 downstream test regressions.
+    #
     #   False → aggregate prior (bayesian fit / manual override).
     #           Safe to update with query-scoped Σk, Σn.
     #   True  → already a query-scoped posterior (analytic
@@ -136,6 +149,15 @@ def _extract_source_curves(model_vars: List[Dict[str, Any]]) -> Dict[str, Dict[s
             'path_onset_delta_days': mv_lat.get('path_onset_delta_days'),
             'forecast_mean': mv_prob.get('mean'),
             'p_stdev': mv_prob.get('stdev'),
+            # Doc 73b §3.9 mirror contract — aggregate Beta-shape on source layer.
+            'prob_alpha': mv_prob.get('alpha'),
+            'prob_beta': mv_prob.get('beta'),
+            'prob_n_effective': mv_prob.get('n_effective'),
+            'prob_provenance': mv_prob.get('provenance'),
+            'prob_cohort_alpha': mv_prob.get('cohort_alpha'),
+            'prob_cohort_beta': mv_prob.get('cohort_beta'),
+            'prob_cohort_n_effective': mv_prob.get('cohort_n_effective'),
+            'prob_cohort_provenance': mv_prob.get('cohort_provenance'),
             'mu_sd': mv_lat.get('mu_sd'),                 # epistemic (doc 61)
             'mu_sd_pred': mv_lat.get('mu_sd_pred'),       # predictive (kappa_lat)
             'sigma_sd': mv_lat.get('sigma_sd'),
@@ -379,45 +401,73 @@ def resolve_model_params(
             beta = float(post_beta)
             p_mean = alpha / (alpha + beta)
 
+    # Doc 73b Stage 2 (§3.9 mirror contract): aggregate analytic source
+    # α/β. When the promoted source is `analytic`, read aggregate Beta
+    # shape from `model_vars[analytic].probability` rather than from
+    # the bayesian posterior (which is empty for analytic-only edges)
+    # or from scoped `p.evidence.{n, k}` (the §3.3.3 layer-isolation
+    # invariant: scoped current-answer fields must never seed an
+    # aggregate model prior). Cohort mode prefers cohort_*; window
+    # mode and cohort fallback prefer the window-family α/β.
+    analytic_provenance: Optional[str] = None
+    if (alpha <= 0 or beta <= 0) and promoted_source == 'analytic':
+        if temporal_mode == 'cohort':
+            ca = _src.get('prob_cohort_alpha')
+            cb = _src.get('prob_cohort_beta')
+            if (isinstance(ca, (int, float)) and isinstance(cb, (int, float))
+                    and float(ca) > 0 and float(cb) > 0):
+                alpha = float(ca)
+                beta = float(cb)
+                p_mean = alpha / (alpha + beta)
+                analytic_provenance = (
+                    _src.get('prob_cohort_provenance')
+                    or 'analytic_cohort_baseline'
+                )
+        if alpha <= 0 or beta <= 0:
+            wa = _src.get('prob_alpha')
+            wb = _src.get('prob_beta')
+            if (isinstance(wa, (int, float)) and isinstance(wb, (int, float))
+                    and float(wa) > 0 and float(wb) > 0):
+                alpha = float(wa)
+                beta = float(wb)
+                p_mean = alpha / (alpha + beta)
+                analytic_provenance = (
+                    _src.get('prob_provenance')
+                    or 'analytic_window_baseline'
+                )
+
     if p_mean == 0:
         # Fall back to forecast mean
         fm = forecast_block.get('mean', 0) or 0
         p_mean = float(fm)
 
-    # D20 FIX: when no posterior alpha/beta, derive from evidence n/k
-    # or construct a prior whose concentration reflects the evidence
-    # base. Without this, the sweep falls back to Beta(1,1) and IS
-    # conditioning overwhelms the prior for per-cohort evaluation.
+    # Doc 73b §3.8 register entry 1: the D20 evidence-count synthesis
+    # (`alpha = ev_k+1, beta = ev_n-ev_k+1` from `p.evidence.{n, k}`)
+    # is invalid — it borrows scoped current-answer evidence as
+    # aggregate model prior, violating the §3.3.3 layer-isolation
+    # rule. Stage 2 removes that path. Acceptable degradation when no
+    # source-layer α/β is available is the named point-estimate
+    # concentration prior below (register entry 2), which records its
+    # provenance label so callers can detect it via diagnostics.
     if alpha <= 0 or beta <= 0:
-        ev_n = evidence_block.get('n')
-        ev_k = evidence_block.get('k')
-        if (isinstance(ev_n, (int, float)) and ev_n > 0
-                and isinstance(ev_k, (int, float)) and ev_k >= 0):
-            # Use evidence counts directly as the Beta prior.
-            # This gives a prior whose concentration reflects all
-            # observed evidence for this edge — typically hundreds
-            # to thousands of trials. IS conditioning then updates
-            # this with per-cohort evidence, producing a sensible
-            # posterior. Add 1 to both for Bayesian smoothing.
-            alpha = float(ev_k) + 1.0
-            beta = float(ev_n - ev_k) + 1.0
-            if p_mean <= 0:
-                p_mean = alpha / (alpha + beta)
-        elif p_mean > 0:
-            # No evidence counts available — use p_mean with moderate
-            # concentration. kappa=200 gives a prior equivalent to
-            # ~200 trials, which resists single-cohort IS better than
-            # kappa=20 while still allowing aggregate evidence to move
-            # the posterior.
-            _KAPPA_FALLBACK = 200.0
+        if p_mean > 0:
+            # Point-estimate concentration prior (kappa = 200) when
+            # neither posterior_block nor source-layer Beta-shape is
+            # available. Provenance: `analytic_point_estimate_degraded`.
+            _KAPPA_POINT_ESTIMATE_DEGRADED = 200.0
             _p = max(min(p_mean, 0.99), 0.01)
-            alpha = _p * _KAPPA_FALLBACK
-            beta = (1.0 - _p) * _KAPPA_FALLBACK
+            alpha = _p * _KAPPA_POINT_ESTIMATE_DEGRADED
+            beta = (1.0 - _p) * _KAPPA_POINT_ESTIMATE_DEGRADED
+            if analytic_provenance is None:
+                analytic_provenance = 'analytic_point_estimate_degraded'
 
     # Subset-conditioning mass (doc 52 §14.3). Pick the mode-appropriate
-    # n_effective from the posterior projection; fall back to ev_n when
-    # D20 synthesised α, β directly from evidence counts (in which case
-    # m_G = ev_n by construction).
+    # n_effective from the source layer: bayesian posterior projection,
+    # or analytic source-layer mirror (doc 73b §3.9). The historical
+    # D20-detection heuristic that inferred n_effective from
+    # `p.evidence.n` is removed by Stage 2 — n_effective is now a
+    # source-layer field, never inferred from scoped current-answer
+    # evidence.
     n_effective: Optional[float] = None
     if promoted_source == 'bayesian':
         if temporal_mode == 'cohort':
@@ -428,14 +478,17 @@ def resolve_model_params(
             n_effective = posterior_block.get('window_n_effective')
         if n_effective is not None:
             n_effective = float(n_effective)
-    # D20-synthesised α, β (posterior α, β missing but evidence n, k present):
-    # the evidence n IS the training mass by construction, so export it.
-    if n_effective is None:
-        _ev_n = evidence_block.get('n')
-        if isinstance(_ev_n, (int, float)) and _ev_n > 0 and alpha > 0 and beta > 0:
-            # Only when we actually used D20 — heuristic check: α+β ≈ ev_n+2.
-            if abs((alpha + beta) - (float(_ev_n) + 2.0)) < 0.1:
-                n_effective = float(_ev_n)
+    elif promoted_source == 'analytic':
+        if temporal_mode == 'cohort':
+            n_effective = _src.get('prob_cohort_n_effective')
+            if n_effective is None:
+                n_effective = _src.get('prob_n_effective')
+        else:
+            n_effective = _src.get('prob_n_effective')
+        if isinstance(n_effective, (int, float)):
+            n_effective = float(n_effective)
+        else:
+            n_effective = None
 
     # Predictive alpha/beta (doc 49): prefer *_pred fields from posterior,
     # fall back to epistemic (when kappa absent, they are identical).

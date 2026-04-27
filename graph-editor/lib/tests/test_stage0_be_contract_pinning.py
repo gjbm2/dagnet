@@ -88,15 +88,6 @@ def _make_analytic_only_edge(n, k, *, with_full_analytic_shape=True):
     }
 
 
-@pytest.mark.xfail(
-    reason=(
-        'doc 73b §3.8 register entry 1 / Stage 2: resolver D20 shortcut at '
-        'model_resolver.py:391-415 currently synthesises analytic α, β '
-        'from scoped p.evidence.{n, k}; Stage 2 routes analytic resolution '
-        'through model_vars[analytic].probability instead.'
-    ),
-    strict=True,
-)
 def test_layer_isolation_scoped_evidence_does_not_change_source_prior():
     """Layer-isolation invariant (§3.3.3, §6.5; §8 binding).
 
@@ -104,6 +95,10 @@ def test_layer_isolation_scoped_evidence_does_not_change_source_prior():
     shape, two resolutions that differ only in ``p.evidence.{n, k}``
     must produce identical α, β, n_effective on the resolved
     promoted source prior.
+
+    Stage 2 (Decision 13) closes this gate: the resolver now reads
+    aggregate α, β from ``model_vars[analytic].probability``; the
+    D20 evidence-count synthesis path was removed.
     """
     from runner.model_resolver import resolve_model_params
 
@@ -129,28 +124,6 @@ def test_layer_isolation_scoped_evidence_does_not_change_source_prior():
     assert resolved_small.n_effective == resolved_large.n_effective, (
         f"Resolved n_effective changed with scoped evidence: "
         f"{resolved_small.n_effective} → {resolved_large.n_effective}."
-    )
-
-
-def test_layer_isolation_violation_documented_today():
-    """Companion to the xfail above — explicitly records that the
-    violation exists today via the D20 shortcut, so Stage 2 has a
-    one-line baseline to flip.
-    """
-    from runner.model_resolver import resolve_model_params
-
-    edge_small = _make_analytic_only_edge(n=10, k=2)
-    edge_large = _make_analytic_only_edge(n=1000, k=200)
-
-    a_small = resolve_model_params(edge_small)
-    a_large = resolve_model_params(edge_large)
-    assert a_small is not None and a_large is not None
-
-    drift = abs(a_small.alpha - a_large.alpha) + abs(a_small.beta - a_large.beta)
-    assert drift > 0, (
-        "Today's resolver should leak scoped p.evidence into α, β; "
-        "if this test passes with drift==0, layer-isolation may already "
-        "be repaired and the xfail above should be flipped to pass."
     )
 
 

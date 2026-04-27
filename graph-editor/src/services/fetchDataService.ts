@@ -1993,7 +1993,7 @@ export async function runStage2EnhancementsAndInboundN(
               console.log(`[fetchDataService] Horizon bootstrap (FE): ${edgesMissingHorizons.length} edges missing mu/sigma`);
               try {
                 const { computeEdgeLatencyStats } = await import('./statisticalEnhancementService');
-                const { upsertModelVars, ukDateNow } = await import('./modelVarsResolution');
+                const { upsertModelVars, ukDateNow, buildAnalyticProbabilityBlock } = await import('./modelVarsResolution');
 
                 const MODEL = forecasting;
                 let bootstrapped = 0;
@@ -2050,13 +2050,18 @@ export async function runStage2EnhancementsAndInboundN(
                   const pf = pid ? fileRegistry.getFile(`parameter-${pid}`)?.data : null;
                   const latestValue = (pf as any)?.values?.[0];
                   if (latestValue) {
+                    // Doc 73b §3.9 mirror contract: populate aggregate
+                    // window-family Beta shape via moment-matching when
+                    // (mean, stdev) is a valid Beta. Resolver falls
+                    // through to `analytic_point_estimate_degraded`
+                    // (§3.8 register entry 2) otherwise.
                     const analyticEntry: any = {
                       source: 'analytic',
                       source_at: (latestValue as any).data_source?.retrieved_at || ukDateNow(),
-                      probability: {
-                        mean: latestValue.mean ?? 0,
-                        stdev: latestValue.stdev ?? 0,
-                      },
+                      probability: buildAnalyticProbabilityBlock(
+                        latestValue.mean ?? 0,
+                        latestValue.stdev ?? 0,
+                      ),
                       latency: {
                         mu: stats.fit.mu,
                         sigma: stats.fit.sigma,
@@ -2222,7 +2227,7 @@ export async function runStage2EnhancementsAndInboundN(
                 // by the conditioned forecast (Job B).
                 if (ev.latency?.mu != null) {
                   const prev: Record<string, any> = existing.latency || {};
-                  existing.latency = mergeModelVarsLatencyPreservingCanonicalEdgeLatency(
+                  existing.latency = mergeModelVarsLatency(
                     {
                       mu: ev.latency.mu!,
                       sigma: ev.latency.sigma!,
@@ -2966,9 +2971,12 @@ export function selectLatencyToApplyForTopoPass(
     existing.sigma > 0;
 
   return {
-    // Preserve existing slice-level latency summary (from file)
-    median_lag_days: existing?.median_lag_days,
-    mean_lag_days: existing?.mean_lag_days,
+    // Preserve existing slice-level latency summary (from file) when set;
+    // fall back to the freshly-computed Stage-2 LAG values so the graph
+    // does not lose median_lag_days / mean_lag_days when the existing
+    // edge had a model fit (mu/sigma) without a pre-stored summary.
+    median_lag_days: existing?.median_lag_days ?? computed.median_lag_days,
+    mean_lag_days: existing?.mean_lag_days ?? computed.mean_lag_days,
     // Preserve the canonical edge-local latency family when the graph already
     // carries one; only the path-level A→Y projection is query-shaped.
     t95: preserveEdgeModel ? (existing?.t95 ?? computed.t95) : computed.t95,
@@ -2988,7 +2996,7 @@ export function selectLatencyToApplyForTopoPass(
   };
 }
 
-function mergeModelVarsLatencyPreservingCanonicalEdgeLatency(
+function mergeModelVarsLatency(
   incoming: Record<string, any> | undefined,
   previous: Record<string, any> | undefined,
 ): Record<string, any> {
@@ -3002,32 +3010,28 @@ function mergeModelVarsLatencyPreservingCanonicalEdgeLatency(
     }
   };
 
-  const preserveEdgeModel =
-    prev.mu != null &&
-    prev.sigma != null &&
-    Number.isFinite(prev.mu) &&
-    Number.isFinite(prev.sigma) &&
-    prev.sigma > 0;
-
-  if (preserveEdgeModel) {
-    setIfPresent('mu', prev.mu);
-    setIfPresent('sigma', prev.sigma);
-    setIfPresent('t95', prev.t95 ?? next.t95);
-    setIfPresent('onset_delta_days', prev.onset_delta_days ?? next.onset_delta_days);
-    setIfPresent('mu_sd', prev.mu_sd ?? next.mu_sd);
-    setIfPresent('sigma_sd', prev.sigma_sd ?? next.sigma_sd);
-    setIfPresent('onset_sd', prev.onset_sd ?? next.onset_sd);
-    setIfPresent('onset_mu_corr', prev.onset_mu_corr ?? next.onset_mu_corr);
-  } else {
-    setIfPresent('mu', next.mu);
-    setIfPresent('sigma', next.sigma);
-    setIfPresent('t95', next.t95);
-    setIfPresent('onset_delta_days', next.onset_delta_days);
-    setIfPresent('mu_sd', next.mu_sd);
-    setIfPresent('sigma_sd', next.sigma_sd);
-    setIfPresent('onset_sd', next.onset_sd);
-    setIfPresent('onset_mu_corr', next.onset_mu_corr);
-  }
+  // Edge-local latency: prefer `next` (Stage-2 LAG output is the
+  // authoritative fresh fit when called) and fall back to `prev` only
+  // when `next` does not supply the field. This matches the path-level
+  // pattern below (`next.path_t95 ?? prev.path_t95`) so the merge is
+  // uniformly "freshest writer wins" instead of asymmetrically
+  // preserving prev for edge-local fields.
+  //
+  // The previous prev-wins-on-edge-local form caused stale values to
+  // persist into the analytic model_vars entry when the file→graph
+  // analytic-entry build had primed `prev` with the file's previous
+  // latency — see `lagHorizonsService.recomputeHorizons` and the
+  // associated regression tests in
+  // `lagHorizonsService.integration.test.ts` /
+  // `batchFetchE2E.comprehensive.test.ts`.
+  setIfPresent('mu', next.mu ?? prev.mu);
+  setIfPresent('sigma', next.sigma ?? prev.sigma);
+  setIfPresent('t95', next.t95 ?? prev.t95);
+  setIfPresent('onset_delta_days', next.onset_delta_days ?? prev.onset_delta_days);
+  setIfPresent('mu_sd', next.mu_sd ?? prev.mu_sd);
+  setIfPresent('sigma_sd', next.sigma_sd ?? prev.sigma_sd);
+  setIfPresent('onset_sd', next.onset_sd ?? prev.onset_sd);
+  setIfPresent('onset_mu_corr', next.onset_mu_corr ?? prev.onset_mu_corr);
 
   setIfPresent('path_mu', next.path_mu ?? prev.path_mu);
   setIfPresent('path_sigma', next.path_sigma ?? prev.path_sigma);

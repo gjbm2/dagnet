@@ -31,6 +31,7 @@ from graph_types import (
     CanvasAnalysis, ContentItem, CanvasAnalysisDisplay, ChartRecipeCore,
     ChartRecipeAnalysis, ChartRecipeScenario,
     CanvasView, CanvasViewObjectState, CanvasViewLayerVisibility, CanvasViewScenario,
+    ModelVarsProbability, ModelVarsLatency, ModelVarsQuality, ModelVarsEntry,
 )
 
 
@@ -278,6 +279,75 @@ class TestResidualBehaviorParity:
         python_props = get_pydantic_fields(ResidualBehavior)
         
         assert_bidirectional_parity(schema_props, python_props, 'ResidualBehavior')
+
+
+class TestModelVarsParity:
+    """model_vars (doc 73b §3.9, S1 schema row): the typed-array shape on
+    ProbabilityParam.model_vars must match the Pydantic ModelVarsEntry tree
+    field-for-field. Inline schema, not $defs (matches the Evidence pattern)."""
+
+    def _items_def(self):
+        schema = load_schema()
+        prob_param_def = schema['$defs']['ProbabilityParam']
+        return prob_param_def['properties']['model_vars']['items']
+
+    def test_model_vars_entry_field_parity(self):
+        items_def = self._items_def()
+        schema_props = get_schema_properties(items_def)
+        python_props = get_pydantic_fields(ModelVarsEntry)
+        assert_bidirectional_parity(
+            schema_props, python_props, 'ModelVarsEntry'
+        )
+
+    def test_model_vars_entry_required_fields(self):
+        items_def = self._items_def()
+        assert items_def.get('required') == ['source', 'source_at', 'probability']
+
+    def test_model_vars_probability_field_parity(self):
+        items_def = self._items_def()
+        prob_def = items_def['properties']['probability']
+        schema_props = get_schema_properties(prob_def)
+        python_props = get_pydantic_fields(ModelVarsProbability)
+        assert_bidirectional_parity(
+            schema_props, python_props, 'ModelVarsProbability'
+        )
+
+    def test_model_vars_probability_no_predictive_fields(self):
+        """§3.9: analytic source must not carry alpha_pred / beta_pred /
+        cohort_alpha_pred / cohort_beta_pred — analytic has no
+        overdispersion model. The bayesian predictive shape lives on
+        p.posterior, not on model_vars[].probability."""
+        items_def = self._items_def()
+        prob_def = items_def['properties']['probability']
+        schema_props = get_schema_properties(prob_def)
+        python_props = get_pydantic_fields(ModelVarsProbability)
+        forbidden = {
+            'alpha_pred', 'beta_pred',
+            'cohort_alpha_pred', 'cohort_beta_pred',
+        }
+        leaked = (schema_props | python_props) & forbidden
+        assert not leaked, (
+            f'§3.9 forbids predictive-flavour fields on '
+            f'model_vars[].probability; leaked: {sorted(leaked)}'
+        )
+
+    def test_model_vars_latency_field_parity(self):
+        items_def = self._items_def()
+        lat_def = items_def['properties']['latency']
+        schema_props = get_schema_properties(lat_def)
+        python_props = get_pydantic_fields(ModelVarsLatency)
+        assert_bidirectional_parity(
+            schema_props, python_props, 'ModelVarsLatency'
+        )
+
+    def test_model_vars_quality_field_parity(self):
+        items_def = self._items_def()
+        qual_def = items_def['properties']['quality']
+        schema_props = get_schema_properties(qual_def)
+        python_props = get_pydantic_fields(ModelVarsQuality)
+        assert_bidirectional_parity(
+            schema_props, python_props, 'ModelVarsQuality'
+        )
 
 
 class TestAllSchemaDefsHavePythonTypes:

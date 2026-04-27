@@ -39,7 +39,7 @@ import { buildAuditEntry } from './updateManager/auditLog';
 import { MAPPING_CONFIGURATIONS, getMappingKey } from './updateManager/mappingConfigurations';
 import { applyMappings } from './updateManager/mappingEngine';
 import type { ModelVarsEntry } from '../types';
-import { upsertModelVars, ukDateNow, applyPromotion } from './modelVarsResolution';
+import { upsertModelVars, ukDateNow, applyPromotion, buildAnalyticProbabilityBlock } from './modelVarsResolution';
 
 // ─── Re-exports (public API — preserve existing import paths) ───────────────
 export type {
@@ -1149,10 +1149,15 @@ export class UpdateManager {
           const entry: ModelVarsEntry = {
             source: 'analytic',
             source_at: latestValue.data_source?.retrieved_at || latestValue.window_to || ukDateNow(),
-            probability: {
-              mean: latestValue.mean,
-              stdev: latestValue.stdev,
-            },
+            // Doc 73b §3.9 mirror contract: when (mean, stdev) yields a
+            // valid Beta moment-match, populate the aggregate window-family
+            // shape (alpha, beta, n_effective, provenance). Otherwise the
+            // resolver falls through to `analytic_point_estimate_degraded`
+            // (§3.8 register entry 2).
+            probability: buildAnalyticProbabilityBlock(
+              latestValue.mean,
+              latestValue.stdev,
+            ),
           };
 
           // Add latency block when mu/sigma are present on the file

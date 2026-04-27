@@ -126,9 +126,31 @@ class ModelVarsLatency(BaseModel):
 
 
 class ModelVarsProbability(BaseModel):
-    """Probability sub-block within a ModelVarsEntry."""
+    """Probability sub-block within a ModelVarsEntry.
+
+    Per doc 73b §3.9 (analytic source-mirror contract), the analytic
+    source carries aggregate window-family Beta-shape (`alpha`, `beta`,
+    `n_effective`, `provenance`) plus optional cohort-family shape
+    (`cohort_alpha`, `cohort_beta`, `cohort_n_effective`,
+    `cohort_provenance`) when cohort-family aggregate evidence exists.
+    The bayesian source uses the same probability sub-block but
+    populates the same fields from offline Bayes fits. Predictive
+    flavour fields (`alpha_pred`, `beta_pred`) are intentionally
+    excluded — analytic has no overdispersion model and the bayesian
+    predictive shape lives on `p.posterior` instead.
+    """
     mean: float = Field(..., ge=0, le=1)
     stdev: float = Field(0.0, ge=0)
+    # Window-family aggregate Beta shape (§3.9).
+    alpha: Optional[float] = Field(None, ge=0, description="Window-family Beta α (aggregate)")
+    beta: Optional[float] = Field(None, ge=0, description="Window-family Beta β (aggregate)")
+    n_effective: Optional[float] = Field(None, ge=0, description="Source mass behind window-family Beta shape")
+    provenance: Optional[str] = Field(None, description="Source-basis label (e.g. analytic_window_baseline, analytic_point_estimate_degraded)")
+    # Cohort-family aggregate Beta shape (§3.9; optional).
+    cohort_alpha: Optional[float] = Field(None, ge=0, description="Cohort-family Beta α (aggregate, optional)")
+    cohort_beta: Optional[float] = Field(None, ge=0, description="Cohort-family Beta β (aggregate, optional)")
+    cohort_n_effective: Optional[float] = Field(None, ge=0, description="Source mass behind cohort-family Beta shape")
+    cohort_provenance: Optional[str] = Field(None, description="Source-basis label for cohort-family shape")
 
 
 class ModelVarsEntry(BaseModel):

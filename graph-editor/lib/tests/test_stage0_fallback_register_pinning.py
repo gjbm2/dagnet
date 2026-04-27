@@ -56,44 +56,34 @@ PLAN_PATH = os.path.join(
 
 
 def test_register_entry_2_kappa_fallback_literal_present():
-    """Register entry 2 (provisional): the fixed point-estimate prior
-    strength literal at ``model_resolver.py:412`` is pinned so Stage 2
-    has a discrete target when renaming/documenting it.
+    """Register entry 2 (provisional): the renamed kappa point-estimate
+    prior-strength literal must remain in ``model_resolver.py``. Stage 2
+    renamed `_KAPPA_FALLBACK` to `_KAPPA_POINT_ESTIMATE_DEGRADED` and
+    attaches the provenance label below.
     """
     resolver_path = os.path.join(LIB_ROOT, 'runner', 'model_resolver.py')
     with open(resolver_path, 'r', encoding='utf-8') as f:
         src = f.read()
 
-    assert re.search(r'_KAPPA_FALLBACK\s*=\s*200\.0', src), (
-        "Register entry 2 expected the literal `_KAPPA_FALLBACK = 200.0` "
-        "in model_resolver.py. If the rename has landed, update this test "
-        "and the §3.8 register entry to match the new name."
+    assert re.search(r'_KAPPA_POINT_ESTIMATE_DEGRADED\s*=\s*200\.0', src), (
+        "Register entry 2 expected the literal "
+        "`_KAPPA_POINT_ESTIMATE_DEGRADED = 200.0` in model_resolver.py."
     )
 
 
-@pytest.mark.xfail(
-    reason=(
-        'doc 73b §3.8 register entry 2: the fixed kappa point-estimate '
-        'fallback must be renamed and surfaced in diagnostics; today the '
-        'literal carries no provenance label. Stage 2 lands the rename '
-        '+ diagnostic.'
-    ),
-    strict=True,
-)
 def test_register_entry_2_kappa_fallback_carries_provenance_label():
-    """End-state: the kappa fallback writes a named provenance label on
-    the resolved params (e.g. ``analytic_point_estimate_degraded``) when
-    it fires. Pinned via grep on the resolver source for the provenance
-    string.
+    """The kappa fallback records ``analytic_point_estimate_degraded``
+    on the resolver source so callers can detect the degraded path via
+    diagnostics. Pinned via grep on the resolver source.
     """
     resolver_path = os.path.join(LIB_ROOT, 'runner', 'model_resolver.py')
     with open(resolver_path, 'r', encoding='utf-8') as f:
         src = f.read()
 
     assert re.search(r'analytic_point_estimate_degraded', src), (
-        "Register entry 2 end-state: the kappa fallback must record "
+        "Register entry 2: the kappa fallback must record "
         "`analytic_point_estimate_degraded` (or named successor) on the "
-        "resolved params so callers can detect it via diagnostics."
+        "resolver source so callers can detect it via diagnostics."
     )
 
 

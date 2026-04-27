@@ -1567,7 +1567,14 @@ describe('UpdateManager', () => {
       expect(entry).toBeDefined();
       expect(entry.source).toBe('analytic');
       expect(entry.source_at).toBe('20-Mar-26');
-      expect(entry.probability).toEqual({ mean: 0.12, stdev: 0.03 });
+      // Doc 73b §3.9: probability sub-block carries mean+stdev plus the
+      // moment-matched aggregate Beta shape when (mean, stdev) is feasible.
+      expect(entry.probability.mean).toBe(0.12);
+      expect(entry.probability.stdev).toBe(0.03);
+      expect(entry.probability.alpha).toBeGreaterThan(0);
+      expect(entry.probability.beta).toBeGreaterThan(0);
+      expect(entry.probability.n_effective).toBeGreaterThan(0);
+      expect(entry.probability.provenance).toBe('analytic_window_baseline');
       expect(entry.latency).toEqual({
         mu: 2.5, sigma: 0.8, t95: 45, onset_delta_days: 3,
       });
@@ -1599,7 +1606,14 @@ describe('UpdateManager', () => {
       const result = await updateManager.handleFileToGraph(paramFile, edge, 'UPDATE', 'parameter');
       const entry = (result.metadata as any)?.analyticModelVarsEntry;
 
-      expect(entry.probability).toEqual({ mean: 0.5, stdev: 0.1 });
+      // Doc 73b §3.9: mean/stdev always present; aggregate Beta shape
+      // populated when the moment-match is feasible (here it is —
+      // mean=0.5, stdev=0.1 yields a valid Beta).
+      expect(entry.probability.mean).toBe(0.5);
+      expect(entry.probability.stdev).toBe(0.1);
+      expect(entry.probability.alpha).toBeGreaterThan(0);
+      expect(entry.probability.beta).toBeGreaterThan(0);
+      expect(entry.probability.provenance).toBe('analytic_window_baseline');
       expect(entry.latency).toBeUndefined();
     });
 

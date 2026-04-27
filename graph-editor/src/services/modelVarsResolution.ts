@@ -191,6 +191,78 @@ export function applyPromotion(
 // ── Shared helpers ──────────────────────────────────────────────────────────
 
 /**
+ * Moment-match a Beta(α, β) shape from `(mean, stdev)` per doc 73b §3.9
+ * "smoothing convention" alternative. Returns `{}` (no Beta shape) when
+ * inputs are invalid for a proper Beta — caller should leave the
+ * §3.9 fields absent so the Python resolver falls through to the
+ * `analytic_point_estimate_degraded` kappa path (§3.8 register entry 2).
+ *
+ * For a Beta(α, β):
+ *   var = α·β / ((α+β)² · (α+β+1))   ≤ mean·(1−mean)
+ *   concentration = α + β = mean·(1−mean)/variance − 1
+ *
+ * Invalid when: stdev not finite or ≤ 0, mean not in (0, 1), or
+ * variance ≥ mean·(1−mean) (impossible for Beta).
+ */
+export function momentMatchAnalyticBeta(
+  mean: number,
+  stdev: number,
+): { alpha?: number; beta?: number; n_effective?: number } {
+  if (!Number.isFinite(mean) || !Number.isFinite(stdev)) return {};
+  if (mean <= 0 || mean >= 1) return {};
+  if (stdev <= 0) return {};
+  const variance = stdev * stdev;
+  const maxVar = mean * (1 - mean);
+  if (variance >= maxVar) return {};
+  const concentration = (maxVar / variance) - 1;
+  if (!Number.isFinite(concentration) || concentration <= 0) return {};
+  const alpha = mean * concentration;
+  const beta = (1 - mean) * concentration;
+  return { alpha, beta, n_effective: concentration };
+}
+
+/**
+ * Build the §3.9 analytic-source probability sub-block from
+ * `(mean, stdev)` plus an optional `n_effective` override (when the
+ * caller has a more reliable source-mass figure than the moment-match
+ * yields). Returns `{ mean, stdev }` plus, when valid, the §3.9
+ * `{ alpha, beta, n_effective, provenance }` window-family shape.
+ */
+export function buildAnalyticProbabilityBlock(
+  mean: number,
+  stdev: number,
+  opts?: { n_effective?: number; provenance?: string },
+): {
+  mean: number;
+  stdev: number;
+  alpha?: number;
+  beta?: number;
+  n_effective?: number;
+  provenance?: string;
+} {
+  const block: {
+    mean: number;
+    stdev: number;
+    alpha?: number;
+    beta?: number;
+    n_effective?: number;
+    provenance?: string;
+  } = { mean, stdev };
+  const moments = momentMatchAnalyticBeta(mean, stdev);
+  if (moments.alpha !== undefined && moments.beta !== undefined) {
+    block.alpha = moments.alpha;
+    block.beta = moments.beta;
+    block.n_effective = (
+      opts?.n_effective !== undefined && Number.isFinite(opts.n_effective) && opts.n_effective > 0
+        ? opts.n_effective
+        : moments.n_effective
+    );
+    block.provenance = opts?.provenance ?? 'analytic_window_baseline';
+  }
+  return block;
+}
+
+/**
  * Upsert a model_vars entry by source, replacing any existing entry
  * with the same source.  Initialises the array when absent.
  */

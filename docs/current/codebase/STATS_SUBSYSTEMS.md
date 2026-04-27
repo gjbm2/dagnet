@@ -149,11 +149,17 @@ established by the earlier work packages.
 **Query-scoping**: this is the *most thorough* query-scoping of any
 subsystem. IS conditioning updates the aggregate bayesian posterior
 specifically to the user's query-DSL-scoped snapshot evidence, per edge.
-That still obeys the `alpha_beta_query_scoped` rule from
-`graph-editor/lib/runner/model_resolver.py`: aggregate priors may update,
-but the `analytic` query-scoped posterior is already scoped and therefore
-routes to degraded or read-directly behaviour instead of being updated
-again.
+**Doc 73b Stage 2 status**: the analytic source resolver now reads
+aggregate α, β from `model_vars[analytic].probability` (or the
+`analytic_point_estimate_degraded` kappa fallback) — the §6.1 binding
+gate is met. The discriminator (`alpha_beta_query_scoped`) and its
+consumer branches in `forecast_state.py`, `forecast_runtime.py`, and
+`cohort_forecast_v3.py` are **deferred to Stage 4(d)** for retirement
+— per §8 "Rename or remove only after the runtime no longer needs it"
+— because the consumer audit is owned by that stage. Until then the
+property still returns True for analytic and the
+`analytic_degraded` / `is_cf_sweep_eligible == False` paths still
+fire for analytic edges; aggregate priors (bayesian) update normally.
 
 **Distinction from FE topo pass**: FE topo is analytic and query-scoped but non-conditioned — a moment-match Jeffreys posterior plus Fenton-Wilkinson latency composition. BE CF is full MC with proper IS on per-edge snapshot evidence, topologically sequenced with upstream carrier propagation. CF supersedes the FE blended `p.mean` and `completeness` when it lands.
 
@@ -288,23 +294,24 @@ No. Bayes produces an **aggregate** posterior from the training corpus; that's d
 
 **Confusion 7: "`model_vars[analytic].alpha, beta` can be used as a prior"**
 
-> **Status note (26-Apr-26)**: this confusion describes today's
-> code accurately, but the underlying behaviour is a documented
-> defect against design intent. The FE topo pass performs **two
-> logically distinct steps** (aggregate model var generation,
-> then a scoped quick-blend) — see
-> [FE_BE_STATS_PARALLELISM.md "Two logical steps in one pass"](FE_BE_STATS_PARALLELISM.md)
-> for the durable framing. Today's code conflates them by writing
-> a query-scoped Jeffreys posterior to `model_vars[analytic].α,β`
-> instead of an aggregate Beta fit; the
-> `ResolvedModelParams.alpha_beta_query_scoped` switch and the
-> `is_cf_sweep_eligible == False` / `cf_mode = 'analytic_degraded'`
-> branches exist to compensate for that conflation. Doc 73b
-> Decision 13 and Stage 4(c)–(d) remove the conflation, after
-> which `model_vars[analytic].α,β` will be aggregate on the same
-> footing as the bayesian equivalent and CF will run uniformly
-> for every promoted source. Until then, the rest of this
-> confusion is the rule consumers must follow.
+> **Status note (27-Apr-26, post doc 73b Stage 2)**: the resolver
+> side of the design intent below is now in place. **Doc 73b Stage 2**
+> landed: the resolver reads aggregate α, β from
+> `model_vars[analytic].probability` (or the
+> `analytic_point_estimate_degraded` kappa fallback per §3.8 register
+> entry 2) and the FE topo Step 1 writer populates the §3.9 mirror
+> contract via `buildAnalyticProbabilityBlock` in
+> `modelVarsResolution.ts`. The §6.1 binding gate (changing scoped
+> `p.evidence.{n, k}` cannot alter the resolved analytic prior when a
+> valid source-layer shape exists) is met. **However the discriminator
+> retirement is deferred to Stage 4(d)**: `alpha_beta_query_scoped`
+> still returns True for analytic, the consumer branches in
+> `forecast_state.py`, `forecast_runtime.py`, and `cohort_forecast_v3.py`
+> still take their pre-Stage-2 path, and `analytic_degraded` /
+> `is_cf_sweep_eligible == False` still fire for analytic edges. This
+> is per §8 "Rename or remove `alpha_beta_query_scoped` only after the
+> runtime no longer needs it" — the consumer audit owns the cleanup.
+> The rule below is therefore still the rule consumers must follow.
 
 It can't — it's already a posterior, and a query-scoped one. The FE
 topo pass derives `α, β` from **query-scoped** `total_k, total_n` as a

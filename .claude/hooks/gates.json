@@ -26,6 +26,8 @@
       "description": "Commands that delete or overwrite data",
       "patterns": [
         "rm ", "rm\t", "rmdir ", "unlink ", "truncate ", "shred ", "sed -i",
+        "cp ", "cp\t", "mv ", "mv\t", "tee ", "tee\t", "dd of=",
+        "awk -i inplace", "awk --inplace",
         "dagnet-gate-"
       ],
       "claude_md_section": "Gate 2: Destructive / data-loss operations"
