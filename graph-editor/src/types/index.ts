@@ -999,7 +999,8 @@ export interface EdgeLatencyDisplay {
 
 export interface ProbabilityParam {
   mean?: number; // [0,1]
-  stdev?: number; // >= 0
+  stdev?: number; // Epistemic SD (doc 73b §3.3.4 / §12.2 row S5)
+  stdev_pred?: number; // Predictive SD, kappa-inflated (doc 73b §3.3.4 / §12.2 row S5). No `*_overridden` lock (row S6).
   mean_overridden?: boolean; // If true, mean was manually edited
   stdev_overridden?: boolean; // If true, stdev was manually edited
   distribution_overridden?: boolean; // If true, distribution was manually edited
@@ -1043,10 +1044,17 @@ export interface ProbabilityParam {
   /** True when model_source_preference was explicitly set by user (not auto) */
   model_source_preference_overridden?: boolean;
 
-  /** Forecast probability from mature cohorts (p_∞) */
+  /** Promoted baseline forecast surface (doc 73b §3.2).
+   *  Three-field promoted surface { mean, stdev, source } is written
+   *  exclusively by applyPromotion (TS) / resolve_model_params (Py).
+   *  `k` shares the namespace but is a runtime-derived population helper
+   *  with a separate writer and lifecycle (doc 73b §12.2 row S4 carve-out).
+   */
   forecast?: {
-    mean?: number;  // Forecast mean probability
+    mean?: number;  // Forecast mean probability (p_∞)
     stdev?: number; // Forecast standard deviation
+    /** Source-basis label written by applyPromotion (doc 73b §3.2, §12.2 row S4). */
+    source?: ModelSource;
     /** Expected converters on this edge = p.mean * p.n.
      *  Used for propagating population downstream (inbound-n calculation).
      *  Cached after batch fetch; single-edge fetches sum inbound forecast.k for p.n.

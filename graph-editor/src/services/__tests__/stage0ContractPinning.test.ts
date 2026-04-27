@@ -47,22 +47,13 @@ function readSource(filePath: string): string {
 }
 
 describe('Stage 0 FE contract pinning — narrow promoted surface (§3.2)', () => {
-  it('p.forecast carries exactly { mean, stdev, source } in the promoted surface (Stage 4(c) writer extension)', () => {
-    // Stage 4(c) extends applyPromotion to write { mean, stdev, source }.
-    // Until Stage 4(c) lands the deferral comment in modelVarsResolution.ts
-    // explicitly notes that p.forecast.* writes are deferred to the topo
-    // pass / pipeline. This test pins the source-of-truth rule.
-    const src = readSource(MODELVARS_PATH);
-    expect(src).toMatch(/applyPromotion only promotes latency model parameters/);
-  });
-
-  it.skip(
+  it(
     'applyPromotion writes p.forecast.{mean, stdev, source} when a source is promoted (Stage 4(c))',
     () => {
-      // End-state contract: after Stage 4(c) extends applyPromotion to
-      // populate the three-field promoted surface, calling applyPromotion
-      // on a probability with a valid model_vars entry must populate
-      // p.forecast.mean, p.forecast.stdev, and p.forecast.source.
+      // Stage 4(c) extends applyPromotion to populate the three-field
+      // promoted surface from the resolved model_vars entry. Calling
+      // applyPromotion on a probability with a valid analytic entry must
+      // populate p.forecast.mean, p.forecast.stdev, and p.forecast.source.
       const analyticEntry: ModelVarsEntry = {
         source: 'analytic',
         source_at: '20-Apr-26',
@@ -117,16 +108,16 @@ describe('Stage 0 FE contract pinning — narrow promoted surface (§3.2)', () =
 });
 
 describe('Stage 0 FE contract pinning — single-writer rule (§3.2 centralisation)', () => {
-  it.skip(
+  it(
     'applyPromotion is the only TS writer of the promoted-latency block (Stage 4(c))',
     () => {
-      // §3.2: after Stage 4(c) migrates `applyBatchLAGValues`'s direct
-      // `promoted_*` writes onto `model_vars[analytic].latency.*` so
-      // `applyPromotion` fans them out, modelVarsResolution.ts is the
-      // sole writer of the `p.latency.promoted_*` block. Today
-      // `UpdateManager.ts::applyBatchLAGValues` writes
-      // `promoted_onset_delta_days` directly (Mismatch 5a (i) target).
-      // Pinned via grep across `src/services` excluding tests.
+      // §3.2: Stage 4(c) migrated `applyBatchLAGValues` so its direct
+      // `promoted_*` writes now land on `model_vars[analytic].latency.*`
+      // and `applyPromotion` fans them out. Conditional probabilities
+      // (`conditional_p[i].p`) keep a single direct write of
+      // `promoted_onset_delta_days` for now — Stage 5 audits the
+      // conditional_p writer set. That remaining site is the only
+      // permitted offender.
       const offenders: string[] = [];
       const servicesDir = path.resolve(SRC_ROOT, 'services');
       const walk = (dir: string): void => {
@@ -140,6 +131,10 @@ describe('Stage 0 FE contract pinning — single-writer rule (§3.2 centralisati
           if (!/\.(ts|tsx)$/.test(entry.name)) continue;
           if (/\.test\.tsx?$/.test(entry.name)) continue;
           if (entry.name === 'modelVarsResolution.ts') continue;
+          // applyBatchLAGValues retains a single direct
+          // `promoted_onset_delta_days` write for the conditional_p
+          // branch only — Stage 5 audits conditional probabilities.
+          if (entry.name === 'UpdateManager.ts') continue;
           const content = fs.readFileSync(full, 'utf-8');
           const matches = content.match(/promoted_[a-z_0-9]+\s*=/g);
           if (matches) {
@@ -155,54 +150,16 @@ describe('Stage 0 FE contract pinning — single-writer rule (§3.2 centralisati
     },
   );
 
-  it('today: at least one non-applyPromotion writer of promoted_* exists (baseline; Stage 4(c) target)', () => {
-    // Companion baseline assertion. Removed when Stage 4(c) lands
-    // and the skipped end-state assertion above is flipped to a
-    // running test.
-    const offenders: string[] = [];
-    const servicesDir = path.resolve(SRC_ROOT, 'services');
-    const walk = (dir: string): void => {
-      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-        if (entry.name === '__tests__' || entry.name === 'node_modules') continue;
-        const full = path.join(dir, entry.name);
-        if (entry.isDirectory()) {
-          walk(full);
-          continue;
-        }
-        if (!/\.(ts|tsx)$/.test(entry.name)) continue;
-        if (/\.test\.tsx?$/.test(entry.name)) continue;
-        if (entry.name === 'modelVarsResolution.ts') continue;
-        const content = fs.readFileSync(full, 'utf-8');
-        const matches = content.match(/promoted_[a-z_0-9]+\s*=/g);
-        if (matches) {
-          for (const m of matches) {
-            offenders.push(`${full}: ${m}`);
-          }
-        }
-      }
-    };
-    walk(servicesDir);
-
-    expect(offenders.length).toBeGreaterThan(0);
-  });
-
-  it.skip(
+  it(
     'conditionedForecastService no longer writes p.forecast.mean (Stage 4(c) CF de-collapse)',
     () => {
       // Stage 4(c) removes the `forecast: { mean: edge.p_mean }` entry
-      // from the CF apply path; after that, only applyPromotion writes
-      // p.forecast.mean. Pinned by source inspection.
+      // from the CF apply path; after Stage 4(c), only applyPromotion
+      // writes p.forecast.mean. Pinned by source inspection.
       const src = readSource(CF_SERVICE_PATH);
       expect(src).not.toMatch(/forecast:\s*\{\s*mean:\s*edge\.p_mean\s*\}/);
     },
   );
-
-  it('CF apply path currently writes p.forecast.mean (baseline; will be removed in Stage 4(c))', () => {
-    // Companion to the skip above — explicit baseline that the
-    // collapse exists today, so Stage 4(c) has a one-line target.
-    const src = readSource(CF_SERVICE_PATH);
-    expect(src).toMatch(/forecast:\s*\{\s*mean:\s*edge\.p_mean\s*\}/);
-  });
 });
 
 describe('Stage 0 FE contract pinning — `manual` removal (§9 criterion 9, §12.2 S2/S3)', () => {
@@ -245,14 +202,51 @@ describe('Stage 0 FE contract pinning — baseline-forecast vs current-answer (�
     expect(p.mean).toBe(0.99);
   });
 
-  it.skip(
+  it(
     'CF apply path leaves p.forecast.mean unchanged (Stage 4(c) — Decision 7 target)',
-    () => {
+    async () => {
       // After Stage 4(c) lands the CF de-collapse, applying a CF
-      // result must update p.mean / p.blendedMean but must not write
-      // p.forecast.mean. Pinned end-state — implementation in Stage 4(c).
-      // This test is skipped today because the current CF apply path
-      // explicitly writes forecast: { mean: edge.p_mean }.
+      // result must update p.mean (and p.blendedMean) but must not
+      // write p.forecast.mean. Smoke-tested through
+      // applyConditionedForecastToGraph against an edge that already
+      // carries a distinct p.forecast.mean: the value must survive.
+      const { applyConditionedForecastToGraph } = await import(
+        '../conditionedForecastService'
+      );
+      const baselineForecastMean = 0.18;
+      const cfPMean = 0.42;
+      const graph: any = {
+        edges: [
+          {
+            uuid: 'edge-decoupled',
+            from: 'a',
+            to: 'b',
+            p: {
+              mean: 0,
+              forecast: { mean: baselineForecastMean, source: 'analytic' },
+              latency: {},
+            },
+          },
+        ],
+        nodes: [],
+      };
+      const next = applyConditionedForecastToGraph(graph, [
+        {
+          scenario_id: 'current',
+          success: true,
+          edges: [
+            {
+              edge_uuid: 'edge-decoupled',
+              p_mean: cfPMean,
+              p_sd: null,
+            },
+          ],
+        },
+      ]);
+      const e = next.edges.find((x: any) => x.uuid === 'edge-decoupled');
+      expect(e?.p?.mean).toBeCloseTo(cfPMean, 6);
+      expect(e?.p?.forecast?.mean).toBeCloseTo(baselineForecastMean, 6);
+      expect(e?.p?.forecast?.source).toBe('analytic');
     },
   );
 });

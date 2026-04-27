@@ -296,8 +296,14 @@ describe('Sample File Query Flow E2E', () => {
 
       expect(pMean).toBeGreaterThanOrEqual(Math.min(evidenceDebiased, forecastMean!) - 1e-3);
       expect(pMean).toBeLessThanOrEqual(Math.max(evidenceDebiased, forecastMean!) + 1e-3);
-      expect(paramPack['e.checkout-to-payment.p.stdev']).toBeCloseTo(CHECKOUT_TO_PAYMENT_COHORT.stdev, 2);
-      
+      // Doc 73b §3.3.4 / §12.2 row S5: `p.stdev` is the FE topo Step 2
+      // epistemic blend (moment-derived posterior SD on the rate), not
+      // the file's authored `stdev`. Just check it landed and is finite.
+      const cohortStdev = paramPack['e.checkout-to-payment.p.stdev'];
+      expect(typeof cohortStdev).toBe('number');
+      expect(Number.isFinite(cohortStdev as number)).toBe(true);
+      expect(cohortStdev as number).toBeGreaterThan(0);
+
       // === EVIDENCE.MEAN (IN param pack - RAW k/n) ===
       // This comes from UpdateManager mapping: values[latest].evidence.mean -> p.evidence.mean
       expect(paramPack['e.checkout-to-payment.p.evidence.mean']).toBeCloseTo(expectedEvidenceMean, 3);
@@ -491,8 +497,13 @@ describe('Sample File Query Flow E2E', () => {
       expect(forecastMean!).toBeLessThan(1);
       expect(pMean).toBeGreaterThan(0);
       expect(pMean).toBeLessThan(1);
-      expect(paramPack['e.checkout-to-payment.p.stdev']).toBe(CHECKOUT_TO_PAYMENT_WINDOW.stdev);
-      
+      // Doc 73b §3.3.4 / §12.2 row S5: `p.stdev` is the FE topo Step 2
+      // epistemic blend, not the file's authored `stdev`.
+      const windowStdev = paramPack['e.checkout-to-payment.p.stdev'];
+      expect(typeof windowStdev).toBe('number');
+      expect(Number.isFinite(windowStdev as number)).toBe(true);
+      expect(windowStdev as number).toBeGreaterThan(0);
+
       // === EVIDENCE.MEAN (IN param pack - RAW k/n) ===
       expect(paramPack['e.checkout-to-payment.p.evidence.mean']).toBeCloseTo(expectedEvidenceMean, 3);
       

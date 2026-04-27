@@ -424,13 +424,20 @@ function getProbabilityBeadValueForLayer(
     (typeof pForLayer?.evidence?.k === 'number' ? pForLayer.evidence.k : undefined)
     ?? (typeof fallbackP?.evidence?.k === 'number' ? fallbackP.evidence.k : undefined);
 
-  // Mean/stdev basis (for F+E mode)
+  // Mean/stdev basis (for F+E mode).
+  // Doc 73b §6.2 / §3.3.4: F+E chart bands use the predictive-preferred
+  // fallback (`p.stdev_pred ?? p.stdev`). Forecast-band consumers want
+  // the kappa-aware width when the promoted source supplies one;
+  // analytic / pre-kappa graphs fall through to the epistemic value.
   const mean =
     typeof pForLayer?.mean === 'number' ? pForLayer.mean
       : (typeof fallbackP?.mean === 'number' ? fallbackP.mean : 0);
   const stdev =
-    typeof pForLayer?.stdev === 'number' ? pForLayer.stdev
-      : (typeof fallbackP?.stdev === 'number' ? fallbackP.stdev : undefined);
+    typeof pForLayer?.stdev_pred === 'number' ? pForLayer.stdev_pred
+      : typeof pForLayer?.stdev === 'number' ? pForLayer.stdev
+      : typeof fallbackP?.stdev_pred === 'number' ? fallbackP.stdev_pred
+      : typeof fallbackP?.stdev === 'number' ? fallbackP.stdev
+      : undefined;
 
   // === Derived sibling basis (E/F modes only) ===
   // For E mode: if any sibling has explicit evidence, missing siblings get residual allocation.

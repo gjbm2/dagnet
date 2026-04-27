@@ -308,11 +308,22 @@ class BayesRunMetadata(BaseModel):
 
 
 class ForecastParams(BaseModel):
-    """Forecast probability parameters from mature cohorts."""
+    """Promoted baseline forecast surface (doc 73b §3.2).
+
+    The three-field promoted surface is { mean, stdev, source } and is
+    written exclusively by applyPromotion (TS) / resolve_model_params
+    (Py). `k` shares the namespace but is a runtime-derived population
+    helper with a separate writer and lifecycle (doc 73b §12.2 row S4
+    carve-out).
+    """
     # NOTE: mean can exceed 1.0 in edge cases when extrapolating from sparse/immature data.
     # The forecast is still useful as an indicator even if > 1.0 (will be clamped at display time).
     mean: Optional[float] = Field(None, ge=0, description="Forecast mean probability (p_∞)")
     stdev: Optional[float] = Field(None, ge=0, description="Forecast standard deviation")
+    source: Optional[Literal['analytic', 'bayesian']] = Field(
+        None,
+        description="Source-basis label written by applyPromotion (doc 73b §3.2, §12.2 row S4)."
+    )
     # Expected converters: p.mean * p.n - used for propagating population downstream
     k: Optional[float] = Field(None, ge=0, description="Expected converters on this edge (p.mean * p.n)")
 
@@ -321,8 +332,9 @@ class ProbabilityParam(BaseModel):
     """Probability parameter: p.mean is P(to|from)."""
     mean: Optional[float] = Field(None, ge=0, le=1, description="Probability value")
     mean_overridden: bool = Field(False, description="If true, mean was manually edited")
-    stdev: Optional[float] = Field(None, ge=0, description="Standard deviation")
+    stdev: Optional[float] = Field(None, ge=0, description="Epistemic standard deviation (doc 73b §3.3.4 / §12.2 row S5)")
     stdev_overridden: bool = Field(False, description="If true, stdev was manually edited")
+    stdev_pred: Optional[float] = Field(None, ge=0, description="Predictive standard deviation (kappa-inflated) (doc 73b §3.3.4 / §12.2 row S5). Present only when the promoted source supplies a predictive flavour. No lock flag (row S6).")
     distribution: Optional[Literal["normal", "beta", "uniform"]] = Field("beta", description="Distribution type")
     distribution_overridden: bool = Field(False, description="If true, distribution was manually edited")
     connection: Optional[str] = Field(None, description="Connection name from connections.yaml")

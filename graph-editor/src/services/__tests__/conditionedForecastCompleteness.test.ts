@@ -277,6 +277,8 @@ describe('CF owns completeness on the graph path (FE authority contract)', () =>
   // ── 2. applyConditionedForecastToGraph OVERWRITES completeness ──────
 
   it('applyConditionedForecastToGraph overwrites edge.p.latency.completeness with CF value', () => {
+    // Doc 73b §6.2 / §12.2 row S9: CF apply mapping is
+    // `p_sd → p.stdev_pred` (predictive), `p_sd_epistemic → p.stdev` (epistemic).
     const graph = latencyGraph();
     const results: ConditionedForecastScenarioResult[] = [
       {
@@ -286,8 +288,9 @@ describe('CF owns completeness on the graph path (FE authority contract)', () =>
           {
             edge_uuid: EDGE_ID,
             p_mean: 0.6,
-            p_sd: 0.04,
-            completeness: 0.85,       // doc 45 — CF's own value
+            p_sd: 0.05,            // predictive (kappa-inflated)
+            p_sd_epistemic: 0.04,  // epistemic
+            completeness: 0.85,    // doc 45 — CF's own value
             completeness_sd: 0.07,
           },
         ],
@@ -297,9 +300,9 @@ describe('CF owns completeness on the graph path (FE authority contract)', () =>
     const updated = applyConditionedForecastToGraph(graph, results);
     const edge = updated.edges.find((e: any) => (e.uuid || e.id) === EDGE_ID);
     expect(edge.p.latency.completeness).toBeCloseTo(0.85, 5);
-    // NOT the old value (0.42).
     expect(edge.p.latency.completeness).not.toBeCloseTo(0.42, 5);
-    expect(edge.p.stdev).toBeCloseTo(0.04, 5);
+    expect(edge.p.stdev).toBeCloseTo(0.04, 5);       // p_sd_epistemic → p.stdev
+    expect(edge.p.stdev_pred).toBeCloseTo(0.05, 5);  // p_sd → p.stdev_pred
   });
 
   it('applyConditionedForecastToGraph overwrites edge.p.latency.completeness_stdev with CF value', () => {

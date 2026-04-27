@@ -1,0 +1,258 @@
+{
+  "_doc": "TS/Py promotion-parity contract — doc 73b §3.2. Shared fixtures: TS `applyPromotion` (graph-editor/src/services/modelVarsResolution.ts) and Py `resolve_model_params` (graph-editor/lib/runner/model_resolver.py) must agree on which source promotes and on the promoted Beta-shape / latency parameters. Each `expected` field is asserted by both sides; null/missing fields are skipped (used for cases where applyPromotion writes nothing because no entry promoted).",
+  "cases": [
+    {
+      "name": "analytic_only_best_available",
+      "edge": {
+        "p": {
+          "forecast": {},
+          "latency": {},
+          "posterior": {"alpha": 40, "beta": 60},
+          "model_vars": [
+            {
+              "source": "analytic",
+              "probability": {
+                "mean": 0.4, "stdev": 0.04898979485566356,
+                "alpha": 40, "beta": 60, "n_effective": 100,
+                "provenance": "analytic_window_baseline"
+              },
+              "latency": {
+                "mu": 3.0, "sigma": 0.6, "t95": 12.0, "onset_delta_days": 1.0,
+                "mu_sd": 0.12, "sigma_sd": 0.05, "onset_sd": 0.2, "onset_mu_corr": 0.0
+              }
+            }
+          ]
+        }
+      },
+      "graph_preference": null,
+      "expected": {
+        "source": "analytic",
+        "prob_mean": 0.4,
+        "prob_stdev": 0.04898979485566356,
+        "lat_mu": 3.0, "lat_sigma": 0.6, "lat_t95": 12.0, "lat_onset_delta_days": 1.0,
+        "lat_mu_sd": 0.12, "lat_sigma_sd": 0.05, "lat_onset_sd": 0.2, "lat_onset_mu_corr": 0.0
+      }
+    },
+    {
+      "name": "bayesian_gated_wins_under_best_available",
+      "edge": {
+        "p": {
+          "forecast": {},
+          "latency": {},
+          "posterior": {"alpha": 70, "beta": 30},
+          "model_vars": [
+            {
+              "source": "analytic",
+              "probability": {
+                "mean": 0.4, "stdev": 0.04898979485566356,
+                "alpha": 40, "beta": 60, "n_effective": 100
+              },
+              "latency": {"mu": 3.0, "sigma": 0.6, "t95": 12.0, "onset_delta_days": 1.0}
+            },
+            {
+              "source": "bayesian",
+              "probability": {"mean": 0.7, "stdev": 0.045},
+              "latency": {
+                "mu": 2.4, "sigma": 0.5, "t95": 9.5, "onset_delta_days": 0.5,
+                "mu_sd": 0.18, "sigma_sd": 0.07, "onset_sd": 0.15, "onset_mu_corr": -0.2
+              },
+              "quality": {"gate_passed": true}
+            }
+          ]
+        }
+      },
+      "graph_preference": null,
+      "expected": {
+        "source": "bayesian",
+        "prob_mean": 0.7,
+        "prob_stdev": 0.045,
+        "lat_mu": 2.4, "lat_sigma": 0.5, "lat_t95": 9.5, "lat_onset_delta_days": 0.5,
+        "lat_mu_sd": 0.18, "lat_sigma_sd": 0.07, "lat_onset_sd": 0.15, "lat_onset_mu_corr": -0.2
+      }
+    },
+    {
+      "name": "bayesian_ungated_falls_back_to_analytic_under_best_available",
+      "edge": {
+        "p": {
+          "forecast": {},
+          "latency": {},
+          "posterior": {"alpha": 40, "beta": 60},
+          "model_vars": [
+            {
+              "source": "analytic",
+              "probability": {
+                "mean": 0.4, "stdev": 0.04898979485566356,
+                "alpha": 40, "beta": 60, "n_effective": 100
+              },
+              "latency": {"mu": 3.0, "sigma": 0.6, "t95": 12.0, "onset_delta_days": 1.0}
+            },
+            {
+              "source": "bayesian",
+              "probability": {"mean": 0.7, "stdev": 0.045},
+              "latency": {"mu": 2.4, "sigma": 0.5, "t95": 9.5, "onset_delta_days": 0.5},
+              "quality": {"gate_passed": false}
+            }
+          ]
+        }
+      },
+      "graph_preference": null,
+      "expected": {
+        "source": "analytic",
+        "prob_mean": 0.4,
+        "prob_stdev": 0.04898979485566356,
+        "lat_mu": 3.0, "lat_sigma": 0.6, "lat_t95": 12.0, "lat_onset_delta_days": 1.0
+      }
+    },
+    {
+      "name": "edge_pref_analytic_overrides_graph_pref_bayesian",
+      "edge": {
+        "p": {
+          "forecast": {},
+          "latency": {},
+          "posterior": {"alpha": 40, "beta": 60},
+          "model_source_preference": "analytic",
+          "model_vars": [
+            {
+              "source": "analytic",
+              "probability": {
+                "mean": 0.4, "stdev": 0.04898979485566356,
+                "alpha": 40, "beta": 60, "n_effective": 100
+              },
+              "latency": {"mu": 3.0, "sigma": 0.6, "t95": 12.0, "onset_delta_days": 1.0}
+            },
+            {
+              "source": "bayesian",
+              "probability": {"mean": 0.7, "stdev": 0.045},
+              "latency": {"mu": 2.4, "sigma": 0.5, "t95": 9.5, "onset_delta_days": 0.5},
+              "quality": {"gate_passed": true}
+            }
+          ]
+        }
+      },
+      "graph_preference": "bayesian",
+      "expected": {
+        "source": "analytic",
+        "prob_mean": 0.4,
+        "prob_stdev": 0.04898979485566356,
+        "lat_mu": 3.0, "lat_sigma": 0.6, "lat_t95": 12.0, "lat_onset_delta_days": 1.0
+      }
+    },
+    {
+      "name": "edge_pref_bayesian_wins_even_when_ungated",
+      "edge": {
+        "p": {
+          "forecast": {},
+          "latency": {},
+          "posterior": {"alpha": 70, "beta": 30},
+          "model_source_preference": "bayesian",
+          "model_vars": [
+            {
+              "source": "analytic",
+              "probability": {
+                "mean": 0.4, "stdev": 0.04898979485566356,
+                "alpha": 40, "beta": 60, "n_effective": 100
+              },
+              "latency": {"mu": 3.0, "sigma": 0.6, "t95": 12.0, "onset_delta_days": 1.0}
+            },
+            {
+              "source": "bayesian",
+              "probability": {"mean": 0.7, "stdev": 0.045},
+              "latency": {"mu": 2.4, "sigma": 0.5, "t95": 9.5, "onset_delta_days": 0.5},
+              "quality": {"gate_passed": false}
+            }
+          ]
+        }
+      },
+      "graph_preference": null,
+      "expected": {
+        "source": "bayesian",
+        "prob_mean": 0.7,
+        "prob_stdev": 0.045,
+        "lat_mu": 2.4, "lat_sigma": 0.5, "lat_t95": 9.5, "lat_onset_delta_days": 0.5
+      }
+    },
+    {
+      "name": "op3_pref_bayesian_with_no_bayesian_entry_falls_back_to_analytic",
+      "edge": {
+        "p": {
+          "forecast": {},
+          "latency": {},
+          "posterior": {"alpha": 40, "beta": 60},
+          "model_vars": [
+            {
+              "source": "analytic",
+              "probability": {
+                "mean": 0.4, "stdev": 0.04898979485566356,
+                "alpha": 40, "beta": 60, "n_effective": 100
+              },
+              "latency": {"mu": 3.0, "sigma": 0.6, "t95": 12.0, "onset_delta_days": 1.0}
+            }
+          ]
+        }
+      },
+      "graph_preference": "bayesian",
+      "expected": {
+        "source": "analytic",
+        "prob_mean": 0.4,
+        "prob_stdev": 0.04898979485566356,
+        "lat_mu": 3.0, "lat_sigma": 0.6, "lat_t95": 12.0, "lat_onset_delta_days": 1.0
+      }
+    },
+    {
+      "name": "pref_analytic_with_no_analytic_entry_yields_no_promoted_source",
+      "edge": {
+        "p": {
+          "forecast": {},
+          "latency": {},
+          "model_source_preference": "analytic",
+          "model_vars": [
+            {
+              "source": "bayesian",
+              "probability": {"mean": 0.7, "stdev": 0.045},
+              "latency": {"mu": 2.4, "sigma": 0.5, "t95": 9.5, "onset_delta_days": 0.5},
+              "quality": {"gate_passed": true}
+            }
+          ]
+        }
+      },
+      "graph_preference": null,
+      "expected": {
+        "source": ""
+      }
+    },
+    {
+      "name": "stale_manual_preference_degrades_to_best_available",
+      "edge": {
+        "p": {
+          "forecast": {},
+          "latency": {},
+          "posterior": {"alpha": 70, "beta": 30},
+          "model_source_preference": "manual",
+          "model_vars": [
+            {
+              "source": "analytic",
+              "probability": {
+                "mean": 0.4, "stdev": 0.04898979485566356,
+                "alpha": 40, "beta": 60, "n_effective": 100
+              },
+              "latency": {"mu": 3.0, "sigma": 0.6, "t95": 12.0, "onset_delta_days": 1.0}
+            },
+            {
+              "source": "bayesian",
+              "probability": {"mean": 0.7, "stdev": 0.045},
+              "latency": {"mu": 2.4, "sigma": 0.5, "t95": 9.5, "onset_delta_days": 0.5},
+              "quality": {"gate_passed": true}
+            }
+          ]
+        }
+      },
+      "graph_preference": null,
+      "expected": {
+        "source": "bayesian",
+        "prob_mean": 0.7,
+        "prob_stdev": 0.045,
+        "lat_mu": 2.4, "lat_sigma": 0.5, "lat_t95": 9.5, "lat_onset_delta_days": 0.5
+      }
+    }
+  ]
+}

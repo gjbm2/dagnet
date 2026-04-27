@@ -846,3 +846,86 @@ class TestForecastEngineNonBayes:
         # sigma=0 → early return with zeros
         assert np.all(result.rate_draws == 0.0)
 
+
+class TestPromotionParityWithTS:
+    """TS/Py promotion-parity contract — doc 73b §3.2.
+
+    Loads the shared fixture matrix at
+    `fixtures/promotion-parity/cases.json` and asserts that
+    `resolve_model_params` agrees with the expected promoted source and
+    latency point values. The TS side runs the same fixture against
+    `applyPromotion` in `promotionParity.test.ts`; both sides MUST agree
+    on which source promotes and on the promoted latency parameters.
+
+    Per §3.2 centralisation: applyPromotion (TS) and resolve_model_params
+    (Py) are the only computers of the promoted scalars. A behaviour
+    drift between them is a contract violation regardless of whether
+    each side's local tests pass.
+    """
+
+    @staticmethod
+    def _load_cases():
+        fixture_path = (
+            Path(__file__).parent / 'fixtures' / 'promotion-parity' / 'cases.json'
+        )
+        return json.loads(fixture_path.read_text())['cases']
+
+    def test_promotion_parity_each_case(self):
+        from runner.model_resolver import resolve_model_params
+
+        cases = self._load_cases()
+        assert len(cases) > 0, 'No promotion-parity cases loaded'
+
+        failures = []
+        for case in cases:
+            name = case['name']
+            edge = case['edge']
+            graph_pref = case.get('graph_preference')
+            expected = case['expected']
+
+            result = resolve_model_params(
+                edge,
+                scope='edge',
+                temporal_mode='window',
+                graph_preference=graph_pref,
+            )
+
+            def _check(field, actual, exp):
+                if exp is None:
+                    return
+                if isinstance(exp, float) or isinstance(actual, float):
+                    if not (
+                        isinstance(actual, (int, float))
+                        and abs(float(actual) - float(exp)) < 1e-9
+                    ):
+                        failures.append(f"{name}.{field}: actual={actual} expected={exp}")
+                else:
+                    if actual != exp:
+                        failures.append(f"{name}.{field}: actual={actual} expected={exp}")
+
+            _check('source', result.source, expected.get('source'))
+            # When no source promoted, TS writes nothing; Py falls back to
+            # flat fields. Skip latency/prob assertions so the fixture
+            # only pins source-selection parity for those cases.
+            if expected.get('source') == '':
+                continue
+
+            if expected.get('prob_mean') is not None:
+                _check('p_mean', result.p_mean, expected['prob_mean'])
+
+            lat = result.edge_latency
+            _check('lat_mu', lat.mu, expected.get('lat_mu'))
+            _check('lat_sigma', lat.sigma, expected.get('lat_sigma'))
+            _check('lat_t95', lat.t95, expected.get('lat_t95'))
+            _check('lat_onset_delta_days', lat.onset_delta_days,
+                   expected.get('lat_onset_delta_days'))
+            _check('lat_mu_sd', lat.mu_sd, expected.get('lat_mu_sd'))
+            _check('lat_sigma_sd', lat.sigma_sd, expected.get('lat_sigma_sd'))
+            _check('lat_onset_sd', lat.onset_sd, expected.get('lat_onset_sd'))
+            _check('lat_onset_mu_corr', lat.onset_mu_corr,
+                   expected.get('lat_onset_mu_corr'))
+
+        assert not failures, (
+            "Promotion-parity violations (Py side):\n  " + "\n  ".join(failures)
+        )
+

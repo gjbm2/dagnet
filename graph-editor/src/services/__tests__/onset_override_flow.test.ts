@@ -4,11 +4,17 @@
  * Tests that user-set onset_delta_days values (marked with onset_delta_days_overridden: true)
  * are preserved through data fetch and LAG pass cycles.
  *
- * DESIGN PRINCIPLE (promoted pattern):
- * - The LAG/stats pass writes to promoted_onset_delta_days (model output)
- * - The user's onset_delta_days (model input) is never overwritten by the pass
- * - onset_delta_days_overridden controls whether the input or promoted value
- *   feeds into the next model run (handled by modelVarsResolution, not here)
+ * DESIGN PRINCIPLE (doc 73b §3.2 / Stage 4(c)):
+ * - The LAG/stats pass writes promoted-block latency scalars (mu, sigma,
+ *   path_mu, path_sigma, promoted_onset_delta_days, etc.) into
+ *   `model_vars[analytic].latency.*`; applyPromotion is the single TS
+ *   computer of `p.latency.promoted_*` and the input field
+ *   `p.latency.onset_delta_days`.
+ * - When `onset_delta_days_overridden = true`, applyPromotion preserves
+ *   the user-authored input field; otherwise it writes the analytic
+ *   source's value back to the input field.
+ * - applyBatchLAGValues runs applyPromotion at the end of the apply
+ *   loop on edges that received an analytic upsert.
  *
  * @vitest-environment node
  */
@@ -89,8 +95,12 @@ describe('onset_delta_days Override Flow', () => {
       ]);
 
       const e = next.edges.find((x: any) => x.id === 'A-B');
-      expect(e.p.latency.onset_delta_days).toBe(10); // Input untouched
-      expect(e.p.latency.promoted_onset_delta_days).toBe(3); // Promoted written
+      // Edges without an analytic source ledger fall through to the
+      // legacy direct-write branch — promoted_onset_delta_days is
+      // written; the input onset_delta_days stays untouched (the
+      // writeHorizonsToGraph gate is off here).
+      expect(e.p.latency.onset_delta_days).toBe(10);
+      expect(e.p.latency.promoted_onset_delta_days).toBe(3);
     });
 
     it('should write promoted_onset_delta_days when override is undefined', () => {
@@ -126,8 +136,8 @@ describe('onset_delta_days Override Flow', () => {
       ]);
 
       const e = next.edges.find((x: any) => x.id === 'A-B');
-      expect(e.p.latency.onset_delta_days).toBe(10); // Input untouched
-      expect(e.p.latency.promoted_onset_delta_days).toBe(3); // Promoted written
+      expect(e.p.latency.onset_delta_days).toBe(10);
+      expect(e.p.latency.promoted_onset_delta_days).toBe(3);
     });
   });
 

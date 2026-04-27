@@ -294,6 +294,10 @@ function extractEdgeParams(edge: GraphEdge): EdgeParamDiff | null {
     const pAny = edge.p as any;
     if (pAny.mean !== undefined) p.mean = pAny.mean;
     if (pAny.stdev !== undefined) p.stdev = pAny.stdev;
+    // Doc 73b §3.6 / §12.2 row S8 / 73a §8: pack carries the L5
+    // dispersion split (`stdev` epistemic + optional `stdev_pred`
+    // predictive). No `*_overridden` flag for `stdev_pred` (row S6).
+    if (pAny.stdev_pred !== undefined) p.stdev_pred = pAny.stdev_pred;
     if (pAny.n !== undefined) p.n = pAny.n;
     // NOTE: distribution, min, max, alpha, beta are NOT in param packs
 
@@ -346,6 +350,9 @@ function extractEdgeParams(edge: GraphEdge): EdgeParamDiff | null {
       const condPAny = cond.p as any;
       if (condPAny?.mean !== undefined) condP.mean = condPAny.mean;
       if (condPAny?.stdev !== undefined) condP.stdev = condPAny.stdev;
+      // Doc 73b §3.6 / §12.2 row S8: conditional_p mirror carries
+      // `stdev_pred` (predictive) alongside `stdev` (epistemic).
+      if (condPAny?.stdev_pred !== undefined) condP.stdev_pred = condPAny.stdev_pred;
       if (condPAny?.n !== undefined) condP.n = condPAny.n;
       // NOTE: distribution, min, max, alpha, beta are NOT in param packs
       

@@ -231,9 +231,19 @@ export function applyConditionedForecastToGraph(
         edge.completeness_sd != null && Number.isFinite(edge.completeness_sd)
           ? edge.completeness_sd as number
           : lat.completeness_stdev;
-      const stdevFromCf =
+      // Doc 73b §6.2 / §12.2 row S9: CF apply mapping is
+      //   `p_sd → p.stdev_pred` (predictive, kappa-inflated)
+      //   `p_sd_epistemic → p.stdev` (epistemic, kappa-bare).
+      // The doc 49 vs doc 61 naming inversion is contained at this
+      // boundary — `p_sd` is predictive on the wire (CF response),
+      // `p.stdev_pred` is predictive in storage (graph current-answer).
+      const stdevPredFromCf =
         edge.p_sd != null && Number.isFinite(edge.p_sd) && edge.p_sd >= 0
           ? edge.p_sd as number
+          : undefined;
+      const stdevEpistemicFromCf =
+        edge.p_sd_epistemic != null && Number.isFinite(edge.p_sd_epistemic) && (edge.p_sd_epistemic as number) >= 0
+          ? edge.p_sd_epistemic as number
           : undefined;
       // In analytic_degraded/query_scoped fallback mode, p_mean is sourced from
       // query-scoped posterior state on the graph. Projecting horizon-row
@@ -260,6 +270,11 @@ export function applyConditionedForecastToGraph(
         && edge.evidence_k >= 0
           ? edge.evidence_k as number
           : undefined;
+      // Doc 73b §3.2 / Stage 4(c) — CF de-collapse: CF must NOT write
+      // p.forecast.{mean, stdev, source}. The promoted surface is
+      // populated exclusively by applyPromotion from model_vars[]. CF's
+      // p.mean (current-answer) lands via blendedMean below; CF's
+      // stdev / stdev_pred lands via stdev / stdev_pred fields below.
       edgeUpdates.push({
         edgeId: edge.edge_uuid,
         latency: {
@@ -270,9 +285,9 @@ export function applyConditionedForecastToGraph(
           completeness: completenessFromCf,
           ...(completenessSdFromCf != null ? { completeness_stdev: completenessSdFromCf } : {}),
         },
-        ...(stdevFromCf != null ? { stdev: stdevFromCf } : {}),
+        ...(stdevEpistemicFromCf != null ? { stdev: stdevEpistemicFromCf } : {}),
+        ...(stdevPredFromCf != null ? { stdev_pred: stdevPredFromCf } : {}),
         blendedMean: edge.p_mean,
-        forecast: { mean: edge.p_mean },
         ...((evidenceNFromCf != null || evidenceKFromCf != null)
           ? {
               evidence: {

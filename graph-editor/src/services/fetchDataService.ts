@@ -2050,16 +2050,26 @@ export async function runStage2EnhancementsAndInboundN(
                   const pf = pid ? fileRegistry.getFile(`parameter-${pid}`)?.data : null;
                   const latestValue = (pf as any)?.values?.[0];
                   if (latestValue) {
-                    // Doc 73b §3.9 mirror contract: populate aggregate
-                    // window-family Beta shape via moment-matching when
-                    // (mean, stdev) is a valid Beta. Resolver falls
-                    // through to `analytic_point_estimate_degraded`
-                    // (§3.8 register entry 2) otherwise.
+                    // Doc 73b §3.9 mirror contract: analytic source's
+                    // probability mean is the window-family aggregate
+                    // (mature-day baseline `forecast` scalar). No
+                    // fallback to slice-level `mean` — that would mask
+                    // the §3.3.3 layer-isolation rule by writing a
+                    // cohort-evidence mean into the source surface.
+                    // When `forecast` is absent, omit the analytic
+                    // source mean and let the resolver's §3.8 register
+                    // entry 2 (`analytic_point_estimate_degraded`)
+                    // handle it with explicit provenance.
+                    const bootstrapAnalyticMean =
+                      typeof (latestValue as any).forecast === 'number' &&
+                      Number.isFinite((latestValue as any).forecast)
+                        ? (latestValue as any).forecast
+                        : undefined;
                     const analyticEntry: any = {
                       source: 'analytic',
                       source_at: (latestValue as any).data_source?.retrieved_at || ukDateNow(),
                       probability: buildAnalyticProbabilityBlock(
-                        latestValue.mean ?? 0,
+                        bootstrapAnalyticMean as number,
                         latestValue.stdev ?? 0,
                       ),
                       latency: {
@@ -2207,7 +2217,8 @@ export async function runStage2EnhancementsAndInboundN(
                       })()
                     : ev.latency,
                   blendedMean: ev.blendedMean,
-                  stdev: (ev as any).stdev,
+                  stdev: ev.stdev,
+                  stdev_pred: ev.stdev_pred,
                   forecast: ev.forecast,
                   evidence: ev.evidence,
                 })),

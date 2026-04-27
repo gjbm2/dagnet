@@ -160,9 +160,23 @@ export function applyPromotion(
   const result = promoteModelVars(entry);
   if (!result) return undefined;
 
-  // p.mean (blend), p.stdev (blend uncertainty), and p.forecast.mean (p∞)
-  // are per-query display quantities computed by the topo pass / pipeline.
-  // applyPromotion only promotes latency model parameters (mu, sigma, t95, etc.).
+  // Doc 73b §3.2 — narrow promoted probability surface
+  // { mean, stdev, source }. applyPromotion is the only computer of these
+  // three fields; CF and runtime cascades must not write them. `k` (a
+  // runtime-derived population helper) is preserved on the same struct
+  // but is written by a different path (FE topo inbound-n propagation)
+  // — see §12.2 row S4 for the field-set partition. Skip the mean/stdev
+  // writes when the resolved source carries no probability values
+  // (e.g. an analytic entry built from a parameter file that omits
+  // mean/stdev) so we don't overwrite a forecast value populated
+  // upstream by file→graph mapping with `undefined`.
+  if (!p.forecast) p.forecast = {};
+  if (Number.isFinite(result.mean)) p.forecast.mean = result.mean;
+  if (Number.isFinite(result.stdev)) p.forecast.stdev = result.stdev;
+  p.forecast.source = result.activeSource;
+
+  // p.mean and p.stdev are L5 current-answer scalars written by the topo
+  // pass / CF (§3.3 / §3.3.4). applyPromotion does not touch them.
 
   if (result.latency && p.latency) {
     p.latency.mu = result.latency.mu;

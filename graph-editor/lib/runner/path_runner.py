@@ -102,6 +102,11 @@ def _effective_edge_probability(
             if matches:
                 p = cp.get('p') or {}
                 if isinstance(p, dict):
+                    # Doc 73b §6.5 / Stage 4(d) scope decision: the path
+                    # analyzer renders mode-aware *display* answers and
+                    # reads the L5 conditional `p.mean` directly. The
+                    # carrier reroute lives in `forecast_state._resolve_edge_p`
+                    # for true model-baseline carrier computations.
                     pv = float(p.get('mean') or 0.0)
                 elif isinstance(p, (int, float)):
                     pv = float(p)

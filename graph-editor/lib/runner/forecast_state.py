@@ -9,6 +9,7 @@ See doc 29 §ForecastState Contract.
 
 from __future__ import annotations
 
+import logging
 import math
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
@@ -267,29 +268,58 @@ def _convolve_completeness_at_age(
     return min(conv, 1.0)
 
 
-def _resolve_edge_p(edge: Dict[str, Any]) -> float:
-    """Get edge probability from p.mean, model_vars, or posterior.
+_LEGACY_PMEAN_CARRIER_WARNED: set = set()
 
-    On enriched synth graphs p.mean may be None (it's an FE quick pass
-    display quantity). Fall back to model_vars or posterior alpha/beta.
+
+def _warn_legacy_pmean_carrier(edge: Dict[str, Any], context: str = '') -> None:
+    """One-line warning when a carrier read falls back to legacy `p.mean`.
+
+    Doc 73b §6.5 requires carrier consumers to read the promoted-baseline
+    model probability via `resolve_model_params`, never the L5
+    current-answer scalar `p.mean`. The fallback below is a documented,
+    transitional degrade for pre-Stage 4 graphs / synthetic fixtures that
+    have only `p.mean` populated — no `model_vars`, no `posterior`, no
+    `forecast.mean`. To be removed once all fixtures populate the
+    promoted layer (cf. §3.8 fallback register).
     """
+    edge_id = edge.get('id') or edge.get('uuid') or '?'
+    key = (edge_id, context)
+    if key in _LEGACY_PMEAN_CARRIER_WARNED:
+        return
+    _LEGACY_PMEAN_CARRIER_WARNED.add(key)
+    logging.getLogger(__name__).warning(
+        "doc 73b §6.5: edge %r%s falling back to legacy p.mean for carrier "
+        "read (no promoted-baseline model — check FE topo / applyPromotion)",
+        edge_id,
+        f' [{context}]' if context else '',
+    )
+
+
+def _resolve_edge_p(edge: Dict[str, Any]) -> float:
+    """Resolve carrier probability via the shared resolver (doc 73b §6.5).
+
+    Carriers MUST read the promoted-baseline model probability through
+    `resolve_model_params`, not the L5 current-answer scalar `p.mean`
+    (the §3.3.3 layer-isolation invariant — changing only a current
+    query-owned scalar must not alter carrier behaviour).
+
+    The fallback to legacy `p.mean` (with one-line WARNING log) is the
+    §3.8 documented degrade for pre-Stage 4 graphs / synthetic fixtures
+    that lack a promoted-baseline source. Provenance:
+    `_warn_legacy_pmean_carrier`. Owner: Stage 4(d) transition.
+    """
+    from .model_resolver import resolve_model_params
+
+    result = resolve_model_params(edge, scope='edge', temporal_mode='window')
+    if result is not None and result.p_mean > 0:
+        return float(result.p_mean)
+    # Documented fallback (§3.8 register): legacy p.mean only as last
+    # resort, with a logged warning so the offending edge surfaces.
     p_obj = edge.get('p') or {}
-    # Direct flat value (production graphs after FE quick pass)
-    mean = p_obj.get('mean')
-    if isinstance(mean, (int, float)) and mean > 0:
-        return float(mean)
-    # model_vars (enriched graphs)
-    for mv in (p_obj.get('model_vars') or []):
-        prob = mv.get('probability') or {}
-        mv_mean = prob.get('mean')
-        if isinstance(mv_mean, (int, float)) and mv_mean > 0:
-            return float(mv_mean)
-    # posterior alpha/beta
-    post = p_obj.get('posterior') or {}
-    alpha = post.get('alpha')
-    beta = post.get('beta')
-    if alpha and beta and (alpha + beta) > 0:
-        return float(alpha) / float(alpha + beta)
+    legacy = p_obj.get('mean')
+    if isinstance(legacy, (int, float)) and legacy > 0:
+        _warn_legacy_pmean_carrier(edge, context='_resolve_edge_p')
+        return float(legacy)
     return 0.0
 
 

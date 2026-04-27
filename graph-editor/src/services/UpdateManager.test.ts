@@ -1554,9 +1554,12 @@ describe('UpdateManager', () => {
 
   describe('Analytic model_vars metadata (doc 15 §5.1)', () => {
     it('should attach analytic ModelVarsEntry with probability + latency from file data', async () => {
+      // Doc 73b §3.9: the analytic-source mean is the window-baseline
+      // forecast scalar (populated by addEvidenceAndForecastScalars in
+      // the live fetch flow). The slice-level `mean` is not used.
       const paramFile = {
         type: 'probability',
-        values: [{ mean: 0.12, stdev: 0.03, data_source: { retrieved_at: '20-Mar-26' } }],
+        values: [{ mean: 0.12, stdev: 0.03, forecast: 0.12, data_source: { retrieved_at: '20-Mar-26' } }],
         latency: { mu: 2.5, sigma: 0.8, t95: 45, onset_delta_days: 3 },
       };
       const edge = { p: { mean: 0, stdev: 0 } };
@@ -1567,8 +1570,9 @@ describe('UpdateManager', () => {
       expect(entry).toBeDefined();
       expect(entry.source).toBe('analytic');
       expect(entry.source_at).toBe('20-Mar-26');
-      // Doc 73b §3.9: probability sub-block carries mean+stdev plus the
-      // moment-matched aggregate Beta shape when (mean, stdev) is feasible.
+      // Probability sub-block carries the window-baseline forecast as
+      // mean (§3.9), stdev from the value, and the moment-matched
+      // aggregate Beta shape when the pair is feasible.
       expect(entry.probability.mean).toBe(0.12);
       expect(entry.probability.stdev).toBe(0.03);
       expect(entry.probability.alpha).toBeGreaterThan(0);
@@ -1583,7 +1587,7 @@ describe('UpdateManager', () => {
     it('should include path-level latency fields when present', async () => {
       const paramFile = {
         type: 'probability',
-        values: [{ mean: 0.1, stdev: 0.02, window_to: '19-Mar-26' }],
+        values: [{ mean: 0.1, stdev: 0.02, forecast: 0.1, window_to: '19-Mar-26' }],
         latency: { mu: 2, sigma: 0.7, t95: 40, onset_delta_days: 2, path_mu: 3.1, path_sigma: 0.9, path_t95: 60 },
       };
       const edge = { p: { mean: 0, stdev: 0 } };
@@ -1599,22 +1603,45 @@ describe('UpdateManager', () => {
     it('should omit latency block when mu/sigma absent on file', async () => {
       const paramFile = {
         type: 'probability',
-        values: [{ mean: 0.5, stdev: 0.1 }],
+        values: [{ mean: 0.5, stdev: 0.1, forecast: 0.5 }],
       };
       const edge = { p: { mean: 0, stdev: 0 } };
 
       const result = await updateManager.handleFileToGraph(paramFile, edge, 'UPDATE', 'parameter');
       const entry = (result.metadata as any)?.analyticModelVarsEntry;
 
-      // Doc 73b §3.9: mean/stdev always present; aggregate Beta shape
-      // populated when the moment-match is feasible (here it is —
-      // mean=0.5, stdev=0.1 yields a valid Beta).
+      // Probability mean/stdev present (forecast scalar populated);
+      // moment-matched aggregate Beta shape feasible at (0.5, 0.1).
       expect(entry.probability.mean).toBe(0.5);
       expect(entry.probability.stdev).toBe(0.1);
       expect(entry.probability.alpha).toBeGreaterThan(0);
       expect(entry.probability.beta).toBeGreaterThan(0);
       expect(entry.probability.provenance).toBe('analytic_window_baseline');
       expect(entry.latency).toBeUndefined();
+    });
+
+    it('omits probability.mean when latestValue.forecast is absent — no slice-mean fallback (doc 73b §3.3.3 / §3.9)', async () => {
+      // Layer-isolation guard: when no window-baseline `forecast`
+      // scalar has been computed for the latest value, the analytic
+      // source must NOT silently fall back to `latestValue.mean` (which
+      // could be a cohort-evidence mean). The downstream resolver then
+      // enters the §3.8 register entry 2 (`analytic_point_estimate_degraded`)
+      // with explicit provenance.
+      const paramFile = {
+        type: 'probability',
+        values: [{ mean: 0.5, stdev: 0.1 /* no forecast scalar */ }],
+      };
+      const edge = { p: { mean: 0, stdev: 0 } };
+
+      const result = await updateManager.handleFileToGraph(paramFile, edge, 'UPDATE', 'parameter');
+      const entry = (result.metadata as any)?.analyticModelVarsEntry;
+
+      expect(entry).toBeDefined();
+      expect(entry.source).toBe('analytic');
+      expect(entry.probability.mean).toBeUndefined();
+      expect(entry.probability.alpha).toBeUndefined();
+      expect(entry.probability.beta).toBeUndefined();
+      expect(entry.probability.provenance).toBeUndefined();
     });
 
     it('should fall back to window_to then current date for source_at', async () => {

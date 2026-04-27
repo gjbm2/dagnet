@@ -958,12 +958,17 @@
         "stdev": {
           "type": "number",
           "minimum": 0,
-          "description": "Standard deviation"
+          "description": "Epistemic standard deviation on the rate (doc 73b §3.3.4 / §12.2 row S5). Posterior SD before kappa-inflation. Always written by the topo / CF current-answer pipeline."
         },
         "stdev_overridden": {
           "type": "boolean",
           "default": false,
           "description": "If true, stdev was manually edited and should not be auto-updated"
+        },
+        "stdev_pred": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Predictive standard deviation on the rate (doc 73b §3.3.4 / §12.2 row S5). Kappa-inflated; written only when the promoted source supplies a predictive flavour. No `*_overridden` lock (row S6)."
         },
         "distribution": {
           "type": "string",
@@ -1616,7 +1621,7 @@
     "ForecastParams": {
       "type": "object",
       "additionalProperties": false,
-      "$comment": "Forecast probability parameters from mature cohorts. Note: mean can exceed 1.0 in edge cases when extrapolating from immature cohort data.",
+      "$comment": "Promoted baseline forecast surface (doc 73b §3.2). Three fields are written by applyPromotion (TS) / resolve_model_params (Py): { mean, stdev, source }. k is a runtime-derived population helper with a separate writer and lifecycle (doc 73b §12.2 row S4 carve-out). Note: mean can exceed 1.0 in edge cases when extrapolating from immature cohort data.",
       "properties": {
         "mean": {
           "type": "number",
@@ -1627,6 +1632,11 @@
           "type": "number",
           "minimum": 0,
           "description": "Forecast standard deviation"
+        },
+        "source": {
+          "type": "string",
+          "enum": ["analytic", "bayesian"],
+          "description": "Source-basis label written by applyPromotion (doc 73b §3.2, §12.2 row S4)."
         },
         "k": {
           "type": "number",

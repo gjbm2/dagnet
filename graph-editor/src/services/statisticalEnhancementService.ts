@@ -1852,6 +1852,10 @@ export interface EdgeLAGValues {
   };
   /** Blended p.mean (if computed) */
   blendedMean?: number;
+  /** Epistemic dispersion → `p.stdev` (doc 73b §3.3.4 / §12.2 row S5). Posterior moment SD; never kappa-inflated. */
+  stdev?: number;
+  /** Predictive dispersion → `p.stdev_pred` (doc 73b §3.3.4 / §12.2 row S5). Set only when the promoted source supplies a kappa-inflated predictive flavour; absent on analytic-only / pre-kappa sources (the FE topo's analytic blend never produces this). */
+  stdev_pred?: number;
   /** Forecast data to preserve on edge.p.forecast */
   forecast?: {
     mean?: number;
@@ -2917,6 +2921,11 @@ export function enhanceGraphLatencies(
 
       const edgeLAGValues: EdgeLAGValues = {
         edgeUuid,
+        // Doc 73b §3.3.4 / §12.2 row S5: the FE topo Step 2 blend yields
+        // an epistemic posterior SD (moment-derived from `(α=k+1, β=n-k+1)`).
+        // Promote it to `edge.p.stdev` (epistemic). `stdev_pred` stays
+        // absent — the analytic blend has no kappa-aware predictive flavour.
+        stdev: latencyStats.p_sd,
         latency: {
           median_lag_days: aggregateMedianLag,
           mean_lag_days: aggregateMeanLag,
@@ -3549,6 +3558,8 @@ export function enhanceGraphLatencies(
         const cpEdgeLAGValues: EdgeLAGValues = {
           edgeUuid,
           conditionalIndex: cpIdx,
+          // Doc 73b §3.3.4 / §12.2 row S5: epistemic blend → conditional_p[i].p.stdev.
+          stdev: cpLatencyStats.p_sd,
           latency: {
             median_lag_days: cpMedianLag,
             mean_lag_days: cpMeanLag,

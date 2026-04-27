@@ -39,7 +39,10 @@ import { buildAuditEntry } from './updateManager/auditLog';
 import { MAPPING_CONFIGURATIONS, getMappingKey } from './updateManager/mappingConfigurations';
 import { applyMappings } from './updateManager/mappingEngine';
 import type { ModelVarsEntry } from '../types';
-import { ukDateNow, buildAnalyticProbabilityBlock } from './modelVarsResolution';
+import {
+  ukDateNow,
+  buildAnalyticProbabilityBlock,
+} from './modelVarsResolution';
 
 // ─── Re-exports (public API — preserve existing import paths) ───────────────
 export type {
@@ -1125,16 +1128,30 @@ export class UpdateManager {
       if (isProbType) {
         const latestValue = getNestedValue(fileData, 'values[latest]');
         if (latestValue) {
+          // Doc 73b §3.9 mirror contract: the analytic source's
+          // probability mean is the window-family aggregate — the
+          // mature-day baseline `forecast` scalar populated by
+          // `addEvidenceAndForecastScalars`. No fallback to
+          // `latestValue.mean`: that would expose the analytic-source
+          // surface to whichever slice happened to sort first (often
+          // a cohort-evidence mean) and silently violate the §3.3.3
+          // layer-isolation rule. When `forecast` is absent, the
+          // analytic source carries no usable mean and the resolver's
+          // §3.8 register entry 2 (`analytic_point_estimate_degraded`)
+          // takes over with explicit provenance.
+          const analyticMean =
+            typeof latestValue.forecast === 'number' && Number.isFinite(latestValue.forecast)
+              ? latestValue.forecast
+              : undefined;
           const entry: ModelVarsEntry = {
             source: 'analytic',
             source_at: latestValue.data_source?.retrieved_at || latestValue.window_to || ukDateNow(),
-            // Doc 73b §3.9 mirror contract: when (mean, stdev) yields a
-            // valid Beta moment-match, populate the aggregate window-family
-            // shape (alpha, beta, n_effective, provenance). Otherwise the
-            // resolver falls through to `analytic_point_estimate_degraded`
-            // (§3.8 register entry 2).
+            // When (mean, stdev) yields a valid Beta moment-match, populate
+            // the aggregate window-family shape (alpha, beta, n_effective,
+            // provenance). Otherwise the resolver falls through to
+            // `analytic_point_estimate_degraded` (§3.8 register entry 2).
             probability: buildAnalyticProbabilityBlock(
-              latestValue.mean,
+              analyticMean as number,
               latestValue.stdev,
             ),
           };
@@ -2053,8 +2070,10 @@ export class UpdateManager {
         path_t95: number;
         onset_delta_days?: number;
       };
-      /** Conditioned dispersion scalar from CF (`p_sd`). */
+      /** Epistemic dispersion → `p.stdev` (doc 73b §3.3.4 / §12.2 row S5). FE topo Step 2 always sets it; CF apply path sets it from `p_sd_epistemic`. */
       stdev?: number;
+      /** Predictive dispersion → `p.stdev_pred` (doc 73b §3.3.4 / §12.2 row S5). CF apply path sets it from `p_sd`; FE topo Step 2 leaves it absent (analytic blend has no kappa-aware predictive flavour). */
+      stdev_pred?: number;
       blendedMean?: number;
       forecast?: {
         mean?: number;
@@ -2082,13 +2101,13 @@ export class UpdateManager {
     if (!edgeUpdates || edgeUpdates.length === 0) {
       return graph;
     }
-    
+
     // STEP 1: Clone graph ONCE
     const nextGraph = structuredClone(graph);
-    
+
     // Track which edges need rebalancing (by source node)
     const edgesToRebalance: string[] = [];
-    
+
     const writeHorizonsToGraph = opts?.writeHorizonsToGraph === true;
 
     // STEP 2: Apply ALL latency values and mean changes
@@ -2130,65 +2149,115 @@ export class UpdateManager {
       if (!targetP.latency) {
         targetP.latency = {};
       }
-      
-      // Apply latency values (to targetP which is either edge.p or edge.conditional_p[i].p)
+
+      const isBaseEdge = typeof update.conditionalIndex !== 'number';
+      const updLat = update.latency as any;
+
+      // Doc 73b §3.2 / Stage 4(c): for base edges that already carry an
+      // analytic source-ledger entry, route promoted-block writes through
+      // it so applyPromotion is the single computer of the promoted
+      // surface. When no analytic entry exists (tests, edge bootstrap),
+      // the legacy direct-write path runs below — production callers
+      // (FE topo Step 1, parameter-file load via mappingConfigurations)
+      // always populate the analytic entry before this point.
+      let analyticEntry: any = undefined;
+      if (isBaseEdge && Array.isArray(targetP.model_vars)) {
+        analyticEntry = targetP.model_vars.find((mv: any) => mv?.source === 'analytic');
+        if (analyticEntry) {
+          if (!analyticEntry.latency) analyticEntry.latency = {};
+          if (!analyticEntry.probability) {
+            analyticEntry.probability = {
+              mean: typeof targetP.forecast?.mean === 'number'
+                ? targetP.forecast.mean
+                : (typeof targetP.mean === 'number' ? targetP.mean : 0),
+              stdev: typeof targetP.forecast?.stdev === 'number'
+                ? targetP.forecast.stdev
+                : (typeof targetP.stdev === 'number' ? targetP.stdev : 0),
+            };
+          }
+        }
+      }
+
+      // Current-answer / display latency fields stay direct on targetP.latency.
       if (update.latency.median_lag_days !== undefined) {
         targetP.latency.median_lag_days = update.latency.median_lag_days;
       }
       if (update.latency.mean_lag_days !== undefined) {
         targetP.latency.mean_lag_days = update.latency.mean_lag_days;
       }
-      // Phase 2: respect override flags
-      if (writeHorizonsToGraph) {
-        if (targetP.latency.t95_overridden !== true) {
-          targetP.latency.t95 = this.roundHorizonDays(update.latency.t95);
-        }
-      }
       targetP.latency.completeness = update.latency.completeness;
       // Doc 45: CF owns completeness_stdev alongside completeness. The
       // conditioned forecast returns both; the stats topo pass returns
       // both (FE and BE variants). Whichever source lands last wins
       // per the normal promotion cascade.
-      if ((update.latency as any).completeness_stdev !== undefined) {
-        (targetP.latency as any).completeness_stdev = (update.latency as any).completeness_stdev;
+      if (updLat.completeness_stdev !== undefined) {
+        targetP.latency.completeness_stdev = updLat.completeness_stdev;
       }
+
+      // t95 / path_t95 input-field bootstrap under writeHorizonsToGraph
+      // stays direct: these are user-edit input fields (the analytic fit
+      // reads them as constraints). applyPromotion writes their promoted
+      // counterparts (`promoted_t95`, `promoted_path_t95`) via the
+      // analytic source-layer fan-out below.
       if (writeHorizonsToGraph) {
+        if (targetP.latency.t95_overridden !== true) {
+          targetP.latency.t95 = this.roundHorizonDays(update.latency.t95);
+        }
         if (targetP.latency.path_t95_overridden !== true) {
           targetP.latency.path_t95 = this.roundHorizonDays(update.latency.path_t95);
         }
       }
-      // onset_delta_days: write stats-pass output to both promoted and input fields.
-      // Mirrors t95 pattern: the input field is what the compiler reads for priors.
-      if ((update.latency as any).promoted_onset_delta_days !== undefined) {
-        targetP.latency.promoted_onset_delta_days = (update.latency as any).promoted_onset_delta_days;
-        if (writeHorizonsToGraph && targetP.latency.onset_delta_days_overridden !== true) {
-          targetP.latency.onset_delta_days = (update.latency as any).promoted_onset_delta_days;
+
+      if (analyticEntry) {
+        // Promoted-block writes (base edge with analytic source ledger):
+        // redirected to model_vars[analytic].latency.* and
+        // model_vars[analytic].probability.mean. applyPromotion fans
+        // them out at the end of the apply loop.
+        const al = analyticEntry.latency;
+        if (updLat.mu !== undefined) al.mu = updLat.mu;
+        if (updLat.sigma !== undefined) al.sigma = updLat.sigma;
+        if (updLat.promoted_onset_delta_days !== undefined) {
+          al.onset_delta_days = updLat.promoted_onset_delta_days;
         }
-      }
-      // mu/sigma: fitted model params (internal, always written when available)
-      if ((update.latency as any).mu !== undefined) {
-        targetP.latency.mu = (update.latency as any).mu;
-      }
-      if ((update.latency as any).sigma !== undefined) {
-        targetP.latency.sigma = (update.latency as any).sigma;
-      }
-      // path_mu/path_sigma/path_onset_delta_days: path-level A→Y CDF params (Fenton–Wilkinson combined)
-      if ((update.latency as any).path_mu !== undefined) {
-        targetP.latency.path_mu = (update.latency as any).path_mu;
-      }
-      if ((update.latency as any).path_sigma !== undefined) {
-        targetP.latency.path_sigma = (update.latency as any).path_sigma;
-      }
-      if ((update.latency as any).path_onset_delta_days !== undefined) {
-        targetP.latency.path_onset_delta_days = (update.latency as any).path_onset_delta_days;
-      }
-      
-      // Apply forecast if provided
-      if (update.forecast) {
-        if (!targetP.forecast) {
-          targetP.forecast = {};
+        if (updLat.path_mu !== undefined) al.path_mu = updLat.path_mu;
+        if (updLat.path_sigma !== undefined) al.path_sigma = updLat.path_sigma;
+        if (updLat.path_t95 !== undefined) al.path_t95 = updLat.path_t95;
+        if (updLat.path_onset_delta_days !== undefined) al.path_onset_delta_days = updLat.path_onset_delta_days;
+        // Heuristic dispersion SDs (edge-level + path-level) — promoted via applyPromotion.
+        if (updLat.mu_sd !== undefined) al.mu_sd = updLat.mu_sd;
+        if (updLat.sigma_sd !== undefined) al.sigma_sd = updLat.sigma_sd;
+        if (updLat.onset_sd !== undefined) al.onset_sd = updLat.onset_sd;
+        if (updLat.onset_mu_corr !== undefined) al.onset_mu_corr = updLat.onset_mu_corr;
+        if (updLat.path_mu_sd !== undefined) al.path_mu_sd = updLat.path_mu_sd;
+        if (updLat.path_sigma_sd !== undefined) al.path_sigma_sd = updLat.path_sigma_sd;
+        if (updLat.path_onset_sd !== undefined) al.path_onset_sd = updLat.path_onset_sd;
+        // Promoted probability surface (§3.2): forecast.mean lands in
+        // `model_vars[analytic].probability.mean`. applyPromotion fans
+        // this out to `p.forecast.{mean, stdev, source}`.
+        if (update.forecast?.mean !== undefined) {
+          analyticEntry.probability.mean = update.forecast.mean;
         }
-        if (update.forecast.mean !== undefined) {
+      } else {
+        // No analytic entry on this edge (tests / non-fetch callers
+        // that bypass FE topo Step 1) OR conditional probability target
+        // (`conditional_p[i].p` — Stage 5 will audit). Keep legacy direct
+        // writes so the fields land somewhere; promotion-via-model_vars
+        // simply doesn't apply here.
+        if (updLat.mu !== undefined) targetP.latency.mu = updLat.mu;
+        if (updLat.sigma !== undefined) targetP.latency.sigma = updLat.sigma;
+        if (updLat.promoted_onset_delta_days !== undefined) {
+          targetP.latency.promoted_onset_delta_days = updLat.promoted_onset_delta_days;
+          if (writeHorizonsToGraph && targetP.latency.onset_delta_days_overridden !== true) {
+            targetP.latency.onset_delta_days = updLat.promoted_onset_delta_days;
+          }
+        }
+        if (updLat.path_mu !== undefined) targetP.latency.path_mu = updLat.path_mu;
+        if (updLat.path_sigma !== undefined) targetP.latency.path_sigma = updLat.path_sigma;
+        if (updLat.path_onset_delta_days !== undefined) {
+          targetP.latency.path_onset_delta_days = updLat.path_onset_delta_days;
+        }
+        if (update.forecast?.mean !== undefined) {
+          if (!targetP.forecast) targetP.forecast = {};
           targetP.forecast.mean = update.forecast.mean;
         }
       }
@@ -2212,10 +2281,17 @@ export class UpdateManager {
         }
       }
 
-      // CF can provide a direct conditioned dispersion scalar (`p_sd`).
-      // Respect explicit locks on authored output scalars.
+      // Doc 73b §3.3.4 / §12.2 row S5: route the epistemic dispersion to
+      // `p.stdev` and the predictive dispersion to `p.stdev_pred`. The
+      // FE topo Step 2 sets `update.stdev` (epistemic) only; the CF
+      // apply path sets both. `p.stdev_overridden` gates `p.stdev` only;
+      // there is no `*_overridden` flag for `p.stdev_pred` (row S6 — not
+      // user-overtypable).
       if (update.stdev !== undefined && targetP.stdev_overridden !== true) {
         targetP.stdev = this.roundToDP(update.stdev);
+      }
+      if (update.stdev_pred !== undefined) {
+        targetP.stdev_pred = this.roundToDP(update.stdev_pred);
       }
 
       // Keep p.stdev consistently populated when the topo/LAG pass updates p.mean but
@@ -2266,6 +2342,17 @@ export class UpdateManager {
       }
     }
     
+    // Doc 73b §3.2 / Stage 4(c): callers that funnel through this
+    // function (notably `fetchDataService.materialiseFeEdgeValues`
+    // and `applyConditionedForecastToGraph`) run `applyPromotion`
+    // after `applyBatchLAGValues` returns, so the redirected
+    // `model_vars[analytic]` fields fan out into `p.forecast.*` and
+    // the promoted latency block. We deliberately do NOT call
+    // `applyPromotion` from inside this function — that would
+    // re-fan promoted output during a CF apply (which doesn't refresh
+    // analytic source fields) and clobber values written by an
+    // upstream promotion pass.
+
     // STEP 3: Rebalance all affected edges ONCE using consolidated rebalancing logic
     // Uses findSiblingsForRebalance + rebalanceSiblingEdges (same path as rebalanceEdgeProbabilities)
     for (const edgeId of edgesToRebalance) {

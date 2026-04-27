@@ -171,33 +171,39 @@ def _resolve_node_id(node_ref: str, node_lookup: dict) -> str:
 def _extract_probability(edge: dict, graph_data: dict) -> Optional[float]:
     """
     Extract effective probability from edge.
-    
+
     Handles:
     - Regular edges: p.mean
     - Case edges: variant weight from parent case node
-    
+
+    Note (doc 73b §6.5 / Stage 4(d) scope decision): this helper feeds
+    the path analyzer, which renders mode-aware *display* probabilities
+    (`'f'`, `'e'`, `'f+e'`) — not model-baseline carrier computations.
+    The `'f+e'` mode is, by construction, a read of the L5 blended
+    current-answer scalar; rerouting it through `resolve_model_params`
+    would replace the displayed blended answer with the L2 baseline and
+    silently change every analyzer reach result. The documented carrier
+    reroute is `forecast_state._resolve_edge_p`; the analyzer keeps
+    `p.mean` so the displayed-answer modes stay coherent.
+
     Args:
         edge: Edge dict
         graph_data: Full graph data (for case node lookup)
-    
+
     Returns:
         Probability value (0-1) or None if not set
     """
-    # Check if case edge
     case_id = edge.get('case_id')
     variant_name = edge.get('case_variant')
-    
     if case_id and variant_name:
-        # Get probability from case node variant weight
         weight = _get_case_variant_weight(case_id, variant_name, graph_data)
         if weight is not None:
             return weight
-    
-    # Regular probability
+
     p = edge.get('p')
     if p is None:
         return None
-    
+
     if isinstance(p, dict):
         return p.get('mean')
     elif isinstance(p, (int, float)):

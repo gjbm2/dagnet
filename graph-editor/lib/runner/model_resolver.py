@@ -143,9 +143,11 @@ def _extract_source_curves(model_vars: List[Dict[str, Any]]) -> Dict[str, Dict[s
         entry: Dict[str, Any] = {
             'mu': mv_lat.get('mu'),
             'sigma': mv_lat.get('sigma'),
+            't95': mv_lat.get('t95'),
             'onset_delta_days': mv_lat.get('onset_delta_days'),
             'path_mu': mv_lat.get('path_mu'),
             'path_sigma': mv_lat.get('path_sigma'),
+            'path_t95': mv_lat.get('path_t95'),
             'path_onset_delta_days': mv_lat.get('path_onset_delta_days'),
             'forecast_mean': mv_prob.get('mean'),
             'p_stdev': mv_prob.get('stdev'),
@@ -162,10 +164,12 @@ def _extract_source_curves(model_vars: List[Dict[str, Any]]) -> Dict[str, Dict[s
             'mu_sd_pred': mv_lat.get('mu_sd_pred'),       # predictive (kappa_lat)
             'sigma_sd': mv_lat.get('sigma_sd'),
             'onset_sd': mv_lat.get('onset_sd'),
+            'onset_mu_corr': mv_lat.get('onset_mu_corr'),
             'path_mu_sd': mv_lat.get('path_mu_sd'),
             'path_mu_sd_pred': mv_lat.get('path_mu_sd_pred'),
             'path_sigma_sd': mv_lat.get('path_sigma_sd'),
             'path_onset_sd': mv_lat.get('path_onset_sd'),
+            'path_onset_mu_corr': mv_lat.get('path_onset_mu_corr'),
         }
         curves[src] = entry
     return curves
@@ -437,9 +441,18 @@ def resolve_model_params(
                 )
 
     if p_mean == 0:
-        # Fall back to forecast mean
-        fm = forecast_block.get('mean', 0) or 0
-        p_mean = float(fm)
+        # Doc 73b §3.9 mirror contract: the analytic source's
+        # `probability.mean` is the canonical baseline when neither
+        # posterior nor source-layer Beta is set. Prefer it over the
+        # promoted `forecast.mean` because applyPromotion writes
+        # `forecast.mean` from this same source-layer field — they
+        # agree on enriched graphs, but on test fixtures /
+        # pre-Stage-4 graphs the source field is populated and
+        # `forecast.mean` may not be.
+        fm = (_src.get('forecast_mean') if promoted_source else None)
+        if fm is None:
+            fm = forecast_block.get('mean', 0) or 0
+        p_mean = float(fm or 0)
 
     # Doc 73b §3.8 register entry 1: the D20 evidence-count synthesis
     # (`alpha = ev_k+1, beta = ev_n-ev_k+1` from `p.evidence.{n, k}`)
