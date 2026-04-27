@@ -11,56 +11,49 @@ import {
 } from './snapshotSubjectResolutionService';
 import type { Graph, ScenarioVisibilityMode } from '../types';
 import { resolveComputeAffectingDisplay } from '../lib/analysisDisplaySettingsRegistry';
-import { projectProbabilityPosterior, projectLatencyPosterior, resolveAsatPosterior } from './posteriorSliceResolution';
-import { parseConstraints } from '../lib/queryDSL';
+import {
+  contextGraphForEffectiveDsl,
+  type ParameterFileResolver,
+} from './posteriorSliceContexting';
+import { engorgeGraphEdges } from '../lib/bayesEngorge';
+import { collectConditionedForecastParameterFiles } from '../lib/conditionedForecastGraphSnapshot';
 
-// ── Posterior re-projection (doc 25 §2.2, doc 27 §5.4) ─────────────────────
-// After building a per-scenario analysis graph, re-project the posterior
-// from the stashed _posteriorSlices using that scenario's effective DSL.
-// This ensures each scenario graph carries the right posterior for its
-// query context (window vs cohort, contexted vs aggregate).
+// ── Per-scenario request-graph contexting + engorgement (doc 73b §3.2a) ────
+// After building a per-scenario analysis graph, re-context it to that
+// scenario's effective DSL: pick the matching slice from each edge's
+// parameter file and project onto in-schema fields, then engorge the
+// transient `_posteriorSlices` library and the bayes evidence/priors so
+// BE consumers (`epistemic_bands.py`, CF) read the right material.
 //
-// When the effective DSL contains asat(), the posterior is resolved from
-// fit_history (doc 27 §5) before projection. If no historical fit exists
-// on or before the asat date, the posterior is cleared (strict, no fallback).
+// Stage 4(a) replaces the previous "stash on the live edge" model. The
+// shared helper in `posteriorSliceContexting.ts` is the single match-rule
+// owner; this function is pure orchestration around it.
+//
+// When `resolveParameterFile` is absent the graph passes through unchanged
+// (legacy behaviour for tests that exercise prepared shape without the
+// per-scenario re-contexting concern).
+function recontextScenarioGraph(
+  graph: Graph,
+  effectiveDsl: string,
+  resolveParameterFile: ParameterFileResolver | undefined,
+): void {
+  if (!resolveParameterFile) return;
 
-function reprojectPosteriorForDsl(graph: Graph, effectiveDsl: string): void {
-  const edges = (graph as any)?.edges;
-  if (!Array.isArray(edges)) return;
+  // In-schema contexting: project the active slice onto p.posterior.* and
+  // p.latency.posterior.* per scenario. Mirrors under each conditional_p[X].
+  contextGraphForEffectiveDsl(graph, resolveParameterFile, effectiveDsl, {
+    engorgeFitHistory: false,
+  });
 
-  // Parse asat date from the effective DSL (if present)
-  let asatDate: string | null = null;
-  try {
-    const parsed = parseConstraints(effectiveDsl);
-    asatDate = parsed.asat;
-  } catch { /* no asat */ }
-
-  for (const edge of edges) {
-    const stashed = edge?.p?._posteriorSlices;
-    if (!stashed?.slices) continue;
-
-    // If asat is active, resolve the historical posterior (doc 27 §5.2)
-    const posteriorToProject = asatDate
-      ? resolveAsatPosterior(stashed, asatDate)
-      : stashed;
-
-    if (!posteriorToProject) {
-      // No fit exists on or before the asat date — clear posterior (strict)
-      edge.p.posterior = undefined;
-      if (edge.p.latency) edge.p.latency.posterior = undefined;
-      continue;
-    }
-
-    const probResult = projectProbabilityPosterior(posteriorToProject, effectiveDsl);
-    if (probResult) {
-      edge.p.posterior = probResult;
-    }
-
-    const latResult = projectLatencyPosterior(posteriorToProject, effectiveDsl);
-    if (latResult && edge.p.latency) {
-      edge.p.latency.posterior = latResult;
-    }
-  }
+  // Out-of-schema engorgement on the request-graph copy: attach
+  // `_posteriorSlices`, `_bayes_evidence`, `_bayes_priors` so BE consumers
+  // (epistemic_bands.py, CF) see the file-sourced material that used to
+  // live in the persistent Flow G stash.
+  const parameterFiles = collectConditionedForecastParameterFiles(
+    graph,
+    resolveParameterFile,
+  );
+  engorgeGraphEdges(graph, parameterFiles);
 }
 
 type ScenarioLike = {
@@ -156,6 +149,12 @@ type SharedParams = {
   workspace?: { repository: string; branch: string };
   /** Canvas analysis display bag — compute-affecting keys are forwarded to the backend. */
   display?: Record<string, unknown> | null;
+  /** Parameter-file resolver for per-scenario request-graph contexting +
+   *  engorgement (doc 73b §3.2a, Stage 4(a)/4(b)). Required after Stage 4(b)
+   *  removes the persistent `_posteriorSlices` stash; without it scenario
+   *  graphs lose their per-DSL posterior projection. Optional during
+   *  migration so legacy callers and shape-only tests continue to compile. */
+  resolveParameterFile?: ParameterFileResolver;
 };
 
 type LiveParams = SharedParams & {
@@ -413,7 +412,7 @@ export async function prepareAnalysisComputeInputs(
       );
 
       const effectiveQueryDsl = getQueryDslForScenario(scenarioId);
-      reprojectPosteriorForDsl(scenarioGraph, effectiveQueryDsl);
+      recontextScenarioGraph(scenarioGraph, effectiveQueryDsl, params.resolveParameterFile);
       scenarios.push({
         scenario_id: scenarioId,
         name: params.getScenarioName(scenarioId),
@@ -461,7 +460,7 @@ export async function prepareAnalysisComputeInputs(
         augmentDSLWithConstraint(params.currentDSL || '', scenario.effective_dsl || ''),
         params.chartCurrentLayerDsl,
       );
-      reprojectPosteriorForDsl(scenarioGraph, effectiveQueryDsl);
+      recontextScenarioGraph(scenarioGraph, effectiveQueryDsl, params.resolveParameterFile);
 
       return {
         scenario_id: scenario.scenario_id,

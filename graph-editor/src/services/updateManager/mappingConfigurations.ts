@@ -777,13 +777,25 @@ function buildMappingConfigurations(): Map<string, MappingConfiguration> {
     { sourceField: 'latency.path_sigma', targetField: 'p.latency.path_sigma', condition: isProbType },
     { sourceField: 'latency.path_onset_delta_days', targetField: 'p.latency.path_onset_delta_days', condition: isProbType },
 
-    // Bayesian posteriors (doc 21: unified posterior schema, doc 25: slice resolution)
-    // File has posterior.slices with unified entries. We project onto graph
-    // edge in the shapes UI components expect (ProbabilityPosterior on
-    // p.posterior, LatencyPosterior on p.latency.posterior).
-    // The cascade defaults to window() (effectiveDsl = ''); per-scenario
-    // re-projection happens in the analysis graph composition (doc 25 §2.2).
-    // Raw slices are stashed at p._posteriorSlices for re-projection.
+    // Bayesian posteriors (doc 21: unified posterior schema, doc 25: slice
+    // resolution; doc 73b §3.2a: live-edge contexting model).
+    //
+    // Flow F — single-context posterior projection on the live edge: the
+    // active edge's `p.posterior.*` and `p.latency.posterior.*` carry the
+    // slice that matches the live editor's `currentDSL`. Stage 4(e) re-runs
+    // this projection on `currentDSL` change so the live edge stays in
+    // sync. Default DSL here is `''` (window() bare aggregate); the live
+    // re-context overrides per active DSL.
+    //
+    // The pre-73b "Flow G" stash that wrote the entire multi-context slice
+    // library to `p._posteriorSlices` has been removed (Stage 4(b), schema
+    // row S7a). Per-scenario request graphs and live-edge re-context now
+    // read the slice library directly from the parameter file via the
+    // shared helper in `posteriorSliceContexting.ts`, and BE consumers that
+    // need the multi-context view receive it as transient engorgement on
+    // the request-graph copy (doc 73b §3.2a (ii)). The schema entry, dead
+    // types, and remaining reader paths in `bayesPriorService.ts` are
+    // cleaned up in Stage 6 (S7b).
     {
       sourceField: 'posterior',
       targetField: 'p.posterior',
@@ -801,26 +813,6 @@ function buildMappingConfigurations(): Map<string, MappingConfiguration> {
       transform: (value: any) => {
         if (!value || typeof value !== 'object' || !value.slices) return undefined;
         return projectLatencyPosterior(value, '');
-      },
-    },
-    // Stash raw posterior.slices on graph edge for per-scenario re-projection (doc 25 §2.2)
-    {
-      sourceField: 'posterior',
-      targetField: 'p._posteriorSlices',
-      condition: (source) => isProbType(source) && source.posterior?.slices !== undefined,
-      transform: (value: any) => {
-        if (!value || typeof value !== 'object' || !value.slices) return undefined;
-        // Stash the full posterior (slices + metadata + fit_history) so
-        // re-projection has everything, including asat resolution (doc 27 §5)
-        return {
-          slices: value.slices,
-          fitted_at: value.fitted_at,
-          fingerprint: value.fingerprint,
-          hdi_level: value.hdi_level,
-          prior_tier: value.prior_tier,
-          surprise_z: value.surprise_z,
-          ...(value.fit_history ? { fit_history: value.fit_history } : {}),
-        };
       },
     },
 

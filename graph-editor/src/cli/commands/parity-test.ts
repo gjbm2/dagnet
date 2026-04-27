@@ -260,6 +260,8 @@ async function testParity(args: TestParityArgs): Promise<ComparisonResult> {
     getScenarioVisibilityMode: () => 'f+e' as ScenarioVisibilityMode,
     getScenarioName: (id: string) => id === 'current' ? 'Current' : 'Scenario 1',
     getScenarioColour: (id: string) => id === 'current' ? '#ef4444' : '#3b82f6',
+    // Doc 73b §3.2a / Stage 4(a): see analyse.ts for rationale.
+    resolveParameterFile: (paramId: string) => bundle.parameters.get(paramId),
   });
 
   if (prepared.status === 'blocked') {

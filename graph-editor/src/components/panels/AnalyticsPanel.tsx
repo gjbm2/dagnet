@@ -517,6 +517,7 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
         ),
         getScenarioName,
         getScenarioColour,
+        resolveParameterFile: (paramId) => fileRegistry.getFile(`parameter-${paramId}`)?.data,
       });
 
       if (prepared.status !== 'ready') {

@@ -340,6 +340,8 @@ export function useCanvasAnalysisCompute({
         bootReadyEpoch,
       });
       try {
+        const resolveParameterFile = (paramId: string) =>
+          fileRegistry.getFile(`parameter-${paramId}`)?.data;
         const nextPreparedState = await prepareAnalysisComputeInputs(
           mode === 'live'
             ? {
@@ -361,6 +363,7 @@ export function useCanvasAnalysisCompute({
                 getScenarioName,
                 getScenarioColour,
                 display: contentItem.display as Record<string, unknown> | undefined,
+                resolveParameterFile,
               }
             : (() => {
                 // Patch the 'current' underlayer's colour with the live tab value
@@ -387,6 +390,7 @@ export function useCanvasAnalysisCompute({
                   hiddenScenarioIds: (((contentItem?.display as any)?.hidden_scenarios) || []) as string[],
                   frozenWhatIfDsl: contentItem?.what_if_dsl,
                   display: contentItem.display as Record<string, unknown> | undefined,
+                  resolveParameterFile,
                 };
               })(),
         );

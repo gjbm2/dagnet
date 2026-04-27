@@ -254,6 +254,12 @@ async function runAnalyse() {
     hiddenScenarioIds: [],
     frozenWhatIfDsl: null,
     display: cliDisplaySettings,
+    // Doc 73b §3.2a / Stage 4(a): per-scenario request graphs context off
+    // the parameter-file slice library. The CLI shares
+    // analysisComputePreparationService with the FE, so the same wiring
+    // contract applies — without this, CLI runs would lose per-scenario
+    // posterior projection after Stage 4(b) removes the persistent stash.
+    resolveParameterFile: (paramId: string) => bundle.parameters.get(paramId),
   });
 
   if (prepared.status === 'blocked') {

@@ -14,7 +14,7 @@
 - [x] Stage 1 — completed 27-Apr-26
 - [x] Stage 2 — completed 27-Apr-26
 - [x] Stage 3 — completed 27-Apr-26
-- [ ] Stage 4 part 1 — 4(a) request-graph contexting + 4(b) persistent-stash removal + 4(e) live-edge re-context on currentDSL
+- [x] Stage 4 part 1 — completed 27-Apr-26
 - [ ] Stage 4 part 2 — 4(c) promoted writer + 4(d) carrier consumer audit + 4(f) L5 dispersion split (coordinated with 73a §8/§10)
 - [ ] Stage 5
 - [ ] Stage 6

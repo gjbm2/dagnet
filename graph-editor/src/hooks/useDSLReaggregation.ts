@@ -27,6 +27,8 @@ import {
 } from '../services/fetchDataService';
 import { operationRegistryService } from '../services/operationRegistryService';
 import { useFetchData } from './useFetchData';
+import { contextLiveGraphForCurrentDsl } from '../services/posteriorSliceContexting';
+import { fileRegistry } from '../contexts/TabContext';
 import type { Graph } from '../types';
 import toast from 'react-hot-toast';
 
@@ -65,6 +67,7 @@ export function useDSLReaggregation({
   const lastAnalysedDSLRef = useRef<string | null>(null);
   const lastAutoAggregatedDSLRef = useRef<string | null>(null);
   const lastAggregatedDSLRef = useRef<string | null>(null);
+  const lastContextedDSLRef = useRef<string | null>(null);
   const isAggregatingRef = useRef(false);
   const isInitialMountRef = useRef(true);
   const graphRef = useRef(graph);
@@ -86,9 +89,44 @@ export function useDSLReaggregation({
   });
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // PLANNER ANALYSIS — runs when currentDSL changes
+  // LIVE-EDGE CONTEXTING — refresh `p.posterior.*` and `p.latency.posterior.*`
+  // (and the conditional_p mirrors) on `currentDSL` change.
+  //
+  // Doc 73b §3.2a / Stage 4(e). After Stage 4(b) removes the persistent
+  // `_posteriorSlices` stash, the live edge no longer carries the
+  // multi-context slice library — so on every `currentDSL` change the
+  // matching slice must be re-projected from the parameter file. Without
+  // this step, canvas displays that read the promoted/projected posterior
+  // (the `'f'` mode chart, ModelRateChart, edge labels) would silently
+  // stale on DSL change once Stage 4(c) removes CF's compensating
+  // `forecast.mean = p_mean` write.
+  //
+  // Pure orchestration around the shared slice helper — match rules and
+  // fallbacks live in `posteriorSliceResolution.ts`.
   // ═══════════════════════════════════════════════════════════════════════════
   const currentDSL = graphStoreApi.getState().currentDSL;
+  useEffect(() => {
+    if (isAggregatingRef.current) return;
+    if (isTemporaryFile) return;
+    if (!graph) return;
+
+    const authoritativeDSL = graphStoreApi.getState().currentDSL || '';
+    if (!authoritativeDSL) return;
+
+    if (lastContextedDSLRef.current === authoritativeDSL) return;
+    lastContextedDSLRef.current = authoritativeDSL;
+
+    // Mutate a clone so React reconciliation sees a new reference (anti-pattern 3).
+    const cloned = structuredClone(graph) as Graph;
+    contextLiveGraphForCurrentDsl(
+      cloned,
+      (paramId: string) => fileRegistry.getFile(`parameter-${paramId}`)?.data,
+      authoritativeDSL,
+    );
+    setGraph(cloned);
+  }, [graph, currentDSL, isTemporaryFile, graphStoreApi, setGraph]);
+
+
   useEffect(() => {
     if (isAggregatingRef.current) return;
     if (isTemporaryFile) return;

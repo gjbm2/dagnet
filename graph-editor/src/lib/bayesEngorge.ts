@@ -388,6 +388,36 @@ export function engorgeGraphEdges(
     // Resolve warm-start extras
     const extras = resolveWarmStartExtras(edge, pf);
 
+    // Engorge `_posteriorSlices` from the parameter file's `posterior`
+    // (doc 73b §3.2a (ii) — request-graph engorgement only).
+    //
+    // Today's BE consumer (`epistemic_bands.py:148`) walks the multi-context
+    // slice library plus `fit_history` for time-axis epistemic bands. Before
+    // doc 73b, that data lived persistently on the live edge via
+    // `mappingConfigurations.ts` Flow G. Stage 4(b) removes the persistent
+    // stash; Stage 4(a) replaces it with a per-call engorgement onto the
+    // request-graph copy. The shape mirrors what Flow G used to write so
+    // the BE consumer remains unchanged.
+    //
+    // Engorgement is presence-conditional (§3.2a (ii)): the field is written
+    // when the parameter file's posterior is present, regardless of which
+    // source the selector / quality gate has promoted.
+    const fileposterior = (pf as any).posterior;
+    if (fileposterior && typeof fileposterior === 'object' && fileposterior.slices) {
+      if (!edge.p || typeof edge.p !== 'object') {
+        edge.p = {};
+      }
+      edge.p._posteriorSlices = {
+        slices: fileposterior.slices,
+        fitted_at: fileposterior.fitted_at,
+        fingerprint: fileposterior.fingerprint,
+        hdi_level: fileposterior.hdi_level,
+        prior_tier: fileposterior.prior_tier,
+        surprise_z: fileposterior.surprise_z,
+        ...(fileposterior.fit_history ? { fit_history: fileposterior.fit_history } : {}),
+      };
+    }
+
     // Build _bayes_priors
     edge._bayes_priors = {
       prob_alpha: prob.alpha,
