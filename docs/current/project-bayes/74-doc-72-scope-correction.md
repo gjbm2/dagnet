@@ -90,21 +90,27 @@ are promoted model state, and which fields are the current query's answer.
 
 ## 6. Where the implementation now lives
 
-Doc 73a is the active implementation note for this narrowed pass. It captures
-the settled shape that follows from the app's data design:
+Docs 73a and 73b together carry the active implementation. Ownership split
+(reconciled 27-Apr-26 by doc 73b §11.2 conflict 5):
 
-the FE provisional answer no longer serves as authoritative model input
+- **Doc 73a** owns the param-pack and CF-supersession spine: parameter
+  files as the deep store, the graph as structure plus current projection,
+  user scenarios as ordered thin param-pack deltas, per-scenario CF
+  supersession in tab context, and scenario packs widened only to the
+  active projected fields needed for faithful rebuild.
+- **Doc 73b** owns the source/promoted/current-answer layer split that
+  follows from the app's data design. Specifically:
+  - The FE provisional answer no longer serves as authoritative model
+    input — the FE-provisional-vs-model split is delivered by doc 73b
+    Stages 2 and 4(c)/4(d) (analytic semantic transition; narrow promoted
+    writer; carrier consumer reads via the shared resolver).
+  - The Python runtime uses one consistent probability-source contract
+    across target-edge and carrier reads — Python source-order
+    unification is delivered by doc 73b Stage 4(d) (carrier consumer
+    audit and switch through `resolve_model_params`).
 
-the Python runtime uses one consistent probability-source contract across
-target-edge and carrier reads
-
-parameter files remain the deep store
-
-the graph remains structure plus current projection
-
-user scenarios remain ordered thin param-pack deltas
-
-conditioned-forecast supersession becomes per-scenario state in tab context
-
-scenario packs are widened only to the active projected fields needed for
-faithful rebuild, not to full graphs or full file-backed inventories
+Both items above were originally framed in this section as "doc 73a
+captures the settled shape"; doc 73a hands them back to 73b for
+implementation, and doc 73b §11.2 records the resolved boundary. Doc 73a
+remains the active implementation note for the param-pack / CF
+supersession items in the first bullet.

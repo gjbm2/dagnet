@@ -10,7 +10,7 @@
 
 <!-- managed by /implement-carefully — edit checkboxes manually only when the skill is not running -->
 
-- [ ] Stage 0
+- [x] Stage 0 — completed 27-Apr-26
 - [ ] Stage 1
 - [ ] Stage 2
 - [ ] Stage 3
