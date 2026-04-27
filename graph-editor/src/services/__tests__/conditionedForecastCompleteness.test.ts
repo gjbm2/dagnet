@@ -7,8 +7,8 @@
  * p_sd, completeness) that get written back to the graph". CF is
  * the authoritative writer for these fields on the graph path; the
  * FE topo pass must yield its own CDF-derived completeness on those
- * edges, and CF must not project its evidence onto the FE-owned
- * `p.evidence.*`.
+ * edges, and CF projects only `evidence_k/n` onto `p.evidence.k/n`
+ * (without taking over `p.evidence.mean` authority).
  *
  * This file is the FE-local authority contract. It tests only how
  * the FE projects CF's response into graph state. It does not test
@@ -28,27 +28,27 @@
  *      `edge.p.latency.completeness_stdev` with CF's values.
  *
  *   3. The graph projection boundary stays explicit: CF response
- *      evidence is available to direct-response consumers, but
- *      `edge.p.evidence.*` remains on the topo-pass / FE writer
- *      path, and CF must not project its evidence onto it.
+ *      evidence is available to direct-response consumers, and
+ *      CF projects `evidence_k/n` onto `edge.p.evidence.k/n`
+ *      while leaving `edge.p.evidence.mean` unchanged.
  *
  *   4. `buildConditionedForecastGraphSnapshot` engorges a clone,
  *      never the live graph.
  *
  *   5. End-to-end via `runStage2EnhancementsAndInboundN`:
  *      a. CF fast path: `completeness` on the edge is CF's value
- *         (not the FE topo CDF-derived value); evidence on the
- *         graph path stays at the FE/topo value.
+ *         (not the FE topo CDF-derived value); CF evidence n/k is
+ *         projected onto the graph path.
  *      b. CF slow path: after the subsequent-overwrite `.then()`
  *         fires, completeness reflects CF's value.
  *
  * ── Authoring receipt (doc 64 §3.6) ─────────────────────────────
  *
  * Family         F. Projection and authority — FE-local only.
- * Invariant      CF authoritatively writes `completeness` /
- *                `completeness_sd` / `cf_mode` / `cf_reason` on
- *                the graph; the FE topo pass owns `p.evidence.*`.
- *                Neither writer may overrun the other's fields.
+ * Invariant      CF authoritatively writes `p.mean` / `p.stdev` /
+ *                `completeness` / `completeness_sd` and projects
+ *                `evidence_k/n` onto `p.evidence.k/n` on the graph.
+ *                `p.evidence.mean` remains on the FE topo path.
  * Oracle type    FE-local authority contract. Not BE semantic
  *                correctness (that lives in the Python suite).
  * Apparatus      TypeScript integration — real
@@ -69,7 +69,7 @@
  * False-pass     A test could pass if CF and the FE topo silently
  *                produced the same values. Mitigated by seeding the
  *                graph with distinctive pre-existing values (0.42,
- *                0.05, n=300, k=150) that the CF response
+ *                0.05, n=300, k=150) and distinct CF response
  *                deliberately does not match.
  * Retires        Supersedes the `*.red.test.ts` framing from when
  *                CF did not yet write completeness. CF now does;
@@ -299,6 +299,7 @@ describe('CF owns completeness on the graph path (FE authority contract)', () =>
     expect(edge.p.latency.completeness).toBeCloseTo(0.85, 5);
     // NOT the old value (0.42).
     expect(edge.p.latency.completeness).not.toBeCloseTo(0.42, 5);
+    expect(edge.p.stdev).toBeCloseTo(0.04, 5);
   });
 
   it('applyConditionedForecastToGraph overwrites edge.p.latency.completeness_stdev with CF value', () => {
@@ -325,7 +326,7 @@ describe('CF owns completeness on the graph path (FE authority contract)', () =>
     expect(edge.p.latency.completeness_stdev).not.toBeCloseTo(0.05, 5);
   });
 
-  it('applyConditionedForecastToGraph preserves existing graph evidence instead of projecting CF evidence', () => {
+  it('applyConditionedForecastToGraph projects CF evidence n/k while preserving evidence.mean', () => {
     const graph = latencyGraph();
     const results: ConditionedForecastScenarioResult[] = [
       {
@@ -345,8 +346,8 @@ describe('CF owns completeness on the graph path (FE authority contract)', () =>
 
     const updated = applyConditionedForecastToGraph(graph, results);
     const edge = updated.edges.find((e: any) => (e.uuid || e.id) === EDGE_ID);
-    expect(edge.p.evidence.n).toBe(300);
-    expect(edge.p.evidence.k).toBe(150);
+    expect(edge.p.evidence.n).toBe(120);
+    expect(edge.p.evidence.k).toBe(48);
     expect(edge.p.evidence.mean).toBeCloseTo(0.5, 5);
   });
 
@@ -396,9 +397,9 @@ describe('CF owns completeness on the graph path (FE authority contract)', () =>
     // CF's completeness (0.88) must win — FE's CDF-based value would
     // be whatever enhanceGraphLatencies computed, NOT 0.88.
     expect(edge.p.latency.completeness).toBeCloseTo(0.88, 5);
-    // Evidence stays on the topo/FE authority path; CF must not replace it.
-    expect(edge.p.evidence.n).toBe(300);
-    expect(edge.p.evidence.k).toBe(150);
+    expect(edge.p.stdev).toBeCloseTo(0.04, 5);
+    expect(edge.p.evidence.n).toBe(120);
+    expect(edge.p.evidence.k).toBe(48);
     expect(edge.p.evidence.mean).toBeCloseTo(0.5, 5);
   });
 

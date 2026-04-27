@@ -11,6 +11,7 @@ import type { ScenarioVisibilityMode } from '../types';
 import { SCENARIO_COLOURS } from './constants';
 
 export interface ScenarioSpec {
+  id?: string;
   name: string;
   queryDsl: string;
   colour: string;
@@ -39,11 +40,12 @@ export function parseScenarioFlags(argv: string[]): ScenarioSpec[] {
  * Format: comma-separated key=value pairs and DSL fragments.
  * Commas inside parentheses are preserved (they're part of DSL).
  *
- * Recognised keys: name, colour/color, visibility/visibility_mode.
+ * Recognised keys: id/scenario_id, name, colour/color, visibility/visibility_mode.
  * Everything else is treated as DSL.
  */
 export function parseScenarioSpec(raw: string, index: number): ScenarioSpec {
   const parts = splitOutsideParens(raw);
+  let id: string | undefined;
   let name: string | undefined;
   let colour: string | undefined;
   let visibilityMode: ScenarioVisibilityMode = 'f+e';
@@ -55,6 +57,8 @@ export function parseScenarioSpec(raw: string, index: number): ScenarioSpec {
       const key = part.slice(0, eqIdx).trim().toLowerCase();
       const value = part.slice(eqIdx + 1).trim();
       switch (key) {
+        case 'id':
+        case 'scenario_id': id = value; break;
         case 'name': name = value; break;
         case 'colour':
         case 'color': colour = value; break;
@@ -68,6 +72,7 @@ export function parseScenarioSpec(raw: string, index: number): ScenarioSpec {
   }
 
   return {
+    id,
     name: name || `Scenario ${index + 1}`,
     queryDsl: dslParts.join(','),
     colour: colour || SCENARIO_COLOURS[index % SCENARIO_COLOURS.length],

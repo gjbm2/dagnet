@@ -1,0 +1,32 @@
+73a Stage 0D regression baseline receipt (recovered mirror)
+===========================================================
+
+Mirror of:
+- graph-editor/lib/tests/fixtures/cf-baseline/regression-baseline.txt
+
+Source record:
+- /home/reg/dev/dagnet/tmp1.log
+
+Record summary (from pytest output in source log):
+- collected: 1163
+- passed: 1122
+- skipped: 31
+- failed: 10
+- elapsed: 671.91s (0:11:11)
+
+Failed tests captured in the source record:
+1. lib/tests/test_cf_query_scoped_degradation.py::test_surprise_gauge_prefers_temporal_candidate_regime
+2. lib/tests/test_cf_query_scoped_degradation.py::test_daily_conversions_degraded_branch_reuses_closed_form_beta_surface
+3. lib/tests/test_conditioned_forecast_response_contract.py::TestConditionedForecastResponseContract::test_handler_passes_axis_tau_max_to_upstream_fetch
+4. lib/tests/test_doc56_phase0_behaviours.py::test_query_scoped_identity_carrier_collapses_public_evidence_basis
+5. lib/tests/test_doc56_phase0_behaviours.py::test_lag_fit_and_surprise_gauge_share_downstream_temporal_mode_split
+6. lib/tests/test_doc56_phase0_behaviours.py::test_bayesian_sidecar_preserves_downstream_window_cohort_chart_split
+7. lib/tests/test_v2_v3_parity.py::TestRowLevelParity::test_window_mode_row_parity
+8. lib/tests/test_v2_v3_parity.py::TestRowLevelParity::test_cohort_mode_row_parity
+9. lib/tests/test_v2_v3_parity.py::TestRowLevelParity::test_multihop_row_parity
+10. lib/tests/test_v2_v3_parity.py::TestRowLevelParity::test_single_edge_cohort_with_upstream_parity
+
+Notes:
+- This mirrors the Python-side recovered baseline receipt so both 73a-listed
+  baseline paths now exist in-repo.
+- The recovered log does not include a separate TS/Vitest baseline block.

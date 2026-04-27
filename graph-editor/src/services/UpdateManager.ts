@@ -2069,6 +2069,8 @@ export class UpdateManager {
         path_t95: number;
         onset_delta_days?: number;
       };
+      /** Conditioned dispersion scalar from CF (`p_sd`). */
+      stdev?: number;
       blendedMean?: number;
       forecast?: {
         mean?: number;
@@ -2224,6 +2226,12 @@ export class UpdateManager {
         if (update.evidence.stdev !== undefined) {
           targetP.evidence.stdev = update.evidence.stdev;
         }
+      }
+
+      // CF can provide a direct conditioned dispersion scalar (`p_sd`).
+      // Respect explicit locks on authored output scalars.
+      if (update.stdev !== undefined && targetP.stdev_overridden !== true) {
+        targetP.stdev = this.roundToDP(update.stdev);
       }
 
       // Keep p.stdev consistently populated when the topo/LAG pass updates p.mean but

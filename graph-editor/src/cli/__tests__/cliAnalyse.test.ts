@@ -57,6 +57,13 @@ describe('Scenario spec parsing', () => {
     expect(spec.queryDsl).toBe('window(1-Dec-25:31-Dec-25)');
   });
 
+  it('should parse explicit scenario id', () => {
+    const spec = parseScenarioSpec('id=scenario-before,name=Before,window(1-Nov-25:30-Nov-25)', 0);
+    expect(spec.id).toBe('scenario-before');
+    expect(spec.name).toBe('Before');
+    expect(spec.queryDsl).toBe('window(1-Nov-25:30-Nov-25)');
+  });
+
   it('should preserve commas inside parentheses in DSL', () => {
     const spec = parseScenarioSpec('name=Test,context(channel:google,device:mobile).window(-30d:)', 0);
     expect(spec.name).toBe('Test');

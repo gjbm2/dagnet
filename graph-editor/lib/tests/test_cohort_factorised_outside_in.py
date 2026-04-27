@@ -31,12 +31,32 @@ import pytest
 import yaml
 
 from conftest import requires_data_repo, requires_db, requires_synth
+from _daemon_client import DaemonError, get_default_client
 
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _ANALYSE_SH = _REPO_ROOT / "graph-ops" / "scripts" / "analyse.sh"
 _PARAM_PACK_SH = _REPO_ROOT / "graph-ops" / "scripts" / "param-pack.sh"
 _TRUTH_DIR = _REPO_ROOT / "bayes" / "truth"
+
+
+def _resolve_data_repo_path() -> Optional[str]:
+    """Resolve the data repo path for daemon-mode CLI calls.
+
+    The shell scripts read this from `.private-repos.conf` automatically;
+    the daemon takes it as an explicit `--graph` arg, so we resolve it
+    here once.
+    """
+    conf = _REPO_ROOT / ".private-repos.conf"
+    if not conf.exists():
+        return None
+    for line in conf.read_text().splitlines():
+        if line.startswith("DATA_REPO_DIR="):
+            return str(_REPO_ROOT / line.split("=", 1)[1].strip())
+    return None
+
+
+_DATA_REPO_PATH = _resolve_data_repo_path()
 
 _PYTHON_BE_URL = os.environ.get("PYTHON_API_URL", "http://localhost:9000")
 _P_MEAN_ABS_TOL = 1e-4
@@ -102,6 +122,34 @@ def _run_analyse_cached(
     sidecar_path: Optional[str] = None,
     diagnostic: bool = False,
 ) -> dict[str, Any]:
+    # Daemon path (default): single long-lived dagnet-cli process serves
+    # all requests, amortising Node + tsx + module-graph startup over the
+    # session. Falls back to per-call subprocess when DAGNET_USE_DAEMON=0.
+    client = get_default_client() if _DATA_REPO_PATH else None
+    if client is not None:
+        args = [
+            "--graph", _DATA_REPO_PATH,
+            "--name", graph_name,
+            "--query", dsl,
+            "--type", analysis_type,
+            "--no-cache", "--no-snapshot-cache",
+            "--format", "json",
+        ]
+        if diagnostic:
+            args.append("--diag")
+        if sidecar_path is not None:
+            sidecar = Path(sidecar_path)
+            assert sidecar.exists(), f"sidecar missing: {sidecar}"
+            args += ["--bayes-vars", str(sidecar)]
+        try:
+            return client.call_json("analyse", args)
+        except DaemonError as exc:
+            raise AssertionError(
+                f"daemon analyse failed for {graph_name} / {dsl!r} "
+                f"(exit {exc.exit_code}): {exc}\n"
+                f"stderr:\n{exc.stderr[-2000:]}"
+            )
+
     cmd = [
         "bash",
         str(_ANALYSE_SH),
@@ -168,6 +216,27 @@ def _run_param_pack_cached(
     *,
     sidecar_path: Optional[str] = None,
 ) -> dict[str, Any]:
+    client = get_default_client() if _DATA_REPO_PATH else None
+    if client is not None:
+        args = [
+            "--graph", _DATA_REPO_PATH,
+            "--name", graph_name,
+            "--query", dsl,
+            "--no-cache", "--format", "json",
+        ]
+        if sidecar_path is not None:
+            sidecar = Path(sidecar_path)
+            assert sidecar.exists(), f"sidecar missing: {sidecar}"
+            args += ["--bayes-vars", str(sidecar)]
+        try:
+            return client.call_json("param-pack", args)
+        except DaemonError as exc:
+            raise AssertionError(
+                f"daemon param-pack failed for {graph_name} / {dsl!r} "
+                f"(exit {exc.exit_code}): {exc}\n"
+                f"stderr:\n{exc.stderr[-2000:]}"
+            )
+
     cmd = [
         "bash",
         str(_PARAM_PACK_SH),

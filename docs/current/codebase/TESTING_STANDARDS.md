@@ -144,6 +144,29 @@ class TestMyAnalysis:
 - `--enrich` — also run hydrate (topo pass + promotion) after generation
 - `--bust-cache` — skip freshness check, regenerate unconditionally
 
+## CLI-driven Python tests run through a daemon by default
+
+Pytest tests under `graph-editor/lib/tests/` that exercise
+`analyse.sh` / `param-pack.sh` (currently
+`test_cohort_factorised_outside_in.py`) route through a long-lived
+`tsx` daemon by default — see `GRAPH_OPS_TOOLING.md` §"Long-lived
+daemon mode" for the full design. The cached helpers
+`_run_analyse_cached` / `_run_param_pack_cached` lazy-start the daemon
+on first call and tear it down via `atexit`. This amortises the
+~1.2s Node + tsx + module-graph startup over the session and gives a
+~2× wall-time reduction on test files that fire many CLI calls.
+
+The daemon honours per-request `--no-cache` and `--no-snapshot-cache`
+identically to the subprocess path, so the cache-bypass guarantee
+tests rely on is preserved. To bisect a daemon-specific suspicion, set
+`DAGNET_USE_DAEMON=0` and the helpers fall back to per-call
+`subprocess.run` (each invocation gets a fresh Node process — full
+isolation, no shared state). The parity script
+`graph-editor/lib/tests/_daemon_parity_check.py` runs representative
+tuples through both paths and asserts byte-equal JSON; run it after
+any change to `src/cli/bootstrap.ts`, `src/cli/daemon.ts`, or any
+service they import.
+
 ## When to Skip Tests
 
 Not every change needs a test. Pure refactors with no behaviour change, documentation edits, and config tweaks do not need tests. But any change that **introduces a new code path, replaces an existing code path, or changes how data flows between subsystems** needs a test — and that test must exercise the real boundary, not a mock of it.

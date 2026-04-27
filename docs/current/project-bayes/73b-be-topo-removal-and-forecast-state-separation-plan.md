@@ -99,27 +99,37 @@ fields. CF stops writing `forecast.mean = p_mean`.
 
 The promoted persistent surface is intentionally narrow because the only
 persistent consumers are FE display surfaces (`'f'` mode read; ModelRateChart;
-edge labels), all of which need only mean/stdev/source. Beta-shape
-parameters (`alpha`, `beta`, `alpha_pred`, `beta_pred`, `n_effective`) and
-the latency posterior block that today's BE consumers read are NOT placed on
-the persistent promoted surface. They live in source-ledger entries that
-are engorged onto each request graph at request-build time (see Decision 15).
-Persistent storage of slice material on the live graph (the `_posteriorSlices`
-stash) is retired.
+edge labels), all of which need only mean/stdev/source. The Beta-shape
+fields (`alpha`, `beta`, `alpha_pred`, `beta_pred`, `n_effective`) that BE
+consumers read live in `p.posterior.*` (the standard posterior block),
+which is contexted per scenario by Stage 4(a) — they reach the BE through
+in-schema posterior projection on the request graph, not through engorgement.
+The one field BE consumers read that has no place in the normal schema is
+`fit_history`, used by `epistemic_bands.py`; that is the sole legitimate
+engorgement need (see Decision 15). Persistent storage of the multi-context
+slice library on the live graph (the `_posteriorSlices` stash) is retired.
 
-Decision 15. Slice-level model material — Beta-shape parameters, latency
-posterior, fit_history, and any other depth a BE consumer may need — has no
-persistent home on the live graph. It is engorged onto each request graph at
-request-build time, both at CF dispatch
-([buildConditionedForecastGraphSnapshot](graph-editor/src/lib/conditionedForecastGraphSnapshot.ts))
-and at analysis-prep
-([analysisComputePreparationService](graph-editor/src/services/analysisComputePreparationService.ts)).
-The engorgement uses each scenario's effective DSL to pick the matching slice
-from the parameter file. The transient shape on the request graph can be
-whatever minimises consumer disruption — preserving today's
-`_posteriorSlices` shape, widening `model_vars[bayesian]`, or any other
-convenient layout. The choice is implementation detail; the binding rule is
-that no slice library is persisted on the live graph.
+Decision 15 (revised). Two distinct request-graph operations are required;
+they are different in kind and must not be conflated:
+
+(i) **Per-scenario contexting** — adapting a graph (live edge or
+request-graph copy) for a specific effective DSL by selecting the
+matching slice from the parameter file and projecting it onto the
+*standard* schema fields (`model_vars[bayesian]`,
+`p.posterior.*`, `p.latency.posterior.*`). All values land in fields the
+schema already recognises. Required for normal app behaviour.
+
+(ii) **Engorgement** — writing onto a transient request-graph copy a
+field that does not belong to the normal graph schema, *for the
+specific purpose of relaying file-depth data across a process boundary*
+(BE analysis, BE CF, Bayes run). Examples are out-of-schema fields
+like `fit_history` that BE consumers read but the live graph never
+holds. The graph copy is discarded after the call.
+
+The live editor edge needs (i) only — it never crosses a boundary.
+Per-scenario request graphs (for CF dispatch and analysis-prep) need (i)
+plus (ii). The implementation may share a helper, but the two operations
+are conceptually distinct and the docs name them distinctly.
 
 Decision 8. Baseline forecast estimate from
 `graph-editor/src/services/windowAggregationService.ts` is model-bearing input.
@@ -154,17 +164,74 @@ unavailable. The selector default falls through to `analytic`; FE topo supplies
 and other file-dependent operations fail explicitly when their files are
 absent, but standard rendering and FE-quick / CF passes continue.
 
-Decision 13. The `analytic` source must transition from "already query-scoped
-posterior" to generator-owned aggregate-style model source. Today the Python
-runtime treats `analytic.alpha_beta_query_scoped == True` (see
-`graph-editor/lib/runner/model_resolver.py:95-108`) and conjugate-update
-consumers branch on this flag to avoid double-counting evidence. The target
-contract requires `analytic` to be safe to combine with query-scoped Σk, Σn
-on the consumer side, the same as `bayesian`. This change is load-bearing for
-Work package B and is sequenced ahead of the promoted-probability work; the
-exact resolution (split aggregate-vs-posterior fields inside the analytic
-entry, change what FE topo writes, or rewrite the conjugate-update branch) is
-captured as an open point in section 7.
+Decision 13. **Sources are aggregate; current answer is scoped;
+combination is uniform.**
+
+Both source families carry **aggregate** model material:
+
+- `bayesian` — offline fit by the Bayes compiler on a training
+  corpus, file-backed, multi-context slice library.
+- `analytic` — FE topo Step 1 output, recency-weighted aggregation
+  across window data.
+
+`p.evidence.{n, k}` is **scoped** to the user's current query. The
+current-answer scalars (`p.mean`, `p.stdev`, completeness) are
+**always scoped** — there is no non-scoped writer of `p.mean`.
+
+Two combination passes write the current answer:
+
+- **FE topo Step 2** — quick blend of aggregate source +
+  scoped evidence. Provisional.
+- **CF** — careful IS-conditioning of aggregate source + scoped
+  evidence (DB snapshot evidence and file evidence engorged as
+  `_bayes_evidence`). Authoritative when it lands.
+
+Both passes have the same input contract (aggregate source +
+scoped evidence) and write the same persistent fields with the same
+persistence model. Promotion picks which source feeds the pass; the
+combination logic is source-agnostic. CF wins because it runs
+second and is more careful, not because it has special status.
+
+**There is no source-conditional skip path. CF runs uniformly for
+every promoted source.**
+
+**Implementation defects to remove** (the present runtime does not
+match this design — flagged here, not part of the decision proper):
+
+- The resolver's D20 shortcut at `model_resolver.py:392-417`
+  synthesises α/β for analytic from current-answer fields
+  (`p.evidence.{n,k}` and, in adjacent paths, `p.mean`) instead of
+  from the promoted source layer. That is a layer violation. The
+  current-answer evidence block is scoped to the active DSL and must
+  never be used as a model prior or as a hidden concentration source.
+  The only valid analytic-source inputs are FE topo **Step 1** source
+  entries under `model_vars[analytic]` and promoted fields derived from
+  that source. FE topo **Step 2** writes the scoped blended current answer
+  (`p.mean`) using simple analytic conditioning over the active DSL's
+  evidence. That `p.mean` is not a model-var field and must not be
+  consumed by CF or any BE model-input path.
+- If FE topo cannot provide a full Beta-shape source, the system must
+  degrade honestly. Acceptable degradation is one of: moment-match from
+  FE topo Step 1's aggregate `model_vars[analytic].probability.{mean, stdev}`
+  when the variance is valid; use an explicitly named point-estimate prior
+  strength recorded in the fallback register; or return a no-prior /
+  skipped result with diagnostics. Borrowing `p.evidence.{n,k}` is not
+  an acceptable degradation path.
+- The discriminator (`alpha_beta_query_scoped` at
+  `model_resolver.py:107-108`), the sweep-eligibility gate
+  (`is_cf_sweep_eligible` at `forecast_runtime.py:514`), and the
+  `'analytic_degraded'` CF mode at `forecast_runtime.py:524-528`
+  are all artefacts of the current incorrect path. They are
+  removed once the resolver supplies aggregate α/β for analytic.
+  CF then runs uniformly; the conjugate-update branch in
+  `cohort_forecast_v3.py:148-152` becomes the only branch.
+
+OP8's earlier "no structural change required" stance is **superseded**.
+Decision 13 names a real behavioural change. The earlier "transition
+to aggregate" framing pointed at the right end-state but located the
+change wrong: the source ledger has always been aggregate by design;
+the transition is the runtime change above so analytic actually
+behaves as aggregate at resolver-time, letting CF do its job.
 
 Decision 14. Doc 73a is a binding prerequisite for Stage 3 onwards. Doc 73a
 owns: pack field membership (§8), `applyComposedParamsToGraph` mechanics,
@@ -213,22 +280,33 @@ After implementation, the source ledger contains generator-owned entries only.
 There are exactly two source families.
 
 `bayesian` is the aggregate fitted source from the offline pipeline. It is
-file-backed and keyed by query context. **Per-scenario request graphs**
-carry only the slice for that scenario's effective DSL (engorged at
-request-build time by Stage 4(a) — see §8). The **live editor edge** does
-not re-engorge on live-DSL change today and continues to carry the slice
-loaded at file→graph time; live-edge re-engorgement is not in scope for
-this plan and is left to a follow-up if user-visible per-context display
-on the live canvas becomes a requirement. Refresh on query-context change
-on per-scenario request graphs is a promotion-triggering event for that
-graph; some staleness between context change and next regen on the live
-canvas is acceptable.
+file-backed and keyed by query context. The full multi-context slice library
+lives in the parameter file; the graph never holds the whole library
+persistently. The **live editor edge** carries one slice — the one matching
+the current DSL on the canvas — refreshed on `currentDSL` change by
+**contexting** (Stage 4(e); see §8). Per-scenario request graphs are
+copies of the live edge re-contexted to each scenario's effective DSL
+(Stage 4(a)). Per-scenario contexting on a request graph is a
+promotion-triggering event for that request graph (the new slice may
+change the promoted source). All of this is in-schema field projection;
+none of it is engorgement (see §3.2a for the precise distinction).
 
-`analytic` is the FE fallback source. It is runtime-computed by FE topo from
-the current evidence slice and `window()` family inputs for probability, and
-existing all-history lag-fit inputs for latency. It is not persisted to files;
-it is regenerated from graph state. Active query-scoped answer state must not
-live in `analytic`.
+`analytic` is the FE fallback source. It is the output of FE topo
+**Step 1**: recency-weighted aggregation across window data, producing
+aggregate model material (probability `mean`/`stdev`, latency
+`mu`/`sigma`/`t95`/...). It is graph-only, regenerated from graph
+state, not persisted to files. Like `bayesian`, it is aggregate at
+the source-ledger layer — never a scoped answer.
+
+Per Decision 13, the scoped current-answer scalars (`p.mean`,
+`p.stdev`, completeness) are written by two combination passes —
+FE topo Step 2 (quick blend of aggregate source + scoped evidence)
+and CF (careful IS-conditioning of the same inputs). Both passes
+take whichever source promotion has selected and treat it uniformly
+as an aggregate prior. Both write the same persistent fields with
+the same persistence model. CF wins because it runs second and is
+more careful, not because it has special persistence status, and
+not because the source family changes its behaviour.
 
 `manual` is no longer a source. User authoring lives at the promoted layer
 (selector pin, see 3.5) and at the current-answer layer (per-field locks, see
@@ -268,41 +346,126 @@ promoted-probability fields and removes the deferral comment. CF stops
 writing `forecast.mean = p_mean`. Promotion is also responsible for the
 per-edge selector default (quality-gated rule), respecting any user pin.
 
-### 3.2a Request-graph engorgement (the durable home for slice material)
+### 3.2a Per-scenario contexting and engorgement of request graphs
 
-Slice-level model material — Beta-shape parameters, latency posterior,
-fit_history, predictive parameters — has no persistent home on the live
-graph. It is engorged onto each request graph at request-build time:
+Two operations happen at request-build time. They are different in kind
+(see Decision 15) and the docs name them distinctly to avoid eliding them.
 
-- **CF dispatch** (`buildConditionedForecastGraphSnapshot`) builds an
-  in-memory copy of the graph, picks the slice that matches each
-  scenario's effective DSL from the parameter file, and writes the
-  needed fields onto each edge of that copy. The engorged copy is sent
-  to the BE; the live graph is unchanged.
-- **Analysis preparation** (`analysisComputePreparationService`) does
-  the same for analysis runners.
-- **Per-scenario contexting** falls out for free: each scenario's
-  effective DSL drives a different slice selection, so each scenario's
-  request graph carries different engorged values.
+**(i) Contexting** — the request graph is a copy of the live edge,
+re-projected to the scenario's effective DSL. Concretely: pick the
+matching slice from the parameter file for that DSL and project it onto
+the standard schema fields on each edge of the copy:
+`model_vars[bayesian]`, `p.posterior.*`, `p.latency.posterior.*`. All
+three are in-schema fields the live graph already recognises. The BE
+consumers that read Beta-shape and predictive parameters (`alpha`,
+`beta`, `alpha_pred`, `beta_pred`, `n_effective`, `cohort_*`,
+`window_*`) read them from `p.posterior.*`, and `forecast_state.py`
+reads latency joint draws from `p.latency.posterior.*` — so
+per-scenario contexting of those two blocks is sufficient for them.
+**`model_vars[bayesian]` is also a runtime-read field, not just a
+promotion input**:
+[`cohort_forecast_v3.py`](graph-editor/lib/runner/cohort_forecast_v3.py)
+reads `p.model_vars[bayesian]` directly when computing predictive
+maturity rows, so contexting must keep `model_vars[bayesian]` in sync
+with the scenario's effective DSL on every request graph (and on the
+live edge per Stage 4(e)). No out-of-schema material is required for
+any of these consumers.
 
-The transient shape is implementation detail. The existing
-`_posteriorSlices`-style structure works; widening `model_vars[bayesian]`
-works; a new `_bayes_runtime`-style block works. Stage 4 picks one shape
-and pins it; the binding rule is the engorgement *pattern*, not the
-field layout.
+**(ii) Engorgement** — write onto the request-graph copy any
+out-of-schema fields a BE consumer needs that don't fit the normal
+graph schema. Today's engorged set, all bayes-related (none written
+when the active source is analytic):
+
+- `_bayes_evidence` — file evidence material, including aggregate
+  counts AND time-series cohort daily-row data
+  (`cohort[].n_daily`, `k_daily`, `dates`). Consumed by CF for
+  IS-conditioning, and by
+  [`api_handlers.py:2099`](graph-editor/lib/api_handlers.py#L2099)
+  to supplement DB-snapshot rows with file rows the snapshot
+  doesn't cover. Engorged today by
+  [`bayesEngorge.ts`](graph-editor/src/lib/bayesEngorge.ts); no
+  change in Stage 4.
+- `_bayes_priors` — bayesian prior material consumed by CF as the
+  IS prior. Carries `prob_alpha`, `prob_beta`, `prob_source`
+  (provenance — `warm_start` / `moment_matched` / `kn_derived` /
+  `uninformative`), edge-level latency priors (`latency_mu`,
+  `latency_sigma`, `latency_onset`, `latency_source`,
+  `onset_uncertainty`), warm-start ESS hint (`kappa`), path-level
+  cohort-derived latency (`cohort_mu`, `cohort_sigma`,
+  `cohort_onset`), and histogram-derived onset observations
+  (`onset_observations` per doc 41a). Engorged today by
+  `bayesEngorge.ts`; no change in Stage 4.
+- `_posteriorSlices.fit_history` — history of bayesian fits per
+  `asat` date. Consumed by
+  [`epistemic_bands.py:148-149`](graph-editor/lib/runner/epistemic_bands.py#L148-L149)
+  for time-axis epistemic bands. **New in Stage 4(a)**: today
+  supplied by the persistent Flow G stash; once Stage 4(b) removes
+  the stash, it is engorged per call from the parameter file.
+
+DB-snapshot evidence is not engorged — the BE queries the DB
+directly. Engorgement covers file-sourced material only, in
+compliance with rule §3.8 (the Python runtime is stateless about
+parameter files). If a future BE consumer needs a new out-of-schema
+field, it joins this list.
+
+Both operations happen on the request-graph *copy*; the live graph is
+unchanged by either. CF dispatch
+(`buildConditionedForecastGraphSnapshot`) and analysis preparation
+(`analysisComputePreparationService`) both run them via the existing
+slice-resolution machinery (see "Wiring" below).
+
+**Wiring — no new matching logic.** Stage 4(a) (per-scenario request
+graphs) and Stage 4(e) (live-edge re-context on `currentDSL` change)
+MUST use the existing, tested slice-resolution functions. They are
+thin orchestration wrappers; correctness is owned by the existing
+modules and their test suites. No new contract, no new fallback
+rules, no new normalisation.
+
+- **Param-file posterior slice library** (drives contexting of
+  `model_vars[bayesian]`, `p.posterior.*`, `p.latency.posterior.*`):
+  use [`buildSliceKey(effectiveDsl)`](graph-editor/src/services/posteriorSliceResolution.ts)
+  to canonicalise the scenario's effective DSL and
+  [`resolvePosteriorSlice(slices, effectiveDsl)`](graph-editor/src/services/posteriorSliceResolution.ts)
+  to pick the matching entry from the parameter file's
+  `posterior.slices`. Exact-match → bare-mode aggregate fallback →
+  undefined; that semantics is inherited as-is.
+- **Snapshot regime construction** (when the request also drives a
+  snapshot subject): use
+  [`buildCandidateRegimesByEdge(graph, workspace, parameterFiles)`](graph-editor/src/services/candidateRegimeService.ts)
+  on the request-graph copy. The BE then calls
+  [`select_regime_rows(rows, candidate_regimes)`](graph-editor/lib/snapshot_regime_selection.py)
+  per the contract in
+  [`30-snapshot-regime-selection-contract.md`](docs/current/project-bayes/30-snapshot-regime-selection-contract.md).
+- **MECE / dimensional reduction** (when the effective DSL queries a
+  subset of MECE-partitioned dimensions): the existing
+  `meceSliceService` and `dimensionalReductionService` selectors
+  apply unchanged.
+- **Engorgement**: [`bayesEngorge.ts`](graph-editor/src/lib/bayesEngorge.ts)
+  attaches `_bayes_evidence` and `_bayes_priors`. Stage 4(a) extends
+  it (only) to attach `_posteriorSlices.fit_history` per the shape
+  consumed by [`epistemic_bands.py`](graph-editor/lib/runner/epistemic_bands.py)
+  (`fit_history`, `slices`, `fitted_at`, `hdi_level`, plus the
+  per-fit-history slice fields `p_hdi_lower`, `p_hdi_upper`,
+  `evidence_grade`).
+
+Stage 4(a) and 4(e) differ only in caller and target (request-graph
+copy vs live edge); they invoke the same functions with the same
+contracts. Anything beyond orchestration — different fallbacks,
+different normalisation, additional matching rules — is out of scope
+for these stages and should be raised as a defect against the
+existing slice-resolution modules instead.
 
 The persistent live graph keeps its existing single-context `posterior.*`
 / `latency.posterior.*` projection (written by `mappingConfigurations.ts`
 Flow F, the file→graph projection of the active edge's current-context
-posterior). That is the props-panel and BayesPosteriorCard display
-source for the active edge in the live editor. It is single-context
-display state, not per-scenario or per-consumer source-of-truth.
+posterior). On `currentDSL` change, that projection is re-contexted on
+the live edge by Stage 4(e), driven by the same shared slice helper.
 
 What goes away: the persistent `_posteriorSlices` stash on the live
-graph (`mappingConfigurations.ts` Flow G), and `reprojectPosteriorForDsl`'s
-read from that stash. `reprojectPosteriorForDsl` is replaced by an
-engorgement step that reads the parameter file directly at analysis-prep
-time.
+graph (`mappingConfigurations.ts` Flow G). It is no longer the source
+for `reprojectPosteriorForDsl`; the live-edge re-context (Stage 4(e))
+and the request-graph contexting/engorgement (Stage 4(a)) both read
+the parameter file directly via the shared slice helper.
 
 ### 3.3 Current query-scoped surface
 
@@ -407,6 +570,134 @@ Bayes-dependent operations (e.g. running the Bayes compiler) fail explicitly
 when files they require are absent. They are not in scope for this fallback;
 only the standard rendering pipeline must continue to work.
 
+### 3.8 Fallback and degradation register
+
+Fallbacks are not allowed to be implicit. Any fallback or degraded path
+inside the Stage 2 fetch pipeline, resolver, CF runtime, scenario transport,
+or analysis-prep request graph must be entered in this plan before it is kept
+or introduced.
+
+Each register entry must state:
+
+- trigger condition;
+- source layer read;
+- output layer written;
+- provenance / diagnostic exposed to callers;
+- test or outside-in gate that proves the fallback fires only under that
+  trigger;
+- owner stage and removal condition.
+
+Initial register items for this plan:
+
+1. `model_resolver.py` D20 evidence-count prior synthesis. Status:
+   invalid. It reads current-answer `p.evidence.{n,k}` as a model prior
+   concentration source. Stage 2 removes or quarantines it behind an
+   explicit failure diagnostic; it must not survive as a silent fallback.
+2. `model_resolver.py` fixed point-estimate prior strength. Status:
+   provisional. It may survive only if renamed and documented as an
+   analytic point-estimate degradation path sourced from
+   FE topo Step 1's `model_vars[analytic].probability.mean`, with the concentration
+   constant named, tested, and surfaced in diagnostics. It must not read
+   current-answer evidence.
+3. `analytic_degraded` / query-scoped-posterior mode. Status: migration
+   guard only. It exists because the resolver currently cannot always
+   present analytic as an aggregate source. Stage 2/Stage 4 remove it once
+   analytic source priors are source-layer values.
+   While it exists, CF response projection must preserve provenance
+   consistency: if `cf_reason == query_scoped_posterior` or conditioning
+   reports `skip_reason == source_query_scoped`, the projector must not write
+   horizon-row `evidence_k` / `evidence_n` back into graph
+   `p.evidence.{k,n}`. Those counts belong to a different evidence family
+   from the query-scoped posterior that produced `p_mean`; writing them makes
+   repeated CF application non-idempotent. This projection guard is deleted
+   when Stage 2/Stage 4 remove `analytic_degraded` and the resolver presents
+   analytic as an aggregate prior source.
+4. Context-stripping posterior-slice fallback. Status: invalid at the
+   bayesian-source layer. Stage 4(a) removes or guards it so per-scenario
+   request graphs use exact-context slice material only.
+5. Scenario param-only analysis transport. Status: invalid for analysis
+   execution. Param packs are export/edit artefacts, not a lossless carrier
+   for scenario-owned enriched graph state. Stage 4(a) / Stage 6 must
+   preserve the enriched scenario graph or prove an explicitly lossless
+   request-graph build.
+6. Carrier weak-prior / empirical fallback paths in `forecast_state.py`.
+   Status: audit required. Stage 4(d)'s runner audit classifies each as
+   designed degradation or removes it. Any survivor must expose provenance
+   and have an outside-in regression.
+
+### 3.9 FE topo analytic source mirror contract
+
+FE topo Step 1 must export analytic source material in the same temporal
+family shape that the Bayes compiler exports, while preserving the distinction
+between source-layer model material and scoped current-answer state.
+
+Bayes exports:
+
+- a `window()` family for edge-rate probability and edge-level latency;
+- a `cohort()` family for the same edge-rate probability family plus
+  path-level latency, when path fields exist;
+- context-qualified mirrors of those families for exact-context slices.
+
+The analytic source must mirror that shape in `model_vars[analytic]`.
+
+Required analytic probability fields:
+
+- `probability.mean` — aggregate window-family analytic rate estimate, used
+  by promotion as the default `p.forecast.mean`;
+- `probability.stdev` — epistemic uncertainty for the aggregate window-family
+  analytic rate estimate;
+- `probability.alpha`, `probability.beta` — window-family epistemic Beta
+  shape derived from the same aggregate source basis as `probability.mean`;
+- `probability.n_effective` or `probability.window_n_effective` — source
+  mass behind the window-family analytic shape;
+- `probability.provenance` — source-basis label such as
+  `analytic_window_baseline` or `analytic_mature_window_degraded`;
+- `probability.cohort_alpha`, `probability.cohort_beta` — cohort-family
+  epistemic Beta shape when aggregate cohort-family evidence exists;
+- `probability.cohort_n_effective` — source mass behind the cohort-family
+  analytic shape;
+- `probability.cohort_provenance` — source-basis label for the cohort-family
+  shape.
+
+FE topo must not emit analytic `alpha_pred` / `beta_pred` or
+`cohort_alpha_pred` / `cohort_beta_pred` unless a specific analytic
+overdispersion model is designed and tested. Until then, analytic predictive
+probability is absent and forecast consumers fall back to the epistemic shape.
+This mirrors the Bayes contract when kappa is absent.
+
+Window-family analytic shape is derived from aggregate window evidence, not
+from current-answer evidence. Cohort-family analytic shape is derived from
+aggregate cohort-family evidence and path-latency maturity, not from the
+active query's scoped `p.evidence.{n,k}`. If cohort-family aggregate evidence
+is unavailable, omit the cohort fields and let the resolver fall back to the
+window-family shape, matching the existing Bayes projection behaviour.
+
+For cohort-family analytic shape, the implementation must specify and test
+the exact aggregate cohort evidence basis it uses. The minimum acceptable
+rule is: use only cohort-family slices that are outside the active query's
+current-answer surface, evaluate maturity against path-level latency, compute
+`cohort_n_effective` from that same aggregate family, and omit the cohort
+shape if those inputs are unavailable or too sparse. It is not acceptable to
+derive `cohort_alpha` / `cohort_beta` from the active DSL's
+`p.evidence.{n,k}`.
+
+The smoothing convention for FE analytic Beta shape must be explicit. The
+default recommendation is to use the source mass as the concentration basis:
+`alpha = mean * n_effective + 1`, `beta = (1 - mean) * n_effective + 1`.
+If implementation instead moment-matches from `mean` and `stdev`, that must
+be a deliberate choice, with invalid-variance handling documented and tested.
+
+Required analytic latency fields remain the existing split:
+
+- window / edge-level: `mu`, `sigma`, `t95`, `onset_delta_days`, `mu_sd`,
+  `sigma_sd`, `onset_sd`, `onset_mu_corr`;
+- cohort / path-level: `path_mu`, `path_sigma`, `path_t95`,
+  `path_onset_delta_days`, `path_mu_sd`, `path_sigma_sd`, `path_onset_sd`.
+
+No Bayes quality metadata (`ess`, `rhat`, LOO, PPC, HDI quality claims) is
+invented for analytic. Analytic provenance is source-basis provenance, not
+Bayesian quality provenance.
+
 ## 4. Current mismatches to close
 
 Mismatch 1. (Largely closed by prior work.) BE-topo orchestration has already
@@ -419,8 +710,15 @@ Mismatch 2. `analytic` currently behaves as already-query-scoped (see
 `graph-editor/lib/runner/model_resolver.py:95-108`,
 `alpha_beta_query_scoped == True`) rather than as a clean generator-owned
 model source. Conjugate-update consumers branch on that flag to avoid
-double-counting. The target contract requires `analytic` to be safe to
-combine with query-scoped Σk, Σn the same as `bayesian`. Separately,
+double-counting. The target contract requires `analytic` to resolve from FE
+topo Step 1 (`model_vars[analytic]`, aggregate source layer), never from FE
+topo Step 2 (`p.mean`, scoped current-answer blend) and never from scoped
+current-answer evidence. If the analytic source lacks sufficient shape for CF,
+the runtime must use a
+registered degradation path or fail explicitly; it must not synthesize prior
+mass from `p.evidence.{n,k}`. Closing this mismatch includes adding the
+window/cohort analytic source fields in §3.9 and teaching the Python resolver
+to read them. Separately,
 `manual` currently appears as a source-ledger citizen that is auto-coupled
 to a selector pin and to per-field output locks; the target model removes
 `manual` from the source layer entirely.
@@ -467,6 +765,11 @@ respects the lock regardless of which branch fires.
 Mismatch 6. FE, CLI, and analysis preparation still lack one clean
 scenario-owned enriched-graph contract. Doc 72 exposed this as parity defect;
 under this plan it is a query-owned state-isolation defect per scenario.
+Rebuilding analysis input from a stripped param pack is not sufficient unless
+the build step is proven lossless for model source, promoted, current-answer,
+and request-only fields. Param packs remain the export/edit contract; analysis
+execution must consume scenario-owned enriched graph state or an explicitly
+lossless request graph derived from it.
 
 Mismatch 7. Output overtype in
 `graph-editor/src/components/PropertiesPanel.tsx::updateEdgeParam` currently
@@ -570,45 +873,58 @@ in `modelVarsResolution.ts`.
 - `conditionedForecastService.ts:227-239` — stop writing
   `forecast.mean = p_mean` (the `f` vs `f+e` collapse).
 
-Most BE consumers are not migrated as part of this work. They keep
-reading from the field shapes they read today (`posterior.*`,
-`model_vars[]`, `latency.posterior.*`); what changes is *where* those
-values come from. After Stage 4 lands, the values reach the BE via
-per-call engorgement on the request graph (§3.2a), not via a
-persistent stash on the live graph. Consumer code is unchanged for
-those readers.
+BE consumers are not migrated as part of this work. They keep reading
+from the field shapes they read today (`posterior.*`, `model_vars[]`,
+`latency.posterior.*`). What changes is *where* those values come from
+on the request graph: per-scenario contexting (Stage 4(a) (i)) supplies
+them in-schema for the scenario's effective DSL; the `_posteriorSlices`
+persistent stash on the live graph is removed. Consumer code is
+unchanged for slice-material readers.
 
-The exception is the carrier `p.mean` read in `forecast_state.py`
-(and any sibling reach/carrier sites). That read is a model-input
-read of a current-answer field — a layer-split defect — and is
-fixed by Stage 4(d) routing it through the shared resolver
-(`resolve_model_params`). See §6.5 for the rule.
+The narrowing of the persistent promoted surface to
+`p.forecast.{mean, stdev, source}` is safe because the BE never reads
+`p.forecast.{alpha, beta, alpha_pred, beta_pred, n_effective}` —
+verified by grep: those fields are read from `posterior_block` (i.e.
+`p.posterior.*`) in `model_resolver.py`, not from `p.forecast.*`. The
+out-of-schema material BE consumers need (`_bayes_evidence`,
+`_bayes_priors`, `_posteriorSlices.fit_history`) is supplied by
+request-graph engorgement, not by the persistent promoted surface.
+See §3.2a (ii) for the full list and consumer mapping.
+
+The carrier `p.mean` read in `forecast_state.py` is the one consumer
+that *does* change — that read is a model-input read of a current-answer
+field (a layer-split defect) and is fixed by Stage 4(d) routing it
+through the shared resolver (`resolve_model_params`). See §6.5.
 
 ### 6.2a Move slice material from persistent to transient
 
-The actual structural defect this plan closes is that the live graph
+The structural defect this plan closes is that the live graph
 persistently carries a per-edge slice library (`_posteriorSlices` stash
 written by `mappingConfigurations.ts` Flow G), plus its dependent
-`reprojectPosteriorForDsl` per-DSL projector. This is durable in-memory
-state that should not exist on the live graph.
+`reprojectPosteriorForDsl` per-DSL projector. The persistent stash is
+file-depth data living on the wrong layer.
 
-Fix: relocate the slice material to per-call engorgement on the request
-graph (§3.2a). Concretely:
+Fix: separate the two operations the stash conflated and locate them
+properly (using the contexting/engorgement distinction from §3.2a):
 
-- Stop writing `_posteriorSlices` to the live graph (remove the Flow G
-  stash in `mappingConfigurations.ts`).
-- Replace `reprojectPosteriorForDsl`'s read-from-stash with an engorge-
-  from-parameter-file step at analysis-prep time, mirroring the existing
-  CF engorgement pattern in `bayesEngorge.ts` /
-  `conditionedForecastGraphSnapshot.ts`.
-- Extend the engorgement to carry the fields BE consumers read today:
-  Beta-shape (`alpha`, `beta`, `alpha_pred`, `beta_pred`, `n_effective`),
-  latency posterior block, fit_history (for `epistemic_bands.py`).
-  The transient shape is implementation choice — preserving today's
-  `_posteriorSlices` shape on the request graph is the lowest-disruption
-  option because no consumer code changes.
-- Per-scenario contexting falls out: each scenario's request graph picks
-  its own slice based on its effective DSL.
+- **Stop the persistent multi-context stash.** Remove the `_posteriorSlices`
+  write in `mappingConfigurations.ts` Flow G. The live graph no longer
+  carries the multi-context library.
+- **Live-edge contexting on `currentDSL` change** (Stage 4(e)). When the
+  user changes the live current-DSL on the canvas, re-project the
+  matching slice onto the live edge's standard schema fields:
+  `model_vars[bayesian]`, `p.posterior.*`, `p.latency.posterior.*`. This
+  is in-schema, single-context, no out-of-schema material. Driven by the
+  shared slice helper. Replaces today's `reprojectPosteriorForDsl`
+  read-from-stash with a read-from-parameter-file via the same helper.
+- **Per-scenario request-graph contexting and engorgement** at
+  analysis-prep / CF dispatch (Stage 4(a)). Each per-scenario request
+  graph copy is contexted to the scenario's effective DSL (in-schema
+  fields) and engorged with `fit_history` for `epistemic_bands.py`
+  (out-of-schema). See §3.2a for the precise distinction.
+
+Per-scenario contexting falls out from the helper accepting an effective
+DSL parameter — same code, different DSL per call.
 
 ### 6.3 Keep FE quick pass as immediate query-owned projector
 
@@ -669,9 +985,16 @@ which reads `p.mean` first for the upstream carrier — a path that
 FE quick's provisional `p.mean` writes can poison. Fix: route the
 carrier read through `resolve_model_params` (or an equivalent shared
 helper if the call surface differs), so the carrier picks the
-promoted source by the same rule as every other consumer. Other
-sites in `forecast_runtime.py`, `graph_builder.py`, and `runners.py`
-that read `p.mean` for model purposes get the same treatment.
+promoted source by the same rule as every other consumer. The
+sibling carrier-style `p.mean` reads confirmed today —
+[`graph_builder.py:202`](graph-editor/lib/runner/graph_builder.py#L202)
+(`return p.get('mean')`) and
+[`path_runner.py:105`](graph-editor/lib/runner/path_runner.py#L105)
+(`pv = float(p.get('mean') or 0.0)`) — get the same treatment.
+Stage 4(d)'s first task is an audit pass over `graph-editor/lib/runner/`
+to confirm that list is exhaustive (any further `p.get('mean')` /
+`p['mean']` site used as a model input, not as a current-answer
+display, joins it).
 
 This work lands in Stage 4(d), alongside Stage 4(c)'s narrow
 promoted writer and CF de-collapse. The two are tightly coupled:
@@ -733,12 +1056,10 @@ unchanged. The card flow under the new model is:
 3. **Analytic** — read-only display of the analytic `model_vars` entry +
    selector pin toggle. Continues to host the `t95`/`path_t95` override
    fields per doc 19 (input constraints to the analytic latency fit).
-4. **Promoted vars** — repurposed from today's "Output" card. Shows what
-   promotion wrote to `p.forecast.*` and the promoted latency block, with a
-   source-provenance badge ("source: bayesian/analytic"). Only `mean` and
-   `stdev` remain editable; everything else is `RoField`. Editing flips the
-   corresponding `*_overridden` flag and the value sticks regardless of
-   what promotion subsequently writes.
+4. **Output** — current-answer display. `mean` and `stdev` remain
+   editable; edits write `p.mean`/`p.stdev` and flip `*_overridden`,
+   sticking against subsequent automated writes (FE quick / CF / batch
+   helpers).
 
 Concrete code actions:
 
@@ -773,19 +1094,17 @@ and
 Selector pinning becomes a deliberate, separate user action via the
 Bayes/Analytic card pin toggles only.
 
-Action B7e. Repurpose the "Output" card in
-[`graph-editor/src/components/ModelVarsCards.tsx`](graph-editor/src/components/ModelVarsCards.tsx)
-as the "Promoted vars" card per the flow above. The card is retained and
-keeps `mean` and `stdev` as its editable fields with their existing
-`AutomatableField` override wrappers; only the framing and badge change.
-Remove the auto-flip-source-to-manual on first keystroke
-(`handleOutputStartEdit` at lines 154-164) — it's no longer needed because
-overtype no longer changes the source pin. Remove the
-"click-active-card-off → pin to manual" branch at lines 125-127 of the
-`handleToggle` callback; replace with "click-active-card-off → unpin
-(return to quality-gated default)". Remove the `findEntry(modelVars,
-'manual')` lookup at line 105 and any `'manual'` references in the card
-header rendering at lines 246-256.
+Action B7e. Keep the existing "Output" card in
+[`graph-editor/src/components/ModelVarsCards.tsx`](graph-editor/src/components/ModelVarsCards.tsx).
+Editable `mean`/`stdev` fields and `AutomatableField` override
+wrappers stay as today; edits write `p.mean`/`p.stdev` and flip
+`*_overridden`. Remove only the manual-source side-effects: the
+auto-flip-source-to-manual on first keystroke (`handleOutputStartEdit`
+at lines 154-164), the "click-active-card-off → pin to manual" branch
+at lines 125-127 of the `handleToggle` callback (replace with
+"click-active-card-off → unpin (return to quality-gated default)"),
+the `findEntry(modelVars, 'manual')` lookup at line 105, and any
+`'manual'` references in the card header rendering at lines 246-256.
 
 Action B7f. Cutover for in-the-wild graphs per OP1 (graceful degrade
 in the loader). See §7 OP1 for the rule.
@@ -897,13 +1216,24 @@ still in flight versus what is binding.
 **Also resolved**
 
 - **OP5 — Per-edge `model_vars[]` refresh on query-context change**.
-  RESOLVED-by-deferral. Per-scenario request graphs re-engorge on
-  every dispatch (per §3.2a / Stage 4(a)), so per-scenario refresh
-  is automatic. The live editor edge does not re-engorge on
-  context change (per §3.1) — it keeps the file→graph-time slice
-  for props-panel / BayesPosteriorCard display. User-visible
-  per-context display on the live canvas is explicitly out of
-  scope and deferred to a follow-up if it becomes a requirement.
+  RESOLVED. Two refresh paths, named distinctly per the
+  contexting/engorgement distinction (§3.2a):
+  - Per-scenario request graphs are contexted (and engorged) per
+    dispatch by Stage 4(a). Fresh slice per call, no staleness
+    possible at the BE boundary.
+  - The live editor edge re-contexts on `currentDSL` change
+    (Stage 4(e)) — re-projects `model_vars[bayesian]`, `p.posterior.*`,
+    `p.latency.posterior.*` onto the live edge from the matching
+    slice. Promotion re-runs as a downstream consequence, so
+    `p.forecast.{mean, stdev, source}` updates and the canvas
+    displays stay correct.
+
+  An earlier version of this OP marked it "resolved-by-deferral",
+  treating live-edge refresh as out of scope. That was wrong:
+  Stage 4(c) removes CF's compensating write of
+  `forecast.mean = p_mean`, so without Stage 4(e) the canvas would
+  display stale forecast on every currentDSL change. Stage 4(e) is
+  in scope; without it, Stage 4(c) is a regression.
 
 **WP8 interaction (doc 60 open item — tracked here)**. Doc 60 WP8 is the
 live narrow direct-`cohort()`-for-`p` rate-conditioning path. Its dispatch
@@ -951,9 +1281,58 @@ rule that current-answer fields are not model inputs. The narrow promoted
 probability surface (§3.2 — `p.forecast.{mean, stdev, source}`) and its
 single writer (`applyPromotion` in
 [modelVarsResolution.ts](graph-editor/src/services/modelVarsResolution.ts))
-are pinned here. Stage 4 implements the writer extension; the Stage 4
-engorgement step (§3.2a) carries the Beta-shape and predictive fields on
-the request graph rather than on the persistent surface.
+are pinned here. The fallback register in §3.8 is also pinned here: every
+fallback/degraded path is either registered with provenance and tests or
+removed. Outside-in CLI regressions that compare param-pack, CF, and
+cohort-maturity public surfaces are mandatory gates, not optional follow-up.
+At least one Stage 0 test must prove that changing scoped
+`p.evidence.{n,k}` does not change the resolved source prior when
+`model_vars[analytic]` carries a valid source-layer shape.
+Stage 4 implements the writer extension; the Stage 4 engorgement step
+(§3.2a) carries the Beta-shape and predictive fields on the request graph
+rather than on the persistent surface.
+
+Stage 0 receiving handoff receipt (from doc 73a-2, dated 27-Apr-26):
+
+- baseline receipt source: recovered run log `tmp1.log`, stored at
+  `graph-editor/lib/tests/fixtures/cf-baseline/regression-baseline.txt`
+  and mirrored at
+  `graph-editor/src/services/__tests__/__fixtures__/cf-baseline/regression-baseline.txt`;
+- baseline counts: collected 1163, passed 1122, skipped 31, failed 10;
+- current verification rerun (`pytest`): collected 1247, passed 1198,
+  skipped 31, failed 18;
+- delta: +84 collected, +76 passed, +0 skipped, +8 failed;
+- unchanged failures: all 10 baseline failing tests remain failing;
+- resolved baseline failures: none;
+- newly failing tests relative to baseline (8 total):
+  - `lib/tests/test_multihop_evidence_parity.py::TestMultihopCollapse::test_evidence_x_parity`
+  - `lib/tests/test_multihop_evidence_parity.py::TestMultihopCollapse::test_evidence_y_parity`
+  - `lib/tests/test_v2_v3_parity_outside_in.py::TestV2V3ParityOutsideIn::test_midpoint_parity_per_tau[single-hop-cohort-wide]`
+  - `lib/tests/test_v2_v3_parity_outside_in.py::TestV2V3ParityOutsideIn::test_v2_returns_non_vacuous_data[single-hop-cohort-narrow]`
+  - `lib/tests/test_v2_v3_parity_outside_in.py::TestV2V3ParityOutsideIn::test_midpoint_parity_per_tau[multi-hop-cohort-wide]`
+  - `lib/tests/test_v2_v3_parity_outside_in.py::TestV2V3ParityOutsideIn::test_midpoint_parity_per_tau[multi-hop-cohort-narrow]`
+  - `lib/tests/test_v2_v3_parity_outside_in.py::TestV2V3ParityOutsideIn::test_midpoint_parity_per_tau[single-hop-window]`
+  - `lib/tests/test_window_cohort_convergence.py::test_multi_hop_composition[synth-mirror-4step:c-d-e]`
+
+Stage ownership and gate assignment for the 8 new failures:
+
+- `test_multihop_evidence_parity.py::*` and
+  `test_window_cohort_convergence.py::test_multi_hop_composition[...]`
+  are assigned to Stage 4(d) runner-consumer audit plus Stage 2 resolver
+  fallback removal, because they expose model-input collapse between promoted
+  source and current-answer evidence families.
+- `test_v2_v3_parity_outside_in.py::*` is assigned to Stage 4(d)
+  runner-consumer audit and Stage 4(a) contexting/engorgement parity, with
+  Stage 2 analytic-source/fallback correction as prerequisite where the
+  failures depend on current-answer leakage into source-prior resolution.
+
+Expected-versus-unexpected classification for this receipt:
+
+- unexpected drift in baseline failure identity: none (all 10 baseline reds are
+  unchanged);
+- new red tests: expected for this handoff, because they come from additional
+  parity/convergence suites now collected in the expanded run and they target
+  exactly the unresolved Stage 2 / Stage 4 contracts this plan owns.
 
 Stage 1. Complete Work package A. Verify absence of removed BE-topo
 surfaces, clean residue (fixtures, docs, CLI noise), and rewrite any FE-only
@@ -961,14 +1340,32 @@ contract tests that still describe the BE-topo era. Result is a known-clean
 baseline for Work package B.
 
 Stage 2. Land the analytic semantic transition (Decision 13). Open
-point 8 is RESOLVED — no behavioural change is required. The
-substantive work is documentation cleanup: rewrite the comment block
-in `model_resolver.py:100-108` so a reader does not infer "analytic
-is unsafe to condition on", and rename `alpha_beta_query_scoped` to
-a name that conveys "which subset-blend regime applies" (e.g.
-`evidence_already_aggregated`). The earlier "shadow implementation"
-framing is retired. This stage may run in parallel with doc 73a work
-but is a hard prerequisite for Stage 3.
+point 8 is RESOLVED as a real behaviour change, not documentation cleanup.
+Implement the FE topo analytic source mirror contract in §3.9:
+
+- extend the TypeScript model-vars schema so `model_vars[analytic].probability`
+  can carry window-family and cohort-family Beta shape and source mass;
+- write window-family `alpha`, `beta`, and source mass from aggregate
+  window-family analytic evidence;
+- write cohort-family `cohort_alpha`, `cohort_beta`, and source mass from
+  aggregate cohort-family analytic evidence when available;
+- omit analytic predictive probability fields unless a principled predictive
+  model is introduced;
+- preserve existing edge-level and path-level analytic latency fields.
+
+Remove the resolver path that treats current-answer evidence
+(`p.evidence.{n,k}`) as prior concentration. Make the analytic source resolve
+from `model_vars[analytic]` / promoted source-layer fields only. If analytic
+has only an aggregate point estimate, use a registered degradation path with
+named prior strength and diagnostics, or return no-prior/skipped explicitly.
+Rename or remove `alpha_beta_query_scoped` only after the runtime no longer
+needs it to compensate for current-answer evidence leakage. This stage may
+run in parallel with doc 73a work but is a hard prerequisite for Stage 3.
+
+Stage 2 also reconciles `STATS_SUBSYSTEMS.md` and
+`FE_BE_STATS_PARALLELISM.md` so they no longer contradict the implemented
+Step 1 / Step 2 split, resolver fallback removal, or analytic window/cohort
+source mirror contract.
 
 Stage 3. Remove `manual` from source taxonomy and decouple output overtype
 from source-ledger and selector writes (Actions B7a–B7g, B8c, B8d).
@@ -978,10 +1375,11 @@ exists as a source; analytic is safe as a generator-owned aggregate; output
 overtype writes only the value plus its `*_overridden` flag. Doc 73a
 acceptance gates must pass before Stage 3 begins.
 
-Stage 4. **Slice material moves from persistent to transient.** The core
-defect — `_posteriorSlices` as a durable in-memory tumour on the live
-graph — is closed in this stage. Three coordinated pieces, intended to
-land together so the cutover is one observable diff per scenario:
+Stage 4. **Slice material moves from persistent to transient; live edge
+re-contexts on currentDSL change.** The core defect — `_posteriorSlices`
+as a durable in-memory multi-context library on the live graph — is
+closed in this stage, alongside the live-edge contexting refresh that
+keeps the canvas correct on currentDSL change.
 
 **Stage 4 entry preconditions** — open points to settle before Stage 4:
 
@@ -990,27 +1388,45 @@ land together so the cutover is one observable diff per scenario:
   for "what does `applyPromotion` write when the pinned source is
   not available for this scenario / edge".
 
-(Open point 5 is resolved-by-deferral; see §7.)
+(Open point 5 is resolved by Stage 4(e); see §7.)
 
-The four pieces:
+The five pieces:
 
-(a) **Engorgement at analysis-prep time, mirroring CF's existing pattern.**
+(a) **Per-scenario request-graph contexting + engorgement at
+analysis-prep.**
 [analysisComputePreparationService](graph-editor/src/services/analysisComputePreparationService.ts)
-gains a slice-engorgement step modelled on
+gains a request-graph build step modelled on
 [buildConditionedForecastGraphSnapshot](graph-editor/src/lib/conditionedForecastGraphSnapshot.ts)
 + [bayesEngorge.ts](graph-editor/src/lib/bayesEngorge.ts): builds an
-in-memory request graph copy and writes the slice fields BE consumers
-read (Beta-shape `alpha`/`beta`/`alpha_pred`/`beta_pred`/`n_effective`,
-latency posterior block, fit_history) onto each edge. The transient
-shape preserves today's read paths — keeping the `_posteriorSlices`
-field name and structure on the request graph means no BE consumer
-code change is required. Per-scenario contexting falls out: each
-scenario's effective DSL drives a different slice selection; same
-derivation function used by FE and CLI. The exact-context match is
-the only allowed match — no cross-context fallback at the bayesian-
-source layer; `resolvePosteriorSlice`'s context-stripping fallback at
+in-memory request graph copy, then for each edge:
+
+- **Contexting (i)** — pick the slice from the parameter file matching
+  the scenario's effective DSL and project it onto the standard schema
+  fields: `model_vars[bayesian]`, `p.posterior.*`, `p.latency.posterior.*`.
+  All BE consumers that read Beta-shape (`alpha`, `beta`, `alpha_pred`,
+  `beta_pred`, `n_effective`, `cohort_*`, `window_*`) read those from
+  the posterior block, so contexting alone is sufficient for them
+  (verified by grep against `lib/runner/`).
+- **Engorgement (ii)** — write the out-of-schema field
+  `_posteriorSlices.fit_history` for the matching slice, used by
+  `epistemic_bands.py:148-149` (the only BE consumer that reads
+  out-of-schema slice material).
+
+The exact-context match is the only allowed match — no cross-context
+fallback at the bayesian-source layer; `resolvePosteriorSlice`'s
+context-stripping fallback at
 [posteriorSliceResolution.ts:167-171](graph-editor/src/services/posteriorSliceResolution.ts#L167-L171)
 is removed at source or guarded against at the seam.
+
+**CLI subtask (binding for Stage 6 parity)**: the same contexting +
+engorgement step must be wired into the CLI's analysis-prep code path,
+not just the FE TS one. Today the CLI loads graphs through
+[`graph-editor/src/cli/aggregate.ts`](graph-editor/src/cli/aggregate.ts) /
+[`analyse.ts`](graph-editor/src/cli/commands/analyse.ts) and shares
+`analysisComputePreparationService` with the FE; that sharing is the
+binding contract — both must call the slice helper with the scenario's
+effective DSL before dispatching to the BE. Without this, CLI requests
+go out with stale slices and Stage 6's CLI/FE parity gate fails.
 
 (b) **Stop persistent stash writes.** Remove the `_posteriorSlices`
 write from
@@ -1019,8 +1435,7 @@ Flow G. The Flow F single-context `posterior.*` / `latency.posterior.*`
 projection on the live edge stays — it is the props-panel and
 BayesPosteriorCard display source for the active edge in the live
 editor's current context. Replace `reprojectPosteriorForDsl`'s read
-from the persistent stash with a call to the engorgement helper from
-(a).
+from the persistent stash with a call to the shared slice helper.
 
 (c) **Narrow promoted writer extension and CF de-collapse.**
 `applyPromotion` in
@@ -1038,21 +1453,69 @@ reading `p.mean` first and instead routes through
 `resolve_model_params` in
 [model_resolver.py](graph-editor/lib/runner/model_resolver.py), so
 the carrier picks the promoted source by the same rule as every
-other consumer. Sibling sites in `forecast_runtime.py`,
-`graph_builder.py`, and `runners.py` that read `p.mean` for model
-purposes get the same treatment. See §6.5 for the rule and the
-drift-prevention principle. This is the read-side counterpart to
-(c) — the promoted surface comes into existence in (c); carriers
-start honouring it in (d). Slice-material readers (the BE consumers
-served by the engorgement in (a)) are not touched here; they keep
-their existing read paths.
+other consumer. The sibling carrier-style `p.mean` reads confirmed
+today — [`graph_builder.py:202`](graph-editor/lib/runner/graph_builder.py#L202)
+and [`path_runner.py:105`](graph-editor/lib/runner/path_runner.py#L105) —
+get the same treatment. Stage 4(d) opens with an audit pass over
+`graph-editor/lib/runner/` to confirm that list is exhaustive
+(`p.get('mean')` / `p['mean']` reads used as model inputs, not as
+current-answer display, all join). See §6.5 for the rule and the
+drift-prevention principle. Slice-material readers (the BE consumers
+served by the contexting/engorgement in (a)) are not touched here;
+they keep their existing read paths.
 
-By stage end: the live graph no longer carries `_posteriorSlices`; BE
-slice-material consumers receive the same data (in the same shape)
-on each request graph from per-call engorgement; the narrow promoted
-surface is populated and stable; the carrier read no longer treats
-`p.mean` as model input; CF and FE display modes are correctly
-separated.
+Stage 4(d)'s audit also covers all registered fallback paths in Python
+forecast runners. Any path that reads `p.evidence.{n,k}`, `p.mean`, or other
+current-answer fields as model input is either removed or reclassified as a
+documented display/current-answer consumer. No silent weak-prior or empirical
+fallback may survive this audit without provenance in the response payload or
+diagnostics and an outside-in regression.
+
+(e) **Live-edge contexting on `currentDSL` change.** When the user
+changes the live current-DSL on the canvas (the
+[`useDSLReaggregation`](graph-editor/src/hooks/useDSLReaggregation.ts)
+trigger that already exists), re-context the live edge: re-project the
+matching slice onto `model_vars[bayesian]`, `p.posterior.*`, and
+`p.latency.posterior.*`, using the same shared slice helper as (a) but
+with the live edge as the target rather than a request-graph copy.
+Promotion re-runs as a downstream consequence (it already runs on
+`model_vars` mutation), so the narrow promoted surface
+(`p.forecast.{mean, stdev, source}`) updates automatically. Without
+this piece, after (c) lands the canvas displays that read the
+promoted surface (`'f'` mode chart, ModelRateChart, edge labels)
+would go stale on every currentDSL change because today's compensating
+CF write of `forecast.mean = p_mean` is removed by (c).
+
+This is contexting only — in-schema field projection on the live edge.
+It is not engorgement (no out-of-schema fields are added; the live edge
+never crosses a process boundary).
+
+**Share-bundle / share-chart hydration coverage.** The hooks
+[`useShareBundleFromUrl.ts`](graph-editor/src/hooks/useShareBundleFromUrl.ts)
+and [`useShareChartFromUrl.ts`](graph-editor/src/hooks/useShareChartFromUrl.ts)
+restore graph-level `baseDSL` / `currentQueryDSL` from the share
+payload but do not themselves re-project edge posteriors. The
+re-projection happens later at analysis-prep time via
+`reprojectPosteriorForDsl` in
+[`analysisComputePreparationService.ts`](graph-editor/src/services/analysisComputePreparationService.ts),
+which today reads from the persistent `edge.p._posteriorSlices`
+stash. **Once Stage 4(b) removes that stash, share-restore breaks
+unless the Stage 4(a) rewiring of `reprojectPosteriorForDsl` to
+read from the parameter file via the shared slice helper is in
+place.** Coverage is therefore transitive through Stage 4(a) — not
+through the hooks themselves. A dedicated regression test
+(`shareRestorePosteriorRehydration.test.ts`, see doc 73d) pins
+this so the dependency cannot rot silently.
+
+By stage end: the live graph no longer carries the multi-context
+`_posteriorSlices` library; the live edge always carries the
+single slice matching the current DSL (refreshed by (e) on change);
+per-scenario request graphs are contexted to each scenario's effective
+DSL with `fit_history` engorged for `epistemic_bands.py`; the narrow
+promoted surface is populated and stable; the carrier read no longer
+treats `p.mean` as model input; CF and FE display modes are correctly
+separated; share-bundle / share-chart restore picks up the right slice
+on hydration.
 
 Stage 5. **Lock-respecting writer discipline.** Bring the lock-respecting
 writer set into checking `p.mean_overridden` / `p.stdev_overridden`
@@ -1180,34 +1643,43 @@ this plan; they must be reconciled before implementation begins.
 
 - Pack field membership, compositor mechanics, CF supersession, CF
   response → graph apply mapping (the §10 table), `awaitBackgroundPromises`
-  orchestration, the request-graph engorgement pattern (rule §3.9 in
-  doc 73a — applies to both CF and analysis-prep engorgement), and
-  CLI/FE prepared-graph alignment — owned by doc 73a.
+  orchestration, the request-graph build pattern (rule §3.9 in
+  doc 73a — covers both CF dispatch and analysis-prep request graphs;
+  this plan's §3.2a refines what those request graphs carry per the
+  contexting/engorgement distinction), and CLI/FE prepared-graph
+  alignment — owned by doc 73a.
 - Source taxonomy, selector mechanics, promoted-layer field set
   (narrow), lock discipline on the live edge, removal of `manual` as a
   source, analytic semantic transition, decoupling of overtype from
-  source-ledger writes, **slice material relocation from persistent
-  stash to per-call engorgement** (Stage 4 in this plan), the
-  associated cleanup of `reprojectPosteriorForDsl`, and **carrier
-  consumer reads via the shared resolver** (Stage 4(d) — closes the
-  `p.mean`-as-model-input defect) — owned by this plan. Fit-history
-  engorgement for `epistemic_bands.py` is included in Stage 4(a)'s
-  engorgement scope.
+  source-ledger writes, **per-scenario request-graph contexting +
+  `fit_history` engorgement** (Stage 4(a)), **stop persistent stash
+  writes** (Stage 4(b)), **narrow promoted writer + CF de-collapse**
+  (Stage 4(c)), **carrier consumer reads via the shared resolver**
+  (Stage 4(d)), **live-edge re-contexting on currentDSL change**
+  (Stage 4(e) — closes the canvas-display regression that 4(c) would
+  otherwise introduce), and the associated cleanup of
+  `reprojectPosteriorForDsl` — owned by this plan. The CLI subtask of
+  Stage 4(a) (wiring contexting/engorgement into the CLI's
+  `analysisComputePreparationService` consumer) is binding for
+  doc 73a Stage 6's CLI/FE parity gate.
 
 **Conflicts**:
 
-1. **Stage references in doc 73a → this plan**. Under the simplified
-   structure: slice-material relocation (engorgement at analysis-prep
-   + stop persistent stash) + narrow promoted writer + CF de-collapse
-   + carrier consumer read via shared resolver → Stage 4 (four
-   pieces: a/b/c/d); lock-respecting writer discipline → Stage 5;
-   residual cleanup → Stage 6. The slice-material readers do not
-   migrate (engorgement preserves their read paths); the only
-   consumer change is the carrier read in (d), which routes through
-   the shared `resolve_model_params` so it honours the promotion
-   decision. Any surviving `5a`/`5b`/`5c` citation in doc 73a, or
-   any citation of "first consumer switch" / "consumer migration"
-   against this plan, is a reconciliation defect.
+1. **Stage references in doc 73a → this plan**. Under the current
+   structure: per-scenario request-graph contexting + `fit_history`
+   engorgement at analysis-prep + stop persistent stash + narrow
+   promoted writer + CF de-collapse + carrier consumer read via shared
+   resolver + live-edge re-contexting on currentDSL change → Stage 4
+   (five pieces: a/b/c/d/e); lock-respecting writer discipline →
+   Stage 5; residual cleanup → Stage 6. The slice-material BE readers
+   do not migrate (per-scenario contexting supplies their fields
+   in-schema); the only consumer change is the carrier read in (d),
+   routed through `resolve_model_params` to honour the promotion
+   decision. The CLI's analysis-prep code path is a binding subtask
+   of (a) — without it, Stage 6's CLI/FE parity gate fails. Any
+   surviving `5a`/`5b`/`5c` citation in doc 73a, or any citation of
+   "first consumer switch" / "consumer migration" against this plan,
+   is a reconciliation defect.
 2. **`p_sd → p.stdev` persistence** — RESOLVED (open point 9; CF
    writes `p_sd → p.stdev`; doc 73a §10 reflects).
 3. **`applyBatchLAGValues` ownership** — RESOLVED. Doc 73a §5 phasing
@@ -1243,13 +1715,34 @@ pulled from the implemented types at that point.
   edge for display; full slice library lives in the parameter file,
   not on the graph) and `analytic` (FE-topo-derived). User authoring
   does not write the ledger.
-- **Engorged request material** (transient, per-call): at CF dispatch
-  and analysis-prep, the request-graph builder picks the parameter
-  file slice that matches each scenario's effective DSL and writes
-  the depth fields BE consumers need (Beta-shape, latency posterior,
-  fit_history) onto an in-memory copy of the graph. The transient
-  shape preserves today's read paths — no consumer code changes.
-  Per-scenario contexting falls out from per-scenario DSL.
+- **Live-edge contexting** (in-schema, on `currentDSL` change): the
+  shared slice helper picks the matching slice from the parameter
+  file and re-projects `model_vars[bayesian]`, `p.posterior.*`, and
+  `p.latency.posterior.*` on the live edge. No out-of-schema fields
+  are written. Promotion re-runs as a downstream consequence and
+  refreshes the narrow promoted surface.
+- **Per-scenario request graphs** (transient, per-call) — built at
+  CF dispatch and analysis-prep, with two operations on each edge of
+  the request-graph copy:
+  - **Contexting** (in-schema): same slice helper as the live edge,
+    applied to each scenario's effective DSL; sets
+    `model_vars[bayesian]`, `p.posterior.*`, `p.latency.posterior.*`.
+    All Beta-shape and predictive fields BE consumers read
+    (`alpha`, `beta`, `alpha_pred`, `beta_pred`, `n_effective`,
+    `cohort_*`, `window_*`) reach the BE via this in-schema posterior
+    projection.
+  - **Engorgement** (out-of-schema, all bayes-related; nothing
+    written when active source is analytic): writes `_bayes_evidence`
+    (file evidence including cohort daily-row time series — consumed
+    by CF for IS-conditioning and by `api_handlers.py:2099` for
+    snapshot supplementation), `_bayes_priors` (bayesian prior
+    material consumed by CF as the IS prior), and
+    `_posteriorSlices.fit_history` (per-`asat` fit history consumed
+    by `epistemic_bands.py`). The first two are engorged today by
+    `bayesEngorge.ts`; the third is added in Stage 4(a) because
+    Stage 4(b) removes the persistent stash that supplies it today.
+    DB-snapshot evidence is not engorged — the BE queries the DB
+    directly. The graph copy is discarded after the call.
 - **Promoted layer** (`p.forecast.{mean, stdev, source}` plus promoted
   latency block, persistent): the narrow display surface for `'f'`
   mode and the FE charts. Written only by `applyPromotion`.
@@ -1266,9 +1759,8 @@ pulled from the implemented types at that point.
 - **FE quick pass**: produces `model_vars[analytic]`, reads promoted
   layer for forecast contributions, aggregates evidence, writes
   provisional current-answer scalars.
-- **CF**: receives engorged slice material on the request graph,
-  IS-conditions on query-scoped evidence, writes current-answer
-  scalars only.
+- **CF**: receives a contexted+engorged request graph, IS-conditions
+  on query-scoped evidence, writes current-answer scalars only.
 - **Carrier consumers** (`forecast_state.py::_resolve_edge_p` and
   any sibling reach/carrier sites): read model inputs only via the
   shared `resolve_model_params` resolver, never `p.mean` directly.

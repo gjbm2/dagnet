@@ -287,6 +287,25 @@ Not any more. `run_conversion_funnel` calls the CF machinery directly — **one 
 No. Bayes produces an **aggregate** posterior from the training corpus; that's durable. The BE CF pass does query-time IS conditioning of **draws** from that posterior, producing a conditioned posterior-representation (mean, SD) written to `p.mean, p.sd`. The bayesian α/β themselves don't change. The engine additionally applies a mass-weighted blend (doc 52) before return, mixing the IS-conditioned draws with the unconditioned draws at ratio `(1 − r) : r` where `r = m_S / m_G` (selected Cohort mass over compiler training mass on the matching temporal axis). This corrects the systematic over-concentration that arises when the query's selected Cohorts overlap the compiler's training set. See [project-bayes/52-subset-conditioning-double-count-correction.md](../project-bayes/52-subset-conditioning-double-count-correction.md).
 
 **Confusion 7: "`model_vars[analytic].alpha, beta` can be used as a prior"**
+
+> **Status note (26-Apr-26)**: this confusion describes today's
+> code accurately, but the underlying behaviour is a documented
+> defect against design intent. The FE topo pass performs **two
+> logically distinct steps** (aggregate model var generation,
+> then a scoped quick-blend) — see
+> [FE_BE_STATS_PARALLELISM.md "Two logical steps in one pass"](FE_BE_STATS_PARALLELISM.md)
+> for the durable framing. Today's code conflates them by writing
+> a query-scoped Jeffreys posterior to `model_vars[analytic].α,β`
+> instead of an aggregate Beta fit; the
+> `ResolvedModelParams.alpha_beta_query_scoped` switch and the
+> `is_cf_sweep_eligible == False` / `cf_mode = 'analytic_degraded'`
+> branches exist to compensate for that conflation. Doc 73b
+> Decision 13 and Stage 4(c)–(d) remove the conflation, after
+> which `model_vars[analytic].α,β` will be aggregate on the same
+> footing as the bayesian equivalent and CF will run uniformly
+> for every promoted source. Until then, the rest of this
+> confusion is the rule consumers must follow.
+
 It can't — it's already a posterior, and a query-scoped one. The FE
 topo pass derives `α, β` from **query-scoped** `total_k, total_n` as a
 Jeffreys posterior (`α = k+1, β = n-k+1`). Using it as a prior for a

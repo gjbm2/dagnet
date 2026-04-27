@@ -81,6 +81,7 @@ type ChartRecipeScenarioLike = {
   name?: string;
   colour?: string;
   visibility_mode?: ScenarioVisibilityMode;
+  graph?: Graph | null;
   params?: Record<string, any>;
 };
 
@@ -177,6 +178,11 @@ type CustomParams = SharedParams & {
 
 export type PrepareAnalysisComputeInputsParams = LiveParams | CustomParams;
 
+function hasGraphShape(graph: unknown): graph is Graph {
+  const value = graph as any;
+  return !!(value && Array.isArray(value.nodes) && Array.isArray(value.edges));
+}
+
 function summarisePrepareParams(params: PrepareAnalysisComputeInputsParams): Record<string, unknown> {
   return {
     mode: params.mode,
@@ -197,6 +203,11 @@ function summarisePrepareParams(params: PrepareAnalysisComputeInputsParams): Rec
       : undefined,
     customScenarioIds: params.mode === 'custom'
       ? (params.customScenarios || []).map((scenario) => scenario.scenario_id)
+      : undefined,
+    customScenarioGraphIds: params.mode === 'custom'
+      ? (params.customScenarios || [])
+          .filter((scenario) => hasGraphShape(scenario.graph))
+          .map((scenario) => scenario.scenario_id)
       : undefined,
   };
 }
@@ -350,7 +361,7 @@ export async function prepareAnalysisComputeInputs(
   logChartReadinessTrace('AnalysisPrepare:start', summarisePrepareParams(params));
 
   const graph = params.graph;
-  if (!(graph && Array.isArray((graph as any).nodes) && Array.isArray((graph as any).edges))) {
+  if (!hasGraphShape(graph)) {
     return logBlockedResult(params, { status: 'blocked', reason: 'graph_not_ready' });
   }
 
@@ -431,14 +442,17 @@ export async function prepareAnalysisComputeInputs(
     // index 1 as end — "from base TO variation".
     const builtScenarios = customScenarios.map((scenario) => {
       const visibilityMode = scenario.visibility_mode || 'f+e';
+      const hasScenarioGraph = hasGraphShape(scenario.graph);
       let scenarioGraph: Graph = graph;
-      // Apply captured graph parameter overrides (from Live-mode composition).
-      // Without this, Custom mode would use the base graph and produce different
-      // outcomes than Live mode for scenarios with parameter overlays.
-      if (scenario.params && (scenario.params.edges || scenario.params.nodes)) {
+      if (hasScenarioGraph) {
+        scenarioGraph = scenario.graph as Graph;
+      }
+      // Prefer caller-provided scenario graph when present. Params remain
+      // supported for legacy recipe callers that still pass overlay deltas.
+      if (!hasScenarioGraph && scenario.params && (scenario.params.edges || scenario.params.nodes)) {
         scenarioGraph = applyComposedParamsToGraph(scenarioGraph, scenario.params as any);
       }
-      if (scenario.scenario_id === 'current' && params.frozenWhatIfDsl) {
+      if (!hasScenarioGraph && scenario.scenario_id === 'current' && params.frozenWhatIfDsl) {
         scenarioGraph = applyWhatIfToGraph(scenarioGraph, params.frozenWhatIfDsl) as Graph;
       }
       scenarioGraph = applyProbabilityVisibilityModeToGraph(scenarioGraph, visibilityMode);

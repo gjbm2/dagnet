@@ -1129,3 +1129,92 @@ kept as the per-layer reasoning archive only.
 | 7 | `liveScenarioConditionedForecastRoundtrip.spec.ts` | Playwright | Real-browser end-to-end |
 | 7 | (no separate cross-cutting bundle) | n/a | The doc 73d surviving suite, run as a CI sequence, is the regression barrier. No omnibus test file. |
 
+---
+
+## Appendix Z — Post-completion notes (forward-reference only, 26-Apr-26)
+
+**Status of this appendix.** The body of this plan above is the
+record of doc 73a as implemented and is not changed by this
+appendix. The notes below were written after 73a's completion to
+keep the cross-references to doc 73b accurate as that plan's
+framing tightened during its own review. They are reference
+annotations only — they do not modify, supersede, or invalidate any
+section above, any stage, any gate, any test spec, or any handoff
+boundary defined in 73a. If an ambiguity arises between the body
+and this appendix, the body wins.
+
+These notes restate, in the body's own terms, the same handoff
+boundary already documented above; readers do not need them to
+understand 73a as shipped. Their value is forward — when reading
+73a alongside the latest revision of 73b, the terminology lines up.
+
+### Z.1 Contexting vs engorgement (terminology used in 73b)
+
+Doc 73b's revised §3.2a / Decision 15 splits what 73a referred to
+generically as "request-graph engorgement" (rule 9, §15A A10, §10,
+§8 pack contract) into two operations on the request-graph copy:
+
+- **Contexting** — projection of the matching parameter-file slice
+  onto the standard schema fields the live graph already
+  recognises: `model_vars[bayesian]`, `p.posterior.*`,
+  `p.latency.posterior.*`. In-schema only.
+- **Engorgement** — writing of out-of-schema fields the BE consumes
+  but the live graph never holds. Today's set, all bayes-related:
+  `_bayes_evidence`, `_bayes_priors`, and (added by 73b Stage 4(a))
+  `_posteriorSlices.fit_history`.
+
+Where 73a's body says "engorgement" in handoff text (rule 9, §2
+defect 3c, §8 pack contract Beta-shape note, §10 dispersion-carrier
+paragraph, §15A A10, §15B B1), the corresponding 73b operation is
+contexting for in-schema fields and engorgement for out-of-schema
+fields. 73a's prescribed work does not depend on which of the two
+produces a given field — that distinction is enforced inside doc
+73b's territory.
+
+### Z.2 Carrier-read site list (73b Stage 4(d))
+
+73a §15A A10 names `_resolve_edge_p` in
+[`forecast_state.py`](graph-editor/lib/runner/forecast_state.py)
+as the one carrier-style consumer that changes under 73b Stage
+4(d). The same Stage 4(d) audit confirmed today by file inspection
+that two sibling sites read `p.mean` as a model input and join the
+same rerouting:
+
+- [`graph_builder.py:202`](graph-editor/lib/runner/graph_builder.py#L202)
+  — `return p.get('mean')`
+- [`path_runner.py:105`](graph-editor/lib/runner/path_runner.py#L105)
+  — `pv = float(p.get('mean') or 0.0)`
+
+The §15A A10 boundary statement is not narrowed by this — 73a
+still does not modify any of these sites; doc 73b owns the
+rerouting. Listed here only so a future reader sees the actual
+audited site list rather than the single-site shorthand.
+
+### Z.3 Live-edge re-context on currentDSL change (73b Stage 4(e))
+
+After 73a was completed, doc 73b added Stage 4(e) — a re-context
+of the live edge's `model_vars[bayesian]` / `p.posterior.*` /
+`p.latency.posterior.*` whenever `currentDSL` changes — to prevent
+canvas displays going stale once Stage 4(c) removes CF's
+compensating write of `forecast.mean = p_mean`. §15B's "doc 73b
+Stage 4 acceptance gate" precondition implicitly covers this; no
+73a-side gate is added.
+
+### Z.4 CLI subtask of 73b Stage 4(a)
+
+73a §15B B1 requires FE/CLI byte-identical prepared scenario
+graphs. Doc 73b Stage 4(a) splits out a CLI subtask (wiring the
+contexting + engorgement step into the CLI's
+`analysisComputePreparationService` consumer) as a binding
+precondition for B1. Same precondition the body already states
+("after doc 73b Stage 4 acceptance gate has landed"); flagged
+here for traceability when reading the two plans side by side.
+
+### Z.5 Share-bundle / share-chart hydration (73b Stage 4(a) coverage)
+
+Doc 73b §4(e) clarifies that share-restore depends transitively on
+73b Stage 4(a)'s rewiring of `reprojectPosteriorForDsl`
+(read-from-parameter-file instead of read-from-stash), pinned by
+73d's `shareRestorePosteriorRehydration.test.ts`. No 73a-side
+change; noted here so the dependency is traceable from this plan.
+

@@ -12,6 +12,7 @@
 import type { Graph } from '../types';
 import { fetchItems, getItemsForFromFileLoad } from '../services/fetchDataService';
 import type { FetchMode } from '../services/fetchDataService';
+import { createConditionedForecastSupersessionState } from '../services/conditionedForecastSupersessionState';
 import type { GraphBundle } from './diskLoader';
 import { log, isDiagnostic } from './logger';
 
@@ -22,6 +23,8 @@ export interface AggregateOptions {
   mode?: FetchMode;
   /** Workspace identity for snapshot-backed CLI passes (CF regime discovery). */
   workspace?: { repository: string; branch: string };
+  /** Scenario identity threaded to CF supersession logic. */
+  scenarioId?: string;
 }
 
 /**
@@ -65,6 +68,7 @@ export async function aggregateAndPopulateGraph(
   };
 
   const mode = options?.mode ?? 'from-file';
+  const cfSupersessionState = createConditionedForecastSupersessionState();
 
   // Run the exact same fetch pipeline the browser uses.
   // awaitBackgroundPromises: true — the CLI wants deterministic final
@@ -79,6 +83,8 @@ export async function aggregateAndPopulateGraph(
         suppressMissingDataToast: true,
         suppressBatchToast: true,
         awaitBackgroundPromises: true,
+        scenarioId: options?.scenarioId,
+        cfSupersessionState,
         workspace: options?.workspace,
       },
       currentGraph,

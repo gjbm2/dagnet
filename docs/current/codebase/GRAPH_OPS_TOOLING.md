@@ -311,6 +311,202 @@ JSON cache to `~/.cache/dagnet-cli/`. Subsequent calls check source
 file mtimes — if unchanged, load from cache. Pass `--no-cache` to
 bypass.
 
+### Long-lived daemon mode
+
+When the same CLI command is invoked repeatedly in a session — most
+notably from a pytest run that fires dozens of `analyse` / `param-pack`
+calls — the per-call cost of starting Node, loading `tsx`, importing
+the FE module graph, and seeding `fake-indexeddb` dominates. The
+daemon mode amortises that cost by serving multiple requests from a
+single long-lived `tsx` process.
+
+Entry point: `graph-editor/src/cli/daemon.ts`. Wrapper:
+`graph-ops/scripts/daemon.sh`. Started directly it reads
+newline-delimited JSON requests on stdin and writes newline-delimited
+JSON responses on stdout. The first stdout line is a ready handshake
+(`{"ready": true, "pid": <pid>}`); requests follow.
+
+The daemon serves the **same** `runAnalyse()` / `runParamPack()`
+functions the standalone CLI calls. There is no parallel
+implementation; daemon-mode is just a different way of dispatching the
+same code. The Python client at
+`graph-editor/lib/tests/_daemon_client.py` provides
+`DaemonClient.start()`, `client.call_json("analyse", args)`, and a
+process-wide `get_default_client()` lazy singleton with `atexit`
+shutdown.
+
+Performance: on `graph-editor/lib/tests/test_cohort_factorised_outside_in.py`
+the daemon path runs in ~62s versus ~129s for the per-call subprocess
+path — a 2.09× speedup, ~67s saved per session. The win scales linearly
+with the number of CLI calls in the session.
+
+#### Enabling and disabling the daemon
+
+Tests under `graph-editor/lib/tests/` route through the daemon
+**by default**. The toggle lives in
+`_daemon_client.py:get_default_client()` and is controlled by the
+`DAGNET_USE_DAEMON` environment variable:
+
+- `DAGNET_USE_DAEMON=1` (default, also any value other than `"0"`):
+  the cached test helpers `_run_analyse_cached` and
+  `_run_param_pack_cached` lazy-start a daemon on first call and reuse
+  it for the rest of the session. The daemon is shut down via
+  `atexit` when pytest exits.
+- `DAGNET_USE_DAEMON=0`: the helpers fall back to the per-call
+  `subprocess.run(['bash', 'analyse.sh', …])` path. This is the
+  escape hatch — use it to bisect a daemon-specific suspicion or to
+  re-run the existing parity proof.
+
+Run interactively from a shell with `bash graph-ops/scripts/daemon.sh`
+(reads NDJSON requests on stdin). Useful for debugging the protocol
+itself; not the normal mode of use.
+
+The idle timeout is configurable via `DAGNET_DAEMON_IDLE_MS`
+(default 300000 ms = 5 minutes). The daemon exits cleanly when no
+request has been seen for that interval, so an interrupted pytest run
+does not leave it dangling.
+
+#### Lifecycle, scope, and the code-change staleness window
+
+The daemon's life is **strictly bounded by the pytest process that
+spawned it**. Each `pytest` invocation gets its own Python process,
+its own `_default_client` singleton, and therefore its own daemon.
+Daemons do not persist across pytest runs and do not share state
+between two pytest invocations running in parallel.
+
+Three exit paths, in order of likelihood:
+
+1. **`atexit` shutdown (normal)** — when pytest finishes (success,
+   failure, or any handled exception), Python's atexit handlers fire,
+   `_shutdown_default_client()` sends `{"command": "quit"}`, and waits
+   up to 10 seconds. If the daemon doesn't respond in time it falls
+   through to `proc.kill()` + `proc.wait(timeout=5)`. The daemon
+   always dies, gracefully or otherwise.
+2. **stdin EOF** — when the parent's pipe closes (e.g. a child
+   subprocess of pytest holding the client exits), the daemon's
+   `process.stdin.on('end', …)` handler drains the queue and exits.
+3. **Idle timeout** — safety net for orphaned daemons (e.g. pytest
+   killed via SIGKILL where atexit cannot run). Catches the daemon
+   within `DAGNET_DAEMON_IDLE_MS` of the last request.
+
+After pytest exits, the daemon is gone. The next `pytest` invocation
+starts a brand-new daemon, with a brand-new module graph imported
+from disk. Edits made to `src/cli/*` or any imported service between
+two pytest runs are picked up on the next run with no special action.
+
+**The one staleness window: edits during a single pytest run.** The
+daemon imports `commands/analyse.ts`, `commands/paramPack.ts`, and
+their full transitive module graph (`bootstrap.ts`, `src/services/*`,
+`src/lib/*`) once at boot. After that, ESM module cache holds the
+compiled-in versions; `tsx` is not HMR-capable in CLI mode. So if
+you edit a CLI- or service-layer source file *while a pytest run is
+mid-flight*, requests still in the queue will be served by the
+already-loaded code and silently produce results from your old
+implementation. There is no current detection mechanism — the daemon
+will not warn you.
+
+In practice the window is narrow (pytest runs are short, intra-run
+editing is uncommon), but the failure mode is invisible: plausible
+results from stale code. Two ways to recover when in doubt:
+
+- **Re-run pytest** — fresh daemon, fresh module graph.
+- **`DAGNET_USE_DAEMON=0`** — every call is a fresh `npx tsx`, so
+  edits are always picked up.
+
+If your workflow involves frequent edit-and-re-run cycles, prefer
+short pytest runs over leaving a session open across edits, or set
+`DAGNET_USE_DAEMON=0` while iterating.
+
+#### Wire format
+
+NDJSON, one JSON object per line in each direction. Request:
+
+- `{"id": "<string>", "command": "analyse" | "param-pack" | "ping" | "quit", "args": ["--graph", "/path", "--name", "g", …]}`
+
+Response on success:
+
+- `{"id": "<string>", "ok": true, "stdout": "<captured stdout>"}`
+
+Response on failure:
+
+- `{"id": "<string>", "ok": false, "exit_code": <n>, "error": "<msg>", "stdout": "<captured up to failure>"}`
+
+The `args` array is exactly what the standalone CLI would receive on
+the command line, so the daemon can mirror every CLI flag without a
+separate schema. Stderr is left unredirected so `[cli]` log lines
+still surface live; the test client captures them in a ring buffer
+for diagnostics on failure.
+
+#### Cache assurance — why no caching can leak between requests
+
+This is the user-facing contract: a request with `--no-cache` and
+`--no-snapshot-cache` must produce identical results to a per-call
+subprocess invocation with the same flags. The daemon guarantees this
+through four reset hooks, all in `daemon.ts` and `bootstrap.ts`:
+
+1. **CLI disk bundle cache** — `loadGraphFromDiskCached` is
+   fingerprinted on source-file mtimes, and `--no-cache` short-circuits
+   it to `loadGraphFromDisk` (fresh YAML parse). Bootstrap consults
+   the per-request `--no-cache` flag, so a request that asks to bypass
+   the cache always reads from disk regardless of what previous
+   requests did.
+2. **`fileRegistry` re-seed** — every request re-runs `bootstrap()`,
+   which re-loads the bundle and calls `seedFileRegistry(bundle)`.
+   That overwrites any prior request's seeded entries with the freshly
+   loaded data. This is the mechanism that defeats `--bayes-vars`
+   contamination: an in-place patch applied by request N is replaced
+   by request N+1's seed before any work begins.
+3. **BE snapshot-cache bypass** — `--no-snapshot-cache` sets the
+   global `__dagnetComputeNoCache = true` in `commands/analyse.ts`.
+   `daemon.ts:resetPerRequest()` deletes that global between requests
+   so the flag never leaks; the request whose args actually contain
+   `--no-snapshot-cache` re-sets it before its analysis runs.
+4. **Diagnostic flag** — `setDiagnostic(true)` from
+   `cliEntry.ts` / `bootstrap()` is not auto-cleared. The daemon
+   resets it explicitly per request, then re-enables it when the
+   incoming args contain `--diag` or `--diagnostic`.
+5. **`--force-vars` quality-gate override** — `bootstrap()` already
+   resets `qualityGateOverride` in a `finally` block (see
+   `bayesPatchService.ts`). The daemon inherits this for free.
+
+The guarantee is structural: any state with cross-request leak
+potential is touched by `bootstrap()` or by the daemon's per-request
+hook. Verification is empirical:
+`graph-editor/lib/tests/_daemon_parity_check.py` runs the same
+representative tuples through both the subprocess path (gold) and the
+daemon, and compares parsed JSON. The current slice (5 analyse + 2
+param-pack invocations spanning small / fanout / lat4 graphs and both
+window and cohort temporal modes) is byte-equal across paths. Run it
+manually after any change to `bootstrap.ts`, `daemon.ts`, or any
+service it imports.
+
+Tests that need maximum cache hygiene should pass both
+`--no-cache` and `--no-snapshot-cache` on every request — the cached
+test helpers (`_run_analyse_cached`, `_run_param_pack_cached`) already
+do. Outside the test path, omit them when you want the disk bundle
+cache to speed up repeated calls in the same daemon process.
+
+#### Error handling and survival
+
+`commands/analyse.ts` and `commands/paramPack.ts` historically called
+`process.exit(N)` on bad input or failed preparation. In a long-lived
+daemon that would terminate the whole process. The fix lives in
+`logger.ts`: a daemon-aware `exit(code, msg)` helper plus a
+`CLIExitError` class. When `setDaemonMode(true)` has been called
+(daemon entry point does this once at startup), `exit()` throws
+`CLIExitError` instead of terminating; the daemon's per-request
+`try/catch` reports the failure on the response channel and keeps
+serving. `log.fatal` routes through the same helper so any code path
+that called `log.fatal('…')` retains the same semantics on the
+standalone CLI but no longer kills the daemon.
+
+The serial request queue in `daemon.ts` (`Promise.then` chain) ensures
+that even if multiple requests arrive while one is still mid-flight,
+they are processed one at a time. The Python BE cannot handle
+concurrent `/api/forecast/conditioned` and `/api/runner/analyze`
+requests safely under HMR, and the FE preparation pipeline mutates
+process-wide state, so concurrency is intentionally avoided.
+
 ### CLI module layout
 
 ```

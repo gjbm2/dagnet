@@ -2202,6 +2202,7 @@ export async function runStage2EnhancementsAndInboundN(
                       })()
                     : ev.latency,
                   blendedMean: ev.blendedMean,
+                  stdev: (ev as any).stdev,
                   forecast: ev.forecast,
                   evidence: ev.evidence,
                 })),
@@ -2412,10 +2413,9 @@ export async function runStage2EnhancementsAndInboundN(
               return nextGraph;
             };
 
-          // ── Helper: merge conditioned forecast p.mean into FE edge values ──
+          // ── Helper: merge conditioned forecast scalars into FE edge values ──
           // When the conditioned forecast wins the 500ms race, its p.mean
-          // replaces FE's blended p.mean in the same render. FE latency
-          // fields are preserved — CF only sets p.mean / forecast.mean.
+          // replaces FE's blended p.mean in the same render.
           // Merge every scalar CF is authoritative for (doc 45):
           // p_mean/p_sd AND completeness/completeness_sd. FE's latency
           // fit fields (mu, sigma, t95, path_t95, median_lag_days,
@@ -2428,14 +2428,41 @@ export async function runStage2EnhancementsAndInboundN(
             if (!cfResults || cfResults.length === 0 || !cfResults[0]?.edges?.length) return feValues;
             type CfScalars = {
               p_mean: number;
+              p_sd?: number;
+              evidence_n?: number;
+              evidence_k?: number;
               completeness?: number;
               completeness_sd?: number;
             };
             const byEdge = new Map<string, CfScalars>();
             for (const e of cfResults[0].edges) {
               if (e.p_mean != null && Number.isFinite(e.p_mean)) {
+                const isQueryScopedPosteriorFallback =
+                  e.cf_mode === 'analytic_degraded'
+                  && (
+                    e.cf_reason === 'query_scoped_posterior'
+                    || e.conditioning?.skip_reason === 'source_query_scoped'
+                  );
                 byEdge.set(e.edge_uuid, {
                   p_mean: e.p_mean as number,
+                  p_sd:
+                    e.p_sd != null && Number.isFinite(e.p_sd) && e.p_sd >= 0
+                      ? (e.p_sd as number)
+                      : undefined,
+                  evidence_n:
+                    !isQueryScopedPosteriorFallback
+                    && e.evidence_n != null
+                    && Number.isFinite(e.evidence_n)
+                    && e.evidence_n >= 0
+                      ? (e.evidence_n as number)
+                      : undefined,
+                  evidence_k:
+                    !isQueryScopedPosteriorFallback
+                    && e.evidence_k != null
+                    && Number.isFinite(e.evidence_k)
+                    && e.evidence_k >= 0
+                      ? (e.evidence_k as number)
+                      : undefined,
                   completeness:
                     e.completeness != null && Number.isFinite(e.completeness)
                       ? (e.completeness as number)
@@ -2453,8 +2480,18 @@ export async function runStage2EnhancementsAndInboundN(
               if (cf == null) return fe;
               return {
                 ...fe,
+                ...(cf.p_sd != null ? { stdev: cf.p_sd } : {}),
                 blendedMean: cf.p_mean,
                 forecast: { ...(fe.forecast || {}), mean: cf.p_mean },
+                ...((cf.evidence_n != null || cf.evidence_k != null)
+                  ? {
+                      evidence: {
+                        ...(fe.evidence || {}),
+                        ...(cf.evidence_n != null ? { n: cf.evidence_n } : {}),
+                        ...(cf.evidence_k != null ? { k: cf.evidence_k } : {}),
+                      },
+                    }
+                  : {}),
                 latency: {
                   ...fe.latency,
                   ...(cf.completeness != null

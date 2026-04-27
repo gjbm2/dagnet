@@ -10,19 +10,18 @@
  * Requires the Python BE to be running.
  */
 
-import { log, isDiagnostic } from '../logger';
+import { log, isDiagnostic, exit } from '../logger';
 import { SCENARIO_COLOURS } from '../constants';
 import { parseScenarioFlags, type ScenarioSpec } from '../scenarioParser';
 import { getSnapshotContract } from '../analysisTypeRegistry';
 import { aggregateAndPopulateGraph } from '../aggregate';
 import { bootstrap } from '../bootstrap';
-import { extractParamsFromGraph } from '../../services/GraphParamExtractor';
 import {
   prepareAnalysisComputeInputs,
   runPreparedAnalysis,
   type PreparedAnalysisComputeReady,
 } from '../../services/analysisComputePreparationService';
-import type { ScenarioVisibilityMode } from '../../types';
+import type { Graph, ScenarioVisibilityMode } from '../../types';
 
 const USAGE = `
 dagnet-cli analyse
@@ -106,7 +105,7 @@ async function runAnalyse() {
   });
   if (!ctx) {
     console.error(USAGE);
-    process.exit(1);
+    exit(1, 'usage');
   }
 
   const { bundle, queryDsl, workspace, getKey, format, flags, extraArgs } = ctx;
@@ -120,7 +119,7 @@ async function runAnalyse() {
       cliDisplaySettings = JSON.parse(extraArgs.display as string);
     } catch {
       log.error(`Invalid --display JSON: ${extraArgs.display}`);
-      process.exit(1);
+      exit(1, 'invalid --display JSON');
     }
   }
 
@@ -143,46 +142,58 @@ async function runAnalyse() {
   // forecast) even though it's not a registered analysis type.
   const needsSnapshots = analysisType === 'conditioned_forecast' || !!getSnapshotContract(analysisType);
 
-  // Aggregate each scenario independently and extract params
+  // Aggregate each scenario independently and preserve the enriched graph
   const scenarioEntries: Array<{
     id: string;
     name: string;
     colour: string;
     visibilityMode: ScenarioVisibilityMode;
     queryDsl: string;
-    params: any;
+    graph: Graph;
   }> = [];
 
   // 'from-file' = cache only; 'versioned' = cache first, API if stale/missing
   const fetchMode = flags.allowExternalFetch ? 'versioned' as const : 'from-file' as const;
 
-  // Track the last populated graph — used as the base graph for analysis
-  // preparation (carries model_vars, promoted fields from the FE topo pass
-  // that runs inside aggregateAndPopulateGraph).
-  let baseGraph = bundle.graph;
+  // Keep analysis preparation rooted in the original baseline graph.
+  // Scenario-specific state enters through per-scenario enriched graphs.
+  const baseGraph = bundle.graph;
+  const usedExternalScenarioIds = new Set<string>();
+  const resolveExternalScenarioId = (spec: ScenarioSpec, index: number): string => {
+    const candidate = (spec.id || spec.name || '').trim() || `scenario-${index + 1}`;
+    let suffix = 2;
+    let unique = candidate;
+    while (usedExternalScenarioIds.has(unique)) {
+      unique = `${candidate}-${suffix}`;
+      suffix += 1;
+    }
+    if (unique !== candidate) {
+      log.warn(`Duplicate scenario id '${candidate}' remapped to '${unique}'. Pass id=... to keep it stable.`);
+    }
+    usedExternalScenarioIds.add(unique);
+    return unique;
+  };
 
   for (let i = 0; i < scenarios.length; i++) {
     const spec = scenarios[i];
+    const externalId = resolveExternalScenarioId(spec, i);
     log.info(`Aggregating scenario '${spec.name}' (${spec.queryDsl}, mode: ${fetchMode})...`);
     const { graph: populatedGraph, warnings } = await aggregateAndPopulateGraph(bundle, spec.queryDsl, {
       mode: fetchMode,
       workspace,
+      scenarioId: externalId,
     });
     for (const w of warnings) {
       log.warn(`[${spec.name}]: ${w}`);
     }
-    const params = extractParamsFromGraph(populatedGraph);
     scenarioEntries.push({
-      id: spec.name === 'Scenario 1' && scenarios.length === 1 ? 'current' : (i === scenarios.length - 1 ? 'current' : `scenario-${i + 1}`),
+      id: externalId,
       name: spec.name,
       colour: spec.colour,
       visibilityMode: spec.visibilityMode,
       queryDsl: spec.queryDsl,
-      params,
+      graph: populatedGraph,
     });
-    // Use the last scenario's populated graph as the base — it has the
-    // most complete data (model_vars, promoted fields, evidence).
-    baseGraph = populatedGraph;
   }
 
   log.info(`${scenarioEntries.length} scenario(s) prepared`);
@@ -234,55 +245,25 @@ async function runAnalyse() {
     }
   }
 
-  // Build scenariosContext to inject CLI scenarios into live mode.
-  // The last scenario is always 'current'. Earlier ones are live scenarios.
-  const currentEntry = scenarioEntries[scenarioEntries.length - 1];
-  const nonCurrentEntries = scenarioEntries.slice(0, -1);
-
-  const scenarioLikes = nonCurrentEntries.map(e => ({
-    id: e.id,
-    params: e.params,
-    name: e.name,
-    colour: e.colour,
-    meta: {
-      isLive: true,
-      queryDSL: e.queryDsl,
-      lastEffectiveDSL: e.queryDsl,
-    },
-  }));
-
-  const visibleScenarioIds = scenarioEntries.map(e => e.id);
-
   const prepared = await prepareAnalysisComputeInputs({
-    mode: 'live',
+    mode: 'custom',
     graph: baseGraph,
     analysisType,
     analyticsDsl,
-    currentDSL: currentEntry.queryDsl,
+    currentDSL: '',
     needsSnapshots,
     workspace,
-    rawScenarioStateLoaded: true,
-    visibleScenarioIds,
-    scenariosContext: {
-      scenarios: scenarioLikes,
-      baseParams: {},
-      currentParams: currentEntry.params,
-      scenariosReady: true,
-    },
+    customScenarios: scenarioEntries.map((entry) => ({
+      scenario_id: entry.id,
+      name: entry.name,
+      colour: entry.colour,
+      visibility_mode: entry.visibilityMode,
+      graph: entry.graph,
+      effective_dsl: entry.queryDsl,
+    })),
+    hiddenScenarioIds: [],
+    frozenWhatIfDsl: null,
     display: cliDisplaySettings,
-    whatIfDSL: null,
-    getScenarioVisibilityMode: (id: string) => {
-      const entry = scenarioEntries.find(e => e.id === id);
-      return entry?.visibilityMode || 'f+e';
-    },
-    getScenarioName: (id: string) => {
-      const entry = scenarioEntries.find(e => e.id === id);
-      return entry?.name || id;
-    },
-    getScenarioColour: (id: string) => {
-      const entry = scenarioEntries.find(e => e.id === id);
-      return entry?.colour || '#808080';
-    },
   });
 
   if (prepared.status === 'blocked') {
@@ -290,7 +271,7 @@ async function runAnalyse() {
     if (prepared.missingFileIds?.length) {
       log.error(`Missing files: ${prepared.missingFileIds.join(', ')}`);
     }
-    process.exit(1);
+    exit(1, `analysis preparation blocked — ${prepared.reason}`);
   }
 
   log.info(`Analysis prepared (type: ${prepared.analysisType}, scenarios: ${prepared.scenarios.length})`);
@@ -378,7 +359,7 @@ async function runAnalyse() {
       if (result.result) {
         log.info(`result.* keys: ${Object.keys(result.result).join(', ')}`);
       }
-      process.exit(1);
+      exit(1, `key '${getKey}' not found in analysis result`);
     }
     process.stdout.write(typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value));
     process.stdout.write('\n');

@@ -5,7 +5,7 @@
  * then runs aggregation + LAG pass + param extraction + serialisation.
  */
 
-import { log, isDiagnostic } from '../logger';
+import { log, isDiagnostic, exit } from '../logger';
 import { bootstrap } from '../bootstrap';
 import { extractParamsFromGraph } from '../../services/GraphParamExtractor';
 import { flattenParams, toYAML, toJSON, toCSV } from '../../services/ParamPackDSLService';
@@ -36,6 +36,8 @@ dagnet-cli param-pack
     --verbose, -v            Show all console.log/warn output (LAG debug, etc.)
     --session-log            Show session log output
     --allow-external-fetch   Allow fetching from external sources if cache is stale/missing
+    --no-snapshot-cache      Bypass the BE snapshot service in-memory TTL cache
+                             (essential during synth-gen cycles or after BE code edits)
     --help, -h               Show this help
 
   Environment:
@@ -58,13 +60,24 @@ export async function run() {
 }
 
 async function runParamPack() {
-  const ctx = await bootstrap();
+  const ctx = await bootstrap({
+    extraOptions: {
+      'no-snapshot-cache': { type: 'boolean' },
+    },
+  });
   if (!ctx) {
     console.error(USAGE);
-    process.exit(1);
+    exit(1, 'usage');
   }
 
-  const { bundle, queryDsl, getKey, format, flags, workspace } = ctx;
+  const { bundle, queryDsl, getKey, format, flags, workspace, extraArgs } = ctx;
+
+  // Bypass the BE snapshot service in-memory cache. Essential during
+  // synth-gen cycles and for test correctness when BE Python edits may
+  // have left stale cached results behind.
+  if (extraArgs['no-snapshot-cache']) {
+    (globalThis as any).__dagnetComputeNoCache = true;
+  }
 
   // Signatures diagnostic
   if (flags.showSignatures) {
@@ -153,7 +166,7 @@ async function runParamPack() {
         log.info(`Available keys for '${edgeOrNodeId}':`);
         for (const k of suggestions) log.info(`  ${k}`);
       }
-      process.exit(1);
+      exit(1, `key '${getKey}' not found in param pack`);
     }
     process.stdout.write(String(value) + '\n');
     return;

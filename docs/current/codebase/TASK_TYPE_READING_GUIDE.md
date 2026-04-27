@@ -97,7 +97,7 @@ All docs are in `docs/current/codebase/` unless a full path is given.
 - BEAD_DISPLAY_MODE.md **(full if touching bead values/formatting)** — BeadDisplayMode enum, data values, path view, inbound-n topo walk, anchor resolution, latency bead gate
 
 ## Running CLI tools (analyse, param-pack, hydrate, parity, validation)
-- `GRAPH_OPS_TOOLING.md` **(full — start with Quick Reference)** — all CLI scripts, options, architecture, invariants
+- `GRAPH_OPS_TOOLING.md` **(full — start with Quick Reference)** — all CLI scripts, options, architecture, invariants. Includes the long-lived daemon mode (`DAGNET_USE_DAEMON`, wire format, cache assurance).
 - `graph-ops/playbooks/cli-analyse.md` **(full if running analyse)** — scenarios, subject, topo-pass, troubleshooting
 - `graph-ops/playbooks/cli-param-pack.md` **(full if running param-pack)** — query DSL, output formats, --get
 - `graph-ops/reference/common-pitfalls.md` **(skim)** — known pitfalls that affect CLI output
@@ -158,7 +158,7 @@ All docs are in `docs/current/codebase/` unless a full path is given.
 - `BAYESIAN_ENGINE_RESEARCH.md` — Bayesian tool research
 - `SESSION_LOG_ARCHITECTURE.md` — session log levels, thresholds, viewer, endOperation cleanup
 - `DEV_LOG_STREAMING.md` — three JSONL log streams
-- `GRAPH_OPS_TOOLING.md` — **full CLI reference**: all graph-ops scripts (analyse, param-pack, hydrate, validate, parity), options, architecture, key invariants
+- `GRAPH_OPS_TOOLING.md` — **full CLI reference**: all graph-ops scripts (analyse, param-pack, hydrate, validate, parity), options, architecture, key invariants, long-lived daemon mode and cache-assurance contract
 - `INTEGRITY_CHECK_ADDITIONS.md` — structural integrity checks
 - `TEST_COVERAGE_SURVEY.md` — test coverage analysis
 - `STATE_MANAGEMENT_REFERENCE.md` — state layers reference

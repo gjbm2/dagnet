@@ -558,6 +558,8 @@ def _ensure_synth_ready(
     graph_name: str,
     enriched: bool,
     bayesian: bool = False,
+    *,
+    check_fe_parity: bool = True,
 ) -> None:
     """Check freshness and bootstrap if needed. Calls pytest.skip on failure.
 
@@ -567,6 +569,14 @@ def _ensure_synth_ready(
     The on-disk graph file is never mutated for bayesian state —
     canonical TS apply-patch replay happens at
     `load_graph_json(..., bayesian=True)` call time.
+
+    `check_fe_parity` (default True) controls the cross-runtime probe
+    inside `verify_synth_data` that spawns an FE CLI subprocess per
+    graph to detect FE-interpretation drift invisible to file hashes.
+    Pass `False` from tests that themselves invoke the FE CLI per
+    graph — the test's own assertions already surface that drift, and
+    skipping the probe drops the per-graph freshness cost from
+    ~1s of CLI startup to a few ms of file-hash checks.
     """
     repo = _resolve_data_repo_dir()
     if repo is None:
@@ -594,6 +604,7 @@ def _ensure_synth_ready(
         check_bayesian=False,
         check_param_files=True,
         check_event_hashes=True,
+        check_fe_parity=check_fe_parity,
     )
     status = result["status"]
 

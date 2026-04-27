@@ -6,6 +6,45 @@ Previously this note also covered a "quick BE topo pass" that ran in parallel an
 
 **See also**: [STATS_SUBSYSTEMS.md](STATS_SUBSYSTEMS.md) (canonical four-subsystem map and "which Python entry point do I call" table), [LAG_ANALYSIS_SUBSYSTEM.md](LAG_ANALYSIS_SUBSYSTEM.md) (what FE topo actually computes — t95, mu/sigma, lag fit detail), [STATISTICAL_DOMAIN_SUMMARY.md](STATISTICAL_DOMAIN_SUMMARY.md) (broader statistical architecture), [PROBABILITY_BLENDING.md](PROBABILITY_BLENDING.md) (how computed values feed into blended probabilities).
 
+## Two logical steps in one pass (FE topo)
+
+The FE topo pass performs **two logically distinct steps in a single traversal**. The two steps are easily conflated because they share one walk and one service entry point, but they sit on different layers of the data model and have different scoping rules. Code and design discussions that elide them produce persistent confusion; this section names them so the rest of the document can refer to each unambiguously.
+
+### Step 1 — model var generation (aggregate, source-ledger layer)
+
+FE topo walks all `window()` data for the edge, recency-weights it, and produces aggregate model vars on the `model_vars[analytic]` block — the analytic source's Beta-shape parameters, latency `mu`/`sigma`/`onset`, path-level equivalents, etc. **This output is not query-scoped**: it summarises the edge's history, not the user's current query. It is the analytic-source equivalent of what an offline Bayesian fit produces and writes to `model_vars[bayesian]`. The output is graph-only and persists on the edge.
+
+Both source families therefore live on the same layer with the same shape: an aggregate fitted source the live graph carries.
+
+### Step 2 — quick-and-dirty blend (scoped, current-answer layer)
+
+FE topo then combines the Step 1 model vars with the current query's scoped evidence (`p.evidence.{n, k}`) and the effective DSL to produce a scoped current-answer surface — `p.mean`, `p.stdev`, `latency.completeness`, `latency.completeness_stdev`. **This output is query-scoped**: switching DSL changes it, but does not change the Step 1 model vars. It is the analytic-source equivalent of what CF does carefully (importance-sampling conditioning on snapshot evidence plus engorged file evidence). When CF runs, it overwrites the same fields on the same query-scoped surface.
+
+`p.mean` is **always query-scoped**. There is no writer that produces a non-scoped `p.mean`.
+
+### Where each output lives on the edge
+
+| Layer | Fields | Step that writes it | Scoping |
+|---|---|---|---|
+| Source ledger (aggregate) | `model_vars[analytic].*`, `model_vars[bayesian].*` | Step 1 (analytic) / offline Bayesian fit (bayesian) | Aggregate — not query-scoped |
+| Current evidence (scoped) | `p.evidence.{n, k, mean}` | Stage 2 evidence aggregation upstream of FE topo | Query-scoped |
+| Current answer (scoped) | `p.mean`, `p.stdev`, `latency.completeness`, `latency.completeness_stdev`, plus `*_overridden` flags | Step 2 (FE quick) or CF (careful) | Query-scoped — overwritten by CF when CF runs |
+| Promoted (model field) | `p.forecast.{mean, stdev, source}` | `applyPromotion` in `modelVarsResolution.ts` | Aggregate — promoted from a model_vars source |
+
+### The combination pass is uniform across source families (design intent)
+
+Step 2 (and CF, its careful equivalent) takes the same input contract for both source families: `(model_vars[source], scoped p.evidence.*, effective DSL) → scoped current-answer`. There is no source-conditional skip. CF runs uniformly for every promoted source. See `project-bayes/73b-be-topo-removal-and-forecast-state-separation-plan.md` Decision 13 for the full design statement.
+
+### Defects against this framing in current code
+
+Several flags and code paths encode an incorrect assumption that "analytic" means "the model var IS already the scoped current-answer", so Step 2 / CF should be skipped or replaced for analytic sources. These are documented defects against design intent, slated for removal under doc 73b Stage 4(c)–(d):
+
+- `alpha_beta_query_scoped = (source == 'analytic')` at [`model_resolver.py:107-108`](../../graph-editor/lib/runner/model_resolver.py#L107-L108) — keys CF's combination behaviour off the source name rather than the layer.
+- `D20` synthesis path at [`model_resolver.py:392-417`](../../graph-editor/lib/runner/model_resolver.py#L392-L417) — derives `α`/`β` from scoped `p.evidence.{n, k}` for the analytic source, baking scoping into what should be an aggregate Step 1 output. Today's `model_vars[analytic].alpha/beta` are written this way (see "Dual-evidence treatment" table below); the design-intent fix moves to a recency-weighted aggregate Beta fit upstream of Step 2.
+- `is_cf_sweep_eligible == False` for analytic and `cf_mode = 'analytic_degraded'` at [`forecast_runtime.py:514-528`](../../graph-editor/lib/runner/forecast_runtime.py#L514-L528) — gates CF off entirely for analytic sources.
+
+When this section conflicts with the "Dual-evidence treatment" rows below, **the table describes today's code; this section describes design intent**. The two-step framing is the durable model; the defects are scheduled for removal.
+
 ## What the Stage 2 passes compute
 
 Per edge, given raw cohort evidence, Stage 2 produces:
@@ -26,9 +65,11 @@ The FE topo pass deliberately splits the cohort evidence it consumes into two se
 | `p_infinity` (asymptote from mature cohorts) | **Full unscoped cohorts**, filtered to `age ≥ t95` with recency weighting | Needs fully-matured cohorts to estimate the true endpoint rate. Query-window cohorts are typically not yet mature |
 | `evidence.{n, k, mean}` | **Query-scoped cohorts** (the DSL window) | This is the user's "what actually happened in the window I'm looking at". Must match the DSL |
 | `completeness`, `completeness_stdev` | **Query-scoped cohorts** | "How mature is the evidence we just aggregated" — must match the evidence set |
-| `alpha`, `beta` on `model_vars[analytic]` | Derived from **query-scoped** `total_k, total_n` (Jeffreys-style: `α = k+1, β = n-k+1`) | A query-scoped Jeffreys posterior, not an aggregate prior |
+| `alpha`, `beta` on `model_vars[analytic]` *(today — defect, see "Two logical steps" §)* | Derived from **query-scoped** `total_k, total_n` (Jeffreys-style: `α = k+1, β = n-k+1`) | Today's code writes a query-scoped Jeffreys posterior here; design intent (doc 73b Decision 13) is an aggregate Beta fit on the same recency-weighted basis as the latency fields above. |
 
-**Implication for downstream consumers**: the `α, β` on `analytic` is **already a query-scoped posterior**. It is not a prior that should be updated with query-scoped evidence again — doing so double-counts. This is the key difference from `model_vars[bayesian].probability.{alpha, beta}`, which is aggregate (not query-scoped) and is a legitimate prior for conjugate updates or as an IS proposal.
+**Implication for downstream consumers (today)**: with the current code, `α, β` on `model_vars[analytic]` is already a query-scoped posterior, so consumers must not update it again with query-scoped evidence — doing so double-counts. This is why `alpha_beta_query_scoped`, the `D20` synthesis path, and `is_cf_sweep_eligible == False` exist; they encode that workaround. `model_vars[bayesian].probability.{alpha, beta}` does *not* have this problem — it is aggregate (per Step 1), so it is a legitimate prior for conjugate updates or as an IS proposal.
+
+**Implication for downstream consumers (design intent)**: once the Step 1 / Step 2 separation is honoured (doc 73b Stage 4(c)–(d)), `model_vars[analytic].{alpha, beta}` will be aggregate on the same footing as the bayesian equivalent, the source-conditional resolver flags will be removed, and CF will run uniformly for every promoted source. The "Two logical steps" section above is the canonical statement; this row will then describe an aggregate fit rather than a scoped Jeffreys posterior.
 
 See [STATS_SUBSYSTEMS.md §5 Confusion 7](STATS_SUBSYSTEMS.md) for the full scoping table.
 

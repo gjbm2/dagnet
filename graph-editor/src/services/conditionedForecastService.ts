@@ -32,9 +32,9 @@ export interface ConditionedForecastEdgeResult {
   p_sd_epistemic?: number | null;
   completeness?: number | null;
   completeness_sd?: number | null;
-  // Direct-response consumers (for example the funnel runner) may use
-  // these counts from the CF payload, but the graph projection keeps
-  // `edge.p.evidence.*` under the topo-pass evidence authority.
+  // CF returns observed counts at the conditioned horizon. The FE graph
+  // projection persists n/k onto edge.p.evidence.{n,k}; evidence.mean
+  // remains on the topo-pass authority path.
   evidence_k?: number | null;
   evidence_n?: number | null;
   conditioning?: {
@@ -199,8 +199,13 @@ export function applyConditionedForecastToGraph(
       completeness_stdev?: number;
       path_t95: number;
     };
+    stdev?: number;
     blendedMean?: number;
     forecast?: { mean?: number };
+    evidence?: {
+      n?: number;
+      k?: number;
+    };
   }> = [];
 
   for (const scenario of results) {
@@ -226,6 +231,35 @@ export function applyConditionedForecastToGraph(
         edge.completeness_sd != null && Number.isFinite(edge.completeness_sd)
           ? edge.completeness_sd as number
           : lat.completeness_stdev;
+      const stdevFromCf =
+        edge.p_sd != null && Number.isFinite(edge.p_sd) && edge.p_sd >= 0
+          ? edge.p_sd as number
+          : undefined;
+      // In analytic_degraded/query_scoped fallback mode, p_mean is sourced from
+      // query-scoped posterior state on the graph. Projecting horizon-row
+      // evidence_n/k here makes the graph non-idempotent across passes:
+      // subsequent CF calls would read different query-scoped counts and drift.
+      // Keep n/k on the existing query-scoped authority path for this mode.
+      const isQueryScopedPosteriorFallback =
+        edge.cf_mode === 'analytic_degraded'
+        && (
+          edge.cf_reason === 'query_scoped_posterior'
+          || edge.conditioning?.skip_reason === 'source_query_scoped'
+        );
+      const evidenceNFromCf =
+        !isQueryScopedPosteriorFallback
+        && edge.evidence_n != null
+        && Number.isFinite(edge.evidence_n)
+        && edge.evidence_n >= 0
+          ? edge.evidence_n as number
+          : undefined;
+      const evidenceKFromCf =
+        !isQueryScopedPosteriorFallback
+        && edge.evidence_k != null
+        && Number.isFinite(edge.evidence_k)
+        && edge.evidence_k >= 0
+          ? edge.evidence_k as number
+          : undefined;
       edgeUpdates.push({
         edgeId: edge.edge_uuid,
         latency: {
@@ -236,8 +270,17 @@ export function applyConditionedForecastToGraph(
           completeness: completenessFromCf,
           ...(completenessSdFromCf != null ? { completeness_stdev: completenessSdFromCf } : {}),
         },
+        ...(stdevFromCf != null ? { stdev: stdevFromCf } : {}),
         blendedMean: edge.p_mean,
         forecast: { mean: edge.p_mean },
+        ...((evidenceNFromCf != null || evidenceKFromCf != null)
+          ? {
+              evidence: {
+                ...(evidenceNFromCf != null ? { n: evidenceNFromCf } : {}),
+                ...(evidenceKFromCf != null ? { k: evidenceKFromCf } : {}),
+              },
+            }
+          : {}),
       });
 
       console.log(

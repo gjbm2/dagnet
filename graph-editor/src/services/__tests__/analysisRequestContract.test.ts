@@ -204,6 +204,92 @@ describe('Analysis Request Contract', () => {
     });
   });
 
+  describe('custom mode graph transport', () => {
+    it('uses scenario graph as authoritative when graph and params are both provided', async () => {
+      const scenarioGraph = JSON.parse(JSON.stringify(MINIMAL_GRAPH));
+      scenarioGraph.edges[0].p.mean = 0.91;
+      scenarioGraph.edges[0].p.model_vars = [
+        {
+          source: 'analytic',
+          probability: { mean: 0.91, alpha: 3, beta: 2 },
+        },
+      ];
+      scenarioGraph.edges[0].p.latency = {
+        path_t95: 44,
+        path_mu: 1.2,
+        path_sigma: 0.7,
+      };
+
+      const prepared = await prepareAnalysisComputeInputs({
+        mode: 'custom',
+        graph: MINIMAL_GRAPH as any,
+        analysisType: 'graph_overview',
+        analyticsDsl: 'to(switch-success)',
+        currentDSL: '',
+        needsSnapshots: false,
+        customScenarios: [{
+          scenario_id: 'scenario-graph',
+          effective_dsl: 'window(-30d:)',
+          visibility_mode: 'f+e',
+          graph: scenarioGraph as any,
+          params: {
+            edges: {
+              e1: {
+                p: {
+                  mean: 0.11,
+                  model_vars: [{ source: 'manual', probability: { mean: 0.11 } }],
+                  latency: { path_t95: 5 },
+                },
+              },
+            },
+            nodes: {},
+          },
+        }],
+        hiddenScenarioIds: [],
+        frozenWhatIfDsl: null,
+      });
+
+      expect(prepared.status).toBe('ready');
+      if (prepared.status !== 'ready') return;
+
+      const e1 = prepared.scenarios[0].graph.edges.find((edge: any) => (edge.id || edge.uuid) === 'e1');
+      expect(e1?.p?.mean).toBe(0.91);
+      expect(e1?.p?.model_vars?.[0]?.source).toBe('analytic');
+      expect(e1?.p?.model_vars?.[0]?.probability?.alpha).toBe(3);
+      expect(e1?.p?.latency?.path_t95).toBe(44);
+    });
+
+    it('keeps params-overlay behaviour for custom scenarios without graph', async () => {
+      const prepared = await prepareAnalysisComputeInputs({
+        mode: 'custom',
+        graph: MINIMAL_GRAPH as any,
+        analysisType: 'graph_overview',
+        analyticsDsl: 'to(switch-success)',
+        currentDSL: '',
+        needsSnapshots: false,
+        customScenarios: [{
+          scenario_id: 'scenario-params',
+          effective_dsl: 'window(-30d:)',
+          visibility_mode: 'f+e',
+          params: {
+            edges: {
+              e1: { p: { mean: 0.77 } },
+            },
+            nodes: {},
+          },
+        }],
+        hiddenScenarioIds: [],
+        frozenWhatIfDsl: null,
+      });
+
+      expect(prepared.status).toBe('ready');
+      if (prepared.status !== 'ready') return;
+
+      const e1 = prepared.scenarios[0].graph.edges.find((edge: any) => (edge.id || edge.uuid) === 'e1');
+      expect(e1?.p?.mean).toBe(0.77);
+    });
+  });
+
   describe('DSL invariants', () => {
     /**
      * These parameterised tests assert that the preparation service
