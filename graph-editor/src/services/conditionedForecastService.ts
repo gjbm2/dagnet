@@ -34,7 +34,7 @@ export interface ConditionedForecastEdgeResult {
   completeness_sd?: number | null;
   // CF returns observed counts at the conditioned horizon. The FE graph
   // projection persists n/k onto edge.p.evidence.{n,k}; evidence.mean
-  // remains on the topo-pass authority path.
+  // remains on the FE quick pass authority path.
   evidence_k?: number | null;
   evidence_n?: number | null;
   conditioning?: {
@@ -70,7 +70,7 @@ export interface ConditionedForecastScenarioResult {
  * Builds the payload from the graph and query DSL, sends to the
  * BE endpoint, returns per-edge scalars per scenario.
  *
- * @param graph - Graph with promoted model vars (post topo pass)
+ * @param graph - Graph with promoted model vars (post FE quick pass)
  * @param queryDsl - The effective query DSL (temporal clause)
  * @param analyticsDsl - Optional subject DSL (from/to). If absent,
  *   forecasts all edges that have snapshot subjects.

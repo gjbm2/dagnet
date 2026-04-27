@@ -1,6 +1,6 @@
 # DagNet Test Coverage Survey
 
-**Date**: 3-Feb-26  
+**Date**: 3-Feb-26 (file counts refreshed 27-Apr-26; 3-Feb-26 narrative retained where still accurate)
 **Status**: Comprehensive analysis of test coverage across the codebase
 
 ---
@@ -9,14 +9,17 @@
 
 The DagNet application has **moderate to good test coverage** with significant variation across different layers:
 
-- ✅ **Services Layer**: Strong coverage (~185 test files for 102 services)
-- ⚠️ **Components Layer**: Very low coverage (4 test files for 137 components)
-- ✅ **Hooks Layer**: Moderate coverage (17 test files for 51 hooks)
-- ✅ **Contexts Layer**: Good coverage (5 test files for 11 contexts)
-- ✅ **E2E Tests**: 8 Playwright tests covering critical user flows
-- ✅ **Integration Tests**: Comprehensive suite in `tests/` directory
+- ✅ **Services Layer**: Strong coverage — `services/__tests__/` ~108k LOC across 250+ test files
+- ⚠️ **Components Layer**: Low coverage relative to surface area (137+ components, ~10 dedicated test files)
+- 🟡 **Hooks Layer**: Moderate coverage (17 test files for **93 hooks** — see [HOOKS_INVENTORY.md](HOOKS_INVENTORY.md))
+- ✅ **Contexts Layer**: Reasonable coverage (5 test files for **18 contexts**)
+- ✅ **E2E Tests**: ~12k LOC Playwright in `graph-editor/e2e/`
+- ✅ **Python integration tests**: ~33k LOC in `graph-editor/lib/tests/`
+- ✅ **Bayes regression tests**: ~19k LOC in `bayes/tests/`
 
-**Overall Assessment**: The core business logic (services) is well-tested, but UI components have minimal test coverage. The test infrastructure is solid and well-organized.
+**Test mass total**: ~170,000 LOC across 4 test areas. This is comparable in size to the Bayes Python tree.
+
+**Overall Assessment**: The core business logic (services and BE runners) is well-tested with rigorous parity/contract patterns. UI components have minimal direct test coverage but are exercised indirectly through services and e2e tests. The test infrastructure itself (conftest fixtures, daemon mode, sidecar caching) is a substantial subsystem — see `BAYES_REGRESSION_TOOLING.md` and `TESTING_STANDARDS.md`.
 
 ---
 
@@ -188,11 +191,14 @@ Critical UI components with no test coverage:
 
 ### 3. Hooks Layer (`src/hooks/`)
 
-**Status**: 🟡 **Moderate Coverage**
+**Status**: 🟡 **Moderate Coverage** (declined since Feb-26 as new hooks landed faster than tests)
 
-- **Hook Files**: 51 TypeScript files
+- **Hook Files**: **93** TypeScript files (20,730 LOC) — count grew substantially through v2.0 development
 - **Test Files**: 17 test files in `src/hooks/__tests__/`
-- **Coverage Ratio**: ~0.33 tests per hook (33% coverage)
+- **Coverage Ratio**: ~0.18 tests per hook (18% coverage by file count)
+- **Largest hooks with no dedicated tests**: `useCanvasAnalysisCompute` (885 LOC), `useShareChartFromUrl` (807), `useSnapshotsMenu` (770), `useBayesTrigger` (704), `useShareBundleFromUrl` (547)
+
+Many hooks are exercised indirectly through service tests or e2e specs. See [HOOKS_INVENTORY.md](HOOKS_INVENTORY.md) for the full inventory.
 
 #### Tested Hooks
 
@@ -220,11 +226,11 @@ Many hooks lack dedicated tests, including:
 
 ### 4. Contexts Layer (`src/contexts/`)
 
-**Status**: 🟢 **Good Coverage**
+**Status**: 🟡 **Partial Coverage**
 
-- **Context Files**: 11 TSX files
+- **Context Files**: **18** TSX files (7,112 LOC)
 - **Test Files**: 5 test files in `src/contexts/__tests__/`
-- **Coverage Ratio**: ~0.45 tests per context (45% coverage)
+- **Coverage Ratio**: ~0.28 tests per context (28% coverage)
 
 #### Tested Contexts
 

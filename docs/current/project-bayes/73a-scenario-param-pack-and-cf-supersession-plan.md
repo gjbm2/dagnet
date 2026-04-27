@@ -13,6 +13,18 @@
 `../codebase/SESSION_LOG_ARCHITECTURE.md`,
 `../codebase/STATS_SUBSYSTEMS.md`
 
+**Dated annotation — 27-Apr-26 (closed-plan cross-doc inconsistency).**
+This document is closed and its body contract is intentionally left unchanged.
+Doc 73a records the earlier CF dispersion mapping
+`p_sd → p.stdev` with `p_sd_epistemic` response-only. Doc 73b now carries a
+newer target contract for the later L5 dispersion split:
+`p_sd → p.stdev_pred` (predictive) and `p_sd_epistemic → p.stdev`
+(epistemic), with `p.stdev_pred` added to the pack round-trip contract when
+that later stage lands. Treat this as a known cross-doc inconsistency, not as
+permission to reopen or edit the 73a stages. Reconciliation is owned by doc
+73b's later implementation / follow-through work; until then, the main text
+below remains the closed 73a record.
+
 ## 0. History and posture of this plan
 
 Two prior attempts widened scope into doc 73b's territory (model-vars

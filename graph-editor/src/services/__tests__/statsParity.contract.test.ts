@@ -2,7 +2,7 @@
  * FE statistical-enhancement contract vectors.
  *
  * Canonical test vectors with hardcoded expected values for the FE
- * topo-pass primitives (fitLagDistribution, logNormalCDF, etc.). Any
+ * quick pass primitives (fitLagDistribution, logNormalCDF, etc.). Any
  * drift in these primitives breaks this test.
  *
  * @vitest-environment node

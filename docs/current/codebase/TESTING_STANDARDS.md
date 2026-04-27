@@ -147,14 +147,13 @@ class TestMyAnalysis:
 ## CLI-driven Python tests run through a daemon by default
 
 Pytest tests under `graph-editor/lib/tests/` that exercise
-`analyse.sh` / `param-pack.sh` (currently
-`test_cohort_factorised_outside_in.py`) route through a long-lived
-`tsx` daemon by default — see `GRAPH_OPS_TOOLING.md` §"Long-lived
-daemon mode" for the full design. The cached helpers
-`_run_analyse_cached` / `_run_param_pack_cached` lazy-start the daemon
-on first call and tear it down via `atexit`. This amortises the
-~1.2s Node + tsx + module-graph startup over the session and gives a
-~2× wall-time reduction on test files that fire many CLI calls.
+`analyse.sh` / `param-pack.sh` route through a long-lived `tsx` daemon
+by default — see `GRAPH_OPS_TOOLING.md` §"Long-lived daemon mode" for
+the full design. The cached helpers `_run_analyse_cached` /
+`_run_param_pack_cached` lazy-start the daemon on first call and tear
+it down via `atexit`. This amortises the ~1.2s Node + tsx +
+module-graph startup over the session and gives a ~2× wall-time
+reduction on test files that fire many CLI calls.
 
 The daemon honours per-request `--no-cache` and `--no-snapshot-cache`
 identically to the subprocess path, so the cache-bypass guarantee
@@ -166,6 +165,71 @@ isolation, no shared state). The parity script
 tuples through both paths and asserts byte-equal JSON; run it after
 any change to `src/cli/bootstrap.ts`, `src/cli/daemon.ts`, or any
 service they import.
+
+## Cache-bypass discipline for outside-in CLI tests
+
+Tests that drive the CLI must pass **both** `--no-cache` (disk bundle
+cache, fingerprinted on source-file mtime) **and** `--no-snapshot-cache`
+(BE Python `snapshot_service._cache`, a 15-min TTL keyed on
+`(fn_name, args)`) on every analyse and param-pack invocation. Both
+caches are deterministic and safe in production, but neither is
+fingerprinted against BE source code: a dev workflow that edits BE
+Python and re-runs a test inside the TTL window can otherwise be
+satisfied by a stale cached result.
+
+`paramPack.ts` accepts `--no-snapshot-cache` (added so tests can
+bypass the BE TTL on every param-pack call — `analyse.ts` already
+had it). The flag sets `globalThis.__dagnetComputeNoCache` which
+`graphComputeClient.ts` threads into the request body as
+`no_cache: true`. The BE wraps the handler in `cache_bypass_ctx()`
+(see `api_handlers.py`).
+
+The wave-3 outside-in tests (`test_asat_blind.py`,
+`test_multihop_evidence_parity.py`, `test_conditioned_forecast_parity.py`)
+all pass both flags on every call. Older outside-in tests inherited
+from the bash originals may not — audit before reusing them as the
+basis for new fixtures. The cost of hardening is ~10 seconds total
+across the wave-3 suite (still ~1.94× faster than the bash originals);
+worth it for the safety guarantee.
+
+## Audit trail for any rebuild / regen
+
+The fixture machinery in `lib/tests/conftest.py` must surface the
+*reason* whenever it triggers a snapshot regen or MCMC sidecar build.
+"Just runs sometimes" is unacceptable for a tool chain agents and
+operators rely on.
+
+- `_ensure_synth_ready` reads the `reasons` list returned by
+  `verify_synth_data` and prints every entry under the
+  `[requires_synth]` prefix before kicking off `synth_gen.py`. Each
+  reason names the specific check that failed (truth hash drift,
+  graph JSON drift, event hash drift, missing param file, query
+  signature mismatch, etc.) so the operator can confirm the regen
+  was warranted.
+- `_ensure_bayes_sidecar` does not blindly trust `load_sidecar`
+  returning `None`. The helper `_explain_sidecar_staleness` re-reads
+  the sidecar, classifies the rejection (file missing, schema drift,
+  fingerprint mismatch), and on fingerprint mismatch diffs every
+  changed key (`saved=… expected=…`). All reasons are printed before
+  MCMC is launched.
+
+When adding a new fixture that triggers expensive generation,
+preserve this contract: emit a precise reason for every rebuild,
+never just a status word.
+
+## Slow-call self-diagnostic
+
+`DaemonClient.call` emits a stderr audit block whenever any CLI
+request exceeds `DAGNET_SLOW_CALL_THRESHOLD_S` seconds (default 10).
+The block contains the graph, query, daemon age + RSS, and the slice
+of daemon stderr captured during the request. See
+`GRAPH_OPS_TOOLING.md` §"Slow-call self-diagnostic" for the full
+contract.
+
+When a test file logs an unexplained slow run, search for
+`daemon-slow-call` in the captured pytest output. The accompanying
+block is sufficient to triage which call on which graph stalled,
+without rerunning the test.
 
 ## When to Skip Tests
 

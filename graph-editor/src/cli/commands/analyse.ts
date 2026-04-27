@@ -98,7 +98,6 @@ async function runAnalyse() {
       type: { type: 'string' },
       subject: { type: 'string' },
       scenario: { type: 'string', multiple: true },
-      'topo-pass': { type: 'boolean' },
       'no-snapshot-cache': { type: 'boolean' },
       display: { type: 'string' },
     },
@@ -197,15 +196,6 @@ async function runAnalyse() {
   }
 
   log.info(`${scenarioEntries.length} scenario(s) prepared`);
-
-  // ── Deprecated: --topo-pass flag ──────────────────────────────
-  // Accepted silently for backwards compatibility with existing
-  // graph-ops scripts. The quick BE topo pass was removed on
-  // `24-Apr-26` per project-bayes/73; Stage 2 now runs FE topo + CF
-  // unconditionally via aggregate / fetchItems.
-  if (extraArgs['topo-pass']) {
-    log.warn('--topo-pass is deprecated and now a no-op.');
-  }
 
   // ── Split combined DSL into subject + temporal ──────────────────
   // The user may pass a single DSL like "from(x).to(y).cohort(1-Jan-26:1-Mar-26)".

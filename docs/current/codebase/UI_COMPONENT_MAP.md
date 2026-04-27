@@ -85,7 +85,7 @@ Z-order: DOM append order = conversion → container → post-it → analysis. S
 
 Minimise/maximise logic: see CANVAS_OBJECT_DISPLAY_STATES.md.
 
-## Context menus (11)
+## Context menus (~13)
 
 | Menu | Component | Trigger |
 |------|-----------|---------|
@@ -103,7 +103,7 @@ Minimise/maximise logic: see CANVAS_OBJECT_DISPLAY_STATES.md.
 
 `CanvasContextMenus.tsx` is the dispatcher — it determines which specific menu to show based on what was right-clicked.
 
-## Modals (21+)
+## Modals (~26)
 
 All in `src/components/modals/`. Major groups:
 

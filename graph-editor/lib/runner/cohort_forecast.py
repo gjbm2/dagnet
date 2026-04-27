@@ -107,8 +107,8 @@ def build_x_provider_from_graph(
 
     # Compute reach via topo walk using _resolve_edge_p (same as
     # build_node_arrival_cache in forecast_state.py). Reads from
-    # model_vars/posterior — no dependency on p.mean (which is a
-    # topo-pass output and would be circular).
+    # model_vars/posterior — no dependency on p.mean (which is an
+    # FE quick pass output and would be circular).
     reach = 0.0
     try:
         from .forecast_state import _resolve_edge_p

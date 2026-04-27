@@ -28,8 +28,10 @@ All docs are in `docs/current/codebase/` unless a full path is given.
 ## Adding or modifying analysis types / charts / canvas analyses
 - adding-analysis-types.md **(full)** — checklist
 - CHART_PIPELINE_ARCHITECTURE.md **(full)** — recipes, hydration, compute, display planning
+- ANALYSIS_ECHARTS_BUILDERS.md **(full if touching chart rendering)** — builder cluster umbrella, dispatch model, shared utilities, chart-kind ↔ analysis-type matrix
 - CANVAS_ANALYSIS_FEATURE.md **(full if touching canvas)** — container+content, three-mode scenarios
 - ANALYSIS_RETURN_SCHEMA.md **(ref)** — result schema contract
+- GRAPH_COMPUTE_CLIENT.md **(ref if touching the FE↔BE boundary)** — request/response shapes, normalisers, caching
 
 ## Modifying scenarios, what-if, or parameter overlays
 - SCENARIO_SYSTEM_ARCHITECTURE.md **(full)** — composition, regeneration, provenance
@@ -42,6 +44,7 @@ All docs are in `docs/current/codebase/` unless a full path is given.
 
 ## Modifying statistical/Bayesian/forecasting logic
 - **STATS_SUBSYSTEMS.md** **(full — read FIRST)** — disambiguates the five distinct processing subsystems (Bayes compiler / FE topo pass / BE topo pass / BE CF pass / BE analysis runners); field authority; pipeline sequence; common confusions. Designs that assume any particular pass has run, or propose new "passes", MUST start here.
+- BE_RUNNER_CLUSTER.md **(full if touching `lib/runner/`)** — directory umbrella for the 18.5k LOC BE runner cluster: forecast engine sub-cluster, span kernel, derivation files, model resolver, cohort_forecast lineage
 - FE_BE_STATS_PARALLELISM.md **(full)** — FE↔BE topo orchestration detail, CF race mechanics, parity comparison
 - STATISTICAL_DOMAIN_SUMMARY.md **(full)** — underlying statistical models (shifted lognormal, Beta/Binomial, completeness, partial pooling)
 - COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md **(full if touching `cohort()` or multi-hop `window()` analysis semantics)** — fixed-`x` versus anchor-to-`x` denominator behaviour; `x->end` subject progression; single-hop versus multi-hop meaning; gross-fitted evidence/model-var admission rules
@@ -85,7 +88,7 @@ All docs are in `docs/current/codebase/` unless a full path is given.
 - URL_PARAMS.md **(ref)** — supported URL parameters
 
 ## Modifying UI components, panels, context menus, modals, or display states
-- UI_COMPONENT_MAP.md **(full)** — visual hierarchy, all 11 context menus, 21 modals, display state decision tree
+- UI_COMPONENT_MAP.md **(full)** — visual hierarchy, context menus (~13), modals (~26), display state decision tree
 - CANVAS_OBJECT_DISPLAY_STATES.md **(full if touching minimise/collapse)** — canvas analysis/post-it minimise, position offsets, canvas view integration
 - SIDEBAR_AND_PANELS_ARCHITECTURE.md **(full if touching sidebar)** — rc-dock, panel persistence, sidebar state
 
@@ -138,6 +141,14 @@ All docs are in `docs/current/codebase/` unless a full path is given.
 ## Modifying Python backend, MSMDC, or compute server
 - PYTHON_BACKEND_ARCHITECTURE.md **(full)** — FastAPI endpoints, MSMDC, Bayes, FE-BE communication
 
+## Modifying integrity checks / cross-graph validation
+- INTEGRITY_CHECK_SERVICE.md **(full if touching `integrityCheckService.ts`)** — 10-phase architecture, 19 issue categories, deep vs auto-debounced, workspace dedup
+- INTEGRITY_CHECK_ADDITIONS.md **(ref)** — specific checks added during synth-data work
+- HASH_SIGNATURE_INFRASTRUCTURE.md **(ref — §"Integrity Checks")** — Phase 9/10 detail
+
+## Reading hooks / modifying hooks
+- HOOKS_INVENTORY.md **(full — categorical inventory)** — 93 hooks across 20.7k LOC, grouped by purpose
+
 ## Other subsystem docs (consult when relevant)
 - `DIAGNOSTIC_PLAYBOOKS.md` — symptom → checklist for common bugs
 - `KNOWN_ANTI_PATTERNS.md` — failure patterns with known fixes
@@ -162,5 +173,10 @@ All docs are in `docs/current/codebase/` unless a full path is given.
 - `INTEGRITY_CHECK_ADDITIONS.md` — structural integrity checks
 - `TEST_COVERAGE_SURVEY.md` — test coverage analysis
 - `STATE_MANAGEMENT_REFERENCE.md` — state layers reference
+- `BE_RUNNER_CLUSTER.md` — BE runner cluster umbrella (`lib/runner/`)
+- `HOOKS_INVENTORY.md` — categorical hook inventory
+- `GRAPH_COMPUTE_CLIENT.md` — FE↔Python boundary, normalisers, caching
+- `ANALYSIS_ECHARTS_BUILDERS.md` — chart-rendering cluster umbrella
+- `INTEGRITY_CHECK_SERVICE.md` — 10-phase cross-workspace forensic validation
 - `DEVTOOL_ENGINEERING_PRINCIPLES.md` — devtool engineering standards, data safety, audit checklist
 - `AGENT_VERIFICATION_GAP.md` — problem statement: agent launches untested code

@@ -30,18 +30,36 @@ Vite watches `src/**/*` and `public/docs/**/*`. Changes to `.ts`, `.tsx`, `.css`
 
 ### Python (Uvicorn auto-reload)
 
-Uvicorn runs with `reload=True`, watching all `*.py` files. Any change to `lib/*.py` or `dev-server.py` kills and restarts the entire Python process.
+Uvicorn runs with `reload=True` and `reload_dirs=[".", "lib", "lib/runner"]` (see `dev-server.py` near the bottom). The supervisor watches those directories and kills + respawns the BE child whenever a watched file is touched.
 
 **Auto-reload handles**:
 - Any `.py` file in `graph-editor/lib/` — API handlers, MSMDC, query DSL, stats, snapshot service
 - `dev-server.py` itself
 
+**Auto-reload deliberately ignores** (`reload_excludes` in `dev-server.py`):
+- `lib/tests/*` and everything below it — pytest files do not affect server behaviour, and watching them caused spurious BE restarts every time a test was edited (see "Test files must not trigger BE reload" below)
+- `**/__pycache__/*` and `**/*.pyc` — Python bytecode cache files churn during test imports; they don't change runtime behaviour
+
 **Auto-reload does NOT handle**:
 - `.env.local` changes — env vars read once at startup; change + restart needed
 - `requirements-local.txt` — need `pip install -r requirements-local.txt` + restart
 - Venv changes
+- The supervisor's own `reload_dirs` / `reload_excludes` config — uvicorn binds those at startup, so changing them in `dev-server.py` requires a full Ctrl-C + re-run, not just a file save
 
-**Note**: Python reload is process-level — 1-2 second window of API unavailability during restart. In-memory state is lost.
+**Note**: Python reload is process-level. The published "1-2 second" reload window is a best case; cold restarts that re-import `numpy`, `scipy`, `scipy.ndimage`, `scipy.spatial`, `psycopg2`, etc. and re-open the remote Postgres connection take 5-30s. Any in-flight HTTP requests are dropped or hang during the restart window. In-memory state (snapshot_service TTL cache, etc.) is lost.
+
+### Test files must not trigger BE reload
+
+Pytest files live under `graph-editor/lib/tests/`, which is inside the watched `lib/` tree. Without an explicit exclude, two things make the BE restart from a test session:
+
+1. **Editing a test file** — even just `touch lib/tests/foo.py` (no content change). The supervisor only inspects mtime.
+2. **Pytest writing fresh `.pyc` files** to `lib/tests/__pycache__/` when it imports a freshly-edited test module.
+
+The symptom is a wedge-pattern in test latency: most calls complete in their normal time, but any call that lands during a kill + cold-respawn window stalls for 30-200s+ while imports rerun and Postgres reconnects. This was visible historically as "intermittent 195s outliers in `test_asat_blind`" with no apparent cause — the cause was the agent itself editing a test file mid-session and uvicorn promptly bouncing the BE.
+
+The `reload_excludes` patterns in `dev-server.py` block this. They are bound at supervisor startup, so changes there require a full BE restart (Ctrl-C + re-run) to take effect — saving the file is not enough.
+
+The `_daemon_client.py` slow-call diagnostic (see `GRAPH_OPS_TOOLING.md` §"Slow-call self-diagnostic") catches recurrences of this pattern: any single CLI request that exceeds `DAGNET_SLOW_CALL_THRESHOLD_S` (default 10s) prints a block with the graph, query, daemon age, RSS, and the daemon stderr captured during that request, so a future regression can be triaged from the test log alone.
 
 ## When you actually need to restart
 

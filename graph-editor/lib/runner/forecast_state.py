@@ -270,11 +270,11 @@ def _convolve_completeness_at_age(
 def _resolve_edge_p(edge: Dict[str, Any]) -> float:
     """Get edge probability from p.mean, model_vars, or posterior.
 
-    On enriched synth graphs p.mean may be None (it's a topo-pass
+    On enriched synth graphs p.mean may be None (it's an FE quick pass
     display quantity). Fall back to model_vars or posterior alpha/beta.
     """
     p_obj = edge.get('p') or {}
-    # Direct flat value (production graphs after topo pass)
+    # Direct flat value (production graphs after FE quick pass)
     mean = p_obj.get('mean')
     if isinstance(mean, (int, float)) and mean > 0:
         return float(mean)

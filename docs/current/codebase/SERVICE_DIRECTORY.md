@@ -30,15 +30,25 @@ Quick-lookup table: what you need to do → which service owns it → where the 
 | Bayes patch apply + cascade | `bayesPatchService.ts` | `bayesPatchServiceMerge.integration.test.ts`, `cliApplyPatch.test.ts` |
 | Bayes reconnect + automation submit | `bayesReconnectService.ts` | (no dedicated test yet) |
 | Daily fetch / runBayes flags | `dailyFetchService.ts` | `dailyFetchService.test.ts` |
+| Integrity check (10-phase) | `integrityCheckService.ts` (4,177 LOC) | `integrityCheckService.*.test.ts` (7 files) — see [INTEGRITY_CHECK_SERVICE.md](INTEGRITY_CHECK_SERVICE.md) |
+| FE↔Python compute boundary | `lib/graphComputeClient.ts` (2,478 LOC) | `graphComputeClient.test.ts` — see [GRAPH_COMPUTE_CLIENT.md](GRAPH_COMPUTE_CLIENT.md) |
+| Chart rendering (ECharts) | `analysisECharts/` cluster (5,187 LOC) | `analysisEChartsService.*.test.ts` — see [ANALYSIS_ECHARTS_BUILDERS.md](ANALYSIS_ECHARTS_BUILDERS.md) |
+| Display settings registry | `lib/analysisDisplaySettingsRegistry.ts` (1,530 LOC) | `analysisDisplaySettingsRegistry.test.ts` |
 
 ## Backend Services (`api/`)
+
+For the full BE runner cluster umbrella, see [BE_RUNNER_CLUSTER.md](BE_RUNNER_CLUSTER.md).
 
 | Need to... | Service | Key test file(s) |
 |------------|---------|-------------------|
 | Snapshot regime selection | `snapshot_regime_selection.py`, FE: `candidateRegimeService.ts` | `test_snapshot_regime_selection.py`, `test_regime_consumer_integration.py` |
 | BE subject resolution (doc 31) | `analysis_subject_resolution.py`, `graph_select.py` | `test_analysis_subject_resolution.py`, `test_doc31_parity.py`, CLI `parity-test.sh` |
-| Forecast engine (doc 29) | `runner/forecast_state.py` (`_evaluate_cohort`, `compute_forecast_trajectory`), `runner/model_resolver.py` | `test_v2_v3_parity.py`, `test_forecast_state_cohort.py`, CLI `v2-v3-parity-test.sh`, `chart-graph-agreement-test.sh` |
+| Analysis dispatch | `lib/api_handlers.py` (5,275 LOC) | (covered by per-handler tests) |
+| Analysis runners | `runner/runners.py` (2,139 LOC) | `test_v2_v3_parity.py`, etc. |
+| Forecast engine (doc 29) | `runner/forecast_state.py`, `runner/forecast_runtime.py`, `runner/model_resolver.py` | `test_v2_v3_parity.py`, `test_forecast_state_cohort.py`, CLI `v2-v3-parity-test.sh`, `chart-graph-agreement-test.sh` |
 | Cohort maturity v3 | `runner/cohort_forecast_v3.py` | `test_v2_v3_parity.py`, CLI `v2-v3-parity-test.sh` |
+| Span kernel (multi-hop) | `runner/span_kernel.py`, `runner/span_evidence.py`, `runner/span_upstream.py` | (exercised via cohort_maturity tests) |
+| Per-analysis derivations | `runner/cohort_maturity_derivation.py`, `runner/daily_conversions_derivation.py`, `runner/lag_fit_derivation.py`, `runner/conversion_rate_derivation.py`, `runner/histogram_derivation.py` | per-derivation tests in `lib/tests/` |
 | LOO-ELPD model adequacy | `bayes/compiler/loo.py`, FE: `bayesQualityTier.ts` | `test_loo.py` |
 | PPC calibration | `bayes/compiler/calibration.py` | (validated via `--diag` on synth graphs) |
 

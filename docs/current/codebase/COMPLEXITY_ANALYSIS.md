@@ -1,282 +1,153 @@
 # DagNet Application Complexity Analysis
 
-**Date**: 3-Feb-26  
+**Date**: 27-Apr-26
 **Purpose**: Identify and document the most complex aspects of the DagNet application
 
 ---
 
 ## Executive Summary
 
-The DagNet application is a **highly complex graph-based data analysis platform** with sophisticated algorithms, intricate state management, and complex data synchronization. The complexity stems from:
+DagNet is a graph-based data analysis platform. Its complexity stems from:
 
-1. **Multi-layered state synchronization** across multiple sources of truth
-2. **Complex graph algorithms** for path probability calculations and query optimization
-3. **Sophisticated data transformation pipelines** with caching and incremental updates
-4. **Large, monolithic service files** handling multiple responsibilities
-5. **Intricate DSL parsing and query construction** with multiple execution modes
+1. **Multi-layered state synchronisation** across IndexedDB, in-memory registries, Zustand stores, ReactFlow, and GitHub.
+2. **Path-probability and MSMDC graph algorithms** with state-space expansion and inclusion-exclusion query optimisation.
+3. **A fetch / cache / merge pipeline** spread across a cluster of specialised services that plan, execute, and reconcile time-series and cohort data from external providers.
+4. **Conditioned and cohort forecasting** that fit lag-distribution models, derive maturity, and generate epistemic/confidence bands.
+5. **A Bayesian compiler and regression harness** with synthetic builders, JAX-based inference, and prior-sensitivity tooling.
+6. **A snapshot-DB layer** that captures per-regime, per-slice retrievals as durable, signature-keyed artefacts.
+7. **A hash-chain and signature-matching cluster** that links queries, plans, retrievals, and snapshots so cache hits can be proven across editor sessions.
+8. **A DSL** with compound operators, query explosion, and inclusion-exclusion combination.
+9. **A statistical-enhancement subsystem** doing lag-distribution fitting, path-T95 computation, and recency weighting.
+10. **An analysis-ECharts pipeline** that hydrates, recomputes, and renders multiple chart families (cohort comparison, funnel, snapshots, surprise gauge, bridge).
 
-**Overall Complexity Rating**: 🔴 **Very High** - This is a complex domain application requiring deep understanding of graph theory, statistical methods, and distributed state management.
+**Overall complexity**: 🔴 **Very High** — domain knowledge (graph theory, statistics, Bayesian inference, time-series merging) is required across most subsystems.
 
 ---
 
-## 1. State Management & Synchronization
+## 1. State Management & Synchronisation
 
 ### Complexity Level: 🔴 **Extremely High**
 
-**Key Files**:
-- `src/contexts/TabContext.tsx` (2,852 lines)
-- `src/components/GraphCanvas.tsx` (5,467 lines)
-- `src/components/editors/GraphEditor.tsx` (2,271 lines)
-- `src/contexts/GraphStoreContext.tsx`
-- `src/contexts/ScenariosContext.tsx` (1,708 lines)
+**Key files**:
+- [`src/contexts/TabContext.tsx`](graph-editor/src/contexts/TabContext.tsx) — 3,147 LOC
+- [`src/components/GraphCanvas.tsx`](graph-editor/src/components/GraphCanvas.tsx) — 2,895 LOC
+- [`src/components/editors/GraphEditor.tsx`](graph-editor/src/components/editors/GraphEditor.tsx) — 2,647 LOC
+- [`src/contexts/GraphStoreContext.tsx`](graph-editor/src/contexts/GraphStoreContext.tsx) — 725 LOC
+- [`src/contexts/ScenariosContext.tsx`](graph-editor/src/contexts/ScenariosContext.tsx) — 1,935 LOC
 
-### The Challenge
+### The challenge
 
-The application maintains **multiple sources of truth** that must stay synchronized:
+Multiple sources of truth must stay synchronised:
 
-1. **FileRegistry** (in-memory Map) - Single source of truth for file data
-2. **IndexedDB** (`db.files`) - Persistent storage
-3. **GraphStore** (Zustand) - Per-file graph state (shared across tabs)
-4. **ReactFlow State** - Transformed presentation state
-5. **GitHub** - Remote source of truth
-6. **What-If Context** - Dual state (local + persisted)
+1. **IndexedDB** (`db.files`) — durable source of truth for file content, dirty state, git SHAs, workspace state.
+2. **FileRegistry** — in-memory cache layered over IndexedDB.
+3. **GraphStore** (Zustand) — per-file graph state shared across tabs.
+4. **ReactFlow state** — transformed presentation state.
+5. **GitHub** — remote source of truth.
+6. **What-If / Scenarios** — dual state (in-memory plus IndexedDB-persisted), with scenarios now seeded from graph JSON and round-tripped on commit.
 
-### Complex Synchronization Patterns
+### Complex synchronisation patterns
 
-#### A. Bidirectional Sync with Loop Prevention
+#### A. Bidirectional sync with loop prevention
 
-```typescript
-// GraphEditor uses isSyncingRef to prevent infinite loops
-const syncingRef = useRef(false);
+GraphEditor uses an `isSyncingRef` guard so FileState↔GraphStore updates do not feed each other. Each direction sets the ref before propagating and clears it on a microtask, accepting the small risk of a race in exchange for breaking the feedback loop.
 
-// FileState → GraphStore sync
-useEffect(() => {
-  if (syncingRef.current) return;
-  syncingRef.current = true;
-  setGraph(data);
-  setTimeout(() => { syncingRef.current = false; }, 100);
-}, [data]);
+#### B. Per-file stores shared across tabs
 
-// GraphStore → FileState sync
-useEffect(() => {
-  if (syncingRef.current) return;
-  syncingRef.current = true;
-  updateData(graph);
-  setTimeout(() => { syncingRef.current = false; }, 100);
-}, [graph]);
-```
+Multiple tabs viewing the same file share one GraphStore instance. Undo/redo in one tab affects all tabs viewing the file. History stacks are per-tab; current state is shared. This requires careful coordination on commit/discard.
 
-**Complexity**: Multiple sync paths can trigger each other, requiring careful guards.
+#### C. Editor-type history independence
 
-#### B. Per-File Stores Shared Across Tabs
+- Graph editor — GraphStore history (shared per-file).
+- Form editor — local `historyRef` (per-tab).
+- Monaco editor — Monaco's internal stack (per-tab).
 
-- Multiple tabs viewing the same file share the same GraphStore
-- Undo/redo operations in one tab affect all tabs
-- History stacks are independent per tab but current state is shared
-- Requires careful coordination to prevent conflicts
+Switching editors does **not** merge history stacks.
 
-#### C. Editor-Type History Independence
+### Why it's complex
 
-- Graph Editor: GraphStore history (shared per-file)
-- Form Editor: Local historyRef (per-tab)
-- Monaco Editor: Monaco's internal stack (per-tab)
-- Switching editors does NOT merge history stacks
+1. **Race conditions** across tabs and between layers.
+2. **Feedback loops** in bidirectional sync.
+3. **Consistency** across IndexedDB, in-memory caches, and remote.
+4. **Performance** — sync must be fast enough to not stall typing.
+5. **Undo/redo** spanning multiple editors and tabs.
 
-### Why It's Complex
-
-1. **Race Conditions**: Multiple tabs can modify the same file simultaneously
-2. **Feedback Loops**: Bidirectional sync can cause infinite update loops
-3. **State Consistency**: Must ensure all sources of truth stay aligned
-4. **Performance**: Sync operations must be fast and non-blocking
-5. **Undo/Redo**: History management across multiple editors and tabs
+For full architecture see [`docs/current/codebase/SYNC_SYSTEM_OVERVIEW.md`](docs/current/codebase/SYNC_SYSTEM_OVERVIEW.md).
 
 ---
 
-## 2. Data Operations Service
-
-### Complexity Level: 🔴 **Extremely High**
-
-**Key File**: `src/services/dataOperationsService.ts` (9,244 lines)
-
-### The Challenge
-
-This is the **largest and most complex service** in the application, handling:
-
-1. **Data Fetching** (`getFromSource`)
-   - Cache analysis and gap detection
-   - Incremental fetch planning
-   - Window/cohort mode selection
-   - Maturity and refetch policy evaluation
-   - Multi-gap chaining for contiguous data ranges
-
-2. **Data Merging** (`mergeTimeSeriesIntoParameter`)
-   - Time-series aggregation
-   - Latency statistics calculation
-   - Onset delta derivation
-   - Recency weighting
-   - Completeness constraints
-
-3. **Data Persistence** (`putParameterToFile`, `getParameterFromFile`)
-   - Bidirectional sync (graph ↔ file)
-   - Override flag handling
-   - ID preservation
-   - Provenance tracking
-   - Array append operations
-
-4. **Cache Management**
-   - Query signature matching
-   - Cache hit/miss detection
-   - Gap identification in cached data
-   - Virtual snapshot reconstruction
-
-### Complex Algorithms
-
-#### A. Incremental Fetch Planning
-
-```typescript
-// Calculate which days need to be fetched based on:
-// - Existing cache coverage
-// - Maturity thresholds (latency-based)
-// - Refetch policies
-// - Effective maturity calculations
-const fetchWindows = calculateIncrementalFetch({
-  existingData: cachedTimeSeries,
-  requestedWindow: { start, end },
-  latencyConfig: { t95, medianLag },
-  refetchPolicy: 'stale-while-revalidate'
-});
-```
-
-**Complexity**: Must account for latency, maturity, recency, and refetch policies.
-
-#### B. Time-Series Merging with Latency
-
-```typescript
-// Merge time-series data while:
-// - Aggregating latency statistics (median, mean, t95)
-// - Deriving onset delta from lag histograms
-// - Applying recency weighting
-// - Enforcing completeness constraints
-// - Handling window vs cohort mode differences
-mergeTimeSeriesIntoParameter({
-  timeSeries: fetchedData,
-  parameter: existingParam,
-  latencyConfig: { ... },
-  recencyHalfLife: RECENCY_HALF_LIFE_DAYS
-});
-```
-
-**Complexity**: Statistical calculations combined with data transformation and validation.
-
-#### C. Cache Analysis
-
-```typescript
-// Analyze cache coverage:
-// - Identify gaps in time-series
-// - Calculate days to fetch vs days from cache
-// - Determine contiguous gap regions
-// - Apply maturity thresholds
-const analysis = analyzeCacheCoverage({
-  cachedData: existingValues,
-  requestedWindow: { start, end },
-  maturityThreshold: effectiveMaturity
-});
-```
-
-**Complexity**: Must handle partial coverage, overlapping windows, and maturity-based filtering.
-
-### Why It's Complex
-
-1. **Multiple Execution Paths**: Different modes (window/cohort), different providers, different cache states
-2. **Statistical Calculations**: Latency fitting, recency weighting, completeness constraints
-3. **State Management**: Must coordinate with UpdateManager, FileRegistry, GraphStore
-4. **Error Handling**: Network failures, API rate limits, data validation errors
-5. **Performance**: Incremental fetches, caching, batch operations
-
----
-
-## 3. UpdateManager
+## 2. UpdateManager (Mapping Engine)
 
 ### Complexity Level: 🔴 **Very High**
 
-**Key File**: `src/services/UpdateManager.ts` (4,979 lines)
+**Key files**:
+- [`src/services/UpdateManager.ts`](graph-editor/src/services/UpdateManager.ts) — 3,713 LOC
+- [`src/services/updateManager/`](graph-editor/src/services/updateManager/) — `auditLog`, `mappingConfigurations`, `mappingEngine`, `nestedValueAccess`, `roundingUtils`, `types`
 
-### The Challenge
+### The challenge
 
-Centralized service for **all data transformations** between different domains:
+Centralised service for **all data transformations** between domains:
 
-1. **5 Direction Handlers**:
-   - `graph_internal` - Graph → Graph (MSMDC, cascades)
-   - `graph_to_file` - Graph → File (save, export)
-   - `file_to_graph` - File → Graph (pull, sync)
-   - `external_to_graph` - External → Graph (direct update)
-   - `external_to_file` - External → File (append history)
+1. **5 direction handlers**: `graph_internal`, `graph_to_file`, `file_to_graph`, `external_to_graph`, `external_to_file`.
+2. **4 operation types**: `CREATE`, `UPDATE`, `APPEND`, `DELETE`.
+3. **18+ mapping configurations**: parameter (`p`, `cost_gbp`, `labour_cost`), node (label, description, metadata), case (schedules, variants), context, event.
 
-2. **4 Operation Types**:
-   - `CREATE` - New entity creation
-   - `UPDATE` - Existing entity modification
-   - `APPEND` - Array append operations
-   - `DELETE` - Entity deletion
+### Complex features
 
-3. **18 Mapping Configurations**:
-   - Parameter mappings (p, cost_gbp, labour_cost)
-   - Node mappings (label, description, metadata)
-   - Case mappings (schedules, variants)
-   - Context mappings
-   - Event mappings
+- **Override-flag handling** — `field_overridden` markers prevent overwriting user edits unless `ignoreOverrideFlags` is set.
+- **Conflict resolution** — strategies are `skip`, `overwrite`, `prompt`, `error`; both batch and interactive modes are supported.
+- **Field transformations** — date normalisation (UK format), DSL normalisation, ID generation, array merging.
+- **Audit trail** — every change is logged for debugging and rollback.
 
-### Complex Features
+### Why it's complex
 
-#### A. Override Flag Handling
+1. **Combinatorial surface**: 5 directions × 4 operations × ~18 mappings.
+2. **Override semantics**: when to respect vs ignore.
+3. **Conflict strategies** with interactive prompts.
+4. **Transform chains**: values may be transformed multiple times in one pipeline.
 
-```typescript
-// Respect override flags to prevent overwriting user edits
-if (target.field_overridden && !options.ignoreOverrideFlags) {
-  return { skipped: true, reason: 'overridden' };
-}
-```
+---
 
-**Complexity**: Must track which fields are overridden and when to respect vs ignore them.
+## 3. Data Fetch & Cache Pipeline
 
-#### B. Conflict Resolution
+### Complexity Level: 🔴 **Very High**
 
-```typescript
-// Handle conflicts between source and target:
-// - Overridden fields
-// - Modified since sync
-// - Type mismatches
-if (conflict) {
-  switch (options.conflictStrategy) {
-    case 'skip': return { skipped: true };
-    case 'overwrite': return { applied: true };
-    case 'prompt': return { requiresUserInput: true };
-    case 'error': throw new Error('Conflict detected');
-  }
-}
-```
+The old monolithic `dataOperationsService.ts` (~9k LOC) has been split into a cluster:
 
-**Complexity**: Multiple conflict types, multiple resolution strategies, interactive vs batch modes.
+**Thin orchestrator** (entry point):
+- [`src/services/dataOperationsService.ts`](graph-editor/src/services/dataOperationsService.ts) — 713 LOC
 
-#### C. Field Transformations
+**Decomposed helpers** under [`src/services/dataOperations/`](graph-editor/src/services/dataOperations/):
+- `applyChanges`, `asatQuerySupport`, `batchMode`, `cacheManagement`, `evidenceForecastScalars`, `fileToGraphSync`, `getFromSourceDirect`, `graphToFileSync`, `logHelpers`, `querySignature`, `types`.
 
-```typescript
-// Transform values during mapping:
-// - Date normalization (UK format)
-// - Query DSL normalization
-// - ID generation
-// - Array merging
-const transformed = mapping.transform(value, source, target);
-```
+**Fetch orchestration cluster** (planning, policy, execution):
+- [`fetchOrchestratorService.ts`](graph-editor/src/services/fetchOrchestratorService.ts), [`fetchPlanBuilderService.ts`](graph-editor/src/services/fetchPlanBuilderService.ts), `fetchPlanTypes.ts`, `fetchRefetchPolicy.ts`, `fetchTargetEnumerationService.ts`.
+- [`fetchDataService.ts`](graph-editor/src/services/fetchDataService.ts) — 3,169 LOC (provider-side execution, query DSL → provider call).
+- [`windowFetchPlannerService.ts`](graph-editor/src/services/windowFetchPlannerService.ts), [`retrieveAllSlicesPlannerService.ts`](graph-editor/src/services/retrieveAllSlicesPlannerService.ts), [`retrieveAllSlicesService.ts`](graph-editor/src/services/retrieveAllSlicesService.ts).
 
-**Complexity**: Different transformations for different field types, conditional transformations.
+**Daily automation**:
+- [`dailyAutomationJob.ts`](graph-editor/src/services/dailyAutomationJob.ts), [`dailyFetchService.ts`](graph-editor/src/services/dailyFetchService.ts), [`dailyRetrieveAllAutomationService.ts`](graph-editor/src/services/dailyRetrieveAllAutomationService.ts), [`stalenessNudgeService.ts`](graph-editor/src/services/stalenessNudgeService.ts), `stalenessNudgeJobs.ts`.
 
-### Why It's Complex
+### Complex algorithms
 
-1. **Combinatorial Explosion**: 5 directions × 4 operations × 18 mappings = 360 possible combinations
-2. **Override Logic**: Complex rules for when to respect vs ignore override flags
-3. **Conflict Handling**: Multiple conflict types with different resolution strategies
-4. **Transform Chains**: Values may be transformed multiple times through the pipeline
-5. **Audit Trail**: Must track all changes for debugging and rollback
+- **Incremental fetch planning** — calculate which days require fetch given existing cache coverage, latency-based maturity thresholds, and refetch policy (`stale-while-revalidate`, etc.).
+- **Time-series merge** — aggregate `n` and `k`, derive lag/latency statistics, compute onset delta from lag histograms, apply recency weighting, enforce completeness constraints, and reconcile window vs cohort semantics.
+- **Cache analysis** — identify gaps in cached time-series, group contiguous regions, and apply maturity thresholds.
+- **Query signature matching** — see §10.
+
+### Provider abstraction
+
+- **Amplitude** (live + staging) — event-based queries.
+- **Sheets** — HRN-based queries.
+- **Sheets context fallback** — when Amplitude lacks a context dimension.
+
+### Why it's complex
+
+1. **Many execution paths**: window vs cohort modes, multiple providers, multiple cache states.
+2. **Statistical reconciliation** during merge.
+3. **State coordination** with UpdateManager, FileRegistry, GraphStore, snapshot DB.
+4. **Error handling**: rate limits, partial failures, retries.
+5. **Performance**: incremental fetches, batching, cache hits.
 
 ---
 
@@ -284,90 +155,34 @@ const transformed = mapping.transform(value, source, target);
 
 ### Complexity Level: 🔴 **Very High**
 
-**Key Files**:
-- `lib/runner/path_runner.py` (Python)
-- `src/lib/runner.ts` (TypeScript)
-- `src/lib/graphPruning.ts`
-- `lib/msmdc.py` (Python)
+**Key files**:
+- [`graph-editor/lib/runner/path_runner.py`](graph-editor/lib/runner/path_runner.py) — 836 LOC (Python)
+- [`graph-editor/lib/msmdc.py`](graph-editor/lib/msmdc.py) — 1,196 LOC (Python)
+- [`graph-editor/src/lib/runner.ts`](graph-editor/src/lib/runner.ts) — 504 LOC (TypeScript)
+- [`graph-editor/src/lib/graphPruning.ts`](graph-editor/src/lib/graphPruning.ts) — 263 LOC
 
-### The Challenge
+### The challenge
 
 Calculate **path probabilities** through directed graphs with:
 
-1. **Conditional Probabilities**: Edges with `conditional_p` that depend on visited nodes
-2. **Multiple Paths**: Many paths from start to end node
-3. **Cost Calculations**: Expected monetary and labour costs
-4. **Query Pruning**: Filter graph based on DSL constraints
+1. **Conditional probabilities** — edges with `conditional_p` that depend on visited nodes.
+2. **Multiple paths** from start to end.
+3. **Cost calculations** — expected monetary and labour costs.
+4. **Query-driven pruning** based on DSL constraints.
 
-### Complex Algorithms
+### Complex algorithms
 
-#### A. State-Space Expansion (Python)
+- **State-space expansion** — when `conditional_p` is in play, the state is `(node, visited_tracked_human_ids_subset)` and the state space grows exponentially with the number of tracked nodes.
+- **MSMDC query generation** — finds a minimal set of queries to retrieve all relevant paths using inclusion-exclusion (set cover, NP-hard in general).
+- **Path T95** — cumulative latency along paths via topological DP: `path_t95(edge) = max(path_t95(incoming)) + edge.t95`. Handles cycles and multiple paths.
 
-```python
-def _calculate_path_probability_state_space(
-    G: nx.DiGraph,
-    start_key: str,
-    end_key: str,
-    pruning: Optional[PruningResult] = None,
-) -> PathResult:
-    """
-    State-space expansion for graphs with conditional_p.
-    State = (node_key, visited_tracked_human_ids_subset).
-    """
-    # Expand state space considering:
-    # - Which nodes have been visited
-    # - Which conditional_p edges are active
-    # - Pruning constraints (excluded edges, renorm factors)
-```
+### Why it's complex
 
-**Complexity**: Exponential state space growth with conditional probabilities.
-
-#### B. MSMDC Query Generation
-
-```python
-def generate_msmdc_query(
-    G: nx.DiGraph,
-    from_node: str,
-    to_node: str,
-    visited: List[str],
-    exclude: List[str]
-) -> str:
-    """
-    Generate minimal set of queries for data retrieval.
-    Uses inclusion-exclusion principle to minimize API calls.
-    """
-    # Find all paths matching constraints
-    # Generate base query + minus terms + plus terms
-    # Optimize query set to minimize API calls
-```
-
-**Complexity**: Set cover problem (NP-hard), query optimization, inclusion-exclusion logic.
-
-#### C. Path T95 Calculation
-
-```typescript
-// Compute cumulative latency along paths:
-// path_t95(edge) = max(path_t95(incoming edges)) + edge.t95
-export function computePathT95(
-  graph: GraphForPath,
-  activeEdges: Set<string>,
-  anchorNodeId?: string
-): Map<string, number> {
-  // Topological sort
-  // Dynamic programming to compute max path latency
-  // Handle cycles and multiple paths
-}
-```
-
-**Complexity**: Topological sorting, dynamic programming, handling cycles.
-
-### Why It's Complex
-
-1. **Graph Theory**: Requires understanding of DAGs, topological sorting, path finding
-2. **Conditional Logic**: State-space explosion with conditional probabilities
-3. **Optimization**: MSMDC is NP-hard (set cover problem)
-4. **Performance**: Must handle large graphs efficiently
-5. **Correctness**: Probability calculations must be mathematically correct
+1. **Graph theory** — DAGs, topological sorting, path enumeration, cycle handling.
+2. **Conditional logic** — state-space explosion.
+3. **NP-hard sub-problems** in query optimisation.
+4. **Performance** at large graphs.
+5. **Mathematical correctness** of probability outputs.
 
 ---
 
@@ -375,513 +190,388 @@ export function computePathT95(
 
 ### Complexity Level: 🟡 **High**
 
-**Key Files**:
-- `src/lib/queryDSL.ts`
-- `src/lib/dslExplosion.ts`
-- `src/lib/compositeQueryParser.ts`
-- `src/lib/das/compositeQueryExecutor.ts`
+**Key files**:
+- [`graph-editor/src/lib/queryDSL.ts`](graph-editor/src/lib/queryDSL.ts) — 979 LOC
+- [`graph-editor/src/lib/dslExplosion.ts`](graph-editor/src/lib/dslExplosion.ts) — 348 LOC
+- [`graph-editor/src/lib/das/compositeQueryExecutor.ts`](graph-editor/src/lib/das/compositeQueryExecutor.ts) — 390 LOC
+- [`graph-editor/lib/query_dsl.py`](graph-editor/lib/query_dsl.py)
 
-### The Challenge
+For terminology see [`docs/current/codebase/RESERVED_QUERY_TERMS_GLOSSARY.md`](docs/current/codebase/RESERVED_QUERY_TERMS_GLOSSARY.md).
 
-Parse and execute **domain-specific query language** with:
+### The challenge
 
-1. **Atomic Expressions**: `visited(a,b)`, `exclude(c)`, `context(key:value)`
-2. **Compound Operators**: `;` (semicolon), `or()`, `minus()`, `plus()`
-3. **Query Explosion**: Expand compound expressions into atomic slices
-4. **Inclusion-Exclusion**: Combine sub-query results with coefficients
+Parse and execute the **domain-specific query language**:
 
-### Complex Features
+1. **Atomic expressions** — `visited(a,b)`, `exclude(c)`, `context(key:value)`.
+2. **Compound operators** — `;` (semicolon), `or()`, `minus()`, `plus()`.
+3. **Query explosion** — expand compound expressions into atomic slices.
+4. **Inclusion-exclusion** — combine sub-query results with coefficients.
 
-#### A. Query Explosion
+### Complex features
 
-```typescript
-// Expand compound expressions:
-// "a;b;c" → ["a", "b", "c"]
-// "or(a,b,c)" → ["a", "b", "c"]
-// "(a;b).window(...)" → ["a.window(...)", "b.window(...)"]
-// "c.(a;b)" → ["c.a", "c.b"]
-export function explodeDSL(dsl: string): string[] {
-  // Handle nested parentheses
-  // Distribute suffixes and prefixes
-  // Handle bare key expansion (Cartesian product)
-}
-```
+- **Query explosion** — handles nested parentheses, prefix/suffix distribution (`(a;b).window(...)` → `[a.window(...), b.window(...)]`), and Cartesian product expansion of bare keys.
+- **Composite query execution** — combines `base − minus₁ − minus₂ + plus₁` with weighted coefficients, including time-series combination and edge-case handling.
+- **Slice isolation** — keeps cohort/window slice keys distinct so signatures and caches do not collide.
 
-**Complexity**: Nested parsing, prefix/suffix distribution, Cartesian product expansion.
+### Why it's complex
 
-#### B. Composite Query Execution
-
-```typescript
-// Execute inclusion-exclusion queries:
-// base - minus1 - minus2 + plus1
-// k = k_base + Σ(coefficient_i × to_count_i)
-function combineInclusionExclusionResults(
-  results: SubQueryResult[]
-): CombinedResult {
-  // Apply weighted sum with coefficients
-  // Combine time-series data
-  // Handle edge cases (empty results, missing data)
-}
-```
-
-**Complexity**: Mathematical correctness, time-series combination, edge case handling.
-
-#### C. Query Signature Matching
-
-```typescript
-// Generate cache keys from query DSL:
-// Must include all relevant constraints
-// Must be consistent across equivalent queries
-export function computeQuerySignature(
-  dsl: string,
-  from: string,
-  to: string
-): string {
-  // Normalize DSL
-  // Include all constraints (visited, exclude, context, window)
-  // Generate deterministic hash
-}
-```
-
-**Complexity**: Normalization, consistency, cache invalidation logic.
-
-### Why It's Complex
-
-1. **Parsing**: Nested expressions, operator precedence, edge cases
-2. **Explosion**: Cartesian product can generate thousands of slices
-3. **Optimization**: Query set cover problem (NP-hard)
-4. **Correctness**: Mathematical correctness of inclusion-exclusion
-5. **Caching**: Signature matching must be consistent and correct
+1. **Parsing** of nested expressions and operator precedence.
+2. **Explosion** can yield thousands of slices.
+3. **Set-cover optimisation** is NP-hard.
+4. **Mathematical correctness** of inclusion-exclusion combination.
+5. **Cache consistency** across equivalent expressions.
 
 ---
 
-## 6. Statistical Enhancement Service
-
-### Complexity Level: 🟡 **High**
-
-**Key File**: `src/services/statisticalEnhancementService.ts` (3,278 lines)
-
-### The Challenge
-
-Apply **statistical methods** to enhance data:
-
-1. **Lag Distribution Fitting**: Fit log-normal distributions to latency data
-2. **Path T95 Calculation**: Cumulative latency along paths
-3. **Statistical Enhancement**: MCMC, Bayesian inference, trend detection
-4. **Recency Weighting**: Apply time-based weights to data points
-
-### Complex Algorithms
-
-#### A. Lag Distribution Fitting
-
-```typescript
-// Fit log-normal distribution to latency histogram:
-// - Transform to model space
-// - Estimate parameters (μ, σ)
-// - Calculate percentiles (t95, median)
-export function fitLagDistribution(
-  histogram: LagHistogram
-): LagDistribution {
-  // Maximum likelihood estimation
-  // Percentile calculations
-  // Validation and error handling
-}
-```
-
-**Complexity**: Statistical methods, parameter estimation, validation.
-
-#### B. Path T95 Topological DP
-
-```typescript
-// Compute cumulative latency using topological DP:
-// path_t95(edge) = max(path_t95(incoming edges)) + edge.t95
-export function computePathT95(
-  graph: GraphForPath,
-  activeEdges: Set<string>
-): Map<string, number> {
-  // Topological sort (Kahn's algorithm)
-  // Dynamic programming
-  // Handle cycles and multiple paths
-}
-```
-
-**Complexity**: Graph algorithms, dynamic programming, cycle handling.
-
-### Why It's Complex
-
-1. **Statistical Methods**: Requires understanding of probability distributions, MLE, Bayesian inference
-2. **Graph Algorithms**: Topological sorting, dynamic programming
-3. **Numerical Stability**: Floating-point precision, edge cases
-4. **Performance**: Must be fast enough for real-time updates
-
----
-
-## 7. Window Aggregation Service
-
-### Complexity Level: 🟡 **High**
-
-**Key File**: `src/services/windowAggregationService.ts` (2,459 lines)
-
-### The Challenge
-
-Aggregate time-series data with:
-
-1. **Window Mode**: Daily time-series aggregation
-2. **Cohort Mode**: Cohort-based aggregation
-3. **Latency Statistics**: Median, mean, t95 calculations
-4. **Query Signature Caching**: Cache aggregation results
-
-### Complex Features
-
-#### A. Time-Series Aggregation
-
-```typescript
-// Aggregate time-series data:
-// - Sum n and k values
-// - Calculate probabilities
-// - Aggregate latency statistics
-// - Handle missing data
-export function aggregateWindowData(
-  timeSeries: TimeSeriesPoint[],
-  window: DateRange
-): AggregatedData {
-  // Date range filtering
-  // Statistical aggregation
-  // Latency statistics
-}
-```
-
-**Complexity**: Date handling, statistical calculations, missing data handling.
-
-#### B. Query Signature Cache
-
-```typescript
-// Cache aggregation results by query signature:
-// Must account for all relevant parameters
-// Must invalidate on data changes
-export class WindowAggregationService {
-  private cache: Map<string, CachedResult>;
-  
-  getCachedResult(signature: string): CachedResult | null {
-    // Check cache
-    // Validate cache entry (expiry, data freshness)
-    // Return cached result or null
-  }
-}
-```
-
-**Complexity**: Cache invalidation, signature matching, expiry handling.
-
-### Why It's Complex
-
-1. **Date Handling**: Time zones, date ranges, edge cases
-2. **Statistical Calculations**: Aggregation, percentiles, latency statistics
-3. **Caching**: Cache invalidation, signature matching, performance
-4. **Mode Differences**: Window vs cohort mode have different semantics
-
----
-
-## 8. GraphCanvas Component
+## 6. Statistical Enhancement & Lag Fitting
 
 ### Complexity Level: 🔴 **Very High**
 
-**Key File**: `src/components/GraphCanvas.tsx` (5,467 lines)
+**Key files**:
+- [`src/services/statisticalEnhancementService.ts`](graph-editor/src/services/statisticalEnhancementService.ts) — 3,836 LOC
+- [`src/services/lagDistributionUtils.ts`](graph-editor/src/services/lagDistributionUtils.ts), [`lagFitAnalysisService.ts`](graph-editor/src/services/lagFitAnalysisService.ts), [`lagHorizonsService.ts`](graph-editor/src/services/lagHorizonsService.ts), [`lagMixtureAggregationService.ts`](graph-editor/src/services/lagMixtureAggregationService.ts).
+- Python: [`graph-editor/lib/runner/lag_distribution_utils.py`](graph-editor/lib/runner/lag_distribution_utils.py), [`lag_fit_derivation.py`](graph-editor/lib/runner/lag_fit_derivation.py), [`lag_model_fitter.py`](graph-editor/lib/runner/lag_model_fitter.py).
+- [`graph-editor/lib/stats_enhancement.py`](graph-editor/lib/stats_enhancement.py).
 
-### The Challenge
+### The challenge
 
-Render and interact with **large, complex graphs**:
+Apply statistical methods to enhance evidence and projections:
 
-1. **ReactFlow Integration**: Transform graph data to ReactFlow format
-2. **Layout Algorithms**: Auto-layout, Sankey layout, force-directed
-3. **Path Finding**: Find all paths between nodes
-4. **Edge Rendering**: Complex edge rendering with probabilities, costs, latency
-5. **Interaction Handling**: Selection, dragging, zooming, panning
+1. **Lag distribution fitting** — log-normal (or mixture) fits to latency histograms; MLE parameter estimation; percentile recovery (median, t95).
+2. **Path T95** — cumulative latency along paths via topological DP.
+3. **Statistical enhancement** — Bayesian smoothing, trend detection, MCMC.
+4. **Recency weighting** — exponential decay over time (`RECENCY_HALF_LIFE_DAYS`).
+5. **Lag-mixture aggregation** — combining per-edge lag distributions into path-level distributions.
 
-### Complex Features
+### Why it's complex
 
-#### A. Graph Transformation
-
-```typescript
-// Transform raw graph data to ReactFlow format:
-// - Convert nodes and edges
-// - Calculate positions
-// - Apply styling
-// - Handle conditional probabilities
-function toFlow(graph: Graph): { nodes: Node[], edges: Edge[] } {
-  // Transform nodes
-  // Transform edges (handle conditional_p)
-  // Calculate positions
-  // Apply visual styling
-}
-```
-
-**Complexity**: Data transformation, layout calculations, conditional logic.
-
-#### B. Path Finding
-
-```typescript
-// Find all paths between two nodes:
-// - DFS with depth limit
-// - Cycle detection
-// - Path enumeration
-const findAllPaths = useCallback((
-  sourceId: string,
-  targetId: string,
-  maxDepth: number = 10
-) => {
-  // DFS traversal
-  // Cycle detection
-  // Path collection
-}, []);
-```
-
-**Complexity**: Graph algorithms, cycle detection, performance optimization.
-
-#### C. Layout Algorithms
-
-```typescript
-// Auto-layout using hierarchical layout:
-// - Topological sort
-// - Layer assignment
-// - Node positioning
-// - Edge routing
-const autoLayout = useCallback(() => {
-  // Topological sort
-  // Layer assignment
-  // Position calculation
-  // Edge routing
-}, []);
-```
-
-**Complexity**: Graph layout algorithms, performance, visual quality.
-
-### Why It's Complex
-
-1. **Performance**: Must handle large graphs (1000+ nodes) efficiently
-2. **Visual Complexity**: Multiple layout algorithms, edge rendering, interactions
-3. **State Management**: ReactFlow state, graph state, UI state
-4. **Data Transformation**: Complex transformations between formats
-5. **User Experience**: Smooth interactions, responsive UI
+1. **Statistical methods** — distribution fitting, MLE, mixture models, percentile recovery.
+2. **Graph algorithms** — topological sort and DP over the active edge set.
+3. **Numerical stability** — floating-point precision, log-space transforms, edge cases.
+4. **Performance** — must run fast enough for live recompute.
 
 ---
 
-## 9. Fetch Data Service
+## 7. Cohort Forecasting & Conditioned Forecast
 
-### Complexity Level: 🟡 **High**
+### Complexity Level: 🔴 **Very High**
 
-**Key File**: `src/services/fetchDataService.ts` (2,075 lines)
+**Key TS files**:
+- [`src/services/conditionedForecastService.ts`](graph-editor/src/services/conditionedForecastService.ts), `conditionedForecastSupersessionState.ts`.
+- [`src/services/cohortRetrievalHorizon.ts`](graph-editor/src/services/cohortRetrievalHorizon.ts), [`forecastingSettingsService.ts`](graph-editor/src/services/forecastingSettingsService.ts).
 
-### The Challenge
+**Key Python runners** under [`graph-editor/lib/runner/`](graph-editor/lib/runner/):
+- `cohort_forecast.py`, `cohort_forecast_v2.py`, `cohort_forecast_v3.py`.
+- `cohort_maturity_derivation.py`, `forecast_state.py`, `forecast_runtime.py`, `forecast_preparation.py`, `forecast_application.py`.
+- `confidence_bands.py`, `epistemic_bands.py`, `daily_conversions_derivation.py`, `histogram_derivation.py`.
 
-Orchestrate **data fetching** from external APIs:
+### The challenge
 
-1. **Query Planning**: Build fetch plans from graph edges
-2. **Provider Abstraction**: Support multiple data providers (Amplitude, Sheets)
-3. **Cache Management**: Check cache, identify gaps, plan fetches
-4. **Error Handling**: Retry logic, rate limiting, error recovery
+Project conversion outcomes for cohorts that are still maturing:
 
-### Complex Features
+1. **Maturity derivation** — for each cohort, what proportion of its lag distribution has elapsed.
+2. **Lag-conditioned projection** — extrapolate observed `k`/`n` to a hypothetical fully-mature cohort.
+3. **Confidence and epistemic bands** — separate aleatoric (sampling) and epistemic (model/lag) uncertainty.
+4. **Supersession** — when a fresh forecast lands, prior conditioned forecasts are marked superseded but kept for diagnostics.
+5. **Settings governance** — `forecastingSettingsService` controls policy (lag model choice, recency, horizon).
 
-#### A. Fetch Plan Building
+### Why it's complex
 
-```typescript
-// Build fetch plans from graph edges:
-// - Extract DSL from edges
-// - Explode compound queries
-// - Group compatible queries
-// - Plan execution order
-export function buildFetchPlan(
-  graph: Graph,
-  edges: Edge[]
-): FetchPlan {
-  // Extract queries
-  // Explode DSL
-  // Group queries
-  // Plan execution
-}
-```
-
-**Complexity**: Query extraction, DSL explosion, query grouping, optimization.
-
-#### B. Provider Abstraction
-
-```typescript
-// Abstract over different providers:
-// - Amplitude: Event-based queries
-// - Sheets: HRN-based queries
-// - Different query formats
-// - Different response formats
-export function buildDataQuerySpec(
-  dsl: string,
-  provider: 'amplitude' | 'sheets'
-): QuerySpec {
-  // Parse DSL
-  // Build provider-specific query
-  // Handle provider differences
-}
-```
-
-**Complexity**: Provider differences, query transformation, response parsing.
-
-### Why It's Complex
-
-1. **Query Planning**: Complex planning logic, optimization
-2. **Provider Differences**: Different APIs, different formats
-3. **Cache Management**: Gap detection, cache invalidation
-4. **Error Handling**: Retry logic, rate limiting, recovery
+1. **Composes** the lag-fitting pipeline (§6), cohort retrieval, the snapshot DB (§8), and statistical enhancement.
+2. **Multiple algorithm versions** (`v2`, `v3`) coexist for back-comparison.
+3. **Numerical care** — small samples, partial windows, censored cohorts.
+4. **State**: supersession requires durable identifiers and dependency tracking.
 
 ---
 
-## 10. Workspace Service
+## 8. Snapshot Database
 
 ### Complexity Level: 🟡 **High**
 
-**Key File**: `src/services/workspaceService.ts` (1,748 lines)
+**Key TS services**:
+- [`graphSnapshotService.ts`](graph-editor/src/services/graphSnapshotService.ts), [`snapshotDependencyPlanService.ts`](graph-editor/src/services/snapshotDependencyPlanService.ts), [`snapshotManagerContextService.ts`](graph-editor/src/services/snapshotManagerContextService.ts), [`snapshotRetrievalsService.ts`](graph-editor/src/services/snapshotRetrievalsService.ts), [`snapshotSubjectResolutionService.ts`](graph-editor/src/services/snapshotSubjectResolutionService.ts), [`snapshotWriteService.ts`](graph-editor/src/services/snapshotWriteService.ts).
 
-### The Challenge
+**Python**:
+- [`graph-editor/lib/snapshot_service.py`](graph-editor/lib/snapshot_service.py), [`graph-editor/lib/snapshot_regime_selection.py`](graph-editor/lib/snapshot_regime_selection.py), [`graph-editor/lib/slice_key_normalisation.py`](graph-editor/lib/slice_key_normalisation.py).
 
-Manage **workspace state** across repositories:
+### The challenge
 
-1. **Workspace Loading**: Load workspace from GitHub
-2. **File Management**: Track files, dirty state, git state
-3. **Index Management**: Build and maintain index files
-4. **Sync Operations**: Sync with remote, handle conflicts
+Persist per-regime, per-slice retrievals as durable, signature-keyed artefacts so that forecasts and analyses can be reproduced and superseded coherently. Snapshots:
 
-### Complex Features
+1. **Subject resolution** — map a query/regime/slice tuple to a canonical subject identity.
+2. **Dependency planning** — given a chart or forecast, plan the set of snapshots it depends on.
+3. **Regime selection** — pick the right candidate regime for a given subject when generalisation is in play.
+4. **Write coordination** — snapshots are written transactionally with their dependency graph.
 
-#### A. Workspace Loading
+### Why it's complex
 
-```typescript
-// Load workspace from GitHub:
-// - Clone repository
-// - Load all files
-// - Build file registry
-// - Initialize IndexedDB
-export async function loadWorkspace(
-  repository: string,
-  branch: string
-): Promise<WorkspaceState> {
-  // Clone repository
-  // Load files
-  // Build registry
-  // Initialize DB
-}
-```
+1. **Identity discipline** — slice-key normalisation must be exact for cache reuse.
+2. **Dependency graphs** — many-to-many between snapshots, charts, forecasts.
+3. **Generalisation interaction** — see §12.
 
-**Complexity**: Git operations, file loading, state initialization.
+---
 
-#### B. Index Management
+## 9. Bayes Compiler & Regression Infrastructure
 
-```typescript
-// Build and maintain index files:
-// - Scan directory structure
-// - Build index entries
-// - Handle updates
-// - Maintain consistency
-export async function rebuildIndex(
-  workspace: WorkspaceState
-): Promise<IndexFile> {
-  // Scan directories
-  // Build entries
-  // Validate consistency
-  // Write index file
-}
-```
+### Complexity Level: 🔴 **Very High**
 
-**Complexity**: File system operations, consistency maintenance, update handling.
+**Tree**: [`bayes/`](bayes/)
 
-### Why It's Complex
+- **Compiler**: [`bayes/compiler/`](bayes/compiler/) — graph → JAX model.
+- **App**: [`bayes/app.py`](bayes/app.py) — service layer.
+- **Regression / harness**: [`run_regression.py`](bayes/run_regression.py), [`regression_plans.py`](bayes/regression_plans.py), [`param_recovery.py`](bayes/param_recovery.py), [`prior_sensitivity.py`](bayes/prior_sensitivity.py), [`recovery_slices.py`](bayes/recovery_slices.py), [`softplus_sweep.py`](bayes/softplus_sweep.py), [`convergence_matrix.py`](bayes/convergence_matrix.py).
+- **Diagnostics**: `diag_jax_nan*.py`, `diag_phase_a.py`, `diag_phase_b.py`, `diag_run.py`.
+- **Migration / fixtures**: [`migrate_truth_files.py`](bayes/migrate_truth_files.py), [`fixtures/`](bayes/fixtures/), [`baselines/`](bayes/baselines/).
+- **Synthetic builders**: `bayes/tests/synthetic.py` — every new compiler branch must add a synthetic builder (CLAUDE.md §4).
 
-1. **Git Operations**: Clone, pull, push, commit, conflict resolution
-2. **State Management**: File registry, IndexedDB, git state
-3. **Consistency**: Must keep all sources of truth aligned
-4. **Performance**: Must handle large workspaces efficiently
+**FE bridge services**:
+- [`bayesService.ts`](graph-editor/src/services/bayesService.ts), [`bayesPatchService.ts`](graph-editor/src/services/bayesPatchService.ts), [`bayesPriorService.ts`](graph-editor/src/services/bayesPriorService.ts), [`bayesReconnectService.ts`](graph-editor/src/services/bayesReconnectService.ts).
+- Local-mode harness: [`graph-editor/lib/bayes_local.py`](graph-editor/lib/bayes_local.py).
+
+### The challenge
+
+1. **Compile graphs to a probabilistic model** that JAX/NumPyro can sample.
+2. **Recover parameters** from synthetic data to validate the compiler.
+3. **Track regression** across compiler changes via a baseline/results schema.
+4. **Diagnose JAX NaNs**, prior drift, and convergence pathologies.
+5. **Bridge** the Python compiler to the FE: prior editing, patching, reconnection, recovery slices.
+
+### Why it's complex
+
+1. **Probabilistic semantics** — getting compiler branches right requires both code and synthetic-builder updates.
+2. **Numerical pathologies** — JAX NaN diagnostics are a recurring class of bug.
+3. **CI cost** — `run_regression.py` is gated (CLAUDE.md gate 5) because runs take minutes-to-hours.
+
+See [`bayes/DEVTOOLS.md`](bayes/DEVTOOLS.md) and [`bayes/TESTING_PLAYBOOK.md`](bayes/TESTING_PLAYBOOK.md) for entry points.
+
+---
+
+## 10. Hash Chain & Signature Matching
+
+### Complexity Level: 🟡 **High**
+
+**Services**:
+- [`hashChainService.ts`](graph-editor/src/services/hashChainService.ts), [`hashMappingsService.ts`](graph-editor/src/services/hashMappingsService.ts), [`coreHashService.ts`](graph-editor/src/services/coreHashService.ts).
+- [`signatureLinksApi.ts`](graph-editor/src/services/signatureLinksApi.ts), [`signatureLinksTabService.ts`](graph-editor/src/services/signatureLinksTabService.ts), [`signatureMatchingService.ts`](graph-editor/src/services/signatureMatchingService.ts), [`signaturePolicyService.ts`](graph-editor/src/services/signaturePolicyService.ts).
+- [`querySignatureService.ts`](graph-editor/src/services/querySignatureService.ts), [`plannerQuerySignatureService.ts`](graph-editor/src/services/plannerQuerySignatureService.ts), [`graphTopologySignatureService.ts`](graph-editor/src/services/graphTopologySignatureService.ts), [`graphInputSignatureService.ts`](graph-editor/src/services/graphInputSignatureService.ts).
+
+### The challenge
+
+Generate, link, and validate deterministic signatures across queries, plans, retrievals, and snapshots so cache hits can be **proven** rather than guessed.
+
+1. **Normalisation** — equivalent expressions must produce identical signatures.
+2. **Hash chains** — link upstream signatures (graph topology, query, plan) to downstream artefacts (retrieval, snapshot, chart).
+3. **Policy** — when a signature is allowed to be reused vs must be regenerated.
+4. **Signature-links UI** — surface chains for inspection.
+
+### Why it's complex
+
+1. **Determinism** across time zones, ordering, and serialisation forms.
+2. **Cross-service dependency** — every cache-touching subsystem must agree on signature semantics.
+3. **Migration** — when signature semantics change, every downstream artefact's link must be reconciled.
+
+This subsystem subsumes the original "query signature matching" complexity domain (it now spans many services rather than one helper).
+
+---
+
+## 11. Window Aggregation
+
+### Complexity Level: 🟡 **High**
+
+**Key file**: [`src/services/windowAggregationService.ts`](graph-editor/src/services/windowAggregationService.ts) — 2,574 LOC
+
+### The challenge
+
+Aggregate time-series data with two semantically-distinct modes:
+
+1. **Window mode** — daily aggregation over a date range.
+2. **Cohort mode** — cohort-based aggregation (cohort indexed by `from_date`).
+
+### Complex features
+
+- **Aggregation** — sum `n`/`k`, derive probabilities, aggregate latency statistics, handle missing data.
+- **Latency stats** — median, mean, t95.
+- **Signature-keyed cache** — invalidation aware of underlying data freshness.
+
+### Why it's complex
+
+1. **Date handling** — UK day boundaries, time zones, edge cases (the `ukDayBoundarySchedulerService` and `ukReferenceDayService` exist for a reason).
+2. **Statistical aggregation** with missing data.
+3. **Cache invalidation** keyed by signature.
+4. **Mode semantics** differ between window and cohort.
+
+---
+
+## 12. Generalisation & Regime Resolution
+
+### Complexity Level: 🟡 **High**
+
+**Services / files**:
+- [`candidateRegimeService.ts`](graph-editor/src/services/candidateRegimeService.ts), [`analysisTypeResolutionService.ts`](graph-editor/src/services/analysisTypeResolutionService.ts), [`modelVarsResolution.ts`](graph-editor/src/services/modelVarsResolution.ts).
+- Python: [`graph-editor/lib/runner/model_resolver.py`](graph-editor/lib/runner/model_resolver.py), [`graph-editor/lib/snapshot_regime_selection.py`](graph-editor/lib/snapshot_regime_selection.py), [`graph-editor/lib/runner/predicates.py`](graph-editor/lib/runner/predicates.py).
+- Scenario portability: scenarios are seeded from graph JSON on first open and serialised back on commit (round-trip in `ScenariosContext.tsx`).
+
+### The challenge
+
+A single graph can carry multiple **regimes** (parameterisations) that apply under different predicates. At resolve time the system must pick the right candidate regime for the active context.
+
+1. **Predicate evaluation** — match the active scenario / context against regime predicates.
+2. **Candidate ranking** — when multiple regimes apply, pick the most specific.
+3. **Snapshot interaction** — regime selection feeds snapshot subject resolution (§8).
+4. **Variable resolution** — `modelVarsResolution` and `posteriorSliceResolution` translate regime + scenario into concrete model vars.
+
+### Why it's complex
+
+Generalisation cuts across the graph model, scenarios, snapshots, forecasting, and Bayes. Mistakes here surface as silent miscomputation rather than crashes.
+
+---
+
+## 13. Analysis ECharts Pipeline
+
+### Complexity Level: 🟡 **High**
+
+**Builders** under [`src/services/analysisECharts/`](graph-editor/src/services/analysisECharts/):
+- `bridgeBuilders`, `cohortComparisonBuilders`, `echartsCommon`, `funnelBuilders`, `snapshotBuilders`, `surpriseGaugeBuilder`.
+
+**Surrounding services**:
+- [`analysisEChartsService.ts`](graph-editor/src/services/analysisEChartsService.ts), [`chartHydrationService.ts`](graph-editor/src/services/chartHydrationService.ts), [`chartRecomputeService.ts`](graph-editor/src/services/chartRecomputeService.ts), [`chartRefreshService.ts`](graph-editor/src/services/chartRefreshService.ts), [`chartOperationsService.ts`](graph-editor/src/services/chartOperationsService.ts), [`chartDisplayPlanningService.ts`](graph-editor/src/services/chartDisplayPlanningService.ts).
+- [`canvasAnalysisCreationService.ts`](graph-editor/src/services/canvasAnalysisCreationService.ts), [`canvasAnalysisMutationService.ts`](graph-editor/src/services/canvasAnalysisMutationService.ts).
+- Funnel: [`amplitudeFunnelBuilderService.ts`](graph-editor/src/services/amplitudeFunnelBuilderService.ts) bridged to [`graph-editor/lib/runner/funnel_engine.py`](graph-editor/lib/runner/funnel_engine.py).
+
+### The challenge
+
+1. **Multiple chart families** with different data shapes (cohort comparison, funnel, snapshot, surprise gauge, bridge).
+2. **Hydration** from snapshots and live retrievals.
+3. **Recompute** without re-fetching when only display state changes.
+4. **Display planning** — layout, axes, legend rules per family.
+
+### Why it's complex
+
+1. **Data shapes** vary widely; builders must be coordinated with snapshot/forecast outputs.
+2. **State**: charts depend on snapshots (§8), forecasts (§7), generalisation (§12), and signatures (§10).
+3. **Performance**: large cohort comparisons can blow up render time without careful display planning.
+
+---
+
+## 14. Workspace & Git Sync
+
+### Complexity Level: 🟡 **High**
+
+**Key files**:
+- [`src/services/workspaceService.ts`](graph-editor/src/services/workspaceService.ts) — 2,374 LOC
+- [`src/services/repositoryOperationsService.ts`](graph-editor/src/services/repositoryOperationsService.ts) — 1,487 LOC
+- [`src/services/indexRebuildService.ts`](graph-editor/src/services/indexRebuildService.ts) — 557 LOC
+- [`src/services/gitService.ts`](graph-editor/src/services/gitService.ts), [`graphGitService.ts`](graph-editor/src/services/graphGitService.ts).
+- Live share: [`liveShareBootService.ts`](graph-editor/src/services/liveShareBootService.ts), [`liveShareHydrationService.ts`](graph-editor/src/services/liveShareHydrationService.ts), [`liveShareSyncService.ts`](graph-editor/src/services/liveShareSyncService.ts).
+
+### The challenge
+
+Manage workspace state across repositories:
+
+1. **Workspace loading** — clone, load files, build registry, initialise IndexedDB.
+2. **File management** — track files, dirty state, git state.
+3. **Index management** — build and maintain index files (`nodes-index.yaml`, `parameters-index.yaml`, etc.).
+4. **Sync** — pull/push with remote, conflict resolution.
+5. **Live share** — boot/hydrate/sync shared sessions.
+
+### Why it's complex
+
+1. **Git operations** — clone, pull, push, commit, conflict resolution against GitHub.
+2. **Multiple sources of truth** — must keep IndexedDB, FileRegistry, and remote consistent (CLAUDE.md §5: always use `db.getDirtyFiles()` for git ops).
+3. **Performance** with large workspaces.
+4. **Index integrity** — required by everything downstream.
 
 ---
 
 ## Complexity Metrics Summary
 
-| Component | Lines of Code | Complexity Level | Key Challenges |
-|-----------|---------------|------------------|----------------|
-| `dataOperationsService.ts` | 9,244 | 🔴 Extremely High | Multi-path execution, statistical calculations, cache management |
-| `GraphCanvas.tsx` | 5,467 | 🔴 Very High | Graph rendering, layout algorithms, performance |
-| `UpdateManager.ts` | 4,979 | 🔴 Very High | Combinatorial mappings, override logic, conflict resolution |
-| `statisticalEnhancementService.ts` | 3,278 | 🟡 High | Statistical methods, graph algorithms |
-| `TabContext.tsx` | 2,852 | 🔴 Very High | State synchronization, multi-tab coordination |
-| `windowAggregationService.ts` | 2,459 | 🟡 High | Time-series aggregation, caching |
-| `GraphEditor.tsx` | 2,271 | 🟡 High | State management, editor coordination |
-| `fetchDataService.ts` | 2,075 | 🟡 High | Query planning, provider abstraction |
-| `workspaceService.ts` | 1,748 | 🟡 High | Git operations, workspace management |
+LOC figures as of 27-Apr-26.
+
+### Largest individual files (top 25)
+
+| Component | LOC | Complexity | Key challenges |
+|-----------|-----|------------|----------------|
+| `lib/api_handlers.py` | 5,275 | 🔴 Very High | BE dispatch monolith — snapshot vs runner routing, single 2,080-line function |
+| `bayes/synth_gen.py` | 4,722 | 🔴 Very High | Synthetic data simulation, burn-in, hash injection, sparsity layer |
+| `bayes/compiler/model.py` | 4,325 | 🔴 Extremely High | PyMC model construction — Phase 1/2/C, hierarchical Dirichlet, latent onset |
+| `services/integrityCheckService.ts` | 4,177 | 🔴 Very High | 10-phase cross-graph validation, debounced + deep modes |
+| `components/PropertiesPanel.tsx` | 4,038 | 🟡 High | Section-driven RJSF + Monaco + override flag UX, ~50 field types |
+| `services/statisticalEnhancementService.ts` | 3,836 | 🔴 Extremely High | Distribution fitting, path-T95 DP, recency weighting |
+| `services/UpdateManager.ts` (+ `updateManager/`) | 3,713 | 🔴 Very High | Combinatorial mappings, override logic, conflict resolution |
+| `services/fetchDataService.ts` | 3,169 | 🔴 Very High | Provider abstraction, query execution, Stage 2 orchestration |
+| `contexts/TabContext.tsx` | 3,147 | 🔴 Very High | State sync, multi-tab coordination |
+| `components/edges/ConversionEdge.tsx` | 3,030 | 🟡 High | Edge rendering, beads, chevrons, hover preview, sankey, drag |
+| `components/GraphCanvas.tsx` | 2,895 | 🟡 High | Rendering, layout, interactions |
+| `lib/snapshot_service.py` | 2,693 | 🟡 High | All snapshot DB queries, connection pool, TTL cache |
+| `components/editors/GraphEditor.tsx` | 2,647 | 🟡 High | State management, editor coordination |
+| `services/windowAggregationService.ts` | 2,574 | 🟡 High | Time-series aggregation, signature cache |
+| `lib/graphComputeClient.ts` | 2,478 | 🟡 High | FE↔Python protocol, per-type normalisers, TTL cache |
+| `bayes/compiler/evidence.py` | 2,424 | 🔴 Very High | Evidence binding, trajectory construction, recency weights |
+| `bayes/worker.py` | 2,420 | 🔴 Very High | Two-phase orchestration, Phase 2 frozen-prior pipeline, Modal entry |
+| `services/workspaceService.ts` | 2,374 | 🟡 High | Git ops, workspace mgmt, live share |
+| `components/QueryExpressionEditor.tsx` | 2,344 | 🟡 High | Monaco autocomplete, DSL chip parsing |
+| `bayes/compiler/inference.py` | 2,251 | 🔴 Very High | nutpie integration, JAX backend, stall detector |
+| `lib/runner/runners.py` | 2,139 | 🟡 High | Per-analysis dispatch (path, funnel, comparison, etc.) |
+| `lib/runner/forecast_runtime.py` | 1,944 | 🔴 Very High | `PreparedForecastRuntimeBundle`, rate-conditioning seam |
+| `services/ScenariosContext.tsx` | 1,935 | 🟡 High | Scenario state, regeneration, persistence |
+| `services/analysisECharts/cohortComparisonBuilders.ts` | 1,915 | 🟡 High | Cohort maturity chart with epochs, bands, latency overlay |
+| `lib/runner/forecast_state.py` | 1,819 | 🔴 Very High | `compute_forecast_trajectory`, `compute_forecast_summary`, IS conditioning |
+
+### Smaller but architecturally central
+
+| Component | LOC | Why it matters |
+|-----------|-----|----------------|
+| `lib/runner/cohort_forecast_v3.py` | 1,708 | Closed-form non-latency rows + MC sweep dispatch |
+| `services/retrieveAllSlicesService.ts` | 1,651 | Daily automation execution path |
+| `services/windowFetchPlannerService.ts` | 1,629 | Staleness/coverage planning |
+| `lib/runner/cohort_forecast.py` | 1,638 | v1 cohort maturity (legacy) |
+| `lib/analysisDisplaySettingsRegistry.ts` | 1,530 | Central chart-display-settings registry |
+| `lib/msmdc.py` | 1,196 | Set-cover query optimisation |
+| `services/queryRegenerationService.ts` | 1,162 | FE-side MSMDC orchestrator |
+| `bayes/tracker/` | 1,553 | MCP server for investigation tracking |
+| `lib/runner/path_runner.py` | 836 | State-space expansion, conditional probabilities |
+| `services/dataOperationsService.ts` (+ `dataOperations/`) | 713 (orchestrator) | Thin orchestrator over the fetch/cache cluster |
+
+### Aggregate clusters
+
+Read these as wholes rather than as individual files:
+
+- **BE runner cluster** — `graph-editor/lib/runner/` 18,481 LOC across forecast / cohort_forecast / runners / derivations. See [BE_RUNNER_CLUSTER.md](BE_RUNNER_CLUSTER.md).
+- **Fetch orchestration cluster** — `dataOperations/` + `fetchDataService` + `windowFetchPlannerService` + `fetchPlanBuilderService` (~12,000 LOC across §3).
+- **Bayes tree** — `bayes/` 36,113 LOC (Python only, plus tests). Compiler 7,902 + worker 2,420 + run_regression 1,768 + synth_gen 4,722 + tracker 1,553 + diagnostics ~3,000.
+- **Hash/signature cluster** — see §10.
+- **analysisECharts builders** — 5,187 LOC across 6 chart builders. See [ANALYSIS_ECHARTS_BUILDERS.md](ANALYSIS_ECHARTS_BUILDERS.md).
+- **Hooks** — 93 files, 20,730 LOC. See [HOOKS_INVENTORY.md](HOOKS_INVENTORY.md).
+- **Tests** — ~170,000 LOC across `services/__tests__` (108k), `lib/tests` (33k), `bayes/tests` (19k), `e2e` (12k).
 
 ---
 
-## Recommendations for Managing Complexity
+## Recommendations
 
-### 1. **Break Down Large Services**
+### 1. Continue the decomposition pattern
 
-The largest services (`dataOperationsService`, `UpdateManager`, `GraphCanvas`) should be split into smaller, focused modules:
+The `dataOperations/`, `updateManager/`, and `analysisECharts/` subdirectories show the pattern that works: keep a thin orchestrator at the top and put helpers in a co-located subdirectory. `statisticalEnhancementService.ts` (3,836 LOC) and `fetchDataService.ts` (3,169 LOC) are candidates for the same treatment.
 
-- **dataOperationsService**: Split into `fetchService`, `mergeService`, `cacheService`
-- **UpdateManager**: Split by direction or operation type
-- **GraphCanvas**: Split into `GraphRenderer`, `LayoutEngine`, `InteractionHandler`
+### 2. Test coverage where state crosses subsystems
 
-### 2. **Improve Test Coverage**
+The riskiest defects sit on the seams: snapshot↔forecast, generalisation↔snapshot, hash chain↔cache, scenario round-trip↔git sync. Integration tests at these seams catch what unit tests cannot.
 
-Focus testing efforts on the most complex components:
+### 3. Document seams, not just files
 
-- **State Synchronization**: Add integration tests for multi-tab scenarios
-- **Data Operations**: Expand test coverage for edge cases
-- **Graph Algorithms**: Add tests for complex graph structures
-- **DSL Parsing**: Add tests for nested expressions and edge cases
+Codebase docs under [`docs/current/codebase/`](docs/current/codebase/) — particularly `SYNC_SYSTEM_OVERVIEW.md`, `RESERVED_QUERY_TERMS_GLOSSARY.md`, `TESTING_STANDARDS.md`, `SERVICE_DIRECTORY.md` — are the canonical entry points. Keep them as the seams change.
 
-### 3. **Document Complex Algorithms**
+### 4. Type safety at signatures
 
-Create detailed documentation for:
+Signature inputs and outputs are the system's contract. Strong types here pay back disproportionately because every cache-touching subsystem depends on them.
 
-- **State Synchronization Patterns**: Document sync guards and loop prevention
-- **Graph Algorithms**: Document MSMDC, path probability calculations
-- **Statistical Methods**: Document lag distribution fitting, recency weighting
-- **Query Execution**: Document inclusion-exclusion, query explosion
+### 5. Bayes compiler discipline
 
-### 4. **Add Type Safety**
-
-Improve type safety in complex areas:
-
-- **State Management**: Stronger types for state transitions
-- **Data Transformations**: Type-safe transformation pipelines
-- **Graph Operations**: Type-safe graph manipulation
-
-### 5. **Performance Optimization**
-
-Focus optimization on:
-
-- **Graph Rendering**: Optimize for large graphs (1000+ nodes)
-- **State Synchronization**: Reduce unnecessary re-renders
-- **Cache Management**: Optimize cache lookups and invalidation
-- **Query Execution**: Optimize query planning and execution
+Per CLAUDE.md §4, every new compiler branch needs a synthetic builder. This is the highest-leverage rule in the codebase: it prevents an entire class of "looks fine in dev, blows up in regression" failures.
 
 ---
 
 ## Conclusion
 
-The DagNet application is **highly complex** due to:
+DagNet's complexity is **inherent to the domain**: graph-based probability and cost calculation, time-series merging across providers, Bayesian inference over compiled graphs, and signature-keyed caching. The codebase has matured from a few large monoliths to a denser fabric of co-located service clusters; the dominant complexity now lives in the **interactions** between subsystems (forecast ↔ snapshot ↔ generalisation ↔ signature) rather than in any single file.
 
-1. **Multi-layered state management** with multiple sources of truth
-2. **Complex graph algorithms** requiring deep graph theory knowledge
-3. **Sophisticated data pipelines** with caching, incremental updates, and statistical calculations
-4. **Large monolithic services** handling multiple responsibilities
-5. **Intricate DSL parsing** with query optimization and execution
-
-**Key Takeaway**: This is a **domain-expert application** requiring deep understanding of:
-- Graph theory and algorithms
-- Statistical methods and probability
-- Distributed state management
-- Query optimization
-- Data synchronization patterns
-
-The complexity is **inherent to the domain** (graph-based data analysis), but can be managed through:
-- Better code organization (smaller modules)
-- Comprehensive testing
-- Detailed documentation
-- Type safety improvements
-- Performance optimization
+**Key takeaway**: read by *cluster*, not by file. The fetch cluster, the forecasting cluster, the Bayes tree, the snapshot DB, and the signature cluster each have their own internal logic, and the seams between them are where the work — and the bugs — live.

@@ -1774,9 +1774,9 @@ export async function getParameterFromFile(options: {
 
       // MODEL_VARS: Upsert analytic entry built by UpdateManager (doc 15 §5.1)
       // Preserve path params from the existing entry — the parameter file doesn't
-      // contain path_mu/path_sigma (they're topo-pass-derived), so the new entry
+      // contain path_mu/path_sigma (they're FE-quick-pass-derived), so the new entry
       // from UpdateManager won't have them.  Without this, every from-file
-      // re-aggregation clobbers path params written by the previous topo pass.
+      // re-aggregation clobbers path params written by the previous FE quick pass.
       const analyticEntry = (result.metadata as any)?.analyticModelVarsEntry;
       if (analyticEntry && nextGraph.edges[edgeIndex].p) {
         const { upsertModelVars, applyPromotion } = await import('../modelVarsResolution');
@@ -1787,12 +1787,13 @@ export async function getParameterFromFile(options: {
           const prevLat = existingAnalytic.latency;
           if (!analyticEntry.latency) {
             // File payloads often omit model latencies entirely. Preserve the
-            // canonical edge-local and topo-derived path model already on the graph
-            // instead of clobbering the analytic entry down to probability-only.
+            // canonical edge-local and FE-quick-pass-derived path model already
+            // on the graph instead of clobbering the analytic entry down to
+            // probability-only.
             analyticEntry.latency = { ...prevLat };
           } else {
-            // Carry forward canonical edge-local and topo-pass-derived fields that
-            // the file payload does not supply.
+            // Carry forward canonical edge-local and FE-quick-pass-derived fields
+            // that the file payload does not supply.
             for (const latencyKey of [
               'mu',
               'sigma',

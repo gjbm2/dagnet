@@ -164,6 +164,7 @@ bash graph-ops/scripts/param-pack.sh <graph-name> "<query-dsl>" \
 | `--format yaml\|json\|csv` | Output format (default: yaml) |
 | `--get <key>` | Extract single scalar (bare value to stdout) |
 | `--show-signatures` | Show computed hash signatures per edge |
+| `--no-snapshot-cache` | Bypass BE snapshot service TTL cache (mirrors the analyse flag; required for test-correctness when the BE process may have stale cached results) |
 | `--verbose` / `-v` | Show all console.log debug output |
 | `--session-log` | Show session log output |
 
@@ -506,6 +507,38 @@ they are processed one at a time. The Python BE cannot handle
 concurrent `/api/forecast/conditioned` and `/api/runner/analyze`
 requests safely under HMR, and the FE preparation pipeline mutates
 process-wide state, so concurrency is intentionally avoided.
+
+#### Slow-call self-diagnostic
+
+`DaemonClient.call` in `_daemon_client.py` measures every request's
+wall-clock latency and emits an audit block when any single call
+exceeds a configurable threshold. This was added after a class of
+intermittent BE perf incidents — typically driven by uvicorn
+restarting the BE child mid-test (see `DEV_ENVIRONMENT_AND_HMR.md`
+§"Test files must not trigger BE reload") — that previously
+manifested as unexplained 195s outliers with no test-side trace.
+
+The block is printed to stderr (and therefore captured into pytest
+log files) and contains:
+
+- elapsed seconds vs threshold
+- command (`analyse` / `param-pack`) and analysis type
+- graph name and full DSL query
+- daemon PID, age, and resident set size
+- the slice of daemon stderr emitted *during this request only*
+  (delimited by a stderr buffer high-water mark recorded before the
+  request was sent)
+
+The threshold is the `DAGNET_SLOW_CALL_THRESHOLD_S` environment
+variable (default 10 seconds; set to 0 to disable). Forcing a low
+value (e.g. `DAGNET_SLOW_CALL_THRESHOLD_S=0.1`) is the recommended
+way to verify the diagnostic is wired correctly after editing
+`_daemon_client.py`.
+
+The diagnostic is universal — it fires for every test that goes
+through the daemon, no per-test opt-in. Tests that legitimately
+expect to run a long single call (e.g. a heavy CF parity sweep) can
+raise the threshold for that subprocess via the env var.
 
 ### CLI module layout
 

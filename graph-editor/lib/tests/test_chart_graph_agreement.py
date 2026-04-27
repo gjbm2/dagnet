@@ -175,7 +175,7 @@ def _last_row_values(chart_payload: dict[str, Any]) -> tuple[Optional[int], Opti
     ids=[c[0] for c in _CASES],
 )
 def test_chart_graph_agreement(label: str, chart_dsl: str, pp_dsl: str) -> None:
-    """Doc 29f §G: topo-pass p.mean must agree with chart prior + IS-conditioned rate.
+    """Doc 29f §G: FE quick pass p.mean must agree with chart prior + IS-conditioned rate.
 
     Assertion A (p.mean ≈ model_midpoint) is expected to pass today.
     Assertion B (p.mean ≈ midpoint) is expected to FAIL until Phase G
