@@ -1,3 +1,5 @@
+**Historical note (`27-Apr-26`)**: this investigation pre-dates the removal of the quick BE topo pass (24-Apr-26) and its FE↔BE parallel-run comparison. The parity service (`forecastingParityService.ts`) referenced below no longer exists. See [project-bayes/73b](../project-bayes/73b-be-topo-removal-and-forecast-state-separation-plan.md) for the current BE surface; the t95 persistence / handling observations themselves remain applicable as historical context for how the system behaved at the time.
+
 ## Context
 
 On 12-Feb-26 we observed **forecasting parity mismatches** in `tmp.log` during the FE↔BE parallel-run comparison. The project policy is that the FE is “right” by default unless we have compelling evidence of a real defect (the “i95 hypothesis”). This note documents what the logs actually show, how `t95`/`path_t95` are produced and persisted today, and why the observed `t95_days` parity mismatches are **not yet** evidence of a modelling defect.

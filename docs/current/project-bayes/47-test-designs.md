@@ -1,5 +1,7 @@
 # Doc 47 — Prose Test Designs
 
+**Historical note (`27-Apr-26`)**: this note pre-dates the removal of the quick BE topo pass (24-Apr-26). The `--topo-pass` CLI flag and the `/api/lag/topo-pass` endpoint referenced in the test examples below no longer exist. See [project-bayes/73b](73b-be-topo-removal-and-forecast-state-separation-plan.md) for the current BE surface and the post-73b CLI surface.
+
 **Date**: 18-Apr-26
 **Gate**: These designs must be reviewed before any test or implementation
 code is written.

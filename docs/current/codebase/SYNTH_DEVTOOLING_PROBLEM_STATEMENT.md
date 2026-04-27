@@ -199,7 +199,7 @@ Three shell scripts require enriched graphs: `v2-v3-parity-test.sh`, `window-coh
 
 ### Phase 3: Integrated enrichment
 
-- Add `--enrich` flag to `synth_gen.py` that runs the hydrate/topo-pass pipeline
+- Add `--enrich` flag to `synth_gen.py` that runs the hydrate / FE-topo pipeline (the historical reference here was to the quick BE topo pass, removed by [project-bayes/73b](../project-bayes/73b-be-topo-removal-and-forecast-state-separation-plan.md); the enrichment now runs through the FE topo pass plus CF only)
 - Record enrichment state in meta sidecar
 - Tests that need enrichment declare it; fixture helper commissions it if missing
 

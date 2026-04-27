@@ -1,5 +1,7 @@
 # Plan: Headless Retrieve-All + BE Topo Pass Race Fix
 
+**Historical note (`27-Apr-26`)**: this plan pre-dates the removal of the quick BE topo pass (24-Apr-26). References below to `beTopoPassService.ts`, the BE topo pass race condition, and `analytic_be` describe the system as it stood when the plan was written. See [project-bayes/73b](../project-bayes/73b-be-topo-removal-and-forecast-state-separation-plan.md) for the current BE surface. The Change-1 (headless retrieveall) part of the plan remains independently applicable; the Change-2 (race fix) is moot now that the BE topo pass is gone.
+
 ## Context
 
 Two issues:

@@ -1,5 +1,7 @@
 # 29g — Engine IS Conditioning and Sweep Evaluation
 
+**Historical note (`27-Apr-26`)**: this proposal pre-dates the removal of the quick BE topo pass (24-Apr-26). References to `handle_stats_topo_pass` describe the system as it stood when the proposal was written. The engine IS-conditioning and sweep design itself is independent of that pipeline topology and remains applicable. See [project-bayes/73b](73b-be-topo-removal-and-forecast-state-separation-plan.md) for the current BE surface.
+
 **Date**: 14-Apr-26
 **Status**: Proposal — for review before implementation
 **Depends on**: doc 29 (engine design), 29e Phase 5 (v3 consumer)

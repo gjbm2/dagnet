@@ -1,5 +1,7 @@
 # 64 — Forecast Assurance Overhaul
 
+**Historical note (`27-Apr-26`)**: this note pre-dates the removal of the quick BE topo pass (24-Apr-26). References below to `topo-pass` tests, `test_be_topo_pass_parity.py`, and "bounded-analytic topo-pass contract" describe the system as it stood when the note was written. After 73b's BE topo removal there is no surviving topo-pass test surface to rewrite; the forecast-assurance design principles themselves remain applicable and are now realised through doc 73b's stage gates and outside-in CLI regressions. See [project-bayes/73b](73b-be-topo-removal-and-forecast-state-separation-plan.md) for the current BE surface.
+
 **Date**: 22-Apr-26  
 **Status**: Proposed active design note  
 **Related**: `59-cohort-window-forecast-implementation-scheme.md`, `60-forecast-adaptation-programme.md`, `57-cf-eligibility-topological-degradation.md`, `55-surprise-gauge-rework.md`, `../codebase/COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md`, `../codebase/STATS_SUBSYSTEMS.md`, `../codebase/TESTING_STANDARDS.md`  

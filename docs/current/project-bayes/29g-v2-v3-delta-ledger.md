@@ -1,5 +1,7 @@
 # v2 vs v3 Delta Ledger
 
+**Historical note (`27-Apr-26`)**: this ledger pre-dates the removal of the quick BE topo pass (24-Apr-26). References to `graph-editor/src/cli/topoPass.ts` and the BE topo pass below describe the system as it stood when the ledger was written. See [project-bayes/73b](73b-be-topo-removal-and-forecast-state-separation-plan.md) for the current BE surface; the v2 vs v3 delta observations themselves remain independently applicable.
+
 **Created**: 15-Apr-26
 **Context**: Phase 5 parity exercise. This ledger records implementation choices in v2 that were discovered during v3 generalisation and that merit subsequent review. These are NOT v3 bugs — they are places where v2 makes a specific choice that may or may not be optimal.
 

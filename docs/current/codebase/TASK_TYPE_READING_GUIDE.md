@@ -101,7 +101,7 @@ All docs are in `docs/current/codebase/` unless a full path is given.
 
 ## Running CLI tools (analyse, param-pack, hydrate, parity, validation)
 - `GRAPH_OPS_TOOLING.md` **(full — start with Quick Reference)** — all CLI scripts, options, architecture, invariants. Includes the long-lived daemon mode (`DAGNET_USE_DAEMON`, wire format, cache assurance).
-- `graph-ops/playbooks/cli-analyse.md` **(full if running analyse)** — scenarios, subject, topo-pass, troubleshooting
+- `graph-ops/playbooks/cli-analyse.md` **(full if running analyse)** — scenarios, subject, troubleshooting
 - `graph-ops/playbooks/cli-param-pack.md` **(full if running param-pack)** — query DSL, output formats, --get
 - `graph-ops/reference/common-pitfalls.md` **(skim)** — known pitfalls that affect CLI output
 - `DSL_SYNTAX_REFERENCE.md` **(ref)** — query DSL grammar for constructing CLI arguments

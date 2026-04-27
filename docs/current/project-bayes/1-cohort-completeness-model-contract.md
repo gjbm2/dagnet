@@ -1,5 +1,7 @@
 # Project Bayes: Cohort completeness model contract
 
+**Historical note (`27-Apr-26`)**: this contract pre-dates the removal of the quick BE topo pass (24-Apr-26). The reference below to deleting `forecastingParityService.ts` "entirely" is now landed; the parity service no longer exists. See [project-bayes/73b](73b-be-topo-removal-and-forecast-state-separation-plan.md) for the current BE surface. The cohort-completeness contract itself is independent of that pipeline topology and remains applicable.
+
 **Status**: Draft  
 **Date**: 11-Mar-26  
 **Purpose**: Define the contract for `cohort()` completeness, forecasting, and

@@ -344,7 +344,7 @@ Multiple code paths can regenerate the graph JSON: `graph_from_truth.py` (truth-
 
 **Root cause**: the synth graph's core_hash (as computed by the FE's hash function) doesn't match what `synth_gen.py` wrote to the snapshot DB. This happens when: (a) the test helper computes hashes differently from the FE, (b) hydration changed edge fields that affect the hash, or (c) the query window's date range doesn't overlap the synth data's date range.
 
-**Fix**: use `analyse.sh --topo-pass --no-snapshot-cache` which computes hashes identically to the FE. For query windows, use absolute dates matching the synth data range (check `base_date` in the synth config and the `anchor_day` range in the DB). Relative dates like `-14d:` fail because they're relative to today, which may be months after the synth data.
+**Fix**: use the current `analyse.sh` invocation that computes hashes identically to the FE (the historical recipe used the now-removed `--topo-pass` flag — see [project-bayes/73b](../project-bayes/73b-be-topo-removal-and-forecast-state-separation-plan.md)). For query windows, use absolute dates matching the synth data range (check `base_date` in the synth config and the `anchor_day` range in the DB). Relative dates like `-14d:` fail because they're relative to today, which may be months after the synth data.
 
 **Detection**: the `v2-v3-parity-test.sh` Phase 1 health checks assert `evidence_x > 0`. If this fails, the snapshot linkage is broken and the parity comparison would be vacuous.
 
@@ -360,15 +360,17 @@ Multiple code paths can regenerate the graph JSON: `graph_from_truth.py` (truth-
 
 **Example**: `analysis_subject_resolution.py` used `re.match()` inside a `try/except Exception` to parse the asat date. `re` wasn't imported. The `NameError` was caught silently, and `sweep_to` fell back to today. The asat date was correctly parsed but never used.
 
-## Anti-pattern 43: CLI topo pass not scoping to query DSL
+## Anti-pattern 43: CLI topo pass not scoping to query DSL — RESOLVED (historical)
 
-**Signature**: param-pack or `analyse --topo-pass` produces `p.mean` or `completeness` values that don't match the cohort maturity chart on the same data. The discrepancy is large (e.g. 0.72 vs 0.40) and doesn't shrink with wider date ranges.
+**Status (`27-Apr-26`)**: this anti-pattern is fully resolved. The CLI topo pass surface (`--topo-pass` flag, `runCliTopoPass`, `src/cli/topoPass.ts`, `handle_stats_topo_pass`) was removed by doc 73b. Retained as historical context for the underlying scoping discipline — query DSL date scoping must still be honoured by all evidence-binding paths.
 
-**Root cause**: the CLI topo pass sends `cohort_data` from the full param file without filtering to the query DSL's date range. The BE uses all cohorts for IS conditioning, not just the scoped ones. The FE browser path correctly sends `scoped_cohorts` in `edge_contexts`.
+**Signature** (historical): param-pack or `analyse --topo-pass` produced `p.mean` or `completeness` values that didn't match the cohort maturity chart on the same data. The discrepancy was large (e.g. 0.72 vs 0.40) and didn't shrink with wider date ranges.
 
-**Fix**: `runCliTopoPass` must parse the query DSL, extract the date range, filter cohorts, and send `edge_contexts` with `scoped_cohorts` alongside `cohort_data`. See D18 fix in `src/cli/topoPass.ts`.
+**Root cause** (historical): the CLI topo pass sent `cohort_data` from the full param file without filtering to the query DSL's date range. The BE used all cohorts for IS conditioning, not just the scoped ones. The FE browser path correctly sent `scoped_cohorts` in `edge_contexts`.
 
-**How to spot**: compare param-pack output against chart output for a narrow cohort date range. If `p.mean` is close to the full-evidence-base rate rather than the scoped-cohort rate, scoping is broken.
+**Fix** (historical, no longer applicable): `runCliTopoPass` was required to parse the query DSL, extract the date range, filter cohorts, and send `edge_contexts` with `scoped_cohorts` alongside `cohort_data`. See [project-bayes/73b](../project-bayes/73b-be-topo-removal-and-forecast-state-separation-plan.md) for the post-removal pipeline.
+
+**How to spot** (historical): compare param-pack output against chart output for a narrow cohort date range. If `p.mean` is close to the full-evidence-base rate rather than the scoped-cohort rate, scoping is broken.
 
 ## Anti-pattern 44: Weak Beta prior overwhelmed by per-cohort IS conditioning
 

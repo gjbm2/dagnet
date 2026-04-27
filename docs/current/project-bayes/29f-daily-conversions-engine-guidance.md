@@ -1,5 +1,7 @@
 # Daily Conversions: Engine Integration Guidance
 
+**Historical note (`27-Apr-26`)**: this guidance pre-dates the removal of the quick BE topo pass (24-Apr-26). References below to `handle_stats_topo_pass` describe the system as it stood when the note was written; the daily-conversions engine integration design itself is independent of that pipeline topology and remains applicable. See [project-bayes/73b](73b-be-topo-removal-and-forecast-state-separation-plan.md) for the current BE surface.
+
 **Date**: 16-Apr-26
 **Implemented**: 16-Apr-26 — G.1b landed. Daily conversions handler in `api_handlers.py` (lines ~3198-3450) calls `compute_forecast_trajectory` per edge, reads `cohort_evals` for per-cohort projected_y/completeness. Fallback to legacy `annotate_rows` if engine fails.
 **Context**: doc 29f §Phase G, G.1b
