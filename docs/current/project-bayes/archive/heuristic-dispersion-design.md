@@ -1,6 +1,18 @@
 # Heuristic Dispersion Estimation for the Non-Bayes Stats Pass
 
-**Status:** Proposal — ready for adversarial review
+> **SUPERSEDED — 28-Apr-26.** Superseded by
+> [`docs/current/project-bayes/73i-principled-epistemic-dispersion.md`](../73i-principled-epistemic-dispersion.md).
+> The `1.25 × σ / √N` location-SD formula in §3.2 is the asymptotic
+> variance of the **sample-median** estimator, not the maximum-likelihood
+> estimator, and the qualityInflation, drift-fraction, and floor
+> corrections layered on top compounded the error. The replacement
+> proposal uses the Student-t / scaled inverse chi-squared posterior
+> under a Jeffreys prior with an interval-matched effective SD for the
+> downstream Gaussian-shaped consumer interface. This document is
+> retained for historical context and to explain the provenance of
+> dispersion values in fixtures generated under the old method.
+
+**Status:** Superseded — see banner above
 **Date:** 2-Apr-26
 **Depends on:** Stats pass consolidation (FE/BE parity)
 

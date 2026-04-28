@@ -1068,7 +1068,20 @@ adapting around the temporary contract.
 |---|---|---|
 | `test_surprise_gauge_prefers_temporal_candidate_regime` | [`graph-editor/lib/tests/test_cf_query_scoped_degradation.py`](../../graph-editor/lib/tests/test_cf_query_scoped_degradation.py) | Cohort-DSL surprise-gauge calls bind the cohort hash (`hash-cohort`, `40/4`) instead of collapsing to the window hash (`hash-window`, `100/40`). Re-enable by removing the `@pytest.mark.xfail` decorator at the test head once WP8 ratifies the cohort regime selector. Strict so the marker fails loudly if the test starts passing for the wrong reason. |
 
-### A.2 How to use this appendix when working in this area
+### A.2 Evidence-merge role reserved for WP8
+
+[`73h-shared-evidence-merge-design.md`](73h-shared-evidence-merge-design.md)
+reserves the `direct_cohort_exact_subject` evidence role for WP8. That
+role represents direct cohort-family rate evidence for exact
+`cohort(A, X -> end)` subject matches.
+
+Until WP8 lands, BE CF p-conditioning must continue to use the
+`window_subject_helper` evidence role. The shared evidence merge library
+must nevertheless support `direct_cohort_exact_subject` in its role model
+so the WP8 implementation can enable it by flag/admission-policy decision
+without redesigning file/snapshot deduplication.
+
+### A.3 How to use this appendix when working in this area
 
 - If you are about to add an `xfail`, a `# WP8` comment, or a "skip
   for now" branch in the engine or its tests, add a row to the table
