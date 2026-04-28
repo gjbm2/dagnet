@@ -18,14 +18,14 @@ import sys
 from datetime import datetime, timedelta
 
 try:
-    from file_evidence_supplement import iter_uncovered_bare_cohort_daily_points
+    from file_evidence_supplement import BAYES_PHASE2_COHORT, merge_file_evidence_for_role
 except ImportError:
     _SHARED_LIB = os.path.abspath(
         os.path.join(os.path.dirname(__file__), "..", "..", "graph-editor", "lib")
     )
     if _SHARED_LIB not in sys.path:
         sys.path.insert(0, _SHARED_LIB)
-    from file_evidence_supplement import iter_uncovered_bare_cohort_daily_points
+    from file_evidence_supplement import BAYES_PHASE2_COHORT, merge_file_evidence_for_role
 
 from .types import (
     TopologyAnalysis,
@@ -1351,11 +1351,18 @@ def _supplement_from_param_file(
     values = pf_data.get("values") or []
     n_supplemented = 0
 
-    supplemented_by_slice: dict[str, list[CohortDailyObs]] = {}
-    for entry, date_str, n, k in iter_uncovered_bare_cohort_daily_points(
+    merge = merge_file_evidence_for_role(
         values,
         snapshot_covered_days,
-    ):
+        role=BAYES_PHASE2_COHORT,
+    )
+
+    supplemented_by_slice: dict[str, list[CohortDailyObs]] = {}
+    for point in merge.points:
+        entry = point.entry
+        date_str = point.date
+        n = point.n
+        k = point.k
         ref_date = _resolve_value_retrieved_at(dict(entry), today)
         age = _date_age(date_str, ref_date)
         compl = _compute_cohort_completeness(

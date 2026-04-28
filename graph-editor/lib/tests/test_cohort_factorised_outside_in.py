@@ -1428,11 +1428,26 @@ def test_cohort_frame_evidence_is_admitted_only_for_single_hop_anchor_override_c
         identity_edge.get("evidence_n"),
     ), "A=X cohort should not switch evidence family"
 
-    assert admitted_edge.get("evidence_n") < window_edge.get("evidence_n"), (
-        "single-hop anchor override should admit narrower cohort-frame evidence"
+    assert (
+        admitted_edge.get("evidence_k"),
+        admitted_edge.get("evidence_n"),
+    ) == (
+        window_edge.get("evidence_k"),
+        window_edge.get("evidence_n"),
+    ), (
+        "WP8-off single-hop anchor override should keep the same window "
+        "subject-helper evidence family for p-conditioning"
     )
-    assert admitted_edge.get("evidence_k") < window_edge.get("evidence_k"), (
-        "single-hop anchor override should reduce admitted numerator evidence"
+    completeness_delta = abs(
+        float(admitted_edge.get("completeness"))
+        - float(window_edge.get("completeness"))
+    )
+    assert completeness_delta >= 0.02, (
+        "single-hop anchor override should still move carrier/completeness "
+        f"even when p-conditioning evidence stays window-rooted: "
+        f"window={window_edge.get('completeness'):.6f} "
+        f"cohort={admitted_edge.get('completeness'):.6f} "
+        f"delta={completeness_delta:.6f}"
     )
 
 

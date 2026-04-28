@@ -1,7 +1,7 @@
 # Heuristic Dispersion Estimation for the Non-Bayes Stats Pass
 
 > **SUPERSEDED — 28-Apr-26.** Superseded by
-> [`docs/current/project-bayes/73i-principled-epistemic-dispersion.md`](../73i-principled-epistemic-dispersion.md).
+> [`docs/current/codebase/EPISTEMIC_DISPERSION_DESIGN.md`](../../codebase/EPISTEMIC_DISPERSION_DESIGN.md).
 > The `1.25 × σ / √N` location-SD formula in §3.2 is the asymptotic
 > variance of the **sample-median** estimator, not the maximum-likelihood
 > estimator, and the qualityInflation, drift-fraction, and floor

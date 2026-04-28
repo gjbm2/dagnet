@@ -70,6 +70,8 @@ import {
   toModelSpace,
   toModelSpaceAgeDays,
   toModelSpaceLagDays,
+  epistemicMuSd,
+  epistemicSigmaSd,
 } from './lagDistributionUtils';
 import type { ForecastingModelSettings } from './forecastingSettingsService';
 
@@ -1297,32 +1299,30 @@ export function computeEdgeLatencyStats(
     model.onsetDeltaDays
   );
 
-  // ── Heuristic dispersion estimates (design doc §3) ────────────────
-  const qualityInflation = fit.empirical_quality_ok ? 1.0 : 2.0;
+  // ── Epistemic dispersion estimates ────────────────────────────────
+  // Design: docs/current/codebase/EPISTEMIC_DISPERSION_DESIGN.md.
+  // μ_sd and σ_sd are the interval-matched effective SDs of the
+  // Jeffreys-prior posteriors on (μ, σ²) for the Gaussian inference
+  // problem on ln(t). These are epistemic only; predictive inflation
+  // (kappa_lat) is the runner's responsibility.
   const sigmaForSd = completenessCdf.sigma_moments > 0 ? completenessCdf.sigma_moments : fit.sigma;
 
-  // §3.1 Rate uncertainty: Beta-binomial posterior SD
+  // Rate uncertainty: Beta-binomial posterior SD (unchanged).
   const pAlpha = totalK + 1;
   const pBeta = totalN - totalK + 1;
   const pSdRaw = Math.sqrt(pAlpha * pBeta / ((pAlpha + pBeta) ** 2 * (pAlpha + pBeta + 1)));
   const pSd = totalK < 30 ? Math.max(pSdRaw, 0.10) : pSdRaw;
 
-  // §3.2 Latency location uncertainty: ~1.25 × σ / √totalK
-  const nLag = Math.max(totalK, 1);
-  const muSdRaw = 1.25 * sigmaForSd / Math.sqrt(nLag);
-  const muSd = Math.max(muSdRaw * qualityInflation, 0.02);
+  // μ epistemic SD: t-posterior on μ, interval-matched at central 90%.
+  const muSd = epistemicMuSd(sigmaForSd, totalK);
 
-  // §3.3 Latency scale uncertainty: ~0.87 × σ / √totalK
-  const sigmaIsDefault = !fit.empirical_quality_ok || sigmaForSd === LATENCY_DEFAULT_SIGMA;
-  const sigmaSdRaw = sigmaIsDefault ? 0.10 : 0.87 * sigmaForSd / Math.sqrt(nLag);
-  const sigmaSd = Math.max(sigmaSdRaw * qualityInflation, 0.02);
+  // σ epistemic SD: scaled inv-χ² posterior on σ², interval-matched over σ.
+  const sigmaSd = epistemicSigmaSd(sigmaForSd, totalK);
 
-  // §3.4 Onset uncertainty: max(0.2, 0.10 × onset), capped at 1.0
-  // Onset has outsized influence on band width near the CDF inflection point
-  // (∂rate/∂onset peaks there). Bayesian posteriors give onset_sd ≈ 0.1–0.3.
+  // Onset SD and onset–mu correlation: separate from the t-posterior
+  // design; retained from the prior heuristic until a principled
+  // formulation lands. See archive/heuristic-dispersion-design.md §3.4–3.5.
   const onsetSd = Math.min(1.0, Math.max(0.2, 0.10 * onsetDeltaDays));
-
-  // §3.5 Onset-mu correlation: structural prior
   const onsetMuCorr = onsetDeltaDays > 0 ? -0.3 : 0.0;
 
   // If no mature cohorts, forecast fallback is not available

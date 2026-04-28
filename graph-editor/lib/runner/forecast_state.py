@@ -828,6 +828,7 @@ def compute_forecast_trajectory(
     det_norm_cdf: Optional[list] = None,
     edge_cdf_arr: Optional[np.ndarray] = None,
     runtime_bundle: Optional[PreparedForecastRuntimeBundle] = None,
+    extra_evidence: Optional[List[tuple]] = None,
 ) -> ForecastTrajectory:
     """Per-cohort population model sweep — generalised from v2.
 
@@ -1077,7 +1078,17 @@ def compute_forecast_trajectory(
             _tau_i = 0
         _n_i = float(_c.evidence_n or 0.0)
         _k_i = float(_c.evidence_k or 0.0)
-        if _tau_i > 0 and _n_i > 0 and _k_i > 0:
+        if _tau_i > 0 and _n_i > 0 and _k_i >= 0:
+            _evidence.append((_tau_i, _n_i, _k_i))
+    for _item in list(extra_evidence or []):
+        try:
+            _tau_i, _n_i, _k_i = _item
+            _tau_i = int(_tau_i)
+            _n_i = float(_n_i or 0.0)
+            _k_i = float(_k_i or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if _tau_i > 0 and _n_i > 0 and _k_i >= 0:
             _evidence.append((_tau_i, _n_i, _k_i))
 
     if _evidence:
@@ -1471,14 +1482,14 @@ def compute_forecast_trajectory(
 
     # F14 aggregate IS forensic: was the maturity correction load-bearing?
     _f14: Dict[str, Any] = {}
-    _sum_N = float(sum(c.evidence_n or 0.0 for c in cohorts))
-    _sum_k = float(sum(c.evidence_k or 0.0 for c in cohorts))
+    _sum_N = float(sum(n for _, n, _ in _evidence))
+    _sum_k = float(sum(k for _, _, k in _evidence))
     _f14['sum_N'] = round(_sum_N, 1)
     _f14['sum_k'] = round(_sum_k, 1)
     _f14['raw_aggregate_k_over_n'] = round(_sum_k / _sum_N, 6) if _sum_N > 0 else None
     _ratios = [
-        (float(c.evidence_k) / float(c.evidence_n)) for c in cohorts
-        if c.evidence_n and c.evidence_n > 0 and c.evidence_k is not None
+        (float(k) / float(n)) for _, n, k in _evidence
+        if n and n > 0 and k is not None
     ]
     if _ratios:
         _ratios_sorted = sorted(_ratios)

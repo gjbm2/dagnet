@@ -78,6 +78,11 @@ from pathlib import Path
 import pytest
 
 from api_handlers import _cf_supplement_evidence_counts_from_file
+from file_evidence_supplement import (
+    DIRECT_COHORT_EXACT_SUBJECT,
+    WINDOW_SUBJECT_HELPER,
+    merge_file_evidence_for_role,
+)
 
 
 HANDLER_PATH = (
@@ -334,12 +339,120 @@ class TestDesignSpecKnown:
 class TestConditionedForecastFileEvidenceSupplement:
     """Bayes-style uncovered-day supplement for CF evidence counts."""
 
-    def test_supplements_only_uncovered_days_from_bare_cohort_daily_arrays(self):
+    def test_shared_merge_window_role_skips_cohort_anchor_slices(self):
+        entries = [
+            {
+                "sliceDSL": "window(1-Apr-26:4-Apr-26)",
+                "dates": ["2026-04-01", "2026-04-02", "2026-04-03"],
+                "n_daily": [10, 20, 30],
+                "k_daily": [1, 2, 3],
+            },
+            {
+                "sliceDSL": "cohort(anchor-a,1-Apr-26:4-Apr-26)",
+                "dates": ["2026-04-01", "2026-04-02", "2026-04-03"],
+                "n_daily": [100, 200, 300],
+                "k_daily": [10, 20, 30],
+            },
+            {
+                "sliceDSL": "cohort(anchor-b,1-Apr-26:4-Apr-26)",
+                "dates": ["2026-04-01", "2026-04-02", "2026-04-03"],
+                "n_daily": [1000, 2000, 3000],
+                "k_daily": [100, 200, 300],
+            },
+        ]
+
+        merged = merge_file_evidence_for_role(
+            entries,
+            {"2026-04-02"},
+            role=WINDOW_SUBJECT_HELPER,
+            anchor_from="2026-04-01",
+            anchor_to="2026-04-03",
+        )
+
+        assert merged.n == 40
+        assert merged.k == 4
+        assert merged.days == {"2026-04-01", "2026-04-03"}
+        assert any(s.reason == "wrong_role" for s in merged.skipped)
+
+    def test_shared_merge_direct_cohort_role_uses_only_matching_anchor(self):
+        entries = [
+            {
+                "sliceDSL": "window(1-Apr-26:4-Apr-26)",
+                "dates": ["2026-04-01", "2026-04-02"],
+                "n_daily": [10, 20],
+                "k_daily": [1, 2],
+            },
+            {
+                "sliceDSL": "cohort(anchor-a,1-Apr-26:4-Apr-26)",
+                "dates": ["2026-04-01", "2026-04-02"],
+                "n_daily": [100, 200],
+                "k_daily": [10, 20],
+            },
+            {
+                "sliceDSL": "cohort(anchor-b,1-Apr-26:4-Apr-26)",
+                "dates": ["2026-04-01", "2026-04-02"],
+                "n_daily": [1000, 2000],
+                "k_daily": [100, 200],
+            },
+        ]
+
+        merged = merge_file_evidence_for_role(
+            entries,
+            {"2026-04-02"},
+            role=DIRECT_COHORT_EXACT_SUBJECT,
+            exact_cohort_anchor="anchor-b",
+            anchor_from="2026-04-01",
+            anchor_to="2026-04-02",
+        )
+
+        assert merged.n == 1000
+        assert merged.k == 100
+        assert merged.days == {"2026-04-01"}
+        assert any(s.reason == "wrong_cohort_anchor" for s in merged.skipped)
+
+    def test_shared_merge_skips_file_days_after_entry_retrieval_date(self):
+        entries = [
+            {
+                "sliceDSL": "window(1-Apr-26:4-Apr-26)",
+                "retrieved_at": "2026-04-02T13:00:00Z",
+                "dates": ["2026-04-01", "2026-04-02", "2026-04-03"],
+                "n_daily": [10, 20, 30],
+                "k_daily": [1, 2, 3],
+            },
+        ]
+
+        merged = merge_file_evidence_for_role(
+            entries,
+            set(),
+            role=WINDOW_SUBJECT_HELPER,
+            anchor_from="2026-04-01",
+            anchor_to="2026-04-03",
+        )
+
+        assert merged.n == 30
+        assert merged.k == 3
+        assert merged.days == {"2026-04-01", "2026-04-02"}
+        assert any(s.reason == "after_retrieved_at" for s in merged.skipped)
+
+    def test_wp8_off_supplements_only_uncovered_window_subject_helper_days(self):
         graph = {
             "edges": [
                 {
                     "uuid": "edge-1",
                     "_bayes_evidence": {
+                        "window": [
+                            {
+                                "sliceDSL": "window(1-Apr-26:4-Apr-26)",
+                                "dates": [
+                                    "2026-04-01",
+                                    "2026-04-02",
+                                    "2026-04-03",
+                                    "2026-04-04",
+                                ],
+                                "n_daily": [10, 20, 30, 40],
+                                "k_daily": [1, 2, 3, 4],
+                            },
+                        ],
                         "cohort": [
                             {
                                 "sliceDSL": "cohort(1-Apr-26:4-Apr-26)",

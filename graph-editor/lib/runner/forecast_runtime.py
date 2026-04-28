@@ -773,13 +773,25 @@ def read_edge_cohort_params(
         result['alpha'] = float(resolved.alpha)
         result['beta'] = float(resolved.beta)
 
-    # Doc 61: this function feeds the upstream-carrier + span-prior
-    # machinery, which is a forecasting consumer. μ SDs are therefore
-    # read from the predictive slot first, falling back to the bare
-    # (epistemic) slot when no predictive value exists — correct when
-    # kappa_lat is absent. When path-level latency is selected but
-    # path-level SDs are not fitted, fall back to edge-level SDs
-    # rather than dropping dispersion silently.
+    # Forecasting-consumer dispersion-field selection.
+    #
+    # This function feeds the upstream-carrier + span-prior machinery,
+    # which wants predictive (kappa_lat-inflated) parameter dispersion.
+    # The candidate ordering reflects what each source emits:
+    #   - Bayesian source: emits both `mu_sd` (epistemic) and
+    #     `mu_sd_pred` (predictive); we prefer `_pred` and the consumer
+    #     gets correctly-inflated predictive width.
+    #   - Analytic source: emits `mu_sd` only (epistemic, derived from
+    #     the t-posterior under a Jeffreys prior — see
+    #     docs/current/codebase/EPISTEMIC_DISPERSION_DESIGN.md). The
+    #     analytic path has no kappa_lat so no predictive value is
+    #     emitted; falling through to the bare epistemic value is the
+    #     correct best-available behaviour. The downstream sweep will
+    #     under-state predictive width on analytic-source paths until a
+    #     principled kappa_lat estimate becomes available — accepted by
+    #     project specification.
+    # Path-level SDs fall back to edge-level SDs when not fitted, rather
+    # than silently dropping dispersion.
     edge_lat = resolved.edge_latency
 
     def _pick_sd(*candidates):

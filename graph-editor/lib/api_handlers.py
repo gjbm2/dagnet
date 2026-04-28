@@ -12,7 +12,8 @@ import os
 from typing import Dict, Any, Optional, List
 
 from file_evidence_supplement import (
-    iter_uncovered_bare_cohort_daily_points,
+    WINDOW_SUBJECT_HELPER,
+    merge_file_evidence_for_role,
     normalise_supported_date,
 )
 
@@ -2092,12 +2093,13 @@ def _cf_supplement_evidence_counts_from_file(
     anchor_from: str,
     anchor_to: str,
     snapshot_covered_days: set[str],
+    evidence_role: str = WINDOW_SUBJECT_HELPER,
 ) -> Dict[str, int]:
     """Supplement CF evidence counts from engorged file data.
 
-    Mirrors the Bayes binder's uncovered-day rule:
-      - only bare cohort daily arrays are eligible
-      - context-qualified entries are skipped
+    Mirrors the shared evidence-merge uncovered-day rule:
+      - only file rows compatible with the requested evidence role are eligible
+      - context-qualified entries are skipped unless the role supports them
       - days already covered by snapshot rows are not counted again
 
     Returns counts only; CF's p.mean remains snapshot-conditioned.
@@ -2121,25 +2123,20 @@ def _cf_supplement_evidence_counts_from_file(
     if not isinstance(bayes_evidence, dict):
         return {'n': 0, 'k': 0, 'supplemented_days': 0}
 
-    cohort_entries = bayes_evidence.get('cohort') or []
-    if not isinstance(cohort_entries, list):
-        return {'n': 0, 'k': 0, 'supplemented_days': 0}
+    entries = []
+    if isinstance(bayes_evidence.get('window'), list):
+        entries.extend(bayes_evidence.get('window') or [])
+    if isinstance(bayes_evidence.get('cohort'), list):
+        entries.extend(bayes_evidence.get('cohort') or [])
 
-    total_n = 0
-    total_k = 0
-    supplemented_days = 0
-
-    for _, _, n_val, k_val in iter_uncovered_bare_cohort_daily_points(
-        cohort_entries,
+    merged = merge_file_evidence_for_role(
+        entries,
         snapshot_covered_days,
         anchor_from=anchor_from_iso,
         anchor_to=anchor_to_iso,
-    ):
-        total_n += n_val
-        total_k += k_val
-        supplemented_days += 1
-
-    return {'n': total_n, 'k': total_k, 'supplemented_days': supplemented_days}
+        role=evidence_role,
+    )
+    return merged.as_counts()
 
 
 def handle_conditioned_forecast(data: Dict[str, Any]) -> Dict[str, Any]:
@@ -2366,6 +2363,46 @@ def handle_conditioned_forecast(data: Dict[str, Any]) -> Dict[str, Any]:
             # below. See doc 50 §§2-3.
             if last_edge_id:
                 anchor_to_str = preparation.anchor_to
+                _extra_conditioning_evidence = []
+                _file_evidence_merge = None
+                _last_entry_for_file = next(
+                    (
+                        entry for entry in per_edge_results
+                        if entry.get('path_role') in ('last', 'only')
+                    ),
+                    None,
+                )
+                if _last_entry_for_file is not None:
+                    _last_subject_for_file = _last_entry_for_file.get('subject') or {}
+                    _edge_for_file = next(
+                        (
+                            e for e in (graph_data.get('edges', []) or [])
+                            if (e.get('uuid') or e.get('id')) == last_edge_id
+                        ),
+                        None,
+                    )
+                    _bayes_evidence = (
+                        _edge_for_file.get('_bayes_evidence')
+                        if isinstance(_edge_for_file, dict)
+                        else None
+                    )
+                    if isinstance(_bayes_evidence, dict):
+                        _entries = []
+                        if isinstance(_bayes_evidence.get('window'), list):
+                            _entries.extend(_bayes_evidence.get('window') or [])
+                        if isinstance(_bayes_evidence.get('cohort'), list):
+                            _entries.extend(_bayes_evidence.get('cohort') or [])
+                        _file_evidence_merge = merge_file_evidence_for_role(
+                            _entries,
+                            _last_entry_for_file.get('snapshot_covered_days') or set(),
+                            role=WINDOW_SUBJECT_HELPER,
+                            anchor_from=_last_subject_for_file.get('anchor_from', anchor_from_str),
+                            anchor_to=_last_subject_for_file.get('anchor_to', anchor_to_str),
+                        )
+                        _extra_conditioning_evidence = [
+                            (p.age_days, p.n, p.k)
+                            for p in _file_evidence_merge.points
+                        ]
                 maturity_rows = compute_cohort_maturity_rows_v3(
                     frames=composed_frames,
                     graph=graph_data,
@@ -2389,6 +2426,7 @@ def handle_conditioned_forecast(data: Dict[str, Any]) -> Dict[str, Any]:
                     span_onset_mu_corr=_span_params.onset_mu_corr if _span_params else None,
                     is_multi_hop=_is_multi_hop,
                     runtime_bundle=_runtime_bundle,
+                    extra_conditioning_evidence=_extra_conditioning_evidence,
                 )
 
                 if maturity_rows:
@@ -2424,23 +2462,14 @@ def handle_conditioned_forecast(data: Dict[str, Any]) -> Dict[str, Any]:
                     completeness = last_row.get('completeness')
                     completeness_sd = last_row.get('completeness_sd')
 
-                    # Scope-observed counts at horizon. v3 sets evidence_y
-                    # (cumulative conversions, k) and evidence_x (cumulative
-                    # arrivals, n) per maturity row from the cohort-scoped
-                    # sweep — same source as the [sweep_diag] Y/X lines.
-                    # Surface as evidence_k/evidence_n so callers (e.g. the
-                    # funnel runner's compute_bars_e) can render the e
-                    # component at the user's DSL scope rather than reading
-                    # unscoped edge.evidence from the scenario graph.
-                    evidence_k = last_row.get('evidence_y')
-                    evidence_n = last_row.get('evidence_x')
-                    # Non-latency / no-frame-evidence fallback: when the row
-                    # builder went through _non_latency_rows with fe=None
-                    # (narrow cohort, no usable frame composition),
-                    # last_row.evidence_y/x are None. Fall back to summing
-                    # across composed_frames — for each (anchor_day) take
-                    # the latest snapshot's y/x and accumulate. Same scope,
-                    # just re-derived without the frame composition step.
+                    # L4 evidence: report the same scoped evidence object
+                    # that conditioned p_mean. Row evidence is a chart
+                    # trajectory projection and may have different semantics.
+                    _pce = getattr(_runtime_bundle, 'p_conditioning_evidence', None)
+                    evidence_k = getattr(_pce, 'total_y', None) if _pce is not None else None
+                    evidence_n = getattr(_pce, 'total_x', None) if _pce is not None else None
+                    # Legacy fallback only when the runtime evidence object
+                    # is absent. Do not use this on the normal CF path.
                     if (evidence_k is None or evidence_n is None) and composed_frames:
                         latest_yx_per_anchor: Dict[Any, Dict[str, Any]] = {}
                         for frame in composed_frames:
@@ -2466,30 +2495,6 @@ def handle_conditioned_forecast(data: Dict[str, Any]) -> Dict[str, Any]:
                             evidence_k = sum_y
                         if evidence_n is None:
                             evidence_n = sum_x
-
-                    last_entry = next(
-                        (
-                            entry for entry in per_edge_results
-                            if entry.get('path_role') in ('last', 'only')
-                        ),
-                        None,
-                    )
-                    if last_entry is not None:
-                        last_subject = last_entry.get('subject') or {}
-                        file_supplement = _cf_supplement_evidence_counts_from_file(
-                            graph_data=graph_data,
-                            edge_uuid=last_edge_id,
-                            anchor_from=last_subject.get('anchor_from', anchor_from_str),
-                            anchor_to=last_subject.get('anchor_to', anchor_to_str),
-                            snapshot_covered_days=last_entry.get('snapshot_covered_days') or set(),
-                        )
-                        if file_supplement.get('supplemented_days', 0) > 0:
-                            evidence_k = (float(evidence_k) if evidence_k is not None else 0.0) + float(file_supplement['k'])
-                            evidence_n = (float(evidence_n) if evidence_n is not None else 0.0) + float(file_supplement['n'])
-                            print(
-                                f"[forecast] supplemented {file_supplement['supplemented_days']} uncovered file days "
-                                f"for {last_edge_id[:12]}… (+k={file_supplement['k']} +n={file_supplement['n']})"
-                            )
 
                     if evidence_k is not None:
                         try:

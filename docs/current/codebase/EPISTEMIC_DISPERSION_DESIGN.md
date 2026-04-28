@@ -1,9 +1,10 @@
-# 73i — Principled epistemic dispersion for the analytic stats pass
+# Epistemic dispersion design — analytic stats pass
 
-**Status**: Proposal — supersedes [`archive/heuristic-dispersion-design.md`](archive/heuristic-dispersion-design.md)
-**Date opened**: 28-Apr-26
-**Parent investigations**: [`73f`](73f-outside-in-cohort-engine-investigation.md), [`73g`](73g-general-purpose-f14-problem-and-invariants.md)
-**Scope**: replaces the current heuristic in the front-end topo stats pass and removes a related layer violation in the back-end runner
+**Status**: Persistent design — design of record for `mu_sd` / `sigma_sd` reported by the FE topo stats pass.
+**Adopted**: 28-Apr-26
+**Supersedes**: [`project-bayes/archive/heuristic-dispersion-design.md`](../project-bayes/archive/heuristic-dispersion-design.md) (the `1.25 × σ / √N` heuristic and its compounded corrections).
+**Originating investigations**: [`project-bayes/73f`](../project-bayes/73f-outside-in-cohort-engine-investigation.md), [`project-bayes/73g`](../project-bayes/73g-general-purpose-f14-problem-and-invariants.md).
+**Scope**: defines the formula used by `statisticalEnhancementService.ts` for epistemic SDs on the lognormal latency parameters, and the parameter-reading discipline in `forecast_runtime.py` that consumes them.
 
 ---
 
@@ -11,7 +12,7 @@
 
 Specify a research-grounded, general-purpose method for reporting epistemic uncertainty on the lognormal latency parameters (μ, σ) emitted by the analytic stats pass. The method must work without arbitrary tuning across the full plausible sample-size range — from a handful of converters in a thin window to millions of converters in a saturated edge — and must rest on standard statistical theory rather than invented multipliers.
 
-This proposal supersedes the design captured in [`archive/heuristic-dispersion-design.md`](archive/heuristic-dispersion-design.md). That design used the asymptotic variance of the sample-median estimator (`1.25 × σ / √N`) as a stand-in for the standard error of the maximum-likelihood estimator. That substitution has no principled basis, and the intervening qualityInflation, drift-fraction, and fixed-floor corrections compounded the error rather than fixing it.
+This document supersedes the design captured in [`project-bayes/archive/heuristic-dispersion-design.md`](../project-bayes/archive/heuristic-dispersion-design.md). That design used the asymptotic variance of the sample-median estimator (`1.25 × σ / √N`) as a stand-in for the standard error of the maximum-likelihood estimator. That substitution has no principled basis, and the intervening qualityInflation, drift-fraction, and fixed-floor corrections compounded the error rather than fixing it.
 
 ---
 
@@ -57,13 +58,13 @@ The alternative — using the t-posterior variance where it is finite (N ≥ 4) 
 
 For N = 1 the sample standard deviation is undefined and no fit can be reported. The stats pass should refuse to emit μ_sd and σ_sd in this case rather than fabricate a value. Downstream consumers must already handle the case where dispersion is unavailable, since this is also the case for edges that have never received any observations.
 
-For N = 2 the sample standard deviation is defined but the t-posterior has 1 degree of freedom and is Cauchy-distributed in shape. The interval-matched effective SD is well defined and finite, but the underlying posterior has Cauchy-heavy tails. A consumer that propagates the effective SD through a Gaussian sweep will under-state the tail mass of the resulting parameter distribution. This is a true statement about what two data points can support, and the right response is to document it rather than hide it. The proposal therefore retains the interval-matched effective SD for N = 2 and notes the heavy-tail caveat in the field documentation.
+For N = 2 the sample standard deviation is defined but the t-posterior has 1 degree of freedom and is Cauchy-distributed in shape. The interval-matched effective SD is well defined and finite, but the underlying posterior has Cauchy-heavy tails. A consumer that propagates the effective SD through a Gaussian sweep will under-state the tail mass of the resulting parameter distribution. This is a true statement about what two data points can support, and the right response is to document it rather than hide it. The design therefore retains the interval-matched effective SD for N = 2 and notes the heavy-tail caveat in the field documentation.
 
 For N = 3 the t-posterior has 2 degrees of freedom, the mean is defined, and the variance is not. The interval-matched effective SD is again finite and well behaved; the same caveat applies in milder form.
 
-For N below the minimum needed for a sensible variance estimate of the underlying lognormal — typically a domain-specific threshold — the stats pass already declines to mark the fit as quality-OK. That gate is a separate concern from dispersion estimation, and the proposal does not change it. The dispersion is reported wherever μ and σ are reported; the consumer can apply its own quality screen.
+There is no domain-specific small-N threshold and no need for one. The interval-matched formula is well defined for every N ≥ 2 and degrades smoothly as N falls — wider intervals at low N, tighter at high N, exactly as the information content of the data dictates. A separate `empirical_quality_ok` gate already exists in the stats pass and decides whether the fit as a whole should be marked trustworthy; that gate is independent of dispersion estimation and is not modified by this design. Dispersion is reported wherever μ and σ are reported; consumers that wish to gate on overall fit quality can do so via the existing flag.
 
-There is no need for a fixed lower floor on the reported dispersion. The interval-matched effective SD is naturally bounded away from zero at every finite N, because s and the relevant t-quantiles are both positive. A floor was needed under the prior heuristic only because the qualityInflation and √(π/2) factors had no principled relationship to N and could in degenerate cases produce values smaller than the noise floor of the downstream forecaster. With the principled formula those degenerate cases do not arise.
+There is also no need for a fixed lower floor on the reported dispersion. The interval-matched effective SD is naturally bounded away from zero at every finite N, because the sample standard deviation s and the relevant t-quantiles are both positive. A floor was needed under the prior heuristic only because the qualityInflation and √(π/2) factors had no principled relationship to N and could in degenerate cases produce values smaller than the noise floor of the downstream forecaster. With the principled formula those degenerate cases do not arise.
 
 ---
 
@@ -73,7 +74,7 @@ A separate, related defect lives in the back-end runner's parameter-reading laye
 
 When the source is the analytic stats pass, however, no predictive field is emitted (correctly, since the analytic source has no basis to compute one), and the runner falls through to the bare epistemic value. It then uses that bare value as if it were predictive, with no inflation applied. The downstream sweep therefore propagates an under-dispersed parameter distribution, masking the true predictive uncertainty.
 
-The fix is independent of the dispersion proposal above and should land alongside it. The runner must distinguish between "predictive value is available, use it directly" and "only the epistemic value is available, apply the predictive inflation step before use". The current single-fallback chain conflates the two cases. The cleanest resolution is to read predictive and epistemic into separate variables and to apply the predictive-inflation step explicitly when only epistemic is available, rather than relying on field-name precedence to imply semantics. The inflation step itself is the runner's existing kappa-based machinery; this proposal does not change it.
+The fix is independent of the dispersion design above but ships alongside it. The runner must distinguish between "predictive value is available, use it directly" and "only the epistemic value is available, apply the predictive-inflation step before use". The current single-fallback chain conflates the two cases. The resolution is to read predictive and epistemic into separate variables and to apply the predictive-inflation step explicitly when only epistemic is available, rather than relying on field-name precedence to imply semantics. The inflation step itself is the runner's existing kappa-based machinery; this design does not change it.
 
 ---
 
@@ -83,11 +84,11 @@ Three files participate in the change.
 
 The front-end stats pass [`statisticalEnhancementService.ts`](../../../graph-editor/src/services/statisticalEnhancementService.ts) computes μ_sd and σ_sd today using the heuristic formulas. The relevant block is the per-cohort dispersion calculation that multiplies σ by √(π/2)/√N and then by the qualityInflation factor and clamps to a floor. That block is replaced by the interval-matched effective SD computation: take the relevant quantiles of the Student-t posterior on μ and the scaled inverse chi-squared posterior on σ, and report the half-range divided by the Gaussian z-score for the chosen interval. The qualityInflation factor and the fixed floor are removed.
 
-The back-end runner [`forecast_runtime.py`](../../../graph-editor/lib/runner/forecast_runtime.py) reads the dispersion fields when constructing its per-cohort parameter pack. The candidate-ordering logic that conflates predictive and epistemic must be split. When only epistemic dispersion is present, the runner applies its existing kappa-based inflation step before propagating the value into the sweep. When predictive is present, the inflation step is skipped exactly as today. The runner's existing inflation machinery is the same machinery the Bayesian path would otherwise use; this proposal does not modify it.
+The back-end runner [`forecast_runtime.py`](../../../graph-editor/lib/runner/forecast_runtime.py) reads the dispersion fields when constructing its per-cohort parameter pack. The candidate-ordering logic that conflates predictive and epistemic must be split. When only epistemic dispersion is present, the runner applies its existing kappa-based inflation step before propagating the value into the sweep. When predictive is present, the inflation step is skipped exactly as today. The runner's existing inflation machinery is the same machinery the Bayesian path would otherwise use; this design does not modify it.
 
-The shared dispersion-design archive doc [`archive/heuristic-dispersion-design.md`](archive/heuristic-dispersion-design.md) is moved fully into the archive directory and stamped as superseded by this proposal. It remains available for historical context and to explain the provenance of values that may persist in fixtures generated under the old method, but it is no longer the design of record.
+The prior dispersion design [`project-bayes/archive/heuristic-dispersion-design.md`](../project-bayes/archive/heuristic-dispersion-design.md) is stamped as superseded. It remains available for historical context and to explain the provenance of values that may persist in fixtures generated under the old method, but it is no longer the design of record.
 
-Tests must cover both ends of the N range and the small-N edge cases. The proposal does not enumerate test names; the [`73g`](73g-general-purpose-f14-problem-and-invariants.md) invariant 8 applies — a passing test is only meaningful if it exercises the public path and asserts a contract, not an implementation quirk. The contract here is that the reported μ_sd matches the interval-matched effective SD of the t-posterior to within numerical tolerance for any N in the supported range, and that for analytic-source inputs the runner sees a predictively-inflated value at the point where it propagates parameter uncertainty.
+Tests must cover both ends of the N range and the small-N edge cases. The design does not enumerate test names; the [`project-bayes/73g`](../project-bayes/73g-general-purpose-f14-problem-and-invariants.md) invariant 8 applies — a passing test is only meaningful if it exercises the public path and asserts a contract, not an implementation quirk. The contract here is that the reported μ_sd matches the interval-matched effective SD of the t-posterior to within numerical tolerance for any N in the supported range, and that for analytic-source inputs the runner sees a predictively-inflated value at the point where it propagates parameter uncertainty.
 
 ---
 

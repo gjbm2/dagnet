@@ -33,6 +33,10 @@ export interface BayesWindowObs {
   n: number;
   k: number;
   sliceDSL: string;
+  n_daily?: number[];
+  k_daily?: number[];
+  dates?: string[];
+  retrieved_at?: string;
 }
 
 export interface BayesCohortObs {
@@ -42,6 +46,7 @@ export interface BayesCohortObs {
   dates?: string[];
   n?: number;
   k?: number;
+  retrieved_at?: string;
 }
 
 export interface BayesEvidence {
@@ -118,15 +123,21 @@ function buildEvidence(pf: Record<string, any>): BayesEvidence {
       if (Array.isArray(entry.dates)) obs.dates = entry.dates;
       if (entry.n != null) obs.n = Number(entry.n);
       if (entry.k != null) obs.k = Number(entry.k);
+      if (entry.data_source?.retrieved_at) obs.retrieved_at = String(entry.data_source.retrieved_at);
       evidence.cohort.push(obs);
     } else if (isWindow(dsl) || (entry.n != null && entry.k != null)) {
       // Window: entries with "window(" in DSL, OR entries with no temporal
       // qualifier but with n/k (treated as aggregate window observations).
-      evidence.window.push({
+      const obs: BayesWindowObs = {
         n: Number(entry.n ?? 0),
         k: Number(entry.k ?? 0),
         sliceDSL: dsl,
-      });
+      };
+      if (Array.isArray(entry.n_daily)) obs.n_daily = entry.n_daily;
+      if (Array.isArray(entry.k_daily)) obs.k_daily = entry.k_daily;
+      if (Array.isArray(entry.dates)) obs.dates = entry.dates;
+      if (entry.data_source?.retrieved_at) obs.retrieved_at = String(entry.data_source.retrieved_at);
+      evidence.window.push(obs);
     }
     // Entries with neither qualifier nor n/k are skipped.
   }

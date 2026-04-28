@@ -139,6 +139,224 @@ export function standardNormalInverseCDF(p: number): number {
   }
 }
 
+// =============================================================================
+// Posterior quantile helpers for epistemic dispersion of lognormal-fit
+// parameters. Design: docs/current/codebase/EPISTEMIC_DISPERSION_DESIGN.md.
+// Formulas: Gelman BDA3 §3.2 (Jeffreys-prior posterior on (μ, σ²) for the
+// Gaussian inference problem on ln(t)). Numerical methods: Numerical
+// Recipes 3rd ed §6.2 (lower incomplete gamma) and §6.4 (incomplete beta).
+// =============================================================================
+
+/**
+ * Log gamma via the Lanczos approximation. Accurate to ~1e-14 for x > 0.5.
+ */
+function logGamma(x: number): number {
+  if (x < 0.5) {
+    return Math.log(Math.PI / Math.sin(Math.PI * x)) - logGamma(1 - x);
+  }
+  const c = [
+    0.99999999999980993, 676.5203681218851, -1259.1392167224028,
+    771.32342877765313, -176.61502916214059, 12.507343278686905,
+    -0.13857109526572012, 9.9843695780195716e-6, 1.5056327351493116e-7,
+  ];
+  const g = 7;
+  x -= 1;
+  let a = c[0];
+  const t = x + g + 0.5;
+  for (let i = 1; i < c.length; i++) a += c[i] / (x + i);
+  return 0.5 * Math.log(2 * Math.PI) + (x + 0.5) * Math.log(t) - t + Math.log(a);
+}
+
+/**
+ * Regularised lower incomplete gamma P(s, x) = γ(s, x) / Γ(s).
+ * Series expansion for x < s + 1; modified Lentz continued fraction otherwise.
+ */
+function regularizedLowerGamma(s: number, x: number): number {
+  if (x < 0 || s <= 0) return NaN;
+  if (x === 0) return 0;
+  const EPS = 3e-16;
+  const FPMIN = 1e-300;
+  const ITMAX = 200;
+  const lnGammaS = logGamma(s);
+
+  if (x < s + 1) {
+    let ap = s;
+    let sum = 1 / s;
+    let del = sum;
+    for (let n = 0; n < ITMAX; n++) {
+      ap += 1;
+      del *= x / ap;
+      sum += del;
+      if (Math.abs(del) < Math.abs(sum) * EPS) break;
+    }
+    return sum * Math.exp(-x + s * Math.log(x) - lnGammaS);
+  }
+
+  let b = x + 1 - s;
+  let c = 1 / FPMIN;
+  let d = 1 / b;
+  let h = d;
+  for (let i = 1; i <= ITMAX; i++) {
+    const an = -i * (i - s);
+    b += 2;
+    d = an * d + b;
+    if (Math.abs(d) < FPMIN) d = FPMIN;
+    c = b + an / c;
+    if (Math.abs(c) < FPMIN) c = FPMIN;
+    d = 1 / d;
+    const del = d * c;
+    h *= del;
+    if (Math.abs(del - 1) < EPS) break;
+  }
+  return 1 - Math.exp(-x + s * Math.log(x) - lnGammaS) * h;
+}
+
+/**
+ * Regularised incomplete beta I_x(a, b) via continued fraction.
+ */
+function regularizedIncompleteBeta(x: number, a: number, b: number): number {
+  if (x <= 0) return 0;
+  if (x >= 1) return 1;
+  const front = Math.exp(
+    -(logGamma(a) + logGamma(b) - logGamma(a + b))
+      + a * Math.log(x) + b * Math.log(1 - x)
+  );
+  if (x < (a + 1) / (a + b + 2)) {
+    return front * betaContinuedFraction(x, a, b) / a;
+  }
+  return 1 - front * betaContinuedFraction(1 - x, b, a) / b;
+}
+
+function betaContinuedFraction(x: number, a: number, b: number): number {
+  const EPS = 3e-16;
+  const FPMIN = 1e-300;
+  const ITMAX = 200;
+  const qab = a + b;
+  const qap = a + 1;
+  const qam = a - 1;
+  let c = 1;
+  let d = 1 - (qab * x) / qap;
+  if (Math.abs(d) < FPMIN) d = FPMIN;
+  d = 1 / d;
+  let h = d;
+  for (let m = 1; m <= ITMAX; m++) {
+    const m2 = 2 * m;
+    let aa = (m * (b - m) * x) / ((qam + m2) * (a + m2));
+    d = 1 + aa * d;
+    if (Math.abs(d) < FPMIN) d = FPMIN;
+    c = 1 + aa / c;
+    if (Math.abs(c) < FPMIN) c = FPMIN;
+    d = 1 / d;
+    h *= d * c;
+    aa = (-(a + m) * (qab + m) * x) / ((a + m2) * (qap + m2));
+    d = 1 + aa * d;
+    if (Math.abs(d) < FPMIN) d = FPMIN;
+    c = 1 + aa / c;
+    if (Math.abs(c) < FPMIN) c = FPMIN;
+    d = 1 / d;
+    const del = d * c;
+    h *= del;
+    if (Math.abs(del - 1) < EPS) break;
+  }
+  return h;
+}
+
+/**
+ * Student-t CDF F(t; ν) = P(T ≤ t).
+ * Uses the identity F(t) = 1 - ½·I_{ν/(ν+t²)}(ν/2, ½) for t > 0 (symmetric for t < 0).
+ */
+export function studentTCDF(t: number, dof: number): number {
+  if (dof <= 0) return NaN;
+  if (t === 0) return 0.5;
+  const ib = regularizedIncompleteBeta(dof / (dof + t * t), dof / 2, 0.5);
+  return t > 0 ? 1 - 0.5 * ib : 0.5 * ib;
+}
+
+/**
+ * Student-t inverse CDF (quantile function). For p > 0.5 returns a positive value.
+ * Bisection over the CDF; converges in ~40 iterations to ~1e-12 absolute.
+ */
+export function studentTQuantile(p: number, dof: number): number {
+  if (dof <= 0) return NaN;
+  if (p <= 0) return -Infinity;
+  if (p >= 1) return Infinity;
+  if (p === 0.5) return 0;
+  const upper = p > 0.5;
+  const target = upper ? p : 1 - p;
+  let lo = 0;
+  let hi = 1;
+  for (let i = 0; i < 50 && studentTCDF(hi, dof) < target; i++) hi *= 2;
+  for (let i = 0; i < 200; i++) {
+    const mid = 0.5 * (lo + hi);
+    if (studentTCDF(mid, dof) < target) lo = mid;
+    else hi = mid;
+    if (hi - lo < 1e-12 * Math.max(1, hi)) break;
+  }
+  const result = 0.5 * (lo + hi);
+  return upper ? result : -result;
+}
+
+/**
+ * Chi-squared CDF F(x; ν) = P(χ² ≤ x) = P(ν/2, x/2).
+ */
+export function chiSquaredCDF(x: number, dof: number): number {
+  if (dof <= 0) return NaN;
+  if (x <= 0) return 0;
+  return regularizedLowerGamma(dof / 2, x / 2);
+}
+
+/**
+ * Chi-squared inverse CDF (quantile function). Uses Wilson-Hilferty as initial
+ * guess and refines via bisection.
+ */
+export function chiSquaredQuantile(p: number, dof: number): number {
+  if (dof <= 0) return NaN;
+  if (p <= 0) return 0;
+  if (p >= 1) return Infinity;
+  const z = standardNormalInverseCDF(p);
+  const wh = dof * Math.pow(1 - 2 / (9 * dof) + z * Math.sqrt(2 / (9 * dof)), 3);
+  let lo = Math.max(1e-10, wh * 0.5);
+  let hi = Math.max(wh * 2, lo * 2 + 1);
+  for (let i = 0; i < 50 && chiSquaredCDF(hi, dof) < p; i++) hi *= 2;
+  for (let i = 0; i < 50 && chiSquaredCDF(lo, dof) > p; i++) lo *= 0.5;
+  for (let i = 0; i < 200; i++) {
+    const mid = 0.5 * (lo + hi);
+    if (chiSquaredCDF(mid, dof) < p) lo = mid;
+    else hi = mid;
+    if (hi - lo < 1e-12 * Math.max(1, hi)) break;
+  }
+  return 0.5 * (lo + hi);
+}
+
+/**
+ * Effective SD of μ for the Jeffreys-prior posterior μ | data ~ t_{N-1}(ȳ, s²/N).
+ * Interval-matched at the central 90% interval: returns the SD of the Gaussian
+ * whose 90% interval coincides with the t-posterior's. Equals (s/√N) · t_{N-1, 0.95} / 1.6449.
+ * Defined for every N ≥ 2; converges to s/√N as N → ∞.
+ */
+export function epistemicMuSd(s: number, N: number): number {
+  if (!Number.isFinite(s) || s <= 0 || N < 2) return 0;
+  const z95 = standardNormalInverseCDF(0.95);
+  const tQ = studentTQuantile(0.95, N - 1);
+  return (s / Math.sqrt(N)) * (tQ / z95);
+}
+
+/**
+ * Effective SD of σ for the Jeffreys-prior posterior σ² | data ~ Inv-χ²(N-1, s²).
+ * Interval-matched at the central 90% interval over σ (= sqrt of σ²).
+ * Defined for every N ≥ 2.
+ */
+export function epistemicSigmaSd(s: number, N: number): number {
+  if (!Number.isFinite(s) || s <= 0 || N < 2) return 0;
+  const dof = N - 1;
+  const z95 = standardNormalInverseCDF(0.95);
+  const chiHi = chiSquaredQuantile(0.95, dof);
+  const chiLo = chiSquaredQuantile(0.05, dof);
+  const sigmaLo = Math.sqrt((dof * s * s) / chiHi);
+  const sigmaHi = Math.sqrt((dof * s * s) / chiLo);
+  return (sigmaHi - sigmaLo) / (2 * z95);
+}
+
 /**
  * Log-normal CDF.
  * F(t) = Φ((ln(t) - μ) / σ)

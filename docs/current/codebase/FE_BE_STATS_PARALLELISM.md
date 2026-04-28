@@ -144,25 +144,23 @@ Doc 73b Stage 3 removed `manual` from the source-ledger taxonomy. User authoring
 
 Promotion order for `best_available`: gated `bayesian`, else `analytic`. A user pin via `model_source_preference` overrides the quality gate when the pinned source exists; if it doesn't, promotion falls through to the available source while retaining the pin.
 
-## Heuristic dispersion SDs
+## Epistemic dispersion SDs
 
-When Bayes has not run, the FE analytic stats pass produces heuristic uncertainty estimates so downstream consumers (fan chart, confidence bands) have non-zero envelopes. Implemented in `statisticalEnhancementService.ts` and consumed on the BE via `confidence_bands.py`.
+When Bayes has not run, the FE analytic stats pass emits **epistemic** parameter SDs so downstream consumers (fan chart, confidence bands) have non-zero envelopes. The analytic source has no basis on which to construct *predictive* (kappa-inflated) dispersion, because there is no kappa parameter being estimated; predictive inflation is the runner's responsibility when the consumer needs a predictive band. Implemented in `statisticalEnhancementService.ts` and consumed on the BE via `confidence_bands.py` and `forecast_runtime.py`.
 
-**Edge-level** (mirrors the formulas that used to live in `stats_engine.py`):
+**Edge-level** — `mu_sd` and `sigma_sd` are derived from the t-posterior on μ and the scaled inverse chi-squared posterior on σ² under a Jeffreys prior on the lognormal location-scale model. The reported scalar is the **interval-matched effective SD**: the SD of the Gaussian whose central 90% interval matches the posterior's central 90% interval (the half-range divided by 1.645). This is exact for every N ≥ 2, has no arbitrary multipliers or floors, and converges to `s/√N` for large N. See [EPISTEMIC_DISPERSION_DESIGN.md](EPISTEMIC_DISPERSION_DESIGN.md) for the principled derivation, the small-N caveats (heavy tails at N ≤ 3), and the originating investigation. The previously-shipped heuristic (`1.25 × σ / √N` plus a `qualityInflation` factor and a fixed floor) is superseded; it confused the asymptotic SD of the sample-median estimator with the SE of the MLE.
 
 | Field | Derivation | Section |
 |-------|-----------|---------|
 | `p_sd` | Beta-binomial SD: `sqrt(p*(1-p)*(1+kappa)/(n+1))` | §3.1 |
-| `mu_sd` | Normalised moment: `sigma / sqrt(2*n_converters)` | §3.2 |
-| `sigma_sd` | Default-safe scale: `sigma / sqrt(2*n_converters)` | §3.3 |
-| `onset_sd` | Onset constraint: `max(1.0, onset * 0.15)` | §3.4 |
-| `onset_mu_corr` | Fixed correlation: `-0.5` (onset↔mu anti-correlation) | §3.5 |
+| `mu_sd` | Interval-matched effective SD of t-posterior on μ (dof = N−1, scale `s/√N`) | [EPISTEMIC_DISPERSION_DESIGN.md](EPISTEMIC_DISPERSION_DESIGN.md) §4 |
+| `sigma_sd` | Interval-matched effective SD of scaled inverse-χ² posterior on σ² (dof = N−1, scale `s²`) | [EPISTEMIC_DISPERSION_DESIGN.md](EPISTEMIC_DISPERSION_DESIGN.md) §4 |
+| `onset_sd` | Onset constraint: `max(1.0, onset * 0.15)` | (separate; see archive design §3.4 for history) |
+| `onset_mu_corr` | Fixed correlation: `-0.5` (onset↔mu anti-correlation) | (separate; see archive design §3.5 for history) |
 
 **Path-level**: quadrature sum propagation — `path_mu_sd = sqrt(mu_sd^2 + upstream_mu_sd^2)`, same for `sigma_sd` and `onset_sd`.
 
-**BE consumption**: `confidence_bands.py:70,103` builds a 4x4 covariance matrix from these 5 fields for MC band generation.
-
-Design: `project-bayes/archive/heuristic-dispersion-design.md`.
+**BE consumption**: `confidence_bands.py:70,103` builds a 4x4 covariance matrix from these 5 fields for MC band generation. `forecast_runtime.py` reads `mu_sd`, `sigma_sd`, etc. when constructing the per-cohort parameter pack; for analytic-source inputs (no `mu_sd_pred` field), the runner applies its existing kappa-based predictive-inflation step before propagating the value into the sweep — see [EPISTEMIC_DISPERSION_DESIGN.md](EPISTEMIC_DISPERSION_DESIGN.md) §6.
 
 ## Promoted fields (production/consumption separation)
 

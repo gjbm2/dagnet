@@ -848,6 +848,7 @@ def compute_cohort_maturity_rows_v3(
     resolved_override=None,
     edge_cdf_arr=None,
     runtime_bundle=None,
+    extra_conditioning_evidence=None,
 ) -> List[Dict[str, Any]]:
     """Compute per-tau rows for cohort maturity v3 chart.
 
@@ -969,15 +970,17 @@ def compute_cohort_maturity_rows_v3(
                 bundle.operator_inputs.span_onset_mu_corr = span_onset_mu_corr
 
         if fe_local is not None:
+            _extra_x = float(sum(float(item[1] or 0.0) for item in (extra_conditioning_evidence or [])))
+            _extra_y = float(sum(float(item[2] or 0.0) for item in (extra_conditioning_evidence or [])))
             bundle.p_conditioning_evidence.evidence_points = len(
                 fe_local.cohort_list or []
-            )
+            ) + len(extra_conditioning_evidence or [])
             bundle.p_conditioning_evidence.total_x = float(
                 sum(c.get('evidence_n', c.get('x_frozen', 0.0)) for c in fe_local.cohort_list)
-            )
+            ) + _extra_x
             bundle.p_conditioning_evidence.total_y = float(
                 sum(c.get('evidence_k', c.get('y_frozen', 0.0)) for c in fe_local.cohort_list)
-            )
+            ) + _extra_y
         else:
             bundle.p_conditioning_evidence.evidence_points = 0
             bundle.p_conditioning_evidence.total_x = None
@@ -1125,6 +1128,7 @@ def compute_cohort_maturity_rows_v3(
         det_norm_cdf=det_norm_cdf,
         edge_cdf_arr=None,
         runtime_bundle=active_runtime_bundle,
+        extra_evidence=extra_conditioning_evidence,
     )
 
     print(
