@@ -388,7 +388,50 @@ Purpose: remove remaining request-prep materialisation only after the caller can
 6. **Materialisation failure must be observable (closes §8.2.1b silent-miss surfaces).** When materialisation cannot complete for a scenario edge — parameter file absent, slice missing for the effective DSL — the step must emit a `warning`-level `sessionLogService` entry naming the affected edge, the missing input (file path or slice key), and the scenario id. The scenario must carry a "not fully materialised" marker through to dispatch rather than being silently treated as ready. Downstream surfacing — a "data unavailable" badge on the chart, a "missing parameter files" banner on share restore, a non-zero CLI exit listing the affected scenarios — reads that signal; it does not invent it. The session log entry is the contract; the visible UI/CLI is its rendering.
 7. **FE topo runs in every materialisation path (closes §8.2.1b CLI Stage 2 gap and the recipe gaps).** Extract FE topo invocation (`enhanceGraphLatencies` plus Step 2 promotion / current-answer derivation) from being fetch-pipeline-only into a standalone helper callable from any materialisation site after projection lands. Wire the four laggard callers — params-only custom recipe, graph-bearing custom recipe, fixed recipe, CLI `analyse` — into the helper. The four callers that already materialise (current edit, live regeneration, refresh-all/boot, share restore) keep invoking FE topo through the fetch pipeline; the new helper is the same code, just usable outside it.
 
-#### Stage 6 — cache sanity and test cleanup
+#### Stage 6 — CLI flag `--no-be` for simulating "no BE available"
+
+Purpose: provide a deterministic, supported way to run CLI commands as if the backend were unreachable. Same end state a user gets working offline, but on demand. Principally a diagnostic affordance: re-running `param-pack` or `analyse` with vs without `--no-be` distinguishes BE-introduced divergence (CF arithmetic, snapshot-DB queries, `/api/runner/analyze` outputs) from upstream FE-only divergence, which is today only achievable by inducing a network failure.
+
+Important framing: `--no-be` is **not** a no-op for analyses that don't themselves dispatch CF. The flag suppresses every BE call in the run — CF dispatch through the fetch pipeline, `/api/runner/analyze` calls, snapshot-DB queries that go through BE handlers. So:
+- For `param-pack`: the only BE call today is CF; `--no-be` is functionally `--no-cf` for this command.
+- For `analyse --type conditioned_forecast`: same as above — CF is suppressed, FE topo provisional values stand.
+- For `analyse --type cohort_maturity_v3` / `surprise_gauge` / runner-analyze types: the analysis cannot complete because it requires BE-side compute. The flag must surface a clean failure (named scenarios, named analysis type, named missing dependency: BE) rather than a cryptic timeout or success-with-empty-output.
+- For analyses that read graph state populated by CF (most of them — anything reading L5 `p.mean`/`p.stdev`/completeness or CF-supplied L4 `evidence_k/n`): the post-fetch graph state under `--no-be` is FE-topo-only, so any later analysis sees provisional values. That is the offline equivalence — it is the point.
+
+End state under `--no-be` (when the command can complete at all):
+- L5 populated by FE topo Step 2 provisional values only.
+- L4 populated by FE data fetch only; CF's `evidence_k/n` writes do not fire.
+- L1 / L1.5 / L2 / L3 unchanged (those have no BE writers).
+- CF response-only fields (`cf_mode`, `cf_reason`, `conditioning{}`, `tau_max`, etc.) absent.
+- `applyConditionedForecastToGraph` does not run.
+
+Items:
+
+1. **Blind tests first.** Three cases:
+   (a) `param-pack` runs with `--no-be` set: assert no fetch is dispatched to the BE host (mock the fetch and assert no calls), `cf_mode` does not appear on output edges, and `p.mean` matches FE-topo Step 2 rather than the post-CF value.
+   (b) `analyse --type conditioned_forecast` with `--no-be`: same shape — no BE call, output reflects FE-topo provisional state.
+   (c) `analyse --type cohort_maturity_v3` (or any runner-analyze type) with `--no-be`: command exits non-zero with a single clear message naming the analysis type and that BE compute is required. No partial output. No silent success.
+   All three must fail against current code.
+
+2. **Single inhibition point in `fetchDataService.fetchItems`.** Add `FetchOptions.skipBackendCalls?: boolean` (default false). When set, the cfPromise short-circuits to `Promise.resolve([])` immediately and any other BE-bound call inside the fetch pipeline (snapshot retrieval that goes via the BE host, etc.) is similarly suppressed. The existing fast-path-deadline / fallback logic at [fetchDataService.ts](../../graph-editor/src/services/fetchDataService.ts) handles the rest naturally — same code path the timeout-fallback already exercises. No changes to the apply mapping or any consumer.
+
+3. **CLI plumbing.** Add `AggregateOptions.skipBackendCalls` in [aggregate.ts](../../graph-editor/src/cli/aggregate.ts) and forward it into `fetchItems`. Register `--no-be` in `extraOptions` for [paramPack.ts](../../graph-editor/src/cli/commands/paramPack.ts) and [analyse.ts](../../graph-editor/src/cli/commands/analyse.ts), mirroring the existing `--no-snapshot-cache` registration. Lift the parsed flag into the option. `hydrate.ts` does not dispatch BE calls — accept the flag silently as a no-op for consistency rather than error.
+
+4. **Direct CF dispatch path in `analyse.ts`.** The analyse command currently has a direct-CF path that bypasses the fetch pipeline (`buildConditionedForecastGraphSnapshot` call site in `analyse.ts`). Stage 2 of this proposal collapses that path into prepared dispatch; if Stage 6 lands after Stage 2, the gating is in one place. If Stage 6 lands before Stage 2, gate the direct path explicitly — bail before the snapshot build when `--no-be` is set, return an empty CF result, emit a session-log entry.
+
+5. **Runner-analyze fail-fast.** For analyse types that require BE-side compute (cohort_maturity_v3, conversion_funnel, lag_*, daily_conversions, conversion_rate, surprise_gauge, branch_comparison, runner registry types), `--no-be` must surface a clean failure at the dispatch site rather than letting the BE call attempt-and-error. Add a single guard at the runner-analyze dispatch point that, when `skipBackendCalls` is true, throws a typed error naming the analysis type and that BE compute is required. The CLI catches and renders this as a non-zero exit with a one-line message; no partial output.
+
+6. **Output labelling.** Param-pack output must carry `be_skipped: true` in pack metadata when the flag was used. Otherwise downstream consumers cannot tell whether `p.mean = 0.42` is BE-authoritative (CF) or FE-topo provisional. One field; non-trivially important. Place alongside any existing run-mode metadata in the pack header.
+
+7. **Session log entry.** When `--no-be` is set, emit a single `info`-level `sessionLogService` entry naming the command, scenarios affected, and the reason (`be_disabled_by_flag`). The durable record explains why a run produced provisional values; complements the metadata flag.
+
+8. **BE-internal CF (out of scope, documented).** The funnel runner (interface I17 in [FORECAST_STACK_DATA_FLOW.md](../codebase/FORECAST_STACK_DATA_FLOW.md)) makes its own whole-graph CF call from `funnel_engine.py`. Under `--no-be` the funnel runner is unreachable anyway (item 5 fails the dispatch fast), so this limitation does not surface for `--no-be`. It would surface only if a future flag tried to allow `/api/runner/analyze` while suppressing CF inside it; that is not Stage 6's scope.
+
+9. **Re-run the focused suites with the flag.** With `--no-be` available, re-run [abBcSmoothLag.paramPack.amplitude.e2e.test.ts](../../graph-editor/src/services/__tests__/abBcSmoothLag.paramPack.amplitude.e2e.test.ts) and the 73b §5 Group 3 outside-in cases under the flag. If the failing scalars come into tolerance with `--no-be` set, the divergence is in BE arithmetic (most likely CF); if they don't, the divergence is upstream of BE. Record the result in [73b-final-outstanding.md](73b-final-outstanding.md) §3.7 / §5 as a triage hint.
+
+This stage is a tightly scoped diagnostic affordance. It does not change BE semantics, does not move any code from FE to BE, and does not introduce a new caller class. It is one option on existing services, two CLI flag wirings, and a guard at the runner-analyze dispatch site.
+
+#### Stage 7 — cache sanity and test cleanup
 
 Purpose: avoid stale results introduced by the boundary change.
 
@@ -398,15 +441,15 @@ Purpose: avoid stale results introduced by the boundary change.
 4. Convert CLI tests that are intended to protect CLI behaviour but currently POST directly to the BE.
 5. Re-run the focused TS suites plus the 73b §5 outside-in Python suite. Numerical movement in 73b §5 Groups 2/3 is not expected from transport cleanup; if it occurs, stop and investigate.
 
-#### Stage 7 — document the final system contract
+#### Stage 8 — document the final system contract
 
 Purpose: make the post-cleanup behaviour durable outside this proposal.
 
 1. Update the canonical codebase forecast-flow documentation after the implementation is complete. At minimum, revise [FORECAST_STACK_DATA_FLOW.md](../codebase/FORECAST_STACK_DATA_FLOW.md) so it describes the final materialisation sequence, prepared analysis transport envelope, endpoint dispatch split (`/api/runner/analyze` vs `/api/forecast/conditioned`), and the distinction between read-only CF dispatch, graph-mutating CF enrichment, CLI param-pack production, and Bayes-run commissioning.
-2. Update CLI / graph-ops docs where behaviour changed. At minimum, revise the CLI analysis and param-pack references so they state that `cli analyse` and the browser share the prepared-analysis path, while `cli param-pack` shares the graph-population/extraction path rather than analysis dispatch.
+2. Update CLI / graph-ops docs where behaviour changed. At minimum, revise the CLI analysis and param-pack references so they state that `cli analyse` and the browser share the prepared-analysis path, while `cli param-pack` shares the graph-population/extraction path rather than analysis dispatch. Document the `--no-be` flag's contract (Stage 6) — when it suppresses cleanly vs when it surfaces a fail-fast non-zero exit.
 3. Update service-directory or invariant docs if ownership changed. The documentation should name the owner of scenario materialisation, request transport cloning/engorgement, TypeScript-vs-Python visibility projection, and request-only Bayes runtime fields.
 4. Remove or rewrite any stale project docs that still describe request-side materialisation as the intended design. If a project note is retained as historical context, mark that explicitly.
-5. Documentation is the final stage because it should describe what actually shipped, not what the proposal hoped would ship. Do not complete Stage 7 until Stages 1–6 are implemented and the final tests have confirmed the boundary behaviour.
+5. Documentation is the final stage because it should describe what actually shipped, not what the proposal hoped would ship. Do not complete Stage 8 until Stages 1–7 are implemented and the final tests have confirmed the boundary behaviour.
 
 ### 8.4 Things this proposal explicitly does not do
 
@@ -439,9 +482,10 @@ Purpose: make the post-cleanup behaviour durable outside this proposal.
 3. **Stage 3 third.** Close 73b §3.1 by making live/current DSL re-contexting update the full in-schema Bayesian surface, including `model_vars[bayesian]` and promotion.
 4. **Stage 4 fourth.** Remove TS-side visibility projection (`applyProbabilityVisibilityModeToGraph` call sites at `CompositionService.ts:423` and `analysisComputePreparationService.ts:457`); Python `_prepare_scenarios` becomes the sole projector. Preserve scalar-runner output parity.
 5. **Stage 5 fifth.** Extract FE topo invocation into a standalone helper, wire the four laggard callers (custom params, graph-bearing custom, fixed, CLI standard) into the unified materialisation path, and add the session-log + not-materialised marker contract for failure cases. Preserve the share/chart restore contract.
-6. **Stage 6 sixth.** Check cache sanity, clean up CLI tests that bypass the public command path, then re-run the focused TS suites and the 73b §5 outside-in Python suite.
-7. **Stage 7 seventh.** Update canonical codebase and CLI docs to reflect the shipped contracts and remove stale descriptions of the old request-prep materialisation behaviour.
-8. **Optimisation phases later.** Evaluate CF multi-scenario bundling for bulk materialisation events after the core contract is stable. Evaluate cache granularity / cache-lifetime improvements separately.
+6. **Stage 6 sixth.** Add CLI `--no-be` flag for simulating "no BE available". Single inhibition point in `fetchDataService.fetchItems`; runner-analyze fail-fast guard for analyses that require BE compute. Diagnostic affordance for distinguishing BE vs FE divergence.
+7. **Stage 7 seventh.** Check cache sanity, clean up CLI tests that bypass the public command path, then re-run the focused TS suites and the 73b §5 outside-in Python suite.
+8. **Stage 8 eighth.** Update canonical codebase and CLI docs to reflect the shipped contracts and remove stale descriptions of the old request-prep materialisation behaviour. Includes documenting the `--no-be` flag's contract.
+9. **Optimisation phases later.** Evaluate CF multi-scenario bundling for bulk materialisation events after the core contract is stable. Evaluate cache granularity / cache-lifetime improvements separately.
 
 ### 8.7 What this proposal closes or leaves open
 
@@ -450,10 +494,11 @@ Purpose: make the post-cleanup behaviour durable outside this proposal.
 - **73b §3.1 is pulled into scope** because the materialisation contract must own `model_vars[bayesian]` and promotion.
 - **73b §3.4 is partially closed** by making the CLI command path the canonical seam; the test conversions remain an explicit implementation step.
 - **73b §3.3 is unchanged** except that future parity tests should distinguish materialisation parity from transport/engorgement parity.
-- **Stage 0 consumer review is complete**; remaining risks are represented in Stages 1–6.
+- **Stage 0 consumer review is complete**; remaining risks are represented in Stages 1–7.
 - **The FE topo location question is closed**: FE topo runs in every materialisation path, extracted into a standalone helper callable from any materialisation site (Stage 5 item 7). The static-scenario preservation question is explicitly out of scope (§8.4).
 - **The visibility projection question is closed**: §8.2.3 audit found Python `_prepare_scenarios` is the canonical owner. Stage 4 removes TS-side projection (`applyProbabilityVisibilityModeToGraph` call sites) without changing scalar-runner output.
-- **The documentation-closeout question is explicit**: Stage 7 updates canonical codebase and CLI docs after the shipped behaviour is known, so this proposal does not remain the only source of truth.
+- **The "no BE available" diagnostic affordance is in scope**: Stage 6 adds `--no-be` to CLI `param-pack` and `analyse`, suppressing every BE call in the run and surfacing a clean fail-fast for analysis types that require BE compute. Mirrors the existing offline / BE-unreachable end state but on demand.
+- **The documentation-closeout question is explicit**: Stage 8 updates canonical codebase and CLI docs after the shipped behaviour is known, so this proposal does not remain the only source of truth.
 - **CF scenario bundling and cache performance tuning remain open optimisations**, explicitly separate from this cleanup's core correctness work.
 
 End of proposal.
@@ -465,8 +510,9 @@ End of proposal.
 - [x] Stage 0 — completed (consumer contract review, recorded in §8.3 body before this block existed)
 - [x] Stage 1 — completed 28-Apr-26
 - [x] Stage 2 — completed 28-Apr-26
-- [ ] Stage 3
+- [x] Stage 3 — completed 28-Apr-26
 - [ ] Stage 4
 - [ ] Stage 5
-- [ ] Stage 6
+- [ ] Stage 6 (`--no-be` CLI flag — added 28-Apr-26)
 - [ ] Stage 7
+- [ ] Stage 8
