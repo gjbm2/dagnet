@@ -158,10 +158,28 @@ export interface FetchOptions {
    *
    * Intended for read-only materialisation paths (doc 73e §8.3 Stage 5) where
    * FE topo is the contract and graph-mutating CF is not desired. The broader
-   * Stage 6 `--no-be` flag will be a wider gate (every BE call); this option
-   * narrowly suppresses CF only.
+   * `skipBackendCalls` flag (Stage 6) is the wider gate (every BE call);
+   * this option narrowly suppresses CF only.
    */
   skipConditionedForecast?: boolean;
+
+  /**
+   * When true, suppress every BE-bound call inside this fetch run — CF
+   * dispatch, snapshot retrievals via the BE host, and any other call that
+   * would reach the Python API. Implies `skipConditionedForecast` and is
+   * the broader gate behind the CLI `--no-be` flag (doc 73e §8.3 Stage 6).
+   *
+   * Intent: provide a deterministic, supported way to run as if the
+   * backend were unreachable. The same end state a user gets working
+   * offline, but on demand. Diagnostic affordance to distinguish
+   * BE-introduced divergence (CF arithmetic, snapshot DB queries,
+   * runner-analyze outputs) from upstream FE-only divergence.
+   *
+   * The downstream pipeline behaves as if every BE call returned no
+   * result — the existing fast-path-deadline / fallback logic handles
+   * the rest naturally. Pipeline op is marked 'skipped' for this run.
+   */
+  skipBackendCalls?: boolean;
 
   /**
    * When true, Stage-2 awaits its fire-and-forget background handlers
@@ -2306,7 +2324,12 @@ export async function runStage2EnhancementsAndInboundN(
           // When FE has no values to apply, CF is the sole writer of p.mean
           // and applies its own results on arrival via
           // applyConditionedForecastToGraph.
-          const cfSkipped = itemOptions?.skipConditionedForecast === true;
+          // `skipBackendCalls` (doc 73e §8.3 Stage 6) is the wider gate
+          // behind the CLI `--no-be` flag — it implies skipConditionedForecast.
+          // Both reach the same short-circuit path here so the CF pipeline
+          // step is marked 'skipped' identically and no fetch reaches the BE.
+          const cfSkipped = itemOptions?.skipConditionedForecast === true
+            || itemOptions?.skipBackendCalls === true;
           updatePipelineStep('cf', cfSkipped ? 'complete' : 'running', cfSkipped ? 'skipped' : undefined);
           const { runConditionedForecast, applyConditionedForecastToGraph } =
             await import('./conditionedForecastService');

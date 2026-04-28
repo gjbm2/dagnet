@@ -205,6 +205,12 @@ export interface PreparedAnalysisComputeReady {
   displaySettings?: Record<string, unknown>;
   /** MECE dimension names for regime selection aggregation safety (doc 30). */
   meceDimensions?: string[];
+  /**
+   * Doc 73e §8.3 Stage 6 — when true, `runBackendAnalysis` short-circuits
+   * runner-analyze and conditioned_forecast dispatch with a typed error
+   * naming the analysis type and that BE compute is required.
+   */
+  skipBackendCalls?: boolean;
 }
 
 export interface PreparedAnalysisComputeBlocked {
@@ -236,6 +242,13 @@ type SharedParams = {
    *  graphs lose their per-DSL posterior projection. Optional during
    *  migration so legacy callers and shape-only tests continue to compile. */
   resolveParameterFile?: ParameterFileResolver;
+  /**
+   * Doc 73e §8.3 Stage 6 — propagated onto `PreparedAnalysisComputeReady`
+   * so `runBackendAnalysis` can fail fast on runner-analyze types when the
+   * backend is to be treated as unavailable. Set by the CLI from `--no-be`;
+   * browser callers leave undefined.
+   */
+  skipBackendCalls?: boolean;
 };
 
 type LiveParams = SharedParams & {
@@ -758,6 +771,7 @@ export async function prepareAnalysisComputeInputs(
     signature: createPreparedSignature(analysisType, analyticsDsl, scenarios, displaySettings),
     displaySettings,
     meceDimensions,
+    skipBackendCalls: params.skipBackendCalls === true ? true : undefined,
   };
 
   logChartReadinessTrace('AnalysisPrepare:ready', {
@@ -832,10 +846,35 @@ export async function runPreparedAnalysis(
   return runBackendAnalysis(prepared);
 }
 
+/**
+ * Doc 73e §8.3 Stage 6 — typed error surfaced from `runBackendAnalysis`
+ * when `prepared.skipBackendCalls === true`. Carries the analysis type
+ * so callers (CLI, FE diagnostics) can render a clean failure naming
+ * the analysis type and the missing dependency (BE compute).
+ */
+export class BackendCallsSkippedError extends Error {
+  readonly analysisType: string;
+  constructor(analysisType: string) {
+    super(`Analysis '${analysisType}' requires BE compute, but BE calls are disabled (skipBackendCalls=true / --no-be).`);
+    this.name = 'BackendCallsSkippedError';
+    this.analysisType = analysisType;
+  }
+}
+
 /** Dispatch to backend (single or multi-scenario). */
 async function runBackendAnalysis(
   prepared: PreparedAnalysisComputeReady,
 ): Promise<AnalysisResponse> {
+  // Doc 73e §8.3 Stage 6 item 5 — runner-analyze fail-fast. When BE calls
+  // are disabled, surface a typed error at the single dispatch point rather
+  // than letting the BE call attempt-and-error. Covers conditioned_forecast,
+  // multi-scenario analyzeMultipleScenarios, and the single-scenario path.
+  // Locally-computable types (node_info, edge_info) never reach this branch
+  // because `runPreparedAnalysis` returns the FE result before delegating.
+  if (prepared.skipBackendCalls === true) {
+    throw new BackendCallsSkippedError(prepared.analysisType);
+  }
+
   // Read-only conditioned forecast: prepared dispatch through the shared CF
   // payload builder (doc 73e §8.3 Stage 2 / 73b §7.1). The prepared graph is
   // already engorged in prep; the dispatcher forwards display_settings,

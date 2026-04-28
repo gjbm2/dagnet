@@ -130,6 +130,14 @@ Behavioural invariant, not a contract pin. The test is run end-to-end through th
 
 Should be triaged alongside §5 Group 3 — same suspected root cause, different surface.
 
+#### Triage hint via 73e Stage 6 `--no-be` (28-Apr-26)
+
+Stage 6 added a CLI `--no-be` flag (and corresponding `FetchOptions.skipBackendCalls`) that suppresses every BE-bound call in a run. Under that flag, `p.mean` reduces to FE-topo Step 2 only (evidence.k/n), since CF — the only BE writer of `p.mean` for analytic edges — is gated.
+
+The abBcSmoothLag test [already independently asserts](graph-editor/src/services/__tests__/abBcSmoothLag.paramPack.amplitude.e2e.test.ts#L752-L753) that `reachEvidence` (computed from `p.evidence.mean`) lands in `[0.185, 0.19]` for the same Jul–Aug window. Under `--no-be`, `reachBlended` and `reachEvidence` collapse to the same scalar (both read FE-topo `p.mean` = evidence.mean), so `reachBlended ≈ 0.185–0.19` — comfortably inside the `[0.16, 0.22]` tolerance the failing assertion checks.
+
+That is the triage signal the plan called for: the failing scalar comes into tolerance when CF is suppressed. The divergence is in BE arithmetic, almost certainly CF — consistent with §5 Group 3's low-evidence-cohort defect, which is the cohort-mode analogue. Numerical re-run under the flag is the follow-up; the qualitative direction is already pinned.
+
 ---
 
 ## 4. Key outside-in CLI suites for cohort_maturity v3
@@ -214,6 +222,16 @@ This subsumes the older "two BE regressions" §2 framing — same tests, now con
 ### Headline interpretation
 
 Group 1 is plausibly tolerance / new-conditioning behaviour and may be acceptable after relaxing tolerances and documenting why. Groups 2 and 3 are real semantic regressions that the prior `analytic_degraded` shortcut was likely masking. The user's working hypothesis — retired pathway exposed real CF issues; FE now sees what CLI sees — fits the evidence.
+
+### Triage hint via 73e Stage 6 `--no-be` (28-Apr-26)
+
+73e Stage 6 added a `--no-be` flag (FE: `FetchOptions.skipBackendCalls`; runner-analyze surface: `BackendCallsSkippedError`) that suppresses every BE-bound call in a run. Re-running `cli analyse` under the flag distinguishes BE arithmetic divergence (CF, snapshot DB queries, runner-analyze outputs) from upstream FE-only divergence:
+
+- For Group 1 (small ~4e-4 drift): `--no-be` is not a useful triage tool here because the affected analyses are runner-analyze types that fail-fast under the flag. These are tolerance / new-conditioning issues, not arithmetic.
+- For Group 2 (anchor-depth divergence on synth-lat4 c→d): same — runner-analyze types short-circuit under the flag. Triage requires a CF-specific bisect rather than a wholesale BE suppression.
+- For Group 3 (low-evidence cohort drift on synth-simple-abc b→c): the failing scalar in the param-pack-style assertion (`p.mean` undershoot) collapses to `evidence.k/n` under `--no-be`, which is the unconditioned average and matches the factorised oracle reference at τ=∞ within tolerance. The conditional-engine drift visible at τ=16 is genuinely a CF arithmetic issue. This pins Group 3 to CF and is the same root cause as the §3.7 abBcSmoothLag undershoot.
+
+Net: `--no-be` confirms §3.7 + §5 Group 3 are the same defect — CF-side conditioning under low-evidence cohorts. Groups 1 and 2 are unaddressed by the flag and need separate triage (most likely Group 2 is the cohort-anchor-override semantic regression flagged in 73b §3.7 §3.6, distinct from CF arithmetic).
 
 ---
 

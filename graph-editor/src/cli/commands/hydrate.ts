@@ -30,6 +30,11 @@ dagnet-cli hydrate
     --name,  -n              Graph name (filename without .json in graphs/)
     --query, -q              Query DSL expression (e.g. "window(-90d:)")
     --allow-external-fetch   Allow fetching from external sources
+    --no-be                  Accepted for CLI surface uniformity. Hydrate's
+                             contract is to materialise the graph the live
+                             system would produce, which includes BE-driven
+                             CF; this flag is a no-op here. (Doc 73e §8.3
+                             Stage 6 item 3.)
     --bayes-vars <path>      Inject Bayesian posteriors from a .bayes-vars.json
                              sidecar before hydration. The hydrated graph
                              written to disk will carry the injected posteriors.
@@ -48,7 +53,15 @@ dagnet-cli hydrate
 `;
 
 export async function runHydrate(): Promise<void> {
-  const ctx = await bootstrap();
+  // Doc 73e §8.3 Stage 6 item 3 — accept `--no-be` silently as a no-op
+  // for CLI surface uniformity. Hydrate's contract is to materialise
+  // the graph the live system would produce, which includes BE-driven CF;
+  // disabling BE during hydrate would break that contract.
+  const ctx = await bootstrap({
+    extraOptions: {
+      'no-be': { type: 'boolean' },
+    },
+  });
   if (!ctx) {
     console.error(USAGE);
     process.exit(1);

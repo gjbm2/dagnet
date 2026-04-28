@@ -10,6 +10,7 @@ import { bootstrap } from '../bootstrap';
 import { extractParamsFromGraph } from '../../services/GraphParamExtractor';
 import { flattenParams, toYAML, toJSON, toCSV } from '../../services/ParamPackDSLService';
 import { computePlausibleSignaturesForEdge } from '../../services/snapshotRetrievalsService';
+import { sessionLogService } from '../../services/sessionLogService';
 import { aggregateAndPopulateGraph } from '../aggregate';
 
 const USAGE = `
@@ -38,6 +39,12 @@ dagnet-cli param-pack
     --allow-external-fetch   Allow fetching from external sources if cache is stale/missing
     --no-snapshot-cache      Bypass the BE snapshot service in-memory TTL cache
                              (essential during synth-gen cycles or after BE code edits)
+    --no-be                  Suppress every BE-bound call in the run.
+                             Functionally equivalent to running offline. For
+                             param-pack the only BE call today is the conditioned
+                             forecast, so --no-be makes p.mean / completeness
+                             reflect FE-topo Step 2 provisional values only.
+                             Pack metadata records be_skipped: true.
     --help, -h               Show this help
 
   Environment:
@@ -63,6 +70,7 @@ async function runParamPack() {
   const ctx = await bootstrap({
     extraOptions: {
       'no-snapshot-cache': { type: 'boolean' },
+      'no-be': { type: 'boolean' },
     },
   });
   if (!ctx) {
@@ -103,10 +111,21 @@ async function runParamPack() {
   // Aggregate + LAG pass
   // 'from-file' = cache only; 'versioned' = cache first, API if stale/missing
   const fetchMode = flags.allowExternalFetch ? 'versioned' as const : 'from-file' as const;
+  // Doc 73e §8.3 Stage 6 — `--no-be` suppresses every BE-bound call.
+  // For param-pack the only BE call today is CF; with the flag set,
+  // p.mean and completeness reflect FE-topo Step 2 provisional values only.
+  const skipBackendCalls = !!extraArgs['no-be'];
+  if (skipBackendCalls) {
+    log.info('--no-be set: BE calls disabled; output reflects FE-topo provisional values only');
+    sessionLogService.info('session', 'NO_BE_FLAG',
+      'param-pack: --no-be set; output reflects FE-topo provisional values only',
+      'be_disabled_by_flag');
+  }
   log.info(`Aggregating parameter data for requested window (mode: ${fetchMode})...`);
   const { graph: populatedGraph, warnings } = await aggregateAndPopulateGraph(bundle, queryDsl, {
     mode: fetchMode,
     workspace,
+    skipBackendCalls,
   });
   for (const w of warnings) {
     log.warn(w);
@@ -187,5 +206,35 @@ async function runParamPack() {
       break;
   }
 
+  if (skipBackendCalls) {
+    output = injectBeSkippedMeta(output, format);
+  }
+
   process.stdout.write(output + '\n');
+}
+
+/**
+ * Doc 73e §8.3 Stage 6 item 6 — inject `meta.be_skipped: true` into the
+ * serialised param-pack output when the run was produced under `--no-be`.
+ * Downstream consumers cannot otherwise distinguish FE-topo provisional
+ * `p.mean` from a BE-authoritative CF value.
+ *
+ * Format-aware so we don't re-implement serialisation. The key lives in
+ * the `meta.*` namespace which never collides with edge or node fields
+ * (`e.*` / `n.*`).
+ *
+ * Exported for unit testing.
+ */
+export function injectBeSkippedMeta(output: string, format: 'yaml' | 'json' | 'csv'): string {
+  switch (format) {
+    case 'json': {
+      const parsed = JSON.parse(output) as Record<string, unknown>;
+      return JSON.stringify({ 'meta.be_skipped': true, ...parsed }, null, 2);
+    }
+    case 'csv':
+      return output.replace(/^key,value\n/, 'key,value\nmeta.be_skipped,true\n');
+    case 'yaml':
+    default:
+      return `meta.be_skipped: true\n${output}`;
+  }
 }

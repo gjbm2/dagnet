@@ -25,6 +25,13 @@ export interface AggregateOptions {
   workspace?: { repository: string; branch: string };
   /** Scenario identity threaded to CF supersession logic. */
   scenarioId?: string;
+  /**
+   * Doc 73e §8.3 Stage 6 — when true, suppress every BE-bound call inside
+   * the fetch pipeline. End state: L5 populated by FE topo Step 2 only,
+   * CF response fields absent, no `applyConditionedForecastToGraph`.
+   * Behind the CLI `--no-be` flag.
+   */
+  skipBackendCalls?: boolean;
 }
 
 /**
@@ -86,6 +93,7 @@ export async function aggregateAndPopulateGraph(
         scenarioId: options?.scenarioId,
         cfSupersessionState,
         workspace: options?.workspace,
+        skipBackendCalls: options?.skipBackendCalls,
       },
       currentGraph,
       setGraph,

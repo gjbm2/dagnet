@@ -19,8 +19,10 @@ import { bootstrap } from '../bootstrap';
 import {
   prepareAnalysisComputeInputs,
   runPreparedAnalysis,
+  BackendCallsSkippedError,
   type PreparedAnalysisComputeReady,
 } from '../../services/analysisComputePreparationService';
+import { sessionLogService } from '../../services/sessionLogService';
 import type { Graph, ScenarioVisibilityMode } from '../../types';
 
 const USAGE = `
@@ -48,6 +50,13 @@ dagnet-cli analyse
     --format, -f             Output format: json (default), yaml
     --no-snapshot-cache      Bypass BE snapshot service cache. Use after synth_gen
                              or any DB repopulation to avoid stale cached results.
+    --no-be                  Suppress every BE-bound call in the run (offline
+                             equivalence on demand). For analyse types that
+                             require BE compute (cohort_maturity_v3,
+                             conditioned_forecast, runner-analyze types) the
+                             command exits non-zero with a clear message
+                             naming the analysis type. For FE-only types
+                             the command runs against FE-topo state only.
     --allow-external-fetch   Fetch live from external sources (e.g. Amplitude)
     --display <json>          Display settings JSON (e.g. '{"show_latency_bands":true}')
     --bayes-vars <path>      Inject Bayesian posteriors from a .bayes-vars.json
@@ -99,6 +108,7 @@ async function runAnalyse() {
       subject: { type: 'string' },
       scenario: { type: 'string', multiple: true },
       'no-snapshot-cache': { type: 'boolean' },
+      'no-be': { type: 'boolean' },
       display: { type: 'string' },
     },
   });
@@ -129,6 +139,20 @@ async function runAnalyse() {
   }
   if (isDiagnostic()) {
     (globalThis as any).__dagnetDiagnostics = true;
+  }
+
+  // Doc 73e §8.3 Stage 6 — `--no-be` suppresses every BE-bound call.
+  // For analyse types that require BE compute (cohort_maturity_v3,
+  // conditioned_forecast, runner-analyze types) `runBackendAnalysis`
+  // surfaces a `BackendCallsSkippedError` which we render as a clean
+  // non-zero exit. For FE-only types (edge_info, node_info) the run
+  // completes against FE-topo state alone.
+  const skipBackendCalls = !!extraArgs['no-be'];
+  if (skipBackendCalls) {
+    log.info('--no-be set: BE calls disabled; FE-topo provisional values only');
+    sessionLogService.info('session', 'NO_BE_FLAG',
+      `analyse: --no-be set (type=${(extraArgs.type as string) || 'graph_overview'}); FE-topo provisional values only`,
+      'be_disabled_by_flag');
   }
 
   // Build scenario list: --scenario flags, or --query as single scenario
@@ -181,6 +205,7 @@ async function runAnalyse() {
       mode: fetchMode,
       workspace,
       scenarioId: externalId,
+      skipBackendCalls,
     });
     for (const w of warnings) {
       log.warn(`[${spec.name}]: ${w}`);
@@ -243,6 +268,7 @@ async function runAnalyse() {
     currentDSL: '',
     needsSnapshots,
     workspace,
+    skipBackendCalls,
     customScenarios: scenarioEntries.map((entry) => ({
       scenario_id: entry.id,
       name: entry.name,
@@ -309,7 +335,18 @@ async function runAnalyse() {
   // /api/forecast/conditioned with display_settings forwarded; standard
   // analyses go to /api/runner/analyze. The CLI no longer hand-rolls a
   // separate CF payload.
-  const result: any = await runPreparedAnalysis(prepared as PreparedAnalysisComputeReady);
+  let result: any;
+  try {
+    result = await runPreparedAnalysis(prepared as PreparedAnalysisComputeReady);
+  } catch (err: any) {
+    // Doc 73e §8.3 Stage 6 item 5 — runner-analyze fail-fast under --no-be.
+    // Render a clean non-zero exit; no partial output.
+    if (err instanceof BackendCallsSkippedError) {
+      log.error(err.message);
+      exit(3, `--no-be: analysis '${err.analysisType}' requires BE compute`);
+    }
+    throw err;
+  }
 
   if (!result.success) {
     log.fatal(`Analysis failed: ${(result as any).error || 'unknown error'}`);
