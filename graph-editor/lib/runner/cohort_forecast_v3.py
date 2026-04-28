@@ -78,24 +78,14 @@ def _non_latency_rows(
     Routed by the authoritative `latency_parameter` flag on the edge
     (not by σ ≤ 0, which was an anti-pattern — see doc 49).
 
-    Branches on the resolver's semantic property
-    `alpha_beta_query_scoped`, not on source name, to decide whether
-    the resolver's α, β already incorporates query-window evidence:
-
-    - **Already query-scoped** (analytic Jeffreys
-      posteriors via D20 fallback): read α, β directly. Updating again
-      would double-count. Blend is skipped with reason
-      ``source_query_scoped``.
-    - **Aggregate prior** (bayesian fit / manual override): conjugate
-      Beta-Binomial update α' = α + Σk, β' = β + Σ(n − k); doc 52
-      engine-level blend then mixes the updated (α', β') with the
-      unupdated aggregate (α, β) at ratio (1 − r) : r, where
-      r = m_S / m_G.
+    Post doc 73b §3.9 / Decision 13, all sources (analytic, bayesian,
+    manual) carry aggregate α, β. Conjugate Beta-Binomial update
+    α' = α + Σk, β' = β + Σ(n − k); doc 52 engine-level blend then
+    mixes the updated (α', β') with the unupdated aggregate (α, β) at
+    ratio (1 − r) : r, where r = m_S / m_G.
 
     Class C (no evidence in the window) falls out naturally: Σn = 0 →
-    aggregate-prior update by zero = prior; query-scoped path returns
-    the already-scoped prior unchanged; blend trivially returns the
-    aggregate in either case.
+    update by zero = prior; blend trivially returns the aggregate.
 
     Returns a NonLatencyResult with ``rows=[]`` only for Class D (no
     usable α, β at all — the resolver failed to populate a prior and
@@ -121,67 +111,43 @@ def _non_latency_rows(
         tau_solid_max = 0
         tau_future_max = 0
 
-    # ── Sub-path selection by prior-vs-posterior semantics ─────────
-    # Branch on the resolver's semantic property, NOT on source name.
-    # The question is whether the resolver's α/β already includes the
-    # query window's evidence (→ read directly) or is an aggregate
-    # prior (→ conjugate update with query Σk, Σn). See
-    # STATS_SUBSYSTEMS.md §5 Confusion 8 and ResolvedModelParams.alpha_beta_query_scoped.
+    # ── Conjugate update with query evidence ───────────────────────
+    # Post 73b §3.9 / Decision 13: α, β is uniformly an aggregate prior
+    # across all sources. Conjugate update with query-scoped Σk, Σn.
     alpha_prior = max(float(getattr(resolved, 'alpha', 0.0) or 0.0), 0.0)
     beta_prior = max(float(getattr(resolved, 'beta', 0.0) or 0.0), 0.0)
-    already_query_scoped = bool(getattr(resolved, 'alpha_beta_query_scoped', False))
 
     # Doc 52 §14.5: determine blend applicability. `m_S = sum_x` mirrors
     # the IS-path convention (sum of per-Cohort x_frozen).
     _blend_info = _compute_blend_params(resolved, sum_x)
-    if already_query_scoped:
-        _blend_info = {
-            'r': None,
-            'm_S': None,
-            'm_G': None,
-            'applied': False,
-            'skip_reason': 'source_query_scoped',
-        }
 
-    if already_query_scoped:
-        # Resolver's α, β already incorporates query-window evidence
-        # (analytic Jeffreys posterior). Read directly —
-        # updating again double-counts.
-        alpha_post = alpha_prior
-        beta_post = beta_prior
-    else:
-        # Resolver's α, β is an aggregate prior (bayesian / manual).
-        # Conjugate update with query-scoped Σk, Σn.
-        alpha_post_conditioned = alpha_prior + sum_y
-        beta_post_conditioned = beta_prior + (sum_x - sum_y)
+    alpha_post_conditioned = alpha_prior + sum_y
+    beta_post_conditioned = beta_prior + (sum_x - sum_y)
 
-        if _blend_info['applied']:
-            # Doc 52 §14.4.3: closed-form Beta blend at moment level.
-            r_val = float(_blend_info['r'])
-            s_cond = alpha_post_conditioned + beta_post_conditioned
-            s_prior = alpha_prior + beta_prior
-            if s_cond > 0 and s_prior > 0:
-                mu_cond = alpha_post_conditioned / s_cond
-                mu_prior = alpha_prior / s_prior
-                var_cond = (alpha_post_conditioned * beta_post_conditioned
-                            / (s_cond * s_cond * (s_cond + 1)))
-                var_prior = (alpha_prior * beta_prior
-                             / (s_prior * s_prior * (s_prior + 1)))
-                mu_b = (1.0 - r_val) * mu_cond + r_val * mu_prior
-                var_b = ((1.0 - r_val) * var_cond + r_val * var_prior
-                         + (1.0 - r_val) * r_val * (mu_cond - mu_prior) ** 2)
-                # Moment-match back to a display Beta.
-                if 0.0 < mu_b < 1.0 and var_b > 0:
-                    common = mu_b * (1.0 - mu_b) / var_b - 1.0
-                    if common > 0:
-                        alpha_post = mu_b * common
-                        beta_post = (1.0 - mu_b) * common
-                    else:
-                        # Variance too large to form a proper Beta — fall
-                        # back to the conditioned update.
-                        alpha_post = alpha_post_conditioned
-                        beta_post = beta_post_conditioned
+    if _blend_info['applied']:
+        # Doc 52 §14.4.3: closed-form Beta blend at moment level.
+        r_val = float(_blend_info['r'])
+        s_cond = alpha_post_conditioned + beta_post_conditioned
+        s_prior = alpha_prior + beta_prior
+        if s_cond > 0 and s_prior > 0:
+            mu_cond = alpha_post_conditioned / s_cond
+            mu_prior = alpha_prior / s_prior
+            var_cond = (alpha_post_conditioned * beta_post_conditioned
+                        / (s_cond * s_cond * (s_cond + 1)))
+            var_prior = (alpha_prior * beta_prior
+                         / (s_prior * s_prior * (s_prior + 1)))
+            mu_b = (1.0 - r_val) * mu_cond + r_val * mu_prior
+            var_b = ((1.0 - r_val) * var_cond + r_val * var_prior
+                     + (1.0 - r_val) * r_val * (mu_cond - mu_prior) ** 2)
+            # Moment-match back to a display Beta.
+            if 0.0 < mu_b < 1.0 and var_b > 0:
+                common = mu_b * (1.0 - mu_b) / var_b - 1.0
+                if common > 0:
+                    alpha_post = mu_b * common
+                    beta_post = (1.0 - mu_b) * common
                 else:
+                    # Variance too large to form a proper Beta — fall
+                    # back to the conditioned update.
                     alpha_post = alpha_post_conditioned
                     beta_post = beta_post_conditioned
             else:
@@ -190,6 +156,9 @@ def _non_latency_rows(
         else:
             alpha_post = alpha_post_conditioned
             beta_post = beta_post_conditioned
+    else:
+        alpha_post = alpha_post_conditioned
+        beta_post = beta_post_conditioned
 
     # Class D guard: no usable prior and no evidence.
     if alpha_post <= 0 or beta_post <= 0:
@@ -222,16 +191,13 @@ def _non_latency_rows(
     # update these with query Σk, Σn (that would collapse the kappa
     # spread to the epistemic width). Fall back to epistemic when the
     # resolver did not supply predictive params (e.g. kappa absent).
-    if already_query_scoped:
-        p_sd = p_sd_epistemic
+    _alpha_p = getattr(resolved, 'alpha_pred', 0.0) or 0.0
+    _beta_p = getattr(resolved, 'beta_pred', 0.0) or 0.0
+    if _alpha_p > 0 and _beta_p > 0 and (_alpha_p, _beta_p) != (alpha_prior, beta_prior):
+        _sp = _alpha_p + _beta_p
+        p_sd = math.sqrt(_alpha_p * _beta_p / (_sp * _sp * (_sp + 1)))
     else:
-        _alpha_p = getattr(resolved, 'alpha_pred', 0.0) or 0.0
-        _beta_p = getattr(resolved, 'beta_pred', 0.0) or 0.0
-        if _alpha_p > 0 and _beta_p > 0 and (_alpha_p, _beta_p) != (alpha_prior, beta_prior):
-            _sp = _alpha_p + _beta_p
-            p_sd = math.sqrt(_alpha_p * _beta_p / (_sp * _sp * (_sp + 1)))
-        else:
-            p_sd = p_sd_epistemic
+        p_sd = p_sd_epistemic
 
     # ── Quantile bands from Beta closed form ────────────────────────
     # Match the v3 chart's default band set: [band_level, 0.5].
@@ -246,11 +212,9 @@ def _non_latency_rows(
     }
 
     # ── Prior (unconditioned) bands for model_* fields ──────────────
-    # When the resolver's α, β was updated (aggregate-prior case), the
-    # model_* bands show the pre-update prior distribution. When the
-    # resolver's α, β was already query-scoped (no update performed),
-    # model_* coincides with the posterior.
-    if (not already_query_scoped) and alpha_prior > 0 and beta_prior > 0:
+    # The model_* bands show the pre-update prior distribution; the
+    # main fan_* bands show the conjugate-updated posterior.
+    if alpha_prior > 0 and beta_prior > 0:
         _sp = alpha_prior + beta_prior
         model_midpoint = alpha_prior / _sp
         model_fan_lower = float(_beta_dist.ppf((1 - band_level) / 2, alpha_prior, beta_prior))

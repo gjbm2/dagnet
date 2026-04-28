@@ -1,5 +1,10 @@
 # TODO
 
+- **Posterior slice cross-context fallback as opt-in feature** (27-Apr-26)
+  - Removed silent cross-context fallback in `graph-editor/src/services/posteriorSliceResolution.ts` (`_findSliceByMode`, `resolvePosteriorSlice`). When DSL specifies `context(c).window()` and no `context(c).window()` slice exists in the param file, the resolver now returns `undefined` rather than substituting the bare `window()` aggregate. The marginal across all contexts is a different population from the asked-for conditional; silent substitution is statistically dishonest and was never explicitly designed (origin: doc 25 §2.1 archived bullet, never UI-toggled, never provenance-marked, never tested as a feature).
+  - **Future feature** if we want it back: make it opt-in. Requires (a) a UI bool to enable, default off; (b) explicit user warning via session log entry + toast when fallback fires; (c) a provenance flag on the projected `p.posterior` (e.g. `slice_match: 'aggregate_fallback'`) so downstream consumers and chart cards can render it as approximate rather than authoritative; (d) tests covering the toggle states and the provenance flag. Probably also wants a per-call `strict: boolean` knob on the helpers so display sites and model-input sites can set their own discipline.
+  - Bare-mode aggregate fallback when the DSL has no `context(...)` clause at all is still in place — that's the literal answer to a no-context query, not a substitution.
+
 - ~~**Graph pull hard gate fires incorrectly on clean fast-forward** (21-Mar-26)~~ **FIXED 22-Mar-26**: Added `localMatchesOriginal` check — both the primary gate and the defence-in-depth gate now allow clean fast-forwards when local content matches its original base (user hasn't edited). See `workspaceService.ts:1328-1340`.
 
 - Bridge chart issues--not updating properly with e.g. date changes & custom scenarios

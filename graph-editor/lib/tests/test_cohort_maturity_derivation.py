@@ -153,6 +153,119 @@ class TestSliceAggregation:
         assert dp["x"] == 90  # 50 + 40
         assert dp["rate"] == pytest.approx(18 / 90, rel=1e-4)
 
+    def test_mece_partition_matches_single_slice_aggregate(self):
+        """
+        BE CF MECE parity (per 73b §6.5 / FETCH_PLANNING_PRINCIPLES §6.2).
+
+        Spec invariant being pinned:
+
+          When the user issues an uncontexted query and snapshot rows
+          arrive as a MECE partition across one context dimension (one
+          row per context value), the frames produced by
+          `derive_cohort_maturity` MUST be equivalent to the frames
+          produced from a single uncontexted row carrying the summed
+          totals (X, Y) and the matching lag moments. Equivalence here
+          means: same number of frames, same snapshot_dates, same
+          number of data_points per frame, same set of fields per
+          data_point, same value on every field.
+
+          This is what allows downstream
+          `build_cohort_evidence_from_frames` (and the v3 forecast
+          chain) to produce identical output regardless of whether
+          evidence was admitted as a MECE partition or as a single
+          uncontexted slice. Without this parity, the user-visible
+          forecast diverges between equivalent evidence shapes.
+
+        `test_slices_summed` asserts absolute totals on a single MECE
+        case. This test asserts byte-level parity vs the reference
+        single-slice equivalent, written from the spec invariant rather
+        than from the implementation's emitted shape.
+        """
+        # Two retrieval dates exercising per-frame aggregation across
+        # both time (multiple snapshot dates) and context (MECE union).
+        # Lag moments are constant per slice — the spec parity must
+        # hold regardless of how the moments are rolled up across
+        # MECE families, so making them constant here keeps the parity
+        # assertion exact (no mixture-quantile noise to bias the test).
+        median_lag = 2.0
+        mean_lag = 3.0
+
+        # `a` (anchor population) is also a sum-aggregated field across
+        # MECE: each context value contributes its share of the anchor
+        # population. The single-slice reference must carry the SUM
+        # (a=2000) for true parity. Per-MECE-row a=1000 (helper default).
+        mece_rows = [
+            # 2025-10-15: google y=10 x=50 a=1000, facebook y=8 x=40 a=1000
+            #             → totals y=18 x=90 a=2000
+            _row("2025-10-01", "2025-10-15T12:00:00+00:00", y=10, x=50, a=1000,
+                 slice_key="context(channel:google)",
+                 median_lag_days=median_lag, mean_lag_days=mean_lag),
+            _row("2025-10-01", "2025-10-15T12:00:00+00:00", y=8, x=40, a=1000,
+                 slice_key="context(channel:facebook)",
+                 median_lag_days=median_lag, mean_lag_days=mean_lag),
+            # 2025-10-16: google y=15 x=60 a=1000, facebook y=12 x=50 a=1000
+            #             → totals y=27 x=110 a=2000
+            _row("2025-10-01", "2025-10-16T12:00:00+00:00", y=15, x=60, a=1000,
+                 slice_key="context(channel:google)",
+                 median_lag_days=median_lag, mean_lag_days=mean_lag),
+            _row("2025-10-01", "2025-10-16T12:00:00+00:00", y=12, x=50, a=1000,
+                 slice_key="context(channel:facebook)",
+                 median_lag_days=median_lag, mean_lag_days=mean_lag),
+        ]
+
+        # Reference: same MECE-summed totals as a single uncontexted slice.
+        single_rows = [
+            _row("2025-10-01", "2025-10-15T12:00:00+00:00", y=18, x=90, a=2000,
+                 slice_key="",
+                 median_lag_days=median_lag, mean_lag_days=mean_lag),
+            _row("2025-10-01", "2025-10-16T12:00:00+00:00", y=27, x=110, a=2000,
+                 slice_key="",
+                 median_lag_days=median_lag, mean_lag_days=mean_lag),
+        ]
+
+        mece_result = derive_cohort_maturity(mece_rows)
+        single_result = derive_cohort_maturity(single_rows)
+
+        # Same number of frames, same snapshot dates, same order.
+        assert len(mece_result["frames"]) == len(single_result["frames"]), (
+            f"frame count differs: MECE={len(mece_result['frames'])} single={len(single_result['frames'])}"
+        )
+        mece_dates = [f["snapshot_date"] for f in mece_result["frames"]]
+        single_dates = [f["snapshot_date"] for f in single_result["frames"]]
+        assert mece_dates == single_dates
+
+        # Per-frame: same number of data_points, same key set, same
+        # values on every key. Strict byte-level parity per spec.
+        # Floats compared with tight tolerance; everything else with ==.
+        for mf, sf in zip(mece_result["frames"], single_result["frames"]):
+            label = mf["snapshot_date"]
+            assert len(mf["data_points"]) == len(sf["data_points"]), (
+                f"frame {label}: data_points count differs "
+                f"(MECE={len(mf['data_points'])} single={len(sf['data_points'])})"
+            )
+            for mdp, sdp in zip(mf["data_points"], sf["data_points"]):
+                m_keys = set(mdp.keys())
+                s_keys = set(sdp.keys())
+                assert m_keys == s_keys, (
+                    f"frame {label} data_point key sets differ: "
+                    f"MECE-only={m_keys - s_keys} single-only={s_keys - m_keys}"
+                )
+                for key in m_keys:
+                    mv = mdp[key]
+                    sv = sdp[key]
+                    if isinstance(mv, float) or isinstance(sv, float):
+                        # None vs number is a divergence — assert numericness explicitly.
+                        assert mv is not None and sv is not None, (
+                            f"frame {label} data_point.{key}: nullness differs (MECE={mv} single={sv})"
+                        )
+                        assert mv == pytest.approx(sv, rel=1e-9, abs=1e-9), (
+                            f"frame {label} data_point.{key}: MECE={mv} single={sv}"
+                        )
+                    else:
+                        assert mv == sv, (
+                            f"frame {label} data_point.{key}: MECE={mv!r} single={sv!r}"
+                        )
+
     def test_temporal_arg_variants_do_not_double_count(self):
         """
         Different stored slice_key strings can represent the same logical slice family

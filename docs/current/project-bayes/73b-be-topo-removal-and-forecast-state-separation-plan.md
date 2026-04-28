@@ -14,10 +14,10 @@
 - [x] Stage 1 — completed 27-Apr-26
 - [x] Stage 2 — completed 27-Apr-26
 - [x] Stage 3 — completed 27-Apr-26
-- [x] Stage 4 part 1 — completed 27-Apr-26
+- [x] Stage 4 part 1 — completed 28-Apr-26 — five 73d-named tests landed and passing (`perScenarioModelVarsDerivation`, `cfAndAnalysisDerivationParity`, `liveEdgeReContextOnDslChange`, `cliAnalysisPrepEngorgement`, `shareRestorePosteriorRehydration`); silent cross-context posterior-slice fallback removed in `posteriorSliceResolution.ts` (case-2 strict, case-1 unchanged) with G4 sentinel test updated and TODO.md tracking the future opt-in feature
 - [x] Stage 4 part 2 — completed 27-Apr-26 — 4(c) promoted writer + 4(d) carrier consumer audit + 4(f) L5 dispersion split (coordinated with 73a §8/§10)
-- [ ] Stage 5
-- [ ] Stage 6
+- [x] Stage 5 — completed 28-Apr-26
+- [x] Stage 6 — completed 28-Apr-26 — S7b dead-code cleanup in `bayesPriorService.ts` and stale-comment trim in `posteriorSliceContexting.ts`; absorbed residual 4(d) discriminator retirement (`alpha_beta_query_scoped` collapsed to False; `is_cf_sweep_eligible` / `get_cf_mode_and_reason` reduced to constants; `analytic_degraded` consumer branches removed in `cohort_forecast_v3.py`, `forecast_state.py`, `api_handlers.py`, `conditionedForecastService.ts`, `fetchDataService.ts`); legacy comment cleanup in `graphComputeClient.ts` and `shareRestorePosteriorRehydration.test.ts`. Test surface still carries pre-retirement contract pins (e.g. `test_query_scoped_*`, `test_blend_non_latency_skip_query_scoped`, `test_register_entry_3_*`, `test_doc56_phase0_behaviours` analytic_degraded assertions, `test_cf_query_scoped_degradation`, `test_wp8_default_off`) — left unchanged pending separate review of which are legitimate retirements vs CF-machinery exposures
 
 ## 1. Objective and scope
 
@@ -2424,21 +2424,18 @@ These documentation updates should land with code changes, not before, so
 reference docs continue to describe live system accurately while this plan
 remains the execution note.
 
-**Closing item — promote Appendix B companion to codebase.** When
-73b is fully implemented and accepted, promote
-[73b-appendix-b-data-flow-and-interfaces.md](73b-appendix-b-data-flow-and-interfaces.md)
-from `docs/current/project-bayes/` into `docs/current/codebase/` as the
-durable post-73b reference for the layered contract, the per-edge
+**Closing item — promote Appendix B companion to codebase. (Done 28-Apr-26.)**
+The maintained doc now lives at
+[docs/current/codebase/FORECAST_STACK_DATA_FLOW.md](../codebase/FORECAST_STACK_DATA_FLOW.md)
+as the durable post-73b reference for the layered contract, the per-edge
 field surface, the per-scenario request graph, and the BE analyse
-dispatch surface (interfaces I1–I17). Suggested codebase name:
-`FORECAST_STACK_DATA_FLOW.md` (final name to be agreed at promotion
-time). After promotion: this 73b plan retains only the cross-link;
-the codebase doc becomes the maintained artefact and is updated in
-lockstep with future contract changes per the
+dispatch surface (interfaces I1–I17). The original
+[73b-appendix-b-data-flow-and-interfaces.md](73b-appendix-b-data-flow-and-interfaces.md)
+is retained as a redirect breadcrumb only. The codebase doc is the
+maintained artefact going forward and is updated in lockstep with
+future contract changes per the
 [SCHEMA_AND_TYPE_PARITY.md](../codebase/SCHEMA_AND_TYPE_PARITY.md) /
 [CHANGE_CHECKLIST.md](../codebase/CHANGE_CHECKLIST.md) discipline.
-Link the new codebase doc from `STATS_SUBSYSTEMS.md` at the top of
-the relevant section so a future reader lands there first.
 
 ### 11.2 Cross-doc alignment with docs 74 and 73a
 

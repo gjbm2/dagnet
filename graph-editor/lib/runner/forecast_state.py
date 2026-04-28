@@ -1028,10 +1028,6 @@ def _compute_blend_params(
     mixing conditioned with unconditioned draw sets.
     """
     n_eff = getattr(resolved, 'n_effective', None) if resolved is not None else None
-    if resolved is not None and getattr(resolved, 'alpha_beta_query_scoped', False):
-        return {'applied': False, 'r': None, 'm_S': float(m_S),
-                'm_G': float(n_eff) if n_eff is not None else None,
-                'skip_reason': 'source_query_scoped'}
     if n_eff is None:
         return {'applied': False, 'r': None, 'm_S': float(m_S),
                 'm_G': None, 'skip_reason': 'n_effective_missing'}
@@ -1658,11 +1654,8 @@ def compute_forecast_trajectory(
 
         return rate, _is_ess_last, _n_conditioned, Y_total, X_total, _cohort_evals
 
-    apply_rate_conditioning = not bool(
-        getattr(resolved, 'alpha_beta_query_scoped', False)
-    )
     rate_conditioned, is_ess, n_conditioned, Y_cond, X_cond, cohort_evals_cond = _run_cohort_loop(
-        apply_is=apply_rate_conditioning,
+        apply_is=True,
     )
     # Model-only draw family: same specific-Cohort population model as
     # `rate_draws`, but without IS conditioning. This keeps the public

@@ -259,14 +259,6 @@ def _compute_surprise_gauge(
     if not resolved:
         print("[surprise_gauge] no resolved params or σ≤0")
         return _unavailable('No resolved model params (σ must be > 0)')
-    cf_mode, cf_reason = get_cf_mode_and_reason(resolved)
-    if not is_cf_sweep_eligible(resolved):
-        return _unavailable(
-            cf_reason or 'query_scoped_posterior',
-            cf_mode=cf_mode,
-            cf_reason=cf_reason,
-            reference_source=resolved.source,
-        )
     if resolved.latency.sigma <= 0:
         print("[surprise_gauge] no resolved params or σ≤0")
         return _unavailable('No resolved model params (σ must be > 0)')
@@ -398,9 +390,9 @@ def _compute_surprise_gauge(
         p_conditioning_total_x=total_n,
         p_conditioning_total_y=total_k,
         resolved_params=resolved,
-        sweep_eligible=is_cf_sweep_eligible(resolved),
-        cf_mode=cf_mode,
-        cf_reason=cf_reason,
+        sweep_eligible=True,
+        cf_mode='sweep',
+        cf_reason=None,
     )
     try:
         summary = compute_forecast_summary(
@@ -2504,11 +2496,7 @@ def handle_conditioned_forecast(data: Dict[str, Any]) -> Dict[str, Any]:
                     # they should NOT infer it from the latency flag
                     # or from evidence_k/n.
                     _conditioned = first_row.pop('_conditioned', False) if isinstance(first_row, dict) else False
-                    _forensic = (
-                        {'cf_mode': _cf_mode, 'cf_reason': _cf_reason}
-                        if _cf_mode == 'analytic_degraded'
-                        else _last_forensic
-                    )
+                    _forensic = _last_forensic
                     edge_results.append({
                         'edge_uuid': last_edge_id,
                         'from_node': query_from_node,

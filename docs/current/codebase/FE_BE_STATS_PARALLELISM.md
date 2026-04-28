@@ -35,15 +35,15 @@ FE topo then combines the Step 1 model vars with the current query's scoped evid
 
 Step 2 (and CF, its careful equivalent) takes the same input contract for both source families: `(model_vars[source], scoped p.evidence.*, effective DSL) → scoped current-answer`. No source-conditional skip. CF runs uniformly for every promoted source. See `project-bayes/73b-be-topo-removal-and-forecast-state-separation-plan.md` Decision 13 for the full design statement.
 
-### Defects against this framing — partially closed by doc 73b Stage 2
+### Defects against this framing — closed by doc 73b Stages 2 and 6
 
-Three flags and code paths historically encoded an incorrect assumption that "analytic" means "the model var IS already the scoped current-answer", so Step 2 / CF should be skipped or replaced for analytic sources. **Doc 73b Stage 2** has closed the resolver-side defect; the consumer-side discriminator retirement is **deferred to Stage 4(d)** per §8.
+Three flags and code paths historically encoded an incorrect assumption that "analytic" means "the model var IS already the scoped current-answer", so Step 2 / CF should be skipped or replaced for analytic sources. **Doc 73b Stage 2** (27-Apr-26) closed the resolver-side defect; **Stage 6** (28-Apr-26) closed the consumer side.
 
 - The D20 synthesis path that derived `α, β` from scoped `p.evidence.{n, k}` for analytic sources has been **removed** from `model_resolver.py` (Stage 2). Analytic α, β now reads from the source-layer `model_vars[analytic].probability.{alpha, beta, n_effective}` per the §3.9 mirror contract (or, when the moment-match is infeasible, from the named `analytic_point_estimate_degraded` kappa fallback per §3.8 register entry 2).
-- `alpha_beta_query_scoped` at [`model_resolver.py:107-108`](../../graph-editor/lib/runner/model_resolver.py#L107-L108) **still returns True for analytic** — Stage 2's plan deferred the flip per §8 "Rename or remove only after the runtime no longer needs it". The consumer audit (forecast_state.py, forecast_runtime.py, cohort_forecast_v3.py) is owned by Stage 4(d), and the discriminator stays intact until that audit lands.
-- `is_cf_sweep_eligible` at [`forecast_runtime.py:514`](../../graph-editor/lib/runner/forecast_runtime.py#L514) and the `analytic_degraded` mode emitter at lines 524-528 still fire for analytic edges (consequence of the discriminator above). They retire alongside the discriminator in Stage 4(d).
+- `alpha_beta_query_scoped` (Stage 6) — collapsed to a no-op that returns `False` unconditionally. The property is retained on `ResolvedModelParams` so legacy callers still load.
+- `is_cf_sweep_eligible` and `get_cf_mode_and_reason` (Stage 6) — reduced to constants returning `True` and `('sweep', None)` respectively. The `analytic_degraded` consumer branches have been removed from `cohort_forecast_v3.py:_non_latency_rows`, `forecast_state.py:_compute_blend_params`, `api_handlers.py`, `conditionedForecastService.ts`, and `fetchDataService.ts`. CF runs the conjugate-update + blend path uniformly across all sources.
 
-The durable two-step framing is now reflected in the resolver, and the §6.1 binding gate (layer-isolation: scoped `p.evidence` cannot alter the resolved analytic prior when a valid source-layer shape exists) is met. Downstream consumer behaviour is unchanged from pre-Stage-2 pending Stage 4(d).
+The durable two-step framing is now reflected end-to-end. The §6.1 binding gate (layer-isolation: scoped `p.evidence` cannot alter the resolved analytic prior when a valid source-layer shape exists) is met by the resolver; the consumer-side conjugate-update path is now uniform.
 
 ## What the Stage 2 passes compute
 
@@ -65,9 +65,9 @@ The FE topo pass deliberately splits the cohort evidence it consumes into two se
 | `p_infinity` (asymptote from mature cohorts) | **Full unscoped cohorts**, filtered to `age ≥ t95` with recency weighting | Needs fully-matured cohorts to estimate the true endpoint rate. Query-window cohorts are typically not yet mature |
 | `evidence.{n, k, mean}` | **Query-scoped cohorts** (the DSL window) | The user's "what actually happened in the window I'm looking at". Must match the DSL |
 | `completeness`, `completeness_stdev` | **Query-scoped cohorts** | "How mature is the evidence we just aggregated" — must match the evidence set |
-| `alpha`, `beta`, `n_effective`, `provenance` on `model_vars[analytic].probability` *(post-doc-73b Stage 2)* | Aggregate Beta fit moment-matched from window-aggregate `(mean, stdev)` via `buildAnalyticProbabilityBlock` in `modelVarsResolution.ts` | Per §3.9 mirror contract: aggregate window-family Beta shape on the same footing as the bayesian equivalent. The Python resolver consumes these fields when present; consumers that branch on `alpha_beta_query_scoped` still see True for analytic edges (deferred to Stage 4(d)) so downstream behaviour is unchanged from pre-Stage-2 until that audit lands. When the moment-match is infeasible (zero stdev, mean at boundary, variance ≥ mean·(1−mean)), the field is omitted and the resolver falls through to `analytic_point_estimate_degraded` (§3.8 register entry 2). |
+| `alpha`, `beta`, `n_effective`, `provenance` on `model_vars[analytic].probability` *(post-doc-73b Stage 2)* | Aggregate Beta fit moment-matched from window-aggregate `(mean, stdev)` via `buildAnalyticProbabilityBlock` in `modelVarsResolution.ts` | Per §3.9 mirror contract: aggregate window-family Beta shape on the same footing as the bayesian equivalent. The Python resolver consumes these fields when present and CF treats them as an aggregate prior (post-Stage-6 consumer cleanup). When the moment-match is infeasible (zero stdev, mean at boundary, variance ≥ mean·(1−mean)), the field is omitted and the resolver falls through to `analytic_point_estimate_degraded` (§3.8 register entry 2). |
 
-**Implication for downstream consumers (post-doc-73b Stage 2 partial)**: `model_vars[analytic].probability.{alpha, beta, n_effective}` is now an aggregate Beta on the same footing as `model_vars[bayesian].probability.{alpha, beta}` — a legitimate prior for conjugate updates and as an IS proposal. The D20 synthesis path is removed. **However** the discriminator and consumer branches that key on it are deferred to Stage 4(d): `alpha_beta_query_scoped` still returns True for analytic, `is_cf_sweep_eligible == False` and `analytic_degraded` mode still fire for analytic edges, and the cohort-forecast-v3 direct-read branch still runs for analytic. CF runs uniformly only after Stage 4(d) lands.
+**Implication for downstream consumers (post-doc-73b Stages 2 + 6)**: `model_vars[analytic].probability.{alpha, beta, n_effective}` is an aggregate Beta on the same footing as `model_vars[bayesian].probability.{alpha, beta}` — a legitimate prior for conjugate updates and as an IS proposal. The D20 synthesis path is removed (Stage 2). The `alpha_beta_query_scoped` discriminator and its consumer branches in `forecast_state.py`, `forecast_runtime.py`, `cohort_forecast_v3.py`, `api_handlers.py`, and the TS CF consumers have been retired (Stage 6). CF now runs the conjugate-update + blend path uniformly across all sources.
 
 See [STATS_SUBSYSTEMS.md §5 Confusion 7](STATS_SUBSYSTEMS.md) for the full scoping table.
 
@@ -139,9 +139,10 @@ Each edge can have multiple model_vars entries from different sources. The `mode
 |--------|-----------|------|
 | `analytic` | FE topo pass | Every fetch (blocking) |
 | `bayesian` | Bayes MCMC service | On Bayes fit completion |
-| `manual` | User override | Manual entry |
 
-Promotion order for `best_available`: gated `bayesian`, else `analytic`. `manual` always wins when present for an edge.
+Doc 73b Stage 3 removed `manual` from the source-ledger taxonomy. User authoring no longer creates a `model_vars[manual]` entry; the canonical authoring affordances are (a) the selector pin (`model_source_preference` ∈ `{best_available, bayesian, analytic}`, with `model_source_preference_overridden`) and (b) per-field output locks (`mean_overridden`, `stdev_overridden`) on the live edge. See doc 73b §3.5 / §6.7.
+
+Promotion order for `best_available`: gated `bayesian`, else `analytic`. A user pin via `model_source_preference` overrides the quality gate when the pinned source exists; if it doesn't, promotion falls through to the available source while retaining the pin.
 
 ## Heuristic dispersion SDs
 
@@ -207,7 +208,7 @@ For `analyse --type conditioned_forecast`, the CLI still dispatches directly to 
 | `src/services/conditionedForecastService.ts` | CF client (`runConditionedForecast`, `applyConditionedForecastToGraph`) |
 | `lib/api_handlers.py` | `/api/forecast/conditioned` handler |
 | `lib/runner/forecast_state.py` | Forecast engine: `_evaluate_cohort` (shared primitive), `compute_forecast_trajectory`, `build_node_arrival_cache`, `compute_forecast_summary` (CF / surprise-gauge surfaces) |
-| `lib/runner/model_resolver.py` | Promoted model resolver: `resolve_model_params(edge, scope, temporal_mode)` — also derives alpha/beta from evidence n/k when no Bayesian posterior (D20) |
+| `lib/runner/model_resolver.py` | Promoted model resolver: `resolve_model_params(edge, scope, temporal_mode)`. Reads aggregate Beta shape from `model_vars[bayesian|analytic].probability` per the §3.9 mirror contract. The legacy D20 evidence-count synthesis path (which derived α/β from scoped `p.evidence.{n,k}`) was removed by doc 73b Stage 2; analytic α/β now come exclusively from the source layer or, when moment-matching is infeasible, from the named `analytic_point_estimate_degraded` kappa fallback (§3.8 register entry 2). |
 | `src/cli/commands/analyse.ts` | CLI analyse command |
 
 `cohort_maturity` analysis type now routes to v3 (engine consumer, 185 lines). v1 and v2 are gated to dev only (`devOnly: true`).

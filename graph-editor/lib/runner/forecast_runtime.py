@@ -511,22 +511,22 @@ def serialise_runtime_bundle(
 
 
 def is_cf_sweep_eligible(resolved: Optional[Any]) -> bool:
-    """Return whether the CF path may run the sweep for this edge.
+    """All edges are sweep-eligible post doc 73b §3.9 / Decision 13.
 
-    Query-scoped analytic posteriors already include the user's window
-    evidence, so running the CF sweep would double-count. Aggregate
-    priors remain sweep-eligible.
+    Retained as a no-op for callers that still pass the flag onto bundles
+    or response payloads; the discriminator branching it once gated has
+    been retired.
     """
-    return not bool(getattr(resolved, 'alpha_beta_query_scoped', False))
+    del resolved
+    return True
 
 
 def get_cf_mode_and_reason(
     resolved: Optional[Any],
 ) -> Tuple[str, Optional[str]]:
-    """Return caller-facing CF provenance for the resolved edge."""
-    if is_cf_sweep_eligible(resolved):
-        return ('sweep', None)
-    return ('analytic_degraded', 'query_scoped_posterior')
+    """CF provenance — always sweep mode post doc 73b §3.9 / Decision 13."""
+    del resolved
+    return ('sweep', None)
 
 
 def should_enable_direct_cohort_p_conditioning(

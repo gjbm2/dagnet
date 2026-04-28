@@ -51,9 +51,13 @@ function invalidateBayesianOnEdges(
       }
     }
 
-    // Remove posterior + stashed slices from the live graph edge so
-    // forecast quality view immediately shows no-data, and the
-    // re-projection pipeline doesn't resurrect stale posterior data.
+    // Remove posterior + any legacy `_posteriorSlices` stash from the
+    // live graph edge so the forecast quality view immediately shows
+    // no-data and re-contexting doesn't resurrect stale posterior data.
+    // Production no longer writes `_posteriorSlices` onto live edges
+    // (post 73b Stage 4(b)), but graphs loaded from older saved state
+    // or restored from pre-4(b) share-bundles can still carry it — so
+    // the deletion remains defensive hygiene for incoming graphs.
     if (opts?.clearPosterior) {
       if (edge.p.posterior) { delete edge.p.posterior; changed = true; }
       if (edge.p._posteriorSlices) { delete edge.p._posteriorSlices; changed = true; }
@@ -318,8 +322,11 @@ export async function deleteHistoryForAllParams(
         }
       }
 
-      // Clear posterior + stashed slices so forecast quality view shows
-      // no-data and re-projection doesn't resurrect stale data
+      // Clear posterior + any legacy `_posteriorSlices` stash so forecast
+      // quality view shows no-data and re-contexting doesn't resurrect
+      // stale data. The stash is no longer written post 73b Stage 4(b)
+      // but can arrive on graphs loaded from older saved state or
+      // restored from pre-4(b) share-bundles.
       if (edge.p?.posterior) { delete edge.p.posterior; edgesCleared = true; }
       if (edge.p?._posteriorSlices) { delete edge.p._posteriorSlices; edgesCleared = true; }
       if (edge.p?.latency?.posterior) { delete edge.p.latency.posterior; edgesCleared = true; }

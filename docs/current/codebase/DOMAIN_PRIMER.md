@@ -106,7 +106,7 @@ Treating them interchangeably leads to two failure modes:
 - **Double-counting**: using a query-scoped posterior as a prior for a conjugate update with the same query-scoped evidence.
 - **Missing query relevance**: using an aggregate prior as if it were the answer for the current query.
 
-The `ResolvedModelParams.alpha_beta_query_scoped` flag distinguishes them at the consumer boundary: True for analytic (already query-scoped); False for bayesian/manual (aggregate priors that need conditioning).
+Post 73b Stage 2 / Stage 6 (28-Apr-26), all sources are uniformly aggregate priors — analytic α/β is moment-matched from window-aggregate `(mean, stdev)` into `model_vars[analytic].probability`, on the same footing as bayesian. The conjugate update at the consumer boundary applies regardless of source. The retired `alpha_beta_query_scoped` flag still exists on `ResolvedModelParams` as a no-op (always False).
 
 See [STATS_SUBSYSTEMS.md](STATS_SUBSYSTEMS.md) for the full layer disambiguation, and [FE_BE_STATS_PARALLELISM.md](FE_BE_STATS_PARALLELISM.md) for how FE topo and CF cooperate.
 

@@ -22,15 +22,33 @@ subcommand that modifies state.
 
 ### Gate 2: Destructive / data-loss operations
 
-`rm`, `rmdir`, `unlink`, `truncate`, `shred`, `> file` (overwriting redirect),
-`echo "" > file`, `cat /dev/null > file`, `mv` that overwrites, `sed -i`,
-`awk` in-place, `scripts/extract-mark-logs.sh --trim`,
-IndexedDB `.clear()` / `.delete()` / `deleteDatabase()`.
+**Spirit**: any command that overwrites file content, removes data, or
+truncates a file is gated — *regardless of whether it appears on the list
+below*. The list is illustrative, not exhaustive. If you cannot prove your
+operation does not destroy uncommitted work, it counts as destructive. See
+anti-pattern 54 (enumeration loophole reasoning) for why a literal-list
+reading of this rule is a known failure mode.
+
+Listed triggers (kept in lockstep with `.claude/hooks/gates.json` —
+the hook is authoritative, this list is documentation):
+
+- file deletion: `rm`, `rmdir`, `unlink`, `truncate`, `shred`
+- file overwrites via copy / move / write: `cp` (overwriting), `mv`
+  (overwriting), `tee` (without `-a`), `dd of=…`
+- in-place edits: `sed -i`, `awk -i inplace`, `awk --inplace`
+- shell redirect overwrites: `> file`, `echo "" > file`,
+  `cat /dev/null > file`
+- repo-specific: `scripts/extract-mark-logs.sh --trim`
+- IndexedDB: `.clear()`, `.delete()`, `deleteDatabase()`
 
 - **Pass condition**: the user gave unmistakable, explicit instruction **in
   the current message**.
 - **If no permission**: **READ first.** Investigate. Ask. Never widen the
   blast radius — if unsure of the precise target, ask, don't escalate.
+- **If your command isn't listed but accomplishes the same effect** as
+  something that is (e.g. `install` / `rsync` / `python -c "open(...,'w')"`
+  overwriting a file): treat it as gated. Asking once costs nothing; an
+  unauthorised overwrite of uncommitted work cannot be undone.
 
 ### Gate 3: Package installs
 

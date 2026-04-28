@@ -22,7 +22,6 @@ DagNet ships command-line tools that produce the same outputs as the browser UI 
 |---|---|---|
 | `scripts/param-pack.sh` | Compute edge probabilities, evidence, forecast, and latency for a graph+window/cohort — identical to the browser's WindowSelector output | [CLI: Param Pack](playbooks/cli-param-pack.md) |
 | `scripts/analyse.sh` | Run any analysis type (graph overview, cohort maturity, etc.) and get the JSON payload that feeds ECharts | [CLI: Analyse](playbooks/cli-analyse.md) |
-| `scripts/parity-test.sh` | Regression test: old path vs new path, single + multi-scenario, all snapshot types | — |
 | `scripts/golden-regression.sh` | Compare current analyse output against golden baselines | — |
 
 ## Reference

@@ -71,10 +71,9 @@ function contextProbabilityBlock(
 
   if (!fileposterior?.slices) {
     // Parameter file carries no posterior — leave any existing edge
-    // projection alone (legacy `reprojectPosteriorForDsl` and Flow F
-    // both treated "no file posterior" as a no-op rather than a wipe).
-    // Engorgement still clears, so a stale stash from an earlier file
-    // version doesn't leak onto this request graph.
+    // projection alone (no-op, not a wipe). Engorgement still clears,
+    // so a stale stash from an earlier file version doesn't leak onto
+    // this request graph.
     if (options.engorgeFitHistory) {
       pBlock._posteriorSlices = undefined;
     }
@@ -87,8 +86,7 @@ function contextProbabilityBlock(
 
   if (!activePosterior) {
     // asat() in effect, but no fit on or before the asat date — clear
-    // strictly (matching the legacy `reprojectPosteriorForDsl` semantics
-    // for the asat case in doc 27 §5.2).
+    // strictly per doc 27 §5.2 asat semantics.
     pBlock.posterior = undefined;
     if (pBlock.latency) pBlock.latency.posterior = undefined;
     if (options.engorgeFitHistory) {

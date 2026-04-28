@@ -42,7 +42,7 @@ For the full BE runner cluster umbrella, see [BE_RUNNER_CLUSTER.md](BE_RUNNER_CL
 | Need to... | Service | Key test file(s) |
 |------------|---------|-------------------|
 | Snapshot regime selection | `snapshot_regime_selection.py`, FE: `candidateRegimeService.ts` | `test_snapshot_regime_selection.py`, `test_regime_consumer_integration.py` |
-| BE subject resolution (doc 31) | `analysis_subject_resolution.py`, `graph_select.py` | `test_analysis_subject_resolution.py`, `test_doc31_parity.py`, CLI `parity-test.sh` |
+| BE subject resolution (doc 31) | `analysis_subject_resolution.py`, `graph_select.py` | `test_analysis_subject_resolution.py`, `test_doc31_parity.py` |
 | Analysis dispatch | `lib/api_handlers.py` (5,275 LOC) | (covered by per-handler tests) |
 | Analysis runners | `runner/runners.py` (2,139 LOC) | `test_v2_v3_parity.py`, etc. |
 | Forecast engine (doc 29) | `runner/forecast_state.py`, `runner/forecast_runtime.py`, `runner/model_resolver.py` | `test_v2_v3_parity.py`, `test_forecast_state_cohort.py`, CLI `v2-v3-parity-test.sh`, `chart-graph-agreement-test.sh` |

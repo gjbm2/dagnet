@@ -2316,10 +2316,20 @@ export class UpdateManager {
       });
       
       // Apply blended mean if provided and different.
+      // Doc 73b §6.8 Action B8c (Stage 5): respect `mean_overridden` here.
+      // The blendedMean primary path is the FE-topo / CF apply funnel; both
+      // pass through this function via `EdgeLAGValues.blendedMean`. A locked
+      // `p.mean` (set by user overtype on Current) must not be rewritten by
+      // automated writers. Mismatch 5a (§6, plan): until Stage 5 this path
+      // wrote unconditionally while the evidence-mean fallback below was
+      // already gated — the asymmetry is closed here. Discipline applies
+      // uniformly to base `targetP` and `conditional_p[i].p` (`targetP` is
+      // resolved to either above) per §6.8 B8c "uniformly across unconditional
+      // p and every entry under conditional_p".
       // Fallback: when blendedMean is unavailable (no forecast/completeness yet, e.g. first
       // fetch on a new graph), use raw evidence.mean so that p.mean reflects observed data
       // and sibling rebalancing fires correctly.
-      if (update.blendedMean !== undefined) {
+      if (update.blendedMean !== undefined && targetP.mean_overridden !== true) {
         const oldMean = targetP.mean;
         if (oldMean !== update.blendedMean) {
           targetP.mean = this.roundToDP(update.blendedMean);

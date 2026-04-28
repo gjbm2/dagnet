@@ -93,32 +93,16 @@ class ResolvedModelParams:
     gate_passed: Optional[bool] = None  # Bayesian quality gate
 
     # Semantic property: does `alpha, beta` already incorporate the
-    # user's query-window evidence? See STATS_SUBSYSTEMS.md §5
-    # Confusion 8. Consumers doing prior+evidence conjugate updates
-    # (e.g. doc 50 Class B Beta-Binomial) must branch on this, not on
-    # `source`, so the conjugate-update logic remains correct if new
-    # sources are introduced.
-    #
-    # **Doc 73b Stage 2 status**: the resolver now reads aggregate α/β
-    # from `model_vars[analytic].probability` (or the
-    # `analytic_point_estimate_degraded` kappa fallback), so the True
-    # branch's compensation (skip conjugate update because α, β are
-    # already query-scoped) is no longer logically required. **The
-    # discriminator retirement is deferred to Stage 4(d)** — per §8
-    # "Rename or remove only after the runtime no longer needs it" —
-    # because the consumer audit (forecast_state.py, forecast_runtime.py,
-    # cohort_forecast_v3.py) is owned by that stage. Until then the
-    # property still returns True for analytic so existing consumers
-    # continue to take their current branch; flipping it without the
-    # audit causes ~18 downstream test regressions.
-    #
-    #   False → aggregate prior (bayesian fit / manual override).
-    #           Safe to update with query-scoped Σk, Σn.
-    #   True  → already a query-scoped posterior (analytic
-    #           Jeffreys). Read directly; updating again double-counts.
+    # user's query-window evidence? Always False post doc 73b §3.9 / Decision 13.
+    # The resolver now reads aggregate α/β from
+    # `model_vars[analytic].probability` (or the
+    # `analytic_point_estimate_degraded` kappa fallback) on the same
+    # footing as the bayesian source, so analytic α/β is an aggregate
+    # prior — never a query-scoped posterior. CF runs uniformly; the
+    # conjugate-update branch is the only branch.
     @property
     def alpha_beta_query_scoped(self) -> bool:
-        return self.source == 'analytic'
+        return False
 
     # Evidence
     evidence_retrieved_at: Optional[str] = None
@@ -273,6 +257,19 @@ def resolve_model_params(
         edge_sigma_sd = float(_src.get('sigma_sd') or 0.0)
         edge_onset_sd = float(_src.get('onset_sd') or 0.0)
         edge_onset_mu_corr = float(_src.get('onset_mu_corr') or 0.0)
+        # Doc 73b §3.9 (analytic dispersion discipline): until a
+        # principled analytic correlation model is designed and tested,
+        # treat analytic latency as having independent (mu, onset) — the
+        # same discipline §3.9 applies to predictive probability
+        # dispersion (no `alpha_pred` / `beta_pred` from analytic until
+        # an overdispersion model lands). Synth/generator-emitted
+        # `onset_mu_corr` values on analytic source are placeholders, not
+        # fitted from a joint distribution; propagating them produces
+        # spec-unjustified MC-vs-deterministic drift in cohort midpoints.
+        # Bayesian source carries kappa-aware joint posterior — its
+        # `onset_mu_corr` is principled and unaffected here.
+        if promoted_source == 'analytic':
+            edge_onset_mu_corr = 0.0
     else:
         # Fallback: posterior → flat promoted fields
         edge_mu = lat_posterior.get('mu_mean') or latency_block.get('mu') or 0.0
@@ -365,6 +362,11 @@ def resolve_model_params(
                 or lat_posterior.get('path_onset_mu_corr')
                 or 0.0
             )
+            # Doc 73b §3.9 (analytic dispersion discipline) — see
+            # edge-level branch above for rationale. Same discipline
+            # applies at path level.
+            if promoted_source == 'analytic':
+                path_onset_mu_corr = 0.0
             path_latency = ResolvedLatency(
                 mu=float(path_mu),
                 sigma=float(path_sigma),

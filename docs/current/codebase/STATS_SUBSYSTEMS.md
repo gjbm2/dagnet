@@ -89,6 +89,8 @@ Key invariants:
 
 ### 3.3 BE CF pass (conditioned forecast — sophisticated MC enrichment)
 
+> **See also**: [FORECAST_STACK_DATA_FLOW.md](FORECAST_STACK_DATA_FLOW.md) — the canonical post-73b data-flow and interface-contract reference (interfaces I1–I17). For the per-scenario request graph, the CF response → graph apply mapping, and the full BE analyse dispatch surface, that doc is the maintained artefact; this section here is a narrative overview.
+
 **What it is**: the sophisticated topologically-sequenced MC enrichment that runs the full cohort_maturity v3 pipeline per edge, across the whole graph, using snapshot DB evidence and per-edge IS conditioning on query-DSL-scoped evidence. Writes per-edge conditioned scalars back to the graph. **This is a graph enrichment endpoint, not an analysis type** — the docstring at [api_handlers.py:2513](../../graph-editor/lib/api_handlers.py#L2513) is explicit.
 
 **Trigger**: `fetchDataService.ts` Stage 2, fires alongside the FE topo pass. Raced against a 500ms fast-path deadline (`CF_FAST_DEADLINE_MS`). Fast path merges into the FE topo pass's single render; slow path renders FE fallback and overwrites on arrival.
@@ -149,17 +151,17 @@ established by the earlier work packages.
 **Query-scoping**: this is the *most thorough* query-scoping of any
 subsystem. IS conditioning updates the aggregate bayesian posterior
 specifically to the user's query-DSL-scoped snapshot evidence, per edge.
-**Doc 73b Stage 2 status**: the analytic source resolver now reads
-aggregate α, β from `model_vars[analytic].probability` (or the
-`analytic_point_estimate_degraded` kappa fallback) — the §6.1 binding
-gate is met. The discriminator (`alpha_beta_query_scoped`) and its
-consumer branches in `forecast_state.py`, `forecast_runtime.py`, and
-`cohort_forecast_v3.py` are **deferred to Stage 4(d)** for retirement
-— per §8 "Rename or remove only after the runtime no longer needs it"
-— because the consumer audit is owned by that stage. Until then the
-property still returns True for analytic and the
-`analytic_degraded` / `is_cf_sweep_eligible == False` paths still
-fire for analytic edges; aggregate priors (bayesian) update normally.
+**Doc 73b Stage 2 + Stage 6 status (28-Apr-26)**: Stage 2 promoted
+analytic α/β into `model_vars[analytic].probability` (or the
+`analytic_point_estimate_degraded` kappa fallback) so the analytic
+source carries an aggregate window-family Beta on the same footing as
+bayesian. Stage 6 retired the `alpha_beta_query_scoped` discriminator:
+the property is now a no-op (always `False`), `is_cf_sweep_eligible` /
+`get_cf_mode_and_reason` are constants returning `True` /
+`('sweep', None)`, and the `analytic_degraded` consumer branches have
+been removed from `cohort_forecast_v3.py`, `forecast_state.py`,
+`api_handlers.py`, `conditionedForecastService.ts`, and
+`fetchDataService.ts`. CF runs uniformly across all sources.
 
 **Distinction from FE topo pass**: FE topo is analytic and query-scoped but non-conditioned — a moment-match Jeffreys posterior plus Fenton-Wilkinson latency composition. BE CF is full MC with proper IS on per-edge snapshot evidence, topologically sequenced with upstream carrier propagation. CF supersedes the FE blended `p.mean` and `completeness` when it lands.
 
@@ -292,59 +294,36 @@ Not any more. `run_conversion_funnel` calls the CF machinery directly — **one 
 **Confusion 6: "Bayes compiler's α/β gets re-conditioned at query time"**
 No. Bayes produces an **aggregate** posterior from the training corpus; that's durable. The BE CF pass does query-time IS conditioning of **draws** from that posterior, producing a conditioned posterior-representation (mean, SD) written to `p.mean, p.sd`. The bayesian α/β themselves don't change. The engine additionally applies a mass-weighted blend (doc 52) before return, mixing the IS-conditioned draws with the unconditioned draws at ratio `(1 − r) : r` where `r = m_S / m_G` (selected Cohort mass over compiler training mass on the matching temporal axis). This corrects the systematic over-concentration that arises when the query's selected Cohorts overlap the compiler's training set. See [project-bayes/52-subset-conditioning-double-count-correction.md](../project-bayes/52-subset-conditioning-double-count-correction.md).
 
-**Confusion 7: "`model_vars[analytic].alpha, beta` can be used as a prior"**
+**Confusion 7 (historical): "`model_vars[analytic].alpha, beta` can be used as a prior"**
 
-> **Status note (27-Apr-26, post doc 73b Stage 2)**: the resolver
-> side of the design intent below is now in place. **Doc 73b Stage 2**
-> landed: the resolver reads aggregate α, β from
-> `model_vars[analytic].probability` (or the
-> `analytic_point_estimate_degraded` kappa fallback per §3.8 register
-> entry 2) and the FE topo Step 1 writer populates the §3.9 mirror
-> contract via `buildAnalyticProbabilityBlock` in
-> `modelVarsResolution.ts`. The §6.1 binding gate (changing scoped
-> `p.evidence.{n, k}` cannot alter the resolved analytic prior when a
-> valid source-layer shape exists) is met. **However the discriminator
-> retirement is deferred to Stage 4(d)**: `alpha_beta_query_scoped`
-> still returns True for analytic, the consumer branches in
-> `forecast_state.py`, `forecast_runtime.py`, and `cohort_forecast_v3.py`
-> still take their pre-Stage-2 path, and `analytic_degraded` /
-> `is_cf_sweep_eligible == False` still fire for analytic edges. This
-> is per §8 "Rename or remove `alpha_beta_query_scoped` only after the
-> runtime no longer needs it" — the consumer audit owns the cleanup.
-> The rule below is therefore still the rule consumers must follow.
+> **Resolved 28-Apr-26 (doc 73b Stage 2 + Stage 6)**: this confusion
+> no longer exists. Stage 2 promoted analytic α/β into
+> `model_vars[analytic].probability` as an aggregate window-family
+> Beta — moment-matched from `(mean, stdev)` via
+> `buildAnalyticProbabilityBlock` in `modelVarsResolution.ts` — on the
+> same footing as the bayesian fit. Stage 6 then retired the
+> `alpha_beta_query_scoped` discriminator (always returns False) and
+> removed all consumer branches that routed analytic edges through a
+> "no conjugate update" shortcut. CF runs the conjugate Beta-Binomial
+> update uniformly across all sources, with the engine-level blend
+> (doc 52) applying when `n_effective` is set.
 
-It can't — it's already a posterior, and a query-scoped one. The FE
-topo pass derives `α, β` from **query-scoped** `total_k, total_n` as a
-Jeffreys posterior (`α = k+1, β = n-k+1`). Using it as a prior for a
-conjugate Beta-Binomial update with query-scoped evidence would count
-the same evidence twice.
+The pre-resolution rule was: analytic `α, β` was a query-scoped
+Jeffreys posterior (`α = k+1, β = n-k+1` from DSL-windowed
+`total_k, total_n`); using it as a prior for a conjugate update with
+the same query-scoped evidence double-counted. The discriminator
+existed to short-circuit the conjugate-update path for analytic
+edges. Stage 2's promotion of analytic α/β into an aggregate window
+Beta removed the query-scoping; Stage 6 then removed the now-redundant
+discriminator and all its consumer code.
 
-Which source's `α, β` is query-scoped depends on the source:
-
-| Source | `α, β` on the source's `model_vars` entry | Lag fit (`mu, sigma, t95`) |
-|---|---|---|
-| `bayesian` | **Aggregate** (offline Bayes fit over the full training corpus — no DSL filtering) | Aggregate (same fit) |
-| `analytic` | **Query-scoped** (Jeffreys posterior from DSL-windowed `total_k, total_n`) | **Unscoped** (full history to avoid survivor bias) |
-
-**Practical consequence**: when `bayesian` is promoted, its `α, β` is
-a legitimate aggregate prior — CF's IS-conditioning (via
-`alpha_pred, beta_pred`) uses it as a proposal and reweights by
-query-scoped cohort evidence. When `analytic` is promoted, its `α, β`
-is already the query-scoped answer — consumers should read it
-directly, not update it further.
-
-The `ResolvedModelParams.alpha_beta_query_scoped` property is the
-canonical switch: `True` for `analytic`, `False` for `bayesian` /
-`manual`. Consumers doing conjugate updates — and the engine-level
-blend (doc 52) — branch on this rather than on source name, so the
-rule stays correct if new source types are introduced. For the
-bayesian-source case, the engine's blend additionally prevents the
-subtler overlap-induced over-concentration (doc 52 §3): even when the
-aggregate is legitimately a prior, re-applying a Cohort set that was
-already in the training set double-counts its evidence. The
-correction mixes conditioned and unconditioned outputs pro-rata to
-`m_S / m_G`, with `n_effective` (training mass) exported per
-temporal mode alongside the posterior.
+For the bayesian-source case (and now uniformly for all sources), the
+engine's blend prevents the subtler overlap-induced over-concentration
+(doc 52 §3): even when the aggregate is a legitimate prior,
+re-applying a Cohort set that was already in the training set
+double-counts its evidence. The correction mixes conditioned and
+unconditioned outputs pro-rata to `m_S / m_G`, with `n_effective`
+(training mass) exported per temporal mode alongside the posterior.
 
 ---
 

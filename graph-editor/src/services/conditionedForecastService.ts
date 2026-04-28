@@ -44,8 +44,8 @@ export interface ConditionedForecastEdgeResult {
     applied: boolean;
     skip_reason?: string | null;
   };
-  cf_mode?: 'sweep' | 'analytic_degraded';
-  cf_reason?: 'query_scoped_posterior' | null;
+  cf_mode?: 'sweep';
+  cf_reason?: null;
   tau_max?: number | null;
   n_rows?: number;
   n_cohorts?: number;
@@ -245,27 +245,14 @@ export function applyConditionedForecastToGraph(
         edge.p_sd_epistemic != null && Number.isFinite(edge.p_sd_epistemic) && (edge.p_sd_epistemic as number) >= 0
           ? edge.p_sd_epistemic as number
           : undefined;
-      // In analytic_degraded/query_scoped fallback mode, p_mean is sourced from
-      // query-scoped posterior state on the graph. Projecting horizon-row
-      // evidence_n/k here makes the graph non-idempotent across passes:
-      // subsequent CF calls would read different query-scoped counts and drift.
-      // Keep n/k on the existing query-scoped authority path for this mode.
-      const isQueryScopedPosteriorFallback =
-        edge.cf_mode === 'analytic_degraded'
-        && (
-          edge.cf_reason === 'query_scoped_posterior'
-          || edge.conditioning?.skip_reason === 'source_query_scoped'
-        );
       const evidenceNFromCf =
-        !isQueryScopedPosteriorFallback
-        && edge.evidence_n != null
+        edge.evidence_n != null
         && Number.isFinite(edge.evidence_n)
         && edge.evidence_n >= 0
           ? edge.evidence_n as number
           : undefined;
       const evidenceKFromCf =
-        !isQueryScopedPosteriorFallback
-        && edge.evidence_k != null
+        edge.evidence_k != null
         && Number.isFinite(edge.evidence_k)
         && edge.evidence_k >= 0
           ? edge.evidence_k as number

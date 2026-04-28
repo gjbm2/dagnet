@@ -102,12 +102,25 @@ def _effective_edge_probability(
             if matches:
                 p = cp.get('p') or {}
                 if isinstance(p, dict):
-                    # Doc 73b §6.5 / Stage 4(d) scope decision: the path
-                    # analyzer renders mode-aware *display* answers and
-                    # reads the L5 conditional `p.mean` directly. The
-                    # carrier reroute lives in `forecast_state._resolve_edge_p`
-                    # for true model-baseline carrier computations.
-                    pv = float(p.get('mean') or 0.0)
+                    # Doc 73b §6.5: route conditional `p.mean` reads
+                    # through the shared resolver, applied per condition.
+                    # `cp` is edge-shaped (`{condition, p}`); the resolver
+                    # reads `cp.get('p')` internally.
+                    # Documented fallback (§3.8 register): legacy
+                    # `p.mean` with one-line warning for pre-Stage-4
+                    # fixtures / graphs without a promoted-baseline source.
+                    from .model_resolver import resolve_model_params
+                    from .forecast_state import _warn_legacy_pmean_carrier
+                    result = resolve_model_params(cp, scope='edge', temporal_mode='window')
+                    if result is not None and result.p_mean > 0:
+                        pv = float(result.p_mean)
+                    else:
+                        legacy = p.get('mean')
+                        if isinstance(legacy, (int, float)) and legacy > 0:
+                            _warn_legacy_pmean_carrier(cp, context='_effective_edge_probability')
+                            pv = float(legacy)
+                        else:
+                            pv = 0.0
                 elif isinstance(p, (int, float)):
                     pv = float(p)
                 else:

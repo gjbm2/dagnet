@@ -2453,12 +2453,6 @@ export async function runStage2EnhancementsAndInboundN(
             const byEdge = new Map<string, CfScalars>();
             for (const e of cfResults[0].edges) {
               if (e.p_mean != null && Number.isFinite(e.p_mean)) {
-                const isQueryScopedPosteriorFallback =
-                  e.cf_mode === 'analytic_degraded'
-                  && (
-                    e.cf_reason === 'query_scoped_posterior'
-                    || e.conditioning?.skip_reason === 'source_query_scoped'
-                  );
                 byEdge.set(e.edge_uuid, {
                   p_mean: e.p_mean as number,
                   p_sd:
@@ -2466,15 +2460,13 @@ export async function runStage2EnhancementsAndInboundN(
                       ? (e.p_sd as number)
                       : undefined,
                   evidence_n:
-                    !isQueryScopedPosteriorFallback
-                    && e.evidence_n != null
+                    e.evidence_n != null
                     && Number.isFinite(e.evidence_n)
                     && e.evidence_n >= 0
                       ? (e.evidence_n as number)
                       : undefined,
                   evidence_k:
-                    !isQueryScopedPosteriorFallback
-                    && e.evidence_k != null
+                    e.evidence_k != null
                     && Number.isFinite(e.evidence_k)
                     && e.evidence_k >= 0
                       ? (e.evidence_k as number)

@@ -136,10 +136,20 @@ export function buildSliceKey(effectiveDsl: string): string {
  * Resolve the best-matching SlicePosteriorEntry from a posterior's slices
  * dict, given the effective query DSL.
  *
- * Resolution order (doc 25 §2.1):
+ * Resolution order:
  *   1. Exact match — canonicalised ideal key against available keys
- *   2. Fallback — strip context, try aggregate (bare mode: 'window()' or 'cohort()')
+ *   2. Bare-mode aggregate — only when the DSL specifies no context
+ *      (e.g. `window()` / `cohort()` queries with no `context(...)` clauses).
+ *      Returning the aggregate IS the literal answer to such queries.
  *   3. undefined — no match
+ *
+ * Cross-context fallback (DSL specifies `context(c)` but no
+ * `context(c).mode()` slice exists) is intentionally NOT performed: the
+ * marginal aggregate is a different population from the asked-for
+ * conditional, and silent substitution presents the wrong posterior as
+ * authoritative. See TODO.md "context-fallback toggle" for the user-
+ * facing toggle / provenance / signposting that would make this
+ * acceptable as opt-in behaviour.
  *
  * @param slices  The `posterior.slices` dict from the parameter file
  * @param effectiveDsl  The effective query DSL (with temporal + context qualifiers)
@@ -164,13 +174,17 @@ export function resolvePosteriorSlice(
   const exact = normalisedMap.get(idealKey);
   if (exact) return exact;
 
-  // 2. Fallback: strip context → aggregate mode
+  // 2. Bare-mode aggregate ONLY when no context was specified.
+  //    When `idealKey === aggregateKey` the DSL had no `context(...)`
+  //    clauses, so the aggregate IS what the user asked for.
   const mode = detectTemporalMode(effectiveDsl);
   const aggregateKey = `${mode}()`;
-  const aggregate = normalisedMap.get(aggregateKey);
-  if (aggregate) return aggregate;
+  if (idealKey === aggregateKey) {
+    const aggregate = normalisedMap.get(aggregateKey);
+    if (aggregate) return aggregate;
+  }
 
-  // 3. No match
+  // 3. No match (context specified but no matching slice — strict).
   return undefined;
 }
 
@@ -321,21 +335,30 @@ export function projectLatencyPosterior(
 
 /**
  * Find a slice by explicit temporal mode, optionally scoped to context dims.
- * Tries context-qualified key first, then bare mode aggregate.
+ *
+ * When `dims` is set (DSL specified one or more `context(...)` clauses),
+ * matches the context-qualified key strictly — no silent fallback to the
+ * bare aggregate. The marginal aggregate is a different population from
+ * the asked-for conditional. See `resolvePosteriorSlice` and TODO.md
+ * "context-fallback toggle".
+ *
+ * When `dims` is empty (DSL had no context), returns the bare-mode
+ * aggregate slice — that IS what the caller asked for.
  */
 function _findSliceByMode(
   slices: Record<string, SlicePosteriorEntry>,
   mode: 'window' | 'cohort',
   dims: string,
 ): SlicePosteriorEntry | undefined {
-  // Try context-qualified first (e.g. "context(channel:google).window()")
   if (dims) {
     const qualifiedKey = canonicaliseSliceKeyForMatching(`${dims}.${mode}()`);
     for (const [rawKey, entry] of Object.entries(slices)) {
       if (canonicaliseSliceKeyForMatching(rawKey) === qualifiedKey) return entry;
     }
+    // Context specified but no matching slice — strict, no cross-context fallback.
+    return undefined;
   }
-  // Fallback: bare aggregate (e.g. "window()")
+  // No context specified: bare aggregate is the literal answer.
   const bareKey = `${mode}()`;
   for (const [rawKey, entry] of Object.entries(slices)) {
     if (canonicaliseSliceKeyForMatching(rawKey) === bareKey) return entry;

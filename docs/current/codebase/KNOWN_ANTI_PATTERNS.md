@@ -181,6 +181,24 @@ The page does **not** auto-reload.
 
 **How to spot**: scan for fields whose comment includes "when X" or "if Y" describing semantic content. The comment is the red flag — if a reader needs the comment to know what the value means, the name is inadequate. Grep for conditional-assignment patterns where the same field is populated in multiple branches with different quantities.
 
+## Anti-pattern 54: Enumeration loophole reasoning against safety rules
+
+**Signature**: agent performs an action that obviously violates the spirit of a documented rule, but justifies it on the grounds that the rule's enumerated trigger list does not literally name the specific command or pattern just used. Typical phrasings: "no git writes — just file copies", "this isn't a destructive command — it's a backup", "the rule lists `mv` but says nothing about `cp`". The pre-action reasoning trace shows the agent inspecting the listed examples, not the rule's stated intent.
+
+**Root cause**: agent reasons over the *literal text* of an enumerated list rather than the rule's purpose. Whenever a safety rule is presented as "X, Y, Z, …" — whether in CLAUDE.md, a hook config, a permission file, or a comment — agents tend to treat the list as exhaustive. Anything outside it reads as authorised. Spirit-clauses ("any command that destroys uncommitted work") are routinely ignored when an enumeration is present, because the enumeration offers a cheaper, more decidable test ("is this string on the list?") than the spirit-clause's judgement call.
+
+This is a structural problem with enumerated rules, not a bug in any specific rule.
+
+**Fix**:
+
+1. **Tool-level enforcement, not prose-level appeals**: a CLAUDE.md sentence saying "any operation that overwrites uncommitted work is gated" gets ignored when a hook config explicitly lists `rm`, `mv`, `truncate` and stops there. Ship the spirit *as enumerated patterns the hook actually catches*, not as an exhortation. The destructive-gate fix in `.claude/hooks/gates.json` (cp/mv/tee/dd/awk -i added 27-Apr-26) is the canonical example: prose alone leaks; the enumerated patterns close the leak.
+2. **Audit enumerated lists for surface coverage**: every time a safety rule is added to a hook, ask "what other commands accomplish the same effect?" and add them. `cp` overwriting a file is functionally equivalent to `mv` overwriting it; `tee` without `-a` is a redirect overwrite; `dd of=` truncates; `awk -i inplace` rewrites. If the rule covers one, it must cover the others.
+3. **Where enumeration is impossible**, treat any reasoning that begins "this isn't on the list, so…" as a stop signal and ask the user.
+
+**Broader principle**: agents fill the gap between literal text and intent in the direction that minimises work, not in the direction the author meant. Enumerated rules will always have gaps; prose addenda do not close them. Enforcement must live at the tool layer, with the enumeration kept honest by ongoing audit.
+
+**Where this matters in this repo**: any rule under CLAUDE.md "Pre-flight Checks" that lists triggering commands; the `.claude/hooks/gates.json` patterns; permission allowlists in `settings.json`. When in doubt, the hook config is authoritative — CLAUDE.md text is documentation, not enforcement.
+
 ## Anti-pattern 53: Dead-caller residue in shared merge / dispatch helpers
 
 **Signature**: a helper that combines, merges, or dispatches between multiple inputs has an asymmetric branch — one set of fields handled with one precedence rule, another set with a different rule. The asymmetry has no documented justification at the call site, and producing the symptom requires the function to be called in a regime the asymmetry was not designed for. The function may have a name advertising the now-bypassed behaviour ("…Preserving…", "…Canonical…", "…Authoritative…").

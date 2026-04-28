@@ -153,21 +153,6 @@ bash graph-ops/scripts/bayes.sh <graph-name> --submit
 
 ---
 
-### parity-test
-
-Proves that the old analysis path (`snapshot_subjects`) and the new path (`analytics_dsl` + `candidate_regimes_by_edge`) produce **identical normalised responses**. Primarily a validation tool for verifying analysis pipeline changes.
-
-**Script**: `graph-ops/scripts/parity-test.sh`
-
-```bash
-bash graph-ops/scripts/parity-test.sh <graph-name> "<query-dsl>" \
-  --subject "from(x).to(y)" --type cohort_maturity
-```
-
-Tests both single-scenario and multi-scenario modes. Requires the Python backend.
-
----
-
 ## Shared Options
 
 All CLI commands support:

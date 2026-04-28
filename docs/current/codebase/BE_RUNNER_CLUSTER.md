@@ -128,7 +128,7 @@ The `cohort_maturity` analysis type now routes to v3. v1/v2 are gated `devOnly: 
 
 **Routing inside v3** (anti-pattern 50 alarm):
 - Routing branch keys on `target_edge.p.latency.latency_parameter is True`, **not** on `sigma > 0` or any fitted scalar
-- Closed-form path (`_non_latency_rows`) handles non-latency edges with conjugate Beta posteriors; the conditioned/predictive σ split comes from `ResolvedModelParams.alpha_beta_query_scoped`
+- Closed-form path (`_non_latency_rows`) handles non-latency edges with conjugate Beta posteriors. Post 73b Stage 6 (28-Apr-26) the conjugate update fires uniformly across all sources; the previously-discriminated "direct read" shortcut for analytic source has been retired
 - MC sweep path handles latency edges; reads frame-level evidence via `build_cohort_evidence_from_frames` and runs `compute_forecast_trajectory` per cohort
 
 ## 5. The span-kernel sub-cluster (multi-hop cohort maturity)
@@ -166,7 +166,7 @@ These are pure transforms — no DB queries, no MCMC. Their inputs come from the
 
 ## 8. Model and lag resolution
 
-`model_resolver.py` is the single entry point for "give me the active probability and latency parameters for this edge in this scope and temporal_mode". Returns `ResolvedModelParams` with `alpha`, `beta`, `alpha_pred`, `beta_pred`, latency block, and the load-bearing `alpha_beta_query_scoped` flag (True for analytic, False for bayesian/manual). All forecast-engine calls flow through this.
+`model_resolver.py` is the single entry point for "give me the active probability and latency parameters for this edge in this scope and temporal_mode". Returns `ResolvedModelParams` with `alpha`, `beta`, `alpha_pred`, `beta_pred` and the latency block. The `alpha_beta_query_scoped` flag remains on the dataclass as a no-op (always `False`) post 73b Stage 6 retirement — once the discriminator that gated analytic edges through a separate no-update path. All forecast-engine calls flow through this.
 
 `lag_model_fitter.py` handles `/api/lag/recompute-models` — recomputes per-edge latency fits from snapshot DB evidence on demand. Independent of the live forecast path.
 

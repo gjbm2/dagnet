@@ -519,7 +519,8 @@ export class GraphComputeClient {
       // Collect model CDF curves from backend results, keyed by
       // composite `${scenario_id}::${subject_id}`.
       //
-      // Each scenario passes its own re-projected graph (via reprojectPosteriorForDsl)
+      // Each scenario passes its own per-scenario request-graph (engorged
+      // via posteriorSliceContexting against the scenario's effective DSL)
       // and the BE computes model curves from that scenario's edge — so different
       // scenarios on the same edge legitimately produce different model curves
       // (different posterior slices for different contexts, different alpha/beta

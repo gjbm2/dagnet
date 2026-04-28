@@ -172,19 +172,19 @@ def _extract_probability(edge: dict, graph_data: dict) -> Optional[float]:
     """
     Extract effective probability from edge.
 
-    Handles:
-    - Regular edges: p.mean
-    - Case edges: variant weight from parent case node
+    Doc 73b §6.5 carrier reroute: model-bearing reads MUST go through
+    `resolve_model_params` so changing only an L5 current-answer scalar
+    cannot alter carrier behaviour. This helper feeds the path
+    analyzer's reach computation — a model-bearing input — so it joins
+    `forecast_state._resolve_edge_p` and `path_runner._effective_edge_probability`
+    on the rerouted side of the layer split.
 
-    Note (doc 73b §6.5 / Stage 4(d) scope decision): this helper feeds
-    the path analyzer, which renders mode-aware *display* probabilities
-    (`'f'`, `'e'`, `'f+e'`) — not model-baseline carrier computations.
-    The `'f+e'` mode is, by construction, a read of the L5 blended
-    current-answer scalar; rerouting it through `resolve_model_params`
-    would replace the displayed blended answer with the L2 baseline and
-    silently change every analyzer reach result. The documented carrier
-    reroute is `forecast_state._resolve_edge_p`; the analyzer keeps
-    `p.mean` so the displayed-answer modes stay coherent.
+    Documented fallback (§3.8 register): legacy `p.mean` is used as a
+    last resort, with a one-line warning per edge so pre-Stage-4
+    fixtures / graphs surface for upgrade. Never silent.
+
+    Case edges keep their existing path (variant weight from parent
+    case node) — that's a structural mapping, not a model-input read.
 
     Args:
         edge: Edge dict
@@ -205,7 +205,16 @@ def _extract_probability(edge: dict, graph_data: dict) -> Optional[float]:
         return None
 
     if isinstance(p, dict):
-        return p.get('mean')
+        from .model_resolver import resolve_model_params
+        from .forecast_state import _warn_legacy_pmean_carrier
+        result = resolve_model_params(edge, scope='edge', temporal_mode='window')
+        if result is not None and result.p_mean > 0:
+            return float(result.p_mean)
+        legacy = p.get('mean')
+        if isinstance(legacy, (int, float)) and legacy > 0:
+            _warn_legacy_pmean_carrier(edge, context='_extract_probability')
+            return float(legacy)
+        return None
     elif isinstance(p, (int, float)):
         return float(p)
 

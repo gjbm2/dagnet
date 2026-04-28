@@ -110,7 +110,7 @@ When in doubt, this glossary points at the canonical doc; that doc is the source
 - **manual** — User override (always wins).
 - **best_available** — Promotion order: gated bayesian → analytic. Default preference.
 - **promoted** — Whichever source `applyPromotion` selected; flat scalars on `edge.p.latency.*`.
-- **`alpha_beta_query_scoped`** — Property of `ResolvedModelParams`. True for analytic (already query-scoped); False for bayesian/manual (aggregate priors). Determines downstream conjugate-update branching.
+- **`alpha_beta_query_scoped`** — Retired discriminator on `ResolvedModelParams` (73b Stage 6, 28-Apr-26). Always `False` post-retirement. The property is retained as a no-op so callers still load; the consumer branches that once routed analytic edges through a no-update shortcut have been removed. All sources now go through conjugate update uniformly.
 - **predictive (`α_pred`, `β_pred`, `mu_sd_pred`)** — κ-inflated for observation noise. Per doc 49 (probability) and doc 61 (latency).
 - **epistemic (`α`, `β`, `mu_sd`)** — Posterior uncertainty only.
 

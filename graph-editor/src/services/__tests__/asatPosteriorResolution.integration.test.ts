@@ -427,11 +427,13 @@ describe('resolvePosteriorSlice — key matching', () => {
     expect(result!.beta).toBe(72);
   });
 
-  it('G4: should fall back to aggregate when context key not found', () => {
-    // context(channel:influencer) not in slices → falls back to window()
+  it('G4: should return undefined when context-qualified key not found (no silent cross-context fallback)', () => {
+    // context(channel:influencer) not in slices → undefined.
+    // The bare window() slice is the marginal across all channels — a different
+    // population from the asked-for conditional — so it is NOT silently
+    // substituted. See TODO.md "context-fallback toggle".
     const result = resolvePosteriorSlice(slices, 'from(a).to(b).context(channel:influencer).window(1-Jan:1-Mar)');
-    expect(result).toBeDefined();
-    expect(result!.alpha).toBe(50);  // window() aggregate
+    expect(result).toBeUndefined();
   });
 
   it('G5: should return undefined when no slices at all', () => {

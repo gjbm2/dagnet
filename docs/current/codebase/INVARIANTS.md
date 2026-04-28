@@ -122,9 +122,9 @@ This is the single most important semantic distinction in the snapshot field mod
 
 Top-level `analytics_dsl` describes the subject (path) and is constant across scenarios. Per-scenario `effective_query_dsl` describes the temporal window and varies. Conflating them produces multi-scenario charts where every scenario gets the same time bounds. AP 19, AP 20.
 
-### I-25: Don't add layer-1 (`model_vars`) values as priors with layer-2 (current-answer) evidence
+### I-25: Layer-1 `analytic` α/β is an aggregate prior on the same footing as bayesian (post 73b Stage 2 / Decision 13)
 
-Layer-1 `analytic` source is already query-scoped (Jeffreys posterior from `total_k, total_n`). Using it as a prior for a conjugate update with the same scoped evidence double-counts. Check `ResolvedModelParams.alpha_beta_query_scoped` — True for analytic, False for bayesian/manual. AP 47.
+Stage 2 promoted analytic α/β into `model_vars[analytic].probability` as an aggregate window-family Beta (moment-matched from `mean, stdev`). Stage 6 (28-Apr-26) retired the `alpha_beta_query_scoped` discriminator: the property still exists on `ResolvedModelParams` but unconditionally returns `False`, and all consumer branches that keyed on it have been removed. Conjugate update with query-scoped Σk, Σn now applies uniformly across all sources. AP 47.
 
 ### I-26: When CF returns `conditioned: false`, the unconditioned prior is the answer
 
