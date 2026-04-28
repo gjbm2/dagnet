@@ -1,16 +1,18 @@
-# Forecast stack — data flow and interface contracts (post-73b)
+# Forecast stack — data flow and interface contracts (post-73e)
 
-**Date**: 27-Apr-26 (promoted into codebase 28-Apr-26)
-**Status**: Canonical reference for the post-73b forecast / CF / analyse
+**Date**: 28-Apr-26 (promoted from 73b 28-Apr-26; supplemented by 73e on 28-Apr-26)
+**Status**: Canonical reference for the post-73e forecast / CF / analyse
 architecture. Maintained in lockstep with the layered contract; if the
 contract changes, this doc must be revised in the same PR.
 **Audience**: engineers reviewing pull requests against any of the
-post-73b interfaces, or implementing a new consumer that touches the
+post-73e interfaces, or implementing a new consumer that touches the
 layered contract or one of the labelled interfaces (I1–I17).
 **Provenance**: promoted from `docs/current/project-bayes/73b-appendix-b-data-flow-and-interfaces.md`
 per [73b plan §11.1](../project-bayes/73b-be-topo-removal-and-forecast-state-separation-plan.md) closing
-item, on completion of 73b Stage 6 (28-Apr-26). The original
-project-bayes path now redirects here.
+item, on completion of 73b Stage 6 (28-Apr-26). Supplemented in §B.5
+below with the materialisation, transport, and CLI changes shipped by
+[73e](../project-bayes/73e-FE-construction.md) (Stages 1–7 complete
+28-Apr-26). The original project-bayes path now redirects here.
 
 **Cross-references**:
 - [73b plan body](../project-bayes/73b-be-topo-removal-and-forecast-state-separation-plan.md) —
@@ -494,3 +496,132 @@ read-only consumers.
 | **I15** | FE → BE → FE | same `/api/runner/analyze` (internal dispatch when `analysis_type ∈ {cohort_maturity, cohort_maturity_v2, cohort_maturity_v1, cohort_maturity_v3}`) | **`cohort_maturity_v3` request** — same I14 envelope; analysis_type triggers `_handle_cohort_maturity_v3` (api_handlers.py:1510). Reads contexted+engorged request graph (B.1 [I4]/[I5]) AND DB snapshot (BE-internal [I11] — snapshot subjects come from each scenario's `snapshot_subjects` list). **Response**: per-scenario per-tau row series — `{ rows: [{ tau, midpoint, model_midpoint, completeness, completeness_sd, ... }], display_meta?, ... }`. Cohort-maturity v3 also reads the CF-applied edge state on the graph when CF has previously run for the same scenario; it does not invoke CF itself. **Persistence**: none — render-only. Owner: `_handle_cohort_maturity_v3`. |
 | **I16** | FE → BE → FE | same `/api/runner/analyze` (internal dispatch when `analysis_type` is snapshot-aware and not a `cohort_maturity_v*` variant) | **Snapshot-analyse request** — same I14 envelope; analysis_type ∈ `{lag_histogram, lag_fit, daily_conversions, conversion_rate, branch_comparison, surprise_gauge, ...}` triggers `_handle_snapshot_analyze_subjects`. Per-subject DB queries via [I11]. **Response**: per-subject series — histograms / per-day counts / fitted lag distributions / rate bands. `surprise_gauge` is a back-end projection of `compute_forecast_summary` reading CF state (doc 55); does not invoke CF. **Persistence**: none — render-only. Owner: `_handle_snapshot_analyze_subjects` + the per-type sub-handlers in api_handlers.py. |
 | **I17** | BE-internal | reuses [I10] inside its handler | **Funnel runner** (doc 52) — invoked through `/api/runner/analyze` as `conversion_funnel`, but internally fires a **whole-graph CF call** ([I10] / [I11] / [I12]) and applies the result to the graph via the standard CF apply path before extracting the subgraph for the funnel rendering. The funnel response itself is render-only; persistence happens through the embedded CF call's [I12] mapping. Owner: funnel runner (`graph-editor/lib/runner/funnel_engine.py`). |
+
+## B.5 Post-73e supplement — materialisation contract, CLI parity, `--no-be`
+
+73e (Stages 1–7, 28-Apr-26) tightened the boundaries above without
+changing the labelled interfaces (I1–I17). Three concrete deltas the
+reader should know:
+
+### B.5.1 Materialisation is a single shared boundary
+
+73e Stage 5 introduced `runScenarioMaterialisation` in
+[analysisComputePreparationService.ts](../../graph-editor/src/services/analysisComputePreparationService.ts)
+as the single orchestration entry point for taking a built scenario
+graph to a transport-ready (materialised) scenario graph. The pipeline
+is: in-schema posterior projection (`recontextScenarioGraph`, owning
+[I4]) → FE topo materialisation (`materialiseScenarioFeTopo` from
+[feTopoMaterialisationService.ts](../../graph-editor/src/services/feTopoMaterialisationService.ts),
+owning Stage 2 LAG + Step 2 promotion + current-answer derivation).
+
+Every caller-shape that does NOT already arrive with a materialised
+graph routes through here:
+
+- params-only custom recipes
+- graph-bearing custom recipes
+- fixed recipes
+- CLI `analyse`
+
+Live, refresh-all/boot, and share restore arrive already-materialised
+via the fetch pipeline upstream and therefore do not call
+`runScenarioMaterialisation` — their adapter packages already-materialised
+scenarios directly. Direction of travel: those callers migrate to the
+shared helper as well, with idempotency on already-materialised state,
+so transport consumes a single uniform contract regardless of caller
+shape.
+
+The function carries no recipe-mode-specific logic and no opt-outs.
+If a caller has already done the work, the caller does not call it.
+
+**Fixed-mode DSL invariant (Stage 5 item 1)**: fixed recipes
+(`analysisMode: 'fixed'` on the prep input) treat `scenario.effective_dsl`
+as ABSOLUTE — it must not be rebased over `currentDSL` via
+`augmentDSLWithConstraint`. Custom recipes still combine current + delta.
+
+### B.5.2 Materialisation observability
+
+When materialisation cannot complete for a scenario edge (parameter
+file absent, slice missing for the effective DSL, etc.):
+
+- `materialiseScenarioFeTopo` emits a `warning`-level
+  `sessionLogService` entry under category `data-fetch`, operation
+  `MATERIALISATION_INCOMPLETE`, naming the scenario, the affected items,
+  and the failure messages.
+- The resulting `PreparedAnalysisScenario` carries
+  `not_fully_materialised: true` and `materialisation_failures: [...]`.
+- Downstream surfacing reads the marker — chart-side rendering shows a
+  "data unavailable" badge, share restore shows a "missing parameter
+  files" banner, CLI `analyse` exits non-zero (code 2) listing the
+  affected scenario ids after best-effort output. The session-log entry
+  is the contract; the visible UI/CLI is its rendering.
+
+### B.5.3 TS-side visibility projection retired
+
+73e Stage 4 removed the call to `applyProbabilityVisibilityModeToGraph`
+from `analysisComputePreparationService.ts`. Python `_prepare_scenarios`
+(`graph-editor/lib/runner/runners.py`) is the canonical owner of
+visibility projection for all scalar-runner consumers. The helper
+itself remains in [CompositionService.ts](../../graph-editor/src/services/CompositionService.ts)
+as a contained compatibility layer for any non-production caller
+(storybook, debug tooling). Layered-graph analyses (`cohort_maturity`,
+`daily_conversions`, `lag_*`, `surprise_gauge`) do not call
+`_prepare_scenarios` and therefore receive the request graph with all
+layered surfaces intact.
+
+### B.5.4 Read-only CF dispatch unified (CLI ↔ browser)
+
+73e Stage 2 retired the CLI's hand-rolled `/api/forecast/conditioned`
+payload in `cli/commands/analyse.ts`. Read-only CF (`analysisType ===
+'conditioned_forecast'`) now routes through `runPreparedAnalysis` →
+`graphComputeClient.forecastConditionedScenarios`, with
+`prepared.displaySettings` forwarded so `axis_tau_max` and other
+compute-affecting display settings resolve identically across FE and
+CLI.
+
+Browser graph-mutating CF enrichment (the fetch-pipeline race,
+`runConditionedForecast` from
+[fetchDataService.ts](../../graph-editor/src/services/fetchDataService.ts))
+remains on its existing lifecycle. It is unaffected by Stage 2.
+
+### B.5.5 `--no-be` CLI contract (Stage 6)
+
+The CLI `analyse` and `param-pack` commands accept a `--no-be` flag
+that suppresses every BE-bound call in the run. The single inhibition
+point is `FetchOptions.skipBackendCalls` in
+[fetchDataService.ts](../../graph-editor/src/services/fetchDataService.ts).
+Behaviour by analysis type:
+
+- **FE-only types** (`edge_info`, `node_info`, ...) — the run completes
+  against FE-topo provisional state alone.
+- **Analyses requiring BE compute** (`cohort_maturity_v3`,
+  `conditioned_forecast`, runner-analyze types) —
+  `runBackendAnalysis` throws `BackendCallsSkippedError`, which the CLI
+  renders as a non-zero exit naming the analysis type.
+- **Param-pack** — CF dispatch through the fetch pipeline is
+  suppressed; the pack output carries `be_skipped: true` in metadata so
+  downstream consumers can distinguish FE-topo provisional values from
+  BE-authoritative ones.
+
+Stage 5 introduced a narrower companion option (`skipConditionedForecast`)
+for read-only materialisation paths that need FE topo without
+graph-mutating CF; that option is internal to `materialiseScenarioFeTopo`
+and not surfaced to the CLI.
+
+### B.5.6 Stage 7 — what 73e did NOT change
+
+- **Cache identity (`graphComputeClient.ts`)** — Stage 7 audit confirmed
+  no cache-key change is required. Stages 1–6 introduced no new
+  output-affecting input that wasn't already represented in the cache
+  key (`graph` hash of `p.mean` + topology + case weights, `analyticsDsl`,
+  `analysisType`, `scenarioIds`, `effective_query_dsl`, `visibility_mode`,
+  `display_settings`, `cohort_maturity_cache_version`, `test_fixture`).
+  Pre-existing limitations (e.g. posterior alpha/beta not in the graph
+  signature) are retained as-is per §8.4 ("It does not redesign caching").
+- **CLI tests** — the three `cliAnalyse` tests that previously POSTed
+  directly to `/api/runner/analyze` were migrated to dispatch through
+  `graphComputeClient.analyzeMultipleScenarios`, exercising the same
+  FE dispatch surface the production CLI command uses. The two
+  snapshot-backed tests retain a direct POST because the FE dispatch
+  surface does not currently forward `snapshot_subjects` — migrating
+  those is gated on extending the dispatch shape or relocating them
+  as Python BE integration tests.

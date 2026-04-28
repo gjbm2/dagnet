@@ -71,6 +71,7 @@ echo "Completeness: $val"
 | `--verbose` / `-v` | Show all internal debug logging (LAG pass, aggregation, etc.) |
 | `--session-log` | Show session log output |
 | `--allow-external-fetch` | Allow fetching from Amplitude if cached data is stale or missing. Without this flag, the CLI uses cached parameter files only. Credentials are auto-loaded from `.env.amplitude.local`. |
+| `--no-be` | Suppress every BE-bound call in the run (offline equivalence on demand). For `param-pack` the only BE call today is conditioned forecast (CF), so `--no-be` is functionally `--no-cf` for this command — `p.mean` and `p.stdev` reflect FE-topo Step 2 provisional values rather than BE-authoritative ones. The pack output carries `be_skipped: true` in metadata so downstream consumers can tell the two apart (doc 73e §8.3 Stage 6). |
 
 ## Query DSL
 

@@ -27,6 +27,9 @@ Quick-lookup table: what you need to do → which service owns it → where the 
 | Automation runs | `dailyRetrieveAllAutomationService.ts` | `dailyRetrieveAllAutomationService.test.ts` |
 | Integrity checks | `integrityCheckService.ts` | `integrityCheckService.*.test.ts` (7 files) |
 | Stage-2 fetch enrichment | `fetchDataService.ts`, `lagHorizonsService.ts` | `conditionedForecastCompleteness.test.ts`, `windowCohortSemantics.paramPack.e2e.test.ts`, `headlessRetrieveAllParity.integration.test.ts` |
+| Scenario materialisation (compose → project → FE topo) | `analysisComputePreparationService.ts` (`runScenarioMaterialisation`), `feTopoMaterialisationService.ts` (FE topo helper) | `analysisPrepStage5.integration.test.ts`, `analysisPrepRecontext.integration.test.ts`, `cliAnalysisPrepEngorgement.test.ts` |
+| Request-graph cloning + engorgement | `lib/bayesGraphRuntime.ts` (`cloneGraphWithoutBayesRuntimeFields`), `lib/bayesEngorge.ts` | `analysisPrepRecontext.integration.test.ts` |
+| Visibility-mode projection (TS-side helper, BE-side canonical) | TS: `CompositionService.applyProbabilityVisibilityModeToGraph` (compatibility-only, not on the prep path post-73e Stage 4); BE: `lib/runner/runners.py::_prepare_scenarios` → `lib/runner/graph_builder.py::apply_visibility_mode` | `CompositionService.probabilityVisibilityMode.strictEvidence.test.ts`, `test_conversion_funnel_v2.py`, `test_funnel_contract.py`, `test_lag_fields.py` |
 | Bayes patch apply + cascade | `bayesPatchService.ts` | `bayesPatchServiceMerge.integration.test.ts`, `cliApplyPatch.test.ts` |
 | Bayes reconnect + automation submit | `bayesReconnectService.ts` | (no dedicated test yet) |
 | Daily fetch / runBayes flags | `dailyFetchService.ts` | `dailyFetchService.test.ts` |

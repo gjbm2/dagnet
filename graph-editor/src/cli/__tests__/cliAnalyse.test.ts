@@ -16,6 +16,7 @@ import { loadGraphFromDisk, seedFileRegistry, type GraphBundle } from '../diskLo
 import { aggregateAndPopulateGraph } from '../aggregate';
 import { parseScenarioSpec } from '../scenarioParser';
 import { PYTHON_API_BASE } from '../../lib/pythonApiBase';
+import { graphComputeClient } from '../../lib/graphComputeClient';
 
 const FIXTURES_DIR = join(__dirname, 'fixtures');
 
@@ -148,38 +149,38 @@ describe('Analyse end-to-end (requires Python BE)', () => {
     seedFileRegistry(bundle);
   });
 
+  // Doc 73e §8.3 Stage 7 item 4 — the analyse-end-to-end tests below exercise
+  // the same FE dispatch surface (`graphComputeClient.analyzeMultipleScenarios`)
+  // the production CLI command uses (via `runPreparedAnalysis` → `runBackendAnalysis`).
+  // Previously these constructed request bodies and POSTed directly to
+  // `/api/runner/analyze`, which gave false confidence: a request-shape change
+  // in the CLI's prep/dispatch path would not have been caught.
+
   it('should return a successful graph_overview analysis for a single scenario', async () => {
     if (!beAvailable) return;
 
     const { graph } = await aggregateAndPopulateGraph(bundle, 'window(1-Jan-26:10-Jan-26)');
 
-    const request = {
-      scenarios: [{
+    const result = await graphComputeClient.analyzeMultipleScenarios(
+      [{
         scenario_id: 'Scenario 1',
         name: 'Scenario 1',
         colour: '#3b82f6',
         visibility_mode: 'f+e',
         graph,
+        effective_query_dsl: 'window(1-Jan-26:10-Jan-26)',
       }],
-      query_dsl: 'window(1-Jan-26:10-Jan-26)',
-      analysis_type: 'graph_overview',
-    };
+      /* analyticsDsl */ '',
+      'graph_overview',
+    );
 
-    const response = await fetch(`${PYTHON_API_BASE}/api/runner/analyze`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(request),
-    });
-
-    expect(response.ok).toBe(true);
-    const result = await response.json();
     expect(result.success).toBe(true);
-    expect(result.result.analysis_type).toBe('graph_overview');
-    expect(result.result.data).toBeInstanceOf(Array);
-    expect(result.result.data.length).toBeGreaterThan(0);
+    expect(result.result?.analysis_type).toBe('graph_overview');
+    expect(result.result?.data).toBeInstanceOf(Array);
+    expect((result.result?.data?.length ?? 0)).toBeGreaterThan(0);
     // Should have probability values for terminal nodes
-    expect(result.result.data[0]).toHaveProperty('probability');
-    expect(typeof result.result.data[0].probability).toBe('number');
+    expect((result.result?.data as any[])[0]).toHaveProperty('probability');
+    expect(typeof (result.result?.data as any[])[0].probability).toBe('number');
   });
 
   it('should return results for two scenarios with different scenario_ids', async () => {
@@ -188,32 +189,24 @@ describe('Analyse end-to-end (requires Python BE)', () => {
     const { graph: g1 } = await aggregateAndPopulateGraph(bundle, 'window(1-Jan-26:5-Jan-26)');
     const { graph: g2 } = await aggregateAndPopulateGraph(bundle, 'window(1-Jan-26:10-Jan-26)');
 
-    const request = {
-      scenarios: [
-        { scenario_id: 'Scenario 1', name: 'Scenario 1', colour: '#3b82f6', visibility_mode: 'f+e', graph: g1 },
-        { scenario_id: 'Scenario 2', name: 'Scenario 2', colour: '#ef4444', visibility_mode: 'f+e', graph: g2 },
+    const result = await graphComputeClient.analyzeMultipleScenarios(
+      [
+        { scenario_id: 'Scenario 1', name: 'Scenario 1', colour: '#3b82f6', visibility_mode: 'f+e', graph: g1, effective_query_dsl: 'window(1-Jan-26:5-Jan-26)' },
+        { scenario_id: 'Scenario 2', name: 'Scenario 2', colour: '#ef4444', visibility_mode: 'f+e', graph: g2, effective_query_dsl: 'window(1-Jan-26:5-Jan-26)' },
       ],
-      query_dsl: 'window(1-Jan-26:5-Jan-26)',
-      analysis_type: 'graph_overview',
-    };
+      /* analyticsDsl */ '',
+      'graph_overview',
+    );
 
-    const response = await fetch(`${PYTHON_API_BASE}/api/runner/analyze`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(request),
-    });
-
-    expect(response.ok).toBe(true);
-    const result = await response.json();
     expect(result.success).toBe(true);
 
     // Both scenario IDs should appear in the dimension values
-    const scenarioDims = result.result?.dimension_values?.scenario_id;
+    const scenarioDims = (result.result as any)?.dimension_values?.scenario_id;
     expect(scenarioDims).toHaveProperty('Scenario 1');
     expect(scenarioDims).toHaveProperty('Scenario 2');
 
     // Data should contain entries from both scenarios
-    const scenarioIds = new Set(result.result.data.map((d: any) => d.scenario_id));
+    const scenarioIds = new Set((result.result?.data as any[]).map((d: any) => d.scenario_id));
     expect(scenarioIds.has('Scenario 1')).toBe(true);
     expect(scenarioIds.has('Scenario 2')).toBe(true);
   });
@@ -223,27 +216,23 @@ describe('Analyse end-to-end (requires Python BE)', () => {
 
     const { graph } = await aggregateAndPopulateGraph(bundle, 'window(1-Jan-26:10-Jan-26)');
 
-    // Use from().to() subject — the BE should parse this
-    const request = {
-      scenarios: [{
+    // The CLI splits subject (from/to/visited/...) from temporal/context
+    // before dispatch — analyticsDsl carries the subject, effective_query_dsl
+    // carries the temporal clause. Mirroring that here so the BE sees the
+    // same fielded payload the production CLI sends.
+    const result = await graphComputeClient.analyzeMultipleScenarios(
+      [{
         scenario_id: 'Scenario 1',
         name: 'Scenario 1',
         colour: '#3b82f6',
         visibility_mode: 'f+e',
         graph,
+        effective_query_dsl: 'window(1-Jan-26:10-Jan-26)',
       }],
-      query_dsl: 'from(start).to(middle).window(1-Jan-26:10-Jan-26)',
-      analysis_type: 'graph_overview',
-    };
+      /* analyticsDsl */ 'from(start).to(middle)',
+      'graph_overview',
+    );
 
-    const response = await fetch(`${PYTHON_API_BASE}/api/runner/analyze`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(request),
-    });
-
-    expect(response.ok).toBe(true);
-    const result = await response.json();
     expect(result.success).toBe(true);
   });
 });
@@ -317,6 +306,16 @@ describe('Snapshot-backed analysis (requires Python BE)', () => {
     if (!beAvailable) return;
     await cleanupSnapshots();
   });
+
+  // Doc 73e §8.3 Stage 7 item 4 — the two snapshot-backed tests below retain
+  // their direct POST to /api/runner/analyze because they exercise BE-side
+  // snapshot retrieval that the FE dispatch surface
+  // (`graphComputeClient.analyzeMultipleScenarios`) does not currently carry
+  // through: the scenario shape it sends omits `snapshot_subjects`, while
+  // these tests rely on hand-crafted subject metadata that points at seeded
+  // DB rows. Migrating these is gated on either extending the FE dispatch
+  // shape to forward snapshot_subjects or relocating these tests as Python
+  // BE integration tests under graph-editor/lib/tests/.
 
   it('should return cohort_maturity analysis using seeded snapshot data', async () => {
     if (!beAvailable) return;

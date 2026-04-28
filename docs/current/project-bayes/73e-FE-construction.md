@@ -514,5 +514,5 @@ End of proposal.
 - [x] Stage 4 — completed 28-Apr-26
 - [x] Stage 5 — completed 28-Apr-26
 - [x] Stage 6 — completed 28-Apr-26 (`--no-be` CLI flag — added 28-Apr-26)
-- [ ] Stage 7
-- [ ] Stage 8
+- [x] Stage 7 — completed 28-Apr-26 (cache audit found no new dependencies; cliAnalyse e2e tests dispatch through `graphComputeClient`; 73b §5 outside-in Python suite deferred to 73b-final-outstanding redux per user direction)
+- [x] Stage 8 — completed 28-Apr-26 (FORECAST_STACK_DATA_FLOW §B.5 supplement; cli-analyse / cli-param-pack `--no-be` documented; SERVICE_DIRECTORY rows for scenario materialisation, transport engorgement, visibility projection)

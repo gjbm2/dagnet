@@ -152,6 +152,7 @@ bash graph-ops/scripts/analyse.sh my-graph "window(-30d:)" \
 | `--scenario <spec>` | Scenario specification (repeatable) |
 | `--subject <dsl>` | Analysis subject (`from(x).to(y)`) — shared across scenarios |
 | `--no-snapshot-cache` | Bypass the BE snapshot service in-memory cache. Essential after `synth_gen.py` or any DB repopulation — without this, the BE may return stale cached empty results. |
+| `--no-be` | Suppress every BE-bound call in the run (offline equivalence on demand). For FE-only analysis types (`edge_info`, `node_info`) the run completes against FE-topo provisional state. For analyses that require BE compute (`cohort_maturity_v3`, `conditioned_forecast`, runner-analyze types) the command exits non-zero with a clear message naming the analysis type. Diagnostic affordance for distinguishing BE arithmetic divergence from FE/materialisation divergence (doc 73e §8.3 Stage 6). |
 | `--get <key>` | Extract a value via dot-path |
 | `--format json\|yaml` | Output format (default: yaml) |
 | `--no-cache` | Bypass disk bundle cache |
@@ -204,6 +205,25 @@ with its own query DSL and no what-if overlays**. No scenario
 composition or stacking is applied — each scenario aggregates
 independently from the clean graph. This is fully reproducible in the
 FE by creating a live scenario with the same DSL.
+
+`cli analyse` shares the **prepared-analysis dispatch path** with the
+browser (doc 73e Stage 2): both call `prepareAnalysisComputeInputs` →
+`runPreparedAnalysis`, which routes `conditioned_forecast` to
+`/api/forecast/conditioned` and every other registered analysis type
+to `/api/runner/analyze`. The CLI no longer hand-rolls a CF payload;
+`display_settings` (including `axis_tau_max`) resolve identically
+across FE and CLI. CLI standard `analyse` runs the same FE topo
+materialisation step (`enhanceGraphLatencies` + Step 2 promotion +
+current-answer derivation) that the browser does (doc 73e Stage 5),
+so `model_vars[analytic]` and the layered probability surface are
+present at transport time.
+
+When materialisation cannot complete for one or more scenarios (a
+parameter file is absent, a slice is missing for the effective DSL,
+…) the CLI emits per-scenario warnings and exits **non-zero with code
+2** AFTER printing the best-effort analysis output, listing the
+affected scenario ids. The session-log entry (`MATERIALISATION_INCOMPLETE`)
+is the contract; the CLI exit is its rendering.
 
 ## Troubleshooting
 
