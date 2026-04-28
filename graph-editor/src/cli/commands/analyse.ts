@@ -272,6 +272,19 @@ async function runAnalyse() {
 
   log.info(`Analysis prepared (type: ${prepared.analysisType}, scenarios: ${prepared.scenarios.length})`);
 
+  // Doc 73e §8.3 Stage 5 item 6 — surface incomplete materialisation. The
+  // session log entry is the contract (already emitted by the helper); the
+  // CLI's rendering of that signal is a non-zero exit listing the affected
+  // scenarios. Analysis output is still produced before exit so the user
+  // sees the best-effort result.
+  const incompleteScenarios = prepared.scenarios.filter((s) => s.not_fully_materialised);
+  for (const sc of incompleteScenarios) {
+    const failureSummary = (sc.materialisation_failures || [])
+      .map((f) => `${f.itemName}: ${f.message}`)
+      .join('; ') || 'unknown';
+    log.warn(`Scenario '${sc.name}' (${sc.scenario_id}) not fully materialised — ${failureSummary}`);
+  }
+
   // Diagnostic: prepared analysis detail
   if (isDiagnostic()) {
     log.diag('── Analysis preparation detail ──');
@@ -335,6 +348,14 @@ async function runAnalyse() {
     : JSON.stringify(result, null, 2);
 
   process.stdout.write(output + '\n');
+
+  // Doc 73e §8.3 Stage 5 item 6 — exit non-zero AFTER printing output if any
+  // scenario was not fully materialised, so the user sees the best-effort
+  // result and the failure signal in the same run.
+  if (incompleteScenarios.length > 0) {
+    const ids = incompleteScenarios.map((s) => s.scenario_id).join(', ');
+    exit(2, `${incompleteScenarios.length} scenario(s) not fully materialised: ${ids}`);
+  }
 }
 
 // ---------------------------------------------------------------------------

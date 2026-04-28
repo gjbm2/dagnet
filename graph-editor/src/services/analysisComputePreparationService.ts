@@ -18,6 +18,10 @@ import {
 import { engorgeGraphEdges } from '../lib/bayesEngorge';
 import { cloneGraphWithoutBayesRuntimeFields } from '../lib/bayesGraphRuntime';
 import { collectConditionedForecastParameterFiles } from '../lib/conditionedForecastGraphSnapshot';
+import {
+  materialiseScenarioFeTopo,
+  type MaterialisationFailureDetail,
+} from './feTopoMaterialisationService';
 
 // ── Per-scenario request-graph contexting + engorgement (doc 73b §3.2a) ────
 // After building a per-scenario analysis graph, re-context it to that
@@ -55,6 +59,63 @@ function recontextScenarioGraph(
     resolveParameterFile,
   );
   engorgeGraphEdges(graph, parameterFiles);
+}
+
+interface RunScenarioMaterialisationResult {
+  graph: Graph;
+  notFullyMaterialised: boolean;
+  failures?: MaterialisationFailureDetail[];
+}
+
+// ── Shared materialisation boundary (doc 73e §8.3 Stage 5) ─────────────────
+// The single orchestration entry point for taking a built scenario graph
+// to a transport-ready (materialised) scenario graph: in-schema posterior
+// projection (Stage 4(a)) followed by FE topo materialisation (Stage 5
+// item 7).
+//
+// Every caller-shape that does NOT already arrive with a materialised
+// graph routes through here: custom recipes (params-only and graph-bearing),
+// fixed recipes, and CLI `analyse`. Live, refresh-all/boot, and share
+// restore arrive already-materialised via the fetch pipeline upstream and
+// therefore do not call this function — they package their already-materialised
+// scenarios directly. Direction of travel: those callers migrate to invoke
+// this function as well, with idempotency on already-materialised state, so
+// transport consumes a single uniform contract regardless of caller shape.
+//
+// No recipe-mode-specific logic, no opt-outs. If a caller has already done
+// the work, the caller does not call this function.
+async function runScenarioMaterialisation(
+  scenarioGraph: Graph,
+  effectiveQueryDsl: string,
+  resolveParameterFile: ParameterFileResolver | undefined,
+  workspace: { repository: string; branch: string } | undefined,
+  meta: { scenarioId: string; scenarioName: string },
+): Promise<RunScenarioMaterialisationResult> {
+  // Stage 4(a) — in-schema posterior projection from parameter files.
+  recontextScenarioGraph(scenarioGraph, effectiveQueryDsl, resolveParameterFile);
+
+  // Stage 5 item 7 — FE topo materialisation via the shared fetch-pipeline
+  // helper. When workspace is unset (legacy/test paths that exercise
+  // prepared shape without file-backed state) there are no parameter files
+  // to draw on, so materialisation is a no-op.
+  if (!workspace) {
+    return { graph: scenarioGraph, notFullyMaterialised: false };
+  }
+
+  const materialised = await materialiseScenarioFeTopo(
+    scenarioGraph,
+    effectiveQueryDsl,
+    {
+      scenarioId: meta.scenarioId,
+      scenarioName: meta.scenarioName,
+      workspace,
+    },
+  );
+  return {
+    graph: materialised.graph,
+    notFullyMaterialised: materialised.notFullyMaterialised,
+    failures: materialised.failures.length > 0 ? materialised.failures : undefined,
+  };
 }
 
 type ScenarioLike = {
@@ -112,6 +173,25 @@ export interface PreparedAnalysisScenario {
   analytics_dsl?: string;
   /** Doc 31: FE-computed candidate regimes for all edges in this scenario's graph. */
   candidate_regimes_by_edge?: Record<string, Array<{ core_hash: string; equivalent_hashes: string[] }>>;
+  /**
+   * Doc 73e §8.3 Stage 5 item 6 — materialisation observability.
+   *
+   * Set true when one or more fetchable items did not complete during
+   * the FE topo materialisation step (parameter file absent, slice
+   * missing for the effective DSL, etc.). Downstream surfacing reads
+   * this signal: chart-side rendering shows a "data unavailable" badge,
+   * share restore shows a "missing parameter files" banner, CLI exits
+   * non-zero listing the affected scenarios. The session-log entry
+   * (warning, MATERIALISATION_INCOMPLETE) is the contract; the visible
+   * UI/CLI is its rendering.
+   */
+  not_fully_materialised?: boolean;
+  /**
+   * Doc 73e §8.3 Stage 5 item 6 — per-item failure details. Populated
+   * alongside `not_fully_materialised`; omitted when the scenario
+   * materialised cleanly.
+   */
+  materialisation_failures?: MaterialisationFailureDetail[];
 }
 
 export interface PreparedAnalysisComputeReady {
@@ -174,6 +254,19 @@ type CustomParams = SharedParams & {
   customScenarios?: ChartRecipeScenarioLike[] | null;
   hiddenScenarioIds?: string[];
   frozenWhatIfDsl?: string | null;
+  /**
+   * Doc 73e §8.3 Stage 5 item 1 — recipe-mode distinction within `mode: 'custom'`.
+   *
+   * Custom recipes (`'custom'`, default): `scenario.effective_dsl` is treated
+   * as a delta over the current graph's DSL — the two are combined via
+   * `augmentDSLWithConstraint`. Recipe overrides win for clauses it provides;
+   * unmentioned clauses inherit from `currentDSL`.
+   *
+   * Fixed recipes (`'fixed'`): `scenario.effective_dsl` is BAKED ABSOLUTE.
+   * It must not be rebased over `currentDSL`; the recipe's DSL is the whole
+   * DSL at preparation time. This is the load-bearing fixed-recipe invariant.
+   */
+  analysisMode?: 'custom' | 'fixed';
 };
 
 export type PrepareAnalysisComputeInputsParams = LiveParams | CustomParams;
@@ -410,9 +503,17 @@ export async function prepareAnalysisComputeInputs(
         params.scenariosContext?.scenarios || [],
         scenarioId === 'current' ? params.whatIfDSL : undefined,
       );
-
       const effectiveQueryDsl = getQueryDslForScenario(scenarioId);
+
+      // Live inputs arrive already-materialised: useDSLReaggregation drove
+      // the fetch pipeline (file projection + FE topo + CF) upstream against
+      // the live graph state before this call. The branch therefore performs
+      // only the per-scenario in-schema re-context (Stage 4(a)) and packages
+      // the result; it does NOT call `runScenarioMaterialisation`. Direction
+      // of travel (§8.3 Stage 5): live should also flow through the shared
+      // boundary once that helper is idempotent on already-materialised state.
       recontextScenarioGraph(scenarioGraph, effectiveQueryDsl, params.resolveParameterFile);
+
       scenarios.push({
         scenario_id: scenarioId,
         name: params.getScenarioName(scenarioId),
@@ -436,12 +537,23 @@ export async function prepareAnalysisComputeInputs(
       return logBlockedResult(params, { status: 'blocked', reason: 'custom_scenarios_missing' });
     }
 
+    // Doc 73e §8.3 Stage 5 item 1 — fixed recipes use scenario.effective_dsl
+    // as ABSOLUTE; custom recipes (default) combine current + delta. This is
+    // the only recipe-mode-specific decision in the custom branch — it lives
+    // in the caller-shape adapter (here), not in the shared materialisation
+    // orchestration (`runScenarioMaterialisation`).
+    const isFixed = params.analysisMode === 'fixed';
+
     // Build prepared scenarios in recipe order, then reorder so 'current'
-    // (the base reference) comes first.  Bridge uses index 0 as start and
+    // (the base reference) comes first. Bridge uses index 0 as start and
     // index 1 as end — "from base TO variation".
-    const builtScenarios = customScenarios.map((scenario) => {
+    const builtScenarios: PreparedAnalysisScenario[] = [];
+    for (const scenario of customScenarios) {
       const visibilityMode = scenario.visibility_mode || 'f+e';
       const hasScenarioGraph = hasGraphShape(scenario.graph);
+      // Caller-shape adapter — turn (recipe scenario) into (scenarioGraph,
+      // effectiveQueryDsl). Recipe-specific composition lives here; the
+      // post-build pipeline runs uniformly via `runScenarioMaterialisation`.
       let scenarioGraph: Graph = graph;
       if (hasScenarioGraph) {
         // Clone-and-strip so re-contexting and engorgement run on an isolated
@@ -461,21 +573,42 @@ export async function prepareAnalysisComputeInputs(
         scenarioGraph = applyWhatIfToGraph(scenarioGraph, params.frozenWhatIfDsl) as Graph;
       }
 
-      const effectiveQueryDsl = composeScenarioDsl(
-        augmentDSLWithConstraint(params.currentDSL || '', scenario.effective_dsl || ''),
-        params.chartCurrentLayerDsl,
-      );
-      recontextScenarioGraph(scenarioGraph, effectiveQueryDsl, params.resolveParameterFile);
+      const recipeDsl = scenario.effective_dsl || '';
+      const effectiveQueryDsl = isFixed
+        // Fixed recipes: the recipe's DSL is the whole DSL. Do not rebase
+        // over currentDSL. Apply only the per-chart current-layer constraint
+        // if present — that's a local UI override, not the live graph DSL.
+        ? composeScenarioDsl(recipeDsl, params.chartCurrentLayerDsl)
+        : composeScenarioDsl(
+            augmentDSLWithConstraint(params.currentDSL || '', recipeDsl),
+            params.chartCurrentLayerDsl,
+          );
 
-      return {
+      const scenarioName = scenario.name || scenario.scenario_id;
+
+      // Shared materialisation: in-schema projection (Stage 4(a)) plus
+      // FE topo materialisation (Stage 5 item 7). Custom/fixed/CLI recipes
+      // run FE topo here because they did not run the fetch pipeline upstream
+      // — that is the laggard-caller fix Stage 5 ships.
+      const materialised = await runScenarioMaterialisation(
+        scenarioGraph,
+        effectiveQueryDsl,
+        params.resolveParameterFile,
+        params.workspace,
+        { scenarioId: scenario.scenario_id, scenarioName },
+      );
+
+      builtScenarios.push({
         scenario_id: scenario.scenario_id,
-        name: scenario.name || scenario.scenario_id,
+        name: scenarioName,
         colour: scenario.colour || '#808080',
         visibility_mode: visibilityMode,
-        graph: scenarioGraph,
+        graph: materialised.graph,
         effective_query_dsl: effectiveQueryDsl,
-      };
-    });
+        ...(materialised.notFullyMaterialised ? { not_fully_materialised: true } : {}),
+        ...(materialised.failures ? { materialisation_failures: materialised.failures } : {}),
+      });
+    }
     const currentIdx = builtScenarios.findIndex((s) => s.scenario_id === 'current');
     if (currentIdx > 0) {
       const [currentScenario] = builtScenarios.splice(currentIdx, 1);

@@ -379,6 +379,11 @@ export function useCanvasAnalysisCompute({
                 }
                 return {
                   mode: 'custom',
+                  // Doc 73e §8.3 Stage 5 item 1 — fixed recipes carry an
+                  // absolute effective DSL that must not be rebased over
+                  // currentDSL during preparation. Forward the chart-level
+                  // mode here so prepareAnalysisComputeInputs can honour it.
+                  analysisMode: mode === 'fixed' ? 'fixed' : 'custom',
                   graph: graph as any,
                   analysisType,
                   analyticsDsl,

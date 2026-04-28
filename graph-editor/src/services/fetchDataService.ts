@@ -151,6 +151,19 @@ export interface FetchOptions {
   skipStage2?: boolean;
 
   /**
+   * When true, suppress the conditioned-forecast dispatch in this fetch run.
+   * `cfPromise` resolves immediately to `[]` and the downstream pipeline
+   * behaves as if CF returned no result — FE topo Step 2 is the sole writer
+   * of `p.mean`. Pipeline step is marked 'skipped' for this run.
+   *
+   * Intended for read-only materialisation paths (doc 73e §8.3 Stage 5) where
+   * FE topo is the contract and graph-mutating CF is not desired. The broader
+   * Stage 6 `--no-be` flag will be a wider gate (every BE call); this option
+   * narrowly suppresses CF only.
+   */
+  skipConditionedForecast?: boolean;
+
+  /**
    * When true, Stage-2 awaits its fire-and-forget background handlers
    * (conditioned-forecast slow-path `.then()`) before resolving. The
    * browser wants fast first render and async catch-up (leave this
@@ -2293,29 +2306,34 @@ export async function runStage2EnhancementsAndInboundN(
           // When FE has no values to apply, CF is the sole writer of p.mean
           // and applies its own results on arrival via
           // applyConditionedForecastToGraph.
-          updatePipelineStep('cf', 'running');
+          const cfSkipped = itemOptions?.skipConditionedForecast === true;
+          updatePipelineStep('cf', cfSkipped ? 'complete' : 'running', cfSkipped ? 'skipped' : undefined);
           const { runConditionedForecast, applyConditionedForecastToGraph } =
             await import('./conditionedForecastService');
           const cfGen = cfSupersessionState.nextGeneration(cfScenarioId);
           const cfStartTime = Date.now();
           if (batchLogId) {
             sessionLogService.addChild(batchLogId, 'info', 'CONDITIONED_FORECAST',
-              `Conditioned forecast started (scenario=${cfScenarioId}, gen ${cfGen}, dsl=${(dsl || '').slice(0, 80)})`);
+              cfSkipped
+                ? 'Conditioned forecast skipped (skipConditionedForecast=true)'
+                : `Conditioned forecast started (scenario=${cfScenarioId}, gen ${cfGen}, dsl=${(dsl || '').slice(0, 80)})`);
           }
-          const cfPromise = runConditionedForecast(
-            cfInputGraph,
-            dsl,
-            undefined,
-            itemOptions?.workspace,
-            cfScenarioId,
-          ).catch(e => {
-            console.warn('[fetchDataService] Conditioned forecast failed:', e);
-            if (batchLogId) {
-              sessionLogService.addChild(batchLogId, 'error', 'CONDITIONED_FORECAST',
-                `Conditioned forecast failed: ${e?.message || e}`);
-            }
-            return [] as Awaited<ReturnType<typeof runConditionedForecast>>;
-          });
+          const cfPromise = cfSkipped
+            ? Promise.resolve([] as Awaited<ReturnType<typeof runConditionedForecast>>)
+            : runConditionedForecast(
+                cfInputGraph,
+                dsl,
+                undefined,
+                itemOptions?.workspace,
+                cfScenarioId,
+              ).catch(e => {
+                console.warn('[fetchDataService] Conditioned forecast failed:', e);
+                if (batchLogId) {
+                  sessionLogService.addChild(batchLogId, 'error', 'CONDITIONED_FORECAST',
+                    `Conditioned forecast failed: ${e?.message || e}`);
+                }
+                return [] as Awaited<ReturnType<typeof runConditionedForecast>>;
+              });
 
           // Finalise the CF sub-step of the fetch-compute pipeline op
           // (and complete the parent op). Called exactly once per cfGen
@@ -2328,7 +2346,7 @@ export async function runStage2EnhancementsAndInboundN(
           let cfToastFinalised = false;
           const finaliseCfToast = (
             results: Awaited<ReturnType<typeof runConditionedForecast>> | null,
-            outcome: 'resolved' | 'empty' | 'error' | 'stale',
+            outcome: 'resolved' | 'empty' | 'error' | 'stale' | 'skipped',
           ) => {
             if (cfToastFinalised) return;
             cfToastFinalised = true;
@@ -2355,7 +2373,13 @@ export async function runStage2EnhancementsAndInboundN(
             let parentLabel: string;
             let scenarioSuffix: string;
 
-            if (outcome === 'stale') {
+            if (outcome === 'skipped') {
+              verdict = 'complete';
+              cfStepStatus = 'complete';
+              cfStepDetail = 'skipped';
+              parentLabel = `Recomputed — CF skipped (${totalMs}ms)`;
+              scenarioSuffix = 'CF skipped';
+            } else if (outcome === 'stale') {
               verdict = 'cancelled';
               cfStepStatus = 'error';
               cfStepDetail = `discarded (${ms}ms)`;
@@ -2414,6 +2438,14 @@ export async function runStage2EnhancementsAndInboundN(
               operationRegistryService.complete(opId, verdict);
             }
           };
+
+          // CF is suppressed for this run (Stage 5 read-only materialisation).
+          // Finalise the toast/pipeline op as 'skipped' eagerly so the FE-apply
+          // path still runs but no later 'empty'/'no result' label is emitted
+          // by the slow-path race or downstream handlers.
+          if (cfSkipped) {
+            finaliseCfToast(null, 'skipped');
+          }
 
           // ── Helper: apply FE edge values through UpdateManager + analytic model_vars ──
           // Accepts the edge values to apply so the CF fast path can pass a
@@ -2519,7 +2551,13 @@ export async function runStage2EnhancementsAndInboundN(
           // p.mean). In both cases, CF applies its own results via
           // applyConditionedForecastToGraph on the freshest graph the
           // caller can see.
+          //
+          // When CF is skipped (skipConditionedForecast=true) the toast was
+          // finalised eagerly above, no overwrite will be applied, and there
+          // is nothing for the handler to do. Skip attaching it so we don't
+          // emit a misleading "Conditioned forecast returned empty" entry.
           const attachCfSlowPathHandler = () => {
+            if (cfSkipped) return;
             backgroundPromises.push(
               cfPromise.then(async results => {
                 const latestCfGen = cfSupersessionState.latestGeneration(cfScenarioId);

@@ -1,6 +1,6 @@
 ---
 name: implement-carefully
-description: Self-administering stage runner for multi-stage implementation plans. Picks the first incomplete stage from the plan's progress section, executes it with strict discipline (briefing receipt, atoms, commits, tests, schema parity), records completion in the plan, and returns control. Use when the user wants to advance a plan one stage at a time without manually specifying which stage. Triggered by `/implement-carefully <plan-path>` or by the user asking to "run the next stage", "advance the plan", or "do the next bit of <plan>".
+description: Self-administering stage runner for multi-stage implementation plans. Picks the first incomplete stage from the plan's progress section, executes it with strict discipline (briefing receipt, atoms, commits, tests, schema parity), records completion in the plan, and returns control. Use when the user wants to advance a plan one stage at a time without manually specifying which stage. Triggered by `/implement-carefully <plan-path>`, `/implement-carefully warm-up <plan-path>` (preparation only — briefing receipt and recon report, then halts before any edits), or by the user asking to "run the next stage", "advance the plan", or "do the next bit of <plan>".
 ---
 
 # Implement Carefully
@@ -10,6 +10,8 @@ You are about to execute ONE incomplete stage of a multi-stage plan, end to end,
 ## Args
 
 The invocation should name the plan doc path (e.g. `/implement-carefully docs/current/project-bayes/73b-be-topo-removal-and-forecast-state-separation-plan.md`). If the path is missing, ambiguous, or does not resolve on disk, **STOP and ASK** the user. Do not guess.
+
+**Warm-up mode**: if the invocation includes the literal token `warm-up` or `warm up` (in either order, e.g. `/implement-carefully warm-up <plan>` or `/implement-carefully <plan> warm up`), or the user phrases the invocation as "warm up <plan>" / "prep <plan>" / "get ready to run <plan>" without asking you to start, treat the session as **preparation only**. See the "Warm-up mode" section below. If you are unsure whether the user wants warm-up or full execution, ASK once — the difference matters.
 
 ## Step 1 — Locate the progress section in the plan
 
@@ -38,6 +40,10 @@ The next stage is the **first** `- [ ]` item in the progress block (top to botto
 
 Do not pause for confirmation here unless one of the **stop conditions** below fires.
 
+**Warm-up exception**: warm-up can be triggered while a prior stage is still in progress (e.g. another session is mid-execution, or the user has not yet committed/marked it done) so that context-loading runs in parallel. Two cases:
+- If the user named a specific stage in their message (e.g. "warm up stage 3"), use that ID, even if an earlier stage is still `- [ ]`.
+- Otherwise, pick the first `- [ ]` as usual. Do not block on the fact that another session may be touching it; warm-up only reads.
+
 ## Step 3 — Stop conditions (check before doing any work)
 
 If any of these is true, **STOP and ASK**:
@@ -46,6 +52,8 @@ If any of these is true, **STOP and ASK**:
 2. `git status` shows uncommitted modifications **to files this stage will edit**. Genuinely conflicting WIP — ask the user how to proceed. Uncommitted changes elsewhere (e.g. leftover from the previous stage that the user hasn't committed yet) are fine; just note them in the kickoff line and proceed.
 3. The plan section for this stage cross-references file paths or §-numbers that don't resolve. Plan-vs-reality drift; ask before acting.
 4. The plan and the current code disagree on a load-bearing field shape, contract, or invariant.
+
+**Warm-up relaxation**: in warm-up mode, condition (2) does not block — warm-up performs no edits, so concurrent WIP on those files is fine. Note the WIP in the warm-up report so the user is aware. Conditions (1), (3), (4) still apply: surface them in the warm-up report rather than as a hard stop, since the user may want to continue prep work while resolving them in parallel. If they look fatal, ask.
 
 ## Step 4 — Session start procedure
 
@@ -58,6 +66,35 @@ Before your first edit:
 5. Emit the briefing-receipt block per CLAUDE.md, then STOP. The Stop hook records it. Continue editing in your next turn.
 
 Quote 3–7 load-bearing invariants from the stage's section in the briefing receipt, with §-numbers. These survive auto-compaction; they are your contract for the session.
+
+## Step 4a — Warm-up mode (preparation only, no edits)
+
+If the invocation is a warm-up (see Args), execute Steps 1–4 to fully load context, then **stop before any edits** and print a warm-up report. The intent is to absorb the cost of briefing and recon now so that, when the user authorises execution later, work begins immediately. Warm-up is also designed to run in parallel with other in-flight stages — it must not interfere with another session's edits or commits.
+
+What warm-up does:
+
+1. Steps 1–4 in full: locate the progress section, pick the stage (honouring an explicit stage hint from the user), surface stop-condition concerns per the warm-up relaxation above, read the warm-start docs and per-path required reads, read the relevant plan sections, emit the briefing receipt as a standalone message. The Stop hook records the receipt; it remains valid for later edits in this conversation.
+2. **Recon, not edits**: enumerate the atoms the stage will land (using `TodoWrite` is fine — but keep all rows pending), the file surfaces it will touch, the schema rows it owns, the test files it will exercise, and the suggested commit boundaries. Open files in read-only fashion to confirm they exist and look as the plan describes; do not modify them. Dispatch the **Explore** subagent for any broader recon you would do at session start.
+3. **Cross-doc prerequisites**: walk the plan's stop-condition prerequisites (entry conditions, gates from companion docs) and report each as "verified", "unverified", or "blocked". Do not assume.
+4. **Print the warm-up report** and stop. The report should include:
+   - Stage ID, plan path, warm-up timestamp.
+   - Stop-condition summary (especially WIP noted on stage-touched files; cite paths).
+   - Atoms enumerated (one bullet each), with the suggested commit message for each.
+   - Surfaces to be edited (file paths) and schema rows owned.
+   - Acceptance criteria the stage will be measured against, quoted.
+   - Tests planned to run (per atom and at stage end).
+   - Open questions or risks that need user input before execution.
+   - The literal line: **"Warm-up complete. Reply 'go' (or `/implement-carefully <plan-path>`) to begin execution. Reply with concerns or course corrections to refine before starting."**
+
+What warm-up must NOT do:
+
+- Any Edit or Write tool call against source code, schemas, tests, or the plan's progress block.
+- Any git write (the standard prohibition still applies).
+- Marking the stage in progress or complete.
+- Starting a TodoWrite atom as `in_progress` — atoms stay pending.
+- Modifying or committing on behalf of another in-flight session, even if its WIP overlaps.
+
+**Resuming after warm-up**: when the user replies "go" / "proceed" / "start" / `/implement-carefully <plan-path>` (without `warm-up`) in the same conversation, continue from Step 5 directly. The briefing receipt is already on file and reusable; do not re-emit unless the receipt's `read:` paths have since changed (e.g. a manifest update or a new path added to the stage's surfaces). If the user resumes in a fresh session instead, the new session re-runs the full warm-up itself — the recorded receipt does not carry across sessions.
 
 ## Step 5 — Stage execution discipline
 
@@ -119,6 +156,8 @@ Write a short user-facing line, then continue:
 
 - After resolving the next stage from the progress block.
 - When you finish reading the briefing materials.
+- When warm-up is complete and you are halting before edits (use the literal "Warm-up complete" line from Step 4a so the user can spot the boundary).
+- When the user resumes after warm-up and you transition into Step 5.
 - When you start an atom.
 - When you finish an atom (with the commit SHA).
 - When a test failure is unexpected.

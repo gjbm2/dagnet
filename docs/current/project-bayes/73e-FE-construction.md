@@ -512,7 +512,7 @@ End of proposal.
 - [x] Stage 2 — completed 28-Apr-26
 - [x] Stage 3 — completed 28-Apr-26
 - [x] Stage 4 — completed 28-Apr-26
-- [ ] Stage 5
+- [x] Stage 5 — completed 28-Apr-26
 - [ ] Stage 6 (`--no-be` CLI flag — added 28-Apr-26)
 - [ ] Stage 7
 - [ ] Stage 8
