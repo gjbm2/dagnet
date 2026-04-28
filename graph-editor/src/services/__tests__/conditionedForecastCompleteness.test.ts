@@ -263,15 +263,15 @@ describe('CF owns completeness on the graph path (FE authority contract)', () =>
         m_S: null,
         m_G: null,
         applied: false,
-        skip_reason: 'source_query_scoped',
+        skip_reason: 'n_effective_missing',
       },
-      cf_mode: 'analytic_degraded',
-      cf_reason: 'query_scoped_posterior',
+      cf_mode: 'sweep',
+      cf_reason: null,
     };
     expect(example.completeness).toBe(0.75);
     expect(example.completeness_sd).toBe(0.08);
-    expect(example.cf_mode).toBe('analytic_degraded');
-    expect(example.cf_reason).toBe('query_scoped_posterior');
+    expect(example.cf_mode).toBe('sweep');
+    expect(example.cf_reason).toBeNull();
   });
 
   // ── 2. applyConditionedForecastToGraph OVERWRITES completeness ──────

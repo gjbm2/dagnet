@@ -134,7 +134,6 @@ class PreparedForecastRuntimeBundle:
     )
     operator_inputs: PreparedOperatorInputs = field(default_factory=PreparedOperatorInputs)
     resolved_params: Optional[Any] = None
-    sweep_eligible: Optional[bool] = None
     cf_mode: Optional[str] = None
     cf_reason: Optional[str] = None
 
@@ -200,7 +199,6 @@ def build_prepared_runtime_bundle(
     p_conditioning_total_x: Optional[float] = None,
     p_conditioning_total_y: Optional[float] = None,
     resolved_params: Optional[Any] = None,
-    sweep_eligible: Optional[bool] = None,
     cf_mode: Optional[str] = None,
     cf_reason: Optional[str] = None,
     mc_cdf_arr: Optional[Any] = None,
@@ -294,7 +292,6 @@ def build_prepared_runtime_bundle(
             span_onset_mu_corr=span_onset_mu_corr,
         ),
         resolved_params=resolved_params,
-        sweep_eligible=sweep_eligible,
         cf_mode=cf_mode,
         cf_reason=cf_reason,
     )
@@ -498,7 +495,6 @@ def serialise_runtime_bundle(
             'span_onset_mu_corr': bundle.operator_inputs.span_onset_mu_corr,
         },
         'resolved_source': getattr(bundle.resolved_params, 'source', None),
-        'sweep_eligible': bundle.sweep_eligible,
         'cf_mode': bundle.cf_mode,
         'cf_reason': bundle.cf_reason,
         'rate_evidence_provenance': serialise_rate_evidence_provenance(bundle),
@@ -508,18 +504,6 @@ def serialise_runtime_bundle(
 # ═══════════════════════════════════════════════════════════════════════
 # Conditioned-forecast sweep eligibility / provenance
 # ═══════════════════════════════════════════════════════════════════════
-
-
-def is_cf_sweep_eligible(resolved: Optional[Any]) -> bool:
-    """All edges are sweep-eligible post doc 73b §3.9 / Decision 13.
-
-    Retained as a no-op for callers that still pass the flag onto bundles
-    or response payloads; the discriminator branching it once gated has
-    been retired.
-    """
-    del resolved
-    return True
-
 
 def get_cf_mode_and_reason(
     resolved: Optional[Any],
@@ -747,116 +731,67 @@ def read_edge_cohort_params(
     """Extract cohort-level (a-anchored) Bayes params from a graph edge.
 
     Returns a dict with keys {p, mu, sigma, onset} or None if the edge
-    lacks required parameters.
+    lacks required parameters. May also include {alpha, beta, mu_sd,
+    sigma_sd, onset_sd, p_sd}.
 
-    Prefers posterior values over flat fields.  For probability, prefers
-    cohort_alpha/cohort_beta (cohort-level) over alpha/beta (window-level).
+    Routes through `resolve_model_params(scope='path', temporal_mode='cohort')`
+    so the upstream-carrier construction sees the same promoted source,
+    quality gates, and kappa fallbacks as the rest of the engine
+    (doc 73f F6 — was previously a posterior-bypass that could diverge
+    from the central resolver on analytic-only fixtures).
     """
-    p_obj = edge.get('p') or {}
-    latency = p_obj.get('latency') or {}
-    lat_post = latency.get('posterior') or {}
-    prob_post = p_obj.get('posterior') or {}
+    from .model_resolver import resolve_model_params
 
-    def _first_num(*vals):
-        for v in vals:
-            if isinstance(v, (int, float)) and math.isfinite(v):
-                return v
+    resolved = resolve_model_params(edge, scope='path', temporal_mode='cohort')
+    if resolved is None:
         return None
 
-    # [v3-debug] dump what's actually available on this edge
-    _edge_id = p_obj.get('id', '?')
-    print(f"[v3-debug] read_edge_cohort_params edge={_edge_id}: "
-          f"lat_post.path_mu_mean={lat_post.get('path_mu_mean')} "
-          f"lat_post.mu_mean={lat_post.get('mu_mean')} "
-          f"lat.path_mu={latency.get('path_mu')} "
-          f"lat.mu={latency.get('mu')} "
-          f"lat_post.path_sigma_mean={lat_post.get('path_sigma_mean')} "
-          f"lat_post.sigma_mean={lat_post.get('sigma_mean')}")
-    mu = _first_num(
-        lat_post.get('path_mu_mean'),
-        lat_post.get('mu_mean'),
-        latency.get('path_mu'),
-        latency.get('mu'))
-    sigma = _first_num(
-        lat_post.get('path_sigma_mean'),
-        lat_post.get('sigma_mean'),
-        latency.get('path_sigma'),
-        latency.get('sigma'))
-    print(f"[v3-debug] read_edge_cohort_params edge={_edge_id}: resolved mu={mu} sigma={sigma}")
-    onset = _first_num(
-        lat_post.get('path_onset_delta_days'),
-        lat_post.get('onset_delta_days'),
-        latency.get('path_onset_delta_days'),
-        latency.get('promoted_onset_delta_days'),
-        latency.get('onset_delta_days'))
-    if onset is None:
-        onset = 0.0
+    lat = resolved.latency  # path_latency if populated, else edge_latency
+    mu = lat.mu
+    sigma = lat.sigma
+    onset = lat.onset_delta_days
 
-    if not isinstance(mu, (int, float)) or not math.isfinite(mu):
+    if not math.isfinite(mu):
         return None
-    if not isinstance(sigma, (int, float)) or not math.isfinite(sigma) or sigma <= 0:
+    if not math.isfinite(sigma) or sigma <= 0:
         return None
 
-    cohort_alpha = prob_post.get('cohort_alpha')
-    cohort_beta = prob_post.get('cohort_beta')
-    post_alpha = prob_post.get('alpha')
-    post_beta = prob_post.get('beta')
-    forecast = (p_obj.get('forecast') or {}).get('mean')
-
-    prob: Optional[float] = None
-    if (isinstance(cohort_alpha, (int, float)) and isinstance(cohort_beta, (int, float))
-            and cohort_alpha > 0 and cohort_beta > 0):
-        prob = float(cohort_alpha) / (float(cohort_alpha) + float(cohort_beta))
-    elif (isinstance(post_alpha, (int, float)) and isinstance(post_beta, (int, float))
-            and post_alpha > 0 and post_beta > 0):
-        prob = float(post_alpha) / (float(post_alpha) + float(post_beta))
-    elif isinstance(forecast, (int, float)) and math.isfinite(forecast) and forecast > 0:
-        prob = float(forecast)
-
-    if prob is None or prob <= 0:
+    prob = resolved.p_mean
+    if not math.isfinite(prob) or prob <= 0:
         return None
-
-    _alpha: Optional[float] = None
-    _beta: Optional[float] = None
-    if (isinstance(cohort_alpha, (int, float)) and isinstance(cohort_beta, (int, float))
-            and cohort_alpha > 0 and cohort_beta > 0):
-        _alpha = float(cohort_alpha)
-        _beta = float(cohort_beta)
-    elif (isinstance(post_alpha, (int, float)) and isinstance(post_beta, (int, float))
-            and post_alpha > 0 and post_beta > 0):
-        _alpha = float(post_alpha)
-        _beta = float(post_beta)
 
     result: Dict[str, float] = {
         'p': float(prob),
         'mu': float(mu),
         'sigma': float(sigma),
-        'onset': float(onset) if isinstance(onset, (int, float)) else 0.0,
+        'onset': float(onset),
     }
-    if _alpha is not None and _beta is not None:
-        result['alpha'] = _alpha
-        result['beta'] = _beta
+
+    if resolved.alpha > 0 and resolved.beta > 0:
+        result['alpha'] = float(resolved.alpha)
+        result['beta'] = float(resolved.beta)
 
     # Doc 61: this function feeds the upstream-carrier + span-prior
     # machinery, which is a forecasting consumer. μ SDs are therefore
-    # read from the predictive slots first (path_mu_sd_pred / mu_sd_pred),
-    # falling back to the bare (epistemic) slot when no predictive value
-    # exists — the correct behaviour when kappa_lat is absent.
-    for _src_keys, _dst_key in [
-        (('path_mu_sd_pred', 'mu_sd_pred', 'path_mu_sd', 'mu_sd'), 'mu_sd'),
-        (('path_sigma_sd', 'sigma_sd'), 'sigma_sd'),
-        (('path_onset_sd', 'onset_sd'), 'onset_sd'),
-    ]:
-        if _dst_key not in result:
-            for _src_key in _src_keys:
-                _v = lat_post.get(_src_key)
-                if isinstance(_v, (int, float)) and math.isfinite(_v) and _v > 0:
-                    result[_dst_key] = float(_v)
-                    break
+    # read from the predictive slot first, falling back to the bare
+    # (epistemic) slot when no predictive value exists — correct when
+    # kappa_lat is absent.
+    mu_sd_pred = lat.mu_sd_pred
+    mu_sd = float(mu_sd_pred) if mu_sd_pred is not None and mu_sd_pred > 0 else float(lat.mu_sd or 0.0)
+    if mu_sd > 0:
+        result['mu_sd'] = mu_sd
+    if lat.sigma_sd and lat.sigma_sd > 0:
+        result['sigma_sd'] = float(lat.sigma_sd)
+    if lat.onset_sd and lat.onset_sd > 0:
+        result['onset_sd'] = float(lat.onset_sd)
 
-    if 'p_sd' not in result and _alpha is not None and _beta is not None:
-        _s = _alpha + _beta
-        result['p_sd'] = float(math.sqrt(_alpha * _beta / (_s * _s * (_s + 1))))
+    if 'alpha' in result and 'beta' in result:
+        a = result['alpha']
+        b = result['beta']
+        s = a + b
+        result['p_sd'] = float(math.sqrt(a * b / (s * s * (s + 1))))
+    elif resolved.p_sd and resolved.p_sd > 0:
+        result['p_sd'] = float(resolved.p_sd)
 
     return result
 

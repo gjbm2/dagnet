@@ -1146,13 +1146,17 @@ export class UpdateManager {
           const entry: ModelVarsEntry = {
             source: 'analytic',
             source_at: latestValue.data_source?.retrieved_at || latestValue.window_to || ukDateNow(),
-            // When (mean, stdev) yields a valid Beta moment-match, populate
-            // the aggregate window-family shape (alpha, beta, n_effective,
-            // provenance). Otherwise the resolver falls through to
-            // `analytic_point_estimate_degraded` (§3.8 register entry 2).
+            // Doc 73f F15: pair `latestValue.forecast` with `latestValue.forecast_stdev`
+            // — both produced by `addEvidenceAndForecastScalars` from the same
+            // weighted window-aggregate population. Top-level `latestValue.stdev`
+            // is the live edge's epistemic SD (a different scope) and was the
+            // wrong companion for the analytic-source mean. When the moment-match
+            // is infeasible (no usable evidence; boundary mean), the block emits
+            // mean only and the resolver returns alpha=beta=0 — consumers render
+            // midline without dispersion bands.
             probability: buildAnalyticProbabilityBlock(
               analyticMean as number,
-              latestValue.stdev,
+              (latestValue as any).forecast_stdev as number,
             ),
           };
 

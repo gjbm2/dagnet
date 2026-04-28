@@ -456,25 +456,21 @@ def resolve_model_params(
             fm = forecast_block.get('mean', 0) or 0
         p_mean = float(fm or 0)
 
-    # Doc 73b §3.8 register entry 1: the D20 evidence-count synthesis
-    # (`alpha = ev_k+1, beta = ev_n-ev_k+1` from `p.evidence.{n, k}`)
-    # is invalid — it borrows scoped current-answer evidence as
-    # aggregate model prior, violating the §3.3.3 layer-isolation
-    # rule. Stage 2 removes that path. Acceptable degradation when no
-    # source-layer α/β is available is the named point-estimate
-    # concentration prior below (register entry 2), which records its
-    # provenance label so callers can detect it via diagnostics.
-    if alpha <= 0 or beta <= 0:
-        if p_mean > 0:
-            # Point-estimate concentration prior (kappa = 200) when
-            # neither posterior_block nor source-layer Beta-shape is
-            # available. Provenance: `analytic_point_estimate_degraded`.
-            _KAPPA_POINT_ESTIMATE_DEGRADED = 200.0
-            _p = max(min(p_mean, 0.99), 0.01)
-            alpha = _p * _KAPPA_POINT_ESTIMATE_DEGRADED
-            beta = (1.0 - _p) * _KAPPA_POINT_ESTIMATE_DEGRADED
-            if analytic_provenance is None:
-                analytic_provenance = 'analytic_point_estimate_degraded'
+    # Doc 73f F15 (28-Apr-26): no synthetic-prior fallback.
+    #
+    # When `alpha` or `beta` could not be resolved from any source
+    # (no Bayes posterior, no `model_vars[analytic].probability` Beta
+    # shape because FE-topo Step 1 had no usable window-aggregate
+    # stdev), leave them at 0. Consumers must tolerate a missing
+    # aggregate dispersion: midlines (`p_mean`) still resolve from
+    # the forecast scalar at line 445; only the dispersion bands
+    # are skipped. Fabricating a prior (the previous κ=200 or κ=2
+    # fallback) was rejected as it manufactures uncertainty out of
+    # nothing. The right place to compute aggregate dispersion is
+    # FE-topo Step 1 over the same weighted window-aggregate
+    # evidence that yields `forecast.mean`, paired into
+    # `addEvidenceAndForecastScalars` as `forecast_stdev` and
+    # consumed by `buildAnalyticProbabilityBlock` upstream.
 
     # Subset-conditioning mass (doc 52 §14.3). Pick the mode-appropriate
     # n_effective from the source layer: bayesian posterior projection,

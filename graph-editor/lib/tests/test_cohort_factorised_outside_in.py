@@ -215,6 +215,7 @@ def _run_param_pack_cached(
     dsl: str,
     *,
     sidecar_path: Optional[str] = None,
+    no_be: bool = False,
 ) -> dict[str, Any]:
     client = get_default_client() if _DATA_REPO_PATH else None
     if client is not None:
@@ -224,6 +225,8 @@ def _run_param_pack_cached(
             "--query", dsl,
             "--no-cache", "--format", "json",
         ]
+        if no_be:
+            args.append("--no-be")
         if sidecar_path is not None:
             sidecar = Path(sidecar_path)
             assert sidecar.exists(), f"sidecar missing: {sidecar}"
@@ -246,6 +249,8 @@ def _run_param_pack_cached(
         "--format",
         "json",
     ]
+    if no_be:
+        cmd.append("--no-be")
     if sidecar_path is not None:
         sidecar = Path(sidecar_path)
         assert sidecar.exists(), f"sidecar missing: {sidecar}"
@@ -277,12 +282,14 @@ def _run_param_pack(
     dsl: str,
     *,
     sidecar: Optional[Path] = None,
+    no_be: bool = False,
 ) -> dict[str, Any]:
     return copy.deepcopy(
         _run_param_pack_cached(
             graph_name,
             dsl,
             sidecar_path=str(sidecar) if sidecar is not None else None,
+            no_be=no_be,
         )
     )
 
@@ -1387,3 +1394,511 @@ def test_zero_evidence_window_rises_as_subject_cdf():
     ):
         payload = _run_analyse_v3(graph_name, f"{subject_dsl}.window(-1d:)")
         _assert_not_flat(_numeric_curve(payload), label=f"{graph_name}/{subject_dsl}")
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Suite C — FE/BE parity canaries via `--no-be`
+# ──────────────────────────────────────────────────────────────────────
+#
+# Doc 73e §8.3 Stage 6 added a `--no-be` flag to `param-pack` that
+# suppresses every BE-bound call. With the flag, `p.mean` reflects FE
+# topo Step 2's `blendedMean = w_e · evidence.mean + (1 − w_e) ·
+# forecast.mean` (see FE_BE_STATS_PARALLELISM.md §"Two logical steps in
+# one pass"). Without the flag, `p.mean` is the CF-conditioned posterior
+# from `compute_forecast_trajectory` (IS reweighting + doc 52 blend).
+#
+# The two writers fill the same field. On synthetic graphs with abundant
+# evidence and well-calibrated priors, FE-topo's blend and CF's
+# IS-conditioned mean should converge — and where they diverge, that is
+# direct evidence that CF arithmetic is producing a different answer
+# than the analytic baseline. Each test here picks a query that makes
+# the convergence argument explicit, with a tolerance justified from
+# the input scale (prior strength vs evidence strength) rather than
+# pulled out of the air.
+#
+# Pre-existing failing tests (Group 2 / Group 3 in 73b §5) are
+# semantic-correctness assertions against factorised oracles. These
+# parity canaries are complementary: they catch CF arithmetic drift
+# even on fixtures where the absolute oracle is hard to construct, by
+# pinning CF against its own cheaper analytic baseline.
+
+
+_PARITY_P_MEAN_TOL = 1e-3
+
+
+@requires_db
+@requires_data_repo
+@requires_python_be
+@requires_synth(_SIMPLE, enriched=True)
+def test_parity_window_mature_high_evidence_p_mean():
+    """Sanity / golden-path canary.
+
+    On a fully-mature high-evidence window query (90 days of data on
+    `simple-a-to-b`, truth p=0.7, t95 ≈ 24 days), CF's IS-conditioned
+    posterior should collapse to ≈ Σy/Σx ≈ evidence.k/n. FE-topo's
+    blendedMean approaches the same limit as `w_evidence → 1`. If the
+    two surfaces disagree by more than the doc-52 blend residual on
+    abundant evidence, something fundamental in CF (proposal / IS /
+    blend wiring) is broken — independent of the cohort-anchor path.
+    """
+    dsl = f"{_SIMPLE_AB}.window(-90d:)"
+    fe_only = _run_param_pack(_SIMPLE, dsl, no_be=True)
+    full = _run_param_pack(_SIMPLE, dsl)
+
+    fe_mean = _param_pack_edge_scalar(fe_only, edge_name=_SIMPLE_AB_EDGE, field="p.mean")
+    full_mean = _param_pack_edge_scalar(full, edge_name=_SIMPLE_AB_EDGE, field="p.mean")
+    delta = abs(fe_mean - full_mean)
+    assert delta <= _PARITY_P_MEAN_TOL, (
+        f"[{_SIMPLE_AB}] FE/BE p.mean parity failed on mature high-evidence window: "
+        f"fe_only={fe_mean:.6f} full_be={full_mean:.6f} delta={delta:.6f} "
+        f"tol={_PARITY_P_MEAN_TOL}"
+    )
+
+
+@requires_db
+@requires_data_repo
+@requires_python_be
+@requires_synth(_LAT4, enriched=True)
+def test_parity_cohort_identity_collapse_p_mean():
+    """Identity-collapse parity.
+
+    `cohort(synth-lat4-c, -90d:)` on edge `c→d` is the identity case:
+    the anchor equals the edge's from_node, so the carrier-materialisation
+    block in `cohort_forecast_v3.py` (use_factorised_carrier=True gate)
+    short-circuits with reach=1, and CF should produce the same answer
+    as `window(-90d:)` on the same edge. FE-topo doesn't have a
+    cohort-anchor branch at all — it emits the same blendedMean for any
+    temporal mode on the edge with the same evidence. Both surfaces
+    therefore reduce to the window case; FE/BE parity should hold.
+
+    Catches: cohort-mode CF entry that mis-fires on identity collapse —
+    something firing when reach=1 that should be a no-op.
+    """
+    cohort_dsl = f"{_LAT4_CD}.cohort(synth-lat4-c,-90d:)"
+    fe_only = _run_param_pack(_LAT4, cohort_dsl, no_be=True)
+    full = _run_param_pack(_LAT4, cohort_dsl)
+
+    fe_mean = _param_pack_edge_scalar(fe_only, edge_name=_LAT4_CD_EDGE, field="p.mean")
+    full_mean = _param_pack_edge_scalar(full, edge_name=_LAT4_CD_EDGE, field="p.mean")
+    delta = abs(fe_mean - full_mean)
+    assert delta <= _PARITY_P_MEAN_TOL, (
+        f"[{_LAT4_CD}] FE/BE p.mean parity failed on identity-collapse cohort: "
+        f"fe_only={fe_mean:.6f} full_be={full_mean:.6f} delta={delta:.6f} "
+        f"tol={_PARITY_P_MEAN_TOL}"
+    )
+
+
+@requires_db
+@requires_data_repo
+@requires_python_be
+@requires_synth(_LAT4, enriched=True)
+def test_parity_subject_equivalent_cohort_anchor_override_p_mean():
+    """Subject-equivalent cohort vs window across surfaces — Group 2 catcher.
+
+    `cohort(synth-lat4-b, -90d:)` on edge `c→d` is the canonical
+    single-hop anchor-override case (truth p_cd = 0.65). The cohort
+    framing changes the latency-completeness story but should not
+    change the long-run edge rate — the same edge population is
+    observed on the same days. FE-topo, which has no cohort-anchor
+    branch, returns the same blendedMean as for a window query. CF
+    *should* converge to the same edge rate at saturation; the
+    carrier-materialisation block changes how cohorts are projected but
+    not the asymptotic edge p.
+
+    Catches: 73b §5 Group 2's 12–18% under-shift. With the CF defect
+    present (reach-scaled evidence counts feeding IS log-weight, see
+    73b §8.2), FE/BE diverge by ~0.1+ on this query.
+    """
+    cohort_dsl = f"{_LAT4_CD}.cohort(synth-lat4-b,-90d:)"
+    fe_only = _run_param_pack(_LAT4, cohort_dsl, no_be=True)
+    full = _run_param_pack(_LAT4, cohort_dsl)
+
+    fe_mean = _param_pack_edge_scalar(fe_only, edge_name=_LAT4_CD_EDGE, field="p.mean")
+    full_mean = _param_pack_edge_scalar(full, edge_name=_LAT4_CD_EDGE, field="p.mean")
+    delta = abs(fe_mean - full_mean)
+    assert delta <= _PARITY_P_MEAN_TOL, (
+        f"[{_LAT4_CD}] FE/BE p.mean parity failed on single-hop anchor-override cohort: "
+        f"fe_only={fe_mean:.6f} full_be={full_mean:.6f} delta={delta:.6f} "
+        f"tol={_PARITY_P_MEAN_TOL} — likely Group 2 (carrier-materialisation reach-scaling)"
+    )
+
+
+@requires_db
+@requires_data_repo
+@requires_python_be
+@requires_synth(_SIMPLE, enriched=True)
+def test_parity_zero_evidence_cohort_returns_prior():
+    """Zero-evidence baseline — both surfaces should return the prior.
+
+    A degenerate one-day cohort window with no maturation has no
+    evidence to condition on. FE-topo's blendedMean reduces to
+    `forecast.mean` (the model_vars[analytic] aggregate prior mean) as
+    `w_evidence → 0`. CF's conjugate update with `Σy ≈ Σx ≈ 0` returns
+    `α_prior / (α + β) = prior mean`. The IS reweighting gate at
+    `forecast_state.py:1152` (`_E_fail >= 1.0`) does not fire on
+    degenerate-zero evidence; doc-52 blend trivially returns the
+    prior. Both surfaces should land at the prior mean, and at each
+    other.
+
+    Catches: CF doing anything *interesting* on zero-evidence, which
+    is a defect — there is nothing to condition on. Pins the prior
+    baseline so the low-evidence Group 3 test can define the slope.
+    """
+    cohort_dsl = f"{_SIMPLE_BC}.cohort(1-Mar-26:1-Mar-26).asat(1-Mar-26)"
+    fe_only = _run_param_pack(_SIMPLE, cohort_dsl, no_be=True)
+    full = _run_param_pack(_SIMPLE, cohort_dsl)
+
+    fe_mean = _param_pack_edge_scalar(fe_only, edge_name="simple-b-to-c", field="p.mean")
+    full_mean = _param_pack_edge_scalar(full, edge_name="simple-b-to-c", field="p.mean")
+    delta = abs(fe_mean - full_mean)
+    assert delta <= _PARITY_P_MEAN_TOL, (
+        f"[{_SIMPLE_BC}] FE/BE p.mean parity failed on zero-evidence cohort: "
+        f"fe_only={fe_mean:.6f} full_be={full_mean:.6f} delta={delta:.6f} "
+        f"tol={_PARITY_P_MEAN_TOL} — both surfaces should return the prior on zero evidence"
+    )
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Suite D — analytic ↔ bayes source parity canaries via `--bayes-vars`
+# ──────────────────────────────────────────────────────────────────────
+#
+# Purpose: assert that analytic-source and bayesian-source promotion paths
+# converge on golden-condition queries where they should. Complements
+# Suite A (oracle correctness), Suite B (FE/CLI surface parity), and
+# Suite C (FE/BE parity within one source) by pinning the *source* axis
+# of variation.
+#
+# Pattern: each test runs `analyse --type cohort_maturity` twice on the
+# same DSL — once **without** sidecar (analytic source promoted, kappa-
+# derived prior) and once **with** the matching
+# `bayes/fixtures/<graph>.bayes-vars.json` sidecar (bayesian source
+# promoted, fitted posterior). Both runs use full BE/CF. Compare per-tau
+# `midpoint` curves and last-row `p_infinity_mean` with tolerances
+# justified per test.
+#
+# Why this matters: outside-in tests have been running on analytic
+# sources because synth fixture parameter files don't carry `posterior:`
+# blocks (see 73f F3). Suite D forces the bayesian projection path to
+# run by injecting a fitted posterior via `--bayes-vars`. Where Suite
+# C's `--no-be` flag distinguishes BE-arithmetic vs FE-only divergence,
+# Suite D's sidecar distinguishes analytic-source vs bayesian-source
+# promotion in the model resolver and downstream consumers. F1-class
+# defects (reach-scaled IS log-weight, see 73f) typically affect the
+# small analytic prior far more than the large bayes prior; that
+# asymmetry is the core diagnostic Suite D pins.
+#
+# `analyse` (not `param-pack`) is used because F1 manifests at
+# intermediate τ — the asymptote can land near truth while the
+# conditioned median collapses at τ=15-20. Curve comparison catches
+# what a scalar comparison would miss.
+
+_BAYES_VARS_DIR = _REPO_ROOT / "bayes" / "fixtures"
+_SOURCE_PARITY_TOL = 1e-3
+_ZERO_EVIDENCE_PARITY_TOL = 5e-3
+_F1_DIVERGENCE_FLOOR = 0.30
+
+
+def _bayes_vars_path(graph_name: str) -> Path:
+    return _BAYES_VARS_DIR / f"{graph_name}.bayes-vars.json"
+
+
+def _promoted_source_from_cm(payload: dict[str, Any]) -> str:
+    """Read `promoted_source` from cohort_maturity payload's first model curve.
+
+    The cohort_maturity payload carries per-scenario per-subject curves
+    under `result.metadata.model_curves[<key>].params.promoted_source`.
+    For Suite D's single-scenario queries there is exactly one curve.
+    Returns '' when absent so callers can produce informative failures.
+    """
+    metadata = (payload.get("result") or {}).get("metadata") or {}
+    curves = metadata.get("model_curves") or {}
+    if not curves:
+        return ""
+    first = next(iter(curves.values())) or {}
+    params = first.get("params") or {}
+    return str(params.get("promoted_source") or "")
+
+
+def _max_pointwise_relative_diff(
+    curve_a: dict[int, float],
+    curve_b: dict[int, float],
+    *,
+    tau_min: int,
+    tau_max: int,
+    eps: float = 1e-9,
+) -> tuple[float, int]:
+    """Return (max relative diff, tau where it occurs) on shared τ in [tau_min, tau_max]."""
+    shared = sorted(t for t in (set(curve_a) & set(curve_b)) if tau_min <= t <= tau_max)
+    if not shared:
+        return 0.0, -1
+    best_rel, best_tau = 0.0, shared[0]
+    for tau in shared:
+        a, b = curve_a[tau], curve_b[tau]
+        denom = max(abs(a), abs(b), eps)
+        rel = abs(a - b) / denom
+        if rel > best_rel:
+            best_rel, best_tau = rel, tau
+    return best_rel, best_tau
+
+
+@requires_db
+@requires_data_repo
+@requires_python_be
+@requires_synth(_SIMPLE, enriched=True)
+def test_d0_bayes_vars_actually_promotes_to_bayesian():
+    """Sanity: --bayes-vars sidecar promotes to bayesian source.
+
+    Without sidecar: synth fixture has no `posterior:` block (see 73f F3),
+    so promotion falls back to analytic. With sidecar: the bayes patch
+    service applies the fitted posterior via the same applyPatchAndCascade
+    codepath the browser uses for webhook patches (see
+    `cohort-cf-defect-and-cli-fe-parity.md`); the rhat/ess gate passes
+    (rhat=1.0013, ess=16026 in `bayes/fixtures/synth-simple-abc.bayes-vars.json`)
+    and bayesian is promoted.
+
+    If this fails, the rest of Suite D is meaningless — the sidecar
+    never took effect and the two runs are both analytic. Guards every
+    other Suite D test.
+    """
+    sidecar = _bayes_vars_path(_SIMPLE)
+    if not sidecar.exists():
+        pytest.skip(f"sidecar missing: {sidecar}")
+
+    dsl = f"{_SIMPLE_AB}.window(-90d:)"
+    analytic = _run_analyse_v3(_SIMPLE, dsl)
+    bayes = _run_analyse_v3(_SIMPLE, dsl, sidecar=sidecar)
+
+    analytic_source = _promoted_source_from_cm(analytic)
+    bayes_source = _promoted_source_from_cm(bayes)
+
+    assert analytic_source == "analytic", (
+        f"expected promoted_source='analytic' without sidecar, got {analytic_source!r}; "
+        f"the synth fixture parameter file may have grown a posterior block "
+        f"(in which case 73f F3 needs revisiting)"
+    )
+    assert bayes_source == "bayesian", (
+        f"expected promoted_source='bayesian' with sidecar, got {bayes_source!r}; "
+        f"sidecar plumbing or quality gate may be broken (see 73f F3 / bayesPatchService)"
+    )
+
+
+@requires_db
+@requires_data_repo
+@requires_python_be
+@requires_synth(_SIMPLE, enriched=True)
+def test_d1_parity_analytic_vs_bayes_mature_window():
+    """Mature high-evidence window — both surfaces converge to evidence.k/n.
+
+    On a 90-day window with ~5000/day at simple-a (truth p=0.7), evidence
+    overwhelms both priors. Analytic promotion (kappa-derived α+β ≈ 50)
+    and bayesian promotion (fitted α+β ≈ 11000) should both produce
+    `p.mean ≈ k/n ≈ 0.7099`. Asymptote parity to 1e-3; curve parity to
+    2e-2 across τ ∈ [10, 60] (looser because the curve carries some
+    early-τ shape that posterior dispersion can perturb without moving
+    the asymptote).
+
+    Catches: bayes-vars projection bugs that skew p.posterior; window-
+    mode rate computation regressions on either source; bayesian-side
+    IS proposal divergence under abundant evidence.
+    """
+    sidecar = _bayes_vars_path(_SIMPLE)
+    if not sidecar.exists():
+        pytest.skip(f"sidecar missing: {sidecar}")
+
+    dsl = f"{_SIMPLE_AB}.window(-90d:)"
+    analytic = _run_analyse_v3(_SIMPLE, dsl)
+    bayes = _run_analyse_v3(_SIMPLE, dsl, sidecar=sidecar)
+
+    a_p = float(_last_row(analytic).get("p_infinity_mean") or 0.0)
+    b_p = float(_last_row(bayes).get("p_infinity_mean") or 0.0)
+    delta = abs(a_p - b_p)
+    assert delta <= _SOURCE_PARITY_TOL, (
+        f"[{_SIMPLE_AB}] analytic vs bayes p_infinity parity failed on mature window: "
+        f"analytic={a_p:.6f} bayes={b_p:.6f} delta={delta:.6f} tol={_SOURCE_PARITY_TOL}"
+    )
+
+    a_curve = _numeric_curve(analytic, field="midpoint")
+    b_curve = _numeric_curve(bayes, field="midpoint")
+    rel_diff, tau_at = _max_pointwise_relative_diff(
+        a_curve, b_curve, tau_min=10, tau_max=60
+    )
+    assert rel_diff <= 0.02, (
+        f"[{_SIMPLE_AB}] analytic vs bayes midpoint curve diverges in stable band: "
+        f"max rel diff {rel_diff:.4f} at tau={tau_at} on a mature window where "
+        f"both surfaces should be evidence-dominated"
+    )
+
+
+@requires_db
+@requires_data_repo
+@requires_python_be
+@requires_synth(_SIMPLE, enriched=True)
+def test_d2_parity_analytic_vs_bayes_identity_collapse_cohort():
+    """Identity-collapse cohort A=X — carrier collapses, both → window result.
+
+    `cohort(simple-b, simple-b-to-c, -90d:)` is the A=X case for edge
+    b→c: the anchor equals the edge's from_node, so the carrier-
+    materialisation gate at cohort_forecast_v3.py:953 short-circuits
+    with reach=1. Both analytic and bayesian sources should collapse to
+    the same window edge rate.
+
+    Catches: cohort-mode bayesian path that mis-fires on identity
+    collapse — something firing when reach=1 that should be a no-op,
+    but only on the bayes side (e.g., bayes posterior projection
+    interacting with the identity-collapse gate differently from
+    analytic).
+    """
+    sidecar = _bayes_vars_path(_SIMPLE)
+    if not sidecar.exists():
+        pytest.skip(f"sidecar missing: {sidecar}")
+
+    dsl = f"{_SIMPLE_BC}.cohort(simple-b,-90d:)"
+    analytic = _run_analyse_v3(_SIMPLE, dsl)
+    bayes = _run_analyse_v3(_SIMPLE, dsl, sidecar=sidecar)
+
+    a_p = float(_last_row(analytic).get("p_infinity_mean") or 0.0)
+    b_p = float(_last_row(bayes).get("p_infinity_mean") or 0.0)
+    delta = abs(a_p - b_p)
+    assert delta <= _SOURCE_PARITY_TOL, (
+        f"[{_SIMPLE_BC}] analytic vs bayes p_infinity parity failed on identity-collapse cohort: "
+        f"analytic={a_p:.6f} bayes={b_p:.6f} delta={delta:.6f} tol={_SOURCE_PARITY_TOL}"
+    )
+
+
+@requires_db
+@requires_data_repo
+@requires_python_be
+@requires_synth(_SIMPLE, enriched=True)
+def test_d3_parity_analytic_vs_bayes_zero_evidence_returns_prior():
+    """Zero-evidence cohort — both surfaces return their respective prior.
+
+    A degenerate one-day cohort with no maturation has nothing to
+    condition on. Both surfaces should return their prior:
+      - analytic: `forecast_mean` from values block ≈ 0.6034
+      - bayesian: α/(α+β) ≈ 6925.5 / 11510.5 ≈ 0.6017
+
+    The two priors differ by ~1.7e-3 at source (synth_gen vs bayes-fit
+    drift). Tolerance loosened to 5e-3 to tolerate this and small
+    downstream drift; tightening would require reconciling synth-gen's
+    analytic forecast_mean with the bayes-fitted α/β mean upstream.
+
+    Catches: prior-vs-evidence wiring bug where one surface interprets
+    the prior differently from the other on zero evidence; CF doing
+    anything *interesting* on zero-evidence on one source but not the
+    other.
+    """
+    sidecar = _bayes_vars_path(_SIMPLE)
+    if not sidecar.exists():
+        pytest.skip(f"sidecar missing: {sidecar}")
+
+    dsl = f"{_SIMPLE_BC}.cohort(1-Mar-26:1-Mar-26).asat(1-Mar-26)"
+    analytic = _run_analyse_v3(_SIMPLE, dsl)
+    bayes = _run_analyse_v3(_SIMPLE, dsl, sidecar=sidecar)
+
+    a_p = float(_last_row(analytic).get("p_infinity_mean") or 0.0)
+    b_p = float(_last_row(bayes).get("p_infinity_mean") or 0.0)
+    delta = abs(a_p - b_p)
+    assert delta <= _ZERO_EVIDENCE_PARITY_TOL, (
+        f"[{_SIMPLE_BC}] analytic vs bayes p_infinity parity failed on zero-evidence cohort: "
+        f"analytic={a_p:.6f} bayes={b_p:.6f} delta={delta:.6f} tol={_ZERO_EVIDENCE_PARITY_TOL} "
+        f"— both surfaces should return their respective prior on zero evidence"
+    )
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "73f F1 — reach-scaled evidence counts feeding IS log-weight. "
+        "Analytic source's small prior (kappa~50) is overwhelmed by reach-"
+        "scaled cohort evidence and produces Group 3's ~60% under-shift; "
+        "bayes-vars' large prior (α+β≈11500) dominates and stays close to "
+        "oracle. Parity therefore fails until F1 is fixed. Strict-xfail: "
+        "when F1 lands, this test starts passing and the marker fires, "
+        "signalling closure."
+    ),
+)
+@requires_db
+@requires_data_repo
+@requires_python_be
+@requires_synth(_SIMPLE, enriched=True)
+def test_d4_parity_analytic_vs_bayes_low_evidence_cohort_F1_signature():
+    """F1-class catcher in PARITY form (currently xfail-strict).
+
+    Same DSL as Suite A's `test_low_evidence_cohort_matches_factorised_convolution_oracle`
+    (Group 3): `cohort(1-Mar-26:3-Mar-26).asat(3-Mar-26)` on b→c.
+
+    Without sidecar: F1 reach-scales the IS log-weight evidence at
+    `forecast_state.py:1149-1173`, the small analytic prior gets
+    dominated, and the cohort midpoint collapses ~60% below the
+    factorised oracle in τ=15-20.
+    With sidecar: bayes prior strength (α+β≈11500) dominates the reach-
+    scaled correction; midpoint stays close to prior/oracle.
+    Result: parity fails until F1 is fixed.
+
+    When F1 is fixed, both surfaces converge and this test passes;
+    strict=True fires the xfail marker as the "F1 closed" signal.
+    """
+    sidecar = _bayes_vars_path(_SIMPLE)
+    if not sidecar.exists():
+        pytest.skip(f"sidecar missing: {sidecar}")
+
+    dsl = f"{_SIMPLE_BC}.cohort(1-Mar-26:3-Mar-26).asat(3-Mar-26)"
+    analytic = _run_analyse_v3(_SIMPLE, dsl)
+    bayes = _run_analyse_v3(_SIMPLE, dsl, sidecar=sidecar)
+
+    a_curve = _numeric_curve(analytic, field="midpoint")
+    b_curve = _numeric_curve(bayes, field="midpoint")
+    rel_diff, tau_at = _max_pointwise_relative_diff(
+        a_curve, b_curve, tau_min=15, tau_max=20
+    )
+    assert rel_diff <= _F1_DIVERGENCE_FLOOR, (
+        f"[{_SIMPLE_BC}] analytic vs bayes midpoint curves diverge by "
+        f"{rel_diff:.4f} (at tau={tau_at}) on the low-evidence cohort — "
+        f"currently expected to fail (F1, see 73f)"
+    )
+
+
+@requires_db
+@requires_data_repo
+@requires_python_be
+@requires_synth(_SIMPLE, enriched=True)
+def test_d5_anti_parity_analytic_vs_bayes_low_evidence_cohort_F1_pinned():
+    """F1-class catcher in ANTI-PARITY form (currently passing, fires on fix).
+
+    Dual of D4: asserts that the analytic vs bayes midpoint curves
+    DIVERGE by at least `_F1_DIVERGENCE_FLOOR` (30%) on the same low-
+    evidence cohort that exhibits Group 3. Currently passes because F1's
+    reach-scaling affects the small analytic prior much more than the
+    large bayes prior.
+
+    When F1 is fixed and both surfaces converge to oracle, this assertion
+    starts failing — the diagnostic signal that F1 is closed. Together
+    with D4 (xfail-strict), Suite D pins F1's status from two angles:
+      - D4: parity assertion currently failing (xfail), passes on fix
+      - D5: anti-parity assertion currently passing, fails on fix
+
+    A failure here without a corresponding D4 transition (D4 still
+    failing) would indicate that the bayes-vars projection has stopped
+    taking effect, in which case re-check D0 first.
+    """
+    sidecar = _bayes_vars_path(_SIMPLE)
+    if not sidecar.exists():
+        pytest.skip(f"sidecar missing: {sidecar}")
+
+    dsl = f"{_SIMPLE_BC}.cohort(1-Mar-26:3-Mar-26).asat(3-Mar-26)"
+    analytic = _run_analyse_v3(_SIMPLE, dsl)
+    bayes = _run_analyse_v3(_SIMPLE, dsl, sidecar=sidecar)
+
+    a_curve = _numeric_curve(analytic, field="midpoint")
+    b_curve = _numeric_curve(bayes, field="midpoint")
+    rel_diff, tau_at = _max_pointwise_relative_diff(
+        a_curve, b_curve, tau_min=15, tau_max=20
+    )
+    assert rel_diff > _F1_DIVERGENCE_FLOOR, (
+        f"[{_SIMPLE_BC}] analytic vs bayes midpoint curves agree to within "
+        f"{rel_diff:.4f} (at tau={tau_at}) on the low-evidence cohort — "
+        f"unexpected convergence. If F1 has been fixed (see 73f), expect "
+        f"this test to fail intentionally; if not, the bayes-vars projection "
+        f"may have stopped taking effect (re-check D0). "
+        f"floor={_F1_DIVERGENCE_FLOOR:.2f}"
+    )

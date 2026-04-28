@@ -159,7 +159,6 @@ def _compute_surprise_gauge(
     from runner.forecast_runtime import (
         build_prepared_runtime_bundle,
         get_cf_mode_and_reason,
-        is_cf_sweep_eligible,
     )
     from runner.forecast_preparation import prepare_forecast_subject_group
     from runner.forecast_state import (
@@ -390,7 +389,6 @@ def _compute_surprise_gauge(
         p_conditioning_total_x=total_n,
         p_conditioning_total_y=total_k,
         resolved_params=resolved,
-        sweep_eligible=True,
         cf_mode='sweep',
         cf_reason=None,
     )

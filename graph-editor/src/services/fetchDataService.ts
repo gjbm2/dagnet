@@ -2091,6 +2091,25 @@ export async function runStage2EnhancementsAndInboundN(
                     // source mean and let the resolver's §3.8 register
                     // entry 2 (`analytic_point_estimate_degraded`)
                     // handle it with explicit provenance.
+                    // Doc 73f F15: the analytic probability block is owned
+                    // by `addEvidenceAndForecastScalars` →
+                    // `UpdateManager.applyMappings`, which pair the
+                    // recency-weighted mature-day forecast mean with a
+                    // matching `forecast_stdev` derived from the SAME
+                    // weighted population. This bootstrap path reads
+                    // from the original param file (via fileRegistry)
+                    // and so cannot reproduce that weighted-N — it
+                    // should not rebuild the probability block here, or
+                    // it would pair the right mean with a wrong (raw
+                    // header-n) stdev and produce α/β that describe a
+                    // different evidence set than `forecast.mean`.
+                    //
+                    // Instead: preserve the existing probability block
+                    // when present, and only contribute the latency
+                    // fields the bootstrap is responsible for.
+                    const existingAnalytic = (ep.model_vars ?? []).find(
+                      (mv: any) => mv?.source === 'analytic',
+                    );
                     const bootstrapAnalyticMean =
                       typeof (latestValue as any).forecast === 'number' &&
                       Number.isFinite((latestValue as any).forecast)
@@ -2099,10 +2118,13 @@ export async function runStage2EnhancementsAndInboundN(
                     const analyticEntry: any = {
                       source: 'analytic',
                       source_at: (latestValue as any).data_source?.retrieved_at || ukDateNow(),
-                      probability: buildAnalyticProbabilityBlock(
-                        bootstrapAnalyticMean as number,
-                        latestValue.stdev ?? 0,
-                      ),
+                      // If UpdateManager has already populated the block
+                      // (with weighted-N α/β and provenance), keep it.
+                      // Otherwise emit a probability block carrying mean
+                      // only — no fabricated stdev.
+                      probability: existingAnalytic?.probability ?? {
+                        ...(bootstrapAnalyticMean !== undefined ? { mean: bootstrapAnalyticMean } : {}),
+                      },
                       latency: {
                         mu: stats.fit.mu,
                         sigma: stats.fit.sigma,
@@ -2290,9 +2312,14 @@ export async function runStage2EnhancementsAndInboundN(
                     prev,
                   );
                 }
-                if (ev.latency?.p_sd != null && Number.isFinite(ev.latency.p_sd) && ev.latency.p_sd > 0) {
-                  existing.probability.stdev = ev.latency.p_sd;
-                }
+                // Doc 73f F15: the analytic probability block is owned by
+                // `buildAnalyticProbabilityBlock` from `(forecast_mean,
+                // forecast_stdev)`, where both are produced by
+                // `addEvidenceAndForecastScalars` from the same weighted
+                // window-aggregate population. Overwriting `.stdev` here
+                // with `ev.latency.p_sd` (a heuristic computed elsewhere)
+                // would leave α/β stale relative to the new stdev. The
+                // probability block stays internally consistent.
               }
 
               // Re-run promotion so promoted_* scalars reflect analytic entries

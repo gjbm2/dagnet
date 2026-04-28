@@ -530,9 +530,22 @@ class TestResolverNonBayes:
         assert abs(result.edge_latency.mu_sd - 0.1) < 1e-6
 
     def test_no_posterior_no_model_vars_forecast_mean_only(self):
-        """Edge with only forecast.mean for probability — minimal viable
-        edge. Resolver should still produce usable params if latency
-        flat fields are present.
+        """Edge with only forecast.mean and no aggregate Beta shape
+        anywhere (no Bayes posterior, no analytic moment-match because
+        FE-topo Step 1 had no usable window-aggregate stdev). The
+        resolver returns the midline `p_mean` from forecast.mean and
+        leaves `alpha = beta = 0` so consumers know there is no
+        aggregate dispersion to render.
+
+        Doc 73f F15 (28-Apr-26): replaces the previous kappa=200 and
+        kappa=2 silent fallbacks. Manufacturing a prior from a fixed
+        concentration was rejected — uncertainty cannot be invented
+        from nothing. Aggregate dispersion comes from FE-topo Step 1
+        over the same weighted window-aggregate evidence that yields
+        `forecast.mean`; when that evidence is absent (or the boundary
+        case mean ∈ {0, 1} makes the moment-match infeasible), no
+        aggregate Beta is emitted and downstream consumers render
+        midline only.
         """
         from runner.model_resolver import resolve_model_params
 
@@ -540,21 +553,41 @@ class TestResolverNonBayes:
             'p': {
                 'forecast': {'mean': 0.25},
                 'latency': {'mu': 4.0, 'sigma': 1.0},
-                # No posterior, no model_vars
+                # No posterior, no model_vars, no evidence
             }
         }
         result = resolve_model_params(edge, scope='edge', temporal_mode='window')
         assert result is not None
         assert abs(result.p_mean - 0.25) < 1e-6
-        # D20: resolver now derives alpha/beta from kappa=200 fallback
-        # when no posterior or evidence counts are available.
-        assert result.alpha > 0, 'D20: resolver should provide alpha'
-        assert result.beta > 0, 'D20: resolver should provide beta'
-        kappa = result.alpha + result.beta
-        assert abs(kappa - 200.0) < 1e-6, f'Expected kappa=200 fallback, got {kappa}'
-        assert abs(result.alpha / kappa - 0.25) < 1e-6, 'Alpha should reflect p_mean'
+        assert result.alpha == 0.0, 'no-aggregate-Beta path must leave alpha=0'
+        assert result.beta == 0.0, 'no-aggregate-Beta path must leave beta=0'
         assert abs(result.edge_latency.mu - 4.0) < 1e-6
         assert abs(result.edge_latency.sigma - 1.0) < 1e-6
+
+    def test_no_aggregate_beta_with_evidence_returns_zero_alpha_beta(self):
+        """Even when scoped query evidence is present (`p.evidence.n > 0`),
+        if no aggregate Beta shape was bound by upstream FE-topo or Bayes,
+        the resolver returns alpha=beta=0 rather than fabricating a prior
+        from the scoped evidence. Doc 73b §3.3.3 layer-isolation: scoped
+        current-answer fields cannot seed an aggregate prior. Doc 73f F15:
+        fabricated priors (κ=200, κ=2) were removed.
+        """
+        from runner.model_resolver import resolve_model_params
+
+        edge = {
+            'p': {
+                'forecast': {'mean': 0.25},
+                'latency': {'mu': 4.0, 'sigma': 1.0},
+                'evidence': {'n': 1000, 'k': 250, 'mean': 0.25},
+                # No posterior, no model_vars — upstream binding
+                # did not populate the aggregate Beta shape.
+            }
+        }
+        result = resolve_model_params(edge, scope='edge', temporal_mode='window')
+        assert result is not None
+        assert abs(result.p_mean - 0.25) < 1e-6
+        assert result.alpha == 0.0, 'aggregate Beta missing → alpha=0 (no fabrication)'
+        assert result.beta == 0.0, 'aggregate Beta missing → beta=0 (no fabrication)'
 
 
 class TestForecastEngineNonBayes:

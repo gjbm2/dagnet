@@ -335,14 +335,17 @@ def test_blend_non_latency_full_r():
     assert res.rows[0]['p_infinity_mean'] == pytest.approx(0.4, abs=1e-4)
 
 
-def test_blend_non_latency_skip_query_scoped():
-    """analytic source skips blend via source_query_scoped."""
+def test_blend_non_latency_analytic_source_uses_same_blend_contract():
+    """Analytic aggregate α/β uses the same blend contract as bayesian."""
     resolved = _make_resolved(source='analytic', alpha=20.0, beta=30.0, n_effective=50.0)
     fe = _make_fe([{'x_frozen': 10.0, 'y_frozen': 4.0}] * 3)
     res = _non_latency_rows(fe=fe, resolved=resolved, sweep_to='2026-04-01')
-    assert res.blend_applied is False
-    assert res.blend_skip_reason == 'source_query_scoped'
-    # Query-scoped branch returns aggregate unchanged.
+    assert res.blend_applied is True
+    assert res.r == pytest.approx(0.6)
+    assert res.m_S == pytest.approx(30.0)
+    assert res.m_G == pytest.approx(50.0)
+    assert res.blend_skip_reason is None
+    # Aggregate and scoped evidence have the same mean in this fixture.
     assert res.rows[0]['p_infinity_mean'] == pytest.approx(20.0 / 50.0)
 
 

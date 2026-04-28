@@ -452,7 +452,8 @@ def test_query_scoped_identity_carrier_collapses_public_evidence_basis():
     cohort_rows = _extract_maturity_rows(cohort_result)
     window_rows = _extract_maturity_rows(window_result)
 
-    assert cohort_subject.get("cf_reason") == "query_scoped_posterior"
+    assert cohort_subject.get("cf_mode") == "sweep"
+    assert cohort_subject.get("cf_reason") is None
     assert cohort_rows and window_rows
 
     window_by_tau = {row["tau_days"]: row for row in window_rows}
@@ -672,8 +673,8 @@ def test_chart_and_daily_conversions_do_not_collapse_window_and_cohort():
         "cohort(-90d:)",
     )
 
-    assert window_daily["cf_mode"] == "analytic_degraded"
-    assert cohort_daily["cf_mode"] == "analytic_degraded"
+    assert window_daily["cf_mode"] == "sweep"
+    assert cohort_daily["cf_mode"] == "sweep"
     assert window_daily["total_conversions"] != cohort_daily["total_conversions"]
 
     window_by_date = {row["date"]: row for row in window_daily["rate_by_cohort"]}

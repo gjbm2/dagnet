@@ -4,6 +4,8 @@ u 73b — Final Outstanding Items
 **Status**: Open punch list — captured at end of Stage 5, with Stage 6 underway
 **Related**: `73b-be-topo-removal-and-forecast-state-separation-plan.md`
 
+> **Note (28-Apr-26)** — the outside-in CLI cohort-engine investigation (originally §4, §5, §3.7, §3.10, §8 in this doc) has been spun out to [`73f-outside-in-cohort-engine-investigation.md`](73f-outside-in-cohort-engine-investigation.md) as a single working location. Sections in this doc remain for traceability; **active engine work happens in 73f**. Items that stay in this doc: §3.1–§3.6 (transport-cleanup spot-checks), §3.8 (Playwright regression), §3.9 (surprise gauge), §7.4–§7.6 (non-engine forensic findings).
+
 ## Purpose
 
 Stages 0–5 of plan 73b have landed. Stage 6 is in flight. This doc captures the items that remain open at this point so they are not lost when the plan itself is closed. They fall into seven sections:
@@ -30,6 +32,19 @@ Expected 73e closures to verify first:
 - §7.2 — `parity-test` is either removed or no longer treated as a 73a/73b parity signal.
 - §7.5 — only if implemented as part of 73e Stage 5: missing posterior slices clear stale graph projection rather than leaving old in-schema Bayesian fields in place.
 - §3.7 / §5 Group 3 — 73e Stage 6 should provide the `--no-be` diagnostic needed to separate FE/materialisation divergence from BE/CF-engine divergence; it is not expected to fix the underlying engine arithmetic by itself.
+
+### Verification status — 28-Apr-26 (after 73e closure)
+
+Source-inspection pass against the 73e implementation. Five of six expected closures confirmed; one is still open with a contradiction between docstring and implementation that needs a deliberate triage call.
+
+| 73b item | Status | Evidence |
+|---|---|---|
+| §3.1 production re-contexting upserts `model_vars[bayesian]` + runs promotion | **CLOSED** | [posteriorSliceContexting.ts:290-309](../../../graph-editor/src/services/posteriorSliceContexting.ts#L290) — `contextLiveGraphForCurrentDsl` now runs `syncBayesianAndPromote` over every edge and conditional `p`. Builds a `bayesian` ModelVarsEntry with quality gate, calls `upsertModelVars` then `applyPromotion`. `model_vars[analytic]` preserved (upsert keys on `source`). [useDSLReaggregation.ts:107-127](../../../graph-editor/src/hooks/useDSLReaggregation.ts#L107) calls it on every DSL change via the production hook. |
+| §3.2 f+e prep mutation + chart-write leak | **CLOSED** | [analysisComputePreparationService.ts:578](../../../graph-editor/src/services/analysisComputePreparationService.ts#L578) — `cloneGraphWithoutBayesRuntimeFields` runs unconditionally for any custom-mode caller-provided graph, before recontexting/engorgement. Persistence side: [repositoryOperationsService.ts:888,1176](../../../graph-editor/src/services/repositoryOperationsService.ts#L888) strips on the way out (covers chart-file writes routed through the repo write path). |
+| §3.4 / §7.1 CLI conditioned_forecast prepared dispatch + display_settings | **CLOSED** | [analyse.ts:340](../../../graph-editor/src/cli/commands/analyse.ts#L340) goes through `runPreparedAnalysis(prepared)`; the direct `/api/forecast/conditioned` POST and the hand-rolled snapshot are gone. [analysisComputePreparationService.ts:884-896](../../../graph-editor/src/services/analysisComputePreparationService.ts#L884) dispatches CF via `graphComputeClient.forecastConditionedScenarios` with `displaySettings: prepared.displaySettings` forwarded. |
+| §7.2 `parity-test` retired | **CLOSED** | File deleted in commit `a1f6f2b5` (28-Apr-26 "73b -- remedials"). |
+| §7.5 missing-slices branch clears stale projection | **CLOSED** | Decided 28-Apr-26: strict-clear is the contract, matching the asat-no-fit branch. [posteriorSliceContexting.ts:73-85](../../../graph-editor/src/services/posteriorSliceContexting.ts#L73) now wipes `p.posterior` and `p.latency.posterior` when the parameter file carries no slices. Test at [posteriorSliceContexting.test.ts:192](../../../graph-editor/src/services/__tests__/posteriorSliceContexting.test.ts#L192) inverted to assert the wipe. |
+| §3.7 / §5 Group 3 `--no-be` triage flag | **CLOSED** | [analyse.ts:111,150-156,342-347](../../../graph-editor/src/cli/commands/analyse.ts#L111), [paramPack.ts:42-47,114-117](../../../graph-editor/src/cli/commands/paramPack.ts#L42), [aggregate.ts:32-34,96](../../../graph-editor/src/cli/aggregate.ts#L32), `BackendCallsSkippedError` thrown in `runBackendAnalysis`. Tests in [cliNoBe.test.ts](../../../graph-editor/src/cli/__tests__/cliNoBe.test.ts). Note: this is instrumentation, not an engine fix — Group 3 itself remains under §5. |
 
 ---
 
@@ -138,6 +153,108 @@ The abBcSmoothLag test [already independently asserts](graph-editor/src/services
 
 That is the triage signal the plan called for: the failing scalar comes into tolerance when CF is suppressed. The divergence is in BE arithmetic, almost certainly CF — consistent with §5 Group 3's low-evidence-cohort defect, which is the cohort-mode analogue. Numerical re-run under the flag is the follow-up; the qualitative direction is already pinned.
 
+### 3.8 Playwright regression — `shareLiveChart` distinct-scenario-graphs (post-73e)
+
+After 73e merged, the Playwright suite reports a new red test: [shareLiveChart.spec.ts:1763](../../../graph-editor/e2e/shareLiveChart.spec.ts#L1763) — `live share (conserve-mass fixture) produces distinct scenario graphs + non-empty inbound-n (regression)`.
+
+Symptom: the test polls the FE's `lastAnalyzeRequest` payload and asserts the two scenario graphs in `scenarios[0].graph.edges` and `scenarios[1].graph.edges` carry **different** `p.mean` on a key edge. The poll predicate returns `"ok"` when distinct or `"equal:<value>"` when identical. After the 60 s timeout, the predicate is still returning `"equal:0.7826"` — both scenarios end up with the same `p.mean = 0.7826` on that edge, so the analyse request payload contains two copies of the same scenario state.
+
+The test name flags this explicitly as a **regression** — it was passing before and is the share-side proxy for "share assembled scenario graphs correctly". Live shares carry DSL only and re-materialise from base; if both scenarios materialise to the same numbers, either:
+
+1. The new uniform materialisation (Stage 5 item 7) is overwriting per-scenario differences when running FE topo, by re-deriving `p.mean` from the same shared file state without applying each scenario's effective DSL projection correctly; or
+2. Stage 4's removal of TS-side `applyProbabilityVisibilityModeToGraph` has a downstream effect for the live-share path that wasn't covered by the audit (audit covered scalar-runner consumers, not the share-restore-into-`lastAnalyzeRequest` flow); or
+3. Stage 1's clone-and-strip is being applied somewhere that strips a scenario-distinguishing field that wasn't request-only (unlikely given the helper's narrow field list).
+
+**Action**: investigate from the test's captured `conserve-mass:lastAnalyzeRequest.json` and `share.db-snapshot.json` attachments. The fastest probe is to compare the two scenarios' `effective_query_dsl` and `graph.edges[k].p` for the key edge — if effective DSLs differ but graphs are identical, the materialisation pipeline is collapsing them; if effective DSLs are also identical, the share-restore is producing the same scenario twice and the bug is upstream in `ScenariosContext` regeneration.
+
+This is a real ship blocker — the failing PW test gates `Release aborted`.
+
+### 3.10 Cohort-engine diagnosis — research annotations against COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md
+
+**Status**: research-only annotations on the §5 Group 3 failure (`test_low_evidence_cohort_matches_factorised_convolution_oracle` on `synth-simple-abc` `b→c` with `cohort(1-Mar-26:3-Mar-26).asat(3-Mar-26)`). Evidence-backed observations only; mechanism for the catastrophic median collapse is **not yet** isolated. No fixes proposed.
+
+Reference doc: [COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md](../codebase/COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md) (canonical semantic contract — review pack 1 of 3).
+
+#### A — Outside-in tests run on analytic source, not bayes posterior
+
+Per the canonical doc's "subject-side reuse rule" (lines 381-403), bayesian posterior projection is the principled source for X→end subject behaviour. The test decorator `@requires_synth(_SIMPLE, enriched=True)` reads as "fixture should carry commissioned posteriors".
+
+Evidence:
+- [synth-simple-abc-simple-b-to-c.yaml](../../../nous-conversion/parameters/synth-simple-abc-simple-b-to-c.yaml) carries only `values:` (raw evidence), `latency:`, and `metadata:` blocks. No `posterior:` block. No `model_vars:` block.
+- CLI YAML output reports `promoted_source: analytic` for the failing edge.
+- [model_resolver.py:486-506](../../../graph-editor/lib/runner/model_resolver.py#L486) reads `n_effective` from the bayesian posterior block when `promoted_source == 'bayesian'`; falls back to `_src.get('prob_*_n_effective')` for analytic. The synth fixture's analytic source layer doesn't carry these fields.
+
+Status: **evidence-backed factual observation**. Whether it is itself a defect or simply means "this fixture wasn't bayes-commissioned" needs a separate decision (does `enriched=True` formally require posterior data, or is it a convention?).
+
+Implication for diagnosis: every cohort assertion in the outside-in suite that passed prior to 73b §3.9 retirement was passing under the analytic-source path with the `alpha_beta_query_scoped` discriminator's True branch active. Post-retirement that path is gone (see C below). This puts the suite under stronger pressure than the pre-retirement code ever exercised.
+
+#### B — `n_effective` missing → doc-52 blend skips → cohort dispersion only, not median
+
+Evidence:
+- [forecast_state.py:1020-1042](../../../graph-editor/lib/runner/forecast_state.py#L1020) `_compute_blend_params` returns `applied: False, skip_reason: 'n_effective_missing'` when `getattr(resolved, 'n_effective', None) is None`.
+- CLI diagnostic (cohort_maturity row metadata): `m_S: 0.00227, m_G: null, skip_reason: n_effective_missing`. The blend in [forecast_state.py:802-817](../../../graph-editor/lib/runner/forecast_state.py#L802) does not run.
+
+Status: **evidence-backed**. As correctly noted in review, this on its own is a dispersion-only effect (`p_draws` mix vs `p_draws_unconditioned` mix). It cannot explain a 60-70% median collapse. **Logged for traceability but ruled out as the catastrophe mechanism.**
+
+#### C — `is_cf_sweep_eligible` is unconditionally `True`; the deterministic prior path is dead code
+
+Evidence:
+- [forecast_runtime.py:513-521](../../../graph-editor/lib/runner/forecast_runtime.py#L513) — `is_cf_sweep_eligible` is now a no-op returning `True` for any input. Inline comment: "All edges are sweep-eligible post doc 73b §3.9 / Decision 13. Retained as a no-op for callers that still pass the flag onto bundles or response payloads; the discriminator branching it once gated has been retired."
+- [forecast_runtime.py:524-529](../../../graph-editor/lib/runner/forecast_runtime.py#L524) — `get_cf_mode_and_reason` likewise unconditional `('sweep', None)`.
+- [cohort_forecast_v3.py:1370](../../../graph-editor/lib/runner/cohort_forecast_v3.py#L1370) — `if not _sweep_eligible:` branch never fires. The branch routes to [`_query_scoped_latency_rows`](../../../graph-editor/lib/runner/cohort_forecast_v3.py#L409) (which uses prior α/β with the deterministic latency CDF and **no conjugate update or sweep**, per its own docstring "Deterministic rows for degraded or zero-evidence latency edges"). That entire function is currently unreachable from `compute_cohort_maturity_rows_v3`.
+
+Status: **evidence-backed**. This is the structural change that 73b §3.9 / Decision 13 made and the §5 / §6 punch list working hypothesis ("the retired discriminator was masking real CF issues") is now mechanically pinned to it: every cohort_maturity query, regardless of evidence quality or analytic-source state, runs the full population sweep. The "low evidence and short horizon → use the prior with the deterministic CDF" route that previously produced oracle-correct numbers for cases like the failing test no longer exists.
+
+Open question for review: was retiring `_query_scoped_latency_rows`-as-a-route the intent of Decision 13, or only the retirement of the discriminator's True branch in the conjugate-update path? The function still exists as code; only the dispatch is dead. If the deterministic-prior route was always supposed to remain available for short-horizon / zero-evidence cohorts, this is a fix candidate (re-introduce a horizon/evidence-aware gate).
+
+#### D — Sweep mechanism: where the actual median collapse enters — *not yet isolated*
+
+Investigation traced through:
+- [forecast_state.py:713-793](../../../graph-editor/lib/runner/forecast_state.py#L713) — aggregate IS conditioning. For our test, this loop is keyed off `evidence` (per-cohort `(tau_i, n_i, k_i)` tuples). Line 731: `if n_i <= 0 or k_i <= 0: continue`. Our cohorts have `k_i = 0` (events haven't reached completion in the 2-day horizon), so **the aggregate IS step skips every cohort** and `n_cohorts_conditioned` stays 0. `p_draws` therefore retains the prior — aggregate IS is **not** the source of collapse.
+- [forecast_state.py:1149-1173](../../../graph-editor/lib/runner/forecast_state.py#L1149) — per-cohort IS inside `_evaluate_cohort`. Guard at L1152: `if E_eff > 0 and a_i > 0 and _E_fail >= 1.0:`. With `k_i=0` and prior CDF at small `a_i` → `E_i ≈ 0`, so `E_eff = max(0, 0) = 0` and the IS step **also doesn't fire**. So per-cohort IS is **not** the source either.
+- [forecast_state.py:1175-1220](../../../graph-editor/lib/runner/forecast_state.py#L1175) — Pop D (frontier survivors) and Pop C (post-frontier upstream arrivals) computation. Per the canonical doc lines 288-294 (factorised cohort numerator), Pop D and Pop C are the two future-numerator additive terms. The sweep code matches this shape (`Y_forecast = k_i + Y_D + Y_C`, `X_forecast = N_i + X_C`). Mechanically the right factorised arithmetic.
+
+Where the mechanism MAY enter — needs follow-up:
+- The CLI diagnostic dump showed two evidence rows `n=4941 k=0` and `n=3535 k=0`. The 4941 matches `anchor_n_daily[80]` (a-arrivals on 1-Mar) in the parameter file. So the cohort-frame evidence is **anchor-rooted** (a-arrivals), not subject-rooted (b-arrivals). The canonical doc rule at L156-160 prohibits "letting the denominator side quietly consume subject-end semantics". If `cohort.x_frozen` (the per-cohort `N_i` consumed at [forecast_state.py:1100](../../../graph-editor/lib/runner/forecast_state.py#L1100)) is being populated with raw a-arrival counts rather than X-rooted carrier-discounted arrivals at b, that would put a wrong-clock denominator into the per-cohort sweep. The mechanism would be: too-large `N_i` → too-large `X_forecast` → median rate `Y/X` collapses while the (uncondition-flavoured) Y-side stays comparatively close to oracle.
+- Alternatively, the `m_S = 0.00227` value (probability-mass-shaped, not count-shaped) suggests that `_mass_from_cohorts` is summing something normalised, while `cohort.x_frozen` consumed by the sweep may be a different, raw-count-shaped field. If the per-cohort `N_i` in the sweep and the `m_S` in the blend disagree on units, the divergence interpretation is harder to pin without reading the cohort builder ([cohort_forecast_v3.py:720-1000](../../../graph-editor/lib/runner/cohort_forecast_v3.py#L720) `build_cohort_evidence_from_frames`).
+
+Status: **partial trace, mechanism not isolated**. Need to read `build_cohort_evidence_from_frames` end-to-end to confirm what `cohort.x_frozen` actually carries for this query (a-rooted count, b-rooted count, or carrier-discounted mass) before claiming a defect against the doc's L156-160 separation rule.
+
+#### E — Mapping to the canonical doc abstractions
+
+Per the doc lines 449-479 (general abstraction points), the implementation should expose:
+1. `population_root` — selected population definition
+2. `carrier_to_x` — denominator-side A→X object
+3. `subject_span` — numerator-side X→end object
+4. `numerator_representation` — factorised vs gross-fitted
+5. `admission_policy` — reuse rule
+
+[forecast_runtime.py:137,203,297,501](../../../graph-editor/lib/runner/forecast_runtime.py#L137) and the bundle construction in [cohort_forecast_v3.py:1196-1294](../../../graph-editor/lib/runner/cohort_forecast_v3.py#L1196) confirm that `PreparedForecastRuntimeBundle` does carry `carrier_to_x`, `numerator_representation` (set to `'factorised'` at L1216), `p_conditioning_evidence`, etc. The skeleton matches the doc's abstractions. Whether each object is **populated correctly** for a single-hop A≠X cohort under short-horizon / analytic-source conditions is exactly the open research question in D above.
+
+#### Retracted earlier claims (for traceability)
+
+I previously asserted that the catastrophic collapse came from a lag-blind conjugate update at [cohort_forecast_v3.py:124](../../../graph-editor/lib/runner/cohort_forecast_v3.py#L124) (`alpha_post = alpha_prior + sum_y; beta_post = beta_prior + (sum_x - sum_y)`). That claim was on the wrong code path. Line 124 is inside `_non_latency_rows`, gated by `if not _is_latency_edge` at [cohort_forecast_v3.py:1304](../../../graph-editor/lib/runner/cohort_forecast_v3.py#L1304). The b→c parameter file carries `latency.latency_parameter: true` (line 1351 of the YAML), so `_is_latency_edge = True` and `_non_latency_rows` does not run for this test. Retracted.
+
+#### Recommended next research steps (not fixes)
+
+1. Read [build_cohort_evidence_from_frames](../../../graph-editor/lib/runner/cohort_forecast_v3.py#L720) to identify what `x_frozen` / `y_frozen` semantically carry, especially for A≠X single-hop cohort with short horizon. Confirm whether they're carrier-discounted or raw.
+2. Add per-cohort instrumentation (or read existing `[v3-debug]` prints at [forecast_state.py:1222-1248](../../../graph-editor/lib/runner/forecast_state.py#L1222), which fire when `upstream_cdf_mc is not None and reach > 0`) to capture per-cohort `N_i, k_i, a_i, X_C, Y_C` values during the failing run. The numbers will tell us whether the `Y/X` collapse is in the denominator (X) or numerator (Y) side.
+3. Assess whether re-introducing a horizon/evidence-aware route to `_query_scoped_latency_rows` (or equivalent) is the right structural answer for the short-horizon analytic-source case. Decision 13's intent in retiring the discriminator may not have been to retire this dispatch route, only the discriminator's specific True branch in the conjugate-update path.
+
+### 3.9 Surprise gauge has stopped working (post-73e)
+
+User-reported regression: the surprise gauge analysis no longer works. Details TBD — needs reproduction and triage.
+
+`surprise_gauge` is a runner-analyze type that requires BE compute (it dispatches via `/api/runner/analyze`). It is one of the analysis types listed in 73e Stage 6 item 5 as requiring BE-side compute (hence subject to `--no-be` fail-fast). Likely 73e-related candidate causes, in rough order of plausibility:
+
+1. **Stage 4 visibility-projection removal.** Surprise gauge consumes the request graph's edge probability surface; if the BE-side `_prepare_scenarios` is not receiving `visibility_mode` or is interpreting it differently after TS-side projection was removed, the analysis input could be wrong.
+2. **Stage 5 materialisation pipeline change.** If FE topo / projection runs differently for the prepared dispatch path now used by surprise gauge, the upstream graph state the BE reads could be missing fields the surprise gauge needs.
+3. **Stage 2 prepared-dispatch routing.** Surprise gauge goes through `runPreparedAnalysis` → `analyzeMultipleScenarios` (or `analyzeSelection`); any payload-shape change in those dispatch surfaces could affect it.
+
+**Action**: reproduce in a canvas chart with a surprise gauge analysis selected; capture the failure signature (no result / wrong values / dispatch error / blocked) and the request payload the FE sends. That will narrow which of the three candidates is responsible.
+
+This is logged here for traceability; full investigation is downstream of the §5 outside-in engine work which is the priority workstream.
+
 ---
 
 ## 4. Key outside-in CLI suites for cohort_maturity v3
@@ -233,6 +350,27 @@ Group 1 is plausibly tolerance / new-conditioning behaviour and may be acceptabl
 
 Net: `--no-be` confirms §3.7 + §5 Group 3 are the same defect — CF-side conditioning under low-evidence cohorts. Groups 1 and 2 are unaddressed by the flag and need separate triage (most likely Group 2 is the cohort-anchor-override semantic regression flagged in 73b §3.7 §3.6, distinct from CF arithmetic).
 
+### Outside-in re-run — 28-Apr-26 (post-73e)
+
+Re-ran `pytest graph-editor/lib/tests/test_cohort_factorised_outside_in.py -v` after all 8 stages of 73e merged. **12 failed, 11 passed in 2 min 37 s** (faster than the 6 min 37 s baseline run, almost certainly because the daemon and BE caches were warm).
+
+Delta vs the 10 fail / 13 pass baseline above:
+
+- All 10 baseline failures are still failing. 73e is transport cleanup; it was not expected to move engine arithmetic, and it didn't.
+- **2 new failures** appeared, both inside Suite B's parity canaries:
+  - `test_cli_window_single_edge_scalar_identity_across_public_surfaces` — `from(simple-a).to(simple-b).window(-90d:)`: pack `p.mean = 0.545800` vs CF `p_mean = 0.546332`, delta **5.3e-4** vs tolerance 1e-4. Was previously passing; this is a Group 1-shape drift on a fixture that was previously below tolerance.
+  - `test_cli_projection_parity_uses_last_row_saturation_not_arbitrary_tau_curve_point` — `synth-lat4-c→d` cohort: pack `p.mean = 0.5217` vs `cm last-row p_infinity_mean = 0.522247`, delta **5.5e-4** vs tolerance 1e-4. Was previously passing; same numbers as the Group 2 anchor-depth pair, suggesting it has been pulled across the tolerance threshold by post-73e prep changes.
+- Group magnitudes within already-failing tests:
+  - Group 1 latent-upstream pair: was 4.7e-4 → now **6.2e-4** (slightly worse but still small-drift).
+  - Group 1 `cli_identity_collapse_matches_window`: was 4.4e-4 → now **4.79e-3** (10× worse — promoted into Group 2 territory).
+  - Group 2 anchor-depth on synth-lat4 c→d: 0.66 → 0.52 spread unchanged.
+  - Group 2 `cohort_and_window_p_infinity_converge` (-90d:): was 0.118 → now **0.123** (marginally worse).
+  - Group 3 low-evidence cohort: τ=16 was 64.6% relative → now **68.6%** (~3pp worse), curve still drifting through τ=20.
+
+**Interpretation.** 73e introduced no engine-side fixes. The 2 new failures and the slightly larger Group 1 deltas are consistent with the Stage 5 item 7 change — graph-bearing custom recipes are now uniformly re-materialised (FE topo + projection refresh) rather than replayed from captured numbers. This shifts intermediate values by O(1e-4) for fixtures whose previous parity rested on FE-topo-equivalent captured scalars, pushing two formerly-passing tests across their 1e-4 tolerance. None of the Group 1 deltas are large enough to indicate a new arithmetic defect; the `cli_identity_collapse` 10× jump is the only one that warrants closer inspection.
+
+Headline: 73e closures (verified above) are landed; engine work in §5 Groups 2 and 3 is unchanged and remains the next active workstream after the §3.x spec-gap punch list. Group 1 is a candidate for tolerance relaxation per §6 step 4.
+
 ---
 
 ## 6. Triage order
@@ -304,24 +442,27 @@ Some neighbouring diagnostics are correctly gated behind `DAGNET_COHORT_DEBUG`, 
 
 ## Summary
 
-| # | Item | Severity | Owner-area |
-|---|---|---|---|
-| 1 | 8 held-over Python tests (cohort multi-hop midpoint) | High | 47-series, not 73b |
-| 2 | 2 BE regressions, root cause unknown | High | Fresh investigation |
-| 3.1 | Production re-contexting does not upsert `model_vars[bayesian]` | High | Stage-4 follow-up |
-| 3.2 | Analysis prep mutates caller graph in f+e mode | Medium | Cleanup + guard test |
-| 3.3 | CF/analysis parity test scope narrower than name | Low | Rename or extend |
-| 3.4 | cliAnalyse non-CF cases hit BE directly, not CLI | Low | Test refactor |
-| 3.5 | Stale comment in carrier-read shared-resolver test | Trivial | One-line fix |
-| 4 | Two outside-in CLI suites in `test_cohort_factorised_outside_in.py` are the primary cohort_maturity v3 acceptance gates | Reference | Run as primary signal |
-| 5 | Outside-in run 28-Apr-26: 10 fail / 13 pass — Group 1 small drift, Group 2 anchor-depth ~12–18%, Group 3 low-evidence oracle ~60% | High | Engine investigation (Groups 2, 3); tolerance call (Group 1) |
-| 6 | Triage order: verify expected 73e closures first; then remaining spec gaps; then §5 engine work | Reference | Sequencing |
-| 7.1 | `analyse --type conditioned_forecast` omits prepared display settings | Medium | CLI CF payload |
-| 7.2 | `parity-test` still uses param replay instead of enriched scenario graphs | Medium | CLI diagnostics |
-| 7.3 | `read_edge_cohort_params` bypasses `resolve_model_params` | High | Python forecast runtime |
-| 7.4 | Bayes patch Tier 1 projects bare slices instead of effective-DSL slices | Medium | Bayes patch / contexting |
-| 7.5 | Missing `posterior.slices` leaves stale graph posterior projection in place | Medium | Posterior contexting |
-| 7.6 | Forecast runtime emits always-on debug stdout | Low | Python forecast runtime cleanup |
+| # | Item | Severity | Owner-area | Status (28-Apr-26) |
+|---|---|---|---|---|
+| 1 | 8 held-over Python tests (cohort multi-hop midpoint) | High | 47-series, not 73b | Open — out of 73b scope |
+| 2 | 2 BE regressions, root cause unknown | High | Fresh investigation | Subsumed by §5 Group 3 |
+| 3.1 | Production re-contexting does not upsert `model_vars[bayesian]` | High | Stage-4 follow-up | **Closed** (73e Stage 3) |
+| 3.2 | Analysis prep mutates caller graph in f+e mode | Medium | Cleanup + guard test | **Closed** (73e Stage 1) |
+| 3.3 | CF/analysis parity test scope narrower than name | Low | Rename or extend | Open |
+| 3.4 | cliAnalyse non-CF cases hit BE directly, not CLI | Low | Test refactor | **Closed** (73e Stage 2) |
+| 3.5 | Stale comment in carrier-read shared-resolver test | Trivial | One-line fix | **Closed** (28-Apr-26 — comment already updated; doc claim was stale) |
+| 3.7 | abBcSmoothLag E2E blended-reach undershoot | High | CF arithmetic (same as §5 Group 3) | Diagnosed via 73e Stage 6 `--no-be` — pinned to CF, engine fix open |
+| 3.8 | PW regression: `shareLiveChart` live-share scenarios collapse to identical `p.mean=0.7826` | High (ships gate) | Materialisation / share-restore | **New, open — gates release** |
+| 3.9 | Surprise gauge has stopped working | TBD | Runner-analyze dispatch / materialisation | **New, open — needs reproduction** |
+| 4 | Two outside-in CLI suites in `test_cohort_factorised_outside_in.py` are the primary cohort_maturity v3 acceptance gates | Reference | Run as primary signal | Reference |
+| 5 | Outside-in run 28-Apr-26: 10 fail / 13 pass — Group 1 small drift, Group 2 anchor-depth ~12–18%, Group 3 low-evidence oracle ~60% | High | Engine investigation (Groups 2, 3); tolerance call (Group 1) | Open (engine work, post-73e) |
+| 6 | Triage order: verify expected 73e closures first; then remaining spec gaps; then §5 engine work | Reference | Sequencing | Step 1 done (verification status above) |
+| 7.1 | `analyse --type conditioned_forecast` omits prepared display settings | Medium | CLI CF payload | **Closed** (73e Stage 2) |
+| 7.2 | `parity-test` still uses param replay instead of enriched scenario graphs | Medium | CLI diagnostics | **Closed** (deleted 28-Apr-26) |
+| 7.3 | `read_edge_cohort_params` bypasses `resolve_model_params` | High | Python forecast runtime | Open |
+| 7.4 | Bayes patch Tier 1 projects bare slices instead of effective-DSL slices | Medium | Bayes patch / contexting | Open |
+| 7.5 | Missing `posterior.slices` leaves stale graph posterior projection in place | Medium | Posterior contexting | **Closed** (28-Apr-26 — strict-clear adopted) |
+| 7.6 | Forecast runtime emits always-on debug stdout | Low | Python forecast runtime cleanup | Open |
 
 ---
 

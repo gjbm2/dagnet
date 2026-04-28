@@ -189,20 +189,21 @@ describe('contextGraphForEffectiveDsl — in-schema contexting', () => {
     expect(graph.edges[0].p.latency.posterior).toBeUndefined();
   });
 
-  it('leaves edge state untouched when parameter file has no posterior (live-mode no-op)', () => {
+  it('clears posterior strictly when parameter file has no posterior slices (73b §7.5)', () => {
     const graph = makeGraphWithEdge('p-1');
-    const existingPosterior = { distribution: 'beta', alpha: 7, beta: 13 };
-    graph.edges[0].p.posterior = existingPosterior;
+    graph.edges[0].p.posterior = { distribution: 'beta', alpha: 7, beta: 13 } as any;
+    graph.edges[0].p.latency = { posterior: { distribution: 'lognormal' } } as any;
 
     contextGraphForEffectiveDsl(
       graph,
       resolverFor('p-1', { /* no posterior */ }),
       'window()',
     );
-    // Pre-73b Flow F treated "no file posterior" as a no-op; the helper
-    // preserves that on the live edge so a missing file doesn't wipe an
-    // existing projection.
-    expect(graph.edges[0].p.posterior).toBe(existingPosterior);
+    // 73b §7.5 closure (28-Apr-26): when the source of truth cannot
+    // supply a slice for the effective DSL, the in-schema projection on
+    // the edge is wiped — same shape as the asat-no-fit branch.
+    expect(graph.edges[0].p.posterior).toBeUndefined();
+    expect(graph.edges[0].p.latency.posterior).toBeUndefined();
   });
 
   it('clears engorged _posteriorSlices when parameter file has no posterior', () => {

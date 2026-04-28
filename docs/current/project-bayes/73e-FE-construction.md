@@ -516,3 +516,9 @@ End of proposal.
 - [x] Stage 6 — completed 28-Apr-26 (`--no-be` CLI flag — added 28-Apr-26)
 - [x] Stage 7 — completed 28-Apr-26 (cache audit found no new dependencies; cliAnalyse e2e tests dispatch through `graphComputeClient`; 73b §5 outside-in Python suite deferred to 73b-final-outstanding redux per user direction)
 - [x] Stage 8 — completed 28-Apr-26 (FORECAST_STACK_DATA_FLOW §B.5 supplement; cli-analyse / cli-param-pack `--no-be` documented; SERVICE_DIRECTORY rows for scenario materialisation, transport engorgement, visibility projection)
+
+## Post-73e follow-up — outside-in CLI cohort-engine work
+
+73e was transport cleanup; it landed without engine-side fixes by design. The outside-in CLI cohort_maturity v3 acceptance suite (`graph-editor/lib/tests/test_cohort_factorised_outside_in.py`) carried 10 failures into the post-73e re-run and added 2 new failures from Stage 5 item 7's uniform materialisation. None of these are 73e regressions in the engine sense — Groups 2 and 3 are real CF arithmetic defects that the retired `alpha_beta_query_scoped` discriminator's True branch was previously masking.
+
+Active engine investigation lives in [73f-outside-in-cohort-engine-investigation.md](73f-outside-in-cohort-engine-investigation.md). Working hypothesis: reach-scaled evidence counts feeding the IS log-weight in `compute_forecast_trajectory`. The 73b transport-cleanup punch list is at [73b-final-outstanding.md](73b-final-outstanding.md).

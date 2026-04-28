@@ -669,7 +669,6 @@ class TestSubsetConditioningBlend:
 
     Covers:
     - `compute_forecast_summary` provenance + blended conditioned scalars.
-    - Blend skip on analytic source (`source_query_scoped`).
     - Blend skip when n_effective is absent (`n_effective_missing`).
     - Boundary behaviour: r→0 ≈ fully conditioned; r=1 ≈ aggregate.
     """
@@ -714,11 +713,11 @@ class TestSubsetConditioningBlend:
         assert cf.m_G == pytest.approx(100.0)
         assert cf.blend_skip_reason is None
 
-    def test_summary_blend_skip_query_scoped(self):
-        """analytic source → blend skipped with source_query_scoped."""
+    def test_summary_blend_analytic_source_uses_same_contract(self):
+        """Analytic aggregate α/β uses the same blend contract as bayesian."""
         from runner.forecast_state import compute_forecast_summary
         _, resolved = self._make_edge_and_resolve(n_effective=100.0)
-        resolved.source = 'analytic'  # toggles alpha_beta_query_scoped=True
+        resolved.source = 'analytic'
         cohorts = [(20.0, 50)]
         evidence = [(20.0, 50, 15)]
 
@@ -728,8 +727,11 @@ class TestSubsetConditioningBlend:
             evidence=evidence,
         )
 
-        assert cf.blend_applied is False
-        assert cf.blend_skip_reason == 'source_query_scoped'
+        assert cf.blend_applied is True
+        assert cf.r == pytest.approx(0.5)
+        assert cf.m_S == pytest.approx(50.0)
+        assert cf.m_G == pytest.approx(100.0)
+        assert cf.blend_skip_reason is None
 
     def test_summary_blend_skip_missing_n_effective(self):
         """n_effective=None → blend skipped with n_effective_missing."""

@@ -71,10 +71,13 @@ function contextProbabilityBlock(
       : undefined;
 
   if (!fileposterior?.slices) {
-    // Parameter file carries no posterior — leave any existing edge
-    // projection alone (no-op, not a wipe). Engorgement still clears,
-    // so a stale stash from an earlier file version doesn't leak onto
-    // this request graph.
+    // Parameter file carries no posterior slices — clear strictly per
+    // 73b §7.5 closure (decided 28-Apr-26). Same shape as the asat-no-fit
+    // branch below: when the source of truth cannot supply a slice, an
+    // existing in-schema projection from a prior DSL or file version
+    // must not persist on the edge.
+    pBlock.posterior = undefined;
+    if (pBlock.latency) pBlock.latency.posterior = undefined;
     if (options.engorgeFitHistory) {
       pBlock._posteriorSlices = undefined;
     }

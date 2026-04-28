@@ -698,6 +698,16 @@ export function addEvidenceAndForecastScalars(
       // (we still want F-mode to work even if header n is missing in some legacy fixtures).
       let forecastMeanComputed: number | undefined =
         weightedNTotal > 0 ? (weightedKTotal / weightedNTotal) : undefined;
+      // Doc 73f F15 fix: pair the forecast mean with the matching window-aggregate stdev.
+      // sqrt(p(1-p)/N) is the Beta-binomial sample SD from the same weighted population
+      // that produced the forecast mean, so the (mean, stdev) pair feeding
+      // buildAnalyticProbabilityBlock describes the same evidence set. Boundary means
+      // (0 or 1) yield zero stdev → moment-match infeasible → no aggregate Beta emitted,
+      // which is the correct degenerate behaviour.
+      const forecastStdevComputed: number | undefined =
+        forecastMeanComputed !== undefined && weightedNTotal > 0
+          ? Math.sqrt(Math.max(0, forecastMeanComputed * (1 - forecastMeanComputed)) / weightedNTotal)
+          : undefined;
       if (forecastMeanComputed !== undefined) {
         // Attach forecast scalar (query-time) – always overwrite so F-mode is explainable and consistent.
         nextAggregated = {
@@ -705,6 +715,7 @@ export function addEvidenceAndForecastScalars(
           values: (nextAggregated.values as ParameterValue[]).map((v: any) => ({
             ...v,
             forecast: forecastMeanComputed,
+            forecast_stdev: forecastStdevComputed,
           })),
         };
 
@@ -822,11 +833,16 @@ export function addEvidenceAndForecastScalars(
       }
 
       if (forecastMeanComputed !== undefined) {
+        // Doc 73f F15 fix: scalar-fallback paths cannot derive a window-aggregate
+        // stdev because they have no weighted-N (no daily arrays). Emit no
+        // forecast_stdev so downstream moment-matching correctly infers "no
+        // dispersion available" rather than fabricating one.
         nextAggregated = {
           ...nextAggregated,
           values: (nextAggregated.values as ParameterValue[]).map((v: any) => ({
             ...v,
             forecast: forecastMeanComputed,
+            forecast_stdev: undefined,
           })),
         };
 

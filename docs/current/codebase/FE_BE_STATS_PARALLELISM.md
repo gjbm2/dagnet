@@ -186,6 +186,20 @@ This gives deterministic headless output without creating a parallel CLI-only to
 
 For `analyse --type conditioned_forecast`, the CLI still dispatches directly to `/api/forecast/conditioned` after the shared analysis preparation step. The request payload is built by `src/lib/conditionedForecastGraphSnapshot.ts`, which engorges the scenario graph using the disk-loaded parameter YAML map. That helper must stay runtime-neutral; the CLI should not import the browser `conditionedForecastService.ts` module just to build the payload.
 
+### Isolating FE-topo Step 2 from CF (`--no-be`)
+
+`param-pack` and `analyse` both accept `--no-be`, which sets `skipBackendCalls=true` on `aggregateAndPopulateGraph` and `prepareAnalysisComputeInputs`. The flag suppresses every BE-bound call in the run: CF (`/api/forecast/conditioned`), the snapshot-DB endpoints, and the runner-analyze surface. Wired in `src/cli/commands/paramPack.ts` and `src/cli/commands/analyse.ts`; surfaced as `BackendCallsSkippedError` from `runBackendAnalysis` for analyses that cannot be served without BE compute.
+
+The flag's value as a diagnostic surface comes from the field-authority split between the two writers. Without `--no-be`, `p.mean` and `latency.completeness` are CF-authoritative — the IS-conditioned posterior overwrites the FE Step 2 blendedMean during Stage 2 enrichment. Under `--no-be`, the Step 2 fallback stands and the same fields reflect FE-topo's analytic blend (`w_evidence · evidence.mean + (1−w_evidence) · forecast.mean`) instead. Two surfaces, same field, two writers — toggling the flag exposes the writer-level disagreement directly.
+
+This makes `--no-be` the canonical way to:
+
+- separate BE arithmetic divergence from upstream FE / materialisation divergence when triaging `p.mean` regressions on synth or production fixtures (a CF-only defect collapses out of the answer when the flag is set);
+- write FE/BE parity tests that pin CF arithmetic against an analytic baseline rather than against itself — Suite C inside [`graph-editor/lib/tests/test_cohort_factorised_outside_in.py`](../../graph-editor/lib/tests/test_cohort_factorised_outside_in.py) is the working example, paired with `_run_param_pack(..., no_be=True/False)` against the same query;
+- reproduce CLI behaviour offline when the BE is unavailable, with `param-pack` output carrying `meta.be_skipped: true` so downstream consumers can recognise the provenance.
+
+For analysis types that require BE (`cohort_maturity_v3`, `conditioned_forecast`, every runner-analyze type), `analyse --no-be` exits non-zero with a typed message naming the analysis type. FE-only types (`edge_info`, `node_info`) complete against FE-topo state alone.
+
 ## Pitfalls
 
 ### Anti-pattern 41: Enrichment results bypassing UpdateManager sibling rebalancing
