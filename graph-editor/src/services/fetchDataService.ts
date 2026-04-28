@@ -1765,9 +1765,9 @@ export async function runStage2EnhancementsAndInboundN(
           };
         });
         const hasLatencyItems = latencyCheck.some(c => c.hasLatency);
-        
+
         console.log('[fetchDataService] Latency items check:', { hasLatencyItems, details: latencyCheck });
-        
+
         if (hasLatencyItems) {
           // Build param lookup: edge ID -> parameter values
           // CRITICAL: Filter to current DSL cohort window so LAG uses the right cohorts
@@ -2087,10 +2087,11 @@ export async function runStage2EnhancementsAndInboundN(
                     // fallback to slice-level `mean` — that would mask
                     // the §3.3.3 layer-isolation rule by writing a
                     // cohort-evidence mean into the source surface.
-                    // When `forecast` is absent, omit the analytic
-                    // source mean and let the resolver's §3.8 register
-                    // entry 2 (`analytic_point_estimate_degraded`)
-                    // handle it with explicit provenance.
+                    // Doc 73f F16: when `forecast` is absent, the
+                    // analytic source emits no usable aggregate Beta
+                    // and the resolver returns alpha=beta=0; consumers
+                    // render midline only. §3.8 register entry 2
+                    // (the κ=200 fixed prior) is withdrawn.
                     // Doc 73f F15: the analytic probability block is owned
                     // by `addEvidenceAndForecastScalars` →
                     // `UpdateManager.applyMappings`, which pair the

@@ -994,12 +994,25 @@ Initial register items for this plan:
    invalid. It reads current-answer `p.evidence.{n,k}` as a model prior
    concentration source. Stage 2 removes or quarantines it behind an
    explicit failure diagnostic; it must not survive as a silent fallback.
-2. `model_resolver.py` fixed point-estimate prior strength. Status:
-   provisional. It may survive only if renamed and documented as an
-   analytic point-estimate degradation path sourced from
-   FE topo Step 1's `model_vars[analytic].probability.mean`, with the concentration
-   constant named, tested, and surfaced in diagnostics. It must not read
-   current-answer evidence.
+2. ~~`model_resolver.py` fixed point-estimate prior strength.~~ **Withdrawn
+   (28-Apr-26, doc 73f F16).** This entry conditionally allowed the
+   silent κ=200 point-estimate fallback to survive only if renamed,
+   named, tested, and diagnostically surfaced. None of those conditions
+   were met in the live implementation; meanwhile the wiring that was
+   meant to make the moment-match in `buildAnalyticProbabilityBlock`
+   succeed was incomplete (no path emitted top-level `value.stdev` on
+   parameter files), so the fallback was firing on every analytic-only
+   edge of the outside-in suite — masking the wiring defect rather than
+   serving its declared "rare edge case" role. Doc 73f F16 closed the
+   wiring gap by emitting `forecast_stdev` alongside `forecast` from the
+   same weighted window-aggregate, and removed the silent fallback from
+   `model_resolver.py`. When the moment-match is genuinely infeasible
+   (boundary mean, overdispersion, no usable evidence), the analytic
+   block now omits the Beta shape and the resolver returns
+   `alpha = beta = 0` — consumers render the midline without dispersion
+   bands rather than relying on a fabricated prior. Entry retained as a
+   withdrawal marker so a future reader does not re-introduce the
+   silent-fabrication pattern.
 3. `analytic_degraded` / query-scoped-posterior mode. Status: migration
    guard only. It exists because the resolver currently cannot always
    present analytic as an aggregate source. Stage 2/Stage 4 remove it once

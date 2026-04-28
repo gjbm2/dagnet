@@ -735,10 +735,12 @@ def read_edge_cohort_params(
     sigma_sd, onset_sd, p_sd}.
 
     Routes through `resolve_model_params(scope='path', temporal_mode='cohort')`
-    so the upstream-carrier construction sees the same promoted source,
-    quality gates, and kappa fallbacks as the rest of the engine
-    (doc 73f F6 — was previously a posterior-bypass that could diverge
-    from the central resolver on analytic-only fixtures).
+    so the upstream-carrier construction sees the same promoted source
+    and quality gates as the rest of the engine (doc 73f F6 — was
+    previously a posterior-bypass that could diverge from the central
+    resolver on analytic-only fixtures). Doc 73f F16 removed the κ=200
+    fallback; when neither posterior nor analytic-mirror provides
+    α, β the resolver returns α=β=0.
     """
     from .model_resolver import resolve_model_params
 
@@ -775,15 +777,26 @@ def read_edge_cohort_params(
     # machinery, which is a forecasting consumer. μ SDs are therefore
     # read from the predictive slot first, falling back to the bare
     # (epistemic) slot when no predictive value exists — correct when
-    # kappa_lat is absent.
-    mu_sd_pred = lat.mu_sd_pred
-    mu_sd = float(mu_sd_pred) if mu_sd_pred is not None and mu_sd_pred > 0 else float(lat.mu_sd or 0.0)
-    if mu_sd > 0:
+    # kappa_lat is absent. When path-level latency is selected but
+    # path-level SDs are not fitted, fall back to edge-level SDs
+    # rather than dropping dispersion silently.
+    edge_lat = resolved.edge_latency
+
+    def _pick_sd(*candidates):
+        for c in candidates:
+            if c is not None and c > 0:
+                return float(c)
+        return None
+
+    mu_sd = _pick_sd(lat.mu_sd_pred, lat.mu_sd, edge_lat.mu_sd_pred, edge_lat.mu_sd)
+    if mu_sd is not None:
         result['mu_sd'] = mu_sd
-    if lat.sigma_sd and lat.sigma_sd > 0:
-        result['sigma_sd'] = float(lat.sigma_sd)
-    if lat.onset_sd and lat.onset_sd > 0:
-        result['onset_sd'] = float(lat.onset_sd)
+    sigma_sd = _pick_sd(lat.sigma_sd, edge_lat.sigma_sd)
+    if sigma_sd is not None:
+        result['sigma_sd'] = sigma_sd
+    onset_sd = _pick_sd(lat.onset_sd, edge_lat.onset_sd)
+    if onset_sd is not None:
+        result['onset_sd'] = onset_sd
 
     if 'alpha' in result and 'beta' in result:
         a = result['alpha']

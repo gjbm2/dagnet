@@ -152,8 +152,7 @@ established by the earlier work packages.
 subsystem. IS conditioning updates the aggregate bayesian posterior
 specifically to the user's query-DSL-scoped snapshot evidence, per edge.
 **Doc 73b Stage 2 + Stage 6 status (28-Apr-26)**: Stage 2 promoted
-analytic α/β into `model_vars[analytic].probability` (or the
-`analytic_point_estimate_degraded` kappa fallback) so the analytic
+analytic α/β into `model_vars[analytic].probability` so the analytic
 source carries an aggregate window-family Beta on the same footing as
 bayesian. Stage 6 retired the `alpha_beta_query_scoped` discriminator:
 the property is now a no-op (always `False`), `is_cf_sweep_eligible` /
@@ -161,7 +160,10 @@ the property is now a no-op (always `False`), `is_cf_sweep_eligible` /
 `('sweep', None)`, and the `analytic_degraded` consumer branches have
 been removed from `cohort_forecast_v3.py`, `forecast_state.py`,
 `api_handlers.py`, `conditionedForecastService.ts`, and
-`fetchDataService.ts`. CF runs uniformly across all sources.
+`fetchDataService.ts`. CF runs uniformly across all sources. Doc 73f F16
+(28-Apr-26) removed the κ=200 fixed-prior fallback (§3.8 register entry
+2, withdrawn): when no source provides α, β, the resolver returns
+α=β=0 and consumers render midline without dispersion bands.
 
 **Distinction from FE topo pass**: FE topo is analytic and query-scoped but non-conditioned — a moment-match Jeffreys posterior plus Fenton-Wilkinson latency composition. BE CF is full MC with proper IS on per-edge snapshot evidence, topologically sequenced with upstream carrier propagation. CF supersedes the FE blended `p.mean` and `completeness` when it lands.
 

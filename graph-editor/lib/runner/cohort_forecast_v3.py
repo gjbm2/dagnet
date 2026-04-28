@@ -704,6 +704,8 @@ def build_cohort_evidence_from_frames(
         obs_y = raw_obs_y
         x_frozen = float(obs_x[a_i]) if a_i < len(obs_x) else raw_n_i
         y_frozen = float(obs_y[a_i]) if a_i < len(obs_y) else float(ci.get('y_frozen', 0.0) or 0.0)
+        evidence_n = x_frozen
+        evidence_k = y_frozen
 
         if use_factorised_carrier:
             subject_curve: List[float] = []
@@ -748,6 +750,8 @@ def build_cohort_evidence_from_frames(
         ci_materialised = dict(ci)
         ci_materialised['x_frozen'] = x_frozen
         ci_materialised['y_frozen'] = y_frozen
+        ci_materialised['evidence_n'] = evidence_n
+        ci_materialised['evidence_k'] = evidence_k
         materialised_cohort_list.append(ci_materialised)
 
         engine_cohorts.append(CohortEvidence(
@@ -757,6 +761,8 @@ def build_cohort_evidence_from_frames(
             y_frozen=y_frozen,
             frontier_age=a_i,
             a_pop=a_pop,
+            evidence_n=evidence_n,
+            evidence_k=evidence_k,
             # Doc 45 §Response contract: the CF endpoint and the
             # cohort maturity chart share this engine. Setting
             # eval_age = frontier_age tells compute_forecast_trajectory to
@@ -967,10 +973,10 @@ def compute_cohort_maturity_rows_v3(
                 fe_local.cohort_list or []
             )
             bundle.p_conditioning_evidence.total_x = float(
-                sum(c.get('x_frozen', 0.0) for c in fe_local.cohort_list)
+                sum(c.get('evidence_n', c.get('x_frozen', 0.0)) for c in fe_local.cohort_list)
             )
             bundle.p_conditioning_evidence.total_y = float(
-                sum(c.get('y_frozen', 0.0) for c in fe_local.cohort_list)
+                sum(c.get('evidence_k', c.get('y_frozen', 0.0)) for c in fe_local.cohort_list)
             )
         else:
             bundle.p_conditioning_evidence.evidence_points = 0
@@ -1183,13 +1189,24 @@ def compute_cohort_maturity_rows_v3(
     band_levels = [0.80, 0.90, 0.95, 0.99]
     rows = []
 
-    # p@∞: median of IS-conditioned rate draws at saturation tau. Sweep
-    # ran out to saturation_tau (2*t95 window / 2*path_t95 cohort); rows
-    # stay clipped to max_tau so the chart axis is unchanged. Exposed on
-    # every row so consumers (CF endpoint) read one scalar off last_row
-    # without a separate channel — see handle_conditioned_forecast.
-    _sat_tau = min(saturation_tau, t - 1)
-    _asymp_draws = sweep.rate_draws[:, _sat_tau]
+    # p@∞ is the rate *parameter* — the conditioned subject `p` per
+    # particle — not the trajectory's aggregate rate at saturation_tau.
+    # The trajectory's saturation rate collapses to raw Σy_frozen/Σx_frozen
+    # whenever every cohort is mature (c(a_i) ≈ 1): for mature cohorts the
+    # `_evaluate_cohort` mature-mask splice locks Y/X to observed history
+    # for τ ≤ a_i, and Pop D's `q_late` ≈ 0 leaves no projection growth
+    # past the frontier. The conditioned `p_draws` are then bypassed at
+    # the asymptote — they are the right object, just not the one the
+    # trajectory aggregate exposes. Read `sweep.p_draws` directly so the
+    # public scalar reflects the IS-conditioned (and doc-52 row-blended)
+    # rate parameter rather than the mature-cohort empirical pin. The
+    # trajectory rows stay on `rate_draws` — the chart still shows the
+    # cohort population's blended observed/forecast shape.
+    # Doc 73f F14 multi-query trace, doc 73g invariant 7.
+    if sweep.p_draws is not None and sweep.p_draws.size:
+        _asymp_draws = sweep.p_draws
+    else:
+        _asymp_draws = sweep.rate_draws[:, min(saturation_tau, t - 1)]
     _p_infinity_mean = float(np.median(_asymp_draws))
     # Per doc 49: two dispersion regimes.
     #   _p_infinity_sd_epistemic — closed-form sigma from Beta(alpha, beta): how

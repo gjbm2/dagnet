@@ -94,12 +94,11 @@ class ResolvedModelParams:
 
     # Semantic property: does `alpha, beta` already incorporate the
     # user's query-window evidence? Always False post doc 73b §3.9 / Decision 13.
-    # The resolver now reads aggregate α/β from
-    # `model_vars[analytic].probability` (or the
-    # `analytic_point_estimate_degraded` kappa fallback) on the same
-    # footing as the bayesian source, so analytic α/β is an aggregate
-    # prior — never a query-scoped posterior. CF runs uniformly; the
-    # conjugate-update branch is the only branch.
+    # The resolver reads aggregate α/β from
+    # `model_vars[analytic].probability` on the same footing as the
+    # bayesian source, so analytic α/β is an aggregate prior — never a
+    # query-scoped posterior. CF runs uniformly; the conjugate-update
+    # branch is the only branch.
     @property
     def alpha_beta_query_scoped(self) -> bool:
         return False

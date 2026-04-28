@@ -1556,10 +1556,12 @@ describe('UpdateManager', () => {
     it('should attach analytic ModelVarsEntry with probability + latency from file data', async () => {
       // Doc 73b §3.9: the analytic-source mean is the window-baseline
       // forecast scalar (populated by addEvidenceAndForecastScalars in
-      // the live fetch flow). The slice-level `mean` is not used.
+      // the live fetch flow). Doc 73f F16: stdev is the matching
+      // `forecast_stdev` produced from the same weighted window-aggregate
+      // population, also attached by addEvidenceAndForecastScalars.
       const paramFile = {
         type: 'probability',
-        values: [{ mean: 0.12, stdev: 0.03, forecast: 0.12, data_source: { retrieved_at: '20-Mar-26' } }],
+        values: [{ mean: 0.12, forecast: 0.12, forecast_stdev: 0.03, data_source: { retrieved_at: '20-Mar-26' } }],
         latency: { mu: 2.5, sigma: 0.8, t95: 45, onset_delta_days: 3 },
       };
       const edge = { p: { mean: 0, stdev: 0 } };
@@ -1571,7 +1573,7 @@ describe('UpdateManager', () => {
       expect(entry.source).toBe('analytic');
       expect(entry.source_at).toBe('20-Mar-26');
       // Probability sub-block carries the window-baseline forecast as
-      // mean (§3.9), stdev from the value, and the moment-matched
+      // mean (§3.9), forecast_stdev from the value, and the moment-matched
       // aggregate Beta shape when the pair is feasible.
       expect(entry.probability.mean).toBe(0.12);
       expect(entry.probability.stdev).toBe(0.03);
@@ -1587,7 +1589,7 @@ describe('UpdateManager', () => {
     it('should include path-level latency fields when present', async () => {
       const paramFile = {
         type: 'probability',
-        values: [{ mean: 0.1, stdev: 0.02, forecast: 0.1, window_to: '19-Mar-26' }],
+        values: [{ mean: 0.1, forecast: 0.1, forecast_stdev: 0.02, window_to: '19-Mar-26' }],
         latency: { mu: 2, sigma: 0.7, t95: 40, onset_delta_days: 2, path_mu: 3.1, path_sigma: 0.9, path_t95: 60 },
       };
       const edge = { p: { mean: 0, stdev: 0 } };
@@ -1603,7 +1605,7 @@ describe('UpdateManager', () => {
     it('should omit latency block when mu/sigma absent on file', async () => {
       const paramFile = {
         type: 'probability',
-        values: [{ mean: 0.5, stdev: 0.1, forecast: 0.5 }],
+        values: [{ mean: 0.5, forecast: 0.5, forecast_stdev: 0.1 }],
       };
       const edge = { p: { mean: 0, stdev: 0 } };
 
@@ -1624,12 +1626,13 @@ describe('UpdateManager', () => {
       // Layer-isolation guard: when no window-baseline `forecast`
       // scalar has been computed for the latest value, the analytic
       // source must NOT silently fall back to `latestValue.mean` (which
-      // could be a cohort-evidence mean). The downstream resolver then
-      // enters the §3.8 register entry 2 (`analytic_point_estimate_degraded`)
-      // with explicit provenance.
+      // could be a cohort-evidence mean). Doc 73f F16: with no forecast
+      // mean and no forecast_stdev, the analytic block carries no
+      // mean/alpha/beta and the resolver returns alpha=beta=0; consumers
+      // render the midline (if any) without dispersion bands.
       const paramFile = {
         type: 'probability',
-        values: [{ mean: 0.5, stdev: 0.1 /* no forecast scalar */ }],
+        values: [{ mean: 0.5 /* no forecast scalar, no forecast_stdev */ }],
       };
       const edge = { p: { mean: 0, stdev: 0 } };
 

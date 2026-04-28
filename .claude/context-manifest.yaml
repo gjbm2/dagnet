@@ -78,3 +78,18 @@ entries:
     description: >
       Index rebuild. Workspace-prefixed IDs and index invariants —
       warm-start sync overview is sufficient.
+
+  - name: be-runner-cluster
+    owner: greg
+    paths:
+      - "graph-editor/lib/runner/**"
+    required_reads:
+      - docs/current/codebase/BE_RUNNER_CLUSTER.md
+      - docs/current/codebase/STATS_SUBSYSTEMS.md
+      - docs/current/codebase/FE_BE_STATS_PARALLELISM.md
+    description: >
+      Python backend analysis and forecasting cluster (~18.5kLOC).
+      Load-bearing invariants around FE/BE parallelism, regime
+      selection, IS conditioning seam, span composition, MECE, and
+      runner dispatch via analysis_types.yaml. Edits here without the
+      umbrella doc tend to break invisible contracts.

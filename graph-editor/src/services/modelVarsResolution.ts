@@ -214,9 +214,11 @@ export function applyPromotion(
 /**
  * Moment-match a Beta(α, β) shape from `(mean, stdev)` per doc 73b §3.9
  * "smoothing convention" alternative. Returns `{}` (no Beta shape) when
- * inputs are invalid for a proper Beta — caller should leave the
- * §3.9 fields absent so the Python resolver falls through to the
- * `analytic_point_estimate_degraded` kappa path (§3.8 register entry 2).
+ * inputs are invalid for a proper Beta — caller should leave the §3.9
+ * fields absent. Doc 73f F16: the Python resolver no longer fabricates a
+ * prior when the aggregate Beta is missing; it returns α=β=0 and
+ * downstream consumers render midline only (no dispersion bands).
+ * §3.8 register entry 2 (the κ=200 fallback) is withdrawn.
  *
  * For a Beta(α, β):
  *   var = α·β / ((α+β)² · (α+β+1))   ≤ mean·(1−mean)

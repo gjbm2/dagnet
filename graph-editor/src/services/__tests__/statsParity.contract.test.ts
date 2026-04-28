@@ -181,11 +181,9 @@ describe('parity: computePerDayBlendedMean', () => {
       onsetDeltaDays: 2.0,
     });
     expect(result).toBeDefined();
-    // Canonical values — must match BE compute_per_day_blended_mean.
-    // If FE drifts, this test breaks. If BE drifts, the Python test breaks.
-    // Canonical values — must match BE compute_per_day_blended_mean.
-    // If FE drifts, this test breaks. If BE drifts, the Python test breaks.
-    expect(result!.blendedMean).toBeCloseTo(0.5903048161481801, 9);
+    // Canonical FE value for observed-rate per-day blending. Completeness
+    // affects per-day evidence weight, not the rate's k/n basis.
+    expect(result!.blendedMean).toBeCloseTo(0.5882908253329786, 9);
     expect(result!.completenessAgg).toBeCloseTo(0.9864722632086734, 6);
   });
 

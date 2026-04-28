@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { GraphForPath, LAGHelpers, ParameterValueForLAG } from '../statisticalEnhancementService';
 import { enhanceGraphLatencies, fitLagDistribution, logNormalCDF } from '../statisticalEnhancementService';
 
-describe('Cohort path-anchored evidence de-biasing (right-censor correction)', () => {
+describe('Cohort path-anchored evidence blending', () => {
   const queryDate = new Date('2025-12-16T00:00:00.000Z');
 
   const mockHelpers: LAGHelpers = {
@@ -44,7 +44,7 @@ describe('Cohort path-anchored evidence de-biasing (right-censor correction)', (
     },
   };
 
-  it('adjusts evidence.mean mildly by completeness in cohort_path_anchored mode', () => {
+  it('keeps evidence.mean on the observed k/n basis in cohort_path_anchored mode', () => {
     const graph: GraphForPath = {
       nodes: [
         { id: 'A', entry: { is_start: true } },
@@ -97,28 +97,18 @@ describe('Cohort path-anchored evidence de-biasing (right-censor correction)', (
     const edgeValue = result.edgeValues.find((v) => v.edgeUuid === 'X-to-Y');
     expect(edgeValue).toBeDefined();
     expect(edgeValue?.debug?.completenessMode).toBe('cohort_path_anchored');
-    expect(edgeValue?.debug?.evidenceMeanBayesAdjusted).toBe(true);
+    expect(edgeValue?.debug?.evidenceMeanBayesAdjusted).not.toBe(true);
 
-    const completeness = edgeValue!.latency.completeness;
     const evidenceRaw = edgeValue!.debug!.evidenceMeanRaw!;
     const evidenceUsed = edgeValue!.debug!.evidenceMeanUsedForBlend!;
-    const wEvidence = edgeValue!.debug!.wEvidence!;
     const forecastMean = edgeValue!.debug!.forecastMeanUsed!;
 
-    // Evidence used for blend should be Bayesian completeness-adjusted and (for immature cohorts)
-    // pushed upward vs raw k/n, while remaining bounded and continuous.
-    expect(evidenceUsed).toBeGreaterThanOrEqual(evidenceRaw);
-    expect(evidenceUsed).toBeLessThanOrEqual(1);
+    // Completeness affects confidence in the evidence via blend weights; it must
+    // not rewrite the observed rate itself.
+    expect(evidenceUsed).toBe(evidenceRaw);
 
-    // Per-day blend uses the pooled de-biased rate (Σk / Σ(n×c)) with
-    // per-day weights.  The exact formula no longer matches the aggregate
-    // blend (wEvidence × evidenceUsed + ...) — see perDayBlendPooledRate.test.ts
-    // for the precise invariant.  Here we verify the directional property:
-    // the blend must exceed what you'd get from raw (un-de-biased) evidence,
-    // confirming that de-biasing is active.
     const blended = edgeValue!.blendedMean!;
-    const blendedUsingRaw = wEvidence * evidenceRaw + (1 - wEvidence) * forecastMean;
-    expect(blended).toBeGreaterThan(blendedUsingRaw);
+    expect(blended).toBeGreaterThan(evidenceRaw);
     expect(blended).toBeLessThan(forecastMean);
   });
 
@@ -302,9 +292,8 @@ describe('Cohort path-anchored evidence de-biasing (right-censor correction)', (
       const edgeValue = result.edgeValues.find((v) => v.edgeUuid === 'X-to-Y');
       expect(edgeValue).toBeDefined();
       expect(edgeValue?.debug?.completenessMode).toBe('cohort_path_anchored');
-      // Under the current semantics, evidence.mean is Bayesian completeness-adjusted in
-      // cohort_path_anchored mode.
-      expect(edgeValue?.debug?.evidenceMeanBayesAdjusted).toBe(true);
+      expect(edgeValue?.debug?.evidenceMeanBayesAdjusted).not.toBe(true);
+      expect(edgeValue?.debug?.evidenceMeanUsedForBlend).toBe(edgeValue?.debug?.evidenceMeanRaw);
 
       means.push(edgeValue!.blendedMean!);
       completenesses.push(edgeValue!.latency.completeness);

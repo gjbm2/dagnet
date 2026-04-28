@@ -273,29 +273,21 @@ describe('Sample File Query Flow E2E', () => {
       
       // === CORE FIELDS (IN param pack) ===
       // p.mean is the BLENDED probability (evidence/forecast blend per forecast-fix.md)
-      // With high completeness, p.mean should be close to evidence, but:
-      // - In cohort() mode, evidence k/n can be right-censored.
-      // - In cohort path-anchored mode, the blend may use a de-biased evidence term (k/n)/completeness.
+      // With high completeness, p.mean should be close to evidence. Completeness
+      // affects the blend weight, not the observed evidence rate itself.
       const expectedEvidenceMean = CHECKOUT_TO_PAYMENT_COHORT.k / CHECKOUT_TO_PAYMENT_COHORT.n;
       const pMean = paramPack['e.checkout-to-payment.p.mean'];
       expect(typeof pMean).toBe('number');
       expect(Number.isFinite(pMean)).toBe(true);
       
-      // Allow for rounding of stored/scenario-visible values in the param pack.
-      // Use the computed completeness (query-date dependent) when bounding possible de-biasing.
-      const computedCompleteness = paramPack['e.checkout-to-payment.p.latency.completeness'] as number | undefined;
-      const evidenceDebiased =
-        typeof computedCompleteness === 'number' && Number.isFinite(computedCompleteness) && computedCompleteness > 0
-          ? Math.min(1, expectedEvidenceMean / computedCompleteness)
-          : expectedEvidenceMean;
       const forecastMean = paramPack['e.checkout-to-payment.p.forecast.mean'] as number | undefined;
       expect(typeof forecastMean).toBe('number');
       expect(Number.isFinite(forecastMean)).toBe(true);
       expect(forecastMean!).toBeGreaterThan(0);
       expect(forecastMean!).toBeLessThan(1);
 
-      expect(pMean).toBeGreaterThanOrEqual(Math.min(evidenceDebiased, forecastMean!) - 1e-3);
-      expect(pMean).toBeLessThanOrEqual(Math.max(evidenceDebiased, forecastMean!) + 1e-3);
+      expect(pMean).toBeGreaterThanOrEqual(Math.min(expectedEvidenceMean, forecastMean!) - 1e-3);
+      expect(pMean).toBeLessThanOrEqual(Math.max(expectedEvidenceMean, forecastMean!) + 1e-3);
       // Doc 73b §3.3.4 / §12.2 row S5: `p.stdev` is the FE topo Step 2
       // epistemic blend (moment-derived posterior SD on the rate), not
       // the file's authored `stdev`. Just check it landed and is finite.
@@ -486,10 +478,8 @@ describe('Sample File Query Flow E2E', () => {
       // === CORE FIELDS (IN param pack) ===
       const expectedEvidenceMean = CHECKOUT_TO_PAYMENT_WINDOW.k / CHECKOUT_TO_PAYMENT_WINDOW.n;
       const pMean = paramPack['e.checkout-to-payment.p.mean'];
-      // Phase 2: p.mean is the blended probability. The canonical blend with Bayesian
-      // evidence adjustment can push p.mean outside the naive [evidence, forecast] interval
-      // (e.g. when completeness-aware de-biasing inflates the evidence term).
-      // Assert it remains a valid probability.
+      // Phase 2: p.mean is the blended probability. Completeness affects the
+      // blend weight, so the result should stay a valid probability.
       const forecastMean = paramPack['e.checkout-to-payment.p.forecast.mean'] as number | undefined;
       expect(typeof forecastMean).toBe('number');
       expect(Number.isFinite(forecastMean)).toBe(true);
@@ -661,26 +651,20 @@ describe('Sample File Query Flow E2E', () => {
       
       // === CORE FIELDS (IN param pack) ===
       // p.mean is the BLENDED probability (evidence/forecast blend per forecast-fix.md)
-      // With high completeness, p.mean should be close to evidence, but cohort mode may apply
-      // completeness-aware de-biasing of right-censored evidence.
+      // With high completeness, p.mean should be close to evidence.
       const expectedEvidenceMean = CHECKOUT_TO_PAYMENT_CONTEXT_GOOGLE.k / CHECKOUT_TO_PAYMENT_CONTEXT_GOOGLE.n;
       const pMean = paramPack['e.checkout-to-payment.p.mean'];
       expect(typeof pMean).toBe('number');
       expect(Number.isFinite(pMean)).toBe(true);
       
-      const computedCompleteness = paramPack['e.checkout-to-payment.p.latency.completeness'] as number | undefined;
-      const evidenceDebiased =
-        typeof computedCompleteness === 'number' && Number.isFinite(computedCompleteness) && computedCompleteness > 0
-          ? Math.min(1, expectedEvidenceMean / computedCompleteness)
-          : expectedEvidenceMean;
       // Allow for rounding of stored/scenario-visible values in the param pack.
       const forecastMean = paramPack['e.checkout-to-payment.p.forecast.mean'] as number | undefined;
       expect(typeof forecastMean).toBe('number');
       expect(Number.isFinite(forecastMean)).toBe(true);
       expect(forecastMean!).toBeGreaterThan(0);
       expect(forecastMean!).toBeLessThan(1);
-      expect(pMean).toBeGreaterThanOrEqual(Math.min(evidenceDebiased, forecastMean!) - 1e-3);
-      expect(pMean).toBeLessThanOrEqual(Math.max(evidenceDebiased, forecastMean!) + 1e-3);
+      expect(pMean).toBeGreaterThanOrEqual(Math.min(expectedEvidenceMean, forecastMean!) - 1e-3);
+      expect(pMean).toBeLessThanOrEqual(Math.max(expectedEvidenceMean, forecastMean!) + 1e-3);
       expect(paramPack['e.checkout-to-payment.p.stdev']).toBeCloseTo(CHECKOUT_TO_PAYMENT_CONTEXT_GOOGLE.stdev, 2);
       
       // === EVIDENCE.MEAN (IN param pack - RAW k/n) ===
@@ -706,8 +690,7 @@ describe('Sample File Query Flow E2E', () => {
       expect(paramPack['e.checkout-to-payment.p.evidence.k']).toBeDefined();
       
       // === MATHEMATICAL VERIFICATION ===
-      // For context-filtered mature cohorts, p.mean should remain close to evidence (allow small
-      // differences due to completeness-aware de-biasing).
+      // For context-filtered mature cohorts, p.mean should remain close to evidence.
       expect(Math.abs(pMean - expectedEvidenceMean)).toBeLessThan(0.02);
     });
   });

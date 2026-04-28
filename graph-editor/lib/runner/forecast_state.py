@@ -113,6 +113,43 @@ def _compute_completeness_at_age(
     return 0.5 * math.erfc(-z / math.sqrt(2))
 
 
+def _normalise_log_weights(log_weights: np.ndarray) -> Optional[np.ndarray]:
+    """Convert a vector of log-weights into normalised weights.
+
+    Returns None when the input is empty or numerically degenerate
+    (non-finite max, or zero/non-finite sum after exponentiation).
+    Used by the aggregate tempered IS step in `compute_forecast_trajectory`.
+    """
+    if log_weights.size == 0:
+        return None
+    max_log_weight = float(np.max(log_weights))
+    if not math.isfinite(max_log_weight):
+        return None
+    shifted = np.clip(log_weights - max_log_weight, -745.0, 0.0)
+    weights = np.exp(shifted)
+    weight_sum = float(np.sum(weights))
+    if not math.isfinite(weight_sum) or weight_sum <= 0:
+        return None
+    return weights / weight_sum
+
+
+def _weights_and_ess(
+    log_likelihood: np.ndarray,
+    tempering_lambda: float,
+) -> Tuple[Optional[np.ndarray], float]:
+    """Tempered weights and ESS for a given log-likelihood vector.
+
+    Used by the aggregate tempered-IS bisection step in
+    `compute_forecast_trajectory` (replaces the per-cohort sequential IS
+    that previously lived inside `_evaluate_cohort`).
+    """
+    weights = _normalise_log_weights(log_likelihood * tempering_lambda)
+    if weights is None:
+        return (None, 0.0)
+    ess = float(1.0 / np.sum(np.square(weights)))
+    return (weights, ess)
+
+
 def compute_completeness_with_sd(
     age_days: float,
     latency: ResolvedLatency,
@@ -442,466 +479,6 @@ def build_node_arrival_cache(
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# Conditioned forecast (doc 29g)
-# ═══════════════════════════════════════════════════════════════════════
-
-_IS_DRAWS = 2000
-
-
-@dataclass
-class ForecastSummary:
-    """Engine output with IS-conditioned draws.
-
-    Point estimates are computed from the conditioned draws.
-    The draw arrays are exposed for consumers that need quantiles
-    (e.g. cohort maturity chart fan bands).
-    """
-    # Conditioned (evidence-informed) completeness — n-weighted
-    # CDF mean across IS-reindexed draws. Same value CF writes to
-    # edge.p.latency.completeness.
-    completeness: float = 0.0
-    completeness_sd: float = 0.0
-    rate_conditioned: float = 0.0      # p × C(age) — maturity-adjusted rate
-    rate_conditioned_sd: float = 0.0
-    p_conditioned: float = 0.0        # mean(p_draws) — asymptotic probability after IS
-    p_conditioned_sd: float = 0.0
-    rate_unconditioned: float = 0.0
-    rate_unconditioned_sd: float = 0.0
-    # Unconditioned (pre-evidence) completeness — n-weighted CDF
-    # mean across raw posterior draws. Parallel to `completeness`
-    # above which is conditioned on evidence via IS. Used by the
-    # surprise gauge as the "prior maturity" baseline for the
-    # conditioned-vs-unconditioned completeness surprise framing
-    # (doc 55).
-    completeness_unconditioned: float = 0.0
-    completeness_unconditioned_sd: float = 0.0
-    # Posterior-predictive unconditioned rate — mean and SD of
-    # p_s × c̄_s across unconditioned draws. Used by the surprise
-    # gauge as the "expected rate at current window maturity"
-    # reference for the p variable (doc 55).
-    pp_rate_unconditioned: float = 0.0
-    pp_rate_unconditioned_sd: float = 0.0
-
-    # Conditioned draws — consumers evaluate CDF at display τ values
-    # using these pre-conditioned params to get fan bands.
-    p_draws: np.ndarray = field(default_factory=lambda: np.array([]))
-    mu_draws: np.ndarray = field(default_factory=lambda: np.array([]))
-    sigma_draws: np.ndarray = field(default_factory=lambda: np.array([]))
-    onset_draws: np.ndarray = field(default_factory=lambda: np.array([]))
-
-    # Unconditioned draws (pre-IS) for model-only fan bands
-    p_draws_unconditioned: np.ndarray = field(default_factory=lambda: np.array([]))
-    mu_draws_unconditioned: np.ndarray = field(default_factory=lambda: np.array([]))
-    sigma_draws_unconditioned: np.ndarray = field(default_factory=lambda: np.array([]))
-    onset_draws_unconditioned: np.ndarray = field(default_factory=lambda: np.array([]))
-
-    # Metadata
-    source: str = ''
-    mode: str = 'window'
-    is_ess: float = 0.0  # effective sample size after IS
-    is_tempering_lambda: float = 1.0  # aggregate likelihood tempering strength
-
-    # Subset-conditioning blend provenance (doc 52 §14.6). When
-    # blend_applied=True, the conditioned scalars (`completeness`,
-    # `rate_conditioned`, `p_conditioned` and their _sd siblings) and
-    # the conditioned draw arrays (`p_draws` etc.) are computed from
-    # the (1 − r):r mix of conditioned and unconditioned draw rows.
-    # The `*_unconditioned` siblings are untouched so surprise-gauge
-    # framing (doc 55) can still compute the shift between the two.
-    r: Optional[float] = None
-    m_S: Optional[float] = None
-    m_G: Optional[float] = None
-    blend_applied: bool = False
-    blend_skip_reason: Optional[str] = None
-    runtime_bundle_diag: Optional[Dict[str, Any]] = None
-
-
-def compute_forecast_summary(
-    edge_id: str,
-    resolved: ResolvedModelParams,
-    cohort_ages_and_weights: List[tuple],
-    evidence: List[tuple],               # [(τ_i, n_i, k_i), ...]
-    from_node_arrival: Optional['NodeArrivalState'] = None,
-    num_draws: int = _IS_DRAWS,
-    runtime_bundle: Optional[PreparedForecastRuntimeBundle] = None,
-) -> ForecastSummary:
-    """Compute ESS-regularised aggregate IS-conditioned forecast.
-
-    SUBSYSTEM GUIDE — When to call this (see docs/current/codebase/
-    STATS_SUBSYSTEMS.md §3.4):
-      - Narrow per-edge IS helper. Historical caller is the surprise
-        gauge (doc 55 rework will supersede its remaining use). Returns
-        a single edge's conditioned draws against a passed evidence
-        list — does NOT handle span topology, upstream carriers,
-        topological sequencing, or per-cohort population dynamics.
-      - New analysis runners needing conditioned forecast output
-        SHOULD NOT call this. Use `handle_conditioned_forecast` (the
-        BE CF pass endpoint) scoped to your analysis path — it
-        delegates the right inner kernel per scope and coordinates
-        multi-edge state. For full cohort-population semantics the
-        correct inner kernel is `compute_forecast_trajectory` above, not
-        this one.
-
-    Draws (p, mu, sigma, onset) from the joint posterior, evaluates
-    completeness at each cohort age per draw, applies IS conditioning
-    against observed evidence, and returns conditioned draws + point
-    estimates.
-
-    The conditioned draws can be used by consumers to evaluate CDF
-    at any display τ range without re-doing MC or IS conditioning.
-
-    Args:
-        edge_id: edge UUID.
-        resolved: from resolve_model_params.
-        cohort_ages_and_weights: [(age_days, n), ...] for completeness.
-        evidence: [(τ_i, n_i, k_i), ...] for IS conditioning.
-        from_node_arrival: upstream carrier (cohort mode).
-        num_draws: MC draw count (default 2000 for IS).
-
-    Returns:
-        ForecastSummary with point estimates and draw arrays.
-    """
-    if runtime_bundle is not None:
-        resolved = runtime_bundle.resolved_params or resolved
-        if from_node_arrival is None:
-            from_node_arrival = runtime_bundle.carrier_to_x.from_node_arrival
-
-    lat = resolved.latency
-    p_mean = resolved.p_mean
-    S = num_draws
-    rng = np.random.default_rng(seed=42)
-    total_n = sum(n for _, n in cohort_ages_and_weights if n > 0)
-
-    # ── Draw p from Beta posterior ───────────────────────────────
-    # Doc 49: use predictive alpha/beta (kappa-inflated) for MC draws.
-    # These include between-day observation noise — correct for
-    # forecasting future observations. Falls back to epistemic when
-    # kappa absent (identical in that case).
-    alpha = resolved.alpha_pred if resolved.alpha_pred and resolved.alpha_pred > 0 else 0.0
-    beta_ = resolved.beta_pred if resolved.beta_pred and resolved.beta_pred > 0 else 0.0
-    if alpha <= 0 or beta_ <= 0:
-        # Fallback to epistemic, then safety net
-        alpha = resolved.alpha if resolved.alpha and resolved.alpha > 0 else 0.0
-        beta_ = resolved.beta if resolved.beta and resolved.beta > 0 else 0.0
-    if alpha <= 0 or beta_ <= 0:
-        _p = max(min(p_mean or 0.5, 0.99), 0.01)
-        alpha = _p * 200.0
-        beta_ = (1.0 - _p) * 200.0
-    p_draws = rng.beta(alpha, beta_, size=S)
-
-    # ── Draw latency params (correlated mu-onset) ────────────────
-    has_dispersions = (lat.mu_sd > 0 or lat.sigma_sd > 0 or lat.onset_sd > 0)
-    if has_dispersions:
-        mu_draws = rng.normal(lat.mu, max(lat.mu_sd, 1e-10), size=S)
-        if abs(lat.onset_mu_corr) > 1e-6 and lat.mu_sd > 0:
-            rho = lat.onset_mu_corr
-            onset_draws = (
-                lat.onset_delta_days
-                + rho * (max(lat.onset_sd, 1e-10) / max(lat.mu_sd, 1e-10))
-                * (mu_draws - lat.mu)
-                + rng.normal(0, max(lat.onset_sd, 1e-10)
-                             * math.sqrt(max(1 - rho * rho, 0)), size=S)
-            )
-        else:
-            onset_draws = rng.normal(
-                lat.onset_delta_days, max(lat.onset_sd, 1e-10), size=S)
-        onset_draws = np.maximum(onset_draws, 0.0)
-        sigma_draws = np.clip(
-            rng.normal(lat.sigma, max(lat.sigma_sd, 1e-10), size=S),
-            0.01, 20.0)
-    else:
-        mu_draws = np.full(S, lat.mu)
-        sigma_draws = np.full(S, lat.sigma)
-        onset_draws = np.full(S, lat.onset_delta_days)
-
-    upstream_cdf = (from_node_arrival.deterministic_cdf
-                    if from_node_arrival else None)
-    reach = from_node_arrival.reach if from_node_arrival else 0.0
-
-    def _cdf_at_age_for_draw(
-        age: float,
-        mu: float,
-        sigma: float,
-        onset: float,
-    ) -> float:
-        """Path-level completeness (with carrier convolution when available).
-
-        Used for the output completeness estimate. NOT for IS conditioning
-        — IS uses edge-level completeness because evidence is edge-level y/x.
-        """
-        if upstream_cdf is not None and reach > 0:
-            return _convolve_completeness_at_age(
-                age, upstream_cdf, reach,
-                mu, sigma, onset)
-        return _compute_completeness_at_age(
-            age, mu, sigma, onset)
-
-    def _edge_cdf_at_age_for_draw(
-        age: float,
-        mu: float,
-        sigma: float,
-        onset: float,
-    ) -> float:
-        """Edge-level completeness (no carrier convolution).
-
-        Used for IS conditioning E_i computation. Evidence is edge-level
-        y/x so the completeness must also be edge-level, regardless of
-        whether a carrier exists.
-        """
-        return _compute_completeness_at_age(
-            age, mu, sigma, onset)
-
-    def _weighted_completeness_draws(
-        mu_values: np.ndarray,
-        sigma_values: np.ndarray,
-        onset_values: np.ndarray,
-    ) -> np.ndarray:
-        mc_completeness = np.zeros(len(mu_values), dtype=float)
-        if total_n <= 0:
-            return mc_completeness
-
-        for age, n in cohort_ages_and_weights:
-            if n <= 0:
-                continue
-            age_f = float(age)
-            for s in range(len(mu_values)):
-                mc_completeness[s] += n * _cdf_at_age_for_draw(
-                    age_f,
-                    float(mu_values[s]),
-                    float(sigma_values[s]),
-                    float(onset_values[s]),
-                )
-
-        mc_completeness /= total_n
-        return mc_completeness
-
-    def _normalise_log_weights(log_weights: np.ndarray) -> Optional[np.ndarray]:
-        if log_weights.size == 0:
-            return None
-        max_log_weight = float(np.max(log_weights))
-        if not math.isfinite(max_log_weight):
-            return None
-        shifted = np.clip(log_weights - max_log_weight, -745.0, 0.0)
-        weights = np.exp(shifted)
-        weight_sum = float(np.sum(weights))
-        if not math.isfinite(weight_sum) or weight_sum <= 0:
-            return None
-        return weights / weight_sum
-
-    def _weights_and_ess(
-        log_likelihood: np.ndarray,
-        tempering_lambda: float,
-    ) -> tuple[Optional[np.ndarray], float]:
-        weights = _normalise_log_weights(log_likelihood * tempering_lambda)
-        if weights is None:
-            return (None, 0.0)
-        ess = float(1.0 / np.sum(np.square(weights)))
-        return (weights, ess)
-
-    # Preserve the true pre-evidence baseline. Downstream consumers use
-    # this to compare conditioned vs unconditioned forecasts.
-    p_draws_unconditioned = p_draws.copy()
-    mu_draws_unconditioned = mu_draws.copy()
-    sigma_draws_unconditioned = sigma_draws.copy()
-    onset_draws_unconditioned = onset_draws.copy()
-    mc_completeness_unconditioned = _weighted_completeness_draws(
-        mu_draws_unconditioned,
-        sigma_draws_unconditioned,
-        onset_draws_unconditioned,
-    )
-
-    # ── IS conditioning against evidence (doc 29g §aggregate IS) ────
-    # Aggregate IS: compute log-likelihood across ALL cohorts
-    # simultaneously, then resample once with tempering to maintain
-    # ESS ≥ target. This replaces the sequential per-cohort resampling
-    # which collapsed draws over 200+ cohorts.
-    #
-    # Per draw s, the aggregate log-likelihood is:
-    #   log w_s = Σ_i [ k_i × log(p_s) + (E_i,s - k_i) × log(1 - p_s) ]
-    # where E_i,s = n_i × CDF_s(τ_i) is the effective exposure for
-    # cohort i under latency draw s.
-    _IS_TARGET_ESS = 20.0
-    is_ess = float(S)
-    is_tempering_lambda = 1.0
-    n_cohorts_conditioned = 0
-    if evidence:
-        # Accumulate aggregate log-likelihood across all cohorts
-        log_lik = np.zeros(S)
-        for tau_i, n_i, k_i in evidence:
-            if n_i <= 0 or k_i <= 0:
-                continue
-
-            # E_i per draw: effective exposure at this cohort's age.
-            # Uses _cdf_at_age_for_draw which is path-level (with
-            # carrier convolution) in cohort mode — correct because
-            # evidence ages are anchor-relative and E_i must reflect
-            # the fraction of anchor entrants who have had time to
-            # reach AND convert at this edge by age τ.
-            E_i = np.zeros(S)
-            for s in range(S):
-                c_s = _cdf_at_age_for_draw(
-                    float(tau_i),
-                    float(mu_draws[s]),
-                    float(sigma_draws[s]),
-                    float(onset_draws[s]),
-                )
-                E_i[s] = n_i * c_s
-
-            E_eff = np.maximum(E_i, float(k_i))
-            E_fail = E_eff - float(k_i)
-
-            # Only include cohorts with meaningful failure count
-            mask = E_fail >= 1.0
-            if not mask.any():
-                continue
-
-            p_clip = np.clip(p_draws, 1e-15, 1 - 1e-15)
-            # Accumulate per-cohort contribution to aggregate likelihood
-            cohort_log_w = np.where(
-                mask,
-                float(k_i) * np.log(p_clip) + E_fail * np.log(1 - p_clip),
-                0.0,
-            )
-            log_lik += cohort_log_w
-            n_cohorts_conditioned += 1
-
-        if n_cohorts_conditioned > 0:
-            # Tempered resampling: binary search for λ ∈ [0, 1] such
-            # that ESS(Lik^λ) ≥ target (doc 29g §4).
-            lo, hi = 0.0, 1.0
-            best_w, best_ess, best_lam = None, 0.0, 0.0
-            for _ in range(20):  # bisection iterations
-                mid = (lo + hi) / 2.0
-                w, ess = _weights_and_ess(log_lik, mid)
-                if w is not None and ess >= _IS_TARGET_ESS:
-                    best_w, best_ess, best_lam = w, ess, mid
-                    lo = mid  # try stronger tempering
-                else:
-                    hi = mid  # back off
-            # Try full strength (λ=1)
-            w_full, ess_full = _weights_and_ess(log_lik, 1.0)
-            if w_full is not None and ess_full >= _IS_TARGET_ESS:
-                best_w, best_ess, best_lam = w_full, ess_full, 1.0
-
-            if best_w is not None and best_ess >= _IS_TARGET_ESS:
-                indices = rng.choice(S, size=S, replace=True, p=best_w)
-                p_draws = p_draws[indices]
-                mu_draws = mu_draws[indices]
-                sigma_draws = sigma_draws[indices]
-                onset_draws = onset_draws[indices]
-                is_ess = best_ess
-                is_tempering_lambda = best_lam
-
-    # ── Doc 52 §14.4.2: subset-conditioning blend ────────────────
-    # Mix the conditioned and unconditioned draw sets row-wise, using
-    # the same permutation across (p, mu, sigma, onset) so per-draw
-    # coupling is preserved. Recompute conditioned scalars from the
-    # blended set; leave *_unconditioned fields untouched so the
-    # surprise gauge's shift comparison remains meaningful.
-    _m_S_sum = float(sum(n for _, n, _ in evidence if n and n > 0))
-    _summary_blend_info = _compute_blend_params(resolved, _m_S_sum)
-    if _summary_blend_info['applied'] and p_draws.size == S and p_draws_unconditioned.size == S:
-        _n_cond_s, _perm_s = _make_blend_permutation(S, _summary_blend_info['r'])
-        _cond_idx_s = _perm_s[:_n_cond_s]
-        _unc_idx_s = _perm_s[_n_cond_s:]
-
-        def _mix(cond: np.ndarray, unc: np.ndarray) -> np.ndarray:
-            out = np.empty(S)
-            out[:_n_cond_s] = cond[_cond_idx_s]
-            out[_n_cond_s:] = unc[_unc_idx_s]
-            return out
-
-        p_draws = _mix(p_draws, p_draws_unconditioned)
-        mu_draws = _mix(mu_draws, mu_draws_unconditioned)
-        sigma_draws = _mix(sigma_draws, sigma_draws_unconditioned)
-        onset_draws = _mix(onset_draws, onset_draws_unconditioned)
-
-    # ── Compute point estimates from conditioned draws ───────────
-    mc_completeness = _weighted_completeness_draws(
-        mu_draws,
-        sigma_draws,
-        onset_draws,
-    )
-    completeness = float(np.mean(mc_completeness)) if mc_completeness.size else 0.0
-    completeness_sd = float(np.std(mc_completeness)) if mc_completeness.size else 0.0
-
-    # ── Unconditioned scalars for surprise gauge (doc 55) ────────
-    # completeness_unconditioned: n-weighted CDF mean across the
-    # raw (pre-IS) draws. Same computation as `completeness` above
-    # but on unreindexed draws.
-    if mc_completeness_unconditioned.size:
-        completeness_unconditioned = float(np.mean(mc_completeness_unconditioned))
-        completeness_unconditioned_sd = float(np.std(mc_completeness_unconditioned))
-        # pp_rate_unconditioned: mean/SD of p_s × c̄_s across
-        # unconditioned draws. This is the posterior-predictive
-        # expected rate at current window maturity — the
-        # comparator the gauge's p variable uses for observed Σk/Σn.
-        pp_unc_products = p_draws_unconditioned * mc_completeness_unconditioned
-        pp_rate_unconditioned = float(np.mean(pp_unc_products))
-        pp_rate_unconditioned_sd = float(np.std(pp_unc_products))
-    else:
-        completeness_unconditioned = 0.0
-        completeness_unconditioned_sd = 0.0
-        pp_rate_unconditioned = 0.0
-        pp_rate_unconditioned_sd = 0.0
-
-    # rate_unconditioned: the prior asymptotic edge probability
-    # (before IS conditioning). Used by surprise gauge as baseline.
-    rate_unconditioned = (
-        float(np.mean(p_draws_unconditioned))
-        if p_draws_unconditioned.size else 0.0
-    )
-    rate_unconditioned_sd = (
-        float(np.std(p_draws_unconditioned))
-        if p_draws_unconditioned.size else 0.0
-    )
-
-    # rate_conditioned: the IS-conditioned asymptotic edge probability.
-    # This is mean(p_draws) after IS resampling — the posterior estimate
-    # of the true edge rate given evidence. NOT p × completeness.
-    # Completeness is a separate orthogonal output.
-    rate_conditioned = float(np.mean(p_draws)) if p_draws.size else 0.0
-    rate_conditioned_sd = float(np.std(p_draws)) if p_draws.size else 0.0
-
-    # Legacy alias — same value, kept for clarity at call sites
-    p_conditioned = rate_conditioned
-    p_conditioned_sd = rate_conditioned_sd
-
-    return ForecastSummary(
-        completeness=completeness,
-        completeness_sd=completeness_sd,
-        rate_conditioned=rate_conditioned,
-        rate_conditioned_sd=rate_conditioned_sd,
-        p_conditioned=p_conditioned,
-        p_conditioned_sd=p_conditioned_sd,
-        rate_unconditioned=rate_unconditioned,
-        rate_unconditioned_sd=rate_unconditioned_sd,
-        completeness_unconditioned=completeness_unconditioned,
-        completeness_unconditioned_sd=completeness_unconditioned_sd,
-        pp_rate_unconditioned=pp_rate_unconditioned,
-        pp_rate_unconditioned_sd=pp_rate_unconditioned_sd,
-        p_draws=p_draws,
-        mu_draws=mu_draws,
-        sigma_draws=sigma_draws,
-        onset_draws=onset_draws,
-        p_draws_unconditioned=p_draws_unconditioned,
-        mu_draws_unconditioned=mu_draws_unconditioned,
-        sigma_draws_unconditioned=sigma_draws_unconditioned,
-        onset_draws_unconditioned=onset_draws_unconditioned,
-        source=resolved.source,
-        mode='cohort' if from_node_arrival else 'window',
-        is_ess=is_ess,
-        is_tempering_lambda=is_tempering_lambda,
-        r=_summary_blend_info.get('r'),
-        m_S=_summary_blend_info.get('m_S'),
-        m_G=_summary_blend_info.get('m_G'),
-        blend_applied=bool(_summary_blend_info.get('applied')),
-        blend_skip_reason=_summary_blend_info.get('skip_reason'),
-        runtime_bundle_diag=serialise_runtime_bundle(runtime_bundle),
-    )
-
-
-# ═══════════════════════════════════════════════════════════════════════
 # Per-cohort population model sweep (v2 parity)
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -923,6 +500,11 @@ class CohortEvidence:
     y_frozen: float        # k_i — y at frontier
     frontier_age: int      # a_i — last observed age (days)
     a_pop: float           # population for upstream scaling
+    # Subject-rate evidence counts for IS/blend. In cohort mode with a
+    # real carrier, x_frozen/y_frozen may be carrier-projected population
+    # state; these fields remain the raw subject evidence counts.
+    evidence_n: Optional[float] = None
+    evidence_k: Optional[float] = None
     eval_age: Optional[int] = None  # coordinate B: τᵢ at which to
     # stash per-cohort draws. When set, the sweep retains (S,) draws
     # at this column for this cohort. When None (cohort maturity),
@@ -932,6 +514,10 @@ class CohortEvidence:
 
     def __post_init__(self):
         """Compute eval_age from anchor_day + eval_date when not set."""
+        if self.evidence_n is None:
+            self.evidence_n = self.x_frozen
+        if self.evidence_k is None:
+            self.evidence_k = self.y_frozen
         if self.eval_age is None and self.anchor_day and self.eval_date:
             from datetime import date as _date
             try:
@@ -985,8 +571,17 @@ class ForecastTrajectory:
     # asat, daily conversions).
     completeness_mean: Optional[float] = None
     completeness_sd: Optional[float] = None
-    # Raw unconditioned draws — for consumers that need the prior
-    # predictive (e.g. surprise gauge computes p × completeness per draw)
+    # Unconditioned (pre-IS) twins of `completeness_mean` and the
+    # posterior-predictive unconditioned rate p × c̄. Populated whenever
+    # `completeness_mean` is. Surprise gauge (doc 55) uses these as the
+    # "model baseline" against which the conditioned moments are scored.
+    completeness_unconditioned: Optional[float] = None
+    completeness_unconditioned_sd: Optional[float] = None
+    pp_rate_unconditioned: Optional[float] = None
+    pp_rate_unconditioned_sd: Optional[float] = None
+    # Conditioned per-particle draws (post-IS reindexing). Consumers
+    # needing the prior-predictive samples should use the
+    # *_unconditioned scalars above rather than re-deriving from these.
     p_draws: Optional[np.ndarray] = None          # (S,)
     mu_draws: Optional[np.ndarray] = None         # (S,)
     sigma_draws: Optional[np.ndarray] = None      # (S,)
@@ -1044,9 +639,10 @@ def _compute_blend_params(
 
 def _mass_from_cohorts(cohorts) -> float:
     """m_S — total raw observation count across selected Cohorts
-    (doc 52 §14.7). Uses x_frozen (N_i at frontier)."""
-    return float(sum(float(c.x_frozen) for c in cohorts
-                     if c.x_frozen and c.x_frozen > 0))
+    (doc 52 §14.7). Uses subject evidence mass, not carrier-projected
+    population mass."""
+    return float(sum(float(c.evidence_n) for c in cohorts
+                     if c.evidence_n and c.evidence_n > 0))
 
 
 def _make_blend_permutation(S: int, r: float) -> Tuple[int, np.ndarray]:
@@ -1072,28 +668,27 @@ def _evaluate_cohort(
     cdf_arr: np.ndarray,
     upstream_cdf_mc: Optional[np.ndarray],
     reach: float,
-    apply_is: bool,
     loop_rng: np.random.Generator,
     _expit,
     edge_cdf_arr: Optional[np.ndarray] = None,
 ) -> tuple:
     """Evaluate the population model for a single cohort.
 
-    Shared primitive extracted from _run_cohort_loop (doc 29f §G.0).
-    Both the chart sweep and the future general forecast call this
-    with identical arithmetic — the only difference is the τ range
-    (full sweep vs single-τ).
+    Pure projection: given a fixed (already-conditioned-or-unconditioned)
+    set of (p, lag-CDF) draws, project the per-cohort Y/X totals across
+    the τ axis. IS conditioning is no longer done per cohort — the
+    aggregate tempered IS step at the front of `compute_forecast_trajectory`
+    produces the conditioned draws this function consumes (doc 73f F14).
+    The unconditioned pass calls this function with the saved unconditioned
+    draws so the doc 52 row-blend can mix the two.
 
-    Returns (Y_cohort, X_cohort, is_ess, conditioned):
+    Returns (Y_cohort, X_cohort):
       Y_cohort: (S, T) forecast + observed y per draw
       X_cohort: (S, T) forecast + observed x per draw
-      is_ess:   float, ESS after IS (0 if no IS fired)
-      conditioned: bool, True if IS resampling fired
 
     RNG contract: consumes loop_rng in exactly this order per call:
       1. normal(size=(S,4)) — drift
-      2. choice(S, size=S) — IS resampling (only if conditioned)
-      3. binomial(remaining, q_late) — Pop D sampling
+      2. binomial(remaining, q_late) — Pop D sampling
     Callers must pass the same loop_rng instance sequentially across
     cohorts to preserve the RNG stream.
     """
@@ -1107,70 +702,12 @@ def _evaluate_cohort(
 
     a_idx = min(a_i, T - 1)
 
-    # E_i from obs_x trajectory (v2 lines 818-830)
-    E_i = 0.0
-    if cohort.obs_x and a_i > 0:
-        prev_x = 0.0
-        for u in range(min(a_i + 1, len(cohort.obs_x))):
-            dx = cohort.obs_x[u] - prev_x
-            prev_x = cohort.obs_x[u]
-            lag = a_i - u
-            c_val = det_cdf[min(lag, T - 1)]
-            E_i += max(dx, 0.0) * c_val
-    else:
-        E_i = float(N_i)
-    E_i = min(E_i, float(N_i))
-
     # Per-cohort drift (v2 lines 833-835)
     delta_i = loop_rng.normal(0.0, drift_sds, size=(S, 4))
     theta_i = theta_transformed + delta_i
     p_i = _expit(theta_i[:, 0])
     # Drift only affects p, not CDF (v2 line 839)
     cdf_i = cdf_arr.copy()
-
-    # IS conditioning with SMC mutation (replaces pure IS resampling).
-    #
-    # Pure IS reweights a fixed set of prior draws. After many cohorts,
-    # all weight concentrates on one draw (ESS→1) — degenerate posterior.
-    # SMC adds a mutation step after resampling: perturb the resampled
-    # particles in logit space using the empirical posterior spread as
-    # the kernel width. This maintains draw diversity while respecting
-    # the evidence — the posterior concentrates naturally but draws fill
-    # the concentrated region properly.
-    #
-    # The mutation kernel width is the empirical SD of the resampled
-    # logit-p, scaled by _SMC_MUTATION_SCALE (0.5). Too large → over-
-    # dispersed (ignores evidence). Too small → degenerate (same as
-    # pure IS). 0.5 is a standard choice for random-walk Metropolis
-    # kernels in SMC literature.
-    _SMC_MUTATION_SCALE = 0.5
-    is_ess = 0.0
-    conditioned = False
-    if apply_is:
-        E_eff = max(E_i, k_i)
-        _E_fail = E_eff - k_i
-        if E_eff > 0 and a_i > 0 and _E_fail >= 1.0:
-            p_i_clip = np.clip(p_i, 1e-15, 1 - 1e-15)
-            log_w_i = (k_i * np.log(p_i_clip)
-                       + _E_fail * np.log(1 - p_i_clip))
-            log_w_i -= np.max(log_w_i)
-            w_i = np.exp(log_w_i)
-            w_i /= w_i.sum()
-            resample_idx = loop_rng.choice(S, size=S,
-                                           replace=True, p=w_i)
-            p_i = p_i[resample_idx]
-            cdf_i = cdf_i[resample_idx]
-            is_ess = 1.0 / np.sum(w_i ** 2)
-
-            # SMC mutation: perturb resampled p in logit space.
-            # Kernel width = empirical SD of resampled logit-p × scale.
-            _logit_p = np.log(np.clip(p_i, 1e-10, 1 - 1e-10)
-                              / (1 - np.clip(p_i, 1e-10, 1 - 1e-10)))
-            _logit_sd = max(float(np.std(_logit_p)), 0.01)
-            _mutation = loop_rng.normal(0.0, _logit_sd * _SMC_MUTATION_SCALE, size=S)
-            p_i = _expit(_logit_p + _mutation)
-
-            conditioned = True
 
     # Pop D: frontier survivors (v2 lines 863-886)
     # For multi-hop, use edge-level CDF when available. Frontier
@@ -1271,7 +808,7 @@ def _evaluate_cohort(
     X_cohort = np.where(mature_mask[None, :],
                         obs_x_padded[None, :], X_forecast)
 
-    return (Y_cohort, X_cohort, is_ess, conditioned)
+    return (Y_cohort, X_cohort)
 
 
 def compute_forecast_trajectory(
@@ -1308,10 +845,10 @@ def compute_forecast_trajectory(
         require for correctness (doc 47). Calling this function
         directly per-edge from an analysis runner bypasses all of
         that coordination and produces subtly wrong numbers.
-      - Surprise gauge historically called `compute_forecast_summary`
-        (below) for its simpler per-edge IS semantics; new consumers
-        of a full cohort-population forecast should go through the
-        handler instead.
+      - Surprise gauge (doc 55) reads its conditioned and unconditioned
+        scalars (`completeness_*`, `pp_rate_unconditioned`) directly off
+        the trajectory return; new consumers of a full cohort-population
+        forecast should go through the handler instead.
 
     Reproduces cohort_forecast_v2.py lines 796-912. For each draw,
     for each cohort, for each τ:
@@ -1492,17 +1029,6 @@ def compute_forecast_trajectory(
         _p_var_logit, _mu_var, _sigma_var_log, _onset_var_log1p,
     ]))
 
-    # Transform draws to unconstrained space.
-    # v2 uses CONSTANT mu/sigma/onset in theta_transformed (the per-draw
-    # CDF variation is already in cdf_arr from mc_span_cdfs). Match that:
-    # only p varies per draw in theta_transformed; latency params are fixed.
-    theta_transformed = np.column_stack([
-        _logit(np.clip(p_draws, 1e-10, 1 - 1e-10)),
-        np.full(S, lat.mu),
-        np.log(np.maximum(np.full(S, lat.sigma), 0.01)),
-        np.log1p(np.maximum(np.full(S, lat.onset_delta_days), 0.0)),
-    ])
-
     # ── Upstream MC CDF (cohort mode only) ───────────────────────
     upstream_cdf_mc = None
     if from_node_arrival is not None and from_node_arrival.mc_cdf is not None:
@@ -1512,6 +1038,118 @@ def compute_forecast_trajectory(
         upstream_cdf_mc = np.tile(_det, (S, 1))
 
     reach = from_node_arrival.reach if from_node_arrival else 0.0
+
+    # ── Aggregate tempered IS conditioning (doc 73f F14) ─────────────
+    # Replaces the per-cohort sequential IS that previously lived inside
+    # `_evaluate_cohort`. The likelihood per cohort i is
+    #   y_i ~ Binomial(n_i, p∞ · c_i_s)
+    # with `c_i_s = lag_cdf(τ_i, μ_s, σ_s, onset_s)` per draw — i.e.
+    # completeness inside the binomial parameter, NOT as an external
+    # cohort weight. Immature cohorts therefore contribute appropriately
+    # reduced certainty rather than amplified weight.
+    #
+    # Tempered resampling (binary search on λ for ESS ≥ target) prevents
+    # the degenerate posterior the per-cohort sequential IS was prone to
+    # over many cohorts (doc 29g §aggregate IS). After resampling, the
+    # conditioned (p, μ, σ, onset, cdf_arr, upstream_cdf_mc, edge_cdf_arr)
+    # tuple is consistent with the same particle indices.
+    p_draws_unconditioned = p_draws.copy()
+    mu_draws_unconditioned = mu_draws.copy()
+    sigma_draws_unconditioned = sigma_draws.copy()
+    onset_draws_unconditioned = onset_draws.copy()
+    cdf_arr_unconditioned = cdf_arr.copy()
+    upstream_cdf_mc_unconditioned = (
+        upstream_cdf_mc.copy() if upstream_cdf_mc is not None else None
+    )
+    edge_cdf_arr_unconditioned = (
+        edge_cdf_arr.copy() if edge_cdf_arr is not None else None
+    )
+
+    is_ess_global = float(S)
+    is_tempering_lambda = 1.0
+    n_cohorts_conditioned = 0
+
+    _evidence: List[tuple] = []
+    for _c in cohorts:
+        try:
+            _tau_i = int(_c.frontier_age) if _c.frontier_age is not None else 0
+        except (TypeError, ValueError):
+            _tau_i = 0
+        _n_i = float(_c.evidence_n or 0.0)
+        _k_i = float(_c.evidence_k or 0.0)
+        if _tau_i > 0 and _n_i > 0 and _k_i > 0:
+            _evidence.append((_tau_i, _n_i, _k_i))
+
+    if _evidence:
+        _IS_TARGET_ESS = 20.0
+        log_lik = np.zeros(S)
+        for tau_i, n_i, k_i in _evidence:
+            E_i = np.zeros(S)
+            for s in range(S):
+                E_i[s] = float(n_i) * _compute_completeness_at_age(
+                    float(tau_i),
+                    float(mu_draws[s]),
+                    float(sigma_draws[s]),
+                    float(onset_draws[s]),
+                )
+            E_eff = np.maximum(E_i, float(k_i))
+            E_fail = E_eff - float(k_i)
+            mask = E_fail >= 1.0
+            if not mask.any():
+                continue
+            p_clip = np.clip(p_draws, 1e-15, 1 - 1e-15)
+            cohort_log_w = np.where(
+                mask,
+                float(k_i) * np.log(p_clip) + E_fail * np.log(1 - p_clip),
+                0.0,
+            )
+            log_lik += cohort_log_w
+            n_cohorts_conditioned += 1
+
+        if n_cohorts_conditioned > 0:
+            lo, hi = 0.0, 1.0
+            best_w, best_ess, best_lam = None, 0.0, 0.0
+            for _ in range(20):  # bisection
+                mid = (lo + hi) / 2.0
+                w, ess = _weights_and_ess(log_lik, mid)
+                if w is not None and ess >= _IS_TARGET_ESS:
+                    best_w, best_ess, best_lam = w, ess, mid
+                    lo = mid
+                else:
+                    hi = mid
+            w_full, ess_full = _weights_and_ess(log_lik, 1.0)
+            if w_full is not None and ess_full >= _IS_TARGET_ESS:
+                best_w, best_ess, best_lam = w_full, ess_full, 1.0
+
+            if best_w is not None and best_ess >= _IS_TARGET_ESS:
+                indices = rng.choice(S, size=S, replace=True, p=best_w)
+                p_draws = p_draws[indices]
+                mu_draws = mu_draws[indices]
+                sigma_draws = sigma_draws[indices]
+                onset_draws = onset_draws[indices]
+                cdf_arr = cdf_arr[indices]
+                if upstream_cdf_mc is not None:
+                    upstream_cdf_mc = upstream_cdf_mc[indices]
+                if edge_cdf_arr is not None:
+                    edge_cdf_arr = edge_cdf_arr[indices]
+                is_ess_global = best_ess
+                is_tempering_lambda = best_lam
+
+    # Transform draws to unconstrained space (POST aggregate IS so
+    # `theta_transformed` carries the conditioned `p` particle indices).
+    # v2 uses CONSTANT mu/sigma/onset in theta_transformed (the per-draw
+    # CDF variation is already in cdf_arr). Match that: only p varies
+    # per draw in theta_transformed; latency params are fixed.
+    def _build_theta_transformed(_p: np.ndarray) -> np.ndarray:
+        return np.column_stack([
+            _logit(np.clip(_p, 1e-10, 1 - 1e-10)),
+            np.full(S, lat.mu),
+            np.log(np.maximum(np.full(S, lat.sigma), 0.01)),
+            np.log1p(np.maximum(np.full(S, lat.onset_delta_days), 0.0)),
+        ])
+
+    theta_transformed = _build_theta_transformed(p_draws)
+    theta_transformed_unconditioned = _build_theta_transformed(p_draws_unconditioned)
 
     # [v3-debug] resolver + carrier shape — used to diff FE vs CLI payloads
     print(
@@ -1545,25 +1183,29 @@ def compute_forecast_trajectory(
         )
 
     # ── Per-cohort population model (v2 lines 800-912) ───────────
-    def _run_cohort_loop(apply_is: bool) -> np.ndarray:
-        """Run the per-cohort loop, optionally with IS conditioning.
+    def _run_cohort_loop(
+        *,
+        p_local: np.ndarray,
+        theta_local: np.ndarray,
+        cdf_local: np.ndarray,
+        upstream_local: Optional[np.ndarray],
+        edge_cdf_local: Optional[np.ndarray],
+        label: str,
+    ) -> tuple:
+        """Run the per-cohort population-model loop with a fixed draw set.
 
-        When apply_is=False, produces the unconditioned model forecast.
-        When apply_is=True, produces the IS-conditioned forecast.
+        Pure projection: aggregate IS conditioning has already happened
+        upstream (doc 73f F14), so this loop does not resample. Caller
+        supplies either the conditioned draws (for the conditioned rate
+        family) or the unconditioned snapshots (for the model-only fan).
 
-        Uses a fresh rng(42) for drift + IS resampling, matching v2's
-        per-cohort loop (cohort_forecast_v2.py:720) which creates its
-        own rng(42) independent of mc_span_cdfs' rng.
-
-        Delegates per-cohort computation to _evaluate_cohort (doc 29f
-        §G.0). The loop here accumulates Y_total/X_total and handles
-        the rate computation and diagnostics.
+        Uses a fresh rng(42) for drift, matching v2's per-cohort loop
+        (cohort_forecast_v2.py:720) which creates its own rng(42)
+        independent of mc_span_cdfs' rng.
         """
         _loop_rng = np.random.default_rng(seed=42)
         Y_total = np.zeros((S, T))
         X_total = np.zeros((S, T))
-        _is_ess_last = float(S)
-        _n_conditioned = 0
         _cohort_evals: List[CohortForecastAtEval] = []
 
         for cohort in cohorts:
@@ -1572,39 +1214,30 @@ def compute_forecast_trajectory(
                 S=S, T=T,
                 det_cdf=det_cdf,
                 drift_sds=drift_sds,
-                theta_transformed=theta_transformed,
-                cdf_arr=cdf_arr,
-                upstream_cdf_mc=upstream_cdf_mc,
+                theta_transformed=theta_local,
+                cdf_arr=cdf_local,
+                upstream_cdf_mc=upstream_local,
                 reach=reach,
-                apply_is=apply_is,
                 loop_rng=_loop_rng,
                 _expit=_expit,
-                edge_cdf_arr=edge_cdf_arr,
+                edge_cdf_arr=edge_cdf_local,
             )
             if result is None:
                 continue
-            Y_c, X_c, c_ess, c_cond = result
+            Y_c, X_c = result
             Y_total += Y_c
             X_total += X_c
-            if c_cond:
-                _is_ess_last = c_ess
-                _n_conditioned += 1
 
             # Coordinate B: stash per-cohort draws at eval_age.
             # Populated on BOTH the conditioned and unconditioned passes
-            # so the doc 52 blend can mix them row-wise; dropping the
-            # `and apply_is` guard also means the unconditioned pass
-            # returns a parallel `cohort_evals` list in identical order.
-            # Consumers that only want the conditioned draws (pre-doc-52
-            # behaviour) read the blended output, where draws from the
-            # unconditioned side appear at ratio r.
+            # so the doc 52 blend can mix them row-wise.
             if cohort.eval_age is not None:
                 t_i = min(cohort.eval_age, T - 1)
                 _cohort_evals.append(CohortForecastAtEval(
                     y_draws=Y_c[:, t_i].copy(),
                     x_draws=X_c[:, t_i].copy(),
                     eval_age=cohort.eval_age,
-                    conditioned=c_cond,
+                    conditioned=(label == 'conditioned'),
                 ))
 
         # Rate draws (v2 lines 914-920)
@@ -1617,7 +1250,7 @@ def compute_forecast_trajectory(
             _xm = np.median(X_total, axis=0)
             _taus = [t for t in [5, 10, 15, 20, 25, 30, 35, 40] if t < T]
             _diag = " ".join(f"t{t}:Y={_ym[t]:.1f}/X={_xm[t]:.1f}" for t in _taus)
-            print(f"[sweep_diag] apply_is={apply_is} {_diag}")
+            print(f"[sweep_diag] pass={label} {_diag}")
 
         # When the population model has no denominator mass anywhere, fall
         # back to the unconditioned curve family instead of dividing 0/0.
@@ -1630,10 +1263,10 @@ def compute_forecast_trajectory(
         _x_median = np.median(X_total, axis=0)
         _needs_fallback = _x_median <= 1e-9
         if np.any(_needs_fallback):
-            fallback_cdf = cdf_arr[:S].copy()
-            if upstream_cdf_mc is not None and reach > 0:
-                upstream_cdf_clip = np.clip(upstream_cdf_mc[:S, :T], 0.0, 1.0)
-                fallback_cdf = np.zeros_like(cdf_arr[:S, :T])
+            fallback_cdf = cdf_local[:S].copy()
+            if upstream_local is not None and reach > 0:
+                upstream_cdf_clip = np.clip(upstream_local[:S, :T], 0.0, 1.0)
+                fallback_cdf = np.zeros_like(cdf_local[:S, :T])
                 upstream_pdf = np.diff(
                     np.concatenate(
                         [np.zeros((S, 1), dtype=np.float64), upstream_cdf_clip],
@@ -1644,24 +1277,38 @@ def compute_forecast_trajectory(
                 upstream_pdf = np.maximum(upstream_pdf, 0.0)
                 for s in range(S):
                     fallback_cdf[s, :] = np.clip(
-                        np.convolve(upstream_pdf[s], cdf_arr[s, :T], mode='full')[:T],
+                        np.convolve(upstream_pdf[s], cdf_local[s, :T], mode='full')[:T],
                         0.0,
                         1.0,
                     )
             rate[:, _needs_fallback] = (
-                p_draws[:S, None] * fallback_cdf[:, _needs_fallback]
+                p_local[:S, None] * fallback_cdf[:, _needs_fallback]
             )
 
-        return rate, _is_ess_last, _n_conditioned, Y_total, X_total, _cohort_evals
+        return rate, Y_total, X_total, _cohort_evals
 
-    rate_conditioned, is_ess, n_conditioned, Y_cond, X_cond, cohort_evals_cond = _run_cohort_loop(
-        apply_is=True,
+    rate_conditioned, Y_cond, X_cond, cohort_evals_cond = _run_cohort_loop(
+        p_local=p_draws,
+        theta_local=theta_transformed,
+        cdf_local=cdf_arr,
+        upstream_local=upstream_cdf_mc,
+        edge_cdf_local=edge_cdf_arr,
+        label='conditioned',
     )
+    is_ess = is_ess_global
+    n_conditioned = n_cohorts_conditioned
     # Model-only draw family: same specific-Cohort population model as
-    # `rate_draws`, but without IS conditioning. This keeps the public
-    # `model_midpoint` carrier-aware in cohort mode instead of collapsing
-    # onto the generic p×CDF shortcut.
-    rate_unc, _unc_ess, _unc_n, Y_unc, X_unc, cohort_evals_unc = _run_cohort_loop(apply_is=False)
+    # `rate_draws`, but driven by the UNCONDITIONED draws preserved
+    # before aggregate IS. Keeps `model_midpoint` carrier-aware in cohort
+    # mode instead of collapsing onto the generic p×CDF shortcut.
+    rate_unc, Y_unc, X_unc, cohort_evals_unc = _run_cohort_loop(
+        p_local=p_draws_unconditioned,
+        theta_local=theta_transformed_unconditioned,
+        cdf_local=cdf_arr_unconditioned,
+        upstream_local=upstream_cdf_mc_unconditioned,
+        edge_cdf_local=edge_cdf_arr_unconditioned,
+        label='unconditioned',
+    )
     rate_model = rate_unc
 
     # Doc 52 §14.4.1: blend conditioned and unconditioned draw rows when
@@ -1718,10 +1365,17 @@ def compute_forecast_trajectory(
     # Blended completeness: n-weighted CDF at each cohort's eval_age.
     # cdf_arr[s, t] = CDF(t, mu_s, sigma_s, onset_s) per draw — this
     # IS completeness, with full posterior uncertainty on latency params.
+    # Compute conditioned and unconditioned families in one pass so the
+    # surprise gauge (doc 55) has a baseline to compare against.
     _comp_mean = None
     _comp_sd = None
+    _comp_unc_mean = None
+    _comp_unc_sd = None
+    _pp_unc_mean = None
+    _pp_unc_sd = None
     _comp_n = 0.0
     _comp_draws = np.zeros(S)
+    _comp_unc_draws = np.zeros(S)
     for c in cohorts:
         if c.eval_age is None:
             continue
@@ -1730,11 +1384,22 @@ def compute_forecast_trajectory(
             continue
         t_i = min(c.eval_age, T - 1)
         _comp_draws += _comp_weight * cdf_arr[:S, t_i]
+        _comp_unc_draws += _comp_weight * cdf_arr_unconditioned[:S, t_i]
         _comp_n += _comp_weight
     if _comp_n > 0:
         _comp_draws /= _comp_n
         _comp_mean = float(np.mean(_comp_draws))
         _comp_sd = float(np.std(_comp_draws))
+        _comp_unc_draws /= _comp_n
+        _comp_unc_mean = float(np.mean(_comp_unc_draws))
+        _comp_unc_sd = float(np.std(_comp_unc_draws))
+        # pp_rate_unconditioned: per-draw p × c̄ on the unconditioned
+        # set. Surprise gauge's p variable scores observed Σk/Σn
+        # against this posterior-predictive expectation at current
+        # window maturity (doc 55 §3.2).
+        _pp_unc_products = p_draws_unconditioned[:S] * _comp_unc_draws
+        _pp_unc_mean = float(np.mean(_pp_unc_products))
+        _pp_unc_sd = float(np.std(_pp_unc_products))
 
     # Forensic: per-tau median Y/X/rate for debugging V2/V3 divergence
     global _last_forensic
@@ -1793,17 +1458,73 @@ def compute_forecast_trajectory(
         _forensic['X10_total'] = round(_x10, 2)
         _forensic['has_carrier'] = upstream_cdf_mc is not None
         _forensic['reach'] = round(reach, 6)
-    # Per-cohort E_i and a_i
+    # Per-cohort E_i and a_i (no truncation — F14 investigation needs all)
     _forensic['cohorts'] = []
     for _ci, c in enumerate(cohorts):
         _forensic['cohorts'].append({
             'i': _ci, 'N': round(c.x_frozen, 1), 'k': round(c.y_frozen, 1),
+            'evidence_N': round(float(c.evidence_n or 0.0), 1),
+            'evidence_k': round(float(c.evidence_k or 0.0), 1),
             'a_i': c.frontier_age, 'a_pop': round(c.a_pop, 1),
             'obs_x_len': len(c.obs_x),
         })
-        if _ci >= 29:
-            _forensic['cohorts'].append({'...': f'{len(cohorts) - 30} more'})
-            break
+
+    # F14 aggregate IS forensic: was the maturity correction load-bearing?
+    _f14: Dict[str, Any] = {}
+    _sum_N = float(sum(c.evidence_n or 0.0 for c in cohorts))
+    _sum_k = float(sum(c.evidence_k or 0.0 for c in cohorts))
+    _f14['sum_N'] = round(_sum_N, 1)
+    _f14['sum_k'] = round(_sum_k, 1)
+    _f14['raw_aggregate_k_over_n'] = round(_sum_k / _sum_N, 6) if _sum_N > 0 else None
+    _ratios = [
+        (float(c.evidence_k) / float(c.evidence_n)) for c in cohorts
+        if c.evidence_n and c.evidence_n > 0 and c.evidence_k is not None
+    ]
+    if _ratios:
+        _ratios_sorted = sorted(_ratios)
+        _f14['per_cohort_k_over_n'] = {
+            'count': len(_ratios),
+            'min': round(min(_ratios), 4),
+            'max': round(max(_ratios), 4),
+            'mean': round(sum(_ratios) / len(_ratios), 4),
+            'median': round(_ratios_sorted[len(_ratios) // 2], 4),
+            'p10': round(_ratios_sorted[len(_ratios) // 10], 4),
+            'p90': round(_ratios_sorted[(len(_ratios) * 9) // 10], 4),
+        }
+    _f14['is_evidence_n'] = len(_evidence)
+    _f14['is_n_cohorts_conditioned'] = int(n_cohorts_conditioned)
+    _f14['is_tempering_lambda'] = round(float(is_tempering_lambda), 4)
+    _f14['is_ess_global'] = round(float(is_ess_global), 2)
+    _f14['post_IS_p_median'] = round(float(np.median(p_draws)), 6)
+    _f14['post_IS_p_std'] = round(float(np.std(p_draws)), 6)
+    _f14['pre_IS_p_median'] = round(float(np.median(p_draws_unconditioned)), 6)
+    _f14['pre_IS_p_std'] = round(float(np.std(p_draws_unconditioned)), 6)
+    # Sample c_s for representative tau values across the cohort range
+    _c_samples: Dict[int, Dict[str, float]] = {}
+    if cohorts:
+        _sample_taus = sorted({
+            int(c.frontier_age or 0)
+            for c in (cohorts[0], cohorts[len(cohorts) // 2], cohorts[-1])
+            if c.frontier_age and c.frontier_age > 0
+        })
+        for _t in _sample_taus:
+            _c_per_draw = [
+                _compute_completeness_at_age(
+                    float(_t),
+                    float(mu_draws_unconditioned[s]),
+                    float(sigma_draws_unconditioned[s]),
+                    float(onset_draws_unconditioned[s]),
+                )
+                for s in range(min(S, 200))
+            ]
+            _c_per_draw_sorted = sorted(_c_per_draw)
+            _c_samples[_t] = {
+                'min': round(min(_c_per_draw), 6),
+                'median': round(_c_per_draw_sorted[len(_c_per_draw) // 2], 6),
+                'max': round(max(_c_per_draw), 6),
+            }
+    _f14['c_s_samples_by_tau'] = _c_samples
+    _forensic['f14_is'] = _f14
 
     import hashlib as _hl
     _rd_hash = _hl.sha256(rate_conditioned.tobytes()).hexdigest()
@@ -1828,6 +1549,10 @@ def compute_forecast_trajectory(
         cohort_evals=cohort_evals if cohort_evals else None,
         completeness_mean=_comp_mean,
         completeness_sd=_comp_sd,
+        completeness_unconditioned=_comp_unc_mean,
+        completeness_unconditioned_sd=_comp_unc_sd,
+        pp_rate_unconditioned=_pp_unc_mean,
+        pp_rate_unconditioned_sd=_pp_unc_sd,
         p_draws=p_draws,
         mu_draws=mu_draws,
         sigma_draws=sigma_draws,

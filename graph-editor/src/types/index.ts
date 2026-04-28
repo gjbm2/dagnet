@@ -651,7 +651,7 @@ export interface ModelVarsEntry {
     alpha?: number;             // >= 0
     beta?: number;              // >= 0
     n_effective?: number;       // >= 0  source mass behind window-family Beta shape
-    provenance?: string;        // e.g. 'analytic_window_baseline', 'analytic_point_estimate_degraded'
+    provenance?: string;        // e.g. 'analytic_window_baseline'
     // Cohort-family aggregate Beta shape (optional; present when cohort-family aggregate evidence available).
     cohort_alpha?: number;      // >= 0
     cohort_beta?: number;       // >= 0

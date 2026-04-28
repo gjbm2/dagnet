@@ -4,16 +4,21 @@
 fallback/degraded path is either registered with provenance and tests
 or removed."
 
-§3.8 register entries (4 is withdrawn):
+§3.8 register entries (entries 2, 3, 4 are withdrawn):
 
 1. ``model_resolver.py`` D20 evidence-count prior synthesis — invalid.
    Pinned by the layer-isolation test in
    ``test_stage0_be_contract_pinning.py`` (xfail until Stage 2).
 
-2. ``model_resolver.py`` fixed point-estimate prior strength
-   (``_KAPPA_FALLBACK = 200.0``) — provisional. Pinned here as a
-   literal-source assertion so Stage 2 has a one-line target when
-   renaming/diagnosing the fallback.
+2. ~~``model_resolver.py`` fixed point-estimate prior strength.~~
+   Withdrawn 28-Apr-26 (doc 73f F16). The κ=200 silent fabrication
+   path was removed entirely after a trace confirmed it was firing
+   on every analytic-only synth edge — masking an upstream wiring
+   bug rather than serving its declared "rare edge case" role.
+   Replacement contract: when neither the bayesian posterior nor
+   the §3.9 analytic mirror has α, β, the resolver returns
+   α=β=0 and consumers render midline only. No literal-source
+   pin to maintain.
 
 5. Scenario param-only analysis transport — invalid for analysis
    execution. Stage 4(a) delivers the lossless per-scenario
@@ -24,9 +29,10 @@ or removed."
    ``forecast_state.py`` — audit at Stage 4(d). Pinned by the
    consumer-rule grep test in ``test_stage0_be_contract_pinning.py``.
 
-This file collects the entries 2 and 5 pinning tests. Register entry 3
-(``analytic_degraded`` / query-scoped-posterior CF mode) has been retired:
-the forecast stack now has one sweep path and no degraded latency-row branch.
+This file collects the register-entry pinning tests still in scope
+(entry 5). Register entry 2 was retired by doc 73f F16, entry 3
+(``analytic_degraded`` / query-scoped-posterior CF mode) by 73b Stage 6,
+and entry 4 was withdrawn at the plan level.
 """
 
 import os
@@ -110,4 +116,39 @@ def test_register_entry_4_remains_withdrawn():
         'existing slice-resolution stack '
         '(`resolvePosteriorSlice` / `meceSliceService` / '
         '`dimensionalReductionService`) is not re-legislated.'
+    )
+
+
+def test_register_entry_2_remains_withdrawn():
+    """Register entry 2 (κ=200 fixed point-estimate prior fallback) is
+    explicitly withdrawn (28-Apr-26, doc 73f F16). Pin the withdrawal
+    so a future revision cannot accidentally re-introduce silent
+    prior fabrication.
+
+    The withdrawal marker must remain in §3.8 of the plan, citing F16
+    as the closure reference. The replacement contract is documented
+    there: when no source provides α, β, the resolver returns
+    α=β=0 — no fabricated prior — and consumers render the midline
+    without dispersion bands.
+    """
+    with open(PLAN_PATH, 'r', encoding='utf-8') as f:
+        plan = f.read()
+
+    assert re.search(
+        r'2\.\s*~~`?model_resolver\.py`? fixed point-estimate prior strength\.~~\s*\*\*Withdrawn',
+        plan,
+    ), (
+        'Register entry 2 must remain marked withdrawn so the κ=200 '
+        'silent-prior fabrication path is not re-introduced. The '
+        'replacement contract (α=β=0 when no source provides α, β) '
+        'is enforced by the resolver, not by literal-source pinning.'
+    )
+
+    assert re.search(
+        r'2\.\s*~~.*?~~.*?\*\*Withdrawn.*?doc 73f F16',
+        plan,
+        re.DOTALL,
+    ), (
+        'Register entry 2 withdrawal must cite doc 73f F16 as the '
+        'closure reference so the rationale is traceable.'
     )

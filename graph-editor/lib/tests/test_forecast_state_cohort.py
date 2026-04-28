@@ -4,12 +4,7 @@ Tests for forecast engine components (doc 29 Phase 3 + G.3).
 Verifies:
 - NodeArrivalState is built correctly for synth graphs
 - Carrier convolution properties (_convolve_completeness_at_age)
-- compute_forecast_summary graceful degradation (used by surprise gauge)
-
-G.3 cleanup: removed TestCohortModeForecastState and
-TestPhase3ParityEnrichedSynth — these tested compute_forecast_state_cohort
-and compute_forecast_state_window which are retired. Parity is now
-tested via v2-v3-parity-test.sh (CLI) and test_v2_v3_parity.py.
+- compute_forecast_trajectory blend semantics + runtime-bundle wiring
 """
 
 import copy
@@ -359,8 +354,9 @@ class TestScopeAndCarrierConsistency:
         upstream delay, carrier applies it again → double-apply → lower).
         """
         from runner.forecast_state import (
+            CohortEvidence,
             build_node_arrival_cache,
-            compute_forecast_summary,
+            compute_forecast_trajectory,
         )
         from runner.model_resolver import resolve_model_params
 
@@ -376,433 +372,45 @@ class TestScopeAndCarrierConsistency:
         resolved_edge = resolve_model_params(edge_bc, scope='edge', temporal_mode='cohort')
         resolved_path = resolve_model_params(edge_bc, scope='path', temporal_mode='cohort')
 
-        cohorts = [(20.0, 100), (30.0, 100)]
+        cohorts = [
+            CohortEvidence(
+                obs_x=[100.0] * 21, obs_y=[0.0] * 21,
+                x_frozen=100.0, y_frozen=0.0,
+                frontier_age=20, a_pop=100.0, eval_age=20,
+            ),
+            CohortEvidence(
+                obs_x=[100.0] * 31, obs_y=[0.0] * 31,
+                x_frozen=100.0, y_frozen=0.0,
+                frontier_age=30, a_pop=100.0, eval_age=30,
+            ),
+        ]
 
-        cf_edge = compute_forecast_summary(
-            edge_id='bc', resolved=resolved_edge,
-            cohort_ages_and_weights=cohorts, evidence=[],
+        cf_edge = compute_forecast_trajectory(
+            resolved=resolved_edge, cohorts=cohorts, max_tau=60,
             from_node_arrival=from_node,
         )
-        cf_path = compute_forecast_summary(
-            edge_id='bc', resolved=resolved_path,
-            cohort_ages_and_weights=cohorts, evidence=[],
+        cf_path = compute_forecast_trajectory(
+            resolved=resolved_path, cohorts=cohorts, max_tau=60,
             from_node_arrival=from_node,
         )
 
         print(f"\nEdge mu={resolved_edge.latency.mu:.3f} "
               f"Path mu={resolved_path.latency.mu:.3f}")
-        print(f"Edge+carrier: {cf_edge.completeness:.4f}")
-        print(f"Path+carrier: {cf_path.completeness:.4f} (double-apply)")
+        print(f"Edge+carrier: {cf_edge.completeness_mean:.4f}")
+        print(f"Path+carrier: {cf_path.completeness_mean:.4f} (double-apply)")
 
         if resolved_path.latency.mu > resolved_edge.latency.mu:
-            assert cf_path.completeness < cf_edge.completeness, \
+            assert cf_path.completeness_mean < cf_edge.completeness_mean, \
                 "Path+carrier gives lower completeness (double upstream lag)"
-
-
-class TestForecastSummaryGracefulDegradation:
-    """Engine degrades gracefully with little or no evidence."""
-
-    def _make_edge_and_resolve(self):
-        from runner.model_resolver import resolve_model_params
-        graph = _make_synth_graph([
-            ('e1', 'n1', 'n2', 'A', 'B', 0.7, 2.3, 0.5, 1.0),
-        ])
-        edge = graph['edges'][0]
-        resolved = resolve_model_params(edge, scope='edge', temporal_mode='window')
-        resolved.alpha = 70.0
-        resolved.beta = 30.0
-        resolved.p_mean = resolved.alpha / (resolved.alpha + resolved.beta)
-        resolved.p_sd = math.sqrt(
-            resolved.alpha * resolved.beta
-            / (((resolved.alpha + resolved.beta) ** 2) * (resolved.alpha + resolved.beta + 1))
-        )
-        return edge, resolved
-
-    def test_no_evidence_returns_unconditioned(self):
-        """Empty evidence list → unconditioned draws, IS skipped."""
-        from runner.forecast_state import compute_forecast_summary
-        _, resolved = self._make_edge_and_resolve()
-        cohorts = [(10.0, 100), (20.0, 100), (30.0, 100)]
-
-        cf = compute_forecast_summary(
-            edge_id='e1', resolved=resolved,
-            cohort_ages_and_weights=cohorts,
-            evidence=[],
-        )
-        assert cf.is_ess == 2000, f"ESS should equal draw count (no IS), got {cf.is_ess}"
-        assert cf.is_tempering_lambda == 1.0
-        assert cf.rate_conditioned == pytest.approx(cf.rate_unconditioned)
-        assert cf.rate_conditioned_sd == pytest.approx(cf.rate_unconditioned_sd)
-        assert cf.completeness > 0
-        assert cf.rate_conditioned > 0
-        print(f"No evidence: completeness={cf.completeness:.3f} "
-              f"rate={cf.rate_conditioned:.3f} ESS={cf.is_ess:.0f}")
-
-    def test_all_zero_k_skips_conditioning(self):
-        """All cohorts have k=0 → IS skipped (no conversions observed)."""
-        from runner.forecast_state import compute_forecast_summary
-        _, resolved = self._make_edge_and_resolve()
-        cohorts = [(10.0, 100), (20.0, 100)]
-        evidence = [(10.0, 100, 0), (20.0, 100, 0)]
-
-        cf = compute_forecast_summary(
-            edge_id='e1', resolved=resolved,
-            cohort_ages_and_weights=cohorts,
-            evidence=evidence,
-        )
-        assert cf.is_ess == 2000, f"ESS should equal draw count (k=0 skips IS), got {cf.is_ess}"
-        assert cf.is_tempering_lambda == 1.0
-        assert cf.rate_conditioned == pytest.approx(cf.rate_unconditioned)
-        print(f"All k=0: completeness={cf.completeness:.3f} "
-              f"rate={cf.rate_conditioned:.3f} ESS={cf.is_ess:.0f}")
-
-    def test_very_young_cohorts_skip_conditioning(self):
-        """Cohorts with age < onset → CDF≈0, E≈0 → IS skipped."""
-        from runner.forecast_state import compute_forecast_summary
-        _, resolved = self._make_edge_and_resolve()
-        cohorts = [(0.5, 50)]
-        evidence = [(0.5, 50, 2)]
-
-        cf = compute_forecast_summary(
-            edge_id='e1', resolved=resolved,
-            cohort_ages_and_weights=cohorts,
-            evidence=evidence,
-        )
-        assert cf.is_ess == 2000, f"ESS should be unconditioned for young cohorts, got {cf.is_ess}"
-        assert cf.is_tempering_lambda == 1.0
-        assert cf.rate_conditioned == pytest.approx(cf.rate_unconditioned)
-        print(f"Young cohorts: completeness={cf.completeness:.3f} ESS={cf.is_ess:.0f}")
-
-    def test_single_cohort_moderate_evidence(self):
-        """One cohort with moderate evidence → mild conditioning, healthy ESS."""
-        from runner.forecast_state import compute_forecast_summary
-        _, resolved = self._make_edge_and_resolve()
-        cohorts = [(20.0, 50)]
-        evidence = [(20.0, 50, 20)]
-
-        cf = compute_forecast_summary(
-            edge_id='e1', resolved=resolved,
-            cohort_ages_and_weights=cohorts,
-            evidence=evidence,
-        )
-        assert cf.is_ess > 10, f"ESS too low for moderate evidence: {cf.is_ess}"
-        assert cf.completeness > 0
-        print(f"Moderate evidence: completeness={cf.completeness:.3f} "
-              f"rate={cf.rate_conditioned:.3f} ESS={cf.is_ess:.0f}")
-
-    def test_strong_evidence_conditions_p_toward_observed(self):
-        """Strong evidence (high n, mature cohorts) should pull p toward
-        observed rate, not leave it at prior."""
-        from runner.forecast_state import compute_forecast_summary
-        _, resolved = self._make_edge_and_resolve()
-        cohorts = [(50.0, 500)]
-        evidence = [(50.0, 500, 200)]
-
-        cf_uncond = compute_forecast_summary(
-            edge_id='e1', resolved=resolved,
-            cohort_ages_and_weights=cohorts,
-            evidence=[],
-        )
-        cf_cond = compute_forecast_summary(
-            edge_id='e1', resolved=resolved,
-            cohort_ages_and_weights=cohorts,
-            evidence=evidence,
-        )
-        assert cf_cond.rate_unconditioned == pytest.approx(cf_uncond.rate_unconditioned)
-        assert cf_cond.rate_conditioned < cf_cond.rate_unconditioned, \
-            f"Conditioned rate ({cf_cond.rate_conditioned:.3f}) should be " \
-            f"< unconditioned ({cf_cond.rate_unconditioned:.3f})"
-        observed_rate = 200 / 500
-        assert abs(cf_cond.rate_conditioned - observed_rate) < abs(
-            cf_cond.rate_unconditioned - observed_rate
-        ), (
-            f"Conditioned rate ({cf_cond.rate_conditioned:.3f}) should be closer to "
-            f"observed ({observed_rate:.3f}) than unconditioned "
-            f"({cf_cond.rate_unconditioned:.3f})"
-        )
-        assert cf_cond.is_ess > 5, f"ESS too low: {cf_cond.is_ess}"
-        print(f"Strong evidence: uncond={cf_cond.rate_unconditioned:.3f} "
-              f"cond={cf_cond.rate_conditioned:.3f} "
-              f"lambda={cf_cond.is_tempering_lambda:.3f} ESS={cf_cond.is_ess:.0f}")
-
-    def test_extreme_aggregate_evidence_uses_tempering_floor(self):
-        """Extreme aggregate evidence should temper the likelihood rather
-        than collapsing to ESS≈1, while still moving toward the evidence.
-        """
-        from runner.forecast_state import compute_forecast_summary
-
-        _, resolved = self._make_edge_and_resolve()
-        cohorts = [(80.0, 1000)] * 18
-        evidence = [(80.0, 1000, 400)] * 18
-
-        cf = compute_forecast_summary(
-            edge_id='e1', resolved=resolved,
-            cohort_ages_and_weights=cohorts,
-            evidence=evidence,
-        )
-
-        observed_rate = 400 / 1000
-        conditioned_p_mean = float(np.mean(cf.p_draws))
-        unconditioned_p_mean = resolved.alpha / (resolved.alpha + resolved.beta)
-
-        assert cf.is_tempering_lambda < 1.0, (
-            f"Extreme evidence should trigger tempering, got λ={cf.is_tempering_lambda:.3f}"
-        )
-        assert cf.is_ess >= 19.5, f"ESS floor not preserved: {cf.is_ess:.2f}"
-        assert conditioned_p_mean < unconditioned_p_mean
-        assert abs(conditioned_p_mean - observed_rate) < abs(
-            unconditioned_p_mean - observed_rate
-        ), (
-            f"Conditioned p ({conditioned_p_mean:.3f}) should move toward observed "
-            f"rate ({observed_rate:.3f}) from prior ({unconditioned_p_mean:.3f})"
-        )
-        print(
-            f"Extreme evidence: prior_p={unconditioned_p_mean:.3f} "
-            f"cond_p={conditioned_p_mean:.3f} observed={observed_rate:.3f} "
-            f"lambda={cf.is_tempering_lambda:.3f} ESS={cf.is_ess:.1f}"
-        )
-
-    def test_draws_valid_after_conditioning(self):
-        """Conditioned draws should be finite and in valid ranges."""
-        from runner.forecast_state import compute_forecast_summary
-        import numpy as np
-        _, resolved = self._make_edge_and_resolve()
-        cohorts = [(15.0, 100), (25.0, 80)]
-        evidence = [(15.0, 100, 35), (25.0, 80, 30)]
-
-        cf = compute_forecast_summary(
-            edge_id='e1', resolved=resolved,
-            cohort_ages_and_weights=cohorts,
-            evidence=evidence,
-        )
-        assert len(cf.p_draws) == 2000
-        assert np.all(np.isfinite(cf.p_draws))
-        assert np.all(cf.p_draws > 0) and np.all(cf.p_draws < 1)
-        assert np.all(np.isfinite(cf.mu_draws))
-        assert np.all(np.isfinite(cf.sigma_draws))
-        assert np.all(cf.sigma_draws > 0)
-        assert np.all(np.isfinite(cf.onset_draws))
-        assert np.all(cf.onset_draws >= 0)
-        print(f"Draws valid: p=[{cf.p_draws.min():.3f}, {cf.p_draws.max():.3f}] "
-              f"mu=[{cf.mu_draws.min():.3f}, {cf.mu_draws.max():.3f}] "
-              f"ESS={cf.is_ess:.0f}")
-
-    def test_surprise_gauge_scalars_populated(self):
-        """Doc 55: ForecastSummary exposes unconditioned completeness moments
-        and the unconditioned posterior-predictive rate for the surprise gauge.
-        Verifies the four scalars are present, finite, and internally
-        consistent with the draw arrays they summarise."""
-        from runner.forecast_state import compute_forecast_summary
-        _, resolved = self._make_edge_and_resolve()
-        cohorts = [(20.0, 100), (40.0, 100), (60.0, 100)]
-        evidence = [(20.0, 100, 30), (40.0, 100, 50), (60.0, 100, 60)]
-
-        cf = compute_forecast_summary(
-            edge_id='e1', resolved=resolved,
-            cohort_ages_and_weights=cohorts,
-            evidence=evidence,
-        )
-
-        # All four new scalars are finite and in valid ranges
-        assert math.isfinite(cf.completeness_unconditioned)
-        assert math.isfinite(cf.completeness_unconditioned_sd)
-        assert math.isfinite(cf.pp_rate_unconditioned)
-        assert math.isfinite(cf.pp_rate_unconditioned_sd)
-        assert 0.0 <= cf.completeness_unconditioned <= 1.0
-        assert cf.completeness_unconditioned_sd >= 0.0
-        assert 0.0 <= cf.pp_rate_unconditioned <= 1.0
-        assert cf.pp_rate_unconditioned_sd >= 0.0
-
-        # pp_rate_unconditioned is NOT the same as rate_unconditioned:
-        # rate_unconditioned = mean(p_draws_unc)              (long-run p)
-        # pp_rate_unconditioned = mean(p_draws_unc × c_unc)   (rate at maturity)
-        # Since 0 < completeness < 1 for non-mature cohorts, pp < rate.
-        assert cf.pp_rate_unconditioned < cf.rate_unconditioned, (
-            f"pp_rate_unconditioned ({cf.pp_rate_unconditioned:.4f}) must be < "
-            f"rate_unconditioned ({cf.rate_unconditioned:.4f}) when completeness < 1"
-        )
-
-        # Unconditioned completeness should match the point-estimate
-        # interpretation of the unconditioned posterior
-        # (approximately; we only check order of magnitude sensibility)
-        assert 0.1 < cf.completeness_unconditioned < 0.99, (
-            f"completeness_unconditioned={cf.completeness_unconditioned:.4f} "
-            f"outside plausible range for these cohort ages"
-        )
-
-        # Conditioned completeness usually differs from unconditioned when
-        # evidence is present (the surprise signal the gauge reports)
-        print(
-            f"Gauge scalars: pp_unc={cf.pp_rate_unconditioned:.4f}±"
-            f"{cf.pp_rate_unconditioned_sd:.4f} "
-            f"c_unc={cf.completeness_unconditioned:.4f}±"
-            f"{cf.completeness_unconditioned_sd:.4f} "
-            f"c_cond={cf.completeness:.4f}±{cf.completeness_sd:.4f}"
-        )
-
-    def test_surprise_gauge_scalars_no_evidence(self):
-        """With no evidence, conditioned == unconditioned for all four
-        surprise-gauge scalars. IS is skipped; resampled and raw draws
-        coincide."""
-        from runner.forecast_state import compute_forecast_summary
-        _, resolved = self._make_edge_and_resolve()
-        cohorts = [(20.0, 100), (40.0, 100)]
-
-        cf = compute_forecast_summary(
-            edge_id='e1', resolved=resolved,
-            cohort_ages_and_weights=cohorts,
-            evidence=[],
-        )
-
-        assert cf.completeness == pytest.approx(cf.completeness_unconditioned)
-        assert cf.completeness_sd == pytest.approx(cf.completeness_unconditioned_sd)
-        # rate_unconditioned is just p; pp_rate_unconditioned is p × c.
-        assert cf.pp_rate_unconditioned < cf.rate_unconditioned
-        print(
-            f"No-evidence gauge scalars: c_cond={cf.completeness:.4f} "
-            f"c_unc={cf.completeness_unconditioned:.4f} (should match)"
-        )
 
 
 class TestSubsetConditioningBlend:
     """Doc 52 §14 — engine-level subset-conditioning blend.
 
-    Covers:
-    - `compute_forecast_summary` provenance + blended conditioned scalars.
-    - Blend skip when n_effective is absent (`n_effective_missing`).
-    - Boundary behaviour: r→0 ≈ fully conditioned; r=1 ≈ aggregate.
+    Covers blend provenance and row-mix behaviour on
+    `compute_forecast_trajectory` (the inner kernel that owns
+    conditioned + unconditioned cohort evals).
     """
-
-    def _make_edge_and_resolve(self, n_effective=None):
-        """Baseline: α=70, β=30, n_effective configurable, source='bayesian'."""
-        from runner.model_resolver import resolve_model_params
-        graph = _make_synth_graph([
-            ('e1', 'n1', 'n2', 'A', 'B', 0.7, 2.3, 0.5, 1.0),
-        ])
-        edge = graph['edges'][0]
-        resolved = resolve_model_params(edge, scope='edge', temporal_mode='window')
-        resolved.alpha = 70.0
-        resolved.beta = 30.0
-        resolved.alpha_pred = 70.0
-        resolved.beta_pred = 30.0
-        resolved.n_effective = n_effective
-        resolved.source = 'bayesian'
-        resolved.p_mean = resolved.alpha / (resolved.alpha + resolved.beta)
-        resolved.p_sd = math.sqrt(
-            resolved.alpha * resolved.beta
-            / (((resolved.alpha + resolved.beta) ** 2) * (resolved.alpha + resolved.beta + 1))
-        )
-        return edge, resolved
-
-    def test_summary_blend_provenance_r06(self):
-        """m_S=60, m_G=100 → r=0.6. Summary carries blend provenance."""
-        from runner.forecast_state import compute_forecast_summary
-        _, resolved = self._make_edge_and_resolve(n_effective=100.0)
-        cohorts = [(30.0, 10)] * 6  # weights used for completeness only
-        evidence = [(30.0, 10, 4)] * 6  # m_S = sum(n) = 60
-
-        cf = compute_forecast_summary(
-            edge_id='e1', resolved=resolved,
-            cohort_ages_and_weights=cohorts,
-            evidence=evidence,
-        )
-
-        assert cf.blend_applied is True
-        assert cf.r == pytest.approx(0.6)
-        assert cf.m_S == pytest.approx(60.0)
-        assert cf.m_G == pytest.approx(100.0)
-        assert cf.blend_skip_reason is None
-
-    def test_summary_blend_analytic_source_uses_same_contract(self):
-        """Analytic aggregate α/β uses the same blend contract as bayesian."""
-        from runner.forecast_state import compute_forecast_summary
-        _, resolved = self._make_edge_and_resolve(n_effective=100.0)
-        resolved.source = 'analytic'
-        cohorts = [(20.0, 50)]
-        evidence = [(20.0, 50, 15)]
-
-        cf = compute_forecast_summary(
-            edge_id='e1', resolved=resolved,
-            cohort_ages_and_weights=cohorts,
-            evidence=evidence,
-        )
-
-        assert cf.blend_applied is True
-        assert cf.r == pytest.approx(0.5)
-        assert cf.m_S == pytest.approx(50.0)
-        assert cf.m_G == pytest.approx(100.0)
-        assert cf.blend_skip_reason is None
-
-    def test_summary_blend_skip_missing_n_effective(self):
-        """n_effective=None → blend skipped with n_effective_missing."""
-        from runner.forecast_state import compute_forecast_summary
-        _, resolved = self._make_edge_and_resolve(n_effective=None)
-        cohorts = [(20.0, 50)]
-        evidence = [(20.0, 50, 15)]
-
-        cf = compute_forecast_summary(
-            edge_id='e1', resolved=resolved,
-            cohort_ages_and_weights=cohorts,
-            evidence=evidence,
-        )
-
-        assert cf.blend_applied is False
-        assert cf.blend_skip_reason == 'n_effective_missing'
-
-    def test_summary_blend_full_r_collapses_to_unconditioned(self):
-        """r=1 → blended completeness == completeness_unconditioned (±tol).
-
-        At r=1 the blended draws are entirely from the unconditioned
-        set, so the "conditioned" scalar collapses to the unconditioned
-        one and the surprise-gauge shift goes to zero.
-        """
-        from runner.forecast_state import compute_forecast_summary
-        _, resolved = self._make_edge_and_resolve(n_effective=60.0)
-        cohorts = [(30.0, 10)] * 6
-        evidence = [(30.0, 10, 9)] * 6  # m_S = 60 = m_G
-
-        cf = compute_forecast_summary(
-            edge_id='e1', resolved=resolved,
-            cohort_ages_and_weights=cohorts,
-            evidence=evidence,
-        )
-
-        assert cf.blend_applied is True
-        assert cf.r == pytest.approx(1.0)
-        # At r=1 the mix is entirely the unconditioned draws, so
-        # completeness equals completeness_unconditioned exactly.
-        assert cf.completeness == pytest.approx(cf.completeness_unconditioned, abs=1e-10)
-        assert cf.rate_conditioned == pytest.approx(cf.rate_unconditioned, abs=1e-10)
-
-    def test_summary_blend_small_r_near_fully_conditioned(self):
-        """r≈0.05 → blended output ≈ fully-conditioned."""
-        from runner.forecast_state import compute_forecast_summary
-        _, resolved = self._make_edge_and_resolve(n_effective=1000.0)
-        cohorts = [(30.0, 10)] * 5
-        evidence = [(30.0, 10, 7)] * 5  # m_S = 50, r = 0.05
-
-        # Compute blend-off reference by passing n_effective=None
-        _, resolved_ref = self._make_edge_and_resolve(n_effective=None)
-        cf_ref = compute_forecast_summary(
-            edge_id='e1', resolved=resolved_ref,
-            cohort_ages_and_weights=cohorts,
-            evidence=evidence,
-        )
-        # Now blend with r≈0.05
-        cf = compute_forecast_summary(
-            edge_id='e1', resolved=resolved,
-            cohort_ages_and_weights=cohorts,
-            evidence=evidence,
-        )
-
-        assert cf.blend_applied is True
-        assert cf.r == pytest.approx(0.05, abs=1e-3)
-        # 5% of the mix is unconditioned; rate should stay close to
-        # the fully-conditioned reference (within a few percent).
-        assert abs(cf.rate_conditioned - cf_ref.rate_conditioned) < 0.05, (
-            f"r=0.05 blend diverged too much: "
-            f"blended={cf.rate_conditioned:.4f} ref={cf_ref.rate_conditioned:.4f}"
-        )
 
     def test_trajectory_blend_cohort_evals_populated_unconditioned(self):
         """Regression for doc 52 §14.4.1: the unconditioned cohort-loop
@@ -1082,67 +690,6 @@ class TestPreparedRuntimeBundle:
             upstream_segment_is_latent=True,
         )
         assert diag['carrier_to_x']['has_x_provider'] is True
-
-    def test_summary_reads_carrier_from_runtime_bundle(self):
-        from runner.forecast_runtime import build_prepared_runtime_bundle
-        from runner.forecast_state import (
-            NodeArrivalState,
-            compute_forecast_summary,
-        )
-        from runner.model_resolver import ResolvedLatency, ResolvedModelParams
-
-        resolved = ResolvedModelParams(
-            p_mean=0.4,
-            p_sd=0.05,
-            alpha=12.0,
-            beta=18.0,
-            alpha_pred=12.0,
-            beta_pred=18.0,
-            edge_latency=ResolvedLatency(mu=2.5, sigma=0.5, onset_delta_days=0.0),
-            source='bayesian',
-        )
-        from_node_arrival = NodeArrivalState(
-            deterministic_cdf=[0.0, 0.2, 0.5, 0.8, 1.0] + [1.0] * 40,
-            reach=0.8,
-            tier='parametric',
-        )
-        cohorts = [(10.0, 100.0), (20.0, 100.0)]
-        evidence = [(10.0, 100.0, 30.0)]
-
-        explicit = compute_forecast_summary(
-            edge_id='bc',
-            resolved=resolved,
-            cohort_ages_and_weights=cohorts,
-            evidence=evidence,
-            from_node_arrival=from_node_arrival,
-        )
-        runtime_bundle = build_prepared_runtime_bundle(
-            mode='cohort',
-            query_from_node='B',
-            query_to_node='C',
-            anchor_node_id='A',
-            from_node_arrival=from_node_arrival,
-            resolved_params=resolved,
-            p_conditioning_temporal_family='cohort',
-            p_conditioning_source='aggregate_evidence',
-            p_conditioning_evidence_points=len(evidence),
-            p_conditioning_total_x=100.0,
-            p_conditioning_total_y=30.0,
-        )
-        bundled = compute_forecast_summary(
-            edge_id='bc',
-            resolved=resolved,
-            cohort_ages_and_weights=cohorts,
-            evidence=evidence,
-            runtime_bundle=runtime_bundle,
-        )
-
-        assert bundled.completeness == pytest.approx(explicit.completeness)
-        assert bundled.rate_conditioned == pytest.approx(explicit.rate_conditioned)
-        assert bundled.runtime_bundle_diag is not None
-        assert bundled.runtime_bundle_diag['population_root'] == 'A'
-        assert bundled.runtime_bundle_diag['carrier_to_x']['mode'] == 'upstream'
-        assert bundled.runtime_bundle_diag['subject_span']['start_node_id'] == 'B'
 
     def test_trajectory_reads_operator_inputs_from_runtime_bundle(self):
         from runner.forecast_runtime import build_prepared_runtime_bundle

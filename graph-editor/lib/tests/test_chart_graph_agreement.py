@@ -8,9 +8,9 @@ Two assertions per case:
 
     A. p.mean ≈ model_midpoint at max_tau
        Both are the (roughly) unconditioned asymptotic rate. p.mean
-       comes from compute_forecast_summary (topo pass); model_midpoint
-       comes from p_draws × CDF (chart prior). Different codepaths,
-       similar question. Expected: GREEN today.
+       comes from the topo pass; model_midpoint comes from p_draws ×
+       CDF (chart prior). Different codepaths, similar question.
+       Expected: GREEN today.
 
     B. p.mean ≈ midpoint at max_tau
        Both should be the IS-conditioned asymptotic rate. midpoint

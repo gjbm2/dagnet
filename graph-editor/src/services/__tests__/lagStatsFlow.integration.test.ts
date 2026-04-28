@@ -1931,48 +1931,40 @@ describe('Per-day blend: mathematical correctness', () => {
   }
 
   /**
-   * Hand-compute the per-day blend with pooled de-biased rate.
+   * Hand-compute the per-day blend with observed per-day rates.
    *
    * 1. Compute per-day c_i and w_i
-   * 2. Pooled rate = Σk / Σ(n×c)  (minimum-variance unbiased estimator)
-   * 3. Per-day blended rate = w_i × pooledRate + (1-w_i) × forecastMean
-   * 4. Aggregate = Σ(n_i × blendedRate_i) / Σn_i
+   * 2. Per-day blended rate = w_i × (k_i/n_i) + (1-w_i) × forecastMean
+   * 3. Aggregate = Σ(n_i × blendedRate_i) / Σn_i
    */
   function handAggregate(
     cohorts: Array<{ n: number; k: number; age: number }>,
     forecastMean: number, nBaseline: number, mu: number, sigma: number,
     onset: number, eta: number, lambda: number
-  ): { blendedMean: number; cAgg: number; wAgg: number; pooledRate: number } {
+  ): { blendedMean: number; cAgg: number; wAgg: number } {
     let totalN = 0;
-    let totalK = 0;
-    let effectiveN = 0;
     let weightedC = 0;
     let weightedW = 0;
 
-    const days: Array<{ n: number; c: number; w: number }> = [];
+    const days: Array<{ n: number; rate: number; c: number; w: number }> = [];
     for (const co of cohorts) {
       if (co.n <= 0) continue;
       const c = handCompleteness(co.age, mu, sigma, onset);
       const w = handWeight(c, co.n, nBaseline, eta, lambda);
       totalN += co.n;
-      totalK += co.k;
-      effectiveN += co.n * c;
       weightedC += co.n * c;
       weightedW += co.n * w;
-      days.push({ n: co.n, c, w });
+      days.push({ n: co.n, rate: co.k / co.n, c, w });
     }
-
-    const pooledRate = effectiveN > 0 ? Math.min(1, totalK / effectiveN) : 0;
 
     let weightedRate = 0;
     for (const d of days) {
-      const blendedRate = d.w * pooledRate + (1 - d.w) * forecastMean;
+      const blendedRate = d.w * d.rate + (1 - d.w) * forecastMean;
       weightedRate += d.n * blendedRate;
     }
 
     return {
       blendedMean: totalN > 0 ? weightedRate / totalN : 0,
-      pooledRate,
       cAgg: totalN > 0 ? weightedC / totalN : 0,
       wAgg: totalN > 0 ? weightedW / totalN : 0,
     };
@@ -2095,7 +2087,7 @@ describe('Per-day blend: mathematical correctness', () => {
     }
   });
 
-  it('should match hand-computed pooled formula for a single cohort (degenerate case)', () => {
+  it('should match hand-computed observed-rate formula for a single cohort', () => {
     const data = [{ date: '15-Nov-25', n: 100, k: 65, age: 30 }];
 
     const perDayResult = computePerDayBlendedMean({
@@ -2108,7 +2100,6 @@ describe('Per-day blend: mathematical correctness', () => {
     }, MODEL);
     expect(perDayResult).toBeDefined();
 
-    // For a single cohort, pooled rate = k/(n×c) and there's one blend weight.
     const expected = handAggregate(data, FORECAST, N_BASELINE, MU, SIGMA, ONSET, 1, 1);
     expect(perDayResult!.blendedMean).toBeCloseTo(expected.blendedMean, 10);
   });

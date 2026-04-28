@@ -145,7 +145,7 @@ class ModelVarsProbability(BaseModel):
     alpha: Optional[float] = Field(None, ge=0, description="Window-family Beta α (aggregate)")
     beta: Optional[float] = Field(None, ge=0, description="Window-family Beta β (aggregate)")
     n_effective: Optional[float] = Field(None, ge=0, description="Source mass behind window-family Beta shape")
-    provenance: Optional[str] = Field(None, description="Source-basis label (e.g. analytic_window_baseline, analytic_point_estimate_degraded)")
+    provenance: Optional[str] = Field(None, description="Source-basis label (e.g. analytic_window_baseline)")
     # Cohort-family aggregate Beta shape (§3.9; optional).
     cohort_alpha: Optional[float] = Field(None, ge=0, description="Cohort-family Beta α (aggregate, optional)")
     cohort_beta: Optional[float] = Field(None, ge=0, description="Cohort-family Beta β (aggregate, optional)")

@@ -138,22 +138,23 @@ def _compute_surprise_gauge(
     *,
     effective_query_dsl: str = '',
 ) -> Dict[str, Any]:
-    """Surprise gauge: thin projection of compute_forecast_summary (doc 55).
+    """Surprise gauge: thin projection of compute_forecast_trajectory (doc 55).
 
     Two variables:
       - p: observed Σk/Σn vs unconditioned posterior-predictive rate
-           (pp_rate_unconditioned moments from the summary).
+           (pp_rate_unconditioned moments from the trajectory).
       - completeness: unconditioned vs IS-conditioned posterior completeness.
                       Dial = unconditioned (model baseline); needle =
                       conditioned (evidence-informed).
 
     Both variables are single-number z-score projections of fields
-    returned by compute_forecast_summary. No analytic fallback, no
-    bespoke maths, no model_vars branching. If the summary cannot be
-    computed (no resolved params, no snapshot rows, no valid cohorts,
-    engine error, degenerate posterior), the variable reports
-    available: false with a reason. Low IS ESS is not a failure —
-    it displays with a warning icon (doc 55 §3.3).
+    returned by compute_forecast_trajectory — the shared sweep that
+    also drives cohort maturity rows and the BE CF pass. No analytic
+    fallback, no bespoke maths, no model_vars branching. If the
+    trajectory cannot be computed (no resolved params, no snapshot
+    rows, no valid cohorts, engine error, degenerate posterior), the
+    variable reports available: false with a reason. Low IS ESS is
+    not a failure — it displays with a warning icon (doc 55 §3.3).
     """
     from runner.model_resolver import resolve_model_params
     from runner.forecast_runtime import (
@@ -162,7 +163,8 @@ def _compute_surprise_gauge(
     )
     from runner.forecast_preparation import prepare_forecast_subject_group
     from runner.forecast_state import (
-        compute_forecast_summary,
+        compute_forecast_trajectory,
+        CohortEvidence,
         build_node_arrival_cache,
     )
     from datetime import date as date_type
@@ -293,8 +295,8 @@ def _compute_surprise_gauge(
     # no cohorts in window) are NOT failures. They are legitimate
     # degenerate states: observed=0 with no evidence is information,
     # naturally compared to the unconditioned prior (pp_rate_unconditioned).
-    # compute_forecast_summary returns zeros for both observed and
-    # expected when inputs are empty → needle at centre, zone 'expected'.
+    # compute_forecast_trajectory returns zero/None scalars when inputs
+    # are empty → needle at centre, zone 'expected'.
     derivation = (
         preparation.per_edge_results[0].get('derivation_result', {})
         if preparation.per_edge_results
@@ -312,13 +314,18 @@ def _compute_surprise_gauge(
         except (ValueError, TypeError):
             pass
 
-    # ── Extract cohort ages/weights and (τ, n, k) evidence ──────
-    # Observed Σk, Σn come from these same rows — observed and
-    # expected share a single source of truth (doc 55 §4.4).
-    cohort_ages_and_weights: List[tuple] = []
-    evidence: List[tuple] = []
+    # ── Extract cohort frames as engine CohortEvidence ──────────
+    # Observed Σk, Σn come from the same rows the engine consumes —
+    # observed and expected share a single source of truth (doc 55 §4.4).
+    # Trajectory wants (obs_x, obs_y) trajectories; the gauge only has
+    # frontier snapshots, so build a degenerate trajectory of length
+    # frontier_age+1 padded with x_frozen/y_frozen. The trajectory's
+    # rate_draws output is unused here — only the IS conditioning and
+    # the n-weighted completeness scalars matter.
+    engine_cohorts: List[CohortEvidence] = []
     total_k = 0.0
     total_n = 0.0
+    max_age = 0
     for dp in data_points:
         ad_str = str(dp.get('anchor_day', ''))[:10]
         try:
@@ -337,10 +344,21 @@ def _compute_surprise_gauge(
         if age < 0:
             continue
         age_i = int(round(age))
-        cohort_ages_and_weights.append((age_i, float(x_val)))
-        evidence.append((age_i, float(x_val), float(y_val)))
-        total_k += float(y_val)
-        total_n += float(x_val)
+        x_f = float(x_val)
+        y_f = float(y_val)
+        engine_cohorts.append(CohortEvidence(
+            obs_x=[x_f] * (age_i + 1),
+            obs_y=[y_f] * (age_i + 1),
+            x_frozen=x_f,
+            y_frozen=y_f,
+            frontier_age=age_i,
+            a_pop=x_f,
+            eval_age=age_i,
+        ))
+        total_k += y_f
+        total_n += x_f
+        if age_i > max_age:
+            max_age = age_i
 
     # ── Upstream carrier (cohort mode) ──────────────────────────
     from_node_arrival = None
@@ -373,9 +391,10 @@ def _compute_surprise_gauge(
             print(f"[surprise_gauge] node arrival cache failed: {e}")
 
     # ── Call CF engine ──────────────────────────────────────────
-    edge_id = str(edge.get('uuid') or edge.get('id') or '')
     from_node_id = _node_ref_to_id.get(str(edge.get('from', '') or ''), str(edge.get('from', '') or ''))
     to_node_id = _node_ref_to_id.get(str(edge.get('to', '') or ''), str(edge.get('to', '') or ''))
+    cf_mode_value = 'sweep'
+    cf_reason_value: Optional[str] = None
     runtime_bundle = build_prepared_runtime_bundle(
         mode='window' if is_window else 'cohort',
         query_from_node=from_node_id,
@@ -385,29 +404,43 @@ def _compute_surprise_gauge(
         from_node_arrival=from_node_arrival,
         numerator_representation='factorised',
         p_conditioning_source='aggregate_evidence',
-        p_conditioning_evidence_points=len(evidence),
+        p_conditioning_evidence_points=len(engine_cohorts),
         p_conditioning_total_x=total_n,
         p_conditioning_total_y=total_k,
         resolved_params=resolved,
-        cf_mode='sweep',
-        cf_reason=None,
+        cf_mode=cf_mode_value,
+        cf_reason=cf_reason_value,
     )
+    # Sweep horizon: cover the largest cohort age. +30 day buffer keeps
+    # the splice tail safely past every cohort's frontier without
+    # bloating the τ axis.
+    sweep_max_tau = max_age + 30 if engine_cohorts else 30
     try:
-        summary = compute_forecast_summary(
-            edge_id=edge_id,
+        trajectory = compute_forecast_trajectory(
             resolved=resolved,
-            cohort_ages_and_weights=cohort_ages_and_weights,
-            evidence=evidence,
+            cohorts=engine_cohorts,
+            max_tau=sweep_max_tau,
             from_node_arrival=from_node_arrival,
             runtime_bundle=runtime_bundle,
         )
     except Exception as e:
-        print(f"[surprise_gauge] compute_forecast_summary failed: {e}")
+        print(f"[surprise_gauge] compute_forecast_trajectory failed: {e}")
         return _unavailable('Forecast engine failed')
 
-    # ── Project summary → gauge variables ───────────────────────
+    # ── Project trajectory → gauge variables ────────────────────
     obs_rate = total_k / total_n if total_n > 0 else 0.0
     retrieved_at = last_frame_date.isoformat() if last_frame_date else None
+
+    # Trajectory leaves the unconditioned scalars at None when no cohort
+    # carries an eval_age (degenerate empty input). Coerce to 0 so the
+    # gauge renders "expected == observed → no surprise" rather than
+    # crashing on None arithmetic.
+    pp_unc_mean = float(trajectory.pp_rate_unconditioned or 0.0)
+    pp_unc_sd = float(trajectory.pp_rate_unconditioned_sd or 0.0)
+    comp_cond = float(trajectory.completeness_mean or 0.0)
+    comp_cond_sd = float(trajectory.completeness_sd or 0.0)
+    comp_unc = float(trajectory.completeness_unconditioned or 0.0)
+    comp_unc_sd = float(trajectory.completeness_unconditioned_sd or 0.0)
 
     variables: List[Dict[str, Any]] = []
 
@@ -422,8 +455,7 @@ def _compute_surprise_gauge(
         return (obs - exp) / sd_denom
 
     # p variable
-    z_p = _sd_z(obs_rate, summary.pp_rate_unconditioned,
-                summary.pp_rate_unconditioned_sd)
+    z_p = _sd_z(obs_rate, pp_unc_mean, pp_unc_sd)
     q_p = float(norm_cdf(z_p))
     variables.append({
         'name': 'p',
@@ -431,10 +463,10 @@ def _compute_surprise_gauge(
         'quantile': round(q_p, 6),
         'sigma': round(z_p, 3),
         'observed': round(obs_rate, 6),
-        'expected': round(summary.pp_rate_unconditioned, 6),
-        'posterior_sd': round(summary.pp_rate_unconditioned_sd, 6),
-        'combined_sd': round(summary.pp_rate_unconditioned_sd, 6),
-        'completeness': round(summary.completeness_unconditioned, 4),
+        'expected': round(pp_unc_mean, 6),
+        'posterior_sd': round(pp_unc_sd, 6),
+        'combined_sd': round(pp_unc_sd, 6),
+        'completeness': round(comp_unc, 4),
         'evidence_n': int(round(total_n)),
         'evidence_k': int(round(total_k)),
         'evidence_retrieved_at': _format_retrieved_at_for_display(retrieved_at),
@@ -445,8 +477,7 @@ def _compute_surprise_gauge(
     # completeness variable — dial centred on unconditioned mean,
     # needle at conditioned mean. Surprise = how much the evidence
     # shifted the model's view of maturity.
-    z_c = _sd_z(summary.completeness, summary.completeness_unconditioned,
-                summary.completeness_unconditioned_sd)
+    z_c = _sd_z(comp_cond, comp_unc, comp_unc_sd)
     q_c = float(norm_cdf(z_c))
     variables.append({
         'name': 'completeness',
@@ -455,15 +486,15 @@ def _compute_surprise_gauge(
         'sigma': round(z_c, 3),
         # Dial shows expected (unconditioned); needle shows
         # observed (conditioned). Same convention as p.
-        'observed': round(summary.completeness, 6),
-        'expected': round(summary.completeness_unconditioned, 6),
-        'posterior_sd': round(summary.completeness_unconditioned_sd, 6),
-        'combined_sd': round(summary.completeness_unconditioned_sd, 6),
+        'observed': round(comp_cond, 6),
+        'expected': round(comp_unc, 6),
+        'posterior_sd': round(comp_unc_sd, 6),
+        'combined_sd': round(comp_unc_sd, 6),
         # Raw pair — convenient for detail rendering.
-        'unconditioned': round(summary.completeness_unconditioned, 6),
-        'unconditioned_sd': round(summary.completeness_unconditioned_sd, 6),
-        'conditioned': round(summary.completeness, 6),
-        'conditioned_sd': round(summary.completeness_sd, 6),
+        'unconditioned': round(comp_unc, 6),
+        'unconditioned_sd': round(comp_unc_sd, 6),
+        'conditioned': round(comp_cond, 6),
+        'conditioned_sd': round(comp_cond_sd, 6),
         'evidence_retrieved_at': _format_retrieved_at_for_display(retrieved_at),
         'zone': classify_zone(q_c),
         'available': True,
@@ -474,18 +505,18 @@ def _compute_surprise_gauge(
         'analysis_name': 'Expectation Gauge',
         'variables': variables,
         'reference_source': resolved.source,
-        'cf_mode': cf_mode,
-        'is_ess': round(summary.is_ess, 1),
+        'cf_mode': cf_mode_value,
+        'is_ess': round(float(trajectory.is_ess or 0.0), 1),
     }
-    if cf_reason is not None:
-        result['cf_reason'] = cf_reason
+    if cf_reason_value is not None:
+        result['cf_reason'] = cf_reason_value
 
-    print(f"[surprise_gauge] source={resolved.source} is_ess={summary.is_ess:.1f} "
-          f"p: obs={obs_rate:.4f} exp={summary.pp_rate_unconditioned:.4f} "
-          f"sd={summary.pp_rate_unconditioned_sd:.4f} "
-          f"c: unc={summary.completeness_unconditioned:.4f} "
-          f"cond={summary.completeness:.4f} "
-          f"unc_sd={summary.completeness_unconditioned_sd:.4f}")
+    print(f"[surprise_gauge] source={resolved.source} is_ess={float(trajectory.is_ess or 0.0):.1f} "
+          f"p: obs={obs_rate:.4f} exp={pp_unc_mean:.4f} "
+          f"sd={pp_unc_sd:.4f} "
+          f"c: unc={comp_unc:.4f} "
+          f"cond={comp_cond:.4f} "
+          f"unc_sd={comp_unc_sd:.4f}")
 
     return result
 
@@ -2122,12 +2153,12 @@ def handle_conditioned_forecast(data: Dict[str, Any]) -> Dict[str, Any]:
         optionally scoped by `analytics_dsl` to a specific path/span.
       - The fetch pipeline calls this as Stage 2 whole-graph enrichment.
     When NOT to call:
-      - Do NOT reach into compute_forecast_trajectory or
-        compute_forecast_summary directly — they are inner kernels
-        and bypass the topo-sequencing + upstream-carrier coordination
-        this handler performs (doc 47). Calling inner kernels per-edge
-        from an analysis runner loses that coordination and produces
-        subtly different numbers on multi-hop paths.
+      - Do NOT reach into compute_forecast_trajectory directly — it is
+        the inner kernel and bypasses the topo-sequencing + upstream-
+        carrier coordination this handler performs (doc 47). Calling the
+        inner kernel per-edge from an analysis runner loses that
+        coordination and produces subtly different numbers on multi-hop
+        paths.
     This is the remaining BE enrichment surface: the old analytic topo
     pass has been removed, so this handler owns the evidence-conditioned
     MC-with-IS path.

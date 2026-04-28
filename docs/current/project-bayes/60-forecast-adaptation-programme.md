@@ -1047,3 +1047,34 @@ This plan also does not subsume the separate workstreams that retire the
 v1/v2 chart features or any later consumer feature work. Its purpose is
 to leave the forecast stack clean enough that those later workstreams can
 build on a stable semantic boundary instead of extending today's drift.
+
+## Appendix A. WP8 references — pinned debt awaiting the direct-`cohort()` path
+
+Until WP8 lands, the runtime always selects window() temporal vars
+regardless of whether the public DSL carries `cohort()`. The
+flagged direct-`cohort()` rate-conditioning path described in §9
+WP8 is what introduces a real cohort-vs-window regime selector;
+everything that depends on that selector is parked here so it can be
+re-enabled in one pass.
+
+This appendix is the authoritative ledger of code, tests, and
+behaviour pins that are blocked on WP8. Any work touching one of
+these surfaces must add itself to the list rather than silently
+adapting around the temporary contract.
+
+### A.1 Tests marked `xfail` against current behaviour
+
+| Test | File | Expected post-WP8 behaviour |
+|---|---|---|
+| `test_surprise_gauge_prefers_temporal_candidate_regime` | [`graph-editor/lib/tests/test_cf_query_scoped_degradation.py`](../../graph-editor/lib/tests/test_cf_query_scoped_degradation.py) | Cohort-DSL surprise-gauge calls bind the cohort hash (`hash-cohort`, `40/4`) instead of collapsing to the window hash (`hash-window`, `100/40`). Re-enable by removing the `@pytest.mark.xfail` decorator at the test head once WP8 ratifies the cohort regime selector. Strict so the marker fails loudly if the test starts passing for the wrong reason. |
+
+### A.2 How to use this appendix when working in this area
+
+- If you are about to add an `xfail`, a `# WP8` comment, or a "skip
+  for now" branch in the engine or its tests, add a row to the table
+  above and link the test or call site by file and line. The
+  alternative — silent adaptation to the temporary regime — is what
+  caused the current pile of regime-selection drift.
+- When WP8 lands, the closing PR should sweep this appendix: every
+  table entry must either be removed (test re-enabled, code path
+  restored) or migrated into a permanent acceptance note in §10.

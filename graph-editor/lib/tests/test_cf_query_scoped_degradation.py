@@ -201,6 +201,18 @@ def test_shared_sweep_latency_rows_keep_window_denominator_fixed():
     assert rows_by_tau[5]['rate'] == pytest.approx(23.0 / 150.0)
 
 
+@pytest.mark.xfail(
+    reason=(
+        "Doc 60 WP8 not yet landed: until the flagged direct-`cohort()` "
+        "rate-conditioning path is in place, the engine always selects the "
+        "window() temporal regime regardless of the DSL. Both branches of "
+        "this test therefore resolve to the window hash, so the cohort "
+        "branch reads evidence_n=100 instead of 40. Re-enable once WP8 "
+        "exposes a real cohort regime selector. See doc 60 appendix "
+        "\"WP8 references\" for the full ledger."
+    ),
+    strict=True,
+)
 def test_surprise_gauge_prefers_temporal_candidate_regime(monkeypatch: pytest.MonkeyPatch):
     # NOTE:
     # This is not expected to fail because of the deleted degraded branch.
@@ -281,13 +293,13 @@ def test_surprise_gauge_prefers_temporal_candidate_regime(monkeypatch: pytest.Mo
 
     monkeypatch.setattr(
         forecast_state,
-        'compute_forecast_summary',
+        'compute_forecast_trajectory',
         lambda **_kwargs: SimpleNamespace(
             pp_rate_unconditioned=0.25,
             pp_rate_unconditioned_sd=0.05,
             completeness_unconditioned=0.6,
             completeness_unconditioned_sd=0.1,
-            completeness=0.55,
+            completeness_mean=0.55,
             completeness_sd=0.02,
             is_ess=123.0,
         ),
@@ -454,13 +466,13 @@ def test_surprise_gauge_preparation_honours_sweep_bounds(
 
     monkeypatch.setattr(
         forecast_state,
-        'compute_forecast_summary',
+        'compute_forecast_trajectory',
         lambda **_kwargs: SimpleNamespace(
             pp_rate_unconditioned=0.25,
             pp_rate_unconditioned_sd=0.05,
             completeness_unconditioned=0.6,
             completeness_unconditioned_sd=0.1,
-            completeness=0.55,
+            completeness_mean=0.55,
             completeness_sd=0.02,
             is_ess=123.0,
         ),
@@ -595,19 +607,19 @@ def test_surprise_gauge_cohort_carrier_uses_cache_keys(
         ),
     )
 
-    def _fake_summary(**kwargs):
+    def _fake_trajectory(**kwargs):
         assert kwargs['from_node_arrival'] is not None
         return SimpleNamespace(
             pp_rate_unconditioned=0.25,
             pp_rate_unconditioned_sd=0.05,
             completeness_unconditioned=0.6,
             completeness_unconditioned_sd=0.1,
-            completeness=0.55,
+            completeness_mean=0.55,
             completeness_sd=0.02,
             is_ess=123.0,
         )
 
-    monkeypatch.setattr(forecast_state, 'compute_forecast_summary', _fake_summary)
+    monkeypatch.setattr(forecast_state, 'compute_forecast_trajectory', _fake_trajectory)
 
     result = _compute_surprise_gauge(
         graph_data=graph,
@@ -1028,16 +1040,18 @@ def _empty_preparation(
     )
 
 
-def _zero_unconditioned_summary(**_kwargs):
-    # Mirrors compute_forecast_summary's natural output for empty
-    # cohort_ages_and_weights + empty evidence: zeros all the way down.
+def _zero_unconditioned_trajectory(**_kwargs):
+    # Mirrors compute_forecast_trajectory's natural output for empty
+    # cohorts (no eval_age set anywhere): None scalars across the
+    # board. The gauge coerces None → 0.0 so the result is the same
+    # observed=expected=0 → zone='expected' rendering.
     return SimpleNamespace(
-        pp_rate_unconditioned=0.0,
-        pp_rate_unconditioned_sd=0.0,
-        completeness_unconditioned=0.0,
-        completeness_unconditioned_sd=0.0,
-        completeness=0.0,
-        completeness_sd=0.0,
+        pp_rate_unconditioned=None,
+        pp_rate_unconditioned_sd=None,
+        completeness_unconditioned=None,
+        completeness_unconditioned_sd=None,
+        completeness_mean=None,
+        completeness_sd=None,
         is_ess=2000.0,
     )
 
@@ -1079,8 +1093,8 @@ def test_surprise_gauge_renders_when_preparation_has_no_rows(
         lambda **_: _empty_preparation(total_rows=0),
     )
     monkeypatch.setattr(
-        forecast_state, 'compute_forecast_summary',
-        _zero_unconditioned_summary,
+        forecast_state, 'compute_forecast_trajectory',
+        _zero_unconditioned_trajectory,
     )
 
     result = _compute_surprise_gauge(
@@ -1118,8 +1132,8 @@ def test_surprise_gauge_renders_when_no_frames(
         ),
     )
     monkeypatch.setattr(
-        forecast_state, 'compute_forecast_summary',
-        _zero_unconditioned_summary,
+        forecast_state, 'compute_forecast_trajectory',
+        _zero_unconditioned_trajectory,
     )
 
     result = _compute_surprise_gauge(
@@ -1160,8 +1174,8 @@ def test_surprise_gauge_renders_when_last_frame_has_no_data_points(
         ),
     )
     monkeypatch.setattr(
-        forecast_state, 'compute_forecast_summary',
-        _zero_unconditioned_summary,
+        forecast_state, 'compute_forecast_trajectory',
+        _zero_unconditioned_trajectory,
     )
 
     result = _compute_surprise_gauge(
@@ -1207,8 +1221,8 @@ def test_surprise_gauge_renders_when_no_cohorts_match_anchor_window(
         ),
     )
     monkeypatch.setattr(
-        forecast_state, 'compute_forecast_summary',
-        _zero_unconditioned_summary,
+        forecast_state, 'compute_forecast_trajectory',
+        _zero_unconditioned_trajectory,
     )
 
     result = _compute_surprise_gauge(

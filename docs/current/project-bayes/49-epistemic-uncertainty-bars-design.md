@@ -558,9 +558,13 @@ Resolution hierarchy per bin:
    or any edge with no latency ancestor). See B.6.4.
 2. Otherwise fall back to the edge's current promoted alpha/beta via
    `resolve_model_params(edge, scope='edge', temporal_mode)`. This
-   walks bayesian → analytic_be → analytic → evidence k/n →
-   p.mean-with-kappa_fallback, so a band exists whenever the edge has
-   any probability parameter at all.
+   walks posterior cohort_alpha/beta → posterior alpha/beta →
+   analytic-mirror prob_cohort_alpha/beta → analytic-mirror
+   prob_alpha/beta. When none of those are populated (no Bayes
+   posterior and FE-topo moment-match infeasible), the resolver
+   returns α=β=0 and the bin renders midline only — no band. The
+   `analytic_be` source and the κ=200 fallback both retired
+   (24-Apr-26 / 28-Apr-26 respectively).
 
 Walk strategy: sort fit_history timeline ascending, sort input dates
 ascending, merge-join walk O(n + m). For bins with no on-or-before

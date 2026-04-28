@@ -1247,7 +1247,7 @@
                   "alpha": {"type": "number", "minimum": 0, "description": "Window-family Beta α (aggregate, doc 73b §3.9)"},
                   "beta": {"type": "number", "minimum": 0, "description": "Window-family Beta β (aggregate, doc 73b §3.9)"},
                   "n_effective": {"type": "number", "minimum": 0, "description": "Source mass behind window-family Beta shape"},
-                  "provenance": {"type": "string", "description": "Source-basis label (e.g. analytic_window_baseline, analytic_point_estimate_degraded)"},
+                  "provenance": {"type": "string", "description": "Source-basis label (e.g. analytic_window_baseline)"},
                   "cohort_alpha": {"type": "number", "minimum": 0, "description": "Cohort-family Beta α (aggregate, optional)"},
                   "cohort_beta": {"type": "number", "minimum": 0, "description": "Cohort-family Beta β (aggregate, optional)"},
                   "cohort_n_effective": {"type": "number", "minimum": 0, "description": "Source mass behind cohort-family Beta shape"},

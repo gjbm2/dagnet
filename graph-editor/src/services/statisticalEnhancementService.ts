@@ -184,9 +184,9 @@ export function computeBlendedMean(
  *
  * Instead of computing a single blend weight from aggregate completeness,
  * this blends per-day: each date gets its own blend weight from its own
- * completeness, then the blended rates are n-weighted to produce the
- * aggregate p.mean.  Mature cohorts contribute nearly pure evidence;
- * immature cohorts are forecast-dominated.
+ * completeness and its own observed rate, then the blended rates are
+ * n-weighted to produce the aggregate p.mean. Mature cohorts contribute
+ * nearly pure evidence; immature cohorts are forecast-dominated.
  */
 export interface PerDayBlendInputs {
   /** Per-day cohort data (n, k, age per date) */
@@ -253,12 +253,11 @@ export function computePerDayBlendedMean(
 
   const useTailConstraint = inputs.tailConstraintApplied && inputs.cdfSigmaMoments !== undefined;
 
-  // Pass 1: compute per-day completeness, blend weights, and accumulate
-  // totals for the pooled de-biased rate  p̂ = Σk / Σ(n×c).
-  const days: Array<{ date: string; n: number; k: number; c: number; w: number }> = [];
+  // Pass 1: compute per-day completeness and blend weights. Completeness
+  // changes how much we trust each observed rate; it must not rewrite k/n
+  // into a second, de-biased rate before the blend.
+  const days: Array<{ date: string; n: number; k: number; rate: number; c: number; w: number }> = [];
   let totalN = 0;
-  let totalK = 0;
-  let effectiveN = 0;  // Σ(n_i × c_i) — completeness-weighted population
   let weightedCompleteness = 0;
   let weightedW = 0;
 
@@ -285,29 +284,27 @@ export function computePerDayBlendedMean(
     const w_i = (m0Eff + nEff) > 0 ? (nEff / (m0Eff + nEff)) : 0;
 
     totalN += cohort.n;
-    totalK += cohort.k;
-    effectiveN += cohort.n * c_i;
     weightedCompleteness += cohort.n * c_i;
     weightedW += cohort.n * w_i;
 
-    days.push({ date: cohort.date, n: cohort.n, k: cohort.k, c: c_i, w: w_i });
+    days.push({
+      date: cohort.date,
+      n: cohort.n,
+      k: cohort.k,
+      rate: Math.max(0, Math.min(1, cohort.k / cohort.n)),
+      c: c_i,
+      w: w_i,
+    });
   }
 
   if (totalN <= 0) return undefined;
 
-  // Pooled de-biased rate: minimum-variance unbiased estimator for the
-  // true long-run rate p, given k_i ~ Binomial(n_i, p × c_i).
-  // This pools all data before de-biasing, so per-day noise cancels
-  // rather than amplifying.  Naturally weights each day by n_i × c_i
-  // (its information content).
-  const pooledRate = effectiveN > 0 ? Math.min(1, totalK / effectiveN) : 0;
-
-  // Pass 2: apply per-day weights to the pooled rate.
+  // Pass 2: apply per-day weights to each day's observed rate.
   let weightedBlendedRate = 0;
   const perDayWeights: PerDayBlendResult['perDayWeights'] = [];
 
   for (const day of days) {
-    const blendedRate_i = day.w * pooledRate + (1 - day.w) * forecastMean;
+    const blendedRate_i = day.w * day.rate + (1 - day.w) * forecastMean;
     weightedBlendedRate += day.n * blendedRate_i;
 
     perDayWeights.push({
@@ -1940,10 +1937,10 @@ export interface EdgeLAGValues {
     /** Evidence mean from the graph edge (raw k/n within the current query window) */
     evidenceMeanRaw?: number;
 
-    /** Evidence mean actually used for blending (may be Bayesian completeness-adjusted in cohort-path mode) */
+    /** Evidence mean actually used for blending; same observed k/n basis as evidenceMeanRaw */
     evidenceMeanUsedForBlend?: number;
 
-    /** Whether evidenceMeanUsedForBlend was Bayesian completeness-adjusted */
+    /** Legacy diagnostic flag; should remain false after the F10 over-lift fix */
     evidenceMeanBayesAdjusted?: boolean;
 
     // === Per-day blend diagnostics ===
@@ -3026,8 +3023,7 @@ export function enhanceGraphLatencies(
         edgeLAGValues.evidence = {
           // IMPORTANT:
           // `p.evidence.mean` should remain the *raw observed* signal (k/n in the current query window).
-          // Any completeness/Bayes adjustments are used ONLY for blending (see evidenceMeanForBlend below)
-          // and surfaced via debug.evidenceMeanUsedForBlend.
+          // Completeness affects only the blend weight; it must not rewrite k/n.
           mean: edge.p.evidence.mean,
           n: edge.p.evidence.n,
           k: edge.p.evidence.k,
@@ -3129,87 +3125,11 @@ export function enhanceGraphLatencies(
         edgeLAGValues.forecast = { mean: forecastMean };
       }
 
-      // COHORT MODE (PATH-ANCHORED): Bayesian completeness adjustment for blending.
-      //
-      // IMPORTANT:
-      // - `p.evidence.mean` remains raw observed k/n for semantic clarity.
-      // - The adjusted signal is used ONLY for blending and surfaced in debug as
-      //   evidenceMeanUsedForBlend (+ evidenceMeanBayesAdjusted).
-      //
-      // Goal:
-      // - evidenceMeanObserved = k_obs / n is right-censored for immature cohorts (low completeness),
-      //   so it systematically underestimates the eventual conversion probability.
-      // - We want a continuous, inspectable signal for "eventual p" that:
-      //     - approaches k/n when cohorts are mature (completeness → 1)
-      //     - shrinks to forecastMean when information is low (n_eff small)
-      //     - avoids the aggressive (k/n)/completeness blow-up for small completeness
-      //
-      // Model (conjugate approximation):
-      // - Treat observed conversions as arising from an effective number of trials:
-      //     n_eff = n * completeness
-      //   so k_obs ≈ Binomial(n_eff, p_eventual)
-      // - Place a Beta prior on p_eventual centred on the stable baseline forecastMean:
-      //     p ~ Beta(alpha, beta), where alpha = p0*s, beta = (1-p0)*s
-      // - Posterior mean:
-      //     E[p | k_obs] = (k_obs + alpha) / (n_eff + alpha + beta)
-      //
-      // We reuse LATENCY_MIN_EFFECTIVE_SAMPLE_SIZE as the prior strength s to avoid adding new knobs.
-      const clamp01 = (x: number) => Math.max(0, Math.min(1, x));
-      const shouldBayesAdjustEvidenceMean =
-        !isWindowMode &&
-        completenessMode === 'cohort_path_anchored' &&
-        typeof evidenceNRaw === 'number' &&
-        Number.isFinite(evidenceNRaw) &&
-        evidenceNRaw > 0 &&
-        typeof evidenceKRaw === 'number' &&
-        Number.isFinite(evidenceKRaw) &&
-        evidenceKRaw >= 0 &&
-        typeof completeness === 'number' &&
-        Number.isFinite(completeness) &&
-        completeness > 0 &&
-        typeof forecastMean === 'number' &&
-        Number.isFinite(forecastMean);
-
-      // ─────────────────────────────────────────────────────────────────────
-      // TEMPORARY EVIDENCE MANIPULATION (port-to-blend later)
-      // ─────────────────────────────────────────────────────────────────────
-      const evidenceMeanForBlend = (() => {
-        if (!shouldBayesAdjustEvidenceMean) return evidenceMeanObserved;
-
-        const nObs = Math.max(0, evidenceNRaw as number);
-        const kObs = Math.max(0, evidenceKRaw as number);
-        const cRaw = Math.max(LATENCY_EPSILON, Math.min(1, completeness as number));
-        // Conservative completeness for evidence correction (tuned power blend):
-        // Use cEff = c^γ with γ in (0.5, 1.0) to moderate the correction strength.
-        // - γ = 1.0  → most aggressive (uses c directly)
-        // - γ = 0.5  → most conservative (uses sqrt(c))
-        // This setting (γ = 0.6) is a pragmatic middle ground that reduces slight
-        // upward drift in p.evidence at mid-completeness while keeping the tail smooth.
-        const cEff = Math.max(LATENCY_EPSILON, Math.min(1, Math.pow(cRaw, 0.7)));
-
-        // Effective trials behind observed conversions under right-censoring.
-        // Guard: ensure n_eff is not below k_obs (can happen with fractional n_eff + discrete k).
-        const nEffRaw = nObs * cEff;
-        const nEff = Math.max(nEffRaw, kObs);
-
-        const p0 = clamp01(forecastMean as number);
-        // Make the prior dominate harder as completeness → 0:
-        // scale pseudo-sample strength as s' = s / c so that extremely immature cohorts
-        // shrink more strongly to the stable baseline p0.
-        const s = MODEL.LATENCY_MIN_EFFECTIVE_SAMPLE_SIZE / cRaw;
-        const alpha = p0 * s;
-        const beta = (1 - p0) * s;
-
-        return clamp01((kObs + alpha) / (nEff + alpha + beta));
-      })();
-
-      const evidenceMeanWasAdjusted =
-        shouldBayesAdjustEvidenceMean &&
-        typeof evidenceMeanForBlend === 'number' &&
-        typeof evidenceMeanObserved === 'number' &&
-        Number.isFinite(evidenceMeanForBlend) &&
-        Number.isFinite(evidenceMeanObserved) &&
-        Math.abs(evidenceMeanForBlend - evidenceMeanObserved) > 1e-12;
+      // Keep the evidence rate on its observed semantic basis. Completeness belongs
+      // in the blend weight below, not in a second transformation of k/n; applying
+      // both over-corrects near-mature cohort queries.
+      const evidenceMeanForBlend = evidenceMeanObserved;
+      const evidenceMeanWasAdjusted = false;
       if (edgeLAGValues.debug) {
         edgeLAGValues.debug.baseForecastMean = baseForecastMean;
         edgeLAGValues.debug.fallbackForecastMean = fallbackForecastMean;

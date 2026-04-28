@@ -1423,7 +1423,14 @@ def test_zero_evidence_window_rises_as_subject_cdf():
 # pinning CF against its own cheaper analytic baseline.
 
 
-_PARITY_P_MEAN_TOL = 1e-3
+# Tolerance for FE/BE p.mean parity. Synth fixtures sample Bernoulli draws
+# at finite N (e.g. ~450k draws over a 90-day window at simple-a→b gives
+# sample-mean SE ≈ √(0.7·0.3/450k) ≈ 7e-4 on raw k/n alone). Maturity
+# censoring, recency-weighted partial sums, the prior-strength term in
+# w_evidence, and CF's IS reweighting each add independent components on
+# top. 1e-2 is the honest "FE/BE arithmetic agree to within fixture noise"
+# floor; tighter values flap on noise rather than catching real defects.
+_PARITY_P_MEAN_TOL = 1e-2
 
 
 @requires_db
@@ -1520,6 +1527,35 @@ def test_parity_subject_equivalent_cohort_anchor_override_p_mean():
         f"[{_LAT4_CD}] FE/BE p.mean parity failed on single-hop anchor-override cohort: "
         f"fe_only={fe_mean:.6f} full_be={full_mean:.6f} delta={delta:.6f} "
         f"tol={_PARITY_P_MEAN_TOL} — likely Group 2 (carrier-materialisation reach-scaling)"
+    )
+
+
+@pytest.mark.parametrize(
+    "anchor",
+    [
+        "synth-lat4-c",
+        "synth-lat4-b",
+    ],
+)
+@requires_db
+@requires_data_repo
+@requires_synth(_LAT4, enriched=True)
+def test_fe_topo_cohort_c_to_d_p_mean_stays_near_truth(anchor: str):
+    """F10 regression: FE-topo must not over-lift near-mature c→d evidence.
+
+    `param-pack --no-be` exposes FE-topo Step 2 without CF. On synth-lat4
+    c→d, both the analytic window baseline and raw scoped evidence are near
+    truth. The FE-only current-answer scalar should therefore stay near the
+    c→d truth rate rather than being lifted to the old 0.8105 failure value.
+    """
+    cohort_dsl = f"{_LAT4_CD}.cohort({anchor},-90d:)"
+    fe_only = _run_param_pack(_LAT4, cohort_dsl, no_be=True)
+
+    truth_p = _load_truth_edge_params(graph_name=_LAT4, edge_name="c-to-d")["p"]
+    fe_mean = _param_pack_edge_scalar(fe_only, edge_name=_LAT4_CD_EDGE, field="p.mean")
+    assert abs(fe_mean - truth_p) <= 0.03, (
+        f"[{_LAT4_CD}] FE-topo --no-be p.mean should stay near c→d truth on cohort({anchor}): "
+        f"fe_mean={fe_mean:.6f} truth={truth_p:.6f} delta={abs(fe_mean - truth_p):.6f}"
     )
 
 

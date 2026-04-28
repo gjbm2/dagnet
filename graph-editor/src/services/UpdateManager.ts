@@ -1135,10 +1135,12 @@ export class UpdateManager {
           // `latestValue.mean`: that would expose the analytic-source
           // surface to whichever slice happened to sort first (often
           // a cohort-evidence mean) and silently violate the §3.3.3
-          // layer-isolation rule. When `forecast` is absent, the
-          // analytic source carries no usable mean and the resolver's
-          // §3.8 register entry 2 (`analytic_point_estimate_degraded`)
-          // takes over with explicit provenance.
+          // layer-isolation rule. Doc 73f F16: when `forecast` (or
+          // its paired `forecast_stdev`) is absent, the analytic
+          // block emits no aggregate Beta and the resolver returns
+          // alpha=beta=0 — consumers render the midline (if any)
+          // without dispersion bands rather than relying on a
+          // fabricated prior. §3.8 register entry 2 is withdrawn.
           const analyticMean =
             typeof latestValue.forecast === 'number' && Number.isFinite(latestValue.forecast)
               ? latestValue.forecast

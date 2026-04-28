@@ -962,3 +962,213 @@ class TestPromotionParityWithTS:
             "Promotion-parity violations (Py side):\n  " + "\n  ".join(failures)
         )
 
+
+class TestBayesVarsSidecarSourceMass:
+    """Pin the bayes-vars sidecar -> posterior_block -> resolver handshake.
+
+    Doc 73f Suite D D0 today only proves `promoted_source = 'bayesian'`
+    (a text label). Source-mass diagnostics (workplan #2) require that
+    `n_effective`, `alpha_pred`, `beta_pred`, and aggregate `alpha`/`beta`
+    are also non-None / non-zero on the bayes path — otherwise the
+    doc-52 blend silently degrades to behave like analytic even when
+    promotion text says bayesian.
+
+    Cross-language contract: `bayesPatchService.ts:340-368` reads
+    `windowSlice.{alpha, beta, alpha_pred, beta_pred, n_effective}` from
+    the sidecar and writes `{alpha, beta, alpha_pred, beta_pred,
+    window_n_effective}` onto `edge.p.posterior` (the field-name
+    translation `n_effective` -> `window_n_effective` is load-bearing —
+    `model_resolver.py:483-491` reads `window_n_effective` /
+    `cohort_n_effective`, never plain `n_effective`).
+
+    This test reconstructs the post-projection edge.p shape from the
+    sidecar (matching what bayesPatchService writes) and asserts the
+    resolver round-trips every source-mass field through to its output.
+    Lives in Python because that pins the read side of the contract;
+    the write side has its own TS test in `bayesPatchServiceMerge`.
+    """
+
+    @staticmethod
+    def _project_window_slice_onto_edge(window_slice: dict, edge_id: str = 'fixture-edge') -> dict:
+        """Mirror `bayesPatchService.ts:340-368` for the window() slice.
+
+        Only the fields the resolver reads matter here — latency block
+        is filled enough to satisfy resolver guards but is not the
+        contract under test.
+        """
+        return {
+            'p': {
+                'id': edge_id,
+                'posterior': {
+                    'alpha': window_slice['alpha'],
+                    'beta': window_slice['beta'],
+                    'alpha_pred': window_slice['alpha_pred'],
+                    'beta_pred': window_slice['beta_pred'],
+                    'p_hdi_lower': window_slice['p_hdi_lower'],
+                    'p_hdi_upper': window_slice['p_hdi_upper'],
+                    'hdi_lower_pred': window_slice['hdi_lower_pred'],
+                    'hdi_upper_pred': window_slice['hdi_upper_pred'],
+                    'window_n_effective': window_slice['n_effective'],
+                    'provenance': window_slice['provenance'],
+                    'ess': window_slice['ess'],
+                    'rhat': window_slice['rhat'],
+                    'delta_elpd': window_slice['delta_elpd'],
+                    'pareto_k_max': window_slice['pareto_k_max'],
+                    'n_loo_obs': window_slice['n_loo_obs'],
+                },
+                'latency': {
+                    'mu': window_slice['mu_mean'],
+                    'sigma': window_slice['sigma_mean'],
+                    'onset_delta_days': window_slice['onset_mean'],
+                    'posterior': {
+                        'mu_mean': window_slice['mu_mean'],
+                        'sigma_mean': window_slice['sigma_mean'],
+                        'mu_sd': window_slice['mu_sd'],
+                        'mu_sd_pred': window_slice['mu_sd_pred'],
+                        'sigma_sd': window_slice['sigma_sd'],
+                        'onset_sd': window_slice['onset_sd'],
+                    },
+                },
+                'forecast': {'mean': window_slice['alpha'] / (window_slice['alpha'] + window_slice['beta'])},
+                'evidence': {'n': 5000, 'k': 3000},
+                'model_vars': [
+                    {
+                        'source': 'bayesian',
+                        'probability': {
+                            'alpha': window_slice['alpha'],
+                            'beta': window_slice['beta'],
+                            'mean': window_slice['alpha'] / (window_slice['alpha'] + window_slice['beta']),
+                        },
+                        'latency': {
+                            'mu': window_slice['mu_mean'],
+                            'sigma': window_slice['sigma_mean'],
+                            'onset_delta_days': window_slice['onset_mean'],
+                            'mu_sd': window_slice['mu_sd'],
+                            'mu_sd_pred': window_slice['mu_sd_pred'],
+                            'sigma_sd': window_slice['sigma_sd'],
+                            'onset_sd': window_slice['onset_sd'],
+                        },
+                    },
+                ],
+                'model_source_preference': 'bayesian',
+            },
+        }
+
+    @staticmethod
+    def _load_sidecar_edges():
+        sidecar_path = (
+            _DAGNET_ROOT / 'bayes' / 'fixtures' / 'synth-simple-abc.bayes-vars.json'
+        )
+        if not sidecar_path.exists():
+            return []
+        sidecar = json.loads(sidecar_path.read_text())
+        return [
+            (entry['param_id'], entry['slices']['window()'])
+            for entry in sidecar.get('webhook_payload_edges', [])
+            if 'window()' in (entry.get('slices') or {})
+        ]
+
+    def test_sidecar_n_effective_propagates_to_resolver(self):
+        from runner.model_resolver import resolve_model_params
+
+        cases = self._load_sidecar_edges()
+        if not cases:
+            pytest.skip('synth-simple-abc bayes-vars sidecar missing')
+
+        failures = []
+        for param_id, slc in cases:
+            edge = self._project_window_slice_onto_edge(slc, edge_id=param_id)
+
+            for mode in ('window', 'cohort'):
+                r = resolve_model_params(edge, scope='edge', temporal_mode=mode)
+                if r.source != 'bayesian':
+                    failures.append(
+                        f"{param_id} {mode}: source={r.source!r}, expected 'bayesian'"
+                    )
+                    continue
+                if r.n_effective is None:
+                    failures.append(
+                        f"{param_id} {mode}: n_effective=None — sidecar has "
+                        f"n_effective={slc['n_effective']}, "
+                        "bayesPatchService should have written window_n_effective. "
+                        "Doc-52 blend will silently degrade."
+                    )
+                    continue
+                # Allow tolerance: resolver returns the projected value (window_n_effective)
+                # for a window-only sidecar; cohort mode falls back to window_n_effective
+                # via model_resolver.py:486-487.
+                if abs(r.n_effective - slc['n_effective']) > 1.0:
+                    failures.append(
+                        f"{param_id} {mode}: n_effective={r.n_effective} "
+                        f"!= sidecar value {slc['n_effective']}"
+                    )
+
+        assert not failures, (
+            "Sidecar n_effective propagation failures:\n  " + "\n  ".join(failures)
+        )
+
+    def test_sidecar_predictive_pair_propagates_to_resolver(self):
+        """alpha_pred/beta_pred are the kappa-inflated predictive pair (doc 49).
+
+        If they are missing on the resolved object, the predictive
+        dispersion bands collapse to the epistemic shape — same defect
+        class as missing n_effective for the doc-52 blend.
+        """
+        from runner.model_resolver import resolve_model_params
+
+        cases = self._load_sidecar_edges()
+        if not cases:
+            pytest.skip('synth-simple-abc bayes-vars sidecar missing')
+
+        failures = []
+        for param_id, slc in cases:
+            edge = self._project_window_slice_onto_edge(slc, edge_id=param_id)
+            r = resolve_model_params(edge, scope='edge', temporal_mode='window')
+
+            if r.alpha_pred <= 0 or r.beta_pred <= 0:
+                failures.append(
+                    f"{param_id}: alpha_pred={r.alpha_pred}, beta_pred={r.beta_pred}; "
+                    f"sidecar carries alpha_pred={slc['alpha_pred']}, "
+                    f"beta_pred={slc['beta_pred']} — predictive bands will collapse"
+                )
+                continue
+            if abs(r.alpha_pred - slc['alpha_pred']) > 1e-6:
+                failures.append(
+                    f"{param_id}: alpha_pred={r.alpha_pred} != sidecar {slc['alpha_pred']}"
+                )
+            if abs(r.beta_pred - slc['beta_pred']) > 1e-6:
+                failures.append(
+                    f"{param_id}: beta_pred={r.beta_pred} != sidecar {slc['beta_pred']}"
+                )
+
+        assert not failures, (
+            "Sidecar predictive pair propagation failures:\n  " + "\n  ".join(failures)
+        )
+
+    def test_sidecar_aggregate_alpha_beta_propagate_to_resolver(self):
+        """Aggregate alpha/beta = the fitted posterior mass; load-bearing
+        for any conjugate update or analytic-mirror dispersion."""
+        from runner.model_resolver import resolve_model_params
+
+        cases = self._load_sidecar_edges()
+        if not cases:
+            pytest.skip('synth-simple-abc bayes-vars sidecar missing')
+
+        failures = []
+        for param_id, slc in cases:
+            edge = self._project_window_slice_onto_edge(slc, edge_id=param_id)
+            r = resolve_model_params(edge, scope='edge', temporal_mode='window')
+
+            if abs(r.alpha - slc['alpha']) > 1e-3:
+                failures.append(
+                    f"{param_id}: alpha={r.alpha} != sidecar {slc['alpha']}"
+                )
+            if abs(r.beta - slc['beta']) > 1e-3:
+                failures.append(
+                    f"{param_id}: beta={r.beta} != sidecar {slc['beta']}"
+                )
+
+        assert not failures, (
+            "Sidecar aggregate alpha/beta propagation failures:\n  " + "\n  ".join(failures)
+        )
+
