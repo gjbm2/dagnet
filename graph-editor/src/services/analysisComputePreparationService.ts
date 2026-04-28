@@ -1,6 +1,6 @@
 import { graphComputeClient, type AnalysisResponse, type SnapshotSubjectPayload } from '../lib/graphComputeClient';
 import { hasLocalCompute, computeLocalResultMultiScenario, mergeBackendAugmentation } from './localAnalysisComputeService';
-import { buildGraphForAnalysisLayer, applyProbabilityVisibilityModeToGraph, applyWhatIfToGraph, applyComposedParamsToGraph } from './CompositionService';
+import { buildGraphForAnalysisLayer, applyWhatIfToGraph, applyComposedParamsToGraph } from './CompositionService';
 import { computeInheritedDSL, computeEffectiveFetchDSL } from './scenarioRegenerationService';
 import { augmentDSLWithConstraint } from '../lib/queryDSL';
 import { logChartReadinessTrace } from '../lib/snapshotBootTrace';
@@ -409,7 +409,6 @@ export async function prepareAnalysisComputeInputs(
         params.scenariosContext?.currentParams || {},
         params.scenariosContext?.scenarios || [],
         scenarioId === 'current' ? params.whatIfDSL : undefined,
-        visibilityMode,
       );
 
       const effectiveQueryDsl = getQueryDslForScenario(scenarioId);
@@ -445,15 +444,12 @@ export async function prepareAnalysisComputeInputs(
       const hasScenarioGraph = hasGraphShape(scenario.graph);
       let scenarioGraph: Graph = graph;
       if (hasScenarioGraph) {
-        // Clone-and-strip the caller-supplied scenario graph so visibility
-        // projection, in-schema re-contexting, and engorgement run on an
-        // isolated copy. Without this, the `f+e` branch of
-        // `applyProbabilityVisibilityModeToGraph` returns the input
-        // reference unchanged and `recontextScenarioGraph` engorges
-        // `_posteriorSlices`, `_bayes_evidence`, and `_bayes_priors` onto
-        // the caller's live graph (73e §8.3 Stage 1 / 73b §3.2). The clone
-        // also drops any stale request-only runtime fields the input may
-        // already carry, so engorgement always re-attaches fresh state.
+        // Clone-and-strip so re-contexting and engorgement run on an isolated
+        // copy. Without this, `recontextScenarioGraph` would engorge
+        // `_posteriorSlices`, `_bayes_evidence`, and `_bayes_priors` onto the
+        // caller's live graph (73e §8.3 Stage 1 / 73b §3.2). The clone also
+        // drops any stale request-only runtime fields the input may already
+        // carry, so engorgement always re-attaches fresh state.
         scenarioGraph = cloneGraphWithoutBayesRuntimeFields(scenario.graph as Graph);
       }
       // Prefer caller-provided scenario graph when present. Params remain
@@ -464,7 +460,6 @@ export async function prepareAnalysisComputeInputs(
       if (!hasScenarioGraph && scenario.scenario_id === 'current' && params.frozenWhatIfDsl) {
         scenarioGraph = applyWhatIfToGraph(scenarioGraph, params.frozenWhatIfDsl) as Graph;
       }
-      scenarioGraph = applyProbabilityVisibilityModeToGraph(scenarioGraph, visibilityMode);
 
       const effectiveQueryDsl = composeScenarioDsl(
         augmentDSLWithConstraint(params.currentDSL || '', scenario.effective_dsl || ''),

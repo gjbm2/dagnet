@@ -1435,7 +1435,6 @@ export function useHoverScenarios(graph: ConversionGraph | Graph | null): LocalS
         scenariosCtx.currentParams || {},
         scenariosCtx.scenarios || [],
         scenarioId === 'current' ? whatIfDSL : undefined,
-        visibilityMode as any,
       );
       const scenario = scenariosCtx.scenarios.find(s => s.id === scenarioId);
       result.push({

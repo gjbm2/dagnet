@@ -18,7 +18,7 @@ import type { ContentItem } from '../../types';
 
 vi.mock('../../services/CompositionService', () => ({
   buildGraphForAnalysisLayer: vi.fn(
-    (layerId: string, graph: any, _base: any, _current: any, _scenarios: any[], _whatIf: any, _mode: any) => ({
+    (layerId: string, graph: any, _base: any, _current: any, _scenarios: any[], _whatIf: any) => ({
       ...graph,
       __composedFor: layerId,
     }),
@@ -92,7 +92,6 @@ function buildLiveScenarioDescriptors(
       scenariosContext.currentParams || {},
       scenariosContext.scenarios || [],
       scenarioId === 'current' ? whatIfDSL : undefined,
-      visibilityMode,
     );
     const colour = scenarioId === 'current' ? '#3b82f6'
       : scenarioId === 'base' ? '#6b7280'
@@ -115,7 +114,6 @@ function buildFrozenScenarioDescriptors(
       scenariosContext.currentParams || {},
       scenariosContext.scenarios || [],
       fs.scenario_id === 'current' ? whatIfDSL : undefined,
-      (fs.visibility_mode || 'f+e') as 'f+e' | 'f' | 'e',
     );
     return {
       scenario_id: fs.scenario_id,
@@ -237,7 +235,7 @@ describe('Live → Custom compute parity', () => {
 
     expect(vi.mocked(buildGraphForAnalysisLayer)).toHaveBeenCalledWith(
       'current', expect.anything(), expect.anything(), expect.anything(), expect.anything(),
-      whatIf, expect.anything(),
+      whatIf,
     );
   });
 

@@ -404,8 +404,7 @@ export function buildGraphForAnalysisLayer(
   baseParams: ScenarioParams,
   currentParams: ScenarioParams,
   scenarios: ScenarioLike[],
-  whatIfDSL?: string | null,
-  visibilityMode?: ProbabilityVisibilityMode
+  whatIfDSL?: string | null
 ): Graph {
   // Force non-cumulative composition for scenario layers.
   const composedParams = getComposedParamsForLayer(
@@ -417,11 +416,6 @@ export function buildGraphForAnalysisLayer(
   );
 
   let result = applyComposedParamsToGraph(graph, composedParams);
-
-  // Enforce probability basis (Evidence/Forecast are strict; no fallbacks).
-  if (visibilityMode) {
-    result = applyProbabilityVisibilityModeToGraph(result, visibilityMode, composedParams);
-  }
 
   if (layerId === 'current' && whatIfDSL) {
     result = applyWhatIfToGraph(result, whatIfDSL);

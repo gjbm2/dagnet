@@ -368,7 +368,6 @@ export function useShareBundleFromUrl(args: { graphFileId: string }): void {
               scenariosContext.currentParams,
             scenariosForLayer as any,
               scenarioId === 'current' ? (t.analysis?.what_if_dsl || undefined) : undefined,
-              visibilityMode
             );
 
             const name = (() => {

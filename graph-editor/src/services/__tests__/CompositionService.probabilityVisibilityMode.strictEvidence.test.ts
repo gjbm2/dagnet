@@ -3,11 +3,15 @@
  *
  * Rule: If UI says "Evidence Probability", we must ONLY use evidence-derived values.
  * Residual allocation within a sibling group is allowed (still evidence-derived).
+ *
+ * Per 73e §8.3 Stage 4, production no longer invokes `applyProbabilityVisibilityModeToGraph`
+ * during request preparation — Python `_prepare_scenarios` is the canonical projector.
+ * The helper itself is retained (Stage 4 item 4); these tests pin its semantics directly
+ * so any future change to the projection rule is caught.
  */
 import { describe, expect, it } from 'vitest';
-import { buildGraphForAnalysisLayer } from '../CompositionService';
+import { applyProbabilityVisibilityModeToGraph } from '../CompositionService';
 import type { Graph } from '../../types';
-import type { ScenarioParams } from '../../types/scenarios';
 
 function makeGraph(p: any): Graph {
   return {
@@ -16,26 +20,15 @@ function makeGraph(p: any): Graph {
   } as any;
 }
 
-describe('buildGraphForAnalysisLayer: strict Evidence Probability (no fallback)', () => {
-  const baseParams: ScenarioParams = { edges: {}, nodes: {} };
-  const currentParams: ScenarioParams = { edges: {}, nodes: {} };
-
-  it('uses p.evidence.mean when visibilityMode is e', () => {
+describe('applyProbabilityVisibilityModeToGraph: strict Evidence Probability (no fallback)', () => {
+  it('uses p.evidence.mean when mode is e', () => {
     const graph = makeGraph({
       mean: 0.9,
       forecast: { mean: 0.8 },
       evidence: { mean: 0.12, n: 100, k: 12 },
     });
 
-    const out = buildGraphForAnalysisLayer(
-      'current',
-      graph,
-      baseParams,
-      currentParams,
-      [],
-      undefined,
-      'e'
-    );
+    const out = applyProbabilityVisibilityModeToGraph(graph, 'e');
 
     expect(out.edges?.[0]?.p?.mean).toBe(0.12);
   });
@@ -51,7 +44,7 @@ describe('buildGraphForAnalysisLayer: strict Evidence Probability (no fallback)'
       ],
     } as any;
 
-    const out = buildGraphForAnalysisLayer('current', graph, baseParams, currentParams, [], undefined, 'e');
+    const out = applyProbabilityVisibilityModeToGraph(graph, 'e');
     const byId = new Map(out.edges!.map((e: any) => [e.id, e]));
 
     expect(byId.get('S->A')?.p?.mean).toBeCloseTo(0.6, 10);

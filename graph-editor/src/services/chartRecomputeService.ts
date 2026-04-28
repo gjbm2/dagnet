@@ -312,7 +312,6 @@ export async function recomputeOpenChartsForGraph(args: RecomputeOpenChartsForGr
           args.currentParams,
           args.scenarios as any,
           sid === 'current' ? whatIfDsl : undefined,
-          visibilityMode
         );
 
         return { scenario_id: sid, name, colour, visibility_mode: visibilityMode, graph: scenarioGraph };

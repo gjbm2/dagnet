@@ -355,7 +355,6 @@ export function useShareChartFromUrl(args: { fileId: string; tabId?: string }) {
           scenariosContext.currentParams,
           scenariosForLayer as any,
           scenarioId === 'current' ? whatIfDsl : undefined,
-          visibilityMode
         );
 
         const scenarioOverride = scenarioOverrideById.get(scenarioId);

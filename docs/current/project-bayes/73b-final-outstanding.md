@@ -13,10 +13,23 @@ Stages 0–5 of plan 73b have landed. Stage 6 is in flight. This doc captures th
 3. Spot-check observations from late-stage review that point to gaps between what 73b says is happening and what production actually does.
 4. The two key outside-in CLI suites that act as the load-bearing acceptance gates for cohort_maturity v3.
 5. Outside-in run results from 28-Apr-26 — 10 failing tests grouped into three failure shapes.
-6. Triage order — §3 spot-checks first, then §5 engine work; tolerance vs semantic distinction.
+6. Triage order — verify expected 73e closures first, then remaining spec gaps, then §5 engine work.
 7. Additional forensic review findings from a static 73a/73b implementation pass.
 
 None of these is a Stage 6 entry condition; they are tracked here for follow-up.
+
+### Return note after 73e
+
+`73e-FE-construction.md` is in progress and is expected to close several of the transport/materialisation gaps below. When returning to this punch list after 73e lands, the first item of business is a verification pass: test or inspect the 73e-covered items, mark the confirmed closures here, and only then move on to the cohort-engine failures in §5.
+
+Expected 73e closures to verify first:
+
+- §3.1 — production DSL re-contexting updates the full in-schema Bayesian surface, including `model_vars[bayesian]` and promotion.
+- §3.2 — custom/f+e analysis preparation and chart-write graph snapshots do not mutate or persist request-only Bayes runtime fields.
+- §3.4 / §7.1 — CLI `analyse`, including `conditioned_forecast`, exercises the prepared-analysis dispatch surface and forwards compute-affecting display settings.
+- §7.2 — `parity-test` is either removed or no longer treated as a 73a/73b parity signal.
+- §7.5 — only if implemented as part of 73e Stage 5: missing posterior slices clear stale graph projection rather than leaving old in-schema Bayesian fields in place.
+- §3.7 / §5 Group 3 — 73e Stage 6 should provide the `--no-be` diagnostic needed to separate FE/materialisation divergence from BE/CF-engine divergence; it is not expected to fix the underlying engine arithmetic by itself.
 
 ---
 
@@ -208,9 +221,10 @@ Group 1 is plausibly tolerance / new-conditioning behaviour and may be acceptabl
 
 Per the user's direction:
 
-1. **First, confirm 73a & 73b were built per spec.** Walk §3 spot-check items: §3.1 (production re-contexting not upserting `model_vars[bayesian]`), §3.2 (analysis-prep mutation in f+e mode), §3.3 (CF/analysis parity test scope narrower than name), §3.4 (cliAnalyse non-CF coverage), §3.5 (stale comment), §3.6 (pre-retirement contract pins). Some of these are simple corrections; the §3.1 and §3.2 items in particular are spec-vs-implementation gaps that may themselves be downstream contributors to the cohort_maturity v3 failures in §5.
-2. **Then move to the outside-in failures in §5.** Working hypothesis: the suite was passing before 73 because the retired `analytic_degraded` / discriminator pathway shortcut was masking real CF issues. The retired path and its fallbacks were the obfuscating layer; what FE now sees should be much closer to what CLI sees, exposing the actual engine defects rather than the symptom mosaic that was being papered over.
-3. **Tolerance vs semantic divergence.** Group 1 (~4e-4 drift on previously-1e-6 contracts) is a candidate for tolerance relaxation rather than engine work — those contracts may have held under no-conditioning and now drift slightly under uniform sweep conditioning; relaxing the test tolerance with a documented reason is the right response if that's the cause. Group 2 (~12–18% anchor-depth) and Group 3 (~60% oracle drift) are substantial semantic divergences and warrant real engine investigation — these are not tolerance issues and should not be silenced.
+1. **First, after 73e lands, verify the expected 73e closures.** Run or inspect the targeted coverage for §3.1, §3.2, §3.4 / §7.1, §7.2, and any §7.5 work that 73e actually includes. Update this document with confirmed closed / still-open status before treating the §5 outside-in failures as the next active workstream.
+2. **Then confirm any remaining 73a & 73b spec gaps.** Walk the §3 spot-check items that 73e did not close: §3.3 (CF/analysis parity test scope narrower than name), §3.5 (stale comment), §3.6 (pre-retirement contract pins), plus any failed verification from item 1. Some of these are simple corrections; any failed §3.1 or §3.2 verification would remain a spec-vs-implementation gap that may itself be a downstream contributor to the cohort_maturity v3 failures in §5.
+3. **Then move to the outside-in failures in §5.** Working hypothesis: the suite was passing before 73 because the retired `analytic_degraded` / discriminator pathway shortcut was masking real CF issues. The retired path and its fallbacks were the obfuscating layer; what FE now sees should be much closer to what CLI sees, exposing the actual engine defects rather than the symptom mosaic that was being papered over.
+4. **Tolerance vs semantic divergence.** Group 1 (~4e-4 drift on previously-1e-6 contracts) is a candidate for tolerance relaxation rather than engine work — those contracts may have held under no-conditioning and now drift slightly under uniform sweep conditioning; relaxing the test tolerance with a documented reason is the right response if that's the cause. Group 2 (~12–18% anchor-depth) and Group 3 (~60% oracle drift) are substantial semantic divergences and warrant real engine investigation — these are not tolerance issues and should not be silenced.
 
 ---
 
@@ -283,7 +297,7 @@ Some neighbouring diagnostics are correctly gated behind `DAGNET_COHORT_DEBUG`, 
 | 3.5 | Stale comment in carrier-read shared-resolver test | Trivial | One-line fix |
 | 4 | Two outside-in CLI suites in `test_cohort_factorised_outside_in.py` are the primary cohort_maturity v3 acceptance gates | Reference | Run as primary signal |
 | 5 | Outside-in run 28-Apr-26: 10 fail / 13 pass — Group 1 small drift, Group 2 anchor-depth ~12–18%, Group 3 low-evidence oracle ~60% | High | Engine investigation (Groups 2, 3); tolerance call (Group 1) |
-| 6 | Triage order: §3 spot-checks first; then §5 engine work; tolerance vs semantic distinction | Reference | Sequencing |
+| 6 | Triage order: verify expected 73e closures first; then remaining spec gaps; then §5 engine work | Reference | Sequencing |
 | 7.1 | `analyse --type conditioned_forecast` omits prepared display settings | Medium | CLI CF payload |
 | 7.2 | `parity-test` still uses param replay instead of enriched scenario graphs | Medium | CLI diagnostics |
 | 7.3 | `read_edge_cohort_params` bypasses `resolve_model_params` | High | Python forecast runtime |
