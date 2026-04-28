@@ -18,6 +18,7 @@ function makeContaminatedGraph() {
         _bayes_priors: { stale: true },
         p: {
           id: 'checkout-to-payment',
+          _posteriorSlices: { slices: { 'window()': { alpha: 1, beta: 1 } }, fitted_at: 'stale' },
           latency: {
             mu: 1.4,
             sigma: 0.5,
@@ -26,6 +27,19 @@ function makeContaminatedGraph() {
             __parityComputedT95Days: 12,
           },
         },
+        conditional_p: [
+          {
+            case_id: 'X',
+            case_variant: 'v1',
+            p: {
+              _posteriorSlices: { slices: { 'window()': { alpha: 2, beta: 2 } } },
+              latency: {
+                __parityEvidence: [{ date: '1-Feb-26', n: 5, k: 1 }],
+                __parityComputedT95Days: 7,
+              },
+            },
+          },
+        ],
       },
     ],
     metadata: {
@@ -71,6 +85,10 @@ describe('Bayes graph runtime helpers', () => {
     expect(graph).not.toBe(snapshot);
     expect(graph.edges[0]._bayes_evidence).toEqual({ stale: true });
     expect(graph.edges[0]._bayes_priors).toEqual({ stale: true });
+    expect((graph.edges[0].p as any)._posteriorSlices).toEqual({
+      slices: { 'window()': { alpha: 1, beta: 1 } },
+      fitted_at: 'stale',
+    });
     expect(graph.edges[0].p.latency.__parityEvidence).toEqual([{ date: '1-Jan-26', n: 10, k: 3 }]);
     expect(graph.edges[0].p.latency.__parityComputedT95Days).toBe(12);
 
@@ -78,6 +96,9 @@ describe('Bayes graph runtime helpers', () => {
     expect(snapshot.edges[0]._bayes_priors).toBeDefined();
     expect((snapshot.edges[0] as any)._bayes_evidence.stale).toBeUndefined();
     expect((snapshot.edges[0] as any)._bayes_priors.stale).toBeUndefined();
+    // Param file in this fixture has no `posterior`, so engorgement does not
+    // re-attach `_posteriorSlices`; the strip pass leaves it absent.
+    expect((snapshot.edges[0].p as any)._posteriorSlices).toBeUndefined();
     expect(snapshot.edges[0].p.latency.__parityEvidence).toBeUndefined();
     expect(snapshot.edges[0].p.latency.__parityComputedT95Days).toBeUndefined();
   });
@@ -90,7 +111,11 @@ describe('Bayes graph runtime helpers', () => {
     expect(modified).toBe(true);
     expect(graph.edges[0]._bayes_evidence).toBeUndefined();
     expect(graph.edges[0]._bayes_priors).toBeUndefined();
+    expect((graph.edges[0].p as any)._posteriorSlices).toBeUndefined();
     expect(graph.edges[0].p.latency.__parityEvidence).toBeUndefined();
     expect(graph.edges[0].p.latency.__parityComputedT95Days).toBeUndefined();
+    expect((graph.edges[0].conditional_p![0].p as any)._posteriorSlices).toBeUndefined();
+    expect((graph.edges[0].conditional_p![0].p.latency as any).__parityEvidence).toBeUndefined();
+    expect((graph.edges[0].conditional_p![0].p.latency as any).__parityComputedT95Days).toBeUndefined();
   });
 });

@@ -34,6 +34,10 @@ During init, all edits update both `data` and `originalData` without marking dir
 
 Workspace-loaded files are keyed by prefixed ID. Use `fileRegistry.restoreFile(fileId, workspaceScope)` which handles both. AP 12.
 
+### I-6a: Underscore-prefixed graph fields are transport-only and must not persist
+
+Fields with a `_` (or `__`) prefix on graph edges, `edge.p`, or `edge.p.latency` are request-only payloads or runtime diagnostics — attached at submission/diagnostic time and stripped at every persistence boundary. Today's catalogue: `_bayes_evidence` and `_bayes_priors` (on edge), `_posteriorSlices` (on `edge.p`), `__parityEvidence` and `__parityComputedT95Days` (on `edge.p.latency`). New transport additions should follow the same prefix convention so the rule stays self-evident. The shared strip helpers in [bayesGraphRuntime.ts](../../../graph-editor/src/lib/bayesGraphRuntime.ts) are the single owner of this rule and run from FileRegistry's save path (graph and chart files), repo commit, and CLI snapshot writes. 73e §8.3 Stage 1 / §8.2.1a.
+
 ---
 
 ## Mutation

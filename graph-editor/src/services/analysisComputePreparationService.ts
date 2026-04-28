@@ -16,6 +16,7 @@ import {
   type ParameterFileResolver,
 } from './posteriorSliceContexting';
 import { engorgeGraphEdges } from '../lib/bayesEngorge';
+import { cloneGraphWithoutBayesRuntimeFields } from '../lib/bayesGraphRuntime';
 import { collectConditionedForecastParameterFiles } from '../lib/conditionedForecastGraphSnapshot';
 
 // ── Per-scenario request-graph contexting + engorgement (doc 73b §3.2a) ────
@@ -444,7 +445,16 @@ export async function prepareAnalysisComputeInputs(
       const hasScenarioGraph = hasGraphShape(scenario.graph);
       let scenarioGraph: Graph = graph;
       if (hasScenarioGraph) {
-        scenarioGraph = scenario.graph as Graph;
+        // Clone-and-strip the caller-supplied scenario graph so visibility
+        // projection, in-schema re-contexting, and engorgement run on an
+        // isolated copy. Without this, the `f+e` branch of
+        // `applyProbabilityVisibilityModeToGraph` returns the input
+        // reference unchanged and `recontextScenarioGraph` engorges
+        // `_posteriorSlices`, `_bayes_evidence`, and `_bayes_priors` onto
+        // the caller's live graph (73e §8.3 Stage 1 / 73b §3.2). The clone
+        // also drops any stale request-only runtime fields the input may
+        // already carry, so engorgement always re-attaches fresh state.
+        scenarioGraph = cloneGraphWithoutBayesRuntimeFields(scenario.graph as Graph);
       }
       // Prefer caller-provided scenario graph when present. Params remain
       // supported for legacy recipe callers that still pass overlay deltas.

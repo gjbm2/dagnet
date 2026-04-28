@@ -9,7 +9,7 @@ import {
 } from '../types';
 import { db } from '../db/appDatabase';
 import { useDialog } from './DialogContext';
-import { stripBayesRuntimeFieldsFromGraphInPlace } from '../lib/bayesGraphRuntime';
+import { stripBayesRuntimeFieldsFromGraphInPlace, stripBayesRuntimeFieldsFromChartInPlace } from '../lib/bayesGraphRuntime';
 
 /**
  * Serialize editorState for IndexedDB storage
@@ -81,8 +81,17 @@ class FileRegistry {
   private fileGenerations = new Map<string, number>(); // Monotonic counter per fileId — prevents stale pending replays
 
   private stripGraphRuntimeFields(type: RepositoryItem['type'] | string | undefined, data: any): boolean {
-    if (type !== 'graph') return false;
-    return stripBayesRuntimeFieldsFromGraphInPlace(data);
+    if (type === 'graph') {
+      return stripBayesRuntimeFieldsFromGraphInPlace(data);
+    }
+    if (type === 'chart') {
+      // Chart-recipe schema does not include a graph snapshot today, but
+      // historic charts (and any future schema widening) could embed one.
+      // Run the strip defensively so request-only Bayes runtime fields can
+      // never reach disk via a chart file (73e §8.3 Stage 1 / §8.2.1a).
+      return stripBayesRuntimeFieldsFromChartInPlace(data);
+    }
+    return false;
   }
 
   private sanitiseFileStateInPlace(file: FileState | undefined): boolean {

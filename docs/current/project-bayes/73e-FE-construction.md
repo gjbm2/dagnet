@@ -444,3 +444,15 @@ Purpose: avoid stale results introduced by the boundary change.
 - **CF scenario bundling and cache performance tuning remain open optimisations**, explicitly separate from this cleanup's core correctness work.
 
 End of proposal.
+
+## Implementation progress
+
+<!-- managed by /implement-carefully — edit checkboxes manually only when the skill is not running -->
+
+- [x] Stage 0 — completed (consumer contract review, recorded in §8.3 body before this block existed)
+- [x] Stage 1 — completed 28-Apr-26
+- [ ] Stage 2
+- [ ] Stage 3
+- [ ] Stage 4
+- [ ] Stage 5
+- [ ] Stage 6

@@ -174,6 +174,63 @@ describe('prepareAnalysisComputeInputs — per-scenario re-context (Stage 4(a))'
     expect(edge._bayes_priors).toBeDefined();
   });
 
+  it('does NOT mutate the caller-supplied scenario.graph in custom f+e mode (73e §8.3 Stage 1)', async () => {
+    // Mutation-isolation guard: per 73e §8.3 Stage 1 / 73b §3.2, the custom-mode
+    // path that aliases `scenario.graph` directly into `scenarioGraph` must
+    // clone before any visibility projection / re-contexting / engorgement.
+    // The f+e branch of `applyProbabilityVisibilityModeToGraph` historically
+    // returned the input reference unchanged, which let `recontextScenarioGraph`
+    // engorge `_posteriorSlices`, `_bayes_evidence`, and `_bayes_priors` onto
+    // the live editor graph. This test pins the isolation invariant.
+    const callerScenarioGraph: any = makeGraph();
+
+    const prepared = await prepareAnalysisComputeInputs({
+      mode: 'custom',
+      graph: makeGraph() as any,
+      analysisType: 'bridge_view',
+      analyticsDsl: 'from(a).to(b)',
+      currentDSL: '',
+      needsSnapshots: false,
+      customScenarios: [{
+        scenario_id: 'scenario-1',
+        name: 'Scenario 1',
+        colour: '#3b82f6',
+        visibility_mode: 'f+e',
+        graph: callerScenarioGraph,
+        effective_dsl: 'window(1-Jan-26:31-Jan-26)',
+      }],
+      hiddenScenarioIds: [],
+      frozenWhatIfDsl: null,
+      resolveParameterFile: (paramId: string) => (
+        paramId === PARAM_ID ? makeParameterFile() : undefined
+      ),
+    }) as PreparedAnalysisComputeReady;
+
+    expect(prepared.status).toBe('ready');
+    const preparedEdge = (prepared.scenarios[0].graph as any).edges[0];
+    const callerEdge = callerScenarioGraph.edges[0];
+
+    // Identity: the prepared graph must be a distinct object from the caller's.
+    expect(prepared.scenarios[0].graph).not.toBe(callerScenarioGraph);
+    expect(preparedEdge).not.toBe(callerEdge);
+
+    // Engorgement fields appear ONLY on the prepared (request) graph.
+    expect(preparedEdge._bayes_evidence).toBeDefined();
+    expect(preparedEdge._bayes_priors).toBeDefined();
+    expect(preparedEdge.p._posteriorSlices).toBeDefined();
+
+    expect(callerEdge._bayes_evidence).toBeUndefined();
+    expect(callerEdge._bayes_priors).toBeUndefined();
+    expect(callerEdge.p._posteriorSlices).toBeUndefined();
+
+    // In-schema projection must not have leaked onto the caller graph either:
+    // the input had no `posterior` and `latency.posterior`, the prepared graph
+    // gains them, but the caller's input graph stays clean.
+    expect(preparedEdge.p.posterior).toBeDefined();
+    expect(callerEdge.p.posterior).toBeUndefined();
+    expect(callerEdge.p.latency?.posterior).toBeUndefined();
+  });
+
   it('produces a no-op for the request graph when resolveParameterFile is omitted', async () => {
     const prepared = await prepareAnalysisComputeInputs({
       mode: 'custom',
