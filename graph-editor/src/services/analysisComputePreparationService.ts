@@ -708,6 +708,26 @@ export async function runPreparedAnalysis(
 async function runBackendAnalysis(
   prepared: PreparedAnalysisComputeReady,
 ): Promise<AnalysisResponse> {
+  // Read-only conditioned forecast: prepared dispatch through the shared CF
+  // payload builder (doc 73e §8.3 Stage 2 / 73b §7.1). The prepared graph is
+  // already engorged in prep; the dispatcher forwards display_settings,
+  // scenario_id, effective_query_dsl, and candidate_regimes_by_edge unchanged.
+  // Browser graph-mutating CF enrichment lives on its existing lifecycle in
+  // conditionedForecastService.runConditionedForecast — that path is untouched.
+  if (prepared.analysisType === 'conditioned_forecast') {
+    return graphComputeClient.forecastConditionedScenarios({
+      scenarios: prepared.scenarios.map((scenario) => ({
+        scenario_id: scenario.scenario_id,
+        graph: scenario.graph,
+        effective_query_dsl: scenario.effective_query_dsl,
+        candidate_regimes_by_edge: scenario.candidate_regimes_by_edge,
+        analytics_dsl: scenario.analytics_dsl,
+      })),
+      analyticsDsl: prepared.analyticsDsl,
+      displaySettings: prepared.displaySettings,
+    });
+  }
+
   if (prepared.scenarios.length > 1) {
     return graphComputeClient.analyzeMultipleScenarios(
       prepared.scenarios.map((scenario) => ({

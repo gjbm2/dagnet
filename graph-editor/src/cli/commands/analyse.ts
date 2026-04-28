@@ -291,45 +291,12 @@ async function runAnalyse() {
     }
   }
 
-  // Dispatch to BE
-  let result: any;
-  if (analysisType === 'conditioned_forecast') {
-    // Conditioned forecast: same preparation, different endpoint (doc 45).
-    // Sends to /api/forecast/conditioned which returns per-edge scalars.
-    // The engorged snapshot helper stays in src/lib so the CLI does not
-    // import the browser-conditioned forecast service (which depends on
-    // TabContext and other browser runtime wiring).
-    const { PYTHON_API_BASE } = await import('../../lib/pythonApiBase');
-    const { buildConditionedForecastGraphSnapshot } = await import('../../lib/conditionedForecastGraphSnapshot');
-    const forecastUrl = `${PYTHON_API_BASE}/api/forecast/conditioned`;
-    // Build the payload from the prepared scenarios
-    const forecastPayload = {
-      analytics_dsl: prepared.analyticsDsl,
-      ...(isDiagnostic() ? { _diagnostics: true } : {}),
-      scenarios: prepared.scenarios.map((sc: any) => ({
-        scenario_id: sc.scenario_id,
-        graph: buildConditionedForecastGraphSnapshot(
-          sc.graph,
-          (paramId) => bundle.parameters.get(paramId),
-        ),
-        effective_query_dsl: sc.effective_query_dsl,
-        candidate_regimes_by_edge: sc.candidate_regimes_by_edge || {},
-        analytics_dsl: sc.analytics_dsl,
-      })),
-    };
-    const resp = await fetch(forecastUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(forecastPayload),
-    });
-    if (!resp.ok) {
-      log.fatal(`Conditioned forecast failed: ${resp.status} ${resp.statusText}`);
-    }
-    result = await resp.json();
-  } else {
-    // Standard analysis dispatch
-    result = await runPreparedAnalysis(prepared as PreparedAnalysisComputeReady);
-  }
+  // Dispatch to BE through the shared prepared-analysis path. CF (doc 73e
+  // §8.3 Stage 2 / 73b §7.1) is routed inside runPreparedAnalysis to
+  // /api/forecast/conditioned with display_settings forwarded; standard
+  // analyses go to /api/runner/analyze. The CLI no longer hand-rolls a
+  // separate CF payload.
+  const result: any = await runPreparedAnalysis(prepared as PreparedAnalysisComputeReady);
 
   if (!result.success) {
     log.fatal(`Analysis failed: ${(result as any).error || 'unknown error'}`);

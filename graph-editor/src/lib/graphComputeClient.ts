@@ -2166,6 +2166,80 @@ export class GraphComputeClient {
   }
 
   /**
+   * Read-only conditioned forecast dispatch (doc 73e §8.3 Stage 2 / 73b §7.1).
+   *
+   * Used by `runPreparedAnalysis` when `analysisType === 'conditioned_forecast'`
+   * to route the prepared scenarios to `/api/forecast/conditioned`. The graph
+   * on each scenario is already engorged by `recontextScenarioGraph` during
+   * prep — this method must NOT call `buildConditionedForecastGraphSnapshot`
+   * again on transport-ready graphs.
+   *
+   * Distinct from `conditionedForecastService.runConditionedForecast`, which
+   * is the browser graph-mutating CF enrichment pipeline (race / timeout /
+   * UpdateManager apply). That one stays on its existing lifecycle; this
+   * dispatcher is the read-only request transport for the prepared-analysis
+   * path.
+   */
+  async forecastConditionedScenarios(args: {
+    scenarios: Array<{
+      scenario_id: string;
+      graph: any;
+      effective_query_dsl?: string;
+      candidate_regimes_by_edge?: Record<string, Array<{ core_hash: string; equivalent_hashes: string[] }>>;
+      analytics_dsl?: string;
+    }>;
+    analyticsDsl?: string;
+    displaySettings?: Record<string, unknown>;
+  }): Promise<AnalysisResponse> {
+    const diagnosticsRequested = !!(globalThis as any).__dagnetDiagnostics;
+
+    if (this.useMock) {
+      return {
+        success: true,
+        result: {
+          analysis_type: 'conditioned_forecast',
+          analysis_name: 'Conditioned Forecast',
+          analysis_description: 'Mock conditioned forecast',
+          metadata: {},
+          data: [],
+        },
+        query_dsl: args.analyticsDsl,
+      };
+    }
+
+    const payload = {
+      analytics_dsl: args.analyticsDsl ?? '',
+      scenarios: args.scenarios.map((s) => ({
+        scenario_id: s.scenario_id,
+        graph: s.graph,
+        ...(s.effective_query_dsl ? { effective_query_dsl: s.effective_query_dsl } : {}),
+        candidate_regimes_by_edge: s.candidate_regimes_by_edge ?? {},
+        ...(s.analytics_dsl ? { analytics_dsl: s.analytics_dsl } : {}),
+      })),
+      ...(args.displaySettings ? { display_settings: args.displaySettings } : {}),
+      ...(diagnosticsRequested ? { _diagnostics: true } : {}),
+    };
+
+    const url = `${this.baseUrl}/api/forecast/conditioned`;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+      const contentType = response.headers.get('content-type');
+      if (contentType?.includes('application/json')) {
+        const error = await response.json();
+        throw new Error(`Conditioned forecast failed: ${error.detail || error.error || response.statusText}`);
+      }
+      throw new Error(`Conditioned forecast API unavailable (${response.status}). Ensure Python backend is running.`);
+    }
+
+    return await response.json();
+  }
+
+  /**
    * Get available analysis types for a DSL query
    * Results are cached to avoid expensive recomputation on re-renders
    * 

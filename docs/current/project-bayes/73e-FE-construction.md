@@ -398,6 +398,16 @@ Purpose: avoid stale results introduced by the boundary change.
 4. Convert CLI tests that are intended to protect CLI behaviour but currently POST directly to the BE.
 5. Re-run the focused TS suites plus the 73b §5 outside-in Python suite. Numerical movement in 73b §5 Groups 2/3 is not expected from transport cleanup; if it occurs, stop and investigate.
 
+#### Stage 7 — document the final system contract
+
+Purpose: make the post-cleanup behaviour durable outside this proposal.
+
+1. Update the canonical codebase forecast-flow documentation after the implementation is complete. At minimum, revise [FORECAST_STACK_DATA_FLOW.md](../codebase/FORECAST_STACK_DATA_FLOW.md) so it describes the final materialisation sequence, prepared analysis transport envelope, endpoint dispatch split (`/api/runner/analyze` vs `/api/forecast/conditioned`), and the distinction between read-only CF dispatch, graph-mutating CF enrichment, CLI param-pack production, and Bayes-run commissioning.
+2. Update CLI / graph-ops docs where behaviour changed. At minimum, revise the CLI analysis and param-pack references so they state that `cli analyse` and the browser share the prepared-analysis path, while `cli param-pack` shares the graph-population/extraction path rather than analysis dispatch.
+3. Update service-directory or invariant docs if ownership changed. The documentation should name the owner of scenario materialisation, request transport cloning/engorgement, TypeScript-vs-Python visibility projection, and request-only Bayes runtime fields.
+4. Remove or rewrite any stale project docs that still describe request-side materialisation as the intended design. If a project note is retained as historical context, mark that explicitly.
+5. Documentation is the final stage because it should describe what actually shipped, not what the proposal hoped would ship. Do not complete Stage 7 until Stages 1–6 are implemented and the final tests have confirmed the boundary behaviour.
+
 ### 8.4 Things this proposal explicitly does not do
 
 - **It does not collapse all scenario source policies into one UI mode.** Live, custom, and fixed remain useful user concepts. The consolidation is below that layer: once materialised, all scenarios share one graph contract. A future fourth mode — 'static', for frozen-snapshot semantics that preserve captured numbers across replay — is acknowledged separately in TODO.md.
@@ -420,6 +430,7 @@ Purpose: avoid stale results introduced by the boundary change.
 7. Scenario storage and chart/share replay paths are audited before removing any fallback projection they currently rely on. Existing canvas custom/fixed-mode tabs and chart files continue to render unchanged.
 8. Obvious cache correctness regressions are ruled out; performance cache redesign remains out of scope.
 9. The 73b §5 outside-in suite is run again after the cleanup lands. 73b §5 Group 2 and Group 3 numerical signatures are not expected to move; if they do, the transport cleanup has exposed or altered engine semantics and must be investigated before closure.
+10. The post-cleanup materialisation, analysis transport, CF dispatch, param-pack, and Bayes commissioning contracts are documented in canonical codebase / CLI docs. The docs distinguish shipped behaviour from historical project notes.
 
 ### 8.6 Suggested sequencing
 
@@ -429,7 +440,8 @@ Purpose: avoid stale results introduced by the boundary change.
 4. **Stage 4 fourth.** Remove TS-side visibility projection (`applyProbabilityVisibilityModeToGraph` call sites at `CompositionService.ts:423` and `analysisComputePreparationService.ts:457`); Python `_prepare_scenarios` becomes the sole projector. Preserve scalar-runner output parity.
 5. **Stage 5 fifth.** Extract FE topo invocation into a standalone helper, wire the four laggard callers (custom params, graph-bearing custom, fixed, CLI standard) into the unified materialisation path, and add the session-log + not-materialised marker contract for failure cases. Preserve the share/chart restore contract.
 6. **Stage 6 sixth.** Check cache sanity, clean up CLI tests that bypass the public command path, then re-run the focused TS suites and the 73b §5 outside-in Python suite.
-7. **Optimisation phases later.** Evaluate CF multi-scenario bundling for bulk materialisation events after the core contract is stable. Evaluate cache granularity / cache-lifetime improvements separately.
+7. **Stage 7 seventh.** Update canonical codebase and CLI docs to reflect the shipped contracts and remove stale descriptions of the old request-prep materialisation behaviour.
+8. **Optimisation phases later.** Evaluate CF multi-scenario bundling for bulk materialisation events after the core contract is stable. Evaluate cache granularity / cache-lifetime improvements separately.
 
 ### 8.7 What this proposal closes or leaves open
 
@@ -441,6 +453,7 @@ Purpose: avoid stale results introduced by the boundary change.
 - **Stage 0 consumer review is complete**; remaining risks are represented in Stages 1–6.
 - **The FE topo location question is closed**: FE topo runs in every materialisation path, extracted into a standalone helper callable from any materialisation site (Stage 5 item 7). The static-scenario preservation question is explicitly out of scope (§8.4).
 - **The visibility projection question is closed**: §8.2.3 audit found Python `_prepare_scenarios` is the canonical owner. Stage 4 removes TS-side projection (`applyProbabilityVisibilityModeToGraph` call sites) without changing scalar-runner output.
+- **The documentation-closeout question is explicit**: Stage 7 updates canonical codebase and CLI docs after the shipped behaviour is known, so this proposal does not remain the only source of truth.
 - **CF scenario bundling and cache performance tuning remain open optimisations**, explicitly separate from this cleanup's core correctness work.
 
 End of proposal.
@@ -451,8 +464,9 @@ End of proposal.
 
 - [x] Stage 0 — completed (consumer contract review, recorded in §8.3 body before this block existed)
 - [x] Stage 1 — completed 28-Apr-26
-- [ ] Stage 2
+- [x] Stage 2 — completed 28-Apr-26
 - [ ] Stage 3
 - [ ] Stage 4
 - [ ] Stage 5
 - [ ] Stage 6
+- [ ] Stage 7
