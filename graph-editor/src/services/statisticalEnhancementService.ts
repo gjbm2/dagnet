@@ -2361,6 +2361,21 @@ export function enhanceGraphLatencies(
       const cohortsAll = aggregateFn(paramValues, queryDate, undefined);
 
       if (cohortsScoped.length === 0) {
+        // No cohort observations land in this query window, so the
+        // canonical evidence/forecast blend cannot run. The blend formula
+        // (`w_evidence = nEff / (m0Eff + nEff)`) reduces to 0 when nEff=0,
+        // i.e. blendedMean → forecast.mean. Bake that limit in here so
+        // p.mean falls back to the available analytic prior instead of
+        // staying at 0 from the empty-evidence stub upstream. Respect
+        // `mean_overridden` (user-locked p.mean must not be rewritten).
+        const forecastMeanOnEdge = edge.p?.forecast?.mean;
+        if (
+          (edge.p as any)?.mean_overridden !== true
+          && typeof forecastMeanOnEdge === 'number'
+          && Number.isFinite(forecastMeanOnEdge)
+        ) {
+          (edge.p as any).mean = forecastMeanOnEdge;
+        }
         // Cohort mode: upstream edges (especially the first latency edge from the anchor)
         // may have only a baseline window() slice. Even if we cannot compute cohort-scoped
         // completeness for that edge, we still need to propagate a baseline median-lag

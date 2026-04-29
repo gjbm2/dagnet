@@ -324,6 +324,19 @@ def build_prepared_span_execution_from_topology(
         lat = resolved.edge_latency if resolved is not None else None
         p_mean = float(min(max(getattr(resolved, 'p_mean', 0.0) or 0.0, 0.0), 1.0))
         p_sd = float(getattr(resolved, 'p_sd', 0.0) or 0.0)
+        # Predictive p_sd — closed form from `alpha_pred`/`beta_pred`. For
+        # bayes this is the kappa-inflated Beta from MCMC; for analytic
+        # it is the Williams MoM Beta-Binomial concentration emitted via
+        # the §6 overdispersion estimator. Falls back to the epistemic
+        # p_sd when no predictive Beta is available (sources that emit
+        # epistemic only). See EPISTEMIC_DISPERSION_DESIGN.md §7.
+        _ap = float(getattr(resolved, 'alpha_pred', 0.0) or 0.0)
+        _bp = float(getattr(resolved, 'beta_pred', 0.0) or 0.0)
+        if _ap > 0 and _bp > 0:
+            _s_pred = _ap + _bp
+            p_sd_pred = math.sqrt(_ap * _bp / (_s_pred * _s_pred * (_s_pred + 1.0)))
+        else:
+            p_sd_pred = p_sd
         mu = float(getattr(lat, 'mu', 0.0) or 0.0)
         sigma = float(getattr(lat, 'sigma', 0.0) or 0.0)
         onset = float(getattr(lat, 'onset_delta_days', 0.0) or 0.0)
@@ -345,7 +358,7 @@ def build_prepared_span_execution_from_topology(
             onset_sd,
         )
         edge_sds_pred[(from_id, to_id)] = (
-            p_sd if p_sd > 0 else 0.05,
+            p_sd_pred if p_sd_pred > 0 else 0.05,
             mu_sd_pred,
             sigma_sd,
             onset_sd,
@@ -1113,17 +1126,52 @@ def span_kernel_to_edge_params(
 
         post_alpha = prob_posterior.get('alpha')
         post_beta = prob_posterior.get('beta')
+        post_alpha_pred = prob_posterior.get('alpha_pred')
+        post_beta_pred = prob_posterior.get('beta_pred')
         cohort_alpha = prob_posterior.get('cohort_alpha')
         cohort_beta = prob_posterior.get('cohort_beta')
+        cohort_alpha_pred = prob_posterior.get('cohort_alpha_pred')
+        cohort_beta_pred = prob_posterior.get('cohort_beta_pred')
 
-        if (isinstance(cohort_alpha, (int, float)) and isinstance(cohort_beta, (int, float))
+        # Doc 49 / EPISTEMIC_DISPERSION_DESIGN.md §6: prefer kappa-inflated
+        # predictive Beta over epistemic for the IS proposal width. When no
+        # predictive is fitted on either source, fall back to epistemic.
+        # When neither source provides anything, the κ=20 default is the
+        # last-resort weak-prior backstop.
+        if (isinstance(cohort_alpha_pred, (int, float)) and isinstance(cohort_beta_pred, (int, float))
+                and cohort_alpha_pred > 0 and cohort_beta_pred > 0):
+            kappa = float(cohort_alpha_pred) + float(cohort_beta_pred)
+        elif (isinstance(post_alpha_pred, (int, float)) and isinstance(post_beta_pred, (int, float))
+                and post_alpha_pred > 0 and post_beta_pred > 0):
+            kappa = float(post_alpha_pred) + float(post_beta_pred)
+        elif (isinstance(cohort_alpha, (int, float)) and isinstance(cohort_beta, (int, float))
                 and cohort_alpha > 0 and cohort_beta > 0):
             kappa = float(cohort_alpha) + float(cohort_beta)
         elif (isinstance(post_alpha, (int, float)) and isinstance(post_beta, (int, float))
                 and post_alpha > 0 and post_beta > 0):
             kappa = float(post_alpha) + float(post_beta)
         else:
-            kappa = 20.0  # weak default
+            # Try analytic source's model_vars predictive Beta from the
+            # Pearson chi-squared overdispersion estimator (FE topo).
+            kappa = None
+            for _mv in p_data.get('model_vars', []):
+                if _mv.get('source') != 'analytic':
+                    continue
+                _mv_prob = _mv.get('probability', {})
+                _ap = _mv_prob.get('alpha_pred')
+                _bp = _mv_prob.get('beta_pred')
+                if (isinstance(_ap, (int, float)) and isinstance(_bp, (int, float))
+                        and _ap > 0 and _bp > 0):
+                    kappa = float(_ap) + float(_bp)
+                    break
+                _ae = _mv_prob.get('alpha')
+                _be = _mv_prob.get('beta')
+                if (isinstance(_ae, (int, float)) and isinstance(_be, (int, float))
+                        and _ae > 0 and _be > 0):
+                    kappa = float(_ae) + float(_be)
+                    break
+            if kappa is None:
+                kappa = 20.0  # weak default backstop
 
         params['posterior_alpha'] = span_p * kappa
         params['posterior_beta'] = (1.0 - span_p) * kappa
@@ -1295,7 +1343,18 @@ def _build_tier1_parametric(
 
     T = max_tau + 1
     S = num_draws
-    DRIFT_FRACTION = 2.0
+    # IS proposal scale = PRIOR_PROPOSAL_SD_FACTOR × prior SD. Setting this
+    # to 1.0 makes proposal = prior so the existing likelihood-only IS
+    # reweighting downstream (forecast_state.py:1093) is mathematically
+    # correct: with proposal = prior, the missing prior/proposal ratio in
+    # the weight collapses to unity. Previous value 2.0 was an attempted
+    # proposal-overdispersion fix (handover 14-Apr-26 §D4) that addressed
+    # a degenerate-weights symptom from a prior 0.20× under-dispersion,
+    # but introduced a real defect in the weak-evidence regime: the
+    # over-dispersion leaks into trajectory bands without any IS-side
+    # correction (no IS reweighting against carrier draws exists).
+    # See docs/current/project-bayes/73j-is-proposal-and-likelihood-only-weights.md.
+    PRIOR_PROPOSAL_SD_FACTOR = 1.0
     tau_grid = np.arange(0, T, dtype=float)
 
     total_w = 0.0
@@ -1327,12 +1386,12 @@ def _build_tier1_parametric(
         _up_mu_sd = _up.get('mu_sd', 0.05)
         _up_sigma_sd = _up.get('sigma_sd', 0.02)
         _up_onset_sd = _up.get('onset_sd', 0.1)
-        _up_mu_s = _up_mu + rng.normal(0, max(DRIFT_FRACTION * _up_mu_sd, 1e-6), size=S)
+        _up_mu_s = _up_mu + rng.normal(0, max(PRIOR_PROPOSAL_SD_FACTOR * _up_mu_sd, 1e-6), size=S)
         _up_sigma_s = np.clip(
-            _up_sigma + rng.normal(0, max(DRIFT_FRACTION * _up_sigma_sd, 1e-6), size=S),
+            _up_sigma + rng.normal(0, max(PRIOR_PROPOSAL_SD_FACTOR * _up_sigma_sd, 1e-6), size=S),
             0.01, 20.0)
         _up_onset_s = np.maximum(
-            _up_onset + rng.normal(0, max(DRIFT_FRACTION * _up_onset_sd, 1e-6), size=S),
+            _up_onset + rng.normal(0, max(PRIOR_PROPOSAL_SD_FACTOR * _up_onset_sd, 1e-6), size=S),
             0.0)
         _up_alpha = _up.get('alpha')
         _up_beta = _up.get('beta')
@@ -1341,7 +1400,7 @@ def _build_tier1_parametric(
         else:
             _up_p_sd = _up.get('p_sd', 0.01)
             _up_p_s = np.clip(
-                _up['p'] + rng.normal(0, max(DRIFT_FRACTION * _up_p_sd, 1e-6), size=S),
+                _up['p'] + rng.normal(0, max(PRIOR_PROPOSAL_SD_FACTOR * _up_p_sd, 1e-6), size=S),
                 1e-6, 1 - 1e-6)
         _t_sh = tau_grid[None, :] - _up_onset_s[:, None]
         _t_sh = np.maximum(_t_sh, 1e-12)
@@ -1584,6 +1643,11 @@ class PreparedForecastSolveInputs:
     x_provider_overlay: Optional[XProvider] = None
     resolved_override: Optional[Any] = None
     runtime_bundle: Optional[PreparedForecastRuntimeBundle] = None
+    extra_conditioning_evidence: List[tuple] = field(default_factory=list)
+    # Typed canonical E built once per scope (73h Stage 3). Downstream
+    # consumers extract `(age_days, n, k)` tuples into `extra_conditioning_evidence`
+    # for the existing seam; the response surfaces compact provenance.
+    evidence_set: Optional[Any] = None
 
 
 def _resolve_subject_temporal_mode(
@@ -1604,6 +1668,65 @@ def _resolve_subject_temporal_mode(
     if anchor_node_id and query_from_node and anchor_node_id != query_from_node:
         return 'cohort'
     return 'window'
+
+
+def parse_asat_from_dsl(dsl: Optional[str]) -> Optional[str]:
+    """Extract the ISO date from an `asat(...)` or `at(...)` DSL clause.
+
+    Returns None when the DSL is empty or has no asat clause; returns
+    None for unparseable date tokens. Mirrors the parse used inside
+    `api_handlers.handle_conditioned_forecast` so both surfaces produce
+    the same as-at boundary.
+    """
+    if not dsl:
+        return None
+    import re as _re
+
+    match = _re.search(r"(?:asat|at)\(([^)]*)\)", str(dsl))
+    if not match or not match.group(1).strip():
+        return None
+    raw = match.group(1).strip()
+    try:
+        from analysis_subject_resolution import _resolve_date
+        resolved = _resolve_date(raw)
+    except Exception:
+        return None
+    return resolved or None
+
+
+def _resolve_evidence_role(
+    *,
+    is_window: bool,
+    anchor_node_id: Optional[str],
+    query_from_node: Optional[str],
+    is_multi_hop: bool,
+    direct_cohort_enabled: bool = False,
+):
+    """Single decision point for the typed-merge `EvidenceRole`.
+
+    Pre-WP8 (`direct_cohort_enabled=False`) every CF subject reads file
+    evidence under `WINDOW_SUBJECT_HELPER` — direct-cohort rate evidence
+    is reserved per 73h §`direct_cohort_exact_subject` and doc 60 §A.2,
+    which require an explicit flag/admission-policy decision before
+    `DIRECT_COHORT_EXACT_SUBJECT` can be selected.
+
+    Post-WP8 the same helper flips to `DIRECT_COHORT_EXACT_SUBJECT` for
+    exact single-hop cohort subjects with `A != X`. The runtime bundle's
+    `p_conditioning_source` and the typed merge's `EvidenceRole` MUST
+    stay in lockstep — they are one decision, not two forks.
+    """
+    from evidence_merge import EvidenceRole
+
+    if (
+        direct_cohort_enabled
+        and not is_window
+        and not is_multi_hop
+        and anchor_node_id
+        and query_from_node
+        and anchor_node_id != query_from_node
+    ):
+        return EvidenceRole.DIRECT_COHORT_EXACT_SUBJECT
+    return EvidenceRole.WINDOW_SUBJECT_HELPER
 
 
 def prepare_forecast_runtime_inputs(
@@ -1629,10 +1752,36 @@ def prepare_forecast_runtime_inputs(
     p_conditioning_source: str = 'snapshot_frames',
     p_conditioning_evidence_points: Optional[int] = None,
     include_epistemic_overlay: bool = False,
+    as_at: Optional[str] = None,
+    scenario_id: Optional[str] = None,
+    direct_cohort_enabled: bool = False,
 ) -> PreparedForecastSolveInputs:
-    """Build the shared prepared runtime inputs for one forecast subject."""
+    """Build the shared prepared runtime inputs for one forecast subject.
+
+    `as_at` is the optional ISO date the merge enforces against raw
+    file `retrieved_at`. FE-asat-tier-1 reconstructed entries
+    (marked `_asat_retrieved_at`) bypass this check via the merge's
+    `asat_materialised` mechanism; raw file entries do not. `scenario_id`
+    is carried into `EvidenceScope` so multi-scenario CF requests do not
+    accidentally share E. `direct_cohort_enabled` is the WP8 admission
+    flag — when False (current default), the typed-merge role is forced
+    to `WINDOW_SUBJECT_HELPER` regardless of the resolved temporal mode.
+    """
+    from datetime import date as _date
+
     from runner.model_resolver import resolve_model_params
     from runner.span_kernel import compose_span_kernel, mc_span_cdfs
+    from evidence_merge import (
+        EvidenceCandidate,
+        EvidenceRole,
+        EvidenceScope,
+        evidence_dedupe_key,
+        merge_evidence_candidates,
+    )
+    from runner.evidence_adapters import (
+        bayes_file_evidence_to_candidates,
+        reconstructed_asat_to_candidates,
+    )
 
     result = PreparedForecastSolveInputs(
         is_multi_hop=is_multi_hop,
@@ -1863,6 +2012,30 @@ def prepare_forecast_runtime_inputs(
             use_epistemic_mu_sd=True,
         )
 
+    # 73h Stage 3 + reviewer-H1: resolve the typed-merge evidence role
+    # once, before either the merge or the runtime-bundle build. Both
+    # sites must agree on what family of E is admitted — pre-WP8 every
+    # CF subject (window or cohort) reads E under WINDOW_SUBJECT_HELPER,
+    # so a cohort query that pairs with `subject_temporal_mode='cohort'`
+    # still has window-family conditioning. The bundle's
+    # `p_conditioning_temporal_family` must reflect the merge's role
+    # family, not the query's temporal mode, otherwise diagnostics
+    # report "cohort" while the merge admitted window-helper E.
+    from evidence_merge import _role_family
+    evidence_role = _resolve_evidence_role(
+        is_window=is_window,
+        anchor_node_id=anchor_node_id,
+        query_from_node=query_from_node,
+        is_multi_hop=is_multi_hop,
+        direct_cohort_enabled=direct_cohort_enabled,
+    )
+    _conditioning_role_family = _role_family(evidence_role)
+    # Map SliceFamily → bundle's temporal-family string convention.
+    from evidence_merge import SliceFamily as _SF
+    conditioning_temporal_family = (
+        'cohort' if _conditioning_role_family == _SF.COHORT else 'window'
+    )
+
     target_edge = find_edge_by_id(graph_data, last_edge_id)
     if target_edge is not None:
         result.resolved_override = resolve_model_params(
@@ -1872,6 +2045,126 @@ def prepare_forecast_runtime_inputs(
             graph_preference=graph_preference,
         )
 
+        # 73h Stage 3: build canonical scoped E once via the typed merge
+        # library, then derive the legacy `(age_days, n, k)` tuple list
+        # downstream consumers still take. The typed `EvidenceSet` is
+        # stashed on the prepared runtime for response provenance.
+        last_entry = next(
+            (
+                entry for entry in (path_per_edge_results or [])
+                if entry.get('path_role') in ('last', 'only')
+            ),
+            None,
+        )
+        if last_entry is not None:
+            subject = last_entry.get('subject') or {}
+            bayes_evidence = (
+                target_edge.get('_bayes_evidence')
+                if isinstance(target_edge, dict)
+                else None
+            )
+            if isinstance(bayes_evidence, dict):
+                anchor_from_iso = str(subject.get('anchor_from') or '')
+                anchor_to_iso = str(subject.get('anchor_to') or '')
+                if anchor_from_iso and anchor_to_iso:
+                    evidence_scope = EvidenceScope(
+                        role=evidence_role,
+                        subject_from=str(query_from_node or ''),
+                        subject_to=str(query_to_node or ''),
+                        date_from=anchor_from_iso,
+                        date_to=anchor_to_iso,
+                        as_at=as_at,
+                        scenario_id=scenario_id,
+                        anchor=anchor_node_id,
+                    )
+                    file_candidates = bayes_file_evidence_to_candidates(
+                        bayes_evidence,
+                        scope=evidence_scope,
+                    )
+                    # 73h #1 Stage 4+: build first-class snapshot candidates
+                    # from the post-regime-selection `snapshot_rows` plumbed
+                    # by `forecast_preparation.prepare_subject_artifacts`.
+                    # Pre-#1 the runtime carried only file candidates and used
+                    # `snapshot_covered_observations` (a flat (key, day) set)
+                    # to filter file rows on snapshot-covered days. With real
+                    # SourceKind.SNAPSHOT candidates in the merge, the
+                    # library's intrinsic SNAPSHOT > FILE precedence
+                    # handles dedupe automatically — see
+                    # evidence_merge.merge_evidence_candidates Step 5. The
+                    # `snapshot_covered_observations` parameter remains
+                    # available for callers without real snapshot rows
+                    # (Bayes Phase 2 still uses it pending #9).
+                    snapshot_rows = last_entry.get('snapshot_rows') or []
+                    # Adapter args:
+                    #  - `is_window=None` (default) → n=x, k=y (edge rate).
+                    #    Passing `is_window=False` would force n=a (WP8
+                    #    first-edge identity), wrong for generic cohort
+                    #    queries until WP8 admission flips.
+                    #  - `asat_materialised=False` is critical: these are
+                    #    plain BE-direct snapshot reads, NOT FE-asat
+                    #    reconstructions. They must remain subject to
+                    #    normal `retrieved_at` / `as_at` admission, and
+                    #    `EvidenceSet.evidence_provenance.asat_materialised_present`
+                    #    must not be falsely inflated.
+                    snapshot_candidates = reconstructed_asat_to_candidates(
+                        snapshot_rows,
+                        scope=evidence_scope,
+                        asat_materialised=False,
+                    ) if snapshot_rows else []
+                    # Repoint snapshot-source candidates onto the SNAPSHOT
+                    # source kind so the merge's SNAPSHOT > FILE precedence
+                    # applies. The adapter defaults to SourceKind.RECONSTRUCTED
+                    # for the FE-marker asat tier-1 path; on the BE-direct
+                    # path the rows are plain snapshots and dedupe under
+                    # SourceKind.SNAPSHOT alongside file candidates.
+                    from evidence_merge import SourceKind
+                    snapshot_candidates = [
+                        EvidenceCandidate(
+                            source=SourceKind.SNAPSHOT,
+                            identity=c.identity,
+                            coordinate=c.coordinate,
+                            n=c.n,
+                            k=c.k,
+                            provenance=c.provenance,
+                        )
+                        for c in snapshot_candidates
+                    ]
+                    candidates = list(file_candidates) + snapshot_candidates
+                    evidence_set = merge_evidence_candidates(
+                        evidence_scope,
+                        candidates,
+                    )
+                    result.evidence_set = evidence_set
+                    extras: list[tuple] = []
+                    for point in evidence_set.points:
+                        # Snapshot-source points already flow into the engine
+                        # via `fe.cohort_list` (built from snapshot frames in
+                        # `build_cohort_evidence_from_frames`). Including them
+                        # here would double-count once `_non_latency_rows`
+                        # pools extras into Σk/Σn (#4) and once
+                        # `compute_forecast_trajectory` consumes them. Extras
+                        # carry only the FILE/RECONSTRUCTED-source residual —
+                        # i.e. the typed-merge points NOT already represented
+                        # in fe.
+                        if point.source == SourceKind.SNAPSHOT:
+                            continue
+                        observed = point.candidate.coordinate.observed_date
+                        retrieved = point.candidate.coordinate.retrieved_at
+                        try:
+                            if retrieved:
+                                age_days = float(
+                                    (
+                                        _date.fromisoformat(retrieved)
+                                        - _date.fromisoformat(observed)
+                                    ).days
+                                )
+                            else:
+                                age_days = 0.0
+                        except ValueError:
+                            age_days = 0.0
+                        extras.append((age_days, point.n, point.k))
+                    result.extra_conditioning_evidence = extras
+
     result.runtime_bundle = build_prepared_runtime_bundle(
         mode='window' if is_window else 'cohort',
         query_from_node=query_from_node,
@@ -1880,7 +2173,10 @@ def prepare_forecast_runtime_inputs(
         is_multi_hop=is_multi_hop,
         x_provider=result.x_provider,
         numerator_representation='factorised',
-        p_conditioning_temporal_family=result.subject_temporal_mode,
+        # Reviewer-H1: temporal family is derived from the resolved
+        # evidence_role, not from `subject_temporal_mode`. They differ
+        # pre-WP8 for cohort queries (mode=cohort, role=window-helper).
+        p_conditioning_temporal_family=conditioning_temporal_family,
         p_conditioning_source=p_conditioning_source,
         p_conditioning_evidence_points=(
             len(composed_frames)

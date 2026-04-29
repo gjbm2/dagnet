@@ -18,14 +18,28 @@ import sys
 from datetime import datetime, timedelta
 
 try:
-    from file_evidence_supplement import BAYES_PHASE2_COHORT, merge_file_evidence_for_role
+    from evidence_merge import (
+        EvidenceRole,
+        EvidenceScope,
+        evidence_dedupe_key,
+        merge_evidence_candidates,
+        normalise_iso_date,
+    )
+    from runner.evidence_adapters import bayes_parameter_file_evidence_to_candidates
 except ImportError:
     _SHARED_LIB = os.path.abspath(
         os.path.join(os.path.dirname(__file__), "..", "..", "graph-editor", "lib")
     )
     if _SHARED_LIB not in sys.path:
         sys.path.insert(0, _SHARED_LIB)
-    from file_evidence_supplement import BAYES_PHASE2_COHORT, merge_file_evidence_for_role
+    from evidence_merge import (
+        EvidenceRole,
+        EvidenceScope,
+        evidence_dedupe_key,
+        merge_evidence_candidates,
+        normalise_iso_date,
+    )
+    from runner.evidence_adapters import bayes_parameter_file_evidence_to_candidates
 
 from .types import (
     TopologyAnalysis,
@@ -1351,19 +1365,52 @@ def _supplement_from_param_file(
     values = pf_data.get("values") or []
     n_supplemented = 0
 
-    merge = merge_file_evidence_for_role(
+    # Build a typed-merge scope for Phase 2 cohort supplement. Bayes Phase 2
+    # admits cohort observations at the per-edge level; subject identity comes
+    # from the edge topology so the merge's subject check passes. The legacy
+    # helper applied no date-bound filter, so the scope's date bounds are wide.
+    scope = EvidenceScope(
+        role=EvidenceRole.BAYES_PHASE2_COHORT,
+        subject_from=getattr(et, "from_node", "") or "",
+        subject_to=getattr(et, "to_node", "") or "",
+        date_from="0001-01-01",
+        date_to="9999-12-31",
+    )
+    candidates = bayes_parameter_file_evidence_to_candidates(
         values,
-        snapshot_covered_days,
-        role=BAYES_PHASE2_COHORT,
+        scope=scope,
+        edge_topology=et,
+    )
+
+    # Translate snapshot-covered anchor-day strings into the merge library's
+    # (dedupe_key, observed_date) shape. The legacy filter was date-only and
+    # blind to anchor — to preserve that, every admitted candidate identity
+    # gets paired with every covered day.
+    covered_iso = {
+        iso
+        for iso in (
+            normalise_iso_date(day) for day in (snapshot_covered_days or set())
+        )
+        if iso
+    }
+    candidate_keys = {evidence_dedupe_key(c.identity) for c in candidates}
+    snapshot_covered_observations = {
+        (key, day) for key in candidate_keys for day in covered_iso
+    }
+
+    evidence_set = merge_evidence_candidates(
+        scope,
+        candidates,
+        snapshot_covered_observations=snapshot_covered_observations,
     )
 
     supplemented_by_slice: dict[str, list[CohortDailyObs]] = {}
-    for point in merge.points:
-        entry = point.entry
-        date_str = point.date
-        n = point.n
-        k = point.k
-        ref_date = _resolve_value_retrieved_at(dict(entry), today)
+    for point in evidence_set.points:
+        provenance = point.candidate.provenance or {}
+        slice_dsl = str(provenance.get("sliceDSL", "") or "")
+        date_str = point.candidate.coordinate.observed_date
+        retrieved_iso = point.candidate.coordinate.retrieved_at
+        ref_date = _parse_retrieved_iso(retrieved_iso) or today
         age = _date_age(date_str, ref_date)
         compl = _compute_cohort_completeness(
             age,
@@ -1372,11 +1419,10 @@ def _supplement_from_param_file(
             et.path_latency.path_sigma,
             et.has_latency,
         )
-        slice_dsl = str(entry.get("sliceDSL", "") or "")
         supplemented_by_slice.setdefault(slice_dsl, []).append(CohortDailyObs(
             date=date_str,
-            n=n,
-            k=k,
+            n=point.n,
+            k=point.k,
             age_days=age,
             completeness=compl,
         ))
@@ -1391,6 +1437,21 @@ def _supplement_from_param_file(
         n_supplemented += len(supplemented_obs)
 
     return n_supplemented
+
+
+def _parse_retrieved_iso(retrieved_iso: str | None) -> datetime | None:
+    """Parse the merge library's normalised ISO retrieved_at into a datetime.
+
+    The adapter normalises retrieved_at via `normalise_iso_date`, which
+    produces strict `YYYY-MM-DD`. Returns None when input is missing or
+    unparseable so callers can fall back to a wall-clock reference.
+    """
+    if not retrieved_iso:
+        return None
+    try:
+        return datetime.strptime(retrieved_iso, "%Y-%m-%d")
+    except ValueError:
+        return None
 
 
 def _retrieval_age(anchor_day: str, retrieved_at: str, today: datetime) -> float:

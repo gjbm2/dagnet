@@ -473,9 +473,18 @@ class RepositoryOperationsService {
         file.sha = fileData.sha;
       }
 
+      // originalData tracks the REMOTE baseline so future "dirty?" checks
+      // (data !== originalData) correctly identify local-only content the
+      // merge absorbed but that has not been pushed yet. Setting
+      // originalData = finalData would clear isDirty on the next pull
+      // even though the merged content still differs from remote — the
+      // second pull would then take the remote-wins branch and silently
+      // wipe the local additions. (Was the cause of bayes posterior data
+      // disappearing on the second auto-pull after a Bayes apply.)
       file.data = finalData;
-      file.originalData = structuredClone(finalData);
-      file.isDirty = false;
+      file.originalData = structuredClone(remoteData);
+      const isStillDirty = serialise(finalData) !== serialise(remoteData);
+      file.isDirty = isStillDirty;
       file.isLocal = false;
       file.lastModified = Date.now();
 
@@ -490,7 +499,7 @@ class RepositoryOperationsService {
       (fileRegistry as any).notifyListeners(fileId, file);
 
       window.dispatchEvent(new CustomEvent('dagnet:fileDirtyChanged', {
-        detail: { fileId, isDirty: false }
+        detail: { fileId, isDirty: isStillDirty }
       }));
 
       sessionLogService.success('git', 'GIT_PULL_FILE', `Pulled ${fileId} from remote`);

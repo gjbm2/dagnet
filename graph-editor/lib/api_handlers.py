@@ -11,12 +11,6 @@ import math
 import os
 from typing import Dict, Any, Optional, List
 
-from file_evidence_supplement import (
-    WINDOW_SUBJECT_HELPER,
-    merge_file_evidence_for_role,
-    normalise_supported_date,
-)
-
 _COHORT_DEBUG = bool(os.environ.get('DAGNET_COHORT_DEBUG'))
 
 
@@ -1623,6 +1617,7 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
         from runner.forecast_runtime import (
             build_prepared_span_execution,
             find_edge_by_id,
+            parse_asat_from_dsl,
             prepare_forecast_runtime_inputs,
             serialise_rate_evidence_provenance,
         )
@@ -1655,6 +1650,8 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
             p_conditioning_source='snapshot_frames',
             p_conditioning_evidence_points=len(composed_frames),
             include_epistemic_overlay=True,
+            as_at=parse_asat_from_dsl(temporal_dsl),
+            scenario_id=scenario_id,
         )
         _subject_temporal_mode = _prepared_runtime_v3.subject_temporal_mode
         _mc_cdf_v3 = _prepared_runtime_v3.mc_cdf_arr
@@ -1704,6 +1701,7 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
                 mc_cdf_arr=_mc_cdf_v3,
                 mc_p_s=_mc_p_v3,
                 det_norm_cdf=_det_norm_cdf,
+                det_span_p=_det_span_p,
                 x_provider_override=_v3_x_provider,
                 span_alpha=_span_alpha_v3,
                 span_beta=_span_beta_v3,
@@ -1714,6 +1712,7 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
                 is_multi_hop=_is_multi_hop,
                 resolved_override=_v3_resolved_override,
                 runtime_bundle=_v3_runtime_bundle,
+                extra_conditioning_evidence=_prepared_runtime_v3.extra_conditioning_evidence,
             )
 
         print(f"[v3] compute_cohort_maturity_rows returned {len(maturity_rows)} rows")
@@ -1739,6 +1738,20 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
                 subject_result['cf_mode'] = _row_cf_mode
             if _row_cf_reason is not None:
                 subject_result['cf_reason'] = _row_cf_reason
+
+        # 73h Stage 4 — same prepared E surfaces on both endpoints. The
+        # cohort_maturity_v3 response carries the same `evidence_provenance`
+        # block as `handle_conditioned_forecast` so consumers can audit
+        # parity directly. `maturity_rows` themselves are CHART display
+        # evidence (cohort-row trajectories), distinct from the L4 raw E
+        # reported under `evidence_provenance.totals` — never copy chart
+        # rows into L4 `p.evidence`.
+        _v3_evidence_set = getattr(_prepared_runtime_v3, 'evidence_set', None)
+        if _v3_evidence_set is not None:
+            from evidence_merge import evidence_set_to_response_provenance
+            subject_result['evidence_provenance'] = (
+                evidence_set_to_response_provenance(_v3_evidence_set)
+            )
 
         if composed_frames and last_edge_id and _span_x_v3 and query_to_node:
             from runner.forecast_application import compute_completeness
@@ -1867,6 +1880,7 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
                             mc_cdf_arr=_mc_cdf_v3_epi,
                             mc_p_s=_mc_p_v3_epi,
                             det_norm_cdf=_det_norm_cdf,
+                            det_span_p=_det_span_p,
                             x_provider_override=(
                                 _v3_x_provider_overlay
                                 if _v3_x_provider_overlay is not None
@@ -2087,58 +2101,6 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
     return {"success": True, "scenarios": per_scenario_results}
 
 
-def _cf_supplement_evidence_counts_from_file(
-    graph_data: Dict[str, Any],
-    edge_uuid: str,
-    anchor_from: str,
-    anchor_to: str,
-    snapshot_covered_days: set[str],
-    evidence_role: str = WINDOW_SUBJECT_HELPER,
-) -> Dict[str, int]:
-    """Supplement CF evidence counts from engorged file data.
-
-    Mirrors the shared evidence-merge uncovered-day rule:
-      - only file rows compatible with the requested evidence role are eligible
-      - context-qualified entries are skipped unless the role supports them
-      - days already covered by snapshot rows are not counted again
-
-    Returns counts only; CF's p.mean remains snapshot-conditioned.
-    """
-    anchor_from_iso = normalise_supported_date(anchor_from)
-    anchor_to_iso = normalise_supported_date(anchor_to)
-    if not edge_uuid or not anchor_from_iso or not anchor_to_iso:
-        return {'n': 0, 'k': 0, 'supplemented_days': 0}
-
-    edge = next(
-        (
-            e for e in (graph_data.get('edges', []) or [])
-            if (e.get('uuid') or e.get('id')) == edge_uuid
-        ),
-        None,
-    )
-    if not isinstance(edge, dict):
-        return {'n': 0, 'k': 0, 'supplemented_days': 0}
-
-    bayes_evidence = edge.get('_bayes_evidence')
-    if not isinstance(bayes_evidence, dict):
-        return {'n': 0, 'k': 0, 'supplemented_days': 0}
-
-    entries = []
-    if isinstance(bayes_evidence.get('window'), list):
-        entries.extend(bayes_evidence.get('window') or [])
-    if isinstance(bayes_evidence.get('cohort'), list):
-        entries.extend(bayes_evidence.get('cohort') or [])
-
-    merged = merge_file_evidence_for_role(
-        entries,
-        snapshot_covered_days,
-        anchor_from=anchor_from_iso,
-        anchor_to=anchor_to_iso,
-        role=evidence_role,
-    )
-    return merged.as_counts()
-
-
 def handle_conditioned_forecast(data: Dict[str, Any]) -> Dict[str, Any]:
     """Conditioned forecast — graph enrichment endpoint (doc 45).
 
@@ -2296,6 +2258,7 @@ def handle_conditioned_forecast(data: Dict[str, Any]) -> Dict[str, Any]:
             )
 
             from runner.forecast_runtime import (
+                parse_asat_from_dsl,
                 prepare_forecast_runtime_inputs,
                 serialise_rate_evidence_provenance,
             )
@@ -2335,12 +2298,15 @@ def handle_conditioned_forecast(data: Dict[str, Any]) -> Dict[str, Any]:
                 p_conditioning_source='snapshot_frames',
                 p_conditioning_evidence_points=len(composed_frames),
                 include_epistemic_overlay=False,
+                as_at=parse_asat_from_dsl(temporal_dsl),
+                scenario_id=scenario_id,
             )
             _mc_cdf = _prepared_runtime.mc_cdf_arr
             _mc_p = _prepared_runtime.mc_p_s
             _is_multi_hop = _prepared_runtime.is_multi_hop
             _edge_mc_cdf = _prepared_runtime.edge_cdf_arr
             _det_norm_cdf = _prepared_runtime.det_norm_cdf
+            _det_span_p = _prepared_runtime.det_span_p
             _span_alpha = _prepared_runtime.span_alpha
             _span_beta = _prepared_runtime.span_beta
             _span_params = _prepared_runtime.span_params
@@ -2363,46 +2329,6 @@ def handle_conditioned_forecast(data: Dict[str, Any]) -> Dict[str, Any]:
             # below. See doc 50 §§2-3.
             if last_edge_id:
                 anchor_to_str = preparation.anchor_to
-                _extra_conditioning_evidence = []
-                _file_evidence_merge = None
-                _last_entry_for_file = next(
-                    (
-                        entry for entry in per_edge_results
-                        if entry.get('path_role') in ('last', 'only')
-                    ),
-                    None,
-                )
-                if _last_entry_for_file is not None:
-                    _last_subject_for_file = _last_entry_for_file.get('subject') or {}
-                    _edge_for_file = next(
-                        (
-                            e for e in (graph_data.get('edges', []) or [])
-                            if (e.get('uuid') or e.get('id')) == last_edge_id
-                        ),
-                        None,
-                    )
-                    _bayes_evidence = (
-                        _edge_for_file.get('_bayes_evidence')
-                        if isinstance(_edge_for_file, dict)
-                        else None
-                    )
-                    if isinstance(_bayes_evidence, dict):
-                        _entries = []
-                        if isinstance(_bayes_evidence.get('window'), list):
-                            _entries.extend(_bayes_evidence.get('window') or [])
-                        if isinstance(_bayes_evidence.get('cohort'), list):
-                            _entries.extend(_bayes_evidence.get('cohort') or [])
-                        _file_evidence_merge = merge_file_evidence_for_role(
-                            _entries,
-                            _last_entry_for_file.get('snapshot_covered_days') or set(),
-                            role=WINDOW_SUBJECT_HELPER,
-                            anchor_from=_last_subject_for_file.get('anchor_from', anchor_from_str),
-                            anchor_to=_last_subject_for_file.get('anchor_to', anchor_to_str),
-                        )
-                        _extra_conditioning_evidence = [
-                            (p.age_days, p.n, p.k)
-                            for p in _file_evidence_merge.points
-                        ]
                 maturity_rows = compute_cohort_maturity_rows_v3(
                     frames=composed_frames,
                     graph=graph_data,
@@ -2417,6 +2343,7 @@ def handle_conditioned_forecast(data: Dict[str, Any]) -> Dict[str, Any]:
                     mc_cdf_arr=_mc_cdf,
                     mc_p_s=_mc_p,
                     det_norm_cdf=_det_norm_cdf,
+                    det_span_p=_det_span_p,
                     x_provider_override=_x_provider,
                     span_alpha=_span_alpha,
                     span_beta=_span_beta,
@@ -2426,7 +2353,7 @@ def handle_conditioned_forecast(data: Dict[str, Any]) -> Dict[str, Any]:
                     span_onset_mu_corr=_span_params.onset_mu_corr if _span_params else None,
                     is_multi_hop=_is_multi_hop,
                     runtime_bundle=_runtime_bundle,
-                    extra_conditioning_evidence=_extra_conditioning_evidence,
+                    extra_conditioning_evidence=_prepared_runtime.extra_conditioning_evidence,
                 )
 
                 if maturity_rows:
@@ -2531,6 +2458,22 @@ def handle_conditioned_forecast(data: Dict[str, Any]) -> Dict[str, Any]:
                     # or from evidence_k/n.
                     _conditioned = first_row.pop('_conditioned', False) if isinstance(first_row, dict) else False
                     _forensic = _last_forensic
+
+                    # 73h §CF Response Provenance Contract: dedicated
+                    # `evidence_provenance` block sourced from the typed
+                    # canonical E. Stays separate from `conditioning`
+                    # (effective-evidence) and from `evidence_k`/`evidence_n`
+                    # (the runtime conditioning seam) on purpose.
+                    _evidence_provenance = None
+                    _evidence_set_for_resp = getattr(
+                        _prepared_runtime, 'evidence_set', None
+                    )
+                    if _evidence_set_for_resp is not None:
+                        from evidence_merge import evidence_set_to_response_provenance
+                        _evidence_provenance = evidence_set_to_response_provenance(
+                            _evidence_set_for_resp
+                        )
+
                     edge_results.append({
                         'edge_uuid': last_edge_id,
                         'from_node': query_from_node,
@@ -2550,6 +2493,11 @@ def handle_conditioned_forecast(data: Dict[str, Any]) -> Dict[str, Any]:
                         'n_cohorts': preparation.cohorts_analysed,
                         '_forensic': _forensic,
                         **({'conditioning': _cond} if _cond else {}),
+                        **(
+                            {'evidence_provenance': _evidence_provenance}
+                            if _evidence_provenance is not None
+                            else {}
+                        ),
                     })
                     print(f"[forecast] {scenario_id}: {query_from_node}→{query_to_node} "
                           f"p={p_mean:.4f} conditioned={bool(_conditioned)} "

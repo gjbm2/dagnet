@@ -1716,11 +1716,37 @@ class WorkspaceService {
               }
 
               {
-                // Apply the merged data
+                // Apply the merged data.
+                //
+                // originalData tracks the REMOTE baseline so subsequent
+                // "dirty?" checks (data !== originalData) recognise the
+                // local-only content the merge absorbed. If we set
+                // originalData = mergedData, the next pull would see the
+                // file as clean and silently overwrite it with remote,
+                // wiping the merged-in local additions. (Was the cause
+                // of bayes posterior data disappearing on the second
+                // auto-pull after a Bayes apply.)
+                //
+                // isInitializing must NOT be re-set to true here — that
+                // would re-enter the editor-normalisation absorption path
+                // (TabContext.updateFile L390) and silently fold the
+                // merged-in local content into originalData, defeating
+                // the dirty preservation above. Files reaching this
+                // branch were already past initialisation by definition
+                // (they had local changes that triggered the 3-way merge).
+                let remoteParsed: any;
+                try {
+                  remoteParsed = isJsonFile ? JSON.parse(remoteContent) : YAML.parse(remoteContent);
+                } catch {
+                  remoteParsed = mergedData;
+                }
+                const mergedSerialised = isJsonFile ? JSON.stringify(mergedData) : YAML.stringify(mergedData);
+                const remoteSerialised = isJsonFile ? JSON.stringify(remoteParsed) : YAML.stringify(remoteParsed);
+                const isStillDirty = mergedSerialised !== remoteSerialised;
+
                 localFileState.data = mergedData;
-                localFileState.originalData = structuredClone(mergedData);
-                localFileState.isDirty = false;
-                localFileState.isInitializing = true; // Allow editor normalization without marking dirty
+                localFileState.originalData = structuredClone(remoteParsed);
+                localFileState.isDirty = isStillDirty;
                 localFileState.sha = treeItem.sha;
                 localFileState.lastSynced = Date.now();
                 localFileState.source = {

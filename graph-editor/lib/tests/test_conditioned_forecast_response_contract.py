@@ -77,12 +77,6 @@ from pathlib import Path
 
 import pytest
 
-from api_handlers import _cf_supplement_evidence_counts_from_file
-from file_evidence_supplement import (
-    DIRECT_COHORT_EXACT_SUBJECT,
-    WINDOW_SUBJECT_HELPER,
-    merge_file_evidence_for_role,
-)
 
 
 HANDLER_PATH = (
@@ -241,22 +235,38 @@ class TestConditionedForecastResponseContract:
 
     def test_handler_passes_axis_tau_max_to_upstream_fetch(self):
         """WP6: whole-graph CF must carry the same donor-lookback bound that v3
-        uses when calling `_fetch_upstream_observations`.
+        uses when fetching upstream observations.
+
+        Post-73h Stage 3, the handler no longer calls
+        `_fetch_upstream_observations` directly — it wires it as the
+        `upstream_observation_fetcher` callback into
+        `prepare_forecast_runtime_inputs`, which then invokes the
+        fetcher with `axis_tau_max` from inside the prepared-runtime
+        build. The contract therefore asserts that the handler hands
+        both the bound and the fetcher to the shared preparation path.
         """
         tree = ast.parse(_load_handler_source())
         func = _find_cf_handler(tree)
-        calls = _iter_calls(func, "_fetch_upstream_observations")
+        calls = _iter_calls(func, "prepare_forecast_runtime_inputs")
         assert calls, (
-            "handle_conditioned_forecast no longer calls "
-            "_fetch_upstream_observations; update this contract test."
+            "handle_conditioned_forecast must call "
+            "prepare_forecast_runtime_inputs to drive the shared runtime "
+            "build."
         )
         assert any(
             any(keyword.arg == "axis_tau_max" for keyword in call.keywords)
+            and any(
+                keyword.arg == "upstream_observation_fetcher"
+                and isinstance(keyword.value, ast.Name)
+                and keyword.value.id == "_fetch_upstream_observations"
+                for keyword in call.keywords
+            )
             for call in calls
         ), (
-            "handle_conditioned_forecast must pass axis_tau_max into "
-            "_fetch_upstream_observations so whole-graph donor lookback uses "
-            "the same horizon bound as the v3 path."
+            "handle_conditioned_forecast must pass both axis_tau_max and "
+            "upstream_observation_fetcher=_fetch_upstream_observations into "
+            "prepare_forecast_runtime_inputs so whole-graph donor lookback "
+            "uses the same horizon bound as the v3 path."
         )
 
     def test_upstream_fetch_uses_shared_forecast_preparation_helper(self):
@@ -336,167 +346,11 @@ class TestDesignSpecKnown:
         )
 
 
-class TestConditionedForecastFileEvidenceSupplement:
-    """Bayes-style uncovered-day supplement for CF evidence counts."""
-
-    def test_shared_merge_window_role_skips_cohort_anchor_slices(self):
-        entries = [
-            {
-                "sliceDSL": "window(1-Apr-26:4-Apr-26)",
-                "dates": ["2026-04-01", "2026-04-02", "2026-04-03"],
-                "n_daily": [10, 20, 30],
-                "k_daily": [1, 2, 3],
-            },
-            {
-                "sliceDSL": "cohort(anchor-a,1-Apr-26:4-Apr-26)",
-                "dates": ["2026-04-01", "2026-04-02", "2026-04-03"],
-                "n_daily": [100, 200, 300],
-                "k_daily": [10, 20, 30],
-            },
-            {
-                "sliceDSL": "cohort(anchor-b,1-Apr-26:4-Apr-26)",
-                "dates": ["2026-04-01", "2026-04-02", "2026-04-03"],
-                "n_daily": [1000, 2000, 3000],
-                "k_daily": [100, 200, 300],
-            },
-        ]
-
-        merged = merge_file_evidence_for_role(
-            entries,
-            {"2026-04-02"},
-            role=WINDOW_SUBJECT_HELPER,
-            anchor_from="2026-04-01",
-            anchor_to="2026-04-03",
-        )
-
-        assert merged.n == 40
-        assert merged.k == 4
-        assert merged.days == {"2026-04-01", "2026-04-03"}
-        assert any(s.reason == "wrong_role" for s in merged.skipped)
-
-    def test_shared_merge_direct_cohort_role_uses_only_matching_anchor(self):
-        entries = [
-            {
-                "sliceDSL": "window(1-Apr-26:4-Apr-26)",
-                "dates": ["2026-04-01", "2026-04-02"],
-                "n_daily": [10, 20],
-                "k_daily": [1, 2],
-            },
-            {
-                "sliceDSL": "cohort(anchor-a,1-Apr-26:4-Apr-26)",
-                "dates": ["2026-04-01", "2026-04-02"],
-                "n_daily": [100, 200],
-                "k_daily": [10, 20],
-            },
-            {
-                "sliceDSL": "cohort(anchor-b,1-Apr-26:4-Apr-26)",
-                "dates": ["2026-04-01", "2026-04-02"],
-                "n_daily": [1000, 2000],
-                "k_daily": [100, 200],
-            },
-        ]
-
-        merged = merge_file_evidence_for_role(
-            entries,
-            {"2026-04-02"},
-            role=DIRECT_COHORT_EXACT_SUBJECT,
-            exact_cohort_anchor="anchor-b",
-            anchor_from="2026-04-01",
-            anchor_to="2026-04-02",
-        )
-
-        assert merged.n == 1000
-        assert merged.k == 100
-        assert merged.days == {"2026-04-01"}
-        assert any(s.reason == "wrong_cohort_anchor" for s in merged.skipped)
-
-    def test_shared_merge_skips_file_days_after_entry_retrieval_date(self):
-        entries = [
-            {
-                "sliceDSL": "window(1-Apr-26:4-Apr-26)",
-                "retrieved_at": "2026-04-02T13:00:00Z",
-                "dates": ["2026-04-01", "2026-04-02", "2026-04-03"],
-                "n_daily": [10, 20, 30],
-                "k_daily": [1, 2, 3],
-            },
-        ]
-
-        merged = merge_file_evidence_for_role(
-            entries,
-            set(),
-            role=WINDOW_SUBJECT_HELPER,
-            anchor_from="2026-04-01",
-            anchor_to="2026-04-03",
-        )
-
-        assert merged.n == 30
-        assert merged.k == 3
-        assert merged.days == {"2026-04-01", "2026-04-02"}
-        assert any(s.reason == "after_retrieved_at" for s in merged.skipped)
-
-    def test_wp8_off_supplements_only_uncovered_window_subject_helper_days(self):
-        graph = {
-            "edges": [
-                {
-                    "uuid": "edge-1",
-                    "_bayes_evidence": {
-                        "window": [
-                            {
-                                "sliceDSL": "window(1-Apr-26:4-Apr-26)",
-                                "dates": [
-                                    "2026-04-01",
-                                    "2026-04-02",
-                                    "2026-04-03",
-                                    "2026-04-04",
-                                ],
-                                "n_daily": [10, 20, 30, 40],
-                                "k_daily": [1, 2, 3, 4],
-                            },
-                        ],
-                        "cohort": [
-                            {
-                                "sliceDSL": "cohort(1-Apr-26:4-Apr-26)",
-                                "dates": [
-                                    "2026-04-01",
-                                    "2026-04-02",
-                                    "2026-04-03",
-                                    "2026-04-04",
-                                ],
-                                "n_daily": [10, 20, 30, 40],
-                                "k_daily": [1, 2, 3, 4],
-                            },
-                            {
-                                "sliceDSL": "cohort(1-Apr-26:4-Apr-26).context(channel:paid)",
-                                "dates": ["2026-04-01", "2026-04-03"],
-                                "n_daily": [999, 999],
-                                "k_daily": [999, 999],
-                            },
-                        ]
-                    },
-                }
-            ]
-        }
-
-        result = _cf_supplement_evidence_counts_from_file(
-            graph_data=graph,
-            edge_uuid="edge-1",
-            anchor_from="2026-04-01",
-            anchor_to="2026-04-04",
-            snapshot_covered_days={"2026-04-02", "2026-04-04"},
-        )
-
-        assert result == {"n": 40, "k": 4, "supplemented_days": 2}
-
-    def test_returns_zero_without_engorged_file_evidence(self):
-        result = _cf_supplement_evidence_counts_from_file(
-            graph_data={"edges": [{"uuid": "edge-1"}]},
-            edge_uuid="edge-1",
-            anchor_from="2026-04-01",
-            anchor_to="2026-04-04",
-            snapshot_covered_days={"2026-04-02"},
-        )
-
-        assert result == {"n": 0, "k": 0, "supplemented_days": 0}
+# Note: the legacy `_cf_supplement_evidence_counts_from_file` and its
+# tests were retired in 73h Stage 7 (28-Apr-26) along with
+# `merge_file_evidence_for_role`. Equivalent properties are covered by
+# `lib/tests/test_evidence_merge.py` and `lib/tests/test_evidence_adapters.py`
+# under the typed merge.
 
 
 # ─── CF endpoint ↔ cohort_maturity_v3 runtime agreement ─────────────
@@ -924,13 +778,33 @@ class TestRateEvidenceProvenanceDiagnostics:
         )
         return diag[0]
 
-    def test_cohort_maturity_diag_exposes_identity_and_admitted_cases(self):
+    def test_cohort_maturity_diag_exposes_identity_and_denied_cases(self):
+        # Reviewer-H1 (29-Apr-26): pre-fix the diagnostic's
+        # `selected_family` came from the bundle's
+        # `p_conditioning_temporal_family`, which was set from
+        # `subject_temporal_mode` (the QUERY's mode). For a cohort()
+        # query with anchor != subject_from, that field said "cohort"
+        # and the diagnostic emitted `admission_decision: 'admitted'`
+        # — even though WP8 is OFF and the typed merge was actually
+        # admitting WINDOW_SUBJECT_HELPER (window-family) E. The
+        # diagnostic and the merge disagreed.
+        #
+        # Post-fix, the bundle's `p_conditioning_temporal_family` is
+        # derived from the resolved evidence_role's family. Pre-WP8
+        # both branches resolve to window-helper, so:
+        #   - anchor == subject_from → `identity_collapse` (unchanged)
+        #   - anchor != subject_from → `denied` with reason
+        #     `cohort_rate_evidence_not_admitted` (was `admitted` /
+        #     `single_hop_anchor_override`)
+        # When WP8 admission lands and `direct_cohort_enabled=True`
+        # the second case will revert to `admitted`. This test will
+        # need to be revisited at that point.
         identity = self._cohort_maturity_diag(
             self._load_synth_graph(),
             self._get_candidate_regimes(None),
             "cohort(synth-lat4-c,-90d:)",
         )
-        admitted = self._cohort_maturity_diag(
+        anchor_distinct = self._cohort_maturity_diag(
             self._load_synth_graph(),
             self._get_candidate_regimes(None),
             "cohort(synth-lat4-b,-90d:)",
@@ -942,20 +816,24 @@ class TestRateEvidenceProvenanceDiagnostics:
             "admission_decision": "identity_collapse",
             "decision_reason": "anchor_equals_subject_start",
         }
-        assert admitted == {
-            "selected_family": "cohort",
-            "selected_anchor_node": "synth-lat4-b",
-            "admission_decision": "admitted",
-            "decision_reason": "single_hop_anchor_override",
+        assert anchor_distinct == {
+            "selected_family": "window",
+            "selected_anchor_node": None,
+            "admission_decision": "denied",
+            "decision_reason": "cohort_rate_evidence_not_admitted",
         }
 
     def test_conditioned_forecast_diag_exposes_per_edge_provenance(self):
+        # Reviewer-H1 (29-Apr-26): same semantic shift as above —
+        # `selected_family` reflects the merge's role family, not the
+        # query's temporal mode. Pre-WP8 the cohort-query branch is
+        # `denied` with reason `cohort_rate_evidence_not_admitted`.
         identity = self._conditioned_forecast_diag(
             self._load_synth_graph(),
             self._get_candidate_regimes(None),
             "cohort(synth-lat4-c,-90d:)",
         )
-        admitted = self._conditioned_forecast_diag(
+        anchor_distinct = self._conditioned_forecast_diag(
             self._load_synth_graph(),
             self._get_candidate_regimes(None),
             "cohort(synth-lat4-b,-90d:)",
@@ -971,14 +849,14 @@ class TestRateEvidenceProvenanceDiagnostics:
             "admission_decision": "identity_collapse",
             "decision_reason": "anchor_equals_subject_start",
         }
-        assert admitted == {
+        assert anchor_distinct == {
             "scenario_id": "diag",
-            "edge_uuid": admitted["edge_uuid"],
+            "edge_uuid": anchor_distinct["edge_uuid"],
             "from_node": "synth-lat4-c",
             "to_node": "synth-lat4-d",
-            "selected_family": "cohort",
-            "selected_anchor_node": "synth-lat4-b",
-            "admission_decision": "admitted",
-            "decision_reason": "single_hop_anchor_override",
+            "selected_family": "window",
+            "selected_anchor_node": None,
+            "admission_decision": "denied",
+            "decision_reason": "cohort_rate_evidence_not_admitted",
         }
 

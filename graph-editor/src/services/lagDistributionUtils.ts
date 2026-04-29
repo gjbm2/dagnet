@@ -358,6 +358,121 @@ export function epistemicSigmaSd(s: number, N: number): number {
 }
 
 /**
+ * Predictive concentration for a Bernoulli rate via the Beta-Binomial
+ * method-of-moments overdispersion estimator (Williams 1975 / Crowder 1978).
+ *
+ * Given per-cohort `(n_i, k_i)` summarising the rate `p` via a Beta-Binomial
+ * generative model `k_i ~ BB(n_i, α, β)` with `α = κ·ŝ`, `β = κ·(1-ŝ)`,
+ * returns the concentration `κ_pred` that matches the empirical
+ * cohort-to-cohort variation, plus `(α_pred, β_pred, φ)`.
+ *
+ * Generative model and MoM derivation:
+ *
+ * ```
+ *   p_i ~ Beta(α, β)             [latent rate per cohort, κ = α + β]
+ *   k_i | p_i, n_i ~ Binomial(n_i, p_i)
+ *
+ *   E[(k_i − n_i ŝ)² / (n_i · ŝ(1−ŝ))]  =  1 + (n_i − 1) / (κ + 1)
+ *   E[X²]  =  N + (S − N) / (κ + 1)        where S = Σ n_i
+ *
+ *   ⇒  κ + 1  =  (S − N) / (X² − (N − 1))
+ *   ⇒  κ_pred =  (S − N) / (X² − (N − 1))  −  1
+ * ```
+ *
+ * Equivalent, more numerically stable form: `κ_pred = (S − N) / ((N − 1)·(φ − 1)) − 1`
+ * where `φ = X² / (N − 1)` is the Pearson dispersion factor.
+ *
+ * Why this differs from the aggregate-rate concentration `S/φ − 1`. The
+ * latter is the equivalent Beta concentration of the aggregate-rate
+ * sampling variance with overdispersion factored in (Var(ŝ) ≈ φ · ŝ(1-ŝ)/S);
+ * it describes how tight the *aggregate* rate posterior is, not how
+ * variable a *new cohort observation* would be. The IS conditioning step
+ * needs the latter — the per-cohort predictive width — so the proposal can
+ * span the regions the data could plausibly favour. Aggregate-rate
+ * concentration on a long window of millions of trials produces a
+ * near-delta proposal that collapses IS reweighting; per-cohort
+ * concentration matches the typical Bayesian fit's `α_pred + β_pred`
+ * (tens to hundreds) and gives IS meaningful per-particle variation.
+ *
+ * Reference: Williams 1975 (Biometrics 31, 949–952), Crowder 1978
+ * (Applied Statistics 27, 34–37), Wedderburn 1974 (Biometrika 61),
+ * McCullagh & Nelder, *Generalized Linear Models*, 2nd ed., 1989, §4.5.
+ * Design: docs/current/codebase/EPISTEMIC_DISPERSION_DESIGN.md §6.
+ *
+ * Edge-case fallbacks:
+ *   - `nDaily` / `kDaily` empty or non-finite: returns undefined.
+ *   - N = 1: cannot estimate overdispersion; falls back to pure-Binomial
+ *     limit `κ_pred = max(1, S − 1)`.
+ *   - X² ≤ N − 1 (no detected overdispersion): same pure-Binomial limit.
+ *   - mean near 0 or 1 boundary: Agresti-Coull-smoothed denominator
+ *     `(K + ½) / (S + 1)` in the X² denominator only.
+ *   - resulting κ_pred ≤ 1: floor at 1.
+ *
+ * @param nDaily per-cohort (or per-day) sample size array
+ * @param kDaily per-cohort success-count array (same length)
+ * @returns object with alpha_pred, beta_pred, kappa_pred, phi — or undefined.
+ */
+export function rateOverdispersionPredictiveBeta(
+  nDaily: ReadonlyArray<number>,
+  kDaily: ReadonlyArray<number>,
+): { alpha_pred: number; beta_pred: number; kappa_pred: number; phi: number } | undefined {
+  if (!nDaily || !kDaily || nDaily.length === 0 || kDaily.length === 0) return undefined;
+  const len = Math.min(nDaily.length, kDaily.length);
+  const pairs: Array<[number, number]> = [];
+  let S = 0;
+  let K = 0;
+  for (let i = 0; i < len; i++) {
+    const ni = nDaily[i];
+    const ki = kDaily[i];
+    if (
+      Number.isFinite(ni) && Number.isFinite(ki)
+      && (ni as number) > 0 && (ki as number) >= 0 && (ki as number) <= (ni as number)
+    ) {
+      pairs.push([ni as number, ki as number]);
+      S += ni as number;
+      K += ki as number;
+    }
+  }
+  const N = pairs.length;
+  if (N === 0 || S <= 0) return undefined;
+
+  const sRaw = K / S;
+  const epsBoundary = 1e-9;
+  const sForVar =
+    (sRaw > epsBoundary && sRaw < 1 - epsBoundary)
+      ? sRaw
+      : (K + 0.5) / (S + 1);
+  const denomVar = Math.max(sForVar * (1 - sForVar), 1e-12);
+
+  let X2 = 0;
+  if (N >= 2) {
+    for (const [ni, ki] of pairs) {
+      const residual = ki - ni * sRaw;
+      X2 += (residual * residual) / (ni * denomVar);
+    }
+  }
+  const phi = N >= 2 ? Math.max(1, X2 / (N - 1)) : 1;
+
+  // Williams/Crowder MoM Beta-Binomial concentration.
+  // Pure-Binomial limit when N < 2 or when X² shows no overdispersion.
+  const X2excess = X2 - (N - 1);
+  let kappaPred: number;
+  if (N < 2 || X2excess <= 1e-9) {
+    kappaPred = Math.max(1, S - 1);
+  } else {
+    kappaPred = Math.max(1, (S - N) / X2excess - 1);
+  }
+
+  if (!Number.isFinite(kappaPred) || kappaPred <= 0) return undefined;
+  return {
+    alpha_pred: kappaPred * sRaw,
+    beta_pred: kappaPred * (1 - sRaw),
+    kappa_pred: kappaPred,
+    phi,
+  };
+}
+
+/**
  * Log-normal CDF.
  * F(t) = Φ((ln(t) - μ) / σ)
  */

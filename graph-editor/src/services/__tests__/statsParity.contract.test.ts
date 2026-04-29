@@ -273,10 +273,12 @@ describe('parity: computeEdgeLatencyStats (full pipeline)', () => {
     expect(result.p_infinity).toBeCloseTo(0.5663243456570916, 4);
     expect(result.forecast_available).toBe(true);
 
-    // Heuristic dispersion (design doc §3) — must match BE
+    // Principled dispersion (EPISTEMIC_DISPERSION_DESIGN.md §3–§5) — must match BE.
+    // mu_sd is the interval-matched effective SD of the t-posterior on μ; sigma_sd
+    // is the interval-matched effective SD of the scaled inv-χ² posterior on σ.
     expect(result.p_sd).toBeCloseTo(0.015535674711082496, 9);
-    expect(result.mu_sd).toBeCloseTo(0.05223762396706334, 9);
-    expect(result.sigma_sd).toBeCloseTo(0.036357386281076084, 9);
+    expect(result.mu_sd).toBeCloseTo(0.041856495821805284, 9);
+    expect(result.sigma_sd).toBeCloseTo(0.029648303064642403, 9);
     expect(result.onset_sd).toBeCloseTo(0.2, 9);
     expect(result.onset_mu_corr).toBeCloseTo(-0.3, 9);
   });

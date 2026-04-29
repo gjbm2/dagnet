@@ -149,35 +149,6 @@ def test_aggregate_prior_aggregates_across_cohorts():
     assert rows[0]['cohorts_covered_base'] == 3
 
 
-# ── Query-scoped path — direct read, no update ────────────────────
-
-
-def test_query_scoped_direct_read_analytic():
-    """analytic α/β is already query-scoped. Read directly."""
-    resolved = _make_resolved(source='analytic', alpha=25.0, beta=75.0)
-    assert resolved.alpha_beta_query_scoped is True  # guard the property
-    fe = _make_fe([{'x_frozen': 200.0, 'y_frozen': 40.0}])  # evidence present
-
-    rows = _rows(fe=fe, resolved=resolved, sweep_to='2026-04-01')
-
-    # Must be 25/100 = 0.25, NOT 65/300 (double-counted)
-    assert rows[0]['p_infinity_mean'] == pytest.approx(0.25)
-    s = 100.0
-    expected_sd = math.sqrt(25.0 * 75.0 / (s * s * (s + 1)))
-    assert rows[0]['p_infinity_sd'] == pytest.approx(expected_sd)
-
-
-def test_query_scoped_direct_read_analytic_again():
-    """Another analytic query-scoped case: same direct-read rule."""
-    resolved = _make_resolved(source='analytic', alpha=15.0, beta=35.0)
-    assert resolved.alpha_beta_query_scoped is True
-    fe = _make_fe([{'x_frozen': 100.0, 'y_frozen': 20.0}])
-
-    rows = _rows(fe=fe, resolved=resolved, sweep_to='2026-04-01')
-    # 15/50 = 0.3, not updated
-    assert rows[0]['p_infinity_mean'] == pytest.approx(0.3)
-
-
 # ── Class C — no evidence in the window ─────────────────────────────
 
 
@@ -273,17 +244,6 @@ def test_aggregate_prior_model_bands_reflect_prior():
     assert rows[0]['model_midpoint'] != rows[0]['midpoint']
 
 
-def test_query_scoped_model_bands_match_posterior():
-    """Query-scoped branch: no update, so model_* == posterior fields."""
-    resolved = _make_resolved(source='analytic', alpha=20.0, beta=30.0)
-    fe = _make_fe([{'x_frozen': 100.0, 'y_frozen': 60.0}])  # evidence ignored
-    rows = _rows(fe=fe, resolved=resolved, sweep_to='2026-04-01')
-
-    assert rows[0]['model_midpoint'] == rows[0]['midpoint']
-    assert rows[0]['model_fan_upper'] == rows[0]['fan_upper']
-    assert rows[0]['model_fan_lower'] == rows[0]['fan_lower']
-
-
 # ── Doc 52: subset-conditioning blend (non-latency path) ──────────
 #
 # Five test cases per doc 52 §14.9. Aggregate prior with a known
@@ -358,3 +318,89 @@ def test_blend_non_latency_skip_missing_n_effective():
     assert res.blend_skip_reason == 'n_effective_missing'
     # Falls through to B1 update: α' = 40+12 = 52, β' = 60+18 = 78, mean = 52/130.
     assert res.rows[0]['p_infinity_mean'] == pytest.approx(52.0 / 130.0)
+
+
+# ── Reviewer fix #4: extra_conditioning_evidence (typed-merge file E) ────
+
+
+def test_extras_pooled_into_conjugate_update_with_fe():
+    """File-derived merged-E points pool with snapshot fe into Σk/Σn.
+
+    Reviewer #4: pre-fix, the bundle reported `total_x = fe + extras`
+    while the engine conditioned only on `fe`. With the parameter
+    threaded through, both the bundle and the conjugate update see the
+    same Σ totals.
+    """
+    resolved = _make_resolved(source='bayesian', alpha=10.0, beta=20.0)
+    fe = _make_fe([{'x_frozen': 50.0, 'y_frozen': 10.0}])
+    extras = [
+        (5.0, 30.0, 6.0),   # n=30, k=6
+        (10.0, 20.0, 4.0),  # n=20, k=4
+    ]
+    res = _non_latency_rows(
+        fe=fe, resolved=resolved, sweep_to='2026-04-01',
+        extra_conditioning_evidence=extras,
+    )
+    # Σn = 50 + 30 + 20 = 100; Σk = 10 + 6 + 4 = 20
+    # α' = 10 + 20 = 30; β' = 20 + (100 - 20) = 100; p = 30/130
+    row = res.rows[0]
+    assert row['p_infinity_mean'] == pytest.approx(30.0 / 130.0)
+    assert row['evidence_x'] == pytest.approx(100.0)
+    assert row['evidence_y'] == pytest.approx(20.0)
+    assert res.conditioned is True
+
+
+def test_extras_only_no_fe_still_conditions():
+    """Extras without fe still drive the conjugate update and `conditioned=True`.
+
+    Pre-fix, `conditioned = (fe is not None and sum_x > 0)` would have
+    returned False here even though extras moved the posterior.
+    """
+    resolved = _make_resolved(source='bayesian', alpha=10.0, beta=20.0)
+    extras = [(0.0, 40.0, 8.0)]
+    res = _non_latency_rows(
+        fe=None, resolved=resolved, sweep_to='2026-04-01',
+        extra_conditioning_evidence=extras,
+    )
+    # α' = 10 + 8 = 18; β' = 20 + 32 = 52; p = 18/70
+    row = res.rows[0]
+    assert row['p_infinity_mean'] == pytest.approx(18.0 / 70.0)
+    assert row['evidence_x'] == pytest.approx(40.0)
+    assert row['evidence_y'] == pytest.approx(8.0)
+    assert res.conditioned is True
+
+
+def test_no_extras_preserves_legacy_behaviour():
+    """Without extras, the function behaves identically to the pre-fix path.
+
+    Guards against accidental regression of the fe-only conditioning
+    case — the most common production path until the snapshot adapter
+    starts populating extras for snapshot-only edges.
+    """
+    resolved = _make_resolved(source='bayesian', alpha=10.0, beta=20.0)
+    fe = _make_fe([{'x_frozen': 100.0, 'y_frozen': 30.0}])
+    res = _non_latency_rows(fe=fe, resolved=resolved, sweep_to='2026-04-01')
+    # α' = 10 + 30 = 40; β' = 20 + 70 = 90; p = 40/130
+    row = res.rows[0]
+    assert row['p_infinity_mean'] == pytest.approx(40.0 / 130.0)
+    assert row['evidence_x'] == pytest.approx(100.0)
+    assert res.conditioned is True
+
+
+def test_malformed_extras_skipped_silently():
+    """Tuples with wrong arity are skipped; valid tuples still fold in."""
+    resolved = _make_resolved(source='bayesian', alpha=10.0, beta=20.0)
+    fe = _make_fe([{'x_frozen': 50.0, 'y_frozen': 10.0}])
+    extras = [
+        (5.0, 30.0, 6.0),
+        ('garbage', None),  # arity-2, ValueError on unpack — must be skipped
+        None,               # not a tuple — must be skipped
+    ]
+    res = _non_latency_rows(
+        fe=fe, resolved=resolved, sweep_to='2026-04-01',
+        extra_conditioning_evidence=extras,
+    )
+    # Only the valid (5.0, 30.0, 6.0) entry contributes.
+    # Σn = 50 + 30 = 80; Σk = 10 + 6 = 16
+    # α' = 26; β' = 20 + 64 = 84; p = 26/110
+    assert res.rows[0]['p_infinity_mean'] == pytest.approx(26.0 / 110.0)

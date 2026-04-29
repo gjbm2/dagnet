@@ -43,6 +43,7 @@ import { filterResultForScenarios } from '@/lib/analysisResultUtils';
 import { SnapshotCalendarSection } from '../HoverAnalysisPreview';
 import { useNavigatorContext } from '@/contexts/NavigatorContext';
 import { resolveEdgeFromDsl } from '@/services/localAnalysisComputeService';
+import { refreshCanvasAnalysis } from '@/services/canvasAnalysisRefreshRegistry';
 
 interface CanvasAnalysisNodeData {
   analysis: CanvasAnalysis;
@@ -272,21 +273,12 @@ function CanvasAnalysisNodeInner({ data, selected, dragging }: NodeProps<CanvasA
     };
   }, [debugSnapshotChart, analysis, analysisProp, analysisType, propAnalysisType, propDebugSnapshotChart, tabId]);
 
-  const { result, loading, waitingForDeps, error, backendUnavailable, refresh } = useCanvasAnalysisCompute({
+  const { result, loading, waitingForDeps, error, backendUnavailable } = useCanvasAnalysisCompute({
     analysis,
     tabId,
     activeContentIndex: clampedIndex,
     debugSnapshotChartOverride: propDebugSnapshotChart,
   });
-
-  useEffect(() => {
-    const handler = (e: Event) => {
-      const detail = (e as CustomEvent).detail;
-      if (detail?.analysisId === analysis.id) refresh();
-    };
-    window.addEventListener('dagnet:canvasAnalysisRefresh', handler);
-    return () => window.removeEventListener('dagnet:canvasAnalysisRefresh', handler);
-  }, [analysis.id, refresh]);
 
   const lifecycleKey = useMemo(() => JSON.stringify({
     loading,
@@ -1459,7 +1451,7 @@ function CanvasAnalysisNodeInner({ data, selected, dragging }: NodeProps<CanvasA
           items.push({
             label: 'Refresh',
             icon: <RefreshCw size={14} />,
-            onClick: () => { refresh(); closeMenu(); },
+            onClick: () => { refreshCanvasAnalysis(analysis.id); closeMenu(); },
           });
 
           // Close tab

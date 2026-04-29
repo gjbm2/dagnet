@@ -1,16 +1,22 @@
-# Epistemic dispersion design — analytic stats pass
+# Epistemic and predictive dispersion design — analytic stats pass
 
-**Status**: Persistent design — design of record for `mu_sd` / `sigma_sd` reported by the FE topo stats pass.
+**Status**: Persistent design — design of record for the dispersion fields (`mu_sd`, `sigma_sd`, `onset_sd`, `alpha_pred`, `beta_pred`) emitted by the FE topo stats pass.
 **Adopted**: 28-Apr-26
-**Supersedes**: [`project-bayes/archive/heuristic-dispersion-design.md`](../project-bayes/archive/heuristic-dispersion-design.md) (the `1.25 × σ / √N` heuristic and its compounded corrections).
+**Supersedes**: [`project-bayes/archive/heuristic-dispersion-design.md`](../project-bayes/archive/heuristic-dispersion-design.md) (the `1.25 × σ / √N` heuristic and its compounded corrections); also closes the §3.9 analytic dispersion discipline deferral recorded in [`model_resolver.py`](../../../graph-editor/lib/runner/model_resolver.py) ("no `alpha_pred` / `beta_pred` from analytic until an overdispersion model lands").
 **Originating investigations**: [`project-bayes/73f`](../project-bayes/73f-outside-in-cohort-engine-investigation.md), [`project-bayes/73g`](../project-bayes/73g-general-purpose-f14-problem-and-invariants.md).
-**Scope**: defines the formula used by `statisticalEnhancementService.ts` for epistemic SDs on the lognormal latency parameters, and the parameter-reading discipline in `forecast_runtime.py` that consumes them.
+**Scope**: defines the formulas used by `statisticalEnhancementService.ts` for both the epistemic SDs on the lognormal latency parameters (`mu_sd`, `sigma_sd`, `onset_sd`) and the predictive (over-dispersion-aware) Beta concentration on the rate (`alpha_pred`, `beta_pred`); also defines the parameter-reading discipline in `forecast_runtime.py` that consumes them.
 
 ---
 
 ## 1. Purpose
 
-Specify a research-grounded, general-purpose method for reporting epistemic uncertainty on the lognormal latency parameters (μ, σ) emitted by the analytic stats pass. The method must work without arbitrary tuning across the full plausible sample-size range — from a handful of converters in a thin window to millions of converters in a saturated edge — and must rest on standard statistical theory rather than invented multipliers.
+Specify a research-grounded, general-purpose method for reporting parameter dispersion on the analytic stats pass output. Two parameter families need attention.
+
+The **latency parameters** (μ, σ, onset) need an epistemic SD reflecting how uncertain the fitted point estimate is. The natural inference framework is the Gaussian/lognormal location–scale model on `ln(t)`; the dispersion is the standard error of the MLE under a Jeffreys prior. §3–§5 below cover the latency case.
+
+The **rate parameter** (p) needs a *predictive* concentration — wider than the epistemic posterior, reflecting observation-level over-dispersion across cohorts. Without predictive width on the rate, the runner's importance-sampling step has no per-particle variation to discriminate against, and conditioning on cohort evidence silently becomes a no-op (the chart returns the model_vars value regardless of what the query DSL selected). §6 below covers the rate case.
+
+The methods must work without arbitrary tuning across the full plausible sample-size range — from a handful of converters in a thin window to millions of converters in a saturated edge — and must rest on standard statistical theory rather than invented multipliers.
 
 This document supersedes the design captured in [`project-bayes/archive/heuristic-dispersion-design.md`](../project-bayes/archive/heuristic-dispersion-design.md). That design used the asymptotic variance of the sample-median estimator (`1.25 × σ / √N`) as a stand-in for the standard error of the maximum-likelihood estimator. That substitution has no principled basis, and the intervening qualityInflation, drift-fraction, and fixed-floor corrections compounded the error rather than fixing it.
 
@@ -68,31 +74,131 @@ There is also no need for a fixed lower floor on the reported dispersion. The in
 
 ---
 
-## 6. Layer violation in the runner
+## 6. Predictive rate dispersion via quasi-likelihood overdispersion
 
-A separate, related defect lives in the back-end runner's parameter-reading layer. When the runner constructs a per-cohort parameter pack, it reads four candidate fields in order — the predictive location SD, the bare (epistemic) location SD, an edge-level predictive SD, and an edge-level bare SD — and uses the first non-null positive value it finds. The rationale for the candidate ordering is sound when the source is a Bayesian fit that emits both epistemic and predictive fields: the predictive value already includes the kappa-driven inflation that the runner would otherwise need to apply, so reading it first short-circuits the inflation step and reduces redundant work.
+The §3–§5 design produces principled epistemic dispersion for the latency parameters. The rate parameter `p` requires a different treatment because the runner's importance-sampling step needs a *predictive* concentration on `p` — wider than the epistemic Beta — for the IS proposal to have meaningful per-particle variation. Without predictive width on the rate, the conditioning step at [`forecast_state.py:1093`](../../../graph-editor/lib/runner/forecast_state.py#L1093) silently becomes a no-op for the analytic source.
 
-When the source is the analytic stats pass, however, no predictive field is emitted (correctly, since the analytic source has no basis to compute one), and the runner falls through to the bare epistemic value. It then uses that bare value as if it were predictive, with no inflation applied. The downstream sweep therefore propagates an under-dispersed parameter distribution, masking the true predictive uncertainty.
+### Why the rate side needs separate treatment
 
-The fix is independent of the dispersion design above but ships alongside it. The runner must distinguish between "predictive value is available, use it directly" and "only the epistemic value is available, apply the predictive-inflation step before use". The current single-fallback chain conflates the two cases. The resolution is to read predictive and epistemic into separate variables and to apply the predictive-inflation step explicitly when only epistemic is available, rather than relying on field-name precedence to imply semantics. The inflation step itself is the runner's existing kappa-based machinery; this design does not change it.
+The runner draws per-particle `(p, μ, σ, onset)` from a proposal parameterised by `(α_pred, β_pred, mu_sd_pred, sigma_sd_pred, onset_sd_pred)` and reweights the particles against per-cohort observations. For the IS step to discriminate particles meaningfully, the proposal width must be wider than the posterior — the proposal needs to span the region the data could plausibly favour, otherwise the reweighting collapses near the proposal mean.
+
+The latency-side principled epistemic SDs from §3 happen to land at widths comparable to a Bayesian fit's kappa-inflated predictive on typical fixtures in this project, so for latency the layer violation is not currently load-bearing. The rate side is different: method-of-moments on the analytic Beta produces `α + β` in the tens of thousands when the cohort window has aggregated millions of observations. Concentration that high produces a near-delta proposal on `p`, with no per-particle variation for IS to reweight against. Bayesian fits emit a separately-fitted `α_pred + β_pred` typically in the tens to hundreds — wide enough for IS to be effective.
+
+The asymmetry between epistemic and predictive on the rate side is therefore the load-bearing element. Without it, "conditioning on cohort evidence" silently becomes "ignore the cohort evidence, return the analytic model_vars".
+
+### Method: Beta-Binomial method-of-moments overdispersion
+
+The standard textbook approach is the Williams (1975) / Crowder (1978) method-of-moments estimator for the Beta-Binomial concentration, on the quasi-likelihood foundation of Wedderburn (1974). McCullagh & Nelder, *Generalized Linear Models*, 2nd ed., 1989, §4.5 and §9.2.4 give the canonical treatment for binary cohort data; the Williams form is the version that handles unequal `n_i`, which is the regime that applies here.
+
+The generative model is
+
+```
+p_i ~ Beta(α, β)             [latent rate per cohort, κ = α + β]
+k_i | p_i, n_i ~ Binomial(n_i, p_i)
+```
+
+Per-cohort the squared standardised residual contributes
+
+```
+(k_i − n_i ŝ)² / (n_i · ŝ(1 − ŝ))   with expectation   1 + (n_i − 1) / (κ + 1)
+```
+
+Summed across N cohorts with `S = Σ n_i`, `K = Σ k_i`, `ŝ = K/S`:
+
+```
+X² = Σ_i (k_i − n_iŝ)² / (n_i ŝ(1 − ŝ))      [Pearson statistic]
+E[X²] = N + (S − N) / (κ + 1)
+```
+
+Solving the moment equation for `κ` gives the estimator:
+
+```
+κ_pred = (S − N) / (X² − (N − 1)) − 1
+α_pred = κ_pred · ŝ
+β_pred = κ_pred · (1 − ŝ)
+```
+
+Equivalent and slightly more numerically stable form using `φ̂ = X² / (N − 1)` as the Pearson dispersion factor:
+
+```
+κ_pred = (S − N) / ((N − 1) · (φ̂ − 1)) − 1
+```
+
+Why this is the right concentration to emit. The IS conditioning step needs the **per-cohort predictive width** — how variable a *new cohort observation* would be — so the proposal can span the regions the data could plausibly favour. The aggregate-rate concentration `S/φ̂ − 1` describes how tight the *aggregate* rate posterior is (variance `φ̂ · ŝ(1−ŝ) / S`); on a long window of millions of trials it produces a near-delta proposal that collapses IS reweighting. The per-cohort concentration `(S − N) / (X² − (N − 1)) − 1` recovers the typical Bayesian fit's `α_pred + β_pred` (tens to hundreds for this project's fixtures), giving IS meaningful per-particle variation and matching what a hierarchical Beta-Binomial fit would produce by MCMC.
+
+The properties that recommend this construction:
+
+- The estimator derives from the data — different fixtures with different actual over-dispersion get different `κ_pred`, with no constant pulled out of the air.
+- It reduces to the pure-Binomial limit (`κ_pred → ∞`, capped at the pure-Binomial concentration `S − 1`) when no over-dispersion is present, which is the right limit for ideally-modelled data.
+- Single linear pass, O(N) time, O(1) memory, no MC, no iteration. Computationally negligible alongside the existing analytic stats pass aggregation.
+- It is the moment-of-moments equivalent of what the Bayesian pipeline computes via MCMC for the per-cohort concentration `κ` — same statistical content, single-pass machinery suitable for FE, comparable order of magnitude to the Bayesian fit on the same evidence.
+
+### Edge cases for the rate-side formula
+
+| Case | Fallback | Rationale |
+|---|---|---|
+| **N = 1** | `κ_pred = S − 1` (pure Binomial) | A single cohort cannot estimate over-dispersion. Pure Binomial is the only defensible answer. |
+| **N = 2** | Use the formula with the floor; estimator is noisy but defined. | Chi-squared has 1 df. Some authors (Breslow 1984) suggest shrinking toward 1 for very small N; the `max(1, ·)` floor on `κ_pred` is sufficient in practice. |
+| **`ŝ` near 0 or 1** (denominator unstable) | Substitute Jeffreys-smoothed `ŝ_J = (K + ½)/(S + 1)` in the X² denominator only. | Agresti & Coull (1998) — preserves estimator consistency, prevents division blow-up. |
+| **No detected over-dispersion** (`X² ≤ N − 1`) | `κ_pred = S − 1` (pure Binomial). | When the Pearson statistic doesn't exceed its residual-df expectation, the data is consistent with a pure Binomial; the formula's `κ_pred → ∞` limit is capped at the pure-Binomial concentration. Allowing the formula to run unbounded would produce a predictive Beta tighter than the pure-Binomial — incoherent for an IS proposal. |
+| **Resulting `κ_pred ≤ 1`** (extreme over-dispersion or numerical edge) | Floor at 1. | Below `κ_pred = 1` the Beta proposal is not unimodal at the mean; for an IS proposal we want at least a unimodal Beta centred near the empirical rate. |
+
+### Latency-side predictive deferral
+
+A parallel Pearson chi-squared overdispersion estimator on log-arrival times is straightforward in principle (test residual variance of `ln(t_i) − μ̂` against the MLE-implied σ²/N). It is not implemented here because the principled epistemic latency SD from §3 happens to come out at a width comparable to a typical Bayesian κ_lat-inflated predictive on this project's fixtures, so the layer violation does not currently bite on the latency side. If a future fixture reveals the latency-side asymmetry biting analogously, the same machinery applies and the same single-pass treatment can be added.
 
 ---
 
-## 7. Implementation pointers
+## 7. Layer violation in the runner
 
-Three files participate in the change.
+A defect lives in the back-end runner's parameter-reading layer. When the runner constructs a per-cohort parameter pack, it reads candidate fields in order — predictive first, bare (epistemic) as fallback — and uses the first non-null positive value it finds. The rationale is sound when the source emits both epistemic and predictive fields: the predictive value already includes the kappa-driven inflation, so reading it first short-circuits any further inflation step.
 
-The front-end stats pass [`statisticalEnhancementService.ts`](../../../graph-editor/src/services/statisticalEnhancementService.ts) computes μ_sd and σ_sd today using the heuristic formulas. The relevant block is the per-cohort dispersion calculation that multiplies σ by √(π/2)/√N and then by the qualityInflation factor and clamps to a floor. That block is replaced by the interval-matched effective SD computation: take the relevant quantiles of the Student-t posterior on μ and the scaled inverse chi-squared posterior on σ, and report the half-range divided by the Gaussian z-score for the chosen interval. The qualityInflation factor and the fixed floor are removed.
+When the source is the analytic stats pass, the previous design did not emit predictive fields (per the §3.9 deferral). The runner fell through to the bare epistemic value and used it as if it were predictive, with no inflation applied. The downstream sweep then propagated an under-dispersed parameter distribution, with the consequences described in §6 — the IS conditioning step silently became a no-op for the analytic source on the rate side.
 
-The back-end runner [`forecast_runtime.py`](../../../graph-editor/lib/runner/forecast_runtime.py) reads the dispersion fields when constructing its per-cohort parameter pack. The candidate-ordering logic that conflates predictive and epistemic must be split. When only epistemic dispersion is present, the runner applies its existing kappa-based inflation step before propagating the value into the sweep. When predictive is present, the inflation step is skipped exactly as today. The runner's existing inflation machinery is the same machinery the Bayesian path would otherwise use; this design does not modify it.
+The resolution closes the loop in two parts. The analytic stats pass now emits `α_pred` and `β_pred` populated by the §6 quasi-likelihood overdispersion formula; the rate side of the layer violation thereby self-resolves. The latency-side `mu_sd_pred` / `sigma_sd_pred` / `onset_sd_pred` are not emitted (per the deferral noted at the end of §6); the runner continues to fall back to the bare epistemic values for those fields, accepting that for analytic sources the latency-side predictive width is whatever the principled epistemic formula produces — which is comparable to typical Bayesian kappa-inflated predictive on this project's fixtures, so the substitution is acceptable until the latency-side overdispersion estimator lands.
 
-The prior dispersion design [`project-bayes/archive/heuristic-dispersion-design.md`](../project-bayes/archive/heuristic-dispersion-design.md) is stamped as superseded. It remains available for historical context and to explain the provenance of values that may persist in fixtures generated under the old method, but it is no longer the design of record.
-
-Tests must cover both ends of the N range and the small-N edge cases. The design does not enumerate test names; the [`project-bayes/73g`](../project-bayes/73g-general-purpose-f14-problem-and-invariants.md) invariant 8 applies — a passing test is only meaningful if it exercises the public path and asserts a contract, not an implementation quirk. The contract here is that the reported μ_sd matches the interval-matched effective SD of the t-posterior to within numerical tolerance for any N in the supported range, and that for analytic-source inputs the runner sees a predictively-inflated value at the point where it propagates parameter uncertainty.
+The runner code itself does not need behavioural change. Its existing `_pick_sd` candidate-ordering logic and its existing alpha_pred-first preference at [`forecast_state.py:938-942`](../../../graph-editor/lib/runner/forecast_state.py#L938) are now correct under the broader design — the analytic source emits a real predictive `α_pred` and the runner consumes it without further inflation.
 
 ---
 
-## 8. References
+## 8. Schema implications
+
+The predictive fields produced by the FE topo stats pass need a transport channel down to the runner. The Bayesian patch service already writes both bare and `_pred` variants of the rate concentration (`alpha`, `beta`, `alpha_pred`, `beta_pred`) into the `posterior` block on the edge. The analytic source previously omitted the `_pred` variants by design.
+
+This design adds two fields to the analytic source's `model_vars[analytic].probability` block:
+
+- `alpha_pred: number` — kappa-inflated predictive Beta α from the §6 formula.
+- `beta_pred: number` — kappa-inflated predictive Beta β from the §6 formula.
+
+These fields already exist in the runner's resolver schema for the Bayesian source; the analytic block previously omitted them by design. With the §6 overdispersion model now landed, the previous omission is replaced by population.
+
+The existing tests that assert the analytic source omits `alpha_pred` / `beta_pred` (e.g. [`contextMECEEquivalence.modelVars.e2e.test.ts:257-263`](../../../graph-editor/src/services/__tests__/contextMECEEquivalence.modelVars.e2e.test.ts#L257)) need to be updated to instead assert that these fields are populated when valid cohort data is available, and absent when the §6 edge-case fallbacks kick in (N = 0, no usable cohort data, etc.).
+
+The CF consumer side requires no change. The runner already prefers `*_pred` fields when present and falls back to bare fields when absent, so populating `alpha_pred` / `beta_pred` from the analytic source is automatically picked up by the existing IS-proposal construction at [`forecast_state.py:938-942`](../../../graph-editor/lib/runner/forecast_state.py#L938). The fallback path that reads bare `alpha` / `beta` (epistemic) when `*_pred` is absent remains in place for sources that never emit predictive fields.
+
+The latency-side predictive fields (`mu_sd_pred`, `sigma_sd_pred`, `onset_sd_pred`) are not added to the analytic source's `model_vars[analytic].latency` block in this design (per the deferral at the end of §6). The schema admits them already on the Bayesian side; the analytic side simply omits them. The runner falls back to the bare epistemic SDs for analytic-source latency, which is correct under the principled epistemic formula from §3.
+
+---
+
+## 9. Implementation pointers
+
+Three areas of code participate in the design.
+
+**Latency epistemic SDs (§3–§5).** The front-end stats pass [`statisticalEnhancementService.ts`](../../../graph-editor/src/services/statisticalEnhancementService.ts) previously computed `mu_sd` and `sigma_sd` via the heuristic `1.25 × σ / √N · qualityInflation` clamped to a floor of `0.02`. That block is replaced by the interval-matched effective SD computation: take the relevant quantiles of the Student-t posterior on μ and the scaled inverse chi-squared posterior on σ, and report the half-range divided by the Gaussian z-score for the chosen interval. The `qualityInflation` factor and the fixed floor are removed. The math primitives (Student-t quantile, χ² quantile, regularised incomplete beta and gamma) live in [`lagDistributionUtils.ts`](../../../graph-editor/src/services/lagDistributionUtils.ts).
+
+**Rate predictive concentration (§6).** The analytic stats pass also computes `α_pred` and `β_pred` via the Pearson chi-squared overdispersion formula. The computation runs over the per-cohort `(k_i, n_i)` tuples already aggregated by FE topo for the rate fit; it adds a single linear pass at negligible cost. The output is written to `model_vars[analytic].probability.{alpha_pred, beta_pred}` via [`buildAnalyticProbabilityBlock`](../../../graph-editor/src/services/modelVarsResolution.ts) (or its analytic-source equivalent). Existing tests asserting `alpha_pred` / `beta_pred` are *omitted* on the analytic block need updating (see §8 for the test pointer).
+
+**Runner consumer.** The back-end runner [`forecast_runtime.py`](../../../graph-editor/lib/runner/forecast_runtime.py) and [`forecast_state.py`](../../../graph-editor/lib/runner/forecast_state.py) require no behavioural change. Their existing `_pick_sd` candidate-ordering logic and `alpha_pred`-first preference are correct under the new design — once the analytic source emits real predictive fields, those fields are consumed without further inflation. A clarifying comment at the `_pick_sd` site documents the now-correct semantics.
+
+**Archived prior design.** The prior dispersion design [`project-bayes/archive/heuristic-dispersion-design.md`](../project-bayes/archive/heuristic-dispersion-design.md) is stamped as superseded. It remains available for historical context and to explain the provenance of values that may persist in fixtures generated under the old method, but it is no longer the design of record.
+
+**Tests.** Tests must cover both ends of the N range and the small-N edge cases. The design does not enumerate test names; the [`project-bayes/73g`](../project-bayes/73g-general-purpose-f14-problem-and-invariants.md) invariant 8 applies — a passing test is only meaningful if it exercises the public path and asserts a contract, not an implementation quirk. The contracts are: (a) reported `mu_sd` matches the interval-matched effective SD of the t-posterior to within numerical tolerance for any N ≥ 2 in the supported range; (b) reported `α_pred + β_pred` recovers `S − 1` in the no-overdispersion limit and produces `(S − N) / (X² − (N − 1)) − 1` for non-trivial Pearson `X²`; (c) cross-source parity tests (analytic vs Bayes on the same evidence) close to within tolerance under the now-comparable proposal widths.
+
+---
+
+## 10. References
+
+### Latency-side (§3–§5)
 
 - Casella, G. & Berger, R. L., *Statistical Inference*, 2nd ed., Duxbury, 2002. §5.3 (sampling distributions of the sample mean and variance), §9.2 (interval estimation).
 - Gelman, A., Carlin, J. B., Stern, H. S., Dunson, D. B., Vehtari, A. & Rubin, D. B., *Bayesian Data Analysis*, 3rd ed., CRC Press, 2013. §3.2 (the normal model with unknown mean and variance), Appendix A (standard distributions).
@@ -105,3 +211,15 @@ Tests must cover both ends of the N range and the small-N edge cases. The design
 - Johnson, N. L., Kotz, S. & Balakrishnan, N., *Continuous Univariate Distributions*, Vol. 2, 2nd ed., Wiley, 1995. Ch. 28 (Student-t distribution: moments and finiteness conditions).
 - Gelman, A., "Prior distributions for variance parameters in hierarchical models", *Bayesian Analysis* 1 (2006), 515–533.
 - Berger, J. O. & Bernardo, J. M., "Estimating a product of means: Bayesian analysis with reference priors", *J. Am. Stat. Assoc.* 84 (1989), 200–207.
+
+### Rate-side (§6)
+
+- Wedderburn, R. W. M., "Quasi-likelihood functions, generalized linear models, and the Gauss-Newton method", *Biometrika* 61 (1974), 439–447.
+- Williams, D. A., "The analysis of binary responses from toxicological experiments involving reproduction and teratogenicity", *Biometrics* 31 (1975), 949–952.
+- McCullagh, P. & Nelder, J. A., *Generalized Linear Models*, 2nd ed., Chapman & Hall, 1989. §4.5 (binary data, overdispersion), §9.2.4 (quasi-likelihood with dispersion).
+- Crowder, M. J., "Beta-binomial ANOVA for proportions", *Applied Statistics* 27 (1978), 34–37.
+- Skellam, J. G., "A probability distribution derived from the binomial distribution by regarding the probability of success as variable between the sets of trials", *J. R. Stat. Soc. B* 10 (1948), 257–261.
+- Agresti, A. & Coull, B. A., "Approximate is better than 'exact' for interval estimation of binomial proportions", *American Statistician* 52 (1998), 119–126.
+- Breslow, N., "Extra-Poisson variation in log-linear models", *Applied Statistics* 33 (1984), 38–44.
+- Collett, D., *Modelling Binary Data*, 2nd ed., Chapman & Hall, 2002. §6.3 (overdispersion in logistic regression).
+- Liang, K.-Y. & Zeger, S. L., "Longitudinal data analysis using generalized linear models", *Biometrika* 73 (1986), 13–22.

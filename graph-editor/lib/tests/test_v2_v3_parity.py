@@ -1063,11 +1063,6 @@ def test_v3_handler_widens_single_edge_downstream_cohort_span(monkeypatch):
         lambda **_kwargs: preparation,
     )
     monkeypatch.setattr(api_handlers, '_compute_axis_tau_max', lambda **_kwargs: 0)
-    monkeypatch.setattr(
-        api_handlers,
-        '_cf_supplement_evidence_counts_from_file',
-        lambda **_kwargs: {'supplemented_days': 0, 'k': 0, 'n': 0},
-    )
     monkeypatch.setattr(model_resolver, 'resolve_model_params', lambda *_args, **_kwargs: resolved)
     monkeypatch.setattr(
         forecast_runtime,
@@ -1331,11 +1326,6 @@ def test_v3_handler_samples_only_visible_source_curves(monkeypatch):
         lambda **_kwargs: preparation,
     )
     monkeypatch.setattr(api_handlers, '_compute_axis_tau_max', lambda **_kwargs: 2)
-    monkeypatch.setattr(
-        api_handlers,
-        '_cf_supplement_evidence_counts_from_file',
-        lambda **_kwargs: {'supplemented_days': 0, 'k': 0, 'n': 0},
-    )
     monkeypatch.setattr(model_resolver, 'resolve_model_params', lambda *_args, **_kwargs: resolved)
     monkeypatch.setattr(
         forecast_runtime,

@@ -253,14 +253,31 @@ describe('MECE equivalence: model_vars[analytic] (73b §3.9)', () => {
     expect(typeof probB.provenance, 'MECE probability.provenance type').toBe('string');
     expect(probB.provenance).toBe(probA.provenance);
 
-    // ── §3.9 absent fields (analytic predictive Beta) ───────────────────
-    // FE topo must NOT emit alpha_pred / beta_pred until an analytic
-    // overdispersion model is designed. Both entries must agree on
-    // their absence.
-    expect(probA.alpha_pred, 'baseline must omit alpha_pred per §3.9').toBeUndefined();
-    expect(probB.alpha_pred, 'MECE must omit alpha_pred per §3.9').toBeUndefined();
-    expect(probA.beta_pred, 'baseline must omit beta_pred per §3.9').toBeUndefined();
-    expect(probB.beta_pred, 'MECE must omit beta_pred per §3.9').toBeUndefined();
+    // ── analytic predictive Beta (§3.9 deferral now closed) ──────────────
+    // FE topo emits alpha_pred / beta_pred when the per-cohort overdispersion
+    // estimator (Pearson chi-squared / quasi-likelihood — Wedderburn 1974,
+    // Williams 1975, McCullagh & Nelder 1989 §4.5) produces a finite
+    // predictive concentration. Design:
+    // docs/current/codebase/EPISTEMIC_DISPERSION_DESIGN.md §6.
+    // When emitted, both MECE-equivalent entries must agree on type and
+    // produce a positive predictive Beta. When not emitted (degenerate cases:
+    // single cohort, boundary mean, infeasible moment-match), both must
+    // agree on absence.
+    if (probA.alpha_pred !== undefined || probB.alpha_pred !== undefined) {
+      expect(typeof probA.alpha_pred, 'baseline alpha_pred type').toBe('number');
+      expect(typeof probB.alpha_pred, 'MECE alpha_pred type').toBe('number');
+      expect(typeof probA.beta_pred, 'baseline beta_pred type').toBe('number');
+      expect(typeof probB.beta_pred, 'MECE beta_pred type').toBe('number');
+      expect(probA.alpha_pred as number).toBeGreaterThan(0);
+      expect(probB.alpha_pred as number).toBeGreaterThan(0);
+      expect(probA.beta_pred as number).toBeGreaterThan(0);
+      expect(probB.beta_pred as number).toBeGreaterThan(0);
+    } else {
+      expect(probA.alpha_pred).toBeUndefined();
+      expect(probB.alpha_pred).toBeUndefined();
+      expect(probA.beta_pred).toBeUndefined();
+      expect(probB.beta_pred).toBeUndefined();
+    }
 
     // ── §3.9 required window/edge-level latency fields ──────────────────
     const latA = analyticA.latency;

@@ -17,8 +17,8 @@ import { AnalysisTypeCardList } from '../panels/AnalysisTypeCardList';
 import type { ScenarioLayerItem } from '../../types/scenarioLayerList';
 import { ChartFloatingIcon } from './ChartInlineSettingsFloating';
 import { logChartReadinessTrace } from '../../lib/snapshotBootTrace';
+import { sessionLogService } from '../../services/sessionLogService';
 import type { ViewMode } from '../../types/chartRecipe';
-import { getAvailableExpressions } from '../../types/chartRecipe';
 import { LayoutGrid, Table2 } from 'lucide-react';
 import { AnalysisInfoCard } from '../analytics/AnalysisInfoCard';
 import { ExpressionToolbarTray } from './ExpressionToolbarTray';
@@ -342,33 +342,119 @@ export function AnalysisChartContainer(props: {
   }, [effectiveKind, finalResult, resolvedSettings, hideScenarioLegend, displayPlan.scenarioIdsToRender, scenarioVisibilityModes, scenarioDslSubtitleById, effectiveSubjectId, fillHeight, height, props.suppressAnimation]);
 
 
-  // Diagnostic: log when we have a result but no chart option
-  useEffect(() => {
-    if (!import.meta.env.DEV) return;
-    if (!finalResult) return; // still loading — nothing to log
-    if (effectiveKind === 'info') return; // info cards don't need echarts
-    if (echartsOption) {
-      console.log(`[ChartRender] OK ${finalResult.analysis_type}×${effectiveKind}`, {
-        analysisId: props.analysisId,
-        dataRows: finalResult.data?.length,
-        seriesCount: echartsOption?.series?.length,
-        source: finalResult.metadata?.source,
-      });
-      return;
+  // Build a stable, explicit failure reason whenever the chart cannot render
+  // despite a result being present. This is the single source of truth that
+  // (a) populates the session-log entry, (b) surfaces an inline message in
+  // the chart area, and (c) annotates the auto-fallback log entry. Silent
+  // fall-through to cards has masked real regressions in the past — we now
+  // log loudly with diagnostic data, regardless of DEV mode.
+  const chartFailureDiagnostic = useMemo(() => {
+    if (!finalResult) return null;
+    if (effectiveKind === 'info') return null;
+    if (echartsOption) return null;
+    const rows: any[] = Array.isArray(finalResult.data) ? finalResult.data : [];
+    const scenarioIdsInData = Array.from(new Set(rows.map((r: any) => String(r?.scenario_id)).filter(Boolean))).sort();
+    const subjectIdsInData = Array.from(new Set(rows.map((r: any) => String(r?.subject_id)).filter(Boolean))).sort();
+    const visibleScenarioIdsList = Array.isArray(visibleScenarioIds) ? visibleScenarioIds : [];
+
+    // Numeric-field profile: most builders treat rows with x=y=0 as "no
+    // cohort data, skip" — when ALL rows are zero the builder returns null
+    // and the user has no idea why. Capture the distribution so the session
+    // log makes it obvious.
+    const rowFieldStats = (() => {
+      let xPositive = 0, yPositive = 0, bothZero = 0, missingDate = 0;
+      let xMissing = 0, yMissing = 0;
+      for (const r of rows) {
+        const xRaw = r?.x;
+        const yRaw = r?.y;
+        if (xRaw == null) xMissing += 1;
+        if (yRaw == null) yMissing += 1;
+        const x = Number(xRaw ?? 0);
+        const y = Number(yRaw ?? 0);
+        if (x > 0) xPositive += 1;
+        if (y > 0) yPositive += 1;
+        if (x === 0 && y === 0) bothZero += 1;
+        if (!r?.date) missingDate += 1;
+      }
+      return { xPositive, yPositive, bothZero, xMissing, yMissing, missingDate };
+    })();
+
+    let reasonCode = 'unknown';
+    if (rows.length === 0) reasonCode = 'no_rows';
+    else if (visibleScenarioIdsList.length > 0
+      && scenarioIdsInData.length > 0
+      && !visibleScenarioIdsList.some(s => scenarioIdsInData.includes(String(s)))) {
+      reasonCode = 'scenario_filter_drops_all_rows';
+    } else if (!finalResult.semantics?.chart?.recommended) {
+      reasonCode = 'no_recommended_chart_in_semantics';
+    } else if (rowFieldStats.bothZero === rows.length) {
+      reasonCode = 'all_rows_have_x_and_y_zero';
+    } else if (rowFieldStats.missingDate === rows.length) {
+      reasonCode = 'all_rows_missing_date';
+    } else {
+      reasonCode = 'builder_returned_null';
     }
-    console.warn(`[ChartRender] NULL echartsOption — chart will be invisible`, {
-      analysisId: props.analysisId,
+
+    // Capture up to 3 sample rows so we can see actual field shape in the
+    // session log without dumping the whole array.
+    const sampleRows = rows.slice(0, 3).map((r: any) => {
+      const out: Record<string, any> = {};
+      for (const k of Object.keys(r || {})) {
+        const v = r[k];
+        if (v && typeof v === 'object') {
+          out[k] = Array.isArray(v) ? `[array len=${v.length}]` : '[object]';
+        } else {
+          out[k] = v;
+        }
+      }
+      return out;
+    });
+
+    return {
+      code: reasonCode,
       analysisType: finalResult.analysis_type,
       effectiveKind,
-      hasResult: true,
-      dataRows: finalResult.data?.length,
-      dimensions: finalResult.semantics?.dimensions?.map((d: any) => d?.id),
-      metrics: finalResult.semantics?.metrics?.map((m: any) => m?.id),
+      requestedKind: kind,
+      dataRows: rows.length,
+      rowFieldStats,
+      sampleRows,
+      scenarioIdsInData,
+      subjectIdsInData,
+      visibleScenarioIds: visibleScenarioIdsList,
+      effectiveSubjectId,
+      semanticsChartRecommended: finalResult.semantics?.chart?.recommended || null,
+      semanticsDimensions: finalResult.semantics?.dimensions?.map((d: any) => d?.id) || [],
       source: finalResult.metadata?.source,
       empty: finalResult.metadata?.empty,
-      hasOnViewModeChange: !!props.onViewModeChange,
-    });
-  }, [finalResult, effectiveKind, echartsOption]);
+      analysisId: props.analysisId,
+    };
+  }, [finalResult, effectiveKind, echartsOption, kind, visibleScenarioIds, effectiveSubjectId, props.analysisId]);
+
+  // Stable string key so we log once per distinct failure rather than per render.
+  const chartFailureKey = chartFailureDiagnostic ? JSON.stringify(chartFailureDiagnostic) : null;
+  useEffect(() => {
+    if (!finalResult) return;
+    if (effectiveKind === 'info') return;
+    if (echartsOption) {
+      if (import.meta.env.DEV) {
+        console.log(`[ChartRender] OK ${finalResult.analysis_type}×${effectiveKind}`, {
+          analysisId: props.analysisId,
+          dataRows: finalResult.data?.length,
+          seriesCount: echartsOption?.series?.length,
+          source: finalResult.metadata?.source,
+        });
+      }
+      return;
+    }
+    if (!chartFailureDiagnostic) return;
+    console.warn(`[ChartRender] NULL echartsOption — chart cannot render`, chartFailureDiagnostic);
+    sessionLogService.warning(
+      'graph',
+      'chart-render',
+      `Chart unavailable for ${chartFailureDiagnostic.analysisType} (${chartFailureDiagnostic.effectiveKind}): ${chartFailureDiagnostic.code}`,
+      JSON.stringify(chartFailureDiagnostic, null, 2),
+    );
+  }, [chartFailureKey]);
 
   // Fire onRendered for non-ECharts paths (info card, null option) — these are
   // already at their final visual state, no ECharts 'finished' event will come.
@@ -380,30 +466,10 @@ export function AnalysisChartContainer(props: {
     props.onRendered?.('failed');
   }, [finalResult, echartsOption, props.onRendered]);
 
-  // Auto-fallback: when chart view can't render (no echarts option and not info),
-  // switch to the next available view mode instead of showing "No data available".
-  // Guard with ref to fire at most once per mount — prevents infinite loop when
-  // viewMode prop reads from ci.view_type (content item) but onViewModeChange
-  // updates analysis.view_mode (container), so the prop never changes.
-  const chartCanRender = (effectiveKind === 'info' && !!finalResult) || !!echartsOption;
-  const autoFallbackFiredRef = useRef(false);
-  // Reset fallback guard when chart becomes renderable again (e.g. new result arrives)
-  if (chartCanRender) autoFallbackFiredRef.current = false;
-  useEffect(() => {
-    if (chartCanRender) return;            // chart renders fine
-    if (autoFallbackFiredRef.current) return; // already fired — prevent loop
-    if (props.children) return;            // parent supplies content (cards/table)
-    if (!finalResult) return;            // no result yet — still loading
-    if (!props.onViewModeChange) return;   // can't switch view mode
-    if (props.viewMode && props.viewMode !== 'chart') return; // already not chart
-
-    const available = getAvailableExpressions(finalResult);
-    const fallback = available.find(m => m !== 'chart');
-    if (fallback) {
-      autoFallbackFiredRef.current = true;
-      props.onViewModeChange(fallback);
-    }
-  }, [chartCanRender, finalResult, props.children, props.onViewModeChange, props.viewMode]);
+  // When chart view can't render we used to auto-switch to cards/table.
+  // That silently flipped the view mode under the user and was confusing —
+  // the session-log warning above is the canonical "why did this fail"
+  // channel; the inline render path shows a small unavailable message.
 
   const onEvents = useMemo(() => ({}), []);
   const echartsRef = useRef<any>(null);
@@ -756,6 +822,15 @@ export function AnalysisChartContainer(props: {
               onEvents={onEvents}
               onChartReady={handleChartReady}
             />
+          </div>
+        ) : finalResult ? (
+          <div style={{ flex: fillHeight ? 1 : undefined, minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, color: 'var(--color-text-muted, #888)', fontSize: 13, textAlign: 'center' }}>
+            <div>
+              <div style={{ marginBottom: 4 }}>Chart unavailable</div>
+              {chartFailureDiagnostic?.code && (
+                <div style={{ fontSize: 11, opacity: 0.7 }}>{chartFailureDiagnostic.code.replace(/_/g, ' ')}</div>
+              )}
+            </div>
           </div>
         ) : null}
         </div>

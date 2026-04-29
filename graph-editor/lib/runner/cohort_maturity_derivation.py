@@ -163,6 +163,13 @@ def derive_cohort_maturity(
                     "median_lag_days": None,
                     "mean_lag_days": None,
                     "onset_delta_days": None,
+                    # Latest actual `retrieved_at` across slices that
+                    # contributed to this anchor's (x, y) at this virtual
+                    # frame. Carries through for callers that need to
+                    # compute observation age relative to when the data
+                    # was *actually* observed, not the virtual frame's
+                    # carry-forward calendar date.
+                    "data_retrieved_at": None,
                 }
             entry = anchor_totals[anchor_day]
             entry["y"] += latest.y
@@ -175,6 +182,15 @@ def derive_cohort_maturity(
                 entry["mean_lag_days"] = latest.mean_lag_days
             if latest.onset_delta_days is not None:
                 entry["onset_delta_days"] = latest.onset_delta_days
+            # Track the latest contributing retrieval timestamp across
+            # slices for this anchor at this virtual frame. Min across
+            # slices is the conservative choice (the composed observation
+            # is only as fresh as the least-recent slice that contributed).
+            _slice_retrieved = latest.retrieved_at
+            if _slice_retrieved is not None:
+                _existing_ret = entry["data_retrieved_at"]
+                if _existing_ret is None or _slice_retrieved < _existing_ret:
+                    entry["data_retrieved_at"] = _slice_retrieved
 
         # Build data_points for this frame
         data_points = []
@@ -183,6 +199,7 @@ def derive_cohort_maturity(
             if ad in anchor_totals:
                 entry = anchor_totals[ad]
                 rate = entry["y"] / entry["x"] if entry["x"] > 0 else 0.0
+                _data_ret = entry["data_retrieved_at"]
                 data_points.append({
                     "anchor_day": ad.isoformat(),
                     "y": entry["y"],
@@ -192,6 +209,15 @@ def derive_cohort_maturity(
                     "median_lag_days": entry["median_lag_days"],
                     "mean_lag_days": entry["mean_lag_days"],
                     "onset_delta_days": entry["onset_delta_days"],
+                    # Latest actual retrieval that contributed (x, y).
+                    # ISO timestamp string when known; None for empty/no-data
+                    # entries. Consumers use this to compute the cohort's
+                    # observation age (the age at *actual* observation time)
+                    # which may differ from this virtual frame's snapshot_date
+                    # under sparse-snapshot conditions.
+                    "data_retrieved_at": (
+                        _data_ret.isoformat() if hasattr(_data_ret, "isoformat") else _data_ret
+                    ),
                 })
                 total_y += entry["y"]
 

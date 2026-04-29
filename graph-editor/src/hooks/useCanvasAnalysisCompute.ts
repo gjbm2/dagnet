@@ -21,6 +21,10 @@ import {
   type PreparedAnalysisComputeReady,
   type PreparedAnalysisComputeState,
 } from '../services/analysisComputePreparationService';
+import {
+  registerCanvasAnalysisRefresh,
+  unregisterCanvasAnalysisRefresh,
+} from '../services/canvasAnalysisRefreshRegistry';
 
 const DEBOUNCE_MS = 2000;
 
@@ -882,13 +886,27 @@ export function useCanvasAnalysisCompute({
   const refresh = useCallback(() => {
     graphComputeClient.clearCache();
     try { (window as any).__dagnetComputeNoCacheOnce = true; } catch { /* ignore */ }
+    canvasAnalysisResultCache.delete(analysis.id);
+    canvasAnalysisTransientCache.delete(analysis.id);
+    if (analysis.content_items) {
+      for (const ci of analysis.content_items) {
+        if (ci?.id) contentItemResultCache.delete(ci.id);
+      }
+    }
+    cacheSeededRef.current = false;
+    seededTransientResultRef.current = false;
     logChartReadinessTrace('CanvasScheduler:manual-refresh', {
       analysisId: analysis.id,
       analysisType,
       currentNonce: manualRefreshNonce,
     });
     setManualRefreshNonce((value) => value + 1);
-  }, [analysis.id, analysisType, manualRefreshNonce]);
+  }, [analysis.id, analysis.content_items, analysisType, manualRefreshNonce]);
+
+  useEffect(() => {
+    registerCanvasAnalysisRefresh(analysis.id, refresh);
+    return () => unregisterCanvasAnalysisRefresh(analysis.id, refresh);
+  }, [analysis.id, refresh]);
 
   return { result, loading, waitingForDeps, error, backendUnavailable, refresh };
 }

@@ -24,6 +24,7 @@ import { getKindsForView, getAvailableViewTypes } from '../panels/analysisTypes'
 import { ANALYSIS_TYPES, getAnalysisTypeMeta } from '../panels/analysisTypes';
 import { analysisResultToCsv } from '../../services/analysisExportService';
 import { downloadTextFile } from '../../services/downloadService';
+import { refreshCanvasAnalysis } from '../../services/canvasAnalysisRefreshRegistry';
 import type { AnalysisResult, AvailableAnalysis } from '../../lib/graphComputeClient';
 import type { ScenarioLayerItem } from '../../types/scenarioLayerList';
 import { ScenarioLayerList } from '../panels/ScenarioLayerList';
@@ -397,7 +398,7 @@ export const ExpressionToolbarTray = React.memo(function ExpressionToolbarTray({
       >
         {analysisId && (
           <button type="button" className="cfp-menu-item"
-            onClick={() => window.dispatchEvent(new CustomEvent('dagnet:canvasAnalysisRefresh', { detail: { analysisId } }))}
+            onClick={() => refreshCanvasAnalysis(analysisId)}
           >
             <RefreshCcw size={12} /> Refresh
           </button>

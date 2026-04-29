@@ -1,5 +1,35 @@
 # TODO
 
+## General forecasting work
+
+- **Performance-optimise pytest suite** (29-Apr-26)
+  - Outside-in module currently runs in ~244s (`test_cohort_factorised_outside_in.py` alone), full forecast / runtime python suite cluster takes minutes. Running specific tests during iterative development is painful and disincentivises running the relevant suite.
+  - Likely surfaces: daemon round-trip cost per `analyse` / `param-pack` invocation (each test does several), graph-load cost on every daemon call, fixture re-derivation across tests that could share a session-scoped frame, and pytest's own collection overhead on the larger files.
+  - Goal: bring the focused outside-in module under a minute; keep the absolute correctness contract intact (no test weakening for speed).
+  - Probable wins: session-scoped daemon process shared across tests in a module (rather than per-test daemon-slow-call timeouts on every invocation), cache the loaded graph + composed frames inside the daemon between back-to-back calls with the same graph + DSL, and class-scope fixtures for the analyse/param-pack outputs that several tests in the same file consume.
+
+- **Retire cohort_maturity v1 and v2** (29-Apr-26)
+  - cohort_maturity v3's outside-in suite is now green (33 passed / 1 xfailed, the xfail being the WP8 admission canary in doc 60 Appendix A.1). v1 and v2 are no longer needed.
+  - Delete the v1 and v2 row-builder modules under `graph-editor/lib/runner/` and any helper scripts that exist solely to serve them.
+  - Delete the v1 / v2 dispatch arms in `graph-editor/lib/api_handlers.py`.
+  - Delete every test whose subject is v1 or v2 (parity tests against v3, version-pinning tests, v1- or v2-specific contract tests). Tests whose subject is the public surface and which happen to use v3 today stay.
+  - Update any docs that still describe v1/v2 as live (mostly inside `docs/current/project-bayes/`).
+  - Sequencing: this is the natural next step before the WP8 work and the de-branching pass below — fewer paths to inspect once v1/v2 are gone. Tracked in [`docs/current/project-bayes/60-forecast-adaptation-programme.md`](docs/current/project-bayes/60-forecast-adaptation-programme.md) §13.1.
+
+- **Refactor out mode-specific branches in the forecasting machinery** (29-Apr-26)
+  - Resume the work paused after the failed F14 attempt. The BE conditioned forecast path still has parallel logic for `window()` vs `cohort()`, single-hop vs multi-hop, scalar projection, chart rows, and graph enrichment. Per the invariants, there must be **one general forecast machinery path** with cases differing only by natural degeneration of the same objects (`population_root`, `carrier_to_x`, `subject_span`, `numerator_representation`, `p_conditioning_evidence`, `projection`).
+  - Required reading before any further code changes: [`docs/current/project-bayes/73g-general-purpose-f14-problem-and-invariants.md`](docs/current/project-bayes/73g-general-purpose-f14-problem-and-invariants.md) and [`docs/current/codebase/COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md`](docs/current/codebase/COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS.md).
+  - Pre-implementation gate: forensic trace of the two failing public queries named in 73g (`from(simple-a).to(simple-b).window(-90d:)` and `from(simple-b).to(simple-c).cohort(1-Mar-26:3-Mar-26).asat(3-Mar-26)`) recording the actual runtime state of each object. The first implementation step must be at the first object whose actual state contradicts the invariants. No downstream projection patch is acceptable unless the upstream object state is already proven correct.
+
+- **Port Daily Conversions analysis (among others) onto the general forecasting machinery** (29-Apr-26)
+  - Daily Conversions currently has its own derivation path (`graph-editor/lib/runner/daily_conversions_derivation.py`) rather than projecting from the same resolved runtime object as `cohort_maturity` rows, CF scalars, and graph `p.mean`. Same applies to other analysis types still routed around the general machinery.
+  - Goal: rows, scalars, overlays, and downstream consumers all read from the single resolved `population_root → carrier_to_x → subject_span → numerator_representation → p_conditioning_evidence → projection` solve, rather than rebuilding mode-specific variants.
+  - Audit which analysis types still bypass the general path; sequence the ports so each analysis type's projection is the only thing that changes per consumer.
+
+- **Finish doc 60 WP8 work** (29-Apr-26)
+  - Outstanding scope from [`docs/current/project-bayes/60-...`] (the doc-60 implementation contract that landed `direct_cohort_enabled` for exact single-hop `cohort(A, X-Y)` subjects). `window()` and multi-hop `cohort(A, X-Z)` still leave the flag off — those need to be pulled into the same single-path semantics as part of the de-branching work above.
+  - Verify the `p_conditioning_evidence` seam is described correctly in code (which evidence family is allowed to move `p`, no silent retargeting of the carrier or subject span).
+
 - **'Static' display type for frozen-snapshot scenarios** (28-Apr-26)
   - Today's display types are `live`, `custom`, `fixed`. None preserves captured numerical state on replay: live materialises from the current graph; custom and fixed materialise from current parameter files. Per the uniform-materialisation decision in `docs/current/project-bayes/73e-FE-construction.md` §8.4, graph-bearing custom recipes do not preserve captured `p.mean` etc. — they re-derive against current files.
   - **Future feature**: a new `static` display type that preserves captured graph state. On replay, transport clones the captured graph, strips request-only fields, and dispatches without re-projection or FE topo. The captured graph is authoritative; refresh requires explicit user action that converts the static scenario back to live/custom/fixed (re-materialising from current files).

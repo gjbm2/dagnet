@@ -137,10 +137,17 @@ def _extract_source_curves(model_vars: List[Dict[str, Any]]) -> Dict[str, Dict[s
             # Doc 73b §3.9 mirror contract — aggregate Beta-shape on source layer.
             'prob_alpha': mv_prob.get('alpha'),
             'prob_beta': mv_prob.get('beta'),
+            # Predictive (kappa-inflated) Beta from the Pearson chi-squared
+            # overdispersion estimator. Emitted by the analytic source per
+            # docs/current/codebase/EPISTEMIC_DISPERSION_DESIGN.md §6.
+            'prob_alpha_pred': mv_prob.get('alpha_pred'),
+            'prob_beta_pred': mv_prob.get('beta_pred'),
             'prob_n_effective': mv_prob.get('n_effective'),
             'prob_provenance': mv_prob.get('provenance'),
             'prob_cohort_alpha': mv_prob.get('cohort_alpha'),
             'prob_cohort_beta': mv_prob.get('cohort_beta'),
+            'prob_cohort_alpha_pred': mv_prob.get('cohort_alpha_pred'),
+            'prob_cohort_beta_pred': mv_prob.get('cohort_beta_pred'),
             'prob_cohort_n_effective': mv_prob.get('cohort_n_effective'),
             'prob_cohort_provenance': mv_prob.get('cohort_provenance'),
             'mu_sd': mv_lat.get('mu_sd'),                 # epistemic (doc 61)
@@ -500,10 +507,17 @@ def resolve_model_params(
         else:
             n_effective = None
 
-    # Predictive alpha/beta (doc 49): prefer *_pred fields from posterior,
-    # fall back to epistemic (when kappa absent, they are identical).
+    # Predictive alpha/beta: prefer *_pred fields from the active source.
+    #
+    # Bayesian source: doc 49 — `_pred` from MCMC posterior, kappa-inflated.
+    # Analytic source: doc 73b §3.9 deferral now closed by the Pearson
+    #   chi-squared overdispersion estimator emitted from FE topo. See
+    #   docs/current/codebase/EPISTEMIC_DISPERSION_DESIGN.md §6.
+    # Falls back to epistemic when no predictive value is available
+    # (legacy fixtures, or sources still operating under the prior deferral).
     alpha_pred = alpha
     beta_pred = beta
+    # Cohort-mode predictive — bayesian posterior block first.
     if temporal_mode == 'cohort':
         _cp_a = posterior_block.get('cohort_alpha_pred', 0) or 0
         _cp_b = posterior_block.get('cohort_beta_pred', 0) or 0
@@ -511,12 +525,29 @@ def resolve_model_params(
             alpha_pred = float(_cp_a)
             beta_pred = float(_cp_b)
     if alpha_pred == alpha and beta_pred == beta:
-        # No cohort predictive or window mode — try edge-level predictive
+        # No cohort predictive or window mode — try window-level predictive
+        # from bayesian posterior block.
         _wp_a = posterior_block.get('alpha_pred', 0) or 0
         _wp_b = posterior_block.get('beta_pred', 0) or 0
         if _wp_a > 0 and _wp_b > 0:
             alpha_pred = float(_wp_a)
             beta_pred = float(_wp_b)
+    # Analytic-source predictive (Pearson chi-squared overdispersion).
+    if alpha_pred == alpha and beta_pred == beta and promoted_source == 'analytic':
+        if temporal_mode == 'cohort':
+            _ca_p = _src.get('prob_cohort_alpha_pred')
+            _cb_p = _src.get('prob_cohort_beta_pred')
+            if (isinstance(_ca_p, (int, float)) and isinstance(_cb_p, (int, float))
+                    and float(_ca_p) > 0 and float(_cb_p) > 0):
+                alpha_pred = float(_ca_p)
+                beta_pred = float(_cb_p)
+        if alpha_pred == alpha and beta_pred == beta:
+            _wa_p = _src.get('prob_alpha_pred')
+            _wb_p = _src.get('prob_beta_pred')
+            if (isinstance(_wa_p, (int, float)) and isinstance(_wb_p, (int, float))
+                    and float(_wa_p) > 0 and float(_wb_p) > 0):
+                alpha_pred = float(_wa_p)
+                beta_pred = float(_wb_p)
 
     # p_sd from alpha/beta or from model_vars
     p_sd = 0.0

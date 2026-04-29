@@ -151,6 +151,8 @@ Dirty state is:
 
 6. **Listener notifications use deep clones.** Prevents stale closure bugs in React subscribers.
 
+7. **Pull merge preserves dirty until commit.** After a 3-way pull merge that absorbed local-only content, `file.originalData` tracks the remote baseline (not the merged result), `file.isDirty` stays `true`, and `isInitializing` is NOT re-set on the merge path. Setting `originalData = mergedData` defeats the next pull's dirty detection (data == originalData → remote-wins overwrite). Re-setting `isInitializing = true` re-engages the absorption logic and folds the merged-in local content into `originalData` on the next normalisation pass — same silent-loss outcome, one cycle delayed. AP 55, I-20a.
+
 ## Pitfalls
 
 ### Anti-pattern 10: Assuming `isInitializing` is false
@@ -160,6 +162,10 @@ Dirty state is:
 **Root cause**: `isInitializing` is true for 500ms after file load. During this phase, all edits are absorbed into `originalData` without marking dirty. If `completeInitialization()` doesn't fire (callback lost, file re-loaded), the phase never ends.
 
 **Fix**: check `file.isInitializing` in the debugger. Verify `completeInitialization(fileId)` is scheduled and fires.
+
+### Anti-pattern 55: Pull merge absorbs local content into baseline
+
+See [KNOWN_ANTI_PATTERNS.md](KNOWN_ANTI_PATTERNS.md) AP 55. Closely related to AP 10 — same `isInitializing` absorption mechanism, different trigger (3-way merge result rather than initial load). The merge-path writers in `pullFile` and `workspaceService.pullLatest` must NOT set `isInitializing = true` after a successful merge; combined with the wrong `originalData` choice this produces silent loss of locally-merged content on the second pull. The canonical symptom is bayes posteriors disappearing from parameter YAMLs after an auto-pull cycle, despite `BAYES_PATCH_APPLIED` having succeeded earlier.
 
 ## Key Files
 

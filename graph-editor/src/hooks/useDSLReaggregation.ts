@@ -126,6 +126,42 @@ export function useDSLReaggregation({
     setGraph(cloned);
   }, [graph, currentDSL, isTemporaryFile, graphStoreApi, setGraph]);
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // POSTERIOR-LANDED RE-CONTEXT
+  //
+  // applyPatch / UpdateManager mappings both pick the bare `window()` slice
+  // when projecting onto live edges — neither knows the active DSL. The
+  // LIVE-EDGE CONTEXTING effect above is the single DSL-aware projection
+  // path, but it is gated on `currentDSL` actually changing. After a fresh
+  // fit lands, the DSL is unchanged so that effect skips, and the edges
+  // hold the bare aggregate even when the user is on a context-qualified
+  // or cohort() DSL. Stage 4(b) (removal of `_posteriorSlices`) plus
+  // contexted Bayes outputs together created this hole.
+  //
+  // This listener fires when applyPatchAndCascade signals new posteriors,
+  // invalidates the gating ref, and re-projects against the active DSL.
+  // ═══════════════════════════════════════════════════════════════════════════
+  useEffect(() => {
+    const handler = () => {
+      if (isAggregatingRef.current) return;
+      if (isTemporaryFile) return;
+      const liveGraph = graphRef.current;
+      if (!liveGraph) return;
+      const authoritativeDSL = graphStoreApi.getState().currentDSL || '';
+      if (!authoritativeDSL) return;
+      const cloned = structuredClone(liveGraph) as Graph;
+      contextLiveGraphForCurrentDsl(
+        cloned,
+        (paramId: string) => fileRegistry.getFile(`parameter-${paramId}`)?.data,
+        authoritativeDSL,
+      );
+      lastContextedDSLRef.current = authoritativeDSL;
+      setGraph(cloned);
+    };
+    window.addEventListener('dagnet:bayesPosteriorsUpdated', handler);
+    return () => window.removeEventListener('dagnet:bayesPosteriorsUpdated', handler);
+  }, [isTemporaryFile, graphStoreApi, setGraph]);
+
 
   useEffect(() => {
     if (isAggregatingRef.current) return;

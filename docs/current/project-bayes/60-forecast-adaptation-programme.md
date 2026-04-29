@@ -1048,6 +1048,113 @@ v1/v2 chart features or any later consumer feature work. Its purpose is
 to leave the forecast stack clean enough that those later workstreams can
 build on a stable semantic boundary instead of extending today's drift.
 
+### 13.1 Outstanding follow-on work after v3 acceptance (29-Apr-26)
+
+With cohort_maturity v3's outside-in suite green (33 passed / 1 xfailed,
+the xfail being the WP8 admission canary in Appendix A.1), four
+follow-on workstreams are now actionable. They are listed in dependency
+order, not priority order.
+
+1. **Retire cohort_maturity v1 and v2.** v3 is the proven path; the v1
+   and v2 row builders, their api_handlers entry points, and every test
+   that pins their behaviour can be deleted in a single pass. This is the
+   v1/v2 chart-retirement workstream that earlier sections of this
+   programme deferred to "later work" — it is no longer deferred.
+   - Delete the v1 and v2 row-builder modules under
+     `graph-editor/lib/runner/` and any helper scripts that exist solely
+     to serve them.
+   - Delete the v1 / v2 dispatch arms in `api_handlers.py`.
+   - Delete every test whose subject is v1 or v2 (parity tests against
+     v3, version-pinning tests, and any v1- or v2-specific contract
+     tests). Tests whose subject is the public surface — and which
+     happen to use v3 today — stay.
+   - Update any docs that still describe v1/v2 as live (mostly inside
+     `docs/current/project-bayes/`).
+   - Leaves a single row-builder path. Reduces surface area for the
+     branch-removal pass below.
+
+2. **Finish doc 60 WP8 work.** §9 WP8 lays out the flagged
+   direct-`cohort()` rate-conditioning path and Appendix A pins the
+   tests that are blocked on it. This is the last load-bearing branch in
+   the runtime — once it lands and the regime selector flips on for
+   single-hop cohort queries with an upstream anchor, the merge admits
+   E under the cohort role rather than under the window-helper role for
+   those queries, the bundle's `p_conditioning_temporal_family` reports
+   `cohort`, and Appendix A.1's xfails (the surprise-gauge regime canary
+   and the single-hop cohort provenance canary) come back green.
+   Sequencing: do this after v1/v2 retirement, before the de-branching
+   pass.
+
+3. **Port Daily Conversions onto the general forecasting machinery.**
+   Daily Conversions still has its own derivation path
+   (`graph-editor/lib/runner/daily_conversions_derivation.py`) rather
+   than projecting from the same resolved runtime object as
+   cohort_maturity rows, CF scalars, and graph `p.mean`. Per 73g
+   invariant 1 ("one general forecast machinery path"), rows, scalars,
+   overlays, and any other downstream consumers should all read from a
+   single resolved
+   `population_root → carrier_to_x → subject_span → numerator_representation → p_conditioning_evidence → projection`
+   solve. Audit which other analysis types still bypass the general path
+   and sequence the ports so each consumer's projection is the only
+   thing that changes per consumer. Rows / scalars / overlays must not
+   carry their own carrier, subject-span, or `p∞` logic.
+
+4. **Careful CF de-branching pass against 73g invariants.** With v1/v2
+   gone and WP8 landed, CF should contain no mode-specific branches.
+   This pass walks `handle_conditioned_forecast`, `_handle_cohort_maturity_v3`,
+   `prepare_forecast_runtime_inputs`, the cohort-vs-window dispatch
+   inside `cohort_forecast_v3`, and the projection seam, and removes
+   any branch that exists only to handle window vs cohort, single-hop
+   vs multi-hop, scalar vs row, or analytic vs bayesian source
+   differently. Reference contract:
+   [`73g-general-purpose-f14-problem-and-invariants.md`](73g-general-purpose-f14-problem-and-invariants.md).
+   Cases must differ only by natural degeneration of the same objects.
+   This is WP9's spirit applied at the level of the eight 73g
+   invariants rather than just the legacy v1/v2 fork — sequencing it
+   after WP8 means the WP8 admission flag is the last branch the pass
+   has to inspect for "can this become natural degeneration?".
+
+5. **CLI test relative-date drift.** Many outside-in CLI tests specify
+   queries with relative dates (`window(-90d:)`, `cohort(A, -1d:)`,
+   `cohort(B, -90d:)`, …). These are resolved against today's clock at
+   test time, but the synth fixtures' snapshot DB and parameter files
+   were captured at a fixed point in time. As wall-clock time advances,
+   the relative offsets walk forward off the back end of the captured
+   data and the tests will start to fail for reasons unrelated to the
+   engine — sparse-snapshot edge cases, empty cohorts, or queries that
+   land beyond the synth fixture's `snapshot_start_offset`. The fix is
+   either (a) rewrite each test's DSL to use absolute dates anchored
+   to the fixture's truth file (so the query window is fixed regardless
+   of when the test runs), or (b) pin a synthetic "as-at" date at the
+   harness level and have the DSL resolver use that instead of `Date.now()`
+   when the harness is active, so relative dates resolve to the same
+   absolute window every run. (b) is lower-touch and matches what the
+   FE parity work already does for the deterministic-clock concern in
+   `live share` parity. Audit `test_cohort_factorised_outside_in.py`
+   and the CLI scripts in `graph-ops/scripts/` for relative-date use
+   before fixing.
+
+6. **BE CF performance pass and caching design.** Now that the engine
+   produces correct numbers, performance is the next concern. Each
+   `analyse` / `param-pack` invocation in the outside-in suite triggers
+   a daemon round-trip, a graph reload, and a full prepare-runtime
+   build; many tests pay this cost several times for the same graph and
+   the daemon-slow-call timeout regularly fires at ~10s. Production CF
+   calls have similar shape: the same prepared subject is rebuilt for
+   the chart row pass, the conditioned-forecast scalar pass, and any
+   overlay band pass. Goals: (a) cache the loaded graph + composed
+   frames inside the daemon across back-to-back calls with the same
+   workspace + graph + as-at, (b) reuse `prepare_forecast_runtime_inputs`
+   output across the cohort_maturity rows, conditioned-forecast scalars,
+   and overlay band paths within a single request, (c) cache
+   evidence-merge `EvidenceSet` builds keyed on
+   `(graph_sha, edge_uuid, role, scope)`. Ordering: the de-branching
+   pass above should land first so the caching design has a single
+   canonical object to key on, not a moving target. Profile-driven —
+   add tracing first, identify the hot path, then design the cache.
+   Correctness contract: caches must be busted by graph edit, parameter
+   edit, snapshot DB write, and as-at change; never by time alone.
+
 ## Appendix A. WP8 references — pinned debt awaiting the direct-`cohort()` path
 
 Until WP8 lands, the runtime always selects window() temporal vars
@@ -1067,6 +1174,7 @@ adapting around the temporary contract.
 | Test | File | Expected post-WP8 behaviour |
 |---|---|---|
 | `test_surprise_gauge_prefers_temporal_candidate_regime` | [`graph-editor/lib/tests/test_cf_query_scoped_degradation.py`](../../graph-editor/lib/tests/test_cf_query_scoped_degradation.py) | Cohort-DSL surprise-gauge calls bind the cohort hash (`hash-cohort`, `40/4`) instead of collapsing to the window hash (`hash-window`, `100/40`). Re-enable by removing the `@pytest.mark.xfail` decorator at the test head once WP8 ratifies the cohort regime selector. Strict so the marker fails loudly if the test starts passing for the wrong reason. |
+| `test_cli_single_hop_downstream_cohort_parity_and_admitted_provenance` | [`graph-editor/lib/tests/test_cohort_factorised_outside_in.py`](../../graph-editor/lib/tests/test_cohort_factorised_outside_in.py) | Provenance reports `selected_family='cohort'`, `selected_anchor_node='synth-lat4-b'`, `admission_decision='admitted'`, `decision_reason='single_hop_anchor_override'` for a single-hop cohort query with an upstream anchor. Pre-WP8 the merge admits every subject under `WINDOW_SUBJECT_HELPER`, so the bundle reports `family='window'` / `decision_reason='cohort_rate_evidence_not_admitted'`. Marker added 29-Apr-26 after the 73h reviewer-H1 fix tied `p_conditioning_temporal_family` to the actual admitted role rather than the query mode. The earlier scalar-parity and completeness-gap-floor checks in the same test continue to exercise cohort-mode forecast math; only the provenance loop is post-WP8. Re-enable by removing the `@pytest.mark.xfail` decorator at the test head once WP8 ratifies the cohort regime selector. |
 
 ### A.2 Evidence-merge role reserved for WP8
 

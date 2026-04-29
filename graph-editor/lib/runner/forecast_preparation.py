@@ -443,6 +443,13 @@ def prepare_forecast_subject_entry(
                 for row in rows
                 if row.get("anchor_day")
             },
+            # 73h #1 Stage 4+: the post-regime-selection snapshot rows so
+            # downstream callers (forecast_runtime → typed merge) can build
+            # SourceKind.SNAPSHOT candidates instead of relying on the
+            # date-set covered_observations filter. Snapshots are now
+            # first-class candidates in `EvidenceSet`; the file path stays
+            # filtered via the merge's intrinsic SNAPSHOT > FILE precedence.
+            "snapshot_rows": list(rows),
             "derivation_result": derivation,
         },
     }

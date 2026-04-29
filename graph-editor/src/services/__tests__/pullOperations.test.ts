@@ -324,6 +324,90 @@ value: 0.5`;
       expect(mergedData.canvasAnalyses[0].id).toBe('chart-1');
       expect(mergedData.nodes).toHaveLength(2);
     });
+
+    it('after a merge that absorbs local-only content, the file stays dirty and originalData tracks remote (so a second pull does not silently overwrite)', async () => {
+      // Reproduces the regression where a Bayes posterior added by applyPatch
+      // survived the first pull (3-way merge) but disappeared on the second
+      // pull because originalData had been set to the merged result, making
+      // hasLocalChanges=false on the next call.
+      const originalParam = { id: 'p', values: [{ n: 1, k: 1 }] };
+      const localParam = {
+        id: 'p',
+        values: [{ n: 1, k: 1 }],
+        posterior: { fitted_at: '23-Apr-26', slices: { 'window()': { alpha: 10, beta: 5 } } },
+      };
+      const remoteParam = { id: 'p', values: [{ n: 1, k: 1 }] };
+
+      const mockFile: any = {
+        id: 'parameter-p',
+        name: 'p',
+        type: 'parameter',
+        data: localParam,
+        originalData: originalParam,
+        isDirty: true,
+        isLocal: false,
+        sha: 'old-sha',
+        source: { path: 'parameters/p.yaml' }
+      };
+
+      vi.mocked(fileRegistry.getFile).mockReturnValue(mockFile);
+      vi.mocked(credentialsManager.loadCredentials).mockResolvedValue(
+        createMockCredentials()
+      );
+      // YAML round-trip: serialise the remote param the way the impl will.
+      const YAML = await import('yaml');
+      const remoteYaml = YAML.stringify(remoteParam);
+      vi.mocked(gitService.getFileContent).mockResolvedValue({
+        success: true,
+        data: { content: remoteYaml, sha: 'new-sha' }
+      });
+      vi.mocked(db.files.put).mockResolvedValue('parameter-p');
+
+      const result = await repositoryOperationsService.pullFile('parameter-p', mockRepository, mockBranch);
+
+      expect(result.success).toBe(true);
+      // The merged data must still carry the local posterior.
+      expect(mockFile.data.posterior).toBeDefined();
+      expect(mockFile.data.posterior.slices['window()'].alpha).toBe(10);
+      // originalData must reflect REMOTE, not the merged result. Otherwise
+      // the next pull's hasLocalChanges check would be false and the
+      // remote-wins branch would silently wipe the posterior.
+      expect(mockFile.originalData.posterior).toBeUndefined();
+      // File must remain dirty until the user commits the posterior.
+      expect(mockFile.isDirty).toBe(true);
+    });
+
+    it('a clean file (no local changes) ends up not dirty after pull', async () => {
+      const remoteParam = { id: 'p', values: [{ n: 5, k: 2 }] };
+      const mockFile: any = {
+        id: 'parameter-p',
+        name: 'p',
+        type: 'parameter',
+        data: { id: 'p', values: [{ n: 1, k: 1 }] },
+        originalData: { id: 'p', values: [{ n: 1, k: 1 }] },
+        isDirty: false,
+        isLocal: false,
+        sha: 'old-sha',
+        source: { path: 'parameters/p.yaml' }
+      };
+
+      vi.mocked(fileRegistry.getFile).mockReturnValue(mockFile);
+      vi.mocked(credentialsManager.loadCredentials).mockResolvedValue(
+        createMockCredentials()
+      );
+      const YAML = await import('yaml');
+      vi.mocked(gitService.getFileContent).mockResolvedValue({
+        success: true,
+        data: { content: YAML.stringify(remoteParam), sha: 'new-sha' }
+      });
+      vi.mocked(db.files.put).mockResolvedValue('parameter-p');
+
+      await repositoryOperationsService.pullFile('parameter-p', mockRepository, mockBranch);
+
+      expect(mockFile.isDirty).toBe(false);
+      expect(mockFile.data.values[0].n).toBe(5);
+      expect(mockFile.originalData.values[0].n).toBe(5);
+    });
   });
 
   describe('pullLatest', () => {

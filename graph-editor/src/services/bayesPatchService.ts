@@ -702,6 +702,22 @@ async function _applyPatchAndCascadeInner(
   sessionLogService.success('bayes', 'BAYES_CASCADE_COMPLETE',
     `Cascaded ${cascaded} params from files to graph`);
 
+  // Signal the live-edge re-context path that fresh posteriors have landed.
+  // applyPatch and UpdateManager both pick the bare `window()` slice when
+  // they project onto edges — neither knows the active DSL. Without this
+  // event, edges keep the bare-aggregate projection until the user happens
+  // to change DSL, at which point the gated effect in useDSLReaggregation
+  // fires. After Stage 4(b) removed `_posteriorSlices` AND Bayes started
+  // emitting per-context slices, this implicit "DSL change re-projects"
+  // path no longer covers the post-fit case. The hook listener uses the
+  // active DSL to project the matching slice from the freshly-written
+  // parameter file.
+  try {
+    window.dispatchEvent(new CustomEvent('dagnet:bayesPosteriorsUpdated', {
+      detail: { graphId, edgesUpdated },
+    }));
+  } catch { /* non-DOM environment (CLI / tests) — listeners are FE-only */ }
+
   return { edgesUpdated };
 }
 

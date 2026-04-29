@@ -1159,6 +1159,9 @@ export class UpdateManager {
             probability: buildAnalyticProbabilityBlock(
               analyticMean as number,
               (latestValue as any).forecast_stdev as number,
+              {
+                stdev_pred: (latestValue as any).forecast_stdev_pred as number | undefined,
+              },
             ),
           };
 

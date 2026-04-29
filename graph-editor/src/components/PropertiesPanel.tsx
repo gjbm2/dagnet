@@ -41,6 +41,7 @@ import { graphComputeClient, type AvailableAnalysis } from '../lib/graphComputeC
 import { resolveAnalysisType } from '../services/analysisTypeResolutionService';
 import { augmentChartKindOptionsForAnalysisType } from '../services/chartDisplayPlanningService';
 import { canvasAnalysisResultCache } from '../hooks/useCanvasAnalysisCompute';
+import { refreshCanvasAnalysis } from '../services/canvasAnalysisRefreshRegistry';
 import { chartOperationsService } from '../services/chartOperationsService';
 import { analysisResultToCsv } from '../services/analysisExportService';
 import { downloadTextFile } from '../services/downloadService';
@@ -641,9 +642,7 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
           <button
             className="property-action-button"
             style={{ padding: '6px 12px', fontSize: 12, cursor: 'pointer', border: '1px solid #d1d5db', borderRadius: 4, background: 'transparent' }}
-            onClick={() => {
-              window.dispatchEvent(new CustomEvent('dagnet:canvasAnalysisRefresh', { detail: { analysisId } }));
-            }}
+            onClick={() => refreshCanvasAnalysis(analysisId)}
           >
             Refresh
           </button>

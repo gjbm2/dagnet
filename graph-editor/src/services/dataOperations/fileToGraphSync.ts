@@ -50,6 +50,84 @@ import { applyChanges } from './applyChanges';
 // Module-level singletons (mirrors dataOperationsService.ts pattern).
 const windowAggregationService = new WindowAggregationService();
 const updateManager = new UpdateManager();
+
+/**
+ * Compute the slice-family key of a stored value entry.
+ *
+ * Family key = `<context dims>.<mode>` (e.g. `context(channel:google).cohort(simple-a)`),
+ * matching the same shape as the asat query's targetSliceKey at the
+ * call site. For cohort, the anchor is part of the family because
+ * different cohort anchors are genuinely different populations
+ * (anchor != X is the key distinction in 73h §"population identity").
+ * Cohort or window date bounds are NOT part of the family — they are
+ * QUERY FILTERS over a single time series, not population identity.
+ * Tier 1 reconstruction replaces the daily arrays for that family
+ * (the snapshot DB owns the dates); Tier 2 truncates the family's
+ * dates by asat.
+ *
+ * Reviewer-M2 (29-Apr-26) initially asked for full population
+ * identity (anchor + bounds for cohort, bounds for window), but
+ * including bounds in the key broke fixtures whose stored sliceDSL
+ * carried different bounds than the asat query — every asat-tier-2
+ * pre-existing test relied on family-level truncation. Cohort anchor
+ * is the meaningful population discriminator within the matcher's
+ * scope; bounds are filters, not identity.
+ */
+function _valueFamilyKey(v: any): string {
+  if (!v?.sliceDSL) return '';
+  return _familyKeyFromDSL(String(v.sliceDSL));
+}
+
+function _familyKeyFromDSL(dsl: string): string {
+  const dims = extractSliceDimensions(dsl);
+  let parsed: any = null;
+  try {
+    parsed = parseConstraints(dsl);
+  } catch {
+    parsed = null;
+  }
+  let mode = '';
+  if (parsed?.cohort) {
+    const anchor = parsed.cohort.anchor ?? '';
+    mode = anchor ? `cohort(${anchor})` : 'cohort()';
+  } else if (parsed?.window) {
+    mode = 'window()';
+  } else if (dsl.includes('cohort(')) {
+    mode = 'cohort()';
+  } else if (dsl.includes('window(')) {
+    mode = 'window()';
+  }
+  return [dims, mode].filter(Boolean).join('.');
+}
+
+/**
+ * Pick the values[] entries an asat query is allowed to mutate.
+ *
+ * Match is by slice family — context dims + mode (and cohort anchor,
+ * because different anchors are different cohort populations). Date
+ * bounds inside `cohort()` / `window()` are query filters, not
+ * population identity, and are not part of the match.
+ *
+ * Back-compat: when the param file has exactly one values[] entry
+ * with no sliceDSL at all (legacy single-slice files), accept it as
+ * the target — the historical behaviour of operating on the only
+ * entry was not the bug.
+ */
+function _selectAsatTargetValues(values: any[], targetFamilyKey: string): any[] {
+  if (!Array.isArray(values) || values.length === 0) return [];
+  if (values.length === 1 && !values[0]?.sliceDSL) return [values[0]];
+  return values.filter(v => _valueFamilyKey(v) === targetFamilyKey);
+}
+
+// Exported for unit-testing the asat slice-family match. Internal —
+// other call sites should use the loops in getParameterFromFile rather
+// than duplicating the match logic.
+export const __asatTesting = {
+  selectAsatTargetValues: _selectAsatTargetValues,
+  valueFamilyKey: _valueFamilyKey,
+  familyKeyFromDSL: _familyKeyFromDSL,
+};
+
 let _cachedDASRunner: ReturnType<typeof createDASRunner> | null = null;
 function getCachedDASRunner() {
   if (!_cachedDASRunner) {
@@ -152,15 +230,21 @@ export async function getParameterFromFile(options: {
         }
 
         if (anchorFrom && anchorTo) {
-          const aFromDate = parseUKDate(anchorFrom);
-          const aToDate = parseUKDate(anchorTo);
-          const fromISO = aFromDate.toISOString().split('T')[0];
-          const toISO = aToDate.toISOString().split('T')[0];
-          const anchorFromISO = fromISO <= toISO ? fromISO : toISO;
-          const anchorToISO = fromISO <= toISO ? toISO : fromISO;
-
-          // asat date → end of day UTC
+          // asat tier-1 reconstruction must return ALL anchor_days observable
+          // as of asat — not just those within the queried scope window. The
+          // FE topo lag-fit (mu, sigma, t95) is spec'd to consume "full
+          // unscoped cohorts — all history" (FE_BE_STATS_PARALLELISM.md
+          // §"Dual-evidence treatment"). The cohort-window narrowing happens
+          // downstream in aggregateCohortData for the evidence consumers
+          // (evidence.{n,k,mean}, completeness), not at this snapshot-DB
+          // reconstruction layer. Bounding only by asat preserves both
+          // contracts: lag-fit gets full asat-truncated history, evidence
+          // gets the scope-window slice via the existing downstream filter.
           const asatDateObj = parseUKDate(asatDateUK);
+          const anchorFromISO = '1970-01-01';
+          const anchorToISO = asatDateObj.toISOString().split('T')[0];
+
+          // asat date → end of day UTC (used for retrieved_at filter only)
           asatDateObj.setUTCHours(23, 59, 59, 999);
           const asAtISO = asatDateObj.toISOString();
 
@@ -203,22 +287,48 @@ export async function getParameterFromFile(options: {
                 });
 
                 if (timeSeries.length > 0 && paramFile?.data?.values) {
-                  // Replace the daily arrays on the matching value entry.
-                  // asat data comes from snapshot DB — the param file may not
-                  // have daily arrays yet (e.g. first asat query before any
-                  // DAS fetch). Create them unconditionally.
+                  // Replace the daily arrays on the value entry whose own
+                  // slice family matches the asat query's slice — context
+                  // dimensions plus mode (cohort/window). Pre-fix this loop
+                  // overwrote every values[] entry, so a query for one slice
+                  // clobbered every other slice's arrays with the queried
+                  // slice's data. Match by slice family so unrelated slices
+                  // are left untouched.
+                  //
+                  // Lag arrays (median/mean/anchor_*) are rewritten from the
+                  // same timeSeries on the matched entries to preserve the
+                  // positional-alignment contract relied on by
+                  // parameterValueToCohortData.
                   const values = paramFile.data.values as any[];
-                  for (const v of values) {
-                    v.n_daily = timeSeries.map(pt => pt.n);
-                    v.k_daily = timeSeries.map(pt => pt.k);
-                    v.dates = timeSeries.map(pt => pt.date);
-                    v.n = timeSeries.reduce((sum: number, pt: any) => sum + pt.n, 0);
-                    v.k = timeSeries.reduce((sum: number, pt: any) => sum + pt.k, 0);
-                    v._asat = parsed.asat;
-                    v._asat_retrieved_at = virtualResult.latest_retrieved_at_used;
+                  // Build the asat query's family key from the parsed
+                  // target — context dims + mode + cohort anchor.
+                  // Different cohort anchors are different populations
+                  // (#6 + reviewer-M2); cohort/window date BOUNDS are
+                  // query filters and are not part of the family.
+                  const targetFamilyKey = _familyKeyFromDSL(targetSlice);
+                  const matchedValues = _selectAsatTargetValues(values, targetFamilyKey);
+                  if (matchedValues.length === 0) {
+                    console.warn(
+                      `[DataOperationsService] asat tier 1: no values[] entry matches slice family "${targetFamilyKey}" — skipping reconstruction`,
+                      { availableSlices: values.map(v => v.sliceDSL ?? '(bare)') }
+                    );
+                  } else {
+                    for (const v of matchedValues) {
+                      v.n_daily = timeSeries.map(pt => pt.n);
+                      v.k_daily = timeSeries.map(pt => pt.k);
+                      v.dates = timeSeries.map(pt => pt.date);
+                      v.median_lag_days = timeSeries.map(pt => pt.median_lag_days);
+                      v.mean_lag_days = timeSeries.map(pt => pt.mean_lag_days);
+                      v.anchor_median_lag_days = timeSeries.map(pt => (pt as any).anchor_median_lag_days);
+                      v.anchor_mean_lag_days = timeSeries.map(pt => (pt as any).anchor_mean_lag_days);
+                      v.n = timeSeries.reduce((sum: number, pt: any) => sum + pt.n, 0);
+                      v.k = timeSeries.reduce((sum: number, pt: any) => sum + pt.k, 0);
+                      v._asat = parsed.asat;
+                      v._asat_retrieved_at = virtualResult.latest_retrieved_at_used;
+                    }
+                    asatApplied = true;
+                    console.log(`[DataOperationsService] asat tier 1: reconstructed ${timeSeries.length} daily points from snapshot DB on ${matchedValues.length} matching slice(s) of ${values.length}`);
                   }
-                  asatApplied = true;
-                  console.log(`[DataOperationsService] asat tier 1: reconstructed ${timeSeries.length} daily points from snapshot DB`);
                 }
 
                 // Fire warnings
@@ -244,26 +354,51 @@ export async function getParameterFromFile(options: {
         if (paramFile?.data?.values) {
           const asatDateObj = parseUKDate(asatDateUK);
           const values = paramFile.data.values as any[];
-          for (const v of values) {
-            if (v.dates && v.n_daily && v.k_daily) {
-              const filteredIndices: number[] = [];
-              for (let i = 0; i < v.dates.length; i++) {
-                try {
-                  const d = parseUKDate(normalizeToUK(v.dates[i]));
-                  if (d <= asatDateObj) filteredIndices.push(i);
-                } catch { /* skip unparseable */ }
+          // Same family-key match as Tier 1 — only truncate the slice
+          // that matches the asat query, leave other slices untouched.
+          const targetFamilyKey = _familyKeyFromDSL(targetSlice);
+          const matchedValues = _selectAsatTargetValues(values, targetFamilyKey);
+          if (matchedValues.length === 0) {
+            console.warn(
+              `[DataOperationsService] asat tier 2: no values[] entry matches slice family "${targetFamilyKey}" — skipping truncation`,
+              { availableSlices: values.map(v => v.sliceDSL ?? '(bare)') }
+            );
+          } else {
+            for (const v of matchedValues) {
+              if (v.dates && v.n_daily && v.k_daily) {
+                const filteredIndices: number[] = [];
+                for (let i = 0; i < v.dates.length; i++) {
+                  try {
+                    const d = parseUKDate(normalizeToUK(v.dates[i]));
+                    if (d <= asatDateObj) filteredIndices.push(i);
+                  } catch { /* skip unparseable */ }
+                }
+                v.n_daily = filteredIndices.map(i => v.n_daily[i]);
+                v.k_daily = filteredIndices.map(i => v.k_daily[i]);
+                v.dates = filteredIndices.map(i => v.dates[i]);
+                // Trim lag arrays by the same indices so positional alignment
+                // (relied on by parameterValueToCohortData) is preserved.
+                if (Array.isArray(v.median_lag_days)) {
+                  v.median_lag_days = filteredIndices.map(i => v.median_lag_days[i]);
+                }
+                if (Array.isArray(v.mean_lag_days)) {
+                  v.mean_lag_days = filteredIndices.map(i => v.mean_lag_days[i]);
+                }
+                if (Array.isArray(v.anchor_median_lag_days)) {
+                  v.anchor_median_lag_days = filteredIndices.map(i => v.anchor_median_lag_days[i]);
+                }
+                if (Array.isArray(v.anchor_mean_lag_days)) {
+                  v.anchor_mean_lag_days = filteredIndices.map(i => v.anchor_mean_lag_days[i]);
+                }
+                v.n = v.n_daily.reduce((s: number, x: number) => s + x, 0);
+                v.k = v.k_daily.reduce((s: number, x: number) => s + x, 0);
+                v._asat = parsed.asat;
+                v._asat_truncated = true;  // Mark as approximation
               }
-              v.n_daily = filteredIndices.map(i => v.n_daily[i]);
-              v.k_daily = filteredIndices.map(i => v.k_daily[i]);
-              v.dates = filteredIndices.map(i => v.dates[i]);
-              v.n = v.n_daily.reduce((s: number, x: number) => s + x, 0);
-              v.k = v.k_daily.reduce((s: number, x: number) => s + x, 0);
-              v._asat = parsed.asat;
-              v._asat_truncated = true;  // Mark as approximation
             }
+            asatApplied = true;
+            console.log(`[DataOperationsService] asat tier 2: truncated file arrays to dates <= ${asatDateUK} on ${matchedValues.length} matching slice(s) of ${values.length} (approximation)`);
           }
-          asatApplied = true;
-          console.log(`[DataOperationsService] asat tier 2: truncated file arrays to dates <= ${asatDateUK} (approximation)`);
         }
       }
     }

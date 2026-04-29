@@ -306,8 +306,15 @@ export function buildDailyConversionsEChartsOption(
   }
   const sortedDates = Array.from(allDates).sort();
 
-  // Single visible scenario → grey; multi → scenario colour
-  const isSingleScenario = keys.length <= 1;
+  // Single visible scenario → grey; multi → scenario colour.
+  // Drive this from tab-level visibility (visibleScenarioIds), NOT from
+  // keys.length — the latter collapses to "single" whenever only one of
+  // multiple visible scenarios happens to have rows in scope, which made
+  // the rendered series revert to neutral grey instead of its scenario
+  // colour. Tab-wide visibility is the right test: the neutral default
+  // is meant for "user has narrowed the canvas to one scenario", not
+  // "this chart received only one series".
+  const isSingleScenario = visibleScenarioIds.length <= 1;
   // Store smoothed forecast rates per key for band polygon alignment
   const smoothedFRateByKey = new Map<string, Array<[string, number | null]>>();
   const NEUTRAL = '#808080';
@@ -968,8 +975,11 @@ export function buildConversionRateEChartsOption(
     filteredRows = filteredRows.filter((r: any) => String(r?.subject_id) === effectiveSubjectId);
   }
 
-  const visibleScenarios = [...new Set(filteredRows.map((r: any) => String(r?.scenario_id)).filter(Boolean))];
-  const isSingleScenario = visibleScenarios.length <= 1;
+  // See buildDailyConversionsEChartsOption: drive single-vs-multi from
+  // tab-level visibility, not from the per-chart filtered set. A scenario
+  // that's tab-visible but has no rows in scope must NOT collapse the
+  // remaining series's colour to neutral grey.
+  const isSingleScenario = visibleScenarioIds.length <= 1;
   const seriesKey = 'scenario_id';
   const meta = scenarioMeta;
 

@@ -23,6 +23,7 @@ import { sessionLogService } from '../sessionLogService';
 import { findBestMECEPartitionCandidateSync, parameterValueRecencyMs } from '../meceSliceService';
 import { RECENCY_HALF_LIFE_DAYS, DEFAULT_T95_DAYS } from '../../constants/latency';
 import type { ForecastingModelSettings } from '../forecastingSettingsService';
+import { rateOverdispersionPredictiveBeta } from '../lagDistributionUtils';
 
 export function addEvidenceAndForecastScalars(
   aggregatedData: any,
@@ -708,6 +709,23 @@ export function addEvidenceAndForecastScalars(
         forecastMeanComputed !== undefined && weightedNTotal > 0
           ? Math.sqrt(Math.max(0, forecastMeanComputed * (1 - forecastMeanComputed)) / weightedNTotal)
           : undefined;
+      // Predictive (overdispersion-aware) Beta concentration for the rate, via the
+      // Pearson chi-squared / quasi-likelihood overdispersion estimator on per-day
+      // (n_i, k_i). This is the load-bearing predictive width that the back-end IS
+      // proposal needs in order to discriminate per-particle p draws against cohort
+      // evidence. Without it, IS conditioning on the analytic rate silently becomes
+      // a no-op. Design: docs/current/codebase/EPISTEMIC_DISPERSION_DESIGN.md §6.
+      const overdispersion =
+        forecastMeanComputed !== undefined && weightedNTotal > 0
+          ? rateOverdispersionPredictiveBeta(nMeta as number[], kMeta as number[])
+          : undefined;
+      const forecastStdevPredComputed: number | undefined =
+        overdispersion !== undefined
+          ? Math.sqrt(
+              Math.max(0, forecastMeanComputed! * (1 - forecastMeanComputed!))
+                / (overdispersion.kappa_pred + 1)
+            )
+          : undefined;
       if (forecastMeanComputed !== undefined) {
         // Attach forecast scalar (query-time) – always overwrite so F-mode is explainable and consistent.
         nextAggregated = {
@@ -716,6 +734,9 @@ export function addEvidenceAndForecastScalars(
             ...v,
             forecast: forecastMeanComputed,
             forecast_stdev: forecastStdevComputed,
+            ...(forecastStdevPredComputed !== undefined
+              ? { forecast_stdev_pred: forecastStdevPredComputed }
+              : {}),
           })),
         };
 
@@ -833,16 +854,64 @@ export function addEvidenceAndForecastScalars(
       }
 
       if (forecastMeanComputed !== undefined) {
-        // Doc 73f F15 fix: scalar-fallback paths cannot derive a window-aggregate
-        // stdev because they have no weighted-N (no daily arrays). Emit no
-        // forecast_stdev so downstream moment-matching correctly infers "no
-        // dispersion available" rather than fabricating one.
+        // Scalar-fallback path: forecast came from a stored scalar on the
+        // candidate value, not from daily aggregation. When the candidate
+        // ALSO has n_daily/k_daily arrays, derive both the epistemic
+        // (Binomial) `forecast_stdev` and the predictive (over-dispersed)
+        // `forecast_stdev_pred` from those — so the analytic source can
+        // emit a meaningful (alpha, beta) and (alpha_pred, beta_pred) pair
+        // via buildAnalyticProbabilityBlock. When n_daily/k_daily are
+        // unavailable, emit no stdev (preserves the doc 73f F15 behaviour
+        // that downstream moment-matching infers "no dispersion available"
+        // rather than fabricating one).
+        // Design: docs/current/codebase/EPISTEMIC_DISPERSION_DESIGN.md §6.
+        let scalarFallbackStdev: number | undefined;
+        let scalarFallbackStdevPred: number | undefined;
+        const scalarCandidate: any =
+          (scalarCandidates.length > 0
+            ? scalarCandidates.reduce((b, cur) => (parameterValueRecencyMs(cur) > parameterValueRecencyMs(b) ? cur : b))
+            : undefined);
+        const fallbackNDaily = (scalarCandidate?.n_daily as number[] | undefined) ?? undefined;
+        const fallbackKDaily = (scalarCandidate?.k_daily as number[] | undefined) ?? undefined;
+        if (
+          fallbackNDaily && fallbackKDaily
+          && fallbackNDaily.length > 0 && fallbackKDaily.length > 0
+        ) {
+          let totalN = 0;
+          let totalK = 0;
+          const len = Math.min(fallbackNDaily.length, fallbackKDaily.length);
+          for (let i = 0; i < len; i++) {
+            const ni = fallbackNDaily[i];
+            const ki = fallbackKDaily[i];
+            if (Number.isFinite(ni) && Number.isFinite(ki) && (ni as number) > 0) {
+              totalN += ni as number;
+              totalK += ki as number;
+            }
+          }
+          if (totalN > 0) {
+            scalarFallbackStdev = Math.sqrt(
+              Math.max(0, forecastMeanComputed * (1 - forecastMeanComputed)) / totalN
+            );
+          }
+          const fallbackOverdispersion = rateOverdispersionPredictiveBeta(
+            fallbackNDaily, fallbackKDaily,
+          );
+          if (fallbackOverdispersion !== undefined) {
+            scalarFallbackStdevPred = Math.sqrt(
+              Math.max(0, forecastMeanComputed * (1 - forecastMeanComputed))
+                / (fallbackOverdispersion.kappa_pred + 1)
+            );
+          }
+        }
         nextAggregated = {
           ...nextAggregated,
           values: (nextAggregated.values as ParameterValue[]).map((v: any) => ({
             ...v,
             forecast: forecastMeanComputed,
-            forecast_stdev: undefined,
+            forecast_stdev: scalarFallbackStdev,
+            ...(scalarFallbackStdevPred !== undefined
+              ? { forecast_stdev_pred: scalarFallbackStdevPred }
+              : {}),
           })),
         };
 

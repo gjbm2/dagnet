@@ -97,7 +97,14 @@ def compose_path_maturity_frames(
             for dp in frame.get('data_points', []):
                 ad = dp.get('anchor_day', '')
                 if ad not in composed[sd]:
-                    composed[sd][ad] = {'x': 0.0, 'y': 0.0, 'a': 0.0}
+                    composed[sd][ad] = {
+                        'x': 0.0, 'y': 0.0, 'a': 0.0,
+                        # Min across edges that contributed: the composed
+                        # observation is only as fresh as the least-recent
+                        # contributing edge. Stored as the ISO string the
+                        # per-edge framer emitted.
+                        'data_retrieved_at': None,
+                    }
                 entry = composed[sd][ad]
                 if x_from_a:
                     # When x = a, use anchor population as denominator
@@ -116,6 +123,11 @@ def compose_path_maturity_frames(
                     a_val = dp.get('a', 0)
                     if isinstance(a_val, (int, float)) and float(a_val) > entry['a']:
                         entry['a'] = float(a_val)
+                _dp_retrieved = dp.get('data_retrieved_at')
+                if isinstance(_dp_retrieved, str) and _dp_retrieved:
+                    _existing = entry['data_retrieved_at']
+                    if _existing is None or _dp_retrieved < _existing:
+                        entry['data_retrieved_at'] = _dp_retrieved
 
     # Extract numerator (y) from y-incident edge frames
     for edge_entry in y_edges:
@@ -129,6 +141,11 @@ def compose_path_maturity_frames(
                     y_val = dp.get('y', 0)
                     if isinstance(y_val, (int, float)):
                         composed[sd][ad]['y'] += float(y_val)
+                    _dp_retrieved = dp.get('data_retrieved_at')
+                    if isinstance(_dp_retrieved, str) and _dp_retrieved:
+                        _existing = composed[sd][ad]['data_retrieved_at']
+                        if _existing is None or _dp_retrieved < _existing:
+                            composed[sd][ad]['data_retrieved_at'] = _dp_retrieved
 
     # ── Build composed frames ─────────────────────────────────────────
     all_anchor_days = set()
@@ -158,6 +175,7 @@ def compose_path_maturity_frames(
                     'median_lag_days': None,
                     'mean_lag_days': None,
                     'onset_delta_days': None,
+                    'data_retrieved_at': vals.get('data_retrieved_at'),
                 })
                 total_y += y_val
         frames.append({

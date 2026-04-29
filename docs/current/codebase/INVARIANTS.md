@@ -106,6 +106,10 @@ Layout transactions set both `sankeyLayoutInProgressRef` (boolean) and `effectsC
 
 In ReactFlow's `applyNodeChanges`, if any change has `type: 'reset'`, it replaces the entire node array with the reset items. During active resize/drag, filter out `type: 'reset'` changes in `onNodesChange` to prevent SelectionConnectors-style updates from clobbering interaction state.
 
+### I-20a: After a 3-way pull merge, `originalData` tracks remote, not the merged result
+
+`isDirty` is computed as `data !== originalData`. If `pullFile` / `workspaceService.pullLatest` set `originalData` to the merged content after a successful auto-merge that absorbed local-only additions, the file appears clean to the next pull (`hasLocalChanges = false`) — and the next pull falls into the remote-wins branch and silently overwrites the locally-merged content. `originalData` must always reflect the last known REMOTE baseline, and `isDirty` must remain `true` whenever the merge added local-only content not yet on remote. Same rule applies to the `dagnet:fileDirtyChanged` event — emit the actual post-merge dirty state, not a hardcoded `false`. AP 55. See [GRAPH_WRITE_SYNC_ARCHITECTURE.md](GRAPH_WRITE_SYNC_ARCHITECTURE.md) and [SYNC_SYSTEM_OVERVIEW.md](SYNC_SYSTEM_OVERVIEW.md) Race 2.
+
 ---
 
 ## Statistical / forecasting

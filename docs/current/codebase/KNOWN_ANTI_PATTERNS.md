@@ -199,6 +199,26 @@ This is a structural problem with enumerated rules, not a bug in any specific ru
 
 **Where this matters in this repo**: any rule under CLAUDE.md "Pre-flight Checks" that lists triggering commands; the `.claude/hooks/gates.json` patterns; permission allowlists in `settings.json`. When in doubt, the hook config is authoritative — CLAUDE.md text is documentation, not enforcement.
 
+## Anti-pattern 55: Pull merge absorbs local content into baseline
+
+**Signature**: a file is dirty, you auto-pull and the merge succeeds. The next auto-pull (with the same dirty content still uncommitted) silently overwrites the file with remote, wiping the locally-merged additions. UI dirty indicators flicker off after the first pull. Symptom is most visible for files the user rarely edits directly (parameter YAMLs holding bayes posteriors, settings) because the user does not notice "I lost my dirty marker" the way they would for a graph file.
+
+**Root cause**: after a successful 3-way merge, the writer sets `file.originalData = mergedContent` and `file.isDirty = false`. The first pull works correctly — local changes survive the merge. But `originalData` is now the merged result, not the remote baseline. On the second pull, the dirty-detection branch checks `hasLocalChanges = file.isDirty || (data !== originalData)` — both are false (data and originalData are now identical) — so the writer falls into the remote-wins branch (`finalData = remoteData`) and overwrites the file. The locally-merged content is lost.
+
+**Fix**: post-merge, `file.originalData` must reflect the last known REMOTE state, not the merged result. `file.isDirty` must be `(merged !== remote)` — true whenever the merge absorbed local-only content. The `dagnet:fileDirtyChanged` event must report the actual post-merge state, not a hardcoded `false`. Do not set `isInitializing = true` after a merge — that re-engages the [TabContext.updateFile](src/contexts/TabContext.tsx) absorption path which folds the merged-in local content into `originalData` on the next normalisation pass, defeating the dirty preservation.
+
+**Where this matters in this repo**: [`pullFile`](src/services/repositoryOperationsService.ts) and [`workspaceService.pullLatest`](src/services/workspaceService.ts). I-20a. The force-replace branch (explicit user-authorised "throw away local") correctly sets `originalData = remote, isDirty = false` — that path is not the bug.
+
+## Anti-pattern 56: Window-event wiring across components is fragile
+
+**Signature**: a button or menu item dispatches `window.dispatchEvent(new CustomEvent('foo:thing', { detail: { id } }))` and expects a single specific component to be mounted as a listener. The button is clicked, nothing happens, and the failure leaves no diagnostic trail because the dispatcher does not know whether anyone heard the event. Symptom is intermittent: works when the listener is mounted, silent when it is not.
+
+**Root cause**: window-event coupling depends on a downstream component happening to be mounted with a closure over the right id. ReactFlow virtualisation, tab switches, alternate viewing surfaces (canvas vs chart-viewer-tab), or stale closures with the wrong id can all break the wiring without producing any error. The dispatcher has no `await listener.success` — `dispatchEvent` returns synchronously regardless of whether anyone handled the event.
+
+**Fix**: replace the window event with a per-id registry — a module-level `Map<id, fn>` that the consuming hook registers/unregisters into via `useEffect`. The button calls `serviceFunction(id)` directly, which looks up the registered fn and either invokes it or surfaces a visible warning when nothing is registered. Failure becomes loud (console warning) instead of silent. The registry pattern also lets the service-level function do work even when no consumer is mounted (e.g. clear caches), so the fallback case is meaningful rather than degenerate.
+
+**Where this matters in this repo**: the canvas-analysis refresh button used `dagnet:canvasAnalysisRefresh` listened only by `CanvasAnalysisNode`; replaced 29-Apr-26 by `canvasAnalysisRefreshRegistry` ([src/services/canvasAnalysisRefreshRegistry.ts](src/services/canvasAnalysisRefreshRegistry.ts)). The bayes-posteriors-updated event survives because it is genuinely broadcast (every mounted `useDSLReaggregation` hook should re-project its own graph) — that case is appropriate for an event. The refresh-button case was inappropriate because it targeted a single specific component instance.
+
 ## Anti-pattern 53: Dead-caller residue in shared merge / dispatch helpers
 
 **Signature**: a helper that combines, merges, or dispatches between multiple inputs has an asymmetric branch — one set of fields handled with one precedence rule, another set with a different rule. The asymmetry has no documented justification at the call site, and producing the symptom requires the function to be called in a regime the asymmetry was not designed for. The function may have a name advertising the now-bypassed behaviour ("…Preserving…", "…Canonical…", "…Authoritative…").

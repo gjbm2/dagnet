@@ -72,6 +72,7 @@ def _non_latency_rows(
     sweep_to: str,
     axis_tau_max: Optional[int] = None,
     band_level: float = 0.90,
+    extra_conditioning_evidence: Optional[List[tuple]] = None,
 ) -> NonLatencyResult:
     """Row builder for non-latency edges — doc 50 Class B, doc 52 blend.
 
@@ -90,6 +91,15 @@ def _non_latency_rows(
     Returns a NonLatencyResult with ``rows=[]`` only for Class D (no
     usable α, β at all — the resolver failed to populate a prior and
     there's no evidence either).
+
+    `extra_conditioning_evidence` carries `(age_days, n, k)` tuples
+    derived from the typed merge's file-evidence points — already
+    filtered against `snapshot_covered_observations` so they do not
+    double-count rows present in `fe.cohort_list`. They are pooled
+    into Σk/Σn for the conjugate update, matching the latency path
+    which already feeds them to `compute_forecast_trajectory` via
+    `extra_evidence`. Without this, the bundle reports merged totals
+    that the row builder did not actually condition on.
     """
     from scipy.stats import beta as _beta_dist
     # Import the shared blend helper from the engine module.
@@ -110,6 +120,19 @@ def _non_latency_rows(
         max_tau = axis_tau_max if axis_tau_max else 30
         tau_solid_max = 0
         tau_future_max = 0
+
+    extra_x = 0.0
+    extra_y = 0.0
+    if extra_conditioning_evidence:
+        for item in extra_conditioning_evidence:
+            try:
+                _age, n_val, k_val = item
+            except (TypeError, ValueError):
+                continue
+            extra_x += float(n_val or 0.0)
+            extra_y += float(k_val or 0.0)
+    sum_x += extra_x
+    sum_y += extra_y
 
     # ── Conjugate update with query evidence ───────────────────────
     # Post 73b §3.9 / Decision 13: α, β is uniformly an aggregate prior
@@ -173,12 +196,14 @@ def _non_latency_rows(
         )
 
     # Whether the returned posterior incorporates observed evidence.
-    # False when `fe` is empty or all cohorts have zero totals — the
-    # result then equals the prior (either α/β directly, or after a
-    # trivial no-op conjugate update α+0, β+0). Consumers that need
-    # to distinguish real conditioned output from untouched-prior
-    # output read this field from the edge response.
-    conditioned = (fe is not None and sum_x > 0)
+    # False when both `fe` and extras are empty (or all zero totals) —
+    # the result then equals the prior (either α/β directly, or after
+    # a trivial no-op conjugate update α+0, β+0). True when the
+    # conjugate update saw any non-zero Σn from snapshot frames or
+    # from the typed-merge file extras. Consumers that need to
+    # distinguish real conditioned output from untouched-prior output
+    # read this field from the edge response.
+    conditioned = sum_x > 0
 
     # ── Posterior scalars (Beta closed form) ────────────────────────
     s = alpha_post + beta_post
@@ -250,8 +275,8 @@ def _non_latency_rows(
             'tau_days': tau,
             'rate': p_mean,
             'rate_pure': p_mean,
-            'evidence_y': sum_y if fe is not None else None,
-            'evidence_x': sum_x if fe is not None else None,
+            'evidence_y': sum_y if (fe is not None or extra_x > 0) else None,
+            'evidence_x': sum_x if (fe is not None or extra_x > 0) else None,
             'projected_rate': p_mean,
             'forecast_y': None,
             'forecast_x': None,
@@ -421,6 +446,7 @@ def build_cohort_evidence_from_frames(
     query_from_node: Optional[str] = None,
     x_provider_override: Optional[Any] = None,
     det_norm_cdf: Optional[List[float]] = None,
+    subject_span_curve: Optional[List[float]] = None,
 ) -> Optional[FrameEvidence]:
     """Build CohortEvidence from derived maturity frames.
 
@@ -485,7 +511,26 @@ def build_cohort_evidence_from_frames(
                 x_val = 0
             if not isinstance(a_val, (int, float)) or a_val <= 0:
                 a_val = max(x_val, 1)
-            tau_max_c = (last_frame_date - ad).days if last_frame_date else 0
+            # Per-cohort observation age: prefer the data_point's actual
+            # `data_retrieved_at` (the timestamp of the latest snapshot
+            # row that contributed (x, y) to this anchor), falling back
+            # to the virtual frame's snapshot_date when the framer didn't
+            # carry it through. Without this, sparse-snapshot scenarios
+            # (e.g. fetcher hasn't run since some past date, or specific
+            # anchors haven't been refreshed recently) inflate tau_max
+            # to today's age and the IS likelihood treats stale
+            # observations as fully mature, biasing the posterior toward
+            # the empirical k/n of stale data. See doc 73f window_mature
+            # analysis (29-Apr-26).
+            _dp_retrieved = dp.get('data_retrieved_at')
+            _obs_date: Optional[_date] = None
+            if isinstance(_dp_retrieved, str) and _dp_retrieved:
+                try:
+                    _obs_date = _date.fromisoformat(_dp_retrieved[:10])
+                except (ValueError, TypeError):
+                    _obs_date = None
+            _tau_anchor = _obs_date if _obs_date is not None else last_frame_date
+            tau_max_c = (_tau_anchor - ad).days if _tau_anchor else 0
             cohort_info[ad_str] = {
                 'x_frozen': float(x_val),
                 'y_frozen': float(y_val) if isinstance(y_val, (int, float)) else 0.0,
@@ -671,7 +716,27 @@ def build_cohort_evidence_from_frames(
     # Default path keeps the raw frame observations. When a real A→X
     # carrier exists, materialise the observed prefix directly on that
     # carrier and recover the numerator by convolving carrier arrivals
-    # against the raw subject-side progression curve.
+    # against the resolved subject-side progression curve.
+    #
+    # 73g invariant 4 / COHORT_ANALYSIS_NUMERATOR_DENOMINATOR_SEMANTICS
+    # §First principles: subject_span owns numerator progression and
+    # answers "given unit mass at X at age 0, when does it reach end?".
+    # That curve must come from the resolved X→end span operator, NOT
+    # from wall-clock raw_obs_y/raw_obs_x — the latter entangles the
+    # A→X carrier delay and double-counts when convolved with
+    # arrival_increments below. Universal across cohorts, so compute
+    # once outside the per-cohort loop.
+    _factorised_subject_curve: Optional[List[float]] = None
+    if subject_span_curve is not None:
+        _src = list(subject_span_curve)
+        if len(_src) < saturation_tau + 1:
+            _last = _src[-1] if _src else 0.0
+            _src = _src + [_last] * (saturation_tau + 1 - len(_src))
+        _factorised_subject_curve = [
+            max(0.0, min(1.0, float(v or 0.0)))
+            for v in _src[:saturation_tau + 1]
+        ]
+
     engine_cohorts: list = []
     materialised_cohort_list: List[Dict[str, Any]] = []
     for ci in cohort_list:
@@ -708,14 +773,24 @@ def build_cohort_evidence_from_frames(
         evidence_k = y_frozen
 
         if use_factorised_carrier:
-            subject_curve: List[float] = []
-            last_ratio = 0.0
-            for t in range(saturation_tau + 1):
-                fx = float(raw_obs_x[t] or 0.0)
-                fy = float(raw_obs_y[t] or 0.0)
-                if fx > 1e-9:
-                    last_ratio = max(0.0, min(1.0, fy / fx))
-                subject_curve.append(last_ratio)
+            if _factorised_subject_curve is not None:
+                # Resolved X→end span operator (73g invariant 4).
+                subject_curve = _factorised_subject_curve
+            else:
+                # Legacy fallback: wall-clock Y/X from raw observations.
+                # Known to double-count the A→X carrier delay when
+                # convolved with arrival_increments below; retained only
+                # for callers that have not yet plumbed
+                # subject_span_curve through. Cohort maturity rows v3
+                # always supplies it.
+                subject_curve = []
+                last_ratio = 0.0
+                for t in range(saturation_tau + 1):
+                    fx = float(raw_obs_x[t] or 0.0)
+                    fy = float(raw_obs_y[t] or 0.0)
+                    if fx > 1e-9:
+                        last_ratio = max(0.0, min(1.0, fy / fx))
+                    subject_curve.append(last_ratio)
 
             obs_x = [0.0] * (saturation_tau + 1)
             obs_y = [0.0] * (saturation_tau + 1)
@@ -1012,6 +1087,7 @@ def compute_cohort_maturity_rows_v3(
             sweep_to=sweep_to,
             axis_tau_max=axis_tau_max,
             band_level=band_level,
+            extra_conditioning_evidence=extra_conditioning_evidence,
         )
         _prepare_runtime_bundle(
             fe_local=fe_closed_form,
@@ -1041,6 +1117,23 @@ def compute_cohort_maturity_rows_v3(
     # numerator prefixes are rebuilt there using the same raw subject-side
     # progression curve the sweep later conditions against. No post-build
     # rewrite.
+    # 73g invariant 4: subject_span is the resolved X→end span operator.
+    # Compose subject_span_curve = det_span_p × det_norm_cdf so the
+    # cohort-evidence builder convolves carrier arrivals against the
+    # genuine conditional progression CDF rather than wall-clock Y/X
+    # from raw frames. Single-hop and multi-hop both flow through this
+    # — span_p / norm_cdf already represent the composed X→end
+    # operator (forecast_runtime.build_prepared_span_execution).
+    _subject_span_curve: Optional[List[float]] = None
+    if (
+        det_norm_cdf is not None
+        and det_span_p is not None
+        and float(det_span_p) > 0
+    ):
+        _subject_span_curve = [
+            float(det_span_p) * float(v or 0.0) for v in det_norm_cdf
+        ]
+
     fe = build_cohort_evidence_from_frames(
         frames=frames,
         target_edge=target_edge,
@@ -1055,6 +1148,7 @@ def compute_cohort_maturity_rows_v3(
         query_from_node=query_from_node,
         x_provider_override=x_provider_override,
         det_norm_cdf=det_norm_cdf,
+        subject_span_curve=_subject_span_curve,
     )
     x_provider = fe.x_provider if fe is not None else None
     from_node_arrival = fe.from_node_arrival if fe is not None else None

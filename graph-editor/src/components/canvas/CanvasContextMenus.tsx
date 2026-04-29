@@ -17,6 +17,7 @@ import { EdgeContextMenu } from '../EdgeContextMenu';
 import { MultiSelectContextMenu } from '../MultiSelectContextMenu';
 import { ScenarioQueryEditModal } from '../modals/ScenarioQueryEditModal';
 import { canvasAnalysisResultCache } from '../../hooks/useCanvasAnalysisCompute';
+import { refreshCanvasAnalysis } from '../../services/canvasAnalysisRefreshRegistry';
 import { chartOperationsService } from '../../services/chartOperationsService';
 import { extractSubgraph } from '../../lib/subgraphExtractor';
 import { getActiveContentTabIndex } from '../../services/activeContentTabTracker';
@@ -823,7 +824,7 @@ export const CanvasContextMenus: React.FC<CanvasContextMenusProps> = React.memo(
               setAnalysisContextMenu(null);
             } : undefined}
             onRefresh={() => {
-              window.dispatchEvent(new CustomEvent('dagnet:canvasAnalysisRefresh', { detail: { analysisId: analysisContextMenu.analysisId } }));
+              refreshCanvasAnalysis(analysisContextMenu.analysisId);
               setAnalysisContextMenu(null);
             }}
             onCaptureFromTab={tabId && scenariosContext ? () => {

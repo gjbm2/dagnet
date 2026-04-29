@@ -645,7 +645,14 @@ describe('workspaceService.pullLatest() - Integration Tests', () => {
     const file = await db.files.get('parameter-test-param');
     expect(file?.data).toHaveProperty('localField', 'added locally');
     expect(file?.data).toHaveProperty('remoteField', 'added remotely');
-    expect(file?.isDirty).toBe(false); // Merged and marked clean
+    // The merged content carries `localField` which is NOT on remote, so the
+    // file must stay dirty until the user commits. Marking it clean here
+    // would let the next pull's hasLocalChanges check return false and the
+    // remote-wins branch silently overwrite the file.
+    expect(file?.isDirty).toBe(true);
+    // originalData must reflect remote, not the merged result.
+    expect(file?.originalData).not.toHaveProperty('localField');
+    expect(file?.originalData).toHaveProperty('remoteField', 'added remotely');
     expect(file?.sha).toBe('sha-new');
   });
 

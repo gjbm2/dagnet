@@ -250,16 +250,25 @@ export function momentMatchAnalyticBeta(
  * caller has a more reliable source-mass figure than the moment-match
  * yields). Returns `{ mean, stdev }` plus, when valid, the §3.9
  * `{ alpha, beta, n_effective, provenance }` window-family shape.
+ *
+ * When the caller also provides `stdev_pred` (a Beta-Binomial predictive
+ * SD from the Pearson chi-squared overdispersion estimator), the block
+ * additionally emits `{ alpha_pred, beta_pred }` from a moment-match
+ * against `(mean, stdev_pred)`. This closes the §3.9 deferral
+ * ("no `alpha_pred` / `beta_pred` from analytic until an overdispersion
+ * model lands") — see [EPISTEMIC_DISPERSION_DESIGN.md §6](../../../docs/current/codebase/EPISTEMIC_DISPERSION_DESIGN.md).
  */
 export function buildAnalyticProbabilityBlock(
   mean: number,
   stdev: number,
-  opts?: { n_effective?: number; provenance?: string },
+  opts?: { n_effective?: number; provenance?: string; stdev_pred?: number },
 ): {
   mean: number;
   stdev: number;
   alpha?: number;
   beta?: number;
+  alpha_pred?: number;
+  beta_pred?: number;
   n_effective?: number;
   provenance?: string;
 } {
@@ -268,6 +277,8 @@ export function buildAnalyticProbabilityBlock(
     stdev: number;
     alpha?: number;
     beta?: number;
+    alpha_pred?: number;
+    beta_pred?: number;
     n_effective?: number;
     provenance?: string;
   } = { mean, stdev };
@@ -281,6 +292,17 @@ export function buildAnalyticProbabilityBlock(
         : moments.n_effective
     );
     block.provenance = opts?.provenance ?? 'analytic_window_baseline';
+  }
+  if (
+    opts?.stdev_pred !== undefined
+    && Number.isFinite(opts.stdev_pred)
+    && opts.stdev_pred > 0
+  ) {
+    const predictive = momentMatchAnalyticBeta(mean, opts.stdev_pred);
+    if (predictive.alpha !== undefined && predictive.beta !== undefined) {
+      block.alpha_pred = predictive.alpha;
+      block.beta_pred = predictive.beta;
+    }
   }
   return block;
 }
