@@ -838,13 +838,6 @@ function buildMappingConfigurations(): Map<string, MappingConfiguration> {
       condition: (source) => isProbType(source) && source.values?.[source.values.length - 1]?.latency?.path_t95 !== undefined
     },
 
-    // LAG: Forecast fields (file → graph only)
-    {
-      sourceField: 'values[latest].forecast',
-      targetField: 'p.forecast.mean',
-      condition: (source) => isProbType(source) && source.values?.[source.values.length - 1]?.forecast !== undefined
-    },
-
     // Cost GBP parameters → edge.cost_gbp.*
     {
       sourceField: 'values[latest].mean',

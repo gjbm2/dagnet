@@ -671,8 +671,6 @@ export function ParameterSection({
           latencyEnabled={param!.latency?.latency_parameter === true}
           onUpdate={(changes) => onUpdate(changes)}
           disabled={disabled}
-          latencyPosterior={param!.latency?.posterior as any}
-          probabilityPosterior={param!.posterior as any}
           paramId={bayesParamId}
           onResetPriors={bayesParamId ? handleBayesResetPriors : undefined}
           onDeleteHistory={bayesParamId ? handleBayesDeleteHistory : undefined}

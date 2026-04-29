@@ -38,11 +38,6 @@ import { roundToDP, roundHorizonDays } from './updateManager/roundingUtils';
 import { buildAuditEntry } from './updateManager/auditLog';
 import { MAPPING_CONFIGURATIONS, getMappingKey } from './updateManager/mappingConfigurations';
 import { applyMappings } from './updateManager/mappingEngine';
-import type { ModelVarsEntry } from '../types';
-import {
-  ukDateNow,
-  buildAnalyticProbabilityBlock,
-} from './modelVarsResolution';
 
 // ─── Re-exports (public API — preserve existing import paths) ───────────────
 export type {
@@ -1117,8 +1112,20 @@ export class UpdateManager {
       }
     }
     
-    // MODEL_VARS: Build analytic entry from cascaded file values (doc 15 §5.1).
-    // Attached as metadata so callers can upsert onto the edge after applying changes.
+    // MODEL_VARS: analytic entry is built fetch-time-direct in
+    // fileToGraphSync.ts. UpdateManager no longer reads
+    // `latestValue.forecast` / `latestValue.forecast_stdev` to mint
+    // `model_vars[analytic]` — the param-file scalar is no longer
+    // authoritative for the analytic source. The probability block
+    // comes from the sidecar `aggregatedData.__fresh_analytic_probability`
+    // that `addEvidenceAndForecastScalars` attaches when it freshly
+    // computes from real daily evidence in this fetch.
+    //
+    // Latency μ/σ/t95 legitimately round-trip through param files
+    // because they're an INPUT to the FE topo pass, not a derived
+    // metric — when present on the file, forward as
+    // `analyticLatencyFromFile` so the caller can attach it to the
+    // entry it builds.
     if (result.success && subDest === 'parameter') {
       const isProbType = fileData.type === 'probability' ||
         fileData.type === 'conditional_probability' ||
@@ -1126,62 +1133,19 @@ export class UpdateManager {
         fileData.parameter_type === 'conditional_probability';
 
       if (isProbType) {
-        const latestValue = getNestedValue(fileData, 'values[latest]');
-        if (latestValue) {
-          // Doc 73b §3.9 mirror contract: the analytic source's
-          // probability mean is the window-family aggregate — the
-          // mature-day baseline `forecast` scalar populated by
-          // `addEvidenceAndForecastScalars`. No fallback to
-          // `latestValue.mean`: that would expose the analytic-source
-          // surface to whichever slice happened to sort first (often
-          // a cohort-evidence mean) and silently violate the §3.3.3
-          // layer-isolation rule. Doc 73f F16: when `forecast` (or
-          // its paired `forecast_stdev`) is absent, the analytic
-          // block emits no aggregate Beta and the resolver returns
-          // alpha=beta=0 — consumers render the midline (if any)
-          // without dispersion bands rather than relying on a
-          // fabricated prior. §3.8 register entry 2 is withdrawn.
-          const analyticMean =
-            typeof latestValue.forecast === 'number' && Number.isFinite(latestValue.forecast)
-              ? latestValue.forecast
-              : undefined;
-          const entry: ModelVarsEntry = {
-            source: 'analytic',
-            source_at: latestValue.data_source?.retrieved_at || latestValue.window_to || ukDateNow(),
-            // Doc 73f F15: pair `latestValue.forecast` with `latestValue.forecast_stdev`
-            // — both produced by `addEvidenceAndForecastScalars` from the same
-            // weighted window-aggregate population. Top-level `latestValue.stdev`
-            // is the live edge's epistemic SD (a different scope) and was the
-            // wrong companion for the analytic-source mean. When the moment-match
-            // is infeasible (no usable evidence; boundary mean), the block emits
-            // mean only and the resolver returns alpha=beta=0 — consumers render
-            // midline without dispersion bands.
-            probability: buildAnalyticProbabilityBlock(
-              analyticMean as number,
-              (latestValue as any).forecast_stdev as number,
-              {
-                stdev_pred: (latestValue as any).forecast_stdev_pred as number | undefined,
-              },
-            ),
-          };
-
-          // Add latency block when mu/sigma are present on the file
-          const lat = fileData.latency;
-          if (lat?.mu != null && lat?.sigma != null) {
-            entry.latency = {
-              mu: lat.mu,
-              sigma: lat.sigma,
-              t95: lat.t95 ?? 0,
-              onset_delta_days: lat.onset_delta_days ?? 0,
-              ...(lat.path_mu != null ? { path_mu: lat.path_mu } : {}),
-              ...(lat.path_sigma != null ? { path_sigma: lat.path_sigma } : {}),
-              ...(lat.path_t95 != null ? { path_t95: lat.path_t95 } : {}),
-              ...(lat.path_onset_delta_days != null ? { path_onset_delta_days: lat.path_onset_delta_days } : {}),
-            };
-          }
-
+        const lat = fileData.latency;
+        if (lat?.mu != null && lat?.sigma != null) {
           result.metadata = result.metadata || {};
-          (result.metadata as any).analyticModelVarsEntry = entry;
+          (result.metadata as any).analyticLatencyFromFile = {
+            mu: lat.mu,
+            sigma: lat.sigma,
+            t95: lat.t95 ?? 0,
+            onset_delta_days: lat.onset_delta_days ?? 0,
+            ...(lat.path_mu != null ? { path_mu: lat.path_mu } : {}),
+            ...(lat.path_sigma != null ? { path_sigma: lat.path_sigma } : {}),
+            ...(lat.path_t95 != null ? { path_t95: lat.path_t95 } : {}),
+            ...(lat.path_onset_delta_days != null ? { path_onset_delta_days: lat.path_onset_delta_days } : {}),
+          };
         }
       }
     }

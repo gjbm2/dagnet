@@ -812,7 +812,14 @@ describe('Forecast scalar attachment (blend now handled in LAG topo pass)', () =
     expect(outputValue.mean).toBe(0.5); // Mean unchanged here
   });
   
-  it('does not modify mean when window slice has no n', () => {
+  it('does not modify mean and emits no forecast when window slice has no daily arrays', () => {
+    // Post-cleanup: when a candidate window slice has only a scalar
+    // `forecast` (no n_daily/k_daily), `addEvidenceAndForecastScalars`
+    // emits NO forecast for the target slice. The legacy scalar-only
+    // fallback (which would have propagated `windowVal.forecast` here)
+    // was removed alongside the W1 cleanup so derived FE metrics never
+    // round-trip through param-file scalars. Cohort `mean` is still
+    // preserved (mean comes from the cohort itself, not the window).
     const cohortVal: ParameterValue = {
       mean: 0.5,
       n: 100,
@@ -826,28 +833,26 @@ describe('Forecast scalar attachment (blend now handled in LAG topo pass)', () =
       evidence: { mean: 0.5, stdev: 0.05 },
       latency: { completeness: 0.8 },
     };
-    
-    // Window slice with forecast but NO n
+
+    // Window slice with forecast scalar but NO n / NO daily arrays
     const windowVal: ParameterValue = {
       mean: 0.9,
-      // n: undefined,  // Missing!
       dates: [daysAgo(14)],
       window_from: daysAgo(14),
       window_to: daysAgo(0),
       sliceDSL: `window(${daysAgo(14)}:${daysAgo(0)})`,
     };
     (windowVal as any).forecast = 0.95;
-    
+
     const result = addEvidenceAndForecastScalars(
       { type: 'probability', values: [cohortVal] },
       { values: [cohortVal, windowVal] },
       `cohort(anchor,${daysAgo(30)}:${daysAgo(30)})`
     );
-    
+
     const outputValue = result.values[0] as any;
-    
-    // Forecast attached but mean unchanged (no n_baseline)
-    expect(outputValue.forecast).toBe(0.95);
+
+    expect(outputValue.forecast).toBeUndefined();
     expect(outputValue.mean).toBe(0.5);
   });
   

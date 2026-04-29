@@ -1,18 +1,23 @@
 /**
- * ModelCard — generalised model parameter display for any source.
+ * ModelCard — uniform model_vars source-card renderer.
  *
- * Renders: params grid (edge + path columns), spark CDF chart with optional
- * confidence bands, and conditionally: quality footer, actions bar.
+ * Renders a `ModelVarsEntry` (analytic or bayesian) as: probability + latency
+ * params grid (edge + path columns), spark CDF chart, and — for bayesian
+ * source only — a quality footer and reset/delete actions bar.
  *
- * Used by all read-only source cards (Bayesian, Analytic FE, Analytic BE).
- * Output/manual card stays separate (editable UX is different).
- *
- * See docs/current/project-bayes/heuristic-dispersion-design.md §8.3 Gap 6.
+ * Contract: this card reads ONLY from the supplied `entry: ModelVarsEntry`.
+ * It does NOT consume `edge.p.posterior`, `edge.p.latency.posterior`,
+ * `edge.p.{mean, stdev, latency.t95, latency.promoted_*}`, or any other
+ * outside-model_vars surface. The card's job is to display the model
+ * source's own view; everything else (live current-answer scalars, DSL-
+ * recontexted posterior projections, etc.) is for other widgets.
  */
 
 import React from 'react';
-import type { ProbabilityPosterior, LatencyPosterior, ModelVarsEntry } from '../../types';
-import { BayesPosteriorCard, ModelRateChart } from './BayesPosteriorCard';
+import type { ModelVarsEntry } from '../../types';
+import { ModelRateChart } from './BayesPosteriorCard';
+import { computeQualityTier, qualityTierToColour, qualityTierLabel } from '../../utils/bayesQualityTier';
+import { formatRelativeTime, getFreshnessLevel, freshnessColour } from '../../utils/freshnessDisplay';
 import GlossaryTooltip from '../GlossaryTooltip';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -29,27 +34,19 @@ function fmt(v: number | null | undefined, dp = 4): string {
 // ── Types ────────────────────────────────────────────────────────────────────
 
 interface ModelCardProps {
-  /** The model_vars entry to display */
+  /** The model_vars entry to display — sole data source. */
   entry: ModelVarsEntry;
-  /** Bayesian probability posterior (only for source === 'bayesian') */
-  probabilityPosterior?: ProbabilityPosterior | null;
-  /** Bayesian latency posterior (only for source === 'bayesian') */
-  latencyPosterior?: LatencyPosterior | null;
-  /** Edge-level t95 (days) */
-  t95?: number | null;
-  /** Path-level t95 (days) */
-  pathT95?: number | null;
   /** Theme for chart rendering */
   theme?: 'light' | 'dark';
   /** Bayesian-specific: reset priors callback */
   onResetPriors?: () => void;
   /** Bayesian-specific: delete history callback */
   onDeleteHistory?: () => void;
-  /** Timestamp label (e.g. "Retrieved", "Computed") */
+  /** Timestamp label (e.g. "Retrieved", "Computed", "Fitted") */
   timestampLabel?: string;
 }
 
-// ── Shared sub-components (inline for now — extract to own files when stable) ─
+// ── Shared sub-components ────────────────────────────────────────────────────
 
 const Label = ({ children }: { children: React.ReactNode }) => (
   <span style={{ color: 'var(--text-muted, #999)', fontSize: 10 }}>{children}</span>
@@ -73,47 +70,35 @@ const SectionLabel = ({ children }: { children: string }) => (
 // ── Main component ──────────────────────────────────────────────────────────
 
 export function ModelCard({
-  entry, probabilityPosterior, latencyPosterior,
-  t95, pathT95, theme = 'dark',
+  entry, theme = 'dark',
   onResetPriors, onDeleteHistory, timestampLabel,
 }: ModelCardProps) {
   const lat = entry.latency;
   const isBayesian = entry.source === 'bayesian';
+  const probMean = entry.probability.mean;
+  const probStdev = entry.probability.stdev;
+  const hasProbStdev = typeof probStdev === 'number' && probStdev > 0;
 
-  // For Bayesian source, delegate to the existing BayesPosteriorCard
-  // which handles HDI, quality footer, provenance, actions.
-  if (isBayesian && (probabilityPosterior || latencyPosterior)) {
-    return (
-      <BayesPosteriorCard
-        probability={probabilityPosterior}
-        latency={latencyPosterior}
-        t95={t95}
-        pathT95={pathT95}
-        theme={theme}
-        onResetPriors={onResetPriors}
-        onDeleteHistory={onDeleteHistory}
-      />
-    );
-  }
-
-  // Non-Bayesian: render params grid + spark chart from model_vars entry
+  // Empty-latency case: probability-only display.
   if (!lat) {
     return (
-      <>
+      <div style={{ padding: '4px 10px 6px' }}>
         <SectionLabel>Probability</SectionLabel>
-        <Row label="p" term="probability" value={fmtPct(entry.probability.mean)} />
-        {entry.probability.stdev > 0 && (
-          <Row label="stdev" term="stdev" value={fmt(entry.probability.stdev)} muted />
+        <Row label="p" term="probability" value={`${fmtPct(probMean)}${hasProbStdev ? ` ± ${fmtPct(probStdev)}` : ''}`} />
+        {timestampLabel && entry.source_at && (
+          <div style={{ fontSize: 10, color: 'var(--text-muted, #999)', marginTop: 4 }}>
+            {timestampLabel}: {entry.source_at}
+          </div>
         )}
-        {timestampLabel && entry.source_at && <Row label={timestampLabel} value={entry.source_at} />}
-      </>
+        {isBayesian && <BayesianFooter entry={entry} theme={theme} onResetPriors={onResetPriors} onDeleteHistory={onDeleteHistory} />}
+      </div>
     );
   }
 
   const hasPath = lat.path_mu != null;
-  const hasSds = (lat.mu_sd != null && lat.mu_sd > 0);
-  // Subtle label for heuristic SDs
-  const sdSuffix = hasSds ? ' est.' : '';
+  const hasLatencySds = (lat.mu_sd != null && lat.mu_sd > 0)
+    || (lat.sigma_sd != null && lat.sigma_sd > 0)
+    || (lat.onset_sd != null && lat.onset_sd > 0);
 
   // Build edge latency rows
   const edgeLatRows = (
@@ -153,7 +138,7 @@ export function ModelCard({
             Edge (window)
           </div>
           <SectionLabel>Probability</SectionLabel>
-          <Row label="p" term="probability" value={`${fmtPct(entry.probability.mean)}${entry.probability.stdev > 0 ? ` ± ${fmtPct(entry.probability.stdev)}` : ''}`} />
+          <Row label="p" term="probability" value={`${fmtPct(probMean)}${hasProbStdev ? ` ± ${fmtPct(probStdev)}` : ''}`} />
           <SectionLabel>Latency</SectionLabel>
           {edgeLatRows}
         </div>
@@ -168,27 +153,126 @@ export function ModelCard({
           </div>
         )}
       </div>
-      {hasSds && (
+      {hasLatencySds && !isBayesian && (
         <div style={{ fontSize: 9, color: 'var(--text-muted, #999)', fontStyle: 'italic', marginTop: 4 }}>
-          ± values are heuristic estimates{sdSuffix}
+          ± values are heuristic estimates est.
         </div>
       )}
-      {timestampLabel && entry.source_at && (
+      {timestampLabel && entry.source_at && !isBayesian && (
         <div style={{ fontSize: 10, color: 'var(--text-muted, #999)', marginTop: 4 }}>
           {timestampLabel}: {entry.source_at}
         </div>
       )}
-      {/* Spark CDF chart — reuse the existing BayesModelRateChart which is already source-agnostic */}
-      <ModelRateChartFromEntry entry={entry} t95={t95} pathT95={pathT95} />
+      {/* Spark CDF chart — driven entirely from entry.{probability, latency} */}
+      <ModelRateChartFromEntry entry={entry} />
+      {isBayesian && (
+        <BayesianFooter entry={entry} theme={theme} onResetPriors={onResetPriors} onDeleteHistory={onDeleteHistory} />
+      )}
     </div>
   );
 }
 
-// ── Spark chart adapter — maps ModelVarsEntry to ModelRateChart props ──
+// ── Bayesian footer (quality tier + freshness + reset/delete actions) ──────
+//
+// Reads exclusively from entry.quality and entry.source_at. No `p.posterior`
+// access. computeQualityTier is duck-typed against the `rhat / ess /
+// divergences / evidence_grade / provenance` shape — entry.quality has
+// rhat/ess/divergences/evidence_grade. provenance is read off
+// entry.probability when present. Other diagnostic fields (surprise_z,
+// pareto_k_max, delta_elpd) are absent on the model_vars contract; the
+// tier degrades gracefully without them.
 
-function ModelRateChartFromEntry({ entry, t95, pathT95 }: { entry: ModelVarsEntry; t95?: number | null; pathT95?: number | null }) {
+function BayesianFooter({ entry, theme, onResetPriors, onDeleteHistory }: {
+  entry: ModelVarsEntry;
+  theme: 'light' | 'dark';
+  onResetPriors?: () => void;
+  onDeleteHistory?: () => void;
+}) {
+  const quality = entry.quality;
+  // computeQualityTier is permissive — it returns 'no-data' when rhat/ess are missing.
+  const tierInput = quality
+    ? {
+        rhat: quality.rhat,
+        ess: quality.ess,
+        divergences: quality.divergences,
+        evidence_grade: quality.evidence_grade,
+        provenance: entry.probability.provenance,
+      } as any
+    : null;
+  const tier = computeQualityTier(tierInput);
+  const tierColour = qualityTierToColour(tier.tier, theme);
+
+  const parts: Array<{ text: string; colour?: string }> = [];
+  parts.push({ text: qualityTierLabel(tier.tier), colour: tierColour });
+  if (quality?.rhat != null) parts.push({ text: `r̂ ${quality.rhat.toFixed(4)}` });
+  if (quality?.ess != null) parts.push({ text: `ESS ${Math.round(quality.ess)}` });
+  if (quality?.evidence_grade != null) parts.push({ text: `${quality.evidence_grade}/3` });
+  if (entry.source_at) {
+    const rel = formatRelativeTime(entry.source_at);
+    parts.push({ text: rel ?? entry.source_at, colour: freshnessColour(getFreshnessLevel(entry.source_at), theme) });
+  }
+
+  return (
+    <>
+      {parts.length > 0 && (
+        <div style={{
+          display: 'flex', flexWrap: 'wrap', gap: '2px 10px',
+          padding: '8px 0 4px', marginTop: 6,
+          fontSize: 10, lineHeight: '15px', color: 'var(--text-muted, #999)',
+        }}>
+          {parts.map((item, i) => (
+            <span key={i} style={item.colour ? { color: item.colour } : undefined}>{item.text}</span>
+          ))}
+        </div>
+      )}
+      {(onResetPriors || onDeleteHistory) && (
+        <div style={{
+          display: 'flex', gap: 12, padding: '4px 0 2px',
+          fontSize: 10, lineHeight: '15px',
+        }}>
+          {onResetPriors && (
+            <button
+              onClick={onResetPriors}
+              style={{
+                background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+                color: 'var(--text-muted, #999)', fontSize: 10, textDecoration: 'underline',
+              }}
+              title="Reset priors for next Bayesian run (non-destructive)"
+            >
+              Reset priors
+            </button>
+          )}
+          {onDeleteHistory && (
+            <button
+              onClick={onDeleteHistory}
+              style={{
+                background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+                color: 'var(--text-muted, #999)', fontSize: 10, textDecoration: 'underline',
+              }}
+              title="Delete all fit history (irreversible)"
+            >
+              Delete history
+            </button>
+          )}
+        </div>
+      )}
+    </>
+  );
+}
+
+// ── Spark chart adapter — maps ModelVarsEntry to ModelRateChart props ──
+//
+// All values come from entry.{probability, latency}. No external props.
+// The chart's x-axis horizon is taken from entry.latency.{t95, path_t95},
+// not from any promoted/edge.p.* surface. Bands are derived from the
+// entry's own epistemic dispersions.
+
+function ModelRateChartFromEntry({ entry }: { entry: ModelVarsEntry }) {
   const lat = entry.latency;
   if (!lat || lat.mu == null || lat.sigma == null) return null;
+
+  const probStdev = entry.probability.stdev;
+  const hasProbStdev = typeof probStdev === 'number' && probStdev > 0;
 
   return (
     <ModelRateChart
@@ -196,22 +280,22 @@ function ModelRateChartFromEntry({ entry, t95, pathT95 }: { entry: ModelVarsEntr
       edgeMu={lat.mu}
       edgeSigma={lat.sigma}
       edgeOnset={lat.onset_delta_days ?? 0}
-      edgePSd={entry.probability.stdev > 0 ? entry.probability.stdev : null}
+      edgePSd={hasProbStdev ? probStdev : null}
       edgeMuSd={lat.mu_sd ?? null}
       edgeSigmaSd={lat.sigma_sd ?? null}
       edgeOnsetSd={lat.onset_sd ?? null}
       edgeOnsetMuCorr={lat.onset_mu_corr ?? null}
-      edgeT95={t95 ?? lat.t95}
+      edgeT95={lat.t95}
       pathP={lat.path_mu != null ? entry.probability.mean : null}
       pathMu={lat.path_mu ?? null}
       pathSigma={lat.path_sigma ?? null}
       pathOnset={lat.path_onset_delta_days ?? null}
-      pathPSd={lat.path_mu != null && entry.probability.stdev > 0 ? entry.probability.stdev : null}
+      pathPSd={lat.path_mu != null && hasProbStdev ? probStdev : null}
       pathMuSd={lat.path_mu_sd ?? null}
       pathSigmaSd={lat.path_sigma_sd ?? null}
       pathOnsetSd={lat.path_onset_sd ?? null}
       pathOnsetMuCorr={null}
-      pathT95={pathT95 ?? lat.path_t95 ?? null}
+      pathT95={lat.path_t95 ?? null}
     />
   );
 }

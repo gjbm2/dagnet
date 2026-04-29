@@ -106,6 +106,8 @@ describe('parity: computeBlendedMean', () => {
   };
 
   it('moderate completeness (0.6)', () => {
+    // cEff = 0.6^2.25 ≈ 0.319, nEff ≈ 63.8, m0Eff = 0.15·1000 = 150
+    // wE = 63.8 / 213.8 ≈ 0.298, blend = 0.298·0.05 + 0.702·0.08 ≈ 0.0707
     const result = computeBlendedMean({
       evidenceMean: 0.05,
       forecastMean: 0.08,
@@ -113,10 +115,13 @@ describe('parity: computeBlendedMean', () => {
       nQuery: 200,
       nBaseline: 1000,
     }, model);
-    expect(result).toBeCloseTo(0.068537033909537, 10);
+    expect(result).toBeCloseTo(0.07109031836966942, 10);
   });
 
-  it('high completeness (0.95) → mostly evidence', () => {
+  it('high completeness (0.95) — prior keeps weight proportional to λ·nBaseline', () => {
+    // cEff = 0.95^2.25 ≈ 0.892, nEff ≈ 178.4, m0Eff = 0.15·1000 = 150
+    // wE = 178.4 / 328.4 ≈ 0.543. Prior is NOT zero — λ·nBaseline is
+    // always present so the prior carries weight at all maturities.
     const result = computeBlendedMean({
       evidenceMean: 0.05,
       forecastMean: 0.08,
@@ -124,7 +129,7 @@ describe('parity: computeBlendedMean', () => {
       nQuery: 200,
       nBaseline: 1000,
     }, model);
-    expect(result).toBeCloseTo(0.052521182878623, 10);
+    expect(result).toBeCloseTo(0.0637111447452022, 10);
   });
 
   it('zero completeness → pure forecast', () => {
@@ -181,9 +186,13 @@ describe('parity: computePerDayBlendedMean', () => {
       onsetDeltaDays: 2.0,
     });
     expect(result).toBeDefined();
-    // Canonical FE value for observed-rate per-day blending. Completeness
-    // affects per-day evidence weight, not the rate's k/n basis.
-    expect(result!.blendedMean).toBeCloseTo(0.5882908253329786, 9);
+    // Canonical FE value for observed-rate per-day blending. Per-day
+    // weights use the conjugate Beta-binomial shape with prior pseudo-
+    // count `λ·nBaseline` always present (no `(1 - completeness^η)`
+    // factor). Completeness affects evidence weight, not the rate's
+    // k/n basis. The prior never collapses to zero — "absence of
+    // evidence is not evidence of absence".
+    expect(result!.blendedMean).toBeCloseTo(0.593312655022008, 9);
     expect(result!.completenessAgg).toBeCloseTo(0.9864722632086734, 6);
   });
 

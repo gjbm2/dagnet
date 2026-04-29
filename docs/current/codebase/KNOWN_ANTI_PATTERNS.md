@@ -229,6 +229,22 @@ This is a structural problem with enumerated rules, not a bug in any specific ru
 
 **How to spot**: investigating "stale value persists across what should be a re-fit" symptoms — look for shared merge functions in the data-flow path. `git log -S '<helper_name>' --all -- <file>` finds the introducing commit; if a multi-caller diff has since lost a caller, the surviving branches are suspect.
 
+## Anti-pattern 57: Relative-DSL test silently slides into vacuity as wallclock advances
+
+**Signature**: a Python CLI test using `window(-Nd:)` / `cohort(-Nd:)` / `cohort(<anchor>,-Nd:)` was passing when committed and is still passing months later, but the assertion is no longer testing what the author intended. Runtime trace shows the BE is computing curves from posterior-only because the resolved window has zero overlap with synth fixture data. The pass is the AP17 vacuous variant — both sides of any comparison agree trivially because both are the prior projection.
+
+**Root cause**: the relative form resolves at request time against the BE's `date.today()`. Synth fixture data spans a fixed window (12-Dec-25 to 21-Mar-26 for most current synths, deterministic from `bayes/synth_gen.py` `base_date` + `n_days`). Once wallclock advances past `fixture_end + N`, the relative form `-Nd:` resolves to a window entirely outside fixture range. The test continues to "pass" because zero-evidence behaviour is symmetric across whatever modes the test compares (window vs cohort, v2 vs v3, etc.), but it is no longer exercising the population model. `-1d:` / `-7d:` / `-14d:` / `-30d:` are already vacuous against current synths today (29-Apr-26).
+
+The non-obvious extra: this is **silent** because most affected tests are symmetric-comparison tests where the assertion remains satisfied even in the zero-evidence regime. Pass/fail status doesn't flip; only test value erodes. There is no infrastructure signal warning the test has gone vacuous.
+
+**Fix**: pin DSL scope to the today's-resolution at pin date, e.g. `window(-90d:)` → `window(29-Jan-26:29-Apr-26)` if pinned on 29-Apr-26. Encode the pin date in a comment so a future reader can reconstruct the intent. Do NOT pin to the synth's full data span (widens `sweep_to` unnecessarily); do NOT add `.asat()` as a wallclock-freeze (introduces six confounding asat code paths). For tests where the assertion itself reads drift-coupled quantities (max-τ, chart length, last-row, forecast horizon), re-author the assertion to anchor on specific τs or anchor days before pinning.
+
+For `-1d:` / `-7d:` and other narrow forms, pinning isn't enough — the authoring intent is ambiguous between "vacuous-by-design" (replace with explicit out-of-fixture absolute) and "narrow-real-evidence" (replace with absolute narrow window inside fixture, possibly with a synth modification). Surface the ambiguity to the user; don't pick silently.
+
+**Where this matters in this repo**: see `docs/current/test-wallclock-flakiness-audit.md` for the per-test ledger and `TESTING_STANDARDS.md` §"Wallclock invariance for date-DSL tests" for the canonical hardening pattern. As of 29-Apr-26, ~190 occurrences across 20 test files; `test_cohort_factorised_outside_in.py` partly hardened (17 of 26 in-scope tests pinned).
+
+**Broader principle**: test fixtures and test DSL must encode their *required preconditions explicitly*. A relative form like `-90d:` is an implicit dependency on "today, when this is run, is within the fixture's evidence window" — a precondition the test doesn't state and CI doesn't check. Relative forms in test code are an evergreen source of silent rot; treat them as a smell.
+
 ---
 
 ## Moved entries (subsystem-specific traps)

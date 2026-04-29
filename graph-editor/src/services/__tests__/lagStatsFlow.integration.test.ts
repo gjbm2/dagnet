@@ -1921,12 +1921,18 @@ describe('Per-day blend: mathematical correctness', () => {
     return Math.max(0, Math.min(1, 0.5 * (1 + (z >= 0 ? erfVal : -erfVal))));
   }
 
-  /** Hand-compute blend weight for given completeness and n. */
+  /** Hand-compute blend weight for given completeness and n.
+   *
+   * Mirrors `computePerDayBlendedMean`: standard conjugate
+   * Beta-binomial blend with the prior pseudo-count (`λ·nBaseline`)
+   * always present. Evidence's influence scales with maturity-
+   * discounted nEff; the prior is never given zero weight, even at
+   * full maturity. "Absence of evidence is not evidence of absence."
+   */
   function handWeight(c: number, n: number, nBaseline: number, eta: number, lambda: number): number {
     const cEff = Math.pow(c, eta);
     const nEff = cEff * n;
-    const remaining = Math.max(0, 1 - cEff);
-    const m0Eff = lambda * nBaseline * remaining;
+    const m0Eff = lambda * nBaseline;
     return (m0Eff + nEff) > 0 ? nEff / (m0Eff + nEff) : 0;
   }
 
@@ -1974,13 +1980,17 @@ describe('Per-day blend: mathematical correctness', () => {
     return data.map(d => ({ date: d.date, n: d.n, k: d.k, age: d.age }));
   }
 
-  it('should match hand-computed values for all-mature cohorts (c ≈ 1 → evidence-dominated)', () => {
-    // Ages well past the lognormal median (~7.4d): 60, 65, 70 days.
-    // At these ages, CDF ≈ 1, so w ≈ 1, and blend ≈ evidence.
+  it('should match hand-computed values for all-mature cohorts (n ≫ λ·nBaseline → evidence-dominated)', () => {
+    // Ages well past the lognormal median (~7.4d): 60, 65, 70 days, so c ≈ 1.
+    // n_total = 30000 ≫ λ·nBaseline = 500 → wEvidence ≈ 30000/30500 ≈ 0.984,
+    // so blend approaches the raw evidence rate. The prior is still
+    // present (per "absence of evidence is not evidence of absence")
+    // — at full maturity it carries weight λ·nBaseline / (n + λ·nBaseline);
+    // evidence wins by accumulating count, not by forcing the prior to vanish.
     const data = [
-      { date: '1-Oct-25', n: 100, k: 72, age: 60 },
-      { date: '6-Oct-25', n: 120, k: 85, age: 65 },
-      { date: '11-Oct-25', n: 80, k: 58, age: 70 },
+      { date: '1-Oct-25', n: 10000, k: 7200, age: 60 },
+      { date: '6-Oct-25', n: 12000, k: 8500, age: 65 },
+      { date: '11-Oct-25', n: 8000, k: 5800, age: 70 },
     ];
     const expected = handAggregate(data, FORECAST, N_BASELINE, MU, SIGMA, ONSET, 1, 1);
     const result = computePerDayBlendedMean({
@@ -1997,8 +2007,8 @@ describe('Per-day blend: mathematical correctness', () => {
     expect(result!.completenessAgg).toBeCloseTo(expected.cAgg, 8);
     expect(result!.wEvidenceAgg).toBeCloseTo(expected.wAgg, 8);
 
-    // With c ≈ 1 for all days, blended mean should be very close to raw evidence.
-    const rawEvidence = (72 + 85 + 58) / (100 + 120 + 80);
+    // With c ≈ 1 and n ≫ λ·nBaseline, blended mean should be close to raw evidence.
+    const rawEvidence = (7200 + 8500 + 5800) / (10000 + 12000 + 8000);
     expect(result!.blendedMean).toBeCloseTo(rawEvidence, 2);
     expect(result!.completenessAgg).toBeGreaterThan(0.99);
   });
@@ -2031,12 +2041,14 @@ describe('Per-day blend: mathematical correctness', () => {
 
   it('should differ from aggregate blend for mixed-maturity sweeps (the core fix)', () => {
     // Mix of mature (age 60d, c≈1) and immature (age 2d, c≈0) cohorts.
-    // The immature cohorts have LARGE n, so they dominate the aggregate.
+    // Per-day mature n is large enough that wEvidence dominates for those
+    // days (n_mature ≫ λ·nBaseline=500): n=5000 → w≈5000/5500≈0.91.
+    // Immature days have c≈0 → cEff·n=0 → w=0 regardless of n.
     const data = [
-      { date: '1-Oct-25', n: 50, k: 38, age: 60 },   // mature, evidence_rate = 0.76
-      { date: '6-Oct-25', n: 50, k: 36, age: 65 },   // mature, evidence_rate = 0.72
-      { date: '1-Dec-25', n: 200, k: 10, age: 2 },    // immature, evidence_rate = 0.05
-      { date: '2-Dec-25', n: 200, k: 12, age: 2 },    // immature, evidence_rate = 0.06
+      { date: '1-Oct-25', n: 5000, k: 3800, age: 60 },   // mature, evidence_rate = 0.76
+      { date: '6-Oct-25', n: 5000, k: 3600, age: 65 },   // mature, evidence_rate = 0.72
+      { date: '1-Dec-25', n: 200, k: 10, age: 2 },        // immature, evidence_rate = 0.05
+      { date: '2-Dec-25', n: 200, k: 12, age: 2 },        // immature, evidence_rate = 0.06
     ];
 
     const perDayResult = computePerDayBlendedMean({
@@ -2071,10 +2083,9 @@ describe('Per-day blend: mathematical correctness', () => {
     expect(Math.abs(perDayResult!.blendedMean - aggregateBlend!)).toBeGreaterThan(0.01);
 
     // Key property: per-day blend correctly lets mature days contribute their
-    // evidence (≈0.74) while immature days lean on forecast (0.80).
-    // The aggregate blend applies a middling weight to all.
-    // Verify the per-day weights reflect this: mature days have w ≈ 1,
-    // immature days have w ≈ 0.
+    // evidence while immature days lean on forecast.
+    //   - Mature days: n=5000 ≫ λ·nBaseline=500 → w≈0.91
+    //   - Immature days: c≈0 → nEff=0 → w=0 → pure forecast
     const matureDays = perDayResult!.perDayWeights.filter(w => w.c > 0.9);
     const immatureDays = perDayResult!.perDayWeights.filter(w => w.c < 0.1);
     expect(matureDays.length).toBe(2);

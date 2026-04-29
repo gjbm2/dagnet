@@ -31,12 +31,18 @@ function c(age: number): number {
   return logNormalCDF(ageX, CDF_MU, CDF_SIGMA);
 }
 
-/** Compute the blend weight for a given c_i and n_i. */
+/** Compute the blend weight for a given c_i and n_i.
+ *
+ * Mirrors `computePerDayBlendedMean` in statisticalEnhancementService:
+ * standard conjugate Beta-binomial blend with prior pseudo-count
+ * always present (no `(1 - cEff)` factor on m0Eff). Evidence's
+ * influence scales with maturity-discounted nEff; the prior never
+ * vanishes — "absence of evidence is not evidence of absence".
+ */
 function w(c_i: number, n_i: number, nBaseline: number): number {
   const cEff = c_i > 0 ? Math.min(1, Math.max(0, Math.pow(c_i, ETA))) : 0;
   const nEff = cEff * n_i;
-  const remaining = Math.max(0, 1 - cEff);
-  const m0Eff = LAMBDA * nBaseline * remaining;
+  const m0Eff = LAMBDA * nBaseline;
   return (m0Eff + nEff) > 0 ? (nEff / (m0Eff + nEff)) : 0;
 }
 
@@ -76,27 +82,74 @@ describe('Per-day blend: observed rates with per-day weights', () => {
     expect(result!.blendedMean).toBeCloseTo(expectedBlend, 6);
   });
 
-  it('should converge to evidence rate when all cohorts are fully mature', () => {
-    // All cohorts at age 60 → c≈1 → w≈1 → blended ≈ evidence rate
+  it('approaches evidence rate as evidence count overwhelms prior pseudo-count', () => {
+    // All cohorts at age 60 → c≈1 → nEff = n; with n ≫ λ·nBaseline the
+    // blend weight wEvidence = n/(n + λ·nBaseline) → 1, so blendedMean
+    // approaches the pooled evidence rate. The prior is never given
+    // zero weight (per "absence of evidence is not evidence of
+    // absence"); evidence wins by accumulating count, not by forcing
+    // the prior to vanish at maturity.
     const cohorts = [
-      { date: '2025-10-01', n: 100, k: 48, age: 60 },
-      { date: '2025-10-02', n: 120, k: 55, age: 59 },
-      { date: '2025-10-03', n: 80,  k: 42, age: 58 },
+      { date: '2025-10-01', n: 10000, k: 4800, age: 60 },
+      { date: '2025-10-02', n: 12000, k: 5500, age: 59 },
+      { date: '2025-10-03', n: 8000,  k: 4200, age: 58 },
     ];
-    const evidenceRate = (48 + 55 + 42) / (100 + 120 + 80);  // 145/300 = 0.4833
+    const totalN = 30000;
+    const evidenceRate = (4800 + 5500 + 4200) / totalN;  // 14500/30000 = 0.4833
+    const forecastMean = 0.60;
+    const nBaseline = 300;
 
     const result = computePerDayBlendedMean({
       cohorts,
-      forecastMean: 0.60,
-      nBaseline: 300,
+      forecastMean,
+      nBaseline,
       cdfMu: CDF_MU,
       cdfSigma: CDF_SIGMA,
       onsetDeltaDays: ONSET,
     });
 
     expect(result).toBeDefined();
-    // At c≈1, per-day weights approach one, so blended ≈ evidence rate.
+    // n=30000 vs λ·nBaseline=0.15·300=45 → wEvidence ≈ 30000/30045 ≈ 0.9985
+    // The per-day blend's exact result differs slightly from a pooled
+    // blend because each day weights its own w_i × rate_i; the
+    // aggregate is n-weighted across days. Net result is still very
+    // close to the pooled evidence rate.
     expect(result!.blendedMean).toBeCloseTo(evidenceRate, 2);
+    // And it's much closer to evidence than to forecast.
+    expect(Math.abs(result!.blendedMean - evidenceRate)).toBeLessThan(
+      Math.abs(result!.blendedMean - forecastMean) * 0.05,
+    );
+  });
+
+  it('keeps the prior present even at full maturity with sparse evidence', () => {
+    // n comparable to λ·nBaseline → the prior should still carry
+    // meaningful weight even when c≈1. This is the load-bearing
+    // case: at completeness=1 with n=0 successes from a small sample,
+    // the formula must NOT collapse to evidenceMean=0.
+    const cohorts = [
+      { date: '2025-10-01', n: 100, k: 0, age: 60 },  // mature, zero successes
+    ];
+    const forecastMean = 0.50;
+    const nBaseline = 100;  // λ·nBaseline = 15, comparable to n
+
+    const result = computePerDayBlendedMean({
+      cohorts,
+      forecastMean,
+      nBaseline,
+      cdfMu: CDF_MU,
+      cdfSigma: CDF_SIGMA,
+      onsetDeltaDays: ONSET,
+    });
+
+    expect(result).toBeDefined();
+    // wEvidence = 100/(100 + 15) ≈ 0.87
+    // blendedMean ≈ 0.87·0 + 0.13·0.50 ≈ 0.065
+    // The prior contributes ~13% — not zero. "Absence of evidence is
+    // not evidence of absence."
+    expect(result!.blendedMean).toBeGreaterThan(0);
+    const expectedW = 100 / (100 + LAMBDA * nBaseline);
+    const expectedBlend = (1 - expectedW) * forecastMean;
+    expect(result!.blendedMean).toBeCloseTo(expectedBlend, 4);
   });
 
   it('should converge to forecast when all cohorts are very immature', () => {

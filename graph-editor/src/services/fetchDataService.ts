@@ -28,6 +28,7 @@ import { resolveMECEPartitionForImplicitUncontexted } from './meceSliceService';
 import { fileRegistry } from '../contexts/TabContext';
 import { parseConstraints } from '../lib/queryDSL';
 import { resolveRelativeDate } from '../lib/dateFormat';
+import { getURLBooleanParam } from '../lib/urlSettings';
 import type { Graph, DateRange } from '../types';
 import type { GetFromFileCopyOptions } from './dataOperationsService';
 import { operationRegistryService } from './operationRegistryService';
@@ -59,6 +60,20 @@ import {
   resolveConditionedForecastScenarioId,
   type ConditionedForecastSupersessionState,
 } from './conditionedForecastSupersessionState';
+
+// `?nobecf` URL flag: dev/test escape hatch that suppresses the BE
+// conditioned-forecast call from the fetch-compute lifecycle. The FE topo
+// pass still runs and writes its scalars; CF is short-circuited to an empty
+// result and the graph is not mutated by `applyConditionedForecastToGraph`.
+// Honoured via `cfSkipped` at the single dispatch point in fetchItems().
+function isBeCfDisabledByUrl(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    return getURLBooleanParam(new URLSearchParams(window.location.search), 'nobecf');
+  } catch {
+    return false;
+  }
+}
 
 // ============================================================================
 // Types (re-exported for consumers)
@@ -2354,10 +2369,13 @@ export async function runStage2EnhancementsAndInboundN(
           // applyConditionedForecastToGraph.
           // `skipBackendCalls` (doc 73e §8.3 Stage 6) is the wider gate
           // behind the CLI `--no-be` flag — it implies skipConditionedForecast.
-          // Both reach the same short-circuit path here so the CF pipeline
-          // step is marked 'skipped' identically and no fetch reaches the BE.
+          // `?nobecf` is the browser equivalent for FE topo-pass testing.
+          // All three reach the same short-circuit path here so the CF
+          // pipeline step is marked 'skipped' identically and no fetch
+          // reaches the BE.
           const cfSkipped = itemOptions?.skipConditionedForecast === true
-            || itemOptions?.skipBackendCalls === true;
+            || itemOptions?.skipBackendCalls === true
+            || isBeCfDisabledByUrl();
           updatePipelineStep('cf', cfSkipped ? 'complete' : 'running', cfSkipped ? 'skipped' : undefined);
           const { runConditionedForecast, applyConditionedForecastToGraph } =
             await import('./conditionedForecastService');

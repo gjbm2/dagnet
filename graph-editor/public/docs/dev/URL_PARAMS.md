@@ -511,6 +511,26 @@ https://dagnet.vercel.app/?creds=<url_encoded_json>
 
 **Security warning:** Only use this for temporary testing. Never share URLs with credentials in production.
 
+### `?nobecf`
+
+Suppresses the **backend conditioned-forecast (BE CF)** call that normally fires after the FE topology pass during the fetch-compute lifecycle.
+
+**Use case:**
+- FE topo-pass testing: validate the frontend topology / materialisation pipeline in isolation, without paying for (or being affected by) the slow BE CF round-trip.
+- Local development against a graph where the BE is unreachable, slow, or known-bad, but you still want the fetch lifecycle to complete.
+
+**Usage:**
+```
+https://dagnet.vercel.app/?graph=conversion-funnel&nobecf
+https://dagnet.vercel.app/?graph=conversion-funnel&nobecf=1
+```
+
+**How it works:**
+- When `nobecf` is present, the CF step in the fetch-compute pipeline short-circuits to an empty result and is reported as **`skipped`** in the pipeline toast and session log.
+- `applyConditionedForecastToGraph` is **not** called, so CF-owned per-edge fields (`p.mean`, `p.stdev_pred`, `completeness`, `completeness_stdev`, `evidence.n`, `evidence.k`) are not written by CF. The FE topo pass still writes its own scalars (`p.stdev`, etc.).
+- The flag is a session-level dev/test escape hatch; the URL is left in place (so reloads continue to suppress CF).
+- The browser equivalent of the CLI `--no-be` flag (which sets `skipBackendCalls`); both feed the same `cfSkipped` gate. Does not affect analysis-side CF dispatch (the `conditioned_forecast` analysis type continues to require BE compute).
+
 ### `?nonudge`
 
 Suppresses the staleness/safety “Updates recommended” modal for the current session.

@@ -768,58 +768,22 @@ describe('Cohort Mode: sliceDSL with Anchor', () => {
 // 7. Forecast and Latency Recomputation
 // =============================================================================
 
-describe('Window Mode: Forecast/Latency Recomputation', () => {
-  
-  it('adds forecast when recomputeForecast is enabled', () => {
+describe('Window Mode: No forecast on merged values', () => {
+  // Architectural rule (post W1 cleanup): window-merge does NOT write a
+  // `forecast` scalar onto merged values. Derived FE metrics are
+  // computed at fetch time (in `addEvidenceAndForecastScalars` and the
+  // topo pass) and live on the graph, not on persisted param-file
+  // values. The `recomputeForecast` flag is now a no-op retained for
+  // caller-API compatibility only.
+
+  it('does not write forecast even with recomputeForecast=true', () => {
     const existing: ParameterValue[] = [];
     const newTimeSeries = makeTimeSeries(30, 10, { withLatency: true });
-    
+
     const result = mergeTimeSeriesIntoParameter(
       existing,
       newTimeSeries,
       { start: daysAgo(30), end: daysAgo(10) },
-      undefined,
-      undefined,
-      undefined,
-      'api',
-      '',
-      { 
-        recomputeForecast: true,
-        latencyConfig: { latency_parameter: true, t95: 7 },
-      }
-    );
-    
-    const merged = result.find(v => !isCohortModeValue(v))!;
-    
-    // Should have forecast field
-    expect((merged as any).forecast).toBeDefined();
-    expect(typeof (merged as any).forecast).toBe('number');
-  });
-
-  it('excludes immature tail when recomputeForecast is enabled (forecast > naive mean when tail is undercounted)', () => {
-    const existing: ParameterValue[] = [];
-
-    // Build a 31-day window where the last ~8 days are undercounted (k=0)
-    // If we include them, mean is dragged down. If we exclude immature tail (t95=7 → cutoff 8 days),
-    // forecast should be materially higher than the naive mean.
-    const newTimeSeries: TimeSeriesPointWithLatency[] = [];
-    for (let i = 30; i >= 0; i--) {
-      const n = 100;
-      const k = i <= 7 ? 0 : 50; // last 8 days have zero conversions (immature)
-      newTimeSeries.push({
-        date: daysAgo(i),
-        n,
-        k,
-        p: n > 0 ? k / n : 0,
-        median_lag_days: 6,
-        mean_lag_days: 7,
-      });
-    }
-
-    const result = mergeTimeSeriesIntoParameter(
-      existing,
-      newTimeSeries,
-      { start: daysAgo(30), end: daysAgo(0) },
       undefined,
       undefined,
       undefined,
@@ -831,86 +795,15 @@ describe('Window Mode: Forecast/Latency Recomputation', () => {
       }
     );
 
-    const merged = result.find(v => !isCohortModeValue(v)) as any;
-    expect(merged).toBeDefined();
-    expect(typeof merged.forecast).toBe('number');
+    const merged = result.find(v => !isCohortModeValue(v))!;
+    expect((merged as any).forecast).toBeUndefined();
+    expect((merged as any).forecast_stdev).toBeUndefined();
+  });
 
-    // Naive mean includes the undercounted tail → below 0.5
-    expect(merged.mean).toBeLessThan(0.5);
-    // Forecast excludes immature tail → should be close to the mature-days rate (0.5)
-    expect(merged.forecast).toBeGreaterThan(merged.mean);
-    expect(merged.forecast).toBeGreaterThan(0.45);
-  });
-  
-  it('does NOT add latency at merge time (latency computed in graph-level topo pass)', () => {
-    // NOTE: Per current design, LAG stats (completeness, t95, blended p) are computed
-    // exclusively in the graph-level topo pass (enhanceGraphLatencies), NOT during merge.
-    // This test verifies the current (correct) behavior.
-    const existing: ParameterValue[] = [];
-    const newTimeSeries = makeTimeSeries(30, 10, { withLatency: true });
-    
-    const result = mergeTimeSeriesIntoParameter(
-      existing,
-      newTimeSeries,
-      { start: daysAgo(30), end: daysAgo(10) },
-      undefined,
-      undefined,
-      undefined,
-      'api',
-      '',
-      { 
-        recomputeForecast: true,
-        latencyConfig: { latency_parameter: true, t95: 7 },
-      }
-    );
-    
-    const merged = result.find(v => !isCohortModeValue(v))!;
-    
-    // Latency is NOT added during merge - it's computed in the topo pass
-    // The merge function only handles forecast (baseline p_infinity)
-    expect((merged as any).latency).toBeUndefined();
-    // But forecast SHOULD be present
-    expect((merged as any).forecast).toBeDefined();
-  });
-  
-  it('preserves onset_delta_days when provided via latencySummary (§0.3)', () => {
-    // §0.3: onset_delta_days is extracted from DAS result and passed through
-    // latencySummary in mergeOptions. It should be preserved in the merged value.
+  it('does not write forecast with recomputeForecast=false either', () => {
     const existing: ParameterValue[] = [];
     const newTimeSeries = makeTimeSeries(30, 10);
-    
-    const result = mergeTimeSeriesIntoParameter(
-      existing,
-      newTimeSeries,
-      { start: daysAgo(30), end: daysAgo(10) },
-      undefined,
-      undefined,
-      undefined,
-      'api',
-      '',
-      { 
-        isCohortMode: false, // Window mode - onset is valid
-        latencySummary: {
-          median_lag_days: 6.5,
-          mean_lag_days: 7.2,
-          onset_delta_days: 3, // §0.3: onset delay from histogram
-        },
-      }
-    );
-    
-    const merged = result.find(v => !isCohortModeValue(v))!;
-    
-    // Latency summary should be preserved
-    expect((merged as any).latency).toBeDefined();
-    expect((merged as any).latency.onset_delta_days).toBe(3);
-    expect((merged as any).latency.median_lag_days).toBe(6.5);
-    expect((merged as any).latency.mean_lag_days).toBe(7.2);
-  });
-  
-  it('does not add forecast when recomputeForecast is false', () => {
-    const existing: ParameterValue[] = [];
-    const newTimeSeries = makeTimeSeries(30, 10);
-    
+
     const result = mergeTimeSeriesIntoParameter(
       existing,
       newTimeSeries,
@@ -922,54 +815,41 @@ describe('Window Mode: Forecast/Latency Recomputation', () => {
       '',
       { recomputeForecast: false }
     );
-    
+
     const merged = result.find(v => !isCohortModeValue(v))!;
-    
-    // Should NOT have forecast field (unless it was already there)
     expect((merged as any).forecast).toBeUndefined();
   });
-  
-  it('forecast recomputation is idempotent on repeated merges', () => {
-    let values: ParameterValue[] = [];
-    const timeSeries = makeTimeSeries(30, 10, { withLatency: true });
-    
-    // First merge
-    values = mergeTimeSeriesIntoParameter(
-      values,
-      timeSeries,
+
+  it('preserves onset_delta_days when provided via latencySummary (§0.3)', () => {
+    // §0.3: onset_delta_days is extracted from DAS result and passed through
+    // latencySummary in mergeOptions. It should be preserved in the merged value.
+    const existing: ParameterValue[] = [];
+    const newTimeSeries = makeTimeSeries(30, 10);
+
+    const result = mergeTimeSeriesIntoParameter(
+      existing,
+      newTimeSeries,
       { start: daysAgo(30), end: daysAgo(10) },
       undefined,
       undefined,
       undefined,
       'api',
       '',
-      { 
-        recomputeForecast: true,
-        latencyConfig: { latency_parameter: true, t95: 7 },
+      {
+        isCohortMode: false, // Window mode - onset is valid
+        latencySummary: {
+          median_lag_days: 6.5,
+          mean_lag_days: 7.2,
+          onset_delta_days: 3, // §0.3: onset delay from histogram
+        },
       }
     );
-    
-    const firstForecast = (values[0] as any).forecast;
-    expect(firstForecast).toBeDefined();
-    
-    // Second merge with same data
-    values = mergeTimeSeriesIntoParameter(
-      values,
-      timeSeries,
-      { start: daysAgo(30), end: daysAgo(10) },
-      undefined,
-      undefined,
-      undefined,
-      'api',
-      '',
-      { 
-        recomputeForecast: true,
-        latencyConfig: { latency_parameter: true, t95: 7 },
-      }
-    );
-    
-    // Forecast should be stable (latency is computed in topo pass, not here)
-    expect((values[0] as any).forecast).toBeCloseTo(firstForecast, 5);
+
+    const merged = result.find(v => !isCohortModeValue(v))!;
+    expect((merged as any).latency).toBeDefined();
+    expect((merged as any).latency.onset_delta_days).toBe(3);
+    expect((merged as any).latency.median_lag_days).toBe(6.5);
+    expect((merged as any).latency.mean_lag_days).toBe(7.2);
   });
 });
 

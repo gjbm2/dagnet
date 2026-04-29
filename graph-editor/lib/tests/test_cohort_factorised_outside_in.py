@@ -14,6 +14,17 @@ Fixture/provenance spike status (26-Apr-26):
   `cf-fix-deep-mixed`, `cf-fix-linear-no-lag`
 - deferred in this suite: explicit multi-hop cohort-frame admission denial for
   non-single-hop subjects (no unambiguous public provenance field yet)
+
+Wallclock pinning (29-Apr-26): the file's relative DSL forms (`window(-Nd:)`,
+`cohort(<anchor>,-Nd:)`) were pinned to today's-resolution absolute dates so
+the test suite is invariant under wall-clock advancement. The conversion
+preserves the evidence regime each test was running on at pin date:
+  -90d:  → 29-Jan-26:29-Apr-26
+  -180d: → 31-Oct-25:29-Apr-26
+See `test_a_equals_x_identity_collapses_to_window` for the rationale (the
+worked example for the pattern). Tests using `window(-1d:)` or `cohort(-1d:)`
+are deliberately NOT pinned in this pass — they need separate per-test
+analysis (vacuous-by-design vs. narrow-real-evidence intent).
 """
 
 from __future__ import annotations
@@ -717,14 +728,18 @@ _NO_LAG = "cf-fix-linear-no-lag"
 _NO_LAG_BC = "from(cf-fix-no-lag-b).to(cf-fix-no-lag-c)"
 _NO_LAG_BD = "from(cf-fix-no-lag-b).to(cf-fix-no-lag-d)"
 
+_MIRROR_4STEP = "synth-mirror-4step"
+_M4_REGISTERED_TO_SUCCESS = "from(m4-registered).to(m4-success)"
+_M4_REGISTERED_TO_SUCCESS_EDGE = "m4-registered-to-success"
+
 
 @requires_db
 @requires_data_repo
 @requires_python_be
 @requires_synth(_SIMPLE, enriched=True)
 def test_a_equals_x_identity_collapses_to_window():
-    window = _run_analyse_v3(_SIMPLE, f"{_SIMPLE_AB}.window(-90d:)")
-    cohort = _run_analyse_v3(_SIMPLE, f"{_SIMPLE_AB}.cohort(-90d:)")
+    window = _run_analyse_v3(_SIMPLE, f"{_SIMPLE_AB}.window(29-Jan-26:29-Apr-26)")
+    cohort = _run_analyse_v3(_SIMPLE, f"{_SIMPLE_AB}.cohort(29-Jan-26:29-Apr-26)")
 
     w_rows = {row["tau_days"]: row for row in _rows(window) if isinstance(row.get("tau_days"), int)}
     c_rows = {row["tau_days"]: row for row in _rows(cohort) if isinstance(row.get("tau_days"), int)}
@@ -773,8 +788,8 @@ def test_a_equals_x_identity_collapses_to_window():
 @requires_synth(_FANOUT, enriched=True)
 @pytest.mark.parametrize("subject_dsl", (_FANOUT_FAST, _FANOUT_SLOW))
 def test_single_hop_non_latent_upstream_collapses_to_window(subject_dsl: str):
-    window = _run_analyse_v3(_FANOUT, f"{subject_dsl}.window(-90d:)")
-    cohort = _run_analyse_v3(_FANOUT, f"{subject_dsl}.cohort(-90d:)")
+    window = _run_analyse_v3(_FANOUT, f"{subject_dsl}.window(29-Jan-26:29-Apr-26)")
+    cohort = _run_analyse_v3(_FANOUT, f"{subject_dsl}.cohort(29-Jan-26:29-Apr-26)")
 
     window_x = _numeric_curve(window, field="evidence_x")
     cohort_x = _numeric_curve(cohort, field="evidence_x")
@@ -841,10 +856,10 @@ def test_single_hop_latent_upstream_lags_window_but_converges_to_same_subject_p(
 @requires_python_be
 @requires_synth(_LAT4, enriched=True)
 def test_anchor_depth_monotonicity_for_same_subject():
-    window_payload = _run_analyse_v3(_LAT4, f"{_LAT4_CD}.window(-90d:)")
-    cohort_identity_payload = _run_analyse_v3(_LAT4, f"{_LAT4_CD}.cohort(synth-lat4-c,-90d:)")
-    cohort_near_payload = _run_analyse_v3(_LAT4, f"{_LAT4_CD}.cohort(synth-lat4-b,-90d:)")
-    cohort_far_payload = _run_analyse_v3(_LAT4, f"{_LAT4_CD}.cohort(synth-lat4-a,-90d:)")
+    window_payload = _run_analyse_v3(_LAT4, f"{_LAT4_CD}.window(29-Jan-26:29-Apr-26)")
+    cohort_identity_payload = _run_analyse_v3(_LAT4, f"{_LAT4_CD}.cohort(synth-lat4-c,29-Jan-26:29-Apr-26)")
+    cohort_near_payload = _run_analyse_v3(_LAT4, f"{_LAT4_CD}.cohort(synth-lat4-b,29-Jan-26:29-Apr-26)")
+    cohort_far_payload = _run_analyse_v3(_LAT4, f"{_LAT4_CD}.cohort(synth-lat4-a,29-Jan-26:29-Apr-26)")
 
     x_window = _numeric_curve(window_payload, field="evidence_x")
     x_identity = _numeric_curve(cohort_identity_payload, field="evidence_x")
@@ -900,8 +915,8 @@ def test_anchor_depth_monotonicity_for_same_subject():
 @requires_python_be
 @requires_synth(_FANOUT, enriched=True)
 def test_same_carrier_shared_across_different_subjects():
-    fast_payload = _run_analyse_v3(_FANOUT, f"{_FANOUT_FAST}.cohort(-90d:)")
-    slow_payload = _run_analyse_v3(_FANOUT, f"{_FANOUT_SLOW}.cohort(-90d:)")
+    fast_payload = _run_analyse_v3(_FANOUT, f"{_FANOUT_FAST}.cohort(29-Jan-26:29-Apr-26)")
+    slow_payload = _run_analyse_v3(_FANOUT, f"{_FANOUT_SLOW}.cohort(29-Jan-26:29-Apr-26)")
 
     x_fast = _numeric_curve(fast_payload, field="evidence_x")
     x_slow = _numeric_curve(slow_payload, field="evidence_x")
@@ -1053,7 +1068,7 @@ def test_degenerate_identity_and_instant_carrier_oracles_reduce_to_subject_kerne
             f"|Δ|={abs_err:.6f} rel={rel_err:.1%}"
         )
 
-    instant_payload = _run_analyse_v3(_NO_LAG, f"{_NO_LAG_BC}.cohort(-90d:)")
+    instant_payload = _run_analyse_v3(_NO_LAG, f"{_NO_LAG_BC}.cohort(29-Jan-26:29-Apr-26)")
     instant_curve = _numeric_curve(instant_payload)
     p_inf = _first_row(instant_payload).get("p_infinity_mean")
     assert isinstance(p_inf, (int, float))
@@ -1077,8 +1092,8 @@ def test_degenerate_identity_and_instant_carrier_oracles_reduce_to_subject_kerne
 @requires_python_be
 @requires_synth(_NO_LAG, enriched=True)
 def test_multihop_non_latent_upstream_collapse():
-    window = _run_analyse_v3(_NO_LAG, f"{_NO_LAG_BD}.window(-90d:)")
-    cohort = _run_analyse_v3(_NO_LAG, f"{_NO_LAG_BD}.cohort(-90d:)")
+    window = _run_analyse_v3(_NO_LAG, f"{_NO_LAG_BD}.window(29-Jan-26:29-Apr-26)")
+    cohort = _run_analyse_v3(_NO_LAG, f"{_NO_LAG_BD}.cohort(29-Jan-26:29-Apr-26)")
 
     # evidence_x is observed counts, deterministic given fixture; left at
     # 1e-6 to flag any cohort-partition rounding differences.
@@ -1103,8 +1118,8 @@ def test_multihop_non_latent_upstream_collapse():
 @requires_python_be
 @requires_synth(_DEEP, enriched=True)
 def test_multihop_latent_upstream_divergence():
-    window = _numeric_curve(_run_analyse_v3(_DEEP, f"{_DEEP_EG}.window(-180d:)"), field="evidence_x")
-    cohort = _numeric_curve(_run_analyse_v3(_DEEP, f"{_DEEP_EG}.cohort(-180d:)"), field="evidence_x")
+    window = _numeric_curve(_run_analyse_v3(_DEEP, f"{_DEEP_EG}.window(31-Oct-25:29-Apr-26)"), field="evidence_x")
+    cohort = _numeric_curve(_run_analyse_v3(_DEEP, f"{_DEEP_EG}.cohort(31-Oct-25:29-Apr-26)"), field="evidence_x")
     shared = _common_taus(window, cohort)
     assert shared, f"[{_DEEP_EG}] no shared taus"
 
@@ -1158,7 +1173,7 @@ def test_multihop_subject_span_is_not_last_edge_or_param_pack_scalar():
 @requires_python_be
 @requires_synth(_SIMPLE, enriched=True)
 def test_cli_window_single_edge_scalar_identity_across_public_surfaces():
-    dsl = f"{_SIMPLE_AB}.window(-90d:)"
+    dsl = f"{_SIMPLE_AB}.window(29-Jan-26:29-Apr-26)"
     scalars = _collect_public_edge_scalars(
         _SIMPLE,
         dsl,
@@ -1175,8 +1190,8 @@ def test_cli_window_single_edge_scalar_identity_across_public_surfaces():
 @requires_python_be
 @requires_synth(_LAT4, enriched=True)
 def test_cli_identity_collapse_matches_window_across_public_surfaces():
-    window_dsl = f"{_LAT4_CD}.window(-90d:)"
-    identity_dsl = f"{_LAT4_CD}.cohort(synth-lat4-c,-90d:)"
+    window_dsl = f"{_LAT4_CD}.window(29-Jan-26:29-Apr-26)"
+    identity_dsl = f"{_LAT4_CD}.cohort(synth-lat4-c,29-Jan-26:29-Apr-26)"
 
     window_scalars = _collect_public_edge_scalars(
         _LAT4,
@@ -1253,8 +1268,8 @@ def test_cli_identity_collapse_matches_window_across_public_surfaces():
 @requires_python_be
 @requires_synth(_LAT4, enriched=True)
 def test_cli_single_hop_downstream_cohort_parity_and_admitted_provenance():
-    window_dsl = f"{_LAT4_CD}.window(-90d:)"
-    cohort_dsl = f"{_LAT4_CD}.cohort(synth-lat4-b,-90d:)"
+    window_dsl = f"{_LAT4_CD}.window(29-Jan-26:29-Apr-26)"
+    cohort_dsl = f"{_LAT4_CD}.cohort(synth-lat4-b,29-Jan-26:29-Apr-26)"
 
     window_scalars = _collect_public_edge_scalars(
         _LAT4,
@@ -1339,7 +1354,7 @@ def test_cli_single_hop_downstream_cohort_parity_and_admitted_provenance():
 @requires_python_be
 @requires_synth(_LAT4, enriched=True)
 def test_cli_projection_parity_uses_last_row_saturation_not_arbitrary_tau_curve_point():
-    dsl = f"{_LAT4_CD}.cohort(synth-lat4-b,-90d:)"
+    dsl = f"{_LAT4_CD}.cohort(synth-lat4-b,29-Jan-26:29-Apr-26)"
     scalars = _collect_public_edge_scalars(
         _LAT4,
         dsl,
@@ -1381,8 +1396,8 @@ def test_cli_projection_parity_uses_last_row_saturation_not_arbitrary_tau_curve_
         # Deltas above this expose the 73f class (a) anchor-override
         # evidence-binding asymmetry (see header).
         (_LAT4, f"{_LAT4_BC}.window(-1d:)", f"{_LAT4_BC}.cohort(-1d:)", _P_MEAN_ABS_TOL),
-        (_LAT4, f"{_LAT4_CD}.window(-90d:)", f"{_LAT4_CD}.cohort(synth-lat4-b,-90d:)", _P_MEAN_ABS_TOL),
-        (_NO_LAG, f"{_NO_LAG_BD}.window(-90d:)", f"{_NO_LAG_BD}.cohort(-90d:)", _P_MEAN_ABS_TOL),
+        (_LAT4, f"{_LAT4_CD}.window(29-Jan-26:29-Apr-26)", f"{_LAT4_CD}.cohort(synth-lat4-b,29-Jan-26:29-Apr-26)", _P_MEAN_ABS_TOL),
+        (_NO_LAG, f"{_NO_LAG_BD}.window(29-Jan-26:29-Apr-26)", f"{_NO_LAG_BD}.cohort(29-Jan-26:29-Apr-26)", _P_MEAN_ABS_TOL),
     ),
 )
 def test_cohort_and_window_p_infinity_converge_for_same_subject_rate(
@@ -1410,17 +1425,17 @@ def test_cohort_and_window_p_infinity_converge_for_same_subject_rate(
 def test_cohort_frame_evidence_is_admitted_only_for_single_hop_anchor_override_case():
     window_payload = _run_analyse_v3(
         _LAT4,
-        f"{_LAT4_CD}.window(-90d:)",
+        f"{_LAT4_CD}.window(29-Jan-26:29-Apr-26)",
         analysis_type="conditioned_forecast",
     )
     identity_payload = _run_analyse_v3(
         _LAT4,
-        f"{_LAT4_CD}.cohort(synth-lat4-c,-90d:)",
+        f"{_LAT4_CD}.cohort(synth-lat4-c,29-Jan-26:29-Apr-26)",
         analysis_type="conditioned_forecast",
     )
     admitted_payload = _run_analyse_v3(
         _LAT4,
-        f"{_LAT4_CD}.cohort(synth-lat4-b,-90d:)",
+        f"{_LAT4_CD}.cohort(synth-lat4-b,29-Jan-26:29-Apr-26)",
         analysis_type="conditioned_forecast",
     )
 
@@ -1467,9 +1482,9 @@ def test_cohort_frame_evidence_is_admitted_only_for_single_hop_anchor_override_c
 @requires_python_be
 @requires_synth(_LAT4, enriched=True)
 def test_cohort_frame_evidence_does_not_retarget_carrier_or_subject():
-    window_payload = _run_analyse_v3(_LAT4, f"{_LAT4_CD}.window(-90d:)")
-    identity_payload = _run_analyse_v3(_LAT4, f"{_LAT4_CD}.cohort(synth-lat4-c,-90d:)")
-    admitted_payload = _run_analyse_v3(_LAT4, f"{_LAT4_CD}.cohort(synth-lat4-b,-90d:)")
+    window_payload = _run_analyse_v3(_LAT4, f"{_LAT4_CD}.window(29-Jan-26:29-Apr-26)")
+    identity_payload = _run_analyse_v3(_LAT4, f"{_LAT4_CD}.cohort(synth-lat4-c,29-Jan-26:29-Apr-26)")
+    admitted_payload = _run_analyse_v3(_LAT4, f"{_LAT4_CD}.cohort(synth-lat4-b,29-Jan-26:29-Apr-26)")
 
     window_curve = _numeric_curve(window_payload)
     identity_curve = _numeric_curve(identity_payload)
@@ -1516,6 +1531,115 @@ def test_zero_evidence_window_rises_as_subject_cdf():
     ):
         payload = _run_analyse_v3(graph_name, f"{subject_dsl}.window(-1d:)")
         _assert_not_flat(_numeric_curve(payload), label=f"{graph_name}/{subject_dsl}")
+
+
+# Saturation invariant tolerance for v3's Level-3 trajectory.
+#
+# Under a clean hierarchical model, the aggregate Σ_d Y_d / Σ_d X_d at
+# saturation_tau equals the n-weighted mean of per-cohort posteriors,
+# which centres on the Level-1/2 rate parameter `p`. Sampling variance at
+# S=2000 IS draws plus carrier-asymptote shrink (carrier_max < 1.0
+# leaves residual unprocessed Pop C even at saturation_tau) plus FW
+# convolution drift give a realistic floor of ≈ 0.05 absolute. Tighter
+# floors flap on noise; looser floors miss real defects (the current
+# Defect 1 gap on synth-mirror-4step is ~0.11).
+_SATURATION_MIDLINE_TOL = 0.05
+
+
+@requires_db
+@requires_data_repo
+@requires_python_be
+@requires_synth(_MIRROR_4STEP, enriched=True)
+def test_v3_midline_at_saturation_converges_to_p():
+    """V3 trajectory invariant: midpoint at saturation must approach `p`.
+
+    Under a hierarchical Level-2 / Level-3 model, the chart's per-particle
+    group trajectory `rate_draws[s, τ] = Σ_d Y_d[s, τ] / Σ_d X_d[s, τ]`
+    converges at large τ to the n-weighted aggregate of per-cohort rates
+    `p_d`, which centres on the Level-1/2 rate parameter posterior. The
+    chart's `midpoint` field reads `median_s rate_draws[s, τ]`; its value
+    at saturation_tau must therefore equal `p_infinity_mean` within the
+    sampling/aggregation noise floor.
+
+    Reproduction (29-Apr-26): on `synth-mirror-4step` (truth p_{m4-registered
+    → m4-success} = 0.7), the cohort query
+    `cohort(m4-landing, 7-Mar-26:21-Mar-26)` produces:
+
+      - p_infinity_mean ≈ 0.697  (correctly tracks the rate parameter)
+      - midpoint at saturation ≈ 0.585
+      - forecast_y / forecast_x ≈ 0.588
+
+    The Level-3 aggregate is stuck ≈ 0.11 below the rate parameter.
+
+    Catches: Defect 1 — `int(remaining)` truncation at
+    `forecast_state.py:726` zeroes Pop D for any cohort with sub-unit
+    `remaining = N_i − k_i`, which is universal when the upstream carrier
+    `reach` is small. Without Pop D's contribution, `Y_forecast` collapses
+    to `k_i + Y_C`, and the aggregate trajectory at large τ pins at
+    `Σ k_i + Σ Y_C ≪ Σ p · X_d`. See
+    `docs/current/cohort-maturity-v3-midline-collapse-investigation.md`.
+
+    Also catches the symmetric failure mode where `p_infinity_mean` itself
+    collapses (Defect 2 — level confusion at the rate-conditioning seam),
+    by pinning `midpoint` against truth `p` directly. If `p_infinity_mean`
+    drifted from truth and `midpoint` followed it, the second assertion
+    would still fail.
+
+    RED while Defect 1 is unfixed; should turn green once
+    `Y_D = remaining * q_late` replaces the binomial draw.
+    """
+    payload = _run_analyse_v3(
+        _MIRROR_4STEP,
+        f"{_M4_REGISTERED_TO_SUCCESS}.cohort(m4-landing,7-Mar-26:21-Mar-26)",
+    )
+    last = _last_row(payload)
+    p_inf = last.get("p_infinity_mean")
+    midpoint = last.get("midpoint")
+    fy = last.get("forecast_y")
+    fx = last.get("forecast_x")
+
+    assert isinstance(p_inf, (int, float)), (
+        f"[{_MIRROR_4STEP}] p_infinity_mean missing on last row "
+        f"(saturation_tau={last.get('tau_days')})"
+    )
+    assert isinstance(midpoint, (int, float)), (
+        f"[{_MIRROR_4STEP}] midpoint missing on last row "
+        f"(saturation_tau={last.get('tau_days')})"
+    )
+
+    delta_mid_pinf = abs(float(midpoint) - float(p_inf))
+    assert delta_mid_pinf <= _SATURATION_MIDLINE_TOL, (
+        f"[{_MIRROR_4STEP}] v3 midline at saturation diverged from p_infinity_mean: "
+        f"midpoint={midpoint:.4f} p_infinity_mean={p_inf:.4f} "
+        f"|Δ|={delta_mid_pinf:.4f} tol={_SATURATION_MIDLINE_TOL} — "
+        f"Defect 1 (int(remaining) truncation in Pop D arithmetic) suspected"
+    )
+
+    if isinstance(fy, (int, float)) and isinstance(fx, (int, float)) and fx > 0:
+        forecast_rate = float(fy) / float(fx)
+        delta_fc_pinf = abs(forecast_rate - float(p_inf))
+        assert delta_fc_pinf <= _SATURATION_MIDLINE_TOL, (
+            f"[{_MIRROR_4STEP}] v3 forecast_y/forecast_x at saturation "
+            f"diverged from p_infinity_mean: "
+            f"forecast_rate={forecast_rate:.4f} p_infinity_mean={p_inf:.4f} "
+            f"|Δ|={delta_fc_pinf:.4f} tol={_SATURATION_MIDLINE_TOL}"
+        )
+
+    truth_p = _load_truth_edge_params(
+        graph_name=_MIRROR_4STEP, edge_name=_M4_REGISTERED_TO_SUCCESS_EDGE
+    )["p"]
+    delta_mid_truth = abs(float(midpoint) - float(truth_p))
+    # Slightly looser truth tolerance: even with Defects 1 and 2 fixed,
+    # the IS-conditioned posterior may sit slightly off truth depending on
+    # the cohort evidence sample. 0.05 against the rate parameter
+    # (above) plus ≈ 0.02 of additional drift between p_infinity_mean and
+    # truth gives a total of 0.07 against truth.
+    assert delta_mid_truth <= _SATURATION_MIDLINE_TOL + 0.02, (
+        f"[{_MIRROR_4STEP}] v3 midline at saturation diverged from truth p: "
+        f"midpoint={midpoint:.4f} truth_p={truth_p:.4f} "
+        f"|Δ|={delta_mid_truth:.4f} tol={_SATURATION_MIDLINE_TOL + 0.02} — "
+        f"if p_infinity_mean is also far from truth, Defect 2 is also active"
+    )
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -1570,7 +1694,7 @@ def test_parity_window_mature_high_evidence_p_mean():
     abundant evidence, something fundamental in CF (proposal / IS /
     blend wiring) is broken — independent of the cohort-anchor path.
     """
-    dsl = f"{_SIMPLE_AB}.window(-90d:)"
+    dsl = f"{_SIMPLE_AB}.window(29-Jan-26:29-Apr-26)"
     fe_only = _run_param_pack(_SIMPLE, dsl, no_be=True)
     full = _run_param_pack(_SIMPLE, dsl)
 
@@ -1595,7 +1719,7 @@ def test_parity_cohort_identity_collapse_p_mean():
     the anchor equals the edge's from_node, so the carrier-materialisation
     block in `cohort_forecast_v3.py` (use_factorised_carrier=True gate)
     short-circuits with reach=1, and CF should produce the same answer
-    as `window(-90d:)` on the same edge. FE-topo doesn't have a
+    as `window(29-Jan-26:29-Apr-26)` on the same edge. FE-topo doesn't have a
     cohort-anchor branch at all — it emits the same blendedMean for any
     temporal mode on the edge with the same evidence. Both surfaces
     therefore reduce to the window case; FE/BE parity should hold.
@@ -1603,7 +1727,7 @@ def test_parity_cohort_identity_collapse_p_mean():
     Catches: cohort-mode CF entry that mis-fires on identity collapse —
     something firing when reach=1 that should be a no-op.
     """
-    cohort_dsl = f"{_LAT4_CD}.cohort(synth-lat4-c,-90d:)"
+    cohort_dsl = f"{_LAT4_CD}.cohort(synth-lat4-c,29-Jan-26:29-Apr-26)"
     fe_only = _run_param_pack(_LAT4, cohort_dsl, no_be=True)
     full = _run_param_pack(_LAT4, cohort_dsl)
 
@@ -1638,7 +1762,7 @@ def test_parity_subject_equivalent_cohort_anchor_override_p_mean():
     present (reach-scaled evidence counts feeding IS log-weight, see
     73b §8.2), FE/BE diverge by ~0.1+ on this query.
     """
-    cohort_dsl = f"{_LAT4_CD}.cohort(synth-lat4-b,-90d:)"
+    cohort_dsl = f"{_LAT4_CD}.cohort(synth-lat4-b,29-Jan-26:29-Apr-26)"
     fe_only = _run_param_pack(_LAT4, cohort_dsl, no_be=True)
     full = _run_param_pack(_LAT4, cohort_dsl)
 
@@ -1670,7 +1794,7 @@ def test_fe_topo_cohort_c_to_d_p_mean_stays_near_truth(anchor: str):
     truth. The FE-only current-answer scalar should therefore stay near the
     c→d truth rate rather than being lifted to the old 0.8105 failure value.
     """
-    cohort_dsl = f"{_LAT4_CD}.cohort({anchor},-90d:)"
+    cohort_dsl = f"{_LAT4_CD}.cohort({anchor},29-Jan-26:29-Apr-26)"
     fe_only = _run_param_pack(_LAT4, cohort_dsl, no_be=True)
 
     truth_p = _load_truth_edge_params(graph_name=_LAT4, edge_name="c-to-d")["p"]
@@ -1873,7 +1997,7 @@ def test_d0_bayes_vars_actually_promotes_to_bayesian():
     if not sidecar.exists():
         pytest.skip(f"sidecar missing: {sidecar}")
 
-    dsl = f"{_SIMPLE_AB}.window(-90d:)"
+    dsl = f"{_SIMPLE_AB}.window(29-Jan-26:29-Apr-26)"
     analytic = _run_analyse_v3(_SIMPLE, dsl)
     bayes = _run_analyse_v3(_SIMPLE, dsl, sidecar=sidecar)
 
@@ -1914,7 +2038,7 @@ def test_d1_parity_analytic_vs_bayes_mature_window():
     if not sidecar.exists():
         pytest.skip(f"sidecar missing: {sidecar}")
 
-    dsl = f"{_SIMPLE_AB}.window(-90d:)"
+    dsl = f"{_SIMPLE_AB}.window(29-Jan-26:29-Apr-26)"
     analytic = _run_analyse_v3(_SIMPLE, dsl)
     bayes = _run_analyse_v3(_SIMPLE, dsl, sidecar=sidecar)
 
@@ -1961,7 +2085,7 @@ def test_d2_parity_analytic_vs_bayes_identity_collapse_cohort():
     if not sidecar.exists():
         pytest.skip(f"sidecar missing: {sidecar}")
 
-    dsl = f"{_SIMPLE_BC}.cohort(simple-b,-90d:)"
+    dsl = f"{_SIMPLE_BC}.cohort(simple-b,29-Jan-26:29-Apr-26)"
     analytic = _run_analyse_v3(_SIMPLE, dsl)
     bayes = _run_analyse_v3(_SIMPLE, dsl, sidecar=sidecar)
 

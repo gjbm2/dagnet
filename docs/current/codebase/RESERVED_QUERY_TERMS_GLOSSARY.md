@@ -36,6 +36,8 @@ The system must therefore treat `asat()` as affecting:
 
 The system must not mix historical evidence with a posterior fitted after the requested `asat()` date.
 
+Non-obvious: `asat()` *omitted* is not equivalent to `asat(today)`. The omitted branch skips the `retrieved_at` admission filter entirely; the explicit branch enforces `retrieved_at <= asat`. See `DATE_MODEL_COHORT_MATURITY.md` §1.5 for the six BE code paths that fork on `asat is None`. This matters for test design — adding `.asat()` as a wallclock-freeze mechanism is a behavioural change, not a no-op.
+
 ## Query modes
 
 **Window mode**

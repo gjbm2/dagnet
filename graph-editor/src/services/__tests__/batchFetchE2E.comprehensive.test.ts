@@ -622,16 +622,22 @@ describe('Comprehensive Batch Fetch E2E Tests', () => {
       );
       
       const edge = currentGraph.edges.find(e => e.id === 'edge-A-B');
-      
-      // Should have all three values set
+
+      // Evidence still flows from file (raw counts → evidence.mean).
       expect(edge?.p?.evidence?.mean).toBeCloseTo(0.45, 2);
-      expect(edge?.p?.forecast?.mean).toBeCloseTo(0.60, 2);
+      // p.mean is set by the FE topo pass (Step 2 quick blend).
       expect(edge?.p?.mean).toBeDefined();
-      
-      // Blended mean should be between evidence and forecast
-      const mean = edge?.p?.mean || 0;
-      expect(mean).toBeGreaterThanOrEqual(0.45);
-      expect(mean).toBeLessThanOrEqual(0.60);
+
+      // Post-cleanup: `p.forecast.mean = 0.60` no longer hydrates from
+      // the scalar `forecast: 0.60` on `paramFile.values[0]` — that
+      // round-trip (R1) was removed because param files don't carry a
+      // DSL/scenario, so persisting derived metrics there is ambiguous.
+      // To exercise the fresh-compute path, this fixture needs `n_daily`
+      // / `k_daily` arrays on a window slice; the cohort-only header
+      // n=200/k=90 doesn't trigger the recency-weighted mature-day
+      // computation in `addEvidenceAndForecastScalars`. TODO: extend
+      // the fixture to include a window slice with daily arrays so the
+      // blend assertion can pin specific evidence/forecast values.
     });
     
     /**

@@ -144,6 +144,46 @@ class TestMyAnalysis:
 - `--enrich` — also run hydrate (topo pass + promotion) after generation
 - `--bust-cache` — skip freshness check, regenerate unconditionally
 
+## Wallclock invariance for date-DSL tests
+
+Tests that exercise query DSL with relative date forms (`window(-90d:)`, `cohort(-Nd:)`, `cohort(<anchor>,-Nd:)`, `asat(-Nd)`) **drift as wallclock advances**. The relative form resolves at request time against the BE's `date.today()`, so what was "the last 90 days of fixture data" when authored becomes "a 90-day window that no longer overlaps fixture data" once enough wallclock has passed. The test then either silently slides into vacuity (assertions pass against zero-evidence posterior-only curves — AP17) or starts failing for reasons unrelated to the regression it was meant to catch.
+
+The audit and per-test ledger for this work live at `docs/current/test-wallclock-flakiness-audit.md`. The canonical hardening pattern below is the strategy applied against that ledger.
+
+### The hardening toolkit (in order of preference)
+
+1. **Re-author drift-coupled assertions.** If the assertion reads `max(curve)`, `last(rows)`, chart length, forecast horizon, or any quantity that grows with `sweep_to` / `eval_age`, rewrite it to express the test's intent without that coupling — e.g. assert at named τ anchors (`τ ∈ {0, 7, 14, 30, 60}`), or by anchor day. This is the cheapest fix when the test's *intent* is drift-stable but its *expression* isn't. Don't naively assert on `tau_max` — that's dangerous, even after pinning.
+2. **Pin DSL scope absolutely** to the today's-resolution at pin date. Convert `window(-90d:)` → `window(<today − 90d>:<today>)`, e.g. `window(29-Jan-26:29-Apr-26)` for a pin date of 29-Apr-26. Encode the pin date in a comment so a future reader can reconstruct the rationale. **Do NOT** pin to the synth's full data span — that widens the `sweep_to` range (anchor_from earlier → wider sweep → ~75% runtime increase) for no test-value gain on symmetric assertions. **Do NOT** pin to authoring-time today — usually a few days off from current today; cosmetic difference but makes the ledger inconsistent. Today's-resolution is the default.
+3. **Modify the synth fixture** if the test's premise requires a fixture shape (different `base_date`, `n_days`, `retrieved_at` distribution) the existing synth doesn't provide. The synth machinery is fully under our control; if a `-1d:` test needs "1 day of real evidence at the fixture tail", the right fix may be to ensure the synth has that data, not to bend the test around the gap.
+4. **Add `.asat(<date>)`.** Reserved for tests whose intent is genuinely "as of date X" — the existing `test_asat_blind` pattern. **Risky** for general wallclock-freeze use because asat triggers six confounding code paths in the BE (admission filter, scope hash, sweep cap, SQL filter, cache key, eval_age compute — see `DATE_MODEL_COHORT_MATURITY.md` §1.5). Adding asat to make a test deterministic makes the test's outcome dependent on asat being defect-free; if asat has a bug, your "stable" test inherits it.
+5. **Wallclock-freeze in the test process.** `freezegun`-style. Works for in-process tests trivially. For daemon-routed tests, would require threading a frozen-today through FE+BE+DB+synth-regen — large surface and a separate audit cost. Not worth the operational complexity for current scope.
+
+### The symmetric-assertion principle
+
+When a test compares two same-DSL-shape calls (window vs cohort, v2 vs v3, parity across CLI surfaces), both sides see the same wallclock-derived inputs. Their delta is wallclock-invariant in result regardless of where the window happens to be looking. For these tests, **scope-pin alone is sufficient invariance** — `sweep_to` / `eval_age` drift cancels because both sides see it identically. No `.asat()` needed; adding it just buys cache-hash and code-path complications.
+
+The test value loss from drift in such a symmetric test isn't pass/fail flipping — it's the test silently moving from exercising the population model to exercising the posterior-only fallback path. Pin scope → exercise the same evidence regime forever → preserve test value indefinitely.
+
+### Synth fixtures are content-deterministic
+
+The pinning approach assumes synth fixtures don't drift underneath the pin. They don't:
+
+- `bayes/synth_gen.py` hardcodes per-graph `base_date` and uses `seed=42` (DEFAULT_SIM_CONFIG line). RNG is `np.random.default_rng(42)` — every random draw reproducible.
+- `verify_synth_data` checks only content hashes (truth SHA256, graph SHA256, param hashes, FE-parity probe). **No wallclock-based staleness criterion**; the synth never regenerates "because it got old".
+- `enriched_at` and `generated_at` in synth-meta are wallclock-stamped but consumed only by self-tests of the synth machinery, not by the analysis pipeline.
+- Snapshot DB rows have `retrieved_at = base_date + fetch_night` — deterministic, not wallclock.
+
+A pinned absolute window stays valid through any number of regenerations as long as `base_date` and `n_days` are unchanged in source.
+
+### The deferred case: `-1d:` and other narrow-window forms
+
+Tests using `window(-1d:)` / `cohort(-1d:)` need a per-test design decision before pinning, because there are two possible authoring intents and the existing DSL is ambiguous between them:
+
+- **Vacuous-by-design**: the test wants zero evidence (e.g. testing posterior-only fallback). Replace with an explicitly out-of-fixture absolute window, e.g. `window(1-Jan-30:2-Jan-30)`, and add a comment that the empty window is deliberate.
+- **Narrow-real-evidence**: the test wants 1-2 days of real fixture evidence (e.g. testing low-evidence cohort behaviour). Replace with an absolute narrow window inside the fixture tail, e.g. `window(20-Mar-26:21-Mar-26)`. The assertion may need re-tuning if the test was previously passing trivially against zero evidence; that's the test design defect surfacing, not a regression caused by the pin.
+
+When the authoring intent is ambiguous from code alone, surface to the user — don't pick one silently.
+
 ## CLI-driven Python tests run through a daemon by default
 
 Pytest tests under `graph-editor/lib/tests/` that exercise

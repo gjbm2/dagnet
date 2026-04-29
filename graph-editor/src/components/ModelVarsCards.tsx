@@ -26,8 +26,6 @@ import type {
   ModelSourcePreference,
   GraphModelSourcePreference,
   LatencyConfig,
-  LatencyPosterior,
-  ProbabilityPosterior,
 } from '../types';
 import {
   resolveActiveModelVars,
@@ -37,7 +35,6 @@ import { roundToDecimalPlaces } from '../utils/rounding';
 import { LATENCY_HORIZON_DECIMAL_PLACES } from '../constants/latency';
 import CollapsibleSection from './CollapsibleSection';
 import { AutomatableField } from './AutomatableField';
-import { BayesPosteriorCard } from './analytics/BayesPosteriorCard';
 import { ModelCard } from './analytics/ModelCard';
 import { useTheme } from '../contexts/ThemeContext';
 import './ModelVarsCards.css';
@@ -58,9 +55,6 @@ interface ModelVarsCardsProps {
   latencyEnabled?: boolean;
   onUpdate: (changes: Record<string, any>) => void;
   disabled?: boolean;
-  /** Bayesian posteriors — full dispersion data for inline display */
-  latencyPosterior?: LatencyPosterior;
-  probabilityPosterior?: ProbabilityPosterior;
   /** Parameter ID — used to wire prior reset / history delete actions */
   paramId?: string;
   /** Reset priors for next Bayesian run (non-destructive). */
@@ -92,7 +86,6 @@ export function ModelVarsCards({
   promotedMean, promotedStdev, meanOverridden, stdevOverridden,
   promotedLatency, latencyEnabled,
   onUpdate, disabled = false,
-  latencyPosterior, probabilityPosterior,
   paramId, onResetPriors, onDeleteHistory,
 }: ModelVarsCardsProps) {
   const { theme } = useTheme();
@@ -177,14 +170,12 @@ export function ModelVarsCards({
           }
         >
           {bayesian ? (
-            <BayesPosteriorCard
-              probability={probabilityPosterior}
-              latency={latencyPosterior}
-              t95={bayesian.latency?.t95}
-              pathT95={bayesian.latency?.path_t95}
+            <ModelCard
+              entry={bayesian}
               theme={theme}
               onResetPriors={onResetPriors}
               onDeleteHistory={onDeleteHistory}
+              timestampLabel="Fitted"
             />
           ) : (
             <p style={{ color: 'var(--text-muted)', fontStyle: 'italic', fontSize: '12px', margin: 0 }}>
@@ -210,9 +201,7 @@ export function ModelVarsCards({
         >
           {analytic ? (
             <>
-              <ModelCard entry={analytic} t95={promotedLatency?.promoted_t95 ?? promotedLatency?.t95}
-                pathT95={promotedLatency?.promoted_path_t95 ?? promotedLatency?.path_t95}
-                timestampLabel="Retrieved" />
+              <ModelCard entry={analytic} timestampLabel="Retrieved" />
               {/* t95 override controls (FE analytic card affordance) */}
               {analytic.latency && (
                 <div style={{ padding: '0 10px' }}>

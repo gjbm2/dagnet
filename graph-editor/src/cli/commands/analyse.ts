@@ -354,12 +354,19 @@ async function runAnalyse() {
 
   log.info(`Analysis complete (type: ${result.result?.analysis_type || analysisType})`);
 
-  // Diagnostic: BE-side diagnostics (regime selection, evidence binding)
+  // Diagnostic: BE-side diagnostics (regime selection, evidence binding,
+  // cohort-forecast forensic). cohort_forensic is rendered as a custom
+  // table — JSON-stringifying the per-cohort lists is unreadable. Other
+  // _diagnostics keys keep the JSON.stringify rendering.
   if (isDiagnostic() && (result as any)._diagnostics) {
     const diag = (result as any)._diagnostics;
     log.diag('── BE diagnostics ──');
     for (const [k, v] of Object.entries(diag)) {
+      if (k === 'cohort_forensic') continue;
       log.diag(`  ${k}: ${JSON.stringify(v)}`);
+    }
+    if (diag.cohort_forensic && typeof diag.cohort_forensic === 'object') {
+      renderCohortForensic(diag.cohort_forensic as Record<string, unknown>);
     }
   }
 
@@ -408,4 +415,75 @@ function resolveDotPath(obj: any, path: string): any {
     current = Number.isNaN(idx) ? current[part] : current[idx];
   }
   return current;
+}
+
+function fmt(v: unknown, digits = 4): string {
+  if (v == null) return '—';
+  if (typeof v === 'number') return Number.isFinite(v) ? v.toFixed(digits) : String(v);
+  if (typeof v === 'boolean') return v ? 'Y' : 'N';
+  return String(v);
+}
+
+function renderCohortForensic(forensicByEdge: Record<string, unknown>): void {
+  for (const [edgeKey, payload] of Object.entries(forensicByEdge)) {
+    if (!payload || typeof payload !== 'object') continue;
+    const p = payload as Record<string, any>;
+    log.diag(`── Cohort forecast forensic [${edgeKey}] ──`);
+
+    const inputs = p._inputs || {};
+    log.diag(
+      `  inputs: n_cohorts=${inputs.n_cohorts ?? '—'} T=${inputs.T ?? '—'} S=${inputs.S ?? '—'} ` +
+      `has_carrier=${fmt(inputs.has_upstream_cdf_mc)} reach=${fmt(inputs.reach, 6)} ` +
+      `p_draws_median=${fmt(inputs.p_draws_median, 6)} p_draws_std=${fmt(inputs.p_draws_std, 6)}`
+    );
+
+    const f14 = p.f14_is || {};
+    log.diag(
+      `  IS: pre_p_med=${fmt(f14.pre_IS_p_median, 6)} post_p_med=${fmt(f14.post_IS_p_median, 6)} ` +
+      `pre_p_sd=${fmt(f14.pre_IS_p_std, 6)} post_p_sd=${fmt(f14.post_IS_p_std, 6)} ` +
+      `ESS=${fmt(f14.is_ess_global, 2)} λ=${fmt(f14.is_tempering_lambda, 4)} ` +
+      `n_cohorts_conditioned=${f14.is_n_cohorts_conditioned ?? '—'}`
+    );
+
+    const summary = p.cohort_projection_summary;
+    if (summary && typeof summary === 'object') {
+      log.diag(
+        `  Σ projection (n_active=${summary.n_active}, n_skipped=${summary.n_skipped}): ` +
+        `Σ remaining=${fmt(summary.sum_remaining, 2)} ` +
+        `Σ int(remaining)=${summary.sum_int_remaining} ` +
+        `truncation_loss=${fmt(summary.truncation_loss, 2)}`
+      );
+      log.diag(
+        `    Σ Y_D_max_med=${fmt(summary.sum_Y_D_max_med, 2)} ` +
+        `Σ Y_C_max_med=${fmt(summary.sum_Y_C_max_med, 2)} ` +
+        `Σ Y_forecast_max_med=${fmt(summary.sum_Y_forecast_max_med, 2)} ` +
+        `Σ X_forecast_max_med=${fmt(summary.sum_X_forecast_max_med, 2)}`
+      );
+    }
+
+    const cohorts = Array.isArray(p.cohorts) ? p.cohorts : [];
+    if (cohorts.length > 0) {
+      log.diag(`  per-cohort projection (${cohorts.length} cohorts):`);
+      for (const c of cohorts) {
+        if (c.proj_skipped) {
+          log.diag(`    [${c.i}] SKIPPED (${c.proj_skip_reason ?? 'no_mass'}) N=${fmt(c.N, 1)} a_pop=${fmt(c.a_pop, 1)}`);
+          continue;
+        }
+        const proj = c.proj || {};
+        log.diag(
+          `    [${c.i}] N=${fmt(c.N, 1)} k=${fmt(c.k, 1)} a_i=${c.a_i} a_pop=${fmt(c.a_pop, 1)} ` +
+          `evN=${fmt(c.evidence_N, 1)} evK=${fmt(c.evidence_k, 1)}`
+        );
+        if (Object.keys(proj).length > 0) {
+          log.diag(
+            `         remaining=${fmt(proj.remaining, 2)} int=${proj.int_remaining} ` +
+            `loss=${fmt(proj.truncation_loss, 2)} p_med=${fmt(proj.p_i_med, 4)} ` +
+            `q_late_max_med=${fmt(proj.q_late_max_med, 4)} ` +
+            `Y_D_max_med=${fmt(proj.Y_D_max_med, 2)} Y_C_max_med=${fmt(proj.Y_C_max_med, 2)} ` +
+            `Y_fc_max_med=${fmt(proj.Y_forecast_max_med, 2)} X_fc_max_med=${fmt(proj.X_forecast_max_med, 2)}`
+          );
+        }
+      }
+    }
+  }
 }

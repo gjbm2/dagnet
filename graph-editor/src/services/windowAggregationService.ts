@@ -1463,16 +1463,20 @@ export interface MergeOptions {
   };
   
   /**
-   * If true, callers previously requested forecast/latency recomputation at merge time.
-   * NOTE: LAG stats (completeness, t95, blended p) are now computed exclusively in the
-   * graph-level topo pass and should NOT be recomputed here; this flag is retained only
-   * to avoid breaking the public API and may be removed in a future cleanup.
+   * No-op flag retained for caller-API compatibility. Window-merge no
+   * longer writes a `forecast` scalar onto merged values — derived FE
+   * metrics belong on the graph (computed at fetch time by
+   * `addEvidenceAndForecastScalars`), not on persisted param files.
+   * Pre-cleanup, `true` triggered the in-merge `forecast` recompute;
+   * the flag is a dead arg now but is kept so the four callers in
+   * `getFromSourceDirect.ts` and the test suite still compile. Safe
+   * to delete (with caller updates) once those are migrated.
    */
   recomputeForecast?: boolean;
 
   /**
-   * Forecasting knobs (shared settings) to use when recomputing forecast scalars.
-   * If omitted, defaults to compiled constants.
+   * No-op forecasting knobs retained for caller-API compatibility.
+   * No longer consumed inside the merge — see `recomputeForecast`.
    */
   forecastingConfig?: {
     RECENCY_HALF_LIFE_DAYS?: number;
@@ -1896,82 +1900,10 @@ export function mergeTimeSeriesIntoParameter(
   const mergedTotalK = mergedK.reduce((sum, k) => sum + k, 0);
   const mergedMean = mergedTotalN > 0 ? Math.round((mergedTotalK / mergedTotalN) * 1000) / 1000 : 0;
 
-  // Window-forecast recomputation (design.md §5.6, Appendix C.1):
-  // Exclude immature tail (last ceil(t95)+1 days) and apply recency weighting over mature days.
-  //
-  // IMPORTANT: This is the baseline p∞ stored on window() slices. It must NOT include
-  // immature recent days, otherwise we systematically underestimate forecast.
-  const computeWindowForecastFromDaily = (): number | undefined => {
-    if (!mergeOptions?.recomputeForecast) return undefined;
-    if (!Array.isArray(mergedDates) || !Array.isArray(mergedN) || !Array.isArray(mergedK)) return undefined;
-    if (mergedDates.length === 0) return undefined;
-
-    // Non-latency edges: no maturity exclusion (include all days).
-    // An edge is non-latency if latencyConfig is undefined or latency_parameter is false/undefined.
-    const isNonLatencyEdge = !mergeOptions?.latencyConfig?.latency_parameter;
-
-    const defaultT95 =
-      (typeof mergeOptions?.forecastingConfig?.DEFAULT_T95_DAYS === 'number' && Number.isFinite(mergeOptions.forecastingConfig.DEFAULT_T95_DAYS))
-        ? mergeOptions.forecastingConfig.DEFAULT_T95_DAYS
-        : DEFAULT_T95_DAYS;
-    const t95Raw =
-      isNonLatencyEdge
-        ? 0 // Non-latency: no maturity exclusion
-        : (typeof mergeOptions?.latencyConfig?.t95 === 'number' && Number.isFinite(mergeOptions.latencyConfig.t95) && mergeOptions.latencyConfig.t95 > 0
-            ? mergeOptions.latencyConfig.t95
-            : defaultT95);
-    const maturityDays = isNonLatencyEdge ? 0 : (Math.ceil(t95Raw) + 1);
-    // Recency datum for forecast MUST be max(window date), not wall-clock "now".
-    const asOf = parseDate(mergedDates[mergedDates.length - 1]);
-    const cutoffMs = isNonLatencyEdge
-      ? Number.POSITIVE_INFINITY // Non-latency: include all days
-      : (asOf.getTime() - maturityDays * 24 * 60 * 60 * 1000);
-
-    let weightedN = 0;
-    let weightedK = 0;
-
-    for (let i = 0; i < mergedDates.length; i++) {
-      const d = parseDate(mergedDates[i]);
-      if (Number.isNaN(d.getTime())) continue;
-
-      // Exclude immature tail
-      if (d.getTime() > cutoffMs) continue;
-
-      // Recency weighting: mirror statisticalEnhancementService (true half-life semantics).
-      const ageDays = Math.max(0, (asOf.getTime() - d.getTime()) / (24 * 60 * 60 * 1000));
-      const halfLife =
-        (typeof mergeOptions?.forecastingConfig?.RECENCY_HALF_LIFE_DAYS === 'number' && Number.isFinite(mergeOptions.forecastingConfig.RECENCY_HALF_LIFE_DAYS) && mergeOptions.forecastingConfig.RECENCY_HALF_LIFE_DAYS > 0)
-          ? mergeOptions.forecastingConfig.RECENCY_HALF_LIFE_DAYS
-          : RECENCY_HALF_LIFE_DAYS;
-      const w = Math.exp(-Math.LN2 * ageDays / halfLife);
-
-      const n = typeof mergedN[i] === 'number' ? mergedN[i] : 0;
-      const k = typeof mergedK[i] === 'number' ? mergedK[i] : 0;
-      if (n <= 0) continue;
-
-      weightedN += w * n;
-      weightedK += w * k;
-    }
-
-    if (weightedN <= 0) return undefined;
-    return weightedK / weightedN;
-  };
-
-  const recomputedForecast = computeWindowForecastFromDaily();
-
   const windowFrom = mergedDates.length > 0 ? mergedDates[0] : normalizeToUK(newWindow.start);
   const windowTo = mergedDates.length > 0 ? mergedDates[mergedDates.length - 1] : normalizeToUK(newWindow.end);
 
   const canonicalWindowSliceDSL = `window(${windowFrom}:${windowTo})${contextSuffix}`;
-
-  // Preserve existing forecast scalar if present on any existing window-mode value for this slice family.
-  // If recomputeForecast is enabled, we will overwrite this with the recomputed forecast below.
-  const existingForecastCandidates = existingForSlice
-    .map(v => (v as any).forecast)
-    .filter((f): f is number => typeof f === 'number' && Number.isFinite(f));
-  const preservedForecast = existingForecastCandidates.length > 0
-    ? existingForecastCandidates[existingForecastCandidates.length - 1]
-    : undefined;
 
   // §0.3 onset merge policy:
   // - Derive an onset value for the *incoming* incremental window (mergeOptions.latencySummary.onset_delta_days).
@@ -2036,21 +1968,6 @@ export function mergeTimeSeriesIntoParameter(
     ...(mergedAnchorMedianLag && { anchor_median_lag_days: mergedAnchorMedianLag }),
     ...(mergedAnchorMeanLag && { anchor_mean_lag_days: mergedAnchorMeanLag }),
     sliceDSL: canonicalWindowSliceDSL,
-    // Persist forecast scalar for window() slices when requested, without computing any LAG stats here.
-    //
-    // The full LAG pipeline (t95, completeness, blend) is computed exclusively in the graph-level
-    // topo pass (enhanceGraphLatencies). This stored forecast is a window-baseline scalar used
-    // during query-time enhancement and for cohort() dual-slice retrieval.
-    ...(mergeOptions?.recomputeForecast
-      ? (
-          // CRITICAL: Never write forecast as a naive copy of mean.
-          // Forecast must come from mature-window computation (recomputedForecast),
-          // or be preserved from an existing window slice value if already present.
-          (recomputedForecast !== undefined)
-            ? { forecast: recomputedForecast }
-            : (preservedForecast !== undefined ? { forecast: preservedForecast } : {})
-        )
-      : (preservedForecast !== undefined ? { forecast: preservedForecast } : {})),
     // §0.3: Propagate latency summary for window mode (includes onset_delta_days),
     // but preserve/blend existing onset under incremental merges.
     ...(mergeLatencySummary && { latency: mergeLatencySummary }),

@@ -357,12 +357,18 @@ describe('Window/Cohort LAG semantics (param-pack integration)', () => {
 
       // p.mean is stored at standard precision (see UpdateManager rounding); we only
       // require correctness within that precision.
+      //
       // Note: per-day blend and aggregate blend (computeBlendedMean) are not the same
-      // formula — m0 = λ·nBaseline competes against ΣnEff aggregated vs each day's nEff
-      // alone, so the per-day weight is structurally lower. The gap scales with cohort
-      // count and (evidence − forecast) and is exact at ~0.01 for this fixture; allow
-      // 0.015 absolute tolerance to absorb it without losing the directional contract.
-      expect(Math.abs(edge.p.mean - expected)).toBeLessThan(0.015);
+      // formula — m0Eff = λ·nBaseline competes against ΣnEff aggregated vs each day's nEff
+      // alone, so the per-day weight is structurally lower. With the conjugate-blend
+      // formula (prior pseudo-count always present, no `(1 - completeness^η)` factor),
+      // this gap is structurally larger than under the old formula because each day's
+      // small nEff is weighed against the same constant m0Eff. For this fixture the gap
+      // is ~0.04. Allow 0.05 absolute tolerance to absorb it without losing the
+      // directional contract; tighter calibration would require switching `expected`
+      // to use computePerDayBlendedMean directly, which would make this an exact-match
+      // tautology rather than a "canonical blend was applied" check.
+      expect(Math.abs(edge.p.mean - expected)).toBeLessThan(0.05);
     });
 
     it('t95 tail constraint LOWERS completeness (and shifts p.mean toward forecast) at param-pack outcome level', async () => {

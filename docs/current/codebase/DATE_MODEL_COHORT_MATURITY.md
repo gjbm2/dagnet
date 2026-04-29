@@ -61,6 +61,32 @@ Canonical date concepts used across the cohort maturity pipeline (FE → BE → 
 
 **Does NOT affect:** Anchor dates (which cohorts to analyse).
 
+#### Omitted vs explicit asat — non-obvious behaviour difference
+
+`asat()` omitted is **not** semantically equivalent to `asat(today)`. The two paths differ at the snapshot evidence admission layer:
+
+- **Omitted (`asat=None`)**: the `retrieved_at` filter is **skipped entirely**. All snapshot rows are admitted regardless of when they were retrieved. See [evidence_merge.py:480-485](../../graph-editor/lib/evidence_merge.py#L480-L485) (`if scope.as_at is not None:` gate) and [snapshot_service.py:707-709](../../graph-editor/lib/snapshot_service.py#L707-L709) (SQL filter only appended when as_at is provided).
+- **Explicit `.asat(d)`**: the filter `retrieved_at <= d` is enforced. Rows retrieved after `d` are rejected as `"after_as_at"`.
+
+For synth fixtures with deterministic, bounded `retrieved_at` (synth `retrieved_at = base_date + fetch_night`, all values inside the simulated window), this difference is invisible: both paths admit the same row set. For production data with rolling `retrieved_at`, omitting asat admits *all* rows including those retrieved after the user's "today", whereas explicit `asat(today)` rejects those.
+
+The implication for tests: adding `.asat()` to a test as a wallclock-freeze mechanism is not a no-op. It activates the admission filter where none was active. For the synth-fixture case, behaviour is preserved by accident (deterministic retrieved_at < asat); for any test using non-synth data or any synth where retrieved_at could exceed the chosen asat, the row set changes.
+
+#### Six asat code paths in the BE
+
+Adding `.asat(<date>)` to a DSL string activates six independent code paths. Each preserves a distinct invariant; collectively they make asat a non-trivial change to BE behaviour:
+
+1. **[evidence_merge.py:480-485](../../graph-editor/lib/evidence_merge.py#L480-L485)** — `retrieved_at > asat` rows rejected as `"after_as_at"`. Admission filter; only active when asat is set.
+2. **[evidence_merge.py:363,371-373](../../graph-editor/lib/evidence_merge.py#L363-L373)** — `as_at` is part of the SHA-256 scope hash. Different asat → different scope identity → different cache entries.
+3. **[analysis_subject_resolution.py:458-471](../../graph-editor/lib/analysis_subject_resolution.py#L458-L471)** — `_resolve_sweep_bounds` returns `sweep_to = _resolve_date(asat)`. With asat set, sweep is frozen at asat; without, sweep_to drifts to today.
+4. **[snapshot_service.py:707-709](../../graph-editor/lib/snapshot_service.py#L707-L709)** — SQL filter `retrieved_at <= asat` appended when as_at is provided. Same observable effect as #1 but at the DB query layer.
+5. **[snapshot_service.py:2369-2370](../../graph-editor/lib/snapshot_service.py#L2369-L2370)** — `as_at` is part of the `query_virtual_snapshot` cache key.
+6. **[api_handlers.py:3524-3560](../../graph-editor/lib/api_handlers.py#L3524-L3560)** — `_eval_date_str` (used to compute `eval_age` for conditioned_forecast trajectories) is `today` when asat omitted, `parse_asat_from_dsl(...)` when present.
+
+Posterior selection is *not yet* asat-aware in the current BE — `resolve_model_params` always reads the latest available posterior. Doc 42 (`docs/current/project-bayes/42-asat-contract.md`) documents the design for asat-aware fit-history selection but it is not implemented.
+
+The practical upshot: introducing `.asat()` to "freeze the wallclock" for a test is a behavioural change at six sites, two of which (sweep_to and eval_age) are *load-bearing* drift sources. The freeze succeeds at making the test deterministic, but at the cost of changing what the test computes — see `TESTING_STANDARDS.md` §"Wallclock invariance for date-DSL tests" for when this is appropriate vs not.
+
 ### 1.6 Today's date
 
 **Implicit dependency.** Used as the default for:

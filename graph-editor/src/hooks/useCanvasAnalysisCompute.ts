@@ -716,9 +716,19 @@ export function useCanvasAnalysisCompute({
               chartKind,
               analyticsDsl: contentItem?.analytics_dsl || analysis?.recipe?.analysis?.analytics_dsl,
               prepared: {
-                signature: prepared.signature?.slice(0, 200),
+                // Full signature, untruncated. Earlier cap of 200 chars hid
+                // the second scenario's effective_query_dsl when comparing
+                // window vs cohort mode dispatch — the very thing the dump
+                // is meant to expose.
+                signature: prepared.signature,
                 scenarios: prepared.scenarios.map((s: any) => ({
                   scenario_id: s.scenario_id,
+                  // Per-scenario temporal/visibility — required to diagnose
+                  // mode mismatches between graph.currentQueryDSL and what
+                  // the BE actually receives per scenario.
+                  visibility_mode: s.visibility_mode,
+                  effective_query_dsl: s.effective_query_dsl,
+                  analytics_dsl: s.analytics_dsl,
                   snapshot_subjects: s.snapshot_subjects?.map((sub: any) => ({
                     subject_id: sub.subject_id,
                     param_id: sub.param_id,

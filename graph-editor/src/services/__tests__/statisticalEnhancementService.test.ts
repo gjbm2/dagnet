@@ -1583,7 +1583,11 @@ describe('enhanceGraphLatencies', () => {
     expect(aToB!.latency.completeness).toBeGreaterThan(0.5);
   });
 
-  it('should skip edges without latency_parameter', () => {
+  it('should process edges without latency_parameter as the degenerate δ(0) lag case', () => {
+    // ONE PATH: a non-latency edge is the degenerate of a latency
+    // edge with lag distribution = δ(0) (instant). The unified path
+    // produces the conjugate blend for it just like any other edge,
+    // so it lands in result.edgeValues.
     const graph: GraphForPath = {
       nodes: [
         { id: 'start', entry: { is_start: true } },
@@ -1600,7 +1604,8 @@ describe('enhanceGraphLatencies', () => {
 
     const result = enhanceGraphLatencies(graph, paramLookup, new Date(), mockHelpers);
 
-    expect(result.edgesWithLAG).toBe(0);
+    expect(result.edgesWithLAG).toBe(1);
+    expect(result.edgeValues).toHaveLength(1);
   });
 
   it('should skip edges without param data', () => {

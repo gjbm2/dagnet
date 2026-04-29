@@ -688,7 +688,11 @@ def _evaluate_cohort(
 
     RNG contract: consumes loop_rng in exactly this order per call:
       1. normal(size=(S,4)) — drift
-      2. binomial(remaining, q_late) — Pop D sampling
+      2. binomial(int(remaining), q_late) — held for stream alignment
+         only. Pop D itself uses the continuous mean `remaining *
+         q_late`; the binomial draw is discarded. Preserved because
+         callers (v2/v3 parity tests, downstream-cohort drift draws,
+         forensic hashes) pin the stream.
     Callers must pass the same loop_rng instance sequentially across
     cohorts to preserve the RNG stream.
     """
@@ -698,7 +702,11 @@ def _evaluate_cohort(
     a_pop = cohort.a_pop
 
     if N_i <= 0 and a_pop <= 0:
-        return None  # Caller must skip — no RNG consumed (matches original `continue`)
+        # Skip path: caller treats `Y_c is None` as continue. RNG not
+        # consumed (matches original `continue`). Diag carries the skip
+        # marker so the caller can keep cohort-index alignment.
+        return (None, None, {'skipped': True, 'reason': 'no_mass',
+                             'N_i': float(N_i), 'a_pop': float(a_pop)})
 
     a_idx = min(a_i, T - 1)
 
@@ -722,8 +730,26 @@ def _evaluate_cohort(
     remaining_cdf = np.maximum(_pop_d_cdf - cdf_at_a[:, None], 0.0)
     q_late = (p_i[:, None] * remaining_cdf) / (1 - q_early)
     q_late = np.clip(q_late, 0.0, 1.0)
-    # v2 default is binomial sampling (display_settings.continuous_forecast)
-    Y_D = loop_rng.binomial(int(remaining), q_late)
+    # Continuous-mean projection of Pop D — the displayed midline is the
+    # expected mass produced by the population model, not a single
+    # discrete draw. The pre-fix `loop_rng.binomial(int(remaining),
+    # q_late)` truncated `remaining` (a fractional cohort weight,
+    # already O(0.1)–O(1)) to its int floor, which discarded ~100% of
+    # frontier-survivor mass on cohort-mode `--cohort()` queries where
+    # every cohort has `remaining < 1`. Pop C is already mean-arithmetic
+    # so this brings Pop D into the same form. The doc 73f F14
+    # aggregate-IS step builds its likelihood from
+    # `evidence_n`/`evidence_k`, not from `Y_D`, so the IS-conditioned
+    # posterior is unaffected. Investigation record:
+    # `docs/current/cohort-maturity-v3-midline-collapse-investigation.md`.
+    Y_D = remaining * q_late
+    # Preserve the per-cohort RNG stream (docstring contract): the
+    # binomial draw was previously load-bearing. Keep an equivalent
+    # no-op consumption so callers that pin the stream — v2/v3 parity
+    # tests, RNG-stable forensic hashes, downstream cohorts' drift
+    # draws — see exactly the same `loop_rng` state after this call as
+    # before. Result discarded.
+    _ = loop_rng.binomial(int(remaining), q_late)
 
     # Pop C: post-frontier upstream arrivals.
     #
@@ -808,7 +834,33 @@ def _evaluate_cohort(
     X_cohort = np.where(mature_mask[None, :],
                         obs_x_padded[None, :], X_forecast)
 
-    return (Y_cohort, X_cohort)
+    # Per-cohort projection diagnostics. Reported as median-over-draws of
+    # max-over-tau so we get a single typical-peak number per quantity per
+    # cohort. Captured AFTER the post-clip Y_forecast and the splice so
+    # the figures match what downstream code actually consumes. Used by
+    # `--diag` to surface the truncation gap in `int(remaining)` (the
+    # cohort-maturity-v3 midline-collapse investigation, doc cohort-
+    # maturity-v3-midline-collapse-investigation.md).
+    _proj_diag = {
+        'skipped': False,
+        'N_i': float(N_i),
+        'k_i': float(k_i),
+        'a_i': int(a_i),
+        'a_pop': float(a_pop),
+        'remaining': float(remaining),
+        'int_remaining': int(remaining),
+        'truncation_loss': float(remaining) - int(remaining),
+        'p_i_med': float(np.median(p_i)),
+        'reach': float(reach),
+        'has_carrier': upstream_cdf_mc is not None,
+        'q_late_max_med': float(np.median(np.max(q_late, axis=1))),
+        'Y_D_max_med': float(np.median(np.max(Y_D, axis=1))),
+        'Y_C_max_med': float(np.median(np.max(Y_C, axis=1))) if Y_C.size else 0.0,
+        'X_C_max_med': float(np.median(np.max(X_C, axis=1))) if X_C.size else 0.0,
+        'Y_forecast_max_med': float(np.median(np.max(Y_forecast, axis=1))),
+        'X_forecast_max_med': float(np.median(np.max(X_forecast, axis=1))),
+    }
+    return (Y_cohort, X_cohort, _proj_diag)
 
 
 def compute_forecast_trajectory(
@@ -1202,6 +1254,7 @@ def compute_forecast_trajectory(
         upstream_local: Optional[np.ndarray],
         edge_cdf_local: Optional[np.ndarray],
         label: str,
+        record_projection_diag: bool = False,
     ) -> tuple:
         """Run the per-cohort population-model loop with a fixed draw set.
 
@@ -1213,11 +1266,19 @@ def compute_forecast_trajectory(
         Uses a fresh rng(42) for drift, matching v2's per-cohort loop
         (cohort_forecast_v2.py:720) which creates its own rng(42)
         independent of mc_span_cdfs' rng.
+
+        When record_projection_diag is True, returns the per-cohort
+        projection diagnostics list as a 5th tuple element. Index aligns
+        with `cohorts` (skipped cohorts produce a `{'skipped': True, ...}`
+        entry rather than being omitted). The conditioned pass uses this
+        to surface arithmetic for `--diag`; the unconditioned pass does
+        not need it.
         """
         _loop_rng = np.random.default_rng(seed=42)
         Y_total = np.zeros((S, T))
         X_total = np.zeros((S, T))
         _cohort_evals: List[CohortForecastAtEval] = []
+        _proj_diags: List[Dict[str, Any]] = []
 
         for cohort in cohorts:
             result = _evaluate_cohort(
@@ -1233,9 +1294,11 @@ def compute_forecast_trajectory(
                 _expit=_expit,
                 edge_cdf_arr=edge_cdf_local,
             )
-            if result is None:
+            Y_c, X_c, _pd = result
+            if record_projection_diag:
+                _proj_diags.append(_pd)
+            if Y_c is None:
                 continue
-            Y_c, X_c = result
             Y_total += Y_c
             X_total += X_c
 
@@ -1296,15 +1359,16 @@ def compute_forecast_trajectory(
                 p_local[:S, None] * fallback_cdf[:, _needs_fallback]
             )
 
-        return rate, Y_total, X_total, _cohort_evals
+        return rate, Y_total, X_total, _cohort_evals, _proj_diags
 
-    rate_conditioned, Y_cond, X_cond, cohort_evals_cond = _run_cohort_loop(
+    rate_conditioned, Y_cond, X_cond, cohort_evals_cond, projection_diags_cond = _run_cohort_loop(
         p_local=p_draws,
         theta_local=theta_transformed,
         cdf_local=cdf_arr,
         upstream_local=upstream_cdf_mc,
         edge_cdf_local=edge_cdf_arr,
         label='conditioned',
+        record_projection_diag=True,
     )
     is_ess = is_ess_global
     n_conditioned = n_cohorts_conditioned
@@ -1312,7 +1376,7 @@ def compute_forecast_trajectory(
     # `rate_draws`, but driven by the UNCONDITIONED draws preserved
     # before aggregate IS. Keeps `model_midpoint` carrier-aware in cohort
     # mode instead of collapsing onto the generic p×CDF shortcut.
-    rate_unc, Y_unc, X_unc, cohort_evals_unc = _run_cohort_loop(
+    rate_unc, Y_unc, X_unc, cohort_evals_unc, _ = _run_cohort_loop(
         p_local=p_draws_unconditioned,
         theta_local=theta_transformed_unconditioned,
         cdf_local=cdf_arr_unconditioned,
@@ -1472,13 +1536,59 @@ def compute_forecast_trajectory(
     # Per-cohort E_i and a_i (no truncation — F14 investigation needs all)
     _forensic['cohorts'] = []
     for _ci, c in enumerate(cohorts):
-        _forensic['cohorts'].append({
+        _entry: Dict[str, Any] = {
             'i': _ci, 'N': round(c.x_frozen, 1), 'k': round(c.y_frozen, 1),
             'evidence_N': round(float(c.evidence_n or 0.0), 1),
             'evidence_k': round(float(c.evidence_k or 0.0), 1),
             'a_i': c.frontier_age, 'a_pop': round(c.a_pop, 1),
             'obs_x_len': len(c.obs_x),
-        })
+        }
+        # Conditioned-pass projection arithmetic — populated when
+        # `record_projection_diag=True` was passed to `_run_cohort_loop`.
+        # Index aligns with `cohorts` because the loop appends a skip
+        # marker rather than omitting skipped cohorts.
+        if _ci < len(projection_diags_cond):
+            _pd = projection_diags_cond[_ci]
+            if _pd.get('skipped'):
+                _entry['proj_skipped'] = True
+                _entry['proj_skip_reason'] = _pd.get('reason')
+            else:
+                _entry['proj'] = {
+                    'remaining': round(_pd['remaining'], 4),
+                    'int_remaining': _pd['int_remaining'],
+                    'truncation_loss': round(_pd['truncation_loss'], 4),
+                    'p_i_med': round(_pd['p_i_med'], 6),
+                    'reach': round(_pd['reach'], 6),
+                    'has_carrier': _pd['has_carrier'],
+                    'q_late_max_med': round(_pd['q_late_max_med'], 6),
+                    'Y_D_max_med': round(_pd['Y_D_max_med'], 4),
+                    'Y_C_max_med': round(_pd['Y_C_max_med'], 4),
+                    'X_C_max_med': round(_pd['X_C_max_med'], 4),
+                    'Y_forecast_max_med': round(_pd['Y_forecast_max_med'], 4),
+                    'X_forecast_max_med': round(_pd['X_forecast_max_med'], 4),
+                }
+        _forensic['cohorts'].append(_entry)
+
+    # Aggregate cohort-projection summary — direct metric for the
+    # cohort-maturity-v3 midline-collapse investigation. `truncation_loss`
+    # is the gap between Σ remaining and Σ int(remaining) — the mass that
+    # `Y_D = binomial(int(remaining), q_late)` discards relative to a
+    # continuous-mean projection.
+    _live_pds = [pd for pd in projection_diags_cond if not pd.get('skipped')]
+    if _live_pds:
+        _sum_rem = sum(float(pd['remaining']) for pd in _live_pds)
+        _sum_int_rem = sum(int(pd['int_remaining']) for pd in _live_pds)
+        _forensic['cohort_projection_summary'] = {
+            'n_active': len(_live_pds),
+            'n_skipped': len(projection_diags_cond) - len(_live_pds),
+            'sum_remaining': round(_sum_rem, 2),
+            'sum_int_remaining': _sum_int_rem,
+            'truncation_loss': round(_sum_rem - _sum_int_rem, 2),
+            'sum_Y_D_max_med': round(sum(pd['Y_D_max_med'] for pd in _live_pds), 2),
+            'sum_Y_C_max_med': round(sum(pd['Y_C_max_med'] for pd in _live_pds), 2),
+            'sum_Y_forecast_max_med': round(sum(pd['Y_forecast_max_med'] for pd in _live_pds), 2),
+            'sum_X_forecast_max_med': round(sum(pd['X_forecast_max_med'] for pd in _live_pds), 2),
+        }
 
     # F14 aggregate IS forensic: was the maturity correction load-bearing?
     _f14: Dict[str, Any] = {}

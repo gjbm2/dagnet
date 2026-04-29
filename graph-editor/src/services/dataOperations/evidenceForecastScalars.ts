@@ -727,7 +727,13 @@ export function addEvidenceAndForecastScalars(
             )
           : undefined;
       if (forecastMeanComputed !== undefined) {
-        // Attach forecast scalar (query-time) – always overwrite so F-mode is explainable and consistent.
+        // Attach forecast scalar (query-time) on values[] for in-fetch
+        // session-log readability and downstream UI consumers that read
+        // `latestValue.forecast` for display. NOT persisted: W1 (the
+        // window-merge writer in `windowAggregationService.ts`) was
+        // removed, so this scalar never makes it back to a param-file
+        // YAML. It's a transient in-memory carrier for the current
+        // fetch only.
         nextAggregated = {
           ...nextAggregated,
           values: (nextAggregated.values as ParameterValue[]).map((v: any) => ({
@@ -738,6 +744,24 @@ export function addEvidenceAndForecastScalars(
               ? { forecast_stdev_pred: forecastStdevPredComputed }
               : {}),
           })),
+        };
+        // Sidecar: hand the just-computed analytic probability triple
+        // forward to the fileToGraphSync.ts caller, which mints the
+        // `model_vars[analytic].probability` entry from it. Sidecar
+        // presence is the "fresh compute happened in this call"
+        // discriminator: param-file values loaded from disk YAML never
+        // carry it, so cold loads with no daily evidence cannot seed
+        // a stale analytic block. (R2 used to read `latestValue.forecast`
+        // directly, which couldn't tell freshly-computed from
+        // disk-resident.)
+        (nextAggregated as any).__fresh_analytic_probability = {
+          mean: forecastMeanComputed,
+          stdev: forecastStdevComputed,
+          stdev_pred: forecastStdevPredComputed,
+          weighted_n: weightedNTotal,
+          weighted_k: weightedKTotal,
+          as_of: asOfDate.toISOString(),
+          target_slice: targetSlice,
         };
 
         if (options?.logOpId) {
@@ -810,131 +834,27 @@ export function addEvidenceAndForecastScalars(
         }
       }
     } else {
-      // Scalar-only fallback: no usable daily arrays anywhere. Preserve legacy behaviour by attaching a
-      // scalar forecast when available (even if header n is missing).
-      const scalarCandidates = contextMatchedWindowCandidates.filter((v) => {
-        const f = (v as any).forecast;
-        return typeof f === 'number' && Number.isFinite(f);
-      });
-
-      // For uncontexted, if there is no explicit uncontexted scalar, attempt an implicit-uncontexted MECE aggregate
-      // (weighted by header n when present).
-      let forecastMeanComputed: number | undefined;
-      let basisLabel = 'scalar (context-matching)';
-      let basisSlices: string[] = [];
-
-      if (scalarCandidates.length > 0) {
-        const best = scalarCandidates.reduce((b, cur) => (parameterValueRecencyMs(cur) > parameterValueRecencyMs(b) ? cur : b));
-        forecastMeanComputed = (best as any).forecast;
-        basisSlices = [best.sliceDSL ?? '<missing sliceDSL>'];
-        basisLabel = isUncontextedTarget ? 'scalar (explicit uncontexted)' : 'scalar (context-matching)';
-      } else if (isUncontextedTarget && bestMECE?.values?.length) {
-        let wN = 0;
-        let wK = 0;
-        let lone: any | undefined;
-        for (const v of bestMECE.values) {
-          const f = (v as any).forecast;
-          if (typeof f !== 'number' || !Number.isFinite(f)) continue;
-          lone = v;
-          const n = typeof (v as any).n === 'number' && Number.isFinite((v as any).n) && (v as any).n > 0 ? (v as any).n : 0;
-          if (n > 0) {
-            wN += n;
-            wK += n * f;
+      // Scalar-only fallback removed: no daily arrays → no analytic
+      // forecast. Reading a `forecast` scalar from existing param-file
+      // values would import the very stale-disk pollution this cleanup
+      // is eliminating. If the caller has no daily evidence, the
+      // analytic source emits nothing and the resolver returns
+      // alpha=beta=0 — consumers render midline only.
+      if (options?.logOpId) {
+        sessionLogService.addChild(
+          options.logOpId,
+          'info',
+          'FORECAST_BASIS',
+          `No forecast: no usable n_daily/k_daily for ${targetSlice}`,
+          undefined,
+          {
+            requestedSlice: targetSlice,
+            targetDims,
+            meceKey,
+            forecastMean: undefined,
+            basis: 'none (no daily evidence)',
           }
-          basisSlices.push(v.sliceDSL ?? '<missing sliceDSL>');
-        }
-        if (wN > 0) {
-          forecastMeanComputed = wK / wN;
-          basisLabel = `scalar (MECE(${meceKey ?? 'unknown'}))`;
-        } else if (lone && typeof (lone as any).forecast === 'number') {
-          // Last resort: single slice forecast with no n weighting available.
-          forecastMeanComputed = (lone as any).forecast;
-          basisLabel = `scalar (MECE(${meceKey ?? 'unknown'}), unweighted)`;
-        }
-      }
-
-      if (forecastMeanComputed !== undefined) {
-        // Scalar-fallback path: forecast came from a stored scalar on the
-        // candidate value, not from daily aggregation. When the candidate
-        // ALSO has n_daily/k_daily arrays, derive both the epistemic
-        // (Binomial) `forecast_stdev` and the predictive (over-dispersed)
-        // `forecast_stdev_pred` from those — so the analytic source can
-        // emit a meaningful (alpha, beta) and (alpha_pred, beta_pred) pair
-        // via buildAnalyticProbabilityBlock. When n_daily/k_daily are
-        // unavailable, emit no stdev (preserves the doc 73f F15 behaviour
-        // that downstream moment-matching infers "no dispersion available"
-        // rather than fabricating one).
-        // Design: docs/current/codebase/EPISTEMIC_DISPERSION_DESIGN.md §6.
-        let scalarFallbackStdev: number | undefined;
-        let scalarFallbackStdevPred: number | undefined;
-        const scalarCandidate: any =
-          (scalarCandidates.length > 0
-            ? scalarCandidates.reduce((b, cur) => (parameterValueRecencyMs(cur) > parameterValueRecencyMs(b) ? cur : b))
-            : undefined);
-        const fallbackNDaily = (scalarCandidate?.n_daily as number[] | undefined) ?? undefined;
-        const fallbackKDaily = (scalarCandidate?.k_daily as number[] | undefined) ?? undefined;
-        if (
-          fallbackNDaily && fallbackKDaily
-          && fallbackNDaily.length > 0 && fallbackKDaily.length > 0
-        ) {
-          let totalN = 0;
-          let totalK = 0;
-          const len = Math.min(fallbackNDaily.length, fallbackKDaily.length);
-          for (let i = 0; i < len; i++) {
-            const ni = fallbackNDaily[i];
-            const ki = fallbackKDaily[i];
-            if (Number.isFinite(ni) && Number.isFinite(ki) && (ni as number) > 0) {
-              totalN += ni as number;
-              totalK += ki as number;
-            }
-          }
-          if (totalN > 0) {
-            scalarFallbackStdev = Math.sqrt(
-              Math.max(0, forecastMeanComputed * (1 - forecastMeanComputed)) / totalN
-            );
-          }
-          const fallbackOverdispersion = rateOverdispersionPredictiveBeta(
-            fallbackNDaily, fallbackKDaily,
-          );
-          if (fallbackOverdispersion !== undefined) {
-            scalarFallbackStdevPred = Math.sqrt(
-              Math.max(0, forecastMeanComputed * (1 - forecastMeanComputed))
-                / (fallbackOverdispersion.kappa_pred + 1)
-            );
-          }
-        }
-        nextAggregated = {
-          ...nextAggregated,
-          values: (nextAggregated.values as ParameterValue[]).map((v: any) => ({
-            ...v,
-            forecast: forecastMeanComputed,
-            forecast_stdev: scalarFallbackStdev,
-            ...(scalarFallbackStdevPred !== undefined
-              ? { forecast_stdev_pred: scalarFallbackStdevPred }
-              : {}),
-          })),
-        };
-
-        if (options?.logOpId) {
-          const diagnosticsOn = sessionLogService.isLevelEnabled('debug');
-          const msg = `Forecast attached from stored scalar (${basisLabel})`;
-          const details = diagnosticsOn ? `slices:\n${basisSlices.join('\n')}` : undefined;
-          sessionLogService.addChild(
-            options.logOpId,
-            'info',
-            'FORECAST_BASIS',
-            msg,
-            details,
-            {
-              requestedSlice: targetSlice,
-              targetDims,
-              meceKey,
-              forecastMean: forecastMeanComputed,
-              basis: basisLabel,
-              diagnosticsOn,
-            }
-          );
-        }
+        );
       }
     }
     // NOTE: LAG computation (t95, completeness, forecast blend) is handled by

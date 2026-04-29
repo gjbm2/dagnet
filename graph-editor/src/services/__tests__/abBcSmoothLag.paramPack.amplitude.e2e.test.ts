@@ -741,11 +741,20 @@ describePython('E2E: Smooth lag Amplitude responses → param-pack stats', () =>
       // evidence uses p.evidence.mean (pure window evidence)
       const reachEvidence = await analyzeReachProbabilityViaPython(currentGraph as Graph, 'to(C)', 'e');
 
-      // With a step-up in Aug, the blend should be pulled upward vs the window evidence average.
-      // Model tuning (λ, completeness, recency weighting, forecast recompute) can move the absolute level.
-      // Keep this as an invariants test (sanity + stability), not a tight numeric calibration.
+      // Under the conjugate-blend formula (prior pseudo-count always
+      // present), p.mean for each edge is a Beta-binomial blend of
+      // window evidence and the recency-weighted-historical forecast
+      // baseline. With a step-up in Aug, the per-edge forecast (which
+      // weights pre-step-up days heavily) is below current evidence,
+      // so the blend pulls each edge slightly DOWN from raw evidence
+      // — and the path-level reach (product of two such blends)
+      // shifts further from the evidence product. Model tuning
+      // (λ, completeness, recency half-life) can move the absolute
+      // level. Keep this as an invariants test (sanity + stability),
+      // not a tight numeric calibration: blend is finite and within
+      // a reasonable envelope around evidence.
       expect(Number.isFinite(reachBlended)).toBe(true);
-      expect(reachBlended).toBeGreaterThanOrEqual(0.16);
+      expect(reachBlended).toBeGreaterThanOrEqual(0.10);
       expect(reachBlended).toBeLessThanOrEqual(0.22);
 
       // Evidence over the whole window should be ~18.75% (0.5 * 0.375).
@@ -753,7 +762,7 @@ describePython('E2E: Smooth lag Amplitude responses → param-pack stats', () =>
       expect(reachEvidence).toBeLessThanOrEqual(0.19);
 
       // Sanity: blended should be in the same ballpark as evidence, not wildly divergent.
-      expect(Math.abs(reachBlended - reachEvidence)).toBeLessThanOrEqual(0.05);
+      expect(Math.abs(reachBlended - reachEvidence)).toBeLessThanOrEqual(0.10);
     });
   }, 30_000);
 });

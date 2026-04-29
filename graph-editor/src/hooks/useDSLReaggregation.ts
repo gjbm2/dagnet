@@ -224,15 +224,32 @@ export function useDSLReaggregation({
   }, [graph, currentDSL, isTemporaryFile, graphStoreApi]);
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // AUTO-AGGREGATION — runs when planner says covered
+  // AUTO-AGGREGATION — runs FE topo on every DSL change, regardless of coverage.
+  //
+  // Contract:
+  //   - DSL change ⇒ run FE topo against currently-cached file data (always).
+  //   - Live API retrieval ⇒ user clicks the Fetch button (toast/op-indicator
+  //     registered in the planner-result effect above, which calls
+  //     executeFetchPlan).
+  //
+  // "Uncovered" items still flow through from-file aggregation: they get
+  // whatever days are cached and surface a "missing data" warning. Empty
+  // scoped evidence (n=0 in the DSL window) is a NATURAL DEGENERATE of the
+  // FE topo blend formula — it returns forecastMean (the prior) cleanly,
+  // since the prior pseudo-count is always present in the conjugate blend.
+  // "Absence of evidence is not evidence of absence." See
+  // computeBlendedMean / computePerDayBlendedMean in
+  // statisticalEnhancementService.ts.
   // ═══════════════════════════════════════════════════════════════════════════
   useEffect(() => {
     if (!plannerResult || plannerResult.status !== 'complete') return;
     // On initial load, trust persisted graph state
     if (plannerResult.analysisContext?.trigger === 'initial_load') return;
-    // Only auto-aggregate when covered (stable or stale), not when not_covered
-    if (plannerResult.outcome === 'not_covered') return;
-    if (plannerResult.autoAggregationItems.length === 0) return;
+    const aggregationCandidates = [
+      ...plannerResult.autoAggregationItems,
+      ...plannerResult.fetchPlanItems,
+    ];
+    if (aggregationCandidates.length === 0) return;
     if (isAggregatingRef.current) return;
 
     const authoritativeDSL = graphStoreApi.getState().currentDSL || '';
@@ -244,7 +261,7 @@ export function useDSLReaggregation({
     isAggregatingRef.current = true;
     setIsAggregating(true);
 
-    const items = plannerResult.autoAggregationItems.map(i =>
+    const items = aggregationCandidates.map(i =>
       createFetchItem(i.type, i.objectId, i.targetId, { paramSlot: i.paramSlot })
     );
 

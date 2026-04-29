@@ -162,18 +162,25 @@ export function computeBlendedMean(
     typeof model?.FORECAST_BLEND_LAMBDA === 'number' && Number.isFinite(model.FORECAST_BLEND_LAMBDA)
       ? model.FORECAST_BLEND_LAMBDA
       : FORECAST_BLEND_LAMBDA;
-  // NEW BLEND WEIGHT (old behaviour removed, no feature flags):
-  // Forecast is meant to compensate for immaturity; as completeness → 1, forecast influence
-  // must smoothly vanish so mature cohorts are evidence-driven.
+  // Standard Beta-binomial conjugate blend: prior pseudo-count vs
+  // maturity-discounted evidence count. The prior is NEVER given zero
+  // weight — "absence of evidence is not evidence of absence". Empty
+  // or maturity-discounted evidence (nEff = 0) falls out as
+  // wEvidence = 0, returning forecastMean naturally without a special
+  // case.
   //
-  // We implement this by scaling forecast pseudo-sample strength by remaining immaturity.
-  // - At completenessForBlendWeight=0 → remaining=1 → behaves like the old weight.
-  // - At completenessForBlendWeight=1 → remaining=0 → forecast has zero weight.
-  const remaining = Math.max(0, 1 - completenessForBlendWeight);
-  const m0 = lambda * nBaseline;
-  const m0Eff = m0 * remaining;
+  // Why no `(1 - completeness^η)` factor on m0:
+  // The previous formula collapsed prior pseudo-count to zero at full
+  // maturity. That correctly delivered evidence-driven results when
+  // evidence existed, but when k=0 with mature cohorts it gave the
+  // prior zero weight too, producing p.mean = 0 — "evidence of
+  // absence" — for a query the system simply hasn't been given data
+  // for. The conjugate update (α₀+k)/(α₀+β₀+n) keeps the prior
+  // pseudo-count present at all times; evidence wins by accumulating
+  // n, not by forcing the prior to vanish.
+  const m0Eff = lambda * nBaseline;
   const wEvidence = (m0Eff + nEff) > 0 ? (nEff / (m0Eff + nEff)) : 0;
-  
+
   return wEvidence * evidenceMean + (1 - wEvidence) * forecastMean;
 }
 
@@ -278,11 +285,12 @@ export function computePerDayBlendedMean(
     }
     c_i = Math.max(0, Math.min(1, c_i));
 
-    // Per-day blend weight (same formula as computeBlendedMean)
+    // Per-day blend weight (same formula as computeBlendedMean):
+    // standard conjugate blend with the prior pseudo-count present at
+    // all maturities. See computeBlendedMean for the rationale.
     const cEff = c_i > 0 ? Math.min(1, Math.max(0, Math.pow(c_i, completenessPower))) : 0;
     const nEff = cEff * cohort.n;
-    const remaining = Math.max(0, 1 - cEff);
-    const m0Eff = lambda * nBaseline * remaining;
+    const m0Eff = lambda * nBaseline;
     const w_i = (m0Eff + nEff) > 0 ? (nEff / (m0Eff + nEff)) : 0;
 
     totalN += cohort.n;
@@ -2271,37 +2279,23 @@ export function enhanceGraphLatencies(
         nodeArrivingMass.set(toNodeId, (nodeArrivingMass.get(toNodeId) ?? 0) + edgeMass);
       }
       
-      // COHORT-VIEW: An edge needs LAG treatment if it has local latency OR
-      // is downstream of latency edges (path_t95 > 0).
+      // ONE PATH for all edges. A non-latency edge is the degenerate
+      // case of a latency edge with lag distribution = δ(0) (Dirac
+      // at 0): no waiting, observations land instantaneously, so any
+      // cohort with age > 0 is fully mature (completeness = 1). The
+      // unified LAG/blend path below produces the right answer in
+      // every case:
+      //   • latency edge with mature cohorts → evidence-driven blend
+      //   • latency edge with immature cohorts → forecast-driven blend
+      //   • latency edge with no scoped evidence → forecastMean
+      //   • non-latency edge with evidence → conjugate posterior
+      //   • non-latency edge with no scoped evidence → forecastMean
+      // The previous skip-no-latency branch was a special case that
+      // bypassed the blend entirely, leaving p.mean = 0 (from the
+      // empty-evidence stub the file→graph sync writes upstream).
       const hasLocalLatency = latencyEnabled;
       const isBehindLaggedPath = edgePrecomputedPathT95 > 0;
-      
-      if (!hasLocalLatency && !isBehindLaggedPath) {
-        console.log('[LAG_TOPO_SKIP] noLag:', { edgeId, latencyEnabled, edgePrecomputedPathT95 });
-        // Truly simple edge: no latency config AND no upstream lag.
-        // Skip LAG computation but propagate path (mu, sigma, onset) through.
-        const skipFromMu = nodePathMu.get(nodeId);
-        const skipFromSigma = nodePathSigma.get(nodeId);
-        const skipFromOnset = nodePathOnset.get(nodeId) ?? 0;
-        edgePathMuInPass.set(edgeId, skipFromMu);
-        edgePathSigmaInPass.set(edgeId, skipFromSigma);
-        const skipEdgeT95 = precomputedPathT95.get(edgeId) ?? 0;
-        if (skipEdgeT95 >= (nodePathT95.get(toNodeId) ?? 0)) {
-          nodePathMu.set(toNodeId, skipFromMu);
-          nodePathSigma.set(toNodeId, skipFromSigma);
-          nodePathOnset.set(toNodeId, Math.max(nodePathOnset.get(toNodeId) ?? 0, skipFromOnset));
-          nodePathMuSd.set(toNodeId, nodePathMuSd.get(nodeId) ?? 0);
-          nodePathSigmaSd.set(toNodeId, nodePathSigmaSd.get(nodeId) ?? 0);
-          nodePathOnsetSd.set(toNodeId, nodePathOnsetSd.get(nodeId) ?? 0);
-        }
-        const newInDegree = (inDegree.get(toNodeId) ?? 1) - 1;
-        inDegree.set(toNodeId, newInDegree);
-        if (newInDegree === 0 && !queue.includes(toNodeId)) {
-          queue.push(toNodeId);
-        }
-        continue;
-      }
-      
+
       // For local latency edges, extract t95 from edge (if set) or use default.
       // For downstream edges without local latency, use precomputed path_t95 as horizon.
       //
@@ -2360,74 +2354,18 @@ export function enhanceGraphLatencies(
       const cohortsScoped = aggregateFn(paramValues, queryDate, cohortWindow);
       const cohortsAll = aggregateFn(paramValues, queryDate, undefined);
 
-      if (cohortsScoped.length === 0) {
-        // No cohort observations land in this query window, so the
-        // canonical evidence/forecast blend cannot run. The blend formula
-        // (`w_evidence = nEff / (m0Eff + nEff)`) reduces to 0 when nEff=0,
-        // i.e. blendedMean → forecast.mean. Bake that limit in here so
-        // p.mean falls back to the available analytic prior instead of
-        // staying at 0 from the empty-evidence stub upstream. Respect
-        // `mean_overridden` (user-locked p.mean must not be rewritten).
-        const forecastMeanOnEdge = edge.p?.forecast?.mean;
-        if (
-          (edge.p as any)?.mean_overridden !== true
-          && typeof forecastMeanOnEdge === 'number'
-          && Number.isFinite(forecastMeanOnEdge)
-        ) {
-          (edge.p as any).mean = forecastMeanOnEdge;
-        }
-        // Cohort mode: upstream edges (especially the first latency edge from the anchor)
-        // may have only a baseline window() slice. Even if we cannot compute cohort-scoped
-        // completeness for that edge, we still need to propagate a baseline median-lag
-        // prior downstream for the anchor-delay soft transition.
-        //
-        // Window mode: this prior is not used (no upstream adjustment), so we can skip.
-        if (!isWindowMode) {
-          const fromNodeIdForPrior = normalizeNodeRef(edge.from);
-          const windowCohortsForPriorOnly = windowAggregateFn(paramValues, queryDate, undefined);
-          const windowLagStatsForPriorOnly = helpers.aggregateLatencyStats(windowCohortsForPriorOnly, MODEL.RECENCY_HALF_LIFE_DAYS);
-          const baselineMedianLagForPrior =
-            windowLagStatsForPriorOnly?.median_lag_days ?? 0;
+      // ONE PATH: empty cohortsScoped is no longer special-cased. The
+      // blend formula naturally returns forecastMean when nEff=0 (no
+      // evidence in scope), so the LAG topo pass produces a sensible
+      // blendedMean = forecastMean for these edges. computeEdgeLatencyStats
+      // is robust to empty cohorts (fitTotalK=0 → fit defaults to
+      // edgeT95/defaultT95Days). The previous Path A short-circuit was
+      // a workaround for the broken `(1 - completeness^η)` factor on
+      // m0Eff that collapsed the prior to zero at full maturity; with
+      // that factor removed the prior is always present and "no
+      // evidence in scope" falls out as a natural degenerate of the
+      // single conjugate-blend path.
 
-          if (baselineMedianLagForPrior > 0) {
-            const currentPriorToNode = nodeMedianLagPrior.get(fromNodeIdForPrior) ?? 0;
-            const newPriorToTarget = currentPriorToNode + baselineMedianLagForPrior;
-            const existingPriorToTarget = nodeMedianLagPrior.get(toNodeId) ?? 0;
-            nodeMedianLagPrior.set(toNodeId, Math.max(existingPriorToTarget, newPriorToTarget));
-          }
-
-          console.log('[LAG_TOPO_SKIP] noData (propagatedPrior):', {
-            edgeId,
-            paramValuesCount: paramValues.length,
-            isWindowMode,
-            propagatedPriorMedianLag: baselineMedianLagForPrior,
-          });
-        } else {
-          console.log('[LAG_TOPO_SKIP] noData:', { edgeId, paramValuesCount: paramValues.length, isWindowMode });
-        }
-        // Propagate path (mu, sigma, onset) through edges with empty cohort data.
-        const skipFromMu3 = nodePathMu.get(nodeId);
-        const skipFromSigma3 = nodePathSigma.get(nodeId);
-        const skipFromOnset3 = nodePathOnset.get(nodeId) ?? 0;
-        edgePathMuInPass.set(edgeId, skipFromMu3);
-        edgePathSigmaInPass.set(edgeId, skipFromSigma3);
-        const skipEdgeT953 = edgePathT95InPass.get(edgeId) ?? precomputedPathT95.get(edgeId) ?? 0;
-        if (skipEdgeT953 >= (nodePathT95.get(toNodeId) ?? 0)) {
-          nodePathMu.set(toNodeId, skipFromMu3);
-          nodePathSigma.set(toNodeId, skipFromSigma3);
-          nodePathOnset.set(toNodeId, Math.max(nodePathOnset.get(toNodeId) ?? 0, skipFromOnset3));
-          nodePathMuSd.set(toNodeId, nodePathMuSd.get(nodeId) ?? 0);
-          nodePathSigmaSd.set(toNodeId, nodePathSigmaSd.get(nodeId) ?? 0);
-          nodePathOnsetSd.set(toNodeId, nodePathOnsetSd.get(nodeId) ?? 0);
-        }
-        const newInDegree = (inDegree.get(toNodeId) ?? 1) - 1;
-        inDegree.set(toNodeId, newInDegree);
-        if (newInDegree === 0 && !queue.includes(toNodeId)) {
-          queue.push(toNodeId);
-        }
-        continue;
-      }
-      
       console.log('[LAG_TOPO_PROCESS] edge:', { 
         edgeId, 
         hasLocalLatency, 

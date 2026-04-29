@@ -177,7 +177,10 @@ export default defineConfig(({ mode }) => {
                           const fileId = sanitise(fileIdRaw);
 
                           fs.mkdirSync(snapshotDir, { recursive: true });
-                          const outPath = path.join(snapshotDir, `${ts}_${label}_${fileId}.json`);
+                          // High-resolution timestamp guarantees filename uniqueness
+                          // when parallel snapshot writes share the same Date.now() ms.
+                          const ns = (process.hrtime.bigint() % 1_000_000n).toString().padStart(6, '0');
+                          const outPath = path.join(snapshotDir, `${ts}_${ns}_${label}_${fileId}.json`);
 
                           fs.writeFileSync(outPath, JSON.stringify(parsed, null, 2), 'utf8');
                           res.statusCode = 200;
@@ -224,12 +227,18 @@ export default defineConfig(({ mode }) => {
                           const parsed = JSON.parse(body || '{}');
                           const dumpDir = path.resolve(__dirname, '..', 'debug', 'analysis-dumps');
                           fs.mkdirSync(dumpDir, { recursive: true });
+                          // High-resolution timestamp guarantees filename uniqueness
+                          // when one chart refresh issues parallel BE calls (e.g.
+                          // window() and cohort() on the same subject). Date.now()
+                          // is ms-precision and collides; appending the ns portion
+                          // of process.hrtime.bigint() makes each dump path unique.
                           const ts = Date.now();
+                          const ns = (process.hrtime.bigint() % 1_000_000n).toString().padStart(6, '0');
                           const atype = typeof parsed?.analysisType === 'string'
                             ? parsed.analysisType.replace(/[^a-z0-9_-]/gi, '').slice(0, 30) : 'unknown';
                           const dsl = typeof parsed?.analyticsDsl === 'string'
                             ? parsed.analyticsDsl.replace(/[^a-zA-Z0-9()-]/g, '_').slice(0, 50) : '';
-                          const outPath = path.join(dumpDir, `${ts}_${atype}_${dsl}.json`);
+                          const outPath = path.join(dumpDir, `${ts}_${ns}_${atype}_${dsl}.json`);
                           fs.writeFileSync(outPath, JSON.stringify(parsed, null, 2), 'utf8');
                           res.statusCode = 200;
                           res.setHeader('content-type', 'application/json');

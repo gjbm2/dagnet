@@ -2,6 +2,12 @@
 
 ## General forecasting work
 
+- **Strip stale graph-edge fields left over from retired writers** (29-Apr-26)
+  - `edge.p.forecast_state` — no FE writer; no live FE compute reader; populated only by the retired BE topo lane (post-73b, removed 24-Apr-26) and never refreshed since. `source: "analytic_be"`, `tier: "be_forecast"` on stamped instances. Strip from the graph schema and from snapshot deserialisation. Verify no Python consumer still keys off it before deleting (preliminary trace: only retired-lane code reads it).
+  - `edge.p.model_vars[source="analytic_be"]` — no live writer in current FE/BE code; all live readers prefer `analytic`. Pure orphan in snapshots last touched on/before 23-Apr-26. Delete writer scaffolding (already gone) and add a one-shot cleanup that drops the entry when graphs are loaded.
+  - `edge.p.evidence.window_from / window_to / scope_from / scope_to` — not written by FE topo Step 2 (`EdgeLAGValues.evidence` carries only `{mean, n, k}`); the surface comes from parameter-file slice metadata via `updateManager/mappingConfigurations.ts`. They're display-provenance only — not query-DSL. Risk is that a future consumer mistakes them for "the active query window". Decide whether to drop them from the graph projection entirely (keep them on the parameter-file value entries only) or rename to e.g. `*_provenance_*` so the role is unambiguous.
+  - This is cleanup, not the priority defect — the priority is fixing the Current-scenario Stage-2 trigger so live values are refreshed at all.
+
 - **Performance-optimise pytest suite** (29-Apr-26)
   - Outside-in module currently runs in ~244s (`test_cohort_factorised_outside_in.py` alone), full forecast / runtime python suite cluster takes minutes. Running specific tests during iterative development is painful and disincentivises running the relevant suite.
   - Likely surfaces: daemon round-trip cost per `analyse` / `param-pack` invocation (each test does several), graph-load cost on every daemon call, fixture re-derivation across tests that could share a session-scoped frame, and pytest's own collection overhead on the larger files.

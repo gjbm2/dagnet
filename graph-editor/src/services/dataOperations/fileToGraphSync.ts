@@ -1907,28 +1907,67 @@ export async function getParameterFromFile(options: {
         if (latestAggValue._asat_retrieved_at) ep._asat_retrieved_at = latestAggValue._asat_retrieved_at;
       }
 
-      // MODEL_VARS: Upsert analytic entry built by UpdateManager (doc 15 §5.1)
-      // Preserve path params from the existing entry — the parameter file doesn't
-      // contain path_mu/path_sigma (they're FE-quick-pass-derived), so the new entry
-      // from UpdateManager won't have them.  Without this, every from-file
-      // re-aggregation clobbers path params written by the previous FE quick pass.
-      const analyticEntry = (result.metadata as any)?.analyticModelVarsEntry;
-      if (analyticEntry && nextGraph.edges[edgeIndex].p) {
-        const { upsertModelVars, applyPromotion } = await import('../modelVarsResolution');
+      // MODEL_VARS — `model_vars[analytic]` write rules:
+      //
+      // PROBABILITY is written by EXACTLY ONE code path: when this
+      // fetch freshly computed a forecast from real daily evidence
+      // (sidecar `aggregatedData.__fresh_analytic_probability` set by
+      // `addEvidenceAndForecastScalars`). No-fresh paths must NOT
+      // touch probability — neither preserve a stale value nor wipe
+      // to undefined. Wiping breaks edge-width rendering on every
+      // empty-evidence-stub load; preserving silently re-introduces
+      // the file/IDB stale-scalar contamination this rewrite is
+      // eliminating.
+      //
+      // LATENCY is a separate concern. File-side latency μ/σ/t95
+      // (`result.metadata.analyticLatencyFromFile`) legitimately
+      // round-trips through param files because it's an INPUT to the
+      // FE topo pass, not a derived metric. When the latency-only
+      // branch fires, we mutate the existing entry's `latency` in
+      // place rather than going through `upsertModelVars` (which is
+      // full-replace by source and would clobber probability).
+      //
+      // (A placeholder-when-prob-type variant was tried and rejected:
+      // it caused CF to fire on synth fixtures that lack a mocked BE
+      // endpoint, and would mis-promote `p.forecast.source = 'analytic'`
+      // for edges with no real analytic source.)
+      const freshAnalyticProb = (aggregatedData as any)?.__fresh_analytic_probability;
+      const analyticLatencyFromFile = (result.metadata as any)?.analyticLatencyFromFile;
+
+      if (freshAnalyticProb && nextGraph.edges[edgeIndex].p) {
+        const { upsertModelVars, applyPromotion, buildAnalyticProbabilityBlock } = await import('../modelVarsResolution');
         const existingAnalytic = nextGraph.edges[edgeIndex].p.model_vars?.find(
           (v: any) => v.source === 'analytic'
         );
+
+        const analyticEntry: any = {
+          source: 'analytic',
+          source_at: freshAnalyticProb.as_of,
+          probability: buildAnalyticProbabilityBlock(
+            freshAnalyticProb.mean,
+            freshAnalyticProb.stdev,
+            {
+              stdev_pred: freshAnalyticProb.stdev_pred,
+              n_effective: typeof freshAnalyticProb.weighted_n === 'number' && freshAnalyticProb.weighted_n > 0
+                ? freshAnalyticProb.weighted_n
+                : undefined,
+            },
+          ),
+        };
+
+        if (analyticLatencyFromFile) {
+          analyticEntry.latency = { ...analyticLatencyFromFile };
+        }
+
+        // Carry forward FE-quick-pass-derived path/dispersion fields
+        // from the existing analytic entry — the file payload doesn't
+        // supply path_mu/path_sigma or *_sd, so without this carry-
+        // forward every re-aggregation would clobber them.
         if (existingAnalytic?.latency) {
           const prevLat = existingAnalytic.latency;
           if (!analyticEntry.latency) {
-            // File payloads often omit model latencies entirely. Preserve the
-            // canonical edge-local and FE-quick-pass-derived path model already
-            // on the graph instead of clobbering the analytic entry down to
-            // probability-only.
             analyticEntry.latency = { ...prevLat };
           } else {
-            // Carry forward canonical edge-local and FE-quick-pass-derived fields
-            // that the file payload does not supply.
             for (const latencyKey of [
               'mu',
               'sigma',
@@ -1943,7 +1982,6 @@ export async function getParameterFromFile(options: {
                 (analyticEntry.latency as any)[latencyKey] = (prevLat as any)[latencyKey];
               }
             }
-            // Also preserve dispersion SDs
             for (const sdKey of [
               'mu_sd',
               'sigma_sd',
@@ -1959,9 +1997,41 @@ export async function getParameterFromFile(options: {
             }
           }
         }
+
         upsertModelVars(nextGraph.edges[edgeIndex].p, analyticEntry);
-        // Run resolution to update promoted scalars (doc 15 §8)
         applyPromotion(nextGraph.edges[edgeIndex].p, nextGraph.model_source_preference);
+      } else if (analyticLatencyFromFile && nextGraph.edges[edgeIndex].p) {
+        // Latency-only update — mutate the existing analytic entry's
+        // `latency` in place without touching probability. If no
+        // analytic entry exists yet, create a probability-less stub
+        // so latency has a home; promoteModelVars treats absent
+        // probability as the degenerate "unfittable" case which is
+        // correct for an edge that hasn't yet had a fresh fetch.
+        const p = nextGraph.edges[edgeIndex].p as any;
+        if (!p.model_vars) p.model_vars = [];
+        const idx = p.model_vars.findIndex((v: any) => v.source === 'analytic');
+        const prevLat = idx >= 0 ? p.model_vars[idx].latency : undefined;
+        const mergedLatency: any = { ...analyticLatencyFromFile };
+        if (prevLat) {
+          for (const k of [
+            'mu', 'sigma', 't95', 'onset_delta_days',
+            'path_mu', 'path_sigma', 'path_t95', 'path_onset_delta_days',
+            'mu_sd', 'sigma_sd', 'onset_sd', 'onset_mu_corr',
+            'path_mu_sd', 'path_sigma_sd', 'path_onset_sd',
+          ] as const) {
+            if (mergedLatency[k] == null && (prevLat as any)[k] != null) {
+              mergedLatency[k] = (prevLat as any)[k];
+            }
+          }
+        }
+        if (idx >= 0) {
+          p.model_vars[idx] = { ...p.model_vars[idx], latency: mergedLatency };
+        }
+        // Note: when no analytic entry exists yet, we deliberately do
+        // NOT create one from latency alone — without a probability
+        // the entry would be promoted as the analytic source with
+        // mean=undefined, breaking p.forecast.mean. Wait for the
+        // first fresh fetch to seed the entry.
       }
 
       console.log('[DataOperationsService] AFTER applyChanges:', {

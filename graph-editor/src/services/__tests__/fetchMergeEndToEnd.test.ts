@@ -221,9 +221,13 @@ describe('Scenario 1: Progressive Window Maturity', () => {
     expect(paramFile.values[0].window_to).toBe(daysAgo(0));
     expect(paramFile.values[0].dates!.length).toBe(15);
     
-    // Forecast scalar is persisted for window() slices when requested.
-    // NOTE: completeness / t95 / blended p are NOT computed at merge time.
-    expect((paramFile.values[0] as any).forecast).toBeDefined();
+    // Forecast scalar is no longer persisted on param-file values.
+    // Post-W1 cleanup: derived FE metrics (forecast, forecast_stdev) live on
+    // the graph as `model_vars[analytic]`, not on parameter files —
+    // param files don't carry a DSL or scenario, so any derived metric
+    // there is ambiguous-by-construction. Computed at fetch time by
+    // `addEvidenceAndForecastScalars`.
+    expect((paramFile.values[0] as any).forecast).toBeUndefined();
   });
   
   it('second fetch (7 days later) only refetches immature portion', () => {

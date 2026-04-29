@@ -1717,6 +1717,32 @@ def _handle_cohort_maturity_v3(data: Dict[str, Any]) -> Dict[str, Any]:
 
         print(f"[v3] compute_cohort_maturity_rows returned {len(maturity_rows)} rows")
 
+        # Surface the per-edge forecast forensic to `--diag` consumers.
+        # Gated on `_emit_diagnostics` so production responses stay lean.
+        # Cohort-projection arithmetic and IS scalars live in
+        # `_last_forensic` (populated inside `compute_forecast_trajectory`)
+        # — see the cohort-maturity-v3 midline-collapse investigation
+        # for what each field means.
+        if _emit_diagnostics and maturity_rows:
+            try:
+                from runner.forecast_state import _last_forensic as _v3_forensic
+                if _v3_forensic is not None:
+                    _diag.setdefault('cohort_forensic', {})
+                    _diag['cohort_forensic'][f"{query_from_node}->{query_to_node}"] = {
+                        'cohort_projection_summary': _v3_forensic.get('cohort_projection_summary'),
+                        'cohorts': _v3_forensic.get('cohorts'),
+                        'f14_is': _v3_forensic.get('f14_is'),
+                        '_inputs': {
+                            k: _v3_forensic.get('_inputs', {}).get(k) for k in (
+                                'n_cohorts', 'T', 'max_tau', 'S',
+                                'has_upstream_cdf_mc', 'reach',
+                                'p_draws_median', 'p_draws_std',
+                            )
+                        },
+                    }
+            except Exception as _diag_err:
+                print(f"[v3] WARNING: failed to attach cohort_forensic to _diag: {_diag_err}", flush=True)
+
         # ── Model curve generation (FE overlay contract) ─────────────
         # The FE chart builder reads model_curve, model_curve_params,
         # source_model_curves, and promoted_source from the result to
