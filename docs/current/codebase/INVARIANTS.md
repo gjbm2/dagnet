@@ -146,6 +146,14 @@ Both encode the posterior on the same edge rate but from different evidence sets
 
 `p_sd` and `p_sd_epistemic` are derived from the resolved α/β pair, not from `np.std(rate_draws)`. IS-conditioning on observed evidence collapses MC stds to epistemic posterior width regardless of how diffuse the predictive prior was. Closed form is the only way to expose predictive dispersion distinctly.
 
+### I-43: FE topo blend prior pseudo-count is always present
+
+In `computeBlendedMean` / `computePerDayBlendedMean`, the prior pseudo-count `m₀ = λ · nBaseline` is never gated by completeness. The conjugate-blend weight is `w = nEff / (m₀ + nEff)` with `nEff = c^η · nQuery`. Empty or maturity-discounted evidence falls out as `w = 0` returning `forecastMean` — no special-case branch. Completeness's only role in the blend is to discount the evidence count; it does not gate prior strength, the prior mean, or the evidence rate `k/n`. The rejected prior-fading variant (`m₀ · (1 - c^η)`) produced `p.mean = 0` for mature scopes with no evidence — kept on record in [PROBABILITY_BLENDING.md](PROBABILITY_BLENDING.md) §3b. AP 12.
+
+### I-44: One blend path for every edge; non-latency is the δ(0) degenerate
+
+`enhanceGraphLatencies` runs the same conjugate-blend path for latency and non-latency edges. A non-latency edge is the degenerate case of a latency edge with lag distribution `δ(0)` (no waiting; any cohort with age > 0 has completeness = 1). No skip-no-latency branch. No `cohortsScoped.length === 0` short-circuit. Empty scopes, immature cohorts, mature cohorts, and instantaneous edges all converge to the same formula. See [PROBABILITY_BLENDING.md](PROBABILITY_BLENDING.md) §1.
+
 ---
 
 ## Bayes / inference

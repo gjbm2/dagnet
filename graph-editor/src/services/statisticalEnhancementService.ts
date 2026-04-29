@@ -2671,7 +2671,13 @@ export function enhanceGraphLatencies(
       let pathMu: number | undefined;
       let pathSigma: number | undefined;
       // Path onset: DP sum of edge onsets along the path (deterministic shift, not FW).
-      const pathOnset = (nodePathOnset.get(nodeId) ?? 0) + (edgeOnsetDeltaDays ?? 0);
+      // Non-latency edges (latency_parameter !== true) are δ(0) per
+      // cohort_latency_params.md §"When path_mu/path_sigma are meaningful":
+      // they contribute identity to path composition. I-21 / AP-18: route on
+      // `latency_parameter`, not on whether `edgeOnsetDeltaDays` happens to be
+      // populated — non-latency edges with window slices may carry a legitimate
+      // bounce-histogram onset that is NOT an X→Y dead-time.
+      const pathOnset = (nodePathOnset.get(nodeId) ?? 0) + (latencyEnabled ? (edgeOnsetDeltaDays ?? 0) : 0);
       // NOTE: EdgeLAGValues['debug'] is optional (can be undefined), so avoid conditional types that
       // collapse to `never` under union-with-undefined. Use the actual field type.
       let completenessMode: NonNullable<EdgeLAGValues['debug']>['completenessMode'] =
@@ -2680,10 +2686,18 @@ export function enhanceGraphLatencies(
       let completenessAuthoritativeT95Days: number | undefined;
       let completenessTailConstraintApplied: boolean | undefined;
 
-      // Always compute path params (path_mu, path_sigma) — they're needed on
+      // Compute path params (path_mu, path_sigma) — they're needed on
       // model_vars for cohort-mode source curve rendering regardless of the
       // current query mode.  Only the completeness override is cohort-specific.
-      {
+      //
+      // Non-latency edges (latency_parameter !== true) skip this fallback (a):
+      // per cohort_latency_params.md they contribute identity (δ(0)) to path
+      // composition. The A→Y CDF for a non-latency edge equals the A→X CDF
+      // (no edge timing to combine). I-21 / AP-18: gate on the structural
+      // flag, not on whether a fit succeeded — non-latency edges can fit a
+      // wide-σ noise lognormal to bounce-arm timing that, if folded into FW,
+      // swamps real downstream latency signals.
+      if (latencyEnabled) {
         // Determine authoritative path_t95 (days) for A→Y tail pull.
         //
         // IMPORTANT:
@@ -2806,7 +2820,10 @@ export function enhanceGraphLatencies(
 
       // Fallback (b): edge has own fit but ayFit wasn't computed (window mode,
       // or no anchor data). Combine upstream path params with edge fit via FW.
-      if (pathMu === undefined) {
+      // Non-latency edges (latency_parameter !== true) bypass FW: per
+      // cohort_latency_params.md they contribute identity (δ(0)) — the A→Y
+      // distribution equals the A→X distribution. They fall through to (c).
+      if (pathMu === undefined && latencyEnabled) {
         const upMu = nodePathMu.get(nodeId);
         const upSigma = nodePathSigma.get(nodeId);
         if (upMu !== undefined && upSigma !== undefined) {
@@ -2819,12 +2836,17 @@ export function enhanceGraphLatencies(
         }
       }
       // Fallback (c): pass through upstream params (instant-conversion edge, or FW failed).
+      // This is the canonical path for non-latency edges: A→Y = A→X, unchanged.
       if (pathMu === undefined) {
         pathMu = nodePathMu.get(nodeId);
         pathSigma = nodePathSigma.get(nodeId);
       }
       // Fallback (d): first edge from anchor — path IS the edge itself (cohort mode only).
-      if (pathMu === undefined && !isWindowMode && latencyStats.fit.mu !== undefined) {
+      // Restricted to latency edges: a non-latency first edge from the anchor
+      // has no edge timing to seed the path with (A→Y = A→X = identity at the
+      // anchor). It correctly leaves pathMu/pathSigma undefined here so a
+      // downstream latency edge can seed the path via its own fit.
+      if (pathMu === undefined && latencyEnabled && !isWindowMode && latencyStats.fit.mu !== undefined) {
         pathMu = latencyStats.completeness_cdf.mu;
         pathSigma = latencyStats.completeness_cdf.sigma;
       }

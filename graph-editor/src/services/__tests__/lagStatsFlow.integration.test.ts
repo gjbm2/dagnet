@@ -1113,6 +1113,156 @@ describe('LAG Stats Flow - Expected Values', () => {
     });
   });
 
+  describe('Scenario 8b: Non-latency edges contribute identity to path_mu/path_sigma composition', () => {
+    /**
+     * Per cohort_latency_params.md §"When path_mu/path_sigma are meaningful":
+     *   "Non-latency edge (instant X→Y conversion): The A→Y distribution IS
+     *    the A→X distribution (convolution with a delta at zero = upstream
+     *    unchanged). path_mu/path_sigma equal the upstream A→X params."
+     *
+     * Pre-fix, non-latency edges that happened to carry param values (e.g.
+     * historical bounce-arm timing on an edge whose `latency_parameter` is
+     * not `true`) ran the full LAG fit, and the resulting wide-σ noise
+     * lognormal was folded into Fenton-Wilkinson composition for downstream
+     * edges. The composed σ ≈ √(σ_noise² + σ_edge²) swamped the real edge
+     * σ, producing degenerate `path_mu`/`path_sigma` on the first downstream
+     * latency edge.
+     *
+     * Reported symptom (graph `gm-rebuild-jan-26`, edge
+     * `gm-delegated-to-registered`): the edge-properties spark chart drew
+     * the edge curve (median ≈ 12 d, slow rise) and the path curve
+     * (near-delta, fast rise) far apart, when they should overlap because
+     * the only latency edge in the chain is the edge itself.
+     *
+     * Fix gates fallbacks (a) `ayFit`, (b) FW(upstream, edge), and (d)
+     * "first edge is the path" on `latency_parameter === true` per I-21
+     * (route on enablement, not on whether a fit succeeded) and AP-18
+     * (data presence is not a feature flag). Non-latency edges fall
+     * through fallback (c) which passes upstream `nodePathMu/nodePathSigma`
+     * through unchanged — the canonical δ(0) identity in FW.
+     *
+     * This test asserts the natural degenerate behaviour the doc requires:
+     * given a chain `A → B → C → D` where A→B and B→C are non-latency with
+     * paramValues, the first downstream latency edge C→D must emit
+     * `path_mu = mu` and `path_sigma = sigma` (its own edge fit), because
+     * the upstream non-latency prefix contributes identity.
+     */
+    it('non-latency edges propagate undefined path; first latency edge seeds path = edge fit', () => {
+      const graph: GraphForPath = {
+        nodes: [
+          { id: 'A', type: 'start' },
+          { id: 'B' },
+          { id: 'C' },
+          { id: 'D' },
+        ],
+        edges: [
+          // A→B: non-latency, but carries cohort/window paramValues
+          // (mirrors `Landing-page → household-created` on gm-rebuild).
+          {
+            id: 'eAB', uuid: 'eAB', from: 'A', to: 'B',
+            p: {
+              mean: 0.5,
+              latency: { latency_parameter: false },
+              forecast: { mean: 0.5 },
+              evidence: { mean: 0.5, n: 1000, k: 500 },
+            },
+          },
+          // B→C: non-latency with data (mirrors
+          // `household-created → household-delegated`).
+          {
+            id: 'eBC', uuid: 'eBC', from: 'B', to: 'C',
+            p: {
+              mean: 0.5,
+              latency: { latency_parameter: false },
+              forecast: { mean: 0.5 },
+              evidence: { mean: 0.5, n: 500, k: 250 },
+            },
+          },
+          // C→D: the only real latency edge in the chain
+          // (mirrors `household-delegated → switch-registered`).
+          {
+            id: 'eCD', uuid: 'eCD', from: 'C', to: 'D',
+            p: {
+              mean: 0.5,
+              latency: { latency_parameter: true, t95: 30 },
+              forecast: { mean: 0.5 },
+              evidence: { mean: 0.5, n: 250, k: 125 },
+            },
+          },
+        ],
+      };
+
+      const dates = ['20-Nov-25', '21-Nov-25', '22-Nov-25', '23-Nov-25', '24-Nov-25'];
+      const paramLookup = new Map<string, ParameterValueForLAG[]>();
+
+      // Non-latency edges with short-lag "noise" timing — exactly the kind
+      // of fit that pre-fix would have polluted downstream path values.
+      paramLookup.set('eAB', [
+        createCohortSlice(
+          dates,
+          [200, 200, 200, 200, 200],
+          [80, 80, 80, 80, 80],
+          [1, 1, 1, 1, 1],
+        ),
+        createWindowSlice('1-Nov-25:19-Nov-25', 1000, 500, 0.5),
+      ]);
+      paramLookup.set('eBC', [
+        createCohortSlice(
+          dates,
+          [80, 80, 80, 80, 80],
+          [40, 40, 40, 40, 40],
+          [1, 1, 1, 1, 1],
+        ),
+        createWindowSlice('1-Nov-25:19-Nov-25', 400, 200, 0.5),
+      ]);
+      // C→D: real latency lag ~10 days median.
+      paramLookup.set('eCD', [
+        createCohortSlice(
+          dates,
+          [40, 40, 40, 40, 40],
+          [20, 20, 20, 20, 20],
+          [10, 10, 10, 10, 10],
+        ),
+        createWindowSlice('1-Nov-25:19-Nov-25', 200, 100, 0.5),
+      ]);
+
+      const queryDate = new Date('2025-11-24');
+      const cohortWindow = { start: new Date('2025-11-20'), end: new Date('2025-11-24') };
+
+      const result = enhanceGraphLatencies(graph, paramLookup, queryDate, helpers, cohortWindow);
+
+      const eAB = result.edgeValues.find(v => v.edgeUuid === 'eAB');
+      const eBC = result.edgeValues.find(v => v.edgeUuid === 'eBC');
+      const eCD = result.edgeValues.find(v => v.edgeUuid === 'eCD');
+
+      expect(eAB).toBeDefined();
+      expect(eBC).toBeDefined();
+      expect(eCD).toBeDefined();
+
+      // Non-latency edges sit on the identity branch of FW: they pass
+      // upstream `nodePathMu / nodePathSigma` through unchanged. Anchor A
+      // initialises both to `undefined` ([line 2188]), so A→B emits
+      // `undefined` and B→C inherits `undefined`.
+      expect(eAB!.latency.path_mu).toBeUndefined();
+      expect(eAB!.latency.path_sigma).toBeUndefined();
+      expect(eBC!.latency.path_mu).toBeUndefined();
+      expect(eBC!.latency.path_sigma).toBeUndefined();
+
+      // C→D is the first latency edge from the anchor (in cohort mode),
+      // so fallback (d) seeds the path with its own edge fit. Critical
+      // assertion of the fix: path_mu equals mu, path_sigma equals sigma.
+      expect(eCD!.latency.mu).toBeDefined();
+      expect(eCD!.latency.sigma).toBeDefined();
+      expect(eCD!.latency.path_mu).toBeCloseTo(eCD!.latency.mu!, 10);
+      expect(eCD!.latency.path_sigma).toBeCloseTo(eCD!.latency.sigma!, 10);
+
+      // Path onset on non-latency edges contributes 0; pathOnset on C→D
+      // accumulates only its own edge onset (zero in this fixture, since
+      // no window slices carry an `onset_delta_days` value).
+      expect(eCD!.latency.path_onset_delta_days).toBeCloseTo(0, 10);
+    });
+  });
+
   describe('Scenario 9: Window-Only Forecast', () => {
     /**
      * Test that forecast comes from window() slices, not cohort() slices.

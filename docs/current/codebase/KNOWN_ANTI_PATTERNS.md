@@ -75,6 +75,16 @@ UpdateManager mapping configurations (`updateManager/mappingConfigurations.ts`) 
 
 When multiple context dimensions produce multiple hashes for the same edge, the BE selects one hash per `retrieved_at` date to avoid double-counting. See `snapshot_regime_selection.py`.
 
+## Anti-pattern 12: Overloading a maturity signal as a prior-strength gate
+
+**Signature**: a Bayesian-style blend (prior + evidence → posterior) appears to behave correctly until you feed it a fully mature scope with little or no evidence in it, at which point the answer collapses to the raw observed rate (or to zero if `k=0`) regardless of sample size. Tests "evidence dominates at maturity" pass under modest `n`. Empty-scope queries publish nonsense like `p.mean = 0`.
+
+**Root cause**: a maturity / completeness signal is being consumed in two places — as a discount on the evidence count (principled) AND as a discount on the prior pseudo-count (not principled). The standard Beta-binomial conjugate update is `posterior_mean = (α₀ + k) / (m₀ + n)` where `m₀` is a property of the prior, not of the evidence. Coupling `m₀` to maturity is not a textbook inference procedure; it manufactures "absence of evidence ⇒ evidence of absence" the moment maturity hits its ceiling.
+
+**Fix**: keep the maturity signal in exactly one role — discounting the evidence count (`nEff = c · n`). Leave `m₀` untouched. Empty / maturity-discounted evidence then falls out as `w = nEff / (m₀ + nEff) → 0`, returning the prior naturally — no special-case branch needed. See [PROBABILITY_BLENDING.md](PROBABILITY_BLENDING.md) §2-3 and the FE topo blend formula change of 29-Apr-26 for the canonical case.
+
+**Why this recurs**: the symptom that motivates the prior-fade ("at full maturity the prior should disappear, otherwise we're under-weighting hard-won data") sounds intuitive and is wrong. The correct response to "evidence is overwhelming the prior should die" is `n → ∞` overwhelming `m₀`; if that doesn't happen for typical `n`, the calibration of `m₀` is too strong, not the formula's structure.
+
 ## Anti-pattern 13: Setup scripts that don't install all dependency sets
 
 **Signature**: tests pass for weeks, then fail after `./dev-start.sh --clean` or fresh `./setup.sh`. The error is `ModuleNotFoundError` for a module in a previously-working subsystem.
