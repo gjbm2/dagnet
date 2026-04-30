@@ -7,9 +7,10 @@ Spark chart for FE model vars doens't align with cli tests or v3 curves...invest
 **Forecasting machinery**
 - **B.** Compliance test tracker — [73f](docs/current/project-bayes/73f-outside-in-cohort-engine-investigation.md)
   - **Bi.** Problems with non-latency edges — [73h](docs/current/project-bayes/73h-v3-router-and-carrier-conditioning-forensic.md) — **needs development & review**
-  - **Bii.** Completeness parity drift — [73l](docs/current/project-bayes/73l-cli-completeness-parity-canary-drift.md) — **needs development & review**
 - **C.** Refresh may not trigger CF pass for all scenarios — no doc yet — **investigate**
 - **D.** Once FE vars flows tested, test Bayes vars flows properly — [modelvars audit 30-Apr-26](docs/current/modelvars-flow-forensic-audit-30-Apr-26.md) — **pending FE flow validation**
+- RETIRE v1, v2 cohortmaturity ++ all associated files
+- "Spike B3" work to use cohort() data properly
 
 **Nightly fetch**
 - **E.** Problematically slow — [daily-automation-audit 28-Feb-26](docs/current/daily-automation-audit-28-feb-26.md), [programme P2.11](docs/current/project-bayes/programme.md) — **needs instrumentation & optimisation**

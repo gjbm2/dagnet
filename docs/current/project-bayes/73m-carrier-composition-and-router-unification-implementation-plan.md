@@ -28,8 +28,6 @@ This plan does not redesign the whole CF pass.
 
 It does not implement full carrier-side importance-sampling conditioning. 73h correctly identifies that carrier and subject evidence-conditioning are not yet unified. This plan fixes carrier composition and the v3 router first. The remaining carrier-conditioning question is not optional cleanup; it is Phase 2 and is tracked in `73n`.
 
-It does not address the 73l CLI completeness parity failures. Those are projection and response-mapping defects under 73g invariant 7.
-
 It does not claim to fix the residual midline-saturation hierarchy defect unless the instrumentation from the midline-collapse investigation proves that the staged repairs close it.
 
 It does not introduce gross-fitted whole-query numerators or widen the direct-cohort `p` conditioning seam beyond the current explicit admission rules.
